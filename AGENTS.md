@@ -21,4 +21,6 @@
 - Web build must keep functional parity between mobile and desktop browsers; every feature ships with both input paths (touch and keyboard/mouse/gamepad) and is tested on both.
 - Dependencies must be permissively licensed (no copyleft, including LGPL/MPL).
 - Never use or derive from leaked X-Ray source or its forks (e.g. OpenXRay).
+- Knowledge of the original game's formats and behavior enters only through docs/clean-room.md; never from memory.
+- The orchestrating session and implementers stay clean: never read the dirty workspace (`~/Sources/mmotorny/volya-dirty/`) or dirty agents' findings; dirty agents report only a verdict and a path.
 - Never commit game assets, including test fixtures; tests needing game data skip when it's absent.
