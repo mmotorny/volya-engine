@@ -4,6 +4,8 @@ A clean-room, BYOA (bring your own assets) game engine for the original S.T.A.L.
 
 Volya ships no game assets. You need your own legally obtained copy of the game.
 
+Live version: https://mmotorny.github.io/volya-engine/
+
 ## Platforms
 
 1. Web: desktop Chrome; Chrome and Safari on iOS
