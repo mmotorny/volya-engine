@@ -44,4 +44,10 @@ Constraints this imposes:
 
 ## Game data: BYOA, local only
 
-Game data never reaches any server. The user imports their own copy (GOG offline installer of the original Shadow of Chernobyl first, Enhanced Edition later) via the file picker; the importer extracts the game's `.db` archives into OPFS as whole files, and the engine reads them in place with random access.
+Game data never reaches any server. The user brings the GOG offline installer (Russian edition of the original Shadow of Chernobyl first; docs/roadmap.md); GOG's servers can't be used from the browser (no CORS on auth, API, content system or CDN).
+
+- **Never extracted.** Every game file in the installer is a chain of independent zlib parts (≤ 10 MiB) stored at known offsets in the `.bin` (docs/formats/gog-installer.md). `GalaxyFile` serves each game file as `Read + Seek` over its parts, inflating on demand with `zlib-rs` (measured ~17–19 ms per part in wasm) and verifying part MD5s.
+- **Inno Setup only for headers.** The `inno` crate parses the `.exe` headers (~12 ms, measured), so it runs at import or launch only; the engine never sees Inno. It needs file install conditions exposed (local patch in `third_party/inno` until upstream has it).
+- **Desktop Chrome: one copy.** The installer stays where the user keeps it; persistent file handles (IndexedDB) give access across visits, the `.exe` is re-parsed at each launch (no stored index), and parts are read in place with `FileReaderSync` in the engine worker.
+- **iPhone Home Screen app: copy the parts.** iOS copies every picked file into a temporary location, so the importer copies the game parts (3.44 GiB, unchanged) plus an index into OPFS, inside the installed app (its storage is separate from the browser's). Peak 3 copies (installer, temporary, OPFS), 2 at rest, 1 if the user deletes the installer. Precheck free space with `storage.estimate()`, request `storage.persist()`.
+- **OPFS is a cache.** Storage can be wiped (user clearing data, deleting the app, eviction without persistent mode). At startup verify the import and offer re-import from the installer; show persistence and usage in the import screen.
