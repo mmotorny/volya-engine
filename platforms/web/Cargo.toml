@@ -18,6 +18,7 @@ workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 volya-engine = { path = "../../crates/volya-engine" }
+volya-engine-installer = { path = "../../crates/volya-engine-installer" }
 js-sys.workspace = true
 serde.workspace = true
 serde_json.workspace = true

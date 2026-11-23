@@ -30,12 +30,12 @@ const started = new Promise((resolve, reject) => {
   };
 });
 
-/** Engine test interface (docs/testing.md): runs `op` in the engine. */
-function call(op) {
+/** Engine interface (docs/testing.md): runs `op` with `args` in the engine. */
+function call(op, args = {}) {
   return new Promise((resolve, reject) => {
     const id = nextId++;
     pending.set(id, { resolve, reject });
-    worker.postMessage({ type: "call", id, op });
+    worker.postMessage({ type: "call", id, op, args });
   });
 }
 
@@ -49,6 +49,7 @@ try {
   await started;
   status.textContent = `Volya ${(await volya.status()).version}`;
   status.dataset.state = "ready";
+  await import("./game-ui.js").then((ui) => ui.start(call));
 } catch (error) {
   status.textContent = `Failed to start: ${error.message}`;
   status.dataset.state = "error";

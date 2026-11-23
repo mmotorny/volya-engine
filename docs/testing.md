@@ -32,6 +32,8 @@ Tests that need real game data (BYOA, never committed) read its location from an
 |---|---|
 | `VOLYA_GOG_INSTALLER` | Directory holding the GOG offline installer parts (`.exe` + `-1.bin`) of the original Shadow of Chernobyl, Russian edition |
 
+`cargo xtask e2e` and `volya-engine-devserver` serve `VOLYA_GOG_INSTALLER` to browser tests under `/volya-engine/__test/installer/` (with `index.json` and HTTP range support; never deployed); the `import` suite imports two small archives from it through the same path as picked files, and skips when it is unset.
+
 Add variables here as new kinds of game data are needed.
 
 Archive tests (`volya-engine-formats` and `volya-engine-core`, `tests/gog.rs`) extract the `.db` / `.xdb` archives from the installer once into `target/tmp/gog-ru-RU-archives/` (the game-root layout, ~6 GB; a few minutes) and reuse them while sizes match; delete the directory to re-extract. Shared helper: `crates/volya-engine-formats/tests/support/gog_archives.rs`. Example: `VOLYA_GOG_INSTALLER=~/<downloads folder> cargo test -p volya-engine-formats -p volya-engine-core`.

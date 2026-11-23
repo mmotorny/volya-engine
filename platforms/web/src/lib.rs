@@ -7,6 +7,8 @@
 
 #![cfg(target_arch = "wasm32")]
 
+mod game;
+mod import;
 mod opfs;
 
 use std::cell::RefCell;
@@ -27,12 +29,26 @@ pub fn start(canvas: OffscreenCanvas) {
     CANVAS.with(|c| *c.borrow_mut() = Some(canvas));
 }
 
-/// Engine test interface entry point: runs `op` and returns its JSON result.
+/// Engine interface for the page, tests and debugging: runs `op` with JSON
+/// `args` and returns its JSON result.
 #[wasm_bindgen]
-pub async fn call(op: String) -> Result<String, JsValue> {
+pub async fn call(op: String, args: String) -> Result<String, JsValue> {
+    let args: serde_json::Value = serde_json::from_str(&args).unwrap_or_default();
+    let text = |key: &str| args.get(key).and_then(|v| v.as_str()).unwrap_or_default();
     match op.as_str() {
         "status" => to_json(&status()),
         "vfs_selftest" => vfs_selftest().await.map(|()| "null".into()),
+        "game_status" => to_json(&game::status().await?),
+        "unmount_game" => {
+            game::unmount();
+            Ok("null".into())
+        }
+        "forget_game" => game::forget().await.map(|()| "null".into()),
+        "read_dir" => to_json(&game::read_dir(text("path"))?),
+        "read_head" => {
+            let max = args.get("max").and_then(|v| v.as_u64()).unwrap_or(4096);
+            to_json(&game::read_head(text("path"), max)?)
+        }
         _ => Err(JsValue::from_str(&format!("unknown op {op:?}"))),
     }
 }

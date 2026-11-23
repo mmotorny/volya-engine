@@ -10,7 +10,7 @@
 //! [`RESULTS_PATH`].
 
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::TcpListener;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -22,6 +22,9 @@ pub const BASE: &str = "/volya-engine/";
 pub const TEST_BASE: &str = "/volya-engine/__test/";
 /// Endpoint receiving test reports.
 pub const RESULTS_PATH: &str = "/volya-engine/__test/results";
+/// URL prefix of the game installer served to tests (BYOA, local only), with
+/// `index.json` listing its files.
+pub const INSTALLER_BASE: &str = "/volya-engine/__test/installer/";
 
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 const MAX_BODY_BYTES: usize = 1024 * 1024;
@@ -33,6 +36,7 @@ pub struct Server {
     /// URL prefix and directory, most specific first.
     mounts: Vec<(&'static str, PathBuf)>,
     results: Option<ResultsSink>,
+    installer: Option<PathBuf>,
 }
 
 impl Server {
@@ -40,6 +44,7 @@ impl Server {
         Ok(Self {
             mounts: vec![(BASE, root.canonicalize()?)],
             results: None,
+            installer: None,
         })
     }
 
@@ -47,6 +52,13 @@ impl Server {
     pub fn with_tests(mut self, dir: &Path, sink: ResultsSink) -> io::Result<Self> {
         self.mounts.insert(0, (TEST_BASE, dir.canonicalize()?));
         self.results = Some(sink);
+        Ok(self)
+    }
+
+    /// Serves the files of `dir` (a GOG installer) to tests under
+    /// [`INSTALLER_BASE`]; never deployed.
+    pub fn with_installer(mut self, dir: &Path) -> io::Result<Self> {
+        self.installer = Some(dir.canonicalize()?);
         Ok(self)
     }
 
@@ -79,25 +91,34 @@ impl Server {
             _ => return write_status(&mut stream, 405, "Method Not Allowed"),
         }
         let head_only = request.method == "HEAD";
+        if let Some(dir) = &self.installer
+            && let Some(name) = request.path.strip_prefix(INSTALLER_BASE)
+        {
+            return match name {
+                "index.json" => {
+                    let body = installer_index(dir)?;
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )?;
+                    stream.flush()
+                }
+                _ => match percent_decode(name) {
+                    Some(name) if !name.contains(['/', '\\']) && dir.join(&name).is_file() => {
+                        serve_file(&mut stream, &dir.join(name), request.range, head_only)
+                    }
+                    _ => write_status(&mut stream, 404, "Not Found"),
+                },
+            };
+        }
         match self.route(&request.path) {
             Route::Redirect => write!(
                 stream,
                 "HTTP/1.1 302 Found\r\nLocation: {BASE}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
             ),
             Route::NotFound => write_status(&mut stream, 404, "Not Found"),
-            Route::File(path) => {
-                let mut file = File::open(&path)?;
-                let len = file.metadata()?.len();
-                write!(
-                    stream,
-                    "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {len}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
-                    content_type(&path)
-                )?;
-                if !head_only {
-                    io::copy(&mut file, &mut stream)?;
-                }
-                stream.flush()
-            }
+            Route::File(path) => serve_file(&mut stream, &path, request.range, head_only),
         }
     }
 
@@ -154,6 +175,59 @@ struct Request {
     method: String,
     path: String,
     body: Vec<u8>,
+    /// `Range: bytes=start-[end]` (inclusive end).
+    range: Option<(u64, Option<u64>)>,
+}
+
+/// Serves `path`, honoring a single byte range.
+fn serve_file(
+    stream: &mut impl Write,
+    path: &Path,
+    range: Option<(u64, Option<u64>)>,
+    head_only: bool,
+) -> io::Result<()> {
+    let mut file = File::open(path)?;
+    let size = file.metadata()?.len();
+    let kind = content_type(path);
+    let (status, start, len) = match range {
+        Some((start, end)) if start < size => {
+            let end = end.unwrap_or(size - 1).min(size - 1);
+            if end < start {
+                return write_status(stream, 416, "Range Not Satisfiable");
+            }
+            write!(
+                stream,
+                "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{end}/{size}\r\n"
+            )?;
+            ("", start, end - start + 1)
+        }
+        Some(_) => return write_status(stream, 416, "Range Not Satisfiable"),
+        None => ("HTTP/1.1 200 OK\r\n", 0, size),
+    };
+    write!(
+        stream,
+        "{status}Content-Type: {kind}\r\nContent-Length: {len}\r\nAccept-Ranges: bytes\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"
+    )?;
+    if !head_only {
+        file.seek(SeekFrom::Start(start))?;
+        io::copy(&mut file.take(len), stream)?;
+    }
+    stream.flush()
+}
+
+/// JSON list of the installer directory's files: `[{"name", "size"}]`.
+fn installer_index(dir: &Path) -> io::Result<String> {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let meta = entry.metadata()?;
+        if let (true, Some(name)) = (meta.is_file(), entry.file_name().to_str()) {
+            let name = name.replace('\\', "\\\\").replace('"', "\\\"");
+            files.push(format!(r#"{{"name":"{name}","size":{}}}"#, meta.len()));
+        }
+    }
+    files.sort();
+    Ok(format!("[{}]", files.join(",")))
 }
 
 fn read_request(stream: &mut impl Read) -> io::Result<Request> {
@@ -187,6 +261,7 @@ fn read_request(stream: &mut impl Read) -> io::Result<Request> {
         .to_owned();
 
     let mut content_length = 0;
+    let mut range = None;
     loop {
         next_line(&mut reader, &mut line)?;
         let header = line.trim_end();
@@ -198,13 +273,33 @@ fn read_request(stream: &mut impl Read) -> io::Result<Request> {
         {
             content_length = value.trim().parse().map_err(|_| invalid())?;
         }
+        if let Some((name, value)) = header.split_once(':')
+            && name.eq_ignore_ascii_case("range")
+            && let Some((start, end)) = value
+                .trim()
+                .strip_prefix("bytes=")
+                .and_then(|r| r.split_once('-'))
+        {
+            let start = start.parse().map_err(|_| invalid())?;
+            let end = if end.is_empty() {
+                None
+            } else {
+                Some(end.parse().map_err(|_| invalid())?)
+            };
+            range = Some((start, end));
+        }
     }
     if content_length > MAX_BODY_BYTES {
         return Err(invalid());
     }
     let mut body = vec![0; content_length];
     reader.read_exact(&mut body)?;
-    Ok(Request { method, path, body })
+    Ok(Request {
+        method,
+        path,
+        body,
+        range,
+    })
 }
 
 fn write_status(stream: &mut impl Write, code: u16, reason: &str) -> io::Result<()> {
@@ -353,6 +448,37 @@ mod tests {
         );
         assert!(response.starts_with("HTTP/1.1 204 "), "{response}");
         assert_eq!(rx.recv().unwrap(), body);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn serves_installer_ranges_and_index() {
+        let (dir, server) = fixture("installer");
+        fs::create_dir_all(dir.join("installer")).unwrap();
+        fs::write(dir.join("installer/setup.bin"), b"0123456789").unwrap();
+        let installer = dir.join("installer");
+        let request = |head: &str| {
+            let server = Server::new(&dir.join("root"))
+                .unwrap()
+                .with_installer(&installer)
+                .unwrap();
+            exchange(server, head)
+        };
+        let index = request("GET /volya-engine/__test/installer/index.json HTTP/1.1\r\n\r\n");
+        assert!(
+            index.ends_with(r#"[{"name":"setup.bin","size":10}]"#),
+            "{index}"
+        );
+        let part = request(
+            "GET /volya-engine/__test/installer/setup.bin HTTP/1.1\r\nRange: bytes=2-5\r\n\r\n",
+        );
+        assert!(part.starts_with("HTTP/1.1 206 "), "{part}");
+        assert!(part.contains("Content-Range: bytes 2-5/10\r\n"));
+        assert!(part.ends_with("\r\n\r\n2345"));
+        let missing =
+            request("GET /volya-engine/__test/installer/..%2Fsecret.txt HTTP/1.1\r\n\r\n");
+        assert!(missing.starts_with("HTTP/1.1 404 "), "{missing}");
+        drop(server);
         fs::remove_dir_all(dir).unwrap();
     }
 

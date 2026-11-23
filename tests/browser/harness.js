@@ -69,7 +69,7 @@ export async function runPage(suite) {
   );
   document.body.insertAdjacentHTML(
     "afterbegin",
-    `<canvas id="view"></canvas><main><p id="status" data-state="loading">Loading…</p></main>`,
+    `<canvas id="view"></canvas><main><p id="status" data-state="loading">Loading…</p><section id="game" hidden></section></main>`,
   );
 
   let startupError = null;

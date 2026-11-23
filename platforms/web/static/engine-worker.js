@@ -3,7 +3,7 @@
 
 // The engine thread (docs/architecture.md). Messages from the page:
 //   { type: "start", canvas }       → { type: "started" } | { type: "error", message }
-//   { type: "call", id, op }        → { type: "result", id, result } | { type: "result", id, error }
+//   { type: "call", id, op, args }  → { type: "result", id, result } | { type: "result", id, error }
 
 import init, { start, call } from "./pkg/volya_engine_web.js";
 
@@ -20,7 +20,7 @@ onmessage = async ({ data }) => {
     }
   } else if (data.type === "call") {
     try {
-      postMessage({ type: "result", id: data.id, result: JSON.parse(await call(data.op)) });
+      postMessage({ type: "result", id: data.id, result: JSON.parse(await call(data.op, JSON.stringify(data.args ?? {}))) });
     } catch (error) {
       postMessage({ type: "result", id: data.id, error: message(error) });
     }

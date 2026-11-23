@@ -9,12 +9,13 @@ use std::sync::Arc;
 use volya_engine_devserver::{BASE, Server};
 
 const USAGE: &str = "\
-Usage: volya-engine-devserver [--root DIR] [--tests DIR] [--port PORT]
+Usage: volya-engine-devserver [--root DIR] [--tests DIR] [--installer DIR] [--port PORT]
 
 Serves --root (default: dist) under /volya-engine/ like GitHub Pages, and the
 browser test suites (default: tests/browser, if present) under
 /volya-engine/__test/; open /volya-engine/__test/<suite>.html to run a suite
-and print its report here.";
+and print its report here. --installer serves a GOG installer directory to
+tests (default: $VOLYA_GOG_INSTALLER, if set).";
 
 fn main() -> ExitCode {
     match run() {
@@ -30,12 +31,14 @@ fn run() -> Result<(), String> {
     let mut root = PathBuf::from("dist");
     let mut tests = Some(PathBuf::from("tests/browser")).filter(|d| d.is_dir());
     let mut port = 8080u16;
+    let mut installer = std::env::var_os("VOLYA_GOG_INSTALLER").map(PathBuf::from);
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         let mut value = || args.next().ok_or(format!("{arg} needs a value"));
         match arg.as_str() {
             "--root" => root = value()?.into(),
             "--tests" => tests = Some(value()?.into()),
+            "--installer" => installer = Some(value()?.into()),
             "--port" => port = value()?.parse().map_err(|e| format!("--port: {e}"))?,
             "-h" | "--help" => {
                 println!("{USAGE}");
@@ -49,6 +52,12 @@ fn run() -> Result<(), String> {
     let server = match tests {
         Some(dir) => server
             .with_tests(&dir, Arc::new(|report| println!("{report}\n")))
+            .map_err(|e| format!("{}: {e}", dir.display()))?,
+        None => server,
+    };
+    let server = match installer {
+        Some(dir) => server
+            .with_installer(&dir)
             .map_err(|e| format!("{}: {e}", dir.display()))?,
         None => server,
     };

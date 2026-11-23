@@ -17,7 +17,7 @@ use volya_engine_devserver::{BASE, Server};
 
 use super::{Profile, Result, cmd, output, root, run as run_cmd, step, web};
 
-const SUITES: &[&str] = &["smoke", "platform"];
+const SUITES: &[&str] = &["smoke", "platform", "import"];
 const TARGETS: &[&str] = &["chrome", "iphone"];
 const REPORT_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -45,6 +45,10 @@ pub fn run(targets: &[&str]) -> Result {
                     let _ = tx.send(report);
                 }),
             )
+        })
+        .and_then(|s| match std::env::var_os("VOLYA_GOG_INSTALLER") {
+            Some(dir) => s.with_installer(std::path::Path::new(&dir)),
+            None => Ok(s),
         })
         .map_err(|e| format!("dev server: {e}"))?;
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| format!("bind: {e}"))?;

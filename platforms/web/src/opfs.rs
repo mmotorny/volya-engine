@@ -57,12 +57,12 @@ async fn subdir(
         .dyn_into()
 }
 
-/// Writes `data` to `path` under `root`, creating directories as needed.
-pub async fn write_file(
+/// Opens `path` under `root` for synchronous access, creating it and its
+/// directories as needed. The caller must close the handle.
+pub async fn open_sync(
     root: &FileSystemDirectoryHandle,
     path: &str,
-    data: &[u8],
-) -> Result<(), JsValue> {
+) -> Result<FileSystemSyncAccessHandle, JsValue> {
     let path = normalize(path).map_err(|e| JsValue::from_str(&e.to_string()))?;
     let (dirs, name) = path.rsplit_once('/').unwrap_or(("", &path));
     let mut dir = root.clone();
@@ -75,9 +75,42 @@ pub async fn write_file(
         JsFuture::from(dir.get_file_handle_with_options(name, &options))
             .await?
             .dyn_into()?;
+    JsFuture::from(file.create_sync_access_handle())
+        .await?
+        .dyn_into()
+}
+
+/// Reads the whole file `name` in `dir`, or `None` if it doesn't exist.
+pub async fn read_file(
+    dir: &FileSystemDirectoryHandle,
+    name: &str,
+) -> Result<Option<Vec<u8>>, JsValue> {
+    let Ok(file) = JsFuture::from(dir.get_file_handle(name)).await else {
+        return Ok(None);
+    };
+    let file: FileSystemFileHandle = file.dyn_into()?;
     let handle: FileSystemSyncAccessHandle = JsFuture::from(file.create_sync_access_handle())
         .await?
         .dyn_into()?;
+    let at = FileSystemReadWriteOptions::new();
+    at.set_at(0.0);
+    let result = handle.get_size().and_then(|size| {
+        let mut data = vec![0u8; size as usize];
+        handle
+            .read_with_u8_array_and_options(&mut data, &at)
+            .map(|_| data)
+    });
+    handle.close();
+    result.map(Some)
+}
+
+/// Writes `data` to `path` under `root`, creating directories as needed.
+pub async fn write_file(
+    root: &FileSystemDirectoryHandle,
+    path: &str,
+    data: &[u8],
+) -> Result<(), JsValue> {
+    let handle = open_sync(root, path).await?;
     let at = FileSystemReadWriteOptions::new();
     at.set_at(0.0);
     let result = handle
@@ -115,6 +148,14 @@ pub struct OpfsVfs {
 }
 
 impl OpfsVfs {
+    /// Releases every file lock now; later reads fail. For a VFS that is
+    /// never dropped (e.g. leaked to give borrowers a `'static` lifetime).
+    pub fn close(&self) {
+        for file in self.files.values() {
+            file.handle.close();
+        }
+    }
+
     /// Mounts the tree under `root`, opening every file.
     pub async fn mount(root: &FileSystemDirectoryHandle) -> Result<Self, JsValue> {
         let mut vfs = Self {

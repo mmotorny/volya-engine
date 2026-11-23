@@ -13,7 +13,7 @@ const ops = {
   async wasm() {
     const { default: init, call } = await engine;
     await init();
-    return JSON.parse(await call("status"));
+    return JSON.parse(await call("status", "{}"));
   },
 
   // Clears the transferred canvas to orange and reads the pixel back from
