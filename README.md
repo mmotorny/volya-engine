@@ -6,6 +6,16 @@ Volya ships no game assets. You need your own legally obtained copy of the game.
 
 Live version: https://mmotorny.github.io/volya-engine/
 
+## Clean room
+
+Volya's knowledge of the original game comes only from:
+
+- the game's own data, as shipped in a legally obtained copy;
+- analysis of the original game's shipped executables, for interoperability;
+- public specifications of standard formats (DDS, Ogg Vorbis, Ogg Theora).
+
+It does not use the leaked X-Ray engine source code or any project derived from it, such as OpenXRay. Investigators who analyze the game write functional specifications ([docs/formats](docs/formats), [docs/behavior](docs/behavior)); a reviewer admits a specification only if it contains no code, pseudo-code or internal names from the original; implementers write Volya's code from those specifications alone. See [docs/clean-room.md](docs/clean-room.md).
+
 ## Platforms
 
 Web (desktop Chrome; Chrome and Safari on iOS, installable as an iPhone Home Screen app), then native iOS and iPadOS, then VR. See [docs/roadmap.md](docs/roadmap.md).
@@ -16,7 +26,7 @@ Open the [live version](https://mmotorny.github.io/volya-engine/) in a supported
 
 To run locally on macOS:
 
-1. Install [rustup](https://rustup.rs); the pinned toolchain and wasm target install automatically on first build.
+1. Install [rustup](https://rustup.rs); the stable toolchain and the wasm target install automatically on first build.
 2. Build and serve (the first build also installs the matching `wasm-bindgen` CLI into `.cache/`):
 
    ```sh
@@ -38,3 +48,7 @@ See [docs/testing.md](docs/testing.md) and [docs/architecture.md](docs/architect
 ## License
 
 BSD-3-Clause.
+
+## Trademarks
+
+Volya is not affiliated with or endorsed by GSC Game World. S.T.A.L.K.E.R. is a trademark of its owner and is used here only to describe compatibility.
