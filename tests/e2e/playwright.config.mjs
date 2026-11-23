@@ -13,9 +13,8 @@ export default defineConfig({
   // Mirrors GitHub Pages: project site under /volya-engine/.
   use: { baseURL: `http://localhost:${port}/volya-engine/` },
   webServer: {
-    command: `node scripts/serve.mjs dist`,
+    command: `cargo run -q -p volya-devserver -- --root dist --port ${port}`,
     cwd: "../..",
-    env: { PORT: String(port) },
     url: `http://localhost:${port}/volya-engine/`,
     reuseExistingServer: false,
   },

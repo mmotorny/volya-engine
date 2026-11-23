@@ -17,5 +17,5 @@ step "Format"
 cargo fmt --all --check
 step "Clippy"
 cargo clippy --workspace --all-targets -- -D warnings
-cargo clippy --workspace --all-targets --target wasm32-unknown-unknown -- -D warnings
+cargo clippy --workspace --exclude volya-devserver --all-targets --target wasm32-unknown-unknown -- -D warnings
 step "Static checks passed"

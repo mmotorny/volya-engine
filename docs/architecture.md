@@ -20,7 +20,7 @@ Served from `https://mmotorny.github.io/volya-engine/`, deployed by pushing the 
 
 Constraints this imposes:
 
-- **No custom headers.** Never depend on cross-origin isolation. `scripts/serve.mjs` sends no such headers and a browser test asserts the page is not isolated.
+- **No custom headers.** Never depend on cross-origin isolation. The dev server (`tools/devserver`) sends no such headers and a browser test asserts the page is not isolated.
 - **Base path `/volya-engine/`.** All URLs are relative. The dev server serves under the same path.
 - **Shared origin.** Every `mmotorny.github.io` project site shares one origin, so storage quota, OPFS, IndexedDB, caches and service worker registrations are shared with unrelated sites. Keep everything under a `volya-engine` namespace (OPFS directory, cache names, IndexedDB names), scope the service worker to `/volya-engine/`, and treat stored data as possibly modified by others: validate on load, never trust it blindly.
 - **No cache control.** Pages sets its own short cache lifetimes; the service worker owns app versioning.

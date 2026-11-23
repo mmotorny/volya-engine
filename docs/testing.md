@@ -11,7 +11,7 @@ The game renders to an opaque WebGPU canvas, so DOM-level tools can't see it. Te
 
 ## Current tooling
 
-All testing is local. `scripts/check.sh` runs fast static checks (SPDX, licenses, fmt, clippy) and gates every push. `scripts/e2e.sh` runs everything below except real-device testing, on demand only. `scripts/serve.mjs` mimics GitHub Pages: served under `/volya-engine/`, no custom headers.
+All testing is local. `scripts/check.sh` runs fast static checks (SPDX, licenses, fmt, clippy) and gates every push. `scripts/e2e.sh` runs everything below except real-device testing, on demand only. The dev server mimics GitHub Pages (served under `/volya-engine/`, no custom headers): `scripts/build-web.sh && cargo run -p volya-devserver`, then open `http://localhost:8080/volya-engine/`.
 
 | Layer | Tool | Browsers |
 |---|---|---|
@@ -35,6 +35,6 @@ iOS only exposes OPFS to secure contexts, so serve over HTTPS:
 1. Create a local CA and certificate with [mkcert](https://github.com/FiloSottile/mkcert):
    `mkcert -install && mkcert -cert-file .cache/dev.pem -key-file .cache/dev-key.pem <mac-hostname>.local`
 2. Install the CA on the device: AirDrop `$(mkcert -CAROOT)/rootCA.pem`, install the profile in Settings, then enable it under Settings > General > About > Certificate Trust Settings.
-3. `scripts/build-web.sh && TLS_CERT=.cache/dev.pem TLS_KEY=.cache/dev-key.pem PORT=8443 node scripts/serve.mjs`
+3. `scripts/build-web.sh && cargo run -p volya-devserver -- --port 8443 --tls-cert .cache/dev.pem --tls-key .cache/dev-key.pem`
 4. On the device, open `https://<mac-hostname>.local:8443/volya-engine/`.
 5. Debug from the Mac: enable Settings > Apps > Safari > Advanced > Web Inspector on the device, connect it, and use Safari's Develop menu.

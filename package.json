@@ -4,7 +4,6 @@
   "license": "BSD-3-Clause",
   "type": "module",
   "scripts": {
-    "serve": "node scripts/serve.mjs",
     "test:e2e": "playwright test --config tests/e2e/playwright.config.mjs"
   },
   "devDependencies": {
