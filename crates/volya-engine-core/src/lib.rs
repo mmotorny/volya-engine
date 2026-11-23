@@ -5,4 +5,5 @@
 //! platform API; see docs/architecture.md (Crates).
 
 pub mod audio;
+pub mod config;
 pub mod vfs;

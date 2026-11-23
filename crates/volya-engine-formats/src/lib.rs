@@ -6,7 +6,9 @@
 //! docs/formats/.
 
 pub mod audio;
+pub mod cp1251;
 pub mod db;
+pub mod ltx;
 pub mod video;
 
 #[cfg(test)]
