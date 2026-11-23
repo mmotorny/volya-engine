@@ -6,10 +6,14 @@
 //
 //   run <id>
 //   suite <name>
-//   ok <test>
+//   ok <test>[\t<note>]
+//   skip <test>\t<reason>
 //   fail <test>\t<message>
 //
 // A report with no `fail` lines and at least one `ok` line passes.
+//
+// `?env=<name>` tells tests where they run (e.g. `ios-simulator`), for
+// skipping checks a known environment can't perform.
 
 const errors = [];
 let runId = "manual";
@@ -24,6 +28,16 @@ export function install(id) {
     errors.push(`console.error: ${args.join(" ")}`);
     consoleError(...args);
   };
+}
+
+/** Where the suite runs, from `?env=`; `null` if unspecified. */
+export const env = new URLSearchParams(location.search).get("env");
+
+class Skip extends Error {}
+
+/** Skips the current test, with a reason shown in the report. */
+export function skip(reason) {
+  throw new Skip(reason);
 }
 
 /** Throws unless `condition` holds. */
@@ -48,8 +62,13 @@ function failedResources() {
 
 export async function run(suite, startupError) {
   const lines = [`run ${runId}`, `suite ${suite}`];
-  const record = (name, error) =>
-    lines.push(error ? `fail ${name}\t${String(error.message ?? error).replace(/\s+/g, " ")}` : `ok ${name}`);
+  const oneLine = (text) => String(text).replace(/\s+/g, " ");
+  const record = (name, error, note) =>
+    lines.push(
+      error
+        ? `fail ${name}\t${oneLine(error.message ?? error)}`
+        : `ok ${name}${note ? `\t${oneLine(note)}` : ""}`,
+    );
 
   if (startupError) {
     record("engine startup", startupError);
@@ -58,10 +77,12 @@ export async function run(suite, startupError) {
       const { tests } = await import(`./${suite}.js`);
       for (const [name, test] of Object.entries(tests)) {
         try {
-          await test();
-          record(name);
+          // A test may return a note (e.g. a measured value) for the report.
+          const note = await test();
+          record(name, null, typeof note === "string" ? note : "");
         } catch (error) {
-          record(name, error);
+          if (error instanceof Skip) lines.push(`skip ${name}\t${oneLine(error.message)}`);
+          else record(name, error);
         }
       }
     } catch (error) {

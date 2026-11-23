@@ -17,7 +17,7 @@ use volya_devserver::{BASE, Server};
 
 use super::{Profile, Result, cmd, output, root, run as run_cmd, step, web};
 
-const SUITES: &[&str] = &["smoke"];
+const SUITES: &[&str] = &["smoke", "platform"];
 const TARGETS: &[&str] = &["chrome", "iphone"];
 const REPORT_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -56,7 +56,11 @@ pub fn run(targets: &[&str]) -> Result {
         for &suite in SUITES {
             step(&format!("Browser suite {suite} on {target}"));
             let id = run_id(target, suite);
-            let url = format!("http://localhost:{port}{BASE}?test={suite}&run={id}");
+            let env = match target {
+                "iphone" => "ios-simulator",
+                _ => "desktop",
+            };
+            let url = format!("http://localhost:{port}{BASE}?test={suite}&run={id}&env={env}");
             let outcome = match target {
                 "chrome" => chrome(&url, &id, &reports),
                 "iphone" => iphone(&url, &id, &reports),
