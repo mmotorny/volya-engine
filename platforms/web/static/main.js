@@ -39,7 +39,19 @@ function call(op, args = {}) {
   });
 }
 
-globalThis.volya = { call, status: () => call("status") };
+/**
+ * Connects an audio context (live or offline) to the engine's mixer through
+ * an AudioWorklet whose port goes straight to the engine worker.
+ */
+async function connectAudio(context) {
+  await context.audioWorklet.addModule(new URL("./audio-worklet.js", import.meta.url));
+  const node = new AudioWorkletNode(context, "volya-output", { numberOfInputs: 0, outputChannelCount: [2] });
+  node.connect(context.destination);
+  worker.postMessage({ type: "audio", port: node.port, sampleRate: context.sampleRate }, [node.port]);
+  return node;
+}
+
+globalThis.volya = { call, status: () => call("status"), connectAudio };
 
 // The engine worker holds OPFS file locks. Browsers keep left pages alive in
 // the back-forward cache, which would keep those locks from the next page:
@@ -55,6 +67,11 @@ try {
   await started;
   status.textContent = `Volya ${(await volya.status()).version}`;
   status.dataset.state = "ready";
+  // Browsers start audio suspended until a user gesture (iOS especially).
+  const audio = new AudioContext();
+  await connectAudio(audio);
+  const resume = () => audio.state !== "running" && audio.resume();
+  for (const event of ["pointerdown", "keydown", "touchend"]) addEventListener(event, resume);
   await import("./game-ui.js").then((ui) => ui.start(call));
 } catch (error) {
   status.textContent = `Failed to start: ${error.message}`;

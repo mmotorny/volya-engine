@@ -1,0 +1,77 @@
+// SPDX-FileCopyrightText: 2026 Maksym Motorny
+// SPDX-License-Identifier: BSD-3-Clause
+
+//! The game's audio: Ogg Vorbis (public formats), decoded with `lewton`.
+
+use std::io::{self, Read, Seek, SeekFrom};
+
+use lewton::inside_ogg::OggStreamReader;
+
+fn invalid(message: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message.into())
+}
+
+/// A Vorbis stream read from an Ogg file, decoded block by block.
+pub struct VorbisStream<R: Read + Seek> {
+    reader: Option<OggStreamReader<R>>,
+}
+
+impl<R: Read + Seek> VorbisStream<R> {
+    pub fn open(reader: R) -> io::Result<Self> {
+        let reader = OggStreamReader::new(reader).map_err(|e| invalid(format!("Vorbis: {e}")))?;
+        Ok(Self {
+            reader: Some(reader),
+        })
+    }
+
+    fn reader(&mut self) -> &mut OggStreamReader<R> {
+        self.reader.as_mut().expect("reader present")
+    }
+
+    pub fn sample_rate(&self) -> u32 {
+        self.reader
+            .as_ref()
+            .expect("reader present")
+            .ident_hdr
+            .audio_sample_rate
+    }
+
+    pub fn channels(&self) -> u16 {
+        self.reader
+            .as_ref()
+            .expect("reader present")
+            .ident_hdr
+            .audio_channels
+            .into()
+    }
+
+    /// Appends the next decoded block to `out` as interleaved samples in
+    /// [-1, 1]; returns `false` at the end of the stream.
+    pub fn read_block(&mut self, out: &mut Vec<f32>) -> io::Result<bool> {
+        loop {
+            match self.reader().read_dec_packet_itl() {
+                Ok(Some(samples)) if samples.is_empty() => continue,
+                Ok(Some(samples)) => {
+                    out.extend(samples.iter().map(|&s| f32::from(s) / 32768.0));
+                    return Ok(true);
+                }
+                Ok(None) => return Ok(false),
+                Err(e) => return Err(invalid(format!("Vorbis: {e}"))),
+            }
+        }
+    }
+
+    /// Restarts from the first sample, by reopening the stream (seeking to
+    /// granule 0 lands on the header packets).
+    pub fn rewind(&mut self) -> io::Result<()> {
+        let mut inner = self
+            .reader
+            .take()
+            .expect("reader present")
+            .into_inner()
+            .into_inner();
+        inner.seek(SeekFrom::Start(0))?;
+        *self = Self::open(inner)?;
+        Ok(())
+    }
+}

@@ -7,6 +7,7 @@
 
 #![cfg(target_arch = "wasm32")]
 
+mod audio;
 mod game;
 mod import;
 mod opfs;
@@ -45,6 +46,15 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         }
         "forget_game" => game::forget().await.map(|()| "null".into()),
         "read_dir" => to_json(&game::read_dir(text("path"))?),
+        "play_sound" => {
+            let looping = args.get("loop").and_then(|v| v.as_bool()).unwrap_or(false);
+            let gain = args.get("gain").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+            to_json(&game::play_sound(text("path"), looping, gain)?)
+        }
+        "stop_sounds" => {
+            audio::stop_all();
+            Ok("null".into())
+        }
         "read_head" => {
             let max = args.get("max").and_then(|v| v.as_u64()).unwrap_or(4096);
             to_json(&game::read_head(text("path"), max)?)

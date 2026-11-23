@@ -158,8 +158,18 @@ fn mounted_status(game: &Game) -> Status {
     }
 }
 
+/// Plays an Ogg Vorbis file from the game tree; returns the voice id.
+pub fn play_sound(path: &str, looping: bool, gain: f32) -> Result<u32, JsValue> {
+    GAME.with(|g| {
+        let game = g.borrow();
+        let game = game.as_ref().ok_or_else(|| error("game not imported"))?;
+        crate::audio::play(&game.tree, path, looping, gain)
+    })
+}
+
 /// Releases the imported files so they can be rewritten or removed.
 pub fn unmount() {
+    crate::audio::stop_all();
     if let Some(game) = GAME.with(|g| g.borrow_mut().take()) {
         drop(game.tree);
         game.opfs.close();

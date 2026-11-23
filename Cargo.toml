@@ -22,6 +22,7 @@ serde_json = "1"
 inno = { version = "0.7", default-features = false }
 md-5 = "0.11"
 ogg = "0.9"
+lewton = "0.10"
 theora_nrp = "0.2"
 zlib-rs = { version = "0.6", default-features = false, features = ["std"] }
 lzokay-native = { version = "0.2", default-features = false }
@@ -44,6 +45,9 @@ opt-level = 3
 opt-level = 3
 
 [profile.dev.package.ogg]
+opt-level = 3
+
+[profile.dev.package.lewton]
 opt-level = 3
 
 [profile.release]

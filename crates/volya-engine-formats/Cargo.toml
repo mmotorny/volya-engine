@@ -19,6 +19,7 @@ path = "src/bin/db.rs"
 
 [dependencies]
 lzokay-native = { workspace = true, features = ["decompress"] }
+lewton.workspace = true
 ogg.workspace = true
 theora_nrp.workspace = true
 

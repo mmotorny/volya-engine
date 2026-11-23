@@ -32,7 +32,7 @@ Tests that need real game data (BYOA, never committed) read its location from an
 |---|---|
 | `VOLYA_GOG_INSTALLER` | Directory holding the GOG offline installer parts (`.exe` + `-1.bin`) of the original Shadow of Chernobyl, Russian edition |
 
-`cargo xtask e2e` and `volya-engine-devserver` serve `VOLYA_GOG_INSTALLER` to browser tests under `/volya-engine/__test/installer/` (with `index.json` and HTTP range support; never deployed); the `import` suite imports two small archives from it through the same path as picked files, and skips when it is unset.
+`cargo xtask e2e` and `volya-engine-devserver` serve `VOLYA_GOG_INSTALLER` to browser tests under `/volya-engine/__test/installer/` (with `index.json` and HTTP range support; never deployed); the `import` suite imports two small archives from it through the same path as picked files, and skips when it is unset. The `audio` suite imports `gamedata.dba`, plays a game sound through the engine's mixer and the AudioWorklet, and renders it with an `OfflineAudioContext` (no user gesture needed).
 
 Add variables here as new kinds of game data are needed.
 

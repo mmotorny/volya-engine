@@ -5,6 +5,7 @@
 //! docs/architecture.md (Crates). Each format follows its clean-room spec in
 //! docs/formats/.
 
+pub mod audio;
 pub mod db;
 pub mod video;
 
