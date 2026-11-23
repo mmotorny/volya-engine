@@ -6,7 +6,7 @@ Volya ships no game assets. You need your own legally obtained copy of the game.
 
 ## Platforms
 
-1. Web
+1. Web: desktop Chrome; Safari and Chrome on iOS and iPadOS
 2. iOS and iPadOS
 3. VR
 
