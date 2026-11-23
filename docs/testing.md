@@ -1,5 +1,16 @@
 # Testing
 
+## Strategy
+
+The game renders to an opaque WebGPU canvas, so DOM-level tools can't see it. Tests go through the engine, not the page.
+
+1. **Native Rust tests carry most of the weight**: formats, VFS, importer, simulation, scripting, save/load. The simulation is single-threaded and deterministic, so tests feed scripted input, step N frames and assert on state, headless.
+2. **Rendering** is checked by native offscreen `wgpu` renders compared against reference images with a tolerance. Committed references use only synthetic content; references rendered from game data stay local, like the data itself.
+3. **The engine test interface** (#14) lets tests inject input, step/pause frames, query state and read back the framebuffer: a direct API natively, a small JS API messaging the engine worker in the browser.
+4. **Browser tests are thin** and cover only platform integration: startup, worker, WebGPU/`OffscreenCanvas`, OPFS, input forwarding, service worker. Each is "run a script in the page, check the result", so any WebDriver client works. Planned: Rust over WebDriver against desktop Chrome (chromedriver) and real Mobile Safari in the iOS Simulator (safaridriver), replacing Playwright and Node (#13, #15).
+
+## Current tooling
+
 All testing is local. `scripts/check.sh` runs everything below except real-device testing. `scripts/serve.mjs` mimics GitHub Pages: served under `/volya-engine/`, no custom headers.
 
 | Layer | Tool | Browsers |
@@ -9,7 +20,7 @@ All testing is local. `scripts/check.sh` runs everything below except real-devic
 | Browser tests | Playwright (`tests/e2e/`) | installed desktop Chrome; WebKit emulating iPhone 17 Pro Max |
 | Real devices | Safari Web Inspector | iPhone 17 Pro Max: Safari and Chrome |
 
-## Setup
+### Setup
 
 - Rust toolchain from `rust-toolchain.toml`.
 - `wasm-bindgen` CLI (provides `wasm-bindgen-test-runner`) matching the `wasm-bindgen` version pinned in `Cargo.toml`.
@@ -17,7 +28,7 @@ All testing is local. `scripts/check.sh` runs everything below except real-devic
 - Google Chrome. A matching chromedriver is downloaded into `.cache/` on first run.
 - `npm ci && npx playwright install webkit`.
 
-## Real devices
+### Real devices
 
 iOS only exposes OPFS to secure contexts, so serve over HTTPS:
 
