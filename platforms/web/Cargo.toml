@@ -21,5 +21,23 @@ workspace = true
 volya-engine = { path = "../../crates/volya-engine" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 wasm-bindgen.workspace = true
-web-sys = { workspace = true, features = ["Document", "Element", "Window"] }
+wasm-bindgen-futures.workspace = true
+web-sys = { workspace = true, features = [
+  "FileSystemDirectoryHandle",
+  "FileSystemFileHandle",
+  "FileSystemGetDirectoryOptions",
+  "FileSystemGetFileOptions",
+  "FileSystemHandle",
+  "FileSystemHandleKind",
+  "FileSystemReadWriteOptions",
+  "FileSystemRemoveOptions",
+  "FileSystemSyncAccessHandle",
+  "OffscreenCanvas",
+  "StorageManager",
+  "WorkerGlobalScope",
+  "WorkerNavigator",
+] }

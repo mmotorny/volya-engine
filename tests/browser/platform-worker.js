@@ -4,12 +4,12 @@
 // Module worker for the platform suite: exercises the engine-worker
 // architecture (docs/architecture.md) from inside a worker.
 
-import init, { test_status } from "../pkg/volya_engine_web.js";
+import init, { call } from "../pkg/volya_engine_web.js";
 
 const ops = {
   async wasm() {
     await init();
-    return JSON.parse(test_status());
+    return JSON.parse(await call("status"));
   },
 
   // Clears the transferred canvas to orange and reads the pixel back from

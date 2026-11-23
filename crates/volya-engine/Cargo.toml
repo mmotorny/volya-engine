@@ -13,3 +13,8 @@ publish = false
 
 [lints]
 workspace = true
+
+[dependencies]
+volya-engine-core = { path = "../volya-engine-core" }
+serde.workspace = true
+serde_json.workspace = true

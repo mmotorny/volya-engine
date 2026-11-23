@@ -6,7 +6,7 @@ The game renders to an opaque WebGPU canvas, so DOM-level tools can't see it. Te
 
 1. **Native Rust tests carry most of the weight**: formats, VFS, importer, simulation, scripting, save/load. The simulation is single-threaded and deterministic, so tests feed scripted input, step N frames and assert on state, headless.
 2. **Rendering** is checked by native offscreen `wgpu` renders compared against reference images with a tolerance. Committed references use only synthetic content; references rendered from game data stay local, like the data itself.
-3. **The engine test interface** (#14) lets tests inject input, step/pause frames, query state and read back the framebuffer: a direct API natively, a small JS API messaging the engine worker in the browser.
+3. **The engine test interface** (#14) lets tests inject input, step/pause frames, query state and read back the framebuffer: a direct API natively (`volya_engine::test_api`), and in the browser `await volya.call(op)` (plus `volya.status()`), which messages the engine worker and resolves with the op's JSON result. Ops live in `call` in `platforms/web/src/lib.rs`.
 4. **Browser tests are thin** and cover only platform integration: startup, worker, WebGPU/`OffscreenCanvas`, OPFS, input forwarding, service worker. No WebDriver: a page loaded with `?test=<suite>&run=<id>` runs the suite itself (`tests/browser/`) and POSTs a report to the dev server, which fails on timeout. Input is synthesized in-page; import tests feed a `File` into the picker's code path. The file picker and native gestures are manual real-device checks.
 
 ## Tooling
@@ -20,6 +20,20 @@ All testing is local. `cargo xtask check` runs fast static checks (SPDX, license
 | Real devices | Same suites, opened by hand: `https://mmotorny.github.io/volya-engine/?test=<suite>` (report shows on the page), or the local dev server over HTTPS; Safari Web Inspector for debugging | iPhone 17 Pro Max: Chrome |
 
 Add a browser suite by creating `tests/browser/<suite>.js` exporting `tests` (name → function, may be async) and listing it in `SUITES` in `tools/xtask/src/e2e.rs`. A test may return a string note for the report, or call `skip(reason)` when `env` (from `?env=`, e.g. `ios-simulator`) can't perform it. The iOS Simulator has no WebGPU adapter, so WebGPU checks need the real device.
+
+### Shared conformance checks
+
+Behavior every backend must share is written once in Rust and run on each backend: e.g. `vfs::conformance::check` runs natively against `StdVfs` and, via the `vfs_selftest` op, against the OPFS VFS in the engine worker on every browser target.
+
+### Game data
+
+Tests that need real game data (BYOA, never committed) read its location from an environment variable and skip, saying so, when it is unset:
+
+| Variable | Points to |
+|---|---|
+| `VOLYA_GOG_INSTALLER` | Directory holding the GOG offline installer parts of the original Shadow of Chernobyl |
+
+Add variables here as new kinds of game data are needed.
 
 ### Setup
 

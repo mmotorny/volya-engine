@@ -61,6 +61,10 @@ export const tests = {
     return `${format}, ${vendor}`;
   },
 
+  "engine OPFS VFS passes the VFS conformance check": async () => {
+    await volya.call("vfs_selftest");
+  },
+
   "OPFS sync access handle works in a worker": async () => {
     assertEqual(await inWorker("opfs"), "volya");
   },
