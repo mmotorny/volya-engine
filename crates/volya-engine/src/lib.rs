@@ -5,6 +5,7 @@
 //! (`platforms/*`) build on it and supply platform specifics.
 
 pub use volya_engine_core as core;
+pub use volya_engine_render as render;
 
 /// Engine version, taken from the crate manifest.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

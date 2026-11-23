@@ -17,7 +17,10 @@ export const tests = {
   "status is shown": async () => {
     const el = document.getElementById("status");
     assertEqual(el.dataset.state, "ready", "data-state");
-    assertEqual(el.textContent, `Volya ${(await volya.status()).version}`, "text");
+    const { version, gpu } = await volya.status();
+    // Without WebGPU the line says why graphics are unavailable.
+    const expected = gpu.state === "ready" ? `Volya ${version}` : `Volya ${version} · graphics unavailable: ${gpu.message}`;
+    assertEqual(el.textContent, expected, "text");
   },
 
   // GitHub Pages cannot send COOP/COEP; the engine must not depend on them.

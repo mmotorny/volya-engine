@@ -2,24 +2,53 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // The engine thread (docs/architecture.md). Messages from the page:
-//   { type: "start", canvas }       → { type: "started" } | { type: "error", message }
+//   { type: "start", canvas, size }  → { type: "started" } | { type: "error", message }
+//   { type: "resize", width, height, dpr }: the canvas's CSS size and the
+//   page's devicePixelRatio (`size` in "start" has the same fields).
 //   { type: "call", id, op, args }  → { type: "result", id, result } | { type: "result", id, error }
 //   { type: "audio", port, sampleRate } connects the page's AudioWorklet; it
 //   then asks this worker for mixed blocks directly over `port`.
+// Once started, the worker runs a frame loop on requestAnimationFrame where
+// workers have it, otherwise on a 60 Hz timer.
 
-import init, { start, call, audio_init, audio_mix } from "./pkg/volya_engine_web.js";
+import init, { start, call, resize, frame, audio_init, audio_mix } from "./pkg/volya_engine_web.js";
 
 const message = (error) => String(error?.message ?? error);
 
+const nextFrame = self.requestAnimationFrame
+  ? (callback) => self.requestAnimationFrame(callback)
+  : (callback) => setTimeout(() => callback(performance.now()), 1000 / 60);
+
+function loop(time) {
+  try {
+    frame(time);
+  } catch (error) {
+    // A broken engine stops drawing; calls report their own errors.
+    console.error(`frame: ${message(error)}`);
+    return;
+  }
+  nextFrame(loop);
+}
+
+let started;
+
 onmessage = async ({ data }) => {
   if (data.type === "start") {
-    try {
+    started = (async () => {
       await init();
-      start(data.canvas);
+      await start(data.canvas);
+      resize(data.size.width, data.size.height, data.size.dpr);
+    })();
+    try {
+      await started;
       postMessage({ type: "started" });
+      nextFrame(loop);
     } catch (error) {
       postMessage({ type: "error", message: message(error) });
     }
+  } else if (data.type === "resize") {
+    await started;
+    resize(data.width, data.height, data.dpr);
   } else if (data.type === "audio") {
     audio_init(data.sampleRate);
     data.port.onmessage = ({ data: request }) => {

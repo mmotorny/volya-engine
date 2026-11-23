@@ -59,13 +59,31 @@ globalThis.volya = { call, status: () => call("status"), connectAudio };
 addEventListener("pagehide", () => worker.terminate());
 addEventListener("pageshow", (event) => event.persisted && location.reload());
 
-const canvas = document.getElementById("view").transferControlToOffscreen();
-worker.postMessage({ type: "start", canvas }, [canvas]);
+// The engine sizes the canvas in device pixels from these.
+const view = document.getElementById("view");
+const size = () => ({ width: view.clientWidth, height: view.clientHeight, dpr: devicePixelRatio });
+const canvas = view.transferControlToOffscreen();
+worker.postMessage({ type: "start", canvas, size: size() }, [canvas]);
+const resized = () => worker.postMessage({ type: "resize", ...size() });
+new ResizeObserver(resized).observe(view);
+// devicePixelRatio changes alone (e.g. moving to another display) resize nothing.
+(function watchPixelRatio() {
+  matchMedia(`(resolution: ${devicePixelRatio}dppx)`).addEventListener(
+    "change",
+    () => {
+      resized();
+      watchPixelRatio();
+    },
+    { once: true },
+  );
+})();
 
 const status = document.getElementById("status");
 try {
   await started;
-  status.textContent = `Volya ${(await volya.status()).version}`;
+  const { version, gpu } = await volya.status();
+  status.textContent =
+    gpu.state === "ready" ? `Volya ${version}` : `Volya ${version} · graphics unavailable: ${gpu.message}`;
   status.dataset.state = "ready";
   // Browsers start audio suspended until a user gesture (iOS especially).
   const audio = new AudioContext();

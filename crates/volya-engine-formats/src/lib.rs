@@ -8,6 +8,7 @@
 pub mod audio;
 pub mod cp1251;
 pub mod db;
+pub mod dds;
 pub mod ltx;
 pub mod video;
 

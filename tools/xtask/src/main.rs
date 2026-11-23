@@ -230,7 +230,7 @@ fn copy_dir(from: &Path, to: &Path) -> io::Result<()> {
 
 /// Source files that must carry SPDX headers.
 const SPDX_PATTERNS: &[&str] = &[
-    "*.rs", "*.sh", "*.js", "*.mjs", "*.html", "*.css", "*.svg", "*.toml",
+    "*.rs", "*.sh", "*.js", "*.mjs", "*.html", "*.css", "*.svg", "*.toml", "*.wgsl",
 ];
 
 fn check_spdx() -> Result {
