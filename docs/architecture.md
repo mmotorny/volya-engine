@@ -9,7 +9,7 @@ Split only where a split buys compile-time isolation, a compiler-enforced bounda
 | Package | Contents | Why separate |
 |---|---|---|
 | `crates/volya-engine` | The platform-free product: composes the role crates into one engine, defines the traits platforms implement (storage, input, audio, surface, clock), and hosts the test interface. | The product as one library every platform ships. |
-| `crates/volya-engine-core` | Platform-free engine: VFS trait and native backend, simulation (world, A-Life, AI, physics, scripting), save/load. | Deterministic and headless-testable; cannot reach rendering or any platform. |
+| `crates/volya-engine-core` | Platform-free engine: VFS trait, native backend and game-archive tree, simulation (world, A-Life, AI, physics, scripting), save/load. | Deterministic and headless-testable; cannot reach rendering or any platform. |
 | `crates/volya-engine-render` | `wgpu` renderer: core state to frames. | Keeps `wgpu` rebuilds off the simulation's edit loop; keeps rendering out of simulation. |
 | `crates/volya-engine-formats` | Game file format parsers over `Read + Seek`, no I/O. | Reused by tools; one home for clean-room provenance and game-data tests. |
 | `crates/volya-engine-installer` | Inno Setup unpacker. | Unrelated to the game; runs in the importer worker; has its own CLI. |

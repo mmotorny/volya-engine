@@ -8,6 +8,8 @@
 //! Paths are relative, `/`-separated and case-sensitive; `\` is accepted as a
 //! separator, `.` and empty segments are ignored, and `..` is rejected.
 
+pub mod db;
+
 use std::fs;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::PathBuf;

@@ -12,3 +12,10 @@ publish = false
 
 [lints]
 workspace = true
+
+[dependencies]
+volya-engine-formats = { path = "../volya-engine-formats" }
+
+[dev-dependencies]
+md-5.workspace = true
+volya-engine-installer = { path = "../volya-engine-installer" }

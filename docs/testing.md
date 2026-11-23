@@ -34,6 +34,10 @@ Tests that need real game data (BYOA, never committed) read its location from an
 
 Add variables here as new kinds of game data are needed.
 
+Archive tests (`volya-engine-formats` and `volya-engine-core`, `tests/gog.rs`) extract the `.db` / `.xdb` archives from the installer once into `target/tmp/gog-ru-RU-archives/` (the game-root layout, ~6 GB; a few minutes) and reuse them while sizes match; delete the directory to re-extract. Shared helper: `crates/volya-engine-formats/tests/support/gog_archives.rs`. Example: `VOLYA_GOG_INSTALLER=~/<downloads folder> cargo test -p volya-engine-formats -p volya-engine-core`.
+
+Dev CLI for archives: `cargo run -p volya-engine-formats --bin volya-engine-db -- list <archive>` or `dump <archive> <stored path>`.
+
 ### Setup
 
 - rustup (installs the toolchain from `rust-toolchain.toml`; `xtask` installs the matching `wasm-bindgen` CLI).

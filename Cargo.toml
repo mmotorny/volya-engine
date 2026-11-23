@@ -22,6 +22,8 @@ serde_json = "1"
 inno = { version = "0.7", default-features = false }
 md-5 = "0.11"
 zlib-rs = "0.6"
+lzokay-native = { version = "0.2", default-features = false }
+crc32fast = "1"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

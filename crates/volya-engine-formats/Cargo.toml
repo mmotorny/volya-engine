@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+
+[package]
+name = "volya-engine-formats"
+description = "Volya Engine: game file format parsers over Read + Seek, no I/O."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "volya-engine-db"
+path = "src/bin/db.rs"
+
+[dependencies]
+lzokay-native = { workspace = true, features = ["decompress"] }
+
+[dev-dependencies]
+crc32fast.workspace = true
+lzokay-native = { workspace = true, features = ["compress", "decompress"] }
+md-5.workspace = true
+volya-engine-installer = { path = "../volya-engine-installer" }
