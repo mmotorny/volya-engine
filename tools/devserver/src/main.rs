@@ -12,11 +12,9 @@ const USAGE: &str = "\
 Usage: volya-engine-devserver [--root DIR] [--tests DIR] [--port PORT] [--tls-cert PEM --tls-key PEM]
 
 Serves --root (default: dist) under /volya-engine/ like GitHub Pages, and the
-browser test harness (default: tests/browser, if present) under
-/volya-engine/__test/; open /volya-engine/?test=<suite> to run a suite and
-print its report here.
-Plain HTTP binds to localhost; with TLS it binds to all interfaces so real
-devices can connect over a secure context.";
+browser test suites (default: tests/browser, if present) under
+/volya-engine/__test/; open /volya-engine/__test/<suite>.html to run a suite
+and print its report here.";
 
 fn main() -> ExitCode {
     match run() {

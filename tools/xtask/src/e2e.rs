@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! Driverless end-to-end tests: serve `dist/` plus the harness in-process,
-//! open `?test=<suite>&run=<id>` in each target browser, and wait for the
+//! open `__test/run/<id>/<suite>.html` in each target browser, and wait for the
 //! page to POST its report back (see tests/browser/harness.js).
 
 use std::net::TcpListener;
@@ -56,17 +56,13 @@ pub fn run(targets: &[&str]) -> Result {
         for &suite in SUITES {
             step(&format!("Browser suite {suite} on {target}"));
             let id = run_id(target, suite);
-            let env = match target {
-                "iphone" => "ios-simulator",
-                _ => "desktop",
-            };
-            let url = format!("http://localhost:{port}{BASE}?test={suite}&run={id}&env={env}");
+            let url = format!("http://localhost:{port}{BASE}__test/run/{id}/{suite}.html");
             let outcome = match target {
                 "chrome" => chrome(&url, &id, &reports),
                 "iphone" => iphone(&url, &id, &reports),
                 _ => unreachable!(),
             };
-            match outcome {
+            match outcome.map(|report| known_failures(target, &report)) {
                 Ok(report) => {
                     println!("{report}");
                     if !passed(&report) {
@@ -110,6 +106,41 @@ fn wait_report(id: &str, reports: &Receiver<String>) -> Result<String> {
             Err(_) => return Err(format!("no report within {REPORT_TIMEOUT:?}")),
         }
     }
+}
+
+/// Tests a target is known not to support, with the reason. Verified: the iOS
+/// Simulator exposes `navigator.gpu` but never returns an adapter, on the main
+/// thread or in workers; WebGPU needs the real device.
+const KNOWN_FAILURES: &[(&str, &str, &str)] = &[
+    (
+        "iphone",
+        "WebGPU adapter on the main thread",
+        "iOS Simulator has no WebGPU adapter; check on a real device",
+    ),
+    (
+        "iphone",
+        "WebGPU renders from a worker to an OffscreenCanvas",
+        "iOS Simulator has no WebGPU adapter; check on a real device",
+    ),
+];
+
+/// Turns `fail` lines of tests in [`KNOWN_FAILURES`] for `target` into
+/// `skip` lines carrying the known reason.
+fn known_failures(target: &str, report: &str) -> String {
+    report
+        .lines()
+        .map(|line| {
+            let known = line.strip_prefix("fail ").and_then(|rest| {
+                let name = rest.split('\t').next()?;
+                KNOWN_FAILURES
+                    .iter()
+                    .find(|(t, n, _)| *t == target && *n == name)
+                    .map(|(_, n, reason)| format!("skip {n}\t{reason}"))
+            });
+            known.unwrap_or_else(|| line.to_owned())
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn passed(report: &str) -> bool {
@@ -186,6 +217,17 @@ fn latest_ios_runtime(list: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn known_failures_become_skips() {
+        let report =
+            "run x\nfail WebGPU adapter on the main thread\tno WebGPU adapter\nfail other\tboom";
+        assert_eq!(
+            known_failures("iphone", report),
+            "run x\nskip WebGPU adapter on the main thread\tiOS Simulator has no WebGPU adapter; check on a real device\nfail other\tboom"
+        );
+        assert_eq!(known_failures("chrome", report), report);
+    }
 
     #[test]
     fn report_verdict() {

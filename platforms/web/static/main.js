@@ -4,12 +4,6 @@
 // Page side: owns the DOM, starts the engine worker and talks to it only by
 // message (docs/architecture.md).
 
-// `?test=<suite>` runs a browser test suite (tests/browser/).
-const params = new URLSearchParams(location.search);
-const suite = params.get("test");
-const harness = suite ? await import("./__test/harness.js") : null;
-harness?.install(params.get("run"));
-
 const worker = new Worker(new URL("./engine-worker.js", import.meta.url), { type: "module" });
 const pending = new Map();
 let nextId = 0;
@@ -45,19 +39,12 @@ const canvas = document.getElementById("view").transferControlToOffscreen();
 worker.postMessage({ type: "start", canvas }, [canvas]);
 
 const status = document.getElementById("status");
-let startupError = null;
 try {
   await started;
   status.textContent = `Volya ${(await volya.status()).version}`;
   status.dataset.state = "ready";
 } catch (error) {
-  startupError = error;
   status.textContent = `Failed to start: ${error.message}`;
   status.dataset.state = "error";
-}
-
-if (harness) {
-  await harness.run(suite, startupError);
-} else if (startupError) {
-  throw startupError;
+  throw error;
 }

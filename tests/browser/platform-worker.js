@@ -4,10 +4,14 @@
 // Module worker for the platform suite: exercises the engine-worker
 // architecture (docs/architecture.md) from inside a worker.
 
-import init, { call } from "../pkg/volya_engine_web.js";
+// The app lives above `__test/` (which may be `__test/run/<id>/`). Imported
+// lazily: `onmessage` must be set before any await, or early messages are lost.
+const base = location.pathname.slice(0, location.pathname.indexOf("/__test/") + 1);
+const engine = import(`${base}pkg/volya_engine_web.js`);
 
 const ops = {
   async wasm() {
+    const { default: init, call } = await engine;
     await init();
     return JSON.parse(await call("status"));
   },

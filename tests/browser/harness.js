@@ -1,8 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-// In-page browser test harness. Runs a suite and POSTs a plain-text report to
-// the dev server:
+// In-page browser test harness. Each suite has a page, `__test/<suite>.html`,
+// that calls `runPage("<suite>")`: it captures page errors, starts the
+// unchanged app, runs the suite and POSTs a plain-text report to the dev
+// server (shown on the page as well):
 //
 //   run <id>
 //   suite <name>
@@ -10,28 +12,11 @@
 //   skip <test>\t<reason>
 //   fail <test>\t<message>
 //
-// A report with no `fail` lines and at least one `ok` line passes.
-//
-// `?env=<name>` tells tests where they run (e.g. `ios-simulator`), for
-// skipping checks a known environment can't perform.
+// A report with no `fail` lines and at least one `ok` line passes. The run id
+// comes from the dev server path `__test/run/<id>/<suite>.html`, which lets
+// `cargo xtask e2e` match reports to runs; otherwise it is `manual`.
 
 const errors = [];
-let runId = "manual";
-
-/** Starts capturing page errors. Call before the engine starts. */
-export function install(id) {
-  runId = id ?? runId;
-  addEventListener("error", (e) => errors.push(`error: ${e.message}`));
-  addEventListener("unhandledrejection", (e) => errors.push(`unhandled rejection: ${e.reason}`));
-  const consoleError = console.error;
-  console.error = (...args) => {
-    errors.push(`console.error: ${args.join(" ")}`);
-    consoleError(...args);
-  };
-}
-
-/** Where the suite runs, from `?env=`; `null` if unspecified. */
-export const env = new URLSearchParams(location.search).get("env");
 
 class Skip extends Error {}
 
@@ -52,6 +37,16 @@ export function assertEqual(actual, expected, message = "") {
   if (a !== e) throw new Error(`${message}${message ? ": " : ""}expected ${e}, got ${a}`);
 }
 
+function captureErrors() {
+  addEventListener("error", (e) => errors.push(`error: ${e.message}`));
+  addEventListener("unhandledrejection", (e) => errors.push(`unhandled rejection: ${e.reason}`));
+  const consoleError = console.error;
+  console.error = (...args) => {
+    errors.push(`console.error: ${args.join(" ")}`);
+    consoleError(...args);
+  };
+}
+
 /** Resources that failed to load, where the browser reports status codes. */
 function failedResources() {
   return performance
@@ -60,7 +55,30 @@ function failedResources() {
     .map((r) => `HTTP ${r.responseStatus}: ${r.name}`);
 }
 
-export async function run(suite, startupError) {
+/** Runs `suite` against the app. Entry point of every suite page. */
+export async function runPage(suite) {
+  captureErrors();
+  const path = location.pathname;
+  const base = path.slice(0, path.indexOf("/__test/") + 1);
+  const runId = path.match(/\/__test\/run\/([^/]+)\//)?.[1] ?? "manual";
+
+  // The app's DOM, as in index.html.
+  document.head.insertAdjacentHTML(
+    "beforeend",
+    `<link rel="icon" href="${base}icon.svg" type="image/svg+xml"><link rel="stylesheet" href="${base}style.css">`,
+  );
+  document.body.insertAdjacentHTML(
+    "afterbegin",
+    `<canvas id="view"></canvas><main><p id="status" data-state="loading">Loading…</p></main>`,
+  );
+
+  let startupError = null;
+  try {
+    await import(`${base}main.js`);
+  } catch (error) {
+    startupError = error;
+  }
+
   const lines = [`run ${runId}`, `suite ${suite}`];
   const oneLine = (text) => String(text).replace(/\s+/g, " ");
   const record = (name, error, note) =>
@@ -94,7 +112,7 @@ export async function run(suite, startupError) {
 
   const report = lines.join("\n");
   try {
-    await fetch("./__test/results", { method: "POST", body: report });
+    await fetch(`${base}__test/results`, { method: "POST", body: report });
   } catch {
     // No dev server (e.g. GitHub Pages): the on-page report is the output.
   }

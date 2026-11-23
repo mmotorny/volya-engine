@@ -3,13 +3,7 @@
 
 // Platform capabilities the engine-worker architecture relies on (#11).
 
-import { assert, assertEqual, env, skip } from "./harness.js";
-
-// Verified: the iOS Simulator exposes navigator.gpu but never returns an
-// adapter, on the main thread or in workers. WebGPU needs a real device.
-function skipWithoutWebGpu() {
-  if (env === "ios-simulator") skip("iOS Simulator has no WebGPU adapter; check on a real device");
-}
+import { assert, assertEqual } from "./harness.js";
 
 /** Runs `op` in a fresh module worker and resolves with its result. */
 function inWorker(op, extra = {}, transfer = []) {
@@ -39,7 +33,6 @@ export const tests = {
 
   // Diagnostic: separates "no WebGPU here" from "no WebGPU in workers".
   "WebGPU adapter on the main thread": async () => {
-    skipWithoutWebGpu();
     assert(navigator.gpu, "navigator.gpu missing");
     const adapter = await navigator.gpu.requestAdapter();
     assert(adapter, "no WebGPU adapter");
@@ -47,7 +40,6 @@ export const tests = {
   },
 
   "WebGPU renders from a worker to an OffscreenCanvas": async () => {
-    skipWithoutWebGpu();
     const el = document.createElement("canvas");
     el.width = el.height = 16;
     document.body.append(el);

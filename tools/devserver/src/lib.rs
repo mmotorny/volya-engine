@@ -146,13 +146,22 @@ impl Server {
         if url_path == "/" || url_path == BASE.trim_end_matches('/') {
             return Route::Redirect;
         }
-        let Some((rest, dir)) = self
+        let Some((prefix, mut rest, dir)) = self
             .mounts
             .iter()
-            .find_map(|(prefix, dir)| Some((url_path.strip_prefix(prefix)?, dir)))
+            .find_map(|(prefix, dir)| Some((*prefix, url_path.strip_prefix(prefix)?, dir)))
         else {
             return Route::NotFound;
         };
+        // `__test/run/<id>/<file>` serves `<file>`; the id only tags reports.
+        if prefix == TEST_BASE
+            && let Some(run) = rest.strip_prefix("run/")
+        {
+            match run.split_once('/') {
+                Some((_, file)) => rest = file,
+                None => return Route::NotFound,
+            }
+        }
         let Some(relative) = percent_decode(rest) else {
             return Route::NotFound;
         };
@@ -330,6 +339,14 @@ mod tests {
             server.route("/volya-engine/__test/harness.js"),
             Route::File(tests.join("harness.js"))
         );
+        assert_eq!(
+            server.route("/volya-engine/__test/run/abc123/harness.js"),
+            Route::File(tests.join("harness.js"))
+        );
+        assert_eq!(
+            server.route("/volya-engine/__test/run/abc123"),
+            Route::NotFound
+        );
         assert_eq!(server.route("/other/index.html"), Route::NotFound);
         assert_eq!(server.route("/volya-engine/missing"), Route::NotFound);
         assert_eq!(server.route("/volya-engine/../secret.txt"), Route::NotFound);
@@ -348,10 +365,7 @@ mod tests {
     #[test]
     fn serves_over_http_without_isolation_headers() {
         let (dir, server) = fixture("http");
-        let response = exchange(
-            server,
-            "GET /volya-engine/?test=smoke HTTP/1.1\r\nHost: x\r\n\r\n",
-        );
+        let response = exchange(server, "GET /volya-engine/ HTTP/1.1\r\nHost: x\r\n\r\n");
         assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
         assert!(response.contains("Content-Type: text/html; charset=utf-8\r\n"));
         assert!(response.ends_with("<p>hi</p>"));

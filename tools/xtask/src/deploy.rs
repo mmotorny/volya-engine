@@ -3,11 +3,8 @@
 
 //! Deploys to GitHub Pages without GitHub Actions: builds a release locally
 //! and force-pushes it as a single commit to the `gh-pages` branch. The branch
-//! is a build artifact; its history carries no value.
-//!
-//! The deployed site includes the browser test harness under `__test/`, so
-//! `?test=<suite>` works on real devices by opening a link (the report shows
-//! on the page).
+//! is a build artifact; its history carries no value. Tests are never
+//! deployed; real devices run them against the local dev server.
 
 use std::fs;
 
@@ -39,9 +36,7 @@ pub fn run_deploy() -> Result {
         fs::remove_dir_all(&site).map_err(|e| format!("remove {}: {e}", site.display()))?;
     }
     copy_dir(&root().join("dist"), &site).map_err(|e| format!("copy dist: {e}"))?;
-    copy_dir(&root().join("tests/browser"), &site.join("__test"))
-        .map_err(|e| format!("copy tests/browser: {e}"))?;
-    // Serve files as-is; Jekyll would drop `__test/`.
+    // Serve files as-is, without Jekyll processing.
     fs::write(site.join(".nojekyll"), "").map_err(|e| format!(".nojekyll: {e}"))?;
 
     step("Publish");

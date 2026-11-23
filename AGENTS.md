@@ -8,6 +8,7 @@
 - AGENTS.md is not README.md: project descriptions go in README.md; only agent instructions go here.
 - Every source file starts with SPDX headers: `SPDX-FileCopyrightText: 2026 Maksym Motorny` (current year for new files) and `SPDX-License-Identifier: BSD-3-Clause`, in the file's comment syntax.
 - Naming: product crate `volya-engine`, role sub-crates `volya-engine-<role>` in `crates/`, platform packages `platforms/<platform>` with crate `volya-engine-<platform>`, tools `tools/<tool>` with crate `volya-engine-<tool>` (except `xtask`, by Cargo convention) (see docs/architecture.md). Create a crate only when its code exists.
+- Never add URL query parameters (`?…`) without the user's explicit approval.
 - Follow docs/architecture.md; update it when a decision changes.
 - No shell scripts: project tasks live in `tools/xtask` (`cargo xtask <task>`).
 - Live at head: run `cargo xtask update` when starting a chunk of work; fix what it breaks rather than pinning.
