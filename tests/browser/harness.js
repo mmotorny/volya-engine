@@ -72,7 +72,11 @@ export async function run(suite, startupError) {
   record("no page errors", pageErrors.length ? new Error(pageErrors.join("; ")) : null);
 
   const report = lines.join("\n");
-  await fetch("./__test/results", { method: "POST", body: report });
+  try {
+    await fetch("./__test/results", { method: "POST", body: report });
+  } catch {
+    // No dev server (e.g. GitHub Pages): the on-page report is the output.
+  }
   const pre = document.createElement("pre");
   pre.id = "test-report";
   pre.textContent = report;

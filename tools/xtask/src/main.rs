@@ -3,6 +3,7 @@
 
 //! Project tasks: `cargo xtask <task>`.
 
+mod deploy;
 mod e2e;
 
 use std::fs;
@@ -18,7 +19,8 @@ Tasks:
   e2e [TARGET...]
               Native tests, then browser suites on TARGETs (chrome, iphone;
               default: all). On demand only.
-  web [--dev] Build the web app into dist/ (release unless --dev).";
+  web [--dev] Build the web app into dist/ (release unless --dev).
+  deploy      Check, build and publish to GitHub Pages (gh-pages branch).";
 
 /// Crates that never build for the web target.
 const NATIVE_ONLY: &[&str] = &["volya-devserver", "xtask"];
@@ -35,6 +37,7 @@ fn main() -> ExitCode {
         ["e2e", targets @ ..] => e2e::run(targets),
         ["web"] => web(Profile::Release),
         ["web", "--dev"] => web(Profile::Dev),
+        ["deploy"] => deploy::run_deploy(),
         ["-h" | "--help"] | [] => {
             println!("{USAGE}");
             Ok(())

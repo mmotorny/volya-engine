@@ -17,7 +17,7 @@ All testing is local. `cargo xtask check` runs fast static checks (SPDX, license
 |---|---|---|
 | Native tests | `cargo test` | Mac |
 | Browser suites | `tests/browser/<suite>.js`, run by `harness.js`; the dev server serves them under `/volya-engine/__test/`, never in `dist/` | Headless desktop Chrome; Mobile Safari in a dedicated `Volya iPhone 17 Pro Max` simulator (created on first run, left booted) |
-| Real devices | Same suites, opened by hand; Safari Web Inspector for debugging | iPhone 17 Pro Max: Safari and Chrome |
+| Real devices | Same suites, opened by hand: `https://mmotorny.github.io/volya-engine/?test=<suite>` (report shows on the page), or the local dev server over HTTPS; Safari Web Inspector for debugging | iPhone 17 Pro Max: Safari and Chrome |
 
 Add a browser suite by creating `tests/browser/<suite>.js` exporting `tests` (name → function, may be async) and listing it in `SUITES` in `tools/xtask/src/e2e.rs`.
 

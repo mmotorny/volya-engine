@@ -33,7 +33,7 @@ The engine (VFS, simulation, scripting, A-Life, physics, rendering) runs on a si
 
 ## Hosting: GitHub Pages, project site
 
-Served from `https://mmotorny.github.io/volya-engine/`, deployed by pushing the locally built `dist/` to the `gh-pages` branch (#12). No custom domain: it emphasizes the project's free, non-commercial nature.
+Served from `https://mmotorny.github.io/volya-engine/`, deployed with `cargo xtask deploy`: a local release build force-pushed as one commit to the `gh-pages` branch (#12). The deployed site also carries the browser test harness under `__test/`, so real-device suites run by opening `…/volya-engine/?test=<suite>`. No custom domain: it emphasizes the project's free, non-commercial nature.
 
 Constraints this imposes:
 
