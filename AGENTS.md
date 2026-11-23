@@ -6,6 +6,7 @@
 - AGENTS.md is not README.md: project descriptions go in README.md; only agent instructions go here.
 - Every source file starts with SPDX headers: `SPDX-FileCopyrightText: 2026 Maksym Motorny` (current year for new files) and `SPDX-License-Identifier: BSD-3-Clause`, in the file's comment syntax.
 - Avoid GitHub CI whenever possible (cost); all testing runs locally.
+- Web build must keep functional parity between mobile and desktop browsers; every feature ships with both input paths (touch and keyboard/mouse/gamepad) and is tested on both.
 - Dependencies must be permissively licensed (no copyleft, including LGPL/MPL).
 - Never use or derive from leaked X-Ray source or its forks (e.g. OpenXRay).
 - Never commit game assets, including test fixtures; tests needing game data skip when it's absent.
