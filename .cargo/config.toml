@@ -1,0 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+
+[target.wasm32-unknown-unknown]
+runner = "wasm-bindgen-test-runner"

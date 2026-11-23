@@ -1,0 +1,19 @@
+/* SPDX-FileCopyrightText: 2026 Maksym Motorny */
+/* SPDX-License-Identifier: BSD-3-Clause */
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: #111;
+  color: #ddd;
+  font: 16px/1.4 system-ui, sans-serif;
+}
+
+main {
+  box-sizing: border-box;
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+    env(safe-area-inset-bottom) env(safe-area-inset-left);
+}

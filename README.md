@@ -13,3 +13,7 @@ Volya ships no game assets. You need your own legally obtained copy of the game.
 ## License
 
 BSD-3-Clause.
+
+## Development
+
+Run `scripts/check.sh` for the full local check. See [docs/testing.md](docs/testing.md).
