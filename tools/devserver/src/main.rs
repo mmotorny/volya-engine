@@ -6,10 +6,10 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use volya_devserver::{BASE, Server};
+use volya_engine_devserver::{BASE, Server};
 
 const USAGE: &str = "\
-Usage: volya-devserver [--root DIR] [--tests DIR] [--port PORT] [--tls-cert PEM --tls-key PEM]
+Usage: volya-engine-devserver [--root DIR] [--tests DIR] [--port PORT] [--tls-cert PEM --tls-key PEM]
 
 Serves --root (default: dist) under /volya-engine/ like GitHub Pages, and the
 browser test harness (default: tests/browser, if present) under
@@ -22,7 +22,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("volya-devserver: {error}\n\n{USAGE}");
+            eprintln!("volya-engine-devserver: {error}\n\n{USAGE}");
             ExitCode::FAILURE
         }
     }

@@ -45,7 +45,7 @@ Add variables here as new kinds of game data are needed.
 
 ### Dev server
 
-Mimics GitHub Pages (served under `/volya-engine/`, no custom headers) and serves the browser suites: `cargo xtask web --dev && cargo run -p volya-devserver`, then open `http://localhost:8080/volya-engine/`. Opening `?test=<suite>` prints that suite's report in the server's terminal.
+Mimics GitHub Pages (served under `/volya-engine/`, no custom headers) and serves the browser suites: `cargo xtask web --dev && cargo run -p volya-engine-devserver`, then open `http://localhost:8080/volya-engine/`. Opening `?test=<suite>` prints that suite's report in the server's terminal.
 
 ### Real devices
 
@@ -54,6 +54,6 @@ iOS only exposes OPFS to secure contexts, so serve over HTTPS:
 1. Create a local CA and certificate with [mkcert](https://github.com/FiloSottile/mkcert):
    `mkcert -install && mkcert -cert-file .cache/dev.pem -key-file .cache/dev-key.pem <mac-hostname>.local`
 2. Install the CA on the device: AirDrop `$(mkcert -CAROOT)/rootCA.pem`, install the profile in Settings, then enable it under Settings > General > About > Certificate Trust Settings.
-3. `cargo xtask web --dev && cargo run -p volya-devserver -- --port 8443 --tls-cert .cache/dev.pem --tls-key .cache/dev-key.pem`
+3. `cargo xtask web --dev && cargo run -p volya-engine-devserver -- --port 8443 --tls-cert .cache/dev.pem --tls-key .cache/dev-key.pem`
 4. On the device, open `https://<mac-hostname>.local:8443/volya-engine/` (append `?test=smoke` to run a suite; the report prints in the server's terminal).
 5. Debug from the Mac: enable Web Inspector in Chrome for iOS (Settings > Content Settings), connect the device, and use Safari's Develop menu on the Mac.

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 [package]
-name = "volya-devserver"
+name = "volya-engine-devserver"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

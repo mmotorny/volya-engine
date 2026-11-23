@@ -286,7 +286,7 @@ mod tests {
 
     fn fixture(name: &str) -> (PathBuf, Server) {
         let dir = std::env::temp_dir().join(format!(
-            "volya-devserver-test-{}-{name}",
+            "volya-engine-devserver-test-{}-{name}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&dir);

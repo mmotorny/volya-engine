@@ -24,7 +24,7 @@ To run locally on macOS:
 
    ```sh
    cargo xtask web --dev
-   cargo run -p volya-devserver
+   cargo run -p volya-engine-devserver
    ```
 
 4. Open http://localhost:8080/volya-engine/ in Chrome.

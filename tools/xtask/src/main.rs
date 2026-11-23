@@ -23,7 +23,7 @@ Tasks:
   deploy      Check, build and publish to GitHub Pages (gh-pages branch).";
 
 /// Crates that never build for the web target.
-const NATIVE_ONLY: &[&str] = &["volya-devserver", "xtask"];
+const NATIVE_ONLY: &[&str] = &["volya-engine-devserver", "xtask"];
 
 const WASM_TARGET: &str = "wasm32-unknown-unknown";
 
