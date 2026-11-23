@@ -4,6 +4,12 @@
 // Page side: owns the DOM, starts the engine worker and talks to it only by
 // message (docs/architecture.md).
 
+// Installable app: offline start and updates (sw.js). Registered relative to
+// this module so the scope is the app's base path.
+navigator.serviceWorker?.register(new URL("./sw.js", import.meta.url)).catch((error) => {
+  console.warn(`service worker: ${error.message}`);
+});
+
 const worker = new Worker(new URL("./engine-worker.js", import.meta.url), { type: "module" });
 const pending = new Map();
 let nextId = 0;

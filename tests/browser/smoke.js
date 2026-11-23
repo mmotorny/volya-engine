@@ -25,6 +25,12 @@ export const tests = {
     assertEqual(self.crossOriginIsolated, false);
   },
 
+  "service worker controls the app scope": async () => {
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 10000));
+    const registration = await Promise.race([navigator.serviceWorker.ready, timeout]);
+    assert(registration.scope.endsWith("/volya-engine/"), `scope ${registration.scope}`);
+  },
+
   "layout fits the viewport": () => {
     const overflow = document.documentElement.scrollWidth - window.innerWidth;
     assert(overflow <= 0, `horizontal overflow ${overflow}px`);
