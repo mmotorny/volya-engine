@@ -4,6 +4,7 @@
 - Track all work in GitHub issues; reference the issue in commits.
 - Don't use harness memory systems; record durable knowledge here.
 - Every instruction here must earn its tokens: cut prose that doesn't change agent behavior.
+- No status disclaimers in docs ("currently", "early days", "coming next"); they go stale. Track status in issues.
 - AGENTS.md is not README.md: project descriptions go in README.md; only agent instructions go here.
 - Every source file starts with SPDX headers: `SPDX-FileCopyrightText: 2026 Maksym Motorny` (current year for new files) and `SPDX-License-Identifier: BSD-3-Clause`, in the file's comment syntax.
 - Naming: product crate `volya-engine`, role sub-crates `volya-engine-<role>` in `crates/`, platform packages `platforms/<platform>` with crate `volya-engine-<platform>`, tools `tools/<tool>` with crate `volya-engine-<tool>` (except `xtask`, by Cargo convention) (see docs/architecture.md). Create a crate only when its code exists.

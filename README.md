@@ -14,7 +14,7 @@ Live version: https://mmotorny.github.io/volya-engine/
 
 ## Running
 
-Open the [live version](https://mmotorny.github.io/volya-engine/) in a supported browser. Early days: it currently starts the engine and shows its version; importing your game comes next.
+Open the [live version](https://mmotorny.github.io/volya-engine/) in a supported browser.
 
 To run locally on macOS:
 
