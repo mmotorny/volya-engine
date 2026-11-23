@@ -29,11 +29,6 @@ impl Rect {
             height,
         }
     }
-
-    /// Whether (`x`, `y`) lies inside (left and top edges inclusive).
-    pub fn contains(&self, x: f32, y: f32) -> bool {
-        x >= self.x && y >= self.y && x < self.x + self.width && y < self.y + self.height
-    }
 }
 
 /// The element at `path`/`index` of `doc` (ui-layout.md section 1.4), which a

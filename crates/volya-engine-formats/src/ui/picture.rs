@@ -21,10 +21,15 @@ impl Picture {
     /// Section 5.2: the value is first looked up as a texture id (exact
     /// match), giving that description's file and rectangle; otherwise it is
     /// a texture path with no rectangle. The `texture` child's own rectangle,
-    /// when set, overrides either.
+    /// when set, overrides either. A description rectangle with zero width or
+    /// height counts as unset (section 5.3: an empty texture rectangle means
+    /// the whole texture).
     pub fn resolve(texture: &TextureRef, descriptions: &TextureDescriptions) -> Self {
         let (path, rect) = match descriptions.get(&texture.name) {
-            Some(d) => (d.file.clone(), Some(d.rect)),
+            Some(d) => (
+                d.file.clone(),
+                Some(d.rect).filter(|r| r.width != 0.0 && r.height != 0.0),
+            ),
             None => (texture.name.clone(), None),
         };
         Self {
