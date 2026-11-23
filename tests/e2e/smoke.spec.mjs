@@ -8,20 +8,21 @@ test("engine starts without errors", async ({ page }) => {
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("console", (msg) => msg.type() === "error" && errors.push(msg.text()));
 
-  await page.goto("/");
+  await page.goto("./");
   const status = page.locator("#status");
   await expect(status).toHaveAttribute("data-state", "ready");
   await expect(status).toHaveText(/^Volya \d+\.\d+\.\d+$/);
   expect(errors).toEqual([]);
 });
 
-test("page is cross-origin isolated", async ({ page }) => {
-  await page.goto("/");
-  expect(await page.evaluate(() => self.crossOriginIsolated)).toBe(true);
+// GitHub Pages cannot send COOP/COEP; the engine must not depend on them.
+test("page is not cross-origin isolated", async ({ page }) => {
+  await page.goto("./");
+  expect(await page.evaluate(() => self.crossOriginIsolated)).toBe(false);
 });
 
 test("layout fits the viewport", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("./");
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth - window.innerWidth,
   );

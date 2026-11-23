@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Static server for dist/. Sends COOP/COEP so SharedArrayBuffer and wasm
-// threads are available, matching production hosting requirements.
+// Static server for dist/ that mimics GitHub Pages: served under
+// /volya-engine/, no custom headers (so no cross-origin isolation).
 // Set TLS_CERT and TLS_KEY to serve HTTPS on all interfaces (real devices
-// need a secure context for OPFS and cross-origin isolation).
+// need a secure context for OPFS).
 
 import { createReadStream, readFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
@@ -14,6 +14,7 @@ import { extname, join, normalize, resolve } from "node:path";
 
 const root = resolve(process.argv[2] ?? "dist");
 const port = Number(process.env.PORT ?? 8080);
+const base = "/volya-engine/";
 const types = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -32,8 +33,16 @@ const tls = process.env.TLS_CERT && process.env.TLS_KEY
 
 async function handle(req, res) {
   const url = new URL(req.url, "http://localhost");
-  let path = normalize(join(root, decodeURIComponent(url.pathname)));
-  if (!path.startsWith(root)) {
+  if (url.pathname === "/" || url.pathname === base.slice(0, -1)) {
+    res.writeHead(302, { Location: base }).end();
+    return;
+  }
+  if (!url.pathname.startsWith(base)) {
+    res.writeHead(404).end();
+    return;
+  }
+  let path = normalize(join(root, decodeURIComponent(url.pathname.slice(base.length))));
+  if (path !== root && !path.startsWith(root + "/")) {
     res.writeHead(403).end();
     return;
   }
@@ -46,8 +55,6 @@ async function handle(req, res) {
   }
   res.writeHead(200, {
     "Content-Type": types[extname(path)] ?? "application/octet-stream",
-    "Cross-Origin-Opener-Policy": "same-origin",
-    "Cross-Origin-Embedder-Policy": "require-corp",
     "Cache-Control": "no-store",
   });
   createReadStream(path).pipe(res);
@@ -56,4 +63,4 @@ async function handle(req, res) {
 const server = tls ? createHttpsServer(tls, handle) : createHttpServer(handle);
 const host = tls ? "0.0.0.0" : "localhost";
 server.listen(port, host, () =>
-  console.log(`Serving ${root} at ${tls ? "https" : "http"}://${host}:${port}`));
+  console.log(`Serving ${root} at ${tls ? "https" : "http"}://${host}:${port}${base}`));

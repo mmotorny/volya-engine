@@ -6,6 +6,7 @@
 - Every instruction here must earn its tokens: cut prose that doesn't change agent behavior.
 - AGENTS.md is not README.md: project descriptions go in README.md; only agent instructions go here.
 - Every source file starts with SPDX headers: `SPDX-FileCopyrightText: 2026 Maksym Motorny` (current year for new files) and `SPDX-License-Identifier: BSD-3-Clause`, in the file's comment syntax.
+- Follow docs/architecture.md; update it when a decision changes.
 - Run `scripts/check.sh` before every push; it must pass.
 - Avoid GitHub CI whenever possible (cost); all testing runs locally.
 - Browser targets: desktop Chrome; Safari and Chrome on iOS (both WebKit). Firefox, Android and iPad are out of scope for now.

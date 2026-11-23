@@ -1,6 +1,6 @@
 # Testing
 
-All testing is local. `scripts/check.sh` runs everything below except real-device testing.
+All testing is local. `scripts/check.sh` runs everything below except real-device testing. `scripts/serve.mjs` mimics GitHub Pages: served under `/volya-engine/`, no custom headers.
 
 | Layer | Tool | Browsers |
 |---|---|---|
@@ -19,11 +19,11 @@ All testing is local. `scripts/check.sh` runs everything below except real-devic
 
 ## Real devices
 
-iOS only exposes OPFS and cross-origin isolation to secure contexts, so serve over HTTPS:
+iOS only exposes OPFS to secure contexts, so serve over HTTPS:
 
 1. Create a local CA and certificate with [mkcert](https://github.com/FiloSottile/mkcert):
    `mkcert -install && mkcert -cert-file .cache/dev.pem -key-file .cache/dev-key.pem <mac-hostname>.local`
 2. Install the CA on the device: AirDrop `$(mkcert -CAROOT)/rootCA.pem`, install the profile in Settings, then enable it under Settings > General > About > Certificate Trust Settings.
 3. `scripts/build-web.sh && TLS_CERT=.cache/dev.pem TLS_KEY=.cache/dev-key.pem PORT=8443 node scripts/serve.mjs`
-4. On the device, open `https://<mac-hostname>.local:8443/`.
+4. On the device, open `https://<mac-hostname>.local:8443/volya-engine/`.
 5. Debug from the Mac: enable Settings > Apps > Safari > Advanced > Web Inspector on the device, connect it, and use Safari's Develop menu.

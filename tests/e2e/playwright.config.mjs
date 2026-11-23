@@ -10,12 +10,13 @@ export default defineConfig({
   testDir: ".",
   outputDir: "../../test-results",
   reporter: [["list"]],
-  use: { baseURL: `http://localhost:${port}` },
+  // Mirrors GitHub Pages: project site under /volya-engine/.
+  use: { baseURL: `http://localhost:${port}/volya-engine/` },
   webServer: {
     command: `node scripts/serve.mjs dist`,
     cwd: "../..",
     env: { PORT: String(port) },
-    url: `http://localhost:${port}/`,
+    url: `http://localhost:${port}/volya-engine/`,
     reuseExistingServer: false,
   },
   projects: [
