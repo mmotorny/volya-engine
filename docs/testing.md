@@ -6,8 +6,8 @@ All testing is local. `scripts/check.sh` runs everything below except real-devic
 |---|---|---|
 | Native unit tests | `cargo test` | n/a |
 | Wasm unit tests | `wasm-bindgen-test` via chromedriver | headless desktop Chrome |
-| Browser tests | Playwright (`tests/e2e/`) | installed desktop Chrome; WebKit emulating iPhone 17 and iPad Pro 11 |
-| Real devices | Safari Web Inspector | iOS/iPadOS Safari and Chrome |
+| Browser tests | Playwright (`tests/e2e/`) | installed desktop Chrome; WebKit emulating iPhone 17 Pro Max |
+| Real devices | Safari Web Inspector | iPhone 17 Pro Max: Safari and Chrome |
 
 ## Setup
 

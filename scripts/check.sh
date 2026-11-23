@@ -25,6 +25,6 @@ step "Wasm tests (headless Chrome)"
 CHROMEDRIVER="$(scripts/chromedriver.sh)" cargo test --workspace --target wasm32-unknown-unknown
 step "Web build"
 scripts/build-web.sh
-step "Browser tests (desktop Chrome, iPhone, iPad)"
+step "Browser tests (desktop Chrome, iPhone)"
 npx playwright test --config tests/e2e/playwright.config.mjs
 step "All checks passed"

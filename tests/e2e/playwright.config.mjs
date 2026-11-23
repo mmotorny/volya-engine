@@ -5,7 +5,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 const port = 8123;
 
-// Targets: desktop Chrome (installed), iOS/iPadOS Safari and Chrome (WebKit).
+// Targets: desktop Chrome (installed), iOS Safari and Chrome (WebKit).
 export default defineConfig({
   testDir: ".",
   outputDir: "../../test-results",
@@ -20,7 +20,6 @@ export default defineConfig({
   },
   projects: [
     { name: "desktop-chrome", use: { ...devices["Desktop Chrome"], channel: "chrome" } },
-    { name: "iphone", use: { ...devices["iPhone 17"] } },
-    { name: "ipad", use: { ...devices["iPad Pro 11"] } },
+    { name: "iphone", use: { ...devices["iPhone 17 Pro Max"] } },
   ],
 });

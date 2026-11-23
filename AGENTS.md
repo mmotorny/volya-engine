@@ -8,7 +8,8 @@
 - Every source file starts with SPDX headers: `SPDX-FileCopyrightText: 2026 Maksym Motorny` (current year for new files) and `SPDX-License-Identifier: BSD-3-Clause`, in the file's comment syntax.
 - Run `scripts/check.sh` before every push; it must pass.
 - Avoid GitHub CI whenever possible (cost); all testing runs locally.
-- Browser targets: desktop Chrome; Safari and Chrome on iOS/iPadOS (both WebKit). Firefox and Android are out of scope.
+- Browser targets: desktop Chrome; Safari and Chrome on iOS (both WebKit). Firefox, Android and iPad are out of scope for now.
+- Reference mobile device (real-device testing, performance and memory budgets): iPhone 17 Pro Max.
 - Web build must keep functional parity between mobile and desktop browsers; every feature ships with both input paths (touch and keyboard/mouse/gamepad) and is tested on both.
 - Dependencies must be permissively licensed (no copyleft, including LGPL/MPL).
 - Never use or derive from leaked X-Ray source or its forks (e.g. OpenXRay).
