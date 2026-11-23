@@ -21,6 +21,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 inno = { version = "0.7", default-features = false }
 md-5 = "0.11"
+ogg = "0.9"
+theora_nrp = "0.2"
 zlib-rs = { version = "0.6", default-features = false, features = ["std"] }
 lzokay-native = { version = "0.2", default-features = false }
 crc32fast = "1"
@@ -30,6 +32,19 @@ unsafe_code = "deny"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+
+# Decoding and hashing are too slow unoptimized for the real-data tests.
+[profile.dev.package.theora_nrp]
+opt-level = 3
+
+[profile.dev.package.ogg_nrp]
+opt-level = 3
+
+[profile.dev.package.md-5]
+opt-level = 3
+
+[profile.dev.package.ogg]
+opt-level = 3
 
 [profile.release]
 opt-level = "s"

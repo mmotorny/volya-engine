@@ -6,6 +6,7 @@
 //! docs/formats/.
 
 pub mod db;
+pub mod video;
 
 #[cfg(test)]
 fn md5_hex(data: &[u8]) -> String {
