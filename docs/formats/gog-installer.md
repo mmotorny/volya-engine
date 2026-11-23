@@ -1,15 +1,17 @@
 # GOG offline installer: original Shadow of Chernobyl
 
-Survey of the GOG offline installer (#4). Sources: observation of a legally obtained installer and the output of [innoextract](https://constexpr.org/innoextract/) 1.9 (zlib license) used as a measuring tool. No game content is reproduced here.
+Survey of the GOG offline installers (#4): the Russian edition (first priority, docs/roadmap.md) and the English (WorldWide) edition. Sources: observation of a legally obtained installer and the output of [innoextract](https://constexpr.org/innoextract/) 1.9 (zlib license) used as a measuring tool. No game content is reproduced here.
 
 ## Download
 
-Two files, both required:
+Each edition is a separate download of two files, both required:
 
 | File | Size | Contents |
 |---|---|---|
-| `setup_s.t.a.l.k.e.r._shadow_of_chernobyl_2.1.0.10_gog_0.13_(77895).exe` | 0.8 MiB | Windows PE loader with the Inno Setup headers (file list, compressed) |
-| `setup_s.t.a.l.k.e.r._shadow_of_chernobyl_2.1.0.10_gog_0.13_(77895)-1.bin` | 3.47 GiB | Data slice 1 |
+| `setup_s.t.a.l.k.e.r._shadow_of_chernobyl_2.1.0.10_gog_0.13_(russian)_(77895).exe` | 0.8 MiB | Russian: Windows PE loader with the Inno Setup headers (file list, compressed) |
+| `setup_s.t.a.l.k.e.r._shadow_of_chernobyl_2.1.0.10_gog_0.13_(russian)_(77895)-1.bin` | 3.48 GiB | Russian: data slice 1 |
+| `setup_s.t.a.l.k.e.r._shadow_of_chernobyl_2.1.0.10_gog_0.13_(77895).exe` | 0.8 MiB | English (multi-language): headers |
+| `setup_s.t.a.l.k.e.r._shadow_of_chernobyl_2.1.0.10_gog_0.13_(77895)-1.bin` | 3.47 GiB | English (multi-language): data slice 1 |
 
 `2.1.0.10` is GOG's installer version (the install script writes it as `InstallVers`), not the game's patch level; identifying the patch level is #8. GOG game ID `1207660573`.
 
@@ -17,9 +19,14 @@ Two files, both required:
 
 - Inno Setup, setup data version **5.6.2 (Unicode)**. Not passworded.
 - The `.bin` is a standard Inno data slice: signature `idska32\x1a`. Chunks start with `zlb\x1a`; most chunk payloads begin with a zlib header (`78 9c`), others appear stored. No RAR wrapping, no encryption seen; LZMA not seen.
-- Languages: de-DE, en-US, es-ES, fr-FR, it-IT, pl-PL, ru-RU, uk-UA, zh-Hant. Shared files are tagged with seven of them; pl-PL and ru-RU tag no files in this download. `gamedata.db9`, `ReadMe.txt`, the manual and GOG metadata are en-US only.
+- Russian installer: single language, every game file tagged `ru-RU`.
+- English installer languages: de-DE, en-US, es-ES, fr-FR, it-IT, pl-PL, ru-RU, uk-UA, zh-Hant. Shared files are tagged with seven of them; pl-PL and ru-RU tag no files in this download. `gamedata.db9`, `ReadMe.txt`, the manual and GOG metadata are en-US only.
 
-## Contents (en-US selection)
+## Contents
+
+Both editions have the same layout and sizes within a few percent: 60 files, 5.58 GiB installed, 5.55 GiB of archives. The archives differ between editions (e.g. `gamedata.dba` 31 MiB Russian vs 21.8 MiB English, `gamedata.dbb` 52.6 vs 57.4 MiB, `gamedata.db5` 664 vs 660 MiB), so they are distinct builds, not a shared base plus a language pack. Whether the Russian build carries Russian voice-over is answered by reading the archives (#9).
+
+### English (en-US selection)
 
 60 files, 5.58 GiB installed, of which 5.55 GiB are archives:
 
@@ -33,4 +40,5 @@ Two files, both required:
 
 - The importer needs both files picked; validate by the `.exe`'s slice reference and the `.bin` signature.
 - Extract only what the engine reads: `gamedata.db*` (plus `mods/*.xdb*` when multiplayer matters), ~5.5 GiB into OPFS. Skip `bin/`, redistributables and installer UI (`tmp/`).
-- Unpacker (#5) must support Inno 5.6.2 Unicode headers, zlib and stored chunks, and per-file language conditions (select en-US).
+- Unpacker (#5) must support Inno 5.6.2 Unicode headers, zlib and stored chunks, and per-file language conditions (select the installer's language; ru-RU for the Russian edition).
+- Fingerprinting (#8) must tell the editions apart by their archives.
