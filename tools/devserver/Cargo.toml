@@ -12,5 +12,3 @@ publish = false
 [lints]
 workspace = true
 
-[dependencies]
-rustls.workspace = true

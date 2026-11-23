@@ -3,7 +3,7 @@
 
 //! Static file server that mimics GitHub Pages for local development:
 //! serves a directory under [`BASE`], sends no custom headers (so no
-//! cross-origin isolation), and optionally speaks HTTPS for real devices.
+//! cross-origin isolation).
 //!
 //! With [`Server::with_tests`] it also serves the browser test harness under
 //! [`TEST_BASE`] (kept out of `dist/`) and accepts test reports POSTed to
@@ -11,13 +11,10 @@
 
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
-
-use rustls::pki_types::pem::PemObject;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 
 /// URL prefix of the GitHub Pages project site.
 pub const BASE: &str = "/volya-engine/";
@@ -36,7 +33,6 @@ pub struct Server {
     /// URL prefix and directory, most specific first.
     mounts: Vec<(&'static str, PathBuf)>,
     results: Option<ResultsSink>,
-    tls: Option<Arc<rustls::ServerConfig>>,
 }
 
 impl Server {
@@ -44,7 +40,6 @@ impl Server {
         Ok(Self {
             mounts: vec![(BASE, root.canonicalize()?)],
             results: None,
-            tls: None,
         })
     }
 
@@ -55,28 +50,6 @@ impl Server {
         Ok(self)
     }
 
-    /// Enables HTTPS with a PEM certificate chain and private key.
-    pub fn with_tls(mut self, cert: &Path, key: &Path) -> io::Result<Self> {
-        let certs = CertificateDer::pem_file_iter(cert)
-            .and_then(|certs| certs.collect::<Result<Vec<_>, _>>())
-            .map_err(io::Error::other)?;
-        let key = PrivateKeyDer::from_pem_file(key).map_err(io::Error::other)?;
-        let config = rustls::ServerConfig::builder_with_provider(Arc::new(
-            rustls::crypto::ring::default_provider(),
-        ))
-        .with_safe_default_protocol_versions()
-        .map_err(io::Error::other)?
-        .with_no_client_auth()
-        .with_single_cert(certs, key)
-        .map_err(io::Error::other)?;
-        self.tls = Some(Arc::new(config));
-        Ok(self)
-    }
-
-    pub fn is_tls(&self) -> bool {
-        self.tls.is_some()
-    }
-
     /// Accepts connections forever, one thread per connection.
     pub fn run(self, listener: TcpListener) -> io::Result<()> {
         let server = Arc::new(self);
@@ -84,26 +57,12 @@ impl Server {
             let stream = stream?;
             let server = Arc::clone(&server);
             thread::spawn(move || {
-                if let Err(error) = server.connection(stream) {
+                if let Err(error) = server.respond(stream) {
                     eprintln!("connection error: {error}");
                 }
             });
         }
         Ok(())
-    }
-
-    fn connection(&self, stream: TcpStream) -> io::Result<()> {
-        match &self.tls {
-            None => self.respond(stream),
-            Some(config) => {
-                let conn =
-                    rustls::ServerConnection::new(Arc::clone(config)).map_err(io::Error::other)?;
-                let mut tls = rustls::StreamOwned::new(conn, stream);
-                self.respond(&mut tls)?;
-                tls.conn.send_close_notify();
-                tls.flush()
-            }
-        }
     }
 
     fn respond<S: Read + Write>(&self, mut stream: S) -> io::Result<()> {
@@ -291,6 +250,7 @@ fn content_type(path: &Path) -> &'static str {
 mod tests {
     use super::*;
     use std::fs;
+    use std::net::TcpStream;
     use std::sync::mpsc;
 
     fn fixture(name: &str) -> (PathBuf, Server) {

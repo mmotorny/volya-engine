@@ -16,7 +16,7 @@
 - Iteration speed first: before reporting done, run only high-ROI tests directly related to the change. End-to-end and multi-device tests (`cargo xtask e2e`) run only on demand; never block normal interaction on them.
 - Avoid GitHub CI whenever possible (cost); all testing runs locally.
 - Work by the priorities in docs/roadmap.md; record roadmap decisions there, not here.
-- Agents test desktop Chrome and Mobile Safari in the iOS Simulator; the user checks only Chrome on iOS on the reference device. Never ask the user to check anything else.
+- Agents test desktop Chrome and Mobile Safari in the iOS Simulator. The user is not QA: never ask them to run tests or checks; real-device feedback comes only from them using the deployed app.
 - Web build must keep functional parity between mobile and desktop browsers; every feature ships with both input paths (touch and keyboard/mouse/gamepad) and is tested on both.
 - Dependencies must be permissively licensed (no copyleft, including LGPL/MPL).
 - Never use or derive from leaked X-Ray source or its forks (e.g. OpenXRay).

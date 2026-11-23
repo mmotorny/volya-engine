@@ -4,7 +4,7 @@
 //! Deploys to GitHub Pages without GitHub Actions: builds a release locally
 //! and force-pushes it as a single commit to the `gh-pages` branch. The branch
 //! is a build artifact; its history carries no value. Tests are never
-//! deployed; real devices run them against the local dev server.
+//! deployed.
 
 use std::fs;
 

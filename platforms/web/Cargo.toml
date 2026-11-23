@@ -16,10 +16,8 @@ crate-type = ["cdylib"]
 [lints]
 workspace = true
 
-[dependencies]
-volya-engine = { path = "../../crates/volya-engine" }
-
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+volya-engine = { path = "../../crates/volya-engine" }
 js-sys.workspace = true
 serde.workspace = true
 serde_json.workspace = true

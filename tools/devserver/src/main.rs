@@ -9,7 +9,7 @@ use std::sync::Arc;
 use volya_engine_devserver::{BASE, Server};
 
 const USAGE: &str = "\
-Usage: volya-engine-devserver [--root DIR] [--tests DIR] [--port PORT] [--tls-cert PEM --tls-key PEM]
+Usage: volya-engine-devserver [--root DIR] [--tests DIR] [--port PORT]
 
 Serves --root (default: dist) under /volya-engine/ like GitHub Pages, and the
 browser test suites (default: tests/browser, if present) under
@@ -30,7 +30,6 @@ fn run() -> Result<(), String> {
     let mut root = PathBuf::from("dist");
     let mut tests = Some(PathBuf::from("tests/browser")).filter(|d| d.is_dir());
     let mut port = 8080u16;
-    let (mut cert, mut key) = (None, None);
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         let mut value = || args.next().ok_or(format!("{arg} needs a value"));
@@ -38,8 +37,6 @@ fn run() -> Result<(), String> {
             "--root" => root = value()?.into(),
             "--tests" => tests = Some(value()?.into()),
             "--port" => port = value()?.parse().map_err(|e| format!("--port: {e}"))?,
-            "--tls-cert" => cert = Some(PathBuf::from(value()?)),
-            "--tls-key" => key = Some(PathBuf::from(value()?)),
             "-h" | "--help" => {
                 println!("{USAGE}");
                 return Ok(());
@@ -55,20 +52,10 @@ fn run() -> Result<(), String> {
             .map_err(|e| format!("{}: {e}", dir.display()))?,
         None => server,
     };
-    let server = match (cert, key) {
-        (Some(cert), Some(key)) => server.with_tls(&cert, &key).map_err(|e| e.to_string())?,
-        (None, None) => server,
-        _ => return Err("--tls-cert and --tls-key go together".into()),
-    };
-    let (scheme, host) = if server.is_tls() {
-        ("https", "0.0.0.0")
-    } else {
-        ("http", "localhost")
-    };
-    let listener =
-        TcpListener::bind((host, port)).map_err(|e| format!("bind {host}:{port}: {e}"))?;
+    let listener = TcpListener::bind(("localhost", port))
+        .map_err(|e| format!("bind localhost:{port}: {e}"))?;
     println!(
-        "Serving {} at {scheme}://{host}:{port}{BASE}",
+        "Serving {} at http://localhost:{port}{BASE}",
         root.display()
     );
     server.run(listener).map_err(|e| e.to_string())

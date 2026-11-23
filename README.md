@@ -26,8 +26,6 @@ To run locally on macOS:
 
 3. Open http://localhost:8080/volya-engine/ in Chrome.
 
-To try it on an iPhone, serve over HTTPS as described in [docs/testing.md](docs/testing.md#real-devices).
-
 ## Development
 
 - `cargo xtask check`: fast static checks (needs [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny)).
