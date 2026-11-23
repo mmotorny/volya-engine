@@ -22,6 +22,16 @@ Each edition is a separate download of two files, both required:
 - Russian installer: single language, every game file tagged `ru-RU`.
 - English installer languages: de-DE, en-US, es-ES, fr-FR, it-IT, pl-PL, ru-RU, uk-UA, zh-Hant. Shared files are tagged with seven of them; pl-PL and ru-RU tag no files in this download. `gamedata.db9`, `ReadMe.txt`, the manual and GOG metadata are en-US only.
 
+## GOG Galaxy part layer
+
+Inno Setup does not store the game files under their names. It stores 1036 *parts* (Russian edition) as `{tmp}/<aa>/<bb>\<md5>` entries; GOG's install code reassembles them. Each part's Inno file entry carries Pascal-script conditions:
+
+- `check`: `check_if_install('ru-RU#','32#64#','')` (language, bitness); redistributables use `check_if_install_dependency(...)`.
+- On the first part of a file only: `before_install('<md5 of the whole file>', '<target path>', <part count>)` (`_dependency` variants for redistributables).
+- On every part: `after_install('<md5 of the inflated part>', <compressed size>, <inflated size>)`.
+
+Parts of one file follow each other in entry order. Each part is a zlib stream inflating to at most 10 MiB (10485760 bytes); its Inno entry name is the MD5 of its compressed bytes. Verified on `gamedata.dbd`: inflating its single part gives exactly the bytes and MD5 that innoextract `--gog` produces. So extraction is: stream each part out of Inno, inflate, verify the part MD5, append to the target, verify the whole-file MD5.
+
 ## Contents
 
 Both editions have the same layout and sizes within a few percent: 60 files, 5.58 GiB installed, 5.55 GiB of archives. The archives differ between editions (e.g. `gamedata.dba` 31 MiB Russian vs 21.8 MiB English, `gamedata.dbb` 52.6 vs 57.4 MiB, `gamedata.db5` 664 vs 660 MiB), so they are distinct builds, not a shared base plus a language pack. Whether the Russian build carries Russian voice-over is answered by reading the archives (#9).
