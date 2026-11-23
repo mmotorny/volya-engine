@@ -15,8 +15,8 @@ Priorities, in order. Work items are tracked in GitHub issues and milestones.
 
 ## Platforms
 
-1. Web.
-2. iOS, then iPadOS (native).
+1. Web, including the iPhone Home Screen web app (PWA) as the primary iOS delivery.
+2. Native iOS, then iPadOS.
 3. VR.
 
 ## Web browsers

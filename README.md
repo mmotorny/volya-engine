@@ -8,7 +8,7 @@ Live version: https://mmotorny.github.io/volya-engine/
 
 ## Platforms
 
-Web (desktop Chrome; Chrome and Safari on iOS), then native iOS and iPadOS, then VR. See [docs/roadmap.md](docs/roadmap.md).
+Web (desktop Chrome; Chrome and Safari on iOS, installable as an iPhone Home Screen app), then native iOS and iPadOS, then VR. See [docs/roadmap.md](docs/roadmap.md).
 
 ## Running
 
