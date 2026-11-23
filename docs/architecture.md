@@ -27,6 +27,7 @@ The engine (VFS, simulation, scripting, A-Life, physics, rendering) runs on a si
 - **Rendering** uses WebGPU on an `OffscreenCanvas` transferred from the main thread. Pending verification on iOS Safari (#11). Fallback if unavailable: render on the main thread from frame data posted by the engine worker.
 - **Main thread** owns DOM UI and input. It forwards normalized input events (touch, keyboard/mouse, gamepad) to the engine worker via `postMessage`.
 - **Audio**: Web Audio lives on the main thread / an AudioWorklet; the engine sends it commands or buffers by message. It is an output channel, not shared state.
+- **I/O is synchronous on the engine thread**: `Read + Seek` over OPFS sync access handles, for parsing, loading screens and in-game loads alike, like the original engine. Keep large reads out of the frame loop where practical. An I/O worker for streaming is deferred until measurements show hitches (#17).
 - **Other workers** do self-contained jobs and exchange messages only, never simulation state: the importer (multi-GB unpack), and later, if profiling demands it, asset decoding.
 - **No `SharedArrayBuffer`, no wasm threads.** This removes the need for cross-origin isolation (COOP/COEP), which GitHub Pages cannot provide. Revisit only with profiling data.
 
