@@ -13,7 +13,7 @@ use std::io::Read;
 use serde::{Deserialize, Serialize};
 use volya_engine::core::vfs::db::DbVfs;
 use volya_engine::core::vfs::{EntryKind, Vfs, VfsFile};
-use wasm_bindgen::JsValue;
+use wasm_bindgen::{JsCast, JsValue};
 
 use crate::opfs;
 
@@ -91,8 +91,9 @@ pub async fn status() -> Result<Status, JsValue> {
     }
     let namespace = opfs::namespace().await?;
     let dir = opfs::create_dir(&namespace, GAME_DIR).await?;
+    let opened = mount_when_unlocked(&dir).await?;
     // Leaked so the tree can borrow it for 'static; `unmount` closes it.
-    let vfs: &'static opfs::OpfsVfs = Box::leak(Box::new(opfs::OpfsVfs::mount(&dir).await?));
+    let vfs: &'static opfs::OpfsVfs = Box::leak(Box::new(opened));
     for file in &manifest.files {
         let size = vfs.open(&file.path).map(|f| f.size()).ok();
         if size != Some(file.size) {
@@ -116,6 +117,36 @@ pub async fn status() -> Result<Status, JsValue> {
     let status = mounted_status(&game);
     GAME.with(|g| *g.borrow_mut() = Some(game));
     Ok(status)
+}
+
+/// Mounts `dir`, waiting out file locks held by a previous page whose engine
+/// worker is still shutting down (a reload); a lock that persists means the
+/// game is open elsewhere.
+async fn mount_when_unlocked(
+    dir: &web_sys::FileSystemDirectoryHandle,
+) -> Result<opfs::OpfsVfs, JsValue> {
+    const ATTEMPTS: u32 = 20;
+    for attempt in 1..=ATTEMPTS {
+        match opfs::OpfsVfs::mount(dir).await {
+            Ok(vfs) => return Ok(vfs),
+            Err(e) if is_lock_error(&e) && attempt < ATTEMPTS => opfs::sleep(250).await?,
+            Err(e) if is_lock_error(&e) => {
+                return Err(error(
+                    "the game is open in another tab or window of this app; close it and reload",
+                ));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    unreachable!()
+}
+
+/// Whether `e` is the error a locked OPFS file gives (`NoModificationAllowedError`
+/// in Chrome, `InvalidStateError` in WebKit).
+fn is_lock_error(e: &JsValue) -> bool {
+    e.dyn_ref::<js_sys::Error>()
+        .map(|e| String::from(e.name()))
+        .is_some_and(|name| name == "NoModificationAllowedError" || name == "InvalidStateError")
 }
 
 fn mounted_status(game: &Game) -> Status {

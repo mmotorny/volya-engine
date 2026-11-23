@@ -9,6 +9,8 @@ const PREVIEW_BYTES = 4096;
 
 let call;
 const root = () => document.getElementById("game");
+/** Replaces the game section's content, skipping absent (null) parts. */
+const show = (...children) => root().replaceChildren(...children.filter((c) => c !== null && c !== undefined));
 
 const formatBytes = (n) =>
   n >= 2 ** 30 ? `${(n / 2 ** 30).toFixed(2)} GiB` : n >= 2 ** 20 ? `${(n / 2 ** 20).toFixed(1)} MiB` : n >= 1024 ? `${(n / 1024).toFixed(1)} KiB` : `${n} B`;
@@ -111,7 +113,7 @@ function showImport(status) {
     }
   });
   const resume = status.written > 0 ? element("p", { textContent: `A previous import stopped after ${status.written} files; choosing the installer again resumes it.` }) : null;
-  root().replaceChildren(
+  show(
     element("h2", { textContent: "Import the game" }),
     element("p", {
       textContent:
@@ -131,7 +133,7 @@ function showDamaged(error) {
     await call("forget_game");
     await refresh();
   });
-  root().replaceChildren(element("h2", { textContent: "Imported game unavailable" }), element("p", { textContent: error.message }), remove);
+  show(element("h2", { textContent: "Imported game unavailable" }), element("p", { textContent: error.message }), remove);
 }
 
 async function showBrowser(path) {
@@ -166,7 +168,7 @@ async function showBrowser(path) {
     await call("forget_game");
     await refresh();
   });
-  root().replaceChildren(
+  show(
     element("p", { className: "storage", textContent: await storageLine() }),
     crumbs,
     preview,

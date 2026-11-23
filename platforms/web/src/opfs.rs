@@ -37,6 +37,15 @@ pub async fn namespace() -> Result<FileSystemDirectoryHandle, JsValue> {
     subdir(&root, NAMESPACE, true).await
 }
 
+/// Resolves after `ms` milliseconds.
+pub async fn sleep(ms: i32) -> Result<(), JsValue> {
+    let scope: WorkerGlobalScope = js_sys::global().dyn_into()?;
+    let promise = js_sys::Promise::new(&mut |resolve, _| {
+        let _ = scope.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms);
+    });
+    JsFuture::from(promise).await.map(drop)
+}
+
 /// Creates (or opens) directory `name` in `dir`.
 pub async fn create_dir(
     dir: &FileSystemDirectoryHandle,

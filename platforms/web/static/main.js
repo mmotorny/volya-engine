@@ -41,6 +41,12 @@ function call(op, args = {}) {
 
 globalThis.volya = { call, status: () => call("status") };
 
+// The engine worker holds OPFS file locks. Browsers keep left pages alive in
+// the back-forward cache, which would keep those locks from the next page:
+// end the worker when the page is hidden, and reload if it is restored.
+addEventListener("pagehide", () => worker.terminate());
+addEventListener("pageshow", (event) => event.persisted && location.reload());
+
 const canvas = document.getElementById("view").transferControlToOffscreen();
 worker.postMessage({ type: "start", canvas }, [canvas]);
 
