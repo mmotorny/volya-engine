@@ -3,6 +3,7 @@
 
 [package]
 name = "volya-engine"
+description = "Volya Engine: the platform-free product library every platform package builds on."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,12 +11,5 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
-[lib]
-crate-type = ["cdylib", "rlib"]
-
 [lints]
 workspace = true
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen.workspace = true
-web-sys = { workspace = true, features = ["Document", "Element", "Window"] }

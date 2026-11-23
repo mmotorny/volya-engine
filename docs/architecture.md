@@ -6,15 +6,17 @@ Decisions and the reasons behind them. Update this file when a decision changes.
 
 Split only where a split buys compile-time isolation, a compiler-enforced boundary, or reuse outside the product; subsystems (AI, physics, A-Life, UI) are modules, not crates.
 
-| Crate | Contents | Why separate |
+| Package | Contents | Why separate |
 |---|---|---|
-| `volya-engine` | The product: composition and all platform code (web shell and workers now; iOS, VR later). Only crate using `web-sys`. | Platform specifics stay at the edge; everything below builds and tests natively. |
-| `volya-engine-core` | Platform-free engine: VFS trait, simulation (world, A-Life, AI, physics, scripting), save/load, test interface. | Deterministic and headless-testable; cannot reach rendering or the browser. |
-| `volya-engine-render` | `wgpu` renderer: core state to frames. | Keeps `wgpu` rebuilds off the simulation's edit loop; keeps rendering out of simulation. |
-| `volya-engine-formats` | Game file format parsers over `Read + Seek`, no I/O. | Reused by tools; one home for clean-room provenance and game-data tests. |
-| `volya-engine-installer` | Inno Setup unpacker. | Unrelated to the game; runs in the importer worker; has its own CLI. |
+| `crates/volya-engine` | The platform-free product: composes the role crates into one engine, defines the traits platforms implement (storage, input, audio, surface, clock), and hosts the test interface. | The product as one library every platform ships. |
+| `crates/volya-engine-core` | Platform-free engine: VFS trait and native backend, simulation (world, A-Life, AI, physics, scripting), save/load. | Deterministic and headless-testable; cannot reach rendering or any platform. |
+| `crates/volya-engine-render` | `wgpu` renderer: core state to frames. | Keeps `wgpu` rebuilds off the simulation's edit loop; keeps rendering out of simulation. |
+| `crates/volya-engine-formats` | Game file format parsers over `Read + Seek`, no I/O. | Reused by tools; one home for clean-room provenance and game-data tests. |
+| `crates/volya-engine-installer` | Inno Setup unpacker. | Unrelated to the game; runs in the importer worker; has its own CLI. |
+| `platforms/web` | Crate `volya-engine-web` (wasm `cdylib`: entry point, OPFS, workers, `OffscreenCanvas`) plus `static/` (HTML, JS, CSS, icons). Only package using `web-sys`. | Platform packaging and APIs; compiles to nothing elsewhere. |
+| `platforms/ios` (later) | Crate `volya-engine-ios` (`staticlib`) plus the Xcode project / Swift shell. | Same, for iOS. VR decided when it starts (visionOS may sit with iOS). |
 
-Dependencies point one way: `volya-engine` → `render` → `core` → `formats`, and `volya-engine` → `installer`. Only `volya-engine` knows the platform. Tooling lives in `tools/` (`devserver`, `xtask`).
+Dependencies point one way: `volya-engine-<platform>` → `volya-engine` → role crates (`render` → `core` → `formats`; `installer`). Everything in `crates/` builds and tests natively. Tooling lives in `tools/` (`devserver`, `xtask`).
 
 ## Threading: one engine thread, in a worker
 

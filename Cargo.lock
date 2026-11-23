@@ -217,7 +217,12 @@ dependencies = [
 [[package]]
 name = "volya-engine"
 version = "0.1.0"
+
+[[package]]
+name = "volya-engine-web"
+version = "0.1.0"
 dependencies = [
+ "volya-engine",
  "wasm-bindgen",
  "web-sys",
 ]

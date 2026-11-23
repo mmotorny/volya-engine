@@ -134,15 +134,15 @@ fn web(profile: Profile) -> Result {
     };
     run(cmd(
         "cargo",
-        &["build", "-p", "volya-engine", "--target", WASM_TARGET],
+        &["build", "-p", "volya-engine-web", "--target", WASM_TARGET],
     )
     .args(flags))?;
     let dist = root().join("dist");
     if dist.exists() {
         fs::remove_dir_all(&dist).map_err(|e| format!("remove dist: {e}"))?;
     }
-    copy_dir(&root().join("web"), &dist).map_err(|e| format!("copy web: {e}"))?;
-    let wasm = format!("target/{WASM_TARGET}/{dir}/volya_engine.wasm");
+    copy_dir(&root().join("platforms/web/static"), &dist).map_err(|e| format!("copy web: {e}"))?;
+    let wasm = format!("target/{WASM_TARGET}/{dir}/volya_engine_web.wasm");
     run(&mut cmd(
         "wasm-bindgen",
         &[
