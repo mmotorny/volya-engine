@@ -20,7 +20,8 @@ Tasks:
               Native tests, then browser suites on TARGETs (chrome, iphone;
               default: all). On demand only.
   web [--dev] Build the web app into dist/ (release unless --dev).
-  deploy      Check, build and publish to GitHub Pages (gh-pages branch).";
+  deploy      Check, build and publish to GitHub Pages (gh-pages branch).
+  update      Move to the latest stable Rust and dependencies, then check.";
 
 /// Crates that never build for the web target.
 const NATIVE_ONLY: &[&str] = &["volya-engine-devserver", "xtask"];
@@ -38,6 +39,7 @@ fn main() -> ExitCode {
         ["web"] => web(Profile::Release),
         ["web", "--dev"] => web(Profile::Dev),
         ["deploy"] => deploy::run_deploy(),
+        ["update"] => update(),
         ["-h" | "--help"] | [] => {
             println!("{USAGE}");
             Ok(())
@@ -123,6 +125,58 @@ fn check() -> Result {
     Ok(())
 }
 
+/// Keeps the project at head: latest stable Rust, latest compatible crates.
+fn update() -> Result {
+    step("Rust toolchain");
+    run(&mut cmd("rustup", &["update", "stable"]))?;
+    step("Dependencies");
+    run(&mut cmd("cargo", &["update"]))?;
+    check()
+}
+
+/// Version of `package` recorded in Cargo.lock.
+fn locked_version(package: &str) -> Result<String> {
+    let lock = fs::read_to_string(root().join("Cargo.lock"))
+        .map_err(|e| format!("read Cargo.lock: {e}"))?;
+    locked_version_in(&lock, package).ok_or_else(|| format!("{package} not in Cargo.lock"))
+}
+
+fn locked_version_in(lock: &str, package: &str) -> Option<String> {
+    let name = format!("name = \"{package}\"");
+    let mut lines = lock.lines();
+    lines.find(|l| *l == name)?;
+    let version = lines.next()?.strip_prefix("version = \"")?;
+    Some(version.trim_end_matches('"').to_owned())
+}
+
+/// Path to a `wasm-bindgen` CLI matching the locked `wasm-bindgen` crate (the
+/// two must match exactly), installed into `.cache/tools` on demand.
+fn wasm_bindgen_cli() -> Result<PathBuf> {
+    let version = locked_version("wasm-bindgen")?;
+    let tools = root().join(".cache/tools");
+    let bin = tools.join("bin/wasm-bindgen");
+    let installed = bin.exists()
+        && output(&mut cmd(&bin.to_string_lossy(), &["--version"]))
+            .is_ok_and(|v| v.split_whitespace().nth(1) == Some(version.as_str()));
+    if !installed {
+        step(&format!("Install wasm-bindgen CLI {version}"));
+        run(&mut cmd(
+            "cargo",
+            &[
+                "install",
+                "--locked",
+                "--force",
+                "wasm-bindgen-cli",
+                "--version",
+                &version,
+                "--root",
+                &tools.to_string_lossy(),
+            ],
+        ))?;
+    }
+    Ok(bin)
+}
+
 #[derive(Clone, Copy)]
 enum Profile {
     Dev,
@@ -130,6 +184,7 @@ enum Profile {
 }
 
 fn web(profile: Profile) -> Result {
+    let wasm_bindgen = wasm_bindgen_cli()?;
     step("Web build");
     let (flags, dir): (&[&str], _) = match profile {
         Profile::Dev => (&[], "debug"),
@@ -147,7 +202,7 @@ fn web(profile: Profile) -> Result {
     copy_dir(&root().join("platforms/web/static"), &dist).map_err(|e| format!("copy web: {e}"))?;
     let wasm = format!("target/{WASM_TARGET}/{dir}/volya_engine_web.wasm");
     run(&mut cmd(
-        "wasm-bindgen",
+        &wasm_bindgen.to_string_lossy(),
         &[
             "--target",
             "web",
@@ -212,6 +267,20 @@ fn has_spdx_headers(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_locked_versions() {
+        let lock = "[[package]]\nname = \"wasm-bindgen\"\nversion = \"0.2.130\"\n\n[[package]]\nname = \"wasm-bindgen-shared\"\nversion = \"0.2.131\"\n";
+        assert_eq!(
+            locked_version_in(lock, "wasm-bindgen").as_deref(),
+            Some("0.2.130")
+        );
+        assert_eq!(
+            locked_version_in(lock, "wasm-bindgen-shared").as_deref(),
+            Some("0.2.131")
+        );
+        assert_eq!(locked_version_in(lock, "serde"), None);
+    }
 
     #[test]
     fn spdx_headers() {

@@ -2,6 +2,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 [toolchain]
-channel = "1.99.1"
+channel = "stable"
 components = ["rustfmt", "clippy"]
 targets = ["wasm32-unknown-unknown"]

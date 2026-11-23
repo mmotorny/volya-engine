@@ -37,8 +37,7 @@ Add variables here as new kinds of game data are needed.
 
 ### Setup
 
-- Rust toolchain from `rust-toolchain.toml`.
-- `wasm-bindgen` CLI matching the `wasm-bindgen` version pinned in `Cargo.toml`.
+- rustup (installs the toolchain from `rust-toolchain.toml`; `xtask` installs the matching `wasm-bindgen` CLI).
 - `cargo-deny`.
 - Google Chrome.
 - Xcode with an iOS simulator runtime.

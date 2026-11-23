@@ -8,13 +8,12 @@ members = ["crates/*", "platforms/*", "tools/*"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.99"
 license = "BSD-3-Clause"
 repository = "https://github.com/mmotorny/volya-engine"
 
 [workspace.dependencies]
-# Must match the installed wasm-bindgen CLI version exactly.
-wasm-bindgen = "=0.2.130"
+# xtask installs the wasm-bindgen CLI matching Cargo.lock.
+wasm-bindgen = "0.2"
 web-sys = "0.3"
 js-sys = "0.3"
 wasm-bindgen-futures = "0.4"

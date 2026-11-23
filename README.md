@@ -19,15 +19,14 @@ Open the [live version](https://mmotorny.github.io/volya-engine/) in a supported
 To run locally on macOS:
 
 1. Install [rustup](https://rustup.rs); the pinned toolchain and wasm target install automatically on first build.
-2. Install the `wasm-bindgen` CLI at the version pinned in `Cargo.toml`: `cargo install wasm-bindgen-cli --version 0.2.130`.
-3. Build and serve:
+2. Build and serve (the first build also installs the matching `wasm-bindgen` CLI into `.cache/`):
 
    ```sh
    cargo xtask web --dev
    cargo run -p volya-engine-devserver
    ```
 
-4. Open http://localhost:8080/volya-engine/ in Chrome.
+3. Open http://localhost:8080/volya-engine/ in Chrome.
 
 To try it on an iPhone, serve over HTTPS as described in [docs/testing.md](docs/testing.md#real-devices).
 
@@ -36,6 +35,7 @@ To try it on an iPhone, serve over HTTPS as described in [docs/testing.md](docs/
 - `cargo xtask check`: fast static checks (needs [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny)).
 - `cargo xtask e2e`: full test suite, including browser tests in headless Chrome and Mobile Safari in the iOS Simulator (needs Google Chrome and Xcode).
 - `cargo xtask deploy`: publish to GitHub Pages.
+- `cargo xtask update`: move to the latest stable Rust and dependencies.
 
 See [docs/testing.md](docs/testing.md) and [docs/architecture.md](docs/architecture.md).
 

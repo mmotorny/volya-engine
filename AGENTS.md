@@ -10,6 +10,7 @@
 - Naming: product crate `volya-engine`, role sub-crates `volya-engine-<role>` in `crates/`, platform packages `platforms/<platform>` with crate `volya-engine-<platform>`, tools `tools/<tool>` with crate `volya-engine-<tool>` (except `xtask`, by Cargo convention) (see docs/architecture.md). Create a crate only when its code exists.
 - Follow docs/architecture.md; update it when a decision changes.
 - No shell scripts: project tasks live in `tools/xtask` (`cargo xtask <task>`).
+- Live at head: run `cargo xtask update` when starting a chunk of work; fix what it breaks rather than pinning.
 - Run `cargo xtask check` (fast static checks) before every push; it must pass.
 - Iteration speed first: before reporting done, run only high-ROI tests directly related to the change. End-to-end and multi-device tests (`cargo xtask e2e`) run only on demand; never block normal interaction on them.
 - Avoid GitHub CI whenever possible (cost); all testing runs locally.

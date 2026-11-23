@@ -6,7 +6,6 @@ name = "volya-engine-core"
 description = "Volya Engine platform-free core: VFS, simulation."
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false

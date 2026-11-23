@@ -6,7 +6,6 @@ name = "volya-engine"
 description = "Volya Engine: the platform-free product library every platform package builds on."
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
