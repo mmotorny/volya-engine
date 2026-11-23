@@ -11,7 +11,7 @@ The game renders to an opaque WebGPU canvas, so DOM-level tools can't see it. Te
 
 ## Current tooling
 
-All testing is local. `scripts/check.sh` runs everything below except real-device testing. `scripts/serve.mjs` mimics GitHub Pages: served under `/volya-engine/`, no custom headers.
+All testing is local. `scripts/check.sh` runs fast static checks (SPDX, licenses, fmt, clippy) and gates every push. `scripts/e2e.sh` runs everything below except real-device testing, on demand only. `scripts/serve.mjs` mimics GitHub Pages: served under `/volya-engine/`, no custom headers.
 
 | Layer | Tool | Browsers |
 |---|---|---|

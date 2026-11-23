@@ -7,7 +7,8 @@
 - AGENTS.md is not README.md: project descriptions go in README.md; only agent instructions go here.
 - Every source file starts with SPDX headers: `SPDX-FileCopyrightText: 2026 Maksym Motorny` (current year for new files) and `SPDX-License-Identifier: BSD-3-Clause`, in the file's comment syntax.
 - Follow docs/architecture.md; update it when a decision changes.
-- Run `scripts/check.sh` before every push; it must pass.
+- Run `scripts/check.sh` (fast static checks) before every push; it must pass.
+- Iteration speed first: before reporting done, run only high-ROI tests directly related to the change. End-to-end and multi-device tests (`scripts/e2e.sh`) run only on demand; never block normal interaction on them.
 - Avoid GitHub CI whenever possible (cost); all testing runs locally.
 - Browser targets: desktop Chrome; Safari and Chrome on iOS (both WebKit). Firefox, Android and iPad are out of scope for now.
 - Reference mobile device (real-device testing, performance and memory budgets): iPhone 17 Pro Max.
