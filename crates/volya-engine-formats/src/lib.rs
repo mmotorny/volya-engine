@@ -9,7 +9,10 @@ pub mod audio;
 pub mod cp1251;
 pub mod db;
 pub mod ltx;
+pub mod text;
+pub mod ui;
 pub mod video;
+pub mod xml;
 
 #[cfg(test)]
 fn md5_hex(data: &[u8]) -> String {
