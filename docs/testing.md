@@ -17,7 +17,7 @@ All testing is local. `cargo xtask check` runs fast static checks (SPDX, license
 |---|---|---|
 | Native tests | `cargo test` | Mac |
 | Browser suites | `tests/browser/<suite>.js`, run by `harness.js`; the dev server serves them under `/volya-engine/__test/`, never in `dist/` | Headless desktop Chrome; Mobile Safari in a dedicated `Volya iPhone 17 Pro Max` simulator (created on first run, left booted) |
-| Real devices | Same suites, opened by hand: `https://mmotorny.github.io/volya-engine/?test=<suite>` (report shows on the page), or the local dev server over HTTPS; Safari Web Inspector for debugging | iPhone 17 Pro Max: Safari and Chrome |
+| Real devices | Same suites, opened by hand: `https://mmotorny.github.io/volya-engine/?test=<suite>` (report shows on the page), or the local dev server over HTTPS; Safari Web Inspector for debugging | iPhone 17 Pro Max: Chrome |
 
 Add a browser suite by creating `tests/browser/<suite>.js` exporting `tests` (name → function, may be async) and listing it in `SUITES` in `tools/xtask/src/e2e.rs`. A test may return a string note for the report, or call `skip(reason)` when `env` (from `?env=`, e.g. `ios-simulator`) can't perform it. The iOS Simulator has no WebGPU adapter, so WebGPU checks need the real device.
 
@@ -42,4 +42,4 @@ iOS only exposes OPFS to secure contexts, so serve over HTTPS:
 2. Install the CA on the device: AirDrop `$(mkcert -CAROOT)/rootCA.pem`, install the profile in Settings, then enable it under Settings > General > About > Certificate Trust Settings.
 3. `cargo xtask web --dev && cargo run -p volya-devserver -- --port 8443 --tls-cert .cache/dev.pem --tls-key .cache/dev-key.pem`
 4. On the device, open `https://<mac-hostname>.local:8443/volya-engine/` (append `?test=smoke` to run a suite; the report prints in the server's terminal).
-5. Debug from the Mac: enable Settings > Apps > Safari > Advanced > Web Inspector on the device, connect it, and use Safari's Develop menu.
+5. Debug from the Mac: enable Web Inspector in Chrome for iOS (Settings > Content Settings), connect the device, and use Safari's Develop menu on the Mac.
