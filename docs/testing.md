@@ -31,7 +31,7 @@ Tests that need real game data (BYOA, never committed) read its location from an
 
 | Variable | Points to |
 |---|---|
-| `VOLYA_GOG_INSTALLER` | Directory holding the GOG offline installer parts of the original Shadow of Chernobyl |
+| `VOLYA_GOG_INSTALLER` | Directory holding the GOG offline installer parts (`.exe` + `-1.bin`) of the original Shadow of Chernobyl, Russian edition |
 
 Add variables here as new kinds of game data are needed.
 
