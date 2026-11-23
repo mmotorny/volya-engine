@@ -1,6 +1,7 @@
 # AGENTS.md
 
 - Agent-first project: act autonomously, including commits and pushes. Block on a human only for expensive or hard-to-undo operations.
+- Track all work in GitHub issues; reference the issue in commits.
 - Don't use harness memory systems; record durable knowledge here.
 - Every instruction here must earn its tokens: cut prose that doesn't change agent behavior.
 - AGENTS.md is not README.md: project descriptions go in README.md; only agent instructions go here.
