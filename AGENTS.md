@@ -6,7 +6,7 @@
 - Every instruction here must earn its tokens: cut prose that doesn't change agent behavior.
 - AGENTS.md is not README.md: project descriptions go in README.md; only agent instructions go here.
 - Every source file starts with SPDX headers: `SPDX-FileCopyrightText: 2026 Maksym Motorny` (current year for new files) and `SPDX-License-Identifier: BSD-3-Clause`, in the file's comment syntax.
-- The product crate is `volya-engine`; internal sub-crates are named by role (e.g. `volya-core`), never by the product name.
+- The product crate is `volya-engine`; sub-crates are `volya-engine-<role>` (see docs/architecture.md). Create a crate only when its code exists.
 - Follow docs/architecture.md; update it when a decision changes.
 - No shell scripts: project tasks live in `tools/xtask` (`cargo xtask <task>`).
 - Run `cargo xtask check` (fast static checks) before every push; it must pass.
