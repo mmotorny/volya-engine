@@ -3,6 +3,8 @@
 
 //! Project tasks: `cargo xtask <task>`.
 
+mod e2e;
+
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -13,14 +15,15 @@ Usage: cargo xtask <task>
 
 Tasks:
   check       Fast static checks (SPDX, licenses, fmt, clippy). Gates every push.
-  e2e         Full test suite incl. end-to-end browser tests. On demand only.
+  e2e [TARGET...]
+              Native tests, then browser suites on TARGETs (chrome, iphone;
+              default: all). On demand only.
   web [--dev] Build the web app into dist/ (release unless --dev).";
 
 /// Crates that never build for the web target.
 const NATIVE_ONLY: &[&str] = &["volya-devserver", "xtask"];
 
 const WASM_TARGET: &str = "wasm32-unknown-unknown";
-const CHROME: &str = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
 type Result<T = ()> = std::result::Result<T, String>;
 
@@ -29,7 +32,7 @@ fn main() -> ExitCode {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let result = match args.as_slice() {
         ["check"] => check(),
-        ["e2e"] => e2e(),
+        ["e2e", targets @ ..] => e2e::run(targets),
         ["web"] => web(Profile::Release),
         ["web", "--dev"] => web(Profile::Dev),
         ["-h" | "--help"] | [] => {
@@ -103,7 +106,6 @@ fn check() -> Result {
         "cargo",
         &["deny", "--log-level", "error", "check"],
     ))?;
-    run(&mut cmd("node", &["scripts/check-npm-licenses.mjs"]))?;
     step("Format");
     run(&mut cmd("cargo", &["fmt", "--all", "--check"]))?;
     step("Clippy");
@@ -116,59 +118,6 @@ fn check() -> Result {
     )?;
     step("Static checks passed");
     Ok(())
-}
-
-fn e2e() -> Result {
-    step("Native tests");
-    run(&mut cmd("cargo", &["test", "--workspace"]))?;
-    step("Wasm tests (headless Chrome)");
-    // No -q: cargo forwards it to wasm-bindgen-test-runner, which rejects it.
-    run(
-        cmd("cargo", &["test", "--workspace", "--target", WASM_TARGET])
-            .args(exclude_native_only())
-            .env("CHROMEDRIVER", chromedriver()?),
-    )?;
-    web(Profile::Release)?;
-    step("Browser tests (desktop Chrome, iPhone)");
-    run(&mut cmd(
-        "npx",
-        &[
-            "playwright",
-            "test",
-            "--config",
-            "tests/e2e/playwright.config.mjs",
-        ],
-    ))?;
-    step("All tests passed");
-    Ok(())
-}
-
-/// Path to a chromedriver matching the installed Chrome, downloaded into
-/// `.cache/` on first use.
-fn chromedriver() -> Result<String> {
-    let version = output(&mut cmd(CHROME, &["--version"]))?;
-    let version = version
-        .split_whitespace()
-        .last()
-        .ok_or("cannot parse Chrome version")?;
-    let cache = root().join(".cache/browsers");
-    let out = output(&mut cmd(
-        "npx",
-        &[
-            "--no-install",
-            "@puppeteer/browsers",
-            "install",
-            &format!("chromedriver@{version}"),
-            "--path",
-            &cache.to_string_lossy(),
-            "--format",
-            "{{path}}",
-        ],
-    ))?;
-    out.lines()
-        .last()
-        .map(str::to_owned)
-        .ok_or_else(|| "no chromedriver path".into())
 }
 
 #[derive(Clone, Copy)]

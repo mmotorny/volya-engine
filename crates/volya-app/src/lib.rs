@@ -11,6 +11,16 @@ pub fn status_text() -> String {
     format!("Volya {VERSION}")
 }
 
+/// Engine test interface: what tests and debugging tools may observe and
+/// drive. Grows with the engine (input injection, frame stepping, state
+/// queries, framebuffer readback); see docs/testing.md.
+pub mod test_api {
+    /// Engine status as a JSON object.
+    pub fn status() -> String {
+        format!(r#"{{"state":"ready","version":"{}"}}"#, super::VERSION)
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 mod web {
     use wasm_bindgen::prelude::*;
@@ -28,6 +38,12 @@ mod web {
         status.set_attribute("data-state", "ready")?;
         Ok(())
     }
+
+    /// [`super::test_api::status`], exposed to the web shell.
+    #[wasm_bindgen]
+    pub fn test_status() -> String {
+        super::test_api::status()
+    }
 }
 
 #[cfg(test)]
@@ -39,15 +55,11 @@ mod tests {
         assert_eq!(status_text(), format!("Volya {VERSION}"));
     }
 
-    #[cfg(target_arch = "wasm32")]
-    mod browser {
-        use wasm_bindgen_test::*;
-
-        wasm_bindgen_test_configure!(run_in_browser);
-
-        #[wasm_bindgen_test]
-        fn has_document() {
-            assert!(web_sys::window().and_then(|w| w.document()).is_some());
-        }
+    #[test]
+    fn test_api_status_reports_version() {
+        assert_eq!(
+            test_api::status(),
+            format!(r#"{{"state":"ready","version":"{VERSION}"}}"#)
+        );
     }
 }

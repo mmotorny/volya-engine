@@ -1,0 +1,207 @@
+// SPDX-FileCopyrightText: 2026 Maksym Motorny
+// SPDX-License-Identifier: BSD-3-Clause
+
+//! Driverless end-to-end tests: serve `dist/` plus the harness in-process,
+//! open `?test=<suite>&run=<id>` in each target browser, and wait for the
+//! page to POST its report back (see tests/browser/harness.js).
+
+use std::net::TcpListener;
+use std::process::{Child, Stdio};
+use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::{env, fs};
+
+use volya_devserver::{BASE, Server};
+
+use super::{Profile, Result, cmd, output, root, run as run_cmd, step, web};
+
+const SUITES: &[&str] = &["smoke"];
+const TARGETS: &[&str] = &["chrome", "iphone"];
+const REPORT_TIMEOUT: Duration = Duration::from_secs(60);
+
+const CHROME: &str = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const SIMULATOR_NAME: &str = "Volya iPhone 17 Pro Max";
+const SIMULATOR_TYPE: &str = "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max";
+const IOS_RUNTIME_PREFIX: &str = "com.apple.CoreSimulator.SimRuntime.iOS-";
+
+pub fn run(targets: &[&str]) -> Result {
+    let targets = if targets.is_empty() { TARGETS } else { targets };
+    if let Some(bad) = targets.iter().find(|t| !TARGETS.contains(t)) {
+        return Err(format!("unknown target {bad}; expected one of {TARGETS:?}"));
+    }
+
+    step("Native tests");
+    run_cmd(&mut cmd("cargo", &["test", "--workspace"]))?;
+    web(Profile::Release)?;
+
+    let (tx, reports) = mpsc::channel();
+    let server = Server::new(&root().join("dist"))
+        .and_then(|s| {
+            s.with_tests(
+                &root().join("tests/browser"),
+                Arc::new(move |report| {
+                    let _ = tx.send(report);
+                }),
+            )
+        })
+        .map_err(|e| format!("dev server: {e}"))?;
+    let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| format!("bind: {e}"))?;
+    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+    thread::spawn(move || server.run(listener));
+
+    let mut failures = Vec::new();
+    for &target in targets {
+        for &suite in SUITES {
+            step(&format!("Browser suite {suite} on {target}"));
+            let id = run_id(target, suite);
+            let url = format!("http://localhost:{port}{BASE}?test={suite}&run={id}");
+            let outcome = match target {
+                "chrome" => chrome(&url, &id, &reports),
+                "iphone" => iphone(&url, &id, &reports),
+                _ => unreachable!(),
+            };
+            match outcome {
+                Ok(report) => {
+                    println!("{report}");
+                    if !passed(&report) {
+                        failures.push(format!("{suite} on {target}"));
+                    }
+                }
+                Err(error) => {
+                    println!("{error}");
+                    failures.push(format!("{suite} on {target}: {error}"));
+                }
+            }
+        }
+    }
+
+    if failures.is_empty() {
+        step("All tests passed");
+        Ok(())
+    } else {
+        Err(format!("failed:\n  {}", failures.join("\n  ")))
+    }
+}
+
+fn run_id(target: &str, suite: &str) -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("{target}-{suite}-{nanos:x}")
+}
+
+/// Waits for the report of run `id`, skipping stale ones (e.g. from restored
+/// Safari tabs reloading old runs).
+fn wait_report(id: &str, reports: &Receiver<String>) -> Result<String> {
+    let deadline = Instant::now() + REPORT_TIMEOUT;
+    let header = format!("run {id}");
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match reports.recv_timeout(left) {
+            Ok(report) if report.lines().next() == Some(header.as_str()) => return Ok(report),
+            Ok(_) => continue,
+            Err(_) => return Err(format!("no report within {REPORT_TIMEOUT:?}")),
+        }
+    }
+}
+
+fn passed(report: &str) -> bool {
+    let mut lines = report.lines();
+    lines.clone().any(|l| l.starts_with("ok ")) && !lines.any(|l| l.starts_with("fail "))
+}
+
+fn chrome(url: &str, id: &str, reports: &Receiver<String>) -> Result<String> {
+    let profile = env::temp_dir().join(format!("volya-chrome-{id}"));
+    let mut child: Child = cmd(
+        CHROME,
+        &[
+            "--headless=new",
+            "--no-first-run",
+            "--no-default-browser-check",
+            &format!("--user-data-dir={}", profile.display()),
+            url,
+        ],
+    )
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .spawn()
+    .map_err(|e| format!("launch Chrome: {e}"))?;
+    let report = wait_report(id, reports);
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = fs::remove_dir_all(profile);
+    report
+}
+
+/// Opens `url` in Mobile Safari on a dedicated iPhone 17 Pro Max simulator,
+/// creating and booting it as needed. The simulator is left booted so later
+/// runs start fast.
+fn iphone(url: &str, id: &str, reports: &Receiver<String>) -> Result<String> {
+    let udid = simulator()?;
+    run_cmd(cmd("xcrun", &["simctl", "bootstatus", &udid, "-b"]).stdout(Stdio::null()))?;
+    run_cmd(&mut cmd("xcrun", &["simctl", "openurl", &udid, url]))?;
+    wait_report(id, reports)
+}
+
+fn simulator() -> Result<String> {
+    let devices = output(&mut cmd(
+        "xcrun",
+        &["simctl", "list", "devices", "available"],
+    ))?;
+    if let Some(udid) = find_device(&devices, SIMULATOR_NAME) {
+        return Ok(udid);
+    }
+    let runtimes = output(&mut cmd("xcrun", &["simctl", "list", "runtimes"]))?;
+    let runtime = latest_ios_runtime(&runtimes).ok_or("no iOS simulator runtime installed")?;
+    println!("Creating simulator {SIMULATOR_NAME} ({runtime})");
+    let udid = output(&mut cmd(
+        "xcrun",
+        &["simctl", "create", SIMULATOR_NAME, SIMULATOR_TYPE, &runtime],
+    ))?;
+    Ok(udid.trim().to_owned())
+}
+
+/// Parses `    <name> (<udid>) (<state>)` lines from `simctl list devices`.
+fn find_device(list: &str, name: &str) -> Option<String> {
+    list.lines().find_map(|line| {
+        let rest = line.trim().strip_prefix(name)?.strip_prefix(" (")?;
+        Some(rest.split_once(')')?.0.to_owned())
+    })
+}
+
+fn latest_ios_runtime(list: &str) -> Option<String> {
+    list.lines()
+        .filter_map(|line| line.split_whitespace().next_back())
+        .rfind(|id| id.starts_with(IOS_RUNTIME_PREFIX))
+        .map(str::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn report_verdict() {
+        assert!(passed("run x\nsuite s\nok a\nok b"));
+        assert!(!passed("run x\nsuite s\nok a\nfail b\tboom"));
+        assert!(!passed("run x\nsuite s"));
+    }
+
+    #[test]
+    fn parses_simctl_output() {
+        let devices = "== Devices ==\n-- iOS 27.2 --\n    iPhone 17 (3E95) (Shutdown) \n    Volya iPhone 17 Pro Max (AB-CD) (Booted) \n";
+        assert_eq!(
+            find_device(devices, SIMULATOR_NAME).as_deref(),
+            Some("AB-CD")
+        );
+        assert_eq!(find_device(devices, "iPhone 18"), None);
+        let runtimes = "== Runtimes ==\niOS 26.0 (26.0 - 23A) - com.apple.CoreSimulator.SimRuntime.iOS-26-0\nwatchOS 27.0 (27.0 - 24R) - com.apple.CoreSimulator.SimRuntime.watchOS-27-0\niOS 27.2 (27.2 - 24B) - com.apple.CoreSimulator.SimRuntime.iOS-27-2\n";
+        assert_eq!(
+            latest_ios_runtime(runtimes).as_deref(),
+            Some("com.apple.CoreSimulator.SimRuntime.iOS-27-2")
+        );
+    }
+}

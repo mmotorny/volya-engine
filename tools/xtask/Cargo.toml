@@ -12,3 +12,6 @@ publish = false
 
 [lints]
 workspace = true
+
+[dependencies]
+volya-devserver = { path = "../devserver" }

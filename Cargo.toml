@@ -15,7 +15,6 @@ repository = "https://github.com/mmotorny/volya-engine"
 [workspace.dependencies]
 # Must match the installed wasm-bindgen CLI version exactly.
 wasm-bindgen = "=0.2.130"
-wasm-bindgen-test = "0.3"
 web-sys = "0.3"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 

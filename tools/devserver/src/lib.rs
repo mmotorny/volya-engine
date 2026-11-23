@@ -4,6 +4,10 @@
 //! Static file server that mimics GitHub Pages for local development:
 //! serves a directory under [`BASE`], sends no custom headers (so no
 //! cross-origin isolation), and optionally speaks HTTPS for real devices.
+//!
+//! With [`Server::with_tests`] it also serves the browser test harness under
+//! [`TEST_BASE`] (kept out of `dist/`) and accepts test reports POSTed to
+//! [`RESULTS_PATH`].
 
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write};
@@ -17,20 +21,38 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 
 /// URL prefix of the GitHub Pages project site.
 pub const BASE: &str = "/volya-engine/";
+/// URL prefix of the browser test harness.
+pub const TEST_BASE: &str = "/volya-engine/__test/";
+/// Endpoint receiving test reports.
+pub const RESULTS_PATH: &str = "/volya-engine/__test/results";
 
 const MAX_HEADER_BYTES: usize = 16 * 1024;
+const MAX_BODY_BYTES: usize = 1024 * 1024;
+
+/// Receives the body of every test report.
+pub type ResultsSink = Arc<dyn Fn(String) + Send + Sync>;
 
 pub struct Server {
-    root: PathBuf,
+    /// URL prefix and directory, most specific first.
+    mounts: Vec<(&'static str, PathBuf)>,
+    results: Option<ResultsSink>,
     tls: Option<Arc<rustls::ServerConfig>>,
 }
 
 impl Server {
     pub fn new(root: &Path) -> io::Result<Self> {
         Ok(Self {
-            root: root.canonicalize()?,
+            mounts: vec![(BASE, root.canonicalize()?)],
+            results: None,
             tls: None,
         })
+    }
+
+    /// Serves the test harness from `dir` and passes reports to `sink`.
+    pub fn with_tests(mut self, dir: &Path, sink: ResultsSink) -> io::Result<Self> {
+        self.mounts.insert(0, (TEST_BASE, dir.canonicalize()?));
+        self.results = Some(sink);
+        Ok(self)
     }
 
     /// Enables HTTPS with a PEM certificate chain and private key.
@@ -89,8 +111,13 @@ impl Server {
             Ok(request) => request,
             Err(_) => return write_status(&mut stream, 400, "Bad Request"),
         };
-        if request.method != "GET" && request.method != "HEAD" {
-            return write_status(&mut stream, 405, "Method Not Allowed");
+        match (request.method.as_str(), &self.results) {
+            ("POST", Some(sink)) if request.path == RESULTS_PATH => {
+                sink(String::from_utf8_lossy(&request.body).into_owned());
+                return write_status(&mut stream, 204, "No Content");
+            }
+            ("GET" | "HEAD", _) => {}
+            _ => return write_status(&mut stream, 405, "Method Not Allowed"),
         }
         let head_only = request.method == "HEAD";
         match self.route(&request.path) {
@@ -119,7 +146,11 @@ impl Server {
         if url_path == "/" || url_path == BASE.trim_end_matches('/') {
             return Route::Redirect;
         }
-        let Some(rest) = url_path.strip_prefix(BASE) else {
+        let Some((rest, dir)) = self
+            .mounts
+            .iter()
+            .find_map(|(prefix, dir)| Some((url_path.strip_prefix(prefix)?, dir)))
+        else {
             return Route::NotFound;
         };
         let Some(relative) = percent_decode(rest) else {
@@ -132,13 +163,13 @@ impl Server {
         {
             return Route::NotFound;
         }
-        let mut path = self.root.join(relative);
+        let mut path = dir.join(relative);
         if path.is_dir() {
             path.push("index.html");
         }
-        // Reject anything that escapes the root, e.g. via symlinks.
+        // Reject anything that escapes the mount, e.g. via symlinks.
         match path.canonicalize() {
-            Ok(real) if real.starts_with(&self.root) && real.is_file() => Route::File(real),
+            Ok(real) if real.starts_with(dir) && real.is_file() => Route::File(real),
             _ => Route::NotFound,
         }
     }
@@ -154,31 +185,58 @@ enum Route {
 struct Request {
     method: String,
     path: String,
+    body: Vec<u8>,
 }
 
 fn read_request(stream: &mut impl Read) -> io::Result<Request> {
-    let mut reader = BufReader::new(stream.take(MAX_HEADER_BYTES as u64));
+    let invalid = || io::Error::from(io::ErrorKind::InvalidData);
+    let mut reader = BufReader::new(stream);
+    let mut header_bytes = 0;
+    let mut next_line = |reader: &mut BufReader<_>, line: &mut String| -> io::Result<()> {
+        line.clear();
+        let n = reader
+            .by_ref()
+            .take((MAX_HEADER_BYTES - header_bytes) as u64)
+            .read_line(line)?;
+        header_bytes += n;
+        if n == 0 || !line.ends_with('\n') {
+            return Err(invalid());
+        }
+        Ok(())
+    };
+
     let mut line = String::new();
-    reader.read_line(&mut line)?;
+    next_line(&mut reader, &mut line)?;
     let mut parts = line.split_whitespace();
     let (Some(method), Some(target)) = (parts.next(), parts.next()) else {
-        return Err(io::ErrorKind::InvalidData.into());
+        return Err(invalid());
     };
-    let path = target.split(['?', '#']).next().unwrap_or_default();
-    let request = Request {
-        method: method.to_owned(),
-        path: path.to_owned(),
-    };
-    // Drain headers; none are needed.
+    let method = method.to_owned();
+    let path = target
+        .split(['?', '#'])
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+
+    let mut content_length = 0;
     loop {
-        line.clear();
-        if reader.read_line(&mut line)? == 0 {
-            return Err(io::ErrorKind::UnexpectedEof.into());
+        next_line(&mut reader, &mut line)?;
+        let header = line.trim_end();
+        if header.is_empty() {
+            break;
         }
-        if line == "\r\n" || line == "\n" {
-            return Ok(request);
+        if let Some((name, value)) = header.split_once(':')
+            && name.eq_ignore_ascii_case("content-length")
+        {
+            content_length = value.trim().parse().map_err(|_| invalid())?;
         }
     }
+    if content_length > MAX_BODY_BYTES {
+        return Err(invalid());
+    }
+    let mut body = vec![0; content_length];
+    reader.read_exact(&mut body)?;
+    Ok(Request { method, path, body })
 }
 
 fn write_status(stream: &mut impl Write, code: u16, reason: &str) -> io::Result<()> {
@@ -224,28 +282,30 @@ fn content_type(path: &Path) -> &'static str {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::mpsc;
 
-    fn fixture() -> (PathBuf, Server) {
+    fn fixture(name: &str) -> (PathBuf, Server) {
         let dir = std::env::temp_dir().join(format!(
-            "volya-devserver-test-{}-{:?}",
-            std::process::id(),
-            thread::current().id()
+            "volya-devserver-test-{}-{name}",
+            std::process::id()
         ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join("root/pkg")).unwrap();
+        fs::create_dir_all(dir.join("tests")).unwrap();
         fs::write(dir.join("root/index.html"), "<p>hi</p>").unwrap();
         fs::write(dir.join("root/pkg/a b.wasm"), [0, 97, 115, 109]).unwrap();
+        fs::write(dir.join("tests/harness.js"), "// harness").unwrap();
         fs::write(dir.join("secret.txt"), "nope").unwrap();
         let server = Server::new(&dir.join("root")).unwrap();
         (dir, server)
     }
 
-    fn get(server: Server, path: &str) -> String {
+    fn exchange(server: Server, request: &str) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         thread::spawn(move || server.run(listener));
         let mut stream = TcpStream::connect(addr).unwrap();
-        write!(stream, "GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n").unwrap();
+        stream.write_all(request.as_bytes()).unwrap();
         let mut response = String::new();
         stream.read_to_string(&mut response).unwrap();
         response
@@ -253,14 +313,22 @@ mod tests {
 
     #[test]
     fn routes() {
-        let (dir, server) = fixture();
+        let (dir, server) = fixture("routes");
+        let server = server
+            .with_tests(&dir.join("tests"), Arc::new(|_| {}))
+            .unwrap();
         let root = dir.join("root").canonicalize().unwrap();
+        let tests = dir.join("tests").canonicalize().unwrap();
         assert_eq!(server.route("/"), Route::Redirect);
         assert_eq!(server.route("/volya-engine"), Route::Redirect);
         assert_eq!(server.route(BASE), Route::File(root.join("index.html")));
         assert_eq!(
             server.route("/volya-engine/pkg/a%20b.wasm"),
             Route::File(root.join("pkg/a b.wasm"))
+        );
+        assert_eq!(
+            server.route("/volya-engine/__test/harness.js"),
+            Route::File(tests.join("harness.js"))
         );
         assert_eq!(server.route("/other/index.html"), Route::NotFound);
         assert_eq!(server.route("/volya-engine/missing"), Route::NotFound);
@@ -269,18 +337,59 @@ mod tests {
             server.route("/volya-engine/%2e%2e/secret.txt"),
             Route::NotFound
         );
+        assert_eq!(
+            server.route("/volya-engine/__test/../secret.txt"),
+            Route::NotFound
+        );
         assert_eq!(server.route("/volya-engine//etc/passwd"), Route::NotFound);
         fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn serves_over_http_without_isolation_headers() {
-        let (dir, server) = fixture();
-        let response = get(server, "/volya-engine/?test=smoke");
+        let (dir, server) = fixture("http");
+        let response = exchange(
+            server,
+            "GET /volya-engine/?test=smoke HTTP/1.1\r\nHost: x\r\n\r\n",
+        );
         assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
         assert!(response.contains("Content-Type: text/html; charset=utf-8\r\n"));
         assert!(response.ends_with("<p>hi</p>"));
         assert!(!response.contains("Cross-Origin"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn accepts_test_results() {
+        let (dir, server) = fixture("results");
+        let (tx, rx) = mpsc::channel();
+        let server = server
+            .with_tests(
+                &dir.join("tests"),
+                Arc::new(move |body| tx.send(body).unwrap()),
+            )
+            .unwrap();
+        let body = "run 1\nok smoke";
+        let response = exchange(
+            server,
+            &format!(
+                "POST {RESULTS_PATH} HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+        );
+        assert!(response.starts_with("HTTP/1.1 204 "), "{response}");
+        assert_eq!(rx.recv().unwrap(), body);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn rejects_posts_without_test_mode() {
+        let (dir, server) = fixture("no-tests");
+        let response = exchange(
+            server,
+            &format!("POST {RESULTS_PATH} HTTP/1.1\r\nContent-Length: 0\r\n\r\n"),
+        );
+        assert!(response.starts_with("HTTP/1.1 405 "), "{response}");
         fs::remove_dir_all(dir).unwrap();
     }
 }

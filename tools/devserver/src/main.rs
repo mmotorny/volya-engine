@@ -4,13 +4,17 @@
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use volya_devserver::{BASE, Server};
 
 const USAGE: &str = "\
-Usage: volya-devserver [--root DIR] [--port PORT] [--tls-cert PEM --tls-key PEM]
+Usage: volya-devserver [--root DIR] [--tests DIR] [--port PORT] [--tls-cert PEM --tls-key PEM]
 
-Serves DIR (default: dist) under /volya-engine/ like GitHub Pages.
+Serves --root (default: dist) under /volya-engine/ like GitHub Pages, and the
+browser test harness (default: tests/browser, if present) under
+/volya-engine/__test/; open /volya-engine/?test=<suite> to run a suite and
+print its report here.
 Plain HTTP binds to localhost; with TLS it binds to all interfaces so real
 devices can connect over a secure context.";
 
@@ -26,6 +30,7 @@ fn main() -> ExitCode {
 
 fn run() -> Result<(), String> {
     let mut root = PathBuf::from("dist");
+    let mut tests = Some(PathBuf::from("tests/browser")).filter(|d| d.is_dir());
     let mut port = 8080u16;
     let (mut cert, mut key) = (None, None);
     let mut args = std::env::args().skip(1);
@@ -33,6 +38,7 @@ fn run() -> Result<(), String> {
         let mut value = || args.next().ok_or(format!("{arg} needs a value"));
         match arg.as_str() {
             "--root" => root = value()?.into(),
+            "--tests" => tests = Some(value()?.into()),
             "--port" => port = value()?.parse().map_err(|e| format!("--port: {e}"))?,
             "--tls-cert" => cert = Some(PathBuf::from(value()?)),
             "--tls-key" => key = Some(PathBuf::from(value()?)),
@@ -45,6 +51,12 @@ fn run() -> Result<(), String> {
     }
 
     let server = Server::new(&root).map_err(|e| format!("{}: {e}", root.display()))?;
+    let server = match tests {
+        Some(dir) => server
+            .with_tests(&dir, Arc::new(|report| println!("{report}\n")))
+            .map_err(|e| format!("{}: {e}", dir.display()))?,
+        None => server,
+    };
     let server = match (cert, key) {
         (Some(cert), Some(key)) => server.with_tls(&cert, &key).map_err(|e| e.to_string())?,
         (None, None) => server,
