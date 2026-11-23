@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-import init, { start, test_status } from "./pkg/volya_app.js";
+import init, { start, test_status } from "./pkg/volya_engine.js";
 
 // `?test=<suite>` runs a browser test suite. The harness is served by the dev
 // server only; it never ships in dist/.

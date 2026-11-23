@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! Volya engine application entry point.
+//! Volya Engine.
 
 /// Engine version, taken from the crate manifest.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
