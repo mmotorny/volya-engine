@@ -16,4 +16,4 @@ BSD-3-Clause.
 
 ## Development
 
-Run `scripts/check.sh` for fast static checks and `scripts/e2e.sh` for the full test suite. See [docs/testing.md](docs/testing.md).
+Run `cargo xtask check` for fast static checks and `cargo xtask e2e` for the full test suite. See [docs/testing.md](docs/testing.md).

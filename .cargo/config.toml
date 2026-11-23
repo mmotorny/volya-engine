@@ -3,3 +3,6 @@
 
 [target.wasm32-unknown-unknown]
 runner = "wasm-bindgen-test-runner"
+
+[alias]
+xtask = "run -q -p xtask --"
