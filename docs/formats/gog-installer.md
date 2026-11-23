@@ -30,7 +30,7 @@ Inno Setup does not store the game files under their names. It stores 1036 *part
 - On the first part of a file only: `before_install('<md5 of the whole file>', '<target path>', <part count>)` (`_dependency` variants for redistributables).
 - On every part: `after_install('<md5 of the inflated part>', <compressed size>, <inflated size>)`.
 
-Parts of one file follow each other in entry order. Each part is a zlib stream inflating to at most 10 MiB (10485760 bytes); its Inno entry name is the MD5 of its compressed bytes. Verified on `gamedata.dbd`: inflating its single part gives exactly the bytes and MD5 that innoextract `--gog` produces. So extraction is: stream each part out of Inno, inflate, verify the part MD5, append to the target, verify the whole-file MD5.
+Parts of one file follow each other in entry order. Each part is a zlib stream; every part but a file's last inflates to exactly 10 MiB (10485760 bytes), and the last takes the remainder, up to ~18 MB observed (so under 20 MiB); its Inno entry name is the MD5 of its compressed bytes. Verified on `gamedata.dbd`: inflating its single part gives exactly the bytes and MD5 that innoextract `--gog` produces. So extraction is: stream each part out of Inno, inflate, verify the part MD5, append to the target, verify the whole-file MD5.
 
 ## Contents
 
