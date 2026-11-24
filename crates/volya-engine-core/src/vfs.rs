@@ -22,6 +22,13 @@ pub trait Vfs {
 
     /// Lists the directory at `path` (`""` is the root), sorted by name.
     fn read_dir(&self, path: &str) -> io::Result<Vec<DirEntry>>;
+
+    /// Whether a file exists at `path`. Backends that can answer without
+    /// opening (and, for compressed archive entries, decompressing) the
+    /// file override this.
+    fn exists(&self, path: &str) -> bool {
+        self.open(path).is_ok()
+    }
 }
 
 /// An open file.

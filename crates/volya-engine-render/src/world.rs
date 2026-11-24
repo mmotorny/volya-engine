@@ -920,35 +920,31 @@ impl Renderer {
             ],
         });
 
-        // Textures once each (by handle), for their views and memory: those
-        // of surfaces the static world draws first, then the objects' own.
-        let mut textures: Vec<Texture> = Vec::new();
-        let mut texture_bytes = 0;
-        let mut object_texture_bytes = 0;
-        let static_surface: Vec<bool> = (0..surfaces.len())
-            .map(|i| {
-                kept.iter()
-                    .any(|d| d.object.is_none() && d.surface as usize == i)
-            })
-            .collect();
-        for objects_pass in [false, true] {
-            for (s, _) in surfaces
-                .iter()
-                .zip(&static_surface)
-                .filter(|(_, st)| **st != objects_pass)
-            {
-                for t in s.textures.iter().chain([&s.env]).flatten() {
-                    if !textures.iter().any(|k| k.texture == t.texture) {
-                        let bytes = self::texture_bytes(&t.texture);
-                        texture_bytes += bytes;
-                        if objects_pass {
-                            object_texture_bytes += bytes;
-                        }
-                        textures.push(t.clone());
-                    }
+        // Textures once each (by handle), for their views and memory; a
+        // texture counts as the objects' when no static draw's surface uses
+        // it.
+        let mut static_surface = vec![false; surfaces.len()];
+        for d in kept.iter().filter(|d| d.object.is_none()) {
+            static_surface[d.surface as usize] = true;
+        }
+        let mut textures: Vec<(Texture, bool)> = Vec::new();
+        for (s, &st) in surfaces.iter().zip(&static_surface) {
+            for t in s.textures.iter().chain([&s.env]).flatten() {
+                match textures.iter_mut().find(|(k, _)| k.texture == t.texture) {
+                    Some((_, used)) => *used |= st,
+                    None => textures.push((t.clone(), st)),
                 }
             }
         }
+        let (mut texture_bytes, mut object_texture_bytes) = (0, 0);
+        for (t, st) in &textures {
+            let bytes = self::texture_bytes(&t.texture);
+            texture_bytes += bytes;
+            if !st {
+                object_texture_bytes += bytes;
+            }
+        }
+        let mut textures: Vec<Texture> = textures.into_iter().map(|(t, _)| t).collect();
         let surface_groups: Vec<wgpu::BindGroup> = surfaces
             .iter()
             .map(|s| {

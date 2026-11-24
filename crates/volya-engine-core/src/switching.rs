@@ -175,7 +175,10 @@ impl Candidate {
         Ok(if class == "AI_STL_S" || class.starts_with("SM_") {
             let job = self.job_online;
             // Offline, with the actor alive: the job value if set; else the
-            // engine's without a spawner; else the (failing) condition.
+            // engine's without a spawner; else the (failing) condition. A
+            // stalker's `dont_spawn_online` field is a script variable no
+            // shipped script sets (section 2.5), so it is taken as false
+            // (our omission: no scripts run here).
             let on = match job {
                 Some(j) => j,
                 None if !self.spawner => on,

@@ -357,9 +357,10 @@ fn sky_shows_where_the_world_does_not() {
 }
 
 /// One object: a screen-covering triangle in model space at z = 0, moved
-/// to z = 1 by its transform, with normal (0, 1, 0) and texture coordinate
-/// (0.75, 0.25), quantized as level-objects.md section 4.7 stores them.
-fn object_geometry() -> ObjectGeometry {
+/// to z = 1 by its transform, with the stored normal bytes `normal` and
+/// texture coordinate (0.75, 0.25), quantized as level-objects.md section
+/// 4.7 stores them.
+fn object_geometry(normal: [u8; 3]) -> ObjectGeometry {
     let q = |v: f32| (v * 32767.0 / 12.0).floor() as i16;
     let uv = [
         (0.75f32 * 32767.0 / 16.0) as i16,
@@ -367,7 +368,7 @@ fn object_geometry() -> ObjectGeometry {
     ];
     let vertices = [[-3.0, -3.0], [-3.0, 9.0], [9.0, -3.0]]
         .iter()
-        .flat_map(|&[x, y]| model_vertex([q(x), q(y), 0], [127, 255, 127], uv))
+        .flat_map(|&[x, y]| model_vertex([q(x), q(y), 0], normal, uv))
         .collect();
     ObjectGeometry {
         vertices,
@@ -375,9 +376,18 @@ fn object_geometry() -> ObjectGeometry {
     }
 }
 
+/// Normal bytes of (0, 1, 0) and of (0, 0, −1), towards the camera.
+const UP: [u8; 3] = [127, 255, 127];
+const TOWARDS: [u8; 3] = [127, 127, 0];
+
 fn object_draw(surface: u32, props: [f32; 4]) -> WorldDraw {
+    object_draw_at(surface, props, 1.0)
+}
+
+/// [`object_draw`] moved to depth `z`.
+fn object_draw_at(surface: u32, props: [f32; 4], z: f32) -> WorldDraw {
     let mut transform = IDENTITY;
-    transform[3] = [0.0, 0.0, 1.0, 1.0];
+    transform[3] = [0.0, 0.0, z, 1.0];
     WorldDraw {
         transform,
         object: Some(props),
@@ -385,87 +395,143 @@ fn object_draw(surface: u32, props: [f32; 4]) -> WorldDraw {
     }
 }
 
+/// The centre pixel of `objects` drawn with `surface` under `light`.
+fn object_pixel(
+    r: &mut Renderer,
+    objects: &ObjectGeometry,
+    surface: Surface<Texture>,
+    props: [f32; 4],
+    light: impl FnOnce(&mut WorldLight),
+) -> [u8; 4] {
+    object_pixel_at(r, objects, surface, props, light, 1.0)
+}
+
+fn object_pixel_at(
+    r: &mut Renderer,
+    objects: &ObjectGeometry,
+    surface: Surface<Texture>,
+    props: [f32; 4],
+    light: impl FnOnce(&mut WorldLight),
+    z: f32,
+) -> [u8; 4] {
+    let g = geom(Layout::VertexLit, 0, 0, [0; 8]);
+    let world = r
+        .create_world_with(
+            &g,
+            objects,
+            &[surface],
+            &[object_draw_at(0, props, z)],
+            None,
+        )
+        .unwrap();
+    assert_eq!((world.object_draw_count(), world.draw_count()), (1, 0));
+    assert!(world.object_gpu_bytes() >= 48 + 8);
+    let mut f = frame(world, None);
+    light(&mut f.light);
+    centre(r, f)
+}
+
 #[test]
 fn objects_draw_quantized_models() {
     let mut r = renderer();
     let base = quadrants(&r);
-    let g = geom(Layout::VertexLit, 0, 0, [0; 8]);
-    let objects = object_geometry();
-    let surfaces = vec![
-        surface(Program::Model, Some(base.clone())),
-        surface(Program::ModelLightPlanes, Some(base.clone())),
-        surface(Program::ModelSelfLight, Some(base)),
-        surface(Program::VertexLit, None),
-    ];
-    let props = [0.0, 0.0, 0.0, 0.5];
-    let empty = r.create_world(&g, &[], &[], None).unwrap();
+    let up = object_geometry(UP);
     // Q = (n.y · 0.5 + 0.5) · L_dynamic_props.w · hemi + ambient
-    // = 1 · 0.5 · 0.4 + 0.1 = 0.3; C = 2 · Q · B with B green at (0.75,
-    // 0.25) (sections 5.4, 5.5).
-    let light = WorldLight {
-        ambient: [0.1; 3],
-        hemi: [0.4; 3],
-        ..frame(empty, None).light
+    // + L_dynamic_props.xyz · S(n) = 1 · 0.5 · 0.4 + 0.1 = 0.3 without sun;
+    // C = 2 · Q · B with B green at (0.75, 0.25) (sections 5.4, 5.5).
+    let hemi = |l: &mut WorldLight| {
+        l.ambient = [0.1; 3];
+        l.hemi = [0.4; 3];
     };
-    for (surface, expected, what) in [
-        (0, [0, 153, 0], "model_def_lq"),
-        (2, [0, 255, 0], "selflight"),
-    ] {
-        let world = r
-            .create_world_with(
-                &g,
-                &objects,
-                &surfaces,
-                &[object_draw(surface, props)],
-                None,
-            )
-            .unwrap();
-        assert_eq!((world.object_draw_count(), world.draw_count()), (1, 0));
-        assert!(world.object_gpu_bytes() >= 48 + 8);
-        let mut f = frame(world, None);
-        f.light = light;
-        assert_near(centre(&mut r, f), expected, what);
-    }
+    let model = surface(Program::Model, Some(base.clone()));
+    let px = object_pixel(&mut r, &up, model.clone(), [0.0, 0.0, 0.0, 0.5], hemi);
+    assert_near(px, [0, 153, 0], "model_def_lq, hemisphere");
+    // The sun term: sunlight straight down on the upward normal, colour
+    // 0.4, L_dynamic_props.xyz 0.5: Q = 0.5 · 0.4 = 0.2, C = 0.4 · B.
+    let sun = |l: &mut WorldLight| {
+        l.sun_color = [0.4; 3];
+        l.sun_dir = [0.0, -1.0, 0.0];
+    };
+    let px = object_pixel(&mut r, &up, model.clone(), [0.5, 0.5, 0.5, 0.0], sun);
+    assert_near(px, [0, 102, 0], "model_def_lq, sun");
+    // Lit from below, the sun adds nothing.
+    let below = |l: &mut WorldLight| {
+        l.sun_color = [0.4; 3];
+        l.sun_dir = [0.0, 1.0, 0.0];
+    };
+    let px = object_pixel(&mut r, &up, model, [0.5, 0.5, 0.5, 0.0], below);
+    assert_near(px, [0, 0, 0], "model_def_lq, sun behind");
+    // Self-lit: the texel.
+    let px = object_pixel(
+        &mut r,
+        &up,
+        surface(Program::ModelSelfLight, Some(base.clone())),
+        [0.0; 4],
+        |_| {},
+    );
+    assert_near(px, [0, 255, 0], "selflight");
+    // Light planes, added (source alpha / one) onto black: B.rgb faded by
+    // |view direction · normal| interpolated from the vertices, whose view
+    // directions (−3, −3, 1), (−3, 9, 1), (9, −3, 1) meet the normal
+    // facing the camera at 0.224, 0.107, 0.107; the centre pixel weighs
+    // them 1/2, 1/4, 1/4: 0.166 · 255 = 42.
+    let mut planes = surface(Program::ModelLightPlanes, Some(base));
+    planes.blend = Blend::Add;
+    let px = object_pixel(&mut r, &object_geometry(TOWARDS), planes, [0.0; 4], |_| {});
+    assert_near(px, [0, 42, 0], "lightplanes");
+
     // A level surface on an object's draw, and a model surface on a level
     // draw, are left out.
+    let g = geom(Layout::VertexLit, 0, 0, [0; 8]);
+    let surfaces = [
+        surface(Program::VertexLit, None),
+        surface(Program::Model, None),
+    ];
     let world = r
         .create_world_with(
             &g,
-            &objects,
+            &up,
             &surfaces,
-            &[object_draw(3, props), draw(0, None)],
+            &[object_draw(0, [0.0; 4]), draw(1, None)],
             None,
         )
         .unwrap();
     assert_eq!(world.skipped(), 2);
     // An object draw beyond the objects' indices fails.
-    let mut far = object_draw(0, props);
+    let mut far = object_draw(1, [0.0; 4]);
     far.first_index = 3;
     assert!(
-        r.create_world_with(&g, &objects, &surfaces, &[far], None)
+        r.create_world_with(&g, &up, &surfaces, &[far], None)
             .is_err()
     );
+}
+
+/// A cube map whose six 4 × 4 faces (+x, −x, +y, −y, +z, −z) each have
+/// one colour (BGRA), so filtering near a face's centre stays on it.
+fn faces_cube(r: &Renderer, faces: [[u8; 4]; 6]) -> Texture {
+    let data: Vec<u8> = faces.iter().flat_map(|f| f.repeat(16)).collect();
+    let file = file(4, 4, 0, true, PixelFormat::BGRA8, &data);
+    r.create_texture(&Dds::parse(&file).unwrap()).unwrap()
 }
 
 #[test]
 fn environment_mapped_models() {
     let mut r = renderer();
-    // A base texel with alpha 0: the environment's texel (rgb (200, 100,
-    // 52)) shows: C = 2 · Q · lerp(E, B, B.a) with Q = 0.5.
+    // A base texel with alpha 0: the environment's texel shows:
+    // C = 2 · Q · lerp(E, B, B.a) with Q = 0.5 (ambient).
     let base = r.create_rgba_texture(1, 1, &[255, 255, 255, 0]);
-    let g = geom(Layout::VertexLit, 0, 0, [0; 8]);
     let mut env = surface(Program::ModelEnv, Some(base));
-    env.env = Some(dds_texture(&r, true, [52, 100, 200, 255]));
-    let world = r
-        .create_world_with(
-            &g,
-            &object_geometry(),
-            &[env],
-            &[object_draw(0, [0.0; 4])],
-            None,
-        )
-        .unwrap();
-    let mut f = frame(world, None);
-    f.light.ambient = [0.5; 3];
-    assert_near(centre(&mut r, f), [200, 100, 52], "model_env_lq");
+    let colours: [[u8; 4]; 6] = std::array::from_fn(|i| [0, 40 * i as u8, 200, 255]);
+    env.env = Some(faces_cube(&r, colours));
+    let ambient = |l: &mut WorldLight| l.ambient = [0.5; 3];
+    // At 40 m every view direction is near (0, 0, 1). Reflected about the
+    // normal facing the camera it points back along −z: face 5. About the
+    // upward normal it keeps going along +z: face 4.
+    let at = |r: &mut Renderer, normal, env| {
+        object_pixel_at(r, &object_geometry(normal), env, [0.0; 4], ambient, 40.0)
+    };
+    let px = at(&mut r, TOWARDS, env.clone());
+    assert_near(px, [200, 200, 0], "reflected towards the camera");
+    let px = at(&mut r, UP, env);
+    assert_near(px, [200, 160, 0], "reflected past the upward normal");
 }

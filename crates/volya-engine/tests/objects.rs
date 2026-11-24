@@ -691,7 +691,7 @@ fn project(view: &[[f32; 4]; 4], projection: &[[f32; 4]; 4], p: [f32; 3]) -> Opt
 }
 
 /// The start view with and without the objects: they show where section 3
-/// places them, and cost little per frame.
+/// places them. Frame times are printed, not checked.
 #[test]
 fn start_view_shows_the_objects() {
     with_game(|tree, data| {

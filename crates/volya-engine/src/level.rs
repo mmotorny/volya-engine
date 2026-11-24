@@ -174,6 +174,19 @@ pub struct PlayerReport {
 /// in the spawn file names a game-graph vertex, whose level the game
 /// graph's level table names (level-loading.md section 2.2).
 pub fn new_game_level(tree: &dyn Vfs, data: &GameData) -> io::Result<(String, spawn::ActorStart)> {
+    read_new_game(tree, data).map(|n| (n.level, n.actor))
+}
+
+/// What creating a New Game reads: the level, the actor's start, and the
+/// spawn file and game graph the objects' switch pass reads again.
+struct NewGame {
+    level: String,
+    actor: spawn::ActorStart,
+    spawn_file: Vec<u8>,
+    graph: GameGraph,
+}
+
+fn read_new_game(tree: &dyn Vfs, data: &GameData) -> io::Result<NewGame> {
     let spawn_path = data
         .aliases
         .path("$game_spawn$", &format!("{SPAWN_NAME}.spawn"))?;
@@ -184,8 +197,13 @@ pub fn new_game_level(tree: &dyn Vfs, data: &GameData) -> io::Result<(String, sp
         tree,
         &data.aliases.path("$game_data$", "game.graph")?,
     )?)?;
-    let level = graph.vertex_level(actor.game_graph_vertex)?;
-    Ok((level.name.clone(), actor))
+    let level = graph.vertex_level(actor.game_graph_vertex)?.name.clone();
+    Ok(NewGame {
+        level,
+        actor,
+        spawn_file,
+        graph,
+    })
 }
 
 /// The weather name of `level` (`[<level>] weathers` of `game.ltx`'s
@@ -215,14 +233,15 @@ fn alife(tree: &dyn Vfs, data: &GameData) -> io::Result<Config> {
 /// platform); neither is "Can't find texture" (static-shading.md 4.2).
 fn locate_texture(tree: &dyn Vfs, data: &GameData, dir: &str, name: &str) -> io::Result<String> {
     let level = format!("{dir}\\{name}.dds");
-    if tree.open(&level).is_ok() {
+    if tree.exists(&level) {
         return Ok(level);
     }
     let path = data
         .aliases
         .path("$game_textures$", &format!("{name}.dds"))?;
-    tree.open(&path)
-        .map_err(|_| invalid(format!("Can't find texture '{name}'")))?;
+    if !tree.exists(&path) {
+        return Err(invalid(format!("Can't find texture '{name}'")));
+    }
     Ok(path)
 }
 
@@ -381,6 +400,10 @@ pub struct NewGameLoad {
     not_drawn: Vec<(String, String)>,
     sky: Option<SkyTextures<String>>,
     flares: Vec<Flares>,
+    /// The spawn file and game graph, from creating the game to the
+    /// switch pass.
+    spawn_file: Vec<u8>,
+    graph: Option<GameGraph>,
     online: Vec<objects::OnlineObject>,
     spawned: Option<objects::Spawned>,
     /// Per model, per mesh: its surface.
@@ -408,10 +431,12 @@ impl NewGameLoad {
         match stage {
             // The level and its start (level-loading.md section 2.2).
             Stage::CreatingNewGame => {
-                let (name, actor) = new_game_level(tree, data)?;
-                self.dir = data.aliases.path("$game_levels$", &name)?;
-                self.name = Some(name);
-                self.actor = Some(actor);
+                let new = read_new_game(tree, data)?;
+                self.dir = data.aliases.path("$game_levels$", &new.level)?;
+                self.name = Some(new.level);
+                self.actor = Some(new.actor);
+                self.spawn_file = new.spawn_file;
+                self.graph = Some(new.graph);
             }
             // The New Game's clock (sav.md section 5) and the switch pass
             // over the level's objects (level-objects.md section 2), placed
@@ -425,15 +450,10 @@ impl NewGameLoad {
                     actor: actor.position,
                     hour: (clock.time_of_day() / 3600.0) as u32,
                 };
-                let spawn_path = data
-                    .aliases
-                    .path("$game_spawn$", &format!("{SPAWN_NAME}.spawn"))?;
-                let graph = GameGraph::parse(&vfs::read(
-                    tree,
-                    &data.aliases.path("$game_data$", "game.graph")?,
-                )?)?;
+                let graph = earlier(self.graph.take(), "game graph")?;
+                let spawn_file = std::mem::take(&mut self.spawn_file);
                 self.online = objects::online_objects(
-                    &vfs::read(tree, &spawn_path)?,
+                    &spawn_file,
                     &graph,
                     name,
                     &data.system,

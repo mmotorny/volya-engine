@@ -68,8 +68,19 @@ pub fn online_objects(
             .flatten()
             .map(str::trim)
             .ok_or_else(|| invalid(format!("section [{section}] has no class")))?;
-        // The Object block is not first in every layout (a stalker's starts
-        // with its Trader-like block), so the record is read whole.
+        // The Object block (game-graph vertex first) starts the state of
+        // every layout but the stalker's, whose Trader-like block comes
+        // first: other levels' records are skipped unparsed where it can.
+        if Kind::from_class_id(class)? != Kind::Stalker {
+            let state = volya_engine_formats::spawn::parse_spawn_packet(r.index, r.spawn)?.data;
+            let vertex = state
+                .first_chunk::<2>()
+                .map(|b| u16::from_le_bytes(*b))
+                .ok_or_else(|| invalid(format!("spawn object {}: no object state", r.index)))?;
+            if graph.vertex_level(vertex)?.name != level {
+                return Ok(ControlFlow::Continue(()));
+            }
+        }
         let record = ObjectRecord::parse(r.spawn, r.update, class, true)?;
         let vertex = record.object.object_block().game_graph_vertex;
         if graph.vertex_level(vertex)?.name == level
@@ -91,7 +102,10 @@ pub fn online_objects(
 /// `<visual>`; `None` without a model (section 3.3: no Visual block, an
 /// empty name, or the actor, whose body the first-person view does not
 /// draw). The configuration's `visual` key is overridden by the Visual
-/// block in every kind that has one, so it is not read.
+/// block in every kind that has one, so it is not read. A dead body's
+/// `corpse_visual` (section 3.2, item 4) is not handled: it applies only to
+/// a body with a non-zero death time, and every dead body of the shipped
+/// file has death time 0 (our omission).
 pub fn visual_name(
     object: &OnlineObject,
     character_visual: &mut dyn FnMut(&TraderLike) -> io::Result<Option<String>>,
@@ -156,6 +170,9 @@ impl<'a> Characters<'a> {
 
     /// The `<visual>` of the trader-like block's specific character: the
     /// block's own if named, else its profile's `<specific_character>`.
+    /// Profiles and descriptions are found by their `id` attribute, and a
+    /// file named in `specific_characters_files` without `.xml` gets it
+    /// appended (our reading: the spec says only that they name them).
     /// A profile that names none would choose at random among the
     /// descriptions of its class; we keep the record's visual then (our
     /// choice).
@@ -242,7 +259,7 @@ pub fn locate_model(tree: &dyn Vfs, data: &GameData, dir: &str, name: &str) -> i
     ];
     for c in candidates {
         let c = c?;
-        if tree.open(&c).is_ok() {
+        if tree.exists(&c) {
             return Ok(c);
         }
     }
@@ -275,7 +292,10 @@ pub struct LoadedModel {
 }
 
 /// Appends `model`'s vertices, quantized (section 4.7), and its meshes'
-/// full-detail indices to `geometry`.
+/// full-detail indices to `geometry`. Every mesh is quantized whatever its
+/// render mode: the software mode keeps floats, but needs a bone index
+/// above 78 with 256 vertex shader constants, which no shipped model has
+/// (our choice: the constant count of a WebGPU device has no meaning here).
 pub fn add_model(
     path: &str,
     model: &Model,
@@ -508,7 +528,9 @@ pub fn spawn(
     online: &[OnlineObject],
 ) -> io::Result<Spawned> {
     let mut characters = Characters::new(tree, data);
+    // Models by file path, and by visual name (located once each).
     let mut by_path: HashMap<String, usize> = HashMap::new();
+    let mut by_name: HashMap<String, usize> = HashMap::new();
     let mut s = Spawned {
         online: online.len(),
         ..Default::default()
@@ -518,6 +540,9 @@ pub fn spawn(
         *classes.entry(o.record.class_id.as_str()).or_default() += 1;
         let name = visual_name(o, &mut |t| characters.visual(t))?;
         let model = match &name {
+            Some(name) if by_name.contains_key(&name.to_lowercase()) => {
+                Some(by_name[&name.to_lowercase()])
+            }
             Some(name) => {
                 let path = locate_model(tree, data, dir, name)?;
                 let key = path.to_lowercase();
@@ -532,6 +557,7 @@ pub fn spawn(
                         s.models.len() - 1
                     }
                 };
+                by_name.insert(name.to_lowercase(), index);
                 Some(index)
             }
             None => None,

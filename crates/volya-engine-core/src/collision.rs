@@ -346,7 +346,9 @@ impl CollisionWorld {
     }
 
     /// Whether the segment from `origin` along the unit direction `dir` for
-    /// `length` metres meets any triangle (either side, any material). The
+    /// `length` metres meets any triangle (either side, any material: our
+    /// choice, the spec does not say which sides or materials block the
+    /// objects' light rays). The
     /// segment's cells are walked in order from the origin, so a hit near it
     /// ends the walk early.
     pub fn ray_hits(&self, origin: Vec3, dir: Vec3, length: f32) -> bool {

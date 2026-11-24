@@ -97,9 +97,10 @@ mod tests {
         let world = b.world();
         let under = ray_origin([0.0, 1.0, 0.0], 1.0);
         assert_eq!(under, [0.0, 1.3, 0.0]);
-        // The roof covers the directions steeper than about 57° from the
-        // horizon (1.7 m up, 2 m out): the 6 near the zenith; the 10 at
-        // 26.6° and 31.7° and the 10 horizontal ones are free.
+        // The roof (1.7 m up, its edges 2 … 2.83 m out) covers the
+        // directions steeper than 31° … 40° from the horizon: the zenith
+        // and the 5 at 58.3°; the 10 at 26.6° and 31.7° and the 10
+        // horizontal ones are free.
         let h = sky_visibility(&world, under);
         assert!((h - 20.0 / 26.0).abs() < 1e-6, "{h}");
         let outside = ray_origin([20.0, 1.0, 0.0], 1.0);

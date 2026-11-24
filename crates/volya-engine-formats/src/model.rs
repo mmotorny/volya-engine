@@ -308,8 +308,9 @@ impl SkinnedMesh {
                 let w = chunks.require(DETAIL_WINDOWS_CHUNK, "skinned progressive mesh")?;
                 let w = parse_progressive_mesh(&w.content()?)?;
                 for s in &w.steps {
-                    let end = s.index_offset as usize + 3 * usize::from(s.triangle_count);
-                    if end > indices.len() {
+                    // u64: on wasm32 a usize sum of a malformed offset wraps.
+                    let end = u64::from(s.index_offset) + 3 * u64::from(s.triangle_count);
+                    if end > indices.len() as u64 {
                         return Err(invalid(format!(
                             "detail window ends at {end} of {} indices",
                             indices.len()
@@ -892,6 +893,17 @@ mod tests {
         let n = out_of_range.len();
         out_of_range[n - 2..].copy_from_slice(&3u16.to_le_bytes());
         assert!(SkinnedMesh::parse(&out_of_range).is_err(), "index 3 of 3");
+        // A detail window whose offset would wrap a 32-bit sum.
+        let mut wrapping = mesh(4, false);
+        let n = wrapping.len();
+        // The last window record: offset, triangles, vertices.
+        wrapping[n - 8..n - 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(
+            SkinnedMesh::parse(&wrapping)
+                .unwrap_err()
+                .to_string()
+                .contains("detail window ends")
+        );
         // A bone index beyond the bones.
         let mut far = mesh(5, false);
         let at = 8 + 44 + 8 + 30 + 8 + 8 + 2 * 60 + 56;
