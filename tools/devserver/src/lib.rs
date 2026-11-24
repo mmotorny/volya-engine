@@ -528,7 +528,10 @@ mod tests {
         assert!(request(app).starts_with("HTTP/1.1 200 "));
         assert!(post("on").starts_with("HTTP/1.1 204 "));
         assert_eq!(request(app), "", "app files unreachable");
-        assert!(request(test).starts_with("HTTP/1.1 200 "), "tests reachable");
+        assert!(
+            request(test).starts_with("HTTP/1.1 200 "),
+            "tests reachable"
+        );
         assert!(post("off").starts_with("HTTP/1.1 204 "));
         assert!(request(app).starts_with("HTTP/1.1 200 "));
         assert!(post("sideways").starts_with("HTTP/1.1 404 "));
