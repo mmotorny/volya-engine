@@ -290,9 +290,18 @@ export const tests = {
     key("Enter");
     await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
     key("Enter");
-    const s = await until((s) => s.phase === "level" && s.load_ms != null, "the level", 60000);
+    // The loading screen (docs/behavior/loading-screen.md): a caption per
+    // stage over the background and the progress strip.
+    const loading = await until((s) => s.phase === "loading" && s.loading, "the loading screen", 10000);
+    assertEqual(loading.loading.expected, 14, "expected captions");
+    const frame = await volya.call("menu_scene", { width: 1024, height: 768 });
+    assertEqual(frame.sprites.filter((s) => s.layer === "loading strip").length, 40, "strip cells");
+    assert(frame.sprites.some((s) => s.layer === "loading background"), "background");
+    assert(frame.sprites.some((s) => s.layer === "loading caption"), "caption");
+    // After the last stage the image covers the level's first 30 frames.
+    const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", 60000);
     assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
-    let note = `loaded and first frame in ${s.load_ms.toFixed(0)} ms`;
+    let note = `"${loading.loading.caption}" seen; loaded and first frame in ${s.load_ms.toFixed(0)} ms`;
     if (gpu.state === "ready") {
       const { rgba } = await volya.call("debug_capture", { width: 256, height: 192 });
       const colours = new Set();

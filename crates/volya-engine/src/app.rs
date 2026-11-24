@@ -20,6 +20,9 @@ use crate::core::vfs::{self, Vfs};
 use crate::data::{Assets, GameData};
 use crate::draw::Ctx;
 use crate::level::{LevelScreen, LevelState};
+use crate::loading_screen::{
+    GAME_TYPE, Loading, LoadingScreen, LoadingScreenState, OVERLAY_FRAMES,
+};
 use crate::scene::{Scene, Sprite, TextureId};
 use crate::startup::{Startup, StartupState};
 use crate::title_menu::{TitleMenu, TitleMenuState};
@@ -66,13 +69,31 @@ pub fn splash_scene(resolution: Resolution, size: (u32, u32)) -> Scene {
 enum Phase {
     Startup(Startup),
     Menu(TitleMenu),
-    /// A new game's level loads on the next update, after one frame of
-    /// this plain loading state (our own; the game's loading screen is
-    /// level-loading.md section 2.4).
+    /// A New Game loading (docs/behavior/loading-screen.md section 2).
     Loading {
         difficulty: &'static str,
+        stages: NewGame,
     },
-    Level(Box<LevelScreen>),
+    /// The level; for its first frames with the loading image over it.
+    Level {
+        level: Box<LevelScreen>,
+        overlay: Option<Overlay>,
+    },
+}
+
+enum NewGame {
+    /// The frame the difficulty was chosen: the last menu frame stays on
+    /// screen until the first caption begins (section 2, step 2).
+    Closing(Box<TitleMenu>),
+    Stages(Box<Loading>),
+}
+
+/// The loading image over the running level, sound muted (section 2,
+/// step 4).
+struct Overlay {
+    screen: LoadingScreen,
+    /// Overlay frames still to draw, this one included.
+    frames_left: u32,
 }
 
 pub struct App {
@@ -86,6 +107,9 @@ pub struct App {
     phase: Option<Phase>,
     /// Why the latest new game failed to load.
     error: Option<String>,
+    /// The game type of the latest game started in this run
+    /// (loading-screen.md section 5).
+    game_type: Option<&'static str>,
     /// Platform time of the update that loaded the level, until the next.
     loaded_at: Option<f64>,
     /// Platform milliseconds from the update that loaded the level to the
@@ -113,11 +137,16 @@ pub enum AppState {
     Loading {
         clock: u64,
         difficulty: &'static str,
+        /// `None` while the last menu frame shows.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        loading: Option<LoadingScreenState>,
     },
     Level {
         clock: u64,
         level: LevelState,
         load_ms: Option<f64>,
+        /// Frames the loading image still covers, this one included.
+        overlay_frames: u32,
     },
 }
 
@@ -131,6 +160,7 @@ impl App {
             clock: 0,
             phase: None,
             error: None,
+            game_type: None,
             loaded_at: None,
             load_ms: None,
         })
@@ -186,25 +216,72 @@ impl App {
             Phase::Menu(menu) => {
                 menu.update(data, now, input, audio);
                 if let Some(difficulty) = menu.take_new_game() {
+                    // What the menu music does while loading is not
+                    // established (loading-screen.md section 6); it stops.
                     menu.stop(audio);
-                    *phase = Phase::Loading { difficulty };
+                    let Phase::Menu(menu) =
+                        std::mem::replace(phase, Phase::Startup(Startup::new(now)))
+                    else {
+                        unreachable!()
+                    };
+                    *phase = Phase::Loading {
+                        difficulty,
+                        stages: NewGame::Closing(Box::new(menu)),
+                    };
                 }
             }
-            Phase::Loading { .. } => match LevelScreen::load(tree, data, now) {
-                Ok(level) => {
-                    self.error = None;
-                    self.loaded_at = Some(time_ms);
-                    *phase = Phase::Level(Box::new(level));
+            Phase::Loading { stages, .. } => {
+                let step = match stages {
+                    NewGame::Closing(_) => {
+                        // Section 5: the first caption only when the game
+                        // type changes; it is remembered from now on.
+                        let changed = self.game_type != Some(GAME_TYPE);
+                        self.game_type = Some(GAME_TYPE);
+                        *stages = NewGame::Stages(Box::new(Loading::start(data, changed)));
+                        Ok(None)
+                    }
+                    NewGame::Stages(loading) => loading
+                        .step(tree, data, now)
+                        .map(|level| level.map(|l| (l, loading.screen().clone()))),
+                };
+                match step {
+                    Ok(None) => {}
+                    Ok(Some((level, screen))) => {
+                        self.error = None;
+                        self.loaded_at = Some(time_ms);
+                        // Section 6: muted while the loading image covers
+                        // the level.
+                        audio.set_master_gain(0.0);
+                        *phase = Phase::Level {
+                            level: Box::new(level),
+                            overlay: Some(Overlay {
+                                screen,
+                                frames_left: OVERLAY_FRAMES,
+                            }),
+                        };
+                    }
+                    Err(e) => {
+                        // Back to the menu, saying why (our choice).
+                        self.error = Some(e.to_string());
+                        *phase = Phase::Menu(TitleMenu::open(data, now, input, audio));
+                    }
                 }
-                Err(e) => {
-                    // Back to the menu, saying why (our choice).
-                    self.error = Some(e.to_string());
-                    *phase = Phase::Menu(TitleMenu::open(data, now, input, audio));
+            }
+            Phase::Level { level, overlay } => {
+                // Section 2, step 6: after the last overlay frame the image
+                // is gone and sound is un-muted.
+                if let Some(o) = overlay.as_mut() {
+                    o.frames_left -= 1;
                 }
-            },
-            Phase::Level(level) => {
+                if overlay.as_ref().is_some_and(|o| o.frames_left == 0) {
+                    *overlay = None;
+                    audio.set_master_gain(1.0);
+                }
                 level.update(now, input);
                 if level.back_requested() {
+                    if overlay.is_some() {
+                        audio.set_master_gain(1.0);
+                    }
                     *phase = Phase::Menu(TitleMenu::open(data, now, input, audio));
                 }
             }
@@ -231,8 +308,27 @@ impl App {
             None => Ok(Scene::new(resolution)),
             Some(Phase::Startup(s)) => s.scene(&mut ctx),
             Some(Phase::Menu(m)) => m.scene(&mut ctx),
-            Some(Phase::Loading { .. }) => Ok(Scene::new(resolution)),
-            Some(Phase::Level(l)) => Ok(l.scene(resolution, self.clock)),
+            Some(Phase::Loading {
+                stages: NewGame::Closing(menu),
+                ..
+            }) => menu.scene(&mut ctx),
+            Some(Phase::Loading {
+                stages: NewGame::Stages(loading),
+                ..
+            }) => {
+                let mut scene = Scene::new(resolution);
+                loading.screen().draw(&mut ctx, &mut scene)?;
+                Ok(scene)
+            }
+            Some(Phase::Level { level, overlay }) => {
+                // The world is drawn under the opaque loading image (which
+                // also brings it to the GPU while covered).
+                let mut scene = level.scene(resolution, self.clock);
+                if let Some(o) = overlay {
+                    o.screen.draw(&mut ctx, &mut scene)?;
+                }
+                Ok(scene)
+            }
         }
     }
 
@@ -245,7 +341,10 @@ impl App {
         match &mut self.phase {
             Some(Phase::Startup(s)) => s.stop(audio),
             Some(Phase::Menu(m)) => m.stop(audio),
-            Some(Phase::Loading { .. } | Phase::Level(_)) | None => {}
+            Some(Phase::Level {
+                overlay: Some(_), ..
+            }) => audio.set_master_gain(1.0),
+            Some(Phase::Loading { .. } | Phase::Level { .. }) | None => {}
         }
     }
 
@@ -262,11 +361,19 @@ impl App {
                 menu: m.state(&self.data, clock),
                 error: self.error.clone(),
             },
-            Some(Phase::Loading { difficulty }) => AppState::Loading { clock, difficulty },
-            Some(Phase::Level(l)) => AppState::Level {
+            Some(Phase::Loading { difficulty, stages }) => AppState::Loading {
                 clock,
-                level: l.state(),
+                difficulty,
+                loading: match stages {
+                    NewGame::Closing(_) => None,
+                    NewGame::Stages(l) => Some(l.screen().state()),
+                },
+            },
+            Some(Phase::Level { level, overlay }) => AppState::Level {
+                clock,
+                level: level.state(),
                 load_ms: self.load_ms,
+                overlay_frames: overlay.as_ref().map_or(0, |o| o.frames_left),
             },
         }
     }
@@ -350,24 +457,53 @@ mod tests {
             app.update(&tree, t, &input, &mut audio);
             input.end_frame();
         }
-        let AppState::Loading { difficulty, .. } = app.state() else {
-            panic!("not loading: {:?}", app.state())
+        let AppState::Loading {
+            difficulty,
+            loading: None,
+            ..
+        } = app.state()
+        else {
+            panic!("not closing the menu: {:?}", app.state())
         };
         assert_eq!(difficulty, "gd_novice");
         assert!(audio.playing.is_empty(), "the menu music stopped");
-        assert!(
-            app.scene(&tree, Resolution::new(64, 48))
-                .unwrap()
-                .sprites
-                .is_empty()
-        );
-        // The fixture has no spawn file: back to the menu, saying why.
+        // The last menu frame stays until the first caption begins.
+        let res = Resolution::new(1024, 768);
+        assert!(app.scene(&tree, res).unwrap().first("background").is_some());
+
+        // One caption per frame: a first New Game starts with prefetching.
+        let caption = |app: &App| match app.state() {
+            AppState::Loading {
+                loading: Some(l), ..
+            } => (l.captions, l.caption),
+            s => panic!("not loading: {s:?}"),
+        };
         app.update(&tree, 40.0, &input, &mut audio);
+        assert_eq!(caption(&app), (1, "Кэширование объектов...".into()));
+        let scene = app.scene(&tree, res).unwrap();
+        assert!(scene.first("background").is_none(), "menu gone");
+        assert_eq!(scene.layer("loading strip").count(), 40);
+        app.update(&tree, 50.0, &input, &mut audio);
+        assert_eq!(caption(&app), (2, "Сервер: Старт...".into()));
+        app.update(&tree, 60.0, &input, &mut audio);
+        app.update(&tree, 70.0, &input, &mut audio);
+        assert_eq!(caption(&app), (4, "st_creating_new_game...".into()));
+        // The fixture has no spawn file: back to the menu, saying why.
+        app.update(&tree, 80.0, &input, &mut audio);
         let AppState::Menu { error, menu, .. } = app.state() else {
             panic!("not in the menu: {:?}", app.state())
         };
         assert!(error.unwrap().contains("spawn"), "error");
         assert_eq!(menu.list, "menu_main");
+        assert!(audio.master_gains.is_empty(), "never muted");
+
+        // A later New Game of the same type skips prefetching.
+        for t in [90.0, 100.0, 110.0] {
+            press(&mut input, Key::Enter);
+            app.update(&tree, t, &input, &mut audio);
+            input.end_frame();
+        }
+        assert_eq!(caption(&app), (1, "Сервер: Старт...".into()));
     }
 
     #[test]

@@ -11,8 +11,8 @@ use crate::core::vfs::Vfs;
 use crate::data::{Assets, GameData};
 use crate::scene::{Scene, Sprite, TextureId};
 use volya_engine_formats::text::font::UiFont;
-use volya_engine_formats::text::layout::{TextBox, layout_text};
-use volya_engine_formats::ui::layout::{Rect, StaticDesc};
+use volya_engine_formats::text::layout::{TextBox, draw_line, layout_text};
+use volya_engine_formats::ui::layout::{HAlign, Rect, StaticDesc};
 use volya_engine_formats::ui::picture::{Picture, PicturePlacement};
 use volya_engine_formats::ui::{Color, Resolution};
 
@@ -94,6 +94,35 @@ impl Ctx<'_> {
         scene.sprites.extend(
             layout
                 .quads
+                .iter()
+                .map(|g| Sprite::glyph(layer, id.clone(), g, size)),
+        );
+        Ok(())
+    }
+
+    /// Adds the glyphs of one string `text` (Windows-1251 bytes) drawn at
+    /// pen `pen` in output pixels with font `font` (text-and-fonts.md
+    /// section 3) as layer `layer`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn line(
+        &mut self,
+        scene: &mut Scene,
+        layer: &str,
+        text: &[u8],
+        pen: (f32, f32),
+        color: Color,
+        align: HAlign,
+        font: UiFont,
+    ) -> io::Result<()> {
+        let fonts = self
+            .assets
+            .fonts(self.tree, self.data, self.resolution.height)?;
+        let font = fonts.get(font).clone();
+        let path = Assets::font_texture(self.data, &font.texture)?;
+        let size = self.assets.image_size(self.tree, &path)?;
+        let id = TextureId::Image { path };
+        scene.sprites.extend(
+            draw_line(&font, text, pen, color, align)
                 .iter()
                 .map(|g| Sprite::glyph(layer, id.clone(), g, size)),
         );

@@ -364,6 +364,9 @@ impl Presenter {
             );
             let c = sprite.color;
             quad.color = [c.r, c.g, c.b, c.a];
+            quad.corner_colors = sprite
+                .corner_colors
+                .map(|cs| cs.map(|c| [c.r, c.g, c.b, c.a]));
             list.quads.push(quad);
         }
         self.videos.retain(|path, _| {

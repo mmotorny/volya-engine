@@ -1,10 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! A New Game's level from the Russian edition (BYOA): which level loads
+//! A New Game from the Russian edition (BYOA): its loading screen
+//! (docs/behavior/loading-screen.md), which level loads
 //! (docs/behavior/level-loading.md section 2.2), the start view
 //! (docs/behavior/start-position.md) rendered headless, with load and frame
-//! times. `VOLYA_DUMP_LEVEL=<file.ppm>` writes the start frame locally for
+//! times. `VOLYA_DUMP_LEVEL=<file.ppm>` writes the start frame and
+//! `VOLYA_DUMP_LOADING=<file.ppm>` the fifth loading image locally for
 //! inspection. Skips when `VOLYA_GOG_INSTALLER` is unset.
 
 #![cfg(not(target_arch = "wasm32"))]
@@ -14,12 +16,17 @@ mod gog_archives;
 
 use std::time::Instant;
 
+use volya_engine::app::{App, AppState};
+use volya_engine::audio::{AudioOut, Voice};
+use volya_engine::core::audio::Playback;
+use volya_engine::core::input::{Event, Input, Key};
 use volya_engine::core::vfs::StdVfs;
 use volya_engine::core::vfs::db::DbVfs;
 use volya_engine::data::GameData;
 use volya_engine::level::{self, LevelScreen};
 use volya_engine::present::Presenter;
 use volya_engine::render::{Renderer, wgpu};
+use volya_engine::scene::TextureId;
 use volya_engine_formats::ui::Resolution;
 
 const SIZE: Resolution = Resolution::new(1024, 768);
@@ -39,9 +46,9 @@ fn renderer() -> Renderer {
     })
 }
 
-/// Writes `pixels` (RGBA) as a PPM when `VOLYA_DUMP_LEVEL` is set.
-fn dump(pixels: &[u8], width: u32, height: u32) {
-    if let Some(path) = std::env::var_os("VOLYA_DUMP_LEVEL") {
+/// Writes `pixels` (RGBA) as a PPM when the variable `var` is set.
+fn dump(var: &str, pixels: &[u8], width: u32, height: u32) {
+    if let Some(path) = std::env::var_os(var) {
         let mut ppm = format!("P6 {width} {height} 255\n").into_bytes();
         for p in pixels.chunks(4) {
             ppm.extend_from_slice(&p[..3]);
@@ -118,7 +125,7 @@ fn new_game_start_view_from_game_data() {
         level.not_drawn
     );
     assert_eq!(world.skipped(), 0);
-    dump(&pixels, SIZE.width, SIZE.height);
+    dump("VOLYA_DUMP_LEVEL", &pixels, SIZE.width, SIZE.height);
 
     // The start view is inside the trader's bunker: the world covers the
     // screen (the clear colour shows nowhere), in many colours.
@@ -180,4 +187,231 @@ fn new_game_start_view_from_game_data() {
         "{cleared} cleared sky pixels"
     );
     assert!(sky.len() > 50, "{} sky colours", sky.len());
+}
+
+/// Records the master gains set; plays nothing.
+#[derive(Default)]
+struct Gains(Vec<f32>);
+
+impl AudioOut for Gains {
+    fn play(&mut self, _: &str, _: Playback) -> Option<Voice> {
+        None
+    }
+    fn stop(&mut self, _: Voice) {}
+    fn is_playing(&self, _: Voice) -> bool {
+        false
+    }
+    fn set_master_gain(&mut self, gain: f32) {
+        self.0.push(gain);
+    }
+}
+
+fn press(input: &mut Input, key: Key) {
+    input.handle(Event::Key { key, pressed: true });
+    input.handle(Event::Key {
+        key,
+        pressed: false,
+    });
+}
+
+/// Section 5's texts with section 10.2's width S and left edge x0 at
+/// 800 × 600, 1024 × 768 and 1920 × 1080.
+type Widths = [(u32, f32); 3];
+const CAPTIONS: [(&str, Widths); 17] = [
+    (
+        "Кэширование объектов...",
+        [(154, 323.), (176, 424.), (257, 832.)],
+    ),
+    ("Сервер: Старт...", [(98, 351.), (113, 456.), (165, 878.)]),
+    (
+        "Сервер: Загрузка симуляции жизни...",
+        [(230, 285.), (265, 380.), (388, 766.)],
+    ),
+    (
+        "Создание новой игры...",
+        [(145, 328.), (168, 428.), (241, 840.)],
+    ),
+    (
+        "Сервер: Соединяемся...",
+        [(142, 329.), (165, 430.), (239, 841.)],
+    ),
+    (
+        "Клиент: Соединение с localhost...",
+        [(208, 296.), (240, 392.), (344, 788.)],
+    ),
+    (
+        "Открытие потока...",
+        [(116, 342.), (129, 448.), (194, 863.)],
+    ),
+    (
+        "Загрузка формы объектов...",
+        [(175, 313.), (198, 413.), (291, 815.)],
+    ),
+    (
+        "Загрузка шейдеров...",
+        [(130, 335.), (148, 438.), (218, 851.)],
+    ),
+    (
+        "Загрузка геометрии...",
+        [(134, 333.), (150, 437.), (222, 849.)],
+    ),
+    (
+        "Загрузка базы пространств...",
+        [(181, 310.), (200, 412.), (299, 811.)],
+    ),
+    (
+        "Загрузка детальных объектов...",
+        [(198, 301.), (223, 401.), (330, 795.)],
+    ),
+    (
+        "Загрузка секторов и порталов...",
+        [(202, 299.), (228, 398.), (334, 793.)],
+    ),
+    (
+        "Загрузка ИИ объектов...",
+        [(151, 325.), (171, 427.), (249, 836.)],
+    ),
+    (
+        "Клиент: Создание...",
+        [(120, 340.), (138, 443.), (200, 860.)],
+    ),
+    (
+        "Загрузка текстур...",
+        [(117, 342.), (129, 448.), (195, 863.)],
+    ),
+    (
+        "Клиент: Синхронизация...",
+        [(154, 323.), (177, 424.), (258, 831.)],
+    ),
+];
+
+/// docs/behavior/loading-screen.md: a first New Game from the title menu
+/// shows the 17 captions in order with their texts, widths and positions
+/// (sections 5, 10.2), the level's picture from caption 5 (4.5), then the
+/// loading image over 30 frames of the running level with sound muted
+/// (sections 2, 6). Its textures render without errors.
+#[test]
+fn new_game_loading_screen_from_game_data() {
+    let Some(archives) = gog_archives::archives() else {
+        return;
+    };
+    let root = StdVfs::new(archives[0].file.parent().unwrap());
+    let tree = DbVfs::open_game(&root, Some("mods")).unwrap();
+    let mut data = GameData::read(&tree, None, SIZE).unwrap();
+    // The logo sequence is skipped; its lengths do not matter here.
+    data.intro_lengths = vec![0.0; data.intro.items.len()];
+    let mut app = App::new(data).unwrap();
+    let (mut input, mut audio) = (Input::new(), Gains::default());
+    let mut t = 0.0;
+    let mut step = |app: &mut App, input: &mut Input, audio: &mut Gains| {
+        t += 16.0;
+        app.update(&tree, t, input, audio);
+        input.end_frame();
+    };
+    for _ in 0..20 {
+        if matches!(app.state(), AppState::Menu { .. }) {
+            break;
+        }
+        press(&mut input, Key::Escape);
+        step(&mut app, &mut input, &mut audio);
+    }
+    assert!(matches!(app.state(), AppState::Menu { .. }));
+    for _ in 0..2 {
+        press(&mut input, Key::Enter);
+        step(&mut app, &mut input, &mut audio);
+    }
+    assert!(matches!(
+        app.state(),
+        AppState::Loading { loading: None, .. }
+    ));
+
+    let resolutions = [
+        (Resolution::new(800, 600), 544.0, 17.0),
+        (SIZE, 696.0, 19.0),
+        (Resolution::new(1920, 1080), 980.0, 30.0),
+    ];
+    let picture = "gamedata\\textures\\intro\\intro_l01_escape.dds";
+    let mut gpu = renderer();
+    let mut presenter = Presenter::new();
+    let start = Instant::now();
+    for (i, (text, widths)) in CAPTIONS.iter().enumerate() {
+        step(&mut app, &mut input, &mut audio);
+        let AppState::Loading {
+            loading: Some(l), ..
+        } = app.state()
+        else {
+            panic!("caption {}: {:?}", i + 1, app.state())
+        };
+        assert_eq!((l.captions, l.caption.as_str()), (i as u32 + 1, *text));
+        assert_eq!(l.picture.as_deref(), (i >= 4).then_some(picture), "{text}");
+        for ((resolution, y, height), (s, x0)) in resolutions.iter().zip(widths) {
+            let scene = app.scene(&tree, *resolution).unwrap();
+            let b = scene.layer_bounds("loading caption").unwrap();
+            assert_eq!(
+                b,
+                [*x0, *y, x0 + *s as f32, y + height],
+                "{text} at {resolution:?}"
+            );
+        }
+        if i == 4 {
+            let scene = app.scene(&tree, SIZE).unwrap();
+            let bg = scene.first("loading background").unwrap();
+            assert_eq!(
+                bg.texture,
+                TextureId::Image {
+                    path: "gamedata\\textures\\ui\\ui_load.dds".into()
+                }
+            );
+            assert_eq!(bg.uv_max, [1.0, 0.75], "1024 × 1024");
+            let list = presenter.draw_list(&mut gpu, &tree, &scene, 0);
+            let pixels =
+                pollster::block_on(gpu.capture(&list, SIZE.width, SIZE.height, wgpu::Color::BLACK))
+                    .unwrap();
+            dump("VOLYA_DUMP_LOADING", &pixels, SIZE.width, SIZE.height);
+            let errors = presenter.take_errors();
+            assert!(errors.is_empty(), "{errors:?}");
+        }
+    }
+
+    // The last caption's work: the level runs under the loading image.
+    step(&mut app, &mut input, &mut audio);
+    eprintln!("loading screen: 17 captions in {:.1?}", start.elapsed());
+    let AppState::Level {
+        level,
+        overlay_frames,
+        ..
+    } = app.state()
+    else {
+        panic!("not in the level: {:?}", app.state())
+    };
+    assert_eq!((level.name.as_str(), overlay_frames), ("l01_escape", 30));
+    assert_eq!(audio.0, [0.0], "muted");
+    let scene = app.scene(&tree, SIZE).unwrap();
+    assert!(scene.world.is_some());
+    assert_eq!(
+        scene.layer_bounds("loading caption").unwrap()[0],
+        424.0,
+        "the last caption"
+    );
+    assert!(scene.first("loading picture").is_some());
+    for _ in 0..29 {
+        step(&mut app, &mut input, &mut audio);
+    }
+    let AppState::Level { overlay_frames, .. } = app.state() else {
+        panic!()
+    };
+    assert_eq!((overlay_frames, audio.0.as_slice()), (1, [0.0].as_slice()));
+    step(&mut app, &mut input, &mut audio);
+    let AppState::Level { overlay_frames, .. } = app.state() else {
+        panic!()
+    };
+    assert_eq!(overlay_frames, 0);
+    assert_eq!(audio.0, [0.0, 1.0], "un-muted after the 30th frame");
+    let scene = app.scene(&tree, SIZE).unwrap();
+    assert!(
+        scene
+            .sprites
+            .iter()
+            .all(|s| !s.layer.starts_with("loading"))
+    );
 }

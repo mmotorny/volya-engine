@@ -21,6 +21,7 @@ mod draw;
 mod fixture;
 pub mod free_controls;
 pub mod level;
+pub mod loading_screen;
 pub mod present;
 pub mod scene;
 pub mod shading;

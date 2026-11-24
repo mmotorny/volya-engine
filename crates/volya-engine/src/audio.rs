@@ -20,6 +20,8 @@ pub trait AudioOut {
     fn play(&mut self, path: &str, playback: Playback) -> Option<Voice>;
     fn stop(&mut self, voice: Voice);
     fn is_playing(&self, voice: Voice) -> bool;
+    /// Sets the master (listener) gain: 0 mutes everything, 1 is normal.
+    fn set_master_gain(&mut self, gain: f32);
 }
 
 /// No audio output: nothing plays.
@@ -33,6 +35,7 @@ impl AudioOut for Silent {
     fn is_playing(&self, _: Voice) -> bool {
         false
     }
+    fn set_master_gain(&mut self, _: f32) {}
 }
 
 /// [`AudioOut`] on a mixer, reading files from `tree`.
@@ -64,5 +67,9 @@ impl AudioOut for MixerOut<'_> {
         self.voices
             .iter()
             .any(|v| v.index() == voice && self.mixer.is_playing(*v))
+    }
+
+    fn set_master_gain(&mut self, gain: f32) {
+        self.mixer.set_master_gain(gain);
     }
 }
