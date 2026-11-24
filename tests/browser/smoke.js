@@ -296,6 +296,18 @@ export const tests = {
       box.click();
       box.click();
       assertEqual(doc.querySelectorAll(".state").length, STATES.length, "states after toggling a device");
+      // The view is kept across reloads.
+      const zoom = doc.querySelector(".zoom input");
+      zoom.value = 55;
+      zoom.dispatchEvent(new Event("change"));
+      box.click();
+      frame.contentWindow.location.reload();
+      await new Promise((r) => frame.addEventListener("load", r, { once: true }));
+      for (let i = 0; i < 100 && !frame.contentDocument.querySelector(".state"); i++) await new Promise((r) => setTimeout(r, 20));
+      const again = frame.contentDocument;
+      assertEqual(again.querySelector(".zoom input").value, "55", "zoom after reload");
+      assert(!again.querySelector(".devices input").checked, "device tick after reload");
+      localStorage.removeItem("volya-engine.ux-audit.view");
     } finally {
       frame.remove();
     }

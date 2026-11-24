@@ -50,7 +50,7 @@ Constraints this imposes:
 
 ## UX audit page
 
-`/volya-engine/ux-audit/` shows every state of the app's own interface on each device (iPhone 17 Pro Max portrait and landscape, desktop Chrome), like a design file. Each frame is the live interface (`style.css`, `game-ui.js`) with a fake engine and fake updates (`ux-audit/frame.js`), so the page can't drift from the app; states live in `ux-audit/states.js`. It is for the project, not players: not kept offline by the service worker, `noindex`. It flags states whose text differs by device, and has a Check for update button: on request it checks every 10 s up to 12 times for a newer build (`cargo xtask web` writes the build into its page; GitHub Pages serves a deploy a minute or two later, from many servers) and reloads, keeping the view, when one appears. No checks otherwise.
+`/volya-engine/ux-audit/` shows every state of the app's own interface on each device (iPhone 17 Pro Max portrait and landscape, desktop Chrome), like a design file. Each frame is the live interface (`style.css`, `game-ui.js`) with a fake engine and fake updates (`ux-audit/frame.js`), so the page can't drift from the app; states live in `ux-audit/states.js`. It is for the project, not players: not kept offline by the service worker, `noindex`. It flags states whose text differs by device, and has a Check for update button: on request it checks every 10 s up to 12 times for a newer build (`cargo xtask web` writes the build into its page; GitHub Pages serves a deploy a minute or two later, from many servers) and reloads when one appears. No checks otherwise. The view (zoom, devices, full length, scroll) is kept across reloads and visits (localStorage).
 
 ## Game data: BYOA, local only
 

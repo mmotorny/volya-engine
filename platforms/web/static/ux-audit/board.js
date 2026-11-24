@@ -128,11 +128,24 @@ zoom.addEventListener("input", () => {
   zoomOut.value = `${zoom.value}%`;
   document.documentElement.style.setProperty("--scale", scale());
 });
+// The view (zoom, devices, full length, scroll) is kept across reloads and
+// visits: saved on every change and when the page is left, restored on load.
+// Namespaced: the github.io origin is shared.
+const VIEW = "volya-engine.ux-audit.view";
+const saveView = () =>
+  localStorage.setItem(VIEW, JSON.stringify({ zoom: zoom.value, shown: [...shown], full: full.checked, y: scrollY }));
+zoom.addEventListener("change", saveView);
+full.addEventListener("change", saveView);
+devicesBox.addEventListener("change", saveView);
+addEventListener("pagehide", saveView);
+document.addEventListener("visibilitychange", () => document.visibilityState === "hidden" && saveView());
+// The board is built after load, so the browser can't restore the scroll.
+history.scrollRestoration = "manual";
+
 // Check for update: on request only, every 10 s up to 12 times (GitHub Pages
 // serves a deploy a minute or two later, from many servers); a newer build
-// reloads the board, keeping the view (zoom, devices, full length, scroll).
-// This page isn't kept offline, so checks reach the network.
-const VIEW = "volya-engine.ux-audit.view";
+// reloads the board, keeping the view. This page isn't kept offline, so
+// checks reach the network.
 const CHECKS = 12;
 const CHECK_EVERY_MS = 10_000;
 const build = () => document.querySelector('meta[name="build"]').content;
@@ -147,7 +160,7 @@ checkButton.addEventListener("click", async () => {
     checkButton.textContent = `Checking… ${attempt}/${CHECKS}`;
     const latest = await deployedBuild().catch(() => null);
     if (latest && latest !== build()) {
-      sessionStorage.setItem(VIEW, JSON.stringify({ zoom: zoom.value, shown: [...shown], full: full.checked, y: scrollY }));
+      saveView();
       location.reload();
       return;
     }
@@ -156,13 +169,17 @@ checkButton.addEventListener("click", async () => {
   checkButton.textContent = "No newer build · Check again";
   checkButton.disabled = false;
 });
-const saved = JSON.parse(sessionStorage.getItem(VIEW) ?? "null");
-sessionStorage.removeItem(VIEW);
+let saved = null;
+try {
+  saved = JSON.parse(localStorage.getItem(VIEW) ?? "null");
+} catch {
+  // A damaged entry: start from the defaults.
+}
 if (saved) {
   zoom.value = saved.zoom;
   full.checked = saved.full;
   shown.clear();
-  for (const id of saved.shown) shown.add(id);
+  for (const id of saved.shown ?? []) if (DEVICES.some((d) => d.id === id)) shown.add(id);
   devicesBox.querySelectorAll("input").forEach((box, i) => (box.checked = shown.has(DEVICES[i].id)));
   zoomOut.value = `${zoom.value}%`;
   document.documentElement.style.setProperty("--scale", scale());
