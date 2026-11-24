@@ -1,26 +1,29 @@
 <!-- SPDX-FileCopyrightText: 2026 Maksym Motorny -->
 <!-- SPDX-License-Identifier: BSD-3-Clause -->
 <!-- App icon: docs/logo.svg without the lettering and frame, enlarged, lines
-     thickened to survive small sizes, a coarser grid; full bleed (platforms
-     round the corners). icon-180/192/512.png are renders of this file. -->
+     thickened to survive small sizes, a coarser two-level grid; darker
+     background and opaque line work keep contrast when the platform drops
+     colour (iOS "Clear" icons). Full bleed (platforms round the corners).
+     icon-180/192/512.png are renders of this file. -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
   <title>Volya Engine</title>
   <defs><radialGradient id="bp-bg" cx="50%" cy="46%" r="68%">
-      <stop offset="0%" stop-color="#1D53A2" />
-      <stop offset="65%" stop-color="#154288" />
-      <stop offset="100%" stop-color="#0F336E" />
+      <stop offset="0%" stop-color="#163F7E" />
+      <stop offset="65%" stop-color="#0F2F63" />
+      <stop offset="100%" stop-color="#0A2147" />
     </radialGradient><pattern id="grid" x="-64" y="-64" width="128" height="128" patternUnits="userSpaceOnUse">
-      <path d="M 64 0 V 128 M 0 64 H 128" fill="none" stroke="#9FCBFA" stroke-width="7" stroke-opacity="0.09" /></pattern></defs>
+      <path d="M 0 0 V 128 M 0 0 H 128 M 32 0 V 128 M 0 32 H 128 M 96 0 V 128 M 0 96 H 128" fill="none" stroke="#9FCBFA" stroke-width="3.5" stroke-opacity="0.07" />
+      <path d="M 64 0 V 128 M 0 64 H 128" fill="none" stroke="#9FCBFA" stroke-width="7" stroke-opacity="0.15" /></pattern></defs>
   <rect width="1024" height="1024" fill="url(#bp-bg)" />
   <rect width="1024" height="1024" fill="url(#grid)" />
   <g transform="translate(512 512) scale(1.22) translate(-517 -466)">
     <g id="isometric-dimensions" stroke-width="2.4" fill="none" stroke-linecap="round">
     
-    <g stroke="#BAE6FD" stroke-width="2.80" stroke-opacity="0.88">
+    <g stroke="#E3F4FE" stroke-width="2.80" stroke-opacity="1">
       
       <line x1="395" y1="810" x2="706" y2="667" />
       
-      <line x1="316" y1="762" x2="656" y2="606" stroke="#5CE1E6" stroke-opacity="0.65" />
+      <line x1="316" y1="762" x2="656" y2="606" stroke="#B5F1F4" stroke-opacity="1" />
       
       <line x1="296" y1="716" x2="456" y2="800" />
       <line x1="466" y1="716" x2="564" y2="768" />
@@ -31,22 +34,22 @@
       <path d="M 398 764 V 782 M 437 782 V 802" stroke-width="2.40" />
     </g>
 
-    <path d="M 500 760 V 792 M 488 776 H 512" stroke="#FFFFFF" stroke-width="3.20" stroke-opacity="0.92" />
+    <path d="M 500 760 V 792 M 488 776 H 512" stroke="#FFFFFF" stroke-width="3.20" stroke-opacity="1" />
 
-    <g stroke="#5CE1E6" stroke-width="3.20">
-      <polygon points="322,734 338,727 352,735 336,742" fill="#143F82" stroke="#7DD3FC" />
-      <polygon points="358,753 374,746 388,754 372,761" fill="#143F82" stroke="#7DD3FC" />
+    <g stroke="#B5F1F4" stroke-width="3.20">
+      <polygon points="322,734 338,727 352,735 336,742" fill="#0F2F63" stroke="#C4E9FD" />
+      <polygon points="358,753 374,746 388,754 372,761" fill="#0F2F63" stroke="#C4E9FD" />
       <path d="M 358 656 L 334 734 M 368 662 L 342 736" />
       <path d="M 394 675 L 370 753 M 404 681 L 378 755" />
     </g>
   </g>
     <g id="ferris-wheel">
     
-    <g transform="matrix(0.78, -0.26, 0, 1, 493, 431)" stroke="#38BDF8" stroke-opacity="0.72">
-      <circle r="290" fill="none" stroke="#BAE6FD" stroke-width="4.40" stroke-opacity="0.85" />
+    <g transform="matrix(0.78, -0.26, 0, 1, 493, 431)" stroke="#93D5FB" stroke-opacity="1">
+      <circle r="290" fill="none" stroke="#E3F4FE" stroke-width="4.40" stroke-opacity="1" />
     </g>
 
-    <g stroke="#5CE1E6" stroke-width="2.75" stroke-opacity="0.75">
+    <g stroke="#B5F1F4" stroke-width="2.75" stroke-opacity="1">
       <line x1="719.2" y1="355.6" x2="753.2" y2="361.6" />
       <line x1="702.0" y1="472.4" x2="736.0" y2="478.4" />
       <line x1="653.0" y1="582.8" x2="687.0" y2="588.8" />
@@ -65,19 +68,19 @@
       <line x1="702.0" y1="250.3" x2="736.0" y2="256.3" />
     </g>
 
-    <g transform="matrix(0.78, -0.26, 0, 1, 527, 437)" stroke="#67E8F9">
+    <g transform="matrix(0.78, -0.26, 0, 1, 527, 437)" stroke="#D5F7FC">
       
       <circle r="290" fill="none" stroke="#F0F9FF" stroke-width="5.72" />
-      <circle r="280" fill="none" stroke="#BAE6FD" stroke-width="3.52" />
+      <circle r="280" fill="none" stroke="#E3F4FE" stroke-width="3.52" />
     </g>
 
     <g id="wheel-hub" stroke="#E0F2FE" stroke-width="3.96" stroke-linejoin="round">
       
-      <line x1="484" y1="429" x2="502" y2="432" stroke="#7DD3FC" stroke-width="11.00" />
+      <line x1="484" y1="429" x2="502" y2="432" stroke="#C4E9FD" stroke-width="11.00" />
       
-      <polygon points="502,424 518,417 534,421 518,428" fill="#1B52A4" />
-      <polygon points="502,424 518,428 518,447 502,443" fill="#133D7E" />
-      <polygon points="518,428 534,421 534,440 518,447" fill="#174894" />
+      <polygon points="502,424 518,417 534,421 518,428" fill="#163F7E" />
+      <polygon points="502,424 518,428 518,447 502,443" fill="#0D2A57" />
+      <polygon points="518,428 534,421 534,440 518,447" fill="#123570" />
     </g>
   </g>
     <g id="v-monogram" stroke="#0F3570" stroke-width="4.5" stroke-linejoin="round" stroke-linecap="round">
