@@ -23,10 +23,14 @@ use crate::core::vfs::{self, Vfs};
 use crate::core::weather::{self, Environment, Weather};
 use crate::data::GameData;
 use crate::free_controls::{self, TouchLayout};
+use crate::render::world::Surface;
 use crate::scene::{Scene, Sprite, TextureId, WorldScene};
+use crate::shading::{self, ShaderLibrary};
+use std::collections::HashMap;
 use volya_engine_formats::env_mod::{self, EnvModifier};
 use volya_engine_formats::game_graph::GameGraph;
 use volya_engine_formats::level_geom::LevelGeom;
+use volya_engine_formats::shaders_xr;
 use volya_engine_formats::spawn;
 use volya_engine_formats::ui::Color;
 use volya_engine_formats::ui::Resolution;
@@ -57,6 +61,15 @@ pub struct LevelWorld {
     pub dir: String,
     pub shaders: Vec<String>,
     pub draw_items: Vec<DrawItem>,
+    /// The surfaces of the shader entries the draw items use, textures as
+    /// file paths (static-shading.md sections 4.2, 7, 8).
+    pub surfaces: Vec<Surface<String>>,
+    /// The bounding sphere (centre, radius) of each draw item's visual.
+    pub spheres: Vec<[f32; 4]>,
+    /// The surface of each draw item; `None` where its entry is not drawn.
+    pub draw_surfaces: Vec<Option<u32>>,
+    /// Shader entries not drawn, with why.
+    pub not_drawn: Vec<(String, String)>,
     /// The vertex and index buffers until the presenter uploads them.
     geometry: Mutex<Option<LevelGeom>>,
 }
@@ -141,6 +154,93 @@ fn start_weather(tree: &dyn Vfs, data: &GameData, level: &str) -> io::Result<(St
     Ok((name, time))
 }
 
+/// The surfaces of the shader entries `draw_items` use, each draw item's
+/// surface, and the entries not drawn with why. A texture that resolves
+/// nowhere fails the load ("Can't find texture", static-shading.md 4.2).
+#[allow(clippy::type_complexity)]
+fn resolve_surfaces(
+    tree: &dyn Vfs,
+    data: &GameData,
+    dir: &str,
+    shaders: &[String],
+    draw_items: &[DrawItem],
+) -> io::Result<(
+    Vec<Surface<String>>,
+    Vec<Option<u32>>,
+    Vec<(String, String)>,
+)> {
+    let aliases = &data.aliases;
+    let definitions: HashMap<String, shaders_xr::Definition> = shaders_xr::parse(&vfs::read(
+        tree,
+        &aliases.path("$game_data$", "shaders.xr")?,
+    )?)?
+    .into_iter()
+    .map(|d| (d.name.clone(), d))
+    .collect();
+    let shader_dir = aliases.path("$game_shaders$", "r1")?;
+    let scripted = |module: &str| tree.open(&format!("{shader_dir}\\{module}.s")).is_ok();
+    let textures_ltx = config::load(tree, &aliases.path("$game_textures$", "textures.ltx")?)?;
+    let associations = shading::associations(&textures_ltx);
+    let library = ShaderLibrary {
+        definitions: &definitions,
+        scripted: &scripted,
+        associations: &associations,
+    };
+    // $level$, then $game_textures$ (the saved-games folder has no place on
+    // this platform).
+    let mut paths: HashMap<String, String> = HashMap::new();
+    let mut locate = |name: String| -> io::Result<String> {
+        if let Some(p) = paths.get(&name) {
+            return Ok(p.clone());
+        }
+        let level = format!("{dir}\\{name}.dds");
+        let path = if tree.open(&level).is_ok() {
+            level
+        } else {
+            let path = aliases.path("$game_textures$", &format!("{name}.dds"))?;
+            tree.open(&path)
+                .map_err(|_| invalid(format!("Can't find texture '{name}'")))?;
+            path
+        };
+        paths.insert(name, path.clone());
+        Ok(path)
+    };
+    let mut surfaces = Vec::new();
+    let mut by_entry: HashMap<u16, Option<u32>> = HashMap::new();
+    let mut not_drawn = Vec::new();
+    let mut draw_surfaces = Vec::with_capacity(draw_items.len());
+    for item in draw_items {
+        if let Some(s) = by_entry.get(&item.shader) {
+            draw_surfaces.push(*s);
+            continue;
+        }
+        let entry = shaders
+            .get(usize::from(item.shader))
+            .map_or("", String::as_str);
+        let surface = match library.resolve(entry) {
+            Ok(surface) => {
+                let [a, b, c, d] = surface.textures.clone();
+                let mut resolved = surface.map_textures(|_| None::<String>);
+                resolved.textures = [
+                    a.map(&mut locate).transpose()?,
+                    b.map(&mut locate).transpose()?,
+                    c.map(&mut locate).transpose()?,
+                    d.map(&mut locate).transpose()?,
+                ];
+                surfaces.push(resolved);
+                Some(surfaces.len() as u32 - 1)
+            }
+            Err(why) => {
+                not_drawn.push((entry.to_owned(), why));
+                None
+            }
+        };
+        by_entry.insert(item.shader, surface);
+        draw_surfaces.push(surface);
+    }
+    Ok((surfaces, draw_surfaces, not_drawn))
+}
+
 impl LevelScreen {
     /// Loads the new game's level at engine clock `now`.
     pub fn load(tree: &dyn Vfs, data: &GameData, now: u64) -> io::Result<Self> {
@@ -167,6 +267,16 @@ impl LevelScreen {
                 .section(spawn::ACTOR_SECTION)
                 .ok_or_else(|| invalid(format!("no section [{}]", spawn::ACTOR_SECTION)))?,
         )?;
+        let spheres = draw_items
+            .iter()
+            .map(|d| {
+                let h = &level.visuals[d.visual as usize].header;
+                let c = h.sphere_centre;
+                [c[0], c[1], c[2], h.sphere_radius]
+            })
+            .collect();
+        let (surfaces, draw_surfaces, not_drawn) =
+            resolve_surfaces(tree, data, &dir, &level.shaders, &draw_items)?;
         let (weather_name, time_of_day) = start_weather(tree, data, &name)?;
         let weather = Weather::load(&data.system, &weather_name)?;
         let eye = body.eye(actor.position);
@@ -176,6 +286,10 @@ impl LevelScreen {
                 dir,
                 shaders: level.shaders,
                 draw_items,
+                spheres,
+                surfaces,
+                draw_surfaces,
+                not_drawn,
                 geometry: Mutex::new(Some(geom)),
             }),
             camera: FreeCamera::new(eye, Angles::from_spawn(actor.angles)),
@@ -193,6 +307,12 @@ impl LevelScreen {
         };
         screen.update_environment();
         Ok(screen)
+    }
+
+    /// Places the free camera (tests and debugging).
+    pub fn set_camera(&mut self, eye: Vec3, angles: Angles) {
+        self.camera = FreeCamera::new(eye, angles);
+        self.update_environment();
     }
 
     pub fn world(&self) -> &Arc<LevelWorld> {
@@ -246,6 +366,8 @@ impl LevelScreen {
         scene.world = Some(WorldScene {
             world: self.world.clone(),
             eye: self.camera.eye,
+            forward: self.camera.angles.direction_up().0,
+            fov_y_degrees: camera::FOV_Y_DEGREES,
             view,
             projection,
             environment: self.environment.clone(),

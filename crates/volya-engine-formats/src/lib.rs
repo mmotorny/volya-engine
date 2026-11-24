@@ -17,6 +17,7 @@ pub mod level_geom;
 pub mod ltx;
 pub mod ogf;
 pub mod pe;
+pub mod shaders_xr;
 pub mod spawn;
 pub mod text;
 pub mod ui;

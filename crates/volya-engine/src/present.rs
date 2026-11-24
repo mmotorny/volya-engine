@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use crate::core::vfs::{self, Vfs};
 use crate::level::LevelWorld;
-use crate::render::world::multiply;
+use crate::render::world::{Surface, TreeLight, WorldLight};
 use crate::render::{
     DrawList, Quad, Rect, Renderer, Texture, VideoTexture, World, WorldDraw, WorldFrame,
 };
@@ -77,6 +77,13 @@ impl Player {
         }
         Ok(())
     }
+}
+
+/// Reads the DDS file at `path` of `tree` and uploads it as stored.
+fn load_texture(renderer: &Renderer, tree: &dyn Vfs, path: &str) -> Result<Texture, String> {
+    let bytes = vfs::read(tree, path).map_err(|e| e.to_string())?;
+    let dds = Dds::parse(&bytes).map_err(|e| e.to_string())?;
+    renderer.create_texture(&dds).map_err(|e| e.to_string())
 }
 
 /// GPU resources of the scenes drawn.
@@ -181,8 +188,15 @@ impl Presenter {
         self.world.as_ref().and_then(|(_, w)| w.as_ref())
     }
 
-    /// The GPU copy of `scene`'s static world, uploaded on first sight.
-    fn world_frame(&mut self, renderer: &mut Renderer, scene: &WorldScene) -> Option<WorldFrame> {
+    /// The GPU copy of `scene`'s static world, uploaded on first sight:
+    /// its geometry (taken from the level) and its surfaces' textures (read
+    /// from `tree`).
+    fn world_frame(
+        &mut self,
+        renderer: &mut Renderer,
+        tree: &dyn Vfs,
+        scene: &WorldScene,
+    ) -> Option<WorldFrame> {
         let current = self
             .world
             .as_ref()
@@ -190,37 +204,86 @@ impl Presenter {
         if !current {
             // The previous world's buffers go before the next's arrive.
             self.world = None;
-            let uploaded = match scene.world.take_geometry() {
-                Some(geom) => {
-                    let draws: Vec<WorldDraw> = scene
-                        .world
-                        .draw_items
-                        .iter()
-                        .map(|d| WorldDraw {
-                            vertex_buffer: d.vertex_buffer,
-                            first_vertex: d.first_vertex,
-                            index_buffer: d.index_buffer,
-                            first_index: d.first_index,
-                            index_count: 3 * d.triangle_count,
-                            transform: d.transform,
-                        })
-                        .collect();
-                    renderer.create_world(&geom, &draws)
-                }
-                None => Err("geometry already uploaded elsewhere".into()),
-            };
-            let world = uploaded
+            let world = self.upload_world(renderer, tree, &scene.world);
+            let world = world
                 .map_err(|e| self.errors.push(format!("{}: {e}", scene.world.dir)))
                 .ok();
             self.world = Some((scene.world.clone(), world));
         }
         let world = self.world.as_ref()?.1.clone()?;
+        let e = &scene.environment;
         Some(WorldFrame {
             world,
-            view_projection: multiply(&scene.view, &scene.projection),
-            // No sky yet: the fog colour shows (our choice).
-            clear: scene.environment.fog_rgb(),
+            view: scene.view,
+            projection: scene.projection,
+            eye: scene.eye,
+            forward: scene.forward,
+            fov_y_degrees: scene.fov_y_degrees,
+            light: WorldLight {
+                ambient: e.ambient,
+                hemi: [e.hemi_color[0], e.hemi_color[1], e.hemi_color[2]],
+                sun_color: e.sun_color,
+                sun_dir: e.sun_dir,
+                fog_color: e.fog_rgb(),
+                fog_near: e.fog_near,
+                fog_far: e.fog_far,
+            },
+            time: scene.time,
+            // No sky: the fog colour shows (our choice).
+            clear: e.fog_rgb(),
         })
+    }
+
+    fn upload_world(
+        &mut self,
+        renderer: &mut Renderer,
+        tree: &dyn Vfs,
+        level: &LevelWorld,
+    ) -> Result<World, String> {
+        let geom = level
+            .take_geometry()
+            .ok_or("geometry already uploaded elsewhere")?;
+        // Each texture file once; one that fails is left unbound (reported).
+        let mut textures: HashMap<String, Option<Texture>> = HashMap::new();
+        let surfaces: Vec<Surface<Texture>> = level
+            .surfaces
+            .iter()
+            .map(|s| {
+                s.clone().map_textures(|path| {
+                    textures
+                        .entry(path.clone())
+                        .or_insert_with(|| {
+                            load_texture(renderer, tree, &path)
+                                .map_err(|e| self.errors.push(format!("{path}: {e}")))
+                                .ok()
+                        })
+                        .clone()
+                })
+            })
+            .collect();
+        let draws: Vec<WorldDraw> = level
+            .draw_items
+            .iter()
+            .zip(&level.draw_surfaces)
+            .zip(&level.spheres)
+            .filter_map(|((d, surface), sphere)| {
+                Some(WorldDraw {
+                    surface: (*surface)?,
+                    vertex_buffer: d.vertex_buffer,
+                    first_vertex: d.first_vertex,
+                    index_buffer: d.index_buffer,
+                    first_index: d.first_index,
+                    index_count: 3 * d.triangle_count,
+                    transform: d.transform,
+                    sphere: *sphere,
+                    tree: d.tree.map(|t| TreeLight {
+                        scale: t.scale,
+                        bias: t.bias,
+                    }),
+                })
+            })
+            .collect();
+        renderer.create_world(&geom, &surfaces, &draws)
     }
 
     /// The draw list of `scene` at engine clock `clock`. Videos no longer in
@@ -241,7 +304,7 @@ impl Presenter {
         let to_ui = |[x, y]: [f32; 2]| [(x + 0.5) * UI_WIDTH / w, (y + 0.5) * UI_HEIGHT / h];
         let mut list = DrawList::default();
         match &scene.world {
-            Some(world) => list.world = self.world_frame(renderer, world),
+            Some(world) => list.world = self.world_frame(renderer, tree, world),
             None => self.world = None,
         }
         for sprite in &scene.sprites {

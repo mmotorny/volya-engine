@@ -63,7 +63,7 @@ fn new_game_start_view_from_game_data() {
     assert_eq!((name.as_str(), actor.game_graph_vertex), ("l01_escape", 4));
 
     let start = Instant::now();
-    let screen = LevelScreen::load(&tree, &data, 0).unwrap();
+    let mut screen = LevelScreen::load(&tree, &data, 0).unwrap();
     let loaded = start.elapsed();
     let state = screen.state();
     assert_eq!(state.draws, 7_782);
@@ -86,7 +86,8 @@ fn new_game_start_view_from_game_data() {
         pollster::block_on(gpu.capture(&list, SIZE.width, SIZE.height, wgpu::Color::BLACK))
             .unwrap();
     let first = start.elapsed();
-    assert!(presenter.take_errors().is_empty());
+    let errors = presenter.take_errors();
+    assert!(errors.is_empty(), "{errors:?}");
     let world = presenter.world().expect("world uploaded").clone();
     assert!(
         screen.world().take_geometry().is_none(),
@@ -104,9 +105,19 @@ fn new_game_start_view_from_game_data() {
     let frame = start.elapsed() / FRAMES;
     eprintln!(
         "level: loaded in {loaded:.1?}, first frame (upload) {first:.1?}, then {frame:.1?} per \
-         frame with readback; GPU world {:.1} MiB",
-        world.gpu_bytes() as f64 / (1 << 20) as f64
+         frame with readback; GPU buffers {:.1} MiB, textures {:.1} MiB; {} draws, {} skipped",
+        world.gpu_bytes() as f64 / (1 << 20) as f64,
+        world.texture_bytes() as f64 / (1 << 20) as f64,
+        world.draw_count(),
+        world.skipped(),
     );
+    let level = screen.world();
+    eprintln!(
+        "{} surfaces; not drawn: {:?}",
+        level.surfaces.len(),
+        level.not_drawn
+    );
+    assert_eq!(world.skipped(), 0);
     dump(&pixels, SIZE.width, SIZE.height);
 
     // The start view looks at the trader's surroundings: most of the screen
@@ -126,4 +137,35 @@ fn new_game_start_view_from_game_data() {
     );
     assert!(background * 2 < total, "mostly world");
     assert!(distinct.len() > 500, "{} colours", distinct.len());
+
+    // Outdoors, above the start (`VOLYA_OUTDOOR=x,y,z,yaw,pitch` picks
+    // another view): terrain, trees and fog, and the clear colour where
+    // nothing is drawn.
+    let view: Vec<f32> = std::env::var("VOLYA_OUTDOOR")
+        .unwrap_or_else(|_| "-180,5,-120,1.2,0.15".into())
+        .split(',')
+        .map(|v| v.trim().parse().unwrap())
+        .collect();
+    screen.set_camera(
+        [view[0], view[1], view[2]],
+        volya_engine::core::camera::Angles {
+            yaw: view[3],
+            pitch: view[4],
+            roll: 0.0,
+        },
+    );
+    let scene = screen.scene(SIZE, 5000);
+    let list = presenter.draw_list(&mut gpu, &tree, &scene, 5000);
+    let pixels =
+        pollster::block_on(gpu.capture(&list, SIZE.width, SIZE.height, wgpu::Color::BLACK))
+            .unwrap();
+    if let Some(path) = std::env::var_os("VOLYA_DUMP_OUTDOOR") {
+        let mut ppm = format!("P6 {} {} 255\n", SIZE.width, SIZE.height).into_bytes();
+        for p in pixels.chunks(4) {
+            ppm.extend_from_slice(&p[..3]);
+        }
+        std::fs::write(path, ppm).unwrap();
+    }
+    let distinct: std::collections::BTreeSet<&[u8]> = pixels.chunks(4).collect();
+    assert!(distinct.len() > 500, "outdoors: {} colours", distinct.len());
 }

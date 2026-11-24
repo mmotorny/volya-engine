@@ -230,6 +230,8 @@ pub fn world_stats() -> serde_json::Value {
         let world = g.as_ref().and_then(|gpu| gpu.presenter.world());
         json!({
             "gpu_world_bytes": world.map(|w| w.gpu_bytes()),
+            "gpu_texture_bytes": world.map(|w| w.texture_bytes()),
+            "skipped_draws": world.map(|w| w.skipped()),
             "world_draws": world.map(|w| w.draw_count()),
         })
     })

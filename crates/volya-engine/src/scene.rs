@@ -138,6 +138,10 @@ pub struct WorldScene {
     #[serde(skip)]
     pub world: Arc<LevelWorld>,
     pub eye: Vec3,
+    /// The viewing direction.
+    pub forward: Vec3,
+    /// Vertical field of view, degrees.
+    pub fov_y_degrees: f32,
     /// Row-vector convention (start-position.md sections 6, 7).
     pub view: Mat4,
     pub projection: Mat4,
@@ -151,6 +155,8 @@ impl PartialEq for WorldScene {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.world, &other.world)
             && self.eye == other.eye
+            && self.forward == other.forward
+            && self.fov_y_degrees == other.fov_y_degrees
             && self.view == other.view
             && self.projection == other.projection
             && self.environment == other.environment
