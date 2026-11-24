@@ -114,15 +114,16 @@ function settingsButton() {
 const graphics = async () => (await call("status")).gpu.state === "ready";
 
 /**
- * What to do when this browser can't draw the game, for this device and
- * browser only.
+ * Why this browser can't draw the game, from the step of setting up WebGPU
+ * that failed (the engine's `gpu.reason`): only what's known, no guesses.
  */
-function graphicsHelp() {
-  if (platform() === "ios") return "WebGPU arrived on iPhone with iOS 26: update iOS to the latest version.";
-  if (chromium()) {
-    return "Update the browser to its latest version. If it's up to date, turn on “Use graphics acceleration when available” in its settings.";
+function graphicsProblem(gpu) {
+  if (gpu?.reason === "no-webgpu") {
+    const supported = platform() === "desktop" && !chromium() ? " On desktop, Volya Engine supports Chrome." : "";
+    return `Volya Engine draws the game with WebGPU, which this browser doesn't support.${supported}`;
   }
-  return "Open Volya Engine in Chrome.";
+  if (gpu?.reason === "no-adapter") return "This browser supports WebGPU, but found no graphics hardware it can use for it.";
+  return "WebGPU, which Volya Engine draws the game with, couldn't be set up in this browser.";
 }
 
 /**
@@ -137,8 +138,7 @@ async function showUnsupported() {
       { className: "panel" },
       element("p", { className: "label", textContent: "Unavailable here" }),
       element("h2", { textContent: "This browser can't run the game" }),
-      element("p", { textContent: "Volya Engine draws the game with WebGPU, which this browser doesn't provide." }),
-      element("p", { textContent: graphicsHelp() }),
+      element("p", { textContent: graphicsProblem(gpu) }),
       gpu?.message ? element("p", { className: "note", textContent: `Details: ${gpu.message}.` }) : null,
     ),
     bottom(updateOffer(), settingsButton()),
@@ -454,10 +454,11 @@ async function showHome(status) {
       problem.hidden = false;
     }
   });
-  const ready = await graphics();
+  const { gpu } = await call("status");
+  const ready = gpu.state === "ready";
   if (!ready) {
     launch.disabled = true;
-    note.textContent = `This browser can't draw the game: it doesn't provide WebGPU. ${graphicsHelp()}`;
+    note.textContent = `${graphicsProblem(gpu)}${gpu.message ? ` (${gpu.message})` : ""}`;
     note.hidden = false;
   }
 

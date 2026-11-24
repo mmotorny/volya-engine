@@ -44,7 +44,12 @@ if (state.tab && !device.touch) globalThis.volyaInstallOffer = { prompt: async (
 Object.defineProperty(navigator.storage, "persisted", { value: async () => state.persisted ?? true });
 Object.defineProperty(navigator.storage, "persist", { value: async () => state.persisted ?? true });
 
-const gpu = state.gpu === false ? { state: "unavailable", message: "no WebGPU adapter" } : { state: "ready" };
+// The engine's own reasons and messages (platforms/web/src/gpu.rs).
+const GPU_FAILURES = {
+  "no-webgpu": "this browser has no WebGPU",
+  "no-adapter": "no WebGPU adapter (no usable GPU)",
+};
+const gpu = state.gpu ? { state: "unavailable", reason: state.gpu, message: GPU_FAILURES[state.gpu] } : { state: "ready" };
 const call = async (op) => {
   switch (op) {
     case "status":
