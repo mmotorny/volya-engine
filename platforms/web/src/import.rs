@@ -201,8 +201,10 @@ pub async fn run_import(bin: JsValue, only: JsValue, progress: Function) -> Resu
     let mut bin = Source::new(bin)?;
     let namespace = opfs::namespace().await?;
     let dir = opfs::create_dir(&namespace, GAME_DIR).await?;
+    // An unreadable record can't vouch for any file: start afresh.
     let mut manifest = crate::game::read_manifest()
-        .await?
+        .await
+        .unwrap_or_default()
         .filter(|m| m.language == language)
         .unwrap_or_default();
     manifest.language = language;

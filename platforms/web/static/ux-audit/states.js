@@ -37,6 +37,11 @@ export const SECTIONS = [
         game: fresh,
         snapshot: { done: 2.31 * 2 ** 30, total: GAME, path: "gamedata.db5", error: "gamedata.db5: MD5 mismatch" },
       },
+      {
+        id: "import-record-damaged",
+        name: "Imported game damaged (its record unreadable)",
+        game: { ...fresh, problem: "import.json: expected value at line 1 column 1" },
+      },
       { id: "import-resume", name: "Interrupted import", game: { ...fresh, written: 1210, bytes: 2.31 * 2 ** 30, total_bytes: GAME } },
     ],
   },
@@ -81,7 +86,6 @@ export const SECTIONS = [
     title: "Problems",
     states: [
       { id: "start-failed", name: "Volya Engine couldn't start", startError: "the wasm module could not be compiled" },
-      { id: "start-failed-record", name: "Volya Engine couldn't start: import record unreadable", game: new Error("import.json: expected value at line 1 column 1") },
     ],
   },
 ];

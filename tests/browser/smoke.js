@@ -234,6 +234,26 @@ export const tests = {
     assert(!document.querySelector("#game .callout.problem"), "notice without the mark");
   },
 
+  "a damaged import record is said so, on the import screen": async () => {
+    if ((await volya.status()).gpu.state !== "ready") skip("no WebGPU here");
+    const status = await volya.call("game_status");
+    if (status.imported || status.written > 0) skip("a real import is present");
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle("volya-engine", { create: true });
+    const file = await dir.getFileHandle("import.json", { create: true });
+    const writable = await file.createWritable();
+    await writable.write("not json");
+    await writable.close();
+    try {
+      await volya.refresh();
+      const notice = document.querySelector("#game .callout.problem");
+      assertEqual(notice?.querySelector("strong")?.textContent, "The imported game is damaged", "notice");
+      assert(notice.textContent.includes("import.json:"), `engine's words missing: ${notice.textContent}`);
+    } finally {
+      await dir.removeEntry("import.json");
+      await volya.refresh();
+    }
+  },
+
   "settings: updates and a danger zone, reachable from the bottom": async () => {
     const settings = [...document.querySelectorAll("#game .bottom button")].find((b) => b.textContent === "Settings");
     assert(settings, "no Settings button at the bottom");

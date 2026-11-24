@@ -129,7 +129,7 @@ async function refresh() {
     // Without graphics nothing else matters: neither importing nor playing.
     if (!(await graphics())) await showUnsupported();
     else if (status.imported) await showHome(status);
-    else showImport(status, null, { kept: await navigator.storage.persisted(), deleted: deletedByBrowser(status) });
+    else showImport(status, null, { kept: await navigator.storage.persisted(), deleted: !status.problem && deletedByBrowser(status) });
   } catch (error) {
     showProblem(error);
   }
@@ -282,6 +282,13 @@ function showImport(status, snapshot = null, { kept = false, deleted = false } =
   // Before anything is imported: how to keep the game on this device, said
   // only for it; importing in a tab anyway accepts the risk.
   const installFirst = kept || installed() ? null : installAdvice();
+  // A damaged import (its record unreadable): import again from scratch.
+  if (status.problem && !snapshot) {
+    warn({
+      title: "The imported game is damaged",
+      text: [`The engine reported: ${status.problem}. Choose `, ...installerFiles(), " to import it again."],
+    });
+  }
   // The browser deleted an earlier import (it can, to free space): say so
   // where the advice above applies.
   if (deleted && !snapshot && status.written === 0) {
@@ -358,9 +365,8 @@ const link = (href, text) => element("a", { href, textContent: text, target: "_b
 const sentence = (text) => text.charAt(0).toUpperCase() + text.slice(1);
 
 /**
- * The app couldn't start: the engine failed to load, or the import's record
- * couldn't be read. The error as reported; Settings (where the import can be
- * removed) when the engine runs.
+ * The app couldn't start: the engine failed to load (a broken deploy). The
+ * error as reported; nothing else works then, so nothing else is offered.
  */
 export function showProblem(error) {
   root().hidden = false;
@@ -372,7 +378,6 @@ export function showProblem(error) {
       element("h2", { textContent: "Volya Engine couldn't start" }),
       element("p", { textContent: `The engine reported: ${error.message}.` }),
     ),
-    call ? bottom(updateOffer(), settingsButton()) : null,
   );
 }
 

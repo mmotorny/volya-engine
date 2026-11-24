@@ -57,7 +57,9 @@ fn error(e: impl std::fmt::Display) -> JsValue {
 pub async fn read_manifest() -> Result<Option<Manifest>, JsValue> {
     let namespace = opfs::namespace().await?;
     match opfs::read_file(&namespace, MANIFEST).await? {
-        Some(bytes) => serde_json::from_slice(&bytes).map(Some).map_err(error),
+        Some(bytes) => serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|e| error(format!("{MANIFEST}: {e}"))),
         None => Ok(None),
     }
 }
@@ -71,6 +73,10 @@ pub struct Status {
     bytes: u64,
     /// Bytes an interrupted import was writing in all, when recorded.
     total_bytes: Option<u64>,
+    /// Why there's no usable import although one was made: its record is
+    /// unreadable. Shown on the import screen; importing starts afresh.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    problem: Option<String>,
 }
 
 /// Mounts the game if it is imported and not yet mounted, then reports.
@@ -78,13 +84,27 @@ pub async fn status() -> Result<Status, JsValue> {
     if let Some(status) = GAME.with(|g| g.borrow().as_ref().map(mounted_status)) {
         return Ok(status);
     }
-    let Some(manifest) = read_manifest().await? else {
+    let manifest = match read_manifest().await {
+        Ok(manifest) => manifest,
+        Err(e) => {
+            return Ok(Status {
+                imported: false,
+                written: 0,
+                total: None,
+                bytes: 0,
+                total_bytes: None,
+                problem: Some(e.as_string().unwrap_or_default()),
+            });
+        }
+    };
+    let Some(manifest) = manifest else {
         return Ok(Status {
             imported: false,
             written: 0,
             total: None,
             bytes: 0,
             total_bytes: None,
+            problem: None,
         });
     };
     if !manifest.complete {
@@ -94,6 +114,7 @@ pub async fn status() -> Result<Status, JsValue> {
             total: None,
             bytes: manifest.files.iter().map(|f| f.size).sum(),
             total_bytes: (manifest.total_bytes > 0).then_some(manifest.total_bytes),
+            problem: None,
         });
     }
     // Files that can't be opened (locked by another copy of the app in
@@ -107,6 +128,7 @@ pub async fn status() -> Result<Status, JsValue> {
             total: Some(manifest.files.len()),
             bytes: manifest.files.iter().map(|f| f.size).sum(),
             total_bytes: None,
+            problem: None,
         }),
     }
 }
@@ -177,6 +199,7 @@ fn mounted_status(game: &Game) -> Status {
         total: Some(game.manifest.files.len()),
         bytes: game.manifest.files.iter().map(|f| f.size).sum(),
         total_bytes: None,
+        problem: None,
     }
 }
 
