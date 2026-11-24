@@ -66,8 +66,7 @@ export async function start(engineCall, updateState = null) {
   globalThis.volya.importGame = importGame;
   globalThis.volya.showSettings = showSettings;
   globalThis.volya.refresh = refresh;
-  // On deeper screens the logo (where shown: the lockup on wide windows) is
-  // the way Home, like Back.
+  // On deeper screens the compact lockup on top is the way Home, like Back.
   const brand = document.querySelector(".brand");
   const home = () => document.documentElement.dataset.screen && navigate("back", refresh);
   brand?.addEventListener("click", home);

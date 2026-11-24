@@ -142,9 +142,26 @@ main {
   height: 18px;
 }
 
-/* Deeper screens (Settings) leave the logo to Home. */
+/* Deeper screens (Settings): the logo is Home's; the compact lockup on top
+   is the way Home (game-ui.js), on every device. */
 html[data-screen="settings"] .brand {
+  justify-content: flex-start;
+  margin-bottom: 0.25rem;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+html[data-screen="settings"] .brand:focus-visible {
+  outline: 2px solid var(--line);
+  outline-offset: 4px;
+}
+
+html[data-screen="settings"] .brand .logo {
   display: none;
+}
+
+html[data-screen="settings"] .brand .lockup {
+  display: flex;
 }
 
 /* Moving between screens: a short slide, forward into deeper screens and
@@ -623,33 +640,15 @@ code {
     max-height: 70vh;
   }
 
-  /* Deeper screens (Settings): one column, the compact lockup on top as the
-     way Home (game-ui.js). */
+  /* Deeper screens (Settings): one column under the lockup. */
   html[data-screen="settings"] main {
     max-width: 34rem;
     display: flex;
   }
 
   html[data-screen="settings"] .brand {
-    display: flex;
     position: static;
     align-self: flex-start;
-    margin-bottom: 0.25rem;
-    border-radius: 8px;
-    cursor: pointer;
-  }
-
-  html[data-screen="settings"] .brand:focus-visible {
-    outline: 2px solid var(--line);
-    outline-offset: 4px;
-  }
-
-  html[data-screen="settings"] .brand .logo {
-    display: none;
-  }
-
-  html[data-screen="settings"] .brand .lockup {
-    display: flex;
   }
 
   #game {
