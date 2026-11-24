@@ -177,31 +177,36 @@ async function runImport({ exe, bin, only }, onProgress) {
  * engine's messages are technical (they name formats and checksums).
  */
 function importProblem(message) {
-  const again = "Choose both installer files again: the import continues where it stopped.";
+  // Messages name files exactly as the steps do, in their style.
+  const again = () => ["Choose ", ...installerFiles(), " again: the import continues where it stopped."];
   if (message === "pick") {
-    // Notices say "both installer files"; only the steps name them.
-    return { title: "Pick both installer files", text: "Select both at once in the file picker." };
+    return { title: "Pick both installer files", text: ["Choose ", ...installerFiles(), " together in the file picker."] };
   }
   if (/^Inno Setup headers|no game archives|not an Inno/i.test(message)) {
     return {
       title: "These aren't the game's installer files",
-      text: "Choose both installer files downloaded from GOG.",
+      text: ["Choose ", ...installerFiles(), " downloaded from GOG."],
     };
   }
   const mismatch = message.match(/^(.*): MD5 mismatch/);
   if (mismatch) {
     return {
       title: "The installer files are damaged",
-      text: `${mismatch[1]} doesn't match the installer's checksum. Download both files from GOG again, then choose them here.`,
+      text: [
+        fileName(mismatch[1]),
+        " doesn't match the installer's checksum. Download ",
+        ...installerFiles(),
+        " from GOG again, then choose them here.",
+      ],
     };
   }
   if (message.startsWith("Not enough storage")) {
     return { title: "Not enough storage", text: `${message.replace(/^Not enough storage:\s*/, "").replace(/^./, (c) => c.toUpperCase())} Free some space, then try again.` };
   }
   if (/^installer read/i.test(message)) {
-    return { title: "The installer files couldn't be read", text: again };
+    return { title: "The installer files couldn't be read", text: again() };
   }
-  return { title: "The import failed", text: `The engine reported: ${message}. ${again}` };
+  return { title: "The import failed", text: [`The engine reported: ${message}. `, ...again()] };
 }
 
 /**
@@ -287,7 +292,11 @@ function showImport(status, snapshot = null) {
     warn(
       {
         title: "The import stopped before it finished",
-        text: "This can happen when the app is closed or the device locks during an import. Choose both installer files again: it continues where it stopped.",
+        text: [
+          "This can happen when the app is closed or the device locks during an import. Choose ",
+          ...installerFiles(),
+          " again: it continues where it stopped.",
+        ],
       },
       "warning",
     );
@@ -308,9 +317,7 @@ function showImport(status, snapshot = null) {
           "Download both installer files from your ",
           link("https://www.gog.com/en/account", "GOG library"),
           " (the game's offline backup installers): ",
-          fileName("setup_….exe"),
-          " and ",
-          fileName("setup_…-1.bin"),
+          ...installerFiles(),
           ".",
         ),
         element("li", {
@@ -328,8 +335,11 @@ function showImport(status, snapshot = null) {
   );
 }
 
-/** An installer file's name, as the steps show it. */
+/** A file's name, as the steps show it. */
 const fileName = (name) => element("code", { textContent: name });
+
+/** The two installer files, named as the steps name them. */
+const installerFiles = () => [fileName("setup_….exe"), " and ", fileName("setup_…-1.bin")];
 
 /** A link that opens outside the app. */
 const link = (href, text) => element("a", { href, textContent: text, target: "_blank", rel: "noopener" });
