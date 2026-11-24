@@ -17,25 +17,11 @@ async function since(before) {
   return { after, actions: after.recent.filter((a) => a.seq > before.count) };
 }
 
-/** The page position of canvas position (x, y), CSS pixels. */
-function client(x, y) {
-  const rect = view().getBoundingClientRect();
-  // Turned 90° clockwise on upright phones (style.css).
-  if (rotated()) return [rect.right - y, rect.top + x];
-  return [rect.left + x, rect.top + y];
-}
-
-function rotated() {
-  const rect = view().getBoundingClientRect();
-  return rect.width < rect.height !== view().clientWidth < view().clientHeight;
-}
-
-/** Dispatches a pointer event at canvas position (x, y); false if its default was prevented. */
+/** Dispatches a pointer event; false if its default was prevented. */
 function pointer(type, x, y, init = {}) {
-  const [clientX, clientY] = client(x, y);
   const event = new PointerEvent(type, {
-    clientX,
-    clientY,
+    clientX: x,
+    clientY: y,
     pointerId: 1,
     pointerType: "mouse",
     isPrimary: true,
@@ -84,11 +70,10 @@ export const tests = {
     assertEqual((await state()).screen, [view().clientWidth, view().clientHeight]);
   },
 
-  "the game is drawn in landscape; upright phones turn it": async () => {
-    assert(view().clientWidth >= view().clientHeight, `canvas ${view().clientWidth}×${view().clientHeight}`);
-    const portrait = innerHeight > innerWidth;
-    const coarse = matchMedia("(pointer: coarse)").matches;
-    assertEqual(rotated(), portrait && coarse, "turned");
+  "upright phones are asked to turn to landscape": async () => {
+    const overlay = getComputedStyle(document.documentElement, "::after").content;
+    const upright = matchMedia("(orientation: portrait) and (pointer: coarse)").matches;
+    assertEqual(overlay.includes("landscape"), upright, `overlay ${overlay}`);
   },
 
   "mouse moves the cursor": async () => {

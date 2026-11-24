@@ -43,11 +43,6 @@ export function startInput(view, send) {
 
   const at = (event) => {
     const rect = view.getBoundingClientRect();
-    // Turned 90° clockwise on upright phones (style.css): the on-screen box
-    // is then portrait while the canvas's own size is landscape.
-    if (rect.width < rect.height !== view.clientWidth < view.clientHeight) {
-      return [event.clientY - rect.top, rect.right - event.clientX];
-    }
     return [event.clientX - rect.left, event.clientY - rect.top];
   };
 
