@@ -110,7 +110,14 @@ try {
   for (const event of ["pointerdown", "keydown", "touchend"]) addEventListener(event, resume);
   await import("./game-ui.js").then((ui) => ui.start(call, updates));
 } catch (error) {
-  status.textContent = `Failed to start: ${error.message}`;
-  status.dataset.state = "error";
+  // The same panel as the interface's other problems, drawn without the engine.
+  status.textContent = `Volya Engine · ${versionText()}`;
+  status.dataset.state = "ready";
+  await import("./game-ui.js")
+    .then((ui) => ui.showProblem(error))
+    .catch(() => {
+      status.textContent = `Failed to start: ${error.message}`;
+      status.dataset.state = "error";
+    });
   throw error;
 }

@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use volya_engine::core::audio::Playback;
 use volya_engine::core::vfs::db::DbVfs;
 use volya_engine::core::vfs::{EntryKind, Vfs, VfsFile};
-use wasm_bindgen::{JsCast, JsValue};
+use wasm_bindgen::JsValue;
 
 use crate::opfs;
 
@@ -96,18 +96,18 @@ pub async fn status() -> Result<Status, JsValue> {
             total_bytes: (manifest.total_bytes > 0).then_some(manifest.total_bytes),
         });
     }
-    // Files locked by another copy of the app (browsers without read-only
-    // handles): still imported; Play reports the browser's error (`mount`).
+    // Files that can't be opened (locked by another copy of the app in
+    // browsers without read-only handles, missing, damaged): still imported;
+    // Play reports the error (`ensure_mounted`).
     match mount(manifest).await {
         Ok(status) => Ok(status),
-        Err((e, manifest)) if is_lock_error(&e) => Ok(Status {
+        Err((_, manifest)) => Ok(Status {
             imported: true,
             written: manifest.files.len(),
             total: Some(manifest.files.len()),
             bytes: manifest.files.iter().map(|f| f.size).sum(),
             total_bytes: None,
         }),
-        Err((e, _)) => Err(e),
     }
 }
 
@@ -168,14 +168,6 @@ async fn mount(manifest: Manifest) -> Result<Status, (JsValue, Manifest)> {
     let status = mounted_status(&game);
     GAME.with(|g| *g.borrow_mut() = Some(game));
     Ok(status)
-}
-
-/// Whether `e` is the error a locked OPFS file gives (`NoModificationAllowedError`
-/// in Chrome, `InvalidStateError` in WebKit).
-fn is_lock_error(e: &JsValue) -> bool {
-    e.dyn_ref::<js_sys::Error>()
-        .map(|e| String::from(e.name()))
-        .is_some_and(|name| name == "NoModificationAllowedError" || name == "InvalidStateError")
 }
 
 fn mounted_status(game: &Game) -> Status {

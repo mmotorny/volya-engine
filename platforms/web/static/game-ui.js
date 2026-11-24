@@ -131,7 +131,7 @@ async function refresh() {
     else if (status.imported) await showHome(status);
     else showImport(status, null, { kept: await navigator.storage.persisted(), deleted: deletedByBrowser(status) });
   } catch (error) {
-    showDamaged(error);
+    showProblem(error);
   }
 }
 
@@ -357,22 +357,22 @@ const link = (href, text) => element("a", { href, textContent: text, target: "_b
 /** Engine errors start lower-case; sentences in the interface don't. */
 const sentence = (text) => text.charAt(0).toUpperCase() + text.slice(1);
 
-function showDamaged(error) {
-  const remove = element("button", { className: "danger wide", textContent: "Remove imported data" });
-  remove.addEventListener("click", async () => {
-    await call("forget_game");
-    markImported(false);
-    await refresh();
-  });
+/**
+ * The app couldn't start: the engine failed to load, or the import's record
+ * couldn't be read. The error as reported; Settings (where the import can be
+ * removed) when the engine runs.
+ */
+export function showProblem(error) {
+  root().hidden = false;
   show(
     element(
       "div",
       { className: "panel" },
       element("p", { className: "label", textContent: "Problem" }),
-      element("h2", { textContent: "The imported game can't be used" }),
-      element("p", { textContent: sentence(error.message) }),
-      remove,
+      element("h2", { textContent: "Volya Engine couldn't start" }),
+      element("p", { textContent: `The engine reported: ${error.message}.` }),
     ),
+    call ? bottom(updateOffer(), settingsButton()) : null,
   );
 }
 
@@ -536,4 +536,4 @@ async function showSettings() {
 }
 
 /** Every screen, for the UX audit page (static/ux-audit/), which shows each state. */
-export const screens = { showImport, showHome, showSettings, showDamaged };
+export const screens = { showImport, showHome, showSettings, showProblem };

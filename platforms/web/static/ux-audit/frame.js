@@ -118,8 +118,9 @@ const updates = {
 const status = document.getElementById("status");
 globalThis.volya = {};
 if (state.startError) {
-  status.textContent = `Failed to start: ${state.startError}`;
-  status.dataset.state = "error";
+  status.textContent = `Volya Engine · ${versionText()}`;
+  status.dataset.state = "ready";
+  screens.showProblem(new Error(state.startError));
 } else {
   const name = `Volya Engine · ${versionText()}`;
   status.textContent = name;

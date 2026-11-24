@@ -80,8 +80,8 @@ export const SECTIONS = [
   {
     title: "Problems",
     states: [
-      { id: "damaged", name: "Import can't be used", game: new Error("game.json is missing") },
-      { id: "start-failed", name: "Engine failed to start", startError: "the wasm module could not be compiled" },
+      { id: "start-failed", name: "Volya Engine couldn't start", startError: "the wasm module could not be compiled" },
+      { id: "start-failed-record", name: "Volya Engine couldn't start: import record unreadable", game: new Error("import.json: expected value at line 1 column 1") },
     ],
   },
 ];
