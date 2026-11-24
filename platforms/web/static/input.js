@@ -129,11 +129,13 @@ export function startInput(view, send) {
   addEventListener("keyup", key);
   // Gamepads have no events for buttons and axes: poll each frame.
   const pads = new Map(); // index → { buttons, axes } last sent
-  // The engine releases everything; what a gamepad still holds is sent
-  // again by the next poll.
+  // The engine releases everything. Our choice: a button still held counts
+  // as released until pressed again, like a key (sending it again would be
+  // a fresh press: a toggle, a jump, an Escape); stick and trigger values are
+  // sent again by the next poll.
   const releaseAll = () => {
     send(["blur"]);
-    pads.clear();
+    for (const last of pads.values()) last.axes = {};
   };
   addEventListener("blur", () => capture && releaseAll());
   // Losing pointer lock (Escape, or the browser taking it back) may swallow

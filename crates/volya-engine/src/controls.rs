@@ -273,8 +273,12 @@ impl Controls {
             // Keyboard movement: the sticks' latches give way.
             self.walk = [None; 2];
         }
+        let released = input.sticks_released();
         for (i, stick) in pads.into_iter().enumerate() {
-            if let Some(([f, b, l, rt], _)) = stick_directions(stick) {
+            if released[i] {
+                // Released by a blur or lost pointer lock, not let go: the
+                // latch and the push's peak stay for the value sent again.
+            } else if let Some(([f, b, l, rt], _)) = stick_directions(stick) {
                 r.forward |= f;
                 r.back |= b;
                 r.left |= l;
@@ -475,8 +479,45 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
         let (r, _) = c.request(&i);
         assert!(r.crouch && !r.accel, "crouched walking: the low crouch");
         // Untouched sticks latch nothing.
-        let mut c = controls();
+        let mut c = Controls::new(
+            Bindings::read(&[DEFAULTS]),
+            Settings {
+                always_run: false,
+                ..Settings::default()
+            },
+        );
         assert_eq!(c.request(&Input::new()).0, Request::default());
+        assert_eq!(c.walk, [None; 2]);
+    }
+
+    #[test]
+    fn a_release_of_everything_keeps_the_latch_and_presses_nothing_again() {
+        let mut c = controls();
+        let mut i = Input::new();
+        i.handle(Event::GamepadAxis {
+            axis: GamepadAxis::LeftY,
+            value: -1.0,
+        });
+        i.handle(Event::GamepadButton {
+            button: GamepadButton::West,
+            pressed: true,
+        });
+        assert!(c.request(&i).0.crouch_toggle);
+        i.end_frame();
+        // A blur: everything released; the platform sends the stick again,
+        // held back in the walk band, and the button state not at all.
+        i.release_all();
+        let (r, _) = c.request(&i);
+        assert!(!r.crouch_toggle && !r.accel && !r.forward);
+        i.end_frame();
+        i.handle(Event::GamepadAxis {
+            axis: GamepadAxis::LeftY,
+            value: -0.4,
+        });
+        let (r, _) = c.request(&i);
+        assert!(r.forward && !r.accel, "the same push: still running");
+        assert!(!r.crouch_toggle && !i.pad_held(GamepadButton::West));
+        assert_eq!(c.walk[0], Some(false));
     }
 
     #[test]

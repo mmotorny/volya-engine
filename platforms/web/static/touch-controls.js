@@ -161,10 +161,8 @@ export function createTouchControls(send, { touch = false } = {}) {
 
   // Buttons: held from down to up.
   const releases = [];
-  const resends = [];
   for (const b of [menu, jump, crouch, sprint]) {
     const held = new Set();
-    resends.push(() => held.size > 0 && b !== menu && send(["tbutton", b.dataset.button, true]));
     releases.push(() => {
       if (held.size === 0) return;
       held.clear();
@@ -207,11 +205,12 @@ export function createTouchControls(send, { touch = false } = {}) {
     }
   };
   // input.js releases everything on blur and on losing pointer lock (its
-  // listeners come first): what the controls still hold is sent again.
+  // listeners come first): a held stick's value is sent again. Our choice:
+  // held buttons count as released until pressed again, like keys (sending
+  // them again would be a fresh press).
   const resend = () => {
     if (root.hidden) return;
     if (stick?.value) send(["stick", ...stick.value]);
-    for (const again of resends) again();
   };
   addEventListener("blur", resend);
   document.addEventListener("pointerlockchange", resend);

@@ -516,6 +516,9 @@ pub struct Input {
     touch_look: [f32; 2],
     /// Relative mouse motion this frame ([`Event::PointerMotion`]).
     motion: [f32; 2],
+    /// Whether the gamepad's left stick and the touch stick read zero only
+    /// because of [`Input::release_all`], until their next value.
+    sticks_released: [bool; 2],
 }
 
 impl Default for Input {
@@ -540,6 +543,7 @@ impl Default for Input {
             touch_stick: [0.0; 2],
             touch_look: [0.0; 2],
             motion: [0.0; 2],
+            sticks_released: [false; 2],
         }
     }
 }
@@ -713,6 +717,14 @@ impl Input {
             self.pad_changes.push((button, false));
         }
         self.touch_stick = [0.0; 2];
+        self.sticks_released = [true; 2];
+    }
+
+    /// Whether the gamepad's left stick and the touch stick read zero only
+    /// because everything was released, not because they were let go: the
+    /// platform sends a stick still held again.
+    pub fn sticks_released(&self) -> [bool; 2] {
+        self.sticks_released
     }
 
     pub fn handle(&mut self, event: Event) {
@@ -768,7 +780,10 @@ impl Input {
                 }
                 self.set(Source::Pad, button.control(), pressed, false)
             }
-            Event::TouchStick { value } => self.touch_stick = value.map(clamp_unit),
+            Event::TouchStick { value } => {
+                self.touch_stick = value.map(clamp_unit);
+                self.sticks_released[1] = false;
+            }
             Event::TouchLook { delta } => {
                 self.touch_look[0] += delta[0];
                 self.touch_look[1] += delta[1];
@@ -779,6 +794,9 @@ impl Input {
             Event::Contact { id, at, phase } => self.contact(id, at, phase),
             Event::GamepadAxis { axis, value } => {
                 self.axes[axis as usize] = value;
+                if matches!(axis, GamepadAxis::LeftX | GamepadAxis::LeftY) {
+                    self.sticks_released[0] = false;
+                }
                 let Some(keys) = axis.keys() else {
                     return;
                 };
