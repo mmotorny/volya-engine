@@ -446,18 +446,21 @@ async function cover() {
 }
 
 /**
- * Whether an import finished here earlier: a cookie set when it did. Under
+ * Whether an import finished here earlier: a mark set when it did. Under
  * storage pressure Chromium evicts a site's quota-managed storage (the
- * imported files, the service worker's cache) but not its cookies, so the
- * app can tell a deleted game from a first start; where the cookie goes too,
- * it's a first start. The UX page sets `volyaImportedBefore` per frame.
+ * imported files, the service worker's cache) but not localStorage (measured,
+ * docs/architecture.md), so the app can tell a deleted game from a first
+ * start; where the mark goes too (Safari's 7-day limit, clearing site data),
+ * it's a first start. localStorage, not a cookie: nothing to send to the
+ * server. Namespaced: the github.io origin is shared. The UX page sets
+ * `volyaImportedBefore` per frame.
  */
-const MARK = "volya-engine-imported";
-const markPath = new URL(".", import.meta.url).pathname;
+const MARK = "volya-engine.imported";
 function markImported(on) {
-  document.cookie = `${MARK}=${on ? 1 : ""}; path=${markPath}; max-age=${on ? 400 * 86400 : 0}; samesite=strict`;
+  if (on) localStorage.setItem(MARK, "1");
+  else localStorage.removeItem(MARK);
 }
-const importedBefore = () => globalThis.volyaImportedBefore ?? document.cookie.split("; ").includes(`${MARK}=1`);
+const importedBefore = () => globalThis.volyaImportedBefore ?? localStorage.getItem(MARK) === "1";
 const deletedByBrowser = (status) => !status.imported && status.written === 0 && importedBefore();
 
 /** The Share symbol, inline in text. */

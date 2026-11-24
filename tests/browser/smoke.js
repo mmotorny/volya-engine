@@ -221,14 +221,13 @@ export const tests = {
   "a game the browser deleted is said so, on the import screen": async () => {
     // Without WebGPU the app says it can't run the game instead (no import screen).
     if ((await volya.status()).gpu.state !== "ready") skip("no WebGPU here");
-    const mark = `volya-engine-imported=1; path=${base}; samesite=strict`;
-    document.cookie = mark;
+    localStorage.setItem("volya-engine.imported", "1");
     try {
       await volya.refresh();
       const notice = document.querySelector("#game .callout.problem strong");
       assertEqual(notice?.textContent, "The browser deleted the imported game", "notice");
     } finally {
-      document.cookie = `volya-engine-imported=; path=${base}; max-age=0`;
+      localStorage.removeItem("volya-engine.imported");
       await volya.refresh();
     }
     assert(!document.querySelector("#game .callout.problem"), "notice without the mark");
