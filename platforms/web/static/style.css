@@ -26,7 +26,10 @@
 
 html {
   min-height: 100%;
-  background-color: var(--navy-3);
+  /* The page's colour at its top edge: iOS 26 tints the status bar from the
+     background colour (it ignores theme-color and draws no page content
+     there), so this keeps the bar continuous with the blueprint below. */
+  background-color: #103266;
   /* Grid lines: fine every 24 px, main every 96 px; then the paper. */
   background-image:
     linear-gradient(rgba(159, 203, 250, 0.11) 1px, transparent 1px),
