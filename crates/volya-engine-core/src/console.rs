@@ -494,8 +494,24 @@ pub enum Exec {
     Ignored,
 }
 
+/// Commands the specs name that are not variables: they have no status,
+/// so the user file never stores them (section 12.3), and a line of one in
+/// a hand-edited file is not kept. Running them is the console's caller's
+/// business (none runs from the user file here).
+pub const COMMANDS: &[&str] = &[
+    "cfg_load",
+    "cfg_save",
+    "vid_restart",
+    "snd_restart",
+    "check_for_updates",
+    // docs/behavior/level-loading.md section 2.1.
+    "disconnect",
+    "start",
+    "main_menu",
+];
+
 /// The console's state.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Console {
     files: ConsoleFiles,
     values: Vec<Value>,
@@ -507,6 +523,19 @@ pub struct Console {
     console_keys: Vec<(String, u16)>,
     /// A preset's script is running.
     in_preset: bool,
+    /// Counts the commands that took effect.
+    generation: u64,
+}
+
+impl PartialEq for Console {
+    /// Equal settings and bindings, however they were reached.
+    fn eq(&self, o: &Self) -> bool {
+        self.files == o.files
+            && self.values == o.values
+            && self.kept == o.kept
+            && self.slots == o.slots
+            && self.console_keys == o.console_keys
+    }
 }
 
 impl Console {
@@ -523,7 +552,13 @@ impl Console {
             slots: vec![[None; 2]; ACTIONS.len()],
             console_keys: Vec::new(),
             in_preset: false,
+            generation: 0,
         }
+    }
+
+    /// Changes whenever a command takes effect (cheap change detection).
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// As the game starts (section 12.2): `unbindall`, then the user
@@ -546,6 +581,14 @@ impl Console {
 
     /// Runs one command line.
     pub fn exec(&mut self, line: &str) -> Exec {
+        let result = self.run(line);
+        if matches!(result, Exec::Done | Exec::Kept) {
+            self.generation += 1;
+        }
+        result
+    }
+
+    fn run(&mut self, line: &str) -> Exec {
         let line = line.trim();
         let (name, rest) = match line.split_once(char::is_whitespace) {
             Some((n, r)) => (n, r.trim()),
@@ -597,6 +640,9 @@ impl Console {
                 return Exec::Done;
             }
             _ => {}
+        }
+        if COMMANDS.contains(&name) {
+            return Exec::Ignored;
         }
         let Some(i) = VARIABLES.iter().position(|d| d.name == name) else {
             if rest.is_empty() {
@@ -848,7 +894,13 @@ mod tests {
     #[test]
     fn the_user_file_round_trips_in_byte_order() {
         let user = b"_preset Extreme\r\nai_use_torch_dynamic_lights on\r\nunbindall\r\nbind left kLEFT\r\nbind quit kESCAPE\r\nbind_console disconnect kF10\nbind_console quit kF9\nbind_sec jump kRCONTROL\r\ng_always_run on\r\nmouse_sens 0.3\r\nph_iterations 18\r\nr2_slight_fade 0.3333\r\nvid_mode 1280x1024\r\n";
-        let c = Console::startup(files(), user);
+        let mut c = Console::startup(files(), user);
+        // Commands without a status are neither run here nor stored.
+        assert_eq!(c.exec("cfg_load other.ltx"), Exec::Ignored);
+        assert_eq!(
+            c.exec("start server(all/single/alife/new) client(localhost)"),
+            Exec::Ignored
+        );
         assert_eq!(c.number("r__tf_aniso"), 16.0, "the preset ran");
         let saved = String::from_utf8(c.save()).unwrap();
         let lines: Vec<&str> = saved.split_inclusive('\n').collect();

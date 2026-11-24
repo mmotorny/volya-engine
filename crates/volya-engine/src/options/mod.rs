@@ -86,6 +86,9 @@ const STICK_DEAD_ZONE: f32 = 0.2;
 /// `ui_map_area_anim`'s timing is not established (section 17), so this is
 /// our choice.
 const BLINK_MS: f32 = 1000.0;
+/// Units the cursor moves in an open list before a press counts as a drag
+/// (our choice).
+const DRAG_SLOP: f32 = 4.0;
 
 /// The screen's pages (section 3.2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -203,6 +206,9 @@ enum Kind {
 struct ListState {
     dd: DropDown,
     backup: usize,
+    /// The variable's value when the backup was taken, for an undo whose
+    /// backed-up entry does not exist.
+    backup_status: String,
     open: bool,
     bar: ScrollBar,
 }
@@ -331,6 +337,10 @@ pub struct OptionsScreen {
     /// The track bar the left button holds.
     sliding: Option<usize>,
     grab: Option<Grab>,
+    /// A left press in the open list's rows: the entry under it, where it
+    /// began, and whether the cursor has moved since (a drag scrolls the
+    /// list instead of choosing).
+    list_press: Option<(Option<usize>, [f32; 2], bool)>,
     /// The open drop-down (item index): it holds the mouse capture.
     open_list: Option<usize>,
     message: bool,
@@ -346,6 +356,8 @@ pub struct OptionsScreen {
     closed: Option<Closed>,
     /// Clicks of buttons without an effect here, for tests.
     clicks: Vec<String>,
+    /// The item under the cursor while a frame is drawn, found once.
+    drawn_hover: std::cell::Cell<Option<Option<usize>>>,
 }
 
 fn invalid(m: String) -> io::Error {
@@ -691,6 +703,7 @@ impl OptionsScreen {
             armed: None,
             sliding: None,
             grab: None,
+            list_press: None,
             open_list: None,
             message: false,
             message_shown: false,
@@ -702,6 +715,7 @@ impl OptionsScreen {
             last_update: None,
             closed: None,
             clicks: Vec::new(),
+            drawn_hover: std::cell::Cell::new(None),
         })
     }
 
@@ -727,6 +741,7 @@ impl OptionsScreen {
         self.armed = None;
         self.sliding = None;
         self.grab = None;
+        self.list_press = None;
         self.open_list = None;
         for it in &mut self.items {
             if let Kind::List(l) = &mut it.kind {
@@ -811,7 +826,13 @@ impl OptionsScreen {
         match &mut self.items[i].kind {
             Kind::Check { shown, backup } => *backup = u8::from(*shown),
             Kind::Track { value, backup, .. } => *backup = *value,
-            Kind::List(l) => l.backup = l.dd.stored,
+            Kind::List(l) => {
+                l.backup = l.dd.stored;
+                l.backup_status =
+                    l.dd.entries
+                        .get(l.dd.stored)
+                        .map_or_else(|| l.dd.line.clone(), |(n, _)| n.clone());
+            }
             _ => {}
         }
     }
@@ -920,7 +941,7 @@ impl OptionsScreen {
             match (b, pressed) {
                 (GamepadButton::South, true) => events.push(Ev::Press(MouseButton::Left)),
                 (GamepadButton::South, false) => events.push(Ev::Release(MouseButton::Left)),
-                (GamepadButton::East, true) => events.push(Ev::Key(Key::Escape)),
+                (GamepadButton::East, true) => events.push(Ev::PadEscape),
                 (GamepadButton::DpadUp, true) => events.push(Ev::Navigate(0.0, -1.0)),
                 (GamepadButton::DpadDown, true) => events.push(Ev::Navigate(0.0, 1.0)),
                 (GamepadButton::DpadLeft, true) => events.push(Ev::Navigate(-1.0, 0.0)),
@@ -969,11 +990,21 @@ impl OptionsScreen {
                     self.moved(console, p);
                 }
             }
-            Ev::Press(b) => self.pressed(data, console, native, now, b),
+            Ev::Press(b) => self.pressed(console, now, b),
             Ev::Release(MouseButton::Left) => self.released(data, console, native),
             Ev::Release(_) => {}
             Ev::Wheel(up) => self.wheel(up),
             Ev::Key(k) => self.key(k),
+            Ev::PadEscape => {
+                // A gamepad's east button ends a cell's waiting without
+                // binding anything (our design: Escape from a keyboard is
+                // captured, section 11.4); otherwise it is Escape.
+                if self.waiting.is_some() && !self.message {
+                    self.waiting = None;
+                } else {
+                    self.key(Key::Escape);
+                }
+            }
         }
     }
 
@@ -994,7 +1025,18 @@ impl OptionsScreen {
             Some(Grab::Arrow(..)) => return,
             None => {}
         }
-        if self.open_list.is_some() {
+        if let Some(l) = self.open_list {
+            // A drag in the open list scrolls it, as a drag in a scroll
+            // view does (our design: a touch reaches every entry, not only
+            // through the arrows).
+            if let Some((_, start, dragged)) = &mut self.list_press {
+                if (p[1] - start[1]).abs() > DRAG_SLOP || (p[0] - start[0]).abs() > DRAG_SLOP {
+                    *dragged = true;
+                }
+                if *dragged && let Kind::List(s) = &mut self.items[l].kind {
+                    s.bar.set(s.bar.pos - dy as i32);
+                }
+            }
             return;
         }
         let at = self.item_at(p);
@@ -1034,14 +1076,7 @@ impl OptionsScreen {
         self.sliding = Some(i);
     }
 
-    fn pressed(
-        &mut self,
-        data: &GameData,
-        console: &mut Console,
-        native: Resolution,
-        now: u64,
-        b: MouseButton,
-    ) {
+    fn pressed(&mut self, console: &mut Console, now: u64, b: MouseButton) {
         let p = self.cursor;
         if self.message {
             if b == MouseButton::Left && contains(self.message_ok(), p) {
@@ -1053,7 +1088,7 @@ impl OptionsScreen {
             if b != MouseButton::Left {
                 return;
             }
-            self.list_press(data, console, native, l, p);
+            self.press_in_list(l, p);
             return;
         }
         let at = self.item_at(p);
@@ -1104,24 +1139,47 @@ impl OptionsScreen {
 
     /// A left press while list `l` is open: on an entry it is chosen, on
     /// the list's scroll bar the bar takes it, elsewhere the list closes.
-    fn list_press(
-        &mut self,
-        data: &GameData,
-        console: &mut Console,
-        native: Resolution,
-        l: usize,
-        p: [f32; 2],
-    ) {
+    fn press_in_list(&mut self, l: usize, p: [f32; 2]) {
         if let Some(bar) = self.bar_at(p) {
             self.bar_press(bar, p);
             return;
         }
         let entry = self.list_entry_at(l, p);
+        if entry.is_some() || self.list_rect(l).is_some_and(|r| contains(r, p)) {
+            // In the rows: chosen on release unless dragged (our design,
+            // so that a drag can scroll; the spec says "a click").
+            self.list_press = Some((entry, p, false));
+            return;
+        }
+        self.close_list(l);
+    }
+
+    fn close_list(&mut self, l: usize) {
         if let Kind::List(s) = &mut self.items[l].kind {
             s.open = false;
         }
         self.open_list = None;
-        let Some(k) = entry else { return };
+        self.list_press = None;
+    }
+
+    /// The left button released over the open list's rows.
+    fn list_release(
+        &mut self,
+        data: &GameData,
+        console: &mut Console,
+        native: Resolution,
+        l: usize,
+    ) {
+        let Some((entry, _, dragged)) = self.list_press.take() else {
+            return;
+        };
+        if dragged {
+            return;
+        }
+        let Some(k) = entry.filter(|&k| self.list_entry_at(l, self.cursor) == Some(k)) else {
+            return;
+        };
+        self.close_list(l);
         let chosen = match &mut self.items[l].kind {
             Kind::List(s) => s.dd.choose(k),
             _ => None,
@@ -1156,6 +1214,11 @@ impl OptionsScreen {
     fn released(&mut self, data: &GameData, console: &mut Console, native: Resolution) {
         let p = self.cursor;
         self.sliding = None;
+        if let Some(l) = self.open_list {
+            self.grab = None;
+            self.list_release(data, console, native, l);
+            return;
+        }
         if let Some(Grab::Arrow(bar, up)) = self.grab.take()
             && self.arrow_rect(bar, up).is_some_and(|r| contains(r, p))
         {
@@ -1241,16 +1304,36 @@ impl OptionsScreen {
                 if !matches!(&self.items[i].var, Some((_, ig)) if *ig == g) || !self.changed(i) {
                     continue;
                 }
+                let mut restored = None;
                 match &mut self.items[i].kind {
                     Kind::Check { shown, backup } => *shown = *backup == 1,
                     Kind::Track { value, backup, .. } => *value = *backup,
                     Kind::List(l) => {
                         let k = l.backup;
-                        l.dd.show(k);
+                        if l.dd.show(k).is_none() {
+                            // The backed-up value 1 of a variable no entry
+                            // matched (4.6) names no entry when the list has
+                            // fewer than two: the variable's backed-up value
+                            // is set instead (our choice, so Cancel undoes).
+                            restored = Some(l.backup_status.clone());
+                        }
                     }
                     _ => {}
                 }
-                self.save(console, i);
+                match restored {
+                    Some(value) => {
+                        let var = self.items[i]
+                            .var
+                            .as_ref()
+                            .map(|(v, _)| v.clone())
+                            .unwrap_or_default();
+                        console.exec(&format!("{var} {value}"));
+                        if VIDEO_RESTART.contains(&var.as_str()) {
+                            self.video_restart = true;
+                        }
+                    }
+                    None => self.save(console, i),
+                }
                 if matches!(self.items[i].kind, Kind::Track { .. } | Kind::List(_)) {
                     self.refresh(data, console, native, i);
                 }
@@ -1612,6 +1695,15 @@ impl OptionsScreen {
             false,
             None,
         )?;
+        self.drawn_hover.set(Some(self.item_at(self.cursor)));
+        let drawn = self.draw_layers(ctx, s);
+        self.drawn_hover.set(None);
+        drawn?;
+        crate::draw::cursor(ctx, s, self.cursor)?;
+        Ok(scene)
+    }
+
+    fn draw_layers(&self, ctx: &mut Ctx, s: &mut Scene) -> io::Result<()> {
         let mut view_start = Vec::new();
         for i in 0..self.items.len() {
             let it = &self.items[i];
@@ -1628,20 +1720,33 @@ impl OptionsScreen {
                         self.draw_bar(ctx, s, &format!("{} bar", it.name), Bar::View(*v))?;
                     }
                 }
-                _ => self.draw_item(ctx, s, i)?,
+                _ => {
+                    // Rows a scroll view hides are not laid out.
+                    if let Some(v) = it.view
+                        && !overlaps(self.shown_rect(i), self.views[v].rect)
+                    {
+                        continue;
+                    }
+                    self.draw_item(ctx, s, i)?
+                }
             }
         }
         if self.message {
             self.draw_message(ctx, s)?;
         }
-        crate::draw::cursor(ctx, s, self.cursor)?;
-        Ok(scene)
+        Ok(())
+    }
+
+    /// The item under the cursor.
+    fn hover(&self) -> Option<usize> {
+        self.drawn_hover
+            .get()
+            .unwrap_or_else(|| self.item_at(self.cursor))
     }
 
     fn state_suffix(&self, i: usize, pressed: bool) -> &'static str {
         let it = &self.items[i];
-        let hovered =
-            self.open_list.is_none() && !self.message && self.item_at(self.cursor) == Some(i);
+        let hovered = self.open_list.is_none() && !self.message && self.hover() == Some(i);
         if !it.enabled {
             "d"
         } else if pressed {
@@ -1679,7 +1784,7 @@ impl OptionsScreen {
             Kind::Button(_) | Kind::Tab(_) => {
                 let pressed = match it.kind {
                     Kind::Tab(t) => t == self.page.tab(),
-                    _ => self.armed == Some(i) && self.item_at(self.cursor) == Some(i),
+                    _ => self.armed == Some(i) && self.hover() == Some(i),
                 };
                 let state = self.state_suffix(i, pressed);
                 let state = if matches!(it.kind, Kind::Tab(_)) && state == "d" {
@@ -1759,6 +1864,8 @@ impl OptionsScreen {
             Kind::Cell(c) => {
                 ctx.frame_line(s, layer, "ui_options_string", (r.x, r.y), r.width)?;
                 let cell = &self.cells[*c];
+                // The key-list name (section 11.2's fallback; our use of it:
+                // the browser reports no operating-system key names).
                 let label = match cell.key {
                     Some(k) => KEYS[k].0,
                     None if cell.cleared => "---",
@@ -1802,8 +1909,7 @@ impl OptionsScreen {
     ) -> io::Result<()> {
         let it = &self.items[i];
         let layer = it.name.as_str();
-        let hovered =
-            self.open_list.is_none() && !self.message && self.item_at(self.cursor) == Some(i);
+        let hovered = self.open_list.is_none() && !self.message && self.hover() == Some(i);
         let base = if hovered {
             "ui_cb_linetext_h"
         } else {
@@ -2129,6 +2235,8 @@ enum Ev {
     Key(Key),
     /// The d-pad (our design).
     Navigate(f32, f32),
+    /// A gamepad's east button (our design).
+    PadEscape,
 }
 
 struct Builder {
@@ -2261,6 +2369,7 @@ impl Builder {
             (Some(_), Some("list")) => Kind::List(Box::new(ListState {
                 dd: DropDown::default(),
                 backup: 0,
+                backup_status: String::new(),
                 open: false,
                 bar: ScrollBar::default(),
             })),
@@ -2309,6 +2418,10 @@ fn state_color(d: &StaticDesc, state: &str, fallback: Color) -> Color {
         _ => None,
     };
     pick.or(c.enabled).unwrap_or(fallback)
+}
+
+fn overlaps(a: Rect, b: Rect) -> bool {
+    a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
 }
 
 fn contains(r: Rect, [x, y]: [f32; 2]) -> bool {

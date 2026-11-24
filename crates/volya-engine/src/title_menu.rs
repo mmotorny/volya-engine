@@ -317,7 +317,9 @@ impl TitleMenu {
                     Key::Down if self.selected + 1 < self.list(data).buttons.len() => {
                         self.select(data, self.selected + 1, now)
                     }
-                    Key::Enter => self.activate(data, now),
+                    // The numeric keypad's Enter acts as Enter here (our
+                    // choice; it is bindable as kNUMPADENTER).
+                    Key::Enter | Key::NumpadEnter => self.activate(data, now),
                     Key::Escape if self.list == NEW_GAME_LIST => {
                         self.set_list(data, MAIN_LIST, now)
                     }
@@ -734,8 +736,8 @@ mod tests {
     #[test]
     fn activation() {
         let mut r = Run::open(0);
-        // Enter on New game: the difficulty page, item 0 selected.
-        r.key(Key::Enter, 1000);
+        // Enter (the keypad's here) on New game: the difficulty page.
+        r.key(Key::NumpadEnter, 1000);
         let s = r.state(1000);
         assert_eq!((s.list, s.selected, s.items.len()), ("menu_new_game", 0, 5));
         assert_eq!(s.items[4].caption, "Назад");

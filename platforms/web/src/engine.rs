@@ -33,6 +33,9 @@ thread_local! {
     static RUNNING: RefCell<Option<Running>> = const { RefCell::new(None) };
     /// The splash picture's size while it shows (loading).
     static SPLASH: RefCell<Option<(u32, u32)>> = const { RefCell::new(None) };
+    /// The user configuration file waiting to be written, and whether a
+    /// write is under way.
+    static USER_CONFIG: RefCell<(Option<Vec<u8>>, bool)> = const { RefCell::new((None, false)) };
     /// The output size in pixels, as the canvas was last sized.
     static RESOLUTION: RefCell<Resolution> = const { RefCell::new(Resolution::new(1024, 768)) };
 }
@@ -121,6 +124,28 @@ pub fn stop() {
     }
 }
 
+/// Stores the user configuration file. Writes go one at a time; a file
+/// asked for while one is written replaces any still waiting, so the latest
+/// content is written last and an older write never lands after a newer one.
+fn store_user_config(bytes: Vec<u8>) {
+    let start = USER_CONFIG.with(|q| {
+        let mut q = q.borrow_mut();
+        q.0 = Some(bytes);
+        !std::mem::replace(&mut q.1, true)
+    });
+    if !start {
+        return;
+    }
+    wasm_bindgen_futures::spawn_local(async {
+        while let Some(bytes) = USER_CONFIG.with(|q| q.borrow_mut().0.take()) {
+            if let Err(e) = crate::game::write_user_config(bytes).await {
+                web_sys::console::error_1(&e);
+            }
+        }
+        USER_CONFIG.with(|q| q.borrow_mut().1 = false);
+    });
+}
+
 /// The size the game draws at while it runs (its video mode, #49), `None`
 /// otherwise (the splash and the page draw at the canvas's size).
 pub fn render_size() -> Option<Resolution> {
@@ -164,11 +189,7 @@ pub fn frame(time: f64) {
             })
         });
         if let Some(bytes) = app.take_save() {
-            wasm_bindgen_futures::spawn_local(async move {
-                if let Err(e) = crate::game::write_user_config(bytes).await {
-                    web_sys::console::error_1(&e);
-                }
-            });
+            store_user_config(bytes);
         }
         crate::input::set_render(Some(app.video_mode()));
         // The game was unmounted under the app.

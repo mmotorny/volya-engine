@@ -12,7 +12,11 @@
 // it. The on-screen touch controls (touch-controls.js) send their own
 // messages; touches on them don't arrive here.
 
-// KeyboardEvent.code → engine key name (layout-independent positions).
+// KeyboardEvent.code → engine key name (layout-independent positions): the
+// W3C UI Events code values (a public standard) paired with the game's key
+// names by the Windows scan code both stand for (the code tables of the
+// standard; Microsoft's DirectInput documentation for the key names). See the
+// key list in crates/volya-engine-core/src/input.rs.
 const KEYS = {
   Escape: "escape",
   Digit1: "1",
@@ -42,7 +46,7 @@ const KEYS = {
   BracketLeft: "left_bracket",
   BracketRight: "right_bracket",
   Enter: "enter",
-  NumpadEnter: "enter",
+  NumpadEnter: "numpad_enter",
   ControlLeft: "left_control",
   KeyA: "a",
   KeyS: "s",

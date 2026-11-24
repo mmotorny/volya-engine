@@ -50,6 +50,8 @@ struct State {
     render: Option<Resolution>,
     /// The top-left of the drawn area in the canvas, CSS pixels.
     offset: [f32; 2],
+    /// A primary touch began on the drawn area and has not ended.
+    touch_down: bool,
 }
 
 impl State {
@@ -85,6 +87,7 @@ pub fn set_capture(on: bool) {
         if s.capture && !on {
             // No more releases will arrive.
             with_recent(&mut s, Input::release_all);
+            s.touch_down = false;
         }
         s.capture = on;
     });
@@ -128,14 +131,18 @@ pub fn handle(message: &Array) -> Result<(), JsValue> {
         if s.capture {
             match event {
                 Some(events) => {
-                    let events: Vec<Event> = events.into_iter().map(|e| s.placed(e)).collect();
+                    let events: Vec<Event> =
+                        events.into_iter().filter_map(|e| s.placed(e)).collect();
                     with_recent(&mut s, |input| {
                         for event in events {
                             input.handle(event);
                         }
                     })
                 }
-                None => with_recent(&mut s, Input::release_all),
+                None => {
+                    with_recent(&mut s, Input::release_all);
+                    s.touch_down = false;
+                }
             }
         }
     });
@@ -143,33 +150,54 @@ pub fn handle(message: &Array) -> Result<(), JsValue> {
 }
 
 impl State {
-    /// `e` with its position relative to the drawn area.
-    fn placed(&self, e: Event) -> Event {
-        match e {
+    /// Whether `at` (relative to the drawn area) is on it.
+    fn on_picture(&self, [x, y]: [f32; 2]) -> bool {
+        let [w, h] = self.input.screen();
+        (0.0..w).contains(&x) && (0.0..h).contains(&y)
+    }
+
+    /// `e` with its position relative to the drawn area; `None` for a press
+    /// or a touch begun in the black bars around it, which are ignored
+    /// rather than taken to the picture's edge (our choice). Moves and
+    /// releases outside it still count (the cursor stops at the edge).
+    fn placed(&mut self, e: Event) -> Option<Event> {
+        Some(match e {
             Event::PointerMoved { at } => Event::PointerMoved { at: self.place(at) },
             Event::PointerButton {
                 at,
                 button,
                 pressed,
                 time,
-            } => Event::PointerButton {
-                at: at.map(|a| self.place(a)),
-                button,
-                pressed,
-                time,
-            },
-            Event::Touch { at, phase, time } => Event::Touch {
-                at: self.place(at),
-                phase,
-                time,
-            },
+            } => {
+                let at = at.map(|a| self.place(a));
+                if pressed && at.is_some_and(|a| !self.on_picture(a)) {
+                    return None;
+                }
+                Event::PointerButton {
+                    at,
+                    button,
+                    pressed,
+                    time,
+                }
+            }
+            Event::Touch { at, phase, time } => {
+                let at = self.place(at);
+                match phase {
+                    TouchPhase::Start if !self.on_picture(at) => return None,
+                    TouchPhase::Start => self.touch_down = true,
+                    _ if !self.touch_down => return None,
+                    TouchPhase::End => self.touch_down = false,
+                    TouchPhase::Move => {}
+                }
+                Event::Touch { at, phase, time }
+            }
             Event::Contact { id, at, phase } => Event::Contact {
                 id,
                 at: self.place(at),
                 phase,
             },
             e => e,
-        }
+        })
     }
 }
 

@@ -117,6 +117,17 @@ macro_rules! keys {
     };
 }
 
+// Which physical key each name means. The game's key names (section 11.2)
+// carry DirectInput key codes, which Microsoft's public DirectInput
+// documentation (the `DIK_*` keyboard device constants) defines as the
+// keyboard's set-1 scan codes. Browsers name physical keys by the W3C UI
+// Events `KeyboardEvent.code` values (a public standard), whose code tables
+// give each code's position and its Windows scan code; the web platform maps
+// codes to the names below (`static/input.js`) by that scan code. Every
+// pairing here is backed by those two documents (documented, not measured
+// on hardware). Keys of the list with no `code` value are not reported:
+// kCIRCUMFLEX, kAT, kCOLON, kUNDERLINE, kKANJI, kSTOP, kAX, kUNLABELED
+// (NEC PC-98 and Japanese keyboards) and mouse4–mouse8.
 keys! {
     Escape "escape" "kESCAPE",
     Digit1 "1" "k1",
@@ -211,6 +222,7 @@ keys! {
     NoConvert "no_convert" "kNOCONVERT",
     Yen "yen" "kYEN",
     NumpadEquals "numpad_equals" "kNUMPADEQUALS",
+    NumpadEnter "numpad_enter" "kNUMPADENTER",
     RightControl "right_control" "kRCONTROL",
     NumpadComma "numpad_comma" "kNUMPADCOMMA",
     NumpadDivide "numpad_divide" "kDIVIDE",

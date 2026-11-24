@@ -570,6 +570,21 @@ export const tests = {
     const scene = await volya.call("menu_scene", { width: 1024, height: 768 });
     assertEqual(bounds(scene, "dialog").slice(0, 2), [414.5, 167.5], "dialog");
     assert(scene.sprites.some((s) => s.layer === "list_renderer line"), "renderer line");
+    // A tap in the black bars beside a 4:3 picture is ignored, not taken to
+    // the picture's edge (our choice).
+    const rect = view().getBoundingClientRect();
+    const rotated = rect.width < rect.height !== view().clientWidth < view().clientHeight;
+    if (rotated || view().clientWidth / view().clientHeight < render[0] / render[1] + 0.05) {
+      return "no bars at the sides here";
+    }
+    const before = (await options()).cursor;
+    const touch = { pointerType: "touch", pointerId: 40, isPrimary: true, button: 0 };
+    const bar = [rect.left + 2, rect.top + rect.height / 2];
+    pointer("pointerdown", bar, { ...touch, buttons: 1 });
+    pointer("pointerup", bar, { ...touch, buttons: 0 });
+    await sleep(100);
+    assertEqual((await options()).cursor, before, "cursor after a tap in the bar");
+    return "a tap in the bar ignored";
   },
 
   "a setting, a tap and a key changed, Apply stores them": async () => {
@@ -577,6 +592,9 @@ export const tests = {
     // The controls tab; the mouse-sensitivity bar clicked at a third.
     clickAt(centreOf(button(await options(), "tab 3")));
     let o = await untilOptions((o) => o.page === "controls", "the controls tab");
+    // Frame times with the key table shown (the latest 60 frames).
+    await sleep(1500);
+    const stats = await volya.call("level_stats");
     const bar = control(o, "track_mousesens");
     clickAt([bar.rect[0] + 12 + (bar.rect[2] - 24) / 3, bar.rect[1] + 10]);
     o = await untilOptions((o) => control(o, "track_mousesens").value !== bar.value, "the bar to move");
@@ -609,7 +627,7 @@ export const tests = {
     assert(stored?.includes("bind forward kT\r\n"), "the binding stored");
     assert(stored.includes(`mouse_sens ${Number(sens).toFixed(5).replace(/0+$/, "")}\r\n`), `mouse_sens ${sens} stored`);
     assert(stored.includes(`snd_efx ${eax === "on" ? "off" : "on"}\r\n`), "snd_efx stored");
-    return `mouse_sens ${sens}`;
+    return `mouse_sens ${sens}; controls tab frame CPU ${stats.frame_cpu_ms.toFixed(2)} ms (max ${stats.frame_cpu_max_ms.toFixed(2)})`;
   },
 
   "the rebound key walks in the level": async () => {

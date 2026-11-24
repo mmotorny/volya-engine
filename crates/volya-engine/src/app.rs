@@ -275,8 +275,8 @@ pub struct App {
     video: Resolution,
     /// The user configuration file to store, once something asked for it.
     save: Option<Vec<u8>>,
-    /// The console's file as last applied to the game data and audio.
-    applied: Vec<u8>,
+    /// The console's generation as last applied to the game data.
+    applied: u64,
     /// The sound volumes as last set.
     volumes: Option<[f32; 2]>,
     /// The console may have changed this frame.
@@ -334,7 +334,7 @@ impl App {
         let console = data.console();
         let video = video_mode(&console);
         Ok(Self {
-            applied: console.save(),
+            applied: console.generation(),
             console,
             options_data: None,
             options: None,
@@ -544,10 +544,10 @@ impl App {
     /// settings the next level uses, and the sound volumes at once.
     fn after_update(&mut self, audio: &mut dyn AudioOut) {
         if std::mem::take(&mut self.console_touched) || self.options_open {
-            let saved = self.console.save();
-            if saved != self.applied {
+            let generation = self.console.generation();
+            if generation != self.applied {
                 self.data.apply(&self.console);
-                self.applied = saved;
+                self.applied = generation;
             }
         }
         let volumes = [

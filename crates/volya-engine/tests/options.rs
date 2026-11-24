@@ -295,6 +295,21 @@ fn options_screen_from_game_data() {
     run.click(run.button("btn_advanced"));
     assert_eq!(run.state().page, Page::Advanced);
     assert_eq!(run.control("track_aniso").value, "2");
+    // Section 6.2 and 16: rows at y = 252 + 30 j, controls at x 664.
+    assert_eq!(
+        run.control("track_vis_dist").rect,
+        [664.0, 252.0, 245.0, 21.0]
+    );
+    assert_eq!(run.control("check_r2_sun").rect[..2], [664.0, 432.0]);
+    assert_eq!(run.control("check_60hz").rect[..2], [664.0, 612.0]);
+    // Scrolled to the bottom (78 units, section 4.8), row 12 shows at 534.
+    for _ in 0..3 {
+        run.input.handle(Event::PointerMoved { at: [700.0, 400.0] });
+        run.input.handle(Event::Wheel { steps: 1 });
+        run.frame();
+    }
+    assert_eq!(run.state().scroll[0], 78);
+    assert_eq!(run.control("check_60hz").rect[1], 534.0);
     let sc = scene(&run, &mut assets);
     let list = presenter.draw_list(&mut gpu, &tree, &sc, run.now);
     dump("VOLYA_DUMP_OPTIONS_ADVANCED", &mut gpu, &list);
@@ -341,6 +356,117 @@ fn options_screen_from_game_data() {
             .unwrap()
             .contains("bind forward kT\r\n")
     );
+    // Section 8.8 cost: frames with the controls tab open (the key table
+    // drawn), timed (native; a release build is the meaningful number).
+    run.screen
+        .open(run.data, &mut run.console, XGA, run.now, [512.0, 384.0]);
+    run.click(run.button("tab 3"));
+    let start = std::time::Instant::now();
+    let frames = 100;
+    for _ in 0..frames {
+        run.input.handle(Event::PointerMoved { at: [700.0, 450.0] });
+        run.frame();
+        let sc = scene(&run, &mut assets);
+        presenter.draw_list(&mut gpu, &tree, &sc, run.now);
+    }
+    eprintln!(
+        "options frame (controls tab: update, scene, draw list): {:.3} ms",
+        start.elapsed().as_secs_f64() * 1000.0 / f64::from(frames)
+    );
+    run.input.handle(Event::Key {
+        key: Key::Escape,
+        pressed: true,
+    });
+    run.frame();
+    run.screen.take_closed();
+
+    // A drag in an open list scrolls it (our design); a press and release
+    // without moving chooses.
+    run.screen
+        .open(run.data, &mut run.console, XGA, run.now, [512.0, 384.0]);
+    run.click(run.button("tab 0"));
+    let small = Resolution::new(2868, 1320);
+    run.screen
+        .open(run.data, &mut run.console, small, run.now, [512.0, 384.0]);
+    let r = run.control("list_resolution").rect;
+    run.click(centre(r));
+    assert_eq!(run.state().open_list.as_deref(), Some("list_resolution"));
+    let rows = [r[0] + 40.0, r[1] + 23.0 + 60.0];
+    run.input.handle(Event::PointerMoved { at: rows });
+    run.input.handle(Event::PointerButton {
+        at: None,
+        button: MouseButton::Left,
+        pressed: true,
+        time: 0.0,
+    });
+    run.frame();
+    run.input.handle(Event::PointerMoved {
+        at: [rows[0], rows[1] - 40.0],
+    });
+    run.frame();
+    run.input.handle(Event::PointerButton {
+        at: None,
+        button: MouseButton::Left,
+        pressed: false,
+        time: 0.0,
+    });
+    run.frame();
+    let s = run.state();
+    assert_eq!(
+        s.open_list.as_deref(),
+        Some("list_resolution"),
+        "still open"
+    );
+    assert_eq!(run.console.video_mode(), (1024, 768), "nothing chosen");
+    run.input.handle(Event::Key {
+        key: Key::Escape,
+        pressed: true,
+    });
+    run.frame();
+    run.screen.take_closed();
+
+    // Cancel undoes a list whose backed-up entry does not exist: one
+    // resolution offered (a 700 × 500 screen), vid_mode 1024x768 not in it.
+    let tiny = Resolution::new(700, 500);
+    run.screen
+        .open(run.data, &mut run.console, tiny, run.now, [512.0, 384.0]);
+    assert_eq!(run.control("list_resolution").entries, ["700x500"]);
+    let r = run.control("list_resolution").rect;
+    run.screen
+        .update(run.data, &mut run.console, tiny, run.now, &run.input);
+    for at in [centre(r), [r[0] + 20.0, r[1] + 23.0 + 9.0]] {
+        run.input.handle(Event::PointerMoved { at });
+        for pressed in [true, false] {
+            run.input.handle(Event::PointerButton {
+                at: None,
+                button: MouseButton::Left,
+                pressed,
+                time: 0.0,
+            });
+            run.now += 16;
+            run.screen
+                .update(run.data, &mut run.console, tiny, run.now, &run.input);
+            run.input.end_frame();
+        }
+    }
+    assert_eq!(run.console.video_mode(), (700, 500), "chosen at once");
+    let cancel = run.button("btn_cancel");
+    run.input.handle(Event::PointerMoved { at: cancel });
+    for pressed in [true, false] {
+        run.input.handle(Event::PointerButton {
+            at: None,
+            button: MouseButton::Left,
+            pressed,
+            time: 0.0,
+        });
+        run.now += 16;
+        run.screen
+            .update(run.data, &mut run.console, tiny, run.now, &run.input);
+        run.input.end_frame();
+    }
+    assert_eq!(run.console.video_mode(), (1024, 768), "Cancel undid it");
+    assert!(run.screen.take_closed().unwrap().video_restart);
+
     // Touch and gamepad (our design): a tap is a click; the d-pad moves
     // the cursor to the nearest control, south clicks, east is Escape.
     run.screen
@@ -378,6 +504,30 @@ fn options_screen_from_game_data() {
     );
     pad(&mut run, GamepadButton::South);
     assert_eq!(run.control("check_eax").value, "on");
+    // East while a key cell waits ends the waiting, binding nothing (our
+    // design).
+    let tab3 = run.button("tab 3");
+    tap(&mut run, tab3);
+    let cell = run
+        .state()
+        .cells
+        .into_iter()
+        .find(|c| c.action == "forward" && c.slot == 1)
+        .unwrap();
+    tap(&mut run, centre(cell.rect));
+    assert_eq!(run.state().waiting.as_deref(), Some("forward:1"));
+    pad(&mut run, GamepadButton::East);
+    let s = run.state();
+    assert_eq!(s.waiting, None);
+    let key = |s: &OptionsState| {
+        s.cells
+            .iter()
+            .find(|c| c.action == "forward" && c.slot == 1)
+            .unwrap()
+            .key
+    };
+    assert_eq!(key(&s), None);
+    assert_eq!(run.screen.take_closed(), None, "still open");
     pad(&mut run, GamepadButton::East);
     assert_eq!(
         run.screen.take_closed(),

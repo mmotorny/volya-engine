@@ -15,7 +15,9 @@ use super::{Color, ColorDefs, flag_attr, float_attr, int_attr, read_color};
 use crate::xml::{Document, Element};
 
 /// An element's `options_item` child: the variable it edits and its group
-/// (sections 5.1 and 6).
+/// (sections 5.1 and 6). The spec names the `group` attribute; that `entry`
+/// names the variable is our reading of the data (each control's `entry`
+/// is the variable section 6 gives it), used to bind the control to it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OptionsItem {
     pub entry: String,
@@ -114,8 +116,12 @@ pub fn key_groups(doc: &Document) -> Vec<KeyGroup> {
 pub struct ScrollBarProfile {
     /// The profile's `height`: the bar's width *t*.
     pub width: f32,
-    /// Texture of the up and down arrows (`texture_e`), the track
-    /// (`back_v`) and the box (`box_v`).
+    /// Texture of the up and down arrows (`up_arrow:texture_e`,
+    /// `down_arrow:texture_e`), the track (`back_v:texture`) and the box
+    /// (`box_v:texture`). The spec names the texture ids (section 4.8) but
+    /// not these elements: they are our reading of the file's structure (in
+    /// the shipped `default` profile they hold exactly those ids), used to
+    /// draw the scroll bars of the scroll views and drop-down lists.
     pub up: String,
     pub down: String,
     pub track: String,
