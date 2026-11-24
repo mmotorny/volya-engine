@@ -18,11 +18,12 @@ use serde::Serialize;
 use crate::core::camera::{self, ActorBody, Angles, FreeCamera, Mat4, Vec3};
 use crate::core::config;
 use crate::core::input::Input;
-use crate::core::level::{DrawItem, StaticWorld};
+use crate::core::level::{DrawItem, Level, LevelGeom};
 use crate::core::vfs::{self, Vfs};
 use crate::core::weather::{self, Environment, Weather};
 use crate::data::GameData;
 use crate::free_controls::{self, TouchLayout};
+use crate::loading_screen::Stage;
 use crate::render::sky::SkyTextures;
 use crate::render::world::Surface;
 use crate::scene::{Scene, Sprite, TextureId, WorldScene};
@@ -31,7 +32,6 @@ use crate::sky::{self, SkyCamera, SunSource};
 use std::collections::HashMap;
 use volya_engine_formats::env_mod::{self, EnvModifier};
 use volya_engine_formats::game_graph::GameGraph;
-use volya_engine_formats::level_geom::LevelGeom;
 use volya_engine_formats::shaders_xr;
 use volya_engine_formats::spawn;
 use volya_engine_formats::ui::Color;
@@ -278,96 +278,209 @@ fn time_factor(tree: &dyn Vfs, data: &GameData) -> io::Result<f32> {
         .map_or(10.0, config::value::float))
 }
 
-impl LevelScreen {
-    /// Loads the new game's level at engine clock `now`.
-    pub fn load(tree: &dyn Vfs, data: &GameData, now: u64) -> io::Result<Self> {
-        let (name, actor) = new_game_level(tree, data)?;
-        let dir = data.aliases.path("$game_levels$", &name)?;
-        for file in LEVEL_FILES {
-            tree.open(&format!("{dir}\\{file}"))
-                .map_err(|e| io::Error::new(e.kind(), format!("{dir}\\{file}: {e}")))?;
+/// A new game's level being loaded stage by stage
+/// (docs/behavior/loading-screen.md section 5): [`NewGameLoad::run`] does
+/// the part of each stage's work this engine has, in the stages' order;
+/// [`NewGameLoad::finish`] makes the level. Stages whose systems do not
+/// exist here (server, life simulation, collision, details, AI, objects)
+/// do nothing.
+#[derive(Default)]
+pub struct NewGameLoad {
+    name: Option<String>,
+    actor: Option<spawn::ActorStart>,
+    dir: String,
+    level: Option<Level>,
+    geom: Option<LevelGeom>,
+    draw_items: Vec<DrawItem>,
+    spheres: Vec<[f32; 4]>,
+    modifiers: Vec<EnvModifier>,
+    body: Option<ActorBody>,
+    weather: Option<Weather>,
+    time_of_day: f32,
+    time_factor: f32,
+    surfaces: Vec<Surface<String>>,
+    draw_surfaces: Vec<Option<u32>>,
+    not_drawn: Vec<(String, String)>,
+    sky: Option<SkyTextures<String>>,
+    sun: Option<SunSource>,
+}
+
+/// What a stage needs from an earlier one, or an error naming it.
+fn earlier<T>(value: Option<T>, what: &str) -> io::Result<T> {
+    value.ok_or_else(|| invalid(format!("loading stages out of order: no {what}")))
+}
+
+impl NewGameLoad {
+    /// The level directory name, once the new game is created.
+    pub fn level_name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    /// Does the work of `stage`.
+    pub fn run(&mut self, stage: Stage, tree: &dyn Vfs, data: &GameData) -> io::Result<()> {
+        let dir = self.dir.clone();
+        let file =
+            |name: &str, e: io::Error| io::Error::new(e.kind(), format!("{dir}\\{name}: {e}"));
+        match stage {
+            // The level and its start (level-loading.md section 2.2).
+            Stage::CreatingNewGame => {
+                let (name, actor) = new_game_level(tree, data)?;
+                self.dir = data.aliases.path("$game_levels$", &name)?;
+                self.name = Some(name);
+                self.actor = Some(actor);
+            }
+            // `level.ltx` is read under this caption; a level's files must
+            // all exist (level-loading.md section 2.2).
+            Stage::ClientConnectingTo => {
+                for name in LEVEL_FILES {
+                    tree.open(&format!("{dir}\\{name}"))
+                        .map_err(|e| file(name, e))?;
+                }
+            }
+            Stage::OpeningStream => {
+                let bytes = vfs::read(tree, &format!("{dir}\\level"))?;
+                self.level = Some(Level::parse(&bytes).map_err(|e| file("level", e))?);
+            }
+            Stage::LoadingGeometry => {
+                let mut f = tree
+                    .open(&format!("{dir}\\level.geom"))
+                    .map_err(|e| file("level.geom", e))?;
+                self.geom = Some(LevelGeom::read(&mut f).map_err(|e| file("level.geom", e))?);
+            }
+            // The static visuals' draw list and bounding spheres (placed
+            // under this caption by us: the spec names the spatial index).
+            Stage::LoadingSpatialDb => {
+                let level = earlier(self.level.as_ref(), "level")?;
+                let geom = earlier(self.geom.as_ref(), "level.geom")?;
+                let draw_items = level
+                    .static_draw_items(geom)
+                    .map_err(|e| file("level", e))?;
+                self.spheres = draw_items
+                    .iter()
+                    .map(|d| {
+                        let h = &level.visuals[d.visual as usize].header;
+                        let c = h.sphere_centre;
+                        [c[0], c[1], c[2], h.sphere_radius]
+                    })
+                    .collect();
+                self.draw_items = draw_items;
+            }
+            // `level.env_mod` comes after the sectors (optional, sky.md 9.1).
+            Stage::LoadingSectorsPortals => {
+                self.modifiers = match vfs::read(tree, &format!("{dir}\\level.env_mod")) {
+                    Ok(file) => env_mod::parse(&file)?,
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
+                    Err(e) => return Err(e),
+                };
+            }
+            // The actor and the start weather (level-loading.md 2.6), placed
+            // under this caption by us (the client creates the objects here).
+            Stage::ClientSpawning => {
+                let name = earlier(self.name.as_deref(), "level")?;
+                self.body = Some(ActorBody::from_section(
+                    data.system
+                        .section(spawn::ACTOR_SECTION)
+                        .ok_or_else(|| invalid(format!("no section [{}]", spawn::ACTOR_SECTION)))?,
+                )?);
+                let (weather_name, time_of_day) = start_weather(tree, data, name)?;
+                self.weather = Some(Weather::load(&data.system, &weather_name)?);
+                self.time_of_day = time_of_day;
+                self.time_factor = time_factor(tree, data)?;
+            }
+            // Every texture file the level needs is located here. The
+            // presenter reads and uploads them with the first frame that
+            // draws the world, the first under the loading image: our
+            // departure from section 5, which reads them under this caption.
+            Stage::LoadingTextures => {
+                let level = earlier(self.level.as_ref(), "level")?;
+                (self.surfaces, self.draw_surfaces, self.not_drawn) =
+                    resolve_surfaces(tree, data, &dir, &level.shaders, &self.draw_items)?;
+                // The sky's textures: the bracketing sections' cube maps and
+                // cloud textures; the sun sprite of the lens-flare section in
+                // effect. Game time stays at the start, so these stay too.
+                let weather = earlier(self.weather.as_ref(), "weather")?;
+                let (a, b, t) = weather.bracket(self.time_of_day);
+                let locate = |name: &str| locate_texture(tree, data, &dir, name);
+                self.sky = Some(SkyTextures {
+                    cubes: [locate(&a.sky_texture)?, locate(&b.sky_texture)?],
+                    clouds: [locate(&a.clouds_texture)?, locate(&b.clouds_texture)?],
+                    sun: None,
+                });
+                self.sun = SunSource::read(&data.system, sky::flares_section(a, b, t))
+                    .map(|s| {
+                        Ok::<_, io::Error>(SunSource {
+                            texture: locate(&s.texture)?,
+                            ..s
+                        })
+                    })
+                    .transpose()?;
+            }
+            Stage::PrefetchingObjects
+            | Stage::ServerStarting
+            | Stage::LoadingAlifeSimulator
+            | Stage::ServerConnecting
+            | Stage::LoadingCform
+            | Stage::LoadingShaders
+            | Stage::LoadingDetails
+            | Stage::LoadingAiObjects
+            | Stage::ClientSynchronising => {}
         }
-        let StaticWorld {
-            level,
-            geom,
-            draw_items,
-            ..
-        } = StaticWorld::load(tree, &dir)?;
-        // Optional (sky.md 9.1).
-        let modifiers = match vfs::read(tree, &format!("{dir}\\level.env_mod")) {
-            Ok(file) => env_mod::parse(&file)?,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
-            Err(e) => return Err(e),
-        };
-        let body = ActorBody::from_section(
-            data.system
-                .section(spawn::ACTOR_SECTION)
-                .ok_or_else(|| invalid(format!("no section [{}]", spawn::ACTOR_SECTION)))?,
-        )?;
-        let spheres = draw_items
-            .iter()
-            .map(|d| {
-                let h = &level.visuals[d.visual as usize].header;
-                let c = h.sphere_centre;
-                [c[0], c[1], c[2], h.sphere_radius]
-            })
-            .collect();
-        let (surfaces, draw_surfaces, not_drawn) =
-            resolve_surfaces(tree, data, &dir, &level.shaders, &draw_items)?;
-        let (weather_name, time_of_day) = start_weather(tree, data, &name)?;
-        let weather = Weather::load(&data.system, &weather_name)?;
-        // The sky's textures: the bracketing sections' cube maps and cloud
-        // textures; the sun sprite of the lens-flare section in effect. Game
-        // time stays at the start, so these stay too.
-        let (a, b, t) = weather.bracket(time_of_day);
-        let locate = |name: &str| locate_texture(tree, data, &dir, name);
-        let sky = SkyTextures {
-            cubes: [locate(&a.sky_texture)?, locate(&b.sky_texture)?],
-            clouds: [locate(&a.clouds_texture)?, locate(&b.clouds_texture)?],
-            sun: None,
-        };
-        let sun = SunSource::read(&data.system, sky::flares_section(a, b, t))
-            .map(|s| {
-                Ok::<_, io::Error>(SunSource {
-                    texture: locate(&s.texture)?,
-                    ..s
-                })
-            })
-            .transpose()?;
-        let time_factor = time_factor(tree, data)?;
+        Ok(())
+    }
+
+    /// The level after every stage ran, shown from engine clock `now`.
+    pub fn finish(self, now: u64) -> io::Result<LevelScreen> {
+        let name = earlier(self.name, "level")?;
+        let actor = earlier(self.actor, "actor")?;
+        let level = earlier(self.level, "level")?;
+        let geom = earlier(self.geom, "level.geom")?;
+        let body = earlier(self.body, "actor body")?;
+        let weather = earlier(self.weather, "weather")?;
+        let sky = earlier(self.sky, "sky")?;
         let eye = body.eye(actor.position);
-        let mut screen = Self {
+        let (a, b, t) = weather.bracket(self.time_of_day);
+        let environment = Environment::blend(a, b, t, &self.modifiers, eye, VIS_DISTANCE);
+        let mut screen = LevelScreen {
             world: Arc::new(LevelWorld {
                 name,
-                dir,
+                dir: self.dir,
                 shaders: level.shaders,
-                draw_items,
-                spheres,
-                surfaces,
-                draw_surfaces,
-                not_drawn,
+                draw_items: self.draw_items,
+                spheres: self.spheres,
+                surfaces: self.surfaces,
+                draw_surfaces: self.draw_surfaces,
+                not_drawn: self.not_drawn,
                 sky,
-                sun,
+                sun: self.sun,
                 geometry: Mutex::new(Some(geom)),
             }),
             camera: FreeCamera::new(eye, Angles::from_spawn(actor.angles)),
-            environment: {
-                let (a, b, t) = weather.bracket(time_of_day);
-                Environment::blend(a, b, t, &modifiers, eye, VIS_DISTANCE)
-            },
+            environment,
             weather,
-            time_of_day,
-            modifiers,
+            time_of_day: self.time_of_day,
+            modifiers: self.modifiers,
             shown: now,
             last: now,
             back: false,
             touch_seen: false,
             sun_fade: 0.0,
             sun_started: false,
-            time_factor,
+            time_factor: self.time_factor,
         };
         screen.update_environment();
         Ok(screen)
+    }
+}
+
+impl LevelScreen {
+    /// Loads the new game's level at engine clock `now`: every stage of
+    /// [`NewGameLoad`] at once.
+    pub fn load(tree: &dyn Vfs, data: &GameData, now: u64) -> io::Result<Self> {
+        let mut load = NewGameLoad::default();
+        for stage in Stage::ALL {
+            load.run(stage, tree, data)?;
+        }
+        load.finish(now)
     }
 
     /// Places the free camera (tests and debugging).
@@ -506,6 +619,7 @@ fn touch_overlay(scene: &mut Scene) {
         uv_min: [0.0, 0.0],
         uv_max: [1.0, 1.0],
         color: mark,
+        corner_colors: None,
     };
     for (layer, r) in [
         ("touch back", layout.back),

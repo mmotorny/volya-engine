@@ -19,6 +19,7 @@ use volya_engine_formats::dds::build::{PixelFormat, file};
 use volya_engine_formats::text::font::UiFont;
 use volya_engine_formats::ui::Resolution;
 
+#[derive(Default)]
 pub struct MemVfs(HashMap<String, Vec<u8>>);
 
 struct MemFile(Cursor<Vec<u8>>);
@@ -107,7 +108,10 @@ const MOVIES: &str = r#"<intro_logo>
 </main_wnd></item>
 </intro_logo>"#;
 
-const STRINGS: [(&str, &str); 11] = [
+const STRINGS: [(&str, &str); 14] = [
+    ("st_prefetching_objects", "Кэширование объектов"),
+    ("st_server_starting", "Сервер: Старт"),
+    ("st_client_connecting_to", "Клиент: Соединение с"),
     ("ui_mm_newgame", "Новая игра"),
     ("ui_mm_load_game", "Загрузить игру"),
     ("ui_mm_multiplayer_n", "Сетевая игра"),
@@ -200,6 +204,13 @@ pub fn tree() -> MemVfs {
     add(&format!("{t}ui/ui_mainmenu.dds"), dds(1024, 1024));
     add(&format!("{t}ui/ui_asus_intro.dds"), dds(1024, 512));
     add(&format!("{t}intro/intro_back.dds"), dds(4, 4));
+    // The loading screen (loading-screen.md sections 4.1, 4.5).
+    add(&format!("{t}ui/ui_load.dds"), dds(1024, 1024));
+    add(&format!("{t}intro/intro_l00_fixture.dds"), dds(512, 256));
+    add(
+        &format!("{t}intro/intro_no_start_picture.dds"),
+        dds(512, 256),
+    );
     let mut seq = "19\r\n".to_owned();
     for i in 1..=8 {
         seq.push_str(&format!("ui\\ui_ani_cursor_{i:02}\r\n"));
@@ -264,6 +275,8 @@ pub struct FakeAudio {
     pub started: Vec<(Voice, String, Playback)>,
     pub playing: Vec<Voice>,
     pub next: Voice,
+    /// Every master gain set, in order.
+    pub master_gains: Vec<f32>,
 }
 
 impl FakeAudio {
@@ -288,5 +301,9 @@ impl AudioOut for FakeAudio {
 
     fn is_playing(&self, voice: Voice) -> bool {
         self.playing.contains(&voice)
+    }
+
+    fn set_master_gain(&mut self, gain: f32) {
+        self.master_gains.push(gain);
     }
 }

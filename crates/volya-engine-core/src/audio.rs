@@ -223,6 +223,8 @@ pub struct Mixer {
     voices: Vec<Voice>,
     next_id: u32,
     volumes: [f32; Category::COUNT],
+    /// The master (listener) gain over every category.
+    master: f32,
 }
 
 impl Mixer {
@@ -232,6 +234,7 @@ impl Mixer {
             voices: Vec::new(),
             next_id: 0,
             volumes: [1.0; Category::COUNT],
+            master: 1.0,
         }
     }
 
@@ -247,6 +250,16 @@ impl Mixer {
     /// Sets the volume of `category`, applying to its playing sounds too.
     pub fn set_volume(&mut self, category: Category, volume: f32) {
         self.volumes[category.index()] = volume;
+    }
+
+    /// The master (listener) gain (initially 1).
+    pub fn master_gain(&self) -> f32 {
+        self.master
+    }
+
+    /// Sets the master (listener) gain, scaling every sound, playing or not.
+    pub fn set_master_gain(&mut self, gain: f32) {
+        self.master = gain;
     }
 
     /// Starts playing `source`. Sounds started between two [`Mixer::mix`]
@@ -290,9 +303,9 @@ impl Mixer {
     /// sounds are removed.
     pub fn mix(&mut self, frames: usize) -> Vec<f32> {
         let mut out = vec![0.0; frames * 2];
-        let volumes = self.volumes;
+        let (volumes, master) = (self.volumes, self.master);
         self.voices
-            .retain_mut(|voice| voice.mix_into(&mut out, volumes[voice.category.index()]));
+            .retain_mut(|voice| voice.mix_into(&mut out, master * volumes[voice.category.index()]));
         for sample in &mut out {
             *sample = sample.clamp(-1.0, 1.0);
         }
@@ -413,6 +426,16 @@ mod tests {
         assert!(mixer.is_playing(id));
         mixer.stop(id);
         assert!(mixer.mix(3).iter().all(|&s| s == 0.0));
+    }
+
+    #[test]
+    fn master_gain_mutes_and_restores_playing_sounds() {
+        let mut mixer = Mixer::new(100);
+        mixer.play(ramp(100, 1, 10), Playback::default());
+        mixer.set_master_gain(0.0);
+        assert!(mixer.mix(3).iter().all(|&s| s == 0.0));
+        mixer.set_master_gain(1.0);
+        assert_eq!(mixer.mix(1)[0], 0.03, "kept playing while muted");
     }
 
     #[test]

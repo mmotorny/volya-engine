@@ -60,10 +60,22 @@ pub struct Sprite {
     /// Multiplies the texels (ARGB).
     #[serde(serialize_with = "argb")]
     pub color: Color,
+    /// Per-corner colours replacing `color`, in the order of `corners`,
+    /// interpolated across the quad.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "argb_corners"
+    )]
+    pub corner_colors: Option<[Color; 4]>,
 }
 
 fn argb<S: serde::Serializer>(c: &Color, s: S) -> Result<S::Ok, S::Error> {
     s.collect_seq([c.a, c.r, c.g, c.b])
+}
+
+fn argb_corners<S: serde::Serializer>(c: &Option<[Color; 4]>, s: S) -> Result<S::Ok, S::Error> {
+    let corners = c.unwrap_or([Color::NONE; 4]);
+    s.collect_seq(corners.map(|c| [c.a, c.r, c.g, c.b]))
 }
 
 impl Sprite {
@@ -81,6 +93,7 @@ impl Sprite {
             uv_min: [q.uv_min.0, q.uv_min.1],
             uv_max: [q.uv_max.0, q.uv_max.1],
             color: q.color,
+            corner_colors: None,
         }
     }
 
@@ -93,6 +106,7 @@ impl Sprite {
             uv_min: [q.uvs[0].0, q.uvs[0].1],
             uv_max: [q.uvs[2].0, q.uvs[2].1],
             color: q.color,
+            corner_colors: None,
         }
     }
 
@@ -119,6 +133,7 @@ impl Sprite {
             uv_min: [uv_min.0, uv_min.1],
             uv_max: [uv_max.0, uv_max.1],
             color: g.top_color,
+            corner_colors: None,
         }
     }
 

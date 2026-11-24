@@ -96,6 +96,9 @@ pub struct Quad {
     /// the order top-left, top-right, bottom-right, bottom-left of `source`
     /// (e.g. a rotated picture).
     pub corners: Option<[[f32; 2]; 4]>,
+    /// When set, a colour per corner (in the order of `corners`) instead of
+    /// `color`, interpolated across the quad.
+    pub corner_colors: Option<[[u8; 4]; 4]>,
 }
 
 impl Quad {
@@ -108,6 +111,7 @@ impl Quad {
             source: Rect::new(0.0, 0.0, width as f32, height as f32),
             color: [255; 4],
             corners: None,
+            corner_colors: None,
         }
     }
 }
@@ -392,18 +396,19 @@ impl Renderer {
             ]);
             // Two triangles: top-left, bottom-left, top-right; top-right,
             // bottom-left, bottom-right.
-            for ([x, y], u, v) in [
-                (tl, u0, v0),
-                (bl, u0, v1),
-                (tr, u1, v0),
-                (tr, u1, v0),
-                (bl, u0, v1),
-                (br, u1, v1),
+            let [ctl, ctr, cbr, cbl] = quad.corner_colors.unwrap_or([quad.color; 4]);
+            for ([x, y], u, v, color) in [
+                (tl, u0, v0, ctl),
+                (bl, u0, v1, cbl),
+                (tr, u1, v0, ctr),
+                (tr, u1, v0, ctr),
+                (bl, u0, v1, cbl),
+                (br, u1, v1, cbr),
             ] {
                 for value in [x, y, u, v] {
                     data.extend_from_slice(&value.to_le_bytes());
                 }
-                data.extend_from_slice(&quad.color);
+                data.extend_from_slice(&color);
             }
             let end = (i as u32 + 1) * VERTICES_PER_QUAD;
             match batches.last_mut() {
