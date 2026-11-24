@@ -1,80 +1,76 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Service worker: network-first for the app's own files, so online use always
-// gets the latest deploy and offline use gets the last copy seen (the whole
-// build is copied on install). GitHub Pages
-// controls HTTP caching, so requests revalidate (`cache: "no-cache"`).
+// Service worker: keeps the whole build for offline use and serves it, so a
+// page always runs one consistent version. The established precache pattern
+// (as in Workbox's injectManifest):
+//
+// - `cargo xtask web` injects the build's files with a hash of each one's
+//   content into PRECACHE, so this script changes exactly when the build
+//   does, and browsers install it anew then (they compare the script's bytes
+//   on navigation and on `registration.update()`).
+// - Install downloads only files whose hash changed or that aren't kept.
+// - A new worker waits until the page asks it to take over (the user taps
+//   Reload, update.js), so a running page never gets files of another
+//   version. Activation deletes copies of files that left the build.
+// - Kept files are served from the cache; anything else goes to the network.
+//
 // The cache name is namespaced: the github.io origin is shared
 // (docs/architecture.md).
 
 const CACHE = "volya-engine-app";
+/** `[path, content hash]` of every file of the build; `./` is the page. */
+const PRECACHE = [/* injected by cargo xtask web */];
+/** The PRECACHE of the copies kept, recorded when an install finishes. */
+const KEPT = "__precache.json";
 
-// Install keeps the whole build for offline use, even files the app hasn't
-// fetched yet. `files.txt` (written by `cargo xtask web`) lists each file after
-// a hash of its content; only files whose hash differs from the copy kept (or
-// that aren't kept) are downloaded. xtask stamps the build into this file so
-// every deploy installs anew.
-const MANIFEST = "files.txt";
-
-const parse = (text) =>
-  new Map(
-    text
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => {
-        const space = line.indexOf(" ");
-        return [line.slice(space + 1), line.slice(0, space)];
-      }),
-  );
+const scope = () => self.registration.scope;
+const absolute = (path) => new URL(path, scope()).href;
 
 self.addEventListener("install", (event) => {
-  self.skipWaiting();
   event.waitUntil(
     (async () => {
-      const response = await fetch(MANIFEST, { cache: "no-cache" });
-      if (!response.ok) return;
-      const text = await response.clone().text();
       const cache = await caches.open(CACHE);
-      const kept = await cache.match(MANIFEST);
-      const old = kept ? parse(await kept.text()) : new Map();
+      const record = await cache.match(absolute(KEPT));
+      const kept = new Map(record ? await record.json() : []);
       const changed = [];
-      for (const [file, hash] of parse(text)) {
-        if (old.get(file) !== hash || !(await cache.match(file))) changed.push(file);
+      for (const [path, hash] of PRECACHE) {
+        if (kept.get(path) !== hash || !(await cache.match(absolute(path)))) changed.push(path);
       }
-      await cache.addAll(changed.map((file) => new Request(file, { cache: "no-cache" })));
+      await cache.addAll(changed.map((path) => new Request(absolute(path), { cache: "no-cache" })));
       // Recorded last: an interrupted install downloads the rest next time.
-      await cache.put(MANIFEST, response);
-    })().catch((error) => console.warn(`offline copy: ${error.message}`)),
+      await cache.put(absolute(KEPT), new Response(JSON.stringify(PRECACHE)));
+    })(),
   );
 });
 
-self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "take-over") self.skipWaiting();
+});
+
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
+    (async () => {
+      const cache = await caches.open(CACHE);
+      const wanted = new Set([...PRECACHE.map(([path]) => absolute(path)), absolute(KEPT)]);
+      for (const request of await cache.keys()) {
+        if (!wanted.has(request.url)) await cache.delete(request);
+      }
+      // A first install controls the open page at once (it has no version to
+      // conflict with); an update only activates when the page asked for it.
+      await self.clients.claim();
+    })(),
+  );
+});
 
 self.addEventListener("fetch", (event) => {
   const request = event.request;
+  if (request.method !== "GET") return;
   const url = new URL(request.url);
-  const scope = new URL(self.registration.scope);
-  if (
-    request.method !== "GET" ||
-    url.origin !== scope.origin ||
-    !url.pathname.startsWith(scope.pathname) ||
-    url.pathname.startsWith(`${scope.pathname}__test/`)
-  ) {
-    return;
-  }
+  url.search = "";
+  url.hash = "";
+  if (!PRECACHE.some(([path]) => absolute(path) === url.href)) return;
   event.respondWith(
-    (async () => {
-      const cache = await caches.open(CACHE);
-      try {
-        const response = await fetch(request, { cache: "no-cache" });
-        if (response.ok) await cache.put(request, response.clone());
-        return response;
-      } catch (error) {
-        const cached = await cache.match(request, { ignoreSearch: true });
-        if (cached) return cached;
-        throw error;
-      }
-    })(),
+    (async () => (await (await caches.open(CACHE)).match(url.href)) ?? fetch(request))(),
   );
 });

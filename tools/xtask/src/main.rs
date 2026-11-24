@@ -204,13 +204,6 @@ fn web(profile: Profile) -> Result {
         fs::remove_dir_all(&dist).map_err(|e| format!("remove dist: {e}"))?;
     }
     copy_dir(&root().join("platforms/web/static"), &dist).map_err(|e| format!("copy web: {e}"))?;
-    // The build's identity, for the page's update check (static/update.js).
-    let build = output(&mut cmd("git", &["rev-parse", "--short", "HEAD"]))?;
-    let dirty = !output(&mut cmd("git", &["status", "--porcelain"]))?
-        .trim()
-        .is_empty();
-    let build = format!("{}{}\n", build.trim(), if dirty { "+" } else { "" });
-    fs::write(dist.join("build.txt"), &build).map_err(|e| format!("build.txt: {e}"))?;
     let wasm = format!("target/{WASM_TARGET}/{dir}/volya_engine_web.wasm");
     run(&mut cmd(
         &wasm_bindgen.to_string_lossy(),
@@ -223,36 +216,54 @@ fn web(profile: Profile) -> Result {
             &wasm,
         ],
     ))?;
-    offline_files(&dist, build.trim())
+    inject_build(&dist)
 }
 
-/// Lets the service worker keep a whole build for offline use: `files.txt`
-/// lists every file (with `./` for the page itself) after a hash of its
-/// content, so an update downloads only files that changed; the build stamped
-/// into `sw.js` makes each deploy install anew (static/sw.js).
-fn offline_files(dist: &Path, build: &str) -> Result {
+/// Injects what the page and its service worker need to know about this
+/// build: the commit into `update.js` (`BUILD`, shown on the page), and every
+/// file with a hash of its content into `sw.js` (`PRECACHE`; static/sw.js).
+fn inject_build(dist: &Path) -> Result {
     use sha2::{Digest, Sha256};
-    let sw = dist.join("sw.js");
-    let script = fs::read_to_string(&sw).map_err(|e| format!("sw.js: {e}"))?;
-    fs::write(&sw, format!("{script}// build {build}\n")).map_err(|e| format!("sw.js: {e}"))?;
+    let commit = output(&mut cmd("git", &["rev-parse", "--short", "HEAD"]))?;
+    let dirty = !output(&mut cmd("git", &["status", "--porcelain"]))?
+        .trim()
+        .is_empty();
+    let commit = format!("{}{}", commit.trim(), if dirty { "+" } else { "" });
+    replace_once(
+        &dist.join("update.js"),
+        r#"export const BUILD = "dev";"#,
+        &format!(r#"export const BUILD = "{commit}";"#),
+    )?;
     let mut files = Vec::new();
     list_files(dist, dist, &mut files).map_err(|e| format!("list dist: {e}"))?;
-    files.retain(|f| f != "files.txt");
-    let hash = |file: &str| -> Result<String> {
-        let bytes = fs::read(dist.join(file)).map_err(|e| format!("{file}: {e}"))?;
-        let digest = Sha256::digest(&bytes);
-        Ok(digest[..8].iter().map(|b| format!("{b:02x}")).collect())
-    };
-    let mut lines = Vec::new();
+    files.retain(|f| f != "sw.js");
+    files.sort();
+    let mut entries = Vec::new();
     for file in &files {
-        lines.push(format!("{} {file}", hash(file)?));
+        let bytes = fs::read(dist.join(file)).map_err(|e| format!("{file}: {e}"))?;
+        let hash: String = Sha256::digest(&bytes)[..8]
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        entries.push(format!(r#"["{file}","{hash}"]"#));
         if file == "index.html" {
-            lines.push(format!("{} ./", hash(file)?));
+            entries.push(format!(r#"["./","{hash}"]"#));
         }
     }
-    lines.sort_by(|a, b| a[17..].cmp(&b[17..]));
-    fs::write(dist.join("files.txt"), lines.join("\n") + "\n")
-        .map_err(|e| format!("files.txt: {e}"))
+    replace_once(
+        &dist.join("sw.js"),
+        "const PRECACHE = [/* injected by cargo xtask web */];",
+        &format!("const PRECACHE = [{}];", entries.join(",")),
+    )
+}
+
+/// Replaces the one occurrence of `from` in the file at `path`.
+fn replace_once(path: &Path, from: &str, to: &str) -> Result {
+    let text = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if text.matches(from).count() != 1 {
+        return Err(format!("{}: expected one {from:?}", path.display()));
+    }
+    fs::write(path, text.replacen(from, to, 1)).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 fn list_files(root: &Path, dir: &Path, files: &mut Vec<String>) -> io::Result<()> {

@@ -60,6 +60,15 @@ function failedResources() {
 /** Runs `suite` against the app. Entry point of every suite page. */
 export async function runPage(suite) {
   captureErrors();
+  // Each run tests the build being served: a service worker left by an
+  // earlier run would serve its own build's copies (sw.js is cache-first, and
+  // a new build waits until asked). Drop it and its copies, then start over.
+  if (navigator.serviceWorker?.controller) {
+    for (const registration of await navigator.serviceWorker.getRegistrations()) await registration.unregister();
+    for (const key of await caches.keys()) if (key.startsWith("volya-engine")) await caches.delete(key);
+    location.reload();
+    return;
+  }
   const path = location.pathname;
   const base = path.slice(0, path.indexOf("/__test/") + 1);
   const runId = path.match(/\/__test\/run\/([^/]+)\//)?.[1] ?? "manual";
