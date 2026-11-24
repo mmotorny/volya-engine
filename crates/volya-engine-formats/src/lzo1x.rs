@@ -58,7 +58,8 @@ impl Input<'_> {
         }
     }
 
-    fn literals(&mut self, out: &mut Vec<u8>, count: usize) -> io::Result<()> {
+    fn literals(&mut self, out: &mut Vec<u8>, count: usize, limit: usize) -> io::Result<()> {
+        grow(out, count, limit)?;
         let bytes = self
             .data
             .get(self.at..self.at + count)
@@ -69,8 +70,19 @@ impl Input<'_> {
     }
 }
 
+/// Fails if `count` more bytes would take the output past `limit`.
+fn grow(out: &[u8], count: usize, limit: usize) -> io::Result<()> {
+    if count > limit - out.len() {
+        return Err(invalid(format!(
+            "output exceeds the expected {limit} bytes"
+        )));
+    }
+    Ok(())
+}
+
 /// Copies a match byte by byte, so that it may overlap its own output.
-fn copy_match(out: &mut Vec<u8>, distance: usize, length: usize) -> io::Result<()> {
+fn copy_match(out: &mut Vec<u8>, distance: usize, length: usize, limit: usize) -> io::Result<()> {
+    grow(out, length, limit)?;
     if distance > out.len() {
         return Err(invalid(format!(
             "match distance {distance} before the start of the output ({} bytes)",
@@ -84,14 +96,19 @@ fn copy_match(out: &mut Vec<u8>, distance: usize, length: usize) -> io::Result<(
     Ok(())
 }
 
-/// Decompresses one stream up to its end marker. `capacity` is a size hint
-/// for the output. Bytes after the end marker are ignored (our choice).
-pub fn decompress(stream: &[u8], capacity: usize) -> io::Result<Vec<u8>> {
+/// Most output reserved up front; more grows as the stream proves it (our
+/// choice: an untrusted length must not allocate by itself).
+const MAX_RESERVE: usize = 16 << 20;
+
+/// Decompresses one stream up to its end marker into at most `limit` bytes:
+/// output beyond `limit` is an error. Bytes after the end marker are ignored
+/// (our choice).
+pub fn decompress(stream: &[u8], limit: usize) -> io::Result<Vec<u8>> {
     let mut input = Input {
         data: stream,
         at: 0,
     };
-    let mut out = Vec::with_capacity(capacity);
+    let mut out = Vec::with_capacity(limit.min(MAX_RESERVE));
     // `state` is S: literals copied by the previous instruction, 4 for a
     // literal run of 4 or more.
     let mut state = 0;
@@ -100,7 +117,7 @@ pub fn decompress(stream: &[u8], capacity: usize) -> io::Result<Vec<u8>> {
     {
         input.at = 1;
         let count = usize::from(first - 17);
-        input.literals(&mut out, count)?;
+        input.literals(&mut out, count, limit)?;
         state = count.min(4);
     }
     loop {
@@ -122,7 +139,7 @@ pub fn decompress(stream: &[u8], capacity: usize) -> io::Result<Vec<u8>> {
             (16384 + h, length, d & 3)
         } else if state == 0 {
             let count = input.length(t, 15)? + 3;
-            input.literals(&mut out, count)?;
+            input.literals(&mut out, count, limit)?;
             state = 4;
             continue;
         } else if state < 4 {
@@ -132,8 +149,8 @@ pub fn decompress(stream: &[u8], capacity: usize) -> io::Result<Vec<u8>> {
             let b = usize::from(input.byte()?);
             ((t >> 2) + 4 * b + 2049, 3, t & 3)
         };
-        copy_match(&mut out, distance, length)?;
-        input.literals(&mut out, trailing)?;
+        copy_match(&mut out, distance, length, limit)?;
+        input.literals(&mut out, trailing, limit)?;
         state = trailing;
     }
 }
@@ -309,10 +326,10 @@ mod tests {
         let mut expected = b"S.T.A.L.K.E.R. ".repeat(8);
         expected.extend(0..0x40u8);
         expected.extend(b"all".repeat(20));
-        let out = decompress(&stream, 0).unwrap();
+        let out = decompress(&stream, 244).unwrap();
         assert_eq!(out.len(), 244);
         assert_eq!(out, expected);
-        assert_eq!(decompress(&compress(&expected), 0).unwrap(), expected);
+        assert_eq!(decompress(&compress(&expected), 244).unwrap(), expected);
     }
 
     #[test]
@@ -400,9 +417,18 @@ mod tests {
     fn rejects_broken_streams() {
         let packed = compress(&b"S.T.A.L.K.E.R. ".repeat(40));
         for cut in 0..packed.len() {
-            assert!(decompress(&packed[..cut], 0).is_err(), "cut at {cut}");
+            assert!(decompress(&packed[..cut], 600).is_err(), "cut at {cut}");
         }
         // A match before the start of the output.
-        assert!(decompress(&[0x12, 0x61, 0x40, 0x01, 0x11, 0, 0], 0).is_err());
+        assert!(decompress(&[0x12, 0x61, 0x40, 0x01, 0x11, 0, 0], 10).is_err());
+        // Output past the limit, by literals and by a match.
+        let packed = compress(&[5; 1000]);
+        assert_eq!(decompress(&packed, 1000).unwrap().len(), 1000);
+        assert!(decompress(&packed, 999).is_err());
+        assert!(decompress(&compress(b"S.T.A.L.K.E.R."), 13).is_err());
+        // A huge declared length reserves only what the stream fills.
+        let out = decompress(&packed, usize::MAX).unwrap();
+        assert_eq!(out.len(), 1000);
+        assert!(out.capacity() <= MAX_RESERVE);
     }
 }

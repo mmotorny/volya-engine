@@ -32,12 +32,28 @@ pub struct JobOnline {
 /// Job-online mode followed by a condition list.
 const JOB_ONLINE_CONDITION_LIST: u8 = 3;
 
+/// Which of the fields of [`CharacterScript`] a record has: job online,
+/// was in a smart terrain, death items dropped (section 7.5). `stalker`: the
+/// stalker's script-version thresholds (3, 5, 6), else the monster's (4, 5,
+/// no last field).
+fn character_fields(cx: &Context, stalker: bool) -> [bool; 3] {
+    let v = cx.script_version;
+    [v >= if stalker { 3 } else { 4 }, v >= 5, stalker && v >= 6]
+}
+
+/// Whether the class id has the scripted stalker or monster additions.
+fn has_character_script(cx: &Context, stalker: bool) -> bool {
+    if stalker {
+        cx.class_id == "AI_STL_S"
+    } else {
+        cx.class_id.starts_with("SM_")
+    }
+}
+
 impl CharacterScript {
-    /// `stalker`: the stalker's script-version thresholds (3, 5, 6), else the
-    /// monster's (4, 5, no last field).
     fn read(r: &mut Reader, cx: &Context, stalker: bool) -> io::Result<Self> {
-        let v = cx.script_version;
-        let job_online = if v >= if stalker { 3 } else { 4 } {
+        let [job, smart, death] = character_fields(cx, stalker);
+        let job_online = if job {
             let mode = r.u8()?;
             let condition_list = if mode == JOB_ONLINE_CONDITION_LIST {
                 Some(r.string()?)
@@ -51,12 +67,8 @@ impl CharacterScript {
         } else {
             None
         };
-        let was_in_smart_terrain = if v >= 5 { Some(r.bool8()?) } else { None };
-        let death_items_dropped = if stalker && v >= 6 {
-            Some(r.bool8()?)
-        } else {
-            None
-        };
+        let was_in_smart_terrain = if smart { Some(r.bool8()?) } else { None };
+        let death_items_dropped = if death { Some(r.bool8()?) } else { None };
         Ok(Self {
             job_online,
             was_in_smart_terrain,
@@ -64,7 +76,41 @@ impl CharacterScript {
         })
     }
 
+    /// The fields present must be those the record's class id and script
+    /// version call for.
+    fn check(script: &Option<Self>, cx: &Context, stalker: bool) -> io::Result<()> {
+        let expected = has_character_script(cx, stalker);
+        match script {
+            None if !expected => Ok(()),
+            Some(s) if expected => {
+                let present = [
+                    s.job_online.is_some(),
+                    s.was_in_smart_terrain.is_some(),
+                    s.death_items_dropped.is_some(),
+                ];
+                if present == character_fields(cx, stalker) {
+                    Ok(())
+                } else {
+                    Err(invalid(format!(
+                        "scripted fields {present:?} do not match script version {}",
+                        cx.script_version
+                    )))
+                }
+            }
+            _ => Err(invalid(format!(
+                "scripted additions {} for this class id",
+                if expected { "missing" } else { "not expected" }
+            ))),
+        }
+    }
+
     fn write(&self, w: &mut Writer) -> io::Result<()> {
+        // A later field is read only after the earlier ones.
+        if (self.was_in_smart_terrain.is_some() && self.job_online.is_none())
+            || (self.death_items_dropped.is_some() && self.was_in_smart_terrain.is_none())
+        {
+            return Err(invalid("a scripted field without the fields before it"));
+        }
         if let Some(j) = &self.job_online {
             w.u8(j.mode);
             if (j.mode == JOB_ONLINE_CONDITION_LIST) != j.condition_list.is_some() {
@@ -118,8 +164,23 @@ impl ArtefactSpawnScript {
     }
 }
 
+/// Whether the record has the `ZS_*` addition.
+fn has_artefact_spawn(cx: &Context) -> bool {
+    cx.single_player && cx.class_id.starts_with("ZS_")
+}
+
+fn check_artefact_spawn(script: &Option<ArtefactSpawnScript>, cx: &Context) -> io::Result<()> {
+    if script.is_some() == has_artefact_spawn(cx) {
+        Ok(())
+    } else {
+        Err(invalid(
+            "the artefact-spawn addition disagrees with the class id or single-player",
+        ))
+    }
+}
+
 fn artefact_spawn(r: &mut Reader, cx: &Context) -> io::Result<Option<ArtefactSpawnScript>> {
-    if cx.single_player && cx.class_id.starts_with("ZS_") {
+    if has_artefact_spawn(cx) {
         ArtefactSpawnScript::read(r).map(Some)
     } else {
         Ok(None)
@@ -306,7 +367,7 @@ impl Stalker {
             equipment_preferences: bytes_list(s)?,
             main_weapon_preferences: bytes_list(s)?,
             skeleton: Skeleton::read(s)?,
-            script: if cx.class_id == "AI_STL_S" {
+            script: if has_character_script(cx, true) {
                 Some(CharacterScript::read(s, cx, true)?)
             } else {
                 None
@@ -709,6 +770,9 @@ pub struct MonsterGroup {
     pub update_flag: u32,
 }
 
+const SMART_TERRAIN: &str = "SMRTTRRN";
+const RESPAWN: &str = "RE_SPAWN";
+
 /// The state and update of an object, by kind.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Object {
@@ -768,7 +832,7 @@ impl Object {
             }),
             Kind::Monster => Self::Monster(Monster {
                 state: MonsterState::read(s)?,
-                script: if cx.class_id.starts_with("SM_") {
+                script: if has_character_script(cx, false) {
                     Some(CharacterScript::read(s, cx, false)?)
                 } else {
                     None
@@ -883,8 +947,8 @@ impl Object {
             Kind::SmartZone => Self::SmartZone(SmartZone {
                 restrictor: Restrictor::read(s)?,
                 script: match cx.class_id {
-                    "SMRTTRRN" => SmartZoneScript::SmartTerrain(SmartTerrain::read(s)?),
-                    "RE_SPAWN" => {
+                    SMART_TERRAIN => SmartZoneScript::SmartTerrain(SmartTerrain::read(s)?),
+                    RESPAWN => {
                         let count = s.u8()?;
                         SmartZoneScript::Respawn(
                             (0..count).map(|_| s.u16()).collect::<io::Result<_>>()?,
@@ -1160,6 +1224,12 @@ impl Object {
                 write_ids(s, &o.member_ids)?;
             }
             Self::MonsterGroup(o) => {
+                if o.update_flag != o.flag {
+                    return Err(invalid(format!(
+                        "monster group update flag {} differs from its state flag {}",
+                        o.update_flag, o.flag
+                    )));
+                }
                 o.state.write(s)?;
                 s.u32(o.flag);
                 s.u16(o.unestablished);
@@ -1169,6 +1239,72 @@ impl Object {
             }
         }
         Ok(())
+    }
+
+    /// The kind this variant is.
+    pub fn kind(&self) -> Kind {
+        match self {
+            Self::Player(_) => Kind::Player,
+            Self::Stalker(_) => Kind::Stalker,
+            Self::Trader(_) => Kind::Trader,
+            Self::Monster(_) => Kind::Monster,
+            Self::CrowOrPhantom(_) => Kind::CrowOrPhantom,
+            Self::Vehicle(_) => Kind::Vehicle,
+            Self::Helicopter(_) => Kind::Helicopter,
+            Self::Item(_) => Kind::Item,
+            Self::Torch(_) => Kind::Torch,
+            Self::Pda(_) => Kind::Pda,
+            Self::Document(_) => Kind::Document,
+            Self::Outfit(_) => Kind::Outfit,
+            Self::Ammunition(_) => Kind::Ammunition,
+            Self::Knife(_) => Kind::Knife,
+            Self::MagazineWeapon(_) => Kind::MagazineWeapon,
+            Self::WeaponWithGrenadeLauncher(_) => Kind::WeaponWithGrenadeLauncher,
+            Self::Shotgun(_) => Kind::Shotgun,
+            Self::Zone(_) => Kind::Zone,
+            Self::Anomaly(_) => Kind::Anomaly,
+            Self::VisualAnomaly(_) => Kind::VisualAnomaly,
+            Self::TorridZone(_) => Kind::TorridZone,
+            Self::LevelChanger(_) => Kind::LevelChanger,
+            Self::Restrictor(_) => Kind::Restrictor,
+            Self::SmartZone(_) => Kind::SmartZone,
+            Self::TeamBase(_) => Kind::TeamBase,
+            Self::PlainVisual(_) => Kind::PlainVisual,
+            Self::StationaryGun(_) => Kind::StationaryGun,
+            Self::HangingLamp(_) => Kind::HangingLamp,
+            Self::PhysicsObject(_) => Kind::PhysicsObject,
+            Self::Breakable(_) => Kind::Breakable,
+            Self::Climbable(_) => Kind::Climbable,
+            Self::SkeletonObject(_) => Kind::SkeletonObject,
+            Self::OnOffGroup(_) => Kind::OnOffGroup,
+            Self::MonsterGroup(_) => Kind::MonsterGroup,
+        }
+    }
+
+    /// Checks the scripted additions (section 7.5) against what the class
+    /// id, script version and single-player flag of `cx` call for, so that a
+    /// written record reads back.
+    pub(super) fn check(&self, cx: &Context) -> io::Result<()> {
+        match self {
+            Self::Stalker(o) => CharacterScript::check(&o.script, cx, true),
+            Self::Monster(o) => CharacterScript::check(&o.script, cx, false),
+            Self::Anomaly(o) => check_artefact_spawn(&o.script, cx),
+            Self::VisualAnomaly(o) => check_artefact_spawn(&o.script, cx),
+            Self::SmartZone(o) => {
+                let ok = matches!(
+                    (cx.class_id, &o.script),
+                    (SMART_TERRAIN, SmartZoneScript::SmartTerrain(_))
+                        | (RESPAWN, SmartZoneScript::Respawn(_))
+                ) || (!matches!(cx.class_id, SMART_TERRAIN | RESPAWN)
+                    && o.script == SmartZoneScript::None);
+                if ok {
+                    Ok(())
+                } else {
+                    Err(invalid("smart-zone additions disagree with the class id"))
+                }
+            }
+            _ => Ok(()),
+        }
     }
 
     /// The Object block every kind starts with.

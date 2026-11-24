@@ -198,6 +198,31 @@ impl Kind {
     }
 }
 
+/// A class id with its kind: valid by construction (an id of section 7.4.2).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClassId {
+    id: String,
+    kind: Kind,
+}
+
+impl ClassId {
+    /// Fails as [`Kind::from_class_id`] does.
+    pub fn new(id: &str) -> io::Result<Self> {
+        Ok(Self {
+            id: id.to_owned(),
+            kind: Kind::from_class_id(id)?,
+        })
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.id
+    }
+
+    pub fn kind(&self) -> Kind {
+        self.kind
+    }
+}
+
 /// What a record's layout depends on besides its bytes.
 #[derive(Clone, Copy, Debug)]
 pub struct Context<'a> {
@@ -254,8 +279,12 @@ fn message(r: &mut Reader, expected: u16, what: &str) -> io::Result<()> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ObjectRecord {
     pub header: SpawnHeader,
-    /// The class id the record was read with; decides how it is saved.
-    pub class_id: String,
+    /// The class id the record was read with; decides its layout and how it
+    /// is saved.
+    pub class_id: ClassId,
+    /// Whether it was read for a single-player game (decides the `ZS_*`
+    /// additions, section 7.5).
+    pub single_player: bool,
     pub object: Object,
 }
 
@@ -269,7 +298,7 @@ impl ObjectRecord {
         class_id: &str,
         single_player: bool,
     ) -> io::Result<Self> {
-        let kind = Kind::from_class_id(class_id)?;
+        let class = ClassId::new(class_id)?;
         let mut r = Reader::new(spawn);
         message(&mut r, SPAWN_MESSAGE, "spawn")?;
         let section = r.string()?;
@@ -299,7 +328,7 @@ impl ObjectRecord {
         // kind here: only the spectator, not a simulation object, may be).
         if size <= 2 {
             return Err(invalid(format!(
-                "{name}: data size {size}: not successfully saved"
+                "{name}: cannot read object, which is not successfully saved :("
             )));
         }
         let mut state = Reader::new(r.take(size - 2)?);
@@ -311,7 +340,7 @@ impl ObjectRecord {
             script_version,
             single_player,
         };
-        let object = Object::read(kind, &mut state, &mut u, &cx)
+        let object = Object::read(class.kind(), &mut state, &mut u, &cx)
             .map_err(|e| invalid(format!("{name} ({class_id}): {e}")))?;
         state.finish(&format!("{name} ({class_id}): object state"))?;
         u.finish(&format!("{name} ({class_id}): update packet"))?;
@@ -333,13 +362,17 @@ impl ObjectRecord {
                 client_data,
                 spawn_id,
             },
-            class_id: class_id.to_owned(),
+            class_id: class,
+            single_player,
             object,
         })
     }
 
     /// Writes the spawn packet and the update packet (each without its `u16`
-    /// length), field by field as read.
+    /// length), field by field as read. Fails on a record [`Self::parse`]
+    /// could not read back: an object of another kind than the class id's,
+    /// or scripted additions the class id, script version and single-player
+    /// flag do not call for.
     pub fn write(&self) -> io::Result<(Vec<u8>, Vec<u8>)> {
         let h = &self.header;
         if h.flags & FLAG_VERSION == 0 || h.version != VERSION {
@@ -348,13 +381,33 @@ impl ObjectRecord {
                 h.name
             )));
         }
+        let class_id = self.class_id.as_str();
+        if self.object.kind() != self.class_id.kind() {
+            return Err(invalid(format!(
+                "{}: a {} object under class id {class_id} ({})",
+                h.name,
+                self.object.kind().name(),
+                self.class_id.kind().name()
+            )));
+        }
+        let cx = Context {
+            class_id,
+            script_version: h.script_version,
+            single_player: self.single_player,
+        };
+        self.object
+            .check(&cx)
+            .map_err(|e| invalid(format!("{} ({class_id}): {e}", h.name)))?;
         let mut state = Writer::new();
         let mut update = Writer::new();
         update.u16(UPDATE_MESSAGE);
         self.object.write(&mut state, &mut update)?;
         let state = state.into_inner();
         if state.is_empty() {
-            return Err(invalid(format!("{}: empty object state", h.name)));
+            return Err(invalid(format!(
+                "{}: object isn't successfully saved, get your backup :(",
+                h.name
+            )));
         }
         let mut w = Writer::new();
         w.u16(SPAWN_MESSAGE);
@@ -384,7 +437,7 @@ impl ObjectRecord {
     }
 
     pub fn kind(&self) -> Kind {
-        Kind::from_class_id(&self.class_id).expect("parsed with this class id")
+        self.class_id.kind()
     }
 
     /// Whether the object "can be saved" (section 7.1).

@@ -244,7 +244,14 @@ impl Skeleton {
         })
     }
 
+    /// Writes the block; flags bit 0x04 must agree with `bone_state`.
     pub fn write(&self, w: &mut Writer) -> io::Result<()> {
+        if (self.flags & SKELETON_BONE_STATE != 0) != self.bone_state.is_some() {
+            return Err(invalid(format!(
+                "skeleton flags {:#x} disagree with its bone state",
+                self.flags
+            )));
+        }
         w.string(&self.startup_animation)?;
         w.u8(self.flags);
         w.u16(self.source_id);

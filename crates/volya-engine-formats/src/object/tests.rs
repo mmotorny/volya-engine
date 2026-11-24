@@ -426,3 +426,119 @@ fn rejects_invalid_records() {
     let medkit = round_trip("II_MEDKI", &spawn("medkit", 6, &item), &update(&[0]), true);
     assert!(medkit.can_be_saved());
 }
+
+/// Writes a record and parses it back to the same record.
+fn round_trip_record(r: &ObjectRecord) {
+    let (s, u) = r.write().unwrap();
+    let back = ObjectRecord::parse(&s, &u, r.class_id.as_str(), r.single_player).unwrap();
+    assert_eq!(&back, r);
+}
+
+#[test]
+fn writer_rejects_records_no_reader_can_parse() {
+    let fails = |r: &ObjectRecord| r.write().is_err();
+    // Another kind than the class id's.
+    let state = bytes(|w| {
+        object_block(w);
+        visual(w);
+    });
+    let mut r = round_trip("O_INVBOX", &spawn("box", 6, &state), &update(&[]), true);
+    r.class_id = ClassId::new("O_BRKBL").unwrap();
+    assert!(fails(&r));
+    assert!(ClassId::new("SPECT").is_err());
+
+    // Scripted stalker additions against class id and script version.
+    let engine = bytes(|w| {
+        trader_like(w);
+        monster_like(w);
+        w.list(&[0u8; 5], |w, &v| w.u8(v)).unwrap();
+        w.list(&[0u8; 4], |w, &v| w.u8(v)).unwrap();
+        skeleton(w);
+    });
+    let upd = update(&bytes(|w| {
+        monster_update(w);
+        w.string("").unwrap();
+    }));
+    let stalker = round_trip(
+        "AI_STL_S",
+        &spawn("stalker", 7, &[&engine[..], &[0, 1, 0]].concat()),
+        &upd,
+        true,
+    );
+    let mut r = stalker.clone();
+    r.header.script_version = 4;
+    assert!(fails(&r));
+    let mut r = stalker.clone();
+    r.class_id = ClassId::new("AI_STL").unwrap();
+    assert!(fails(&r));
+    // A later field without the earlier ones.
+    let mut r = stalker.clone();
+    let Object::Stalker(s) = &mut r.object else {
+        panic!()
+    };
+    s.script.as_mut().unwrap().job_online = None;
+    assert!(fails(&r));
+    // Script version 2 has no scripted fields, but the class still has the
+    // (empty) addition.
+    let mut r = stalker.clone();
+    r.header.script_version = 2;
+    let Object::Stalker(s) = &mut r.object else {
+        panic!()
+    };
+    s.script = Some(CharacterScript {
+        job_online: None,
+        was_in_smart_terrain: None,
+        death_items_dropped: None,
+    });
+    round_trip_record(&r);
+    // Skeleton bit 0x04 without bone state.
+    let mut r = stalker.clone();
+    let Object::Stalker(s) = &mut r.object else {
+        panic!()
+    };
+    s.skeleton.flags |= SKELETON_BONE_STATE;
+    assert!(fails(&r));
+
+    // ZS_ addition against single-player, smart zones against class id.
+    let anomaly = bytes(|w| {
+        object_block(w);
+        write_shapes(w, &[]).unwrap();
+        w.bytes(&[0; 1 + 4 * 5 + 4 + 2 + 4]);
+    });
+    let zs = spawn("zone", 6, &[&anomaly[..], &[0]].concat());
+    let mut r = round_trip("ZS_MBALD", &zs, &update(&[]), true);
+    r.single_player = false;
+    assert!(fails(&r));
+    let restrictor = bytes(|w| {
+        object_block(w);
+        write_shapes(w, &[]).unwrap();
+        w.u8(0);
+    });
+    let smart = spawn("smart", 6, &[&restrictor[..], &[0, 0, 0]].concat());
+    let mut r = round_trip("SMRTTRRN", &smart, &update(&[]), true);
+    r.class_id = ClassId::new("SMRTZONE").unwrap();
+    assert!(fails(&r));
+    r.class_id = ClassId::new("RE_SPAWN").unwrap();
+    assert!(fails(&r));
+
+    // The monster group's update flag repeats its state flag.
+    let monster = bytes(|w| {
+        monster_like(w);
+        skeleton(w);
+        w.u16(0xFFFF);
+    });
+    let group = [
+        &monster[..],
+        &1u32.to_le_bytes(),
+        &[0, 0],
+        &0u32.to_le_bytes(),
+    ]
+    .concat();
+    let upd = [update(&bytes(monster_update)), 1u32.to_le_bytes().to_vec()].concat();
+    let mut r = round_trip("AI_FLE_G", &spawn("flesh_group", 6, &group), &upd, true);
+    let Object::MonsterGroup(g) = &mut r.object else {
+        panic!()
+    };
+    g.update_flag = 0;
+    assert!(fails(&r));
+}

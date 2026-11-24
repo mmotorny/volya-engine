@@ -79,7 +79,8 @@ pub struct GameTime {
     pub normal_time_factor: f32,
 }
 
-/// Game time of a calendar date (section 12, the game's formula).
+/// Game time of a calendar date (section 12, the game's formula). Fails on
+/// a date or time out of range, or a result beyond `u64`.
 pub fn game_time(
     year: u32,
     month: u32,
@@ -88,17 +89,35 @@ pub fn game_time(
     minute: u32,
     second: u32,
     millisecond: u32,
-) -> u64 {
+) -> io::Result<u64> {
     const MONTH_DAYS: [u64; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
     let y = u64::from(year);
     let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
-    let months: u64 = (1..month as usize)
-        .map(|m| MONTH_DAYS[m - 1] + u64::from(m == 2 && leap))
-        .sum();
+    let month_days = |m: usize| MONTH_DAYS[m - 1] + u64::from(m == 2 && leap);
+    let bad = || {
+        invalid(format!(
+            "game time of {day:02}.{month:02}.{year} \
+             {hour:02}:{minute:02}:{second:02}.{millisecond:03} is out of range"
+        ))
+    };
+    if year == 0
+        || !(1..=12).contains(&month)
+        || day == 0
+        || u64::from(day) > month_days(month as usize)
+        || hour >= 24
+        || minute >= 60
+        || second >= 60
+        || millisecond >= 1000
+    {
+        return Err(bad());
+    }
+    let months: u64 = (1..month as usize).map(month_days).sum();
     let days = (y - 1) * 365 + y / 4 - y / 100 + y / 400 + months + u64::from(day) - 1;
-    ((days * 24 + u64::from(hour)) * 60 + u64::from(minute)) * 60 * 1000
-        + u64::from(second) * 1000
-        + u64::from(millisecond)
+    let clock = ((u64::from(hour) * 60 + u64::from(minute)) * 60 + u64::from(second)) * 1000
+        + u64::from(millisecond);
+    days.checked_mul(24 * 60 * 60 * 1000)
+        .and_then(|ms| ms.checked_add(clock))
+        .ok_or_else(bad)
 }
 
 /// Chunk 1: the spawn binding (section 6).
@@ -133,10 +152,12 @@ impl SpawnBinding {
         let mut r = Reader::new(name.uncompressed()?);
         let spawn_name = r.string()?;
         let identifier = r.take(16)?.try_into().unwrap();
+        // Bytes after the identifier are rejected (our choice).
         r.finish("spawn binding name")?;
         // Sub-chunk 1 is not read by the game; we keep its ids. A missing one
         // reads as no spawn points, a non-empty chunk in it is rejected (our
-        // choices: only empty chunks round-trip as ids).
+        // choices: only empty chunks round-trip as ids); ids must increase
+        // (section 6).
         let spawn_points = match chunks.find(BINDING_POINTS_CHUNK) {
             None => Vec::new(),
             Some(points) => Chunks::parse(points.uncompressed()?)?
@@ -153,14 +174,28 @@ impl SpawnBinding {
                 })
                 .collect::<io::Result<_>>()?,
         };
-        Ok(Self {
+        let binding = Self {
             spawn_name,
             identifier,
             spawn_points,
-        })
+        };
+        binding.check_order()?;
+        Ok(binding)
+    }
+
+    /// Spawn-point ids in increasing order (section 6).
+    fn check_order(&self) -> io::Result<()> {
+        match self.spawn_points.windows(2).find(|w| w[0] >= w[1]) {
+            Some(w) => Err(invalid(format!(
+                "spawn points out of order: {} before {}",
+                w[0], w[1]
+            ))),
+            None => Ok(()),
+        }
     }
 
     pub fn write(&self) -> io::Result<Vec<u8>> {
+        self.check_order()?;
         let mut name = Writer::new();
         name.string(&self.spawn_name)?;
         name.bytes(&self.identifier);
@@ -266,6 +301,8 @@ impl Save {
         };
         let mut r = Reader::new(get(SIMULATION_HEADER_CHUNK)?);
         let simulation_version = r.u32()?;
+        // Here and in chunk 5, bytes after the fields are rejected (our
+        // choice).
         r.finish("simulation header")?;
         if simulation_version < 2 {
             return Err(invalid(
@@ -289,7 +326,15 @@ impl Save {
     }
 
     /// Writes the body: the five chunks in the game's order (section 3).
+    /// The records are written as given.
+    // TODO(#75): the save builder: select, order and number the records
+    // (sections 7.1 and 11.3).
     pub fn write_body(&self) -> io::Result<Vec<u8>> {
+        if self.registries.is_empty() {
+            return Err(invalid(
+                "registries chunk empty: a reader takes it as missing",
+            ));
+        }
         let mut time = Writer::new();
         time.u64(self.game_time.time);
         time.float(self.game_time.time_factor);
@@ -327,7 +372,7 @@ mod tests {
         Save {
             simulation_version: SIMULATION_VERSION,
             game_time: GameTime {
-                time: game_time(2012, 5, 1, 5, 30, 0, 0),
+                time: game_time(2012, 5, 1, 5, 30, 0, 0).unwrap(),
                 time_factor: 10.0,
                 normal_time_factor: 10.0,
             },
@@ -348,13 +393,29 @@ mod tests {
 
     #[test]
     fn new_game_time() {
-        let t = game_time(2012, 5, 1, 5, 30, 0, 0);
+        let t = game_time(2012, 5, 1, 5, 30, 0, 0).unwrap();
         assert_eq!(t, 63_471_533_400_000);
         assert_eq!(
             t.to_le_bytes(),
             [0xc0, 0x9f, 0x33, 0x1e, 0xba, 0x39, 0x00, 0x00]
         );
-        assert_eq!(game_time(1, 1, 1, 0, 0, 0, 1), 1);
+        assert_eq!(game_time(1, 1, 1, 0, 0, 0, 1).unwrap(), 1);
+        assert!(game_time(2012, 2, 29, 23, 59, 59, 999).is_ok());
+        for bad in [
+            (0, 1, 1, 0, 0, 0, 0),
+            (2011, 2, 29, 0, 0, 0, 0),
+            (2012, 13, 1, 0, 0, 0, 0),
+            (2012, 0, 1, 0, 0, 0, 0),
+            (2012, 1, 0, 0, 0, 0, 0),
+            (2012, 1, 1, 24, 0, 0, 0),
+            (2012, 1, 1, 0, 60, 0, 0),
+            (2012, 1, 1, 0, 0, 60, 0),
+            (2012, 1, 1, 0, 0, 0, 1000),
+            (u32::MAX, 12, 31, 23, 59, 59, 999),
+        ] {
+            let (y, mo, d, h, mi, s, ms) = bad;
+            assert!(game_time(y, mo, d, h, mi, s, ms).is_err(), "{bad:?}");
+        }
     }
 
     #[test]
@@ -411,11 +472,30 @@ mod tests {
         let last = chunks.find(9).unwrap().offset - 8;
         let err = Save::read_body(&body[..last]).unwrap_err();
         assert_eq!(err.to_string(), "Can't find chunk REGISTRY_CHUNK_DATA!");
-        // An empty chunk reads as missing.
+        // An empty chunk reads as missing, so it is not written.
+        let mut empty = body[..last].to_vec();
+        empty.extend([9, 0, 0, 0, 0, 0, 0, 0]);
+        let err = Save::read_body(&empty).unwrap_err();
+        assert_eq!(err.to_string(), "Can't find chunk REGISTRY_CHUNK_DATA!");
         let mut save = sample();
         save.registries.clear();
-        let err = Save::read_body(&save.write_body().unwrap()).unwrap_err();
-        assert_eq!(err.to_string(), "Can't find chunk REGISTRY_CHUNK_DATA!");
+        assert!(save.write_body().is_err());
+        // Spawn points out of order.
+        let mut save = sample();
+        save.spawn_binding.spawn_points = vec![0, 2, 1];
+        assert!(save.write_body().is_err());
+        let mut binding = sample().spawn_binding.write().unwrap()[..28].to_vec();
+        binding.extend(1u32.to_le_bytes());
+        binding.extend(16u32.to_le_bytes());
+        for id in [1u32, 0] {
+            binding.extend(id.to_le_bytes());
+            binding.extend([0; 4]);
+        }
+        assert!(SpawnBinding::read(&binding).is_err());
+        // A huge declared body length: an error, without reserving it.
+        let mut huge = file.clone();
+        huge[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(read_container(&huge).is_err());
         let mut save = sample();
         save.simulation_version = 1;
         assert!(Save::read_body(&save.write_body().unwrap()).is_err());

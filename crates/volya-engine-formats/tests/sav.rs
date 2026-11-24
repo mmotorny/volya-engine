@@ -160,7 +160,7 @@ fn object_records_and_saves_from_game_data() {
             assert_eq!(s.flags & (SKELETON_BONE_STATE | SKELETON_NOT_SAVED), 0);
         }
         assert!(record.can_be_saved(), "object {}", r.index);
-        assert_ne!(record.class_id, "II_BOLT");
+        assert_ne!(record.class_id.as_str(), "II_BOLT");
         match &record.object {
             Object::SmartZone(z) => {
                 if let SmartZoneScript::SmartTerrain(t) = &z.script {
@@ -201,6 +201,7 @@ fn object_records_and_saves_from_game_data() {
         start.elapsed()
     );
     assert_eq!(records.len(), 8_641);
+    // A regression value read from the data (not a fact of the spec).
     assert_eq!(scripted_anomalies, 764);
 
     use Kind::*;
@@ -291,7 +292,7 @@ fn object_records_and_saves_from_game_data() {
     let save = Save {
         simulation_version: SIMULATION_VERSION,
         game_time: GameTime {
-            time: game_time(2012, 5, 1, 5, 30, 0, 0),
+            time: game_time(2012, 5, 1, 5, 30, 0, 0).unwrap(),
             time_factor: 10.0,
             normal_time_factor: 10.0,
         },
