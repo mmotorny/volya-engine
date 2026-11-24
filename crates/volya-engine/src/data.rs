@@ -363,8 +363,9 @@ pub fn sound_length(tree: &dyn Vfs, path: &str) -> io::Result<f64> {
 /// The length in seconds of the video at `path`, counting its frames by
 /// decoding them.
 pub fn video_length(tree: &dyn Vfs, path: &str) -> io::Result<f64> {
-    let bytes = vfs::read(tree, path).map_err(|e| context(path, e))?;
-    let mut video = TheoraVideo::open(Cursor::new(bytes)).map_err(|e| context(path, e))?;
+    // Streamed from the file: videos can be large.
+    let file = tree.open(path).map_err(|e| context(path, e))?;
+    let mut video = TheoraVideo::open(file).map_err(|e| context(path, e))?;
     let info = video.info().clone();
     let mut frames = 0u64;
     while video.next_frame()?.is_some() {
@@ -507,8 +508,9 @@ impl Assets {
 
 /// Reads the headers of the video at `file`.
 pub fn video_meta(tree: &dyn Vfs, file: &str) -> io::Result<VideoMeta> {
-    let bytes = vfs::read(tree, file).map_err(|e| context(file, e))?;
-    let video = TheoraVideo::open(Cursor::new(bytes)).map_err(|e| context(file, e))?;
+    // Only the headers are read.
+    let reader = tree.open(file).map_err(|e| context(file, e))?;
+    let video = TheoraVideo::open(reader).map_err(|e| context(file, e))?;
     let info = video.info();
     Ok(VideoMeta {
         width: info.width,

@@ -8,11 +8,11 @@
 //! on without graphics and [`status`] says why.
 
 use std::cell::RefCell;
-use std::io::Cursor;
 use std::sync::Arc;
 
 use serde::Serialize;
 use serde_json::json;
+use volya_engine::core::vfs::read_ahead::ReadAhead;
 use volya_engine::formats::pe::Rgba;
 use volya_engine::formats::ui::Resolution;
 use volya_engine::present::Presenter;
@@ -45,7 +45,10 @@ struct Gpu {
 
 /// A video playing into a texture, looping.
 struct Playing {
-    video: TheoraVideo<Cursor<Vec<u8>>>,
+    /// Decodes from `source`, topped up from the game tree before each
+    /// frame (only a window of the file is in memory).
+    video: TheoraVideo<ReadAhead>,
+    source: ReadAhead,
     texture: VideoTexture,
     fps: f64,
     /// Animation time of frame 0, set on the first animation frame.
@@ -302,6 +305,14 @@ impl Gpu {
         }
         let mut failed = None;
         while playing.shown < due {
+            let topped = crate::game::with_trees(|tree, _| playing.source.top_up(tree));
+            if let Err(e) = topped
+                .map_err(|e| std::io::Error::other(format!("{e:?}")))
+                .and_then(|r| r)
+            {
+                failed = Some(e);
+                break;
+            }
             match playing.video.next_frame() {
                 Ok(Some(frame)) => {
                     self.renderer.update_video(&mut playing.texture, &frame);
@@ -346,11 +357,19 @@ pub fn debug_draw(path: Option<&str>) -> Result<serde_json::Value, JsValue> {
     };
     // Fails early, before reading the file, without a GPU.
     with_gpu(|_| Ok(()))?;
-    let bytes = crate::game::read(path)?;
+    let is_video = path.to_ascii_lowercase().ends_with(".ogm");
+    // A video streams from the file; a texture is read whole.
+    let (bytes, source) = if is_video {
+        let source =
+            crate::game::with_trees(|tree, _| ReadAhead::open(tree, path))?.map_err(error)?;
+        (Vec::new(), Some(source))
+    } else {
+        (crate::game::read(path)?, None)
+    };
     with_gpu(|gpu| {
         let info;
-        let quad = if path.to_ascii_lowercase().ends_with(".ogm") {
-            let video = TheoraVideo::open(Cursor::new(bytes)).map_err(error)?;
+        let quad = if let Some(source) = source {
+            let video = TheoraVideo::open(source.clone()).map_err(error)?;
             let info_ = video.info().clone();
             let texture = gpu.renderer.create_video_texture(info_.width, info_.height);
             let mut quad = Quad::new(Rect::SCREEN, texture.texture());
@@ -365,6 +384,7 @@ pub fn debug_draw(path: Option<&str>) -> Result<serde_json::Value, JsValue> {
             });
             gpu.video = Some(Playing {
                 video,
+                source,
                 texture,
                 fps,
                 start: None,
