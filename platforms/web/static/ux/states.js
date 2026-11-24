@@ -65,23 +65,7 @@ export const SECTIONS = [
   {
     title: "Settings",
     states: [
-      { id: "settings", name: "Up to date", game: imported, screen: "settings" },
-      {
-        id: "settings-offer",
-        name: "Update available (automatic downloads off)",
-        game: imported,
-        screen: "settings",
-        updates: { auto: false, status: "available", bytes: 1.9 * 2 ** 20 },
-      },
-      {
-        id: "settings-offer-downloading",
-        name: "Downloading the update on request",
-        game: imported,
-        screen: "settings",
-        updates: { auto: false, status: "downloading", bytes: 1.9 * 2 ** 20 },
-      },
-      { id: "settings-downloading", name: "Downloading automatically", game: imported, screen: "settings", updates: { status: "downloading" } },
-      { id: "settings-finish", name: "Update downloaded", game: imported, screen: "settings", updates: { status: "ready" } },
+      { id: "settings", name: "Imported game", game: imported, screen: "settings" },
       { id: "settings-not-kept", name: "Storage not kept (browser tab)", game: imported, screen: "settings", persisted: false, tab: true },
       { id: "settings-no-game", name: "No game imported", game: fresh, screen: "settings" },
     ],

@@ -530,27 +530,10 @@ async function showSettings() {
   const back = element("button", { className: "back", textContent: "‹ Back" });
   back.addEventListener("click", () => navigate("back", refresh));
 
-  const auto = element("input", { type: "checkbox", checked: updates?.auto ?? true, disabled: !updates });
-  const updateLine = element("p", { className: "note" });
-  const renderUpdates = () => {
-    if (!updates) {
-      updateLine.textContent = "Updates need a browser with service workers.";
-      return;
-    }
-    auto.checked = updates.auto;
-    const { status: s, bytes } = updates;
-    updateLine.textContent =
-      s === "available"
-        ? `An update is available (${formatBytes(bytes)}).`
-        : s === "downloading"
-          ? "Downloading an update…"
-          : s === "ready"
-            ? "An update is downloaded: finish it here, or close and reopen the app."
-            : "Up to date.";
-  };
+  // The version and the download setting; the update itself is offered on
+  // Home (its bottom row), where Settings is reached from.
+  const auto = element("input", { type: "checkbox", checked: updates?.auto ?? true });
   auto.addEventListener("change", () => updates?.setAuto(auto.checked));
-  const stop = updates?.onChange(() => (updateLine.isConnected ? renderUpdates() : stop()));
-  renderUpdates();
 
   const remove = element("button", { className: "danger filled", textContent: "Remove imported game" });
   remove.addEventListener("click", async () => {
@@ -567,14 +550,9 @@ async function showSettings() {
       { className: "panel" },
       element("p", { className: "label", textContent: "Updates" }),
       element("p", { className: "value", textContent: `Version ${versionText()}` }),
-      element(
-        "label",
-        { className: "switch" },
-        auto,
-        element("span", {}, element("strong", { textContent: "Download updates automatically" })),
-      ),
-      updateLine,
-      updateOffer(),
+      updates
+        ? element("label", { className: "switch" }, auto, element("span", {}, element("strong", { textContent: "Download updates automatically" })))
+        : null,
     ),
     element(
       "div",
