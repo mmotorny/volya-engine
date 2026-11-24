@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/logo.svg" alt="Volya Engine logo" width="256"></p>
+
 # Volya Engine
 
 A clean-room, BYOA (bring your own assets) game engine for the original S.T.A.L.K.E.R. series, written in Rust. The first target is S.T.A.L.K.E.R.: Shadow of Chernobyl.
