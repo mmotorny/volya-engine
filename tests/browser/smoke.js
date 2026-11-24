@@ -227,10 +227,16 @@ export const tests = {
   "settings: updates, storage and a danger zone, reachable from the bottom": async () => {
     const settings = [...document.querySelectorAll("#game .bottom button")].find((b) => b.textContent === "Settings");
     assert(settings, "no Settings button at the bottom");
+    // Scrolled down to reach it, as on a short screen: Settings opens at its top.
+    document.body.style.minHeight = "300vh";
+    scrollTo(0, document.documentElement.scrollHeight);
     settings.click();
     for (let i = 0; i < 50 && !document.querySelector(".screen-head"); i++) await new Promise((r) => setTimeout(r, 20));
     const labels = [...document.querySelectorAll("#game .label")].map((l) => l.textContent);
     assert(labels.includes("Updates") && labels.includes("Storage"), `labels ${labels}`);
+    for (let i = 0; i < 50 && scrollY !== 0; i++) await new Promise((r) => setTimeout(r, 20));
+    assertEqual(scrollY, 0, "Settings opened scrolled");
+    document.body.style.minHeight = "";
     const toggle = document.querySelector("#game .switch input");
     assert(toggle && toggle.checked, "automatic updates not on by default");
     assertEqual(document.activeElement?.textContent, "‹ Back", "focus starts on Back (keyboard)");

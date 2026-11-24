@@ -33,9 +33,14 @@ const show = (...children) => {
  * reduced motion.
  */
 function navigate(direction, render) {
-  if (!document.startViewTransition || matchMedia("(prefers-reduced-motion: reduce)").matches) return render();
+  // A new screen starts at its top, not where the last one was scrolled to.
+  const go = async () => {
+    await render();
+    scrollTo(0, 0);
+  };
+  if (!document.startViewTransition || matchMedia("(prefers-reduced-motion: reduce)").matches) return go();
   document.documentElement.dataset.nav = direction;
-  const transition = document.startViewTransition(render);
+  const transition = document.startViewTransition(go);
   // A quick second tap skips this animation; the screen still changes.
   transition.ready.catch(() => {});
   return transition.finished.finally(() => delete document.documentElement.dataset.nav);
@@ -305,8 +310,6 @@ function showImport(status, snapshot = null) {
           element("code", { textContent: "setup_….exe" }),
           " and ",
           element("code", { textContent: "setup_…-1.bin" }),
-          ". Not in your library yet? ",
-          link("https://www.gog.com/en/game/stalker_shadow_of_chernobyl", "Get it on GOG"),
           ".",
         ),
         element("li", {
