@@ -27,3 +27,7 @@ Priorities, in order. Work items are tracked in GitHub issues and milestones.
 - Out of scope: Firefox, Android.
 
 Reference mobile device for real-device testing and performance and memory budgets: iPhone 17 Pro Max.
+
+## Saved games
+
+Volya Engine's own save format, holding the state Volya Engine simulates. Loading the original game's `.sav` files is not planned: it would need the original's whole simulated world.
