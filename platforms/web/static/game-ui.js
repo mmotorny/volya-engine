@@ -113,18 +113,8 @@ function settingsButton() {
 /** Whether the engine can draw (without WebGPU the game would run unseen). */
 const graphics = async () => (await call("status")).gpu.state === "ready";
 
-/**
- * Why this browser can't draw the game, from the step of setting up WebGPU
- * that failed (the engine's `gpu.reason`): only what's known, no guesses.
- */
-function graphicsProblem(gpu) {
-  if (gpu?.reason === "no-webgpu") {
-    const supported = platform() === "desktop" && !chromium() ? " On desktop, Volya Engine supports Chrome." : "";
-    return `Volya Engine draws the game with WebGPU, which this browser doesn't support.${supported}`;
-  }
-  if (gpu?.reason === "no-adapter") return "This browser supports WebGPU, but found no graphics hardware it can use for it.";
-  return "WebGPU, which Volya Engine draws the game with, couldn't be set up in this browser.";
-}
+/** Why the game can't be drawn here: one sentence; the browser's own words go in details. */
+const GRAPHICS_PROBLEM = "Volya Engine draws the game with WebGPU, which isn't working in this browser.";
 
 /**
  * First screen when this browser can't draw the game: said before anything
@@ -138,7 +128,7 @@ async function showUnsupported() {
       { className: "panel" },
       element("p", { className: "label", textContent: "Unavailable here" }),
       element("h2", { textContent: "This browser can't run the game" }),
-      element("p", { textContent: graphicsProblem(gpu) }),
+      element("p", { textContent: GRAPHICS_PROBLEM }),
       gpu?.message ? element("p", { className: "note", textContent: `Details: ${gpu.message}.` }) : null,
     ),
     bottom(updateOffer(), settingsButton()),
@@ -458,7 +448,7 @@ async function showHome(status) {
   const ready = gpu.state === "ready";
   if (!ready) {
     launch.disabled = true;
-    note.textContent = `${graphicsProblem(gpu)}${gpu.message ? ` (${gpu.message})` : ""}`;
+    note.textContent = `${GRAPHICS_PROBLEM}${gpu.message ? ` Details: ${gpu.message}.` : ""}`;
     note.hidden = false;
   }
 

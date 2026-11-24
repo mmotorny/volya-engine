@@ -60,33 +60,11 @@ struct Playing {
 thread_local! {
     static GPU: RefCell<Option<Gpu>> = const { RefCell::new(None) };
     /// Why there is no GPU, once initialisation failed.
-    static UNAVAILABLE: RefCell<Option<Unavailable>> = const { RefCell::new(None) };
+    static UNAVAILABLE: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 fn error(e: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&e.to_string())
-}
-
-/// Why WebGPU couldn't be set up: which step failed (`reason`, for the page
-/// to explain) and the browser's or wgpu's own words (`message`).
-#[derive(Clone)]
-struct Unavailable {
-    reason: &'static str,
-    message: String,
-}
-
-/// The browser has no WebGPU (`navigator.gpu` is absent).
-const NO_WEBGPU: &str = "no-webgpu";
-/// WebGPU is there, but the browser gave no adapter (no usable GPU for it).
-const NO_ADAPTER: &str = "no-adapter";
-/// A later step failed (canvas, device).
-const SETUP: &str = "setup";
-
-fn unavailable(reason: &'static str, message: impl Into<String>) -> Unavailable {
-    Unavailable {
-        reason,
-        message: message.into(),
-    }
 }
 
 /// Sets up WebGPU on `canvas`; on failure records why and returns normally.
@@ -97,13 +75,13 @@ pub async fn init(canvas: OffscreenCanvas) {
     }
 }
 
-async fn connect(canvas: OffscreenCanvas) -> Result<Gpu, Unavailable> {
+async fn connect(canvas: OffscreenCanvas) -> Result<Gpu, String> {
     let navigator = js_sys::Reflect::get(&js_sys::global(), &"navigator".into())
-        .map_err(|_| unavailable(SETUP, "no navigator in the engine worker"))?;
+        .map_err(|_| "no navigator in the engine worker")?;
     let has_gpu = js_sys::Reflect::get(&navigator, &"gpu".into())
         .is_ok_and(|gpu| !gpu.is_undefined() && !gpu.is_null());
     if !has_gpu {
-        return Err(unavailable(NO_WEBGPU, "this browser has no WebGPU"));
+        return Err("this browser has no WebGPU".into());
     }
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::BROWSER_WEBGPU,
@@ -112,21 +90,21 @@ async fn connect(canvas: OffscreenCanvas) -> Result<Gpu, Unavailable> {
     let (width, height) = (canvas.width().max(1), canvas.height().max(1));
     let surface = instance
         .create_surface(wgpu::SurfaceTarget::OffscreenCanvas(canvas))
-        .map_err(|e| unavailable(SETUP, format!("no WebGPU canvas: {e}")))?;
+        .map_err(|e| format!("no WebGPU canvas: {e}"))?;
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
             compatible_surface: Some(&surface),
             ..Default::default()
         })
         .await
-        .map_err(|_| unavailable(NO_ADAPTER, "no WebGPU adapter (no usable GPU)"))?;
+        .map_err(|_| "no WebGPU adapter (no usable GPU)")?;
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             required_features: volya_engine::render::device_features(&adapter),
             ..Default::default()
         })
         .await
-        .map_err(|e| unavailable(SETUP, format!("no WebGPU device: {e}")))?;
+        .map_err(|e| format!("no WebGPU device: {e}"))?;
     // Report instead of panicking, which would stop the whole engine.
     device.on_uncaptured_error(Arc::new(|e| {
         web_sys::console::error_1(&format!("WebGPU: {e}").into());
@@ -137,7 +115,7 @@ async fn connect(canvas: OffscreenCanvas) -> Result<Gpu, Unavailable> {
         .formats
         .into_iter()
         .find(|f| !f.is_srgb())
-        .ok_or_else(|| unavailable(SETUP, "no non-sRGB canvas format"))?;
+        .ok_or("no non-sRGB canvas format")?;
     let config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format,
@@ -164,12 +142,8 @@ async fn connect(canvas: OffscreenCanvas) -> Result<Gpu, Unavailable> {
 
 #[derive(Serialize)]
 pub struct Status {
-    /// `ready`, `unavailable` (see `reason` and `message`) or `starting`.
+    /// `ready`, `unavailable` (see `message`) or `starting`.
     state: &'static str,
-    /// Which step of setting up WebGPU failed: `no-webgpu`, `no-adapter` or
-    /// `setup`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reason: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
     /// Whether BC textures upload as stored.
@@ -186,7 +160,6 @@ pub fn status() -> Status {
     let ready = GPU.with(|g| {
         g.borrow().as_ref().map(|gpu| Status {
             state: "ready",
-            reason: None,
             message: None,
             bc: Some(
                 gpu.renderer
@@ -199,15 +172,14 @@ pub fn status() -> Status {
         })
     });
     ready.unwrap_or_else(|| {
-        let unavailable = UNAVAILABLE.with(|u| u.borrow().clone());
+        let message = UNAVAILABLE.with(|u| u.borrow().clone());
         Status {
-            state: if unavailable.is_some() {
+            state: if message.is_some() {
                 "unavailable"
             } else {
                 "starting"
             },
-            reason: unavailable.as_ref().map(|u| u.reason),
-            message: unavailable.map(|u| u.message),
+            message,
             bc: None,
             format: None,
             size: None,
@@ -222,7 +194,7 @@ fn with_gpu<T>(f: impl FnOnce(&mut Gpu) -> Result<T, JsValue>) -> Result<T, JsVa
             let reason = UNAVAILABLE.with(|u| u.borrow().clone());
             Err(error(format!(
                 "graphics unavailable: {}",
-                reason.as_ref().map_or("starting", |u| u.message.as_str())
+                reason.as_deref().unwrap_or("starting")
             )))
         }
     })
