@@ -391,7 +391,8 @@ impl WorldPipelines {
             };
             let blend = match key.blend {
                 Blend::Off => None,
-                Blend::Alpha => Some(wgpu::BlendState::ALPHA_BLENDING),
+                // Direct3D 9 applies the colour factors to alpha too.
+                Blend::Alpha => Some(alpha_blending()),
                 Blend::Add => Some(wgpu::BlendState {
                     color: additive,
                     alpha: additive,
@@ -454,6 +455,16 @@ fn vec4(v: [f32; 3], w: f32) -> [f32; 4] {
     [v[0], v[1], v[2], w]
 }
 
+/// Source alpha / inverse source alpha for colour and alpha alike.
+pub(crate) fn alpha_blending() -> wgpu::BlendState {
+    let c = wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::SrcAlpha,
+        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+        operation: wgpu::BlendOperation::Add,
+    };
+    wgpu::BlendState { color: c, alpha: c }
+}
+
 /// `a · b`, row-vector convention.
 pub fn multiply(a: &Mat4, b: &Mat4) -> Mat4 {
     std::array::from_fn(|r| std::array::from_fn(|c| (0..4).map(|k| a[r][k] * b[k][c]).sum()))
@@ -474,8 +485,19 @@ pub fn fog_plane(view_projection: &Mat4, fog_near: f32, fog_far: f32) -> [f32; 4
     ]
 }
 
-/// ssa_min for a `width` × `height` target and vertical field of view
-/// `fov` degrees (section 10.2, `r__geometry_lod` 1).
+/// The original's render target for a `width` × `height` screen (section
+/// 10.2): each axis × √`r__supersample` (default 2), clamped to 128 … 2048
+/// and made even. Truncating the product and making it even by rounding
+/// down are our choices (the spec does not say how). We draw at the screen
+/// size; this target only feeds the size threshold, so culling matches the
+/// original's.
+pub fn supersampled(width: u32, height: u32) -> (u32, u32) {
+    let axis = |v: u32| ((v as f32 * 2f32.sqrt()) as u32).clamp(128, 2048) & !1;
+    (axis(width), axis(height))
+}
+
+/// ssa_min for a `width` × `height` render target and vertical field of
+/// view `fov` degrees (section 10.2, `r__geometry_lod` 1).
 pub fn ssa_min(width: u32, height: u32, fov: f32) -> f32 {
     let k = 1.0 / ((1.0 + 1e-7) * (90.0 / fov).powi(2) * width as f32 * height as f32);
     12.25 * k
@@ -761,7 +783,9 @@ impl Renderer {
 
         // Section 10.3: step 1 is priorities 0–1, step 5 priorities 2–3,
         // each grouped by state (opaque before blended); strict-sorted
-        // draws are step 6.
+        // draws are step 6. Blended draws within a step keep this fixed
+        // order rather than near to far by ssa (our choice: the exact order
+        // is unestablished, and a fixed one keeps them in the bundles).
         let mut early = Vec::new();
         let mut late = Vec::new();
         let mut strict = Vec::new();
@@ -920,7 +944,10 @@ impl Renderer {
         push_mat(&mut constants, &frame.view);
         push_vec4(
             &mut constants,
-            vec4(frame.eye, ssa_min(size.0, size.1, frame.fov_y_degrees)),
+            vec4(frame.eye, {
+                let (w, h) = supersampled(size.0, size.1);
+                ssa_min(w, h, frame.fov_y_degrees)
+            }),
         );
         push_vec4(&mut constants, vec4(frame.forward, 0.0));
         push_vec4(&mut constants, vec4(l.ambient, 0.0));

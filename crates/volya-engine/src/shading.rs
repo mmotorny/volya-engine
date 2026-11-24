@@ -28,7 +28,10 @@ pub struct Association {
 }
 
 impl Association {
-    /// `<detail name>,<scale>` and the usage flag found by substring.
+    /// `<detail name>,<scale>` (text up to the first comma, then a float)
+    /// and the usage flag found by substring. The name is lower-cased and
+    /// loses a texture extension like the shader table's names (our
+    /// choice; lookups do not depend on case).
     pub fn parse(value: &str) -> Self {
         let (detail, rest) = value.split_once(',').unwrap_or((value, ""));
         let usage = if value.contains("usage[diffuse_or_bump]") {
@@ -41,7 +44,7 @@ impl Association {
             0
         };
         Self {
-            detail: texture_name(detail.trim()),
+            detail: texture_name(detail),
             scale: value::float(rest),
             usage,
         }
@@ -68,6 +71,21 @@ pub fn associations(textures_ltx: &Config) -> HashMap<String, Association> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Whether a scripted definition's source defines `normal` or `l_special`
+/// (section 3.4): a textual check for `function normal(` or
+/// `function l_special(` (our approximation; no Lua runs here).
+pub fn defines_normal_or_special(source: &str) -> bool {
+    let compact: String = source.split_whitespace().collect::<Vec<_>>().join(" ");
+    [
+        "function normal(",
+        "function normal (",
+        "function l_special(",
+        "function l_special (",
+    ]
+    .iter()
+    .any(|f| compact.contains(f))
 }
 
 /// What resolves shader names.
@@ -334,6 +352,15 @@ mod tests {
         assert!(!Association::parse("d, 2, usage[bump]").diffuse());
         assert_eq!(Association::parse("d,2").usage, 0);
         assert_eq!(texture_list("A.TGA,lmap#1_1,"), ["a", "lmap#1_1", ""]);
+    }
+
+    #[test]
+    fn scripted_definition_detection() {
+        assert!(defines_normal_or_special(
+            "function normal (shader, t_base)\n end"
+        ));
+        assert!(defines_normal_or_special("function   l_special(shader)"));
+        assert!(!defines_normal_or_special("function l_point(shader) end"));
     }
 
     #[test]

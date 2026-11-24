@@ -120,8 +120,8 @@ fn new_game_start_view_from_game_data() {
     assert_eq!(world.skipped(), 0);
     dump(&pixels, SIZE.width, SIZE.height);
 
-    // The start view looks at the trader's surroundings: most of the screen
-    // is world, in many colours, and the sky (cleared) shows somewhere.
+    // The start view is inside the trader's bunker: the world covers the
+    // screen (the clear colour shows nowhere), in many colours.
     let clear = scene.world.as_ref().unwrap().environment.fog_rgb();
     let clear = clear.map(|c| (c * 255.0).round() as u8);
     let total = (SIZE.width * SIZE.height) as usize;
@@ -135,12 +135,11 @@ fn new_game_start_view_from_game_data() {
         100.0 * background as f64 / total as f64,
         distinct.len()
     );
-    assert!(background * 2 < total, "mostly world");
+    assert!(background * 100 < total, "world everywhere");
     assert!(distinct.len() > 500, "{} colours", distinct.len());
 
     // Outdoors, above the start (`VOLYA_OUTDOOR=x,y,z,yaw,pitch` picks
-    // another view): terrain, trees and fog, and the clear colour where
-    // nothing is drawn.
+    // another view): terrain, trees, fog and the sky.
     let view: Vec<f32> = std::env::var("VOLYA_OUTDOOR")
         .unwrap_or_else(|_| "-180,5,-120,1.2,0.15".into())
         .split(',')

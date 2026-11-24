@@ -353,6 +353,29 @@ export const tests = {
     return `moved ${(s.level.eye[0] - start.eye[0]).toFixed(2)} m, turned ${(s.level.yaw - start.yaw).toFixed(2)} rad`;
   },
 
+  "New Game again after returning: the level loads anew": async () => {
+    needsGame();
+    pointer("pointermove", row(0));
+    await until((s) => s.menu.selected === 0, "item 0");
+    key("Enter");
+    await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
+    key("Enter");
+    const s = await until((s) => s.phase === "level" && s.load_ms != null, "the level again", 60000);
+    assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
+    if (gpu.state === "ready") {
+      // The new world reaches the GPU on the next frame drawn.
+      let stats;
+      for (let i = 0; i < 50 && stats?.world_draws !== 7782; i++) {
+        stats = await volya.call("level_stats");
+        await sleep(50);
+      }
+      assertEqual(stats.world_draws, 7782, "world draws on the GPU");
+    }
+    key("Escape");
+    await until((s) => s.phase === "menu", "the menu");
+    return `loaded again in ${s.load_ms.toFixed(0)} ms`;
+  },
+
   "Q quits to the app's own interface": async () => {
     needsGame();
     key("KeyQ");

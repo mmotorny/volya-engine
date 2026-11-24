@@ -306,7 +306,7 @@ impl SkyPipelines {
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &wgpu::vertex_attr_array![0 => Float32x3],
             })],
-            Some(wgpu::BlendState::ALPHA_BLENDING),
+            Some(crate::world::alpha_blending()),
         );
         // effects\sun: source alpha / one (sky.md 7.5).
         let add = wgpu::BlendComponent {
@@ -608,6 +608,60 @@ mod tests {
             let n = cross(sub(b, a), sub(c, a));
             let centroid = [0, 1, 2].map(|k| (a[k] + b[k] + c[k]) / 3.0);
             assert!(dot(n, centroid) < 0.0, "{t:?} faces outward");
+        }
+    }
+
+    /// The interpolated texture coordinate where the ray from the centre
+    /// along `d` hits the box (attributes interpolate linearly across each
+    /// planar triangle, sky.md 5.6).
+    fn lookup(d: [f32; 3]) -> [f32; 3] {
+        for t in SKY_BOX_TRIANGLES {
+            let [(a, ca), (b, cb), (c, cc)] = t.map(|i| SKY_BOX[i as usize]);
+            let (e1, e2) = (sub(b, a), sub(c, a));
+            let n = cross(e1, e2);
+            let denom = dot(n, d);
+            if denom.abs() < 1e-9 {
+                continue;
+            }
+            let k = dot(n, a) / denom;
+            if k <= 0.0 {
+                continue;
+            }
+            let p = d.map(|x| x * k);
+            // Barycentric coordinates of p.
+            let w = sub(p, a);
+            let (d00, d01, d11) = (dot(e1, e1), dot(e1, e2), dot(e2, e2));
+            let (d20, d21) = (dot(w, e1), dot(w, e2));
+            let det = d00 * d11 - d01 * d01;
+            let v = (d11 * d20 - d01 * d21) / det;
+            let u = (d00 * d21 - d01 * d20) / det;
+            if v >= -1e-6 && u >= -1e-6 && v + u <= 1.0 + 1e-6 {
+                return std::array::from_fn(|i| ca[i] + v * (cb[i] - ca[i]) + u * (cc[i] - ca[i]));
+            }
+        }
+        panic!("{d:?} hits nothing")
+    }
+
+    #[test]
+    fn sky_box_lookup_follows_section_5_6() {
+        let close = |a: [f32; 3], b: [f32; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-5);
+        for (d, c) in [
+            // Bottom face: the whole −y face, scaled by 1/1.01.
+            ([0.0, -1.0, 0.2], [0.0, -1.01, 0.2]),
+            ([0.5, -1.0, -0.9], [0.5, -1.01, -0.9]),
+            // Lower side quad: −y border texels.
+            ([1.0, -0.5, 0.0], [1.0, -1.005, 0.0]),
+            // Horizon.
+            ([0.0, 0.0, 1.0], [0.0, -1.0, 1.0]),
+            // Upper side quads: the side face stretched; its middle at
+            // p.y = 0.5.
+            ([0.0, 0.5, 1.0], [0.0, 0.0, 1.0]),
+            ([-1.0, 0.75, 0.25], [-1.0, 0.5, 0.25]),
+            // Top face: a direct lookup.
+            ([0.0, 2.0, 1.0], [0.0, 1.0, 0.5]),
+        ] {
+            let got = lookup(d);
+            assert!(close(got, c), "{d:?}: {got:?} != {c:?}");
         }
     }
 

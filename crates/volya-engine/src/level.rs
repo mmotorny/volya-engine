@@ -46,6 +46,8 @@ pub const LEVEL_FILES: [&str; 4] = ["level", "level.ltx", "level.geom", "level.c
 /// `rs_vis_distance` of the shipped `user.ltx` (start-position.md 7.1); the
 /// user settings are not read for it here (our choice).
 pub const VIS_DISTANCE: f32 = 1.0;
+/// Longest frame the free camera moves by, seconds.
+const MAX_STEP: f32 = 0.1;
 /// Time of day when `config\alife.ltx` gives none (our choice; the shipped
 /// file says 05:30:00).
 const DEFAULT_START_TIME: f32 = 5.5 * 3600.0;
@@ -152,6 +154,7 @@ fn start_weather(tree: &dyn Vfs, data: &GameData, level: &str) -> io::Result<(St
     let name = game
         .get(level, "weathers")
         .flatten()
+        // Our choice when the level has no `weathers` key.
         .unwrap_or("default")
         .to_owned();
     let alife = match data.system.section("alife") {
@@ -206,7 +209,10 @@ fn resolve_surfaces(
     .map(|d| (d.name.clone(), d))
     .collect();
     let shader_dir = aliases.path("$game_shaders$", "r1")?;
-    let scripted = |module: &str| tree.open(&format!("{shader_dir}\\{module}.s")).is_ok();
+    let scripted = |module: &str| {
+        vfs::read(tree, &format!("{shader_dir}\\{module}.s"))
+            .is_ok_and(|text| shading::defines_normal_or_special(&String::from_utf8_lossy(&text)))
+    };
     let textures_ltx = config::load(tree, &aliases.path("$game_textures$", "textures.ltx")?)?;
     let associations = shading::associations(&textures_ltx);
     let library = ShaderLibrary {
@@ -384,7 +390,9 @@ impl LevelScreen {
 
     /// One frame at `now` with this frame's `input`.
     pub fn update(&mut self, now: u64, input: &Input) {
-        let dt = now.saturating_sub(self.last) as f32 / 1000.0;
+        // Frames longer than MAX_STEP (the first after loading) move the
+        // camera as if MAX_STEP long, so it does not jump (our choice).
+        let dt = (now.saturating_sub(self.last) as f32 / 1000.0).min(MAX_STEP);
         self.last = now;
         let (m, back) = free_controls::free_move(input, dt);
         self.camera.apply(&m, dt);
@@ -434,6 +442,8 @@ impl LevelScreen {
             view,
             projection,
             environment: self.environment.clone(),
+            // The shaders' clock starts when the level is shown (our choice;
+            // which clock is unestablished, ogf.md section 10).
             time: clock_ms.saturating_sub(self.shown) as f32 / 1000.0,
             sky: Some(sky::sky_frame(
                 &self.environment,
