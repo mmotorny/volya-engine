@@ -111,12 +111,18 @@ impl Portal {
             }
             used += 1;
         }
-        if used == 0 {
+        let len = dot(sum, sum).sqrt();
+        // A zero or non-finite average normal is invalid too (our choice; the
+        // spec names only the all-degenerate case).
+        if used == 0 || !(len > 0.0 && len.is_finite()) {
             return Err(invalid("Invalid portal detected"));
         }
-        let len = dot(sum, sum).sqrt();
         let n = sum.map(|c| c / len);
-        Ok((n, -dot(n, v[0])))
+        let d = -dot(n, v[0]);
+        if !d.is_finite() {
+            return Err(invalid("Invalid portal detected"));
+        }
+        Ok((n, d))
     }
 
     /// The bounding sphere: centre of the vertices' box and the distance to
@@ -245,6 +251,21 @@ impl Level {
                 return Err(invalid(format!("sector {s}: index out of range")));
             }
         }
+        // Indices into other tables are checked here so later users can
+        // index without checks (our choice; the spec states them only as
+        // properties of the shipped data).
+        for (i, p) in portals.iter().enumerate() {
+            if usize::from(p.sector_a.max(p.sector_b)) >= sectors.len() {
+                return Err(invalid(format!("portal {i}: sector out of range")));
+            }
+        }
+        let shader_ok = |s: u16| usize::from(s) < shaders.len();
+        if let Some(i) = visuals.iter().position(|v| !shader_ok(v.header.shader)) {
+            return Err(invalid(format!("visual {i}: shader index out of range")));
+        }
+        if let Some(i) = glows.iter().position(|g| !shader_ok(g.shader)) {
+            return Err(invalid(format!("glow {i}: shader index out of range")));
+        }
         Ok(Self {
             header,
             shaders,
@@ -295,21 +316,41 @@ impl Level {
                 u32::from(level0.vertex_count),
             )
         } else {
+            if g.index_count % 3 != 0 {
+                return Err(what("index count not a multiple of 3"));
+            }
             (0, g.index_count / 3, g.vertex_count)
         };
-        let first_index = g.first_index.checked_add(offset);
-        let in_range = first_index.is_some_and(|f| {
-            geom.index_buffers
-                .get(g.index_buffer as usize)
-                .is_some_and(|ib| u64::from(f) + 3 * u64::from(triangles) <= ib.len() as u64)
-        }) && geom
+        // The drawn window lies inside the visual's own range (ogf.md
+        // section 6) and uses only its own vertices.
+        if u64::from(offset) + 3 * u64::from(triangles) > u64::from(g.index_count)
+            || vertices > g.vertex_count
+        {
+            return Err(what("detail level outside the visual's range"));
+        }
+        let first_index = g
+            .first_index
+            .checked_add(offset)
+            .ok_or_else(|| what("index range outside its buffer"))?;
+        let drawn = geom
+            .index_buffers
+            .get(g.index_buffer as usize)
+            .and_then(|ib| {
+                ib.get(first_index as usize..)?
+                    .get(..3 * triangles as usize)
+            })
+            .ok_or_else(|| what("index range outside its buffer"))?;
+        let vertices_fit = geom
             .vertex_buffers
             .get(g.vertex_buffer as usize)
             .is_some_and(|vb| {
                 u64::from(g.first_vertex) + u64::from(vertices) <= u64::from(vb.vertex_count)
             });
-        if !in_range || vertices > g.vertex_count {
-            return Err(what("geometry range outside its buffers"));
+        if !vertices_fit {
+            return Err(what("vertex range outside its buffer"));
+        }
+        if drawn.iter().any(|&i| u32::from(i) >= vertices) {
+            return Err(what("index beyond the drawn vertices"));
         }
         Ok(DrawItem {
             visual: index,
@@ -319,7 +360,7 @@ impl Level {
             first_vertex: g.first_vertex,
             vertex_count: vertices,
             index_buffer: g.index_buffer,
-            first_index: first_index.unwrap(),
+            first_index,
             triangle_count: triangles,
             transform: v.tree.map_or(IDENTITY, |t| t.matrix()),
             tree: v.tree,
@@ -388,14 +429,19 @@ fn parse_portals(b: &[u8]) -> io::Result<Vec<Portal>> {
         .iter()
         .map(|r| {
             let count = u32_at(r, 76) as usize;
+            // The record has room for 6 vertices; a larger count is rejected
+            // (our choice; the spec does not say what the game does).
             if count > 6 {
                 return Err(invalid(format!("portal of {count} vertices")));
             }
-            Ok(Portal {
+            let portal = Portal {
                 sector_a: u16::from_le_bytes([r[0], r[1]]),
                 sector_b: u16::from_le_bytes([r[2], r[3]]),
                 vertices: (0..count).map(|i| float3(r, 4 + 12 * i)).collect(),
-            })
+            };
+            // An invalid portal is fatal at load (section 5).
+            portal.plane()?;
+            Ok(portal)
         })
         .collect()
 }
@@ -522,6 +568,7 @@ pub fn screen_measure(radius: f32, centre: [f32; 3], camera: [f32; 3]) -> f32 {
 mod tests {
     use super::*;
     use crate::chunks::chunk;
+    use crate::level_geom::GeometryRef;
     use crate::ogf::tests::{header, words};
 
     fn floats(values: &[f32]) -> Vec<u8> {
@@ -653,6 +700,57 @@ mod tests {
     }
 
     #[test]
+    fn draw_items_of_progressive_and_broken_visuals() {
+        use crate::level_geom::{ProgressiveMesh, Step};
+        let base = Level::parse(&sample()).unwrap();
+        let geom = geom();
+        let step = |index_offset, triangle_count, vertex_count| Step {
+            index_offset,
+            triangle_count,
+            vertex_count,
+        };
+        let with_mesh = |f: &dyn Fn(&mut Visual)| {
+            let mut level = base.clone();
+            f(&mut level.visuals[0]);
+            level.static_draw_items(&geom)
+        };
+        let progressive = |steps: Vec<Step>| {
+            move |v: &mut Visual| {
+                v.header.kind = VisualType::Progressive;
+                v.window_list = Some(ProgressiveMesh {
+                    reserved: [0; 4],
+                    steps: steps.clone(),
+                });
+            }
+        };
+        // Level 0 is drawn: offset 0, 1 triangle, 3 vertices.
+        let items = with_mesh(&progressive(vec![step(0, 1, 3), step(0, 0, 0)])).unwrap();
+        assert_eq!(
+            (
+                items[0].first_index,
+                items[0].triangle_count,
+                items[0].vertex_count
+            ),
+            (0, 1, 3)
+        );
+        // A window past the visual's own range, or using more vertices.
+        assert!(with_mesh(&progressive(vec![step(3, 1, 3)])).is_err());
+        assert!(with_mesh(&progressive(vec![step(0, 1, 4)])).is_err());
+        // Level 0 using fewer vertices than its indices reach.
+        assert!(with_mesh(&progressive(vec![step(0, 1, 2)])).is_err());
+        assert!(with_mesh(&progressive(vec![])).is_err(), "no detail levels");
+        // Whole-range visuals: index beyond vc, count not a multiple of 3,
+        // range past the buffer.
+        let geometry =
+            |f: fn(&mut GeometryRef)| move |v: &mut Visual| f(v.geometry.as_mut().unwrap());
+        assert!(with_mesh(&geometry(|g| g.vertex_count = 2)).is_err());
+        assert!(with_mesh(&geometry(|g| g.index_count = 2)).is_err());
+        assert!(with_mesh(&geometry(|g| g.first_index = 1)).is_err());
+        assert!(with_mesh(&geometry(|g| g.first_vertex = 1)).is_err());
+        assert!(with_mesh(&geometry(|g| g.vertex_buffer = 1)).is_err());
+    }
+
+    #[test]
     fn rejects_broken_levels() {
         let file = sample();
         let chunks = Chunks::parse(&file).unwrap();
@@ -673,6 +771,42 @@ mod tests {
         let mut v13 = file.clone();
         v13[8] = 13;
         assert!(Level::parse(&v13).is_err());
+
+        // One chunk's payload edited.
+        let edited = |id: u32, edit: &dyn Fn(&mut Vec<u8>)| -> io::Result<Level> {
+            let file: Vec<u8> = chunks
+                .iter()
+                .flat_map(|c| {
+                    let mut p = c.payload.to_vec();
+                    if c.id() == id {
+                        edit(&mut p);
+                    }
+                    chunk(c.id_word, &p)
+                })
+                .collect();
+            Level::parse(&file)
+        };
+        assert!(edited(PORTALS_CHUNK, &|_| {}).is_ok());
+        assert!(
+            edited(PORTALS_CHUNK, &|p| p[2] = 2).is_err(),
+            "sector B 2 of 2"
+        );
+        assert!(
+            edited(PORTALS_CHUNK, &|p| p[4..76].fill(0)).is_err(),
+            "degenerate portal"
+        );
+        assert!(edited(PORTALS_CHUNK, &|p| p[76] = 7).is_err(), "7 vertices");
+        assert!(
+            edited(GLOWS_CHUNK, &|p| p[16] = 3).is_err(),
+            "glow shader 3 of 3"
+        );
+        assert!(edited(VISUALS_CHUNK, &|_| {}).is_ok());
+        // Visual 0's header (sub-chunk 0, chunk 1) starts at 8 + 8; its
+        // shader index is at header byte 2.
+        assert!(
+            edited(VISUALS_CHUNK, &|p| p[16 + 2] = 3).is_err(),
+            "visual shader 3 of 3"
+        );
     }
 
     #[test]

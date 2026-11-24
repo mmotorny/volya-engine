@@ -750,6 +750,7 @@ fn visuals_from_game_data() {
                 .collect();
             let v = &level.visuals;
             let mut parents = vec![0; v.len()];
+            let mut parent_kind = vec![None; v.len()];
             let mut lvl_triangles = 0;
             let mut refs = HashSet::new();
             for (i, x) in v.iter().enumerate() {
@@ -763,6 +764,7 @@ fn visuals_from_game_data() {
                 for &c in &x.children {
                     assert!((c as usize) < i, "{name} visual {i}: child {c}");
                     parents[c as usize] += 1;
+                    parent_kind[c as usize] = Some(h.kind);
                     let ch = &v[c as usize].header;
                     for k in 0..3 {
                         assert!(ch.box_min[k] >= h.box_min[k] - 1e-3, "{name} {i} > {c}");
@@ -837,6 +839,7 @@ fn visuals_from_game_data() {
                 assert!(parents[i] <= 1, "{name} visual {i}: {} parents", parents[i]);
                 if x.header.kind.is_tree() {
                     assert_eq!(parents[i], 1, "{name} tree {i}");
+                    assert_eq!(parent_kind[i], Some(BillboardGroup), "{name} tree {i}");
                 }
             }
             assert_eq!(lvl_triangles, level_triangles, "{name}");

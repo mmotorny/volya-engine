@@ -380,17 +380,26 @@ impl Visual {
         let billboards = need(BILLBOARDS_CHUNK, kind == VisualType::BillboardGroup)?
             .map(|b| Billboards::parse(&b).map(Box::new))
             .transpose()?;
-        let (mut geometry_x, mut window_list_x) = (None, None);
-        if let Some(c) = chunks.find(GEOMETRY_X_CHUNK) {
+        // The first renderer ignores chunk 22 (section 3), so a malformed one
+        // leaves the visual without `level.geomx` geometry instead of failing
+        // it (our choice).
+        let geometry_x_chunk = |c: &crate::chunks::Chunk<'_>| -> io::Result<_> {
             let content = c.content()?;
             let nested = Chunks::parse(&content)?;
-            if let Some(g) = nested.find(GEOMETRY_CHUNK) {
-                geometry_x = Some(geometry_ref(&g.content()?)?);
-            }
-            if let Some(w) = nested.find(WINDOWS_CHUNK) {
-                window_list_x = Some(parse_progressive_mesh(&w.content()?)?);
-            }
-        }
+            let g = nested
+                .find(GEOMETRY_CHUNK)
+                .map(|g| geometry_ref(&g.content()?))
+                .transpose()?;
+            let w = nested
+                .find(WINDOWS_CHUNK)
+                .map(|w| parse_progressive_mesh(&w.content()?))
+                .transpose()?;
+            Ok((g, w))
+        };
+        let (geometry_x, window_list_x) = chunks
+            .find(GEOMETRY_X_CHUNK)
+            .and_then(|c| geometry_x_chunk(c).ok())
+            .unwrap_or((None, None));
         Ok(Self {
             header,
             geometry,
@@ -527,14 +536,14 @@ pub(crate) mod tests {
 
     #[test]
     fn billboard_selection() {
-        // Face f: a unit square facing direction angle f × 45° (normal
-        // pointing outward = −face normal convention of the spec).
+        let close3 = |a: [f32; 3], b: [f32; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-6);
+        // Face f: a square centred at (cos, 0, sin) of f × 45°, in the plane
+        // perpendicular to that direction, wound so that its corner normals
+        // point outward along it.
         let mut data = Vec::new();
         for f in 0..8 {
             let a = f as f32 * std::f32::consts::FRAC_PI_4;
             let (s, c) = a.sin_cos();
-            // Square in the plane perpendicular to (c, 0, s), wound so that
-            // the cross products point along −(c, 0, s).
             let right = [-s, 0.0, c];
             let corners = [(-1.0, -1.0), (-1.0, 1.0), (1.0, 1.0), (1.0, -1.0)];
             for (x, y) in corners {
@@ -546,15 +555,16 @@ pub(crate) mod tests {
             }
         }
         let b = Billboards::parse(&data).unwrap();
+        // Face 0 lies at x = 1 with corners (1, −1, −1), (1, 1, −1),
+        // (1, 1, 1), (1, −1, 1): every corner normal is (1, 0, 0), so the
+        // selection normal is its negation.
         let n0 = b.face_normal(0);
-        // Corner normals point along ±x; the face normal is their negation.
-        assert!(
-            (n0[0].abs() - 1.0).abs() < 1e-6 && n0[1].abs() < 1e-6,
-            "{n0:?}"
-        );
-        let camera = n0.map(|c| -100.0 * c);
-        let choice = b.choose_faces([0.0; 3], camera);
+        assert!(close3(n0, [-1.0, 0.0, 0.0]), "{n0:?}");
+        // A camera on face 0's side (+x) looks along −x, matching N₀.
+        let choice = b.choose_faces([0.0; 3], [100.0, 0.0, 0.0]);
         assert_eq!(choice.f1, 0);
+        assert_eq!(b.choose_faces([0.0; 3], [-100.0, 0.0, 0.0]).f1, 4);
+        assert_eq!(b.choose_faces([0.0; 3], [0.0, 0.0, 100.0]).f1, 2);
         assert!(choice.f2 == 1 || choice.f2 == 7);
         // F2 and F3 have equal weights (symmetric neighbours): β = 255.
         assert_eq!(choice.beta, 255);
