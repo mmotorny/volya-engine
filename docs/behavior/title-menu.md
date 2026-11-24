@@ -103,7 +103,10 @@ texture system; what the menu relies on):
   channel; neither menu video has one, so both are opaque.
 - The texture is allocated at the next power of two in each dimension and the frame occupies its
   top-left corner (876 × 400 in a 1024 × 512 texture for the panorama; 128 × 256 for the fire). The
-  `back_movie` texture rectangle (0, 0, 876, 400) therefore maps exactly to the decoded frame.
+  `back_movie` texture rectangle (0, 0, 876, 400) therefore maps exactly to the picture. The panorama's coded
+  Theora frame is 880 × 400 with an 876 × 400 picture; the texture receives the leftmost 876 columns. Which
+  part of a coded frame becomes the texture, what the uncovered texels hold, and the Y′CbCr → RGB conversion
+  are specified in `docs/behavior/startup.md` §6.6; the sizes in the table below are picture sizes.
 - Playback starts when the texture is loaded, runs in real time on the engine's continuous
   millisecond clock (the same clock the sliding bar uses; inferred not to stop while the game is
   paused, since the menu animates while it pauses the game) and **loops** indefinitely: when the elapsed time
@@ -450,7 +453,9 @@ and extracting its alpha shows the transparent sky region and the bar's transluc
   with ffprobe/ffmpeg (stream parameters, frames, texture alpha); static analysis with Ghidra of the
   shipped 32-bit binaries (`xrGame.dll`, `XR_3DA.exe`, `xrSound.dll`, `xrGameSpy.dll`) to establish
   list selection, input handling, bar motion, music handling, cursor and video-texture behaviour,
-  resolution mapping and the startup flow. The binaries were not executed. No leaked source code,
+  resolution mapping and the startup flow. The binaries were not executed, except that (2026-11-23) the
+  video frame-to-texture conversion of `XR_3DA.exe` was run in a CPU emulator on the two menu videos (see
+  `docs/behavior/startup.md` §6.6). No leaked source code,
   derivative engines or third-party documentation of the engine were used.
 - Not established: vertical caption placement within a row, cursor draw scaling and initial position,
   the screen direction of positive rotation, configurability of cursor sensitivity, whether the

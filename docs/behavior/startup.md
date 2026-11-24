@@ -155,12 +155,12 @@ A texture name `X` refers to `textures\X.ogm` for a video item and `textures\X.d
 | Data | Winning file (archive) | Size (bytes) | Properties |
 |---|---|---|---|
 | Background | `textures\intro\intro_back.dds` (db6) | 136 | 4 × 4 DXT1, every texel black |
-| THQ video | `textures\intro\thq_logo_hyuv.ogm` (db6) | 1,361,121 | Ogg Theora 720 × 486, 500000/16683 fps (29.97), 203 frames, 6.773 s, video only |
+| THQ video | `textures\intro\thq_logo_hyuv.ogm` (db6) | 1,361,121 | Ogg Theora, picture 720 × 486 (coded frame 720 × 496, header picture offset x 0, y 10), 500000/16683 fps (29.97), 203 frames, 6.773 s, video only |
 | THQ sound L / R | `sounds\characters_voice\scenario\video\thq_logo_audio_l.ogg` / `_r.ogg` (db9) | 62,025 / 61,577 | Ogg Vorbis mono 44.1 kHz, 6.833 s each |
-| GSC WP video | `textures\intro\intro_gsc-wp.ogm` (dbb) | 613,967 | Theora 640 × 288, 25 fps, 136 frames, 5.44 s, video only |
+| GSC WP video | `textures\intro\intro_gsc-wp.ogm` (dbb) | 613,967 | Theora, picture 640 × 288 (coded frame the same size), 25 fps, 136 frames, 5.44 s, video only |
 | GSC WP sound L | `sounds\characters_voice\scenario\video\intro_gsc_wp_l.ogg` (dbb; identical copy in dba) | 111,028 | Vorbis mono 44.1 kHz, 25.954 s; below −60 dBFS from about 25.3 s |
 | GSC WP sound R | `sounds\characters_voice\scenario\video\intro_gsc_wp_r.ogg` (dbb) | 38,837 | Vorbis mono 44.1 kHz, 5.400 s |
-| GSC video | `textures\intro\intro_gsc.ogm` (db6) | 2,398,515 | Theora 800 × 360, 25 fps, 301 frames, 12.04 s, video only |
+| GSC video | `textures\intro\intro_gsc.ogm` (db6) | 2,398,515 | Theora, picture 800 × 360 (coded frame 800 × 368, header picture offset x 0, y 0), 25 fps, 301 frames, 12.04 s, video only |
 | GSC sound L / R | `sounds\characters_voice\scenario\video\intro_gsc_l.ogg` / `_r.ogg` (db9) | 114,689 / 115,980 | Vorbis mono 44.1 kHz, 13.839 s each |
 | ASUS images | `textures\ui\ui_asus_intro.dds` (db7) | 524,416 | 1024 × 512 DXT5; `config\ui\ui_asus_intro.xml` (`<file_name>ui\ui_asus_intro</file_name>`) defines `ui_asus_01` = x 0, y 0, 512 × 512 (left half) and `ui_asus_02` = x 512, y 0, 512 × 512 (right half) |
 | NVIDIA image | `textures\ui\ui_nvidia_intro.dds` (dbb) | 131,200 | 512 × 512 DXT1 |
@@ -170,8 +170,8 @@ Content, for recognition: the THQ video animates the chrome "THQ" logo onto blac
 glowing GSC logo resolving into a red "GSC WORLD PUBLISHING" logo on black; the GSC video flies through a
 metallic corridor and ends on the chrome "GSC GAME WORLD" logo on black. `ui_asus_01` is the white ASUS logo
 with "Rock Solid · Heart Touching"; `ui_asus_02` is the ROG emblem with "ASUS Gaming Series" and a red
-"Let's game"; the NVIDIA image is the "The way it's meant to be played" badge. The top and bottom pixel rows of
-the decoded video frames contain coloured garbage; the texture rectangles in §6.1 exclude them.
+"Let's game"; the NVIDIA image is the "The way it's meant to be played" badge. How a decoded frame becomes the texture
+that the §6.1 rectangles refer to is specified in §6.6.
 
 Overridden copies not used at launch: `textures\intro\intro_gsc-wp.ogm` in dba (9,385,148 bytes, 800 × 360,
 20.04 s) and `sounds\characters_voice\scenario\video\intro_gsc_wp_r.ogg` in dba (110,101 bytes, 25.954 s).
@@ -203,9 +203,9 @@ Sound: each of the `_l` and `_r` files plays once (not looped) as a mono source 
 listener at x = −0.5 and x = +0.5 respectively (y = 0, z = 0.3), giving a left/right pair. Which volume
 setting applies was not established.
 
-Placement: the `texture` attributes x, y, width, height select the part of the decoded frame (in pixels) that is
-shown. Because the `video_wnd` has no `fullscreen="1"` attribute, its own x/y/width/height are not used for the
-picture's size. Instead the shown picture is centred on the virtual screen at (512, 384), is 1024 virtual units
+Placement: the `texture` attributes x, y, width, height select the part of the video texture (in texels,
+counted from its top-left corner; §6.6) that is shown. Because the `video_wnd` has no `fullscreen="1"`
+attribute, its own x/y/width/height are not used for the picture's size. Instead the shown picture is centred on the virtual screen at (512, 384), is 1024 virtual units
 wide, and is 1024 × (rectangle height ÷ rectangle width) virtual units tall. If the game window's width divided
 by its height is greater than 1.3433334 (wider than 4:3), that height is additionally multiplied by 1.328 so
 the picture keeps its proportions after the virtual screen is stretched. The rest of the screen shows the black
@@ -263,6 +263,82 @@ non-uniformly).
 - Every other key and mouse input is ignored: no console, no menu, no other effect.
 - Any key bound to "quit" in the effective bindings (§4) works, including a second key bound to it.
 
+### 6.6 Video frames as textures
+
+This applies to every Ogg Theora video used as a texture: the three logo videos and the title-menu videos
+(`docs/behavior/title-menu.md` §3.2). Terms: the **coded frame** is the full decoded Theora frame (its size is
+the identification header's frame width/height in macroblocks × 16); the **picture size** is the header's
+picture width × height; the **header picture offset** is the header's picture x / y fields (in the Theora
+specification, y is counted from the bottom of the coded frame). Rows of the coded frame are numbered here from
+its **top** row (row 0, the top of the image as displayed), columns from its left.
+
+**Texture size and frame position.** The video texture is a 32-bit RGBA texture with a single mip level whose
+width is the smallest power of two ≥ the picture width and whose height is the smallest power of two ≥ the
+picture height. Texel (x, y) of the texture, for 0 ≤ x < picture width and 0 ≤ y < picture height, receives the
+pixel at column x, row y of the coded frame. The header picture offset is **ignored**: the original always takes
+the top-left picture-width × picture-height block of the coded frame, never the picture region at the header's
+offset. Texels with x ≥ picture width or y ≥ picture height are never written while the video plays; their
+content is whatever the texture held when it was created (not set by the game; see §9). The texture is
+rewritten only when a new frame has been decoded; between frames, and after a non-looping video has stopped, it
+keeps the last frame.
+
+| Video | Coded frame | Picture size, header offset | Texture | Coded rows / columns that become texels | §6.1 / title-menu rectangle (x, y, w × h) | Coded rows / columns shown |
+|---|---|---|---|---|---|---|
+| THQ `thq_logo_hyuv` | 720 × 496 | 720 × 486, (0, 10) | 1024 × 512 | rows 0–485, columns 0–719 | 0, 1, 720 × 484 | rows 1–484, columns 0–719 |
+| GSC WP `intro_gsc-wp` | 640 × 288 | 640 × 288, (0, 0) | 1024 × 512 | rows 0–287, columns 0–639 | 1, 1, 638 × 286 | rows 1–286, columns 1–638 |
+| GSC `intro_gsc` | 800 × 368 | 800 × 360, (0, 0) | 1024 × 512 | rows 0–359, columns 0–799 | 0, 1, 800 × 358 | rows 1–358, columns 0–799 |
+| Title-menu sky `ui\ui_mm_main_back_crop` | 880 × 400 | 876 × 400, (0, 0) | 1024 × 512 | rows 0–399, columns 0–875 | 0, 0, 876 × 400 | rows 0–399, columns 0–875 |
+| Title-menu fire `ui\ui_mm_fire` | 128 × 256 | 128 × 256, (0, 0) | 128 × 256 | rows 0–255, columns 0–127 | whole texture | rows 0–255, columns 0–127 |
+
+Data evidence for the GSC item: in every one of its 301 frames, coded rows 360–367 (the bottom eight rows of
+the coded frame) have Y′ = 0 and Cb, Cr in 0–4 (as decoded by a conformant decoder), while rows 0–359 hold
+the picture (the corridor and logo on black, Y′ ≈ 16 in black areas). Cropping by the header's picture offset as the Theora specification defines would
+select rows 8–367 and include those eight zero rows; the original selects rows 0–359 instead, so none of them
+reaches the texture. Through the rectangle (0, 1, 800 × 358) the GSC item therefore shows coded rows 1–358 and
+never shows a zero row. For THQ the header offset (y 10 from the bottom) selects the same rows 0–485 as the
+original's rule; coded rows 486–495 are black (Y′ 16–18, Cb = Cr = 128) and are not used. The first and
+last picture rows of each startup video, which the rectangles leave out, contain ordinary picture content
+continuous with the neighbouring rows, not garbage.
+
+**Chroma.** All of these videos are 4:2:0 (header pixel format 0). The texel at (x, y) uses the luma sample at
+(x, y) and the Cb and Cr samples at (⌊x / 2⌋, ⌊y / 2⌋) of the chroma planes (rows also counted from the top):
+each chroma sample is repeated over its 2 × 2 luma block, with no chroma interpolation and no adjustment for
+chroma siting. The header's colour-space field is not consulted (the five videos carry the values 0, 1 and 2;
+all are converted identically).
+
+**Y′CbCr → RGB.** Which of two equivalent paths applies depends on the graphics hardware:
+
+- *Hardware with pixel shader 2.0 or later* (pixel-shader major × 10 + minor > 19; any current GPU): the texture
+  stores the samples unconverted — red = Y′, green = Cb, blue = Cr, alpha = 255. A UI window whose texture name
+  has a `.ogm` file under `textures\` is then drawn with the data-defined shader `hud\movie`
+  (`shaders\r1\hud_movie.s`, winning copy dba, 245 bytes; identical `shaders\r2\` copy): no fog, no depth test or
+  depth write, alpha blending source-alpha / inverse-source-alpha, texture sampled with wrap addressing and
+  filtered (linear filtering, upgraded to anisotropic for the base texture), and pixel shader
+  `shaders\r1\yuv2rgb.ps` (616 bytes). With Y, U, V the filtered texture's red, green and blue as 0…1 values
+  (8-bit value ÷ 255), the shader outputs
+  - R = 1.16406·Y + 1.59765·V − 0.86961
+  - G = 1.16406·Y − 0.390625·U − 0.8125·V + 0.53076
+  - B = 1.16406·Y + 2.01562·U − 1.0786
+  - A = 1 (opaque; the window's own colour and alpha are not applied)
+
+  in reduced (half) precision. Conversion happens after texture filtering. Out-of-range results are clamped to
+  0…1 by the 8-bit render target.
+- *Older hardware*: the conversion is done when the frame is written to the texture, per texel, with integers:
+  with c = 298·(Y′ − 16), d = Cb − 128, e = Cr − 128,
+  R = (c + 409·e + 128) ÷ 256, G = (c − 100·d − 208·e + 128) ÷ 256, B = (c + 516·d + 128) ÷ 256, each division
+  rounding toward −∞ (arithmetic shift) and each result clamped to 0…255; alpha = 255. The window's normal shader
+  is used.
+
+Both are BT.601 limited-range conversions (Y′ 16–235, chroma 16–240 centred on 128). For reference, a texel of
+Y′ = Cb = Cr = 0 converts to RGB (0, 135, 0) on either path, so GSC's rows 360–367 would appear green if
+they were shown.
+
+Evidence: the frame-to-texture conversion of `XR_3DA.exe`, run in a CPU emulator on the shipped files, produced
+for every pixel of the sampled frames (frames 0 and 60 or 150 of each of the five videos) exactly the texels
+described above, and its Theora decoding is bit-identical to that of an independent conformant decoder
+(FFmpeg with cropping disabled). A conformant Theora decoder plus the rules above therefore reproduces the
+original's texture contents.
+
 ## 7. Audio summary
 
 - Memory error box, splash and loading period: silent.
@@ -288,6 +364,13 @@ effect on the startup is not specified here.
 - Mouse-cursor visibility during the logo sequence.
 - Any effect of command-line options on the sequence.
 - Timings in §6.3–6.4 were derived from the data and static analysis, not measured on a running game.
+- Initial content of the video-texture texels outside the picture (§6.6): the game never writes them; the
+  graphics runtime decides. Because sampling is filtered with wrap addressing, a rectangle edge that coincides
+  with a picture edge (e.g. the left and right edges of the THQ and GSC rectangles) can blend up to half a texel
+  of those texels (or of the opposite edge) into the outermost screen pixels; the exact sub-texel placement of UI
+  quads was not established.
+- §6.6 was established from the binaries (static analysis and emulated execution of the conversion) and the data;
+  no screenshot of the running original was taken.
 
 ## Provenance
 
@@ -303,6 +386,11 @@ effect on the startup is not specified here.
   read byte by byte. PE resources (bitmap, string table) of `XR_3DA.exe` extracted with a small resource
   reader and decoded.
 - Binary analysis: static analysis of `XR_3DA.exe` and `xrGame.dll` with Ghidra to establish behaviour
-  (memory thresholds, defaults of XML fields, timing rules, input handling, placement constants). The binaries
-  were not executed.
+  (memory thresholds, defaults of XML fields, timing rules, input handling, placement constants, video-texture
+  size, frame placement and colour conversion, shader selection, sampler defaults).
+- Execution (2026-11-23, §6.6): the Theora decoding and frame-to-texture conversion code of `XR_3DA.exe` was
+  executed in a CPU emulator (Unicorn) on the five shipped videos, with the texture outside the picture
+  pre-filled with a marker to see which texels are written; its output was compared pixel by pixel with FFmpeg's
+  uncropped decoding. Theora identification headers were read with a small parser following the public Theora
+  specification. The shader files were read as text. The game as a whole was not run.
 - No leaked source code, derived engines, third-party engine documentation or recollection was used.
