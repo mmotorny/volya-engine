@@ -179,12 +179,15 @@ async function runImport({ exe, bin, only }, onProgress) {
 function importProblem(message) {
   const again = "Choose both installer files again: the import continues where it stopped.";
   if (message === "pick") {
-    return { title: "Pick both installer files", text: "Choose the setup_….exe and its setup_…-1.bin together." };
+    return {
+      title: "Pick both installer files",
+      text: ["Choose ", fileName("setup_….exe"), " and ", fileName("setup_…-1.bin"), " together."],
+    };
   }
   if (/^Inno Setup headers|no game archives|not an Inno/i.test(message)) {
     return {
       title: "These aren't the game's installer files",
-      text: "Choose the .exe and -1.bin downloaded from GOG.",
+      text: "Choose both installer files downloaded from GOG.",
     };
   }
   const mismatch = message.match(/^(.*): MD5 mismatch/);
@@ -224,7 +227,7 @@ function showImport(status, snapshot = null) {
   const warn = ({ title, text }, kind = "problem") => {
     notice.className = `callout ${kind}`;
     progress.className = kind;
-    notice.replaceChildren(element("strong", { textContent: title }), element("span", { textContent: text }));
+    notice.replaceChildren(element("strong", { textContent: title }), element("span", {}, ...[text].flat()));
     notice.hidden = false;
   };
   /** A failed import: the bar stays where it stopped, with what happened. */
@@ -307,9 +310,9 @@ function showImport(status, snapshot = null) {
           "Download both installer files from your ",
           link("https://www.gog.com/en/account", "GOG library"),
           " (the game's offline backup installers): ",
-          element("code", { textContent: "setup_….exe" }),
+          fileName("setup_….exe"),
           " and ",
-          element("code", { textContent: "setup_…-1.bin" }),
+          fileName("setup_…-1.bin"),
           ".",
         ),
         element("li", {
@@ -326,6 +329,9 @@ function showImport(status, snapshot = null) {
     bottom(updateOffer(), settingsButton()),
   );
 }
+
+/** An installer file's name, as the steps show it. */
+const fileName = (name) => element("code", { textContent: name });
 
 /** A link that opens outside the app. */
 const link = (href, text) => element("a", { href, textContent: text, target: "_blank", rel: "noopener" });
