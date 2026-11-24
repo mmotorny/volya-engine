@@ -147,7 +147,7 @@ function showImport(status) {
       { className: "panel" },
       element("p", { className: "label", textContent: "Bring your own game" }),
       element("h2", { textContent: "Import S.T.A.L.K.E.R.: Shadow of Chernobyl" }),
-      element("p", { textContent: "Volya Engine runs the game from your own copy. It needs the GOG offline installer, Russian edition." }),
+      element("p", { textContent: "Volya Engine runs the game from your own copy, imported from its GOG offline installer." }),
       element(
         "ol",
         { className: "steps" },

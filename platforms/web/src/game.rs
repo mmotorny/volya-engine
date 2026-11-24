@@ -20,8 +20,6 @@ use crate::opfs;
 
 pub const GAME_DIR: &str = "game";
 pub const MANIFEST: &str = "import.json";
-/// Language of the game data imported (docs/roadmap.md).
-pub const LANGUAGE: &str = "ru-RU";
 
 /// What the importer has written; `complete` once every file is in place.
 #[derive(Default, Serialize, Deserialize)]

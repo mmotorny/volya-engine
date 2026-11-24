@@ -27,7 +27,7 @@ use md5::{Digest, Md5};
 const CHUNK_MAGIC: &[u8; 4] = b"zlb\x1a";
 
 /// A file the installer installs, assembled from GOG parts.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GameFile {
     /// Install path relative to the game directory, `/`-separated.
     pub path: String,
@@ -168,6 +168,43 @@ impl Installer {
         self.files
             .iter()
             .filter(move |f| !f.dependency && f.is_for(language))
+    }
+
+    /// The languages the game can be installed in: those whose tagged game
+    /// files add up to at least half the bytes of the best-covered language,
+    /// most bytes first (ties by tag). A language tagging only a few small
+    /// files (the Russian installer tags three, 12 KB, with eight other
+    /// languages) is not offered. Empty when no file is tagged.
+    pub fn offered_languages(&self) -> Vec<String> {
+        let mut bytes = std::collections::BTreeMap::<&str, u64>::new();
+        for f in self.files.iter().filter(|f| !f.dependency) {
+            for l in &f.languages {
+                *bytes.entry(l).or_default() += f.size;
+            }
+        }
+        let most = bytes.values().copied().max().unwrap_or(0);
+        let mut offered: Vec<_> = bytes.into_iter().filter(|&(_, b)| b * 2 >= most).collect();
+        offered.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+        offered.into_iter().map(|(l, _)| l.to_owned()).collect()
+    }
+
+    /// The language to install, chosen from the data: the first of
+    /// `preferred` (e.g. the device's languages) among the offered ones, by
+    /// exact tag, then by primary subtag (`en` matches `en-US`); otherwise
+    /// the best-covered language. `None` when no file is tagged (every game
+    /// file is installed).
+    pub fn choose_language(&self, preferred: &[String]) -> Option<String> {
+        let offered = self.offered_languages();
+        let primary = |tag: &str| tag.split('-').next().unwrap_or(tag).to_ascii_lowercase();
+        let exact = preferred
+            .iter()
+            .find_map(|p| offered.iter().find(|o| o.eq_ignore_ascii_case(p)));
+        let by_primary = || {
+            preferred
+                .iter()
+                .find_map(|p| offered.iter().find(|o| primary(o) == primary(p)))
+        };
+        exact.or_else(by_primary).or(offered.first()).cloned()
     }
 }
 
@@ -333,6 +370,59 @@ mod tests {
             Arg::Other("False")
         );
         assert_eq!(Call::parse("nonsense"), None);
+    }
+
+    fn installer(files: &[(&str, u64, &[&str])]) -> Installer {
+        Installer {
+            files: files
+                .iter()
+                .map(|(path, size, langs)| GameFile {
+                    path: (*path).into(),
+                    size: *size,
+                    languages: langs.iter().map(|l| (*l).into()).collect(),
+                    ..GameFile::default()
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn chooses_language_from_data() {
+        let prefs = |p: &[&str]| p.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        // Like the Russian installer: the game in one language, a few small
+        // files tagged with others.
+        let single = installer(&[
+            ("a", 600, &["ru-RU"]),
+            ("b", 400, &["ru-RU"]),
+            ("c", 5, &["en-US", "ru-RU", "uk-UA"]),
+        ]);
+        assert_eq!(single.offered_languages(), ["ru-RU"]);
+        assert_eq!(
+            single.choose_language(&prefs(&["en-US"])),
+            Some("ru-RU".into())
+        );
+        // Like the English installer: shared archives in several languages,
+        // some files in one only.
+        let multi = installer(&[
+            ("a", 500, &["de-DE", "en-US", "uk-UA"]),
+            ("b", 400, &["de-DE", "en-US", "uk-UA"]),
+            ("c", 100, &["en-US"]),
+        ]);
+        assert_eq!(multi.offered_languages(), ["en-US", "de-DE", "uk-UA"]);
+        assert_eq!(
+            multi.choose_language(&prefs(&["uk-UA", "en-US"])),
+            Some("uk-UA".into())
+        );
+        assert_eq!(multi.choose_language(&prefs(&["uk"])), Some("uk-UA".into()));
+        assert_eq!(
+            multi.choose_language(&prefs(&["fr-FR"])),
+            Some("en-US".into())
+        );
+        assert_eq!(multi.choose_language(&[]), Some("en-US".into()));
+        assert_eq!(
+            installer(&[("a", 1, &[])]).choose_language(&prefs(&["en"])),
+            None
+        );
     }
 
     #[test]

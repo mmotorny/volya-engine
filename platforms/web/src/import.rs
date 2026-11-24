@@ -17,7 +17,7 @@ use volya_engine_installer::{GameFile, Installer, extract, hex};
 use wasm_bindgen::prelude::*;
 use web_sys::{FileSystemReadWriteOptions, FileSystemSyncAccessHandle};
 
-use crate::game::{GAME_DIR, LANGUAGE, MANIFEST, Manifest, ManifestFile};
+use crate::game::{GAME_DIR, MANIFEST, Manifest, ManifestFile};
 use crate::opfs;
 
 /// `Read + Seek` over a JS source.
@@ -90,11 +90,15 @@ fn wanted(file: &GameFile) -> bool {
 }
 
 thread_local! {
-    static PLAN: RefCell<Vec<GameFile>> = const { RefCell::new(Vec::new()) };
+    /// The planned files and their language (empty when the installer tags
+    /// none), for `run_import`.
+    static PLAN: RefCell<(String, Vec<GameFile>)> = const { RefCell::new((String::new(), Vec::new())) };
 }
 
 #[derive(Serialize)]
 struct Plan {
+    /// The language chosen from the installer's data (empty when it tags none).
+    language: String,
     files: Vec<PlanFile>,
     total: u64,
 }
@@ -110,24 +114,26 @@ fn error(e: impl std::fmt::Display) -> JsValue {
 }
 
 /// Parses the installer's `.exe` and returns the files an import would write
-/// (JSON `{files: [{path, size}], total}`).
+/// (JSON `{language, files: [{path, size}], total}`). The language comes from
+/// the installer's data, preferring the device's `preferred` languages
+/// (BCP 47 tags) among those it offers.
 #[wasm_bindgen]
-pub fn plan_import(exe: JsValue) -> Result<String, JsValue> {
+pub fn plan_import(exe: JsValue, preferred: Vec<String>) -> Result<String, JsValue> {
     let mut source = Source::new(exe)?;
     let mut bytes = Vec::with_capacity(source.size as usize);
     source.read_to_end(&mut bytes).map_err(error)?;
     let installer = Installer::parse(Cursor::new(bytes)).map_err(error)?;
+    let language = installer.choose_language(&preferred).unwrap_or_default();
     let files: Vec<GameFile> = installer
-        .game_files(LANGUAGE)
+        .game_files(&language)
         .filter(|f| wanted(f))
         .cloned()
         .collect();
     if files.is_empty() {
-        return Err(error(format!(
-            "no {LANGUAGE} game archives in this installer"
-        )));
+        return Err(error("no game archives in this installer"));
     }
     let plan = Plan {
+        language: language.clone(),
         total: files.iter().map(|f| f.size).sum(),
         files: files
             .iter()
@@ -137,7 +143,7 @@ pub fn plan_import(exe: JsValue) -> Result<String, JsValue> {
             })
             .collect(),
     };
-    PLAN.with(|p| *p.borrow_mut() = files);
+    PLAN.with(|p| *p.borrow_mut() = (language, files));
     serde_json::to_string(&plan).map_err(error)
 }
 
@@ -179,12 +185,15 @@ pub async fn run_import(bin: JsValue, only: JsValue, progress: Function) -> Resu
     } else {
         Some(serde_wasm_only(&only)?)
     };
-    let files: Vec<GameFile> = PLAN.with(|p| {
-        p.borrow()
+    let (language, files): (String, Vec<GameFile>) = PLAN.with(|p| {
+        let plan = p.borrow();
+        let files = plan
+            .1
             .iter()
             .filter(|f| only.as_ref().is_none_or(|o| o.contains(&f.path)))
             .cloned()
-            .collect()
+            .collect();
+        (plan.0.clone(), files)
     });
     if files.is_empty() {
         return Err(error("nothing to import; plan first"));
@@ -194,9 +203,9 @@ pub async fn run_import(bin: JsValue, only: JsValue, progress: Function) -> Resu
     let dir = opfs::create_dir(&namespace, GAME_DIR).await?;
     let mut manifest = crate::game::read_manifest()
         .await?
-        .filter(|m| m.language == LANGUAGE)
+        .filter(|m| m.language == language)
         .unwrap_or_default();
-    manifest.language = LANGUAGE.into();
+    manifest.language = language;
     manifest.complete = false;
 
     let total: u64 = files.iter().map(|f| f.size).sum();

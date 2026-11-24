@@ -4,6 +4,7 @@
 // Import worker: extracts the game from a GOG installer into OPFS
 // (docs/architecture.md, Game data). Messages from the page:
 //   { type: "plan", exe }            → { type: "plan", plan } | { type: "error", message }
+//                                      (plan: { language, files: [{ path, size }], total })
 //   { type: "run", bin, only }       → { type: "progress", done, total, path }…, { type: "done" } | error
 // `exe` and `bin` are Files (or, in tests, `{ url, size }` served with range
 // support); `only` optionally restricts the import to some paths.
@@ -39,7 +40,9 @@ onmessage = async ({ data }) => {
   try {
     await ready;
     if (data.type === "plan") {
-      postMessage({ type: "plan", plan: JSON.parse(plan_import(source(data.exe))) });
+      // The installer's language is chosen from its data, preferring the
+      // device's languages among those it offers.
+      postMessage({ type: "plan", plan: JSON.parse(plan_import(source(data.exe), [...navigator.languages])) });
     } else if (data.type === "run") {
       let last = 0;
       await run_import(source(data.bin), data.only ?? null, (done, total, path) => {

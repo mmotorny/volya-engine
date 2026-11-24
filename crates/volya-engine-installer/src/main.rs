@@ -14,7 +14,8 @@ Usage: volya-engine-installer list <setup.exe> [--lang LANG]
        volya-engine-installer extract <setup.exe> <out-dir> [--lang LANG]
 
 Lists or extracts the game files of a GOG offline installer for LANG
-(default: ru-RU). The data slice is read from <setup.exe stem>-1.bin.";
+(default: chosen from the installer's data, the language most of its files
+are for). The data slice is read from <setup.exe stem>-1.bin.";
 
 fn main() -> ExitCode {
     match run() {
@@ -28,15 +29,21 @@ fn main() -> ExitCode {
 
 fn run() -> Result<(), String> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
-    let mut lang = "ru-RU".to_owned();
+    let mut lang = None;
     if let Some(i) = args.iter().position(|a| a == "--lang") {
-        lang = args.get(i + 1).ok_or("--lang needs a value")?.clone();
+        lang = Some(args.get(i + 1).ok_or("--lang needs a value")?.clone());
         args.drain(i..=i + 1);
     }
+    let language = |installer: &Installer| {
+        lang.clone()
+            .or_else(|| installer.choose_language(&[]))
+            .unwrap_or_default()
+    };
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     match args.as_slice() {
         ["list", exe] => {
             let installer = parse(exe)?;
+            let lang = language(&installer);
             let mut total = 0;
             for file in installer.game_files(&lang) {
                 println!(
@@ -49,12 +56,24 @@ fn run() -> Result<(), String> {
                 total += file.size;
             }
             println!("{total:>12}  total");
+            let tagged = |l: &str| {
+                let files = installer.game_files(l).filter(|f| !f.languages.is_empty());
+                let (n, bytes) = files.fold((0, 0), |(n, b), f| (n + 1, b + f.size));
+                format!("{l} ({n} files, {bytes} bytes)")
+            };
+            let offered: Vec<_> = installer
+                .offered_languages()
+                .iter()
+                .map(|l| tagged(l))
+                .collect();
+            println!("language {lang:?}; offered: {}", offered.join(", "));
             Ok(())
         }
         ["extract", exe, out] => {
             let installer = parse(exe)?;
             let mut bin =
                 BufReader::new(File::open(bin_path(exe)?).map_err(|e| format!("open .bin: {e}"))?);
+            let lang = language(&installer);
             let start = Instant::now();
             let mut total = 0;
             for file in installer.game_files(&lang) {
