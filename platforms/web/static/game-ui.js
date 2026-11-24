@@ -1,9 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Game UI: importing the game from a GOG installer, launching it, and
-// browsing its files. Plain DOM with native buttons, so touch, mouse and
-// keyboard all work.
+// Game UI: importing the game from a GOG installer and launching it. Plain
+// DOM with native buttons, so touch, mouse and keyboard all work.
 //
 // The app always opens here; the game starts from the Play button. That tap
 // also lets the browser play sound (it stays silent until the first user
@@ -12,8 +11,6 @@
 // this interface hides until the player quits (the Q key or the title
 // menu's last item).
 
-const TEXT_EXTENSIONS = new Set(["ltx", "xml", "script", "txt", "ini", "ps", "vs", "s", "h"]);
-const PREVIEW_BYTES = 4096;
 
 let call;
 const root = () => document.getElementById("game");
@@ -27,22 +24,6 @@ function element(tag, props = {}, ...children) {
   const node = Object.assign(document.createElement(tag), props);
   node.append(...children.filter((c) => c !== null && c !== undefined));
   return node;
-}
-
-/** Storage facts for the home screen. */
-async function storageFacts(status) {
-  const persisted = await navigator.storage.persisted();
-  const { usage, quota } = await navigator.storage.estimate();
-  return element(
-    "dl",
-    { className: "facts" },
-    element("dt", { textContent: "Game data" }),
-    element("dd", { textContent: formatBytes(status.bytes) }),
-    element("dt", { textContent: "App storage" }),
-    element("dd", { textContent: `${formatBytes(usage)} of ${formatBytes(quota)}` }),
-    element("dt", { textContent: "Kept by the browser" }),
-    element("dd", { textContent: persisted ? "Always" : "May be cleared" }),
-  );
 }
 
 /** Entry point, called by main.js once the engine runs. */
@@ -223,16 +204,18 @@ async function showHome(status) {
     note.hidden = false;
   }
 
-  const files = element("div", { className: "files" });
-  const listing = element(
-    "details",
-    { className: "panel" },
-    element("summary", {}, element("p", { className: "label", textContent: "Game files" })),
-    files,
-  );
-  listing.addEventListener("toggle", () => listing.open && !files.childElementCount && showFiles(files, ""), { once: false });
+  // Only worth saying when it is true: the browser may delete the import.
+  const persisted = await navigator.storage.persisted();
+  const warning = persisted
+    ? null
+    : element(
+        "div",
+        { className: "panel warning" },
+        element("p", { className: "label", textContent: "Storage" }),
+        element("p", { textContent: "This browser may delete the imported game when it needs space. Install Volya Engine as an app to keep it (on iPhone: Share, then Add to Home Screen)." }),
+      );
 
-  const remove = element("button", { className: "danger wide", textContent: "Remove imported game" });
+  const remove = element("button", { className: "quiet danger", textContent: `Remove imported game · ${formatBytes(status.bytes)}` });
   remove.addEventListener("click", async () => {
     if (!confirm("Remove the imported game from this app's storage? You can import it again from the installer.")) return;
     await call("forget_game");
@@ -248,59 +231,7 @@ async function showHome(status) {
       launch,
       note,
     ),
-    listing,
-    element("div", { className: "panel" }, element("p", { className: "label", textContent: "Storage" }), await storageFacts(status), remove),
+    warning,
+    remove,
   );
-}
-
-/** The game's files under `path`, browsable, with a preview of the picked file. */
-async function showFiles(container, path) {
-  const entries = await call("read_dir", { path });
-  const crumbs = element("nav", { className: "crumbs" });
-  const parts = path ? path.split("/") : [];
-  const crumb = (label, target) => {
-    const button = element("button", { textContent: label });
-    button.addEventListener("click", () => showFiles(container, target));
-    return button;
-  };
-  crumbs.append(crumb("game", ""));
-  parts.forEach((part, i) => crumbs.append("/", crumb(part, parts.slice(0, i + 1).join("/"))));
-
-  const preview = element("pre", { className: "preview", hidden: true });
-  const list = element("ul", { className: "entries" });
-  for (const entry of entries) {
-    const target = path ? `${path}/${entry.name}` : entry.name;
-    const button = element(
-      "button",
-      {},
-      element("span", { className: entry.dir ? "name dir" : "name", textContent: entry.dir ? `${entry.name}/` : entry.name }),
-      entry.dir ? null : element("span", { className: "size", textContent: formatBytes(entry.size) }),
-    );
-    button.addEventListener("click", () => (entry.dir ? showFiles(container, target) : showPreview(target, preview)));
-    list.append(element("li", {}, button));
-  }
-  container.replaceChildren(crumbs, list, preview);
-}
-
-async function showPreview(path, preview) {
-  const { size, bytes } = await call("read_head", { path, max: PREVIEW_BYTES });
-  const data = new Uint8Array(bytes);
-  const extension = path.split(".").pop().toLowerCase();
-  let text;
-  if (TEXT_EXTENSIONS.has(extension)) {
-    // The game's text files are Windows-1251 (Cyrillic).
-    text = new TextDecoder("windows-1251").decode(data);
-  } else {
-    const lines = [];
-    for (let i = 0; i < Math.min(data.length, 512); i += 16) {
-      const row = data.subarray(i, i + 16);
-      const hex = [...row].map((b) => b.toString(16).padStart(2, "0")).join(" ");
-      const ascii = [...row].map((b) => (b >= 32 && b < 127 ? String.fromCharCode(b) : ".")).join("");
-      lines.push(`${i.toString(16).padStart(6, "0")}  ${hex.padEnd(47)}  ${ascii}`);
-    }
-    text = lines.join("\n");
-  }
-  preview.textContent = `${path} (${formatBytes(size)})${size > data.length ? `, first ${formatBytes(data.length)}` : ""}\n\n${text}`;
-  preview.hidden = false;
-  preview.scrollIntoView({ block: "nearest" });
 }

@@ -253,8 +253,7 @@ button:active:not(:disabled) {
   transform: scale(0.98);
 }
 
-button:focus-visible,
-summary:focus-visible {
+button:focus-visible {
   outline: 2px solid var(--line);
   outline-offset: 2px;
 }
@@ -294,6 +293,19 @@ button.wide {
   width: 100%;
 }
 
+/* A text-only action, for what shouldn't compete with Play. */
+button.quiet {
+  align-self: center;
+  border-color: transparent;
+  background: transparent;
+  font-size: 0.875rem;
+}
+
+
+.panel.warning {
+  border-color: rgba(255, 155, 143, 0.45);
+}
+
 button.danger {
   color: var(--danger);
   background: transparent;
@@ -304,6 +316,12 @@ button.danger:hover:not(:disabled) {
   background: rgba(255, 155, 143, 0.1);
   border-color: rgba(255, 155, 143, 0.6);
 }
+
+button.quiet.danger,
+button.quiet.danger:hover:not(:disabled) {
+  border-color: transparent;
+}
+
 
 .note {
   margin-top: 0.75rem !important;
@@ -347,27 +365,6 @@ progress::-moz-progress-bar {
   overflow-wrap: anywhere;
 }
 
-/* Facts: label left, value right, monospaced values. */
-.facts {
-  margin: 0 0 1rem;
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 0.5rem 1rem;
-}
-
-.facts dt {
-  color: var(--ink-3);
-  font-size: 0.875rem;
-}
-
-.facts dd {
-  margin: 0;
-  text-align: right;
-  font: 0.875rem/1.5 var(--mono);
-  color: var(--ink);
-  overflow-wrap: anywhere;
-}
-
 .steps {
   margin: 0 0 1.25rem;
   padding-left: 1.25rem;
@@ -381,117 +378,6 @@ progress::-moz-progress-bar {
 code {
   font: 0.875em var(--mono);
   color: var(--ink);
-}
-
-/* Game files: a collapsible technical listing. */
-details.panel {
-  padding: 0;
-}
-
-details.panel > summary {
-  list-style: none;
-  cursor: pointer;
-  padding: 1rem 1.25rem;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  border-radius: var(--radius);
-}
-
-details.panel > summary::-webkit-details-marker {
-  display: none;
-}
-
-details.panel > summary::after {
-  content: "";
-  width: 0.5rem;
-  height: 0.5rem;
-  border-right: 2px solid var(--ink-3);
-  border-bottom: 2px solid var(--ink-3);
-  transform: rotate(45deg) translateY(-2px);
-  transition: transform 0.15s;
-}
-
-details.panel[open] > summary::after {
-  transform: rotate(-135deg) translateY(-2px);
-}
-
-details.panel > summary .label {
-  margin: 0;
-}
-
-.files {
-  padding: 0 1.25rem 1.25rem;
-}
-
-.crumbs {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.15rem;
-  margin: 0 0 0.5rem;
-  font: 0.8125rem var(--mono);
-  color: var(--ink-3);
-}
-
-.crumbs button {
-  min-height: 32px;
-  padding: 0 0.5rem;
-  border: 0;
-  background: transparent;
-  color: var(--line);
-  font: inherit;
-}
-
-.entries {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  border-top: 1px solid var(--panel-edge);
-}
-
-.entries button {
-  width: 100%;
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
-  text-align: left;
-  border-radius: 0;
-  border-width: 0 0 1px;
-  border-color: rgba(159, 203, 250, 0.12);
-  background: transparent;
-  font: 0.875rem/1.4 var(--mono);
-}
-
-.entries button:hover:not(:disabled) {
-  border-color: rgba(159, 203, 250, 0.12);
-}
-
-.entries .name {
-  overflow-wrap: anywhere;
-}
-
-.entries .dir {
-  color: var(--line);
-}
-
-.entries .size {
-  color: var(--ink-3);
-  white-space: nowrap;
-}
-
-.preview {
-  margin: 0.75rem 0 0;
-  background: rgba(5, 16, 36, 0.7);
-  border: 1px solid var(--panel-edge);
-  border-radius: 10px;
-  padding: 0.75rem;
-  max-height: 50vh;
-  overflow: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font: 12px/1.45 var(--mono);
-  color: var(--ink-2);
 }
 
 /* Landscape phones: brand beside the content to save height. */
