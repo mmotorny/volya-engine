@@ -62,7 +62,10 @@ export const tests = {
       await new Promise((resolve) => navigator.serviceWorker.addEventListener("controllerchange", resolve, { once: true }));
     }
     assert(registration.active, "no active service worker");
-    const files = (await (await fetch(`${base}files.txt`, { cache: "no-store" })).text()).split("\n").filter(Boolean);
+    const files = (await (await fetch(`${base}files.txt`, { cache: "no-store" })).text())
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => line.slice(line.indexOf(" ") + 1));
     assert(files.includes("./") && files.includes("sw.js") && files.some((f) => f.endsWith(".wasm")), `files ${files.join(" ")}`);
     const offline = (on) => fetch(`${base}__test/offline/${on ? "on" : "off"}`, { method: "POST" });
     await offline(true);
@@ -78,6 +81,49 @@ export const tests = {
     } finally {
       await offline(false);
     }
+  },
+
+  "an update downloads only the files that changed": async () => {
+    // Runs the real sw.js install handler against a fake network and cache.
+    const source = await (await fetch(`${base}sw.js`, { cache: "no-store" })).text();
+    const store = new Map();
+    const cache = {
+      match: async (key) => store.get(typeof key === "string" ? key : key.url)?.clone(),
+      put: async (key, response) => store.set(typeof key === "string" ? key : key.url, response),
+      addAll: async (requests) => {
+        downloaded.push(...requests.map((r) => r.url));
+        for (const request of requests) store.set(request.url, new Response(`body of ${request.url}`));
+      },
+    };
+    let manifest = "";
+    let downloaded = [];
+    const install = async () => {
+      const listeners = {};
+      const self = { addEventListener: (type, f) => (listeners[type] = f), skipWaiting() {}, registration: {}, clients: {} };
+      const fakeFetch = async () => new Response(manifest);
+      const fakeCaches = { open: async () => cache };
+      downloaded = [];
+      class FakeRequest {
+        constructor(url) {
+          this.url = url;
+        }
+      }
+      new Function("self", "caches", "fetch", "Request", source)(self, fakeCaches, fakeFetch, FakeRequest);
+      let done;
+      listeners.install({ waitUntil: (p) => (done = p) });
+      await done;
+    };
+    manifest = "aaaa a.js\nbbbb b.wasm\n";
+    await install();
+    assertEqual(downloaded.sort().join(" "), "a.js b.wasm", "first install");
+    manifest = "aaaa a.js\ncccc b.wasm\ndddd c.css\n";
+    await install();
+    assertEqual(downloaded.sort().join(" "), "b.wasm c.css", "update");
+    await install();
+    assertEqual(downloaded.join(" "), "", "no changes");
+    store.delete("a.js");
+    await install();
+    assertEqual(downloaded.join(" "), "a.js", "evicted copy");
   },
 
   "layout fits the viewport": () => {

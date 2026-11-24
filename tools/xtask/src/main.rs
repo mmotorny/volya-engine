@@ -227,21 +227,32 @@ fn web(profile: Profile) -> Result {
 }
 
 /// Lets the service worker keep a whole build for offline use: `files.txt`
-/// lists every file it precaches (with `./` for the page itself), and the
-/// build stamped into `sw.js` makes each deploy install anew, so a new build's
-/// files are precached too (static/sw.js).
+/// lists every file (with `./` for the page itself) after a hash of its
+/// content, so an update downloads only files that changed; the build stamped
+/// into `sw.js` makes each deploy install anew (static/sw.js).
 fn offline_files(dist: &Path, build: &str) -> Result {
+    use sha2::{Digest, Sha256};
+    let sw = dist.join("sw.js");
+    let script = fs::read_to_string(&sw).map_err(|e| format!("sw.js: {e}"))?;
+    fs::write(&sw, format!("{script}// build {build}\n")).map_err(|e| format!("sw.js: {e}"))?;
     let mut files = Vec::new();
     list_files(dist, dist, &mut files).map_err(|e| format!("list dist: {e}"))?;
     files.retain(|f| f != "files.txt");
-    files.push("files.txt".into());
-    files.push("./".into());
-    files.sort();
-    fs::write(dist.join("files.txt"), files.join("\n") + "\n")
-        .map_err(|e| format!("files.txt: {e}"))?;
-    let sw = dist.join("sw.js");
-    let script = fs::read_to_string(&sw).map_err(|e| format!("sw.js: {e}"))?;
-    fs::write(&sw, format!("{script}// build {build}\n")).map_err(|e| format!("sw.js: {e}"))
+    let hash = |file: &str| -> Result<String> {
+        let bytes = fs::read(dist.join(file)).map_err(|e| format!("{file}: {e}"))?;
+        let digest = Sha256::digest(&bytes);
+        Ok(digest[..8].iter().map(|b| format!("{b:02x}")).collect())
+    };
+    let mut lines = Vec::new();
+    for file in &files {
+        lines.push(format!("{} {file}", hash(file)?));
+        if file == "index.html" {
+            lines.push(format!("{} ./", hash(file)?));
+        }
+    }
+    lines.sort_by(|a, b| a[17..].cmp(&b[17..]));
+    fs::write(dist.join("files.txt"), lines.join("\n") + "\n")
+        .map_err(|e| format!("files.txt: {e}"))
 }
 
 fn list_files(root: &Path, dir: &Path, files: &mut Vec<String>) -> io::Result<()> {

@@ -10,21 +10,45 @@
 
 const CACHE = "volya-engine-app";
 
-// Install precaches the whole build (`files.txt`, written by `cargo xtask
-// web`, which also stamps the build into this file so every deploy installs
-// anew), so offline use works even for files the app hasn't fetched yet.
+// Install keeps the whole build for offline use, even files the app hasn't
+// fetched yet. `files.txt` (written by `cargo xtask web`) lists each file after
+// a hash of its content; only files whose hash differs from the copy kept (or
+// that aren't kept) are downloaded. xtask stamps the build into this file so
+// every deploy installs anew.
+const MANIFEST = "files.txt";
+
+const parse = (text) =>
+  new Map(
+    text
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const space = line.indexOf(" ");
+        return [line.slice(space + 1), line.slice(0, space)];
+      }),
+  );
+
 self.addEventListener("install", (event) => {
   self.skipWaiting();
   event.waitUntil(
     (async () => {
-      const response = await fetch("files.txt", { cache: "no-cache" });
+      const response = await fetch(MANIFEST, { cache: "no-cache" });
       if (!response.ok) return;
-      const files = (await response.text()).split("\n").filter(Boolean);
+      const text = await response.clone().text();
       const cache = await caches.open(CACHE);
-      await cache.addAll(files.map((file) => new Request(file, { cache: "no-cache" })));
+      const kept = await cache.match(MANIFEST);
+      const old = kept ? parse(await kept.text()) : new Map();
+      const changed = [];
+      for (const [file, hash] of parse(text)) {
+        if (old.get(file) !== hash || !(await cache.match(file))) changed.push(file);
+      }
+      await cache.addAll(changed.map((file) => new Request(file, { cache: "no-cache" })));
+      // Recorded last: an interrupted install downloads the rest next time.
+      await cache.put(MANIFEST, response);
     })().catch((error) => console.warn(`offline copy: ${error.message}`)),
   );
 });
+
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
 
 self.addEventListener("fetch", (event) => {
