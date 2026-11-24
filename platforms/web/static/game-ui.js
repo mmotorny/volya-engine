@@ -341,12 +341,10 @@ function showImport(status, snapshot = null) {
           ...installerFiles(),
           ".",
         ),
-        element("li", {
-          textContent:
-            platform() === "ios"
-              ? "Choose both files below. The game is copied into this app's storage; iOS also makes a temporary copy of the installer, so leave room for both. Afterwards you can delete the installer files."
-              : "Choose both files below. The game is copied into this app's storage. Afterwards you can delete the installer files.",
-        }),
+        // Storage needs are only known once the installer is read; the check
+        // after choosing says exactly what's needed (iOS's temporary copy of
+        // the installer has been made by then).
+        element("li", { textContent: "Choose both files below. The game is copied into this app's storage. Afterwards you can delete the installer files." }),
       ),
       progress,
       message,
