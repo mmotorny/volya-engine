@@ -216,6 +216,39 @@ export const tests = {
     assertEqual(kept(), "c.css", "removed files are dropped on activation");
     assert(store.has(`${scope}__settings.json`), "settings dropped");
     assertEqual(removal.state.claimed, 1, "claims once active");
+
+    // Fetches: players get the kept copy; the UX audit pages, the network.
+    const fetched = [];
+    const self = {
+      addEventListener: (type, f) => (listeners[type] = f),
+      skipWaiting() {},
+      registration: { scope },
+      clients: {
+        get: async (id) => ({ url: id === "audit" ? `${scope}ux-audit/frame.html` : `${scope}` }),
+        claim: async () => {},
+        matchAll: async () => [],
+      },
+    };
+    const listeners = {};
+    const code = source
+      .replace(/const PRECACHE = \[.*?\];/s, `const PRECACHE = ${JSON.stringify([["c.css", "dddd", 300]])};`);
+    const fakeFetch = async (request, init) => {
+      fetched.push(`${typeof request === "string" ? request : request.url} ${init?.cache ?? "default"}`);
+      return new Response("network");
+    };
+    new Function("self", "caches", "fetch", "Request", code)(self, { open: async () => cache }, fakeFetch, class {
+      constructor(url) {
+        this.url = url;
+      }
+    });
+    const serve = async (clientId) => {
+      let response;
+      listeners.fetch({ request: { method: "GET", url: `${scope}c.css`, mode: "no-cors" }, clientId, respondWith: (r) => (response = r) });
+      return (await response).text();
+    };
+    assert((await serve("player")) !== "network", "players didn't get the kept copy");
+    assertEqual(await serve("audit"), "network", "the UX audit got the kept copy");
+    assertEqual(fetched.at(-1), `${scope}c.css no-cache`, "UX audit fetch not revalidated");
   },
 
   "a game the browser deleted is said so, on the import screen": async () => {
