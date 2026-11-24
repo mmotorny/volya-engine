@@ -40,6 +40,12 @@ globalThis.volyaChromium = !device.touch;
 globalThis.volyaInstalled = state.tab ? false : true;
 if (state.tab && !device.touch) globalThis.volyaInstallOffer = { prompt: async () => {}, userChoice: Promise.resolve({ outcome: "dismissed" }) };
 
+// A design proposal (proposals/<name>.css): its stylesheet and class.
+if (state.variant) {
+  document.documentElement.classList.add(`proposal-${state.variant}`);
+  document.head.insertAdjacentHTML("beforeend", `<link rel="stylesheet" href="proposals/${state.variant}.css">`);
+}
+
 // Whether an import finished here before (the cookie mark in game-ui.js).
 globalThis.volyaImportedBefore = Boolean(state.deleted);
 

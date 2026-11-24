@@ -1,0 +1,53 @@
+/* SPDX-FileCopyrightText: 2026 Maksym Motorny */
+/* SPDX-License-Identifier: BSD-3-Clause */
+
+/* Proposal (UX audit board only, not used by the app): on wide windows the
+   logo takes a left column, centred and kept in view, and the content a
+   right one, so controls stay above the fold without shrinking the logo. */
+
+@media (min-width: 900px) and (orientation: landscape) {
+  .proposal-columns main {
+    max-width: 66rem;
+    display: grid;
+    grid-template-columns: minmax(16rem, 1fr) minmax(0, 34rem);
+    grid-template-rows: 1fr auto;
+    column-gap: 4rem;
+    align-items: center;
+  }
+
+  .proposal-columns .brand {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+    position: sticky;
+    top: 0;
+    align-self: center;
+    margin: 0;
+  }
+
+  /* As large as the column allows, and never taller than the window. */
+  .proposal-columns .brand .logo {
+    width: min(100%, 360px);
+    max-height: 70vh;
+  }
+
+  /* The logo stays on deeper screens too: beside the content, it doesn't
+     push Back down. */
+  html.proposal-columns[data-screen="settings"] .brand {
+    display: flex;
+  }
+
+  .proposal-columns #game {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: center;
+  }
+
+  .proposal-columns #game .bottom {
+    margin-top: 1rem;
+  }
+
+  .proposal-columns footer {
+    grid-column: 2;
+    grid-row: 2;
+  }
+}

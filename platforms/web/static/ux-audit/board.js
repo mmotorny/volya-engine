@@ -66,7 +66,10 @@ function render() {
       row.innerHTML = `<h3><a href="#${state.id}">${state.name}</a><span class="badge" hidden>Text differs by device</span></h3>`;
       const frames = document.createElement("div");
       frames.className = "frames";
-      for (const device of DEVICES.filter((d) => shown.has(d.id))) frames.append(frame(device, state));
+      // A state may be for some devices only (e.g. a desktop-only proposal).
+      for (const device of DEVICES.filter((d) => shown.has(d.id) && (!state.devices || state.devices.includes(d.id)))) {
+        frames.append(frame(device, state));
+      }
       row.append(frames);
       block.append(row);
     }

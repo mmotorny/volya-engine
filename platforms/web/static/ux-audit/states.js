@@ -82,6 +82,21 @@ export const SECTIONS = [
   },
 ];
 
+// Proposal: two columns on wide windows (proposals/columns.css), on the
+// screens that run longest; desktop only, phones are unchanged.
+{
+  const pick = (id) => SECTIONS.flatMap((s) => s.states).find((s) => s.id === id);
+  SECTIONS.push({
+    title: "Proposal: two columns on wide windows",
+    states: ["home", "import", "import-damaged", "settings", "start-failed"].map((id) => ({
+      ...pick(id),
+      id: `columns-${id}`,
+      variant: "columns",
+      devices: ["desktop"],
+    })),
+  });
+}
+
 export const STATES = SECTIONS.flatMap((section) => section.states);
 
 /** Devices: CSS size, safe-area insets, how input works, and whether the
