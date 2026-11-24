@@ -28,8 +28,8 @@ for (const device of DEVICES) {
     if (box.checked) shown.add(device.id);
     else shown.delete(device.id);
     // Live: when the tab is shown again and a newer build is deployed, reload,
-// keeping the view (zoom, devices, full length, scroll). This page isn't kept offline, so the
-// request reaches the network.
+// keeping the view (zoom, devices, full length, scroll). This page isn't
+// kept offline, so the request reaches the network.
 const VIEW = "volya-engine.ux-audit.view";
 const build = () => document.querySelector('meta[name="build"]').content;
 async function deployedBuild() {
@@ -158,31 +158,23 @@ zoom.addEventListener("input", () => {
   document.documentElement.style.setProperty("--scale", scale());
 });
 // Live: when the tab is shown again and a newer build is deployed, reload,
-// keeping the view (zoom, devices, full length, scroll). This page isn't kept offline, so the
-// request reaches the network.
+// keeping the view (zoom, devices, full length, scroll). This page isn't
+// kept offline, so the request reaches the network.
 const VIEW = "volya-engine.ux-audit.view";
 const build = () => document.querySelector('meta[name="build"]').content;
 async function deployedBuild() {
   const html = await (await fetch(location.pathname, { cache: "no-store" })).text();
   return new DOMParser().parseFromString(html, "text/html").querySelector('meta[name="build"]')?.content;
 }
-// A deploy takes a minute or two to go live: after a return that finds
-// nothing new, check again a few times with growing gaps (10 s … 160 s,
-// about five minutes), stopping when the tab is hidden.
-const FOLLOW_UPS_S = [10, 20, 40, 80, 160];
-let followUp = null;
-async function checkDeploy(attempt = 0) {
-  clearTimeout(followUp);
+// One check per return to the tab, no polling: `cargo xtask deploy` reports
+// a deploy only once it's live, so a return after that sees it.
+document.addEventListener("visibilitychange", async () => {
   if (document.visibilityState !== "visible") return;
   const latest = await deployedBuild().catch(() => null);
-  if (latest && latest !== build()) {
-    sessionStorage.setItem(VIEW, JSON.stringify({ zoom: zoom.value, shown: [...shown], full: full.checked, y: scrollY }));
-    location.reload();
-    return;
-  }
-  if (attempt < FOLLOW_UPS_S.length) followUp = setTimeout(() => checkDeploy(attempt + 1), FOLLOW_UPS_S[attempt] * 1000);
-}
-document.addEventListener("visibilitychange", () => checkDeploy());
+  if (!latest || latest === build()) return;
+  sessionStorage.setItem(VIEW, JSON.stringify({ zoom: zoom.value, shown: [...shown], full: full.checked, y: scrollY }));
+  location.reload();
+});
 const saved = JSON.parse(sessionStorage.getItem(VIEW) ?? "null");
 sessionStorage.removeItem(VIEW);
 if (saved) {
