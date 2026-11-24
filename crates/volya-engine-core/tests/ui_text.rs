@@ -19,7 +19,7 @@ use volya_engine_core::ui::{self, TextureSource};
 use volya_engine_core::vfs::db::DbVfs;
 use volya_engine_core::vfs::{EntryKind, StdVfs, Vfs, read};
 use volya_engine_formats::cp1251;
-use volya_engine_formats::text::font::{FontChoice, GlyphMetrics, UiFont};
+use volya_engine_formats::text::font::{GlyphMetrics, UiFont};
 use volya_engine_formats::text::layout::{TextBox, layout_text};
 use volya_engine_formats::ui::layout::{HAlign, Rect, VAlign};
 use volya_engine_formats::ui::picture::{Picture, PicturePlacement};
@@ -98,31 +98,69 @@ fn loads_every_ui_layout_file() {
         assert!(names.contains(&normal.as_str()), "{v} without {normal}");
     }
 
+    // Section 7.2: the eight never-loaded files with `header`, `normal` or
+    // `graffiti18` fail with the fatal unknown-font error; all others load.
+    const UNKNOWN_FONT: [&str; 8] = [
+        "carbody.xml",
+        "inventory.xml",
+        "inventorymp_new.xml",
+        "inventorymp_new2.xml",
+        "jobs_new.xml",
+        "maingame_new.xml",
+        "map.xml",
+        "trade_new.xml",
+    ];
     let start = Instant::now();
-    let mut roots = BTreeMap::<String, usize>::new();
     for resolution in [XGA, HD] {
         for name in &names {
-            let doc = ui::load_ui_file(&g.vfs, &g.aliases, name, resolution)
-                .unwrap_or_else(|e| panic!("{name} at {resolution:?}: {e}"));
-            if resolution == XGA {
-                let root = doc.root().map_or("(none)", |r| r.name.as_str());
-                if root == "(none)" {
-                    eprintln!("no root: {name}");
-                }
-                *roots.entry(root.to_owned()).or_default() += 1;
+            let loaded = ui::load_ui_file(&g.vfs, &g.aliases, name, resolution);
+            if UNKNOWN_FONT.contains(name) {
+                let err = loaded.expect_err(name).to_string();
+                assert!(
+                    ["header", "normal", "graffiti18"]
+                        .iter()
+                        .any(|f| err.contains(&format!("unknown font \"{f}\""))),
+                    "{name}: {err}"
+                );
+            } else {
+                loaded.unwrap_or_else(|e| panic!("{name} at {resolution:?}: {e}"));
             }
         }
     }
     eprintln!(
-        "parsed {} UI files twice in {:.1?}",
+        "loaded {} UI files twice in {:.1?}",
         names.len(),
         start.elapsed()
     );
-    eprintln!("root elements: {roots:?}");
-    // The spec's survey counts 60 `window` and 17 `w` roots by a method it
-    // does not state; the first element of the processed text gives more.
-    assert_eq!(roots["ui_texture"], 23);
-    assert_eq!(roots["(none)"], 6, "empty files and comment-only fragments");
+    // Section 1.4 and Evidence summary: the first element after include
+    // expansion of each file loaded on its own.
+    let mut roots = BTreeMap::<String, usize>::new();
+    let mut without = Vec::new();
+    for name in &names {
+        let (_, text) = ui::read_ui_file(&g.vfs, &g.aliases, name, XGA).unwrap();
+        match xml::parse(&text).unwrap().root() {
+            Some(root) => *roots.entry(root.name.clone()).or_default() += 1,
+            None => without.push(*name),
+        }
+    }
+    without.sort();
+    assert_eq!(
+        without,
+        [
+            "follower_character.xml",
+            "inventory_character.xml",
+            "map_spots_darkvalley.xml",
+            "map_spots_military.xml",
+            "map_spots_rostok.xml",
+            "pda_dialog.xml",
+        ]
+    );
+    assert_eq!(roots.remove("window"), Some(70));
+    assert_eq!(roots.remove("ui_texture"), Some(23));
+    assert_eq!(roots.remove("w"), Some(22));
+    assert_eq!(roots.len(), 29, "other names: {roots:?}");
+    assert_eq!(roots.values().sum::<usize>(), 33);
+    assert!(roots.contains_key("colors") && roots.contains_key("map_spots"));
 
     // Section 1.1: which file each resolution loads.
     let found = |name, r| {
@@ -158,7 +196,8 @@ fn loads_every_ui_layout_file() {
     let background = volya_engine_formats::ui::layout::StaticDesc::read(
         motion.find("background", 0).unwrap(),
         &colors,
-    );
+    )
+    .unwrap();
     assert_eq!(background.window.rect(), Rect::new(0.0, 640.0, 94.0, 125.0));
     assert!(background.stretch);
 
@@ -526,6 +565,11 @@ fn loads_fonts_and_lays_out_title_menu_text() {
             dds_size(&g.vfs, &dds);
         }
     }
+    for f in [UiFont::Medium, UiFont::Small, UiFont::Di] {
+        let section = fonts_ltx.section(f.section()).unwrap();
+        assert!(!section.contains("texture800") && !section.contains("texture1600"));
+        assert_eq!(font(600, f).texture, font(1024, f).texture);
+    }
     let small = font(768, UiFont::Small);
     assert_eq!(
         (small.texture.as_str(), small.interval),
@@ -611,7 +655,7 @@ fn loads_fonts_and_lays_out_title_menu_text() {
     let colors = ui::load_color_defs(&g.vfs, &g.aliases, XGA).unwrap();
     let menu = ui::load_title_menu(&g.vfs, &g.aliases, &colors, XGA).unwrap();
     let main = menu.menu("menu_main").unwrap();
-    assert_eq!(main.font, Some(FontChoice::Font(UiFont::Graffiti22)));
+    assert_eq!(main.font, Some(UiFont::Graffiti22));
     assert_eq!(main.color, Color::rgba(0, 0, 0, 255));
     let version = &menu.static_version;
     let version_text = cp1251::encode("ver. 1.0006").unwrap();
@@ -667,22 +711,28 @@ fn loads_fonts_and_lays_out_title_menu_text() {
                 q.iter().map(|q| q.max.1).fold(f32::MIN, f32::max),
             )
         };
-        let graffiti22 = fonts.get(main.font.as_ref().unwrap().font().unwrap());
+        let graffiti22 = fonts.get(main.font.unwrap());
+        // The menu code centres captions both ways in 164 × 30 rows
+        // (ui-layout.md section 7.3, text-and-fonts.md section 5).
+        let boxes_of_menu = menu.caption_boxes(main);
+        assert_eq!(boxes_of_menu.len(), 6);
+        for (i, b) in boxes_of_menu.iter().enumerate() {
+            assert_eq!(
+                b.rect,
+                Rect::new(700.0, 419.0 + 30.0 * i as f32, 164.0, 30.0)
+            );
+            assert_eq!(
+                (b.align, b.vert_align, b.complex),
+                (HAlign::Centre, VAlign::Centre, false)
+            );
+            assert_eq!(b.color, Color::rgba(0, 0, 0, 255));
+        }
         for (item, want) in [(0, boxes[0]), (5, boxes[1])] {
             let caption = table.get(&main.buttons[item].caption);
-            let b = TextBox {
-                rect: Rect::new(700.0, 419.0 + 30.0 * item as f32, 164.0, 30.0),
-                offset: (0.0, 0.0),
-                align: HAlign::Centre,
-                vert_align: VAlign::Centre,
-                complex: false,
-                color: main.color,
-                line_gap: 0.0,
-            };
             let l = layout_text(
                 graffiti22,
                 &cp1251::encode(caption).unwrap(),
-                &b,
+                &boxes_of_menu[item],
                 scale,
                 &colors,
             )
@@ -691,7 +741,7 @@ fn loads_fonts_and_lays_out_title_menu_text() {
             assert_eq!(extent(&l), want, "item {item} at {resolution:?}");
         }
         let (b, f) = TextBox::of_static(version, version.window.absolute(0.0, 0.0));
-        assert_eq!(f, Some(UiFont::Graffiti19));
+        assert_eq!(f, UiFont::Graffiti19);
         assert_eq!(
             (b.align, b.vert_align, b.complex),
             (HAlign::Left, VAlign::Top, false)
@@ -798,7 +848,7 @@ fn reads_title_menu_layout() {
         rect(15.0, 740.0, 100.0, 30.0)
     );
     let version = menu.static_version.text.as_ref().unwrap();
-    assert_eq!(version.font, Some(FontChoice::Font(UiFont::Graffiti19)));
+    assert_eq!(version.font, Some(UiFont::Graffiti19));
     assert_eq!(version.align, Some(HAlign::Left));
     assert_eq!(version.vert_align, None);
     assert_eq!(version.complex_mode, Some(false));
@@ -881,7 +931,7 @@ fn reads_title_menu_layout() {
     let captions = |name: &str| -> Vec<(String, String)> {
         let m = menu.menu(name).unwrap();
         assert_eq!(m.btn_height, 30.0, "{name}");
-        assert_eq!(m.font, Some(FontChoice::Font(UiFont::Graffiti22)), "{name}");
+        assert_eq!(m.font, Some(UiFont::Graffiti22), "{name}");
         assert_eq!(m.color, Color::rgba(0, 0, 0, 255), "{name}");
         m.buttons
             .iter()

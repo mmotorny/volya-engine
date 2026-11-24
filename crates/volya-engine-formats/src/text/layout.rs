@@ -126,14 +126,10 @@ pub struct TextBox {
 
 impl TextBox {
     /// The text box of static `desc` with absolute rectangle `rect`, and its
-    /// font: the text's font (`None` for an unknown name: no font), else
-    /// the default `letterica16`; defaults left, top, white.
-    pub fn of_static(desc: &StaticDesc, rect: Rect) -> (Self, Option<UiFont>) {
+    /// font: the text's font, else the default `letterica16`; defaults left,
+    /// top, white.
+    pub fn of_static(desc: &StaticDesc, rect: Rect) -> (Self, UiFont) {
         let text = desc.text.as_ref();
-        let font = match text.and_then(|t| t.font.as_ref()) {
-            Some(choice) => choice.font(),
-            None => Some(UiFont::DEFAULT),
-        };
         (
             Self {
                 rect,
@@ -144,7 +140,7 @@ impl TextBox {
                 color: text.map_or(Color::WHITE, |t| t.color),
                 line_gap: 0.0,
             },
-            font,
+            text.and_then(|t| t.font).unwrap_or(UiFont::DEFAULT),
         )
     }
 }
@@ -159,53 +155,52 @@ pub struct TextLayout {
     pub lines: usize,
 }
 
-/// A run of bytes of one colour.
+/// A segment of complex-mode text (section 4.3): a run of bytes of one
+/// colour containing neither a colour code nor `\n`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Segment {
     pub text: Vec<u8>,
     pub color: Color,
+    /// The segment was ended by `\n` (always false in wrapped lines).
+    pub ends_line: bool,
 }
 
-/// Splits complex-mode text into lines of coloured segments (section 4.3,
-/// before wrapping): `%c[default]`, `%c[<name>]` (exact name of
-/// `color_defs.xml`) or `%c[A,R,G,B]` change the colour of the text after
-/// them, keeping `base`'s alpha; each two-byte `\n` ends a line. Choices
-/// where the spec is silent: a `%c[` without a closing `]` is literal text;
-/// fewer than four numbers is the spec's "missing comma" error.
-pub fn split_complex(
-    text: &[u8],
-    base: Color,
-    defs: &ColorDefs,
-) -> Result<Vec<Vec<Segment>>, String> {
-    let mut lines = vec![Vec::new()];
+/// Cuts complex-mode text into segments (section 4.3): at every colour code
+/// (`%c[default]`, `%c[<name>]` with an exact name of `color_defs.xml`, or
+/// `%c[A,R,G,B]`; each sets the colour of the text after it, keeping
+/// `base`'s alpha), then each coloured piece at every two-byte `\n`, which
+/// is removed and ends the line. Empty segments are kept (an empty segment
+/// ended by `\n` is an empty line). Choices where the spec is silent: a
+/// `%c[` without a closing `]` is literal text; fewer than four numbers is
+/// the spec's "missing comma" error.
+pub fn split_complex(text: &[u8], base: Color, defs: &ColorDefs) -> Result<Vec<Segment>, String> {
+    let mut segments = Vec::new();
     let mut color = base;
     let mut rest = text;
     loop {
         let code = find(rest, b"%c[").and_then(|start| {
             find(&rest[start + 3..], b"]").map(|len| (start, &rest[start + 3..start + 3 + len]))
         });
-        let (chunk, next) = match code {
-            Some((start, _)) => (&rest[..start], Some(start)),
-            None => (rest, None),
+        let chunk = match code {
+            Some((start, _)) => &rest[..start],
+            None => rest,
         };
-        for (i, part) in split(chunk, b"\\n").into_iter().enumerate() {
-            if i > 0 {
-                lines.push(Vec::new());
-            }
-            if !part.is_empty() {
-                lines.last_mut().expect("a line").push(Segment {
-                    text: part.to_vec(),
-                    color,
-                });
-            }
+        let parts = split(chunk, b"\\n");
+        let last = parts.len() - 1;
+        for (i, part) in parts.into_iter().enumerate() {
+            segments.push(Segment {
+                text: part.to_vec(),
+                color,
+                ends_line: i < last,
+            });
         }
-        let (Some(start), Some((_, content))) = (next, code) else {
+        let Some((start, content)) = code else {
             break;
         };
         color = code_color(content, base, defs)?;
         rest = &rest[start + 3 + content.len() + 1..];
     }
-    Ok(lines)
+    Ok(segments)
 }
 
 fn code_color(content: &[u8], base: Color, defs: &ColorDefs) -> Result<Color, String> {
@@ -242,87 +237,105 @@ fn split<'a>(text: &'a [u8], separator: &[u8]) -> Vec<&'a [u8]> {
     parts
 }
 
+/// White space for break points (section 4.3): the ASCII white-space
+/// characters space, tab, LF, VT, FF, CR. Whether bytes 0x80–0xFF count was
+/// not established; they are not white space here.
 fn is_wrap_space(b: u8) -> bool {
     matches!(b, 0x09..=0x0D | 0x20)
 }
 
-/// Wraps one line of segments to `width` UI units (section 4.3) for
-/// horizontal scale `sx`. A character is accepted while (line width + its
-/// width + the width of `o`) ≤ `width`; a rejected character breaks the line
-/// after the most recent white-space character of its segment's part on this
-/// line other than that part's first character (the spec's "current
-/// segment"; we read it as the part on the current line), or else after the
-/// rejected character itself, which stays on the line.
-pub fn wrap(font: &Font, line: &[Segment], width: f32, sx: f32) -> Vec<Vec<Segment>> {
+/// Wraps segments into lines of `width` UI units for horizontal scale `sx`
+/// (section 4.3). With *L* the running width of the line (reset on every new
+/// line, carried across segments of a line) and *r* the width of `o`:
+///
+/// - a character is accepted when *L* + its width + *r* ≤ `width`; its width
+///   is added to *L* unless it is the last character of its segment;
+/// - break points are white-space characters of the current segment at a
+///   position other than 0, reached since the segment started or since the
+///   last break in it (the tested character counts as reached);
+/// - a rejected character that is not the last of its segment ends the line
+///   after the most recent break point (filling resumes, re-testing, with the
+///   character after it) or, without one, after itself (it stays on the
+///   line; filling resumes with the next character);
+/// - a rejected last character stays on the line with the rest of its
+///   segment, and the line ends;
+/// - a segment ended by `\n` ends the line, unless its last character was
+///   rejected, which has ended it already (the spec lists the two cases
+///   separately; we do not end a second, empty line).
+///
+/// A final empty line is kept only after a trailing `\n` (or when there is
+/// no other line); the spec does not say whether it counts.
+pub fn wrap(font: &Font, segments: &[Segment], width: f32, sx: f32) -> Vec<Vec<Segment>> {
     let units = |c: u8| font.advance(c) / sx;
-    let reserve = units(b'o');
-    let chars: Vec<(u8, usize)> = line
-        .iter()
-        .enumerate()
-        .flat_map(|(s, seg)| seg.text.iter().map(move |&c| (c, s)))
-        .collect();
-    let mut lines: Vec<Vec<(u8, usize)>> = Vec::new();
-    let mut current: Vec<(u8, usize)> = Vec::new();
-    let mut filled = 0.0;
-    let mut i = 0;
-    while i < chars.len() {
-        let (c, segment) = chars[i];
-        if filled + units(c) + reserve <= width {
-            current.push((c, segment));
-            filled += units(c);
-            i += 1;
-            continue;
-        }
-        let part_start = current
-            .iter()
-            .rposition(|&(_, s)| s != segment)
-            .map_or(0, |p| p + 1);
-        let break_after = (part_start + 1..current.len())
-            .rev()
-            .find(|&k| is_wrap_space(current[k].0));
-        match break_after {
-            Some(k) => {
-                let rest = current.split_off(k + 1);
-                lines.push(std::mem::replace(&mut current, rest));
+    let r = units(b'o');
+    let mut lines: Vec<Vec<Segment>> = Vec::new();
+    let mut current: Vec<Segment> = Vec::new();
+    let mut l = 0.0;
+    let mut ended_by_newline = false;
+    let piece = |text: &[u8], color| Segment {
+        text: text.to_vec(),
+        color,
+        ends_line: false,
+    };
+    for seg in segments {
+        let text = &seg.text;
+        let n = text.len();
+        let mut start = 0;
+        let mut k = 0;
+        let mut break_point: Option<usize> = None;
+        let mut rejected_last = false;
+        while k < n {
+            let c = text[k];
+            if k != 0 && is_wrap_space(c) {
+                break_point = Some(k);
             }
-            None => {
-                current.push((c, segment));
-                i += 1;
-                lines.push(std::mem::take(&mut current));
-            }
-        }
-        filled = current.iter().map(|&(c, _)| units(c)).sum();
-    }
-    lines.push(current);
-    lines
-        .into_iter()
-        .map(|chars| {
-            let mut segments: Vec<(usize, Segment)> = Vec::new();
-            for (c, s) in chars {
-                match segments.last_mut() {
-                    Some((last, seg)) if *last == s => seg.text.push(c),
-                    _ => segments.push((
-                        s,
-                        Segment {
-                            text: vec![c],
-                            color: line[s].color,
-                        },
-                    )),
+            let last = k == n - 1;
+            if l + units(c) + r <= width {
+                if !last {
+                    l += units(c);
                 }
+                k += 1;
+                continue;
             }
-            segments.into_iter().map(|(_, seg)| seg).collect()
-        })
-        .collect()
+            let end = if last {
+                rejected_last = true;
+                n - 1
+            } else {
+                break_point.unwrap_or(k)
+            };
+            current.push(piece(&text[start..=end], seg.color));
+            lines.push(std::mem::take(&mut current));
+            l = 0.0;
+            break_point = None;
+            start = end + 1;
+            k = end + 1;
+        }
+        if start < n {
+            current.push(piece(&text[start..], seg.color));
+        }
+        if n > 0 || seg.ends_line {
+            ended_by_newline = seg.ends_line;
+        }
+        if seg.ends_line && !rejected_last {
+            lines.push(std::mem::take(&mut current));
+            l = 0.0;
+        }
+    }
+    if !current.is_empty() || ended_by_newline || lines.is_empty() {
+        lines.push(current);
+    }
+    lines
 }
 
 /// Lays out the text of a UI element (section 4): `text` is the string
 /// already looked up in the string table (Windows-1251 bytes), `scale` the
 /// UI-to-pixel factors (sx, sy). An empty text draws nothing.
 ///
-/// Simple mode draws the text as one string; complex mode splits it at
-/// colour codes and `\n`, wraps it to the element width and stacks the lines
-/// with pitch *t* + *g*, each segment drawn after the previous one with the
-/// element's alignment applied to the segment itself.
+/// Simple mode draws the text as one string, colour codes and `\n`
+/// literally; complex mode cuts it into segments, wraps them to the element
+/// width and stacks the lines with pitch *t* + *g*, each segment drawn after
+/// the previous one with the element's alignment applied to the segment
+/// itself.
 pub fn layout_text(
     font: &Font,
     text: &[u8],
@@ -356,10 +369,7 @@ pub fn layout_text(
         layout.lines = 1;
         return Ok(layout);
     }
-    let lines: Vec<Vec<Segment>> = split_complex(text, b.color, defs)?
-        .iter()
-        .flat_map(|line| wrap(font, line, b.rect.width, sx))
-        .collect();
+    let lines = wrap(font, &split_complex(text, b.color, defs)?, b.rect.width, sx);
     let n = lines.len() as f32;
     let pitch = t + b.line_gap;
     let top = b.rect.y + b.offset.1 + ay(n * pitch - b.line_gap);
@@ -535,6 +545,16 @@ mod tests {
         let empty =
             layout_text(&font, b"", &menu_row(0), (1.0, 1.0), &ColorDefs::default()).unwrap();
         assert!(empty.quads.is_empty() && empty.lines == 0);
+        // Simple mode draws colour codes literally.
+        let literal = layout_text(
+            &font,
+            b"%c[default]",
+            &menu_row(0),
+            (1.0, 1.0),
+            &ColorDefs::default(),
+        )
+        .unwrap();
+        assert_eq!(literal.quads.len(), 11);
     }
 
     #[test]
@@ -544,75 +564,143 @@ mod tests {
                 .unwrap(),
         );
         let base = Color::rgba(1, 2, 3, 128);
-        let lines = split_complex(
+        let segments = split_complex(
             b"a%c[UI_orange]b\\nc%c[255,192,10,20]d%c[default]e%c[nope",
             base,
             &defs,
         )
         .unwrap();
-        let seg = |t: &str, c| Segment {
+        let orange = Color::rgba(238, 153, 26, 128);
+        let seg = |t: &str, color, ends_line| Segment {
             text: t.as_bytes().to_vec(),
-            color: c,
+            color,
+            ends_line,
         };
         assert_eq!(
-            lines,
+            segments,
             [
-                vec![seg("a", base), seg("b", Color::rgba(238, 153, 26, 128))],
-                vec![
-                    seg("c", Color::rgba(238, 153, 26, 128)),
-                    seg("d", Color::rgba(192, 10, 20, 128)),
-                    seg("e%c[nope", base),
-                ],
+                seg("a", base, false),
+                seg("b", orange, true),
+                seg("c", orange, false),
+                seg("d", Color::rgba(192, 10, 20, 128), false),
+                seg("e%c[nope", base, false),
             ]
         );
         assert!(split_complex(b"%c[1,2,3]x", base, &defs).is_err());
         assert!(split_complex(b"%c[green]x", base, &defs).is_err());
     }
 
+    /// Wraps `pieces` (text, ended by `\n`) to `width` at scale `sx`; the
+    /// lines' texts with `|` between segments.
+    fn wrapped(pieces: &[(&[u8], bool)], width: f32, sx: f32) -> Vec<String> {
+        let segments: Vec<Segment> = pieces
+            .iter()
+            .map(|(t, ends_line)| Segment {
+                text: t.to_vec(),
+                color: BLACK,
+                ends_line: *ends_line,
+            })
+            .collect();
+        wrap(&graffiti22(), &segments, width, sx)
+            .iter()
+            .map(|line| {
+                line.iter()
+                    .map(|s| cp1251::decode(&s.text))
+                    .collect::<Vec<_>>()
+                    .join("|")
+            })
+            .collect()
+    }
+
+    // Section 4.3 wrapping. Widths: `a` 8, space 10, control characters 0,
+    // `o` (the reserve r) 5.
+
     #[test]
-    fn wraps_at_white_space() {
-        let font = graffiti22(); // `a` 8, space 10, `o` reserve 5.
-        let seg = |t: &str| Segment {
-            text: t.as_bytes().to_vec(),
-            color: BLACK,
-        };
-        let text = |lines: Vec<Vec<Segment>>| -> Vec<String> {
-            lines
-                .iter()
-                .map(|l| {
-                    l.iter()
-                        .map(|s| String::from_utf8(s.text.clone()).unwrap())
-                        .collect()
-                })
-                .collect()
-        };
-        // Width 40: "aaa" is 24, + space 10 + 5 = 39 fits; next `a` needs
-        // 34 + 8 + 5 = 47.
+    fn wraps_after_the_most_recent_break_point() {
+        // `aaa ` reaches 34; the next `a` needs 34 + 8 + 5 > 40. The space
+        // (position 3) is the break point; filling resumes with the `a`
+        // after it, tested again.
+        assert_eq!(wrapped(&[(b"aaa aaa", false)], 40.0, 1.0), ["aaa ", "aaa"]);
+        // The tested character counts as reached: a rejected space is its own
+        // break point; break points are forgotten after each break.
         assert_eq!(
-            text(wrap(&font, &[seg("aaa aaa")], 40.0, 1.0)),
-            ["aaa ", "aaa"]
-        );
-        // No white space: the rejected character stays on the line.
-        assert_eq!(
-            text(wrap(&font, &[seg("aaaaaa")], 30.0, 1.0)),
-            ["aaaa", "aa"]
-        );
-        // A space as the first character of the line's part doesn't count.
-        assert_eq!(
-            text(wrap(&font, &[seg(" aaaaa")], 40.0, 1.0)),
-            [" aaaa", "a"]
+            wrapped(&[(b"aa aa aa", false)], 30.0, 1.0),
+            ["aa ", "aa ", "aa"]
         );
         // Scale: widths in units are pixels / sx.
+        assert_eq!(wrapped(&[(b"aaa aaa", false)], 20.0, 2.0), ["aaa ", "aaa"]);
+    }
+
+    #[test]
+    fn wraps_after_the_rejected_character_without_break_point() {
+        // 24 + 8 + 5 > 30: the fourth `a` is rejected and stays on the line.
+        assert_eq!(wrapped(&[(b"aaaaaa", false)], 30.0, 1.0), ["aaaa", "aa"]);
+        // White space at position 0 of the segment is never a break point.
+        assert_eq!(wrapped(&[(b" aaaaa", false)], 40.0, 1.0), [" aaaa", "a"]);
+    }
+
+    #[test]
+    fn break_points_only_in_the_current_segment() {
+        // The space of `aa ` is not a break point for the second segment.
+        // The space, last of its segment, adds no width, so L = 16 when the
+        // second segment starts: 16 + 8 + 5, 24 + 8 + 5 fit, 32 + 8 + 5 not.
         assert_eq!(
-            text(wrap(&font, &[seg("aaa aaa")], 20.0, 2.0)),
-            ["aaa ", "aaa"]
+            wrapped(&[(b"aa ", false), (b"aaaa", false)], 40.0, 1.0),
+            ["aa |aaa", "a"]
         );
-        // The space belongs to the first segment: not searched from the second.
+    }
+
+    #[test]
+    fn last_character_of_a_segment() {
+        // Its width is not added: `aa` + `aa` fits 30 (8 + 8 + 5, then
+        // 8 + 8 + 5 and 16 + 8 + 5), which counting it would not.
         assert_eq!(
-            text(wrap(&font, &[seg("aa "), seg("aaaa")], 40.0, 1.0)),
-            ["aa aa", "aa"]
+            wrapped(&[(b"aa", false), (b"aa", false)], 30.0, 1.0),
+            ["aa|aa"]
         );
-        assert_eq!(text(wrap(&font, &[], 40.0, 1.0)), [""]);
+        // A rejected last character stays with the rest of its segment and
+        // ends the line; the break point (the space) is not used.
+        assert_eq!(
+            wrapped(&[(b"aa a", false), (b"b", false)], 35.0, 1.0),
+            ["aa a", "b"]
+        );
+        // Ended by `\n` too: no second, empty line.
+        assert_eq!(
+            wrapped(&[(b"aaaa", true), (b"bb", false)], 30.0, 1.0),
+            ["aaaa", "bb"]
+        );
+    }
+
+    #[test]
+    fn line_breaks_end_lines() {
+        assert_eq!(
+            wrapped(&[(b"ab", true), (b"", true), (b"cd", false)], 100.0, 1.0),
+            ["ab", "", "cd"]
+        );
+        assert_eq!(
+            wrapped(&[(b"ab", true), (b"", false)], 100.0, 1.0),
+            ["ab", ""]
+        );
+        assert_eq!(
+            wrapped(&[(b"ab", false), (b"cd", false)], 100.0, 1.0),
+            ["ab|cd"]
+        );
+        assert_eq!(wrapped(&[], 40.0, 1.0), [""]);
+    }
+
+    #[test]
+    fn white_space_is_ascii_only() {
+        for space in [b'\t', b'\n', 0x0B, 0x0C, b'\r', b' '] {
+            let text = [b'a', b'a', b'a', space, b'a', b'a', b'a'];
+            let lines = wrapped(&[(&text, false)], 30.0, 1.0);
+            assert_eq!(lines.len(), 2, "{space:#04x}");
+            assert!(lines[0].ends_with(char::from(space)), "{space:#04x}");
+        }
+        // The no-break space 0xA0 (8 wide here) is not a break point.
+        assert_eq!(
+            wrapped(&[(b"aa\xa0aaa", false)], 30.0, 1.0),
+            ["aa\u{a0}a", "aa"]
+        );
     }
 
     #[test]

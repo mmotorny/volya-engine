@@ -194,7 +194,7 @@ mod tests {
 
     fn element(xml: &str) -> StaticDesc {
         let doc = parse(xml.as_bytes()).unwrap();
-        StaticDesc::read(doc.root().unwrap(), &ColorDefs::default())
+        StaticDesc::read(doc.root().unwrap(), &ColorDefs::default()).unwrap()
     }
 
     fn place(xml: &str, parent: (f32, f32), size: (u32, u32)) -> (StaticDesc, PicturePlacement) {

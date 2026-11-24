@@ -96,28 +96,6 @@ impl UiFont {
     }
 }
 
-/// A `font` attribute of UI layout XML: a known font, or an unknown name
-/// (reported as an error; the element gets no font, section 2.1).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum FontChoice {
-    Font(UiFont),
-    Unknown(String),
-}
-
-impl FontChoice {
-    pub fn from_name(name: &str) -> Self {
-        UiFont::from_name(name).map_or_else(|| Self::Unknown(name.to_owned()), Self::Font)
-    }
-
-    /// The font, `None` for an unknown name.
-    pub fn font(&self) -> Option<UiFont> {
-        match self {
-            Self::Font(f) => Some(*f),
-            Self::Unknown(_) => None,
-        }
-    }
-}
-
 /// A section of `config\fonts.ltx` (section 2.2).
 #[derive(Clone, Debug, PartialEq)]
 pub struct FontDefinition {
@@ -213,8 +191,8 @@ pub struct GlyphMetrics {
 }
 
 impl GlyphMetrics {
-    /// Reads the first present of `[symbol_coords]`, `[mb_symbol_coords]`,
-    /// `[Char Widths]`, `[font_size]` (section names case-insensitive).
+    /// Reads the first present of `[mb_symbol_coords]`, `[symbol_coords]`,
+    /// `[Char Widths]`, `[font_size]` (section 2.6; names case-insensitive).
     /// `[mb_symbol_coords]` (multi-byte text, unused by the edition) is
     /// rejected: this engine draws single-byte text only. Missing keys the
     /// spec calls required (`height`, all 256 codes of `[symbol_coords]`)
@@ -228,7 +206,11 @@ impl GlyphMetrics {
                 .ok_or_else(|| invalid(format!("[{}]: missing {key}", s.name())))
         };
         let mut glyphs = [Glyph::default(); 256];
-        if let Some(s) = config.section("symbol_coords") {
+        if config.section("mb_symbol_coords").is_some() {
+            Err(invalid(
+                "[mb_symbol_coords] (multi-byte) fonts are not supported",
+            ))
+        } else if let Some(s) = config.section("symbol_coords") {
             let height = number(s, "height")?;
             for (code, glyph) in glyphs.iter_mut().enumerate() {
                 let key = format!("{code:03}");
@@ -244,10 +226,6 @@ impl GlyphMetrics {
                 };
             }
             Ok(Self { height, glyphs })
-        } else if config.section("mb_symbol_coords").is_some() {
-            Err(invalid(
-                "[mb_symbol_coords] (multi-byte) fonts are not supported",
-            ))
         } else if let Some(s) = config.section("char widths") {
             let height = number(s, "height")?;
             for (code, glyph) in glyphs.iter_mut().enumerate() {
@@ -353,10 +331,8 @@ mod tests {
     fn names_fonts() {
         assert_eq!(UiFont::from_name("graffiti22"), Some(UiFont::Graffiti22));
         assert_eq!(UiFont::from_name("Graffiti22"), None);
-        assert_eq!(
-            FontChoice::from_name("header"),
-            FontChoice::Unknown("header".into())
-        );
+        assert_eq!(UiFont::from_name("header"), None);
+        assert_eq!(UiFont::from_name("di"), Some(UiFont::Di));
         assert_eq!(UiFont::Graffiti22.section(), "ui_font_graffiti22_russian");
         assert_eq!(UiFont::Small.section(), "stat_font");
         assert!(UiFont::Di.gradient() && UiFont::Di.screen_relative_size());
@@ -501,6 +477,22 @@ mod tests {
             GlyphMetrics::parse(&ltx::parse(b"[mb_symbol_coords]\nheight=1\n").unwrap()).is_err()
         );
         assert!(GlyphMetrics::parse(&ltx::parse(b"[other]\n").unwrap()).is_err());
+
+        // Precedence when several sections are present: `[mb_symbol_coords]`,
+        // `[symbol_coords]`, `[Char Widths]`, `[font_size]`.
+        let both = [&widths[..], grid].concat();
+        let m = GlyphMetrics::parse(&ltx::parse(&both).unwrap()).unwrap();
+        assert_eq!((m.height, m.glyphs[17].width), (16.0, 3.0));
+        let mut coords_full = b"[symbol_coords]\nheight = 5\n".to_vec();
+        for code in 0..256 {
+            coords_full.extend_from_slice(format!("{code:03} = 1, 2, 4, 7\n").as_bytes());
+        }
+        let three = [&widths[..], grid, &coords_full].concat();
+        let m = GlyphMetrics::parse(&ltx::parse(&three).unwrap()).unwrap();
+        assert_eq!((m.height, m.glyphs[17].width), (5.0, 3.0));
+        assert_eq!(m.glyphs[17].x, 1.0);
+        let mb = [&coords_full[..], b"[mb_symbol_coords]\nheight = 5\n"].concat();
+        assert!(GlyphMetrics::parse(&ltx::parse(&mb).unwrap()).is_err());
     }
 
     #[test]

@@ -8,7 +8,7 @@
 use std::io;
 
 use super::{Color, ColorDefs, flag_attr, float_attr, int_attr, read_color};
-use crate::text::font::FontChoice;
+use crate::text::font::UiFont;
 use crate::xml::{Document, Element};
 
 /// A rectangle in UI units (or, for texture rectangles, texture pixels).
@@ -45,23 +45,48 @@ pub fn require<'a>(doc: &'a Document, path: &str, index: usize) -> io::Result<&'
 /// A font reference with its colour: a window's `font` child (section 4.2).
 #[derive(Clone, Debug, PartialEq)]
 pub struct FontDesc {
-    pub font: Option<FontChoice>,
+    /// `None`: the font is unchanged.
+    pub font: Option<UiFont>,
     pub color: Color,
 }
 
-/// The `font` attribute of `e`: absent or empty is `None` (section 7.2).
-pub fn font_attr(e: &Element) -> Option<FontChoice> {
-    e.attr("font")
-        .filter(|f| !f.is_empty())
-        .map(FontChoice::from_name)
+/// The `font` attribute of `e` (section 7.2): absent or empty is `None`
+/// (the font is unchanged); any value other than the 11 font names is the
+/// fatal "unknown font" error.
+pub fn font_attr(e: &Element) -> io::Result<Option<UiFont>> {
+    match e.attr("font").filter(|f| !f.is_empty()) {
+        None => Ok(None),
+        Some(name) => UiFont::from_name(name).map(Some).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unknown font {name:?} in <{}>", e.name),
+            )
+        }),
+    }
+}
+
+/// Checks every `font` attribute of `doc` with [`font_attr`]. The spec makes
+/// an unknown font name fatal when its element is read; the shipped files
+/// carry `font` only on elements their screens read (ui-layout.md section
+/// 7.2), so loaders check the whole file up front and fail on the first
+/// unknown name.
+pub fn check_fonts(doc: &Document) -> io::Result<()> {
+    fn walk(e: &Element) -> io::Result<()> {
+        font_attr(e)?;
+        e.elements().try_for_each(walk)
+    }
+    doc.nodes.iter().try_for_each(|n| match n {
+        crate::xml::Node::Element(e) => walk(e),
+        crate::xml::Node::Text(_) => Ok(()),
+    })
 }
 
 impl FontDesc {
-    pub fn read(e: &Element, defs: &ColorDefs) -> Self {
-        Self {
-            font: font_attr(e),
+    pub fn read(e: &Element, defs: &ColorDefs) -> io::Result<Self> {
+        Ok(Self {
+            font: font_attr(e)?,
             color: read_color(e, defs, 255),
-        }
+        })
     }
 }
 
@@ -86,23 +111,26 @@ pub struct WindowDesc {
 }
 
 impl WindowDesc {
-    pub fn read(e: &Element, defs: &ColorDefs) -> Self {
-        Self {
+    pub fn read(e: &Element, defs: &ColorDefs) -> io::Result<Self> {
+        Ok(Self {
             name: e.name.clone(),
             x: float_attr(e, "x", 0.0),
             y: float_attr(e, "y", 0.0),
             width: float_attr(e, "width", 0.0),
             height: float_attr(e, "height", 0.0),
             centred: e.attr("alignment").is_some_and(|a| a.contains('c')),
-            font: e.child("font").map(|f| FontDesc::read(f, defs)),
+            font: e
+                .child("font")
+                .map(|f| FontDesc::read(f, defs))
+                .transpose()?,
             window_name: e
                 .child("window_name")
                 .and_then(|w| w.value().map(str::to_owned)),
             auto_statics: e
                 .children_named("auto_static")
                 .map(|s| StaticDesc::read(s, defs))
-                .collect(),
-        }
+                .collect::<io::Result<_>>()?,
+        })
     }
 
     /// The rectangle relative to the parent's top-left, centre-corrected
@@ -202,7 +230,7 @@ pub struct TextDesc {
     /// The value: a string-table key; `None` when the element has none.
     pub key: Option<String>,
     /// `None`: the text keeps its current font (default `letterica16`).
-    pub font: Option<FontChoice>,
+    pub font: Option<UiFont>,
     /// Always applied; default opaque white.
     pub color: Color,
     /// `None`: unchanged (default left).
@@ -216,10 +244,10 @@ pub struct TextDesc {
 }
 
 impl TextDesc {
-    pub fn read(e: &Element, defs: &ColorDefs) -> Self {
-        Self {
+    pub fn read(e: &Element, defs: &ColorDefs) -> io::Result<Self> {
+        Ok(Self {
             key: e.value().map(str::to_owned),
-            font: font_attr(e),
+            font: font_attr(e)?,
             color: read_color(e, defs, 255),
             align: e.attr("align").and_then(HAlign::parse),
             vert_align: e.attr("vert_align").and_then(VAlign::parse),
@@ -227,7 +255,7 @@ impl TextDesc {
             complex_mode: e
                 .attr("complex_mode")
                 .map(|_| flag_attr(e, "complex_mode", false)),
-        }
+        })
     }
 }
 
@@ -275,9 +303,9 @@ pub struct StaticDesc {
 }
 
 impl StaticDesc {
-    pub fn read(e: &Element, defs: &ColorDefs) -> Self {
-        Self {
-            window: WindowDesc::read(e, defs),
+    pub fn read(e: &Element, defs: &ColorDefs) -> io::Result<Self> {
+        Ok(Self {
+            window: WindowDesc::read(e, defs)?,
             texture: e.child("texture").and_then(|t| TextureRef::read(t, defs)),
             stretch: flag_attr(e, "stretch", false),
             texture_offset: e.child("texture_offset").map_or((0.0, 0.0), |o| {
@@ -285,12 +313,15 @@ impl StaticDesc {
             }),
             heading: flag_attr(e, "heading", false),
             clipper: flag_attr(e, "clipper", false),
-            text: e.child("text").map(|t| TextDesc::read(t, defs)),
+            text: e
+                .child("text")
+                .map(|t| TextDesc::read(t, defs))
+                .transpose()?,
             complex_mode: flag_attr(e, "complex_mode", false),
             text_colors: e
                 .child("text_color")
                 .map(|c| TextStateColors::read(c, defs, 0)),
-        }
+        })
     }
 
     /// Whether the text is multi-line (sections 5.1 and 7.1).
@@ -322,9 +353,9 @@ pub struct ScrollListDesc {
 }
 
 impl ScrollListDesc {
-    pub fn read(e: &Element, defs: &ColorDefs) -> Self {
-        Self {
-            window: WindowDesc::read(e, defs),
+    pub fn read(e: &Element, defs: &ColorDefs) -> io::Result<Self> {
+        Ok(Self {
+            window: WindowDesc::read(e, defs)?,
             right_ident: float_attr(e, "right_ident", 0.0),
             left_ident: float_attr(e, "left_ident", 0.0),
             top_indent: float_attr(e, "top_indent", 0.0),
@@ -338,8 +369,8 @@ impl ScrollListDesc {
             items: e
                 .children_named("text")
                 .map(|t| TextDesc::read(t, defs))
-                .collect(),
-        }
+                .collect::<io::Result<_>>()?,
+        })
     }
 
     /// Lays out items of the given heights (section 9.1): the top-left of
@@ -414,10 +445,12 @@ mod tests {
             <text font=\"graffiti19\" align=\"l\" vert_align=\"x\" x=\"1\" complex_mode=\"0\">key</text>\
             <auto_static x=\"3\" y=\"12\" width=\"19\" height=\"18\"><texture>ui_hud_icon_car</texture></auto_static>\
             <text_color><e r=\"10\"/><h color=\"ui_clr_3\"/></text_color>\
-            </s><bare><texture/><text font=\"header\"/></bare></w>",
+            </s><bare><texture/><text font=\"\"/></bare>\
+            <unknown><text font=\"header\"/></unknown>\
+            <nested><auto_static><font font=\"di2\"/></auto_static></nested></w>",
         )
         .unwrap();
-        let s = StaticDesc::read(require(&doc, "s", 0).unwrap(), &defs());
+        let s = StaticDesc::read(require(&doc, "s", 0).unwrap(), &defs()).unwrap();
         assert_eq!(s.window.rect(), Rect::new(15.5, 9.5, 55.0, 55.0));
         assert_eq!(
             s.window.absolute(599.0, 419.0),
@@ -431,11 +464,11 @@ mod tests {
         assert_eq!(s.texture_offset, (2.0, 3.5));
         assert_eq!(s.window.window_name.as_deref(), Some("win"));
         let f = s.window.font.as_ref().unwrap();
-        assert_eq!(f.font, Some(FontChoice::Font(UiFont::Medium)));
+        assert_eq!(f.font, Some(UiFont::Medium));
         assert_eq!(f.color, Color::rgba(1, 255, 255, 255));
         let text = s.text.as_ref().unwrap();
         assert_eq!(text.key.as_deref(), Some("key"));
-        assert_eq!(text.font, Some(FontChoice::Font(UiFont::Graffiti19)));
+        assert_eq!(text.font, Some(UiFont::Graffiti19));
         assert_eq!(text.align, Some(HAlign::Left));
         assert_eq!(text.vert_align, None);
         assert_eq!(text.offset, (1.0, 0.0));
@@ -450,13 +483,23 @@ mod tests {
         assert_eq!(colors.highlighted, Some(Color::rgba(135, 123, 116, 255)));
         assert_eq!(colors.disabled, None);
 
-        let bare = StaticDesc::read(require(&doc, "bare", 0).unwrap(), &defs());
+        let bare = StaticDesc::read(require(&doc, "bare", 0).unwrap(), &defs()).unwrap();
         assert_eq!(bare.texture, None);
         assert!(!bare.text_complex());
         let text = bare.text.unwrap();
         assert_eq!(text.key, None);
         assert_eq!(text.color, Color::WHITE);
-        assert_eq!(text.font, Some(FontChoice::Unknown("header".into())));
+        assert_eq!(text.font, None, "an empty font keeps the current font");
+        let unknown = StaticDesc::read(require(&doc, "unknown", 0).unwrap(), &defs()).unwrap_err();
+        assert!(
+            unknown.to_string().contains("unknown font \"header\""),
+            "{unknown}"
+        );
+        let nested = StaticDesc::read(require(&doc, "nested", 0).unwrap(), &defs()).unwrap_err();
+        assert!(
+            nested.to_string().contains("unknown font \"di2\""),
+            "{nested}"
+        );
         assert!(require(&doc, "missing", 0).is_err());
     }
 
@@ -470,7 +513,8 @@ mod tests {
             <text>a</text><text>b</text></l></w>",
         )
         .unwrap();
-        let list = ScrollListDesc::read(require(&doc, "buttons_region", 0).unwrap(), &defs());
+        let list =
+            ScrollListDesc::read(require(&doc, "buttons_region", 0).unwrap(), &defs()).unwrap();
         assert!(!list.always_show_scroll);
         assert_eq!(list.scroll_profile, "default");
         let (pos, content) = list.layout(&[30.0; 6]);
@@ -482,7 +526,7 @@ mod tests {
         assert!(!list.shows_scroll_bar(content));
         assert!(list.shows_scroll_bar(300.0));
 
-        let list = ScrollListDesc::read(require(&doc, "l", 0).unwrap(), &defs());
+        let list = ScrollListDesc::read(require(&doc, "l", 0).unwrap(), &defs()).unwrap();
         assert!(list.always_show_scroll);
         assert_eq!(list.items.len(), 2);
         let (pos, content) = list.layout(&[10.0, 20.0]);

@@ -10,6 +10,7 @@
 use std::io;
 
 use volya_engine_formats::cp1251;
+use volya_engine_formats::ui::layout::check_fonts;
 use volya_engine_formats::ui::seq::Sequence;
 use volya_engine_formats::ui::texture_desc::{self, TextureDescriptions};
 use volya_engine_formats::ui::title_menu::TitleMenuLayout;
@@ -82,7 +83,9 @@ pub fn read_ui_file(
     Ok((path, text))
 }
 
-/// Loads and parses the `ui` file `name` (e.g. `ui_mm_main.xml`).
+/// Loads and parses the `ui` file `name` (e.g. `ui_mm_main.xml`); an
+/// unknown `font` name anywhere in it is the fatal "unknown font" error
+/// (section 7.2).
 pub fn load_ui_file(
     vfs: &dyn Vfs,
     aliases: &PathAliases,
@@ -90,7 +93,9 @@ pub fn load_ui_file(
     resolution: Resolution,
 ) -> io::Result<Document> {
     let (path, text) = read_ui_file(vfs, aliases, name, resolution)?;
-    xml::parse(&text).map_err(|e| context(&path, e))
+    let doc = xml::parse(&text).map_err(|e| context(&path, e))?;
+    check_fonts(&doc).map_err(|e| context(&path, e))?;
+    Ok(doc)
 }
 
 /// Loads `config\ui\color_defs.xml` (section 2).
@@ -250,6 +255,11 @@ mod tests {
                 "gamedata/config/ui/tex.xml",
                 b"<ui_texture><file_name>ui\\t</file_name><texture id=\"i\" width=\"2\"/></ui_texture>",
             ),
+            (
+                "gamedata/config/ui/font.xml",
+                b"<w><s><text font=\"header\"/></s><e><text font=\"\"/></e></w>",
+            ),
+            ("gamedata/config/ui/fine.xml", b"<w><s><text font=\"di\"/></s></w>"),
             ("gamedata/textures/ui/v.ogm", b""),
             ("gamedata/textures/ui/v.seq", b""),
             ("gamedata/textures/ui/s.seq", b"2\r\nfx\\f.tga\r\n"),
@@ -274,6 +284,9 @@ mod tests {
         assert!(find_ui_file(&vfs, &aliases, "inc", HD).unwrap().is_some());
         assert!(load_ui_file(&vfs, &aliases, "bad.xml", XGA).is_err());
         assert!(load_ui_file(&vfs, &aliases, "missing.xml", XGA).is_err());
+        let err = load_ui_file(&vfs, &aliases, "font.xml", XGA).unwrap_err();
+        assert!(err.to_string().contains("unknown font \"header\""), "{err}");
+        assert!(load_ui_file(&vfs, &aliases, "fine.xml", XGA).is_ok());
     }
 
     #[test]
