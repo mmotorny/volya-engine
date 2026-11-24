@@ -8,12 +8,13 @@
 // updates also ask (`registration.update()`) when it returns to the
 // foreground, at most hourly.
 //
-// Automatic (the default): the update downloads in the background and is
-// applied (the new worker takes over, the page reloads) at a safe moment:
-// the page's own interface shows (not while the game runs) and nothing is
-// busy (no import). Turned off: nothing downloads by itself (metered
-// connections); the interface offers the update with its size, and a tap
-// downloads and applies it.
+// Downloads are automatic by default: the update downloads in the
+// background. Turned off, nothing downloads by itself (metered connections):
+// the interface offers the update with its size. Either way the app never
+// restarts by itself: once downloaded, the interface offers Finish update
+// (the new worker takes over, the page reloads), as Chrome does; closing and
+// reopening the app finishes it too (browsers activate a waiting worker once
+// no page uses the old one).
 //
 // The setting lives in the service worker's cache, where sw.js reads it.
 
@@ -36,11 +37,6 @@ export function versionText(build = BUILD, built = BUILT) {
 const CACHE = "volya-engine-app";
 const SETTINGS = "__settings.json";
 const MIN_INTERVAL_MS = 60 * 60 * 1000;
-/** Set just before an update reloads the page, to say so afterwards. */
-const UPDATED_FROM = "volya-engine.updated-from";
-
-/** Whether now is a safe moment to reload: the interface shows, idle. */
-export const safeNow = () => !document.querySelector("main")?.hidden && !document.getElementById("game")?.hasAttribute("data-busy");
 
 /** The settings shared with sw.js, kept in its cache. */
 export const settingsStore = (scope, cacheStorage = caches) => {
@@ -62,27 +58,19 @@ export const settingsStore = (scope, cacheStorage = caches) => {
  * - `status`: "current", "available" (opted out; `bytes`, `build`),
  *   "downloading", or "ready" (waiting to take over);
  * - `auto` and `setAuto(on)`;
- * - `download()`: consent to and download the available update (then apply);
- * - `apply()`, `check()`, `onChange(callback)`;
- * - `updatedFrom`: the build this page replaced, if an update just reloaded it.
+ * - `download()`: consent to and download the available update;
+ * - `apply()` (finish: take over and reload), `check()`, `onChange(callback)`.
  */
-export function startUpdates(
-  registration,
-  { container = navigator.serviceWorker, safe = safeNow, store = null, session = sessionStorage } = {},
-) {
+export function startUpdates(registration, { container = navigator.serviceWorker, store = null } = {}) {
   const listeners = new Set();
   let reg = null;
   let settings = { auto: true };
-  let wanted = false;
   let applying = false;
-  const updatedFrom = session.getItem(UPDATED_FROM);
-  session.removeItem(UPDATED_FROM);
 
   const state = {
     status: "current",
     bytes: 0,
     build: null,
-    updatedFrom: updatedFrom && updatedFrom !== BUILD ? updatedFrom : null,
     get auto() {
       return settings.auto !== false;
     },
@@ -94,7 +82,6 @@ export function startUpdates(
     },
     async download() {
       if (state.status !== "available") return;
-      wanted = true;
       settings = { ...settings, consent: state.build };
       await store?.write(settings);
       state.status = "downloading";
@@ -104,7 +91,6 @@ export function startUpdates(
     apply() {
       if (!reg?.waiting || applying) return;
       applying = true;
-      session.setItem(UPDATED_FROM, BUILD);
       container.addEventListener("controllerchange", () => location.reload(), { once: true });
       reg.waiting.postMessage({ type: "take-over" });
     },
@@ -129,7 +115,6 @@ export function startUpdates(
   const changed = () => {
     if (reg?.waiting && container.controller) state.status = "ready";
     else if (state.status === "ready") state.status = "current";
-    if (state.status === "ready" && (state.auto || wanted) && safe()) state.apply();
     for (const callback of listeners) callback(state);
   };
 
@@ -164,11 +149,5 @@ export function startUpdates(
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && state.auto && Date.now() - checked >= MIN_INTERVAL_MS) state.check();
   });
-  // A version that arrived during a game or an import applies once that ends.
-  // Only these two elements, so the interface's own updates can't loop back.
-  const observer = new MutationObserver(() => state.status === "ready" && changed());
-  for (const element of [document.querySelector("main"), document.getElementById("game")]) {
-    if (element) observer.observe(element, { attributes: true, attributeFilter: ["hidden", "data-busy"] });
-  }
   return state;
 }

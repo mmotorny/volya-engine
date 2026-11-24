@@ -62,38 +62,23 @@ export async function start(engineCall, updateState = null) {
   updates = updateState;
   globalThis.volya.importGame = importGame;
   globalThis.volya.showSettings = showSettings;
-  updates?.onChange(showUpdateStatus);
-  showUpdateStatus();
   await refresh();
 }
 
-/** The footer's version line, saying what updates are doing. */
-function showUpdateStatus() {
-  const status = document.getElementById("status");
-  if (!status?.dataset.text || status.dataset.state === "error") return;
-  if (updates?.status === "downloading") {
-    status.textContent = "Updating…";
-  } else if (updates?.updatedFrom && !status.dataset.updatedShown) {
-    status.dataset.updatedShown = "1";
-    status.textContent = `Updated to ${BUILD}`;
-    setTimeout(() => {
-      if (status.textContent === `Updated to ${BUILD}`) status.textContent = status.dataset.text;
-    }, 5000);
-  } else if (status.textContent === "Updating…") {
-    status.textContent = status.dataset.text;
-  }
-}
-
-/** The update offer when automatic updates are off (hidden while none). */
+/**
+ * The update offer: Finish update once one is downloaded (the app never
+ * restarts by itself); with automatic downloads off, Download update first.
+ * Hidden while there's nothing to do (and while downloading automatically).
+ */
 function updateOffer() {
   if (!updates) return null;
   const button = element("button", { className: "primary wide" });
   const render = () => {
     const { status, bytes, auto } = updates;
-    button.hidden = auto || !["available", "downloading", "ready"].includes(status);
+    button.hidden = !(status === "ready" || (!auto && (status === "available" || status === "downloading")));
     button.disabled = status === "downloading";
     button.textContent =
-      status === "downloading" ? "Downloading update…" : status === "ready" ? "Update now" : `Download update · ${formatBytes(bytes)}`;
+      status === "ready" ? "Finish update" : status === "downloading" ? "Downloading update…" : `Download update · ${formatBytes(bytes)}`;
   };
   button.addEventListener("click", () => (updates.status === "ready" ? updates.apply() : updates.download()));
   const stop = updates.onChange(() => (button.isConnected ? render() : stop()));
@@ -156,16 +141,6 @@ async function refresh() {
  * `{ url, size }` sources); `only` optionally limits the paths imported.
  */
 export async function importGame({ exe, bin, only }, onProgress = () => {}) {
-  // Busy: an update must not reload the page meanwhile (update.js).
-  root().dataset.busy = "import";
-  try {
-    return await runImport({ exe, bin, only }, onProgress);
-  } finally {
-    delete root().dataset.busy;
-  }
-}
-
-async function runImport({ exe, bin, only }, onProgress) {
   await call("unmount_game");
   const worker = new Worker(new URL("./import-worker.js", import.meta.url), { type: "module" });
   const request = (message) =>
@@ -570,7 +545,7 @@ async function showSettings() {
         : s === "downloading"
           ? "Downloading an update…"
           : s === "ready"
-            ? "An update is ready."
+            ? "An update is downloaded: finish it here, or close and reopen the app."
             : "Up to date.";
   };
   auto.addEventListener("change", () => updates?.setAuto(auto.checked));
@@ -599,7 +574,7 @@ async function showSettings() {
         element(
           "span",
           {},
-          element("strong", { textContent: "Update automatically" }),
+          element("strong", { textContent: "Download updates automatically" }),
           element("small", { textContent: "When off, nothing downloads until you choose to (for metered connections)." }),
         ),
       ),
@@ -637,4 +612,4 @@ async function showSettings() {
 }
 
 /** Every screen, for the UX audit page (static/ux/), which shows each state. */
-export const screens = { showImport, showHome, showSettings, showInUse, showDamaged, showUpdateStatus };
+export const screens = { showImport, showHome, showSettings, showInUse, showDamaged };

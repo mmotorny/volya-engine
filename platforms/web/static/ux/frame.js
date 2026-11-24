@@ -97,7 +97,6 @@ const updates = {
   status: "current",
   bytes: 0,
   build: "c0ffee1",
-  updatedFrom: null,
   auto: true,
   ...state.updates,
   async setAuto(on) {

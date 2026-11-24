@@ -31,7 +31,7 @@ export const tests = {
     assertEqual(el.textContent, `Volya Engine · ${versionText()}`, "text");
   },
 
-  "updates: automatic applies at a safe moment, opted out only on request": async () => {
+  "updates: never restart by themselves; opted out, nothing downloads unasked": async () => {
     const { startUpdates } = await import(`${base}update.js`);
     const fake = ({ auto }) => {
       const registration = Object.assign(new EventTarget(), { waiting: null, installing: null, updates: 0, scope: "https://example.test/" });
@@ -41,10 +41,7 @@ export const tests = {
       worker.postMessage = (m) => worker.messages.push(m);
       let saved = { auto };
       const store = { read: async () => saved, write: async (s) => (saved = s) };
-      const session = new Map();
-      const sessionStore = { getItem: (k) => session.get(k) ?? null, setItem: (k, v) => session.set(k, v), removeItem: (k) => session.delete(k) };
-      let safe = true;
-      const updates = startUpdates(Promise.resolve(registration), { container, store, session: sessionStore, safe: () => safe });
+      const updates = startUpdates(Promise.resolve(registration), { container, store });
       const waitFor = async () => {
         registration.installing = worker;
         registration.dispatchEvent(new Event("updatefound"));
@@ -53,23 +50,22 @@ export const tests = {
         worker.state = "installed";
         worker.dispatchEvent(new Event("statechange"));
       };
-      return { updates, registration, container, worker, store: () => saved, setSafe: (v) => (safe = v), waitFor };
+      return { updates, registration, container, worker, store: () => saved, waitFor };
     };
     const tick = () => new Promise((r) => setTimeout(r));
 
-    // Automatic: unsafe (in a game) waits; applies once safe.
+    // Automatic downloads: a downloaded update waits; Finish update applies it.
     const a = fake({ auto: true });
     await tick();
     assert(a.updates.auto, "automatic by default");
-    a.setSafe(false);
     await a.waitFor();
-    assertEqual(a.updates.status, "ready", "status");
-    assertEqual(a.worker.messages.length, 0, "applied during a game");
-    a.setSafe(true);
     await a.updates.check();
-    assertEqual(JSON.stringify(a.worker.messages), '[{"type":"take-over"}]', "not applied once safe");
+    assertEqual(a.updates.status, "ready", "status");
+    assertEqual(a.worker.messages.length, 0, "restarted by itself");
+    a.updates.apply();
+    assertEqual(JSON.stringify(a.worker.messages), '[{"type":"take-over"}]', "Finish update didn't apply");
 
-    // Opted out: an offer with its size; nothing until asked.
+    // Opted out: an offer with its size; downloads only when asked; still waits.
     const b = fake({ auto: false });
     await tick();
     assert(!b.updates.auto, "opt-out not read");
@@ -81,8 +77,9 @@ export const tests = {
     assertEqual(b.store().consent, "c0ffee1", "consent recorded for that build");
     assertEqual(b.registration.updates, 2, "download asks the browser to install");
     await b.waitFor();
-    assertEqual(JSON.stringify(b.worker.messages), '[{"type":"take-over"}]', "requested update not applied");
-    // Turning automatic updates back on is remembered.
+    assertEqual(b.updates.status, "ready", "downloaded");
+    assertEqual(b.worker.messages.length, 0, "restarted by itself after download");
+    // Turning automatic downloads back on is remembered.
     await b.updates.setAuto(true);
     assertEqual(b.store().auto, true, "setting saved");
   },
