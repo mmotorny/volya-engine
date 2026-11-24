@@ -36,6 +36,7 @@ if (device.touch) document.body.insertAdjacentHTML("beforeend", `<div class="ux-
 // The device's platform; installed unless the state says it's a browser
 // tab; Chrome's install offer on desktop.
 globalThis.volyaPlatform = device.touch ? "ios" : "desktop";
+globalThis.volyaChromium = !device.touch;
 globalThis.volyaInstalled = state.tab ? false : true;
 if (state.tab && !device.touch) globalThis.volyaInstallOffer = { prompt: async () => {}, userChoice: Promise.resolve({ outcome: "dismissed" }) };
 

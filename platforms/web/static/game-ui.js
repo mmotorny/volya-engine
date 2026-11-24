@@ -16,7 +16,7 @@
 // zone, removing the import.
 
 import { BUILD, versionText } from "./update.js";
-import { SHARE_ICON, canOffer, install, installed, platform } from "./install.js";
+import { SHARE_ICON, canOffer, chromium, install, installed, platform } from "./install.js";
 
 
 let call;
@@ -343,7 +343,9 @@ function showImport(status, snapshot = null) {
         ),
         element("li", {
           textContent:
-            "Choose both files below. The game is extracted into this app's storage, which needs room for it (on iPhone, also for a temporary copy of the installer). Afterwards the installer files are no longer needed.",
+            platform() === "ios"
+              ? "Choose both files below. The game is extracted into this app's storage, which needs room for it and for a temporary copy of the installer that iOS makes. Afterwards the installer files are no longer needed."
+              : "Choose both files below. The game is extracted into this app's storage, which needs room for it. Afterwards the installer files are no longer needed.",
         }),
       ),
       progress,
@@ -503,7 +505,13 @@ function keepHelp() {
     });
     return [element("p", { textContent: "Install Volya Engine as an app to keep it." }), button];
   }
-  return [element("p", { textContent: "Install Volya Engine as an app to keep it: click the install icon at the right of Chrome's address bar." })];
+  return [
+    element("p", {
+      textContent: chromium()
+        ? "Install Volya Engine as an app to keep it: click the install icon at the right of the address bar."
+        : "Install Volya Engine as an app to keep it, if this browser can.",
+    }),
+  ];
 }
 
 const storageWarning = () =>

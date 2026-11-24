@@ -33,6 +33,10 @@ export const platform = () =>
     ? "ios"
     : "desktop");
 
+/** Whether the browser is Chrome or another Chromium browser (they share the
+ * address bar's install icon). */
+export const chromium = () => globalThis.volyaChromium ?? Boolean(navigator.userAgentData);
+
 /** Whether this page runs as the installed app. */
 export const installed = () =>
   globalThis.volyaInstalled ?? (matchMedia("(display-mode: standalone)").matches || navigator.standalone === true);
