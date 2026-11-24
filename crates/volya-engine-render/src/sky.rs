@@ -135,19 +135,31 @@ pub fn cloud_dome() -> (Vec<[f32; 3]>, Vec<[u16; 3]>) {
     (vertices, triangles)
 }
 
-/// The textures of the sky passes: the two sections' cube maps and cloud
-/// textures, and the sun sprite's texture if the lens-flare section draws
-/// one.
+/// The textures of one hourly section of the weather cycle: its cube map,
+/// its cloud texture, and the sun sprite's texture if its lens-flare section
+/// draws one.
+#[derive(Clone, Debug)]
+pub struct SkySection<T> {
+    pub cube: T,
+    pub clouds: T,
+    pub sun: Option<T>,
+}
+
+/// The textures of the sky passes: every hourly section of the weather
+/// cycle, in time order. A frame binds the textures of a section and of the
+/// one after it, wrapping (sky.md 3.3).
 #[derive(Clone, Debug)]
 pub struct SkyTextures<T> {
-    pub cubes: [T; 2],
-    pub clouds: [T; 2],
-    pub sun: Option<T>,
+    pub sections: Vec<SkySection<T>>,
 }
 
 /// The sky's values in one frame (bytes as the specs give them).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SkyFrame {
+    /// Section A of [`SkyTextures::sections`]; B is the one after it.
+    pub section: usize,
+    /// The section whose sun sprite is drawn.
+    pub sun_section: usize,
     /// Bytes of C_sky and of the hourly blend weight t (5.3).
     pub color: [u8; 4],
     /// θ_sky, radians.
@@ -361,9 +373,12 @@ impl SkyPipelines {
 pub(crate) struct SkyResources {
     uniforms: wgpu::Buffer,
     uniform_group: wgpu::BindGroup,
-    cubes: wgpu::BindGroup,
-    clouds: wgpu::BindGroup,
-    sun: Option<wgpu::BindGroup>,
+    /// Per section A: A's and the next section's cube maps.
+    cubes: Vec<wgpu::BindGroup>,
+    /// Per section A: A's and the next section's cloud textures.
+    clouds: Vec<wgpu::BindGroup>,
+    /// Per section: its sun sprite.
+    sun: Vec<Option<wgpu::BindGroup>>,
     box_vertices: wgpu::Buffer,
     box_indices: wgpu::Buffer,
     dome_vertices: wgpu::Buffer,
@@ -397,13 +412,19 @@ fn bytes_of<T: Copy>(values: &[T], each: impl Fn(&T, &mut Vec<u8>)) -> Vec<u8> {
 }
 
 impl SkyResources {
-    /// Fails when a cube map is not a 6-face texture.
+    /// Fails when there are no sections or a cube map is not a 6-face
+    /// texture.
     pub(crate) fn new(
         device: &wgpu::Device,
         pipelines: &SkyPipelines,
         textures: &SkyTextures<Texture>,
     ) -> Result<Self, String> {
-        for c in &textures.cubes {
+        let sections = &textures.sections;
+        if sections.is_empty() {
+            return Err("no weather sections".into());
+        }
+        for s in sections {
+            let c = &s.cube;
             if c.texture.depth_or_array_layers() != 6 || c.texture.width() != c.texture.height() {
                 return Err("sky texture is not a cube map".into());
             }
@@ -432,40 +453,40 @@ impl SkyResources {
         let uniform_group = group(&pipelines.uniform_layout, &[uniforms.as_entire_binding()]);
         let cube = wgpu::TextureViewDimension::Cube;
         let flat = wgpu::TextureViewDimension::D2;
-        let (c0, c1) = (
-            view(&textures.cubes[0], cube),
-            view(&textures.cubes[1], cube),
-        );
-        let cubes = group(
-            &pipelines.cube_layout,
-            &[
-                wgpu::BindingResource::TextureView(&c0),
-                wgpu::BindingResource::TextureView(&c1),
-                wgpu::BindingResource::Sampler(&pipelines.clamp),
-            ],
-        );
-        let (k0, k1) = (
-            view(&textures.clouds[0], flat),
-            view(&textures.clouds[1], flat),
-        );
-        let clouds = group(
-            &pipelines.flat2_layout,
-            &[
-                wgpu::BindingResource::TextureView(&k0),
-                wgpu::BindingResource::TextureView(&k1),
-                wgpu::BindingResource::Sampler(&pipelines.wrap),
-            ],
-        );
-        let sun = textures.sun.as_ref().map(|t| {
-            let v = view(t, flat);
+        let cube_views: Vec<_> = sections.iter().map(|s| view(&s.cube, cube)).collect();
+        let cloud_views: Vec<_> = sections.iter().map(|s| view(&s.clouds, flat)).collect();
+        let n = sections.len();
+        let pair = |views: &[wgpu::TextureView], layout, sampler, a: usize| {
             group(
-                &pipelines.flat1_layout,
+                layout,
                 &[
-                    wgpu::BindingResource::TextureView(&v),
-                    wgpu::BindingResource::Sampler(&pipelines.clamp),
+                    wgpu::BindingResource::TextureView(&views[a]),
+                    wgpu::BindingResource::TextureView(&views[(a + 1) % n]),
+                    wgpu::BindingResource::Sampler(sampler),
                 ],
             )
-        });
+        };
+        let cubes = (0..n)
+            .map(|a| pair(&cube_views, &pipelines.cube_layout, &pipelines.clamp, a))
+            .collect();
+        let clouds = (0..n)
+            .map(|a| pair(&cloud_views, &pipelines.flat2_layout, &pipelines.wrap, a))
+            .collect();
+        let sun = sections
+            .iter()
+            .map(|s| {
+                s.sun.as_ref().map(|t| {
+                    let v = view(t, flat);
+                    group(
+                        &pipelines.flat1_layout,
+                        &[
+                            wgpu::BindingResource::TextureView(&v),
+                            wgpu::BindingResource::Sampler(&pipelines.clamp),
+                        ],
+                    )
+                })
+            })
+            .collect();
         let init = |label, contents: &[u8], usage| {
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
@@ -505,9 +526,16 @@ impl SkyResources {
             &bytes_of(&indices, |i, out| out.extend_from_slice(&i.to_le_bytes())),
             wgpu::BufferUsages::INDEX,
         );
-        let mut kept = textures.cubes.to_vec();
-        kept.extend(textures.clouds.iter().cloned());
-        kept.extend(textures.sun.iter().cloned());
+        let mut kept: Vec<Texture> = Vec::new();
+        for t in sections
+            .iter()
+            .flat_map(|s| [Some(&s.cube), Some(&s.clouds), s.sun.as_ref()])
+            .flatten()
+        {
+            if !kept.iter().any(|k| k.texture == t.texture) {
+                kept.push(t.clone());
+            }
+        }
         Ok(Self {
             uniforms,
             uniform_group,
@@ -572,12 +600,14 @@ impl SkyResources {
         pass.set_bind_group(0, &self.uniform_group, &[]);
         pass.set_viewport(0.0, 0.0, w, h, SKY_DEPTH.0, SKY_DEPTH.1);
         pass.set_pipeline(&self.sky);
-        pass.set_bind_group(1, &self.cubes, &[]);
+        let a = frame.section % self.cubes.len();
+        pass.set_bind_group(1, &self.cubes[a], &[]);
         pass.set_vertex_buffer(0, self.box_vertices.slice(..));
         pass.set_index_buffer(self.box_indices.slice(..), wgpu::IndexFormat::Uint16);
         pass.draw_indexed(0..60, 0, 0..1);
         pass.set_viewport(0.0, 0.0, w, h, 0.0, 1.0);
-        if let (Some(_), Some(sun)) = (frame.sun, &self.sun) {
+        let sun = self.sun.get(frame.sun_section).and_then(Option::as_ref);
+        if let (Some(_), Some(sun)) = (frame.sun, sun) {
             pass.set_pipeline(&self.sun_pipeline);
             pass.set_bind_group(1, sun, &[]);
             pass.draw(0..6, 0..1);
@@ -585,7 +615,7 @@ impl SkyResources {
         if frame.clouds.is_some() {
             pass.set_viewport(0.0, 0.0, w, h, SKY_DEPTH.0, SKY_DEPTH.1);
             pass.set_pipeline(&self.clouds_pipeline);
-            pass.set_bind_group(1, &self.clouds, &[]);
+            pass.set_bind_group(1, &self.clouds[a], &[]);
             pass.set_vertex_buffer(0, self.dome_vertices.slice(..));
             pass.set_index_buffer(self.dome_indices.slice(..), wgpu::IndexFormat::Uint16);
             pass.draw_indexed(0..self.dome_index_count, 0, 0..1);

@@ -12,7 +12,7 @@
 use volya_engine_formats::dds::Dds;
 use volya_engine_formats::dds::build::{PixelFormat, file};
 use volya_engine_formats::level_geom::{Layout, LevelGeom, VertexBuffer};
-use volya_engine_render::sky::{SkyFrame, SkyTextures};
+use volya_engine_render::sky::{SkyFrame, SkySection, SkyTextures};
 use volya_engine_render::world::{Blend, Mat4, Program, Surface, TreeLight, WorldLight};
 use volya_engine_render::{DrawList, Renderer, Texture, WorldDraw, WorldFrame, wgpu};
 
@@ -273,21 +273,26 @@ fn sky_shows_where_the_world_does_not() {
     let mut r = renderer();
     // Cube maps of rgb (100, 50, 26) and (200, 100, 52), blended half and
     // half (t byte 127 ≈ 0.5), times 2 × 127/255 (sky.md 5.4).
+    // Section 1 blends with section 2; section 0 is not bound.
+    let white = dds_texture(&r, false, [255; 4]);
+    let section = |cube| SkySection {
+        cube,
+        clouds: white.clone(),
+        sun: Some(white.clone()),
+    };
     let sky = SkyTextures {
-        cubes: [
-            dds_texture(&r, true, [26, 50, 100, 255]),
-            dds_texture(&r, true, [52, 100, 200, 255]),
+        sections: vec![
+            section(dds_texture(&r, true, [0, 0, 0, 255])),
+            section(dds_texture(&r, true, [26, 50, 100, 255])),
+            section(dds_texture(&r, true, [52, 100, 200, 255])),
         ],
-        clouds: [
-            dds_texture(&r, false, [255; 4]),
-            dds_texture(&r, false, [255; 4]),
-        ],
-        sun: Some(dds_texture(&r, false, [255; 4])),
     };
     let g = geom(Layout::VertexLit, 0, 0, [0; 8]);
     let world = r.create_world(&g, &[], &[], Some(&sky)).unwrap();
     assert_eq!(world.sky_error(), None);
     let sky_frame = SkyFrame {
+        section: 1,
+        sun_section: 2,
         color: [127, 127, 127, 127],
         rotation: 0.0,
         clouds: Some(([37, 217, 176, 9], [113, 84, 80, 127])),
@@ -310,10 +315,8 @@ fn sky_shows_where_the_world_does_not() {
         "sky",
     );
     // A 1-face texture is not a cube map: no sky, said why.
-    let flat = SkyTextures {
-        cubes: [sky.clouds[0].clone(), sky.clouds[1].clone()],
-        ..sky
-    };
+    let mut flat = sky.clone();
+    flat.sections[0].cube = white.clone();
     let world = r.create_world(&g, &[], &[], Some(&flat)).unwrap();
     assert!(world.sky_error().is_some());
 }

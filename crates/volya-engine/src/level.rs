@@ -3,8 +3,9 @@
 
 //! A New Game's level (docs/behavior/level-loading.md): which level, its
 //! static world, and the view from the player's start
-//! (docs/behavior/start-position.md), under the weather of the start time
-//! (docs/behavior/static-shading.md section 9), with its collision world
+//! (docs/behavior/start-position.md), under the weather of the game clock's
+//! time of day (docs/formats/sav.md sections 5 and 12,
+//! docs/behavior/static-shading.md section 9), with its collision world
 //! (docs/formats/level-cform.md), walked by the player in first person
 //! (docs/behavior/player-movement.md).
 //!
@@ -19,20 +20,22 @@ use serde::Serialize;
 
 use crate::controls::Controls;
 use crate::core::camera::{self, Angles, Mat4, Vec3};
+use crate::core::clock::GameClock;
 use crate::core::collision::{CollisionWorld, geometry};
 use crate::core::config;
+use crate::core::config::Config;
 use crate::core::input::Input;
 use crate::core::level::{DrawItem, Level, LevelGeom};
 use crate::core::movement::{Flags, MovementConfig, Player};
 use crate::core::vfs::{self, Vfs};
-use crate::core::weather::{self, Environment, Weather};
+use crate::core::weather::{Environment, Weather};
 use crate::data::GameData;
 use crate::loading_screen::Stage;
-use crate::render::sky::SkyTextures;
+use crate::render::sky::{SkySection, SkyTextures};
 use crate::render::world::Surface;
 use crate::scene::{Scene, WorldScene};
 use crate::shading::{self, ShaderLibrary};
-use crate::sky::{self, SkyCamera, SunSource};
+use crate::sky::{self, Flares, SkyCamera, SunFade};
 use std::collections::HashMap;
 use volya_engine_formats::env_mod::{self, EnvModifier};
 use volya_engine_formats::game_graph::GameGraph;
@@ -51,9 +54,6 @@ pub const LEVEL_FILES: [&str; 4] = ["level", "level.ltx", "level.geom", "level.c
 pub const VIS_DISTANCE: f32 = 1.0;
 /// Longest frame the sun's fade advances by, seconds (our choice).
 const MAX_STEP: f32 = 0.1;
-/// Time of day when `config\alife.ltx` gives none (our choice; the shipped
-/// file says 05:30:00).
-const DEFAULT_START_TIME: f32 = 5.5 * 3600.0;
 
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
@@ -77,10 +77,12 @@ pub struct LevelWorld {
     pub draw_surfaces: Vec<Option<u32>>,
     /// Shader entries not drawn, with why.
     pub not_drawn: Vec<(String, String)>,
-    /// The sky's textures as file paths (sky.md sections 5–7).
+    /// The sky's textures as file paths, per hourly section of the weather
+    /// cycle (sky.md sections 3.2, 5–7).
     pub sky: SkyTextures<String>,
-    /// The sun sprite, its texture as a file path.
-    pub sun: Option<SunSource>,
+    /// The lens-flare section of each hourly section, the sun sprite's
+    /// texture as a file path (sky.md 7.2).
+    pub flares: Vec<Flares>,
     /// The vertex and index buffers until the presenter uploads them.
     geometry: Mutex<Option<LevelGeom>>,
 }
@@ -104,8 +106,8 @@ pub struct LevelScreen {
     /// The near plane of the current view (start-position.md section 7).
     near: f32,
     weather: Weather,
-    /// Time of day, seconds.
-    time_of_day: f32,
+    /// The game clock (sav.md sections 5, 12).
+    clock: GameClock,
     modifiers: Vec<EnvModifier>,
     environment: Environment,
     /// When the level was shown first (engine clock, ms), later by the
@@ -114,12 +116,8 @@ pub struct LevelScreen {
     /// The previous update (engine clock, ms).
     last: u64,
     back: bool,
-    /// The sun sprite's fade (sky.md 7.3) and whether the first frame,
-    /// on which it stays 0, has passed.
-    sun_fade: f32,
-    sun_started: bool,
-    /// How many times faster game time runs than real time.
-    time_factor: f32,
+    /// The sun's fade (sky.md 7.3).
+    sun_fade: SunFade,
 }
 
 /// What the engine interface reports.
@@ -132,7 +130,14 @@ pub struct LevelState {
     pub pitch: f32,
     pub far_plane: f32,
     pub near_plane: f32,
+    /// The game time, game milliseconds (sav.md section 12).
+    pub game_time: u64,
+    /// Its time of day, seconds.
     pub time_of_day: f32,
+    /// The hourly blend weight t (static-shading.md 9.2).
+    pub weather_t: f32,
+    /// The bracketing hourly sections A and B.
+    pub weather_sections: [String; 2],
     pub player: PlayerReport,
 }
 
@@ -176,26 +181,25 @@ pub fn new_game_level(tree: &dyn Vfs, data: &GameData) -> io::Result<(String, sp
 }
 
 /// The weather name of `level` (`[<level>] weathers` of `game.ltx`'s
-/// includes) and the start time (`[alife] start_time`), level-loading.md
-/// section 2.6. The weather script is replaced by its result.
-fn start_weather(tree: &dyn Vfs, data: &GameData, level: &str) -> io::Result<(String, f32)> {
+/// includes), level-loading.md section 2.6. The weather script is replaced
+/// by its result.
+fn start_weather(tree: &dyn Vfs, data: &GameData, level: &str) -> io::Result<String> {
     let game = config::load(tree, &data.aliases.path("$game_config$", "game.ltx")?)?;
-    let name = game
+    Ok(game
         .get(level, "weathers")
         .flatten()
         // Our choice when the level has no `weathers` key.
         .unwrap_or("default")
-        .to_owned();
-    let alife = match data.system.section("alife") {
-        Some(_) => data.system.clone(),
-        None => config::load(tree, &data.aliases.path("$game_config$", "alife.ltx")?)?,
-    };
-    let time = alife
-        .get("alife", "start_time")
-        .flatten()
-        .and_then(weather::parse_time)
-        .unwrap_or(DEFAULT_START_TIME);
-    Ok((name, time))
+        .to_owned())
+}
+
+/// `config\alife.ltx`, or the system configuration where it holds
+/// `[alife]` already.
+fn alife(tree: &dyn Vfs, data: &GameData) -> io::Result<Config> {
+    match data.system.section("alife") {
+        Some(_) => Ok(data.system.clone()),
+        None => config::load(tree, &data.aliases.path("$game_config$", "alife.ltx")?),
+    }
 }
 
 /// The file of texture `name`: `$level$<name>.dds`, then
@@ -294,19 +298,6 @@ fn resolve_surfaces(
     Ok((surfaces, draw_surfaces, not_drawn))
 }
 
-/// `[alife] time_factor`, presumed to be the clock's rate for a New Game
-/// (sky.md 7.3); 10 when absent (the shipped value; our choice).
-fn time_factor(tree: &dyn Vfs, data: &GameData) -> io::Result<f32> {
-    let alife = match data.system.section("alife") {
-        Some(_) => data.system.clone(),
-        None => config::load(tree, &data.aliases.path("$game_config$", "alife.ltx")?)?,
-    };
-    Ok(alife
-        .get("alife", "time_factor")
-        .flatten()
-        .map_or(10.0, config::value::float))
-}
-
 /// A new game's level being loaded stage by stage
 /// (docs/behavior/loading-screen.md section 5): [`NewGameLoad::run`] does
 /// the part of each stage's work this engine has, in the stages' order;
@@ -326,13 +317,12 @@ pub struct NewGameLoad {
     movement: Option<MovementConfig>,
     controls: Option<Controls>,
     weather: Option<Weather>,
-    time_of_day: f32,
-    time_factor: f32,
+    clock: Option<GameClock>,
     surfaces: Vec<Surface<String>>,
     draw_surfaces: Vec<Option<u32>>,
     not_drawn: Vec<(String, String)>,
     sky: Option<SkyTextures<String>>,
-    sun: Option<SunSource>,
+    flares: Vec<Flares>,
 }
 
 /// What a stage needs from an earlier one, or an error naming it.
@@ -424,18 +414,18 @@ impl NewGameLoad {
                     Err(e) => return Err(e),
                 };
             }
-            // The actor and the start weather (level-loading.md 2.6), placed
-            // under this caption by us (the client creates the objects here).
+            // The actor, the start weather (level-loading.md 2.6) and the
+            // New Game's clock (sav.md section 5), placed under this caption
+            // by us (the client creates the objects here).
             Stage::ClientSpawning => {
                 let name = earlier(self.name.as_deref(), "level")?;
                 // player-movement.md section 1: the actor's section is the
                 // one its spawn record names.
                 self.movement = Some(MovementConfig::read(&data.system, spawn::ACTOR_SECTION)?);
                 self.controls = Some(data.controls.clone());
-                let (weather_name, time_of_day) = start_weather(tree, data, name)?;
+                let weather_name = start_weather(tree, data, name)?;
                 self.weather = Some(Weather::load(&data.system, &weather_name)?);
-                self.time_of_day = time_of_day;
-                self.time_factor = time_factor(tree, data)?;
+                self.clock = Some(GameClock::new_game(&alife(tree, data)?)?);
             }
             // Every texture file the level needs is located here. The
             // presenter reads and uploads them with the first frame that
@@ -445,25 +435,36 @@ impl NewGameLoad {
                 let level = earlier(self.level.as_ref(), "level")?;
                 (self.surfaces, self.draw_surfaces, self.not_drawn) =
                     resolve_surfaces(tree, data, &dir, &level.shaders, &self.draw_items)?;
-                // The sky's textures: the bracketing sections' cube maps and
-                // cloud textures; the sun sprite of the lens-flare section in
-                // effect. Game time stays at the start, so these stay too.
+                // The sky's textures for every hourly section of the cycle
+                // (sky.md 3.2; the weather effects' are not, our choice):
+                // cube maps, cloud textures and the sun sprites of their
+                // lens-flare sections, as the clock moves through the day.
                 let weather = earlier(self.weather.as_ref(), "weather")?;
-                let (a, b, t) = weather.bracket(self.time_of_day);
-                let locate = |name: &str| locate_texture(tree, data, &dir, name);
-                self.sky = Some(SkyTextures {
-                    cubes: [locate(&a.sky_texture)?, locate(&b.sky_texture)?],
-                    clouds: [locate(&a.clouds_texture)?, locate(&b.clouds_texture)?],
-                    sun: None,
-                });
-                self.sun = SunSource::read(&data.system, sky::flares_section(a, b, t))
-                    .map(|s| {
-                        Ok::<_, io::Error>(SunSource {
-                            texture: locate(&s.texture)?,
-                            ..s
-                        })
-                    })
-                    .transpose()?;
+                let mut located: HashMap<String, String> = HashMap::new();
+                let mut locate = |name: &str| -> io::Result<String> {
+                    if let Some(p) = located.get(name) {
+                        return Ok(p.clone());
+                    }
+                    let path = locate_texture(tree, data, &dir, name)?;
+                    located.insert(name.to_owned(), path.clone());
+                    Ok(path)
+                };
+                let mut sections = Vec::with_capacity(weather.sections.len());
+                let mut flares = Vec::with_capacity(weather.sections.len());
+                for (_, s) in &weather.sections {
+                    let mut f = Flares::read(&data.system, &s.flares);
+                    if let Some(sun) = &mut f.sun {
+                        sun.texture = locate(&sun.texture)?;
+                    }
+                    sections.push(SkySection {
+                        cube: locate(&s.sky_texture)?,
+                        clouds: locate(&s.clouds_texture)?,
+                        sun: f.sun.as_ref().map(|s| s.texture.clone()),
+                    });
+                    flares.push(f);
+                }
+                self.sky = Some(SkyTextures { sections });
+                self.flares = flares;
             }
             Stage::PrefetchingObjects
             | Stage::ServerStarting
@@ -488,6 +489,7 @@ impl NewGameLoad {
         let controls = earlier(self.controls, "controls")?;
         let weather = earlier(self.weather, "weather")?;
         let sky = earlier(self.sky, "sky")?;
+        let clock = earlier(self.clock, "game clock")?;
         // start-position.md sections 4 and 5: standing at the stored
         // position, the camera at the spawn's angles.
         let player = Player::new(
@@ -498,7 +500,7 @@ impl NewGameLoad {
             now,
         );
         let eye = player.view().eye;
-        let (a, b, t) = weather.bracket(self.time_of_day);
+        let (a, b, t) = weather.bracket(clock.time_of_day());
         let environment = Environment::blend(a, b, t, &self.modifiers, eye, VIS_DISTANCE);
         let mut screen = LevelScreen {
             world: Arc::new(LevelWorld {
@@ -511,7 +513,7 @@ impl NewGameLoad {
                 draw_surfaces: self.draw_surfaces,
                 not_drawn: self.not_drawn,
                 sky,
-                sun: self.sun,
+                flares: self.flares,
                 geometry: Mutex::new(Some(geom)),
             }),
             collision,
@@ -520,14 +522,12 @@ impl NewGameLoad {
             near: camera::NEAR,
             environment,
             weather,
-            time_of_day: self.time_of_day,
+            clock,
             modifiers: self.modifiers,
             shown: now,
             last: now,
             back: false,
-            sun_fade: 0.0,
-            sun_started: false,
-            time_factor: self.time_factor,
+            sun_fade: SunFade::default(),
         };
         screen.update_view();
         Ok(screen)
@@ -564,14 +564,14 @@ impl LevelScreen {
         &self.collision
     }
 
-    /// The environment at the camera (static-shading.md 9.2; game time
-    /// stays at the start time, our choice for a static world) and the near
+    /// The environment at the camera at the clock's time of day
+    /// (static-shading.md 9.2) and the near
     /// plane: 0.01 m while the cube of half-size 0.2 m around the eye meets
     /// a static collision triangle (start-position.md section 7; movable
     /// objects do not exist here).
     fn update_view(&mut self) {
         let eye = self.player.view().eye;
-        let (a, b, t) = self.weather.bracket(self.time_of_day);
+        let (a, b, t) = self.weather.bracket(self.clock.time_of_day());
         self.environment = Environment::blend(a, b, t, &self.modifiers, eye, VIS_DISTANCE);
         let c = camera::NEAR_CLEARANCE;
         let mut found = Vec::new();
@@ -592,30 +592,46 @@ impl LevelScreen {
     }
 
     /// A frame at `now` with game time paused (a movie item's
-    /// `pause_state`, level-loading.md section 2.3): nothing moves and the
-    /// shaders' clock stands still (our reading: which clock the shaders
-    /// use is not established, ogf.md section 10); input is not read.
+    /// `pause_state`, level-loading.md section 2.3): the game clock stands
+    /// still, nothing moves and the shaders' clock stands still (our
+    /// reading: which clock the shaders use is not established, ogf.md
+    /// section 10); input is not read.
     pub fn paused(&mut self, now: u64) {
-        self.shown += now.saturating_sub(self.last);
+        let elapsed = now.saturating_sub(self.last);
+        self.shown += elapsed;
         self.last = now;
+        self.clock.set_paused(true);
+        self.clock.advance(elapsed);
         self.player.paused(now);
     }
 
-    /// One frame at `now` with this frame's `input`.
+    /// One frame at `now` with this frame's `input`. The game clock
+    /// advances by the real time since the previous frame, uncapped (our
+    /// choice: the specs cap only the movement's and the display's frame
+    /// times, player-movement.md 3.2).
     pub fn update(&mut self, now: u64, input: &Input) {
-        let dt = (now.saturating_sub(self.last) as f32 / 1000.0).min(MAX_STEP);
+        let elapsed = now.saturating_sub(self.last);
+        let dt = (elapsed as f32 / 1000.0).min(MAX_STEP);
         self.last = now;
+        self.clock.set_paused(false);
+        self.clock.advance(elapsed);
         let (request, back) = self.controls.request(input);
         self.player.frame(&self.collision, now, &request);
         self.back |= back;
-        // sky.md 7.3: 0 on the first frame, then rising by λ↑·dt·k_t.
-        if let Some(sun) = &self.world.sun {
-            if self.sun_started {
-                self.sun_fade = (self.sun_fade + sun.rise * dt * self.time_factor).min(1.0);
-            }
-            self.sun_started = true;
-        }
+        // sky.md 7.3, k_t from the game clock.
+        let (a, b, t) = self.weather.bracket_indices(self.clock.time_of_day());
+        self.sun_fade.frame(
+            sky::flares_in_effect(a, b, t),
+            &self.world.flares,
+            dt,
+            self.clock.time_factor(),
+        );
         self.update_view();
+    }
+
+    /// The game clock.
+    pub fn clock(&self) -> &GameClock {
+        &self.clock
     }
 
     /// Whether the player asked to go back ([`Controls::request`]): to the
@@ -644,6 +660,11 @@ impl LevelScreen {
         let (view, projection) = self.view_projection(resolution.width, resolution.height);
         let v = self.player.view();
         let d = v.direction;
+        let (a, _, _) = self.weather.bracket_indices(self.clock.time_of_day());
+        let sun = self.sun_fade.taken.and_then(|s| {
+            let sun = self.world.flares.get(s)?.sun.as_ref()?;
+            Some((s, sun))
+        });
         let mut scene = Scene::new(resolution);
         scene.world = Some(WorldScene {
             covered: false,
@@ -659,13 +680,14 @@ impl LevelScreen {
             time: clock_ms.saturating_sub(self.shown) as f32 / 1000.0,
             sky: Some(sky::sky_frame(
                 &self.environment,
+                a,
                 &SkyCamera {
                     eye: v.eye,
                     forward: d,
                     right: [view[0][0], view[1][0], view[2][0]],
                 },
-                self.world.sun.as_ref(),
-                self.sun_fade,
+                sun,
+                self.sun_fade.fade,
             )),
         });
         scene
@@ -682,6 +704,9 @@ impl LevelScreen {
             ..
         } = p.flags;
         let angles = self.player.angles();
+        let tau = self.clock.time_of_day();
+        let (a, b, t) = self.weather.bracket_indices(tau);
+        let section = |i: usize| self.weather.sections[i].1.name.clone();
         LevelState {
             name: self.world.name.clone(),
             draws: self.world.draw_items.len(),
@@ -690,7 +715,10 @@ impl LevelScreen {
             pitch: angles.pitch,
             far_plane: self.environment.far_plane,
             near_plane: self.near,
-            time_of_day: self.time_of_day,
+            game_time: self.clock.time(),
+            time_of_day: tau,
+            weather_t: t,
+            weather_sections: [section(a), section(b)],
             player: PlayerReport {
                 position: p.position,
                 velocity: p.velocity,
