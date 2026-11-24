@@ -14,6 +14,7 @@ mod import;
 mod opfs;
 
 use serde::Serialize;
+use volya_engine::core::audio::{Category, Playback};
 use volya_engine::core::vfs::conformance;
 use wasm_bindgen::prelude::*;
 use web_sys::{OffscreenCanvas, WorkerGlobalScope};
@@ -56,9 +57,27 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         "forget_game" => game::forget().await.map(|()| "null".into()),
         "read_dir" => to_json(&game::read_dir(text("path"))?),
         "play_sound" => {
-            let looping = args.get("loop").and_then(|v| v.as_bool()).unwrap_or(false);
-            let gain = args.get("gain").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
-            to_json(&game::play_sound(text("path"), looping, gain)?)
+            let number = |key: &str, default: f64| {
+                args.get(key).and_then(|v| v.as_f64()).unwrap_or(default) as f32
+            };
+            let playback = Playback {
+                looping: args.get("loop").and_then(|v| v.as_bool()).unwrap_or(false),
+                gain: number("gain", 1.0),
+                pan: number("pan", 0.0),
+                category: category(args.get("category"))?,
+            };
+            to_json(&game::play_sound(text("path"), playback)?)
+        }
+        "play_music" => to_json(&game::play_music(text("track"))?),
+        "stop_music" => {
+            audio::stop_music();
+            Ok("null".into())
+        }
+        "set_volume" => {
+            let volume = args.get("volume").and_then(|v| v.as_f64());
+            let volume = volume.ok_or_else(|| JsValue::from_str("`volume` must be a number"))?;
+            audio::set_volume(category(args.get("category"))?, volume as f32)?;
+            Ok("null".into())
         }
         "stop_sounds" => {
             audio::stop_all();
@@ -74,6 +93,19 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
             to_json(&game::read_head(text("path"), max)?)
         }
         _ => Err(JsValue::from_str(&format!("unknown op {op:?}"))),
+    }
+}
+
+/// The volume category named by `value` (`"effects"`, the default, or
+/// `"music"`).
+fn category(value: Option<&serde_json::Value>) -> Result<Category, JsValue> {
+    match value.map(|v| v.as_str()) {
+        None | Some(Some("effects")) => Ok(Category::Effects),
+        Some(Some("music")) => Ok(Category::Music),
+        _ => Err(JsValue::from_str(&format!(
+            "unknown sound category {}",
+            value.map(|v| v.to_string()).unwrap_or_default()
+        ))),
     }
 }
 

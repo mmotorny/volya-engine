@@ -11,6 +11,7 @@ use std::cell::RefCell;
 use std::io::Read;
 
 use serde::{Deserialize, Serialize};
+use volya_engine::core::audio::Playback;
 use volya_engine::core::vfs::db::DbVfs;
 use volya_engine::core::vfs::{EntryKind, Vfs, VfsFile};
 use wasm_bindgen::{JsCast, JsValue};
@@ -158,13 +159,21 @@ fn mounted_status(game: &Game) -> Status {
     }
 }
 
-/// Plays an Ogg Vorbis file from the game tree; returns the voice id.
-pub fn play_sound(path: &str, looping: bool, gain: f32) -> Result<u32, JsValue> {
+fn with_game<T>(f: impl FnOnce(&Game) -> Result<T, JsValue>) -> Result<T, JsValue> {
     GAME.with(|g| {
         let game = g.borrow();
-        let game = game.as_ref().ok_or_else(|| error("game not imported"))?;
-        crate::audio::play(&game.tree, path, looping, gain)
+        f(game.as_ref().ok_or_else(|| error("game not imported"))?)
     })
+}
+
+/// Plays an Ogg Vorbis file from the game tree; returns the voice id.
+pub fn play_sound(path: &str, playback: Playback) -> Result<u32, JsValue> {
+    with_game(|game| crate::audio::play(&game.tree, path, playback))
+}
+
+/// Starts a music track from the game tree; returns the voice ids.
+pub fn play_music(track: &str) -> Result<[u32; 2], JsValue> {
+    with_game(|game| crate::audio::play_music(&game.tree, track))
 }
 
 /// Releases the imported files so they can be rewritten or removed.
@@ -187,11 +196,7 @@ pub async fn forget() -> Result<(), JsValue> {
 }
 
 fn with_tree<T>(f: impl FnOnce(&dyn Vfs) -> std::io::Result<T>) -> Result<T, JsValue> {
-    GAME.with(|g| {
-        let game = g.borrow();
-        let game = game.as_ref().ok_or_else(|| error("game not imported"))?;
-        f(&game.tree).map_err(error)
-    })
+    with_game(|game| f(&game.tree).map_err(error))
 }
 
 /// The whole file at `path` in the game tree.

@@ -4,6 +4,18 @@
 //! Audio mixing: decoded sources mixed into one stereo stream at the output's
 //! sample rate. Platform-free; platforms pull mixed blocks with
 //! [`Mixer::mix`].
+//!
+//! Each voice has a stereo pan and a volume category. Panning is a linear
+//! balance: a pan `p` in [-1, 1] scales the left channel by `min(1, 1 - p)`
+//! and the right by `min(1, 1 + p)`. Centred voices (`p = 0`) play exactly as
+//! without panning (a mono source at full gain in both channels), and the
+//! extremes send a source to one channel only. That is what the stereo pairs
+//! of the game need: the title menu's music is two mono files, the left and
+//! right channels of one track, played as listener-relative sounds on either
+//! side of the listener (docs/behavior/title-menu.md section 6). How the
+//! original sound system pans by position is not specified, so we model no
+//! 3D positioning: callers choose the pan (the music pair uses -1 and +1, full
+//! separation, reproducing the two channels as recorded).
 
 use std::io::{self, Read, Seek};
 
@@ -37,6 +49,79 @@ impl<R: Read + Seek> Source for VorbisStream<R> {
     }
 }
 
+/// Volume category of a sound; each has its own volume.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Category {
+    Effects,
+    Music,
+}
+
+impl Category {
+    const COUNT: usize = 2;
+
+    fn index(self) -> usize {
+        match self {
+            Category::Effects => 0,
+            Category::Music => 1,
+        }
+    }
+}
+
+/// How a sound plays.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Playback {
+    pub looping: bool,
+    pub gain: f32,
+    /// Stereo balance in [-1, 1]: -1 left only, 0 centred, 1 right only (see
+    /// the module docs). Values outside are clamped.
+    pub pan: f32,
+    pub category: Category,
+}
+
+impl Default for Playback {
+    fn default() -> Self {
+        Self {
+            looping: false,
+            gain: 1.0,
+            pan: 0.0,
+            category: Category::Effects,
+        }
+    }
+}
+
+/// The two mono files of music track `track`, its left and right channels,
+/// relative to the game data directory (docs/behavior/title-menu.md section 6).
+pub fn music_files(track: &str) -> [String; 2] {
+    [
+        format!("sounds\\{track}_l.ogg"),
+        format!("sounds\\{track}_r.ogg"),
+    ]
+}
+
+/// How the two channels of a music track play: started together, not looped,
+/// in the music category. The spec places them at x = -0.5 and +0.5 relative
+/// to the listener; we play them fully left and right (see the module docs).
+pub const MUSIC_PLAYBACK: [Playback; 2] = [
+    Playback {
+        looping: false,
+        gain: 1.0,
+        pan: -1.0,
+        category: Category::Music,
+    },
+    Playback {
+        looping: false,
+        gain: 1.0,
+        pan: 1.0,
+        category: Category::Music,
+    },
+];
+
+/// Channel gains for `pan` (the linear balance of the module docs).
+fn balance(pan: f32) -> (f32, f32) {
+    let pan = pan.clamp(-1.0, 1.0);
+    ((1.0 - pan).min(1.0), (1.0 + pan).min(1.0))
+}
+
 /// Identifies a playing sound.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct VoiceId(u32);
@@ -53,7 +138,9 @@ struct Voice {
     source: Box<dyn Source>,
     channels: usize,
     looping: bool,
-    gain: f32,
+    category: Category,
+    /// Gains of the left and right channels: playback gain and pan.
+    gains: (f32, f32),
     /// Decoded input not yet consumed, interleaved.
     input: Vec<f32>,
     /// Position in input frames (fractional for resampling).
@@ -99,23 +186,25 @@ impl Voice {
         }
     }
 
-    /// Mixes into `out` (stereo, interleaved); returns false when finished.
-    fn mix_into(&mut self, out: &mut [f32]) -> bool {
+    /// Mixes into `out` (stereo, interleaved) with the voice's gains scaled
+    /// by `volume`; returns false when finished.
+    fn mix_into(&mut self, out: &mut [f32], volume: f32) -> bool {
+        let (gl, gr) = (self.gains.0 * volume, self.gains.1 * volume);
         for frame in out.as_chunks_mut::<2>().0 {
             let i = self.pos as usize;
             if !self.fill(i + 2) && i + 1 >= self.frames() {
                 if i < self.frames() {
                     let (l, r) = self.frame(i);
-                    frame[0] += l * self.gain;
-                    frame[1] += r * self.gain;
+                    frame[0] += l * gl;
+                    frame[1] += r * gr;
                 }
                 return false;
             }
             let t = (self.pos - i as f64) as f32;
             let (l0, r0) = self.frame(i);
             let (l1, r1) = self.frame(i + 1);
-            frame[0] += (l0 + (l1 - l0) * t) * self.gain;
-            frame[1] += (r0 + (r1 - r0) * t) * self.gain;
+            frame[0] += (l0 + (l1 - l0) * t) * gl;
+            frame[1] += (r0 + (r1 - r0) * t) * gr;
             self.pos += self.step;
         }
         // Drop consumed input, keeping the frame interpolation still needs.
@@ -133,6 +222,7 @@ pub struct Mixer {
     rate: u32,
     voices: Vec<Voice>,
     next_id: u32,
+    volumes: [f32; Category::COUNT],
 }
 
 impl Mixer {
@@ -141,6 +231,7 @@ impl Mixer {
             rate,
             voices: Vec::new(),
             next_id: 0,
+            volumes: [1.0; Category::COUNT],
         }
     }
 
@@ -148,8 +239,19 @@ impl Mixer {
         self.rate
     }
 
-    /// Starts playing `source`.
-    pub fn play(&mut self, source: Box<dyn Source>, looping: bool, gain: f32) -> VoiceId {
+    /// Volume of `category` (initially 1).
+    pub fn volume(&self, category: Category) -> f32 {
+        self.volumes[category.index()]
+    }
+
+    /// Sets the volume of `category`, applying to its playing sounds too.
+    pub fn set_volume(&mut self, category: Category, volume: f32) {
+        self.volumes[category.index()] = volume;
+    }
+
+    /// Starts playing `source`. Sounds started between two [`Mixer::mix`]
+    /// calls start on the same output frame.
+    pub fn play(&mut self, source: Box<dyn Source>, playback: Playback) -> VoiceId {
         let id = VoiceId(self.next_id);
         self.next_id = self.next_id.wrapping_add(1);
         let channels = usize::from(source.channels().max(1));
@@ -158,8 +260,12 @@ impl Mixer {
             id,
             source,
             channels,
-            looping,
-            gain,
+            looping: playback.looping,
+            category: playback.category,
+            gains: {
+                let (l, r) = balance(playback.pan);
+                (l * playback.gain, r * playback.gain)
+            },
             input: Vec::new(),
             pos: 0.0,
             step,
@@ -184,7 +290,9 @@ impl Mixer {
     /// sounds are removed.
     pub fn mix(&mut self, frames: usize) -> Vec<f32> {
         let mut out = vec![0.0; frames * 2];
-        self.voices.retain_mut(|voice| voice.mix_into(&mut out));
+        let volumes = self.volumes;
+        self.voices
+            .retain_mut(|voice| voice.mix_into(&mut out, volumes[voice.category.index()]));
         for sample in &mut out {
             *sample = sample.clamp(-1.0, 1.0);
         }
@@ -239,10 +347,23 @@ mod tests {
         })
     }
 
+    fn gain(gain: f32) -> Playback {
+        Playback {
+            gain,
+            ..Playback::default()
+        }
+    }
+
+    fn channels(out: &[f32]) -> (Vec<f32>, Vec<f32>) {
+        let left = out.iter().step_by(2).copied().collect();
+        let right = out.iter().skip(1).step_by(2).copied().collect();
+        (left, right)
+    }
+
     #[test]
     fn plays_at_the_same_rate_exactly() {
         let mut mixer = Mixer::new(100);
-        let id = mixer.play(ramp(100, 2, 10), false, 1.0);
+        let id = mixer.play(ramp(100, 2, 10), Playback::default());
         let out = mixer.mix(12);
         let left: Vec<f32> = out.iter().step_by(2).copied().collect();
         let right: Vec<f32> = out.iter().skip(1).step_by(2).copied().collect();
@@ -258,7 +379,7 @@ mod tests {
     #[test]
     fn mono_goes_to_both_channels_and_gain_applies() {
         let mut mixer = Mixer::new(100);
-        mixer.play(ramp(100, 1, 5), false, 0.5);
+        mixer.play(ramp(100, 1, 5), gain(0.5));
         let out = mixer.mix(5);
         assert_eq!(out[6], 0.015);
         assert_eq!(out[7], 0.015);
@@ -268,7 +389,7 @@ mod tests {
     fn resamples_linearly() {
         // 50 Hz source at 100 Hz output: every other frame interpolates.
         let mut mixer = Mixer::new(100);
-        mixer.play(ramp(50, 1, 10), false, 1.0);
+        mixer.play(ramp(50, 1, 10), Playback::default());
         let out = mixer.mix(6);
         let left: Vec<f32> = out.iter().step_by(2).copied().collect();
         for (got, want) in left.iter().zip([0.0, 0.005, 0.01, 0.015, 0.02, 0.025]) {
@@ -279,7 +400,13 @@ mod tests {
     #[test]
     fn loops_and_stops() {
         let mut mixer = Mixer::new(100);
-        let id = mixer.play(ramp(100, 1, 4), true, 1.0);
+        let id = mixer.play(
+            ramp(100, 1, 4),
+            Playback {
+                looping: true,
+                ..Playback::default()
+            },
+        );
         let out = mixer.mix(9);
         let left: Vec<f32> = out.iter().step_by(2).copied().collect();
         assert_eq!(left, [0.0, 0.01, 0.02, 0.03, 0.0, 0.01, 0.02, 0.03, 0.0]);
@@ -291,9 +418,76 @@ mod tests {
     #[test]
     fn mixes_voices_and_clamps() {
         let mut mixer = Mixer::new(100);
-        mixer.play(ramp(100, 1, 10), false, 100.0);
-        mixer.play(ramp(100, 1, 10), false, 100.0);
+        mixer.play(ramp(100, 1, 10), gain(100.0));
+        mixer.play(ramp(100, 1, 10), gain(100.0));
         let out = mixer.mix(3);
         assert_eq!(out[2], 1.0, "0.01 * 100 * 2 clamps to 1");
+    }
+
+    #[test]
+    fn music_tracks_are_pairs_of_files() {
+        assert_eq!(
+            music_files("music\\wasteland2"),
+            [
+                "sounds\\music\\wasteland2_l.ogg",
+                "sounds\\music\\wasteland2_r.ogg"
+            ]
+        );
+        assert_eq!(MUSIC_PLAYBACK.map(|p| p.pan), [-1.0, 1.0]);
+    }
+
+    #[test]
+    fn pans_a_stereo_pair_into_separate_channels() {
+        // Two mono files as the left and right channels of one track, as the
+        // menu music plays them.
+        let mut mixer = Mixer::new(100);
+        mixer.play(ramp(100, 1, 10), MUSIC_PLAYBACK[0]);
+        mixer.play(ramp(100, 1, 5), MUSIC_PLAYBACK[1]);
+        let (left, right) = channels(&mixer.mix(10));
+        let expected: Vec<f32> = (0..10).map(|i| i as f32 / 100.0).collect();
+        assert_eq!(left, expected);
+        assert_eq!(right[..5], expected[..5]);
+        assert!(right[5..].iter().all(|&s| s == 0.0));
+    }
+
+    #[test]
+    fn partial_pan_attenuates_the_far_channel_linearly() {
+        let mut mixer = Mixer::new(100);
+        mixer.play(
+            ramp(100, 2, 3),
+            Playback {
+                pan: 0.25,
+                ..Playback::default()
+            },
+        );
+        let out = mixer.mix(3);
+        assert_eq!(out[4], 0.02 * 0.75, "left scaled by 1 - pan");
+        assert_eq!(out[5], -0.02, "right at full gain");
+        assert_eq!(balance(-7.0), (1.0, 0.0), "pan clamps");
+    }
+
+    #[test]
+    fn category_volumes_scale_their_voices() {
+        let mut mixer = Mixer::new(100);
+        assert_eq!(mixer.volume(Category::Music), 1.0);
+        mixer.set_volume(Category::Music, 0.5);
+        mixer.set_volume(Category::Effects, 0.0);
+        mixer.play(
+            ramp(100, 1, 10),
+            Playback {
+                category: Category::Music,
+                ..Playback::default()
+            },
+        );
+        mixer.play(ramp(100, 1, 10), gain(3.0));
+        let (left, right) = channels(&mixer.mix(3));
+        assert_eq!(left, [0.0, 0.005, 0.01]);
+        assert_eq!(left, right);
+        mixer.set_volume(Category::Effects, 1.0);
+        let out = mixer.mix(1);
+        assert!(
+            (out[0] - (0.015 + 0.09)).abs() < 1e-6,
+            "changes apply to playing voices: {out:?}"
+        );
     }
 }
