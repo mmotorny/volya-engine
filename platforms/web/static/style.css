@@ -185,9 +185,96 @@ footer .source:focus-visible {
 }
 
 #game {
+  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 1rem;
+}
+
+/* Secondary actions: at the bottom, away from Play, as wide as its panel's
+   content (Play's width). */
+#game .bottom {
+  margin-top: auto;
+  padding: 0 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.screen-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.screen-head h2 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 650;
+}
+
+button.back {
+  padding: 0 0.9rem;
+}
+
+.panel .value {
+  margin: 0 0 0.25rem;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* A setting with its explanation; the whole row toggles. */
+.switch {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin: 1rem 0 0.5rem;
+  cursor: pointer;
+}
+
+.switch input {
+  flex: none;
+  width: 1.25rem;
+  height: 1.25rem;
+  margin: 0.15rem 0 0;
+  accent-color: var(--ink);
+}
+
+.switch span {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.switch small {
+  font-size: 0.875rem;
+  color: var(--ink-3);
+}
+
+.panel .wide:not([hidden]) {
+  margin-top: 0.75rem;
+}
+
+/* Irreversible actions, set apart as on GitHub. */
+.panel.danger-zone {
+  border-color: rgba(255, 155, 143, 0.55);
+}
+
+.panel.danger-zone .label {
+  color: var(--danger);
+}
+
+button.danger.filled {
+  margin-top: 0.75rem;
+  background: #c4382c;
+  border-color: #c4382c;
+  color: #fff;
+  font-weight: 650;
+}
+
+button.danger.filled:hover:not(:disabled) {
+  background: #d8483b;
+  border-color: #d8483b;
 }
 
 .panel {

@@ -10,9 +10,16 @@
 // view. While the game runs the engine takes the screen and its input, and
 // this interface hides until the player quits (the Q key or the title
 // menu's last item).
+//
+// Home holds Play only; secondary actions (an update offer, Settings) sit at
+// the bottom, away from it. Settings holds updates, storage and, in a danger
+// zone, removing the import.
+
+import { BUILD, versionText } from "./update.js";
 
 
 let call;
+let updates = null;
 const root = () => document.getElementById("game");
 /** Replaces the game section's content, skipping absent (null) parts. */
 const show = (...children) => root().replaceChildren(...children.filter((c) => c !== null && c !== undefined));
@@ -27,10 +34,57 @@ function element(tag, props = {}, ...children) {
 }
 
 /** Entry point, called by main.js once the engine runs. */
-export async function start(engineCall) {
+export async function start(engineCall, updateState = null) {
   call = engineCall;
+  updates = updateState;
   globalThis.volya.importGame = importGame;
+  globalThis.volya.showSettings = showSettings;
+  updates?.onChange(showUpdateStatus);
+  showUpdateStatus();
   await refresh();
+}
+
+/** The footer's version line, saying what updates are doing. */
+function showUpdateStatus() {
+  const status = document.getElementById("status");
+  if (!status?.dataset.text || status.dataset.state === "error") return;
+  if (updates?.status === "downloading") {
+    status.textContent = "Updating…";
+  } else if (updates?.updatedFrom && !status.dataset.updatedShown) {
+    status.dataset.updatedShown = "1";
+    status.textContent = `Updated to ${BUILD}`;
+    setTimeout(() => {
+      if (status.textContent === `Updated to ${BUILD}`) status.textContent = status.dataset.text;
+    }, 5000);
+  } else if (status.textContent === "Updating…") {
+    status.textContent = status.dataset.text;
+  }
+}
+
+/** The update offer when automatic updates are off (hidden while none). */
+function updateOffer() {
+  if (!updates) return null;
+  const button = element("button", { className: "primary wide" });
+  const render = () => {
+    const { status, bytes, auto } = updates;
+    button.hidden = auto || !["available", "downloading", "ready"].includes(status);
+    button.disabled = status === "downloading";
+    button.textContent =
+      status === "downloading" ? "Downloading update…" : status === "ready" ? "Update now" : `Download update · ${formatBytes(bytes)}`;
+  };
+  button.addEventListener("click", () => (updates.status === "ready" ? updates.apply() : updates.download()));
+  const stop = updates.onChange(() => (button.isConnected ? render() : stop()));
+  render();
+  return button;
+}
+
+/** Secondary actions at the bottom of a screen. */
+const bottom = (...children) => element("div", { className: "bottom" }, ...children);
+
+function settingsButton() {
+  const button = element("button", { className: "wide", textContent: "Settings" });
+  button.addEventListener("click", () => showSettings());
+  return button;
 }
 
 /** Whether the engine can draw (without WebGPU the game would run unseen). */
@@ -54,6 +108,16 @@ async function refresh() {
  * `{ url, size }` sources); `only` optionally limits the paths imported.
  */
 export async function importGame({ exe, bin, only }, onProgress = () => {}) {
+  // Busy: an update must not reload the page meanwhile (update.js).
+  root().dataset.busy = "import";
+  try {
+    return await runImport({ exe, bin, only }, onProgress);
+  } finally {
+    delete root().dataset.busy;
+  }
+}
+
+async function runImport({ exe, bin, only }, onProgress) {
   await call("unmount_game");
   const worker = new Worker(new URL("./import-worker.js", import.meta.url), { type: "module" });
   const request = (message) =>
@@ -144,6 +208,7 @@ function showImport(status) {
       progress,
       message,
     ),
+    bottom(updateOffer(), settingsButton()),
   );
 }
 
@@ -206,22 +271,6 @@ async function showHome(status) {
 
   // Only worth saying when it is true: the browser may delete the import.
   const persisted = await navigator.storage.persisted();
-  const warning = persisted
-    ? null
-    : element(
-        "div",
-        { className: "panel warning" },
-        element("p", { className: "label", textContent: "Storage" }),
-        element("p", { textContent: "This browser may delete the imported game when it needs space. Install Volya Engine as an app to keep it (on iPhone: Share, then Add to Home Screen)." }),
-      );
-
-  const remove = element("button", { className: "danger wide", textContent: `Remove imported game · ${formatBytes(status.bytes)}` });
-  remove.addEventListener("click", async () => {
-    if (!confirm("Remove the imported game from this app's storage? You can import it again from the installer.")) return;
-    await call("forget_game");
-    await refresh();
-  });
-
   show(
     element(
       "div",
@@ -231,7 +280,101 @@ async function showHome(status) {
       launch,
       note,
     ),
-    warning,
-    remove,
+    persisted ? null : storageWarning(),
+    bottom(updateOffer(), settingsButton()),
   );
+}
+
+const storageWarning = () =>
+  element(
+    "div",
+    { className: "panel warning" },
+    element("p", { className: "label", textContent: "Storage" }),
+    element("p", { textContent: "This browser may delete the imported game when it needs space. Install Volya Engine as an app to keep it (on iPhone: Share, then Add to Home Screen)." }),
+  );
+
+/** Settings: updates, storage, and removing the import (danger zone). */
+async function showSettings() {
+  const status = await call("game_status");
+  const persisted = await navigator.storage.persisted();
+  const back = element("button", { className: "back", textContent: "‹ Back" });
+  back.addEventListener("click", () => refresh());
+
+  const auto = element("input", { type: "checkbox", checked: updates?.auto ?? true, disabled: !updates });
+  const updateLine = element("p", { className: "note" });
+  const renderUpdates = () => {
+    if (!updates) {
+      updateLine.textContent = "Updates need a browser with service workers.";
+      return;
+    }
+    auto.checked = updates.auto;
+    const { status: s, bytes } = updates;
+    updateLine.textContent =
+      s === "available"
+        ? `An update is available (${formatBytes(bytes)}).`
+        : s === "downloading"
+          ? "Downloading an update…"
+          : s === "ready"
+            ? "An update is ready."
+            : "Up to date.";
+  };
+  auto.addEventListener("change", () => updates?.setAuto(auto.checked));
+  const stop = updates?.onChange(() => (updateLine.isConnected ? renderUpdates() : stop()));
+  renderUpdates();
+
+  const remove = element("button", { className: "danger filled", textContent: "Remove imported game" });
+  remove.addEventListener("click", async () => {
+    if (!confirm("Remove the imported game from this app's storage? You can import it again from the installer.")) return;
+    await call("forget_game");
+    await refresh();
+  });
+
+  show(
+    element("div", { className: "screen-head" }, back, element("h2", { textContent: "Settings" })),
+    element(
+      "div",
+      { className: "panel" },
+      element("p", { className: "label", textContent: "Updates" }),
+      element("p", { className: "value", textContent: `Version ${versionText()}` }),
+      element(
+        "label",
+        { className: "switch" },
+        auto,
+        element(
+          "span",
+          {},
+          element("strong", { textContent: "Update automatically" }),
+          element("small", { textContent: "When off, nothing downloads until you choose to (for metered connections)." }),
+        ),
+      ),
+      updateLine,
+      updateOffer(),
+    ),
+    element(
+      "div",
+      { className: "panel" },
+      element("p", { className: "label", textContent: "Storage" }),
+      element("p", { className: "value", textContent: status.imported ? `S.T.A.L.K.E.R.: Shadow of Chernobyl · ${formatBytes(status.bytes)}` : "No game imported." }),
+      element("p", {
+        className: "note",
+        textContent: persisted
+          ? "Kept: the browser won't delete it to free space."
+          : "Not kept: the browser may delete it to free space. Install Volya Engine as an app to keep it.",
+      }),
+    ),
+    status.imported
+      ? element(
+          "div",
+          { className: "panel danger-zone" },
+          element("p", { className: "label", textContent: "Danger zone" }),
+          element("p", { className: "value", textContent: "Remove imported game" }),
+          element("p", {
+            className: "note",
+            textContent: `Deletes the game's ${formatBytes(status.bytes)} from this app's storage. You can import it again from the installer.`,
+          }),
+          remove,
+        )
+      : null,
+  );
+  back.focus();
 }

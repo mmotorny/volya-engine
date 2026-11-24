@@ -5,13 +5,14 @@
 // message (docs/architecture.md).
 
 import { startInput } from "./input.js";
-import { BUILD, startUpdateCheck } from "./update.js";
+import { startUpdates, versionText } from "./update.js";
 
 // Installable app: offline start and updates (sw.js, update.js). Registered
 // relative to this module so the scope is the app's base path.
 const registration = navigator.serviceWorker?.register(new URL("./sw.js", import.meta.url)).catch((error) => {
   console.warn(`service worker: ${error.message}`);
 });
+const updates = navigator.serviceWorker ? startUpdates(registration) : null;
 
 const worker = new Worker(new URL("./engine-worker.js", import.meta.url), { type: "module" });
 const pending = new Map();
@@ -94,17 +95,18 @@ new ResizeObserver(resized).observe(view);
 const status = document.getElementById("status");
 try {
   await started;
-  const { version, gpu } = await volya.status();
-  registration?.then((r) => r && startUpdateCheck(status.parentElement, r));
-  const name = `Volya Engine ${version} (${BUILD})`;
+  const { gpu } = await volya.status();
+  // One version: the build's time and commit (docs/architecture.md, Hosting).
+  const name = `Volya Engine · ${versionText()}`;
   status.textContent = gpu.state === "ready" ? name : `${name} · graphics unavailable: ${gpu.message}`;
+  status.dataset.text = status.textContent;
   status.dataset.state = "ready";
   // Browsers start audio suspended until a user gesture (iOS especially).
   const audio = new AudioContext();
   await connectAudio(audio);
   const resume = () => audio.state !== "running" && audio.resume();
   for (const event of ["pointerdown", "keydown", "touchend"]) addEventListener(event, resume);
-  await import("./game-ui.js").then((ui) => ui.start(call));
+  await import("./game-ui.js").then((ui) => ui.start(call, updates));
 } catch (error) {
   status.textContent = `Failed to start: ${error.message}`;
   status.dataset.state = "error";

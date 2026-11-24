@@ -23,43 +23,71 @@ export const tests = {
   "status is shown": async () => {
     const el = document.getElementById("status");
     assertEqual(el.dataset.state, "ready", "data-state");
-    const { version, gpu } = await volya.status();
-    const { BUILD } = await import(`${base}update.js`);
+    const { gpu } = await volya.status();
+    const { BUILD, BUILT, versionText } = await import(`${base}update.js`);
     assert(/^[0-9a-f]{7,}\+?$/.test(BUILD), `build ${BUILD}`);
-    // Without WebGPU the line says why graphics are unavailable.
-    const name = `Volya Engine ${version} (${BUILD})`;
+    assert(!Number.isNaN(new Date(BUILT).getTime()), `built ${BUILT}`);
+    assert(/^\d{4}-\d\d-\d\d \d\d:\d\d · [0-9a-f]{7,}\+?$/.test(versionText()), `version ${versionText()}`);
+    // One version: the build's time and commit. Without WebGPU the line says why.
+    const name = `Volya Engine · ${versionText()}`;
     const expected = gpu.state === "ready" ? name : `${name} · graphics unavailable: ${gpu.message}`;
     assertEqual(el.textContent, expected, "text");
   },
 
-  "a waiting new version is offered, and takes over only when asked": async () => {
-    const { startUpdateCheck } = await import(`${base}update.js`);
-    const registration = Object.assign(new EventTarget(), { waiting: null, installing: null, updates: 0 });
-    registration.update = async () => registration.updates++;
-    const container = Object.assign(new EventTarget(), { controller: {} });
-    const footer = document.createElement("footer");
-    const { button, check } = startUpdateCheck(footer, registration, container);
-    assertEqual(button.parentElement, footer, "placement");
-    await check();
-    assertEqual(registration.updates, 1, "asks the browser for an update");
-    assert(button.hidden, "offered without a new version");
-    // A new version installs and waits.
-    const worker = Object.assign(new EventTarget(), { state: "installing", messages: [] });
-    worker.postMessage = (m) => worker.messages.push(m);
-    registration.installing = worker;
-    registration.dispatchEvent(new Event("updatefound"));
-    registration.installing = null;
-    registration.waiting = worker;
-    worker.state = "installed";
-    worker.dispatchEvent(new Event("statechange"));
-    assert(!button.hidden, "not offered once a new version waits");
-    assertEqual(worker.messages.length, 0, "took over without being asked");
-    // Tapping asks it to take over (the reload follows its controllerchange).
-    button.click();
-    assertEqual(JSON.stringify(worker.messages), '[{"type":"take-over"}]', "messages");
-    // A first install (no controller yet) is not offered: it takes over itself.
-    const first = startUpdateCheck(document.createElement("footer"), registration, Object.assign(new EventTarget(), { controller: null }));
-    assert(first.button.hidden, "offered on first install");
+  "updates: automatic applies at a safe moment, opted out only on request": async () => {
+    const { startUpdates } = await import(`${base}update.js`);
+    const fake = ({ auto }) => {
+      const registration = Object.assign(new EventTarget(), { waiting: null, installing: null, updates: 0, scope: "https://example.test/" });
+      registration.update = async () => registration.updates++;
+      const container = Object.assign(new EventTarget(), { controller: {} });
+      const worker = Object.assign(new EventTarget(), { state: "installing", messages: [] });
+      worker.postMessage = (m) => worker.messages.push(m);
+      let saved = { auto };
+      const store = { read: async () => saved, write: async (s) => (saved = s) };
+      const session = new Map();
+      const sessionStore = { getItem: (k) => session.get(k) ?? null, setItem: (k, v) => session.set(k, v), removeItem: (k) => session.delete(k) };
+      let safe = true;
+      const updates = startUpdates(Promise.resolve(registration), { container, store, session: sessionStore, safe: () => safe });
+      const waitFor = async () => {
+        registration.installing = worker;
+        registration.dispatchEvent(new Event("updatefound"));
+        registration.installing = null;
+        registration.waiting = worker;
+        worker.state = "installed";
+        worker.dispatchEvent(new Event("statechange"));
+      };
+      return { updates, registration, container, worker, store: () => saved, setSafe: (v) => (safe = v), waitFor };
+    };
+    const tick = () => new Promise((r) => setTimeout(r));
+
+    // Automatic: unsafe (in a game) waits; applies once safe.
+    const a = fake({ auto: true });
+    await tick();
+    assert(a.updates.auto, "automatic by default");
+    a.setSafe(false);
+    await a.waitFor();
+    assertEqual(a.updates.status, "ready", "status");
+    assertEqual(a.worker.messages.length, 0, "applied during a game");
+    a.setSafe(true);
+    await a.updates.check();
+    assertEqual(JSON.stringify(a.worker.messages), '[{"type":"take-over"}]', "not applied once safe");
+
+    // Opted out: an offer with its size; nothing until asked.
+    const b = fake({ auto: false });
+    await tick();
+    assert(!b.updates.auto, "opt-out not read");
+    await b.updates.check();
+    assertEqual(b.registration.updates, 1, "check");
+    b.container.dispatchEvent(new MessageEvent("message", { data: { type: "update-available", build: "c0ffee1", bytes: 1234 } }));
+    assertEqual(`${b.updates.status} ${b.updates.bytes} ${b.updates.build}`, "available 1234 c0ffee1", "offer");
+    await b.updates.download();
+    assertEqual(b.store().consent, "c0ffee1", "consent recorded for that build");
+    assertEqual(b.registration.updates, 2, "download asks the browser to install");
+    await b.waitFor();
+    assertEqual(JSON.stringify(b.worker.messages), '[{"type":"take-over"}]', "requested update not applied");
+    // Turning automatic updates back on is remembered.
+    await b.updates.setAuto(true);
+    assertEqual(b.store().auto, true, "setting saved");
   },
 
   // GitHub Pages cannot send COOP/COEP; the engine must not depend on them.
@@ -98,11 +126,12 @@ export const tests = {
     }
   },
 
-  "an update downloads only changed files, waits, and drops removed ones": async () => {
+  "an update downloads only changed files, with consent, waits, and drops removed ones": async () => {
     const source = await (await fetch(`${base}sw.js`, { cache: "no-store" })).text();
     const scope = "https://example.test/app/";
     const store = new Map();
     let downloaded = [];
+    let told = [];
     const cache = {
       match: async (key) => store.get(typeof key === "string" ? key : key.url)?.clone(),
       put: async (key, response) => store.set(typeof key === "string" ? key : key.url, response),
@@ -113,17 +142,21 @@ export const tests = {
       keys: async () => [...store.keys()].map((url) => ({ url })),
       delete: async (request) => store.delete(request.url),
     };
-    // Runs the real sw.js (with a given PRECACHE) against a fake cache.
-    const worker = (precache) => {
+    const setSettings = (settings) => store.set(`${scope}__settings.json`, new Response(JSON.stringify(settings)));
+    // Runs the real sw.js (with a given build and PRECACHE) against fakes.
+    const worker = (build, precache) => {
       const listeners = {};
       const state = { skipped: 0, claimed: 0 };
+      const client = { postMessage: (m) => told.push(m) };
       const self = {
         addEventListener: (type, f) => (listeners[type] = f),
         skipWaiting: () => state.skipped++,
         registration: { scope },
-        clients: { claim: async () => state.claimed++ },
+        clients: { claim: async () => state.claimed++, matchAll: async () => [client] },
       };
-      const code = source.replace(/const PRECACHE = \[.*?\];/s, `const PRECACHE = ${JSON.stringify(precache)};`);
+      const code = source
+        .replace(/const BUILD = ".*?";/, `const BUILD = ${JSON.stringify(build)};`)
+        .replace(/const PRECACHE = \[.*?\];/s, `const PRECACHE = ${JSON.stringify(precache)};`);
       class FakeRequest {
         constructor(url) {
           this.url = url;
@@ -137,33 +170,73 @@ export const tests = {
       };
       return { state, run };
     };
-    const install = async (precache) => {
+    const install = async (build, precache) => {
       downloaded = [];
-      const w = worker(precache);
-      await w.run("install");
-      return w;
+      told = [];
+      const w = worker(build, precache);
+      let error = null;
+      await w.run("install").catch((e) => (error = e));
+      return { ...w, error };
     };
-    const kept = () => [...store.keys()].filter((u) => !u.endsWith("__precache.json")).map((u) => u.slice(scope.length)).sort().join(" ");
+    const kept = () =>
+      [...store.keys()]
+        .filter((u) => !u.includes("__"))
+        .map((u) => u.slice(scope.length))
+        .sort()
+        .join(" ");
 
-    await install([["a.js", "aaaa"], ["b.wasm", "bbbb"]]);
+    // The first install downloads even when opted out.
+    setSettings({ auto: false });
+    await install("b1", [["a.js", "aaaa", 10], ["b.wasm", "bbbb", 20]]);
     assertEqual(downloaded.sort().join(" "), "a.js b.wasm", "first install");
-    const update = await install([["a.js", "aaaa"], ["b.wasm", "cccc"], ["c.css", "dddd"]]);
+    assertEqual(told.length, 0, "a first install announced as an update");
+    // Opted out: no download; the pages hear the size; the install fails.
+    const v2 = [["a.js", "aaaa", 10], ["b.wasm", "cccc", 2000], ["c.css", "dddd", 300]];
+    const refused = await install("b2", v2);
+    assertEqual(downloaded.join(" "), "", "downloaded without consent");
+    assert(refused.error, "install succeeded without consent");
+    assertEqual(JSON.stringify(told), '[{"type":"update-available","build":"b2","bytes":2300,"files":2}]', "told");
+    // Consent for that build: only the changed files download; it waits.
+    setSettings({ auto: false, consent: "b2" });
+    const update = await install("b2", v2);
     assertEqual(downloaded.sort().join(" "), "b.wasm c.css", "update");
+    assertEqual(told[0]?.type, "update-downloading", "told downloading");
     assertEqual(update.state.skipped, 0, "took over without being asked");
     await update.run("message", { type: "something else" });
     assertEqual(update.state.skipped, 0, "took over on another message");
     await update.run("message", { type: "take-over" });
     assertEqual(update.state.skipped, 1, "did not take over when asked");
-    await install([["a.js", "aaaa"], ["b.wasm", "cccc"], ["c.css", "dddd"]]);
+    // Consent was for b2 only.
+    assert((await install("b3", [...v2, ["d.js", "eeee", 5]])).error, "b3 installed on b2's consent");
+    // Automatic: no changes, nothing downloads; an evicted copy comes back.
+    setSettings({ auto: true });
+    await install("b2", v2);
     assertEqual(downloaded.join(" "), "", "no changes");
     store.delete(`${scope}a.js`);
-    await install([["b.wasm", "cccc"], ["c.css", "dddd"], ["a.js", "aaaa"]]);
+    await install("b2", v2);
     assertEqual(downloaded.join(" "), "a.js", "evicted copy");
-    const removal = worker([["c.css", "dddd"]]);
+    // Activation drops files that left the build, keeping the settings.
+    const removal = worker("b4", [["c.css", "dddd", 300]]);
     await removal.run("install");
     await removal.run("activate");
     assertEqual(kept(), "c.css", "removed files are dropped on activation");
+    assert(store.has(`${scope}__settings.json`), "settings dropped");
     assertEqual(removal.state.claimed, 1, "claims once active");
+  },
+
+  "settings: updates, storage and a danger zone, reachable from the bottom": async () => {
+    const settings = [...document.querySelectorAll("#game .bottom button")].find((b) => b.textContent === "Settings");
+    assert(settings, "no Settings button at the bottom");
+    settings.click();
+    for (let i = 0; i < 50 && !document.querySelector(".screen-head"); i++) await new Promise((r) => setTimeout(r, 20));
+    const labels = [...document.querySelectorAll("#game .label")].map((l) => l.textContent);
+    assert(labels.includes("Updates") && labels.includes("Storage"), `labels ${labels}`);
+    const toggle = document.querySelector("#game .switch input");
+    assert(toggle && toggle.checked, "automatic updates not on by default");
+    assertEqual(document.activeElement?.textContent, "‹ Back", "focus starts on Back (keyboard)");
+    document.activeElement.click();
+    for (let i = 0; i < 50 && document.querySelector(".screen-head"); i++) await new Promise((r) => setTimeout(r, 20));
+    assert(!document.querySelector(".screen-head"), "Back did not leave Settings");
   },
 
   "layout fits the viewport": () => {

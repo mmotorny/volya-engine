@@ -220,8 +220,9 @@ fn web(profile: Profile) -> Result {
 }
 
 /// Injects what the page and its service worker need to know about this
-/// build: the commit into `update.js` (`BUILD`, shown on the page), and every
-/// file with a hash of its content into `sw.js` (`PRECACHE`; static/sw.js).
+/// build: the commit and its date into `update.js` (`BUILD`, `BUILT`: the
+/// version shown), and the commit plus every file with a hash of its content
+/// and its size into `sw.js` (`BUILD`, `PRECACHE`; static/sw.js).
 fn inject_build(dist: &Path) -> Result {
     use sha2::{Digest, Sha256};
     let commit = output(&mut cmd("git", &["rev-parse", "--short", "HEAD"]))?;
@@ -229,10 +230,16 @@ fn inject_build(dist: &Path) -> Result {
         .trim()
         .is_empty();
     let commit = format!("{}{}", commit.trim(), if dirty { "+" } else { "" });
+    let date = output(&mut cmd("git", &["show", "-s", "--format=%cI", "HEAD"]))?;
     replace_once(
         &dist.join("update.js"),
         r#"export const BUILD = "dev";"#,
         &format!(r#"export const BUILD = "{commit}";"#),
+    )?;
+    replace_once(
+        &dist.join("update.js"),
+        r#"export const BUILT = "";"#,
+        &format!(r#"export const BUILT = "{}";"#, date.trim()),
     )?;
     let mut files = Vec::new();
     list_files(dist, dist, &mut files).map_err(|e| format!("list dist: {e}"))?;
@@ -245,11 +252,17 @@ fn inject_build(dist: &Path) -> Result {
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect();
-        entries.push(format!(r#"["{file}","{hash}"]"#));
+        let size = bytes.len();
+        entries.push(format!(r#"["{file}","{hash}",{size}]"#));
         if file == "index.html" {
-            entries.push(format!(r#"["./","{hash}"]"#));
+            entries.push(format!(r#"["./","{hash}",{size}]"#));
         }
     }
+    replace_once(
+        &dist.join("sw.js"),
+        r#"const BUILD = "dev";"#,
+        &format!(r#"const BUILD = "{commit}";"#),
+    )?;
     replace_once(
         &dist.join("sw.js"),
         "const PRECACHE = [/* injected by cargo xtask web */];",
