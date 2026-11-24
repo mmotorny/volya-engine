@@ -15,10 +15,10 @@
 pub mod body;
 pub mod geometry;
 
-use std::io;
+use std::io::{self, Read, Seek};
 
 pub use volya_engine_formats::gamemtl::GameMaterial;
-pub use volya_engine_formats::level_cform::{Cform, CformTriangle};
+pub use volya_engine_formats::level_cform::{Cform, CformReader, CformTriangle};
 
 use volya_engine_formats::gamemtl::{DYNAMIC, PASS_THROUGH, TRIANGLE_BIT_14, TRIANGLE_BIT_15};
 use volya_engine_formats::level_cform::{BIT_14, BIT_15, MATERIAL_MASK};
@@ -30,40 +30,72 @@ use self::geometry::Vec3;
 pub const CELL_SIZE: f32 = 2.0;
 /// Most cells a grid may have; larger levels get larger cells (our choice).
 const MAX_CELLS: f32 = (1 << 22) as f32;
+/// Most cell entries the grid may hold (256 MB): a malformed file whose
+/// triangles span many cells fails the load instead (our choice; the first
+/// level needs about 5.5 million).
+pub const MAX_GRID_ENTRIES: u64 = 1 << 26;
 
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 
-/// Maps every triangle's material id to its material index and sets bits 14
-/// and 15 from the material's flags 0x400 and 0x800, keeping the sector
-/// (section 3.3). Only materials without the dynamic flag are found; the
-/// first of several with one id wins (our choice; ids are unique in the
-/// shipped file).
+/// The load-time lookup of section 3.3: material id → index and flags,
+/// among the materials without the dynamic flag. The first of several
+/// with one id wins (our choice; ids are unique in the shipped file).
+pub struct MaterialMap {
+    by_id: Vec<Option<(u32, u32)>>,
+}
+
+impl MaterialMap {
+    pub fn new(materials: &[GameMaterial]) -> Self {
+        let mut by_id = vec![None; MATERIAL_MASK as usize + 1];
+        for (index, m) in materials.iter().enumerate().rev() {
+            if !m.has(DYNAMIC) && m.id <= MATERIAL_MASK && index <= MATERIAL_MASK as usize {
+                by_id[m.id as usize] = Some((index as u32, m.flags));
+            }
+        }
+        Self { by_id }
+    }
+
+    /// The loaded copy of attribute word `w`: bits 0–13 the material's
+    /// index, bits 14 and 15 from its flags 0x400 and 0x800, the sector kept;
+    /// a missing id is the game's fatal error.
+    pub fn map(&self, w: u32) -> io::Result<u32> {
+        let id = w & MATERIAL_MASK;
+        let (index, flags) = self.by_id[id as usize]
+            .ok_or_else(|| invalid(format!("Game material '{id}' not found")))?;
+        let mut mapped = (w & 0xFFFF_0000) | index;
+        if flags & TRIANGLE_BIT_14 != 0 {
+            mapped |= BIT_14;
+        }
+        if flags & TRIANGLE_BIT_15 != 0 {
+            mapped |= BIT_15;
+        }
+        Ok(mapped)
+    }
+}
+
+/// Maps every triangle's attribute word in place (section 3.3).
 pub fn map_materials(
     triangles: &mut [CformTriangle],
     materials: &[GameMaterial],
 ) -> io::Result<()> {
-    let mut by_id = vec![None; MATERIAL_MASK as usize + 1];
-    for (index, m) in materials.iter().enumerate().rev() {
-        if !m.has(DYNAMIC) && m.id <= MATERIAL_MASK && index <= MATERIAL_MASK as usize {
-            by_id[m.id as usize] = Some((index as u32, m.flags));
-        }
-    }
+    let map = MaterialMap::new(materials);
     for t in triangles {
-        let id = t.attributes & MATERIAL_MASK;
-        let (index, flags) =
-            by_id[id as usize].ok_or_else(|| invalid(format!("Game material '{id}' not found")))?;
-        let mut w = (t.attributes & 0xFFFF_0000) | index;
-        if flags & TRIANGLE_BIT_14 != 0 {
-            w |= BIT_14;
-        }
-        if flags & TRIANGLE_BIT_15 != 0 {
-            w |= BIT_15;
-        }
-        t.attributes = w;
+        t.attributes = map.map(t.attributes)?;
     }
     Ok(())
+}
+
+/// The material index collision keeps per triangle (one byte: our choice;
+/// the shipped library has 57 materials).
+fn material_byte(mapped: u32) -> io::Result<u8> {
+    u8::try_from(mapped & MATERIAL_MASK).map_err(|_| {
+        invalid(format!(
+            "material index {} beyond the collision world's 255",
+            mapped & MATERIAL_MASK
+        ))
+    })
 }
 
 /// A uniform grid over x and z.
@@ -85,7 +117,19 @@ impl Grid {
         (at(min), at(max))
     }
 
-    fn build(min: Vec3, max: Vec3, boxes: &[[f32; 4]]) -> Self {
+    /// The cells triangle `t` overlaps: x range, z range.
+    fn cells(&self, t: &[Vec3; 3]) -> ((usize, usize), (usize, usize)) {
+        let [a, b, c] = *t;
+        (
+            self.cell_range(a[0].min(b[0]).min(c[0]), a[0].max(b[0]).max(c[0]), 0),
+            self.cell_range(a[2].min(b[2]).min(c[2]), a[2].max(b[2]).max(c[2]), 1),
+        )
+    }
+
+    /// The grid over `min`…`max` listing each triangle in every cell its
+    /// bounding box overlaps. Ranges are computed from the vertices in both
+    /// passes rather than stored.
+    fn build(min: Vec3, max: Vec3, vertices: &[Vec3], triangles: &[[u32; 3]]) -> io::Result<Self> {
         let extent = [(max[0] - min[0]).max(0.0), (max[2] - min[2]).max(0.0)];
         let mut cell = CELL_SIZE;
         while (extent[0] / cell + 1.0) * (extent[1] / cell + 1.0) > MAX_CELLS {
@@ -99,76 +143,112 @@ impl Grid {
             starts: vec![0; size[0] * size[1] + 1],
             items: Vec::new(),
         };
-        let ranges: Vec<_> = boxes
-            .iter()
-            .map(|b| {
-                (
-                    grid.cell_range(b[0], b[2], 0),
-                    grid.cell_range(b[1], b[3], 1),
-                )
-            })
-            .collect();
-        for &((x0, x1), (z0, z1)) in &ranges {
+        let corners = |t: &[u32; 3]| t.map(|i| vertices[i as usize]);
+        let mut total = 0u64;
+        for t in triangles {
+            let ((x0, x1), (z0, z1)) = grid.cells(&corners(t));
+            total += ((x1 - x0 + 1) * (z1 - z0 + 1)) as u64;
+            if total > MAX_GRID_ENTRIES {
+                return Err(invalid(format!(
+                    "level.cform: the spatial index would need more than {MAX_GRID_ENTRIES} entries"
+                )));
+            }
             for z in z0..=z1 {
                 for x in x0..=x1 {
                     grid.starts[z * size[0] + x + 1] += 1;
                 }
             }
         }
+        // Within u32: the total is capped below it.
         for i in 1..grid.starts.len() {
             grid.starts[i] += grid.starts[i - 1];
         }
         let mut next = grid.starts.clone();
-        grid.items = vec![0; *grid.starts.last().unwrap() as usize];
-        for (t, &((x0, x1), (z0, z1))) in ranges.iter().enumerate() {
+        grid.items = vec![0; total as usize];
+        for (i, t) in triangles.iter().enumerate() {
+            let ((x0, x1), (z0, z1)) = grid.cells(&corners(t));
             for z in z0..=z1 {
                 for x in x0..=x1 {
                     let slot = &mut next[z * size[0] + x];
-                    grid.items[*slot as usize] = t as u32;
+                    grid.items[*slot as usize] = i as u32;
                     *slot += 1;
                 }
             }
         }
-        grid
+        Ok(grid)
     }
 }
 
 /// A level's static collision mesh with mapped materials and its index.
+/// Collision keeps each triangle's vertex indices and material index only:
+/// the sector and bits 14 and 15 are not used by it (section 2.2, 3.3).
 #[derive(Clone, Debug)]
 pub struct CollisionWorld {
     pub bbox_min: Vec3,
     pub bbox_max: Vec3,
     vertices: Vec<Vec3>,
-    /// Attribute words as mapped at load (section 3.3).
-    triangles: Vec<CformTriangle>,
+    triangles: Vec<[u32; 3]>,
+    /// Each triangle's material index (section 3.3).
+    material_of: Vec<u8>,
     materials: Vec<GameMaterial>,
     grid: Grid,
 }
 
 impl CollisionWorld {
-    /// The world of `cform` with the material library `materials`
-    /// (`gamemtl.xr` in file order); fails as the game does on a material
-    /// id that is missing or dynamic (section 3.3).
-    pub fn new(cform: Cform, materials: Vec<GameMaterial>) -> io::Result<Self> {
-        let Cform {
-            bbox_min,
-            bbox_max,
+    /// Reads `level.cform` from `reader` with the material library
+    /// `materials` (`gamemtl.xr` in file order), mapping each triangle as
+    /// it is read; fails as the game does on a material id that is missing
+    /// or dynamic (section 3.3).
+    pub fn read(reader: impl Read + Seek, materials: Vec<GameMaterial>) -> io::Result<Self> {
+        let mut reader = CformReader::new(reader)?;
+        let header = *reader.header();
+        let vertices = reader.vertices()?;
+        let map = MaterialMap::new(&materials);
+        let count = header.triangle_count as usize;
+        let mut triangles = Vec::with_capacity(count);
+        let mut material_of = Vec::with_capacity(count);
+        reader.triangles(|_, t| {
+            material_of.push(material_byte(map.map(t.attributes)?)?);
+            triangles.push(t.vertices);
+            Ok(())
+        })?;
+        Self::from_parts(
+            header.bbox_min,
+            header.bbox_max,
             vertices,
-            mut triangles,
-        } = cform;
-        map_materials(&mut triangles, &materials)?;
-        let boxes: Vec<[f32; 4]> = triangles
+            triangles,
+            material_of,
+            materials,
+        )
+    }
+
+    /// The world of a parsed `cform` (attribute words as stored).
+    pub fn new(cform: Cform, materials: Vec<GameMaterial>) -> io::Result<Self> {
+        let map = MaterialMap::new(&materials);
+        let material_of = cform
+            .triangles
             .iter()
-            .map(|t| {
-                let [a, b, c] = t.vertices.map(|i| vertices[i as usize]);
-                [
-                    a[0].min(b[0]).min(c[0]),
-                    a[2].min(b[2]).min(c[2]),
-                    a[0].max(b[0]).max(c[0]),
-                    a[2].max(b[2]).max(c[2]),
-                ]
-            })
-            .collect();
+            .map(|t| material_byte(map.map(t.attributes)?))
+            .collect::<io::Result<_>>()?;
+        let triangles = cform.triangles.iter().map(|t| t.vertices).collect();
+        Self::from_parts(
+            cform.bbox_min,
+            cform.bbox_max,
+            cform.vertices,
+            triangles,
+            material_of,
+            materials,
+        )
+    }
+
+    fn from_parts(
+        bbox_min: Vec3,
+        bbox_max: Vec3,
+        vertices: Vec<Vec3>,
+        triangles: Vec<[u32; 3]>,
+        material_of: Vec<u8>,
+        materials: Vec<GameMaterial>,
+    ) -> io::Result<Self> {
         // Index over the vertices' extent: the stored box equals it in the
         // shipped files (section 7.3), but the index must cover every vertex.
         let mut min = bbox_min;
@@ -179,12 +259,13 @@ impl CollisionWorld {
                 max[k] = max[k].max(v[k]);
             }
         }
-        let grid = Grid::build(min, max, &boxes);
+        let grid = Grid::build(min, max, &vertices, &triangles)?;
         Ok(Self {
             bbox_min,
             bbox_max,
             vertices,
             triangles,
+            material_of,
             materials,
             grid,
         })
@@ -194,9 +275,8 @@ impl CollisionWorld {
         &self.vertices
     }
 
-    /// The triangles, attribute words mapped (section 3.3): bits 0–13 are
-    /// the material's index.
-    pub fn triangles(&self) -> &[CformTriangle] {
+    /// Each triangle's vertex indices.
+    pub fn triangles(&self) -> &[[u32; 3]] {
         &self.triangles
     }
 
@@ -206,14 +286,17 @@ impl CollisionWorld {
 
     /// The corner positions of triangle `i`.
     pub fn corners(&self, i: u32) -> [Vec3; 3] {
-        self.triangles[i as usize]
-            .vertices
-            .map(|v| self.vertices[v as usize])
+        self.triangles[i as usize].map(|v| self.vertices[v as usize])
+    }
+
+    /// The material index of triangle `i` (section 3.3).
+    pub fn material_index(&self, i: u32) -> u32 {
+        u32::from(self.material_of[i as usize])
     }
 
     /// The material of triangle `i`.
     pub fn material(&self, i: u32) -> &GameMaterial {
-        &self.materials[self.triangles[i as usize].material() as usize]
+        &self.materials[self.material_of[i as usize] as usize]
     }
 
     /// Whether triangle `i` blocks bodies at all (section 3.2: not
@@ -222,10 +305,11 @@ impl CollisionWorld {
         !self.material(i).has(PASS_THROUGH)
     }
 
-    /// Bytes held (vertices, triangles, index), for reporting.
+    /// Bytes held (vertices, triangles, materials, index), for reporting.
     pub fn memory_bytes(&self) -> usize {
         self.vertices.len() * 12
-            + self.triangles.len() * 16
+            + self.triangles.len() * 12
+            + self.material_of.len()
             + (self.grid.starts.len() + self.grid.items.len()) * 4
     }
 
@@ -412,6 +496,54 @@ mod tests {
             attributes: 9,
         }];
         assert!(map_materials(&mut missing, &lib).is_err());
+    }
+
+    #[test]
+    fn caps_the_grid_against_malformed_meshes() {
+        // 70 quads each spanning the whole 4 km grid: about 140 × 1 million
+        // entries, over the cap.
+        let mut b = Builder::default();
+        for _ in 0..70 {
+            b.floor([0.0, 4096.0], [0.0, 4096.0], 0.0, true);
+        }
+        let cform = Cform {
+            bbox_min: [0.0; 3],
+            bbox_max: [4096.0, 0.0, 4096.0],
+            vertices: b.vertices.clone(),
+            triangles: b.triangles.clone(),
+        };
+        let e = CollisionWorld::new(cform, materials()).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData);
+        assert!(e.to_string().contains("spatial index"), "{e}");
+    }
+
+    #[test]
+    fn reads_a_stream_like_a_parse() {
+        let mut b = Builder::default();
+        b.floor([-1.0, 1.0], [-1.0, 1.0], 0.0, true);
+        // The file of section 2.1.
+        let mut bytes = Vec::new();
+        for w in [4u32, 4, 2] {
+            bytes.extend(w.to_le_bytes());
+        }
+        for f in [-1.0f32, 0.0, -1.0, 1.0, 0.0, 1.0] {
+            bytes.extend(f.to_le_bytes());
+        }
+        for v in &b.vertices {
+            bytes.extend(v.iter().flat_map(|f| f.to_le_bytes()));
+        }
+        for t in &b.triangles {
+            for w in [t.vertices[0], t.vertices[1], t.vertices[2], t.attributes] {
+                bytes.extend(w.to_le_bytes());
+            }
+        }
+        let w = CollisionWorld::read(std::io::Cursor::new(&bytes), materials()).unwrap();
+        assert_eq!(w.triangles(), [[0, 1, 2], [0, 2, 3]]);
+        assert_eq!((w.material_index(0), w.material(1).id), (1, 1));
+        assert_eq!(
+            w.memory_bytes() - (w.grid.starts.len() + w.grid.items.len()) * 4,
+            4 * 12 + 2 * 13
+        );
     }
 
     #[test]

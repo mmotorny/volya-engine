@@ -18,13 +18,12 @@
 //!    contacts and moves the body, and reports the airborne state and
 //!    landing (6.4).
 //!
-//! The original resolves contacts with a general rigid-body library whose
-//! contact parameters the spec gives (error reduction, constraint-force
-//! mixing, friction pyramid, bounce, section 4.2). Here they drive our own
-//! small solver of the same kind: soft velocity constraints, projected
-//! Gauss–Seidel over `ph_iterations` sweeps, friction bounded by the
-//! coefficient times the normal impulse (Coulomb's law; whether the
-//! original bounds friction this way is our choice).
+//! The spec gives each contact's parameters (error reduction, constraint-
+//! force mixing, friction pyramid, bounce, section 4.2) and the solver's
+//! iteration count (6.1), not the solver. Ours is our interpretation of
+//! those terms: soft velocity constraints solved by projected Gauss–Seidel
+//! over `ph_iterations` sweeps, friction bounded by the coefficient times
+//! the normal impulse (Coulomb's law).
 
 use std::io;
 
@@ -254,6 +253,7 @@ pub struct PlayerBody {
     contacts: Vec<Contact>,
     step: StepContacts,
     scratch: Vec<u32>,
+    rows: Vec<Row>,
 }
 
 /// The contact rules' state while a step's contacts are processed.
@@ -289,6 +289,7 @@ impl PlayerBody {
             contacts: Vec::new(),
             step: StepContacts::default(),
             scratch: Vec::new(),
+            rows: Vec::new(),
         }
     }
 
@@ -409,7 +410,13 @@ impl PlayerBody {
     /// says the movement layer applied a jump this step (6.3, 6.4).
     pub fn finish_step(&mut self, force: Vec3, jump_applied: bool) -> StepResult {
         let mut v = add(self.velocity, scale(force, STEP / self.config.mass));
-        solve(&self.contacts, &mut v, self.config.mass, ITERATIONS);
+        solve(
+            &self.contacts,
+            &mut v,
+            self.config.mass,
+            ITERATIONS,
+            &mut self.rows,
+        );
         let start = self.centre;
         self.previous = self.centre;
         self.centre = add(self.centre, scale(v, STEP));
@@ -491,34 +498,53 @@ impl PlayerBody {
         }
         let (centre, previous) = (self.centre, self.previous);
         let mut contacts = Vec::new();
-        let mut scratch = Vec::new();
+        let mut scratch = std::mem::take(&mut self.scratch);
+        let mut rows = std::mem::take(&mut self.rows);
+        let rules = || Rules {
+            moving: false,
+            direction: [0.0; 3],
+            step_assist: false,
+            blocked: false,
+            replacement: false,
+        };
+        // Only penetration that is new counts: the torso and head contacts
+        // before growing, by shape and triangle, are subtracted. The bottom
+        // sphere does not change with the box and is left out (our choice).
+        let counted = |c: &Contact| c.shape != Shape::Bottom;
+        self.collide(world, &self.shapes, rules(), &mut contacts, &mut scratch);
+        let before: Vec<(Shape, u32, f32)> = contacts
+            .iter()
+            .filter(|c| counted(c))
+            .map(|c| (c.shape, c.triangle, c.depth))
+            .collect();
         let mut penetration = 0.0f32;
         for k in 1..=POSTURE_GROWTH_STEPS {
             let f = k as f32 / POSTURE_GROWTH_STEPS as f32;
             let shapes = Shapes::of(add(from, scale(sub(to, from), f)));
             for settle in 0..=POSTURE_SETTLE_STEPS {
-                let rules = Rules {
-                    moving: false,
-                    direction: [0.0; 3],
-                    step_assist: false,
-                    blocked: false,
-                    replacement: false,
-                };
-                self.collide(world, &shapes, rules, &mut contacts, &mut scratch);
+                self.collide(world, &shapes, rules(), &mut contacts, &mut scratch);
                 if k == POSTURE_GROWTH_STEPS && settle == POSTURE_SETTLE_STEPS {
                     penetration = contacts
                         .iter()
-                        .filter(|c| c.shape != Shape::Bottom)
-                        .map(|c| c.depth)
+                        .filter(|c| counted(c))
+                        .map(|c| {
+                            let old = before
+                                .iter()
+                                .find(|b| b.0 == c.shape && b.1 == c.triangle)
+                                .map_or(0.0, |b| b.2);
+                            c.depth - old
+                        })
                         .fold(0.0, f32::max);
                     break;
                 }
                 let mut v = [0.0; 3];
-                solve(&contacts, &mut v, self.config.mass, ITERATIONS);
+                solve(&contacts, &mut v, self.config.mass, ITERATIONS, &mut rows);
                 self.previous = self.centre;
                 self.centre = add(self.centre, scale(v, STEP));
             }
         }
+        self.scratch = scratch;
+        self.rows = rows;
         if penetration > POSTURE_PENETRATION {
             (self.centre, self.previous) = (centre, previous);
             self.refused = Some((target, now, centre));
@@ -561,6 +587,10 @@ impl PlayerBody {
             ],
             &mut self.scratch,
         );
+        // Half-sizes 0.7·r along â and 0.5·r across it: the spec believes
+        // this assignment (6.3). The step probe is not skipped in the
+        // spec's one unestablished movement state, which is believed not
+        // to occur on foot (our choice).
         let axes = [along, UP, across];
         let upper = (
             add(centre, [0.0, PROBE_UPPER_HEIGHT, 0.0]),
@@ -655,7 +685,7 @@ impl PlayerBody {
                     continue;
                 };
                 let generated_normal = normal;
-                let material = world.triangles()[t as usize].material();
+                let material = world.material_index(t);
                 let m = &world.materials()[material as usize];
                 let pass = m.has(PASS_THROUGH);
                 // 4.4: impact speed and the material touched, over the
@@ -773,57 +803,60 @@ fn horizontal_dot(n: Vec3, a: Vec3) -> f32 {
     n[0] * a[0] + n[2] * a[2]
 }
 
+/// One contact's rows in [`solve`]: normal, two tangents, and the impulses
+/// so far.
+#[derive(Clone, Debug)]
+struct Row {
+    n: Vec3,
+    t: [Vec3; 2],
+    target: f32,
+    soft: f32,
+    friction: f32,
+    normal: f32,
+    tangent: [f32; 2],
+}
+
 /// Solves the contacts for the velocity `v` (already including the step's
 /// external force) of a point of mass `mass`: each contact's normal row
 /// drives the approach velocity to `erp·depth/h` (or the bounce), softened
 /// by `cfm`, with a non-negative impulse; two friction rows per contact
 /// are bounded by `friction ×` the normal impulse.
-fn solve(contacts: &[Contact], v: &mut Vec3, mass: f32, iterations: u32) {
+fn solve(contacts: &[Contact], v: &mut Vec3, mass: f32, iterations: u32, rows: &mut Vec<Row>) {
+    rows.clear();
     if contacts.is_empty() {
         return;
     }
     let inv_mass = 1.0 / mass;
-    struct Row {
-        n: Vec3,
-        t: [Vec3; 2],
-        target: f32,
-        soft: f32,
-        friction: f32,
-        normal: f32,
-        tangent: [f32; 2],
-    }
-    let mut rows: Vec<Row> = contacts
-        .iter()
-        .map(|c| {
-            let n = c.normal;
-            let seed = if n[1].abs() < 0.9 {
-                UP
-            } else {
-                [1.0, 0.0, 0.0]
-            };
-            let t0 = normalize(cross(n, seed)).unwrap_or([0.0, 0.0, 1.0]);
-            let t1 = cross(n, t0);
-            let mut target = c.erp * c.depth / STEP;
-            if let Some((k, threshold)) = c.bounce {
-                let approach = -dot(n, *v);
-                if approach > threshold {
-                    target = target.max(k * approach);
-                }
+    rows.extend(contacts.iter().map(|c| {
+        let n = c.normal;
+        let seed = if n[1].abs() < 0.9 {
+            UP
+        } else {
+            [1.0, 0.0, 0.0]
+        };
+        let t0 = normalize(cross(n, seed)).unwrap_or([0.0, 0.0, 1.0]);
+        let t1 = cross(n, t0);
+        let mut target = c.erp * c.depth / STEP;
+        if let Some((k, threshold)) = c.bounce {
+            let approach = -dot(n, *v);
+            if approach > threshold {
+                target = target.max(k * approach);
             }
-            Row {
-                n,
-                t: [t0, t1],
-                target,
-                // The library's force-level mixing as an impulse term.
-                soft: c.cfm / STEP,
-                friction: c.friction,
-                normal: 0.0,
-                tangent: [0.0; 2],
-            }
-        })
-        .collect();
+        }
+        Row {
+            n,
+            t: [t0, t1],
+            target,
+            // Our interpretation: constraint-force mixing relates
+            // force to velocity error, so per impulse it is cfm / h.
+            soft: c.cfm / STEP,
+            friction: c.friction,
+            normal: 0.0,
+            tangent: [0.0; 2],
+        }
+    }));
     for _ in 0..iterations {
-        for row in &mut rows {
+        for row in rows.iter_mut() {
             let vn = dot(row.n, *v);
             let delta = (row.target - vn - row.soft * row.normal) / (inv_mass + row.soft);
             let total = (row.normal + delta).max(0.0);
@@ -954,8 +987,9 @@ mod tests {
         let mut body = PlayerBody::new(config(), [0.0, -0.01, 0.0]);
         let c = body.begin_step(&world, &StepInput::default());
         assert!(c.walkable && c.traction == 1.0 && !c.moving);
-        // 7.4 before the player's rules: k/(k+d) = 0.375 with all factors
-        // 1; the floor softening q = 39.2 then gives f·0.5·e.
+        // Section 4.2's example: error reduction 0.375 and constraint-force
+        // mixing 1.5625e-6 with all factors 1 and h = 0.01; the floor
+        // softening of 5.4, q = 39.2, then gives f·0.5·e.
         let e = 0.375f32;
         let f = 1.0 / ((1.0 - e) * 39.2 + e * 0.5);
         let contact = body.contacts()[0];
@@ -1093,11 +1127,25 @@ mod tests {
             assert_eq!(body.box_index(), if fits { 0 } else { 1 });
             assert!(length(sub(body.position(), feet)) < 0.02);
             if !fits {
-                // Not retried within 500 ms unless moved; to the low crouch
-                // always.
-                assert!(!body.request_box(&world, 0, 300));
-                assert!(body.request_box(&world, 2, 300));
-                assert_eq!(body.box_index(), 2);
+                // A refused target is not tested again within 500 ms unless
+                // the body moved 0.05 m: in a world where it would fit now,
+                // still refused at 300 ms; tested again at 600 ms, or after
+                // moving 0.06 m.
+                let mut open = Builder::default();
+                open.floor([-5.0, 5.0], [-5.0, 5.0], 0.0, true);
+                let open = open.world();
+                let mut moved = body.clone();
+                assert!(!body.request_box(&open, 0, 300));
+                assert!(body.request_box(&open, 0, 600));
+                assert_eq!(body.box_index(), 0);
+                let feet = moved.position();
+                moved.set_position([feet[0] + 0.06, feet[1], feet[2]]);
+                assert!(moved.request_box(&open, 0, 300));
+                // A lower box always.
+                let mut low = PlayerBody::new(config(), [0.0, 0.0, 0.0]);
+                assert!(low.request_box(&world, 1, 0));
+                assert!(low.request_box(&world, 2, 0));
+                assert_eq!(low.box_index(), 2);
             }
         }
     }

@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use serde::Serialize;
 
 use crate::core::camera::{self, ActorBody, Angles, FreeCamera, Mat4, Vec3};
-use crate::core::collision::{Cform, CollisionWorld};
+use crate::core::collision::CollisionWorld;
 use crate::core::config;
 use crate::core::input::Input;
 use crate::core::level::{DrawItem, Level, LevelGeom};
@@ -359,13 +359,13 @@ impl NewGameLoad {
                     Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
                     Err(e) => return Err(e),
                 };
-                let bytes = vfs::read(tree, &format!("{dir}\\level.cform"))
+                // Read as a stream into the world's own form, so the file
+                // is never held whole.
+                let f = tree
+                    .open(&format!("{dir}\\level.cform"))
                     .map_err(|e| file("level.cform", e))?;
-                let cform = Cform::parse(&bytes).map_err(|e| file("level.cform", e))?;
-                drop(bytes);
-                self.collision = Some(
-                    CollisionWorld::new(cform, materials).map_err(|e| file("level.cform", e))?,
-                );
+                self.collision =
+                    Some(CollisionWorld::read(f, materials).map_err(|e| file("level.cform", e))?);
             }
             Stage::LoadingGeometry => {
                 let mut f = tree

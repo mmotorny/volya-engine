@@ -125,59 +125,88 @@ fn crosses(t: &[Vec3; 3], previous: Vec3, centre: Vec3, s: f32, s_prev: f32) -> 
 
 /// Contact of a sphere (centre `centre`, radius `r`; centre `previous` at
 /// the end of the previous step) with triangle `t`, front side only.
+///
+/// A centre that crossed the plane to the back during the step is pushed
+/// back out along the front normal only when it crossed inside the face;
+/// otherwise only an edge or corner within reach gives a contact, as from
+/// the front (our choice, as are the normal and depth).
 pub fn sphere(centre: Vec3, r: f32, previous: Vec3, t: &[Vec3; 3]) -> Option<RawContact> {
     let n = front_normal(t)?;
     let (front, s, s_prev) = side(n, t, centre, previous)?;
     let q = closest_point(centre, t);
-    let d = length(sub(centre, q));
-    if front {
-        if d >= r {
-            return None;
-        }
-        // In the face's interior the face normal, exactly (so a wall at the
-        // centre's height is not tilted by rounding); else from the
-        // nearest edge or corner to the centre.
-        let normal = if d - s > 1e-5 && d > 1e-6 {
-            scale(sub(centre, q), 1.0 / d)
-        } else {
-            n
-        };
+    if !front && crosses(t, previous, centre, s, s_prev) {
         return Some(RawContact {
-            normal,
-            depth: r - d,
+            normal: n,
+            depth: r - s,
             point: q,
         });
     }
-    // Crossed to the back during the step: pushed back out along the front
-    // normal (our choice of normal and depth).
-    (d < r || crosses(t, previous, centre, s, s_prev)).then_some(RawContact {
-        normal: n,
-        depth: r - s,
+    let d = length(sub(centre, q));
+    if d >= r {
+        return None;
+    }
+    // In the face's interior the face normal, exactly (so a wall at the
+    // centre's height is not tilted by rounding); else from the nearest
+    // edge or corner to the centre.
+    let interior = (d - s.abs()).abs() <= 1e-5;
+    let normal = if !interior && d > 1e-6 {
+        scale(sub(centre, q), 1.0 / d)
+    } else if front {
+        n
+    } else {
+        // Behind the face's interior without crossing it: no contact.
+        return None;
+    };
+    Some(RawContact {
+        normal,
+        depth: r - d,
         point: q,
     })
 }
 
-/// The part of triangle `t` between heights `y0` and `y1`.
-fn clip_slab(t: &[Vec3; 3], y0: f32, y1: f32) -> Vec<Vec3> {
-    let clip = |poly: Vec<Vec3>, keep: &dyn Fn(Vec3) -> f32| {
-        let mut out = Vec::with_capacity(poly.len() + 1);
+/// A convex polygon of at most six corners, on the stack.
+#[derive(Clone, Copy)]
+struct Polygon {
+    corners: [Vec3; 6],
+    len: usize,
+}
+
+impl Polygon {
+    fn as_slice(&self) -> &[Vec3] {
+        &self.corners[..self.len]
+    }
+
+    /// The part where `keep(p) ≥ 0`.
+    fn clip(&self, keep: impl Fn(Vec3) -> f32) -> Self {
+        let mut out = Self {
+            corners: [[0.0; 3]; 6],
+            len: 0,
+        };
+        let poly = self.as_slice();
         for i in 0..poly.len() {
             let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
             let (da, db) = (keep(a), keep(b));
-            if da >= 0.0 {
-                out.push(a);
+            if da >= 0.0 && out.len < 6 {
+                out.corners[out.len] = a;
+                out.len += 1;
             }
-            if (da >= 0.0) != (db >= 0.0) {
-                out.push(add(a, scale(sub(b, a), da / (da - db))));
+            if (da >= 0.0) != (db >= 0.0) && out.len < 6 {
+                out.corners[out.len] = add(a, scale(sub(b, a), da / (da - db)));
+                out.len += 1;
             }
         }
         out
-    };
-    let poly = clip(t.to_vec(), &|p| p[1] - y0);
-    if poly.is_empty() {
-        return poly;
     }
-    clip(poly, &|p| y1 - p[1])
+}
+
+/// The part of triangle `t` between heights `y0` and `y1` (at most five
+/// corners).
+fn clip_slab(t: &[Vec3; 3], y0: f32, y1: f32) -> Polygon {
+    let mut corners = [[0.0; 3]; 6];
+    corners[..3].copy_from_slice(t);
+    Polygon { corners, len: 3 }
+        .clip(|p| p[1] - y0)
+        .clip(|p| y1 - p[1])
 }
 
 /// The point of the (convex, planar) polygon closest to the vertical line
@@ -229,25 +258,35 @@ fn closest_to_axis(poly: &[Vec3], o: Vec3, plane: Vec3, a: Vec3) -> (Vec3, f32) 
 /// exact (the triangle's part within the cylinder's height range against
 /// its disc); the contact's normal is the separating direction of least
 /// penetration among the triangle's normal, the horizontal direction from
-/// the triangle to the axis and the caps (our choice).
+/// the triangle to the axis and the caps (our choice). A centre that crossed
+/// to the back is treated as [`sphere`] says: pushed out along the front
+/// normal only when it crossed inside the face, otherwise only the
+/// radial and cap directions apply (our choice).
 pub fn cylinder(centre: Vec3, r: f32, l: f32, previous: Vec3, t: &[Vec3; 3]) -> Option<RawContact> {
     let n = front_normal(t)?;
     let (front, s, s_prev) = side(n, t, centre, previous)?;
     let face_depth = r * n[0].hypot(n[2]) + l * n[1].abs() - s;
     let (y0, y1) = (centre[1] - l, centre[1] + l);
-    let poly = clip_slab(t, y0, y1);
-    let overlap = (!poly.is_empty()).then(|| closest_to_axis(&poly, centre, n, t[0]));
-    let overlap = overlap.filter(|&(_, d)| d < r);
-    if !front {
-        let crossed = overlap.is_some() || crosses(t, previous, centre, s, s_prev);
-        return crossed.then(|| RawContact {
+    if !front && crosses(t, previous, centre, s, s_prev) {
+        return Some(RawContact {
             normal: n,
             depth: face_depth,
             point: closest_point(centre, t),
         });
     }
-    let (near_axis, d) = overlap?;
-    let mut best = (n, face_depth);
+    let clipped = clip_slab(t, y0, y1);
+    let poly = clipped.as_slice();
+    if poly.is_empty() {
+        return None;
+    }
+    let (near_axis, d) = closest_to_axis(poly, centre, n, t[0]);
+    if d >= r {
+        return None;
+    }
+    let mut best = (
+        if front { n } else { [0.0; 3] },
+        if front { face_depth } else { f32::INFINITY },
+    );
     if d > 1e-6 {
         let radial = [
             (centre[0] - near_axis[0]) / d,
@@ -268,6 +307,9 @@ pub fn cylinder(centre: Vec3, r: f32, l: f32, previous: Vec3, t: &[Vec3; 3]) -> 
     }
     if n[1] < 0.0 && y1 - lo < best.1 {
         best = ([0.0, -1.0, 0.0], y1 - lo);
+    }
+    if !best.1.is_finite() {
+        return None;
     }
     // The contact point: the overlapping part's point nearest the
     // cylinder's centre (our choice).
@@ -345,6 +387,11 @@ mod tests {
         let c = sphere([-2.0, -0.1, 2.0], 0.35, [-2.0, 0.2, 2.0], &FLOOR).unwrap();
         assert_eq!(c.normal, [0.0, 1.0, 0.0]);
         assert!((c.depth - 0.45).abs() < 1e-6);
+        // Crossed beside the face: no push-out; within reach of the edge,
+        // the edge's contact.
+        assert!(sphere([-5.5, -0.1, 0.0], 0.35, [-5.5, 0.2, 0.0], &FLOOR).is_none());
+        let c = sphere([-5.1, -0.05, 0.0], 0.35, [-5.3, 0.2, 0.0], &FLOOR).unwrap();
+        assert!(c.normal[0] < -0.5 && c.normal[1] < 0.0, "{c:?}");
         // At an edge the normal points from the edge to the centre.
         let c = sphere([-5.2, 0.2, 0.0], 0.35, [-5.2, 0.2, 0.0], &FLOOR).unwrap();
         assert!(c.normal[0] < -0.5 && c.normal[1] > 0.5);

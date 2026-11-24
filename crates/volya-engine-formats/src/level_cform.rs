@@ -5,7 +5,7 @@
 //! (docs/formats/level-cform.md section 2): a header, the vertex positions
 //! and 16-byte triangle records. Not chunked.
 
-use std::io;
+use std::io::{self, Cursor, Read, Seek, SeekFrom};
 
 /// The only version the game accepts (section 2.1).
 pub const VERSION: u32 = 4;
@@ -76,61 +76,140 @@ fn float3(b: &[u8]) -> [f32; 3] {
     ]
 }
 
-impl Cform {
-    /// Parses the whole file. A version other than 4 or a size other than
-    /// `36 + 12·V + 16·T` is an error (section 2.1); so is a vertex index
-    /// `≥ V`, which the spec does not describe (our choice, so later code
-    /// never reads outside the vertices).
-    pub fn parse(data: &[u8]) -> io::Result<Self> {
-        if data.len() < HEADER_SIZE {
-            return Err(invalid(format!("level.cform: {} bytes", data.len())));
+/// The header of a `level.cform` (section 2.1).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CformHeader {
+    pub vertex_count: u32,
+    pub triangle_count: u32,
+    pub bbox_min: [f32; 3],
+    pub bbox_max: [f32; 3],
+}
+
+/// Records read per call to the underlying reader.
+const BATCH: usize = 4096;
+
+/// Reads a `level.cform` from a stream in order (header, vertices,
+/// triangles) without holding the file, so a caller can keep the triangles
+/// in its own form.
+pub struct CformReader<R> {
+    reader: R,
+    header: CformHeader,
+}
+
+impl<R: Read + Seek> CformReader<R> {
+    /// Reads and checks the header. A version other than 4 or a stream
+    /// length other than `36 + 12·V + 16·T` is an error (section 2.1).
+    pub fn new(mut reader: R) -> io::Result<Self> {
+        let length = reader.seek(SeekFrom::End(0))?;
+        reader.seek(SeekFrom::Start(0))?;
+        if length < HEADER_SIZE as u64 {
+            return Err(invalid(format!("level.cform: {length} bytes")));
         }
-        let version = u32_at(data, 0);
+        let mut h = [0u8; HEADER_SIZE];
+        reader.read_exact(&mut h)?;
+        let version = u32_at(&h, 0);
         if version != VERSION {
             return Err(invalid(format!(
                 "level.cform: version {version}, expected {VERSION}"
             )));
         }
-        let v = u32_at(data, 4) as usize;
-        let t = u32_at(data, 8) as usize;
-        let expected = v
-            .checked_mul(VERTEX_SIZE)
-            .and_then(|a| t.checked_mul(TRIANGLE_SIZE).map(|b| (a, b)))
-            .and_then(|(a, b)| a.checked_add(b)?.checked_add(HEADER_SIZE));
-        if expected != Some(data.len()) {
+        let (v, t) = (u32_at(&h, 4), u32_at(&h, 8));
+        let expected = HEADER_SIZE as u64
+            + u64::from(v) * VERTEX_SIZE as u64
+            + u64::from(t) * TRIANGLE_SIZE as u64;
+        if expected != length {
             return Err(invalid(format!(
-                "level.cform: {} bytes for {v} vertices and {t} triangles",
-                data.len()
+                "level.cform: {length} bytes for {v} vertices and {t} triangles"
             )));
         }
-        let vertex_end = HEADER_SIZE + v * VERTEX_SIZE;
-        let vertices: Vec<[f32; 3]> = data[HEADER_SIZE..vertex_end]
-            .as_chunks::<VERTEX_SIZE>()
-            .0
-            .iter()
-            .map(|b| float3(b))
-            .collect();
-        let mut triangles = Vec::with_capacity(t);
-        for (i, r) in data[vertex_end..]
-            .as_chunks::<TRIANGLE_SIZE>()
-            .0
-            .iter()
-            .enumerate()
-        {
+        Ok(Self {
+            reader,
+            header: CformHeader {
+                vertex_count: v,
+                triangle_count: t,
+                bbox_min: float3(&h[12..24]),
+                bbox_max: float3(&h[24..36]),
+            },
+        })
+    }
+
+    pub fn header(&self) -> &CformHeader {
+        &self.header
+    }
+
+    /// Calls `each` with `count` records of `size` bytes, read in batches.
+    fn records<const N: usize>(
+        &mut self,
+        offset: u64,
+        count: u32,
+        mut each: impl FnMut(usize, &[u8; N]) -> io::Result<()>,
+    ) -> io::Result<()> {
+        self.reader.seek(SeekFrom::Start(offset))?;
+        let mut buffer = vec![0u8; BATCH * N];
+        let mut done = 0usize;
+        let count = count as usize;
+        while done < count {
+            let n = (count - done).min(BATCH);
+            self.reader.read_exact(&mut buffer[..n * N])?;
+            for (k, r) in buffer[..n * N].as_chunks::<N>().0.iter().enumerate() {
+                each(done + k, r)?;
+            }
+            done += n;
+        }
+        Ok(())
+    }
+
+    /// The vertex positions.
+    pub fn vertices(&mut self) -> io::Result<Vec<[f32; 3]>> {
+        let mut out = Vec::with_capacity(self.header.vertex_count as usize);
+        self.records::<VERTEX_SIZE>(HEADER_SIZE as u64, self.header.vertex_count, |_, r| {
+            out.push(float3(r));
+            Ok(())
+        })?;
+        Ok(out)
+    }
+
+    /// Calls `each` with every triangle's index and record, in file order.
+    /// A vertex index `≥ V`, which the spec does not describe, is an error
+    /// (our choice, so later code never reads outside the vertices).
+    pub fn triangles(
+        &mut self,
+        mut each: impl FnMut(usize, CformTriangle) -> io::Result<()>,
+    ) -> io::Result<()> {
+        let v = self.header.vertex_count;
+        let offset = HEADER_SIZE as u64 + u64::from(v) * VERTEX_SIZE as u64;
+        self.records::<TRIANGLE_SIZE>(offset, self.header.triangle_count, |i, r| {
             let vertices = [u32_at(r, 0), u32_at(r, 4), u32_at(r, 8)];
-            if vertices.iter().any(|&k| k as usize >= v) {
+            if vertices.iter().any(|&k| k >= v) {
                 return Err(invalid(format!(
                     "level.cform: triangle {i} has vertex indices {vertices:?}, {v} vertices"
                 )));
             }
-            triangles.push(CformTriangle {
-                vertices,
-                attributes: u32_at(r, 12),
-            });
-        }
+            each(
+                i,
+                CformTriangle {
+                    vertices,
+                    attributes: u32_at(r, 12),
+                },
+            )
+        })
+    }
+}
+
+impl Cform {
+    /// Parses a whole file held in memory, as [`CformReader`] reads it.
+    pub fn parse(data: &[u8]) -> io::Result<Self> {
+        let mut reader = CformReader::new(Cursor::new(data))?;
+        let header = *reader.header();
+        let vertices = reader.vertices()?;
+        let mut triangles = Vec::with_capacity(header.triangle_count as usize);
+        reader.triangles(|_, t| {
+            triangles.push(t);
+            Ok(())
+        })?;
         Ok(Self {
-            bbox_min: float3(&data[12..24]),
-            bbox_max: float3(&data[24..36]),
+            bbox_min: header.bbox_min,
+            bbox_max: header.bbox_max,
             vertices,
             triangles,
         })

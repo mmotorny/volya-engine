@@ -18,7 +18,7 @@ use volya_engine_core::collision::body::{
     BodyConfig, PlayerBody, StepInput, WALKABLE_NORMAL_Y, drive_direction,
 };
 use volya_engine_core::collision::geometry::{cross, dot, front_normal, length, sub};
-use volya_engine_core::collision::{Cform, CollisionWorld};
+use volya_engine_core::collision::{Cform, CollisionWorld, map_materials};
 use volya_engine_core::config;
 use volya_engine_core::vfs::db::DbVfs;
 use volya_engine_core::vfs::{EntryKind, StdVfs, Vfs, read};
@@ -253,22 +253,36 @@ fn escape_collision_mesh() {
         near(up_area, 1_150_394.56, 0.05);
 
         let lib = materials(vfs);
-        let start = Instant::now();
-        let world = CollisionWorld::new(cform, lib).unwrap();
-        let indexed = start.elapsed();
-        eprintln!(
-            "l01_escape: parsed in {parsed:.1?}, mapped and indexed in {indexed:.1?}, {:.1} MB",
-            world.memory_bytes() as f64 / 1e6
-        );
-        let tris = world.triangles();
+        // Section 3.3's loaded attribute words, from the parse (the world
+        // keeps only the material index).
+        let mut mapped = cform.triangles.clone();
+        map_materials(&mut mapped, &lib).unwrap();
         assert_eq!(
-            tris.iter().filter(|t| t.attributes & BIT_14 != 0).count(),
+            mapped.iter().filter(|t| t.attributes & BIT_14 != 0).count(),
             115_596
         );
         assert_eq!(
-            tris.iter().filter(|t| t.attributes & BIT_15 != 0).count(),
+            mapped.iter().filter(|t| t.attributes & BIT_15 != 0).count(),
             138_140
         );
+        assert!(
+            mapped
+                .iter()
+                .zip(&cform.triangles)
+                .all(|(m, t)| m.sector() == t.sector())
+        );
+        drop((mapped, cform));
+        // The engine's path: streamed from the file, mapped and indexed.
+        let start = Instant::now();
+        let f = vfs.open("gamedata/levels/l01_escape/level.cform").unwrap();
+        let world = CollisionWorld::read(f, lib).unwrap();
+        let loaded = start.elapsed();
+        eprintln!(
+            "l01_escape: parsed from memory in {parsed:.1?}; read, mapped and indexed in \
+             {loaded:.1?}, {:.1} MB",
+            world.memory_bytes() as f64 / 1e6
+        );
+        let tris = world.triangles();
         let pass = (0..tris.len() as u32).filter(|&t| !world.is_solid(t));
         assert_eq!(pass.clone().count(), 115_596);
         assert_eq!(
@@ -314,10 +328,7 @@ fn start_position(vfs: &dyn Vfs, world: &CollisionWorld) {
     assert!(crossings.iter().all(|c| c.0 > 0.0));
     let (dy, t, n) = crossings[0];
     assert_eq!(t, 424_895);
-    assert_eq!(
-        world.triangles()[t as usize].vertices,
-        [250_888, 247_104, 247_153]
-    );
+    assert_eq!(world.triangles()[t as usize], [250_888, 247_104, 247_153]);
     assert!((dy - 0.000_13).abs() < 0.000_01, "{dy}");
     assert!(
         n[1] > WALKABLE_NORMAL_Y && (n[0] + 0.004_37).abs() < 1e-4,
@@ -328,7 +339,7 @@ fn start_position(vfs: &dyn Vfs, world: &CollisionWorld) {
         (floor.id, floor.name.as_str()),
         (12, "materials\\flooring_tile")
     );
-    assert_eq!(world.triangles()[t as usize].material(), 11);
+    assert_eq!(world.material_index(t), 11);
     assert!(world.is_solid(t));
     let (dy, t, n) = crossings[1];
     assert!((dy - 3.177_11).abs() < 1e-4 && (n[1] + 0.993_41).abs() < 1e-4);

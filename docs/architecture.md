@@ -39,7 +39,7 @@ The engine (VFS, simulation, scripting, A-Life, physics, rendering) runs on a si
 
 ## Collision
 
-- A level's collision mesh (`level.cform`, docs/formats/level-cform.md) stays in memory while the level runs, materials mapped, with a uniform grid over x and z (2 m cells) listing each cell's triangles: 46 MB for `l01_escape`, built under `st_loading_cform` (about 30 ms native release, measured).
+- A level's collision mesh (`level.cform`, docs/formats/level-cform.md) stays in memory while the level runs as vertex indices and one material index per triangle, with a uniform grid over x and z (2 m cells) listing each cell's triangles: 42 MB for `l01_escape`. It is streamed from the file and indexed under `st_loading_cform` without holding the file or per-triangle temporaries (about 45 ms and 44 MB peak, native release, measured).
 - The player's body is our own small solver, not a physics library: the body never rotates, so it is a point mass with contact constraints using the spec's parameters (error reduction, constraint-force mixing, friction, bounce), solved by projected Gauss–Seidel. The movement layer drives it in two halves per fixed step (`collision::body`): the step's contacts first, then its forces.
 
 ## Hosting: GitHub Pages, project site
