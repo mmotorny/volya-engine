@@ -12,7 +12,13 @@
 //! 0 … *W* − 1 spans −0.5 … *W* − 0.5 and a glyph cell at integer *x*₀ spans
 //! *x*₀ … *x*₀ + *w* with half-texel texture coordinates.
 
+use std::sync::Arc;
+
 use serde::Serialize;
+
+use crate::core::camera::{Mat4, Vec3};
+use crate::core::weather::Environment;
+use crate::level::LevelWorld;
 use volya_engine_formats::text::layout::GlyphQuad;
 use volya_engine_formats::ui::picture::{Quad, RotatedQuad};
 use volya_engine_formats::ui::{Color, Resolution};
@@ -33,6 +39,8 @@ pub enum TextureId {
     },
     /// The splash picture (docs/behavior/startup.md section 3).
     Splash,
+    /// A white texel (flat-coloured shapes).
+    White,
 }
 
 /// One textured quad.
@@ -124,11 +132,49 @@ impl Sprite {
     }
 }
 
-/// Everything drawn in one frame, back to front, over black.
+/// The 3D world of a frame: a level's static world seen from a camera.
+#[derive(Clone, Debug, Serialize)]
+pub struct WorldScene {
+    #[serde(skip)]
+    pub world: Arc<LevelWorld>,
+    pub eye: Vec3,
+    /// The viewing direction.
+    pub forward: Vec3,
+    /// Vertical field of view, degrees.
+    pub fov_y_degrees: f32,
+    /// Row-vector convention (start-position.md sections 6, 7).
+    pub view: Mat4,
+    pub projection: Mat4,
+    #[serde(skip)]
+    pub environment: Environment,
+    /// Seconds since the level was shown (the shaders' `time`).
+    pub time: f32,
+    #[serde(skip)]
+    pub sky: Option<crate::render::sky::SkyFrame>,
+}
+
+impl PartialEq for WorldScene {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.world, &other.world)
+            && self.eye == other.eye
+            && self.forward == other.forward
+            && self.fov_y_degrees == other.fov_y_degrees
+            && self.view == other.view
+            && self.projection == other.projection
+            && self.environment == other.environment
+            && self.time == other.time
+            && self.sky == other.sky
+    }
+}
+
+/// Everything drawn in one frame: the world, if any, then the sprites over
+/// it, back to front, over black.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Scene {
     #[serde(serialize_with = "resolution")]
     pub resolution: Resolution,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub world: Option<WorldScene>,
     pub sprites: Vec<Sprite>,
 }
 
@@ -140,6 +186,7 @@ impl Scene {
     pub fn new(resolution: Resolution) -> Self {
         Self {
             resolution,
+            world: None,
             sprites: Vec::new(),
         }
     }

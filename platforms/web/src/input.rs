@@ -14,7 +14,7 @@
 //! | `["move", x, y]` | mouse moved |
 //! | `["motion", dx, dy]` | relative mouse motion (pointer lock) |
 //! | `["button", x, y, "left"\|"right"\|"middle", pressed, time]` | mouse button |
-//! | `["touch", x, y, "start"\|"move"\|"end", time]` | primary touch |
+//! | `["touch", x, y, "start"\|"move"\|"end", time, id, primary]` | a touch contact (`id`, `primary` optional: a primary contact without id) |
 //! | `["key", name, pressed]` | key ([`Key::name`]), no auto-repeat |
 //! | `["pad", name, pressed]` | gamepad button ([`GamepadButton::name`]) |
 //! | `["axis", name, value]` | gamepad axis ([`GamepadAxis::name`]) |
@@ -86,7 +86,11 @@ pub fn handle(message: &Array) -> Result<(), JsValue> {
         let mut s = s.borrow_mut();
         if s.capture {
             match event {
-                Some(event) => with_recent(&mut s, |input| input.handle(event)),
+                Some(events) => with_recent(&mut s, |input| {
+                    for event in events {
+                        input.handle(event);
+                    }
+                }),
                 None => with_recent(&mut s, Input::release_all),
             }
         }
@@ -109,7 +113,7 @@ fn with_recent(s: &mut State, f: impl FnOnce(&mut Input)) {
 }
 
 /// `None` for `blur`.
-fn decode(message: &Array) -> Result<Option<Event>, JsValue> {
+fn decode(message: &Array) -> Result<Option<Vec<Event>>, JsValue> {
     let bad = || JsValue::from_str(&format!("bad input message {message:?}"));
     let num = |i: u32| message.get(i).as_f64().ok_or_else(bad);
     let text = |i: u32| message.get(i).as_string().ok_or_else(bad);
@@ -124,16 +128,29 @@ fn decode(message: &Array) -> Result<Option<Event>, JsValue> {
             pressed: flag(4)?,
             time: num(5)?,
         },
-        "touch" => Event::Touch {
-            at: at()?,
-            phase: match text(3)?.as_str() {
+        "touch" => {
+            let phase = match text(3)?.as_str() {
                 "start" => TouchPhase::Start,
                 "move" => TouchPhase::Move,
                 "end" => TouchPhase::End,
                 _ => return Err(bad()),
-            },
-            time: num(4)?,
-        },
+            };
+            let id = message.get(5).as_f64().map_or(0, |id| id as u32);
+            let primary = message.get(6).as_bool().unwrap_or(true);
+            let mut events = vec![Event::Contact {
+                id,
+                at: at()?,
+                phase,
+            }];
+            if primary {
+                events.push(Event::Touch {
+                    at: at()?,
+                    phase,
+                    time: num(4)?,
+                });
+            }
+            return Ok(Some(events));
+        }
         "key" => Event::Key {
             key: Key::from_name(&text(1)?).ok_or_else(bad)?,
             pressed: flag(2)?,
@@ -149,7 +166,7 @@ fn decode(message: &Array) -> Result<Option<Event>, JsValue> {
         "blur" => return Ok(None),
         _ => return Err(bad()),
     };
-    Ok(Some(event))
+    Ok(Some(vec![event]))
 }
 
 #[derive(Serialize)]

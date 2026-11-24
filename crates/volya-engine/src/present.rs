@@ -8,10 +8,16 @@
 
 use std::collections::HashMap;
 use std::io::Cursor;
+use std::sync::Arc;
 
 use crate::core::vfs::{self, Vfs};
-use crate::render::{DrawList, Quad, Rect, Renderer, Texture, VideoTexture};
-use crate::scene::{Scene, TextureId};
+use crate::level::LevelWorld;
+use crate::render::sky::SkyTextures;
+use crate::render::world::{Surface, TreeLight, WorldLight};
+use crate::render::{
+    DrawList, Quad, Rect, Renderer, Texture, VideoTexture, World, WorldDraw, WorldFrame,
+};
+use crate::scene::{Scene, TextureId, WorldScene};
 use volya_engine_formats::dds::Dds;
 use volya_engine_formats::pe::Rgba;
 use volya_engine_formats::ui::{UI_HEIGHT, UI_WIDTH};
@@ -74,6 +80,13 @@ impl Player {
     }
 }
 
+/// Reads the DDS file at `path` of `tree` and uploads it as stored.
+fn load_texture(renderer: &Renderer, tree: &dyn Vfs, path: &str) -> Result<Texture, String> {
+    let bytes = vfs::read(tree, path).map_err(|e| e.to_string())?;
+    let dds = Dds::parse(&bytes).map_err(|e| e.to_string())?;
+    renderer.create_texture(&dds).map_err(|e| e.to_string())
+}
+
 /// GPU resources of the scenes drawn.
 #[derive(Default)]
 pub struct Presenter {
@@ -81,6 +94,10 @@ pub struct Presenter {
     images: HashMap<String, Option<Texture>>,
     videos: HashMap<String, Player>,
     splash: Option<Texture>,
+    white: Option<Texture>,
+    /// The static world on the GPU and the level it was made from; `None`
+    /// inside when the upload failed (reported once).
+    world: Option<(Arc<LevelWorld>, Option<World>)>,
     errors: Vec<String>,
 }
 
@@ -167,11 +184,141 @@ impl Presenter {
         Some(player.texture.texture().clone())
     }
 
+    /// The GPU world of the current level, once uploaded.
+    pub fn world(&self) -> Option<&World> {
+        self.world.as_ref().and_then(|(_, w)| w.as_ref())
+    }
+
+    /// The GPU copy of `scene`'s static world, uploaded on first sight:
+    /// its geometry (taken from the level) and its surfaces' textures (read
+    /// from `tree`).
+    fn world_frame(
+        &mut self,
+        renderer: &mut Renderer,
+        tree: &dyn Vfs,
+        scene: &WorldScene,
+    ) -> Option<WorldFrame> {
+        let current = self
+            .world
+            .as_ref()
+            .is_some_and(|(level, _)| Arc::ptr_eq(level, &scene.world));
+        if !current {
+            // The previous world's buffers go before the next's arrive.
+            self.world = None;
+            let world = self.upload_world(renderer, tree, &scene.world);
+            let world = world
+                .map_err(|e| self.errors.push(format!("{}: {e}", scene.world.dir)))
+                .ok();
+            self.world = Some((scene.world.clone(), world));
+        }
+        let world = self.world.as_ref()?.1.clone()?;
+        let e = &scene.environment;
+        Some(WorldFrame {
+            world,
+            view: scene.view,
+            projection: scene.projection,
+            eye: scene.eye,
+            forward: scene.forward,
+            fov_y_degrees: scene.fov_y_degrees,
+            light: WorldLight {
+                ambient: e.ambient,
+                hemi: [e.hemi_color[0], e.hemi_color[1], e.hemi_color[2]],
+                sun_color: e.sun_color,
+                sun_dir: e.sun_dir,
+                fog_color: e.fog_rgb(),
+                fog_near: e.fog_near,
+                fog_far: e.fog_far,
+            },
+            time: scene.time,
+            sky: scene.sky,
+            // Where neither the world nor the sky draws (does not occur:
+            // the sky box encloses the eye; sky.md 14) and without a sky.
+            clear: e.fog_rgb(),
+        })
+    }
+
+    fn upload_world(
+        &mut self,
+        renderer: &mut Renderer,
+        tree: &dyn Vfs,
+        level: &LevelWorld,
+    ) -> Result<World, String> {
+        let geom = level
+            .take_geometry()
+            .ok_or("geometry already uploaded elsewhere")?;
+        // Each texture file once; one that fails is left unbound (reported).
+        let mut textures: HashMap<String, Option<Texture>> = HashMap::new();
+        let surfaces: Vec<Surface<Texture>> = level
+            .surfaces
+            .iter()
+            .map(|s| {
+                s.clone().map_textures(|path| {
+                    textures
+                        .entry(path.clone())
+                        .or_insert_with(|| {
+                            load_texture(renderer, tree, &path)
+                                .map_err(|e| self.errors.push(format!("{path}: {e}")))
+                                .ok()
+                        })
+                        .clone()
+                })
+            })
+            .collect();
+        let draws: Vec<WorldDraw> = level
+            .draw_items
+            .iter()
+            .zip(&level.draw_surfaces)
+            .zip(&level.spheres)
+            .filter_map(|((d, surface), sphere)| {
+                Some(WorldDraw {
+                    surface: (*surface)?,
+                    vertex_buffer: d.vertex_buffer,
+                    first_vertex: d.first_vertex,
+                    index_buffer: d.index_buffer,
+                    first_index: d.first_index,
+                    index_count: 3 * d.triangle_count,
+                    transform: d.transform,
+                    sphere: *sphere,
+                    tree: d.tree.map(|t| TreeLight {
+                        scale: t.scale,
+                        bias: t.bias,
+                    }),
+                })
+            })
+            .collect();
+        let mut texture = |path: &String| {
+            textures
+                .entry(path.clone())
+                .or_insert_with(|| {
+                    load_texture(renderer, tree, path)
+                        .map_err(|e| self.errors.push(format!("{path}: {e}")))
+                        .ok()
+                })
+                .clone()
+        };
+        let [a, b] = level.sky.cubes.each_ref().map(&mut texture);
+        let [c, d] = level.sky.clouds.each_ref().map(&mut texture);
+        let sun = level.sun.as_ref().and_then(|s| texture(&s.texture));
+        let sky = match (a, b, c, d) {
+            (Some(a), Some(b), Some(c), Some(d)) => Some(SkyTextures {
+                cubes: [a, b],
+                clouds: [c, d],
+                sun,
+            }),
+            _ => None,
+        };
+        let world = renderer.create_world(&geom, &surfaces, &draws, sky.as_ref())?;
+        if let Some(e) = world.sky_error() {
+            self.errors.push(format!("{}: sky: {e}", level.dir));
+        }
+        Ok(world)
+    }
+
     /// The draw list of `scene` at engine clock `clock`. Videos no longer in
-    /// the scene are released.
+    /// the scene are released, and so is a world no longer shown.
     pub fn draw_list(
         &mut self,
-        renderer: &Renderer,
+        renderer: &mut Renderer,
         tree: &dyn Vfs,
         scene: &Scene,
         clock: u64,
@@ -184,6 +331,10 @@ impl Presenter {
         // units with the renderer's half-pixel centres.
         let to_ui = |[x, y]: [f32; 2]| [(x + 0.5) * UI_WIDTH / w, (y + 0.5) * UI_HEIGHT / h];
         let mut list = DrawList::default();
+        match &scene.world {
+            Some(world) => list.world = self.world_frame(renderer, tree, world),
+            None => self.world = None,
+        }
         for sprite in &scene.sprites {
             let texture = match &sprite.texture {
                 TextureId::Image { path } => self.image(renderer, tree, path),
@@ -193,6 +344,11 @@ impl Presenter {
                     looping,
                 } => self.video(renderer, tree, path, *start_ms, *looping, clock),
                 TextureId::Splash => self.splash.clone(),
+                TextureId::White => Some(
+                    self.white
+                        .get_or_insert_with(|| renderer.create_rgba_texture(1, 1, &[255; 4]))
+                        .clone(),
+                ),
             };
             let Some(texture) = texture else { continue };
             let (tw, th) = texture.size();

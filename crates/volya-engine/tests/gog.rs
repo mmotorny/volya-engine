@@ -112,7 +112,9 @@ fn key(input: &mut Input, key: Key) {
 }
 
 fn step(app: &mut App, input: &mut Input, t: f64) {
-    app.update(t, input, &mut Silent);
+    // The startup sequence and the menu read nothing in updates.
+    let empty = DbVfs::<std::io::Empty>::new();
+    app.update(&empty, t, input, &mut Silent);
     input.end_frame();
 }
 
@@ -202,7 +204,7 @@ fn startup_and_title_menu_from_game_data() {
         (v[3] - v[1] - height * 1.328 * 1.40625).abs() < 0.01,
         "{v:?}"
     );
-    let list = presenter.draw_list(&gpu, &recording, &s, app.clock());
+    let list = presenter.draw_list(&mut gpu, &recording, &s, app.clock());
     assert_eq!(list.quads.len(), 2);
     let pixels = pollster::block_on(gpu.capture(&list, 256, 192, wgpu::Color::BLACK)).unwrap();
     assert!(
@@ -379,7 +381,7 @@ fn startup_and_title_menu_from_game_data() {
 
     // Rendered: the captions are black glyphs on the slats.
     let s = app.scene(&recording, XGA).unwrap();
-    let list = presenter.draw_list(&gpu, &recording, &s, app.clock());
+    let list = presenter.draw_list(&mut gpu, &recording, &s, app.clock());
     assert_eq!(
         list.quads.len(),
         s.sprites.len(),
@@ -481,7 +483,7 @@ fn video_frames_as_textures_from_game_data() {
             uv.try_into().unwrap(),
             [0.0, 1.0 / 512.0, 800.0 / 1024.0, 359.0 / 512.0]
         ));
-        let list = presenter.draw_list(&gpu, &tree, &s, app.clock());
+        let list = presenter.draw_list(&mut gpu, &tree, &s, app.clock());
         assert_eq!(list.quads.len(), 2, "{:?}", presenter.take_errors());
         let pixels = pollster::block_on(gpu.capture(&list, 1024, 768, wgpu::Color::BLACK)).unwrap();
         let green = pixels

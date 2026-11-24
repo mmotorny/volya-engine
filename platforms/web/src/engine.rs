@@ -132,6 +132,7 @@ pub fn frame(time: f64) {
             crate::input::with_input(|input| {
                 crate::audio::with_mixer_opt(|mixer| match mixer {
                     Some(mixer) => app.update(
+                        tree,
                         time,
                         input,
                         &mut MixerOut {
@@ -140,7 +141,7 @@ pub fn frame(time: f64) {
                             voices,
                         },
                     ),
-                    None => app.update(time, input, &mut Silent),
+                    None => app.update(tree, time, input, &mut Silent),
                 })
             })
         });
@@ -155,7 +156,7 @@ pub fn frame(time: f64) {
 /// The draw list of the engine's screen at `resolution`, `None` when the
 /// game does not run.
 pub fn draw_list(
-    renderer: &Renderer,
+    renderer: &mut Renderer,
     presenter: &mut Presenter,
     resolution: Resolution,
 ) -> Option<DrawList> {

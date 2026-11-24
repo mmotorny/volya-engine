@@ -43,7 +43,7 @@ impl Renderer {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        self.render(&target.create_view(&Default::default()), list, clear);
+        self.render(&target, list, clear);
         read_texture(&self.device, &self.queue, &target)
     }
 }

@@ -223,6 +223,20 @@ pub fn resolution() -> Option<Resolution> {
     })
 }
 
+/// GPU memory of the static world shown, if any.
+pub fn world_stats() -> serde_json::Value {
+    GPU.with(|g| {
+        let g = g.borrow();
+        let world = g.as_ref().and_then(|gpu| gpu.presenter.world());
+        json!({
+            "gpu_world_bytes": world.map(|w| w.gpu_bytes()),
+            "gpu_texture_bytes": world.map(|w| w.texture_bytes()),
+            "skipped_draws": world.map(|w| w.skipped()),
+            "world_draws": world.map(|w| w.draw_count()),
+        })
+    })
+}
+
 /// Sets the splash picture the game shows while it loads.
 pub fn set_splash(image: &Rgba) {
     let _ = with_gpu(|gpu| {
@@ -238,7 +252,7 @@ pub fn frame(time: f64) {
         let resolution = Resolution::new(gpu.config.width, gpu.config.height);
         // The game's screen, redrawn every frame while it runs (videos and
         // the cursor animate); otherwise what `debug_draw` set.
-        match crate::engine::draw_list(&gpu.renderer, &mut gpu.presenter, resolution) {
+        match crate::engine::draw_list(&mut gpu.renderer, &mut gpu.presenter, resolution) {
             Some(list) => {
                 gpu.present(&list);
                 // Once the game stops, the debug list is drawn over it.
@@ -269,8 +283,7 @@ impl Gpu {
             }
             _ => return,
         };
-        let view = texture.texture.create_view(&Default::default());
-        self.renderer.render(&view, list, CLEAR);
+        self.renderer.render(&texture.texture, list, CLEAR);
         self.queue.present(texture);
         self.dirty = false;
     }
@@ -400,7 +413,7 @@ pub async fn debug_capture(width: u32, height: u32) -> Result<Capture, JsValue> 
     let pixels = with_gpu(|gpu| {
         // The game's screen as it would be at this size, else the debug list.
         let resolution = Resolution::new(width, height);
-        let list = crate::engine::draw_list(&gpu.renderer, &mut gpu.presenter, resolution)
+        let list = crate::engine::draw_list(&mut gpu.renderer, &mut gpu.presenter, resolution)
             .unwrap_or_else(|| gpu.list.clone());
         Ok(gpu.renderer.capture(&list, width, height, CLEAR))
     })?;

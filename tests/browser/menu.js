@@ -15,6 +15,8 @@ import { assert, assertEqual, skip } from "./harness.js";
 // game-data test), plus the splash's executable and the default user
 // settings.
 const ONLY = [
+  // The levels (a New Game's level, docs/behavior/level-loading.md).
+  "gamedata.db0",
   "gamedata.db5",
   "gamedata.db6",
   "gamedata.db7",
@@ -279,6 +281,99 @@ export const tests = {
     key("Escape");
     await sleep(100);
     assertEqual((await state()).phase, "menu", "phase");
+  },
+
+  "a difficulty starts a new game: the level's start view is drawn": async () => {
+    needsGame();
+    pointer("pointermove", row(0));
+    await until((s) => s.menu.selected === 0, "item 0");
+    key("Enter");
+    await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
+    key("Enter");
+    const s = await until((s) => s.phase === "level" && s.load_ms != null, "the level", 60000);
+    assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
+    let note = `loaded and first frame in ${s.load_ms.toFixed(0)} ms`;
+    if (gpu.state === "ready") {
+      const { rgba } = await volya.call("debug_capture", { width: 256, height: 192 });
+      const colours = new Set();
+      for (let i = 0; i < rgba.length; i += 4) colours.add((rgba[i] << 16) | (rgba[i + 1] << 8) | rgba[i + 2]);
+      assert(colours.size > 200, `${colours.size} colours`);
+      note += `, ${colours.size} colours`;
+    }
+    const stats = await volya.call("level_stats");
+    return `${note}; ${JSON.stringify(stats)}`;
+  },
+
+  "keyboard and mouse fly the free camera": async () => {
+    needsGame();
+    const start = (await state()).level;
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyW", bubbles: true, cancelable: true }));
+    await sleep(300);
+    document.body.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyW", bubbles: true, cancelable: true }));
+    let s = await until((s) => s.level.eye[0] > start.eye[0] + 0.3, "W to move forward (+x at the start heading)");
+    // A drag with the left button turns right.
+    const yaw = s.level.yaw;
+    pointer("pointermove", client(500, 400));
+    pointer("pointerdown", client(500, 400), { button: 0, buttons: 1 });
+    pointer("pointermove", client(600, 400), { buttons: 1 });
+    pointer("pointerup", client(600, 400), { button: 0, buttons: 0 });
+    s = await until((s) => s.level.yaw > yaw + 0.1, "the drag to turn right");
+    return `moved ${(s.level.eye[0] - start.eye[0]).toFixed(2)} m, turned ${(s.level.yaw - yaw).toFixed(2)} rad`;
+  },
+
+  "touch flies the free camera and its back button returns to the title menu": async () => {
+    needsGame();
+    const touch = (type, id, at, primary) =>
+      pointer(type, at, { pointerType: "touch", pointerId: id, isPrimary: primary, button: 0, buttons: type === "pointerup" ? 0 : 1 });
+    const start = (await state()).level;
+    // Left half: a virtual stick pushed up moves forward while a right-half
+    // drag (a second finger) turns.
+    touch("pointerdown", 11, client(256, 600), true);
+    touch("pointermove", 11, client(256, 450), true);
+    touch("pointerdown", 12, client(700, 400), false);
+    await sleep(50);
+    touch("pointermove", 12, client(800, 400), false);
+    await sleep(300);
+    touch("pointerup", 12, client(800, 400), false);
+    touch("pointerup", 11, client(256, 450), true);
+    const s = await until(
+      (s) => s.level.eye[0] > start.eye[0] + 0.2 && s.level.yaw > start.yaw + 0.1,
+      "the stick to move and the drag to turn",
+    );
+    // The back button sits at the top left (a square of 14 % of the shorter
+    // side, 4 % in).
+    const short = Math.min(view().clientWidth, view().clientHeight);
+    const rect = view().getBoundingClientRect();
+    const [bx, by] = [0.11 * short, 0.11 * short];
+    const at = rect.width < rect.height !== view().clientWidth < view().clientHeight ? [rect.right - by, rect.top + bx] : [rect.left + bx, rect.top + by];
+    touch("pointerdown", 13, at, true);
+    touch("pointerup", 13, at, true);
+    const menu = await until((s) => s.phase === "menu", "the menu");
+    assertEqual(menu.menu.list, "menu_main", "list");
+    return `moved ${(s.level.eye[0] - start.eye[0]).toFixed(2)} m, turned ${(s.level.yaw - start.yaw).toFixed(2)} rad`;
+  },
+
+  "New Game again after returning: the level loads anew": async () => {
+    needsGame();
+    pointer("pointermove", row(0));
+    await until((s) => s.menu.selected === 0, "item 0");
+    key("Enter");
+    await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
+    key("Enter");
+    const s = await until((s) => s.phase === "level" && s.load_ms != null, "the level again", 60000);
+    assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
+    if (gpu.state === "ready") {
+      // The new world reaches the GPU on the next frame drawn.
+      let stats;
+      for (let i = 0; i < 50 && stats?.world_draws !== 7782; i++) {
+        stats = await volya.call("level_stats");
+        await sleep(50);
+      }
+      assertEqual(stats.world_draws, 7782, "world draws on the GPU");
+    }
+    key("Escape");
+    await until((s) => s.phase === "menu", "the menu");
+    return `loaded again in ${s.load_ms.toFixed(0)} ms`;
   },
 
   "Q quits to the app's own interface": async () => {

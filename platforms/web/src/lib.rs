@@ -40,12 +40,90 @@ pub fn resize(width: f64, height: f64, dpr: f64) {
     engine::resized(gpu::resolution().unwrap_or(Resolution::new(pixels(width), pixels(height))));
 }
 
+/// Frames whose timings [`FrameStats`] averages.
+const STATS_FRAMES: usize = 60;
+
+/// Timings of the latest frames, milliseconds.
+#[derive(Default)]
+struct FrameStats {
+    /// Time spent in [`frame`] (engine update, scene, draw submission).
+    cpu: std::collections::VecDeque<f64>,
+    /// Animation-frame time between consecutive frames.
+    interval: std::collections::VecDeque<f64>,
+    last: Option<f64>,
+}
+
+thread_local! {
+    static FRAME_STATS: std::cell::RefCell<FrameStats> = Default::default();
+}
+
+/// `performance.now()` of the worker, milliseconds.
+fn now() -> f64 {
+    js_sys::global()
+        .dyn_into::<WorkerGlobalScope>()
+        .ok()
+        .and_then(|g| g.performance())
+        .map_or_else(js_sys::Date::now, |p| p.now())
+}
+
 /// Runs one animation frame; `time` in milliseconds.
 #[wasm_bindgen]
 pub fn frame(time: f64) {
+    let start = now();
     engine::frame(time);
     gpu::frame(time);
     input::end_frame();
+    let cpu = now() - start;
+    FRAME_STATS.with(|s| {
+        let mut s = s.borrow_mut();
+        let push = |q: &mut std::collections::VecDeque<f64>, v: f64| {
+            if q.len() == STATS_FRAMES {
+                q.pop_front();
+            }
+            q.push_back(v);
+        };
+        push(&mut s.cpu, cpu);
+        if let Some(last) = s.last {
+            push(&mut s.interval, time - last);
+        }
+        s.last = Some(time);
+    });
+}
+
+#[derive(Serialize)]
+struct LevelStats {
+    /// The wasm heap (linear memory) size.
+    wasm_heap_bytes: f64,
+    /// GPU memory of the static world (buffers and textures).
+    #[serde(flatten)]
+    gpu: serde_json::Value,
+    /// Averages over the latest frames, milliseconds.
+    frame_cpu_ms: f64,
+    frame_cpu_max_ms: f64,
+    frame_interval_ms: f64,
+}
+
+fn level_stats() -> LevelStats {
+    let heap = wasm_bindgen::memory()
+        .dyn_into::<js_sys::WebAssembly::Memory>()
+        .map(|m| {
+            m.buffer()
+                .unchecked_into::<js_sys::ArrayBuffer>()
+                .byte_length() as f64
+        })
+        .unwrap_or(0.0);
+    let average =
+        |q: &std::collections::VecDeque<f64>| q.iter().sum::<f64>() / q.len().max(1) as f64;
+    FRAME_STATS.with(|s| {
+        let s = s.borrow();
+        LevelStats {
+            wasm_heap_bytes: heap,
+            gpu: gpu::world_stats(),
+            frame_cpu_ms: average(&s.cpu),
+            frame_cpu_max_ms: s.cpu.iter().copied().fold(0.0, f64::max),
+            frame_interval_ms: average(&s.interval),
+        }
+    })
 }
 
 /// One input message from the page (format in the `input` module).
@@ -114,6 +192,7 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
             to_json(&game::read_head(text("path"), max)?)
         }
         "input_state" => to_json(&input::state()),
+        "level_stats" => to_json(&level_stats()),
         "launch" => to_json(&engine::launch().await?),
         "menu_state" => to_json(&engine::state()),
         "menu_scene" => {

@@ -155,7 +155,7 @@ export const tests = {
     const prevented = !pointer("pointerdown", (3 * w) / 4, h / 2, touch);
     const held = (await state()).held;
     pointer("pointermove", (3 * w) / 4, (3 * h) / 4, { ...touch, button: -1 });
-    // Further fingers are ignored.
+    // Further fingers do not move the cursor (they reach the free camera).
     pointer("pointerdown", 0, 0, { ...touch, pointerId: 2, isPrimary: false });
     pointer("pointerup", (3 * w) / 4, (3 * h) / 4, { ...touch, buttons: 0 });
     const { after, actions } = await since(before);
@@ -198,8 +198,8 @@ export const tests = {
 
   "other keys and browser shortcuts are not forwarded": async () => {
     const before = await state();
-    key("keydown", "KeyA");
-    key("keyup", "KeyA");
+    key("keydown", "KeyZ");
+    key("keyup", "KeyZ");
     key("keydown", "KeyQ", { metaKey: true });
     const { actions } = await since(before);
     assertEqual(actions.length, 0, "actions");
