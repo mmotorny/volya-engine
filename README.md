@@ -4,19 +4,19 @@
 
 A clean-room, BYOA (bring your own assets) game engine for the original S.T.A.L.K.E.R. series, written in Rust. The first target is S.T.A.L.K.E.R.: Shadow of Chernobyl.
 
-Volya ships no game assets. You need your own legally obtained copy of the game.
+Volya Engine ships no game assets. You need your own legally obtained copy of the game.
 
 Live version: https://mmotorny.github.io/volya-engine/
 
 ## Clean room
 
-Volya's knowledge of the original game comes only from:
+Volya Engine's knowledge of the original game comes only from:
 
 - the game's own data, as shipped in a legally obtained copy;
 - analysis of the original game's shipped executables, for interoperability;
 - public specifications of standard formats (DDS, Ogg Vorbis, Ogg Theora).
 
-It does not use the leaked X-Ray engine source code or any project derived from it, such as OpenXRay. Investigators who analyze the game write functional specifications ([docs/formats](docs/formats), [docs/behavior](docs/behavior)); a reviewer admits a specification only if it contains no code, pseudo-code or internal names from the original; implementers write Volya's code from those specifications alone. See [docs/clean-room.md](docs/clean-room.md).
+It does not use the leaked X-Ray engine source code or any project derived from it, such as OpenXRay. Investigators who analyze the game write functional specifications ([docs/formats](docs/formats), [docs/behavior](docs/behavior)); a reviewer admits a specification only if it contains no code, pseudo-code or internal names from the original; implementers write Volya Engine's code from those specifications alone. See [docs/clean-room.md](docs/clean-room.md).
 
 ## Platforms
 
@@ -53,4 +53,4 @@ BSD-3-Clause.
 
 ## Trademarks
 
-Volya is not affiliated with or endorsed by GSC Game World. S.T.A.L.K.E.R. is a trademark of its owner and is used here only to describe compatibility.
+Volya Engine is not affiliated with or endorsed by GSC Game World. S.T.A.L.K.E.R. is a trademark of its owner and is used here only to describe compatibility.

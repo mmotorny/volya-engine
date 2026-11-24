@@ -19,7 +19,7 @@ export const tests = {
     assertEqual(el.dataset.state, "ready", "data-state");
     const { version, gpu } = await volya.status();
     // Without WebGPU the line says why graphics are unavailable.
-    const expected = gpu.state === "ready" ? `Volya ${version}` : `Volya ${version} · graphics unavailable: ${gpu.message}`;
+    const expected = gpu.state === "ready" ? `Volya Engine ${version}` : `Volya Engine ${version} · graphics unavailable: ${gpu.message}`;
     assertEqual(el.textContent, expected, "text");
   },
 

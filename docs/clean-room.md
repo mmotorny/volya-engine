@@ -1,6 +1,6 @@
 # Clean room
 
-How knowledge of the original game's formats and behavior enters Volya. The goal is to stay defensively clean: no leaked or derived code, and nothing whose provenance we can't show.
+How knowledge of the original game's formats and behavior enters Volya Engine. The goal is to stay defensively clean: no leaked or derived code, and nothing whose provenance we can't show.
 
 ## Roles
 

@@ -42,9 +42,9 @@ Both editions have the same layout and sizes within a few percent: 60 files, 5.5
 
 - `gamedata.db0`–`gamedata.db8` (284–675 MiB each), `gamedata.db9` (en-US, 76 MiB), `gamedata.dba`–`gamedata.dbd` (0.1–57 MiB).
 - `mods/mp_military_2.xdb0` (48 MiB, multiplayer map).
-- `bin/`: the original Windows executables and DLLs (`XR_3DA.exe`, `xr*.dll`, ...). Not needed by Volya.
+- `bin/`: the original Windows executables and DLLs (`XR_3DA.exe`, `xr*.dll`, ...). Volya Engine reads only the splash picture from `XR_3DA.exe` (docs/behavior/startup.md).
 - `Settings.exe`, `ReadMe.txt`, `StalkerUserManual.pdf`, GOG metadata (`goggame-1207660573.*`), user-docs templates (`user.ltx`, `banned.ltx`).
-- No `fsgame.ltx`: GOG's install script generates it ("Generate fsgame.ltx"). Volya defines its own mounts.
+- No `fsgame.ltx`: GOG's install script generates it ("Generate fsgame.ltx"). Volya Engine defines its own mounts.
 
 ## Implications
 

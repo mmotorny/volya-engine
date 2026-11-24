@@ -33,7 +33,7 @@ fn report_timeout(suite: &str) -> Duration {
 }
 
 const CHROME: &str = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const SIMULATOR_NAME: &str = "Volya iPhone 17 Pro Max";
+const SIMULATOR_NAME: &str = "Volya Engine iPhone 17 Pro Max";
 const SIMULATOR_TYPE: &str = "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max";
 const IOS_RUNTIME_PREFIX: &str = "com.apple.CoreSimulator.SimRuntime.iOS-";
 
@@ -279,7 +279,7 @@ mod tests {
 
     #[test]
     fn parses_simctl_output() {
-        let devices = "== Devices ==\n-- iOS 27.2 --\n    iPhone 17 (3E95) (Shutdown) \n    Volya iPhone 17 Pro Max (AB-CD) (Booted) \n";
+        let devices = "== Devices ==\n-- iOS 27.2 --\n    iPhone 17 (3E95) (Shutdown) \n    Volya Engine iPhone 17 Pro Max (AB-CD) (Booted) \n";
         assert_eq!(
             find_device(devices, SIMULATOR_NAME).as_deref(),
             Some("AB-CD")

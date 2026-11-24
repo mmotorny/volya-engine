@@ -95,7 +95,7 @@ try {
   await started;
   const { version, gpu } = await volya.status();
   status.textContent =
-    gpu.state === "ready" ? `Volya ${version}` : `Volya ${version} · graphics unavailable: ${gpu.message}`;
+    gpu.state === "ready" ? `Volya Engine ${version}` : `Volya Engine ${version} · graphics unavailable: ${gpu.message}`;
   status.dataset.state = "ready";
   // Browsers start audio suspended until a user gesture (iOS especially).
   const audio = new AudioContext();

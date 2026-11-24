@@ -16,7 +16,7 @@ All testing is local. `cargo xtask check` runs fast static checks (SPDX, license
 | Layer | How | Where |
 |---|---|---|
 | Native tests | `cargo test` | Mac |
-| Browser suites | `tests/browser/<suite>.js`, run by `harness.js`; the dev server serves them under `/volya-engine/__test/`, never in `dist/` | Headless desktop Chrome; Mobile Safari in a dedicated `Volya iPhone 17 Pro Max` simulator (created on first run, left booted) |
+| Browser suites | `tests/browser/<suite>.js`, run by `harness.js`; the dev server serves them under `/volya-engine/__test/`, never in `dist/` | Headless desktop Chrome; Mobile Safari in a dedicated `Volya Engine iPhone 17 Pro Max` simulator (created on first run, left booted) |
 
 Add a browser suite by creating `tests/browser/<suite>.js` exporting `tests` (name → function, may be async), a `<suite>.html` page calling `runPage("<suite>")`, and listing it in `SUITES` in `tools/xtask/src/e2e.rs`. A test may return a string note for the report. Tests report what really happens; failures a target is known to have (the iOS Simulator has no WebGPU adapter: WebKit disables WebGPU on simulators, whose Metal reports GPU family Apple2, below the Apple4 it needs; WebKit bug 285709) are turned into skips by `KNOWN_FAILURES` in `tools/xtask/src/e2e.rs`.
 
