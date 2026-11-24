@@ -134,10 +134,46 @@ main {
   padding-left: 0.22em;
 }
 
-/* Version line, a drawing's title-block note. */
-#status {
-  margin: auto 0 0;
+/* Footer: the version line, a drawing's title-block note, and the source. */
+footer {
+  margin-top: auto;
   padding-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+footer .source {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 32px;
+  padding: 0 0.75rem;
+  border-radius: 999px;
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+  text-decoration: none;
+  transition: color 0.15s, background-color 0.15s;
+}
+
+footer .source svg {
+  width: 16px;
+  height: 16px;
+}
+
+footer .source:hover {
+  color: var(--ink);
+  background: rgba(159, 203, 250, 0.1);
+}
+
+footer .source:focus-visible {
+  outline: 2px solid var(--line);
+  outline-offset: 2px;
+}
+
+#status {
+  margin: 0;
   text-align: center;
   font: 12px/1.4 var(--mono);
   letter-spacing: 0.04em;
@@ -490,7 +526,7 @@ details.panel > summary .label {
     grid-column: 2;
   }
 
-  #status {
+  footer {
     grid-column: 2;
   }
 }
