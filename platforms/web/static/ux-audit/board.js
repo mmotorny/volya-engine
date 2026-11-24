@@ -27,7 +27,37 @@ for (const device of DEVICES) {
   box.addEventListener("change", () => {
     if (box.checked) shown.add(device.id);
     else shown.delete(device.id);
-    render();
+    // Live: when the tab is shown again and a newer build is deployed, reload,
+// keeping the view (zoom, devices, full length, scroll). One small request
+// per return to the tab, no polling. This page isn't kept offline, so the
+// request reaches the network.
+const VIEW = "volya-engine.ux-audit.view";
+const build = () => document.querySelector('meta[name="build"]').content;
+async function deployedBuild() {
+  const html = await (await fetch(location.pathname, { cache: "no-store" })).text();
+  return new DOMParser().parseFromString(html, "text/html").querySelector('meta[name="build"]')?.content;
+}
+document.addEventListener("visibilitychange", async () => {
+  if (document.visibilityState !== "visible") return;
+  const latest = await deployedBuild().catch(() => null);
+  if (!latest || latest === build()) return;
+  sessionStorage.setItem(VIEW, JSON.stringify({ zoom: zoom.value, shown: [...shown], full: full.checked, y: scrollY }));
+  location.reload();
+});
+const saved = JSON.parse(sessionStorage.getItem(VIEW) ?? "null");
+sessionStorage.removeItem(VIEW);
+if (saved) {
+  zoom.value = saved.zoom;
+  full.checked = saved.full;
+  shown.clear();
+  for (const id of saved.shown) shown.add(id);
+  devicesBox.querySelectorAll("input").forEach((box, i) => (box.checked = shown.has(DEVICES[i].id)));
+  zoomOut.value = `${zoom.value}%`;
+  document.documentElement.style.setProperty("--scale", scale());
+}
+
+render();
+if (saved) requestAnimationFrame(() => scrollTo(0, saved.y));
     for (const stateId of texts.keys()) compareText(stateId);
   });
   const label = document.createElement("label");
@@ -126,4 +156,34 @@ zoom.addEventListener("input", () => {
   zoomOut.value = `${zoom.value}%`;
   document.documentElement.style.setProperty("--scale", scale());
 });
+// Live: when the tab is shown again and a newer build is deployed, reload,
+// keeping the view (zoom, devices, full length, scroll). One small request
+// per return to the tab, no polling. This page isn't kept offline, so the
+// request reaches the network.
+const VIEW = "volya-engine.ux-audit.view";
+const build = () => document.querySelector('meta[name="build"]').content;
+async function deployedBuild() {
+  const html = await (await fetch(location.pathname, { cache: "no-store" })).text();
+  return new DOMParser().parseFromString(html, "text/html").querySelector('meta[name="build"]')?.content;
+}
+document.addEventListener("visibilitychange", async () => {
+  if (document.visibilityState !== "visible") return;
+  const latest = await deployedBuild().catch(() => null);
+  if (!latest || latest === build()) return;
+  sessionStorage.setItem(VIEW, JSON.stringify({ zoom: zoom.value, shown: [...shown], full: full.checked, y: scrollY }));
+  location.reload();
+});
+const saved = JSON.parse(sessionStorage.getItem(VIEW) ?? "null");
+sessionStorage.removeItem(VIEW);
+if (saved) {
+  zoom.value = saved.zoom;
+  full.checked = saved.full;
+  shown.clear();
+  for (const id of saved.shown) shown.add(id);
+  devicesBox.querySelectorAll("input").forEach((box, i) => (box.checked = shown.has(DEVICES[i].id)));
+  zoomOut.value = `${zoom.value}%`;
+  document.documentElement.style.setProperty("--scale", scale());
+}
+
 render();
+if (saved) requestAnimationFrame(() => scrollTo(0, saved.y));
