@@ -15,7 +15,7 @@ export const SECTIONS = [
     states: [
       { id: "import", name: "First start", game: fresh },
       { id: "import-tab", name: "First start in a browser tab", game: fresh, tab: true },
-      { id: "import-no-webgpu", name: "First start, WebGPU not working", game: fresh, gpu: false },
+      { id: "import-no-webgpu", name: "WebGPU not working (before or after import)", game: fresh, gpu: false },
       { id: "import-pick", name: "Picked the wrong files", game: fresh, snapshot: { error: "pick" } },
       { id: "import-not-installer", name: "Not the game's installer", game: fresh, snapshot: { error: "Inno Setup headers: unexpected signature" } },
       {
@@ -44,7 +44,6 @@ export const SECTIONS = [
     states: [
       { id: "home", name: "Ready", game: imported },
       { id: "home-not-kept", name: "Storage not kept (browser tab)", game: imported, persisted: false, tab: true },
-      { id: "home-no-webgpu", name: "WebGPU not working after import", game: imported, gpu: false },
       { id: "home-play-failed", name: "Play failed", game: imported, launchError: "level.geom: unexpected end of file" },
       { id: "home-updating", name: "Updating (automatic)", game: imported, updates: { status: "downloading", bytes: 1.9 * 2 ** 20 } },
       { id: "home-updated", name: "Just updated", game: imported, updates: { updatedFrom: "a1b2c3d" } },

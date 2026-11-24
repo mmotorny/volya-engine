@@ -117,8 +117,9 @@ const graphics = async () => (await call("status")).gpu.state === "ready";
 const GRAPHICS_PROBLEM = "Volya Engine draws the game with WebGPU, which isn't working in this browser.";
 
 /**
- * First screen when this browser can't draw the game: said before anything
- * is downloaded or imported (a game imported here couldn't be played).
+ * The screen when this browser can't draw the game, imported or not: said
+ * before anything is downloaded or imported (it couldn't be played here).
+ * Settings stays reachable, e.g. to remove an import.
  */
 async function showUnsupported() {
   const { gpu } = await call("status");
@@ -140,9 +141,10 @@ async function refresh() {
   root().hidden = false;
   try {
     const status = await call("game_status");
-    if (status.in_use) showInUse();
+    // Without graphics nothing else matters: neither importing nor playing.
+    if (!(await graphics())) await showUnsupported();
+    else if (status.in_use) showInUse();
     else if (status.imported) await showHome(status);
-    else if (!(await graphics())) await showUnsupported();
     else showImport(status);
   } catch (error) {
     showDamaged(error);
@@ -426,7 +428,6 @@ function showDamaged(error) {
 }
 
 async function showHome(status) {
-  const note = element("p", { className: "note", hidden: true });
   const problem = element("div", { className: "callout problem", hidden: true });
   const launch = element("button", { className: "primary play", textContent: "Play" });
   launch.addEventListener("click", async () => {
@@ -444,13 +445,6 @@ async function showHome(status) {
       problem.hidden = false;
     }
   });
-  const { gpu } = await call("status");
-  const ready = gpu.state === "ready";
-  if (!ready) {
-    launch.disabled = true;
-    note.textContent = `${GRAPHICS_PROBLEM}${gpu.message ? ` Details: ${gpu.message}.` : ""}`;
-    note.hidden = false;
-  }
 
   // Only worth saying when it is true: the browser may delete the import.
   const persisted = await keptStorage();
@@ -459,10 +453,9 @@ async function showHome(status) {
       "div",
       { className: "panel ready" },
       await cover(),
-      element("p", { className: "label", textContent: ready ? "Ready" : "Unavailable here" }),
+      element("p", { className: "label", textContent: "Ready" }),
       element("p", { className: "game-title", textContent: "S.T.A.L.K.E.R.: Shadow of Chernobyl" }),
       launch,
-      note,
       problem,
     ),
     persisted ? null : storageWarning(),
