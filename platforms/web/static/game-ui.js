@@ -61,6 +61,7 @@ export async function start(engineCall, updateState = null) {
   updates = updateState;
   globalThis.volya.importGame = importGame;
   globalThis.volya.showSettings = showSettings;
+  globalThis.volya.refresh = refresh;
   await refresh();
 }
 
@@ -129,7 +130,7 @@ async function refresh() {
     if (!(await graphics())) await showUnsupported();
     else if (status.in_use) showInUse();
     else if (status.imported) await showHome(status);
-    else showImport(status);
+    else showImport(status, null, { kept: await navigator.storage.persisted(), deleted: deletedByBrowser(status) });
   } catch (error) {
     showDamaged(error);
   }
@@ -213,7 +214,7 @@ function importProblem(message) {
  * `snapshot` shows a moment of an import on the UX page: under way
  * ({ done, total, path }) or failed ({ done, total, error }).
  */
-function showImport(status, snapshot = null) {
+function showImport(status, snapshot = null, { kept = false, deleted = false } = {}) {
   const message = element("p", { className: "message", hidden: true });
   const progress = element("progress", { max: 1, value: 0, hidden: true });
   const notice = element("div", { hidden: true });
@@ -264,6 +265,7 @@ function showImport(status, snapshot = null) {
         progress.value = done / total;
         say(`${formatBytes(done)} of ${formatBytes(total)} · ${path}`);
       });
+      markImported(true);
       await refresh();
     } catch (error) {
       fail(error.message);
@@ -278,25 +280,14 @@ function showImport(status, snapshot = null) {
     }
     if (snapshot.error) fail(snapshot.error);
   }
-  // On iPhone in a browser tab, an import would stay in the browser's storage,
-  // apart from the Home Screen app's: say so before files are chosen.
-  const installFirst =
-    platform() === "ios" && !installed()
-      ? element(
-          "div",
-          { className: "callout warning" },
-          element("strong", { textContent: "Install the app first" }),
-          element(
-            "span",
-            {},
-            "The browser may delete a game imported in a tab. Install Volya Engine first: tap ",
-            shareIcon(),
-            ", then ",
-            element("strong", { textContent: "Add to Home Screen" }),
-            ", and import from the app on your Home Screen.",
-          ),
-        )
-      : null;
+  // Before anything is imported: how to keep the game on this device, said
+  // only for it; importing in a tab anyway accepts the risk.
+  const installFirst = kept || installed() ? null : installAdvice();
+  // The browser deleted an earlier import (it can, to free space): say so
+  // where the advice above applies.
+  if (deleted && !snapshot && status.written === 0) {
+    warn({ title: "The browser deleted the imported game", text: "Browsers can delete a site's stored data when they need space." });
+  }
   // An interrupted import looks like one under way, stopped where it was,
   // with what happened and how to go on.
   if (status.written > 0 && !snapshot) {
@@ -387,6 +378,7 @@ function showDamaged(error) {
   const remove = element("button", { className: "danger wide", textContent: "Remove imported data" });
   remove.addEventListener("click", async () => {
     await call("forget_game");
+    markImported(false);
     await refresh();
   });
   show(
@@ -419,7 +411,6 @@ async function showHome(status) {
   });
 
   // Only worth saying when it is true: the browser may delete the import.
-  const persisted = await keptStorage();
   show(
     element(
       "div",
@@ -430,7 +421,6 @@ async function showHome(status) {
       launch,
       problem,
     ),
-    persisted ? null : storageWarning(),
     bottom(updateOffer(), settingsButton()),
   );
 }
@@ -456,16 +446,19 @@ async function cover() {
 }
 
 /**
- * Whether the browser keeps this app's storage. Chromium decides silently
- * from whether the site is installed or bookmarked, its use and notification
- * permission, and re-decides on each request (web.dev, Persistent storage):
- * ask again, so installing or bookmarking later takes effect. Other browsers
- * may prompt, so they're only asked at import.
+ * Whether an import finished here earlier: a cookie set when it did. Under
+ * storage pressure Chromium evicts a site's quota-managed storage (the
+ * imported files, the service worker's cache) but not its cookies, so the
+ * app can tell a deleted game from a first start; where the cookie goes too,
+ * it's a first start. The UX page sets `volyaImportedBefore` per frame.
  */
-async function keptStorage() {
-  if (await navigator.storage.persisted()) return true;
-  return chromium() ? navigator.storage.persist() : false;
+const MARK = "volya-engine-imported";
+const markPath = new URL(".", import.meta.url).pathname;
+function markImported(on) {
+  document.cookie = `${MARK}=${on ? 1 : ""}; path=${markPath}; max-age=${on ? 400 * 86400 : 0}; samesite=strict`;
 }
+const importedBefore = () => globalThis.volyaImportedBefore ?? document.cookie.split("; ").includes(`${MARK}=1`);
+const deletedByBrowser = (status) => !status.imported && status.written === 0 && importedBefore();
 
 /** The Share symbol, inline in text. */
 function shareIcon() {
@@ -475,57 +468,41 @@ function shareIcon() {
 }
 
 /**
- * How to keep the game on this device: install the app (install.js), said
- * only for this device; nothing once installed. On iPhone the Home Screen
- * app has its own storage, so the game is imported again there.
+ * Before importing in a browser tab: install the app first, so the browser
+ * doesn't delete the game. For this device only (install.js). On iPhone the
+ * Home Screen app has its own storage, so the game is imported there.
  */
-function keepHelp() {
-  if (installed()) return [];
+function installAdvice() {
+  const callout = (...text) =>
+    element("div", { className: "callout warning" }, element("strong", { textContent: "Install the app first" }), element("span", {}, ...text));
   if (platform() === "ios") {
-    return [
-      element(
-        "p",
-        {},
-        "To keep it, install Volya Engine: tap ",
-        shareIcon(),
-        ", then ",
-        element("strong", { textContent: "Add to Home Screen" }),
-        ", and import the game again from the app on your Home Screen.",
-      ),
-    ];
+    return callout(
+      "The browser may delete a game imported in a tab. Install Volya Engine first: tap ",
+      shareIcon(),
+      ", then ",
+      element("strong", { textContent: "Add to Home Screen" }),
+      ", and import from the app on your Home Screen.",
+    );
   }
+  if (!chromium() && !canOffer()) return null;
+  const advice = callout(
+    canOffer()
+      ? "The browser may delete a game imported in a tab. Install Volya Engine as an app, or bookmark it, before importing."
+      : "The browser may delete a game imported in a tab. Install Volya Engine as an app (the install icon at the right of the address bar), or bookmark it, before importing.",
+  );
   if (canOffer()) {
     const button = element("button", { className: "wide", textContent: "Install app" });
     button.addEventListener("click", async () => {
-      if (await install()) {
-        await navigator.storage.persist();
-        await refresh();
-      }
+      if (await install()) await refresh();
     });
-    return [element("p", { textContent: "Install Volya Engine as an app, or bookmark it, to keep it." }), button];
+    advice.append(button);
   }
-  return [
-    element("p", {
-      textContent: chromium()
-        ? "Install Volya Engine as an app (the install icon at the right of the address bar), or bookmark it, to keep it."
-        : "Install Volya Engine as an app to keep it, if this browser can.",
-    }),
-  ];
+  return advice;
 }
 
-const storageWarning = () =>
-  element(
-    "div",
-    { className: "panel warning" },
-    element("p", { className: "label", textContent: "Storage" }),
-    element("p", { textContent: "This browser may delete the imported game when it needs space." }),
-    ...keepHelp(),
-  );
-
-/** Settings: updates, storage, and removing the import (danger zone). */
+/** Settings: updates and removing the import (danger zone). */
 async function showSettings() {
   const status = await call("game_status");
-  const persisted = await keptStorage();
   const back = element("button", { className: "back", textContent: "‹ Back" });
   back.addEventListener("click", () => navigate("back", refresh));
 
@@ -538,6 +515,7 @@ async function showSettings() {
   remove.addEventListener("click", async () => {
     if (!confirm("Remove the imported game from this app's storage? You can import it again from the installer.")) return;
     await call("forget_game");
+    markImported(false);
     coverImage = null;
     await refresh();
   });
@@ -551,17 +529,6 @@ async function showSettings() {
       updates
         ? element("label", { className: "switch" }, auto, element("span", {}, element("strong", { textContent: "Download updates automatically" })))
         : null,
-    ),
-    element(
-      "div",
-      { className: "panel" },
-      element("p", { className: "label", textContent: "Storage" }),
-      element("p", { className: "value", textContent: status.imported ? `S.T.A.L.K.E.R.: Shadow of Chernobyl · ${formatBytes(status.bytes)}` : "No game imported." }),
-      element("p", {
-        className: "note",
-        textContent: persisted ? "Kept: the browser won't delete it to free space." : "Not kept: the browser may delete it to free space.",
-      }),
-      ...(persisted ? [] : keepHelp()),
     ),
     status.imported
       ? element(

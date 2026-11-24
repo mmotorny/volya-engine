@@ -40,6 +40,9 @@ globalThis.volyaChromium = !device.touch;
 globalThis.volyaInstalled = state.tab ? false : true;
 if (state.tab && !device.touch) globalThis.volyaInstallOffer = { prompt: async () => {}, userChoice: Promise.resolve({ outcome: "dismissed" }) };
 
+// Whether an import finished here before (the cookie mark in game-ui.js).
+globalThis.volyaImportedBefore = Boolean(state.deleted);
+
 // Storage persistence as the state says (the installed app keeps it).
 Object.defineProperty(navigator.storage, "persisted", { value: async () => state.persisted ?? true });
 Object.defineProperty(navigator.storage, "persist", { value: async () => state.persisted ?? true });

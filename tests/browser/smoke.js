@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-import { assert, assertEqual } from "./harness.js";
+import { assert, assertEqual, skip } from "./harness.js";
 
 // The app's base path (tests are served under it, in __test/).
 const base = location.pathname.slice(0, location.pathname.indexOf("/__test/") + 1);
@@ -218,7 +218,23 @@ export const tests = {
     assertEqual(removal.state.claimed, 1, "claims once active");
   },
 
-  "settings: updates, storage and a danger zone, reachable from the bottom": async () => {
+  "a game the browser deleted is said so, on the import screen": async () => {
+    // Without WebGPU the app says it can't run the game instead (no import screen).
+    if ((await volya.status()).gpu.state !== "ready") skip("no WebGPU here");
+    const mark = `volya-engine-imported=1; path=${base}; samesite=strict`;
+    document.cookie = mark;
+    try {
+      await volya.refresh();
+      const notice = document.querySelector("#game .callout.problem strong");
+      assertEqual(notice?.textContent, "The browser deleted the imported game", "notice");
+    } finally {
+      document.cookie = `volya-engine-imported=; path=${base}; max-age=0`;
+      await volya.refresh();
+    }
+    assert(!document.querySelector("#game .callout.problem"), "notice without the mark");
+  },
+
+  "settings: updates and a danger zone, reachable from the bottom": async () => {
     const settings = [...document.querySelectorAll("#game .bottom button")].find((b) => b.textContent === "Settings");
     assert(settings, "no Settings button at the bottom");
     // Scrolled down to reach it, as on a short screen: Settings opens at its top.
@@ -227,7 +243,7 @@ export const tests = {
     settings.click();
     for (let i = 0; i < 50 && !document.querySelector(".screen-head"); i++) await new Promise((r) => setTimeout(r, 20));
     const labels = [...document.querySelectorAll("#game .label")].map((l) => l.textContent);
-    assert(labels.includes("Updates") && labels.includes("Storage"), `labels ${labels}`);
+    assert(labels.includes("Updates") && !labels.includes("Storage"), `labels ${labels}`);
     for (let i = 0; i < 50 && scrollY !== 0; i++) await new Promise((r) => setTimeout(r, 20));
     assertEqual(scrollY, 0, "Settings opened scrolled");
     document.body.style.minHeight = "";
