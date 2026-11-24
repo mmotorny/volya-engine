@@ -370,8 +370,12 @@ export const tests = {
     assert(moved > 0.5, `moved ${moved.toFixed(2)} m`);
     assert(Math.abs(p.position[1] - start.position[1]) < 0.05, `height ${p.position[1] - start.position[1]}`);
     assert(!p.airborne, "still on the ground");
-    // No touch in the level yet: desktop Chrome shows no touch controls.
-    assert(document.getElementById("touch-controls").hidden, "touch controls shown without a touch");
+    // The level's controls are live (the engine's message arrived), and with
+    // no touch in the level yet desktop Chrome shows no touch controls.
+    const touchControls = document.getElementById("touch-controls");
+    for (let i = 0; i < 100 && touchControls.dataset.live !== "true"; i++) await sleep(20);
+    assertEqual(touchControls.dataset.live, "true", "the level's controls are live");
+    assert(touchControls.hidden, "touch controls shown without a touch");
     return `ran ${moved.toFixed(2)} m, jumped ${height.toFixed(2)} m`;
   },
 

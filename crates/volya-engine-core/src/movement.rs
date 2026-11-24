@@ -819,11 +819,12 @@ impl Player {
             self.land(world, c.impact_speed);
         } else if r.landed && self.state.falling {
             // Our reading: a contact held from the take-off (a wall) is the
-            // first touch, and the falling flag set after it would then never
-            // clear (the spec clears it only on that touch); so the step
-            // ending the airborne phase (level-cform.md 6.4) lands too while
-            // the character is falling.
-            self.land(world, c.impact_speed);
+            // first touch, and the falling flag set after it would by the spec
+            // stay until the next airborne phase's first touch; so the step
+            // ending the airborne phase (level-cform.md 6.4) clears falling
+            // and jump, and nothing else of the landing.
+            self.state.falling = false;
+            self.state.jump = false;
         }
         if !r.airborne {
             self.touched = false;

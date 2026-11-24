@@ -26,9 +26,12 @@
 //! Sticks give the spec's digital directions: eight sectors of 45°
 //! ([`stick_directions`]). Crouch is a toggle on both, since holding it
 //! while moving and looking would need a third thumb. Each stick's walk or
-//! run choice is latched: a light push selects walking, a full push running,
-//! and a released stick keeps the last choice, so the low crouch (a crouch
-//! while walking, 4.2) can be entered and held without touching the stick.
+//! run choice is latched (our design): a push whose peak deflection stays
+//! below [`RUN_DEFLECTION`] selects walking, one that reaches it running, and
+//! a released stick keeps the last choice, so the low crouch (a crouch while
+//! walking, 4.2) can be entered and held without touching the stick. A stick
+//! never pushed latches nothing, and any keyboard movement key clears both
+//! latches, so the keyboard's `accel` works as bound.
 
 use std::collections::HashMap;
 
@@ -189,9 +192,11 @@ pub fn stick_directions([x, y]: [f32; 2]) -> Option<([bool; 4], bool)> {
 pub struct Controls {
     pub bindings: Bindings,
     pub settings: Settings,
-    /// The latched walk choice of the gamepad's left stick and of the touch
-    /// stick (see the module docs).
-    pub walk: [bool; 2],
+    /// The latched walk (`true`) or run choice of the gamepad's left stick
+    /// and of the touch stick, `None` until pushed (see the module docs).
+    pub walk: [Option<bool>; 2],
+    /// Each stick's peak deflection in the current push, 0 when released.
+    peak: [f32; 2],
 }
 
 impl Controls {
@@ -199,7 +204,8 @@ impl Controls {
         Self {
             bindings,
             settings,
-            walk: [false; 2],
+            walk: [None; 2],
+            peak: [0.0; 2],
         }
     }
 }
@@ -263,15 +269,24 @@ impl Controls {
             ],
             input.touch_stick(),
         ];
-        for (stick, walk) in pads.into_iter().zip(&mut self.walk) {
-            if let Some(([f, b, l, rt], run)) = stick_directions(stick) {
+        if r.forward || r.back || r.left || r.right {
+            // Keyboard movement: the sticks' latches give way.
+            self.walk = [None; 2];
+        }
+        for (i, stick) in pads.into_iter().enumerate() {
+            if let Some(([f, b, l, rt], _)) = stick_directions(stick) {
                 r.forward |= f;
                 r.back |= b;
                 r.left |= l;
                 r.right |= rt;
-                *walk = !run;
+                self.peak[i] = self.peak[i].max(stick[0].hypot(stick[1]));
+                self.walk[i] = Some(self.peak[i] < RUN_DEFLECTION);
+            } else {
+                self.peak[i] = 0.0;
             }
-            r.accel |= self.settings.always_run == *walk;
+            if let Some(walk) = self.walk[i] {
+                r.accel |= self.settings.always_run == walk;
+            }
         }
         let dead = |v: f32| if v.abs() < DEAD_ZONE { 0.0 } else { v };
         r.turn[0] = (r.turn[0] + dead(input.axis(GamepadAxis::RightX))).clamp(-1.0, 1.0);
@@ -411,21 +426,57 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
         });
         let (r, _) = c.request(&i);
         assert!(!r.forward && r.accel, "the walk choice is kept");
-        i.handle(Event::GamepadAxis {
-            axis: GamepadAxis::LeftY,
-            value: -1.0,
-        });
-        assert!(!c.request(&i).0.accel, "a full push runs");
-        i.handle(Event::GamepadAxis {
-            axis: GamepadAxis::LeftY,
-            value: 0.0,
-        });
-        assert!(!c.request(&i).0.accel, "and stays running");
+        // A full push returning gradually through the walk band stays a run.
+        for value in [-1.0, -0.8, -0.5, -0.3, -0.1, 0.0] {
+            i.handle(Event::GamepadAxis {
+                axis: GamepadAxis::LeftY,
+                value,
+            });
+            assert!(!c.request(&i).0.accel, "running at {value}");
+        }
         i.handle(Event::GamepadButton {
             button: GamepadButton::East,
             pressed: true,
         });
         assert!(c.request(&i).1, "east goes back");
+    }
+
+    #[test]
+    fn the_keyboard_walks_with_always_run_off() {
+        let mut c = Controls::new(
+            Bindings::read(&[DEFAULTS]),
+            Settings {
+                always_run: false,
+                ..Settings::default()
+            },
+        );
+        let mut i = Input::new();
+        // A stick pushed fully once, then the keyboard: W alone walks
+        // (`accel` not held), W with Shift runs, Control with W walks into
+        // the low crouch.
+        i.handle(Event::GamepadAxis {
+            axis: GamepadAxis::LeftY,
+            value: -1.0,
+        });
+        assert!(c.request(&i).0.accel, "the stick runs");
+        i.handle(Event::GamepadAxis {
+            axis: GamepadAxis::LeftY,
+            value: 0.0,
+        });
+        assert!(c.request(&i).0.accel, "and stays latched");
+        key(&mut i, Key::W, true);
+        let (r, _) = c.request(&i);
+        assert!(r.forward && !r.accel, "W walks");
+        assert_eq!(c.walk, [None; 2], "the keyboard cleared the latches");
+        key(&mut i, Key::LeftShift, true);
+        assert!(c.request(&i).0.accel, "Shift runs");
+        key(&mut i, Key::LeftShift, false);
+        key(&mut i, Key::LeftControl, true);
+        let (r, _) = c.request(&i);
+        assert!(r.crouch && !r.accel, "crouched walking: the low crouch");
+        // Untouched sticks latch nothing.
+        let mut c = controls();
+        assert_eq!(c.request(&Input::new()).0, Request::default());
     }
 
     #[test]
@@ -456,7 +507,10 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
         });
         let (r, back) = c.request(&i);
         assert!(r.jump_released && back && r.forward);
-        // A light push, then let go: the touch stick keeps walking too.
+        // Released, then a light push and let go: the touch stick keeps
+        // walking too.
+        i.handle(Event::TouchStick { value: [0.0, 0.0] });
+        c.request(&i);
         i.handle(Event::TouchStick { value: [0.0, -0.3] });
         assert!(c.request(&i).0.accel);
         i.handle(Event::TouchStick { value: [0.0, 0.0] });

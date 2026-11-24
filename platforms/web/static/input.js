@@ -127,13 +127,18 @@ export function startInput(view, send) {
   };
   addEventListener("keydown", key);
   addEventListener("keyup", key);
-  addEventListener("blur", () => capture && send(["blur"]));
-  // Losing pointer lock (Escape, or the browser taking it back) may swallow
-  // releases: nothing stays held.
-  document.addEventListener("pointerlockchange", () => capture && !locked() && send(["blur"]));
-
   // Gamepads have no events for buttons and axes: poll each frame.
   const pads = new Map(); // index → { buttons, axes } last sent
+  // The engine releases everything; what a gamepad still holds is sent
+  // again by the next poll.
+  const releaseAll = () => {
+    send(["blur"]);
+    pads.clear();
+  };
+  addEventListener("blur", () => capture && releaseAll());
+  // Losing pointer lock (Escape, or the browser taking it back) may swallow
+  // releases: nothing stays held.
+  document.addEventListener("pointerlockchange", () => capture && !locked() && releaseAll());
   let polling = false;
   const poll = () => {
     if (!capture) {

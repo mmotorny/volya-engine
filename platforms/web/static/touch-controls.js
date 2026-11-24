@@ -66,14 +66,15 @@ export function createTouchControls(send, { touch = false } = {}) {
   actions.append(sprint, crouch, jump);
   root.append(move, look, menu, actions);
 
-  // Every touch on the controls stays with them; a mouse or pen passes
-  // through to input.js (pointer lock, firing) on a device with both.
+  // Every touch or pen contact on the controls stays with them (a pen
+  // can't use pointer lock); a mouse passes through to input.js (pointer
+  // lock, firing) on a device with both.
   const own = (target, handlers) => {
     for (const [type, handler] of Object.entries(handlers)) {
       target.addEventListener(
         type,
         (event) => {
-          if (event.pointerType !== "touch") return;
+          if (event.pointerType === "mouse") return;
           event.stopPropagation();
           event.preventDefault();
           handler(event);
@@ -94,7 +95,7 @@ export function createTouchControls(send, { touch = false } = {}) {
   root.addEventListener("contextmenu", (event) => event.preventDefault());
 
   // The move stick.
-  let stick = null; // { id, origin }
+  let stick = null; // { id, origin, value }
   const showStick = (origin, [x, y]) => {
     ring.style.left = `${origin[0]}px`;
     ring.style.top = `${origin[1]}px`;
@@ -131,6 +132,7 @@ export function createTouchControls(send, { touch = false } = {}) {
     pointermove: (event) => {
       if (stick?.id !== event.pointerId) return;
       const value = deflection(event);
+      stick.value = value;
       showStick(stick.origin, value);
       send(["stick", ...value]);
     },
@@ -159,8 +161,10 @@ export function createTouchControls(send, { touch = false } = {}) {
 
   // Buttons: held from down to up.
   const releases = [];
+  const resends = [];
   for (const b of [menu, jump, crouch, sprint]) {
     const held = new Set();
+    resends.push(() => held.size > 0 && b !== menu && send(["tbutton", b.dataset.button, true]));
     releases.push(() => {
       if (held.size === 0) return;
       held.clear();
@@ -202,6 +206,15 @@ export function createTouchControls(send, { touch = false } = {}) {
       for (const release of releases) release();
     }
   };
+  // input.js releases everything on blur and on losing pointer lock (its
+  // listeners come first): what the controls still hold is sent again.
+  const resend = () => {
+    if (root.hidden) return;
+    if (stick?.value) send(["stick", ...stick.value]);
+    for (const again of resends) again();
+  };
+  addEventListener("blur", resend);
+  document.addEventListener("pointerlockchange", resend);
   addEventListener(
     "pointerdown",
     (event) => {
@@ -216,6 +229,8 @@ export function createTouchControls(send, { touch = false } = {}) {
     element: root,
     update({ level, crouch: crouched, sprint: sprinting }) {
       live = level;
+      // For tests: whether the engine's message says the controls are live.
+      root.dataset.live = String(Boolean(level));
       crouch.setAttribute("aria-pressed", String(Boolean(crouched)));
       sprint.setAttribute("aria-pressed", String(Boolean(sprinting)));
       render();
