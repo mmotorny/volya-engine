@@ -71,17 +71,14 @@ async fn subdir(
 /// A read-only sync access handle: browsers that support the mode (Chrome
 /// 121 and later) let any number of pages hold one, so several copies of the
 /// app can read the game at once. Others ignore the option and lock the file
-/// to one handle; a second copy then gets their lock error. Through
-/// `Reflect`: web-sys has the option only among its unstable APIs.
+/// to one handle; a second copy then gets their error.
 async fn open_read_only(
     file: &FileSystemFileHandle,
 ) -> Result<FileSystemSyncAccessHandle, JsValue> {
-    let options = js_sys::Object::new();
-    Reflect::set(&options, &"mode".into(), &"read-only".into())?;
-    let create: js_sys::Function =
-        Reflect::get(file, &"createSyncAccessHandle".into())?.dyn_into()?;
-    let promise: js_sys::Promise = create.call1(file, &options)?.dyn_into()?;
-    JsFuture::from(promise).await?.dyn_into()
+    let options = web_sys::FileSystemSyncAccessHandleOptions::new();
+    options.set_mode(web_sys::FileSystemSyncAccessHandleMode::ReadOnly);
+    let handle = JsFuture::from(file.create_sync_access_handle_with_options(&options)).await?;
+    Ok(handle.dyn_into()?)
 }
 
 pub async fn open_sync(

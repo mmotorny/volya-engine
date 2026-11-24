@@ -135,7 +135,7 @@ async fn mount(manifest: Manifest) -> Result<Status, (JsValue, Manifest)> {
         Ok(d) => d,
         Err(e) => return Err((e, manifest)),
     };
-    let opened = match mount_when_unlocked(&dir).await {
+    let opened = match opfs::OpfsVfs::mount(&dir).await {
         Ok(v) => v,
         Err(e) => return Err((e, manifest)),
     };
@@ -168,24 +168,6 @@ async fn mount(manifest: Manifest) -> Result<Status, (JsValue, Manifest)> {
     let status = mounted_status(&game);
     GAME.with(|g| *g.borrow_mut() = Some(game));
     Ok(status)
-}
-
-/// Mounts `dir`, waiting out file locks held by a previous page whose engine
-/// worker is still shutting down (a reload); a lock that persists means the
-/// game is open elsewhere (`None`).
-/// Mounts, retrying a lock error for 5 s: after a reload the old page's
-/// worker may still be letting go of its handles.
-async fn mount_when_unlocked(
-    dir: &web_sys::FileSystemDirectoryHandle,
-) -> Result<opfs::OpfsVfs, JsValue> {
-    const ATTEMPTS: u32 = 20;
-    for attempt in 1..=ATTEMPTS {
-        match opfs::OpfsVfs::mount(dir).await {
-            Err(e) if is_lock_error(&e) && attempt < ATTEMPTS => opfs::sleep(250).await?,
-            result => return result,
-        }
-    }
-    unreachable!()
 }
 
 /// Whether `e` is the error a locked OPFS file gives (`NoModificationAllowedError`

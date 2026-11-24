@@ -36,6 +36,8 @@ web-sys = { workspace = true, features = [
   "FileSystemReadWriteOptions",
   "FileSystemRemoveOptions",
   "FileSystemSyncAccessHandle",
+  "FileSystemSyncAccessHandleMode",
+  "FileSystemSyncAccessHandleOptions",
   "OffscreenCanvas",
   "Performance",
   "StorageManager",

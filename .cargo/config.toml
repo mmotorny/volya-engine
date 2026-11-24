@@ -3,3 +3,8 @@
 
 [alias]
 xtask = "run -q -p xtask --"
+
+# web-sys bindings still marked unstable (e.g. read-only OPFS sync handles):
+# compile errors, not silent failures, when they change or become stable.
+[target.wasm32-unknown-unknown]
+rustflags = ["--cfg=web_sys_unstable_apis"]
