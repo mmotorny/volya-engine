@@ -215,7 +215,7 @@ async function showHome(status) {
         element("p", { textContent: "This browser may delete the imported game when it needs space. Install Volya Engine as an app to keep it (on iPhone: Share, then Add to Home Screen)." }),
       );
 
-  const remove = element("button", { className: "quiet danger", textContent: `Remove imported game · ${formatBytes(status.bytes)}` });
+  const remove = element("button", { className: "danger wide", textContent: `Remove imported game · ${formatBytes(status.bytes)}` });
   remove.addEventListener("click", async () => {
     if (!confirm("Remove the imported game from this app's storage? You can import it again from the installer.")) return;
     await call("forget_game");

@@ -293,14 +293,6 @@ button.wide {
   width: 100%;
 }
 
-/* A text-only action, for what shouldn't compete with Play. */
-button.quiet {
-  align-self: center;
-  border-color: transparent;
-  background: transparent;
-  font-size: 0.875rem;
-}
-
 
 .panel.warning {
   border-color: rgba(255, 155, 143, 0.45);
@@ -316,12 +308,6 @@ button.danger:hover:not(:disabled) {
   background: rgba(255, 155, 143, 0.1);
   border-color: rgba(255, 155, 143, 0.6);
 }
-
-button.quiet.danger,
-button.quiet.danger:hover:not(:disabled) {
-  border-color: transparent;
-}
-
 
 .note {
   margin-top: 0.75rem !important;
