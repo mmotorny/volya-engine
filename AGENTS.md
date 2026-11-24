@@ -22,5 +22,6 @@
 - Dependencies must be permissively licensed (no copyleft, including LGPL/MPL).
 - Never use or derive from leaked X-Ray source or its forks (e.g. OpenXRay).
 - Knowledge of the original game's formats and behavior enters only through docs/clean-room.md; never from memory.
+- Name code after the approved specs' own words, never the original program's internal terms.
 - The orchestrating session and implementers stay clean: never read the dirty workspace (`~/Sources/mmotorny/volya-dirty/`) or dirty agents' findings; dirty agents report only a verdict and a path.
 - Never commit game assets, including test fixtures; tests needing game data skip when it's absent.
