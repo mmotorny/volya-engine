@@ -9,8 +9,8 @@
       <stop offset="0%" stop-color="#1D53A2" />
       <stop offset="65%" stop-color="#154288" />
       <stop offset="100%" stop-color="#0F336E" />
-    </radialGradient><pattern id="grid" x="0" y="0" width="96" height="96" patternUnits="userSpaceOnUse">
-      <path d="M 96 0 H 0 V 96" fill="none" stroke="#5A94DC" stroke-width="2.5" stroke-opacity="0.35" /></pattern></defs>
+    </radialGradient><pattern id="grid" x="-64" y="-64" width="128" height="128" patternUnits="userSpaceOnUse">
+      <path d="M 64 0 V 128 M 0 64 H 128" fill="none" stroke="#9FCBFA" stroke-width="7" stroke-opacity="0.09" /></pattern></defs>
   <rect width="1024" height="1024" fill="url(#bp-bg)" />
   <rect width="1024" height="1024" fill="url(#grid)" />
   <g transform="translate(512 512) scale(1.22) translate(-517 -466)">
