@@ -17,7 +17,8 @@ The orchestrating session is clean. Nothing dirty reaches it.
 
 - **Dirty workspace:** `~/Sources/mmotorny/volya-dirty/`, outside the repository, never committed. Only dirty roles read or write it.
 - **Investigator → reviewer:** files only, `specs/<format>.md` in the dirty workspace.
-- **Reviewer → repository:** an approved spec is copied verbatim to `docs/formats/<format>.md`; a rejected one is not passed on in any form.
+- **Reviewer → repository:** an approved spec is copied verbatim to `docs/formats/<format>.md` (formats) or `docs/behavior/<name>.md` (behavior); a rejected one never reaches the clean side in any form.
+- **Rejection → revision:** the investigator revises the draft in place, from the reviewer's reasons in the dirty workspace. Every review round, including after a revision, is done by a fresh reviewer that reviews the whole spec.
 - **Dirty roles report to the orchestrator only a verdict and a path** (`SPEC READY <path>`, `APPROVED <path>`, `REJECTED`, `BLOCKED`), never findings or reasons that carry content.
 - **Implementers start fresh** with only the approved spec's path; they never see dirty prompts, reports or files.
 
