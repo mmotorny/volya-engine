@@ -80,13 +80,16 @@ are then addressed by that name. Loading a level sets `$level$` to that director
    loading stage begins.
 2. Loading proceeds through the stages of section 2.4 (server start, new-game creation, level files,
    objects, textures, synchronisation).
-3. When the level is loaded and within the first three rendered frames of the level, because the fourth
-   server parameter is `new`, the **intro movie sequence** `<intro_game>` of `config\ui\ui_movies.xml` (dbb,
+3. After the last stage the loading image stays drawn over the first 30 rendered frames of the running
+   level (sound muted; loading-screen specification, section 2). During those frames, as soon as the level
+   is loaded and at most 2 of the 30 frames remain, and because the fourth server parameter is `new`, the
+   **intro movie sequence** `<intro_game>` of `config\ui\ui_movies.xml` (dbb,
    13,247 bytes) starts: `textures\intro\intro_stalker.ogm` (db6, 120,077,638 bytes; 512 × 288, 182.2 s;
    startup specification) over the background `intro\intro_back`, with sound
    `characters_voice\scenario\video\intro_stalker` (`_l`/`_r` pair), `pause_state on` (game time paused
    while it plays). The sequence semantics (skipping, sound pair, window) are those of the startup
    specification. The command-line switch `-nointro` suppresses it.
+   Details of the trigger are in the loading-screen specification, section 7.
 4. When the sequence ends or is skipped, the level is visible from the player's first-person view.
 
 For M3 the movie is not required: the target is the level view of step 4.
@@ -99,14 +102,16 @@ Elements (virtual screen space 1024 × 768 units, scaled to the window):
 |---|---|
 | Background | `textures\ui\ui_load.dds` (db8, 1,048,704 bytes, 1024 × 1024 DXT5); its top 1024 × 768 texel region is stretched over the whole screen; drawn with shader `hud\default` |
 | Level picture | `textures\intro\intro_<level>.dds` where `<level>` is the level directory name: `textures\intro\intro_l01_escape.dds` (db6, 65,664 bytes, 512 × 256 DXT1). If that file does not exist, `textures\intro\intro_no_start_picture.dds` (db6, 65,664 bytes). Drawn with shader `font` |
-| Progress strip | 41 segments whose brightness follows the number of stages begun so far out of an expected total: 17 when the game type is single-player and the program's own command line contains `alife` (e.g. a `-start server(…/alife/…)` switch); otherwise 14, which is the case for New Game from the menu |
+| Progress strip | 40 cells (41 vertex columns) that fill from both ends as stages begin, relative to an expected total (fill pattern: loading-screen specification, section 4.2): 17 when the game type is single-player and the program's own command line contains `alife` (e.g. a `-start server(…/alife/…)` switch); otherwise 14, which is the case for New Game from the menu |
 | Stage caption | The current stage's text, centered, colour 0xFF9D8C78 (ARGB), font `[ui_font_graffiti19_russian]` of `config\fonts.ltx` (font texture selection per the text-and-fonts specification) |
 
-The exact rectangles of the picture, strip and caption are left to a loading-screen specification
-(**unestablished** here beyond the facts above).
+Exact rectangles, the fill pattern and caption formatting are specified by the loading-screen
+specification (`docs/behavior/loading-screen.md`), which refines this section.
 
 Stage captions are string-table ids resolved through the string tables (text-and-fonts specification); all
-are in `config\text\rus\ui_st_other.xml` (dbb, 6,609 bytes):
+are in `config\text\rus\ui_st_other.xml` (dbb, 6,609 bytes). The shown caption is the translation followed by
+`...` (three full stops); for `st_client_connecting_to` the translation, a space and the client address
+(`localhost`) are shown, followed by `...` (loading-screen specification, section 4.3):
 
 | id | Russian text |
 |---|---|
@@ -128,17 +133,18 @@ are in `config\text\rus\ui_st_other.xml` (dbb, 6,609 bytes):
 | `st_client_synchronising` | Клиент: Синхронизация |
 | `st_prefetching_objects` | Кэширование объектов |
 
-Order: the server stages come first (`st_server_starting`, then `st_loading_alife_simulator`, then
-`st_creating_new_game`, then `st_server_connecting`); the level stages are, in this order, `st_opening_stream`
+Order: `st_prefetching_objects` is the first caption, shown only when the game type changes (as it does on
+the first New Game after startup); then the server stages (`st_server_starting`, then
+`st_loading_alife_simulator`, then `st_creating_new_game`, then `st_server_connecting`); then
+`st_client_connecting_to`; the level stages are, in this order, `st_opening_stream`
 (the file `level` is opened), `st_loading_cform`, `st_loading_shaders`, `st_loading_geometry`,
 `st_loading_spatial_db`, `st_loading_details`, `st_loading_sectors_portals`, then `st_loading_ai_objects`;
-then `st_client_spawning` and `st_loading_textures`, and last `st_client_synchronising` (it ends the loading
-screen). The positions of `st_client_connecting_to` and `st_prefetching_objects` within the sequence are
-**unestablished**.
+then `st_client_spawning` and `st_loading_textures`, and last `st_client_synchronising`. The file `level.ltx` is read before the
+`st_opening_stream` caption is set, i.e. under `st_client_connecting_to`.
 
 What each stage reads is given in section 3. Two observable consequences: texture files are read in the
-`st_loading_textures` stage, not when shaders are created; during `st_client_synchronising` the engine
-precaches for 30 frames before the loading screen ends.
+`st_loading_textures` stage, not when shaders are created; after `st_client_synchronising` the loading image
+is drawn over the first 30 rendered frames of the running level (sound muted), then disappears.
 
 ### 2.5 Start position and view direction
 
@@ -199,7 +205,7 @@ game conventions). Level-directory files are in `levels\l01_escape\`.
 | `level` | 4,094,604 | own, chunked | main level file: header, shader/texture table, static visual tree, portals, sectors, lights, glows | R (chunks 1, 2, 3); O (4, 6, 7, 8) | `st_opening_stream` … `st_loading_sectors_portals` |
 | `level.geom` | 56,995,500 | own, chunked | vertex and index buffers of the static geometry | R | `st_loading_geometry` |
 | `level.geomx` | 13,401,518 | own, chunked (same container as `level.geom`) | position-only buffers; read only by the second renderer | N for the first renderer | `st_loading_geometry` |
-| `level.ltx` | 300 | LTX | level configuration; must exist (fatal otherwise); content is only `[level_map]` (PDA map) | R (existence) | `st_opening_stream` |
+| `level.ltx` | 300 | LTX | level configuration; must exist (fatal otherwise); content is only `[level_map]` (PDA map) | R (existence) | before `st_opening_stream` (under `st_client_connecting_to`) |
 | `level.cform` | 30,383,712 | own, header + tables | collision mesh; must exist; its bounding box sizes the engine's spatial structures | O (bounds only) | `st_loading_cform` |
 | `level.env_mod` | 588 | own, chunked | environment modifier spheres (fog/colour overrides) | O | after `st_loading_sectors_portals` (if the file exists) |
 | `level.details` | 8,392,388 | own, chunked | detail objects (grass etc.): models and placement grid | O | `st_loading_details` |
@@ -293,7 +299,8 @@ For `l01_escape` all 307 distinct texture names of `level` chunk 2 resolve; the 
 `lmap#1_1` … `lmap#5_2`, `terrain\terrain_escape`, `terrain\terrain_escape_lm` and `level_lods`. In addition
 `level.details` names `build_details`, which also resolves to the level directory.
 
-Model name resolution (`.ogf`): `$level$<name>.ogf`, then `$game_meshes$<name>.ogf` (".ogf" appended when the
+Model name resolution (`.ogf`): the name as given if it already names an existing file; otherwise
+`$level$<name>.ogf`, then `$game_meshes$<name>.ogf` (".ogf" appended when the
 name has no extension); not found is fatal.
 
 ## 5. Structural overview of the game-own formats
@@ -544,8 +551,6 @@ M3 matches the default configuration: the first renderer.
 ## 9. Unestablished (summary)
 
 - Camera heading/pitch from the actor's stored angles; eye height; coordinate handedness.
-- Loading-screen rectangles; positions of `st_client_connecting_to` and `st_prefetching_objects` in the
-  stage order.
 - Meaning of: `level` header second u16; `level.geom(x)` header second u16; light-record leading u32;
   `level.env_mod` fields after the radius; `shaders.xr` chunk 1; `all.spawn` header last u32 and chunk 2;
   most of the game-graph vertex record.
@@ -559,7 +564,8 @@ M3 matches the default configuration: the first renderer.
 - Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG), 14 archives `gamedata.db0` …
   `gamedata.dbd`; binaries `bin\XR_3DA.exe`, `bin\xrGame.dll`, `bin\xrRender_R1.dll`, `bin\xrRender_R2.dll`
   (32-bit Windows).
-- Data examined: archive listings merged with later-archive precedence (25,683 file entries); extracted
+- Data examined: archive listings merged case-insensitively with later-archive precedence (25,684 file entries; 28,153 including
+  directory entries); extracted
   `levels\l01_escape\` (81 files), `config\`, `scripts\`, `spawns\`, `shaders\`, root `*.xr` files,
   `game.graph`, `textures\textures.ltx` and the textures named above; the game's own shader sources
   (`shaders\shared\common.h`, `shaders\r1\lmap.vs`) and scripts were read as data. All sizes, counts, chunk ids, record
