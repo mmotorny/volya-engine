@@ -45,13 +45,21 @@ export const SECTIONS = [
       { id: "home", name: "Ready", game: imported },
       { id: "home-not-kept", name: "Storage not kept (browser tab)", game: imported, persisted: false, tab: true },
       { id: "home-play-failed", name: "Play failed", game: imported, launchError: "level.geom: unexpected end of file" },
-      { id: "home-finish", name: "Update downloaded", game: imported, updates: { status: "ready" } },
+      // An update, in order: offered (automatic downloads off), downloading
+      // on request, downloaded (either way).
       {
         id: "home-offer",
-        name: "Update available (automatic off)",
+        name: "Update available (automatic downloads off)",
         game: imported,
         updates: { auto: false, status: "available", bytes: 1.9 * 2 ** 20 },
       },
+      {
+        id: "home-offer-downloading",
+        name: "Downloading the update on request",
+        game: imported,
+        updates: { auto: false, status: "downloading", bytes: 1.9 * 2 ** 20 },
+      },
+      { id: "home-finish", name: "Update downloaded", game: imported, updates: { status: "ready" } },
     ],
   },
   {
@@ -60,12 +68,19 @@ export const SECTIONS = [
       { id: "settings", name: "Up to date", game: imported, screen: "settings" },
       {
         id: "settings-offer",
-        name: "Automatic off, update available",
+        name: "Update available (automatic downloads off)",
         game: imported,
         screen: "settings",
         updates: { auto: false, status: "available", bytes: 1.9 * 2 ** 20 },
       },
-      { id: "settings-downloading", name: "Downloading", game: imported, screen: "settings", updates: { status: "downloading" } },
+      {
+        id: "settings-offer-downloading",
+        name: "Downloading the update on request",
+        game: imported,
+        screen: "settings",
+        updates: { auto: false, status: "downloading", bytes: 1.9 * 2 ** 20 },
+      },
+      { id: "settings-downloading", name: "Downloading automatically", game: imported, screen: "settings", updates: { status: "downloading" } },
       { id: "settings-finish", name: "Update downloaded", game: imported, screen: "settings", updates: { status: "ready" } },
       { id: "settings-not-kept", name: "Storage not kept (browser tab)", game: imported, screen: "settings", persisted: false, tab: true },
       { id: "settings-no-game", name: "No game imported", game: fresh, screen: "settings" },
