@@ -37,6 +37,11 @@ The engine (VFS, simulation, scripting, A-Life, physics, rendering) runs on a si
 - **Other workers** do self-contained jobs and exchange messages only, never simulation state: the importer (multi-GB unpack), and later, if profiling demands it, asset decoding.
 - **No `SharedArrayBuffer`, no wasm threads.** This removes the need for cross-origin isolation (COOP/COEP), which GitHub Pages cannot provide. Revisit only with profiling data.
 
+## Collision
+
+- A level's collision mesh (`level.cform`, docs/formats/level-cform.md) stays in memory while the level runs, materials mapped, with a uniform grid over x and z (2 m cells) listing each cell's triangles: 46 MB for `l01_escape`, built under `st_loading_cform` (about 30 ms native release, measured).
+- The player's body is our own small solver, not a physics library: the body never rotates, so it is a point mass with contact constraints using the spec's parameters (error reduction, constraint-force mixing, friction, bounce), solved by projected Gauss–Seidel. The movement layer drives it in two halves per fixed step (`collision::body`): the step's contacts first, then its forces.
+
 ## Hosting: GitHub Pages, project site
 
 Served from `https://mmotorny.github.io/volya-engine/`, deployed with `cargo xtask deploy`: a local release build force-pushed as one commit to the `gh-pages` branch (#12). Tests are never deployed. No custom domain: it emphasizes the project's free, non-commercial nature.

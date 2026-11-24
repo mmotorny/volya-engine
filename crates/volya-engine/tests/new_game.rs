@@ -25,6 +25,7 @@ use volya_engine::core::vfs::StdVfs;
 use volya_engine::core::vfs::db::DbVfs;
 use volya_engine::data::GameData;
 use volya_engine::level::{self, LevelScreen};
+use volya_engine::loading_screen::Stage;
 use volya_engine::present::Presenter;
 use volya_engine::render::{Renderer, wgpu};
 use volya_engine::scene::TextureId;
@@ -505,4 +506,30 @@ fn new_game_loading_screen_from_game_data() {
     step(&mut app, &mut input, &mut audio);
     assert!(matches!(app.state(), AppState::Menu { .. }));
     assert_eq!(audio.0, [0.0, 1.0, 0.0, 1.0]);
+}
+
+/// Each loading stage's work, timed: the loading screen does one stage per
+/// frame (loading-screen.md section 5), so each must fit under a frame the
+/// player sees. `st_loading_cform` loads the collision world.
+#[test]
+fn loading_stage_times() {
+    let Some(archives) = gog_archives::archives() else {
+        return;
+    };
+    let root = StdVfs::new(archives[0].file.parent().unwrap());
+    let tree = DbVfs::open_game(&root, Some("mods")).unwrap();
+    let data = GameData::read(&tree, None, SIZE).unwrap();
+    let mut load = level::NewGameLoad::default();
+    for stage in Stage::ALL {
+        let start = Instant::now();
+        load.run(stage, &tree, &data).unwrap();
+        eprintln!("{stage:?}: {:.1?}", start.elapsed());
+    }
+    let screen = load.finish(0).unwrap();
+    let collision = screen.collision();
+    assert_eq!(collision.triangles().len(), 1_375_470);
+    eprintln!(
+        "collision world: {:.1} MB",
+        collision.memory_bytes() as f64 / 1e6
+    );
 }

@@ -4,7 +4,8 @@
 //! A New Game's level (docs/behavior/level-loading.md): which level, its
 //! static world, and the view from the player's start
 //! (docs/behavior/start-position.md), under the weather of the start time
-//! (docs/behavior/static-shading.md section 9).
+//! (docs/behavior/static-shading.md section 9), with its collision world
+//! (docs/formats/level-cform.md).
 //!
 //! [`LevelScreen::load`] reads everything synchronously through the VFS;
 //! the GPU copy of the geometry is made by the presenter on the first frame
@@ -16,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use serde::Serialize;
 
 use crate::core::camera::{self, ActorBody, Angles, FreeCamera, Mat4, Vec3};
+use crate::core::collision::{Cform, CollisionWorld};
 use crate::core::config;
 use crate::core::input::Input;
 use crate::core::level::{DrawItem, Level, LevelGeom};
@@ -32,6 +34,7 @@ use crate::sky::{self, SkyCamera, SunSource};
 use std::collections::HashMap;
 use volya_engine_formats::env_mod::{self, EnvModifier};
 use volya_engine_formats::game_graph::GameGraph;
+use volya_engine_formats::gamemtl;
 use volya_engine_formats::shaders_xr;
 use volya_engine_formats::spawn;
 use volya_engine_formats::ui::Color;
@@ -95,6 +98,7 @@ impl LevelWorld {
 /// The level shown.
 pub struct LevelScreen {
     world: Arc<LevelWorld>,
+    collision: CollisionWorld,
     camera: FreeCamera,
     weather: Weather,
     /// Time of day, seconds.
@@ -283,8 +287,7 @@ fn time_factor(tree: &dyn Vfs, data: &GameData) -> io::Result<f32> {
 /// (docs/behavior/loading-screen.md section 5): [`NewGameLoad::run`] does
 /// the part of each stage's work this engine has, in the stages' order;
 /// [`NewGameLoad::finish`] makes the level. Stages whose systems do not
-/// exist here (server, life simulation, collision, details, AI, objects)
-/// do nothing.
+/// exist here (server, life simulation, details, AI, objects) do nothing.
 #[derive(Default)]
 pub struct NewGameLoad {
     name: Option<String>,
@@ -292,6 +295,7 @@ pub struct NewGameLoad {
     dir: String,
     level: Option<Level>,
     geom: Option<LevelGeom>,
+    collision: Option<CollisionWorld>,
     draw_items: Vec<DrawItem>,
     spheres: Vec<[f32; 4]>,
     modifiers: Vec<EnvModifier>,
@@ -341,6 +345,27 @@ impl NewGameLoad {
             Stage::OpeningStream => {
                 let bytes = vfs::read(tree, &format!("{dir}\\level"))?;
                 self.level = Some(Level::parse(&bytes).map_err(|e| file("level", e))?);
+            }
+            // The collision mesh with its materials mapped and indexed
+            // (level-cform.md sections 2, 3.3). `gamemtl.xr` is read here,
+            // not at game start as the game does (our choice; only this
+            // needs it). Without it there are no materials, so the mapping
+            // fails as the game's does (section 1).
+            Stage::LoadingCform => {
+                let path = data.aliases.path("$game_data$", "gamemtl.xr")?;
+                let materials = match vfs::read(tree, &path) {
+                    Ok(bytes) => gamemtl::parse(&bytes)
+                        .map_err(|e| io::Error::new(e.kind(), format!("{path}: {e}")))?,
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
+                    Err(e) => return Err(e),
+                };
+                let bytes = vfs::read(tree, &format!("{dir}\\level.cform"))
+                    .map_err(|e| file("level.cform", e))?;
+                let cform = Cform::parse(&bytes).map_err(|e| file("level.cform", e))?;
+                drop(bytes);
+                self.collision = Some(
+                    CollisionWorld::new(cform, materials).map_err(|e| file("level.cform", e))?,
+                );
             }
             Stage::LoadingGeometry => {
                 let mut f = tree
@@ -420,7 +445,6 @@ impl NewGameLoad {
             | Stage::ServerStarting
             | Stage::LoadingAlifeSimulator
             | Stage::ServerConnecting
-            | Stage::LoadingCform
             | Stage::LoadingShaders
             | Stage::LoadingDetails
             | Stage::LoadingAiObjects
@@ -435,6 +459,7 @@ impl NewGameLoad {
         let actor = earlier(self.actor, "actor")?;
         let level = earlier(self.level, "level")?;
         let geom = earlier(self.geom, "level.geom")?;
+        let collision = earlier(self.collision, "level.cform")?;
         let body = earlier(self.body, "actor body")?;
         let weather = earlier(self.weather, "weather")?;
         let sky = earlier(self.sky, "sky")?;
@@ -455,6 +480,7 @@ impl NewGameLoad {
                 sun: self.sun,
                 geometry: Mutex::new(Some(geom)),
             }),
+            collision,
             camera: FreeCamera::new(eye, Angles::from_spawn(actor.angles)),
             environment,
             weather,
@@ -492,6 +518,11 @@ impl LevelScreen {
 
     pub fn world(&self) -> &Arc<LevelWorld> {
         &self.world
+    }
+
+    /// The level's collision world, for the player's body.
+    pub fn collision(&self) -> &CollisionWorld {
+        &self.collision
     }
 
     /// The environment at the camera (static-shading.md 9.2). Game time

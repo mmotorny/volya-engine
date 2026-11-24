@@ -6,6 +6,7 @@
 
 pub mod audio;
 pub mod camera;
+pub mod collision;
 pub mod config;
 pub mod input;
 pub mod level;
