@@ -93,32 +93,9 @@ pub fn run_deploy() -> Result {
         .stdout(std::process::Stdio::null()))?;
     }
     let url = output(&mut cmd("gh", &["api", &pages, "--jq", ".html_url"]))?;
-    let url = url.trim();
     step(&format!(
-        "Published {sha}; waiting for GitHub Pages to serve it"
+        "Published {sha}; GitHub Pages serves it in a minute or two at {}",
+        url.trim()
     ));
-    wait_live(url, sha)?;
-    step(&format!("Deployed {sha}: live at {url}"));
     Ok(())
-}
-
-/// Waits until the live site serves build `sha` (the UX audit page carries
-/// it, uncached by the service worker), so "deployed" means live: Pages
-/// takes a minute or two after the push.
-fn wait_live(url: &str, sha: &str) -> Result {
-    let page = format!("{}/ux-audit/", url.trim_end_matches('/'));
-    let marker = format!(r#"<meta name="build" content="{sha}">"#);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(600);
-    while std::time::Instant::now() < deadline {
-        let body = output(&mut cmd(
-            "curl",
-            &["-sf", "-H", "Cache-Control: no-cache", &page],
-        ))
-        .unwrap_or_default();
-        if body.contains(&marker) {
-            return Ok(());
-        }
-        std::thread::sleep(std::time::Duration::from_secs(5));
-    }
-    Err(format!("{page} didn't serve {sha} within 10 minutes"))
 }

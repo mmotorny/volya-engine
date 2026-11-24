@@ -71,6 +71,26 @@ a:hover {
   font-weight: 400;
 }
 
+.title .check {
+  margin-left: 0.25rem;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid #4a4a4a;
+  border-radius: 5px;
+  background: #383838;
+  color: var(--text);
+  font: 12px system-ui, -apple-system, sans-serif;
+  cursor: pointer;
+}
+
+.title .check:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.title .check:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
 .controls,
 .devices {
   display: flex;

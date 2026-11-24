@@ -19,7 +19,9 @@ const lengths = new Map();
 /** Each state's screen text per device, as its frames report it. */
 const texts = new Map();
 
-document.querySelector(".title").insertAdjacentHTML("beforeend", `<span class="build">${versionText()}</span>`);
+document
+  .querySelector(".title")
+  .insertAdjacentHTML("beforeend", `<span class="build">${versionText()}</span><button class="check" type="button">Check for update</button>`);
 
 const shown = new Set(DEVICES.filter((d) => !d.hidden).map((d) => d.id));
 for (const device of DEVICES) {
@@ -27,38 +29,7 @@ for (const device of DEVICES) {
   box.addEventListener("change", () => {
     if (box.checked) shown.add(device.id);
     else shown.delete(device.id);
-    // Live: when the tab is shown again and a newer build is deployed, reload,
-// keeping the view (zoom, devices, full length, scroll). This page isn't
-// kept offline, so the request reaches the network.
-const VIEW = "volya-engine.ux-audit.view";
-const build = () => document.querySelector('meta[name="build"]').content;
-async function deployedBuild() {
-  const html = await (await fetch(location.pathname, { cache: "no-store" })).text();
-  return new DOMParser().parseFromString(html, "text/html").querySelector('meta[name="build"]')?.content;
-}
-// One check per return to the tab, no polling: `cargo xtask deploy` reports
-// a deploy only once it's live, so a return after that sees it.
-document.addEventListener("visibilitychange", async () => {
-  if (document.visibilityState !== "visible") return;
-  const latest = await deployedBuild().catch(() => null);
-  if (!latest || latest === build()) return;
-  sessionStorage.setItem(VIEW, JSON.stringify({ zoom: zoom.value, shown: [...shown], full: full.checked, y: scrollY }));
-  location.reload();
-});
-const saved = JSON.parse(sessionStorage.getItem(VIEW) ?? "null");
-sessionStorage.removeItem(VIEW);
-if (saved) {
-  zoom.value = saved.zoom;
-  full.checked = saved.full;
-  shown.clear();
-  for (const id of saved.shown) shown.add(id);
-  devicesBox.querySelectorAll("input").forEach((box, i) => (box.checked = shown.has(DEVICES[i].id)));
-  zoomOut.value = `${zoom.value}%`;
-  document.documentElement.style.setProperty("--scale", scale());
-}
-
-render();
-if (saved) requestAnimationFrame(() => scrollTo(0, saved.y));
+    render();
     for (const stateId of texts.keys()) compareText(stateId);
   });
   const label = document.createElement("label");
@@ -157,23 +128,33 @@ zoom.addEventListener("input", () => {
   zoomOut.value = `${zoom.value}%`;
   document.documentElement.style.setProperty("--scale", scale());
 });
-// Live: when the tab is shown again and a newer build is deployed, reload,
-// keeping the view (zoom, devices, full length, scroll). This page isn't
-// kept offline, so the request reaches the network.
+// Check for update: on request only, every 10 s up to 12 times (GitHub Pages
+// serves a deploy a minute or two later, from many servers); a newer build
+// reloads the board, keeping the view (zoom, devices, full length, scroll).
+// This page isn't kept offline, so checks reach the network.
 const VIEW = "volya-engine.ux-audit.view";
+const CHECKS = 12;
+const CHECK_EVERY_MS = 10_000;
 const build = () => document.querySelector('meta[name="build"]').content;
 async function deployedBuild() {
   const html = await (await fetch(location.pathname, { cache: "no-store" })).text();
   return new DOMParser().parseFromString(html, "text/html").querySelector('meta[name="build"]')?.content;
 }
-// One check per return to the tab, no polling: `cargo xtask deploy` reports
-// a deploy only once it's live, so a return after that sees it.
-document.addEventListener("visibilitychange", async () => {
-  if (document.visibilityState !== "visible") return;
-  const latest = await deployedBuild().catch(() => null);
-  if (!latest || latest === build()) return;
-  sessionStorage.setItem(VIEW, JSON.stringify({ zoom: zoom.value, shown: [...shown], full: full.checked, y: scrollY }));
-  location.reload();
+const checkButton = document.querySelector(".check");
+checkButton.addEventListener("click", async () => {
+  checkButton.disabled = true;
+  for (let attempt = 1; attempt <= CHECKS; attempt++) {
+    checkButton.textContent = `Checking… ${attempt}/${CHECKS}`;
+    const latest = await deployedBuild().catch(() => null);
+    if (latest && latest !== build()) {
+      sessionStorage.setItem(VIEW, JSON.stringify({ zoom: zoom.value, shown: [...shown], full: full.checked, y: scrollY }));
+      location.reload();
+      return;
+    }
+    if (attempt < CHECKS) await new Promise((resolve) => setTimeout(resolve, CHECK_EVERY_MS));
+  }
+  checkButton.textContent = "No newer build · Check again";
+  checkButton.disabled = false;
 });
 const saved = JSON.parse(sessionStorage.getItem(VIEW) ?? "null");
 sessionStorage.removeItem(VIEW);

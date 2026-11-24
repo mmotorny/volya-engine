@@ -276,6 +276,31 @@ export const tests = {
     assertEqual(failed.join(" "), "", "frames that didn't render");
   },
 
+  "the UX audit board lays out every state and checks for updates only on request": async () => {
+    const frame = Object.assign(document.createElement("iframe"), { width: 1600, height: 900 });
+    frame.style.cssText = "position: fixed; left: -5000px; top: 0";
+    frame.src = `${base}ux-audit/`;
+    document.body.append(frame);
+    try {
+      const { STATES } = await import(`${base}ux-audit/states.js`);
+      let doc = null;
+      for (let i = 0; i < 100 && !doc?.querySelector(".state"); i++) {
+        await new Promise((r) => setTimeout(r, 20));
+        doc = frame.contentDocument;
+      }
+      assertEqual(doc.querySelectorAll(".state").length, STATES.length, "states on the board");
+      const check = doc.querySelector(".title .check");
+      assertEqual(check?.textContent, "Check for update", "update button");
+      // Toggling a device re-renders once (no listeners piling up).
+      const box = doc.querySelector(".devices input");
+      box.click();
+      box.click();
+      assertEqual(doc.querySelectorAll(".state").length, STATES.length, "states after toggling a device");
+    } finally {
+      frame.remove();
+    }
+  },
+
   "layout fits the viewport": () => {
     const overflow = document.documentElement.scrollWidth - window.innerWidth;
     assert(overflow <= 0, `horizontal overflow ${overflow}px`);
