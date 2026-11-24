@@ -14,13 +14,13 @@ export const SECTIONS = [
     title: "Import",
     states: [
       { id: "import", name: "First start", game: fresh },
-      { id: "import-resume", name: "Interrupted import", game: { ...fresh, written: 1210, bytes: 2.31 * 2 ** 30, total_bytes: GAME } },
       {
         id: "import-progress",
         name: "Importing",
         game: fresh,
         snapshot: { done: 2.31 * 2 ** 30, total: GAME, path: "gamedata.db5" },
       },
+      { id: "import-resume", name: "Interrupted import", game: { ...fresh, written: 1210, bytes: 2.31 * 2 ** 30, total_bytes: GAME } },
     ],
   },
   {

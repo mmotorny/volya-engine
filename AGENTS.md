@@ -18,7 +18,7 @@
 - Avoid GitHub CI whenever possible (cost); all testing runs locally.
 - Work by the priorities in docs/roadmap.md; record roadmap decisions there, not here.
 - Exactly two browser targets; don't add more. Desktop Chrome (headless, the only one that draws) is the default. The iOS Simulator (no WebGPU: WebKit refuses its GPU) only for changes to the page, input, audio or storage. WebKit drawing is checked by the user's use of the deployed app; a drawing bug Chrome can't reproduce gets a one-off look in desktop Safari, not a target. The user is not QA: never ask them to run tests or checks; real-device feedback comes only from them using the deployed app.
-- Every state of the app's own interface is on the UX audit page (`platforms/web/static/ux/states.js`, deployed at `/volya-engine/ux/`); add or update states with every interface change, so the user audits designs there instead of clicking through the app.
+- Any UI change updates the UX audit board (`platforms/web/static/ux/states.js`, deployed at `/volya-engine/ux/`) in the same commit: every state of the app's own interface is on it, sections and states in the order a user meets them. The user audits designs there instead of clicking through the app.
 - Web build must keep functional parity between mobile and desktop browsers; every feature ships with both input paths (touch and keyboard/mouse/gamepad) and is tested on both.
 - Dependencies must be permissively licensed (no copyleft, including LGPL/MPL).
 - Never use or derive from leaked X-Ray source or its forks (e.g. OpenXRay).
