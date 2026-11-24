@@ -60,6 +60,9 @@ pub async fn launch() -> Result<serde_json::Value, JsValue> {
     }
     // The browser's own error if the files can't be opened here.
     crate::game::ensure_mounted().await?;
+    // The user configuration file stored before; without one the
+    // installer's copy in the game root applies (startup.md section 4).
+    let user = crate::game::read_user_config().await?;
     let splash = crate::game::with_trees(|_, root| app::splash(root))?.map_err(error)?;
     let size = splash.as_ref().map_or((0, 0), |s| (s.width, s.height));
     if let Some(image) = &splash {
@@ -69,11 +72,18 @@ pub async fn launch() -> Result<serde_json::Value, JsValue> {
     crate::input::set_capture(true);
     // Let the frame loop show the splash before loading blocks the thread.
     crate::opfs::sleep(100).await?;
-    let resolution = RESOLUTION.with(|r| *r.borrow());
+    let native = RESOLUTION.with(|r| *r.borrow());
     let started = js_sys::Date::now();
-    let loaded = crate::game::with_trees(|tree, root| GameData::load(tree, Some(root), resolution))
+    let loaded = crate::game::with_trees(|tree, root| GameData::load(tree, Some(root), native))
         .and_then(|r| r.map_err(error))
-        .and_then(|data| App::new(data).map_err(error));
+        .and_then(|mut data| {
+            if let Some(user) = user {
+                data.set_user_config(user);
+            }
+            let mut app = App::new(data).map_err(error)?;
+            app.resized(native);
+            Ok(app)
+        });
     SPLASH.with(|s| *s.borrow_mut() = None);
     let app = match loaded {
         Ok(app) => app,
@@ -82,6 +92,7 @@ pub async fn launch() -> Result<serde_json::Value, JsValue> {
             return Err(e);
         }
     };
+    crate::input::set_render(Some(app.video_mode()));
     RUNNING.with(|r| {
         *r.borrow_mut() = Some(Running {
             app,
@@ -106,7 +117,14 @@ pub fn stop() {
             }
         });
         crate::input::set_capture(false);
+        crate::input::set_render(None);
     }
+}
+
+/// The size the game draws at while it runs (its video mode, #49), `None`
+/// otherwise (the splash and the page draw at the canvas's size).
+pub fn render_size() -> Option<Resolution> {
+    RUNNING.with(|r| r.borrow().as_ref().map(|running| running.app.video_mode()))
 }
 
 /// The output was resized to `resolution` pixels.
@@ -145,6 +163,14 @@ pub fn frame(time: f64) {
                 })
             })
         });
+        if let Some(bytes) = app.take_save() {
+            wasm_bindgen_futures::spawn_local(async move {
+                if let Err(e) = crate::game::write_user_config(bytes).await {
+                    web_sys::console::error_1(&e);
+                }
+            });
+        }
+        crate::input::set_render(Some(app.video_mode()));
         // The game was unmounted under the app.
         updated.is_err() || app.quit_requested()
     });

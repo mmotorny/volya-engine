@@ -146,6 +146,8 @@ pub struct Renderer {
     world_pipelines: Option<world::WorldPipelines>,
     /// The world pass's depth buffer, sized to the latest target.
     depth: Option<wgpu::Texture>,
+    /// The frame [`Renderer::render_scaled`] draws into.
+    offscreen: Option<Texture>,
 }
 
 impl Renderer {
@@ -250,6 +252,7 @@ impl Renderer {
             video: video::Converter::new(device),
             world_pipelines: None,
             depth: None,
+            offscreen: None,
         }
     }
 
@@ -370,6 +373,82 @@ impl Renderer {
                         &self.pipeline
                     });
                     pass.set_bind_group(0, &texture.bind_group, &[]);
+                    pass.draw(vertices, 0..1);
+                }
+            }
+        }
+        self.queue.submit([encoder.finish()]);
+    }
+
+    /// Draws `list` at `size` pixels and shows the result in `target`
+    /// scaled to fit with its aspect ratio kept, centred, black around it
+    /// (#49). At the target's own size it draws straight into it.
+    pub fn render_scaled(
+        &mut self,
+        target: &wgpu::Texture,
+        list: &DrawList,
+        clear: wgpu::Color,
+        size: (u32, u32),
+    ) {
+        if size == (target.width(), target.height()) || size.0 == 0 || size.1 == 0 {
+            self.render(target, list, clear);
+            return;
+        }
+        let stale = self.offscreen.as_ref().is_none_or(|t| t.size() != size);
+        if stale {
+            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("frame"),
+                size: wgpu::Extent3d {
+                    width: size.0,
+                    height: size.1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            self.offscreen = Some(self.wrap(texture));
+        }
+        let frame = self.offscreen.clone().expect("offscreen frame");
+        self.render(frame.wgpu(), list, clear);
+        let [x, y, w, h] = volya_engine_formats::ui::Resolution::new(size.0, size.1)
+            .letterbox((target.width() as f32, target.height() as f32));
+        let blit = DrawList {
+            world: None,
+            quads: vec![Quad::new(Rect::SCREEN, &frame)],
+        };
+        let batches = self.upload_vertices(&blit);
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("fit") });
+        {
+            let view = target.create_view(&Default::default());
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("fit"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            if w >= 1.0 && h >= 1.0 {
+                pass.set_viewport(x, y, w, h, 0.0, 1.0);
+                pass.set_vertex_buffer(0, self.vertices.slice(..));
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &frame.bind_group, &[]);
+                for (_, vertices) in batches {
                     pass.draw(vertices, 0..1);
                 }
             }

@@ -7,7 +7,7 @@
 
 use std::io::Cursor;
 
-use crate::core::audio::{Mixer, Playback, VoiceId};
+use crate::core::audio::{Category, Mixer, Playback, VoiceId};
 use crate::core::vfs::{self, Vfs};
 use volya_engine_formats::audio::VorbisStream;
 
@@ -22,6 +22,9 @@ pub trait AudioOut {
     fn is_playing(&self, voice: Voice) -> bool;
     /// Sets the master (listener) gain: 0 mutes everything, 1 is normal.
     fn set_master_gain(&mut self, gain: f32);
+    /// Sets the volume of a sound category (`snd_volume_eff`,
+    /// `snd_volume_music`, docs/behavior/options-screens.md section 6.4).
+    fn set_volume(&mut self, category: Category, volume: f32);
 }
 
 /// No audio output: nothing plays.
@@ -36,6 +39,7 @@ impl AudioOut for Silent {
         false
     }
     fn set_master_gain(&mut self, _: f32) {}
+    fn set_volume(&mut self, _: Category, _: f32) {}
 }
 
 /// [`AudioOut`] on a mixer, reading files from `tree`.
@@ -71,5 +75,9 @@ impl AudioOut for MixerOut<'_> {
 
     fn set_master_gain(&mut self, gain: f32) {
         self.mixer.set_master_gain(gain);
+    }
+
+    fn set_volume(&mut self, category: Category, volume: f32) {
+        self.mixer.set_volume(category, volume);
     }
 }

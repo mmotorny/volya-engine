@@ -32,6 +32,8 @@ const ONLY = [
 const CAPTIONS = ["Новая игра", "Загрузить игру", "Сетевая игра", "Опции", "Титры", "Выйти в Windows"];
 let installer;
 let gpu;
+// The size the game draws at (#49), shown scaled to fit the canvas.
+let render;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const state = () => volya.call("menu_state");
@@ -65,9 +67,21 @@ function key(code) {
   }
 }
 
-/** Page position of UI point (x, y) (1024 × 768 stretched to the canvas). */
+/** Reads the size the game draws at. */
+async function readRender() {
+  render = (await volya.status()).render;
+}
+
+/**
+ * Page position of UI point (x, y): 1024 × 768 stretched to the drawn
+ * picture, which fits the canvas with its aspect kept (#49).
+ */
 function client(x, y) {
-  const [cx, cy] = [(x * view().clientWidth) / 1024, (y * view().clientHeight) / 768];
+  const [w, h] = [view().clientWidth, view().clientHeight];
+  const [rw, rh] = render ?? [w, h];
+  const scale = Math.min(w / rw, h / rh);
+  const [fw, fh] = [rw * scale, rh * scale];
+  const [cx, cy] = [(w - fw) / 2 + (x * fw) / 1024, (h - fh) / 2 + (y * fh) / 768];
   const rect = view().getBoundingClientRect();
   // Turned 90° clockwise on upright phones (style.css).
   if (rect.width < rect.height !== view().clientWidth < view().clientHeight) return [rect.right - cy, rect.top + cx];
@@ -107,10 +121,47 @@ function bounds(scene, layer) {
   return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
 }
 
+/** The options screen's state (it must show). */
+async function options() {
+  const o = (await state()).options;
+  assert(o, "the options screen does not show");
+  return o;
+}
+
+/** Polls the options screen's state until `test` holds. */
+async function untilOptions(test, what, ms = 5000) {
+  return (await until((s) => s.options && test(s.options), what, ms)).options;
+}
+
+const control = (o, name) => o.controls.find((c) => c.name === name) ?? assert(false, `no ${name}`);
+const button = (o, name) => o.buttons.find((b) => b.name === name) ?? assert(false, `no ${name}`);
+/** The centre of a reported rectangle, in UI units. */
+const centreOf = ({ rect: [x, y, w, h] }) => [x + w / 2, y + h / 2];
+
+/** A mouse click at UI point `at`. */
+function clickAt(at) {
+  const p = client(...at);
+  pointer("pointermove", p);
+  pointer("pointerdown", p, { button: 0, buttons: 1 });
+  pointer("pointerup", p, { button: 0, buttons: 0 });
+}
+
+/** Opens the options screen from the title menu's main page. */
+async function openOptions() {
+  pointer("pointermove", row(3));
+  await until((s) => s.menu?.selected === 3 && !s.menu.moving, "item 3 at rest", 3000);
+  pointer("pointerdown", row(3), { button: 0, buttons: 1 });
+  pointer("pointerup", row(3), { button: 0, buttons: 0 });
+  return untilOptions(() => true, "the options screen");
+}
+
 export const tests = {
   "launch without an imported game fails and keeps the page": async () => {
     gpu = (await volya.status()).gpu;
     await volya.call("forget_game");
+    // The installer's user settings apply (a stored copy from an earlier
+    // run would not).
+    await volya.call("forget_user_config");
     const error = await volya.call("launch").then(() => null, (e) => e.message);
     assert(error?.includes("not imported"), `expected a clear error, got ${error}`);
     assertEqual((await volya.call("input_state")).capture, false, "capture");
@@ -160,6 +211,9 @@ export const tests = {
       await until((s) => s.phase === "menu" || s.startup?.item === item, `item ${item}`);
     }
     const s = await until((s) => s.phase === "menu", "the menu");
+    await readRender();
+    // The installer's settings: 1024 × 768 (options-screens.md 12.4).
+    assertEqual(render, [1024, 768], "drawn at vid_mode");
     assertEqual(s.menu.list, "menu_main", "list");
     assertEqual(
       s.menu.items.map((i) => i.caption),
@@ -244,6 +298,10 @@ export const tests = {
     pointer("pointerup", row(3), { button: 0, buttons: 0 });
     const s = await until((s) => s.menu.activations.length > 0, "an activation");
     assertEqual(s.menu.activations.at(-1).item, "btn_options", "activated");
+    // It opened the options screen; Escape closes it.
+    await until((s) => s.options, "the options screen");
+    key("Escape");
+    await until((s) => !s.options, "the options screen to close");
     // A click outside the glass activates nothing.
     pointer("pointerdown", client(100, 100), { button: 0, buttons: 1 });
     pointer("pointerup", client(100, 100), { button: 0, buttons: 0 });
@@ -500,6 +558,107 @@ export const tests = {
     return `loaded again in ${s.load_ms.toFixed(0)} ms`;
   },
 
+  "Options opens from the title menu": async () => {
+    needsGame();
+    await openOptions();
+    const o = (await state()).options;
+    assertEqual(o.controls.length, 31, "option controls");
+    assertEqual(o.cells.length, 118, "key cells");
+    const scene = await volya.call("menu_scene", { width: 1024, height: 768 });
+    assertEqual(bounds(scene, "dialog").slice(0, 2), [414.5, 167.5], "dialog");
+    assert(scene.sprites.some((s) => s.layer === "list_renderer line"), "renderer line");
+  },
+
+  "a setting, a tap and a key changed, Apply stores them": async () => {
+    needsGame();
+    // The controls tab; the mouse-sensitivity bar clicked at a third.
+    clickAt(centreOf(button(await options(), "tab 3")));
+    let o = await untilOptions((o) => o.page === "controls", "the controls tab");
+    const bar = control(o, "track_mousesens");
+    clickAt([bar.rect[0] + 12 + (bar.rect[2] - 24) / 3, bar.rect[1] + 10]);
+    o = await untilOptions((o) => control(o, "track_mousesens").value !== bar.value, "the bar to move");
+    const sens = control(o, "track_mousesens").value;
+    // kb_forward's primary cell waits for a key: T.
+    const cell = o.cells.find((c) => c.action === "forward" && c.slot === 0);
+    assertEqual(cell.key, "kW", "forward's key");
+    clickAt(centreOf(cell));
+    await untilOptions((o) => o.waiting === "forward:0", "the cell to wait");
+    key("KeyT");
+    o = await untilOptions((o) => o.cells.find((c) => c.action === "forward" && c.slot === 0).key === "kT", "kT");
+    // Touch: a tap on the sound tab, then on the EAX check box.
+    const touch = { pointerType: "touch", pointerId: 41, isPrimary: true, button: 0 };
+    const tap = (at) => {
+      pointer("pointerdown", at, { ...touch, buttons: 1 });
+      pointer("pointerup", at, { ...touch, buttons: 0 });
+    };
+    tap(client(...centreOf(button(o, "tab 1"))));
+    o = await untilOptions((o) => o.page === "sound", "the sound tab");
+    const eax = control(o, "check_eax").value;
+    tap(client(...centreOf(control(o, "check_eax"))));
+    o = await untilOptions((o) => control(o, "check_eax").value !== eax, "the tap to toggle EAX");
+    clickAt(centreOf(button(o, "btn_accept")));
+    await until((s) => s.phase === "menu" && !s.options, "Apply to close the screen");
+    let stored;
+    for (let i = 0; i < 50 && !stored?.includes("bind forward kT"); i++) {
+      stored = await volya.call("user_config");
+      await sleep(50);
+    }
+    assert(stored?.includes("bind forward kT\r\n"), "the binding stored");
+    assert(stored.includes(`mouse_sens ${Number(sens).toFixed(5).replace(/0+$/, "")}\r\n`), `mouse_sens ${sens} stored`);
+    assert(stored.includes(`snd_efx ${eax === "on" ? "off" : "on"}\r\n`), "snd_efx stored");
+    return `mouse_sens ${sens}`;
+  },
+
+  "the rebound key walks in the level": async () => {
+    needsGame();
+    pointer("pointermove", row(0));
+    await until((s) => s.menu.selected === 0, "item 0");
+    key("Enter");
+    await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
+    key("Enter");
+    await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", 60000);
+    const tap = { pointerType: "touch", pointerId: 22, isPrimary: true, button: 0 };
+    pointer("pointerdown", client(512, 384), { ...tap, buttons: 1 });
+    pointer("pointerup", client(512, 384), { ...tap, buttons: 0 });
+    await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
+    const down = (code) => document.body.dispatchEvent(new KeyboardEvent("keydown", { code, bubbles: true, cancelable: true }));
+    const up = (code) => document.body.dispatchEvent(new KeyboardEvent("keyup", { code, bubbles: true, cancelable: true }));
+    // W no longer moves.
+    down("KeyW");
+    await sleep(300);
+    const still = (await state()).level.player;
+    up("KeyW");
+    assert(!still.moving, "W still walks");
+    down("KeyT");
+    await until((s) => s.level.player.moving, "T to walk forward");
+    up("KeyT");
+    await until((s) => !s.level.player.moving, "the player to stop");
+    key("Escape");
+    await until((s) => s.phase === "menu", "the menu");
+  },
+
+  "the settings are read back when the game starts again": async () => {
+    needsGame();
+    key("KeyQ");
+    await until((s) => s.phase === "none", "the game to end");
+    await volya.call("launch");
+    await until((s) => s.phase === "startup", "the logo sequence", 2000);
+    for (let item = 1; item <= 5; item++) {
+      key("Escape");
+      await until((s) => s.phase === "menu" || s.startup?.item === item, `item ${item}`);
+    }
+    await until((s) => s.phase === "menu", "the menu");
+    await openOptions();
+    clickAt(centreOf(button(await options(), "tab 3")));
+    const o = await untilOptions((o) => o.page === "controls", "the controls tab");
+    assertEqual(o.cells.find((c) => c.action === "forward" && c.slot === 0).key, "kT", "forward's key");
+    // The defaults back (section 11.6), then Escape closes the screen.
+    clickAt(centreOf(button(o, "btn_default")));
+    await untilOptions((o) => o.cells.find((c) => c.action === "forward" && c.slot === 0).key === "kW", "the defaults");
+    key("Escape");
+    await until((s) => s.phase === "menu" && !s.options, "Escape to close the screen");
+  },
+
   "Q quits to the app's own interface": async () => {
     needsGame();
     key("KeyQ");
@@ -511,5 +670,6 @@ export const tests = {
 
   "forgets the game": async () => {
     if (installer) await volya.call("forget_game");
+    await volya.call("forget_user_config");
   },
 };

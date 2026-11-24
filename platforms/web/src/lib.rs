@@ -37,6 +37,7 @@ pub fn resize(width: f64, height: f64, dpr: f64) {
     gpu::resize(width, height, dpr);
     input::resize(width, height);
     let pixels = |css: f64| ((css * dpr).round() as u32).max(1);
+    // The canvas's own size: what the resolution list offers (#49).
     engine::resized(gpu::resolution().unwrap_or(Resolution::new(pixels(width), pixels(height))));
 }
 
@@ -213,6 +214,11 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
                 size("height").max(1),
             ))?)
         }
+        "user_config" => {
+            let bytes = game::read_user_config().await?;
+            to_json(&bytes.map(|b| volya_engine::formats::cp1251::decode(&b)))
+        }
+        "forget_user_config" => game::forget_user_config().await.map(|()| "null".into()),
         "quit_game" => {
             engine::stop();
             Ok("null".into())
@@ -246,6 +252,9 @@ fn to_json(value: &impl Serialize) -> Result<String, JsValue> {
 struct Status {
     #[serde(flatten)]
     engine: volya_engine::test_api::Status,
+    /// The size the game draws at while it runs (#49).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    render: Option<[u32; 2]>,
     /// `worker` when running in a worker, as the architecture requires.
     thread: &'static str,
     gpu: gpu::Status,
@@ -254,6 +263,7 @@ struct Status {
 fn status() -> Status {
     Status {
         engine: volya_engine::test_api::status(),
+        render: engine::render_size().map(|r| [r.width, r.height]),
         thread: if js_sys::global().is_instance_of::<WorkerGlobalScope>() {
             "worker"
         } else {

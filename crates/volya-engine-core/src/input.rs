@@ -92,76 +92,158 @@ fn clamp_unit(v: f32) -> f32 {
     if v.is_nan() { 0.0 } else { v.clamp(-1.0, 1.0) }
 }
 
-/// Keys the engine distinguishes; the rest are not reported. Those the menu
-/// uses (§4.4) plus the console key.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Key {
-    Up,
-    Down,
-    Left,
-    Right,
-    Enter,
-    Escape,
-    Q,
-    F12,
-    /// The key left of 1 (`` ` `` / `~`), for the console.
-    Grave,
-    W,
-    A,
-    S,
-    D,
-    X,
-    Space,
-    LeftShift,
-    LeftControl,
+macro_rules! keys {
+    ($($variant:ident $name:literal $dik:literal,)*) => {
+        /// Keyboard keys the engine distinguishes: those of the game's key
+        /// list (docs/behavior/options-screens.md section 11.2) a keyboard
+        /// can report; other keys are not reported.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        pub enum Key { $($variant,)* }
+
+        impl Key {
+            pub const ALL: &'static [Key] = &[$(Key::$variant,)*];
+
+            /// Stable name, used by platforms and the engine interface.
+            pub fn name(self) -> &'static str {
+                match self { $(Key::$variant => $name,)* }
+            }
+
+            /// The key's name in the game's key list (options-screens.md
+            /// section 11.2), as `bind` lines write it.
+            pub fn dik_name(self) -> &'static str {
+                match self { $(Key::$variant => $dik,)* }
+            }
+        }
+    };
+}
+
+keys! {
+    Escape "escape" "kESCAPE",
+    Digit1 "1" "k1",
+    Digit2 "2" "k2",
+    Digit3 "3" "k3",
+    Digit4 "4" "k4",
+    Digit5 "5" "k5",
+    Digit6 "6" "k6",
+    Digit7 "7" "k7",
+    Digit8 "8" "k8",
+    Digit9 "9" "k9",
+    Digit0 "0" "k0",
+    Minus "minus" "kMINUS",
+    Equals "equals" "kEQUALS",
+    Backspace "backspace" "kBACK",
+    Tab "tab" "kTAB",
+    Q "q" "kQ",
+    W "w" "kW",
+    E "e" "kE",
+    R "r" "kR",
+    T "t" "kT",
+    Y "y" "kY",
+    U "u" "kU",
+    I "i" "kI",
+    O "o" "kO",
+    P "p" "kP",
+    LeftBracket "left_bracket" "kLBRACKET",
+    RightBracket "right_bracket" "kRBRACKET",
+    Enter "enter" "kRETURN",
+    LeftControl "left_control" "kLCONTROL",
+    A "a" "kA",
+    S "s" "kS",
+    D "d" "kD",
+    F "f" "kF",
+    G "g" "kG",
+    H "h" "kH",
+    J "j" "kJ",
+    K "k" "kK",
+    L "l" "kL",
+    Semicolon "semicolon" "kSEMICOLON",
+    Apostrophe "apostrophe" "kAPOSTROPHE",
+    Grave "grave" "kGRAVE",
+    LeftShift "left_shift" "kLSHIFT",
+    Backslash "backslash" "kBACKSLASH",
+    Z "z" "kZ",
+    X "x" "kX",
+    C "c" "kC",
+    V "v" "kV",
+    B "b" "kB",
+    N "n" "kN",
+    M "m" "kM",
+    Comma "comma" "kCOMMA",
+    Period "period" "kPERIOD",
+    Slash "slash" "kSLASH",
+    RightShift "right_shift" "kRSHIFT",
+    NumpadMultiply "numpad_multiply" "kMULTIPLY",
+    LeftAlt "left_alt" "kLMENU",
+    Space "space" "kSPACE",
+    CapsLock "caps_lock" "kCAPITAL",
+    F1 "f1" "kF1",
+    F2 "f2" "kF2",
+    F3 "f3" "kF3",
+    F4 "f4" "kF4",
+    F5 "f5" "kF5",
+    F6 "f6" "kF6",
+    F7 "f7" "kF7",
+    F8 "f8" "kF8",
+    F9 "f9" "kF9",
+    F10 "f10" "kF10",
+    NumLock "num_lock" "kNUMLOCK",
+    ScrollLock "scroll_lock" "kSCROLL",
+    Numpad7 "numpad7" "kNUMPAD7",
+    Numpad8 "numpad8" "kNUMPAD8",
+    Numpad9 "numpad9" "kNUMPAD9",
+    NumpadSubtract "numpad_subtract" "kSUBTRACT",
+    Numpad4 "numpad4" "kNUMPAD4",
+    Numpad5 "numpad5" "kNUMPAD5",
+    Numpad6 "numpad6" "kNUMPAD6",
+    NumpadAdd "numpad_add" "kADD",
+    Numpad1 "numpad1" "kNUMPAD1",
+    Numpad2 "numpad2" "kNUMPAD2",
+    Numpad3 "numpad3" "kNUMPAD3",
+    Numpad0 "numpad0" "kNUMPAD0",
+    NumpadDecimal "numpad_decimal" "kDECIMAL",
+    F11 "f11" "kF11",
+    F12 "f12" "kF12",
+    F13 "f13" "kF13",
+    F14 "f14" "kF14",
+    F15 "f15" "kF15",
+    Kana "kana" "kKANA",
+    Convert "convert" "kCONVERT",
+    NoConvert "no_convert" "kNOCONVERT",
+    Yen "yen" "kYEN",
+    NumpadEquals "numpad_equals" "kNUMPADEQUALS",
+    RightControl "right_control" "kRCONTROL",
+    NumpadComma "numpad_comma" "kNUMPADCOMMA",
+    NumpadDivide "numpad_divide" "kDIVIDE",
+    PrintScreen "print_screen" "kSYSRQ",
+    RightAlt "right_alt" "kRMENU",
+    Pause "pause" "kPAUSE",
+    Home "home" "kHOME",
+    Up "up" "kUP",
+    PageUp "page_up" "kPRIOR",
+    Left "left" "kLEFT",
+    Right "right" "kRIGHT",
+    End "end" "kEND",
+    Down "down" "kDOWN",
+    PageDown "page_down" "kNEXT",
+    Insert "insert" "kINSERT",
+    Delete "delete" "kDELETE",
+    LeftWin "left_win" "kLWIN",
+    RightWin "right_win" "kRWIN",
+    Apps "apps" "kAPPS",
 }
 
 impl Key {
-    pub const ALL: [Key; 17] = [
-        Key::Up,
-        Key::Down,
-        Key::Left,
-        Key::Right,
-        Key::Enter,
-        Key::Escape,
-        Key::Q,
-        Key::F12,
-        Key::Grave,
-        Key::W,
-        Key::A,
-        Key::S,
-        Key::D,
-        Key::X,
-        Key::Space,
-        Key::LeftShift,
-        Key::LeftControl,
-    ];
-
-    /// Stable name, used by platforms and the engine interface.
-    pub fn name(self) -> &'static str {
-        match self {
-            Key::Up => "up",
-            Key::Down => "down",
-            Key::Left => "left",
-            Key::Right => "right",
-            Key::Enter => "enter",
-            Key::Escape => "escape",
-            Key::Q => "q",
-            Key::F12 => "f12",
-            Key::Grave => "grave",
-            Key::W => "w",
-            Key::A => "a",
-            Key::S => "s",
-            Key::D => "d",
-            Key::X => "x",
-            Key::Space => "space",
-            Key::LeftShift => "left_shift",
-            Key::LeftControl => "left_control",
-        }
+    pub fn from_name(name: &str) -> Option<Key> {
+        Key::ALL.iter().copied().find(|k| k.name() == name)
     }
 
-    pub fn from_name(name: &str) -> Option<Key> {
-        Key::ALL.into_iter().find(|k| k.name() == name)
+    /// The key named `name` in the game's key list, compared
+    /// case-insensitively (section 11.2).
+    pub fn from_dik_name(name: &str) -> Option<Key> {
+        Key::ALL
+            .iter()
+            .copied()
+            .find(|k| k.dik_name().eq_ignore_ascii_case(name))
     }
 }
 
@@ -396,6 +478,11 @@ pub enum Event {
         button: TouchButton,
         pressed: bool,
     },
+    /// Mouse-wheel steps: negative toward the user's "up" (content toward
+    /// its start), positive "down".
+    Wheel {
+        steps: i32,
+    },
 }
 
 /// A touch contact, in screen units.
@@ -468,6 +555,10 @@ pub enum Action {
     },
     Release {
         control: Control,
+    },
+    /// One mouse-wheel step: *wheel up* or *wheel down*.
+    Wheel {
+        up: bool,
     },
 }
 
@@ -792,6 +883,11 @@ impl Input {
                 self.set(Source::Touch, Control::Touch(button), pressed, false)
             }
             Event::Contact { id, at, phase } => self.contact(id, at, phase),
+            Event::Wheel { steps } => {
+                for _ in 0..steps.unsigned_abs().min(64) {
+                    self.push(Action::Wheel { up: steps < 0 });
+                }
+            }
             Event::GamepadAxis { axis, value } => {
                 self.axes[axis as usize] = value;
                 if matches!(axis, GamepadAxis::LeftX | GamepadAxis::LeftY) {
@@ -1228,9 +1324,11 @@ mod tests {
 
     #[test]
     fn names_round_trip() {
-        for key in Key::ALL {
+        for &key in Key::ALL {
             assert_eq!(Key::from_name(key.name()), Some(key));
+            assert_eq!(Key::from_dik_name(key.dik_name()), Some(key));
         }
+        assert_eq!(Key::from_dik_name("klcontrol"), Some(Key::LeftControl));
         for button in MouseButton::ALL {
             assert_eq!(MouseButton::from_name(button.name()), Some(button));
         }
@@ -1241,7 +1339,8 @@ mod tests {
             assert_eq!(GamepadAxis::from_name(axis.name()), Some(axis));
         }
         assert_eq!(Key::from_name("space"), Some(Key::Space));
-        assert_eq!(Key::from_name("tab"), None);
+        assert_eq!(Key::from_name("tab"), Some(Key::Tab));
+        assert_eq!(Key::from_name("kTAB"), None);
     }
 
     #[test]

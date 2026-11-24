@@ -5,10 +5,10 @@
 //! layers, the item list with the sliding bar and cog wheels, the version
 //! caption, the cursor, the music, and navigation and activation.
 //!
-//! Items that open other screens (load, options, multiplayer, credits, new
-//! game, last save) are not implemented: activating them only records what
-//! the spec says they do ([`TitleMenuState::activations`]); nothing visible
-//! happens. `btn_quit` should open a confirmation box first; that box is
+//! New game and options open their screens (the app shows them). Items
+//! that open other screens (load, multiplayer, credits, last save) are not
+//! implemented: activating them only records what the spec says they do
+//! ([`TitleMenuState::activations`]); nothing visible happens. `btn_quit` should open a confirmation box first; that box is
 //! another screen, so it quits at once, like the Q key, which here means
 //! leaving the engine's screen for the app's own interface.
 
@@ -27,7 +27,6 @@ use volya_engine_formats::text::font::UiFont;
 use volya_engine_formats::text::layout::TextBox;
 use volya_engine_formats::ui::Resolution;
 use volya_engine_formats::ui::layout::{Rect, StaticDesc};
-use volya_engine_formats::ui::picture::PicturePlacement;
 use volya_engine_formats::ui::title_menu::MenuList;
 
 /// The list shown on the title screen without a valid last save
@@ -115,6 +114,9 @@ pub struct TitleMenu {
     /// The difficulty of a new game the player chose
     /// (level-loading.md section 2.1), until the app takes it.
     new_game: Option<&'static str>,
+    /// The options screen was asked for (section 4.5), until the app
+    /// takes it.
+    options: bool,
 }
 
 impl TitleMenu {
@@ -139,6 +141,7 @@ impl TitleMenu {
             activations: Vec::new(),
             quit: false,
             new_game: None,
+            options: false,
         };
         // The cursor already over a row does not select it; only entering
         // a row does (the spec does not cover the cursor's position at
@@ -261,7 +264,10 @@ impl TitleMenu {
             "btn_load" => "opens the load-game screen (not implemented)",
             "btn_lastsave" => "loads the last save (not implemented)",
             "btn_multiplayer" => "opens the multiplayer screen (not implemented)",
-            "btn_options" => "opens the options screen (not implemented)",
+            "btn_options" => {
+                self.options = true;
+                "opens the options screen"
+            }
             "btn_credits" => "starts the credits sequence (not implemented)",
             "btn_quit" => {
                 self.quit = true;
@@ -279,7 +285,7 @@ impl TitleMenu {
     /// the bar, the wheels and the music.
     pub fn update(&mut self, data: &GameData, now: u64, input: &Input, audio: &mut dyn AudioOut) {
         for action in input.actions() {
-            if self.quit || self.new_game.is_some() {
+            if self.quit || self.new_game.is_some() || self.options {
                 break;
             }
             match *action {
@@ -393,6 +399,11 @@ impl TitleMenu {
         self.quit
     }
 
+    /// Whether the options screen was asked for, once.
+    pub fn take_options(&mut self) -> bool {
+        std::mem::take(&mut self.options)
+    }
+
     /// The difficulty of the new game the player started, once.
     pub fn take_new_game(&mut self) -> Option<&'static str> {
         self.new_game.take()
@@ -496,21 +507,7 @@ impl TitleMenu {
 
         // Section 7: the cursor's top-left at the cursor, 64 × 64 units from
         // a 64 × 64 frame (one texel per unit, as unstretched pictures).
-        let frame = data.cursor.frame(now);
-        let path = crate::core::ui::still_image(ctx.tree, &data.aliases, frame)?;
-        let size = ctx.assets.image_size(ctx.tree, &path)?;
-        let placement = PicturePlacement {
-            position: (self.cursor[0], self.cursor[1]),
-            size: (size.0 as f32, size.1 as f32),
-            texture_rect: Rect::new(0.0, 0.0, size.0 as f32, size.1 as f32),
-            texture_size: (size.0 as f32, size.1 as f32),
-            color: volya_engine_formats::ui::Color::WHITE,
-        };
-        scene.sprites.push(crate::scene::Sprite::picture(
-            "cursor",
-            crate::scene::TextureId::Image { path },
-            &placement.quad(ctx.scale()),
-        ));
+        crate::draw::cursor(ctx, &mut scene, self.cursor)?;
         Ok(scene)
     }
 

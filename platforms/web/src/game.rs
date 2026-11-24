@@ -20,6 +20,10 @@ use crate::opfs;
 
 pub const GAME_DIR: &str = "game";
 pub const MANIFEST: &str = "import.json";
+/// The user configuration file (docs/behavior/options-screens.md section
+/// 12): Volya Engine's own copy beside the imported game, never written
+/// into the game's files.
+pub const USER_CONFIG: &str = "user.ltx";
 
 /// What the importer has written; `complete` once every file is in place.
 #[derive(Default, Serialize, Deserialize)]
@@ -233,6 +237,52 @@ pub fn unmount() {
         drop(game.tree);
         game.opfs.close();
     }
+}
+
+/// Attempts at opening the user configuration file, and the pause between.
+const CONFIG_ATTEMPTS: u32 = 20;
+const CONFIG_RETRY_MS: i32 = 25;
+
+/// The stored user configuration file, `None` before the first store
+/// (retried while a write holds it, as [`write_user_config`]).
+pub async fn read_user_config() -> Result<Option<Vec<u8>>, JsValue> {
+    let namespace = opfs::namespace().await?;
+    let mut attempt = 0;
+    loop {
+        match opfs::read_file(&namespace, USER_CONFIG).await {
+            Err(_) if attempt < CONFIG_ATTEMPTS => {
+                attempt += 1;
+                opfs::sleep(CONFIG_RETRY_MS).await?;
+            }
+            result => return result,
+        }
+    }
+}
+
+/// Stores the user configuration file. A file's sync access handle is
+/// exclusive, so a read of it at the same moment (or an earlier write still
+/// open) makes the attempt fail: it is retried a few times (our choice).
+pub async fn write_user_config(bytes: Vec<u8>) -> Result<(), JsValue> {
+    let namespace = opfs::namespace().await?;
+    let mut attempt = 0;
+    loop {
+        match opfs::write_file(&namespace, USER_CONFIG, &bytes).await {
+            Err(_) if attempt < CONFIG_ATTEMPTS => {
+                attempt += 1;
+                opfs::sleep(CONFIG_RETRY_MS).await?;
+            }
+            result => return result,
+        }
+    }
+}
+
+/// Deletes the stored user configuration file (tests); the installer's copy
+/// applies again.
+pub async fn forget_user_config() -> Result<(), JsValue> {
+    let namespace = opfs::namespace().await?;
+    // An absent file is fine.
+    let _ = opfs::remove(&namespace, USER_CONFIG).await;
+    Ok(())
 }
 
 /// Deletes the imported game.

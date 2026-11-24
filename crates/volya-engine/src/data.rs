@@ -11,6 +11,7 @@ use std::io::{self, Cursor};
 
 use crate::controls::{Bindings, Controls};
 use crate::core::config::{self, Config, PathAliases};
+use crate::core::console::{Console, ConsoleFiles, PRESET_FILES};
 use crate::core::input::Key;
 use crate::core::movement::Settings;
 use crate::core::text::{self, Fonts, Localization, StringTable};
@@ -82,14 +83,12 @@ fn cannot_find(path: &str) -> io::Error {
 /// Keys of the effective bindings of the `quit` action (startup.md
 /// section 4): `bind quit <key>` lines of `config\default_controls.ltx`,
 /// then of the user settings on top (a later `bind` of the action replaces
-/// the earlier). Only `kESCAPE` names a key this engine receives; a
-/// binding to any other key leaves no usable key, and then Escape is kept so
-/// the sequence stays skippable (our choice). Other console commands
-/// (`bind_sec`, `unbind`) are not covered by the spec and are ignored.
+/// the earlier). A binding to a key this engine does not receive (a mouse
+/// button, a key no keyboard reports) leaves no usable key, and then Escape
+/// is kept so the sequence stays skippable (our choice). Other console
+/// commands (`bind_sec`, `unbind`) are not covered by the spec and are
+/// ignored.
 pub fn quit_keys(files: &[&[u8]]) -> Vec<Key> {
-    // DirectInput key names this engine receives (only the one the spec
-    // names).
-    const KEYS: [(&str, Key); 1] = [("kESCAPE", Key::Escape)];
     let mut bound = None;
     for file in files {
         for line in cp1251::decode(file).lines() {
@@ -99,8 +98,19 @@ pub fn quit_keys(files: &[&[u8]]) -> Vec<Key> {
             }
         }
     }
-    let key = bound.and_then(|b| KEYS.iter().find(|(name, _)| *name == b).map(|(_, k)| *k));
+    let key = bound.and_then(|b| Key::from_dik_name(&b));
     vec![key.unwrap_or(Key::Escape)]
+}
+
+/// The quit keys and the player's controls of `console`'s settings: read
+/// from the file it saves, whose `unbindall` and `bind` lines give the
+/// effective bindings (player-movement.md sections 1.2 and 2.1).
+fn derived(console: &Console) -> (Vec<Key>, Controls) {
+    let saved = console.save();
+    (
+        quit_keys(&[&saved]),
+        Controls::new(Bindings::read(&[&saved]), Settings::read(&[&saved])),
+    )
 }
 
 /// The path aliases of the game root's `fsgame.ltx`, or of the installer's
@@ -135,6 +145,14 @@ pub struct GameData {
     pub quit_keys: Vec<Key>,
     /// The player's bindings and the console settings movement reads.
     pub controls: Controls,
+    /// The game files the console runs (options-screens.md sections 8 and
+    /// 11.5).
+    pub console_files: ConsoleFiles,
+    /// The user configuration file read at startup (section 12.2): Volya
+    /// Engine's own copy when the platform has one
+    /// ([`GameData::set_user_config`]), else the installer's
+    /// [`DEFAULT_USER_LTX`].
+    pub user_config: Vec<u8>,
     /// The version string of the version caption.
     pub version: String,
     /// `textures\ui\ui_ani_cursor`: the frames of the menu cursor.
@@ -182,12 +200,20 @@ impl GameData {
         let default_controls = vfs::read(tree, &aliases.path(GAME_CONFIG, "default_controls.ltx")?)
             .unwrap_or_default();
         let user = root_file(DEFAULT_USER_LTX).unwrap_or_default();
-        let quit_keys = quit_keys(&[&default_controls, &user]);
-        // player-movement.md sections 1.2 and 2.1.
-        let controls = Controls::new(
-            Bindings::read(&[&default_controls, &user]),
-            Settings::read(&[&user]),
-        );
+        let mut presets: [Vec<u8>; 5] = Default::default();
+        for (script, file) in presets.iter_mut().zip(PRESET_FILES) {
+            // A missing preset script does nothing (our choice).
+            *script = vfs::read(
+                tree,
+                &aliases.path(GAME_CONFIG, &format!("rspec_{file}.ltx"))?,
+            )
+            .unwrap_or_default();
+        }
+        let console_files = ConsoleFiles {
+            default_controls,
+            presets,
+        };
+        let (quit_keys, controls) = derived(&Console::startup(console_files.clone(), &user));
 
         let descriptions = ui::load_texture_descriptions(tree, &aliases, &system, resolution)?;
         let colors = ui::load_color_defs(tree, &aliases, resolution)?;
@@ -235,9 +261,29 @@ impl GameData {
             intro_game_lengths: Vec::new(),
             quit_keys,
             controls,
+            console_files,
+            user_config: user,
             version: BUILT_IN_VERSION.to_owned(),
             cursor,
         })
+    }
+
+    /// Replaces the user configuration file read at startup, and what it
+    /// sets.
+    pub fn set_user_config(&mut self, user: Vec<u8>) {
+        self.user_config = user;
+        self.apply(&self.console());
+    }
+
+    /// The console as the game starts (section 12.2).
+    pub fn console(&self) -> Console {
+        Console::startup(self.console_files.clone(), &self.user_config)
+    }
+
+    /// Takes the bindings and settings of `console`: what the next level
+    /// and the menus use.
+    pub fn apply(&mut self, console: &Console) {
+        (self.quit_keys, self.controls) = derived(console);
     }
 
     /// The logo sequence with its lengths.
@@ -548,9 +594,13 @@ mod tests {
             [Key::Escape]
         );
         assert_eq!(quit_keys(&[]), [Key::Escape]);
-        // A key this engine does not receive: Escape is kept.
         assert_eq!(
             quit_keys(&[b"bind quit kESCAPE\n", b"bind quit kF10\n"]),
+            [Key::F10]
+        );
+        // A key this engine does not receive: Escape is kept.
+        assert_eq!(
+            quit_keys(&[b"bind quit kESCAPE\n", b"bind quit mouse1\n"]),
             [Key::Escape]
         );
     }

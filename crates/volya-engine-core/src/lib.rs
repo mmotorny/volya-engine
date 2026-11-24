@@ -8,6 +8,7 @@ pub mod audio;
 pub mod camera;
 pub mod collision;
 pub mod config;
+pub mod console;
 pub mod input;
 pub mod level;
 pub mod movement;

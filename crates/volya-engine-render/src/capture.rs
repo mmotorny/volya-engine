@@ -46,6 +46,34 @@ impl Renderer {
         self.render(&target, list, clear);
         read_texture(&self.device, &self.queue, &target)
     }
+
+    /// As [`Renderer::capture`], with `list` drawn at `size` and shown
+    /// scaled to fit ([`Renderer::render_scaled`]).
+    pub fn capture_scaled(
+        &mut self,
+        list: &DrawList,
+        size: (u32, u32),
+        width: u32,
+        height: u32,
+        clear: wgpu::Color,
+    ) -> impl Future<Output = Result<Vec<u8>, wgpu::BufferAsyncError>> + use<> {
+        let target = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("capture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        self.render_scaled(&target, list, clear, size);
+        read_texture(&self.device, &self.queue, &target)
+    }
 }
 
 /// Reads mip level 0 of an RGBA8 or BGRA8 `texture` back as RGBA.

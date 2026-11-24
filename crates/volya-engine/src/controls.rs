@@ -99,24 +99,17 @@ impl MoveAction {
     }
 }
 
-/// Key names of section 2.1 this engine receives.
-const KEY_NAMES: [(&str, Control); 15] = [
-    ("kW", Control::Key(Key::W)),
-    ("kS", Control::Key(Key::S)),
-    ("kA", Control::Key(Key::A)),
-    ("kD", Control::Key(Key::D)),
-    ("kX", Control::Key(Key::X)),
-    ("kQ", Control::Key(Key::Q)),
-    ("kSPACE", Control::Key(Key::Space)),
-    ("kLSHIFT", Control::Key(Key::LeftShift)),
-    ("kLCONTROL", Control::Key(Key::LeftControl)),
-    ("kUP", Control::Key(Key::Up)),
-    ("kDOWN", Control::Key(Key::Down)),
-    ("kLEFT", Control::Key(Key::Left)),
-    ("kRIGHT", Control::Key(Key::Right)),
-    ("mouse1", Control::Mouse(MouseButton::Left)),
-    ("mouse2", Control::Mouse(MouseButton::Right)),
-];
+/// The control a key name of `bind` lines names (options-screens.md
+/// section 11.2, case-insensitive), `None` for keys this engine does not
+/// receive.
+pub fn control_named(name: &str) -> Option<Control> {
+    match name.to_ascii_lowercase().as_str() {
+        "mouse1" => Some(Control::Mouse(MouseButton::Left)),
+        "mouse2" => Some(Control::Mouse(MouseButton::Right)),
+        "mouse3" => Some(Control::Mouse(MouseButton::Middle)),
+        _ => Key::from_dik_name(name).map(Control::Key),
+    }
+}
 
 /// The effective bindings: each action's primary (`bind`) and secondary
 /// (`bind_sec`) control.
@@ -129,9 +122,10 @@ impl Bindings {
     /// The bindings of the console lines of `files` in order (section
     /// 2.1): `unbindall` removes every binding made so far, `bind` and
     /// `bind_sec` set an action's primary and secondary key. A key this
-    /// engine does not receive leaves the slot empty. Whether binding a key
-    /// to one action unbinds it from another is not in the spec; it does
-    /// not here (our choice).
+    /// engine does not receive leaves the slot empty. Binding a key to one
+    /// action does not unbind it from another here: the files read are the
+    /// console's saved bindings ([`crate::core::console::Console::save`]),
+    /// which applied that rule already.
     pub fn read(files: &[&[u8]]) -> Self {
         let mut b = Self::default();
         for file in files {
@@ -152,7 +146,7 @@ impl Bindings {
                 let Some(action) = MoveAction::ALL.into_iter().find(|a| a.name() == *name) else {
                     continue;
                 };
-                let control = KEY_NAMES.iter().find(|(n, _)| n == key).map(|(_, c)| *c);
+                let control = control_named(key);
                 b.bound.entry(action).or_default()[slot] = control;
             }
         }
@@ -228,7 +222,7 @@ impl Controls {
             input.actions().iter().any(|a| match a {
                 Action::Press { control, .. } => pressed && *control == Control::Touch(b),
                 Action::Release { control } => !pressed && *control == Control::Touch(b),
-                Action::Cursor { .. } => false,
+                Action::Cursor { .. } | Action::Wheel { .. } => false,
             })
         };
         let mut r = Request {

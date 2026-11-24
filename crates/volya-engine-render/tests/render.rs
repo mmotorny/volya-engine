@@ -162,6 +162,31 @@ fn axes_scale_independently() {
 }
 
 #[test]
+fn a_smaller_frame_fits_the_target_with_its_aspect_kept() {
+    let mut renderer = renderer();
+    let texture = renderer.create_rgba_texture(1, 1, &RED);
+    let mut list = DrawList::default();
+    list.quads.push(Quad::new(Rect::SCREEN, &texture));
+    // A 4:3 frame of 32 × 24 in a 64 × 24 target: black bars of 16 at the
+    // sides (#49).
+    let (w, h) = (64, 24);
+    let image = pollster::block_on(renderer.capture_scaled(&list, (32, 24), w, h, BLACK)).unwrap();
+    for y in 0..h {
+        for x in 0..w {
+            let expected = if (16..48).contains(&x) {
+                RED
+            } else {
+                [0, 0, 0, 255]
+            };
+            assert_eq!(pixel(&image, w, x, y), expected, "({x}, {y})");
+        }
+    }
+    // At the target's own size it draws straight into it.
+    let image = pollster::block_on(renderer.capture_scaled(&list, (w, h), w, h, BLACK)).unwrap();
+    assert!(image.chunks(4).all(|p| p == RED));
+}
+
+#[test]
 fn draws_in_order_with_tint_and_alpha() {
     let mut renderer = renderer();
     let red = renderer.create_rgba_texture(1, 1, &RED);

@@ -15,6 +15,8 @@ use std::io;
 use serde::Serialize;
 
 use crate::audio::AudioOut;
+use crate::core::audio::Category;
+use crate::core::console::Console;
 use crate::core::input::{Action, Control, Input};
 use crate::core::vfs::{self, Vfs};
 use crate::data::{Assets, GameData};
@@ -24,6 +26,7 @@ use crate::loading_screen::{
     GAME_TYPE, Loading, LoadingScreen, LoadingScreenState, OVERLAY_FRAMES, SERVER_NEW_GAME,
     intro_due,
 };
+use crate::options::{OptionsData, OptionsScreen, OptionsState};
 use crate::scene::{Scene, Sprite, TextureId};
 use crate::startup::{MoviePlayer, MovieSequenceState, Startup};
 use crate::title_menu::{TitleMenu, TitleMenuState};
@@ -257,6 +260,33 @@ pub struct App {
     /// the level was made: every stage (one frame each at least) and the
     /// first frame drawn (which uploads the world).
     load_ms: Option<f64>,
+    /// The settings and bindings (docs/behavior/options-screens.md).
+    console: Console,
+    /// The options screen's layout, loaded when it first opens.
+    options_data: Option<OptionsData>,
+    /// The options screen of the current menu screen: made on its first
+    /// opening after each opening of the menu (section 2.1).
+    options: Option<OptionsScreen>,
+    options_open: bool,
+    /// The screen's own size in pixels, which the resolution list offers.
+    native: Resolution,
+    /// The resolution drawn at: `vid_mode` as the last video restart
+    /// applied it (sections 5.4, 9).
+    video: Resolution,
+    /// The user configuration file to store, once something asked for it.
+    save: Option<Vec<u8>>,
+    /// The console's file as last applied to the game data and audio.
+    applied: Vec<u8>,
+    /// The sound volumes as last set.
+    volumes: Option<[f32; 2]>,
+    /// The console may have changed this frame.
+    console_touched: bool,
+}
+
+/// The resolution of `vid_mode`.
+fn video_mode(console: &Console) -> Resolution {
+    let (w, h) = console.video_mode();
+    Resolution::new(w, h)
 }
 
 /// What the engine interface reports.
@@ -273,6 +303,9 @@ pub enum AppState {
     Menu {
         clock: u64,
         menu: TitleMenuState,
+        /// The options screen while it shows.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        options: Option<Box<OptionsState>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
@@ -298,7 +331,19 @@ pub enum AppState {
 impl App {
     pub fn new(data: GameData) -> io::Result<Self> {
         TitleMenu::check(&data)?;
+        let console = data.console();
+        let video = video_mode(&console);
         Ok(Self {
+            applied: console.save(),
+            console,
+            options_data: None,
+            options: None,
+            options_open: false,
+            native: video,
+            video,
+            save: None,
+            volumes: None,
+            console_touched: false,
             data,
             assets: Assets::default(),
             origin: None,
@@ -346,11 +391,46 @@ impl App {
                 if startup.finished(data) {
                     // Shown within one frame of the sequence's end.
                     *phase = Phase::Menu(TitleMenu::open(data, now, input, audio));
+                    self.options = None;
+                }
+            }
+            Phase::Menu(menu) if self.options_open => {
+                // The title menu is hidden meanwhile (title-menu.md 4.5);
+                // its music plays on.
+                let screen = self.options.as_mut().expect("open options");
+                screen.update(data, &mut self.console, self.native, now, input);
+                self.console_touched = true;
+                menu.update(data, now, &Input::new(), audio);
+                if let Some(closed) = screen.take_closed() {
+                    self.options_open = false;
+                    if closed.video_restart {
+                        // `vid_restart` (section 5.4).
+                        self.video = video_mode(&self.console);
+                        menu.resized(data, self.video);
+                    }
+                    // Stored now, not only at exit (our choice: a browser
+                    // tab is usually closed without the game's shutdown).
+                    self.save = Some(self.console.save());
                 }
             }
             Phase::Menu(menu) => {
                 menu.update(data, now, input, audio);
+                if menu.take_options() {
+                    let opened = self.open_options(tree, now, input);
+                    if let Err(e) = opened {
+                        // Back on the menu, saying why (our choice).
+                        self.error = Some(format!("options: {e}"));
+                    }
+                    self.after_update(audio);
+                    return;
+                }
+                if menu.quit_requested() {
+                    self.save = Some(self.console.save());
+                }
                 if let Some(difficulty) = menu.take_new_game() {
+                    // level-loading.md section 2.1.
+                    self.console
+                        .exec(&format!("g_game_difficulty {difficulty}"));
                     // What the menu music does while loading is not
                     // established (loading-screen.md section 6); it stops.
                     menu.stop(audio);
@@ -397,6 +477,7 @@ impl App {
                         // Back to the menu, saying why (our choice).
                         self.error = Some(e.to_string());
                         *phase = Phase::Menu(TitleMenu::open(data, now, input, audio));
+                        self.options = None;
                     }
                 }
             }
@@ -429,16 +510,78 @@ impl App {
                         o.end(audio);
                     }
                     *phase = Phase::Menu(TitleMenu::open(data, now, input, audio));
+                    self.options = None;
                 }
             }
         }
+        self.after_update(audio);
     }
 
-    /// The output was resized (a video device reset).
-    pub fn resized(&mut self, resolution: Resolution) {
-        if let Some(Phase::Menu(menu)) = &mut self.phase {
-            menu.resized(&self.data, resolution);
+    /// Opens the options screen (title-menu.md 4.5; options-screens.md 2.1),
+    /// loading its layout the first time.
+    fn open_options(&mut self, tree: &dyn Vfs, now: u64, input: &Input) -> io::Result<()> {
+        if self.options_data.is_none() {
+            self.options_data = Some(OptionsData::load(tree, &self.data, self.video)?);
         }
+        if self.options.is_none() {
+            let opt = self.options_data.as_ref().expect("loaded");
+            self.options = Some(OptionsScreen::new(&self.data, opt)?);
+        }
+        let screen = self.options.as_mut().expect("made");
+        screen.open(
+            &self.data,
+            &mut self.console,
+            self.native,
+            now,
+            input.cursor_ui(),
+        );
+        self.options_open = true;
+        self.error = None;
+        Ok(())
+    }
+
+    /// What the settings changed this frame do: the bindings and movement
+    /// settings the next level uses, and the sound volumes at once.
+    fn after_update(&mut self, audio: &mut dyn AudioOut) {
+        if std::mem::take(&mut self.console_touched) || self.options_open {
+            let saved = self.console.save();
+            if saved != self.applied {
+                self.data.apply(&self.console);
+                self.applied = saved;
+            }
+        }
+        let volumes = [
+            self.console.number("snd_volume_eff"),
+            self.console.number("snd_volume_music"),
+        ];
+        if self.volumes != Some(volumes) {
+            audio.set_volume(Category::Effects, volumes[0]);
+            audio.set_volume(Category::Music, volumes[1]);
+            self.volumes = Some(volumes);
+        }
+    }
+
+    /// The screen's own size in pixels changed (the resolution list offers
+    /// it, section 9).
+    pub fn resized(&mut self, native: Resolution) {
+        self.native = native;
+    }
+
+    /// The resolution to draw at: the video mode the last video restart
+    /// applied (#49: shown scaled to fit the screen, aspect kept).
+    pub fn video_mode(&self) -> Resolution {
+        self.video
+    }
+
+    /// The user configuration file to store (section 12.3), once asked for:
+    /// when the options screen closes and when the player quits.
+    pub fn take_save(&mut self) -> Option<Vec<u8>> {
+        self.save.take()
+    }
+
+    /// The console's settings.
+    pub fn console(&self) -> &Console {
+        &self.console
     }
 
     /// The frame at the current clock for `resolution`.
@@ -453,6 +596,9 @@ impl App {
         match &self.phase {
             None => Ok(Scene::new(resolution)),
             Some(Phase::Startup(s)) => s.scene(&mut ctx),
+            Some(Phase::Menu(_)) if self.options_open => {
+                self.options.as_ref().expect("open options").scene(&mut ctx)
+            }
             Some(Phase::Menu(m)) => m.scene(&mut ctx),
             Some(Phase::Loading {
                 stages: NewGame::Closing(menu),
@@ -529,6 +675,11 @@ impl App {
             Some(Phase::Menu(m)) => AppState::Menu {
                 clock,
                 menu: m.state(&self.data, clock),
+                options: self
+                    .options
+                    .as_ref()
+                    .filter(|_| self.options_open)
+                    .map(|o| Box::new(o.state(&self.data))),
                 error: self.error.clone(),
             },
             Some(Phase::Loading { difficulty, stages }) => AppState::Loading {
@@ -611,6 +762,59 @@ mod tests {
         app.update(&tree, 5400.0, &input, &mut audio);
         assert!(app.quit_requested());
         assert!(audio.playing.is_empty());
+    }
+
+    #[test]
+    fn settings_apply_volumes_and_options_open_from_the_menu() {
+        let tree = fixture::tree();
+        let mut data = fixture::data(&tree);
+        data.set_user_config(
+            b"snd_volume_music 0.5\r\nvid_mode 800x600\r\nbind forward kT\r\n".to_vec(),
+        );
+        assert_eq!(
+            data.controls
+                .bindings
+                .controls(crate::controls::MoveAction::Forward)
+                .collect::<Vec<_>>(),
+            [Control::Key(Key::T)]
+        );
+        let mut app = App::new(data).unwrap();
+        app.assets = fixture::assets();
+        assert_eq!(app.video_mode(), Resolution::new(800, 600));
+        let (mut input, mut audio) = (Input::new(), FakeAudio::default());
+        app.update(&tree, 0.0, &input, &mut audio);
+        // Section 6.4: the volumes at once (built-in effects volume 1).
+        assert_eq!(
+            audio.volumes,
+            [(Category::Effects, 1.0), (Category::Music, 0.5)]
+        );
+        for _ in 0..5 {
+            press(&mut input, Key::Escape);
+            app.update(&tree, 10.0, &input, &mut audio);
+            input.end_frame();
+        }
+        // Options (item 3): the fixture has no options layout, so the menu
+        // stays, saying why.
+        for _ in 0..3 {
+            press(&mut input, Key::Down);
+            app.update(&tree, 20.0, &input, &mut audio);
+            input.end_frame();
+        }
+        press(&mut input, Key::Enter);
+        app.update(&tree, 30.0, &input, &mut audio);
+        input.end_frame();
+        let AppState::Menu { options, error, .. } = app.state() else {
+            panic!("not in the menu")
+        };
+        assert!(options.is_none());
+        assert!(error.unwrap().contains("ui_mm_opt.xml"));
+        // Quitting stores the settings.
+        press(&mut input, Key::Q);
+        app.update(&tree, 40.0, &input, &mut audio);
+        let saved = String::from_utf8(app.take_save().unwrap()).unwrap();
+        assert!(
+            saved.contains("snd_volume_music 0.5\r\n") && saved.contains("bind forward kT\r\n")
+        );
     }
 
     #[test]

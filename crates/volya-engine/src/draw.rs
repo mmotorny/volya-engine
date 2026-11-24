@@ -12,7 +12,7 @@ use crate::data::{Assets, GameData};
 use crate::scene::{Scene, Sprite, TextureId};
 use volya_engine_formats::text::font::UiFont;
 use volya_engine_formats::text::layout::{TextBox, draw_line, layout_text};
-use volya_engine_formats::ui::layout::{HAlign, Rect, StaticDesc};
+use volya_engine_formats::ui::layout::{HAlign, Rect, StaticDesc, TextureRef, WindowDesc};
 use volya_engine_formats::ui::picture::{Picture, PicturePlacement};
 use volya_engine_formats::ui::{Color, Resolution};
 
@@ -100,6 +100,225 @@ impl Ctx<'_> {
         Ok(())
     }
 
+    /// The size in texture pixels (= units at pixel size) of texture id
+    /// `id`, `None` when no description has it.
+    pub fn part_size(&self, id: &str) -> Option<(f32, f32)> {
+        let r = self.data.descriptions.get(id)?.rect;
+        Some((r.width, r.height))
+    }
+
+    /// Adds texture id `id` at its pixel size with its top-left at (`x`,
+    /// `y`) units, cut to `size` units from its top-left when smaller (the
+    /// partial tile of a repeated part, options-screens.md section 4.9).
+    /// `color` multiplies the texels. Nothing for an unknown id.
+    #[allow(clippy::too_many_arguments)]
+    pub fn part(
+        &mut self,
+        scene: &mut Scene,
+        layer: &str,
+        id: &str,
+        (x, y): (f32, f32),
+        size: Option<(f32, f32)>,
+        color: Color,
+    ) -> io::Result<()> {
+        let Some(d) = self.data.descriptions.get(id) else {
+            return Ok(());
+        };
+        let r = d.rect;
+        let (w, h) = size.map_or((r.width, r.height), |(w, h)| {
+            (w.min(r.width), h.min(r.height))
+        });
+        if w <= 0.0 || h <= 0.0 {
+            return Ok(());
+        }
+        let desc = picture_desc(
+            id,
+            Rect::new(x, y, w, h),
+            Some(Rect::new(r.x, r.y, w, h)),
+            color,
+        );
+        self.picture(
+            scene,
+            layer,
+            &desc,
+            Rect::new(x, y, w, h),
+            0.0,
+            0,
+            false,
+            None,
+        )
+    }
+
+    /// Adds texture id `id` stretched over `rect` (units).
+    pub fn part_stretched(
+        &mut self,
+        scene: &mut Scene,
+        layer: &str,
+        id: &str,
+        rect: Rect,
+    ) -> io::Result<()> {
+        if self.data.descriptions.get(id).is_none() {
+            return Ok(());
+        }
+        let mut desc = picture_desc(id, rect, None, Color::WHITE);
+        desc.stretch = true;
+        self.picture(scene, layer, &desc, rect, 0.0, 0, false, None)
+    }
+
+    /// `id` repeated from `from` to `to` along x (or y when `vertical`) at
+    /// the other coordinate `at`, the last tile cut (section 4.9).
+    #[allow(clippy::too_many_arguments)]
+    fn repeat(
+        &mut self,
+        scene: &mut Scene,
+        layer: &str,
+        id: &str,
+        from: f32,
+        to: f32,
+        at: f32,
+        across: Option<f32>,
+        vertical: bool,
+        color: Color,
+    ) -> io::Result<()> {
+        let Some((w, h)) = self.part_size(id) else {
+            return Ok(());
+        };
+        let step = if vertical { h } else { w };
+        if step <= 0.0 {
+            return Ok(());
+        }
+        let mut p = from;
+        while p < to - 0.001 {
+            let len = (to - p).min(step);
+            let (pos, size) = if vertical {
+                ((at, p), (across.unwrap_or(w), len))
+            } else {
+                ((p, at), (len, across.unwrap_or(h)))
+            };
+            self.part(scene, layer, id, pos, Some(size), color)?;
+            p += step;
+        }
+        Ok(())
+    }
+
+    /// A frame window with texture base `base` over `rect` (section 4.9):
+    /// corners at pixel size, edges repeated between them and `_back` over
+    /// the interior, each run ending with a cut tile.
+    pub fn frame_window(
+        &mut self,
+        scene: &mut Scene,
+        layer: &str,
+        base: &str,
+        rect: Rect,
+    ) -> io::Result<()> {
+        let c = Color::WHITE;
+        let size =
+            |s: &Self, part: &str| s.part_size(&format!("{base}_{part}")).unwrap_or_default();
+        let (lt, rt, lb) = (size(self, "lt"), size(self, "rt"), size(self, "lb"));
+        let rb = size(self, "rb");
+        let (x0, y0) = (rect.x, rect.y);
+        let (x1, y1) = (rect.x + rect.width, rect.y + rect.height);
+        let id = |part: &str| format!("{base}_{part}");
+        // The interior first, then edges and corners over it.
+        let mut y = y0 + lt.1;
+        let back = size(self, "back");
+        while back.1 > 0.0 && y < y1 - lb.1 - 0.001 {
+            let h = (y1 - lb.1 - y).min(back.1);
+            self.repeat(
+                scene,
+                layer,
+                &id("back"),
+                x0 + lt.0,
+                x1 - rt.0,
+                y,
+                Some(h),
+                false,
+                c,
+            )?;
+            y += back.1;
+        }
+        self.repeat(
+            scene,
+            layer,
+            &id("t"),
+            x0 + lt.0,
+            x1 - rt.0,
+            y0,
+            None,
+            false,
+            c,
+        )?;
+        let b = size(self, "b");
+        self.repeat(
+            scene,
+            layer,
+            &id("b"),
+            x0 + lb.0,
+            x1 - rb.0,
+            y1 - b.1,
+            None,
+            false,
+            c,
+        )?;
+        self.repeat(
+            scene,
+            layer,
+            &id("l"),
+            y0 + lt.1,
+            y1 - lb.1,
+            x0,
+            None,
+            true,
+            c,
+        )?;
+        let r = size(self, "r");
+        self.repeat(
+            scene,
+            layer,
+            &id("r"),
+            y0 + rt.1,
+            y1 - rb.1,
+            x1 - r.0,
+            None,
+            true,
+            c,
+        )?;
+        self.part(scene, layer, &id("lt"), (x0, y0), None, c)?;
+        self.part(scene, layer, &id("rt"), (x1 - rt.0, y0), None, c)?;
+        self.part(scene, layer, &id("lb"), (x0, y1 - lb.1), None, c)?;
+        self.part(scene, layer, &id("rb"), (x1 - rb.0, y1 - rb.1), None, c)
+    }
+
+    /// A horizontal frame line with texture base `base` from (`x`, `y`),
+    /// `width` long (section 4.9): `_b` at the left, `_e` at the right,
+    /// `_back` repeated between.
+    pub fn frame_line(
+        &mut self,
+        scene: &mut Scene,
+        layer: &str,
+        base: &str,
+        (x, y): (f32, f32),
+        width: f32,
+    ) -> io::Result<()> {
+        let c = Color::WHITE;
+        let (b, e) = (format!("{base}_b"), format!("{base}_e"));
+        let bw = self.part_size(&b).map_or(0.0, |s| s.0);
+        let ew = self.part_size(&e).map_or(0.0, |s| s.0);
+        self.repeat(
+            scene,
+            layer,
+            &format!("{base}_back"),
+            x + bw,
+            x + width - ew,
+            y,
+            None,
+            false,
+            c,
+        )?;
+        self.part(scene, layer, &b, (x, y), None, c)?;
+        self.part(scene, layer, &e, (x + width - ew, y), None, c)
+    }
+
     /// Adds the glyphs of one string `text` (Windows-1251 bytes) drawn at
     /// pen `pen` in output pixels with font `font` (text-and-fonts.md
     /// section 3) as layer `layer`.
@@ -128,4 +347,60 @@ impl Ctx<'_> {
         );
         Ok(())
     }
+}
+
+/// A static showing texture `name` (a texture id or path) with texture
+/// rectangle `texture_rect` (pixels), at pixel size over `rect`.
+pub fn picture_desc(
+    name: &str,
+    rect: Rect,
+    texture_rect: Option<Rect>,
+    color: Color,
+) -> StaticDesc {
+    StaticDesc {
+        window: WindowDesc {
+            name: String::new(),
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+            centred: false,
+            font: None,
+            window_name: None,
+            auto_statics: Vec::new(),
+        },
+        texture: Some(TextureRef {
+            name: name.to_owned(),
+            rect: texture_rect,
+            color,
+        }),
+        stretch: false,
+        texture_offset: (0.0, 0.0),
+        heading: false,
+        clipper: false,
+        text: None,
+        complex_mode: false,
+        text_colors: None,
+    }
+}
+
+/// The menu cursor (title-menu.md section 7): its frame at `ctx.clock_ms`
+/// with its top-left at `at` (UI units), one texel per unit.
+pub fn cursor(ctx: &mut Ctx, scene: &mut Scene, at: [f32; 2]) -> io::Result<()> {
+    let frame = ctx.data.cursor.frame(ctx.clock_ms);
+    let path = crate::core::ui::still_image(ctx.tree, &ctx.data.aliases, frame)?;
+    let size = ctx.assets.image_size(ctx.tree, &path)?;
+    let placement = PicturePlacement {
+        position: (at[0], at[1]),
+        size: (size.0 as f32, size.1 as f32),
+        texture_rect: Rect::new(0.0, 0.0, size.0 as f32, size.1 as f32),
+        texture_size: (size.0 as f32, size.1 as f32),
+        color: Color::WHITE,
+    };
+    scene.sprites.push(Sprite::picture(
+        "cursor",
+        TextureId::Image { path },
+        &placement.quad(ctx.scale()),
+    ));
+    Ok(())
 }

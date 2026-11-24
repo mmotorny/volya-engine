@@ -252,12 +252,17 @@ pub fn set_splash(image: &Rgba) {
 /// presents if anything changed.
 pub fn frame(time: f64) {
     let _ = with_gpu(|gpu| {
-        let resolution = Resolution::new(gpu.config.width, gpu.config.height);
+        let canvas = Resolution::new(gpu.config.width, gpu.config.height);
+        // The game draws at its video mode (#49), within the GPU's limit.
+        let max = gpu.renderer.device().limits().max_texture_dimension_2d;
+        let resolution = crate::engine::render_size().map_or(canvas, |r| {
+            Resolution::new(r.width.clamp(1, max), r.height.clamp(1, max))
+        });
         // The game's screen, redrawn every frame while it runs (videos and
         // the cursor animate); otherwise what `debug_draw` set.
         match crate::engine::draw_list(&mut gpu.renderer, &mut gpu.presenter, resolution) {
             Some(list) => {
-                gpu.present(&list);
+                gpu.present_at(&list, (resolution.width, resolution.height));
                 // Once the game stops, the debug list is drawn over it.
                 gpu.dirty = true;
             }
@@ -276,6 +281,11 @@ pub fn frame(time: f64) {
 
 impl Gpu {
     fn present(&mut self, list: &DrawList) {
+        self.present_at(list, (self.config.width, self.config.height));
+    }
+
+    /// Presents `list` drawn at `size`, scaled to fit the canvas.
+    fn present_at(&mut self, list: &DrawList, size: (u32, u32)) {
         let texture = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t)
             | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
@@ -286,7 +296,8 @@ impl Gpu {
             }
             _ => return,
         };
-        self.renderer.render(&texture.texture, list, CLEAR);
+        self.renderer
+            .render_scaled(&texture.texture, list, CLEAR, size);
         self.queue.present(texture);
         self.dirty = false;
     }

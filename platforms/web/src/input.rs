@@ -21,6 +21,7 @@
 //! | `["stick", x, y]` | the on-screen move stick's deflection, −1 … +1 (+y down) |
 //! | `["look", dx, dy]` | a drag on the on-screen look area |
 //! | `["tbutton", name, pressed]` | an on-screen button ([`TouchButton::name`]) |
+//! | `["wheel", steps]` | mouse-wheel steps, negative up |
 //! | `["blur"]` | the page lost focus: release everything |
 
 use std::cell::RefCell;
@@ -31,6 +32,7 @@ use serde::Serialize;
 use volya_engine::core::input::{
     Action, Event, GamepadAxis, GamepadButton, Input, Key, MouseButton, TouchButton, TouchPhase,
 };
+use volya_engine::formats::ui::Resolution;
 use wasm_bindgen::JsValue;
 
 /// Actions kept for [`state`], across frames.
@@ -41,6 +43,31 @@ struct State {
     input: Input,
     capture: bool,
     recent: VecDeque<(u64, Action)>,
+    /// The canvas's size in CSS pixels.
+    css: [f32; 2],
+    /// The size the engine draws at, shown scaled to fit the canvas with its
+    /// aspect kept (#49); `None` when it fills the canvas.
+    render: Option<Resolution>,
+    /// The top-left of the drawn area in the canvas, CSS pixels.
+    offset: [f32; 2],
+}
+
+impl State {
+    /// Event positions are relative to the drawn area: the engine's screen
+    /// is the letterboxed picture, not the canvas.
+    fn fit(&mut self) {
+        let [w, h] = self.css;
+        let [x, y, fw, fh] = match self.render {
+            Some(r) => r.letterbox((w, h)),
+            None => [0.0, 0.0, w, h],
+        };
+        self.offset = [x, y];
+        self.input.set_screen([fw, fh]);
+    }
+
+    fn place(&self, [x, y]: [f32; 2]) -> [f32; 2] {
+        [x - self.offset[0], y - self.offset[1]]
+    }
 }
 
 thread_local! {
@@ -66,9 +93,20 @@ pub fn set_capture(on: bool) {
 /// Screen size in CSS pixels, the units of event positions.
 pub fn resize(width: f64, height: f64) {
     STATE.with(|s| {
-        s.borrow_mut()
-            .input
-            .set_screen([width as f32, height as f32])
+        let mut s = s.borrow_mut();
+        s.css = [width as f32, height as f32];
+        s.fit();
+    });
+}
+
+/// The size the engine draws at (`None`: the canvas's own).
+pub fn set_render(render: Option<Resolution>) {
+    STATE.with(|s| {
+        let mut s = s.borrow_mut();
+        if s.render != render {
+            s.render = render;
+            s.fit();
+        }
     });
 }
 
@@ -89,16 +127,50 @@ pub fn handle(message: &Array) -> Result<(), JsValue> {
         let mut s = s.borrow_mut();
         if s.capture {
             match event {
-                Some(events) => with_recent(&mut s, |input| {
-                    for event in events {
-                        input.handle(event);
-                    }
-                }),
+                Some(events) => {
+                    let events: Vec<Event> = events.into_iter().map(|e| s.placed(e)).collect();
+                    with_recent(&mut s, |input| {
+                        for event in events {
+                            input.handle(event);
+                        }
+                    })
+                }
                 None => with_recent(&mut s, Input::release_all),
             }
         }
     });
     Ok(())
+}
+
+impl State {
+    /// `e` with its position relative to the drawn area.
+    fn placed(&self, e: Event) -> Event {
+        match e {
+            Event::PointerMoved { at } => Event::PointerMoved { at: self.place(at) },
+            Event::PointerButton {
+                at,
+                button,
+                pressed,
+                time,
+            } => Event::PointerButton {
+                at: at.map(|a| self.place(a)),
+                button,
+                pressed,
+                time,
+            },
+            Event::Touch { at, phase, time } => Event::Touch {
+                at: self.place(at),
+                phase,
+                time,
+            },
+            Event::Contact { id, at, phase } => Event::Contact {
+                id,
+                at: self.place(at),
+                phase,
+            },
+            e => e,
+        }
+    }
 }
 
 /// Runs `f` on the input and records the actions it adds.
@@ -172,6 +244,9 @@ fn decode(message: &Array) -> Result<Option<Vec<Event>>, JsValue> {
             button: TouchButton::from_name(&text(1)?).ok_or_else(bad)?,
             pressed: flag(2)?,
         },
+        "wheel" => Event::Wheel {
+            steps: num(1)? as i32,
+        },
         "blur" => return Ok(None),
         _ => return Err(bad()),
     };
@@ -231,6 +306,12 @@ pub fn state() -> Snapshot {
                         Action::Release { control } => {
                             ("release", Some(control.name()), None, false)
                         }
+                        Action::Wheel { up } => (
+                            if up { "wheel_up" } else { "wheel_down" },
+                            None,
+                            None,
+                            false,
+                        ),
                     };
                     RecentAction {
                         seq,

@@ -14,24 +14,119 @@
 
 // KeyboardEvent.code → engine key name (layout-independent positions).
 const KEYS = {
-  ArrowUp: "up",
-  ArrowDown: "down",
-  ArrowLeft: "left",
-  ArrowRight: "right",
+  Escape: "escape",
+  Digit1: "1",
+  Digit2: "2",
+  Digit3: "3",
+  Digit4: "4",
+  Digit5: "5",
+  Digit6: "6",
+  Digit7: "7",
+  Digit8: "8",
+  Digit9: "9",
+  Digit0: "0",
+  Minus: "minus",
+  Equal: "equals",
+  Backspace: "backspace",
+  Tab: "tab",
+  KeyQ: "q",
+  KeyW: "w",
+  KeyE: "e",
+  KeyR: "r",
+  KeyT: "t",
+  KeyY: "y",
+  KeyU: "u",
+  KeyI: "i",
+  KeyO: "o",
+  KeyP: "p",
+  BracketLeft: "left_bracket",
+  BracketRight: "right_bracket",
   Enter: "enter",
   NumpadEnter: "enter",
-  Escape: "escape",
-  KeyQ: "q",
-  F12: "f12",
-  Backquote: "grave",
-  KeyW: "w",
+  ControlLeft: "left_control",
   KeyA: "a",
   KeyS: "s",
   KeyD: "d",
-  KeyX: "x",
-  Space: "space",
+  KeyF: "f",
+  KeyG: "g",
+  KeyH: "h",
+  KeyJ: "j",
+  KeyK: "k",
+  KeyL: "l",
+  Semicolon: "semicolon",
+  Quote: "apostrophe",
+  Backquote: "grave",
   ShiftLeft: "left_shift",
-  ControlLeft: "left_control",
+  Backslash: "backslash",
+  KeyZ: "z",
+  KeyX: "x",
+  KeyC: "c",
+  KeyV: "v",
+  KeyB: "b",
+  KeyN: "n",
+  KeyM: "m",
+  Comma: "comma",
+  Period: "period",
+  Slash: "slash",
+  ShiftRight: "right_shift",
+  NumpadMultiply: "numpad_multiply",
+  AltLeft: "left_alt",
+  Space: "space",
+  CapsLock: "caps_lock",
+  F1: "f1",
+  F2: "f2",
+  F3: "f3",
+  F4: "f4",
+  F5: "f5",
+  F6: "f6",
+  F7: "f7",
+  F8: "f8",
+  F9: "f9",
+  F10: "f10",
+  NumLock: "num_lock",
+  ScrollLock: "scroll_lock",
+  Numpad7: "numpad7",
+  Numpad8: "numpad8",
+  Numpad9: "numpad9",
+  NumpadSubtract: "numpad_subtract",
+  Numpad4: "numpad4",
+  Numpad5: "numpad5",
+  Numpad6: "numpad6",
+  NumpadAdd: "numpad_add",
+  Numpad1: "numpad1",
+  Numpad2: "numpad2",
+  Numpad3: "numpad3",
+  Numpad0: "numpad0",
+  NumpadDecimal: "numpad_decimal",
+  F11: "f11",
+  F12: "f12",
+  F13: "f13",
+  F14: "f14",
+  F15: "f15",
+  KanaMode: "kana",
+  Convert: "convert",
+  NonConvert: "no_convert",
+  IntlYen: "yen",
+  NumpadEqual: "numpad_equals",
+  ControlRight: "right_control",
+  NumpadComma: "numpad_comma",
+  NumpadDivide: "numpad_divide",
+  PrintScreen: "print_screen",
+  AltRight: "right_alt",
+  Pause: "pause",
+  Home: "home",
+  ArrowUp: "up",
+  PageUp: "page_up",
+  ArrowLeft: "left",
+  ArrowRight: "right",
+  End: "end",
+  ArrowDown: "down",
+  PageDown: "page_down",
+  Insert: "insert",
+  Delete: "delete",
+  MetaLeft: "left_win",
+  MetaRight: "right_win",
+  ContextMenu: "apps",
 };
 // Keys whose browser action (developer tools) is left alone.
 const BROWSER_KEYS = new Set(["F12"]);
@@ -57,6 +152,8 @@ const PAD_BUTTONS = {
 const PAD_AXES = { 0: "left_x", 1: "left_y", 2: "right_x", 3: "right_y" };
 // Analog triggers are buttons with a value in the standard mapping.
 const PAD_TRIGGERS = { 6: "left_trigger", 7: "right_trigger" };
+// CSS pixels of wheel scrolling per wheel step.
+const WHEEL_PIXELS = 50;
 // Axis changes smaller than this are not sent.
 const AXIS_EPSILON = 0.02;
 
@@ -113,6 +210,27 @@ export function startInput(view, send) {
     addEventListener(type, pointer, { passive: false });
   }
   addEventListener("contextmenu", (event) => capture && event.preventDefault());
+  // Wheel steps (our choice): one per line or page, one per WHEEL_PIXELS of
+  // pixel scrolling (trackpads send many small deltas); negative is up.
+  let wheel = 0;
+  addEventListener(
+    "wheel",
+    (event) => {
+      if (!capture) return;
+      event.preventDefault();
+      if (event.deltaMode !== 0) {
+        send(["wheel", Math.sign(event.deltaY)]);
+        return;
+      }
+      wheel += event.deltaY;
+      const steps = Math.trunc(wheel / WHEEL_PIXELS);
+      if (steps !== 0) {
+        wheel -= steps * WHEEL_PIXELS;
+        send(["wheel", steps]);
+      }
+    },
+    { passive: false },
+  );
 
   const key = (event) => {
     const name = KEYS[event.code];

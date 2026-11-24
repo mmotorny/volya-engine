@@ -206,6 +206,7 @@ impl AudioOut for Gains {
     fn set_master_gain(&mut self, gain: f32) {
         self.0.push(gain);
     }
+    fn set_volume(&mut self, _: volya_engine::core::audio::Category, _: f32) {}
 }
 
 fn press(input: &mut Input, key: Key) {

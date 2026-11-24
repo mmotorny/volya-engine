@@ -220,6 +220,40 @@ impl Scene {
         self.sprites.iter().find(|s| s.layer == layer)
     }
 
+    /// Clips the sprites from index `start` on to `rect` (output pixels:
+    /// min x, min y, max x, max y): screen-aligned sprites are cut, their
+    /// texture coordinates with them; those outside, and rotated ones not
+    /// wholly inside, are dropped (a clipping window, ui-layout.md 4.3).
+    pub fn clip_from(&mut self, start: usize, [x0, y0, x1, y1]: [f32; 4]) {
+        let mut kept = Vec::with_capacity(self.sprites.len() - start);
+        for mut s in self.sprites.drain(start..) {
+            let c = s.corners;
+            let aligned = c[0][1] == c[1][1] && c[1][0] == c[2][0] && c[0][0] == c[3][0];
+            let [bx0, by0, bx1, by1] = s.bounds();
+            if bx1 <= x0 || bx0 >= x1 || by1 <= y0 || by0 >= y1 {
+                continue;
+            }
+            if bx0 >= x0 && bx1 <= x1 && by0 >= y0 && by1 <= y1 {
+                kept.push(s);
+                continue;
+            }
+            if !aligned {
+                continue;
+            }
+            let (l, t, r, b) = (c[0][0], c[0][1], c[2][0], c[2][1]);
+            let (nl, nt, nr, nb) = (l.max(x0), t.max(y0), r.min(x1), b.min(y1));
+            let lerp = |a: f32, b: f32, f: f32| a + (b - a) * f;
+            let fx = |x: f32| if r != l { (x - l) / (r - l) } else { 0.0 };
+            let fy = |y: f32| if b != t { (y - t) / (b - t) } else { 0.0 };
+            let (u0, v0, u1, v1) = (s.uv_min[0], s.uv_min[1], s.uv_max[0], s.uv_max[1]);
+            s.uv_min = [lerp(u0, u1, fx(nl)), lerp(v0, v1, fy(nt))];
+            s.uv_max = [lerp(u0, u1, fx(nr)), lerp(v0, v1, fy(nb))];
+            s.corners = [[nl, nt], [nr, nt], [nr, nb], [nl, nb]];
+            kept.push(s);
+        }
+        self.sprites.extend(kept);
+    }
+
     /// The bounds of all sprites of `layer` together (as
     /// [`Sprite::bounds`]), `None` when there are none.
     pub fn layer_bounds(&self, layer: &str) -> Option<[f32; 4]> {

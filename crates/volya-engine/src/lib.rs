@@ -17,11 +17,12 @@ pub mod app;
 pub mod audio;
 pub mod controls;
 pub mod data;
-mod draw;
+pub mod draw;
 #[cfg(test)]
 mod fixture;
 pub mod level;
 pub mod loading_screen;
+pub mod options;
 pub mod present;
 pub mod scene;
 pub mod shading;

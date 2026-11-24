@@ -11,6 +11,7 @@
 
 pub mod layout;
 pub mod movies;
+pub mod options;
 pub mod picture;
 pub mod seq;
 pub mod texture_desc;
@@ -49,6 +50,15 @@ impl Resolution {
     /// correction (section 5.4).
     pub fn is_wide(self) -> bool {
         self.width as f32 / self.height as f32 > 1.343_333_4
+    }
+
+    /// Where a picture of this size shows on a screen `w` × `h`, scaled to
+    /// fit with its aspect ratio kept and centred (bars at the sides or top
+    /// and bottom): x, y, width, height (#49, our design).
+    pub fn letterbox(self, (w, h): (f32, f32)) -> [f32; 4] {
+        let scale = (w / self.width.max(1) as f32).min(h / self.height.max(1) as f32);
+        let (fw, fh) = (self.width as f32 * scale, self.height as f32 * scale);
+        [(w - fw) / 2.0, (h - fh) / 2.0, fw, fh]
     }
 }
 
@@ -198,6 +208,19 @@ mod tests {
         assert_eq!(sx, 1.25);
         assert!((sy - 1.333_333).abs() < 1e-5);
         assert_eq!(Resolution::new(1920, 1080).scale(), (1.875, 1.40625));
+    }
+
+    #[test]
+    fn letterboxes_by_aspect() {
+        let xga = Resolution::new(1024, 768);
+        // A wide screen: bars at the sides.
+        assert_eq!(
+            xga.letterbox((1920.0, 1080.0)),
+            [240.0, 0.0, 1440.0, 1080.0]
+        );
+        // A tall one: bars above and below.
+        assert_eq!(xga.letterbox((800.0, 800.0)), [0.0, 100.0, 800.0, 600.0]);
+        assert_eq!(xga.letterbox((512.0, 384.0)), [0.0, 0.0, 512.0, 384.0]);
     }
 
     #[test]

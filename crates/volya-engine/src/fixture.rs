@@ -293,6 +293,8 @@ pub struct FakeAudio {
     pub next: Voice,
     /// Every master gain set, in order.
     pub master_gains: Vec<f32>,
+    /// Every category volume set, in order.
+    pub volumes: Vec<(crate::core::audio::Category, f32)>,
 }
 
 impl FakeAudio {
@@ -321,5 +323,9 @@ impl AudioOut for FakeAudio {
 
     fn set_master_gain(&mut self, gain: f32) {
         self.master_gains.push(gain);
+    }
+
+    fn set_volume(&mut self, category: crate::core::audio::Category, volume: f32) {
+        self.volumes.push((category, volume));
     }
 }
