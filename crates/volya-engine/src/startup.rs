@@ -1,9 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! The logo sequence `intro_logo` (docs/behavior/startup.md section 6):
-//! items played in order on the engine clock, each skippable with the quit
-//! key.
+//! Movie sequences (docs/behavior/startup.md section 6): [`MoviePlayer`]
+//! plays the items of any sequence of `ui_movies.xml` in order on the
+//! engine clock, each stoppable item skippable with the quit key;
+//! [`Startup`] is the logo sequence `intro_logo`, and the app plays the New
+//! Game intro `intro_game` with it too (loading-screen.md section 7).
 //!
 //! Timing follows the clock, not the audio output: a video item's picture
 //! shows the frame for the time since its delay ended, and the item ends

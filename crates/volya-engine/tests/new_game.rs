@@ -7,7 +7,8 @@
 //! (docs/behavior/start-position.md) rendered headless, with load and frame
 //! times. `VOLYA_DUMP_LEVEL=<file.ppm>` writes the start frame,
 //! `VOLYA_DUMP_LOADING=<file.ppm>` the fifth loading image and
-//! `VOLYA_DUMP_INTRO=<file.ppm>` an intro frame locally for inspection. Skips when `VOLYA_GOG_INSTALLER` is unset.
+//! `VOLYA_DUMP_INTRO=<file.ppm>` an intro frame locally for inspection.
+//! Skips when `VOLYA_GOG_INSTALLER` is unset.
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -390,7 +391,10 @@ fn new_game_loading_screen_from_game_data() {
     assert_eq!((level.name.as_str(), overlay_frames), ("l01_escape", 30));
     assert_eq!(audio.0, [0.0], "muted");
     let scene = app.scene(&tree, SIZE).unwrap();
-    assert!(scene.world.is_some());
+    assert!(
+        !scene.world.as_ref().unwrap().covered,
+        "drawn under the loading image"
+    );
     assert_eq!(
         scene.layer_bounds("loading caption").unwrap()[0],
         424.0,
@@ -433,6 +437,10 @@ fn new_game_loading_screen_from_game_data() {
     assert_eq!(time(&mut app), paused_at, "game time paused");
     let scene = app.scene(&tree, SIZE).unwrap();
     assert!(
+        scene.world.as_ref().unwrap().covered,
+        "not drawn under the intro"
+    );
+    assert!(
         scene
             .sprites
             .iter()
@@ -467,6 +475,7 @@ fn new_game_loading_screen_from_game_data() {
     assert!(time(&mut app) > paused_at);
     let scene = app.scene(&tree, SIZE).unwrap();
     assert!(scene.first("video").is_none());
+    assert!(!scene.world.unwrap().covered);
 
     // A later New Game skips prefetching (section 5); leaving the level
     // during its overlay frames un-mutes at once.

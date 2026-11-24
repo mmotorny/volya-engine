@@ -504,7 +504,8 @@ impl LevelScreen {
 
     /// A frame at `now` with game time paused (a movie item's
     /// `pause_state`, level-loading.md section 2.3): nothing moves and the
-    /// shaders' clock stands still; input is not read.
+    /// shaders' clock stands still (our reading: which clock the shaders
+    /// use is not established, ogf.md section 10); input is not read.
     pub fn paused(&mut self, now: u64) {
         self.shown += now.saturating_sub(self.last);
         self.last = now;
@@ -557,6 +558,7 @@ impl LevelScreen {
         let (d, _) = self.camera.angles.direction_up();
         let mut scene = Scene::new(resolution);
         scene.world = Some(WorldScene {
+            covered: false,
             world: self.world.clone(),
             eye: self.camera.eye,
             forward: d,

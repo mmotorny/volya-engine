@@ -190,6 +190,28 @@ impl Intro {
     }
 }
 
+/// A level frame: the level, then the intro, then the loading image
+/// (the intro's first frames are under the image, loading-screen.md
+/// section 7). The world is drawn under the opaque loading image (which
+/// brings it to the GPU and warms it up, section 2 step 4) but not under
+/// the intro, whose black background hides it (our choice, to save GPU
+/// time).
+fn compose(
+    mut scene: Scene,
+    intro: &Intro,
+    overlay: Option<&Overlay>,
+    ctx: &mut Ctx,
+) -> io::Result<Scene> {
+    if let Some(world) = &mut scene.world {
+        world.covered = intro.player.is_some() && overlay.is_none();
+    }
+    intro.draw(ctx, &mut scene)?;
+    if let Some(o) = overlay {
+        o.screen.draw(ctx, &mut scene)?;
+    }
+    Ok(scene)
+}
+
 /// Presses that skip a movie item this frame (startup.md section 6.5):
 /// each press of a key bound to quit (a gamepad's east button arrives as
 /// Escape); a touch counts as one (our design for touch).
@@ -441,17 +463,12 @@ impl App {
                 level,
                 overlay,
                 intro,
-            }) => {
-                // The world is drawn under the opaque loading image and
-                // intro (which also brings it to the GPU while covered); the
-                // intro's first frames are under the image (section 7).
-                let mut scene = level.scene(resolution, self.clock);
-                intro.draw(&mut ctx, &mut scene)?;
-                if let Some(o) = overlay {
-                    o.screen.draw(&mut ctx, &mut scene)?;
-                }
-                Ok(scene)
-            }
+            }) => compose(
+                level.scene(resolution, self.clock),
+                intro,
+                overlay.as_ref(),
+                &mut ctx,
+            ),
         }
     }
 
@@ -672,6 +689,53 @@ mod tests {
         assert!(audio.playing.is_empty(), "its sounds ended");
         assert!(!intro.frame(&data, 4000, Some(1), 0, &mut audio));
         assert!(intro.player.is_none());
+    }
+
+    #[test]
+    fn a_level_frame_is_level_then_intro_then_loading_image() {
+        let tree = fixture::tree();
+        let data = fixture::data(&tree);
+        let mut audio = FakeAudio::default();
+        let mut intro = Intro::default();
+        let overlay = Overlay::new(LoadingScreen::default(), &mut audio);
+        let mut assets = fixture::assets();
+        let resolution = Resolution::new(1024, 768);
+        let mut ctx = Ctx {
+            tree: &tree,
+            data: &data,
+            assets: &mut assets,
+            resolution,
+            clock_ms: 16,
+        };
+        let level = || {
+            let mut s = Scene::new(resolution);
+            s.sprites
+                .push(splash_scene(resolution, (1, 1)).sprites[0].clone());
+            s.sprites[0].layer = "level".into();
+            s
+        };
+        let layers = |s: &Scene| {
+            let mut l: Vec<String> = s.sprites.iter().map(|s| s.layer.clone()).collect();
+            l.dedup();
+            l
+        };
+        let s = compose(level(), &intro, Some(&overlay), &mut ctx).unwrap();
+        assert_eq!(layers(&s)[..2], ["level", "loading background"]);
+        // The intro starts under the last two overlay frames.
+        intro.frame(&data, 0, Some(2), 0, &mut audio);
+        let s = compose(level(), &intro, Some(&overlay), &mut ctx).unwrap();
+        assert_eq!(
+            layers(&s)[..5],
+            [
+                "level",
+                "background",
+                "video",
+                "loading background",
+                "loading strip"
+            ]
+        );
+        let s = compose(level(), &intro, None, &mut ctx).unwrap();
+        assert_eq!(layers(&s), ["level", "background", "video"]);
     }
 
     #[test]

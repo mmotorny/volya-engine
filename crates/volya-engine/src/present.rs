@@ -338,7 +338,11 @@ impl Presenter {
         let to_ui = |[x, y]: [f32; 2]| [(x + 0.5) * UI_WIDTH / w, (y + 0.5) * UI_HEIGHT / h];
         let mut list = DrawList::default();
         match &scene.world {
-            Some(world) => list.world = self.world_frame(renderer, tree, world),
+            Some(world) => {
+                // Uploaded (or kept) even when covered, so it is ready.
+                let frame = self.world_frame(renderer, tree, world);
+                list.world = frame.filter(|_| !world.covered);
+            }
             None => self.world = None,
         }
         for sprite in &scene.sprites {
