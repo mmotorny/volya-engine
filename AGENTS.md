@@ -1,6 +1,7 @@
 # AGENTS.md
 
 - Agent-first project: act autonomously, including commits and pushes. Block on a human only for expensive or hard-to-undo operations.
+- When the user asks a question or for an opinion, answer and propose; implement after their go.
 - Track all work in GitHub issues; reference the issue in commits.
 - Don't use harness memory systems; record durable knowledge here.
 - Every instruction here must earn its tokens: cut prose that doesn't change agent behavior.
@@ -11,7 +12,9 @@
 - Never open pull requests, issues or comments on other people's repositories; forks under the user's account are fine.
 - Never add URL query parameters (`?…`) without the user's explicit approval.
 - Follow docs/architecture.md; update it when a decision changes.
+- Verify how browsers and platforms behave (storage, caching, APIs) before relying on it, and say whether it's measured, documented, or believed. Before inventing a mechanism or a design, check how it's commonly done.
 - No shell scripts: project tasks live in `tools/xtask` (`cargo xtask <task>`).
+- Run shell pipelines with `set -o pipefail`.
 - Live at head: run `cargo xtask update` when starting a chunk of work; fix what it breaks rather than pinning.
 - Run `cargo xtask check` (fast static checks) before every push; it must pass.
 - Iteration speed first: before reporting done, run the cheapest tests that prove the change: unit tests, then one browser suite on one target (`cargo xtask e2e <target> <suite>`). The full `cargo xtask e2e` only for changes crossing page and engine, or on demand; never block normal interaction on it.
@@ -19,7 +22,8 @@
 - Work by the priorities in docs/roadmap.md; record roadmap decisions there, not here.
 - Exactly two browser targets; don't add more. Desktop Chrome (headless, the only one that draws) is the default. The iOS Simulator (no WebGPU: WebKit refuses its GPU) only for changes to the page, input, audio or storage. WebKit drawing is checked by the user's use of the deployed app; a drawing bug Chrome can't reproduce gets a one-off look in desktop Safari, not a target. The user is not QA: never ask them to run tests or checks; real-device feedback comes only from them using the deployed app.
 - Any UI change updates the UX audit board (`platforms/web/static/ux-audit/states.js`, deployed at `/volya-engine/ux-audit/`) in the same commit: every state of the app's own interface is on it, sections and states in the order a user meets them. The user audits designs there instead of clicking through the app.
-- Interface text says only what applies to the device, browser and state it is shown in: branch in code (`static/install.js`: `platform()`, `installed()`, `chromium()`), never parenthetical conditionals ("on iPhone: …") or text for other platforms. Audit every new string against each board frame.
+- Interface text is plain, concise and professional, and says only what's known and what applies where it's shown: no text meant for another device or browser, no guessed causes or unbacked advice, no facts that vary with the user's game data (sizes, versions) unless read from that data.
+- Interface design: no information the user doesn't need there, including repeats of what they just saw; tell them about blockers before they invest effort; never interrupt them on their behalf (e.g. reloading the app), offer the action instead.
 - Web build must keep functional parity between mobile and desktop browsers; every feature ships with both input paths (touch and keyboard/mouse/gamepad) and is tested on both.
 - Dependencies must be permissively licensed (no copyleft, including LGPL/MPL).
 - Never use or derive from leaked X-Ray source or its forks (e.g. OpenXRay).
