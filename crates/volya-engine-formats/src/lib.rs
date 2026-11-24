@@ -11,6 +11,7 @@ pub mod cp1251;
 pub mod db;
 pub mod dds;
 pub mod env_mod;
+pub mod game_graph;
 pub mod level;
 pub mod level_geom;
 pub mod ltx;

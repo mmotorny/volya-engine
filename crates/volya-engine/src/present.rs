@@ -8,10 +8,15 @@
 
 use std::collections::HashMap;
 use std::io::Cursor;
+use std::sync::Arc;
 
 use crate::core::vfs::{self, Vfs};
-use crate::render::{DrawList, Quad, Rect, Renderer, Texture, VideoTexture};
-use crate::scene::{Scene, TextureId};
+use crate::level::LevelWorld;
+use crate::render::world::multiply;
+use crate::render::{
+    DrawList, Quad, Rect, Renderer, Texture, VideoTexture, World, WorldDraw, WorldFrame,
+};
+use crate::scene::{Scene, TextureId, WorldScene};
 use volya_engine_formats::dds::Dds;
 use volya_engine_formats::pe::Rgba;
 use volya_engine_formats::ui::{UI_HEIGHT, UI_WIDTH};
@@ -81,6 +86,9 @@ pub struct Presenter {
     images: HashMap<String, Option<Texture>>,
     videos: HashMap<String, Player>,
     splash: Option<Texture>,
+    /// The static world on the GPU and the level it was made from; `None`
+    /// inside when the upload failed (reported once).
+    world: Option<(Arc<LevelWorld>, Option<World>)>,
     errors: Vec<String>,
 }
 
@@ -167,11 +175,58 @@ impl Presenter {
         Some(player.texture.texture().clone())
     }
 
+    /// The GPU world of the current level, once uploaded.
+    pub fn world(&self) -> Option<&World> {
+        self.world.as_ref().and_then(|(_, w)| w.as_ref())
+    }
+
+    /// The GPU copy of `scene`'s static world, uploaded on first sight.
+    fn world_frame(&mut self, renderer: &mut Renderer, scene: &WorldScene) -> Option<WorldFrame> {
+        let current = self
+            .world
+            .as_ref()
+            .is_some_and(|(level, _)| Arc::ptr_eq(level, &scene.world));
+        if !current {
+            // The previous world's buffers go before the next's arrive.
+            self.world = None;
+            let uploaded = match scene.world.take_geometry() {
+                Some(geom) => {
+                    let draws: Vec<WorldDraw> = scene
+                        .world
+                        .draw_items
+                        .iter()
+                        .map(|d| WorldDraw {
+                            vertex_buffer: d.vertex_buffer,
+                            first_vertex: d.first_vertex,
+                            index_buffer: d.index_buffer,
+                            first_index: d.first_index,
+                            index_count: 3 * d.triangle_count,
+                            transform: d.transform,
+                        })
+                        .collect();
+                    renderer.create_world(&geom, &draws)
+                }
+                None => Err("geometry already uploaded elsewhere".into()),
+            };
+            let world = uploaded
+                .map_err(|e| self.errors.push(format!("{}: {e}", scene.world.dir)))
+                .ok();
+            self.world = Some((scene.world.clone(), world));
+        }
+        let world = self.world.as_ref()?.1.clone()?;
+        Some(WorldFrame {
+            world,
+            view_projection: multiply(&scene.view, &scene.projection),
+            // No sky yet: the fog colour shows (our choice).
+            clear: scene.environment.fog_rgb(),
+        })
+    }
+
     /// The draw list of `scene` at engine clock `clock`. Videos no longer in
-    /// the scene are released.
+    /// the scene are released, and so is a world no longer shown.
     pub fn draw_list(
         &mut self,
-        renderer: &Renderer,
+        renderer: &mut Renderer,
         tree: &dyn Vfs,
         scene: &Scene,
         clock: u64,
@@ -184,6 +239,10 @@ impl Presenter {
         // units with the renderer's half-pixel centres.
         let to_ui = |[x, y]: [f32; 2]| [(x + 0.5) * UI_WIDTH / w, (y + 0.5) * UI_HEIGHT / h];
         let mut list = DrawList::default();
+        match &scene.world {
+            Some(world) => list.world = self.world_frame(renderer, world),
+            None => self.world = None,
+        }
         for sprite in &scene.sprites {
             let texture = match &sprite.texture {
                 TextureId::Image { path } => self.image(renderer, tree, path),

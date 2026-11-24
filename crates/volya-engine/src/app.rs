@@ -19,6 +19,7 @@ use crate::core::input::{Action, Control, Input};
 use crate::core::vfs::{self, Vfs};
 use crate::data::{Assets, GameData};
 use crate::draw::Ctx;
+use crate::level::{LevelScreen, LevelState};
 use crate::scene::{Scene, Sprite, TextureId};
 use crate::startup::{Startup, StartupState};
 use crate::title_menu::{TitleMenu, TitleMenuState};
@@ -65,6 +66,13 @@ pub fn splash_scene(resolution: Resolution, size: (u32, u32)) -> Scene {
 enum Phase {
     Startup(Startup),
     Menu(TitleMenu),
+    /// A new game's level loads on the next update, after one frame of
+    /// this plain loading state (our own; the game's loading screen is
+    /// level-loading.md section 2.4).
+    Loading {
+        difficulty: &'static str,
+    },
+    Level(Box<LevelScreen>),
 }
 
 pub struct App {
@@ -76,15 +84,41 @@ pub struct App {
     clock: u64,
     /// `None` until the first update.
     phase: Option<Phase>,
+    /// Why the latest new game failed to load.
+    error: Option<String>,
+    /// Platform time of the update that loaded the level, until the next.
+    loaded_at: Option<f64>,
+    /// Platform milliseconds from the update that loaded the level to the
+    /// next one: loading and the first frame drawn.
+    load_ms: Option<f64>,
 }
 
 /// What the engine interface reports.
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "phase", rename_all = "snake_case")]
 pub enum AppState {
-    Loaded { clock: u64 },
-    Startup { clock: u64, startup: StartupState },
-    Menu { clock: u64, menu: TitleMenuState },
+    Loaded {
+        clock: u64,
+    },
+    Startup {
+        clock: u64,
+        startup: StartupState,
+    },
+    Menu {
+        clock: u64,
+        menu: TitleMenuState,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    Loading {
+        clock: u64,
+        difficulty: &'static str,
+    },
+    Level {
+        clock: u64,
+        level: LevelState,
+        load_ms: Option<f64>,
+    },
 }
 
 impl App {
@@ -96,6 +130,9 @@ impl App {
             origin: None,
             clock: 0,
             phase: None,
+            error: None,
+            loaded_at: None,
+            load_ms: None,
         })
     }
 
@@ -109,7 +146,17 @@ impl App {
     }
 
     /// One frame at platform time `time_ms` with this frame's `input`.
-    pub fn update(&mut self, time_ms: f64, input: &Input, audio: &mut dyn AudioOut) {
+    /// Loading a level reads from `tree`.
+    pub fn update(
+        &mut self,
+        tree: &dyn Vfs,
+        time_ms: f64,
+        input: &Input,
+        audio: &mut dyn AudioOut,
+    ) {
+        if let Some(at) = self.loaded_at.take() {
+            self.load_ms = Some(time_ms - at);
+        }
         let origin = *self.origin.get_or_insert(time_ms);
         self.clock = self.clock.max((time_ms - origin).max(0.0) as u64);
         let now = self.clock;
@@ -136,7 +183,31 @@ impl App {
                     *phase = Phase::Menu(TitleMenu::open(data, now, input, audio));
                 }
             }
-            Phase::Menu(menu) => menu.update(data, now, input, audio),
+            Phase::Menu(menu) => {
+                menu.update(data, now, input, audio);
+                if let Some(difficulty) = menu.take_new_game() {
+                    menu.stop(audio);
+                    *phase = Phase::Loading { difficulty };
+                }
+            }
+            Phase::Loading { .. } => match LevelScreen::load(tree, data, now) {
+                Ok(level) => {
+                    self.error = None;
+                    self.loaded_at = Some(time_ms);
+                    *phase = Phase::Level(Box::new(level));
+                }
+                Err(e) => {
+                    // Back to the menu, saying why (our choice).
+                    self.error = Some(e.to_string());
+                    *phase = Phase::Menu(TitleMenu::open(data, now, input, audio));
+                }
+            },
+            Phase::Level(level) => {
+                level.update(now, input);
+                if level.back_requested() {
+                    *phase = Phase::Menu(TitleMenu::open(data, now, input, audio));
+                }
+            }
         }
     }
 
@@ -160,6 +231,8 @@ impl App {
             None => Ok(Scene::new(resolution)),
             Some(Phase::Startup(s)) => s.scene(&mut ctx),
             Some(Phase::Menu(m)) => m.scene(&mut ctx),
+            Some(Phase::Loading { .. }) => Ok(Scene::new(resolution)),
+            Some(Phase::Level(l)) => Ok(l.scene(resolution, self.clock)),
         }
     }
 
@@ -172,7 +245,7 @@ impl App {
         match &mut self.phase {
             Some(Phase::Startup(s)) => s.stop(audio),
             Some(Phase::Menu(m)) => m.stop(audio),
-            None => {}
+            Some(Phase::Loading { .. } | Phase::Level(_)) | None => {}
         }
     }
 
@@ -187,6 +260,13 @@ impl App {
             Some(Phase::Menu(m)) => AppState::Menu {
                 clock,
                 menu: m.state(&self.data, clock),
+                error: self.error.clone(),
+            },
+            Some(Phase::Loading { difficulty }) => AppState::Loading { clock, difficulty },
+            Some(Phase::Level(l)) => AppState::Level {
+                clock,
+                level: l.state(),
+                load_ms: self.load_ms,
             },
         }
     }
@@ -214,11 +294,11 @@ mod tests {
         let (mut input, mut audio) = (Input::new(), FakeAudio::default());
         assert!(matches!(app.state(), AppState::Loaded { .. }));
         // The clock starts at the first update.
-        app.update(5000.0, &input, &mut audio);
+        app.update(&tree, 5000.0, &input, &mut audio);
         assert!(matches!(app.state(), AppState::Startup { clock: 0, .. }));
         // Keys other than quit do nothing; a tap counts as quit.
         press(&mut input, Key::Enter);
-        app.update(5100.0, &input, &mut audio);
+        app.update(&tree, 5100.0, &input, &mut audio);
         input.end_frame();
         let AppState::Startup { startup, .. } = app.state() else {
             panic!()
@@ -229,7 +309,7 @@ mod tests {
             phase: TouchPhase::Start,
             time: 0.0,
         });
-        app.update(5200.0, &input, &mut audio);
+        app.update(&tree, 5200.0, &input, &mut audio);
         input.end_frame();
         let AppState::Startup { startup, .. } = app.state() else {
             panic!()
@@ -237,18 +317,52 @@ mod tests {
         assert_eq!((startup.item, startup.skipped), (1, 1));
         // Escape ends the last item: the menu shows in the same frame.
         press(&mut input, Key::Escape);
-        app.update(5300.0, &input, &mut audio);
+        app.update(&tree, 5300.0, &input, &mut audio);
         input.end_frame();
-        let AppState::Menu { clock, menu } = app.state() else {
+        let AppState::Menu { clock, menu, .. } = app.state() else {
             panic!()
         };
         assert_eq!((clock, menu.list, menu.music.starts), (300, "menu_main", 1));
         let scene = app.scene(&tree, Resolution::new(1024, 768)).unwrap();
         assert!(scene.first("background").is_some());
         press(&mut input, Key::Q);
-        app.update(5400.0, &input, &mut audio);
+        app.update(&tree, 5400.0, &input, &mut audio);
         assert!(app.quit_requested());
         assert!(audio.playing.is_empty());
+    }
+
+    #[test]
+    fn a_difficulty_loads_the_new_game_or_returns_saying_why() {
+        let tree = fixture::tree();
+        let mut app = App::new(fixture::data(&tree)).unwrap();
+        app.assets = fixture::assets();
+        let (mut input, mut audio) = (Input::new(), FakeAudio::default());
+        app.update(&tree, 0.0, &input, &mut audio);
+        for _ in 0..5 {
+            press(&mut input, Key::Escape);
+            app.update(&tree, 10.0, &input, &mut audio);
+            input.end_frame();
+        }
+        assert!(matches!(app.state(), AppState::Menu { .. }));
+        // New game, then the first difficulty.
+        for t in [20.0, 30.0] {
+            press(&mut input, Key::Enter);
+            app.update(&tree, t, &input, &mut audio);
+            input.end_frame();
+        }
+        let AppState::Loading { difficulty, .. } = app.state() else {
+            panic!("not loading: {:?}", app.state())
+        };
+        assert_eq!(difficulty, "gd_novice");
+        assert!(audio.playing.is_empty(), "the menu music stopped");
+        assert!(app.scene(&tree, Resolution::new(64, 48)).unwrap().sprites.is_empty());
+        // The fixture has no spawn file: back to the menu, saying why.
+        app.update(&tree, 40.0, &input, &mut audio);
+        let AppState::Menu { error, menu, .. } = app.state() else {
+            panic!("not in the menu: {:?}", app.state())
+        };
+        assert!(error.unwrap().contains("spawn"), "error");
+        assert_eq!(menu.list, "menu_main");
     }
 
     #[test]

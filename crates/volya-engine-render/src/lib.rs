@@ -17,12 +17,14 @@
 mod capture;
 mod texture;
 mod video;
+pub mod world;
 
 use std::ops::Range;
 
 pub use texture::TextureError;
 pub use video::VideoTexture;
 pub use wgpu;
+pub use world::{World, WorldDraw, WorldFrame};
 
 /// Size of the UI space in units.
 pub const UI_WIDTH: f32 = 1024.0;
@@ -109,9 +111,11 @@ impl Quad {
     }
 }
 
-/// What to draw in one frame, back to front.
+/// What to draw in one frame: the 3D world, if any, then the quads over
+/// it, back to front.
 #[derive(Clone, Debug, Default)]
 pub struct DrawList {
+    pub world: Option<WorldFrame>,
     pub quads: Vec<Quad>,
 }
 
@@ -133,6 +137,10 @@ pub struct Renderer {
     movie_sampler: wgpu::Sampler,
     vertices: wgpu::Buffer,
     video: video::Converter,
+    /// Created with the first world.
+    world_pipelines: Option<world::WorldPipelines>,
+    /// The world pass's depth buffer, sized to the latest target.
+    depth: Option<wgpu::Texture>,
 }
 
 impl Renderer {
@@ -235,6 +243,8 @@ impl Renderer {
             movie_sampler,
             vertices: vertex_buffer(device, 64),
             video: video::Converter::new(device),
+            world_pipelines: None,
+            depth: None,
         }
     }
 
@@ -312,12 +322,22 @@ impl Renderer {
         }
     }
 
-    /// Draws `list` into `target` (cleared to `clear` first) and submits.
-    pub fn render(&mut self, target: &wgpu::TextureView, list: &DrawList, clear: wgpu::Color) {
+    /// Draws `list` into `target` (cleared to `clear` first, or to the
+    /// world's clear colour when it has a world) and submits.
+    pub fn render(&mut self, target: &wgpu::Texture, list: &DrawList, clear: wgpu::Color) {
         let batches = self.upload_vertices(list);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("ui") });
+        let target_size = (target.width(), target.height());
+        let target = &target.create_view(&Default::default());
+        if let Some(frame) = &list.world {
+            self.encode_world(&mut encoder, target, target_size, frame);
+        }
+        let load = match list.world {
+            Some(_) => wgpu::LoadOp::Load,
+            None => wgpu::LoadOp::Clear(clear),
+        };
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("ui"),
@@ -326,7 +346,7 @@ impl Renderer {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(clear),
+                        load,
                         store: wgpu::StoreOp::Store,
                     },
                 })],

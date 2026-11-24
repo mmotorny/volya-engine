@@ -15,6 +15,8 @@ import { assert, assertEqual, skip } from "./harness.js";
 // game-data test), plus the splash's executable and the default user
 // settings.
 const ONLY = [
+  // The levels (a New Game's level, docs/behavior/level-loading.md).
+  "gamedata.db0",
   "gamedata.db5",
   "gamedata.db6",
   "gamedata.db7",
@@ -279,6 +281,34 @@ export const tests = {
     key("Escape");
     await sleep(100);
     assertEqual((await state()).phase, "menu", "phase");
+  },
+
+  "a difficulty starts a new game: the level's start view is drawn": async () => {
+    needsGame();
+    pointer("pointermove", row(0));
+    await until((s) => s.menu.selected === 0, "item 0");
+    key("Enter");
+    await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
+    key("Enter");
+    const s = await until((s) => s.phase === "level" && s.load_ms != null, "the level", 60000);
+    assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
+    let note = `loaded and first frame in ${s.load_ms.toFixed(0)} ms`;
+    if (gpu.state === "ready") {
+      const { rgba } = await volya.call("debug_capture", { width: 256, height: 192 });
+      const colours = new Set();
+      for (let i = 0; i < rgba.length; i += 4) colours.add((rgba[i] << 16) | (rgba[i + 1] << 8) | rgba[i + 2]);
+      assert(colours.size > 200, `${colours.size} colours`);
+      note += `, ${colours.size} colours`;
+    }
+    const stats = await volya.call("level_stats");
+    return `${note}; ${JSON.stringify(stats)}`;
+  },
+
+  "Escape returns from the level to the title menu": async () => {
+    needsGame();
+    key("Escape");
+    const s = await until((s) => s.phase === "menu", "the menu");
+    assertEqual(s.menu.list, "menu_main", "list");
   },
 
   "Q quits to the app's own interface": async () => {

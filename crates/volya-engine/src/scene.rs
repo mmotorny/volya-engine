@@ -12,7 +12,13 @@
 //! 0 … *W* − 1 spans −0.5 … *W* − 0.5 and a glyph cell at integer *x*₀ spans
 //! *x*₀ … *x*₀ + *w* with half-texel texture coordinates.
 
+use std::sync::Arc;
+
 use serde::Serialize;
+
+use crate::core::camera::{Mat4, Vec3};
+use crate::core::weather::Environment;
+use crate::level::LevelWorld;
 use volya_engine_formats::text::layout::GlyphQuad;
 use volya_engine_formats::ui::picture::{Quad, RotatedQuad};
 use volya_engine_formats::ui::{Color, Resolution};
@@ -124,11 +130,40 @@ impl Sprite {
     }
 }
 
-/// Everything drawn in one frame, back to front, over black.
+/// The 3D world of a frame: a level's static world seen from a camera.
+#[derive(Clone, Debug, Serialize)]
+pub struct WorldScene {
+    #[serde(skip)]
+    pub world: Arc<LevelWorld>,
+    pub eye: Vec3,
+    /// Row-vector convention (start-position.md sections 6, 7).
+    pub view: Mat4,
+    pub projection: Mat4,
+    #[serde(skip)]
+    pub environment: Environment,
+    /// Seconds since the level was shown (the shaders' `time`).
+    pub time: f32,
+}
+
+impl PartialEq for WorldScene {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.world, &other.world)
+            && self.eye == other.eye
+            && self.view == other.view
+            && self.projection == other.projection
+            && self.environment == other.environment
+            && self.time == other.time
+    }
+}
+
+/// Everything drawn in one frame: the world, if any, then the sprites over
+/// it, back to front, over black.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Scene {
     #[serde(serialize_with = "resolution")]
     pub resolution: Resolution,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub world: Option<WorldScene>,
     pub sprites: Vec<Sprite>,
 }
 
@@ -140,6 +175,7 @@ impl Scene {
     pub fn new(resolution: Resolution) -> Self {
         Self {
             resolution,
+            world: None,
             sprites: Vec::new(),
         }
     }

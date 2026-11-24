@@ -12,3 +12,4 @@ pub mod level;
 pub mod text;
 pub mod ui;
 pub mod vfs;
+pub mod weather;

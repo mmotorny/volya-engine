@@ -112,6 +112,9 @@ pub struct TitleMenu {
     seed: u32,
     activations: Vec<Activation>,
     quit: bool,
+    /// The difficulty of a new game the player chose
+    /// (level-loading.md section 2.1), until the app takes it.
+    new_game: Option<&'static str>,
 }
 
 impl TitleMenu {
@@ -135,6 +138,7 @@ impl TitleMenu {
             seed: 1,
             activations: Vec::new(),
             quit: false,
+            new_game: None,
         };
         // The cursor already over a row does not select it; only entering
         // a row does (the spec does not cover the cursor's position at
@@ -244,7 +248,15 @@ impl TitleMenu {
                 "switches back to the main page"
             }
             "btn_novice" | "btn_stalker" | "btn_veteran" | "btn_master" => {
-                "sets the difficulty and starts a new game (not implemented)"
+                // The console commands' `g_game_difficulty` value
+                // (level-loading.md section 2.1).
+                self.new_game = Some(match item.as_str() {
+                    "btn_novice" => "gd_novice",
+                    "btn_stalker" => "gd_stalker",
+                    "btn_veteran" => "gd_veteran",
+                    _ => "gd_master",
+                });
+                "sets the difficulty and starts a new game"
             }
             "btn_load" => "opens the load-game screen (not implemented)",
             "btn_lastsave" => "loads the last save (not implemented)",
@@ -267,7 +279,7 @@ impl TitleMenu {
     /// the bar, the wheels and the music.
     pub fn update(&mut self, data: &GameData, now: u64, input: &Input, audio: &mut dyn AudioOut) {
         for action in input.actions() {
-            if self.quit {
+            if self.quit || self.new_game.is_some() {
                 break;
             }
             match *action {
@@ -379,6 +391,11 @@ impl TitleMenu {
 
     pub fn quit_requested(&self) -> bool {
         self.quit
+    }
+
+    /// The difficulty of the new game the player started, once.
+    pub fn take_new_game(&mut self) -> Option<&'static str> {
+        self.new_game.take()
     }
 
     /// The video device was reset at `resolution` (section 8): the wheels
@@ -730,6 +747,9 @@ mod tests {
         let s = r.state(3000);
         assert_eq!(s.activations.last().unwrap().item, "btn_stalker");
         assert_eq!(s.list, "menu_new_game");
+        // The app takes the new game; the menu reacts again after.
+        assert_eq!(r.menu.take_new_game(), Some("gd_stalker"));
+        assert_eq!(r.menu.take_new_game(), None);
         // Escape returns to the main page; there it does nothing.
         r.key(Key::Escape, 4000);
         assert_eq!(

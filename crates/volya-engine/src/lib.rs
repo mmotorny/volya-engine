@@ -19,6 +19,7 @@ pub mod data;
 mod draw;
 #[cfg(test)]
 mod fixture;
+pub mod level;
 pub mod present;
 pub mod scene;
 pub mod startup;
