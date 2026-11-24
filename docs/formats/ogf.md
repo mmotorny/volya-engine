@@ -10,8 +10,9 @@ Related specifications: chunk container `chunks.md` (scoping specification `leve
 vertex/index buffers and vertex decoding `level-geom.md`; `level.md`.
 
 Conventions as in `level.md`: little-endian; `u8`/`u16`/`u32`/`f32`; `float3` = 3 × f32; a chunk is
-`u32 id`, `u32 size`, payload, found by id (chunk order inside a visual has no meaning: the shipped data
-stores chunk 1 last or next to last). "VB *k*" / "IB *k*" = vertex buffer / index buffer *k* of
+`u32 id`, `u32 size`, payload, found by id (chunk order inside a visual has no meaning; in the shipped
+data chunk 1 is stored last in meshes, progressive meshes and tree instances except type 11 (order 21, 12,
+1, 20), and first in groups and billboard groups (orders 1, 10 and 1, 10, 11)). "VB *k*" / "IB *k*" = vertex buffer / index buffer *k* of
 `level.geom` chunk 9 / chunk 10 (`level-geom.md`); "window record *k*" = record *k* of `level.geom`
 chunk 11.
 
