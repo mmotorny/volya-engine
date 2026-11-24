@@ -166,6 +166,9 @@ pub struct WorldScene {
     pub time: f32,
     #[serde(skip)]
     pub sky: Option<crate::render::sky::SkyFrame>,
+    /// Hidden under an opaque picture: kept on the GPU but not drawn.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub covered: bool,
 }
 
 impl PartialEq for WorldScene {
@@ -179,6 +182,7 @@ impl PartialEq for WorldScene {
             && self.environment == other.environment
             && self.time == other.time
             && self.sky == other.sky
+            && self.covered == other.covered
     }
 }
 

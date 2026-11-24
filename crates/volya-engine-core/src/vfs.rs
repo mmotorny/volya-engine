@@ -9,6 +9,7 @@
 //! separator, `.` and empty segments are ignored, and `..` is rejected.
 
 pub mod db;
+pub mod read_ahead;
 
 use std::fs;
 use std::io::{self, Read, Seek, SeekFrom};

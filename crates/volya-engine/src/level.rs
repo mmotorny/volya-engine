@@ -101,7 +101,8 @@ pub struct LevelScreen {
     time_of_day: f32,
     modifiers: Vec<EnvModifier>,
     environment: Environment,
-    /// When the level was shown first (engine clock, ms).
+    /// When the level was shown first (engine clock, ms), later by the
+    /// time paused since.
     shown: u64,
     /// The previous update (engine clock, ms).
     last: u64,
@@ -501,6 +502,15 @@ impl LevelScreen {
             Environment::blend(a, b, t, &self.modifiers, self.camera.eye, VIS_DISTANCE);
     }
 
+    /// A frame at `now` with game time paused (a movie item's
+    /// `pause_state`, level-loading.md section 2.3): nothing moves and the
+    /// shaders' clock stands still (our reading: which clock the shaders
+    /// use is not established, ogf.md section 10); input is not read.
+    pub fn paused(&mut self, now: u64) {
+        self.shown += now.saturating_sub(self.last);
+        self.last = now;
+    }
+
     /// One frame at `now` with this frame's `input`.
     pub fn update(&mut self, now: u64, input: &Input) {
         // Frames longer than MAX_STEP (the first after loading) move the
@@ -548,6 +558,7 @@ impl LevelScreen {
         let (d, _) = self.camera.angles.direction_up();
         let mut scene = Scene::new(resolution);
         scene.world = Some(WorldScene {
+            covered: false,
             world: self.world.clone(),
             eye: self.camera.eye,
             forward: d,

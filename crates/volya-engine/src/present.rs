@@ -7,9 +7,9 @@
 //! splash picture.
 
 use std::collections::HashMap;
-use std::io::Cursor;
 use std::sync::Arc;
 
+use crate::core::vfs::read_ahead::ReadAhead;
 use crate::core::vfs::{self, Vfs};
 use crate::level::LevelWorld;
 use crate::render::sky::SkyTextures;
@@ -27,7 +27,10 @@ use volya_engine_formats::video::TheoraVideo;
 const MAX_DECODE: u32 = 4;
 
 struct Player {
-    video: TheoraVideo<Cursor<Vec<u8>>>,
+    /// Decodes from `source`, which is topped up from the tree before each
+    /// call, so only a window of the file is in memory.
+    video: TheoraVideo<ReadAhead>,
+    source: ReadAhead,
     texture: VideoTexture,
     fps: f64,
     start_ms: u64,
@@ -42,7 +45,7 @@ struct Player {
 
 impl Player {
     /// Decodes up to the frame due at `clock`.
-    fn advance(&mut self, renderer: &Renderer, clock: u64) -> Result<(), String> {
+    fn advance(&mut self, renderer: &Renderer, tree: &dyn Vfs, clock: u64) -> Result<(), String> {
         let elapsed = clock.saturating_sub(self.start_ms) as f64;
         let due = (elapsed * self.fps / 1000.0).floor() as u64;
         let mut budget = MAX_DECODE;
@@ -61,6 +64,7 @@ impl Player {
             }
             while self.decoded <= index && budget > 0 {
                 budget -= 1;
+                self.source.top_up(tree).map_err(|e| e.to_string())?;
                 match self.video.next_frame().map_err(|e| e.to_string())? {
                     Some(frame) => {
                         renderer.update_video(&mut self.texture, &frame);
@@ -151,15 +155,16 @@ impl Presenter {
             self.videos.remove(path);
         }
         if !self.videos.contains_key(path) {
-            let opened = vfs::read(tree, path)
-                .and_then(|bytes| TheoraVideo::open(Cursor::new(bytes)))
+            let opened = ReadAhead::open(tree, path)
+                .and_then(|source| Ok((TheoraVideo::open(source.clone())?, source)))
                 .map_err(|e| e.to_string());
             match opened {
-                Ok(video) => {
+                Ok((video, source)) => {
                     let info = video.info().clone();
                     let player = Player {
                         texture: renderer.create_video_texture(info.width, info.height),
                         video,
+                        source,
                         fps: f64::from(info.fps_numerator) / f64::from(info.fps_denominator.max(1)),
                         start_ms,
                         looping,
@@ -176,7 +181,7 @@ impl Presenter {
             }
         }
         let player = self.videos.get_mut(path).expect("player inserted");
-        if let Err(e) = player.advance(renderer, clock) {
+        if let Err(e) = player.advance(renderer, tree, clock) {
             self.errors.push(format!("{path}: {e}"));
             self.videos.remove(path);
             return None;
@@ -333,7 +338,11 @@ impl Presenter {
         let to_ui = |[x, y]: [f32; 2]| [(x + 0.5) * UI_WIDTH / w, (y + 0.5) * UI_HEIGHT / h];
         let mut list = DrawList::default();
         match &scene.world {
-            Some(world) => list.world = self.world_frame(renderer, tree, world),
+            Some(world) => {
+                // Uploaded (or kept) even when covered, so it is ready.
+                let frame = self.world_frame(renderer, tree, world);
+                list.world = frame.filter(|_| !world.covered);
+            }
             None => self.world = None,
         }
         for sprite in &scene.sprites {
