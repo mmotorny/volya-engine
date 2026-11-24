@@ -196,13 +196,20 @@ export const tests = {
     ]);
   },
 
-  "other keys and browser shortcuts are not forwarded": async () => {
+  "keys outside the game's key list and browser shortcuts are not forwarded": async () => {
     const before = await state();
-    key("keydown", "KeyZ");
-    key("keyup", "KeyZ");
+    // IntlBackslash (the key left of Z on ISO keyboards) has no name in the
+    // game's key list (options-screens.md section 11.2).
+    key("keydown", "IntlBackslash");
+    key("keyup", "IntlBackslash");
     key("keydown", "KeyQ", { metaKey: true });
     const { actions } = await since(before);
     assertEqual(actions.length, 0, "actions");
+    // A key of the list is forwarded, so it can be bound.
+    key("keydown", "KeyZ");
+    key("keyup", "KeyZ");
+    const after = await since(before);
+    assertEqual(summary(after.actions.filter((a) => a.action !== "cursor")), ["press z", "release z"], "KeyZ");
   },
 
   "Control with a key is the browser's outside a level": async () => {

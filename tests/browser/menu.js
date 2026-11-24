@@ -466,20 +466,23 @@ export const tests = {
         }),
       );
     const start = (await state()).level;
-    // The stick pushed fully up runs forward (along the view the keyboard
-    // test turned to); a second finger drags right to look.
+    // The stick pulled fully down runs back the way the keyboard test came
+    // (clear for its whole run, 0.8 m or more), held until the player has
+    // gone half a metre from where this test started, however long the
+    // frames take; a second finger then drags right to look.
     const move = controls.querySelector(".touch-move");
     const look = controls.querySelector(".touch-look");
     const [mx, my] = centre(move);
+    const from = (s) => Math.hypot(s.level.player.position[0] - start.player.position[0], s.level.player.position[2] - start.player.position[2]);
     touchOn(move, "pointerdown", 31, [mx, my]);
-    touchOn(move, "pointermove", 31, [mx, my - 80]);
+    touchOn(move, "pointermove", 31, [mx, my + 80]);
     let s = await until((s) => s.level.player.moving && s.level.player.running, "the stick to run");
-    await sleep(200);
-    touchOn(move, "pointerup", 31, [mx, my - 80]);
+    s = await until((s) => from(s) > 0.5, "the stick to run half a metre", 4000);
+    touchOn(move, "pointerup", 31, [mx, my + 80]);
     s = await until((s) => !s.level.player.moving, "the player to stop");
     const p = s.level.player;
-    const moved = Math.hypot(p.position[0] - start.player.position[0], p.position[2] - start.player.position[2]);
-    assert(moved > 0.3, `moved ${moved.toFixed(2)} m: ${JSON.stringify(p)}`);
+    const moved = from(s);
+    assert(moved > 0.5, `moved ${moved.toFixed(2)} m: ${JSON.stringify(p)}`);
     const [lx, ly] = centre(look);
     touchOn(look, "pointerdown", 32, [lx, ly]);
     touchOn(look, "pointermove", 32, [lx + 100, ly + 20]);

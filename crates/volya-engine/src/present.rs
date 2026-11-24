@@ -12,7 +12,7 @@ use std::sync::Arc;
 use crate::core::vfs::read_ahead::ReadAhead;
 use crate::core::vfs::{self, Vfs};
 use crate::level::LevelWorld;
-use crate::render::sky::SkyTextures;
+use crate::render::sky::{SkySection, SkyTextures};
 use crate::render::world::{Surface, TreeLight, WorldLight};
 use crate::render::{
     DrawList, Quad, Rect, Renderer, Texture, VideoTexture, World, WorldDraw, WorldFrame,
@@ -301,17 +301,22 @@ impl Presenter {
                 })
                 .clone()
         };
-        let [a, b] = level.sky.cubes.each_ref().map(&mut texture);
-        let [c, d] = level.sky.clouds.each_ref().map(&mut texture);
-        let sun = level.sun.as_ref().and_then(|s| texture(&s.texture));
-        let sky = match (a, b, c, d) {
-            (Some(a), Some(b), Some(c), Some(d)) => Some(SkyTextures {
-                cubes: [a, b],
-                clouds: [c, d],
-                sun,
-            }),
-            _ => None,
-        };
+        // Any section's cube map or cloud texture failing to upload: no sky
+        // at any hour (our choice; reported like every texture). A sun
+        // texture failing leaves only that section without its sun.
+        let sky = level
+            .sky
+            .sections
+            .iter()
+            .map(|s| {
+                Some(SkySection {
+                    cube: texture(&s.cube)?,
+                    clouds: texture(&s.clouds)?,
+                    sun: s.sun.as_ref().and_then(&mut texture),
+                })
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(|sections| SkyTextures { sections });
         let world = renderer.create_world(&geom, &surfaces, &draws, sky.as_ref())?;
         if let Some(e) = world.sky_error() {
             self.errors.push(format!("{}: sky: {e}", level.dir));

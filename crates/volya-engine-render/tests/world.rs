@@ -12,7 +12,7 @@
 use volya_engine_formats::dds::Dds;
 use volya_engine_formats::dds::build::{PixelFormat, file};
 use volya_engine_formats::level_geom::{Layout, LevelGeom, VertexBuffer};
-use volya_engine_render::sky::{SkyFrame, SkyTextures};
+use volya_engine_render::sky::{SkyFrame, SkySection, SkyTextures};
 use volya_engine_render::world::{Blend, Mat4, Program, Surface, TreeLight, WorldLight};
 use volya_engine_render::{DrawList, Renderer, Texture, WorldDraw, WorldFrame, wgpu};
 
@@ -273,21 +273,28 @@ fn sky_shows_where_the_world_does_not() {
     let mut r = renderer();
     // Cube maps of rgb (100, 50, 26) and (200, 100, 52), blended half and
     // half (t byte 127 ≈ 0.5), times 2 × 127/255 (sky.md 5.4).
+    // Section 1 blends with section 2; section 0 is not bound. Sections 0
+    // and 1 have a white sun texture, section 2 a black one.
+    let white = dds_texture(&r, false, [255; 4]);
+    let black = dds_texture(&r, false, [0, 0, 0, 255]);
+    let section = |cube, sun: &Texture| SkySection {
+        cube,
+        clouds: white.clone(),
+        sun: Some(sun.clone()),
+    };
     let sky = SkyTextures {
-        cubes: [
-            dds_texture(&r, true, [26, 50, 100, 255]),
-            dds_texture(&r, true, [52, 100, 200, 255]),
+        sections: vec![
+            section(dds_texture(&r, true, [0, 0, 0, 255]), &white),
+            section(dds_texture(&r, true, [26, 50, 100, 255]), &white),
+            section(dds_texture(&r, true, [52, 100, 200, 255]), &black),
         ],
-        clouds: [
-            dds_texture(&r, false, [255; 4]),
-            dds_texture(&r, false, [255; 4]),
-        ],
-        sun: Some(dds_texture(&r, false, [255; 4])),
     };
     let g = geom(Layout::VertexLit, 0, 0, [0; 8]);
     let world = r.create_world(&g, &[], &[], Some(&sky)).unwrap();
     assert_eq!(world.sky_error(), None);
     let sky_frame = SkyFrame {
+        section: 1,
+        sun_section: 2,
         color: [127, 127, 127, 127],
         rotation: 0.0,
         clouds: Some(([37, 217, 176, 9], [113, 84, 80, 127])),
@@ -305,15 +312,42 @@ fn sky_shows_where_the_world_does_not() {
     let blend = |a: f32, b: f32| (2.0 * 127.0 / 255.0 * (a + (b - a) * 127.0 / 255.0)) as u8;
     let expected = [blend(100.0, 200.0), blend(50.0, 100.0), blend(26.0, 52.0)];
     assert_near(
-        centre(&mut r, frame(world, Some(sky_frame))),
+        centre(&mut r, frame(world.clone(), Some(sky_frame))),
         expected,
         "sky",
     );
-    // A 1-face texture is not a cube map: no sky, said why.
-    let flat = SkyTextures {
-        cubes: [sky.clouds[0].clone(), sky.clouds[1].clone()],
-        ..sky
+    // A sprite over the centre (added: source alpha / one, sky.md 7.5):
+    // section 2's black sun adds nothing, section 1's white one saturates.
+    // Axes X = r = +x, Y = r × F = −y (sky.md 7.4).
+    let over = SkyFrame {
+        sun: Some((
+            [
+                [1.0, 1.0, 10.0],
+                [1.0, -1.0, 10.0],
+                [-1.0, 1.0, 10.0],
+                [-1.0, -1.0, 10.0],
+            ],
+            [255, 255, 255, 255],
+        )),
+        ..sky_frame
     };
+    assert_near(
+        centre(&mut r, frame(world.clone(), Some(over))),
+        expected,
+        "section 2's sun",
+    );
+    let white_sun = SkyFrame {
+        sun_section: 1,
+        ..over
+    };
+    assert_near(
+        centre(&mut r, frame(world, Some(white_sun))),
+        [255; 3],
+        "section 1's sun",
+    );
+    // A 1-face texture is not a cube map: no sky, said why.
+    let mut flat = sky.clone();
+    flat.sections[0].cube = white.clone();
     let world = r.create_world(&g, &[], &[], Some(&flat)).unwrap();
     assert!(world.sky_error().is_some());
 }

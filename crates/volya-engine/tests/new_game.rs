@@ -189,6 +189,60 @@ fn new_game_start_view_from_game_data() {
         "{cleared} cleared sky pixels"
     );
     assert!(sky.len() > 50, "{} sky colours", sky.len());
+
+    // The game clock (sav.md sections 5, 15): 205 real seconds at ×10
+    // later it is 06:04:10, and the sky blends the next hour's pair.
+    assert_eq!(screen.state().game_time, 63_471_533_400_000);
+    screen.update(205_000, &Input::new());
+    let state = screen.state();
+    assert_eq!(state.game_time, 63_471_533_400_000 + 2_050_000);
+    assert_eq!(state.time_of_day, 6.0 * 3600.0 + 250.0);
+    assert_eq!(
+        state.weather_sections,
+        ["default_weather_06", "default_weather_07"]
+    );
+    assert!((state.weather_t - 250.0 / 3600.0).abs() < 1e-6);
+    screen.set_camera(
+        [view[0], view[1], view[2]],
+        volya_engine::core::camera::Angles {
+            yaw: view[3],
+            pitch: view[4],
+            roll: 0.0,
+        },
+    );
+    let mut scene = screen.scene(SIZE, 205_000);
+    let mut top_rows = |scene: &volya_engine::scene::Scene| {
+        let list = presenter.draw_list(&mut gpu, &tree, scene, 205_000);
+        let pixels =
+            pollster::block_on(gpu.capture(&list, SIZE.width, SIZE.height, wgpu::Color::BLACK))
+                .unwrap();
+        pixels[..(SIZE.width * 16 * 4) as usize].to_vec()
+    };
+    let at_six = top_rows(&scene);
+    // The frame binds the cube maps of [default_weather_06] and _07 (index
+    // 6 of the cycle in time order, from 00:00) ...
+    let sky = scene.world.as_mut().unwrap().sky.as_mut().unwrap();
+    assert_eq!(sky.section, 6);
+    // ... and the same frame with the 05:30 pair bound instead (sky colour,
+    // blend weight and view unchanged) shows another sky, so the drawn sky
+    // comes from the next hour's cube maps.
+    sky.section = 5;
+    let with_five = top_rows(&scene);
+    let differing = at_six
+        .chunks(4)
+        .zip(with_five.chunks(4))
+        .filter(|(a, b)| a.iter().zip(b.iter()).any(|(x, y)| x.abs_diff(*y) > 8))
+        .count();
+    eprintln!(
+        "06:04: {differing} of {} sky pixels differ",
+        at_six.len() / 4
+    );
+    assert!(
+        differing * 2 > at_six.len() / 4,
+        "06:04: {differing} of {} sky pixels differ from the 05:00 pair's",
+        at_six.len() / 4
+    );
+    assert!(presenter.take_errors().is_empty());
 }
 
 /// Records the master gains set; plays nothing.

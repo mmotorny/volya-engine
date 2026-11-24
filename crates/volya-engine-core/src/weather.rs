@@ -163,6 +163,13 @@ impl Weather {
     /// weight `t = clamp((τ − τ_A)/(τ_B − τ_A), 0, 1)`, times wrapping at a
     /// day (static-shading.md 9.2).
     pub fn bracket(&self, tau: f32) -> (&WeatherSection, &WeatherSection, f32) {
+        let (a, b, t) = self.bracket_indices(tau);
+        (&self.sections[a].1, &self.sections[b].1, t)
+    }
+
+    /// [`Weather::bracket`] as indices into `sections`: B is always the
+    /// section after A, wrapping.
+    pub fn bracket_indices(&self, tau: f32) -> (usize, usize, f32) {
         let tau = tau.rem_euclid(DAY);
         let n = self.sections.len();
         // The last section at or before τ (wrapping to the last of the day).
@@ -180,7 +187,7 @@ impl Weather {
         } else {
             0.0
         };
-        (&self.sections[a].1, &self.sections[b].1, t)
+        (a, b, t)
     }
 }
 

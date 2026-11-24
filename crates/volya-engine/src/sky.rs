@@ -8,7 +8,7 @@
 
 use crate::core::camera::Vec3;
 use crate::core::config::{Config, value};
-use crate::core::weather::{Environment, WeatherSection};
+use crate::core::weather::Environment;
 use crate::render::sky::SkyFrame;
 
 /// The sun sprite of a lens-flare section (section 7.2).
@@ -18,31 +18,82 @@ pub struct SunSource {
     pub texture: String,
     pub radius: f32,
     pub ignore_color: bool,
-    /// λ↑ = 1/(`blend_rise_time` + 10⁻⁷), rise per second.
-    pub rise: f32,
 }
 
-impl SunSource {
-    /// The sun sprite of section `name` of `config`, `None` when it has no
-    /// `source` (or the section does not exist).
-    pub fn read(config: &Config, name: &str) -> Option<Self> {
-        let section = config.section(name)?;
-        let get = |key: &str| section.get(key).flatten().unwrap_or("");
-        if !value::bool(get("source")) {
-            return None;
+/// A lens-flare section (section 7.2): its fade rates and its sun sprite.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Flares {
+    /// The section's name; empty for none.
+    pub name: String,
+    /// λ↑ = 1/(`blend_rise_time` + 10⁻⁷), rise per second.
+    pub rise: f32,
+    /// λ↓ = 1/(`blend_down_time` + 10⁻⁷), fall per second.
+    pub down: f32,
+    /// `None` when it has no `source`.
+    pub sun: Option<SunSource>,
+}
+
+impl Flares {
+    /// Section `name` of `config`. A section that does not exist (or an
+    /// empty name) has no sun and reads its times as 0 (the specs do not say
+    /// what its rates are; our choice).
+    pub fn read(config: &Config, name: &str) -> Self {
+        let section = config.section(name);
+        let get = |key: &str| section.and_then(|s| s.get(key).flatten()).unwrap_or("");
+        let rate = |key: &str| 1.0 / (value::float(get(key)).max(0.0) + 1e-7);
+        Self {
+            name: name.to_owned(),
+            rise: rate("blend_rise_time"),
+            down: rate("blend_down_time"),
+            sun: value::bool(get("source")).then(|| SunSource {
+                texture: crate::core::weather::texture_name(get("source_texture")),
+                radius: value::float(get("source_radius")),
+                ignore_color: value::bool(get("source_ignore_color")),
+            }),
         }
-        Some(Self {
-            texture: crate::core::weather::texture_name(get("source_texture")),
-            radius: value::float(get("source_radius")),
-            ignore_color: value::bool(get("source_ignore_color")),
-            rise: 1.0 / (value::float(get("blend_rise_time")).max(0.0) + 1e-7),
-        })
     }
 }
 
-/// The lens-flare section in effect: A's if t < 0.5, else B's (3.3).
-pub fn flares_section<'a>(a: &'a WeatherSection, b: &'a WeatherSection, t: f32) -> &'a str {
-    if t < 0.5 { &a.flares } else { &b.flares }
+/// The section whose lens-flare section is in effect: A's if t < 0.5, else
+/// B's (3.3).
+pub fn flares_in_effect(a: usize, b: usize, t: f32) -> usize {
+    if t < 0.5 { a } else { b }
+}
+
+/// The fade a of the sun, flares and gradient (section 7.3), and the
+/// lens-flare section taken, as the index of the hourly section that names
+/// it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SunFade {
+    pub fade: f32,
+    /// `None` before the level's first frame.
+    pub taken: Option<usize>,
+}
+
+impl SunFade {
+    /// One frame of `dt` real seconds with game time `k_t` times faster than
+    /// real time, the lens-flare section of hourly section `in_effect` in
+    /// effect; `flares` per hourly section. On the first frame the section is
+    /// taken and a stays 0; then a rises by λ↑·dt·k_t up to 1. When the
+    /// section in effect (by name) changes, a falls by the old section's
+    /// λ↓·dt·k_t; on the frame it reaches 0 the new section is taken, and a
+    /// rises from the next frame (our choice).
+    pub fn frame(&mut self, in_effect: usize, flares: &[Flares], dt: f32, k_t: f32) {
+        let Some(taken) = self.taken else {
+            self.taken = Some(in_effect);
+            return;
+        };
+        if flares[taken].name == flares[in_effect].name {
+            self.taken = Some(in_effect);
+            self.fade = (self.fade + flares[in_effect].rise * dt * k_t).min(1.0);
+        } else {
+            self.fade -= flares[taken].down * dt * k_t;
+            if self.fade <= 0.0 {
+                self.fade = 0.0;
+                self.taken = Some(in_effect);
+            }
+        }
+    }
 }
 
 /// The clamped byte of x: clamp(trunc(255·x), 0, 255).
@@ -83,22 +134,27 @@ pub struct SkyCamera {
     pub right: Vec3,
 }
 
-/// The sky's values for `environment` seen from `camera`, the sun sprite
-/// from `sun` faded by `fade` (0 … 1).
+/// The sky's values for `environment`, blended from hourly section
+/// `section` and the one after it, seen from `camera`; the sun sprite from
+/// `sun` (with the hourly section whose lens-flare section it is) faded by
+/// `fade` (0 … 1).
 pub fn sky_frame(
     environment: &Environment,
+    section: usize,
     camera: &SkyCamera,
-    sun: Option<&SunSource>,
+    sun: Option<(usize, &SunSource)>,
     fade: f32,
 ) -> SkyFrame {
     let e = environment;
     let clouds = (e.clouds_opacity.abs() >= 0.001)
         .then(|| (cloud_directions(), bytes(e.clouds_color, e.clouds_opacity)));
     SkyFrame {
+        section,
+        sun_section: sun.map_or(section, |(s, _)| s),
         color: bytes(e.sky_color, e.t),
         rotation: e.sky_rotation,
         clouds,
-        sun: sun.and_then(|s| sun_sprite(e, camera, s, fade)),
+        sun: sun.and_then(|(_, s)| sun_sprite(e, camera, s, fade)),
     }
 }
 
@@ -172,14 +228,14 @@ mod tests {
             texture: "fx\\fx_sun_rise".into(),
             radius: 0.03,
             ignore_color: false,
-            rise: 1.0 / 300.0,
         };
         let start = SkyCamera {
             eye: [-246.7263, -23.26326, -134.43387],
             forward: [0.984797, -0.0043165, 0.173655],
             right: [0.173657, 0.0, -0.984806],
         };
-        let f = sky_frame(&environment(), &start, Some(&sun), 0.0);
+        let f = sky_frame(&environment(), 4, &start, Some((5, &sun)), 0.0);
+        assert_eq!((f.section, f.sun_section), (4, 5));
         assert_eq!(f.color, [173, 177, 181, 127]);
         assert_eq!(f.clouds, Some(([37, 217, 176, 9], [113, 84, 80, 127])));
         assert_eq!(f.sun, None, "the sun is behind the player");
@@ -194,7 +250,7 @@ mod tests {
                 r.map(|c| c / l)
             },
         };
-        let (corners, color) = sky_frame(&environment(), &toward, Some(&sun), 1.0)
+        let (corners, color) = sky_frame(&environment(), 4, &toward, Some((4, &sun)), 1.0)
             .sun
             .unwrap();
         assert_eq!(color, [193, 96, 26, 255]);
@@ -208,6 +264,46 @@ mod tests {
         assert!((side - 2.0 * half).abs() < 1e-3);
         let mut e = environment();
         e.clouds_opacity = 0.0005;
-        assert_eq!(sky_frame(&e, &start, None, 0.0).clouds, None);
+        assert_eq!(sky_frame(&e, 4, &start, None, 0.0).clouds, None);
+    }
+
+    #[test]
+    fn the_fade_rises_then_falls_for_a_new_section() {
+        let config = volya_engine_formats::ltx::parse(
+            b"[rise]\nsource = on\nsource_texture = fx\\fx_sun_rise.tga\nsource_radius = 0.03\n\
+              blend_rise_time = 300\nblend_down_time = 100\n\
+              [day]\nblend_rise_time = 200\nblend_down_time = 200\n",
+        )
+        .unwrap();
+        let flares = [
+            Flares::read(&config, "rise"),
+            Flares::read(&config, "rise"),
+            Flares::read(&config, "day"),
+        ];
+        assert_eq!(flares[0].sun.as_ref().unwrap().texture, "fx\\fx_sun_rise");
+        assert!(flares[2].sun.is_none());
+        let mut a = SunFade::default();
+        // First frame: taken, still 0.
+        a.frame(0, &flares, 1.0, 10.0);
+        assert_eq!((a.fade, a.taken), (0.0, Some(0)));
+        // 30 real seconds at k_t = 10 fade in [rise] (300 s).
+        for _ in 0..15 {
+            a.frame(0, &flares, 1.0, 10.0);
+        }
+        assert!((a.fade - 0.5).abs() < 1e-5);
+        // The same section named by the next hour: still rising.
+        a.frame(1, &flares, 1.0, 10.0);
+        assert!((a.fade - 1.0 / 30.0 * 16.0).abs() < 1e-5);
+        assert_eq!(a.taken, Some(1));
+        // Another section: falls at [rise]'s λ↓ (100 s), then takes [day].
+        a.frame(2, &flares, 1.0, 10.0);
+        assert!((a.fade - (16.0 / 30.0 - 0.1)).abs() < 1e-5);
+        assert_eq!(a.taken, Some(1));
+        for _ in 0..5 {
+            a.frame(2, &flares, 1.0, 10.0);
+        }
+        assert_eq!((a.fade, a.taken), (0.0, Some(2)));
+        a.frame(2, &flares, 1.0, 10.0);
+        assert!((a.fade - 0.05).abs() < 1e-5);
     }
 }
