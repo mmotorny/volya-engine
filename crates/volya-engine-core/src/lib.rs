@@ -8,6 +8,7 @@ pub mod audio;
 pub mod camera;
 pub mod config;
 pub mod input;
+pub mod level;
 pub mod text;
 pub mod ui;
 pub mod vfs;

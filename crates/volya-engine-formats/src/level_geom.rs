@@ -474,12 +474,12 @@ impl LevelGeom {
         let header = get(HEADER_CHUNK)?;
         let vertices = get(VERTEX_BUFFERS_CHUNK)?;
         let indices = get(INDEX_BUFFERS_CHUNK)?;
-        let windows = get(PROGRESSIVE_MESHES_CHUNK)?;
+        let progressive = get(PROGRESSIVE_MESHES_CHUNK)?;
         Self::from_chunks(
             header.as_deref(),
             vertices.as_deref(),
             indices.as_deref(),
-            windows.as_deref(),
+            progressive.as_deref(),
         )
     }
 
@@ -487,7 +487,7 @@ impl LevelGeom {
         header: Option<&[u8]>,
         vertices: Option<&[u8]>,
         indices: Option<&[u8]>,
-        windows: Option<&[u8]>,
+        progressive: Option<&[u8]>,
     ) -> io::Result<Self> {
         let header = header.and_then(|h| {
             let h: [u8; 4] = h.try_into().ok()?;
@@ -501,7 +501,7 @@ impl LevelGeom {
             header,
             vertex_buffers: parse_vertex_buffers(vertices)?,
             index_buffers: indices.map_or(Ok(Vec::new()), parse_index_buffers)?,
-            progressive_meshes: windows.map_or(Ok(Vec::new()), parse_progressive_meshes)?,
+            progressive_meshes: progressive.map_or(Ok(Vec::new()), parse_progressive_meshes)?,
         })
     }
 }
@@ -643,7 +643,7 @@ fn read_window(b: &mut Bytes) -> io::Result<ProgressiveMesh> {
 
 /// A visual's reference into the geometry buffers (section 7): six `u32` as
 /// stored in the visual's data.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct GeometryRef {
     pub vertex_buffer: u32,
     pub first_vertex: u32,
@@ -880,13 +880,13 @@ mod tests {
         indices.extend(3u32.to_le_bytes());
         indices.extend(shorts(&[0, 1, 2]));
         indices.extend(0u32.to_le_bytes());
-        let mut windows = 1u32.to_le_bytes().to_vec();
-        windows.extend([0; 16]);
-        windows.extend(2u32.to_le_bytes());
-        windows.extend(3u32.to_le_bytes());
-        windows.extend(shorts(&[1, 3]));
-        windows.extend(0u32.to_le_bytes());
-        windows.extend(shorts(&[0, 0]));
+        let mut progressive = 1u32.to_le_bytes().to_vec();
+        progressive.extend([0; 16]);
+        progressive.extend(2u32.to_le_bytes());
+        progressive.extend(3u32.to_le_bytes());
+        progressive.extend(shorts(&[1, 3]));
+        progressive.extend(0u32.to_le_bytes());
+        progressive.extend(shorts(&[0, 0]));
         let mut file = Vec::new();
         if header {
             file.extend(chunk(HEADER_CHUNK, &[14, 0, 18, 0]));
@@ -895,7 +895,7 @@ mod tests {
         if with_indices {
             file.extend(chunk(INDEX_BUFFERS_CHUNK, &indices));
         }
-        file.extend(chunk(PROGRESSIVE_MESHES_CHUNK, &windows));
+        file.extend(chunk(PROGRESSIVE_MESHES_CHUNK, &progressive));
         file
     }
 
