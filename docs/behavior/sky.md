@@ -225,12 +225,25 @@ the ray from the centre along d with the cube, at the point p = d / max(|d.x|, |
 | lower sides (−1 ≤ p.y < 0, on a side face) | (p.x, −1 + 0.01·p.y, p.z) |
 | bottom face (p.y = −1) | (p.x, −1.01, p.z) |
 
-Consequences: above the eye's horizontal plane the whole cube map is shown compressed into the upper half
-(the horizon itself shows the edge between the cube's side faces and its −y face, direction
-(p.x, −1, p.z)); below the horizon every
-direction shows practically the same texels as the horizon (the −y face near its border). The cube map is
-sampled with the public Direct3D cube-map face selection and face coordinates; the DDS faces are in the
-public DDS order (+x, −x, +y, −y, +z, −z).
+Consequences, for viewing directions d (model space):
+
+- Above the horizon, directions that hit an upper side quad show that side face of the cube map (|c.x| or
+  |c.z| = 1) with its full height stretched: c.y runs from −1 at the horizon to +1 where the side quad meets
+  the top face (45° elevation on a face's centre line, 35.3° toward the box's vertical edges). On a face's
+  centre line c.y = 0, the middle of the side face, is shown at 26.6° elevation (p.y = 0.5). Steeper
+  directions hit the top face and show the +y face exactly as a direct cube-map lookup would (c = p).
+- At the horizon itself (p.y = 0) the lookup is (p.x, −1, p.z): the edge between a side face and the −y
+  face, i.e. the border texels of the −y face.
+- Below the horizon, directions that hit a lower side quad (shallower than the bottom face's boundary:
+  |d.y| < max(|d.x|, |d.z|)) get c.y between −1 and −1.01 with |c.x| or |c.z| = 1, i.e. practically the
+  same −y border texels as the horizon directly above them.
+- Directions that hit the bottom face (|d.y| ≥ max(|d.x|, |d.z|)) get c = (p.x, −1.01, p.z) with p.x, p.z
+  spanning [−1, 1]: the whole −y face, its face coordinates scaled by 1/1.01 (e.g. d = (0, −1, 0.2) shows
+  a texel near the centre of the −y face). This part of the box must be drawn; it is not a continuation
+  of the horizon colour.
+
+The cube map is sampled with the public Direct3D cube-map face selection and face coordinates; the DDS
+faces are in the public DDS order (+x, −x, +y, −y, +z, −z).
 
 ## 6. Clouds
 
