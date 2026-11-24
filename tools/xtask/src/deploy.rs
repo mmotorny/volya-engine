@@ -94,7 +94,9 @@ pub fn run_deploy() -> Result {
     }
     let url = output(&mut cmd("gh", &["api", &pages, "--jq", ".html_url"]))?;
     let url = url.trim();
-    step(&format!("Published {sha}; waiting for GitHub Pages to serve it"));
+    step(&format!(
+        "Published {sha}; waiting for GitHub Pages to serve it"
+    ));
     wait_live(url, sha)?;
     step(&format!("Deployed {sha}: live at {url}"));
     Ok(())
@@ -108,7 +110,11 @@ fn wait_live(url: &str, sha: &str) -> Result {
     let marker = format!(r#"<meta name="build" content="{sha}">"#);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(600);
     while std::time::Instant::now() < deadline {
-        let body = output(&mut cmd("curl", &["-sf", "-H", "Cache-Control: no-cache", &page])).unwrap_or_default();
+        let body = output(&mut cmd(
+            "curl",
+            &["-sf", "-H", "Cache-Control: no-cache", &page],
+        ))
+        .unwrap_or_default();
         if body.contains(&marker) {
             return Ok(());
         }
