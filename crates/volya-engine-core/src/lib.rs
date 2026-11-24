@@ -5,6 +5,7 @@
 //! platform API; see docs/architecture.md (Crates).
 
 pub mod audio;
+pub mod camera;
 pub mod config;
 pub mod input;
 pub mod text;

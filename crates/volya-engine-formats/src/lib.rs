@@ -6,11 +6,15 @@
 //! docs/formats/.
 
 pub mod audio;
+pub mod chunks;
 pub mod cp1251;
 pub mod db;
 pub mod dds;
+pub mod env_mod;
+pub mod level_geom;
 pub mod ltx;
 pub mod pe;
+pub mod spawn;
 pub mod text;
 pub mod ui;
 pub mod video;
