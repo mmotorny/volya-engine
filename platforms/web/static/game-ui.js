@@ -286,15 +286,15 @@ function showImport(status, snapshot = null) {
       ? element(
           "div",
           { className: "callout warning" },
-          element("strong", { textContent: "Add to your Home Screen first" }),
+          element("strong", { textContent: "Install the app first" }),
           element(
             "span",
             {},
-            "The Home Screen app keeps the game and has its own storage, so import there: tap ",
+            "So the browser can't delete the game later, install Volya Engine before importing: tap ",
             shareIcon(),
-            " in the browser, then ",
+            ", then ",
             element("strong", { textContent: "Add to Home Screen" }),
-            ", and open Volya Engine from your Home Screen.",
+            ", and import from the app on your Home Screen.",
           ),
         )
       : null;
@@ -497,11 +497,11 @@ function keepHelp() {
       element(
         "p",
         {},
-        "To keep it, add Volya Engine to your Home Screen: tap ",
+        "So the browser can't delete it, install Volya Engine: tap ",
         shareIcon(),
-        " in the browser, then ",
+        ", then ",
         element("strong", { textContent: "Add to Home Screen" }),
-        ". Then import the game in the Home Screen app: it has its own storage.",
+        ", and import the game again from the app on your Home Screen.",
       ),
     ];
   }
