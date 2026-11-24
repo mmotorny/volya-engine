@@ -17,7 +17,7 @@ use volya_engine_devserver::{BASE, Server};
 
 use super::{Profile, Result, cmd, output, root, run as run_cmd, step, web};
 
-const SUITES: &[&str] = &["smoke", "platform", "import", "audio", "render"];
+const SUITES: &[&str] = &["smoke", "platform", "import", "audio", "render", "input"];
 const TARGETS: &[&str] = &["chrome", "iphone"];
 const REPORT_TIMEOUT: Duration = Duration::from_secs(60);
 
