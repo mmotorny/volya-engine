@@ -42,8 +42,10 @@ const call = async (op) => {
     case "status":
       return { gpu };
     case "cover":
-      if (state.cover === false) throw new Error("no art");
       return placeholderArt();
+    case "launch":
+      if (state.launchError) throw new Error(state.launchError);
+      return null;
     case "game_status":
       if (state.game instanceof Error) throw state.game;
       return state.game;
@@ -114,6 +116,11 @@ if (state.startError) {
   await start(call, updates);
   if (state.screen === "settings") await globalThis.volya.showSettings();
   if (state.snapshot) screens.showImport(state.game, state.snapshot);
+  // Play pressed, and the game failed to start.
+  if (state.launchError) {
+    document.querySelector("button.play").click();
+    await new Promise((resolve) => setTimeout(resolve));
+  }
 }
 document.title = `${state.name} · ${device.name}`;
 document.documentElement.dataset.ready = "true";

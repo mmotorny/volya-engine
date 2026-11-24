@@ -148,10 +148,45 @@ async function runImport({ exe, bin, only }, onProgress) {
   }
 }
 
-/** `snapshot` ({ done, total, path }) shows an import under way (UX page). */
+/**
+ * What went wrong with an import, for people: a title and what to do. The
+ * engine's messages are technical (they name formats and checksums).
+ */
+function importProblem(message) {
+  const again = "Choose both installer files again: the import continues where it stopped.";
+  if (message === "pick") {
+    return { title: "Pick both installer files", text: "Choose the setup_….exe and its setup_…-1.bin together." };
+  }
+  if (/^Inno Setup headers|no game archives|not an Inno/i.test(message)) {
+    return {
+      title: "These aren't the game's installer files",
+      text: "Volya Engine imports from the GOG offline installer of S.T.A.L.K.E.R.: Shadow of Chernobyl: its .exe and its -1.bin.",
+    };
+  }
+  const mismatch = message.match(/^(.*): MD5 mismatch/);
+  if (mismatch) {
+    return {
+      title: "The installer files are damaged",
+      text: `${mismatch[1]} doesn't match the installer's checksum. Download both files from GOG again, then choose them here.`,
+    };
+  }
+  if (message.startsWith("Not enough storage")) {
+    return { title: "Not enough storage", text: `${message.replace(/^Not enough storage:\s*/, "").replace(/^./, (c) => c.toUpperCase())} Free some space, then try again.` };
+  }
+  if (/^installer read/i.test(message)) {
+    return { title: "The installer files couldn't be read", text: again };
+  }
+  return { title: "The import failed", text: `The engine reported: ${message}. ${again}` };
+}
+
+/**
+ * `snapshot` shows a moment of an import on the UX page: under way
+ * ({ done, total, path }) or failed ({ done, total, error }).
+ */
 function showImport(status, snapshot = null) {
   const message = element("p", { className: "message", hidden: true });
   const progress = element("progress", { max: 1, value: 0, hidden: true });
+  const notice = element("div", { hidden: true });
   // Declaring the installer's types sends iOS straight to the Files picker
   // (no Photos or camera menu); both files stay selectable (checked in the
   // simulator with real taps, `cargo xtask sim`).
@@ -161,6 +196,23 @@ function showImport(status, snapshot = null) {
     message.textContent = text;
     message.hidden = !text;
   };
+  /** A warning (amber) or a problem (red): a title and what to do. */
+  const warn = ({ title, text }, kind = "problem") => {
+    notice.className = `callout ${kind}`;
+    notice.replaceChildren(element("strong", { textContent: title }), element("span", { textContent: text }));
+    notice.hidden = false;
+  };
+  /** A failed import: the bar stays where it stopped, with what happened. */
+  const fail = (error) => {
+    warn(importProblem(error));
+    choose.disabled = false;
+    choose.textContent = "Choose installer files";
+    if (progress.value > 0) say(message.textContent.replace(/ · .*$/, ""));
+    else {
+      progress.hidden = true;
+      say("");
+    }
+  };
   choose.addEventListener("click", () => input.click());
   input.addEventListener("change", async () => {
     const files = [...input.files];
@@ -168,9 +220,10 @@ function showImport(status, snapshot = null) {
     const bin = files.find((f) => f.name.toLowerCase().endsWith(".bin"));
     input.value = "";
     if (!exe || !bin) {
-      say("Pick both installer files: the .exe and the -1.bin.");
+      fail("pick");
       return;
     }
+    notice.hidden = true;
     choose.disabled = true;
     progress.hidden = false;
     say("Reading the installer…");
@@ -181,20 +234,20 @@ function showImport(status, snapshot = null) {
       });
       await refresh();
     } catch (error) {
-      say(`Import failed: ${sentence(error.message)}`);
-      choose.disabled = false;
-      progress.hidden = true;
+      fail(error.message);
     }
   });
   if (snapshot) {
     choose.disabled = true;
-    progress.hidden = false;
-    progress.value = snapshot.done / snapshot.total;
-    say(`${formatBytes(snapshot.done)} of ${formatBytes(snapshot.total)} · ${snapshot.path}`);
+    if (snapshot.total) {
+      progress.hidden = false;
+      progress.value = snapshot.done / snapshot.total;
+      say(`${formatBytes(snapshot.done)} of ${formatBytes(snapshot.total)}${snapshot.path ? ` · ${snapshot.path}` : ""}`);
+    }
+    if (snapshot.error) fail(snapshot.error);
   }
   // An interrupted import looks like one under way, stopped where it was,
   // with what happened and how to go on.
-  let resume = null;
   if (status.written > 0 && !snapshot) {
     choose.textContent = "Choose installer files to continue";
     if (status.total_bytes) {
@@ -204,14 +257,12 @@ function showImport(status, snapshot = null) {
     } else {
       say(`${formatBytes(status.bytes)} imported`);
     }
-    resume = element(
-      "div",
-      { className: "callout" },
-      element("strong", { textContent: "The import stopped before it finished" }),
-      element("span", {
-        textContent:
-          "This can happen when the app is closed or the device locks during an import. Choose both installer files again: it continues where it stopped.",
-      }),
+    warn(
+      {
+        title: "The import stopped before it finished",
+        text: "This can happen when the app is closed or the device locks during an import. Choose both installer files again: it continues where it stopped.",
+      },
+      "warning",
     );
   }
   show(
@@ -229,7 +280,7 @@ function showImport(status, snapshot = null) {
       ),
       progress,
       message,
-      resume,
+      notice,
       choose,
       input,
     ),
@@ -276,15 +327,21 @@ function showDamaged(error) {
 
 async function showHome(status) {
   const note = element("p", { className: "note", hidden: true });
+  const problem = element("div", { className: "callout problem", hidden: true });
   const launch = element("button", { className: "primary play", textContent: "Play" });
   launch.addEventListener("click", async () => {
-    note.hidden = true;
+    problem.hidden = true;
     try {
       await call("launch");
     } catch (error) {
-      note.className = "note error";
-      note.textContent = `The game could not start: ${sentence(error.message)}`;
-      note.hidden = false;
+      // Where damaged game files show: say what failed and the way out.
+      problem.replaceChildren(
+        element("strong", { textContent: "The game couldn't start" }),
+        element("span", {
+          textContent: `The engine reported: ${error.message}. If this keeps happening, the imported files may be damaged: remove the game in Settings, then import it again.`,
+        }),
+      );
+      problem.hidden = false;
     }
   });
   const ready = await graphics();
@@ -305,6 +362,7 @@ async function showHome(status) {
       element("p", { className: "game-title", textContent: "S.T.A.L.K.E.R.: Shadow of Chernobyl" }),
       launch,
       note,
+      problem,
     ),
     persisted ? null : storageWarning(),
     bottom(updateOffer(), settingsButton()),
@@ -316,7 +374,10 @@ let coverImage = null;
 async function cover() {
   try {
     coverImage ??= await call("cover");
-  } catch {
+  } catch (error) {
+    // Decoration only: a verified import always has it, so this is a bug or
+    // storage damaged since; Play reports real damage.
+    console.warn(`game art: ${error.message}`);
     return null;
   }
   if (!coverImage) return null;

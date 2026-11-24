@@ -347,6 +347,15 @@ button.danger.filled:hover:not(:disabled) {
   font-weight: 650;
 }
 
+.callout.problem {
+  border-left-color: var(--danger);
+  background: rgba(255, 155, 143, 0.1);
+}
+
+.callout.problem strong {
+  color: var(--danger);
+}
+
 .game-title {
   margin: 0 0 1rem;
   font-size: 1.125rem;

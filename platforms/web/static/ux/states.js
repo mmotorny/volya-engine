@@ -14,11 +14,25 @@ export const SECTIONS = [
     title: "Import",
     states: [
       { id: "import", name: "First start", game: fresh },
+      { id: "import-pick", name: "Picked the wrong files", game: fresh, snapshot: { error: "pick" } },
+      { id: "import-not-installer", name: "Not the game's installer", game: fresh, snapshot: { error: "Inno Setup headers: unexpected signature" } },
+      {
+        id: "import-storage",
+        name: "Not enough storage",
+        game: fresh,
+        snapshot: { error: "Not enough storage: the game needs 5.56 GiB, 3.10 GiB is available." },
+      },
       {
         id: "import-progress",
         name: "Importing",
         game: fresh,
         snapshot: { done: 2.31 * 2 ** 30, total: GAME, path: "gamedata.db5" },
+      },
+      {
+        id: "import-damaged",
+        name: "Damaged installer files",
+        game: fresh,
+        snapshot: { done: 2.31 * 2 ** 30, total: GAME, path: "gamedata.db5", error: "gamedata.db5: MD5 mismatch" },
       },
       { id: "import-resume", name: "Interrupted import", game: { ...fresh, written: 1210, bytes: 2.31 * 2 ** 30, total_bytes: GAME } },
     ],
@@ -27,9 +41,9 @@ export const SECTIONS = [
     title: "Home",
     states: [
       { id: "home", name: "Ready", game: imported },
-      { id: "home-no-art", name: "Ready, game art unreadable", game: imported, cover: false },
       { id: "home-not-kept", name: "Storage not kept (browser tab)", game: imported, persisted: false },
       { id: "home-no-webgpu", name: "No WebGPU", game: imported, gpu: false },
+      { id: "home-play-failed", name: "Play failed", game: imported, launchError: "level.geom: unexpected end of file" },
       { id: "home-updating", name: "Updating (automatic)", game: imported, updates: { status: "downloading", bytes: 1.9 * 2 ** 20 } },
       { id: "home-updated", name: "Just updated", game: imported, updates: { updatedFrom: "a1b2c3d" } },
       {
