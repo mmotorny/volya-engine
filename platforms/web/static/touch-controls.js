@@ -10,8 +10,9 @@
 // - the left half is a move stick: it appears where a thumb lands (a faint
 //   hint rests at the bottom left) and sends its reach in stick radii, past
 //   the rim too. Pushed forward past the rim it sprints, and a lock target
-//   shows above it: let go there, the sprint locks hands-free until the
-//   stick is touched again (the engine decides, SprintLock);
+//   shows above it (closer, or turned aside, where a thumb lands too high
+//   for it): let go there, the sprint locks hands-free until the stick is
+//   touched again (the engine decides, SprintLock);
 // - the right half looks: drags send their motion;
 // - Jump and Crouch (a toggle, shown on, and lower in the low crouch) at
 //   the bottom right act on their press; a drag begun on either then looks
@@ -43,6 +44,10 @@ const DRAG = 12;
 const SWIPE_CONE = Math.cos((35 * Math.PI) / 180);
 /** The controls fade after this long untouched, milliseconds (our choice). */
 const IDLE_MS = 4000;
+/** A look drag's speed is smoothed over about this long, milliseconds (our
+ * choice: steady under 120 Hz events and frame jitter, quick to follow a
+ * flick). */
+const LOOK_SMOOTH_MS = 75;
 
 const SVG = "http://www.w3.org/2000/svg";
 
@@ -105,14 +110,17 @@ function element(tag, className) {
   return node;
 }
 
-/** Whether a stick at `[x, y]` (stick radii) is past the rim, given whether
- * it was (the engine's hysteresis). */
-function pastRim([x, y], was) {
+/** Whether a stick at `[x, y]` (stick radii) is past the rim toward the
+ * lock target at `centre`, given whether it was (the engine's rule and
+ * hysteresis). */
+function pastRim([x, y], centre, was) {
   const length = Math.hypot(x, y);
-  return -y >= SPRINT_CONE * length && length >= (was ? SPRINT_RIM_EXIT : SPRINT_RIM);
+  const reach = Math.hypot(...centre);
+  const ahead = (x * centre[0] + y * centre[1]) / reach >= SPRINT_CONE * length;
+  return ahead && length >= (was ? SPRINT_RIM_EXIT : SPRINT_RIM);
 }
 
-const onTarget = ([x, y], reach) => Math.hypot(x, y + reach) <= LOCK_RADIUS;
+const onTarget = ([x, y], centre) => Math.hypot(x - centre[0], y - centre[1]) <= LOCK_RADIUS;
 
 /**
  * The controls; `send(message)` posts one input message to the engine.
@@ -131,7 +139,7 @@ export function createTouchControls(send, { touch = false, fade = true } = {}) {
   const target = element("div", "touch-lock");
   const knob = element("div", "touch-knob");
   const hint = glyph("touch-sprint-hint", SPRINT);
-  ring.append(drawing("touch-rim", 112, RIM), hint, target, knob);
+  ring.append(drawing("touch-rim", 112, RIM), target, knob, hint);
   move.append(ring);
   const look = element("div", "touch-look");
   const button = (name, label, art, sides) => {
@@ -191,73 +199,106 @@ export function createTouchControls(send, { touch = false, fade = true } = {}) {
   root.addEventListener("pointerdown", wake, { capture: true });
 
   // The move stick.
-  let stick = null; // { id, origin, value, past }
+  let stick = null; // { id, origin, centre, value, past }
   let sprinting = false;
-  let lockOrigin = null; // where the stick was let go into the lock
-  let lockReach = LOCK_REACH;
-  /** The lock target for a stick centred at `origin` (our choice): the
-   * default reach, or lower where its whole drop area wouldn't fit below
-   * the safe area's top edge (where Menu's top is), but past the rim. The
-   * engine is told, so it accepts a let-go where the target is drawn. */
-  const aim = (origin) => {
-    const room = (origin[1] - menu.offsetTop) / RADIUS - LOCK_RADIUS;
-    lockReach = Math.min(LOCK_REACH, Math.max(LOCK_MIN_REACH, room));
-    // Centres in the ring's frame: 56 px down its 112-pixel box, inside a
-    // 2-pixel border; the target is 44 px, the chevrons 22 px.
-    const centre = 56 - lockReach * RADIUS;
-    target.style.top = `${centre - 24}px`;
-    hint.style.top = `${(centre + 22) / 2 - 13}px`;
+  let letGo = null; // { origin, centre } of the latest let-go, for the lock
+  /**
+   * The lock target's centre (stick radii) for a stick centred at
+   * `origin` (our choice): straight ahead at the default reach, or closer,
+   * down to all of it past the rim, where its drop area wouldn't fit
+   * inside the safe area (whose top edge is Menu's top, its right and
+   * bottom edges the action buttons'); else turned clockwise, toward the
+   * screen's middle, in 15° steps up to 135°. The engine is told, so it
+   * accepts a let-go where the target is drawn.
+   */
+  const aim = ([x0, y0]) => {
+    const hit = LOCK_RADIUS * RADIUS;
+    const top = menu.offsetTop;
+    const right = actions.offsetLeft + actions.offsetWidth;
+    const bottom = actions.offsetTop + actions.offsetHeight;
+    const fits = ([x, y]) => y - hit >= top && y + hit <= bottom && x + hit <= right;
+    for (let degrees = 0; degrees <= 135; degrees += 15) {
+      const turn = (degrees * Math.PI) / 180;
+      const toward = [Math.sin(turn), -Math.cos(turn)];
+      for (let reach = LOCK_REACH; reach >= LOCK_MIN_REACH - 1e-6; reach -= 0.05) {
+        const centre = [toward[0] * reach, toward[1] * reach];
+        if (fits([x0 + centre[0] * RADIUS, y0 + centre[1] * RADIUS])) return centre;
+      }
+    }
+    const turn = (135 * Math.PI) / 180;
+    return [Math.sin(turn) * LOCK_MIN_REACH, -Math.cos(turn) * LOCK_MIN_REACH];
+  };
+  /** Draws the target and the sprint chevrons toward `centre`. */
+  const drawTarget = (centre) => {
+    // In the ring's frame: its centre 56 px into the 112-pixel box, inside
+    // a 2-pixel border; the target is 44 px, the chevrons 22 px.
+    const reach = Math.hypot(...centre);
+    const toward = [centre[0] / reach, centre[1] / reach];
+    const at = (r) => [56 + toward[0] * r - 2, 56 + toward[1] * r - 2];
+    const [tx, ty] = at(reach * RADIUS);
+    target.style.left = `${tx - 22}px`;
+    target.style.top = `${ty - 22}px`;
+    // Between the rim and the target's near edge.
+    const [hx, hy] = at((RADIUS + reach * RADIUS - 22) / 2);
+    hint.style.left = `${hx - 11}px`;
+    hint.style.top = `${hy - 11}px`;
+    hint.style.transform = `rotate(${Math.atan2(toward[0], -toward[1])}rad)`;
   };
   const place = (origin) => {
     ring.style.left = origin ? `${origin[0]}px` : "";
     ring.style.top = origin ? `${origin[1]}px` : "";
   };
-  /** The knob at `[x, y]` stick radii: on the rim at most, except forward
-   * past it, where it follows the thumb up to the lock target. */
-  const knobAt = ([x, y], past) => {
+  /** The knob at `[x, y]` stick radii: on the rim at most, except past it
+   * toward the target, where it follows the thumb up to the target. */
+  const knobAt = ([x, y], most) => {
     const length = Math.hypot(x, y);
-    const most = past ? lockReach : 1;
     if (length > most) [x, y] = [(x / length) * most, (y / length) * most];
     knob.style.transform = `translate(${x * RADIUS}px, ${y * RADIUS}px)`;
   };
-  const showStick = (origin, value, past = pastRim(value, false)) => {
-    if (!stick) aim(origin);
+  const showHeld = (origin, centre, value, past) => {
+    drawTarget(centre);
     place(origin);
     ring.classList.add("held");
     ring.classList.toggle("past", past);
-    ring.classList.toggle("on-target", past && onTarget(value, lockReach));
+    ring.classList.toggle("on-target", past && onTarget(value, centre));
     ring.classList.remove("locked");
-    knobAt(value, past);
+    knobAt(value, past ? Math.hypot(...centre) : 1);
   };
-  const showLocked = (origin) => {
-    if (origin !== lockOrigin && origin) aim(origin);
-    lockOrigin = origin;
+  const drawLocked = ({ origin, centre }) => {
+    drawTarget(centre);
     place(origin);
     ring.classList.remove("held", "past", "on-target");
     ring.classList.add("locked");
-    knobAt([0, -lockReach], true);
+    knobAt(centre, Infinity);
   };
   const restStick = () => {
-    lockOrigin = null;
     place(null);
     ring.classList.remove("held", "past", "on-target", "locked");
     knob.style.transform = "";
   };
-  const reach = (event) => {
+  const reachOf = (event) => {
     const [px, py] = local(root, event);
     const clamp = (v) => Math.max(-REACH, Math.min(REACH, v));
     return [clamp((px - stick.origin[0]) / RADIUS), clamp((py - stick.origin[1]) / RADIUS)];
   };
-  const endStick = (event) => {
-    if (stick?.id !== event.pointerId) return;
-    const value = reach(event);
-    const past = pastRim(value, stick.past);
+  /** The stick's touch ends: let go where it is, or, `cancelled` (by the
+   * system or the controls hiding), without acting there, so no lock. */
+  const endStick = (cancelled, value) => {
+    const { origin, centre, past } = stick;
+    stick = null;
+    if (cancelled) {
+      send(["stick_cancel"]);
+      letGo = null;
+      restStick();
+      return;
+    }
     // Where it was let go, then the let-go: the engine locks on the target.
     send(["stick", ...value]);
     send(["stick", 0, 0]);
-    const origin = stick.origin;
-    stick = null;
-    if (past && onTarget(value, lockReach) && sprinting) showLocked(origin);
+    letGo = { origin, centre };
+    // Drawn at once while the page knows of the sprint; otherwise when
+    // the engine says it locked (update).
+    if (pastRim(value, centre, past) && onTarget(value, centre) && sprinting) drawLocked(letGo);
     else restStick();
   };
   own(move, {
@@ -265,39 +306,55 @@ export function createTouchControls(send, { touch = false, fade = true } = {}) {
       if (stick) return;
       capture(event);
       const origin = local(root, event);
-      aim(origin);
-      stick = { id: event.pointerId, origin, value: [0, 0], past: false };
-      showStick(origin, [0, 0]);
-      send(["stick_lock", lockReach]);
+      const centre = aim(origin);
+      stick = { id: event.pointerId, origin, centre, value: [0, 0], past: false };
+      showHeld(origin, centre, [0, 0], false);
+      send(["stick_lock", ...centre]);
       send(["stick", 0, 0]);
     },
     pointermove: (event) => {
       if (stick?.id !== event.pointerId) return;
-      const value = reach(event);
+      const value = reachOf(event);
       stick.value = value;
-      stick.past = pastRim(value, stick.past);
-      showStick(stick.origin, value, stick.past);
+      stick.past = pastRim(value, stick.centre, stick.past);
+      showHeld(stick.origin, stick.centre, value, stick.past);
       send(["stick", ...value]);
     },
-    pointerup: endStick,
-    pointercancel: endStick,
+    pointerup: (event) => {
+      if (stick?.id === event.pointerId) endStick(false, reachOf(event));
+    },
+    pointercancel: (event) => {
+      if (stick?.id === event.pointerId) endStick(true);
+    },
   });
 
   // Looking: each finger's motion, on the look area or dragged from a
-  // button.
-  const looking = new Map(); // pointerId → last position
+  // button, with its speed smoothed over its own event times (the engine's
+  // look curve; our choice: an exponential average over LOOK_SMOOTH_MS).
+  const looking = new Map(); // pointerId → { at, time, speed, pending }
+  const startLook = (event, at) =>
+    looking.set(event.pointerId, { at, time: event.timeStamp, speed: 0, pending: 0 });
   const lookTo = (event) => {
-    const last = looking.get(event.pointerId);
-    if (!last) return;
+    const drag = looking.get(event.pointerId);
+    if (!drag) return;
     const at = local(root, event);
-    looking.set(event.pointerId, at);
-    send(["look", at[0] - last[0], at[1] - last[1]]);
+    const [dx, dy] = [at[0] - drag.at[0], at[1] - drag.at[1]];
+    drag.at = at;
+    drag.pending += Math.hypot(dx, dy);
+    const dt = event.timeStamp - drag.time;
+    if (dt > 0) {
+      const weight = 1 - Math.exp(-dt / LOOK_SMOOTH_MS);
+      drag.speed += weight * ((drag.pending / dt) * 1000 - drag.speed);
+      drag.pending = 0;
+      drag.time = event.timeStamp;
+    }
+    send(["look", dx, dy, drag.speed]);
   };
   const endLook = (event) => looking.delete(event.pointerId);
   own(look, {
     pointerdown: (event) => {
       capture(event);
-      looking.set(event.pointerId, local(root, event));
+      startLook(event, local(root, event));
     },
     pointermove: lookTo,
     pointerup: endLook,
@@ -309,7 +366,8 @@ export function createTouchControls(send, { touch = false, fade = true } = {}) {
   // buttons do), and on Crouch, if that first move is down, is the low
   // crouch too. Crouch while crouched waits (our choice): a tap stands up
   // on release, a drag aside stands up and looks, a swipe down only goes
-  // to the low crouch, so no swipe stands up for a moment first.
+  // to the low crouch, so no swipe stands up for a moment first; a
+  // cancelled touch does nothing.
   let crouched = false;
   const releases = [];
   for (const b of [menu, jump, crouch]) {
@@ -332,10 +390,10 @@ export function createTouchControls(send, { touch = false, fade = true } = {}) {
       held.clear();
       lift();
     });
-    const release = (event) => {
+    const release = (event, cancelled) => {
       const touch = held.get(event.pointerId);
       if (!touch) return;
-      if (touch.waiting) press();
+      if (touch.waiting && !cancelled) press();
       held.delete(event.pointerId);
       looking.delete(event.pointerId);
       if (held.size === 0) lift();
@@ -364,10 +422,10 @@ export function createTouchControls(send, { touch = false, fade = true } = {}) {
           press();
         }
         touch.waiting = false;
-        looking.set(event.pointerId, at);
+        startLook(event, at);
       },
-      pointerup: release,
-      pointercancel: release,
+      pointerup: (event) => release(event, false),
+      pointercancel: (event) => release(event, true),
     });
   }
 
@@ -382,9 +440,10 @@ export function createTouchControls(send, { touch = false, fade = true } = {}) {
     if (shown) {
       wake();
     } else {
-      // Nothing stays held when the controls go away.
-      if (stick) send(["stick", 0, 0]);
-      stick = null;
+      // Nothing stays held when the controls go away, and nothing acts:
+      // a held stick is cancelled, not let go, so it can't lock.
+      if (stick) endStick(true);
+      letGo = null;
       restStick();
       looking.clear();
       for (const release of releases) release();
@@ -419,17 +478,26 @@ export function createTouchControls(send, { touch = false, fade = true } = {}) {
       sprinting = Boolean(sprint);
       // For tests: whether the engine's message says the controls are live.
       root.dataset.live = String(Boolean(level));
-      crouch.setAttribute("aria-pressed", String(Boolean(crouched)));
-      crouch.classList.toggle("low", Boolean(crouched && low));
-      if (lock && !stick) showLocked(lockOrigin);
+      crouch.setAttribute("aria-pressed", String(crouched));
+      crouch.classList.toggle("low", crouched && Boolean(low));
+      crouch.setAttribute("aria-label", crouched && low ? "Crouch, low" : "Crouch");
+      // The lock where the thumb let go, whatever the page knew then.
+      if (lock && !stick) drawLocked(letGo ?? { origin: null, centre: [0, -LOCK_REACH] });
       else if (!lock && ring.classList.contains("locked")) restStick();
       render();
     },
-    /** The stick held at `origin` (CSS pixels) with `value` (stick radii;
-     * UX audit page). */
-    showStick,
+    /** The stick held at `origin` (CSS pixels) with `value` (stick radii,
+     * or "target" for the lock target's place; UX audit page). */
+    showStick(origin, value) {
+      const centre = aim(origin);
+      const at = value === "target" ? centre : value;
+      showHeld(origin, centre, at, pastRim(at, centre, false));
+    },
     /** The stick locked after being let go at `origin` (UX audit page). */
-    showLocked,
+    showLocked(origin) {
+      letGo = { origin, centre: aim(origin) };
+      drawLocked(letGo);
+    },
     /** The controls faded as when idle (UX audit page). */
     fadeNow: () => root.classList.add("idle"),
   };

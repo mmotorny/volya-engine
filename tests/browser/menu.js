@@ -516,21 +516,40 @@ export const tests = {
     const sprinted = Math.hypot(s.level.player.position[0] - sprintAt[0], s.level.player.position[2] - sprintAt[2]);
     for (let i = 0; i < 50 && ring.classList.contains("locked"); i++) await sleep(20);
     assert(!ring.classList.contains("locked"), "the stick shown unlocked");
-    // A thumb landing high: the target is drawn lower to stay on the
-    // screen (1.95 radii, 109 px up, its drop area just below the safe
-    // area's top edge), and the engine locks where it is drawn.
-    const high = controls.querySelector(".touch-button.menu").offsetTop + 140;
-    touchOn(move, "pointerdown", 40, [mx, high]);
-    const lockRect = controls.querySelector(".touch-lock").getBoundingClientRect();
-    assert(lockRect.top >= 0, `the lock target on the screen: ${JSON.stringify(lockRect)}`);
-    touchOn(move, "pointermove", 40, [mx, high - 84]);
-    await until((s) => s.level.player.sprint_requested, "past the rim (high) to request the sprint");
-    touchOn(move, "pointermove", 40, [mx, high - 109]);
-    touchOn(move, "pointerup", 40, [mx, high - 109]);
-    await until((s) => s.level.player.sprint_locked, "the lowered target to lock");
-    touchOn(move, "pointerdown", 41, [mx, my]);
-    touchOn(move, "pointerup", 41, [mx, my]);
-    s = await until((s) => !s.level.player.sprint_locked && !s.level.player.moving, "a touch to end the lock and stop");
+    // Thumbs landing high: the target is drawn closer (1.95 radii, its
+    // drop area just below the safe area's top edge), or at the very top
+    // turned aside; either way on the screen, and the engine locks where
+    // it is drawn.
+    const top = controls.querySelector(".touch-button.menu").offsetTop;
+    const lockTarget = controls.querySelector(".touch-lock");
+    let id = 50;
+    for (const [y, what] of [
+      [top + 142, "closer"],
+      [top + 4, "aside"],
+    ]) {
+      touchOn(move, "pointerdown", ++id, [mx, y]);
+      const r = lockTarget.getBoundingClientRect();
+      assert(r.top >= top - 1 && r.left >= 0, `the ${what} lock target on the screen: ${JSON.stringify(r)}`);
+      const [tx, ty] = [(r.left + r.right) / 2, (r.top + r.bottom) / 2];
+      const d = Math.hypot(tx - mx, ty - y);
+      touchOn(move, "pointermove", id, [mx + ((tx - mx) / d) * 84, y + ((ty - y) / d) * 84]);
+      await until((s) => s.level.player.sprint_requested, `past the rim toward the ${what} target`);
+      touchOn(move, "pointermove", id, [tx, ty]);
+      touchOn(move, "pointerup", id, [tx, ty]);
+      await until((s) => s.level.player.sprint_locked && s.level.player.sprint, `the ${what} target to lock`);
+      touchOn(move, "pointerdown", ++id, [mx, my]);
+      touchOn(move, "pointerup", id, [mx, my]);
+      await until((s) => !s.level.player.sprint_locked && !s.level.player.moving, "a touch to end the lock and stop");
+    }
+    // A cancelled touch on the target neither locks nor keeps sprinting.
+    touchOn(move, "pointerdown", ++id, [mx, my]);
+    touchOn(move, "pointermove", id, [mx, my - 84]);
+    await until((s) => s.level.player.sprint_requested, "past the rim to request the sprint again");
+    touchOn(move, "pointermove", id, [mx, my - 118]);
+    touchOn(move, "pointercancel", id, [mx, my - 118]);
+    s = await until((s) => !s.level.player.sprint_requested && !s.level.player.moving, "the cancel to end the sprint");
+    assert(!s.level.player.sprint_locked && !ring.classList.contains("locked"), "a cancelled touch locked");
+
     // A drag begun on Jump jumps and turns too.
     const jump = controls.querySelector(".touch-button.jump");
     const [jx, jy] = centre(jump);
@@ -567,6 +586,10 @@ export const tests = {
     await sleep(150);
     s = await state();
     assert(s.level.player.crouch_toggled && s.level.player.posture === 2, `still low: ${JSON.stringify(s.level.player)}`);
+    touchOn(crouch, "pointerdown", 44, [cx, cy]);
+    touchOn(crouch, "pointercancel", 44, [cx, cy]);
+    await sleep(150);
+    assert((await state()).level.player.crouch_toggled, "a cancelled touch on Crouch is no tap");
     touchOn(crouch, "pointerdown", 43, [cx, cy]);
     await sleep(100);
     assert((await state()).level.player.crouch_toggled, "a tap waits for its release");

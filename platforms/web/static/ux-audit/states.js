@@ -86,13 +86,19 @@ export const SECTIONS = [
       {
         id: "level-touch-on-target",
         name: "On the lock target",
-        level: { stick: [0, -2.1], sprint: true },
+        level: { stick: "target", sprint: true },
         devices: TOUCH,
       },
       {
         id: "level-touch-past-rim-high",
-        name: "Past the rim with the thumb high: the lock target lowered to fit",
-        level: { stick: [0, -1.85], sprint: true, high: true },
+        name: "Past the rim with the thumb high: the lock target closer",
+        level: { stick: "target", sprint: true, thumbY: 150 },
+        devices: TOUCH,
+      },
+      {
+        id: "level-touch-past-rim-top",
+        name: "Past the rim with the thumb at the very top: the lock target beside it",
+        level: { stick: "target", sprint: true, thumbY: 20 },
         devices: TOUCH,
       },
       { id: "level-touch-locked", name: "Sprint locked", level: { lock: true, sprint: true }, devices: TOUCH },

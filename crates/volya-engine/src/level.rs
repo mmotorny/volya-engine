@@ -623,7 +623,7 @@ impl LevelScreen {
         self.clock.set_paused(false);
         self.clock.advance(elapsed);
         let player = self.player.state();
-        let (request, back) = self.controls.request(input, dt, &player);
+        let (request, back) = self.controls.request(input, &player);
         self.player.frame(&self.collision, now, &request);
         self.back |= back;
         // sky.md 7.3, k_t from the game clock.

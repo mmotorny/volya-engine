@@ -161,8 +161,9 @@ html[data-engine-input] canvas#view {
 
 /* The move stick: a faint disc resting at the bottom left; held, a thin
    accent ring centred under the thumb. Its radius (56 px) is the full
-   deflection; above it the sprint chevrons and the sprint lock target
-   (centred 2.1 radii up, controls.rs LOCK_CENTRE). */
+   deflection; beyond it the sprint chevrons and the sprint lock target,
+   placed by touch-controls.js (2.1 radii up, controls.rs LOCK_REACH, or
+   closer or turned where that won't fit). */
 .touch-stick {
   position: absolute;
   left: calc(var(--safe-left) + var(--edge) + 64px);
@@ -219,22 +220,27 @@ html[data-engine-input] canvas#view {
   background: rgba(16, 26, 42, 0.62);
 }
 
+/* Past the rim the knob goes translucent: the chevrons and the target it
+   moves over stay readable. */
+.touch-stick.past .touch-knob {
+  background: rgba(16, 26, 42, 0.2);
+}
+
 /* Sprint ahead and the lock target: shown while the stick is held, bright
    past the rim, filled with the knob on it and once locked. */
 .touch-sprint-hint,
 .touch-lock {
   position: absolute;
-  left: 50%;
+  left: 0;
+  top: 0;
   visibility: hidden;
   opacity: 0.6;
   pointer-events: none;
 }
 
 .touch-sprint-hint {
-  top: -33px;
   width: 22px;
   height: 22px;
-  margin-left: -11px;
   fill: none;
   stroke: var(--touch-glyph);
   stroke-width: 2.5;
@@ -244,12 +250,10 @@ html[data-engine-input] canvas#view {
 }
 
 .touch-lock {
-  /* Centred 118 px above the stick's (2.1 radii). */
-  top: -86px;
   box-sizing: border-box;
   width: 44px;
   height: 44px;
-  margin-left: -22px;
+
   border-radius: 50%;
   border: 2px solid var(--touch-glyph);
   background: rgba(10, 24, 48, 0.18);
@@ -417,7 +421,7 @@ button.touch-button.crouch.low .touch-edges :is(.left, .right) {
 /* Idle a while (touch-controls.js): everything but a held stick fades. */
 .touch-controls.idle button.touch-button,
 .touch-controls.idle .touch-stick:not(.held, .locked) {
-  opacity: 0.45;
+  opacity: 0.6;
 }
 
 main {
@@ -830,7 +834,6 @@ button.play {
 button.wide {
   width: 100%;
 }
-
 
 .panel.warning {
   border-color: rgba(255, 155, 143, 0.45);
