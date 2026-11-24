@@ -42,6 +42,7 @@ if (state.tab && !device.touch) globalThis.volyaInstallOffer = { prompt: async (
 
 // Storage persistence as the state says (the installed app keeps it).
 Object.defineProperty(navigator.storage, "persisted", { value: async () => state.persisted ?? true });
+Object.defineProperty(navigator.storage, "persist", { value: async () => state.persisted ?? true });
 
 const gpu = state.gpu === false ? { state: "unavailable", message: "no WebGPU adapter" } : { state: "ready" };
 const call = async (op) => {

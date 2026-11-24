@@ -429,7 +429,7 @@ async function showHome(status) {
   }
 
   // Only worth saying when it is true: the browser may delete the import.
-  const persisted = await navigator.storage.persisted();
+  const persisted = await keptStorage();
   show(
     element(
       "div",
@@ -464,6 +464,18 @@ async function cover() {
   canvas.getContext("2d").putImageData(new ImageData(bytes, width, height), 0, 0);
   canvas.setAttribute("aria-hidden", "true");
   return canvas;
+}
+
+/**
+ * Whether the browser keeps this app's storage. Chromium decides silently
+ * from whether the site is installed or bookmarked, its use and notification
+ * permission, and re-decides on each request (web.dev, Persistent storage):
+ * ask again, so installing or bookmarking later takes effect. Other browsers
+ * may prompt, so they're only asked at import.
+ */
+async function keptStorage() {
+  if (await navigator.storage.persisted()) return true;
+  return chromium() ? navigator.storage.persist() : false;
 }
 
 /** The Share symbol, inline in text. */
@@ -501,12 +513,12 @@ function keepHelp() {
         await refresh();
       }
     });
-    return [element("p", { textContent: "Install Volya Engine as an app to keep it." }), button];
+    return [element("p", { textContent: "Install Volya Engine as an app, or bookmark it, to keep it." }), button];
   }
   return [
     element("p", {
       textContent: chromium()
-        ? "Install Volya Engine as an app to keep it: click the install icon at the right of the address bar."
+        ? "Install Volya Engine as an app (the install icon at the right of the address bar), or bookmark it, to keep it."
         : "Install Volya Engine as an app to keep it, if this browser can.",
     }),
   ];
@@ -524,7 +536,7 @@ const storageWarning = () =>
 /** Settings: updates, storage, and removing the import (danger zone). */
 async function showSettings() {
   const status = await call("game_status");
-  const persisted = await navigator.storage.persisted();
+  const persisted = await keptStorage();
   const back = element("button", { className: "back", textContent: "‹ Back" });
   back.addEventListener("click", () => navigate("back", refresh));
 
