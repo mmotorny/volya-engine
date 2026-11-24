@@ -141,12 +141,16 @@ pub fn input_capture() -> bool {
 }
 
 /// The level's controls for the page: 0 while they are not live, else 1,
-/// plus 2 while the crouch toggle is engaged and 4 while a sprint is
-/// requested.
+/// plus 2 while the crouch toggle is engaged, 4 while a sprint is
+/// requested, 8 while the toggled crouch is the low crouch and 16 while the
+/// sprint lock holds the touch stick.
 #[wasm_bindgen]
 pub fn level_controls() -> u32 {
     engine::level_controls().map_or(0, |c| {
-        1 | u32::from(c.crouch) << 1 | u32::from(c.sprint) << 2
+        1 | u32::from(c.crouch) << 1
+            | u32::from(c.sprint) << 2
+            | u32::from(c.low_crouch) << 3
+            | u32::from(c.sprint_lock) << 4
     })
 }
 

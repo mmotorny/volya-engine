@@ -130,6 +130,18 @@ html[data-engine-input] canvas#view {
   }
 }
 
+/* Over the game, our design after mobile shooters (Rainbow Six Mobile):
+   translucent grey bases without outlines and white line glyphs, readable
+   over any scene; the blueprint's light blue is the accent of what is
+   active or on. */
+#touch-controls {
+  --touch-base: rgba(150, 160, 176, 0.3);
+  --touch-base-down: rgba(196, 206, 222, 0.48);
+  --touch-glyph: #fff;
+  --touch-accent: #8fc4ff;
+  --touch-shadow: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.45));
+}
+
 .touch-move,
 .touch-look {
   position: absolute;
@@ -147,84 +159,244 @@ html[data-engine-input] canvas#view {
   right: 0;
 }
 
-/* The move stick: resting at the bottom left, centred under the finger
-   while held. Its radius (56 px) is the full deflection. */
+/* The move stick: a faint disc resting at the bottom left; held, a thin
+   accent ring centred under the thumb. Its radius (56 px) is the full
+   deflection; beyond it the sprint chevrons and the sprint lock target,
+   placed by touch-controls.js (2.1 radii up, controls.rs LOCK_REACH, or
+   closer or turned where that won't fit). */
 .touch-stick {
   position: absolute;
   left: calc(var(--safe-left) + var(--edge) + 64px);
   top: calc(100% - var(--safe-bottom) - var(--edge) - 64px);
+  box-sizing: border-box;
   width: 112px;
   height: 112px;
   margin: -56px 0 0 -56px;
   border-radius: 50%;
-  border: 1px solid var(--panel-edge);
-  background: rgba(8, 26, 58, 0.28);
-  opacity: 0.6;
+  border: 2px solid transparent;
+  background: var(--touch-base);
   pointer-events: none;
+  transition: opacity 0.6s;
 }
 
-.touch-stick.held {
-  opacity: 1;
+.touch-stick.held,
+.touch-stick.locked {
+  background: rgba(10, 24, 48, 0.12);
+  border-color: var(--touch-accent);
+}
+
+.touch-rim {
+  position: absolute;
+  inset: -2px;
+  width: 112px;
+  height: 112px;
+  fill: none;
+  stroke: var(--touch-glyph);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.55;
+}
+
+.touch-stick.held .touch-rim {
+  stroke: var(--touch-accent);
+  opacity: 0.9;
 }
 
 .touch-knob {
   position: absolute;
   left: 50%;
   top: 50%;
+  box-sizing: border-box;
   width: 48px;
   height: 48px;
   margin: -24px 0 0 -24px;
   border-radius: 50%;
-  background: rgba(242, 248, 255, 0.55);
+  border: 1.5px solid rgba(255, 255, 255, 0.85);
+  background: rgba(16, 26, 42, 0.5);
 }
 
-button.touch-button {
+.touch-stick.held .touch-knob {
+  background: rgba(16, 26, 42, 0.62);
+}
+
+/* Past the rim the knob goes translucent: the chevrons and the target it
+   moves over stay readable. */
+.touch-stick.past .touch-knob {
+  background: rgba(16, 26, 42, 0.2);
+}
+
+/* Sprint ahead and the lock target: shown while the stick is held, bright
+   past the rim, filled with the knob on it and once locked. */
+.touch-sprint-hint,
+.touch-lock {
   position: absolute;
+  left: 0;
+  top: 0;
+  visibility: hidden;
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.touch-sprint-hint {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: var(--touch-glyph);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: var(--touch-shadow);
+}
+
+.touch-lock {
+  box-sizing: border-box;
+  width: 44px;
+  height: 44px;
+
+  border-radius: 50%;
+  border: 2px solid var(--touch-glyph);
+  background: rgba(10, 24, 48, 0.18);
+}
+
+.touch-stick:is(.held, .locked) :is(.touch-sprint-hint, .touch-lock) {
+  visibility: visible;
+}
+
+.touch-stick:is(.past, .locked) .touch-sprint-hint {
+  opacity: 1;
+  stroke: var(--touch-accent);
+}
+
+.touch-stick.past .touch-lock {
+  opacity: 1;
+  border-color: var(--touch-accent);
+  transform: scale(1.15);
+}
+
+.touch-stick:is(.on-target, .locked) .touch-lock {
+  opacity: 1;
+  border-color: var(--touch-accent);
+  background: var(--touch-accent);
+  transform: scale(1.15);
+}
+
+.touch-stick:is(.on-target, .locked) .touch-knob {
+  border-color: #fff;
+  background: transparent;
+}
+
+#touch-controls button.touch-button {
+  position: absolute;
+  box-sizing: border-box;
   min-height: 0;
   width: 60px;
   height: 60px;
   padding: 0;
+  border: none;
   border-radius: 50%;
-  border-color: var(--panel-edge);
-  background: var(--panel);
-  color: var(--ink);
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
-  transition: none;
+  background: var(--touch-base);
+  color: var(--touch-glyph);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  transition: opacity 0.6s;
+  transform: none;
 }
 
-button.touch-button.down {
-  background: rgba(159, 203, 250, 0.3);
-  border-color: rgba(159, 203, 250, 0.6);
+#touch-controls button.touch-button:focus-visible {
+  outline: 2px solid var(--touch-accent);
+  outline-offset: 3px;
 }
 
-/* A toggle that is on: white on navy, like Play. */
-button.touch-button[aria-pressed="true"] {
-  background: var(--ink);
-  border-color: var(--ink);
+#touch-controls button.touch-button.down {
+  background: var(--touch-base-down);
+  transform: scale(0.92);
+}
+
+.touch-glyph {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 56%;
+  height: 56%;
+  transform: translate(-50%, -50%);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: var(--touch-shadow);
+}
+
+/* The gestures a button takes, as chevrons at its edges. */
+.touch-edges {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.45;
+}
+
+/* Crouch on: the accent base, navy line work. The low crouch: the lower
+   figure and the down chevron lit. */
+#touch-controls button.touch-button.crouch[aria-pressed="true"] {
+  background: var(--touch-accent);
   color: var(--navy-3);
 }
 
-button.touch-button.menu {
-  left: calc(var(--safe-left) + var(--edge));
-  top: calc(var(--safe-top) + var(--edge));
-  width: auto;
-  height: 40px;
-  padding: 0 1rem;
-  border-radius: 999px;
+#touch-controls button.touch-button.crouch[aria-pressed="true"] .touch-glyph {
+  filter: none;
 }
 
-/* Jump at the corner, Crouch to its left, Sprint above it. */
+.touch-glyph.low,
+button.touch-button.crouch.low .touch-glyph {
+  display: none;
+}
+
+button.touch-button.crouch.low .touch-glyph.low {
+  display: block;
+}
+
+button.touch-button.crouch.low .touch-edges .down {
+  stroke-width: 6;
+}
+
+button.touch-button.crouch[aria-pressed="true"] .touch-edges {
+  opacity: 0.6;
+}
+
+button.touch-button.crouch.low .touch-edges {
+  opacity: 1;
+}
+
+button.touch-button.crouch.low .touch-edges :is(.left, .right) {
+  opacity: 0.6;
+}
+
+#touch-controls button.touch-button.menu {
+  left: calc(var(--safe-left) + var(--edge));
+  top: calc(var(--safe-top) + var(--edge));
+  width: 44px;
+  height: 44px;
+}
+
+#touch-controls button.touch-button.menu .touch-glyph {
+  width: 50%;
+  height: 50%;
+}
+
+/* Jump, the primary, at the corner; Crouch to its left. */
 .touch-actions {
   position: absolute;
   right: calc(var(--safe-right) + var(--edge));
   bottom: calc(var(--safe-bottom) + var(--edge));
-  width: 156px;
-  height: 156px;
+  width: 164px;
+  height: 80px;
   pointer-events: none;
 }
 
@@ -232,21 +404,24 @@ button.touch-button.menu {
   pointer-events: auto;
 }
 
-button.touch-button.jump {
+#touch-controls button.touch-button.jump {
   right: 0;
   bottom: 0;
-  width: 76px;
-  height: 76px;
+  width: 80px;
+  height: 80px;
 }
 
-button.touch-button.crouch {
-  right: 92px;
-  bottom: 8px;
+#touch-controls button.touch-button.crouch {
+  right: 100px;
+  bottom: 4px;
+  width: 64px;
+  height: 64px;
 }
 
-button.touch-button.sprint {
-  right: 8px;
-  bottom: 92px;
+/* Idle a while (touch-controls.js): everything but a held stick fades. */
+.touch-controls.idle button.touch-button,
+.touch-controls.idle .touch-stick:not(.held, .locked) {
+  opacity: 0.6;
 }
 
 main {
@@ -659,7 +834,6 @@ button.play {
 button.wide {
   width: 100%;
 }
-
 
 .panel.warning {
   border-color: rgba(255, 155, 143, 0.45);

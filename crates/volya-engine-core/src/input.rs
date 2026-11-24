@@ -92,6 +92,10 @@ fn clamp_unit(v: f32) -> f32 {
     if v.is_nan() { 0.0 } else { v.clamp(-1.0, 1.0) }
 }
 
+/// How far past its rim the touch stick reports, in stick radii per axis
+/// (our choice: room for the sprint lock above it).
+pub const STICK_REACH: f32 = 3.0;
+
 macro_rules! keys {
     ($($variant:ident $name:literal $dik:literal,)*) => {
         /// Keyboard keys the engine distinguishes: those of the game's key
@@ -405,7 +409,9 @@ impl GamepadAxis {
 pub enum TouchButton {
     Jump,
     Crouch,
-    Sprint,
+    /// Crouch swiped down: the low crouch (a gesture, pressed and released
+    /// at once).
+    CrouchLow,
     /// Does what Escape does.
     Menu,
 }
@@ -414,7 +420,7 @@ impl TouchButton {
     pub const ALL: [TouchButton; 4] = [
         TouchButton::Jump,
         TouchButton::Crouch,
-        TouchButton::Sprint,
+        TouchButton::CrouchLow,
         TouchButton::Menu,
     ];
 
@@ -422,7 +428,7 @@ impl TouchButton {
         match self {
             TouchButton::Jump => "jump",
             TouchButton::Crouch => "crouch",
-            TouchButton::Sprint => "sprint",
+            TouchButton::CrouchLow => "crouch_low",
             TouchButton::Menu => "menu",
         }
     }
@@ -477,14 +483,26 @@ pub enum Event {
         at: [f32; 2],
         phase: TouchPhase,
     },
-    /// The on-screen move stick's deflection, −1 … +1 per axis (+x right,
-    /// +y down); zero when released.
+    /// The on-screen move stick's reach in stick radii (+x right, +y
+    /// down): within its rim at most 1 long, past it up to
+    /// [`STICK_REACH`] per axis; zero when released.
     TouchStick {
         value: [f32; 2],
     },
-    /// A drag on the on-screen look area, in screen units.
+    /// The on-screen move stick's touch was cancelled (by the system, or
+    /// the controls hiding): released, without acting where it was.
+    TouchStickCancel,
+    /// Where the page draws the move stick's sprint lock target for the
+    /// current touch: its centre relative to the stick's, in stick radii
+    /// (+y down).
+    TouchLockTarget {
+        centre: [f32; 2],
+    },
+    /// A look drag on the on-screen controls, in screen units, at `speed`
+    /// screen units per second (the page's smoothed speed of that drag).
     TouchLook {
         delta: [f32; 2],
+        speed: f32,
     },
     TouchButton {
         button: TouchButton,
@@ -547,7 +565,8 @@ impl Control {
             Control::Pad(b) => b.name(),
             Control::Touch(TouchButton::Jump) => "touch_jump",
             Control::Touch(TouchButton::Crouch) => "touch_crouch",
-            Control::Touch(TouchButton::Sprint) => "touch_sprint",
+            Control::Touch(TouchButton::CrouchLow) => "touch_crouch_low",
+
             Control::Touch(TouchButton::Menu) => "touch_menu",
         }
     }
@@ -615,6 +634,11 @@ pub struct Input {
     pad_held: Vec<GamepadButton>,
     pad_changes: Vec<(GamepadButton, bool)>,
     touch_stick: [f32; 2],
+    /// The touch stick's values this frame, in order.
+    touch_stick_values: Vec<Option<[f32; 2]>>,
+    touch_lock_target: Option<[f32; 2]>,
+    /// Look drags this frame with their speeds.
+    touch_look_moves: Vec<([f32; 2], f32)>,
     /// Look drags this frame.
     touch_look: [f32; 2],
     /// Relative mouse motion this frame ([`Event::PointerMotion`]).
@@ -644,6 +668,9 @@ impl Default for Input {
             pad_held: Vec::new(),
             pad_changes: Vec::new(),
             touch_stick: [0.0; 2],
+            touch_stick_values: Vec::new(),
+            touch_lock_target: None,
+            touch_look_moves: Vec::new(),
             touch_look: [0.0; 2],
             motion: [0.0; 2],
             sticks_released: [false; 2],
@@ -723,9 +750,26 @@ impl Input {
         &self.pad_changes
     }
 
-    /// The on-screen move stick's deflection.
+    /// The on-screen move stick's reach ([`Event::TouchStick`]).
     pub fn touch_stick(&self) -> [f32; 2] {
         self.touch_stick
+    }
+
+    /// The latest [`Event::TouchLockTarget`], if any.
+    pub fn touch_lock_target(&self) -> Option<[f32; 2]> {
+        self.touch_lock_target
+    }
+
+    /// This frame's look drags, each with its speed ([`Event::TouchLook`]).
+    pub fn touch_look_moves(&self) -> &[([f32; 2], f32)] {
+        &self.touch_look_moves
+    }
+
+    /// Every value the touch stick sent this frame, in order: a touch, a
+    /// let-go (zero) and where it was let go show here even within one
+    /// frame; `None` is a cancelled touch ([`Event::TouchStickCancel`]).
+    pub fn touch_stick_values(&self) -> &[Option<[f32; 2]>] {
+        &self.touch_stick_values
     }
 
     /// Drags on the on-screen look area this frame.
@@ -798,6 +842,8 @@ impl Input {
         self.device_changes.clear();
         self.pad_changes.clear();
         self.touch_look = [0.0; 2];
+        self.touch_stick_values.clear();
+        self.touch_look_moves.clear();
         self.motion = [0.0; 2];
         self.contacts.retain(|c| !c.ended);
         for c in &mut self.contacts {
@@ -884,12 +930,26 @@ impl Input {
                 self.set(Source::Pad, button.control(), pressed, false)
             }
             Event::TouchStick { value } => {
-                self.touch_stick = value.map(clamp_unit);
+                self.touch_stick = value.map(|v| {
+                    if v.is_nan() {
+                        0.0
+                    } else {
+                        v.clamp(-STICK_REACH, STICK_REACH)
+                    }
+                });
+                self.touch_stick_values.push(Some(self.touch_stick));
                 self.sticks_released[1] = false;
             }
-            Event::TouchLook { delta } => {
+            Event::TouchStickCancel => {
+                self.touch_stick = [0.0; 2];
+                self.touch_stick_values.push(None);
+                self.sticks_released[1] = false;
+            }
+            Event::TouchLockTarget { centre } => self.touch_lock_target = Some(centre),
+            Event::TouchLook { delta, speed } => {
                 self.touch_look[0] += delta[0];
                 self.touch_look[1] += delta[1];
+                self.touch_look_moves.push((delta, speed));
             }
             Event::TouchButton { button, pressed } => {
                 self.set(Source::Touch, Control::Touch(button), pressed, false)
@@ -1448,14 +1508,39 @@ mod tests {
         assert_eq!(input.pad_changes(), [(GamepadButton::South, true)]);
         assert!(input.is_held(Control::Touch(TouchButton::Jump)));
         input.handle(Event::TouchStick { value: [0.5, -2.0] });
-        input.handle(Event::TouchLook { delta: [3.0, 1.0] });
-        input.handle(Event::TouchLook { delta: [1.0, 1.0] });
-        assert_eq!(input.touch_stick(), [0.5, -1.0]);
+        input.handle(Event::TouchStick { value: [0.5, -9.0] });
+        input.handle(Event::TouchLook {
+            delta: [3.0, 1.0],
+            speed: 100.0,
+        });
+        input.handle(Event::TouchLook {
+            delta: [1.0, 1.0],
+            speed: 200.0,
+        });
+        assert_eq!(
+            input.touch_look_moves(),
+            [([3.0, 1.0], 100.0), ([1.0, 1.0], 200.0)]
+        );
+        input.handle(Event::TouchStickCancel);
+        assert_eq!(input.touch_stick(), [0.0, 0.0]);
+        input.handle(Event::TouchStick { value: [0.5, -9.0] });
+        assert_eq!(input.touch_stick(), [0.5, -STICK_REACH]);
+        assert_eq!(
+            input.touch_stick_values(),
+            [
+                Some([0.5, -2.0]),
+                Some([0.5, -STICK_REACH]),
+                None,
+                Some([0.5, -STICK_REACH])
+            ]
+        );
         assert_eq!(input.touch_look(), [4.0, 2.0]);
         input.end_frame();
         assert!(input.device_changes().is_empty() && input.pad_changes().is_empty());
         assert_eq!(input.touch_look(), [0.0, 0.0]);
-        assert_eq!(input.touch_stick(), [0.5, -1.0]);
+        assert_eq!(input.touch_stick(), [0.5, -STICK_REACH]);
+        assert!(input.touch_stick_values().is_empty() && input.touch_look_moves().is_empty());
+
         input.release_all();
         assert_eq!(input.touch_stick(), [0.0, 0.0]);
         assert!(!input.pad_held(GamepadButton::South));

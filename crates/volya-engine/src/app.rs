@@ -234,7 +234,11 @@ fn quit_presses(data: &GameData, input: &Input) -> u32 {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LevelControls {
     pub crouch: bool,
+    /// The crouch toggle engaged in the low crouch's box.
+    pub low_crouch: bool,
     pub sprint: bool,
+    /// The touch stick's sprint lock holds it forward.
+    pub sprint_lock: bool,
 }
 
 pub struct App {
@@ -627,7 +631,8 @@ impl App {
 
     /// While the player's controls are live (the level shows with no
     /// loading image or intro over it): whether the crouch toggle is engaged
-    /// and a sprint is requested, which the touch controls show.
+    /// (and in the low crouch), a sprint is requested and the sprint lock
+    /// holds, which the touch controls show.
     pub fn level_controls(&self) -> Option<LevelControls> {
         match &self.phase {
             Some(Phase::Level {
@@ -638,7 +643,9 @@ impl App {
                 let p = level.player().state();
                 Some(LevelControls {
                     crouch: p.crouch_toggled,
+                    low_crouch: p.crouch_toggled && p.posture == 2,
                     sprint: p.sprint_requested,
+                    sprint_lock: level.controls().sprint_lock.locked(),
                 })
             }
             _ => None,

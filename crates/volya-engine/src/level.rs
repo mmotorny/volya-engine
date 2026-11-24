@@ -166,6 +166,8 @@ pub struct PlayerReport {
     /// The toggles the touch controls show.
     pub crouch_toggled: bool,
     pub sprint_requested: bool,
+    /// The touch stick's sprint lock holds it forward.
+    pub sprint_locked: bool,
 }
 
 /// The level of a new game and where its actor starts: the actor's object
@@ -767,7 +769,8 @@ impl LevelScreen {
         self.last = now;
         self.clock.set_paused(false);
         self.clock.advance(elapsed);
-        let (request, back) = self.controls.request(input);
+        let player = self.player.state();
+        let (request, back) = self.controls.request(input, &player);
         self.player.frame(&self.collision, now, &request);
         self.back |= back;
         // sky.md 7.3, k_t from the game clock.
@@ -885,6 +888,7 @@ impl LevelScreen {
                 landing,
                 crouch_toggled: p.crouch_toggled,
                 sprint_requested: p.sprint_requested,
+                sprint_locked: self.controls.sprint_lock.locked(),
             },
             objects: self.world.objects.report(),
         }
@@ -893,5 +897,10 @@ impl LevelScreen {
     /// The player in the level.
     pub fn player(&self) -> &Player {
         &self.player
+    }
+
+    /// The player's controls.
+    pub fn controls(&self) -> &Controls {
+        &self.controls
     }
 }

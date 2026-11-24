@@ -124,15 +124,19 @@ if (state.level) {
   document.documentElement.dataset.uxLevel = "";
   if (device.height > device.width) document.documentElement.dataset.uxTurned = "";
   document.querySelector("main").hidden = true;
-  const touch = createTouchControls(() => {}, { touch: true });
+  const touch = createTouchControls(() => {}, { touch: true, fade: false });
   document.body.append(touch.element);
-  touch.update({ level: true, crouch: state.level.crouch, sprint: state.level.sprint });
-  if (state.level.stick) {
-    // A finger a little above the stick's resting place.
-    const box = touch.element;
-    const landscape = [Math.max(box.clientWidth, box.clientHeight), Math.min(box.clientWidth, box.clientHeight)];
-    touch.showStick([140, landscape[1] - 150], state.level.stick);
-  }
+  const { stick, lock, fade, down, thumbY, ...toggles } = state.level;
+  touch.update({ level: true, ...toggles });
+  const box = touch.element;
+  const landscape = [Math.max(box.clientWidth, box.clientHeight), Math.min(box.clientWidth, box.clientHeight)];
+  // A thumb a little above the stick's resting place, or where the state
+  // says (high on the screen).
+  const thumb = [140, thumbY ?? landscape[1] - 150];
+  if (stick) touch.showStick(thumb, stick);
+  if (lock) touch.showLocked(thumb);
+  if (fade) touch.fadeNow();
+  if (down) box.querySelector(`.touch-button.${down}`).classList.add("down");
 } else if (state.startError) {
   status.textContent = `Volya Engine · ${versionText()}`;
   status.dataset.state = "ready";

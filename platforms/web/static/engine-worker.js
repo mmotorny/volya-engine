@@ -11,9 +11,10 @@
 //   { type: "input", event }: one input event (format in src/input.rs).
 // To the page, besides replies: { type: "capture", on } whenever the engine
 // starts or stops owning the screen; the page forwards input only while on.
-// { type: "controls", level, crouch, sprint } whenever the level's controls
-// go live or stop (level) or their toggles change (crouch toggle engaged,
-// sprint requested): the page's touch controls and pointer lock follow it.
+// { type: "controls", level, crouch, sprint, low, lock } whenever the
+// level's controls go live or stop (level) or their toggles change (crouch
+// toggle engaged, sprint requested, the toggled crouch low, the sprint lock
+// holding): the page's touch controls and pointer lock follow it.
 // Once started, the worker runs a frame loop on requestAnimationFrame where
 // workers have it, otherwise on a 60 Hz timer.
 
@@ -37,7 +38,14 @@ function syncCapture() {
   const bits = level_controls();
   if (bits !== controls) {
     controls = bits;
-    postMessage({ type: "controls", level: (bits & 1) !== 0, crouch: (bits & 2) !== 0, sprint: (bits & 4) !== 0 });
+    postMessage({
+      type: "controls",
+      level: (bits & 1) !== 0,
+      crouch: (bits & 2) !== 0,
+      sprint: (bits & 4) !== 0,
+      low: (bits & 8) !== 0,
+      lock: (bits & 16) !== 0,
+    });
   }
 }
 
