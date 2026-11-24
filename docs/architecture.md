@@ -46,7 +46,7 @@ Constraints this imposes:
 - **No custom headers.** Never depend on cross-origin isolation. The dev server (`tools/devserver`) sends no such headers and a browser test asserts the page is not isolated.
 - **Base path `/volya-engine/`.** All URLs are relative. The dev server serves under the same path.
 - **Shared origin.** Every `mmotorny.github.io` project site shares one origin, so storage quota, OPFS, IndexedDB, caches and service worker registrations are shared with unrelated sites. Keep everything under a `volya-engine` namespace (OPFS directory, cache names, IndexedDB names), scope the service worker to `/volya-engine/`, and treat stored data as possibly modified by others: validate on load, never trust it blindly.
-- **No cache control.** Pages sets its own short cache lifetimes; the service worker owns app versioning: network-first, so a fresh start gets the latest deploy. An installed app is usually resumed rather than restarted, so the page compares its build (`build.txt`, the commit, written by `cargo xtask web`) with the deployed one on returning to the foreground and every 10 minutes, and offers a reload (never automatic: it would interrupt a game).
+- **No cache control.** Pages sets its own short cache lifetimes; the service worker owns app versioning: network-first, so a fresh start gets the latest deploy. An installed app is usually resumed rather than restarted, so the page compares its build (`build.txt`, the commit, written by `cargo xtask web`) with the deployed one on returning to the foreground, at most once an hour (no polling: one tiny request per user per active hour), and offers a reload (never automatic: it would interrupt a game).
 
 ## Game data: BYOA, local only
 
