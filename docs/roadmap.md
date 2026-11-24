@@ -30,4 +30,4 @@ Reference mobile device for real-device testing and performance and memory budge
 
 ## Saved games
 
-Volya Engine's own save format, holding the state Volya Engine simulates. Loading the original game's `.sav` files is not planned: it would need the original's whole simulated world.
+Volya Engine reads and writes the original game's saves. Saving and loading are built once every system whose state a save holds exists.
