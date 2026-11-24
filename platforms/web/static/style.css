@@ -32,6 +32,23 @@ canvas#view {
   pointer-events: none;
 }
 
+/* The game is always drawn in landscape: on an upright phone (iOS lets web
+   apps neither lock nor request an orientation) the canvas is laid out
+   landscape and turned 90° clockwise, so the engine sees a landscape size.
+   input.js turns positions back. */
+@media (orientation: portrait) and (pointer: coarse) {
+  canvas#view {
+    inset: auto;
+    top: 50%;
+    left: 50%;
+    width: 100vh;
+    height: 100vw;
+    width: 100dvh;
+    height: 100dvw;
+    transform: translate(-50%, -50%) rotate(90deg);
+  }
+}
+
 main {
   position: relative;
   box-sizing: border-box;
