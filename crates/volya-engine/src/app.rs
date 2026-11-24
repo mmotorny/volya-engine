@@ -96,6 +96,33 @@ struct Overlay {
     frames_left: u32,
 }
 
+impl Overlay {
+    /// The first overlay frame: sound muted (section 6).
+    fn new(screen: LoadingScreen, audio: &mut dyn AudioOut) -> Self {
+        audio.set_master_gain(0.0);
+        Self {
+            screen,
+            frames_left: OVERLAY_FRAMES,
+        }
+    }
+
+    /// The next frame's overlay; after the last, none: the image is gone
+    /// and sound un-muted (section 2, step 6).
+    fn next_frame(mut self, audio: &mut dyn AudioOut) -> Option<Self> {
+        self.frames_left -= 1;
+        if self.frames_left == 0 {
+            self.end(audio);
+            return None;
+        }
+        Some(self)
+    }
+
+    /// Ends the overlay early (leaving the level), un-muting sound.
+    fn end(self, audio: &mut dyn AudioOut) {
+        audio.set_master_gain(1.0);
+    }
+}
+
 pub struct App {
     data: GameData,
     assets: Assets,
@@ -110,10 +137,14 @@ pub struct App {
     /// The game type of the latest game started in this run
     /// (loading-screen.md section 5).
     game_type: Option<&'static str>,
-    /// Platform time of the update that loaded the level, until the next.
-    loaded_at: Option<f64>,
-    /// Platform milliseconds from the update that loaded the level to the
-    /// next one: loading and the first frame drawn.
+    /// Platform time of the update that began the first caption, while
+    /// loading.
+    load_started: Option<f64>,
+    /// Set with the level: when its loading began, until the next update.
+    loaded_since: Option<f64>,
+    /// Platform milliseconds from the first caption to the update after
+    /// the level was made: every stage (one frame each at least) and the
+    /// first frame drawn (which uploads the world).
     load_ms: Option<f64>,
 }
 
@@ -161,7 +192,8 @@ impl App {
             phase: None,
             error: None,
             game_type: None,
-            loaded_at: None,
+            load_started: None,
+            loaded_since: None,
             load_ms: None,
         })
     }
@@ -184,7 +216,7 @@ impl App {
         input: &Input,
         audio: &mut dyn AudioOut,
     ) {
-        if let Some(at) = self.loaded_at.take() {
+        if let Some(at) = self.loaded_since.take() {
             self.load_ms = Some(time_ms - at);
         }
         let origin = *self.origin.get_or_insert(time_ms);
@@ -234,9 +266,12 @@ impl App {
                 let step = match stages {
                     NewGame::Closing(_) => {
                         // Section 5: the first caption only when the game
-                        // type changes; it is remembered from now on.
+                        // type changes. It is remembered from now on, before
+                        // the first caption's work (our choice; the spec sets
+                        // it after).
                         let changed = self.game_type != Some(GAME_TYPE);
                         self.game_type = Some(GAME_TYPE);
+                        self.load_started = Some(time_ms);
                         *stages = NewGame::Stages(Box::new(Loading::start(data, changed)));
                         Ok(None)
                     }
@@ -248,16 +283,10 @@ impl App {
                     Ok(None) => {}
                     Ok(Some((level, screen))) => {
                         self.error = None;
-                        self.loaded_at = Some(time_ms);
-                        // Section 6: muted while the loading image covers
-                        // the level.
-                        audio.set_master_gain(0.0);
+                        self.loaded_since = self.load_started.take();
                         *phase = Phase::Level {
                             level: Box::new(level),
-                            overlay: Some(Overlay {
-                                screen,
-                                frames_left: OVERLAY_FRAMES,
-                            }),
+                            overlay: Some(Overlay::new(screen, audio)),
                         };
                     }
                     Err(e) => {
@@ -268,19 +297,13 @@ impl App {
                 }
             }
             Phase::Level { level, overlay } => {
-                // Section 2, step 6: after the last overlay frame the image
-                // is gone and sound is un-muted.
-                if let Some(o) = overlay.as_mut() {
-                    o.frames_left -= 1;
-                }
-                if overlay.as_ref().is_some_and(|o| o.frames_left == 0) {
-                    *overlay = None;
-                    audio.set_master_gain(1.0);
+                if let Some(o) = overlay.take() {
+                    *overlay = o.next_frame(audio);
                 }
                 level.update(now, input);
                 if level.back_requested() {
-                    if overlay.is_some() {
-                        audio.set_master_gain(1.0);
+                    if let Some(o) = overlay.take() {
+                        o.end(audio);
                     }
                     *phase = Phase::Menu(TitleMenu::open(data, now, input, audio));
                 }
@@ -341,10 +364,12 @@ impl App {
         match &mut self.phase {
             Some(Phase::Startup(s)) => s.stop(audio),
             Some(Phase::Menu(m)) => m.stop(audio),
-            Some(Phase::Level {
-                overlay: Some(_), ..
-            }) => audio.set_master_gain(1.0),
-            Some(Phase::Loading { .. } | Phase::Level { .. }) | None => {}
+            Some(Phase::Level { overlay, .. }) => {
+                if let Some(o) = overlay.take() {
+                    o.end(audio);
+                }
+            }
+            Some(Phase::Loading { .. }) | None => {}
         }
     }
 
@@ -504,6 +529,25 @@ mod tests {
             input.end_frame();
         }
         assert_eq!(caption(&app), (1, "Сервер: Старт...".into()));
+    }
+
+    #[test]
+    fn the_overlay_mutes_for_thirty_frames_or_until_left() {
+        let mut audio = FakeAudio::default();
+        let mut overlay = Some(Overlay::new(LoadingScreen::default(), &mut audio));
+        let mut frames = 0;
+        while let Some(o) = overlay {
+            frames += 1;
+            assert_eq!(audio.master_gains, [0.0], "muted on frame {frames}");
+            overlay = o.next_frame(&mut audio);
+        }
+        assert_eq!(frames, 30);
+        assert_eq!(audio.master_gains, [0.0, 1.0]);
+        // Leaving the level during the overlay un-mutes at once.
+        let mut audio = FakeAudio::default();
+        let o = Overlay::new(LoadingScreen::default(), &mut audio);
+        o.next_frame(&mut audio).unwrap().end(&mut audio);
+        assert_eq!(audio.master_gains, [0.0, 1.0]);
     }
 
     #[test]

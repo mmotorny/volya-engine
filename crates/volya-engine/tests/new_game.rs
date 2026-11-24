@@ -414,4 +414,33 @@ fn new_game_loading_screen_from_game_data() {
             .iter()
             .all(|s| !s.layer.starts_with("loading"))
     );
+
+    // A later New Game skips prefetching (section 5); leaving the level
+    // during its overlay frames un-mutes at once.
+    for k in [Key::Escape, Key::Enter, Key::Enter] {
+        press(&mut input, k);
+        step(&mut app, &mut input, &mut audio);
+    }
+    step(&mut app, &mut input, &mut audio);
+    let AppState::Loading {
+        loading: Some(l), ..
+    } = app.state()
+    else {
+        panic!("not loading: {:?}", app.state())
+    };
+    assert_eq!((l.captions, l.caption.as_str()), (1, CAPTIONS[1].0));
+    for _ in 0..16 {
+        step(&mut app, &mut input, &mut audio);
+    }
+    assert!(matches!(
+        app.state(),
+        AppState::Level {
+            overlay_frames: 30,
+            ..
+        }
+    ));
+    press(&mut input, Key::Escape);
+    step(&mut app, &mut input, &mut audio);
+    assert!(matches!(app.state(), AppState::Menu { .. }));
+    assert_eq!(audio.0, [0.0, 1.0, 0.0, 1.0]);
 }

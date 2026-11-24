@@ -94,15 +94,18 @@ pub async fn launch() -> Result<serde_json::Value, JsValue> {
     Ok(json!({ "loading_ms": js_sys::Date::now() - started, "splash": splash.is_some() }))
 }
 
-/// Ends the game, stopping its sounds and giving the screen back.
+/// Ends the game, stopping its sounds and giving the screen back. The
+/// app's master gain ends with it (it is 0 while the loading image covers
+/// the level, docs/behavior/loading-screen.md section 6).
 pub fn stop() {
     let running = RUNNING.with(|r| r.borrow_mut().take());
-    if let Some(running) = running {
+    if let Some(Running { voices, .. }) = running {
         crate::audio::with_mixer_opt(|mixer| {
             if let Some(mixer) = mixer {
-                for voice in running.voices {
+                for voice in voices {
                     mixer.stop(voice);
                 }
+                mixer.set_master_gain(1.0);
             }
         });
         crate::input::set_capture(false);

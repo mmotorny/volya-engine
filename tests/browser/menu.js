@@ -291,17 +291,23 @@ export const tests = {
     await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
     key("Enter");
     // The loading screen (docs/behavior/loading-screen.md): a caption per
-    // stage over the background and the progress strip.
+    // stage over the background and the progress strip. Whichever loading
+    // image is current when the scene is read (a stage's, or after the last
+    // stage the overlay's over the level's first 30 frames) is checked.
     const loading = await until((s) => s.phase === "loading" && s.loading, "the loading screen", 10000);
     assertEqual(loading.loading.expected, 14, "expected captions");
-    const frame = await volya.call("menu_scene", { width: 1024, height: 768 });
+    let frame;
+    for (const deadline = performance.now() + 10000; performance.now() < deadline; await sleep(30)) {
+      frame = await volya.call("menu_scene", { width: 1024, height: 768 });
+      if (frame.sprites.some((s) => s.layer.startsWith("loading"))) break;
+    }
     assertEqual(frame.sprites.filter((s) => s.layer === "loading strip").length, 40, "strip cells");
     assert(frame.sprites.some((s) => s.layer === "loading background"), "background");
     assert(frame.sprites.some((s) => s.layer === "loading caption"), "caption");
     // After the last stage the image covers the level's first 30 frames.
     const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", 60000);
     assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
-    let note = `"${loading.loading.caption}" seen; loaded and first frame in ${s.load_ms.toFixed(0)} ms`;
+    let note = `"${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms`;
     if (gpu.state === "ready") {
       const { rgba } = await volya.call("debug_capture", { width: 256, height: 192 });
       const colours = new Set();

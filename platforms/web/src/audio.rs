@@ -23,7 +23,7 @@ thread_local! {
 const GAME_DATA: &str = "gamedata\\";
 
 /// (Re)starts audio output at the output's sample rate; stops any sounds and
-/// keeps the category volumes.
+/// keeps the category volumes and the master gain.
 #[wasm_bindgen]
 pub fn audio_init(sample_rate: u32) {
     MIXER.with(|m| {
@@ -33,6 +33,7 @@ pub fn audio_init(sample_rate: u32) {
             for category in [Category::Effects, Category::Music] {
                 new.set_volume(category, old.volume(category));
             }
+            new.set_master_gain(old.master_gain());
         }
         *mixer = Some(new);
     });

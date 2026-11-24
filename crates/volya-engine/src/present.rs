@@ -314,8 +314,9 @@ impl Presenter {
         Ok(world)
     }
 
-    /// The draw list of `scene` at engine clock `clock`. Videos no longer in
-    /// the scene are released, and so is a world no longer shown.
+    /// The draw list of `scene` at engine clock `clock`. Images and videos
+    /// no longer in the scene are released, and so is a world no longer
+    /// shown.
     pub fn draw_list(
         &mut self,
         renderer: &mut Renderer,
@@ -369,6 +370,15 @@ impl Presenter {
                 .map(|cs| cs.map(|c| [c.r, c.g, c.b, c.a]));
             list.quads.push(quad);
         }
+        // Images no longer drawn are released too, e.g. the loading image's
+        // textures once the overlay ends (loading-screen.md section 2,
+        // step 6).
+        self.images.retain(|path, _| {
+            scene
+                .sprites
+                .iter()
+                .any(|s| matches!(&s.texture, TextureId::Image { path: p } if p == path))
+        });
         self.videos.retain(|path, _| {
             scene
                 .sprites

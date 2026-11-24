@@ -342,10 +342,13 @@ impl NewGameLoad {
                 self.level = Some(Level::parse(&bytes).map_err(|e| file("level", e))?);
             }
             Stage::LoadingGeometry => {
-                let mut f = tree.open(&format!("{dir}\\level.geom"))?;
+                let mut f = tree
+                    .open(&format!("{dir}\\level.geom"))
+                    .map_err(|e| file("level.geom", e))?;
                 self.geom = Some(LevelGeom::read(&mut f).map_err(|e| file("level.geom", e))?);
             }
-            // The static visuals' draw list and bounding spheres.
+            // The static visuals' draw list and bounding spheres (placed
+            // under this caption by us: the spec names the spatial index).
             Stage::LoadingSpatialDb => {
                 let level = earlier(self.level.as_ref(), "level")?;
                 let geom = earlier(self.geom.as_ref(), "level.geom")?;
@@ -370,7 +373,8 @@ impl NewGameLoad {
                     Err(e) => return Err(e),
                 };
             }
-            // The actor and the start weather (level-loading.md 2.6).
+            // The actor and the start weather (level-loading.md 2.6), placed
+            // under this caption by us (the client creates the objects here).
             Stage::ClientSpawning => {
                 let name = earlier(self.name.as_deref(), "level")?;
                 self.body = Some(ActorBody::from_section(
@@ -383,9 +387,10 @@ impl NewGameLoad {
                 self.time_of_day = time_of_day;
                 self.time_factor = time_factor(tree, data)?;
             }
-            // Every texture file the level needs is located here; the
+            // Every texture file the level needs is located here. The
             // presenter reads and uploads them with the first frame that
-            // draws the world (the first frame under the loading image).
+            // draws the world, the first under the loading image: our
+            // departure from section 5, which reads them under this caption.
             Stage::LoadingTextures => {
                 let level = earlier(self.level.as_ref(), "level")?;
                 (self.surfaces, self.draw_surfaces, self.not_drawn) =
