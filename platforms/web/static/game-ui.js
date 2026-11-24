@@ -179,10 +179,8 @@ async function runImport({ exe, bin, only }, onProgress) {
 function importProblem(message) {
   const again = "Choose both installer files again: the import continues where it stopped.";
   if (message === "pick") {
-    return {
-      title: "Pick both installer files",
-      text: ["Choose ", fileName("setup_….exe"), " and ", fileName("setup_…-1.bin"), " together."],
-    };
+    // Notices say "both installer files"; only the steps name them.
+    return { title: "Pick both installer files", text: "Select both at once in the file picker." };
   }
   if (/^Inno Setup headers|no game archives|not an Inno/i.test(message)) {
     return {
