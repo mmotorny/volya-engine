@@ -458,9 +458,10 @@ details.panel > summary .label {
 /* Landscape phones: brand beside the content to save height. */
 @media (orientation: landscape) and (max-height: 500px) {
   main {
-    max-width: 52rem;
+    max-width: 54rem;
     display: grid;
-    grid-template-columns: 12rem 1fr;
+    grid-template-columns: 14rem 1fr;
+    column-gap: 2rem;
     grid-template-rows: auto 1fr;
     align-items: start;
     padding-top: calc(env(safe-area-inset-top) + 1.25rem);
@@ -470,6 +471,16 @@ details.panel > summary .label {
     grid-row: 1 / span 2;
     position: sticky;
     top: 1.25rem;
+    margin: 0;
+    text-align: center;
+  }
+
+  /* One line under the icon, so name and icon read as one mark. */
+  .brand h1 {
+    font-size: 1.125rem;
+    letter-spacing: 0.2em;
+    padding-left: 0.2em;
+    white-space: nowrap;
   }
 
   #game {
