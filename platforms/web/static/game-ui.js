@@ -106,7 +106,10 @@ export async function importGame({ exe, bin, only }, onProgress = () => {}) {
 function showImport(status) {
   const message = element("p", { className: "message", hidden: true });
   const progress = element("progress", { max: 1, value: 0, hidden: true });
-  const input = element("input", { type: "file", multiple: true, hidden: true });
+  // Declaring the installer's types sends iOS straight to the Files picker
+  // (no Photos or camera menu); both files stay selectable (checked in the
+  // simulator with real taps, `cargo xtask sim`).
+  const input = element("input", { type: "file", multiple: true, accept: ".exe,.bin", hidden: true });
   const choose = element("button", { className: "primary wide", textContent: "Choose installer files" });
   const say = (text) => {
     message.textContent = text;
