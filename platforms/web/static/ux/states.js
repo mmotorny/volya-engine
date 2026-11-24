@@ -14,6 +14,7 @@ export const SECTIONS = [
     title: "Import",
     states: [
       { id: "import", name: "First start", game: fresh },
+      { id: "import-tab", name: "First start in a browser tab", game: fresh, tab: true },
       { id: "import-pick", name: "Picked the wrong files", game: fresh, snapshot: { error: "pick" } },
       { id: "import-not-installer", name: "Not the game's installer", game: fresh, snapshot: { error: "Inno Setup headers: unexpected signature" } },
       {
@@ -41,7 +42,7 @@ export const SECTIONS = [
     title: "Home",
     states: [
       { id: "home", name: "Ready", game: imported },
-      { id: "home-not-kept", name: "Storage not kept (browser tab)", game: imported, persisted: false },
+      { id: "home-not-kept", name: "Storage not kept (browser tab)", game: imported, persisted: false, tab: true },
       { id: "home-no-webgpu", name: "No WebGPU", game: imported, gpu: false },
       { id: "home-play-failed", name: "Play failed", game: imported, launchError: "level.geom: unexpected end of file" },
       { id: "home-updating", name: "Updating (automatic)", game: imported, updates: { status: "downloading", bytes: 1.9 * 2 ** 20 } },
@@ -67,7 +68,7 @@ export const SECTIONS = [
         updates: { auto: false, status: "available", bytes: 1.9 * 2 ** 20 },
       },
       { id: "settings-downloading", name: "Downloading", game: imported, screen: "settings", updates: { status: "downloading" } },
-      { id: "settings-not-kept", name: "Storage not kept", game: imported, screen: "settings", persisted: false },
+      { id: "settings-not-kept", name: "Storage not kept (browser tab)", game: imported, screen: "settings", persisted: false, tab: true },
       { id: "settings-no-game", name: "No game imported", game: fresh, screen: "settings" },
     ],
   },

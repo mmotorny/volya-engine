@@ -5,6 +5,8 @@
 // message (docs/architecture.md).
 
 import { startInput } from "./input.js";
+// Early: Chrome offers installing the app once, soon after load.
+import "./install.js";
 import { startUpdates, versionText } from "./update.js";
 
 // Installable app: offline start and updates (sw.js, update.js). Registered

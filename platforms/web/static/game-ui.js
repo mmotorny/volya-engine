@@ -16,6 +16,7 @@
 // zone, removing the import.
 
 import { BUILD, versionText } from "./update.js";
+import { SHARE_ICON, canOffer, install, installed, platform } from "./install.js";
 
 
 let call;
@@ -278,6 +279,25 @@ function showImport(status, snapshot = null) {
     }
     if (snapshot.error) fail(snapshot.error);
   }
+  // On iPhone in a browser tab, an import would stay in the browser's storage,
+  // apart from the Home Screen app's: say so before files are chosen.
+  const installFirst =
+    platform() === "ios" && !installed()
+      ? element(
+          "div",
+          { className: "callout warning" },
+          element("strong", { textContent: "Add to your Home Screen first" }),
+          element(
+            "span",
+            {},
+            "The Home Screen app keeps the game and has its own storage, so import there: tap ",
+            shareIcon(),
+            " in the browser, then ",
+            element("strong", { textContent: "Add to Home Screen" }),
+            ", and open Volya Engine from your Home Screen.",
+          ),
+        )
+      : null;
   // An interrupted import looks like one under way, stopped where it was,
   // with what happened and how to go on.
   if (status.written > 0 && !snapshot) {
@@ -308,6 +328,7 @@ function showImport(status, snapshot = null) {
       element("p", { className: "label", textContent: "Bring your own game" }),
       element("h2", { textContent: "Import S.T.A.L.K.E.R.: Shadow of Chernobyl" }),
       element("p", { textContent: "Volya Engine runs the game from your own copy, imported from its GOG offline installer." }),
+      installFirst,
       element(
         "ol",
         { className: "steps" },
@@ -445,12 +466,53 @@ async function cover() {
   return canvas;
 }
 
+/** The Share symbol, inline in text. */
+function shareIcon() {
+  const span = element("span", { className: "inline-icon" });
+  span.innerHTML = SHARE_ICON;
+  return span;
+}
+
+/**
+ * How to keep the game on this device: install the app (install.js), said
+ * only for this device; nothing once installed. On iPhone the Home Screen
+ * app has its own storage, so the game is imported again there.
+ */
+function keepHelp() {
+  if (installed()) return [];
+  if (platform() === "ios") {
+    return [
+      element(
+        "p",
+        {},
+        "To keep it, add Volya Engine to your Home Screen: tap ",
+        shareIcon(),
+        " in the browser, then ",
+        element("strong", { textContent: "Add to Home Screen" }),
+        ". Then import the game in the Home Screen app: it has its own storage.",
+      ),
+    ];
+  }
+  if (canOffer()) {
+    const button = element("button", { className: "wide", textContent: "Install app" });
+    button.addEventListener("click", async () => {
+      if (await install()) {
+        await navigator.storage.persist();
+        await refresh();
+      }
+    });
+    return [element("p", { textContent: "Install Volya Engine as an app to keep it." }), button];
+  }
+  return [element("p", { textContent: "Install Volya Engine as an app to keep it: click the install icon at the right of Chrome's address bar." })];
+}
+
 const storageWarning = () =>
   element(
     "div",
     { className: "panel warning" },
     element("p", { className: "label", textContent: "Storage" }),
-    element("p", { textContent: "This browser may delete the imported game when it needs space. Install Volya Engine as an app to keep it (on iPhone: Share, then Add to Home Screen)." }),
+    element("p", { textContent: "This browser may delete the imported game when it needs space." }),
+    ...keepHelp(),
   );
 
 /** Settings: updates, storage, and removing the import (danger zone). */
@@ -518,10 +580,9 @@ async function showSettings() {
       element("p", { className: "value", textContent: status.imported ? `S.T.A.L.K.E.R.: Shadow of Chernobyl · ${formatBytes(status.bytes)}` : "No game imported." }),
       element("p", {
         className: "note",
-        textContent: persisted
-          ? "Kept: the browser won't delete it to free space."
-          : "Not kept: the browser may delete it to free space. Install Volya Engine as an app to keep it.",
+        textContent: persisted ? "Kept: the browser won't delete it to free space." : "Not kept: the browser may delete it to free space.",
       }),
+      ...(persisted ? [] : keepHelp()),
     ),
     status.imported
       ? element(

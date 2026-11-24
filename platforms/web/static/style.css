@@ -405,7 +405,7 @@ button.danger.filled:hover:not(:disabled) {
   color: var(--ink-2);
 }
 
-.callout strong {
+.callout > strong {
   color: #f5c26b;
   font-weight: 650;
 }
@@ -415,7 +415,7 @@ button.danger.filled:hover:not(:disabled) {
   background: rgba(255, 155, 143, 0.1);
 }
 
-.callout.problem strong {
+.callout.problem > strong {
   color: var(--danger);
 }
 
@@ -579,6 +579,14 @@ progress.problem::-moz-progress-bar {
 }
 
 .panel a:hover {
+  color: var(--ink);
+}
+
+/* A system symbol inline in text (e.g. iOS's Share). */
+.inline-icon svg {
+  width: 0.95em;
+  height: 1.15em;
+  vertical-align: -0.2em;
   color: var(--ink);
 }
 
