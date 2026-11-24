@@ -16,7 +16,7 @@
 //! | Action | Gamepad | Touch (the page's on-screen controls) |
 //! |---|---|---|
 //! | move | left stick | the move stick (left half) |
-//! | walk instead of run | the stick pushed less than [`RUN_DEFLECTION`] | the same |
+//! | walk instead of run | the stick pushed less than [`RUN_DEFLECTION`], kept after it is released | the same |
 //! | look | right stick, at `rot_speed` at full deflection (8.2) | a drag on the right half, as mouse counts (8.1) |
 //! | jump | south (A / cross) | Jump |
 //! | crouch | west (X / square), as `crouch_toggle` | Crouch, as `crouch_toggle` |
@@ -25,7 +25,10 @@
 //!
 //! Sticks give the spec's digital directions: eight sectors of 45°
 //! ([`stick_directions`]). Crouch is a toggle on both, since holding it
-//! while moving and looking would need a third thumb.
+//! while moving and looking would need a third thumb. Each stick's walk or
+//! run choice is latched: a light push selects walking, a full push running,
+//! and a released stick keeps the last choice, so the low crouch (a crouch
+//! while walking, 4.2) can be entered and held without touching the stick.
 
 use std::collections::HashMap;
 
@@ -186,6 +189,19 @@ pub fn stick_directions([x, y]: [f32; 2]) -> Option<([bool; 4], bool)> {
 pub struct Controls {
     pub bindings: Bindings,
     pub settings: Settings,
+    /// The latched walk choice of the gamepad's left stick and of the touch
+    /// stick (see the module docs).
+    pub walk: [bool; 2],
+}
+
+impl Controls {
+    pub fn new(bindings: Bindings, settings: Settings) -> Self {
+        Self {
+            bindings,
+            settings,
+            walk: [false; 2],
+        }
+    }
 }
 
 impl Controls {
@@ -193,7 +209,7 @@ impl Controls {
     /// go back (Escape, a gamepad's east button, the touch Menu button).
     /// The in-game menu (a separate spec) is not made yet; going back
     /// returns to the title menu.
-    pub fn request(&self, input: &Input) -> (Request, bool) {
+    pub fn request(&mut self, input: &Input) -> (Request, bool) {
         let held = |a| self.bindings.controls(a).any(|c| input.device_held(c));
         let changed = |a, pressed: bool| {
             input
@@ -247,14 +263,15 @@ impl Controls {
             ],
             input.touch_stick(),
         ];
-        for stick in pads {
+        for (stick, walk) in pads.into_iter().zip(&mut self.walk) {
             if let Some(([f, b, l, rt], run)) = stick_directions(stick) {
                 r.forward |= f;
                 r.back |= b;
                 r.left |= l;
                 r.right |= rt;
-                r.accel |= self.settings.always_run != run;
+                *walk = !run;
             }
+            r.accel |= self.settings.always_run == *walk;
         }
         let dead = |v: f32| if v.abs() < DEAD_ZONE { 0.0 } else { v };
         r.turn[0] = (r.turn[0] + dead(input.axis(GamepadAxis::RightX))).clamp(-1.0, 1.0);
@@ -288,10 +305,7 @@ bind rlookout kE\nbind jump kSPACE\nbind crouch kLCONTROL\nbind accel kLSHIFT\n\
 bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
 
     fn controls() -> Controls {
-        Controls {
-            bindings: Bindings::read(&[DEFAULTS]),
-            settings: Settings::default(),
-        }
+        Controls::new(Bindings::read(&[DEFAULTS]), Settings::default())
     }
 
     fn key(input: &mut Input, key: Key, pressed: bool) {
@@ -324,7 +338,7 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
 
     #[test]
     fn keyboard_and_mouse_follow_the_bindings() {
-        let c = controls();
+        let mut c = controls();
         let mut i = Input::new();
         key(&mut i, Key::W, true);
         key(&mut i, Key::LeftShift, true);
@@ -367,7 +381,7 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
             stick_directions([-0.3, 0.05]),
             Some(([false, false, true, false], false))
         );
-        let c = controls();
+        let mut c = controls();
         let mut i = Input::new();
         i.handle(Event::GamepadAxis {
             axis: GamepadAxis::LeftY,
@@ -389,6 +403,24 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
         // Walking with g_always_run on is `accel` held.
         assert!(r.forward && r.accel && r.crouch_toggle && r.jump_pressed);
         assert_eq!(r.turn, [0.5, 0.0]);
+        // Released, the stick keeps walking: crouching now is the low
+        // crouch, held without the stick.
+        i.handle(Event::GamepadAxis {
+            axis: GamepadAxis::LeftY,
+            value: 0.0,
+        });
+        let (r, _) = c.request(&i);
+        assert!(!r.forward && r.accel, "the walk choice is kept");
+        i.handle(Event::GamepadAxis {
+            axis: GamepadAxis::LeftY,
+            value: -1.0,
+        });
+        assert!(!c.request(&i).0.accel, "a full push runs");
+        i.handle(Event::GamepadAxis {
+            axis: GamepadAxis::LeftY,
+            value: 0.0,
+        });
+        assert!(!c.request(&i).0.accel, "and stays running");
         i.handle(Event::GamepadButton {
             button: GamepadButton::East,
             pressed: true,
@@ -398,7 +430,7 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
 
     #[test]
     fn touch_controls() {
-        let c = controls();
+        let mut c = controls();
         let mut i = Input::new();
         i.handle(Event::TouchStick { value: [0.0, -0.9] });
         i.handle(Event::TouchLook { delta: [12.0, 4.0] });
@@ -424,5 +456,104 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
         });
         let (r, back) = c.request(&i);
         assert!(r.jump_released && back && r.forward);
+        // A light push, then let go: the touch stick keeps walking too.
+        i.handle(Event::TouchStick { value: [0.0, -0.3] });
+        assert!(c.request(&i).0.accel);
+        i.handle(Event::TouchStick { value: [0.0, 0.0] });
+        let (r, _) = c.request(&i);
+        assert!(r.accel && !r.forward);
+    }
+
+    #[test]
+    fn a_latched_walk_holds_the_low_crouch_without_the_stick() {
+        use crate::core::camera::Angles;
+        use crate::core::collision::{Cform, CformTriangle, CollisionWorld};
+        use crate::core::movement::{Bobbing, MovementConfig, Player};
+        use volya_engine_formats::gamemtl::GameMaterial;
+
+        // A floor of the default material, facing up.
+        let v = [
+            [-10.0, 0.0, -10.0],
+            [-10.0, 0.0, 10.0],
+            [10.0, 0.0, 10.0],
+            [10.0, 0.0, -10.0],
+        ];
+        let triangles = [[0, 1, 2], [0, 2, 3]].map(|vertices| CformTriangle {
+            vertices,
+            attributes: 0,
+        });
+        let cform = Cform {
+            bbox_min: [-10.0, 0.0, -10.0],
+            bbox_max: [10.0, 0.0, 10.0],
+            vertices: v.to_vec(),
+            triangles: triangles.to_vec(),
+        };
+        let world = CollisionWorld::new(
+            cform,
+            vec![GameMaterial {
+                id: 0,
+                ..GameMaterial::default()
+            }],
+        )
+        .unwrap();
+        let config = MovementConfig {
+            walk_accel: 17.0,
+            run_coef: 2.1,
+            run_back_coef: 1.8,
+            walk_back_coef: 0.8,
+            crouch_coef: 0.45,
+            sprint_koef: 2.6,
+            walk_strafe_coef: 1.0,
+            run_strafe_coef: 1.0,
+            jump_speed: 6.0,
+            air_control_param: 0.1,
+            camera_height_factor: 0.85,
+            crash_speed_min: 14.0,
+            crash_speed_max: 30.0,
+            body: crate::core::collision::body::BodyConfig {
+                boxes: [[0.35, 0.9, 0.35], [0.35, 0.75, 0.35], [0.35, 0.6, 0.35]],
+                mass: 80.0,
+            },
+            lim_pitch: [-1.5, 1.5],
+            rot_speed: [3.0, 3.0, 0.0],
+            bobbing: Bobbing {
+                run_amplitude: 0.0075,
+                run_speed: 10.0,
+                walk_amplitude: 0.005,
+                walk_speed: 7.0,
+            },
+        };
+        let mut c = controls();
+        let mut p = Player::new(config, c.settings, [0.0; 3], Angles::default(), 0);
+        let mut now = 0;
+        let mut frame = |c: &mut Controls, p: &mut Player, i: &mut Input| {
+            now += 16;
+            let (r, _) = c.request(i);
+            p.frame(&world, now, &r);
+            i.end_frame();
+        };
+        let mut i = Input::new();
+        // A light push on the touch stick, let go; then Crouch.
+        i.handle(Event::TouchStick { value: [0.0, -0.3] });
+        frame(&mut c, &mut p, &mut i);
+        i.handle(Event::TouchStick { value: [0.0, 0.0] });
+        frame(&mut c, &mut p, &mut i);
+        i.handle(Event::TouchButton {
+            button: TouchButton::Crouch,
+            pressed: true,
+        });
+        frame(&mut c, &mut p, &mut i);
+        i.handle(Event::TouchButton {
+            button: TouchButton::Crouch,
+            pressed: false,
+        });
+        for _ in 0..30 {
+            frame(&mut c, &mut p, &mut i);
+        }
+        assert_eq!(p.state().posture, 2, "the low crouch, held");
+        // A full push runs: the crouch rises to box 1.
+        i.handle(Event::TouchStick { value: [0.0, -1.0] });
+        frame(&mut c, &mut p, &mut i);
+        assert_eq!(p.state().posture, 1);
     }
 }

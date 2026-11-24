@@ -119,15 +119,18 @@ export function startInput(view, send) {
     if (!capture || !name) return;
     if (!BROWSER_KEYS.has(event.code)) event.preventDefault();
     const pressed = event.type === "keydown";
-    // Physical presses only; shortcuts with Meta or Alt belong to the
-    // browser. Control is a game key (crouch), so keys pressed with it are
-    // the game's.
-    if (pressed && (event.repeat || event.metaKey || event.altKey)) return;
+    // Physical presses only; shortcuts with modifiers belong to the
+    // browser. While the level's controls are live Control is a game key
+    // (crouch), so keys pressed with it are the game's there.
+    if (pressed && (event.repeat || event.metaKey || event.altKey || (event.ctrlKey && !level))) return;
     send(["key", name, pressed]);
   };
   addEventListener("keydown", key);
   addEventListener("keyup", key);
   addEventListener("blur", () => capture && send(["blur"]));
+  // Losing pointer lock (Escape, or the browser taking it back) may swallow
+  // releases: nothing stays held.
+  document.addEventListener("pointerlockchange", () => capture && !locked() && send(["blur"]));
 
   // Gamepads have no events for buttons and axes: poll each frame.
   const pads = new Map(); // index → { buttons, axes } last sent

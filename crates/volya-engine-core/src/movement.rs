@@ -233,7 +233,9 @@ impl Default for Settings {
 impl Settings {
     /// The built-in values with the `<name> <value>` lines of `files`
     /// applied in order. A flag is on for `on` (any other value is off, our
-    /// choice); `mouse_sens` is limited to its range (8.1).
+    /// choice). `mouse_sens` is limited to its range (8.1) and `cam_inert`
+    /// to 0 … 1; that out-of-range values are limited rather than refused
+    /// is our choice.
     pub fn read(files: &[&[u8]]) -> Self {
         let mut s = Self::default();
         for file in files {
@@ -363,9 +365,7 @@ pub struct Player {
     /// The most upward contact normal of the last step with contacts
     /// (6.6).
     last_ground: Option<Vec3>,
-    /// The current airborne phase has had a step without contact, and the
-    /// first touch after it has happened (6.7, 9.2).
-    air_clear: bool,
+    /// The current airborne phase has touched something (6.7, 9.2).
     touched: bool,
     /// The feet's height as the eye follows it (start-position.md 4.2).
     eye_feet: f32,
@@ -433,7 +433,6 @@ impl Player {
             take_off: None,
             jump_assist: None,
             last_ground: None,
-            air_clear: false,
             touched: false,
             eye_feet: position[1],
             bob_time: 0.0,
@@ -510,6 +509,11 @@ impl Player {
             .min(FRAME_TIME_CAP);
         self.frame_time = dt_f;
 
+        // The order within a frame is our choice where the spec gives none:
+        // look (8), the movement update (3-5), the hand-over and take-off
+        // (6.1, 6.6), the physics steps (6.1), the direction clearing of 9.1
+        // (after the steps, on the speed they leave: our choice), the camera
+        // (7, 9).
         self.look(request, dt_f);
         let (a, take_off) = self.movement_update(world, now, request, dt_m);
         self.hand_over(a);
@@ -618,7 +622,8 @@ impl Player {
                 s.left = false;
                 s.right = false;
             }
-            // 4.2: entering a crouch and changing its height.
+            // 4.2: entering a crouch, and changing its height while crouched
+            // (also on the frame the crouch request ends, before standing up).
             let request_runs = self.runs(request.accel);
             let mut keep_accel = false;
             if crouch && !self.state.crouch {
@@ -626,7 +631,7 @@ impl Player {
                 if self.body.request_box(world, target, now) {
                     self.state.crouch = true;
                 }
-            } else if crouch && self.state.crouch {
+            } else if self.state.crouch {
                 let state_runs = self.runs(self.state.accel);
                 if !state_runs && request_runs {
                     keep_accel = !self.body.request_box(world, 1, now);
@@ -807,17 +812,20 @@ impl Player {
         if take_off.is_none() && c.walkable {
             self.jump_assist = None;
         }
-        // 6.7, 9.2: the first touch of an airborne phase.
-        if airborne && take_off.is_none() {
-            if c.ground.is_none() {
-                self.air_clear = true;
-            } else if self.air_clear && !self.touched {
-                self.touched = true;
-                self.land(world, c.impact_speed);
-            }
+        // 6.7, 9.2: the step the character first touches something while
+        // airborne (the step applying a take-off is not yet airborne).
+        if airborne && take_off.is_none() && c.ground.is_some() && !self.touched {
+            self.touched = true;
+            self.land(world, c.impact_speed);
+        } else if r.landed && self.state.falling {
+            // Our reading: a contact held from the take-off (a wall) is the
+            // first touch, and the falling flag set after it would then never
+            // clear (the spec clears it only on that touch); so the step
+            // ending the airborne phase (level-cform.md 6.4) lands too while
+            // the character is falling.
+            self.land(world, c.impact_speed);
         }
         if !r.airborne {
-            self.air_clear = false;
             self.touched = false;
         }
     }
@@ -860,7 +868,8 @@ impl Player {
         if airborne {
             force = add(force, scale(a, m * self.config.air_control_param));
         }
-        // 6.6: jump assistance.
+        // 6.6: jump assistance; not on the step applying the take-off, which
+        // starts it (our choice).
         if let Some(p0) = self.jump_assist.filter(|_| !taking_off) {
             let ah = horizontal(a);
             let l = length(ah);

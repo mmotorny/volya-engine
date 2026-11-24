@@ -335,15 +335,16 @@ export const tests = {
     const player = async () => (await state()).level.player;
     const down = (code) => document.body.dispatchEvent(new KeyboardEvent("keydown", { code, bubbles: true, cancelable: true }));
     const up = (code) => document.body.dispatchEvent(new KeyboardEvent("keyup", { code, bubbles: true, cancelable: true }));
-    // The start faces the trader's counter about a metre ahead: turn
-    // around with the arrow keys (π rad/s) first, towards the door.
+    // Collision stops a run along the start view after about 0.8 m
+    // (measured natively): turn half round with the arrow keys (π rad/s)
+    // first, where the way is clear for more than a metre.
     let s = await state();
     const yaw = s.level.yaw;
     down("ArrowRight");
     await until((s) => s.level.yaw > yaw + 2.9, "the right arrow to turn round", 3000);
     up("ArrowRight");
-    // Space held a moment where the player stands (the bunker's ceiling is
-    // 3.2 m up): up (0.92 m at most) and back down.
+    // Space held a moment where the player stands (a ceiling measured
+    // 3.2 m above the start): up (0.92 m at most) and back down.
     const ground = await player();
     assert(!ground.airborne, "on the ground at the start");
     down("Space");
@@ -369,8 +370,8 @@ export const tests = {
     assert(moved > 0.5, `moved ${moved.toFixed(2)} m`);
     assert(Math.abs(p.position[1] - start.position[1]) < 0.05, `height ${p.position[1] - start.position[1]}`);
     assert(!p.airborne, "still on the ground");
-    // A level frame posts its controls to the page; the desktop shows no
-    // touch controls until a touch.
+    // No touch in the level yet: desktop Chrome shows no touch controls.
+    assert(document.getElementById("touch-controls").hidden, "touch controls shown without a touch");
     return `ran ${moved.toFixed(2)} m, jumped ${height.toFixed(2)} m`;
   },
 
@@ -403,8 +404,8 @@ export const tests = {
         }),
       );
     const start = (await state()).level;
-    // The stick pushed fully up runs forward (towards the door: the
-    // keyboard test turned round); a second finger drags right to look.
+    // The stick pushed fully up runs forward (along the view the keyboard
+    // test turned to); a second finger drags right to look.
     const move = controls.querySelector(".touch-move");
     const look = controls.querySelector(".touch-look");
     const [mx, my] = centre(move);
@@ -431,6 +432,12 @@ export const tests = {
     await until((s) => s.level.player.crouch, "Crouch to crouch");
     for (let i = 0; i < 50 && crouch.getAttribute("aria-pressed") !== "true"; i++) await sleep(20);
     assertEqual(crouch.getAttribute("aria-pressed"), "true", "Crouch shown on");
+    // Jump held down while Menu is pressed: when the controls hide in the
+    // menu, nothing stays held.
+    const jump = controls.querySelector(".touch-button.jump");
+    touchOn(jump, "pointerdown", 35, centre(jump));
+    await sleep(100);
+    assert((await volya.call("input_state")).held.includes("touch_jump"), "Jump held");
     const menu = controls.querySelector(".touch-button.menu");
     touchOn(menu, "pointerdown", 34, centre(menu));
     touchOn(menu, "pointerup", 34, centre(menu));
@@ -438,6 +445,9 @@ export const tests = {
     assertEqual(back.menu.list, "menu_main", "list");
     for (let i = 0; i < 50 && !controls.hidden; i++) await sleep(20);
     assert(controls.hidden, "the touch controls hide in the menu");
+    await sleep(100);
+    const held = (await volya.call("input_state")).held;
+    assert(!held.some((h) => h.startsWith("touch_")), `held after hiding: ${held}`);
     return `moved ${moved.toFixed(2)} m, turned ${(s.level.yaw - start.yaw).toFixed(2)} rad`;
   },
 

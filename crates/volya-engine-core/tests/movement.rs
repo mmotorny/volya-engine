@@ -83,8 +83,9 @@ fn walks_from_the_start_at_the_run_speed() {
         "{eye:?}"
     );
 
-    // Standing a moment (the start view faces the trader's counter, a metre
-    // ahead), then turned towards the bunker's door with the mouse.
+    // Standing a moment (collision stops a run along the start view after
+    // about 0.8 m, measured), then turned half round with the mouse, where
+    // the way is clear for more than a metre (measured).
     let mut now = 0;
     let idle = Request::default();
     for _ in 0..30 {
@@ -120,7 +121,7 @@ fn walks_from_the_start_at_the_run_speed() {
     };
     // Running forward in 16 ms frames: 25 m/s² up to 3.57 m/s (0.143 s),
     // then the cap. In 22 frames (0.352 s): 3.57 × 0.352 − 3.57 × 0.143 / 2
-    // ≈ 1.0 m, short of the door's sill.
+    // ≈ 1.0 m, short of a 0.16 m step measured 1.3 m ahead.
     let timer = Instant::now();
     let (s, distance, heading) = run(&mut player, &mut now, 22);
     let per_frame = timer.elapsed() / 22;
@@ -139,8 +140,8 @@ fn walks_from_the_start_at_the_run_speed() {
     assert!(!s.airborne);
     assert!((s.position[1] - start[1]).abs() < 0.01, "{:?}", s.position);
 
-    // On over the sill and out: on the ground throughout, back at the run
-    // speed.
+    // On over the step and beyond: on the ground throughout, back at the
+    // run speed.
     let mut highest = 0.0f32;
     for _ in 0..41 {
         let (s, _, _) = run(&mut player, &mut now, 1);
@@ -149,7 +150,7 @@ fn walks_from_the_start_at_the_run_speed() {
     }
     let (s, distance, _) = run(&mut player, &mut now, 0);
     let speed = s.velocity[0].hypot(s.velocity[2]);
-    eprintln!("then {distance:.3} m in 1.008 s, over a sill {highest:.3} m high");
+    eprintln!("then {distance:.3} m in 1.008 s, over a step {highest:.3} m high");
     assert!(
         distance > 3.0 && (speed - 3.57).abs() < 0.01,
         "{distance} m, {speed} m/s"

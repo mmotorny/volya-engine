@@ -630,3 +630,82 @@ fn falling_off_a_ledge_lands_with_the_effect() {
         p.state()
     );
 }
+
+#[test]
+fn releasing_the_low_crouch_under_a_ceiling_rises_to_the_crouch() {
+    // Room for the crouch box (1.44 m) but not for standing (1.74 m).
+    let mut b = Builder::default();
+    b.floor([-10.0, 10.0], [-10.0, 10.0], 0.0, true);
+    b.floor([-10.0, 10.0], [-10.0, 10.0], 1.6, false);
+    let world = b.world();
+    let mut p = Player::new(config(), settings(), [0.0; 3], Angles::default(), 0);
+    let low = Request {
+        crouch: true,
+        accel: true,
+        ..Request::default()
+    };
+    let now = run(&mut p, &world, 0, &low, 0.3);
+    assert_eq!(p.state().posture, 2);
+    // Ctrl and Shift released together: the request runs, so the height
+    // changes to box 1 (4.2), and standing up is refused.
+    let released = Request {
+        crouch_released: true,
+        ..Request::default()
+    };
+    run(&mut p, &world, now, &released, 0.5);
+    assert_eq!(p.state().posture, 1);
+    assert!(p.state().flags.crouch);
+}
+
+#[test]
+fn a_jump_against_a_wall_lands_and_stops_falling() {
+    let mut b = Builder::default();
+    b.floor([-10.0, 10.0], [-10.0, 10.0], 0.0, true);
+    b.wall_x(0.34, [0.0, 3.0], [-10.0, 10.0], true);
+    let world = b.world();
+    let mut p = Player::new(config(), settings(), [0.0; 3], Angles::default(), 0);
+    let mut now = run(&mut p, &world, 0, &Request::default(), 0.3);
+    assert!(!p.body().contacts().is_empty());
+    let press = Request {
+        jump_pressed: true,
+        ..Request::default()
+    };
+    now = run(&mut p, &world, now, &press, 0.016);
+    assert!(p.state().airborne);
+    let mut falling = false;
+    for _ in 0..80 {
+        now = run(&mut p, &world, now, &Request::default(), 0.016);
+        falling |= p.state().flags.falling;
+    }
+    let s = p.state();
+    assert!(falling, "it fell");
+    assert!(!s.airborne && !s.flags.falling && !s.flags.jump, "{s:?}");
+}
+
+#[test]
+fn a_jump_pressed_again_in_the_air_waits_for_a_release() {
+    let world = floor();
+    let (mut p, now) = player(&world);
+    let press = Request {
+        jump_pressed: true,
+        ..Request::default()
+    };
+    let release = Request {
+        jump_released: true,
+        ..Request::default()
+    };
+    let mut now = run(&mut p, &world, now, &press, 0.016);
+    now = run(&mut p, &world, now, &release, 0.1);
+    // Released, then pressed and held while still in the air.
+    now = run(&mut p, &world, now, &press, 0.016);
+    assert!(p.state().airborne);
+    while p.state().airborne {
+        now = run(&mut p, &world, now, &Request::default(), 0.016);
+    }
+    // Held through the landing: no jump, however long after the cooldown.
+    now = run(&mut p, &world, now, &Request::default(), 1.0);
+    assert!(!p.state().airborne && !p.state().flags.jump);
+    now = run(&mut p, &world, now, &release, 0.016);
+    run(&mut p, &world, now, &press, 0.016);
+    assert!(p.state().flags.jump && p.state().airborne);
+}

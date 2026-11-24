@@ -184,10 +184,10 @@ impl GameData {
         let user = root_file(DEFAULT_USER_LTX).unwrap_or_default();
         let quit_keys = quit_keys(&[&default_controls, &user]);
         // player-movement.md sections 1.2 and 2.1.
-        let controls = Controls {
-            bindings: Bindings::read(&[&default_controls, &user]),
-            settings: Settings::read(&[&user]),
-        };
+        let controls = Controls::new(
+            Bindings::read(&[&default_controls, &user]),
+            Settings::read(&[&user]),
+        );
 
         let descriptions = ui::load_texture_descriptions(tree, &aliases, &system, resolution)?;
         let colors = ui::load_color_defs(tree, &aliases, resolution)?;

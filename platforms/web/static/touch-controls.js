@@ -66,12 +66,14 @@ export function createTouchControls(send, { touch = false } = {}) {
   actions.append(sprint, crouch, jump);
   root.append(move, look, menu, actions);
 
-  // Every pointer event on the controls stays with them.
+  // Every touch on the controls stays with them; a mouse or pen passes
+  // through to input.js (pointer lock, firing) on a device with both.
   const own = (target, handlers) => {
     for (const [type, handler] of Object.entries(handlers)) {
       target.addEventListener(
         type,
         (event) => {
+          if (event.pointerType !== "touch") return;
           event.stopPropagation();
           event.preventDefault();
           handler(event);
@@ -156,8 +158,15 @@ export function createTouchControls(send, { touch = false } = {}) {
   });
 
   // Buttons: held from down to up.
+  const releases = [];
   for (const b of [menu, jump, crouch, sprint]) {
     const held = new Set();
+    releases.push(() => {
+      if (held.size === 0) return;
+      held.clear();
+      b.classList.remove("down");
+      send(["tbutton", b.dataset.button, false]);
+    });
     const release = (event) => {
       if (!held.delete(event.pointerId) || held.size > 0) return;
       b.classList.remove("down");
@@ -176,7 +185,8 @@ export function createTouchControls(send, { touch = false } = {}) {
     });
   }
 
-  // Shown on touch devices: a coarse pointer, or once a touch is seen.
+  // Shown on touch devices: a coarse pointer, or once a touch is seen in
+  // the level.
   let touched = touch || matchMedia("(pointer: coarse)").matches;
   let live = false;
   const render = () => {
@@ -189,12 +199,13 @@ export function createTouchControls(send, { touch = false } = {}) {
       stick = null;
       restStick();
       looking.clear();
+      for (const release of releases) release();
     }
   };
   addEventListener(
     "pointerdown",
     (event) => {
-      if (event.pointerType !== "touch" || touched) return;
+      if (event.pointerType !== "touch" || touched || !live) return;
       touched = true;
       render();
     },

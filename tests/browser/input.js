@@ -205,6 +205,26 @@ export const tests = {
     assertEqual(actions.length, 0, "actions");
   },
 
+  "Control with a key is the browser's outside a level": async () => {
+    const before = await state();
+    key("keydown", "KeyQ", { ctrlKey: true });
+    key("keyup", "KeyQ", { ctrlKey: true });
+    const { actions } = await since(before);
+    // The release arrives, but nothing was pressed.
+    assertEqual(summary(actions.filter((a) => a.action !== "cursor")), [], "actions");
+  },
+
+  "blur and pointer-lock loss release everything held": async () => {
+    for (const event of [() => dispatchEvent(new Event("blur")), () => document.dispatchEvent(new Event("pointerlockchange"))]) {
+      key("keydown", "ArrowUp");
+      pointer("pointerdown", 5, 5, { button: 0, buttons: 1 });
+      const held = (await state()).held;
+      assert(held.includes("up") && held.includes("mouse_left"), `held ${held}`);
+      event();
+      assertEqual((await state()).held, [], "released");
+    }
+  },
+
   "losing capture releases held input and returns input to the page": async () => {
     key("keydown", "ArrowUp");
     assertEqual((await state()).held, ["up"], "held");
