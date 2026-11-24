@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/logo.svg" alt="Volya Engine logo" width="256"></p>
+<p align="center"><img src="docs/logo.svg" alt="Volya Engine logo" width="384"></p>
 
 # Volya Engine
 
