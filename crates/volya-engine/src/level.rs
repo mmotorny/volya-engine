@@ -15,19 +15,22 @@ use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 
-use crate::core::camera::{self, ActorBody, Angles, Mat4, Vec3};
+use crate::core::camera::{self, ActorBody, Angles, FreeCamera, Mat4, Vec3};
 use crate::core::config;
-use crate::core::input::{Action, Control, Input, Key};
+use crate::core::input::Input;
 use crate::core::level::{DrawItem, StaticWorld};
 use crate::core::vfs::{self, Vfs};
 use crate::core::weather::{self, Environment, Weather};
 use crate::data::GameData;
-use crate::scene::{Scene, WorldScene};
+use crate::free_controls::{self, TouchLayout};
+use crate::scene::{Scene, Sprite, TextureId, WorldScene};
 use volya_engine_formats::env_mod::{self, EnvModifier};
 use volya_engine_formats::game_graph::GameGraph;
 use volya_engine_formats::level_geom::LevelGeom;
 use volya_engine_formats::spawn;
+use volya_engine_formats::ui::Color;
 use volya_engine_formats::ui::Resolution;
+use volya_engine_formats::ui::picture::Quad;
 
 /// The spawn file's name: the first server parameter `all`
 /// (level-loading.md section 2.1).
@@ -71,8 +74,7 @@ impl LevelWorld {
 /// The level shown.
 pub struct LevelScreen {
     world: Arc<LevelWorld>,
-    eye: Vec3,
-    angles: Angles,
+    camera: FreeCamera,
     weather: Weather,
     /// Time of day, seconds.
     time_of_day: f32,
@@ -80,7 +82,11 @@ pub struct LevelScreen {
     environment: Environment,
     /// When the level was shown first (engine clock, ms).
     shown: u64,
+    /// The previous update (engine clock, ms).
+    last: u64,
     back: bool,
+    /// Whether touch was used: the touch controls show from then on.
+    touch_seen: bool,
 }
 
 /// What the engine interface reports.
@@ -172,8 +178,7 @@ impl LevelScreen {
                 draw_items,
                 geometry: Mutex::new(Some(geom)),
             }),
-            eye,
-            angles: Angles::from_spawn(actor.angles),
+            camera: FreeCamera::new(eye, Angles::from_spawn(actor.angles)),
             environment: {
                 let (a, b, t) = weather.bracket(time_of_day);
                 Environment::blend(a, b, t, &modifiers, eye, VIS_DISTANCE)
@@ -182,7 +187,9 @@ impl LevelScreen {
             time_of_day,
             modifiers,
             shown: now,
+            last: now,
             back: false,
+            touch_seen: false,
         };
         screen.update_environment();
         Ok(screen)
@@ -196,25 +203,23 @@ impl LevelScreen {
     /// stays at the start time (our choice for a static world).
     fn update_environment(&mut self) {
         let (a, b, t) = self.weather.bracket(self.time_of_day);
-        self.environment = Environment::blend(a, b, t, &self.modifiers, self.eye, VIS_DISTANCE);
+        self.environment =
+            Environment::blend(a, b, t, &self.modifiers, self.camera.eye, VIS_DISTANCE);
     }
 
     /// One frame at `now` with this frame's `input`.
-    pub fn update(&mut self, _now: u64, input: &Input) {
-        for action in input.actions() {
-            if let Action::Press {
-                control: Control::Key(Key::Escape),
-                ..
-            } = action
-            {
-                self.back = true;
-            }
-        }
+    pub fn update(&mut self, now: u64, input: &Input) {
+        let dt = now.saturating_sub(self.last) as f32 / 1000.0;
+        self.last = now;
+        let (m, back) = free_controls::free_move(input, dt);
+        self.camera.apply(&m, dt);
+        self.back |= back;
+        self.touch_seen |= !input.contacts().is_empty();
         self.update_environment();
     }
 
-    /// Whether the player asked to go back to the title menu (our design:
-    /// Escape, or the gamepad's east button, which acts as Escape).
+    /// Whether the player asked to go back to the title menu
+    /// ([`free_controls`]).
     pub fn back_requested(&self) -> bool {
         self.back
     }
@@ -223,8 +228,8 @@ impl LevelScreen {
     /// (start-position.md sections 5–7, the smoothing of 7.2 replaced by its
     /// targets, which it allows; near plane 0.2 m: collision is not loaded).
     pub fn view_projection(&self, width: u32, height: u32) -> (Mat4, Mat4) {
-        let (d, u) = self.angles.direction_up();
-        let view = camera::view_matrix(self.eye, d, u);
+        let (d, u) = self.camera.angles.direction_up();
+        let view = camera::view_matrix(self.camera.eye, d, u);
         let projection = camera::projection(
             camera::FOV_Y_DEGREES.to_radians(),
             camera::aspect_factor(width, height),
@@ -240,12 +245,15 @@ impl LevelScreen {
         let mut scene = Scene::new(resolution);
         scene.world = Some(WorldScene {
             world: self.world.clone(),
-            eye: self.eye,
+            eye: self.camera.eye,
             view,
             projection,
             environment: self.environment.clone(),
             time: clock_ms.saturating_sub(self.shown) as f32 / 1000.0,
         });
+        if self.touch_seen {
+            touch_overlay(&mut scene);
+        }
         scene
     }
 
@@ -253,11 +261,80 @@ impl LevelScreen {
         LevelState {
             name: self.world.name.clone(),
             draws: self.world.draw_items.len(),
-            eye: self.eye,
-            yaw: self.angles.yaw,
-            pitch: self.angles.pitch,
+            eye: self.camera.eye,
+            yaw: self.camera.angles.yaw,
+            pitch: self.camera.angles.pitch,
             far_plane: self.environment.far_plane,
             time_of_day: self.time_of_day,
+        }
+    }
+}
+
+/// The touch controls ([`free_controls`]) drawn over the world: translucent
+/// squares with a cross (back) and arrows (up, down).
+fn touch_overlay(scene: &mut Scene) {
+    let (w, h) = (
+        scene.resolution.width as f32,
+        scene.resolution.height as f32,
+    );
+    let layout = TouchLayout::new(w, h);
+    let panel = Color::rgba(0, 0, 0, 96);
+    let mark = Color::rgba(255, 255, 255, 192);
+    let square = |layer: &str, r: [f32; 4], color| {
+        Sprite::picture(
+            layer,
+            TextureId::White,
+            &Quad {
+                min: (r[0], r[1]),
+                max: (r[2], r[3]),
+                uv_min: (0.0, 0.0),
+                uv_max: (1.0, 1.0),
+                color,
+            },
+        )
+    };
+    // A shape from four corners (two equal corners make a triangle).
+    let shape = |layer: &str, corners: [[f32; 2]; 4]| Sprite {
+        layer: layer.into(),
+        texture: TextureId::White,
+        corners,
+        uv_min: [0.0, 0.0],
+        uv_max: [1.0, 1.0],
+        color: mark,
+    };
+    for (layer, r) in [
+        ("touch back", layout.back),
+        ("touch up", layout.up),
+        ("touch down", layout.down),
+    ] {
+        scene.sprites.push(square(layer, r, panel));
+        let (cx, cy) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+        let s = (r[2] - r[0]) * 0.3;
+        let t = s * 0.15;
+        match layer {
+            "touch back" => {
+                for k in [1.0f32, -1.0] {
+                    // A bar from (−s, −k·s) to (s, k·s), t thick.
+                    let (nx, ny) = (k * t, -t);
+                    scene.sprites.push(shape(
+                        layer,
+                        [
+                            [cx - s - nx, cy - k * s - ny],
+                            [cx + s - nx, cy + k * s - ny],
+                            [cx + s + nx, cy + k * s + ny],
+                            [cx - s + nx, cy - k * s + ny],
+                        ],
+                    ));
+                }
+            }
+            _ => {
+                let k = if layer == "touch up" { -1.0 } else { 1.0 };
+                let tip = [cx, cy + k * s];
+                scene.sprites.push(shape(
+                    layer,
+                    [tip, tip, [cx + s, cy - k * s], [cx - s, cy - k * s]],
+                ));
+            }
         }
     }
 }

@@ -304,11 +304,53 @@ export const tests = {
     return `${note}; ${JSON.stringify(stats)}`;
   },
 
-  "Escape returns from the level to the title menu": async () => {
+  "keyboard and mouse fly the free camera": async () => {
     needsGame();
-    key("Escape");
-    const s = await until((s) => s.phase === "menu", "the menu");
-    assertEqual(s.menu.list, "menu_main", "list");
+    const start = (await state()).level;
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyW", bubbles: true, cancelable: true }));
+    await sleep(300);
+    document.body.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyW", bubbles: true, cancelable: true }));
+    let s = await until((s) => s.level.eye[0] > start.eye[0] + 0.3, "W to move forward (+x at the start heading)");
+    // A drag with the left button turns right.
+    const yaw = s.level.yaw;
+    pointer("pointermove", client(500, 400));
+    pointer("pointerdown", client(500, 400), { button: 0, buttons: 1 });
+    pointer("pointermove", client(600, 400), { buttons: 1 });
+    pointer("pointerup", client(600, 400), { button: 0, buttons: 0 });
+    s = await until((s) => s.level.yaw > yaw + 0.1, "the drag to turn right");
+    return `moved ${(s.level.eye[0] - start.eye[0]).toFixed(2)} m, turned ${(s.level.yaw - yaw).toFixed(2)} rad`;
+  },
+
+  "touch flies the free camera and its back button returns to the title menu": async () => {
+    needsGame();
+    const touch = (type, id, at, primary) =>
+      pointer(type, at, { pointerType: "touch", pointerId: id, isPrimary: primary, button: 0, buttons: type === "pointerup" ? 0 : 1 });
+    const start = (await state()).level;
+    // Left half: a virtual stick pushed up moves forward while a right-half
+    // drag (a second finger) turns.
+    touch("pointerdown", 11, client(256, 600), true);
+    touch("pointermove", 11, client(256, 450), true);
+    touch("pointerdown", 12, client(700, 400), false);
+    await sleep(50);
+    touch("pointermove", 12, client(800, 400), false);
+    await sleep(300);
+    touch("pointerup", 12, client(800, 400), false);
+    touch("pointerup", 11, client(256, 450), true);
+    const s = await until(
+      (s) => s.level.eye[0] > start.eye[0] + 0.2 && s.level.yaw > start.yaw + 0.1,
+      "the stick to move and the drag to turn",
+    );
+    // The back button sits at the top left (a square of 14 % of the shorter
+    // side, 4 % in).
+    const short = Math.min(view().clientWidth, view().clientHeight);
+    const rect = view().getBoundingClientRect();
+    const [bx, by] = [0.11 * short, 0.11 * short];
+    const at = rect.width < rect.height !== view().clientWidth < view().clientHeight ? [rect.right - by, rect.top + bx] : [rect.left + bx, rect.top + by];
+    touch("pointerdown", 13, at, true);
+    touch("pointerup", 13, at, true);
+    const menu = await until((s) => s.phase === "menu", "the menu");
+    assertEqual(menu.menu.list, "menu_main", "list");
+    return `moved ${(s.level.eye[0] - start.eye[0]).toFixed(2)} m, turned ${(s.level.yaw - start.yaw).toFixed(2)} rad`;
   },
 
   "Q quits to the app's own interface": async () => {

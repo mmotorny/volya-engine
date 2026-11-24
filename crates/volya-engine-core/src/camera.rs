@@ -215,6 +215,62 @@ pub fn inert(old: Vec3, computed: Vec3, cam_inert: f32) -> Vec3 {
     [0, 1, 2].map(|i| old[i] * cam_inert + computed[i] * (1.0 - cam_inert))
 }
 
+/// Free-camera speed, metres per second (our design: the free camera is not
+/// game behaviour).
+pub const FREE_SPEED: f32 = 4.0;
+/// Speed factor while the speed modifier is held.
+pub const FREE_FAST: f32 = 5.0;
+/// Pitch limit of the free camera, the first-person camera's `lim_pitch`
+/// (section 5).
+pub const FREE_PITCH_LIMIT: f32 = 1.5;
+
+/// One frame's request to the free camera.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FreeMove {
+    /// Along the viewing direction, −1 … 1 (more for touch beyond the
+    /// stick's rim).
+    pub forward: f32,
+    /// Toward the camera's right, −1 … 1.
+    pub right: f32,
+    /// Along world +y, −1 … 1.
+    pub up: f32,
+    /// The speed modifier.
+    pub fast: bool,
+    /// Turn this frame, radians: yaw (positive toward +x, i.e. right) and
+    /// pitch (positive looks down).
+    pub yaw: f32,
+    pub pitch: f32,
+}
+
+/// A camera flying freely from the player's start (our design).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FreeCamera {
+    pub eye: Vec3,
+    pub angles: Angles,
+}
+
+impl FreeCamera {
+    pub fn new(eye: Vec3, angles: Angles) -> Self {
+        Self { eye, angles }
+    }
+
+    /// Applies `m` over `dt` seconds: turn first, then move along the new
+    /// viewing direction, the horizontal right vector and world up.
+    pub fn apply(&mut self, m: &FreeMove, dt: f32) {
+        self.angles.yaw = (self.angles.yaw + m.yaw).rem_euclid(std::f32::consts::TAU);
+        self.angles.pitch =
+            (self.angles.pitch + m.pitch).clamp(-FREE_PITCH_LIMIT, FREE_PITCH_LIMIT);
+        let (d, _) = self.angles.direction_up();
+        let (sy, cy) = self.angles.yaw.sin_cos();
+        let right = [cy, 0.0, -sy];
+        let speed = FREE_SPEED * if m.fast { FREE_FAST } else { 1.0 } * dt.max(0.0);
+        for i in 0..3 {
+            self.eye[i] += speed * (m.forward * d[i] + m.right * right[i]);
+        }
+        self.eye[1] += speed * m.up;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,5 +344,45 @@ mod tests {
         assert_eq!(smooth(90.0, 67.5, -1.0), 90.0);
         assert_eq!(inert([0.0; 3], [1.0, 2.0, 4.0], 0.75), [0.25, 0.5, 1.0]);
         assert_eq!(inert([3.0; 3], [1.0; 3], 0.0), [1.0; 3]);
+    }
+
+    #[test]
+    fn free_camera_moves_and_turns() {
+        let mut c = FreeCamera::new([0.0; 3], Angles::default());
+        let forward = FreeMove {
+            forward: 1.0,
+            ..Default::default()
+        };
+        c.apply(&forward, 0.5);
+        assert!(close(&c.eye, &[0.0, 0.0, 2.0], 1e-6), "{:?}", c.eye);
+        // Right is +x at yaw 0; up is world +y; fast is five times.
+        c.apply(
+            &FreeMove {
+                right: 1.0,
+                up: -1.0,
+                fast: true,
+                ..Default::default()
+            },
+            0.1,
+        );
+        assert!(close(&c.eye, &[2.0, -2.0, 2.0], 1e-6), "{:?}", c.eye);
+        // A quarter turn right: forward is now +x; pitch clamps.
+        c.apply(
+            &FreeMove {
+                yaw: std::f32::consts::FRAC_PI_2,
+                pitch: 3.0,
+                ..Default::default()
+            },
+            0.0,
+        );
+        assert_eq!(c.angles.pitch, FREE_PITCH_LIMIT);
+        c.angles.pitch = 0.0;
+        c.apply(&forward, 0.25);
+        assert!(close(&c.eye, &[3.0, -2.0, 2.0], 1e-5), "{:?}", c.eye);
+        // Looking down, forward descends.
+        c.angles.pitch = 1.0;
+        let y = c.eye[1];
+        c.apply(&forward, 1.0);
+        assert!(c.eye[1] < y);
     }
 }

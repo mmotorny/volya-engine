@@ -19,6 +19,7 @@ pub mod data;
 mod draw;
 #[cfg(test)]
 mod fixture;
+pub mod free_controls;
 pub mod level;
 pub mod present;
 pub mod scene;

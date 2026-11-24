@@ -86,6 +86,7 @@ pub struct Presenter {
     images: HashMap<String, Option<Texture>>,
     videos: HashMap<String, Player>,
     splash: Option<Texture>,
+    white: Option<Texture>,
     /// The static world on the GPU and the level it was made from; `None`
     /// inside when the upload failed (reported once).
     world: Option<(Arc<LevelWorld>, Option<World>)>,
@@ -252,6 +253,11 @@ impl Presenter {
                     looping,
                 } => self.video(renderer, tree, path, *start_ms, *looping, clock),
                 TextureId::Splash => self.splash.clone(),
+                TextureId::White => Some(
+                    self.white
+                        .get_or_insert_with(|| renderer.create_rgba_texture(1, 1, &[255; 4]))
+                        .clone(),
+                ),
             };
             let Some(texture) = texture else { continue };
             let (tw, th) = texture.size();

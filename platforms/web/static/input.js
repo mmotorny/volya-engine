@@ -19,6 +19,14 @@ const KEYS = {
   KeyQ: "q",
   F12: "f12",
   Backquote: "grave",
+  KeyW: "w",
+  KeyA: "a",
+  KeyS: "s",
+  KeyD: "d",
+  Space: "space",
+  KeyC: "c",
+  ShiftLeft: "shift",
+  ShiftRight: "shift",
 };
 // Keys whose browser action (developer tools) is left alone.
 const BROWSER_KEYS = new Set(["F12"]);
@@ -29,8 +37,20 @@ const BUTTONS = ["left", "middle", "right"];
 const BUTTON_BITS = [1, 4, 2];
 
 // Standard Gamepad mapping (W3C) indices → engine names.
-const PAD_BUTTONS = { 0: "south", 1: "east", 12: "dpad_up", 13: "dpad_down", 14: "dpad_left", 15: "dpad_right" };
-const PAD_AXES = { 0: "left_x", 1: "left_y" };
+const PAD_BUTTONS = {
+  0: "south",
+  1: "east",
+  4: "left_shoulder",
+  5: "right_shoulder",
+  10: "left_stick",
+  12: "dpad_up",
+  13: "dpad_down",
+  14: "dpad_left",
+  15: "dpad_right",
+};
+const PAD_AXES = { 0: "left_x", 1: "left_y", 2: "right_x", 3: "right_y" };
+// Analog triggers are buttons with a value in the standard mapping.
+const PAD_TRIGGERS = { 6: "left_trigger", 7: "right_trigger" };
 // Axis changes smaller than this are not sent.
 const AXIS_EPSILON = 0.02;
 
@@ -54,9 +74,9 @@ export function startInput(view, send) {
   const pointer = (event) => {
     if (!capture) return;
     if (event.pointerType === "touch") {
-      if (!event.isPrimary) return;
+      // Every contact, with its id; the primary one also drives the cursor.
       const phase = { pointerdown: "start", pointermove: "move" }[event.type] ?? "end";
-      send(["touch", ...at(event), phase, event.timeStamp]);
+      send(["touch", ...at(event), phase, event.timeStamp, event.pointerId, event.isPrimary]);
       event.preventDefault();
       return;
     }
@@ -108,8 +128,11 @@ export function startInput(view, send) {
           send(["pad", name, pressed]);
         }
       }
-      for (const [index, name] of Object.entries(PAD_AXES)) {
-        const value = pad.axes[index] ?? 0;
+      const values = [
+        ...Object.entries(PAD_AXES).map(([index, name]) => [`a${index}`, name, pad.axes[index] ?? 0]),
+        ...Object.entries(PAD_TRIGGERS).map(([index, name]) => [`t${index}`, name, pad.buttons[index]?.value ?? 0]),
+      ];
+      for (const [index, name, value] of values) {
         if (Math.abs(value - (last.axes[index] ?? 0)) >= AXIS_EPSILON) {
           last.axes[index] = value;
           send(["axis", name, value]);

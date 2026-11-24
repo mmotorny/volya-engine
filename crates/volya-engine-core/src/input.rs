@@ -29,6 +29,14 @@
 //!   ([`Event::PointerMotion`], e.g. under pointer lock).
 //! - Keyboard auto-repeat is not a key press: platforms report physical
 //!   presses only.
+//!
+//! Beyond the menu, the free camera of the level view (our design, not the
+//! game's) reads raw state the menu ignores: held movement keys
+//! ([`Input::key_held`]), mouse motion ([`Input::pointer_delta`]), every
+//! touch contact ([`Input::contacts`], from [`Event::Contact`]; the primary
+//! one also drives the cursor as above) and analog gamepad axes
+//! ([`Input::axis`]: both sticks and the triggers). Gamepad buttons without
+//! a key (shoulders, stick click) are held as [`Control::Pad`].
 
 /// Virtual UI space (§1): 1024 × 768 units, origin top-left, y downward.
 pub const UI_WIDTH: f32 = 1024.0;
@@ -94,10 +102,18 @@ pub enum Key {
     F12,
     /// The key left of 1 (`` ` `` / `~`), for the console.
     Grave,
+    W,
+    A,
+    S,
+    D,
+    Space,
+    C,
+    /// Either Shift key.
+    Shift,
 }
 
 impl Key {
-    pub const ALL: [Key; 9] = [
+    pub const ALL: [Key; 16] = [
         Key::Up,
         Key::Down,
         Key::Left,
@@ -107,6 +123,13 @@ impl Key {
         Key::Q,
         Key::F12,
         Key::Grave,
+        Key::W,
+        Key::A,
+        Key::S,
+        Key::D,
+        Key::Space,
+        Key::C,
+        Key::Shift,
     ];
 
     /// Stable name, used by platforms and the engine interface.
@@ -121,6 +144,13 @@ impl Key {
             Key::Q => "q",
             Key::F12 => "f12",
             Key::Grave => "grave",
+            Key::W => "w",
+            Key::A => "a",
+            Key::S => "s",
+            Key::D => "d",
+            Key::Space => "space",
+            Key::C => "c",
+            Key::Shift => "shift",
         }
     }
 
@@ -162,16 +192,23 @@ pub enum GamepadButton {
     DpadDown,
     DpadLeft,
     DpadRight,
+    LeftShoulder,
+    RightShoulder,
+    /// The left stick pressed in.
+    LeftStick,
 }
 
 impl GamepadButton {
-    pub const ALL: [GamepadButton; 6] = [
+    pub const ALL: [GamepadButton; 9] = [
         GamepadButton::South,
         GamepadButton::East,
         GamepadButton::DpadUp,
         GamepadButton::DpadDown,
         GamepadButton::DpadLeft,
         GamepadButton::DpadRight,
+        GamepadButton::LeftShoulder,
+        GamepadButton::RightShoulder,
+        GamepadButton::LeftStick,
     ];
 
     pub fn name(self) -> &'static str {
@@ -182,6 +219,9 @@ impl GamepadButton {
             GamepadButton::DpadDown => "dpad_down",
             GamepadButton::DpadLeft => "dpad_left",
             GamepadButton::DpadRight => "dpad_right",
+            GamepadButton::LeftShoulder => "left_shoulder",
+            GamepadButton::RightShoulder => "right_shoulder",
+            GamepadButton::LeftStick => "left_stick",
         }
     }
 
@@ -189,45 +229,69 @@ impl GamepadButton {
         GamepadButton::ALL.into_iter().find(|b| b.name() == name)
     }
 
-    /// The key this button acts as (our design, see module docs).
-    pub fn key(self) -> Key {
+    /// The key this button acts as (our design, see module docs); `None`
+    /// for buttons held as themselves ([`Control::Pad`]).
+    pub fn key(self) -> Option<Key> {
         match self {
-            GamepadButton::South => Key::Enter,
-            GamepadButton::East => Key::Escape,
-            GamepadButton::DpadUp => Key::Up,
-            GamepadButton::DpadDown => Key::Down,
-            GamepadButton::DpadLeft => Key::Left,
-            GamepadButton::DpadRight => Key::Right,
+            GamepadButton::South => Some(Key::Enter),
+            GamepadButton::East => Some(Key::Escape),
+            GamepadButton::DpadUp => Some(Key::Up),
+            GamepadButton::DpadDown => Some(Key::Down),
+            GamepadButton::DpadLeft => Some(Key::Left),
+            GamepadButton::DpadRight => Some(Key::Right),
+            _ => None,
         }
+    }
+
+    /// The control holding this button.
+    pub fn control(self) -> Control {
+        self.key().map_or(Control::Pad(self), Control::Key)
     }
 }
 
-/// Left stick axes; −1 is left / up, +1 right / down.
+/// Analog gamepad axes. Sticks: −1 is left / up, +1 right / down.
+/// Triggers: 0 released … 1 fully pressed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum GamepadAxis {
     LeftX,
     LeftY,
+    RightX,
+    RightY,
+    LeftTrigger,
+    RightTrigger,
 }
 
 impl GamepadAxis {
+    pub const ALL: [GamepadAxis; 6] = [
+        GamepadAxis::LeftX,
+        GamepadAxis::LeftY,
+        GamepadAxis::RightX,
+        GamepadAxis::RightY,
+        GamepadAxis::LeftTrigger,
+        GamepadAxis::RightTrigger,
+    ];
+
     pub fn name(self) -> &'static str {
         match self {
             GamepadAxis::LeftX => "left_x",
             GamepadAxis::LeftY => "left_y",
+            GamepadAxis::RightX => "right_x",
+            GamepadAxis::RightY => "right_y",
+            GamepadAxis::LeftTrigger => "left_trigger",
+            GamepadAxis::RightTrigger => "right_trigger",
         }
     }
 
     pub fn from_name(name: &str) -> Option<GamepadAxis> {
-        [GamepadAxis::LeftX, GamepadAxis::LeftY]
-            .into_iter()
-            .find(|a| a.name() == name)
+        GamepadAxis::ALL.into_iter().find(|a| a.name() == name)
     }
 
-    /// Keys for the negative and positive directions.
-    fn keys(self) -> [Key; 2] {
+    /// Keys for the negative and positive directions (the left stick only).
+    fn keys(self) -> Option<[Key; 2]> {
         match self {
-            GamepadAxis::LeftX => [Key::Left, Key::Right],
-            GamepadAxis::LeftY => [Key::Up, Key::Down],
+            GamepadAxis::LeftX => Some([Key::Left, Key::Right]),
+            GamepadAxis::LeftY => Some([Key::Up, Key::Down]),
+            _ => None,
         }
     }
 }
@@ -270,6 +334,35 @@ pub enum Event {
         axis: GamepadAxis,
         value: f32,
     },
+    /// Any touch contact (the primary one included) began, moved or ended
+    /// at `at`; `id` tells simultaneous contacts apart.
+    Contact {
+        id: u32,
+        at: [f32; 2],
+        phase: TouchPhase,
+    },
+}
+
+/// A touch contact, in screen units.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Contact {
+    pub id: u32,
+    /// Where it began.
+    pub start: [f32; 2],
+    pub at: [f32; 2],
+    /// Where it was at the end of the previous frame (or where it began).
+    pub previous: [f32; 2],
+    /// Began this frame.
+    pub new: bool,
+    /// Lifted this frame (gone after [`Input::end_frame`]).
+    pub ended: bool,
+}
+
+impl Contact {
+    /// Motion this frame.
+    pub fn delta(&self) -> [f32; 2] {
+        [self.at[0] - self.previous[0], self.at[1] - self.previous[1]]
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -285,6 +378,8 @@ pub enum TouchPhase {
 pub enum Control {
     Key(Key),
     Mouse(MouseButton),
+    /// A gamepad button that acts as no key.
+    Pad(GamepadButton),
 }
 
 impl Control {
@@ -294,6 +389,7 @@ impl Control {
             Control::Mouse(MouseButton::Left) => "mouse_left",
             Control::Mouse(MouseButton::Right) => "mouse_right",
             Control::Mouse(MouseButton::Middle) => "mouse_middle",
+            Control::Pad(b) => b.name(),
         }
     }
 }
@@ -342,6 +438,14 @@ pub struct Input {
     count: u64,
     /// Touch contacts begun this frame.
     touch_starts: u32,
+    /// The absolute pointer's latest position.
+    pointer_at: Option<[f32; 2]>,
+    /// Pointer motion this frame.
+    pointer_delta: [f32; 2],
+    /// Pointer motion this frame while a mouse button was held.
+    drag_delta: [f32; 2],
+    contacts: Vec<Contact>,
+    axes: [f32; 6],
 }
 
 impl Default for Input {
@@ -355,6 +459,11 @@ impl Default for Input {
             last_press: [None; 3],
             count: 0,
             touch_starts: 0,
+            pointer_at: None,
+            pointer_delta: [0.0; 2],
+            drag_delta: [0.0; 2],
+            contacts: Vec::new(),
+            axes: [0.0; 6],
         }
     }
 }
@@ -399,6 +508,36 @@ impl Input {
         self.held.iter().any(|&(_, c)| c == control)
     }
 
+    /// Whether `key` is held by the keyboard or a gamepad button (not by the
+    /// left stick acting as arrow keys; read [`Input::axis`] for it).
+    pub fn key_held(&self, key: Key) -> bool {
+        self.held
+            .iter()
+            .any(|&(s, c)| c == Control::Key(key) && s != Source::Stick)
+    }
+
+    /// Mouse motion this frame, in screen units (absolute moves and relative
+    /// motion alike).
+    pub fn pointer_delta(&self) -> [f32; 2] {
+        self.pointer_delta
+    }
+
+    /// Mouse motion this frame made while a mouse button was held (a drag,
+    /// even one pressed and released within the frame).
+    pub fn drag_delta(&self) -> [f32; 2] {
+        self.drag_delta
+    }
+
+    /// Touch contacts down this frame (and those lifted this frame).
+    pub fn contacts(&self) -> &[Contact] {
+        &self.contacts
+    }
+
+    /// The latest value of gamepad axis `axis`.
+    pub fn axis(&self, axis: GamepadAxis) -> f32 {
+        self.axes[axis as usize]
+    }
+
     /// Held controls, each once, in the order first pressed.
     pub fn held(&self) -> Vec<Control> {
         let mut out: Vec<Control> = Vec::new();
@@ -431,6 +570,13 @@ impl Input {
     pub fn end_frame(&mut self) {
         self.actions.clear();
         self.touch_starts = 0;
+        self.pointer_delta = [0.0; 2];
+        self.drag_delta = [0.0; 2];
+        self.contacts.retain(|c| !c.ended);
+        for c in &mut self.contacts {
+            c.previous = c.at;
+            c.new = false;
+        }
     }
 
     /// Releases every held control, e.g. when the platform stops delivering
@@ -439,12 +585,20 @@ impl Input {
         while let Some(&(source, control)) = self.held.last() {
             self.set(source, control, false, false);
         }
+        for c in &mut self.contacts {
+            c.ended = true;
+        }
+        self.axes = [0.0; 6];
     }
 
     pub fn handle(&mut self, event: Event) {
         match event {
-            Event::PointerMoved { at } => self.move_to(at),
+            Event::PointerMoved { at } => {
+                self.pointer_to(at);
+                self.move_to(at)
+            }
             Event::PointerMotion { delta } => {
+                self.add_motion(delta);
                 let to = apply_motion(self.cursor, delta, self.screen, self.sensitivity);
                 self.set_cursor(to);
             }
@@ -455,6 +609,7 @@ impl Input {
                 time,
             } => {
                 if let Some(at) = at {
+                    self.pointer_to(at);
                     self.move_to(at);
                 }
                 self.mouse_button(Source::Mouse, button, pressed, time);
@@ -476,10 +631,15 @@ impl Input {
                 self.set(Source::Keyboard, Control::Key(key), pressed, false)
             }
             Event::GamepadButton { button, pressed } => {
-                self.set(Source::Pad, Control::Key(button.key()), pressed, false)
+                self.set(Source::Pad, button.control(), pressed, false)
             }
+            Event::Contact { id, at, phase } => self.contact(id, at, phase),
             Event::GamepadAxis { axis, value } => {
-                let [negative, positive] = axis.keys().map(Control::Key);
+                self.axes[axis as usize] = value;
+                let Some(keys) = axis.keys() else {
+                    return;
+                };
+                let [negative, positive] = keys.map(Control::Key);
                 for (control, deflection) in [(negative, -value), (positive, value)] {
                     let held = self.held.contains(&(Source::Stick, control));
                     if !held && deflection >= STICK_PRESS {
@@ -489,6 +649,44 @@ impl Input {
                     }
                 }
             }
+        }
+    }
+
+    fn pointer_to(&mut self, at: [f32; 2]) {
+        if let Some(last) = self.pointer_at {
+            self.add_motion([at[0] - last[0], at[1] - last[1]]);
+        }
+        self.pointer_at = Some(at);
+    }
+
+    fn add_motion(&mut self, delta: [f32; 2]) {
+        let dragging = self.held.iter().any(|&(s, _)| s == Source::Mouse);
+        for i in 0..2 {
+            self.pointer_delta[i] += delta[i];
+            if dragging {
+                self.drag_delta[i] += delta[i];
+            }
+        }
+    }
+
+    fn contact(&mut self, id: u32, at: [f32; 2], phase: TouchPhase) {
+        let existing = self.contacts.iter().position(|c| c.id == id && !c.ended);
+        match (phase, existing) {
+            (TouchPhase::Start, None) => self.contacts.push(Contact {
+                id,
+                start: at,
+                at,
+                previous: at,
+                new: true,
+                ended: false,
+            }),
+            (TouchPhase::Start | TouchPhase::Move, Some(i)) => self.contacts[i].at = at,
+            (TouchPhase::End, Some(i)) => {
+                self.contacts[i].at = at;
+                self.contacts[i].ended = true;
+            }
+            // A move or end of a contact never begun: ignored.
+            (TouchPhase::Move | TouchPhase::End, None) => {}
         }
     }
 
@@ -767,6 +965,7 @@ mod tests {
                 pressed: true,
             });
             assert!(input.is_held(Control::Key(key)), "{button:?}");
+            assert!(input.key_held(key), "{button:?}");
             input.handle(Event::GamepadButton {
                 button,
                 pressed: false,
@@ -874,9 +1073,70 @@ mod tests {
         for button in GamepadButton::ALL {
             assert_eq!(GamepadButton::from_name(button.name()), Some(button));
         }
-        for axis in [GamepadAxis::LeftX, GamepadAxis::LeftY] {
+        for axis in GamepadAxis::ALL {
             assert_eq!(GamepadAxis::from_name(axis.name()), Some(axis));
         }
-        assert_eq!(Key::from_name("space"), None);
+        assert_eq!(Key::from_name("space"), Some(Key::Space));
+        assert_eq!(Key::from_name("tab"), None);
+    }
+
+    #[test]
+    fn raw_state_for_the_free_camera() {
+        let mut input = Input::new();
+        // Mouse motion accumulates per frame.
+        input.handle(Event::PointerMoved { at: [10.0, 10.0] });
+        input.handle(Event::PointerMoved { at: [15.0, 8.0] });
+        input.handle(Event::PointerMotion { delta: [1.0, 1.0] });
+        assert_eq!(input.pointer_delta(), [6.0, -1.0]);
+        assert_eq!(input.drag_delta(), [0.0, 0.0]);
+        // A drag within one frame still counts.
+        for (pressed, at) in [(true, [15.0, 8.0]), (false, [25.0, 8.0])] {
+            input.handle(Event::PointerButton {
+                at: Some(at),
+                button: MouseButton::Right,
+                pressed,
+                time: 0.0,
+            });
+        }
+        assert_eq!(input.drag_delta(), [10.0, 0.0]);
+        input.end_frame();
+        assert_eq!(input.pointer_delta(), [0.0, 0.0]);
+        // Analog axes; the stick also holds arrow keys, which key_held
+        // leaves out.
+        input.handle(Event::GamepadAxis {
+            axis: GamepadAxis::LeftY,
+            value: -0.8,
+        });
+        input.handle(Event::GamepadAxis {
+            axis: GamepadAxis::RightTrigger,
+            value: 0.6,
+        });
+        assert_eq!(input.axis(GamepadAxis::LeftY), -0.8);
+        assert_eq!(input.axis(GamepadAxis::RightTrigger), 0.6);
+        assert!(input.is_held(Control::Key(Key::Up)));
+        assert!(!input.key_held(Key::Up));
+        input.handle(Event::GamepadButton {
+            button: GamepadButton::LeftShoulder,
+            pressed: true,
+        });
+        assert!(input.is_held(Control::Pad(GamepadButton::LeftShoulder)));
+        // Contacts: begun, moved, deltas per frame, ended.
+        let contact = |id, at, phase| Event::Contact { id, at, phase };
+        input.handle(contact(1, [0.0, 0.0], TouchPhase::Start));
+        input.handle(contact(2, [50.0, 0.0], TouchPhase::Start));
+        input.handle(contact(1, [3.0, 4.0], TouchPhase::Move));
+        assert_eq!(input.contacts().len(), 2);
+        assert_eq!(input.contacts()[0].delta(), [3.0, 4.0]);
+        assert!(input.contacts()[0].new);
+        input.end_frame();
+        input.handle(contact(1, [4.0, 4.0], TouchPhase::End));
+        assert_eq!(input.contacts()[0].delta(), [1.0, 0.0]);
+        assert!(input.contacts()[0].ended);
+        assert_eq!(input.contacts()[0].start, [0.0, 0.0]);
+        input.end_frame();
+        assert_eq!(input.contacts().len(), 1);
+        input.release_all();
+        assert!(input.contacts()[0].ended);
+        assert_eq!(input.axis(GamepadAxis::RightTrigger), 0.0);
     }
 }

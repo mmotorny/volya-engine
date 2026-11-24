@@ -355,7 +355,12 @@ mod tests {
         };
         assert_eq!(difficulty, "gd_novice");
         assert!(audio.playing.is_empty(), "the menu music stopped");
-        assert!(app.scene(&tree, Resolution::new(64, 48)).unwrap().sprites.is_empty());
+        assert!(
+            app.scene(&tree, Resolution::new(64, 48))
+                .unwrap()
+                .sprites
+                .is_empty()
+        );
         // The fixture has no spawn file: back to the menu, saying why.
         app.update(&tree, 40.0, &input, &mut audio);
         let AppState::Menu { error, menu, .. } = app.state() else {

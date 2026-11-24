@@ -39,6 +39,8 @@ pub enum TextureId {
     },
     /// The splash picture (docs/behavior/startup.md section 3).
     Splash,
+    /// A white texel (flat-coloured shapes).
+    White,
 }
 
 /// One textured quad.
