@@ -270,6 +270,12 @@ export const tests = {
     const toggle = document.querySelector("#game .switch input");
     assert(toggle && toggle.checked, "automatic updates not on by default");
     assertEqual(document.activeElement?.textContent, "‹ Back", "focus starts on Back (keyboard)");
+    // The logo leads Home too.
+    document.querySelector(".brand").click();
+    for (let i = 0; i < 50 && document.querySelector(".screen-head"); i++) await new Promise((r) => setTimeout(r, 20));
+    assert(!document.querySelector(".screen-head"), "the logo did not lead Home");
+    [...document.querySelectorAll("#game .bottom button")].find((b) => b.textContent === "Settings").click();
+    for (let i = 0; i < 50 && !document.querySelector(".screen-head"); i++) await new Promise((r) => setTimeout(r, 20));
     document.activeElement.click();
     for (let i = 0; i < 50 && document.querySelector(".screen-head"); i++) await new Promise((r) => setTimeout(r, 20));
     assert(!document.querySelector(".screen-head"), "Back did not leave Settings");

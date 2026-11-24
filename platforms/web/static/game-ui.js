@@ -24,6 +24,10 @@ const root = () => document.getElementById("game");
 /** Replaces the game section's content, skipping absent (null) parts. */
 const show = (...children) => {
   delete document.documentElement.dataset.screen;
+  const brand = document.querySelector(".brand");
+  brand?.removeAttribute("tabindex");
+  brand?.removeAttribute("role");
+  brand?.removeAttribute("title");
   root().replaceChildren(...children.filter((c) => c !== null && c !== undefined));
 };
 
@@ -62,6 +66,12 @@ export async function start(engineCall, updateState = null) {
   globalThis.volya.importGame = importGame;
   globalThis.volya.showSettings = showSettings;
   globalThis.volya.refresh = refresh;
+  // On deeper screens the logo (where shown: the lockup on wide windows) is
+  // the way Home, like Back.
+  const brand = document.querySelector(".brand");
+  const home = () => document.documentElement.dataset.screen && navigate("back", refresh);
+  brand?.addEventListener("click", home);
+  brand?.addEventListener("keydown", (event) => (event.key === "Enter" || event.key === " ") && (event.preventDefault(), home()));
   await refresh();
 }
 
@@ -540,6 +550,10 @@ async function showSettings() {
   );
   // Settings is a deeper screen: no logo (it's Home's), Back at the top.
   document.documentElement.dataset.screen = "settings";
+  const brand = document.querySelector(".brand");
+  brand?.setAttribute("tabindex", "0");
+  brand?.setAttribute("role", "link");
+  brand?.setAttribute("title", "Home");
   back.focus();
 }
 

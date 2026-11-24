@@ -623,9 +623,32 @@ code {
     max-height: 70vh;
   }
 
-  /* The logo stays on deeper screens too: beside the content, it doesn't
-     push Back down. */
+  /* Deeper screens (Settings): one column, the compact lockup on top as the
+     way Home (game-ui.js). */
+  html[data-screen="settings"] main {
+    max-width: 34rem;
+    display: flex;
+  }
+
   html[data-screen="settings"] .brand {
+    display: flex;
+    position: static;
+    align-self: flex-start;
+    margin-bottom: 0.25rem;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+
+  html[data-screen="settings"] .brand:focus-visible {
+    outline: 2px solid var(--line);
+    outline-offset: 4px;
+  }
+
+  html[data-screen="settings"] .brand .logo {
+    display: none;
+  }
+
+  html[data-screen="settings"] .brand .lockup {
     display: flex;
   }
 
