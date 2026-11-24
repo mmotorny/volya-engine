@@ -40,14 +40,14 @@ const AXIS_EPSILON = 0.02;
  */
 export function startInput(view, send) {
   let capture = false;
-  // While upright, the game is covered by "turn your phone" (style.css) and
-  // gets no touches; a touch begun before turning upright still ends.
-  // Keyboards, mice and gamepads reach it in any orientation.
-  const upright = matchMedia("(orientation: portrait) and (pointer: coarse)");
-  let touching = false;
 
   const at = (event) => {
     const rect = view.getBoundingClientRect();
+    // Turned 90° clockwise on upright phones (style.css): the on-screen box
+    // is then portrait while the canvas's own size is landscape.
+    if (rect.width < rect.height !== view.clientWidth < view.clientHeight) {
+      return [event.clientY - rect.top, rect.right - event.clientX];
+    }
     return [event.clientX - rect.left, event.clientY - rect.top];
   };
 
@@ -56,13 +56,6 @@ export function startInput(view, send) {
     if (event.pointerType === "touch") {
       if (!event.isPrimary) return;
       const phase = { pointerdown: "start", pointermove: "move" }[event.type] ?? "end";
-      if (phase === "start") touching = !upright.matches;
-      const blocked = !touching || (phase === "move" && upright.matches);
-      if (phase === "end") touching = false;
-      if (blocked) {
-        event.preventDefault();
-        return;
-      }
       send(["touch", ...at(event), phase, event.timeStamp]);
       event.preventDefault();
       return;

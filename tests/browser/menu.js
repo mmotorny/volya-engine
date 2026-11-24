@@ -63,8 +63,14 @@ function key(code) {
   }
 }
 
-/** Client position of UI point (x, y) (1024 × 768 stretched to the canvas). */
-const client = (x, y) => [(x * view().clientWidth) / 1024, (y * view().clientHeight) / 768];
+/** Page position of UI point (x, y) (1024 × 768 stretched to the canvas). */
+function client(x, y) {
+  const [cx, cy] = [(x * view().clientWidth) / 1024, (y * view().clientHeight) / 768];
+  const rect = view().getBoundingClientRect();
+  // Turned 90° clockwise on upright phones (style.css).
+  if (rect.width < rect.height !== view().clientWidth < view().clientHeight) return [rect.right - cy, rect.top + cx];
+  return [rect.left + cx, rect.top + cy];
+}
 
 function pointer(type, [x, y], init = {}) {
   document.body.dispatchEvent(
@@ -244,9 +250,6 @@ export const tests = {
   },
 
   "touch: a tap selects a row, a second tap activates it": async () => {
-    if (matchMedia("(orientation: portrait) and (pointer: coarse)").matches) {
-      skip("upright: touches are blocked until turned (covered on desktop)");
-    }
     needsGame();
     const touch = { pointerType: "touch", button: 0, buttons: 1 };
     const tap = (at) => {

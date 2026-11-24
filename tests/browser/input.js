@@ -5,9 +5,7 @@
 // synthesized in the page reach the engine's input state. Gamepads cannot be
 // synthesized; their mapping is unit-tested in volya-engine-core.
 
-import { assert, assertEqual, skip } from "./harness.js";
-
-const upright = () => matchMedia("(orientation: portrait) and (pointer: coarse)").matches;
+import { assert, assertEqual } from "./harness.js";
 
 const state = () => volya.call("input_state");
 const view = () => document.getElementById("view");
@@ -19,11 +17,25 @@ async function since(before) {
   return { after, actions: after.recent.filter((a) => a.seq > before.count) };
 }
 
-/** Dispatches a pointer event; false if its default was prevented. */
+/** The page position of canvas position (x, y), CSS pixels. */
+function client(x, y) {
+  const rect = view().getBoundingClientRect();
+  // Turned 90° clockwise on upright phones (style.css).
+  if (rotated()) return [rect.right - y, rect.top + x];
+  return [rect.left + x, rect.top + y];
+}
+
+function rotated() {
+  const rect = view().getBoundingClientRect();
+  return rect.width < rect.height !== view().clientWidth < view().clientHeight;
+}
+
+/** Dispatches a pointer event at canvas position (x, y); false if its default was prevented. */
 function pointer(type, x, y, init = {}) {
+  const [clientX, clientY] = client(x, y);
   const event = new PointerEvent(type, {
-    clientX: x,
-    clientY: y,
+    clientX,
+    clientY,
     pointerId: 1,
     pointerType: "mouse",
     isPrimary: true,
@@ -72,30 +84,18 @@ export const tests = {
     assertEqual((await state()).screen, [view().clientWidth, view().clientHeight]);
   },
 
-  "upright phones are asked to turn to landscape": async () => {
-    const overlay = getComputedStyle(document.documentElement, "::after").content;
-    assertEqual(overlay.includes("landscape"), upright(), `overlay ${overlay}`);
-  },
-
-  "upright phones get no touches until turned": async () => {
-    if (!upright()) skip("not upright");
-    await sleep(300);
-    const before = await state();
-    const touch = { pointerType: "touch", button: 0, buttons: 1 };
-    const prevented = !pointer("pointerdown", 10, 10, touch);
-    pointer("pointermove", 20, 20, { ...touch, button: -1 });
-    const held = (await state()).held;
-    pointer("pointerup", 20, 20, { ...touch, buttons: 0 });
-    const { actions } = await since(before);
-    assert(prevented, "default prevented");
-    assertEqual(held, [], "held");
-    assertEqual(summary(actions), [], "actions");
+  "the game is drawn in landscape; upright phones turn it": async () => {
+    assert(view().clientWidth >= view().clientHeight, `canvas ${view().clientWidth}×${view().clientHeight}`);
+    const portrait = innerHeight > innerWidth;
+    const coarse = matchMedia("(pointer: coarse)").matches;
+    assertEqual(rotated(), portrait && coarse, "turned");
     // Keyboards (and gamepads, which share the path) reach the game in any
-    // orientation.
-    const keyed = await state();
+    // orientation; touches are covered by the tests below, which run turned
+    // on the upright simulator.
+    const before = await state();
     key("keydown", "ArrowDown");
     key("keyup", "ArrowDown");
-    assertEqual(summary((await since(keyed)).actions), ["press down", "release down"], "keys while upright");
+    assertEqual(summary((await since(before)).actions), ["press down", "release down"], "keys");
   },
 
   "mouse moves the cursor": async () => {
@@ -148,7 +148,6 @@ export const tests = {
   },
 
   "touch moves the cursor there and presses": async () => {
-    if (upright()) skip("upright: touches are blocked until turned (covered on desktop)");
     await sleep(300);
     const { clientWidth: w, clientHeight: h } = view();
     const before = await state();
@@ -167,7 +166,6 @@ export const tests = {
   },
 
   "a cancelled touch releases": async () => {
-    if (upright()) skip("upright: touches are blocked until turned (covered on desktop)");
     await sleep(300);
     const before = await state();
     const touch = { pointerType: "touch", button: 0, buttons: 1 };
