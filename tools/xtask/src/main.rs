@@ -204,6 +204,13 @@ fn web(profile: Profile) -> Result {
         fs::remove_dir_all(&dist).map_err(|e| format!("remove dist: {e}"))?;
     }
     copy_dir(&root().join("platforms/web/static"), &dist).map_err(|e| format!("copy web: {e}"))?;
+    // The build's identity, for the page's update check (static/update.js).
+    let build = output(&mut cmd("git", &["rev-parse", "--short", "HEAD"]))?;
+    let dirty = !output(&mut cmd("git", &["status", "--porcelain"]))?
+        .trim()
+        .is_empty();
+    let build = format!("{}{}\n", build.trim(), if dirty { "+" } else { "" });
+    fs::write(dist.join("build.txt"), build).map_err(|e| format!("build.txt: {e}"))?;
     let wasm = format!("target/{WASM_TARGET}/{dir}/volya_engine_web.wasm");
     run(&mut cmd(
         &wasm_bindgen.to_string_lossy(),
