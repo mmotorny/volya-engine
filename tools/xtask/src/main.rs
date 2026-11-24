@@ -243,7 +243,9 @@ fn inject_build(dist: &Path) -> Result {
     )?;
     let mut files = Vec::new();
     list_files(dist, dist, &mut files).map_err(|e| format!("list dist: {e}"))?;
-    files.retain(|f| f != "sw.js");
+    // The UX audit page (static/ux/) is for the project, not players: not
+    // kept offline.
+    files.retain(|f| f != "sw.js" && !f.starts_with("ux/"));
     files.sort();
     let mut entries = Vec::new();
     for file in &files {

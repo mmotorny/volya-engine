@@ -148,7 +148,8 @@ async function runImport({ exe, bin, only }, onProgress) {
   }
 }
 
-function showImport(status) {
+/** `snapshot` ({ done, total, path }) shows an import under way (UX page). */
+function showImport(status, snapshot = null) {
   const message = element("p", { className: "message", hidden: true });
   const progress = element("progress", { max: 1, value: 0, hidden: true });
   // Declaring the installer's types sends iOS straight to the Files picker
@@ -185,6 +186,12 @@ function showImport(status) {
       progress.hidden = true;
     }
   });
+  if (snapshot) {
+    choose.disabled = true;
+    progress.hidden = false;
+    progress.value = snapshot.done / snapshot.total;
+    say(`${formatBytes(snapshot.done)} of ${formatBytes(snapshot.total)} · ${snapshot.path}`);
+  }
   const resume =
     status.written > 0
       ? element("p", { className: "note", textContent: `A previous import stopped after ${status.written} files. Choosing the installer again resumes it.` })
@@ -378,3 +385,6 @@ async function showSettings() {
   );
   back.focus();
 }
+
+/** Every screen, for the UX audit page (static/ux/), which shows each state. */
+export const screens = { showImport, showHome, showSettings, showInUse, showDamaged, showUpdateStatus };

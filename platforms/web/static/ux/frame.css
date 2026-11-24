@@ -1,0 +1,56 @@
+/* SPDX-FileCopyrightText: 2026 Maksym Motorny */
+/* SPDX-License-Identifier: BSD-3-Clause */
+
+/* A frame on the UX audit page: the device's safe-area insets (env() is 0
+   in a frame), and its status bar drawn over the page as iOS does. */
+
+main {
+  padding: calc(var(--inset-top, 0px) + 2rem) calc(var(--inset-right, 0px) + 1.25rem)
+    calc(var(--inset-bottom, 0px) + 1.25rem) calc(var(--inset-left, 0px) + 1.25rem);
+}
+
+@media (orientation: landscape) and (max-height: 500px) {
+  main {
+    padding-top: calc(var(--inset-top, 0px) + 1.25rem);
+  }
+}
+
+.ux-status-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--inset-top);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 2.2rem;
+  font: 600 17px system-ui, -apple-system, sans-serif;
+  color: #fff;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.ux-status-bar .island {
+  position: absolute;
+  left: 50%;
+  top: 11px;
+  width: 125px;
+  height: 37px;
+  transform: translateX(-50%);
+  border-radius: 20px;
+  background: #000;
+}
+
+.ux-home-indicator {
+  position: fixed;
+  left: 50%;
+  bottom: 8px;
+  width: 140px;
+  height: 5px;
+  transform: translateX(-50%);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.85);
+  pointer-events: none;
+  z-index: 10;
+}

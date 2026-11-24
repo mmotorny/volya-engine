@@ -1,0 +1,27 @@
+<!-- SPDX-FileCopyrightText: 2026 Maksym Motorny -->
+<!-- SPDX-License-Identifier: BSD-3-Clause -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="robots" content="noindex">
+<title>Volya Engine · UX audit</title>
+<link rel="icon" href="../icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="board.css">
+</head>
+<body>
+<header class="toolbar">
+  <div class="title"><img src="../icon.svg" alt=""><span>Volya Engine</span><span class="sep">/</span><span>UX audit</span></div>
+  <div class="controls">
+    <span class="devices"></span>
+    <label title="Show whole screens instead of the device's viewport"><input type="checkbox" class="full"> Full length</label>
+    <label class="zoom">Zoom <input type="range" min="20" max="100" step="5" value="40"><output>40%</output></label>
+  </div>
+</header>
+<nav class="sections"></nav>
+<main class="board"></main>
+<script type="module" src="board.js"></script>
+</body>
+</html>
