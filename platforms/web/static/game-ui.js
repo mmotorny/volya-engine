@@ -15,7 +15,6 @@
 // the bottom, away from it. Settings holds updates, storage and, in a danger
 // zone, removing the import.
 
-import { BUILD, versionText } from "./update.js";
 import { SHARE_ICON, canOffer, chromium, install, installed, platform } from "./install.js";
 
 
@@ -530,8 +529,8 @@ async function showSettings() {
   const back = element("button", { className: "back", textContent: "‹ Back" });
   back.addEventListener("click", () => navigate("back", refresh));
 
-  // The version and the download setting; the update itself is offered on
-  // Home (its bottom row), where Settings is reached from.
+  // The download setting only: the version is in the footer, and the update
+  // itself is offered on Home (its bottom row), where Settings is reached from.
   const auto = element("input", { type: "checkbox", checked: updates?.auto ?? true });
   auto.addEventListener("change", () => updates?.setAuto(auto.checked));
 
@@ -549,7 +548,6 @@ async function showSettings() {
       "div",
       { className: "panel" },
       element("p", { className: "label", textContent: "Updates" }),
-      element("p", { className: "value", textContent: `Version ${versionText()}` }),
       updates
         ? element("label", { className: "switch" }, auto, element("span", {}, element("strong", { textContent: "Download updates automatically" })))
         : null,
