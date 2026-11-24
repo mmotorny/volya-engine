@@ -571,12 +571,7 @@ async function showSettings() {
         "label",
         { className: "switch" },
         auto,
-        element(
-          "span",
-          {},
-          element("strong", { textContent: "Download updates automatically" }),
-          element("small", { textContent: "When off, nothing downloads until you choose to (for metered connections)." }),
-        ),
+        element("span", {}, element("strong", { textContent: "Download updates automatically" })),
       ),
       updateLine,
       updateOffer(),
