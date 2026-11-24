@@ -8,6 +8,7 @@
 const GAME = 5.56 * 2 ** 30;
 const imported = { imported: true, written: 3020, total: 3020, bytes: GAME };
 const fresh = { imported: false, written: 0, total: 0, bytes: 0 };
+const TOUCH = ["iphone", "iphone-landscape"];
 
 export const SECTIONS = [
   {
@@ -72,18 +73,29 @@ export const SECTIONS = [
   {
     title: "In the level",
     states: [
-      { id: "level-touch", name: "Touch controls", level: {}, devices: ["iphone", "iphone-landscape"] },
+      { id: "level-touch", name: "Idle", level: {}, devices: TOUCH },
+      { id: "level-touch-faded", name: "Idle a while: faded", level: { fade: true }, devices: TOUCH },
+      { id: "level-touch-moving", name: "Moving with the stick", level: { stick: [0.45, -0.85] }, devices: TOUCH },
+      { id: "level-touch-jump", name: "Jump held", level: { down: "jump" }, devices: TOUCH },
       {
-        id: "level-touch-moving",
-        name: "Moving with the stick",
-        level: { stick: [0.45, -0.85] },
-        devices: ["iphone", "iphone-landscape"],
+        id: "level-touch-past-rim",
+        name: "Past the rim: sprinting, the lock target shown",
+        level: { stick: [0.1, -1.5], sprint: true },
+        devices: TOUCH,
       },
       {
-        id: "level-touch-toggles",
-        name: "Crouching and sprint on",
-        level: { crouch: true, sprint: true },
-        devices: ["iphone", "iphone-landscape"],
+        id: "level-touch-on-target",
+        name: "On the lock target",
+        level: { stick: [0, -2.1], sprint: true },
+        devices: TOUCH,
+      },
+      { id: "level-touch-locked", name: "Sprint locked", level: { lock: true, sprint: true }, devices: TOUCH },
+      { id: "level-touch-crouched", name: "Crouched", level: { crouch: true }, devices: TOUCH },
+      {
+        id: "level-touch-low",
+        name: "Crouch swiped down: low crouch",
+        level: { crouch: true, low: true },
+        devices: TOUCH,
       },
     ],
   },

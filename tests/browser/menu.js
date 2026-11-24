@@ -437,7 +437,7 @@ export const tests = {
     return `ran ${moved.toFixed(2)} m, jumped ${height.toFixed(2)} m`;
   },
 
-  "touch: the move stick walks, a drag looks, Menu returns to the title menu": async () => {
+  "touch: the stick walks and its sprint lock sprints, drags look (from Jump too), Crouch and its swipe down, Menu returns to the title menu": async () => {
     needsGame();
     const controls = document.getElementById("touch-controls");
     assert(controls, "no touch controls");
@@ -487,9 +487,46 @@ export const tests = {
     touchOn(look, "pointerdown", 32, [lx, ly]);
     touchOn(look, "pointermove", 32, [lx + 100, ly + 20]);
     touchOn(look, "pointerup", 32, [lx + 100, ly + 20]);
-    // 100 px at mouse_sens 0.12: 0.24 rad right, a little down.
+    // 100 px at mouse_sens 0.12: 0.24 rad right or more (the look curve),
+    // a little down.
     s = await until((s) => s.level.yaw > start.yaw + 0.2, "the drag to turn right");
     assert(s.level.pitch > start.pitch, "the drag looks down");
+    const turned = s.level.yaw - start.yaw;
+    // The sprint lock: the stick pushed forward past its rim (1.5 radii)
+    // sprints; let go on the lock target (2.1 radii up) it keeps sprinting
+    // with nobody on it; a touch on the stick ends it.
+    const ring = controls.querySelector(".touch-stick");
+    touchOn(move, "pointerdown", 36, [mx, my]);
+    touchOn(move, "pointermove", 36, [mx, my - 84]);
+    await until((s) => s.level.player.sprint_requested, "past the rim to request the sprint");
+    assert(ring.classList.contains("past"), "the lock target shown past the rim");
+    touchOn(move, "pointermove", 36, [mx, my - 118]);
+    touchOn(move, "pointerup", 36, [mx, my - 118]);
+    s = await until((s) => s.level.player.sprint_locked && s.level.player.sprint, "the lock to sprint hands-free");
+    const sprintAt = s.level.player.position;
+    await sleep(150);
+    s = await state();
+    assert(s.level.player.sprint_locked, `the lock held: ${JSON.stringify(s.level.player)}`);
+    for (let i = 0; i < 50 && !ring.classList.contains("locked"); i++) await sleep(20);
+    assert(ring.classList.contains("locked"), "the stick shown locked");
+    touchOn(move, "pointerdown", 37, [mx, my]);
+    touchOn(move, "pointerup", 37, [mx, my]);
+    s = await until((s) => !s.level.player.sprint_locked && !s.level.player.sprint_requested, "a touch to end the lock");
+    s = await until((s) => !s.level.player.moving, "the player to stop after the lock");
+    const sprinted = Math.hypot(s.level.player.position[0] - sprintAt[0], s.level.player.position[2] - sprintAt[2]);
+    for (let i = 0; i < 50 && ring.classList.contains("locked"); i++) await sleep(20);
+    assert(!ring.classList.contains("locked"), "the stick shown unlocked");
+    // A drag begun on Jump jumps and turns too.
+    const jump = controls.querySelector(".touch-button.jump");
+    const [jx, jy] = centre(jump);
+    const yaw = s.level.yaw;
+    touchOn(jump, "pointerdown", 38, [jx, jy]);
+    touchOn(jump, "pointermove", 38, [jx - 20, jy]);
+    touchOn(jump, "pointermove", 38, [jx - 100, jy]);
+    await until((s) => s.level.player.airborne, "Jump to jump");
+    touchOn(jump, "pointerup", 38, [jx - 100, jy]);
+    s = await until((s) => s.level.yaw < yaw - 0.15, "the drag from Jump to turn left");
+    s = await until((s) => !s.level.player.airborne, "the jump to land", 3000);
     // Crouch toggles: the engine reports it back to the button.
     const crouch = controls.querySelector(".touch-button.crouch");
     touchOn(crouch, "pointerdown", 33, centre(crouch));
@@ -497,9 +534,16 @@ export const tests = {
     await until((s) => s.level.player.crouch, "Crouch to crouch");
     for (let i = 0; i < 50 && crouch.getAttribute("aria-pressed") !== "true"; i++) await sleep(20);
     assertEqual(crouch.getAttribute("aria-pressed"), "true", "Crouch shown on");
+    // Crouch swiped down: the low crouch, shown on the button.
+    const [cx, cy] = centre(crouch);
+    touchOn(crouch, "pointerdown", 39, [cx, cy]);
+    touchOn(crouch, "pointermove", 39, [cx, cy + 30]);
+    touchOn(crouch, "pointerup", 39, [cx, cy + 30]);
+    await until((s) => s.level.player.posture === 2 && s.level.player.crouch_toggled, "the swipe to crouch low");
+    for (let i = 0; i < 50 && !crouch.classList.contains("low"); i++) await sleep(20);
+    assert(crouch.classList.contains("low") && crouch.getAttribute("aria-pressed") === "true", "low crouch shown");
     // Jump held down while Menu is pressed: when the controls hide in the
     // menu, nothing stays held.
-    const jump = controls.querySelector(".touch-button.jump");
     touchOn(jump, "pointerdown", 35, centre(jump));
     await sleep(100);
     assert((await volya.call("input_state")).held.includes("touch_jump"), "Jump held");
@@ -513,7 +557,7 @@ export const tests = {
     await sleep(100);
     const held = (await volya.call("input_state")).held;
     assert(!held.some((h) => h.startsWith("touch_")), `held after hiding: ${held}`);
-    return `moved ${moved.toFixed(2)} m, turned ${(s.level.yaw - start.yaw).toFixed(2)} rad`;
+    return `moved ${moved.toFixed(2)} m, turned ${turned.toFixed(2)} rad, sprint-locked ${sprinted.toFixed(2)} m`;
   },
 
   "New Game again after returning: the level loads anew": async () => {

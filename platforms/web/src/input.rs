@@ -18,7 +18,7 @@
 //! | `["key", name, pressed]` | key ([`Key::name`]), no auto-repeat |
 //! | `["pad", name, pressed]` | gamepad button ([`GamepadButton::name`]) |
 //! | `["axis", name, value]` | gamepad axis ([`GamepadAxis::name`]) |
-//! | `["stick", x, y]` | the on-screen move stick's deflection, −1 … +1 (+y down) |
+//! | `["stick", x, y]` | the on-screen move stick's reach in stick radii (+y down): at most 1 long within its rim, up to 3 per axis past it; `0, 0` when touched and when let go |
 //! | `["look", dx, dy]` | a drag on the on-screen look area |
 //! | `["tbutton", name, pressed]` | an on-screen button ([`TouchButton::name`]) |
 //! | `["wheel", steps]` | mouse-wheel steps, negative up |
