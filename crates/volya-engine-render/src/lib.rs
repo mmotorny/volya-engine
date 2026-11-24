@@ -213,8 +213,9 @@ impl Renderer {
             ..Default::default()
         });
         // Video textures: wrap addressing, linear filtering (startup.md
-        // 6.6). Anisotropic filtering, which the original enables, has no
-        // effect without mip levels, so it is left off.
+        // 6.6). Anisotropic filtering, which the original enables, is left
+        // off (our choice): these quads are scaled nearly evenly, where it
+        // makes no visible difference.
         let movie_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("movie"),
             address_mode_u: wgpu::AddressMode::Repeat,
