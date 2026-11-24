@@ -119,7 +119,7 @@ if (state.startError) {
   status.dataset.state = "error";
 } else {
   const name = `Volya Engine · ${versionText()}`;
-  status.textContent = gpu.state === "ready" ? name : `${name} · graphics unavailable: ${gpu.message}`;
+  status.textContent = name;
   status.dataset.text = status.textContent;
   status.dataset.state = "ready";
   await start(call, updates);

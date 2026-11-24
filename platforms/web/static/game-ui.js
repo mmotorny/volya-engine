@@ -113,6 +113,38 @@ function settingsButton() {
 /** Whether the engine can draw (without WebGPU the game would run unseen). */
 const graphics = async () => (await call("status")).gpu.state === "ready";
 
+/**
+ * What to do when this browser can't draw the game, for this device and
+ * browser only.
+ */
+function graphicsHelp() {
+  if (platform() === "ios") return "WebGPU arrived on iPhone with iOS 26: update iOS to the latest version.";
+  if (chromium()) {
+    return "Update the browser to its latest version. If it's up to date, turn on “Use graphics acceleration when available” in its settings.";
+  }
+  return "Open Volya Engine in Chrome.";
+}
+
+/**
+ * First screen when this browser can't draw the game: said before anything
+ * is downloaded or imported (a game imported here couldn't be played).
+ */
+async function showUnsupported() {
+  const { gpu } = await call("status");
+  show(
+    element(
+      "div",
+      { className: "panel" },
+      element("p", { className: "label", textContent: "Unavailable here" }),
+      element("h2", { textContent: "This browser can't run the game" }),
+      element("p", { textContent: "Volya Engine draws the game with WebGPU, which this browser doesn't provide." }),
+      element("p", { textContent: graphicsHelp() }),
+      gpu?.message ? element("p", { className: "note", textContent: `Details: ${gpu.message}.` }) : null,
+    ),
+    bottom(updateOffer(), settingsButton()),
+  );
+}
+
 /** Shows the home or the import screen. */
 async function refresh() {
   root().hidden = false;
@@ -120,6 +152,7 @@ async function refresh() {
     const status = await call("game_status");
     if (status.in_use) showInUse();
     else if (status.imported) await showHome(status);
+    else if (!(await graphics())) await showUnsupported();
     else showImport(status);
   } catch (error) {
     showDamaged(error);
@@ -424,7 +457,7 @@ async function showHome(status) {
   const ready = await graphics();
   if (!ready) {
     launch.disabled = true;
-    note.textContent = "The game needs WebGPU, which this browser doesn't offer.";
+    note.textContent = `This browser can't draw the game: it doesn't provide WebGPU. ${graphicsHelp()}`;
     note.hidden = false;
   }
 

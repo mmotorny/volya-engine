@@ -23,15 +23,12 @@ export const tests = {
   "status is shown": async () => {
     const el = document.getElementById("status");
     assertEqual(el.dataset.state, "ready", "data-state");
-    const { gpu } = await volya.status();
     const { BUILD, BUILT, versionText } = await import(`${base}update.js`);
     assert(/^[0-9a-f]{7,}\+?$/.test(BUILD), `build ${BUILD}`);
     assert(!Number.isNaN(new Date(BUILT).getTime()), `built ${BUILT}`);
     assert(/^\d{4}-\d\d-\d\d \d\d:\d\d · [0-9a-f]{7,}\+?$/.test(versionText()), `version ${versionText()}`);
-    // One version: the build's time and commit. Without WebGPU the line says why.
-    const name = `Volya Engine · ${versionText()}`;
-    const expected = gpu.state === "ready" ? name : `${name} · graphics unavailable: ${gpu.message}`;
-    assertEqual(el.textContent, expected, "text");
+    // One version: the build's time and commit (missing graphics is said in the page).
+    assertEqual(el.textContent, `Volya Engine · ${versionText()}`, "text");
   },
 
   "updates: automatic applies at a safe moment, opted out only on request": async () => {

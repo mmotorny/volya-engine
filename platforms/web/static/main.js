@@ -97,10 +97,10 @@ new ResizeObserver(resized).observe(view);
 const status = document.getElementById("status");
 try {
   await started;
-  const { gpu } = await volya.status();
   // One version: the build's time and commit (docs/architecture.md, Hosting).
   const name = `Volya Engine · ${versionText()}`;
-  status.textContent = gpu.state === "ready" ? name : `${name} · graphics unavailable: ${gpu.message}`;
+  // Missing graphics is explained in the page itself (game-ui.js).
+  status.textContent = name;
   status.dataset.text = status.textContent;
   status.dataset.state = "ready";
   // Browsers start audio suspended until a user gesture (iOS especially).
