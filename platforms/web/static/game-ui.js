@@ -435,12 +435,10 @@ async function showHome(status) {
     try {
       await call("launch");
     } catch (error) {
-      // Where damaged game files show: say what failed and the way out.
+      // Only what's known: the engine's own words.
       problem.replaceChildren(
         element("strong", { textContent: "The game couldn't start" }),
-        element("span", {
-          textContent: `The engine reported: ${error.message}. If this keeps happening, the imported files may be damaged: remove the game in Settings, then import it again.`,
-        }),
+        element("span", { textContent: `The engine reported: ${error.message}.` }),
       );
       problem.hidden = false;
     }
