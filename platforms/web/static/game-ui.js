@@ -5,9 +5,12 @@
 // browsing its files. Plain DOM with native buttons, so touch, mouse and
 // keyboard all work.
 //
-// Once the game is imported, the app launches it on start (and after an
-// import): the engine takes the screen and its input, and this interface
-// hides until the player quits (the Q key or the title menu's last item).
+// The app always opens here; the game starts from the Play button. That tap
+// also lets the browser play sound (it stays silent until the first user
+// gesture), and keeps this screen, where the engine's settings live, in
+// view. While the game runs the engine takes the screen and its input, and
+// this interface hides until the player quits (the Q key or the title
+// menu's last item).
 
 const TEXT_EXTENSIONS = new Set(["ltx", "xml", "script", "txt", "ini", "ps", "vs", "s", "h"]);
 const PREVIEW_BYTES = 4096;
@@ -38,23 +41,19 @@ async function storageLine() {
 export async function start(engineCall) {
   call = engineCall;
   globalThis.volya.importGame = importGame;
-  await refresh({ launch: true });
+  await refresh();
 }
 
 /** Whether the engine can draw (without WebGPU the game would run unseen). */
 const graphics = async () => (await call("status")).gpu.state === "ready";
 
-/**
- * Shows the browser or the import screen; `launch` starts an imported game
- * when the engine can draw.
- */
-async function refresh({ launch = false } = {}) {
+/** Shows the browser or the import screen. */
+async function refresh() {
   root().hidden = false;
   try {
     const status = await call("game_status");
     if (status.imported) {
       await showBrowser("");
-      if (launch && (await graphics())) await play();
     } else showImport(status);
   } catch (error) {
     showDamaged(error);
@@ -128,7 +127,7 @@ function showImport(status) {
         progress.value = done / total;
         message.textContent = `Importing ${path}: ${formatBytes(done)} of ${formatBytes(total)}`;
       });
-      await refresh({ launch: true });
+      await refresh();
     } catch (error) {
       message.textContent = `Import failed: ${error.message}`;
       choose.disabled = false;
@@ -185,7 +184,7 @@ async function showBrowser(path) {
     list.append(element("li", {}, button));
   }
 
-  const launch = element("button", { className: "primary", textContent: "Play" });
+  const launch = element("button", { className: "primary play", textContent: "Play" });
   launch.addEventListener("click", play);
   if (!(await graphics())) {
     launch.disabled = true;

@@ -95,6 +95,15 @@ button.primary {
   border-color: #c8b46a;
 }
 
+button.play {
+  display: block;
+  width: 100%;
+  margin: 1rem 0 1.5rem;
+  padding: 1.25rem;
+  font-size: 1.75rem;
+  font-weight: 600;
+}
+
 progress {
   display: block;
   width: 100%;
