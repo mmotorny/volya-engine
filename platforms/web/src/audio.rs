@@ -105,6 +105,11 @@ pub fn stop_music() {
     }
 }
 
+/// Runs `f` on the mixer, `None` before audio output is connected.
+pub fn with_mixer_opt<T>(f: impl FnOnce(Option<&mut Mixer>) -> T) -> T {
+    MIXER.with(|m| f(m.borrow_mut().as_mut()))
+}
+
 pub fn set_volume(category: Category, volume: f32) -> Result<(), JsValue> {
     with_mixer(|mixer| mixer.set_volume(category, volume))
 }

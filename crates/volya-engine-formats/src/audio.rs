@@ -11,6 +11,28 @@ fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 
+/// The granule position of the last Ogg page in `bytes` (the public Ogg
+/// format: pages start with `OggS`, version 0, and carry the granule at byte
+/// 6). For a Vorbis stream that is the number of PCM frames up to the end of
+/// the stream, so the length in seconds is this over the sample rate. `None`
+/// when no page is found.
+pub fn ogg_end_granule(bytes: &[u8]) -> Option<u64> {
+    let mut end = bytes.len();
+    while end >= 27 {
+        let start = bytes[..end].windows(4).rposition(|w| w == b"OggS")?;
+        let page = &bytes[start..];
+        if page.len() >= 27 && page[4] == 0 {
+            let granule = u64::from_le_bytes(page[6..14].try_into().unwrap());
+            // -1: no packet ends on this page.
+            if granule != u64::MAX {
+                return Some(granule);
+            }
+        }
+        end = start;
+    }
+    None
+}
+
 /// A Vorbis stream read from an Ogg file, decoded block by block.
 pub struct VorbisStream<R: Read + Seek> {
     reader: Option<OggStreamReader<R>>,

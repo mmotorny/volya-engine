@@ -10,7 +10,7 @@ mod gog_archives;
 use std::fs::File;
 use std::io::{BufReader, Cursor};
 
-use volya_engine_formats::audio::VorbisStream;
+use volya_engine_formats::audio::{VorbisStream, ogg_end_granule};
 use volya_engine_formats::db::{Archive, Scrambling};
 
 fn archive(name: &str) -> Option<Archive<BufReader<File>>> {
@@ -52,6 +52,8 @@ fn decodes_like_the_reference() {
     let data = dba.read(&entry).unwrap();
     // Reference: ffmpeg decodes 1,144,576 mono samples at 44.1 kHz.
     assert_eq!(decode_all(&data), (44_100, 1, 1_144_576));
+    // The last page's granule gives the length without decoding.
+    assert_eq!(ogg_end_granule(&data), Some(1_144_576));
 
     // Rewinding restarts from the first sample.
     let mut stream = VorbisStream::open(Cursor::new(data.as_slice())).unwrap();

@@ -127,6 +127,22 @@ fn texels_map_one_to_one_and_sub_rectangles_select() {
 }
 
 #[test]
+fn corners_place_a_rotated_quad() {
+    let mut renderer = renderer();
+    let texture = renderer.create_rgba_texture(2, 2, &quadrants(2, [RED, GREEN, BLUE, WHITE]));
+    // A quarter turn counter-clockwise: the texture's top-left lands at the
+    // bottom-left, its top-right at the top-left.
+    let mut quad = Quad::new(Rect::SCREEN, &texture);
+    quad.corners = Some([[0.0, 768.0], [0.0, 0.0], [1024.0, 0.0], [1024.0, 768.0]]);
+    let mut list = DrawList::default();
+    list.quads.push(quad);
+    let image = capture(&mut renderer, &list, 16, 16);
+    for (x, y, expected) in [(1, 14, RED), (1, 1, GREEN), (14, 14, BLUE), (14, 1, WHITE)] {
+        assert_eq!(pixel(&image, 16, x, y), expected, "({x}, {y})");
+    }
+}
+
+#[test]
 fn axes_scale_independently() {
     let mut renderer = renderer();
     let texture = renderer.create_rgba_texture(1, 1, &RED);

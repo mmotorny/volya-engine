@@ -69,6 +69,11 @@ pub fn resize(width: f64, height: f64) {
     });
 }
 
+/// Runs `f` on the input state (this frame's actions, the cursor).
+pub fn with_input<T>(f: impl FnOnce(&Input) -> T) -> T {
+    STATE.with(|s| f(&s.borrow().input))
+}
+
 /// Ends the frame: this frame's actions have been consumed.
 pub fn end_frame() {
     STATE.with(|s| s.borrow_mut().input.end_frame());

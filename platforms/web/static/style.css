@@ -16,6 +16,8 @@ html, body {
 /* The engine owns the screen and its input (input.js): no page gestures. */
 html[data-engine-input] {
   touch-action: none;
+  /* The engine draws its own cursor. */
+  cursor: none;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;

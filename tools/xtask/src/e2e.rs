@@ -17,9 +17,20 @@ use volya_engine_devserver::{BASE, Server};
 
 use super::{Profile, Result, cmd, output, root, run as run_cmd, step, web};
 
-const SUITES: &[&str] = &["smoke", "platform", "import", "audio", "render", "input"];
+const SUITES: &[&str] = &[
+    "smoke", "platform", "import", "audio", "render", "input", "menu",
+];
 const TARGETS: &[&str] = &["chrome", "iphone"];
 const REPORT_TIMEOUT: Duration = Duration::from_secs(60);
+/// Suites importing gigabytes from the installer get longer.
+const SLOW_SUITES: &[(&str, Duration)] = &[("menu", Duration::from_secs(300))];
+
+fn report_timeout(suite: &str) -> Duration {
+    SLOW_SUITES
+        .iter()
+        .find(|(s, _)| *s == suite)
+        .map_or(REPORT_TIMEOUT, |(_, t)| *t)
+}
 
 const CHROME: &str = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const SIMULATOR_NAME: &str = "Volya iPhone 17 Pro Max";
@@ -62,8 +73,8 @@ pub fn run(targets: &[&str]) -> Result {
             let id = run_id(target, suite);
             let url = format!("http://localhost:{port}{BASE}__test/run/{id}/{suite}.html");
             let outcome = match target {
-                "chrome" => chrome(&url, &id, &reports),
-                "iphone" => iphone(&url, &id, &reports),
+                "chrome" => chrome(&url, &id, &reports, report_timeout(suite)),
+                "iphone" => iphone(&url, &id, &reports, report_timeout(suite)),
                 _ => unreachable!(),
             };
             match outcome.map(|report| known_failures(target, &report)) {
@@ -99,15 +110,15 @@ fn run_id(target: &str, suite: &str) -> String {
 
 /// Waits for the report of run `id`, skipping stale ones (e.g. from restored
 /// Safari tabs reloading old runs).
-fn wait_report(id: &str, reports: &Receiver<String>) -> Result<String> {
-    let deadline = Instant::now() + REPORT_TIMEOUT;
+fn wait_report(id: &str, reports: &Receiver<String>, timeout: Duration) -> Result<String> {
+    let deadline = Instant::now() + timeout;
     let header = format!("run {id}");
     loop {
         let left = deadline.saturating_duration_since(Instant::now());
         match reports.recv_timeout(left) {
             Ok(report) if report.lines().next() == Some(header.as_str()) => return Ok(report),
             Ok(_) => continue,
-            Err(_) => return Err(format!("no report within {REPORT_TIMEOUT:?}")),
+            Err(_) => return Err(format!("no report within {timeout:?}")),
         }
     }
 }
@@ -163,7 +174,7 @@ fn passed(report: &str) -> bool {
     lines.clone().any(|l| l.starts_with("ok ")) && !lines.any(|l| l.starts_with("fail "))
 }
 
-fn chrome(url: &str, id: &str, reports: &Receiver<String>) -> Result<String> {
+fn chrome(url: &str, id: &str, reports: &Receiver<String>, timeout: Duration) -> Result<String> {
     let profile = env::temp_dir().join(format!("volya-chrome-{id}"));
     let mut child: Child = cmd(
         CHROME,
@@ -179,7 +190,7 @@ fn chrome(url: &str, id: &str, reports: &Receiver<String>) -> Result<String> {
     .stderr(Stdio::null())
     .spawn()
     .map_err(|e| format!("launch Chrome: {e}"))?;
-    let report = wait_report(id, reports);
+    let report = wait_report(id, reports, timeout);
     let _ = child.kill();
     let _ = child.wait();
     let _ = fs::remove_dir_all(profile);
@@ -189,11 +200,11 @@ fn chrome(url: &str, id: &str, reports: &Receiver<String>) -> Result<String> {
 /// Opens `url` in Mobile Safari on a dedicated iPhone 17 Pro Max simulator,
 /// creating and booting it as needed. The simulator is left booted so later
 /// runs start fast.
-fn iphone(url: &str, id: &str, reports: &Receiver<String>) -> Result<String> {
+fn iphone(url: &str, id: &str, reports: &Receiver<String>, timeout: Duration) -> Result<String> {
     let udid = simulator()?;
     run_cmd(cmd("xcrun", &["simctl", "bootstatus", &udid, "-b"]).stdout(Stdio::null()))?;
     run_cmd(&mut cmd("xcrun", &["simctl", "openurl", &udid, url]))?;
-    wait_report(id, reports)
+    wait_report(id, reports, timeout)
 }
 
 fn simulator() -> Result<String> {

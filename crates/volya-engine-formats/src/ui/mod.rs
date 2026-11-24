@@ -5,10 +5,12 @@
 //! 1024 × 768 UI space and its screen mapping, the wide-screen `_16` file
 //! rule, colours, element descriptions read from layout XML ([`layout`]),
 //! picture geometry ([`picture`]), texture descriptions ([`texture_desc`]),
-//! frame sequences ([`seq`]) and the title menu's layout ([`title_menu`]).
+//! frame sequences ([`seq`]), movie sequences ([`movies`]) and the title
+//! menu's layout ([`title_menu`]).
 //! Finding files is the caller's job (`volya-engine-core::ui`).
 
 pub mod layout;
+pub mod movies;
 pub mod picture;
 pub mod seq;
 pub mod texture_desc;

@@ -147,6 +147,12 @@ impl<R: Read + Seek> DbVfs<R> {
         Ok(())
     }
 
+    /// The mount-order index of the archive whose entry `path` is (the one
+    /// that wins), for diagnostics; `None` when no file has that path.
+    pub fn archive_of(&self, path: &str) -> Option<usize> {
+        self.files.get(&key(path).ok()?).map(|f| f.archive)
+    }
+
     /// Adds directory `path` and its ancestors.
     fn add_dir(&mut self, path: &str) {
         if !path.is_empty() && !self.dirs.contains_key(path) {

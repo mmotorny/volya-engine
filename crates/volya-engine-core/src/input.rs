@@ -15,7 +15,9 @@
 //!   there, then presses the left mouse button; lifting releases it. Moving
 //!   while touching moves the cursor. On the title menu a tap on a row
 //!   selects it (hover), and a tap on the selected row, now under the glass,
-//!   activates it.
+//!   activates it. Screens that react to keys only (the logo sequence,
+//!   skipped with the quit key) treat a tap as that key
+//!   ([`Input::touch_starts`]).
 //! - **Gamepad** ([`GamepadButton`], [`GamepadAxis`]): south (A / cross) is
 //!   Enter, east (B / circle) is Escape, the d-pad is the arrow keys, and the
 //!   left stick acts as the arrow keys once pushed past [`STICK_PRESS`]
@@ -338,6 +340,8 @@ pub struct Input {
     last_press: [Option<f64>; 3],
     /// Actions since start, including earlier frames.
     count: u64,
+    /// Touch contacts begun this frame.
+    touch_starts: u32,
 }
 
 impl Default for Input {
@@ -350,6 +354,7 @@ impl Default for Input {
             actions: Vec::new(),
             last_press: [None; 3],
             count: 0,
+            touch_starts: 0,
         }
     }
 }
@@ -415,9 +420,17 @@ impl Input {
         self.count
     }
 
+    /// Touch contacts begun this frame. They also press the left mouse
+    /// button; screens that need touch to reach a key the touch path lacks
+    /// (e.g. skipping the logo sequence, which only keys do) read this.
+    pub fn touch_starts(&self) -> u32 {
+        self.touch_starts
+    }
+
     /// Clears this frame's actions; call once per frame after the consumers.
     pub fn end_frame(&mut self) {
         self.actions.clear();
+        self.touch_starts = 0;
     }
 
     /// Releases every held control, e.g. when the platform stops delivering
@@ -450,6 +463,7 @@ impl Input {
                 self.move_to(at);
                 match phase {
                     TouchPhase::Start => {
+                        self.touch_starts += 1;
                         self.mouse_button(Source::Touch, MouseButton::Left, true, time)
                     }
                     TouchPhase::End => {
@@ -691,6 +705,9 @@ mod tests {
                 Action::Release { control: left },
             ]
         );
+        assert_eq!(input.touch_starts(), 1);
+        input.end_frame();
+        assert_eq!(input.touch_starts(), 0);
         // A second tap soon after is a double click, as with the mouse.
         input.handle(Event::Touch {
             at: [300.0, 600.0],

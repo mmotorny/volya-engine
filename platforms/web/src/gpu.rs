@@ -13,6 +13,9 @@ use std::sync::Arc;
 
 use serde::Serialize;
 use serde_json::json;
+use volya_engine::formats::pe::Rgba;
+use volya_engine::formats::ui::Resolution;
+use volya_engine::present::Presenter;
 use volya_engine::render::{DrawList, Quad, Rect, Renderer, VideoTexture, wgpu};
 use volya_engine_formats::dds::{Dds, Format};
 use volya_engine_formats::video::TheoraVideo;
@@ -31,8 +34,11 @@ struct Gpu {
     config: wgpu::SurfaceConfiguration,
     queue: wgpu::Queue,
     renderer: Renderer,
+    /// What `debug_draw` shows when the game does not run.
     list: DrawList,
     video: Option<Playing>,
+    /// The game's textures and videos.
+    presenter: Presenter,
     /// Whether the canvas shows something other than the current state.
     dirty: bool,
 }
@@ -126,6 +132,7 @@ async fn connect(canvas: OffscreenCanvas) -> Result<Gpu, String> {
         queue,
         list: DrawList::default(),
         video: None,
+        presenter: Presenter::new(),
         dirty: true,
     })
 }
@@ -207,20 +214,51 @@ pub fn resize(width: f64, height: f64, dpr: f64) {
     });
 }
 
+/// The canvas size in pixels, `None` without graphics.
+pub fn resolution() -> Option<Resolution> {
+    GPU.with(|g| {
+        g.borrow()
+            .as_ref()
+            .map(|gpu| Resolution::new(gpu.config.width, gpu.config.height))
+    })
+}
+
+/// Sets the splash picture the game shows while it loads.
+pub fn set_splash(image: &Rgba) {
+    let _ = with_gpu(|gpu| {
+        gpu.presenter.set_splash(&gpu.renderer, image);
+        Ok(())
+    });
+}
+
 /// One animation frame at `time` (milliseconds): advances video and
 /// presents if anything changed.
 pub fn frame(time: f64) {
     let _ = with_gpu(|gpu| {
-        gpu.advance_video(time);
-        if gpu.dirty {
-            gpu.present();
+        let resolution = Resolution::new(gpu.config.width, gpu.config.height);
+        // The game's screen, redrawn every frame while it runs (videos and
+        // the cursor animate); otherwise what `debug_draw` set.
+        match crate::engine::draw_list(&gpu.renderer, &mut gpu.presenter, resolution) {
+            Some(list) => {
+                gpu.present(&list);
+                // Once the game stops, the debug list is drawn over it.
+                gpu.dirty = true;
+            }
+            None => {
+                gpu.advance_video(time);
+                if gpu.dirty {
+                    let list = std::mem::take(&mut gpu.list);
+                    gpu.present(&list);
+                    gpu.list = list;
+                }
+            }
         }
         Ok(())
     });
 }
 
 impl Gpu {
-    fn present(&mut self) {
+    fn present(&mut self, list: &DrawList) {
         let texture = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t)
             | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
@@ -232,7 +270,7 @@ impl Gpu {
             _ => return,
         };
         let view = texture.texture.create_view(&Default::default());
-        self.renderer.render(&view, &self.list, CLEAR);
+        self.renderer.render(&view, list, CLEAR);
         self.queue.present(texture);
         self.dirty = false;
     }
@@ -352,13 +390,20 @@ pub struct Capture {
     rgba: Vec<u8>,
 }
 
-/// Debugging and tests: renders the current draw list offscreen at
-/// `width` × `height` and reads it back (docs/testing.md).
+/// Debugging and tests: renders the current frame offscreen at
+/// `width` × `height` and reads it back (docs/testing.md): the game's screen
+/// built for that size while the game runs, else the debug draw list.
 pub async fn debug_capture(width: u32, height: u32) -> Result<Capture, JsValue> {
     if !(1..=MAX_CAPTURE).contains(&width) || !(1..=MAX_CAPTURE).contains(&height) {
         return Err(error(format!("capture size {width}×{height}")));
     }
-    let pixels = with_gpu(|gpu| Ok(gpu.renderer.capture(&gpu.list, width, height, CLEAR)))?;
+    let pixels = with_gpu(|gpu| {
+        // The game's screen as it would be at this size, else the debug list.
+        let resolution = Resolution::new(width, height);
+        let list = crate::engine::draw_list(&gpu.renderer, &mut gpu.presenter, resolution)
+            .unwrap_or_else(|| gpu.list.clone());
+        Ok(gpu.renderer.capture(&list, width, height, CLEAR))
+    })?;
     let rgba = pixels.await.map_err(error)?;
     Ok(Capture {
         width,

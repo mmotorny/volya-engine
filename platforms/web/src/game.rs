@@ -176,8 +176,14 @@ pub fn play_music(track: &str) -> Result<[u32; 2], JsValue> {
     with_game(|game| crate::audio::play_music(&game.tree, track))
 }
 
+/// Runs `f` on the combined archive tree and the game root (loose files).
+pub fn with_trees<T>(f: impl FnOnce(&dyn Vfs, &dyn Vfs) -> T) -> Result<T, JsValue> {
+    with_game(|game| Ok(f(&game.tree, game.opfs)))
+}
+
 /// Releases the imported files so they can be rewritten or removed.
 pub fn unmount() {
+    crate::engine::stop();
     crate::audio::stop_all();
     if let Some(game) = GAME.with(|g| g.borrow_mut().take()) {
         drop(game.tree);

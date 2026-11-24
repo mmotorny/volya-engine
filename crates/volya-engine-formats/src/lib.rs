@@ -10,6 +10,7 @@ pub mod cp1251;
 pub mod db;
 pub mod dds;
 pub mod ltx;
+pub mod pe;
 pub mod text;
 pub mod ui;
 pub mod video;

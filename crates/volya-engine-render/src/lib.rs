@@ -87,6 +87,10 @@ pub struct Quad {
     pub source: Rect,
     /// Multiplies the texel colour: RGBA, 255 = unchanged.
     pub color: [u8; 4],
+    /// When set, the corners to draw at instead of `rect`, in UI units, in
+    /// the order top-left, top-right, bottom-right, bottom-left of `source`
+    /// (e.g. a rotated picture).
+    pub corners: Option<[[f32; 2]; 4]>,
 }
 
 impl Quad {
@@ -98,6 +102,7 @@ impl Quad {
             texture: texture.clone(),
             source: Rect::new(0.0, 0.0, width as f32, height as f32),
             color: [255; 4],
+            corners: None,
         }
     }
 }
@@ -318,16 +323,21 @@ impl Renderer {
             let (r, s) = (quad.rect, quad.source);
             let (u0, v0) = (s.x / tw as f32, s.y / th as f32);
             let (u1, v1) = ((s.x + s.width) / tw as f32, (s.y + s.height) / th as f32);
-            let (x0, y0, x1, y1) = (r.x, r.y, r.x + r.width, r.y + r.height);
+            let [tl, tr, br, bl] = quad.corners.unwrap_or([
+                [r.x, r.y],
+                [r.x + r.width, r.y],
+                [r.x + r.width, r.y + r.height],
+                [r.x, r.y + r.height],
+            ]);
             // Two triangles: top-left, bottom-left, top-right; top-right,
             // bottom-left, bottom-right.
-            for (x, y, u, v) in [
-                (x0, y0, u0, v0),
-                (x0, y1, u0, v1),
-                (x1, y0, u1, v0),
-                (x1, y0, u1, v0),
-                (x0, y1, u0, v1),
-                (x1, y1, u1, v1),
+            for ([x, y], u, v) in [
+                (tl, u0, v0),
+                (bl, u0, v1),
+                (tr, u1, v0),
+                (tr, u1, v0),
+                (bl, u0, v1),
+                (br, u1, v1),
             ] {
                 for value in [x, y, u, v] {
                     data.extend_from_slice(&value.to_le_bytes());

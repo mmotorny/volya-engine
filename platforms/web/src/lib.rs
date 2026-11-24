@@ -8,6 +8,7 @@
 #![cfg(target_arch = "wasm32")]
 
 mod audio;
+mod engine;
 mod game;
 mod gpu;
 mod import;
@@ -17,6 +18,7 @@ mod opfs;
 use serde::Serialize;
 use volya_engine::core::audio::{Category, Playback};
 use volya_engine::core::vfs::conformance;
+use volya_engine::formats::ui::Resolution;
 use wasm_bindgen::prelude::*;
 use web_sys::{OffscreenCanvas, WorkerGlobalScope};
 
@@ -34,11 +36,14 @@ pub async fn start(canvas: OffscreenCanvas) {
 pub fn resize(width: f64, height: f64, dpr: f64) {
     gpu::resize(width, height, dpr);
     input::resize(width, height);
+    let pixels = |css: f64| ((css * dpr).round() as u32).max(1);
+    engine::resized(gpu::resolution().unwrap_or(Resolution::new(pixels(width), pixels(height))));
 }
 
 /// Runs one animation frame; `time` in milliseconds.
 #[wasm_bindgen]
 pub fn frame(time: f64) {
+    engine::frame(time);
     gpu::frame(time);
     input::end_frame();
 }
@@ -109,6 +114,19 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
             to_json(&game::read_head(text("path"), max)?)
         }
         "input_state" => to_json(&input::state()),
+        "launch" => to_json(&engine::launch().await?),
+        "menu_state" => to_json(&engine::state()),
+        "menu_scene" => {
+            let size = |key| args.get(key).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            to_json(&engine::scene(Resolution::new(
+                size("width").max(1),
+                size("height").max(1),
+            ))?)
+        }
+        "quit_game" => {
+            engine::stop();
+            Ok("null".into())
+        }
         "input_capture" => {
             input::set_capture(args.get("on").and_then(|v| v.as_bool()).unwrap_or(false));
             Ok("null".into())

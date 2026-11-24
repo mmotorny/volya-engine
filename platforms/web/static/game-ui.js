@@ -1,8 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Game UI: importing the game from a GOG installer, and browsing its files.
-// Plain DOM with native buttons, so touch, mouse and keyboard all work.
+// Game UI: importing the game from a GOG installer, launching it, and
+// browsing its files. Plain DOM with native buttons, so touch, mouse and
+// keyboard all work.
+//
+// Once the game is imported, the app launches it on start (and after an
+// import): the engine takes the screen and its input, and this interface
+// hides until the player quits (the Q key or the title menu's last item).
 
 const TEXT_EXTENSIONS = new Set(["ltx", "xml", "script", "txt", "ini", "ps", "vs", "s", "h"]);
 const PREVIEW_BYTES = 4096;
@@ -33,17 +38,35 @@ async function storageLine() {
 export async function start(engineCall) {
   call = engineCall;
   globalThis.volya.importGame = importGame;
-  await refresh();
+  await refresh({ launch: true });
 }
 
-async function refresh() {
+/** Whether the engine can draw (without WebGPU the game would run unseen). */
+const graphics = async () => (await call("status")).gpu.state === "ready";
+
+/**
+ * Shows the browser or the import screen; `launch` starts an imported game
+ * when the engine can draw.
+ */
+async function refresh({ launch = false } = {}) {
   root().hidden = false;
   try {
     const status = await call("game_status");
-    if (status.imported) await showBrowser("");
-    else showImport(status);
+    if (status.imported) {
+      await showBrowser("");
+      if (launch && (await graphics())) await play();
+    } else showImport(status);
   } catch (error) {
     showDamaged(error);
+  }
+}
+
+/** Launches the game; on failure says why above the browser. */
+async function play() {
+  try {
+    await call("launch");
+  } catch (error) {
+    root().prepend(element("p", { className: "message", textContent: `The game could not start: ${error.message}` }));
   }
 }
 
@@ -105,7 +128,7 @@ function showImport(status) {
         progress.value = done / total;
         message.textContent = `Importing ${path}: ${formatBytes(done)} of ${formatBytes(total)}`;
       });
-      await refresh();
+      await refresh({ launch: true });
     } catch (error) {
       message.textContent = `Import failed: ${error.message}`;
       choose.disabled = false;
@@ -162,6 +185,12 @@ async function showBrowser(path) {
     list.append(element("li", {}, button));
   }
 
+  const launch = element("button", { className: "primary", textContent: "Play" });
+  launch.addEventListener("click", play);
+  if (!(await graphics())) {
+    launch.disabled = true;
+    launch.title = "The game needs WebGPU, which is unavailable here.";
+  }
   const remove = element("button", { textContent: "Remove imported game" });
   remove.addEventListener("click", async () => {
     if (!confirm("Remove the imported game from this app's storage? You can import it again from the installer.")) return;
@@ -169,6 +198,7 @@ async function showBrowser(path) {
     await refresh();
   });
   show(
+    launch,
     element("p", { className: "storage", textContent: await storageLine() }),
     crumbs,
     preview,

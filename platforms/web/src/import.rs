@@ -79,10 +79,14 @@ impl Seek for Source {
     }
 }
 
-/// Files the engine reads: the game archives (docs/formats/gog-installer.md).
+/// Files the engine reads: the game archives (docs/formats/gog-installer.md),
+/// the executable holding the splash picture and the default user settings
+/// (docs/behavior/startup.md sections 3 and 4).
 fn wanted(file: &GameFile) -> bool {
     file.path.starts_with("gamedata.db")
         || (file.path.starts_with("mods/") && file.path.contains(".xdb"))
+        || file.path == volya_engine::app::SPLASH_EXE
+        || file.path == volya_engine::data::DEFAULT_USER_LTX
 }
 
 thread_local! {

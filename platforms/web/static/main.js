@@ -67,8 +67,13 @@ addEventListener("pageshow", (event) => event.persisted && location.reload());
 // The engine sizes the canvas in device pixels from these.
 const view = document.getElementById("view");
 const size = () => ({ width: view.clientWidth, height: view.clientHeight, dpr: devicePixelRatio });
-// Input goes to the engine only while it owns the screen (input.js).
-setCapture = startInput(view, (event) => worker.postMessage({ type: "input", event }));
+// Input goes to the engine only while it owns the screen (input.js); the
+// page's own interface hides meanwhile.
+const forward = startInput(view, (event) => worker.postMessage({ type: "input", event }));
+setCapture = (on) => {
+  forward(on);
+  document.querySelector("main").hidden = on;
+};
 const canvas = view.transferControlToOffscreen();
 worker.postMessage({ type: "start", canvas, size: size() }, [canvas]);
 const resized = () => worker.postMessage({ type: "resize", ...size() });
