@@ -40,6 +40,19 @@ export const tests = {
     return `planned ${result.plan.files.length} files, persisted: ${result.persisted}`;
   },
 
+  "updates an existing import without re-extracting": async () => {
+    if (!installer) skip("no installer");
+    const exe = installer.find((f) => f.name.endsWith(".exe")).name;
+    const bin = installer.find((f) => f.name.endsWith("-1.bin")).name;
+    const written = new Set();
+    const result = await volya.importGame(
+      { exe: await source(exe), bin: await source(bin), only: [...ONLY, "gamedata.dbb"] },
+      ({ path }) => written.add(path),
+    );
+    assertEqual([...written], ["gamedata.dbb"], "files extracted by the update");
+    assertEqual(result.status.written, ONLY.length + 1, "files in the import");
+  },
+
   "browses the game tree": async () => {
     if (!installer) skip("no installer");
     const root = await volya.call("read_dir", { path: "" });

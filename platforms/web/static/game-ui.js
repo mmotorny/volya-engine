@@ -75,6 +75,9 @@ async function play() {
  * `{ url, size }` sources); `only` optionally limits the paths imported.
  */
 export async function importGame({ exe, bin, only }, onProgress = () => {}) {
+  // Files already imported are skipped (the import resumes), so only the
+  // rest needs free space.
+  const imported = (await call("game_status").catch(() => ({ bytes: 0 }))).bytes ?? 0;
   await call("unmount_game");
   const worker = new Worker(new URL("./import-worker.js", import.meta.url), { type: "module" });
   const request = (message) =>
@@ -94,7 +97,7 @@ export async function importGame({ exe, bin, only }, onProgress = () => {}) {
     const { plan } = await request({ type: "plan", exe });
     const needed = only ? plan.files.filter((f) => only.includes(f.path)).reduce((s, f) => s + f.size, 0) : plan.total;
     const { usage, quota } = await navigator.storage.estimate();
-    if (quota - usage < needed) {
+    if (quota - usage < needed - imported) {
       throw new Error(`Not enough storage: the game needs ${formatBytes(needed)}, ${formatBytes(quota - usage)} is available.`);
     }
     const persisted = await navigator.storage.persist();
@@ -105,11 +108,16 @@ export async function importGame({ exe, bin, only }, onProgress = () => {}) {
   }
 }
 
-function showImport(status) {
+/**
+ * A button that picks the installer's two files and imports from them, with
+ * progress and messages. Importing over an existing import adds only what is
+ * missing (files already imported are skipped).
+ */
+function installerPicker(label, primary) {
   const message = element("p", { className: "message" });
   const progress = element("progress", { max: 1, value: 0, hidden: true });
   const input = element("input", { type: "file", multiple: true, hidden: true });
-  const choose = element("button", { className: "primary", textContent: "Choose installer files" });
+  const choose = element("button", { className: primary ? "primary" : "", textContent: label });
   choose.addEventListener("click", () => input.click());
   input.addEventListener("change", async () => {
     const files = [...input.files];
@@ -135,6 +143,10 @@ function showImport(status) {
       progress.hidden = true;
     }
   });
+  return [choose, input, progress, message];
+}
+
+function showImport(status) {
   const resume = status.written > 0 ? element("p", { textContent: `A previous import stopped after ${status.written} files; choosing the installer again resumes it.` }) : null;
   show(
     element("h2", { textContent: "Import the game" }),
@@ -143,10 +155,7 @@ function showImport(status) {
         "Choose both files of the GOG offline installer of S.T.A.L.K.E.R.: Shadow of Chernobyl (Russian edition): setup_….exe and setup_…-1.bin. The game files are extracted into this app's storage (about 5.6 GiB).",
     }),
     resume,
-    choose,
-    input,
-    progress,
-    message,
+    ...installerPicker("Choose installer files", true),
   );
 }
 
@@ -203,6 +212,9 @@ async function showBrowser(path) {
     crumbs,
     preview,
     list,
+    // Adds files a newer version of the app imports (e.g. the splash
+    // executable) without re-extracting the archives.
+    ...installerPicker("Update from installer", false),
     remove,
   );
 }
