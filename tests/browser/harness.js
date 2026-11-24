@@ -51,7 +51,9 @@ function captureErrors() {
 function failedResources() {
   return performance
     .getEntriesByType("resource")
-    .filter((r) => r.responseStatus >= 400)
+    // Requests to the test infrastructure itself (e.g. probing whether an
+    // installer is configured) are not page errors.
+    .filter((r) => r.responseStatus >= 400 && !new URL(r.name).pathname.includes("/__test/"))
     .map((r) => `HTTP ${r.responseStatus}: ${r.name}`);
 }
 
