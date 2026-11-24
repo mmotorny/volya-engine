@@ -290,7 +290,7 @@ function showImport(status, snapshot = null) {
           element(
             "span",
             {},
-            "So the browser can't delete the game later, install Volya Engine before importing: tap ",
+            "The browser may delete a game imported in a tab. Install Volya Engine first: tap ",
             shareIcon(),
             ", then ",
             element("strong", { textContent: "Add to Home Screen" }),
@@ -497,7 +497,7 @@ function keepHelp() {
       element(
         "p",
         {},
-        "So the browser can't delete it, install Volya Engine: tap ",
+        "To keep it, install Volya Engine: tap ",
         shareIcon(),
         ", then ",
         element("strong", { textContent: "Add to Home Screen" }),
