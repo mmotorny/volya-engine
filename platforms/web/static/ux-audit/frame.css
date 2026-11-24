@@ -54,3 +54,30 @@ main {
   pointer-events: none;
   z-index: 10;
 }
+
+/* In the level: a plain backdrop instead of the game's frame, and the
+   touch controls clear of the device's safe areas; on an upright phone
+   turned with the canvas (style.css), as on the device. */
+html[data-ux-level] {
+  background: linear-gradient(#5b6168, #2f3337);
+}
+
+#touch-controls {
+  --safe-top: var(--inset-top, 0px);
+  --safe-right: var(--inset-right, 0px);
+  --safe-bottom: var(--inset-bottom, 0px);
+  --safe-left: var(--inset-left, 0px);
+}
+
+html[data-ux-turned] #touch-controls {
+  inset: auto;
+  top: 50%;
+  left: 50%;
+  width: 100vh;
+  height: 100vw;
+  transform: translate(-50%, -50%) rotate(90deg);
+  --safe-top: var(--inset-right, 0px);
+  --safe-right: var(--inset-bottom, 0px);
+  --safe-bottom: var(--inset-left, 0px);
+  --safe-left: var(--inset-top, 0px);
+}

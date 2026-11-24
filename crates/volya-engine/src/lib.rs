@@ -15,11 +15,11 @@ pub use volya_engine_render as render;
 
 pub mod app;
 pub mod audio;
+pub mod controls;
 pub mod data;
 mod draw;
 #[cfg(test)]
 mod fixture;
-pub mod free_controls;
 pub mod level;
 pub mod loading_screen;
 pub mod present;

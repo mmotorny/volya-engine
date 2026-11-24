@@ -6,6 +6,11 @@
 // (format in src/input.rs) while the engine owns the screen. Otherwise the
 // page's DOM UI keeps all input. Positions are CSS pixels relative to the
 // canvas; the engine knows the canvas's CSS size from "resize".
+//
+// While the player's controls are live in a level, a click takes pointer
+// lock (mouse look needs relative motion), and leaving the level releases
+// it. The on-screen touch controls (touch-controls.js) send their own
+// messages; touches on them don't arrive here.
 
 // KeyboardEvent.code → engine key name (layout-independent positions).
 const KEYS = {
@@ -23,10 +28,10 @@ const KEYS = {
   KeyA: "a",
   KeyS: "s",
   KeyD: "d",
+  KeyX: "x",
   Space: "space",
-  KeyC: "c",
-  ShiftLeft: "shift",
-  ShiftRight: "shift",
+  ShiftLeft: "left_shift",
+  ControlLeft: "left_control",
 };
 // Keys whose browser action (developer tools) is left alone.
 const BROWSER_KEYS = new Set(["F12"]);
@@ -40,6 +45,7 @@ const BUTTON_BITS = [1, 4, 2];
 const PAD_BUTTONS = {
   0: "south",
   1: "east",
+  2: "west",
   4: "left_shoulder",
   5: "right_shoulder",
   10: "left_stick",
@@ -56,10 +62,16 @@ const AXIS_EPSILON = 0.02;
 
 /**
  * Starts listening; `send(event)` posts one message to the engine worker.
- * Returns `setCapture(on)`, called when the engine reports capture changes.
+ * Returns `setCapture(on)`, called when the engine reports capture changes,
+ * and `setLevel(on)`, called when the level's controls go live or stop.
  */
 export function startInput(view, send) {
   let capture = false;
+  let level = false;
+  // The page's root takes the lock: the canvas lets pointer events through
+  // (style.css), and locked events then target the root and reach `pointer`.
+  const root = document.documentElement;
+  const locked = () => document.pointerLockElement === root;
 
   const at = (event) => {
     const rect = view.getBoundingClientRect();
@@ -83,10 +95,16 @@ export function startInput(view, send) {
     // Mouse and pen. A button pressed or released while another is held
     // arrives as pointermove with `button` set.
     if (event.type === "pointercancel") return;
+    // Mouse look needs pointer lock, which browsers grant on a click.
+    if (level && event.type === "pointerdown" && event.pointerType === "mouse" && !locked()) {
+      root.requestPointerLock?.()?.catch?.(() => {});
+    }
     if (event.button >= 0 && BUTTONS[event.button]) {
       const pressed = event.type === "pointermove" ? (event.buttons & BUTTON_BITS[event.button]) !== 0 : event.type === "pointerdown";
       send(["button", ...at(event), BUTTONS[event.button], pressed, event.timeStamp]);
       if (event.type !== "pointermove") event.preventDefault();
+    } else if (locked()) {
+      send(["motion", event.movementX, event.movementY]);
     } else {
       send(["move", ...at(event)]);
     }
@@ -101,16 +119,28 @@ export function startInput(view, send) {
     if (!capture || !name) return;
     if (!BROWSER_KEYS.has(event.code)) event.preventDefault();
     const pressed = event.type === "keydown";
-    // Physical presses only; shortcuts with modifiers belong to the browser.
-    if (pressed && (event.repeat || event.metaKey || event.ctrlKey || event.altKey)) return;
+    // Physical presses only; shortcuts with modifiers belong to the
+    // browser. While the level's controls are live Control is a game key
+    // (crouch), so keys pressed with it are the game's there.
+    if (pressed && (event.repeat || event.metaKey || event.altKey || (event.ctrlKey && !level))) return;
     send(["key", name, pressed]);
   };
   addEventListener("keydown", key);
   addEventListener("keyup", key);
-  addEventListener("blur", () => capture && send(["blur"]));
-
   // Gamepads have no events for buttons and axes: poll each frame.
   const pads = new Map(); // index → { buttons, axes } last sent
+  // The engine releases everything. Our choice: a button still held counts
+  // as released until pressed again, like a key (sending it again would be
+  // a fresh press: a toggle, a jump, an Escape); stick and trigger values are
+  // sent again by the next poll.
+  const releaseAll = () => {
+    send(["blur"]);
+    for (const last of pads.values()) last.axes = {};
+  };
+  addEventListener("blur", () => capture && releaseAll());
+  // Losing pointer lock (Escape, or the browser taking it back) may swallow
+  // releases: nothing stays held.
+  document.addEventListener("pointerlockchange", () => capture && !locked() && releaseAll());
   let polling = false;
   const poll = () => {
     if (!capture) {
@@ -142,7 +172,12 @@ export function startInput(view, send) {
     requestAnimationFrame(poll);
   };
 
-  return (on) => {
+  const setLevel = (on) => {
+    level = on;
+    if (!on && locked()) document.exitPointerLock();
+  };
+
+  const setCapture = (on) => {
     if (on === capture) return;
     capture = on;
     // The engine takes touch gestures (no scrolling or zooming).
@@ -153,4 +188,5 @@ export function startInput(view, send) {
       requestAnimationFrame(poll);
     }
   };
+  return { setCapture, setLevel };
 }

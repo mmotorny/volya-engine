@@ -227,6 +227,13 @@ fn quit_presses(data: &GameData, input: &Input) -> u32 {
         + input.touch_starts()
 }
 
+/// See [`App::level_controls`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LevelControls {
+    pub crouch: bool,
+    pub sprint: bool,
+}
+
 pub struct App {
     data: GameData,
     assets: Assets,
@@ -469,6 +476,26 @@ impl App {
                 overlay.as_ref(),
                 &mut ctx,
             ),
+        }
+    }
+
+    /// While the player's controls are live (the level shows with no
+    /// loading image or intro over it): whether the crouch toggle is engaged
+    /// and a sprint is requested, which the touch controls show.
+    pub fn level_controls(&self) -> Option<LevelControls> {
+        match &self.phase {
+            Some(Phase::Level {
+                level,
+                overlay: None,
+                intro,
+            }) if intro.player.is_none() => {
+                let p = level.player().state();
+                Some(LevelControls {
+                    crouch: p.crouch_toggled,
+                    sprint: p.sprint_requested,
+                })
+            }
+            _ => None,
         }
     }
 

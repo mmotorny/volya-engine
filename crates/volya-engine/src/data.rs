@@ -9,8 +9,10 @@
 use std::collections::HashMap;
 use std::io::{self, Cursor};
 
+use crate::controls::{Bindings, Controls};
 use crate::core::config::{self, Config, PathAliases};
 use crate::core::input::Key;
+use crate::core::movement::Settings;
 use crate::core::text::{self, Fonts, Localization, StringTable};
 use crate::core::ui::{self, TextureSource};
 use crate::core::vfs::{self, Vfs};
@@ -131,6 +133,8 @@ pub struct GameData {
     /// Per `intro_game` item, as [`GameData::intro_lengths`].
     pub intro_game_lengths: Vec<f64>,
     pub quit_keys: Vec<Key>,
+    /// The player's bindings and the console settings movement reads.
+    pub controls: Controls,
     /// The version string of the version caption.
     pub version: String,
     /// `textures\ui\ui_ani_cursor`: the frames of the menu cursor.
@@ -175,10 +179,15 @@ impl GameData {
         let system = required("system.ltx")?;
         required("game.ltx")?;
 
-        let controls = vfs::read(tree, &aliases.path(GAME_CONFIG, "default_controls.ltx")?)
+        let default_controls = vfs::read(tree, &aliases.path(GAME_CONFIG, "default_controls.ltx")?)
             .unwrap_or_default();
         let user = root_file(DEFAULT_USER_LTX).unwrap_or_default();
-        let quit_keys = quit_keys(&[&controls, &user]);
+        let quit_keys = quit_keys(&[&default_controls, &user]);
+        // player-movement.md sections 1.2 and 2.1.
+        let controls = Controls::new(
+            Bindings::read(&[&default_controls, &user]),
+            Settings::read(&[&user]),
+        );
 
         let descriptions = ui::load_texture_descriptions(tree, &aliases, &system, resolution)?;
         let colors = ui::load_color_defs(tree, &aliases, resolution)?;
@@ -225,6 +234,7 @@ impl GameData {
             intro_game,
             intro_game_lengths: Vec::new(),
             quit_keys,
+            controls,
             version: BUILT_IN_VERSION.to_owned(),
             cursor,
         })

@@ -294,7 +294,9 @@ export const tests = {
         for (let i = 0; i < 100 && !ok; i++) {
           await new Promise((r) => setTimeout(r, 20));
           const doc = frame.contentDocument;
-          ok = doc?.documentElement.dataset.ready === "true" && (doc.getElementById("game").children.length > 0 || state.startError);
+          // The level's states show the touch controls instead of a screen.
+          const shown = state.level ? doc?.getElementById("touch-controls")?.hidden === false : doc?.getElementById("game").children.length > 0;
+          ok = doc?.documentElement.dataset.ready === "true" && (shown || state.startError);
         }
         if (!ok) failed.push(`${device.id}/${state.id}`);
         frame.remove();

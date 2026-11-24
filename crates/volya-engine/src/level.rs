@@ -5,7 +5,8 @@
 //! static world, and the view from the player's start
 //! (docs/behavior/start-position.md), under the weather of the start time
 //! (docs/behavior/static-shading.md section 9), with its collision world
-//! (docs/formats/level-cform.md).
+//! (docs/formats/level-cform.md), walked by the player in first person
+//! (docs/behavior/player-movement.md).
 //!
 //! [`LevelScreen::load`] reads everything synchronously through the VFS;
 //! the GPU copy of the geometry is made by the presenter on the first frame
@@ -16,19 +17,20 @@ use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 
-use crate::core::camera::{self, ActorBody, Angles, FreeCamera, Mat4, Vec3};
-use crate::core::collision::CollisionWorld;
+use crate::controls::Controls;
+use crate::core::camera::{self, Angles, Mat4, Vec3};
+use crate::core::collision::{CollisionWorld, geometry};
 use crate::core::config;
 use crate::core::input::Input;
 use crate::core::level::{DrawItem, Level, LevelGeom};
+use crate::core::movement::{Flags, MovementConfig, Player};
 use crate::core::vfs::{self, Vfs};
 use crate::core::weather::{self, Environment, Weather};
 use crate::data::GameData;
-use crate::free_controls::{self, TouchLayout};
 use crate::loading_screen::Stage;
 use crate::render::sky::SkyTextures;
 use crate::render::world::Surface;
-use crate::scene::{Scene, Sprite, TextureId, WorldScene};
+use crate::scene::{Scene, WorldScene};
 use crate::shading::{self, ShaderLibrary};
 use crate::sky::{self, SkyCamera, SunSource};
 use std::collections::HashMap;
@@ -37,9 +39,7 @@ use volya_engine_formats::game_graph::GameGraph;
 use volya_engine_formats::gamemtl;
 use volya_engine_formats::shaders_xr;
 use volya_engine_formats::spawn;
-use volya_engine_formats::ui::Color;
 use volya_engine_formats::ui::Resolution;
-use volya_engine_formats::ui::picture::Quad;
 
 /// The spawn file's name: the first server parameter `all`
 /// (level-loading.md section 2.1).
@@ -49,7 +49,7 @@ pub const LEVEL_FILES: [&str; 4] = ["level", "level.ltx", "level.geom", "level.c
 /// `rs_vis_distance` of the shipped `user.ltx` (start-position.md 7.1); the
 /// user settings are not read for it here (our choice).
 pub const VIS_DISTANCE: f32 = 1.0;
-/// Longest frame the free camera moves by, seconds.
+/// Longest frame the sun's fade advances by, seconds (our choice).
 const MAX_STEP: f32 = 0.1;
 /// Time of day when `config\alife.ltx` gives none (our choice; the shipped
 /// file says 05:30:00).
@@ -99,7 +99,10 @@ impl LevelWorld {
 pub struct LevelScreen {
     world: Arc<LevelWorld>,
     collision: CollisionWorld,
-    camera: FreeCamera,
+    player: Player,
+    controls: Controls,
+    /// The near plane of the current view (start-position.md section 7).
+    near: f32,
     weather: Weather,
     /// Time of day, seconds.
     time_of_day: f32,
@@ -111,8 +114,6 @@ pub struct LevelScreen {
     /// The previous update (engine clock, ms).
     last: u64,
     back: bool,
-    /// Whether touch was used: the touch controls show from then on.
-    touch_seen: bool,
     /// The sun sprite's fade (sky.md 7.3) and whether the first frame,
     /// on which it stays 0, has passed.
     sun_fade: f32,
@@ -130,7 +131,30 @@ pub struct LevelState {
     pub yaw: f32,
     pub pitch: f32,
     pub far_plane: f32,
+    pub near_plane: f32,
     pub time_of_day: f32,
+    pub player: PlayerReport,
+}
+
+/// The player's movement as the engine interface reports it.
+#[derive(Clone, Debug, Serialize)]
+pub struct PlayerReport {
+    /// Feet.
+    pub position: Vec3,
+    pub velocity: Vec3,
+    pub airborne: bool,
+    /// The collision box: 0 standing, 1 crouch, 2 low crouch.
+    pub posture: usize,
+    pub moving: bool,
+    pub running: bool,
+    pub crouch: bool,
+    pub sprint: bool,
+    pub jump: bool,
+    pub falling: bool,
+    pub landing: bool,
+    /// The toggles the touch controls show.
+    pub crouch_toggled: bool,
+    pub sprint_requested: bool,
 }
 
 /// The level of a new game and where its actor starts: the actor's object
@@ -299,7 +323,8 @@ pub struct NewGameLoad {
     draw_items: Vec<DrawItem>,
     spheres: Vec<[f32; 4]>,
     modifiers: Vec<EnvModifier>,
-    body: Option<ActorBody>,
+    movement: Option<MovementConfig>,
+    controls: Option<Controls>,
     weather: Option<Weather>,
     time_of_day: f32,
     time_factor: f32,
@@ -403,11 +428,10 @@ impl NewGameLoad {
             // under this caption by us (the client creates the objects here).
             Stage::ClientSpawning => {
                 let name = earlier(self.name.as_deref(), "level")?;
-                self.body = Some(ActorBody::from_section(
-                    data.system
-                        .section(spawn::ACTOR_SECTION)
-                        .ok_or_else(|| invalid(format!("no section [{}]", spawn::ACTOR_SECTION)))?,
-                )?);
+                // player-movement.md section 1: the actor's section is the
+                // one its spawn record names.
+                self.movement = Some(MovementConfig::read(&data.system, spawn::ACTOR_SECTION)?);
+                self.controls = Some(data.controls.clone());
                 let (weather_name, time_of_day) = start_weather(tree, data, name)?;
                 self.weather = Some(Weather::load(&data.system, &weather_name)?);
                 self.time_of_day = time_of_day;
@@ -460,10 +484,20 @@ impl NewGameLoad {
         let level = earlier(self.level, "level")?;
         let geom = earlier(self.geom, "level.geom")?;
         let collision = earlier(self.collision, "level.cform")?;
-        let body = earlier(self.body, "actor body")?;
+        let movement = earlier(self.movement, "actor")?;
+        let controls = earlier(self.controls, "controls")?;
         let weather = earlier(self.weather, "weather")?;
         let sky = earlier(self.sky, "sky")?;
-        let eye = body.eye(actor.position);
+        // start-position.md sections 4 and 5: standing at the stored
+        // position, the camera at the spawn's angles.
+        let player = Player::new(
+            movement,
+            controls.settings,
+            actor.position,
+            Angles::from_spawn(actor.angles),
+            now,
+        );
+        let eye = player.view().eye;
         let (a, b, t) = weather.bracket(self.time_of_day);
         let environment = Environment::blend(a, b, t, &self.modifiers, eye, VIS_DISTANCE);
         let mut screen = LevelScreen {
@@ -481,7 +515,9 @@ impl NewGameLoad {
                 geometry: Mutex::new(Some(geom)),
             }),
             collision,
-            camera: FreeCamera::new(eye, Angles::from_spawn(actor.angles)),
+            player,
+            controls,
+            near: camera::NEAR,
             environment,
             weather,
             time_of_day: self.time_of_day,
@@ -489,12 +525,11 @@ impl NewGameLoad {
             shown: now,
             last: now,
             back: false,
-            touch_seen: false,
             sun_fade: 0.0,
             sun_started: false,
             time_factor: self.time_factor,
         };
-        screen.update_environment();
+        screen.update_view();
         Ok(screen)
     }
 }
@@ -510,10 +545,14 @@ impl LevelScreen {
         load.finish(now)
     }
 
-    /// Places the free camera (tests and debugging).
+    /// Places the player with its eye at `eye` (tests and debugging).
     pub fn set_camera(&mut self, eye: Vec3, angles: Angles) {
-        self.camera = FreeCamera::new(eye, angles);
-        self.update_environment();
+        let h = self
+            .player
+            .config
+            .eye_height(self.player.body().box_index());
+        self.player.place([eye[0], eye[1] - h, eye[2]], angles);
+        self.update_view();
     }
 
     pub fn world(&self) -> &Arc<LevelWorld> {
@@ -525,12 +564,31 @@ impl LevelScreen {
         &self.collision
     }
 
-    /// The environment at the camera (static-shading.md 9.2). Game time
-    /// stays at the start time (our choice for a static world).
-    fn update_environment(&mut self) {
+    /// The environment at the camera (static-shading.md 9.2; game time
+    /// stays at the start time, our choice for a static world) and the near
+    /// plane: 0.01 m while the cube of half-size 0.2 m around the eye meets
+    /// a static collision triangle (start-position.md section 7; movable
+    /// objects do not exist here).
+    fn update_view(&mut self) {
+        let eye = self.player.view().eye;
         let (a, b, t) = self.weather.bracket(self.time_of_day);
-        self.environment =
-            Environment::blend(a, b, t, &self.modifiers, self.camera.eye, VIS_DISTANCE);
+        self.environment = Environment::blend(a, b, t, &self.modifiers, eye, VIS_DISTANCE);
+        let c = camera::NEAR_CLEARANCE;
+        let mut found = Vec::new();
+        self.collision.query(
+            [eye[0] - c, eye[1] - c, eye[2] - c],
+            [eye[0] + c, eye[1] + c, eye[2] + c],
+            &mut found,
+        );
+        let axes = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        let close = found
+            .iter()
+            .any(|&t| geometry::box_intersects(eye, axes, [c; 3], &self.collision.corners(t)));
+        self.near = if close {
+            camera::NEAR_CLOSE
+        } else {
+            camera::NEAR
+        };
     }
 
     /// A frame at `now` with game time paused (a movie item's
@@ -540,18 +598,16 @@ impl LevelScreen {
     pub fn paused(&mut self, now: u64) {
         self.shown += now.saturating_sub(self.last);
         self.last = now;
+        self.player.paused(now);
     }
 
     /// One frame at `now` with this frame's `input`.
     pub fn update(&mut self, now: u64, input: &Input) {
-        // Frames longer than MAX_STEP (the first after loading) move the
-        // camera as if MAX_STEP long, so it does not jump (our choice).
         let dt = (now.saturating_sub(self.last) as f32 / 1000.0).min(MAX_STEP);
         self.last = now;
-        let (m, back) = free_controls::free_move(input, dt);
-        self.camera.apply(&m, dt);
+        let (request, back) = self.controls.request(input);
+        self.player.frame(&self.collision, now, &request);
         self.back |= back;
-        self.touch_seen |= !input.contacts().is_empty();
         // sky.md 7.3: 0 on the first frame, then rising by λ↑·dt·k_t.
         if let Some(sun) = &self.world.sun {
             if self.sun_started {
@@ -559,25 +615,25 @@ impl LevelScreen {
             }
             self.sun_started = true;
         }
-        self.update_environment();
+        self.update_view();
     }
 
-    /// Whether the player asked to go back to the title menu
-    /// ([`free_controls`]).
+    /// Whether the player asked to go back ([`Controls::request`]): to the
+    /// title menu until the in-game menu exists.
     pub fn back_requested(&self) -> bool {
         self.back
     }
 
     /// View and projection for a `width` × `height` target
     /// (start-position.md sections 5–7, the smoothing of 7.2 replaced by its
-    /// targets, which it allows; near plane 0.2 m: collision is not loaded).
+    /// targets, which it allows), from the player's eye.
     pub fn view_projection(&self, width: u32, height: u32) -> (Mat4, Mat4) {
-        let (d, u) = self.camera.angles.direction_up();
-        let view = camera::view_matrix(self.camera.eye, d, u);
+        let v = self.player.view();
+        let view = camera::view_matrix(v.eye, v.direction, v.up);
         let projection = camera::projection(
             camera::FOV_Y_DEGREES.to_radians(),
             camera::aspect_factor(width, height),
-            camera::NEAR,
+            self.near,
             self.environment.far_plane,
         );
         (view, projection)
@@ -586,12 +642,13 @@ impl LevelScreen {
     /// The frame for `resolution`.
     pub fn scene(&self, resolution: Resolution, clock_ms: u64) -> Scene {
         let (view, projection) = self.view_projection(resolution.width, resolution.height);
-        let (d, _) = self.camera.angles.direction_up();
+        let v = self.player.view();
+        let d = v.direction;
         let mut scene = Scene::new(resolution);
         scene.world = Some(WorldScene {
             covered: false,
             world: self.world.clone(),
-            eye: self.camera.eye,
+            eye: v.eye,
             forward: d,
             fov_y_degrees: camera::FOV_Y_DEGREES,
             view,
@@ -603,7 +660,7 @@ impl LevelScreen {
             sky: Some(sky::sky_frame(
                 &self.environment,
                 &SkyCamera {
-                    eye: self.camera.eye,
+                    eye: v.eye,
                     forward: d,
                     right: [view[0][0], view[1][0], view[2][0]],
                 },
@@ -611,91 +668,49 @@ impl LevelScreen {
                 self.sun_fade,
             )),
         });
-        if self.touch_seen {
-            touch_overlay(&mut scene);
-        }
         scene
     }
 
     pub fn state(&self) -> LevelState {
+        let p = self.player.state();
+        let Flags {
+            crouch,
+            sprint,
+            jump,
+            falling,
+            landing,
+            ..
+        } = p.flags;
+        let angles = self.player.angles();
         LevelState {
             name: self.world.name.clone(),
             draws: self.world.draw_items.len(),
-            eye: self.camera.eye,
-            yaw: self.camera.angles.yaw,
-            pitch: self.camera.angles.pitch,
+            eye: self.player.view().eye,
+            yaw: angles.yaw,
+            pitch: angles.pitch,
             far_plane: self.environment.far_plane,
+            near_plane: self.near,
             time_of_day: self.time_of_day,
+            player: PlayerReport {
+                position: p.position,
+                velocity: p.velocity,
+                airborne: p.airborne,
+                posture: p.posture,
+                moving: p.flags.forward || p.flags.back || p.flags.left || p.flags.right,
+                running: self.player.settings.always_run != p.flags.accel,
+                crouch,
+                sprint,
+                jump,
+                falling,
+                landing,
+                crouch_toggled: p.crouch_toggled,
+                sprint_requested: p.sprint_requested,
+            },
         }
     }
-}
 
-/// The touch controls ([`free_controls`]) drawn over the world: translucent
-/// squares with a cross (back) and arrows (up, down).
-fn touch_overlay(scene: &mut Scene) {
-    let (w, h) = (
-        scene.resolution.width as f32,
-        scene.resolution.height as f32,
-    );
-    let layout = TouchLayout::new(w, h);
-    let panel = Color::rgba(0, 0, 0, 96);
-    let mark = Color::rgba(255, 255, 255, 192);
-    let square = |layer: &str, r: [f32; 4], color| {
-        Sprite::picture(
-            layer,
-            TextureId::White,
-            &Quad {
-                min: (r[0], r[1]),
-                max: (r[2], r[3]),
-                uv_min: (0.0, 0.0),
-                uv_max: (1.0, 1.0),
-                color,
-            },
-        )
-    };
-    // A shape from four corners (two equal corners make a triangle).
-    let shape = |layer: &str, corners: [[f32; 2]; 4]| Sprite {
-        layer: layer.into(),
-        texture: TextureId::White,
-        corners,
-        uv_min: [0.0, 0.0],
-        uv_max: [1.0, 1.0],
-        color: mark,
-        corner_colors: None,
-    };
-    for (layer, r) in [
-        ("touch back", layout.back),
-        ("touch up", layout.up),
-        ("touch down", layout.down),
-    ] {
-        scene.sprites.push(square(layer, r, panel));
-        let (cx, cy) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
-        let s = (r[2] - r[0]) * 0.3;
-        let t = s * 0.15;
-        match layer {
-            "touch back" => {
-                for k in [1.0f32, -1.0] {
-                    // A bar from (−s, −k·s) to (s, k·s), t thick.
-                    let (nx, ny) = (k * t, -t);
-                    scene.sprites.push(shape(
-                        layer,
-                        [
-                            [cx - s - nx, cy - k * s - ny],
-                            [cx + s - nx, cy + k * s - ny],
-                            [cx + s + nx, cy + k * s + ny],
-                            [cx - s + nx, cy - k * s + ny],
-                        ],
-                    ));
-                }
-            }
-            _ => {
-                let k = if layer == "touch up" { -1.0 } else { 1.0 };
-                let tip = [cx, cy + k * s];
-                scene.sprites.push(shape(
-                    layer,
-                    [tip, tip, [cx + s, cy - k * s], [cx - s, cy - k * s]],
-                ));
-            }
-        }
+    /// The player in the level.
+    pub fn player(&self) -> &Player {
+        &self.player
     }
 }

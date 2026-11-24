@@ -205,6 +205,51 @@ export const tests = {
     assertEqual(actions.length, 0, "actions");
   },
 
+  "Control with a key is the browser's outside a level": async () => {
+    const before = await state();
+    key("keydown", "KeyQ", { ctrlKey: true });
+    key("keyup", "KeyQ", { ctrlKey: true });
+    const { actions } = await since(before);
+    // The release arrives, but nothing was pressed.
+    assertEqual(summary(actions.filter((a) => a.action !== "cursor")), [], "actions");
+  },
+
+  "blur and pointer-lock loss release everything held": async () => {
+    for (const event of [() => dispatchEvent(new Event("blur")), () => document.dispatchEvent(new Event("pointerlockchange"))]) {
+      key("keydown", "ArrowUp");
+      pointer("pointerdown", 5, 5, { button: 0, buttons: 1 });
+      const held = (await state()).held;
+      assert(held.includes("up") && held.includes("mouse_left"), `held ${held}`);
+      event();
+      assertEqual((await state()).held, [], "released");
+    }
+  },
+
+  "a gamepad button held through blur or pointer-lock loss is not pressed again": async () => {
+    const pad = { index: 0, mapping: "standard", axes: [0, 0, 0, 0], buttons: Array.from({ length: 17 }, () => ({ pressed: false, value: 0 })) };
+    const getGamepads = navigator.getGamepads;
+    navigator.getGamepads = () => [pad];
+    try {
+      pad.buttons[0].pressed = true;
+      for (let i = 0; i < 50 && !(await state()).held.includes("enter"); i++) await new Promise((r) => setTimeout(r, 20));
+      assert((await state()).held.includes("enter"), "south held as Enter");
+      for (const event of [() => dispatchEvent(new Event("blur")), () => document.dispatchEvent(new Event("pointerlockchange"))]) {
+        event();
+        const before = await state();
+        assertEqual(before.held, [], "released");
+        // Several polls with the button still down.
+        await new Promise((r) => setTimeout(r, 200));
+        const { after, actions } = await since(before);
+        assertEqual(summary(actions), [], "no new press");
+        assertEqual(after.held, [], "still released");
+      }
+    } finally {
+      pad.buttons[0].pressed = false;
+      await new Promise((r) => setTimeout(r, 100));
+      navigator.getGamepads = getGamepads;
+    }
+  },
+
   "losing capture releases held input and returns input to the page": async () => {
     key("keydown", "ArrowUp");
     assertEqual((await state()).held, ["up"], "held");

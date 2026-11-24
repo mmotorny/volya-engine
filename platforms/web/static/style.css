@@ -94,6 +94,161 @@ html[data-engine-input] canvas#view {
   }
 }
 
+/* The level's touch controls (touch-controls.js): over the canvas, in the
+   game's landscape frame, clear of the safe areas. */
+#touch-controls {
+  --safe-top: env(safe-area-inset-top);
+  --safe-right: env(safe-area-inset-right);
+  --safe-bottom: env(safe-area-inset-bottom);
+  --safe-left: env(safe-area-inset-left);
+  --edge: 16px;
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* Turned with the canvas on upright phones: the controls' top is the
+   screen's right, their left the screen's top. */
+@media (orientation: portrait) and (pointer: coarse) {
+  #touch-controls {
+    inset: auto;
+    top: 50%;
+    left: 50%;
+    width: 100vh;
+    height: 100vw;
+    width: 100dvh;
+    height: 100dvw;
+    transform: translate(-50%, -50%) rotate(90deg);
+    --safe-top: env(safe-area-inset-right);
+    --safe-right: env(safe-area-inset-bottom);
+    --safe-bottom: env(safe-area-inset-left);
+    --safe-left: env(safe-area-inset-top);
+  }
+}
+
+.touch-move,
+.touch-look {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+
+.touch-move {
+  left: 0;
+  right: 50%;
+}
+
+.touch-look {
+  left: 50%;
+  right: 0;
+}
+
+/* The move stick: resting at the bottom left, centred under the finger
+   while held. Its radius (56 px) is the full deflection. */
+.touch-stick {
+  position: absolute;
+  left: calc(var(--safe-left) + var(--edge) + 64px);
+  top: calc(100% - var(--safe-bottom) - var(--edge) - 64px);
+  width: 112px;
+  height: 112px;
+  margin: -56px 0 0 -56px;
+  border-radius: 50%;
+  border: 1px solid var(--panel-edge);
+  background: rgba(8, 26, 58, 0.28);
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.touch-stick.held {
+  opacity: 1;
+}
+
+.touch-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 48px;
+  height: 48px;
+  margin: -24px 0 0 -24px;
+  border-radius: 50%;
+  background: rgba(242, 248, 255, 0.55);
+}
+
+button.touch-button {
+  position: absolute;
+  min-height: 0;
+  width: 60px;
+  height: 60px;
+  padding: 0;
+  border-radius: 50%;
+  border-color: var(--panel-edge);
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  transition: none;
+}
+
+button.touch-button.down {
+  background: rgba(159, 203, 250, 0.3);
+  border-color: rgba(159, 203, 250, 0.6);
+}
+
+/* A toggle that is on: white on navy, like Play. */
+button.touch-button[aria-pressed="true"] {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--navy-3);
+}
+
+button.touch-button.menu {
+  left: calc(var(--safe-left) + var(--edge));
+  top: calc(var(--safe-top) + var(--edge));
+  width: auto;
+  height: 40px;
+  padding: 0 1rem;
+  border-radius: 999px;
+}
+
+/* Jump at the corner, Crouch to its left, Sprint above it. */
+.touch-actions {
+  position: absolute;
+  right: calc(var(--safe-right) + var(--edge));
+  bottom: calc(var(--safe-bottom) + var(--edge));
+  width: 156px;
+  height: 156px;
+  pointer-events: none;
+}
+
+.touch-actions button.touch-button {
+  pointer-events: auto;
+}
+
+button.touch-button.jump {
+  right: 0;
+  bottom: 0;
+  width: 76px;
+  height: 76px;
+}
+
+button.touch-button.crouch {
+  right: 92px;
+  bottom: 8px;
+}
+
+button.touch-button.sprint {
+  right: 8px;
+  bottom: 92px;
+}
+
 main {
   position: relative;
   box-sizing: border-box;
