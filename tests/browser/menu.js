@@ -244,6 +244,9 @@ export const tests = {
   },
 
   "touch: a tap selects a row, a second tap activates it": async () => {
+    if (matchMedia("(orientation: portrait) and (pointer: coarse)").matches) {
+      skip("upright: touches are blocked until turned (covered on desktop)");
+    }
     needsGame();
     const touch = { pointerType: "touch", button: 0, buttons: 1 };
     const tap = (at) => {

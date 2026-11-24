@@ -5,7 +5,9 @@
 // synthesized in the page reach the engine's input state. Gamepads cannot be
 // synthesized; their mapping is unit-tested in volya-engine-core.
 
-import { assert, assertEqual } from "./harness.js";
+import { assert, assertEqual, skip } from "./harness.js";
+
+const upright = () => matchMedia("(orientation: portrait) and (pointer: coarse)").matches;
 
 const state = () => volya.call("input_state");
 const view = () => document.getElementById("view");
@@ -72,8 +74,22 @@ export const tests = {
 
   "upright phones are asked to turn to landscape": async () => {
     const overlay = getComputedStyle(document.documentElement, "::after").content;
-    const upright = matchMedia("(orientation: portrait) and (pointer: coarse)").matches;
-    assertEqual(overlay.includes("landscape"), upright, `overlay ${overlay}`);
+    assertEqual(overlay.includes("landscape"), upright(), `overlay ${overlay}`);
+  },
+
+  "upright phones get no touches until turned": async () => {
+    if (!upright()) skip("not upright");
+    await sleep(300);
+    const before = await state();
+    const touch = { pointerType: "touch", button: 0, buttons: 1 };
+    const prevented = !pointer("pointerdown", 10, 10, touch);
+    pointer("pointermove", 20, 20, { ...touch, button: -1 });
+    const held = (await state()).held;
+    pointer("pointerup", 20, 20, { ...touch, buttons: 0 });
+    const { actions } = await since(before);
+    assert(prevented, "default prevented");
+    assertEqual(held, [], "held");
+    assertEqual(summary(actions), [], "actions");
   },
 
   "mouse moves the cursor": async () => {
@@ -126,6 +142,7 @@ export const tests = {
   },
 
   "touch moves the cursor there and presses": async () => {
+    if (upright()) skip("upright: touches are blocked until turned (covered on desktop)");
     await sleep(300);
     const { clientWidth: w, clientHeight: h } = view();
     const before = await state();
@@ -144,6 +161,7 @@ export const tests = {
   },
 
   "a cancelled touch releases": async () => {
+    if (upright()) skip("upright: touches are blocked until turned (covered on desktop)");
     await sleep(300);
     const before = await state();
     const touch = { pointerType: "touch", button: 0, buttons: 1 };
