@@ -4,14 +4,18 @@
 //! The spawn file `spawns\all.spawn`, only as far as the start position needs
 //! (docs/behavior/start-position.md, sections 2 and 3): the objects of
 //! top-level chunk 1 and the common part of each spawn packet. Everything
-//! else is skipped by chunk sizes.
+//! else is skipped by chunk sizes. [`for_each_record`] hands out both packets
+//! of every object, which [`crate::object`] parses in full
+//! (docs/formats/sav.md, section 7).
 
 use std::io;
 use std::ops::ControlFlow;
 
 use crate::chunks::Chunks;
-use crate::cp1251;
+use crate::packet::Reader;
 
+/// Top-level chunk holding the header.
+const HEADER_CHUNK: u32 = 0;
 /// Top-level chunk holding the objects.
 const OBJECTS_CHUNK: u32 = 1;
 /// Sub-chunk of [`OBJECTS_CHUNK`] holding one sub-chunk per object.
@@ -20,6 +24,8 @@ const OBJECT_LIST_CHUNK: u32 = 1;
 const PACKETS_CHUNK: u32 = 1;
 /// Chunk of [`PACKETS_CHUNK`] holding the spawn packet.
 const SPAWN_PACKET_CHUNK: u32 = 0;
+/// Chunk of [`PACKETS_CHUNK`] holding the update packet.
+const UPDATE_PACKET_CHUNK: u32 = 1;
 
 /// The spawn message type every packet starts with.
 const SPAWN_MESSAGE: u16 = 1;
@@ -55,53 +61,9 @@ pub struct SpawnObject<'a> {
     pub packet: &'a [u8],
 }
 
-/// Reads packet fields in order, failing on overrun.
-struct Fields<'a> {
-    data: &'a [u8],
-}
-
-impl<'a> Fields<'a> {
-    fn take(&mut self, n: usize) -> io::Result<&'a [u8]> {
-        if n > self.data.len() {
-            return Err(invalid("spawn packet: truncated"));
-        }
-        let (head, rest) = self.data.split_at(n);
-        self.data = rest;
-        Ok(head)
-    }
-
-    fn u8(&mut self) -> io::Result<u8> {
-        Ok(self.take(1)?[0])
-    }
-
-    fn u16(&mut self) -> io::Result<u16> {
-        Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
-    }
-
-    fn u32(&mut self) -> io::Result<u32> {
-        Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
-    }
-
-    fn float3(&mut self) -> io::Result<[f32; 3]> {
-        let b = self.take(12)?;
-        Ok([0, 4, 8].map(|i| f32::from_le_bytes(b[i..i + 4].try_into().unwrap())))
-    }
-
-    fn string(&mut self) -> io::Result<String> {
-        let end = self
-            .data
-            .iter()
-            .position(|&b| b == 0)
-            .ok_or_else(|| invalid("spawn packet: unterminated string"))?;
-        let s = cp1251::decode(&self.data[..end]);
-        self.data = &self.data[end + 1..];
-        Ok(s)
-    }
-}
-
 /// Parses the common part of spawn packet data (after its `u16` length).
 pub fn parse_spawn_packet(index: u32, packet: &[u8]) -> io::Result<SpawnObject<'_>> {
-    let mut f = Fields { data: packet };
+    let mut f = Reader::new(packet);
     let message = f.u16()?;
     if message != SPAWN_MESSAGE {
         return Err(invalid(format!(
@@ -166,12 +128,22 @@ fn packet_data(chunk: &[u8]) -> io::Result<&[u8]> {
         .ok_or_else(|| invalid("spawn packet: longer than its chunk"))
 }
 
-/// Calls `visit` with the common part of every object's spawn packet, in
-/// object-index order, until it breaks. Objects are the list of
-/// sub-chunks 0, 1, 2, … (chunks.md, section 2) of chunk 1's sub-chunk 1.
-pub fn for_each_object(
+/// One object of the spawn file: its two packets, each without its `u16`
+/// length.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Record<'a> {
+    /// Object index: the id of the object's sub-chunk.
+    pub index: u32,
+    pub spawn: &'a [u8],
+    pub update: &'a [u8],
+}
+
+/// Calls `visit` with both packets of every object, in object-index order,
+/// until it breaks or fails. Objects are the list of sub-chunks 0, 1, 2, …
+/// (chunks.md, section 2) of chunk 1's sub-chunk 1.
+pub fn for_each_record(
     file: &[u8],
-    mut visit: impl FnMut(&SpawnObject<'_>) -> ControlFlow<()>,
+    mut visit: impl FnMut(Record<'_>) -> io::Result<ControlFlow<()>>,
 ) -> io::Result<()> {
     let top = Chunks::parse(file)?;
     let objects = top.require(OBJECTS_CHUNK, "spawn file")?.content()?;
@@ -184,18 +156,42 @@ pub fn for_each_object(
         let index = object.id();
         let content = object.content()?;
         let chunks = Chunks::parse(&content)?;
-        let packets = chunks
-            .require(PACKETS_CHUNK, &format!("spawn object {index}"))?
-            .content()?;
+        let what = format!("spawn object {index}");
+        let packets = chunks.require(PACKETS_CHUNK, &what)?.content()?;
         let packets = Chunks::parse(&packets)?;
-        let spawn = packets
-            .require(SPAWN_PACKET_CHUNK, &format!("spawn object {index}"))?
-            .content()?;
-        if visit(&parse_spawn_packet(index, packet_data(&spawn)?)?).is_break() {
+        let spawn = packets.require(SPAWN_PACKET_CHUNK, &what)?.content()?;
+        let update = packets.require(UPDATE_PACKET_CHUNK, &what)?.content()?;
+        let record = Record {
+            index,
+            spawn: packet_data(&spawn)?,
+            update: packet_data(&update)?,
+        };
+        if visit(record)?.is_break() {
             break;
         }
     }
     Ok(())
+}
+
+/// Calls `visit` with the common part of every object's spawn packet, in
+/// object-index order, until it breaks.
+pub fn for_each_object(
+    file: &[u8],
+    mut visit: impl FnMut(&SpawnObject<'_>) -> ControlFlow<()>,
+) -> io::Result<()> {
+    for_each_record(file, |r| Ok(visit(&parse_spawn_packet(r.index, r.spawn)?)))
+}
+
+/// The spawn file's identifier: bytes 4 … 19 of its header, chunk 0
+/// (level-loading specification section 5.10), which a save's spawn binding
+/// repeats (docs/formats/sav.md, section 6).
+pub fn identifier(file: &[u8]) -> io::Result<[u8; 16]> {
+    let top = Chunks::parse(file)?;
+    let header = top.require(HEADER_CHUNK, "spawn file")?.content()?;
+    header
+        .get(4..20)
+        .map(|b| b.try_into().unwrap())
+        .ok_or_else(|| invalid("spawn file: header shorter than 20 bytes"))
 }
 
 /// The actor's start: the first object whose section is `actor` (the spec
@@ -230,7 +226,7 @@ pub fn actor_start(file: &[u8]) -> io::Result<ActorStart> {
 fn actor_fields(o: &SpawnObject<'_>) -> io::Result<ActorStart> {
     // Object-specific data: u16 game-graph vertex, float, u32, u32
     // level-graph node (section 3.3).
-    let mut f = Fields { data: o.data };
+    let mut f = Reader::new(o.data);
     let game_graph_vertex = f.u16()?;
     f.take(8)?;
     let level_graph_node = f.u32()?;
