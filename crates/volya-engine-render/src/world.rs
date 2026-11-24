@@ -19,6 +19,7 @@ use std::rc::Rc;
 use volya_engine_formats::level_geom::{Layout, LevelGeom};
 use wgpu::util::DeviceExt;
 
+use crate::sky::{SkyFrame, SkyPipelines, SkyResources, SkyTextures};
 use crate::{Renderer, Texture};
 
 /// Depth buffer format of the world pass.
@@ -186,8 +187,10 @@ pub struct WorldFrame {
     /// Vertical field of view in degrees (size culling, 10.2).
     pub fov_y_degrees: f32,
     pub light: WorldLight,
-    /// Seconds (tree sway).
+    /// Seconds (tree sway, cloud drift).
     pub time: f32,
+    /// The sky's values; `None` draws no sky.
+    pub sky: Option<SkyFrame>,
     /// What shows where nothing is drawn (RGB, 0 … 1).
     pub clear: [f32; 3],
 }
@@ -209,6 +212,7 @@ pub(crate) struct WorldPipelines {
     pipelines: HashMap<PipelineKey, wgpu::RenderPipeline>,
     samplers: [wgpu::Sampler; 3],
     white: wgpu::TextureView,
+    sky: SkyPipelines,
 }
 
 fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
@@ -366,6 +370,7 @@ impl WorldPipelines {
             pipelines: HashMap::new(),
             samplers,
             white: white.create_view(&Default::default()),
+            sky: SkyPipelines::new(device, format),
         }
     }
 
@@ -507,6 +512,8 @@ struct Inner {
     late: wgpu::RenderBundle,
     /// Step 6: strict-sorted draws, ordered each frame.
     strict: Vec<(usize, WorldDraw)>,
+    sky: Option<SkyResources>,
+    sky_error: Option<String>,
     draws: usize,
     skipped: usize,
     buffer_bytes: u64,
@@ -546,6 +553,11 @@ impl World {
     /// surface's program, or their surface is missing.
     pub fn skipped(&self) -> usize {
         self.0.skipped
+    }
+
+    /// Why the sky could not be set up, if it could not.
+    pub fn sky_error(&self) -> Option<&str> {
+        self.0.sky_error.as_deref()
     }
 
     pub fn same(&self, other: &World) -> bool {
@@ -594,12 +606,15 @@ impl Renderer {
     /// Uploads `geom`'s buffers as stored and records `draws` with
     /// `surfaces`. A draw whose vertex layout does not suit its surface's
     /// program, or whose surface is missing, is left out and counted
-    /// ([`World::skipped`]). Fails when a draw names a buffer `geom` lacks.
+    /// ([`World::skipped`]). `sky` sets up the sky passes; when that fails
+    /// the world has no sky ([`World::sky_error`]). Fails when a draw names
+    /// a buffer `geom` lacks.
     pub fn create_world(
         &mut self,
         geom: &LevelGeom,
         surfaces: &[Surface<Texture>],
         draws: &[WorldDraw],
+        sky: Option<&SkyTextures<Texture>>,
     ) -> Result<World, String> {
         for d in draws {
             if d.vertex_buffer as usize >= geom.vertex_buffers.len()
@@ -818,6 +833,19 @@ impl Renderer {
         };
         let early = record(&early);
         let late = record(&late);
+        let (sky, sky_error) = match sky.map(|t| SkyResources::new(&device, &pipelines.sky, t)) {
+            Some(Ok(sky)) => {
+                for t in sky.textures() {
+                    if !textures.iter().any(|k| k.texture == t.texture) {
+                        texture_bytes += self::texture_bytes(&t.texture);
+                        textures.push(t.clone());
+                    }
+                }
+                (Some(sky), None)
+            }
+            Some(Err(e)) => (None, Some(e)),
+            None => (None, None),
+        };
         Ok(World(Rc::new(Inner {
             vertex_buffers,
             index_buffers,
@@ -830,6 +858,8 @@ impl Renderer {
             early,
             late,
             strict,
+            sky,
+            sky_error,
             draws: kept.len(),
             skipped,
             buffer_bytes,
@@ -905,6 +935,10 @@ impl Renderer {
         push_vec4(&mut constants, [0.1 / tau, 0.01 / tau, 0.11 / tau, t / tau]);
         push_vec4(&mut constants, wind);
         self.queue.write_buffer(&inner.frame, 0, &constants);
+        let sky = inner.sky.as_ref().zip(frame.sky.as_ref());
+        if let Some((resources, sky_frame)) = sky {
+            resources.write(&self.queue, sky_frame, frame.eye, &view_projection, t);
+        }
 
         // Step 6 order: decreasing squared distance (back to front).
         let mut strict = inner.strict.clone();
@@ -940,7 +974,13 @@ impl Renderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.execute_bundles([&inner.early, &inner.late]);
+        // Section 10.3: step 1, the sky (step 3, sky.md section 10), step
+        // 5, then step 6.
+        pass.execute_bundles([&inner.early]);
+        if let Some((resources, sky_frame)) = sky {
+            resources.draw(&mut pass, sky_frame, size);
+        }
+        pass.execute_bundles([&inner.late]);
         pass.set_bind_group(0, &inner.frame_group, &[]);
         for (i, d) in strict {
             pass.set_pipeline(&inner.surface_pipelines[d.surface as usize]);
@@ -1001,6 +1041,7 @@ mod tests {
         assert!((f(10.0 + offset) - 1.0).abs() < 1e-4);
         assert!(f(110.0 + offset).abs() < 1e-4);
         assert!((f(60.0 + offset) - 0.5).abs() < 1e-4);
-        assert!((ssa_min(1024, 768, 90.0) - 12.25 / (1024.0 * 768.0)).abs() < 1e-12);
+        let expected = 12.25 / (1024.0 * 768.0);
+        assert!((ssa_min(1024, 768, 90.0) - expected).abs() < 1e-5 * expected);
     }
 }

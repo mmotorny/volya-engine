@@ -149,6 +149,8 @@ pub struct WorldScene {
     pub environment: Environment,
     /// Seconds since the level was shown (the shaders' `time`).
     pub time: f32,
+    #[serde(skip)]
+    pub sky: Option<crate::render::sky::SkyFrame>,
 }
 
 impl PartialEq for WorldScene {
@@ -161,6 +163,7 @@ impl PartialEq for WorldScene {
             && self.projection == other.projection
             && self.environment == other.environment
             && self.time == other.time
+            && self.sky == other.sky
     }
 }
 

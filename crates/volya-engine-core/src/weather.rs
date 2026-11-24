@@ -59,6 +59,8 @@ pub struct WeatherSection {
     pub clouds_color: Vec3,
     /// `a` of `clouds_color`.
     pub clouds_opacity: f32,
+    /// `flares`: the lens-flare section, or empty (sky.md 3.1).
+    pub flares: String,
 }
 
 impl WeatherSection {
@@ -90,6 +92,7 @@ impl WeatherSection {
             clouds_texture: texture_name(get("clouds_texture")),
             clouds_color: [clouds[0] * k, clouds[1] * k, clouds[2] * k],
             clouds_opacity: clouds[3],
+            flares: get("flares").trim().to_owned(),
         }
     }
 }

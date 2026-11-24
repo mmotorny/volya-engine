@@ -24,6 +24,7 @@ pub mod level;
 pub mod present;
 pub mod scene;
 pub mod shading;
+pub mod sky;
 pub mod startup;
 pub mod title_menu;
 

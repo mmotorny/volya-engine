@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use crate::core::vfs::{self, Vfs};
 use crate::level::LevelWorld;
+use crate::render::sky::SkyTextures;
 use crate::render::world::{Surface, TreeLight, WorldLight};
 use crate::render::{
     DrawList, Quad, Rect, Renderer, Texture, VideoTexture, World, WorldDraw, WorldFrame,
@@ -229,7 +230,9 @@ impl Presenter {
                 fog_far: e.fog_far,
             },
             time: scene.time,
-            // No sky: the fog colour shows (our choice).
+            sky: scene.sky,
+            // Where neither the world nor the sky draws (does not occur:
+            // the sky box encloses the eye; sky.md 14) and without a sky.
             clear: e.fog_rgb(),
         })
     }
@@ -283,7 +286,32 @@ impl Presenter {
                 })
             })
             .collect();
-        renderer.create_world(&geom, &surfaces, &draws)
+        let mut texture = |path: &String| {
+            textures
+                .entry(path.clone())
+                .or_insert_with(|| {
+                    load_texture(renderer, tree, path)
+                        .map_err(|e| self.errors.push(format!("{path}: {e}")))
+                        .ok()
+                })
+                .clone()
+        };
+        let [a, b] = level.sky.cubes.each_ref().map(&mut texture);
+        let [c, d] = level.sky.clouds.each_ref().map(&mut texture);
+        let sun = level.sun.as_ref().and_then(|s| texture(&s.texture));
+        let sky = match (a, b, c, d) {
+            (Some(a), Some(b), Some(c), Some(d)) => Some(SkyTextures {
+                cubes: [a, b],
+                clouds: [c, d],
+                sun,
+            }),
+            _ => None,
+        };
+        let world = renderer.create_world(&geom, &surfaces, &draws, sky.as_ref())?;
+        if let Some(e) = world.sky_error() {
+            self.errors.push(format!("{}: sky: {e}", level.dir));
+        }
+        Ok(world)
     }
 
     /// The draw list of `scene` at engine clock `clock`. Videos no longer in

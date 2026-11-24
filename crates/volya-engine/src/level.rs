@@ -23,9 +23,11 @@ use crate::core::vfs::{self, Vfs};
 use crate::core::weather::{self, Environment, Weather};
 use crate::data::GameData;
 use crate::free_controls::{self, TouchLayout};
+use crate::render::sky::SkyTextures;
 use crate::render::world::Surface;
 use crate::scene::{Scene, Sprite, TextureId, WorldScene};
 use crate::shading::{self, ShaderLibrary};
+use crate::sky::{self, SkyCamera, SunSource};
 use std::collections::HashMap;
 use volya_engine_formats::env_mod::{self, EnvModifier};
 use volya_engine_formats::game_graph::GameGraph;
@@ -70,6 +72,10 @@ pub struct LevelWorld {
     pub draw_surfaces: Vec<Option<u32>>,
     /// Shader entries not drawn, with why.
     pub not_drawn: Vec<(String, String)>,
+    /// The sky's textures as file paths (sky.md sections 5–7).
+    pub sky: SkyTextures<String>,
+    /// The sun sprite, its texture as a file path.
+    pub sun: Option<SunSource>,
     /// The vertex and index buffers until the presenter uploads them.
     geometry: Mutex<Option<LevelGeom>>,
 }
@@ -100,6 +106,12 @@ pub struct LevelScreen {
     back: bool,
     /// Whether touch was used: the touch controls show from then on.
     touch_seen: bool,
+    /// The sun sprite's fade (sky.md 7.3) and whether the first frame,
+    /// on which it stays 0, has passed.
+    sun_fade: f32,
+    sun_started: bool,
+    /// How many times faster game time runs than real time.
+    time_factor: f32,
 }
 
 /// What the engine interface reports.
@@ -154,6 +166,22 @@ fn start_weather(tree: &dyn Vfs, data: &GameData, level: &str) -> io::Result<(St
     Ok((name, time))
 }
 
+/// The file of texture `name`: `$level$<name>.dds`, then
+/// `$game_textures$<name>.dds` (the saved-games folder has no place on this
+/// platform); neither is "Can't find texture" (static-shading.md 4.2).
+fn locate_texture(tree: &dyn Vfs, data: &GameData, dir: &str, name: &str) -> io::Result<String> {
+    let level = format!("{dir}\\{name}.dds");
+    if tree.open(&level).is_ok() {
+        return Ok(level);
+    }
+    let path = data
+        .aliases
+        .path("$game_textures$", &format!("{name}.dds"))?;
+    tree.open(&path)
+        .map_err(|_| invalid(format!("Can't find texture '{name}'")))?;
+    Ok(path)
+}
+
 /// The surfaces of the shader entries `draw_items` use, each draw item's
 /// surface, and the entries not drawn with why. A texture that resolves
 /// nowhere fails the load ("Can't find texture", static-shading.md 4.2).
@@ -186,22 +214,12 @@ fn resolve_surfaces(
         scripted: &scripted,
         associations: &associations,
     };
-    // $level$, then $game_textures$ (the saved-games folder has no place on
-    // this platform).
     let mut paths: HashMap<String, String> = HashMap::new();
     let mut locate = |name: String| -> io::Result<String> {
         if let Some(p) = paths.get(&name) {
             return Ok(p.clone());
         }
-        let level = format!("{dir}\\{name}.dds");
-        let path = if tree.open(&level).is_ok() {
-            level
-        } else {
-            let path = aliases.path("$game_textures$", &format!("{name}.dds"))?;
-            tree.open(&path)
-                .map_err(|_| invalid(format!("Can't find texture '{name}'")))?;
-            path
-        };
+        let path = locate_texture(tree, data, dir, &name)?;
         paths.insert(name, path.clone());
         Ok(path)
     };
@@ -239,6 +257,19 @@ fn resolve_surfaces(
         draw_surfaces.push(surface);
     }
     Ok((surfaces, draw_surfaces, not_drawn))
+}
+
+/// `[alife] time_factor`, presumed to be the clock's rate for a New Game
+/// (sky.md 7.3); 10 when absent (the shipped value; our choice).
+fn time_factor(tree: &dyn Vfs, data: &GameData) -> io::Result<f32> {
+    let alife = match data.system.section("alife") {
+        Some(_) => data.system.clone(),
+        None => config::load(tree, &data.aliases.path("$game_config$", "alife.ltx")?)?,
+    };
+    Ok(alife
+        .get("alife", "time_factor")
+        .flatten()
+        .map_or(10.0, config::value::float))
 }
 
 impl LevelScreen {
@@ -279,6 +310,25 @@ impl LevelScreen {
             resolve_surfaces(tree, data, &dir, &level.shaders, &draw_items)?;
         let (weather_name, time_of_day) = start_weather(tree, data, &name)?;
         let weather = Weather::load(&data.system, &weather_name)?;
+        // The sky's textures: the bracketing sections' cube maps and cloud
+        // textures; the sun sprite of the lens-flare section in effect. Game
+        // time stays at the start, so these stay too.
+        let (a, b, t) = weather.bracket(time_of_day);
+        let locate = |name: &str| locate_texture(tree, data, &dir, name);
+        let sky = SkyTextures {
+            cubes: [locate(&a.sky_texture)?, locate(&b.sky_texture)?],
+            clouds: [locate(&a.clouds_texture)?, locate(&b.clouds_texture)?],
+            sun: None,
+        };
+        let sun = SunSource::read(&data.system, sky::flares_section(a, b, t))
+            .map(|s| {
+                Ok::<_, io::Error>(SunSource {
+                    texture: locate(&s.texture)?,
+                    ..s
+                })
+            })
+            .transpose()?;
+        let time_factor = time_factor(tree, data)?;
         let eye = body.eye(actor.position);
         let mut screen = Self {
             world: Arc::new(LevelWorld {
@@ -290,6 +340,8 @@ impl LevelScreen {
                 surfaces,
                 draw_surfaces,
                 not_drawn,
+                sky,
+                sun,
                 geometry: Mutex::new(Some(geom)),
             }),
             camera: FreeCamera::new(eye, Angles::from_spawn(actor.angles)),
@@ -304,6 +356,9 @@ impl LevelScreen {
             last: now,
             back: false,
             touch_seen: false,
+            sun_fade: 0.0,
+            sun_started: false,
+            time_factor,
         };
         screen.update_environment();
         Ok(screen)
@@ -335,6 +390,13 @@ impl LevelScreen {
         self.camera.apply(&m, dt);
         self.back |= back;
         self.touch_seen |= !input.contacts().is_empty();
+        // sky.md 7.3: 0 on the first frame, then rising by λ↑·dt·k_t.
+        if let Some(sun) = &self.world.sun {
+            if self.sun_started {
+                self.sun_fade = (self.sun_fade + sun.rise * dt * self.time_factor).min(1.0);
+            }
+            self.sun_started = true;
+        }
         self.update_environment();
     }
 
@@ -362,16 +424,27 @@ impl LevelScreen {
     /// The frame for `resolution`.
     pub fn scene(&self, resolution: Resolution, clock_ms: u64) -> Scene {
         let (view, projection) = self.view_projection(resolution.width, resolution.height);
+        let (d, _) = self.camera.angles.direction_up();
         let mut scene = Scene::new(resolution);
         scene.world = Some(WorldScene {
             world: self.world.clone(),
             eye: self.camera.eye,
-            forward: self.camera.angles.direction_up().0,
+            forward: d,
             fov_y_degrees: camera::FOV_Y_DEGREES,
             view,
             projection,
             environment: self.environment.clone(),
             time: clock_ms.saturating_sub(self.shown) as f32 / 1000.0,
+            sky: Some(sky::sky_frame(
+                &self.environment,
+                &SkyCamera {
+                    eye: self.camera.eye,
+                    forward: d,
+                    right: [view[0][0], view[1][0], view[2][0]],
+                },
+                self.world.sun.as_ref(),
+                self.sun_fade,
+            )),
         });
         if self.touch_seen {
             touch_overlay(&mut scene);

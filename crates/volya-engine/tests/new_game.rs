@@ -168,4 +168,17 @@ fn new_game_start_view_from_game_data() {
     }
     let distinct: std::collections::BTreeSet<&[u8]> = pixels.chunks(4).collect();
     assert!(distinct.len() > 500, "outdoors: {} colours", distinct.len());
+    // The sky (docs/behavior/sky.md) covers the top rows: varied, and not
+    // the clear colour.
+    let top = &pixels[..(SIZE.width * 16 * 4) as usize];
+    let cleared = top
+        .chunks(4)
+        .filter(|p| p[..3].iter().zip(clear).all(|(a, b)| a.abs_diff(b) <= 1))
+        .count();
+    let sky: std::collections::BTreeSet<&[u8]> = top.chunks(4).collect();
+    assert!(
+        cleared * 100 < top.len() / 4,
+        "{cleared} cleared sky pixels"
+    );
+    assert!(sky.len() > 50, "{} sky colours", sky.len());
 }

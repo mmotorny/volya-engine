@@ -15,6 +15,7 @@
 //! non-sRGB target format.
 
 mod capture;
+pub mod sky;
 mod texture;
 mod video;
 pub mod world;
