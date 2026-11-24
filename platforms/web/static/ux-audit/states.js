@@ -50,14 +50,6 @@ export const SECTIONS = [
     states: [
       { id: "home", name: "Ready", game: imported },
       { id: "home-play-failed", name: "Play failed", game: imported, launchError: "level.geom: unexpected end of file" },
-      // Safari's error (measured in the iOS Simulator) when another copy of
-      // the app holds the files: no shared read-only handles there.
-      {
-        id: "home-play-locked",
-        name: "Play failed: game open in another copy (Safari)",
-        game: imported,
-        launchError: "InvalidStateError: The object is in an invalid state.",
-      },
       // An update, in order: offered (automatic downloads off), downloading
       // on request, downloaded (either way).
       {

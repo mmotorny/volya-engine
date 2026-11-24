@@ -206,7 +206,7 @@ function importProblem(message) {
   if (/^installer read/i.test(message)) {
     return { title: "The installer files couldn't be read", text: again() };
   }
-  return { title: "The import failed", text: [`The engine reported: ${message}. `, ...again()] };
+  return { title: "The import failed", text: [`${reported(message)} `, ...again()] };
 }
 
 /**
@@ -286,7 +286,7 @@ function showImport(status, snapshot = null, { kept = false, deleted = false } =
   if (status.problem && !snapshot) {
     warn({
       title: "The imported game is damaged",
-      text: [`The engine reported: ${status.problem}. Choose `, ...installerFiles(), " to import it again."],
+      text: [`${reported(status.problem)} Choose `, ...installerFiles(), " to import it again."],
     });
   }
   // The browser deleted an earlier import (it can, to free space): say so
@@ -352,6 +352,9 @@ function showImport(status, snapshot = null, { kept = false, deleted = false } =
   );
 }
 
+/** An error as the engine reported it, as a sentence (one full stop). */
+const reported = (message) => `The engine reported: ${message}${/[.!?]$/.test(message) ? "" : "."}`;
+
 /** A file's name, as the steps show it. */
 const fileName = (name) => element("code", { textContent: name });
 
@@ -376,7 +379,7 @@ export function showProblem(error) {
       { className: "panel" },
       element("p", { className: "label", textContent: "Problem" }),
       element("h2", { textContent: "Volya Engine couldn't start" }),
-      element("p", { textContent: `The engine reported: ${error.message}.` }),
+      element("p", { textContent: reported(error.message) }),
     ),
   );
 }
@@ -392,7 +395,7 @@ async function showHome(status) {
       // Only what's known: the engine's own words.
       problem.replaceChildren(
         element("strong", { textContent: "The game couldn't start" }),
-        element("span", { textContent: `The engine reported: ${error.message}.` }),
+        element("span", { textContent: reported(error.message) }),
       );
       problem.hidden = false;
     }
