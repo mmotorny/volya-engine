@@ -33,25 +33,6 @@ if (device.insets.top > 0) {
 }
 if (device.touch) document.body.insertAdjacentHTML("beforeend", `<div class="ux-home-indicator"></div>`);
 
-// A design proposal (proposals/): its stylesheet and header.
-if (state.variant) {
-  document.documentElement.classList.add(`proposal-${state.variant}`);
-  document.head.insertAdjacentHTML("beforeend", `<link rel="stylesheet" href="proposals/proposals.css">`);
-  const brand = document.querySelector(".brand");
-  brand.innerHTML =
-    state.variant === "c"
-      ? `<img class="drawing" src="proposals/logo-drawing.svg" alt=""><img class="wordmark" src="proposals/logo-wordmark.svg" alt="Volya Engine">`
-      : `<img src="proposals/logo-mark.svg" alt="Volya Engine">`;
-  if (state.variant === "b") {
-    // The footer as a drawing's title block: labelled cells.
-    const footer = document.querySelector("footer");
-    const status = footer.querySelector("#status");
-    const source = footer.querySelector(".source");
-    const label = (text) => Object.assign(document.createElement("span"), { className: "tb-label", textContent: text });
-    footer.replaceChildren(label("Build"), status, label("Source"), source);
-  }
-}
-
 // Storage persistence as the state says (the installed app keeps it).
 Object.defineProperty(navigator.storage, "persisted", { value: async () => state.persisted ?? true });
 

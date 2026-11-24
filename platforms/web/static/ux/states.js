@@ -81,23 +81,6 @@ export const SECTIONS = [
   },
 ];
 
-// Proposals: the README logo instead of the app icon and name, three ways,
-// on the screens people see most.
-const PROPOSALS = [
-  ["a", "A · Hero logo on the sheet"],
-  ["b", "B · Drawing sheet with title block"],
-  ["c", "C · Compact lockup"],
-];
-const BASES = ["home", "import", "settings"];
-for (const [variant, title] of PROPOSALS) {
-  const states = SECTIONS.flatMap((s) => s.states).filter((s) => BASES.includes(s.id));
-  SECTIONS.push({
-    title: `Proposal ${title}`,
-    proposal: true,
-    states: states.map((s) => ({ ...s, id: `${variant}-${s.id}`, name: s.name, variant })),
-  });
-}
-
 export const STATES = SECTIONS.flatMap((section) => section.states);
 
 /** Devices: CSS size, safe-area insets, and how input works. */
