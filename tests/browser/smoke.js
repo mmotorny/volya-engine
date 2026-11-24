@@ -255,13 +255,13 @@ export const tests = {
   },
 
   "the UX audit page renders every state on every device": async () => {
-    const { DEVICES, STATES } = await import(`${base}ux/states.js`);
+    const { DEVICES, STATES } = await import(`${base}ux-audit/states.js`);
     const failed = [];
     for (const device of DEVICES) {
       for (const state of STATES) {
         const frame = Object.assign(document.createElement("iframe"), { width: device.width, height: device.height });
         frame.style.cssText = "position: fixed; left: -5000px; top: 0";
-        frame.src = `${base}ux/frame.html#${device.id}/${state.id}`;
+        frame.src = `${base}ux-audit/frame.html#${device.id}/${state.id}`;
         document.body.append(frame);
         let ok = false;
         for (let i = 0; i < 100 && !ok; i++) {

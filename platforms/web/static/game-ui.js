@@ -552,5 +552,5 @@ async function showSettings() {
   back.focus();
 }
 
-/** Every screen, for the UX audit page (static/ux/), which shows each state. */
+/** Every screen, for the UX audit page (static/ux-audit/), which shows each state. */
 export const screens = { showImport, showHome, showSettings, showInUse, showDamaged };

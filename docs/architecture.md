@@ -50,7 +50,7 @@ Constraints this imposes:
 
 ## UX audit page
 
-`/volya-engine/ux/` shows every state of the app's own interface on each device (iPhone 17 Pro Max portrait and landscape, desktop Chrome), like a design file. Each frame is the live interface (`style.css`, `game-ui.js`) with a fake engine and fake updates (`ux/frame.js`), so the page can't drift from the app; states live in `ux/states.js`. It is for the project, not players: not kept offline by the service worker, `noindex`. The `smoke` suite renders every state on every device.
+`/volya-engine/ux-audit/` shows every state of the app's own interface on each device (iPhone 17 Pro Max portrait and landscape, desktop Chrome), like a design file. Each frame is the live interface (`style.css`, `game-ui.js`) with a fake engine and fake updates (`ux-audit/frame.js`), so the page can't drift from the app; states live in `ux-audit/states.js`. It is for the project, not players: not kept offline by the service worker, `noindex`. The `smoke` suite renders every state on every device.
 
 ## Game data: BYOA, local only
 
