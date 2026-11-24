@@ -330,53 +330,115 @@ export const tests = {
     return `${note}; ${JSON.stringify(stats)}`;
   },
 
-  "keyboard and mouse fly the free camera": async () => {
+  "keyboard: W walks forward and Space jumps, leaving and regaining the ground": async () => {
     needsGame();
-    const start = (await state()).level;
-    document.body.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyW", bubbles: true, cancelable: true }));
-    await sleep(300);
-    document.body.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyW", bubbles: true, cancelable: true }));
-    let s = await until((s) => s.level.eye[0] > start.eye[0] + 0.3, "W to move forward (+x at the start heading)");
-    // A drag with the left button turns right.
+    const player = async () => (await state()).level.player;
+    const down = (code) => document.body.dispatchEvent(new KeyboardEvent("keydown", { code, bubbles: true, cancelable: true }));
+    const up = (code) => document.body.dispatchEvent(new KeyboardEvent("keyup", { code, bubbles: true, cancelable: true }));
+    // The start faces the trader's counter about a metre ahead: turn
+    // around with the arrow keys (π rad/s) first, towards the door.
+    let s = await state();
     const yaw = s.level.yaw;
-    pointer("pointermove", client(500, 400));
-    pointer("pointerdown", client(500, 400), { button: 0, buttons: 1 });
-    pointer("pointermove", client(600, 400), { buttons: 1 });
-    pointer("pointerup", client(600, 400), { button: 0, buttons: 0 });
-    s = await until((s) => s.level.yaw > yaw + 0.1, "the drag to turn right");
-    return `moved ${(s.level.eye[0] - start.eye[0]).toFixed(2)} m, turned ${(s.level.yaw - yaw).toFixed(2)} rad`;
+    down("ArrowRight");
+    await until((s) => s.level.yaw > yaw + 2.9, "the right arrow to turn round", 3000);
+    up("ArrowRight");
+    // Space held a moment where the player stands (the bunker's ceiling is
+    // 3.2 m up): up (0.92 m at most) and back down.
+    const ground = await player();
+    assert(!ground.airborne, "on the ground at the start");
+    down("Space");
+    s = await until((s) => s.level.player.airborne, "Space to jump", 2000);
+    await sleep(80);
+    up("Space");
+    let top = s.level.player.position[1];
+    s = await until((s) => {
+      top = Math.max(top, s.level.player.position[1]);
+      return !s.level.player.airborne;
+    }, "the jump to land", 3000);
+    const height = top - ground.position[1];
+    assert(height > 0.5 && height < 1.0, `jump height ${height.toFixed(2)} m`);
+    await sleep(400);
+    const start = await player();
+    down("KeyW");
+    s = await until((s) => s.level.player.running && s.level.player.moving, "W to run");
+    await sleep(250);
+    up("KeyW");
+    s = await until((s) => !s.level.player.moving, "the player to stop");
+    const p = s.level.player;
+    const moved = Math.hypot(p.position[0] - start.position[0], p.position[2] - start.position[2]);
+    assert(moved > 0.5, `moved ${moved.toFixed(2)} m`);
+    assert(Math.abs(p.position[1] - start.position[1]) < 0.05, `height ${p.position[1] - start.position[1]}`);
+    assert(!p.airborne, "still on the ground");
+    // A level frame posts its controls to the page; the desktop shows no
+    // touch controls until a touch.
+    return `ran ${moved.toFixed(2)} m, jumped ${height.toFixed(2)} m`;
   },
 
-  "touch flies the free camera and its back button returns to the title menu": async () => {
+  "touch: the move stick walks, a drag looks, Menu returns to the title menu": async () => {
     needsGame();
-    const touch = (type, id, at, primary) =>
-      pointer(type, at, { pointerType: "touch", pointerId: id, isPrimary: primary, button: 0, buttons: type === "pointerup" ? 0 : 1 });
+    const controls = document.getElementById("touch-controls");
+    assert(controls, "no touch controls");
+    // A touch anywhere shows them (a touch device).
+    const tap = { pointerType: "touch", pointerId: 30, isPrimary: true, button: 0 };
+    pointer("pointerdown", client(512, 100), { ...tap, buttons: 1 });
+    pointer("pointerup", client(512, 100), { ...tap, buttons: 0 });
+    for (let i = 0; i < 50 && controls.hidden; i++) await sleep(20);
+    assert(!controls.hidden, "the touch controls show");
+    const centre = (el) => {
+      const r = el.getBoundingClientRect();
+      return [(r.left + r.right) / 2, (r.top + r.bottom) / 2];
+    };
+    const touchOn = (el, type, id, [x, y]) =>
+      el.dispatchEvent(
+        new PointerEvent(type, {
+          clientX: x,
+          clientY: y,
+          pointerId: id,
+          pointerType: "touch",
+          isPrimary: id === 31,
+          button: type === "pointermove" ? -1 : 0,
+          buttons: type === "pointerup" ? 0 : 1,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
     const start = (await state()).level;
-    // Left half: a virtual stick pushed up moves forward while a right-half
-    // drag (a second finger) turns.
-    touch("pointerdown", 11, client(256, 600), true);
-    touch("pointermove", 11, client(256, 450), true);
-    touch("pointerdown", 12, client(700, 400), false);
-    await sleep(50);
-    touch("pointermove", 12, client(800, 400), false);
-    await sleep(300);
-    touch("pointerup", 12, client(800, 400), false);
-    touch("pointerup", 11, client(256, 450), true);
-    const s = await until(
-      (s) => s.level.eye[0] > start.eye[0] + 0.2 && s.level.yaw > start.yaw + 0.1,
-      "the stick to move and the drag to turn",
-    );
-    // The back button sits at the top left (a square of 14 % of the shorter
-    // side, 4 % in).
-    const short = Math.min(view().clientWidth, view().clientHeight);
-    const rect = view().getBoundingClientRect();
-    const [bx, by] = [0.11 * short, 0.11 * short];
-    const at = rect.width < rect.height !== view().clientWidth < view().clientHeight ? [rect.right - by, rect.top + bx] : [rect.left + bx, rect.top + by];
-    touch("pointerdown", 13, at, true);
-    touch("pointerup", 13, at, true);
-    const menu = await until((s) => s.phase === "menu", "the menu");
-    assertEqual(menu.menu.list, "menu_main", "list");
-    return `moved ${(s.level.eye[0] - start.eye[0]).toFixed(2)} m, turned ${(s.level.yaw - start.yaw).toFixed(2)} rad`;
+    // The stick pushed fully up runs forward (towards the door: the
+    // keyboard test turned round); a second finger drags right to look.
+    const move = controls.querySelector(".touch-move");
+    const look = controls.querySelector(".touch-look");
+    const [mx, my] = centre(move);
+    touchOn(move, "pointerdown", 31, [mx, my]);
+    touchOn(move, "pointermove", 31, [mx, my - 80]);
+    let s = await until((s) => s.level.player.moving && s.level.player.running, "the stick to run");
+    await sleep(200);
+    touchOn(move, "pointerup", 31, [mx, my - 80]);
+    s = await until((s) => !s.level.player.moving, "the player to stop");
+    const p = s.level.player;
+    const moved = Math.hypot(p.position[0] - start.player.position[0], p.position[2] - start.player.position[2]);
+    assert(moved > 0.3, `moved ${moved.toFixed(2)} m: ${JSON.stringify(p)}`);
+    const [lx, ly] = centre(look);
+    touchOn(look, "pointerdown", 32, [lx, ly]);
+    touchOn(look, "pointermove", 32, [lx + 100, ly + 20]);
+    touchOn(look, "pointerup", 32, [lx + 100, ly + 20]);
+    // 100 px at mouse_sens 0.12: 0.24 rad right, a little down.
+    s = await until((s) => s.level.yaw > start.yaw + 0.2, "the drag to turn right");
+    assert(s.level.pitch > start.pitch, "the drag looks down");
+    // Crouch toggles: the engine reports it back to the button.
+    const crouch = controls.querySelector(".touch-button.crouch");
+    touchOn(crouch, "pointerdown", 33, centre(crouch));
+    touchOn(crouch, "pointerup", 33, centre(crouch));
+    await until((s) => s.level.player.crouch, "Crouch to crouch");
+    for (let i = 0; i < 50 && crouch.getAttribute("aria-pressed") !== "true"; i++) await sleep(20);
+    assertEqual(crouch.getAttribute("aria-pressed"), "true", "Crouch shown on");
+    const menu = controls.querySelector(".touch-button.menu");
+    touchOn(menu, "pointerdown", 34, centre(menu));
+    touchOn(menu, "pointerup", 34, centre(menu));
+    const back = await until((s) => s.phase === "menu", "the menu");
+    assertEqual(back.menu.list, "menu_main", "list");
+    for (let i = 0; i < 50 && !controls.hidden; i++) await sleep(20);
+    assert(controls.hidden, "the touch controls hide in the menu");
+    return `moved ${moved.toFixed(2)} m, turned ${(s.level.yaw - start.yaw).toFixed(2)} rad`;
   },
 
   "New Game again after returning: the level loads anew": async () => {
@@ -394,6 +456,22 @@ export const tests = {
     pointer("pointerdown", client(512, 384), { ...tap, buttons: 1 });
     pointer("pointerup", client(512, 384), { ...tap, buttons: 0 });
     await until((s) => s.phase === "level" && !s.intro, "the tap to skip the intro");
+    // A gamepad (the Gamepad API, faked): the left stick pushed up runs.
+    const start = (await state()).level.player;
+    const pad = { index: 0, mapping: "standard", axes: [0, -1, 0, 0], buttons: Array.from({ length: 17 }, () => ({ pressed: false, value: 0 })) };
+    const getGamepads = navigator.getGamepads;
+    navigator.getGamepads = () => [pad];
+    try {
+      await until((s) => s.level.player.moving && s.level.player.running, "the left stick to run");
+      await sleep(250);
+      pad.axes[1] = 0;
+      const stopped = await until((s) => !s.level.player.moving, "the player to stop");
+      const p = stopped.level.player;
+      const moved = Math.hypot(p.position[0] - start.position[0], p.position[2] - start.position[2]);
+      assert(moved > 0.1, `the gamepad moved ${moved.toFixed(2)} m`);
+    } finally {
+      navigator.getGamepads = getGamepads;
+    }
     if (gpu.state === "ready") {
       // The new world reaches the GPU on the next frame drawn.
       let stats;

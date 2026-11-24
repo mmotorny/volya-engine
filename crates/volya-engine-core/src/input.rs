@@ -30,13 +30,17 @@
 //! - Keyboard auto-repeat is not a key press: platforms report physical
 //!   presses only.
 //!
-//! Beyond the menu, the free camera of the level view (our design, not the
-//! game's) reads raw state the menu ignores: held movement keys
-//! ([`Input::key_held`]), mouse motion ([`Input::pointer_delta`]), every
-//! touch contact ([`Input::contacts`], from [`Event::Contact`]; the primary
-//! one also drives the cursor as above) and analog gamepad axes
-//! ([`Input::axis`]: both sticks and the triggers). Gamepad buttons without
-//! a key (shoulders, stick click) are held as [`Control::Pad`].
+//! Beyond the menu, the player's controls in a level read raw state the
+//! menu ignores: keys and mouse buttons of the keyboard and mouse alone
+//! ([`Input::device_held`], [`Input::device_changes`]), mouse motion
+//! ([`Input::pointer_delta`], relative under pointer lock), gamepad buttons
+//! as themselves ([`Input::pad_held`], [`Input::pad_changes`]) and analog
+//! axes ([`Input::axis`]: both sticks and the triggers), and the page's
+//! on-screen touch controls ([`Event::TouchStick`], [`Event::TouchLook`],
+//! [`Event::TouchButton`]). Every touch contact is also kept
+//! ([`Input::contacts`], from [`Event::Contact`]; the primary one also
+//! drives the cursor as above). Gamepad buttons without a key (shoulders,
+//! stick click, west) are held as [`Control::Pad`].
 
 /// Virtual UI space (§1): 1024 × 768 units, origin top-left, y downward.
 pub const UI_WIDTH: f32 = 1024.0;
@@ -106,14 +110,14 @@ pub enum Key {
     A,
     S,
     D,
+    X,
     Space,
-    C,
-    /// Either Shift key.
-    Shift,
+    LeftShift,
+    LeftControl,
 }
 
 impl Key {
-    pub const ALL: [Key; 16] = [
+    pub const ALL: [Key; 17] = [
         Key::Up,
         Key::Down,
         Key::Left,
@@ -127,9 +131,10 @@ impl Key {
         Key::A,
         Key::S,
         Key::D,
+        Key::X,
         Key::Space,
-        Key::C,
-        Key::Shift,
+        Key::LeftShift,
+        Key::LeftControl,
     ];
 
     /// Stable name, used by platforms and the engine interface.
@@ -148,9 +153,10 @@ impl Key {
             Key::A => "a",
             Key::S => "s",
             Key::D => "d",
+            Key::X => "x",
             Key::Space => "space",
-            Key::C => "c",
-            Key::Shift => "shift",
+            Key::LeftShift => "left_shift",
+            Key::LeftControl => "left_control",
         }
     }
 
@@ -188,6 +194,7 @@ impl MouseButton {
 pub enum GamepadButton {
     South,
     East,
+    West,
     DpadUp,
     DpadDown,
     DpadLeft,
@@ -199,9 +206,10 @@ pub enum GamepadButton {
 }
 
 impl GamepadButton {
-    pub const ALL: [GamepadButton; 9] = [
+    pub const ALL: [GamepadButton; 10] = [
         GamepadButton::South,
         GamepadButton::East,
+        GamepadButton::West,
         GamepadButton::DpadUp,
         GamepadButton::DpadDown,
         GamepadButton::DpadLeft,
@@ -215,6 +223,7 @@ impl GamepadButton {
         match self {
             GamepadButton::South => "south",
             GamepadButton::East => "east",
+            GamepadButton::West => "west",
             GamepadButton::DpadUp => "dpad_up",
             GamepadButton::DpadDown => "dpad_down",
             GamepadButton::DpadLeft => "dpad_left",
@@ -296,6 +305,39 @@ impl GamepadAxis {
     }
 }
 
+/// The buttons of the page's on-screen touch controls in a level (our
+/// design; the original has no touch support).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TouchButton {
+    Jump,
+    Crouch,
+    Sprint,
+    /// Does what Escape does.
+    Menu,
+}
+
+impl TouchButton {
+    pub const ALL: [TouchButton; 4] = [
+        TouchButton::Jump,
+        TouchButton::Crouch,
+        TouchButton::Sprint,
+        TouchButton::Menu,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            TouchButton::Jump => "jump",
+            TouchButton::Crouch => "crouch",
+            TouchButton::Sprint => "sprint",
+            TouchButton::Menu => "menu",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<TouchButton> {
+        TouchButton::ALL.into_iter().find(|b| b.name() == name)
+    }
+}
+
 /// What a platform reports. Screen positions are in the same units as the
 /// screen size given to [`Input::set_screen`], origin top-left.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -341,6 +383,19 @@ pub enum Event {
         at: [f32; 2],
         phase: TouchPhase,
     },
+    /// The on-screen move stick's deflection, −1 … +1 per axis (+x right,
+    /// +y down); zero when released.
+    TouchStick {
+        value: [f32; 2],
+    },
+    /// A drag on the on-screen look area, in screen units.
+    TouchLook {
+        delta: [f32; 2],
+    },
+    TouchButton {
+        button: TouchButton,
+        pressed: bool,
+    },
 }
 
 /// A touch contact, in screen units.
@@ -380,6 +435,7 @@ pub enum Control {
     Mouse(MouseButton),
     /// A gamepad button that acts as no key.
     Pad(GamepadButton),
+    Touch(TouchButton),
 }
 
 impl Control {
@@ -390,6 +446,10 @@ impl Control {
             Control::Mouse(MouseButton::Right) => "mouse_right",
             Control::Mouse(MouseButton::Middle) => "mouse_middle",
             Control::Pad(b) => b.name(),
+            Control::Touch(TouchButton::Jump) => "touch_jump",
+            Control::Touch(TouchButton::Crouch) => "touch_crouch",
+            Control::Touch(TouchButton::Sprint) => "touch_sprint",
+            Control::Touch(TouchButton::Menu) => "touch_menu",
         }
     }
 }
@@ -446,6 +506,16 @@ pub struct Input {
     drag_delta: [f32; 2],
     contacts: Vec<Contact>,
     axes: [f32; 6],
+    /// Presses (true) and releases of the keyboard and mouse this frame.
+    device_changes: Vec<(Control, bool)>,
+    /// Gamepad buttons held, and their presses and releases this frame.
+    pad_held: Vec<GamepadButton>,
+    pad_changes: Vec<(GamepadButton, bool)>,
+    touch_stick: [f32; 2],
+    /// Look drags this frame.
+    touch_look: [f32; 2],
+    /// Relative mouse motion this frame ([`Event::PointerMotion`]).
+    motion: [f32; 2],
 }
 
 impl Default for Input {
@@ -464,6 +534,12 @@ impl Default for Input {
             drag_delta: [0.0; 2],
             contacts: Vec::new(),
             axes: [0.0; 6],
+            device_changes: Vec::new(),
+            pad_held: Vec::new(),
+            pad_changes: Vec::new(),
+            touch_stick: [0.0; 2],
+            touch_look: [0.0; 2],
+            motion: [0.0; 2],
         }
     }
 }
@@ -516,10 +592,50 @@ impl Input {
             .any(|&(s, c)| c == Control::Key(key) && s != Source::Stick)
     }
 
+    /// Whether the keyboard or the mouse holds `control` (not a gamepad or
+    /// touch acting as it).
+    pub fn device_held(&self, control: Control) -> bool {
+        self.held
+            .iter()
+            .any(|&(s, c)| c == control && matches!(s, Source::Keyboard | Source::Mouse))
+    }
+
+    /// Presses (`true`) and releases of keys and mouse buttons by the
+    /// keyboard and mouse this frame, in order.
+    pub fn device_changes(&self) -> &[(Control, bool)] {
+        &self.device_changes
+    }
+
+    /// Whether gamepad button `button` is held.
+    pub fn pad_held(&self, button: GamepadButton) -> bool {
+        self.pad_held.contains(&button)
+    }
+
+    /// Presses (`true`) and releases of gamepad buttons this frame.
+    pub fn pad_changes(&self) -> &[(GamepadButton, bool)] {
+        &self.pad_changes
+    }
+
+    /// The on-screen move stick's deflection.
+    pub fn touch_stick(&self) -> [f32; 2] {
+        self.touch_stick
+    }
+
+    /// Drags on the on-screen look area this frame.
+    pub fn touch_look(&self) -> [f32; 2] {
+        self.touch_look
+    }
+
     /// Mouse motion this frame, in screen units (absolute moves and relative
     /// motion alike).
     pub fn pointer_delta(&self) -> [f32; 2] {
         self.pointer_delta
+    }
+
+    /// Relative mouse motion this frame (under pointer lock), in screen
+    /// units; absolute moves are not included.
+    pub fn pointer_motion(&self) -> [f32; 2] {
+        self.motion
     }
 
     /// Mouse motion this frame made while a mouse button was held (a drag,
@@ -572,6 +688,10 @@ impl Input {
         self.touch_starts = 0;
         self.pointer_delta = [0.0; 2];
         self.drag_delta = [0.0; 2];
+        self.device_changes.clear();
+        self.pad_changes.clear();
+        self.touch_look = [0.0; 2];
+        self.motion = [0.0; 2];
         self.contacts.retain(|c| !c.ended);
         for c in &mut self.contacts {
             c.previous = c.at;
@@ -589,6 +709,10 @@ impl Input {
             c.ended = true;
         }
         self.axes = [0.0; 6];
+        for button in std::mem::take(&mut self.pad_held) {
+            self.pad_changes.push((button, false));
+        }
+        self.touch_stick = [0.0; 2];
     }
 
     pub fn handle(&mut self, event: Event) {
@@ -598,6 +722,8 @@ impl Input {
                 self.move_to(at)
             }
             Event::PointerMotion { delta } => {
+                self.motion[0] += delta[0];
+                self.motion[1] += delta[1];
                 self.add_motion(delta);
                 let to = apply_motion(self.cursor, delta, self.screen, self.sensitivity);
                 self.set_cursor(to);
@@ -631,7 +757,24 @@ impl Input {
                 self.set(Source::Keyboard, Control::Key(key), pressed, false)
             }
             Event::GamepadButton { button, pressed } => {
+                let held = self.pad_held.contains(&button);
+                if pressed != held {
+                    if pressed {
+                        self.pad_held.push(button);
+                    } else {
+                        self.pad_held.retain(|&b| b != button);
+                    }
+                    self.pad_changes.push((button, pressed));
+                }
                 self.set(Source::Pad, button.control(), pressed, false)
+            }
+            Event::TouchStick { value } => self.touch_stick = value.map(clamp_unit),
+            Event::TouchLook { delta } => {
+                self.touch_look[0] += delta[0];
+                self.touch_look[1] += delta[1];
+            }
+            Event::TouchButton { button, pressed } => {
+                self.set(Source::Touch, Control::Touch(button), pressed, false)
             }
             Event::Contact { id, at, phase } => self.contact(id, at, phase),
             Event::GamepadAxis { axis, value } => {
@@ -726,7 +869,10 @@ impl Input {
                 self.held.remove(i);
                 self.push(Action::Release { control });
             }
-            _ => {}
+            _ => return,
+        }
+        if matches!(source, Source::Keyboard | Source::Mouse) {
+            self.device_changes.push((control, pressed));
         }
     }
 
@@ -1081,13 +1227,14 @@ mod tests {
     }
 
     #[test]
-    fn raw_state_for_the_free_camera() {
+    fn raw_state_for_the_level_controls() {
         let mut input = Input::new();
         // Mouse motion accumulates per frame.
         input.handle(Event::PointerMoved { at: [10.0, 10.0] });
         input.handle(Event::PointerMoved { at: [15.0, 8.0] });
         input.handle(Event::PointerMotion { delta: [1.0, 1.0] });
         assert_eq!(input.pointer_delta(), [6.0, -1.0]);
+        assert_eq!(input.pointer_motion(), [1.0, 1.0]);
         assert_eq!(input.drag_delta(), [0.0, 0.0]);
         // A drag within one frame still counts.
         for (pressed, at) in [(true, [15.0, 8.0]), (false, [25.0, 8.0])] {
@@ -1138,5 +1285,54 @@ mod tests {
         input.release_all();
         assert!(input.contacts()[0].ended);
         assert_eq!(input.axis(GamepadAxis::RightTrigger), 0.0);
+        assert_eq!(
+            input.pad_changes().last(),
+            Some(&(GamepadButton::LeftShoulder, false))
+        );
+    }
+
+    #[test]
+    fn device_pad_and_touch_controls_are_told_apart() {
+        let mut input = Input::new();
+        let space = Control::Key(Key::Space);
+        input.handle(Event::Key {
+            key: Key::Space,
+            pressed: true,
+        });
+        input.handle(Event::GamepadButton {
+            button: GamepadButton::South,
+            pressed: true,
+        });
+        input.handle(Event::GamepadButton {
+            button: GamepadButton::South,
+            pressed: true,
+        });
+        input.handle(Event::TouchButton {
+            button: TouchButton::Jump,
+            pressed: true,
+        });
+        assert!(input.device_held(space));
+        // South holds Enter for the menu, and itself.
+        assert!(!input.device_held(Control::Key(Key::Enter)));
+        assert!(input.pad_held(GamepadButton::South));
+        assert_eq!(input.device_changes(), [(space, true)]);
+        assert_eq!(input.pad_changes(), [(GamepadButton::South, true)]);
+        assert!(input.is_held(Control::Touch(TouchButton::Jump)));
+        input.handle(Event::TouchStick { value: [0.5, -2.0] });
+        input.handle(Event::TouchLook { delta: [3.0, 1.0] });
+        input.handle(Event::TouchLook { delta: [1.0, 1.0] });
+        assert_eq!(input.touch_stick(), [0.5, -1.0]);
+        assert_eq!(input.touch_look(), [4.0, 2.0]);
+        input.end_frame();
+        assert!(input.device_changes().is_empty() && input.pad_changes().is_empty());
+        assert_eq!(input.touch_look(), [0.0, 0.0]);
+        assert_eq!(input.touch_stick(), [0.5, -1.0]);
+        input.release_all();
+        assert_eq!(input.touch_stick(), [0.0, 0.0]);
+        assert!(!input.pad_held(GamepadButton::South));
+        assert_eq!(input.device_changes(), [(space, false)]);
+        for button in TouchButton::ALL {
+            assert_eq!(TouchButton::from_name(button.name()), Some(button));
+        }
     }
 }

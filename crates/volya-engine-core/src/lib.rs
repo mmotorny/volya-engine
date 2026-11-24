@@ -10,6 +10,7 @@ pub mod collision;
 pub mod config;
 pub mod input;
 pub mod level;
+pub mod movement;
 pub mod text;
 pub mod ui;
 pub mod vfs;

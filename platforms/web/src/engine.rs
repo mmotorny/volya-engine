@@ -186,6 +186,13 @@ pub fn draw_list(
     }
 }
 
+/// The level's controls for the page while they are live
+/// ([`App::level_controls`]): the page shows its touch controls and takes
+/// pointer lock only then.
+pub fn level_controls() -> Option<app::LevelControls> {
+    RUNNING.with(|r| r.borrow().as_ref()?.app.level_controls())
+}
+
 /// The `menu_state` op: the app's state, or `{"phase": "none"}` (or
 /// `"loading"` during the splash).
 pub fn state() -> serde_json::Value {

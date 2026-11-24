@@ -304,6 +304,14 @@ impl PlayerBody {
         self.previous = self.centre;
     }
 
+    /// Moves the body by `delta` within the step just finished (the speed
+    /// cap's position corrections, `player-movement` 6.3): unlike
+    /// [`PlayerBody::set_position`] the previous centre is kept, so the
+    /// front-side test still sees the step's crossing.
+    pub fn move_by(&mut self, delta: Vec3) {
+        self.centre = add(self.centre, delta);
+    }
+
     pub fn centre(&self) -> Vec3 {
         self.centre
     }

@@ -6,6 +6,7 @@
 // the address after `#` names the device and the state: `#iphone/home`.
 
 import { screens, start } from "../game-ui.js";
+import { createTouchControls } from "../touch-controls.js";
 import { versionText } from "../update.js";
 import { DEVICES, STATES } from "./states.js";
 
@@ -117,7 +118,22 @@ const updates = {
 
 const status = document.getElementById("status");
 globalThis.volya = {};
-if (state.startError) {
+if (state.level) {
+  // In the level: the page's own interface hides, the touch controls show
+  // over a plain backdrop.
+  document.documentElement.dataset.uxLevel = "";
+  if (device.height > device.width) document.documentElement.dataset.uxTurned = "";
+  document.querySelector("main").hidden = true;
+  const touch = createTouchControls(() => {}, { touch: true });
+  document.body.append(touch.element);
+  touch.update({ level: true, crouch: state.level.crouch, sprint: state.level.sprint });
+  if (state.level.stick) {
+    // A finger a little above the stick's resting place.
+    const box = touch.element;
+    const landscape = [Math.max(box.clientWidth, box.clientHeight), Math.min(box.clientWidth, box.clientHeight)];
+    touch.showStick([140, landscape[1] - 150], state.level.stick);
+  }
+} else if (state.startError) {
   status.textContent = `Volya Engine · ${versionText()}`;
   status.dataset.state = "ready";
   screens.showProblem(new Error(state.startError));

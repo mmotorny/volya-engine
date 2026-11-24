@@ -67,6 +67,26 @@ export const SECTIONS = [
       { id: "home-finish", name: "Update downloaded", game: imported, updates: { status: "ready" } },
     ],
   },
+  // The level's touch controls over a plain backdrop (the board can't show
+  // the game's own frames), on touch devices only.
+  {
+    title: "In the level",
+    states: [
+      { id: "level-touch", name: "Touch controls", level: {}, devices: ["iphone", "iphone-landscape"] },
+      {
+        id: "level-touch-moving",
+        name: "Moving with the stick",
+        level: { stick: [0.45, -0.85] },
+        devices: ["iphone", "iphone-landscape"],
+      },
+      {
+        id: "level-touch-toggles",
+        name: "Crouching and sprint on",
+        level: { crouch: true, sprint: true },
+        devices: ["iphone", "iphone-landscape"],
+      },
+    ],
+  },
   {
     title: "Settings",
     states: [

@@ -18,6 +18,9 @@
 //! | `["key", name, pressed]` | key ([`Key::name`]), no auto-repeat |
 //! | `["pad", name, pressed]` | gamepad button ([`GamepadButton::name`]) |
 //! | `["axis", name, value]` | gamepad axis ([`GamepadAxis::name`]) |
+//! | `["stick", x, y]` | the on-screen move stick's deflection, −1 … +1 (+y down) |
+//! | `["look", dx, dy]` | a drag on the on-screen look area |
+//! | `["tbutton", name, pressed]` | an on-screen button ([`TouchButton::name`]) |
 //! | `["blur"]` | the page lost focus: release everything |
 
 use std::cell::RefCell;
@@ -26,7 +29,7 @@ use std::collections::VecDeque;
 use js_sys::Array;
 use serde::Serialize;
 use volya_engine::core::input::{
-    Action, Event, GamepadAxis, GamepadButton, Input, Key, MouseButton, TouchPhase,
+    Action, Event, GamepadAxis, GamepadButton, Input, Key, MouseButton, TouchButton, TouchPhase,
 };
 use wasm_bindgen::JsValue;
 
@@ -162,6 +165,12 @@ fn decode(message: &Array) -> Result<Option<Vec<Event>>, JsValue> {
         "axis" => Event::GamepadAxis {
             axis: GamepadAxis::from_name(&text(1)?).ok_or_else(bad)?,
             value: num(2)? as f32,
+        },
+        "stick" => Event::TouchStick { value: at()? },
+        "look" => Event::TouchLook { delta: at()? },
+        "tbutton" => Event::TouchButton {
+            button: TouchButton::from_name(&text(1)?).ok_or_else(bad)?,
+            pressed: flag(2)?,
         },
         "blur" => return Ok(None),
         _ => return Err(bad()),

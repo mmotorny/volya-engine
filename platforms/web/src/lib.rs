@@ -139,6 +139,16 @@ pub fn input_capture() -> bool {
     input::capture()
 }
 
+/// The level's controls for the page: 0 while they are not live, else 1,
+/// plus 2 while the crouch toggle is engaged and 4 while a sprint is
+/// requested.
+#[wasm_bindgen]
+pub fn level_controls() -> u32 {
+    engine::level_controls().map_or(0, |c| {
+        1 | u32::from(c.crouch) << 1 | u32::from(c.sprint) << 2
+    })
+}
+
 /// Engine interface for the page, tests and debugging: runs `op` with JSON
 /// `args` and returns its JSON result.
 #[wasm_bindgen]
