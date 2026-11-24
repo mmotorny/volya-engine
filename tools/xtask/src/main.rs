@@ -16,9 +16,10 @@ Usage: cargo xtask <task>
 
 Tasks:
   check       Fast static checks (SPDX, licenses, fmt, clippy). Gates every push.
-  e2e [TARGET...]
+  e2e [TARGET...] [SUITE...]
               Native tests, then browser suites on TARGETs (chrome, iphone;
-              default: all). On demand only.
+              default: all). Naming SUITEs runs only those, without the
+              native tests. On demand only.
   web [--dev] Build the web app into dist/ (release unless --dev).
   deploy      Check, build and publish to GitHub Pages (gh-pages branch).
   update      Move to the latest stable Rust and dependencies, then check.";

@@ -11,14 +11,14 @@ The game renders to an opaque WebGPU canvas, so DOM-level tools can't see it. Te
 
 ## Tooling
 
-All testing is local. `cargo xtask check` runs fast static checks (SPDX, licenses, fmt, clippy) and gates every push. `cargo xtask e2e [chrome] [iphone]` runs native tests, builds the web app and runs every browser suite on each target, on demand only.
+All testing is local. `cargo xtask check` runs fast static checks (SPDX, licenses, fmt, clippy) and gates every push. `cargo xtask e2e [chrome] [iphone] [suite...]` runs native tests, builds the web app and runs every browser suite on each target, on demand only; naming suites runs only those (no native tests), e.g. `cargo xtask e2e chrome render`.
 
 | Layer | How | Where |
 |---|---|---|
 | Native tests | `cargo test` | Mac |
 | Browser suites | `tests/browser/<suite>.js`, run by `harness.js`; the dev server serves them under `/volya-engine/__test/`, never in `dist/` | Headless desktop Chrome; Mobile Safari in a dedicated `Volya iPhone 17 Pro Max` simulator (created on first run, left booted) |
 
-Add a browser suite by creating `tests/browser/<suite>.js` exporting `tests` (name → function, may be async), a `<suite>.html` page calling `runPage("<suite>")`, and listing it in `SUITES` in `tools/xtask/src/e2e.rs`. A test may return a string note for the report. Tests report what really happens; failures a target is known to have (the iOS Simulator has no WebGPU adapter) are turned into skips by `KNOWN_FAILURES` in `tools/xtask/src/e2e.rs`.
+Add a browser suite by creating `tests/browser/<suite>.js` exporting `tests` (name → function, may be async), a `<suite>.html` page calling `runPage("<suite>")`, and listing it in `SUITES` in `tools/xtask/src/e2e.rs`. A test may return a string note for the report. Tests report what really happens; failures a target is known to have (the iOS Simulator has no WebGPU adapter: WebKit disables WebGPU on simulators, whose Metal reports GPU family Apple2, below the Apple4 it needs; WebKit bug 285709) are turned into skips by `KNOWN_FAILURES` in `tools/xtask/src/e2e.rs`.
 
 ### Shared conformance checks
 

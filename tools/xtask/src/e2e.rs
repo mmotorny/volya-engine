@@ -37,14 +37,29 @@ const SIMULATOR_NAME: &str = "Volya iPhone 17 Pro Max";
 const SIMULATOR_TYPE: &str = "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max";
 const IOS_RUNTIME_PREFIX: &str = "com.apple.CoreSimulator.SimRuntime.iOS-";
 
-pub fn run(targets: &[&str]) -> Result {
-    let targets = if targets.is_empty() { TARGETS } else { targets };
-    if let Some(bad) = targets.iter().find(|t| !TARGETS.contains(t)) {
-        return Err(format!("unknown target {bad}; expected one of {TARGETS:?}"));
+/// Runs `args` (targets and suite names, in any order): every suite on every
+/// target by default. Naming suites runs only those, without the native
+/// tests (run them with `cargo test`).
+pub fn run(args: &[&str]) -> Result {
+    if let Some(bad) = args
+        .iter()
+        .find(|a| !TARGETS.contains(a) && !SUITES.contains(a))
+    {
+        return Err(format!(
+            "unknown argument {bad}; expected targets {TARGETS:?} or suites {SUITES:?}"
+        ));
     }
+    let named = |all: &'static [&'static str]| -> Vec<&'static str> {
+        let some: Vec<_> = all.iter().copied().filter(|x| args.contains(x)).collect();
+        if some.is_empty() { all.to_vec() } else { some }
+    };
+    let targets = named(TARGETS);
+    let suites = named(SUITES);
 
-    step("Native tests");
-    run_cmd(&mut cmd("cargo", &["test", "--workspace"]))?;
+    if suites.len() == SUITES.len() {
+        step("Native tests");
+        run_cmd(&mut cmd("cargo", &["test", "--workspace"]))?;
+    }
     web(Profile::Release)?;
 
     let (tx, reports) = mpsc::channel();
@@ -67,8 +82,8 @@ pub fn run(targets: &[&str]) -> Result {
     thread::spawn(move || server.run(listener));
 
     let mut failures = Vec::new();
-    for &target in targets {
-        for &suite in SUITES {
+    for &target in &targets {
+        for &suite in &suites {
             step(&format!("Browser suite {suite} on {target}"));
             let id = run_id(target, suite);
             let url = format!("http://localhost:{port}{BASE}__test/run/{id}/{suite}.html");

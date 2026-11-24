@@ -14,10 +14,10 @@
 - No shell scripts: project tasks live in `tools/xtask` (`cargo xtask <task>`).
 - Live at head: run `cargo xtask update` when starting a chunk of work; fix what it breaks rather than pinning.
 - Run `cargo xtask check` (fast static checks) before every push; it must pass.
-- Iteration speed first: before reporting done, run only high-ROI tests directly related to the change. End-to-end and multi-device tests (`cargo xtask e2e`) run only on demand; never block normal interaction on them.
+- Iteration speed first: before reporting done, run the cheapest tests that prove the change: unit tests, then one browser suite on one target (`cargo xtask e2e <target> <suite>`). The full `cargo xtask e2e` only for changes crossing page and engine, or on demand; never block normal interaction on it.
 - Avoid GitHub CI whenever possible (cost); all testing runs locally.
 - Work by the priorities in docs/roadmap.md; record roadmap decisions there, not here.
-- Agents test desktop Chrome and Mobile Safari in the iOS Simulator. The user is not QA: never ask them to run tests or checks; real-device feedback comes only from them using the deployed app.
+- Exactly two browser targets; don't add more. Desktop Chrome (headless, the only one that draws) is the default. The iOS Simulator (no WebGPU: WebKit refuses its GPU) only for changes to the page, input, audio or storage. WebKit drawing is checked by the user's use of the deployed app; a drawing bug Chrome can't reproduce gets a one-off look in desktop Safari, not a target. The user is not QA: never ask them to run tests or checks; real-device feedback comes only from them using the deployed app.
 - Web build must keep functional parity between mobile and desktop browsers; every feature ships with both input paths (touch and keyboard/mouse/gamepad) and is tested on both.
 - Dependencies must be permissively licensed (no copyleft, including LGPL/MPL).
 - Never use or derive from leaked X-Ray source or its forks (e.g. OpenXRay).
