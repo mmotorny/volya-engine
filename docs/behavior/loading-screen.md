@@ -94,8 +94,8 @@ caption does not overlap it).
 - Vertex colour 0xFFFFFFFF at all four corners.
 - Texture coordinates: u = 0 … 1024 / *T*w, v = 0 … 768 / *T*h, where *T*w × *T*h is the texture's size
   (1024 × 1024, so u 0 … 1, v 0 … 0.75: the top 1024 × 768 texels). The left/top screen edge gets u/v 0.
-- If the background's shader could not be created, the whole screen is instead cleared to black (colour
-  0, depth 1) and nothing else of the image is drawn. This does not happen with the shipped data.
+- If the background's shader could not be created, the colour buffer is instead cleared to black
+  (colour 0; depth is not cleared) and nothing else of the image is drawn. This does not happen with the shipped data.
 
 ### 4.2 Progress strip
 
@@ -164,9 +164,15 @@ on (section 10.4).
 - Shader `font` (blending as for glyphs; alpha test reference 32), vertex colour 0xFFFFFFFF.
 - Texture coordinates: the whole texture, u 0 … 1 left to right, v 0 … 1 top to bottom, stretched over
   the picture rectangle (section 3) whatever the texture size.
-- **When it is shown:** only once the level has been determined, i.e. from caption 7 (`st_opening_stream`)
-  of section 5 onwards, including the 30 overlay frames. Captions 1–6 are shown without a picture (the
-  area shows the background).
+- **When it is shown:** from the first image drawn after the level has been determined. On a New Game
+  the level is first determined during the work of caption 4 (`st_creating_new_game`): when the game's
+  objects are created from `spawns\all.spawn`, the creation of the player object (the record whose spawn
+  flags have bit 0x08 set, section 8.4) makes the life simulation select the level of the player's
+  game-graph vertex (scoping specification, section 2.2: `l01_escape`), and this selects the picture. So
+  the picture is drawn from caption 5 (`st_server_connecting`) onwards, including the 30 overlay frames;
+  captions 1–4 are shown without it (the area shows the background). When the client later starts loading
+  the level (caption 7) the same picture is selected again; nothing changes on screen. Nothing removes the
+  picture before the end of the overlay frames.
 
 ## 5. Stage sequence
 
@@ -178,10 +184,10 @@ Russian texts are those of `config\text\rus\ui_st_other.xml` with the `...` adde
 | 1 | `st_prefetching_objects` | Кэширование объектов... | Pre-creating game objects and loading models for later use (skipped work with `-noprefetch`; the caption is still shown). Only when the game type changes, see below. |
 | 2 | `st_server_starting` | Сервер: Старт... | The local server is created for the game type `single`. |
 | 3 | `st_loading_alife_simulator` | Сервер: Загрузка симуляции жизни... | The life simulation is set up. |
-| 4 | `st_creating_new_game` | Создание новой игры... | A new game is created from `spawns\all.spawn` and `game.graph` (scoping specification, section 2.2). |
+| 4 | `st_creating_new_game` | Создание новой игры... | A new game is created from `spawns\all.spawn` and `game.graph` (scoping specification, section 2.2); the level and its picture are determined here (section 4.5). |
 | 5 | `st_server_connecting` | Сервер: Соединяемся... | The server finishes creating the game. |
 | 6 | `st_client_connecting_to` + address | Клиент: Соединение с localhost... | The client connects to the local server. The address is the client parameter of the start command up to its first `/` (`localhost`; at most 63 bytes). |
-| 7 | `st_opening_stream` | Открытие потока... | The file `level` is opened (`levels\l01_escape\level.ltx` was read just before, under caption 6); the level picture appears. |
+| 7 | `st_opening_stream` | Открытие потока... | The file `level` is opened (`levels\l01_escape\level.ltx` was read just before, under caption 6). |
 | 8 | `st_loading_cform` | Загрузка формы объектов... | `level.cform` (collision). |
 | 9 | `st_loading_shaders` | Загрузка шейдеров... | The level's shader list (from `level`). |
 | 10 | `st_loading_geometry` | Загрузка геометрии... | `level.geom` (and `level.geomx` with the second renderer). |
@@ -270,6 +276,12 @@ strip-band alpha mean is 134.07 with truncation and 134.10 with exact or rounded
 All 17 caption ids are in `config\text\rus\ui_st_other.xml` (dbb, 6,609 bytes) and nowhere else in the
 string tables. The file also holds `st_loading_saved_game` (Загрузка игры) and `st_validating_cdkey`, which
 New Game does not show.
+
+### 8.4 The player object in `spawns\all.spawn`
+
+Of the 8,641 spawn records (start-position specification, section 3), exactly one has bit 0x08 set in its
+spawn-record flags: the actor (index 63, section `actor`, flags `0x0029`); all others have `0x0021`
+(8,629) or `0x0023` (11). Its game-graph vertex 4 lies on level id 1, `l01_escape`.
 
 ## 9. Corrections to the scoping specification
 
