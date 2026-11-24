@@ -13,6 +13,14 @@ html, body {
   font: 16px/1.4 system-ui, sans-serif;
 }
 
+/* The engine owns the screen and its input (input.js): no page gestures. */
+html[data-engine-input] {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
 canvas#view {
   position: fixed;
   inset: 0;

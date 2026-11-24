@@ -6,6 +6,7 @@
 
 pub mod audio;
 pub mod config;
+pub mod input;
 pub mod text;
 pub mod ui;
 pub mod vfs;

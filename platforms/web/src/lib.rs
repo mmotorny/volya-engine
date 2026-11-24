@@ -11,6 +11,7 @@ mod audio;
 mod game;
 mod gpu;
 mod import;
+mod input;
 mod opfs;
 
 use serde::Serialize;
@@ -32,12 +33,27 @@ pub async fn start(canvas: OffscreenCanvas) {
 #[wasm_bindgen]
 pub fn resize(width: f64, height: f64, dpr: f64) {
     gpu::resize(width, height, dpr);
+    input::resize(width, height);
 }
 
 /// Runs one animation frame; `time` in milliseconds.
 #[wasm_bindgen]
 pub fn frame(time: f64) {
     gpu::frame(time);
+    input::end_frame();
+}
+
+/// One input message from the page (format in the `input` module).
+#[wasm_bindgen]
+pub fn input(message: js_sys::Array) -> Result<(), JsValue> {
+    input::handle(&message)
+}
+
+/// Whether the engine owns the screen, so the page should forward input to
+/// it. Off by default; the `input_capture` op sets it.
+#[wasm_bindgen]
+pub fn input_capture() -> bool {
+    input::capture()
 }
 
 /// Engine interface for the page, tests and debugging: runs `op` with JSON
@@ -91,6 +107,11 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         "read_head" => {
             let max = args.get("max").and_then(|v| v.as_u64()).unwrap_or(4096);
             to_json(&game::read_head(text("path"), max)?)
+        }
+        "input_state" => to_json(&input::state()),
+        "input_capture" => {
+            input::set_capture(args.get("on").and_then(|v| v.as_bool()).unwrap_or(false));
+            Ok("null".into())
         }
         _ => Err(JsValue::from_str(&format!("unknown op {op:?}"))),
     }

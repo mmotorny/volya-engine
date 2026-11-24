@@ -8,10 +8,13 @@
 //   { type: "call", id, op, args }  → { type: "result", id, result } | { type: "result", id, error }
 //   { type: "audio", port, sampleRate } connects the page's AudioWorklet; it
 //   then asks this worker for mixed blocks directly over `port`.
+//   { type: "input", event }: one input event (format in src/input.rs).
+// To the page, besides replies: { type: "capture", on } whenever the engine
+// starts or stops owning the screen; the page forwards input only while on.
 // Once started, the worker runs a frame loop on requestAnimationFrame where
 // workers have it, otherwise on a 60 Hz timer.
 
-import init, { start, call, resize, frame, audio_init, audio_mix } from "./pkg/volya_engine_web.js";
+import init, { start, call, resize, frame, audio_init, audio_mix, input, input_capture } from "./pkg/volya_engine_web.js";
 
 const message = (error) => String(error?.message ?? error);
 
@@ -19,9 +22,20 @@ const nextFrame = self.requestAnimationFrame
   ? (callback) => self.requestAnimationFrame(callback)
   : (callback) => setTimeout(() => callback(performance.now()), 1000 / 60);
 
+let capture = false;
+/** Tells the page when input capture changed (after calls and frames). */
+function syncCapture() {
+  const on = input_capture();
+  if (on !== capture) {
+    capture = on;
+    postMessage({ type: "capture", on });
+  }
+}
+
 function loop(time) {
   try {
     frame(time);
+    syncCapture();
   } catch (error) {
     // A broken engine stops drawing; calls report their own errors.
     console.error(`frame: ${message(error)}`);
@@ -55,11 +69,25 @@ onmessage = async ({ data }) => {
       const block = audio_mix(request.need);
       data.port.postMessage(block, [block.buffer]);
     };
-  } else if (data.type === "call") {
+  } else if (data.type === "input") {
     try {
-      postMessage({ type: "result", id: data.id, result: JSON.parse(await call(data.op, JSON.stringify(data.args ?? {}))) });
+      input(data.event);
     } catch (error) {
-      postMessage({ type: "result", id: data.id, error: message(error) });
+      console.warn(`input: ${message(error)}`);
     }
+  } else if (data.type === "call") {
+    let reply;
+    try {
+      reply = { type: "result", id: data.id, result: JSON.parse(await call(data.op, JSON.stringify(data.args ?? {}))) };
+    } catch (error) {
+      reply = { type: "result", id: data.id, error: message(error) };
+    }
+    // Before the reply, so a caller turning capture on finds the page forwarding.
+    try {
+      syncCapture();
+    } catch {
+      // The engine is not initialized: capture is still off.
+    }
+    postMessage(reply);
   }
 };

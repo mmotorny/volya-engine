@@ -4,6 +4,8 @@
 // Page side: owns the DOM, starts the engine worker and talks to it only by
 // message (docs/architecture.md).
 
+import { startInput } from "./input.js";
+
 // Installable app: offline start and updates (sw.js). Registered relative to
 // this module so the scope is the app's base path.
 navigator.serviceWorker?.register(new URL("./sw.js", import.meta.url)).catch((error) => {
@@ -13,11 +15,14 @@ navigator.serviceWorker?.register(new URL("./sw.js", import.meta.url)).catch((er
 const worker = new Worker(new URL("./engine-worker.js", import.meta.url), { type: "module" });
 const pending = new Map();
 let nextId = 0;
+// Set once the canvas exists, below; capture starts off.
+let setCapture = () => {};
 
 const started = new Promise((resolve, reject) => {
   worker.onmessage = ({ data }) => {
     if (data.type === "started") resolve();
     else if (data.type === "error") reject(new Error(data.message));
+    else if (data.type === "capture") setCapture(data.on);
     else if (data.type === "result") {
       const { resolve, reject } = pending.get(data.id);
       pending.delete(data.id);
@@ -62,6 +67,8 @@ addEventListener("pageshow", (event) => event.persisted && location.reload());
 // The engine sizes the canvas in device pixels from these.
 const view = document.getElementById("view");
 const size = () => ({ width: view.clientWidth, height: view.clientHeight, dpr: devicePixelRatio });
+// Input goes to the engine only while it owns the screen (input.js).
+setCapture = startInput(view, (event) => worker.postMessage({ type: "input", event }));
 const canvas = view.transferControlToOffscreen();
 worker.postMessage({ type: "start", canvas, size: size() }, [canvas]);
 const resized = () => worker.postMessage({ type: "resize", ...size() });
