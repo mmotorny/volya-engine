@@ -20,6 +20,8 @@ Tasks:
               Native tests, then browser suites on TARGETs (chrome, iphone;
               default: all). Naming SUITEs runs only those, without the
               native tests. On demand only.
+  sim STEP...  Real touches in the iOS Simulator (tools/simdriver): runs the
+              steps, e.g. 'open URL' 'tap-text Play' 'screenshot out.png'.
   web [--dev] Build the web app into dist/ (release unless --dev).
   deploy      Check, build and publish to GitHub Pages (gh-pages branch).
   update      Move to the latest stable Rust and dependencies, then check.";
@@ -37,6 +39,7 @@ fn main() -> ExitCode {
     let result = match args.as_slice() {
         ["check"] => check(),
         ["e2e", targets @ ..] => e2e::run(targets),
+        ["sim", steps @ ..] if !steps.is_empty() => e2e::sim(steps),
         ["web"] => web(Profile::Release),
         ["web", "--dev"] => web(Profile::Dev),
         ["deploy"] => deploy::run_deploy(),
@@ -231,7 +234,18 @@ fn copy_dir(from: &Path, to: &Path) -> io::Result<()> {
 
 /// Source files that must carry SPDX headers.
 const SPDX_PATTERNS: &[&str] = &[
-    "*.rs", "*.sh", "*.js", "*.mjs", "*.html", "*.css", "*.svg", "*.toml", "*.wgsl",
+    "*.rs",
+    "*.sh",
+    "*.js",
+    "*.mjs",
+    "*.html",
+    "*.css",
+    "*.svg",
+    "*.toml",
+    "*.wgsl",
+    "*.swift",
+    "*.pbxproj",
+    "*.xcscheme",
 ];
 
 fn check_spdx() -> Result {

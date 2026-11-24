@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-FileCopyrightText: 2026 Maksym Motorny -->
+<!-- SPDX-License-Identifier: BSD-3-Clause -->
+<Scheme LastUpgradeVersion = "2700" version = "1.7">
+   <TestAction buildConfiguration = "Debug" selectedDebuggerIdentifier = "" selectedLauncherIdentifier = "Xcode.IDEFoundation.Launcher.PosixSpawn" shouldUseLaunchSchemeArgsEnv = "YES">
+      <Testables>
+         <TestableReference skipped = "NO">
+            <BuildableReference BuildableIdentifier = "primary" BlueprintIdentifier = "A10000000000000000000008" BuildableName = "SimDriverUITests.xctest" BlueprintName = "SimDriverUITests" ReferencedContainer = "container:SimDriver.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+      </Testables>
+   </TestAction>
+</Scheme>

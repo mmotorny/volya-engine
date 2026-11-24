@@ -222,6 +222,49 @@ fn iphone(url: &str, id: &str, reports: &Receiver<String>, timeout: Duration) ->
     wait_report(id, reports, timeout)
 }
 
+/// Runs `steps` (one per argument; see tools/simdriver) in the test
+/// simulator with real touches, through an XCUITest that drives Safari.
+pub fn sim(steps: &[&str]) -> Result {
+    let udid = simulator()?;
+    run_cmd(cmd("xcrun", &["simctl", "bootstatus", &udid, "-b"]).stdout(Stdio::null()))?;
+    let derived = root().join("target/simdriver");
+    let derived = derived.to_str().ok_or("non-UTF-8 path")?;
+    let out = cmd(
+        "xcodebuild",
+        &[
+            "test",
+            "-project",
+            "tools/simdriver/SimDriver.xcodeproj",
+            "-scheme",
+            "SimDriver",
+            "-destination",
+            &format!("id={udid}"),
+            "-derivedDataPath",
+            derived,
+        ],
+    )
+    .current_dir(root())
+    // xcodebuild passes TEST_RUNNER_-prefixed variables to the test.
+    .env("TEST_RUNNER_SIMDRIVER_SCRIPT", steps.join("\n"))
+    .output()
+    .map_err(|e| format!("xcodebuild: {e}"))?;
+    let log = String::from_utf8_lossy(&out.stdout);
+    let relevant = |l: &&str| {
+        l.contains("simdriver: ")
+            || l.contains("error:")
+            || l.contains(": failed")
+            || l.contains("XCTAssert")
+    };
+    for line in log.lines().filter(relevant) {
+        println!("{}", line.trim());
+    }
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err("simulator steps failed (see above)".into())
+    }
+}
+
 fn simulator() -> Result<String> {
     let devices = output(&mut cmd(
         "xcrun",

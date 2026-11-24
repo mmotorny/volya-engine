@@ -40,6 +40,10 @@ Archive tests (`tests/gog.rs` of `volya-engine-formats`, `volya-engine-core`, `v
 
 Dev CLI for archives: `cargo run -p volya-engine-formats --bin volya-engine-db -- list <archive>` or `dump <archive> <stored path>`.
 
+### Real touches in the simulator
+
+`cargo xtask sim STEP...` drives Safari in the test simulator with real touches (`tools/simdriver`, an XCUITest; no window, no extra permissions), for what in-page synthesized input can't reach: system sheets such as the file picker, iOS gestures, the path from the screen to the page. Steps: `open <url>`, `wait <s>`, `tap <x> <y>` (screen points), `tap-text <label>`, `hold <x> <y> <s>`, `drag <x1> <y1> <x2> <y2>`, `expect-text <label>`, `screenshot <path>`. A step that fails stops the run with the reason. Example: `cargo xtask sim "open http://localhost:8080/volya-engine/" "tap-text Play" "wait 3" "screenshot /tmp/s.png"`. XCUITest can't hold independent fingers on different spots at once; multi-finger input stays covered by in-page tests. Files for pickers go in the simulator's "On My iPhone" folder: the `File Provider Storage` directory of the `group.com.apple.FileProvider.LocalStorage` app group in the device's data.
+
 ### Setup
 
 - rustup (installs the toolchain from `rust-toolchain.toml`; `xtask` installs the matching `wasm-bindgen` CLI).
