@@ -237,11 +237,6 @@ fn inject_build(dist: &Path) -> Result {
         &format!(r#"export const BUILD = "{commit}";"#),
     )?;
     replace_once(
-        &dist.join("ux-audit/index.html"),
-        r#"<meta name="build" content="dev">"#,
-        &format!(r#"<meta name="build" content="{commit}">"#),
-    )?;
-    replace_once(
         &dist.join("update.js"),
         r#"export const BUILT = "";"#,
         &format!(r#"export const BUILT = "{}";"#, date.trim()),

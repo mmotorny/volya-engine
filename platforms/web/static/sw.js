@@ -14,8 +14,6 @@
 //   running page never gets files of another version. Activation deletes
 //   copies of files that left the build.
 // - Kept files are served from the cache; anything else goes to the network.
-//   The UX audit pages always get the network (revalidated), so they show
-//   the deployed version.
 //
 // Downloading an update needs consent: automatic updates (the default), or
 // the player's tap for this version when they turned them off (metered
@@ -99,17 +97,8 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   url.search = "";
   url.hash = "";
-  const precached = PRECACHE.some(([path]) => absolute(path) === url.href);
+  if (!PRECACHE.some(([path]) => absolute(path) === url.href)) return;
   event.respondWith(
-    (async () => {
-      // The UX audit pages show the deployed app, not this worker's copy:
-      // their requests (the board, its frames and the app files the frames
-      // load) go to the network, revalidated.
-      const client = event.clientId ? await self.clients.get(event.clientId) : null;
-      const page = client?.url ?? (request.mode === "navigate" ? request.url : "");
-      if (page.startsWith(absolute("ux-audit/"))) return fetch(request, { cache: "no-cache" });
-      if (precached) return (await (await caches.open(CACHE)).match(url.href)) ?? fetch(request);
-      return fetch(request);
-    })(),
+    (async () => (await (await caches.open(CACHE)).match(url.href)) ?? fetch(request))(),
   );
 });

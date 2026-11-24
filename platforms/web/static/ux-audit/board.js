@@ -19,9 +19,7 @@ const lengths = new Map();
 /** Each state's screen text per device, as its frames report it. */
 const texts = new Map();
 
-document
-  .querySelector(".title")
-  .insertAdjacentHTML("beforeend", `<span class="build">${versionText()}</span><button class="check" type="button">Check for update</button>`);
+document.querySelector(".title").insertAdjacentHTML("beforeend", `<span class="build">${versionText()}</span>`);
 
 const shown = new Set(DEVICES.filter((d) => !d.hidden).map((d) => d.id));
 for (const device of DEVICES) {
@@ -142,33 +140,6 @@ document.addEventListener("visibilitychange", () => document.visibilityState ===
 // The board is built after load, so the browser can't restore the scroll.
 history.scrollRestoration = "manual";
 
-// Check for update: on request only, every 10 s up to 12 times (GitHub Pages
-// serves a deploy a minute or two later, from many servers); a newer build
-// reloads the board, keeping the view. This page isn't kept offline, so
-// checks reach the network.
-const CHECKS = 12;
-const CHECK_EVERY_MS = 10_000;
-const build = () => document.querySelector('meta[name="build"]').content;
-async function deployedBuild() {
-  const html = await (await fetch(location.pathname, { cache: "no-store" })).text();
-  return new DOMParser().parseFromString(html, "text/html").querySelector('meta[name="build"]')?.content;
-}
-const checkButton = document.querySelector(".check");
-checkButton.addEventListener("click", async () => {
-  checkButton.disabled = true;
-  for (let attempt = 1; attempt <= CHECKS; attempt++) {
-    checkButton.textContent = `Checking… ${attempt}/${CHECKS}`;
-    const latest = await deployedBuild().catch(() => null);
-    if (latest && latest !== build()) {
-      saveView();
-      location.reload();
-      return;
-    }
-    if (attempt < CHECKS) await new Promise((resolve) => setTimeout(resolve, CHECK_EVERY_MS));
-  }
-  checkButton.textContent = "No newer build · Check again";
-  checkButton.disabled = false;
-});
 let saved = null;
 try {
   saved = JSON.parse(localStorage.getItem(VIEW) ?? "null");
