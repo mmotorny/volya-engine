@@ -15,7 +15,6 @@ pub use volya_engine_render as render;
 
 pub mod app;
 pub mod audio;
-pub mod cover;
 pub mod data;
 mod draw;
 #[cfg(test)]

@@ -123,8 +123,80 @@ main {
 
 .brand .logo {
   display: block;
-  width: min(52vw, 230px);
+  width: min(46vw, 200px);
   height: auto;
+}
+
+/* The compact lockup, for short screens: the drawing beside the wordmark. */
+.brand .lockup {
+  display: none;
+  align-items: center;
+  gap: 0.9rem;
+}
+
+.brand .lockup img:first-child {
+  height: 56px;
+}
+
+.brand .lockup img:last-child {
+  height: 18px;
+}
+
+/* Deeper screens (Settings) leave the logo to Home. */
+html[data-screen="settings"] .brand {
+  display: none;
+}
+
+/* Moving between screens: a short slide, forward into deeper screens and
+   back out of them (navigate() in game-ui.js). */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 0.24s;
+  animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+
+html[data-nav="forward"]::view-transition-old(root) {
+  animation-name: slide-out-left;
+}
+
+html[data-nav="forward"]::view-transition-new(root) {
+  animation-name: slide-in-right;
+}
+
+html[data-nav="back"]::view-transition-old(root) {
+  animation-name: slide-out-right;
+}
+
+html[data-nav="back"]::view-transition-new(root) {
+  animation-name: slide-in-left;
+}
+
+@keyframes slide-in-right {
+  from {
+    transform: translateX(30%);
+    opacity: 0;
+  }
+}
+
+@keyframes slide-out-left {
+  to {
+    transform: translateX(-30%);
+    opacity: 0;
+  }
+}
+
+@keyframes slide-in-left {
+  from {
+    transform: translateX(-30%);
+    opacity: 0;
+  }
+}
+
+@keyframes slide-out-right {
+  to {
+    transform: translateX(30%);
+    opacity: 0;
+  }
 }
 
 /* Footer: the version line, a drawing's title-block note, and the source. */
@@ -304,8 +376,8 @@ button.danger.filled:hover:not(:disabled) {
   margin-bottom: 0;
 }
 
-/* Art from the player's own game across the top of the Ready panel, fading
-   into it. */
+/* The player's own game's splash picture across the top of the Ready panel,
+   whole, fading into it. */
 .panel.ready {
   overflow: hidden;
 }
@@ -313,10 +385,8 @@ button.danger.filled:hover:not(:disabled) {
 .panel.ready .cover {
   display: block;
   width: calc(100% + 2.5rem);
-  height: 11rem;
+  height: auto;
   margin: -1.25rem -1.25rem 1rem;
-  object-fit: cover;
-  object-position: center top;
   -webkit-mask-image: linear-gradient(#000 55%, transparent);
   mask-image: linear-gradient(#000 55%, transparent);
 }
@@ -470,6 +540,23 @@ progress::-moz-progress-bar {
   background: var(--ink);
 }
 
+/* A stopped import's bar takes its notice's colour. */
+progress.warning::-webkit-progress-value {
+  background: #f5c26b;
+}
+
+progress.problem::-webkit-progress-value {
+  background: var(--danger);
+}
+
+progress.warning::-moz-progress-bar {
+  background: #f5c26b;
+}
+
+progress.problem::-moz-progress-bar {
+  background: var(--danger);
+}
+
 .message {
   font-size: 0.875rem;
   color: var(--ink-2);
@@ -486,40 +573,33 @@ progress::-moz-progress-bar {
   margin-top: 0.4rem;
 }
 
+.panel a {
+  color: var(--line);
+  text-underline-offset: 0.15em;
+}
+
+.panel a:hover {
+  color: var(--ink);
+}
+
 code {
   font: 0.875em var(--mono);
   color: var(--ink);
 }
 
-/* Landscape phones: brand beside the content to save height. */
+/* Landscape phones: the same layout as portrait, with the compact lockup
+   to save height. */
 @media (orientation: landscape) and (max-height: 500px) {
   main {
-    max-width: 54rem;
-    display: grid;
-    grid-template-columns: 14rem 1fr;
-    column-gap: 2rem;
-    grid-template-rows: auto 1fr;
-    align-items: start;
-    padding-top: calc(env(safe-area-inset-top) + 1.25rem);
-  }
-
-  .brand {
-    grid-row: 1 / span 2;
-    position: sticky;
-    top: 1.25rem;
-    margin: 0;
-    text-align: center;
+    max-width: 40rem;
+    padding-top: calc(env(safe-area-inset-top) + 1rem);
   }
 
   .brand .logo {
-    width: 12rem;
+    display: none;
   }
 
-  #game {
-    grid-column: 2;
-  }
-
-  footer {
-    grid-column: 2;
+  .brand .lockup {
+    display: flex;
   }
 }

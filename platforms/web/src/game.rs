@@ -277,16 +277,16 @@ pub struct Cover {
     rgba: String,
 }
 
-/// Art from the imported game for the home screen (volya_engine::cover).
-pub fn cover() -> Result<Cover, JsValue> {
+/// Art from the imported game for the home screen: its splash picture
+/// (startup.md section 3), `None` when the game has none.
+pub fn cover() -> Result<Option<Cover>, JsValue> {
     with_game(|game| {
-        let aliases = volya_engine::data::read_aliases(Some(game.opfs)).map_err(error)?;
-        let image = volya_engine::cover::read(&game.tree, &aliases).map_err(error)?;
-        Ok(Cover {
+        let splash = volya_engine::app::splash(game.opfs).map_err(error)?;
+        Ok(splash.map(|image| Cover {
             width: image.width,
             height: image.height,
-            rgba: base64(&image.rgba),
-        })
+            rgba: base64(&image.pixels),
+        }))
     })
 }
 

@@ -59,7 +59,8 @@ const call = async (op) => {
  * can't ship game assets): a dark, grainy plate with a note.
  */
 function placeholderArt() {
-  const [width, height] = [512, 384];
+  // The splash's size (startup.md section 3).
+  const [width, height] = [500, 268];
   const canvas = new OffscreenCanvas(width, height);
   const g = canvas.getContext("2d");
   const gradient = g.createLinearGradient(0, 0, width, height);
@@ -74,7 +75,7 @@ function placeholderArt() {
   g.fillStyle = "rgba(255, 235, 200, 0.55)";
   g.font = "600 30px system-ui, sans-serif";
   g.textAlign = "center";
-  g.fillText("Art from the player's game", width / 2, 90);
+  g.fillText("The game's splash picture", width / 2, height / 2);
   const rgba = g.getImageData(0, 0, width, height).data;
   let binary = "";
   for (let i = 0; i < rgba.length; i += 0x8000) binary += String.fromCharCode(...rgba.subarray(i, i + 0x8000));

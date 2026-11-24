@@ -20,7 +20,7 @@ export const SECTIONS = [
         id: "import-storage",
         name: "Not enough storage",
         game: fresh,
-        snapshot: { error: "Not enough storage: the game needs 5.56 GiB, 3.10 GiB is available." },
+        snapshot: { error: "Not enough storage: the game needs 5.56 GiB, and this browser allows Volya Engine 3.10 GiB more." },
       },
       {
         id: "import-progress",

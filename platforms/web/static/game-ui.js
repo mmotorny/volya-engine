@@ -22,7 +22,24 @@ let call;
 let updates = null;
 const root = () => document.getElementById("game");
 /** Replaces the game section's content, skipping absent (null) parts. */
-const show = (...children) => root().replaceChildren(...children.filter((c) => c !== null && c !== undefined));
+const show = (...children) => {
+  delete document.documentElement.dataset.screen;
+  root().replaceChildren(...children.filter((c) => c !== null && c !== undefined));
+};
+
+/**
+ * Moves to another screen, sliding forward (deeper, e.g. into Settings) or
+ * back; instant where the browser can't animate it or the player asked for
+ * reduced motion.
+ */
+function navigate(direction, render) {
+  if (!document.startViewTransition || matchMedia("(prefers-reduced-motion: reduce)").matches) return render();
+  document.documentElement.dataset.nav = direction;
+  const transition = document.startViewTransition(render);
+  // A quick second tap skips this animation; the screen still changes.
+  transition.ready.catch(() => {});
+  return transition.finished.finally(() => delete document.documentElement.dataset.nav);
+}
 
 const formatBytes = (n) =>
   n >= 2 ** 30 ? `${(n / 2 ** 30).toFixed(2)} GiB` : n >= 2 ** 20 ? `${(n / 2 ** 20).toFixed(1)} MiB` : n >= 1024 ? `${(n / 1024).toFixed(1)} KiB` : `${n} B`;
@@ -83,7 +100,7 @@ const bottom = (...children) => element("div", { className: "bottom" }, ...child
 
 function settingsButton() {
   const button = element("button", { className: "wide", textContent: "Settings" });
-  button.addEventListener("click", () => showSettings());
+  button.addEventListener("click", () => navigate("forward", showSettings));
   return button;
 }
 
@@ -138,7 +155,9 @@ async function runImport({ exe, bin, only }, onProgress) {
     const needed = only ? plan.files.filter((f) => only.includes(f.path)).reduce((s, f) => s + f.size, 0) : plan.total;
     const { usage, quota } = await navigator.storage.estimate();
     if (quota - usage < needed) {
-      throw new Error(`Not enough storage: the game needs ${formatBytes(needed)}, ${formatBytes(quota - usage)} is available.`);
+      // The browser's allowance for this app, not the disk's free space
+      // (browsers don't tell): say so.
+      throw new Error(`Not enough storage: the game needs ${formatBytes(needed)}, and this browser allows Volya Engine ${formatBytes(quota - usage)} more.`);
     }
     const persisted = await navigator.storage.persist();
     await request({ type: "run", bin, only });
@@ -160,7 +179,7 @@ function importProblem(message) {
   if (/^Inno Setup headers|no game archives|not an Inno/i.test(message)) {
     return {
       title: "These aren't the game's installer files",
-      text: "Volya Engine imports from the GOG offline installer of S.T.A.L.K.E.R.: Shadow of Chernobyl: its .exe and its -1.bin.",
+      text: "Choose the .exe and -1.bin downloaded from GOG.",
     };
   }
   const mismatch = message.match(/^(.*): MD5 mismatch/);
@@ -199,6 +218,7 @@ function showImport(status, snapshot = null) {
   /** A warning (amber) or a problem (red): a title and what to do. */
   const warn = ({ title, text }, kind = "problem") => {
     notice.className = `callout ${kind}`;
+    progress.className = kind;
     notice.replaceChildren(element("strong", { textContent: title }), element("span", { textContent: text }));
     notice.hidden = false;
   };
@@ -224,6 +244,7 @@ function showImport(status, snapshot = null) {
       return;
     }
     notice.hidden = true;
+    progress.className = "";
     choose.disabled = true;
     progress.hidden = false;
     say("Reading the installer…");
@@ -275,8 +296,23 @@ function showImport(status, snapshot = null) {
       element(
         "ol",
         { className: "steps" },
-        element("li", {}, "Download both installer files from GOG: ", element("code", { textContent: "setup_….exe" }), " and ", element("code", { textContent: "setup_…-1.bin" }), "."),
-        element("li", { textContent: "Choose both files below. The game is extracted into this app's storage, after which the installer files are no longer needed." }),
+        element(
+          "li",
+          {},
+          "Download both installer files from your ",
+          link("https://www.gog.com/en/account", "GOG library"),
+          " (the game's offline backup installers): ",
+          element("code", { textContent: "setup_….exe" }),
+          " and ",
+          element("code", { textContent: "setup_…-1.bin" }),
+          ". Not in your library yet? ",
+          link("https://www.gog.com/en/game/stalker_shadow_of_chernobyl", "Get it on GOG"),
+          ".",
+        ),
+        element("li", {
+          textContent:
+            "Choose both files below. The game is extracted into this app's storage, which needs room for it (on iPhone, also for a temporary copy of the installer). Afterwards the installer files are no longer needed.",
+        }),
       ),
       progress,
       message,
@@ -287,6 +323,9 @@ function showImport(status, snapshot = null) {
     bottom(updateOffer(), settingsButton()),
   );
 }
+
+/** A link that opens outside the app. */
+const link = (href, text) => element("a", { href, textContent: text, target: "_blank", rel: "noopener" });
 
 /** Engine errors start lower-case; sentences in the interface don't. */
 const sentence = (text) => text.charAt(0).toUpperCase() + text.slice(1);
@@ -369,7 +408,7 @@ async function showHome(status) {
   );
 }
 
-/** Art from the imported game (the engine decodes it), or nothing. */
+/** The imported game's splash picture (the engine decodes it), or nothing. */
 let coverImage = null;
 async function cover() {
   try {
@@ -402,7 +441,7 @@ async function showSettings() {
   const status = await call("game_status");
   const persisted = await navigator.storage.persisted();
   const back = element("button", { className: "back", textContent: "‹ Back" });
-  back.addEventListener("click", () => refresh());
+  back.addEventListener("click", () => navigate("back", refresh));
 
   const auto = element("input", { type: "checkbox", checked: updates?.auto ?? true, disabled: !updates });
   const updateLine = element("p", { className: "note" });
@@ -481,6 +520,8 @@ async function showSettings() {
         )
       : null,
   );
+  // Settings is a deeper screen: no logo (it's Home's), Back at the top.
+  document.documentElement.dataset.screen = "settings";
   back.focus();
 }
 
