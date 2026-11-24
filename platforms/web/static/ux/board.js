@@ -51,8 +51,8 @@ function render() {
   board.replaceChildren();
   nav.replaceChildren();
   for (const section of SECTIONS) {
-    const id = section.title.toLowerCase();
-    nav.insertAdjacentHTML("beforeend", `<a href="#${id}">${section.title}</a>`);
+    const id = section.title.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    nav.insertAdjacentHTML("beforeend", `<a href="#${id}">${section.proposal ? section.title.replace(/^Proposal /, "Proposal ").split(" · ")[0] : section.title}</a>`);
     const block = document.createElement("section");
     block.id = id;
     block.innerHTML = `<h2>${section.title}</h2>`;
