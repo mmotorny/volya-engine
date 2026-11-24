@@ -23,6 +23,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 inno = { version = "0.7", default-features = false }
 md-5 = "0.11"
+sha2 = "0.11"
 ogg = "0.9"
 lewton = "0.10"
 theora_nrp = "0.2"
@@ -54,6 +55,14 @@ opt-level = 3
 
 [profile.dev.package.lewton]
 opt-level = 3
+
+# The level real-data tests (volya-engine/tests/visuals.rs) walk every
+# visual of every level: about 190 s unoptimized, 25 s at opt-level 1.
+[profile.dev.package.volya-engine]
+opt-level = 1
+
+[profile.dev.package.volya-engine-formats]
+opt-level = 1
 
 [profile.release]
 opt-level = "s"
