@@ -15,6 +15,7 @@ use crate::core::text::{self, Fonts, Localization, StringTable};
 use crate::core::ui::{self, TextureSource};
 use crate::core::vfs::{self, Vfs};
 use crate::scene::TextureId;
+use crate::startup::Sequence;
 use volya_engine_formats::audio::{VorbisStream, ogg_end_granule};
 use volya_engine_formats::cp1251;
 use volya_engine_formats::dds::Dds;
@@ -115,6 +116,11 @@ pub struct GameData {
     /// video item the length of its left sound, or without a sound its
     /// video's.
     pub intro_lengths: Vec<f64>,
+    /// The New Game intro `intro_game` of the same file
+    /// (loading-screen.md section 7), when the file defines it.
+    pub intro_game: Option<MovieSequence>,
+    /// Per `intro_game` item, as [`GameData::intro_lengths`].
+    pub intro_game_lengths: Vec<f64>,
     pub quit_keys: Vec<Key>,
     /// The version string of the version caption.
     pub version: String,
@@ -182,6 +188,11 @@ impl GameData {
             )
         })?;
         let intro = MovieSequence::read(intro, &colors).map_err(|e| context("intro_logo", e))?;
+        // Without it a New Game plays no intro (our choice).
+        let intro_game = tutorials
+            .find("intro_game", 0)
+            .map(|e| MovieSequence::read(e, &colors).map_err(|e| context("intro_game", e)))
+            .transpose()?;
 
         let cursor = match ui::texture_source(tree, &aliases, "ui\\ui_ani_cursor")? {
             TextureSource::Sequence(_, seq) => seq,
@@ -203,18 +214,48 @@ impl GameData {
             menu,
             intro,
             intro_lengths: Vec::new(),
+            intro_game,
+            intro_game_lengths: Vec::new(),
             quit_keys,
             version: BUILT_IN_VERSION.to_owned(),
             cursor,
         })
     }
 
-    /// Measures [`GameData::intro_lengths`]; the second file of each sound
-    /// pair must exist too.
+    /// The logo sequence with its lengths.
+    pub fn intro_logo(&self) -> Sequence<'_> {
+        Sequence {
+            movies: &self.intro,
+            lengths: &self.intro_lengths,
+        }
+    }
+
+    /// The New Game intro with its lengths, once measured.
+    pub fn intro_game(&self) -> Option<Sequence<'_>> {
+        let movies = self.intro_game.as_ref()?;
+        (movies.items.len() == self.intro_game_lengths.len()).then_some(Sequence {
+            movies,
+            lengths: &self.intro_game_lengths,
+        })
+    }
+
+    /// Measures [`GameData::intro_lengths`] and
+    /// [`GameData::intro_game_lengths`]; the second file of each sound pair
+    /// must exist too.
     pub fn measure_intro(&mut self, tree: &dyn Vfs) -> io::Result<()> {
-        let data = &*self;
-        self.intro_lengths = data
-            .intro
+        self.intro_lengths = self.lengths(tree, &self.intro)?;
+        if let Some(game) = &self.intro_game {
+            self.intro_game_lengths = self
+                .lengths(tree, game)
+                .map_err(|e| context("intro_game", e))?;
+        }
+        Ok(())
+    }
+
+    /// The length of each item of `sequence` in seconds after its delay.
+    fn lengths(&self, tree: &dyn Vfs, sequence: &MovieSequence) -> io::Result<Vec<f64>> {
+        let data = self;
+        sequence
             .items
             .iter()
             .map(|item| match &item.kind {
@@ -232,8 +273,7 @@ impl GameData {
                 }
                 MovieItemKind::Image { length_sec, .. } => Ok(f64::from(*length_sec)),
             })
-            .collect::<io::Result<_>>()?;
-        Ok(())
+            .collect()
     }
 
     /// The pair of files of sound `sound` (startup.md section 6.2): `_l` and
@@ -245,19 +285,21 @@ impl GameData {
         ])
     }
 
-    /// Every picture the intro and the menu draw resolves to an existing
+    /// Every picture the intros and the menu draw resolves to an existing
     /// texture, and the menu's music files exist.
     pub fn check_media(&self, tree: &dyn Vfs) -> io::Result<()> {
         let mut statics: Vec<&StaticDesc> = Vec::new();
-        if let Some(global) = &self.intro.global_wnd {
-            statics.extend(&global.window.auto_statics);
-        }
         let mut refs: Vec<&TextureRef> = Vec::new();
-        for item in &self.intro.items {
-            match &item.kind {
-                MovieItemKind::Video { texture, .. } => refs.push(texture),
-                MovieItemKind::Image { pictures, .. } => {
-                    statics.extend(pictures.iter().map(|p| &p.desc))
+        for sequence in std::iter::once(&self.intro).chain(&self.intro_game) {
+            if let Some(global) = &sequence.global_wnd {
+                statics.extend(&global.window.auto_statics);
+            }
+            for item in &sequence.items {
+                match &item.kind {
+                    MovieItemKind::Video { texture, .. } => refs.push(texture),
+                    MovieItemKind::Image { pictures, .. } => {
+                        statics.extend(pictures.iter().map(|p| &p.desc))
+                    }
                 }
             }
         }

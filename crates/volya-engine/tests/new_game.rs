@@ -5,9 +5,9 @@
 //! (docs/behavior/loading-screen.md), which level loads
 //! (docs/behavior/level-loading.md section 2.2), the start view
 //! (docs/behavior/start-position.md) rendered headless, with load and frame
-//! times. `VOLYA_DUMP_LEVEL=<file.ppm>` writes the start frame and
-//! `VOLYA_DUMP_LOADING=<file.ppm>` the fifth loading image locally for
-//! inspection. Skips when `VOLYA_GOG_INSTALLER` is unset.
+//! times. `VOLYA_DUMP_LEVEL=<file.ppm>` writes the start frame,
+//! `VOLYA_DUMP_LOADING=<file.ppm>` the fifth loading image and
+//! `VOLYA_DUMP_INTRO=<file.ppm>` an intro frame locally for inspection. Skips when `VOLYA_GOG_INSTALLER` is unset.
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -289,7 +289,9 @@ const CAPTIONS: [(&str, Widths); 17] = [
 /// shows the 17 captions in order with their texts, widths and positions
 /// (sections 5, 10.2), the level's picture from caption 5 (4.5), then the
 /// loading image over 30 frames of the running level with sound muted
-/// (sections 2, 6). Its textures render without errors.
+/// (sections 2, 6), the intro starting under the last two of them and
+/// playing over the paused level until skipped (section 7). Its textures
+/// and the intro's video render without errors.
 #[test]
 fn new_game_loading_screen_from_game_data() {
     let Some(archives) = gog_archives::archives() else {
@@ -298,6 +300,7 @@ fn new_game_loading_screen_from_game_data() {
     let root = StdVfs::new(archives[0].file.parent().unwrap());
     let tree = DbVfs::open_game(&root, Some("mods")).unwrap();
     let mut data = GameData::read(&tree, None, SIZE).unwrap();
+    data.measure_intro(&tree).unwrap();
     // The logo sequence is skipped; its lengths do not matter here.
     data.intro_lengths = vec![0.0; data.intro.items.len()];
     let mut app = App::new(data).unwrap();
@@ -394,19 +397,40 @@ fn new_game_loading_screen_from_game_data() {
         "the last caption"
     );
     assert!(scene.first("loading picture").is_some());
-    for _ in 0..29 {
+    let level_state = |app: &App| match app.state() {
+        AppState::Level {
+            overlay_frames,
+            intro,
+            ..
+        } => (overlay_frames, intro),
+        s => panic!("not in the level: {s:?}"),
+    };
+    for _ in 0..27 {
         step(&mut app, &mut input, &mut audio);
     }
-    let AppState::Level { overlay_frames, .. } = app.state() else {
-        panic!()
-    };
-    assert_eq!((overlay_frames, audio.0.as_slice()), (1, [0.0].as_slice()));
+    assert!(matches!(level_state(&app), (3, None)));
+    // Section 7: the intro starts once at most 2 overlay frames remain.
     step(&mut app, &mut input, &mut audio);
-    let AppState::Level { overlay_frames, .. } = app.state() else {
-        panic!()
-    };
-    assert_eq!(overlay_frames, 0);
+    let (left, intro) = level_state(&app);
+    let intro = intro.expect("the intro started");
+    assert_eq!((left, intro.items, intro.kind), (2, 1, Some("video")));
+    // intro_stalker: 182.2 s (startup.md section 5).
+    let length = intro.length_ms.unwrap();
+    assert!((180_000..190_000).contains(&length), "{length} ms");
+    assert_eq!(audio.0, [0.0], "still muted");
+    step(&mut app, &mut input, &mut audio);
+    step(&mut app, &mut input, &mut audio);
+    let (left, intro) = level_state(&app);
+    assert_eq!((left, intro.is_some()), (0, true));
     assert_eq!(audio.0, [0.0, 1.0], "un-muted after the 30th frame");
+
+    // It plays over the level, game time paused (`pause_state on`).
+    let time = |app: &mut App| app.scene(&tree, SIZE).unwrap().world.unwrap().time;
+    let paused_at = time(&mut app);
+    for _ in 0..100 {
+        step(&mut app, &mut input, &mut audio);
+    }
+    assert_eq!(time(&mut app), paused_at, "game time paused");
     let scene = app.scene(&tree, SIZE).unwrap();
     assert!(
         scene
@@ -414,6 +438,35 @@ fn new_game_loading_screen_from_game_data() {
             .iter()
             .all(|s| !s.layer.starts_with("loading"))
     );
+    let video = scene.first("video").expect("the intro video");
+    assert!(
+        matches!(&video.texture, TextureId::Video { path, .. }
+            if path == "gamedata\\textures\\intro\\intro_stalker.ogm"),
+        "{:?}",
+        video.texture
+    );
+    let list = presenter.draw_list(&mut gpu, &tree, &scene, app.clock());
+    let pixels =
+        pollster::block_on(gpu.capture(&list, SIZE.width, SIZE.height, wgpu::Color::BLACK))
+            .unwrap();
+    let errors = presenter.take_errors();
+    assert!(errors.is_empty(), "{errors:?}");
+    let distinct: std::collections::BTreeSet<&[u8]> = pixels.chunks(4).collect();
+    assert!(
+        distinct.len() > 100,
+        "video frame: {} colours",
+        distinct.len()
+    );
+    dump("VOLYA_DUMP_INTRO", &pixels, SIZE.width, SIZE.height);
+    // Escape skips it (startup.md section 6.5): the level is shown and game
+    // time runs again.
+    press(&mut input, Key::Escape);
+    step(&mut app, &mut input, &mut audio);
+    assert!(matches!(level_state(&app), (0, None)));
+    step(&mut app, &mut input, &mut audio);
+    assert!(time(&mut app) > paused_at);
+    let scene = app.scene(&tree, SIZE).unwrap();
+    assert!(scene.first("video").is_none());
 
     // A later New Game skips prefetching (section 5); leaving the level
     // during its overlay frames un-mutes at once.

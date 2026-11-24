@@ -21,10 +21,11 @@ use crate::data::{Assets, GameData};
 use crate::draw::Ctx;
 use crate::level::{LevelScreen, LevelState};
 use crate::loading_screen::{
-    GAME_TYPE, Loading, LoadingScreen, LoadingScreenState, OVERLAY_FRAMES,
+    GAME_TYPE, Loading, LoadingScreen, LoadingScreenState, OVERLAY_FRAMES, SERVER_NEW_GAME,
+    intro_due,
 };
 use crate::scene::{Scene, Sprite, TextureId};
-use crate::startup::{Startup, StartupState};
+use crate::startup::{MoviePlayer, MovieSequenceState, Startup};
 use crate::title_menu::{TitleMenu, TitleMenuState};
 use volya_engine_formats::pe::{self, Rgba};
 use volya_engine_formats::ui::Resolution;
@@ -74,10 +75,12 @@ enum Phase {
         difficulty: &'static str,
         stages: NewGame,
     },
-    /// The level; for its first frames with the loading image over it.
+    /// The level; for its first frames with the loading image over it,
+    /// then with the intro over it.
     Level {
         level: Box<LevelScreen>,
         overlay: Option<Overlay>,
+        intro: Intro,
     },
 }
 
@@ -123,6 +126,85 @@ impl Overlay {
     }
 }
 
+/// The New Game intro `intro_game` (loading-screen.md section 7): checked
+/// once per started game during the overlay frames, then played over the
+/// level.
+#[derive(Default)]
+struct Intro {
+    checked: bool,
+    player: Option<MoviePlayer>,
+}
+
+impl Intro {
+    /// One frame at `now`: the intro starts when due ([`intro_due`]; the
+    /// level is loaded whenever this runs), then plays, each of
+    /// `quit_presses` skipping a stoppable item (startup.md section 6.5).
+    /// Returns whether game time is paused: the current item's
+    /// `pause_state` is on.
+    fn frame(
+        &mut self,
+        data: &GameData,
+        now: u64,
+        overlay_frames_left: Option<u32>,
+        quit_presses: u32,
+        audio: &mut dyn AudioOut,
+    ) -> bool {
+        if !self.checked
+            && let Some(left) = overlay_frames_left
+            && intro_due(true, left, SERVER_NEW_GAME)
+        {
+            self.checked = true;
+            // Without a measured `intro_game` there is none to play (our
+            // choice).
+            if data.intro_game().is_some() {
+                self.player = Some(MoviePlayer::new(now));
+            }
+        }
+        let (Some(player), Some(seq)) = (self.player.as_mut(), data.intro_game()) else {
+            return false;
+        };
+        player.update(seq, data, now, quit_presses, audio);
+        if player.finished(seq) {
+            // Section 2.3, step 4: then the level is visible.
+            self.player = None;
+            return false;
+        }
+        player.pauses(seq)
+    }
+
+    fn stop(&mut self, audio: &mut dyn AudioOut) {
+        if let Some(p) = self.player.as_mut() {
+            p.stop(audio);
+        }
+    }
+
+    fn draw(&self, ctx: &mut Ctx, scene: &mut Scene) -> io::Result<()> {
+        match (&self.player, ctx.data.intro_game()) {
+            (Some(p), Some(seq)) => p.draw(seq, ctx, scene),
+            _ => Ok(()),
+        }
+    }
+
+    fn state(&self, data: &GameData, now: u64) -> Option<MovieSequenceState> {
+        Some(self.player.as_ref()?.state(data.intro_game()?, now))
+    }
+}
+
+/// Presses that skip a movie item this frame (startup.md section 6.5):
+/// each press of a key bound to quit (a gamepad's east button arrives as
+/// Escape); a touch counts as one (our design for touch).
+fn quit_presses(data: &GameData, input: &Input) -> u32 {
+    input
+        .actions()
+        .iter()
+        .filter(|a| {
+            matches!(a, Action::Press { control: Control::Key(k), .. }
+                if data.quit_keys.contains(k))
+        })
+        .count() as u32
+        + input.touch_starts()
+}
+
 pub struct App {
     data: GameData,
     assets: Assets,
@@ -157,7 +239,7 @@ pub enum AppState {
     },
     Startup {
         clock: u64,
-        startup: StartupState,
+        startup: MovieSequenceState,
     },
     Menu {
         clock: u64,
@@ -178,6 +260,9 @@ pub enum AppState {
         load_ms: Option<f64>,
         /// Frames the loading image still covers, this one included.
         overlay_frames: u32,
+        /// The New Game intro while it plays.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        intro: Option<MovieSequenceState>,
     },
 }
 
@@ -228,18 +313,7 @@ impl App {
             .get_or_insert_with(|| Phase::Startup(Startup::new(now)));
         match phase {
             Phase::Startup(startup) => {
-                // Section 6.5: each press of a key bound to quit skips one
-                // item; a touch counts as one (our design for touch).
-                let presses = input
-                    .actions()
-                    .iter()
-                    .filter(|a| {
-                        matches!(a, Action::Press { control: Control::Key(k), .. }
-                            if data.quit_keys.contains(k))
-                    })
-                    .count() as u32
-                    + input.touch_starts();
-                startup.update(data, now, presses, audio);
+                startup.update(data, now, quit_presses(data, input), audio);
                 if startup.finished(data) {
                     // Shown within one frame of the sequence's end.
                     *phase = Phase::Menu(TitleMenu::open(data, now, input, audio));
@@ -287,6 +361,7 @@ impl App {
                         *phase = Phase::Level {
                             level: Box::new(level),
                             overlay: Some(Overlay::new(screen, audio)),
+                            intro: Intro::default(),
                         };
                     }
                     Err(e) => {
@@ -296,9 +371,28 @@ impl App {
                     }
                 }
             }
-            Phase::Level { level, overlay } => {
+            Phase::Level {
+                level,
+                overlay,
+                intro,
+            } => {
                 if let Some(o) = overlay.take() {
                     *overlay = o.next_frame(audio);
+                }
+                let left = overlay.as_ref().map(|o| o.frames_left);
+                // While the intro plays, including the frame that ends it,
+                // input goes to it alone (our choice; the level is paused
+                // under it anyway).
+                let playing = intro.player.is_some();
+                if intro.frame(data, now, left, quit_presses(data, input), audio) {
+                    level.paused(now);
+                    return;
+                }
+                if playing || intro.player.is_some() {
+                    // An item without `pause_state`, or the intro's end: the
+                    // level runs without this frame's input.
+                    level.update(now, &Input::new());
+                    return;
                 }
                 level.update(now, input);
                 if level.back_requested() {
@@ -343,10 +437,16 @@ impl App {
                 loading.screen().draw(&mut ctx, &mut scene)?;
                 Ok(scene)
             }
-            Some(Phase::Level { level, overlay }) => {
-                // The world is drawn under the opaque loading image (which
-                // also brings it to the GPU while covered).
+            Some(Phase::Level {
+                level,
+                overlay,
+                intro,
+            }) => {
+                // The world is drawn under the opaque loading image and
+                // intro (which also brings it to the GPU while covered); the
+                // intro's first frames are under the image (section 7).
                 let mut scene = level.scene(resolution, self.clock);
+                intro.draw(&mut ctx, &mut scene)?;
                 if let Some(o) = overlay {
                     o.screen.draw(&mut ctx, &mut scene)?;
                 }
@@ -364,7 +464,8 @@ impl App {
         match &mut self.phase {
             Some(Phase::Startup(s)) => s.stop(audio),
             Some(Phase::Menu(m)) => m.stop(audio),
-            Some(Phase::Level { overlay, .. }) => {
+            Some(Phase::Level { overlay, intro, .. }) => {
+                intro.stop(audio);
                 if let Some(o) = overlay.take() {
                     o.end(audio);
                 }
@@ -394,11 +495,16 @@ impl App {
                     NewGame::Stages(l) => Some(l.screen().state()),
                 },
             },
-            Some(Phase::Level { level, overlay }) => AppState::Level {
+            Some(Phase::Level {
+                level,
+                overlay,
+                intro,
+            }) => AppState::Level {
                 clock,
                 level: level.state(),
                 load_ms: self.load_ms,
                 overlay_frames: overlay.as_ref().map_or(0, |o| o.frames_left),
+                intro: intro.state(&self.data, clock),
             },
         }
     }
@@ -529,6 +635,97 @@ mod tests {
             input.end_frame();
         }
         assert_eq!(caption(&app), (1, "Сервер: Старт...".into()));
+    }
+
+    #[test]
+    fn the_intro_starts_under_the_last_two_overlay_frames_once() {
+        let tree = fixture::tree();
+        let data = fixture::data(&tree);
+        let mut audio = FakeAudio::default();
+        let mut intro = Intro::default();
+        let mut started = None;
+        for (frame, left) in (1..OVERLAY_FRAMES).rev().enumerate() {
+            let paused = intro.frame(&data, frame as u64 * 16, Some(left), 0, &mut audio);
+            if started.is_none() && intro.player.is_some() {
+                started = Some(left);
+            }
+            // `pause_state on`: game time paused from its first frame.
+            assert_eq!(paused, intro.player.is_some(), "{left} left");
+        }
+        assert_eq!(started, Some(2));
+        // Its sound pair starts with the video (no delay), under the
+        // muting the overlay set.
+        let files: Vec<&str> = audio.started.iter().map(|(_, f, _)| f.as_str()).collect();
+        assert_eq!(
+            files,
+            [
+                "gamedata\\sounds\\v\\intro_l.ogg",
+                "gamedata\\sounds\\v\\intro_r.ogg"
+            ]
+        );
+        // After the overlay: plays its 3 s, then the level resumes; it is
+        // not started again.
+        let start = u64::from(OVERLAY_FRAMES - 3) * 16;
+        assert!(intro.frame(&data, start + 2999, None, 0, &mut audio));
+        assert!(!intro.frame(&data, start + 3000, None, 0, &mut audio));
+        assert!(intro.player.is_none());
+        assert!(audio.playing.is_empty(), "its sounds ended");
+        assert!(!intro.frame(&data, 4000, Some(1), 0, &mut audio));
+        assert!(intro.player.is_none());
+    }
+
+    #[test]
+    fn the_intro_draws_over_the_level_and_a_quit_press_skips_it() {
+        let tree = fixture::tree();
+        let data = fixture::data(&tree);
+        let mut audio = FakeAudio::default();
+        let mut intro = Intro::default();
+        assert!(intro.frame(&data, 0, Some(2), 0, &mut audio));
+        let mut assets = fixture::assets();
+        let mut ctx = Ctx {
+            tree: &tree,
+            data: &data,
+            assets: &mut assets,
+            resolution: Resolution::new(1024, 768),
+            clock_ms: 16,
+        };
+        let mut scene = Scene::new(ctx.resolution);
+        intro.draw(&mut ctx, &mut scene).unwrap();
+        let layers: Vec<&str> = scene.sprites.iter().map(|s| s.layer.as_str()).collect();
+        assert_eq!(layers, ["background", "video"]);
+        assert_eq!(
+            scene.first("video").unwrap().texture,
+            TextureId::Video {
+                path: "gamedata\\textures\\intro\\intro_stalker.ogm".into(),
+                start_ms: 0,
+                looping: false
+            }
+        );
+        assert_eq!(intro.state(&data, 16).unwrap().items, 1);
+        // Escape (a gamepad's east button too) or a touch: one press ends
+        // the only item, its sounds stop and game time runs again.
+        let mut input = Input::new();
+        input.handle(Event::GamepadButton {
+            button: crate::core::input::GamepadButton::East,
+            pressed: true,
+        });
+        assert_eq!(quit_presses(&data, &input), 1);
+        assert!(!intro.frame(&data, 32, Some(1), 1, &mut audio));
+        assert!(intro.player.is_none());
+        assert!(audio.playing.is_empty());
+        let mut input = Input::new();
+        press(&mut input, Key::Escape);
+        assert_eq!(quit_presses(&data, &input), 1);
+        let mut input = Input::new();
+        input.handle(Event::Touch {
+            at: [1.0, 1.0],
+            phase: TouchPhase::Start,
+            time: 0.0,
+        });
+        assert_eq!(quit_presses(&data, &input), 1);
+        let mut input = Input::new();
+        press(&mut input, Key::Enter);
+        assert_eq!(quit_presses(&data, &input), 0, "other keys do nothing");
     }
 
     #[test]

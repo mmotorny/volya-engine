@@ -23,7 +23,7 @@ use crate::data::GameData;
 use crate::draw::Ctx;
 use crate::scene::{Scene, Sprite};
 use volya_engine_formats::ui::layout::Rect;
-use volya_engine_formats::ui::movies::MovieItemKind;
+use volya_engine_formats::ui::movies::{MovieItemKind, MovieSequence};
 use volya_engine_formats::ui::picture::{Picture, PicturePlacement};
 use volya_engine_formats::ui::{Color, UI_HEIGHT, UI_WIDTH};
 
@@ -95,9 +95,19 @@ fn sound_playback(side: usize) -> Playback {
 /// The wide-screen height correction of video pictures (section 6.3).
 const WIDE_VIDEO_STRETCH: f32 = 1.328;
 
-/// The state of the logo sequence.
+/// A movie sequence with the length of each item in seconds after its
+/// delay (sections 6.3, 6.4): an image item its `length_sec`; a video item
+/// the length of its left sound, or without a sound its video's.
+#[derive(Clone, Copy, Debug)]
+pub struct Sequence<'a> {
+    pub movies: &'a MovieSequence,
+    pub lengths: &'a [f64],
+}
+
+/// A movie sequence playing (section 6): the logo sequence at launch, the
+/// intro of a New Game (loading-screen.md section 7).
 #[derive(Clone, Debug)]
-pub struct Startup {
+pub struct MoviePlayer {
     /// The current item (`items.len()` once finished).
     item: usize,
     /// When the current item became current, engine clock.
@@ -118,7 +128,7 @@ fn delay_ms(kind: &MovieItemKind) -> u64 {
     }
 }
 
-impl Startup {
+impl MoviePlayer {
     /// The sequence, its first item current from `now`.
     pub fn new(now: u64) -> Self {
         Self {
@@ -130,13 +140,22 @@ impl Startup {
         }
     }
 
-    pub fn finished(&self, data: &GameData) -> bool {
-        self.item >= data.intro.items.len()
+    pub fn finished(&self, seq: Sequence) -> bool {
+        self.item >= seq.movies.items.len()
     }
 
     /// How long item `i` lasts, in milliseconds.
-    fn length_ms(data: &GameData, i: usize) -> u64 {
-        delay_ms(&data.intro.items[i].kind) + (data.intro_lengths[i] * 1000.0).round() as u64
+    fn length_ms(seq: Sequence, i: usize) -> u64 {
+        delay_ms(&seq.movies.items[i].kind) + (seq.lengths[i] * 1000.0).round() as u64
+    }
+
+    /// The current item's `pause_state` is `on` (game time paused while
+    /// it plays, level-loading.md section 2.3).
+    pub fn pauses(&self, seq: Sequence) -> bool {
+        seq.movies
+            .items
+            .get(self.item)
+            .is_some_and(|i| i.pause_state.as_deref() == Some("on"))
     }
 
     fn next(&mut self, at: u64, audio: &mut dyn AudioOut) {
@@ -150,35 +169,36 @@ impl Startup {
 
     /// Advances to `now`: items end when their time is up (the next starts
     /// exactly then); then each of `quit_presses` ends the current item at
-    /// once (section 6.5: every item of `intro_logo` is stoppable); then the
+    /// once if it is stoppable (section 6.5); then the
     /// current video item's sounds start once its delay has passed.
     pub fn update(
         &mut self,
+        seq: Sequence,
         data: &GameData,
         now: u64,
         quit_presses: u32,
         audio: &mut dyn AudioOut,
     ) {
-        while !self.finished(data) {
-            let end = self.item_start + Self::length_ms(data, self.item);
+        while !self.finished(seq) {
+            let end = self.item_start + Self::length_ms(seq, self.item);
             if end > now {
                 break;
             }
             self.next(end, audio);
         }
         for _ in 0..quit_presses {
-            if self.finished(data) {
+            if self.finished(seq) {
                 break;
             }
-            if self.stoppable(data) {
+            if self.stoppable(seq) {
                 self.skipped += 1;
                 self.next(now, audio);
             }
         }
-        if self.finished(data) {
+        if self.finished(seq) {
             return;
         }
-        let item = &data.intro.items[self.item].kind;
+        let item = &seq.movies.items[self.item].kind;
         if let MovieItemKind::Video {
             sound: Some(sound), ..
         } = item
@@ -197,8 +217,8 @@ impl Startup {
     /// Whether the current item can be ended with the quit key: a video
     /// unless `can_be_stopped` is 0; an image always (the spec covers only
     /// items without `guard_key`; one with it is treated alike).
-    fn stoppable(&self, data: &GameData) -> bool {
-        match &data.intro.items[self.item].kind {
+    fn stoppable(&self, seq: Sequence) -> bool {
+        match &seq.movies.items[self.item].kind {
             MovieItemKind::Video { can_be_stopped, .. } => *can_be_stopped,
             MovieItemKind::Image { .. } => true,
         }
@@ -211,27 +231,27 @@ impl Startup {
         }
     }
 
-    /// The frame at `ctx.clock_ms`: the background, then the current item.
-    pub fn scene(&self, ctx: &mut Ctx) -> io::Result<Scene> {
-        let mut scene = Scene::new(ctx.resolution);
+    /// Adds the frame at `ctx.clock_ms` to `scene`: the background, then
+    /// the current item.
+    pub(crate) fn draw(&self, seq: Sequence, ctx: &mut Ctx, scene: &mut Scene) -> io::Result<()> {
         let data = ctx.data;
-        if let Some(global) = &data.intro.global_wnd {
+        if let Some(global) = &seq.movies.global_wnd {
             let wnd = global.window.absolute(0.0, 0.0);
             for s in &global.window.auto_statics {
                 let abs = s.window.absolute(wnd.x, wnd.y);
-                ctx.picture(&mut scene, "background", s, abs, 0.0, 0, false, None)?;
+                ctx.picture(scene, "background", s, abs, 0.0, 0, false, None)?;
             }
         }
-        if self.finished(data) {
-            return Ok(scene);
+        if self.finished(seq) {
+            return Ok(());
         }
         let now = ctx.clock_ms;
         let t = now.saturating_sub(self.item_start);
-        match &data.intro.items[self.item].kind {
+        match &seq.movies.items[self.item].kind {
             MovieItemKind::Video { texture, .. } => {
-                let delay = delay_ms(&data.intro.items[self.item].kind);
+                let delay = delay_ms(&seq.movies.items[self.item].kind);
                 if t < delay {
-                    return Ok(scene);
+                    return Ok(());
                 }
                 let picture = Picture::resolve(texture, &data.descriptions);
                 let resolved = ctx.assets.texture(ctx.tree, data, &picture.texture, now)?;
@@ -280,34 +300,76 @@ impl Startup {
                         });
                     let abs = p.desc.window.absolute(0.0, 0.0);
                     let layer = format!("picture {i}");
-                    ctx.picture(&mut scene, &layer, &p.desc, abs, 0.0, 0, false, color)?;
+                    ctx.picture(scene, &layer, &p.desc, abs, 0.0, 0, false, color)?;
                 }
             }
         }
-        Ok(scene)
+        Ok(())
     }
 
-    pub fn state(&self, data: &GameData, now: u64) -> StartupState {
-        let kind = data.intro.items.get(self.item).map(|i| match i.kind {
+    pub fn state(&self, seq: Sequence, now: u64) -> MovieSequenceState {
+        let kind = seq.movies.items.get(self.item).map(|i| match i.kind {
             MovieItemKind::Video { .. } => "video",
             MovieItemKind::Image { .. } => "image",
         });
-        StartupState {
+        MovieSequenceState {
             item: self.item,
-            items: data.intro.items.len(),
+            items: seq.movies.items.len(),
             kind,
             elapsed_ms: now.saturating_sub(self.item_start),
-            length_ms: (self.item < data.intro.items.len())
-                .then(|| Self::length_ms(data, self.item)),
+            length_ms: (self.item < seq.movies.items.len())
+                .then(|| Self::length_ms(seq, self.item)),
             sounds: self.voices.clone(),
             skipped: self.skipped,
         }
     }
 }
 
-/// The logo sequence as the engine interface reports it.
+/// The logo sequence `intro_logo` (section 6).
+#[derive(Clone, Debug)]
+pub struct Startup(MoviePlayer);
+
+impl Startup {
+    /// The sequence, its first item current from `now`.
+    pub fn new(now: u64) -> Self {
+        Self(MoviePlayer::new(now))
+    }
+
+    pub fn finished(&self, data: &GameData) -> bool {
+        self.0.finished(data.intro_logo())
+    }
+
+    /// See [`MoviePlayer::update`].
+    pub fn update(
+        &mut self,
+        data: &GameData,
+        now: u64,
+        quit_presses: u32,
+        audio: &mut dyn AudioOut,
+    ) {
+        self.0
+            .update(data.intro_logo(), data, now, quit_presses, audio);
+    }
+
+    pub fn stop(&mut self, audio: &mut dyn AudioOut) {
+        self.0.stop(audio);
+    }
+
+    /// The frame at `ctx.clock_ms`.
+    pub fn scene(&self, ctx: &mut Ctx) -> io::Result<Scene> {
+        let mut scene = Scene::new(ctx.resolution);
+        self.0.draw(ctx.data.intro_logo(), ctx, &mut scene)?;
+        Ok(scene)
+    }
+
+    pub fn state(&self, data: &GameData, now: u64) -> MovieSequenceState {
+        self.0.state(data.intro_logo(), now)
+    }
+}
+
+/// A movie sequence as the engine interface reports it.
 #[derive(Clone, Debug, Serialize)]
-pub struct StartupState {
+pub struct MovieSequenceState {
     pub item: usize,
     pub items: usize,
     pub kind: Option<&'static str>,

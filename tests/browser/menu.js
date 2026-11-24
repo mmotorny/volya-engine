@@ -304,10 +304,16 @@ export const tests = {
     assertEqual(frame.sprites.filter((s) => s.layer === "loading strip").length, 40, "strip cells");
     assert(frame.sprites.some((s) => s.layer === "loading background"), "background");
     assert(frame.sprites.some((s) => s.layer === "loading caption"), "caption");
-    // After the last stage the image covers the level's first 30 frames.
+    // After the last stage the image covers the level's first 30 frames;
+    // the intro starts under the last two (loading-screen.md section 7).
     const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", 60000);
     assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
-    let note = `"${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms`;
+    assertEqual([s.intro?.items, s.intro?.kind], [1, "video"], "the intro plays");
+    // A key bound to quit skips it (startup.md section 6.5).
+    key("Escape");
+    const shown = await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
+    assertEqual(shown.phase, "level", "still in the level");
+    let note = `"${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; intro skipped`;
     if (gpu.state === "ready") {
       const { rgba } = await volya.call("debug_capture", { width: 256, height: 192 });
       const colours = new Set();
@@ -375,8 +381,14 @@ export const tests = {
     key("Enter");
     await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
     key("Enter");
-    const s = await until((s) => s.phase === "level" && s.load_ms != null, "the level again", 60000);
+    const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level again", 60000);
     assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
+    // The intro again; a tap skips it (our design for touch).
+    assert(s.intro, "the intro plays");
+    const tap = { pointerType: "touch", pointerId: 21, isPrimary: true, button: 0 };
+    pointer("pointerdown", client(512, 384), { ...tap, buttons: 1 });
+    pointer("pointerup", client(512, 384), { ...tap, buttons: 0 });
+    await until((s) => s.phase === "level" && !s.intro, "the tap to skip the intro");
     if (gpu.state === "ready") {
       // The new world reaches the GPU on the next frame drawn.
       let stats;

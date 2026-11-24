@@ -106,7 +106,15 @@ const MOVIES: &str = r#"<intro_logo>
   <auto_static start_time="0" length_sec="4" x="0" y="0" width="1024" height="768" stretch="1" light_anim="asus_logo_01" la_alpha="1" la_texture="1"><texture>ui_asus_01</texture></auto_static>
   <auto_static start_time="4" length_sec="4" x="0" y="0" width="1024" height="768" stretch="1" light_anim="asus_logo_01" la_alpha="1" la_texture="1"><texture>ui_asus_02</texture></auto_static>
 </main_wnd></item>
-</intro_logo>"#;
+</intro_logo>
+<intro_game>
+<global_wnd x="0" y="0" width="1024" height="768">
+  <auto_static x="0" y="0" width="1024" height="768" stretch="1"><texture>intro\intro_back</texture></auto_static>
+</global_wnd>
+<play_each_item>1</play_each_item>
+<item type="video"><pause_state>on</pause_state><sound>v\intro</sound>
+  <video_wnd x="0" y="0" width="1024" height="768" stretch="1"><texture x="0" y="0" width="512" height="288">intro\intro_stalker</texture></video_wnd></item>
+</intro_game>"#;
 
 const STRINGS: [(&str, &str); 14] = [
     ("st_prefetching_objects", "Кэширование объектов"),
@@ -221,6 +229,7 @@ pub fn tree() -> MemVfs {
         "ui/ui_mm_main_back_crop.ogm",
         "ui/ui_mm_fire.ogm",
         "intro/logo.ogm",
+        "intro/intro_stalker.ogm",
     ] {
         add(&format!("{t}{video}"), Vec::new());
     }
@@ -229,6 +238,8 @@ pub fn tree() -> MemVfs {
         "music/wasteland2_r.ogg",
         "v/logo_l.ogg",
         "v/logo_r.ogg",
+        "v/intro_l.ogg",
+        "v/intro_r.ogg",
     ] {
         add(&format!("gamedata/sounds/{sound}"), Vec::new());
     }
@@ -236,10 +247,11 @@ pub fn tree() -> MemVfs {
 }
 
 /// The game data of [`tree`], with the media lengths the placeholders
-/// cannot give: the logo's sound lasts 2.5 s.
+/// cannot give: the logo's sound lasts 2.5 s, the intro's 3 s.
 pub fn data(tree: &MemVfs) -> GameData {
     let mut data = GameData::read(tree, None, Resolution::new(1024, 768)).unwrap();
     data.intro_lengths = vec![2.5, 9.0];
+    data.intro_game_lengths = vec![3.0];
     data.check_media(tree).unwrap();
     data
 }
@@ -266,6 +278,10 @@ pub fn videos() -> Vec<(&'static str, ResolvedTexture)> {
         ),
         ("ui\\ui_mm_fire", video("ui\\ui_mm_fire", 128, 256, 33.0)),
         ("intro\\logo", video("intro\\logo", 720, 486, 29.97)),
+        (
+            "intro\\intro_stalker",
+            video("intro\\intro_stalker", 512, 288, 30.0),
+        ),
     ]
 }
 

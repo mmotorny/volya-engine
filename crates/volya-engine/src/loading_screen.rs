@@ -17,9 +17,8 @@
 //! is not presented: the next caption's image follows directly.
 //!
 //! After the last stage the app draws the image over the level's first
-//! [`OVERLAY_FRAMES`] frames with sound muted (sections 2, 6). The intro
-//! movie that section 7 starts during those frames is not played here
-//! (#51).
+//! [`OVERLAY_FRAMES`] frames with sound muted (sections 2, 6), and starts
+//! the New Game intro under its last frames ([`intro_due`], section 7).
 
 use std::io;
 
@@ -48,6 +47,12 @@ pub const EXPECTED_CAPTIONS: u32 = 14;
 /// Rendered frames of the running level the loading image stays over
 /// (section 2, step 4; `-gpu_ref` does not exist here).
 pub const OVERLAY_FRAMES: u32 = 30;
+/// The fourth server parameter of a New Game's start command
+/// `start server(all/single/alife/new)` (level-loading.md section 2.1).
+pub const SERVER_NEW_GAME: &str = "new";
+/// The intro starts once at most this many overlay frames remain
+/// (section 7).
+pub const INTRO_OVERLAY_FRAMES: u32 = 2;
 /// The caption colour 0xFF9D8C78 (section 4.4).
 pub const CAPTION_COLOR: Color = Color::rgba(157, 140, 120, 255);
 /// The caption font, `[ui_font_graffiti19_russian]` (section 4.4).
@@ -64,6 +69,18 @@ pub const BACKGROUND: &str = "ui\\ui_load";
 /// (section 4.5).
 pub const PICTURE_PREFIX: &str = "intro\\intro_";
 pub const NO_PICTURE: &str = "intro\\intro_no_start_picture";
+
+/// Whether the New Game intro starts on an overlay frame (section 7): a
+/// level is loaded, at most [`INTRO_OVERLAY_FRAMES`] overlay frames remain
+/// counting this one (so the intro's first frames are under at most two of
+/// them; our reading), and the fourth server parameter is `new`, compared
+/// case-insensitively. This platform has no command line, so no
+/// `-nointro`. The caller checks once per started game.
+pub fn intro_due(level_loaded: bool, overlay_frames_left: u32, server_parameter: &str) -> bool {
+    level_loaded
+        && overlay_frames_left <= INTRO_OVERLAY_FRAMES
+        && server_parameter.eq_ignore_ascii_case(SERVER_NEW_GAME)
+}
 
 /// A loading stage, named by its caption (section 5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -466,6 +483,17 @@ mod tests {
                 "st_client_synchronising",
             ]
         );
+    }
+
+    #[test]
+    fn the_intro_is_due_once_at_most_two_overlay_frames_remain() {
+        let due: Vec<u32> = (1..=OVERLAY_FRAMES)
+            .filter(|&n| intro_due(true, n, SERVER_NEW_GAME))
+            .collect();
+        assert_eq!(due, [1, 2]);
+        assert!(!intro_due(false, 2, "new"), "no level loaded");
+        assert!(intro_due(true, 2, "NEW"), "case-insensitive");
+        assert!(!intro_due(true, 2, "load"));
     }
 
     #[test]
