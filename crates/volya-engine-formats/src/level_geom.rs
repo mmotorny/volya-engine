@@ -21,7 +21,7 @@ use crate::chunks::{self, Chunks};
 pub const HEADER_CHUNK: u32 = 1;
 pub const VERTEX_BUFFERS_CHUNK: u32 = 9;
 pub const INDEX_BUFFERS_CHUNK: u32 = 10;
-pub const SLIDE_WINDOWS_CHUNK: u32 = 11;
+pub const PROGRESSIVE_MESHES_CHUNK: u32 = 11;
 
 /// Element types (section 4).
 pub const FLOAT3: u8 = 2;
@@ -127,18 +127,19 @@ impl Element {
     }
 
     /// The 4-component value a vertex program receives for this element of
-    /// `vertex` (section 4's table).
-    pub fn program_input(&self, vertex: &[u8]) -> [f32; 4] {
-        let at = &vertex[usize::from(self.offset)..];
+    /// `vertex` (section 4's table); `None` for a type without a size or a
+    /// vertex too short for the element.
+    pub fn program_input(&self, vertex: &[u8]) -> Option<[f32; 4]> {
+        let offset = usize::from(self.offset);
+        let at = vertex.get(offset..offset + self.size()?)?;
         let f32_at = |i: usize| f32::from_le_bytes(at[4 * i..4 * i + 4].try_into().unwrap());
         let i16_at = |i: usize| f32::from(i16::from_le_bytes([at[2 * i], at[2 * i + 1]]));
-        match self.kind {
+        Some(match self.kind {
             FLOAT3 => [f32_at(0), f32_at(1), f32_at(2), 1.0],
             D3DCOLOR => [at[2], at[1], at[0], at[3]].map(|b| f32::from(b) / 255.0),
             SHORT2 => [i16_at(0), i16_at(1), 0.0, 1.0],
-            SHORT4 => [i16_at(0), i16_at(1), i16_at(2), i16_at(3)],
-            _ => unreachable!("declarations hold only types with a size"),
-        }
+            _ => [i16_at(0), i16_at(1), i16_at(2), i16_at(3)], // SHORT4
+        })
     }
 }
 
@@ -401,7 +402,7 @@ impl VertexBuffer {
 
 /// Steps of continuous level of detail (section 6).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct SlideWindow {
+pub struct ProgressiveMesh {
     /// Four reserved words, read and ignored.
     pub reserved: [u32; 4],
     /// From most to least detailed.
@@ -417,7 +418,7 @@ pub struct Step {
     pub vertex_count: u16,
 }
 
-impl SlideWindow {
+impl ProgressiveMesh {
     /// The step the first renderer draws at detail factor `f` in [0, 1]
     /// (1 = full detail): `floor((1 − f) × (step_count − 1) + 0.5)`. We clamp
     /// `f` to [0, 1]; `None` without steps.
@@ -440,7 +441,7 @@ pub struct LevelGeom {
     /// renderer).
     pub index_buffers: Vec<Vec<u16>>,
     /// Chunk 11; empty when absent.
-    pub slide_windows: Vec<SlideWindow>,
+    pub progressive_meshes: Vec<ProgressiveMesh>,
 }
 
 impl LevelGeom {
@@ -454,7 +455,7 @@ impl LevelGeom {
             get(HEADER_CHUNK)?,
             get(VERTEX_BUFFERS_CHUNK)?,
             get(INDEX_BUFFERS_CHUNK)?,
-            get(SLIDE_WINDOWS_CHUNK)?,
+            get(PROGRESSIVE_MESHES_CHUNK)?,
         )
     }
 
@@ -473,7 +474,7 @@ impl LevelGeom {
         let header = get(HEADER_CHUNK)?;
         let vertices = get(VERTEX_BUFFERS_CHUNK)?;
         let indices = get(INDEX_BUFFERS_CHUNK)?;
-        let windows = get(SLIDE_WINDOWS_CHUNK)?;
+        let windows = get(PROGRESSIVE_MESHES_CHUNK)?;
         Self::from_chunks(
             header.as_deref(),
             vertices.as_deref(),
@@ -500,7 +501,7 @@ impl LevelGeom {
             header,
             vertex_buffers: parse_vertex_buffers(vertices)?,
             index_buffers: indices.map_or(Ok(Vec::new()), parse_index_buffers)?,
-            slide_windows: windows.map_or(Ok(Vec::new()), parse_slide_windows)?,
+            progressive_meshes: windows.map_or(Ok(Vec::new()), parse_progressive_meshes)?,
         })
     }
 }
@@ -597,7 +598,7 @@ pub fn parse_index_buffers(chunk: &[u8]) -> io::Result<Vec<Vec<u16>>> {
 
 /// Chunk 11 (section 6). The spec does not say that the records fill the
 /// chunk; we require it, as for chunks 9 and 10.
-pub fn parse_slide_windows(chunk: &[u8]) -> io::Result<Vec<SlideWindow>> {
+pub fn parse_progressive_meshes(chunk: &[u8]) -> io::Result<Vec<ProgressiveMesh>> {
     let mut b = Bytes {
         data: chunk,
         what: "progressive-mesh records",
@@ -605,23 +606,39 @@ pub fn parse_slide_windows(chunk: &[u8]) -> io::Result<Vec<SlideWindow>> {
     let count = b.u32()?;
     let mut records = Vec::new();
     for _ in 0..count {
-        let reserved = [b.u32()?, b.u32()?, b.u32()?, b.u32()?];
-        let n = b.u32()?;
-        let steps = b
-            .array(n, 8)?
-            .as_chunks::<8>()
-            .0
-            .iter()
-            .map(|s| Step {
-                index_offset: u32::from_le_bytes(s[..4].try_into().unwrap()),
-                triangle_count: u16::from_le_bytes([s[4], s[5]]),
-                vertex_count: u16::from_le_bytes([s[6], s[7]]),
-            })
-            .collect();
-        records.push(SlideWindow { reserved, steps });
+        records.push(read_window(&mut b)?);
     }
     b.finish()?;
     Ok(records)
+}
+
+/// One record in the layout of chunk 11 filling `data` exactly, as stored in
+/// a type-2 visual's chunk 6 (ogf.md section 6).
+pub fn parse_progressive_mesh(data: &[u8]) -> io::Result<ProgressiveMesh> {
+    let mut b = Bytes {
+        data,
+        what: "progressive-mesh record",
+    };
+    let window = read_window(&mut b)?;
+    b.finish()?;
+    Ok(window)
+}
+
+fn read_window(b: &mut Bytes) -> io::Result<ProgressiveMesh> {
+    let reserved = [b.u32()?, b.u32()?, b.u32()?, b.u32()?];
+    let n = b.u32()?;
+    let steps = b
+        .array(n, 8)?
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|s| Step {
+            index_offset: u32::from_le_bytes(s[..4].try_into().unwrap()),
+            triangle_count: u16::from_le_bytes([s[4], s[5]]),
+            vertex_count: u16::from_le_bytes([s[6], s[7]]),
+        })
+        .collect();
+    Ok(ProgressiveMesh { reserved, steps })
 }
 
 /// A visual's reference into the geometry buffers (section 7): six `u32` as
@@ -670,9 +687,14 @@ impl GeometryRef {
             .checked_add(self.index_count as usize)
             .and_then(|end| ib.get(first..end))
             .ok_or_else(|| invalid("index range outside its buffer"))?;
-        indices
-            .as_chunks::<3>()
-            .0
+        let (triangles, rest) = indices.as_chunks::<3>();
+        if !rest.is_empty() {
+            return Err(invalid(format!(
+                "index count {} is not a multiple of 3",
+                self.index_count
+            )));
+        }
+        triangles
             .iter()
             .map(|t| {
                 let mut out = [0; 3];
@@ -794,17 +816,17 @@ mod tests {
         let e = buffers[1].elements[1];
         assert_eq!(
             e.program_input(buffers[1].vertex(0)),
-            [128.0 / 255.0, 1.0, 0.0, 51.0 / 255.0]
+            Some([128.0 / 255.0, 1.0, 0.0, 51.0 / 255.0])
         );
         let e = buffers[0].elements[4];
         assert_eq!(
             e.program_input(buffers[0].vertex(0)),
-            [2048.0, -1024.0, 4096.0, 0.0]
+            Some([2048.0, -1024.0, 4096.0, 0.0])
         );
         let e = buffers[1].elements[5];
         assert_eq!(
             e.program_input(buffers[1].vertex(0)),
-            [1024.0, -3.0, 0.0, 1.0]
+            Some([1024.0, -3.0, 0.0, 1.0])
         );
     }
 
@@ -873,7 +895,7 @@ mod tests {
         if with_indices {
             file.extend(chunk(INDEX_BUFFERS_CHUNK, &indices));
         }
-        file.extend(chunk(SLIDE_WINDOWS_CHUNK, &windows));
+        file.extend(chunk(PROGRESSIVE_MESHES_CHUNK, &windows));
         file
     }
 
@@ -884,7 +906,7 @@ mod tests {
         assert_eq!(geom, LevelGeom::read(&mut Cursor::new(&file)).unwrap());
         assert_eq!(geom.header, Some((14, 18)));
         assert_eq!(geom.index_buffers, [vec![0, 1, 2], vec![]]);
-        let w = &geom.slide_windows[0];
+        let w = &geom.progressive_meshes[0];
         assert_eq!(
             w.steps[0],
             Step {
@@ -897,7 +919,7 @@ mod tests {
         assert_eq!(w.step_for_detail(0.0), Some(1));
         assert_eq!(w.step_for_detail(0.6), Some(0));
         assert_eq!(w.step_for_detail(0.4), Some(1));
-        assert_eq!(SlideWindow::default().step_for_detail(1.0), None);
+        assert_eq!(ProgressiveMesh::default().step_for_detail(1.0), None);
 
         // Header and index buffers are optional, vertex buffers are not.
         let geom = LevelGeom::parse(&sample_file(false, false)).unwrap();
@@ -926,6 +948,11 @@ mod tests {
             ..r
         };
         assert!(shifted.triangles(&geom).is_err(), "index 2 ≥ 2 vertices");
+        let partial = GeometryRef {
+            index_count: 2,
+            ..r
+        };
+        assert!(partial.triangles(&geom).is_err(), "not a multiple of 3");
         let past = GeometryRef {
             index_count: 6,
             ..r

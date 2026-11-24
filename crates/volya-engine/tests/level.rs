@@ -199,7 +199,7 @@ fn level_geometry_from_game_data() {
         assert_eq!(index_sum, 20_158_230_477);
 
         // Chunk 11.
-        let w = &geom.slide_windows;
+        let w = &geom.progressive_meshes;
         assert_eq!(w.len(), 97);
         assert_eq!(w.iter().map(|r| r.steps.len()).sum::<usize>(), 45_910);
         assert!(w.iter().all(|r| r.reserved == [0; 4]));
@@ -341,7 +341,7 @@ fn level_geometry_from_game_data() {
         let mut file = vfs.open("gamedata/levels/l01_escape/level.geomx").unwrap();
         let geomx = LevelGeom::read(&mut file).unwrap();
         assert_eq!(geomx.header, Some((14, 267)));
-        assert!(geomx.slide_windows.is_empty());
+        assert!(geomx.progressive_meshes.is_empty());
         let counts: Vec<u32> = geomx
             .vertex_buffers
             .iter()
@@ -412,8 +412,8 @@ fn level_geometry_from_game_data() {
                 }
                 assert!(g.index_buffers.iter().all(|b| b.len() % 3 == 0), "{path}");
                 if file == "level.geomx" {
-                    assert!(g.slide_windows.is_empty(), "{path}");
-                } else if g.slide_windows.is_empty() {
+                    assert!(g.progressive_meshes.is_empty(), "{path}");
+                } else if g.progressive_meshes.is_empty() {
                     no_windows.push(level.as_str());
                 }
             }
@@ -511,7 +511,10 @@ fn start_position_from_game_data() {
             [0xC376_B9EF, 0xC1C6_5899, 0xC306_6F12]
         );
         assert_eq!(bits(actor.angles), [0x3B8D_71BC, 0xBFB2_B877, 0xBA34_045D]);
-        assert_eq!((actor.game_vertex, actor.level_vertex), (4, 11_713));
+        assert_eq!(
+            (actor.game_graph_vertex, actor.level_graph_node),
+            (4, 11_713)
+        );
 
         // Eye height (section 4.2).
         // The actor's section, in config\creatures\actor.ltx, inherits from

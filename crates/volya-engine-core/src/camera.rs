@@ -152,9 +152,11 @@ pub fn view_matrix(e: Vec3, d: Vec3, u: Vec3) -> Mat4 {
 }
 
 /// The aspect factor: `(height ÷ 2) / (width ÷ 2)`, halves rounded down to
-/// integers, times [`CAMERA_ASPECT`] (section 7).
+/// integers, times [`CAMERA_ASPECT`] (section 7). Halves below 1 count as 1,
+/// so a target narrower than 2 pixels gives a finite factor (our choice; the
+/// spec does not cover it).
 pub fn aspect_factor(width: u32, height: u32) -> f32 {
-    (height / 2) as f32 / (width / 2) as f32 * CAMERA_ASPECT
+    (height / 2).max(1) as f32 / (width / 2).max(1) as f32 * CAMERA_ASPECT
 }
 
 /// The projection matrix for vertical field of view `fov_y` (radians),
@@ -259,6 +261,7 @@ mod tests {
         assert_eq!(aspect_factor(1024, 768), 0.75);
         assert_eq!(aspect_factor(1920, 1080), 0.5625);
         assert_eq!(aspect_factor(1281, 1023), 511.0 / 640.0);
+        assert_eq!(aspect_factor(1, 0), 1.0);
         let p = projection(FOV_Y_DEGREES.to_radians(), 0.75, NEAR, 350.0);
         assert!((p[0][0] - 1.122454).abs() < 1e-5);
         assert!((p[1][1] - 1.496606).abs() < 1e-5);

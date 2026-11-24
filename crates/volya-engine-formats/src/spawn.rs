@@ -210,8 +210,8 @@ pub struct ActorStart {
     pub angles: [f32; 3],
     /// Game-graph vertex and level-graph node from the object-specific data
     /// (section 3.3), for cross-checks.
-    pub game_vertex: u16,
-    pub level_vertex: u32,
+    pub game_graph_vertex: u16,
+    pub level_graph_node: u32,
 }
 
 /// Finds the actor in spawn file `file`.
@@ -231,16 +231,16 @@ fn actor_fields(o: &SpawnObject<'_>) -> io::Result<ActorStart> {
     // Object-specific data: u16 game-graph vertex, float, u32, u32
     // level-graph node (section 3.3).
     let mut f = Fields { data: o.data };
-    let game_vertex = f.u16()?;
+    let game_graph_vertex = f.u16()?;
     f.take(8)?;
-    let level_vertex = f.u32()?;
+    let level_graph_node = f.u32()?;
     Ok(ActorStart {
         index: o.index,
         name: o.name.clone(),
         position: o.position,
         angles: o.angles,
-        game_vertex,
-        level_vertex,
+        game_graph_vertex,
+        level_graph_node,
     })
 }
 
@@ -313,7 +313,10 @@ mod tests {
         assert_eq!(actor.index, 1);
         assert_eq!(actor.position, [1.0, 2.0, 3.0]);
         assert_eq!(actor.angles, [0.5, -1.5, 0.25]);
-        assert_eq!((actor.game_vertex, actor.level_vertex), (4, 11_713));
+        assert_eq!(
+            (actor.game_graph_vertex, actor.level_graph_node),
+            (4, 11_713)
+        );
 
         assert!(actor_start(&file(&[object(0, &packet("x", 118, b""))])).is_err());
     }
