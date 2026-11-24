@@ -42,6 +42,7 @@ export function startInput(view, send) {
   let capture = false;
   // While upright, the game is covered by "turn your phone" (style.css) and
   // gets no touches; a touch begun before turning upright still ends.
+  // Keyboards, mice and gamepads reach it in any orientation.
   const upright = matchMedia("(orientation: portrait) and (pointer: coarse)");
   let touching = false;
 

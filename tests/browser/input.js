@@ -90,6 +90,12 @@ export const tests = {
     assert(prevented, "default prevented");
     assertEqual(held, [], "held");
     assertEqual(summary(actions), [], "actions");
+    // Keyboards (and gamepads, which share the path) reach the game in any
+    // orientation.
+    const keyed = await state();
+    key("keydown", "ArrowDown");
+    key("keyup", "ArrowDown");
+    assertEqual(summary((await since(keyed)).actions), ["press down", "release down"], "keys while upright");
   },
 
   "mouse moves the cursor": async () => {
