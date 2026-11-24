@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+
+[package]
+name = "volya-engine-render"
+description = "Volya Engine: wgpu renderer."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+volya-engine-formats = { path = "../volya-engine-formats" }
+wgpu.workspace = true
+
+[dev-dependencies]
+pollster.workspace = true
+volya-engine-installer = { path = "../volya-engine-installer" }

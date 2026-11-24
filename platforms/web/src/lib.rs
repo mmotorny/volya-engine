@@ -9,25 +9,34 @@
 
 mod audio;
 mod game;
+mod gpu;
 mod import;
 mod opfs;
-
-use std::cell::RefCell;
 
 use serde::Serialize;
 use volya_engine::core::vfs::conformance;
 use wasm_bindgen::prelude::*;
 use web_sys::{OffscreenCanvas, WorkerGlobalScope};
 
-thread_local! {
-    /// The page's canvas, transferred to this worker; the renderer's target.
-    static CANVAS: RefCell<Option<OffscreenCanvas>> = const { RefCell::new(None) };
+/// Starts the engine on the canvas transferred from the page. Without
+/// WebGPU the engine still starts; `status` reports why graphics are
+/// unavailable.
+#[wasm_bindgen]
+pub async fn start(canvas: OffscreenCanvas) {
+    gpu::init(canvas).await;
 }
 
-/// Starts the engine on the canvas transferred from the page.
+/// The canvas's size in CSS pixels and the page's devicePixelRatio, on start
+/// and whenever they change.
 #[wasm_bindgen]
-pub fn start(canvas: OffscreenCanvas) {
-    CANVAS.with(|c| *c.borrow_mut() = Some(canvas));
+pub fn resize(width: f64, height: f64, dpr: f64) {
+    gpu::resize(width, height, dpr);
+}
+
+/// Runs one animation frame; `time` in milliseconds.
+#[wasm_bindgen]
+pub fn frame(time: f64) {
+    gpu::frame(time);
 }
 
 /// Engine interface for the page, tests and debugging: runs `op` with JSON
@@ -55,6 +64,11 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
             audio::stop_all();
             Ok("null".into())
         }
+        "debug_draw" => to_json(&gpu::debug_draw(args.get("path").and_then(|v| v.as_str()))?),
+        "debug_capture" => {
+            let size = |key| args.get(key).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            to_json(&gpu::debug_capture(size("width"), size("height")).await?)
+        }
         "read_head" => {
             let max = args.get("max").and_then(|v| v.as_u64()).unwrap_or(4096);
             to_json(&game::read_head(text("path"), max)?)
@@ -73,6 +87,7 @@ struct Status {
     engine: volya_engine::test_api::Status,
     /// `worker` when running in a worker, as the architecture requires.
     thread: &'static str,
+    gpu: gpu::Status,
 }
 
 fn status() -> Status {
@@ -83,6 +98,7 @@ fn status() -> Status {
         } else {
             "main"
         },
+        gpu: gpu::status(),
     }
 }
 

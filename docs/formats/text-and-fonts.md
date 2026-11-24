@@ -104,7 +104,7 @@ as a glyph index (0–255) of the font (section 3.1). The Russian texts use the 
 |---|---|---|
 | `$$ACTION_<name>$$` | when the table is loaded | Replaced by the name of the key bound to the input action `<name>` (case-insensitive action name), as `<primary>` or `<primary> , <secondary>` when two keys are bound. The unsubstituted text is remembered and the substitution is redone whenever key bindings change. Used by 32 strings (e.g. `$$ACTION_crouch$$`). The key-name strings belong to the key-binding specification. |
 | `\n` (the two bytes `0x5C 0x6E`, not a real line break) | only by UI text elements in complex mode (section 4.3) | Line break. Used by 96 strings (dialogue texts). In simple mode and in direct font output it is drawn as the two glyphs `\` and `n`. |
-| `%c[…]` | only by UI text elements in complex mode (section 4.3) | Colour change. Not used in the Russian string tables; used by texts that game code builds (e.g. `%c[default]`, `%c[green]`, `%c[UI_orange]`, `%c[255,192,192,192]`). |
+| `%c[…]` | only by UI text elements in complex mode (section 4.3) | Colour change. In simple mode and in direct font output it is drawn literally. Not used in the Russian string tables; used by texts that game code builds (e.g. `%c[default]`, `%c[green]`, `%c[UI_orange]`, `%c[255,192,192,192]`). |
 | `%s`, `%d` | only where specific game code uses a string as a format template | Placeholders filled by that code (9 strings of the multiplayer tables, e.g. `Игрок %s выиграл бой!`). Text elements draw strings literally, so a `%` is shown as `%`. |
 
 ### 1.7 Evidence (Russian edition)
@@ -124,8 +124,19 @@ as a glyph index (0–255) of the font (section 3.1). The Russian texts use the 
 ### 2.1 Fonts available to the UI
 
 The game creates a fixed set of 11 fonts when its UI is first created. UI layout XML refers to them by
-the `font` attribute; the names are matched exactly (case-sensitive). An unknown name is reported as
-an error and the element gets no font.
+the `font` attribute; the names are matched exactly (case-sensitive). All 11 names in the table below
+are accepted (including `di`, which no layout file of this edition uses). An absent or empty `font`
+attribute leaves the element's font unchanged (no error). Any other non-empty value is a **fatal
+error** in the shipped game: an error report "unknown font" naming the value is produced and the game
+stops. (Were execution forced past that error, the lookup would yield no font and a text element
+would keep its current font; all occurrences below are on `text` elements.)
+
+The layout data of this edition contains three values that are not font names — `header` (10
+times), `normal` (7) and `graffiti18` (1) — but only in the eight files `carbody.xml`,
+`inventory.xml`, `inventorymp_new.xml`, `inventorymp_new2.xml`, `jobs_new.xml`, `maingame_new.xml`,
+`map.xml` and `trade_new.xml` of `config\ui\`. None of these files is named by the game's code or
+scripts or included by another file; they are never loaded, so the fatal error does not occur in
+practice.
 
 | `font=` in UI XML | Section of `config\fonts.ltx` | Flags |
 |---|---|---|
@@ -174,7 +185,8 @@ If the preferred key is absent the next lower one in the order `texture1600`, `t
 choice is made when the fonts are created and made again, with the metric file reloaded, whenever the video device is reset (e.g. a resolution change).
 The width and aspect ratio play no part.
 
-Examples (all UI fonts of this edition have all three keys):
+Examples (every UI font of this edition except `medium`, `small` and `di` has all three keys; those
+three have only `texture` and therefore use the same texture at every resolution):
 
 | Resolution | `graffiti22` texture | `graffiti19` texture |
 |---|---|---|
@@ -203,11 +215,14 @@ For the final name *T* (e.g. `ui\ui_font_graff_22_1024`):
 
 ### 2.6 Metric file formats
 
-The metric file contains one of four sections, chosen in this priority order (section names are
-case-insensitive, as in all LTX):
+The metric file contains one of four sections. When a file contains more than one, the first present
+in the order `[mb_symbol_coords]`, `[symbol_coords]`, `[Char Widths]`, `[font_size]` is used (section
+names are case-insensitive, as in all LTX). No metric file of this edition contains more than one.
 
-1. **`[symbol_coords]`** — used by every UI font of this edition (98 of the 101 metric files; two
-   files that no font references lack `height`).
+1. **`[symbol_coords]`** — used by 98 of the 101 metric files `textures\ui\ui_font_*.ini`, among them
+   those of every UI font except `medium` and `small`. Two of the 98, `ui_font_letter_16.ini` and
+   `ui_font_letter_18.ini`, lack `height`; no font references them (the letterica fonts use the
+   `_800`, `_1024` and `_1600` files).
    - `height` — the glyph height *h* in texture pixels (also the default font height).
    - `000` … `255` (three-digit decimal byte codes, all 256 required) —
      `x1, y1, x2, y2` in texture pixels. The glyph's cell is *x* = `x1`, *y* = `y1`, width
@@ -215,13 +230,15 @@ case-insensitive, as in all LTX):
      `y1` + *h*). A glyph with *w* = 0 is invisible and has zero advance; codes 0–31 are all
      `0, 0, 0, 0`.
 2. **`[mb_symbol_coords]`** — a 65,536-entry variant for multi-byte text (keys `00000`–`65535`,
-   width `x2` + 1 − `x1`, absent keys are empty glyphs). Not used by this edition.
+   width `x2` + 1 − `x1`, absent keys are empty glyphs). Not used by this edition. (Listed second
+   here for readability; it takes precedence over `[symbol_coords]`, see above.)
 3. **`[Char Widths]`** — `height` *h* and keys `0`…`255` giving each glyph's width; glyph *i* lies in
-   a grid of *h* × *h* cells, 16 per row: *x* = (*i* mod 16)·*h*, *y* = ⌊*i* / 16⌋·*h*. Used by
-   `ui_font_hud_02` (`medium`).
+   a grid of *h* × *h* cells, 16 per row: *x* = (*i* mod 16)·*h*, *y* = ⌊*i* / 16⌋·*h*. Used by two
+   files, both with `height = 16`: `ui_font_hud_02` (font `medium`) and `ui_font_console_01`, which no
+   font references (`di` uses `ui_font_console_02`, a `[symbol_coords]` file).
 4. **`[font_size]`** — fixed-width grid: `height` *h*, `width` *c*, `cpl` (cells per line) *n*;
    glyph *i* is at *x* = (*i* mod *n*)·*c*, *y* = ⌊*i* / *n*⌋·*h*, width *c*. Used by `ui_font_hud_01`
-   (`small`: 8 × 8, 16 per line).
+   (`small`: 8 × 8, 16 per line), the only such file.
 
 If none is present the font cannot be created (fatal).
 
@@ -346,8 +363,9 @@ do not affect each other.
 
 ### 4.2 Simple mode (`complex_mode` 0, the default)
 
-The whole text is drawn as one string (section 3). With the element's absolute rectangle
-(*X*, *Y*, *w*, *h*) in UI units, its text offset (*tx*, *ty*), and the line height in UI units
+The whole text is drawn as one string (section 3): colour codes `%c[…]` and `\n` are **not**
+interpreted in this mode; they are drawn literally as their glyphs, like any other text. With the
+element's absolute rectangle (*X*, *Y*, *w*, *h*) in UI units, its text offset (*tx*, *ty*), and the line height in UI units
 *t* = *f* · interval.*y* / *s*ᵧ:
 
 - horizontal anchor *a*ₓ = 0 (left), *w* (right) or *w* / 2 (centre); the font is drawn with the same
@@ -376,15 +394,34 @@ text alpha**. The codes themselves are not drawn.
 
 **Line breaks.** Each `\n` (backslash, `n`) ends the current line; the two bytes are removed.
 
-**Wrapping.** Lines are wrapped to the element width *w* (UI units). Character widths are measured
-in UI units as *w*ᶜ · interval.*x* / *s*ₓ. While filling a line, a character is accepted when the
-width of the line so far plus the character plus a reserve of the width of the letter `o` does not
-exceed *w*. When a character is not accepted, the line is broken after the most recent whitespace
-character of the current segment that is not its first character, or else after the rejected
-character itself (which stays on the line); filling continues on a new line with the character
-after the break. Whitespace at a break remains at the end of the line it ends. Widths are accumulated
-across the coloured segments of a line. The text is re-wrapped whenever it, the font or the element
-width changes.
+**Wrapping.** Lines are wrapped to the element width *w* (UI units). Wrapping works on
+**segments**: the pieces obtained by cutting the text at every colour code and then cutting each
+coloured piece at every `\n`, so a segment contains neither. Positions are counted within each
+segment from 0. Character widths are measured in UI units as *w*ᶜ · interval.*x* / *s*ₓ; *r* is the
+width of the letter `o` measured the same way.
+
+- The running width *L* of the current line starts at 0 on every new line and carries over from one
+  segment to the next segment on the same line.
+- Each character of a segment, in order, is **accepted** when *L* + (its width) + *r* ≤ *w*. An
+  accepted character's width is added to *L* — except for the last character of a segment, whose
+  width is not added (so the following segment on the same line is measured without it).
+- **Break points** are whitespace characters of the *current segment only*, at a position other
+  than 0, that have been reached since the segment started or since the last break in it (the
+  character being tested counts as reached). Whitespace in earlier segments of the line is never a
+  break point, and a break point is forgotten once a break has been made.
+- When a character is **not accepted** and it is not the last character of its segment: if there is
+  a break point, the line ends after the most recent one (the whitespace stays at the end of that
+  line) and filling resumes on a new line with the character after it, which is tested again; if
+  there is none, the line ends **after the rejected character itself, which stays on the line**,
+  and filling resumes on a new line with the next character.
+- When the last character of a segment is not accepted, the rest of the segment including that
+  character stays on the current line (no break point is used) and the line ends.
+- When a segment ends without a rejected character, its text stays on the current line; the line
+  ends there if the segment was ended by `\n` and otherwise continues with the next segment.
+
+Whitespace means the ASCII white-space characters (space, tab, line feed, vertical tab, form feed,
+carriage return); whether bytes 0x80–0xFF (e.g. the no-break space 0xA0) count was not established.
+The text is re-wrapped whenever it, the font or the element width changes.
 
 **Drawing.** Lines are stacked from the top with a pitch of *t* + *g* UI units, where *t* is the line
 height of section 4.2 and *g* an extra line gap (0 by default). The text block height is
@@ -400,7 +437,9 @@ Fonts and strings used (title-menu spec sections 3.4, 4 and 5):
 
 - Captions: font `graffiti22` (`[ui_font_graffiti22_russian]`), colour (0, 0, 0, 255), simple mode,
   horizontally **centred**, vertically **centred**, in rows of 164 × 30 UI units at absolute
-  (700, 419 + 30·*i*); text = string-table lookup of the caption key.
+  (700, 419 + 30·*i*); text = string-table lookup of the caption key. The menu code sets simple
+  mode and both centre alignments on every item it creates; the layout data does not specify them
+  (the row height *h* used for vertical centring is the item height 30, the list's `btn_height`).
 - Version caption `static_version` (15, 740, 100 × 30): `<text align="l" font="graffiti19" r="135"
   g="123" b="116" complex_mode="0"/>` — font `graffiti19`, colour (135, 123, 116, 255), simple mode,
   left aligned, top aligned (no `vert_align`), no offset.
@@ -428,6 +467,7 @@ pen y = 0.78125 · (419 + (30 − 21/0.78125)/2) = 328.5625; *x*₀ = 610 − 40
 - Which UI data, if any, sets the complex-mode extra line gap.
 - Multi-byte (`[mb_symbol_coords]`) text handling beyond the table layout (unused by this edition).
 - The exact key-name strings substituted for `$$ACTION_…$$`.
+- Whether bytes 0x80–0xFF count as whitespace when choosing a wrap break point (section 4.3).
 
 ## 7. Provenance
 
@@ -447,3 +487,25 @@ pen y = 0.78125 · (419 + (30 − 21/0.78125)/2) = 328.5625; *x*₀ = 610 − 40
 - **Sources not used:** no leaked or derived engine source code, no third-party reimplementations or
   documentation of the engine's internals; no web searches. Statements of the form "not established"
   mark what neither the data nor the binaries settled.
+- **Revision 2026-11-23** (reconciliation with the UI layout specification; same edition and tools,
+  plus: a survey of all `font` attribute values in `config\`; a survey of the sections and heights of
+  all 101 metric files and of the texture keys of the UI font sections; a search of the game
+  library, the engine executable, all scripts and all include lines for the layout files that are
+  loaded; and a re-reading in the game library of the font-name lookup and its callers, the error
+  path, the simple-mode drawing, the wrapping and the code that builds the title-menu items, and in
+  the engine executable of the metric-section choice). Changes against the previously approved text:
+  - 2.1: the 11 font names including `di` are confirmed; an unknown non-empty name is now stated to
+    be a fatal error (was "reported as an error and the element gets no font"); an absent or empty
+    `font` keeps the current font; the three unused values `header`, `normal`, `graffiti18` and the
+    eight never-loaded files that contain them are listed.
+  - 2.3: the note that every UI font has all three texture keys now excludes `medium`, `small`, `di`.
+  - 2.6: metric-section precedence corrected (`[mb_symbol_coords]` before `[symbol_coords]`); the
+    two `[symbol_coords]` files without `height` are named (`ui_font_letter_16.ini`,
+    `ui_font_letter_18.ini`); `[Char Widths]` is also used by `ui_font_console_01`; `[symbol_coords]`
+    is not used by `medium` and `small`.
+  - 1.6, 4.2: stated explicitly that simple mode draws colour codes and `\n` literally.
+  - 4.3: wrapping rule made precise (segments, break points only in the current segment and never
+    at its position 0, no-whitespace break after the rejected character, which stays on the line,
+    end-of-segment cases); the whitespace classification of high bytes added to section 6.
+  - 5: the vertical centring of the title-menu captions is confirmed from the code that builds the
+    menu items (no change to the numbers) and stated to come from that code, not from the data.

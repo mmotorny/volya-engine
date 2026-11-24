@@ -194,6 +194,11 @@ fn with_tree<T>(f: impl FnOnce(&dyn Vfs) -> std::io::Result<T>) -> Result<T, JsV
     })
 }
 
+/// The whole file at `path` in the game tree.
+pub fn read(path: &str) -> Result<Vec<u8>, JsValue> {
+    with_tree(|tree| volya_engine::core::vfs::read(tree, path))
+}
+
 #[derive(Serialize)]
 pub struct Entry {
     name: String,

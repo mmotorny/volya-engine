@@ -17,7 +17,7 @@ use volya_engine_devserver::{BASE, Server};
 
 use super::{Profile, Result, cmd, output, root, run as run_cmd, step, web};
 
-const SUITES: &[&str] = &["smoke", "platform", "import", "audio"];
+const SUITES: &[&str] = &["smoke", "platform", "import", "audio", "render"];
 const TARGETS: &[&str] = &["chrome", "iphone"];
 const REPORT_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -116,17 +116,28 @@ fn wait_report(id: &str, reports: &Receiver<String>) -> Result<String> {
 /// Simulator exposes `navigator.gpu` but never returns an adapter, on the main
 /// thread or in workers; WebGPU needs the real device.
 const KNOWN_FAILURES: &[(&str, &str, &str)] = &[
-    (
-        "iphone",
-        "WebGPU adapter on the main thread",
-        "iOS Simulator has no WebGPU adapter; check on a real device",
-    ),
+    ("iphone", "WebGPU adapter on the main thread", NO_WEBGPU),
     (
         "iphone",
         "WebGPU renders from a worker to an OffscreenCanvas",
-        "iOS Simulator has no WebGPU adapter; check on a real device",
+        NO_WEBGPU,
     ),
+    (
+        "iphone",
+        "WebGPU renderer runs in the engine worker",
+        NO_WEBGPU,
+    ),
+    ("iphone", "empty draw list renders black", NO_WEBGPU),
+    (
+        "iphone",
+        "draws an uncompressed game texture exactly",
+        NO_WEBGPU,
+    ),
+    ("iphone", "draws a BC game texture as stored", NO_WEBGPU),
+    ("iphone", "plays a game video as a texture", NO_WEBGPU),
 ];
+
+const NO_WEBGPU: &str = "iOS Simulator has no WebGPU adapter; check on a real device";
 
 /// Turns `fail` lines of tests in [`KNOWN_FAILURES`] for `target` into
 /// `skip` lines carrying the known reason.

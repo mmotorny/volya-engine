@@ -98,8 +98,12 @@ shipped data (a strict parser rejects 18 of the 154 `config\ui\*.xml` files):
 
 ### 1.4 Document model and lookup
 
-- The **root** is the first element of the document (`<window>` in most layout files; `<ui_texture>`
-  in texture descriptions; `<w>`, `<colors>` etc. elsewhere). Its own name is not significant.
+- The **root** is the first element of the document after `#include` expansion (comments,
+  `<?…?>` and `<!…>` declarations are not elements). Its own name is not significant. Counted this
+  way over the 154 files of `config\ui\` (each file counted once, as loaded on its own): `<window>`
+  in 70, `<ui_texture>` in 23 (exactly the 23 texture descriptions, section 6.1), `<w>` in 22, 29
+  other names (`<colors>`, `<map_spots>`, …) in 33, and 6 files have no element at all (section
+  "Evidence summary").
 - An element is addressed by a **path** of element names separated by `:` relative to the root
   (e.g. `shniaga_wnd:shniaga:magnifire`), plus an **index** that selects the *n*-th (0-based)
   element with the first name among the root's children; every further path component takes the
@@ -289,8 +293,12 @@ trimmed of surrounding white space). Each name gets `.xml` appended and is loade
 ui_icons_map, ui_common, ui_old_textures, ui_ingame, ui_map_description, ui_models_multiplayer,
 ui_team_logo, ui_team_logo_small, ui_mainmenu, ui_mp_main, ui_statistics, ui_hud, ui_numpad,
 ui_inventory, ui_inventory2, ui_iconstotal, ui_pda, ui_icons_npc, ui_npc_monster, ui_npc_unique,
-ui_buy_menu, ui_asus_intro`. If the section does not exist, no descriptions are loaded. The files
-are loaded once, when the main-menu object is created (before any screen is built).
+ui_buy_menu, ui_asus_intro`. All 23 files exist. The texture named by `ui_mp_icon_rank`
+(`ui\ui_mp_icon_rank`, ids `rank_0`…`rank_4`, referenced by `ui_game_dm.xml` and its `_16` variant)
+is **absent** from this edition: no `textures\ui\ui_mp_icon_rank` file of any kind (`.dds`, `.ogm`,
+`.avi`, `.seq`) exists in any of the 14 archives (nor in the multiplayer map archive under `mods\`);
+the textures of the other 22 files all exist. If the section does not exist, no descriptions are
+loaded. The files are loaded once, when the main-menu object is created (before any screen is built).
 
 ### 6.2 File format
 
@@ -383,7 +391,7 @@ A static's caption is described by its `text` child:
 | `align` | `l` left, `r` right, `c` centre (exact one-letter values); other/absent: unchanged (default left) |
 | `vert_align` | `t` top, `c` centre, `b` bottom; other/absent: unchanged (default top) |
 | `x`, `y` | text offset in units from the element's top-left (default 0) |
-| `complex_mode` | 1: multi-line text (7.4); 0: single line |
+| `complex_mode` | 1: multi-line text with colour codes and `\n` (7.4); 0: single line, drawn literally |
 
 Further optional children of the element (not of `text`) give state colours for buttons:
 `text_color` with children `e` (enabled), `d` (disabled), `t` (touched), `h` (highlighted), each a
@@ -394,11 +402,17 @@ Survey: 1,424 `text` children with `font`, 918 with `align`, 82 with `vert_align
 
 ### 7.2 Font names
 
-Accepted values of `font` (exact match): `graffiti19`, `graffiti22`, `graffiti32`, `graffiti50`,
-`arial_14`, `medium`, `small`, `letterica16`, `letterica18`, `letterica25`. Any other non-empty
-value is an error ("unknown font"). The fonts themselves (their `config\fonts.ltx` sections,
-glyph sizes, per-resolution textures) are specified with the font system; this document uses only
-a font's line height and character advance widths, both in screen pixels.
+Accepted values of `font` (exact match), 11 in all: `graffiti19`, `graffiti22`, `graffiti32`,
+`graffiti50`, `arial_14`, `medium`, `small`, `letterica16`, `letterica18`, `letterica25`, `di`
+(`di` is accepted but no layout file of this edition uses it). An absent or empty `font` leaves the
+font unchanged. Any other non-empty value is a **fatal error** in the shipped game (an error report
+"unknown font" naming the value; the game stops). The data contains three such values, `header`,
+`normal` and `graffiti18`, only in `carbody.xml`, `inventory.xml`, `inventorymp_new.xml`,
+`inventorymp_new2.xml`, `jobs_new.xml`, `maingame_new.xml`, `map.xml` and `trade_new.xml`; no code,
+script or include names these eight files, so they are never loaded (all 18 occurrences are on
+`text` children). The fonts themselves (their `config\fonts.ltx` sections, glyph sizes,
+per-resolution textures) are specified with the font system; this document uses only a font's line
+height and character advance widths, both in screen pixels.
 
 ### 7.3 Placement (single line)
 
@@ -413,23 +427,36 @@ and the line height in units *lh* = (font line height in pixels) / sy.
 - Text is not clipped to the element unless `clipper` is on.
 - Examples: `static_version` (15, 740, 100 × 30), `<text align="l" font="graffiti19" r="135"
   g="123" b="116" complex_mode="0"/>`: anchor (15, 740), left aligned, top, colour ARGB
-  (255, 135, 123, 116), at 1920 × 1080 screen (28.125, 1040.625). Title-menu item row *i* (700,
-  419 + 30*i*, 164 × 30) centred by code, top: anchor (782, 419 + 30*i*).
+  (255, 135, 123, 116), at 1920 × 1080 screen (28.125, 1040.625).
+- Title-menu item row *i* (700, 419 + 30*i*, 164 × 30): the menu code sets every item caption to
+  single-line mode, **horizontal centre and vertical centre** (the layout data gives only their
+  font and colour), so the anchor is (782, 419 + 30*i* + (30 − *lh*)/2). With `graffiti22` at
+  1024 × 768 (line height 22 px, *lh* = 22): (782, 423 + 30*i*). At 800 × 600 (`_800` variant,
+  21 px, *lh* = 26.88): *ay* = 419 + 30*i* + 1.56; for item 0 the font draws at screen y 328.5625.
+  The resulting pixels are worked out in the text-and-fonts specification, section 5.
 
 ### 7.4 Multi-line (complex) mode
 
-- The text is split into lines at every literal two-character sequence `\n` (backslash, `n`) and
-  then word-wrapped to the element width *w*: characters are accumulated while
-  (width so far + width of the next character + width of the letter `o`) ≤ *w* (widths in units =
-  pixels / sx); when the next character does not fit, the line is broken after the last white-space
-  character of the line if there is one, otherwise before the character that did not fit.
+This mode is used only when `complex_mode` is 1. The complete rules (colour codes, line breaks,
+wrapping, line placement) are in the text-and-fonts specification
+(`docs/formats/text-and-fonts.md`), section 4.3; in brief:
+
+- The text is cut at every colour code and at every literal two-character sequence `\n`
+  (backslash, `n`), which ends a line. The resulting pieces (segments) are word-wrapped to the
+  element width *w*: a character is accepted while (line width so far + its width + width of the
+  letter `o`) ≤ *w* (widths in units = the character's advance in pixels, including the font's
+  interval factor, divided by sx). When a character is not accepted, the line is
+  broken after the most recent white-space character **of the current segment** (not at the
+  segment's position 0); if the segment has none, the line is broken **after the rejected character,
+  which stays on the line**. The exact end-of-segment cases are in the text-and-fonts specification.
 - Lines are laid out top to bottom with pitch *lh* + interval (interval 0 unless set by code);
   *H_t* = *n* · (*lh* + interval) − interval for *n* lines. Horizontal alignment applies to each
   line separately; vertical alignment uses *H_t*.
-- Colour codes inside the text (both modes, when colour codes are enabled, which is the default):
-  `%c[default]` restores the element's text colour, `%c[<name>]` selects a colour of
-  `color_defs.xml`, `%c[a,r,g,b]` gives the colour numerically (four decimal integers, in that
-  order). The shipped string tables do not use them.
+- Colour codes are interpreted **only in this mode** (in single-line mode they are drawn
+  literally, as are `\n` sequences): `%c[default]` restores the element's text colour,
+  `%c[<name>]` selects a colour of `color_defs.xml`, `%c[a,r,g,b]` gives the colour numerically
+  (four decimal integers, in that order; the alpha always stays the element's text alpha). The
+  shipped string tables do not use them.
 
 ## 8. How UI textures are drawn
 
@@ -516,7 +543,7 @@ What `ui_mm_main.xml` needs, by the rules above:
 | `magnifire` | rectangle and `stretch="1"`, path `ui\ui_magnifier`; `y_offset` value read by code (1.4) |
 | `left_anim`, `right_anim` | `alignment="c"` (4.1), `stretch="1"` 55 × 55 from 86 × 86 px, `heading="1"` (5.4) |
 | `left_grating`, `right_grating` | no stretch: drawn 46 × 70 and 55 × 67 units from the top-left (5.3) |
-| `menu_*` lists | attributes `btn_height`, `font`, `a r g b` and `btn` children `name`/`caption` are read by the menu code (title-menu spec section 4) |
+| `menu_*` lists | attributes `btn_height`, `font`, `a r g b` and `btn` children `name`/`caption` are read by the menu code (title-menu spec section 4); each caption is drawn single-line, centred horizontally and vertically in its 164 × 30 row (7.3) |
 | `menu_sound` | `random` attribute and `menu_music` values read by the menu code |
 | `static_version` | 7.1–7.3: `graffiti19`, left, top, ARGB (255, 135, 123, 116), single line |
 
@@ -546,7 +573,12 @@ What `ui_mm_main.xml` needs, by the rules above:
 | `textures\ui\ui_mainmenu.dds`, `ui_common.dds`, `ui_hud.dds`, `ui_iconstotal.dds`, `ui_inventory.dds` | | 1024 × 1024 DXT5, 1 mip level |
 | `textures\ui\ui_magnifier.dds` 256 × 32, `ui_ani_cursor_01.dds` 64 × 64, `ui_noise_00.dds` 256 × 256 | | power-of-two, 1 mip level |
 
-`config\ui\` contains 154 `.xml` files (60 with root `window`, 23 `ui_texture`, 17 `w`).
+`config\ui\` contains 154 `.xml` files. Counting the first element of each file after `#include`
+expansion (comments and declarations skipped; the expansion changes no file's first element): 70
+`window`, 23 `ui_texture`, 22 `w`, 33 files with 29 other names, and 6 files with no element:
+`follower_character.xml`, `inventory_character.xml` and `pda_dialog.xml` are empty (0 bytes in every
+archive that has them), `map_spots_darkvalley.xml`, `map_spots_military.xml` and
+`map_spots_rostok.xml` contain only comments.
 
 ## Provenance
 
@@ -564,3 +596,27 @@ What `ui_mm_main.xml` needs, by the rules above:
 - Prior approved specs relied on: `docs/formats/db-archive.md`, `docs/formats/ltx-config.md`,
   `docs/behavior/startup.md`, `docs/behavior/title-menu.md`.
 - No leaked source code, derived projects or third-party documentation of the engine was used.
+- **Revision 2026-11-23** (reconciliation with the text-and-fonts specification; same edition and
+  tools, plus: a survey of all `font` attribute values; a count of the first element of every
+  `config\ui\` file after include expansion; a check against the archive listings of every
+  texture-description texture and of the sizes of the files without elements; a search of the game
+  library, the engine executable, all scripts and all include lines for the layout files that are
+  loaded; and a re-reading in the game library of the font-name lookup and its callers, the error
+  path, the single-line drawing, the wrapping and the code that builds the title-menu items). Changes
+  against the previously approved text:
+  - 1.4 and Evidence summary: the root-element counts are corrected (70 `window`, 23 `ui_texture`,
+    22 `w`, 29 other names in 33 files, 6 files without any element, three of them 0 bytes and three
+    containing only comments; was 60 `window`, 17 `w`) and the counting rule is stated.
+  - 6.1: the texture of `ui_mp_icon_rank` (`ui\ui_mp_icon_rank`) is stated to be absent from the
+    edition; the other 22 description textures exist.
+  - 7.1, 7.2: `di` added (11 accepted names, was 10); an unknown non-empty name is a fatal error;
+    an absent or empty `font` keeps the current font; the three unused values `header`, `normal`,
+    `graffiti18` and the eight never-loaded files that contain them are listed.
+  - 7.3: the title-menu example is corrected: item captions are centred **vertically** as well as
+    horizontally by the menu code (was "top"), anchor y 423 + 30*i* at 1024 × 768 (was 419 + 30*i*);
+    the same fact is added to the checklist of section 10.
+  - 7.1, 7.4: colour codes and `\n` are interpreted only in complex mode (was "both modes"); the
+    no-whitespace break is after the rejected character, which stays on the line (was "before" it);
+    break points are searched only in the current segment, never at its position 0 (was "the
+    line"); the character widths are stated to include the font's interval factor; the full rule is
+    referenced to the text-and-fonts specification.
