@@ -12,7 +12,7 @@ use std::time::Instant;
 
 use volya_engine_formats::dds::Dds;
 use volya_engine_formats::dds::build::{PixelFormat, file};
-use volya_engine_formats::video::{Frame, Plane};
+use volya_engine_formats::video::{Chroma, Frame, Plane};
 use volya_engine_render::wgpu;
 use volya_engine_render::{DrawList, Quad, Rect, Renderer, TextureError};
 
@@ -325,20 +325,49 @@ fn converts_uncompressed_formats_and_uploads_mips_and_cube_faces() {
     assert_eq!(pixel(&image, 16, 13, 1), [200, 0, 0, 255], "cube face 0");
 }
 
-/// Reference conversion: BT.601, video range.
+/// Reference conversion: the pixel-shader path of docs/behavior/startup.md
+/// 6.6 (BT.601, limited range), on 0…1 values.
 fn yuv_to_rgb(y: u8, cb: u8, cr: u8) -> [u8; 4] {
-    let y = (f32::from(y) - 16.0) * 1.164383;
-    let (cb, cr) = (f32::from(cb) - 128.0, f32::from(cr) - 128.0);
-    let channel = |v: f32| v.round().clamp(0.0, 255.0) as u8;
+    let [y, u, v] = [y, cb, cr].map(|c| f32::from(c) / 255.0);
+    let channel = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
     [
-        channel(y + 1.596027 * cr),
-        channel(y - 0.391762 * cb - 0.812968 * cr),
-        channel(y + 2.017232 * cb),
+        channel(1.16406 * y + 1.59765 * v - 0.86961),
+        channel(1.16406 * y - 0.390625 * u - 0.8125 * v + 0.53076),
+        channel(1.16406 * y + 2.01562 * u - 1.0786),
         255,
     ]
 }
 
-/// A synthetic 4:2:0 frame: planes with a row stride wider than the picture.
+/// The older-hardware integer path of startup.md 6.6, which the spec calls
+/// equivalent: the reference must agree with it.
+fn yuv_to_rgb_integer(y: u8, cb: u8, cr: u8) -> [u8; 4] {
+    let c = 298 * (i32::from(y) - 16);
+    let (d, e) = (i32::from(cb) - 128, i32::from(cr) - 128);
+    let channel = |v: i32| (v >> 8).clamp(0, 255) as u8;
+    [
+        channel(c + 409 * e + 128),
+        channel(c - 100 * d - 208 * e + 128),
+        channel(c + 516 * d + 128),
+        255,
+    ]
+}
+
+#[test]
+fn conversion_paths_agree_and_zero_is_green() {
+    for y in (0..=255).step_by(5) {
+        for cb in (0..=255).step_by(15) {
+            for cr in (0..=255).step_by(15) {
+                let (a, b) = (yuv_to_rgb(y, cb, cr), yuv_to_rgb_integer(y, cb, cr));
+                assert_near(a, b, 2, &format!("({y}, {cb}, {cr})"));
+            }
+        }
+    }
+    assert_eq!(yuv_to_rgb_integer(0, 0, 0), [0, 135, 0, 255]);
+    assert_eq!(yuv_to_rgb(0, 0, 0), [0, 135, 0, 255]);
+}
+
+/// A synthetic 4:2:0 coded frame larger than its picture, with the
+/// picture offset in the header pointing away from the top-left corner.
 struct SyntheticFrame {
     width: usize,
     height: usize,
@@ -346,51 +375,63 @@ struct SyntheticFrame {
 }
 
 impl SyntheticFrame {
+    /// Extra coded columns and rows beyond the picture.
     const PAD: usize = 5;
 
+    fn coded(&self) -> (usize, usize) {
+        (self.width + Self::PAD, self.height + Self::PAD)
+    }
+
     fn new(width: usize, height: usize, seed: u8) -> Self {
-        let (cw, ch) = (width.div_ceil(2), height.div_ceil(2));
+        let (fw, fh) = (width + Self::PAD, height + Self::PAD);
+        let (cw, ch) = (fw.div_ceil(2), fh.div_ceil(2));
         let plane = |w: usize, h: usize, k: u8| -> Vec<u8> {
-            (0..(w + Self::PAD) * h)
-                .map(|i| ((i % (w + Self::PAD)) * 37 + (i / (w + Self::PAD)) * 11) as u8 ^ k ^ seed)
+            (0..w * h)
+                .map(|i| ((i % w) * 37 + (i / w) * 11) as u8 ^ k ^ seed)
                 .collect()
         };
         Self {
             width,
             height,
-            planes: [
-                plane(width, height, 0),
-                plane(cw, ch, 0x55),
-                plane(cw, ch, 0xaa),
-            ],
+            planes: [plane(fw, fh, 0), plane(cw, ch, 0x55), plane(cw, ch, 0xaa)],
         }
     }
 
     fn frame(&self) -> Frame<'_> {
-        let (cw, ch) = (self.width.div_ceil(2), self.height.div_ceil(2));
-        let sizes = [(self.width, self.height), (cw, ch), (cw, ch)];
-        let planes = [0, 1, 2].map(|i| Plane {
+        let (fw, fh) = self.coded();
+        let (cw, ch) = (fw.div_ceil(2), fh.div_ceil(2));
+        let sizes = [(fw, fh), (cw, ch), (cw, ch)];
+        let coded = [0, 1, 2].map(|i| Plane {
             width: sizes[i].0,
             height: sizes[i].1,
-            stride: sizes[i].0 + Self::PAD,
+            stride: sizes[i].0,
             data: &self.planes[i],
         });
-        Frame { number: 0, planes }
+        Frame {
+            number: 0,
+            coded,
+            chroma: Chroma::Yuv420,
+            width: self.width as u32,
+            height: self.height as u32,
+            pic_x: 2,
+            pic_y: 4,
+        }
     }
 
+    /// Texel (x, y): coded luma (x, y), chroma (⌊x / 2⌋, ⌊y / 2⌋).
     fn expected(&self, x: usize, y: usize) -> [u8; 4] {
         let f = self.frame();
         let at = |p: &Plane, x: usize, y: usize| p.data[y * p.stride + x];
         yuv_to_rgb(
-            at(&f.planes[0], x, y),
-            at(&f.planes[1], x / 2, y / 2),
-            at(&f.planes[2], x / 2, y / 2),
+            at(&f.coded[0], x, y),
+            at(&f.coded[1], x / 2, y / 2),
+            at(&f.coded[2], x / 2, y / 2),
         )
     }
 }
 
 #[test]
-fn video_frames_convert_on_the_gpu_into_a_power_of_two_texture() {
+fn video_frames_map_to_the_top_left_of_a_power_of_two_texture() {
     let mut renderer = renderer();
     let (w, h) = (6, 3);
     let mut video = renderer.create_video_texture(w as u32, h as u32);
@@ -408,13 +449,16 @@ fn video_frames_convert_on_the_gpu_into_a_power_of_two_texture() {
                 let expected = if x < w && y < h {
                     synthetic.expected(x, y)
                 } else {
-                    // Transparent black over the black background.
-                    [0, 0, 0, 255]
+                    // Never written: Y'CbCr black (our choice).
+                    yuv_to_rgb(16, 128, 128)
                 };
                 let actual = pixel(&image, 8, x as u32, y as u32);
                 assert_near(actual, expected, 1, &format!("frame {seed} ({x}, {y})"));
             }
         }
+        // The quad's colour and alpha are not applied (startup.md 6.6).
+        list.quads[0].color = [0, 0, 0, 0];
+        assert_eq!(capture(&mut renderer, &list, 8, 4), image, "tinted");
     }
 }
 
@@ -440,7 +484,7 @@ fn video_conversion_cost() {
     let start = Instant::now();
     let mut rgba = vec![0; 876 * 400 * 4];
     for _ in 0..N {
-        let [luma, cb, cr] = &frame.planes;
+        let [luma, cb, cr] = &frame.texture_planes();
         for (y, out) in rgba.as_chunks_mut::<{ 876 * 4 }>().0.iter_mut().enumerate() {
             let (l, b, r) = (luma.row(y), cb.row(y / 2), cr.row(y / 2));
             for (x, pixel) in out.as_chunks_mut::<4>().0.iter_mut().enumerate() {

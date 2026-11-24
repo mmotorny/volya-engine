@@ -1,17 +1,24 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! Video frames as textures. The texture is allocated at the next power of
-//! two in each dimension with the frame in its top-left corner, the rest
-//! transparent black (docs/behavior/title-menu.md, 3.2). Each frame's
-//! Y'CbCr planes upload as they are (1.5 bytes per pixel for 4:2:0) and a
-//! render pass converts them to RGB on the GPU (`yuv.wgsl`).
+//! Video frames as textures (docs/behavior/startup.md 6.6, the pixel-shader
+//! path). The texture is RGBA8, one level, the next power of two in each
+//! dimension of the picture; texel (x, y) of the picture block holds the
+//! samples unconverted: red = Y', green = Cb, blue = Cr, alpha = 255. Each
+//! frame's planes upload as they are (1.5 bytes per pixel for 4:2:0) and a
+//! render pass packs them into the texture (`yuv.wgsl`); drawing converts to
+//! RGB after filtering (`ui.wgsl`, `fs_movie`).
+//!
+//! Texels outside the picture are never written; the spec leaves their
+//! content to the graphics runtime (startup.md 9). Our choice: Y'CbCr black
+//! (16, 128, 128, 255), so filtering at a picture edge blends in black.
 
 use volya_engine_formats::video::{Frame, Plane};
 
 use crate::{Rect, Renderer, Texture};
 
-/// The YUV → RGB pass, shared by all video textures.
+/// The pass packing a frame's planes into a video texture, shared by all
+/// video textures.
 pub(crate) struct Converter {
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
@@ -93,8 +100,17 @@ impl VideoTexture {
     }
 }
 
+/// The initial content of a video texture: Y'CbCr black (our choice, see
+/// the module documentation).
+const OUTSIDE: wgpu::Color = wgpu::Color {
+    r: 16.0 / 255.0,
+    g: 128.0 / 255.0,
+    b: 128.0 / 255.0,
+    a: 1.0,
+};
+
 impl Renderer {
-    /// A texture for frames of `width` × `height` pixels.
+    /// A texture for frames whose picture is `width` × `height` pixels.
     pub fn create_video_texture(&self, width: u32, height: u32) -> VideoTexture {
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("video"),
@@ -110,23 +126,43 @@ impl Renderer {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("video fill"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &texture.create_view(&Default::default()),
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(OUTSIDE),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        self.queue.submit([encoder.finish()]);
         VideoTexture {
-            texture: self.wrap(texture),
+            texture: self.wrap_video(texture),
             width,
             height,
             planes: None,
         }
     }
 
-    /// Shows `frame` in `video`.
+    /// Shows `frame` in `video`: its top-left picture-sized block
+    /// (startup.md 6.6).
     ///
     /// # Panics
     ///
-    /// If the frame's luma plane is not the size `video` was created for.
+    /// If the frame's picture is not the size `video` was created for.
     pub fn update_video(&self, video: &mut VideoTexture, frame: &Frame) {
         let size = |p: &Plane| (p.width as u32, p.height as u32);
+        let frame_planes = frame.texture_planes();
         assert_eq!(
-            size(&frame.planes[0]),
+            size(&frame_planes[0]),
             (video.width, video.height),
             "video frame size"
         );
@@ -134,14 +170,14 @@ impl Renderer {
             planes
                 .textures
                 .iter()
-                .zip(&frame.planes)
+                .zip(&frame_planes)
                 .any(|(t, p)| (t.width(), t.height()) != size(p))
         });
         if stale {
-            video.planes = Some(self.create_planes(&frame.planes));
+            video.planes = Some(self.create_planes(&frame_planes));
         }
         let planes = video.planes.as_ref().expect("planes allocated");
-        for (texture, plane) in planes.textures.iter().zip(&frame.planes) {
+        for (texture, plane) in planes.textures.iter().zip(&frame_planes) {
             self.queue.write_texture(
                 texture.as_image_copy(),
                 plane.data,
@@ -166,7 +202,7 @@ impl Renderer {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         // Outside the viewport the texture keeps its initial
-                        // transparent black.
+                        // content.
                         load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
                     },

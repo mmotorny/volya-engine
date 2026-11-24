@@ -15,7 +15,7 @@ mod gog_archives;
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::fs::File;
-use std::io::{self, BufReader};
+use std::io::{self, BufReader, Cursor};
 use std::time::Instant;
 
 use volya_engine::app::{self, App, AppState};
@@ -28,6 +28,7 @@ use volya_engine::present::Presenter;
 use volya_engine::render::{Renderer, wgpu};
 use volya_engine::scene::{Scene, TextureId};
 use volya_engine_formats::ui::Resolution;
+use volya_engine_formats::video::TheoraVideo;
 use volya_engine_installer::{Installer, extract};
 
 const XGA: Resolution = Resolution::new(1024, 768);
@@ -440,4 +441,115 @@ fn startup_and_title_menu_from_game_data() {
         .filter_map(|p| tree.archive_of(p).map(|i| mounted[i].path.clone()))
         .collect();
     eprintln!("archives used: {archives_used:?}");
+}
+
+/// Which coded rows and columns of each startup and title-menu video become
+/// its texture (startup.md 6.6, table), and the GSC data evidence: its coded
+/// rows 360–367 are zero in every frame and no shown texel is; rendered, no
+/// pixel of the GSC item is their green (#35).
+#[test]
+fn video_frames_as_textures_from_game_data() {
+    let Some(archives) = gog_archives::archives() else {
+        return;
+    };
+    let root = StdVfs::new(archives[0].file.parent().unwrap());
+    let tree = DbVfs::open_game(&root, Some("mods")).unwrap();
+    let mut gpu = renderer();
+
+    // The GSC item, rendered: skip THQ and GSC WP, then the item's 1 s delay.
+    let mut app = App::new(GameData::load(&tree, None, XGA).unwrap()).unwrap();
+    let mut input = Input::new();
+    let mut presenter = Presenter::new();
+    step(&mut app, &mut input, 1000.0);
+    key(&mut input, Key::Escape);
+    key(&mut input, Key::Escape);
+    step(&mut app, &mut input, 1100.0);
+    let AppState::Startup { startup, .. } = app.state() else {
+        panic!()
+    };
+    assert_eq!(startup.item, 2);
+    let mut drawn = 0;
+    for t in (2150..2400).step_by(20) {
+        step(&mut app, &mut input, f64::from(t));
+        let s = app.scene(&tree, XGA).unwrap();
+        let video = s.layer("video").next().unwrap();
+        assert!(matches!(&video.texture, TextureId::Video { path, .. }
+            if path == "gamedata\\textures\\intro\\intro_gsc.ogm"));
+        // Texture rectangle (0, 1, 800 × 358) of 1024 × 512.
+        let uv = [video.uv_min, video.uv_max].concat();
+        assert!(close(
+            uv.try_into().unwrap(),
+            [0.0, 1.0 / 512.0, 800.0 / 1024.0, 359.0 / 512.0]
+        ));
+        let list = presenter.draw_list(&gpu, &tree, &s, app.clock());
+        assert_eq!(list.quads.len(), 2, "{:?}", presenter.take_errors());
+        let pixels = pollster::block_on(gpu.capture(&list, 1024, 768, wgpu::Color::BLACK)).unwrap();
+        let green = pixels
+            .chunks(4)
+            .filter(|p| p[0] < 8 && p[2] < 8 && (120..150).contains(&p[1]))
+            .count();
+        assert_eq!(green, 0, "GSC at {t} ms: {green} green pixels");
+        drawn += usize::from(pixels.chunks(4).any(|p| p[..3] != [0, 0, 0]));
+    }
+    assert!(drawn > 0, "GSC frames are black");
+
+    // Video, coded frame, picture, header offset (y from the bottom),
+    // texture, shown rectangle (x, y, w, h).
+    #[rustfmt::skip]
+    let table = [
+        ("intro\\thq_logo_hyuv", (720, 496), (720, 486), (0, 10), (1024, 512), [0, 1, 720, 484]),
+        ("intro\\intro_gsc-wp", (640, 288), (640, 288), (0, 0), (1024, 512), [1, 1, 638, 286]),
+        ("intro\\intro_gsc", (800, 368), (800, 360), (0, 0), (1024, 512), [0, 1, 800, 358]),
+        ("ui\\ui_mm_main_back_crop", (880, 400), (876, 400), (0, 0), (1024, 512), [0, 0, 876, 400]),
+        ("ui\\ui_mm_fire", (128, 256), (128, 256), (0, 0), (128, 256), [0, 0, 128, 256]),
+    ];
+    for (name, coded, picture, offset, texture, shown) in table {
+        let path = format!("gamedata\\textures\\{name}.ogm");
+        let bytes = volya_engine::core::vfs::read(&tree, &path).unwrap();
+        let mut video = TheoraVideo::open(Cursor::new(bytes)).unwrap();
+        let i = video.info().clone();
+        assert_eq!((i.frame_width, i.frame_height), coded, "{name}");
+        assert_eq!((i.width, i.height), picture, "{name}");
+        let from_bottom = i.frame_height - i.height - i.pic_y;
+        assert_eq!((i.pic_x, from_bottom), offset, "{name}");
+        let size = gpu.create_video_texture(i.width, i.height).texture().size();
+        assert_eq!(size, texture, "{name}");
+        let gsc = name == "intro\\intro_gsc";
+        let mut frames = 0;
+        while let Some(frame) = video.next_frame().unwrap() {
+            frames += 1;
+            let [y, cb, cr] = frame.texture_planes();
+            let [cy, ccb, _] = frame.coded;
+            // Texel (x, y) is coded column x, row y.
+            assert_eq!((y.width as u32, y.height as u32), picture, "{name}");
+            assert_eq!(y.data.as_ptr(), cy.data.as_ptr(), "{name}: luma origin");
+            assert_eq!(cb.data.as_ptr(), ccb.data.as_ptr(), "{name}: chroma origin");
+            if !gsc {
+                continue;
+            }
+            for r in 360..368 {
+                assert!(
+                    cy.row(r).iter().all(|&v| v == 0),
+                    "GSC frame {frames}: coded row {r}"
+                );
+            }
+            let [x0, y0, w, h] = shown;
+            for row in y0..y0 + h {
+                for x in x0..x0 + w {
+                    let (l, b, r) = (
+                        y.row(row)[x],
+                        cb.row(row / 2)[x / 2],
+                        cr.row(row / 2)[x / 2],
+                    );
+                    assert!(
+                        l > 4 || b > 4 || r > 4,
+                        "GSC frame {frames}: texel ({x}, {row}) is ({l}, {b}, {r})"
+                    );
+                }
+            }
+        }
+        if gsc {
+            assert_eq!(frames, 301);
+        }
+    }
 }

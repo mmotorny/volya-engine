@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! The game's videos: Ogg Theora (public formats; Ogg via `ogg`, Theora via
-//! `theora_nrp`, a port of libtheora's decoder). Yields Y'CbCr frames cropped
-//! to the picture region, ready for the renderer.
+//! `theora_nrp`, a port of libtheora's decoder). Yields whole decoded (coded)
+//! Y'CbCr frames; [`Frame::texture_planes`] is the part that becomes a video
+//! texture (docs/behavior/startup.md 6.6), [`Frame::picture_planes`] the
+//! picture region as the Theora specification crops it.
 
 use std::io::{self, Read, Seek, SeekFrom};
 
@@ -36,13 +38,20 @@ pub struct VideoInfo {
     /// Picture size in pixels (the visible region).
     pub width: u32,
     pub height: u32,
+    /// Coded frame size in pixels (multiples of 16).
+    pub frame_width: u32,
+    pub frame_height: u32,
+    /// The header's picture offset, `pic_y` converted to count from the top
+    /// of the coded frame (where the Theora specification puts the picture).
+    pub pic_x: u32,
+    pub pic_y: u32,
     pub chroma: Chroma,
     /// Frame rate as a fraction.
     pub fps_numerator: u32,
     pub fps_denominator: u32,
 }
 
-/// One plane of a frame, cropped to the picture region.
+/// One plane of a frame, or a region of one.
 #[derive(Clone, Copy, Debug)]
 pub struct Plane<'a> {
     pub width: usize,
@@ -59,14 +68,70 @@ impl Plane<'_> {
     pub fn row(&self, r: usize) -> &[u8] {
         &self.data[r * self.stride..r * self.stride + self.width]
     }
+
+    /// The `width` × `height` region at column `x`, row `y`.
+    fn region(&self, x: usize, y: usize, width: usize, height: usize) -> Self {
+        assert!(
+            x + width <= self.width && y + height <= self.height,
+            "region"
+        );
+        let start = y * self.stride + x;
+        let end = start + (height.max(1) - 1) * self.stride + width;
+        Plane {
+            width,
+            height,
+            stride: self.stride,
+            data: &self.data[start..end],
+        }
+    }
 }
 
-/// A decoded frame: Y', Cb, Cr.
+/// A decoded frame: the whole coded frame's Y', Cb, Cr planes, rows from the
+/// top.
 #[derive(Clone, Copy, Debug)]
 pub struct Frame<'a> {
     /// Index from the start of the video.
     pub number: u64,
-    pub planes: [Plane<'a>; 3],
+    pub coded: [Plane<'a>; 3],
+    pub chroma: Chroma,
+    /// Picture size in pixels.
+    pub width: u32,
+    pub height: u32,
+    /// The picture offset from the coded frame's top-left corner, as the
+    /// Theora specification places the picture.
+    pub pic_x: u32,
+    pub pic_y: u32,
+}
+
+impl<'a> Frame<'a> {
+    /// The planes of the picture-sized block at luma (`x`, `y`); the chroma
+    /// regions hold every chroma sample a luma pixel of the block uses.
+    fn block(&self, x: u32, y: u32) -> [Plane<'a>; 3] {
+        let (sx, sy) = self.chroma.shifts();
+        let mut i = 0;
+        self.coded.map(|p| {
+            let (sx, sy) = if i == 0 { (0, 0) } else { (sx, sy) };
+            i += 1;
+            let (x0, y0) = (x >> sx, y >> sy);
+            let width = ((x + self.width + sx) >> sx) - x0;
+            let height = ((y + self.height + sy) >> sy) - y0;
+            p.region(x0 as usize, y0 as usize, width as usize, height as usize)
+        })
+    }
+
+    /// What becomes the video texture (docs/behavior/startup.md 6.6): the
+    /// top-left picture-width × picture-height block of the coded frame; the
+    /// header's picture offset is ignored. For 4:2:0, chroma sample
+    /// (⌊x / 2⌋, ⌊y / 2⌋) of these planes belongs to texel (x, y).
+    pub fn texture_planes(&self) -> [Plane<'a>; 3] {
+        self.block(0, 0)
+    }
+
+    /// The picture region at the header's offset, as the Theora
+    /// specification (and libtheora, FFmpeg) crops it.
+    pub fn picture_planes(&self) -> [Plane<'a>; 3] {
+        self.block(self.pic_x, self.pic_y)
+    }
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -134,6 +199,11 @@ impl<R: Read + Seek> TheoraVideo<R> {
         let video = VideoInfo {
             width: info.pic_width,
             height: info.pic_height,
+            frame_width: info.frame_width,
+            frame_height: info.frame_height,
+            // `theora_nrp` already counts `pic_y` from the top.
+            pic_x: info.pic_x,
+            pic_y: info.pic_y,
             chroma,
             fps_numerator: info.fps_numerator,
             fps_denominator: info.fps_denominator,
@@ -198,28 +268,82 @@ impl<R: Read + Seek> TheoraVideo<R> {
         }
         let number = self.frames;
         self.frames += 1;
-        let (sx, sy) = self.video.chroma.shifts();
-        let info = &self.info;
-        let buffer = self.decoder.ycbcr_out();
-        let crop = |i: usize| {
-            let p = &buffer[i];
-            let (sx, sy) = if i == 0 { (0, 0) } else { (sx, sy) };
-            let (x0, y0) = (info.pic_x >> sx, info.pic_y >> sy);
-            let width = ((info.pic_x + info.pic_width + sx) >> sx) - x0;
-            let height = ((info.pic_y + info.pic_height + sy) >> sy) - y0;
-            let stride = p.stride as usize;
-            let start = y0 as usize * stride + x0 as usize;
-            let end = start + (height as usize - 1) * stride + width as usize;
-            Plane {
-                width: width as usize,
-                height: height as usize,
-                stride,
-                data: &p.data[start..end],
-            }
-        };
+        let coded = self.decoder.ycbcr_out().map(|p| Plane {
+            width: p.width as usize,
+            height: p.height as usize,
+            stride: p.stride as usize,
+            data: p.data,
+        });
+        let v = &self.video;
         Ok(Some(Frame {
             number,
-            planes: [crop(0), crop(1), crop(2)],
+            coded,
+            chroma: v.chroma,
+            width: v.width,
+            height: v.height,
+            pic_x: v.pic_x,
+            pic_y: v.pic_y,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A 16 × 16 coded 4:2:0 frame whose samples encode their position:
+    /// luma = row × 16 + column, chroma = 128 + row × 8 + column.
+    fn planes() -> [Vec<u8>; 3] {
+        let luma = (0..16).flat_map(|r| (0..16).map(move |c| (r * 16 + c) as u8));
+        let chroma = (0..8).flat_map(|r| (0..8).map(move |c| (128 + r * 8 + c) as u8));
+        [luma.collect(), chroma.clone().collect(), chroma.collect()]
+    }
+
+    /// A 13 × 11 picture at header offset (2, 4) of the coded frame `data`.
+    fn frame(data: &[Vec<u8>; 3]) -> Frame<'_> {
+        let mut i = 0;
+        Frame {
+            number: 0,
+            coded: data.each_ref().map(|d| {
+                let side = if i == 0 { 16 } else { 8 };
+                i += 1;
+                Plane {
+                    width: side,
+                    height: side,
+                    stride: side,
+                    data: d,
+                }
+            }),
+            chroma: Chroma::Yuv420,
+            width: 13,
+            height: 11,
+            pic_x: 2,
+            pic_y: 4,
+        }
+    }
+
+    #[test]
+    fn texture_is_the_top_left_block_of_the_coded_frame() {
+        let data = planes();
+        let [y, cb, cr] = frame(&data).texture_planes();
+        assert_eq!((y.width, y.height), (13, 11));
+        // Texel (x, y) is coded column x, row y; the offset is ignored.
+        assert_eq!(y.row(0)[0], 0);
+        assert_eq!(y.row(10)[12], 10 * 16 + 12);
+        // Chroma for (⌊x / 2⌋, ⌊y / 2⌋) with x < 13, y < 11: 7 × 6 samples.
+        for p in [cb, cr] {
+            assert_eq!((p.width, p.height), (7, 6));
+            assert_eq!(p.row(0)[0], 128);
+            assert_eq!(p.row(5)[6], 128 + 5 * 8 + 6);
+        }
+    }
+
+    #[test]
+    fn picture_is_at_the_header_offset() {
+        let data = planes();
+        let [y, cb, _] = frame(&data).picture_planes();
+        assert_eq!((y.width, y.height), (13, 11));
+        assert_eq!(y.row(0)[0], 4 * 16 + 2);
+        assert_eq!(cb.row(0)[0], 128 + 2 * 8 + 1);
     }
 }

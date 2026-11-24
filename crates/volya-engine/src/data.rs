@@ -331,7 +331,7 @@ pub fn video_length(tree: &dyn Vfs, path: &str) -> io::Result<f64> {
     Ok(frames as f64 * f64::from(info.fps_denominator) / f64::from(info.fps_numerator.max(1)))
 }
 
-/// A video's decoded frame size and rate.
+/// A video's picture size and frame rate.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VideoMeta {
     pub width: u32,

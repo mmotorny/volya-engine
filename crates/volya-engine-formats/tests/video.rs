@@ -208,7 +208,7 @@ fn every_video_decodes_like_libtheora() {
         let mut count = 0;
         while let Some(frame) = video.next_frame().unwrap() {
             assert_eq!(frame.number, count);
-            for plane in &frame.planes {
+            for plane in &frame.picture_planes() {
                 for r in 0..plane.height {
                     hash.update(plane.row(r));
                 }
@@ -224,12 +224,12 @@ fn every_video_decodes_like_libtheora() {
     // Rewinding restarts from the first frame.
     let data = &videos["textures\\intro\\intro_thq.ogm"];
     let mut video = TheoraVideo::open(Cursor::new(data.as_slice())).unwrap();
-    let first: Vec<u8> = video.next_frame().unwrap().unwrap().planes[0]
+    let first: Vec<u8> = video.next_frame().unwrap().unwrap().picture_planes()[0]
         .row(0)
         .to_vec();
     while video.next_frame().unwrap().is_some() {}
     video.rewind().unwrap();
     let again = video.next_frame().unwrap().unwrap();
     assert_eq!(again.number, 0);
-    assert_eq!(again.planes[0].row(0), first.as_slice());
+    assert_eq!(again.picture_planes()[0].row(0), first.as_slice());
 }

@@ -63,6 +63,8 @@ impl Rect {
 pub struct Texture {
     texture: wgpu::Texture,
     bind_group: wgpu::BindGroup,
+    /// Holds Y'CbCr, converted when drawn (a [`VideoTexture`]).
+    ycbcr: bool,
 }
 
 impl Texture {
@@ -123,8 +125,12 @@ pub struct Renderer {
     queue: wgpu::Queue,
     format: wgpu::TextureFormat,
     pipeline: wgpu::RenderPipeline,
+    /// For Y'CbCr video textures.
+    movie_pipeline: wgpu::RenderPipeline,
     texture_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
+    /// For video textures.
+    movie_sampler: wgpu::Sampler,
     vertices: wgpu::Buffer,
     video: video::Converter,
 }
@@ -162,41 +168,57 @@ impl Renderer {
             bind_group_layouts: &[Some(&texture_layout)],
             immediate_size: 0,
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("ui"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs"),
-                compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: VERTEX_BYTES,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![
-                        0 => Float32x2, 1 => Float32x2, 2 => Unorm8x4
-                    ],
-                })],
-            },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    // Straight (non-premultiplied) alpha.
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipeline_for = |entry_point: &str| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(entry_point),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs"),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride: VERTEX_BYTES,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![
+                            0 => Float32x2, 1 => Float32x2, 2 => Unorm8x4
+                        ],
+                    })],
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(entry_point),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        // Straight (non-premultiplied) alpha; also the
+                        // movie shader's blending (startup.md 6.6).
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let pipeline = pipeline_for("fs");
+        let movie_pipeline = pipeline_for("fs_movie");
         // Bilinear within a level, nearest level; edges clamped.
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("ui"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        // Video textures: wrap addressing, linear filtering (startup.md
+        // 6.6). Anisotropic filtering, which the original enables, has no
+        // effect without mip levels, so it is left off.
+        let movie_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("movie"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
@@ -206,8 +228,10 @@ impl Renderer {
             queue: queue.clone(),
             format,
             pipeline,
+            movie_pipeline,
             texture_layout,
             sampler,
+            movie_sampler,
             vertices: vertex_buffer(device, 64),
             video: video::Converter::new(device),
         }
@@ -252,6 +276,15 @@ impl Renderer {
 
     /// Makes `texture` drawable: its first layer, all levels.
     fn wrap(&self, texture: wgpu::Texture) -> Texture {
+        self.wrap_with(texture, &self.sampler, false)
+    }
+
+    /// Makes video `texture` drawable as Y'CbCr.
+    fn wrap_video(&self, texture: wgpu::Texture) -> Texture {
+        self.wrap_with(texture, &self.movie_sampler, true)
+    }
+
+    fn wrap_with(&self, texture: wgpu::Texture, sampler: &wgpu::Sampler, ycbcr: bool) -> Texture {
         let view = texture.create_view(&wgpu::TextureViewDescriptor {
             dimension: Some(wgpu::TextureViewDimension::D2),
             array_layer_count: Some(1),
@@ -267,13 +300,14 @@ impl Renderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    resource: wgpu::BindingResource::Sampler(sampler),
                 },
             ],
         });
         Texture {
             texture,
             bind_group,
+            ycbcr,
         }
     }
 
@@ -301,10 +335,15 @@ impl Renderer {
                 multiview_mask: None,
             });
             if !batches.is_empty() {
-                pass.set_pipeline(&self.pipeline);
                 pass.set_vertex_buffer(0, self.vertices.slice(..));
                 for (texture, vertices) in batches {
-                    pass.set_bind_group(0, &list.quads[texture].texture.bind_group, &[]);
+                    let texture = &list.quads[texture].texture;
+                    pass.set_pipeline(if texture.ycbcr {
+                        &self.movie_pipeline
+                    } else {
+                        &self.pipeline
+                    });
+                    pass.set_bind_group(0, &texture.bind_group, &[]);
                     pass.draw(vertices, 0..1);
                 }
             }
