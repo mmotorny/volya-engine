@@ -92,8 +92,122 @@ const LAYOUT: &str = r#"<window>
   <btn name="btn_veteran" caption="ui_mm_veteran"/><btn name="btn_master" caption="ui_mm_master"/>
   <btn name="btn_new_back" caption="ui_mm_back"/>
 </menu_new_game>
+<menu_main_single btn_height="30" font="graffiti22" a="255" r="0" g="0" b="0">
+  <btn name="btn_ret" caption="ui_mm_return_game"/><btn name="btn_lastsave" caption="ui_mm_last_save"/>
+  <btn name="btn_load" caption="ui_mm_load_game"/><btn name="btn_save" caption="ui_mm_save_game"/>
+  <btn name="btn_options" caption="ui_mm_options_n"/><btn name="btn_credits" caption="ui_mm_credits"/>
+  <btn name="btn_quit_to_mm" caption="ui_mm_quit_game"/><btn name="btn_quit" caption="ui_mm_quit2windows"/>
+</menu_main_single>
 <menu_sound random="0"><menu_music>music\wasteland2</menu_music></menu_sound>
 </window>"#;
+
+/// The menu's boxes (save-load-screens.md section 6), all at the same
+/// rectangles.
+fn message_boxes() -> String {
+    let mut xml = "<window>".to_owned();
+    for (name, kind, text) in [
+        (
+            "message_box_quit_windows",
+            "yes_no",
+            "ui_mm_quit_windows_message",
+        ),
+        ("message_box_quit_game", "yes_no", "ui_mm_quit_game_message"),
+        (
+            "message_box_confirm_load_save",
+            "yes_no",
+            "ui_st_load_game_confirm",
+        ),
+        (
+            "message_box_empty_file_name",
+            "ok",
+            "ui_st_file_name_is_empty",
+        ),
+        (
+            "message_box_file_already_exist",
+            "yes_no",
+            "ui_st_file_exist_owerwrite_q",
+        ),
+        (
+            "message_box_delete_file_name",
+            "yes_no",
+            "ui_mm_delete_existing_file_q",
+        ),
+        (
+            "message_box_invalid_saved_game",
+            "ok",
+            "ui_st_invalid_saved_game",
+        ),
+    ] {
+        let button = |e: &str, x: u32, key: &str| {
+            format!(
+                r#"<{e} x="{x}" y="154" width="117" height="29"><texture>ui_button_ordinary</texture><text font="letterica16" r="216" g="186" b="140">{key}</text></{e}>"#
+            )
+        };
+        let buttons = if kind == "ok" {
+            button("button_ok", 370, "ui_st_btn_ok")
+        } else {
+            button("button_yes", 250, "ui_st_btn_yes") + &button("button_no", 370, "ui_st_btn_no")
+        };
+        xml.push_str(&format!(
+            r#"<{name} type="{kind}" x="200" y="250" width="510" height="206"><texture>ui_frame_error</texture>
+<picture x="35" y="65" width="77" height="77"><texture>ui_frame_error_sign_red</texture></picture>
+<message_text x="170" y="40" width="310" height="60" complex_mode="1"><text font="letterica18" r="216" g="186" b="140">{text}</text></message_text>
+{buttons}</{name}>"#
+        ));
+    }
+    xml.push_str("</window>");
+    xml
+}
+
+/// A save or load screen (save-load-screens.md tables 4.1 and 5.1).
+fn save_load_dialog(save: bool) -> String {
+    let button = |name: &str, x: u32, key: &str| {
+        format!(
+            r#"<{name} x="{x}" y="427" width="157" height="48"><texture>ui_button_main01</texture><text font="graffiti22">{key}</text>
+<text_color><e r="227" g="199" b="178"/><t r="180" g="153" b="155"/><d r="106" g="95" b="91"/><h r="0" g="0" b="0"/></text_color></{name}>"#
+        )
+    };
+    let (caption, list_y, list_h, action) = if save {
+        (
+            "ui_mm_save_game",
+            106,
+            287,
+            button("btn_save", 65, "ui_mm_save"),
+        )
+    } else {
+        (
+            "ui_mm_load_game",
+            231,
+            180,
+            button("btn_load", 65, "ui_mm_load"),
+        )
+    };
+    let extra = if save {
+        r#"<edit x="65" y="55" width="257" height="23"><texture>ui_linetext_e</texture><text font="letterica18" r="240" g="217" b="182"/></edit>"#
+    } else {
+        r#"<picture x="105" y="71" width="128" height="128" clipper="1"><texture>ui\ui_noise</texture></picture>
+<file_info x="47" y="55" width="497" height="171"><texture x="0" y="768" width="497" height="171">ui\ui_static_mm_back_04</texture></file_info>
+<file_caption x="299" y="109" width="512" height="20" complex_mode="1"><text font="letterica18" r="238" g="155" b="23"/></file_caption>
+<file_data x="299" y="129" width="512" height="50" complex_mode="1"><text font="letterica18" r="216" g="186" b="140"/></file_data>"#
+    };
+    format!(
+        r#"<window>
+<back_video x="0" y="0" width="1024" height="430"><texture x="0" y="0" width="1024" height="430">ui\ui_mm_window_back_crop</texture></back_video>
+<background x="0" y="0" width="1024" height="768"><texture>ui\ui_static_mm_back_04</texture></background>
+<newspaper_video x="137" y="512" width="256" height="256"><texture>ui\ui_mm_newspaper</texture></newspaper_video>
+<form x="415" y="168" width="560" height="460"><texture>ui_menu_options_dlg</texture>
+<caption x="65" y="10" width="500" height="25"><text font="graffiti22" r="184" g="168" b="131">{caption}</text></caption>
+{extra}
+<list_frame x="65" y="{}" width="449" height="{}"><texture>ui_tablist_textbox</texture></list_frame>
+<list x="75" y="{list_y}" width="429" height="{list_h}" item_height="18"/>
+{action}{}{}
+</form></window>"#,
+        list_y - 10,
+        list_h + 20,
+        button("btn_delete", 221, "ui_mm_delete"),
+        button("btn_cancel", 377, "ui_mm_cancel"),
+    )
+}
 
 const MOVIES: &str = r#"<intro_logo>
 <global_wnd x="0" y="0" width="1024" height="768">
@@ -116,7 +230,13 @@ const MOVIES: &str = r#"<intro_logo>
   <video_wnd x="0" y="0" width="1024" height="768" stretch="1"><texture x="0" y="0" width="512" height="288">intro\intro_stalker</texture></video_wnd></item>
 </intro_game>"#;
 
-const STRINGS: [(&str, &str); 14] = [
+const STRINGS: [(&str, &str); 20] = [
+    ("ui_mm_return_game", "Возврат к игре"),
+    ("ui_mm_save_game", "Сохранить игру"),
+    ("ui_mm_quit_game", "Завершить игру"),
+    ("ui_st_btn_yes", "Да"),
+    ("ui_st_btn_no", "Нет"),
+    ("ui_st_btn_ok", "ОК"),
     ("st_prefetching_objects", "Кэширование объектов"),
     ("st_server_starting", "Сервер: Старт"),
     ("st_client_connecting_to", "Клиент: Соединение с"),
@@ -146,7 +266,7 @@ pub fn tree() -> MemVfs {
     let c = "gamedata/config/";
     add(
         &format!("{c}system.ltx"),
-        b"[texture_desc]\nfiles = ui_mainmenu, ui_asus_intro\n".into(),
+        b"[texture_desc]\nfiles = ui_mainmenu, ui_asus_intro, ui_common\n".into(),
     );
     add(&format!("{c}game.ltx"), b"[levels]\nx = 1\n".into());
     add(
@@ -173,6 +293,40 @@ pub fn tree() -> MemVfs {
             .into(),
     );
     add(&format!("{c}ui/color_defs.xml"), b"<colors/>".into());
+    add(&format!("{c}ui/message_box.xml"), message_boxes().into());
+    add(
+        &format!("{c}ui/ui_mm_save_dlg.xml"),
+        save_load_dialog(true).into(),
+    );
+    add(
+        &format!("{c}ui/ui_mm_load_dlg.xml"),
+        save_load_dialog(false).into(),
+    );
+    add(
+        &format!("{c}ui/scroll_bar.xml"),
+        br#"<window><default height="16"><up_arrow><texture_e>ui_scroll_btn_up</texture_e></up_arrow>
+<down_arrow><texture_e>ui_scroll_btn_down</texture_e></down_arrow><back_v><texture>ui_scroll_back</texture></back_v>
+<box_v><texture>ui_scroll_box</texture></box_v></default></window>"#
+            .into(),
+    );
+    add(
+        &format!("{c}ui/ui_common.xml"),
+        br#"<ui_texture><file_name>ui\ui_common</file_name>
+        <texture id="ui_frame_error" x="213" y="0" width="510" height="206"/>
+        <texture id="ui_frame_error_sign_red" x="800" y="0" width="77" height="77"/>
+        <texture id="ui_button_ordinary_e" x="0" y="115" width="117" height="29"/>
+        <texture id="ui_button_ordinary_h" x="0" y="144" width="117" height="29"/>
+        <texture id="ui_button_ordinary_t" x="0" y="173" width="117" height="29"/>
+        <texture id="ui_button_main01_e" x="0" y="470" width="157" height="48"/>
+        <texture id="ui_button_main01_h" x="0" y="566" width="157" height="48"/>
+        <texture id="ui_button_main01_t" x="0" y="518" width="157" height="48"/>
+        <texture id="ui_menu_options_dlg" x="164" y="232" width="566" height="461"/>
+        <texture id="ui_listline_b" x="0" y="37" width="4" height="18"/>
+        <texture id="ui_listline_back" x="4" y="37" width="28" height="18"/>
+        <texture id="ui_listline_e" x="32" y="37" width="4" height="18"/>
+        </ui_texture>"#
+            .into(),
+    );
     add(&format!("{c}ui/ui_mm_main.xml"), LAYOUT.into());
     add(
         &format!("{c}ui/game_tutorials.xml"),
@@ -210,6 +364,13 @@ pub fn tree() -> MemVfs {
     add(&format!("{t}ui/font.ini"), ini.into());
     add(&format!("{t}ui/font.dds"), dds(256, 256));
     add(&format!("{t}ui/ui_mainmenu.dds"), dds(1024, 1024));
+    add(&format!("{t}ui/ui_common.dds"), dds(1024, 1024));
+    add(&format!("{t}ui/ui_static_mm_back_04.dds"), dds(1024, 1024));
+    add(
+        &format!("{t}ui/ui_noise.seq"),
+        b"25\r\nui\\ui_noise_00\r\n".into(),
+    );
+    add(&format!("{t}ui/ui_noise_00.dds"), dds(256, 256));
     add(&format!("{t}ui/ui_asus_intro.dds"), dds(1024, 512));
     add(&format!("{t}intro/intro_back.dds"), dds(4, 4));
     // The loading screen (loading-screen.md sections 4.1, 4.5).
@@ -228,6 +389,8 @@ pub fn tree() -> MemVfs {
     for video in [
         "ui/ui_mm_main_back_crop.ogm",
         "ui/ui_mm_fire.ogm",
+        "ui/ui_mm_window_back_crop.ogm",
+        "ui/ui_mm_newspaper.ogm",
         "intro/logo.ogm",
         "intro/intro_stalker.ogm",
     ] {
@@ -277,6 +440,14 @@ pub fn videos() -> Vec<(&'static str, ResolvedTexture)> {
             video("ui\\ui_mm_main_back_crop", 876, 400, 24.0),
         ),
         ("ui\\ui_mm_fire", video("ui\\ui_mm_fire", 128, 256, 33.0)),
+        (
+            "ui\\ui_mm_window_back_crop",
+            video("ui\\ui_mm_window_back_crop", 1024, 430, 30.0),
+        ),
+        (
+            "ui\\ui_mm_newspaper",
+            video("ui\\ui_mm_newspaper", 256, 256, 33.0),
+        ),
         ("intro\\logo", video("intro\\logo", 720, 486, 29.97)),
         (
             "intro\\intro_stalker",

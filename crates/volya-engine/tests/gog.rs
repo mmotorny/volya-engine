@@ -244,8 +244,8 @@ fn startup_and_title_menu_from_game_data() {
     let AppState::Menu { menu, .. } = app.state() else {
         panic!("not in the menu")
     };
-    assert_eq!(menu.list, "menu_main");
-    let captions: Vec<&str> = menu.items.iter().map(|i| i.caption.as_str()).collect();
+    assert_eq!(menu.menu.list, "menu_main");
+    let captions: Vec<&str> = menu.menu.items.iter().map(|i| i.caption.as_str()).collect();
     assert_eq!(
         captions,
         [
@@ -257,15 +257,15 @@ fn startup_and_title_menu_from_game_data() {
             "Выйти в Windows"
         ]
     );
-    assert_eq!(menu.version, "ver. 1.0006");
-    assert_eq!(menu.music.track.as_deref(), Some("music\\wasteland2"));
+    assert_eq!(menu.menu.version, "ver. 1.0006");
+    assert_eq!(menu.menu.music.track.as_deref(), Some("music\\wasteland2"));
     // The opening move: 22 units up in 556 ms.
     step(&mut app, &mut input, 12_600.0);
     let AppState::Menu { menu, .. } = app.state() else {
         panic!()
     };
-    assert_eq!((menu.bar_y, menu.moving), (-22.0, false));
-    assert_eq!(menu.glass, [675.0, 419.0, 232.0, 36.0]);
+    assert_eq!((menu.menu.bar_y, menu.menu.moving), (-22.0, false));
+    assert_eq!(menu.menu.glass, [675.0, 419.0, 232.0, 36.0]);
 
     // Layers at 1024 × 768 (title-menu.md section 3, ui-layout.md 5.3).
     let s = app.scene(&recording, XGA).unwrap();
@@ -373,10 +373,10 @@ fn startup_and_title_menu_from_game_data() {
         panic!()
     };
     assert_eq!(
-        (menu.selected, menu.bar_target, menu.moving),
+        (menu.menu.selected, menu.menu.bar_target, menu.menu.moving),
         (1, 8.0, true)
     );
-    assert!(menu.wheel_angle != 0.0);
+    assert!(menu.menu.wheel_angle != 0.0);
     step(&mut app, &mut input, 13_700.0);
 
     // Rendered: the captions are black glyphs on the slats.
@@ -432,8 +432,8 @@ fn startup_and_title_menu_from_game_data() {
     let AppState::Menu { menu, .. } = app.state() else {
         panic!()
     };
-    assert_eq!(menu.selected, 4);
-    assert_eq!(menu.activations.last().unwrap().item, "btn_credits");
+    assert_eq!(menu.menu.selected, 4);
+    assert_eq!(menu.menu.activations.last().unwrap().item, "btn_credits");
 
     let mounted = volya_engine::core::vfs::db::game_archives(&root, Some("mods")).unwrap();
     let archives_used: BTreeSet<String> = recording

@@ -146,6 +146,35 @@ function clickAt(at) {
   pointer("pointerup", p, { button: 0, buttons: 0 });
 }
 
+/** The in-game menu's item list (save-load-screens.md section 2). */
+const inGame = (s) => (s.phase === "level" ? s.menu?.menu : undefined);
+
+/** Selects in-game menu item `name` with the arrow keys from where it is. */
+async function selectInGame(name) {
+  const m = inGame(await state());
+  const target = m.items.findIndex((i) => i.name === name);
+  assert(target >= 0, `no ${name}`);
+  for (let i = m.selected; i < target; i++) key("ArrowDown");
+  for (let i = m.selected; i > target; i--) key("ArrowUp");
+  await until((s) => inGame(s)?.selected === target, `${name} selected`);
+}
+
+/** Answers the box over the in-game menu by clicking `answer`. */
+async function answerBox(answer) {
+  const box = (await until((s) => s.menu?.message, "the box")).menu.message;
+  clickAt(centreOf(box.buttons.find((b) => b.answer === answer)));
+}
+
+/** From the level: the in-game menu, "Завершить игру", "Да": the title menu. */
+async function quitToTitle() {
+  if (!inGame(await state())) key("Escape");
+  await until((s) => inGame(s), "the in-game menu");
+  await selectInGame("btn_quit_to_mm");
+  key("Enter");
+  await answerBox("yes");
+  return until((s) => s.phase === "menu", "the title menu");
+}
+
 /** Opens the options screen from the title menu's main page. */
 async function openOptions() {
   pointer("pointermove", row(3));
@@ -437,7 +466,7 @@ export const tests = {
     return `ran ${moved.toFixed(2)} m, jumped ${height.toFixed(2)} m`;
   },
 
-  "touch: the stick walks and its sprint lock sprints, drags look (from Jump too), Crouch and its swipe down, Menu returns to the title menu": async () => {
+  "touch: the stick walks and its sprint lock sprints, drags look (from Jump too), Crouch and its swipe down, Menu opens the menu": async () => {
     needsGame();
     const controls = document.getElementById("touch-controls");
     assert(controls, "no touch controls");
@@ -605,13 +634,23 @@ export const tests = {
     const menu = controls.querySelector(".touch-button.menu");
     touchOn(menu, "pointerdown", 34, centre(menu));
     touchOn(menu, "pointerup", 34, centre(menu));
-    const back = await until((s) => s.phase === "menu", "the menu");
-    assertEqual(back.menu.list, "menu_main", "list");
+    const opened = await until((s) => inGame(s), "the in-game menu");
+    assertEqual(inGame(opened).list, "menu_main_single", "list");
     for (let i = 0; i < 50 && !controls.hidden; i++) await sleep(20);
     assert(controls.hidden, "the touch controls hide in the menu");
     await sleep(100);
     const held = (await volya.call("input_state")).held;
     assert(!held.some((h) => h.startsWith("touch_")), `held after hiding: ${held}`);
+    // A tap on "Возврат к игре", selected and under the glass once the bar
+    // rests, activates it; the controls show again.
+    const menuTap = { pointerType: "touch", pointerId: 36, isPrimary: true, button: 0 };
+    await until((s) => inGame(s)?.selected === 0 && !inGame(s).moving, "item 0 at rest", 3000);
+    pointer("pointerdown", row(0), { ...menuTap, buttons: 1 });
+    pointer("pointerup", row(0), { ...menuTap, buttons: 0 });
+    await until((s) => s.phase === "level" && !s.menu, "back in the game");
+    for (let i = 0; i < 50 && controls.hidden; i++) await sleep(20);
+    assert(!controls.hidden, "the touch controls show again");
+    await quitToTitle();
     return `moved ${moved.toFixed(2)} m, turned ${turned.toFixed(2)} rad, sprint-locked ${sprinted.toFixed(2)} m`;
   },
 
@@ -655,9 +694,53 @@ export const tests = {
       }
       assertEqual(stats.world_draws, 7782, "world draws on the GPU");
     }
-    key("Escape");
-    await until((s) => s.phase === "menu", "the menu");
     return `loaded again in ${s.load_ms.toFixed(0)} ms`;
+  },
+
+  "the in-game menu: Escape opens it and stops the clock, Return resumes, Load lists no saves, quitting asks": async () => {
+    needsGame();
+    key("Escape");
+    let s = await until((s) => inGame(s), "the in-game menu");
+    // title-menu.md section 4.1: no valid last save, so no last-save item.
+    assertEqual(
+      inGame(s).items.map((i) => i.name),
+      ["btn_ret", "btn_load", "btn_save", "btn_options", "btn_credits", "btn_quit_to_mm", "btn_quit"],
+      "items",
+    );
+    const stopped = s.level.game_time;
+    await sleep(300);
+    assertEqual((await state()).level.game_time, stopped, "the game clock stops");
+    if (gpu.state === "ready") {
+      // The menu covers the screen; the level stays on the GPU.
+      const stats = await volya.call("level_stats");
+      assertEqual(stats.world_draws, 7782, "the world kept on the GPU");
+    }
+    // "Возврат к игре": the game runs again.
+    key("Enter");
+    await until((s) => s.phase === "level" && !s.menu, "back in the game");
+    await until((s) => s.level.game_time > stopped, "the clock to run again");
+    // Load: the load screen with no saves; Escape returns to the menu.
+    key("Escape");
+    await until((s) => inGame(s), "the in-game menu");
+    await selectInGame("btn_load");
+    key("Enter");
+    s = await until((s) => s.menu?.load_screen, "the load screen");
+    assertEqual(s.menu.load_screen.list.rows.length, 0, "no saves");
+    assertEqual(s.menu.load_screen.list.rect, [490, 399, 429, 180], "the list");
+    key("Escape");
+    await until((s) => inGame(s) && !s.menu.load_screen, "back to the menu");
+    // Quit game: the box; "Нет" keeps the game, "Да" ends it.
+    await selectInGame("btn_quit_to_mm");
+    key("Enter");
+    s = await until((s) => s.menu?.message, "the quit box");
+    assertEqual(s.menu.message.name, "message_box_quit_game", "box");
+    await answerBox("no");
+    await until((s) => inGame(s) && !s.menu.message, "the box to close");
+    assertEqual((await state()).phase, "level", "still in the game");
+    key("Enter");
+    await answerBox("yes");
+    const title = await until((s) => s.phase === "menu", "the title menu");
+    assertEqual(title.menu.list, "menu_main", "list");
   },
 
   "Options opens from the title menu": async () => {
@@ -753,8 +836,7 @@ export const tests = {
     await until((s) => s.level.player.moving, "T to walk forward");
     up("KeyT");
     await until((s) => !s.level.player.moving, "the player to stop");
-    key("Escape");
-    await until((s) => s.phase === "menu", "the menu");
+    await quitToTitle();
   },
 
   "the settings are read back when the game starts again": async () => {

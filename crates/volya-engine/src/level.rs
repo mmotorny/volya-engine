@@ -642,10 +642,10 @@ impl LevelScreen {
         &self.clock
     }
 
-    /// Whether the player asked to go back ([`Controls::request`]): to the
-    /// title menu until the in-game menu exists.
-    pub fn back_requested(&self) -> bool {
-        self.back
+    /// Whether the player asked for the menu since the last call
+    /// ([`Controls::request`]).
+    pub fn take_back_requested(&mut self) -> bool {
+        std::mem::take(&mut self.back)
     }
 
     /// View and projection for a `width` × `height` target

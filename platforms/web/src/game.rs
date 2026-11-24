@@ -5,16 +5,21 @@
 //! one file tree and the operations the page uses to browse it.
 //!
 //! Layout under the `volya-engine` namespace: `game/` holds the extracted
-//! files, `import.json` the [`Manifest`] written by the importer.
+//! files, `import.json` the [`Manifest`] written by the importer, `user.ltx`
+//! the user configuration file and `savedgames/` the saved games.
 
 use std::cell::RefCell;
 use std::io::Read;
 
+use js_sys::Reflect;
 use serde::{Deserialize, Serialize};
 use volya_engine::core::audio::Playback;
 use volya_engine::core::vfs::db::DbVfs;
 use volya_engine::core::vfs::{EntryKind, Vfs, VfsFile};
-use wasm_bindgen::JsValue;
+use volya_engine::saved_games::{LocalTime, SavedFile, SavedGames};
+use wasm_bindgen::{JsCast, JsValue};
+use wasm_bindgen_futures::JsFuture;
+use web_sys::{FileSystemFileHandle, FileSystemHandleKind};
 
 use crate::opfs;
 
@@ -274,6 +279,80 @@ pub async fn write_user_config(bytes: Vec<u8>) -> Result<(), JsValue> {
             result => return result,
         }
     }
+}
+
+/// The saved-games folder (`$game_saves$`, docs/formats/sav.md section
+/// 1.1): Volya Engine's own, beside `user.ltx` (`$app_data_root$`). Nothing
+/// creates it yet: saves are not written (#75).
+pub const SAVED_GAMES: &str = "savedgames";
+
+/// The saved-games folder's files with their modification times, and the
+/// contents of the `.sav` files directly in it; empty without the folder.
+pub async fn saved_games() -> Result<SavedGames, JsValue> {
+    let namespace = opfs::namespace().await?;
+    let Some(root) = opfs::existing_dir(&namespace, SAVED_GAMES).await? else {
+        return Ok(SavedGames::default());
+    };
+    let mut files = Vec::new();
+    let mut pending = vec![(String::new(), root)];
+    while let Some((path, dir)) = pending.pop() {
+        for handle in opfs::entries(&dir).await? {
+            let name = handle.name();
+            let child = if path.is_empty() {
+                name.clone()
+            } else {
+                format!("{path}\\{name}")
+            };
+            if handle.kind() == FileSystemHandleKind::Directory {
+                pending.push((child, handle.dyn_into()?));
+                continue;
+            }
+            let file: FileSystemFileHandle = handle.dyn_into()?;
+            let blob = JsFuture::from(file.get_file()).await?;
+            let ms = Reflect::get(&blob, &"lastModified".into())?
+                .as_f64()
+                .unwrap_or(0.0);
+            // The browser's local time zone.
+            let date = js_sys::Date::new(&JsValue::from_f64(ms));
+            let modified = LocalTime {
+                year: date.get_full_year(),
+                month: date.get_month() + 1,
+                day: date.get_date(),
+                hour: date.get_hours(),
+                minute: date.get_minutes(),
+            };
+            let contents = if path.is_empty() && name.to_lowercase().ends_with(".sav") {
+                opfs::read_file(&dir, &name).await?
+            } else {
+                None
+            };
+            files.push(SavedFile {
+                path: child,
+                modified_ms: ms,
+                modified,
+                contents,
+            });
+        }
+    }
+    Ok(SavedGames::new(files))
+}
+
+/// Deletes file `path` (relative to the saved-games folder, `\` between
+/// folders) from it.
+pub async fn delete_saved_file(path: &str) -> Result<(), JsValue> {
+    let namespace = opfs::namespace().await?;
+    let Some(mut dir) = opfs::existing_dir(&namespace, SAVED_GAMES).await? else {
+        return Ok(());
+    };
+    let mut parts: Vec<&str> = path.split('\\').collect();
+    let name = parts.pop().unwrap_or_default();
+    for part in parts {
+        let Some(d) = opfs::existing_dir(&dir, part).await? else {
+            return Ok(());
+        };
+        dir = d;
+    }
+    opfs::remove(&dir, name).await
 }
 
 /// Deletes the stored user configuration file (tests); the installer's copy

@@ -21,7 +21,7 @@
 //! | jump | south (A / cross) | Jump |
 //! | crouch | west (X / square), as `crouch_toggle` | Crouch, as `crouch_toggle` |
 //! | sprint | left stick pressed, as `sprint_toggle` | the stick pushed forward past its rim, kept by the sprint lock ([`SprintLock`]) |
-//! | back to the menu | east (B / circle), as Escape | Menu |
+//! | open the menu | east (B / circle), as the key bound to `quit` | Menu |
 //!
 //! Sticks give the spec's digital directions: eight sectors of 45°
 //! ([`stick_directions`]). Crouch is a toggle on both, since holding it
@@ -415,12 +415,12 @@ impl Controls {
 }
 
 impl Controls {
-    /// This frame's request from `input`, and whether the player asked to
-    /// go back (Escape, a gamepad's east button, the touch Menu button).
-    /// The in-game menu (a separate spec) is not made yet; going back
-    /// returns to the title menu. `player` is the player after the previous
-    /// frame (its sprint request for the sprint lock, its crouch toggle for
-    /// the touch low crouch).
+    /// This frame's request from `input`, and whether the player asked for
+    /// the menu with a gamepad's east button or the touch Menu button (the
+    /// keyboard's key bound to `quit` is the app's: it opens the menu
+    /// whatever has the keyboard, save-load-screens.md section 2). `player`
+    /// is the player after the previous frame (its sprint request for the
+    /// sprint lock, its crouch toggle for the touch low crouch).
     pub fn request(&mut self, input: &Input, player: &PlayerState) -> (Request, bool) {
         let held = |a| self.bindings.controls(a).any(|c| input.device_held(c));
         let changed = |a, pressed: bool| {
@@ -534,15 +534,7 @@ impl Controls {
             r.mouse[0] += delta[0] * gain;
             r.mouse[1] += delta[1] * gain;
         }
-        let back = input.actions().iter().any(|a| {
-            matches!(
-                a,
-                Action::Press {
-                    control: Control::Key(Key::Escape),
-                    ..
-                }
-            )
-        }) || touch(TouchButton::Menu, true);
+        let back = pad(GamepadButton::East, true) || touch(TouchButton::Menu, true);
         (r, back)
     }
 }
@@ -628,7 +620,13 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
         key(&mut i, Key::Space, false);
         key(&mut i, Key::Escape, true);
         let (r, back) = req(&mut c, &i);
-        assert!(r.jump_released && !r.jump_pressed && !r.sprint_toggle && back);
+        assert!(r.jump_released && !r.jump_pressed && !r.sprint_toggle);
+        assert!(!back, "the quit key is the app's");
+        i.handle(Event::GamepadButton {
+            button: GamepadButton::East,
+            pressed: true,
+        });
+        assert!(req(&mut c, &i).1, "a gamepad's east button");
         // A gamepad's d-pad acts as the arrow keys in the menu, not as the
         // look keys here.
         let mut i = Input::new();

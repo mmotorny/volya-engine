@@ -533,9 +533,90 @@ fn new_game_loading_screen_from_game_data() {
     assert!(scene.first("video").is_none());
     assert!(!scene.world.unwrap().covered);
 
-    // A later New Game skips prefetching (section 5); leaving the level
-    // during its overlay frames un-mutes at once.
-    for k in [Key::Escape, Key::Enter, Key::Enter] {
+    // The menu during the game (save-load-screens.md section 2): Escape
+    // opens it with the in-game list, game time stops, the level is not
+    // drawn but stays loaded; Escape on its main page returns.
+    press(&mut input, Key::Escape);
+    step(&mut app, &mut input, &mut audio);
+    let menu = |app: &App| match app.state() {
+        AppState::Level { menu, .. } => menu,
+        s => panic!("not in the level: {s:?}"),
+    };
+    let m = menu(&app).expect("the menu opened");
+    assert_eq!(m.menu.list, "menu_main_single");
+    let items: Vec<&str> = m.menu.items.iter().map(|i| i.name.as_str()).collect();
+    // No valid last save: its item is absent (title-menu.md 4.1).
+    assert_eq!(
+        items,
+        [
+            "btn_ret",
+            "btn_load",
+            "btn_save",
+            "btn_options",
+            "btn_credits",
+            "btn_quit_to_mm",
+            "btn_quit"
+        ]
+    );
+    let game_time = |app: &App| match app.state() {
+        AppState::Level { level, .. } => level.game_time,
+        s => panic!("{s:?}"),
+    };
+    let stopped = game_time(&app);
+    for _ in 0..10 {
+        step(&mut app, &mut input, &mut audio);
+    }
+    assert_eq!(game_time(&app), stopped, "game time paused");
+    let scene = app.scene(&tree, SIZE).unwrap();
+    assert!(scene.world.as_ref().unwrap().covered, "the level not drawn");
+    assert!(scene.first("background").is_some(), "the menu drawn");
+    assert!(app.level_controls().is_none(), "the controls stop");
+    press(&mut input, Key::Escape);
+    step(&mut app, &mut input, &mut audio);
+    assert!(menu(&app).is_none(), "returned to the game");
+    step(&mut app, &mut input, &mut audio);
+    assert!(game_time(&app) > stopped, "game time runs again");
+
+    // Load (item 1) shows the load screen with no saves; Escape returns to
+    // the menu. Quit game (item 5) asks first; "Yes" ends the game.
+    press(&mut input, Key::Escape);
+    step(&mut app, &mut input, &mut audio);
+    for k in [Key::Down, Key::Enter] {
+        press(&mut input, k);
+        step(&mut app, &mut input, &mut audio);
+    }
+    let load = menu(&app).unwrap().load_screen.expect("the load screen");
+    assert!(load.screen.list.rows.is_empty());
+    press(&mut input, Key::Escape);
+    step(&mut app, &mut input, &mut audio);
+    let m = menu(&app).unwrap();
+    assert!(m.load_screen.is_none() && m.menu.selected == 1);
+    for k in [Key::Down, Key::Down, Key::Down, Key::Down, Key::Enter] {
+        press(&mut input, k);
+        step(&mut app, &mut input, &mut audio);
+    }
+    let message = menu(&app).unwrap().message.expect("the quit box");
+    assert_eq!(message.name, "message_box_quit_game");
+    let yes = message.buttons[0].rect;
+    let at = [yes[0] + yes[2] / 2.0, yes[1] + yes[3] / 2.0];
+    input.handle(Event::PointerMoved { at });
+    for pressed in [true, false] {
+        input.handle(Event::PointerButton {
+            at: None,
+            button: volya_engine::core::input::MouseButton::Left,
+            pressed,
+            time: 1.0e9,
+        });
+    }
+    step(&mut app, &mut input, &mut audio);
+    let AppState::Menu { menu: m, .. } = app.state() else {
+        panic!("not on the title screen: {:?}", app.state())
+    };
+    assert_eq!(m.menu.list, "menu_main");
+
+    // A later New Game skips prefetching (section 5); the menu does not
+    // open under the loading image (our choice).
+    for k in [Key::Up, Key::Enter, Key::Enter] {
         press(&mut input, k);
         step(&mut app, &mut input, &mut audio);
     }
@@ -559,8 +640,8 @@ fn new_game_loading_screen_from_game_data() {
     ));
     press(&mut input, Key::Escape);
     step(&mut app, &mut input, &mut audio);
-    assert!(matches!(app.state(), AppState::Menu { .. }));
-    assert_eq!(audio.0, [0.0, 1.0, 0.0, 1.0]);
+    assert!(menu(&app).is_none());
+    assert_eq!(audio.0, [0.0, 1.0, 0.0], "still muted");
 }
 
 /// Each loading stage's work, timed: the loading screen does one stage per

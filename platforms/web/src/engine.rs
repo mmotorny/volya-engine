@@ -66,6 +66,12 @@ pub async fn launch() -> Result<serde_json::Value, JsValue> {
     // The user configuration file stored before; without one the
     // installer's copy in the game root applies (startup.md section 4).
     let user = crate::game::read_user_config().await?;
+    // The saved games the menu's screens list; a folder that can't be read
+    // lists none (our choice), saying why on the console.
+    let saves = crate::game::saved_games().await.unwrap_or_else(|e| {
+        web_sys::console::error_1(&e);
+        Default::default()
+    });
     let splash = crate::game::with_trees(|_, root| app::splash(root))?.map_err(error)?;
     let size = splash.as_ref().map_or((0, 0), |s| (s.width, s.height));
     if let Some(image) = &splash {
@@ -85,6 +91,7 @@ pub async fn launch() -> Result<serde_json::Value, JsValue> {
             }
             let mut app = App::new(data).map_err(error)?;
             app.resized(native);
+            app.set_saved_games(saves);
             Ok(app)
         });
     SPLASH.with(|s| *s.borrow_mut() = None);
@@ -190,6 +197,13 @@ pub fn frame(time: f64) {
         });
         if let Some(bytes) = app.take_save() {
             store_user_config(bytes);
+        }
+        for path in app.take_deleted_saves() {
+            wasm_bindgen_futures::spawn_local(async move {
+                if let Err(e) = crate::game::delete_saved_file(&path).await {
+                    web_sys::console::error_1(&e);
+                }
+            });
         }
         crate::input::set_render(Some(app.video_mode()));
         // The game was unmounted under the app.

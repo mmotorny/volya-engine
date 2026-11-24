@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! The game from launch to the title menu (docs/behavior/startup.md): the
-//! logo sequence, then the title menu, driven by the platform's clock and
-//! input, drawing [`Scene`]s and playing sounds through [`AudioOut`].
+//! logo sequence, then the title menu, a New Game's level and the menu
+//! during it (docs/behavior/save-load-screens.md section 2), driven by the
+//! platform's clock and input, drawing [`Scene`]s and playing sounds through
+//! [`AudioOut`].
 //!
 //! The platform shows the splash ([`splash`]) while it loads the data
 //! ([`GameData::load`]), then creates an [`App`]; the sequence starts on the
@@ -26,10 +28,12 @@ use crate::loading_screen::{
     GAME_TYPE, Loading, LoadingScreen, LoadingScreenState, OVERLAY_FRAMES, SERVER_NEW_GAME,
     intro_due,
 };
-use crate::options::{OptionsData, OptionsScreen, OptionsState};
+use crate::menu_screens::{Frame, MenuFrame, MenuScreens, MenuState};
+use crate::save_load::FieldFont;
+use crate::saved_games::SavedGames;
 use crate::scene::{Scene, Sprite, TextureId};
 use crate::startup::{MoviePlayer, MovieSequenceState, Startup};
-use crate::title_menu::{TitleMenu, TitleMenuState};
+use crate::title_menu::{Opening, TitleMenu};
 use volya_engine_formats::pe::{self, Rgba};
 use volya_engine_formats::ui::Resolution;
 use volya_engine_formats::ui::picture::Quad;
@@ -84,6 +88,9 @@ enum Phase {
         level: Box<LevelScreen>,
         overlay: Option<Overlay>,
         intro: Intro,
+        /// The menu opened during the game: the level stays loaded, paused
+        /// and not drawn (save-load-screens.md section 2).
+        menu: Option<Box<TitleMenu>>,
     },
 }
 
@@ -230,6 +237,53 @@ fn quit_presses(data: &GameData, input: &Input) -> u32 {
         + input.touch_starts()
 }
 
+/// Whether the frame has a press of a keyboard key bound to `quit`
+/// (save-load-screens.md section 2).
+fn quit_key_pressed(data: &GameData, input: &Input) -> bool {
+    input
+        .device_changes()
+        .iter()
+        .any(|&(c, pressed)| pressed && matches!(c, Control::Key(k) if data.quit_keys.contains(&k)))
+}
+
+/// One frame of `menu` and its screens.
+#[allow(clippy::too_many_arguments)]
+fn menu_frame(
+    screens: &mut MenuScreens,
+    menu: &mut TitleMenu,
+    tree: &dyn Vfs,
+    data: &GameData,
+    assets: &mut Assets,
+    console: &mut Console,
+    (native, video): (Resolution, Resolution),
+    now: u64,
+    input: &Input,
+    audio: &mut dyn AudioOut,
+) -> MenuFrame {
+    // The name field measures its text in its font at the size drawn at.
+    let field = screens.field_font().and_then(|font| {
+        let fonts = assets.fonts(tree, data, video.height).ok()?;
+        Some(FieldFont {
+            font: fonts.get(font).clone(),
+            scale_x: video.scale().0,
+        })
+    });
+    screens.update(
+        menu,
+        Frame {
+            tree,
+            data,
+            console,
+            native,
+            video,
+            now,
+            input,
+            audio,
+            field_font: field.as_ref(),
+        },
+    )
+}
+
 /// See [`App::level_controls`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LevelControls {
@@ -266,12 +320,8 @@ pub struct App {
     load_ms: Option<f64>,
     /// The settings and bindings (docs/behavior/options-screens.md).
     console: Console,
-    /// The options screen's layout, loaded when it first opens.
-    options_data: Option<OptionsData>,
-    /// The options screen of the current menu screen: made on its first
-    /// opening after each opening of the menu (section 2.1).
-    options: Option<OptionsScreen>,
-    options_open: bool,
+    /// The menu's sub-screens and boxes, and the saved games.
+    screens: MenuScreens,
     /// The screen's own size in pixels, which the resolution list offers.
     native: Resolution,
     /// The resolution drawn at: `vid_mode` as the last video restart
@@ -306,12 +356,8 @@ pub enum AppState {
     },
     Menu {
         clock: u64,
-        menu: TitleMenuState,
-        /// The options screen while it shows.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        options: Option<Box<OptionsState>>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
+        #[serde(flatten)]
+        menu: Box<MenuState>,
     },
     Loading {
         clock: u64,
@@ -322,13 +368,16 @@ pub enum AppState {
     },
     Level {
         clock: u64,
-        level: LevelState,
+        level: Box<LevelState>,
         load_ms: Option<f64>,
         /// Frames the loading image still covers, this one included.
         overlay_frames: u32,
         /// The New Game intro while it plays.
         #[serde(skip_serializing_if = "Option::is_none")]
         intro: Option<MovieSequenceState>,
+        /// The menu while it is open.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        menu: Option<Box<MenuState>>,
     },
 }
 
@@ -340,9 +389,7 @@ impl App {
         Ok(Self {
             applied: console.generation(),
             console,
-            options_data: None,
-            options: None,
-            options_open: false,
+            screens: MenuScreens::default(),
             native: video,
             video,
             save: None,
@@ -365,6 +412,26 @@ impl App {
         &self.data
     }
 
+    /// The saved-games folder as the platform found it.
+    pub fn set_saved_games(&mut self, saves: SavedGames) {
+        self.screens.set_saves(saves);
+    }
+
+    /// Files of the saved-games folder the player deleted since the last
+    /// call, relative to the folder, for the platform to remove.
+    pub fn take_deleted_saves(&mut self) -> Vec<String> {
+        self.screens.take_deleted()
+    }
+
+    /// How the menu opens now (title-menu.md section 4.1).
+    fn opening(&self, in_game: bool) -> Opening {
+        let last = self.console.status("load_last_save");
+        Opening {
+            in_game,
+            last_save: self.screens.saves().last_save_valid(last.as_deref()),
+        }
+    }
+
     /// The engine clock, milliseconds.
     pub fn clock(&self) -> u64 {
         self.clock
@@ -385,53 +452,48 @@ impl App {
         let origin = *self.origin.get_or_insert(time_ms);
         self.clock = self.clock.max((time_ms - origin).max(0.0) as u64);
         let now = self.clock;
+        let title = self.opening(false);
+        let in_game = self.opening(true);
         let data = &self.data;
         let phase = self
             .phase
             .get_or_insert_with(|| Phase::Startup(Startup::new(now)));
+        let resolutions = (self.native, self.video);
         match phase {
             Phase::Startup(startup) => {
                 startup.update(data, now, quit_presses(data, input), audio);
                 if startup.finished(data) {
                     // Shown within one frame of the sequence's end.
-                    *phase = Phase::Menu(TitleMenu::open(data, now, input, audio));
-                    self.options = None;
-                }
-            }
-            Phase::Menu(menu) if self.options_open => {
-                // The title menu is hidden meanwhile (title-menu.md 4.5);
-                // its music plays on.
-                let screen = self.options.as_mut().expect("open options");
-                screen.update(data, &mut self.console, self.native, now, input);
-                self.console_touched = true;
-                menu.update(data, now, &Input::new(), audio);
-                if let Some(closed) = screen.take_closed() {
-                    self.options_open = false;
-                    if closed.video_restart {
-                        // `vid_restart` (section 5.4).
-                        self.video = video_mode(&self.console);
-                        menu.resized(data, self.video);
-                    }
-                    // Stored now, not only at exit (our choice: a browser
-                    // tab is usually closed without the game's shutdown).
-                    self.save = Some(self.console.save());
+                    *phase = Phase::Menu(TitleMenu::open(data, now, input, audio, title));
+                    self.screens.menu_opened();
                 }
             }
             Phase::Menu(menu) => {
-                menu.update(data, now, input, audio);
-                if menu.take_options() {
-                    let opened = self.open_options(tree, now, input);
-                    if let Err(e) = opened {
-                        // Back on the menu, saying why (our choice).
-                        self.error = Some(format!("options: {e}"));
-                    }
-                    self.after_update(audio);
-                    return;
+                let out = menu_frame(
+                    &mut self.screens,
+                    menu,
+                    tree,
+                    data,
+                    &mut self.assets,
+                    &mut self.console,
+                    resolutions,
+                    now,
+                    input,
+                    audio,
+                );
+                self.console_touched = true;
+                if out.video_restart {
+                    // `vid_restart` (options-screens.md section 5.4).
+                    self.video = video_mode(&self.console);
+                    menu.resized(data, self.video);
                 }
-                if menu.quit_requested() {
+                if out.store_config || menu.quit_requested() {
+                    // Stored when the options screen closes, not only at exit
+                    // (our choice: a browser tab is usually closed without
+                    // the game's shutdown).
                     self.save = Some(self.console.save());
                 }
-                if let Some(difficulty) = menu.take_new_game() {
+                if let Some(difficulty) = out.new_game {
                     // level-loading.md section 2.1.
                     self.console
                         .exec(&format!("g_game_difficulty {difficulty}"));
@@ -475,13 +537,14 @@ impl App {
                             level: Box::new(level),
                             overlay: Some(Overlay::new(screen, audio)),
                             intro: Intro::default(),
+                            menu: None,
                         };
                     }
                     Err(e) => {
                         // Back to the menu, saying why (our choice).
                         self.error = Some(e.to_string());
-                        *phase = Phase::Menu(TitleMenu::open(data, now, input, audio));
-                        self.options = None;
+                        *phase = Phase::Menu(TitleMenu::open(data, now, input, audio, title));
+                        self.screens.menu_opened();
                     }
                 }
             }
@@ -489,6 +552,56 @@ impl App {
                 level,
                 overlay,
                 intro,
+                menu: Some(menu),
+            } => {
+                // The menu pauses the game for its whole duration, its
+                // screens and boxes included (save-load-screens.md section 2).
+                level.paused(now);
+                let out = menu_frame(
+                    &mut self.screens,
+                    menu,
+                    tree,
+                    data,
+                    &mut self.assets,
+                    &mut self.console,
+                    resolutions,
+                    now,
+                    input,
+                    audio,
+                );
+                self.console_touched = true;
+                if out.video_restart {
+                    self.video = video_mode(&self.console);
+                    menu.resized(data, self.video);
+                }
+                if out.store_config || menu.quit_requested() {
+                    self.save = Some(self.console.save());
+                }
+                if out.return_to_game {
+                    // `main_menu off`: the menu screen is discarded, which
+                    // stops its music; the pause is released.
+                    menu.stop(audio);
+                    let Phase::Level { menu, .. } = phase else {
+                        unreachable!()
+                    };
+                    *menu = None;
+                } else if out.disconnect {
+                    // `disconnect`: the game ends; with no level the title
+                    // screen's menu opens.
+                    menu.stop(audio);
+                    intro.stop(audio);
+                    if let Some(o) = overlay.take() {
+                        o.end(audio);
+                    }
+                    *phase = Phase::Menu(TitleMenu::open(data, now, input, audio, title));
+                    self.screens.menu_opened();
+                }
+            }
+            Phase::Level {
+                level,
+                overlay,
+                intro,
+                menu,
             } => {
                 if let Some(o) = overlay.take() {
                     *overlay = o.next_frame(audio);
@@ -509,45 +622,22 @@ impl App {
                     return;
                 }
                 level.update(now, input);
-                if level.back_requested() {
-                    if let Some(o) = overlay.take() {
-                        o.end(audio);
-                    }
-                    *phase = Phase::Menu(TitleMenu::open(data, now, input, audio));
-                    self.options = None;
+                let asked = level.take_back_requested() || quit_key_pressed(data, input);
+                // The menu opens while the player's controls are live, not
+                // under the loading image (our choice).
+                if asked && overlay.is_none() {
+                    *menu = Some(Box::new(TitleMenu::open(data, now, input, audio, in_game)));
+                    self.screens.menu_opened();
                 }
             }
         }
         self.after_update(audio);
     }
 
-    /// Opens the options screen (title-menu.md 4.5; options-screens.md 2.1),
-    /// loading its layout the first time.
-    fn open_options(&mut self, tree: &dyn Vfs, now: u64, input: &Input) -> io::Result<()> {
-        if self.options_data.is_none() {
-            self.options_data = Some(OptionsData::load(tree, &self.data, self.video)?);
-        }
-        if self.options.is_none() {
-            let opt = self.options_data.as_ref().expect("loaded");
-            self.options = Some(OptionsScreen::new(&self.data, opt)?);
-        }
-        let screen = self.options.as_mut().expect("made");
-        screen.open(
-            &self.data,
-            &mut self.console,
-            self.native,
-            now,
-            input.cursor_ui(),
-        );
-        self.options_open = true;
-        self.error = None;
-        Ok(())
-    }
-
     /// What the settings changed this frame do: the bindings and movement
     /// settings the next level uses, and the sound volumes at once.
     fn after_update(&mut self, audio: &mut dyn AudioOut) {
-        if std::mem::take(&mut self.console_touched) || self.options_open {
+        if std::mem::take(&mut self.console_touched) {
             let generation = self.console.generation();
             if generation != self.applied {
                 self.data.apply(&self.console);
@@ -600,10 +690,7 @@ impl App {
         match &self.phase {
             None => Ok(Scene::new(resolution)),
             Some(Phase::Startup(s)) => s.scene(&mut ctx),
-            Some(Phase::Menu(_)) if self.options_open => {
-                self.options.as_ref().expect("open options").scene(&mut ctx)
-            }
-            Some(Phase::Menu(m)) => m.scene(&mut ctx),
+            Some(Phase::Menu(m)) => self.screens.scene(m, &mut ctx),
             Some(Phase::Loading {
                 stages: NewGame::Closing(menu),
                 ..
@@ -618,8 +705,25 @@ impl App {
             }
             Some(Phase::Level {
                 level,
+                menu: Some(menu),
+                ..
+            }) => {
+                // Nothing of the game is drawn behind the menu; the world
+                // stays in the scene, covered, so it stays on the GPU.
+                let mut scene = level.scene(resolution, self.clock);
+                if let Some(world) = &mut scene.world {
+                    world.covered = true;
+                }
+                scene
+                    .sprites
+                    .extend(self.screens.scene(menu, &mut ctx)?.sprites);
+                Ok(scene)
+            }
+            Some(Phase::Level {
+                level,
                 overlay,
                 intro,
+                menu: None,
             }) => compose(
                 level.scene(resolution, self.clock),
                 intro,
@@ -639,6 +743,7 @@ impl App {
                 level,
                 overlay: None,
                 intro,
+                menu: None,
             }) if intro.player.is_none() => {
                 let p = level.player().state();
                 Some(LevelControls {
@@ -653,7 +758,11 @@ impl App {
     }
 
     pub fn quit_requested(&self) -> bool {
-        matches!(&self.phase, Some(Phase::Menu(m)) if m.quit_requested())
+        match &self.phase {
+            Some(Phase::Menu(m)) => m.quit_requested(),
+            Some(Phase::Level { menu: Some(m), .. }) => m.quit_requested(),
+            _ => false,
+        }
     }
 
     /// Stops every sound the app started.
@@ -661,7 +770,15 @@ impl App {
         match &mut self.phase {
             Some(Phase::Startup(s)) => s.stop(audio),
             Some(Phase::Menu(m)) => m.stop(audio),
-            Some(Phase::Level { overlay, intro, .. }) => {
+            Some(Phase::Level {
+                overlay,
+                intro,
+                menu,
+                ..
+            }) => {
+                if let Some(m) = menu {
+                    m.stop(audio);
+                }
                 intro.stop(audio);
                 if let Some(o) = overlay.take() {
                     o.end(audio);
@@ -679,16 +796,14 @@ impl App {
                 clock,
                 startup: s.state(&self.data, clock),
             },
-            Some(Phase::Menu(m)) => AppState::Menu {
-                clock,
-                menu: m.state(&self.data, clock),
-                options: self
-                    .options
-                    .as_ref()
-                    .filter(|_| self.options_open)
-                    .map(|o| Box::new(o.state(&self.data))),
-                error: self.error.clone(),
-            },
+            Some(Phase::Menu(m)) => {
+                let mut menu = self.screens.state(m, &self.data, clock);
+                menu.error = self.error.clone().or(menu.error);
+                AppState::Menu {
+                    clock,
+                    menu: Box::new(menu),
+                }
+            }
             Some(Phase::Loading { difficulty, stages }) => AppState::Loading {
                 clock,
                 difficulty,
@@ -701,12 +816,16 @@ impl App {
                 level,
                 overlay,
                 intro,
+                menu,
             }) => AppState::Level {
                 clock,
-                level: level.state(),
+                level: Box::new(level.state()),
                 load_ms: self.load_ms,
                 overlay_frames: overlay.as_ref().map_or(0, |o| o.frames_left),
                 intro: intro.state(&self.data, clock),
+                menu: menu
+                    .as_ref()
+                    .map(|m| Box::new(self.screens.state(m, &self.data, clock))),
             },
         }
     }
@@ -762,7 +881,10 @@ mod tests {
         let AppState::Menu { clock, menu, .. } = app.state() else {
             panic!()
         };
-        assert_eq!((clock, menu.list, menu.music.starts), (300, "menu_main", 1));
+        assert_eq!(
+            (clock, menu.menu.list, menu.menu.music.starts),
+            (300, "menu_main", 1)
+        );
         let scene = app.scene(&tree, Resolution::new(1024, 768)).unwrap();
         assert!(scene.first("background").is_some());
         press(&mut input, Key::Q);
@@ -810,11 +932,11 @@ mod tests {
         press(&mut input, Key::Enter);
         app.update(&tree, 30.0, &input, &mut audio);
         input.end_frame();
-        let AppState::Menu { options, error, .. } = app.state() else {
+        let AppState::Menu { menu, .. } = app.state() else {
             panic!("not in the menu")
         };
-        assert!(options.is_none());
-        assert!(error.unwrap().contains("ui_mm_opt.xml"));
+        assert!(menu.options.is_none());
+        assert!(menu.error.unwrap().contains("ui_mm_opt.xml"));
         // Quitting stores the settings.
         press(&mut input, Key::Q);
         app.update(&tree, 40.0, &input, &mut audio);
@@ -876,11 +998,11 @@ mod tests {
         assert_eq!(caption(&app), (4, "st_creating_new_game...".into()));
         // The fixture has no spawn file: back to the menu, saying why.
         app.update(&tree, 80.0, &input, &mut audio);
-        let AppState::Menu { error, menu, .. } = app.state() else {
+        let AppState::Menu { menu, .. } = app.state() else {
             panic!("not in the menu: {:?}", app.state())
         };
-        assert!(error.unwrap().contains("spawn"), "error");
-        assert_eq!(menu.list, "menu_main");
+        assert!(menu.error.clone().unwrap().contains("spawn"), "error");
+        assert_eq!(menu.menu.list, "menu_main");
         assert!(audio.master_gains.is_empty(), "never muted");
 
         // A later New Game of the same type skips prefetching.

@@ -1,16 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! The title menu (docs/behavior/title-menu.md) on the title screen: its
-//! layers, the item list with the sliding bar and cog wheels, the version
-//! caption, the cursor, the music, and navigation and activation.
+//! The menu (docs/behavior/title-menu.md), on the title screen and during a
+//! game: its layers, the item list chosen at opening (section 4.1) with the
+//! sliding bar and cog wheels, the version caption, the cursor, the music,
+//! and navigation and activation.
 //!
-//! New game and options open their screens (the app shows them). Items
-//! that open other screens (load, multiplayer, credits, last save) are not
-//! implemented: activating them only records what the spec says they do
-//! ([`TitleMenuState::activations`]); nothing visible happens. `btn_quit` should open a confirmation box first; that box is
-//! another screen, so it quits at once, like the Q key, which here means
-//! leaving the engine's screen for the app's own interface.
+//! Items that open screens or boxes (new game, load, save, options, the
+//! quit boxes, last save, return to game) ask the app ([`Request`]), which
+//! shows them. Multiplayer and credits are not implemented: activating them
+//! only records what the spec says they do
+//! ([`TitleMenuState::activations`]); nothing visible happens. Quitting the
+//! game (Q, or "Yes" in the quit box) here means leaving the engine's screen
+//! for the app's own interface.
 
 use std::f32::consts::PI;
 use std::io;
@@ -29,10 +31,13 @@ use volya_engine_formats::ui::Resolution;
 use volya_engine_formats::ui::layout::{Rect, StaticDesc};
 use volya_engine_formats::ui::title_menu::MenuList;
 
-/// The list shown on the title screen without a valid last save
-/// (section 4.1). This platform has no saved games, so there is never a
-/// valid last save and `menu_main_last_save` is not used.
+/// The lists of section 4.1: the title screen's without and with a valid
+/// last save, and a single-player game's with the player alive.
 pub const MAIN_LIST: &str = "menu_main";
+pub const LAST_SAVE_LIST: &str = "menu_main_last_save";
+pub const SINGLE_LIST: &str = "menu_main_single";
+/// The last-save item, the only conditional one (section 4.1).
+const LAST_SAVE_ITEM: &str = "btn_lastsave";
 /// The difficulty page (section 4.5).
 pub const NEW_GAME_LIST: &str = "menu_new_game";
 /// Shortest bar move, milliseconds (section 4.3).
@@ -76,6 +81,53 @@ pub fn wheel_angle(y: f32, h: f32) -> f32 {
     2.0 * PI * (turns - turns.floor())
 }
 
+/// When the menu opens (section 4.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Opening {
+    /// A single-player level runs.
+    pub in_game: bool,
+    /// The remembered last save is valid.
+    pub last_save: bool,
+}
+
+impl Opening {
+    pub const TITLE: Self = Self {
+        in_game: false,
+        last_save: false,
+    };
+
+    /// The list shown (section 4.1). The player character never dies here,
+    /// so `menu_main_single_dead` is not chosen.
+    fn list(self) -> &'static str {
+        match (self.in_game, self.last_save) {
+            (true, _) => SINGLE_LIST,
+            (false, true) => LAST_SAVE_LIST,
+            (false, false) => MAIN_LIST,
+        }
+    }
+}
+
+/// What an activated item or key asks the app to do (section 4.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Request {
+    /// `btn_options`: the options screen.
+    Options,
+    /// `btn_load`: the load-game screen.
+    Load,
+    /// `btn_save`: the save-game screen.
+    Save,
+    /// `btn_ret`, or Escape on the main page in a game: `main_menu off`.
+    Return,
+    /// `btn_quit`: the box `message_box_quit_windows`.
+    QuitWindows,
+    /// `btn_quit_to_mm`: the box `message_box_quit_game`.
+    QuitGame,
+    /// `btn_lastsave`: loads the last save (in a game after the box
+    /// `message_box_confirm_load_save`).
+    LastSave,
+}
+
 /// What activating an item did.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Activation {
@@ -87,8 +139,13 @@ pub struct Activation {
 /// The menu.
 #[derive(Clone, Debug)]
 pub struct TitleMenu {
-    /// The list shown: [`MAIN_LIST`] or [`NEW_GAME_LIST`].
+    /// The list shown: the main page's or [`NEW_GAME_LIST`].
     list: &'static str,
+    /// Its items, the last-save item only with a valid last save.
+    items: MenuList,
+    /// The main page's list, chosen at opening.
+    main: &'static str,
+    opening: Opening,
     selected: usize,
     /// The bar's y relative to `shniaga_wnd` when not moving.
     bar_y: f32,
@@ -114,18 +171,27 @@ pub struct TitleMenu {
     /// The difficulty of a new game the player chose
     /// (level-loading.md section 2.1), until the app takes it.
     new_game: Option<&'static str>,
-    /// The options screen was asked for (section 4.5), until the app
-    /// takes it.
-    options: bool,
+    /// What the player asked for, until the app takes it.
+    request: Option<Request>,
 }
 
 impl TitleMenu {
-    /// Opens the menu at `now` (section 2): the main list, the bar at its
-    /// XML position sliding to item 0, the music started.
-    pub fn open(data: &GameData, now: u64, input: &Input, audio: &mut dyn AudioOut) -> Self {
+    /// Opens the menu at `now` (section 2): the list of `opening`, the bar
+    /// at its XML position sliding to item 0, the music started.
+    pub fn open(
+        data: &GameData,
+        now: u64,
+        input: &Input,
+        audio: &mut dyn AudioOut,
+        opening: Opening,
+    ) -> Self {
         let wheel_width = data.menu.left_anim.window.width;
+        let main = opening.list();
         let mut menu = Self {
-            list: MAIN_LIST,
+            list: main,
+            items: Self::items(data, main, opening),
+            main,
+            opening,
             selected: 0,
             bar_y: data.menu.shniaga.window.y,
             motion: None,
@@ -141,7 +207,7 @@ impl TitleMenu {
             activations: Vec::new(),
             quit: false,
             new_game: None,
-            options: false,
+            request: None,
         };
         // The cursor already over a row does not select it; only entering
         // a row does (the spec does not cover the cursor's position at
@@ -152,15 +218,29 @@ impl TitleMenu {
         menu
     }
 
-    fn list<'a>(&self, data: &'a GameData) -> &'a MenuList {
-        data.menu
-            .menu(self.list)
-            .unwrap_or_else(|| panic!("ui_mm_main.xml has no {}", self.list))
+    /// List `name`'s items: the last-save item only with a valid last save
+    /// (section 4.1).
+    fn items(data: &GameData, name: &str, opening: Opening) -> MenuList {
+        let mut list = data
+            .menu
+            .menu(name)
+            .unwrap_or_else(|| panic!("ui_mm_main.xml has no {name}"))
+            .clone();
+        if !opening.last_save {
+            list.buttons.retain(|b| b.name != LAST_SAVE_ITEM);
+        }
+        list
     }
 
-    /// Whether `ui_mm_main.xml` has the lists this menu shows.
+    fn list(&self, _data: &GameData) -> &MenuList {
+        &self.items
+    }
+
+    /// Whether `ui_mm_main.xml` has the lists this menu shows: those of
+    /// the title screen and of a single-player game (checked at startup,
+    /// our choice).
     pub fn check(data: &GameData) -> io::Result<()> {
-        for list in [MAIN_LIST, NEW_GAME_LIST] {
+        for list in [MAIN_LIST, NEW_GAME_LIST, SINGLE_LIST] {
             if data.menu.menu(list).is_none_or(|m| m.buttons.is_empty()) {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -235,6 +315,7 @@ impl TitleMenu {
 
     fn set_list(&mut self, data: &GameData, list: &'static str, now: u64) {
         self.list = list;
+        self.items = Self::items(data, list, self.opening);
         self.hovered = self.row_at(data, self.cursor);
         self.select(data, 0, now);
     }
@@ -247,7 +328,7 @@ impl TitleMenu {
                 "switches to the difficulty page"
             }
             "btn_new_back" => {
-                self.set_list(data, MAIN_LIST, now);
+                self.set_list(data, self.main, now);
                 "switches back to the main page"
             }
             "btn_novice" | "btn_stalker" | "btn_veteran" | "btn_master" => {
@@ -261,17 +342,35 @@ impl TitleMenu {
                 });
                 "sets the difficulty and starts a new game"
             }
-            "btn_load" => "opens the load-game screen (not implemented)",
-            "btn_lastsave" => "loads the last save (not implemented)",
+            "btn_load" => {
+                self.request = Some(Request::Load);
+                "opens the load-game screen"
+            }
+            "btn_lastsave" => {
+                self.request = Some(Request::LastSave);
+                "loads the last save"
+            }
             "btn_multiplayer" => "opens the multiplayer screen (not implemented)",
             "btn_options" => {
-                self.options = true;
+                self.request = Some(Request::Options);
                 "opens the options screen"
             }
             "btn_credits" => "starts the credits sequence (not implemented)",
             "btn_quit" => {
-                self.quit = true;
-                "quits (without the confirmation box, which is not implemented)"
+                self.request = Some(Request::QuitWindows);
+                "opens the quit confirmation box"
+            }
+            "btn_ret" => {
+                self.request = Some(Request::Return);
+                "returns to the game"
+            }
+            "btn_save" => {
+                self.request = Some(Request::Save);
+                "opens the save-game screen"
+            }
+            "btn_quit_to_mm" => {
+                self.request = Some(Request::QuitGame);
+                "opens the quit-game confirmation box"
             }
             _ => "no action is bound to this item",
         };
@@ -285,7 +384,7 @@ impl TitleMenu {
     /// the bar, the wheels and the music.
     pub fn update(&mut self, data: &GameData, now: u64, input: &Input, audio: &mut dyn AudioOut) {
         for action in input.actions() {
-            if self.quit || self.new_game.is_some() || self.options {
+            if self.quit || self.new_game.is_some() || self.request.is_some() {
                 break;
             }
             match *action {
@@ -321,7 +420,16 @@ impl TitleMenu {
                     // choice; it is bindable as kNUMPADENTER).
                     Key::Enter | Key::NumpadEnter => self.activate(data, now),
                     Key::Escape if self.list == NEW_GAME_LIST => {
-                        self.set_list(data, MAIN_LIST, now)
+                        self.set_list(data, self.main, now)
+                    }
+                    // On the main page with a level running and the player
+                    // alive: `main_menu off`.
+                    Key::Escape if self.list == SINGLE_LIST => {
+                        self.request = Some(Request::Return);
+                        self.activations.push(Activation {
+                            item: "key escape".into(),
+                            effect: "returns to the game".into(),
+                        });
                     }
                     Key::Q => {
                         self.quit = true;
@@ -348,8 +456,10 @@ impl TitleMenu {
             return;
         }
         // Section 6: on the title screen the game is never paused, so a
-        // stopped channel restarts the pair.
-        if let Some([l, r]) = self.music
+        // stopped channel restarts the pair; during a game the menu pauses
+        // it, so the track plays once.
+        if !self.opening.in_game
+            && let Some([l, r]) = self.music
             && !(audio.is_playing(l) && audio.is_playing(r))
         {
             self.start_music(data, audio);
@@ -401,9 +511,32 @@ impl TitleMenu {
         self.quit
     }
 
-    /// Whether the options screen was asked for, once.
-    pub fn take_options(&mut self) -> bool {
-        std::mem::take(&mut self.options)
+    /// Quits the game ("Yes" in the quit box: console command `quit`).
+    pub fn quit(&mut self, audio: &mut dyn AudioOut) {
+        self.quit = true;
+        self.stop(audio);
+    }
+
+    /// What the player asked for, once.
+    pub fn take_request(&mut self) -> Option<Request> {
+        self.request.take()
+    }
+
+    pub fn cursor(&self) -> [f32; 2] {
+        self.cursor
+    }
+
+    /// Puts the cursor at `at` without selecting the row there: where a box
+    /// or a sub-screen over the list left it (our choice; only entering a
+    /// row selects it).
+    pub fn set_cursor(&mut self, data: &GameData, at: [f32; 2]) {
+        self.cursor = at;
+        self.hovered = self.row_at(data, at);
+    }
+
+    /// Whether the menu was opened during a game.
+    pub fn in_game(&self) -> bool {
+        self.opening.in_game
     }
 
     /// The difficulty of the new game the player started, once.
@@ -611,7 +744,7 @@ mod tests {
             let data = fixture::data(&tree);
             let input = Input::new();
             let mut audio = FakeAudio::default();
-            let menu = TitleMenu::open(&data, now, &input, &mut audio);
+            let menu = TitleMenu::open(&data, now, &input, &mut audio, Opening::TITLE);
             Self {
                 data,
                 tree,
@@ -764,18 +897,107 @@ mod tests {
         }
         r.key(Key::Enter, 7000);
         assert_eq!(r.state(7000).list, "menu_main");
-        // Quit item: quits, music stopped.
+        // Quit item: asks for its confirmation box; "Yes" quits, music
+        // stopped.
         for _ in 0..5 {
             r.key(Key::Down, 8000);
         }
         assert!(!r.audio.playing.is_empty());
         r.key(Key::Enter, 9000);
+        assert!(!r.menu.quit_requested());
+        assert_eq!(r.menu.take_request(), Some(Request::QuitWindows));
+        assert_eq!(r.menu.take_request(), None);
+        r.menu.quit(&mut r.audio);
         assert!(r.menu.quit_requested());
         assert!(r.audio.playing.is_empty());
         // Q quits at once.
         let mut r = Run::open(0);
         r.key(Key::Q, 10);
         assert!(r.menu.quit_requested());
+        // Escape on the title screen's main page asks for nothing.
+        let mut r = Run::open(0);
+        r.key(Key::Escape, 10);
+        assert_eq!(r.menu.take_request(), None);
+    }
+
+    #[test]
+    fn in_game_list_without_a_valid_last_save() {
+        let tree = fixture::tree();
+        let data = fixture::data(&tree);
+        let mut audio = FakeAudio::default();
+        let open = |last_save, audio: &mut FakeAudio| {
+            let opening = Opening {
+                in_game: true,
+                last_save,
+            };
+            TitleMenu::open(&data, 0, &Input::new(), audio, opening)
+        };
+        let mut menu = open(false, &mut audio);
+        let names = |m: &TitleMenu| -> Vec<String> {
+            m.state(&data, 0)
+                .items
+                .into_iter()
+                .map(|i| i.name)
+                .collect()
+        };
+        // Section 4.1: `menu_main_single`, the last-save item only with a
+        // valid last save.
+        assert_eq!(menu.state(&data, 0).list, "menu_main_single");
+        assert_eq!(
+            names(&menu),
+            [
+                "btn_ret",
+                "btn_load",
+                "btn_save",
+                "btn_options",
+                "btn_credits",
+                "btn_quit_to_mm",
+                "btn_quit"
+            ]
+        );
+        assert_eq!(names(&open(true, &mut audio))[1], "btn_lastsave");
+        assert!(menu.in_game());
+        // Escape on the main page returns to the game; so does item 0.
+        let mut input = Input::new();
+        input.handle(Event::Key {
+            key: Key::Escape,
+            pressed: true,
+        });
+        menu.update(&data, 10, &input, &mut audio);
+        assert_eq!(menu.take_request(), Some(Request::Return));
+        for (i, request) in [
+            (0, Request::Return),
+            (1, Request::Load),
+            (2, Request::Save),
+            (3, Request::Options),
+            (5, Request::QuitGame),
+            (6, Request::QuitWindows),
+        ] {
+            let mut menu = open(false, &mut audio);
+            let mut input = Input::new();
+            for _ in 0..i {
+                input.handle(Event::Key {
+                    key: Key::Down,
+                    pressed: true,
+                });
+                input.handle(Event::Key {
+                    key: Key::Down,
+                    pressed: false,
+                });
+            }
+            input.handle(Event::Key {
+                key: Key::Enter,
+                pressed: true,
+            });
+            menu.update(&data, 10, &input, &mut audio);
+            assert_eq!(menu.take_request(), Some(request), "item {i}");
+        }
+        // The menu pauses the game, so its music plays once (section 6).
+        let mut menu = open(false, &mut audio);
+        let voices = menu.state(&data, 0).music.voices.unwrap();
+        audio.end(voices[0]);
+        menu.update(&data, 20, &Input::new(), &mut audio);
+        assert_eq!(menu.state(&data, 20).music.starts, 1);
     }
 
     #[test]

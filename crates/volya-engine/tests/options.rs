@@ -588,11 +588,11 @@ fn the_title_menu_opens_the_options_screen() {
     }
     step(&mut app, &mut input, &[Key::Enter]);
     step(&mut app, &mut input, &[]);
-    let AppState::Menu { options, error, .. } = app.state() else {
+    let AppState::Menu { menu, .. } = app.state() else {
         panic!("not in the menu: {:?}", app.state())
     };
-    assert_eq!(error, None);
-    let options = options.expect("the options screen");
+    assert_eq!(menu.error, None);
+    let options = menu.options.expect("the options screen");
     assert_eq!(options.page, Page::Video);
     // A key captured and applied: the next level's controls have it.
     let click = |app: &mut App, input: &mut Input, at: [f32; 2], t: f64| {
@@ -621,10 +621,10 @@ fn the_title_menu_opens_the_options_screen() {
     app.update(&tree, 3100.0, &input, &mut Silent);
     input.end_frame();
     click(&mut app, &mut input, [712.0, 621.0], 4000.0);
-    let AppState::Menu { options, .. } = app.state() else {
+    let AppState::Menu { menu, .. } = app.state() else {
         panic!()
     };
-    assert!(options.is_none(), "Apply closed the screen");
+    assert!(menu.options.is_none(), "Apply closed the screen");
     assert_eq!(
         app.video_mode(),
         Resolution::new(800, 600),

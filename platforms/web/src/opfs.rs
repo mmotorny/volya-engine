@@ -66,6 +66,28 @@ async fn subdir(
         .dyn_into()
 }
 
+/// Directory `name` in `dir`, `None` when it does not exist (nothing is
+/// created).
+pub async fn existing_dir(
+    dir: &FileSystemDirectoryHandle,
+    name: &str,
+) -> Result<Option<FileSystemDirectoryHandle>, JsValue> {
+    Ok(subdir(dir, name, false).await.ok())
+}
+
+/// The entries of `dir`.
+pub async fn entries(dir: &FileSystemDirectoryHandle) -> Result<Vec<FileSystemHandle>, JsValue> {
+    let mut out = Vec::new();
+    let iter = dir.values();
+    loop {
+        let next = JsFuture::from(iter.next()?).await?;
+        if Reflect::get(&next, &"done".into())?.is_truthy() {
+            return Ok(out);
+        }
+        out.push(Reflect::get(&next, &"value".into())?.dyn_into()?);
+    }
+}
+
 /// Opens `path` under `root` for synchronous access, creating it and its
 /// directories as needed. The caller must close the handle.
 /// A read-only sync access handle: browsers that support the mode (Chrome
