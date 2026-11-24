@@ -8,7 +8,7 @@ Volya Engine ships no game assets. You need your own legally obtained copy of th
 
 Live version: https://mmotorny.github.io/volya-engine/
 
-UX audit: every screen of the app, in each state, on each device: https://mmotorny.github.io/volya-engine/ux-audit/
+UX audit (every screen of the app, in each state, on each device): https://mmotorny.github.io/volya-engine/ux-audit/
 
 ## Clean room
 
