@@ -22,6 +22,7 @@ pub mod draw;
 mod fixture;
 pub mod level;
 pub mod loading_screen;
+pub mod objects;
 pub mod options;
 pub mod present;
 pub mod scene;

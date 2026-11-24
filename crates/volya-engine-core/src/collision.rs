@@ -345,6 +345,70 @@ impl CollisionWorld {
         out.truncate(w);
     }
 
+    /// Whether the segment from `origin` along the unit direction `dir` for
+    /// `length` metres meets any triangle (either side, any material). The
+    /// segment's cells are walked in order from the origin, so a hit near it
+    /// ends the walk early.
+    pub fn ray_hits(&self, origin: Vec3, dir: Vec3, length: f32) -> bool {
+        let g = &self.grid;
+        let start = [origin[0], origin[2]];
+        let d = [dir[0], dir[2]];
+        // Clip to the grid's extent in x and z.
+        let (mut t0, mut t1) = (0.0f32, length);
+        for axis in 0..2 {
+            let lo = g.origin[axis];
+            let hi = lo + g.cell * g.size[axis] as f32;
+            if d[axis].abs() < 1e-12 {
+                if start[axis] < lo || start[axis] > hi {
+                    return false;
+                }
+                continue;
+            }
+            let (a, b) = ((lo - start[axis]) / d[axis], (hi - start[axis]) / d[axis]);
+            t0 = t0.max(a.min(b));
+            t1 = t1.min(a.max(b));
+        }
+        if t0 > t1 {
+            return false;
+        }
+        let cell_of = |t: f32, axis: usize| {
+            let v = start[axis] + d[axis] * t;
+            (((v - g.origin[axis]) / g.cell).floor().max(0.0) as usize).min(g.size[axis] - 1)
+        };
+        let mut cell = [cell_of(t0, 0), cell_of(t0, 1)];
+        let step: [isize; 2] = std::array::from_fn(|a| if d[a] > 0.0 { 1 } else { -1 });
+        // Ray parameter of the next cell boundary on each axis, and the
+        // parameter step between boundaries.
+        let mut next = [f32::INFINITY; 2];
+        let mut delta = [f32::INFINITY; 2];
+        for a in 0..2 {
+            if d[a].abs() >= 1e-12 {
+                let edge =
+                    g.origin[a] + g.cell * (cell[a] as f32 + if d[a] > 0.0 { 1.0 } else { 0.0 });
+                next[a] = (edge - start[a]) / d[a];
+                delta[a] = g.cell / d[a].abs();
+            }
+        }
+        loop {
+            let c = cell[1] * g.size[0] + cell[0];
+            for &t in &g.items[g.starts[c] as usize..g.starts[c + 1] as usize] {
+                if geometry::segment_hits_triangle(origin, dir, length, &self.corners(t)) {
+                    return true;
+                }
+            }
+            let a = if next[0] < next[1] { 0 } else { 1 };
+            if next[a] > t1 {
+                return false;
+            }
+            let moved = cell[a] as isize + step[a];
+            if moved < 0 || moved >= g.size[a] as isize {
+                return false;
+            }
+            cell[a] = moved as usize;
+            next[a] += delta[a];
+        }
+    }
+
     /// The highest point at or below `top` where the vertical line through
     /// `(x, z)` meets a triangle's front side facing up, with the
     /// triangle; for checks and placement.

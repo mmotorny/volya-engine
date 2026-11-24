@@ -17,6 +17,8 @@ import { assert, assertEqual, skip } from "./harness.js";
 const ONLY = [
   // The levels (a New Game's level, docs/behavior/level-loading.md).
   "gamedata.db0",
+  // The level's objects' models (docs/behavior/level-objects.md).
+  "gamedata.db4",
   "gamedata.db5",
   "gamedata.db6",
   "gamedata.db7",
@@ -366,6 +368,8 @@ export const tests = {
     // the intro starts under the last two (loading-screen.md section 7).
     const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", 60000);
     assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
+    // The level's objects (docs/behavior/level-objects.md section 7.1).
+    assertEqual([s.level.objects.online, s.level.objects.with_model], [671, 352], "objects");
     assertEqual([s.intro?.items, s.intro?.kind], [1, "video"], "the intro plays");
     // The intro's 120 MB video streams from the file (#53): playing it
     // keeps the wasm heap near its size before (about 137 MB).

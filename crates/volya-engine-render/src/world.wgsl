@@ -52,6 +52,8 @@ struct Draw {
 @group(1) @binding(4) var s_aniso: sampler;
 @group(1) @binding(5) var s_linear: sampler;
 @group(1) @binding(6) var s_clamp: sampler;
+// The cube environment map of the objects' MODELEbB surfaces.
+@group(1) @binding(7) var t_env: texture_cube<f32>;
 
 // Element 0 (near) when |E − C| − r < 44 m (section 5).
 const NEAR_DISTANCE: f32 = 44.0;
@@ -69,6 +71,8 @@ struct Out {
     @location(5) fog: f32,
     // x: alpha ref, y: fog on, z: detail used.
     @location(6) @interpolate(flat) pass_flags: vec3<f32>,
+    // The environment map's look-up direction (objects).
+    @location(7) reflection: vec3<f32>,
 }
 
 struct LightMapped {
@@ -347,4 +351,97 @@ fn vs_lplanes(v: VertexLit) -> Out {
 fn fs_lplanes(in: Out) -> @location(0) vec4<f32> {
     let b = textureSample(t_base, s_aniso, in.uv);
     return finish(b.rgb, b.a * in.c0.a, in);
+}
+
+// The objects' models (docs/behavior/level-objects.md sections 4.7, 4.8,
+// 5.2–5.5), element 1 for every object. A vertex arrives quantized and is
+// drawn at its stored position, transformed by the object's X (`transform`);
+// `c_scale` holds L_dynamic_props, `sphere` the model's world sphere, so
+// very small objects are skipped by the static meshes' size test (section
+// 5.1 believes so; the exact test is unestablished: ours).
+
+struct ModelVertex {
+    @builtin(instance_index) draw: u32,
+    @location(0) position: vec4<i32>,
+    @location(1) normal: vec4<f32>,
+    @location(2) uv: vec2<i32>,
+}
+
+struct ModelPoint {
+    p: vec3<f32>,
+    n: vec3<f32>,
+    uv: vec2<f32>,
+}
+
+// q · 12 / 32768, 2c/255 − 1 and q · 16 / 32768 (section 4.7); the normal
+// turned by X's rotation and normalised (section 5.5).
+fn model_point(d: Draw, v: ModelVertex) -> ModelPoint {
+    var m: ModelPoint;
+    let local = vec3<f32>(v.position.xyz) * (12.0 / 32768.0);
+    m.p = (d.transform * vec4(local, 1.0)).xyz;
+    m.n = normalize((d.transform * vec4(2.0 * v.normal.xyz - 1.0, 0.0)).xyz);
+    m.uv = vec2<f32>(v.uv) * (16.0 / 32768.0);
+    return m;
+}
+
+// The model light Q, clamped as a vertex colour (section 5.5).
+fn model_light(d: Draw, n: vec3<f32>) -> vec3<f32> {
+    let props = d.c_scale;
+    return saturate((n.y * 0.5 + 0.5) * props.w * frame.hemi.rgb + frame.ambient.rgb
+        + props.xyz * sun_term(n));
+}
+
+// model_def_lq; the pixel stage is fs_vert's C = 2 · Q · B.rgb, A = B.a.
+@vertex
+fn vs_model(v: ModelVertex) -> Out {
+    let d = draws[v.draw];
+    let m = model_point(d, v);
+    var out = start(d, m.p, false);
+    out.uv = m.uv;
+    out.c0 = vec4(model_light(d, m.n), 0.0);
+    return out;
+}
+
+// model_env_lq: the view direction reflected about the normal picks the
+// environment texel (our reading of calc_reflection).
+@vertex
+fn vs_model_env(v: ModelVertex) -> Out {
+    let d = draws[v.draw];
+    let m = model_point(d, v);
+    var out = start(d, m.p, false);
+    out.uv = m.uv;
+    out.c0 = vec4(model_light(d, m.n), 0.0);
+    out.reflection = reflect(normalize(m.p - frame.eye.xyz), m.n);
+    return out;
+}
+
+@fragment
+fn fs_model_env(in: Out) -> @location(0) vec4<f32> {
+    let b = textureSample(t_base, s_aniso, in.uv);
+    let e = textureSample(t_env, s_clamp, in.reflection).rgb;
+    let base = mix(e, b.rgb, b.a);
+    return finish(2.0 * in.c0.rgb * base, b.a, in);
+}
+
+// model_def_lqs with simple: the base texel, unlit.
+@vertex
+fn vs_model_simple(v: ModelVertex) -> Out {
+    let d = draws[v.draw];
+    let m = model_point(d, v);
+    var out = start(d, m.p, false);
+    out.uv = m.uv;
+    return out;
+}
+
+// model_def_lplanes: faded by |view direction · normal| (as 8.2).
+@vertex
+fn vs_model_lplanes(v: ModelVertex) -> Out {
+    let d = draws[v.draw];
+    let m = model_point(d, v);
+    var out = start(d, m.p, false);
+    out.uv = m.uv;
+    let pv = normalize((frame.view * vec4(m.p, 1.0)).xyz);
+    let nv = normalize((frame.view * vec4(m.n, 0.0)).xyz);
+    out.c0 = vec4(0.0, 0.0, 0.0, abs(dot(pv, nv)));
+    return out;
 }

@@ -251,6 +251,10 @@ impl Presenter {
         let geom = level
             .take_geometry()
             .ok_or("geometry already uploaded elsewhere")?;
+        let objects = level
+            .objects
+            .take_geometry()
+            .ok_or("object geometry already uploaded elsewhere")?;
         // Each texture file once; one that fails is left unbound (reported).
         let mut textures: HashMap<String, Option<Texture>> = HashMap::new();
         let surfaces: Vec<Surface<Texture>> = level
@@ -288,8 +292,21 @@ impl Presenter {
                         scale: t.scale,
                         bias: t.bias,
                     }),
+                    object: None,
                 })
             })
+            .chain(level.objects.draws.iter().map(|d| WorldDraw {
+                surface: d.surface,
+                vertex_buffer: 0,
+                first_vertex: d.first_vertex,
+                index_buffer: 0,
+                first_index: d.first_index,
+                index_count: d.index_count,
+                transform: d.transform,
+                sphere: d.sphere,
+                tree: None,
+                object: Some(d.dynamic_props),
+            }))
             .collect();
         let mut texture = |path: &String| {
             textures
@@ -317,7 +334,7 @@ impl Presenter {
             })
             .collect::<Option<Vec<_>>>()
             .map(|sections| SkyTextures { sections });
-        let world = renderer.create_world(&geom, &surfaces, &draws, sky.as_ref())?;
+        let world = renderer.create_world_with(&geom, &objects, &surfaces, &draws, sky.as_ref())?;
         if let Some(e) = world.sky_error() {
             self.errors.push(format!("{}: sky: {e}", level.dir));
         }

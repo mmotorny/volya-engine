@@ -1347,6 +1347,58 @@ impl Object {
         }
     }
 
+    /// The Visual block, for kinds that have one (section 7.4.2).
+    pub fn visual(&self) -> Option<&Visual> {
+        Some(match self {
+            Self::Player(o) => &o.creature.visual,
+            Self::Stalker(o) => &o.monster.creature.visual,
+            Self::Trader(o) => &o.visual,
+            Self::Monster(o) => &o.state.monster.creature.visual,
+            Self::CrowOrPhantom(o) => &o.creature.visual,
+            Self::Vehicle(o) => &o.visual,
+            Self::Helicopter(o) => &o.visual,
+            Self::Item(o) => &o.item.visual,
+            Self::Torch(o) => &o.item.visual,
+            Self::Pda(o) => &o.item.visual,
+            Self::Document(o) => &o.item.visual,
+            Self::Outfit(o) => &o.item.visual,
+            Self::Ammunition(o) => &o.item.visual,
+            Self::Knife(o) => &o.weapon.item.visual,
+            Self::MagazineWeapon(o) => &o.weapon.item.visual,
+            Self::WeaponWithGrenadeLauncher(o) => &o.weapon.item.visual,
+            Self::Shotgun(o) => &o.weapon.item.visual,
+            Self::VisualAnomaly(o) => &o.visual,
+            Self::PlainVisual(o) => &o.visual,
+            Self::StationaryGun(o) => &o.visual,
+            Self::HangingLamp(o) => &o.visual,
+            Self::PhysicsObject(o) => &o.visual,
+            Self::Breakable(o) => &o.visual,
+            Self::SkeletonObject(o) => &o.visual,
+            Self::MonsterGroup(o) => &o.state.monster.creature.visual,
+            Self::Zone(_)
+            | Self::Anomaly(_)
+            | Self::TorridZone(_)
+            | Self::LevelChanger(_)
+            | Self::Restrictor(_)
+            | Self::SmartZone(_)
+            | Self::TeamBase(_)
+            | Self::Climbable(_)
+            | Self::OnOffGroup(_) => return None,
+        })
+    }
+
+    /// The Creature block, for kinds that have one.
+    pub fn creature(&self) -> Option<&Creature> {
+        Some(match self {
+            Self::Player(o) => &o.creature,
+            Self::Stalker(o) => &o.monster.creature,
+            Self::Monster(o) => &o.state.monster.creature,
+            Self::CrowOrPhantom(o) => &o.creature,
+            Self::MonsterGroup(o) => &o.state.monster.creature,
+            _ => return None,
+        })
+    }
+
     /// The Skeleton block, for kinds that have one.
     pub fn skeleton(&self) -> Option<&Skeleton> {
         match self {

@@ -3,7 +3,9 @@
 
 //! How a level's shader table entries resolve to surfaces: programs,
 //! textures and states of the normal pass (docs/behavior/static-shading.md
-//! sections 3–5, 7, 8).
+//! sections 3–5, 7, 8), and the objects' model shaders, resolved the same
+//! way (docs/behavior/level-objects.md section 5.2; element 1, which a
+//! renderer without the projected light texture draws every object with).
 //!
 //! Scripted definitions (`shaders\r1\*.s`) are Lua; no Lua runs here. The
 //! effect of the four scripts the first level uses is the spec's section 8,
@@ -16,7 +18,7 @@ use crate::core::config::{Config, value};
 use crate::core::weather::texture_name;
 use crate::render::world::{Blend, Program, Surface};
 use volya_engine_formats::level::split_shader_entry;
-use volya_engine_formats::shaders_xr::Definition;
+use volya_engine_formats::shaders_xr::{Definition, Value};
 
 /// A `[association]` entry of `textures\textures.ltx` (section 4.3).
 #[derive(Clone, Debug, PartialEq)]
@@ -115,6 +117,7 @@ fn surface(program: Program, textures: [Option<String>; 4]) -> Surface<String> {
         strict: false,
         object_lod: false,
         textures,
+        env: None,
     }
 }
 
@@ -202,12 +205,47 @@ impl ShaderLibrary<'_> {
                 s.detail_scale = association.map(|a| a.scale);
                 s
             }
-            other => return Err(format!("class {other:?} is not drawn for static visuals")),
+            // Element 1 of the model classes (level-objects.md 5.2): no
+            // detail, fog on, depth test and write on.
+            "MODEL   " => {
+                let mut s = surface(Program::Model, [t0, None, None, None]);
+                if def.boolean("Use alpha-channel").unwrap_or(false) {
+                    s.blend = Blend::Alpha;
+                    s.alpha_ref = aref(def);
+                }
+                s
+            }
+            "MODELEbB" => {
+                let mut s = surface(Program::ModelEnv, [t0, None, None, None]);
+                s.env = environment_map(def);
+                if def.boolean("Alpha-Blend").unwrap_or(false) {
+                    s.blend = Blend::Alpha;
+                    s.alpha_ref = Some(0);
+                    s.depth_write = false;
+                }
+                s
+            }
+            other => return Err(format!("class {other:?} is not drawn")),
         };
         s.priority = def.priority().clamp(0, 3) as u8;
         s.strict = def.strict();
         Ok(s)
     }
+}
+
+/// The cube map `E` of a `MODELEbB` definition: its texture `Name` after
+/// the common block's (level-objects.md 5.2), lower-cased without an
+/// extension like every texture name.
+fn environment_map(def: &Definition) -> Option<String> {
+    def.properties
+        .iter()
+        .filter_map(|(n, v)| match v {
+            Value::Texture(t) if n == "Name" => Some(t),
+            _ => None,
+        })
+        .nth(1)
+        .map(|t| texture_name(t))
+        .filter(|t| !t.is_empty())
 }
 
 /// The normal pass of a scripted definition (section 8).
@@ -231,6 +269,19 @@ fn scripted(module: &str, t0: Option<String>) -> Result<Surface<String>, String>
             ..surface(Program::Wallmark, base)
         },
         "details_lod" => return Err("distant billboards are not drawn".into()),
+        // The objects' scripted model shaders (level-objects.md 5.2).
+        "models_selflight" | "models_selflightl" => surface(Program::ModelSelfLight, base),
+        // Additive source-alpha / one, depth write off; fog off, alpha ref 0
+        // and priority 2 as `effects\lightplanes` (our choice: the spec
+        // gives only blending, depth write and the fade).
+        "models_lightplanes" => Surface {
+            fog: false,
+            depth_write: false,
+            blend: Blend::Add,
+            alpha_ref: Some(0),
+            priority: 2,
+            ..surface(Program::ModelLightPlanes, base)
+        },
         other => return Err(format!("scripted shader {other} is not supported")),
     })
 }
@@ -309,6 +360,34 @@ mod tests {
                 ],
             ),
             definition("S_SET   ", "effects\\glow", vec![]),
+            definition(
+                "MODEL   ",
+                "models\\model",
+                vec![
+                    ("Use alpha-channel", Value::Boolean(false)),
+                    ("Alpha ref", int(32)),
+                ],
+            ),
+            definition(
+                "MODEL   ",
+                "models\\model_aref",
+                vec![
+                    ("Use alpha-channel", Value::Boolean(true)),
+                    ("Alpha ref", int(128)),
+                ],
+            ),
+            definition(
+                "MODELEbB",
+                "models\\window",
+                vec![
+                    ("Base Texture", Value::Marker),
+                    ("Name", Value::Texture("$base0".into())),
+                    ("Transform", Value::Transform("$null".into())),
+                    ("Name", Value::Texture("sky\\sky_cube_weapons.dds".into())),
+                    ("Transform", Value::Transform("$null".into())),
+                    ("Alpha-Blend", Value::Boolean(true)),
+                ],
+            ),
         ]
         .into_iter()
         .map(|d| (d.name.clone(), d))
@@ -328,7 +407,17 @@ mod tests {
         .into_iter()
         .map(|(k, v)| (k.to_owned(), Association::parse(v)))
         .collect();
-        let scripted = |m: &str| ["selflight", "effects_wallmarkblend", "details_lod"].contains(&m);
+        let scripted = |m: &str| {
+            [
+                "selflight",
+                "effects_wallmarkblend",
+                "details_lod",
+                "models_selflight",
+                "models_lightplanes",
+                "models_xdistort",
+            ]
+            .contains(&m)
+        };
         ShaderLibrary {
             definitions: &definitions,
             scripted: &scripted,
@@ -423,6 +512,34 @@ mod tests {
                 .unwrap_err()
                 .contains("not found in library")
         );
+    }
+
+    #[test]
+    fn model_shaders() {
+        // level-objects.md 5.2: element 1 of MODEL and MODELEbB.
+        let s = resolve("models\\model/wood\\wood_walls8").unwrap();
+        assert_eq!(
+            (s.program, s.blend, s.alpha_ref, s.fog, s.depth_write),
+            (Program::Model, Blend::Off, None, true, true)
+        );
+        assert_eq!(names(&s)[0], Some("wood\\wood_walls8"));
+        let s = resolve("models\\model_aref/glow\\glow_ghost").unwrap();
+        assert_eq!((s.blend, s.alpha_ref), (Blend::Alpha, Some(128)));
+        let s = resolve("models\\window/glas\\glas_dirt").unwrap();
+        assert_eq!(
+            (s.program, s.blend, s.alpha_ref, s.depth_write),
+            (Program::ModelEnv, Blend::Alpha, Some(0), false)
+        );
+        assert_eq!(s.env.as_deref(), Some("sky\\sky_cube_weapons"));
+        assert_eq!(names(&s)[0], Some("glas\\glas_dirt"));
+        let s = resolve("models\\selflight/prop\\prop_iten4").unwrap();
+        assert_eq!((s.program, s.fog), (Program::ModelSelfLight, true));
+        let s = resolve("models\\lightplanes/x").unwrap();
+        assert_eq!(
+            (s.program, s.blend, s.depth_write),
+            (Program::ModelLightPlanes, Blend::Add, false)
+        );
+        assert!(resolve("models\\xdistort/x").is_err());
     }
 
     #[test]

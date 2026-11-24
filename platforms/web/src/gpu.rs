@@ -226,7 +226,8 @@ pub fn resolution() -> Option<Resolution> {
     })
 }
 
-/// GPU memory of the static world shown, if any.
+/// GPU memory of the static world shown, if any, with its objects'
+/// share.
 pub fn world_stats() -> serde_json::Value {
     GPU.with(|g| {
         let g = g.borrow();
@@ -236,6 +237,9 @@ pub fn world_stats() -> serde_json::Value {
             "gpu_texture_bytes": world.map(|w| w.texture_bytes()),
             "skipped_draws": world.map(|w| w.skipped()),
             "world_draws": world.map(|w| w.draw_count()),
+            "object_draws": world.map(|w| w.object_draw_count()),
+            "gpu_object_bytes": world.map(|w| w.object_gpu_bytes()),
+            "gpu_object_texture_bytes": world.map(|w| w.object_texture_bytes()),
         })
     })
 }

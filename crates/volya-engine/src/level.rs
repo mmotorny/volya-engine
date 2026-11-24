@@ -27,10 +27,12 @@ use crate::core::config::Config;
 use crate::core::input::Input;
 use crate::core::level::{DrawItem, Level, LevelGeom};
 use crate::core::movement::{Flags, MovementConfig, Player};
+use crate::core::switching::{StartState, SwitchDistances};
 use crate::core::vfs::{self, Vfs};
 use crate::core::weather::{Environment, Weather};
 use crate::data::GameData;
 use crate::loading_screen::Stage;
+use crate::objects::{self, LevelObjects, ObjectsReport};
 use crate::render::sky::{SkySection, SkyTextures};
 use crate::render::world::Surface;
 use crate::scene::{Scene, WorldScene};
@@ -85,6 +87,9 @@ pub struct LevelWorld {
     pub flares: Vec<Flares>,
     /// The vertex and index buffers until the presenter uploads them.
     geometry: Mutex<Option<LevelGeom>>,
+    /// The spawned objects drawn with the static world
+    /// (docs/behavior/level-objects.md).
+    pub objects: LevelObjects,
 }
 
 impl LevelWorld {
@@ -139,6 +144,7 @@ pub struct LevelState {
     /// The bracketing hourly sections A and B.
     pub weather_sections: [String; 2],
     pub player: PlayerReport,
+    pub objects: ObjectsReport,
 }
 
 /// The player's movement as the engine interface reports it.
@@ -218,21 +224,32 @@ fn locate_texture(tree: &dyn Vfs, data: &GameData, dir: &str, name: &str) -> io:
     Ok(path)
 }
 
-/// The surfaces of the shader entries `draw_items` use, each draw item's
-/// surface, and the entries not drawn with why. A texture that resolves
-/// nowhere fails the load ("Can't find texture", static-shading.md 4.2).
-#[allow(clippy::type_complexity)]
+/// Every surface the level draws: the static world's and the objects'.
+struct Resolved {
+    surfaces: Vec<Surface<String>>,
+    /// The surface of each draw item; `None` where its entry is not drawn.
+    draw_surfaces: Vec<Option<u32>>,
+    /// Static shader entries not drawn, with why.
+    not_drawn: Vec<(String, String)>,
+    /// The surface of each object entry (`<shader>/<texture>`).
+    object_surfaces: Vec<Option<u32>>,
+    /// Object entries not drawn, with why.
+    objects_not_drawn: Vec<(String, String)>,
+}
+
+/// The surfaces of the shader entries `draw_items` use and of the objects'
+/// entries `object_entries` (level-objects.md 5.2: a model mesh's pair
+/// resolves like an entry of the shader table; only the model programs
+/// draw them). A texture that resolves nowhere fails the load ("Can't find
+/// texture", static-shading.md 4.2).
 fn resolve_surfaces(
     tree: &dyn Vfs,
     data: &GameData,
     dir: &str,
     shaders: &[String],
     draw_items: &[DrawItem],
-) -> io::Result<(
-    Vec<Surface<String>>,
-    Vec<Option<u32>>,
-    Vec<(String, String)>,
-)> {
+    object_entries: &[String],
+) -> io::Result<Resolved> {
     let aliases = &data.aliases;
     let definitions: HashMap<String, shaders_xr::Definition> = shaders_xr::parse(&vfs::read(
         tree,
@@ -263,20 +280,20 @@ fn resolve_surfaces(
         Ok(path)
     };
     let mut surfaces = Vec::new();
-    let mut by_entry: HashMap<u16, Option<u32>> = HashMap::new();
-    let mut not_drawn = Vec::new();
-    let mut draw_surfaces = Vec::with_capacity(draw_items.len());
-    for item in draw_items {
-        if let Some(s) = by_entry.get(&item.shader) {
-            draw_surfaces.push(*s);
-            continue;
+    let mut by_entry: HashMap<String, Result<u32, String>> = HashMap::new();
+    let mut resolve = |entry: &str, model: bool| -> io::Result<Result<u32, String>> {
+        if let Some(s) = by_entry.get(entry) {
+            return Ok(s.clone());
         }
-        let entry = shaders
-            .get(usize::from(item.shader))
-            .map_or("", String::as_str);
         let surface = match library.resolve(entry) {
+            Ok(surface) if surface.program.is_model() != model => Err(if model {
+                "not a model shader".to_owned()
+            } else {
+                "a model shader".to_owned()
+            }),
             Ok(surface) => {
                 let [a, b, c, d] = surface.textures.clone();
+                let env = surface.env.clone();
                 let mut resolved = surface.map_textures(|_| None::<String>);
                 resolved.textures = [
                     a.map(&mut locate).transpose()?,
@@ -284,25 +301,64 @@ fn resolve_surfaces(
                     c.map(&mut locate).transpose()?,
                     d.map(&mut locate).transpose()?,
                 ];
+                resolved.env = env.map(&mut locate).transpose()?;
                 surfaces.push(resolved);
-                Some(surfaces.len() as u32 - 1)
+                Ok(surfaces.len() as u32 - 1)
             }
+            Err(why) => Err(why),
+        };
+        by_entry.insert(entry.to_owned(), surface.clone());
+        Ok(surface)
+    };
+    let mut not_drawn = Vec::new();
+    let mut draw_surfaces = Vec::with_capacity(draw_items.len());
+    let mut seen: HashMap<u16, Option<u32>> = HashMap::new();
+    for item in draw_items {
+        if let Some(s) = seen.get(&item.shader) {
+            draw_surfaces.push(*s);
+            continue;
+        }
+        let entry = shaders
+            .get(usize::from(item.shader))
+            .map_or("", String::as_str);
+        let surface = match resolve(entry, false)? {
+            Ok(s) => Some(s),
             Err(why) => {
                 not_drawn.push((entry.to_owned(), why));
                 None
             }
         };
-        by_entry.insert(item.shader, surface);
+        seen.insert(item.shader, surface);
         draw_surfaces.push(surface);
     }
-    Ok((surfaces, draw_surfaces, not_drawn))
+    let mut objects_not_drawn = Vec::new();
+    let mut object_surfaces = Vec::with_capacity(object_entries.len());
+    for entry in object_entries {
+        object_surfaces.push(match resolve(entry, true)? {
+            Ok(s) => Some(s),
+            Err(why) => {
+                objects_not_drawn.push((entry.clone(), why));
+                None
+            }
+        });
+    }
+    Ok(Resolved {
+        surfaces,
+        draw_surfaces,
+        not_drawn,
+        object_surfaces,
+        objects_not_drawn,
+    })
 }
 
 /// A new game's level being loaded stage by stage
 /// (docs/behavior/loading-screen.md section 5): [`NewGameLoad::run`] does
 /// the part of each stage's work this engine has, in the stages' order;
 /// [`NewGameLoad::finish`] makes the level. Stages whose systems do not
-/// exist here (server, life simulation, details, AI, objects) do nothing.
+/// exist here (server, life simulation, details, AI) do nothing; the
+/// level's objects (docs/behavior/level-objects.md) are switched online,
+/// spawned with their models, given surfaces and light inputs in the
+/// stages named after those steps (placed there by us).
 #[derive(Default)]
 pub struct NewGameLoad {
     name: Option<String>,
@@ -323,6 +379,12 @@ pub struct NewGameLoad {
     not_drawn: Vec<(String, String)>,
     sky: Option<SkyTextures<String>>,
     flares: Vec<Flares>,
+    online: Vec<objects::OnlineObject>,
+    spawned: Option<objects::Spawned>,
+    /// Per model, per mesh: its surface.
+    mesh_surfaces: Vec<Vec<Option<u32>>>,
+    objects_not_drawn: Vec<(String, String)>,
+    dynamic_props: Vec<[f32; 4]>,
 }
 
 /// What a stage needs from an earlier one, or an error naming it.
@@ -348,6 +410,35 @@ impl NewGameLoad {
                 self.dir = data.aliases.path("$game_levels$", &name)?;
                 self.name = Some(name);
                 self.actor = Some(actor);
+            }
+            // The New Game's clock (sav.md section 5) and the switch pass
+            // over the level's objects (level-objects.md section 2), placed
+            // under this caption by us (the server has created the game).
+            Stage::ServerConnecting => {
+                let name = earlier(self.name.as_deref(), "level")?;
+                let actor = earlier(self.actor.as_ref(), "actor")?;
+                let alife = alife(tree, data)?;
+                let clock = GameClock::new_game(&alife)?;
+                let start = StartState {
+                    actor: actor.position,
+                    hour: (clock.time_of_day() / 3600.0) as u32,
+                };
+                let spawn_path = data
+                    .aliases
+                    .path("$game_spawn$", &format!("{SPAWN_NAME}.spawn"))?;
+                let graph = GameGraph::parse(&vfs::read(
+                    tree,
+                    &data.aliases.path("$game_data$", "game.graph")?,
+                )?)?;
+                self.online = objects::online_objects(
+                    &vfs::read(tree, &spawn_path)?,
+                    &graph,
+                    name,
+                    &data.system,
+                    &start,
+                    &SwitchDistances::read(&alife)?,
+                )?;
+                self.clock = Some(clock);
             }
             // `level.ltx` is read under this caption; a level's files must
             // all exist (level-loading.md section 2.2).
@@ -415,8 +506,8 @@ impl NewGameLoad {
                 };
             }
             // The actor, the start weather (level-loading.md 2.6) and the
-            // New Game's clock (sav.md section 5), placed under this caption
-            // by us (the client creates the objects here).
+            // objects' models (level-objects.md sections 3, 4), placed under
+            // this caption by us (the client creates the objects here).
             Stage::ClientSpawning => {
                 let name = earlier(self.name.as_deref(), "level")?;
                 // player-movement.md section 1: the actor's section is the
@@ -425,7 +516,8 @@ impl NewGameLoad {
                 self.controls = Some(data.controls.clone());
                 let weather_name = start_weather(tree, data, name)?;
                 self.weather = Some(Weather::load(&data.system, &weather_name)?);
-                self.clock = Some(GameClock::new_game(&alife(tree, data)?)?);
+                let online = std::mem::take(&mut self.online);
+                self.spawned = Some(objects::spawn(tree, data, &dir, &online)?);
             }
             // Every texture file the level needs is located here. The
             // presenter reads and uploads them with the first frame that
@@ -433,8 +525,30 @@ impl NewGameLoad {
             // departure from section 5, which reads them under this caption.
             Stage::LoadingTextures => {
                 let level = earlier(self.level.as_ref(), "level")?;
-                (self.surfaces, self.draw_surfaces, self.not_drawn) =
-                    resolve_surfaces(tree, data, &dir, &level.shaders, &self.draw_items)?;
+                let spawned = earlier(self.spawned.as_ref(), "objects")?;
+                let entries: Vec<String> = spawned
+                    .models
+                    .iter()
+                    .flat_map(|m| &m.meshes)
+                    .map(|m| format!("{}/{}", m.shader, m.texture))
+                    .collect();
+                let resolved =
+                    resolve_surfaces(tree, data, &dir, &level.shaders, &self.draw_items, &entries)?;
+                let mut object_surfaces = resolved.object_surfaces.into_iter();
+                self.mesh_surfaces = spawned
+                    .models
+                    .iter()
+                    .map(|m| {
+                        m.meshes
+                            .iter()
+                            .map(|_| object_surfaces.next().flatten())
+                            .collect()
+                    })
+                    .collect();
+                self.surfaces = resolved.surfaces;
+                self.draw_surfaces = resolved.draw_surfaces;
+                self.not_drawn = resolved.not_drawn;
+                self.objects_not_drawn = resolved.objects_not_drawn;
                 // The sky's textures for every hourly section of the cycle
                 // (sky.md 3.2; the weather effects' are not, our choice):
                 // cube maps, cloud textures and the sun sprites of their
@@ -469,14 +583,26 @@ impl NewGameLoad {
                 self.sky = Some(SkyTextures { sections });
                 self.flares = flares;
             }
+            // The objects' light inputs against the static collision under
+            // the start's sun (level-objects.md 5.4), placed under this
+            // caption by us. They are kept while the level runs (our
+            // choice: the game retests them, the sun's ray as the sun moves).
+            Stage::ClientSynchronising => {
+                let collision = earlier(self.collision.as_ref(), "level.cform")?;
+                let weather = earlier(self.weather.as_ref(), "weather")?;
+                let clock = earlier(self.clock.as_ref(), "game clock")?;
+                let actor = earlier(self.actor.as_ref(), "actor")?;
+                let spawned = earlier(self.spawned.as_ref(), "objects")?;
+                let (a, b, t) = weather.bracket(clock.time_of_day());
+                let sun = Environment::blend(a, b, t, &[], actor.position, VIS_DISTANCE).sun_dir;
+                self.dynamic_props = objects::light_inputs(collision, &spawned.instances, sun);
+            }
             Stage::PrefetchingObjects
             | Stage::ServerStarting
             | Stage::LoadingAlifeSimulator
-            | Stage::ServerConnecting
             | Stage::LoadingShaders
             | Stage::LoadingDetails
-            | Stage::LoadingAiObjects
-            | Stage::ClientSynchronising => {}
+            | Stage::LoadingAiObjects => {}
         }
         Ok(())
     }
@@ -493,6 +619,16 @@ impl NewGameLoad {
         let weather = earlier(self.weather, "weather")?;
         let sky = earlier(self.sky, "sky")?;
         let clock = earlier(self.clock, "game clock")?;
+        let spawned = earlier(self.spawned, "objects")?;
+        if self.dynamic_props.len() != spawned.instances.len() {
+            return Err(invalid("loading stages out of order: no light inputs"));
+        }
+        let objects = LevelObjects::new(
+            spawned,
+            &self.mesh_surfaces,
+            &self.dynamic_props,
+            self.objects_not_drawn,
+        );
         // start-position.md sections 4 and 5: standing at the stored
         // position, the camera at the spawn's angles.
         let player = Player::new(
@@ -518,6 +654,7 @@ impl NewGameLoad {
                 sky,
                 flares: self.flares,
                 geometry: Mutex::new(Some(geom)),
+                objects,
             }),
             collision,
             player,
@@ -556,6 +693,16 @@ impl LevelScreen {
             .eye_height(self.player.body().box_index());
         self.player.place([eye[0], eye[1] - h, eye[2]], angles);
         self.update_view();
+    }
+
+    /// Leaves the objects out of the frames drawn (tests and comparisons);
+    /// only before the world is shared with a presenter. Returns whether
+    /// it could.
+    pub fn hide_objects(&mut self) -> bool {
+        Arc::get_mut(&mut self.world).is_some_and(|w| {
+            w.objects.draws.clear();
+            true
+        })
     }
 
     pub fn world(&self) -> &Arc<LevelWorld> {
@@ -739,6 +886,7 @@ impl LevelScreen {
                 crouch_toggled: p.crouch_toggled,
                 sprint_requested: p.sprint_requested,
             },
+            objects: self.world.objects.report(),
         }
     }
 

@@ -52,16 +52,67 @@ pub enum Program {
     SelfLight,
     /// `base_lplanes` (`effects\lightplanes`).
     LightPlanes,
+    /// `model_def_lq` (class `MODEL   `, element 1; level-objects.md 5.2).
+    Model,
+    /// `model_env_lq` (class `MODELEbB`, element 1).
+    ModelEnv,
+    /// `model_def_lqs` / `simple` (`models\selflight`, `models\selflightl`).
+    ModelSelfLight,
+    /// `model_def_lplanes` / `base_lplanes` (`models\lightplanes`).
+    ModelLightPlanes,
+}
+
+/// The vertex layout a program reads: one of `level.geom`'s, or the
+/// objects' models' (level-objects.md section 4.7: position as `s16` × 3
+/// and one unused, normal as `u8` × 3 and one unused, texture coordinate as
+/// `s16` × 2; 16 bytes).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VertexLayout {
+    Level(Layout),
+    Model,
+}
+
+/// Bytes of one model vertex ([`VertexLayout::Model`]).
+pub const MODEL_VERTEX_BYTES: usize = 16;
+
+/// One model vertex as stored for drawing: the quantized position, normal
+/// and texture coordinate of level-objects.md section 4.7.
+pub fn model_vertex(position: [i16; 3], normal: [u8; 3], uv: [i16; 2]) -> [u8; MODEL_VERTEX_BYTES] {
+    let mut v = [0; MODEL_VERTEX_BYTES];
+    for (i, c) in position.iter().enumerate() {
+        v[2 * i..2 * i + 2].copy_from_slice(&c.to_le_bytes());
+    }
+    v[8..11].copy_from_slice(&normal);
+    v[12..14].copy_from_slice(&uv[0].to_le_bytes());
+    v[14..16].copy_from_slice(&uv[1].to_le_bytes());
+    v
+}
+
+/// The objects' models on the GPU side: every model vertex
+/// ([`model_vertex`]) in one buffer and every index in another; each draw
+/// names its range.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ObjectGeometry {
+    pub vertices: Vec<u8>,
+    pub indices: Vec<u16>,
 }
 
 impl Program {
     /// The vertex layout the program reads.
-    pub fn layout(self) -> Layout {
+    pub fn layout(self) -> VertexLayout {
         match self {
-            Self::LightMapped | Self::Terrain => Layout::LightMapped,
-            Self::Tree => Layout::Tree,
-            _ => Layout::VertexLit,
+            Self::LightMapped | Self::Terrain => VertexLayout::Level(Layout::LightMapped),
+            Self::Tree => VertexLayout::Level(Layout::Tree),
+            Self::Model | Self::ModelEnv | Self::ModelSelfLight | Self::ModelLightPlanes => {
+                VertexLayout::Model
+            }
+            _ => VertexLayout::Level(Layout::VertexLit),
         }
+    }
+
+    /// Whether the program draws the objects' models.
+    pub fn is_model(self) -> bool {
+        self.layout() == VertexLayout::Model
     }
 
     fn entry_points(self) -> (&'static str, &'static str) {
@@ -73,6 +124,10 @@ impl Program {
             Self::Wallmark => ("vs_wmark", "fs_vert"),
             Self::SelfLight => ("vs_simple", "fs_simple"),
             Self::LightPlanes => ("vs_lplanes", "fs_lplanes"),
+            Self::Model => ("vs_model", "fs_vert"),
+            Self::ModelEnv => ("vs_model_env", "fs_model_env"),
+            Self::ModelSelfLight => ("vs_model_simple", "fs_simple"),
+            Self::ModelLightPlanes => ("vs_model_lplanes", "fs_lplanes"),
         }
     }
 }
@@ -105,6 +160,8 @@ pub struct Surface<T> {
     pub object_lod: bool,
     /// Base, second (light map), hemi map, detail.
     pub textures: [Option<T>; 4],
+    /// The cube environment map (`MODELEbB`, level-objects.md 5.2).
+    pub env: Option<T>,
 }
 
 impl<T> Surface<T> {
@@ -126,6 +183,7 @@ impl<T> Surface<T> {
                 c.and_then(&mut f),
                 d.and_then(&mut f),
             ],
+            env: self.env.and_then(&mut f),
         }
     }
 }
@@ -140,7 +198,9 @@ pub struct TreeLight {
 
 /// One draw of the static world: `index_count` indices of index buffer
 /// `index_buffer` from `first_index`, each relative to `first_vertex` of
-/// vertex buffer `vertex_buffer`, with surface `surface`.
+/// vertex buffer `vertex_buffer`, with surface `surface`. An object's draw
+/// (`object` set) reads [`ObjectGeometry`] instead, and its buffer indices
+/// are ignored.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WorldDraw {
     pub surface: u32,
@@ -154,6 +214,8 @@ pub struct WorldDraw {
     /// Bounding sphere: centre, radius.
     pub sphere: [f32; 4],
     pub tree: Option<TreeLight>,
+    /// An object's `L_dynamic_props` (level-objects.md 5.4).
+    pub object: Option<[f32; 4]>,
 }
 
 /// Bytes of one draw's record in the draws buffer.
@@ -212,6 +274,7 @@ pub(crate) struct WorldPipelines {
     pipelines: HashMap<PipelineKey, wgpu::RenderPipeline>,
     samplers: [wgpu::Sampler; 3],
     white: wgpu::TextureView,
+    white_cube: wgpu::TextureView,
     sky: SkyPipelines,
 }
 
@@ -237,7 +300,7 @@ fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
-fn vertex_layout(layout: Layout) -> wgpu::VertexBufferLayout<'static> {
+fn vertex_layout(layout: VertexLayout) -> wgpu::VertexBufferLayout<'static> {
     const LIGHT_MAPPED: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
         0 => Float32x3, 1 => Unorm8x4, 2 => Unorm8x4, 3 => Unorm8x4, 4 => Sint16x2, 5 => Sint16x2
     ];
@@ -247,12 +310,19 @@ fn vertex_layout(layout: Layout) -> wgpu::VertexBufferLayout<'static> {
     const TREE: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
         0 => Float32x3, 1 => Unorm8x4, 2 => Unorm8x4, 3 => Unorm8x4, 4 => Sint16x4
     ];
+    const MODEL: [wgpu::VertexAttribute; 3] = wgpu::vertex_attr_array![
+        0 => Sint16x4, 1 => Unorm8x4, 2 => Sint16x2
+    ];
     wgpu::VertexBufferLayout {
-        array_stride: 32,
+        array_stride: match layout {
+            VertexLayout::Model => MODEL_VERTEX_BYTES as u64,
+            VertexLayout::Level(_) => 32,
+        },
         step_mode: wgpu::VertexStepMode::Vertex,
         attributes: match layout {
-            Layout::LightMapped => &LIGHT_MAPPED,
-            Layout::Tree => &TREE,
+            VertexLayout::Level(Layout::LightMapped) => &LIGHT_MAPPED,
+            VertexLayout::Level(Layout::Tree) => &TREE,
+            VertexLayout::Model => &MODEL,
             _ => &VERTEX_LIT,
         },
     }
@@ -299,6 +369,16 @@ impl WorldPipelines {
                 sampler_entry(4),
                 sampler_entry(5),
                 sampler_entry(6),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::Cube,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -361,6 +441,25 @@ impl WorldPipelines {
             Default::default(),
             &[255; 4],
         );
+        let white_cube = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("white cube"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 6,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            Default::default(),
+            &[255; 24],
+        );
         Self {
             format,
             frame_layout,
@@ -370,6 +469,10 @@ impl WorldPipelines {
             pipelines: HashMap::new(),
             samplers,
             white: white.create_view(&Default::default()),
+            white_cube: white_cube.create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(wgpu::TextureViewDimension::Cube),
+                ..Default::default()
+            }),
             sky: SkyPipelines::new(device, format),
         }
     }
@@ -540,6 +643,9 @@ struct Inner {
     skipped: usize,
     buffer_bytes: u64,
     texture_bytes: u64,
+    object_draws: usize,
+    object_buffer_bytes: u64,
+    object_texture_bytes: u64,
 }
 
 /// A static world uploaded to the GPU; cheap to clone (a handle).
@@ -567,8 +673,26 @@ impl World {
         self.0.texture_bytes
     }
 
+    /// Draws of the static world.
     pub fn draw_count(&self) -> usize {
         self.0.draws
+    }
+
+    /// Draws of the objects' models.
+    pub fn object_draw_count(&self) -> usize {
+        self.0.object_draws
+    }
+
+    /// Bytes of GPU buffers held for the objects' models and their draws
+    /// (included in [`World::gpu_bytes`]).
+    pub fn object_gpu_bytes(&self) -> u64 {
+        self.0.object_buffer_bytes
+    }
+
+    /// Bytes of the textures only the objects' surfaces use (included in
+    /// [`World::texture_bytes`]).
+    pub fn object_texture_bytes(&self) -> u64 {
+        self.0.object_texture_bytes
     }
 
     /// Draws left out because their vertex layout does not suit their
@@ -591,6 +715,8 @@ fn draw_record(surface: &Surface<Texture>, d: &WorldDraw, out: &mut Vec<u8>) {
     push_mat(out, &d.transform);
     push_vec4(out, d.sphere);
     let (scale, bias, sun) = match &d.tree {
+        // An object's L_dynamic_props in c_scale's place.
+        None if d.object.is_some() => (d.object.unwrap_or_default(), [0.0; 4], [0.0; 2]),
         Some(t) => {
             let f = |v: [f32; 5]| v.map(|c| c * TREE_FACTOR);
             let (s, b) = (f(t.scale), f(t.bias));
@@ -638,10 +764,34 @@ impl Renderer {
         draws: &[WorldDraw],
         sky: Option<&SkyTextures<Texture>>,
     ) -> Result<World, String> {
+        self.create_world_with(geom, &ObjectGeometry::default(), surfaces, draws, sky)
+    }
+
+    /// [`Renderer::create_world`] with the objects' models: `objects`'
+    /// buffers are uploaded beside `geom`'s, and draws with
+    /// [`WorldDraw::object`] set read them. Fails when such a draw's range
+    /// lies outside them.
+    pub fn create_world_with(
+        &mut self,
+        geom: &LevelGeom,
+        objects: &ObjectGeometry,
+        surfaces: &[Surface<Texture>],
+        draws: &[WorldDraw],
+        sky: Option<&SkyTextures<Texture>>,
+    ) -> Result<World, String> {
+        if !objects.vertices.len().is_multiple_of(MODEL_VERTEX_BYTES) {
+            return Err("object vertices are not whole model vertices".into());
+        }
+        let object_vertices = (objects.vertices.len() / MODEL_VERTEX_BYTES) as u64;
         for d in draws {
-            if d.vertex_buffer as usize >= geom.vertex_buffers.len()
-                || d.index_buffer as usize >= geom.index_buffers.len()
-            {
+            let fits = if d.object.is_some() {
+                u64::from(d.first_index) + u64::from(d.index_count) <= objects.indices.len() as u64
+                    && u64::from(d.first_vertex) < object_vertices.max(1)
+            } else {
+                (d.vertex_buffer as usize) < geom.vertex_buffers.len()
+                    && (d.index_buffer as usize) < geom.index_buffers.len()
+            };
+            if !fits {
                 return Err(format!("draw {d:?} names a missing buffer"));
             }
         }
@@ -663,13 +813,17 @@ impl Renderer {
                 })
             })
             .collect();
-        let index_buffers: Vec<wgpu::Buffer> = geom
+        let index_data = |ib: &[u16]| {
+            let mut data: Vec<u8> = ib.iter().flat_map(|i| i.to_le_bytes()).collect();
+            // Buffer sizes are multiples of 4.
+            data.resize(data.len().next_multiple_of(4).max(4), 0);
+            data
+        };
+        let mut index_buffers: Vec<wgpu::Buffer> = geom
             .index_buffers
             .iter()
             .map(|ib| {
-                let mut data: Vec<u8> = ib.iter().flat_map(|i| i.to_le_bytes()).collect();
-                // Buffer sizes are multiples of 4.
-                data.resize(data.len().next_multiple_of(4).max(4), 0);
+                let data = index_data(ib);
                 buffer_bytes += data.len() as u64;
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("level.geom indices"),
@@ -678,15 +832,60 @@ impl Renderer {
                 })
             })
             .collect();
+        // The objects' buffers follow the level's.
+        let mut vertex_buffers = vertex_buffers;
+        let (object_vb, object_ib) = (vertex_buffers.len() as u32, index_buffers.len() as u32);
+        let mut object_buffer_bytes = 0;
+        if !objects.vertices.is_empty() {
+            // Whole 16-byte vertices: a multiple of 4 bytes, as buffers need.
+            let vertices = &objects.vertices;
+            let indices = index_data(&objects.indices);
+            object_buffer_bytes += (vertices.len() + indices.len()) as u64;
+            vertex_buffers.push(
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("object vertices"),
+                    contents: vertices,
+                    usage: wgpu::BufferUsages::VERTEX,
+                }),
+            );
+            index_buffers.push(
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("object indices"),
+                    contents: &indices,
+                    usage: wgpu::BufferUsages::INDEX,
+                }),
+            );
+        }
+        buffer_bytes += object_buffer_bytes;
 
-        // Draws that can be drawn: surface present, layouts agree.
+        // Draws that can be drawn: surface present, layouts agree. Object
+        // draws are pointed at the objects' buffers.
         let usable = |d: &WorldDraw| {
             surfaces.get(d.surface as usize).is_some_and(|s| {
-                geom.vertex_buffers[d.vertex_buffer as usize].layout == Some(s.program.layout())
+                if d.object.is_some() {
+                    s.program.layout() == VertexLayout::Model && !objects.vertices.is_empty()
+                } else {
+                    geom.vertex_buffers[d.vertex_buffer as usize]
+                        .layout
+                        .map(VertexLayout::Level)
+                        == Some(s.program.layout())
+                }
             })
         };
-        let kept: Vec<WorldDraw> = draws.iter().copied().filter(usable).collect();
+        let kept: Vec<WorldDraw> = draws
+            .iter()
+            .copied()
+            .filter(usable)
+            .map(|mut d| {
+                if d.object.is_some() {
+                    d.vertex_buffer = object_vb;
+                    d.index_buffer = object_ib;
+                }
+                d
+            })
+            .collect();
         let skipped = draws.len() - kept.len();
+        let object_draws = kept.iter().filter(|d| d.object.is_some()).count();
 
         let mut records = Vec::with_capacity(kept.len().max(1) * DRAW_BYTES);
         for d in &kept {
@@ -694,6 +893,7 @@ impl Renderer {
         }
         records.resize(records.len().max(DRAW_BYTES), 0);
         buffer_bytes += records.len() as u64;
+        object_buffer_bytes += (object_draws * DRAW_BYTES) as u64;
         let draw_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("world draws"),
             contents: &records,
@@ -720,35 +920,71 @@ impl Renderer {
             ],
         });
 
-        // Textures once each (by handle), for their views and memory.
+        // Textures once each (by handle), for their views and memory: those
+        // of surfaces the static world draws first, then the objects' own.
         let mut textures: Vec<Texture> = Vec::new();
         let mut texture_bytes = 0;
+        let mut object_texture_bytes = 0;
+        let static_surface: Vec<bool> = (0..surfaces.len())
+            .map(|i| {
+                kept.iter()
+                    .any(|d| d.object.is_none() && d.surface as usize == i)
+            })
+            .collect();
+        for objects_pass in [false, true] {
+            for (s, _) in surfaces
+                .iter()
+                .zip(&static_surface)
+                .filter(|(_, st)| **st != objects_pass)
+            {
+                for t in s.textures.iter().chain([&s.env]).flatten() {
+                    if !textures.iter().any(|k| k.texture == t.texture) {
+                        let bytes = self::texture_bytes(&t.texture);
+                        texture_bytes += bytes;
+                        if objects_pass {
+                            object_texture_bytes += bytes;
+                        }
+                        textures.push(t.clone());
+                    }
+                }
+            }
+        }
         let surface_groups: Vec<wgpu::BindGroup> = surfaces
             .iter()
             .map(|s| {
-                let views: Vec<wgpu::TextureView> = s
+                let mut views: Vec<wgpu::TextureView> = s
                     .textures
                     .iter()
                     .map(|t| match t {
-                        Some(t) => {
-                            if !textures.iter().any(|k| k.texture == t.texture) {
-                                texture_bytes += self::texture_bytes(&t.texture);
-                                textures.push(t.clone());
-                            }
-                            t.texture.create_view(&wgpu::TextureViewDescriptor {
-                                dimension: Some(wgpu::TextureViewDimension::D2),
-                                array_layer_count: Some(1),
-                                ..Default::default()
-                            })
-                        }
+                        Some(t) => t.texture.create_view(&wgpu::TextureViewDescriptor {
+                            dimension: Some(wgpu::TextureViewDimension::D2),
+                            array_layer_count: Some(1),
+                            ..Default::default()
+                        }),
                         None => pipelines.white.clone(),
                     })
                     .collect();
+                // A map that is not a 6-face square texture binds white (our
+                // choice).
+                views.push(match &s.env {
+                    Some(t)
+                        if t.texture.depth_or_array_layers() == 6
+                            && t.texture.width() == t.texture.height() =>
+                    {
+                        t.texture.create_view(&wgpu::TextureViewDescriptor {
+                            dimension: Some(wgpu::TextureViewDimension::Cube),
+                            array_layer_count: Some(6),
+                            ..Default::default()
+                        })
+                    }
+                    _ => pipelines.white_cube.clone(),
+                });
                 let mut entries: Vec<wgpu::BindGroupEntry> = views
                     .iter()
                     .enumerate()
                     .map(|(i, v)| wgpu::BindGroupEntry {
-                        binding: i as u32,
+                        // The cube map is binding 7, after the samplers.
+                        binding: if i < 4 { i as u32 } else { 7 },
                         resource: wgpu::BindingResource::TextureView(v),
                     })
                     .collect();
@@ -884,10 +1120,13 @@ impl Renderer {
             strict,
             sky,
             sky_error,
-            draws: kept.len(),
+            draws: kept.len() - object_draws,
             skipped,
             buffer_bytes,
             texture_bytes,
+            object_draws,
+            object_buffer_bytes,
+            object_texture_bytes,
         })))
     }
 
