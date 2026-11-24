@@ -68,6 +68,22 @@ async fn subdir(
 
 /// Opens `path` under `root` for synchronous access, creating it and its
 /// directories as needed. The caller must close the handle.
+/// A read-only sync access handle: browsers that support the mode (Chrome
+/// 121 and later) let any number of pages hold one, so several copies of the
+/// app can read the game at once. Others ignore the option and lock the file
+/// to one handle; a second copy then gets their lock error. Through
+/// `Reflect`: web-sys has the option only among its unstable APIs.
+async fn open_read_only(
+    file: &FileSystemFileHandle,
+) -> Result<FileSystemSyncAccessHandle, JsValue> {
+    let options = js_sys::Object::new();
+    Reflect::set(&options, &"mode".into(), &"read-only".into())?;
+    let create: js_sys::Function =
+        Reflect::get(file, &"createSyncAccessHandle".into())?.dyn_into()?;
+    let promise: js_sys::Promise = create.call1(file, &options)?.dyn_into()?;
+    JsFuture::from(promise).await?.dyn_into()
+}
+
 pub async fn open_sync(
     root: &FileSystemDirectoryHandle,
     path: &str,
@@ -165,7 +181,7 @@ impl OpfsVfs {
         }
     }
 
-    /// Mounts the tree under `root`, opening every file.
+    /// Mounts the tree under `root`, opening every file read-only.
     pub async fn mount(root: &FileSystemDirectoryHandle) -> Result<Self, JsValue> {
         let mut vfs = Self {
             files: BTreeMap::new(),
@@ -196,10 +212,7 @@ impl OpfsVfs {
                     });
                 } else {
                     let file: FileSystemFileHandle = handle.dyn_into()?;
-                    let handle: FileSystemSyncAccessHandle =
-                        JsFuture::from(file.create_sync_access_handle())
-                            .await?
-                            .dyn_into()?;
+                    let handle = open_read_only(&file).await?;
                     let size = handle.get_size()? as u64;
                     vfs.files.insert(child, File { handle, size });
                     entries.push(DirEntry {

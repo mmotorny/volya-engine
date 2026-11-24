@@ -128,7 +128,6 @@ async function refresh() {
     const status = await call("game_status");
     // Without graphics nothing else matters: neither importing nor playing.
     if (!(await graphics())) await showUnsupported();
-    else if (status.in_use) showInUse();
     else if (status.imported) await showHome(status);
     else showImport(status, null, { kept: await navigator.storage.persisted(), deleted: deletedByBrowser(status) });
   } catch (error) {
@@ -358,22 +357,6 @@ const link = (href, text) => element("a", { href, textContent: text, target: "_b
 /** Engine errors start lower-case; sentences in the interface don't. */
 const sentence = (text) => text.charAt(0).toUpperCase() + text.slice(1);
 
-/** The game is open in another tab or window, which holds its files. */
-function showInUse() {
-  const retry = element("button", { className: "primary wide", textContent: "Try again" });
-  retry.addEventListener("click", () => location.reload());
-  show(
-    element(
-      "div",
-      { className: "panel" },
-      element("p", { className: "label", textContent: "Open elsewhere" }),
-      element("h2", { textContent: "The game is open in another tab or window" }),
-      element("p", { textContent: "Close Volya Engine there, then try again. Your imported game is safe." }),
-      retry,
-    ),
-  );
-}
-
 function showDamaged(error) {
   const remove = element("button", { className: "danger wide", textContent: "Remove imported data" });
   remove.addEventListener("click", async () => {
@@ -553,4 +536,4 @@ async function showSettings() {
 }
 
 /** Every screen, for the UX audit page (static/ux-audit/), which shows each state. */
-export const screens = { showImport, showHome, showSettings, showInUse, showDamaged };
+export const screens = { showImport, showHome, showSettings, showDamaged };

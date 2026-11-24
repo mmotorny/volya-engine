@@ -58,11 +58,8 @@ pub async fn launch() -> Result<serde_json::Value, JsValue> {
     if !flag("imported") {
         return Err(error("game not imported"));
     }
-    if flag("in_use") {
-        return Err(error(
-            "the game is open in another tab or window of this app",
-        ));
-    }
+    // The browser's own error if the files can't be opened here.
+    crate::game::ensure_mounted().await?;
     let splash = crate::game::with_trees(|_, root| app::splash(root))?.map_err(error)?;
     let size = splash.as_ref().map_or((0, 0), |s| (s.width, s.height));
     if let Some(image) = &splash {

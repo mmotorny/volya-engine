@@ -6,8 +6,8 @@
 // sections. Devices: desktop first, for balance.
 
 const GAME = 5.56 * 2 ** 30;
-const imported = { imported: true, written: 3020, total: 3020, bytes: GAME, in_use: false };
-const fresh = { imported: false, written: 0, total: 0, bytes: 0, in_use: false };
+const imported = { imported: true, written: 3020, total: 3020, bytes: GAME };
+const fresh = { imported: false, written: 0, total: 0, bytes: 0 };
 
 export const SECTIONS = [
   {
@@ -45,6 +45,14 @@ export const SECTIONS = [
     states: [
       { id: "home", name: "Ready", game: imported },
       { id: "home-play-failed", name: "Play failed", game: imported, launchError: "level.geom: unexpected end of file" },
+      // Safari's error (measured in the iOS Simulator) when another copy of
+      // the app holds the files: no shared read-only handles there.
+      {
+        id: "home-play-locked",
+        name: "Play failed: game open in another copy (Safari)",
+        game: imported,
+        launchError: "InvalidStateError: The object is in an invalid state.",
+      },
       // An update, in order: offered (automatic downloads off), downloading
       // on request, downloaded (either way).
       {
@@ -72,7 +80,6 @@ export const SECTIONS = [
   {
     title: "Problems",
     states: [
-      { id: "in-use", name: "Open in another tab", game: { ...imported, in_use: true } },
       { id: "damaged", name: "Import can't be used", game: new Error("game.json is missing") },
       { id: "start-failed", name: "Engine failed to start", startError: "the wasm module could not be compiled" },
     ],

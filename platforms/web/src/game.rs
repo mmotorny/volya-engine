@@ -71,9 +71,6 @@ pub struct Status {
     bytes: u64,
     /// Bytes an interrupted import was writing in all, when recorded.
     total_bytes: Option<u64>,
-    /// The import is complete but open in another tab or window of this app,
-    /// which holds its files.
-    in_use: bool,
 }
 
 /// Mounts the game if it is imported and not yet mounted, then reports.
@@ -88,7 +85,6 @@ pub async fn status() -> Result<Status, JsValue> {
             total: None,
             bytes: 0,
             total_bytes: None,
-            in_use: false,
         });
     };
     if !manifest.complete {
@@ -98,20 +94,50 @@ pub async fn status() -> Result<Status, JsValue> {
             total: None,
             bytes: manifest.files.iter().map(|f| f.size).sum(),
             total_bytes: (manifest.total_bytes > 0).then_some(manifest.total_bytes),
-            in_use: false,
         });
     }
-    let namespace = opfs::namespace().await?;
-    let dir = opfs::create_dir(&namespace, GAME_DIR).await?;
-    let Some(opened) = mount_when_unlocked(&dir).await? else {
-        return Ok(Status {
+    // Files locked by another copy of the app (browsers without read-only
+    // handles): still imported; Play reports the browser's error (`mount`).
+    match mount(manifest).await {
+        Ok(status) => Ok(status),
+        Err((e, manifest)) if is_lock_error(&e) => Ok(Status {
             imported: true,
             written: manifest.files.len(),
             total: Some(manifest.files.len()),
             bytes: manifest.files.iter().map(|f| f.size).sum(),
             total_bytes: None,
-            in_use: true,
-        });
+        }),
+        Err((e, _)) => Err(e),
+    }
+}
+
+/// Mounts the imported game if it isn't: the browser's error otherwise (e.g.
+/// its lock error when another copy of the app holds the files).
+pub async fn ensure_mounted() -> Result<(), JsValue> {
+    if GAME.with(|g| g.borrow().is_some()) {
+        return Ok(());
+    }
+    let manifest = read_manifest()
+        .await?
+        .filter(|m| m.complete)
+        .ok_or_else(|| error("game not imported"))?;
+    mount(manifest).await.map(|_| ()).map_err(|(e, _)| e)
+}
+
+/// Opens every imported file and the archive tree; gives the manifest back
+/// with the error.
+async fn mount(manifest: Manifest) -> Result<Status, (JsValue, Manifest)> {
+    let namespace = match opfs::namespace().await {
+        Ok(n) => n,
+        Err(e) => return Err((e, manifest)),
+    };
+    let dir = match opfs::create_dir(&namespace, GAME_DIR).await {
+        Ok(d) => d,
+        Err(e) => return Err((e, manifest)),
+    };
+    let opened = match mount_when_unlocked(&dir).await {
+        Ok(v) => v,
+        Err(e) => return Err((e, manifest)),
     };
     // Leaked so the tree can borrow it for 'static; `unmount` closes it.
     let vfs: &'static opfs::OpfsVfs = Box::leak(Box::new(opened));
@@ -119,17 +145,21 @@ pub async fn status() -> Result<Status, JsValue> {
         let size = vfs.open(&file.path).map(|f| f.size()).ok();
         if size != Some(file.size) {
             vfs.close();
-            return Err(error(format!(
+            let message = format!(
                 "imported game is damaged ({} missing or wrong size); import it again",
                 file.path
-            )));
+            );
+            return Err((error(message), manifest));
         }
     }
     let mods = vfs.read_dir("mods").is_ok().then_some("mods");
-    let tree = DbVfs::open_game(vfs, mods).map_err(|e| {
-        vfs.close();
-        error(e)
-    })?;
+    let tree = match DbVfs::open_game(vfs, mods) {
+        Ok(t) => t,
+        Err(e) => {
+            vfs.close();
+            return Err((error(e), manifest));
+        }
+    };
     let game = Game {
         opfs: vfs,
         tree,
@@ -143,16 +173,16 @@ pub async fn status() -> Result<Status, JsValue> {
 /// Mounts `dir`, waiting out file locks held by a previous page whose engine
 /// worker is still shutting down (a reload); a lock that persists means the
 /// game is open elsewhere (`None`).
+/// Mounts, retrying a lock error for 5 s: after a reload the old page's
+/// worker may still be letting go of its handles.
 async fn mount_when_unlocked(
     dir: &web_sys::FileSystemDirectoryHandle,
-) -> Result<Option<opfs::OpfsVfs>, JsValue> {
+) -> Result<opfs::OpfsVfs, JsValue> {
     const ATTEMPTS: u32 = 20;
     for attempt in 1..=ATTEMPTS {
         match opfs::OpfsVfs::mount(dir).await {
-            Ok(vfs) => return Ok(Some(vfs)),
             Err(e) if is_lock_error(&e) && attempt < ATTEMPTS => opfs::sleep(250).await?,
-            Err(e) if is_lock_error(&e) => return Ok(None),
-            Err(e) => return Err(e),
+            result => return result,
         }
     }
     unreachable!()
@@ -173,7 +203,6 @@ fn mounted_status(game: &Game) -> Status {
         total: Some(game.manifest.files.len()),
         bytes: game.manifest.files.iter().map(|f| f.size).sum(),
         total_bytes: None,
-        in_use: false,
     }
 }
 

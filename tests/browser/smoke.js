@@ -313,6 +313,31 @@ export const tests = {
     }
   },
 
+  "two copies can open the game's files at once where read-only handles exist": async () => {
+    // As the engine opens them (static/../src/opfs.rs: mode "read-only"), twice.
+    const code = `onmessage = async () => {
+      const root = await navigator.storage.getDirectory();
+      const dir = await root.getDirectoryHandle("volya-engine-test-shared", { create: true });
+      const file = await dir.getFileHandle("probe.bin", { create: true });
+      const open = () => file.createSyncAccessHandle({ mode: "read-only" });
+      const first = await open();
+      let second = null, error = null;
+      try { second = await open(); } catch (e) { error = e.name + ": " + e.message; }
+      first.close(); second?.close();
+      await root.removeEntry("volya-engine-test-shared", { recursive: true });
+      postMessage({ shared: Boolean(second), error });
+    };`;
+    const worker = new Worker(URL.createObjectURL(new Blob([code], { type: "text/javascript" })));
+    const result = await new Promise((resolve, reject) => {
+      worker.onmessage = ({ data }) => resolve(data);
+      worker.onerror = (e) => reject(new Error(e.message));
+      worker.postMessage(null);
+    });
+    worker.terminate();
+    if (navigator.userAgentData) assert(result.shared, `Chromium refused a second read-only handle: ${result.error}`);
+    return result.shared ? "shared" : `exclusive: ${result.error}`;
+  },
+
   "layout fits the viewport": () => {
     const overflow = document.documentElement.scrollWidth - window.innerWidth;
     assert(overflow <= 0, `horizontal overflow ${overflow}px`);
