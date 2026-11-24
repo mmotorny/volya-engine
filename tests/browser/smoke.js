@@ -55,6 +55,31 @@ export const tests = {
     assert(registration.scope.endsWith("/volya-engine/"), `scope ${registration.scope}`);
   },
 
+  "the whole app works offline once installed": async () => {
+    const registration = await navigator.serviceWorker.ready;
+    // Offline copies are made on install; the page must be controlled to use them.
+    if (!navigator.serviceWorker.controller) {
+      await new Promise((resolve) => navigator.serviceWorker.addEventListener("controllerchange", resolve, { once: true }));
+    }
+    assert(registration.active, "no active service worker");
+    const files = (await (await fetch(`${base}files.txt`, { cache: "no-store" })).text()).split("\n").filter(Boolean);
+    assert(files.includes("./") && files.includes("sw.js") && files.some((f) => f.endsWith(".wasm")), `files ${files.join(" ")}`);
+    const offline = (on) => fetch(`${base}__test/offline/${on ? "on" : "off"}`, { method: "POST" });
+    await offline(true);
+    try {
+      const unreachable = await fetch(`${base}not-in-the-build`).then(() => false, () => true);
+      assert(unreachable, "the network is still reachable");
+      const missing = [];
+      for (const file of files) {
+        const response = await fetch(`${base}${file === "./" ? "" : file}`).catch(() => null);
+        if (!response?.ok || (await response.arrayBuffer()).byteLength === 0) missing.push(file);
+      }
+      assertEqual(missing.join(" "), "", "files unavailable offline");
+    } finally {
+      await offline(false);
+    }
+  },
+
   "layout fits the viewport": () => {
     const overflow = document.documentElement.scrollWidth - window.innerWidth;
     assert(overflow <= 0, `horizontal overflow ${overflow}px`);

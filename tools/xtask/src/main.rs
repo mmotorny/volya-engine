@@ -210,7 +210,7 @@ fn web(profile: Profile) -> Result {
         .trim()
         .is_empty();
     let build = format!("{}{}\n", build.trim(), if dirty { "+" } else { "" });
-    fs::write(dist.join("build.txt"), build).map_err(|e| format!("build.txt: {e}"))?;
+    fs::write(dist.join("build.txt"), &build).map_err(|e| format!("build.txt: {e}"))?;
     let wasm = format!("target/{WASM_TARGET}/{dir}/volya_engine_web.wasm");
     run(&mut cmd(
         &wasm_bindgen.to_string_lossy(),
@@ -222,7 +222,38 @@ fn web(profile: Profile) -> Result {
             "dist/pkg",
             &wasm,
         ],
-    ))
+    ))?;
+    offline_files(&dist, build.trim())
+}
+
+/// Lets the service worker keep a whole build for offline use: `files.txt`
+/// lists every file it precaches (with `./` for the page itself), and the
+/// build stamped into `sw.js` makes each deploy install anew, so a new build's
+/// files are precached too (static/sw.js).
+fn offline_files(dist: &Path, build: &str) -> Result {
+    let mut files = Vec::new();
+    list_files(dist, dist, &mut files).map_err(|e| format!("list dist: {e}"))?;
+    files.retain(|f| f != "files.txt");
+    files.push("files.txt".into());
+    files.push("./".into());
+    files.sort();
+    fs::write(dist.join("files.txt"), files.join("\n") + "\n")
+        .map_err(|e| format!("files.txt: {e}"))?;
+    let sw = dist.join("sw.js");
+    let script = fs::read_to_string(&sw).map_err(|e| format!("sw.js: {e}"))?;
+    fs::write(&sw, format!("{script}// build {build}\n")).map_err(|e| format!("sw.js: {e}"))
+}
+
+fn list_files(root: &Path, dir: &Path, files: &mut Vec<String>) -> io::Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            list_files(root, &path, files)?;
+        } else if let Ok(relative) = path.strip_prefix(root) {
+            files.push(relative.to_string_lossy().replace('\\', "/"));
+        }
+    }
+    Ok(())
 }
 
 fn copy_dir(from: &Path, to: &Path) -> io::Result<()> {

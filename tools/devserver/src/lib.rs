@@ -14,6 +14,7 @@ use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::TcpListener;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 /// URL prefix of the GitHub Pages project site.
@@ -22,6 +23,10 @@ pub const BASE: &str = "/volya-engine/";
 pub const TEST_BASE: &str = "/volya-engine/__test/";
 /// Endpoint receiving test reports.
 pub const RESULTS_PATH: &str = "/volya-engine/__test/results";
+/// Tests POST `on` or `off` under this prefix to make the app's own files
+/// unreachable (connections close without a response, like a lost network),
+/// to check the service worker's offline copies. Test files stay reachable.
+pub const OFFLINE_BASE: &str = "/volya-engine/__test/offline/";
 /// URL prefix of the game installer served to tests (BYOA, local only), with
 /// `index.json` listing its files.
 pub const INSTALLER_BASE: &str = "/volya-engine/__test/installer/";
@@ -37,6 +42,7 @@ pub struct Server {
     mounts: Vec<(&'static str, PathBuf)>,
     results: Option<ResultsSink>,
     installer: Option<PathBuf>,
+    offline: AtomicBool,
 }
 
 impl Server {
@@ -45,6 +51,7 @@ impl Server {
             mounts: vec![(BASE, root.canonicalize()?)],
             results: None,
             installer: None,
+            offline: AtomicBool::new(false),
         })
     }
 
@@ -87,6 +94,15 @@ impl Server {
                 sink(String::from_utf8_lossy(&request.body).into_owned());
                 return write_status(&mut stream, 204, "No Content");
             }
+            ("POST", Some(_)) if request.path.starts_with(OFFLINE_BASE) => {
+                let on = match &request.path[OFFLINE_BASE.len()..] {
+                    "on" => true,
+                    "off" => false,
+                    _ => return write_status(&mut stream, 404, "Not Found"),
+                };
+                self.offline.store(on, Ordering::SeqCst);
+                return write_status(&mut stream, 204, "No Content");
+            }
             ("GET" | "HEAD", _) => {}
             _ => return write_status(&mut stream, 405, "Method Not Allowed"),
         }
@@ -111,6 +127,10 @@ impl Server {
                     _ => write_status(&mut stream, 404, "Not Found"),
                 },
             };
+        }
+        if self.offline.load(Ordering::SeqCst) && !request.path.starts_with(TEST_BASE) {
+            // No response at all: the browser sees a network error.
+            return Ok(());
         }
         match self.route(&request.path) {
             Route::Redirect => write!(
@@ -479,6 +499,39 @@ mod tests {
             request("GET /volya-engine/__test/installer/..%2Fsecret.txt HTTP/1.1\r\n\r\n");
         assert!(missing.starts_with("HTTP/1.1 404 "), "{missing}");
         drop(server);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn offline_switch_cuts_only_app_files() {
+        let (dir, server) = fixture("offline");
+        let server = server
+            .with_tests(&dir.join("tests"), Arc::new(|_| {}))
+            .unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || server.run(listener));
+        let request = |head: &str| {
+            let mut stream = TcpStream::connect(addr).unwrap();
+            stream.write_all(head.as_bytes()).unwrap();
+            let mut response = String::new();
+            stream.read_to_string(&mut response).unwrap();
+            response
+        };
+        let post = |what: &str| {
+            request(&format!(
+                "POST {OFFLINE_BASE}{what} HTTP/1.1\r\nContent-Length: 0\r\n\r\n"
+            ))
+        };
+        let app = "GET /volya-engine/ HTTP/1.1\r\n\r\n";
+        let test = "GET /volya-engine/__test/harness.js HTTP/1.1\r\n\r\n";
+        assert!(request(app).starts_with("HTTP/1.1 200 "));
+        assert!(post("on").starts_with("HTTP/1.1 204 "));
+        assert_eq!(request(app), "", "app files unreachable");
+        assert!(request(test).starts_with("HTTP/1.1 200 "), "tests reachable");
+        assert!(post("off").starts_with("HTTP/1.1 204 "));
+        assert!(request(app).starts_with("HTTP/1.1 200 "));
+        assert!(post("sideways").starts_with("HTTP/1.1 404 "));
         fs::remove_dir_all(dir).unwrap();
     }
 
