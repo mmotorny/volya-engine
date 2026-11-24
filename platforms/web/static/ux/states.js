@@ -3,7 +3,7 @@
 
 // The app states shown on the UX audit page: each is what the fake engine
 // and updates report, and which screen to show. Grouped into the board's
-// sections.
+// sections. Devices: desktop first, for balance.
 
 const GAME = 5.56 * 2 ** 30;
 const imported = { imported: true, written: 3020, total: 3020, bytes: GAME, in_use: false };
@@ -14,7 +14,7 @@ export const SECTIONS = [
     title: "Import",
     states: [
       { id: "import", name: "First start", game: fresh },
-      { id: "import-resume", name: "Interrupted import", game: { ...fresh, written: 1210 } },
+      { id: "import-resume", name: "Interrupted import", game: { ...fresh, written: 1210, bytes: 2.31 * 2 ** 30, total_bytes: GAME } },
       {
         id: "import-progress",
         name: "Importing",
@@ -27,6 +27,7 @@ export const SECTIONS = [
     title: "Home",
     states: [
       { id: "home", name: "Ready", game: imported },
+      { id: "home-no-art", name: "Ready, game art unreadable", game: imported, cover: false },
       { id: "home-not-kept", name: "Storage not kept (browser tab)", game: imported, persisted: false },
       { id: "home-no-webgpu", name: "No WebGPU", game: imported, gpu: false },
       { id: "home-updating", name: "Updating (automatic)", game: imported, updates: { status: "downloading", bytes: 1.9 * 2 ** 20 } },
@@ -70,7 +71,7 @@ export const STATES = SECTIONS.flatMap((section) => section.states);
 
 /** Devices: CSS size, safe-area insets, and how input works. */
 export const DEVICES = [
+  { id: "desktop", name: "Desktop Chrome", width: 1280, height: 800, insets: { top: 0, right: 0, bottom: 0, left: 0 }, touch: false },
   { id: "iphone", name: "iPhone 17 Pro Max", width: 440, height: 956, insets: { top: 62, right: 0, bottom: 34, left: 0 }, touch: true },
   { id: "iphone-landscape", name: "iPhone 17 Pro Max · landscape", width: 956, height: 440, insets: { top: 0, right: 62, bottom: 21, left: 62 }, touch: true },
-  { id: "desktop", name: "Desktop Chrome", width: 1280, height: 800, insets: { top: 0, right: 0, bottom: 0, left: 0 }, touch: false },
 ];

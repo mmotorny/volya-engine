@@ -311,6 +311,42 @@ button.danger.filled:hover:not(:disabled) {
   margin-bottom: 0;
 }
 
+/* Art from the player's own game across the top of the Ready panel, fading
+   into it. */
+.panel.ready {
+  overflow: hidden;
+}
+
+.panel.ready .cover {
+  display: block;
+  width: calc(100% + 2.5rem);
+  height: 11rem;
+  margin: -1.25rem -1.25rem 1rem;
+  object-fit: cover;
+  object-position: center top;
+  -webkit-mask-image: linear-gradient(#000 55%, transparent);
+  mask-image: linear-gradient(#000 55%, transparent);
+}
+
+/* A warning inside a panel: what happened and what to do. */
+.callout {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0.75rem 0;
+  padding: 0.75rem 0.9rem;
+  border-left: 3px solid #f5c26b;
+  border-radius: 8px;
+  background: rgba(245, 194, 107, 0.1);
+  font-size: 0.9rem;
+  color: var(--ink-2);
+}
+
+.callout strong {
+  color: #f5c26b;
+  font-weight: 650;
+}
+
 .game-title {
   margin: 0 0 1rem;
   font-size: 1.125rem;

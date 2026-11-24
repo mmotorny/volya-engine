@@ -41,6 +41,9 @@ const call = async (op) => {
   switch (op) {
     case "status":
       return { gpu };
+    case "cover":
+      if (state.cover === false) throw new Error("no art");
+      return placeholderArt();
     case "game_status":
       if (state.game instanceof Error) throw state.game;
       return state.game;
@@ -48,6 +51,33 @@ const call = async (op) => {
       return null;
   }
 };
+
+/**
+ * Stand-in for the art the engine reads from the player's game (the page
+ * can't ship game assets): a dark, grainy plate with a note.
+ */
+function placeholderArt() {
+  const [width, height] = [512, 384];
+  const canvas = new OffscreenCanvas(width, height);
+  const g = canvas.getContext("2d");
+  const gradient = g.createLinearGradient(0, 0, width, height);
+  gradient.addColorStop(0, "#3a2f22");
+  gradient.addColorStop(1, "#14110c");
+  g.fillStyle = gradient;
+  g.fillRect(0, 0, width, height);
+  for (let i = 0; i < 4000; i++) {
+    g.fillStyle = `rgba(255, 230, 190, ${Math.random() * 0.06})`;
+    g.fillRect(Math.random() * width, Math.random() * height, 2, 2);
+  }
+  g.fillStyle = "rgba(255, 235, 200, 0.55)";
+  g.font = "600 30px system-ui, sans-serif";
+  g.textAlign = "center";
+  g.fillText("Art from the player's game", width / 2, 90);
+  const rgba = g.getImageData(0, 0, width, height).data;
+  let binary = "";
+  for (let i = 0; i < rgba.length; i += 0x8000) binary += String.fromCharCode(...rgba.subarray(i, i + 0x8000));
+  return { width, height, rgba: btoa(binary) };
+}
 
 // Fake updates with the state's values.
 const listeners = new Set();

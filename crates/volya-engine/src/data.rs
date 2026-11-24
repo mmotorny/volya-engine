@@ -101,6 +101,15 @@ pub fn quit_keys(files: &[&[u8]]) -> Vec<Key> {
     vec![key.unwrap_or(Key::Escape)]
 }
 
+/// The path aliases of the game root's `fsgame.ltx`, or of the installer's
+/// when the root has none.
+pub fn read_aliases(root: Option<&dyn Vfs>) -> io::Result<PathAliases> {
+    let fsgame = root
+        .and_then(|r| vfs::read(r, "fsgame.ltx").ok())
+        .unwrap_or_else(|| INSTALLER_FSGAME.as_bytes().into());
+    PathAliases::parse(&fsgame, "")
+}
+
 /// Everything loaded before the logo sequence starts.
 pub struct GameData {
     pub aliases: PathAliases,
@@ -153,8 +162,7 @@ impl GameData {
         resolution: Resolution,
     ) -> io::Result<Self> {
         let root_file = |path: &str| root.and_then(|r| vfs::read(r, path).ok());
-        let fsgame = root_file("fsgame.ltx").unwrap_or_else(|| INSTALLER_FSGAME.as_bytes().into());
-        let aliases = PathAliases::parse(&fsgame, "")?;
+        let aliases = read_aliases(root)?;
 
         let required = |name: &str| -> io::Result<Config> {
             let path = aliases.path(GAME_CONFIG, name)?;

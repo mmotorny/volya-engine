@@ -506,3 +506,36 @@ fn new_game_loading_screen_from_game_data() {
     assert!(matches!(app.state(), AppState::Menu { .. }));
     assert_eq!(audio.0, [0.0, 1.0, 0.0, 1.0]);
 }
+
+/// The home screen's cover: the loading screen's background, decoded as
+/// loading-screen.md 8.1 measures it (mean RGB ≈ 31.7, 27.3, 21.4).
+#[test]
+fn cover_from_game_data() {
+    let Some(archives) = gog_archives::archives() else {
+        return;
+    };
+    let root = StdVfs::new(archives[0].file.parent().unwrap());
+    let tree = DbVfs::open_game(&root, Some("mods")).unwrap();
+    let aliases = volya_engine::data::read_aliases(None).unwrap();
+    let image = volya_engine::cover::read(&tree, &aliases).unwrap();
+    assert_eq!((image.width, image.height), (512, 384));
+    let n = (image.width * image.height) as f64;
+    let mean = |c: usize| {
+        image
+            .rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| f64::from(p[c]))
+            .sum::<f64>()
+            / n
+    };
+    for (c, want) in [31.7, 27.3, 21.4].into_iter().enumerate() {
+        assert!((mean(c) - want).abs() < 0.6, "channel {c}: {}", mean(c));
+    }
+    assert!(
+        image.rgba.as_chunks::<4>().0.iter().all(|p| p[3] == 255),
+        "background is opaque"
+    );
+    dump("VOLYA_DUMP_COVER", &image.rgba, image.width, image.height);
+}

@@ -27,6 +27,10 @@ pub struct Manifest {
     pub language: String,
     pub complete: bool,
     pub files: Vec<ManifestFile>,
+    /// Bytes the import writes in all (0 in manifests written before it was
+    /// recorded), so an interrupted import can say how far it got.
+    #[serde(default)]
+    pub total_bytes: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -65,6 +69,8 @@ pub struct Status {
     written: usize,
     total: Option<usize>,
     bytes: u64,
+    /// Bytes an interrupted import was writing in all, when recorded.
+    total_bytes: Option<u64>,
     /// The import is complete but open in another tab or window of this app,
     /// which holds its files.
     in_use: bool,
@@ -81,6 +87,7 @@ pub async fn status() -> Result<Status, JsValue> {
             written: 0,
             total: None,
             bytes: 0,
+            total_bytes: None,
             in_use: false,
         });
     };
@@ -90,6 +97,7 @@ pub async fn status() -> Result<Status, JsValue> {
             written: manifest.files.len(),
             total: None,
             bytes: manifest.files.iter().map(|f| f.size).sum(),
+            total_bytes: (manifest.total_bytes > 0).then_some(manifest.total_bytes),
             in_use: false,
         });
     }
@@ -101,6 +109,7 @@ pub async fn status() -> Result<Status, JsValue> {
             written: manifest.files.len(),
             total: Some(manifest.files.len()),
             bytes: manifest.files.iter().map(|f| f.size).sum(),
+            total_bytes: None,
             in_use: true,
         });
     };
@@ -163,6 +172,7 @@ fn mounted_status(game: &Game) -> Status {
         written: game.manifest.files.len(),
         total: Some(game.manifest.files.len()),
         bytes: game.manifest.files.iter().map(|f| f.size).sum(),
+        total_bytes: None,
         in_use: false,
     }
 }
@@ -257,4 +267,45 @@ pub fn read_head(path: &str, max: u64) -> Result<Head, JsValue> {
         file.take(max).read_to_end(&mut bytes)?;
         Ok(Head { size, bytes })
     })
+}
+
+#[derive(Serialize)]
+pub struct Cover {
+    width: u32,
+    height: u32,
+    /// RGBA, 8 bits per channel, rows top to bottom, in base64.
+    rgba: String,
+}
+
+/// Art from the imported game for the home screen (volya_engine::cover).
+pub fn cover() -> Result<Cover, JsValue> {
+    with_game(|game| {
+        let aliases = volya_engine::data::read_aliases(Some(game.opfs)).map_err(error)?;
+        let image = volya_engine::cover::read(&game.tree, &aliases).map_err(error)?;
+        Ok(Cover {
+            width: image.width,
+            height: image.height,
+            rgba: base64(&image.rgba),
+        })
+    })
+}
+
+/// Standard base64 with padding.
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, &b)| n | u32::from(b) << (16 - 8 * i));
+        for i in 0..4 {
+            out.push(if i <= chunk.len() {
+                ALPHABET[(n >> (18 - 6 * i) & 63) as usize] as char
+            } else {
+                '='
+            });
+        }
+    }
+    out
 }

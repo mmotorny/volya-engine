@@ -209,6 +209,7 @@ pub async fn run_import(bin: JsValue, only: JsValue, progress: Function) -> Resu
     manifest.complete = false;
 
     let total: u64 = files.iter().map(|f| f.size).sum();
+    manifest.total_bytes = total;
     let done = std::cell::Cell::new(0u64);
     for file in &files {
         let md5 = hex(&file.md5);

@@ -192,10 +192,28 @@ function showImport(status, snapshot = null) {
     progress.value = snapshot.done / snapshot.total;
     say(`${formatBytes(snapshot.done)} of ${formatBytes(snapshot.total)} · ${snapshot.path}`);
   }
-  const resume =
-    status.written > 0
-      ? element("p", { className: "note", textContent: `A previous import stopped after ${status.written} files. Choosing the installer again resumes it.` })
-      : null;
+  // An interrupted import looks like one under way, stopped where it was,
+  // with what happened and how to go on.
+  let resume = null;
+  if (status.written > 0 && !snapshot) {
+    choose.textContent = "Choose installer files to continue";
+    if (status.total_bytes) {
+      progress.hidden = false;
+      progress.value = status.bytes / status.total_bytes;
+      say(`${formatBytes(status.bytes)} of ${formatBytes(status.total_bytes)}`);
+    } else {
+      say(`${formatBytes(status.bytes)} imported`);
+    }
+    resume = element(
+      "div",
+      { className: "callout" },
+      element("strong", { textContent: "The import stopped before it finished" }),
+      element("span", {
+        textContent:
+          "This can happen when the app is closed or the device locks during an import. Choose both installer files again: it continues where it stopped.",
+      }),
+    );
+  }
   show(
     element(
       "div",
@@ -207,13 +225,13 @@ function showImport(status, snapshot = null) {
         "ol",
         { className: "steps" },
         element("li", {}, "Download both installer files from GOG: ", element("code", { textContent: "setup_….exe" }), " and ", element("code", { textContent: "setup_…-1.bin" }), "."),
-        element("li", { textContent: "Choose both files below. The game is extracted into this app's storage (about 5.6 GiB) and the installer files are no longer needed." }),
+        element("li", { textContent: "Choose both files below. The game is extracted into this app's storage, after which the installer files are no longer needed." }),
       ),
+      progress,
+      message,
       resume,
       choose,
       input,
-      progress,
-      message,
     ),
     bottom(updateOffer(), settingsButton()),
   );
@@ -281,7 +299,8 @@ async function showHome(status) {
   show(
     element(
       "div",
-      { className: "panel" },
+      { className: "panel ready" },
+      await cover(),
       element("p", { className: "label", textContent: ready ? "Ready" : "Unavailable here" }),
       element("p", { className: "game-title", textContent: "S.T.A.L.K.E.R.: Shadow of Chernobyl" }),
       launch,
@@ -290,6 +309,23 @@ async function showHome(status) {
     persisted ? null : storageWarning(),
     bottom(updateOffer(), settingsButton()),
   );
+}
+
+/** Art from the imported game (the engine decodes it), or nothing. */
+let coverImage = null;
+async function cover() {
+  try {
+    coverImage ??= await call("cover");
+  } catch {
+    return null;
+  }
+  if (!coverImage) return null;
+  const { width, height, rgba } = coverImage;
+  const bytes = Uint8ClampedArray.from(atob(rgba), (c) => c.charCodeAt(0));
+  const canvas = element("canvas", { className: "cover", width, height });
+  canvas.getContext("2d").putImageData(new ImageData(bytes, width, height), 0, 0);
+  canvas.setAttribute("aria-hidden", "true");
+  return canvas;
 }
 
 const storageWarning = () =>
@@ -333,6 +369,7 @@ async function showSettings() {
   remove.addEventListener("click", async () => {
     if (!confirm("Remove the imported game from this app's storage? You can import it again from the installer.")) return;
     await call("forget_game");
+    coverImage = null;
     await refresh();
   });
 

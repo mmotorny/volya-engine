@@ -155,6 +155,7 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         }
         "forget_game" => game::forget().await.map(|()| "null".into()),
         "read_dir" => to_json(&game::read_dir(text("path"))?),
+        "cover" => to_json(&game::cover()?),
         "play_sound" => {
             let number = |key: &str, default: f64| {
                 args.get(key).and_then(|v| v.as_f64()).unwrap_or(default) as f32

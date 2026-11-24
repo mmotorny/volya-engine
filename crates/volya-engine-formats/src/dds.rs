@@ -112,6 +112,127 @@ impl Masks {
     }
 }
 
+impl Format {
+    /// Decodes one image of `width` × `height` texels (as stored for this
+    /// format) to RGBA, 8 bits per channel, rows top to bottom.
+    ///
+    /// Block formats follow the public S3TC/BC1–3 definitions: 5:6:5
+    /// endpoints expanded by bit replication; colour interpolants
+    /// (2·c0 + c1) / 3 and (c0 + 2·c1) / 3, or (c0 + c1) / 2 and transparent
+    /// black when BC1's c0 ≤ c1; BC3 alpha interpolants ((7 − k)·a0 + k·a1) / 7
+    /// when a0 > a1, else ((5 − k)·a0 + k·a1) / 5 plus 0 and 255; integer
+    /// division truncating (as docs/behavior/loading-screen.md 8.1 measures).
+    pub fn to_rgba8(self, data: &[u8], width: u32, height: u32) -> Vec<u8> {
+        let block = match self {
+            Self::Masked(masks) => return masks.to_rgba8(data, width, height),
+            _ => self.block_bytes().unwrap_or(16),
+        };
+        let (w, h) = (width as usize, height as usize);
+        let mut out = vec![0u8; w * h * 4];
+        let blocks_x = w.div_ceil(4).max(1);
+        for (index, bytes) in data
+            .chunks_exact(block)
+            .enumerate()
+            .take(blocks_x * h.div_ceil(4).max(1))
+        {
+            let (bx, by) = (index % blocks_x * 4, index / blocks_x * 4);
+            let (alpha, colour) = match self {
+                Self::Bc1 => (None, bytes),
+                _ => (Some(&bytes[..8]), &bytes[8..16]),
+            };
+            let texels = decode_colour_block(colour, self == Self::Bc1);
+            let alphas = alpha.map(|a| {
+                if self == Self::Bc2 {
+                    explicit_alpha(a)
+                } else {
+                    interpolated_alpha(a)
+                }
+            });
+            for (i, mut texel) in texels.into_iter().enumerate() {
+                let (x, y) = (bx + i % 4, by + i / 4);
+                if x >= w || y >= h {
+                    continue;
+                }
+                if let Some(alphas) = &alphas {
+                    texel[3] = alphas[i];
+                }
+                out[(y * w + x) * 4..][..4].copy_from_slice(&texel);
+            }
+        }
+        out
+    }
+}
+
+fn rgb565(value: u16) -> [u32; 3] {
+    let (r, g, b) = (
+        u32::from(value >> 11),
+        u32::from((value >> 5) & 63),
+        u32::from(value & 31),
+    );
+    [
+        (r << 3) | (r >> 2),
+        (g << 2) | (g >> 4),
+        (b << 3) | (b >> 2),
+    ]
+}
+
+/// The 16 texels of a BC colour block, in row order.
+fn decode_colour_block(bytes: &[u8], bc1: bool) -> [[u8; 4]; 16] {
+    let raw0 = u16::from_le_bytes([bytes[0], bytes[1]]);
+    let raw1 = u16::from_le_bytes([bytes[2], bytes[3]]);
+    let (c0, c1) = (rgb565(raw0), rgb565(raw1));
+    let mix = |f: fn(u32, u32) -> u32| [0, 1, 2].map(|i| f(c0[i], c1[i]));
+    let four = !bc1 || raw0 > raw1;
+    let palette: [[u32; 4]; 4] = {
+        let opaque = |c: [u32; 3]| [c[0], c[1], c[2], 255];
+        if four {
+            [
+                opaque(c0),
+                opaque(c1),
+                opaque(mix(|a, b| (2 * a + b) / 3)),
+                opaque(mix(|a, b| (a + 2 * b) / 3)),
+            ]
+        } else {
+            [
+                opaque(c0),
+                opaque(c1),
+                opaque(mix(|a, b| (a + b) / 2)),
+                [0, 0, 0, 0],
+            ]
+        }
+    };
+    let indices = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+    std::array::from_fn(|i| palette[((indices >> (2 * i)) & 3) as usize].map(|v| v as u8))
+}
+
+/// BC2's alpha: 4 bits per texel, scaled to 8.
+fn explicit_alpha(bytes: &[u8]) -> [u8; 16] {
+    let bits = u64::from_le_bytes(bytes.try_into().unwrap());
+    std::array::from_fn(|i| (((bits >> (4 * i)) & 15) * 17) as u8)
+}
+
+/// BC3's alpha: two endpoints and 3-bit indices.
+fn interpolated_alpha(bytes: &[u8]) -> [u8; 16] {
+    let (a0, a1) = (u32::from(bytes[0]), u32::from(bytes[1]));
+    let mut palette = [a0, a1, 0, 0, 0, 0, 0, 0];
+    if a0 > a1 {
+        for k in 1..=6 {
+            palette[k + 1] = ((7 - k as u32) * a0 + k as u32 * a1) / 7;
+        }
+    } else {
+        for k in 1..=4 {
+            palette[k + 1] = ((5 - k as u32) * a0 + k as u32 * a1) / 5;
+        }
+        palette[6] = 0;
+        palette[7] = 255;
+    }
+    let mut bits = 0u64;
+    for (i, &b) in bytes[2..8].iter().enumerate() {
+        bits |= u64::from(b) << (8 * i);
+    }
+    std::array::from_fn(|i| palette[((bits >> (3 * i)) & 7) as usize] as u8)
+}
+
 /// One channel's position and width within a texel.
 #[derive(Clone, Copy)]
 struct Channel {
@@ -408,6 +529,51 @@ pub mod build {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn decodes_block_formats() {
+        // BC1, four colours: c0 pure red, c1 pure blue; indices 0,1,2,3 in row 0.
+        let bc1 = [0x00, 0xF8, 0x1F, 0x00, 0b1110_0100, 0, 0, 0];
+        let rgba = Format::Bc1.to_rgba8(&bc1, 4, 4);
+        assert_eq!(&rgba[0..4], &[255, 0, 0, 255]);
+        assert_eq!(&rgba[4..8], &[0, 0, 255, 255]);
+        assert_eq!(&rgba[8..12], &[170, 0, 85, 255]);
+        assert_eq!(&rgba[12..16], &[85, 0, 170, 255]);
+        // BC1, c0 ≤ c1: index 3 is transparent black, index 2 the average.
+        let bc1 = [0x1F, 0x00, 0x00, 0xF8, 0b1110_0100, 0, 0, 0];
+        let rgba = Format::Bc1.to_rgba8(&bc1, 4, 4);
+        assert_eq!(&rgba[8..12], &[127, 0, 127, 255]);
+        assert_eq!(&rgba[12..16], &[0, 0, 0, 0]);
+        // BC3 alpha: a0 = 255 > a1 = 0; indices 0, 1, 2 (= (6·255 + 0)/7 = 218).
+        let mut bc3 = [
+            255,
+            0,
+            0b0101_0000,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0xF8,
+            0,
+            0xF8,
+            0,
+            0,
+            0,
+            0,
+        ];
+        bc3[2] = 0b1000_1000; // texel 0: 0, texel 1: 1, texel 2: 2 (bits 6..8)
+        bc3[3] = 0;
+        let rgba = Format::Bc3.to_rgba8(&bc3, 4, 4);
+        assert_eq!((rgba[3], rgba[7], rgba[11]), (255, 0, 218));
+        // BC2 alpha: nibbles F, 0, 8.
+        let bc2 = [0x0F, 0x08, 0, 0, 0, 0, 0, 0, 0, 0xF8, 0, 0xF8, 0, 0, 0, 0];
+        let rgba = Format::Bc2.to_rgba8(&bc2, 4, 4);
+        assert_eq!((rgba[3], rgba[7], rgba[11]), (255, 0, 136));
+        // A 2 × 2 image keeps only the block's top-left texels.
+        assert_eq!(Format::Bc1.to_rgba8(&[0; 8], 2, 2).len(), 16);
+    }
+
     use super::build::{PixelFormat, file};
     use super::*;
 
