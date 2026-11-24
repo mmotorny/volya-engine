@@ -83,9 +83,10 @@ export const SECTIONS = [
 
 export const STATES = SECTIONS.flatMap((section) => section.states);
 
-/** Devices: CSS size, safe-area insets, and how input works. */
+/** Devices: CSS size, safe-area insets, how input works, and whether the
+ * board starts with it unticked (`hidden`). */
 export const DEVICES = [
   { id: "desktop", name: "Desktop Chrome", width: 1280, height: 800, insets: { top: 0, right: 0, bottom: 0, left: 0 }, touch: false },
   { id: "iphone", name: "iPhone 17 Pro Max", width: 440, height: 956, insets: { top: 62, right: 0, bottom: 34, left: 0 }, touch: true },
-  { id: "iphone-landscape", name: "iPhone 17 Pro Max · landscape", width: 956, height: 440, insets: { top: 0, right: 62, bottom: 21, left: 62 }, touch: true },
+  { id: "iphone-landscape", name: "iPhone 17 Pro Max · landscape", width: 956, height: 440, insets: { top: 0, right: 62, bottom: 21, left: 62 }, touch: true, hidden: true },
 ];

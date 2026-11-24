@@ -19,9 +19,9 @@ const lengths = new Map();
 
 document.querySelector(".title").insertAdjacentHTML("beforeend", `<span class="build">${versionText()}</span>`);
 
-const shown = new Set(DEVICES.map((d) => d.id));
+const shown = new Set(DEVICES.filter((d) => !d.hidden).map((d) => d.id));
 for (const device of DEVICES) {
-  const box = Object.assign(document.createElement("input"), { type: "checkbox", checked: true });
+  const box = Object.assign(document.createElement("input"), { type: "checkbox", checked: shown.has(device.id) });
   box.addEventListener("change", () => {
     if (box.checked) shown.add(device.id);
     else shown.delete(device.id);
