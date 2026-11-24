@@ -489,6 +489,11 @@ pub enum Event {
     TouchStick {
         value: [f32; 2],
     },
+    /// Where the page draws the move stick's sprint lock target for the
+    /// current touch: this many stick radii straight ahead of its centre.
+    TouchLockReach {
+        reach: f32,
+    },
     /// A drag on the on-screen look area, in screen units.
     TouchLook {
         delta: [f32; 2],
@@ -625,6 +630,7 @@ pub struct Input {
     touch_stick: [f32; 2],
     /// The touch stick's values this frame, in order.
     touch_stick_values: Vec<[f32; 2]>,
+    touch_lock_reach: Option<f32>,
     /// Look drags this frame.
     touch_look: [f32; 2],
     /// Relative mouse motion this frame ([`Event::PointerMotion`]).
@@ -655,6 +661,7 @@ impl Default for Input {
             pad_changes: Vec::new(),
             touch_stick: [0.0; 2],
             touch_stick_values: Vec::new(),
+            touch_lock_reach: None,
             touch_look: [0.0; 2],
             motion: [0.0; 2],
             sticks_released: [false; 2],
@@ -737,6 +744,11 @@ impl Input {
     /// The on-screen move stick's reach ([`Event::TouchStick`]).
     pub fn touch_stick(&self) -> [f32; 2] {
         self.touch_stick
+    }
+
+    /// The latest [`Event::TouchLockReach`], if any.
+    pub fn touch_lock_reach(&self) -> Option<f32> {
+        self.touch_lock_reach
     }
 
     /// Every value the touch stick sent this frame, in order: a touch, a
@@ -913,6 +925,7 @@ impl Input {
                 self.touch_stick_values.push(self.touch_stick);
                 self.sticks_released[1] = false;
             }
+            Event::TouchLockReach { reach } => self.touch_lock_reach = Some(reach),
             Event::TouchLook { delta } => {
                 self.touch_look[0] += delta[0];
                 self.touch_look[1] += delta[1];

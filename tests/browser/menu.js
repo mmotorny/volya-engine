@@ -516,6 +516,21 @@ export const tests = {
     const sprinted = Math.hypot(s.level.player.position[0] - sprintAt[0], s.level.player.position[2] - sprintAt[2]);
     for (let i = 0; i < 50 && ring.classList.contains("locked"); i++) await sleep(20);
     assert(!ring.classList.contains("locked"), "the stick shown unlocked");
+    // A thumb landing high: the target is drawn lower to stay on the
+    // screen (1.95 radii, 109 px up, its drop area just below the safe
+    // area's top edge), and the engine locks where it is drawn.
+    const high = controls.querySelector(".touch-button.menu").offsetTop + 140;
+    touchOn(move, "pointerdown", 40, [mx, high]);
+    const lockRect = controls.querySelector(".touch-lock").getBoundingClientRect();
+    assert(lockRect.top >= 0, `the lock target on the screen: ${JSON.stringify(lockRect)}`);
+    touchOn(move, "pointermove", 40, [mx, high - 84]);
+    await until((s) => s.level.player.sprint_requested, "past the rim (high) to request the sprint");
+    touchOn(move, "pointermove", 40, [mx, high - 109]);
+    touchOn(move, "pointerup", 40, [mx, high - 109]);
+    await until((s) => s.level.player.sprint_locked, "the lowered target to lock");
+    touchOn(move, "pointerdown", 41, [mx, my]);
+    touchOn(move, "pointerup", 41, [mx, my]);
+    s = await until((s) => !s.level.player.sprint_locked && !s.level.player.moving, "a touch to end the lock and stop");
     // A drag begun on Jump jumps and turns too.
     const jump = controls.querySelector(".touch-button.jump");
     const [jx, jy] = centre(jump);
@@ -542,6 +557,23 @@ export const tests = {
     await until((s) => s.level.player.posture === 2 && s.level.player.crouch_toggled, "the swipe to crouch low");
     for (let i = 0; i < 50 && !crouch.classList.contains("low"); i++) await sleep(20);
     assert(crouch.classList.contains("low") && crouch.getAttribute("aria-pressed") === "true", "low crouch shown");
+    // Crouch while crouched waits for its gesture: nothing on the press,
+    // a swipe down stays crouched, a tap stands up on release.
+    touchOn(crouch, "pointerdown", 42, [cx, cy]);
+    await sleep(100);
+    assert(!(await volya.call("input_state")).held.includes("touch_crouch"), "no press while crouched");
+    touchOn(crouch, "pointermove", 42, [cx, cy + 30]);
+    touchOn(crouch, "pointerup", 42, [cx, cy + 30]);
+    await sleep(150);
+    s = await state();
+    assert(s.level.player.crouch_toggled && s.level.player.posture === 2, `still low: ${JSON.stringify(s.level.player)}`);
+    touchOn(crouch, "pointerdown", 43, [cx, cy]);
+    await sleep(100);
+    assert((await state()).level.player.crouch_toggled, "a tap waits for its release");
+    touchOn(crouch, "pointerup", 43, [cx, cy]);
+    await until((s) => !s.level.player.crouch_toggled, "a tap while crouched to stand up");
+    for (let i = 0; i < 50 && crouch.getAttribute("aria-pressed") !== "false"; i++) await sleep(20);
+    assertEqual(crouch.getAttribute("aria-pressed"), "false", "Crouch shown off");
     // Jump held down while Menu is pressed: when the controls hide in the
     // menu, nothing stays held.
     touchOn(jump, "pointerdown", 35, centre(jump));

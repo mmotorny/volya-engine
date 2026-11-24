@@ -19,6 +19,7 @@
 //! | `["pad", name, pressed]` | gamepad button ([`GamepadButton::name`]) |
 //! | `["axis", name, value]` | gamepad axis ([`GamepadAxis::name`]) |
 //! | `["stick", x, y]` | the on-screen move stick's reach in stick radii (+y down): at most 1 long within its rim, up to 3 per axis past it; `0, 0` when touched and when let go |
+//! | `["stick_lock", reach]` | where the stick's sprint lock target is drawn for this touch, stick radii ahead of its centre (sent before the touch's first `stick`) |
 //! | `["look", dx, dy]` | a drag on the on-screen look area |
 //! | `["tbutton", name, pressed]` | an on-screen button ([`TouchButton::name`]) |
 //! | `["wheel", steps]` | mouse-wheel steps, negative up |
@@ -267,6 +268,9 @@ fn decode(message: &Array) -> Result<Option<Vec<Event>>, JsValue> {
             value: num(2)? as f32,
         },
         "stick" => Event::TouchStick { value: at()? },
+        "stick_lock" => Event::TouchLockReach {
+            reach: num(1)? as f32,
+        },
         "look" => Event::TouchLook { delta: at()? },
         "tbutton" => Event::TouchButton {
             button: TouchButton::from_name(&text(1)?).ok_or_else(bad)?,

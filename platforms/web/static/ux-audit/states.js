@@ -89,6 +89,12 @@ export const SECTIONS = [
         level: { stick: [0, -2.1], sprint: true },
         devices: TOUCH,
       },
+      {
+        id: "level-touch-past-rim-high",
+        name: "Past the rim with the thumb high: the lock target lowered to fit",
+        level: { stick: [0, -1.85], sprint: true, high: true },
+        devices: TOUCH,
+      },
       { id: "level-touch-locked", name: "Sprint locked", level: { lock: true, sprint: true }, devices: TOUCH },
       { id: "level-touch-crouched", name: "Crouched", level: { crouch: true }, devices: TOUCH },
       {

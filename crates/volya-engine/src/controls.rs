@@ -197,12 +197,27 @@ pub const SPRINT_RIM_EXIT: f32 = 1.15;
 /// Past the rim counts within 45° of straight forward (our choice): the
 /// cosine of that angle.
 pub const SPRINT_CONE: f32 = std::f32::consts::FRAC_1_SQRT_2;
-/// The sprint lock target's centre relative to the stick's, in stick
-/// radii (+y down; our choice: above the rim, within a thumb's reach).
-pub const LOCK_CENTRE: [f32; 2] = [0.0, -2.1];
+/// How far straight ahead of the stick's centre the sprint lock target is
+/// centred, in stick radii (our choice: above the rim, within a thumb's
+/// reach). Where that would leave the screen or its safe area, the page
+/// draws the target lower ([`Input::touch_lock_reach`]), down to
+/// [`LOCK_MIN_REACH`].
+pub const LOCK_REACH: f32 = 2.1;
 /// The lock target's radius, in stick radii (our choice: 31 CSS pixels at
 /// the page's 56-pixel stick radius, a 62-pixel target).
 pub const LOCK_RADIUS: f32 = 0.55;
+/// The lowest the lock target goes: all of it past the rim.
+pub const LOCK_MIN_REACH: f32 = SPRINT_RIM + LOCK_RADIUS;
+
+/// The lock target's reach for the page's `reach` (the default when the
+/// page gave none or nonsense), kept between [`LOCK_MIN_REACH`] and
+/// [`LOCK_REACH`].
+pub fn lock_reach(reach: Option<f32>) -> f32 {
+    match reach {
+        Some(r) if r.is_finite() => r.clamp(LOCK_MIN_REACH, LOCK_REACH),
+        _ => LOCK_REACH,
+    }
+}
 
 /// The sprint lock of the touch stick (our design, after mobile shooters):
 ///
@@ -210,7 +225,7 @@ pub const LOCK_RADIUS: f32 = 0.55;
 ///   the stick requests the sprint;
 /// - back within the rim ([`SPRINT_RIM_EXIT`]) or turned aside while held,
 ///   it ends the sprint it requested;
-/// - let go on the lock target ([`LOCK_CENTRE`], [`LOCK_RADIUS`]) while
+/// - let go on the lock target ([`LOCK_REACH`] ahead, [`LOCK_RADIUS`]) while
 ///   sprinting, it locks: the stick reads full forward with nobody on it;
 /// - let go elsewhere, it ends the sprint it requested;
 /// - a touch on the stick, or everything released (focus lost), ends the
@@ -251,9 +266,16 @@ impl SprintLock {
     /// One frame: the stick's `values` this frame in order
     /// ([`Input::touch_stick_values`]), whether everything was `released`
     /// since ([`Input::sticks_released`]), and whether the sprint is
-    /// `requested` after the previous frame. Returns whether to press
+    /// `requested` after the previous frame, with the lock target `reach`
+    /// stick radii ahead ([`lock_reach`]). Returns whether to press
     /// `sprint_toggle`.
-    pub fn frame(&mut self, values: &[[f32; 2]], released: bool, requested: bool) -> bool {
+    pub fn frame(
+        &mut self,
+        values: &[[f32; 2]],
+        released: bool,
+        requested: bool,
+        reach: f32,
+    ) -> bool {
         // The movement layer cancelled the request (made by the previous
         // frame at the latest).
         if !requested {
@@ -283,7 +305,7 @@ impl SprintLock {
                 // Touched again.
                 LockPhase::Locked => end(&mut self.phase),
                 LockPhase::Past { sprinting } if let_go => {
-                    let d = [self.last[0] - LOCK_CENTRE[0], self.last[1] - LOCK_CENTRE[1]];
+                    let d = [self.last[0], self.last[1] + reach];
                     if sprinting && d[0].hypot(d[1]) <= LOCK_RADIUS {
                         self.phase = LockPhase::Locked;
                     } else {
@@ -418,6 +440,7 @@ impl Controls {
             input.touch_stick_values(),
             input.sticks_released()[1],
             player.sprint_requested,
+            lock_reach(input.touch_lock_reach()),
         );
         // Crouch swiped down (our design): the low crouch, the crouch
         // toggle engaged with the touch stick's latch walking (4.2), as a
@@ -795,7 +818,7 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
 
     /// One frame of the lock with the stick's `values`.
     fn lock(l: &mut SprintLock, values: &[[f32; 2]], requested: bool) -> bool {
-        l.frame(values, false, requested)
+        l.frame(values, false, requested, LOCK_REACH)
     }
 
     #[test]
@@ -826,7 +849,35 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
         lock(&mut l, &[[0.0, -2.1]], false);
         lock(&mut l, &[[0.0, 0.0]], true);
         assert!(l.locked());
-        assert!(l.frame(&[], true, true) && !l.locked());
+        assert!(l.frame(&[], true, true, LOCK_REACH) && !l.locked());
+    }
+
+    #[test]
+    fn the_lock_target_lowered_to_fit_the_screen_is_where_it_locks() {
+        // The page's reach, kept from below the rim to the default.
+        assert_eq!(lock_reach(None), LOCK_REACH);
+        assert_eq!(lock_reach(Some(f32::NAN)), LOCK_REACH);
+        assert_eq!(lock_reach(Some(9.0)), LOCK_REACH);
+        assert_eq!(lock_reach(Some(0.5)), LOCK_MIN_REACH);
+        assert_eq!(lock_reach(Some(1.9)), 1.9);
+        // A thumb landing high: the target drawn at the lowest reach. A
+        // let-go there locks; at the default target's place it doesn't.
+        let mut l = SprintLock::default();
+        let low = LOCK_MIN_REACH;
+        assert!(l.frame(&[[0.0, -1.5]], false, false, low));
+        assert!(!l.frame(&[[0.0, -low], [0.0, 0.0]], false, true, low));
+        assert!(l.locked());
+        l.frame(&[[0.0, 0.0]], false, true, low);
+        l.frame(&[[0.0, -1.5]], false, false, low);
+        l.frame(&[[0.0, -2.6], [0.0, 0.0]], false, true, low);
+        assert!(!l.locked());
+        // Through the controls: the page's message moves the target.
+        let mut w = Walk::new();
+        w.event(Event::TouchLockReach { reach: low });
+        w.stick([0.0, 0.0]).stick([0.0, -1.5]).frames(2);
+        w.stick([0.0, -low]).stick([0.0, 0.0]);
+        let s = w.frames(10);
+        assert!(w.c.sprint_lock.locked() && s.flags.sprint);
     }
 
     #[test]

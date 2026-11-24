@@ -26,12 +26,14 @@
 /** Stick radius, CSS pixels: a full deflection (matches style.css). */
 const RADIUS = 56;
 // The sprint lock's geometry in stick radii, as the engine's (controls.rs:
-// SPRINT_RIM, SPRINT_RIM_EXIT, SPRINT_CONE, LOCK_CENTRE, LOCK_RADIUS).
+// SPRINT_RIM, SPRINT_RIM_EXIT, SPRINT_CONE, LOCK_REACH, LOCK_RADIUS,
+// LOCK_MIN_REACH).
 const SPRINT_RIM = 1.3;
 const SPRINT_RIM_EXIT = 1.15;
 const SPRINT_CONE = Math.SQRT1_2;
-const LOCK_CENTRE = 2.1;
+const LOCK_REACH = 2.1;
 const LOCK_RADIUS = 0.55;
+const LOCK_MIN_REACH = SPRINT_RIM + LOCK_RADIUS;
 /** The reach the page reports at most, per axis (STICK_REACH in the engine). */
 const REACH = 3;
 /** A touch on Jump or Crouch moved this far (CSS pixels) drags (our choice). */
@@ -110,7 +112,7 @@ function pastRim([x, y], was) {
   return -y >= SPRINT_CONE * length && length >= (was ? SPRINT_RIM_EXIT : SPRINT_RIM);
 }
 
-const onTarget = ([x, y]) => Math.hypot(x, y + LOCK_CENTRE) <= LOCK_RADIUS;
+const onTarget = ([x, y], reach) => Math.hypot(x, y + reach) <= LOCK_RADIUS;
 
 /**
  * The controls; `send(message)` posts one input message to the engine.
@@ -128,7 +130,8 @@ export function createTouchControls(send, { touch = false, fade = true } = {}) {
   const ring = element("div", "touch-stick");
   const target = element("div", "touch-lock");
   const knob = element("div", "touch-knob");
-  ring.append(drawing("touch-rim", 112, RIM), glyph("touch-sprint-hint", SPRINT), target, knob);
+  const hint = glyph("touch-sprint-hint", SPRINT);
+  ring.append(drawing("touch-rim", 112, RIM), hint, target, knob);
   move.append(ring);
   const look = element("div", "touch-look");
   const button = (name, label, art, sides) => {
@@ -191,6 +194,20 @@ export function createTouchControls(send, { touch = false, fade = true } = {}) {
   let stick = null; // { id, origin, value, past }
   let sprinting = false;
   let lockOrigin = null; // where the stick was let go into the lock
+  let lockReach = LOCK_REACH;
+  /** The lock target for a stick centred at `origin` (our choice): the
+   * default reach, or lower where its whole drop area wouldn't fit below
+   * the safe area's top edge (where Menu's top is), but past the rim. The
+   * engine is told, so it accepts a let-go where the target is drawn. */
+  const aim = (origin) => {
+    const room = (origin[1] - menu.offsetTop) / RADIUS - LOCK_RADIUS;
+    lockReach = Math.min(LOCK_REACH, Math.max(LOCK_MIN_REACH, room));
+    // Centres in the ring's frame: 56 px down its 112-pixel box, inside a
+    // 2-pixel border; the target is 44 px, the chevrons 22 px.
+    const centre = 56 - lockReach * RADIUS;
+    target.style.top = `${centre - 24}px`;
+    hint.style.top = `${(centre + 22) / 2 - 13}px`;
+  };
   const place = (origin) => {
     ring.style.left = origin ? `${origin[0]}px` : "";
     ring.style.top = origin ? `${origin[1]}px` : "";
@@ -199,24 +216,26 @@ export function createTouchControls(send, { touch = false, fade = true } = {}) {
    * past it, where it follows the thumb up to the lock target. */
   const knobAt = ([x, y], past) => {
     const length = Math.hypot(x, y);
-    const most = past ? LOCK_CENTRE : 1;
+    const most = past ? lockReach : 1;
     if (length > most) [x, y] = [(x / length) * most, (y / length) * most];
     knob.style.transform = `translate(${x * RADIUS}px, ${y * RADIUS}px)`;
   };
   const showStick = (origin, value, past = pastRim(value, false)) => {
+    if (!stick) aim(origin);
     place(origin);
     ring.classList.add("held");
     ring.classList.toggle("past", past);
-    ring.classList.toggle("on-target", past && onTarget(value));
+    ring.classList.toggle("on-target", past && onTarget(value, lockReach));
     ring.classList.remove("locked");
     knobAt(value, past);
   };
   const showLocked = (origin) => {
+    if (origin !== lockOrigin && origin) aim(origin);
     lockOrigin = origin;
     place(origin);
     ring.classList.remove("held", "past", "on-target");
     ring.classList.add("locked");
-    knobAt([0, -LOCK_CENTRE], true);
+    knobAt([0, -lockReach], true);
   };
   const restStick = () => {
     lockOrigin = null;
@@ -238,15 +257,18 @@ export function createTouchControls(send, { touch = false, fade = true } = {}) {
     send(["stick", 0, 0]);
     const origin = stick.origin;
     stick = null;
-    if (past && onTarget(value) && sprinting) showLocked(origin);
+    if (past && onTarget(value, lockReach) && sprinting) showLocked(origin);
     else restStick();
   };
   own(move, {
     pointerdown: (event) => {
       if (stick) return;
       capture(event);
-      stick = { id: event.pointerId, origin: local(root, event), value: [0, 0], past: false };
-      showStick(stick.origin, [0, 0]);
+      const origin = local(root, event);
+      aim(origin);
+      stick = { id: event.pointerId, origin, value: [0, 0], past: false };
+      showStick(origin, [0, 0]);
+      send(["stick_lock", lockReach]);
       send(["stick", 0, 0]);
     },
     pointermove: (event) => {
@@ -285,47 +307,63 @@ export function createTouchControls(send, { touch = false, fade = true } = {}) {
   // Buttons: held from down to up. A touch on Jump or Crouch that moves
   // past DRAG then looks from there (our design, as mobile shooters' fire
   // buttons do), and on Crouch, if that first move is down, is the low
-  // crouch too.
+  // crouch too. Crouch while crouched waits (our choice): a tap stands up
+  // on release, a drag aside stands up and looks, a swipe down only goes
+  // to the low crouch, so no swipe stands up for a moment first.
+  let crouched = false;
   const releases = [];
   for (const b of [menu, jump, crouch]) {
-    const held = new Map(); // pointerId → where it began, until it drags
+    const held = new Map(); // pointerId → { start, waiting }
     const drags = b !== menu;
+    let pressed = false; // the press sent, its release not yet
+    const press = () => {
+      if (pressed) return;
+      pressed = true;
+      send(["tbutton", b.dataset.button, true]);
+    };
+    const lift = () => {
+      b.classList.remove("down");
+      if (!pressed) return;
+      pressed = false;
+      send(["tbutton", b.dataset.button, false]);
+    };
     releases.push(() => {
-      if (held.size === 0) return;
       for (const id of held.keys()) looking.delete(id);
       held.clear();
-      b.classList.remove("down");
-      send(["tbutton", b.dataset.button, false]);
+      lift();
     });
     const release = (event) => {
-      if (!held.has(event.pointerId)) return;
+      const touch = held.get(event.pointerId);
+      if (!touch) return;
+      if (touch.waiting) press();
       held.delete(event.pointerId);
       looking.delete(event.pointerId);
-      if (held.size > 0) return;
-      b.classList.remove("down");
-      send(["tbutton", b.dataset.button, false]);
+      if (held.size === 0) lift();
     };
     own(b, {
       pointerdown: (event) => {
         capture(event);
-        held.set(event.pointerId, local(root, event));
-        if (held.size > 1) return;
+        const waiting = b === crouch && crouched;
+        held.set(event.pointerId, { start: local(root, event), waiting });
         b.classList.add("down");
-        send(["tbutton", b.dataset.button, true]);
+        if (!waiting) press();
       },
       pointermove: (event) => {
         if (!drags) return;
         if (looking.has(event.pointerId)) return lookTo(event);
-        const start = held.get(event.pointerId);
-        if (!start) return;
+        const touch = held.get(event.pointerId);
+        if (!touch) return;
         const at = local(root, event);
-        const [dx, dy] = [at[0] - start[0], at[1] - start[1]];
+        const [dx, dy] = [at[0] - touch.start[0], at[1] - touch.start[1]];
         const length = Math.hypot(dx, dy);
         if (length < DRAG) return;
         if (b === crouch && dy >= SWIPE_CONE * length) {
           send(["tbutton", "crouch_low", true]);
           send(["tbutton", "crouch_low", false]);
+        } else if (touch.waiting) {
+          press();
         }
+        touch.waiting = false;
         looking.set(event.pointerId, at);
       },
       pointerup: release,
@@ -375,7 +413,8 @@ export function createTouchControls(send, { touch = false, fade = true } = {}) {
 
   return {
     element: root,
-    update({ level, crouch: crouched, low, sprint, lock }) {
+    update({ level, crouch: on, low, sprint, lock }) {
+      crouched = Boolean(on);
       live = level;
       sprinting = Boolean(sprint);
       // For tests: whether the engine's message says the controls are live.
