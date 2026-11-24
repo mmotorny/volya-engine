@@ -26,7 +26,8 @@ fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 
-/// Integers `a<sep>b<sep>c` (each part trimmed); a missing part reads as 0.
+/// Integers `a<sep>b<sep>c` (each part trimmed); a missing second or third
+/// part reads as 0 (our choice; the shipped values have all three).
 fn three(text: &str, sep: char) -> Option<(u32, u32, u32)> {
     let mut parts = text.trim().split(sep).map(|p| p.trim().parse::<u32>().ok());
     let a = parts.next()??;
@@ -95,7 +96,7 @@ impl GameClock {
 
     /// The time of day, seconds (0 … 86,400).
     pub fn time_of_day(&self) -> f32 {
-        (self.time.time % DAY_MS) as f32 / 1000.0
+        ((self.time.time % DAY_MS) as f64 / 1000.0) as f32
     }
 
     pub fn paused(&self) -> bool {

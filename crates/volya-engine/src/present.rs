@@ -301,7 +301,9 @@ impl Presenter {
                 })
                 .clone()
         };
-        // Any section's cube map or cloud texture failing: no sky.
+        // Any section's cube map or cloud texture failing to upload: no sky
+        // at any hour (our choice; reported like every texture). A sun
+        // texture failing leaves only that section without its sun.
         let sky = level
             .sky
             .sections

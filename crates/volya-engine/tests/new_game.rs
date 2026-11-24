@@ -210,15 +210,39 @@ fn new_game_start_view_from_game_data() {
             roll: 0.0,
         },
     );
-    let scene = screen.scene(SIZE, 205_000);
-    let list = presenter.draw_list(&mut gpu, &tree, &scene, 205_000);
-    let pixels =
-        pollster::block_on(gpu.capture(&list, SIZE.width, SIZE.height, wgpu::Color::BLACK))
-            .unwrap();
+    let mut scene = screen.scene(SIZE, 205_000);
+    let mut top_rows = |scene: &volya_engine::scene::Scene| {
+        let list = presenter.draw_list(&mut gpu, &tree, scene, 205_000);
+        let pixels =
+            pollster::block_on(gpu.capture(&list, SIZE.width, SIZE.height, wgpu::Color::BLACK))
+                .unwrap();
+        pixels[..(SIZE.width * 16 * 4) as usize].to_vec()
+    };
+    let at_six = top_rows(&scene);
+    // The frame binds the cube maps of [default_weather_06] and _07 (index
+    // 6 of the cycle in time order, from 00:00) ...
+    let sky = scene.world.as_mut().unwrap().sky.as_mut().unwrap();
+    assert_eq!(sky.section, 6);
+    // ... and the same frame with the 05:30 pair bound instead (sky colour,
+    // blend weight and view unchanged) shows another sky, so the drawn sky
+    // comes from the next hour's cube maps.
+    sky.section = 5;
+    let with_five = top_rows(&scene);
+    let differing = at_six
+        .chunks(4)
+        .zip(with_five.chunks(4))
+        .filter(|(a, b)| a.iter().zip(b.iter()).any(|(x, y)| x.abs_diff(*y) > 8))
+        .count();
+    eprintln!(
+        "06:04: {differing} of {} sky pixels differ",
+        at_six.len() / 4
+    );
+    assert!(
+        differing * 2 > at_six.len() / 4,
+        "06:04: {differing} of {} sky pixels differ from the 05:00 pair's",
+        at_six.len() / 4
+    );
     assert!(presenter.take_errors().is_empty());
-    let top = &pixels[..(SIZE.width * 16 * 4) as usize];
-    let sky: std::collections::BTreeSet<&[u8]> = top.chunks(4).collect();
-    assert!(sky.len() > 50, "06:04: {} sky colours", sky.len());
 }
 
 /// Records the master gains set; plays nothing.

@@ -439,6 +439,9 @@ impl NewGameLoad {
                 // (sky.md 3.2; the weather effects' are not, our choice):
                 // cube maps, cloud textures and the sun sprites of their
                 // lens-flare sections, as the clock moves through the day.
+                // A texture of any section that resolves nowhere fails the
+                // load, as any texture of the level does (static-shading.md
+                // 4.2; for the sections not yet in use, our choice).
                 let weather = earlier(self.weather.as_ref(), "weather")?;
                 let mut located: HashMap<String, String> = HashMap::new();
                 let mut locate = |name: &str| -> io::Result<String> {
@@ -595,7 +598,9 @@ impl LevelScreen {
     /// `pause_state`, level-loading.md section 2.3): the game clock stands
     /// still, nothing moves and the shaders' clock stands still (our
     /// reading: which clock the shaders use is not established, ogf.md
-    /// section 10); input is not read.
+    /// section 10); input is not read. The sun's fade (sky.md 7.3) does
+    /// not change either (our choice: the specs do not say what k_t is
+    /// while game time is paused).
     pub fn paused(&mut self, now: u64) {
         let elapsed = now.saturating_sub(self.last);
         self.shown += elapsed;
