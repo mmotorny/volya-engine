@@ -53,13 +53,15 @@ pub async fn launch() -> Result<serde_json::Value, JsValue> {
     if active() {
         return Err(error("the game is already running"));
     }
-    let status = crate::game::status().await?;
-    if !serde_json::to_value(&status)
-        .ok()
-        .and_then(|s| s.get("imported")?.as_bool())
-        .unwrap_or(false)
-    {
+    let status = serde_json::to_value(crate::game::status().await?).unwrap_or_default();
+    let flag = |name: &str| status.get(name).and_then(|v| v.as_bool()).unwrap_or(false);
+    if !flag("imported") {
         return Err(error("game not imported"));
+    }
+    if flag("in_use") {
+        return Err(error(
+            "the game is open in another tab or window of this app",
+        ));
     }
     let splash = crate::game::with_trees(|_, root| app::splash(root))?.map_err(error)?;
     let size = splash.as_ref().map_or((0, 0), |s| (s.width, s.height));

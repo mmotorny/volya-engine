@@ -67,6 +67,9 @@ pub struct Status {
     written: usize,
     total: Option<usize>,
     bytes: u64,
+    /// The import is complete but open in another tab or window of this app,
+    /// which holds its files.
+    in_use: bool,
 }
 
 /// Mounts the game if it is imported and not yet mounted, then reports.
@@ -80,6 +83,7 @@ pub async fn status() -> Result<Status, JsValue> {
             written: 0,
             total: None,
             bytes: 0,
+            in_use: false,
         });
     };
     if !manifest.complete {
@@ -88,11 +92,20 @@ pub async fn status() -> Result<Status, JsValue> {
             written: manifest.files.len(),
             total: None,
             bytes: manifest.files.iter().map(|f| f.size).sum(),
+            in_use: false,
         });
     }
     let namespace = opfs::namespace().await?;
     let dir = opfs::create_dir(&namespace, GAME_DIR).await?;
-    let opened = mount_when_unlocked(&dir).await?;
+    let Some(opened) = mount_when_unlocked(&dir).await? else {
+        return Ok(Status {
+            imported: true,
+            written: manifest.files.len(),
+            total: Some(manifest.files.len()),
+            bytes: manifest.files.iter().map(|f| f.size).sum(),
+            in_use: true,
+        });
+    };
     // Leaked so the tree can borrow it for 'static; `unmount` closes it.
     let vfs: &'static opfs::OpfsVfs = Box::leak(Box::new(opened));
     for file in &manifest.files {
@@ -122,20 +135,16 @@ pub async fn status() -> Result<Status, JsValue> {
 
 /// Mounts `dir`, waiting out file locks held by a previous page whose engine
 /// worker is still shutting down (a reload); a lock that persists means the
-/// game is open elsewhere.
+/// game is open elsewhere (`None`).
 async fn mount_when_unlocked(
     dir: &web_sys::FileSystemDirectoryHandle,
-) -> Result<opfs::OpfsVfs, JsValue> {
+) -> Result<Option<opfs::OpfsVfs>, JsValue> {
     const ATTEMPTS: u32 = 20;
     for attempt in 1..=ATTEMPTS {
         match opfs::OpfsVfs::mount(dir).await {
-            Ok(vfs) => return Ok(vfs),
+            Ok(vfs) => return Ok(Some(vfs)),
             Err(e) if is_lock_error(&e) && attempt < ATTEMPTS => opfs::sleep(250).await?,
-            Err(e) if is_lock_error(&e) => {
-                return Err(error(
-                    "the game is open in another tab or window of this app; close it and reload",
-                ));
-            }
+            Err(e) if is_lock_error(&e) => return Ok(None),
             Err(e) => return Err(e),
         }
     }
@@ -156,6 +165,7 @@ fn mounted_status(game: &Game) -> Status {
         written: game.manifest.files.len(),
         total: Some(game.manifest.files.len()),
         bytes: game.manifest.files.iter().map(|f| f.size).sum(),
+        in_use: false,
     }
 }
 

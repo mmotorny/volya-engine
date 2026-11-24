@@ -29,12 +29,20 @@ function element(tag, props = {}, ...children) {
   return node;
 }
 
-async function storageLine() {
+/** Storage facts for the home screen. */
+async function storageFacts(status) {
   const persisted = await navigator.storage.persisted();
   const { usage, quota } = await navigator.storage.estimate();
-  return `Storage: ${formatBytes(usage)} used of ${formatBytes(quota)}; ${
-    persisted ? "persistent" : "not persistent: the browser may clear it"
-  }.`;
+  return element(
+    "dl",
+    { className: "facts" },
+    element("dt", { textContent: "Game data" }),
+    element("dd", { textContent: formatBytes(status.bytes) }),
+    element("dt", { textContent: "App storage" }),
+    element("dd", { textContent: `${formatBytes(usage)} of ${formatBytes(quota)}` }),
+    element("dt", { textContent: "Kept by the browser" }),
+    element("dd", { textContent: persisted ? "Always" : "May be cleared" }),
+  );
 }
 
 /** Entry point, called by main.js once the engine runs. */
@@ -47,25 +55,16 @@ export async function start(engineCall) {
 /** Whether the engine can draw (without WebGPU the game would run unseen). */
 const graphics = async () => (await call("status")).gpu.state === "ready";
 
-/** Shows the browser or the import screen. */
+/** Shows the home or the import screen. */
 async function refresh() {
   root().hidden = false;
   try {
     const status = await call("game_status");
-    if (status.imported) {
-      await showBrowser("");
-    } else showImport(status);
+    if (status.in_use) showInUse();
+    else if (status.imported) await showHome(status);
+    else showImport(status);
   } catch (error) {
     showDamaged(error);
-  }
-}
-
-/** Launches the game; on failure says why above the browser. */
-async function play() {
-  try {
-    await call("launch");
-  } catch (error) {
-    root().prepend(element("p", { className: "message", textContent: `The game could not start: ${error.message}` }));
   }
 }
 
@@ -105,10 +104,14 @@ export async function importGame({ exe, bin, only }, onProgress = () => {}) {
 }
 
 function showImport(status) {
-  const message = element("p", { className: "message" });
+  const message = element("p", { className: "message", hidden: true });
   const progress = element("progress", { max: 1, value: 0, hidden: true });
   const input = element("input", { type: "file", multiple: true, hidden: true });
-  const choose = element("button", { className: "primary", textContent: "Choose installer files" });
+  const choose = element("button", { className: "primary wide", textContent: "Choose installer files" });
+  const say = (text) => {
+    message.textContent = text;
+    message.hidden = !text;
+  };
   choose.addEventListener("click", () => input.click());
   input.addEventListener("change", async () => {
     const files = [...input.files];
@@ -116,59 +119,149 @@ function showImport(status) {
     const bin = files.find((f) => f.name.toLowerCase().endsWith(".bin"));
     input.value = "";
     if (!exe || !bin) {
-      message.textContent = "Pick both installer files: the .exe and the -1.bin.";
+      say("Pick both installer files: the .exe and the -1.bin.");
       return;
     }
     choose.disabled = true;
     progress.hidden = false;
-    message.textContent = "Reading the installer…";
+    say("Reading the installer…");
     try {
       await importGame({ exe, bin }, ({ done, total, path }) => {
         progress.value = done / total;
-        message.textContent = `Importing ${path}: ${formatBytes(done)} of ${formatBytes(total)}`;
+        say(`${formatBytes(done)} of ${formatBytes(total)} · ${path}`);
       });
       await refresh();
     } catch (error) {
-      message.textContent = `Import failed: ${error.message}`;
+      say(`Import failed: ${sentence(error.message)}`);
       choose.disabled = false;
       progress.hidden = true;
     }
   });
-  const resume = status.written > 0 ? element("p", { textContent: `A previous import stopped after ${status.written} files; choosing the installer again resumes it.` }) : null;
+  const resume =
+    status.written > 0
+      ? element("p", { className: "note", textContent: `A previous import stopped after ${status.written} files. Choosing the installer again resumes it.` })
+      : null;
   show(
-    element("h2", { textContent: "Import the game" }),
-    element("p", {
-      textContent:
-        "Choose both files of the GOG offline installer of S.T.A.L.K.E.R.: Shadow of Chernobyl (Russian edition): setup_….exe and setup_…-1.bin. The game files are extracted into this app's storage (about 5.6 GiB).",
-    }),
-    resume,
-    choose,
-    input,
-    progress,
-    message,
+    element(
+      "div",
+      { className: "panel" },
+      element("p", { className: "label", textContent: "Bring your own game" }),
+      element("h2", { textContent: "Import S.T.A.L.K.E.R.: Shadow of Chernobyl" }),
+      element("p", { textContent: "Volya Engine runs the game from your own copy. It needs the GOG offline installer, Russian edition." }),
+      element(
+        "ol",
+        { className: "steps" },
+        element("li", {}, "Download both installer files from GOG: ", element("code", { textContent: "setup_….exe" }), " and ", element("code", { textContent: "setup_…-1.bin" }), "."),
+        element("li", { textContent: "Choose both files below. The game is extracted into this app's storage (about 5.6 GiB) and the installer files are no longer needed." }),
+      ),
+      resume,
+      choose,
+      input,
+      progress,
+      message,
+    ),
+  );
+}
+
+/** Engine errors start lower-case; sentences in the interface don't. */
+const sentence = (text) => text.charAt(0).toUpperCase() + text.slice(1);
+
+/** The game is open in another tab or window, which holds its files. */
+function showInUse() {
+  const retry = element("button", { className: "primary wide", textContent: "Try again" });
+  retry.addEventListener("click", () => location.reload());
+  show(
+    element(
+      "div",
+      { className: "panel" },
+      element("p", { className: "label", textContent: "Open elsewhere" }),
+      element("h2", { textContent: "The game is open in another tab or window" }),
+      element("p", { textContent: "Close Volya Engine there, then try again. Your imported game is safe." }),
+      retry,
+    ),
   );
 }
 
 function showDamaged(error) {
-  const remove = element("button", { textContent: "Remove imported data" });
+  const remove = element("button", { className: "danger wide", textContent: "Remove imported data" });
   remove.addEventListener("click", async () => {
     await call("forget_game");
     await refresh();
   });
-  show(element("h2", { textContent: "Imported game unavailable" }), element("p", { textContent: error.message }), remove);
+  show(
+    element(
+      "div",
+      { className: "panel" },
+      element("p", { className: "label", textContent: "Problem" }),
+      element("h2", { textContent: "The imported game can't be used" }),
+      element("p", { textContent: sentence(error.message) }),
+      remove,
+    ),
+  );
 }
 
-async function showBrowser(path) {
+async function showHome(status) {
+  const note = element("p", { className: "note", hidden: true });
+  const launch = element("button", { className: "primary play", textContent: "Play" });
+  launch.addEventListener("click", async () => {
+    note.hidden = true;
+    try {
+      await call("launch");
+    } catch (error) {
+      note.className = "note error";
+      note.textContent = `The game could not start: ${sentence(error.message)}`;
+      note.hidden = false;
+    }
+  });
+  const ready = await graphics();
+  if (!ready) {
+    launch.disabled = true;
+    note.textContent = "The game needs WebGPU, which this browser doesn't offer.";
+    note.hidden = false;
+  }
+
+  const files = element("div", { className: "files" });
+  const listing = element(
+    "details",
+    { className: "panel" },
+    element("summary", {}, element("p", { className: "label", textContent: "Game files" })),
+    files,
+  );
+  listing.addEventListener("toggle", () => listing.open && !files.childElementCount && showFiles(files, ""), { once: false });
+
+  const remove = element("button", { className: "danger wide", textContent: "Remove imported game" });
+  remove.addEventListener("click", async () => {
+    if (!confirm("Remove the imported game from this app's storage? You can import it again from the installer.")) return;
+    await call("forget_game");
+    await refresh();
+  });
+
+  show(
+    element(
+      "div",
+      { className: "panel" },
+      element("p", { className: "label", textContent: ready ? "Ready" : "Unavailable here" }),
+      element("p", { className: "game-title", textContent: "S.T.A.L.K.E.R.: Shadow of Chernobyl" }),
+      launch,
+      note,
+    ),
+    listing,
+    element("div", { className: "panel" }, element("p", { className: "label", textContent: "Storage" }), await storageFacts(status), remove),
+  );
+}
+
+/** The game's files under `path`, browsable, with a preview of the picked file. */
+async function showFiles(container, path) {
   const entries = await call("read_dir", { path });
   const crumbs = element("nav", { className: "crumbs" });
   const parts = path ? path.split("/") : [];
   const crumb = (label, target) => {
     const button = element("button", { textContent: label });
-    button.addEventListener("click", () => showBrowser(target));
+    button.addEventListener("click", () => showFiles(container, target));
     return button;
   };
   crumbs.append(crumb("game", ""));
-  parts.forEach((part, i) => crumbs.append(" / ", crumb(part, parts.slice(0, i + 1).join("/"))));
+  parts.forEach((part, i) => crumbs.append("/", crumb(part, parts.slice(0, i + 1).join("/"))));
 
   const preview = element("pre", { className: "preview", hidden: true });
   const list = element("ul", { className: "entries" });
@@ -177,33 +270,13 @@ async function showBrowser(path) {
     const button = element(
       "button",
       {},
-      element("span", { className: "name", textContent: entry.dir ? `${entry.name}/` : entry.name }),
+      element("span", { className: entry.dir ? "name dir" : "name", textContent: entry.dir ? `${entry.name}/` : entry.name }),
       entry.dir ? null : element("span", { className: "size", textContent: formatBytes(entry.size) }),
     );
-    button.addEventListener("click", () => (entry.dir ? showBrowser(target) : showPreview(target, preview)));
+    button.addEventListener("click", () => (entry.dir ? showFiles(container, target) : showPreview(target, preview)));
     list.append(element("li", {}, button));
   }
-
-  const launch = element("button", { className: "primary play", textContent: "Play" });
-  launch.addEventListener("click", play);
-  if (!(await graphics())) {
-    launch.disabled = true;
-    launch.title = "The game needs WebGPU, which is unavailable here.";
-  }
-  const remove = element("button", { textContent: "Remove imported game" });
-  remove.addEventListener("click", async () => {
-    if (!confirm("Remove the imported game from this app's storage? You can import it again from the installer.")) return;
-    await call("forget_game");
-    await refresh();
-  });
-  show(
-    launch,
-    element("p", { className: "storage", textContent: await storageLine() }),
-    crumbs,
-    preview,
-    list,
-    remove,
-  );
+  container.replaceChildren(crumbs, list, preview);
 }
 
 async function showPreview(path, preview) {

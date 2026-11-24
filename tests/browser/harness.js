@@ -71,7 +71,7 @@ export async function runPage(suite) {
   );
   document.body.insertAdjacentHTML(
     "afterbegin",
-    `<canvas id="view"></canvas><main><p id="status" data-state="loading">Loading…</p><section id="game" hidden></section></main>`,
+    `<canvas id="view"></canvas><main><header class="brand"><img class="mark" src="${base}icon.svg" alt=""><h1>Volya Engine</h1></header><section id="game" hidden></section><p id="status" data-state="loading">Loading…</p></main>`,
   );
 
   let startupError = null;

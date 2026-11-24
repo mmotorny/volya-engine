@@ -1,16 +1,50 @@
 /* SPDX-FileCopyrightText: 2026 Maksym Motorny */
 /* SPDX-License-Identifier: BSD-3-Clause */
 
+/* The app's own screens follow the logo: a blueprint. Navy paper with a
+   two-level grid, white line work, light-blue annotations. */
+
+:root {
+  --navy-1: #163f7e;
+  --navy-2: #0f2f63;
+  --navy-3: #0a2147;
+  --line: #9fcbfa;
+  --ink: #f2f8ff;
+  --ink-2: #b9d3ef;
+  --ink-3: #7fa3cc;
+  --panel: rgba(8, 26, 58, 0.62);
+  --panel-edge: rgba(159, 203, 250, 0.22);
+  --danger: #ff9b8f;
+  --radius: 16px;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+
 [hidden] {
   display: none !important;
 }
 
-html, body {
-  margin: 0;
+html {
   min-height: 100%;
-  background: #111;
-  color: #ddd;
-  font: 16px/1.4 system-ui, sans-serif;
+  background-color: var(--navy-3);
+  /* Grid lines: fine every 24 px, main every 96 px; then the paper. */
+  background-image:
+    linear-gradient(rgba(159, 203, 250, 0.11) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(159, 203, 250, 0.11) 1px, transparent 1px),
+    linear-gradient(rgba(159, 203, 250, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(159, 203, 250, 0.045) 1px, transparent 1px),
+    radial-gradient(ellipse at 50% 30%, var(--navy-1), var(--navy-2) 55%, var(--navy-3));
+  background-size: 96px 96px, 96px 96px, 24px 24px, 24px 24px, 100% 100%;
+  background-position: center top;
+  background-attachment: fixed;
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%;
 }
 
 /* The engine owns the screen and its input (input.js): no page gestures. */
@@ -30,6 +64,14 @@ canvas#view {
   height: 100%;
   display: block;
   pointer-events: none;
+  /* Shown only while the engine owns the screen; the page's own interface
+     shows the blueprint background. Hidden, it keeps its size and the
+     engine keeps rendering. */
+  visibility: hidden;
+}
+
+html[data-engine-input] canvas#view {
+  visibility: visible;
 }
 
 /* The game is always drawn in landscape: on an upright phone (iOS lets web
@@ -52,81 +94,321 @@ canvas#view {
 main {
   position: relative;
   box-sizing: border-box;
-  max-width: 48rem;
+  min-height: 100vh;
+  min-height: 100dvh;
+  max-width: 34rem;
   margin: 0 auto;
-  padding: calc(env(safe-area-inset-top) + 1rem) calc(env(safe-area-inset-right) + 1rem)
-    calc(env(safe-area-inset-bottom) + 1rem) calc(env(safe-area-inset-left) + 1rem);
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: calc(env(safe-area-inset-top) + 2rem) calc(env(safe-area-inset-right) + 1.25rem)
+    calc(env(safe-area-inset-bottom) + 1.25rem) calc(env(safe-area-inset-left) + 1.25rem);
 }
 
+/* Brand: the app icon and the name, as on the logo. */
+.brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.9rem;
+  margin-bottom: 0.5rem;
+}
+
+.brand .mark {
+  width: 88px;
+  height: 88px;
+  border-radius: 22.5%;
+  box-shadow: 0 0 0 1px var(--panel-edge), 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+
+.brand h1 {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  /* Letter spacing trails the last letter; balance it. */
+  padding-left: 0.22em;
+}
+
+/* Version line, a drawing's title-block note. */
 #status {
+  margin: auto 0 0;
+  padding-top: 1rem;
   text-align: center;
-  color: #888;
+  font: 12px/1.4 var(--mono);
+  letter-spacing: 0.04em;
+  color: var(--ink-3);
 }
 
-h2 {
+#status[data-state="error"] {
+  color: var(--danger);
+}
+
+#game {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+
+/* Small uppercase captions, like a drawing's annotations. */
+.label {
+  margin: 0 0 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.panel h2 {
+  margin: 0 0 0.5rem;
   font-size: 1.25rem;
-  margin: 1rem 0 0.5rem;
+  font-weight: 650;
+}
+
+.panel p {
+  margin: 0 0 0.75rem;
+  color: var(--ink-2);
+}
+
+.panel p:last-child {
+  margin-bottom: 0;
+}
+
+.game-title {
+  margin: 0 0 1rem;
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--ink);
 }
 
 button {
   font: inherit;
-  color: inherit;
-  background: #222;
-  border: 1px solid #333;
-  border-radius: 6px;
+  color: var(--ink);
+  background: rgba(159, 203, 250, 0.08);
+  border: 1px solid var(--panel-edge);
+  border-radius: 12px;
   min-height: 44px;
-  padding: 0 1rem;
+  padding: 0 1.1rem;
   cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 0.15s, border-color 0.15s, transform 0.1s;
 }
 
-button:hover:not(:disabled), button:focus-visible {
-  background: #2c2c2c;
-  border-color: #c8b46a;
-  outline: none;
+button:hover:not(:disabled) {
+  background: rgba(159, 203, 250, 0.16);
+  border-color: rgba(159, 203, 250, 0.45);
+}
+
+button:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+button:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--line);
+  outline-offset: 2px;
 }
 
 button:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
+  cursor: default;
 }
 
+/* White on navy, like the logo's V. */
 button.primary {
-  background: #c8b46a;
-  color: #111;
-  border-color: #c8b46a;
+  background: var(--ink);
+  color: var(--navy-3);
+  border-color: var(--ink);
+  font-weight: 650;
+}
+
+button.primary:hover:not(:disabled) {
+  background: #fff;
+  border-color: #fff;
 }
 
 button.play {
   display: block;
   width: 100%;
-  margin: 1rem 0 1.5rem;
-  padding: 1.25rem;
-  font-size: 1.75rem;
-  font-weight: 600;
+  min-height: 64px;
+  font-size: 1.375rem;
+  font-weight: 750;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  text-indent: 0.22em;
+  border-radius: 14px;
+  box-shadow: 0 8px 28px rgba(159, 203, 250, 0.25);
+}
+
+button.wide {
+  width: 100%;
+}
+
+button.danger {
+  color: var(--danger);
+  background: transparent;
+  border-color: rgba(255, 155, 143, 0.35);
+}
+
+button.danger:hover:not(:disabled) {
+  background: rgba(255, 155, 143, 0.1);
+  border-color: rgba(255, 155, 143, 0.6);
+}
+
+.note {
+  margin-top: 0.75rem !important;
+  font-size: 0.875rem;
+  color: var(--ink-3);
+}
+
+.note.error {
+  color: var(--danger);
 }
 
 progress {
+  -webkit-appearance: none;
+  appearance: none;
   display: block;
   width: 100%;
+  height: 6px;
   margin: 1rem 0 0.5rem;
+  border: 0;
+  border-radius: 3px;
+  background: rgba(159, 203, 250, 0.15);
+  overflow: hidden;
 }
 
-.message, .storage {
-  color: #aaa;
+progress::-webkit-progress-bar {
+  background: rgba(159, 203, 250, 0.15);
+}
+
+progress::-webkit-progress-value {
+  background: var(--ink);
+  border-radius: 3px;
+}
+
+progress::-moz-progress-bar {
+  background: var(--ink);
+}
+
+.message {
+  font-size: 0.875rem;
+  color: var(--ink-2);
   overflow-wrap: anywhere;
+}
+
+/* Facts: label left, value right, monospaced values. */
+.facts {
+  margin: 0 0 1rem;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.5rem 1rem;
+}
+
+.facts dt {
+  color: var(--ink-3);
+  font-size: 0.875rem;
+}
+
+.facts dd {
+  margin: 0;
+  text-align: right;
+  font: 0.875rem/1.5 var(--mono);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.steps {
+  margin: 0 0 1.25rem;
+  padding-left: 1.25rem;
+  color: var(--ink-2);
+}
+
+.steps li + li {
+  margin-top: 0.4rem;
+}
+
+code {
+  font: 0.875em var(--mono);
+  color: var(--ink);
+}
+
+/* Game files: a collapsible technical listing. */
+details.panel {
+  padding: 0;
+}
+
+details.panel > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 1rem 1.25rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-radius: var(--radius);
+}
+
+details.panel > summary::-webkit-details-marker {
+  display: none;
+}
+
+details.panel > summary::after {
+  content: "";
+  width: 0.5rem;
+  height: 0.5rem;
+  border-right: 2px solid var(--ink-3);
+  border-bottom: 2px solid var(--ink-3);
+  transform: rotate(45deg) translateY(-2px);
+  transition: transform 0.15s;
+}
+
+details.panel[open] > summary::after {
+  transform: rotate(-135deg) translateY(-2px);
+}
+
+details.panel > summary .label {
+  margin: 0;
+}
+
+.files {
+  padding: 0 1.25rem 1.25rem;
 }
 
 .crumbs {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.25rem;
-  margin: 0.5rem 0;
+  gap: 0.15rem;
+  margin: 0 0 0.5rem;
+  font: 0.8125rem var(--mono);
+  color: var(--ink-3);
+}
+
+.crumbs button {
+  min-height: 32px;
+  padding: 0 0.5rem;
+  border: 0;
+  background: transparent;
+  color: var(--line);
+  font: inherit;
 }
 
 .entries {
   list-style: none;
   padding: 0;
-  margin: 0 0 1rem;
+  margin: 0;
+  border-top: 1px solid var(--panel-edge);
 }
 
 .entries button {
@@ -137,26 +419,64 @@ progress {
   text-align: left;
   border-radius: 0;
   border-width: 0 0 1px;
+  border-color: rgba(159, 203, 250, 0.12);
   background: transparent;
+  font: 0.875rem/1.4 var(--mono);
+}
+
+.entries button:hover:not(:disabled) {
+  border-color: rgba(159, 203, 250, 0.12);
 }
 
 .entries .name {
   overflow-wrap: anywhere;
 }
 
+.entries .dir {
+  color: var(--line);
+}
+
 .entries .size {
-  color: #888;
+  color: var(--ink-3);
   white-space: nowrap;
 }
 
 .preview {
-  background: #1a1a1a;
-  border: 1px solid #333;
-  border-radius: 6px;
+  margin: 0.75rem 0 0;
+  background: rgba(5, 16, 36, 0.7);
+  border: 1px solid var(--panel-edge);
+  border-radius: 10px;
   padding: 0.75rem;
   max-height: 50vh;
   overflow: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font: 12px/1.4 ui-monospace, monospace;
+  font: 12px/1.45 var(--mono);
+  color: var(--ink-2);
+}
+
+/* Landscape phones: brand beside the content to save height. */
+@media (orientation: landscape) and (max-height: 500px) {
+  main {
+    max-width: 52rem;
+    display: grid;
+    grid-template-columns: 12rem 1fr;
+    grid-template-rows: auto 1fr;
+    align-items: start;
+    padding-top: calc(env(safe-area-inset-top) + 1.25rem);
+  }
+
+  .brand {
+    grid-row: 1 / span 2;
+    position: sticky;
+    top: 1.25rem;
+  }
+
+  #game {
+    grid-column: 2;
+  }
+
+  #status {
+    grid-column: 2;
+  }
 }
