@@ -136,8 +136,32 @@ if (state.startError) {
 }
 document.title = `${state.name} · ${device.name}`;
 document.documentElement.dataset.ready = "true";
-// The page's full length, for the board's "Full length" view.
+// The page's full length, for the board's "Full length" view, and the
+// screen's text (its content, not the status bar or footer), for the board
+// to flag states whose text differs by device.
+/** The content's text, with inline symbols named (e.g. "[Share]"). */
+function screenText() {
+  const game = document.getElementById("game");
+  const icons = [...game.querySelectorAll(".inline-icon")];
+  const marks = icons.map((icon) => {
+    const mark = document.createTextNode(`[${icon.querySelector("[aria-label]")?.getAttribute("aria-label") ?? "icon"}]`);
+    icon.after(mark);
+    return mark;
+  });
+  const text = game.innerText.trim();
+  for (const mark of marks) mark.remove();
+  return text;
+}
+
 const report = () =>
-  parent.postMessage({ type: "ux-frame", hash: location.hash, height: document.documentElement.scrollHeight }, "*");
+  parent.postMessage(
+    {
+      type: "ux-frame",
+      hash: location.hash,
+      height: document.documentElement.scrollHeight,
+      text: screenText(),
+    },
+    "*",
+  );
 new ResizeObserver(report).observe(document.body);
 report();

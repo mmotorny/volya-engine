@@ -16,6 +16,8 @@ const nav = document.querySelector(".sections");
 const full = document.querySelector(".full");
 /** Each frame's full length, as it reports it. */
 const lengths = new Map();
+/** Each state's screen text per device, as its frames report it. */
+const texts = new Map();
 
 document.querySelector(".title").insertAdjacentHTML("beforeend", `<span class="build">${versionText()}</span>`);
 
@@ -26,6 +28,7 @@ for (const device of DEVICES) {
     if (box.checked) shown.add(device.id);
     else shown.delete(device.id);
     render();
+    for (const stateId of texts.keys()) compareText(stateId);
   });
   const label = document.createElement("label");
   label.append(box, device.name);
@@ -60,7 +63,7 @@ function render() {
       const row = document.createElement("div");
       row.className = "state";
       row.id = state.id;
-      row.innerHTML = `<h3><a href="#${state.id}">${state.name}</a></h3>`;
+      row.innerHTML = `<h3><a href="#${state.id}">${state.name}</a><span class="badge" hidden>Text differs by device</span></h3>`;
       const frames = document.createElement("div");
       frames.className = "frames";
       for (const device of DEVICES.filter((d) => shown.has(d.id))) frames.append(frame(device, state));
@@ -79,9 +82,40 @@ function fit(viewport) {
   viewport.querySelector("iframe").height = height;
 }
 
+/**
+ * Flags a state whose text differs between the devices shown (they load as
+ * they scroll into view): a badge listing each device's own lines, and the
+ * captions marked, so it's read on each.
+ */
+function compareText(stateId) {
+  const row = board.querySelector(`.state[id="${stateId}"]`);
+  const byDevice = texts.get(stateId);
+  if (!row || !byDevice) return;
+  const shownTexts = [...byDevice].filter(([device]) => shown.has(device));
+  const differs = new Set(shownTexts.map(([, text]) => text)).size > 1;
+  const badge = row.querySelector(".badge");
+  badge.hidden = !differs;
+  for (const caption of row.querySelectorAll("figcaption")) caption.classList.toggle("differs", differs);
+  if (!differs) return;
+  const lines = (text) => new Set(text.split("\n").map((l) => l.trim()).filter(Boolean));
+  const sets = shownTexts.map(([device, text]) => [device, lines(text)]);
+  badge.title = sets
+    .map(([device, own]) => {
+      const others = sets.filter(([d]) => d !== device).map(([, set]) => set);
+      const unique = [...own].filter((line) => others.some((set) => !set.has(line)));
+      const name = DEVICES.find((d) => d.id === device).name;
+      return `${name}:\n${unique.map((l) => `  ${l}`).join("\n") || "  (nothing of its own)"}`;
+    })
+    .join("\n\n");
+}
+
 addEventListener("message", ({ data }) => {
   if (data?.type !== "ux-frame") return;
   lengths.set(data.hash, data.height);
+  const [device, stateId] = data.hash.slice(1).split("/");
+  if (!texts.has(stateId)) texts.set(stateId, new Map());
+  texts.get(stateId).set(device, data.text);
+  compareText(stateId);
   const viewport = board.querySelector(`.viewport[data-hash="${data.hash}"]`);
   if (viewport) fit(viewport);
 });
