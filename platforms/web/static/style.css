@@ -644,11 +644,18 @@ code {
   html[data-screen="settings"] main {
     max-width: 34rem;
     display: flex;
+    /* Full width, however little content: the lockup and the panels share
+       one left edge. */
+    align-items: stretch;
   }
 
   html[data-screen="settings"] .brand {
     position: static;
     align-self: flex-start;
+  }
+
+  html[data-screen="settings"] #game {
+    align-self: stretch;
   }
 
   #game {
