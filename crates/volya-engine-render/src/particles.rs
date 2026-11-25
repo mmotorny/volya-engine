@@ -445,6 +445,31 @@ impl ParticlePipelines {
         pipelines
     }
 
+    /// Grows the vertex and index buffers to hold `particles` sprites.
+    pub fn reserve(&mut self, device: &wgpu::Device, particles: usize) {
+        let quads = particles as u64;
+        grown(
+            device,
+            &mut self.vertices,
+            quads * 4 * VERTEX_BYTES,
+            wgpu::BufferUsages::VERTEX,
+            "particle vertices",
+        );
+        grown(
+            device,
+            &mut self.indices,
+            quads * 6 * 4,
+            wgpu::BufferUsages::INDEX,
+            "particle indices",
+        );
+    }
+
+    /// The vertex and index buffers' sizes in bytes.
+    pub fn buffer_sizes(&self) -> (u64, u64) {
+        let size = |b: &Option<wgpu::Buffer>| b.as_ref().map_or(0, wgpu::Buffer::size);
+        (size(&self.vertices), size(&self.indices))
+    }
+
     fn pipeline(&mut self, device: &wgpu::Device, key: PipelineKey) {
         if self.pipelines.contains_key(&key) {
             return;

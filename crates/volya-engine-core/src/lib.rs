@@ -26,3 +26,4 @@ pub mod text;
 pub mod ui;
 pub mod vfs;
 pub mod weather;
+pub mod zones;

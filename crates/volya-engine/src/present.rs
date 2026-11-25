@@ -290,6 +290,9 @@ impl Presenter {
             // The effects' textures first: the world's upload drops the
             // prepared textures it leaves.
             self.particle_shaders = self.load_particle_shaders(renderer, tree, &scene.world);
+            // Buffers for every particle the level's effects can hold, made
+            // now rather than while the level runs.
+            renderer.reserve_particles(scene.world.particle_capacity);
             let world = self.upload_world(renderer, tree, &scene.world);
             let world = world
                 .map_err(|e| self.errors.push(format!("{}: {e}", scene.world.dir)))

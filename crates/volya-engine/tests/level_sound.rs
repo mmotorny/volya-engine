@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 use volya_engine::core::collision::geometry::normalize;
 use volya_engine::core::config;
 use volya_engine::core::pause::GlobalClock;
-use volya_engine::core::sound::ambient::list_items;
+use volya_engine::core::sound::ambient::{NoParticles, list_items};
 use volya_engine::core::sound::occlusion::Occlusion;
 use volya_engine::core::sound::random::SharedRandom;
 use volya_engine::core::sound::system::{Listener, NoDevice, SoundSystem, Vec3};
@@ -403,6 +403,7 @@ fn first_level_sounds_from_game_data() {
         &level.sound_inputs(),
         clock.frame(frame_ms, false),
         false,
+        &mut NoParticles::default(),
     )
     .unwrap();
     system.update(16, &mut NoDevice);
@@ -453,6 +454,7 @@ fn first_level_sounds_from_game_data() {
             &level.sound_inputs(),
             clock.frame((frame + 1) * frame_ms, false),
             false,
+            &mut NoParticles::default(),
         )
         .unwrap();
         rules += t.elapsed();

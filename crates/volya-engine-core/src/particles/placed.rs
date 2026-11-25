@@ -1,10 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! The effects a level places through `level.ps_static`
-//! (docs/behavior/level-placed-effects.md): one instance per record,
-//! placed once, played and updated once at the load, then updated by the
-//! engine's scheduler with a period growing with the camera's distance.
+//! The level's particle objects. The effects a level places through
+//! `level.ps_static` (docs/behavior/level-placed-effects.md): one instance
+//! per record, placed once, played and updated once at the load, then
+//! updated by the engine's scheduler with a period growing with the
+//! camera's distance. The zones' idle effects
+//! (docs/behavior/zone-idle-effects.md section 4.5: made at a zone's first
+//! idle start, stopped and played again with its state) and the weather's
+//! ambient effects (docs/behavior/weather-ambient-effects.md section 3: made
+//! by the ambient rule, removed once they no longer play) are particle
+//! objects of the same kind, scheduled and drawn as P8's (P9 4.5, P11 3.3).
 //!
 //! The drawing update of section 5.3 is [`PlacedEffects::draw_update`],
 //! which the level runs for the instances it draws. The scheduler's
@@ -16,7 +22,7 @@ use std::sync::Arc;
 
 use volya_engine_formats::particles::{Library, PlacedRecord};
 
-use super::{EffectInstance, GroupInstance, Mode, Random, STEP_MS, Sphere, Vec3, sub};
+use super::{EffectInstance, GroupInstance, Matrix, Mode, Random, STEP_MS, Sphere, Vec3, sub};
 
 /// What a record made (section 2).
 #[derive(Clone, Debug)]
@@ -26,6 +32,57 @@ pub enum Instance {
 }
 
 impl Instance {
+    /// The instance of `name`: among the library's effects first, its
+    /// groups second (P8 2, P9 4.5, P11 3.1). A name that is neither, or a
+    /// group a member of which names no effect, is the game's assertion
+    /// failure: an error here.
+    pub fn make(library: &Library, name: &str) -> Result<Self, String> {
+        if let Some(i) = library.effect(name) {
+            Ok(Instance::Effect(EffectInstance::new(
+                i,
+                &library.effects[i],
+            )))
+        } else if let Some(g) = library.group(name) {
+            Ok(Instance::Group(
+                GroupInstance::new(library, g).map_err(|e| format!("{name}: {e}"))?,
+            ))
+        } else {
+            Err(format!("{name}: Particle effect or group doesn't exist"))
+        }
+    }
+
+    /// Places it by `m` with velocity `w` (P2 5, P6 3).
+    pub fn place(&mut self, m: &Matrix, w: Vec3, mode: Mode) {
+        match self {
+            Instance::Effect(i) => i.place(m, w, mode),
+            Instance::Group(g) => g.place(m, w, mode),
+        }
+    }
+
+    /// Play (P2 7, P6 3).
+    pub fn play(&mut self) {
+        match self {
+            Instance::Effect(i) => i.play(),
+            Instance::Group(g) => g.play(),
+        }
+    }
+
+    /// Deferred stop (P2 7, P6 3).
+    pub fn stop_deferred(&mut self) {
+        match self {
+            Instance::Effect(i) => i.stop_deferred(),
+            Instance::Group(g) => g.stop_deferred(),
+        }
+    }
+
+    /// Immediate stop (P2 7, P6 3).
+    pub fn stop_immediate(&mut self) {
+        match self {
+            Instance::Effect(i) => i.stop_immediate(),
+            Instance::Group(g) => g.stop_immediate(),
+        }
+    }
+
     fn update(&mut self, e: u32, library: &Library, random: &mut Random) {
         match self {
             Instance::Effect(i) => i.update(e, random),
@@ -56,10 +113,57 @@ impl Instance {
     }
 }
 
-/// One record's instance with its update times.
+/// The most particles the instance of `name` can hold at once: an
+/// effect's maximum, or the sum over a group's members and the children
+/// their member flags use (P1 6.1). `None` for a name of neither.
+pub fn particle_capacity(library: &Library, name: &str) -> Option<usize> {
+    use volya_engine_formats::particles::member_flags as m;
+    let max = |n: &str| {
+        library
+            .effect(n)
+            .map_or(0, |i| library.effects[i].max_particles as usize)
+    };
+    if let Some(i) = library.effect(name) {
+        return Some(library.effects[i].max_particles as usize);
+    }
+    let g = library.group(name)?;
+    Some(
+        library.groups[g]
+            .members
+            .iter()
+            .map(|member| {
+                let mut n = max(&member.effect);
+                for (bit, child) in [
+                    (m::PER_PARTICLE_CHILD, &member.per_particle_child),
+                    (m::BIRTH_CHILD, &member.birth_child),
+                    (m::DEATH_CHILD, &member.death_child),
+                ] {
+                    if member.flags & bit != 0 {
+                        n += max(child);
+                    }
+                }
+                n
+            })
+            .sum(),
+    )
+}
+
+/// What made a particle object.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Origin {
+    /// A record of `level.ps_static` (P8).
+    Placed,
+    /// A zone's idle effect (P9 4.5).
+    Zone,
+    /// The weather's ambient effect (P11 3).
+    Weather,
+}
+
+/// One particle object: its instance with its update times.
 #[derive(Clone, Debug)]
 pub struct PlacedEffect {
     pub name: String,
+    pub origin: Origin,
     pub instance: Instance,
     /// The last-update time (clock, ms).
     last: u32,
@@ -133,13 +237,17 @@ pub fn period(distance: f64) -> u32 {
     (lo + product.trunc() as i64).clamp(lo, hi) as u32
 }
 
-/// The level's placed effects with the library they come from, their
+/// The level's particle objects with the library they come from, their
 /// generators and the world clock they run on.
 #[derive(Clone, Debug)]
 pub struct PlacedEffects {
     library: Arc<Library>,
     random: Random,
-    effects: Vec<PlacedEffect>,
+    /// The objects; a deleted one leaves its slot to the next made.
+    effects: Vec<Option<PlacedEffect>>,
+    /// Objects asked to be destroyed, deleted at the next frame's start
+    /// (P11 3.5).
+    queued: Vec<usize>,
     /// The world clock (autosave-timing.md section 1), ms: it advances
     /// only by [`PlacedEffects::advance`], so it stands still while the
     /// game is paused or the page hidden.
@@ -156,60 +264,130 @@ impl PlacedEffects {
         records: &[PlacedRecord],
         clock: u32,
     ) -> Result<Self, String> {
-        let mut random = Random::default();
-        let mut effects = Vec::with_capacity(records.len());
+        let mut effects = Self {
+            library,
+            random: Random::default(),
+            effects: Vec::with_capacity(records.len()),
+            queued: Vec::new(),
+            clock,
+        };
         for r in records {
-            let mut instance = if let Some(i) = library.effect(&r.name) {
-                Instance::Effect(EffectInstance::new(i, &library.effects[i]))
-            } else if let Some(g) = library.group(&r.name) {
-                Instance::Group(
-                    GroupInstance::new(&library, g).map_err(|e| format!("{}: {e}", r.name))?,
-                )
-            } else {
-                return Err(format!(
-                    "{}: Particle effect or group doesn't exist",
-                    r.name
-                ));
-            };
+            let i = effects.add(&r.name, Origin::Placed)?;
             let mut m = r.transform;
             m[3][1] += LIFT;
-            match &mut instance {
-                Instance::Effect(i) => {
-                    i.place(&m, [0.0; 3], Mode::World);
-                    i.play();
-                }
-                Instance::Group(g) => {
-                    g.place(&m, [0.0; 3], Mode::World);
-                    g.play();
-                }
-            }
-            let mut placed = PlacedEffect {
-                name: r.name.clone(),
-                instance,
-                last: clock.wrapping_sub(STEP_MS),
-                due: clock,
-                period: 0,
-                registered: None,
-                updates: 0,
-            };
-            placed.update(clock, &library, &mut random);
-            placed.register();
-            effects.push(placed);
+            effects.start(i, &m, [0.0; 3]);
         }
-        Ok(Self {
-            library,
-            random,
-            effects,
-            clock,
+        Ok(effects)
+    }
+
+    /// Makes the object of `name` (P8 2, P9 4.5, P11 3.1), not yet placed
+    /// or playing, and returns its index; errors as [`Instance::make`].
+    pub fn add(&mut self, name: &str, origin: Origin) -> Result<usize, String> {
+        let instance = Instance::make(&self.library, name)?;
+        let object = PlacedEffect {
+            name: name.to_owned(),
+            origin,
+            instance,
+            last: self.clock,
+            due: self.clock,
+            period: 0,
+            registered: None,
+            updates: 0,
+        };
+        Ok(match self.effects.iter().position(Option::is_none) {
+            Some(i) => {
+                self.effects[i] = Some(object);
+                i
+            }
+            None => {
+                self.effects.push(Some(object));
+                self.effects.len() - 1
+            }
         })
+    }
+
+    /// Places object `i` by `m` with velocity `w` in world mode, plays it,
+    /// updates it at once with 33 ms (its last-update time the clock minus
+    /// 33) and registers its visibility sphere (P8 3, 4, 5.1, 5.4; P9 4.1,
+    /// 4.5; P11 3.2).
+    pub fn start(&mut self, i: usize, m: &Matrix, w: Vec3) {
+        let clock = self.clock;
+        let Some(Some(p)) = self.effects.get_mut(i) else {
+            return;
+        };
+        p.instance.place(m, w, Mode::World);
+        p.instance.play();
+        p.last = clock.wrapping_sub(STEP_MS);
+        p.update(clock, &self.library, &mut self.random);
+        p.register();
+    }
+
+    /// Places object `i` again (the moving zone, P9 5).
+    pub fn place(&mut self, i: usize, m: &Matrix, w: Vec3) {
+        if let Some(Some(p)) = self.effects.get_mut(i) {
+            p.instance.place(m, w, Mode::World);
+        }
+    }
+
+    /// Stops object `i` immediately (P9 4.2).
+    pub fn stop_immediate(&mut self, i: usize) {
+        if let Some(Some(p)) = self.effects.get_mut(i) {
+            p.instance.stop_immediate();
+        }
+    }
+
+    /// Stops object `i` with a deferred stop (P11 3.4).
+    pub fn stop_deferred(&mut self, i: usize) {
+        if let Some(Some(p)) = self.effects.get_mut(i) {
+            p.instance.stop_deferred();
+        }
+    }
+
+    /// Asks object `i` to be destroyed (P11 3.5): the scheduler no longer
+    /// updates it, and it is deleted at the start of the next frame.
+    pub fn remove(&mut self, i: usize) {
+        if !self.queued.contains(&i) {
+            self.queued.push(i);
+        }
+    }
+
+    /// Deletes the objects asked to be destroyed (P11 3.5).
+    pub fn delete_queued(&mut self) {
+        for i in std::mem::take(&mut self.queued) {
+            if let Some(slot) = self.effects.get_mut(i) {
+                *slot = None;
+            }
+        }
+    }
+
+    /// The level's generators (P2 2.1), which the zones' lights draw from
+    /// too (P9 4.4).
+    pub fn random_mut(&mut self) -> &mut Random {
+        &mut self.random
     }
 
     pub fn library(&self) -> &Library {
         &self.library
     }
 
-    pub fn effects(&self) -> &[PlacedEffect] {
-        &self.effects
+    /// The library, shared.
+    pub fn shared_library(&self) -> Arc<Library> {
+        self.library.clone()
+    }
+
+    /// Object `i`.
+    pub fn get(&self, i: usize) -> Option<&PlacedEffect> {
+        self.effects.get(i).and_then(Option::as_ref)
+    }
+
+    /// Every object.
+    pub fn effects(&self) -> impl Iterator<Item = &PlacedEffect> {
+        self.effects.iter().flatten()
+    }
+
+    /// Every object with its index.
+    pub fn indexed(&self) -> impl Iterator<Item = (usize, &PlacedEffect)> {
+        (self.effects.iter().enumerate()).filter_map(|(i, p)| p.as_ref().map(|p| (i, p)))
     }
 
     /// The world clock, ms.
@@ -223,11 +401,13 @@ impl PlacedEffects {
     }
 
     /// The scheduler's pass of a frame (section 5.2) with the camera at
-    /// `camera`: every instance whose due time the clock is past runs.
+    /// `camera`: every instance whose due time the clock is past runs, but
+    /// those asked to be destroyed.
     pub fn schedule(&mut self, camera: Vec3) {
         let clock = self.clock;
-        for p in &mut self.effects {
-            if (clock.wrapping_sub(p.due) as i32) <= 0 {
+        for (i, p) in self.effects.iter_mut().enumerate() {
+            let Some(p) = p else { continue };
+            if (clock.wrapping_sub(p.due) as i32) <= 0 || self.queued.contains(&i) {
                 continue;
             }
             let c = p.instance.sphere().centre;
@@ -239,35 +419,51 @@ impl PlacedEffects {
         }
     }
 
-    /// The drawing update of record `i` (section 5.3): advanced to the
+    /// The drawing update of object `i` (section 5.3): advanced to the
     /// clock before it is drawn; the visibility sphere is left as it was
     /// (5.1, as disputed in review).
     pub fn draw_update(&mut self, i: usize) {
         let clock = self.clock;
-        if let Some(p) = self.effects.get_mut(i) {
+        if let Some(Some(p)) = self.effects.get_mut(i) {
             p.update(clock, &self.library, &mut self.random);
         }
     }
 
-    /// One frame: the clock moves on by `elapsed` ms, then the scheduler's
-    /// pass.
+    /// One frame: the clock moves on by `elapsed` ms, the objects asked to
+    /// be destroyed are deleted (P11 3.6), then the scheduler's pass.
     pub fn frame(&mut self, elapsed: u64, camera: Vec3) {
         self.advance(elapsed);
+        self.delete_queued();
         self.schedule(camera);
     }
 
     /// The fatal error a group met (particle-groups.md 2.3): the game ends
     /// with it.
     pub fn fatal(&self) -> Option<&str> {
-        self.effects.iter().find_map(|p| match &p.instance {
+        self.effects().find_map(|p| match &p.instance {
             Instance::Group(g) => g.fatal(),
             Instance::Effect(_) => None,
         })
     }
 
-    /// Every effect instance of every record, for drawing.
+    /// Every effect instance of every object, for drawing.
     pub fn instances(&self) -> impl Iterator<Item = &EffectInstance> {
-        self.effects.iter().flat_map(|p| p.instance.effects())
+        self.effects().flat_map(|p| p.instance.effects())
+    }
+
+    /// A copy holding only the objects of `origin` (tests and benches).
+    pub fn copy_of(&self, origin: Origin) -> Self {
+        Self {
+            library: self.library.clone(),
+            random: self.random.clone(),
+            effects: (self.effects())
+                .filter(|p| p.origin == origin)
+                .cloned()
+                .map(Some)
+                .collect(),
+            queued: Vec::new(),
+            clock: self.clock,
+        }
     }
 
     /// Live particles of every instance.
@@ -335,50 +531,50 @@ mod tests {
     #[test]
     fn the_first_levels_effect_is_lifted_placed_and_started() {
         let p = level();
-        let Instance::Effect(e) = &p.effects[0].instance else {
+        let Instance::Effect(e) = &p.get(0).unwrap().instance else {
             panic!()
         };
         // P8 8: placed with y bits 0xC196956F.
         assert_eq!(e.position()[1].to_bits(), 0xC196_956F);
         assert!(e.is_playing());
         // The start update ran one step: the source's first births.
-        assert_eq!(p.effects[0].updates, 1);
-        assert!(p.effects[0].registered.is_some());
+        assert_eq!(p.get(0).unwrap().updates, 1);
+        assert!(p.get(0).unwrap().registered.is_some());
     }
 
     #[test]
     fn the_schedule_runs_past_due_and_stands_still_with_the_clock() {
         let mut p = level();
-        let camera = p.effects[0].instance.sphere().centre;
+        let camera = p.get(0).unwrap().instance.sphere().centre;
         // Due at the load clock: not run until the clock is past it.
         p.schedule(camera);
-        assert_eq!(p.effects[0].updates, 1);
+        assert_eq!(p.get(0).unwrap().updates, 1);
         p.frame(16, camera);
-        assert_eq!(p.effects[0].updates, 2);
-        assert_eq!(p.effects[0].period, 30);
+        assert_eq!(p.get(0).unwrap().updates, 2);
+        assert_eq!(p.get(0).unwrap().period, 30);
         // A paused frame does not move the clock: nothing runs.
         for _ in 0..10 {
             p.frame(0, camera);
         }
-        assert_eq!(p.effects[0].updates, 2);
+        assert_eq!(p.get(0).unwrap().updates, 2);
         for _ in 0..120 {
             p.frame(16, camera);
         }
         assert!(p.particle_count() > 0);
-        assert!(p.effects[0].instance.is_playing());
+        assert!(p.get(0).unwrap().instance.is_playing());
     }
 
     #[test]
     fn a_far_camera_updates_less_often() {
         let mut near = level();
         let mut far = level();
-        let c = near.effects[0].instance.sphere().centre;
+        let c = near.get(0).unwrap().instance.sphere().centre;
         for _ in 0..600 {
             near.frame(16, c);
             far.frame(16, [c[0] + 500.0, c[1], c[2]]);
         }
-        assert_eq!(far.effects[0].period, 525);
-        assert!(far.effects[0].updates * 10 < near.effects[0].updates);
+        assert_eq!(far.get(0).unwrap().period, 525);
+        assert!(far.get(0).unwrap().updates * 10 < near.get(0).unwrap().updates);
     }
 
     #[test]

@@ -773,24 +773,44 @@ impl App {
                     direction: v.direction,
                     up: v.up,
                 });
+                let mut created_now = false;
                 if let Some(data) = level.take_sound_data() {
                     match LevelSounds::create(sounds, tree, &self.data.aliases, &data) {
                         Ok(created) => {
                             sounds.occlusion_mut().level = Some(level.shared_collision());
                             self.level_sounds = Some(created);
+                            created_now = true;
                         }
                         Err(e) => fatal = Some(e),
                     }
                 }
+                // The zones' idle sounds (S15 3): those of zones that came
+                // online since are created; created this frame, the sounds
+                // play as the zones stand, else as this frame changed them.
+                if let Some(level_sounds) = &mut self.level_sounds {
+                    let names = level.zone_sound_names();
+                    let dir = level.world().dir.clone();
+                    if let Err(e) =
+                        level_sounds.add_zones(sounds, tree, &self.data.aliases, &dir, &names)
+                    {
+                        fatal = Some(e);
+                    } else if created_now {
+                        level_sounds.zone_events(sounds, &level.zone_sounds_playing());
+                    } else {
+                        level_sounds.zone_events(sounds, level.zone_sound_events());
+                    }
+                }
                 if !paused {
                     let now = self.global_clock.now();
+                    let (inputs, mut particles) = level.sound_frame_parts();
                     if let Some(level_sounds) = &mut self.level_sounds
                         && let Err(e) = self.sound_run.frame(
                             sounds,
                             level_sounds,
-                            &level.sound_inputs(),
+                            &inputs,
                             now,
                             overlay.is_some(),
+                            &mut particles,
                         )
                     {
                         fatal = Some(e);

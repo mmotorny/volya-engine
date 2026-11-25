@@ -542,6 +542,22 @@ export const tests = {
     return `${fx.particles} particles, period ${fx.records[0].period} ms; a frame's update in wasm: mean ${bench.mean_us.toFixed(2)} µs over ${bench.frames} frames, the slowest under ${bench.max_us.toFixed(0)} µs (the timer's resolution)`;
   },
 
+  "the zones' idle effects play, the campfires among them": async () => {
+    needsGame();
+    // docs/behavior/zone-idle-effects.md 8: 178 zone records online, 160
+    // with an idle effect; only the galantines switch off.
+    const { zones } = await volya.call("zones_state");
+    assertEqual(zones.length, 178, "zones");
+    const withEffect = zones.filter((z) => z.effect);
+    assertEqual(withEffect.length, 160, "zones with an idle effect");
+    const off = withEffect.filter((z) => !z.playing);
+    assert(off.every((z) => z.section === "zone_witches_galantine" && z.state === "disabled"), `off: ${JSON.stringify(off)}`);
+    const fires = zones.filter((z) => z.effect === "explosions\\campfire_05");
+    assertEqual(fires.map((z) => z.playing && z.sound_on), Array(11).fill(true), "campfires");
+    const stats = await volya.call("level_stats");
+    return `${withEffect.length - off.length} idle effects playing, ${off.length} galantines off; frame CPU ${stats.frame_cpu_ms.toFixed(2)} ms average, ${stats.frame_cpu_max_ms.toFixed(2)} ms worst; wasm heap ${mib(stats.wasm_heap_bytes)}`;
+  },
+
   "transcoding to ETC2 costs: the level's textures and a few large ones": async () => {
     needsGame();
     await until((s) => s.phase === "level" && !s.intro, "the level");
