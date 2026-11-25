@@ -689,6 +689,18 @@ impl App {
                         {
                             fatal = Some(e);
                         }
+                        // The player's steps of this frame (S11) on the
+                        // level sounds' clock, which is the step clock
+                        // (S11 3.1; TODO(#328)), played independently (4.3).
+                        if let Err(e) = level.footsteps_frame(self.sound_run.clock as u32) {
+                            fatal = Some(e);
+                        } else if let (Some(level_sounds), Some(f)) =
+                            (&self.level_sounds, level.footsteps())
+                        {
+                            for step in f.sounds() {
+                                level_sounds.pairs.play(sounds, step);
+                            }
+                        }
                     }
                     None => self.sound_run.paused_frame(),
                 }
