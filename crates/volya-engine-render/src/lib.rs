@@ -29,7 +29,7 @@ pub mod world;
 use std::ops::Range;
 
 pub use texture::{
-    TextureError, TexturePath, Transcoded, transcode, transcode_into, transcoded_len,
+    TextureError, TexturePath, TextureUpload, Transcoded, transcode, transcode_into, transcoded_len,
 };
 pub use video::VideoTexture;
 pub use wgpu;

@@ -14,7 +14,7 @@ There are no arenas: every allocation goes to one general heap, the target's sys
 Two reuse fixes from #357 stand in for arenas:
 
 - The collision world's large arrays are kept when it is dropped (a thread-local spare in `volya-engine-core::collision`) and reused by the next world when large enough, so a second New Game's collision world finds its 28 MB without new memory (it needed up to 13 MiB more before, measured in headless Chrome).
-- Prepared textures share one read buffer and one transcoding buffer, and texture writes go in bands of 2 MiB.
+- Prepared textures share one read buffer, and are written in bands of at most 2 MiB, a transcoded one transcoded a band at a time into one reused buffer (`TextureUpload`, #440): a whole transcoding of the largest texture held 8 MiB beside its file.
 
 ## Measurements by lifetime (#399)
 
