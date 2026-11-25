@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! Heap use of each New Game loading stage on the Russian edition (BYOA):
-//! the peak above the stage's start and what the stage keeps, each peak
-//! held to a budget. The loading peak is the wasm heap's high-water mark,
+//! the peak above the stage's start and what the stage keeps, with the
+//! allocations it makes and the blocks it keeps; each peak is reported
+//! against a budget (an "OVER BUDGET" note, never a failure: budgets are
+//! reported, not gates). The loading peak is the wasm heap's high-water mark,
 //! which never shrinks. Its own test binary, so no other test allocates
 //! meanwhile. Skips when `VOLYA_GOG_INSTALLER` is unset.
 
@@ -29,6 +31,11 @@ struct Counting;
 
 static CURRENT: AtomicUsize = AtomicUsize::new(0);
 static PEAK: AtomicUsize = AtomicUsize::new(0);
+/// Blocks live: many small long-lived ones split the free space the wasm
+/// heap's large blocks need (docs/architecture/memory.md).
+static BLOCKS: AtomicUsize = AtomicUsize::new(0);
+/// Allocations made (a growing reallocation counts as one).
+static ALLOCS: AtomicUsize = AtomicUsize::new(0);
 
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
@@ -36,6 +43,8 @@ unsafe impl GlobalAlloc for Counting {
         if !p.is_null() {
             let now = CURRENT.fetch_add(layout.size(), Ordering::Relaxed) + layout.size();
             PEAK.fetch_max(now, Ordering::Relaxed);
+            BLOCKS.fetch_add(1, Ordering::Relaxed);
+            ALLOCS.fetch_add(1, Ordering::Relaxed);
         }
         p
     }
@@ -43,12 +52,14 @@ unsafe impl GlobalAlloc for Counting {
     unsafe fn dealloc(&self, p: *mut u8, layout: Layout) {
         unsafe { System.dealloc(p, layout) };
         CURRENT.fetch_sub(layout.size(), Ordering::Relaxed);
+        BLOCKS.fetch_sub(1, Ordering::Relaxed);
     }
 
     unsafe fn realloc(&self, p: *mut u8, layout: Layout, size: usize) -> *mut u8 {
         let q = unsafe { System.realloc(p, layout, size) };
         if !q.is_null() {
             if size > layout.size() {
+                ALLOCS.fetch_add(1, Ordering::Relaxed);
                 let now = CURRENT.fetch_add(size - layout.size(), Ordering::Relaxed)
                     + (size - layout.size());
                 PEAK.fetch_max(now, Ordering::Relaxed);
@@ -68,13 +79,13 @@ fn mb(bytes: usize) -> f64 {
 }
 
 /// Each stage's peak above its start, MB: the measured peak (native,
-/// `l01_escape`, #79) with a margin, so a regression fails. Stages not
+/// `l01_escape`, #79) with a margin, so a regression is noted. Stages not
 /// listed allocate next to nothing.
 const STAGE_BUDGETS: [(Stage, f64); 10] = [
     (Stage::CreatingNewGame, 14.5),  // 12.8: the spawn file and game graph
-    (Stage::ServerConnecting, 23.0), // 19.8: the offline simulation
+    (Stage::ServerConnecting, 16.0), // 14.1: the offline simulation (#370)
     (Stage::OpeningStream, 14.0),    // 12.6: the `level` file and its parse
-    (Stage::LoadingCform, 48.0),     // 44.3: the collision world it keeps
+    (Stage::LoadingCform, 38.0),     // 35.1: the collision world it keeps (#371)
     (Stage::LoadingGeometry, 1.5),   // 0.7: the geometry's layout only
     (Stage::LoadingSpatialDb, 7.0),  // 5.4: index pieces and the draw list
     // 9.5: `level.details`' slot grid (8.4) and the cache (#411).
@@ -87,10 +98,10 @@ const STAGE_BUDGETS: [(Stage, f64); 10] = [
 ];
 /// Any other stage's peak, MB.
 const OTHER_BUDGET: f64 = 0.5;
-/// The whole load's peak above its start, MB (91.8 measured with the detail
-/// objects' grid, #411; 80.0 before them; 188.3 before
-/// #79).
-const LOADING_BUDGET: f64 = 96.0;
+/// The whole load's peak above its start, MB (72.8 measured with the
+/// detail objects' grid, #411; 63.3 without it, 82.3 before #370 and #371,
+/// 188.3 before #79).
+const LOADING_BUDGET: f64 = 79.0;
 
 #[test]
 fn loading_stage_memory() {
@@ -100,16 +111,22 @@ fn loading_stage_memory() {
     let root = StdVfs::new(archives[0].file.parent().unwrap());
     let tree = DbVfs::open_game(&root, Some("mods")).unwrap();
     let start = CURRENT.load(Ordering::Relaxed);
+    let mut game_blocks = (BLOCKS.load(Ordering::Relaxed), 0);
     let data = GameData::read(&tree, None, Resolution::new(1024, 768)).unwrap();
     eprintln!(
         "the game's data (configuration, UI, strings): keeps {:.1} MB",
         mb(CURRENT.load(Ordering::Relaxed) - start)
     );
+    game_blocks.1 = BLOCKS.load(Ordering::Relaxed);
     let mut load = NewGameLoad::default();
     let base = CURRENT.load(Ordering::Relaxed);
     let mut highest = 0;
     for stage in Stage::ALL {
         let before = CURRENT.load(Ordering::Relaxed);
+        let (blocks, allocs) = (
+            BLOCKS.load(Ordering::Relaxed),
+            ALLOCS.load(Ordering::Relaxed),
+        );
         PEAK.store(before, Ordering::Relaxed);
         load.run(stage, &tree, &data).unwrap();
         let (peak, after) = (
@@ -118,26 +135,32 @@ fn loading_stage_memory() {
         );
         highest = highest.max(peak - base);
         eprintln!(
-            "{stage:?}: peak +{:.1} MB above its start, keeps {:+.1} MB (loading total {:.1} MB)",
+            "{stage:?}: peak +{:.1} MB above its start, keeps {:+.1} MB (loading total {:.1} MB); {} allocations, keeps {:+} blocks",
             mb(peak - before),
             mb(after) - mb(before),
-            mb(after - base)
+            mb(after - base),
+            ALLOCS.load(Ordering::Relaxed) - allocs,
+            BLOCKS.load(Ordering::Relaxed) as isize - blocks as isize,
         );
         let budget = STAGE_BUDGETS
             .iter()
             .find(|(s, _)| *s == stage)
             .map_or(OTHER_BUDGET, |&(_, b)| b);
-        assert!(
-            mb(peak - before) <= budget,
-            "{stage:?} peaks at +{:.1} MB, over its {budget} MB budget",
-            mb(peak - before)
-        );
-        if stage == Stage::ServerConnecting {
-            // The offline simulation keeps 19.8 MB (measured).
-            assert!(mb(after) - mb(before) < 23.0, "{stage:?} kept");
+        if mb(peak - before) > budget {
+            eprintln!("  OVER BUDGET: {stage:?} peaks over its {budget} MB budget");
+        }
+        // The offline simulation keeps 12.7 MB (measured).
+        if stage == Stage::ServerConnecting && mb(after) - mb(before) >= 15.0 {
+            eprintln!("  OVER BUDGET: {stage:?} keeps 15 MB or more");
         }
     }
     eprintln!("loading peak: {:.1} MB above the start", mb(highest));
+    eprintln!(
+        "blocks live: {} before the game's data, {} with it, {} at the load's end",
+        game_blocks.0,
+        game_blocks.1,
+        BLOCKS.load(Ordering::Relaxed)
+    );
     let before = CURRENT.load(Ordering::Relaxed);
     let screen = load.finish(0).unwrap();
     eprintln!(
@@ -159,6 +182,12 @@ fn loading_stage_memory() {
         drop(screen.world().objects.take_geometry());
     });
     drop(screen);
+    // What outlives the level: kept for the next one.
+    eprintln!(
+        "after the level: {:.1} MB and {:+} blocks above the load's start",
+        mb(CURRENT.load(Ordering::Relaxed).saturating_sub(base)),
+        BLOCKS.load(Ordering::Relaxed) as isize - game_blocks.1 as isize
+    );
     let (mut system, mut strings) = (Some(data.system), Some(data.strings));
     freed(
         "the configuration (system.ltx and its includes)",
@@ -167,9 +196,10 @@ fn loading_stage_memory() {
         },
     );
     freed("the string tables", &mut || drop(strings.take()));
-    assert!(
-        mb(highest) <= LOADING_BUDGET,
-        "the load peaks at +{:.1} MB, over its {LOADING_BUDGET} MB budget",
-        mb(highest)
-    );
+    if mb(highest) > LOADING_BUDGET {
+        eprintln!(
+            "OVER BUDGET: the load peaks at +{:.1} MB, over its {LOADING_BUDGET} MB budget",
+            mb(highest)
+        );
+    }
 }

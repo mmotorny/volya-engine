@@ -75,6 +75,36 @@ let installer;
 let gpu;
 // The size the game draws at (#49), shown scaled to fit the canvas.
 let render;
+// The title menu's frames drawn through WebGPU are compared with the same
+// scenes drawn through WebGL 2 (#121, #425), at the installer's video mode
+// and a phone's size. They are drawn where no wasm heap is measured after
+// (the readback grows the heap, which never shrinks).
+const MENU_FRAME_SIZES = [
+  [1024, 768],
+  [2868, 1320],
+];
+// How far WebGL 2's frame may be from WebGPU's: measured identical in
+// headless Chrome on the Mac (both on BC textures as stored, the same UI
+// program and sampler), so only rounding is allowed.
+const MENU_FRAME_MAX_DIFFERENCE = 2;
+const MENU_FRAME_MAX_SHARE = 0.001;
+/**
+ * The title menu as it is now at each size, its videos at 2 s from their
+ * start whatever the clock, drawn through this backend (the
+ * `debug_capture_scene` op).
+ */
+async function drawMenuFrames(scenes) {
+  scenes ??= await Promise.all(
+    MENU_FRAME_SIZES.map(async ([width, height]) => {
+      const scene = await volya.call("menu_scene", { width, height });
+      for (const s of scene.sprites) if (s.texture.kind === "video") s.texture.start_ms = 0;
+      return scene;
+    }),
+  );
+  const frames = [];
+  for (const scene of scenes) frames.push({ scene, rgba: (await volya.call("debug_capture_scene", { scene, clock_ms: 2000 })).rgba });
+  return frames;
+}
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const state = () => volya.call("menu_state");
@@ -1829,6 +1859,18 @@ export const tests = {
     const { graphics } = volya;
     if (!graphics.available.webgl2) skip("no WebGL 2 here");
     if (!graphics.available.webgpu) skip("no WebGPU here: the New Games above drew through WebGL 2");
+    // The title menu through WebGPU, for WebGL 2's frames of the same scenes
+    // below.
+    await volya.call("launch");
+    await until((s) => s.phase === "startup" || s.phase === "menu", "the game", 10000);
+    for (let s = await state(); s.phase !== "menu"; s = await state()) {
+      key("Escape");
+      await sleep(100);
+    }
+    assertEqual((await volya.status()).gpu.backend, "webgpu", "graphics");
+    const menuFrames = await drawMenuFrames();
+    await volya.call("quit_game");
+    await until((s) => s.phase === "none", "the game to end");
     await volya.showSettings();
     document.querySelector('#game input[name="graphics"][value="webgl2"]').click();
     // The engine workers started from here on (#369).
@@ -1894,7 +1936,32 @@ export const tests = {
       const second = byCaption(await volya.call("heap_log", { on: false }));
       const after = await volya.call("level_stats");
       const heapNote = overBudget(heap(stats), "wasm heaps after the first New Game") + overBudget(heap(after), "wasm heaps after the second New Game");
-      return `${heapNote}${drawn.backend}, textures ${drawn.textures}; first caption to first level frame in ${s.load_ms.toFixed(0)} ms, ${again.load_ms.toFixed(0)} ms again; ${colours.size} colours; wasm heap ${mib(stats.wasm_heap_bytes)}, ${mib(after.wasm_heap_bytes)} after the second; by caption (MiB, heap/live): ${first}; the second: ${second}; ${JSON.stringify(stats)}`;
+      // The title menu's scenes drawn through WebGPU above, drawn again
+      // through WebGL 2: the same picture.
+      await quitToTitle();
+      const menuNote = [];
+      const drawnAgain = await drawMenuFrames(menuFrames.map((f) => f.scene));
+      menuFrames.forEach(({ scene, rgba }, i) => {
+        const [width, height] = scene.resolution;
+        const other = drawnAgain[i].rgba;
+        let differ = 0;
+        let max = 0;
+        const box = [width, height, -1, -1];
+        for (let p = 0; p < width * height; p++) {
+          let d = 0;
+          for (let c = 0; c < 3; c++) d = Math.max(d, Math.abs(rgba[4 * p + c] - other[4 * p + c]));
+          if (d === 0) continue;
+          differ++;
+          max = Math.max(max, d);
+          const [x, y] = [p % width, Math.floor(p / width)];
+          [box[0], box[1], box[2], box[3]] = [Math.min(box[0], x), Math.min(box[1], y), Math.max(box[2], x), Math.max(box[3], y)];
+        }
+        const what = `title menu at ${width}×${height}: ${differ} pixels differ, by up to ${max}${differ ? ` within ${box}` : ""}`;
+        assert(max <= MENU_FRAME_MAX_DIFFERENCE && differ <= MENU_FRAME_MAX_SHARE * width * height, `WebGL 2 against WebGPU, ${what}`);
+        menuNote.push(what);
+      });
+      await volya.call("quit_game");
+      return `${heapNote}${drawn.backend}, textures ${drawn.textures}; ${menuNote.map((n) => `${n}; `).join("")}first caption to first level frame in ${s.load_ms.toFixed(0)} ms, ${again.load_ms.toFixed(0)} ms again; ${colours.size} colours; wasm heap ${mib(stats.wasm_heap_bytes)}, ${mib(after.wasm_heap_bytes)} after the second; by caption (MiB, heap/live): ${first}; the second: ${second}; ${JSON.stringify(stats)}`;
     } finally {
       globalThis.Worker = Original;
       localStorage.removeItem("volya-engine.graphics");
