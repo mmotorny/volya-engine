@@ -140,20 +140,12 @@ fn shared_index_ranges_with_different_bases() {
     }
     assert_eq!(steps, 2, "a piece a step");
     let other = r.begin_geometry(&layout, &objects, &[red]).unwrap();
-    assert!(
-        r.finish_world(other, &objects, &surfaces, &[red], None)
-            .is_err()
-    );
-    assert!(
-        r.finish_world(upload, &objects, &surfaces, &[red], None)
-            .is_err()
-    );
+    assert!(r.finish_world(other, &surfaces, &[red], None).is_err());
+    assert!(r.finish_world(upload, &surfaces, &[red], None).is_err());
     let mut upload = r.begin_geometry(&layout, &objects, &draws).unwrap();
     assert!(!upload.step(&r, &mut g.source(), &objects, 1).unwrap());
     assert!(upload.step(&r, &mut g.source(), &objects, 1).unwrap());
-    let world = r
-        .finish_world(upload, &objects, &surfaces, &draws, None)
-        .unwrap();
+    let world = r.finish_world(upload, &surfaces, &draws, None).unwrap();
     assert_near(
         centre(&mut r, frame(world, None)),
         [0, 0xFE, 0],

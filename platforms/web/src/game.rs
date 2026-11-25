@@ -483,6 +483,11 @@ pub fn read(path: &str) -> Result<Vec<u8>, JsValue> {
     with_tree(|tree| volya_engine::core::vfs::read(tree, path))
 }
 
+/// [`read`] into `buffer` ([`volya_engine::core::vfs::read_into`]).
+pub fn read_into(path: &str, buffer: &mut Vec<u8>) -> Result<(), JsValue> {
+    with_tree(|tree| volya_engine::core::vfs::read_into(tree, path, buffer))
+}
+
 #[derive(Serialize)]
 pub struct Entry {
     name: String,

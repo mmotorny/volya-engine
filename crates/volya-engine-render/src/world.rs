@@ -1253,6 +1253,42 @@ fn fill_rebased(
     Ok(())
 }
 
+/// Fills `out`, the bytes from `at` of the objects' rebased index buffer
+/// laid out by `segments` (32-bit indices when `wide`, else 16-bit), from
+/// the objects' `indices`; past the last segment with zeros (a buffer is at
+/// least 4 bytes).
+fn fill_object_rebased(
+    indices: &[u16],
+    segments: &[Segment],
+    wide: bool,
+    at: u64,
+    out: &mut [u8],
+) -> io::Result<()> {
+    let size = if wide { 4 } else { 2 };
+    let first = (at / size as u64) as u32;
+    let mut k = segments.partition_point(|s| s.at + s.count <= first);
+    for (j, slot) in out.chunks_exact_mut(size).enumerate() {
+        let i = first + j as u32;
+        while segments.get(k).is_some_and(|s| s.at + s.count <= i) {
+            k += 1;
+        }
+        let Some(s) = segments.get(k) else {
+            slot.fill(0);
+            continue;
+        };
+        let stored = indices
+            .get((s.first + i - s.at) as usize)
+            .ok_or_else(|| io::Error::other("the objects' indices changed"))?;
+        let index = u32::from(*stored) + s.base;
+        if wide {
+            slot.copy_from_slice(&index.to_le_bytes());
+        } else {
+            slot.copy_from_slice(&(index as u16).to_le_bytes());
+        }
+    }
+    Ok(())
+}
+
 /// Where a buffer of a level's geometry takes its bytes from.
 enum Source {
     /// Stored vertex buffer `i` of the level's geometry.
@@ -1266,8 +1302,9 @@ enum Source {
     ObjectVertices,
     /// The objects' indices, as held.
     ObjectIndices,
-    /// Bytes made when the upload began (the objects' rebased indices).
-    Held(Vec<u8>),
+    /// The objects' indices rebased by `segments`
+    /// ([`Renderer::compat`]), 32-bit when `wide`.
+    ObjectRebased { segments: Vec<Segment>, wide: bool },
 }
 
 /// A buffer of a [`GeometryUpload`] and where its bytes come from.
@@ -1305,6 +1342,8 @@ pub struct GeometryUpload {
     object_ib: u32,
     /// The draws' index ranges it was begun for.
     ranges: Vec<(bool, u32, u32, u32, u32)>,
+    /// Whether it was begun with objects' vertices.
+    objects: bool,
 }
 
 impl GeometryUpload {
@@ -1357,9 +1396,8 @@ impl GeometryUpload {
                     }
                     Ok(())
                 }
-                Source::Held(bytes) => {
-                    out.copy_from_slice(&bytes[range]);
-                    Ok(())
+                Source::ObjectRebased { segments, wide } => {
+                    fill_object_rebased(&objects.indices, segments, *wide, at, out)
                 }
             }
             .map_err(|e| format!("{}: {e}", job.label))?;
@@ -1373,6 +1411,7 @@ impl GeometryUpload {
             self.at += n as u64;
             spent += n as u64;
         }
+        self.piece = Vec::new();
         Ok(true)
     }
 
@@ -1428,7 +1467,7 @@ impl Renderer {
     ) -> Result<World, String> {
         let mut upload = self.begin_geometry(geom.layout(), objects, draws)?;
         upload.step(self, geom, objects, u64::MAX)?;
-        self.finish_world(upload, objects, surfaces, draws, sky)
+        self.finish_world(upload, surfaces, draws, sky)
     }
 
     /// Begins uploading a level's static geometry laid out as `layout` and
@@ -1552,31 +1591,31 @@ impl Renderer {
             object_buffer_bytes += bytes;
             let label = "object indices";
             if compat {
-                // Rebased in memory (the objects' indices are held there),
-                // 32-bit once they pass 16 bits.
-                let mut out: Vec<u32> = Vec::new();
+                // Rebased as they are uploaded, as the level's are (a
+                // rebased copy made at once took 2.6 MiB, its 32-bit
+                // working copy 4 MiB, in the wasm heap; #357), 32-bit once
+                // they pass 16 bits.
+                let mut object_segments: Vec<Segment> = Vec::new();
+                let mut widest = 0u32;
                 for d in draws.iter().filter(|d| d.object.is_some()) {
                     rebased.add(d, || {
-                        let at = out.len() as u32;
+                        let at = object_segments.last().map_or(0, |s| s.at + s.count);
                         let range =
                             d.first_index as usize..(d.first_index + d.index_count) as usize;
-                        out.extend(
-                            objects.indices[range]
-                                .iter()
-                                .map(|&i| u32::from(i) + d.first_vertex),
-                        );
+                        let top = objects.indices[range].iter().copied().max().unwrap_or(0);
+                        widest = widest.max(u32::from(top) + d.first_vertex);
+                        object_segments.push(Segment {
+                            at,
+                            first: d.first_index,
+                            count: d.index_count,
+                            base: d.first_vertex,
+                        });
                         at
                     });
                 }
-                let wide = out.iter().any(|&i| i > u32::from(u16::MAX));
-                let mut held: Vec<u8> = if wide {
-                    out.iter().flat_map(|i| i.to_le_bytes()).collect()
-                } else {
-                    out.iter().flat_map(|&i| (i as u16).to_le_bytes()).collect()
-                };
-                drop(out);
-                held.resize(held.len().max(4), 0);
-                let bytes = held.len() as u64;
+                let wide = widest > u32::from(u16::MAX);
+                let count = object_segments.last().map_or(0, |s| s.at + s.count);
+                let bytes = (u64::from(count) * if wide { 4 } else { 2 }).max(4);
                 object_buffer_bytes += bytes.next_multiple_of(4);
                 index_formats.push(if wide {
                     wgpu::IndexFormat::Uint32
@@ -1588,7 +1627,10 @@ impl Renderer {
                 jobs.push(Job {
                     buffer,
                     label,
-                    source: Source::Held(held),
+                    source: Source::ObjectRebased {
+                        segments: object_segments,
+                        wide,
+                    },
                     bytes,
                 });
             } else {
@@ -1622,16 +1664,16 @@ impl Renderer {
             object_vb,
             object_ib,
             ranges: draws.iter().map(Rebased::key).collect(),
+            objects: !objects.vertices.is_empty(),
         })
     }
 
     /// The world of a finished [`GeometryUpload`] (begun with the same
-    /// `objects` and `draws`), with `surfaces` and `sky` as
+    /// `draws`), with `surfaces` and `sky` as
     /// [`Renderer::create_world_from`] takes them.
     pub fn finish_world(
         &mut self,
         upload: GeometryUpload,
-        objects: &ObjectGeometry,
         surfaces: &[Surface<Texture>],
         draws: &[WorldDraw],
         sky: Option<&SkyTextures<Texture>>,
@@ -1658,6 +1700,7 @@ impl Renderer {
             mut object_buffer_bytes,
             object_vb,
             object_ib,
+            objects,
             ..
         } = upload;
         let device = self.device.clone();
@@ -1675,7 +1718,7 @@ impl Renderer {
         let usable = |d: &WorldDraw| {
             surfaces.get(d.surface as usize).is_some_and(|s| {
                 if d.object.is_some() {
-                    s.program.layout() == VertexLayout::Model && !objects.vertices.is_empty()
+                    s.program.layout() == VertexLayout::Model && objects
                 } else {
                     vertex_layouts[d.vertex_buffer as usize].map(VertexLayout::Level)
                         == Some(s.program.layout())
@@ -2378,6 +2421,55 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The objects' rebased indices filled piece by piece match the whole
+    /// buffer made at once, 16- and 32-bit, a piece starting mid-segment,
+    /// zeros past the last.
+    #[test]
+    fn object_indices_rebase_piece_by_piece() {
+        let indices: Vec<u16> = (0..40).map(|i| (i * 7 % 23) as u16).collect();
+        let segments = [
+            Segment {
+                at: 0,
+                first: 3,
+                count: 9,
+                base: 0,
+            },
+            Segment {
+                at: 9,
+                first: 0,
+                count: 14,
+                base: 70_000,
+            },
+            Segment {
+                at: 23,
+                first: 20,
+                count: 11,
+                base: 5,
+            },
+        ];
+        for wide in [false, true] {
+            let size = if wide { 4 } else { 2 };
+            let mut whole = Vec::new();
+            for s in &segments {
+                for &i in &indices[s.first as usize..(s.first + s.count) as usize] {
+                    let v = u32::from(i) + s.base;
+                    if wide {
+                        whole.extend_from_slice(&v.to_le_bytes());
+                    } else {
+                        whole.extend_from_slice(&(v as u16).to_le_bytes());
+                    }
+                }
+            }
+            whole.resize(whole.len() + 2 * size, 0);
+            let mut pieces = vec![0; whole.len()];
+            for (k, piece) in pieces.chunks_mut(3 * size).enumerate() {
+                let at = (k * 3 * size) as u64;
+                fill_object_rebased(&indices, &segments, wide, at, piece).unwrap();
+            }
+            assert_eq!(pieces, whole, "wide {wide}");
+        }
+    }
 
     #[test]
     fn multiply_is_row_vector_composition() {
