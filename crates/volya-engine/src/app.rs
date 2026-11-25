@@ -992,9 +992,9 @@ impl App {
     }
 
     /// Whether the frame shows the game's mouse cursor: the title menu and
-    /// its screens, before a game and during one (their scenes draw it).
-    /// Platforms turn touch into a touchpad for the cursor then (a Volya
-    /// Engine addition, decided by the user, #108).
+    /// its screens, before a game and during one, and the inventory screen
+    /// (their scenes draw it). Platforms turn touch into a touchpad for the
+    /// cursor then (a Volya Engine addition, decided by the user, #108).
     pub fn cursor_shown(&self) -> bool {
         matches!(
             &self.phase,
@@ -1004,7 +1004,7 @@ impl App {
                     ..
                 })
                 | Some(Phase::Level { menu: Some(_), .. })
-        )
+        ) || self.inventory_open()
     }
 
     /// The save screen's name field (UI units) and whether it has focus,
@@ -1025,29 +1025,23 @@ impl App {
     }
 
     /// Test interface: puts an item of section `section` into the player's
-    /// inventory, taken by the rules of player-state.md 3.3, with an id one
-    /// above every id the inventory holds (the game takes items from the
-    /// world, which does not exist yet; this op is not a game action).
-    /// Returns its id.
+    /// inventory, taken by the rules of player-state.md 3.3, with an id
+    /// from the level (the simulation's pool), held by the character only:
+    /// the game takes items from the world, which does not exist yet; this
+    /// op is not a game action. Returns its id.
     pub fn give_item(&mut self, section: &str) -> io::Result<u16> {
         use crate::core::character::inventory::{InventoryItem, ItemConfig};
         let Some(Phase::Level { level, .. }) = &mut self.phase else {
             return Err(io::Error::other("no level"));
         };
+        let config = ItemConfig::read(&self.data.system, section)?;
+        if level.character().is_none() {
+            return Err(io::Error::other("no player character"));
+        }
+        let id = level.take_item_id()?;
         let character = level
             .character_mut()
             .ok_or_else(|| io::Error::other("no player character"))?;
-        let config = ItemConfig::read(&self.data.system, section)?;
-        let id = character
-            .inventory
-            .items
-            .iter()
-            .map(|i| i.id)
-            .max()
-            .unwrap_or(0)
-            .checked_add(1)
-            .filter(|&id| id != crate::core::character::inventory::NO_ID)
-            .ok_or_else(|| io::Error::other("no id left"))?;
         let item = InventoryItem::create(
             config,
             id,
@@ -1554,6 +1548,8 @@ mod tests {
         // inventory-screen.md 1.3: the cursor shows, the page's touch
         // controls and pointer lock go (our design), the game runs on.
         assert!(app.level_controls().is_none());
+        // Touch is a touchpad for its cursor (#108).
+        assert!(app.cursor_shown());
         assert!(audio.started.last().unwrap().1.ends_with("inv_open.ogg"));
         let t = game_time(&app);
         // A key the screen does not use reaches the character: W walks.
@@ -1588,7 +1584,7 @@ mod tests {
         press(&mut input, Key::Escape);
         app.update(&tree, 148.0, &input, &mut audio);
         input.end_frame();
-        assert!(!app.inventory_open() && !menu_open(&app));
+        assert!(!app.inventory_open() && !menu_open(&app) && !app.cursor_shown());
         assert!(app.level_controls().is_some());
         assert!(audio.started.last().unwrap().1.ends_with("inv_close.ogg"));
         // Escape again opens the menu as usual.
