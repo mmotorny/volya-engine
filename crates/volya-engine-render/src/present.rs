@@ -228,6 +228,12 @@ pub(crate) struct Targets {
     pub(crate) depth: wgpu::Texture,
 }
 
+/// The distortion target's format: `postprocess_d` reads only its red
+/// and green, and the distortion pass blends each channel by the source's
+/// alpha alone, so two channels of the same 8 bits give the same offsets
+/// with half the target's memory traffic (#433).
+pub(crate) const DISTORT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg8Unorm;
+
 /// Bytes of the quad's constants.
 const CONSTANTS: u64 = 12 * 16;
 
@@ -449,7 +455,7 @@ impl PostProcess {
             supersample,
             size,
             colour: make("$user$rendertarget", self.format, colour),
-            distort: make("$user$distort", self.format, colour),
+            distort: make("$user$distort", DISTORT_FORMAT, colour),
             depth: make(
                 "$user$rendertarget depth",
                 DEPTH_FORMAT,
