@@ -2,7 +2,7 @@
 
 - Agent-first project: act autonomously, including commits and pushes. Block on a human only for expensive or hard-to-undo operations.
 - When the user asks a question or for an opinion, answer and propose; implement after their go.
-- Track all work in GitHub issues; reference the issue in commits. Each area issue carries a checklist of its proposed specs (spec approved, implemented); each piece of work gets its own issue when it starts. Outstanding work found anywhere becomes an issue, never just a note.
+- Track all work in GitHub issues; reference the issue in commits. Issues are cheap and focused (one spec, one implementation, one fix), never umbrellas or checklists; order them with GitHub's "blocked by" dependencies. Outstanding work found anywhere becomes an issue, never just a note.
 - Don't use harness memory systems; record durable knowledge here.
 - Every instruction here must earn its tokens: cut prose that doesn't change agent behavior.
 - No status disclaimers in docs ("currently", "early days", "coming next"); they go stale. Track status in issues.
