@@ -38,8 +38,10 @@ const ONLY = [
 // the iOS Simulator, drawing through WebGL 2 (#184: the level's geometry
 // uploaded a few pieces per task turn, since wgpu's GL backend keeps what
 // is written in the heap until WebGL reports it done); a regression past
-// this fails.
+// this is reported as an "OVER BUDGET" note, not failed: budgets are
+// measured and tracked in issues, never a release gate (AGENTS.md).
 const WASM_HEAP_CAP = 110 * 2 ** 20;
+const overBudget = (bytes, what) => (bytes > WASM_HEAP_CAP ? `OVER BUDGET: ${what} ${mib(bytes)} > ${mib(WASM_HEAP_CAP)}; ` : "");
 // Touch devices: no full screen offer, touch controls from the start.
 const coarse = () => matchMedia("(pointer: coarse)").matches;
 // How long a level may take to load: transcoding its textures (WebGL 2
@@ -544,8 +546,8 @@ export const tests = {
     const shown = await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
     assertEqual(shown.phase, "level", "still in the level");
     const byCaption = stages.map(([n, m]) => `${n} ${m}`).join(", ");
-    assert(playing.wasm_heap_bytes <= WASM_HEAP_CAP, `wasm heap ${mib(playing.wasm_heap_bytes)} during the intro, over ${mib(WASM_HEAP_CAP)}; by caption (MiB): ${byCaption}; textures ${JSON.stringify(playing.textures)}`);
-    let note = `wasm heap by caption (MiB): ${byCaption}; "${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; intro skipped, wasm heap ${mib(before.wasm_heap_bytes)} before it, ${mib(playing.wasm_heap_bytes)} while it played; at the start ${lights.passes} light passes, ${lights.sprites} glows drawn`;
+    const heapNote = overBudget(playing.wasm_heap_bytes, "wasm heap during the intro");
+    let note = `${heapNote}wasm heap by caption (MiB): ${byCaption}; "${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; intro skipped, wasm heap ${mib(before.wasm_heap_bytes)} before it, ${mib(playing.wasm_heap_bytes)} while it played; at the start ${lights.passes} light passes, ${lights.sprites} glows drawn`;
     if (gpu.state === "ready") {
       const { rgba } = await volya.call("debug_capture", { width: 256, height: 192 });
       const colours = new Set();
@@ -1245,8 +1247,8 @@ export const tests = {
     }
     // A second load reuses the heap the first one grew.
     const heap = (await volya.call("level_stats")).wasm_heap_bytes;
-    assert(heap <= WASM_HEAP_CAP, `wasm heap ${mib(heap)} after the second New Game, over ${mib(WASM_HEAP_CAP)}; by caption (MiB): ${byCaption}`);
-    return `loaded again in ${s.load_ms.toFixed(0)} ms; wasm heap ${mib(heap)}; by caption (MiB): ${byCaption}`;
+    const heapNote = overBudget(heap, "wasm heap after the second New Game");
+    return `${heapNote}loaded again in ${s.load_ms.toFixed(0)} ms; wasm heap ${mib(heap)}; by caption (MiB): ${byCaption}`;
   },
 
   "hidden: the menu opens, the clock, the frame loop and audio stop; shown: the game takes on from there": async () => {

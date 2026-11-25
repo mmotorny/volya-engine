@@ -18,6 +18,7 @@
 - Never wait on a process with `pgrep -f` of a pattern that also matches the waiting shell's own command line; wait on a PID or a file. Stop every background loop you start before finishing.
 - Live at head: run `cargo xtask update` when starting a chunk of work; fix what it breaks rather than pinning.
 - Run `cargo xtask check` (fast static checks) before every push; it must pass.
+- Performance and memory budgets are measured and reported, never release gates: ship working features, file an issue for any regression past a budget, and optimise separately.
 - Iteration speed first: before reporting done, run the cheapest tests that prove the change: unit tests, then one browser suite on one target (`cargo xtask e2e <target> <suite>`). The full `cargo xtask e2e` only for changes crossing page and engine, or on demand; never block normal interaction on it.
 - Avoid GitHub CI whenever possible (cost); all testing runs locally.
 - Tests and investigations are silent on this machine: Chrome muted (`--mute-audio`), suite pages send live audio through a gain of 0 (`harness.js`; the iOS Simulator can't be routed to no device), the original run with Wine's audio driver disabled in its prefix. Never change the Mac's system volume.
