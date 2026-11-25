@@ -11,6 +11,7 @@ import { createTextEntry } from "./text-entry.js";
 // Early: Chrome offers installing the app once, soon after load.
 import "./install.js";
 import { startUpdates, versionText } from "./update.js";
+import * as diagnostics from "./diagnostics.js";
 
 // Installable app: offline start and updates (sw.js, update.js). Registered
 // relative to this module so the scope is the app's base path.
@@ -21,6 +22,7 @@ const updates = navigator.serviceWorker ? startUpdates(registration) : null;
 
 const worker = new Worker(new URL("./engine-worker.js", import.meta.url), { type: "module" });
 const pending = new Map();
+diagnostics.connect((message) => worker.postMessage(message));
 let nextId = 0;
 // Set once the canvas exists, below; capture starts off, and so do the
 // level's controls.
@@ -77,7 +79,7 @@ async function connectAudio(context) {
 // The page's live audio context, once made (below).
 let audio = null;
 
-globalThis.volya = { call, status: () => call("status"), connectAudio, audioState: () => audio?.state };
+globalThis.volya = { call, status: () => call("status"), connectAudio, audioState: () => audio?.state, diagnostics };
 
 // Our design (#93): every browser throttles or suspends hidden pages, so the
 // engine stops while the page is hidden (another tab, a minimised window, an
@@ -133,7 +135,8 @@ setLevel = (controls) => {
   offer.update(controls);
 };
 const canvas = view.transferControlToOffscreen();
-worker.postMessage({ type: "start", canvas, size: size() }, [canvas]);
+// The diagnostic log, when the player keeps one (#346).
+worker.postMessage({ type: "start", canvas, size: size(), diagnostics: diagnostics.enabled() ? diagnostics.session() : null }, [canvas]);
 if (document.visibilityState === "hidden") visibilityChanged();
 const resized = () => worker.postMessage({ type: "resize", ...size() });
 new ResizeObserver(resized).observe(view);
@@ -160,6 +163,8 @@ try {
   status.dataset.state = "ready";
   // Browsers start audio suspended until a user gesture (iOS especially).
   audio = new AudioContext();
+  diagnostics.event("AudioContext state", { state: audio.state, sample_rate: audio.sampleRate });
+  audio.addEventListener("statechange", () => diagnostics.event("AudioContext state", { state: audio.state }));
   // Made while hidden: suspended until shown.
   if (document.visibilityState === "hidden") audio.suspend().catch(() => {});
   await connectAudio(audio);

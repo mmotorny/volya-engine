@@ -2,8 +2,12 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // The engine thread (docs/architecture.md). Messages from the page:
-//   { type: "start", canvas, size }  → { type: "started", build } | { type: "error", message }
-//   (`build`: the wasm build loaded, wasm-build.js)
+//   { type: "start", canvas, size, diagnostics }  → { type: "started", build } | { type: "error", message }
+//   (`build`: the wasm build loaded, wasm-build.js; `diagnostics`: the
+//   session as diagnostics.js tells it when the player keeps a diagnostic
+//   log, else null)
+//   { type: "diag", kind, name, … }: the page's events for the diagnostic
+//   log (diagnostics.js), dropped while it is off.
 //   { type: "resize", width, height, dpr }: the canvas's CSS size and the
 //   page's devicePixelRatio (`size` in "start" has the same fields).
 //   { type: "call", id, op, args }  → { type: "result", id, result } | { type: "result", id, error }
@@ -107,12 +111,19 @@ function loop(time) {
     // A broken engine stops drawing; calls report their own errors.
     console.error(`frame: ${message(error)}`);
     broken = true;
+    try {
+      e().diagnostics_event("engine stopped", 1, JSON.stringify({ error: message(error) }));
+    } catch {
+      // The engine can't record any more.
+    }
     return;
   }
   schedule();
 }
 
 let started;
+/** Whether the diagnostic log is on (the `diagnostics_set` op's result). */
+let logging = false;
 /** The port of the AudioWorklet pulling mixed blocks, once connected. */
 let audioPort = null;
 
@@ -121,6 +132,10 @@ onmessage = async ({ data }) => {
     let build;
     started = (async () => {
       ({ build, module: engine } = await loadEngine());
+      // The player's setting, before anything else runs (#346).
+      if (data.diagnostics) {
+        logging = JSON.parse(await engine.call("diagnostics_set", JSON.stringify({ on: true, session: data.diagnostics }))).on;
+      }
       await engine.start(data.canvas);
       engine.resize(data.size.width, data.size.height, data.size.dpr);
     })();
@@ -139,7 +154,12 @@ onmessage = async ({ data }) => {
     // One output pulls from the mixer: a replaced one gets nothing more.
     audioPort?.close();
     audioPort = data.port;
+    const rate = data.sampleRate;
     data.port.onmessage = ({ data: request }) => {
+      if (logging) {
+        const [min, sum, max, n] = request.fill;
+        e().diagnostics_audio(request.underrun, request.wait, n ? min : 0, sum, max, n, request.overrun, rate);
+      }
       const block = e().audio_mix(request.need, request.underrun, request.queued);
       data.port.postMessage(block, [block.buffer]);
     };
@@ -153,6 +173,16 @@ onmessage = async ({ data }) => {
       console.warn(`visibility: ${message(error)}`);
     }
     schedule();
+  } else if (data.type === "diag") {
+    // The page's events for the diagnostic log (diagnostics.js).
+    if (!logging) return;
+    try {
+      if (data.kind === "event") e().diagnostics_event(data.name, 2, JSON.stringify(data.args ?? {}));
+      else if (data.kind === "metrics") e().diagnostics_metrics(data.name, data.n, data.min, data.sum, data.max);
+      else if (data.kind === "count") e().diagnostics_count(data.name, data.n);
+    } catch (error) {
+      console.warn(`diagnostics: ${message(error)}`);
+    }
   } else if (data.type === "input") {
     try {
       e().input(data.event);
@@ -163,6 +193,7 @@ onmessage = async ({ data }) => {
     let reply;
     try {
       reply = { type: "result", id: data.id, result: JSON.parse(await e().call(data.op, JSON.stringify(data.args ?? {}))) };
+      if (data.op === "diagnostics_set") logging = reply.result.on;
     } catch (error) {
       reply = { type: "result", id: data.id, error: message(error) };
     }
