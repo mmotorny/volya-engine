@@ -505,9 +505,11 @@ export const tests = {
     assertEqual([s.level.objects.online, s.level.objects.with_model], [671, 352], "objects");
     // Its lamps on, with their seven records; chunk 6's 40 records and the
     // sun's two besides; 22 glows of its own and the lamps' 5
-    // (hanging-lamps.md 9.3, dynamic-lights.md 3.3, glows.md 7).
+    // (hanging-lamps.md 9.3, dynamic-lights.md 3.3, glows.md 7); the
+    // player's torch's two records and glow, off (torch.md 12).
     const lights = s.level.lights;
-    assertEqual([lights.lamps, lights.lamps_on, lights.records, lights.glows], [5, 5, 49, 27], "lights");
+    assertEqual([lights.lamps, lights.lamps_on, lights.records, lights.glows], [5, 5, 51, 28], "lights");
+    assert(s.level.torch?.attached && !s.level.torch.on, "the torch attached and off");
     assertEqual([s.intro?.items, s.intro?.kind], [1, "video"], "the intro plays");
     // The intro's 120 MB video streams from the file (#53): playing it
     // keeps the wasm heap near its size before.
@@ -721,6 +723,16 @@ export const tests = {
     assertEqual(touchControls.dataset.live, "true", "the level's controls are live");
     // A touch device shows them from the start.
     assertEqual(touchControls.hidden, !coarse(), "touch controls hidden until a touch, on desktop");
+    // The torch (docs/behavior/torch.md 12): off at the start; L switches
+    // it on, its main light and glow with it, and off again.
+    assert(s.level.torch && !s.level.torch.on && s.level.torch.attached, "the torch attached and off");
+    const active = s.level.lights.active;
+    key("KeyL");
+    s = await until((s) => s.level.torch.on, "L to switch the torch on");
+    assert(s.level.torch.main_active && s.level.torch.glow_on && !s.level.torch.second_active, "its main light and glow");
+    assertEqual(s.level.lights.active, active + 1, "one more active light record");
+    key("KeyL");
+    await until((s) => !s.level.torch.on && s.level.lights.active === active, "L to switch it off");
     return `ran ${moved.toFixed(2)} m, jumped ${height.toFixed(2)} m`;
   },
   "touch: the controls are drawn from the game's textures": async () => {
@@ -1185,6 +1197,13 @@ export const tests = {
       const p = stopped.level.player;
       const moved = Math.hypot(p.position[0] - start.position[0], p.position[2] - start.position[2]);
       assert(moved > 0.1, `the gamepad moved ${moved.toFixed(2)} m`);
+      // The d-pad up switches the torch on and off (our design).
+      for (const on of [true, false]) {
+        pad.buttons[12] = { pressed: true, value: 1 };
+        await until((s) => s.level.torch.on === on, `the d-pad up to switch the torch ${on ? "on" : "off"}`);
+        pad.buttons[12] = { pressed: false, value: 0 };
+        await sleep(100);
+      }
     } finally {
       navigator.getGamepads = getGamepads;
     }

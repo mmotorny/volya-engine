@@ -23,6 +23,8 @@
 //! | sprint | left stick pressed, as `sprint_toggle` | the stick pushed forward past its rim, kept by the sprint lock ([`SprintLock`]) |
 //! | open the menu | east (B / circle), as the key bound to `quit` | Menu |
 //! | open the inventory screen | north (Y / triangle) | Inventory, at the top right |
+//! | `torch` (docs/behavior/torch.md 8) | d-pad up | none yet (TODO(#363)) |
+//! | `night_vision` (15.3) | d-pad down | none yet (TODO(#363)) |
 //!
 //! While a screen that takes the mouse is open over the running level (the
 //! inventory screen, docs/behavior/inventory-screen.md section 1.3), only
@@ -57,8 +59,9 @@ use crate::core::input::{
 use crate::core::movement::{PlayerState, Request, Settings};
 use volya_engine_formats::cp1251;
 
-/// The actions of section 2.2 this engine acts on, and the inventory
-/// screen's (`inventory`, `drop`; docs/behavior/inventory-screen.md 6.1).
+/// The actions of section 2.2 this engine acts on, the inventory screen's
+/// (`inventory`, `drop`; docs/behavior/inventory-screen.md 6.1) and the
+/// torch's (`torch`, `night_vision`; docs/behavior/torch.md 8, 15.3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MoveAction {
     Forward,
@@ -77,10 +80,12 @@ pub enum MoveAction {
     WpnFire,
     Inventory,
     Drop,
+    Torch,
+    NightVision,
 }
 
 impl MoveAction {
-    pub const ALL: [MoveAction; 16] = [
+    pub const ALL: [MoveAction; 18] = [
         MoveAction::Forward,
         MoveAction::Back,
         MoveAction::LStrafe,
@@ -97,6 +102,8 @@ impl MoveAction {
         MoveAction::WpnFire,
         MoveAction::Inventory,
         MoveAction::Drop,
+        MoveAction::Torch,
+        MoveAction::NightVision,
     ];
 
     /// The action's name in `bind` lines.
@@ -118,6 +125,8 @@ impl MoveAction {
             MoveAction::WpnFire => "wpn_fire",
             MoveAction::Inventory => "inventory",
             MoveAction::Drop => "drop",
+            MoveAction::Torch => "torch",
+            MoveAction::NightVision => "night_vision",
         }
     }
 }
@@ -467,6 +476,30 @@ impl Controls {
             )
         });
         key || touch || input.pad_changes().contains(&(GamepadButton::North, true))
+    }
+
+    /// Whether the player pressed `torch` this frame (torch.md 8): a key
+    /// bound to it, or a gamepad's d-pad up (our design); while a screen
+    /// takes the mouse, only keys it does not use.
+    pub fn torch_pressed(&self, input: &Input) -> bool {
+        self.command_pressed(input, MoveAction::Torch, GamepadButton::DpadUp)
+    }
+
+    /// Whether the player pressed `night_vision` this frame (torch.md
+    /// 15.3): a key bound to it, or a gamepad's d-pad down (our design).
+    pub fn night_vision_pressed(&self, input: &Input) -> bool {
+        self.command_pressed(input, MoveAction::NightVision, GamepadButton::DpadDown)
+    }
+
+    // TODO(#363): no touch control for the torch's commands yet.
+    fn command_pressed(&self, input: &Input, action: MoveAction, pad: GamepadButton) -> bool {
+        let only = self.keys_only.as_ref();
+        let key = input.device_changes().iter().any(|&(c, pressed)| {
+            pressed
+                && only.is_none_or(|kept| matches!(c, Control::Key(_)) && !kept.contains(&c))
+                && self.bindings.controls(action).any(|b| b == c)
+        });
+        key || (only.is_none() && input.pad_changes().contains(&(pad, true)))
     }
 }
 
@@ -1356,5 +1389,58 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
             pressed: true,
         });
         assert!(c.inventory_pressed(&i));
+    }
+
+    #[test]
+    fn the_torch_commands_by_key_and_gamepad() {
+        let mut c = controls();
+        c.bindings = Bindings::read(&[DEFAULTS, b"bind torch kL\nbind night_vision kN\n"]);
+        let mut i = Input::new();
+        key(&mut i, Key::L, true);
+        assert!(c.torch_pressed(&i) && !c.night_vision_pressed(&i));
+        i.end_frame();
+        assert!(!c.torch_pressed(&i), "held, not pressed");
+        key(&mut i, Key::N, true);
+        assert!(c.night_vision_pressed(&i) && !c.torch_pressed(&i));
+        i.end_frame();
+        for (button, torch) in [
+            (GamepadButton::DpadUp, true),
+            (GamepadButton::DpadDown, false),
+        ] {
+            i.handle(Event::GamepadButton {
+                button,
+                pressed: true,
+            });
+            assert_eq!(
+                (c.torch_pressed(&i), c.night_vision_pressed(&i)),
+                (torch, !torch)
+            );
+            i.end_frame();
+        }
+        // Under a screen that takes the mouse: its unused keys only.
+        c.keys_only = Some(vec![Control::Key(Key::N)]);
+        key(&mut i, Key::L, false);
+        key(&mut i, Key::L, true);
+        key(&mut i, Key::N, false);
+        key(&mut i, Key::N, true);
+        i.handle(Event::GamepadButton {
+            button: GamepadButton::DpadUp,
+            pressed: false,
+        });
+        i.handle(Event::GamepadButton {
+            button: GamepadButton::DpadUp,
+            pressed: true,
+        });
+        assert!(c.torch_pressed(&i) && !c.night_vision_pressed(&i));
+        i.end_frame();
+        i.handle(Event::GamepadButton {
+            button: GamepadButton::DpadUp,
+            pressed: false,
+        });
+        i.handle(Event::GamepadButton {
+            button: GamepadButton::DpadUp,
+            pressed: true,
+        });
+        assert!(!c.torch_pressed(&i));
     }
 }

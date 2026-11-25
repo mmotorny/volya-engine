@@ -169,8 +169,12 @@ fn first_level_lights_from_game_data() {
         // The 40 chunk-6 point records, excluded, and the sun's two.
         assert_eq!(records.iter().filter(|(_, r)| r.excluded).count(), 42);
 
-        // Glows: chunk 7's 22 and the five lamps' (glows.md 7).
-        let glows: Vec<_> = ll.glows.iter().collect();
+        // Glows: chunk 7's 22, the five lamps' (glows.md 7) and the
+        // player's torch's, off (torch.md 12).
+        let torch = screen.torches().records().unwrap().2;
+        let torch = ll.glows.get(torch).unwrap().clone();
+        assert!(!torch.on && torch.radius == 0.3);
+        let glows: Vec<_> = ll.glows.iter().filter(|g| **g != torch).collect();
         assert_eq!(glows.len(), 27);
         let mut lamp_radii: Vec<f32> = glows
             .iter()
@@ -184,7 +188,8 @@ fn first_level_lights_from_game_data() {
             .filter(|s| s.texture.contains("glow_orange"))
             .collect();
         assert_eq!(orange.len(), 1, "{:?}", world.glow_shaders);
-        assert_eq!(world.glow_shaders.len(), 4);
+        // With the torch's `glow\glow_torch_r2`.
+        assert_eq!(world.glow_shaders.len(), 5);
 
         // Placed and coloured at each frame (4.2, 4.3), at global clock
         // times of the sample table.

@@ -56,6 +56,7 @@ use crate::render::world::Surface;
 use crate::scene::{Scene, WorldScene};
 use crate::shading::{self, ShaderLibrary};
 use crate::sky::{self, Flares, SkyCamera, SunFade};
+use crate::torch::{PlayerTorchData, PlayerTorches, TorchReport, TorchSound};
 use std::collections::HashMap;
 use volya_engine_formats::env_mod::{self, EnvModifier};
 use volya_engine_formats::game_graph::GameGraph;
@@ -245,6 +246,8 @@ pub struct LevelScreen {
     /// The global clock (sound-weather-ambient.md 3.1), ms, as the app
     /// last gave it.
     global_ms: u64,
+    /// The player's torches (docs/behavior/torch.md).
+    torches: PlayerTorches,
 }
 
 /// What the engine interface reports.
@@ -273,6 +276,9 @@ pub struct LevelState {
     /// The lights, glows and lamps (docs/behavior/dynamic-lights.md, glows.md,
     /// hanging-lamps.md).
     pub lights: crate::level_lights::LightsReport,
+    /// The player's attached torch (torch.md).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub torch: Option<TorchReport>,
 }
 
 /// The level's placed effects as the engine interface reports them.
@@ -1006,6 +1012,8 @@ pub struct NewGameLoad {
     glow_records: Vec<volya_engine_formats::level::Glow>,
     /// The light passes' attenuation textures (dynamic-lights.md 6.4).
     light_textures: Option<[String; 3]>,
+    /// The player's torches' data (torch.md 1, 3).
+    torches: Option<PlayerTorchData>,
 }
 
 /// The game hour of `clock`, 0 … 23 (the scripts' switch rules,
@@ -1250,6 +1258,22 @@ impl NewGameLoad {
                     cycles,
                 )?);
                 sound.pairs = Some(pairs);
+                // The player's torches (torch.md 1.2, 3), placed under this
+                // caption by us with the objects' models; their night-vision
+                // sounds are loaded with their sections (14).
+                let character = earlier(self.character.as_ref(), "player character")?;
+                let torches =
+                    crate::torch::read_player_torches(tree, data, &dir, character, visual)?;
+                sound.torches = (character.inventory.items.iter())
+                    .filter_map(|i| {
+                        let t = torches
+                            .torches
+                            .iter()
+                            .find(|t| t.section == i.config.section)?;
+                        Some((i.id, t.item.night_vision.clone()?))
+                    })
+                    .collect();
+                self.torches = Some(torches);
                 sound.check(tree, &data.aliases)?;
                 self.sound = Some(sound);
                 self.weather = Some(weather);
@@ -1374,6 +1398,14 @@ impl NewGameLoad {
                             .transpose()
                     })
                     .collect::<io::Result<_>>()?;
+                // The torches' glows: `effects\glow` with `glow_texture`
+                // (torch.md 3 step 7, glows.md 2.2).
+                if let Some(torches) = &mut self.torches {
+                    for t in &mut torches.torches {
+                        let texture = weather_texture_name(&t.definition.glow_texture);
+                        t.glow_shader = shader_of(&texture, false)?;
+                    }
+                }
                 // dynamic-lights.md 6.4.
                 self.light_textures = Some([
                     locate("internal\\internal_light_att")?,
@@ -1458,6 +1490,7 @@ impl NewGameLoad {
         let spawned = earlier(self.spawned, "objects")?;
         let simulation = earlier(self.simulation, "simulation")?;
         let footsteps = earlier(self.footsteps, "footsteps")?;
+        let torches = earlier(self.torches, "torches")?;
         if self.dynamic_props.len() != spawned.instances.len() {
             return Err(invalid("loading stages out of order: no light inputs"));
         }
@@ -1498,6 +1531,7 @@ impl NewGameLoad {
         let eye = player.view().eye;
         let (a, b, t) = weather.bracket(clock.time_of_day());
         let environment = Environment::blend(a, b, t, &self.modifiers, eye, VIS_DISTANCE);
+        let name_for_torches = name.clone();
         let mut screen = LevelScreen {
             world: Arc::new(LevelWorld {
                 name,
@@ -1541,7 +1575,9 @@ impl NewGameLoad {
             effects_drawn: true,
             lights,
             global_ms: 0,
+            torches: PlayerTorches::new(torches, &name_for_torches),
         };
+        screen.torches_frame(0.0);
         screen.update_view();
         screen.lights_frame(0.0);
         Ok(screen)
@@ -1684,6 +1720,24 @@ impl LevelScreen {
         }
         self.back |= back;
         self.simulate();
+        // The player's torches (torch.md 4, 6, 8, 15.3) after the
+        // movement, aimed by this frame's camera.
+        self.torches.take_sounds();
+        let alive = self
+            .character
+            .as_ref()
+            .is_some_and(|c| c.conditions.alive());
+        if let Some(c) = &mut self.character {
+            let (lights, glows) = (&mut self.lights.lights, &mut self.lights.glows);
+            self.torches.sync(c, lights, glows);
+            if self.controls.torch_pressed(input) {
+                self.torches.torch_command(alive, lights, glows);
+            }
+            if self.controls.night_vision_pressed(input) {
+                self.torches.night_vision_command(alive, c);
+            }
+        }
+        self.torches_frame(elapsed as f32 / 1000.0);
         // The lamps' frame updates (hanging-lamps.md 4) on the global clock.
         self.lights
             .lamps_frame(self.global_ms as f32 / 1000.0, elapsed as f32 / 1000.0);
@@ -1714,6 +1768,43 @@ impl LevelScreen {
         self.sky_visibility
             .update(&self.collision, eye, elapsed as f32 / 1000.0);
         self.lights_frame(elapsed as f32 / 1000.0);
+    }
+
+    /// The player's torches placed and coloured for a frame of `dt`
+    /// seconds (torch.md 7), the torch bytes kept (9).
+    fn torches_frame(&mut self, dt: f32) {
+        if let Some(c) = &mut self.character {
+            self.torches
+                .sync(c, &mut self.lights.lights, &mut self.lights.glows);
+        }
+        let v = self.player.view();
+        let a = self.player.angles();
+        let aim = crate::core::torch::Aim {
+            yaw: a.yaw,
+            pitch: a.pitch,
+        };
+        let (animations, lights, glows) = self.lights.parts_mut();
+        self.torches.frame(
+            self.player.state().position,
+            aim,
+            v.eye,
+            dt,
+            self.global_ms as f32 / 1000.0,
+            animations,
+            lights,
+            glows,
+        );
+    }
+
+    /// The player's torches.
+    pub fn torches(&self) -> &PlayerTorches {
+        &self.torches
+    }
+
+    /// This frame's night-vision sound commands, taken (the app plays them
+    /// on the level's sounds, torch.md 14).
+    pub fn take_torch_sounds(&mut self) -> Vec<TorchSound> {
+        self.torches.take_sounds()
     }
 
     /// The player's footsteps.
@@ -2075,6 +2166,7 @@ impl LevelScreen {
             character: self.character.as_ref().map(CharacterReport::of),
             objects: self.objects_report(),
             lights: self.lights.report(),
+            torch: self.torches.report(&self.lights.lights, &self.lights.glows),
         }
     }
 
@@ -2246,6 +2338,7 @@ impl LevelScreen {
             view_size: std::cell::Cell::new((1024, 768)),
             effects_drawn: true,
             lights: LevelLights::default(),
+            torches: PlayerTorches::default(),
             global_ms: 0,
         }
     }

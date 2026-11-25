@@ -26,6 +26,7 @@ pub mod simulation;
 pub mod sound;
 pub mod switching;
 pub mod text;
+pub mod torch;
 pub mod ui;
 pub mod vfs;
 pub mod weather;

@@ -482,6 +482,17 @@ impl LevelLights {
         );
     }
 
+    /// The colour animations (`lanims.xr`).
+    pub fn animations(&self) -> &ColourAnimations {
+        &self.animations
+    }
+
+    /// The colour animations, the records and the glows, for a source
+    /// updating its own.
+    pub fn parts_mut(&mut self) -> (&ColourAnimations, &mut Lights, &mut Glows) {
+        (&self.animations, &mut self.lights, &mut self.glows)
+    }
+
     /// The frame's light passes.
     pub fn passes(&self) -> &[LightPass] {
         &self.passes
