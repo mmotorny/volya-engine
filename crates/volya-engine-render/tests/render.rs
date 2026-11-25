@@ -179,6 +179,34 @@ fn a_smaller_frame_fits_the_target_with_its_aspect_kept() {
 }
 
 #[test]
+fn the_gamma_ramp_maps_every_channel_of_the_whole_screen() {
+    // display-gamma.md 2.1: brightness 1.5 lifts 0 to 8192, 128 to 41088
+    // (entries / 65535 shown on an 8-bit target: 32 and 160); 255 stays.
+    // At gamma and contrast 1.0 the table is 257 i + 8192, clamped.
+    let table: [u16; 256] = std::array::from_fn(|i| (257 * i as u32 + 8192).min(65535) as u16);
+    let mut renderer = renderer();
+    let texture = renderer.create_rgba_texture(2, 1, &[128, 0, 255, 255, 0, 64, 192, 255]);
+    let mut list = DrawList {
+        ramp: Some(table),
+        ..Default::default()
+    };
+    list.quads.push(Quad::new(Rect::SCREEN, &texture));
+    let shown = |v: u8| (f32::from(table[usize::from(v)]) / 65535.0 * 255.0).round() as u8;
+    let left = [shown(128), shown(0), shown(255), 255];
+    let right = [shown(0), shown(64), shown(192), 255];
+    assert_eq!(left, [160, 32, 255, 255]);
+    let image = capture(&mut renderer, &list, 8, 4);
+    assert_eq!(pixel(&image, 8, 0, 0), left);
+    assert_eq!(pixel(&image, 8, 7, 3), right);
+    // Scaled to fit, the black bars are shown through the ramp too: the
+    // ramp acts on the entire screen (section 2).
+    let image = pollster::block_on(renderer.capture_scaled(&list, (8, 4), 16, 4, BLACK)).unwrap();
+    assert_eq!(pixel(&image, 16, 0, 0), [32, 32, 32, 255]);
+    assert_eq!(pixel(&image, 16, 4, 0), left);
+    assert_eq!(pixel(&image, 16, 11, 3), right);
+}
+
+#[test]
 fn draws_in_order_with_tint_and_alpha() {
     let mut renderer = renderer();
     let red = renderer.create_rgba_texture(1, 1, &RED);

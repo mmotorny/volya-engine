@@ -258,7 +258,7 @@ fn frame(world: volya_engine_render::World, sky: Option<SkyFrame>) -> WorldFrame
 fn centre(renderer: &mut Renderer, frame: WorldFrame) -> [u8; 4] {
     let list = DrawList {
         world: Some(frame),
-        quads: Vec::new(),
+        ..Default::default()
     };
     let pixels =
         pollster::block_on(renderer.capture(&list, SIZE, SIZE, wgpu::Color::BLACK)).unwrap();
@@ -750,7 +750,7 @@ fn batch(
 fn pixels(renderer: &mut Renderer, frame: WorldFrame, size: u32) -> Vec<u8> {
     let list = DrawList {
         world: Some(frame),
-        quads: Vec::new(),
+        ..Default::default()
     };
     pollster::block_on(renderer.capture(&list, size, size, wgpu::Color::BLACK)).unwrap()
 }

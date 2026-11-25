@@ -16,6 +16,7 @@
 
 mod capture;
 pub mod particles;
+mod ramp;
 pub mod sky;
 mod texture;
 mod video;
@@ -126,6 +127,10 @@ impl Quad {
 pub struct DrawList {
     pub world: Option<WorldFrame>,
     pub quads: Vec<Quad>,
+    /// The display's gamma ramp the picture is shown through
+    /// (docs/behavior/display-gamma.md): entry *i* / 65535 for channel
+    /// value *i*, the same for R, G and B; `None` for the identity.
+    pub ramp: Option<[u16; 256]>,
 }
 
 /// Bytes per vertex: position (2 × f32), texture coordinates (2 × f32),
@@ -171,6 +176,8 @@ pub struct Renderer {
     /// distortion pass (particle-drawing.md 6.2), sized to the latest
     /// target.
     distortion_targets: Option<(wgpu::Texture, wgpu::Texture)>,
+    /// The display's gamma ramp (display-gamma.md).
+    ramp: ramp::RampPass,
 }
 
 impl Renderer {
@@ -288,6 +295,7 @@ impl Renderer {
             // from 99 to 112 MiB).
             particles: Some(particles::ParticlePipelines::new(device, queue, format)),
             distortion_targets: None,
+            ramp: ramp::RampPass::new(device, format),
         };
         // The world's pipelines too (the light passes' among them).
         renderer.make_world_pipelines();
@@ -433,8 +441,74 @@ impl Renderer {
     }
 
     /// Draws `list` into `target` (cleared to `clear` first, or to the
-    /// world's clear colour when it has a world) and submits.
+    /// world's clear colour when it has a world) and submits; through the
+    /// list's gamma ramp, if any.
     pub fn render(&mut self, target: &wgpu::Texture, list: &DrawList, clear: wgpu::Color) {
+        let size = (target.width(), target.height());
+        match &list.ramp {
+            None => self.draw(target, list, clear),
+            Some(table) => {
+                let frame = self.offscreen_frame(size);
+                self.draw(frame.wgpu(), list, clear);
+                let rect = [0.0, 0.0, size.0 as f32, size.1 as f32];
+                self.draw_ramp(frame.wgpu(), target, rect, table);
+            }
+        }
+    }
+
+    /// Shows `frame` in `target` within `rect` through the gamma `table`.
+    fn draw_ramp(
+        &self,
+        frame: &wgpu::Texture,
+        target: &wgpu::Texture,
+        rect: [f32; 4],
+        table: &[u16; 256],
+    ) {
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("ramp"),
+            });
+        let view = target.create_view(&Default::default());
+        self.ramp.draw(
+            &self.device,
+            &self.queue,
+            &mut encoder,
+            frame,
+            &view,
+            rect,
+            table,
+        );
+        self.queue.submit([encoder.finish()]);
+    }
+
+    /// The frame drawn into before it is scaled or shown through the ramp,
+    /// `size` pixels.
+    fn offscreen_frame(&mut self, size: (u32, u32)) -> Texture {
+        let stale = self.offscreen.as_ref().is_none_or(|t| t.size() != size);
+        if stale {
+            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("frame"),
+                size: wgpu::Extent3d {
+                    width: size.0,
+                    height: size.1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            self.offscreen = Some(self.wrap(texture));
+        }
+        self.offscreen.clone().expect("offscreen frame")
+    }
+
+    /// Draws `list` into `target` as [`Renderer::render`], without the ramp.
+    fn draw(&mut self, target: &wgpu::Texture, list: &DrawList, clear: wgpu::Color) {
         let batches = self.upload_vertices(list);
         let mut encoder = self
             .device
@@ -496,32 +570,17 @@ impl Renderer {
             self.render(target, list, clear);
             return;
         }
-        let stale = self.offscreen.as_ref().is_none_or(|t| t.size() != size);
-        if stale {
-            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("frame"),
-                size: wgpu::Extent3d {
-                    width: size.0,
-                    height: size.1,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: self.format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            });
-            self.offscreen = Some(self.wrap(texture));
-        }
-        let frame = self.offscreen.clone().expect("offscreen frame");
-        self.render(frame.wgpu(), list, clear);
+        let frame = self.offscreen_frame(size);
+        self.draw(frame.wgpu(), list, clear);
         let [x, y, w, h] = volya_engine_formats::ui::Resolution::new(size.0, size.1)
             .letterbox((target.width() as f32, target.height() as f32));
+        if let Some(table) = &list.ramp {
+            self.draw_ramp(frame.wgpu(), target, [x, y, w, h], table);
+            return;
+        }
         let blit = DrawList {
-            world: None,
             quads: vec![Quad::new(Rect::SCREEN, &frame)],
+            ..Default::default()
         };
         let batches = self.upload_vertices(&blit);
         let mut encoder = self

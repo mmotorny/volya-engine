@@ -21,6 +21,7 @@ use crate::audio::AudioOut;
 use crate::core::audio::Category;
 use crate::core::console::Console;
 use crate::core::diagnostics;
+use crate::core::display::DisplayColour;
 use crate::core::input::{Action, Control, Input};
 use crate::core::lights::LightSettings;
 use crate::core::pause::{GlobalClock, Pause};
@@ -456,6 +457,8 @@ pub struct App {
     shown: bool,
     /// The inventory screen's menu font at the size drawn at.
     menu_font: Option<(Resolution, FieldFont)>,
+    /// The display colour settings and their ramp as last computed.
+    ramp: Option<(DisplayColour, Option<[u16; 256]>)>,
 }
 
 /// The resolution of `vid_mode`.
@@ -539,6 +542,7 @@ impl App {
             hidden: false,
             shown: false,
             menu_font: None,
+            ramp: None,
             data,
             assets: Assets::default(),
             origin: None,
@@ -1357,7 +1361,16 @@ impl App {
     // TODO(#339): a storage read failing while drawing (a platform failure,
     // not a missing file) is fatal too; no spec covers it.
     pub fn scene(&mut self, tree: &dyn Vfs, resolution: Resolution) -> io::Result<Scene> {
-        let scene = self.compose_scene(tree, resolution);
+        let mut scene = self.compose_scene(tree, resolution);
+        // display-gamma.md: the ramp of the display colour settings acts
+        // on everything presented.
+        let colour = DisplayColour::of(&self.console);
+        if self.ramp.is_none_or(|(c, _)| c != colour) {
+            self.ramp = Some((colour, colour.ramp()));
+        }
+        if let Ok(scene) = &mut scene {
+            scene.ramp = self.ramp.and_then(|(_, r)| r);
+        }
         if let Err(e) = &scene
             && e.kind() != io::ErrorKind::Unsupported
         {
@@ -1732,6 +1745,27 @@ mod tests {
         app.update(&tree, 5400.0, &input, &mut audio);
         assert!(app.quit_requested());
         assert!(audio.playing.is_empty());
+    }
+
+    #[test]
+    fn the_display_colour_settings_give_every_frame_its_ramp() {
+        // display-gamma.md 3.1, 3.2: the stored values from the first frame;
+        // a variable executed later at once.
+        let tree = fixture::tree();
+        let mut data = fixture::data(&tree);
+        data.set_user_config(b"rs_c_brightness 1.5\r\n".to_vec());
+        let mut app = App::new(data).unwrap();
+        app.assets = fixture::assets();
+        let (input, mut audio) = (Input::new(), FakeAudio::default());
+        app.update(&tree, 5000.0, &input, &mut audio);
+        let scene = app.scene(&tree, Resolution::new(1024, 768)).unwrap();
+        assert_eq!(scene.ramp.map(|r| [r[0], r[128]]), Some([8192, 41088]));
+        app.console.exec("rs_c_brightness 1");
+        let scene = app.scene(&tree, Resolution::new(1024, 768)).unwrap();
+        assert_eq!(scene.ramp, None);
+        app.console.exec("rs_c_gamma 0.5");
+        let scene = app.scene(&tree, Resolution::new(1024, 768)).unwrap();
+        assert_eq!(scene.ramp.map(|r| r[64]), Some(4128));
     }
 
     #[test]

@@ -13,6 +13,7 @@ pub mod config;
 pub mod console;
 pub mod cycles;
 pub mod diagnostics;
+pub mod display;
 pub mod footsteps;
 pub mod glows;
 pub mod input;

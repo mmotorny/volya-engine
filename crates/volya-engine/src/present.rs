@@ -710,7 +710,10 @@ impl Presenter {
         // Output pixels with integer centres (the scene's convention) to UI
         // units with the renderer's half-pixel centres.
         let to_ui = |[x, y]: [f32; 2]| [(x + 0.5) * UI_WIDTH / w, (y + 0.5) * UI_HEIGHT / h];
-        let mut list = DrawList::default();
+        let mut list = DrawList {
+            ramp: scene.ramp,
+            ..Default::default()
+        };
         match &scene.world {
             Some(world) => {
                 // Uploaded (or kept) even when covered, so it is ready.

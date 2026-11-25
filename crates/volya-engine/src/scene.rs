@@ -213,6 +213,10 @@ pub struct Scene {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub world: Option<WorldScene>,
     pub sprites: Vec<Sprite>,
+    /// The display's gamma ramp the picture is shown through
+    /// (docs/behavior/display-gamma.md); `None` for the identity.
+    #[serde(skip)]
+    pub ramp: Option<[u16; 256]>,
 }
 
 fn resolution<S: serde::Serializer>(r: &Resolution, s: S) -> Result<S::Ok, S::Error> {
@@ -225,6 +229,7 @@ impl Scene {
             resolution,
             world: None,
             sprites: Vec::new(),
+            ramp: None,
         }
     }
 
