@@ -16,9 +16,14 @@
 //   `_sprint`) as silhouettes (their alpha with the one-texel scanline gaps
 //   closed by the engine) and our own Jump arrow (after the proportions of
 //   `ui\ui_map_arrow_02`), Menu bars and Inventory backpack (the UI
-//   textures have no inventory icon), redrawn with scanlines at device
+//   textures have no inventory icon) and Torch beam (the torch's one
+//   picture, its icon, is Night vision's), redrawn with scanlines at device
 //   pixels (every third row dimmed), so they can't beat against the
 //   screen's pixels.
+// - Night vision's glyph: the inventory icon of the torch (`device_torch`,
+//   which has the night vision, torch.md 1.1; `ui\ui_icon_equipment`)
+//   engraved: its brightness as alpha, so its lenses show where a
+//   silhouette would be one blot.
 // - The stick's segmented ring (`ui_hud_grenadetarget_d`) and the lock
 //   target's ring (the map spot of `ui\ui_common`).
 // - Colours: teal, the crouch icon's mean texel colour; grey, the
@@ -42,9 +47,10 @@ const REQUESTS = [
   ["segments", { id: "ui_hud_grenadetarget_d" }],
   // The map spot ring has no texture description of its own.
   ["spot", { path: "ui\\ui_common", region: [728, 577, 50, 50] }],
+  ["torchIcon", { item: "device_torch", engraving: true }],
 ];
 /** Glyph sources whose transparent margins are trimmed. */
-const TRIMMED = new Set(["crouch", "creep", "sprint"]);
+const TRIMMED = new Set(["crouch", "creep", "sprint", "torchIcon"]);
 
 /** The approximations' palette, close to the game's (our choice). */
 const APPROXIMATE_TEAL = [36, 178, 162];
@@ -224,6 +230,41 @@ function segmentCanvas(size, count, gap, width, color, offset = 0) {
   return c;
 }
 
+/** An approximate torch icon (our drawing of the headset, in its 100 × 50
+ * frame): the housing faint, the two lenses' rims bright, as engraved. */
+function torchIconCanvas(scale = 4) {
+  const [c, g] = canvas(100 * scale, 50 * scale);
+  g.scale(scale, scale);
+  g.fillStyle = g.strokeStyle = "#fff";
+  g.globalAlpha = 0.4;
+  g.beginPath();
+  [
+    [12, 22],
+    [30, 9],
+    [56, 11],
+    [95, 14],
+    [94, 31],
+    [58, 40],
+    [42, 47],
+    [12, 45],
+  ].forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
+  g.closePath();
+  g.fill();
+  g.lineWidth = 3;
+  for (const [x, y, r] of [
+    [17, 36, 8],
+    [40, 38, 9.5],
+  ]) {
+    g.globalAlpha = 0.25;
+    g.beginPath();
+    g.arc(x, y, r, 0, 2 * Math.PI);
+    g.fill();
+    g.globalAlpha = 1;
+    g.stroke();
+  }
+  return c;
+}
+
 /** Close vector approximations of the game's art (no game data). */
 export function approximateArt() {
   const [frame, g] = canvas(64, 64);
@@ -244,6 +285,7 @@ export function approximateArt() {
     // spot's), gaps at the quarters.
     segments: segmentCanvas(184, 12, 0.16, 26, "rgba(200, 200, 200, 0.5)", -Math.PI / 2 - Math.PI / 12),
     spot: segmentCanvas(100, 4, 0.34, 16, "rgb(167, 255, 255)", 0),
+    torchIcon: torchIconCanvas(),
     ...palette(APPROXIMATE_TEAL, APPROXIMATE_GREY),
   };
 }
@@ -343,13 +385,36 @@ const BAG = {
   inside: [9.5, 15.9, 5, 2.2, 0.6],
 };
 
-/** A vector glyph source (our Jump arrow, Menu bars or Inventory
- * backpack) at `size` device pixels. */
+/** Our Torch glyph in 24 × 24: a lamp (its body, x, y, width, height,
+ * radius, and its face) and its beam, three rays spreading (stroked). */
+const LAMP = { body: [2, 7.5, 7.5, 9, 2.2], face: [9, 5.5, 2.6, 13, 0.8] };
+const RAYS = [
+  [14, 8.6, 21.5, 5.4],
+  [14, 12, 22, 12],
+  [14, 15.4, 21.5, 18.6],
+];
+
+/** A vector glyph source (our Jump arrow, Menu bars, Inventory backpack or
+ * Torch beam) at `size` device pixels. */
 export function vectorGlyph(name, size) {
   const [c, g] = canvas(size, size);
   g.scale(size / 24, size / 24);
   g.fillStyle = "#fff";
-  if (name === "jump") {
+  if (name === "torch") {
+    g.beginPath();
+    g.roundRect(...LAMP.body);
+    g.roundRect(...LAMP.face);
+    g.fill();
+    g.strokeStyle = "#fff";
+    g.lineWidth = 2.2;
+    g.lineCap = "round";
+    for (const [x0, y0, x1, y1] of RAYS) {
+      g.beginPath();
+      g.moveTo(x0, y0);
+      g.lineTo(x1, y1);
+      g.stroke();
+    }
+  } else if (name === "jump") {
     g.beginPath();
     JUMP.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
     g.closePath();

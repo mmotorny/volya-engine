@@ -1001,6 +1001,74 @@ export const tests = {
     return `game time ran ${((s.level.game_time - clock) / 1000).toFixed(1)} s under the screen; pointer lock ${granted ? "granted" : "stubbed"}`;
   },
 
+  "touch: Torch and Night vision give the torch's commands as L and N do; Night vision shows only with an outfit that has it": async () => {
+    needsGame();
+    const controls = document.getElementById("touch-controls");
+    // A touch anywhere shows the controls (a touch device).
+    const tap = { pointerType: "touch", pointerId: 70, isPrimary: true, button: 0 };
+    pointer("pointerdown", client(512, 100), { ...tap, buttons: 1 });
+    pointer("pointerup", client(512, 100), { ...tap, buttons: 0 });
+    for (let i = 0; i < 50 && controls.hidden; i++) await sleep(20);
+    assert(!controls.hidden, "the touch controls show");
+    const torch = controls.querySelector(".touch-button.torch");
+    const night = controls.querySelector(".touch-button.night-vision");
+    const press = (el) => {
+      const r = el.getBoundingClientRect();
+      for (const type of ["pointerdown", "pointerup"]) {
+        el.dispatchEvent(
+          new PointerEvent(type, {
+            clientX: (r.left + r.right) / 2,
+            clientY: (r.top + r.bottom) / 2,
+            pointerId: 71,
+            pointerType: "touch",
+            isPrimary: true,
+            button: 0,
+            buttons: type === "pointerdown" ? 1 : 0,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      }
+    };
+    const shown = async (el, pressed, what) => {
+      for (let i = 0; i < 50 && (el.hidden || el.getAttribute("aria-pressed") !== String(pressed)); i++) await sleep(20);
+      assert(!el.hidden, `${what} shown`);
+      assertEqual(el.getAttribute("aria-pressed"), String(pressed), `${what} shown ${pressed ? "on" : "off"}`);
+    };
+    // The torch attached and off: Torch shows, off; no outfit with night
+    // vision is worn, so Night vision is hidden.
+    let s = await state();
+    assert(s.level.torch.attached && !s.level.torch.on, "the torch attached and off");
+    await shown(torch, false, "Torch");
+    assert(night.hidden, "Night vision hidden without an outfit that has it");
+    const active = s.level.lights.active;
+    press(torch);
+    s = await until((s) => s.level.torch.on, "Torch to switch the torch on");
+    assert(s.level.torch.main_active && s.level.torch.glow_on, "its main light and glow");
+    assertEqual(s.level.lights.active, active + 1, "one more active light record");
+    await shown(torch, true, "Torch");
+    press(torch);
+    await until((s) => !s.level.torch.on && s.level.lights.active === active, "Torch to switch it off");
+    await shown(torch, false, "Torch");
+    // An outfit with night vision worn: Night vision shows and switches its
+    // effect on and off (torch.md 15.2).
+    const outfit = await volya.call("debug_nightvision_outfit", { wear: true });
+    await shown(night, false, "Night vision");
+    press(night);
+    s = await until((s) => s.level.torch.night_vision_effect, "Night vision to start the effect");
+    assert(s.level.torch.night_vision_requested, "requested");
+    await shown(night, true, "Night vision");
+    press(night);
+    s = await until((s) => !s.level.torch.night_vision_effect, "Night vision to stop it");
+    assert(!s.level.torch.night_vision_requested && !s.level.torch.on, "not requested, the torch still off");
+    await shown(night, false, "Night vision");
+    // The outfit gone: hidden again.
+    await volya.call("debug_nightvision_outfit", { wear: false });
+    for (let i = 0; i < 50 && !night.hidden; i++) await sleep(20);
+    assert(night.hidden, "Night vision hidden once the outfit is gone");
+    return `outfit ${outfit}`;
+  },
+
   "touch: the stick walks and its sprint lock sprints, drags look (from Jump too), Crouch and its swipe down, Menu opens the menu": async () => {
     needsGame();
     const controls = document.getElementById("touch-controls");

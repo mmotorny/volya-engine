@@ -124,6 +124,20 @@ export const SECTIONS = [
         level: { crouch: true, low: true },
         devices: TOUCH,
       },
+      { id: "level-touch-torch", name: "Torch on", level: { torch: true }, devices: TOUCH },
+      {
+        id: "level-touch-night-vision",
+        name: "Wearing an outfit with night vision: Night vision shown",
+        level: { nightVision: false },
+        devices: TOUCH,
+      },
+      { id: "level-touch-night-vision-on", name: "Night vision on", level: { nightVision: true }, devices: TOUCH },
+      {
+        id: "level-touch-no-torch",
+        name: "Torch moved to the backpack: Torch hidden",
+        level: { torch: null },
+        devices: TOUCH,
+      },
     ],
   },
   {

@@ -449,15 +449,21 @@ pub enum TouchButton {
     Menu,
     /// Opens the inventory screen (#110).
     Inventory,
+    /// The `torch` command (#363).
+    Torch,
+    /// The `night_vision` command (#363).
+    NightVision,
 }
 
 impl TouchButton {
-    pub const ALL: [TouchButton; 5] = [
+    pub const ALL: [TouchButton; 7] = [
         TouchButton::Jump,
         TouchButton::Crouch,
         TouchButton::CrouchLow,
         TouchButton::Menu,
         TouchButton::Inventory,
+        TouchButton::Torch,
+        TouchButton::NightVision,
     ];
 
     pub fn name(self) -> &'static str {
@@ -467,6 +473,8 @@ impl TouchButton {
             TouchButton::CrouchLow => "crouch_low",
             TouchButton::Menu => "menu",
             TouchButton::Inventory => "inventory",
+            TouchButton::Torch => "torch",
+            TouchButton::NightVision => "night_vision",
         }
     }
 
@@ -633,6 +641,8 @@ impl Control {
             Control::Touch(TouchButton::CrouchLow) => "touch_crouch_low",
             Control::Touch(TouchButton::Menu) => "touch_menu",
             Control::Touch(TouchButton::Inventory) => "touch_inventory",
+            Control::Touch(TouchButton::Torch) => "touch_torch",
+            Control::Touch(TouchButton::NightVision) => "touch_night_vision",
         }
     }
 }
