@@ -321,3 +321,37 @@ fn shape_spheres() {
     assert_eq!(c, [0.0; 3]);
     assert!((r - 3f32.sqrt() * 0.5).abs() < 1e-6);
 }
+
+#[test]
+fn the_idle_light_is_a_dynamic_light_record() {
+    // P9 4.4: a record of its own, shadow on, point; active while idle.
+    let mut fx = effects();
+    let mut zones = Zones::default();
+    let mut lights = crate::lights::Lights::default();
+    let s = section(BUZZ, "zone_buzz", Behaviour::Bfuzz).unwrap();
+    zones.create(&record(1, 1, 0), s, 0, &mut fx).unwrap();
+    zones.sync_lights(&mut lights);
+    let id = zones.zones()[0].light.as_ref().unwrap().record.unwrap();
+    let r = lights.get(id).unwrap();
+    assert!(r.active && r.shadow);
+    assert_eq!(r.kind, crate::lights::LightKind::Point);
+    assert_eq!((r.range, r.position), (3.0, [10.0, 2.7, -5.0]));
+    let mut clock = 0;
+    while clock < 1_100 {
+        clock += 16;
+        let frame = Frame {
+            clock,
+            elapsed: 16,
+            camera: [10.0, 2.0, -5.0],
+            colours: &Green,
+        };
+        zones.frame(&frame, &mut fx).unwrap();
+        zones.sync_lights(&mut lights);
+        if clock == 16 {
+            assert_eq!(lights.get(id).unwrap().colour, light_colour(0x0099_D538));
+        }
+    }
+    // Disabled at 1 s: the same record, inactive.
+    assert!(!lights.get(id).unwrap().active);
+    assert_eq!(lights.len(), 1);
+}

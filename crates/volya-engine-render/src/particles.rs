@@ -43,6 +43,13 @@ pub enum ParticleProgram {
     Plain,
     /// `particle_distort`, no alpha test, no fog.
     Distort,
+    /// A glow's `S_SET   ` pass of `effects\glow` (glows.md 6,
+    /// static-shading.md 7.5): colour = texel × vertex colour, alpha test
+    /// A · 255 > 0, no fog, depth test on, texture clamped with linear
+    /// filtering.
+    Glow,
+    /// `effects\flare`: alpha test A · 255 > 2, depth test off.
+    Flare,
 }
 
 /// Face culling during the effect's draw (section 4.5).
@@ -66,6 +73,8 @@ pub enum ParticleQueue {
     Strict,
     /// In the distortion list, back to front (step 7).
     Distortion,
+    /// The glows, after the strict-sorted passes (glows.md section 4).
+    Glow,
 }
 
 /// One pass of an effect's shader.
@@ -125,6 +134,8 @@ const PASSES: &[(ParticleProgram, ParticleBlend, bool)] = &[
     (ParticleProgram::Blended, ParticleBlend::AlphaAdd, false),
     (ParticleProgram::Plain, ParticleBlend::Add, false),
     (ParticleProgram::Distort, ParticleBlend::Alpha, false),
+    (ParticleProgram::Glow, ParticleBlend::AlphaAdd, false),
+    (ParticleProgram::Flare, ParticleBlend::AlphaAdd, false),
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -147,6 +158,9 @@ pub(crate) struct ParticlePipelines {
     clamp: wgpu::Sampler,
     wrap: wgpu::Sampler,
     linear: wgpu::Sampler,
+    /// The glows' texture: clamped, linear minification, magnification
+    /// and mip filtering.
+    glow: wgpu::Sampler,
     /// (0, 0, 0, 1): `s_distort` without a texture.
     black: wgpu::TextureView,
     frame: wgpu::Buffer,
@@ -313,6 +327,13 @@ impl ParticlePipelines {
             mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..linear.clone()
         });
+        let glow = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("glow"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            ..linear.clone()
+        });
         let linear = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("particle s_distort"),
             ..linear
@@ -400,6 +421,7 @@ impl ParticlePipelines {
             clamp,
             wrap,
             linear,
+            glow,
             black,
             frame,
             frame_group,
@@ -482,6 +504,8 @@ impl ParticlePipelines {
             ParticleProgram::Blended => "fs_blended",
             ParticleProgram::Plain => "fs_plain",
             ParticleProgram::Distort => "fs_distort",
+            ParticleProgram::Glow => "fs_glow",
+            ParticleProgram::Flare => "fs_flare",
         };
         // static-shading.md 10.1's convention, as the world's: a face is
         // front when it appears clockwise on screen.
@@ -513,7 +537,11 @@ impl ParticlePipelines {
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: DEPTH_FORMAT,
                 depth_write_enabled: Some(key.depth_write),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                depth_compare: Some(if key.program == ParticleProgram::Flare {
+                    wgpu::CompareFunction::Always
+                } else {
+                    wgpu::CompareFunction::LessEqual
+                }),
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
@@ -614,11 +642,18 @@ impl ParticlePipelines {
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: wgpu::BindingResource::Sampler(if b.pass.clamp {
-                            &self.clamp
-                        } else {
-                            &self.wrap
-                        }),
+                        resource: wgpu::BindingResource::Sampler(
+                            if matches!(
+                                b.pass.program,
+                                ParticleProgram::Glow | ParticleProgram::Flare
+                            ) {
+                                &self.glow
+                            } else if b.pass.clamp {
+                                &self.clamp
+                            } else {
+                                &self.wrap
+                            },
+                        ),
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,

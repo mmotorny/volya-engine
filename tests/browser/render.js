@@ -187,6 +187,25 @@ export const tests = {
     return `${gpu.backend}${blend.compat ? ", compat path" : ""}`;
   },
 
+  "draws dynamic light passes and glows": async () => {
+    needsGpu();
+    const draw = async (name) => {
+      const info = await volya.call("debug_draw_lights", { case: name });
+      const rgba = await capture(16, 16);
+      return { compat: info.compat, centre: Array.from(rgba.slice(4 * (8 * 16 + 8), 4 * (8 * 16 + 8) + 3)) };
+    };
+    const near = (got, want, what) => assert(got.every((v, i) => Math.abs(v - want[i]) <= 3), `${what}: ${got}, expected ${want}`);
+    const none = await draw("none");
+    near(none.centre, [0, 0, 0], "unlit");
+    // 2 · B · c with white attenuation textures: (¼, ⅛, 0) doubled.
+    near((await draw("point")).centre, [128, 64, 0], "a point light pass");
+    near((await draw("spot")).centre, [128, 64, 0], "a spot light pass");
+    near((await draw("glow")).centre, [64, 64, 64], "a glow in front");
+    near((await draw("hidden")).centre, [0, 0, 0], "a glow behind the triangle");
+    await volya.call("debug_draw", {});
+    return `${gpu.backend}${none.compat ? ", compat path" : ""}`;
+  },
+
   "clears and forgets the game": async () => {
     if (gpu.state === "ready") await volya.call("debug_draw", {});
     if (installer) await volya.call("forget_game");

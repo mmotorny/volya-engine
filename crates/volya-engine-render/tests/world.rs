@@ -18,7 +18,8 @@ use volya_engine_render::particles::{
 };
 use volya_engine_render::sky::{SkyFrame, SkySection, SkyTextures};
 use volya_engine_render::world::{
-    Blend, Mat4, ObjectGeometry, Program, Surface, TreeLight, WorldLight, model_vertex,
+    Blend, LightElement, LightPass, LightProgram, LightTextures, Mat4, ObjectGeometry, Program,
+    Surface, TreeLight, WorldLight, model_vertex,
 };
 use volya_engine_render::{DrawList, Renderer, Texture, WorldDraw, WorldFrame, wgpu};
 
@@ -62,6 +63,8 @@ both!(
     environment_mapped_models,
     shared_index_ranges_with_different_bases,
     particles_queue_blend_cull_and_distort,
+    light_passes_add_to_the_image,
+    glows_add_after_the_world,
 );
 
 fn renderer() -> Renderer {
@@ -211,6 +214,7 @@ fn surface(program: Program, base: Option<Texture>) -> Surface<Texture> {
         object_lod: true,
         textures: [base, None, None, None],
         env: None,
+        light: None,
     }
 }
 
@@ -255,6 +259,7 @@ fn frame(world: volya_engine_render::World, sky: Option<SkyFrame>) -> WorldFrame
         sky,
         clear: [0.0; 3],
         particles: Vec::new(),
+        lights: Vec::new(),
     }
 }
 
@@ -860,5 +865,162 @@ fn particles_queue_blend_cull_and_distort() {
         at(&shifted, size, 112, 128)[..3],
         [255, 255, 255],
         "still white"
+    );
+}
+
+/// A light pass whose frustum holds everything (clip (0, 0, ½, 1)).
+fn everywhere(spot: bool, position: [f32; 4], colour: [f32; 3]) -> LightPass {
+    let mut frustum = [[0.0; 4]; 4];
+    frustum[3] = [0.0, 0.0, 0.5, 1.0];
+    LightPass {
+        spot,
+        position,
+        colour: [colour[0], colour[1], colour[2], 1.0],
+        xform: frustum,
+        frustum,
+    }
+}
+
+/// dynamic-lights.md 6: a light pass adds 2 · B.rgb · B.a · a₁ · a₂ · c
+/// to the image, c the light's colour times n · −l; with white
+/// attenuation textures a₁ = a₂ = 1. The alpha test, a hidden draw and a
+/// frustum missing the draw leave the image as it is.
+#[test]
+fn light_passes_add_to_the_image() {
+    let mut r = renderer();
+    let white = r.create_rgba_texture(1, 1, &[255; 4]);
+    let half = r.create_rgba_texture(1, 1, &[255, 255, 255, 128]);
+    // A black vertex-lit triangle at depth 1 with normal (0, 1, 0).
+    let g = geom(Layout::VertexLit, 0, 0, [0; 8]);
+    let lit = |base: &Texture, alpha_ref| Surface {
+        light: Some(LightElement {
+            program: LightProgram::VertexLit,
+            alpha_ref,
+            priority: 1,
+        }),
+        ..surface(Program::VertexLit, Some(base.clone()))
+    };
+    let surfaces = [
+        lit(&white, 0),
+        lit(&half, 0),
+        lit(&half, 200),
+        Surface {
+            light: Some(LightElement {
+                program: LightProgram::VertexLit,
+                alpha_ref: 0,
+                priority: 2,
+            }),
+            ..surface(Program::VertexLit, Some(white.clone()))
+        },
+    ];
+    let world = |r: &mut Renderer, surface| {
+        r.create_world(&g, &surfaces, &[draw(surface, None)], None)
+            .unwrap()
+    };
+    // A point light far above (lit per vertex): n · −l ≈ 1.
+    let light = everywhere(false, [0.0, 1000.0, 1.0, 0.0625], [0.25, 0.125, 0.0]);
+    let lit_frame = |w| {
+        let mut f = frame(w, None);
+        f.lights = vec![light];
+        f
+    };
+    // Without the attenuation textures no light pass is drawn.
+    let w = world(&mut r, 0);
+    assert_near(
+        centre(&mut r, lit_frame(w.clone())),
+        [0, 0, 0],
+        "no textures",
+    );
+    r.set_light_textures(LightTextures {
+        att: white.clone(),
+        attclip: white.clone(),
+        attpoint: white.clone(),
+    });
+    assert_near(centre(&mut r, frame(w.clone(), None)), [0, 0, 0], "unlit");
+    assert_near(centre(&mut r, lit_frame(w.clone())), [128, 64, 0], "point");
+    // Two passes add.
+    let mut f = lit_frame(w.clone());
+    f.lights.push(light);
+    assert_near(centre(&mut r, f), [255, 128, 0], "two passes");
+    // B.a = ½ halves it; alpha 2 · ½ · c.a = 1 passes a reference of 200.
+    let w = world(&mut r, 1);
+    assert_near(centre(&mut r, lit_frame(w)), [64, 32, 0], "half alpha");
+    let w = world(&mut r, 2);
+    assert_near(
+        centre(&mut r, lit_frame(w)),
+        [64, 32, 0],
+        "alpha test passes",
+    );
+    // A light below the surface: n · −l < 0 adds nothing.
+    let w = world(&mut r, 0);
+    let mut f = frame(w.clone(), None);
+    f.lights = vec![everywhere(false, [0.0, -1000.0, 1.0, 0.0625], [1.0; 3])];
+    assert_near(centre(&mut r, f), [0, 0, 0], "lit from behind");
+    // A spot pass reads its projected coordinate: here (0, 0) / ½.
+    let mut f = frame(w.clone(), None);
+    f.lights = vec![everywhere(
+        true,
+        [0.0, 1000.0, 1.0, 0.125],
+        [0.25, 0.125, 0.0],
+    )];
+    assert_near(centre(&mut r, f), [128, 64, 0], "spot");
+    // A frustum the draw's sphere misses.
+    let mut away = light;
+    away.frustum[3] = [0.0, 0.0, -1.0, 1.0];
+    let mut f = frame(w.clone(), None);
+    f.lights = vec![away];
+    assert_near(centre(&mut r, f), [0, 0, 0], "outside the light's frustum");
+    // A hidden draw (radius 0) is not lit.
+    r.place_draw(&w, 0, &IDENTITY, [0.0, 0.0, 1.0, 0.0]);
+    assert_near(centre(&mut r, lit_frame(w)), [0, 0, 0], "hidden");
+    // Priority 2 elements are never lit.
+    let w = world(&mut r, 3);
+    assert_near(centre(&mut r, lit_frame(w)), [0, 0, 0], "priority 2");
+}
+
+/// glows.md 4, 6: glows add texel · b/255 · A after the strict-sorted
+/// passes; `effects\glow` is hidden by nearer geometry, `effects\flare`
+/// is not.
+#[test]
+fn glows_add_after_the_world() {
+    let mut r = renderer();
+    let white = r.create_rgba_texture(1, 1, &[255; 4]);
+    let black = r.create_rgba_texture(1, 1, &[0, 0, 0, 255]);
+    let g = geom(Layout::VertexLit, 0, 0, [0; 8]);
+    let world = r
+        .create_world(
+            &g,
+            &[surface(Program::SelfLight, Some(black))],
+            &[draw(0, None)],
+            None,
+        )
+        .unwrap();
+    let glow = |program, z| ParticleBatch {
+        pass: ParticlePass {
+            program,
+            blend: ParticleBlend::AlphaAdd,
+            depth_write: false,
+            clamp: true,
+            base: Some(white.clone()),
+            distort: None,
+        },
+        queue: ParticleQueue::Glow,
+        cull: ParticleCull::CounterClockwise,
+        key: 0.0,
+        // b = 128 in all four channels: 128/255 · 128/255 added.
+        vertices: sprite(-0.25, 0.25, -0.25, 0.25, z, 0x8080_8080),
+    };
+    let mut f = frame(world.clone(), None);
+    f.particles = vec![glow(ParticleProgram::Glow, 0.5)];
+    assert_near(centre(&mut r, f), [64, 64, 64], "a glow in front");
+    let mut f = frame(world.clone(), None);
+    f.particles = vec![glow(ParticleProgram::Glow, 2.0)];
+    assert_near(centre(&mut r, f), [0, 0, 0], "a glow behind the triangle");
+    let mut f = frame(world, None);
+    f.particles = vec![glow(ParticleProgram::Flare, 2.0)];
+    assert_near(
+        centre(&mut r, f),
+        [64, 64, 64],
+        "a flare behind the triangle",
     );
 }

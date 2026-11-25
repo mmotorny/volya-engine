@@ -12,8 +12,9 @@
 //! The effect objects are the level's particle objects
 //! ([`crate::particles::placed`]); the sounds are played by the level's
 //! sound side from [`Zones::sound_events`]; the idle light is kept here as
-//! the light record's values (P16) for the dynamic lights to take
-//! ([`Zones::lights`]). Their destruction with the level (3.2) is the
+//! the light record's values, given to its record among the level's dynamic
+//! lights (P16) by [`Zones::sync_lights`]. Their destruction with the level
+//! (3.2) is the
 //! level's: its sounds are stopped and discarded, its particle objects and
 //! zones dropped.
 //!
@@ -24,14 +25,13 @@
 //!   ever idle or disabled (TODO(#350)).
 //! - The moving zone's motion (P9 5): `Z_TORRID` stays at its record's
 //!   position (TODO(#351)).
-//! - The colour animation of the idle light (lanims-xr.md, P12) and the
-//!   dynamic lights that draw it (P16): TODO(#344).
 
 use std::io;
 
 use volya_engine_formats::ltx::{Section, value};
 use volya_engine_formats::object::{Object, ObjectRecord, Shape, Zone as ZoneBlock};
 
+use crate::lights::{LightId, Lights};
 use crate::particles::placed::{Origin, PlacedEffects};
 use crate::particles::{Matrix, Vec3, place_point};
 
@@ -245,13 +245,16 @@ pub enum State {
 pub struct IdleLight {
     pub keys: LightKeys,
     pub active: bool,
-    /// The range last set (m). Whether the stored range follows is P16's
-    /// rule for range updates (TODO(#344)).
+    /// The range last set (m); the record's stored range follows P16's
+    /// rule for range updates ([`Lights::set_range`]).
     pub range: f32,
     /// Red, green, blue, alpha; `None` until the first light step sets it.
     pub colour: Option<[f32; 4]>,
     pub position: Vec3,
     pub shadow: bool,
+    /// The light record among the level's dynamic lights, once made
+    /// ([`Zones::sync_lights`]).
+    pub record: Option<LightId>,
 }
 
 /// The colour animations of `lanims.xr` (lanims-xr.md, P12): the colour
@@ -262,8 +265,18 @@ pub trait ColourAnimations {
     fn colour_at(&self, name: &str, t: f32) -> Option<u32>;
 }
 
-/// No colour animations: the idle light's colour stays unset.
-/// TODO(#344): `lanims.xr`'s entries.
+impl ColourAnimations for volya_engine_formats::lanims::ColourAnimations {
+    /// The entry found by name (lanims-xr.md 4). An `idle_light_anim`
+    /// naming no entry is unestablished (P9 10; none occurs): the colour
+    /// stays as it was (TODO(#330)).
+    fn colour_at(&self, name: &str, t: f32) -> Option<u32> {
+        let name = volya_engine_formats::cp1251::encode(name)?;
+        let i = self.find(&name)?;
+        Some(self.entries[i].colour_at(t).0)
+    }
+}
+
+/// No colour animations: the idle light's colour stays unset (tests).
 pub struct NoColourAnimations;
 
 impl ColourAnimations for NoColourAnimations {
@@ -444,12 +457,32 @@ impl Zones {
         self.events.clear();
     }
 
-    /// The active idle lights, for the dynamic lights (P16; TODO(#344):
-    /// submitted nowhere yet).
+    /// The active idle lights.
     pub fn lights(&self) -> impl Iterator<Item = &IdleLight> {
         (self.zones.iter())
             .filter_map(|z| z.light.as_ref())
             .filter(|l| l.active)
+    }
+
+    /// Gives the idle lights' values to their records among the level's
+    /// dynamic lights (docs/behavior/dynamic-lights.md), making each record
+    /// the first time (P9 4.4: shadow on, its type the default point).
+    /// Unchanged values change nothing, so it runs after every frame's
+    /// updates and creations.
+    pub fn sync_lights(&mut self, lights: &mut Lights) {
+        for l in self.zones.iter_mut().filter_map(|z| z.light.as_mut()) {
+            let id = *l.record.get_or_insert_with(|| {
+                let id = lights.create();
+                lights.set_shadow(id, l.shadow);
+                id
+            });
+            lights.set_range(id, l.range);
+            lights.set_position(id, l.position);
+            if let Some(c) = l.colour {
+                lights.set_colour(id, c);
+            }
+            lights.set_active(id, l.active);
+        }
     }
 
     /// Whether object `id` has a zone.
@@ -483,6 +516,7 @@ impl Zones {
             colour: None,
             position: [0.0; 3],
             shadow: true,
+            record: None,
         });
         let zone = Zone {
             id: record.id,

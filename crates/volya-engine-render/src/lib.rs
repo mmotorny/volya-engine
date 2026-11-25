@@ -144,8 +144,12 @@ pub struct Renderer {
     movie_sampler: wgpu::Sampler,
     vertices: wgpu::Buffer,
     video: video::Converter,
-    /// Created with the first world.
+    /// Made with the renderer (and again when the mode changes).
     world_pipelines: Option<world::WorldPipelines>,
+    /// The light passes' attenuation textures, once given.
+    light_textures: Option<world::LightTextures>,
+    /// The draws the last frame's light passes drew.
+    light_draws: usize,
     /// The world pass's depth buffer, sized to the latest target.
     depth: Option<wgpu::Texture>,
     /// The frame [`Renderer::render_scaled`] draws into.
@@ -254,7 +258,7 @@ impl Renderer {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        Self {
+        let mut renderer = Self {
             device: device.clone(),
             queue: queue.clone(),
             format,
@@ -266,6 +270,8 @@ impl Renderer {
             vertices: vertex_buffer(device, 64),
             video: video::Converter::new(device),
             world_pipelines: None,
+            light_textures: None,
+            light_draws: 0,
             depth: None,
             offscreen: None,
             prepared: Default::default(),
@@ -277,7 +283,10 @@ impl Renderer {
             // from 99 to 112 MiB).
             particles: Some(particles::ParticlePipelines::new(device, queue, format)),
             distortion_targets: None,
-        }
+        };
+        // The world's pipelines too (the light passes' among them).
+        renderer.make_world_pipelines();
+        renderer
     }
 
     /// Whether the world is drawn the way WebGL 2 allows: per-draw data read
@@ -309,7 +318,7 @@ impl Renderer {
     pub fn set_compat(&mut self, on: bool) {
         if on != self.compat {
             self.compat = on;
-            self.world_pipelines = None;
+            self.make_world_pipelines();
         }
     }
 
