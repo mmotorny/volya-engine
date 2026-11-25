@@ -15,9 +15,13 @@ links = "volya_luajit"
 [lints]
 workspace = true
 
+[dependencies]
+volya-engine-core = { path = "../volya-engine-core" }
+volya-engine-formats = { path = "../volya-engine-formats" }
+
 [build-dependencies]
 cc.workspace = true
 
 [dev-dependencies]
-volya-engine-core = { path = "../volya-engine-core" }
+md-5.workspace = true
 volya-engine-installer = { path = "../volya-engine-installer" }
