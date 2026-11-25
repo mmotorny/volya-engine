@@ -402,6 +402,9 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
             let size = |key| args.get(key).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
             to_json(&gpu::debug_capture(size("width"), size("height")).await?)
         }
+        // `{scene, clock_ms}`: a `menu_scene` drawn by this backend (tests).
+        #[cfg(feature = "test-ops")]
+        "debug_capture_scene" => to_json(&gpu::debug_capture_scene(&args).await?),
         "read_head" => {
             let max = args.get("max").and_then(|v| v.as_u64()).unwrap_or(4096);
             to_json(&game::read_head(text("path"), max)?)

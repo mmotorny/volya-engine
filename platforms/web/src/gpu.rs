@@ -751,6 +751,107 @@ pub async fn debug_capture(width: u32, height: u32) -> Result<Capture, JsValue> 
     })
 }
 
+/// The `debug_capture_scene` op (tests): `scene`, as the `menu_scene` op
+/// gives it, drawn at its resolution by a presenter of its own at engine
+/// clock `clock_ms` and read back, so the same frame can be drawn by each
+/// backend (the title menu on WebGPU and on WebGL 2) and compared: its
+/// videos decoded from their start up to the frame due then, whatever the
+/// engine's clock.
+#[cfg(feature = "test-ops")]
+pub async fn debug_capture_scene(args: &serde_json::Value) -> Result<Capture, JsValue> {
+    use volya_engine::formats::ui::Color;
+    use volya_engine::scene::{Scene, Sprite, TextureId};
+
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "kind", rename_all = "snake_case")]
+    enum JsonTexture {
+        Image {
+            path: String,
+        },
+        Video {
+            path: String,
+            start_ms: u64,
+            looping: bool,
+        },
+        Splash,
+        White,
+    }
+    #[derive(serde::Deserialize)]
+    struct JsonSprite {
+        layer: String,
+        texture: JsonTexture,
+        corners: [[f32; 2]; 4],
+        uv_min: [f32; 2],
+        uv_max: [f32; 2],
+        color: [u8; 4],
+        corner_colors: Option<[[u8; 4]; 4]>,
+    }
+    #[derive(serde::Deserialize)]
+    struct JsonScene {
+        resolution: [u32; 2],
+        sprites: Vec<JsonSprite>,
+    }
+    let argb = |[a, r, g, b]: [u8; 4]| Color { a, r, g, b };
+    let json: JsonScene = serde_json::from_value(args.get("scene").cloned().unwrap_or_default())
+        .map_err(|e| error(format!("scene: {e}")))?;
+    let [width, height] = json.resolution;
+    if !(1..=MAX_CAPTURE).contains(&width) || !(1..=MAX_CAPTURE).contains(&height) {
+        return Err(error(format!("capture size {width}×{height}")));
+    }
+    let mut scene = Scene::new(Resolution::new(width, height));
+    scene.sprites = json
+        .sprites
+        .into_iter()
+        .map(|s| Sprite {
+            layer: s.layer,
+            texture: match s.texture {
+                JsonTexture::Image { path } => TextureId::Image { path },
+                JsonTexture::Video {
+                    path,
+                    start_ms,
+                    looping,
+                } => TextureId::Video {
+                    path,
+                    start_ms,
+                    looping,
+                },
+                JsonTexture::Splash => TextureId::Splash,
+                JsonTexture::White => TextureId::White,
+            },
+            corners: s.corners,
+            uv_min: s.uv_min,
+            uv_max: s.uv_max,
+            color: argb(s.color),
+            corner_colors: s.corner_colors.map(|cs| cs.map(argb)),
+        })
+        .collect();
+    let clock = args.get("clock_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+    let pixels = with_gpu(|gpu| {
+        let mut presenter = Presenter::new();
+        let list = crate::game::with_trees(|tree, _| {
+            // Each call decodes a few video frames (at most 4); enough calls
+            // for 60 frames a second reach the frame due at `clock`.
+            let calls = clock * 60 / 4000 + 2;
+            let mut list = DrawList::default();
+            for _ in 0..calls {
+                list = presenter.draw_list(&mut gpu.renderer, tree, &scene, clock);
+            }
+            list
+        })?;
+        let errors = presenter.take_errors();
+        if !errors.is_empty() {
+            return Err(error(errors.join("; ")));
+        }
+        Ok(gpu.renderer.capture(&list, width, height, CLEAR))
+    })?;
+    let rgba = pixels.await.map_err(error)?;
+    Ok(Capture {
+        width,
+        height,
+        rgba,
+    })
+}
+
 /// The `debug_draw_particles` op (tests): sets the debug draw list to a
 /// world without geometry holding particle batches of `case`, the scenes
 /// of the native `particles_queue_blend_cull_and_distort` render test
