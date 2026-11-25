@@ -424,6 +424,46 @@ pub fn instant(name: &str, tid: u32, args: &[(String, Value)]) {
     with(|d| d.instant(name, tid, &args));
 }
 
+/// A step of a level's GPU work about to run (#443): an instant event
+/// `name` on the engine's thread with `args` and the bytes handed to the
+/// GPU so far by kind, stored at once, so the last record before the page
+/// dies names the step. While logging is on.
+pub fn gpu_step(name: &str, renderer: &volya_engine::render::Renderer, args: &[(&str, Value)]) {
+    if !on() {
+        return;
+    }
+    let textures = renderer.texture_bytes_written();
+    let geometry = renderer.geometry_bytes_written();
+    let mib = |b: u64| Value::Number(b as f64 / f64::from(1 << 20));
+    let mut all: Vec<(&str, Value)> = args.to_vec();
+    all.push(("texture_MiB", mib(textures)));
+    all.push(("geometry_MiB", mib(geometry)));
+    all.push(("heap_MiB", mib(crate::heap_bytes() as u64)));
+    let _ = SESSION.try_with(|s| {
+        if let Ok(mut s) = s.try_borrow_mut()
+            && let Some(s) = s.as_mut()
+        {
+            s.diagnostics.instant(name, 1, &all);
+            append_pending(s);
+        }
+    });
+}
+
+/// Appends the events recorded so far to the log (one write), leaving the
+/// period running: unlike [`store`], no summary, so a step's record costs
+/// only its own event.
+fn append_pending(s: &mut Session) {
+    let Some(log) = s.log.as_mut() else {
+        return;
+    };
+    let pending = s.diagnostics.take_pending();
+    if let Err(e) = log.append(&pending, &s.diagnostics.session_metadata()) {
+        s.log = Log::open(Store::Memory(MemoryStore::default())).ok();
+        s.stored = false;
+        tracing::error!(error = %e, "diagnostic log write failed");
+    }
+}
+
 /// The JS bridge: an instant event `name` on thread `tid` (2: the page, 3:
 /// the audio worklet) with `args`, a JSON object.
 #[wasm_bindgen]

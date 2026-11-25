@@ -1,0 +1,179 @@
+<!-- SPDX-FileCopyrightText: 2026 Maksym Motorny -->
+<!-- SPDX-License-Identifier: BSD-3-Clause -->
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Volya Engine test: WebGL 2 memory</title>
+<!-- What WebGL 2 holds per resource, for sampling the browser's footprint
+     from outside (docs/architecture/memory.md). Not a suite: open it with
+     `cargo xtask sim "open http://localhost:8080/volya-engine/__test/run/<id>/webgl-memory.html#<experiment>"`
+     while sampling the footprints. Experiments (one per page): `etc2`
+     (128 MiB of ETC2 textures with mips, written in bands, then drawn),
+     `rgba` (the same in RGBA8), `buffer` (a 64 MiB buffer written in 2 MiB
+     pieces, each drawn from before the next), `index` (a 32 MiB 16-bit index
+     buffer drawn from at an odd, then an even first index), `dynamic` (an
+     8 MiB buffer written 1 MiB at a time every frame and drawn), `depth` and
+     `nodepth` (a 2868 × 1320 canvas drawn every frame for 8 s, its context
+     with and without a depth buffer). Each phase
+     is shown and posted to the dev server with its time, 8 s apart. -->
+<body style="font: 24px sans-serif">
+<p id="log"></p>
+<canvas id="c" width="64" height="64"></canvas>
+<script type="module">
+  const base = location.pathname.slice(0, location.pathname.indexOf("/__test/") + 1);
+  const experiment = location.hash.slice(1);
+  const lines = [];
+  const mark = (text) => {
+    lines.push(`${Math.floor(Date.now() / 1000)} ${experiment}: ${text}`);
+    document.getElementById("log").textContent = lines.at(-1);
+    fetch(`${base}__test/results`, { method: "POST", body: lines.join("\n") });
+  };
+  const pause = (s) => new Promise((r) => setTimeout(r, s * 1000));
+  const frame = () => new Promise((r) => requestAnimationFrame(r));
+  const canvas = document.getElementById("c");
+  if (experiment.endsWith("depth")) [canvas.width, canvas.height] = [2868, 1320];
+  const gl = canvas.getContext("webgl2", { antialias: false, depth: experiment !== "nodepth" });
+  const MiB = 1 << 20;
+
+  const shader = (type, source) => {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, source);
+    gl.compileShader(s);
+    return s;
+  };
+  const program = gl.createProgram();
+  gl.attachShader(program, shader(gl.VERTEX_SHADER, `#version 300 es
+    in vec4 p;
+    void main() { gl_Position = vec4(p.xy * 0.0, 0.0, 1.0); gl_PointSize = 1.0; }`));
+  gl.attachShader(program, shader(gl.FRAGMENT_SHADER, `#version 300 es
+    precision mediump float;
+    uniform sampler2D t;
+    out vec4 o;
+    void main() { o = texture(t, vec2(0.5)); }`));
+  gl.bindAttribLocation(program, 0, "p");
+  gl.linkProgram(program);
+  gl.useProgram(program);
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+  const small = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, small);
+  gl.bufferData(gl.ARRAY_BUFFER, 64, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 16, 0);
+  const finish = async () => {
+    const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+    gl.flush();
+    while (gl.clientWaitSync(sync, 0, 0) === gl.TIMEOUT_EXPIRED) await frame();
+    gl.deleteSync(sync);
+  };
+
+  mark("start");
+  await pause(8);
+  if (experiment === "etc2" || experiment === "rgba") {
+    const etc2 = experiment === "etc2";
+    if (etc2) mark(`extension ${!!gl.getExtension("WEBGL_compressed_texture_etc")}, error ${gl.getError()}`);
+    const format = etc2 ? 0x9278 /* COMPRESSED_RGBA8_ETC2_EAC */ : gl.RGBA8;
+    const size = 1024;
+    const levels = 11;
+    const count = 96; // 1.33 MiB each in ETC2 (1 byte a texel), 128 MiB
+    const textures = [];
+    const band = new Uint8Array(etc2 ? 256 * size : 4 * 256 * size);
+    for (let i = 0; i < count; i++) {
+      const t = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texStorage2D(gl.TEXTURE_2D, levels, format, size, size);
+      if (i === 0) mark(`storage error ${gl.getError()}`);
+      for (let level = 0; level < levels; level++) {
+        const s = Math.max(1, size >> level);
+        for (let y = 0; y < s; y += 256) {
+          const rows = Math.min(256, s - y);
+          if (etc2) {
+            const bytes = Math.ceil(s / 4) * Math.ceil(rows / 4) * 16;
+            gl.compressedTexSubImage2D(gl.TEXTURE_2D, level, 0, y, s, rows, format, band.subarray(0, bytes));
+          } else {
+            gl.texSubImage2D(gl.TEXTURE_2D, level, 0, y, s, rows, gl.RGBA, gl.UNSIGNED_BYTE, band.subarray(0, 4 * s * rows));
+          }
+        }
+      }
+      if (i === 0) mark(`upload error ${gl.getError()}`);
+      textures.push(t);
+      if (i % 8 == 7) await finish();
+    }
+    await finish();
+    mark(`uploaded ${count} textures, ${(count * size * size * (etc2 ? 1 : 4) * 4 / 3 / MiB).toFixed(0)} MiB, error ${gl.getError()}`);
+    await pause(8);
+    for (const t of textures) {
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.drawArrays(gl.POINTS, 0, 1);
+    }
+    await finish();
+    mark("drawn");
+    await pause(8);
+  } else if (experiment === "buffer") {
+    const b = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, b);
+    gl.bufferData(gl.ARRAY_BUFFER, 64 * MiB, gl.STATIC_DRAW);
+    gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 16, 0);
+    await finish();
+    mark("made 64 MiB");
+    await pause(8);
+    const piece = new Uint8Array(2 * MiB);
+    for (let i = 0; i < 32; i++) {
+      gl.bufferSubData(gl.ARRAY_BUFFER, i * 2 * MiB, piece);
+      gl.drawArrays(gl.POINTS, 0, 1);
+      gl.flush();
+    }
+    mark("written in 32 pieces, each drawn from, no wait");
+    await finish();
+    mark("finished");
+    await pause(8);
+    for (let i = 0; i < 32; i++) {
+      gl.bufferSubData(gl.ARRAY_BUFFER, i * 2 * MiB, piece);
+      gl.drawArrays(gl.POINTS, 0, 1);
+      await finish();
+    }
+    mark("written in 32 pieces again, waiting for each");
+    await pause(8);
+  } else if (experiment === "index") {
+    const b = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, b);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(16 * MiB), gl.STATIC_DRAW);
+    await finish();
+    mark("made 32 MiB of 16-bit indices");
+    await pause(8);
+    gl.drawElements(gl.POINTS, 3, gl.UNSIGNED_SHORT, 2);
+    await finish();
+    mark("drawn from first index 1");
+    await pause(8);
+    gl.drawElements(gl.POINTS, 3, gl.UNSIGNED_SHORT, 4);
+    await finish();
+    mark("drawn from first index 2");
+    await pause(8);
+  } else if (experiment.endsWith("depth")) {
+    for (let i = 0; i < 480; i++) {
+      gl.clearColor(i % 2, 0, 0, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      await frame();
+    }
+    mark(`drawn for 480 frames, depth bits ${gl.getParameter(gl.DEPTH_BITS)}`);
+    await pause(8);
+  } else if (experiment === "dynamic") {
+    const b = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, b);
+    gl.bufferData(gl.ARRAY_BUFFER, 8 * MiB, gl.DYNAMIC_DRAW);
+    gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 16, 0);
+    await finish();
+    mark("made 8 MiB");
+    await pause(8);
+    const piece = new Uint8Array(MiB);
+    for (let i = 0; i < 600; i++) {
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, piece);
+      gl.drawArrays(gl.POINTS, 0, 1);
+      await frame();
+    }
+    mark("600 frames written and drawn");
+    await pause(8);
+  }
+  mark("done");
+</script>

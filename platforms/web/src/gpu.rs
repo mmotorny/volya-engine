@@ -9,11 +9,12 @@
 //! [`frame`] once per animation frame. Without either the engine runs on
 //! without graphics and [`status`] says why.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
 use serde::Serialize;
 use serde_json::json;
+use volya_engine::core::diagnostics::Value;
 use volya_engine::core::vfs::read_ahead::ReadAhead;
 use volya_engine::formats::pe::Rgba;
 use volya_engine::formats::ui::Resolution;
@@ -109,6 +110,22 @@ fn watch_context_loss(canvas: &OffscreenCanvas) {
     lost.forget();
 }
 
+/// Makes the canvas's WebGL 2 context before wgpu asks for it, without a
+/// depth or stencil buffer: wgpu draws into textures of its own and blits
+/// the surface's into the default framebuffer, whose depth buffer (a
+/// canvas-size renderbuffer by default, Depth32Float on Metal: 15 MB at
+/// 2868 × 1320) nothing reads (#443). A canvas gives the same context to a
+/// later `getContext` of its kind, ignoring the attributes then asked for
+/// (HTML specification), so wgpu's own options (`antialias: false`) are
+/// repeated here.
+fn make_webgl_context(canvas: &OffscreenCanvas) {
+    let options = js_sys::Object::new();
+    for (key, value) in [("antialias", false), ("depth", false), ("stencil", false)] {
+        let _ = js_sys::Reflect::set(&options, &key.into(), &value.into());
+    }
+    let _ = canvas.get_context_with_context_options("webgl2", &options);
+}
+
 /// Keeps the Graphics setting's stored choice (`""` when none), for the
 /// diagnostic log's `settings` event.
 pub fn set_choice(choice: String) {
@@ -171,6 +188,7 @@ async fn connect(canvas: OffscreenCanvas, webgl: bool) -> Result<Gpu, String> {
     let (width, height) = (canvas.width().max(1), canvas.height().max(1));
     if backend == "webgl2" {
         watch_context_loss(&canvas);
+        make_webgl_context(&canvas);
     }
     let surface = instance
         .create_surface(wgpu::SurfaceTarget::OffscreenCanvas(canvas))
@@ -336,6 +354,15 @@ pub fn prepare_world(level: &Arc<LevelWorld>, budget: u64) -> Result<bool, JsVal
     })
 }
 
+/// The level's first frames marked in the diagnostic log (#443).
+const LOGGED_LEVEL_FRAMES: u32 = 10;
+
+thread_local! {
+    /// The level's frames drawn since its warm-up, up to
+    /// [`LOGGED_LEVEL_FRAMES`] (that many before any warm-up).
+    static LEVEL_FRAMES: Cell<u32> = const { Cell::new(LOGGED_LEVEL_FRAMES) };
+}
+
 /// Frames whose GPU times `level_stats` averages.
 const RECENT_FRAMES: usize = 60;
 
@@ -392,6 +419,12 @@ pub fn warm_up() -> Result<bool, JsValue> {
         // Kept through the loading screen's frames until the level shows.
         let level = scene.world.as_ref().map(|w| w.world.clone());
         gpu.presenter.hold_world(level);
+        let mode = [
+            ("width", Value::Number(f64::from(size.width))),
+            ("height", Value::Number(f64::from(size.height))),
+        ];
+        // The world is made here (its buffers, records and programs).
+        crate::diagnostics::gpu_step("gpu.world_make", &gpu.renderer, &mode);
         let list = tracing::info_span!("render.scene").in_scope(|| {
             crate::game::with_trees(|tree, _| {
                 gpu.presenter.draw_list(&mut gpu.renderer, tree, &scene, 0)
@@ -418,9 +451,12 @@ pub fn warm_up() -> Result<bool, JsValue> {
                     | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             });
+        crate::diagnostics::gpu_step("gpu.warm_up_draw", &gpu.renderer, &mode);
         tracing::info_span!("render.encode")
             .in_scope(|| gpu.renderer.render(&target, &list, CLEAR));
         target.destroy();
+        crate::diagnostics::gpu_step("gpu.warm_up_submitted", &gpu.renderer, &mode);
+        LEVEL_FRAMES.set(0);
         Ok(true)
     })
 }
@@ -631,6 +667,16 @@ pub fn frame(time: f64) {
                         canvas_width = canvas.width,
                         canvas_height = canvas.height,
                         "video mode"
+                    );
+                }
+                // The level's first frames, each a step of its GPU work
+                // named in the diagnostic log (#443).
+                if list.world.is_some() && LEVEL_FRAMES.get() < LOGGED_LEVEL_FRAMES {
+                    LEVEL_FRAMES.set(LEVEL_FRAMES.get() + 1);
+                    crate::diagnostics::gpu_step(
+                        "gpu.level_frame",
+                        &gpu.renderer,
+                        &[("frame", Value::Number(f64::from(LEVEL_FRAMES.get())))],
                     );
                 }
                 gpu.present_at(&list, (resolution.width, resolution.height));

@@ -29,6 +29,7 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use serde::Serialize;
+use volya_engine::core::diagnostics::Value;
 use volya_engine::level::LevelWorld;
 use volya_engine::render::transcode;
 use volya_engine::render::world::UPLOAD_PIECE;
@@ -188,6 +189,16 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
             continue;
         };
         let t = now();
+        // Each texture's making and upload a step in the diagnostic log
+        // (#443; one per texture, as one per band filled the log).
+        let size = [dds.width, dds.height].map(|n| Value::Number(f64::from(n)));
+        let [width, height] = size;
+        let step = [
+            ("path", Value::Text(path.clone())),
+            ("width", width),
+            ("height", height),
+        ];
+        crate::gpu::with_renderer(|r| crate::diagnostics::gpu_step("gpu.texture", r, &step));
         let Some(Ok(mut upload)) = crate::gpu::with_renderer(|r| r.begin_texture(&dds)) else {
             continue;
         };
@@ -274,6 +285,13 @@ async fn prepare_world(level: Arc<LevelWorld>) -> Result<(), JsValue> {
         } else {
             WORLD_TURN_BYTES
         };
+        crate::gpu::with_renderer(|r| {
+            crate::diagnostics::gpu_step(
+                "gpu.geometry",
+                r,
+                &[("turn", Value::Number(f64::from(turns)))],
+            )
+        });
         let done = tracing::info_span!("prepare.world")
             .in_scope(|| crate::gpu::prepare_world(&level, budget))?;
         // Where WebGL 2 draws, until WebGL reports the pieces written done

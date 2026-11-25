@@ -1791,6 +1791,7 @@ impl GeometryUpload {
             }
             .map_err(|e| format!("{}: {e}", job.label))?;
             renderer.queue.write_buffer(&job.buffer, at, &self.piece);
+            (renderer.geometry_bytes).set(renderer.geometry_bytes.get() + self.piece.len() as u64);
             if self.compat {
                 // Each piece submitted at once, so the staging of finished
                 // ones can go (see the type's description).

@@ -172,6 +172,8 @@ pub struct Renderer {
     prepared: std::cell::RefCell<std::collections::HashMap<String, Texture>>,
     /// Bytes of texture data written so far ([`Renderer::texture_bytes_written`]).
     texture_bytes: std::cell::Cell<u64>,
+    /// Bytes of world geometry written so far ([`Renderer::geometry_bytes_written`]).
+    geometry_bytes: std::cell::Cell<u64>,
     /// Whether the world reads per-draw data from a texture and draws
     /// without base vertices ([`Renderer::compat`]).
     compat: bool,
@@ -298,6 +300,7 @@ impl Renderer {
             offscreen: None,
             prepared: Default::default(),
             texture_bytes: Default::default(),
+            geometry_bytes: Default::default(),
             compat: device.limits().max_storage_buffers_per_shader_stage == 0,
             // Made with the renderer, before any level: what lives across
             // levels is allocated below their data, so a level's freed
@@ -360,6 +363,12 @@ impl Renderer {
     /// writes done ([`Renderer::flush_uploads`]).
     pub fn texture_bytes_written(&self) -> u64 {
         self.texture_bytes.get()
+    }
+
+    /// Bytes of the worlds' geometry written since the renderer was made
+    /// (`GeometryUpload::step`), for the diagnostic log (#443).
+    pub fn geometry_bytes_written(&self) -> u64 {
+        self.geometry_bytes.get()
     }
 
     /// The texture prepared for `path`, if any (it is then forgotten).
