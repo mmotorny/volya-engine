@@ -15,6 +15,7 @@ use crate::core::vfs::read_ahead::ReadAhead;
 use crate::core::vfs::{self, Vfs};
 use crate::level::LevelWorld;
 use crate::particle_drawing::{ParticleDraw, ParticleShader};
+use crate::render::details::{DetailDraw, DetailFrame};
 use crate::render::particles::{
     ParticleBatch, ParticleBlend, ParticleCull, ParticlePass as RenderPass, ParticleProgram,
     ParticleQueue, ParticleVertex,
@@ -305,6 +306,15 @@ impl Presenter {
             // now rather than while the level runs.
             renderer.reserve_particles(scene.world.particle_capacity);
             self.load_lights(renderer, tree, &scene.world);
+            // The detail models with the world (detail-objects.md 6), so
+            // nothing is made while the level runs.
+            renderer.clear_details();
+            if let Some(d) = &scene.world.details {
+                match load_texture(renderer, tree, &d.texture) {
+                    Ok(t) => renderer.set_details(&d.models, &t, d.alpha_test, d.capacity),
+                    Err(e) => self.errors.push(format!("{}: {e}", d.texture)),
+                }
+            }
             if let Some(path) = &scene.world.presentation_noise {
                 match load_texture(renderer, tree, path) {
                     Ok(t) => renderer.set_presentation_noise(&t),
@@ -359,6 +369,25 @@ impl Presenter {
                 .collect(),
             presentation: Default::default(),
             effects: None,
+            details: scene.details.as_ref().map(|d| DetailFrame {
+                instances: d.frame.instances.clone(),
+                draws: (d.frame.draws.iter())
+                    .map(|d| DetailDraw {
+                        model: d.model,
+                        list: d.list,
+                        first: d.first,
+                        count: d.count,
+                    })
+                    .collect(),
+                sway: [
+                    d.sway.amp1,
+                    d.sway.amp2,
+                    d.sway.rot1,
+                    d.sway.rot2,
+                    d.sway.speed,
+                ],
+                time: d.time,
+            }),
         })
     }
 
@@ -741,7 +770,9 @@ impl Presenter {
                 });
             }
             None => {
-                self.world = None;
+                if self.world.take().is_some() {
+                    renderer.clear_details();
+                }
                 self.particle_shaders.clear();
                 self.glow_shaders.clear();
             }

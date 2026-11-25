@@ -30,6 +30,8 @@ theora_nrp = "0.2"
 zlib-rs = { version = "0.6", default-features = false, features = ["std"] }
 lzokay-native = { version = "0.2", default-features = false }
 crc32fast = "1"
+# Detail objects' instances to the GPU without a copy.
+bytemuck = "1"
 # WebGPU in browsers, Metal on Apple platforms; no native GL, Vulkan or
 # DX12. WebGL 2 (#113) in the web build (volya-engine-render's `webgl`
 # feature).

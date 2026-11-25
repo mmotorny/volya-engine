@@ -954,6 +954,13 @@ impl App {
                 .map_or(GLOWS_PER_FRAME, |v| v.clamp(2, 32));
             level.set_light_settings(settings, glows);
             level.set_supersample(self.supersample);
+            // detail-objects.md 7; weather-ambient-effects.md 4.3: the wind
+            // as the sound rules last updated it (without audio output
+            // they do not run, #352).
+            level.set_detail_settings(
+                self.console.number("r__detail_density"),
+                self.sound_run.wind.strength,
+            );
         }
         let now = self.clock;
         let title = self.opening(false);
@@ -1440,10 +1447,7 @@ impl App {
             }) => {
                 // Nothing of the game is drawn behind the menu; the world
                 // stays in the scene, covered, so it stays on the GPU.
-                let mut scene = level.scene(resolution, self.clock);
-                if let Some(world) = &mut scene.world {
-                    world.covered = true;
-                }
+                let mut scene = level.covered_scene(resolution, self.clock);
                 scene
                     .sprites
                     .extend(self.screens.scene(menu, &mut ctx)?.sprites);

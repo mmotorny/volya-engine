@@ -15,6 +15,7 @@
 //! non-sRGB target format.
 
 mod capture;
+pub mod details;
 pub mod particles;
 pub mod present;
 mod ramp;
@@ -176,6 +177,8 @@ pub struct Renderer {
     /// The off-screen target and the presentation quad
     /// (frame-presentation.md).
     post: present::PostProcess,
+    /// Detail objects' pipelines and the level's models (detail-objects.md).
+    details: details::DetailPipelines,
     /// The display's gamma ramp (display-gamma.md).
     ramp: ramp::RampPass,
 }
@@ -295,6 +298,7 @@ impl Renderer {
             // from 99 to 112 MiB).
             particles: Some(particles::ParticlePipelines::new(device, queue, format)),
             post: present::PostProcess::new(device, queue, format),
+            details: details::DetailPipelines::new(device, format),
             ramp: ramp::RampPass::new(device, format),
         };
         // The world's pipelines too (the light passes' among them).
@@ -615,6 +619,37 @@ impl Renderer {
             }
         }
         self.queue.submit([encoder.finish()]);
+    }
+
+    /// The level's detail models (docs/behavior/detail-objects.md), their
+    /// texture, whether their shader has the alpha test, and room for
+    /// `capacity` instances a frame: made with the level's world, so
+    /// nothing is made while it runs.
+    pub fn set_details(
+        &mut self,
+        models: &[details::DetailGeometry],
+        texture: &Texture,
+        alpha_test: bool,
+        capacity: usize,
+    ) {
+        self.details.set_level(
+            &self.device,
+            &self.queue,
+            models,
+            texture,
+            alpha_test,
+            capacity,
+        );
+    }
+
+    /// Drops the level's detail models.
+    pub fn clear_details(&mut self) {
+        self.details.clear_level();
+    }
+
+    /// Bytes of the detail objects' buffers on the GPU.
+    pub fn details_gpu_bytes(&self) -> u64 {
+        self.details.gpu_bytes()
     }
 
     /// Builds the off-screen target for a `screen` of the game's size and

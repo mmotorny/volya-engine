@@ -183,6 +183,9 @@ pub struct WorldScene {
     /// [`crate::level::LevelWorld::glow_shaders`].
     #[serde(skip)]
     pub glows: Vec<crate::core::glows::GlowSprite>,
+    /// The detail objects drawn (docs/behavior/detail-objects.md).
+    #[serde(skip)]
+    pub details: Option<crate::level_details::DetailsScene>,
 }
 
 impl PartialEq for WorldScene {
@@ -201,6 +204,14 @@ impl PartialEq for WorldScene {
             && self.particles == other.particles
             && self.lights == other.lights
             && self.glows == other.glows
+            && self
+                .details
+                .as_ref()
+                .map(|d| std::sync::Arc::as_ptr(&d.frame))
+                == other
+                    .details
+                    .as_ref()
+                    .map(|d| std::sync::Arc::as_ptr(&d.frame))
     }
 }
 

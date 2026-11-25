@@ -379,6 +379,8 @@ pub struct WorldFrame {
     /// The screen-effect values handed over for this frame
     /// (frame-presentation.md 2.2); `None` keeps those in force.
     pub effects: Option<crate::present::ScreenEffects>,
+    /// The detail objects drawn (detail-objects.md 5.4, 6).
+    pub details: Option<crate::details::DetailFrame>,
 }
 
 /// One dynamic light's pass (docs/behavior/dynamic-lights.md sections 5,
@@ -2215,6 +2217,14 @@ impl Renderer {
         sorted.sort_by(|a, b| b.0.total_cmp(&a.0));
 
         let lights = self.prepare_lights(frame, &view_projection);
+        let details = frame.details.as_ref().filter(|d| {
+            self.details.prepare(
+                &self.queue,
+                d,
+                &view_projection,
+                [l.ambient, l.hemi, l.sun_color],
+            )
+        });
         let light_pipelines = self.world_pipelines.as_ref().filter(|_| !lights.is_empty());
         let [r, g, b] = frame.clear.map(f64::from);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -2251,6 +2261,11 @@ impl Renderer {
         pass.execute_bundles([&inner.early]);
         if let Some((pipelines, prepared)) = particles {
             prepared.draw_queue(pipelines, &mut pass, ParticleQueue::Early);
+        }
+        // The detail objects after the priority 0–1 draws, before the sky
+        // (detail-objects.md 6.1).
+        if let Some(d) = details {
+            self.details.draw(&mut pass, d);
         }
         if let Some((resources, sky_frame)) = sky {
             resources.draw(&mut pass, sky_frame, size);

@@ -66,6 +66,7 @@ both!(
     light_passes_add_to_the_image,
     glows_add_after_the_world,
     the_presentation_reduces_a_supersampled_target,
+    detail_objects_are_cut_lit_and_swayed,
 );
 
 fn renderer() -> Renderer {
@@ -255,6 +256,7 @@ fn frame(world: volya_engine_render::World, sky: Option<SkyFrame>) -> WorldFrame
         lights: Vec::new(),
         presentation: Default::default(),
         effects: None,
+        details: None,
     }
 }
 
@@ -761,6 +763,107 @@ fn pixels(renderer: &mut Renderer, frame: WorldFrame, size: u32) -> Vec<u8> {
 fn at(pixels: &[u8], size: u32, x: u32, y: u32) -> [u8; 4] {
     let i = ((y * size + x) * 4) as usize;
     pixels[i..i + 4].try_into().unwrap()
+}
+
+/// detail-objects.md 6: an instance of a still model lit by the ambient
+/// colour (texel × colour × 2), an instance whose texels fail the alpha
+/// test cut away, both faces drawn, a swaying instance's colour within its
+/// pulse's range, and an instance turned and scaled.
+#[test]
+fn detail_objects_are_cut_lit_and_swayed() {
+    use std::sync::Arc;
+    use volya_engine_render::details::{DetailDraw, DetailFrame, DetailGeometry, STILL, SWAY_1};
+    let mut r = renderer();
+    let black = r.create_rgba_texture(1, 1, &[0, 0, 0, 255]);
+    let g = geom(Layout::VertexLit, 0, 0, [0; 8]);
+    let world = r
+        .create_world(
+            &g,
+            &[surface(Program::SelfLight, Some(black))],
+            &[draw(0, None)],
+            None,
+        )
+        .unwrap();
+    // Left texel opaque white, right texel white below the reference.
+    let texture = r.create_rgba_texture(2, 1, &[255, 255, 255, 255, 255, 255, 255, 128]);
+    // A unit quad standing on y = 0, x −0.5 … 0.5, its texels at u.
+    let quad = |u: f32, clockwise: bool| {
+        let v = [
+            ([-0.5, 0.0, 0.0], [u, 0.5]),
+            ([0.5, 0.0, 0.0], [u, 0.5]),
+            ([-0.5, 1.0, 0.0], [u, 0.5]),
+            ([0.5, 1.0, 0.0], [u, 0.5]),
+        ];
+        let i: &[u16] = if clockwise {
+            &[0, 2, 1, 1, 2, 3]
+        } else {
+            &[0, 1, 2, 2, 1, 3]
+        };
+        DetailGeometry::new(&v, i)
+    };
+    r.set_details(
+        &[quad(0.25, false), quad(0.75, false), quad(0.25, true)],
+        &texture,
+        true,
+        16,
+    );
+    let size = 64;
+    let at_ = |p: &[u8], x: u32, y: u32| at(p, size, x, y);
+    let mut f = frame(world, None);
+    f.light.ambient = [0.25; 3];
+    // In front of the world's triangle (depth 1).
+    let instance =
+        |x: f32, scale: f32, turn: f32| [x, -0.2, 0.8, scale, turn.cos(), turn.sin(), 0.0, 0.0];
+    let details = |instances: Vec<[f32; 8]>, draws: Vec<DetailDraw>| DetailFrame {
+        instances: Arc::new(instances),
+        draws,
+        sway: [0.0, 0.0, 1.0, 1.0, 1.0],
+        time: 0.0,
+    };
+    let one = |model, list, first| DetailDraw {
+        model,
+        list,
+        first,
+        count: 1,
+    };
+    // Model 0 at the centre, model 1 (cut) left, model 2 (wound the other
+    // way: both faces drawn) right.
+    f.details = Some(details(
+        vec![
+            instance(0.0, 0.4, 0.0),
+            instance(-0.5, 0.4, 0.0),
+            instance(0.5, 0.4, 0.0),
+        ],
+        vec![one(0, STILL, 0), one(1, STILL, 1), one(2, STILL, 2)],
+    ));
+    let p = pixels(&mut r, f.clone(), size);
+    assert_near(at_(&p, 32, 30), [128, 128, 128], "ambient × 2");
+    assert_eq!(at_(&p, 8, 30)[..3], [0, 0, 0], "cut by the alpha test");
+    assert_near(at_(&p, 56, 30), [128, 128, 128], "the other face");
+    // Turned a quarter about y, the quad is seen edge on: nothing at the
+    // centre; scaled by 0.5 it no longer reaches the top.
+    f.details = Some(details(
+        vec![instance(0.0, 0.4, std::f32::consts::FRAC_PI_2)],
+        vec![one(0, STILL, 0)],
+    ));
+    let p = pixels(&mut r, f.clone(), size);
+    assert_eq!(at_(&p, 25, 30)[..3], [0, 0, 0], "edge on");
+    f.details = Some(details(
+        vec![instance(0.0, 0.2, 0.0)],
+        vec![one(0, STILL, 0)],
+    ));
+    let p = pixels(&mut r, f.clone(), size);
+    assert_eq!(at_(&p, 32, 28)[..3], [0, 0, 0], "half height");
+    assert_near(at_(&p, 32, 36), [128, 128, 128], "half height");
+    // Sway 1 without amplitude: in place, the colour × (0.9 + 0.25
+    // max(0, γ) φ).
+    f.details = Some(details(
+        vec![instance(0.0, 0.4, 0.0)],
+        vec![one(0, SWAY_1, 0)],
+    ));
+    let p = pixels(&mut r, f, size);
+    let c = at_(&p, 32, 30)[0];
+    assert!((114..=147).contains(&c), "swaying colour {c}");
 }
 
 /// frame-presentation.md 1.1, 3.1, 3.5: at `r__supersample` 2 the world is
