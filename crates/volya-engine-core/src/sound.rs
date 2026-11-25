@@ -20,6 +20,13 @@ use volya_engine_formats::sound_params::{self, SoundParams};
 use crate::config::{LEVEL, PathAliases};
 use crate::vfs::{self, Vfs};
 
+pub mod ambient;
+pub mod music;
+pub mod occlusion;
+pub mod rain_thunder;
+pub mod random;
+pub mod reverb;
+pub mod static_sources;
 pub mod system;
 
 /// The alias of the sound directory (section 2).

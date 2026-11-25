@@ -26,6 +26,7 @@ use crate::data::{Assets, GameData};
 use crate::draw::Ctx;
 use crate::inventory_screen::{self, InventoryScreen, InventoryState};
 use crate::level::{LevelScreen, LevelState};
+use crate::level_sound::{LevelSounds, SoundRun};
 use crate::loading_screen::{
     GAME_TYPE, Loading, LoadingScreen, LoadingScreenState, OVERLAY_FRAMES, SERVER_NEW_GAME,
     intro_due,
@@ -375,6 +376,10 @@ pub struct App {
     sound_in_level: bool,
     /// The sound system is paused for the menu over the level.
     sound_paused: bool,
+    /// The running level's sounds (crate::level_sound).
+    level_sounds: Option<LevelSounds>,
+    /// The sound rules' state kept for the whole run, with their clock.
+    sound_run: SoundRun,
     /// The console may have changed this frame.
     console_touched: bool,
     /// Updates so far.
@@ -465,6 +470,8 @@ impl App {
             sound_voices_set: false,
             sound_in_level: false,
             sound_paused: false,
+            level_sounds: None,
+            sound_run: SoundRun::default(),
             console_touched: false,
             frames: 0,
             unlock_opened: None,
@@ -560,16 +567,19 @@ impl App {
             return;
         }
         self.update_phase(tree, time_ms, input, audio);
-        self.sound_frame(audio);
+        self.sound_frame(tree, audio);
     }
 
     /// What the sound system takes from this frame
     /// (docs/behavior/sound-positional.md): its voices (`snd_targets`) once
     /// the settings are read; the listener, the level's camera; a pause
     /// while the menu is open over the level (section 4.5); every sound
-    /// stopped when the level is left (section 4.4). The platform runs its
-    /// update.
-    fn sound_frame(&mut self, audio: &mut dyn AudioOut) {
+    /// stopped when the level is left (section 4.4). The level's own sounds
+    /// (crate::level_sound) are created once the level runs and the sound
+    /// system exists, and their rules run on the frames that advance game
+    /// time without the loading image or the intro over the level. The
+    /// platform runs the sound system's update.
+    fn sound_frame(&mut self, tree: &dyn Vfs, audio: &mut dyn AudioOut) {
         let Some(sounds) = audio.sounds() else {
             return;
         };
@@ -583,20 +593,57 @@ impl App {
                 sounds.restart(voices);
             }
         }
-        let (in_level, menu_open) = match &self.phase {
-            Some(Phase::Level { level, menu, .. }) => {
+        let (in_level, menu_open) = match &mut self.phase {
+            Some(Phase::Level {
+                level,
+                menu,
+                overlay,
+                intro,
+                ..
+            }) => {
                 let v = level.player().view();
                 sounds.set_listener(Listener {
                     position: v.eye,
                     direction: v.direction,
                     up: v.up,
                 });
+                if let Some(data) = level.take_sound_data() {
+                    match LevelSounds::create(sounds, tree, &self.data.aliases, &data) {
+                        Ok(created) => {
+                            sounds.occlusion_mut().level = Some(level.shared_collision());
+                            self.level_sounds = Some(created);
+                        }
+                        // The original stops with a fatal error; the level
+                        // plays on without its sounds, saying why (our
+                        // choice).
+                        Err(e) => self.error = Some(e.to_string()),
+                    }
+                }
+                if let Some(elapsed) = level.advanced() {
+                    self.sound_run.advance(elapsed);
+                    if let Some(level_sounds) = &mut self.level_sounds
+                        && overlay.is_none()
+                        && intro.player.is_none()
+                        && menu.is_none()
+                    {
+                        self.sound_run.frame(
+                            sounds,
+                            level_sounds,
+                            &level.sound_inputs(),
+                            elapsed as f32 / 1000.0,
+                        );
+                    }
+                }
                 (true, menu.is_some())
             }
             _ => (false, false),
         };
         if self.sound_in_level && !in_level {
             sounds.stop_all();
+            if let Some(level_sounds) = self.level_sounds.take() {
+                level_sounds.discard(sounds);
+            }
+            self.sound_run.level_left();
         }
         self.sound_in_level = in_level;
         if menu_open != self.sound_paused {

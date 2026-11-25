@@ -35,12 +35,14 @@ use crate::core::config::Config;
 use crate::core::input::Input;
 use crate::core::level::{DrawItem, Level};
 use crate::core::movement::{Flags, MovementConfig, Player};
+use crate::core::object_light::SkyVisibility;
 use crate::core::simulation::graph::Graph;
 use crate::core::simulation::navigation::Navigation;
 use crate::core::simulation::{AlifeConfig, Changes, Simulation};
 use crate::core::vfs::{self, Vfs};
 use crate::core::weather::{Environment, Weather};
 use crate::data::GameData;
+use crate::level_sound::{LevelSoundData, SoundInputs};
 use crate::loading_screen::Stage;
 use crate::objects::{self, Characters, LevelObjects, ObjectsReport};
 use crate::render::sky::{SkySection, SkyTextures};
@@ -149,7 +151,17 @@ impl LevelWorld {
 /// The level shown.
 pub struct LevelScreen {
     world: Arc<LevelWorld>,
-    collision: CollisionWorld,
+    /// Shared with the sound system, whose level mesh it is
+    /// (sound-occlusion.md section 3).
+    collision: Arc<CollisionWorld>,
+    /// The level's sound data until the app creates its sounds.
+    sound_data: Option<LevelSoundData>,
+    /// The player's sky visibility (level-objects.md 5.4), for the sounds
+    /// of the weather.
+    sky_visibility: SkyVisibility,
+    /// The real time the last frame advanced game time by (ms), `None` for
+    /// a paused frame.
+    advanced: Option<u64>,
     player: Player,
     /// The player character's state (docs/behavior/player-state.md); `None`
     /// only in the unit tests' empty level.
@@ -714,6 +726,7 @@ pub struct NewGameLoad {
     mesh_surfaces: Vec<Vec<Option<u32>>>,
     objects_not_drawn: Vec<(String, String)>,
     dynamic_props: Vec<[f32; 4]>,
+    sound: Option<LevelSoundData>,
 }
 
 /// The game hour of `clock`, 0 … 23 (the scripts' switch rules,
@@ -898,7 +911,11 @@ impl NewGameLoad {
                 self.movement = Some(MovementConfig::read(&data.system, spawn::ACTOR_SECTION)?);
                 self.controls = Some(data.controls.clone());
                 let weather_name = start_weather(tree, data, name)?;
-                self.weather = Some(Weather::load(&data.system, &weather_name)?);
+                let weather = Weather::load(&data.system, &weather_name)?;
+                // The level's sound data (docs/behavior/level-sound-scope.md),
+                // placed under this caption by us, with the weather it needs.
+                self.sound = Some(LevelSoundData::read(tree, data, &dir, name, &weather)?);
+                self.weather = Some(weather);
                 let level_objects = std::mem::take(&mut self.level_objects);
                 self.spawned = Some(objects::spawn(tree, data, &dir, &level_objects)?);
             }
@@ -1052,7 +1069,10 @@ impl NewGameLoad {
                 geometry: geom,
                 objects,
             }),
-            collision,
+            collision: Arc::new(collision),
+            sound_data: self.sound,
+            sky_visibility: SkyVisibility::default(),
+            advanced: None,
             player,
             character: Some(character),
             controls,
@@ -1152,6 +1172,7 @@ impl LevelScreen {
         let elapsed = now.saturating_sub(self.last);
         self.shown += elapsed;
         self.last = now;
+        self.advanced = None;
         self.clock.set_paused(true);
         self.clock.advance(elapsed);
         self.player.paused(now);
@@ -1165,6 +1186,7 @@ impl LevelScreen {
         let elapsed = now.saturating_sub(self.last);
         let dt = (elapsed as f32 / 1000.0).min(MAX_STEP);
         self.last = now;
+        self.advanced = Some(elapsed);
         self.clock.set_paused(false);
         self.clock.advance(elapsed);
         let player = self.player.state();
@@ -1201,6 +1223,43 @@ impl LevelScreen {
             self.clock.time_factor(),
         );
         self.update_view();
+        // TODO(docs/behavior/level-objects.md 5.4): the rays start at the
+        // centre of the player's model sphere raised by 0.3 of its radius;
+        // the player's model is not loaded, so they start at the eye (our
+        // choice).
+        let eye = self.player.view().eye;
+        self.sky_visibility
+            .update(&self.collision, eye, elapsed as f32 / 1000.0);
+    }
+
+    /// The level's sound data, once (the app creates its sounds).
+    pub fn take_sound_data(&mut self) -> Option<LevelSoundData> {
+        self.sound_data.take()
+    }
+
+    /// The collision world, shared.
+    pub fn shared_collision(&self) -> Arc<CollisionWorld> {
+        self.collision.clone()
+    }
+
+    /// The real time the last frame advanced game time by (ms), `None` when
+    /// it was paused.
+    pub fn advanced(&self) -> Option<u64> {
+        self.advanced
+    }
+
+    /// What this frame's sound rules read.
+    pub fn sound_inputs(&self) -> SoundInputs<'_> {
+        let (a, b, t) = self.weather.bracket(self.clock.time_of_day());
+        SoundInputs {
+            tau: (self.clock.time() % crate::core::clock::DAY_MS) as u32,
+            sections: [a, b],
+            t,
+            far_plane: self.environment.far_plane,
+            sun_dir: self.environment.sun_dir,
+            eye: self.player.view().eye,
+            sky_visibility: self.sky_visibility.value(),
+        }
     }
 
     /// One update of the offline simulation (offline-simulation.md 6.2)
@@ -1521,7 +1580,12 @@ impl LevelScreen {
                 geometry: GeomFile::default(),
                 objects: LevelObjects::default(),
             }),
-            collision: CollisionWorld::new(Default::default(), Vec::new()).expect("collision"),
+            collision: Arc::new(
+                CollisionWorld::new(Default::default(), Vec::new()).expect("collision"),
+            ),
+            sound_data: None,
+            sky_visibility: SkyVisibility::default(),
+            advanced: None,
             player,
             character: None,
             controls,
