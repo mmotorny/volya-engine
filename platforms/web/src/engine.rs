@@ -247,9 +247,21 @@ pub fn frame(time: f64) {
     }
 }
 
+thread_local! {
+    /// Whether the page is hidden (#93), for work outside the frame loop.
+    static PAGE_HIDDEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the page is hidden: work outside the frame loop waits meanwhile
+/// (#93).
+pub fn page_hidden() -> bool {
+    PAGE_HIDDEN.with(|h| h.get())
+}
+
 /// The page was hidden or shown again ([`App::set_hidden`]; our design,
 /// #93): in a level the menu opens; the frame loop idles meanwhile.
 pub fn set_hidden(hidden: bool) {
+    PAGE_HIDDEN.with(|h| h.set(hidden));
     RUNNING.with(|r| {
         let mut r = r.borrow_mut();
         let Some(Running { app, voices }) = r.as_mut() else {

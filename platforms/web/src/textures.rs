@@ -117,8 +117,11 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
         drop(bytes);
         stats.total_ms = now() - start;
         STATS.with(|s| *s.borrow_mut() = stats.clone());
-        // A task turn for frames to run.
+        // A task turn for frames to run; none while the page is hidden (#93).
         crate::opfs::sleep(0).await?;
+        while crate::engine::page_hidden() {
+            crate::opfs::sleep(100).await?;
+        }
     }
     stats.total_ms = now() - start;
     STATS.with(|s| *s.borrow_mut() = stats);

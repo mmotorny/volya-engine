@@ -532,8 +532,10 @@ export const tests = {
   "transcoding to ETC2 costs: the level's textures and a few large ones": async () => {
     needsGame();
     await until((s) => s.phase === "level" && !s.intro, "the level");
-    // Measured on every target (Chrome uploads BC, but the wasm
-    // transcoder's cost is the same work).
+    // Only where the level's textures are transcoded: elsewhere (Chrome
+    // uploads BC) the op would block the engine worker for half a minute
+    // in the middle of the level's tests.
+    if (gpu?.textures !== "etc2") skip(`textures ${gpu?.textures ?? "none"}: nothing is transcoded`);
     const large = [
       "gamedata\\textures\\detail\\detail_grnd_grass.dds",
       "gamedata\\levels\\l01_escape\\terrain\\terrain_escape.dds",
