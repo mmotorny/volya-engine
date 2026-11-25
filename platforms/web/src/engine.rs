@@ -29,6 +29,59 @@ struct Running {
     app: App,
     /// Voices the app started, for the mixer adapter.
     voices: Vec<VoiceId>,
+    /// The console's generation the `settings` event last looked at, and
+    /// the values it recorded.
+    settings: (u64, Vec<String>),
+}
+
+/// The console's settings the diagnostic log's `settings` event records:
+/// those that change the picture or a frame's cost
+/// (docs/architecture/diagnostics.md).
+const SETTINGS: &[&str] = &[
+    "renderer",
+    "vid_mode",
+    "r__supersample",
+    "_preset",
+    "r__detail_density",
+    "r__geometry_lod",
+    "texture_lod",
+    "r__tf_aniso",
+    "r1_tf_mipbias",
+    "r1_dlights",
+    "r1_dlights_clip",
+    "r1_glows_per_frame",
+    "r2_sun_lumscale",
+    "r1_pps_u",
+    "r1_pps_v",
+    "rs_c_gamma",
+    "rs_c_contrast",
+    "rs_c_brightness",
+    "rs_vis_distance",
+];
+
+/// The [`SETTINGS`] as the console holds them, empty where a name holds no
+/// value (its built-in default applies).
+fn settings(app: &App) -> Vec<String> {
+    let console = app.console();
+    SETTINGS
+        .iter()
+        .map(|name| console.status(name).unwrap_or_default())
+        .collect()
+}
+
+/// Writes the `settings` event: `values` (of [`SETTINGS`]), the Graphics
+/// setting as stored (`graphics`) and the backend drawing (`backend`).
+fn log_settings(values: &[String]) {
+    use volya_engine::core::diagnostics::Value;
+    let (graphics, backend) = crate::gpu::graphics();
+    let mut args: Vec<(String, Value)> = SETTINGS
+        .iter()
+        .zip(values)
+        .map(|(name, v)| ((*name).to_owned(), Value::Text(v.clone())))
+        .collect();
+    args.push(("graphics".to_owned(), Value::Text(graphics)));
+    args.push(("backend".to_owned(), Value::Text(backend.to_owned())));
+    crate::diagnostics::instant("settings", 1, &args);
 }
 
 thread_local! {
@@ -113,9 +166,12 @@ pub async fn launch() -> Result<serde_json::Value, JsValue> {
         }
     };
     tracing::info!(loading_ms = js_sys::Date::now() - started, "game started");
+    let values = settings(&app);
+    log_settings(&values);
     crate::input::set_render(Some(app.video_mode()));
     RUNNING.with(|r| {
         *r.borrow_mut() = Some(Running {
+            settings: (app.console().generation(), values),
             app,
             voices: Vec::new(),
         })
@@ -263,7 +319,11 @@ pub fn frame(time: f64) {
     let quit = RUNNING.with(|r| {
         let mut r = r.borrow_mut();
         let running = r.as_mut()?;
-        let Running { app, voices } = running;
+        let Running {
+            app,
+            voices,
+            settings: logged,
+        } = running;
         let updated = crate::game::with_trees(|tree, _| {
             crate::input::with_input(|input| {
                 crate::audio::with_sounds(|host| {
@@ -293,6 +353,15 @@ pub fn frame(time: f64) {
                     web_sys::console::error_1(&e);
                 }
             });
+        }
+        // A command took effect: the settings again where they changed.
+        let generation = app.console().generation();
+        if logged.0 != generation {
+            let values = settings(app);
+            if values != logged.1 {
+                log_settings(&values);
+            }
+            *logged = (generation, values);
         }
         crate::input::set_render(Some(app.video_mode()));
         // The game was unmounted under the app.
@@ -324,7 +393,7 @@ pub fn set_hidden(hidden: bool) {
     PAGE_HIDDEN.with(|h| h.set(hidden));
     RUNNING.with(|r| {
         let mut r = r.borrow_mut();
-        let Some(Running { app, voices }) = r.as_mut() else {
+        let Some(Running { app, voices, .. }) = r.as_mut() else {
             return;
         };
         let _ = crate::game::with_trees(|tree, _| {
@@ -537,6 +606,89 @@ pub fn particles_bench(frames: u32) -> Result<serde_json::Value, JsValue> {
             "max_us": max * 1000.0,
             "particles": effects.particle_count(),
         }))
+    })
+}
+
+/// The `debug_rays_bench` op (tests, #396): `count` pseudo-random rays
+/// from within 1 m of the player's sky-ray origin against the level's
+/// collision world, short (a particle's step, 1 mm to 0.5 m) and long
+/// (5 to 100 m), each cast 5 times: the mean CPU time of a ray
+/// (microseconds) by `ray_nearest` under the particles' test and by
+/// `ray_any` under the sound occlusion's, and how many hit.
+#[cfg(feature = "test-ops")]
+pub fn rays_bench(count: u32) -> Result<serde_json::Value, JsValue> {
+    use volya_engine::core::particles::collision::front_hit;
+    use volya_engine::core::sound::occlusion::crosses;
+    RUNNING.with(|r| {
+        let r = r.borrow();
+        let running = r.as_ref().ok_or_else(|| error("the game is not running"))?;
+        let level = running.app.level().ok_or_else(|| error("no level"))?;
+        let world = level.collision();
+        let p = level.sky_ray_origin();
+        let mut state = 396u64;
+        let mut unit = move || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 40) as f32 / (1u64 << 24) as f32
+        };
+        let mut rays = |short: bool| {
+            (0..count)
+                .map(|_| {
+                    let o = [
+                        p[0] + unit() * 2.0 - 1.0,
+                        p[1] + unit() * 2.0 - 1.0,
+                        p[2] + unit() * 2.0 - 1.0,
+                    ];
+                    let d = loop {
+                        let v = [unit() * 2.0 - 1.0, unit() * 2.0 - 1.0, unit() * 2.0 - 1.0];
+                        let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                        if l > 0.1 && l <= 1.0 {
+                            break v.map(|x| x / l);
+                        }
+                    };
+                    let length = if short {
+                        1e-3 * 500f32.powf(unit())
+                    } else {
+                        5.0 + 95.0 * unit()
+                    };
+                    (o, d, length)
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut result = serde_json::Map::new();
+        for (name, rays) in [("short", rays(true)), ("long", rays(false))] {
+            let time = |f: &dyn Fn(([f32; 3], [f32; 3], f32)) -> bool| {
+                let begin = crate::now();
+                let mut hits = 0;
+                for _ in 0..5 {
+                    hits = rays.iter().filter(|&&r| f(r)).count();
+                }
+                let us = (crate::now() - begin) * 1000.0 / (5.0 * f64::from(count.max(1)));
+                (us, hits)
+            };
+            let (nearest_us, nearest_hits) = time(&|(o, d, l)| {
+                world
+                    .ray_nearest(o, d, l, |i| {
+                        front_hit(o, d, &world.corners(i)).filter(|&t| t < l)
+                    })
+                    .is_some()
+            });
+            let (any_us, any_hits) =
+                time(&|(o, d, l)| world.ray_any(o, d, l, |t| crosses(o, d, l, t, true)));
+            result.insert(
+                name.into(),
+                json!({
+                    "nearest_us": nearest_us,
+                    "nearest_hits": nearest_hits,
+                    "any_us": any_us,
+                    "any_hits": any_hits,
+                }),
+            );
+        }
+        result.insert("rays".into(), json!(count));
+        result.insert("index_bytes".into(), json!(world.memory_bytes()));
+        Ok(serde_json::Value::Object(result))
     })
 }
 

@@ -53,6 +53,7 @@ fn main() -> ExitCode {
         ["e2e", targets @ ..] => e2e::run(targets),
         ["wait-memory"] => machine::wait_memory(),
         ["sim", steps @ ..] if !steps.is_empty() => e2e::sim(steps),
+        [e2e::REAPER, holder, udid] => e2e::reap(holder, udid),
         ["simshot"] => e2e::screenshot(None).map(drop),
         ["simshot", path] => e2e::screenshot(Some(Path::new(path))).map(drop),
         ["simrec", path, seconds] => seconds
