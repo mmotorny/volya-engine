@@ -20,6 +20,7 @@ pub mod particles;
 pub mod present;
 mod ramp;
 pub mod sky;
+pub mod stats;
 mod texture;
 mod timing;
 mod video;
@@ -367,6 +368,7 @@ impl Renderer {
     /// submissions: wgpu's GL backend holds written bytes in CPU memory (the
     /// wasm heap on the web) until then (#113).
     pub fn flush_uploads(&self) {
+        crate::stats::submit();
         self.queue.submit([]);
         let _ = self.device.poll(wgpu::PollType::Poll);
     }
@@ -501,6 +503,7 @@ impl Renderer {
             rect,
             table,
         );
+        crate::stats::submit();
         self.queue.submit([encoder.finish()]);
     }
 
@@ -552,6 +555,8 @@ impl Renderer {
             None => wgpu::LoadOp::Clear(clear),
         };
         {
+            let timed = crate::timing::pass_writes("ui", timed.is_some());
+            crate::stats::pass();
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("ui"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -564,24 +569,29 @@ impl Renderer {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: timed.and_then(|slot| Some(self.timer.as_ref()?.last_pass(slot))),
+                timestamp_writes: crate::timing::writes(&timed),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
             if !batches.is_empty() {
+                crate::stats::buffer();
                 pass.set_vertex_buffer(0, self.vertices.slice(..));
                 for (texture, vertices) in batches {
                     let texture = &list.quads[texture].texture;
+                    crate::stats::pipeline();
                     pass.set_pipeline(if texture.ycbcr {
                         &self.movie_pipeline
                     } else {
                         &self.pipeline
                     });
+                    crate::stats::bind_group();
                     pass.set_bind_group(0, &texture.bind_group, &[]);
+                    crate::stats::draw();
                     pass.draw(vertices, 0..1);
                 }
             }
         }
+        crate::stats::submit();
         tracing::info_span!("render.submit").in_scope(|| self.queue.submit([encoder.finish()]));
     }
 
@@ -606,6 +616,12 @@ impl Renderer {
         if let (Some(timer), Some(slot)) = (self.timer.as_mut(), timed) {
             timer.end(&self.device, &self.queue, slot);
         }
+    }
+
+    /// The draw calls and state changes encoded since the last call
+    /// (#387).
+    pub fn take_frame_stats(&self) -> stats::FrameStats {
+        stats::take()
     }
 
     /// Whether the device can time frames on the GPU (timestamp queries).
@@ -634,6 +650,16 @@ impl Renderer {
     /// own, other backends when the device is polled.
     pub fn take_gpu_times(&mut self) -> Vec<f64> {
         self.timer.as_mut().map(|t| t.take()).unwrap_or_default()
+    }
+
+    /// The GPU times of the passes of the frames [`Renderer::take_gpu_times`]
+    /// returned, milliseconds, by pass name (`world`, `distortion`,
+    /// `presentation`, `ui`, `fit`, `ramp`; #387).
+    pub fn take_gpu_pass_times(&mut self) -> Vec<(&'static str, f64)> {
+        self.timer
+            .as_mut()
+            .map(|t| t.take_passes())
+            .unwrap_or_default()
     }
 
     /// [`Renderer::render_scaled`]'s drawing; its last pass ends the
@@ -668,6 +694,8 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("fit") });
         {
             let view = target.create_view(&Default::default());
+            let timed = crate::timing::pass_writes("fit", timed.is_some());
+            crate::stats::pass();
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("fit"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -680,20 +708,25 @@ impl Renderer {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: timed.and_then(|slot| Some(self.timer.as_ref()?.last_pass(slot))),
+                timestamp_writes: crate::timing::writes(&timed),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
             if w >= 1.0 && h >= 1.0 {
                 pass.set_viewport(x, y, w, h, 0.0, 1.0);
+                crate::stats::buffer();
                 pass.set_vertex_buffer(0, self.vertices.slice(..));
+                crate::stats::pipeline();
                 pass.set_pipeline(&self.pipeline);
+                crate::stats::bind_group();
                 pass.set_bind_group(0, &frame.bind_group, &[]);
                 for (_, vertices) in batches {
+                    crate::stats::draw();
                     pass.draw(vertices, 0..1);
                 }
             }
         }
+        crate::stats::submit();
         tracing::info_span!("render.submit_fit").in_scope(|| self.queue.submit([encoder.finish()]));
     }
 
@@ -830,7 +863,9 @@ impl Renderer {
             // TODO(#329): particle-drawing.md 6.2 does not state the view
             // and projection of the distortion pass; the scene's
             // (believed).
+            stats::set_part(stats::Part::Particles);
             pipelines.distort(encoder, prepared, distort, depth);
+            stats::set_part(stats::Part::Screen);
         }
         self.particles = pipelines;
         distorted

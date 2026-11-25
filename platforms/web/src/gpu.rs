@@ -79,6 +79,12 @@ thread_local! {
     /// log.
     static DRAWN: std::cell::Cell<Option<(Resolution, Resolution)>> =
         const { std::cell::Cell::new(None) };
+    /// The latest frames' GPU times by pass (#387).
+    static PASS_RECENT: RefCell<std::collections::BTreeMap<&'static str, std::collections::VecDeque<f64>>> =
+        Default::default();
+    /// The draw calls and state changes of the last frame drawn (#387).
+    static LAST_STATS: std::cell::Cell<volya_engine::render::stats::FrameStats> =
+        std::cell::Cell::new(Default::default());
 }
 
 fn error(e: impl std::fmt::Display) -> JsValue {
@@ -463,7 +469,37 @@ pub fn world_stats() -> serde_json::Value {
             "object_draws": world.map(|w| w.object_draw_count()),
             "gpu_object_bytes": world.map(|w| w.object_gpu_bytes()),
             "gpu_object_texture_bytes": world.map(|w| w.object_texture_bytes()),
+            "frame_commands": frame_commands(),
+            "gpu_pass_ms": PASS_RECENT.with_borrow(|r| {
+                r.iter()
+                    .map(|(k, q)| (k.to_string(), json!(q.iter().sum::<f64>() / q.len().max(1) as f64)))
+                    .collect::<serde_json::Map<_, _>>()
+            }),
         })
+    })
+}
+
+/// The last frame's draw calls and state changes, in all and by part.
+fn frame_commands() -> serde_json::Value {
+    use volya_engine::render::stats::{Counts, Part};
+    let s = LAST_STATS.get();
+    let counts = |c: Counts| {
+        json!({
+            "draws": c.draws,
+            "pipelines": c.pipelines,
+            "bind_groups": c.bind_groups,
+            "buffers": c.buffers,
+        })
+    };
+    let parts: serde_json::Map<String, serde_json::Value> = Part::ALL
+        .iter()
+        .map(|&p| (p.name().to_owned(), counts(s.part(p))))
+        .collect();
+    json!({
+        "total": counts(s.total()),
+        "passes": s.passes,
+        "submits": s.submits,
+        "parts": parts,
     })
 }
 
@@ -568,6 +604,25 @@ impl Gpu {
             volya_engine::core::diagnostics::metric("gpu.time_ms", ms);
             keep(0, ms);
         }
+        for (pass, ms) in self.renderer.take_gpu_pass_times() {
+            let name = match pass {
+                "world" => "gpu.pass.world_ms",
+                "distortion" => "gpu.pass.distortion_ms",
+                "presentation" => "gpu.pass.presentation_ms",
+                "ui" => "gpu.pass.ui_ms",
+                "fit" => "gpu.pass.fit_ms",
+                "ramp" => "gpu.pass.ramp_ms",
+                _ => "gpu.pass.other_ms",
+            };
+            volya_engine::core::diagnostics::metric(name, ms);
+            PASS_RECENT.with_borrow_mut(|r| {
+                let q = r.entry(pass).or_default();
+                if q.len() == RECENT_FRAMES {
+                    q.pop_front();
+                }
+                q.push_back(ms);
+            });
+        }
         for ms in DONE_MS.with(|d| std::mem::take(&mut *d.borrow_mut())) {
             volya_engine::core::diagnostics::metric("gpu.done_ms", ms);
             keep(1, ms);
@@ -605,10 +660,21 @@ impl Gpu {
             }
             _ => return,
         };
+        self.renderer.take_frame_stats();
         tracing::info_span!("render.encode").in_scope(|| {
             self.renderer
                 .render_scaled(&texture.texture, list, CLEAR, size);
         });
+        let stats = self.renderer.take_frame_stats();
+        LAST_STATS.set(stats);
+        if list.world.is_some() {
+            use volya_engine::core::diagnostics::metric;
+            let t = stats.total();
+            metric("render.draws", f64::from(t.draws));
+            metric("render.pipelines", f64::from(t.pipelines));
+            metric("render.bind_groups", f64::from(t.bind_groups));
+            metric("render.buffers", f64::from(t.buffers));
+        }
         self.watch_done();
         tracing::info_span!("render.present").in_scope(|| self.queue.present(texture));
         self.dirty = false;

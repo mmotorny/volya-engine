@@ -130,8 +130,9 @@ fn shared_index_ranges_with_different_bases() {
         [0, 0xFE, 0],
         "green over red",
     );
-    // In steps (#184): one piece a step, the vertex buffer then the index
-    // buffer; finished only when all is uploaded, and for the same draws.
+    // In steps (#184): one piece a step, the vertex buffer, the index
+    // buffer, then the vertices' draw ids (#387); finished only when all is
+    // uploaded, and for the same draws.
     let objects = ObjectGeometry::default();
     let draws = [red, green];
     let layout = g.source().layout().clone();
@@ -140,11 +141,12 @@ fn shared_index_ranges_with_different_bases() {
     while !upload.step(&r, &mut g.source(), &objects, 1).unwrap() {
         steps += 1;
     }
-    assert_eq!(steps, 2, "a piece a step");
+    assert_eq!(steps, 3, "a piece a step");
     let other = r.begin_geometry(&layout, &objects, &[red]).unwrap();
     assert!(r.finish_world(other, &surfaces, &[red], None).is_err());
     assert!(r.finish_world(upload, &surfaces, &[red], None).is_err());
     let mut upload = r.begin_geometry(&layout, &objects, &draws).unwrap();
+    assert!(!upload.step(&r, &mut g.source(), &objects, 1).unwrap());
     assert!(!upload.step(&r, &mut g.source(), &objects, 1).unwrap());
     assert!(upload.step(&r, &mut g.source(), &objects, 1).unwrap());
     let world = r.finish_world(upload, &surfaces, &draws, None).unwrap();
