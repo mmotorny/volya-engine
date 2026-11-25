@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! Rendering in the engine worker on the `OffscreenCanvas` the page
-//! transferred (docs/architecture.md, Threading): WebGPU when the browser
+//! transferred (docs/architecture/rendering.md): WebGPU when the browser
 //! gives an adapter, else WebGL 2 (#113), or WebGL 2 where the player chose
 //! it (#121). The page reports the canvas's CSS
 //! size and devicePixelRatio ([`resize`]); `engine-worker.js` calls

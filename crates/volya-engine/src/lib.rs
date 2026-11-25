@@ -18,6 +18,7 @@ pub mod app;
 pub mod audio;
 pub mod controls;
 pub mod data;
+pub mod detector;
 pub mod dialog;
 pub mod draw;
 #[cfg(test)]

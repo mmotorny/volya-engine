@@ -870,6 +870,21 @@ impl App {
                         fatal = Some(e);
                     }
                 }
+                // The detectors' ticks and stops of this frame
+                // (sound-detector.md 3, 6), made by its update.
+                for sound in level.take_detector_sounds() {
+                    if let Some(level_sounds) = &mut self.level_sounds
+                        && let Err(e) = level_sounds.detector(
+                            sounds,
+                            tree,
+                            &self.data.aliases,
+                            sound,
+                            level.detectors().section(sound.detector),
+                        )
+                    {
+                        fatal = Some(e);
+                    }
+                }
                 (true, menu.is_some())
             }
             _ => (false, false),
@@ -1545,6 +1560,12 @@ impl App {
             return Err(io::Error::other("no level"));
         };
         let config = ItemConfig::read(&self.data.system, section)?;
+        // A detector reads its section as it is made (sound-detector.md 2.1).
+        if crate::detector::is_detector(config.class_id.as_str()) {
+            let detector =
+                crate::core::detector::DetectorSection::read(&self.data.system, section)?;
+            level.add_detector_section(detector);
+        }
         if level.character().is_none() {
             return Err(io::Error::other("no player character"));
         }

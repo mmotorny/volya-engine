@@ -16,13 +16,15 @@ fn section(text: &str, name: &str, behaviour: Behaviour) -> io::Result<ZoneSecti
 
 const GALANTINE: &str = "[zone_witches_galantine]\nidle_particles = tests\\muhi\n\
      idle_sound = anomaly\\electra_idle1\nidle_light = off\nawaking_time = 100\n\
-     blowout_time = 1000\naccamulate_time = 1000\nblowout_sound = anomaly\\electra_blast1\n\
+     blowout_time = 1000\naccamulate_time = 1000\n\
+     visible_by_detector = on\nblowout_sound = anomaly\\electra_blast1\n\
      hit_sound = anomaly\\electra_hit\nentrance_sound = anomaly\\electra_hit\n";
 
 fn record(e: u32, d: u32, s: u32) -> ZoneRecord {
     ZoneRecord {
         id: 7,
         name: "esc_zone_witches_galantine".into(),
+        class_id: "ZS_MBALD".into(),
         position: [10.0, 2.0, -5.0],
         angles: [0.0; 3],
         shapes: vec![Shape::Sphere {
@@ -210,7 +212,8 @@ fn the_light_colour_is_the_entrys_red_green_blue_over_255() {
 
 const BUZZ: &str = "[zone_buzz]\nidle_particles = tests\\muhi\nidle_light = on\n\
      idle_light_range = 3.0\nidle_light_range_delta = 0.25\nidle_light_anim = light_green_02\n\
-     idle_light_height = 0.70\nawaking_time = 1\nblowout_time = 1\naccamulate_time = 1\n";
+     idle_light_height = 0.70\nawaking_time = 1\nblowout_time = 1\naccamulate_time = 1\n\
+     visible_by_detector = on\n";
 
 struct Green;
 
@@ -266,7 +269,7 @@ fn sections_are_read_as_the_zone_reads_them() {
     // P9 1.2: with `idle_light` off its keys are not read.
     let flame = "[zone_flame_small]\nidle_particles = explosions\\campfire_05\n\
          idle_sound = ambient\\fire2\nidle_light = off\nidle_light_anim = koster_00\n\
-         awaking_time = 0\nblowout_time = 1000\naccamulate_time = 0\n\
+         awaking_time = 0\nblowout_time = 1000\naccamulate_time = 0\nvisible_by_detector = on\n\
          blowout_sound = ambient\\fire2\nartefact_born_sound = x\n";
     let s = section(flame, "zone_flame_small", Behaviour::Mbald).unwrap();
     assert_eq!(s.idle_particles.as_deref(), Some("explosions\\campfire_05"));
@@ -275,13 +278,25 @@ fn sections_are_read_as_the_zone_reads_them() {
     // S15 2.1: the artefact sound only with `spawn_blowout_artefacts` on.
     assert!(s.sounds[6].is_none());
     assert_eq!(s.sounds[3].as_deref(), Some("ambient\\fire2"));
+    // sound-detector.md 5.2: `visible_by_detector` is required.
+    assert!(s.visible_by_detector);
+    let hidden = flame.replace("visible_by_detector = on", "visible_by_detector = off");
+    assert!(
+        !section(&hidden, "zone_flame_small", Behaviour::Mbald)
+            .unwrap()
+            .visible_by_detector
+    );
+    let without = flame.replace("visible_by_detector = on\n", "");
+    assert!(section(&without, "zone_flame_small", Behaviour::Mbald).is_err());
     // A missing `idle_light` is fatal.
-    let none = "[z]\nawaking_time = 0\nblowout_time = 0\naccamulate_time = 0\n";
+    let none = "[z]\nawaking_time = 0\nblowout_time = 0\naccamulate_time = 0\n\
+         visible_by_detector = on\n";
     assert!(section(none, "z", Behaviour::Mbald).is_err());
     // S15 2.1: the `ZS_MINCE` behaviour needs `body_tearing_sound` and
     // `tele_height`.
     let mincer = "[m]\nidle_light = off\nawaking_time = 50\nblowout_time = 10000\n\
-         accamulate_time = 4000\nidle_sound = anomaly\\gravi_idle01\n";
+         accamulate_time = 4000\nvisible_by_detector = on\n\
+         idle_sound = anomaly\\gravi_idle01\n";
     assert!(section(mincer, "m", Behaviour::Mincer).is_err());
     let mincer = format!("{mincer}body_tearing_sound = anomaly\\anomaly_body_tear_1\n");
     assert!(section(&mincer, "m", Behaviour::Mincer).is_err());

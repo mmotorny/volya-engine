@@ -1,0 +1,48 @@
+# Diagnostic log
+
+For problems seen only on a player's device (#346). Settings has "Keep a diagnostic log" (off by default; localStorage `volya-engine.diagnostic-log`) and "Download diagnostic log", shown while a log exists, also after turning it off, which keeps it. Technical only: level and file names and error messages are kept whole, as they aren't personal data and the check box is the consent (decided by the user, #356); no per-voice events.
+
+## Format
+
+Chrome's Trace Event Format, JSON Object Format (`{"traceEvents": [...], "displayTimeUnit": "ms", "otherData": {...}}`, built by `Log::trace`), so Perfetto and `chrome://tracing` open it. File `volya-engine-log-<date>-version-<version>.json`.
+
+- A session is a process: `pid` its start in Unix seconds, `process_name` "Volya Engine <version>". Threads: the engine worker 1, the page 2, the audio worklet 3.
+- Every event carries the version's commit in `cat` (`volya,v:<commit>`). `ts` is microseconds since the Unix epoch (`performance.timeOrigin + now()`), so sessions line up.
+- A root span is written whole, as a complete event (`X`) with the spans inside it, only when it lasts at least 50 ms (`frame`) or 10 ms (anything else).
+- Per period, every span's mean, maximum and count are series of one counter event (`time ms`), and metrics' min, mean and max and counts' sums series of another (`metrics`): one event's overhead instead of one per series.
+- Errors and state changes are instants (`i`), at most 20 per name per period; the excess is reported as one `events over the limit` instant.
+- Checked: Perfetto's trace processor loads a `Log::trace` (`VOLYA_DUMP_TRACE` in the core tests), and the `smoke` suite checks a downloaded file against the format's documented fields.
+
+## Recording
+
+- `volya-engine-core::diagnostics`: code uses the `tracing` crate on targets starting with `volya` (others are never enabled): `tracing::info_span!("name")` around work; `diagnostics::metric(name, value)` and `diagnostics::count(name, n)`; `tracing::error!` (or `warn!`, `info!`) for instants, fields as arguments. `TraceLayer`, on `tracing_subscriber`'s registry, records them into a `Diagnostics`, which the platform also feeds directly and ends each period with (`summarize`).
+- Off, the callsites are disabled (`set_recording`, `tracing`'s interest cache), so instrumentation stays in shipped code: a frame's spans cost 0.03 µs off against 5.4 µs on in headless Chrome's wasm (measured, `debug_diagnostics_bench`).
+- The page (`static/diagnostics.js`): `event(name, args)`, `metric(name, value)` (aggregated on the page, sent once a second) and `count(name, n)`, sent to the engine worker only while the log is on.
+- The audio worker reports about once a second of output its underruns, its ring's fill at each wake and its mixing time per block; the engine worker records them (`volya-engine-web` `diagnostics::audio_ring`) as `audio.underrun_frames`, `audio.fill_ms` and `audio.mix_ms`. The audio worker's instance records no spans.
+- Logged instants: the session (version, user agent, screen, `devicePixelRatio`, cores, the GPU's state, backend, texture path, timing and message); game started, level loading and level made (name, loading time); `video mode` when the drawn or canvas size changes; `frame gap` (an interval over 250 ms); every end (below); GPU errors; page visibility; AudioContext state changes; the log's own failures.
+- Per period (a second while a game runs, 10 s otherwise): the spans (`frame`, `engine`, `sound`, `render`, `render.scene`, `render.upload_world`, `render.encode`, `render.present`, `textures`, `prepare.texture`, `prepare.world`, `prepare.warm_up`), the metrics (`frame.interval_ms`, `frame.late` for intervals over 25 ms, `gpu.time_ms`, `gpu.done_ms`, `load.gpu_wait_ms`, the audio ones, `diagnostics.write_ms`) and the `wasm heap` counter.
+
+## GPU time
+
+Spans time only the engine worker's CPU, not the browser's GPU process or the GPU (#355). GPU timing runs only while the log is on; the session's `gpu_timing` says which kind.
+
+- `timestamp-query` (WebGPU's optional feature): `gpu.time_ms` is a frame's GPU time, from the beginning of a one-texel clear submitted before the frame to the end of its last pass (`volya-engine-render::timing`), read back a few frames late; frames whose timestamps come back zero are left out (some do natively on Metal, measured). Whether iOS Safari offers the feature is not documented (WebKit removed it in 2024, bug 273702; later bugs fix it).
+- Everywhere: `gpu.done_ms` is the time from a frame's last submission until the browser reports the GPU done (`onSubmittedWorkDone`; on WebGL 2 wgpu checks its fences when the frame loop polls, so to a frame): the GPU process's handling, the wait behind earlier frames and the GPU's work, not presentation.
+
+## Storage
+
+- OPFS `volya-engine/diagnostic-log/0` … `7`, segments of 256 KiB with one sync access handle each (readwrite: one copy of the app gets them; another keeps its log in memory).
+- Each event is one self-contained JSON line; a period's events are appended in one write and flushed (each period, and at once after an end).
+- When the newest segment is full the oldest is emptied and becomes the newest, so the oldest events go first. Each segment begins with a header holding its sequence number (the order across reloads) and the session's metadata events. On opening, a segment whose header doesn't read (the origin is shared) is emptied and a line cut by an interrupted write is dropped. The download joins the lines into one trace.
+- The cap is 2 MiB: at about 1.2 KB a second while a game runs (measured, the `menu` suite's session in headless Chrome) it holds about half an hour of play, and stays small to send by mail or chat.
+
+## Ends
+
+Decided by the user (#356): every way the engine or a game ends writes an instant `engine.end` with `reason` and `message`, then stores the period at once. It is never limited per period and is the last event of its write. A session can go on after one (the title menu after a quit, a page shown again), so a session's last event tells how it ended: one that isn't `engine.end` ended abruptly (the tab killed or crashed, out of memory).
+
+- Reasons: `fatal` (`App::fatal`, its message), `load_failed` (a New Game's loading, or the game's data at launch), `quit` (to the title menu, or leaving the game for the app's screens), `unmounted` (the game's files released under it), `panic` (its message and `location`), `engine_error` (an exception out of a frame), `worker_error`, `page_error`, `worklet_error` (an uncaught error or unhandled rejection in the engine worker, the page, the audio worklet), `device_lost` (WebGPU's `device.lost`; on WebGL 2 wgpu's report and `webglcontextlost`), `page_hidden` (`visibilitychange`), `page_closed` (`pagehide`, which also ends the worker).
+- Ends the engine worker meets itself are recorded and written in the same task through the sync access handle's `write` and `flush`, which are synchronous (documented, File System Standard); the engine's own at the end of the frame that met them. A panic's hook writes before the wasm aborts, unless the panic came from inside the log.
+- The page's and the worklet's ends are messages to the worker, written when it handles them.
+- Hidden or closed, the page first keeps the end itself (localStorage `volya-engine.diagnostic-log-end`: `setItem` is synchronous; shown again, the page forgets it), then tells the worker, and on `pagehide` ends it. `terminate()` discards the worker's queued tasks (documented, HTML Standard), so the worker's record is only attempted: it stored `page_closed` 9 times in 12 in headless Chrome and 0 times in 3 in the iOS Simulator (measured, `smoke`), hence the page's copy. A closing page's `visibilitychange` can come after its `pagehide` (seen in headless Chrome), so a kept `page_closed` isn't replaced by `page_hidden`.
+- The next session with the log on adds the page's copy (`recorded_by: "page"`) unless the closed session stored anything from that time on.
+- Only attempted: `pagehide` itself, which a phone's system ending a page in the background doesn't fire (documented, Page Lifecycle API; the last end is then `page_hidden`), and the page's copy reaching disk once the page is gone (believed).

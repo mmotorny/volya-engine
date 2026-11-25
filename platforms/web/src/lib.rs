@@ -3,7 +3,7 @@
 
 //! Volya Engine for web browsers. Runs inside the engine worker
 //! (`static/engine-worker.js`); the page talks to it only by message
-//! (docs/architecture.md). Builds to nothing on other targets.
+//! (docs/architecture/web-platform.md). Builds to nothing on other targets.
 
 #![cfg(target_arch = "wasm32")]
 

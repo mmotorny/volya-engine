@@ -4,7 +4,7 @@
 //! Builds the vendored LuaJIT 1.0.3 interpreter (vendor/luajit-1.0.3, left
 //! unmodified; [`PATCHES`] change a copy) with our shims (csrc/): natively
 //! with the system C compiler, for wasm32 with Homebrew LLVM clang against
-//! our minimal C library (csrc/wasm). See docs/architecture.md (Scripts).
+//! our minimal C library (csrc/wasm). See docs/architecture/scripts.md.
 
 use std::env;
 use std::fs;
@@ -169,7 +169,7 @@ fn wasm_toolchain(build: &mut cc::Build, root: &Path) {
         .flag("-mexception-handling")
         .flag("-mllvm")
         .flag("-wasm-enable-sjlj")
-        // The legacy encoding: the widest browser support (docs/architecture.md, Scripts).
+        // The legacy encoding: the widest browser support (docs/architecture/scripts.md).
         .flag("-mllvm")
         .flag("-wasm-use-legacy-eh=true");
 }

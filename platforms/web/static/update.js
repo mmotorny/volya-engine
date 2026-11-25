@@ -123,7 +123,7 @@ export function startUpdates(registration, { container = navigator.serviceWorker
         await reg.update();
       } catch {
         // A TypeError whether the network is down or sw.js can't be had
-        // (Service Workers spec, Update; see docs/architecture.md).
+        // (Service Workers spec, Update; see docs/architecture/web-platform.md).
         failed = true;
       } finally {
         reg.removeEventListener("updatefound", seen);

@@ -23,6 +23,7 @@ use std::io;
 use std::sync::Arc;
 
 use crate::core::config::{self, LEVEL, PathAliases};
+use crate::core::detector::DetectorSection;
 use crate::core::sound::Fatal;
 use crate::core::sound::ambient::{self, AmbientParticles, AmbientSet, AmbientState, SetData};
 use crate::core::sound::music::{self, LevelMusic, TrackParams};
@@ -38,6 +39,7 @@ use crate::core::weather::Weather;
 use crate::core::weather::wind::Wind;
 use crate::core::zones::{self, SoundEvent};
 use crate::data::GameData;
+use crate::detector::{DetectorCommand, DetectorSound, DetectorSounds};
 use crate::footsteps::{MaterialPairs, PairSounds};
 use crate::torch::{TorchSound, TorchSounds};
 
@@ -79,6 +81,9 @@ pub struct LevelSoundData {
     /// The night vision of each of the player's torches with it, by item
     /// id: its sounds are loaded with its section (torch.md 14).
     pub torches: Vec<(u16, NightVisionSection)>,
+    /// The player's detectors' sections, by item id: their sound lists are
+    /// loaded with them (sound-detector.md 2.2).
+    pub detectors: Vec<(u16, DetectorSection)>,
     /// The sounds of each zone object (S15 2.1), by zone, created with the
     /// level's.
     pub zones: Vec<ZoneSoundNames>,
@@ -146,6 +151,7 @@ impl LevelSoundData {
             bolt_common,
             pairs: None,
             torches: Vec::new(),
+            detectors: Vec::new(),
             zones: Vec::new(),
         })
     }
@@ -172,6 +178,8 @@ pub struct LevelSounds {
     pub pairs: PairSounds,
     /// The torches' night-vision sounds, by item id (torch.md 14).
     pub torches: HashMap<u16, TorchSounds>,
+    /// The detectors' sound lists, by item id (sound-detector.md 2.2).
+    pub detectors: HashMap<u16, DetectorSounds>,
     /// The level directory, for the sounds of torches that come later.
     dir: String,
     /// Each zone's sounds (S15 2.1), by zone.
@@ -250,6 +258,10 @@ impl LevelSounds {
         for (id, section) in &data.torches {
             torches.insert(*id, TorchSounds::create(system, tree, aliases, section)?);
         }
+        let mut detectors = HashMap::new();
+        for (id, section) in &data.detectors {
+            detectors.insert(*id, DetectorSounds::create(system, tree, aliases, section)?);
+        }
         let zones = (data.zones.iter())
             .map(|names| zone_sounds(system, tree, aliases, names))
             .collect::<Result<_, _>>()?;
@@ -269,6 +281,7 @@ impl LevelSounds {
             rain,
             pairs,
             torches,
+            detectors,
             dir: data.dir.clone(),
             zones,
         })
@@ -297,6 +310,43 @@ impl LevelSounds {
         }
         if let Some(t) = self.torches.get_mut(&sound.torch) {
             t.apply(system, sound.command);
+        }
+        Ok(())
+    }
+
+    /// Carries out a detector's sound command (sound-detector.md 3, 6), its
+    /// sound lists created from `section` the first time (a detector that
+    /// came after the level's sounds): fatal when a file cannot be opened
+    /// (S1 section 5). Discarding discards them.
+    pub fn detector(
+        &mut self,
+        system: &mut SoundSystem,
+        tree: &dyn Vfs,
+        aliases: &PathAliases,
+        sound: DetectorSound,
+        section: Option<&DetectorSection>,
+    ) -> Result<(), Fatal> {
+        let command = match sound.command {
+            DetectorCommand::Discard => {
+                if let Some(d) = self.detectors.remove(&sound.detector) {
+                    d.discard(system);
+                }
+                return Ok(());
+            }
+            DetectorCommand::Sound(c) => c,
+        };
+        if !self.detectors.contains_key(&sound.detector) {
+            let Some(section) = section else {
+                return Ok(());
+            };
+            let mut aliases = aliases.clone();
+            aliases.set_dir(LEVEL, &self.dir);
+            let created = system
+                .all_or_none(|system| DetectorSounds::create(system, tree, &aliases, section))?;
+            self.detectors.insert(sound.detector, created);
+        }
+        if let Some(d) = self.detectors.get(&sound.detector) {
+            d.apply(system, command);
         }
         Ok(())
     }
@@ -364,6 +414,9 @@ impl LevelSounds {
         self.pairs.discard(system);
         for t in self.torches.values() {
             t.discard(system);
+        }
+        for d in self.detectors.values() {
+            d.discard(system);
         }
         for &id in self.zones.iter().flatten().flatten() {
             system.discard(id);

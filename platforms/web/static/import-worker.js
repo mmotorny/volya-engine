@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Import worker: extracts the game from a GOG installer into OPFS
-// (docs/architecture.md, Game data). Messages from the page:
+// (docs/architecture/game-data.md). Messages from the page:
 //   { type: "plan", exe }            → { type: "plan", plan } | { type: "error", message }
 //                                      (plan: { language, files: [{ path, size }], total })
 //   { type: "run", bin, only }       → { type: "progress", done, total, path }…, { type: "done" } | error

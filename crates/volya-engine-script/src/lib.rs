@@ -6,7 +6,7 @@
 //! unmodified in `vendor/luajit-1.0.3` (build.rs patches a copy, adding the
 //! original's C-style comments) and run without its machine-code compiler,
 //! behind a thin safe API; [`loader`] loads the game's script files. See
-//! docs/architecture.md (Scripts).
+//! docs/architecture/scripts.md.
 //!
 //! Lua raises errors with longjmp, which must never cross Rust frames: every
 //! Lua call that can raise runs in C inside `lua_cpcall` (csrc/volya_glue.c),

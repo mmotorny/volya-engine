@@ -46,7 +46,7 @@ if (state.tab && !device.touch) globalThis.volyaInstallOffer = { prompt: async (
 const log = { on: false, entries: false, ...state.log };
 globalThis.volyaDiagnostics = log.on;
 
-// Whether an import finished here before (the cookie mark in game-ui.js).
+// Whether an import finished here before (the localStorage mark in game-ui.js).
 globalThis.volyaImportedBefore = Boolean(state.deleted);
 
 // Storage persistence as the state says (the installed app keeps it).
