@@ -75,7 +75,7 @@ pub struct WeatherSection {
 
 impl WeatherSection {
     /// Reads `section`; a missing key reads as zeros (the specs do not say
-    /// what the game does; every shipped section has them).
+    /// what the game does; every shipped section has them). TODO(#330).
     pub fn read(section: &Section) -> Self {
         let get = |key: &str| section.get(key).flatten().unwrap_or("");
         let floats3 = |key: &str| value::floats::<3>(get(key));

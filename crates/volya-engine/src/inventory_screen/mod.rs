@@ -276,7 +276,7 @@ fn weight_line(data: &GameData, c: &CharacterState) -> String {
     )
 }
 
-/// A float key of a section, 0 when absent (our choice).
+/// A float key of a section, 0 when absent (our choice). TODO(#330).
 fn section_float(data: &GameData, section: &str, key: &str) -> f32 {
     data.system
         .get(section, key)
@@ -464,6 +464,7 @@ impl InventoryScreen {
 
     fn fill_panel(&self, data: &GameData, item: &InventoryItem) -> Panel {
         let section = &item.config.section;
+        // Absent `inv_name` and `cost`: empty and 0. TODO(#330).
         let name = section_text(data, section, "inv_name").unwrap_or("");
         let description = section_text(data, section, "description");
         let cost = data
@@ -1210,6 +1211,7 @@ impl InventoryScreen {
             let id = c
                 .inventory
                 .worn_outfit()
+                // Without `full_icon_name`, as without an outfit. TODO(#330).
                 .and_then(|o| section_text(ctx.data, &o.config.section, "full_icon_name"))
                 .unwrap_or(WITHOUT_OUTFIT)
                 .to_owned();
@@ -1556,24 +1558,27 @@ fn draw_addons(
             continue;
         }
         let section = &c.section;
+        // Without the addon's section name nothing is drawn. TODO(#330).
         let Some(addon) = section_text(ctx.data, section, &format!("{name}_name")) else {
             continue;
         };
+        // 4.2: every item section has the grid keys; one missing is fatal.
         let grid = |key: &str| {
             ctx.data
                 .system
                 .get(addon, key)
                 .flatten()
                 .map(|v| crate::core::config::value::int(v) as u32 as f32)
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, format!("[{addon}] lacks {key}"))
+                })
         };
-        let (Some(gx), Some(gy), Some(gw), Some(gh)) = (
-            grid("inv_grid_x"),
-            grid("inv_grid_y"),
-            grid("inv_grid_width"),
-            grid("inv_grid_height"),
-        ) else {
-            continue;
-        };
+        let (gx, gy, gw, gh) = (
+            grid("inv_grid_x")?,
+            grid("inv_grid_y")?,
+            grid("inv_grid_width")?,
+            grid("inv_grid_height")?,
+        );
         let x = section_float(ctx.data, section, &format!("{name}_x"));
         let y = section_float(ctx.data, section, &format!("{name}_y"));
         let tr = Rect::new(

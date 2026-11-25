@@ -271,14 +271,23 @@ fn menu_frame(
     input: &Input,
     audio: &mut dyn AudioOut,
 ) -> MenuFrame {
-    // The name field measures its text in its font at the size drawn at.
-    let field = screens.field_font().and_then(|font| {
-        let fonts = assets.fonts(tree, data, video.height).ok()?;
-        Some(FieldFont {
-            font: fonts.get(font).clone(),
-            scale_x: video.scale().0,
-        })
-    });
+    // The name field measures its text in its font at the size drawn at;
+    // a font that cannot be created is fatal (text-and-fonts.md 2.5, 2.6).
+    let field = match screens.field_font() {
+        Some(font) => match assets.fonts(tree, data, video.height) {
+            Ok(fonts) => Some(FieldFont {
+                font: fonts.get(font).clone(),
+                scale_x: video.scale().0,
+            }),
+            Err(e) => {
+                return MenuFrame {
+                    fatal: Some(e.to_string()),
+                    ..Default::default()
+                };
+            }
+        },
+        None => None,
+    };
     screens.update(
         menu,
         Frame {
@@ -307,16 +316,17 @@ fn inventory_keys(data: &GameData, controls: &crate::controls::Controls) -> inve
 }
 
 /// The inventory screen's menu font at the size drawn at (its width,
-/// inventory-screen.md 5.6).
+/// inventory-screen.md 5.6); one that cannot be created is fatal
+/// (text-and-fonts.md 2.5, 2.6).
 fn menu_font(
     tree: &dyn Vfs,
     data: &GameData,
     assets: &mut Assets,
     screen: &InventoryScreen,
     video: Resolution,
-) -> Option<FieldFont> {
-    let fonts = assets.fonts(tree, data, video.height).ok()?;
-    Some(FieldFont {
+) -> io::Result<FieldFont> {
+    let fonts = assets.fonts(tree, data, video.height)?;
+    Ok(FieldFont {
         font: fonts.get(screen.layout().menu.font).clone(),
         scale_x: video.scale().0,
     })
@@ -342,8 +352,11 @@ pub struct App {
     clock: u64,
     /// `None` until the first update.
     phase: Option<Phase>,
-    /// Why the latest new game failed to load.
+    /// Why the latest new game failed to load or ended.
     error: Option<String>,
+    /// A fatal error met during this update, taken by [`App::fatal`] at
+    /// its end.
+    failed: Option<String>,
     /// The game type of the latest game started in this run
     /// (loading-screen.md section 5).
     game_type: Option<&'static str>,
@@ -487,6 +500,7 @@ impl App {
             clock: 0,
             phase: None,
             error: None,
+            failed: None,
             game_type: None,
             load_started: None,
             loaded_since: None,
@@ -568,15 +582,30 @@ impl App {
             return;
         }
         self.update_phase(tree, time_ms, input, audio);
-        if let Err(fatal) = self.sound_frame(tree, audio) {
-            self.fatal(tree, fatal.to_string(), input, audio);
+        if let Some(Phase::Level { level, .. }) = &mut self.phase
+            && let Some(error) = level.take_fatal()
+        {
+            self.failed.get_or_insert(error);
+        }
+        let failed = match self.failed.take() {
+            Some(error) => Some(error),
+            None => self.sound_frame(tree, audio).err().map(|f| f.to_string()),
+        };
+        if let Some(error) = failed {
+            self.fatal(tree, error, input, audio);
         }
     }
 
     /// A fatal error during play (as sound-ogg-params.md section 5 makes a
-    /// sound file that cannot be opened): the game ends, as when loading
-    /// fails, and the title menu opens saying why.
+    /// sound file that cannot be opened, or inventory-screen.md 3.2 an item
+    /// with no room in its list): the game ends, as when loading fails, and
+    /// the title menu opens saying why. Never recovered from.
     fn fatal(&mut self, tree: &dyn Vfs, error: String, input: &Input, audio: &mut dyn AudioOut) {
+        // The title menu that already says why fails again (drawing it):
+        // it stays, not opened anew each frame.
+        if matches!(self.phase, Some(Phase::Menu(_))) && self.error.as_ref() == Some(&error) {
+            return;
+        }
         self.error = Some(error);
         let now = self.clock;
         let title = self.opening(false);
@@ -742,6 +771,9 @@ impl App {
                     audio,
                 );
                 self.console_touched = true;
+                if let Some(error) = &out.fatal {
+                    self.failed = Some(error.clone());
+                }
                 if out.video_restart {
                     // `vid_restart` (options-screens.md section 5.4).
                     self.video = video_mode(&self.console);
@@ -851,6 +883,9 @@ impl App {
                     audio,
                 );
                 self.console_touched = true;
+                if let Some(error) = &out.fatal {
+                    self.failed = Some(error.clone());
+                }
                 if out.video_restart {
                     self.video = video_mode(&self.console);
                     menu.resized(data, self.video);
@@ -924,13 +959,18 @@ impl App {
                     level.controls_mut().keys_only = Some(keys.used());
                     // Measured with once per size drawn at.
                     if self.menu_font.as_ref().map(|(r, _)| *r) != Some(self.video) {
-                        self.menu_font =
-                            menu_font(tree, data, &mut self.assets, screen, self.video)
-                                .map(|f| (self.video, f));
+                        match menu_font(tree, data, &mut self.assets, screen, self.video) {
+                            Ok(f) => self.menu_font = Some((self.video, f)),
+                            Err(e) => {
+                                self.failed = Some(e.to_string());
+                                return;
+                            }
+                        }
                     }
                     let font = self.menu_font.as_ref().map(|(_, f)| f);
                     let time_of_day = level.clock().time_of_day();
                     let out = match level.character_mut() {
+                        // An error is fatal, as in the original.
                         Some(character) => screen.update(inventory_screen::Frame {
                             data,
                             character,
@@ -949,10 +989,8 @@ impl App {
                     match out {
                         Ok(out) => dropped.extend(out.dropped),
                         Err(e) => {
-                            // The original stops with a fatal error; the
-                            // screen closes, saying why (our choice).
-                            self.error = Some(e.to_string());
-                            screen.close(data, audio);
+                            self.failed = Some(e.to_string());
+                            return;
                         }
                     }
                     level.update(now, input);
@@ -1000,7 +1038,8 @@ impl App {
                             let keys = inventory_keys(data, level.controls());
                             level.controls_mut().keys_only = Some(keys.used());
                         }
-                        Err(e) => self.error = Some(e.to_string()),
+                        // An error is fatal, as in the original.
+                        Err(e) => self.failed = Some(e.to_string()),
                     }
                 }
             }
@@ -1101,8 +1140,18 @@ impl App {
         &self.console
     }
 
-    /// The frame at the current clock for `resolution`.
+    /// The frame at the current clock for `resolution`. An error is fatal
+    /// (as ui-layout.md 6.3 makes a missing texture): the next update ends
+    /// the game ([`App::fatal`]).
     pub fn scene(&mut self, tree: &dyn Vfs, resolution: Resolution) -> io::Result<Scene> {
+        let scene = self.compose_scene(tree, resolution);
+        if let Err(e) = &scene {
+            self.failed.get_or_insert(e.to_string());
+        }
+        scene
+    }
+
+    fn compose_scene(&mut self, tree: &dyn Vfs, resolution: Resolution) -> io::Result<Scene> {
         let mut ctx = Ctx {
             tree,
             data: &self.data,
@@ -1812,6 +1861,52 @@ mod tests {
         app.update(&tree, 164.0, &input, &mut audio);
         input.end_frame();
         assert!(menu_open(&app));
+    }
+
+    /// inventory-screen.md 4.2: an item without its grid keys is a fatal
+    /// error, opening the screen or while it is open: the game ends and
+    /// the title menu says why.
+    #[test]
+    fn the_inventory_screen_errors_are_fatal() {
+        let without_grid = |app: &mut App| {
+            let Some(Phase::Level { level, .. }) = &mut app.phase else {
+                panic!()
+            };
+            let inv = &mut level.character_mut().unwrap().inventory;
+            for item in &mut inv.items {
+                item.config.inv_grid = None;
+            }
+        };
+        let ends_saying_why = |app: &App| {
+            let AppState::Menu { menu, .. } = app.state() else {
+                panic!("{:?}", app.state())
+            };
+            assert!(menu.error.unwrap().contains("[bread] lacks"));
+        };
+        // Opening.
+        let (tree, mut app, mut input, mut audio) = in_level_with_inventory();
+        without_grid(&mut app);
+        press(&mut input, Key::I);
+        app.update(&tree, 32.0, &input, &mut audio);
+        input.end_frame();
+        ends_saying_why(&app);
+        // While open: an item without them enters the inventory, which
+        // rebuilds the screen (4.3).
+        let (tree, mut app, mut input, mut audio) = in_level_with_inventory();
+        press(&mut input, Key::I);
+        app.update(&tree, 32.0, &input, &mut audio);
+        input.end_frame();
+        assert!(app.inventory_open());
+        let Some(Phase::Level { level, .. }) = &mut app.phase else {
+            panic!()
+        };
+        let inv = &mut level.character_mut().unwrap().inventory;
+        let mut item = inv.item(5).unwrap().clone();
+        item.id = 6;
+        item.config.inv_grid = None;
+        inv.take(item);
+        app.update(&tree, 48.0, &input, &mut audio);
+        ends_saying_why(&app);
     }
 
     #[test]

@@ -156,6 +156,8 @@ pub struct LevelScreen {
     collision: Arc<CollisionWorld>,
     /// The level's sound data until the app creates its sounds.
     sound_data: Option<LevelSoundData>,
+    /// A fatal error met while the level ran, until the app takes it.
+    fatal: Option<String>,
     /// The player's sky visibility (level-objects.md 5.4), for the sounds
     /// of the weather.
     sky_visibility: SkyVisibility,
@@ -379,7 +381,7 @@ fn start_weather(tree: &dyn Vfs, data: &GameData, level: &str) -> io::Result<Str
     Ok(game
         .get(level, "weathers")
         .flatten()
-        // Our choice when the level has no `weathers` key.
+        // Our choice when the level has no `weathers` key. TODO(#330).
         .unwrap_or("default")
         .to_owned())
 }
@@ -613,6 +615,24 @@ fn resolve_surfaces(
         paths.insert(name, path.clone());
         Ok(path)
     };
+    // Every entry of the table is created at load, in table order, whether
+    // or not a draw uses it (level.md 3): what is fatal for one fails the
+    // load (static-shading.md 3.4, 4.2, 7).
+    for entry in shaders.iter().filter(|e| !e.is_empty()) {
+        match library.resolve(entry) {
+            Err(shading::NotDrawn::Fatal(why)) => {
+                return Err(invalid(format!("shader {entry:?}: {why}")));
+            }
+            Ok(surface) => {
+                for t in surface.textures.into_iter().flatten().chain(surface.env) {
+                    locate(t)?;
+                }
+            }
+            // TODO(#332): which textures a class this engine
+            // does not draw loads, and so whether they exist, is unchecked.
+            Err(shading::NotDrawn::Unsupported(_)) => {}
+        }
+    }
     let mut surfaces = Vec::new();
     let mut by_entry: HashMap<String, Result<u32, String>> = HashMap::new();
     let mut resolve = |entry: &str, model: bool| -> io::Result<Result<u32, String>> {
@@ -620,6 +640,10 @@ fn resolve_surfaces(
             return Ok(s.clone());
         }
         let surface = match library.resolve(entry) {
+            // static-shading.md 3.4, 7.1, 7.4: the level does not load.
+            Err(shading::NotDrawn::Fatal(why)) => {
+                return Err(invalid(format!("shader {entry:?}: {why}")));
+            }
             Ok(surface) if surface.program.is_model() != model => Err(if model {
                 "not a model shader".to_owned()
             } else {
@@ -639,7 +663,7 @@ fn resolve_surfaces(
                 surfaces.push(resolved);
                 Ok(surfaces.len() as u32 - 1)
             }
-            Err(why) => Err(why),
+            Err(why) => Err(why.to_string()),
         };
         by_entry.insert(entry.to_owned(), surface.clone());
         Ok(surface)
@@ -914,7 +938,11 @@ impl NewGameLoad {
                 let weather = Weather::load(&data.system, &weather_name)?;
                 // The level's sound data (docs/behavior/level-sound-scope.md),
                 // placed under this caption by us, with the weather it needs.
-                self.sound = Some(LevelSoundData::read(tree, data, &dir, name, &weather)?);
+                // Its files are checked now, with or without audio output
+                // (S1 section 5: fatal at level load).
+                let sound = LevelSoundData::read(tree, data, &dir, name, &weather)?;
+                sound.check(tree, &data.aliases)?;
+                self.sound = Some(sound);
                 self.weather = Some(weather);
                 let level_objects = std::mem::take(&mut self.level_objects);
                 self.spawned = Some(objects::spawn(tree, data, &dir, &level_objects)?);
@@ -1071,6 +1099,7 @@ impl NewGameLoad {
             }),
             collision: Arc::new(collision),
             sound_data: self.sound,
+            fatal: None,
             sky_visibility: SkyVisibility::default(),
             advanced: None,
             player,
@@ -1266,8 +1295,8 @@ impl LevelScreen {
     /// with the actor where the player stands, at the clock's game time,
     /// and the objects' visuals following what switched. Runs only in
     /// [`LevelScreen::update`], so it stands still while the game is paused
-    /// or the page hidden. A simulation error leaves the objects as they
-    /// are (our choice: the frame goes on).
+    /// or the page hidden. A simulation error is fatal (offline-simulation.md
+    /// 6.2, level-objects.md 2.3): kept for [`LevelScreen::take_fatal`].
     fn simulate(&mut self) {
         let Some(sim) = &mut self.simulation else {
             return;
@@ -1278,9 +1307,15 @@ impl LevelScreen {
             self.clock.game_time().normal_time_factor,
             hour(&self.clock),
         );
-        if let Ok(changes) = changes {
-            self.place_objects(&changes);
+        match changes {
+            Ok(changes) => self.place_objects(&changes),
+            Err(e) => self.fatal = self.fatal.take().or(Some(e.to_string())),
         }
+    }
+
+    /// A fatal error met while the level ran, once.
+    pub fn take_fatal(&mut self) -> Option<String> {
+        self.fatal.take()
     }
 
     /// Shows the instances of objects that came online, at their records'
@@ -1584,6 +1619,7 @@ impl LevelScreen {
                 CollisionWorld::new(Default::default(), Vec::new()).expect("collision"),
             ),
             sound_data: None,
+            fatal: None,
             sky_visibility: SkyVisibility::default(),
             advanced: None,
             player,

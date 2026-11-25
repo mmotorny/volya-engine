@@ -118,21 +118,21 @@ pub struct ItemConfig {
     pub belt: bool,
     /// True when absent (3.3).
     pub default_to_ruck: bool,
-    /// 0 when absent (our choice).
+    /// 0 when absent (our choice; TODO(#330)).
     pub inv_weight: f32,
-    /// `visual`, empty when absent (our choice).
+    /// `visual`, empty when absent (our choice; TODO(#330)).
     pub visual: String,
     /// `condition`: the default of a supplied item's condition (3.1).
     pub condition: Option<f32>,
     /// `ammo_mag_size`, 0 when absent (3.1).
     pub ammo_mag_size: u16,
     /// `scope_status`, `grenade_launcher_status`, `silencer_status`, 0 when
-    /// absent (our choice).
+    /// absent (our choice; TODO(#330)).
     pub scope_status: i64,
     pub grenade_launcher_status: i64,
     pub silencer_status: i64,
     /// An outfit's `additional_inventory_weight` and `..._weight2`, 0 when
-    /// absent (our choice).
+    /// absent (our choice; TODO(#330)).
     pub additional_inventory_weight: f32,
     pub additional_inventory_weight2: f32,
     /// An outfit's `power_loss`, `None` when absent (3.4).

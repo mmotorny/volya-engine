@@ -130,6 +130,7 @@ impl SetData {
             .section(name)
             .ok_or_else(|| invalid(format!("no ambient set [{name}]")))?;
         let get = |key: &str| section.get(key).flatten();
+        // A missing pair reads as 0, 0. TODO(#330).
         let pair = |key: &str| value::floats::<2>(get(key).unwrap_or(""));
         let sounds: Vec<String> = match section.get("sounds") {
             Some(v) => list_items(v).into_iter().map(str::to_owned).collect(),

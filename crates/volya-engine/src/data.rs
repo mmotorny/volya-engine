@@ -231,7 +231,7 @@ impl GameData {
             )
         })?;
         let intro = MovieSequence::read(intro, &colors).map_err(|e| context("intro_logo", e))?;
-        // Without it a New Game plays no intro (our choice).
+        // Without it a New Game plays no intro (our choice). TODO(#330).
         let intro_game = tutorials
             .find("intro_game", 0)
             .map(|e| MovieSequence::read(e, &colors).map_err(|e| context("intro_game", e)))

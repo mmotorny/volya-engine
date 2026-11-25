@@ -77,6 +77,7 @@ impl BoltCommon {
         let section = config
             .section("thunderbolt_common")
             .ok_or_else(|| invalid("no section [thunderbolt_common]"))?;
+        // A missing key reads as 0. TODO(#330).
         let get = |key: &str| section.get(key).flatten().unwrap_or("");
         let [a0, a1] = value::floats::<2>(get("altitude"));
         Ok(Self {
@@ -102,6 +103,7 @@ pub fn collection_sounds(config: &Config, name: &str) -> io::Result<Vec<Option<S
             let bolt = config
                 .section(e.key())
                 .ok_or_else(|| invalid(format!("[{name}]: no bolt section [{}]", e.key())))?;
+            // A missing `sound` is as an empty one. TODO(#330).
             Ok(bolt
                 .get("sound")
                 .flatten()

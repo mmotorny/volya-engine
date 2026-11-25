@@ -34,6 +34,7 @@ impl Localization {
         let language = get("language")
             .ok_or_else(|| invalid("localization.ltx: [string_table] without language"))?
             .to_owned();
+        // TODO(#330): a missing `files` or `font_prefix`.
         let files = get("files")
             .map(|f| {
                 f.split(',')

@@ -140,7 +140,7 @@ fn new_game_waits_for_six_then_plays_amb01() {
     let mut now = 100_000u32;
     while started.is_none() {
         let before = music.next_check;
-        music.frame(&mut s, now, tau(now));
+        music.frame(&mut s, now, tau(now)).unwrap();
         if music.current.is_some() {
             started = Some(now);
         } else if music.next_check != before {
@@ -165,7 +165,7 @@ fn new_game_waits_for_six_then_plays_amb01() {
     let mut now = 280_019u32;
     loop {
         s.update(u64::from(now), &mut NoDevice);
-        music.frame(&mut s, now, tau(now));
+        music.frame(&mut s, now, tau(now)).unwrap();
         if music.current.is_none() {
             break;
         }
@@ -182,10 +182,10 @@ fn a_track_is_not_stopped_when_its_window_ends() {
     let mut s = SoundSystem::new(16);
     let mut music = escape(&mut s);
     let late = 22 * HOUR - 1_000;
-    music.frame(&mut s, 1, late);
+    music.frame(&mut s, 1, late).unwrap();
     assert!(music.current.is_some());
     s.update(1, &mut NoDevice);
-    music.frame(&mut s, 2, 22 * HOUR + 10);
+    music.frame(&mut s, 2, 22 * HOUR + 10).unwrap();
     s.update(2, &mut NoDevice);
     assert!(s.emitters().iter().all(|e| !e.stopping));
     assert!(music.current.is_some());
@@ -201,4 +201,20 @@ fn the_pause_draw_is_not_uniform() {
     }
     assert!((20_000..32_768).all(|v| counts[v] == 2));
     assert!((32_768..40_000).all(|v| counts[v] == 1));
+}
+
+#[test]
+fn a_pause_from_equal_bounds_is_fatal() {
+    // Bounds equal modulo 2³² (p₁ − p₀ = 2²⁹ s): the draw divides by zero.
+    let mut s = SoundSystem::new(16);
+    let mut music = escape(&mut s);
+    music.frame(&mut s, 1, 22 * HOUR - 1_000).unwrap();
+    let i = music.current.unwrap();
+    let t = &mut music.tracks[i];
+    t.params.pause_max = t.params.pause_min;
+    let (left, right) = (t.left, t.right);
+    s.stop(left);
+    s.stop(right);
+    s.update(2, &mut NoDevice);
+    assert!(music.frame(&mut s, 3, 22 * HOUR).is_err());
 }

@@ -158,6 +158,12 @@ fn in_game_menu_and_save_load_screens_from_game_data() {
         text.contains("Время: 05:30 05/01/2012\\nЗдоровье 100%"),
         "{text}"
     );
+    // A valid container whose body cannot be read is fatal (sav.md 3, 7.1).
+    let mut broken = vec![0xFF; 4];
+    broken.extend(3u32.to_le_bytes());
+    broken.extend(100u32.to_le_bytes());
+    broken.extend([0; 8]);
+    assert!(SaveInfo::read(&tree, &data, &broken).is_err());
 
     // The screens through the menu during a game: Save (item 3), then
     // Load (item 2).

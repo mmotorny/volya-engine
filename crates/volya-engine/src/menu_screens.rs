@@ -50,7 +50,7 @@ enum MenuBox {
 }
 
 /// What the menu's frame asks of the app.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MenuFrame {
     /// A new game of this difficulty (title-menu.md section 4.5).
     pub new_game: Option<&'static str>,
@@ -62,6 +62,9 @@ pub struct MenuFrame {
     pub video_restart: bool,
     /// The options screen closed: the settings are to be stored.
     pub store_config: bool,
+    /// A screen failed to open: fatal, as in the original (ui-layout.md
+    /// 1.2 – 1.4, 7.2; text-and-fonts.md 2.5, 2.6).
+    pub fatal: Option<String>,
 }
 
 /// What a frame needs besides the menu.
@@ -92,8 +95,6 @@ pub struct MenuScreens {
     saves: SavedGames,
     /// Files deleted from the saved-games folder, for the platform.
     deleted: Vec<String>,
-    /// Why the latest screen could not open.
-    error: Option<String>,
     /// The previous frame's time (the left stick's cursor speed).
     last_now: Option<u64>,
     /// The time of the last hold step of any scroll bar, 0 at program
@@ -113,14 +114,6 @@ impl MenuScreens {
     /// The files deleted since the last call.
     pub fn take_deleted(&mut self) -> Vec<String> {
         std::mem::take(&mut self.deleted)
-    }
-
-    pub fn error(&self) -> Option<&str> {
-        self.error.as_deref()
-    }
-
-    pub fn set_error(&mut self, error: Option<String>) {
-        self.error = error;
     }
 
     /// The menu (re)opened: its screens are made afresh when next opened
@@ -211,6 +204,7 @@ impl MenuScreens {
                     &mut self.last_hold,
                 );
                 self.deleted.extend(o.deleted);
+                out.fatal = screen.take_fatal();
                 menu.update_hidden(data, now);
                 if o.closed {
                     self.sub = None;
@@ -233,6 +227,7 @@ impl MenuScreens {
                     &mut self.last_hold,
                 );
                 self.deleted.extend(o.deleted);
+                out.fatal = screen.take_fatal();
                 menu.update_hidden(data, now);
                 if o.closed {
                     self.sub = None;
@@ -335,10 +330,8 @@ impl MenuScreens {
             // TODO(#75): `main_menu off`, then `load_last_save`.
             Request::LastSave => Ok(()),
         };
-        match opened {
-            Ok(()) => self.error = None,
-            // Back on the menu, saying why (our choice).
-            Err(e) => self.error = Some(e.to_string()),
+        if let Err(e) = opened {
+            out.fatal = Some(e.to_string());
         }
         out
     }
@@ -457,7 +450,7 @@ impl MenuScreens {
                 .filter(|_| self.sub == Some(Sub::Load))
                 .map(|s| Box::new(s.state())),
             message: self.message.as_ref().map(|(m, _)| m.state()),
-            error: self.error.clone(),
+            error: None,
         }
     }
 }
@@ -877,11 +870,10 @@ mod tests {
 
     #[test]
     fn options_open_from_the_in_game_menu() {
-        // The fixture has no options layout: the menu stays, saying why.
+        // The fixture has no options layout: fatal, saying why.
         let mut r = Run::new(true);
-        r.item(4);
-        let s = r.state();
-        assert!(s.options.is_none());
-        assert!(s.error.unwrap().contains("ui_mm_opt.xml"));
+        let out = r.item(4);
+        assert!(r.state().options.is_none());
+        assert!(out.fatal.unwrap().contains("ui_mm_opt.xml"));
     }
 }

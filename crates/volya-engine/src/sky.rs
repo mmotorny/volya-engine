@@ -36,7 +36,7 @@ pub struct Flares {
 impl Flares {
     /// Section `name` of `config`. A section that does not exist (or an
     /// empty name) has no sun and reads its times as 0 (the specs do not say
-    /// what its rates are; our choice).
+    /// what its rates are; our choice). TODO(#330).
     pub fn read(config: &Config, name: &str) -> Self {
         let section = config.section(name);
         let get = |key: &str| section.and_then(|s| s.get(key).flatten()).unwrap_or("");

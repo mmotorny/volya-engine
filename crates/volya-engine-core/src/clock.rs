@@ -17,7 +17,7 @@ pub use volya_engine_formats::sav::GameTime;
 pub const DAY_MS: u64 = 86_400_000;
 
 /// `[alife]` values when `config\alife.ltx` lacks them (our choice: the
-/// shipped values, sav.md section 15).
+/// shipped values, sav.md section 15). TODO(#330).
 const DEFAULT_TIME_FACTOR: f32 = 10.0;
 const DEFAULT_START: (u32, u32, u32) = (1, 5, 2012);
 const DEFAULT_START_TIME: (u32, u32, u32) = (5, 30, 0);

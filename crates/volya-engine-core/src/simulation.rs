@@ -1076,7 +1076,8 @@ fn travel_config(record: &ObjectRecord, system: &Config) -> io::Result<travel::T
     let going_speed = get("going_speed").map_or(0.0, value::float);
     let current_level_going_speed =
         get("current_level_going_speed").map_or(going_speed, value::float);
-    // A missing or malformed interval is 0 (our choice).
+    // A missing `going_speed`, or a missing or malformed interval, is 0
+    // (our choice). TODO(#330).
     let choose_interval = get("smart_terrain_choose_interval")
         .and_then(interval_ms)
         .unwrap_or(0);
