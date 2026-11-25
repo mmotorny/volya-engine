@@ -63,6 +63,8 @@ pub struct VorbisStream<R: Read + Seek> {
     end: Option<u64>,
     /// Frames returned so far.
     frames: u64,
+    /// Decoded samples [`VorbisStream::skip`] did not skip, returned first.
+    pending: Vec<f32>,
 }
 
 impl<R: Read + Seek> VorbisStream<R> {
@@ -73,6 +75,7 @@ impl<R: Read + Seek> VorbisStream<R> {
             reader: Some(reader),
             end,
             frames: 0,
+            pending: Vec::new(),
         })
     }
 
@@ -100,6 +103,10 @@ impl<R: Read + Seek> VorbisStream<R> {
     /// Appends the next decoded block to `out` as interleaved samples in
     /// [-1, 1]; returns `false` at the end of the stream.
     pub fn read_block(&mut self, out: &mut Vec<f32>) -> io::Result<bool> {
+        if !self.pending.is_empty() {
+            out.append(&mut self.pending);
+            return Ok(true);
+        }
         let channels = u64::from(self.channels().max(1));
         loop {
             match self.reader().read_dec_packet_itl() {
@@ -121,6 +128,29 @@ impl<R: Read + Seek> VorbisStream<R> {
                 Err(e) => return Err(invalid(format!("Vorbis: {e}"))),
             }
         }
+    }
+
+    /// Skips `frames` frames by decoding them; returns how many were
+    /// skipped (fewer at the end of the stream).
+    pub fn skip(&mut self, frames: u64) -> io::Result<u64> {
+        let channels = usize::from(self.channels().max(1));
+        let mut skipped = 0;
+        let mut block = Vec::new();
+        while skipped < frames {
+            block.clear();
+            if !self.read_block(&mut block)? {
+                break;
+            }
+            let n = (block.len() / channels) as u64;
+            if skipped + n > frames {
+                let keep = ((frames - skipped) as usize) * channels;
+                self.pending = block.split_off(keep);
+                skipped = frames;
+            } else {
+                skipped += n;
+            }
+        }
+        Ok(skipped)
     }
 
     /// Restarts from the first sample, by reopening the stream (seeking to

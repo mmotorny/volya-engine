@@ -3,10 +3,14 @@
 
 //! Audio output from the engine worker: the mixer runs here; the page's
 //! AudioWorklet (`static/audio-worklet.js`) pulls mixed stereo blocks over a
-//! MessagePort handled in `static/engine-worker.js`.
+//! MessagePort handled in `static/engine-worker.js`. The positional sound
+//! system (docs/behavior/sound-positional.md) runs here too, updated once per
+//! frame of the worker whether or not the game runs, its voices on the
+//! mixer.
 
 use std::cell::RefCell;
 
+use volya_engine::audio::SoundHost;
 use volya_engine::core::audio::{self as mix, Category, Mixer, Playback, VoiceId};
 use volya_engine::core::vfs::Vfs;
 use volya_engine_formats::audio::VorbisStream;
@@ -16,6 +20,29 @@ thread_local! {
     static MIXER: RefCell<Option<Mixer>> = const { RefCell::new(None) };
     /// The voices of the music track playing, left and right.
     static MUSIC: RefCell<Option<[VoiceId; 2]>> = const { RefCell::new(None) };
+    static SOUNDS: RefCell<Option<SoundHost>> = const { RefCell::new(None) };
+}
+
+/// Runs `f` on the sound system (made on first use).
+pub fn with_sounds<T>(f: impl FnOnce(&mut SoundHost) -> T) -> T {
+    SOUNDS.with(|s| f(s.borrow_mut().get_or_insert_with(SoundHost::default)))
+}
+
+/// The sound system's update of the frame at page time `time` (ms), on the
+/// mixer once audio output is connected, reading sounds from the game
+/// tree when one is mounted.
+pub fn sound_frame(time: f64) {
+    with_sounds(|host| {
+        let mut host = Some(host);
+        let mut run = |tree: Option<&dyn Vfs>| {
+            if let Some(host) = host.take() {
+                MIXER.with(|m| host.update(time, m.borrow_mut().as_mut(), tree));
+            }
+        };
+        if crate::game::with_trees(|tree, _| run(Some(tree))).is_err() {
+            run(None);
+        }
+    });
 }
 
 /// The game data directory in the game tree: the archives hold their files
@@ -38,6 +65,7 @@ pub fn audio_init(sample_rate: u32) {
         *mixer = Some(new);
     });
     MUSIC.with(|m| *m.borrow_mut() = None);
+    with_sounds(SoundHost::mixer_replaced);
 }
 
 /// Mixes the next `frames` frames (stereo, interleaved); silence before init.
@@ -112,10 +140,60 @@ pub fn with_mixer_opt<T>(f: impl FnOnce(Option<&mut Mixer>) -> T) -> T {
 }
 
 pub fn set_volume(category: Category, volume: f32) -> Result<(), JsValue> {
+    with_sounds(|host| host.system.set_volume(category, volume));
     with_mixer(|mixer| mixer.set_volume(category, volume))
 }
 
 pub fn stop_all() {
     MUSIC.with(|m| *m.borrow_mut() = None);
+    with_sounds(|host| host.system.stop_all());
     let _ = with_mixer(Mixer::stop_all);
+}
+
+/// The `debug_play_sound` op (tests): plays the sound named `name` (S1's
+/// name rules, with the installer's path aliases) at `position` with the
+/// play flags given; its voice and emitter show in [`sound_state`].
+#[cfg(feature = "test-ops")]
+pub fn debug_play_sound(
+    tree: &dyn Vfs,
+    name: &str,
+    category: Category,
+    position: [f32; 3],
+    flags: volya_engine::core::sound::system::PlayFlags,
+) -> Result<(), JsValue> {
+    let aliases = volya_engine::core::config::PathAliases::parse(
+        volya_engine::data::INSTALLER_FSGAME.as_bytes(),
+        "",
+    )
+    .map_err(error)?;
+    with_sounds(|host| {
+        let id = host
+            .system
+            .create(tree, &aliases, name, category)
+            .map_err(error)?;
+        host.system.play_at(id, position, flags);
+        Ok(())
+    })
+}
+
+/// The `sound_state` op (tests): the sound clock, the voices and every
+/// emitter.
+#[cfg(feature = "test-ops")]
+pub fn sound_state() -> serde_json::Value {
+    with_sounds(|host| {
+        let s = &host.system;
+        serde_json::json!({
+            "now": s.now(),
+            "voices": s.voice_count(),
+            "pause_level": s.pause_level(),
+            "emitters": s.emitters().iter().map(|e| serde_json::json!({
+                "name": e.name,
+                "phase": format!("{:?}", e.phase).to_lowercase(),
+                "position": e.position,
+                "two_d": e.two_d,
+                "out": e.out,
+                "voice": e.voice,
+            })).collect::<Vec<_>>(),
+        })
+    })
 }

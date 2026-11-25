@@ -20,6 +20,7 @@ use crate::audio::AudioOut;
 use crate::core::audio::Category;
 use crate::core::console::Console;
 use crate::core::input::{Action, Control, Input};
+use crate::core::sound::system::Listener;
 use crate::core::vfs::{self, Vfs};
 use crate::data::{Assets, GameData};
 use crate::draw::Ctx;
@@ -368,6 +369,12 @@ pub struct App {
     applied: u64,
     /// The sound volumes as last set.
     volumes: Option<[f32; 2]>,
+    /// The sound system's voices were set from `snd_targets`.
+    sound_voices_set: bool,
+    /// The last frame was in a level, for the sound system.
+    sound_in_level: bool,
+    /// The sound system is paused for the menu over the level.
+    sound_paused: bool,
     /// The console may have changed this frame.
     console_touched: bool,
     /// Updates so far.
@@ -452,6 +459,9 @@ impl App {
             video,
             save: None,
             volumes: None,
+            sound_voices_set: false,
+            sound_in_level: false,
+            sound_paused: false,
             console_touched: false,
             frames: 0,
             unlock_opened: None,
@@ -504,6 +514,66 @@ impl App {
     /// One frame at platform time `time_ms` with this frame's `input`.
     /// Loading a level reads from `tree`.
     pub fn update(
+        &mut self,
+        tree: &dyn Vfs,
+        time_ms: f64,
+        input: &Input,
+        audio: &mut dyn AudioOut,
+    ) {
+        if self.hidden {
+            return;
+        }
+        self.update_phase(tree, time_ms, input, audio);
+        self.sound_frame(audio);
+    }
+
+    /// What the sound system takes from this frame
+    /// (docs/behavior/sound-positional.md): its voices (`snd_targets`) once
+    /// the settings are read; the listener, the level's camera; a pause
+    /// while the menu is open over the level (section 4.5); every sound
+    /// stopped when the level is left (section 4.4). The platform runs its
+    /// update.
+    fn sound_frame(&mut self, audio: &mut dyn AudioOut) {
+        let Some(sounds) = audio.sounds() else {
+            return;
+        };
+        if !self.sound_voices_set {
+            self.sound_voices_set = true;
+            if let Some(voices) = self
+                .console
+                .status("snd_targets")
+                .and_then(|v| v.trim().parse::<usize>().ok())
+            {
+                sounds.restart(voices);
+            }
+        }
+        let (in_level, menu_open) = match &self.phase {
+            Some(Phase::Level { level, menu, .. }) => {
+                let v = level.player().view();
+                sounds.set_listener(Listener {
+                    position: v.eye,
+                    direction: v.direction,
+                    up: v.up,
+                });
+                (true, menu.is_some())
+            }
+            _ => (false, false),
+        };
+        if self.sound_in_level && !in_level {
+            sounds.stop_all();
+        }
+        self.sound_in_level = in_level;
+        if menu_open != self.sound_paused {
+            if menu_open {
+                sounds.pause();
+            } else {
+                sounds.resume();
+            }
+            self.sound_paused = menu_open;
+        }
+    }
+
+    fn update_phase(
         &mut self,
         tree: &dyn Vfs,
         time_ms: f64,

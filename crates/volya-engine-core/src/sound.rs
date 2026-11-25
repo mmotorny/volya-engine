@@ -14,11 +14,13 @@ use std::collections::HashMap;
 use std::io::{self, Cursor};
 use std::rc::Rc;
 
-use volya_engine_formats::audio::VorbisStream;
+use volya_engine_formats::audio::{VorbisStream, ogg_end_granule};
 use volya_engine_formats::sound_params::{self, SoundParams};
 
 use crate::config::{LEVEL, PathAliases};
 use crate::vfs::{self, Vfs};
+
+pub mod system;
 
 /// The alias of the sound directory (section 2).
 pub const GAME_SOUNDS: &str = "$game_sounds$";
@@ -86,9 +88,18 @@ pub struct Sound {
     /// The file's path in the game tree.
     pub path: String,
     pub params: SoundParams,
+    /// The number of samples *N* of the decoded data: the granule position
+    /// of the last Ogg page (docs/behavior/sound-positional.md section 2).
+    pub samples: u64,
 }
 
 impl Sound {
+    /// The duration *D* in milliseconds: floor(*N* · 1000 / 44,100)
+    /// (docs/behavior/sound-positional.md section 2).
+    pub fn duration_ms(&self) -> u64 {
+        self.samples * 1000 / u64::from(SAMPLE_RATE)
+    }
+
     /// Reads the file at `path` for the sound `name`: checks the stream and
     /// reads its parameters (sections 3 – 5). A missing or unknown record
     /// gives the defaults and a warning.
@@ -115,6 +126,7 @@ impl Sound {
             name: name.to_owned(),
             path: path.to_owned(),
             params,
+            samples: ogg_end_granule(&bytes).unwrap_or(0),
         };
         Ok((sound, warning))
     }
@@ -339,6 +351,7 @@ mod tests {
             name: "a\\b".into(),
             path: "gamedata\\sounds\\a\\b.ogg".into(),
             params: SoundParams::default(),
+            samples: 0,
         });
         sounds.loaded.insert("a\\b".into(), sound.clone());
         for name in ["a\\b", "A\\B", "a\\b.ogg", "a\\b.x.y"] {

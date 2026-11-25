@@ -117,6 +117,47 @@ export const tests = {
     }
   },
 
+  // The positional sound system (docs/behavior/sound-positional.md) on the
+  // same output: `intro_gsc_wp_r` has no parameters, so the defaults (min
+  // distance 1, max 300). The listener stands at the origin looking along +z.
+  "plays a sound at a position, heard on its side": async () => {
+    if (!installer) skip("no installer");
+    const name = "characters_voice\\scenario\\video\\intro_gsc_wp_r";
+    let state;
+    const [left, right] = await render(async () => {
+      await volya.call("debug_play_sound", { name, position: [3, 0, 0] });
+      // Started by the next sound update.
+      for (let i = 0; i < 50; i++) {
+        state = await volya.call("sound_state");
+        if (state.emitters[0]?.phase === "playing") break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    });
+    assert(state.emitters[0]?.phase === "playing", `not playing: ${JSON.stringify(state)}`);
+    assert(state.voices >= 4, `voices ${state.voices}`);
+    assert(rmsOf(right) > 0.001, `right channel is silent (RMS ${rmsOf(right)})`);
+    assert(rmsOf(left) < 1e-6, `left channel is not silent (RMS ${rmsOf(left)})`);
+    return `RMS right ${rmsOf(right).toFixed(4)}, left ${rmsOf(left)}`;
+  },
+
+  "a sound beyond its max distance is silent": async () => {
+    if (!installer) skip("no installer");
+    const name = "characters_voice\\scenario\\video\\intro_gsc_wp_r";
+    let state;
+    const [left, right] = await render(async () => {
+      await volya.call("debug_play_sound", { name, position: [400, 0, 0] });
+      for (let i = 0; i < 50; i++) {
+        state = await volya.call("sound_state");
+        if (state.emitters[0]?.phase === "silent") break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    });
+    assert(state.emitters[0]?.phase === "silent", `not silent: ${JSON.stringify(state)}`);
+    for (const [side, channel] of [["left", left], ["right", right]]) {
+      assert(rmsOf(channel) === 0, `${side} channel is audible (RMS ${rmsOf(channel)})`);
+    }
+  },
+
   "forgets the game": async () => {
     if (!installer) skip("no installer");
     await volya.call("forget_game");

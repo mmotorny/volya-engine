@@ -89,6 +89,7 @@ pub(crate) fn now() -> f64 {
 pub fn frame(time: f64) {
     let start = now();
     engine::frame(time);
+    audio::sound_frame(time);
     gpu::frame(time);
     input::end_frame();
     let cpu = now() - start;
@@ -128,6 +129,7 @@ pub fn frame(time: f64) {
 #[wasm_bindgen]
 pub fn visibility(hidden: bool) {
     engine::set_hidden(hidden);
+    audio::with_sounds(|host| host.set_hidden(hidden));
     // The interval spanning the hidden time is not a frame time.
     FRAME_STATS.with(|s| s.borrow_mut().last = None);
 }
@@ -276,6 +278,27 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         "bound_keys" => to_json(&engine::bound_keys()),
         #[cfg(feature = "test-ops")]
         "debug_give_item" => to_json(&engine::give_item(text("section"))?),
+        // `{name, position: [x, y, z], category, looped, two_d, delay}`.
+        #[cfg(feature = "test-ops")]
+        "debug_play_sound" => {
+            let flag = |key: &str| args.get(key).and_then(|v| v.as_bool()).unwrap_or(false);
+            let position = args
+                .get("position")
+                .and_then(|v| serde_json::from_value::<[f32; 3]>(v.clone()).ok())
+                .unwrap_or_default();
+            let flags = volya_engine::core::sound::system::PlayFlags {
+                looped: flag("looped"),
+                two_d: flag("two_d"),
+                delay: args.get("delay").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+            };
+            let category = category(args.get("category"))?;
+            game::with_trees(|tree, _| {
+                audio::debug_play_sound(tree, text("name"), category, position, flags)
+            })??;
+            Ok("null".into())
+        }
+        #[cfg(feature = "test-ops")]
+        "sound_state" => to_json(&audio::sound_state()),
         "menu_scene" => {
             let size = |key| args.get(key).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
             to_json(&engine::scene(Resolution::new(
