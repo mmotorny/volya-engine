@@ -9,13 +9,12 @@
 //! [`MaterialPairs`] are read with the materials; [`PairSounds`] are their
 //! lists' sounds in the sound system, created with the level's sounds;
 //! [`PlayerFootsteps`] chooses the leg cycle and times the steps on each
-//! frame that advances game time, and [`PairSounds::play`] plays what they
-//! give.
+//! frame of the level while the pause is off, and [`PairSounds::play`]
+//! plays what they give.
 //!
 //! The step clock (S11 3.1) is the engine's global clock of
-//! sound-weather-ambient.md 3.1, which the level's sounds keep
-//! (crate::level_sound::SoundRun); the app gives it to each frame.
-//! TODO(#328): that clock follows the spec's global clock.
+//! sound-weather-ambient.md 3.1 (`volya-engine-core::pause`), which the
+//! app keeps and gives to each frame.
 
 use std::io;
 use std::sync::Arc;

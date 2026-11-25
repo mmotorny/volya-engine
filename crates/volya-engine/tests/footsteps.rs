@@ -370,8 +370,8 @@ fn footsteps_from_game_data() {
         for _ in 0..n {
             now += FRAME_MS;
             // The footsteps' own cost: the same frame on a copy of them.
-            // The step clock: the frames' real time (the app's level sound
-            // clock), here the frame time itself.
+            // The step clock: the global clock (the app's), here the
+            // frames' real time, nothing paused.
             let clock = now as u32;
             let mut copy = level.footsteps().unwrap().clone();
             level.update(now, input);

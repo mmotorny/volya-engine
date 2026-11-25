@@ -164,9 +164,6 @@ pub struct LevelScreen {
     /// The player's sky visibility (level-objects.md 5.4), for the sounds
     /// of the weather.
     sky_visibility: SkyVisibility,
-    /// The real time the last frame advanced game time by (ms), `None` for
-    /// a paused frame.
-    advanced: Option<u64>,
     player: Player,
     /// The player character's state (docs/behavior/player-state.md); `None`
     /// only in the unit tests' empty level.
@@ -1111,7 +1108,6 @@ impl NewGameLoad {
             sound_data: self.sound,
             footsteps: Some(footsteps),
             sky_visibility: SkyVisibility::default(),
-            advanced: None,
             player,
             character: Some(character),
             controls,
@@ -1211,7 +1207,6 @@ impl LevelScreen {
         let elapsed = now.saturating_sub(self.last);
         self.shown += elapsed;
         self.last = now;
-        self.advanced = None;
         self.clock.set_paused(true);
         self.clock.advance(elapsed);
         self.player.paused(now);
@@ -1235,7 +1230,6 @@ impl LevelScreen {
         let elapsed = now.saturating_sub(self.last);
         let dt = (elapsed as f32 / 1000.0).min(MAX_STEP);
         self.last = now;
-        self.advanced = Some(elapsed);
         self.clock.set_paused(false);
         self.clock.advance(elapsed);
         let player = self.player.state();
@@ -1286,8 +1280,8 @@ impl LevelScreen {
         self.footsteps.as_ref()
     }
 
-    /// The player's footsteps on a frame that advanced game time, after
-    /// its update, at step clock `now` (S11 3.1; crate::footsteps): the
+    /// The player's footsteps on a frame of the level while the pause is
+    /// off, after its update, at step clock `now` (S11 3.1; crate::footsteps): the
     /// leg cycle and the steps (S11 2, 3). Fatal as the pair lookup is.
     pub fn footsteps_frame(&mut self, now: u32) -> Result<(), Fatal> {
         let Some(f) = &mut self.footsteps else {
@@ -1305,12 +1299,6 @@ impl LevelScreen {
     /// The collision world, shared.
     pub fn shared_collision(&self) -> Arc<CollisionWorld> {
         self.collision.clone()
-    }
-
-    /// The real time the last frame advanced game time by (ms), `None` when
-    /// it was paused.
-    pub fn advanced(&self) -> Option<u64> {
-        self.advanced
     }
 
     /// What this frame's sound rules read.
@@ -1651,7 +1639,6 @@ impl LevelScreen {
             sound_data: None,
             footsteps: None,
             sky_visibility: SkyVisibility::default(),
-            advanced: None,
             player,
             character: None,
             controls,
