@@ -30,7 +30,6 @@ use crate::core::simulation::{NO_ID, Simulation};
 use crate::core::vfs::{self, Vfs};
 use crate::data::GameData;
 use crate::render::world::{ObjectGeometry, model_vertex};
-use volya_engine_formats::chunks;
 use volya_engine_formats::cp1251;
 use volya_engine_formats::lanims;
 use volya_engine_formats::model::{self, Mat4, Model, transform, transform_point};
@@ -278,23 +277,6 @@ pub fn locate_model(tree: &dyn Vfs, data: &GameData, dir: &str, name: &str) -> i
         }
     }
     Err(invalid(format!("Can't find model file '{name}'.")))
-}
-
-/// The header (ogf.md section 2) of the model of visual name `name`
-/// ([`locate_model`]), read without the rest of the file.
-pub fn read_model_header(
-    tree: &dyn Vfs,
-    data: &GameData,
-    dir: &str,
-    name: &str,
-) -> io::Result<model::Header> {
-    let path = locate_model(tree, data, dir, name)?;
-    let context = |e: io::Error| io::Error::new(e.kind(), format!("{path}: {e}"));
-    let mut file = tree.open(&path).map_err(context)?;
-    let headers = chunks::index(&mut file).map_err(context)?;
-    let header = chunks::find_header(&headers, model::HEADER_CHUNK)
-        .ok_or_else(|| invalid(format!("{path}: no header chunk")))?;
-    model::Header::parse(&header.read_content(&mut file).map_err(context)?).map_err(context)
 }
 
 /// A child mesh of a loaded model: its shader pair and its range in the
@@ -663,6 +645,10 @@ pub fn spawn(
         .collect();
     by_class.sort();
     s.online_by_class = by_class;
+    // Grown model by model: the spare capacity (a third of it for
+    // `l01_escape`, measured) goes, shrunk in place (#357).
+    s.geometry.vertices.shrink_to_fit();
+    s.geometry.indices.shrink_to_fit();
     Ok(s)
 }
 

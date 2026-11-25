@@ -8,8 +8,9 @@
 //! vertices (4.7), and the object transform of section 3.4, whose rotation
 //! the bind pose shares.
 //!
-//! Chunks a model needs for drawing at rest are required; the description,
-//! user data and motions (chunks 14, 15, 17, 18, 19) are not read.
+//! Chunks a model needs for drawing at rest are required; the description
+//! and motions (chunks 14, 15, 18, 19) are not read, the user data (chunk
+//! 17) only by [`user_data`].
 
 use std::io;
 
@@ -26,6 +27,8 @@ pub const DETAIL_WINDOWS_CHUNK: u32 = 6;
 pub const CHILDREN_CHUNK: u32 = 9;
 pub const BONE_NAMES_CHUNK: u32 = 13;
 pub const BONE_DATA_CHUNK: u32 = 16;
+/// LTX text (section 4.3; read by torches, docs/behavior/torch.md 1.2).
+pub const USER_DATA_CHUNK: u32 = 17;
 
 /// Vertex formats of skinned meshes (section 4.6).
 pub const ONE_LINK: u32 = 0x1207_1980;
@@ -276,6 +279,35 @@ impl Model {
     pub fn bind_pose(&self) -> io::Result<Vec<Mat4>> {
         bind_pose(&self.bones)
     }
+}
+
+/// A model file's header and bones only (chunks 1, 13, 16), its meshes
+/// not read: for what needs a skeleton without drawing it.
+pub fn skeleton(file: &[u8]) -> io::Result<(Header, Vec<Bone>)> {
+    let chunks = Chunks::parse(file)?;
+    let header = Header::parse(&chunks.require(HEADER_CHUNK, "model")?.content()?)?;
+    let names = chunks
+        .require(BONE_NAMES_CHUNK, "skeleton model")?
+        .content()?;
+    let data = chunks
+        .require(BONE_DATA_CHUNK, "skeleton model")?
+        .content()?;
+    Ok((header, parse_bones(&names, &data)?))
+}
+
+/// A model file's user data (chunk 17): its text, up to a terminating NUL
+/// if it has one; `None` without the chunk.
+pub fn user_data(file: &[u8]) -> io::Result<Option<Vec<u8>>> {
+    let chunks = Chunks::parse(file)?;
+    let Some(chunk) = chunks.find(USER_DATA_CHUNK) else {
+        return Ok(None);
+    };
+    let content = chunk.content()?;
+    let end = content
+        .iter()
+        .position(|&b| b == 0)
+        .unwrap_or(content.len());
+    Ok(Some(content[..end].to_vec()))
 }
 
 impl SkinnedMesh {

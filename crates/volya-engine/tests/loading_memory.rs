@@ -96,7 +96,12 @@ fn loading_stage_memory() {
     };
     let root = StdVfs::new(archives[0].file.parent().unwrap());
     let tree = DbVfs::open_game(&root, Some("mods")).unwrap();
+    let start = CURRENT.load(Ordering::Relaxed);
     let data = GameData::read(&tree, None, Resolution::new(1024, 768)).unwrap();
+    eprintln!(
+        "the game's data (configuration, UI, strings): keeps {:.1} MB",
+        mb(CURRENT.load(Ordering::Relaxed) - start)
+    );
     let mut load = NewGameLoad::default();
     let base = CURRENT.load(Ordering::Relaxed);
     let mut highest = 0;
@@ -130,6 +135,35 @@ fn loading_stage_memory() {
         }
     }
     eprintln!("loading peak: {:.1} MB above the start", mb(highest));
+    let before = CURRENT.load(Ordering::Relaxed);
+    let screen = load.finish(0).unwrap();
+    eprintln!(
+        "the level made: {:+.1} MB, the level keeps {:.1} MB",
+        mb(CURRENT.load(Ordering::Relaxed)) - mb(before),
+        mb(CURRENT.load(Ordering::Relaxed) - base)
+    );
+    // What the steady level holds besides: the objects' geometry goes
+    // once uploaded; the configuration and the string tables stay.
+    let freed = |what: &str, f: &mut dyn FnMut()| {
+        let before = CURRENT.load(Ordering::Relaxed);
+        f();
+        eprintln!(
+            "{what}: {:.1} MB",
+            mb(before - CURRENT.load(Ordering::Relaxed))
+        );
+    };
+    freed("the objects' geometry until uploaded", &mut || {
+        drop(screen.world().objects.take_geometry());
+    });
+    drop(screen);
+    let (mut system, mut strings) = (Some(data.system), Some(data.strings));
+    freed(
+        "the configuration (system.ltx and its includes)",
+        &mut || {
+            drop(system.take());
+        },
+    );
+    freed("the string tables", &mut || drop(strings.take()));
     assert!(
         mb(highest) <= LOADING_BUDGET,
         "the load peaks at +{:.1} MB, over its {LOADING_BUDGET} MB budget",

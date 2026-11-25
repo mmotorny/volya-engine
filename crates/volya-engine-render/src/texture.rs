@@ -12,6 +12,7 @@ use std::fmt;
 use volya_engine_formats::dds::{Dds, Format};
 use volya_engine_formats::etc2::{self, Etc2Format};
 
+use crate::world::UPLOAD_PIECE;
 use crate::{Renderer, Texture};
 
 /// Why a texture could not be created.
@@ -95,25 +96,45 @@ pub fn transcoded_len(dds: &Dds, format: Etc2Format) -> usize {
 
 /// Transcodes BC texture `dds` to ETC2; `None` for an uncompressed one.
 pub fn transcode(dds: &Dds) -> Option<Transcoded> {
+    let mut out = Transcoded {
+        format: Etc2Format::Rgb8,
+        data: Vec::new(),
+    };
+    transcode_into(dds, &mut out).then_some(out)
+}
+
+/// [`transcode`] into `out`, whose buffer is reused when it has the room
+/// (many textures transcoded through one keep their bytes in one block of
+/// the wasm heap, #357); whether `dds` is BC.
+pub fn transcode_into(dds: &Dds, out: &mut Transcoded) -> bool {
     let levels = || (0..dds.faces).flat_map(|f| (0..dds.mip_levels).map(move |m| (f, m)));
-    let all: Vec<&[u8]> = levels().map(|(f, m)| dds.level(f, m)).collect();
     let format = if dds.format == Format::Bc1 {
-        let transparent = all
-            .iter()
-            .any(|l| Etc2Format::for_bc(dds.format, l) == Some(Etc2Format::Rgb8A1));
+        let transparent = levels().any(|(f, m)| {
+            Etc2Format::for_bc(dds.format, dds.level(f, m)) == Some(Etc2Format::Rgb8A1)
+        });
         if transparent {
             Etc2Format::Rgb8A1
         } else {
             Etc2Format::Rgb8
         }
     } else {
-        Etc2Format::for_bc(dds.format, &[])?
+        match Etc2Format::for_bc(dds.format, &[]) {
+            Some(format) => format,
+            None => return false,
+        }
     };
-    let mut data = Vec::with_capacity(transcoded_len(dds, format));
-    for level in all {
-        data.extend(etc2::transcode_bc(dds.format, level, format));
+    let len = transcoded_len(dds, format);
+    out.format = format;
+    out.data.clear();
+    if out.data.capacity() < len {
+        // Freed before its replacement is made.
+        out.data = Vec::new();
+        out.data.reserve_exact(len);
     }
-    Some(Transcoded { format, data })
+    for (f, m) in levels() {
+        etc2::transcode_bc_into(dds.format, dds.level(f, m), format, &mut out.data);
+    }
+    true
 }
 
 fn etc2_format(format: Etc2Format) -> wgpu::TextureFormat {
@@ -224,29 +245,41 @@ impl Renderer {
                         (converted.as_slice(), w * 4, h, (w, h))
                     }
                 };
-                self.queue.write_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &texture,
-                        mip_level: mip,
-                        origin: wgpu::Origin3d {
-                            x: 0,
-                            y: 0,
-                            z: face,
+                self.texture_bytes
+                    .set(self.texture_bytes.get() + data.len() as u64);
+                // Written in bands of rows of at most [`UPLOAD_PIECE`]
+                // bytes: wgpu stages each write whole, in the wasm heap on
+                // its GL backend, where a large one needs new memory once
+                // the heap is fragmented (#357).
+                let row_height = extent.1 / rows;
+                let band = (UPLOAD_PIECE as u32 / row_bytes).clamp(1, rows);
+                for first in (0..rows).step_by(band as usize) {
+                    let n = band.min(rows - first);
+                    let start = (first * row_bytes) as usize;
+                    self.queue.write_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &texture,
+                            mip_level: mip,
+                            origin: wgpu::Origin3d {
+                                x: 0,
+                                y: first * row_height,
+                                z: face,
+                            },
+                            aspect: wgpu::TextureAspect::All,
                         },
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    data,
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(row_bytes),
-                        rows_per_image: Some(rows),
-                    },
-                    wgpu::Extent3d {
-                        width: extent.0,
-                        height: extent.1,
-                        depth_or_array_layers: 1,
-                    },
-                );
+                        &data[start..start + (n * row_bytes) as usize],
+                        wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(row_bytes),
+                            rows_per_image: Some(n),
+                        },
+                        wgpu::Extent3d {
+                            width: extent.0,
+                            height: n * row_height,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                }
             }
         }
         Ok(self.wrap(texture))

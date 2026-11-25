@@ -18,7 +18,13 @@
 //   crouch) at the bottom right act on their press; a drag begun on either
 //   then looks too, and Crouch swiped down is the low crouch. Menu at the
 //   top left does what Escape does; Inventory at the top right opens the
-//   inventory screen (#110), both clear of the thumbs' zones.
+//   inventory screen (#110), both clear of the thumbs' zones;
+// - Torch and Night vision (toggles, shown on) in a row left of Inventory
+//   along the top edge (#363), clear of the thumbs' zones too, give the
+//   `torch` and `night_vision` commands. Each shows only while its command
+//   would do something (the engine says): Torch while a torch is attached,
+//   Night vision while that torch's night vision is on or the worn outfit
+//   has it, so neither sits idle for most of the game.
 //
 // They look like instruments of the game's HUD, drawn from its own UI
 // textures (touch-art.js; design A of #105). No text on the controls: names
@@ -32,7 +38,7 @@ import { approximateArt, gameArt, paintDisc, paintGlyph, paintPicture, vectorGly
 const RADIUS = 56;
 /** Sizes in CSS pixels (match style.css): the buttons, the knob, the lock
  * target, and the segmented ring around the stick. */
-const SIZE = { menu: 44, inventory: 44, jump: 80, crouch: 64 };
+const SIZE = { menu: 44, inventory: 44, torch: 44, nightVision: 44, jump: 80, crouch: 64 };
 const KNOB = 48;
 const TARGET = 44;
 const SEGMENTS = 2 * RADIUS + 6;
@@ -125,8 +131,9 @@ const onTarget = ([x, y], centre) => Math.hypot(x - centre[0], y - centre[1]) <=
 /**
  * The controls; `send(message)` posts one input message to the engine, and
  * `call(op, args)` runs an engine op (for the game's textures; without it
- * the approximations stay). `update({ level, crouch, low, sprint, lock })`
- * follows the engine's state. `touch` says the device has touch without
+ * the approximations stay). `update({ level, crouch, low, sprint, lock,
+ * torch, nightVision })` follows the engine's state (`torch` and
+ * `nightVision` on or off, or null to hide their buttons). `touch` says the device has touch without
  * waiting for one, and `fade: false` keeps the controls from fading when
  * idle (UX audit page).
  */
@@ -170,9 +177,17 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
   // the low crouch.
   const crouch = button("crouch", "Crouch", ["left", "right", "down"], ["", "on", "low"]);
   crouch.setAttribute("aria-pressed", "false");
+  // Torch and Night vision: their glyphs, brighter when on.
+  const torch = button("torch", "Torch", null, ["", "on"]);
+  const nightVision = button("night-vision", "Night vision", null, ["", "on"]);
+  nightVision.dataset.button = "night_vision";
+  for (const b of [torch, nightVision]) {
+    b.setAttribute("aria-pressed", "false");
+    b.hidden = true;
+  }
   const actions = element("div", "touch-actions");
   actions.append(crouch, jump);
-  root.append(move, look, menu, inventory, actions);
+  root.append(move, look, menu, inventory, torch, nightVision, actions);
 
   // Every touch or pen contact on the controls stays with them (a pen
   // can't use pointer lock); a mouse passes through to input.js (pointer
@@ -383,10 +398,10 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
   // to the low crouch, so no swipe stands up for a moment first; a
   // cancelled touch does nothing.
   let crouched = false;
-  const releases = [];
-  for (const b of [menu, inventory, jump, crouch]) {
+  const releases = new Map(); // button → its release
+  for (const b of [menu, inventory, torch, nightVision, jump, crouch]) {
     const held = new Map(); // pointerId → { start, waiting }
-    const drags = b !== menu && b !== inventory;
+    const drags = b === jump || b === crouch;
     let pressed = false; // the press sent, its release not yet
     const press = () => {
       if (pressed) return;
@@ -399,7 +414,7 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
       pressed = false;
       send(["tbutton", b.dataset.button, false]);
     };
-    releases.push(() => {
+    releases.set(b, () => {
       for (const id of held.keys()) looking.delete(id);
       held.clear();
       lift();
@@ -452,6 +467,8 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
     for (const [b, size] of [
       [menu, SIZE.menu],
       [inventory, SIZE.inventory],
+      [torch, SIZE.torch],
+      [nightVision, SIZE.nightVision],
       [jump, SIZE.jump],
       [crouch, SIZE.crouch],
     ]) {
@@ -464,6 +481,15 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
     // backpack, drawn as the Menu bars are.
     const bagGlyph = SIZE.inventory * 0.56;
     paintGlyph(inventory.querySelector(".touch-glyph"), vectorGlyph("inventory", Math.round(bagGlyph * k)), bagGlyph, bagGlyph, grey);
+    const torchGlyph = SIZE.torch * 0.58;
+    const [torchNormal, torchOn] = torch.querySelectorAll(".touch-glyph");
+    paintGlyph(torchNormal, vectorGlyph("torch", Math.round(torchGlyph * k)), torchGlyph, torchGlyph, grey);
+    paintGlyph(torchOn, vectorGlyph("torch", Math.round(torchGlyph * k)), torchGlyph, torchGlyph, tealHi);
+    // The icon is twice as wide as high.
+    const nightGlyph = SIZE.nightVision * 0.74;
+    const [nightNormal, nightOn] = nightVision.querySelectorAll(".touch-glyph");
+    paintGlyph(nightNormal, art.torchIcon, nightGlyph, nightGlyph / 2, grey);
+    paintGlyph(nightOn, art.torchIcon, nightGlyph, nightGlyph / 2, tealHi);
     const jumpGlyph = SIZE.jump * 0.56;
     paintGlyph(jump.querySelector(".touch-glyph"), vectorGlyph("jump", Math.round(jumpGlyph * k)), jumpGlyph, jumpGlyph, teal);
     const crouchGlyph = SIZE.crouch * 0.62;
@@ -528,7 +554,7 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
       letGo = null;
       restStick();
       looking.clear();
-      for (const release of releases) release();
+      for (const release of releases.values()) release();
       clearTimeout(idleTimer);
     }
   };
@@ -554,7 +580,7 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
 
   return {
     element: root,
-    update({ level, crouch: on, low, sprint, lock }) {
+    update({ level, crouch: on, low, sprint, lock, torch: torchOn, nightVision: nightOn }) {
       crouched = Boolean(on);
       live = level;
       if (level) askArt();
@@ -564,6 +590,17 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
       crouch.setAttribute("aria-pressed", String(crouched));
       crouch.classList.toggle("low", crouched && Boolean(low));
       crouch.setAttribute("aria-label", crouched && low ? "Crouch, low" : "Crouch");
+      // Torch and Night vision: hidden (null) while their command would do
+      // nothing; a press on one going away acts no further.
+      for (const [b, value] of [
+        [torch, torchOn],
+        [nightVision, nightOn],
+      ]) {
+        const hidden = value === null || value === undefined;
+        if (hidden && !b.hidden) releases.get(b)();
+        b.hidden = hidden;
+        b.setAttribute("aria-pressed", String(Boolean(value)));
+      }
       // The lock where the thumb let go, whatever the page knew then.
       if (lock && !stick) drawLocked(letGo ?? { origin: null, centre: [0, -LOCK_REACH] });
       else if (!lock && ring.classList.contains("locked")) restStick();

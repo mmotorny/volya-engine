@@ -52,6 +52,7 @@ export const SECTIONS = [
     title: "Home",
     states: [
       { id: "home", name: "Ready", game: imported },
+      { id: "home-starting", name: "Starting the game (Play pressed)", game: imported, starting: true },
       { id: "home-play-failed", name: "Play failed", game: imported, launchError: "level.geom: unexpected end of file" },
       // An update, in order: offered (automatic downloads off), downloading
       // on request or after Check for updates found it, downloaded (either way).
@@ -121,6 +122,20 @@ export const SECTIONS = [
         id: "level-touch-low",
         name: "Crouch swiped down: low crouch",
         level: { crouch: true, low: true },
+        devices: TOUCH,
+      },
+      { id: "level-touch-torch", name: "Torch on", level: { torch: true }, devices: TOUCH },
+      {
+        id: "level-touch-night-vision",
+        name: "Wearing an outfit with night vision: Night vision shown",
+        level: { nightVision: false },
+        devices: TOUCH,
+      },
+      { id: "level-touch-night-vision-on", name: "Night vision on", level: { nightVision: true }, devices: TOUCH },
+      {
+        id: "level-touch-no-torch",
+        name: "Torch moved to the backpack: Torch hidden",
+        level: { torch: null },
         devices: TOUCH,
       },
     ],

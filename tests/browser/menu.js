@@ -45,6 +45,23 @@ const ONLY = [
 const WASM_HEAP_CAP = 110 * 2 ** 20;
 /** Both wasm instances' heaps in `level_stats`: the engine's and the audio worker's. */
 const heap = (stats) => stats.wasm_heap_bytes + stats.audio_heap_bytes;
+// The wasm heap at the end of the last frame under each caption, MiB, from
+// a `heap_log`; in test builds with the most it held live meanwhile
+// (`heap/live`), so fragmentation shows as the difference (#357).
+const byCaption = (log) => {
+  const stages = [];
+  for (const e of log) {
+    const name = e.caption ?? e.phase;
+    const heap = Math.round(e.wasm_heap_bytes / 2 ** 20);
+    const live = e.peak_bytes === undefined ? undefined : Math.round(e.peak_bytes / 2 ** 20);
+    const last = stages.at(-1);
+    if (last?.name === name) {
+      last.heap = heap;
+      last.live = Math.max(last.live ?? 0, live ?? 0);
+    } else stages.push({ name, heap, live });
+  }
+  return stages.map((s) => `${s.name} ${s.heap}${s.live === undefined ? "" : `/${s.live}`}`).join(", ");
+};
 const overBudget = (bytes, what) => (bytes > WASM_HEAP_CAP ? `OVER BUDGET: ${what} ${mib(bytes)} > ${mib(WASM_HEAP_CAP)}; ` : "");
 // Touch devices: no full screen offer, touch controls from the start.
 const coarse = () => matchMedia("(pointer: coarse)").matches;
@@ -518,22 +535,17 @@ export const tests = {
     // Transcoding the level's textures (WebGL 2 without BC, #113) takes
     // longer, on every load.
     const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", loadMs());
-    // The wasm heap at the end of the last frame under each caption.
-    const stages = [];
-    for (const e of await volya.call("heap_log", { on: false })) {
-      const name = e.caption ?? e.phase;
-      const mib = Math.round(e.wasm_heap_bytes / 2 ** 20);
-      if (stages.length && stages[stages.length - 1][0] === name) stages[stages.length - 1][1] = mib;
-      else stages.push([name, mib]);
-    }
+    const stages = byCaption(await volya.call("heap_log", { on: false }));
     assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
     // The level's objects (docs/behavior/level-objects.md section 7.1).
     assertEqual([s.level.objects.online, s.level.objects.with_model], [671, 352], "objects");
     // Its lamps on, with their seven records; chunk 6's 40 records and the
     // sun's two besides; 22 glows of its own and the lamps' 5
-    // (hanging-lamps.md 9.3, dynamic-lights.md 3.3, glows.md 7).
+    // (hanging-lamps.md 9.3, dynamic-lights.md 3.3, glows.md 7); the
+    // player's torch's two records and glow, off (torch.md 12).
     const lights = s.level.lights;
-    assertEqual([lights.lamps, lights.lamps_on, lights.records, lights.glows], [5, 5, 49, 27], "lights");
+    assertEqual([lights.lamps, lights.lamps_on, lights.records, lights.glows], [5, 5, 51, 28], "lights");
+    assert(s.level.torch?.attached && !s.level.torch.on, "the torch attached and off");
     assertEqual([s.intro?.items, s.intro?.kind], [1, "video"], "the intro plays");
     // The intro's 120 MB video streams from the file (#53): playing it
     // keeps the wasm heap near its size before.
@@ -549,9 +561,8 @@ export const tests = {
     key("Escape");
     const shown = await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
     assertEqual(shown.phase, "level", "still in the level");
-    const byCaption = stages.map(([n, m]) => `${n} ${m}`).join(", ");
     const heapNote = overBudget(heap(playing), "wasm heaps during the intro");
-    let note = `${heapNote}wasm heap by caption (MiB): ${byCaption}; "${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; intro skipped, wasm heap ${mib(before.wasm_heap_bytes)} before it, ${mib(playing.wasm_heap_bytes)} while it played, the audio worker's ${mib(playing.audio_heap_bytes)}; at the start ${lights.passes} light passes, ${lights.sprites} glows drawn`;
+    let note = `${heapNote}wasm heap by caption (MiB, heap/live): ${stages}; "${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; intro skipped, wasm heap ${mib(before.wasm_heap_bytes)} before it, ${mib(playing.wasm_heap_bytes)} while it played, the audio worker's ${mib(playing.audio_heap_bytes)}; at the start ${lights.passes} light passes, ${lights.sprites} glows drawn`;
     if (gpu.state === "ready") {
       const { rgba } = await volya.call("debug_capture", { width: 256, height: 192 });
       const colours = new Set();
@@ -763,6 +774,16 @@ export const tests = {
     assertEqual(touchControls.dataset.live, "true", "the level's controls are live");
     // A touch device shows them from the start.
     assertEqual(touchControls.hidden, !coarse(), "touch controls hidden until a touch, on desktop");
+    // The torch (docs/behavior/torch.md 12): off at the start; L switches
+    // it on, its main light and glow with it, and off again.
+    assert(s.level.torch && !s.level.torch.on && s.level.torch.attached, "the torch attached and off");
+    const active = s.level.lights.active;
+    key("KeyL");
+    s = await until((s) => s.level.torch.on, "L to switch the torch on");
+    assert(s.level.torch.main_active && s.level.torch.glow_on && !s.level.torch.second_active, "its main light and glow");
+    assertEqual(s.level.lights.active, active + 1, "one more active light record");
+    key("KeyL");
+    await until((s) => !s.level.torch.on && s.level.lights.active === active, "L to switch it off");
     return `ran ${moved.toFixed(2)} m, jumped ${height.toFixed(2)} m`;
   },
   "touch: the controls are drawn from the game's textures": async () => {
@@ -989,6 +1010,74 @@ export const tests = {
     return `game time ran ${((s.level.game_time - clock) / 1000).toFixed(1)} s under the screen; pointer lock ${granted ? "granted" : "stubbed"}`;
   },
 
+  "touch: Torch and Night vision give the torch's commands as L and N do; Night vision shows only with an outfit that has it": async () => {
+    needsGame();
+    const controls = document.getElementById("touch-controls");
+    // A touch anywhere shows the controls (a touch device).
+    const tap = { pointerType: "touch", pointerId: 70, isPrimary: true, button: 0 };
+    pointer("pointerdown", client(512, 100), { ...tap, buttons: 1 });
+    pointer("pointerup", client(512, 100), { ...tap, buttons: 0 });
+    for (let i = 0; i < 50 && controls.hidden; i++) await sleep(20);
+    assert(!controls.hidden, "the touch controls show");
+    const torch = controls.querySelector(".touch-button.torch");
+    const night = controls.querySelector(".touch-button.night-vision");
+    const press = (el) => {
+      const r = el.getBoundingClientRect();
+      for (const type of ["pointerdown", "pointerup"]) {
+        el.dispatchEvent(
+          new PointerEvent(type, {
+            clientX: (r.left + r.right) / 2,
+            clientY: (r.top + r.bottom) / 2,
+            pointerId: 71,
+            pointerType: "touch",
+            isPrimary: true,
+            button: 0,
+            buttons: type === "pointerdown" ? 1 : 0,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      }
+    };
+    const shown = async (el, pressed, what) => {
+      for (let i = 0; i < 50 && (el.hidden || el.getAttribute("aria-pressed") !== String(pressed)); i++) await sleep(20);
+      assert(!el.hidden, `${what} shown`);
+      assertEqual(el.getAttribute("aria-pressed"), String(pressed), `${what} shown ${pressed ? "on" : "off"}`);
+    };
+    // The torch attached and off: Torch shows, off; no outfit with night
+    // vision is worn, so Night vision is hidden.
+    let s = await state();
+    assert(s.level.torch.attached && !s.level.torch.on, "the torch attached and off");
+    await shown(torch, false, "Torch");
+    assert(night.hidden, "Night vision hidden without an outfit that has it");
+    const active = s.level.lights.active;
+    press(torch);
+    s = await until((s) => s.level.torch.on, "Torch to switch the torch on");
+    assert(s.level.torch.main_active && s.level.torch.glow_on, "its main light and glow");
+    assertEqual(s.level.lights.active, active + 1, "one more active light record");
+    await shown(torch, true, "Torch");
+    press(torch);
+    await until((s) => !s.level.torch.on && s.level.lights.active === active, "Torch to switch it off");
+    await shown(torch, false, "Torch");
+    // An outfit with night vision worn: Night vision shows and switches its
+    // effect on and off (torch.md 15.2).
+    const outfit = await volya.call("debug_nightvision_outfit", { wear: true });
+    await shown(night, false, "Night vision");
+    press(night);
+    s = await until((s) => s.level.torch.night_vision_effect, "Night vision to start the effect");
+    assert(s.level.torch.night_vision_requested, "requested");
+    await shown(night, true, "Night vision");
+    press(night);
+    s = await until((s) => !s.level.torch.night_vision_effect, "Night vision to stop it");
+    assert(!s.level.torch.night_vision_requested && !s.level.torch.on, "not requested, the torch still off");
+    await shown(night, false, "Night vision");
+    // The outfit gone: hidden again.
+    await volya.call("debug_nightvision_outfit", { wear: false });
+    for (let i = 0; i < 50 && !night.hidden; i++) await sleep(20);
+    assert(night.hidden, "Night vision hidden once the outfit is gone");
+    return `outfit ${outfit}`;
+  },
+
   "touch: the stick walks and its sprint lock sprints, drags look (from Jump too), Crouch and its swipe down, Menu opens the menu": async () => {
     needsGame();
     const controls = document.getElementById("touch-controls");
@@ -1204,15 +1293,7 @@ export const tests = {
     const seen = { menu_asked: asked.menu_asked, overlay: asked.overlay_frames, intro: Boolean(asked.intro) };
     assert(asked.menu_asked && !asked.menu, `the menu asked for, not open: ${JSON.stringify(seen)}`);
     const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level again", loadMs());
-    // The wasm heap at the end of the last frame under each caption.
-    const stages = [];
-    for (const e of await volya.call("heap_log", { on: false })) {
-      const name = e.caption ?? e.phase;
-      const m = Math.round(e.wasm_heap_bytes / 2 ** 20);
-      if (stages.length && stages[stages.length - 1][0] === name) stages[stages.length - 1][1] = m;
-      else stages.push([name, m]);
-    }
-    const byCaption = stages.map(([n, m]) => `${n} ${m}`).join(", ");
+    const stages = byCaption(await volya.call("heap_log", { on: false }));
     assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
     // The intro again; a tap skips it (our design for touch). The controls
     // go live then, and the menu opens at once.
@@ -1237,6 +1318,13 @@ export const tests = {
       const p = stopped.level.player;
       const moved = Math.hypot(p.position[0] - start.position[0], p.position[2] - start.position[2]);
       assert(moved > 0.1, `the gamepad moved ${moved.toFixed(2)} m`);
+      // The d-pad up switches the torch on and off (our design).
+      for (const on of [true, false]) {
+        pad.buttons[12] = { pressed: true, value: 1 };
+        await until((s) => s.level.torch.on === on, `the d-pad up to switch the torch ${on ? "on" : "off"}`);
+        pad.buttons[12] = { pressed: false, value: 0 };
+        await sleep(100);
+      }
     } finally {
       navigator.getGamepads = getGamepads;
     }
@@ -1252,7 +1340,7 @@ export const tests = {
     // A second load reuses the heap the first one grew.
     const stats = await volya.call("level_stats");
     const heapNote = overBudget(heap(stats), "wasm heaps after the second New Game");
-    return `${heapNote}loaded again in ${s.load_ms.toFixed(0)} ms; wasm heap ${mib(stats.wasm_heap_bytes)}, the audio worker's ${mib(stats.audio_heap_bytes)}; by caption (MiB): ${byCaption}`;
+    return `${heapNote}loaded again in ${s.load_ms.toFixed(0)} ms; wasm heap ${mib(stats.wasm_heap_bytes)}, the audio worker's ${mib(stats.audio_heap_bytes)}; by caption (MiB, heap/live): ${stages}`;
   },
 
   "hidden: the menu opens, the clock, the frame loop and audio stop; shown: the game takes on from there": async () => {
@@ -1684,16 +1772,29 @@ export const tests = {
     return `${mine.length} events, ${(bytes / seconds).toFixed(0)} B/s over ${seconds.toFixed(0)} s; ${long.length} long frames (worst ${worst.toFixed(0)} ms); audio ${audio ? "running" : volya.audioState()}`;
   },
 
-  "WebGL 2 chosen in Settings: Play starts the engine anew on it, and the level draws": async () => {
+  "WebGL 2 chosen in Settings: one press of Play starts the engine anew on it and the game, and the level draws": async () => {
     needsGame();
     const { graphics } = volya;
     if (!graphics.available.webgl2) skip("no WebGL 2 here");
     if (!graphics.available.webgpu) skip("no WebGPU here: the New Games above drew through WebGL 2");
     await volya.showSettings();
     document.querySelector('#game input[name="graphics"][value="webgl2"]').click();
+    // The engine workers started from here on (#369).
+    const Original = globalThis.Worker;
+    let engines = 0;
+    globalThis.Worker = class extends Original {
+      constructor(url, options) {
+        super(url, options);
+        if (String(url).includes("engine-worker.js")) engines++;
+      }
+    };
     try {
       await volya.refresh();
-      document.querySelector("#game button.play").click();
+      const play = document.querySelector("#game button.play");
+      play.click();
+      // Pressed again while the engine starts anew: nothing more happens.
+      assert(play.disabled && play.textContent === "Starting…", `Play while starting: ${play.disabled} ${play.textContent}`);
+      play.click();
       // Calls made while the engine starts anew fail: asked again.
       for (const deadline = performance.now() + 30000; ; await sleep(100)) {
         const s = await state().catch(() => null);
@@ -1702,30 +1803,48 @@ export const tests = {
       }
       const { gpu: drawn } = await volya.status();
       assertEqual([drawn.state, drawn.backend], ["ready", "webgl2"], "graphics");
+      assertEqual(engines, 1, "engines started");
       // Escape skips the logos, then the title menu's New Game.
       for (let s = await state(); s.phase !== "menu"; s = await state()) {
         key("Escape");
         await sleep(100);
       }
       await readRender();
-      pointer("pointermove", row(0));
-      await until((s) => s.menu?.selected === 0 && !s.menu.moving, "item 0", 5000);
-      key("Enter");
-      await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
-      key("Enter");
-      const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", drawn.textures === "etc2" ? 120000 : 60000);
-      assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
-      key("Escape");
-      await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
+      // A New Game on this engine, then another after the title menu: the
+      // wasm heap through each load and its first frames (#357), against
+      // the budget.
+      const level = drawn.textures === "etc2" ? 120000 : 60000;
+      const newGame = async () => {
+        pointer("pointermove", row(0));
+        await until((s) => s.menu?.selected === 0 && !s.menu.moving, "item 0", 5000);
+        key("Enter");
+        await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
+        await volya.call("heap_log", { on: true });
+        key("Enter");
+        const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", level);
+        assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
+        key("Escape");
+        await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
+        return s;
+      };
+      const s = await newGame();
       // Frame times over a few seconds of the level.
       await sleep(3000);
+      const first = byCaption(await volya.call("heap_log", { on: false }));
       const { rgba } = await volya.call("debug_capture", { width: 256, height: 192 });
       const colours = new Set();
       for (let i = 0; i < rgba.length; i += 4) colours.add((rgba[i] << 16) | (rgba[i + 1] << 8) | rgba[i + 2]);
       assert(colours.size > 200, `${colours.size} colours`);
       const stats = await volya.call("level_stats");
-      return `${drawn.backend}, textures ${drawn.textures}; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; ${colours.size} colours; ${JSON.stringify(stats)}`;
+      await quitToTitle();
+      const again = await newGame();
+      await sleep(1000);
+      const second = byCaption(await volya.call("heap_log", { on: false }));
+      const after = await volya.call("level_stats");
+      const heapNote = overBudget(heap(stats), "wasm heaps after the first New Game") + overBudget(heap(after), "wasm heaps after the second New Game");
+      return `${heapNote}${drawn.backend}, textures ${drawn.textures}; first caption to first level frame in ${s.load_ms.toFixed(0)} ms, ${again.load_ms.toFixed(0)} ms again; ${colours.size} colours; wasm heap ${mib(stats.wasm_heap_bytes)}, ${mib(after.wasm_heap_bytes)} after the second; by caption (MiB, heap/live): ${first}; the second: ${second}; ${JSON.stringify(stats)}`;
     } finally {
+      globalThis.Worker = Original;
       localStorage.removeItem("volya-engine.graphics");
       // Leaves the game for the tests after (a failure above is the one told).
       if ((await state()).phase !== "none") {

@@ -77,6 +77,23 @@ pub fn read(vfs: &dyn Vfs, path: &str) -> io::Result<Vec<u8>> {
     Ok(data)
 }
 
+/// Reads the whole file at `path` into `buffer`, replacing its contents.
+/// Reading many files through one buffer keeps their bytes in one block:
+/// a buffer per file is a large allocation each time, which a fragmented
+/// heap may only satisfy with new memory (the wasm heap never shrinks,
+/// #357). A buffer too small is freed before its replacement is made.
+pub fn read_into(vfs: &dyn Vfs, path: &str, buffer: &mut Vec<u8>) -> io::Result<()> {
+    let mut file = vfs.open(path)?;
+    let size = file.size() as usize;
+    buffer.clear();
+    if buffer.capacity() < size {
+        *buffer = Vec::new();
+        buffer.reserve_exact(size);
+    }
+    file.read_to_end(buffer)?;
+    Ok(())
+}
+
 /// [`Vfs`] over a directory of the native filesystem.
 pub struct StdVfs {
     root: PathBuf,

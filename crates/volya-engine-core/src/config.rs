@@ -56,6 +56,20 @@ pub fn load(vfs: &dyn Vfs, path: &str) -> io::Result<Config> {
     Ok(builder.finish())
 }
 
+/// Parses `text` as a configuration file whose includes resolve against
+/// the directory `base` (ending in `\` or empty), as a model's
+/// user data is read (torch.md 1.2).
+pub fn parse_in(vfs: &dyn Vfs, text: &[u8], base: &str) -> io::Result<Config> {
+    let mut builder = Builder::new();
+    add_file(
+        vfs,
+        &format!("{}user data", lower(base)),
+        text,
+        &mut builder,
+    )?;
+    Ok(builder.finish())
+}
+
 fn add_file(vfs: &dyn Vfs, path: &str, text: &[u8], builder: &mut Builder) -> io::Result<()> {
     let dir = directory(path);
     builder

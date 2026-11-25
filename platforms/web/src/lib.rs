@@ -26,6 +26,69 @@ use volya_engine::formats::ui::Resolution;
 use wasm_bindgen::prelude::*;
 use web_sys::{OffscreenCanvas, WorkerGlobalScope};
 
+/// Test builds count the wasm heap's live bytes and their high-water mark
+/// (the `heap_log` op), to tell what a stage holds from what fragmentation
+/// adds to the heap (#357), as `loading_memory.rs` does natively.
+#[cfg(feature = "test-ops")]
+#[allow(unsafe_code)] // `GlobalAlloc` is unsafe to implement; this forwards.
+mod counting {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+
+    static LIVE: AtomicUsize = AtomicUsize::new(0);
+    static PEAK: AtomicUsize = AtomicUsize::new(0);
+
+    struct Counting;
+
+    fn grew(by: usize) {
+        PEAK.fetch_max(LIVE.fetch_add(by, Relaxed) + by, Relaxed);
+    }
+
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            let p = unsafe { System.alloc(layout) };
+            if !p.is_null() {
+                grew(layout.size());
+            }
+            p
+        }
+
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            let p = unsafe { System.alloc_zeroed(layout) };
+            if !p.is_null() {
+                grew(layout.size());
+            }
+            p
+        }
+
+        unsafe fn dealloc(&self, p: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(p, layout) };
+            LIVE.fetch_sub(layout.size(), Relaxed);
+        }
+
+        unsafe fn realloc(&self, p: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+            let q = unsafe { System.realloc(p, layout, size) };
+            if !q.is_null() {
+                if size > layout.size() {
+                    grew(size - layout.size());
+                } else {
+                    LIVE.fetch_sub(layout.size() - size, Relaxed);
+                }
+            }
+            q
+        }
+    }
+
+    #[global_allocator]
+    static ALLOCATOR: Counting = Counting;
+
+    /// Live bytes, and the most live since the last call.
+    pub fn take() -> (usize, usize) {
+        let live = LIVE.load(Relaxed);
+        (live, PEAK.swap(live, Relaxed))
+    }
+}
+
 /// Starts the engine on the canvas transferred from the page, drawing
 /// through WebGL 2 even where WebGPU works when `webgl` (the player's
 /// Graphics setting, #121). Without graphics the engine still starts;
@@ -132,6 +195,14 @@ pub fn frame(time: f64) {
             "caption": state.get("loading").and_then(|l| l.get("caption")),
             "wasm_heap_bytes": heap_bytes(),
         });
+        #[cfg(feature = "test-ops")]
+        let entry = {
+            let mut entry = entry;
+            let (live, peak) = counting::take();
+            entry["live_bytes"] = live.into();
+            entry["peak_bytes"] = peak.into();
+            entry
+        };
         HEAP_LOG.with(|l| {
             if let Some(log) = l.borrow_mut().as_mut() {
                 log.push(entry);
@@ -235,15 +306,24 @@ pub fn input_capture() -> bool {
 /// plus 2 while the crouch toggle is engaged, 4 while a sprint is
 /// requested, 8 while the toggled crouch is the low crouch and 16 while the
 /// sprint lock holds the touch stick; 32 while the character takes keys
-/// (the level's controls live, or the inventory screen over them, #110).
+/// (the level's controls live, or the inventory screen over them, #110);
+/// 64 while the touch Torch button shows and 128 while the torch is on, 256
+/// while the Night vision button shows and 512 while night vision is
+/// active (#363).
 #[wasm_bindgen]
 pub fn level_controls() -> u32 {
     let keys = u32::from(engine::character_takes_keys()) << 5;
+    let button = |b: Option<bool>, shift: u32| match b {
+        None => 0,
+        Some(on) => (1 | u32::from(on) << 1) << shift,
+    };
     keys | engine::level_controls().map_or(0, |c| {
         1 | u32::from(c.crouch) << 1
             | u32::from(c.sprint) << 2
             | u32::from(c.low_crouch) << 3
             | u32::from(c.sprint_lock) << 4
+            | button(c.torch, 6)
+            | button(c.night_vision, 8)
     })
 }
 
@@ -372,6 +452,12 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         }
         #[cfg(feature = "test-ops")]
         "debug_give_item" => to_json(&engine::give_item(text("section"))?),
+        // `{wear}`: an outfit with night vision put on, or taken away.
+        #[cfg(feature = "test-ops")]
+        "debug_nightvision_outfit" => {
+            let wear = args.get("wear").and_then(|v| v.as_bool()).unwrap_or(true);
+            to_json(&engine::nightvision_outfit(wear)?)
+        }
         // `{name, position: [x, y, z], category, looped, two_d, delay}`.
         #[cfg(feature = "test-ops")]
         "debug_play_sound" => {

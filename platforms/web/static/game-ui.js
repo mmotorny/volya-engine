@@ -413,6 +413,11 @@ async function showHome(status) {
   const problem = element("div", { className: "callout problem", hidden: true });
   const launch = element("button", { className: "primary play", textContent: "Play" });
   launch.addEventListener("click", async () => {
+    // One start at a time: starting anew on the Graphics choice can take
+    // seconds, and a second press would start the engine anew again (#369).
+    // Click serves the pointer, touch and the keyboard alike.
+    launch.disabled = true;
+    launch.textContent = "Starting…";
     problem.hidden = true;
     try {
       // The Graphics choice applies as the game starts: the engine starts
@@ -430,6 +435,10 @@ async function showHome(status) {
         element("span", { textContent: reported(error.message) }),
       );
       problem.hidden = false;
+    } finally {
+      // Home shows again as it was once the game ends.
+      launch.disabled = false;
+      launch.textContent = "Play";
     }
   });
 

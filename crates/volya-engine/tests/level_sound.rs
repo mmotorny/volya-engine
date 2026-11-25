@@ -22,9 +22,9 @@ use volya_engine::audio::SoundHost;
 use volya_engine::core::audio::{Category, Mixer, VoiceId};
 use volya_engine::core::collision::geometry::normalize;
 use volya_engine::core::config;
-use volya_engine::core::pause::GlobalClock;
 use volya_engine::core::input::Input;
 use volya_engine::core::object_light::SkyVisibility;
+use volya_engine::core::pause::GlobalClock;
 use volya_engine::core::sound::ambient::{AmbientParticles, NoParticles, list_items};
 use volya_engine::core::sound::occlusion::Occlusion;
 use volya_engine::core::sound::random::SharedRandom;
@@ -590,7 +590,11 @@ fn sky_visibility_and_heard_levels(
         "{:?}",
         bunker.occlusion
     );
-    assert!(bunker.db.0 >= -41.25 && bunker.db.1 <= -20.35, "{:?}", bunker.db);
+    assert!(
+        bunker.db.0 >= -41.25 && bunker.db.1 <= -20.35,
+        "{:?}",
+        bunker.db
+    );
 
     // H5: outdoors on the ground above the start (y −7.659), 13 of the 26
     // rays are free, 4 of the first 5: h = 0.8 at a first update.
@@ -637,7 +641,40 @@ fn sky_visibility_and_heard_levels(
         outdoors.db
     );
     let (h, target) = level.sky_visibility();
-    assert!(h >= 0.05 && (target - 0.5).abs() < 1e-6, "{h} {target} {:?} {frames}", level.player().state());
+    assert!(h >= 0.05 && (target - 0.5).abs() < 1e-6, "{h} {target}");
+    // L6's placements (36 angles × d = 30, 60 m, 10 m above the eye, no
+    // jitter) from this point: each target is 1 or the level's 0.4.
+    let occlusion = Occlusion {
+        level: Some(level.shared_collision()),
+        sound: sound.occlusion_mesh.clone(),
+        scale: 0.4,
+    };
+    let mut free = 0;
+    for k in 0..36 {
+        let a = k as f32 * std::f32::consts::TAU / 36.0;
+        for d in [30.0, 60.0] {
+            let to = [eye[0] + d * a.cos(), eye[1] + 10.0, eye[2] + d * a.sin()];
+            let v = [to[0] - eye[0], to[1] - eye[1], to[2] - eye[2]];
+            let o = occlusion.target_along(eye, normalize(v).unwrap(), distance(eye, to));
+            assert!(o == 1.0 || (o - 0.4).abs() < 1e-6, "{o}");
+            free += usize::from(o == 1.0);
+        }
+    }
+    let unoccluded = outdoors.occlusion.iter().filter(|&&o| o == 1.0).count();
+    // Outdoors part of them are unoccluded, unlike from the bunker.
+    assert!((1..72).contains(&free), "{free} of 72 unoccluded");
+    eprintln!("outdoor placements unoccluded: {free} of 72");
+    eprintln!(
+        "heard random sounds: bunker {} sounds, {:.1} … {:.1} dB, no effect; outdoors after \
+         {frames} frames, {} sounds ({unoccluded} unoccluded), {:.1} … {:.1} dB, {} effects",
+        bunker.sounds,
+        bunker.db.0,
+        bunker.db.1,
+        outdoors.sounds,
+        outdoors.db.0,
+        outdoors.db.1,
+        outdoors.effects
+    );
 }
 
 /// What [`heard_levels`] found of the random sounds.
@@ -725,7 +762,13 @@ fn heard_levels(
             assert_eq!(max, 75.0, "{}", e.name);
             let g = distance_gain(m, max, ROLLOFF, delta);
             assert_eq!(e.fade, 1.0, "{} fades", e.name);
-            assert!((e.out - e.occlusion).abs() < 1e-3, "{}: V {} o {}", e.name, e.out, e.occlusion);
+            assert!(
+                (e.out - e.occlusion).abs() < 1e-3,
+                "{}: V {} o {}",
+                e.name,
+                e.out,
+                e.occlusion
+            );
             assert!((gain - e.out * g).abs() < 1e-6, "{}: {gain}", e.name);
             assert!(
                 (e.priority - e.out * distance_factor(m, delta)).abs() < 1e-6,
