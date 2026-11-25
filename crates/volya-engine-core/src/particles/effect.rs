@@ -261,7 +261,8 @@ impl EffectInstance {
                 STEP,
             );
         }
-        // TODO(#152): collision (P5) when it has 0x10000.
+        // TODO(#342): collision (particle-collision.md, P5) when it has
+        // 0x10000.
         let count = self.particles.len();
         if count > 0 {
             let mut b = Bounds::EMPTY;
