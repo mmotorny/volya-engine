@@ -464,6 +464,14 @@ impl Loading {
         }
     }
 
+    /// The level, made, while the platform prepares its world for the GPU.
+    pub fn level_to_prepare(&self) -> Option<&LevelScreen> {
+        match &self.hold {
+            Hold::World(level) => Some(level),
+            _ => None,
+        }
+    }
+
     /// The platform has prepared the level's world: the next step shows
     /// the level.
     pub fn world_prepared(&mut self) {

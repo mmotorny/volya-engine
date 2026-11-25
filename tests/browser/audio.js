@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Audio path: a game sound (from the real installer, as in the import suite)
-// decoded and mixed in the engine worker, pulled by the AudioWorklet and
-// rendered by an OfflineAudioContext (no user gesture needed).
+// sent by the engine worker to the audio worker, decoded and mixed there,
+// pulled by the AudioWorklet and rendered by an OfflineAudioContext (no user
+// gesture needed).
 
 import { assert, skip } from "./harness.js";
 
@@ -35,6 +36,10 @@ let live;
 const CAPTURE_SECONDS = 30;
 const SLOW_FROM = 10000;
 const FRAME_COST = 60;
+// Then frames of a whole second for LONG_FRAMES_MS (#354: the output does
+// not wait for the engine's frames).
+const LONG_FRAME_COST = 1000;
+const LONG_FRAMES_MS = 3500;
 let levelStart;
 // S3 section 5, source 2 of `l01_escape`: a song on a tape recorder.
 const TAPE = "scripts\\magnitofon\\magnitofon_2";
@@ -89,6 +94,14 @@ async function render(start) {
   return [0, 1].map((c) => buffer.getChannelData(c).subarray(RATE * 0.2));
 }
 
+// The AudioWorklet's queue when it asked (what plays before a reply's
+// audio: the output's latency), over captured blocks.
+function queue(blocks) {
+  const ms = blocks.map((b) => (b[4] / live.sampleRate) * 1000);
+  const mean = ms.reduce((a, b) => a + b, 0) / ms.length;
+  return `queue at a request ${mean.toFixed(0)} ms average, ${Math.max(...ms).toFixed(0)} ms most`;
+}
+
 // RMS of `a`, or of the difference `a - b`.
 function rmsOf(a, b) {
   let sum = 0;
@@ -133,10 +146,17 @@ export const tests = {
     // Each render adds one file, inverted and panned to its side, to the
     // track: if the file plays exactly that channel (from the same frame as
     // the track), the channel cancels out and the other stays.
-    const cancel = (side, pan) => () =>
-      volya
-        .call("play_music", { track: MUSIC })
-        .then(() => volya.call("play_sound", { path: `${TRACK}_${side}.ogg`, pan, gain: -1 }));
+    // Both calls' commands reach the audio worker together, as one frame's
+    // do: it mixes on its own schedule, so calls apart may fall apart.
+    const cancel = (side, pan) => async () => {
+      await volya.call("debug_audio_hold", { on: true });
+      try {
+        await volya.call("play_music", { track: MUSIC });
+        await volya.call("play_sound", { path: `${TRACK}_${side}.ogg`, pan, gain: -1 });
+      } finally {
+        await volya.call("debug_audio_hold", { on: false });
+      }
+    };
     const [leftCancelled, right] = await render(cancel("l", -1));
     const [left, rightCancelled] = await render(cancel("r", 1));
     for (const [name, rms] of [["left", rmsOf(left)], ["right", rmsOf(right)]]) {
@@ -282,7 +302,8 @@ export const tests = {
       `playing: ${heard.join(", ")}; sparks1 occlusion ${sparks?.occlusion}; ` +
       `sound update ${(stats.sound_update_ms * 1000).toFixed(0)} µs average, ` +
       `${(stats.sound_update_max_ms * 1000).toFixed(0)} µs worst; ` +
-      `frame CPU ${stats.frame_cpu_ms.toFixed(2)} ms; wasm heap ${(stats.wasm_heap_bytes / 2 ** 20).toFixed(0)} MiB`
+      `frame CPU ${stats.frame_cpu_ms.toFixed(2)} ms; wasm heap ${(stats.wasm_heap_bytes / 2 ** 20).toFixed(0)} MiB, ` +
+      `the audio worker's ${(stats.audio_heap_bytes / 2 ** 20).toFixed(1)} MiB`
     );
   },
 
@@ -310,6 +331,9 @@ export const tests = {
     const slowFrom = slowAt - (performance.now() - blocks.at(-1)[0]);
     const first = blocks.findIndex((b) => b[5] >= 0);
     assert(first >= 0, "the tape recorder never played");
+    // Before the tape recorder, from the New Game's start: the loading and
+    // the level's first frame, which creates its sounds.
+    const before = blocks.slice(0, first + 1).reduce((sum, b) => sum + b[3], 0);
     const underruns = [0, 0];
     let worstJump = 0;
     // From the block after the first: the voice starts at gain 0 and
@@ -326,11 +350,47 @@ export const tests = {
     }
     const ms = (frames) => ((frames / live.sampleRate) * 1000).toFixed(0);
     assert(
-      underruns[0] + underruns[1] === 0,
-      `silence for want of mixed audio: ${ms(underruns[0])} ms before the frames slow down, ${ms(underruns[1])} ms after`,
+      before + underruns[0] + underruns[1] === 0,
+      `silence for want of mixed audio: ${ms(before)} ms before the tape recorder starts, ` +
+        `${ms(underruns[0])} ms before the frames slow down, ${ms(underruns[1])} ms after`,
     );
     assert(worstJump < 0.05, `the gain jumped by ${worstJump}`);
-    return `${blocks.length - first} blocks on one voice, no underrun; worst gain change per block ${worstJump.toFixed(4)}`;
+    return `${blocks.length - first} blocks on one voice, no underrun; worst gain change per block ${worstJump.toFixed(4)}; ${queue(blocks)}`;
+  },
+
+  // #354: the audio worker mixes on the output's schedule, so engine
+  // frames of a whole second leave the output fed, the voice continuous.
+  "frames of a second leave no gap": async () => {
+    if (!installer) skip("no installer");
+    if (live.state !== "running") skip(`the AudioContext is ${live.state} (no user gesture)`);
+    await volya.call("audio_capture", { name: TAPE });
+    await sleep(500);
+    await volya.call("debug_frame_cost", { ms: LONG_FRAME_COST });
+    try {
+      await sleep(LONG_FRAMES_MS);
+    } finally {
+      await volya.call("debug_frame_cost", { ms: 0 });
+    }
+    await sleep(500);
+    const { blocks, frames } = await volya.call("audio_capture");
+    const longest = Math.max(...frames.map((f) => f[1]));
+    assert(longest >= LONG_FRAME_COST, `the longest frame took ${longest} ms`);
+    const first = blocks.findIndex((b) => b[5] >= 0);
+    assert(first >= 0, "the tape recorder is not playing");
+    let underrun = blocks[first][3];
+    for (let i = first + 1; i < blocks.length; i++) {
+      const [t, , , gap, , voice, before] = blocks[i];
+      const prev = blocks[i - 1];
+      assert(voice === prev[5] && before === prev[7], `at ${t.toFixed(0)} ms the voice changed or jumped`);
+      underrun += gap;
+    }
+    assert(underrun === 0, `silence for want of mixed audio: ${((underrun / live.sampleRate) * 1000).toFixed(0)} ms`);
+    const stats = await volya.call("level_stats");
+    return (
+      `${frames.length} frames, the longest ${longest.toFixed(0)} ms; ${blocks.length - first} blocks, no underrun; ${queue(blocks)}; ` +
+      `mixing ${(stats.audio_mix_ms / (stats.audio_mixed_frames / live.sampleRate)).toFixed(1)} ms per second of audio; ` +
+      `audio worker heap ${(stats.audio_heap_bytes / 2 ** 20).toFixed(1)} MiB, engine ${(stats.wasm_heap_bytes / 2 ** 20).toFixed(0)} MiB`
+    );
   },
 
   // The player's footsteps (docs/behavior/player-footsteps.md): running in

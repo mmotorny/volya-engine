@@ -32,12 +32,14 @@ use crate::core::sound::rain_thunder::{
 };
 use crate::core::sound::static_sources::{self, SourceRecord, StaticSources};
 use crate::core::sound::system::{PlayFlags, SoundId, SoundSystem, Vec3};
+use crate::core::torch::NightVisionSection;
 use crate::core::vfs::{self, Vfs};
 use crate::core::weather::Weather;
 use crate::core::weather::wind::Wind;
 use crate::core::zones::{self, SoundEvent};
 use crate::data::GameData;
 use crate::footsteps::{MaterialPairs, PairSounds};
+use crate::torch::{TorchSound, TorchSounds};
 
 /// Reads `name` in the level directory `dir`, `None` when it is missing.
 fn optional(tree: &dyn Vfs, dir: &str, name: &str) -> io::Result<Option<Vec<u8>>> {
@@ -74,6 +76,9 @@ pub struct LevelSoundData {
     /// The material pairs, whose sounds are created with the level's (S9
     /// section 4); read with the materials.
     pub pairs: Option<Arc<MaterialPairs>>,
+    /// The night vision of each of the player's torches with it, by item
+    /// id: its sounds are loaded with its section (torch.md 14).
+    pub torches: Vec<(u16, NightVisionSection)>,
     /// The sounds of each zone object (S15 2.1), by zone, created with the
     /// level's.
     pub zones: Vec<ZoneSoundNames>,
@@ -140,6 +145,7 @@ impl LevelSoundData {
             collections,
             bolt_common,
             pairs: None,
+            torches: Vec::new(),
             zones: Vec::new(),
         })
     }
@@ -164,6 +170,10 @@ pub struct LevelSounds {
     /// `ambient\rain` (S8 4.1).
     pub rain: SoundId,
     pub pairs: PairSounds,
+    /// The torches' night-vision sounds, by item id (torch.md 14).
+    pub torches: HashMap<u16, TorchSounds>,
+    /// The level directory, for the sounds of torches that come later.
+    dir: String,
     /// Each zone's sounds (S15 2.1), by zone.
     pub zones: Vec<[Option<SoundId>; 8]>,
 }
@@ -236,6 +246,10 @@ impl LevelSounds {
             Some(p) => PairSounds::create(system, tree, aliases, p)?,
             None => PairSounds::default(),
         };
+        let mut torches = HashMap::new();
+        for (id, section) in &data.torches {
+            torches.insert(*id, TorchSounds::create(system, tree, aliases, section)?);
+        }
         let zones = (data.zones.iter())
             .map(|names| zone_sounds(system, tree, aliases, names))
             .collect::<Result<_, _>>()?;
@@ -254,8 +268,37 @@ impl LevelSounds {
             bolt_common: data.bolt_common.clone(),
             rain,
             pairs,
+            torches,
+            dir: data.dir.clone(),
             zones,
         })
+    }
+
+    /// Carries out a torch's sound command (torch.md 14), its sounds created
+    /// from `section` the first time (a torch that came after the level's
+    /// sounds): fatal when a file cannot be opened (S1 section 5).
+    pub fn torch(
+        &mut self,
+        system: &mut SoundSystem,
+        tree: &dyn Vfs,
+        aliases: &PathAliases,
+        sound: TorchSound,
+        section: Option<&NightVisionSection>,
+    ) -> Result<(), Fatal> {
+        if !self.torches.contains_key(&sound.torch) {
+            let Some(section) = section else {
+                return Ok(());
+            };
+            let mut aliases = aliases.clone();
+            aliases.set_dir(LEVEL, &self.dir);
+            let created = system
+                .all_or_none(|system| TorchSounds::create(system, tree, &aliases, section))?;
+            self.torches.insert(sound.torch, created);
+        }
+        if let Some(t) = self.torches.get_mut(&sound.torch) {
+            t.apply(system, sound.command);
+        }
+        Ok(())
     }
 
     /// Creates the sounds of zones that came online after the level's
@@ -319,6 +362,9 @@ impl LevelSounds {
         }
         system.discard(self.rain);
         self.pairs.discard(system);
+        for t in self.torches.values() {
+            t.discard(system);
+        }
         for &id in self.zones.iter().flatten().flatten() {
             system.discard(id);
         }

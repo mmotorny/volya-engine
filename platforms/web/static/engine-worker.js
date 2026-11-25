@@ -17,8 +17,13 @@
 //   { type: "resize", width, height, dpr }: the canvas's CSS size and the
 //   page's devicePixelRatio (`size` in "start" has the same fields).
 //   { type: "call", id, op, args }  → { type: "result", id, result } | { type: "result", id, error }
-//   { type: "audio", port, sampleRate } connects the page's AudioWorklet; it
-//   then asks this worker for mixed blocks directly over `port`.
+//   { type: "audio", memory, port, sampleRate } connects a new output:
+//   `memory` is its shared memory (audio-ring.js), `port` goes to the audio
+//   worker (audio-worker.js), which mixes for the AudioWorklet. After every
+//   frame, call and visibility change this worker writes the mixer's
+//   commands to the ring of commands and posts the files they play to
+//   `port`; it takes the audio worker's reports from it. `worklet` is the
+//   AudioWorklet's port, which reports its errors.
 //   { type: "input", event }: one input event (format in src/input.rs).
 //   { type: "visibility", hidden }: the page was hidden or shown again; the
 //   engine stops while hidden (our design, #93).
@@ -127,12 +132,23 @@ function schedule() {
   nextFrame(loop);
 }
 
+let started;
+/** The port to the audio worker, once an output is connected. */
+let audioPort = null;
+/** Sends the audio worker the mixer's commands since the last time, and the files they play. */
+function flushAudio() {
+  if (!audioPort || !engine) return;
+  const files = engine.audio_flush();
+  if (files) for (const file of files) audioPort.postMessage(file, [file[1].buffer]);
+}
+
 function loop(time) {
   scheduled = false;
   // Hidden after this frame was asked for: idle until shown.
   if (hidden) return;
   try {
     e().frame(time);
+    flushAudio();
     syncCapture();
   } catch (error) {
     // A broken engine stops drawing; calls report their own errors.
@@ -144,11 +160,8 @@ function loop(time) {
   schedule();
 }
 
-let started;
 /** Whether the diagnostic log is on (the `diagnostics_set` op's result). */
 let logging = false;
-/** The port of the AudioWorklet pulling mixed blocks, once connected. */
-let audioPort = null;
 
 onmessage = async ({ data }) => {
   if (data.type === "start") {
@@ -179,26 +192,26 @@ onmessage = async ({ data }) => {
     await started;
     e().resize(data.width, data.height, data.dpr);
   } else if (data.type === "audio") {
-    e().audio_init(data.sampleRate);
-    // One output pulls from the mixer: a replaced one gets nothing more.
+    e().audio_init(data.sampleRate, data.memory);
+    // One output: a replaced one gets nothing more.
     audioPort?.close();
     audioPort = data.port;
-    const rate = data.sampleRate;
-    data.port.onmessage = ({ data: request }) => {
-      // The worklet's processor failed (audio-worklet.js).
-      if (request.error !== undefined) return ended("worklet_error", request.error, 3);
-      if (logging) {
-        const [min, sum, max, n] = request.fill;
-        e().diagnostics_audio(request.underrun, request.wait, n ? min : 0, sum, max, n, request.overrun, rate);
+    data.port.onmessage = ({ data: report }) => {
+      try {
+        e().audio_report(report);
+      } catch (error) {
+        console.warn(`audio: ${message(error)}`);
       }
-      const block = e().audio_mix(request.need, request.underrun, request.queued);
-      data.port.postMessage(block, [block.buffer]);
     };
+    // The worklet's processor failed (audio-worklet.js).
+    data.worklet.onmessage = ({ data: { error } }) => ended("worklet_error", error, 3);
+    flushAudio();
   } else if (data.type === "visibility") {
     await started;
     hidden = data.hidden;
     try {
       e().visibility(hidden);
+      flushAudio();
       syncCapture();
     } catch (error) {
       console.warn(`visibility: ${message(error)}`);
@@ -230,6 +243,8 @@ onmessage = async ({ data }) => {
     } catch (error) {
       reply = { type: "result", id: data.id, error: message(error) };
     }
+    // Before the reply, so what the call played is on its way.
+    flushAudio();
     // Before the reply, so a caller turning capture on finds the page forwarding.
     try {
       syncCapture();

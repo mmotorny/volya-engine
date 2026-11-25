@@ -147,6 +147,9 @@ pub struct ItemConfig {
     pub inv_grid: Option<InvGrid>,
     /// `quest_item = true`: never dropped (screen 5.6, 5.7).
     pub quest_item: bool,
+    /// An outfit's `nightvision_sect`, the section of its night-vision
+    /// effect; `None` when absent or for other items (torch.md 15.1).
+    pub nightvision_sect: Option<String>,
 }
 
 impl ItemConfig {
@@ -217,6 +220,8 @@ impl ItemConfig {
             eatable,
             inv_grid,
             quest_item: get("quest_item").is_some_and(value::bool),
+            nightvision_sect: (get("nightvision_sect").filter(|_| outfit))
+                .map(|v| value::unquote(v).to_owned()),
             class_id,
         })
     }

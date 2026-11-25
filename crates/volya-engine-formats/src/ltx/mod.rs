@@ -15,6 +15,7 @@ pub mod value;
 
 use std::collections::BTreeMap;
 use std::io;
+use std::sync::Arc;
 
 use crate::cp1251;
 
@@ -247,11 +248,13 @@ impl Entry {
     }
 }
 
-/// A named set of entries, ordered by key bytes (section 6).
+/// A named set of entries, ordered by key bytes (section 6). Entries are
+/// shared with the sections that inherit them, so a parent's entries are
+/// stored once however many sections copy them (#357).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Section {
     name: String,
-    entries: BTreeMap<Vec<u8>, Entry>,
+    entries: BTreeMap<Arc<[u8]>, Arc<Entry>>,
 }
 
 impl Section {
@@ -271,12 +274,12 @@ impl Section {
 
     /// The entries in key byte order.
     pub fn entries(&self) -> impl ExactSizeIterator<Item = &Entry> {
-        self.entries.values()
+        self.entries.values().map(|e| &**e)
     }
 
     /// The entry with exactly this key (keys are case-sensitive).
     pub fn entry(&self, key: &str) -> Option<&Entry> {
-        self.entries.get(&cp1251::encode(key)?)
+        self.entries.get(&*cp1251::encode(key)?).map(|e| &**e)
     }
 
     pub fn contains(&self, key: &str) -> bool {
@@ -303,7 +306,7 @@ impl Section {
             key: cp1251::decode(key),
             value: value.map(cp1251::decode),
         };
-        self.entries.insert(key.to_vec(), entry);
+        self.entries.insert(key.into(), Arc::new(entry));
     }
 }
 

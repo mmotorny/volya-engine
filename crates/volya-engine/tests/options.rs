@@ -542,20 +542,69 @@ fn options_screen_from_game_data() {
         "east is Escape"
     );
 
-    // The restart message: a renderer change (section 10).
+    // The renderer list's dynamic entries are disabled (#364, a deviation
+    // decided by the user): no input chooses them, so the restart message
+    // (section 10) never opens.
     run.screen
         .open(run.data, &mut run.console, XGA, run.now, [512.0, 384.0]);
     run.click(run.button("tab 0"));
     let r = run.control("list_renderer").rect;
+    let entry = |k: f32| [r[0] + 20.0, r[1] + 23.0 + k * 18.0 + 9.0];
     run.click(centre(r));
-    run.click([r[0] + 20.0, r[1] + 23.0 + 2.0 * 18.0 + 9.0]);
-    assert!(run.state().message);
-    assert!(run.control("check_r2_sun").enabled);
+    assert_eq!(run.state().open_list.as_deref(), Some("list_renderer"));
     let sc = scene(&run, &mut assets);
-    assert!(sc.layer("message text").count() > 10);
+    let alpha = |k: usize| {
+        sc.first(&format!("list_renderer entry {k}"))
+            .unwrap()
+            .color
+            .a
+    };
+    assert_eq!(
+        (alpha(1), alpha(2)),
+        (128, 128),
+        "section 4.6's disabled rows"
+    );
+    assert_eq!(alpha(0), 255);
     let list = presenter.draw_list(&mut gpu, &tree, &sc, run.now);
-    dump("VOLYA_DUMP_OPTIONS_MESSAGE", &mut gpu, &list);
+    dump("VOLYA_DUMP_OPTIONS_RENDERERS", &mut gpu, &list);
     assert_eq!(presenter.take_errors(), Vec::<String>::new());
+    run.click(entry(2.0));
+    tap(&mut run, entry(1.0));
+    assert_eq!(run.state().open_list.as_deref(), Some("list_renderer"));
+    // The d-pad reaches only the enabled entry: from it, nothing below.
+    pad(&mut run, GamepadButton::DpadUp);
+    let before = run.state().cursor;
+    assert!((before[1] - entry(0.0)[1]).abs() < 1.0, "{before:?}");
+    pad(&mut run, GamepadButton::DpadDown);
+    assert_eq!(run.state().cursor, before);
+    pad(&mut run, GamepadButton::South);
+    assert_eq!(run.state().open_list, None);
+    assert_eq!(run.console.status("renderer").unwrap(), "renderer_r1");
+    assert_eq!(run.control("list_renderer").value, "Статичное освещение");
+    assert!(!run.state().message);
+    assert!(!run.control("check_r2_sun").enabled);
+    run.click(run.button("btn_cancel"));
+
+    // A dynamic renderer stored by the original's user.ltx: kept as
+    // written, shown as the static renderer it is drawn with.
+    run.console.exec("renderer renderer_r2");
+    run.screen
+        .open(run.data, &mut run.console, XGA, run.now, [512.0, 384.0]);
+    let c = run.control("list_renderer");
+    assert_eq!(
+        (c.value.as_str(), c.changed),
+        ("Статичное освещение", false)
+    );
+    for name in [
+        "check_r2_sun",
+        "check_r2_sun_details",
+        "track_light_distance",
+        "track_particles_distance",
+    ] {
+        assert!(!run.control(name).enabled, "{name}");
+    }
+    run.click(run.button("btn_accept"));
+    assert_eq!(run.console.status("renderer").unwrap(), "renderer_r2");
 }
 
 /// The app opens the screen from the title menu's options item.

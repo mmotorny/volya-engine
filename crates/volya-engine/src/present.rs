@@ -176,6 +176,9 @@ pub struct Presenter {
     /// A level's geometry uploaded while it loaded
     /// ([`Presenter::prepare_world`]).
     prepared: Option<PreparedWorld>,
+    /// The level whose world is kept through scenes without one
+    /// ([`Presenter::hold_world`]).
+    held: Option<Arc<LevelWorld>>,
     errors: Vec<String>,
 }
 
@@ -590,6 +593,10 @@ impl Presenter {
         let mut file = tree.open(&path).map_err(|e| format!("{path}: {e}"))?;
         let mut source = level.geometry().reader(&mut file);
         p.done = p.upload.step(renderer, &mut source, &p.objects, budget)?;
+        if p.done {
+            // Uploaded: the CPU copy goes before the level shows.
+            p.objects = ObjectGeometry::default();
+        }
         Ok(p.done)
     }
 
@@ -673,7 +680,7 @@ impl Presenter {
                 if !p.done {
                     p.upload.step(renderer, &mut source, &p.objects, u64::MAX)?;
                 }
-                renderer.finish_world(p.upload, &p.objects, &surfaces, &draws, sky.as_ref())?
+                renderer.finish_world(p.upload, &surfaces, &draws, sky.as_ref())?
             }
             (None, Some(objects)) => renderer.create_world_from(
                 &mut source,
@@ -690,9 +697,23 @@ impl Presenter {
         Ok(world)
     }
 
+    /// Keeps the GPU world of `level`, once made, through scenes without a
+    /// world (the loading screen's, after the level was drawn unseen ahead
+    /// of showing, #355), until called with `None`.
+    pub fn hold_world(&mut self, level: Option<Arc<LevelWorld>>) {
+        self.held = level;
+    }
+
+    fn holds_world(&self) -> bool {
+        match (&self.held, &self.world) {
+            (Some(held), Some((level, _))) => Arc::ptr_eq(held, level),
+            _ => false,
+        }
+    }
+
     /// The draw list of `scene` at engine clock `clock`. Images and videos
     /// no longer in the scene are released, and so is a world no longer
-    /// shown.
+    /// shown (unless held, [`Presenter::hold_world`]).
     pub fn draw_list(
         &mut self,
         renderer: &mut Renderer,
@@ -714,6 +735,7 @@ impl Presenter {
                 let frame = self.world_frame(renderer, tree, world);
                 list.world = frame.filter(|_| !world.covered);
             }
+            None if self.holds_world() => {}
             None => {
                 self.world = None;
                 self.particle_shaders.clear();

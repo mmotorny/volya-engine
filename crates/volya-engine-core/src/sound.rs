@@ -142,7 +142,13 @@ impl Sound {
     /// by block. The file is read again; the stream was checked on load, so
     /// errors here mean the file changed or cannot be read.
     pub fn open(&self, tree: &dyn Vfs) -> io::Result<VorbisStream<Cursor<Vec<u8>>>> {
-        VorbisStream::open(Cursor::new(vfs::read(tree, &self.path)?))
+        VorbisStream::open(Cursor::new(self.file(tree)?))
+    }
+
+    /// The sound's file, read again (compressed), for a mixer to decode
+    /// ([`crate::audio::MixerControl::play_file`]).
+    pub fn file(&self, tree: &dyn Vfs) -> io::Result<Vec<u8>> {
+        vfs::read(tree, &self.path)
     }
 }
 

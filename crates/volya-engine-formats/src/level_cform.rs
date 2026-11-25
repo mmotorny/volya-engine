@@ -162,11 +162,16 @@ impl<R: Read + Seek> CformReader<R> {
     /// The vertex positions.
     pub fn vertices(&mut self) -> io::Result<Vec<[f32; 3]>> {
         let mut out = Vec::with_capacity(self.header.vertex_count as usize);
+        self.vertices_into(&mut out)?;
+        Ok(out)
+    }
+
+    /// Appends the vertex positions to `out`.
+    pub fn vertices_into(&mut self, out: &mut Vec<[f32; 3]>) -> io::Result<()> {
         self.records::<VERTEX_SIZE>(HEADER_SIZE as u64, self.header.vertex_count, |_, r| {
             out.push(float3(r));
             Ok(())
-        })?;
-        Ok(out)
+        })
     }
 
     /// Calls `each` with every triangle's index and record, in file order.

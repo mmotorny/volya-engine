@@ -52,8 +52,12 @@ function failedResources() {
   return performance
     .getEntriesByType("resource")
     // Requests to the test infrastructure itself (e.g. probing whether an
-    // installer is configured) are not page errors.
-    .filter((r) => r.responseStatus >= 400 && !new URL(r.name).pathname.includes("/__test/"))
+    // installer is configured) are not page errors, nor headless Chrome's
+    // own request for the origin's /favicon.ico, outside the app (#368).
+    .filter((r) => {
+      const path = new URL(r.name).pathname;
+      return r.responseStatus >= 400 && !path.includes("/__test/") && path !== "/favicon.ico";
+    })
     .map((r) => `HTTP ${r.responseStatus}: ${r.name}`);
 }
 

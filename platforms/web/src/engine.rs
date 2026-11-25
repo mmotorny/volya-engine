@@ -211,6 +211,12 @@ pub fn world_to_prepare() -> Option<Arc<LevelWorld>> {
     RUNNING.with(|r| Some(r.borrow().as_ref()?.app.world_to_prepare()?.clone()))
 }
 
+/// The level's start view while its world is prepared
+/// ([`App::level_to_prepare_scene`]).
+pub fn level_to_prepare_scene(resolution: Resolution) -> Option<Scene> {
+    RUNNING.with(|r| r.borrow().as_ref()?.app.level_to_prepare_scene(resolution))
+}
+
 /// The level's world is prepared: the level shows.
 pub fn world_prepared() {
     RUNNING.with(|r| {

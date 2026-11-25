@@ -14,6 +14,8 @@ import { choose } from "./graphics.js";
 import "./install.js";
 import { startUpdates, versionText } from "./update.js";
 import * as diagnostics from "./diagnostics.js";
+import { ensureIsolated } from "./isolation.js";
+import { createRing, ringTarget } from "./audio-ring.js";
 
 // No browser zoom anywhere in the app, first (#345).
 blockZoom();
@@ -24,6 +26,12 @@ const registration = navigator.serviceWorker?.register(new URL("./sw.js", import
   console.warn(`service worker: ${error.message}`);
 });
 const updates = navigator.serviceWorker ? startUpdates(registration) : null;
+// Audio output needs a cross-origin isolated page (isolation.js): one
+// reload when that makes it so, before anything starts; otherwise the
+// interface says so (game-ui.js).
+const isolation = await ensureIsolated({ registered: registration });
+if (isolation === "reloading") await new Promise(() => {});
+const isolated = isolation === "isolated";
 
 /**
  * The Graphics choice (graphics.js), stored only when the player made one.
@@ -75,21 +83,36 @@ let audio = null;
 let output = null;
 /** Contexts holding the AudioWorklet's module (added once per context). */
 const worklets = new WeakSet();
+// Mixes on the output's schedule for the AudioWorklet, from the engine
+// worker's commands (audio-worker.js); made with the first output.
+let audioWorker = null;
 
 /**
- * Connects an audio context (live or offline) to the engine's mixer through
- * an AudioWorklet whose port goes straight to the engine worker.
+ * Connects an audio context (live or offline) to the engine's mixer: an
+ * AudioWorklet playing what the audio worker mixes, which the engine worker
+ * drives, all over the output's shared memory (audio-ring.js). Needs a
+ * cross-origin isolated page.
  */
 async function connectAudio(context) {
   if (!worklets.has(context)) {
     await context.audioWorklet.addModule(new URL("./audio-worklet.js", import.meta.url));
     worklets.add(context);
   }
-  const node = new AudioWorkletNode(context, "volya-output", { numberOfInputs: 0, outputChannelCount: [2] });
+  const memory = createRing();
+  const sampleRate = context.sampleRate;
+  const target = ringTarget(sampleRate);
+  const node = new AudioWorkletNode(context, "volya-output", {
+    numberOfInputs: 0,
+    outputChannelCount: [2],
+    processorOptions: { memory, target },
+  });
   // The processor failed (its constructor too; errors it caught it reports itself).
   node.onprocessorerror = () => diagnostics.end("worklet_error", "the audio worklet's processor failed");
   node.connect(context.destination);
-  worker.postMessage({ type: "audio", port: node.port, sampleRate: context.sampleRate }, [node.port]);
+  audioWorker ??= new Worker(new URL("./audio-worker.js", import.meta.url), { type: "module" });
+  const link = new MessageChannel();
+  audioWorker.postMessage({ type: "connect", sampleRate, target, memory, engine: link.port1 }, [link.port1]);
+  worker.postMessage({ type: "audio", memory, port: link.port2, worklet: node.port, sampleRate }, [link.port2, node.port]);
   return node;
 }
 
@@ -126,6 +149,7 @@ addEventListener("pagehide", () => {
   diagnostics.keepEnd("page_closed", message);
   worker.postMessage({ type: "end", reason: "page_closed", message });
   worker.terminate();
+  audioWorker?.terminate();
 });
 addEventListener("pageshow", (event) => event.persisted && location.reload());
 
@@ -194,7 +218,7 @@ async function restartEngine() {
   view.replaceWith(fresh);
   view = fresh;
   await startEngine();
-  if (audio) output = await connectAudio(audio);
+  if (audio && isolated) output = await connectAudio(audio);
 }
 
 /**
@@ -202,6 +226,8 @@ async function restartEngine() {
  * supports, the stored choice, storing one, and applying it before the game
  * starts.
  */
+/** The Graphics choice being applied (`graphics.apply`), while it is. */
+let applying = null;
 const graphics = {
   get available() {
     return available;
@@ -216,9 +242,16 @@ const graphics = {
       console.warn(`graphics setting: ${error.message}`);
     }
   },
-  /** Starts the engine anew where the choice differs from the backend it runs. */
-  async apply() {
-    if (choose(storedGraphics(), available) !== backend) await restartEngine();
+  /**
+   * Starts the engine anew where the choice differs from the backend it
+   * runs. One restart at a time: `backend` changes only once the new engine
+   * runs, so a second restart would end the one awaited (#369).
+   */
+  apply() {
+    applying ??= (async () => {
+      if (choose(storedGraphics(), available) !== backend) await restartEngine();
+    })().finally(() => (applying = null));
+    return applying;
   },
 };
 
@@ -277,10 +310,11 @@ try {
   audio.addEventListener("statechange", () => diagnostics.event("AudioContext state", { state: audio.state }));
   // Made while hidden: suspended until shown.
   if (document.visibilityState === "hidden") audio.suspend().catch(() => {});
-  output = await connectAudio(audio);
+  // Not isolated, nothing plays: the interface says so before anything else.
+  if (isolated) output = await connectAudio(audio);
   const resume = () => document.visibilityState === "visible" && audio.state !== "running" && audio.resume();
   for (const event of ["pointerdown", "keydown", "touchend"]) addEventListener(event, resume);
-  await import("./game-ui.js").then((ui) => ui.start(call, updates, graphics));
+  await import("./game-ui.js").then((ui) => ui.start(call, updates, graphics, { isolated }));
 } catch (error) {
   // The same panel as the interface's other problems, drawn without the engine.
   status.textContent = `Volya Engine · ${versionText()}`;

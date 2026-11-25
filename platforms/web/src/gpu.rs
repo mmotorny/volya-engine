@@ -344,6 +344,53 @@ pub async fn submitted_work_done() -> Result<(), JsValue> {
     Ok(())
 }
 
+/// Draws the level's start view once into a frame of its own, never
+/// shown, while its loading waits ([`crate::engine::level_to_prepare_scene`]):
+/// the world is made from what was uploaded, and the browser and the GPU
+/// do their first-draw work (programs, the world's render bundles) under
+/// the loading image (#355, #376). Whether there was a view to draw.
+pub fn warm_up() -> Result<bool, JsValue> {
+    with_gpu(|gpu| {
+        let max = gpu.renderer.device().limits().max_texture_dimension_2d;
+        let Some(mode) = crate::engine::render_size() else {
+            return Ok(false);
+        };
+        let size = Resolution::new(mode.width.clamp(1, max), mode.height.clamp(1, max));
+        let Some(scene) = crate::engine::level_to_prepare_scene(size) else {
+            return Ok(false);
+        };
+        // Kept through the loading screen's frames until the level shows.
+        let level = scene.world.as_ref().map(|w| w.world.clone());
+        gpu.presenter.hold_world(level);
+        let list = tracing::info_span!("render.scene").in_scope(|| {
+            crate::game::with_trees(|tree, _| {
+                gpu.presenter.draw_list(&mut gpu.renderer, tree, &scene, 0)
+            })
+        })?;
+        for e in gpu.presenter.take_errors() {
+            web_sys::console::error_1(&format!("drawing: {e}").into());
+        }
+        let target = gpu.renderer.device().create_texture(&wgpu::TextureDescriptor {
+            label: Some("warm-up"),
+            size: wgpu::Extent3d {
+                width: size.width,
+                height: size.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: gpu.config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        tracing::info_span!("render.encode")
+            .in_scope(|| gpu.renderer.render(&target, &list, CLEAR));
+        target.destroy();
+        Ok(true)
+    })
+}
+
 /// Runs `f` with the renderer, `None` without graphics.
 pub fn with_renderer<T>(f: impl FnOnce(&Renderer) -> T) -> Option<T> {
     GPU.with(|g| g.borrow().as_ref().map(|gpu| f(&gpu.renderer)))
@@ -429,6 +476,11 @@ pub fn frame(time: f64) {
         // frees finished uploads only when polled; the browser's WebGPU
         // does both on its own (this is then a no-op).
         let _ = gpu.renderer.device().poll(wgpu::PollType::Poll);
+        // A world drawn ahead of its level (`warm_up`) is held only while
+        // the loading waits for it.
+        if crate::engine::world_to_prepare().is_none() {
+            gpu.presenter.hold_world(None);
+        }
         let canvas = Resolution::new(gpu.config.width, gpu.config.height);
         // The game draws at its video mode (#49), within the GPU's limit.
         let max = gpu.renderer.device().limits().max_texture_dimension_2d;

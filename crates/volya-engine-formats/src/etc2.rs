@@ -141,13 +141,27 @@ impl Etc2Format {
 }
 
 /// Transcodes one image of BC blocks (`format`, as stored: rows of blocks)
-/// to `target`, block for block.
+/// to `target`, block for block; empty for an image that isn't BC.
 pub fn transcode_bc(format: Format, data: &[u8], target: Etc2Format) -> Vec<u8> {
+    let mut out = Vec::new();
+    transcode_bc_into(format, data, target, &mut out);
+    out
+}
+
+/// [`transcode_bc`] appending to `out`, so one buffer can take many
+/// images; whether the image was BC (if not, `out` is left as it was).
+pub fn transcode_bc_into(
+    format: Format,
+    data: &[u8],
+    target: Etc2Format,
+    out: &mut Vec<u8>,
+) -> bool {
     let Some(block) = format.block_bytes() else {
-        return Vec::new();
+        return false;
     };
     let size = target.block_bytes();
-    let mut out = Vec::with_capacity(data.len() / block * size);
+    let start = out.len();
+    out.reserve(data.len() / block * size);
     // A block like the one before it (flat areas) is encoded alike.
     let mut previous: Option<&[u8]> = None;
     for bytes in data.chunks_exact(block) {
@@ -157,7 +171,8 @@ pub fn transcode_bc(format: Format, data: &[u8], target: Etc2Format) -> Vec<u8> 
         }
         previous = Some(bytes);
         let Some((palette, indices)) = format.colour_block(bytes) else {
-            return Vec::new();
+            out.truncate(start);
+            return false;
         };
         match target {
             Etc2Format::Rgb8 => {
@@ -176,7 +191,7 @@ pub fn transcode_bc(format: Format, data: &[u8], target: Etc2Format) -> Vec<u8> 
             }
         }
     }
-    out
+    true
 }
 
 type Rgb = [i32; 3];

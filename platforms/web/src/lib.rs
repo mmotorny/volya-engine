@@ -8,6 +8,8 @@
 #![cfg(target_arch = "wasm32")]
 
 mod audio;
+mod audio_host;
+mod audio_ring;
 mod diagnostics;
 mod engine;
 mod game;
@@ -23,6 +25,69 @@ use volya_engine::core::vfs::conformance;
 use volya_engine::formats::ui::Resolution;
 use wasm_bindgen::prelude::*;
 use web_sys::{OffscreenCanvas, WorkerGlobalScope};
+
+/// Test builds count the wasm heap's live bytes and their high-water mark
+/// (the `heap_log` op), to tell what a stage holds from what fragmentation
+/// adds to the heap (#357), as `loading_memory.rs` does natively.
+#[cfg(feature = "test-ops")]
+#[allow(unsafe_code)] // `GlobalAlloc` is unsafe to implement; this forwards.
+mod counting {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+
+    static LIVE: AtomicUsize = AtomicUsize::new(0);
+    static PEAK: AtomicUsize = AtomicUsize::new(0);
+
+    struct Counting;
+
+    fn grew(by: usize) {
+        PEAK.fetch_max(LIVE.fetch_add(by, Relaxed) + by, Relaxed);
+    }
+
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            let p = unsafe { System.alloc(layout) };
+            if !p.is_null() {
+                grew(layout.size());
+            }
+            p
+        }
+
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            let p = unsafe { System.alloc_zeroed(layout) };
+            if !p.is_null() {
+                grew(layout.size());
+            }
+            p
+        }
+
+        unsafe fn dealloc(&self, p: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(p, layout) };
+            LIVE.fetch_sub(layout.size(), Relaxed);
+        }
+
+        unsafe fn realloc(&self, p: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+            let q = unsafe { System.realloc(p, layout, size) };
+            if !q.is_null() {
+                if size > layout.size() {
+                    grew(size - layout.size());
+                } else {
+                    LIVE.fetch_sub(layout.size() - size, Relaxed);
+                }
+            }
+            q
+        }
+    }
+
+    #[global_allocator]
+    static ALLOCATOR: Counting = Counting;
+
+    /// Live bytes, and the most live since the last call.
+    pub fn take() -> (usize, usize) {
+        let live = LIVE.load(Relaxed);
+        (live, PEAK.swap(live, Relaxed))
+    }
+}
 
 /// Starts the engine on the canvas transferred from the page, drawing
 /// through WebGL 2 even where WebGPU works when `webgl` (the player's
@@ -98,6 +163,16 @@ pub(crate) fn now() -> f64 {
         .map_or_else(js_sys::Date::now, |p| p.now())
 }
 
+/// Milliseconds since the epoch, comparable between workers (each
+/// worker's `performance.now()` counts from its own start).
+pub(crate) fn epoch_now() -> f64 {
+    js_sys::global()
+        .dyn_into::<WorkerGlobalScope>()
+        .ok()
+        .and_then(|g| g.performance())
+        .map_or_else(js_sys::Date::now, |p| p.time_origin() + p.now())
+}
+
 /// Runs one animation frame; `time` in milliseconds.
 #[wasm_bindgen]
 pub fn frame(time: f64) {
@@ -124,6 +199,14 @@ pub fn frame(time: f64) {
             "caption": state.get("loading").and_then(|l| l.get("caption")),
             "wasm_heap_bytes": heap_bytes(),
         });
+        #[cfg(feature = "test-ops")]
+        let entry = {
+            let mut entry = entry;
+            let (live, peak) = counting::take();
+            entry["live_bytes"] = live.into();
+            entry["peak_bytes"] = peak.into();
+            entry
+        };
         HEAP_LOG.with(|l| {
             if let Some(log) = l.borrow_mut().as_mut() {
                 log.push(entry);
@@ -189,6 +272,9 @@ struct LevelStats {
     /// The sound system's update per frame: average and worst.
     sound_update_ms: f64,
     sound_update_max_ms: f64,
+    /// The audio worker's own (its heap, mixing time, underruns).
+    #[serde(flatten)]
+    audio: audio::HostStats,
 }
 
 fn level_stats() -> LevelStats {
@@ -206,6 +292,7 @@ fn level_stats() -> LevelStats {
             frame_interval_ms: average(&s.interval),
             sound_update_ms: average(&s.sound),
             sound_update_max_ms: s.sound.iter().copied().fold(0.0, f64::max),
+            audio: audio::host_stats(),
         }
     })
 }
@@ -413,6 +500,12 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
             engine::set_video_mode(mode).map(|()| "null".into())
         }
         // `{"ms": …}`: every frame takes at least that long from now on.
+        // `{"on": …}`: the mixer's commands wait while on (`audio::hold`).
+        #[cfg(feature = "test-ops")]
+        "debug_audio_hold" => {
+            audio::hold(args.get("on").and_then(|v| v.as_bool()).unwrap_or(false));
+            Ok("null".into())
+        }
         #[cfg(feature = "test-ops")]
         "debug_frame_cost" => {
             let ms = args.get("ms").and_then(|v| v.as_f64()).unwrap_or(0.0);

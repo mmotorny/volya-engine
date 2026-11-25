@@ -333,6 +333,30 @@ fn check_bc_formats(renderer: &mut Renderer, formats: [wgpu::TextureFormat; 3], 
     );
 }
 
+/// A level larger than an upload piece is written in bands of rows (#357):
+/// each band lands where it belongs.
+#[test]
+fn a_large_level_is_written_in_bands() {
+    let mut renderer = renderer();
+    // BC1, 4096 × 4096 (8 MiB): four horizontal stripes of 1024 rows.
+    let colours = [0xf800, 0x07e0, 0x001f, 0xffff];
+    let mut blocks = Vec::with_capacity(4096 * 4096 / 2);
+    for row in 0..1024 {
+        for _ in 0..1024 {
+            blocks.extend_from_slice(&bc1_block(colours[row / 256]));
+        }
+    }
+    let bc1 = file(4096, 4096, 0, false, PixelFormat::FourCc(b"DXT1"), &blocks);
+    let texture = renderer.create_texture(&Dds::parse(&bc1).unwrap()).unwrap();
+    let mut list = DrawList::default();
+    list.quads
+        .push(Quad::new(Rect::new(0.0, 0.0, 1024.0, 768.0), &texture));
+    let image = capture(&mut renderer, &list, 16, 16);
+    for (y, expected) in [(2, RED), (6, GREEN), (10, BLUE), (14, WHITE)] {
+        assert_eq!(pixel(&image, 16, 8, y), expected, "row {y}");
+    }
+}
+
 #[test]
 fn converts_uncompressed_formats_and_uploads_mips_and_cube_faces() {
     let mut renderer = renderer();

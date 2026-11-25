@@ -595,6 +595,20 @@ impl App {
         }
     }
 
+    /// The level's start view at `resolution`, while the loading waits for
+    /// the platform to prepare its world ([`App::world_to_prepare`]): the
+    /// platform draws it once, unseen, so the GPU's first-draw work is done
+    /// under the loading image (#355, #376).
+    pub fn level_to_prepare_scene(&self, resolution: Resolution) -> Option<Scene> {
+        match &self.phase {
+            Some(Phase::Loading {
+                stages: NewGame::Stages(loading),
+                ..
+            }) => Some(loading.level_to_prepare()?.scene(resolution, self.clock)),
+            _ => None,
+        }
+    }
+
     /// The platform has prepared [`App::world_to_prepare`]: the level shows
     /// at the next update.
     pub fn world_prepared(&mut self) {
@@ -833,6 +847,21 @@ impl App {
                         for step in f.sounds() {
                             level_sounds.pairs.play(sounds, step);
                         }
+                    }
+                }
+                // The torches' night-vision sounds of this frame (torch.md
+                // 14), made by its update.
+                for sound in level.take_torch_sounds() {
+                    if let Some(level_sounds) = &mut self.level_sounds
+                        && let Err(e) = level_sounds.torch(
+                            sounds,
+                            tree,
+                            &self.data.aliases,
+                            sound,
+                            level.torches().night_vision(sound.torch),
+                        )
+                    {
+                        fatal = Some(e);
                     }
                 }
                 (true, menu.is_some())
