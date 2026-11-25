@@ -1275,6 +1275,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tracing",
+ "tracing-subscriber",
  "volya-engine-core",
  "volya-engine-formats",
  "volya-engine-installer",

@@ -2,12 +2,18 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // The engine thread (docs/architecture.md). Messages from the page:
-//   { type: "start", canvas, size, diagnostics }  → { type: "started", build } | { type: "error", message }
-//   (`build`: the wasm build loaded, wasm-build.js; `diagnostics`: the
-//   session as diagnostics.js tells it when the player keeps a diagnostic
-//   log, else null)
+//   { type: "start", canvas, size, graphics, diagnostics, previousEnd }
+//     → { type: "started", available, backend, diagnostics } | { type: "error", message }
+//   (`graphics`: the stored Graphics choice or null; `available`: what the
+//   browser supports, `backend`: the one chosen, graphics.js; `diagnostics`:
+//   the session as diagnostics.js tells it when the player keeps a
+//   diagnostic log, else null, and in the reply the log's status;
+//   `previousEnd`: how an earlier session's page ended, kept by
+//   diagnostics.js)
 //   { type: "diag", kind, name, … }: the page's events for the diagnostic
 //   log (diagnostics.js), dropped while it is off.
+//   { type: "end", reason, message }: how the page ended (an uncaught
+//   error, closed), recorded as `engine.end` and stored at once.
 //   { type: "resize", width, height, dpr }: the canvas's CSS size and the
 //   page's devicePixelRatio (`size` in "start" has the same fields).
 //   { type: "call", id, op, args }  → { type: "result", id, result } | { type: "result", id, error }
@@ -16,7 +22,8 @@
 //   worker (audio-worker.js), which mixes for the AudioWorklet. After every
 //   frame, call and visibility change this worker writes the mixer's
 //   commands to the ring of commands and posts the files they play to
-//   `port`; it takes the audio worker's reports from it.
+//   `port`; it takes the audio worker's reports from it. `worklet` is the
+//   AudioWorklet's port, which reports its errors.
 //   { type: "input", event }: one input event (format in src/input.rs).
 //   { type: "visibility", hidden }: the page was hidden or shown again; the
 //   engine stops while hidden (our design, #93).
@@ -36,9 +43,10 @@
 // workers have it, otherwise on a 60 Hz timer; it idles while the page is
 // hidden, drawing nothing.
 
-import { loadEngine } from "./wasm-build.js";
+import init, * as wasm from "./pkg/volya_engine_web.js";
+import { choose, supported } from "./graphics.js";
 
-/** The wasm build's exports, once "start" loaded it (wasm-build.js). */
+/** The engine's exports, once "start" initialized them. */
 let engine = null;
 /** The engine's exports; throws until they are loaded. */
 const e = () => {
@@ -47,6 +55,26 @@ const e = () => {
 };
 
 const message = (error) => String(error?.message ?? error);
+
+/**
+ * Records how the engine ended in the diagnostic log (`engine.end`, stored
+ * at once; nothing while it is off), on thread `tid` (1: this worker, 2:
+ * the page, 3: the audio worklet).
+ */
+function ended(reason, text, tid = 1) {
+  try {
+    engine?.diagnostics_end(reason, String(text), tid);
+  } catch {
+    // The engine can't record any more.
+  }
+}
+// Uncaught errors here end the engine as far as anyone knows.
+addEventListener("error", (event) =>
+  ended("worker_error", `${event.message} (${event.filename}:${event.lineno}:${event.colno})`),
+);
+addEventListener("unhandledrejection", (event) =>
+  ended("worker_error", `unhandled rejection: ${event.reason?.stack ?? message(event.reason)}`),
+);
 
 const nextFrame = self.requestAnimationFrame
   ? (callback) => self.requestAnimationFrame(callback)
@@ -126,11 +154,7 @@ function loop(time) {
     // A broken engine stops drawing; calls report their own errors.
     console.error(`frame: ${message(error)}`);
     broken = true;
-    try {
-      e().diagnostics_event("engine stopped", 1, JSON.stringify({ error: message(error) }));
-    } catch {
-      // The engine can't record any more.
-    }
+    ended("engine_error", error?.stack ?? message(error));
     return;
   }
   schedule();
@@ -141,19 +165,25 @@ let logging = false;
 
 onmessage = async ({ data }) => {
   if (data.type === "start") {
-    let build;
+    let available, backend;
+    let diagnostics = null;
     started = (async () => {
-      ({ build, module: engine } = await loadEngine());
+      available = await supported();
+      backend = choose(data.graphics, available);
+      await init();
+      engine = wasm;
       // The player's setting, before anything else runs (#346).
       if (data.diagnostics) {
-        logging = JSON.parse(await engine.call("diagnostics_set", JSON.stringify({ on: true, session: data.diagnostics }))).on;
+        const args = { on: true, session: data.diagnostics, previous_end: data.previousEnd };
+        diagnostics = JSON.parse(await engine.call("diagnostics_set", JSON.stringify(args)));
+        logging = diagnostics.on;
       }
-      await engine.start(data.canvas);
+      await engine.start(data.canvas, backend === "webgl2");
       engine.resize(data.size.width, data.size.height, data.size.dpr);
     })();
     try {
       await started;
-      postMessage({ type: "started", build });
+      postMessage({ type: "started", available, backend, diagnostics });
       schedule();
     } catch (error) {
       postMessage({ type: "error", message: message(error) });
@@ -173,6 +203,8 @@ onmessage = async ({ data }) => {
         console.warn(`audio: ${message(error)}`);
       }
     };
+    // The worklet's processor failed (audio-worklet.js).
+    data.worklet.onmessage = ({ data: { error } }) => ended("worklet_error", error, 3);
     flushAudio();
   } else if (data.type === "visibility") {
     await started;
@@ -185,6 +217,8 @@ onmessage = async ({ data }) => {
       console.warn(`visibility: ${message(error)}`);
     }
     schedule();
+  } else if (data.type === "end") {
+    ended(data.reason, data.message, 2);
   } else if (data.type === "diag") {
     // The page's events for the diagnostic log (diagnostics.js).
     if (!logging) return;

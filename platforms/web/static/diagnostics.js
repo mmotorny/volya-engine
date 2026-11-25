@@ -10,14 +10,23 @@
 //   metric(name, value)  a value; its minimum, mean and maximum per second
 //                        are logged (aggregated here, sent once a second)
 //   count(name, n)       adds to a count, logged per second
+//   end(reason, message) how the engine ended (`engine.end`, stored at once)
 //
 // The setting is kept in localStorage (namespaced: the github.io origin is
 // shared); the UX audit page sets `volyaDiagnostics` per frame.
+//
+// As the page is hidden or closed, its engine worker may be ended before it
+// stores its own `engine.end`: the page keeps one in localStorage too
+// (`keepEnd`, written synchronously in the event), which the next session
+// adds to the log unless the worker stored its own (`takeKeptEnd`).
 
 import { versionText } from "./update.js";
 
 const KEY = "volya-engine.diagnostic-log";
+const END_KEY = "volya-engine.diagnostic-log-end";
 const PERIOD_MS = 1000;
+/** This session's `{pid, cat}` once its log is on (the engine's status). */
+let current = null;
 
 let post = null;
 let timer = null;
@@ -58,6 +67,49 @@ function follow() {
   }
 }
 
+/** Takes the log's status (`diagnostic_log_status`): this session's number. */
+export function setStatus(status) {
+  current = status?.on ? (status.session ?? null) : null;
+}
+
+/** Microseconds since the Unix epoch, as the engine's events. */
+const now = () => (performance.timeOrigin + performance.now()) * 1000;
+
+/** Keeps how this session ended, should its engine worker be ended before storing it. */
+export function keepEnd(reason, message) {
+  if (!current || !enabled()) return;
+  try {
+    // A closing page's `visibilitychange` may come after its `pagehide`
+    // (seen in headless Chrome: a reload kept `page_hidden`): closed stays
+    // closed.
+    const kept = JSON.parse(localStorage.getItem(END_KEY));
+    if (kept?.pid === current.pid && kept.reason === "page_closed") return;
+    localStorage.setItem(END_KEY, JSON.stringify({ ...current, ts: now(), reason, message }));
+  } catch {
+    // Storage refused: only the worker's record remains.
+  }
+}
+
+/** Forgets the kept end: the session goes on (the page shown again). */
+export function forgetEnd() {
+  try {
+    localStorage.removeItem(END_KEY);
+  } catch {
+    // Nothing kept.
+  }
+}
+
+/** The end an earlier session kept, once (for the engine to add). */
+export function takeKeptEnd() {
+  try {
+    const kept = JSON.parse(localStorage.getItem(END_KEY));
+    localStorage.removeItem(END_KEY);
+    return kept;
+  } catch {
+    return null;
+  }
+}
+
 /** Sends the page's events with `postMessage` (main.js: to the engine worker). */
 export function connect(postMessage) {
   post = postMessage;
@@ -76,7 +128,8 @@ export async function setEnabled(on, call) {
     // Storage refused: the setting lasts this session.
   }
   if (globalThis.volyaDiagnostics !== undefined) globalThis.volyaDiagnostics = on;
-  const status = await call("diagnostics_set", { on, session: session() });
+  const status = await call("diagnostics_set", { on, session: session(), previous_end: on ? takeKeptEnd() : null });
+  setStatus(status);
   follow();
   return status;
 }
@@ -98,4 +151,9 @@ export function metric(name, value) {
 
 export function count(name, n = 1) {
   if (post && enabled()) post({ type: "diag", kind: "count", name, n });
+}
+
+/** How the engine ended, seen from the page: recorded and stored at once. */
+export function end(reason, message) {
+  if (post && enabled()) post({ type: "end", reason, message: String(message) });
 }

@@ -6,6 +6,8 @@
 //! weather cycle, their blending at a time of day, and the environment
 //! modifiers of `level.env_mod` around the camera.
 
+pub mod wind;
+
 use std::io;
 
 use crate::config::{Config, Section, value};

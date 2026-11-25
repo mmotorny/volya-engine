@@ -105,7 +105,9 @@ pub async fn launch() -> Result<serde_json::Value, JsValue> {
         Ok(app) => app,
         Err(e) => {
             crate::input::set_capture(false);
-            tracing::error!(error = %e.as_string().unwrap_or_default(), "game failed to start");
+            let message = e.as_string().unwrap_or_default();
+            volya_engine::core::diagnostics::end("load_failed", &message);
+            crate::diagnostics::store_if_ended();
             return Err(e);
         }
     };
@@ -120,10 +122,11 @@ pub async fn launch() -> Result<serde_json::Value, JsValue> {
     Ok(json!({ "loading_ms": js_sys::Date::now() - started, "splash": splash.is_some() }))
 }
 
-/// Ends the game, stopping its sounds and giving the screen back. The
-/// app's master gain ends with it (it is 0 while the loading image covers
-/// the level, docs/behavior/loading-screen.md section 6).
-pub fn stop() {
+/// Ends the game, stopping its sounds and giving the screen back; the
+/// diagnostic log records why (`reason`, `message`). The app's master gain
+/// ends with it (it is 0 while the loading image covers the level,
+/// docs/behavior/loading-screen.md section 6).
+pub fn stop(reason: &str, message: &str) {
     let running = RUNNING.with(|r| r.borrow_mut().take());
     if let Some(Running { voices, .. }) = running {
         crate::audio::with_mixer_opt(|mixer| {
@@ -137,7 +140,8 @@ pub fn stop() {
         crate::input::set_capture(false);
         crate::input::set_render(None);
         crate::game::close_saved_games();
-        tracing::info!("game ended");
+        volya_engine::core::diagnostics::end(reason, message);
+        crate::diagnostics::store_if_ended();
     }
 }
 
@@ -228,9 +232,7 @@ pub fn resized(resolution: Resolution) {
 pub fn frame(time: f64) {
     let quit = RUNNING.with(|r| {
         let mut r = r.borrow_mut();
-        let Some(running) = r.as_mut() else {
-            return false;
-        };
+        let running = r.as_mut()?;
         let Running { app, voices } = running;
         let updated = crate::game::with_trees(|tree, _| {
             crate::input::with_input(|input| {
@@ -264,10 +266,14 @@ pub fn frame(time: f64) {
         }
         crate::input::set_render(Some(app.video_mode()));
         // The game was unmounted under the app.
-        updated.is_err() || app.quit_requested()
+        match updated {
+            Err(e) => Some(("unmounted", e.as_string().unwrap_or_default())),
+            Ok(()) if app.quit_requested() => Some(("quit", "left the game".to_owned())),
+            Ok(()) => None,
+        }
     });
-    if quit {
-        stop();
+    if let Some((reason, message)) = quit {
+        stop(reason, &message);
     }
 }
 
@@ -434,6 +440,19 @@ pub fn particles_state() -> Result<serde_json::Value, JsValue> {
     })
 }
 
+/// The `zones_state` op (tests): the level's zones and the weather's
+/// ambient effect (docs/behavior/zone-idle-effects.md,
+/// weather-ambient-effects.md).
+#[cfg(feature = "test-ops")]
+pub fn zones_state() -> Result<serde_json::Value, JsValue> {
+    RUNNING.with(|r| {
+        let r = r.borrow();
+        let running = r.as_ref().ok_or_else(|| error("the game is not running"))?;
+        let level = running.app.level().ok_or_else(|| error("no level"))?;
+        serde_json::to_value(level.zones_report()).map_err(error)
+    })
+}
+
 /// The `debug_particles_bench` op (tests): a copy of the level's placed
 /// effects runs `frames` frames of 16 ms with the camera at the first
 /// record; the CPU time of a frame's update by `performance.now()`
@@ -447,8 +466,14 @@ pub fn particles_bench(frames: u32) -> Result<serde_json::Value, JsValue> {
         let mut effects = level
             .effects()
             .ok_or_else(|| error("no placed effects"))?
-            .clone();
-        let camera = effects.effects()[0].instance.sphere().centre;
+            .copy_of(volya_engine::core::particles::placed::Origin::Placed);
+        let camera = effects
+            .effects()
+            .next()
+            .ok_or_else(|| error("no placed effects"))?
+            .instance
+            .sphere()
+            .centre;
         // The timer's resolution (coarsened without cross-origin
         // isolation) is far above a frame's update: the mean is the whole
         // run's time over its frames, the max a single frame's.

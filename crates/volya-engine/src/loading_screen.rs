@@ -511,6 +511,7 @@ impl Loading {
                     && let Some(level) = self.load.level_name()
                 {
                     // Section 4.5: the level is determined here.
+                    tracing::info!(level, "level loading");
                     self.screen.set_level(tree, data, level)?;
                 }
                 if stage == Stage::LoadingTextures && self.prepare {

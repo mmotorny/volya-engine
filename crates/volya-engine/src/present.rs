@@ -10,13 +10,19 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::core::camera::Mat4;
+use crate::core::glows::{CORNER_UV, GlowSprite};
 use crate::core::vfs::read_ahead::ReadAhead;
 use crate::core::vfs::{self, Vfs};
 use crate::level::LevelWorld;
 use crate::particle_drawing::{ParticleDraw, ParticleShader};
-use crate::render::particles::{ParticleBatch, ParticlePass as RenderPass};
+use crate::render::particles::{
+    ParticleBatch, ParticleBlend, ParticleCull, ParticlePass as RenderPass, ParticleProgram,
+    ParticleQueue, ParticleVertex,
+};
 use crate::render::sky::{SkySection, SkyTextures};
-use crate::render::world::{GeometryUpload, ObjectGeometry, Surface, TreeLight, WorldLight};
+use crate::render::world::{
+    GeometryUpload, LightPass, LightTextures, ObjectGeometry, Surface, TreeLight, WorldLight,
+};
 use crate::render::{
     DrawList, Quad, Rect, Renderer, Texture, VideoTexture, World, WorldDraw, WorldFrame,
 };
@@ -164,6 +170,9 @@ pub struct Presenter {
     /// The level's effect shaders with their textures, by library index
     /// (particle-drawing.md 5.1), loaded with the world.
     particle_shaders: Vec<Option<ParticleShader<Texture>>>,
+    /// The level's glow shaders with their textures (glows.md 6), loaded
+    /// with the world; `None` for one whose texture failed.
+    glow_shaders: Vec<Option<(Texture, bool)>>,
     /// A level's geometry uploaded while it loaded
     /// ([`Presenter::prepare_world`]).
     prepared: Option<PreparedWorld>,
@@ -287,9 +296,14 @@ impl Presenter {
             self.world = None;
             self.placed = None;
             self.particle_shaders.clear();
+            self.glow_shaders.clear();
             // The effects' textures first: the world's upload drops the
             // prepared textures it leaves.
             self.particle_shaders = self.load_particle_shaders(renderer, tree, &scene.world);
+            // Buffers for every particle the level's effects can hold, made
+            // now rather than while the level runs.
+            renderer.reserve_particles(scene.world.particle_capacity);
+            self.load_lights(renderer, tree, &scene.world);
             let world = self.upload_world(renderer, tree, &scene.world);
             let world = world
                 .map_err(|e| self.errors.push(format!("{}: {e}", scene.world.dir)))
@@ -320,8 +334,106 @@ impl Presenter {
             // Where neither the world nor the sky draws (does not occur:
             // the sky box encloses the eye; sky.md 14) and without a sky.
             clear: e.fog_rgb(),
-            particles: self.particle_batches(&scene.particles),
+            particles: {
+                let mut batches = self.particle_batches(&scene.particles);
+                batches.extend(self.glow_batches(&scene.glows));
+                batches
+            },
+            lights: scene
+                .lights
+                .iter()
+                .map(|l| LightPass {
+                    spot: l.spot,
+                    position: l.position,
+                    colour: l.colour,
+                    xform: l.xform,
+                    frustum: l.frustum,
+                })
+                .collect(),
         })
+    }
+
+    /// The level's glow textures, and the light passes' attenuation
+    /// textures given to the renderer; one that fails is reported and
+    /// leaves its glows, or every light pass, undrawn.
+    fn load_lights(&mut self, renderer: &mut Renderer, tree: &dyn Vfs, level: &LevelWorld) {
+        let mut load = |path: &String| {
+            load_texture(renderer, tree, path)
+                .map_err(|e| self.errors.push(format!("{path}: {e}")))
+                .ok()
+        };
+        let shaders = level
+            .glow_shaders
+            .iter()
+            .map(|s| Some((load(&s.texture)?, s.flare)))
+            .collect();
+        let attenuation = level.light_textures.as_ref().and_then(|[a, c, p]| {
+            Some(LightTextures {
+                att: load(a)?,
+                attclip: load(c)?,
+                attpoint: load(p)?,
+            })
+        });
+        self.glow_shaders = shaders;
+        if let Some(t) = attenuation {
+            renderer.set_light_textures(t);
+        }
+    }
+
+    /// The renderer's batches of the scene's glows: one per shader, in
+    /// shader order (glows.md 6; the blending makes the order irrelevant).
+    fn glow_batches(&self, sprites: &[GlowSprite]) -> Vec<ParticleBatch> {
+        let mut batches: Vec<(u32, ParticleBatch)> = Vec::new();
+        for g in sprites {
+            let Some(Some((texture, flare))) = self.glow_shaders.get(g.shader as usize) else {
+                continue;
+            };
+            let i = match batches.iter().position(|(s, _)| *s == g.shader) {
+                Some(i) => i,
+                None => {
+                    batches.push((
+                        g.shader,
+                        ParticleBatch {
+                            pass: RenderPass {
+                                program: if *flare {
+                                    ParticleProgram::Flare
+                                } else {
+                                    ParticleProgram::Glow
+                                },
+                                blend: ParticleBlend::AlphaAdd,
+                                depth_write: false,
+                                clamp: true,
+                                base: Some(texture.clone()),
+                                distort: None,
+                            },
+                            queue: ParticleQueue::Glow,
+                            // The default culling: triangles appearing
+                            // counter-clockwise are removed (glows.md 6).
+                            cull: ParticleCull::CounterClockwise,
+                            key: 0.0,
+                            vertices: Vec::new(),
+                        },
+                    ));
+                    batches.len() - 1
+                }
+            };
+            let colour = u32::from(g.b) * 0x0101_0101;
+            batches[i]
+                .1
+                .vertices
+                .extend(
+                    g.corners
+                        .iter()
+                        .zip(CORNER_UV)
+                        .map(|(&position, uv)| ParticleVertex {
+                            position,
+                            colour,
+                            uv,
+                        }),
+                );
+        }
+        batches.sort_by_key(|(s, _)| *s);
+        batches.into_iter().map(|(_, b)| b).collect()
     }
 
     /// Every effect shader's textures, each file read once; one that fails
@@ -604,6 +716,7 @@ impl Presenter {
             None => {
                 self.world = None;
                 self.particle_shaders.clear();
+                self.glow_shaders.clear();
             }
         }
         for sprite in &scene.sprites {

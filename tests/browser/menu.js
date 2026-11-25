@@ -38,11 +38,14 @@ const ONLY = [
 // the iOS Simulator, drawing through WebGL 2 (#184: the level's geometry
 // uploaded a few pieces per task turn, since wgpu's GL backend keeps what
 // is written in the heap until WebGL reports it done); a regression past
-// this fails. The audio worker's instance (#354) counts too
-// (`audio_heap_bytes`, which `heap` adds).
+// this is reported as an "OVER BUDGET" note, not failed: budgets are
+// measured and tracked in issues, never a release gate (AGENTS.md). The
+// audio worker's instance (#354) counts too (`audio_heap_bytes`, which
+// `heap` adds).
 const WASM_HEAP_CAP = 110 * 2 ** 20;
 /** Both wasm instances' heaps in `level_stats`: the engine's and the audio worker's. */
 const heap = (stats) => stats.wasm_heap_bytes + stats.audio_heap_bytes;
+const overBudget = (bytes, what) => (bytes > WASM_HEAP_CAP ? `OVER BUDGET: ${what} ${mib(bytes)} > ${mib(WASM_HEAP_CAP)}; ` : "");
 // Touch devices: no full screen offer, touch controls from the start.
 const coarse = () => matchMedia("(pointer: coarse)").matches;
 // How long a level may take to load: transcoding its textures (WebGL 2
@@ -247,6 +250,26 @@ async function quitToTitle() {
   key("Enter");
   await answerBox("yes");
   return until((s) => s.phase === "menu", "the title menu");
+}
+
+/** From the title menu's main page: New game, the first difficulty. */
+async function newGame() {
+  pointer("pointermove", row(0));
+  await until((s) => s.menu.selected === 0, "item 0");
+  key("Enter");
+  await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
+  key("Enter");
+}
+
+/**
+ * This session's `engine.end` events in the diagnostic log as stored now
+ * (not those waiting for the period's end).
+ */
+async function storedEnds() {
+  const { text } = await volya.call("diagnostic_log", { stored_only: true });
+  const events = JSON.parse(text).traceEvents;
+  const pid = events.findLast((e) => e.name === "session").pid;
+  return events.filter((e) => e.pid === pid && e.name === "engine.end");
 }
 
 /**
@@ -506,6 +529,11 @@ export const tests = {
     assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
     // The level's objects (docs/behavior/level-objects.md section 7.1).
     assertEqual([s.level.objects.online, s.level.objects.with_model], [671, 352], "objects");
+    // Its lamps on, with their seven records; chunk 6's 40 records and the
+    // sun's two besides; 22 glows of its own and the lamps' 5
+    // (hanging-lamps.md 9.3, dynamic-lights.md 3.3, glows.md 7).
+    const lights = s.level.lights;
+    assertEqual([lights.lamps, lights.lamps_on, lights.records, lights.glows], [5, 5, 49, 27], "lights");
     assertEqual([s.intro?.items, s.intro?.kind], [1, "video"], "the intro plays");
     // The intro's 120 MB video streams from the file (#53): playing it
     // keeps the wasm heap near its size before.
@@ -522,8 +550,8 @@ export const tests = {
     const shown = await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
     assertEqual(shown.phase, "level", "still in the level");
     const byCaption = stages.map(([n, m]) => `${n} ${m}`).join(", ");
-    assert(heap(playing) <= WASM_HEAP_CAP, `wasm heaps ${mib(heap(playing))} during the intro (the audio worker's ${mib(playing.audio_heap_bytes)}), over ${mib(WASM_HEAP_CAP)}; by caption (MiB): ${byCaption}; textures ${JSON.stringify(playing.textures)}`);
-    let note = `wasm heap by caption (MiB): ${byCaption}; "${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; intro skipped, wasm heap ${mib(before.wasm_heap_bytes)} before it, ${mib(playing.wasm_heap_bytes)} while it played, the audio worker's ${mib(playing.audio_heap_bytes)}`;
+    const heapNote = overBudget(heap(playing), "wasm heaps during the intro");
+    let note = `${heapNote}wasm heap by caption (MiB): ${byCaption}; "${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; intro skipped, wasm heap ${mib(before.wasm_heap_bytes)} before it, ${mib(playing.wasm_heap_bytes)} while it played, the audio worker's ${mib(playing.audio_heap_bytes)}; at the start ${lights.passes} light passes, ${lights.sprites} glows drawn`;
     if (gpu.state === "ready") {
       const { rgba } = await volya.call("debug_capture", { width: 256, height: 192 });
       const colours = new Set();
@@ -549,6 +577,22 @@ export const tests = {
     assert(fx.particles > 0 && fx.particles <= 7, `${fx.particles} particles`);
     const bench = await volya.call("debug_particles_bench", { frames: 20000 });
     return `${fx.particles} particles, period ${fx.records[0].period} ms; a frame's update in wasm: mean ${bench.mean_us.toFixed(2)} µs over ${bench.frames} frames, the slowest under ${bench.max_us.toFixed(0)} µs (the timer's resolution)`;
+  },
+
+  "the zones' idle effects play, the campfires among them": async () => {
+    needsGame();
+    // docs/behavior/zone-idle-effects.md 8: 178 zone records online, 160
+    // with an idle effect; only the galantines switch off.
+    const { zones } = await volya.call("zones_state");
+    assertEqual(zones.length, 178, "zones");
+    const withEffect = zones.filter((z) => z.effect);
+    assertEqual(withEffect.length, 160, "zones with an idle effect");
+    const off = withEffect.filter((z) => !z.playing);
+    assert(off.every((z) => z.section === "zone_witches_galantine" && z.state === "disabled"), `off: ${JSON.stringify(off)}`);
+    const fires = zones.filter((z) => z.effect === "explosions\\campfire_05");
+    assertEqual(fires.map((z) => z.playing && z.sound_on), Array(11).fill(true), "campfires");
+    const stats = await volya.call("level_stats");
+    return `${withEffect.length - off.length} idle effects playing, ${off.length} galantines off; frame CPU ${stats.frame_cpu_ms.toFixed(2)} ms average, ${stats.frame_cpu_max_ms.toFixed(2)} ms worst; wasm heap ${mib(stats.wasm_heap_bytes)}`;
   },
 
   "transcoding to ETC2 costs: the level's textures and a few large ones": async () => {
@@ -755,6 +799,23 @@ export const tests = {
     assert(answer.cross_color?.length === 4, `the crosshair's colour: ${answer.cross_color}`);
     const sources = ["frame", "crouch", "creep", "sprint", "segments", "spot"].reduce((n, k) => n + art[k].width * art[k].height * 4, 0);
     return `decoded in ${art.ms.toFixed(1)} ms (engine), ${art.totalMs.toFixed(1)} ms with the page's part; sources ${(sources / 1024).toFixed(0)} KiB, canvases ${(bytes / 1024).toFixed(0)} KiB at ${devicePixelRatio}x`;
+  },
+
+  "zoom: in the level the engine's layers take every touch, pinches are cancelled on the controls, the page is at scale 1": async () => {
+    needsGame();
+    const root = document.documentElement;
+    const controls = document.getElementById("touch-controls");
+    assert(root.hasAttribute("data-engine-input"), "the engine doesn't own the screen");
+    for (const el of [root, document.getElementById("view"), controls]) {
+      assertEqual(getComputedStyle(el).touchAction, "none", `touch-action of ${el.id || el.tagName.toLowerCase()}`);
+    }
+    // The guard cancels pinches on the controls' layer too (zoom.js).
+    for (const type of ["gesturestart", "gesturechange", "gestureend"]) {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      controls.dispatchEvent(event);
+      assert(event.defaultPrevented, `${type} not cancelled`);
+    }
+    assertEqual(visualViewport.scale, 1, "visualViewport.scale");
   },
 
   "the inventory: I opens it over the running level (a held W walks on, Control crouches under it), the outfit dragged to the backpack, bread eaten, the touch button opens it, the touchpad selects, opens the menu and drags, Escape and the exit button close it": async () => {
@@ -1133,6 +1194,7 @@ export const tests = {
     await until((s) => s.menu.selected === 0, "item 0");
     key("Enter");
     await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
+    await volya.call("heap_log", { on: true });
     key("Enter");
     // Escape while the loading image covers the level's first frames,
     // before the intro starts under its last two: kept (#96).
@@ -1142,6 +1204,15 @@ export const tests = {
     const seen = { menu_asked: asked.menu_asked, overlay: asked.overlay_frames, intro: Boolean(asked.intro) };
     assert(asked.menu_asked && !asked.menu, `the menu asked for, not open: ${JSON.stringify(seen)}`);
     const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level again", loadMs());
+    // The wasm heap at the end of the last frame under each caption.
+    const stages = [];
+    for (const e of await volya.call("heap_log", { on: false })) {
+      const name = e.caption ?? e.phase;
+      const m = Math.round(e.wasm_heap_bytes / 2 ** 20);
+      if (stages.length && stages[stages.length - 1][0] === name) stages[stages.length - 1][1] = m;
+      else stages.push([name, m]);
+    }
+    const byCaption = stages.map(([n, m]) => `${n} ${m}`).join(", ");
     assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
     // The intro again; a tap skips it (our design for touch). The controls
     // go live then, and the menu opens at once.
@@ -1180,8 +1251,8 @@ export const tests = {
     }
     // A second load reuses the heap the first one grew.
     const stats = await volya.call("level_stats");
-    assert(heap(stats) <= WASM_HEAP_CAP, `wasm heaps ${mib(heap(stats))} after the second New Game, over ${mib(WASM_HEAP_CAP)}`);
-    return `loaded again in ${s.load_ms.toFixed(0)} ms; wasm heap ${mib(stats.wasm_heap_bytes)}, the audio worker's ${mib(stats.audio_heap_bytes)}`;
+    const heapNote = overBudget(heap(stats), "wasm heaps after the second New Game");
+    return `${heapNote}loaded again in ${s.load_ms.toFixed(0)} ms; wasm heap ${mib(stats.wasm_heap_bytes)}, the audio worker's ${mib(stats.audio_heap_bytes)}; by caption (MiB): ${byCaption}`;
   },
 
   "hidden: the menu opens, the clock, the frame loop and audio stop; shown: the game takes on from there": async () => {
@@ -1201,6 +1272,7 @@ export const tests = {
       const idle = (await volya.status()).frames;
       assert(idle - frames <= 1, `${idle - frames} frames ran while hidden`);
       assertEqual(volya.audioState(), "suspended", "audio while hidden");
+      assertEqual((await storedEnds()).at(-1)?.args.reason, "page_hidden", "the end in the diagnostic log");
     } finally {
       setVisibility("visible");
     }
@@ -1370,7 +1442,27 @@ export const tests = {
     await answerBox("yes");
     const title = await until((s) => s.phase === "menu", "the title menu");
     assertEqual(title.menu.list, "menu_main", "list");
+    const end = (await storedEnds()).at(-1);
+    assertEqual([end?.args.reason, end?.args.message], ["quit", "quit to the title menu"], "the end in the diagnostic log");
   },
+
+  "a level sound file missing at a New Game fails the load; the diagnostic log stores why at once": async () => {
+    needsGame();
+    await volya.call("debug_hide_file", { suffix: "sounds/ambient/rain.ogg" });
+    try {
+      await newGame();
+      await until((s) => s.phase !== "menu", "the New Game to start");
+      const s = await until((s) => s.phase === "menu" && s.error, "the title menu saying why", loadMs());
+      assert(s.error.includes("rain.ogg"), `error: ${s.error}`);
+    } finally {
+      await volya.call("debug_hide_file", {});
+    }
+    const end = (await storedEnds()).at(-1);
+    assertEqual(end?.args.reason, "load_failed", "reason");
+    assert(end.args.message.includes("rain.ogg"), `message: ${end.args.message}`);
+    return end.args.message;
+  },
+
 
   "Options opens from the title menu": async () => {
     needsGame();
@@ -1555,6 +1647,8 @@ export const tests = {
     assertEqual((await volya.call("input_state")).capture, false, "capture");
     await sleep(50);
     assertEqual(document.querySelector("main").hidden, false, "page interface hidden");
+    const end = (await storedEnds()).at(-1);
+    assertEqual([end?.args.reason, end?.args.message], ["quit", "left the game"], "the end in the diagnostic log");
   },
 
   "the diagnostic log holds the games, their levels and their frames, after the game ended": async () => {
@@ -1564,10 +1658,15 @@ export const tests = {
     const pid = events.findLast((e) => e.name === "session").pid;
     const mine = events.filter((e) => e.pid === pid);
     const count = (ph, name) => mine.filter((e) => e.ph === ph && e.name === name).length;
-    // Two New Games and the options' game, each ended.
+    // Two New Games and the options' game, each left; each level named.
     assert(count("i", "game started") >= 2, `games started ${count("i", "game started")}`);
-    assertEqual(count("i", "game ended"), count("i", "game started"), "games ended");
-    assert(count("i", "level loading") >= 2 && count("i", "level made") >= 2, "levels");
+    const ends = mine.filter((e) => e.name === "engine.end");
+    const left = ends.filter((e) => e.args.message === "left the game").length;
+    assertEqual(left, count("i", "game started"), "games left");
+    const reasons = new Set(ends.map((e) => e.args.reason));
+    for (const reason of ["quit", "page_hidden", "load_failed"]) assert(reasons.has(reason), `no ${reason} end`);
+    const levels = (name) => mine.filter((e) => e.name === name && e.args?.level === "l01_escape").length;
+    assert(levels("level loading") >= 2 && levels("level made") >= 2, "levels");
     const series = (key) => mine.filter((e) => e.ph === "C" && key in e.args).length;
     for (const key of ["frame max", "engine max", "render max", "frame.interval_ms max", "MiB", "diagnostics.write_ms max"]) {
       assert(series(key) > 10, `${key}: ${series(key)}`);
@@ -1583,6 +1682,59 @@ export const tests = {
     const seconds = (mine.at(-1).ts - mine.find((e) => e.ts > 0).ts) / 1e6;
     const bytes = mine.reduce((sum, e) => sum + JSON.stringify(e).length + 2, 0);
     return `${mine.length} events, ${(bytes / seconds).toFixed(0)} B/s over ${seconds.toFixed(0)} s; ${long.length} long frames (worst ${worst.toFixed(0)} ms); audio ${audio ? "running" : volya.audioState()}`;
+  },
+
+  "WebGL 2 chosen in Settings: Play starts the engine anew on it, and the level draws": async () => {
+    needsGame();
+    const { graphics } = volya;
+    if (!graphics.available.webgl2) skip("no WebGL 2 here");
+    if (!graphics.available.webgpu) skip("no WebGPU here: the New Games above drew through WebGL 2");
+    await volya.showSettings();
+    document.querySelector('#game input[name="graphics"][value="webgl2"]').click();
+    try {
+      await volya.refresh();
+      document.querySelector("#game button.play").click();
+      // Calls made while the engine starts anew fail: asked again.
+      for (const deadline = performance.now() + 30000; ; await sleep(100)) {
+        const s = await state().catch(() => null);
+        if (s?.phase === "startup" || s?.phase === "menu") break;
+        assert(performance.now() < deadline, `the game did not start: ${JSON.stringify(s)?.slice(0, 300)}`);
+      }
+      const { gpu: drawn } = await volya.status();
+      assertEqual([drawn.state, drawn.backend], ["ready", "webgl2"], "graphics");
+      // Escape skips the logos, then the title menu's New Game.
+      for (let s = await state(); s.phase !== "menu"; s = await state()) {
+        key("Escape");
+        await sleep(100);
+      }
+      await readRender();
+      pointer("pointermove", row(0));
+      await until((s) => s.menu?.selected === 0 && !s.menu.moving, "item 0", 5000);
+      key("Enter");
+      await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
+      key("Enter");
+      const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", drawn.textures === "etc2" ? 120000 : 60000);
+      assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
+      key("Escape");
+      await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
+      // Frame times over a few seconds of the level.
+      await sleep(3000);
+      const { rgba } = await volya.call("debug_capture", { width: 256, height: 192 });
+      const colours = new Set();
+      for (let i = 0; i < rgba.length; i += 4) colours.add((rgba[i] << 16) | (rgba[i + 1] << 8) | rgba[i + 2]);
+      assert(colours.size > 200, `${colours.size} colours`);
+      const stats = await volya.call("level_stats");
+      return `${drawn.backend}, textures ${drawn.textures}; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; ${colours.size} colours; ${JSON.stringify(stats)}`;
+    } finally {
+      localStorage.removeItem("volya-engine.graphics");
+      // Leaves the game for the tests after (a failure above is the one told).
+      if ((await state()).phase !== "none") {
+        if ((await state()).menu) key("Escape");
+        await sleep(100);
+        key("KeyQ");
+        await until((s) => s.phase === "none", "the game to end").catch((e) => console.warn(e.message));
+      }
+    }
   },
 
   "forgets the game": async () => {

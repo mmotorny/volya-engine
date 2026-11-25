@@ -176,6 +176,13 @@ pub struct WorldScene {
     pub covered: bool,
     /// The particle effects drawn (docs/behavior/particle-drawing.md).
     pub particles: Vec<crate::particle_drawing::ParticleDraw>,
+    /// The dynamic light passes (docs/behavior/dynamic-lights.md 5).
+    #[serde(skip)]
+    pub lights: Vec<crate::core::lights::LightPass>,
+    /// The glows' sprites (docs/behavior/glows.md 6), by
+    /// [`crate::level::LevelWorld::glow_shaders`].
+    #[serde(skip)]
+    pub glows: Vec<crate::core::glows::GlowSprite>,
 }
 
 impl PartialEq for WorldScene {
@@ -192,6 +199,8 @@ impl PartialEq for WorldScene {
             && self.sky == other.sky
             && self.covered == other.covered
             && self.particles == other.particles
+            && self.lights == other.lights
+            && self.glows == other.glows
     }
 }
 

@@ -20,7 +20,9 @@ use serde::Serialize;
 use crate::audio::AudioOut;
 use crate::core::audio::Category;
 use crate::core::console::Console;
+use crate::core::diagnostics;
 use crate::core::input::{Action, Control, Input};
+use crate::core::lights::LightSettings;
 use crate::core::pause::{GlobalClock, Pause};
 use crate::core::sound::Fatal;
 use crate::core::sound::system::Listener;
@@ -29,6 +31,7 @@ use crate::data::{Assets, GameData};
 use crate::draw::Ctx;
 use crate::inventory_screen::{self, InventoryScreen, InventoryState};
 use crate::level::{LevelScreen, LevelState, LevelWorld};
+use crate::level_lights::GLOWS_PER_FRAME;
 use crate::level_sound::{LevelSounds, SoundRun};
 use crate::loading_screen::{
     GAME_TYPE, Loading, LoadingScreen, LoadingScreenState, OVERLAY_FRAMES, SERVER_NEW_GAME,
@@ -670,7 +673,7 @@ impl App {
         if matches!(self.phase, Some(Phase::Menu(_))) && self.error.as_ref() == Some(&error) {
             return;
         }
-        tracing::error!(error = %error, "fatal error");
+        diagnostics::end("fatal", &error);
         self.error = Some(error);
         let now = self.clock;
         let title = self.opening(false);
@@ -774,24 +777,47 @@ impl App {
                     direction: v.direction,
                     up: v.up,
                 });
+                let mut created_now = false;
                 if let Some(data) = level.take_sound_data() {
                     match LevelSounds::create(sounds, tree, &self.data.aliases, &data) {
                         Ok(created) => {
                             sounds.occlusion_mut().level = Some(level.shared_collision());
                             self.level_sounds = Some(created);
+                            created_now = true;
                         }
                         Err(e) => fatal = Some(e),
                     }
                 }
+                // The zones' idle sounds (S15 3): those of zones that came
+                // online since are created; created this frame, the sounds
+                // play as the zones stand, else as this frame changed them.
+                if let Some(level_sounds) = &mut self.level_sounds {
+                    let added = if level.zones().zones().len() > level_sounds.zones.len() {
+                        let names = level.zone_sound_names();
+                        let dir = level.world().dir.clone();
+                        level_sounds.add_zones(sounds, tree, &self.data.aliases, &dir, &names)
+                    } else {
+                        Ok(())
+                    };
+                    if let Err(e) = added {
+                        fatal = Some(e);
+                    } else if created_now {
+                        level_sounds.zone_events(sounds, &level.zone_sounds_playing());
+                    } else {
+                        level_sounds.zone_events(sounds, level.zone_sound_events());
+                    }
+                }
                 if !paused {
                     let now = self.global_clock.now();
+                    let (inputs, mut particles) = level.sound_frame_parts();
                     if let Some(level_sounds) = &mut self.level_sounds
                         && let Err(e) = self.sound_run.frame(
                             sounds,
                             level_sounds,
-                            &level.sound_inputs(),
+                            &inputs,
                             now,
                             overlay.is_some(),
+                            &mut particles,
                         )
                     {
                         fatal = Some(e);
@@ -845,7 +871,11 @@ impl App {
         self.frames += 1;
         if let Some(at) = self.loaded_since.take() {
             self.load_ms = Some(time_ms - at);
-            tracing::info!(load_ms = time_ms - at, "level made");
+            let level = match &self.phase {
+                Some(Phase::Level { level, .. }) => level.world().name.as_str(),
+                _ => "",
+            };
+            tracing::info!(level, load_ms = time_ms - at, "level made");
         }
         if std::mem::take(&mut self.shown) {
             // The hidden time never reaches the engine clock: this frame's
@@ -861,6 +891,22 @@ impl App {
         // clock starts at the first update and leaves out the hidden page's
         // time, during which the pause is on anyway (focus loss).
         self.global_clock.frame(self.clock, self.pause.is_on());
+        if let Some(Phase::Level { level, .. }) = &mut self.phase {
+            // The lamps' clock (hanging-lamps.md 4.3) and the renderer's
+            // light settings (dynamic-lights.md 8, glows.md 5).
+            level.set_global_clock(self.global_clock.now());
+            let c = &self.console;
+            let status = |name| c.status(name);
+            let settings = LightSettings::from_statuses(
+                status("r1_dlights").as_deref(),
+                status("r1_dlights_clip").as_deref(),
+                status("r2_sun_lumscale").as_deref(),
+            );
+            let glows = status("r1_glows_per_frame")
+                .and_then(|v| v.trim().parse::<u32>().ok())
+                .map_or(GLOWS_PER_FRAME, |v| v.clamp(2, 32));
+            level.set_light_settings(settings, glows);
+        }
         let now = self.clock;
         let title = self.opening(false);
         let in_game = self.opening(true);
@@ -934,7 +980,6 @@ impl App {
                         let changed = self.game_type != Some(GAME_TYPE);
                         self.game_type = Some(GAME_TYPE);
                         self.load_started = Some(time_ms);
-                        tracing::info!("level loading");
                         let mut loading = Loading::start(data, changed);
                         if self.prepare_textures {
                             loading.prepare_textures();
@@ -967,7 +1012,7 @@ impl App {
                                 };
                             }
                             Err(e) => {
-                                tracing::error!(error = %e, "loading failed");
+                                diagnostics::end("load_failed", &e.to_string());
                                 self.error = Some(e.to_string());
                                 *phase =
                                     Phase::Menu(TitleMenu::open(data, now, input, audio, title));
@@ -977,7 +1022,7 @@ impl App {
                     }
                     Err(e) => {
                         // Back to the menu, saying why (our choice).
-                        tracing::error!(error = %e, "loading failed");
+                        diagnostics::end("load_failed", &e.to_string());
                         self.error = Some(e.to_string());
                         *phase = Phase::Menu(TitleMenu::open(data, now, input, audio, title));
                         self.screens.menu_opened();
@@ -1033,6 +1078,7 @@ impl App {
                 } else if out.disconnect {
                     // `disconnect`: the game ends; with no level the title
                     // screen's menu opens.
+                    diagnostics::end("quit", "quit to the title menu");
                     menu.stop(audio);
                     intro.stop(audio);
                     if let Some(o) = overlay.take() {

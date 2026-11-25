@@ -26,22 +26,14 @@ use volya_engine::formats::ui::Resolution;
 use wasm_bindgen::prelude::*;
 use web_sys::{OffscreenCanvas, WorkerGlobalScope};
 
-/// Starts the engine on the canvas transferred from the page. Without
-/// WebGPU the engine still starts; `status` reports why graphics are
-/// unavailable.
+/// Starts the engine on the canvas transferred from the page, drawing
+/// through WebGL 2 even where WebGPU works when `webgl` (the player's
+/// Graphics setting, #121). Without graphics the engine still starts;
+/// `status` reports why they are unavailable.
 #[wasm_bindgen]
-pub async fn start(canvas: OffscreenCanvas) {
-    gpu::init(canvas).await;
+pub async fn start(canvas: OffscreenCanvas, webgl: bool) {
+    gpu::init(canvas, webgl).await;
     diagnostics::started();
-}
-
-/// The wasm build running (static/wasm-build.js, #186).
-fn build() -> &'static str {
-    if cfg!(feature = "webgl") {
-        "webgl"
-    } else {
-        "webgpu"
-    }
 }
 
 /// The canvas's size in CSS pixels and the page's devicePixelRatio, on start
@@ -178,8 +170,11 @@ pub fn visibility(hidden: bool) {
     // The interval spanning the hidden time is not a frame time.
     FRAME_STATS.with(|s| s.borrow_mut().last = None);
     tracing::info!(hidden, "page visibility");
-    // Hidden pages may be ended without notice (iOS): stored now.
-    diagnostics::tick(hidden);
+    if hidden {
+        // Hidden pages may be ended without notice (iOS): recorded as an
+        // end and stored now. Shown again, the session goes on.
+        diagnostics::end(2, "page_hidden", "the page was hidden", &[]);
+    }
 }
 
 #[derive(Serialize)]
@@ -325,14 +320,20 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         }
         "input_state" => to_json(&input::state()),
         "level_stats" => to_json(&level_stats()),
-        "diagnostic_log" => to_json(&diagnostics::trace().await?),
+        // `{stored_only}` (tests): only what is in storage now.
+        "diagnostic_log" => {
+            let stored_only = args.get("stored_only").and_then(|v| v.as_bool());
+            to_json(&diagnostics::trace(stored_only.unwrap_or(false)).await?)
+        }
         "diagnostic_log_status" => to_json(&diagnostics::status().await),
-        // `{on, session}`: the player's setting, and what the page tells
-        // of the session (diagnostics.js).
+        // `{on, session, previous_end}`: the player's setting, what the
+        // page tells of the session and how an earlier session's page
+        // ended (diagnostics.js).
         "diagnostics_set" => {
             let on = args.get("on").and_then(|v| v.as_bool()).unwrap_or(false);
             let session = args.get("session").cloned().unwrap_or_default();
-            diagnostics::set(on, &session).await;
+            let previous = args.get("previous_end").cloned().unwrap_or_default();
+            diagnostics::set(on, &session, &previous).await;
             to_json(&diagnostics::status().await)
         }
         #[cfg(feature = "test-ops")]
@@ -361,6 +362,15 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         "menu_state" => to_json(&engine::state()),
         "bound_keys" => to_json(&engine::bound_keys()),
         #[cfg(feature = "test-ops")]
+        "debug_lose_device" => gpu::lose_device().map(|()| "null".into()),
+        // `{suffix}`: the archive tree hides the paths ending in `suffix`
+        // (none without one).
+        #[cfg(feature = "test-ops")]
+        "debug_hide_file" => {
+            game::hidden::set(args.get("suffix").and_then(|v| v.as_str()));
+            Ok("null".into())
+        }
+        #[cfg(feature = "test-ops")]
         "debug_give_item" => to_json(&engine::give_item(text("section"))?),
         // `{name, position: [x, y, z], category, looped, two_d, delay}`.
         #[cfg(feature = "test-ops")]
@@ -386,8 +396,14 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         // `{case}`: particle batches drawn through this backend (tests).
         #[cfg(feature = "test-ops")]
         "debug_draw_particles" => to_json(&gpu::debug_draw_particles(text("case"))?),
+        // `{case}`: a light pass or a glow drawn through this backend (tests).
+        #[cfg(feature = "test-ops")]
+        "debug_draw_lights" => to_json(&gpu::debug_draw_lights(text("case"))?),
         #[cfg(feature = "test-ops")]
         "particles_state" => to_json(&engine::particles_state()?),
+        // The zones and the weather's ambient effect (tests).
+        #[cfg(feature = "test-ops")]
+        "zones_state" => to_json(&engine::zones_state()?),
         // `{frames}`: the placed effects' update cost in wasm.
         #[cfg(feature = "test-ops")]
         "debug_particles_bench" => {
@@ -430,7 +446,7 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         }
         "forget_user_config" => game::forget_user_config().await.map(|()| "null".into()),
         "quit_game" => {
-            engine::stop();
+            engine::stop("quit", "left the game");
             Ok("null".into())
         }
         "input_capture" => {
@@ -470,9 +486,6 @@ struct Status {
     /// Frames the worker's loop has run.
     frames: u64,
     gpu: gpu::Status,
-    /// The wasm build running (static/wasm-build.js, #186): `webgpu`, or
-    /// `webgl` with WebGL 2 too.
-    build: &'static str,
 }
 
 /// Frames the worker's loop has run.
@@ -491,7 +504,6 @@ fn status() -> Status {
         },
         frames: frames(),
         gpu: gpu::status(),
-        build: build(),
     }
 }
 

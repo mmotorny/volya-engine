@@ -34,17 +34,22 @@ use crate::core::config;
 use crate::core::config::Config;
 use crate::core::input::Input;
 use crate::core::level::{DrawItem, Level};
+use crate::core::lights::{LightSettings, Lights};
 use crate::core::movement::{Flags, MovementConfig, Player};
 use crate::core::object_light::SkyVisibility;
-use crate::core::particles::placed::PlacedEffects;
+use crate::core::particles::placed::{Origin, PlacedEffect, PlacedEffects, particle_capacity};
 use crate::core::simulation::graph::Graph;
 use crate::core::simulation::navigation::Navigation;
 use crate::core::simulation::{AlifeConfig, Changes, Simulation};
 use crate::core::sound::Fatal;
+use crate::core::sound::ambient::AmbientParticles;
 use crate::core::vfs::{self, Vfs};
-use crate::core::weather::{Environment, Weather};
+use crate::core::weather::{Environment, Weather, texture_name as weather_texture_name};
+use crate::core::zones::{Behaviour, SoundEvent, ZoneRecord, ZoneSection, Zones};
 use crate::data::GameData;
 use crate::footsteps::{self, MaterialPairs, PlayerFootsteps};
+use crate::level_lights::{self, GlowShader, LevelLights, LightCamera, LightsData};
+use crate::level_sound::ZoneSoundNames;
 use crate::level_sound::{LevelSoundData, SoundInputs};
 use crate::loading_screen::Stage;
 use crate::objects::{self, Characters, LevelObjects, ObjectsReport};
@@ -58,6 +63,8 @@ use std::collections::HashMap;
 use volya_engine_formats::env_mod::{self, EnvModifier};
 use volya_engine_formats::game_graph::GameGraph;
 use volya_engine_formats::gamemtl;
+use volya_engine_formats::lanims::ColourAnimations;
+use volya_engine_formats::level::split_shader_entry;
 use volya_engine_formats::level_geom::{GeomBuffer, GeomFile, GeomLayout, GeomSource};
 use volya_engine_formats::model as model_math;
 use volya_engine_formats::object::{self as record, ObjectRecord};
@@ -110,12 +117,21 @@ pub struct LevelWorld {
     /// in the file until the presenter uploads them.
     geometry: GeomFile,
     /// Each library effect's shader with located textures, for the
-    /// effects the level's records can show (particle-drawing.md 5.1);
-    /// `None` for the others and those not drawn.
+    /// effects the level's records, its zones and its weather's ambient
+    /// effects can show (particle-drawing.md 5.1); `None` for the others and
+    /// those not drawn.
     pub particle_shaders: Vec<Option<ParticleShader<String>>>,
+    /// The most particles the level's effect objects can hold at once, for
+    /// the renderer's buffers, which are sized for them with the world.
+    pub particle_capacity: usize,
     /// The spawned objects drawn with the static world
     /// (docs/behavior/level-objects.md).
     pub objects: LevelObjects,
+    /// The glows' shaders, textures as file paths (glows.md 6).
+    pub glow_shaders: Vec<GlowShader<String>>,
+    /// The light passes' attenuation textures as file paths: `att`,
+    /// `attclip`, `attpoint` (dynamic-lights.md 6.4).
+    pub light_textures: Option<[String; 3]>,
 }
 
 /// Every texture file of `surfaces` and `sky`, each once.
@@ -139,6 +155,20 @@ fn texture_paths(surfaces: &[Surface<String>], sky: Option<&SkyTextures<String>>
     paths
 }
 
+/// Adds the glows' and the light passes' textures to `paths`, each once.
+fn light_texture_paths(
+    paths: &mut Vec<String>,
+    glows: &[GlowShader<String>],
+    lights: Option<&[String; 3]>,
+) {
+    let glows = glows.iter().map(|g| &g.texture);
+    for t in glows.chain(lights.into_iter().flatten()) {
+        if !paths.contains(t) {
+            paths.push(t.clone());
+        }
+    }
+}
+
 impl LevelWorld {
     /// Every texture file the level uploads, each once.
     pub fn texture_paths(&self) -> Vec<String> {
@@ -150,6 +180,7 @@ impl LevelWorld {
                 }
             }
         }
+        light_texture_paths(&mut paths, &self.glow_shaders, self.light_textures.as_ref());
         paths
     }
 
@@ -209,12 +240,28 @@ pub struct LevelScreen {
     placements: Arc<Vec<Option<Mat4>>>,
     /// Instance of each object id with a loaded visual.
     instances: HashMap<u16, usize>,
-    /// The effects of `level.ps_static` (level-placed-effects.md).
+    /// The level's particle objects: the effects of `level.ps_static`
+    /// (level-placed-effects.md), the zones' idle effects
+    /// (zone-idle-effects.md) and the weather's ambient effect
+    /// (weather-ambient-effects.md).
     effects: Option<PlacedEffects>,
+    /// The zone objects (zone-idle-effects.md).
+    zones: Zones,
+    /// The zone sections read, by name.
+    zone_sections: HashMap<String, ZoneSection>,
+    /// The weather's ambient effect object, while it exists (P11 3).
+    weather_effect: Option<usize>,
     /// The size of the latest frame drawn, for the effects' view test.
     view_size: std::cell::Cell<(u32, u32)>,
-    /// Whether the effects are drawn (tests compare frames without them).
-    effects_drawn: bool,
+    /// Which effect objects are drawn, by origin (tests compare frames
+    /// without them): placed, zones', weather's.
+    effects_drawn: [bool; 3],
+    /// The level's dynamic light records (docs/behavior/dynamic-lights.md):
+    /// chunk 6's, the sun's and every source's; its glows and lamps.
+    lights: LevelLights,
+    /// The global clock (sound-weather-ambient.md 3.1), ms, as the app
+    /// last gave it.
+    global_ms: u64,
 }
 
 /// What the engine interface reports.
@@ -240,6 +287,9 @@ pub struct LevelState {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub character: Option<CharacterReport>,
     pub objects: ObjectsReport,
+    /// The lights, glows and lamps (docs/behavior/dynamic-lights.md, glows.md,
+    /// hanging-lamps.md).
+    pub lights: crate::level_lights::LightsReport,
 }
 
 /// The level's placed effects as the engine interface reports them.
@@ -291,7 +341,89 @@ pub struct ParticleReport {
 /// Particles reported per effect at most.
 const REPORTED_PARTICLES: usize = 16;
 
-/// The report of `effects`.
+/// The zones and the weather's ambient effect as the engine interface
+/// reports them.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct ZonesReport {
+    pub zones: Vec<ZoneReport>,
+    /// The weather's ambient effect object, while it exists.
+    pub weather: Option<WeatherEffectReport>,
+}
+
+/// One zone object (zone-idle-effects.md).
+#[derive(Clone, Debug, Serialize)]
+pub struct ZoneReport {
+    pub id: u16,
+    pub name: String,
+    pub section: String,
+    /// `idle`, `disabled`, …
+    pub state: String,
+    pub fast: bool,
+    pub position: Vec3,
+    /// The idle effect's name.
+    pub effect: Option<String>,
+    pub playing: bool,
+    pub particles: usize,
+    /// The idle sound's name.
+    pub sound: Option<String>,
+    pub sound_on: bool,
+    /// The idle light is active.
+    pub light: bool,
+}
+
+/// The weather's ambient effect object (weather-ambient-effects.md 3).
+#[derive(Clone, Debug, Serialize)]
+pub struct WeatherEffectReport {
+    pub name: String,
+    pub playing: bool,
+    pub stopping: bool,
+    pub sphere: [f32; 4],
+    pub particles: usize,
+}
+
+/// The level's side of the ambient rule's effect object
+/// (weather-ambient-effects.md 3): made among the level's particle objects,
+/// placed once at the rule's position in world axes.
+pub struct WeatherParticles<'a> {
+    effects: &'a mut Option<PlacedEffects>,
+    object: &'a mut Option<usize>,
+}
+
+impl AmbientParticles for WeatherParticles<'_> {
+    fn start(&mut self, particles: &str, position: Vec3) -> Result<(), Fatal> {
+        let Some(effects) = self.effects.as_mut() else {
+            return Ok(());
+        };
+        let i = effects.add(particles, Origin::Weather).map_err(Fatal)?;
+        // P11 3.2: rows 0 – 2 the identity, row 3 the position.
+        let mut m = crate::core::particles::IDENTITY;
+        m[3] = [position[0], position[1], position[2], 1.0];
+        effects.start(i, &m, [0.0; 3]);
+        *self.object = Some(i);
+        Ok(())
+    }
+
+    fn stop(&mut self) {
+        if let (Some(effects), Some(i)) = (self.effects.as_mut(), *self.object) {
+            effects.stop_deferred(i);
+        }
+    }
+
+    fn is_playing(&self) -> bool {
+        match (self.effects.as_ref(), *self.object) {
+            (Some(effects), Some(i)) => effects.get(i).is_some_and(|p| p.instance.is_playing()),
+            _ => false,
+        }
+    }
+
+    fn remove(&mut self) {
+        if let (Some(effects), Some(i)) = (self.effects.as_mut(), self.object.take()) {
+            effects.remove(i);
+        }
+    }
+}
+
+/// The report of `effects`' placed records (level-placed-effects.md).
 pub fn effects_report(effects: Option<&PlacedEffects>) -> EffectsReport {
     let Some(effects) = effects else {
         return EffectsReport::default();
@@ -299,7 +431,7 @@ pub fn effects_report(effects: Option<&PlacedEffects>) -> EffectsReport {
     let library = effects.library();
     let records = effects
         .effects()
-        .iter()
+        .filter(|p| p.origin == Origin::Placed)
         .map(|p| {
             let s = p.instance.sphere();
             PlacedReport {
@@ -338,7 +470,11 @@ pub fn effects_report(effects: Option<&PlacedEffects>) -> EffectsReport {
         .collect();
     EffectsReport {
         clock: effects.clock(),
-        particles: effects.particle_count(),
+        particles: (effects.effects())
+            .filter(|p| p.origin == Origin::Placed)
+            .flat_map(|p| p.instance.effects())
+            .map(|e| e.particles().len())
+            .sum(),
         records,
     }
 }
@@ -686,7 +822,8 @@ fn locate_texture(tree: &dyn Vfs, data: &GameData, dir: &str, name: &str) -> io:
     Ok(path)
 }
 
-/// The shaders of the effects the level's placed records can show (the
+/// The shaders of the effects the level's particle objects and the effects
+/// or groups `names` can show (the
 /// records' effects, their groups' member effects and the children their
 /// member flags use; particle-drawing.md 5.1), by library index, with
 /// their textures located by `locate` (a texture found nowhere fails the
@@ -697,9 +834,9 @@ fn particle_shaders(
     data: &GameData,
     definitions: &HashMap<String, shaders_xr::Definition>,
     effects: &PlacedEffects,
+    names: &[&str],
     locate: &mut dyn FnMut(&str) -> io::Result<String>,
 ) -> io::Result<(Vec<Option<ParticleShader<String>>>, Vec<(String, String)>)> {
-    use crate::core::particles::placed::Instance;
     use volya_engine_formats::particles::member_flags as m;
     let library = effects.library();
     let mut wanted = vec![false; library.effects.len()];
@@ -708,20 +845,20 @@ fn particle_shaders(
             wanted[i] = true;
         }
     };
-    for p in effects.effects() {
-        match &p.instance {
-            Instance::Effect(e) => want(&library.effects[e.record()].name),
-            Instance::Group(g) => {
-                for member in &library.groups[g.record()].members {
-                    want(&member.effect);
-                    for (bit, child) in [
-                        (m::PER_PARTICLE_CHILD, &member.per_particle_child),
-                        (m::BIRTH_CHILD, &member.birth_child),
-                        (m::DEATH_CHILD, &member.death_child),
-                    ] {
-                        if member.flags & bit != 0 {
-                            want(child);
-                        }
+    let objects = effects.effects().map(|p| p.name.as_str());
+    for name in objects.chain(names.iter().copied()) {
+        if library.effect(name).is_some() {
+            want(name);
+        } else if let Some(g) = library.group(name) {
+            for member in &library.groups[g].members {
+                want(&member.effect);
+                for (bit, child) in [
+                    (m::PER_PARTICLE_CHILD, &member.per_particle_child),
+                    (m::BIRTH_CHILD, &member.birth_child),
+                    (m::DEATH_CHILD, &member.death_child),
+                ] {
+                    if member.flags & bit != 0 {
+                        want(child);
                     }
                 }
             }
@@ -959,13 +1096,57 @@ pub struct NewGameLoad {
     /// The engine clock of the frame a stage runs in (ms).
     now: u64,
     particle_shaders: Vec<Option<ParticleShader<String>>>,
-    /// The level's placed effects and the clock they were started at.
+    particle_capacity: usize,
+    /// The level's particle objects and the engine clock their clock was
+    /// last brought to.
     effects: Option<(PlacedEffects, u64)>,
+    /// The zone objects online at the start and the sections of every zone
+    /// of the level's objects.
+    zones: Zones,
+    zone_sections: HashMap<String, ZoneSection>,
+    /// The section of each zone record of the level's objects.
+    zone_record_sections: Vec<String>,
     /// The material pairs, read with the materials (S9).
     pairs: Option<Arc<MaterialPairs>>,
     /// The player's visual, from its record.
     player_visual: Option<String>,
     footsteps: Option<PlayerFootsteps>,
+    /// The level's lights, glows and their shaders
+    /// (docs/behavior/dynamic-lights.md, glows.md), and chunk 7's records
+    /// until their shaders are resolved.
+    lights: LightsData,
+    glow_records: Vec<volya_engine_formats::level::Glow>,
+    /// The light passes' attenuation textures (dynamic-lights.md 6.4).
+    light_textures: Option<[String; 3]>,
+}
+
+/// The zone objects of `level_objects` (zone-idle-effects.md 1.1: the
+/// records of the class ids its behaviours cover), each with its section
+/// read from `system` once (`sections`, by name): fatal where a required
+/// key is missing.
+fn zone_objects<'a>(
+    level_objects: &'a [objects::LevelObject],
+    system: &Config,
+    sections: &mut HashMap<String, ZoneSection>,
+) -> io::Result<Vec<(&'a objects::LevelObject, ZoneRecord)>> {
+    let mut out = Vec::new();
+    for o in level_objects {
+        let Some(behaviour) = Behaviour::of(o.record.class_id.as_str()) else {
+            continue;
+        };
+        let Some(record) = ZoneRecord::of(o.id, &o.record) else {
+            continue;
+        };
+        let name = &o.record.header.section;
+        if !sections.contains_key(name) {
+            let section = system
+                .section(name)
+                .ok_or_else(|| invalid(format!("no section [{name}]")))?;
+            sections.insert(name.clone(), ZoneSection::read(section, behaviour)?);
+        }
+        out.push((o, record));
+    }
+    Ok(out)
 }
 
 /// The game hour of `clock`, 0 … 23 (the scripts' switch rules,
@@ -1014,6 +1195,11 @@ impl NewGameLoad {
                 }
             }
         }
+        light_texture_paths(
+            &mut paths,
+            &self.lights.glow_shaders,
+            self.light_textures.as_ref(),
+        );
         paths
     }
 
@@ -1069,7 +1255,17 @@ impl NewGameLoad {
             }
             Stage::OpeningStream => {
                 let bytes = vfs::read(tree, &format!("{dir}\\level"))?;
-                self.level = Some(Level::parse(&bytes).map_err(|e| file("level", e))?);
+                let level = Level::parse(&bytes).map_err(|e| file("level", e))?;
+                // Chunks 6 and 7 and the portals, for the lights
+                // (dynamic-lights.md 3.1, glows.md 2.1, level.md 9.1).
+                self.lights.level_lights = (level.lights.iter())
+                    .filter_map(level_lights::level_light)
+                    .collect();
+                self.lights.portals = (level.portals.iter())
+                    .flat_map(|p| level_lights::portal_triangles(&p.vertices))
+                    .collect();
+                self.glow_records = level.glows.clone();
+                self.level = Some(level);
             }
             // The collision mesh with its materials mapped and indexed
             // (level-cform.md sections 2, 3.3). `gamemtl.xr` is read here,
@@ -1195,11 +1391,43 @@ impl NewGameLoad {
                     cycles,
                 )?);
                 sound.pairs = Some(pairs);
+                // The zones online at the start are created as the client
+                // creates its objects (zone-idle-effects.md 3.1), on the
+                // effects' clock brought to this frame; their sounds are
+                // the level's (S15 2.1).
+                let (effects, at) = earlier(self.effects.as_mut(), "particles.xr")?;
+                effects.advance(self.now.saturating_sub(*at));
+                *at = self.now;
+                for (o, record) in
+                    zone_objects(&self.level_objects, &data.system, &mut self.zone_sections)?
+                {
+                    self.zone_record_sections
+                        .push(o.record.header.section.clone());
+                    if o.online {
+                        let section = self.zone_sections[&o.record.header.section].clone();
+                        self.zones
+                            .create(&record, section, effects.clock(), effects)
+                            .map_err(invalid)?;
+                    }
+                }
+                sound.zones = (self.zones.zones().iter())
+                    .map(|z| z.section.sounds.clone())
+                    .collect();
                 sound.check(tree, &data.aliases)?;
                 self.sound = Some(sound);
                 self.weather = Some(weather);
                 let level_objects = std::mem::take(&mut self.level_objects);
                 self.spawned = Some(objects::spawn(tree, data, &dir, &level_objects)?);
+                // The lamps' colour animations (docs/formats/lanims-xr.md),
+                // read here with the lamps (our choice: when the game reads
+                // the file is unestablished); without the file, none.
+                let path = data.aliases.path("$game_data$", "lanims.xr")?;
+                self.lights.animations = match vfs::read(tree, &path) {
+                    Ok(bytes) => ColourAnimations::parse(&bytes)
+                        .map_err(|e| io::Error::new(e.kind(), format!("{path}: {e}")))?,
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => ColourAnimations::default(),
+                    Err(e) => return Err(e),
+                };
             }
             // Every texture file the level needs is located here. The
             // presenter reads and uploads them with the first frame that
@@ -1264,15 +1492,94 @@ impl NewGameLoad {
                     flares.push(f);
                 }
                 self.sky = Some(SkyTextures { sections });
+                // The glows' shaders (glows.md 2): chunk 7's entries, and
+                // `effects\glow` with each lamp's glow texture; a texture
+                // found nowhere fails the load, as the level's do.
+                let mut shader_of = |texture: &str, flare: bool| -> io::Result<u32> {
+                    let texture = locate(texture)?;
+                    let shader = GlowShader { texture, flare };
+                    let shaders = &mut self.lights.glow_shaders;
+                    Ok(match shaders.iter().position(|s| *s == shader) {
+                        Some(i) => i as u32,
+                        None => {
+                            shaders.push(shader);
+                            shaders.len() as u32 - 1
+                        }
+                    })
+                };
+                for g in std::mem::take(&mut self.glow_records) {
+                    let entry = &level.shaders[usize::from(g.shader)];
+                    let (shader, list) = split_shader_entry(entry).unwrap_or(("", ""));
+                    let flare = match shader {
+                        "effects\\glow" => false,
+                        "effects\\flare" => true,
+                        _ => {
+                            // TODO(#347): no shipped glow has another shader.
+                            self.not_drawn
+                                .push((entry.clone(), "glow shader not drawn".into()));
+                            continue;
+                        }
+                    };
+                    let texture = shading::texture_list(list)
+                        .into_iter()
+                        .next()
+                        .unwrap_or_default();
+                    let i = shader_of(&texture, flare)?;
+                    self.lights.level_glows.push((g.position, g.radius, i));
+                }
+                self.lights.lamp_glows = spawned
+                    .lamps
+                    .iter()
+                    .map(|l| {
+                        l.glow
+                            .as_ref()
+                            .map(|g| shader_of(&weather_texture_name(&g.texture), false))
+                            .transpose()
+                    })
+                    .collect::<io::Result<_>>()?;
+                // dynamic-lights.md 6.4.
+                self.light_textures = Some([
+                    locate("internal\\internal_light_att")?,
+                    locate("internal\\internal_light_attclip")?,
+                    locate("internal\\internal_light_attpoint")?,
+                ]);
                 self.flares = flares;
                 // The shaders of the effects the level can show
                 // (particle-drawing.md 5.1), their textures located like
                 // the level's.
+                // (particle-drawing.md 5.1): the placed records', every
+                // zone section's of the level's objects and every ambient
+                // effect of the weather's sets.
                 if let Some((effects, _)) = &self.effects {
+                    let sound = earlier(self.sound.as_ref(), "sound data")?;
+                    let zones =
+                        (self.zone_sections.values()).filter_map(|s| s.idle_particles.as_deref());
+                    let weather: Vec<&str> = (sound.sets.values())
+                        .flat_map(|s| &s.effects)
+                        .map(|e| e.particles.as_str())
+                        .collect();
+                    let names: Vec<&str> = zones.chain(weather.iter().copied()).collect();
                     let (shaders, not_drawn) =
-                        particle_shaders(tree, data, &definitions, effects, &mut locate)?;
+                        particle_shaders(tree, data, &definitions, effects, &names, &mut locate)?;
                     self.particle_shaders = shaders;
                     self.not_drawn.extend(not_drawn);
+                    // The most particles at once: every placed record's and
+                    // zone's (each may come online) and the largest ambient
+                    // effect (one at a time).
+                    let library = effects.library();
+                    let capacity = |n: &str| particle_capacity(library, n).unwrap_or(0);
+                    let zone_sections = &self.zone_sections;
+                    let zones: usize = (self.zone_record_sections.iter())
+                        .filter_map(|s| zone_sections.get(s))
+                        .filter_map(|s| s.idle_particles.as_deref())
+                        .map(capacity)
+                        .sum();
+                    let placed: usize = (effects.effects())
+                        .filter(|p| p.origin == Origin::Placed)
+                        .map(|p| capacity(&p.name))
+                        .sum();
+                    let ambient = weather.iter().map(|n| capacity(n)).max().unwrap_or(0);
+                    self.particle_capacity = placed + zones + ambient;
                 }
             }
             // The objects' light inputs against the static collision under
@@ -1287,7 +1594,10 @@ impl NewGameLoad {
                 let spawned = earlier(self.spawned.as_ref(), "objects")?;
                 let (a, b, t) = weather.bracket(clock.time_of_day());
                 let sun = Environment::blend(a, b, t, &[], actor.position, VIS_DISTANCE).sun_dir;
-                self.dynamic_props = objects::light_inputs(collision, &spawned.instances, sun);
+                // The sun-visibility ray goes along −d_B, the direction of
+                // the sun's record B (dynamic-lights.md 3.1, 11).
+                let d_b = crate::core::lights::sun_b_direction(sun);
+                self.dynamic_props = objects::light_inputs(collision, &spawned.instances, d_b);
             }
             // `level.ps_static`'s effects, made, placed and started
             // (level-placed-effects.md sections 1 – 4): read after the
@@ -1301,18 +1611,17 @@ impl NewGameLoad {
                     Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
                     Err(e) => return Err(e),
                 };
-                if !records.is_empty() {
-                    let path = data.aliases.path("$game_data$", "particles.xr")?;
-                    let library = match vfs::read(tree, &path) {
-                        Ok(bytes) => Library::parse(&bytes)
-                            .map_err(|e| io::Error::new(e.kind(), format!("{path}: {e}")))?,
-                        Err(e) if e.kind() == io::ErrorKind::NotFound => Library::default(),
-                        Err(e) => return Err(e),
-                    };
-                    let effects = PlacedEffects::new(Arc::new(library), &records, self.now as u32)
-                        .map_err(|e| invalid(format!("{dir}\\level.ps_static: {e}")))?;
-                    self.effects = Some((effects, self.now));
-                }
+                // The library serves the zones' and the weather's effects too.
+                let path = data.aliases.path("$game_data$", "particles.xr")?;
+                let library = match vfs::read(tree, &path) {
+                    Ok(bytes) => Library::parse(&bytes)
+                        .map_err(|e| io::Error::new(e.kind(), format!("{path}: {e}")))?,
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => Library::default(),
+                    Err(e) => return Err(e),
+                };
+                let effects = PlacedEffects::new(Arc::new(library), &records, self.now as u32)
+                    .map_err(|e| invalid(format!("{dir}\\level.ps_static: {e}")))?;
+                self.effects = Some((effects, self.now));
             }
             Stage::PrefetchingObjects
             | Stage::ServerStarting
@@ -1324,7 +1633,7 @@ impl NewGameLoad {
     }
 
     /// The level after every stage ran, shown from engine clock `now`.
-    pub fn finish(self, now: u64) -> io::Result<LevelScreen> {
+    pub fn finish(mut self, now: u64) -> io::Result<LevelScreen> {
         let name = earlier(self.name, "level")?;
         let actor = earlier(self.actor, "actor")?;
         let level = earlier(self.level, "level")?;
@@ -1348,6 +1657,8 @@ impl NewGameLoad {
             &self.dynamic_props,
             self.objects_not_drawn,
         );
+        let glow_shaders = self.lights.glow_shaders.clone();
+        let lights = LevelLights::new(std::mem::take(&mut self.lights), objects.lamps.clone())?;
         let placements = objects
             .instances
             .iter()
@@ -1392,6 +1703,9 @@ impl NewGameLoad {
                 geometry: geom,
                 objects,
                 particle_shaders: self.particle_shaders,
+                particle_capacity: self.particle_capacity,
+                glow_shaders,
+                light_textures: self.light_textures,
             }),
             collision: Arc::new(collision),
             sound_data: self.sound,
@@ -1415,9 +1729,16 @@ impl NewGameLoad {
             instances,
             effects,
             view_size: std::cell::Cell::new((1024, 768)),
-            effects_drawn: true,
+            zones: self.zones,
+            zone_sections: self.zone_sections,
+            weather_effect: None,
+            effects_drawn: [true; 3],
+            lights,
+            global_ms: 0,
         };
         screen.update_view();
+        screen.sync_zone_lights();
+        screen.lights_frame(0.0);
         Ok(screen)
     }
 }
@@ -1504,6 +1825,8 @@ impl LevelScreen {
         self.clock.set_paused(true);
         self.clock.advance(elapsed);
         self.player.paused(now);
+        // The frame still draws its lights and glows; no time passes.
+        self.lights_frame(0.0);
     }
 
     /// The level waits until `now` before it first shows (the platform
@@ -1529,6 +1852,9 @@ impl LevelScreen {
         let elapsed = now.saturating_sub(self.last);
         let dt = (elapsed as f32 / 1000.0).min(MAX_STEP);
         self.last = now;
+        // The previous frame's idle sound starts and stops were the sound
+        // side's to play.
+        self.zones.clear_events();
         self.clock.set_paused(false);
         self.clock.advance(elapsed);
         let player = self.player.state();
@@ -1556,15 +1882,32 @@ impl LevelScreen {
         }
         self.back |= back;
         self.simulate();
+        // The lamps' frame updates (hanging-lamps.md 4) on the global clock.
+        self.lights
+            .lamps_frame(self.global_ms as f32 / 1000.0, elapsed as f32 / 1000.0);
         // The placed effects on the world clock, which is the global clock
         // (autosave-timing.md 1, sound-weather-ambient.md 3.1): it stands
         // still while the pause is on (the menu, a `pause_state on` intro
         // item, the hidden page), when the app runs no update but
         // [`LevelScreen::paused`] or none at all, so the elapsed time here is
         // the global clock's.
+        // The zones' updates after the scheduler's pass over the effect
+        // objects, on the same clock (zone-idle-effects.md 6).
         if let Some(effects) = &mut self.effects {
-            effects.frame(elapsed, self.player.view().eye);
+            let eye = self.player.view().eye;
+            effects.frame(elapsed, eye);
+            let frame = crate::core::zones::Frame {
+                clock: effects.clock(),
+                elapsed: elapsed as u32,
+                camera: eye,
+                colours: self.lights.animations(),
+            };
+            if let Err(e) = self.zones.frame(&frame, effects) {
+                self.fatal.get_or_insert(e);
+            }
         }
+        // The idle lights of zones updated or created this frame.
+        self.sync_zone_lights();
         self.draw_updates();
         // sky.md 7.3, k_t from the game clock.
         let (a, b, t) = self.weather.bracket_indices(self.clock.time_of_day());
@@ -1582,6 +1925,7 @@ impl LevelScreen {
         let eye = self.player.view().eye;
         self.sky_visibility
             .update(&self.collision, eye, elapsed as f32 / 1000.0);
+        self.lights_frame(elapsed as f32 / 1000.0);
     }
 
     /// The player's footsteps.
@@ -1622,6 +1966,99 @@ impl LevelScreen {
             eye: self.player.view().eye,
             sky_visibility: self.sky_visibility.value(),
         }
+    }
+
+    /// What this frame's sound rules read, with the level's side of the
+    /// weather's ambient effect objects (weather-ambient-effects.md 3).
+    pub fn sound_frame_parts(&mut self) -> (SoundInputs<'_>, WeatherParticles<'_>) {
+        let (a, b, t) = self.weather.bracket(self.clock.time_of_day());
+        let inputs = SoundInputs {
+            tau: (self.clock.time() % crate::core::clock::DAY_MS) as u32,
+            sections: [a, b],
+            t,
+            far_plane: self.environment.far_plane,
+            sun_dir: self.environment.sun_dir,
+            eye: self.player.view().eye,
+            sky_visibility: self.sky_visibility.value(),
+        };
+        let particles = WeatherParticles {
+            effects: &mut self.effects,
+            object: &mut self.weather_effect,
+        };
+        (inputs, particles)
+    }
+
+    /// The weather's ambient effect object, while it exists.
+    pub fn weather_effect(&self) -> Option<&PlacedEffect> {
+        let effects = self.effects.as_ref()?;
+        effects.get(self.weather_effect?)
+    }
+
+    /// The zone objects (zone-idle-effects.md).
+    pub fn zones(&self) -> &Zones {
+        &self.zones
+    }
+
+    /// The zones' idle sound starts and stops of this frame (S15 3).
+    pub fn zone_sound_events(&self) -> &[SoundEvent] {
+        self.zones.sound_events()
+    }
+
+    /// The zones' idle sounds playing now, as starts at the positions of
+    /// their latest starts: for sounds created after the zones started.
+    pub fn zone_sounds_playing(&self) -> Vec<SoundEvent> {
+        (self.zones.zones().iter().enumerate())
+            .filter(|(_, z)| z.sound_on)
+            .map(|(zone, z)| SoundEvent::Play {
+                zone,
+                position: z.sound_position,
+            })
+            .collect()
+    }
+
+    /// Each zone's sound names (S15 2.1), by zone.
+    pub fn zone_sound_names(&self) -> Vec<ZoneSoundNames> {
+        (self.zones.zones().iter())
+            .map(|z| z.section.sounds.clone())
+            .collect()
+    }
+
+    /// The zones as the engine interface reports them.
+    pub fn zones_report(&self) -> ZonesReport {
+        let effects = self.effects.as_ref();
+        let object = |o: Option<usize>| o.and_then(|o| effects?.get(o));
+        let zones = (self.zones.zones().iter())
+            .map(|z| {
+                let effect = object(z.effect);
+                ZoneReport {
+                    id: z.id,
+                    name: z.name.clone(),
+                    section: z.section.name.clone(),
+                    state: format!("{:?}", z.state).to_lowercase(),
+                    fast: z.fast,
+                    position: z.position(),
+                    effect: z.section.idle_particles.clone(),
+                    playing: effect.is_some_and(|p| p.instance.is_playing()),
+                    particles: effect.map_or(0, |p| {
+                        p.instance.effects().map(|e| e.particles().len()).sum()
+                    }),
+                    sound: z.section.sounds[crate::core::zones::IDLE].clone(),
+                    sound_on: z.sound_on,
+                    light: z.light.as_ref().is_some_and(|l| l.active),
+                }
+            })
+            .collect();
+        let weather = self.weather_effect().map(|p| WeatherEffectReport {
+            name: p.name.clone(),
+            playing: p.instance.is_playing(),
+            stopping: p.instance.effects().any(|e| e.is_stopping()),
+            sphere: {
+                let s = p.instance.sphere();
+                [s.centre[0], s.centre[1], s.centre[2], s.radius]
+            },
+            particles: p.instance.effects().map(|e| e.particles().len()).sum(),
+        });
+        ZonesReport { zones, weather }
     }
 
     /// One update of the offline simulation (offline-simulation.md 6.2)
@@ -1665,7 +2102,35 @@ impl LevelScreen {
         if changes.is_empty() {
             return;
         }
+        for &id in &changes.online {
+            self.lights.object_online(id);
+        }
+        for &id in changes.offline.iter().chain(&changes.removed) {
+            self.lights.object_offline(id);
+        }
         let Some(sim) = &self.simulation else { return };
+        // A zone record coming online for the first time creates its zone
+        // object (zone-idle-effects.md 3.1); zones never go offline.
+        if let Some(effects) = &mut self.effects {
+            for &id in &changes.online {
+                let Some(o) = sim.object(id).filter(|_| !self.zones.contains(id)) else {
+                    continue;
+                };
+                let (Some(section), Some(record)) = (
+                    self.zone_sections.get(&o.record.header.section),
+                    ZoneRecord::of(id, &o.record),
+                ) else {
+                    continue;
+                };
+                let section = section.clone();
+                if let Err(e) = self
+                    .zones
+                    .create(&record, section, effects.clock(), effects)
+                {
+                    self.fatal.get_or_insert(e);
+                }
+            }
+        }
         let mut placements = (*self.placements).clone();
         let mut changed = false;
         for &id in &changes.online {
@@ -1686,6 +2151,63 @@ impl LevelScreen {
         }
     }
 
+    /// The level's dynamic light records, for the sources that create and
+    /// update their lights each frame (docs/architecture.md, Lights).
+    /// The zones' idle lights given to their records among the level's
+    /// dynamic lights (zone-idle-effects.md 4.4), each made the first time.
+    fn sync_zone_lights(&mut self) {
+        let mut zones = std::mem::take(&mut self.zones);
+        zones.sync_lights(self.lights_mut());
+        self.zones = zones;
+    }
+
+    pub fn lights_mut(&mut self) -> &mut Lights {
+        &mut self.lights.lights
+    }
+
+    /// The level's dynamic light records.
+    pub fn lights(&self) -> &Lights {
+        &self.lights.lights
+    }
+
+    /// The level's lights, glows and lamps.
+    pub fn level_lights(&self) -> &LevelLights {
+        &self.lights
+    }
+
+    /// The level's lights, glows and lamps (tests: settings, hits).
+    pub fn level_lights_mut(&mut self) -> &mut LevelLights {
+        &mut self.lights
+    }
+
+    /// This frame's global clock (sound-weather-ambient.md 3.1), ms: the
+    /// lamps' colour animations' time (hanging-lamps.md 4.3).
+    pub fn set_global_clock(&mut self, ms: u64) {
+        self.global_ms = ms;
+    }
+
+    /// The settings of dynamic-lights.md 8 and `r1_glows_per_frame`.
+    pub fn set_light_settings(&mut self, settings: LightSettings, glows_per_frame: u32) {
+        self.lights.settings = settings;
+        self.lights.glows_per_frame = glows_per_frame;
+    }
+
+    /// The frame's lights and glows from the latest frame's view, a frame
+    /// of `dt` seconds (0 while paused).
+    fn lights_frame(&mut self, dt: f32) {
+        let (w, h) = self.view_size.get();
+        let (view, projection) = self.view_projection(w, h);
+        let e = &self.environment;
+        let camera = LightCamera {
+            eye: self.player.view().eye,
+            view,
+            projection,
+            far: e.far_plane,
+        };
+        let sun = (e.sun_dir, e.sun_color);
+        self.lights.frame(&self.collision, &camera, sun, dt);
+    }
+
     /// The level's placed effects (level-placed-effects.md).
     pub fn effects(&self) -> Option<&PlacedEffects> {
         self.effects.as_ref()
@@ -1699,21 +2221,45 @@ impl LevelScreen {
     fn draw_updates(&mut self) {
         let (w, h) = self.view_size.get();
         let (view, projection) = self.view_projection(w, h);
-        let Some(effects) = &mut self.effects else {
+        let Some(effects) = &self.effects else {
             return;
         };
-        if !self.effects_drawn {
-            return;
+        let drawn = self.drawn(effects, &view, &projection);
+        if let Some(effects) = &mut self.effects {
+            for i in drawn {
+                effects.draw_update(i);
+            }
         }
-        for i in particle_drawing::visible(effects, &view, &projection) {
-            effects.draw_update(i);
-        }
+    }
+
+    /// The effect objects drawn in a view: those visible (7.1) of the
+    /// origins drawn.
+    fn drawn(&self, effects: &PlacedEffects, view: &Mat4, projection: &Mat4) -> Vec<usize> {
+        let origin = |o: Origin| match o {
+            Origin::Placed => 0,
+            Origin::Zone => 1,
+            Origin::Weather => 2,
+        };
+        particle_drawing::visible(effects, view, projection)
+            .into_iter()
+            .filter(|&i| {
+                effects
+                    .get(i)
+                    .is_some_and(|p| self.effects_drawn[origin(p.origin)])
+            })
+            .collect()
     }
 
     /// Leaves the effects out of the frames drawn, or draws them again
     /// (tests compare frames with and without them).
     pub fn set_effects_drawn(&mut self, drawn: bool) {
-        self.effects_drawn = drawn;
+        self.effects_drawn = [drawn; 3];
+    }
+
+    /// Draws only the effect objects of `origins` (tests).
+    pub fn set_effect_origins_drawn(&mut self, origins: &[Origin]) {
+        self.effects_drawn =
+            [Origin::Placed, Origin::Zone, Origin::Weather].map(|o| origins.contains(&o));
     }
 
     /// The effects queued for a frame of `view` and `projection` at
@@ -1725,7 +2271,7 @@ impl LevelScreen {
         projection: &Mat4,
     ) -> Vec<particle_drawing::ParticleDraw> {
         self.view_size.set((resolution.width, resolution.height));
-        let Some(effects) = self.effects.as_ref().filter(|_| self.effects_drawn) else {
+        let Some(effects) = self.effects.as_ref() else {
             return Vec::new();
         };
         let v = self.player.view();
@@ -1736,7 +2282,7 @@ impl LevelScreen {
         };
         let (w, h) = crate::render::world::supersampled(resolution.width, resolution.height);
         let ssa_min = crate::render::world::ssa_min(w, h, camera::FOV_Y_DEGREES);
-        let records = particle_drawing::visible(effects, view, projection);
+        let records = self.drawn(effects, view, projection);
         particle_drawing::queue(
             effects,
             &records,
@@ -1814,6 +2360,8 @@ impl LevelScreen {
         let mut scene = Scene::new(resolution);
         scene.world = Some(WorldScene {
             particles,
+            lights: self.lights.passes().to_vec(),
+            glows: self.lights.sprites().to_vec(),
             covered: false,
             world: self.world.clone(),
             eye: v.eye,
@@ -1885,6 +2433,7 @@ impl LevelScreen {
             },
             character: self.character.as_ref().map(CharacterReport::of),
             objects: self.objects_report(),
+            lights: self.lights.report(),
         }
     }
 
@@ -2027,6 +2576,9 @@ impl LevelScreen {
                 geometry: GeomFile::default(),
                 objects: LevelObjects::default(),
                 particle_shaders: Vec::new(),
+                particle_capacity: 0,
+                glow_shaders: Vec::new(),
+                light_textures: None,
             }),
             collision: Arc::new(
                 CollisionWorld::new(Default::default(), Vec::new()).expect("collision"),
@@ -2052,7 +2604,12 @@ impl LevelScreen {
             instances: HashMap::new(),
             effects: None,
             view_size: std::cell::Cell::new((1024, 768)),
-            effects_drawn: true,
+            zones: Zones::default(),
+            zone_sections: HashMap::new(),
+            weather_effect: None,
+            effects_drawn: [true; 3],
+            lights: LevelLights::default(),
+            global_ms: 0,
         }
     }
 }

@@ -1,0 +1,70 @@
+<!-- SPDX-FileCopyrightText: 2026 Maksym Motorny -->
+<!-- SPDX-License-Identifier: BSD-3-Clause -->
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Volya Engine test: gestures</title>
+<!-- Real iOS gestures against the zoom guard (zoom.js), driven by `cargo
+     xtask sim` (docs/testing.md). Not a suite: the app's style sheet,
+     viewport and guard over shell-like text and a field; flags in the hash,
+     joined by "+": `play` (the engine takes input), `controls` (the touch
+     controls' fixed layer), `cursor` (touchend cancelled, as with the
+     touchpad), and to compare, `unguarded` (no zoom.js), `bare` (no
+     touch-action), `oldmeta` (the viewport from before #345). It shows the
+     visual viewport's scale (for `expect-text`) and the events that reached
+     it, and posts them to the dev server, which prints them. Open each run
+     at its own path (`__test/run/<id>/gestures.html`): Safari keeps the
+     document across hash changes. -->
+<body>
+<p id="scale" style="position: relative; z-index: 2; font-size: 32px">scale ?</p>
+<script type="module">
+  const base = location.pathname.slice(0, location.pathname.indexOf("/__test/") + 1);
+  document.head.insertAdjacentHTML("beforeend", `<link rel="stylesheet" href="${base}style.css">`);
+  const flags = location.hash.slice(1).split("+");
+  const meta = document.querySelector('meta[name="viewport"]');
+  if (!flags.includes("oldmeta")) {
+    const index = new DOMParser().parseFromString(await (await fetch(`${base}index.html`)).text(), "text/html");
+    meta.content = index.querySelector('meta[name="viewport"]').content;
+  }
+  if (!flags.includes("unguarded")) (await import(`${base}zoom.js`)).blockZoom();
+  if (flags.includes("bare")) document.head.insertAdjacentHTML("beforeend", "<style>* { touch-action: auto !important; }</style>");
+  if (flags.includes("play")) document.documentElement.toggleAttribute("data-engine-input", true);
+  // As input.js while the game shows its cursor (the touchpad).
+  if (flags.includes("cursor")) addEventListener("touchend", (event) => event.cancelable && event.preventDefault(), { passive: false });
+  if (flags.includes("controls")) {
+    const controls = document.createElement("div");
+    controls.id = "touch-controls";
+    // As touch-controls.js: every touch stays with the controls.
+    for (const type of ["pointerdown", "pointermove", "pointerup"]) {
+      controls.addEventListener(type, (event) => event.preventDefault(), { passive: false });
+    }
+    document.body.append(controls);
+  }
+  const text = "Shell text to scroll through. ".repeat(40);
+  document.body.insertAdjacentHTML("beforeend", `<main><input aria-label="Field" style="font-size: 12px">${`<p>${text}</p>`.repeat(8)}</main>`);
+
+  const scale = document.getElementById("scale");
+  const show = () => (scale.textContent = `scale ${visualViewport.scale.toFixed(2)}`);
+  show();
+  visualViewport.addEventListener("resize", show);
+  // What reached the page, after the guard: 2 for two touches, x cancelled.
+  const seen = {};
+  const log = document.createElement("p");
+  log.style.cssText = "position: relative; z-index: 2; font-size: 14px";
+  scale.after(log);
+  for (const type of ["touchstart", "touchmove", "touchend", "touchcancel", "gesturestart", "gesturechange", "gestureend", "pointerdown", "pointermove", "pointercancel"]) {
+    addEventListener(type, (event) => {
+      const key = `${type}${event.touches?.length > 1 ? "2" : ""}${event.defaultPrevented ? "x" : ""}`;
+      seen[key] = (seen[key] ?? 0) + 1;
+      log.textContent = Object.entries(seen).map(([k, n]) => `${k}:${n}`).join(" ");
+    }, { passive: true });
+  }
+  let posted = "";
+  setInterval(() => {
+    const text = `gestures ${location.hash} ${scale.textContent} scrollY ${Math.round(scrollY)} focus ${document.activeElement?.tagName} ${log.textContent}`;
+    if (text !== posted) fetch(`${base}__test/results`, { method: "POST", body: (posted = text) });
+  }, 500);
+</script>
+</body>
+</html>

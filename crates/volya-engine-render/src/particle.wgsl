@@ -85,3 +85,25 @@ fn fs_distort(in: Out) -> @location(0) vec4<f32> {
     let c = saturate(in.color);
     return saturate(vec4(d.rgb, d.a * ((c.r + c.g + c.b) * 0.33)));
 }
+
+// A glow's fixed-function pass (glows.md section 6, static-shading.md
+// 7.5): colour = texel × vertex colour, alpha likewise; no fog. The
+// `effects\glow` alpha test passes when A · 255 > 0, `effects\flare`'s
+// when A · 255 > 2.
+@fragment
+fn fs_glow(in: Out) -> @location(0) vec4<f32> {
+    let c = particle(in);
+    if c.a * 255.0 <= 0.0 {
+        discard;
+    }
+    return c;
+}
+
+@fragment
+fn fs_flare(in: Out) -> @location(0) vec4<f32> {
+    let c = particle(in);
+    if c.a * 255.0 <= 2.0 {
+        discard;
+    }
+    return c;
+}

@@ -180,7 +180,8 @@ const WHEEL_PIXELS = 50;
 const AXIS_EPSILON = 0.02;
 
 /**
- * Starts listening; `send(event)` posts one message to the engine worker.
+ * Starts listening; `view()` is the canvas (replaced when the engine starts
+ * anew, main.js), `send(event)` posts one message to the engine worker.
  * `onClick()` runs in the event handler of a touchpad gesture pressing the
  * left button (the page may focus its text entry there: a device's keyboard
  * rises only in a user gesture). Returns `setCapture(on)`, called when the
@@ -235,10 +236,11 @@ export function startInput(view, send, { onClick = () => {} } = {}) {
   const locked = () => document.pointerLockElement === root;
 
   const at = (event) => {
-    const rect = view.getBoundingClientRect();
+    const canvas = view();
+    const rect = canvas.getBoundingClientRect();
     // Turned 90° clockwise on upright phones (style.css): the on-screen box
     // is then portrait while the canvas's own size is landscape.
-    if (rect.width < rect.height !== view.clientWidth < view.clientHeight) {
+    if (rect.width < rect.height !== canvas.clientWidth < canvas.clientHeight) {
       return [event.clientY - rect.top, rect.right - event.clientX];
     }
     return [event.clientX - rect.left, event.clientY - rect.top];

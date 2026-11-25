@@ -9,14 +9,14 @@
 // low, the engine worker after writing commands to the ring of commands),
 // then applies the commands and fills the ring of frames, however long
 // the engine's frames take. Messages from the page:
-//   { type: "connect", build, sampleRate, target, memory, engine }: a new
+//   { type: "connect", sampleRate, target, memory, engine }: a new
 //   output; `engine` is a port to the engine worker, which sends it the
 //   files the commands play as `[number, Uint8Array]`, and to which it
 //   posts its reports (audio_host_report). An earlier output gets nothing
 //   more.
 
 import { WAKE, ringViews } from "./audio-ring.js";
-import { loadEngine } from "./wasm-build.js";
+import init, * as wasm from "./pkg/volya_engine_web.js";
 
 let ready = null;
 /** The current output: `{ engine, control }`. */
@@ -40,7 +40,7 @@ function service(e, current) {
 
 onmessage = async ({ data }) => {
   if (data.type !== "connect") return;
-  ready ??= loadEngine(data.build).then(({ module }) => module);
+  ready ??= init().then(() => wasm);
   const e = await ready;
   const previous = output;
   previous?.engine.close();

@@ -6,7 +6,9 @@
 // render quantum without allocating, so nothing here waits for a message
 // or a garbage collector. A quantum the ring can't fill plays the rest as
 // silence and counts it (UNDERRUN). When the ring holds under the audio
-// worker's target after a read, the processor wakes it.
+// worker's target after a read, the processor wakes it. An error here is
+// sent as `{ error }` over the port (to the engine worker) before it ends
+// the processor, for the diagnostic log's `engine.end`.
 
 import { OUT_FRAMES, OUT_READ, OUT_WRITE, UNDERRUN, WAKE, ringViews } from "./audio-ring.js";
 
@@ -20,7 +22,25 @@ class VolyaOutput extends AudioWorkletProcessor {
     this.low = processorOptions.target;
   }
 
-  process(_inputs, outputs) {
+  /** Tells the engine worker of an error (its diagnostic log). */
+  report(error) {
+    try {
+      this.port.postMessage({ error: String(error?.stack ?? error) });
+    } catch {
+      // The port is gone.
+    }
+  }
+
+  process(inputs, outputs) {
+    try {
+      return this.play(inputs, outputs);
+    } catch (error) {
+      this.report(error);
+      throw error;
+    }
+  }
+
+  play(_inputs, outputs) {
     const [left, right = left] = outputs[0];
     const { control, frames } = this;
     const read = Atomics.load(control, OUT_READ);
