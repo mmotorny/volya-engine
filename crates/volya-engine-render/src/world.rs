@@ -2031,9 +2031,11 @@ impl Renderer {
         let mut wide = Vec::with_capacity(layout.index_counts.len());
         for (i, list) in segments.iter().enumerate() {
             // 32-bit indices where a vertex buffer drawn from passes 16 bits.
-            let w = list.iter().any(|s| {
-                layout.vertex_buffers[s.vb as usize].vertex_count > u32::from(u16::MAX) + 1
-            });
+            // Experiment (#443): every index buffer 32-bit on WebGL 2.
+            let w = compat
+                || list.iter().any(|s| {
+                    layout.vertex_buffers[s.vb as usize].vertex_count > u32::from(u16::MAX) + 1
+                });
             wide.push(w);
             let count = list.last().map_or(0, |s| u64::from(s.at + s.count));
             let bytes = count * if w { 4 } else { 2 };
@@ -2117,7 +2119,7 @@ impl Renderer {
                         at
                     });
                 }
-                let wide = widest > u32::from(u16::MAX);
+                let wide = compat || widest > u32::from(u16::MAX);
                 let count = object_segments.last().map_or(0, |s| s.at + s.count);
                 let bytes = (u64::from(count) * if wide { 4 } else { 2 }).max(4);
                 object_buffer_bytes += bytes.next_multiple_of(4);
