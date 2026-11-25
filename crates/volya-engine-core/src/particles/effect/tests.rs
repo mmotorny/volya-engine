@@ -92,10 +92,10 @@ fn the_parent_velocity_follows_the_effects_velocity() {
 
 #[test]
 fn muhis_source_makes_p2s_particle() {
-    // P2's vector leaves out the drawing's frame values (P7 3.2): without
-    // flag 0x1000 the birth draws nothing more.
+    // P2 9.2 with `tests\muhi`'s flags 0x1401: seven draws for the
+    // particle, then the birth notice's eighth for its start frame (P7 3.2).
     let only_source = vec![muhi().actions.remove(0)];
-    let mut e = EffectInstance::new(0, &effect("muhi", 7, 0x0401, 0.0, only_source));
+    let mut e = EffectInstance::new(0, &effect("muhi", 7, 0x1401, 0.0, only_source));
     let mut random = Random::new(1);
     e.play();
     e.update(33, &mut random);
@@ -109,7 +109,9 @@ fn muhis_source_makes_p2s_particle() {
     assert_eq!(p.size, [0.01, 0.01, 0.0]);
     assert_eq!(p.colour, 0xFF7F_7F7F);
     assert_eq!(p.age, 0.0);
-    assert_eq!(random.uniform.state, 752_224_798);
+    assert_eq!(p.frame, 510);
+    assert_eq!(p.frame_flags, 0);
+    assert_eq!(random.uniform.state, 1_924_036_713);
 }
 
 #[test]
@@ -222,22 +224,6 @@ fn a_deferred_stop_lets_particles_live_on_without_births() {
         e.update(33, &mut random);
     }
     assert!(!e.is_playing() && !e.is_stopping());
-}
-
-#[test]
-fn a_random_start_frame_takes_one_more_draw() {
-    // particle-drawing.md 3.2 with `tests\muhi`'s flags 0x1401: the eighth
-    // k of state 1 picks one of its 4 frames.
-    let only_source = vec![muhi().actions.remove(0)];
-    let mut e = EffectInstance::new(0, &effect("muhi", 7, 0x1401, 0.0, only_source));
-    let mut random = Random::new(1);
-    e.play();
-    e.update(33, &mut random);
-    let mut g = super::super::random::Generator::new(752_224_798);
-    let k = g.next_k();
-    assert_eq!(random.uniform, g);
-    assert_eq!(e.particles()[0].frame, ((k % 4) * 255) as u16);
-    assert_eq!(e.particles()[0].frame_flags, 0);
 }
 
 #[test]

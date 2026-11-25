@@ -158,6 +158,47 @@ fn in_game_menu_and_save_load_screens_from_game_data() {
         text.contains("Время: 05:30 05/01/2012\\nЗдоровье 100%"),
         "{text}"
     );
+    // A valid container whose body cannot be read is fatal (sav.md 3, 7.1).
+    let mut broken = vec![0xFF; 4];
+    broken.extend(3u32.to_le_bytes());
+    broken.extend(100u32.to_le_bytes());
+    broken.extend([0; 8]);
+    assert!(SaveInfo::read(&tree, &data, &broken).is_err());
+    // What the menu does not read cannot fail it (sav.md 11.4): a save of
+    // only chunks 5 and 2, whose first record (the player's, from
+    // all.spawn) has bytes after its fields in both packets and whose
+    // second record is truncated.
+    let spawn_file = volya_engine::core::vfs::read(
+        &tree,
+        &data.aliases.path("$game_spawn$", "all.spawn").unwrap(),
+    )
+    .unwrap();
+    let actor = volya_engine_formats::spawn::actor_start(&spawn_file).unwrap();
+    let mut player =
+        volya_engine::level::player_record(&spawn_file, actor.index, &data.system).unwrap();
+    if let volya_engine_formats::object::Object::Player(p) = &mut player.object {
+        p.creature.health = 0.5;
+    }
+    let (mut spawn, mut update) = player.write().unwrap();
+    spawn.push(0);
+    update.push(0);
+    let mut objects = 2u32.to_le_bytes().to_vec();
+    for packet in [&spawn, &update] {
+        objects.extend((packet.len() as u16).to_le_bytes());
+        objects.extend(packet.iter());
+    }
+    objects.extend([200, 0, 1]);
+    let mut body = Vec::new();
+    let mut time = 63_471_533_400_000u64.to_le_bytes().to_vec();
+    time.extend([0; 8]);
+    for (id, payload) in [(5u32, &time), (2, &objects)] {
+        body.extend(id.to_le_bytes());
+        body.extend((payload.len() as u32).to_le_bytes());
+        body.extend(payload.iter());
+    }
+    let file = volya_engine_formats::sav::write_container(&body).unwrap();
+    let info = SaveInfo::read(&tree, &data, &file).unwrap();
+    assert_eq!((info.level.as_str(), info.health), ("l01_escape", 0.5));
 
     // The screens through the menu during a game: Save (item 3), then
     // Load (item 2).

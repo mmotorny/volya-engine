@@ -232,10 +232,13 @@ impl LevelMusic {
 
     /// The rule of 4.3 at clock `now` and time of day `tau` (ms). Run once
     /// per frame of the running level, after the static sources, not while
-    /// game time is paused nor under the loading image (4.1).
-    pub fn frame(&mut self, system: &mut SoundSystem, now: u32, tau: u32) {
+    /// game time is paused nor under the loading image (4.1). Fatal when
+    /// the pause is drawn from bounds equal modulo 2³² (*p*₁ − *p*₀ a
+    /// multiple of 2²⁹ s; 2.2 keeps them apart otherwise): the draw's
+    /// division by zero, fatal as in S3 4.2 and S4 4.7.
+    pub fn frame(&mut self, system: &mut SoundSystem, now: u32, tau: u32) -> Result<(), Fatal> {
         if self.tracks.is_empty() {
-            return;
+            return Ok(());
         }
         if self.current.is_none() && now > self.next_check {
             for t in &self.tracks {
@@ -276,10 +279,16 @@ impl LevelMusic {
                 0
             } else {
                 let n = system.random().draw();
-                range(n, p.pause_min, p.pause_max).unwrap_or(p.pause_min)
+                range(n, p.pause_min, p.pause_max).ok_or_else(|| {
+                    Fatal(format!(
+                        "music {}: a pause from {} to {} ms",
+                        self.tracks[i].name, p.pause_min, p.pause_max
+                    ))
+                })?
             };
             self.next_check = now.wrapping_add(pause);
         }
+        Ok(())
     }
 }
 

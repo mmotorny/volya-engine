@@ -78,6 +78,7 @@ pub fn associations(textures_ltx: &Config) -> HashMap<String, Association> {
 /// Whether a scripted definition's source defines `normal` or `l_special`
 /// (section 3.4): a textual check for `function normal(` or
 /// `function l_special(` (our approximation; no Lua runs here).
+// TODO(#340): detect them as the original does.
 pub fn defines_normal_or_special(source: &str) -> bool {
     let compact: String = source.split_whitespace().collect::<Vec<_>>().join(" ");
     [
@@ -125,11 +126,35 @@ fn nonempty(t: Option<&String>) -> Option<String> {
     t.filter(|t| !t.is_empty()).cloned()
 }
 
+/// Why a shader table entry gives no surface.
+#[derive(Clone, Debug, PartialEq)]
+pub enum NotDrawn {
+    /// Fatal in the original: the level does not load.
+    Fatal(String),
+    /// Not drawn by this engine (a feature it lacks).
+    Unsupported(String),
+}
+
+impl std::fmt::Display for NotDrawn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Fatal(why) | Self::Unsupported(why) => f.write_str(why),
+        }
+    }
+}
+
+impl From<NotDrawn> for String {
+    fn from(n: NotDrawn) -> Self {
+        n.to_string()
+    }
+}
+
 impl ShaderLibrary<'_> {
     /// The surface of a non-empty shader table entry, or why it is not
     /// drawn.
-    pub fn resolve(&self, entry: &str) -> Result<Surface<String>, String> {
-        let (shader, list) = split_shader_entry(entry).ok_or("empty entry")?;
+    pub fn resolve(&self, entry: &str) -> Result<Surface<String>, NotDrawn> {
+        let (shader, list) =
+            split_shader_entry(entry).ok_or_else(|| NotDrawn::Unsupported("empty entry".into()))?;
         let t = texture_list(list);
         let t0 = nonempty(t.first());
         let module = shader.replace('\\', "_");
@@ -139,7 +164,7 @@ impl ShaderLibrary<'_> {
         let def = self
             .definitions
             .get(shader)
-            .ok_or_else(|| format!("{shader} not found in library"))?;
+            .ok_or_else(|| NotDrawn::Fatal(format!("{shader} not found in library")))?;
         // The diffuse detail of T[0] (section 4.3).
         let association = t0.as_ref().and_then(|t| self.associations.get(t));
         let diffuse_detail = association.filter(|a| a.diffuse());
@@ -160,7 +185,7 @@ impl ShaderLibrary<'_> {
         let mut s = match def.tag.as_str() {
             tag @ ("LM      " | "LM_AREF ") => {
                 if t.len() < 3 {
-                    return Err("Not enought textures for shader".into());
+                    return Err(NotDrawn::Fatal("Not enought textures for shader".into()));
                 }
                 let mut s = surface(
                     Program::LightMapped,
@@ -192,7 +217,7 @@ impl ShaderLibrary<'_> {
             }
             "BmmDold " => {
                 if t.len() < 2 {
-                    return Err("Not enought textures for shader".into());
+                    return Err(NotDrawn::Fatal("Not enought textures for shader".into()));
                 }
                 let mut s = surface(Program::Terrain, [t0, nonempty(t.get(1)), None, None]);
                 // The definition's own detail texture; dt_params from T[0]'s
@@ -225,7 +250,11 @@ impl ShaderLibrary<'_> {
                 }
                 s
             }
-            other => return Err(format!("class {other:?} is not drawn")),
+            other => {
+                return Err(NotDrawn::Unsupported(format!(
+                    "class {other:?} is not drawn"
+                )));
+            }
         };
         s.priority = def.priority().clamp(0, 3) as u8;
         s.strict = def.strict();
@@ -249,7 +278,7 @@ fn environment_map(def: &Definition) -> Option<String> {
 }
 
 /// The normal pass of a scripted definition (section 8).
-fn scripted(module: &str, t0: Option<String>) -> Result<Surface<String>, String> {
+fn scripted(module: &str, t0: Option<String>) -> Result<Surface<String>, NotDrawn> {
     let base = [t0, None, None, None];
     Ok(match module {
         "selflight" => surface(Program::SelfLight, base),
@@ -268,7 +297,11 @@ fn scripted(module: &str, t0: Option<String>) -> Result<Surface<String>, String>
             priority: 2,
             ..surface(Program::Wallmark, base)
         },
-        "details_lod" => return Err("distant billboards are not drawn".into()),
+        "details_lod" => {
+            return Err(NotDrawn::Unsupported(
+                "distant billboards are not drawn".into(),
+            ));
+        }
         // The objects' scripted model shaders (level-objects.md 5.2).
         "models_selflight" | "models_selflightl" => surface(Program::ModelSelfLight, base),
         // Additive source-alpha / one, depth write off; fog off, alpha ref 0
@@ -282,7 +315,11 @@ fn scripted(module: &str, t0: Option<String>) -> Result<Surface<String>, String>
             priority: 2,
             ..surface(Program::ModelLightPlanes, base)
         },
-        other => return Err(format!("scripted shader {other} is not supported")),
+        other => {
+            return Err(NotDrawn::Unsupported(format!(
+                "scripted shader {other} is not supported"
+            )));
+        }
     })
 }
 
@@ -394,7 +431,7 @@ mod tests {
         .collect()
     }
 
-    fn resolve(entry: &str) -> Result<Surface<String>, String> {
+    fn resolve(entry: &str) -> Result<Surface<String>, NotDrawn> {
         let definitions = library();
         let associations: HashMap<String, Association> = [
             (
@@ -472,8 +509,12 @@ mod tests {
         // A bump-only association gives no detail.
         let s = resolve("default/mtl\\mtl_b,lmap#5_1,lmap#5_2").unwrap();
         assert_eq!((s.detail_scale, s.textures[3].as_deref()), (None, None));
+        // Fatal (section 7.1).
         assert!(
-            resolve("default/mtl\\mtl_a,lmap#5_1").is_err(),
+            matches!(
+                resolve("default/mtl\\mtl_a,lmap#5_1"),
+                Err(NotDrawn::Fatal(_))
+            ),
             "too few textures"
         );
         let s = resolve("def_shaders\\def_trans/glass,lmap#1_1,lmap#1_2").unwrap();
@@ -506,11 +547,14 @@ mod tests {
             ]
         );
         assert_eq!(s.detail_scale, Some(144.0));
-        assert!(resolve("effects\\glow/glow\\glow_04").is_err());
-        assert!(
-            resolve("nothing/x")
-                .unwrap_err()
-                .contains("not found in library")
+        assert!(matches!(
+            resolve("effects\\glow/glow\\glow_04"),
+            Err(NotDrawn::Unsupported(_))
+        ));
+        // Fatal (section 3.4).
+        assert_eq!(
+            resolve("nothing/x"),
+            Err(NotDrawn::Fatal("nothing not found in library".into()))
         );
     }
 

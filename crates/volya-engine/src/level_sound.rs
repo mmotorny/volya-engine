@@ -134,6 +134,14 @@ impl LevelSoundData {
             pairs: None,
         })
     }
+
+    /// Checks every sound file of the level as creating its sounds does
+    /// (S1 section 5: a file that cannot be opened is fatal at level load),
+    /// whether or not a sound system exists to create them in.
+    pub fn check(&self, tree: &dyn Vfs, aliases: &PathAliases) -> Result<(), Fatal> {
+        let mut scratch = SoundSystem::new(0);
+        LevelSounds::create(&mut scratch, tree, aliases, self).map(|_| ())
+    }
 }
 
 /// The level's sounds in the sound system.
@@ -303,7 +311,7 @@ impl SoundRun {
         let now = now as u32;
         if !loading_image {
             sounds.statics.frame(system, now, inputs.tau)?;
-            sounds.music.frame(system, now, inputs.tau);
+            sounds.music.frame(system, now, inputs.tau)?;
         }
         let [a, b] = inputs.sections;
         let t = inputs.t;

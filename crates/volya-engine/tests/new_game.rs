@@ -15,14 +15,17 @@
 #[path = "../../volya-engine-formats/tests/support/gog_archives.rs"]
 mod gog_archives;
 
+use std::cell::Cell;
+use std::io;
 use std::time::Instant;
 
 use volya_engine::app::{App, AppState};
 use volya_engine::audio::{AudioOut, Voice};
 use volya_engine::core::audio::Playback;
 use volya_engine::core::input::{Event, Input, Key};
-use volya_engine::core::vfs::StdVfs;
+use volya_engine::core::sound::system::SoundSystem;
 use volya_engine::core::vfs::db::DbVfs;
+use volya_engine::core::vfs::{self, DirEntry, StdVfs, Vfs, VfsFile};
 use volya_engine::data::GameData;
 use volya_engine::level::{self, LevelScreen};
 use volya_engine::loading_screen::Stage;
@@ -989,4 +992,154 @@ fn placed_effects_are_drawn_from_game_data() {
         assert!(inside > 50, "compat {compat}: {inside} pixels differ");
         assert_eq!(outside, 0, "compat {compat}");
     }
+}
+
+/// A game tree that, while `hidden` is set, lacks the file of
+/// `ambient\rain` (sound-rain-thunder.md 4.1), a sound every level creates.
+struct WithoutRain<'a> {
+    inner: &'a dyn Vfs,
+    hidden: Cell<bool>,
+}
+
+impl WithoutRain<'_> {
+    fn hides(&self, path: &str) -> bool {
+        self.hidden.get()
+            && vfs::normalize(path)
+                .is_ok_and(|p| p.to_ascii_lowercase().ends_with("sounds/ambient/rain.ogg"))
+    }
+}
+
+impl Vfs for WithoutRain<'_> {
+    fn open(&self, path: &str) -> io::Result<Box<dyn VfsFile + '_>> {
+        if self.hides(path) {
+            return Err(io::ErrorKind::NotFound.into());
+        }
+        self.inner.open(path)
+    }
+    fn read_dir(&self, path: &str) -> io::Result<Vec<DirEntry>> {
+        self.inner.read_dir(path)
+    }
+    fn exists(&self, path: &str) -> bool {
+        !self.hides(path) && self.inner.exists(path)
+    }
+}
+
+/// An audio output with the positional sound system, or without one.
+#[derive(Default)]
+struct Output {
+    gains: Gains,
+    sounds: Option<SoundSystem>,
+}
+
+impl AudioOut for Output {
+    fn play(&mut self, path: &str, playback: Playback) -> Option<Voice> {
+        self.gains.play(path, playback)
+    }
+    fn stop(&mut self, voice: Voice) {
+        self.gains.stop(voice);
+    }
+    fn is_playing(&self, voice: Voice) -> bool {
+        self.gains.is_playing(voice)
+    }
+    fn set_master_gain(&mut self, gain: f32) {
+        self.gains.set_master_gain(gain);
+    }
+    fn set_volume(&mut self, category: volya_engine::core::audio::Category, volume: f32) {
+        self.gains.set_volume(category, volume);
+    }
+    fn sounds(&mut self) -> Option<&mut SoundSystem> {
+        self.sounds.as_mut()
+    }
+}
+
+/// The title menu's error once a New Game is chosen on `tree` with
+/// `audio` and its level has run a few frames, `None` while it runs.
+/// `running` is called at the first frame the level runs.
+fn new_game_error(
+    tree: &dyn Vfs,
+    data: GameData,
+    audio: &mut Output,
+    running: impl FnOnce(&mut Output),
+) -> Option<String> {
+    let mut app = App::new(data).unwrap();
+    let mut input = Input::new();
+    let mut t = 0.0;
+    let mut step = |app: &mut App, input: &mut Input, audio: &mut Output| {
+        t += 16.0;
+        app.update(tree, t, input, audio);
+        input.end_frame();
+    };
+    for _ in 0..20 {
+        if matches!(app.state(), AppState::Menu { .. }) {
+            break;
+        }
+        press(&mut input, Key::Escape);
+        step(&mut app, &mut input, audio);
+    }
+    for _ in 0..2 {
+        press(&mut input, Key::Enter);
+        step(&mut app, &mut input, audio);
+    }
+    let mut running = Some(running);
+    for _ in 0..40 {
+        step(&mut app, &mut input, audio);
+        match app.state() {
+            AppState::Menu { menu, .. } => return menu.error,
+            AppState::Level { .. } => {
+                if let Some(f) = running.take() {
+                    f(audio);
+                }
+            }
+            _ => {}
+        }
+    }
+    assert!(matches!(app.state(), AppState::Level { .. }));
+    None
+}
+
+/// sound-ogg-params.md section 5: a level sound's file that cannot be
+/// opened is fatal at level load, with or without audio output (the
+/// level's sounds are created only with it): the game ends and the title
+/// menu says why. Gone once the level runs, when the sound system appears
+/// and the sounds are created, it is fatal there too (`App::fatal`).
+#[test]
+fn a_missing_level_sound_file_is_fatal() {
+    let Some(archives) = gog_archives::archives() else {
+        return;
+    };
+    let root = StdVfs::new(archives[0].file.parent().unwrap());
+    let inner = DbVfs::open_game(&root, Some("mods")).unwrap();
+    let tree = WithoutRain {
+        inner: &inner,
+        hidden: Cell::new(false),
+    };
+    let data = || {
+        let mut data = GameData::read(&tree, None, SIZE).unwrap();
+        data.intro_lengths = vec![0.0; data.intro.items.len()];
+        data
+    };
+    let fatal = |e: Option<String>| {
+        let e = e.expect("fatal");
+        assert!(e.contains("rain.ogg"), "{e}");
+    };
+    tree.hidden.set(true);
+    for sounds in [None, Some(SoundSystem::new(32))] {
+        let mut audio = Output {
+            sounds,
+            ..Default::default()
+        };
+        fatal(new_game_error(&tree, data(), &mut audio, |_| {}));
+    }
+    // Loaded without audio output, the file present; then the output
+    // appears and the file is gone.
+    tree.hidden.set(false);
+    fatal(new_game_error(
+        &tree,
+        data(),
+        &mut Output::default(),
+        |audio| {
+            tree.hidden.set(true);
+            audio.sounds = Some(SoundSystem::new(32));
+        },
+    ));
 }

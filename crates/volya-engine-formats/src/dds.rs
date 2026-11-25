@@ -349,6 +349,11 @@ fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 
+/// What this decoder does not read (not a fault of the file).
+fn unsupported(message: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::Unsupported, message.into())
+}
+
 fn u32_at(bytes: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
 }
@@ -374,7 +379,7 @@ impl<'a> Dds<'a> {
             return Err(invalid(format!("DDS size {width}×{height}")));
         }
         if caps2 & CAPS2_VOLUME != 0 {
-            return Err(invalid("volume DDS textures are not supported"));
+            return Err(unsupported("volume DDS textures are not supported"));
         }
         let format = if pf_flags & PF_FOURCC != 0 {
             match &fourcc.to_le_bytes() {
@@ -382,7 +387,7 @@ impl<'a> Dds<'a> {
                 b"DXT3" => Format::Bc2,
                 b"DXT5" => Format::Bc3,
                 other => {
-                    return Err(invalid(format!(
+                    return Err(unsupported(format!(
                         "unsupported DDS format {:?}",
                         String::from_utf8_lossy(other)
                     )));
@@ -475,7 +480,9 @@ impl<'a> Dds<'a> {
 
 fn masked_format(flags: u32, bits: u32, [r, g, b, a]: [u32; 4]) -> io::Result<Format> {
     if !matches!(bits, 8 | 16 | 24 | 32) {
-        return Err(invalid(format!("unsupported DDS texel size {bits} bits")));
+        return Err(unsupported(format!(
+            "unsupported DDS texel size {bits} bits"
+        )));
     }
     let alpha = if flags & (PF_ALPHAPIXELS | PF_ALPHA) != 0 {
         a
@@ -507,7 +514,7 @@ fn masked_format(flags: u32, bits: u32, [r, g, b, a]: [u32; 4]) -> io::Result<Fo
             a,
         }
     } else {
-        return Err(invalid(format!(
+        return Err(unsupported(format!(
             "unsupported DDS pixel format flags {flags:#x}"
         )));
     };

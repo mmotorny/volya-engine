@@ -169,6 +169,21 @@ fn player_round_trips_with_each_physics_form() {
         );
         let long = [&upd[..], &[0]].concat();
         assert!(ObjectRecord::parse(&spawn("actor", 6, &state), &long, "O_ACTOR", true).is_err());
+        // Bytes after the fields, in the state and in either packet, are
+        // left unread by the lenient reader; a truncation still fails it.
+        let long_state = spawn("actor", 6, &[&state[..], &[0]].concat());
+        let long_spawn = [&spawn("actor", 6, &state)[..], &[0]].concat();
+        for (s, u) in [
+            (&long_state, &upd),
+            (&long_spawn, &upd),
+            (&spawn("actor", 6, &state), &long),
+        ] {
+            assert!(ObjectRecord::parse(s, u, "O_ACTOR", true).is_err());
+            let lenient = ObjectRecord::parse_allowing_trailing(s, u, "O_ACTOR", true).unwrap();
+            assert_eq!(lenient.object, r.object);
+        }
+        let spawn = spawn("actor", 6, &state);
+        assert!(ObjectRecord::parse_allowing_trailing(&spawn, truncated, "O_ACTOR", true).is_err());
     }
 }
 

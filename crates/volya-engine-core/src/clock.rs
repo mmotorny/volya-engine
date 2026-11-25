@@ -16,12 +16,6 @@ pub use volya_engine_formats::sav::GameTime;
 /// (section 12's formula counts whole days, then the clock time).
 pub const DAY_MS: u64 = 86_400_000;
 
-/// `[alife]` values when `config\alife.ltx` lacks them (our choice: the
-/// shipped values, sav.md section 15).
-const DEFAULT_TIME_FACTOR: f32 = 10.0;
-const DEFAULT_START: (u32, u32, u32) = (1, 5, 2012);
-const DEFAULT_START_TIME: (u32, u32, u32) = (5, 30, 0);
-
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
@@ -58,24 +52,20 @@ impl GameClock {
     /// The clock of a New Game (section 5): `[alife]` of `alife`
     /// (`config\alife.ltx`): the time from `start_date` (day.month.year) and
     /// `start_time` (h:m:s), both factors from `time_factor` and
-    /// `normal_time_factor`. A missing key takes the shipped value (our
-    /// choice); a malformed one fails.
+    /// `normal_time_factor`. All four are read: a missing one is fatal
+    /// (ltx-config.md 11); a malformed one fails.
     pub fn new_game(alife: &Config) -> io::Result<Self> {
-        let get = |key: &str| alife.get("alife", key).flatten();
-        let parse = |key: &str, sep: char, default| match get(key) {
-            None => Ok(default),
-            Some(text) => three(text, sep)
-                .ok_or_else(|| invalid(format!("[alife] {key} = {text}: malformed"))),
+        let get = |key: &str| alife.read("alife", key);
+        let parse = |key: &str, sep: char| -> io::Result<(u32, u32, u32)> {
+            let text = get(key)?;
+            three(text, sep).ok_or_else(|| invalid(format!("[alife] {key} = {text}: malformed")))
         };
-        let (day, month, year) = parse("start_date", '.', DEFAULT_START)?;
-        let (hour, minute, second) = parse("start_time", ':', DEFAULT_START_TIME)?;
-        let factor = |key: &str, default: f32| get(key).map_or(default, value::float);
-        let time_factor = factor("time_factor", DEFAULT_TIME_FACTOR);
+        let (day, month, year) = parse("start_date", '.')?;
+        let (hour, minute, second) = parse("start_time", ':')?;
         Ok(Self::new(GameTime {
             time: sav::game_time(year, month, day, hour, minute, second, 0)?,
-            time_factor,
-            // Our choice when absent: the time factor.
-            normal_time_factor: factor("normal_time_factor", time_factor),
+            time_factor: value::float(get("time_factor")?),
+            normal_time_factor: value::float(get("normal_time_factor")?),
         }))
     }
 
@@ -131,6 +121,10 @@ mod tests {
         volya_engine_formats::ltx::parse(format!("[alife]\n{text}").as_bytes()).unwrap()
     }
 
+    /// The shipped `[alife]` time keys (sav.md section 15).
+    const SHIPPED: &str = "time_factor = 10\nnormal_time_factor = 10\nstart_date = 01.05.2012\n\
+                           start_time = 05:30:00 ; comment\n";
+
     #[test]
     fn starts_at_the_new_game_time() {
         // sav.md section 15.
@@ -148,15 +142,30 @@ mod tests {
         assert_eq!(clock.game_time().normal_time_factor, 10.0);
         assert_eq!(clock.time_of_day(), 19_800.0);
         assert!(!clock.paused());
-        // Missing keys: the shipped values.
-        assert_eq!(GameClock::new_game(&alife("")).unwrap(), clock);
-        assert!(GameClock::new_game(&alife("start_date = 1.13.2012\n")).is_err());
-        assert!(GameClock::new_game(&alife("start_time = 5h\n")).is_err());
+        // ltx-config.md 11: a missing key is fatal.
+        for key in [
+            "time_factor",
+            "normal_time_factor",
+            "start_date",
+            "start_time",
+        ] {
+            let without: String = SHIPPED
+                .lines()
+                .filter(|l| !l.starts_with(key))
+                .map(|l| format!("{l}\n"))
+                .collect();
+            let err = GameClock::new_game(&alife(&without)).unwrap_err();
+            assert!(err.to_string().contains(key), "{err}");
+        }
+        let bad = SHIPPED.replace("01.05.2012", "1.13.2012");
+        assert!(GameClock::new_game(&alife(&bad)).is_err());
+        let bad = SHIPPED.replace("05:30:00", "5h");
+        assert!(GameClock::new_game(&alife(&bad)).is_err());
     }
 
     #[test]
     fn advances_at_the_time_factor() {
-        let mut clock = GameClock::new_game(&alife("")).unwrap();
+        let mut clock = GameClock::new_game(&alife(SHIPPED)).unwrap();
         let start = clock.time();
         clock.advance(1000);
         assert_eq!(clock.time() - start, 10_000);
@@ -185,7 +194,7 @@ mod tests {
 
     #[test]
     fn stands_still_while_paused() {
-        let mut clock = GameClock::new_game(&alife("")).unwrap();
+        let mut clock = GameClock::new_game(&alife(SHIPPED)).unwrap();
         let start = clock.time();
         clock.set_paused(true);
         clock.advance(60_000);

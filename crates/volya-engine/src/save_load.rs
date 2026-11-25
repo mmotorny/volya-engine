@@ -36,7 +36,7 @@ use crate::saved_games::{SaveRow, SavedGames};
 use crate::scene::Scene;
 use volya_engine_formats::game_graph::GameGraph;
 use volya_engine_formats::object::{self, Object, ObjectRecord};
-use volya_engine_formats::sav::Save;
+use volya_engine_formats::sav::{self, MenuData};
 use volya_engine_formats::text::font::{Font, UiFont};
 use volya_engine_formats::text::layout::TextBox;
 use volya_engine_formats::ui::layout::{HAlign, Rect, StaticDesc, VAlign, require};
@@ -938,6 +938,8 @@ struct Screen {
     stubbed: Vec<Stubbed>,
     /// The save screen's name field, a d-pad target (our design, #94).
     field: Option<Rect>,
+    /// A fatal error met, until the menu takes it.
+    fatal: Option<String>,
 }
 
 impl Screen {
@@ -955,6 +957,7 @@ impl Screen {
             left_was_held: false,
             stubbed: Vec::new(),
             field: None,
+            fatal: None,
         }
     }
 
@@ -999,11 +1002,13 @@ impl Screen {
         activated
     }
 
+    /// A box the data lacks is fatal (ui-layout.md 1.4: elements a builder
+    /// requires must exist).
+    // TODO(#339): 1.4 says "error", not fatal.
     fn show(&mut self, data: &GameData, sl: &SaveLoadData, name: &str, purpose: BoxFor) {
-        // A box the data lacks is not shown (the real-data test checks
-        // they all exist).
-        if let Ok(desc) = sl.message_box(data, name) {
-            self.message = Some((MessageBox::new(desc, self.cursor), purpose));
+        match sl.message_box(data, name) {
+            Ok(desc) => self.message = Some((MessageBox::new(desc, self.cursor), purpose)),
+            Err(e) => self.fatal = Some(format!("{name}: {e}")),
         }
     }
 
@@ -1186,6 +1191,11 @@ impl SaveScreen {
 
     pub fn cursor(&self) -> [f32; 2] {
         self.screen.cursor
+    }
+
+    /// A fatal error met since the last call.
+    pub fn take_fatal(&mut self) -> Option<String> {
+        self.screen.fatal.take()
     }
 
     /// The name field's rectangle (UI units) and whether it has focus, for
@@ -1442,29 +1452,29 @@ fn game_graph(tree: &dyn Vfs, data: &GameData) -> io::Result<GameGraph> {
 impl SaveInfo {
     /// What sav.md section 11.4 reads from save file `file`: chunk 5's game
     /// time, the first object record's (the player's) health and the level
-    /// of its game-graph vertex; for a file that is not valid, or one whose
-    /// first record cannot be read (our choice), the defaults
-    /// ([`SaveInfo::defaults`]).
+    /// of its game-graph vertex; for a file that is not valid (section 2),
+    /// the defaults ([`SaveInfo::defaults`]). An error reading what the menu
+    /// reads of a valid one is fatal (sections 3, 7.1: an assertion stops the
+    /// game); the rest of the file is not read, and bytes after the record's
+    /// fields are left unread ([`ObjectRecord::parse_allowing_trailing`]).
     pub fn read(tree: &dyn Vfs, data: &GameData, file: &[u8]) -> io::Result<Self> {
-        match Self::read_valid(tree, data, file) {
-            Ok(info) => Ok(info),
-            Err(_) => Self::defaults(tree, data),
+        if !sav::is_valid(file) {
+            return Self::defaults(tree, data);
         }
+        Self::read_valid(tree, data, file)
     }
 
     fn read_valid(tree: &dyn Vfs, data: &GameData, file: &[u8]) -> io::Result<Self> {
-        let save = Save::read(file)?;
-        let first = save
-            .objects
-            .first()
-            .ok_or_else(|| invalid("saved game without objects"))?;
+        let save = MenuData::read(file)?;
+        let first = &save.first;
         let section = object::section(&first.spawn)?;
         let class = data
             .system
             .get(&section, "class")
             .flatten()
             .ok_or_else(|| invalid(format!("[{section}] without class")))?;
-        let record = ObjectRecord::parse(&first.spawn, &first.update, class, true)?;
+        let record =
+            ObjectRecord::parse_allowing_trailing(&first.spawn, &first.update, class, true)?;
         let Object::Player(player) = record.object else {
             return Err(invalid("the first record is not the player's"));
         };
@@ -1577,6 +1587,11 @@ impl LoadScreen {
         self.screen.cursor
     }
 
+    /// A fatal error met since the last call.
+    pub fn take_fatal(&mut self) -> Option<String> {
+        self.screen.fatal.take()
+    }
+
     /// One frame at `now`; reads saves' information from `saves` and the
     /// game data from `tree`.
     #[allow(clippy::too_many_arguments)]
@@ -1668,9 +1683,10 @@ impl LoadScreen {
                 // A file that cannot be read shows what a file that is not
                 // valid shows (our choice).
                 let file = file.unwrap_or_default();
-                self.data_text = SaveInfo::read(tree, data, &file)
-                    .map(|i| i.text(data))
-                    .unwrap_or_default();
+                match SaveInfo::read(tree, data, &file) {
+                    Ok(info) => self.data_text = info.text(data),
+                    Err(e) => self.screen.fatal = Some(e.to_string()),
+                }
             }
         }
     }

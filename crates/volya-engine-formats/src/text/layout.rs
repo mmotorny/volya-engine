@@ -203,6 +203,8 @@ pub fn split_complex(text: &[u8], base: Color, defs: &ColorDefs) -> Result<Vec<S
     Ok(segments)
 }
 
+// TODO(#339): section 4.3 makes a missing comma an "error", not fatal; the
+// caller's error is fatal through `App::scene`.
 fn code_color(content: &[u8], base: Color, defs: &ColorDefs) -> Result<Color, String> {
     let name = crate::cp1251::decode(content);
     if name == "default" {

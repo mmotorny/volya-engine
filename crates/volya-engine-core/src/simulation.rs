@@ -1071,22 +1071,23 @@ fn is_actor(record: &ObjectRecord) -> bool {
 fn travel_config(record: &ObjectRecord, system: &Config) -> io::Result<travel::TravelConfig> {
     let section = &record.header.section;
     let get = |key: &str| system.get(section, key).flatten();
-    // A missing `going_speed` is 0, so the object does not travel (our
-    // choice).
-    let going_speed = get("going_speed").map_or(0.0, value::float);
+    // `going_speed`, `smart_terrain_choose_interval` and (without the
+    // custom data's) `terrain` are read: a missing one is fatal
+    // (ltx-config.md 11); `current_level_going_speed` defaults to
+    // `going_speed` (7.4).
+    let read = |key: &str| system.read(section, key);
+    let going_speed = value::float(read("going_speed")?);
     let current_level_going_speed =
         get("current_level_going_speed").map_or(going_speed, value::float);
-    // A missing or malformed interval is 0 (our choice).
-    let choose_interval = get("smart_terrain_choose_interval")
-        .and_then(interval_ms)
-        .unwrap_or(0);
+    // A malformed interval is 0 (our choice; 7.2 gives only the format).
+    let choose_interval = interval_ms(read("smart_terrain_choose_interval")?).unwrap_or(0);
     let custom = &record.object.object_block().custom_data;
     let custom = volya_engine_formats::cp1251::encode(custom)
         .and_then(|b| ltx::parse(&b).ok())
         .unwrap_or_default();
     let masks: Vec<TerrainMask> = match custom.get("alife", "terrain").flatten() {
         Some(t) => terrain_masks(t, &custom),
-        None => terrain_masks(get("terrain").unwrap_or(""), system),
+        None => terrain_masks(read("terrain")?, system),
     };
     Ok(travel::TravelConfig {
         going_speed,

@@ -17,27 +17,27 @@ use volya_engine_formats::ltx;
 
 const XGA: Resolution = Resolution::new(1024, 768);
 
-const ITEMS: &str = "\
+pub(crate) const ITEMS: &str = "\
     [inventory]\nmax_weight = 50\nmax_belt = 5\nslot_persistent_1 = true\n\
     slot_persistent_4 = true\nslot_persistent_5 = true\nslot_persistent_6 = true\n\
     slot_persistent_8 = true\nslot_persistent_9 = true\nslot_persistent_10 = true\n\
-    [wpn_ak74]\nclass = WP_AK74\nslot = 2\ninv_weight = 3\ninv_grid_x = 5\ninv_grid_y = 5\n\
+    [wpn_ak74]\nclass = WP_AK74\ninv_name = wpn_ak74\ncost = 10\nvisual = v\nscope_status = 0\nsilencer_status = 0\ngrenade_launcher_status = 0\nslot = 2\ninv_weight = 3\ninv_grid_x = 5\ninv_grid_y = 5\n\
     inv_grid_width = 5\ninv_grid_height = 2\n\
-    [wpn_pm]\nclass = WP_PM\nslot = 1\ninv_weight = 1\ninv_grid_x = 0\ninv_grid_y = 0\n\
+    [wpn_pm]\nclass = WP_PM\ninv_name = wpn_pm\ncost = 10\nvisual = v\nscope_status = 0\nsilencer_status = 0\ngrenade_launcher_status = 0\nslot = 1\ninv_weight = 1\ninv_grid_x = 0\ninv_grid_y = 0\n\
     inv_grid_width = 2\ninv_grid_height = 1\n\
-    [medkit]\nclass = II_MEDKI\ninv_weight = 0.3\ninv_grid_x = 6\ninv_grid_y = 14\n\
+    [medkit]\nclass = II_MEDKI\ninv_name = medkit\ncost = 10\nvisual = v\ninv_weight = 0.3\ninv_grid_x = 6\ninv_grid_y = 14\n\
     inv_grid_width = 2\ninv_grid_height = 1\neat_health = 0.6\neat_power = 0\neat_satiety = 0\n\
     eat_radiation = -0.1\nwounds_heal_perc = 0.3\neat_portions_num = 1\n\
-    [bread]\nclass = II_FOOD\nslot = 4\ninv_weight = 0.3\ninv_grid_x = 0\ninv_grid_y = 2\n\
+    [bread]\nclass = II_FOOD\ninv_name = bread\ncost = 10\nvisual = v\nslot = 4\ninv_weight = 0.3\ninv_grid_x = 0\ninv_grid_y = 2\n\
     inv_grid_width = 1\ninv_grid_height = 1\neat_health = 0.05\neat_power = 0\n\
     eat_satiety = 0.2\neat_radiation = 0\nwounds_heal_perc = 0\neat_portions_num = -1\n\
-    [novice_outfit]\nclass = E_STLK\nslot = 6\ninv_weight = 3\ninv_grid_x = 0\n\
+    [novice_outfit]\nclass = E_STLK\ninv_name = novice_outfit\ncost = 10\nfull_icon_name = npc_icon_without_outfit\nburn_protection = 0\nshock_protection = 0\nstrike_protection = 0\nwound_protection = 0\nradiation_protection = 0\ntelepatic_protection = 0\nchemical_burn_protection = 0\nexplosion_protection = 0\nfire_wound_protection = 0\nvisual = v\nadditional_inventory_weight = 0\nadditional_inventory_weight2 = 0\nslot = 6\ninv_weight = 3\ninv_grid_x = 0\n\
     inv_grid_y = 18\ninv_grid_width = 2\ninv_grid_height = 2\n\
-    [af_medusa]\nclass = ARTEFACT\nbelt = true\ninv_weight = 0.5\ninv_grid_x = 1\n\
+    [af_medusa]\nclass = ARTEFACT\ninv_name = af_medusa\ncost = 10\nvisual = v\nbelt = true\ninv_weight = 0.5\ninv_grid_x = 1\n\
     inv_grid_y = 1\ninv_grid_width = 1\ninv_grid_height = 1\n\
-    [quest_doc]\nclass = II_DOC\nquest_item = true\ninv_weight = 0.1\ninv_grid_x = 1\n\
+    [quest_doc]\nclass = II_DOC\ninv_name = quest_doc\ncost = 10\nvisual = v\nquest_item = true\ninv_weight = 0.1\ninv_grid_x = 1\n\
     inv_grid_y = 3\ninv_grid_width = 1\ninv_grid_height = 1\n\
-    [grenade_f1]\nclass = G_F1\nslot = 3\ninv_weight = 0.6\ninv_grid_x = 0\ninv_grid_y = 4\n\
+    [grenade_f1]\nclass = G_F1\ninv_name = grenade_f1\ncost = 10\nvisual = v\nslot = 3\ninv_weight = 0.6\ninv_grid_x = 0\ninv_grid_y = 4\n\
     inv_grid_width = 1\ninv_grid_height = 1\n";
 
 pub(crate) fn items() -> Config {
@@ -726,12 +726,85 @@ fn bars_follow_their_values_and_jump_from_nothing_drawn() {
 #[test]
 fn only_class_ammo_counts_rounds() {
     let system = ltx::parse(
-        b"[ammo_5.45x39_fmj]\nclass = AMMO\ninv_weight = 0.3\n\
-          [ammo_vog-25]\nclass = A_VOG25\ninv_weight = 0.3\n",
+        b"[ammo_5.45x39_fmj]\nclass = AMMO\ninv_weight = 0.3\nvisual = v\n\
+          [ammo_vog-25]\nclass = A_VOG25\ninv_weight = 0.3\nvisual = v\n",
     )
     .unwrap();
     let item =
         |s| InventoryItem::create(ItemConfig::read(&system, s).unwrap(), 1, None, 0, "actor");
     assert!(list::is_ammunition(&item("ammo_5.45x39_fmj")));
     assert!(!list::is_ammunition(&item("ammo_vog-25")));
+}
+
+/// ltx-config.md 11: the panel's `inv_name` and `cost` (4.6) and the worn
+/// outfit's `full_icon_name` (4.4) are read, so a missing one is fatal.
+#[test]
+fn a_missing_panel_key_is_fatal() {
+    let mut run = Run::open(&[("bread", 5, 3)]);
+    let without = ITEMS.replace("inv_name = bread\n", "");
+    assert_ne!(without, ITEMS);
+    run.data.system = ltx::parse(without.as_bytes()).unwrap();
+    let err = run
+        .screen
+        .select(&run.data, &run.character.inventory, Some(5))
+        .unwrap_err();
+    assert!(err.to_string().contains("inv_name"), "{err}");
+    let without = ITEMS.replace("cost = 10\n", "");
+    run.data.system = ltx::parse(without.as_bytes()).unwrap();
+    let err = run
+        .screen
+        .select(&run.data, &run.character.inventory, Some(5))
+        .unwrap_err();
+    assert!(err.to_string().contains("cost"), "{err}");
+}
+
+/// 4.2: an installed attachable addon is drawn with the icon of the section
+/// the weapon's `scope_name` names; that section lacking a grid key is
+/// fatal.
+#[test]
+fn an_addon_section_without_its_grid_keys_is_fatal() {
+    use crate::core::character::inventory::{ADDON_SCOPE, ItemState};
+    let mut r = Run::open(&[("wpn_pm", 1, 3)]);
+    let item = &mut r.character.inventory.items[0];
+    item.config.scope_status = 2;
+    let ItemState::Weapon(w) = &mut item.state else {
+        panic!("{:?}", item.state)
+    };
+    w.installed_addons |= ADDON_SCOPE;
+    let draw = |r: &mut Run, scope: &str| {
+        r.data.system = ltx::parse(
+            format!(
+                "{}{scope}",
+                ITEMS.replace(
+                    "[wpn_pm]\n",
+                    "[wpn_pm]\nscope_name = wpn_scope\nscope_x = 10\nscope_y = 5\n"
+                )
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let mut assets = fixture::assets();
+        let mut ctx = Ctx {
+            tree: &r.tree,
+            data: &r.data,
+            assets: &mut assets,
+            resolution: XGA,
+            clock_ms: 0,
+        };
+        let mut scene = Scene::new(XGA);
+        r.screen
+            .draw(&mut ctx, &mut scene, &r.character)
+            .map(|()| scene.layer("dragdrop_bag addon").count())
+    };
+    let grid = "[wpn_scope]\ninv_grid_x = 0\ninv_grid_y = 0\ninv_grid_width = 1\n";
+    assert_eq!(
+        draw(&mut r, &format!("{grid}inv_grid_height = 1\n")).unwrap(),
+        1
+    );
+    let err = draw(&mut r, grid).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("[wpn_scope] lacks inv_grid_height"),
+        "{err}"
+    );
 }

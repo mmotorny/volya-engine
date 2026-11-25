@@ -26,11 +26,11 @@ const SYSTEM: &str = "\
     scope_status = 1\nsilencer_status = 0\ngrenade_launcher_status = 0\n\
     visual = weapons\\binoculars\\wpn_binoculars.ogf\n\
     [device_pda]\nclass = D_PDA\nslot = 7\ninv_weight = 0.3\nvisual = equipments\\item_pda\n\
-    [bolt]\nclass = II_BOLT\nslot = 5\ninv_weight = 0\n\
-    [medkit]\nclass = II_MEDKI\ninv_weight = 0.1\neat_health = 0.6\neat_power = 0.0\n\
+    [bolt]\nclass = II_BOLT\nvisual = v\nslot = 5\ninv_weight = 0\n\
+    [medkit]\nclass = II_MEDKI\nvisual = v\ninv_weight = 0.1\neat_health = 0.6\neat_power = 0.0\n\
     eat_satiety = 0\neat_radiation = -0.1\nwounds_heal_perc = 0.3\neat_portions_num = 1\n\
     eat_max_power = 0.1\n\
-    [heavy]\nclass = II_MEDKI\ninv_weight = 60\n";
+    [heavy]\nclass = II_MEDKI\nvisual = v\ninv_weight = 60\n";
 
 /// The player's custom data (2.1), CR LF line ends.
 const CUSTOM_DATA: &str = "[dont_spawn_character_supplies]\r\n\r\n[spawn]\r\nwpn_binoc\r\n\

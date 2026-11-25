@@ -173,6 +173,8 @@ pub struct LevelScreen {
     collision: Arc<CollisionWorld>,
     /// The level's sound data until the app creates its sounds.
     sound_data: Option<LevelSoundData>,
+    /// A fatal error met while the level ran, until the app takes it.
+    fatal: Option<String>,
     /// The player's footsteps (S11); `None` only in the unit tests' empty
     /// level.
     footsteps: Option<PlayerFootsteps>,
@@ -503,7 +505,9 @@ fn start_weather(tree: &dyn Vfs, data: &GameData, level: &str) -> io::Result<Str
     Ok(game
         .get(level, "weathers")
         .flatten()
-        // Our choice when the level has no `weathers` key.
+        // TODO(#330): level-loading.md 2.6 has the weather script read the
+        // key, but not whether it checks for it first; `default` without
+        // it is our choice.
         .unwrap_or("default")
         .to_owned())
 }
@@ -763,6 +767,33 @@ struct Resolved {
     definitions: HashMap<String, shaders_xr::Definition>,
 }
 
+/// Every entry of the shader table is created at load, in table order,
+/// whether or not a draw uses it (level.md 3): what is fatal for one fails
+/// the load (static-shading.md 3.4, 4.2, 7), and each texture of a surface
+/// is located.
+fn create_table(
+    library: &ShaderLibrary,
+    shaders: &[String],
+    locate: &mut dyn FnMut(String) -> io::Result<String>,
+) -> io::Result<()> {
+    for entry in shaders.iter().filter(|e| !e.is_empty()) {
+        match library.resolve(entry) {
+            Err(shading::NotDrawn::Fatal(why)) => {
+                return Err(invalid(format!("shader {entry:?}: {why}")));
+            }
+            Ok(surface) => {
+                for t in surface.textures.into_iter().flatten().chain(surface.env) {
+                    locate(t)?;
+                }
+            }
+            // TODO(#332): which textures a class this engine
+            // does not draw loads, and so whether they exist, is unchecked.
+            Err(shading::NotDrawn::Unsupported(_)) => {}
+        }
+    }
+    Ok(())
+}
+
 /// The surfaces of the shader entries `draw_items` use and of the objects'
 /// entries `object_entries` (level-objects.md 5.2: a model mesh's pair
 /// resolves like an entry of the shader table; only the model programs
@@ -805,6 +836,7 @@ fn resolve_surfaces(
         paths.insert(name, path.clone());
         Ok(path)
     };
+    create_table(&library, shaders, &mut locate)?;
     let mut surfaces = Vec::new();
     let mut by_entry: HashMap<String, Result<u32, String>> = HashMap::new();
     let mut resolve = |entry: &str, model: bool| -> io::Result<Result<u32, String>> {
@@ -812,6 +844,10 @@ fn resolve_surfaces(
             return Ok(s.clone());
         }
         let surface = match library.resolve(entry) {
+            // static-shading.md 3.4, 7.1, 7.4: the level does not load.
+            Err(shading::NotDrawn::Fatal(why)) => {
+                return Err(invalid(format!("shader {entry:?}: {why}")));
+            }
             Ok(surface) if surface.program.is_model() != model => Err(if model {
                 "not a model shader".to_owned()
             } else {
@@ -831,7 +867,7 @@ fn resolve_surfaces(
                 surfaces.push(resolved);
                 Ok(surfaces.len() as u32 - 1)
             }
-            Err(why) => Err(why),
+            Err(why) => Err(why.to_string()),
         };
         by_entry.insert(entry.to_owned(), surface.clone());
         Ok(surface)
@@ -1142,6 +1178,8 @@ impl NewGameLoad {
                 let weather = Weather::load(&data.system, &weather_name)?;
                 // The level's sound data (docs/behavior/level-sound-scope.md),
                 // placed under this caption by us, with the weather it needs.
+                // Its files are checked now, with or without audio output
+                // (S1 section 5: fatal at level load).
                 let mut sound = LevelSoundData::read(tree, data, &dir, name, &weather)?;
                 // The player's footsteps (S11) on its cycles (S10), placed
                 // under this caption by us, with the player's movement.
@@ -1157,6 +1195,7 @@ impl NewGameLoad {
                     cycles,
                 )?);
                 sound.pairs = Some(pairs);
+                sound.check(tree, &data.aliases)?;
                 self.sound = Some(sound);
                 self.weather = Some(weather);
                 let level_objects = std::mem::take(&mut self.level_objects);
@@ -1213,7 +1252,7 @@ impl NewGameLoad {
                 let mut sections = Vec::with_capacity(weather.sections.len());
                 let mut flares = Vec::with_capacity(weather.sections.len());
                 for (_, s) in &weather.sections {
-                    let mut f = Flares::read(&data.system, &s.flares);
+                    let mut f = Flares::read(&data.system, &s.flares)?;
                     if let Some(sun) = &mut f.sun {
                         sun.texture = locate(&sun.texture)?;
                     }
@@ -1356,6 +1395,7 @@ impl NewGameLoad {
             }),
             collision: Arc::new(collision),
             sound_data: self.sound,
+            fatal: None,
             footsteps: Some(footsteps),
             sky_visibility: SkyVisibility::default(),
             player,
@@ -1588,8 +1628,8 @@ impl LevelScreen {
     /// with the actor where the player stands, at the clock's game time,
     /// and the objects' visuals following what switched. Runs only in
     /// [`LevelScreen::update`], so it stands still while the game is paused
-    /// or the page hidden. A simulation error leaves the objects as they
-    /// are (our choice: the frame goes on).
+    /// or the page hidden. A simulation error is fatal (offline-simulation.md
+    /// 6.2, level-objects.md 2.3): kept for [`LevelScreen::take_fatal`].
     fn simulate(&mut self) {
         let Some(sim) = &mut self.simulation else {
             return;
@@ -1600,9 +1640,20 @@ impl LevelScreen {
             self.clock.game_time().normal_time_factor,
             hour(&self.clock),
         );
-        if let Ok(changes) = changes {
-            self.place_objects(&changes);
+        match changes {
+            Ok(changes) => self.place_objects(&changes),
+            Err(e) => self.record_fatal(e.to_string()),
         }
+    }
+
+    /// Keeps the first fatal error met while the level runs.
+    pub(crate) fn record_fatal(&mut self, error: String) {
+        self.fatal.get_or_insert(error);
+    }
+
+    /// A fatal error met while the level ran, once.
+    pub fn take_fatal(&mut self) -> Option<String> {
+        self.fatal.take()
     }
 
     /// Shows the instances of objects that came online, at their records'
@@ -1901,14 +1952,21 @@ impl LevelScreen {
         use crate::core::movement::Bobbing;
         let weather = Weather::load(
             &volya_engine_formats::ltx::parse(
-                b"[weathers]\ndefault = cycle\n[cycle]\n00:00:00 = w\n[w]\nfar_plane = 100\n",
+                b"[weathers]\ndefault = cycle\n[cycle]\n00:00:00 = w\n[w]\nfar_plane = 100\n\
+                  ambient = 0\nhemi_color = 0\nsun_color = 0\nsun_dir = 0\nfog_color = 0\n\
+                  fog_distance = 0\nfog_density = 0\nsky_texture = s\nsky_color = 0\n\
+                  clouds_texture = c\nclouds_color = 0\nflares =\nrain_density = 0\nthunderbolt =\n",
             )
             .expect("weather"),
             "default",
         )
         .expect("weather");
-        let clock = GameClock::new_game(&volya_engine_formats::ltx::parse(b"").expect("alife"))
-            .expect("clock");
+        let alife = volya_engine_formats::ltx::parse(
+            b"[alife]\ntime_factor = 10\nnormal_time_factor = 10\nstart_date = 01.05.2012\n\
+              start_time = 05:30:00\n",
+        )
+        .expect("alife");
+        let clock = GameClock::new_game(&alife).expect("clock");
         let movement = MovementConfig {
             walk_accel: 17.0,
             run_coef: 2.1,
@@ -1974,6 +2032,7 @@ impl LevelScreen {
                 CollisionWorld::new(Default::default(), Vec::new()).expect("collision"),
             ),
             sound_data: None,
+            fatal: None,
             footsteps: None,
             sky_visibility: SkyVisibility::default(),
             player,
@@ -1995,5 +2054,54 @@ impl LevelScreen {
             view_size: std::cell::Cell::new((1024, 768)),
             effects_drawn: true,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use volya_engine_formats::shaders_xr::Definition;
+
+    /// level.md 3: an entry no draw uses is still created, so one the
+    /// library lacks (static-shading.md 3.4) or with too few textures (7.1)
+    /// fails the load; a good one has its textures located.
+    #[test]
+    fn an_unused_shader_table_entry_fails_the_load() {
+        let definitions: HashMap<String, Definition> = [(
+            "default".to_owned(),
+            Definition {
+                tag: "LM      ".into(),
+                name: "default".into(),
+                version: 1,
+                properties: Vec::new(),
+            },
+        )]
+        .into();
+        let associations = HashMap::new();
+        let library = ShaderLibrary {
+            definitions: &definitions,
+            scripted: &|_| false,
+            associations: &associations,
+        };
+        let create = |entries: &[&str]| {
+            let shaders: Vec<String> = entries.iter().map(|&e| e.to_owned()).collect();
+            let mut located = Vec::new();
+            create_table(&library, &shaders, &mut |t| {
+                located.push(t.clone());
+                Ok(t)
+            })
+            .map(|()| located)
+        };
+        assert_eq!(
+            create(&["", "default/a,lmap#1_1,lmap#1_2"]).unwrap(),
+            ["a", "lmap#1_1", "lmap#1_2"]
+        );
+        let err = create(&["default/a,lmap#1_1,lmap#1_2", "nothing/x"]).unwrap_err();
+        assert!(
+            err.to_string().contains("nothing not found in library"),
+            "{err}"
+        );
+        let err = create(&["default/a,lmap#1_1"]).unwrap_err();
+        assert!(err.to_string().contains("Not enought textures"), "{err}");
     }
 }

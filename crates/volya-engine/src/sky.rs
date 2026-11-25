@@ -6,10 +6,16 @@
 //! (7.2–7.4). The lens flares and the gradient (7.4) are not drawn: they fade
 //! with the sun's occlusion by the collision mesh, which is not loaded.
 
+use std::io;
+
 use crate::core::camera::Vec3;
 use crate::core::config::{Config, value};
 use crate::core::weather::Environment;
 use crate::render::sky::SkyFrame;
+
+fn invalid(message: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message.into())
+}
 
 /// The sun sprite of a lens-flare section (section 7.2).
 #[derive(Clone, Debug, PartialEq)]
@@ -34,23 +40,77 @@ pub struct Flares {
 }
 
 impl Flares {
-    /// Section `name` of `config`. A section that does not exist (or an
-    /// empty name) has no sun and reads its times as 0 (the specs do not say
-    /// what its rates are; our choice).
-    pub fn read(config: &Config, name: &str) -> Self {
-        let section = config.section(name);
-        let get = |key: &str| section.and_then(|s| s.get(key).flatten()).unwrap_or("");
-        let rate = |key: &str| 1.0 / (value::float(get(key)).max(0.0) + 1e-7);
-        Self {
-            name: name.to_owned(),
-            rise: rate("blend_rise_time"),
-            down: rate("blend_down_time"),
-            sun: value::bool(get("source")).then(|| SunSource {
-                texture: crate::core::weather::texture_name(get("source_texture")),
-                radius: value::float(get("source_radius")),
-                ignore_color: value::bool(get("source_ignore_color")),
-            }),
+    /// Section `name` of `config` (section 7.2). Its keys are read, those
+    /// after `source`, `flares` and `gradient` only when that switch is on;
+    /// a missing section or key is fatal (ltx-config.md 11). An empty name
+    /// has no sun, flares or gradient (3.1).
+    // TODO(#330): sky.md 3.1 and 7.2 do not give the fade rates of an empty
+    // name (no section is read); 0 times are our choice.
+    pub fn read(config: &Config, name: &str) -> io::Result<Self> {
+        if name.is_empty() {
+            return Ok(Self {
+                name: String::new(),
+                rise: 1e7,
+                down: 1e7,
+                sun: None,
+            });
         }
+        let section = config
+            .section(name)
+            .ok_or_else(|| invalid(format!("no lens-flare section [{name}]")))?;
+        let get = |key: &str| section.read(key);
+        let rate = |key: &str| get(key).map(|v| 1.0 / (value::float(v).max(0.0) + 1e-7));
+        let switch = |key: &str, then: &[&str]| -> io::Result<bool> {
+            let on = value::bool(get(key)?);
+            if on {
+                for key in then {
+                    get(key)?;
+                }
+            }
+            Ok(on)
+        };
+        let source = switch(
+            "source",
+            &[
+                "source_shader",
+                "source_texture",
+                "source_radius",
+                "source_ignore_color",
+            ],
+        )?;
+        // Read, though not drawn (the module's note).
+        switch(
+            "flares",
+            &[
+                "flare_shader",
+                "flare_textures",
+                "flare_radius",
+                "flare_opacity",
+                "flare_position",
+            ],
+        )?;
+        switch(
+            "gradient",
+            &[
+                "gradient_shader",
+                "gradient_texture",
+                "gradient_radius",
+                "gradient_opacity",
+            ],
+        )?;
+        Ok(Self {
+            name: name.to_owned(),
+            rise: rate("blend_rise_time")?,
+            down: rate("blend_down_time")?,
+            sun: match source {
+                true => Some(SunSource {
+                    texture: crate::core::weather::texture_name(get("source_texture")?),
+                    radius: value::float(get("source_radius")?),
+                    ignore_color: value::bool(get("source_ignore_color")?),
+                }),
+                false => None,
+            },
+        })
     }
 }
 
@@ -267,18 +327,39 @@ mod tests {
         assert_eq!(sky_frame(&e, 4, &start, None, 0.0).clouds, None);
     }
 
+    /// ltx-config.md 11: a missing lens-flare section or key is fatal; a
+    /// switch's keys are read only when it is on (section 7.2).
+    #[test]
+    fn a_missing_flares_key_is_fatal() {
+        let config = volya_engine_formats::ltx::parse(
+            b"[a]\nsource = off\nflares = off\ngradient = off\nblend_rise_time = 1\n\
+              [b]\nsource = off\nflares = on\ngradient = off\nblend_rise_time = 1\n\
+              blend_down_time = 1\n",
+        )
+        .unwrap();
+        let err = Flares::read(&config, "a").unwrap_err();
+        assert!(err.to_string().contains("blend_down_time"), "{err}");
+        let err = Flares::read(&config, "b").unwrap_err();
+        assert!(err.to_string().contains("flare_shader"), "{err}");
+        assert!(Flares::read(&config, "none").is_err());
+        assert!(Flares::read(&config, "").unwrap().sun.is_none());
+    }
+
     #[test]
     fn the_fade_rises_then_falls_for_a_new_section() {
         let config = volya_engine_formats::ltx::parse(
-            b"[rise]\nsource = on\nsource_texture = fx\\fx_sun_rise.tga\nsource_radius = 0.03\n\
+            b"[rise]\nsource = on\nsource_shader = effects\\sun\n\
+              source_texture = fx\\fx_sun_rise.tga\nsource_radius = 0.03\n\
+              source_ignore_color = off\nflares = off\ngradient = off\n\
               blend_rise_time = 300\nblend_down_time = 100\n\
-              [day]\nblend_rise_time = 200\nblend_down_time = 200\n",
+              [day]\nsource = off\nflares = off\ngradient = off\n\
+              blend_rise_time = 200\nblend_down_time = 200\n",
         )
         .unwrap();
         let flares = [
-            Flares::read(&config, "rise"),
-            Flares::read(&config, "rise"),
-            Flares::read(&config, "day"),
+            Flares::read(&config, "rise").unwrap(),
+            Flares::read(&config, "rise").unwrap(),
+            Flares::read(&config, "day").unwrap(),
         ];
         assert_eq!(flares[0].sun.as_ref().unwrap().texture, "fx\\fx_sun_rise");
         assert!(flares[2].sun.is_none());

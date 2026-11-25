@@ -716,3 +716,36 @@ fn intervals() {
     assert_eq!(interval_ms("01:00:30"), Some(3_630_000));
     assert_eq!(interval_ms("15"), None);
 }
+
+/// ltx-config.md 11: a stalker's or monster's `going_speed`,
+/// `smart_terrain_choose_interval` and `terrain` are read (7.2, 7.4), so a
+/// missing one is fatal; `current_level_going_speed` defaults to
+/// `going_speed`.
+#[test]
+fn a_missing_travel_key_is_fatal() {
+    let records = || vec![actor([0.0, 0.0, 7.0], 2, 10), flesh(1, 0, 0, [0.0; 3])];
+    for key in ["going_speed", "smart_terrain_choose_interval", "terrain"] {
+        let without: String = SYSTEM
+            .lines()
+            .filter(|l| !l.starts_with(&format!("{key} =")))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        let system = ltx::parse(without.as_bytes()).unwrap();
+        let mut sim = Simulation::new(
+            Graph::new(world()),
+            PatrolPaths::default(),
+            config(0.5, 1.0),
+        );
+        let err = sim.load(records(), &system).unwrap_err();
+        assert!(err.to_string().contains(key), "{key}: {err}");
+    }
+    let lenient = SYSTEM.replace("current_level_going_speed = 1\n", "");
+    assert_ne!(lenient, SYSTEM);
+    let system = ltx::parse(lenient.as_bytes()).unwrap();
+    let mut sim = Simulation::new(
+        Graph::new(world()),
+        PatrolPaths::default(),
+        config(0.5, 1.0),
+    );
+    assert!(sim.load(records(), &system).is_ok());
+}

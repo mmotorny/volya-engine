@@ -138,7 +138,8 @@ pub struct GameData {
     /// video's.
     pub intro_lengths: Vec<f64>,
     /// The New Game intro `intro_game` of the same file
-    /// (loading-screen.md section 7), when the file defines it.
+    /// (loading-screen.md section 7), when the file defines it: a New Game
+    /// without it fails when it reaches the intro.
     pub intro_game: Option<MovieSequence>,
     /// Per `intro_game` item, as [`GameData::intro_lengths`].
     pub intro_game_lengths: Vec<f64>,
@@ -231,7 +232,10 @@ impl GameData {
             )
         })?;
         let intro = MovieSequence::read(intro, &colors).map_err(|e| context("intro_logo", e))?;
-        // Without it a New Game plays no intro (our choice).
+        // A New Game without it fails when it reaches the intro
+        // (loading-screen.md 7; `App`'s intro).
+        // TODO(#330): its files are measured here, at data load; the specs
+        // do not say when the original opens them.
         let intro_game = tutorials
             .find("intro_game", 0)
             .map(|e| MovieSequence::read(e, &colors).map_err(|e| context("intro_game", e)))

@@ -130,15 +130,17 @@ impl SetData {
             .section(name)
             .ok_or_else(|| invalid(format!("no ambient set [{name}]")))?;
         let get = |key: &str| section.get(key).flatten();
-        let pair = |key: &str| value::floats::<2>(get(key).unwrap_or(""));
+        // A pair, once read, must exist (ltx-config.md 11); a missing
+        // component is 0 (2.2).
+        let pair = |key: &str| section.read(key).map(value::floats::<2>);
         let sounds: Vec<String> = match section.get("sounds") {
             Some(v) => list_items(v).into_iter().map(str::to_owned).collect(),
             None => Vec::new(),
         };
         let has_sounds = section.contains("sounds");
         let (sound_period, sound_dist) = if has_sounds {
-            let [p0, p1] = pair("sound_period");
-            let [d0, d1] = pair("sound_dist");
+            let [p0, p1] = pair("sound_period")?;
+            let [d0, d1] = pair("sound_dist")?;
             (
                 Some((ms(p0), ms(p1))),
                 Some(if d0 > d1 { (d1, d0) } else { (d0, d1) }),
@@ -147,10 +149,13 @@ impl SetData {
             (None, None)
         };
         let effect_names = list_items(get("effects"));
-        let effect_period = (!effect_names.is_empty()).then(|| {
-            let [q0, q1] = pair("effect_period");
-            (ms(q0), ms(q1))
-        });
+        let effect_period = match effect_names.is_empty() {
+            true => None,
+            false => {
+                let [q0, q1] = pair("effect_period")?;
+                Some((ms(q0), ms(q1)))
+            }
+        };
         let effects = effect_names
             .iter()
             .map(|e| EffectData::read(config, e))

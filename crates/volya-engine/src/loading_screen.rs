@@ -313,27 +313,17 @@ impl LoadingScreen {
     /// caption, picture).
     pub(crate) fn draw(&self, ctx: &mut Ctx, scene: &mut Scene) -> io::Result<()> {
         let scale = ctx.scale();
-        let (w, h) = (ctx.resolution.width as f32, ctx.resolution.height as f32);
         let path = ctx
             .data
             .aliases
             .path("$game_textures$", &format!("{BACKGROUND}.dds"))?;
-        let Ok((tw, th)) = ctx.assets.image_size(ctx.tree, &path) else {
-            // Section 4.1: without the background's shader the screen is
-            // cleared to black and nothing else is drawn. A missing or
-            // unreadable texture counts as that here (our choice).
-            scene.sprites.push(Sprite::picture(
-                "loading black",
-                TextureId::White,
-                &quad(
-                    [-0.5, -0.5, w - 0.5, h - 0.5],
-                    (0.0, 0.0),
-                    (1.0, 1.0),
-                    Color::rgba(0, 0, 0, 255),
-                ),
-            ));
-            return Ok(());
-        };
+        // A missing texture is fatal (ui-layout.md 6.3). Section 4.1's
+        // black screen, for a shader that cannot be created, has no cause
+        // here: this engine's UI shader always exists.
+        let (tw, th) = ctx
+            .assets
+            .image_size(ctx.tree, &path)
+            .map_err(|e| io::Error::new(e.kind(), format!("{path}: {e}")))?;
         let (tw, th) = (tw as f32, th as f32);
         let texture = TextureId::Image { path };
         scene.sprites.push(Sprite::picture(
@@ -775,22 +765,20 @@ mod tests {
     }
 
     #[test]
-    fn without_the_background_the_screen_is_black() {
+    fn without_the_background_drawing_fails() {
         let tree = fixture::MemVfs::default();
         let fixture_tree = fixture::tree();
         let data = fixture::data(&fixture_tree);
         let mut screen = LoadingScreen::default();
         screen.begin(&data, Stage::ServerStarting);
-        let s = screen
+        let e = screen
             .scene(
                 &tree,
                 &data,
                 &mut Assets::default(),
                 Resolution::new(64, 48),
             )
-            .unwrap();
-        assert_eq!(s.sprites.len(), 1);
-        assert_eq!(s.sprites[0].layer, "loading black");
-        assert_eq!(s.sprites[0].bounds(), [-0.5, -0.5, 63.5, 47.5]);
+            .unwrap_err();
+        assert!(e.to_string().contains("ui_load.dds"), "{e}");
     }
 }

@@ -289,6 +289,15 @@ impl Section {
         self.entry(key).map(Entry::value)
     }
 
+    /// Reads `key` as the original's reader does: a missing key is fatal
+    /// (section 11); a key without a value reads as empty.
+    pub fn read(&self, key: &str) -> io::Result<&str> {
+        match self.get(key) {
+            Some(value) => Ok(value.unwrap_or("")),
+            None => Err(invalid(format!("[{}] has no key {key}", self.name))),
+        }
+    }
+
     fn insert(&mut self, key: &[u8], value: Option<&[u8]>) {
         let entry = Entry {
             key: cp1251::decode(key),
@@ -336,6 +345,15 @@ impl Config {
     /// `Some(None)` if the entry has no value.
     pub fn get(&self, name: &str, key: &str) -> Option<Option<&str>> {
         self.section(name)?.get(key)
+    }
+
+    /// Reads `key` of section `name` as the original's reader does: a
+    /// missing section or key is fatal (section 11); a key without a value
+    /// reads as empty.
+    pub fn read(&self, name: &str, key: &str) -> io::Result<&str> {
+        self.section(name)
+            .ok_or_else(|| invalid(format!("no section [{name}]")))?
+            .read(key)
     }
 }
 

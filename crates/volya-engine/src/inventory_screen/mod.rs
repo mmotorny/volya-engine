@@ -276,12 +276,19 @@ fn weight_line(data: &GameData, c: &CharacterState) -> String {
     )
 }
 
-/// A float key of a section, 0 when absent (our choice).
-fn section_float(data: &GameData, section: &str, key: &str) -> f32 {
+/// A float key of a section; missing, it is fatal (ltx-config.md 11).
+fn section_float(data: &GameData, section: &str, key: &str) -> io::Result<f32> {
     data.system
-        .get(section, key)
-        .flatten()
-        .map_or(0.0, crate::core::config::value::float)
+        .read(section, key)
+        .map(crate::core::config::value::float)
+}
+
+/// A text key of a section, unquoted; missing, it is fatal (ltx-config.md
+/// 11).
+fn read_text<'a>(data: &'a GameData, section: &str, key: &str) -> io::Result<&'a str> {
+    data.system
+        .read(section, key)
+        .map(|v| crate::core::config::value::unquote(v).trim())
 }
 
 fn section_text<'a>(data: &'a GameData, section: &str, key: &str) -> Option<&'a str> {
@@ -359,7 +366,7 @@ impl InventoryScreen {
         // The protection lines keep their order of first appearance for the
         // screen's whole life, the level's (4.8).
         self.last_update = Some(now);
-        self.per_frame(data, character, time_of_day, 0.0);
+        self.per_frame(data, character, time_of_day, 0.0)?;
         self.exit.frame(self.layout.exit.rect, cursor);
         // TODO(#111): the information portion `ui_inventory` (scripts), the
         // HUD hidden (#101), the pause key (1.4).
@@ -414,7 +421,7 @@ impl InventoryScreen {
             self.list_mut(ListKind::Bag).place(inv, id, None)?;
         }
         self.known = sorted_ids(inv);
-        self.select(data, inv, None);
+        self.deselect();
         self.weight_line = weight_line(data, c);
         Ok(())
     }
@@ -452,26 +459,33 @@ impl InventoryScreen {
     }
 
     /// Selects `id` (5.1), filling the panel when the selection changes.
-    fn select(&mut self, data: &GameData, inv: &Inventory, id: Option<u16>) {
+    /// Selects item `id`, or none; filling the panel can fail (4.6).
+    fn select(&mut self, data: &GameData, inv: &Inventory, id: Option<u16>) -> io::Result<()> {
         if self.selected == id && (id.is_none() || self.panel.is_some()) {
-            return;
+            return Ok(());
         }
         self.selected = id;
         self.panel = id
             .and_then(|id| inv.item(id))
-            .map(|i| self.fill_panel(data, i));
+            .map(|i| self.fill_panel(data, i))
+            .transpose()?;
+        Ok(())
     }
 
-    fn fill_panel(&self, data: &GameData, item: &InventoryItem) -> Panel {
+    /// Clears the selection, which cannot fail.
+    fn deselect(&mut self) {
+        self.selected = None;
+        self.panel = None;
+    }
+
+    /// 4.6: `inv_name` and `cost` are read, so a missing one is fatal
+    /// (ltx-config.md 11); an absent `description` is an empty text.
+    fn fill_panel(&self, data: &GameData, item: &InventoryItem) -> io::Result<Panel> {
         let section = &item.config.section;
-        let name = section_text(data, section, "inv_name").unwrap_or("");
+        let name = read_text(data, section, "inv_name")?;
         let description = section_text(data, section, "description");
-        let cost = data
-            .system
-            .get(section, "cost")
-            .flatten()
-            .map_or(0, crate::core::config::value::int);
-        Panel {
+        let cost = crate::core::config::value::int(data.system.read(section, "cost")?);
+        Ok(Panel {
             item: item.id,
             name: data.strings.get(name).to_owned(),
             // TODO(#111): a weapon's addons and magazine (4.6).
@@ -480,7 +494,7 @@ impl InventoryScreen {
             condition: item.condition,
             description: description.map_or(String::new(), |k| data.strings.get(k).to_owned()),
             icon: icon_rect(item).map(|r| (r, (r.width, r.height))),
-        }
+        })
     }
 
     /// One frame of the open screen.
@@ -536,7 +550,7 @@ impl InventoryScreen {
                 return Ok(a.out);
             }
         }
-        self.per_frame(a.data, a.character, time_of_day, dt);
+        self.per_frame(a.data, a.character, time_of_day, dt)?;
         self.exit.frame(self.layout.exit.rect, self.cursor);
         Ok(a.out)
     }
@@ -665,7 +679,7 @@ impl InventoryScreen {
                 }
             }
             In::PadQuit | In::PadInventory => return Ok(true),
-            In::Move(p) => self.moved(p, a),
+            In::Move(p) => self.moved(p, a)?,
             // `double`: the input's rule (title-menu.md 4.4): a second press
             // of the button within 250 ms of the previous single press; a
             // third starts a new pair.
@@ -684,11 +698,11 @@ impl InventoryScreen {
         Ok(false)
     }
 
-    fn moved(&mut self, p: [f32; 2], a: &mut Act) {
+    fn moved(&mut self, p: [f32; 2], a: &mut Act) -> io::Result<()> {
         self.cursor = p;
         if let Some(m) = &mut self.menu {
             m.hovered = m.row_at(p, self.layout.menu.top_indent).or(m.hovered);
-            return;
+            return Ok(());
         }
         let r = self.layout.exit.rect;
         if self.exit.receives(r, p) {
@@ -703,13 +717,14 @@ impl InventoryScreen {
         {
             let id = self.list(k).cells[i].item();
             let r = self.list(k).cell_rect(i);
-            self.select(a.data, &a.character.inventory, Some(id));
+            self.select(a.data, &a.character.inventory, Some(id))?;
             self.drag = Some(Drag {
                 list: k,
                 item: id,
                 offset: [(r.x - p[0]).trunc(), (r.y - p[1]).trunc()],
             });
         }
+        Ok(())
     }
 
     fn press(&mut self, right: bool, double: bool, a: &mut Act) -> io::Result<bool> {
@@ -737,7 +752,7 @@ impl InventoryScreen {
         };
         let cell = &self.list(k).cells[i];
         let (id, grouped) = (cell.item(), cell.items.len());
-        self.select(a.data, &a.character.inventory, Some(id));
+        self.select(a.data, &a.character.inventory, Some(id))?;
         if right {
             self.open_menu(a, id, grouped);
         } else if double {
@@ -950,7 +965,7 @@ impl InventoryScreen {
     /// **Use** (5.7): the selection cleared; a usable item is eaten
     /// (player-state.md section 5) with `snd_item_use`.
     fn use_item(&mut self, a: &mut Act, id: u16) -> io::Result<()> {
-        self.select(a.data, &a.character.inventory, None);
+        self.deselect();
         if a.character
             .inventory
             .item(id)
@@ -984,12 +999,20 @@ impl InventoryScreen {
         a.out.dropped.push(item);
         self.forget(id);
         play(a.data, a.audio, &self.layout.sounds.drop_item);
-        self.select(a.data, &a.character.inventory, None);
+        self.deselect();
         self.weight_line = weight_line(a.data, a.character);
     }
 
     /// The per-frame values (4.7, 4.8).
-    fn per_frame(&mut self, data: &GameData, c: &CharacterState, time_of_day: f32, dt: f32) {
+    /// The outfit's protection keys are read (4.8): a missing one is fatal
+    /// (ltx-config.md 11).
+    fn per_frame(
+        &mut self,
+        data: &GameData,
+        c: &CharacterState,
+        time_of_day: f32,
+        dt: f32,
+    ) -> io::Result<()> {
         let cond = &c.conditions;
         let values = [cond.health, cond.psy_health, cond.radiation];
         for (i, v) in values.into_iter().enumerate() {
@@ -1002,9 +1025,10 @@ impl InventoryScreen {
         // 4.8.
         let outfit = c.inventory.worn_outfit();
         for (k, (label, key)) in PROTECTIONS.iter().enumerate() {
-            let p = outfit.map_or(0.0, |o| {
-                section_float(data, &o.config.section, key) * o.condition
-            });
+            let p = match outfit {
+                Some(o) => section_float(data, &o.config.section, key)? * o.condition,
+                None => 0.0,
+            };
             // TODO(#111): belt artefacts' protection factor; 1 without them.
             let a = 1.0_f32;
             let shown = p.abs() >= EPSILON || (1.0 - a).abs() >= EPSILON;
@@ -1039,6 +1063,7 @@ impl InventoryScreen {
             }
             None => self.condition_bar = Bar::default(),
         }
+        Ok(())
     }
 
     /// Draws the open screen over the level (3.1: its elements in their
@@ -1207,12 +1232,13 @@ impl InventoryScreen {
         let rect = list.desc.rect;
         if k == ListKind::Outfit {
             // 4.4: the character picture, nothing else.
-            let id = c
-                .inventory
-                .worn_outfit()
-                .and_then(|o| section_text(ctx.data, &o.config.section, "full_icon_name"))
-                .unwrap_or(WITHOUT_OUTFIT)
-                .to_owned();
+            // The worn outfit's `full_icon_name` is read: missing, it is
+            // fatal (ltx-config.md 11).
+            let id = match c.inventory.worn_outfit() {
+                Some(o) => read_text(ctx.data, &o.config.section, "full_icon_name")?,
+                None => WITHOUT_OUTFIT,
+            }
+            .to_owned();
             ctx.part_stretched(s, &format!("{name} picture"), &id, rect)?;
             return Ok(());
         }
@@ -1556,26 +1582,29 @@ fn draw_addons(
             continue;
         }
         let section = &c.section;
-        let Some(addon) = section_text(ctx.data, section, &format!("{name}_name")) else {
-            continue;
-        };
+        // 4.2: the weapon's `*_name`, `*_x` and `*_y` are read for an
+        // installed attachable addon: a missing one is fatal (ltx-config.md
+        // 11).
+        let addon = read_text(ctx.data, section, &format!("{name}_name"))?;
+        // 4.2: every item section has the grid keys; one missing is fatal.
         let grid = |key: &str| {
             ctx.data
                 .system
                 .get(addon, key)
                 .flatten()
                 .map(|v| crate::core::config::value::int(v) as u32 as f32)
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, format!("[{addon}] lacks {key}"))
+                })
         };
-        let (Some(gx), Some(gy), Some(gw), Some(gh)) = (
-            grid("inv_grid_x"),
-            grid("inv_grid_y"),
-            grid("inv_grid_width"),
-            grid("inv_grid_height"),
-        ) else {
-            continue;
-        };
-        let x = section_float(ctx.data, section, &format!("{name}_x"));
-        let y = section_float(ctx.data, section, &format!("{name}_y"));
+        let (gx, gy, gw, gh) = (
+            grid("inv_grid_x")?,
+            grid("inv_grid_y")?,
+            grid("inv_grid_width")?,
+            grid("inv_grid_height")?,
+        );
+        let x = section_float(ctx.data, section, &format!("{name}_x"))?;
+        let y = section_float(ctx.data, section, &format!("{name}_y"))?;
         let tr = Rect::new(
             gx * ICON_PIXELS,
             gy * ICON_PIXELS,

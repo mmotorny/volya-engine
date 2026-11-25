@@ -205,13 +205,35 @@ fn a_bolt_with_sound_plays_its_thunder_delayed_at_its_point() {
 fn common_values_are_capped() {
     let c = volya_engine_formats::ltx::parse(
         b"[thunderbolt_common]\naltitude = 10, 20\ndelta_longitude = 17\n\
-          min_dist_factor = 0.99\nsecond_propability = 1.5\n",
+          min_dist_factor = 0.99\nsecond_propability = 1.5\n\
+          tilt = 15\nsky_color = 1, 1, 1\nsun_color = 1, 1, 1\nfog_color = 1, 1, 1\n",
     )
     .unwrap();
     let common = BoltCommon::read(&c).unwrap();
     assert_eq!(common.altitude, (10.0, 20.0));
     assert_eq!(common.min_dist_factor, 0.95);
     assert_eq!(common.second_probability, 1.0);
+}
+
+/// ltx-config.md 11: the keys of 2.2 are read unconditionally, so a
+/// missing one is fatal.
+#[test]
+fn a_missing_bolt_key_is_fatal() {
+    let c = volya_engine_formats::ltx::parse(
+        b"[thunderbolt_common]\naltitude = 10, 20\ndelta_longitude = 17\n\
+          min_dist_factor = 0.5\ntilt = 15\nsky_color = 1\nsun_color = 1\nfog_color = 1\n\
+          [storm]\nbolt_1\nbolt_2\n[bolt_1]\nsound = thunder\n[bolt_2]\nsound =\n\
+          [quiet]\nbolt_3\n[bolt_3]\nlightning_model = m\n",
+    )
+    .unwrap();
+    let err = BoltCommon::read(&c).unwrap_err();
+    assert!(err.to_string().contains("second_propability"), "{err}");
+    assert_eq!(
+        collection_sounds(&c, "storm").unwrap(),
+        [Some("thunder".to_owned()), None]
+    );
+    let err = collection_sounds(&c, "quiet").unwrap_err();
+    assert!(err.to_string().contains("sound"), "{err}");
 }
 
 #[test]

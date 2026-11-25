@@ -163,7 +163,9 @@ impl Intro {
     /// level is loaded whenever this runs), then plays, each of
     /// `quit_presses` skipping a stoppable item (startup.md section 6.5).
     /// Returns whether game time is paused: the current item's
-    /// `pause_state` is on.
+    /// `pause_state` is on. Data without `intro_game` fails when the intro
+    /// is due: the original starts the sequence then (loading-screen.md 7),
+    /// and a missing element is fatal.
     fn frame(
         &mut self,
         data: &GameData,
@@ -171,28 +173,34 @@ impl Intro {
         overlay_frames_left: Option<u32>,
         quit_presses: u32,
         audio: &mut dyn AudioOut,
-    ) -> bool {
+    ) -> io::Result<bool> {
         if !self.checked
             && let Some(left) = overlay_frames_left
             && intro_due(true, left, SERVER_NEW_GAME)
         {
             self.checked = true;
-            // Without a measured `intro_game` there is none to play (our
-            // choice).
+            if data.intro_game.is_none() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "game_tutorials.xml: no intro_game",
+                ));
+            }
+            // Unmeasured (data read without its media) there is none to
+            // play.
             if data.intro_game().is_some() {
                 self.player = Some(MoviePlayer::new(now));
             }
         }
         let (Some(player), Some(seq)) = (self.player.as_mut(), data.intro_game()) else {
-            return false;
+            return Ok(false);
         };
         player.update(seq, data, now, quit_presses, audio);
         if player.finished(seq) {
             // Section 2.3, step 4: then the level is visible.
             self.player = None;
-            return false;
+            return Ok(false);
         }
-        player.pauses(seq)
+        Ok(player.pauses(seq))
     }
 
     fn stop(&mut self, audio: &mut dyn AudioOut) {
@@ -287,14 +295,23 @@ fn menu_frame(
     input: &Input,
     audio: &mut dyn AudioOut,
 ) -> MenuFrame {
-    // The name field measures its text in its font at the size drawn at.
-    let field = screens.field_font().and_then(|font| {
-        let fonts = assets.fonts(tree, data, video.height).ok()?;
-        Some(FieldFont {
-            font: fonts.get(font).clone(),
-            scale_x: video.scale().0,
-        })
-    });
+    // The name field measures its text in its font at the size drawn at;
+    // a font that cannot be created is fatal (text-and-fonts.md 2.5, 2.6).
+    let field = match screens.field_font() {
+        Some(font) => match assets.fonts(tree, data, video.height) {
+            Ok(fonts) => Some(FieldFont {
+                font: fonts.get(font).clone(),
+                scale_x: video.scale().0,
+            }),
+            Err(e) => {
+                return MenuFrame {
+                    fatal: Some(e.to_string()),
+                    ..Default::default()
+                };
+            }
+        },
+        None => None,
+    };
     screens.update(
         menu,
         Frame {
@@ -323,16 +340,17 @@ fn inventory_keys(data: &GameData, controls: &crate::controls::Controls) -> inve
 }
 
 /// The inventory screen's menu font at the size drawn at (its width,
-/// inventory-screen.md 5.6).
+/// inventory-screen.md 5.6); one that cannot be created is fatal
+/// (text-and-fonts.md 2.5, 2.6).
 fn menu_font(
     tree: &dyn Vfs,
     data: &GameData,
     assets: &mut Assets,
     screen: &InventoryScreen,
     video: Resolution,
-) -> Option<FieldFont> {
-    let fonts = assets.fonts(tree, data, video.height).ok()?;
-    Some(FieldFont {
+) -> io::Result<FieldFont> {
+    let fonts = assets.fonts(tree, data, video.height)?;
+    Ok(FieldFont {
         font: fonts.get(screen.layout().menu.font).clone(),
         scale_x: video.scale().0,
     })
@@ -358,8 +376,11 @@ pub struct App {
     clock: u64,
     /// `None` until the first update.
     phase: Option<Phase>,
-    /// Why the latest new game failed to load.
+    /// Why the latest new game failed to load or ended.
     error: Option<String>,
+    /// A fatal error met during this update, taken by [`App::fatal`] at
+    /// its end.
+    failed: Option<String>,
     /// The game type of the latest game started in this run
     /// (loading-screen.md section 5).
     game_type: Option<&'static str>,
@@ -515,6 +536,7 @@ impl App {
             clock: 0,
             phase: None,
             error: None,
+            failed: None,
             game_type: None,
             load_started: None,
             loaded_since: None,
@@ -620,23 +642,34 @@ impl App {
             return;
         }
         self.update_phase(tree, time_ms, input, audio);
-        // A placed effect's group met a fatal error (particle-groups.md
-        // 2.3): the game ends with it.
-        let effects = self.level().and_then(|l| l.effects());
-        if let Some(fatal) = effects.and_then(|e| e.fatal()).map(str::to_owned) {
-            self.fatal(tree, fatal, input, audio);
-            return;
+        // A fatal error the level met, or a placed effect's group
+        // (particle-groups.md 2.3): the game ends with it.
+        if let Some(Phase::Level { level, .. }) = &mut self.phase {
+            let effects = level.effects().and_then(|e| e.fatal()).map(str::to_owned);
+            if let Some(error) = level.take_fatal().or(effects) {
+                self.failed.get_or_insert(error);
+            }
         }
         self.sync_pause();
-        if let Err(fatal) = self.sound_frame(tree, audio) {
-            self.fatal(tree, fatal.to_string(), input, audio);
+        let failed = match self.failed.take() {
+            Some(error) => Some(error),
+            None => self.sound_frame(tree, audio).err().map(|f| f.to_string()),
+        };
+        if let Some(error) = failed {
+            self.fatal(tree, error, input, audio);
         }
     }
 
     /// A fatal error during play (as sound-ogg-params.md section 5 makes a
-    /// sound file that cannot be opened): the game ends, as when loading
-    /// fails, and the title menu opens saying why.
+    /// sound file that cannot be opened, or inventory-screen.md 3.2 an item
+    /// with no room in its list): the game ends, as when loading fails, and
+    /// the title menu opens saying why. Never recovered from.
     fn fatal(&mut self, tree: &dyn Vfs, error: String, input: &Input, audio: &mut dyn AudioOut) {
+        // The title menu that already says why fails again (drawing it):
+        // it stays, not opened anew each frame.
+        if matches!(self.phase, Some(Phase::Menu(_))) && self.error.as_ref() == Some(&error) {
+            return;
+        }
         self.error = Some(error);
         let now = self.clock;
         let title = self.opening(false);
@@ -857,6 +890,9 @@ impl App {
                     audio,
                 );
                 self.console_touched = true;
+                if let Some(error) = &out.fatal {
+                    self.failed.get_or_insert(error.clone());
+                }
                 if out.video_restart {
                     // `vid_restart` (options-screens.md section 5.4).
                     self.video = video_mode(&self.console);
@@ -966,6 +1002,9 @@ impl App {
                     audio,
                 );
                 self.console_touched = true;
+                if let Some(error) = &out.fatal {
+                    self.failed.get_or_insert(error.clone());
+                }
                 if out.video_restart {
                     self.video = video_mode(&self.console);
                     menu.resized(data, self.video);
@@ -1014,9 +1053,16 @@ impl App {
                 // input goes to it alone (our choice; the level is paused
                 // under it anyway).
                 let playing = intro.player.is_some();
-                if intro.frame(data, now, left, quit_presses(data, input), audio) {
-                    level.paused(now);
-                    return;
+                match intro.frame(data, now, left, quit_presses(data, input), audio) {
+                    Ok(true) => {
+                        level.paused(now);
+                        return;
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        self.failed.get_or_insert(e.to_string());
+                        return;
+                    }
                 }
                 if playing || intro.player.is_some() {
                     // An item without `pause_state`, or the intro's end: the
@@ -1039,13 +1085,18 @@ impl App {
                     level.controls_mut().keys_only = Some(keys.used());
                     // Measured with once per size drawn at.
                     if self.menu_font.as_ref().map(|(r, _)| *r) != Some(self.video) {
-                        self.menu_font =
-                            menu_font(tree, data, &mut self.assets, screen, self.video)
-                                .map(|f| (self.video, f));
+                        match menu_font(tree, data, &mut self.assets, screen, self.video) {
+                            Ok(f) => self.menu_font = Some((self.video, f)),
+                            Err(e) => {
+                                self.failed.get_or_insert(e.to_string());
+                                return;
+                            }
+                        }
                     }
                     let font = self.menu_font.as_ref().map(|(_, f)| f);
                     let time_of_day = level.clock().time_of_day();
                     let out = match level.character_mut() {
+                        // An error is fatal, as in the original.
                         Some(character) => screen.update(inventory_screen::Frame {
                             data,
                             character,
@@ -1064,10 +1115,8 @@ impl App {
                     match out {
                         Ok(out) => dropped.extend(out.dropped),
                         Err(e) => {
-                            // The original stops with a fatal error; the
-                            // screen closes, saying why (our choice).
-                            self.error = Some(e.to_string());
-                            screen.close(data, audio);
+                            self.failed.get_or_insert(e.to_string());
+                            return;
                         }
                     }
                     level.update(now, input);
@@ -1115,7 +1164,10 @@ impl App {
                             let keys = inventory_keys(data, level.controls());
                             level.controls_mut().keys_only = Some(keys.used());
                         }
-                        Err(e) => self.error = Some(e.to_string()),
+                        // An error is fatal, as in the original.
+                        Err(e) => {
+                            self.failed.get_or_insert(e.to_string());
+                        }
                     }
                 }
             }
@@ -1225,8 +1277,24 @@ impl App {
         &self.console
     }
 
-    /// The frame at the current clock for `resolution`.
+    /// The frame at the current clock for `resolution`. An error is fatal
+    /// (as ui-layout.md 6.3 makes a missing texture): the next update ends
+    /// the game ([`App::fatal`]); except what this engine does not support
+    /// (`ErrorKind::Unsupported`: AVI, a DDS or Theora layout our decoders
+    /// lack), which the original plays, so it is returned, not fatal.
+    // TODO(#339): a storage read failing while drawing (a platform failure,
+    // not a missing file) is fatal too; no spec covers it.
     pub fn scene(&mut self, tree: &dyn Vfs, resolution: Resolution) -> io::Result<Scene> {
+        let scene = self.compose_scene(tree, resolution);
+        if let Err(e) = &scene
+            && e.kind() != io::ErrorKind::Unsupported
+        {
+            self.failed.get_or_insert(e.to_string());
+        }
+        scene
+    }
+
+    fn compose_scene(&mut self, tree: &dyn Vfs, resolution: Resolution) -> io::Result<Scene> {
         let mut ctx = Ctx {
             tree,
             data: &self.data,
@@ -1681,7 +1749,9 @@ mod tests {
         let mut intro = Intro::default();
         let mut started = None;
         for (frame, left) in (1..OVERLAY_FRAMES).rev().enumerate() {
-            let paused = intro.frame(&data, frame as u64 * 16, Some(left), 0, &mut audio);
+            let paused = intro
+                .frame(&data, frame as u64 * 16, Some(left), 0, &mut audio)
+                .unwrap();
             if started.is_none() && intro.player.is_some() {
                 started = Some(left);
             }
@@ -1702,11 +1772,19 @@ mod tests {
         // After the overlay: plays its 3 s, then the level resumes; it is
         // not started again.
         let start = u64::from(OVERLAY_FRAMES - 3) * 16;
-        assert!(intro.frame(&data, start + 2999, None, 0, &mut audio));
-        assert!(!intro.frame(&data, start + 3000, None, 0, &mut audio));
+        assert!(
+            intro
+                .frame(&data, start + 2999, None, 0, &mut audio)
+                .unwrap()
+        );
+        assert!(
+            !intro
+                .frame(&data, start + 3000, None, 0, &mut audio)
+                .unwrap()
+        );
         assert!(intro.player.is_none());
         assert!(audio.playing.is_empty(), "its sounds ended");
-        assert!(!intro.frame(&data, 4000, Some(1), 0, &mut audio));
+        assert!(!intro.frame(&data, 4000, Some(1), 0, &mut audio).unwrap());
         assert!(intro.player.is_none());
     }
 
@@ -1741,7 +1819,7 @@ mod tests {
         let s = compose(level(), &intro, Some(&overlay), &mut ctx).unwrap();
         assert_eq!(layers(&s)[..2], ["level", "loading background"]);
         // The intro starts under the last two overlay frames.
-        intro.frame(&data, 0, Some(2), 0, &mut audio);
+        intro.frame(&data, 0, Some(2), 0, &mut audio).unwrap();
         let s = compose(level(), &intro, Some(&overlay), &mut ctx).unwrap();
         assert_eq!(
             layers(&s)[..5],
@@ -1763,7 +1841,7 @@ mod tests {
         let data = fixture::data(&tree);
         let mut audio = FakeAudio::default();
         let mut intro = Intro::default();
-        assert!(intro.frame(&data, 0, Some(2), 0, &mut audio));
+        assert!(intro.frame(&data, 0, Some(2), 0, &mut audio).unwrap());
         let mut assets = fixture::assets();
         let mut ctx = Ctx {
             tree: &tree,
@@ -1793,7 +1871,7 @@ mod tests {
             pressed: true,
         });
         assert_eq!(quit_presses(&data, &input), 1);
-        assert!(!intro.frame(&data, 32, Some(1), 1, &mut audio));
+        assert!(!intro.frame(&data, 32, Some(1), 1, &mut audio).unwrap());
         assert!(intro.player.is_none());
         assert!(audio.playing.is_empty());
         let mut input = Input::new();
@@ -1944,6 +2022,52 @@ mod tests {
         app.update(&tree, 164.0, &input, &mut audio);
         input.end_frame();
         assert!(menu_open(&app));
+    }
+
+    /// inventory-screen.md 4.2: an item without its grid keys is a fatal
+    /// error, opening the screen or while it is open: the game ends and
+    /// the title menu says why.
+    #[test]
+    fn the_inventory_screen_errors_are_fatal() {
+        let without_grid = |app: &mut App| {
+            let Some(Phase::Level { level, .. }) = &mut app.phase else {
+                panic!()
+            };
+            let inv = &mut level.character_mut().unwrap().inventory;
+            for item in &mut inv.items {
+                item.config.inv_grid = None;
+            }
+        };
+        let ends_saying_why = |app: &App| {
+            let AppState::Menu { menu, .. } = app.state() else {
+                panic!("{:?}", app.state())
+            };
+            assert!(menu.error.unwrap().contains("[bread] lacks"));
+        };
+        // Opening.
+        let (tree, mut app, mut input, mut audio) = in_level_with_inventory();
+        without_grid(&mut app);
+        press(&mut input, Key::I);
+        app.update(&tree, 32.0, &input, &mut audio);
+        input.end_frame();
+        ends_saying_why(&app);
+        // While open: an item without them enters the inventory, which
+        // rebuilds the screen (4.3).
+        let (tree, mut app, mut input, mut audio) = in_level_with_inventory();
+        press(&mut input, Key::I);
+        app.update(&tree, 32.0, &input, &mut audio);
+        input.end_frame();
+        assert!(app.inventory_open());
+        let Some(Phase::Level { level, .. }) = &mut app.phase else {
+            panic!()
+        };
+        let inv = &mut level.character_mut().unwrap().inventory;
+        let mut item = inv.item(5).unwrap().clone();
+        item.id = 6;
+        item.config.inv_grid = None;
+        inv.take(item);
+        app.update(&tree, 48.0, &input, &mut audio);
+        ends_saying_why(&app);
     }
 
     #[test]
@@ -2342,6 +2466,70 @@ mod tests {
             }
         ));
         assert!(menu_open(&app), "the menu opens in the first live frame");
+    }
+
+    /// A fatal error the level met while running (the simulation's switch
+    /// pass, offline-simulation.md 6.2) ends the game at the end of the
+    /// update: the title menu opens saying why.
+    #[test]
+    fn a_fatal_error_of_the_running_level_ends_the_game() {
+        let (tree, mut app, input, mut audio) = in_level();
+        let Some(Phase::Level { level, .. }) = &mut app.phase else {
+            panic!()
+        };
+        level.record_fatal("lamp: no renderer type set for hanging-lamp".into());
+        app.update(&tree, 32.0, &input, &mut audio);
+        let AppState::Menu { menu, .. } = app.state() else {
+            panic!("{:?}", app.state())
+        };
+        assert!(menu.error.unwrap().contains("hanging-lamp"));
+    }
+
+    /// `App::fatal`: the title menu that already says why, failing again
+    /// with the same error, stays as it is; another error opens it anew.
+    #[test]
+    fn the_menu_saying_why_is_not_opened_again_for_the_same_error() {
+        let (tree, mut app, input, mut audio) = in_level();
+        let error = "x: fatal".to_owned();
+        app.failed = Some(error.clone());
+        app.update(&tree, 32.0, &input, &mut audio);
+        assert!(matches!(app.state(), AppState::Menu { .. }));
+        let opened = audio.started.len();
+        assert!(opened > 0, "the menu's music started");
+        for t in [48.0, 64.0] {
+            app.failed = Some(error.clone());
+            app.update(&tree, t, &input, &mut audio);
+        }
+        assert_eq!(audio.started.len(), opened, "not opened again");
+        app.failed = Some("y: fatal".into());
+        app.update(&tree, 80.0, &input, &mut audio);
+        assert!(audio.started.len() > opened, "opened anew");
+        let AppState::Menu { menu, .. } = app.state() else {
+            panic!("{:?}", app.state())
+        };
+        assert!(menu.error.unwrap().contains("y: fatal"));
+    }
+
+    /// loading-screen.md 7: data without `intro_game` loads; the New Game
+    /// fails when it reaches the intro, under the last overlay frames.
+    #[test]
+    fn a_new_game_without_its_intro_ends_when_the_intro_is_due() {
+        let (tree, mut app, input, mut audio) = in_level();
+        app.data.intro_game = None;
+        let Some(Phase::Level { overlay, .. }) = &mut app.phase else {
+            panic!()
+        };
+        let mut o = Overlay::new(LoadingScreen::default(), &mut audio);
+        o.frames_left = 4;
+        *overlay = Some(o);
+        // Three and two frames left after this one: not yet due.
+        app.update(&tree, 32.0, &input, &mut audio);
+        assert!(matches!(app.state(), AppState::Level { .. }));
+        app.update(&tree, 48.0, &input, &mut audio);
+        let AppState::Menu { menu, .. } = app.state() else {
+            panic!("{:?}", app.state())
+        };
+        assert!(menu.error.unwrap().contains("intro_game"));
     }
 
     #[test]

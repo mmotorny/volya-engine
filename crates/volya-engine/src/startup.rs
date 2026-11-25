@@ -37,10 +37,11 @@ pub struct ColorAnimation {
     pub keys: &'static [(u32, u32)],
 }
 
-/// `asus_logo_01` as startup.md section 6.4 gives it. The colour-animation
-/// library `lanims.xr` that holds it has no approved format specification,
-/// so the one animation the startup uses is built in from that table; other
-/// names have no animation (the picture keeps its colour).
+/// `asus_logo_01` as startup.md section 6.4 gives it (docs/formats/lanims-xr.md
+/// section 8 agrees). The one animation the startup uses is built in from that
+/// table; other names have no animation (the picture keeps its colour).
+// TODO(#337): read it from `lanims.xr` (lanims-xr.md), where a missing file
+// gives no animation.
 const ASUS_LOGO_01: ColorAnimation = ColorAnimation {
     fps: 30.0,
     keys: &[
