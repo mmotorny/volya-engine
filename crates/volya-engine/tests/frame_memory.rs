@@ -115,7 +115,12 @@ fn level_frame_heap_traffic() {
     let eye = level.player().view().eye;
 
     // Each part's allocations and bytes over the measured frames.
-    let mut parts = [("update", 0, 0), ("sounds", 0, 0), ("scene", 0, 0), ("draw list", 0, 0)];
+    let mut parts = [
+        ("update", 0, 0),
+        ("sounds", 0, 0),
+        ("scene", 0, 0),
+        ("draw list", 0, 0),
+    ];
     let mut worst = 0;
     let mut live_after_warmup = 0;
     for t in 1..=FRAMES + 60 {
@@ -151,8 +156,15 @@ fn level_frame_heap_traffic() {
         });
         let now = clock.frame(ms, false);
         let (inputs, mut particles) = level.sound_frame_parts();
-        run.frame(&mut system, &mut level_sounds, &inputs, now, false, &mut particles)
-            .unwrap();
+        run.frame(
+            &mut system,
+            &mut level_sounds,
+            &inputs,
+            now,
+            false,
+            &mut particles,
+        )
+        .unwrap();
         system.update(ms, &mut NoDevice);
         part(1, &mut at);
         let scene = level.scene(SIZE, ms);
@@ -164,9 +176,7 @@ fn level_frame_heap_traffic() {
             worst = worst.max(at.0 - frame_start);
         }
     }
-    let (allocs, bytes) = parts
-        .iter()
-        .fold((0, 0), |(a, b), p| (a + p.1, b + p.2));
+    let (allocs, bytes) = parts.iter().fold((0, 0), |(a, b), p| (a + p.1, b + p.2));
     eprintln!(
         "per frame ({FRAMES} frames): {:.0} allocations, {:.1} KB allocated (most allocations in a frame: {worst})",
         allocs as f64 / FRAMES as f64,

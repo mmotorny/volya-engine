@@ -1,6 +1,6 @@
 # Memory
 
-How the engine's memory is laid out: the heaps, what lives in each, and what they measure. Numbers are for a New Game of `l01_escape` on the Russian edition and are marked measured (with where), documented (with the source) or believed. The design that the migration works towards is in its own section, [Design: heaps by lifetime](#design-heaps-by-lifetime-399); everything before it describes the code as it is.
+How the engine's memory is laid out: the heaps, what lives in each, and what they measure. Numbers are for a New Game of `l01_escape` on the Russian edition and are marked measured (with where), documented (with the source) or believed. The design that the migration works towards, and what its first implementation measured, is in its own section, [Design: heaps by lifetime](#design-heaps-by-lifetime-399); everything before it describes the code as it is.
 
 ## Heaps and allocators
 
@@ -18,7 +18,7 @@ Two reuse fixes from #357 stand in for arenas:
 
 ## Measurements by lifetime (#399)
 
-Measured natively (release, M-series Mac) with counting allocators: `volya-engine/tests/loading_memory.rs` per loading stage, `volya-engine/tests/frame_memory.rs` per frame of the running level. Bytes are as requested, so the allocator's overhead is not in them.
+Measured natively (release, M-series Mac) with counting allocators: `volya-engine/tests/loading_memory.rs` per loading stage (budgets reported as "OVER BUDGET" notes, never failures), `volya-engine/tests/frame_memory.rs` per frame of the running level. Bytes are as requested, so the allocator's overhead is not in them.
 
 ### Held across levels
 
@@ -118,14 +118,31 @@ Containers that take an allocator remain possible over the same heaps on stable 
 
 Why heaps and not bump arenas released whole: a bump arena reuses nothing until it is reset, and can only be reset once all its blocks are gone. Loading interleaves temporaries with what it keeps, and the running level frees and regrows its data; a heap per lifetime reuses its own freed space and needs no proof of emptiness. Bump allocation stays a choice for the frame, whose blocks are all gone at its end.
 
+### The first implementation, measured (#401)
+
+Built on the branch `memory-heaps-experiment` (commit e6135e9), not merged: the heaps above, with the level scope around every stage, the level's update and its making; the loading scope around files of 64 KiB or more read whole, the parsed `level` file, the static draw list's making and the objects' model parsing; the loading heap given back whole once empty and the level heap's empty segments at each stage's end. Natively it placed what it should (`loading_memory.rs`, measured): the loading heap emptied after each stage and the level heap reserved 83.6 MB for 77.7 MB live at the load's end (88.6 MB before the loading scope), the waste in the offline simulation's stage (5.4 MB) and the objects' (2.9 MB). The frame scope was measured natively only: the first draw list's lasting state (the world's upload) kept 4.1 MB in the frame heap and 13.1 MB reserved.
+
+In headless Chrome (`menu` suite, MiB, heap after the New Game; one run each):
+
+| Variant | WebGPU, first | WebGPU, second | WebGL 2, first | WebGL 2, second |
+|---|---|---|---|---|
+| Before (the general heap only) | 98 | 98 | 106 | 110 |
+| Level heap, segments kept for good (256 KiB) | 108 | 111 | 119 | 132 |
+| Level and loading heaps, empty segments given back (256 KiB) | 107 | 111 | 120 | 131 |
+| The same, 64 KiB segments | 113 | 120 | 122 | 130 |
+
+The heap grew in every variant: under `st_loading_cform` by 37 MiB for 39 MiB more live (28 before). Heaps apart from the general one need their segments whole: the general heap's free space before the game (48 MiB of 59, split by what the import and the menus left) serves its own small blocks but not the level heap's segments, so the level's blocks moved from the general heap's holes to new memory at its top; and each heap's free space (the level heap's 11 MiB above live in the browser) is no longer the others'. Separate heaps cost the sharing of free space that one heap has, and here the sharing is worth more than the separation.
+
+### Open
+
+What the measurements leave, for the user to decide (#401): the level's large blocks are what needs new memory (the collision world's four arrays, up to 16.5 MB each, the game graph and the spawn file read whole, 8.1 and 4.5 MB, the navigation 7.1 MB), not its small ones. Ways that keep one heap's sharing:
+
+- make the large blocks smaller: the collision grid and triangles packed (#371), the registry compacted (#370), the game graph and spawn file streamed (#403);
+- split the large blocks into fixed pieces (1 MiB, say) that any free space of that size takes, and that the next level's pieces reuse;
+- a level arena of such pieces released whole, with the level's temporaries kept out of it (an experiment, not yet measured).
+
 ### Migration
 
-Each step is measured natively (`loading_memory.rs`, `frame_memory.rs`, each heap's live and reserved bytes) and in the browser (`heap_log` with each heap's live and reserved bytes after the first and second New Game, both paths):
-
-1. The heaps and the level scope (#401): every stage's and the running level's allocations in the level heap; the collision world's spare arrays become unnecessary.
-2. The collision grid (#371) and the registry (#370) made smaller, in the level heap.
-3. The frame scope (#402): the scene, the draw list, the sound frame.
-4. The loading scope and streaming loaders (#403): the files read whole, the models' temporaries.
-5. Pools for particles, emitters and voices (#404), if the frame heap's measurements show their churn.
+Each step is measured natively (`loading_memory.rs`: each stage's peak, kept bytes, allocations and blocks kept; `frame_memory.rs`) and in the browser (`heap_log` after the first and second New Game, both paths).
 
 Done when heap minus live after the first and the second New Game is near zero on both paths (#399).

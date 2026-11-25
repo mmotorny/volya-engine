@@ -165,7 +165,10 @@ fn simulation_memory_and_update_time() {
     over("kept 27 MB or more", mb(after_navigation - base) >= 27.0);
     over("peak 27 MB or more", mb(peak - base) >= 27.0);
     if !cfg!(debug_assertions) {
-        over("median update 200 µs or more", rest[rest.len() / 2] >= 200.0);
+        over(
+            "median update 200 µs or more",
+            rest[rest.len() / 2] >= 200.0,
+        );
         over(
             "99th percentile update 500 µs or more",
             rest[rest.len() * 99 / 100] >= 500.0,
