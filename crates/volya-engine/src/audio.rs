@@ -138,7 +138,7 @@ impl Device for MixerDevice<'_> {
         let Ok(mut stream) = sound.open(tree) else {
             return;
         };
-        // TODO(#98): resuming far into a long sound decodes up to the
+        // TODO(#309): resuming far into a long sound decodes up to the
         // offset in this update; seek by pages if it shows as a hitch.
         if stream.skip(offset).is_err() {
             return;

@@ -217,6 +217,20 @@ fn first_level_files() {
             total_decode += decode.as_secs_f64();
         }
         assert_eq!(sounds.len(), LEVEL_FILES.len());
+        // docs/behavior/sound-positional.md section 10: samples N and
+        // duration D.
+        for (name, samples, duration) in [
+            ("music\\wasteland2_l", 5_518_127, 125_127),
+            ("music\\wasteland2_r", 5_518_127, 125_127),
+            ("ambient\\sparks1", 176_953, 4_012),
+        ] {
+            let sound = sounds.get(tree, &aliases, name).unwrap();
+            assert_eq!(
+                (sound.samples, sound.duration_ms()),
+                (samples, duration),
+                "{name}"
+            );
+        }
         assert!(sounds.take_warnings().is_empty());
         eprintln!(
             "all: {:.1} s of audio decoded in {total_decode:.2} s",
