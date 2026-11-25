@@ -424,6 +424,44 @@ button.touch-button.crouch.low .touch-edges :is(.left, .right) {
   opacity: 0.6;
 }
 
+/* The text entry over the save screen's name field on touch screens
+   (text-entry.js, #94): laid out as the canvas, an unseen input over the
+   field the engine draws. 16 px text: iOS zooms into smaller fields on
+   focus (believed). */
+#text-entry {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+@media (orientation: portrait) and (pointer: coarse) {
+  #text-entry {
+    inset: auto;
+    top: 50%;
+    left: 50%;
+    width: 100vh;
+    height: 100vw;
+    width: 100dvh;
+    height: 100dvw;
+    transform: translate(-50%, -50%) rotate(90deg);
+  }
+}
+
+#text-entry input {
+  position: absolute;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+  font-size: 16px;
+  pointer-events: auto;
+}
+
 /* The offer of full screen with Keyboard Lock in the level (fullscreen.js,
    #85): small, in the top right corner over the game, with the system
    pointer showing while it does (the engine draws none in the level). */

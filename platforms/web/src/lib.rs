@@ -167,6 +167,14 @@ pub fn level_controls() -> u32 {
     })
 }
 
+/// The save screen's name field while it shows, for the page's text entry
+/// (#94): `[x, y, width, height, focused]`, canvas CSS pixels and 1 or 0.
+#[wasm_bindgen]
+pub fn text_field() -> Option<Vec<f32>> {
+    engine::text_field()
+        .map(|([x, y, w, h], focused)| vec![x, y, w, h, f32::from(u8::from(focused))])
+}
+
 /// Engine interface for the page, tests and debugging: runs `op` with JSON
 /// `args` and returns its JSON result.
 #[wasm_bindgen]

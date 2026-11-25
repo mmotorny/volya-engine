@@ -821,6 +821,84 @@ export const tests = {
     return `audio ${audioBefore} before hiding; engine clock +${ran} ms over the return`;
   },
 
+  "the save screen's name: typed through the device keyboard's input on touch, and the on-screen keyboard with a gamepad": async () => {
+    needsGame();
+    key("Escape");
+    await until((s) => inGame(s), "the in-game menu");
+    await selectInGame("btn_save");
+    key("Enter");
+    const save = async () => (await until((s) => s.menu?.save_screen, "the save screen")).menu.save_screen;
+    const [fx, fy, fw, fh] = (await save()).field;
+    // Touch (seen earlier in this page): the text entry lies over the field.
+    const entry = document.querySelector("#text-entry input");
+    for (let i = 0; i < 50 && entry.parentElement.hidden; i++) await sleep(20);
+    assert(!entry.parentElement.hidden, "the text entry shows");
+    const [x, y] = client(fx + fw / 2, fy + fh / 2);
+    assertEqual(document.elementFromPoint(x, y), entry, "the text entry over the field");
+    // A tap on it reaches the engine: the field takes focus. (A synthesized
+    // tap can't focus the input or raise a keyboard: focused by hand.)
+    const touch = { pointerType: "touch", pointerId: 31, isPrimary: true, button: 0, bubbles: true, cancelable: true, clientX: x, clientY: y };
+    entry.dispatchEvent(new PointerEvent("pointerdown", { ...touch, buttons: 1 }));
+    entry.dispatchEvent(new PointerEvent("pointerup", { ...touch, buttons: 0 }));
+    await until((s) => s.menu?.save_screen?.focused, "the field focused by the tap");
+    entry.focus();
+    // Typed text reaches the field by its own rules (Cyrillic types nothing).
+    entry.value = "Ab1ж";
+    entry.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: "Ab1ж", bubbles: true }));
+    await until((s) => s.menu?.save_screen?.name === "Ab1", "the typed name");
+    assertEqual(entry.value, "", "the input emptied");
+    // The device keyboard's Backspace and Enter without key codes.
+    const press = (key) => entry.dispatchEvent(new KeyboardEvent("keydown", { key, code: "", bubbles: true, cancelable: true }));
+    press("Backspace");
+    await until((s) => s.menu?.save_screen?.name === "Ab", "Backspace");
+    press("Enter");
+    await until((s) => s.menu?.save_screen && !s.menu.save_screen.focused, "Enter ends the focus");
+    for (let i = 0; i < 50 && document.activeElement === entry; i++) await sleep(20);
+    assert(document.activeElement !== entry, "the device keyboard closes");
+    // A gamepad (faked): south on the field opens the on-screen keyboard.
+    const pad = { index: 0, mapping: "standard", axes: [0, 0, 0, 0], buttons: Array.from({ length: 17 }, () => ({ pressed: false, value: 0 })) };
+    const getGamepads = navigator.getGamepads;
+    navigator.getGamepads = () => [pad];
+    const button = async (i) => {
+      pad.buttons[i].pressed = true;
+      await sleep(80);
+      pad.buttons[i].pressed = false;
+      await sleep(80);
+    };
+    try {
+      await button(0);
+      let s = await save();
+      assert(s.focused && s.keyboard, `the keyboard opens: ${JSON.stringify({ focused: s.focused, keyboard: s.keyboard })}`);
+      assertEqual(s.keyboard.selected, "1", "the first key highlighted");
+      // Down twice (13), south (0): "a"; west (2): Backspace.
+      await button(13);
+      await button(13);
+      assertEqual((await save()).keyboard.selected, "a", "highlighted");
+      await button(0);
+      await until((s) => s.menu?.save_screen?.name === "Aba", "a typed");
+      await button(2);
+      await until((s) => s.menu?.save_screen?.name === "Ab", "Backspace");
+      if (gpu.state === "ready") {
+        const scene = await volya.call("menu_scene", { width: 1024, height: 768 });
+        assert(scene.sprites.some((p) => p.layer === "keyboard key"), "the keyboard drawn");
+      }
+      // East (1): Done; the screen stays.
+      await button(1);
+      s = (await until((s) => s.menu?.save_screen && !s.menu.save_screen.keyboard, "the keyboard closes")).menu.save_screen;
+      await sleep(200);
+      assert((await state()).menu?.save_screen, "east's release leaves the screen open");
+      assert(!s.focused, "the focus ends");
+      assertEqual(s.name, "Ab", "the name kept");
+    } finally {
+      navigator.getGamepads = getGamepads;
+    }
+    // Back to the menu, then the game.
+    key("Escape");
+    await until((s) => inGame(s) && !s.menu.save_screen, "the in-game menu");
+    key("Escape");
+    await until((s) => s.phase === "level" && !s.menu, "back in the game");
+  },
+
   "the in-game menu: Escape opens it and stops the clock, Return resumes, Load lists no saves, quitting asks": async () => {
     needsGame();
     key("Escape");

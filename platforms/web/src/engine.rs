@@ -282,6 +282,13 @@ pub fn level_controls() -> Option<app::LevelControls> {
     RUNNING.with(|r| r.borrow().as_ref()?.app.level_controls())
 }
 
+/// The save screen's name field while it shows ([`App::text_field`]), in
+/// canvas CSS pixels, and whether it has focus.
+pub fn text_field() -> Option<([f32; 4], bool)> {
+    let (rect, focused) = RUNNING.with(|r| r.borrow().as_ref()?.app.text_field())?;
+    Some((crate::input::css_from_ui(rect), focused))
+}
+
 /// The `bound_keys` op: the names of the keys bound to any action, which
 /// the page's full screen locks (#85); empty while the game is not running.
 pub fn bound_keys() -> Vec<&'static str> {

@@ -865,6 +865,18 @@ impl App {
         }
     }
 
+    /// The save screen's name field (UI units) and whether it has focus,
+    /// while it shows: a platform puts its text entry over it (the
+    /// device's keyboard on touch screens; our design, #94).
+    pub fn text_field(&self) -> Option<(volya_engine_formats::ui::layout::Rect, bool)> {
+        match &self.phase {
+            Some(Phase::Menu(_)) | Some(Phase::Level { menu: Some(_), .. }) => {
+                self.screens.text_field()
+            }
+            _ => None,
+        }
+    }
+
     pub fn quit_requested(&self) -> bool {
         match &self.phase {
             Some(Phase::Menu(m)) => m.quit_requested(),

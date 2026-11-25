@@ -7,7 +7,9 @@
 //! 13): the in-game list's captions, the screens' and boxes' layouts,
 //! strings and textures resolve, and the screens draw.
 //! `VOLYA_DUMP_SAVE=<file.ppm>` and `VOLYA_DUMP_LOAD=<file.ppm>` write the
-//! screens' frames locally. Skips when `VOLYA_GOG_INSTALLER` is unset.
+//! screens' frames locally, `VOLYA_DUMP_KEYBOARD=<file.ppm>` the save screen
+//! with the on-screen keyboard (#94). Skips when `VOLYA_GOG_INSTALLER` is
+//! unset.
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -15,7 +17,7 @@
 mod gog_archives;
 
 use volya_engine::audio::Silent;
-use volya_engine::core::input::{Event, Input, Key};
+use volya_engine::core::input::{Event, GamepadButton, Input, Key};
 use volya_engine::core::ui;
 use volya_engine::core::vfs::StdVfs;
 use volya_engine::core::vfs::db::DbVfs;
@@ -244,6 +246,38 @@ fn in_game_menu_and_save_load_screens_from_game_data() {
     );
     let scene = draw(&menu, &screens, "VOLYA_DUMP_SAVE");
     assert!(scene.first("edit").is_some() && scene.first("caption").is_some());
+    // The on-screen keyboard (#94): a gamepad's south on the name field
+    // opens it; it draws with the field's font; east closes it, the screen
+    // stays.
+    let [x, y, w, h] = save.field;
+    input.handle(Event::PointerMoved {
+        at: [x + w / 2.0, y + h / 2.0],
+    });
+    let pad = |input: &mut Input, button: GamepadButton| {
+        for pressed in [true, false] {
+            input.handle(Event::GamepadButton { button, pressed });
+        }
+    };
+    pad(&mut input, GamepadButton::South);
+    let s = frame(&[], &mut menu, &mut screens, &mut input);
+    let save = s.save_screen.expect("the save screen");
+    assert!(
+        save.focused && save.keyboard.is_some(),
+        "the keyboard opens"
+    );
+    pad(&mut input, GamepadButton::South);
+    let s = frame(&[], &mut menu, &mut screens, &mut input);
+    assert_eq!(s.save_screen.expect("the save screen").name, "1");
+    let scene = draw(&menu, &screens, "VOLYA_DUMP_KEYBOARD");
+    assert_eq!(scene.layer("keyboard key").count(), 50);
+    assert!(scene.layer("keyboard label").count() >= 50);
+    pad(&mut input, GamepadButton::East);
+    let s = frame(&[], &mut menu, &mut screens, &mut input);
+    let save = s.save_screen.expect("east's release leaves the screen");
+    assert!(
+        !save.focused && save.keyboard.is_none(),
+        "the keyboard closes"
+    );
     let s = frame(&[Key::Escape], &mut menu, &mut screens, &mut input);
     assert!(s.save_screen.is_none());
     let s = frame(&[Key::Up, Key::Enter], &mut menu, &mut screens, &mut input);

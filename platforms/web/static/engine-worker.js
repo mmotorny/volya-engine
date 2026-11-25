@@ -17,11 +17,26 @@
 // level's controls go live or stop (level) or their toggles change (crouch
 // toggle engaged, sprint requested, the toggled crouch low, the sprint lock
 // holding): the page's touch controls and pointer lock follow it.
+// { type: "text_field", rect, focused } whenever the save screen's name
+// field shows, moves, gains or loses focus, or goes (rect null): canvas CSS
+// pixels [x, y, width, height]; the page's text entry follows it (#94).
 // Once started, the worker runs a frame loop on requestAnimationFrame where
 // workers have it, otherwise on a 60 Hz timer; it idles while the page is
 // hidden, drawing nothing.
 
-import init, { start, call, resize, frame, visibility, audio_init, audio_mix, input, input_capture, level_controls } from "./pkg/volya_engine_web.js";
+import init, {
+  start,
+  call,
+  resize,
+  frame,
+  visibility,
+  audio_init,
+  audio_mix,
+  input,
+  input_capture,
+  level_controls,
+  text_field,
+} from "./pkg/volya_engine_web.js";
 
 const message = (error) => String(error?.message ?? error);
 
@@ -31,6 +46,7 @@ const nextFrame = self.requestAnimationFrame
 
 let capture = false;
 let controls = 0;
+let field = "";
 /** Tells the page when input capture or the level's controls changed (after calls and frames). */
 function syncCapture() {
   const on = input_capture();
@@ -49,6 +65,12 @@ function syncCapture() {
       low: (bits & 8) !== 0,
       lock: (bits & 16) !== 0,
     });
+  }
+  const f = text_field();
+  const key = f ? Array.from(f).join() : "";
+  if (key !== field) {
+    field = key;
+    postMessage({ type: "text_field", rect: f ? Array.from(f.subarray(0, 4)) : null, focused: f ? f[4] === 1 : false });
   }
 }
 

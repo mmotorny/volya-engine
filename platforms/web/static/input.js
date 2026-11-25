@@ -168,6 +168,11 @@ const AXIS_EPSILON = 0.02;
  */
 export function startInput(view, send) {
   let capture = false;
+  // The page's text entry over the save screen's name field
+  // (text-entry.js): a tap on it reaches the engine too, but its default
+  // (focus, the device's keyboard) stays; characters typed into it arrive
+  // as text.
+  const entry = (event) => event.target?.closest?.("#text-entry");
   let level = false;
   // The page's root takes the lock: the canvas lets pointer events through
   // (style.css), and locked events then target the root and reach `pointer`.
@@ -190,7 +195,7 @@ export function startInput(view, send) {
       // Every contact, with its id; the primary one also drives the cursor.
       const phase = { pointerdown: "start", pointermove: "move" }[event.type] ?? "end";
       send(["touch", ...at(event), phase, event.timeStamp, event.pointerId, event.isPrimary]);
-      event.preventDefault();
+      if (!entry(event)) event.preventDefault();
       return;
     }
     // Mouse and pen. A button pressed or released while another is held
@@ -239,6 +244,8 @@ export function startInput(view, send) {
   const key = (event) => {
     const name = KEYS[event.code];
     if (!capture || !name) return;
+    // A character into the text entry is its text, not a key.
+    if (entry(event) && event.key?.length === 1 && !event.ctrlKey && !event.metaKey) return;
     if (!BROWSER_KEYS.has(event.code)) event.preventDefault();
     const pressed = event.type === "keydown";
     // Physical presses only; shortcuts with modifiers belong to the
