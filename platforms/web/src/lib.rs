@@ -46,14 +46,76 @@ mod counting {
     static LARGE_BLOCKS: [(AtomicUsize, AtomicUsize); 512] =
         [const { (AtomicUsize::new(0), AtomicUsize::new(0)) }; 512];
 
+    /// Live bytes by block size, per power of two (`[k]`: 2^k ≤ size < 2^(k+1)).
+    static BY_SIZE: [AtomicUsize; 33] = [const { AtomicUsize::new(0) }; 33];
+    /// The most live since `reset_record`, and what was live then: the
+    /// sizes' bytes and the large blocks (taken each 256 KiB of new record).
+    static RECORD: AtomicUsize = AtomicUsize::new(0);
+    static RECORD_TAKEN: AtomicUsize = AtomicUsize::new(0);
+    static RECORD_BY_SIZE: [AtomicUsize; 33] = [const { AtomicUsize::new(0) }; 33];
+    static RECORD_LARGE: [(AtomicUsize, AtomicUsize); 512] =
+        [const { (AtomicUsize::new(0), AtomicUsize::new(0)) }; 512];
+
     struct Counting;
 
     fn grew(by: usize) {
-        PEAK.fetch_max(LIVE.fetch_add(by, Relaxed) + by, Relaxed);
+        let live = LIVE.fetch_add(by, Relaxed) + by;
+        PEAK.fetch_max(live, Relaxed);
+    }
+
+    /// After a block was added: a new record's sizes and large blocks.
+    fn recorded() {
+        let live = LIVE.load(Relaxed);
+        if live <= RECORD.load(Relaxed) {
+            return;
+        }
+        RECORD.store(live, Relaxed);
+        if live < RECORD_TAKEN.load(Relaxed) + (256 << 10) {
+            return;
+        }
+        RECORD_TAKEN.store(live, Relaxed);
+        for (r, b) in RECORD_BY_SIZE.iter().zip(&BY_SIZE) {
+            r.store(b.load(Relaxed), Relaxed);
+        }
+        for (r, b) in RECORD_LARGE.iter().zip(&LARGE_BLOCKS) {
+            r.0.store(b.0.load(Relaxed), Relaxed);
+            r.1.store(b.1.load(Relaxed), Relaxed);
+        }
+    }
+
+    /// Starts a new record from what is live now.
+    pub fn reset_record() {
+        RECORD.store(0, Relaxed);
+        RECORD_TAKEN.store(0, Relaxed);
+        recorded();
+    }
+
+    /// The record: live bytes then (as of the last snapshot), bytes per
+    /// size class (KiB, by the class's lower bound in bytes) and the large
+    /// blocks (address MiB, KiB) by size, largest first.
+    pub fn record() -> (usize, Vec<(usize, usize)>, Vec<(f64, usize)>) {
+        let sizes = (RECORD_BY_SIZE.iter().enumerate())
+            .map(|(k, b)| (1usize << k.min(31), b.load(Relaxed) >> 10))
+            .filter(|&(_, kib)| kib > 0)
+            .collect();
+        let mut large: Vec<(f64, usize)> = (RECORD_LARGE.iter())
+            .filter_map(|s| {
+                let p = s.0.load(Relaxed);
+                (p != 0).then(|| (p as f64 / (1 << 20) as f64, s.1.load(Relaxed) >> 10))
+            })
+            .collect();
+        large.sort_by(|a, b| b.1.cmp(&a.1));
+        (RECORD_TAKEN.load(Relaxed), sizes, large)
     }
 
     /// Adds (or with `add` false removes) `size` bytes at `p` to the map.
     fn mapped(p: *mut u8, size: usize, add: bool) {
+        let class = &BY_SIZE[(usize::BITS - 1 - size.max(1).leading_zeros()) as usize];
+        if add {
+            class.fetch_add(size, Relaxed);
+        } else {
+            class.fetch_sub(size, Relaxed);
+        }
         let (start, end) = (p as usize, p as usize + size);
         let mut at = start;
         while at < end {
@@ -89,6 +151,7 @@ mod counting {
             if !p.is_null() {
                 grew(layout.size());
                 mapped(p, layout.size(), true);
+                recorded();
             }
             p
         }
@@ -98,6 +161,7 @@ mod counting {
             if !p.is_null() {
                 grew(layout.size());
                 mapped(p, layout.size(), true);
+                recorded();
             }
             p
         }
@@ -115,6 +179,7 @@ mod counting {
                 mapped(q, size, true);
                 if size > layout.size() {
                     grew(size - layout.size());
+                    recorded();
                 } else {
                     LIVE.fetch_sub(layout.size() - size, Relaxed);
                 }
@@ -533,6 +598,15 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
                 "live_kib_per_mib": per_mib,
                 "large": large,
             }))
+        }
+        // The most live since `{"reset": true}`, and by what (#440).
+        #[cfg(feature = "test-ops")]
+        "heap_record" => {
+            if args.get("reset").and_then(|v| v.as_bool()).unwrap_or(false) {
+                counting::reset_record();
+            }
+            let (live, sizes, large) = counting::record();
+            to_json(&serde_json::json!({ "live_bytes": live, "sizes_kib": sizes, "large": large }))
         }
         "launch" => to_json(&engine::launch().await?),
         "menu_state" => to_json(&engine::state()),

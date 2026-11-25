@@ -472,7 +472,11 @@ impl PostProcess {
     }
 
     /// The presentation quad (3.1 step 5) into `screen`, with
-    /// `postprocess_d` when `distorted`.
+    /// `postprocess_d` when `distorted`, then `overlay` (the menus and HUD)
+    /// in the same pass, so the frame is written once (#433). `last`: the
+    /// pass ends the timed frame. Returns whether it drew (a target was
+    /// built).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn draw(
         &mut self,
         device: &wgpu::Device,
@@ -481,9 +485,11 @@ impl PostProcess {
         screen: &wgpu::TextureView,
         presentation: &Presentation,
         distorted: bool,
-    ) {
+        last: bool,
+        overlay: impl FnOnce(&mut wgpu::RenderPass<'_>),
+    ) -> bool {
         let Some(t) = self.targets.clone() else {
-            return;
+            return false;
         };
         if t.size.1 != t.screen.1 {
             self.effects.blur = 1.0;
@@ -552,7 +558,7 @@ impl PostProcess {
                 },
             ],
         });
-        let timed = crate::timing::pass_writes("presentation", false);
+        let timed = crate::timing::pass_writes("presentation", last);
         crate::stats::pass();
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("postprocess"),
@@ -580,6 +586,8 @@ impl PostProcess {
         pass.set_bind_group(0, &group, &[]);
         crate::stats::draw();
         pass.draw(0..4, 0..1);
+        overlay(&mut pass);
+        true
     }
 }
 
