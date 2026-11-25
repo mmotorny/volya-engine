@@ -34,6 +34,7 @@ Spans time only the engine worker's CPU, not the browser's GPU process or the GP
 ## Storage
 
 - OPFS `volya-engine/diagnostic-log/0` … `7`, segments of 256 KiB with one sync access handle each (readwrite: one copy of the app gets them; another keeps its log in memory).
+- Turning the log on or off, reading it and its status run one at a time, so a read can't hold the handles while they open (#428): the log is reported on only once its store is open.
 - Each event is one self-contained JSON line; a period's events are appended in one write and flushed (each period, and at once after an end).
 - When the newest segment is full the oldest is emptied and becomes the newest, so the oldest events go first. Each segment begins with a header holding its sequence number (the order across reloads) and the session's metadata events. On opening, a segment whose header doesn't read (the origin is shared) is emptied and a line cut by an interrupted write is dropped. The download joins the lines into one trace.
 - The cap is 2 MiB: at about 1.2 KB a second while a game runs (measured, the `menu` suite's session in headless Chrome) it holds about half an hour of play, and stays small to send by mail or chat.
