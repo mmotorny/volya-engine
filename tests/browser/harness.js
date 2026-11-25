@@ -102,7 +102,9 @@ export async function runPage(suite) {
   const base = path.slice(0, path.indexOf("/__test/") + 1);
   const runId = path.match(/\/__test\/run\/([^/]+)\//)?.[1] ?? "manual";
 
-  // The app's DOM, as in index.html.
+  // The app's DOM, as in index.html, with its viewport.
+  const index = new DOMParser().parseFromString(await (await fetch(`${base}index.html`)).text(), "text/html");
+  document.querySelector('meta[name="viewport"]').content = index.querySelector('meta[name="viewport"]').content;
   document.head.insertAdjacentHTML(
     "beforeend",
     `<link rel="icon" href="${base}icon.svg" type="image/svg+xml"><link rel="stylesheet" href="${base}style.css">`,

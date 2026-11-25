@@ -105,9 +105,11 @@ pub async fn launch() -> Result<serde_json::Value, JsValue> {
         Ok(app) => app,
         Err(e) => {
             crate::input::set_capture(false);
+            tracing::error!(error = %e.as_string().unwrap_or_default(), "game failed to start");
             return Err(e);
         }
     };
+    tracing::info!(loading_ms = js_sys::Date::now() - started, "game started");
     crate::input::set_render(Some(app.video_mode()));
     RUNNING.with(|r| {
         *r.borrow_mut() = Some(Running {
@@ -135,6 +137,7 @@ pub fn stop() {
         crate::input::set_capture(false);
         crate::input::set_render(None);
         crate::game::close_saved_games();
+        tracing::info!("game ended");
     }
 }
 

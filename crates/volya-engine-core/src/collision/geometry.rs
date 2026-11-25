@@ -364,26 +364,33 @@ pub fn box_intersects(centre: Vec3, axes: [Vec3; 3], half: Vec3, t: &[Vec3; 3]) 
 /// `length` meets triangle `t` from either side (the Möller–Trumbore test;
 /// a segment in the triangle's plane does not meet it).
 pub fn segment_hits_triangle(origin: Vec3, dir: Vec3, length: f32, t: &[Vec3; 3]) -> bool {
+    ray_triangle_distance(origin, dir, t).is_some_and(|d| (0.0..=length).contains(&d))
+}
+
+/// The signed distance along the unit direction `dir` from `origin` at
+/// which the line through them meets triangle `t` from either side, if it
+/// does (the Möller–Trumbore test; a line in the triangle's plane does not
+/// meet it).
+pub fn ray_triangle_distance(origin: Vec3, dir: Vec3, t: &[Vec3; 3]) -> Option<f32> {
     let e1 = sub(t[1], t[0]);
     let e2 = sub(t[2], t[0]);
     let p = cross(dir, e2);
     let det = dot(e1, p);
     if det.abs() < 1e-12 {
-        return false;
+        return None;
     }
     let inv = 1.0 / det;
     let s = sub(origin, t[0]);
     let u = dot(s, p) * inv;
     if !(0.0..=1.0).contains(&u) {
-        return false;
+        return None;
     }
     let q = cross(s, e1);
     let v = dot(dir, q) * inv;
     if v < 0.0 || u + v > 1.0 {
-        return false;
+        return None;
     }
-    let distance = dot(e2, q) * inv;
-    (0.0..=length).contains(&distance)
+    Some(dot(e2, q) * inv)
 }
 
 #[cfg(test)]

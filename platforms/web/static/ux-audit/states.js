@@ -126,7 +126,21 @@ export const SECTIONS = [
   {
     title: "Settings",
     states: [
-      { id: "settings", name: "Imported game", game: imported, screen: "settings" },
+      { id: "settings", name: "Imported game; WebGPU and WebGL 2 supported", game: imported, screen: "settings" },
+      {
+        id: "settings-no-webgpu",
+        name: "WebGPU not supported by this browser",
+        game: imported,
+        screen: "settings",
+        graphics: { available: { webgpu: false, webgl2: true } },
+      },
+      {
+        id: "settings-webgl2",
+        name: "WebGL 2 chosen",
+        game: imported,
+        screen: "settings",
+        graphics: { chosen: "webgl2" },
+      },
       { id: "settings-checking", name: "Check for updates pressed: checking", game: imported, screen: "settings", check: "checking" },
       { id: "settings-up-to-date", name: "Checked: up to date (for a few seconds)", game: imported, screen: "settings", check: "none" },
       { id: "settings-check-offline", name: "Checked while offline (for a few seconds)", game: imported, screen: "settings", check: "offline" },
@@ -137,6 +151,24 @@ export const SECTIONS = [
         screen: "settings",
         check: "failed",
       },
+      // The diagnostic log (#346): off by default.
+      { id: "settings-log-on-empty", name: "Diagnostic log on, nothing recorded yet", game: imported, screen: "settings", log: { on: true, entries: false } },
+      { id: "settings-log-on", name: "Diagnostic log on, with a log to download", game: imported, screen: "settings", log: { on: true, entries: true } },
+      {
+        id: "settings-log-preparing",
+        name: "Download diagnostic log pressed: preparing the file",
+        game: imported,
+        screen: "settings",
+        log: { on: true, entries: true, download: "preparing" },
+      },
+      {
+        id: "settings-log-failed",
+        name: "Download failed: the log couldn't be read (for a few seconds)",
+        game: imported,
+        screen: "settings",
+        log: { on: true, entries: true, download: "failed" },
+      },
+      { id: "settings-log-off-kept", name: "Diagnostic log turned off, its log kept", game: imported, screen: "settings", log: { on: false, entries: true } },
       { id: "settings-no-game", name: "No game imported", game: fresh, screen: "settings" },
     ],
   },

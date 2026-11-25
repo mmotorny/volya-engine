@@ -50,9 +50,26 @@ body {
   -webkit-text-size-adjust: 100%;
 }
 
-/* The engine owns the screen and its input (input.js): no page gestures. */
-html[data-engine-input] {
+/* No browser zoom anywhere (zoom.js): every element pans but never zooms
+   (WebKit resets touch-action at scroll containers, so not only the root).
+   A page zoomed anyway pans and zooms until back at scale 1. */
+* {
+  touch-action: pan-x pan-y;
+}
+
+html[data-zoomed],
+html[data-zoomed] * {
+  touch-action: manipulation !important;
+}
+
+/* The engine owns the screen and its input (input.js): no page gestures,
+   on every element (each sets its own, as above). */
+html[data-engine-input],
+html[data-engine-input] * {
   touch-action: none;
+}
+
+html[data-engine-input] {
   /* The engine draws its own cursor. */
   cursor: none;
   user-select: none;
@@ -795,6 +812,24 @@ button.back {
 
 .switch small {
   font-size: 0.875rem;
+  color: var(--ink-3);
+}
+
+/* Options, one below the other (Graphics); one the browser can't run is
+   dimmed and can't be picked. */
+[role="radiogroup"] .switch {
+  margin: 0.75rem 0 0;
+}
+
+[role="radiogroup"] .switch:first-child {
+  margin-top: 0;
+}
+
+.switch:has(input:disabled) {
+  cursor: default;
+}
+
+.switch input:disabled + span strong {
   color: var(--ink-3);
 }
 

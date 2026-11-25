@@ -283,6 +283,27 @@ pub fn animated_colour(argb: u32, brightness: f32) -> Vec3 {
     [16, 8, 0].map(|s| ((argb >> s) & 0xFF) as f32 * k)
 }
 
+/// The static part of a glow's occlusion ray (glows.md 5.1): the first
+/// triangle of `collision` met at 0 < t ≤ `length` from `from` along the
+/// unit direction `dir`, from either side; every triangle counts, whatever
+/// its material.
+pub fn static_ray(
+    collision: &CollisionWorld,
+    from: Vec3,
+    dir: Vec3,
+    length: f32,
+) -> Option<[Vec3; 3]> {
+    let mut hit = None;
+    collision.ray_any(from, dir, length, |t| {
+        let found = crate::core::glows::ray_meets(from, dir, length, t);
+        if found {
+            hit = Some(*t);
+        }
+        found
+    });
+    hit
+}
+
 /// The camera of a frame.
 #[derive(Clone, Copy, Debug)]
 pub struct LightCamera {
@@ -417,7 +438,9 @@ impl LevelLights {
     /// sectors, the light passes (4, 5), and the glows (glows.md 3 – 6),
     /// their occlusion rays against `collision`.
     // TODO(#347): the object part of the glows' occlusion ray (glows.md
-    // 5.1).
+    // 5.1): the bone shapes' fields (level-objects.md chunk 16: shape type
+    // codes, the box, sphere and cylinder layouts) and which objects are
+    // enabled are not specified.
     pub fn frame(
         &mut self,
         collision: &CollisionWorld,
@@ -460,17 +483,7 @@ impl LevelLights {
             dt,
             self.glows_per_frame,
             |p| Self::has_sector(collision, portals, p),
-            |from, dir, length| {
-                let mut hit = None;
-                collision.ray_any(from, dir, length, |t| {
-                    let found = geometry::segment_hits_triangle(from, dir, length, t);
-                    if found {
-                        hit = Some(*t);
-                    }
-                    found
-                });
-                hit
-            },
+            |from, dir, length| static_ray(collision, from, dir, length),
         );
     }
 

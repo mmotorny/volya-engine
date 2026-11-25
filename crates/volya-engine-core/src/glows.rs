@@ -11,7 +11,7 @@
 //! allows): a glow's sector matters only as whether it has one.
 
 use crate::camera::Vec3;
-use crate::collision::geometry::segment_hits_triangle;
+use crate::collision::geometry::ray_triangle_distance;
 use crate::lights::Frustum;
 
 fn dot(a: Vec3, b: Vec3) -> f32 {
@@ -334,6 +334,12 @@ impl Glows {
     }
 }
 
+/// Whether the static ray meets triangle `t` at 0 < t ≤ `length`
+/// (section 5.1), from either side.
+pub fn ray_meets(from: Vec3, dir: Vec3, length: f32, t: &[Vec3; 3]) -> bool {
+    ray_triangle_distance(from, dir, t).is_some_and(|d| d > 0.0 && d <= length)
+}
+
 /// The static part of the occlusion ray (section 5.1) with the glow's
 /// remembered test: reused when the ray is the same within the tolerances,
 /// "hit" when the remembered triangle is hit again, otherwise the full
@@ -352,8 +358,9 @@ fn static_test(
         if same {
             return last.hit.is_some();
         }
+        // Hit again at 0 < t < D.
         if let Some(t) = last.hit
-            && segment_hits_triangle(from, dir, length, &t)
+            && ray_triangle_distance(from, dir, &t).is_some_and(|d| d > 0.0 && d < length)
         {
             return true;
         }

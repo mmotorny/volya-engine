@@ -26,7 +26,7 @@ use volya_engine::core::vfs::db::DbVfs;
 use volya_engine::core::vfs::{self, StdVfs, Vfs};
 use volya_engine::data::GameData;
 use volya_engine::level::LevelScreen;
-use volya_engine::level_lights::animated_colour;
+use volya_engine::level_lights::{self, animated_colour};
 use volya_engine::present::Presenter;
 use volya_engine::render::world::LightProgram;
 use volya_engine::render::{Renderer, wgpu};
@@ -491,5 +491,88 @@ fn lights_frame_cost_from_game_data() {
             );
             assert!(per.as_micros() < 5_000, "{what}: {per:?}");
         }
+    });
+}
+
+/// glows.md 5.1 and 7: the static part of the occlusion ray from the New
+/// Game eye to each of the 22 level glows, every triangle tested: glows 7
+/// and 20 not hit, the other 20 hit (glows 6 and 21 by `materials\fake`
+/// triangles only); and, through the level's own frames, what the glows'
+/// occlusion tests make of it.
+#[test]
+fn the_glows_static_rays_at_the_start_from_game_data() {
+    with_game(|tree, data| {
+        let mut screen = LevelScreen::load(tree, data, 0).unwrap();
+        let eye = [-246.726_3, -23.263_261, -134.433_87];
+        let collision = screen.shared_collision();
+        let ll = screen.level_lights();
+        // Chunk 7's glows come first, in record order.
+        let level: Vec<[f32; 3]> = ll.glows.iter().take(22).map(|g| g.position).collect();
+        let hit: Vec<bool> = (level.iter())
+            .map(|&p| {
+                let to: Vec<f32> = (0..3).map(|i| p[i] - eye[i]).collect();
+                let d = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
+                let dir = [to[0] / d, to[1] / d, to[2] / d];
+                level_lights::static_ray(&collision, eye, dir, d).is_some()
+            })
+            .collect();
+        let clear: Vec<usize> = (0..22).filter(|&i| !hit[i]).collect();
+        assert_eq!(clear, [7, 20], "{level:?}");
+        for i in [7, 20] {
+            assert!(near3(level[i], [-249.74, -21.28, -134.44], 0.01), "{i}");
+        }
+        for i in [6, 21] {
+            assert!(near3(level[i], [-244.53, -21.92, -134.42], 0.01), "{i}");
+        }
+        // The start's eye is the level's camera.
+        let start = screen.player().view().eye;
+        assert!(near3(start, eye, 1e-3), "{start:?}");
+        let mut now = 0;
+        for _ in 0..10 {
+            now += 16;
+            screen.update(now, &Input::new());
+        }
+        // From the start's view, the seen glows (2, 3, 6, 13, 14, 21) are
+        // occluded once tested and fade out; glows 7 and 20 are outside it.
+        // The start view looks along +x; glows 7 and 20 are behind it.
+        assert!(screen.player().view().direction[0] > 0.98);
+        let level_glows = |screen: &LevelScreen| {
+            let glows: Vec<_> = screen
+                .level_lights()
+                .glows
+                .iter()
+                .take(22)
+                .cloned()
+                .collect();
+            glows
+        };
+        let glows = level_glows(&screen);
+        for i in [2, 3, 6, 13, 14, 21] {
+            assert!(
+                glows[i].in_sector && glows[i].occluded && glows[i].fade < 255.0,
+                "glow {i}: {:?}",
+                glows[i]
+            );
+        }
+        // Looking at glows 7 and 20 from the same eye: both tested, not
+        // occluded, and drawn.
+        screen.set_camera(eye, look(eye, level[7]));
+        for _ in 0..10 {
+            now += 16;
+            screen.update(now, &Input::new());
+        }
+        let glows = level_glows(&screen);
+        for i in [7, 20] {
+            assert!(
+                glows[i].in_sector && !glows[i].occluded && glows[i].fade == 255.0,
+                "glow {i}: {:?}",
+                glows[i]
+            );
+        }
+        let ll = screen.level_lights();
+        let at_7 = (ll.sprites().iter())
+            .filter(|s| near3(s.corners[0], level[7], 1.0))
+            .count();
+        assert_eq!(at_7, 2, "{:?}", ll.sprites());
     });
 }

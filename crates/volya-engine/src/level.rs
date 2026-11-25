@@ -1737,7 +1737,7 @@ impl NewGameLoad {
             global_ms: 0,
         };
         screen.update_view();
-        screen.zones.sync_lights(&mut screen.lights.lights);
+        screen.sync_zone_lights();
         screen.lights_frame(0.0);
         Ok(screen)
     }
@@ -1907,7 +1907,7 @@ impl LevelScreen {
             }
         }
         // The idle lights of zones updated or created this frame.
-        self.zones.sync_lights(&mut self.lights.lights);
+        self.sync_zone_lights();
         self.draw_updates();
         // sky.md 7.3, k_t from the game clock.
         let (a, b, t) = self.weather.bracket_indices(self.clock.time_of_day());
@@ -2153,6 +2153,14 @@ impl LevelScreen {
 
     /// The level's dynamic light records, for the sources that create and
     /// update their lights each frame (docs/architecture.md, Lights).
+    /// The zones' idle lights given to their records among the level's
+    /// dynamic lights (zone-idle-effects.md 4.4), each made the first time.
+    fn sync_zone_lights(&mut self) {
+        let mut zones = std::mem::take(&mut self.zones);
+        zones.sync_lights(self.lights_mut());
+        self.zones = zones;
+    }
+
     pub fn lights_mut(&mut self) -> &mut Lights {
         &mut self.lights.lights
     }

@@ -2,10 +2,22 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Audio output: plays stereo blocks mixed by the engine worker, which talks to
-// this processor directly over its port. Asks for more when under the target.
+// this processor directly over its port. Under the target it asks, one
+// request at a time, for what tops the queue up to the target plus a
+// request's worth plus what plays while the reply is on its way (the last
+// reply's wait, at most the target): the worker answers between its frames,
+// so a reply has to last a whole frame however long frames are (#343: a
+// fixed 50 ms per reply starved the output once frames took longer). Each
+// request also says how many frames played as silence for want of mixed
+// ones since the last (underrun) and how many are queued; for the diagnostic
+// log (#346), also the last reply's wait, the queue's least, summed and
+// greatest fill over the process calls since the last request, and whether
+// the last reply left it over-full (overrun: over OVERFULL_SECONDS).
 
 const TARGET_SECONDS = 0.15;
 const REQUEST_SECONDS = 0.05;
+// More than the most a reply asks for (TARGET + REQUEST + TARGET).
+const OVERFULL_SECONDS = 0.5;
 
 class VolyaOutput extends AudioWorkletProcessor {
   constructor() {
@@ -13,12 +25,26 @@ class VolyaOutput extends AudioWorkletProcessor {
     this.queue = []; // Float32Array blocks, interleaved stereo
     this.offset = 0; // in the first block, in samples
     this.queued = 0; // frames
+    this.underrun = 0; // frames
     this.pending = false;
+    this.sent = 0; // currentFrame when the pending request was sent
+    this.wait = 0; // frames the last reply took
+    this.overrun = 0; // replies that left the queue over-full
+    this.resetFill();
     this.port.onmessage = ({ data }) => {
       this.queue.push(data);
       this.queued += data.length / 2;
       this.pending = false;
+      this.wait = currentFrame - this.sent;
+      if (this.queued > sampleRate * OVERFULL_SECONDS) this.overrun++;
     };
+  }
+
+  resetFill() {
+    this.fillMin = Infinity;
+    this.fillMax = 0;
+    this.fillSum = 0;
+    this.fillN = 0;
   }
 
   process(_inputs, outputs) {
@@ -27,6 +53,7 @@ class VolyaOutput extends AudioWorkletProcessor {
       const block = this.queue[0];
       if (!block) {
         left[i] = right[i] = 0; // underrun: silence
+        this.underrun++;
         continue;
       }
       left[i] = block[this.offset];
@@ -38,9 +65,26 @@ class VolyaOutput extends AudioWorkletProcessor {
         this.offset = 0;
       }
     }
-    if (!this.pending && this.queued < sampleRate * TARGET_SECONDS) {
+    this.fillMin = Math.min(this.fillMin, this.queued);
+    this.fillMax = Math.max(this.fillMax, this.queued);
+    this.fillSum += this.queued;
+    this.fillN++;
+    const target = sampleRate * TARGET_SECONDS;
+    if (!this.pending && this.queued < target) {
       this.pending = true;
-      this.port.postMessage({ need: Math.round(sampleRate * REQUEST_SECONDS) });
+      this.sent = currentFrame;
+      const need = Math.round(target + sampleRate * REQUEST_SECONDS + Math.min(this.wait, target) - this.queued);
+      this.port.postMessage({
+        need,
+        underrun: this.underrun,
+        queued: this.queued,
+        wait: this.wait,
+        fill: [this.fillMin, this.fillSum, this.fillMax, this.fillN],
+        overrun: this.overrun,
+      });
+      this.underrun = 0;
+      this.overrun = 0;
+      this.resetFill();
     }
     return true;
   }
