@@ -24,7 +24,7 @@
 - Any UI change updates the UX audit board (`platforms/web/static/ux-audit/states.js`, deployed at `/volya-engine/ux-audit/`) in the same commit: every state of the app's own interface is on it, sections and states in the order a user meets them. The user audits designs there instead of clicking through the app.
 - Interface text is plain, concise and professional, and says only what's known and what applies where it's shown: no text meant for another device or browser, no guessed causes or unbacked advice, no facts that vary with the user's game data (sizes, versions) unless read from that data.
 - Interface design: no information the user doesn't need there, including repeats of what they just saw; tell them about blockers before they invest effort; never interrupt them on their behalf (e.g. reloading the app), offer the action instead.
-- Build features compatible with the original game. A temporary stub that unblocks dependent work is fine when an issue tracks replacing it. Any permanent deviation from the original, or addition on top of it, goes to the user first.
+- Build features compatible with the original game. A temporary stub that unblocks dependent work is fine when an issue tracks replacing it. Any permanent deviation from the original, or addition on top of it, goes to the user first. What is fatal in the original is fatal here too (`App::fatal`), never recovered from.
 - Web build must keep functional parity between mobile and desktop browsers; every feature ships with both input paths (touch and keyboard/mouse/gamepad) and is tested on both.
 - Dependencies must be permissively licensed (no copyleft, including LGPL/MPL).
 - Never use or derive from leaked X-Ray source or its forks (e.g. OpenXRay).
