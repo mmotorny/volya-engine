@@ -185,6 +185,30 @@ impl Format {
         texels
     }
 
+    /// A BC block's colour part as its four colours (RGBA; BC1's
+    /// transparent black included) and its texels' 2-bit indices into them
+    /// (row order, texel `i`'s at bit `2 i`): what
+    /// [`decode_block`](Self::decode_block) gives each texel, alpha aside
+    /// for BC2 and BC3. `None` for an uncompressed format.
+    pub fn colour_block(self, bytes: &[u8]) -> Option<([[u8; 4]; 4], u32)> {
+        match self {
+            Self::Bc1 => Some(colour_palette(bytes, true)),
+            Self::Bc2 | Self::Bc3 => Some(colour_palette(&bytes[8..16], false)),
+            Self::Masked(_) => None,
+        }
+    }
+
+    /// The alpha block of a BC2 or BC3 block, per texel (row order), as
+    /// [`decode_block`](Self::decode_block) gives it; `None` for formats
+    /// without one.
+    pub fn block_alpha(self, bytes: &[u8]) -> Option<[u8; 16]> {
+        match self {
+            Self::Bc2 => Some(explicit_alpha(&bytes[..8])),
+            Self::Bc3 => Some(interpolated_alpha(&bytes[..8])),
+            _ => None,
+        }
+    }
+
     /// Whether a BC1 block has a transparent texel (BC1's three-colour mode
     /// with index 3); false for other formats.
     pub fn block_has_transparency(self, bytes: &[u8]) -> bool {
@@ -213,6 +237,13 @@ fn rgb565(value: u16) -> [u32; 3] {
 
 /// The 16 texels of a BC colour block, in row order.
 fn decode_colour_block(bytes: &[u8], bc1: bool) -> [[u8; 4]; 16] {
+    let (palette, indices) = colour_palette(bytes, bc1);
+    std::array::from_fn(|i| palette[((indices >> (2 * i)) & 3) as usize])
+}
+
+/// A BC colour block's four colours (RGBA) and its texels' 2-bit indices
+/// into them (texel `i`'s at bit `2 i`).
+fn colour_palette(bytes: &[u8], bc1: bool) -> ([[u8; 4]; 4], u32) {
     let raw0 = u16::from_le_bytes([bytes[0], bytes[1]]);
     let raw1 = u16::from_le_bytes([bytes[2], bytes[3]]);
     let (c0, c1) = (rgb565(raw0), rgb565(raw1));
@@ -237,7 +268,7 @@ fn decode_colour_block(bytes: &[u8], bc1: bool) -> [[u8; 4]; 16] {
         }
     };
     let indices = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
-    std::array::from_fn(|i| palette[((indices >> (2 * i)) & 3) as usize].map(|v| v as u8))
+    (palette.map(|c| c.map(|v| v as u8)), indices)
 }
 
 /// BC2's alpha: 4 bits per texel, scaled to 8.

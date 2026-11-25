@@ -111,7 +111,7 @@ fn every_mode_decodes_as_fitted() {
         let block = opaque(&texels);
         for (mode, candidate) in [
             ("etc1", etc1(&block, Modes::All)),
-            ("planar", planar(&block)),
+            ("planar", planar(&block, &plane_sums(&block))),
             ("t/h", t_and_h(&block)),
         ] {
             let decoded = decode_rgb(candidate.bits.to_be_bytes());
@@ -153,7 +153,10 @@ fn modes_are_selected_by_their_bits() {
     let mut rng = Rng(7);
     for texels in blocks(&mut rng, 500) {
         let block = opaque(&texels);
-        assert_eq!(mode(planar(&block).bits.to_be_bytes()), "planar");
+        assert_eq!(
+            mode(planar(&block, &plane_sums(&block)).bits.to_be_bytes()),
+            "planar"
+        );
         let th = mode(t_and_h(&block).bits.to_be_bytes());
         assert!(th == "t" || th == "h", "{th}");
         let e = mode(etc1(&block, Modes::All).bits.to_be_bytes());
@@ -235,7 +238,7 @@ fn punch_through_blocks() {
         };
         let mut candidates = vec![etc1(&block, modes), t_and_h(&block)];
         if modes == Modes::Opaque {
-            candidates.push(planar(&block));
+            candidates.push(planar(&block, &plane_sums(&block)));
         }
         for mut c in candidates {
             if modes == Modes::Punch {

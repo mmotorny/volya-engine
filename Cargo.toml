@@ -71,6 +71,11 @@ opt-level = 1
 opt-level = "s"
 lto = true
 
+# The ETC2 encoder (#183) runs on every WebGL 2 level load: about twice as
+# fast at opt-level 3 as at "s" (measured natively).
+[profile.release.package.volya-engine-formats]
+opt-level = 3
+
 # File install conditions exposed (docs/architecture.md, Game data).
 [patch.crates-io]
 inno = { git = "https://github.com/mmotorny/inno", branch = "expose-file-conditions" }

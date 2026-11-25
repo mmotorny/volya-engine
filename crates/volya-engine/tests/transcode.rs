@@ -94,7 +94,10 @@ fn level_textures_transcode() {
         classes[colour].texels += blocks * 16;
         for (source, encoded) in levels.iter().zip(&out) {
             let encoded_block = target.block_bytes();
-            for (s, e) in source.chunks_exact(block).zip(encoded.chunks_exact(encoded_block)) {
+            for (s, e) in source
+                .chunks_exact(block)
+                .zip(encoded.chunks_exact(encoded_block))
+            {
                 let texels = dds.format.decode_block(s);
                 let (alpha, rgb) = if target == Etc2Format::Rgba8 {
                     (Some(decode::alpha(e[..8].try_into().unwrap())), &e[8..])
@@ -142,8 +145,9 @@ fn level_textures_transcode() {
             c.psnr()
         );
     }
-    // The quality #113's encoder measured (dB), less 0.5 (#183).
-    for (c, floor) in classes.iter().zip([0.0, 0.0, 0.0, 0.0]) {
-        assert!(c.psnr() > floor, "{:.2} dB", c.psnr());
+    // #113's encoder measured 43.38, 35.71, 38.91 and 47.77 dB; #183's may
+    // lose up to about 0.5 dB a kind for its speed.
+    for (c, floor) in classes.iter().zip([42.88, 35.21, 38.41, 47.27]) {
+        assert!(c.psnr() > floor, "{:.2} dB, below {floor}", c.psnr());
     }
 }

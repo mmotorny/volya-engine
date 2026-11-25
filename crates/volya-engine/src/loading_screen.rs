@@ -26,6 +26,7 @@
 //! the New Game intro under its last frames ([`intro_due`], section 7).
 
 use std::io;
+use std::sync::Arc;
 
 use serde::Serialize;
 
@@ -33,7 +34,7 @@ use crate::core::text::StringTable;
 use crate::core::vfs::Vfs;
 use crate::data::{self, Assets, GameData};
 use crate::draw::Ctx;
-use crate::level::{LevelScreen, NewGameLoad};
+use crate::level::{LevelScreen, LevelWorld, NewGameLoad};
 use crate::scene::{Scene, Sprite, TextureId};
 use volya_engine_formats::text::font::UiFont;
 use volya_engine_formats::ui::layout::HAlign;
@@ -417,6 +418,11 @@ enum Hold {
     Preparing(Vec<String>),
     /// Prepared: the next step goes on to the next caption.
     Prepared,
+    /// The level, made, while the platform prepares its world for the GPU
+    /// (#184), the last caption showing.
+    World(Box<LevelScreen>),
+    /// The level's world prepared: the next step shows the level.
+    WorldPrepared(Box<LevelScreen>),
 }
 
 impl Loading {
@@ -437,7 +443,10 @@ impl Loading {
 
     /// Holds the loading under `st_loading_textures`, once its work is
     /// done, until [`Loading::textures_prepared`]: the platform prepares
-    /// [`Loading::textures_to_prepare`] meanwhile.
+    /// [`Loading::textures_to_prepare`] meanwhile. Then, once the level is
+    /// made, it holds under the last caption until
+    /// [`Loading::world_prepared`], while the platform uploads
+    /// [`Loading::world_to_prepare`] a piece at a time (#184).
     pub fn prepare_textures(&mut self) {
         self.prepare = true;
     }
@@ -454,6 +463,22 @@ impl Loading {
     pub fn textures_prepared(&mut self) {
         if matches!(self.hold, Hold::Preparing(_)) {
             self.hold = Hold::Prepared;
+        }
+    }
+
+    /// The level's world, while the platform is to prepare it for the GPU.
+    pub fn world_to_prepare(&self) -> Option<&Arc<LevelWorld>> {
+        match &self.hold {
+            Hold::World(level) => Some(level.world()),
+            _ => None,
+        }
+    }
+
+    /// The platform has prepared the level's world: the next step shows
+    /// the level.
+    pub fn world_prepared(&mut self) {
+        if let Hold::World(level) = std::mem::take(&mut self.hold) {
+            self.hold = Hold::WorldPrepared(level);
         }
     }
 
@@ -479,6 +504,14 @@ impl Loading {
                 self.hold = Hold::Preparing(paths);
                 return Ok(None);
             }
+            Hold::World(level) => {
+                self.hold = Hold::World(level);
+                return Ok(None);
+            }
+            Hold::WorldPrepared(mut level) => {
+                level.wait(now);
+                return Ok(Some(*level));
+            }
             Hold::Prepared => {}
             Hold::None => {
                 let stage = self.stage();
@@ -500,7 +533,12 @@ impl Loading {
             self.screen.begin(data, self.stages[self.current]);
             return Ok(None);
         }
-        std::mem::take(&mut self.load).finish(now).map(Some)
+        let level = std::mem::take(&mut self.load).finish(now)?;
+        if self.prepare {
+            self.hold = Hold::World(Box::new(level));
+            return Ok(None);
+        }
+        Ok(Some(level))
     }
 }
 

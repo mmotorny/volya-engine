@@ -1157,6 +1157,16 @@ impl LevelScreen {
         self.player.paused(now);
     }
 
+    /// The level waits until `now` before it first shows (the platform
+    /// preparing its world for the GPU, #184): no clock moves, as if it
+    /// were made at `now`.
+    pub fn wait(&mut self, now: u64) {
+        let elapsed = now.saturating_sub(self.last);
+        self.shown += elapsed;
+        self.last = now;
+        self.player.paused(now);
+    }
+
     /// One frame at `now` with this frame's `input`. The game clock
     /// advances by the real time since the previous frame, uncapped (our
     /// choice: the specs cap only the movement's and the display's frame

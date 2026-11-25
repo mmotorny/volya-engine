@@ -847,10 +847,30 @@ fn loading_waits_for_prepared_textures() {
     app.textures_prepared();
     step(&mut app, &mut input, &mut audio);
     assert_eq!(caption(&app).map(|c| c.0), Some(17), "went on");
+    // Then held under the last caption while the world is uploaded in
+    // pieces (#184), its clocks not running meanwhile.
+    step(&mut app, &mut input, &mut audio);
+    let level = app
+        .world_to_prepare()
+        .expect("the world to prepare")
+        .clone();
+    let mut presenter = Presenter::new();
+    let mut turns = 1;
+    let start = Instant::now();
+    while !presenter
+        .prepare_world(&mut gpu, &tree, &level, 4 << 20)
+        .unwrap()
+    {
+        turns += 1;
+        step(&mut app, &mut input, &mut audio);
+        assert_eq!(caption(&app).map(|c| c.0), Some(17), "held");
+    }
+    eprintln!("world prepared in {turns} turns, {:.1?}", start.elapsed());
+    assert!(turns > 10, "{turns} turns");
+    app.world_prepared();
     step(&mut app, &mut input, &mut audio);
     assert!(matches!(app.state(), AppState::Level { .. }));
     let scene = app.scene(&tree, SIZE).unwrap();
-    let mut presenter = Presenter::new();
     presenter.draw_list(&mut gpu, &tree, &scene, 0);
     let errors = presenter.take_errors();
     assert!(errors.is_empty(), "{errors:?}");
