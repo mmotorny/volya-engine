@@ -14,9 +14,10 @@
 //! the strict-sorted draws are ordered on the CPU each frame (10.3).
 
 use std::collections::HashMap;
+use std::io;
 use std::rc::Rc;
 
-use volya_engine_formats::level_geom::{Layout, LevelGeom};
+use volya_engine_formats::level_geom::{GeomBuffer, GeomSource, Layout, LevelGeom};
 use wgpu::util::DeviceExt;
 
 use crate::sky::{SkyFrame, SkyPipelines, SkyResources, SkyTextures};
@@ -750,6 +751,76 @@ fn draw_record(surface: &Surface<Texture>, d: &WorldDraw, out: &mut Vec<u8>) {
     );
 }
 
+/// Most bytes of a buffer the CPU holds at once while streaming it to the
+/// GPU.
+pub const UPLOAD_PIECE: usize = 2 << 20;
+
+/// A buffer holding `contents` (its size rounded up to whole 4-byte words,
+/// zero-padded), written with `Queue::write_buffer`. Unlike a buffer mapped
+/// at creation, this makes no copy of `contents` in the wasm heap on the web
+/// (wgpu's WebGPU backend passes the bytes to the browser as they are).
+pub(crate) fn upload_buffer(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    usage: wgpu::BufferUsages,
+    contents: &[u8],
+) -> wgpu::Buffer {
+    let size = (contents.len() as u64).next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT);
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size,
+        usage: usage | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let whole = contents.len() / 4 * 4;
+    if whole > 0 {
+        queue.write_buffer(&buffer, 0, &contents[..whole]);
+    }
+    if whole < contents.len() {
+        let mut tail = [0; 4];
+        tail[..contents.len() - whole].copy_from_slice(&contents[whole..]);
+        queue.write_buffer(&buffer, whole as u64, &tail);
+    }
+    buffer
+}
+
+/// A buffer of `bytes` bytes (rounded up to whole 4-byte words, zero-padded,
+/// at least `min_size`) filled by `fill(offset, out)` in pieces of at most
+/// [`UPLOAD_PIECE`] bytes through `piece`, each written with
+/// `Queue::write_buffer` (see [`upload_buffer`]).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn stream_buffer(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    usage: wgpu::BufferUsages,
+    bytes: u64,
+    min_size: u64,
+    piece: &mut Vec<u8>,
+    mut fill: impl FnMut(u64, &mut [u8]) -> io::Result<()>,
+) -> Result<wgpu::Buffer, String> {
+    let size = bytes
+        .next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT)
+        .max(min_size);
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size,
+        usage: usage | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut at = 0;
+    while at < bytes {
+        let n = (bytes - at).min(UPLOAD_PIECE as u64) as usize;
+        piece.clear();
+        piece.resize(n.next_multiple_of(4), 0);
+        fill(at, &mut piece[..n]).map_err(|e| format!("{label}: {e}"))?;
+        queue.write_buffer(&buffer, at, piece);
+        at += n as u64;
+    }
+    Ok(buffer)
+}
+
 impl Renderer {
     /// Uploads `geom`'s buffers as stored and records `draws` with
     /// `surfaces`. A draw whose vertex layout does not suit its surface's
@@ -779,83 +850,116 @@ impl Renderer {
         draws: &[WorldDraw],
         sky: Option<&SkyTextures<Texture>>,
     ) -> Result<World, String> {
+        self.create_world_from(&mut geom.source(), objects, surfaces, draws, sky)
+    }
+
+    /// [`Renderer::create_world_with`] reading the static geometry from
+    /// `geom` as it uploads it, in pieces of at most [`UPLOAD_PIECE`]
+    /// bytes, so the CPU never holds more of it than one piece. Also fails
+    /// when reading fails.
+    pub fn create_world_from(
+        &mut self,
+        geom: &mut dyn GeomSource,
+        objects: &ObjectGeometry,
+        surfaces: &[Surface<Texture>],
+        draws: &[WorldDraw],
+        sky: Option<&SkyTextures<Texture>>,
+    ) -> Result<World, String> {
         if !objects.vertices.len().is_multiple_of(MODEL_VERTEX_BYTES) {
             return Err("object vertices are not whole model vertices".into());
         }
         let object_vertices = (objects.vertices.len() / MODEL_VERTEX_BYTES) as u64;
+        let layout = geom.layout();
         for d in draws {
             let fits = if d.object.is_some() {
                 u64::from(d.first_index) + u64::from(d.index_count) <= objects.indices.len() as u64
                     && u64::from(d.first_vertex) < object_vertices.max(1)
             } else {
-                (d.vertex_buffer as usize) < geom.vertex_buffers.len()
-                    && (d.index_buffer as usize) < geom.index_buffers.len()
+                (d.vertex_buffer as usize) < layout.vertex_buffers.len()
+                    && (d.index_buffer as usize) < layout.index_counts.len()
             };
             if !fits {
                 return Err(format!("draw {d:?} names a missing buffer"));
             }
         }
+        let vertex_layouts: Vec<Option<Layout>> =
+            layout.vertex_buffers.iter().map(|b| b.layout).collect();
+        let vertex_bytes: Vec<u64> = layout.vertex_buffers.iter().map(|b| b.bytes()).collect();
+        let index_bytes: Vec<u64> = layout
+            .index_counts
+            .iter()
+            .map(|&n| 2 * u64::from(n))
+            .collect();
         let device = self.device.clone();
+        let queue = self.queue.clone();
         let format = self.format;
         let pipelines = self
             .world_pipelines
-            .get_or_insert_with(|| WorldPipelines::new(&device, &self.queue, format));
+            .get_or_insert_with(|| WorldPipelines::new(&device, &queue, format));
         let mut buffer_bytes = 0;
-        let vertex_buffers: Vec<wgpu::Buffer> = geom
-            .vertex_buffers
-            .iter()
-            .map(|vb| {
-                buffer_bytes += vb.data.len() as u64;
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("level.geom vertices"),
-                    contents: &vb.data,
-                    usage: wgpu::BufferUsages::VERTEX,
-                })
-            })
-            .collect();
-        let index_data = |ib: &[u16]| {
-            let mut data: Vec<u8> = ib.iter().flat_map(|i| i.to_le_bytes()).collect();
-            // Buffer sizes are multiples of 4.
-            data.resize(data.len().next_multiple_of(4).max(4), 0);
-            data
-        };
-        let mut index_buffers: Vec<wgpu::Buffer> = geom
-            .index_buffers
-            .iter()
-            .map(|ib| {
-                let data = index_data(ib);
-                buffer_bytes += data.len() as u64;
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("level.geom indices"),
-                    contents: &data,
-                    usage: wgpu::BufferUsages::INDEX,
-                })
-            })
-            .collect();
+        let mut piece = Vec::new();
+        let mut vertex_buffers = Vec::with_capacity(vertex_bytes.len() + 1);
+        for (i, &bytes) in vertex_bytes.iter().enumerate() {
+            buffer_bytes += bytes;
+            vertex_buffers.push(stream_buffer(
+                &device,
+                &queue,
+                "level.geom vertices",
+                wgpu::BufferUsages::VERTEX,
+                bytes,
+                0,
+                &mut piece,
+                |at, out| geom.read(GeomBuffer::Vertices(i as u32), at, out),
+            )?);
+        }
+        let mut index_buffers = Vec::with_capacity(index_bytes.len() + 1);
+        for (i, &bytes) in index_bytes.iter().enumerate() {
+            // Index buffers are at least 4 bytes, as before any were empty.
+            buffer_bytes += bytes.next_multiple_of(4).max(4);
+            index_buffers.push(stream_buffer(
+                &device,
+                &queue,
+                "level.geom indices",
+                wgpu::BufferUsages::INDEX,
+                bytes,
+                4,
+                &mut piece,
+                |at, out| geom.read(GeomBuffer::Indices(i as u32), at, out),
+            )?);
+        }
         // The objects' buffers follow the level's.
-        let mut vertex_buffers = vertex_buffers;
         let (object_vb, object_ib) = (vertex_buffers.len() as u32, index_buffers.len() as u32);
         let mut object_buffer_bytes = 0;
         if !objects.vertices.is_empty() {
             // Whole 16-byte vertices: a multiple of 4 bytes, as buffers need.
             let vertices = &objects.vertices;
-            let indices = index_data(&objects.indices);
-            object_buffer_bytes += (vertices.len() + indices.len()) as u64;
-            vertex_buffers.push(
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("object vertices"),
-                    contents: vertices,
-                    usage: wgpu::BufferUsages::VERTEX,
-                }),
-            );
-            index_buffers.push(
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("object indices"),
-                    contents: &indices,
-                    usage: wgpu::BufferUsages::INDEX,
-                }),
-            );
+            let index_bytes = 2 * objects.indices.len() as u64;
+            object_buffer_bytes += vertices.len() as u64 + index_bytes.next_multiple_of(4).max(4);
+            vertex_buffers.push(upload_buffer(
+                &device,
+                &queue,
+                "object vertices",
+                wgpu::BufferUsages::VERTEX,
+                vertices,
+            ));
+            index_buffers.push(stream_buffer(
+                &device,
+                &queue,
+                "object indices",
+                wgpu::BufferUsages::INDEX,
+                index_bytes,
+                4,
+                &mut piece,
+                |at, out| {
+                    for (j, o) in out.iter_mut().enumerate() {
+                        let at = at as usize + j;
+                        *o = objects.indices[at / 2].to_le_bytes()[at % 2];
+                    }
+                    Ok(())
+                },
+            )?);
         }
+        drop(piece);
         buffer_bytes += object_buffer_bytes;
 
         // Draws that can be drawn: surface present, layouts agree. Object
@@ -865,9 +969,7 @@ impl Renderer {
                 if d.object.is_some() {
                     s.program.layout() == VertexLayout::Model && !objects.vertices.is_empty()
                 } else {
-                    geom.vertex_buffers[d.vertex_buffer as usize]
-                        .layout
-                        .map(VertexLayout::Level)
+                    vertex_layouts[d.vertex_buffer as usize].map(VertexLayout::Level)
                         == Some(s.program.layout())
                 }
             })
@@ -894,11 +996,13 @@ impl Renderer {
         records.resize(records.len().max(DRAW_BYTES), 0);
         buffer_bytes += records.len() as u64;
         object_buffer_bytes += (object_draws * DRAW_BYTES) as u64;
-        let draw_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("world draws"),
-            contents: &records,
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+        let draw_buffer = upload_buffer(
+            &device,
+            &queue,
+            "world draws",
+            wgpu::BufferUsages::STORAGE,
+            &records,
+        );
         let frame = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("world frame"),
             size: FRAME_BYTES,
@@ -1089,19 +1193,20 @@ impl Renderer {
         };
         let early = record(&early);
         let late = record(&late);
-        let (sky, sky_error) = match sky.map(|t| SkyResources::new(&device, &pipelines.sky, t)) {
-            Some(Ok(sky)) => {
-                for t in sky.textures() {
-                    if !textures.iter().any(|k| k.texture == t.texture) {
-                        texture_bytes += self::texture_bytes(&t.texture);
-                        textures.push(t.clone());
+        let (sky, sky_error) =
+            match sky.map(|t| SkyResources::new(&device, &queue, &pipelines.sky, t)) {
+                Some(Ok(sky)) => {
+                    for t in sky.textures() {
+                        if !textures.iter().any(|k| k.texture == t.texture) {
+                            texture_bytes += self::texture_bytes(&t.texture);
+                            textures.push(t.clone());
+                        }
                     }
+                    (Some(sky), None)
                 }
-                (Some(sky), None)
-            }
-            Some(Err(e)) => (None, Some(e)),
-            None => (None, None),
-        };
+                Some(Err(e)) => (None, Some(e)),
+                None => (None, None),
+            };
         Ok(World(Rc::new(Inner {
             vertex_buffers,
             index_buffers,

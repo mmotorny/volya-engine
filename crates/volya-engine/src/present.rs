@@ -195,8 +195,8 @@ impl Presenter {
     }
 
     /// The GPU copy of `scene`'s static world, uploaded on first sight:
-    /// its geometry (taken from the level) and its surfaces' textures (read
-    /// from `tree`).
+    /// its geometry and its surfaces' textures, read from `tree`, and the
+    /// objects' geometry (taken from the level).
     fn world_frame(
         &mut self,
         renderer: &mut Renderer,
@@ -248,9 +248,6 @@ impl Presenter {
         tree: &dyn Vfs,
         level: &LevelWorld,
     ) -> Result<World, String> {
-        let geom = level
-            .take_geometry()
-            .ok_or("geometry already uploaded elsewhere")?;
         let objects = level
             .objects
             .take_geometry()
@@ -334,7 +331,17 @@ impl Presenter {
             })
             .collect::<Option<Vec<_>>>()
             .map(|sections| SkyTextures { sections });
-        let world = renderer.create_world_with(&geom, &objects, &surfaces, &draws, sky.as_ref())?;
+        // The static geometry streams from its file to the GPU, a piece
+        // at a time.
+        let path = level.geometry_path();
+        let mut file = tree.open(&path).map_err(|e| format!("{path}: {e}"))?;
+        let world = renderer.create_world_from(
+            &mut level.geometry().reader(&mut file),
+            &objects,
+            &surfaces,
+            &draws,
+            sky.as_ref(),
+        )?;
         if let Some(e) = world.sky_error() {
             self.errors.push(format!("{}: sky: {e}", level.dir));
         }

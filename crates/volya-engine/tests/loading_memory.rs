@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! Heap use of each New Game loading stage on the Russian edition (BYOA):
-//! the peak above the stage's start and what the stage keeps. The loading
-//! peak is the wasm heap's high-water mark, which never shrinks. Its own
-//! test binary, so no other test allocates meanwhile. Skips when
-//! `VOLYA_GOG_INSTALLER` is unset.
+//! the peak above the stage's start and what the stage keeps, each peak
+//! held to a budget. The loading peak is the wasm heap's high-water mark,
+//! which never shrinks. Its own test binary, so no other test allocates
+//! meanwhile. Skips when `VOLYA_GOG_INSTALLER` is unset.
 
 #![cfg(not(target_arch = "wasm32"))]
 // A counting allocator needs `unsafe impl GlobalAlloc`; it only forwards to
@@ -67,6 +67,24 @@ fn mb(bytes: usize) -> f64 {
     bytes as f64 / 1e6
 }
 
+/// Each stage's peak above its start, MB: the measured peak (native,
+/// `l01_escape`, #79) with a margin, so a regression fails. Stages not
+/// listed allocate next to nothing.
+const STAGE_BUDGETS: [(Stage, f64); 8] = [
+    (Stage::CreatingNewGame, 14.0),  // 12.6: the spawn file and game graph
+    (Stage::ServerConnecting, 12.5), // 10.6
+    (Stage::OpeningStream, 14.0),    // 12.6: the `level` file and its parse
+    (Stage::LoadingCform, 48.0),     // 44.3: the collision world it keeps
+    (Stage::LoadingGeometry, 1.5),   // 0.7: the geometry's layout only
+    (Stage::LoadingSpatialDb, 7.0),  // 5.4: index pieces and the draw list
+    (Stage::ClientSpawning, 6.5),    // 5.1
+    (Stage::LoadingTextures, 4.5),   // 3.2
+];
+/// Any other stage's peak, MB.
+const OTHER_BUDGET: f64 = 0.5;
+/// The whole load's peak above its start, MB (56.5 measured).
+const LOADING_BUDGET: f64 = 62.0;
+
 #[test]
 fn loading_stage_memory() {
     let Some(archives) = gog_archives::archives() else {
@@ -93,6 +111,20 @@ fn loading_stage_memory() {
             mb(after) - mb(before),
             mb(after - base)
         );
+        let budget = STAGE_BUDGETS
+            .iter()
+            .find(|(s, _)| *s == stage)
+            .map_or(OTHER_BUDGET, |&(_, b)| b);
+        assert!(
+            mb(peak - before) <= budget,
+            "{stage:?} peaks at +{:.1} MB, over its {budget} MB budget",
+            mb(peak - before)
+        );
     }
     eprintln!("loading peak: {:.1} MB above the start", mb(highest));
+    assert!(
+        mb(highest) <= LOADING_BUDGET,
+        "the load peaks at +{:.1} MB, over its {LOADING_BUDGET} MB budget",
+        mb(highest)
+    );
 }

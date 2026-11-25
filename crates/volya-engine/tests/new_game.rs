@@ -99,8 +99,8 @@ fn new_game_start_view_from_game_data() {
     assert!(errors.is_empty(), "{errors:?}");
     let world = presenter.world().expect("world uploaded").clone();
     assert!(
-        screen.world().take_geometry().is_none(),
-        "CPU copy released"
+        screen.world().objects.take_geometry().is_none(),
+        "CPU copy of the objects released"
     );
 
     // Frame time: the same view again, the world already on the GPU.
