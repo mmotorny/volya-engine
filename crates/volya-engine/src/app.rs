@@ -13,6 +13,7 @@
 //! turns true and the platform returns to its own interface.
 
 use std::io;
+use std::sync::Arc;
 
 use serde::Serialize;
 
@@ -20,13 +21,14 @@ use crate::audio::AudioOut;
 use crate::core::audio::Category;
 use crate::core::console::Console;
 use crate::core::input::{Action, Control, Input};
+use crate::core::pause::{GlobalClock, Pause};
 use crate::core::sound::Fatal;
 use crate::core::sound::system::Listener;
 use crate::core::vfs::{self, Vfs};
 use crate::data::{Assets, GameData};
 use crate::draw::Ctx;
 use crate::inventory_screen::{self, InventoryScreen, InventoryState};
-use crate::level::{LevelScreen, LevelState};
+use crate::level::{LevelScreen, LevelState, LevelWorld};
 use crate::level_sound::{LevelSounds, SoundRun};
 use crate::loading_screen::{
     GAME_TYPE, Loading, LoadingScreen, LoadingScreenState, OVERLAY_FRAMES, SERVER_NEW_GAME,
@@ -217,6 +219,20 @@ impl Intro {
     fn state(&self, data: &GameData, now: u64) -> Option<MovieSequenceState> {
         Some(self.player.as_ref()?.state(data.intro_game()?, now))
     }
+
+    /// See [`MoviePlayer::current`].
+    fn current<'a>(&self, data: &'a GameData) -> Option<(usize, Option<&'a str>)> {
+        self.player.as_ref()?.current(data.intro_game()?)
+    }
+}
+
+/// The interface sequences that play (sound-weather-ambient.md section 3.1).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum SequenceId {
+    /// `intro_logo`.
+    Logo,
+    /// `intro_game`.
+    Intro,
 }
 
 /// A level frame: the level, then the intro, then the loading image
@@ -400,8 +416,16 @@ pub struct App {
     sound_paused: bool,
     /// The running level's sounds (crate::level_sound).
     level_sounds: Option<LevelSounds>,
-    /// The sound rules' state kept for the whole run, with their clock.
+    /// The sound rules' state kept for the whole run.
     sound_run: SoundRun,
+    /// The pause and the global clock (sound-weather-ambient.md section
+    /// 3.1; [`App::sync_pause`]).
+    pause: Pause,
+    global_clock: GlobalClock,
+    /// The interface sequence item playing at the last [`App::sync_pause`].
+    pause_item: Option<(SequenceId, usize)>,
+    /// The engine clock's advance since the previous update, milliseconds.
+    frame_ms: u64,
     /// The console may have changed this frame.
     console_touched: bool,
     /// Updates so far.
@@ -494,6 +518,10 @@ impl App {
             sound_paused: false,
             level_sounds: None,
             sound_run: SoundRun::default(),
+            pause: Pause::default(),
+            global_clock: GlobalClock::default(),
+            pause_item: None,
+            frame_ms: 0,
             console_touched: false,
             frames: 0,
             unlock_opened: None,
@@ -552,6 +580,30 @@ impl App {
         }
     }
 
+    /// The level's world, while the loading waits for the platform to
+    /// prepare it for the GPU (with [`App::set_prepare_textures`], #184).
+    pub fn world_to_prepare(&self) -> Option<&Arc<LevelWorld>> {
+        match &self.phase {
+            Some(Phase::Loading {
+                stages: NewGame::Stages(loading),
+                ..
+            }) => loading.world_to_prepare(),
+            _ => None,
+        }
+    }
+
+    /// The platform has prepared [`App::world_to_prepare`]: the level shows
+    /// at the next update.
+    pub fn world_prepared(&mut self) {
+        if let Some(Phase::Loading {
+            stages: NewGame::Stages(loading),
+            ..
+        }) = &mut self.phase
+        {
+            loading.world_prepared();
+        }
+    }
+
     /// The saved-games folder as the platform found it.
     pub fn set_saved_games(&mut self, saves: SavedGames) {
         self.screens.set_saves(saves);
@@ -595,6 +647,7 @@ impl App {
         {
             self.failed.get_or_insert(error);
         }
+        self.sync_pause();
         let failed = match self.failed.take() {
             Some(error) => Some(error),
             None => self.sound_frame(tree, audio).err().map(|f| f.to_string()),
@@ -636,8 +689,44 @@ impl App {
             &self.data, now, input, audio, title,
         )));
         self.screens.menu_opened();
+        self.sync_pause();
         // The level's sounds go as when the level is left.
         let _ = self.sound_frame(tree, audio);
+    }
+
+    /// The events of the pause's table (sound-weather-ambient.md section
+    /// 3.1) that this frame's state shows: an interface sequence's item
+    /// ending or starting (the logo sequence, the New Game intro), then the
+    /// main menu opening or closing (on the title screen, or over a level;
+    /// it closes as a New Game starts, before the level is loaded). In this
+    /// order, so the menu that opens as the logos end finds the pause off.
+    /// Our logo player moves from one item to the next, and from the last
+    /// to the menu, within one update, so no unpaused frame passes between
+    /// them (TODO(#335): the spec leaves those frames open). The input
+    /// focus is [`App::set_hidden`]'s; the table's other events are
+    /// TODO(#334).
+    fn sync_pause(&mut self) {
+        let data = &self.data;
+        let (item, menu) = match &self.phase {
+            Some(Phase::Startup(s)) => (s.current(data).map(|c| (SequenceId::Logo, c)), false),
+            Some(Phase::Menu(_)) => (None, true),
+            Some(Phase::Level { intro, menu, .. }) => (
+                intro.current(data).map(|c| (SequenceId::Intro, c)),
+                menu.is_some(),
+            ),
+            Some(Phase::Loading { .. }) | None => (None, false),
+        };
+        let key = item.map(|(id, (i, _))| (id, i));
+        if key != self.pause_item {
+            if self.pause_item.is_some() {
+                self.pause.item_ended();
+            }
+            if let Some((_, (_, state))) = item {
+                self.pause.item_started(state);
+            }
+            self.pause_item = key;
+        }
+        self.pause.main_menu(menu);
     }
 
     /// What the sound system takes from this frame
@@ -646,10 +735,14 @@ impl App {
     /// while the menu is open over the level (section 4.5); every sound
     /// stopped when the level is left (section 4.4). The level's own sounds
     /// (crate::level_sound) are created once the level runs and the sound
-    /// system exists, and their rules run on the frames that advance game
-    /// time with no menu open. The platform runs the sound system's update.
-    /// A fatal error of theirs is returned.
+    /// system exists, and their rules run on the level's frames while the
+    /// pause is off, on the global clock (sound-weather-ambient.md section
+    /// 3.1). The platform runs the sound system's update. A fatal error of
+    /// theirs is returned.
     fn sound_frame(&mut self, tree: &dyn Vfs, audio: &mut dyn AudioOut) -> Result<(), Fatal> {
+        let paused = self.pause.is_on();
+        self.sound_run
+            .frame_time(self.frame_ms as f32 / 1000.0, paused);
         let Some(sounds) = audio.sounds() else {
             return Ok(());
         };
@@ -686,23 +779,31 @@ impl App {
                         Err(e) => fatal = Some(e),
                     }
                 }
-                match level.advanced() {
-                    Some(elapsed) => {
-                        self.sound_run.advance(elapsed);
-                        if let Some(level_sounds) = &mut self.level_sounds
-                            && menu.is_none()
-                            && let Err(e) = self.sound_run.frame(
-                                sounds,
-                                level_sounds,
-                                &level.sound_inputs(),
-                                elapsed as f32 / 1000.0,
-                                overlay.is_some(),
-                            )
-                        {
-                            fatal = Some(e);
+                if !paused {
+                    let now = self.global_clock.now();
+                    if let Some(level_sounds) = &mut self.level_sounds
+                        && let Err(e) = self.sound_run.frame(
+                            sounds,
+                            level_sounds,
+                            &level.sound_inputs(),
+                            now,
+                            overlay.is_some(),
+                        )
+                    {
+                        fatal = Some(e);
+                    }
+                    // The player's steps of this frame (S11) on the global
+                    // clock, which is the step clock (S11 3.1), played
+                    // independently (4.3).
+                    if let Err(e) = level.footsteps_frame(now as u32) {
+                        fatal = Some(e);
+                    } else if let (Some(level_sounds), Some(f)) =
+                        (&self.level_sounds, level.footsteps())
+                    {
+                        for step in f.sounds() {
+                            level_sounds.pairs.play(sounds, step);
                         }
                     }
-                    None => self.sound_run.paused_frame(),
                 }
                 (true, menu.is_some())
             }
@@ -747,7 +848,14 @@ impl App {
             self.origin = Some(time_ms - self.clock as f64);
         }
         let origin = *self.origin.get_or_insert(time_ms);
+        let previous = self.clock;
         self.clock = self.clock.max((time_ms - origin).max(0.0) as u64);
+        self.frame_ms = self.clock - previous;
+        // The global clock at the frame's start, the pause as the previous
+        // frame left it (sound-weather-ambient.md section 3.1). The engine
+        // clock starts at the first update and leaves out the hidden page's
+        // time, during which the pause is on anyway (focus loss).
+        self.global_clock.frame(self.clock, self.pause.is_on());
         let now = self.clock;
         let title = self.opening(false);
         let in_game = self.opening(true);
@@ -1081,6 +1189,9 @@ impl App {
         self.hidden = hidden;
         if !hidden {
             self.shown = true;
+            // Regaining the input focus (sound-weather-ambient.md section
+            // 3.1): off unless it was on when the focus was lost.
+            self.pause.focus(true);
             return;
         }
         let in_game = self.opening(true);
@@ -1100,6 +1211,12 @@ impl App {
             // lost pointer lock opened the menu in and the next.
             self.unlock_opened = Some(self.frames + 1);
         }
+        // Hiding is our platform's loss of the input focus, which turns the
+        // pause on (sound-weather-ambient.md section 3.1); after the menu
+        // it opens, so the menu remembers the pause off and the return
+        // leaves it on until the menu closes.
+        self.sync_pause();
+        self.pause.focus(false);
     }
 
     /// Whether the page is hidden ([`App::set_hidden`]).
@@ -2103,6 +2220,76 @@ mod tests {
         // minutes hidden did not.
         let ran = game_time(&app) - time;
         assert!(ran < 60_000, "only shown time ran: {ran} ms of game time");
+    }
+
+    #[test]
+    fn the_global_clock_stands_still_under_the_title_menu() {
+        let tree = fixture::tree();
+        let mut app = App::new(fixture::data(&tree)).unwrap();
+        app.assets = fixture::assets();
+        let (mut input, mut audio) = (Input::new(), FakeAudio::default());
+        app.update(&tree, 1000.0, &input, &mut audio);
+        // The fixture's logo items have no `pause_state`: the clock runs.
+        app.update(&tree, 1100.0, &input, &mut audio);
+        assert_eq!(app.global_clock.now(), 100);
+        assert!(!app.pause.is_on());
+        for at in [1200.0, 1300.0] {
+            press(&mut input, Key::Escape);
+            app.update(&tree, at, &input, &mut audio);
+            input.end_frame();
+        }
+        assert!(matches!(app.state(), AppState::Menu { .. }));
+        assert!(app.pause.is_on(), "the main menu");
+        app.update(&tree, 9300.0, &input, &mut audio);
+        assert_eq!(app.global_clock.now(), 300);
+    }
+
+    #[test]
+    fn the_pause_in_a_level_the_menu_the_intro_and_the_hidden_page() {
+        let (tree, mut app, mut input, mut audio) = in_level();
+        let (mut at, start) = (16.0, app.global_clock.now());
+        let mut frame = |app: &mut App, input: &mut Input, ms: f64| {
+            at += ms;
+            app.update(&tree, at, input, &mut audio);
+            input.end_frame();
+            app.global_clock.now()
+        };
+        assert_eq!(frame(&mut app, &mut input, 1000.0), start + 1000);
+        // The menu: on from its opening to its closing.
+        press(&mut input, Key::Escape);
+        assert_eq!(frame(&mut app, &mut input, 16.0), start + 1016);
+        assert!(menu_open(&app) && app.pause.is_on());
+        assert_eq!(frame(&mut app, &mut input, 5000.0), start + 1016);
+        press(&mut input, Key::Escape);
+        frame(&mut app, &mut input, 16.0);
+        assert!(!menu_open(&app) && !app.pause.is_on());
+        assert_eq!(frame(&mut app, &mut input, 16.0), start + 1032);
+        // Hidden (focus lost): the menu opens and the pause is on; shown
+        // again (focus back), the menu holds it until it closes.
+        app.set_hidden(true, &input, &mut FakeAudio::default());
+        assert!(app.pause.is_on());
+        app.set_hidden(false, &input, &mut FakeAudio::default());
+        assert!(app.pause.is_on());
+        for _ in 0..3 {
+            frame(&mut app, &mut input, 16.0);
+        }
+        assert_eq!(app.global_clock.now(), start + 1032);
+        press(&mut input, Key::Escape);
+        frame(&mut app, &mut input, 16.0);
+        assert!(!app.pause.is_on());
+        let now = frame(&mut app, &mut input, 16.0);
+        // The intro's `pause_state` on item: on while it plays.
+        if let Some(Phase::Level { intro, .. }) = &mut app.phase {
+            intro.checked = true;
+            intro.player = Some(MoviePlayer::new(app.clock));
+        }
+        assert_eq!(frame(&mut app, &mut input, 16.0), now + 16);
+        assert!(app.pause.is_on());
+        assert_eq!(frame(&mut app, &mut input, 1000.0), now + 16);
+        press(&mut input, Key::Escape);
+        frame(&mut app, &mut input, 16.0);
+        assert!(!app.pause.is_on(), "the intro skipped");
+        assert_eq!(frame(&mut app, &mut input, 16.0), now + 32);
     }
 
     #[test]

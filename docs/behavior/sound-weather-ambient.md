@@ -38,7 +38,9 @@ files from the archives; `export.py` regenerates the evidence in `ev/` (headless
 shipped program files); `run_all.py` runs `check_data.py` (tags D1 – D9: the game data, decoded by a
 reader written from section 2), `check_bin.py` (tags B1 – B17: the program files) and `model.py`
 (tags M1 – M6: an implementation of sections 3 – 4 written from this text, reproducing the worked
-examples of section 7).
+examples of section 7) and `clock/check_clock.py` (tags C1 – C9: the clock and the pause of section 3.1,
+from the program files, the shipped scripts and the interface sequence files, which `clock/extract.py`
+extracts).
 
 ## 1. Overview
 
@@ -132,16 +134,84 @@ A copy of a weather section keeps its set [B4].
 
 ### 3.1 The global clock
 
-"Now" is the engine's global clock: milliseconds of real time since the engine started, as an unsigned
-32-bit number [B14]:
+"Now" is the engine's global clock: an unsigned 32-bit count of milliseconds, taken once per frame, at the
+start of the frame, from a timer of real time that starts when the engine is initialized (before the
+first frame) [B14, C1]:
 
-- it stops while the game is paused (the pause state in which this rule does not run, section 4.1) and
-  continues from the same value when the pause ends [B14];
-- its rate factor is 1 initially and no shipped program file changes it [B14];
-- with the device flag 0x100 set it instead advances by 20 ms per frame; the flag is clear initially
-  [B14] (what sets it is **unestablished**).
+- It is the timer's elapsed time, not a sum of frame steps: time that passes while no frame runs (for
+  example while a level is being loaded) is counted in full at the next frame [C1].
+- The timer stands still while **the pause** (below) is on, and continues from the same value when the
+  pause ends, so paused time is never counted [B14].
+- Its rate factor is 1 initially and no shipped program file changes it [B14].
+- With the device flag 0x100 set, "now" instead advances by exactly 20 ms per frame, also while the pause
+  is on; the flag is clear initially [B14, C2] (what sets it is **unestablished**).
 
 The times kept by this specification (section 4.2) are on this clock. It is not S2's sound clock.
+
+**The pause** is one on/off state of the engine; it is the "paused" of section 4.1 [B14, C6]. It is not
+nested: turning it on while it is on, or off while it is off, changes nothing, and turning it off ends it
+whatever turned it on [C3]. Turning it on takes effect only while the **game type** is none or
+single-player; turning it off always takes effect [C3, C4]. The game type is taken from the second
+`/`-separated field of the server options of the console command `start server(…)`: `single` gives
+single-player, `deathmatch`, `teamdeathmatch` and `artefacthunt` give multiplayer types, anything else
+none; it is none when the program starts and again after a game is left (disconnect) [C4]. The
+single-player menus start games of type `single` [C4]. In the engine's benchmark mode (a batch mode that
+plays a list read from a `benchmark` settings section) nothing changes the pause [C3].
+
+These are all the events that change the pause [C5]:
+
+| Event | Effect on the pause |
+|---|---|
+| The main menu opens (on the title screen or during a game) | on, unless it is on; whether it was on is remembered |
+| The main menu closes | off, unless it was on when the menu opened |
+| An item of an interface sequence (below) with `pause_state` `on` starts | on, unless it is on; whether it was on is remembered |
+| That item ends | off, unless it was on when the item started |
+| An item with `pause_state` `off` starts | off, if it is on; whether it was on is remembered |
+| That item ends | on, if it was on when the item started |
+| The action `pause` is pressed during play, while the level-change window is not shown | toggles |
+| The level-change window is shown / hidden | on / off |
+| The program loses the input focus | on; whether it was on is remembered |
+| The program regains the input focus | off, unless it was on when the focus was lost |
+| A saved game is loaded while a game is running (console command `load`, which the quick-load action also executes) | off, before loading |
+| The scripts' device pause function | as the script asks; no shipped script calls it |
+| The Pause key (keyboard code 0xC5) in the camera-recording mode of the console command `demo_record` | toggles |
+
+The main menu takes its remembered value only while the game type allows the pause to be turned on;
+during a multiplayer game, losing the focus does not turn the pause on [C5]. An item whose `pause_state`
+is missing, empty or any other value leaves the pause unchanged [C5]. Opening or closing the console does not change the pause [C5].
+
+**Interface sequences** are the sequences of `config\ui\game_tutorials.xml` and the files it includes
+(`ui\ui_credits.xml`, `ui\ui_movies.xml`); each item, picture or video, has its own `pause_state` [C5].
+In this edition there are 34 sequences with 52 items [C7]:
+
+- `pause_state` `on` in every item of 17 sequences: the startup logo sequence `intro_logo` (3 video and
+  2 picture items), the New Game intro `intro_game` (1 video item), the movies `x18_dream`, `radar_dream`,
+  `yantar_dream`, `mov_desire_1` … `mov_desire_5`, `mov_join_osoznanie`, `mov_refuse_osoznanie`, the
+  tutorials `pripyat_tutorial`, `agroprom_tutorial`, `bar_tutorial`, `yantar_tutorial`, and the credits
+  `credits_seq` [C7];
+- `off` in every item of 16 sequences (the PDA and hint tutorials `part_…`, `test`, `game_over`) [C7];
+- empty in the one item of `part_2_binocular` [C7].
+
+Hence, in this edition [C5, C7, C8, C9]:
+
+- **Title screen.** The pause is on while each item of the startup logo sequence plays (the game type is
+  none), and on while the main menu is shown. So the clock stands still on the title screen, except in any
+  frames where neither holds (between the logo items, and between the logos and the menu).
+- **Main menu during a game** (single-player): the clock stands still from the menu's opening to its
+  closing, and whatever screen of the menu is shown.
+- **Loading.** Starting a game (New Game, or loading a saved game from the title screen) closes the main
+  menu before the level is created and loaded, in the same step [C8]; loading a saved game during a game
+  turns the pause off before loading [C5]; confirming a level change hides the level-change window before
+  the change is requested [C9]. Nothing turns the pause on during loading [C5]. So the clock counts the
+  whole loading in real time, including the loading image and the frames it stays on top of the running
+  level (`docs/behavior/loading-screen.md` section 2). Leaving a level reopens the main menu [C8].
+- **Intro and movies.** While the New Game intro plays, the clock stands still; it continues when the
+  intro ends or is skipped (the pause is off when the intro starts, during the frames after loading). The
+  same holds for every movie, the four level tutorials and the credits listed above. The `off` tutorials
+  leave the clock running in normal play, where the pause is already off.
+- The rule itself runs only on the frames of section 4.1, but the clock advances whenever the pause is
+  off, with or without a level. So the times of section 4.2 are compared with real time spent playing and
+  loading, and not with time spent in the main menu or in the sequences with `pause_state` `on`.
 
 ### 3.2 The shared generator
 
@@ -186,7 +256,9 @@ The program keeps, for the whole run [B13, B12]:
 The times start at 0 when the program starts and are not reset when a level is loaded or left [B13].
 When a level is left, the active effect's particles (if any) are removed at once and every sound is
 stopped at once (S2 "stop all") [B13]. Because the times start at 0, the first frame of play starts a
-random sound at once and, if the view is outdoors, an effect.
+random sound at once and, if the view is outdoors, an effect. Because the clock counts loading time but not
+time in the main menu or in movies (section 3.1), a time set in a previous level that has passed during a
+load is due on the first frame of the next level.
 
 ### 4.3 Outdoors
 
@@ -449,6 +521,9 @@ the view stays outdoors [M6].
 - Date: 2026-11-24. Game: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition, archives
   `gamedata.db0` … `gamedata.dbd`, and the shipped program files of `bin\`.
 - Data examined: `config\weathers\*.ltx` and the `config\system.ltx` and `config\game.ltx` include trees,
+  `config\ui\game_tutorials.xml`, `config\ui\ui_credits.xml` and `config\ui\ui_movies.xml` (the
+  sequences and their items' `pause_state` and `pause_sound`), `scripts\ui_main_menu.script` (the
+  commands of New Game),
   the `sounds\ambient\` files (Ogg pages, Vorbis headers, parameter records), and the shipped
   `scripts\*.script` files (searched for the keys).
 - Analysis: static analysis (decompilation and disassembly with Ghidra, headless) of the shipped engine
@@ -460,3 +535,8 @@ the view stays outdoors [M6].
 
 - Which object's sky visibility is read for the outdoors test when the view entity is not the actor
   (section 4.3).
+- The pause's value when the program starts, and so whether the clock runs during the start-up loading
+  before the logo sequence, is not stated (section 3.1).
+- How long the unpaused frames on the title screen last (the items' delays between logo items, and the
+  frame before the title menu appears: `docs/behavior/startup.md` sections 5 and 6) is not tied to the
+  clock rule (section 3.1).

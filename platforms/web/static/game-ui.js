@@ -151,6 +151,8 @@ async function refresh() {
  */
 export async function importGame({ exe, bin, only }, onProgress = () => {}) {
   await call("unmount_game");
+  // The import worker loads the engine worker's wasm build (wasm-build.js).
+  const { build } = await call("status");
   const worker = new Worker(new URL("./import-worker.js", import.meta.url), { type: "module" });
   const request = (message) =>
     new Promise((resolve, reject) => {
@@ -163,7 +165,7 @@ export async function importGame({ exe, bin, only }, onProgress = () => {}) {
         event.preventDefault();
         reject(new Error(`import worker: ${event.message ?? "failed to load"}`));
       };
-      worker.postMessage(message);
+      worker.postMessage({ ...message, build });
     });
   try {
     const { plan } = await request({ type: "plan", exe });

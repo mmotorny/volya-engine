@@ -14,6 +14,8 @@ mod scramble;
 use std::io::{self, Read, Seek, SeekFrom};
 
 pub use lzhuf::decode as decompress_directory;
+#[cfg(test)]
+pub(crate) use lzhuf::tests::encode_literals;
 pub use scramble::descramble;
 
 /// Chunk type of the directory chunk.

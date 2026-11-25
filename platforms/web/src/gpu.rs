@@ -16,6 +16,7 @@ use serde_json::json;
 use volya_engine::core::vfs::read_ahead::ReadAhead;
 use volya_engine::formats::pe::Rgba;
 use volya_engine::formats::ui::Resolution;
+use volya_engine::level::LevelWorld;
 use volya_engine::present::Presenter;
 use volya_engine::render::{DrawList, Quad, Rect, Renderer, VideoTexture, wgpu};
 use volya_engine_formats::dds::{Dds, Format};
@@ -100,7 +101,11 @@ async fn connect(canvas: OffscreenCanvas) -> Result<Gpu, String> {
         Err("no WebGPU")
     };
     let (instance, backend, why) = match webgpu {
-        Ok(instance) => (instance, "webgpu", None),
+        Ok(instance) => (instance, "webgpu", None::<&str>),
+        // The build for WebGPU: no other way to draw.
+        #[cfg(not(feature = "webgl"))]
+        Err(why) => return Err(why.to_owned()),
+        #[cfg(feature = "webgl")]
         Err(why) => {
             web_sys::console::info_1(&format!("{why}: trying WebGL 2").into());
             let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -228,6 +233,18 @@ pub fn status() -> Status {
             format: None,
             size: None,
         }
+    })
+}
+
+/// Uploads about `budget` more bytes of `level`'s world before it shows
+/// ([`Presenter::prepare_world`]); whether all of it is.
+pub fn prepare_world(level: &Arc<LevelWorld>, budget: u64) -> Result<bool, JsValue> {
+    with_gpu(|gpu| {
+        crate::game::with_trees(|tree, _| {
+            gpu.presenter
+                .prepare_world(&mut gpu.renderer, tree, level, budget)
+        })?
+        .map_err(error)
     })
 }
 
