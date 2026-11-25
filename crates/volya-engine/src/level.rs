@@ -35,6 +35,7 @@ use crate::core::config::Config;
 use crate::core::input::Input;
 use crate::core::level::{DrawItem, Level};
 use crate::core::movement::{Flags, MovementConfig, Player};
+use crate::core::particles::placed::PlacedEffects;
 use crate::core::simulation::graph::Graph;
 use crate::core::simulation::navigation::Navigation;
 use crate::core::simulation::{AlifeConfig, Changes, Simulation};
@@ -55,6 +56,7 @@ use volya_engine_formats::gamemtl;
 use volya_engine_formats::level_geom::{GeomBuffer, GeomFile, GeomLayout, GeomSource};
 use volya_engine_formats::model as model_math;
 use volya_engine_formats::object::{self as record, ObjectRecord};
+use volya_engine_formats::particles::{self as particle_records, Library};
 use volya_engine_formats::patrol_path::PatrolPaths;
 use volya_engine_formats::shaders_xr;
 use volya_engine_formats::spawn;
@@ -178,6 +180,8 @@ pub struct LevelScreen {
     placements: Arc<Vec<Option<Mat4>>>,
     /// Instance of each object id with a loaded visual.
     instances: HashMap<u16, usize>,
+    /// The effects of `level.ps_static` (level-placed-effects.md).
+    effects: Option<PlacedEffects>,
 }
 
 /// What the engine interface reports.
@@ -203,6 +207,107 @@ pub struct LevelState {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub character: Option<CharacterReport>,
     pub objects: ObjectsReport,
+}
+
+/// The level's placed effects as the engine interface reports them.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct EffectsReport {
+    /// The world clock they run on, ms.
+    pub clock: u32,
+    pub particles: usize,
+    pub records: Vec<PlacedReport>,
+}
+
+/// One record's instance.
+#[derive(Clone, Debug, Serialize)]
+pub struct PlacedReport {
+    pub name: String,
+    pub group: bool,
+    pub playing: bool,
+    /// The latest scheduled period, ms.
+    pub period: u32,
+    pub updates: u64,
+    /// Bounding sphere: centre and radius.
+    pub sphere: [f32; 4],
+    pub effects: Vec<EffectReport>,
+}
+
+/// One effect instance (a record's, a group member's or a child).
+#[derive(Clone, Debug, Serialize)]
+pub struct EffectReport {
+    pub name: String,
+    pub playing: bool,
+    pub stopping: bool,
+    pub position: [f32; 3],
+    pub count: usize,
+    /// The first particles: what drawing reads.
+    pub particles: Vec<ParticleReport>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ParticleReport {
+    pub position: [f32; 3],
+    pub size: [f32; 3],
+    pub rotation: [f32; 3],
+    /// A · 2²⁴ + R · 2¹⁶ + G · 2⁸ + B.
+    pub colour: u32,
+    pub age: f32,
+    pub frame: u16,
+}
+
+/// Particles reported per effect at most.
+const REPORTED_PARTICLES: usize = 16;
+
+/// The report of `effects`.
+pub fn effects_report(effects: Option<&PlacedEffects>) -> EffectsReport {
+    let Some(effects) = effects else {
+        return EffectsReport::default();
+    };
+    let library = effects.library();
+    let records = effects
+        .effects()
+        .iter()
+        .map(|p| {
+            let s = p.instance.sphere();
+            PlacedReport {
+                name: p.name.clone(),
+                group: matches!(
+                    p.instance,
+                    crate::core::particles::placed::Instance::Group(_)
+                ),
+                playing: p.instance.is_playing(),
+                period: p.period(),
+                updates: p.updates(),
+                sphere: [s.centre[0], s.centre[1], s.centre[2], s.radius],
+                effects: p
+                    .instance
+                    .effects()
+                    .map(|e| EffectReport {
+                        name: library.effects[e.record()].name.clone(),
+                        playing: e.is_playing(),
+                        stopping: e.is_stopping(),
+                        position: e.position(),
+                        count: e.particles().len(),
+                        particles: (e.particles().iter().take(REPORTED_PARTICLES))
+                            .map(|q| ParticleReport {
+                                position: q.position,
+                                size: q.size,
+                                rotation: q.rotation,
+                                colour: q.colour,
+                                age: q.age,
+                                frame: q.frame,
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            }
+        })
+        .collect();
+    EffectsReport {
+        clock: effects.clock(),
+        particles: effects.particle_count(),
+        records,
+    }
 }
 
 /// The player character's state as the engine interface reports it
@@ -714,6 +819,10 @@ pub struct NewGameLoad {
     mesh_surfaces: Vec<Vec<Option<u32>>>,
     objects_not_drawn: Vec<(String, String)>,
     dynamic_props: Vec<[f32; 4]>,
+    /// The engine clock of the frame a stage runs in (ms).
+    now: u64,
+    /// The level's placed effects and the clock they were started at.
+    effects: Option<(PlacedEffects, u64)>,
 }
 
 /// The game hour of `clock`, 0 … 23 (the scripts' switch rules,
@@ -755,6 +864,11 @@ impl NewGameLoad {
     /// and the sky's), each once, once `st_loading_textures` has run.
     pub fn texture_paths(&self) -> Vec<String> {
         texture_paths(&self.surfaces, self.sky.as_ref())
+    }
+
+    /// The engine clock of the frame the next stage runs in.
+    pub fn set_clock(&mut self, now: u64) {
+        self.now = now;
     }
 
     /// Does the work of `stage`.
@@ -980,12 +1094,36 @@ impl NewGameLoad {
                 let sun = Environment::blend(a, b, t, &[], actor.position, VIS_DISTANCE).sun_dir;
                 self.dynamic_props = objects::light_inputs(collision, &spawned.instances, sun);
             }
+            // `level.ps_static`'s effects, made, placed and started
+            // (level-placed-effects.md sections 1 – 4): read after the
+            // level's objects in the game, under this caption here (our
+            // placement), with `particles.xr`, read here rather than at
+            // game start (our choice; only this needs it).
+            Stage::LoadingAiObjects => {
+                let records = match vfs::read(tree, &format!("{dir}\\level.ps_static")) {
+                    Ok(bytes) => particle_records::parse_placed(&bytes)
+                        .map_err(|e| file("level.ps_static", e))?,
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
+                    Err(e) => return Err(e),
+                };
+                if !records.is_empty() {
+                    let path = data.aliases.path("$game_data$", "particles.xr")?;
+                    let library = match vfs::read(tree, &path) {
+                        Ok(bytes) => Library::parse(&bytes)
+                            .map_err(|e| io::Error::new(e.kind(), format!("{path}: {e}")))?,
+                        Err(e) if e.kind() == io::ErrorKind::NotFound => Library::default(),
+                        Err(e) => return Err(e),
+                    };
+                    let effects = PlacedEffects::new(Arc::new(library), &records, self.now as u32)
+                        .map_err(|e| invalid(format!("{dir}\\level.ps_static: {e}")))?;
+                    self.effects = Some((effects, self.now));
+                }
+            }
             Stage::PrefetchingObjects
             | Stage::ServerStarting
             | Stage::LoadingAlifeSimulator
             | Stage::LoadingShaders
-            | Stage::LoadingDetails
-            | Stage::LoadingAiObjects => {}
+            | Stage::LoadingDetails => {}
         }
         Ok(())
     }
@@ -1025,6 +1163,12 @@ impl NewGameLoad {
             .enumerate()
             .map(|(k, i)| (i.id, k))
             .collect();
+        // The first update after loading receives the rest of the load's
+        // time (level-placed-effects.md section 5.3).
+        let effects = self.effects.map(|(mut e, at)| {
+            e.advance(now.saturating_sub(at));
+            e
+        });
         // start-position.md sections 4 and 5: standing at the stored
         // position, the camera at the spawn's angles.
         let player = Player::new(
@@ -1068,6 +1212,7 @@ impl NewGameLoad {
             simulation: Some(simulation),
             placements: Arc::new(placements),
             instances,
+            effects,
         };
         screen.update_view();
         Ok(screen)
@@ -1079,6 +1224,7 @@ impl LevelScreen {
     /// [`NewGameLoad`] at once.
     pub fn load(tree: &dyn Vfs, data: &GameData, now: u64) -> io::Result<Self> {
         let mut load = NewGameLoad::default();
+        load.set_clock(now);
         for stage in Stage::ALL {
             load.run(stage, tree, data)?;
         }
@@ -1192,6 +1338,11 @@ impl LevelScreen {
         }
         self.back |= back;
         self.simulate();
+        // The placed effects on the world clock, which stands still while
+        // the game is paused (no update runs then) or the page hidden.
+        if let Some(effects) = &mut self.effects {
+            effects.frame(elapsed, self.player.view().eye);
+        }
         // sky.md 7.3, k_t from the game clock.
         let (a, b, t) = self.weather.bracket_indices(self.clock.time_of_day());
         self.sun_fade.frame(
@@ -1252,6 +1403,16 @@ impl LevelScreen {
         if changed {
             self.placements = Arc::new(placements);
         }
+    }
+
+    /// The level's placed effects (level-placed-effects.md).
+    pub fn effects(&self) -> Option<&PlacedEffects> {
+        self.effects.as_ref()
+    }
+
+    /// What the engine interface reports of the placed effects.
+    pub fn effects_report(&self) -> EffectsReport {
+        effects_report(self.effects.as_ref())
     }
 
     /// The offline simulation.
@@ -1537,6 +1698,7 @@ impl LevelScreen {
             simulation: None,
             placements: Arc::new(Vec::new()),
             instances: HashMap::new(),
+            effects: None,
         }
     }
 }

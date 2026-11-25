@@ -1190,6 +1190,14 @@ impl App {
         Ok(id)
     }
 
+    /// The level while one runs.
+    pub fn level(&self) -> Option<&LevelScreen> {
+        match &self.phase {
+            Some(Phase::Level { level, .. }) => Some(level),
+            _ => None,
+        }
+    }
+
     pub fn quit_requested(&self) -> bool {
         match &self.phase {
             Some(Phase::Menu(m)) => m.quit_requested(),

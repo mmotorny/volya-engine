@@ -70,15 +70,17 @@ fn mb(bytes: usize) -> f64 {
 /// Each stage's peak above its start, MB: the measured peak (native,
 /// `l01_escape`, #79) with a margin, so a regression fails. Stages not
 /// listed allocate next to nothing.
-const STAGE_BUDGETS: [(Stage, f64); 8] = [
+const STAGE_BUDGETS: [(Stage, f64); 9] = [
     (Stage::CreatingNewGame, 14.5),  // 12.8: the spawn file and game graph
     (Stage::ServerConnecting, 23.0), // 19.8: the offline simulation
     (Stage::OpeningStream, 14.0),    // 12.6: the `level` file and its parse
     (Stage::LoadingCform, 48.0),     // 44.3: the collision world it keeps
     (Stage::LoadingGeometry, 1.5),   // 0.7: the geometry's layout only
     (Stage::LoadingSpatialDb, 7.0),  // 5.4: index pieces and the draw list
-    (Stage::ClientSpawning, 11.0),   // 9.4: the objects' models
-    (Stage::LoadingTextures, 4.5),   // 3.2
+    // 3.3: `particles.xr` and the effect library it keeps (1.9).
+    (Stage::LoadingAiObjects, 4.0),
+    (Stage::ClientSpawning, 11.0), // 9.4: the objects' models
+    (Stage::LoadingTextures, 4.5), // 3.2
 ];
 /// Any other stage's peak, MB.
 const OTHER_BUDGET: f64 = 0.5;

@@ -482,6 +482,7 @@ impl Loading {
             Hold::Prepared => {}
             Hold::None => {
                 let stage = self.stage();
+                self.load.set_clock(now);
                 self.load.run(stage, tree, data)?;
                 if stage == Stage::CreatingNewGame
                     && let Some(level) = self.load.level_name()

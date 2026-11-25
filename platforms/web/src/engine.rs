@@ -401,6 +401,53 @@ pub fn give_item(section: &str) -> Result<u16, JsValue> {
     })
 }
 
+/// The `particles_state` op (tests): the level's placed effects and their
+/// particles (docs/behavior/level-placed-effects.md).
+#[cfg(feature = "test-ops")]
+pub fn particles_state() -> Result<serde_json::Value, JsValue> {
+    RUNNING.with(|r| {
+        let r = r.borrow();
+        let running = r.as_ref().ok_or_else(|| error("the game is not running"))?;
+        let level = running.app.level().ok_or_else(|| error("no level"))?;
+        serde_json::to_value(level.effects_report()).map_err(error)
+    })
+}
+
+/// The `debug_particles_bench` op (tests): a copy of the level's placed
+/// effects runs `frames` frames of 16 ms with the camera at the first
+/// record; the CPU time of a frame's update by `performance.now()`
+/// (microseconds: mean and max), and the particles at the end.
+#[cfg(feature = "test-ops")]
+pub fn particles_bench(frames: u32) -> Result<serde_json::Value, JsValue> {
+    RUNNING.with(|r| {
+        let r = r.borrow();
+        let running = r.as_ref().ok_or_else(|| error("the game is not running"))?;
+        let level = running.app.level().ok_or_else(|| error("no level"))?;
+        let mut effects = level
+            .effects()
+            .ok_or_else(|| error("no placed effects"))?
+            .clone();
+        let camera = effects.effects()[0].instance.sphere().centre;
+        // The timer's resolution (coarsened without cross-origin
+        // isolation) is far above a frame's update: the mean is the whole
+        // run's time over its frames, the max a single frame's.
+        let mut max = 0.0f64;
+        let begin = crate::now();
+        for _ in 0..frames {
+            let start = crate::now();
+            effects.frame(16, camera);
+            max = max.max(crate::now() - start);
+        }
+        let total = crate::now() - begin;
+        Ok(serde_json::json!({
+            "frames": frames,
+            "mean_us": total * 1000.0 / f64::from(frames.max(1)),
+            "max_us": max * 1000.0,
+            "particles": effects.particle_count(),
+        }))
+    })
+}
+
 /// The `menu_scene` op: the sprites of the current frame at `resolution`.
 pub fn scene(resolution: Resolution) -> Result<serde_json::Value, JsValue> {
     RUNNING.with(|r| {

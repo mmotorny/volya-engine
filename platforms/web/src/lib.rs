@@ -305,6 +305,14 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         }
         #[cfg(feature = "test-ops")]
         "sound_state" => to_json(&audio::sound_state()),
+        #[cfg(feature = "test-ops")]
+        "particles_state" => to_json(&engine::particles_state()?),
+        // `{frames}`: the placed effects' update cost in wasm.
+        #[cfg(feature = "test-ops")]
+        "debug_particles_bench" => {
+            let frames = args.get("frames").and_then(|v| v.as_u64()).unwrap_or(600);
+            to_json(&engine::particles_bench(frames as u32)?)
+        }
         "menu_scene" => {
             let size = |key| args.get(key).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
             to_json(&engine::scene(Resolution::new(

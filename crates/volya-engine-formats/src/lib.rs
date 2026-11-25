@@ -25,6 +25,7 @@ pub mod model;
 pub mod object;
 pub mod ogf;
 pub mod packet;
+pub mod particles;
 pub mod patrol_path;
 pub mod pe;
 pub mod sav;

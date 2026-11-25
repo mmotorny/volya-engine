@@ -258,12 +258,27 @@ fn new_game_start_view_from_game_data() {
     let c = state.character.as_ref().unwrap();
     assert_eq!((c.health, c.power, c.satiety, c.money), (1.0, 1.0, 1.0, 40));
     assert_eq!(c.active_slot, Some(4));
+    // The level's placed effect (level-placed-effects.md 8): started at
+    // the load, on a world clock that stands still while paused.
+    let fx = screen.effects_report();
+    assert_eq!(fx.records.len(), 1);
+    assert_eq!(fx.records[0].name, "tests\\muhi");
+    assert!(fx.records[0].playing && !fx.records[0].group);
+    let clock = fx.clock;
     screen.update(215_000, &Input::new());
     let satiety = screen.state().character.unwrap().satiety;
     assert!((satiety - (1.0 - 0.0015)).abs() < 1e-5, "{satiety}");
+    let fx = screen.effects_report();
+    assert!(fx.clock > clock && fx.particles > 0, "{fx:?}");
     screen.paused(300_000);
     screen.update(300_000, &Input::new());
     assert_eq!(screen.state().character.unwrap().satiety, satiety);
+    assert_eq!(screen.effects_report().clock, fx.clock);
+    for t in 0..120 {
+        screen.update(300_016 + t * 16, &Input::new());
+    }
+    let fx = screen.effects_report();
+    assert_eq!(fx.records[0].effects[0].count, 7, "{fx:?}");
 }
 
 /// Records the master gains set; plays nothing.

@@ -15,6 +15,7 @@ pub mod input;
 pub mod level;
 pub mod movement;
 pub mod object_light;
+pub mod particles;
 pub mod simulation;
 pub mod sound;
 pub mod switching;

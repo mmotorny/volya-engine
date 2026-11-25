@@ -529,6 +529,21 @@ export const tests = {
     return `${gpu.backend}, textures ${gpu.textures}; ${note}; ${JSON.stringify(stats)}`;
   },
 
+  "the level's placed effect runs on the world clock; its update cost in wasm": async () => {
+    needsGame();
+    await until((s) => s.phase === "level" && !s.intro, "the level");
+    // docs/behavior/level-placed-effects.md 8: l01_escape places tests\muhi.
+    let fx = await volya.call("particles_state");
+    assertEqual(fx.records.map((r) => [r.name, r.group, r.playing]), [["tests\\muhi", false, true]], "records");
+    const clock = fx.clock;
+    await sleep(500);
+    fx = await volya.call("particles_state");
+    assert(fx.clock > clock, "the world clock runs in the level");
+    assert(fx.particles > 0 && fx.particles <= 7, `${fx.particles} particles`);
+    const bench = await volya.call("debug_particles_bench", { frames: 20000 });
+    return `${fx.particles} particles, period ${fx.records[0].period} ms; a frame's update in wasm: mean ${bench.mean_us.toFixed(2)} µs over ${bench.frames} frames, the slowest under ${bench.max_us.toFixed(0)} µs (the timer's resolution)`;
+  },
+
   "transcoding to ETC2 costs: the level's textures and a few large ones": async () => {
     needsGame();
     await until((s) => s.phase === "level" && !s.intro, "the level");
@@ -1171,9 +1186,11 @@ export const tests = {
       s = await until((s) => inGame(s), "the in-game menu");
       const { clock, level } = s;
       const frames = (await volya.status()).frames;
+      const effects = (await volya.call("particles_state")).clock;
       await sleep(500);
       s = await state();
       assertEqual([s.clock, s.level.game_time], [clock, level.game_time], "the engine and game clocks while hidden");
+      assertEqual((await volya.call("particles_state")).clock, effects, "the effects' clock while hidden");
       const idle = (await volya.status()).frames;
       assert(idle - frames <= 1, `${idle - frames} frames ran while hidden`);
       assertEqual(volya.audioState(), "suspended", "audio while hidden");
@@ -1311,8 +1328,10 @@ export const tests = {
       "items",
     );
     const stopped = s.level.game_time;
+    const effects = (await volya.call("particles_state")).clock;
     await sleep(300);
     assertEqual((await state()).level.game_time, stopped, "the game clock stops");
+    assertEqual((await volya.call("particles_state")).clock, effects, "the effects' clock stops");
     if (gpu.state === "ready") {
       // The menu covers the screen; the level stays on the GPU.
       const stats = await volya.call("level_stats");
