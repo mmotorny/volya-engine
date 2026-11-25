@@ -326,7 +326,12 @@ pub fn tree() -> MemVfs {
     let c = "gamedata/config/";
     add(
         &format!("{c}system.ltx"),
-        b"[texture_desc]\nfiles = ui_mainmenu, ui_asus_intro, ui_common, ui_inventory\n".into(),
+        // The inventory screen's item sections (it reads their panel keys).
+        format!(
+            "[texture_desc]\nfiles = ui_mainmenu, ui_asus_intro, ui_common, ui_inventory\n{}",
+            crate::inventory_screen::tests::ITEMS
+        )
+        .into(),
     );
     add(&format!("{c}game.ltx"), b"[levels]\nx = 1\n".into());
     add(

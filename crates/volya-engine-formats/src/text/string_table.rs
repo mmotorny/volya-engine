@@ -27,26 +27,27 @@ pub struct Localization {
 }
 
 impl Localization {
-    /// The spec does not cover a missing `language`; it is rejected. Empty
-    /// items of `files` (a trailing comma) are skipped.
+    /// `language` and `files` are read (sections 1.1, 1.2): a missing one
+    /// is fatal (ltx-config.md 11). Empty items of `files` (a trailing comma)
+    /// are skipped.
     pub fn read(config: &Config) -> io::Result<Self> {
-        let get = |k| config.get("string_table", k).flatten();
-        let language = get("language")
-            .ok_or_else(|| invalid("localization.ltx: [string_table] without language"))?
-            .to_owned();
-        // TODO(#330): a missing `files` or `font_prefix`.
-        let files = get("files")
-            .map(|f| {
-                f.split(',')
-                    .map(|n| xml::trim(n).to_owned())
-                    .filter(|n| !n.is_empty())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let get = |k| config.read("string_table", k);
+        let language = get("language")?.to_owned();
+        let files = get("files")?
+            .split(',')
+            .map(|n| xml::trim(n).to_owned())
+            .filter(|n| !n.is_empty())
+            .collect();
+        // TODO(#330): section 2.4 says what a value does, not whether the
+        // key is checked for first; a missing one is taken as empty.
+        let font_prefix = config
+            .get("string_table", "font_prefix")
+            .flatten()
+            .map(str::to_owned);
         Ok(Self {
             language,
             files,
-            font_prefix: get("font_prefix").map(str::to_owned),
+            font_prefix,
         })
     }
 
@@ -217,12 +218,17 @@ mod tests {
         assert_eq!(l.files, ["ui_st_pda", "ui_st_mm_mp", "stable_game_credits"]);
         assert_eq!(l.font_prefix, None);
         assert_eq!(l.table_path("ui_st_mm"), "text\\rus\\ui_st_mm.xml");
-        let west = ltx::parse(b"[string_table]\nlanguage = eng\nfont_prefix = _west\n").unwrap();
+        let west = ltx::parse(b"[string_table]\nlanguage = eng\nfont_prefix = _west\nfiles = a\n")
+            .unwrap();
         assert_eq!(
             Localization::read(&west).unwrap().font_prefix.as_deref(),
             Some("_west")
         );
         assert!(Localization::read(&ltx::parse(b"[string_table]\n").unwrap()).is_err());
+        // ltx-config.md 11: `files` is read, so a missing one is fatal.
+        let err = Localization::read(&ltx::parse(b"[string_table]\nlanguage = rus\n").unwrap())
+            .unwrap_err();
+        assert!(err.to_string().contains("files"), "{err}");
     }
 
     #[test]

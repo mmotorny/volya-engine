@@ -118,21 +118,24 @@ pub struct ItemConfig {
     pub belt: bool,
     /// True when absent (3.3).
     pub default_to_ruck: bool,
-    /// 0 when absent (our choice; TODO(#330)).
+    /// Read for every item (3.4); missing, it is fatal (ltx-config.md 11).
     pub inv_weight: f32,
-    /// `visual`, empty when absent (our choice; TODO(#330)).
+    /// `visual`, the Visual block's model (3.1); empty when absent, as the
+    /// key is set only if present (level-objects.md 3.2 item 1).
     pub visual: String,
     /// `condition`: the default of a supplied item's condition (3.1).
     pub condition: Option<f32>,
     /// `ammo_mag_size`, 0 when absent (3.1).
     pub ammo_mag_size: u16,
-    /// `scope_status`, `grenade_launcher_status`, `silencer_status`, 0 when
-    /// absent (our choice; TODO(#330)).
+    /// `scope_status`, `grenade_launcher_status`, `silencer_status`: read
+    /// for a weapon (3.1; screen 4.2 reads all three for each weapon cell
+    /// item), missing it is fatal; 0 for other items, which do not read
+    /// them.
     pub scope_status: i64,
     pub grenade_launcher_status: i64,
     pub silencer_status: i64,
-    /// An outfit's `additional_inventory_weight` and `..._weight2`, 0 when
-    /// absent (our choice; TODO(#330)).
+    /// An outfit's `additional_inventory_weight` and `..._weight2`: read
+    /// for an outfit (3.4), missing it is fatal; 0 for other items.
     pub additional_inventory_weight: f32,
     pub additional_inventory_weight2: f32,
     /// An outfit's `power_loss`, `None` when absent (3.4).
@@ -154,8 +157,32 @@ impl ItemConfig {
             .ok_or_else(|| invalid(format!("no item section [{name}]")))?;
         let class_id = ClassId::new(required(s, "class")?.trim())?;
         let get = |key: &str| s.get(key).flatten();
-        let float = |key: &str| get(key).map_or(0.0, value::float);
         let int = |key: &str| get(key).map_or(0, value::int);
+        // Keys read only for some kinds: missing, fatal for those
+        // (ltx-config.md 11), 0 for the rest.
+        // TODO(#330): the specs read the addon statuses of "a weapon"
+        // (pstate 3.1, screen 4.2) without saying whether a knife reads them;
+        // it is counted as a weapon, as `is_weapon` does.
+        let kind = class_id.kind();
+        let weapon = matches!(
+            kind,
+            Kind::Knife | Kind::MagazineWeapon | Kind::WeaponWithGrenadeLauncher | Kind::Shotgun
+        );
+        let int_of = |read: bool, key: &str| -> io::Result<i64> {
+            if read {
+                s.read(key).map(value::int)
+            } else {
+                Ok(0)
+            }
+        };
+        let float_of = |read: bool, key: &str| -> io::Result<f32> {
+            if read {
+                s.read(key).map(value::float)
+            } else {
+                Ok(0.0)
+            }
+        };
+        let outfit = kind == Kind::Outfit;
         let eatable = Eatable::read(s, class_id.as_str())?;
         let grid = |key: &str| get(key).map(|v| value::int(v) as u32);
         let inv_grid = match (
@@ -177,15 +204,15 @@ impl ItemConfig {
             slot: get("slot").map(value::int),
             belt: get("belt").is_some_and(value::bool),
             default_to_ruck: get("default_to_ruck").is_none_or(value::bool),
-            inv_weight: float("inv_weight"),
+            inv_weight: value::float(s.read("inv_weight")?),
             visual: get("visual").map(value::unquote).unwrap_or("").to_owned(),
             condition: get("condition").map(value::float),
             ammo_mag_size: int("ammo_mag_size").clamp(0, i64::from(u16::MAX)) as u16,
-            scope_status: int("scope_status"),
-            grenade_launcher_status: int("grenade_launcher_status"),
-            silencer_status: int("silencer_status"),
-            additional_inventory_weight: float("additional_inventory_weight"),
-            additional_inventory_weight2: float("additional_inventory_weight2"),
+            scope_status: int_of(weapon, "scope_status")?,
+            grenade_launcher_status: int_of(weapon, "grenade_launcher_status")?,
+            silencer_status: int_of(weapon, "silencer_status")?,
+            additional_inventory_weight: float_of(outfit, "additional_inventory_weight")?,
+            additional_inventory_weight2: float_of(outfit, "additional_inventory_weight2")?,
             power_loss: get("power_loss").map(value::float),
             eatable,
             inv_grid,
@@ -940,14 +967,14 @@ mod tests {
         [wpn_binoc]\nclass = WP_BINOC\nslot = 4\ninv_weight = 1.0\nammo_mag_size = 0\n\
         scope_status = 1\nsilencer_status = 0\ngrenade_launcher_status = 0\n\
         visual = weapons\\binoculars\\wpn_binoculars.ogf\n\
-        [wpn_pm]\nclass = WP_PM\nslot = 1\ninv_weight = 1.0\nammo_mag_size = 8\n\
+        [wpn_pm]\nclass = WP_PM\nvisual = v\nslot = 1\ninv_weight = 1.0\nammo_mag_size = 8\n\
         scope_status = 0\nsilencer_status = 2\ngrenade_launcher_status = 0\n\
         [device_pda]\nclass = D_PDA\nslot = 7\ninv_weight = 0.3\nvisual = equipments\\item_pda\n\
-        [bolt]\nclass = II_BOLT\nslot = 5\ninv_weight = 0\n\
-        [bread]\nclass = II_FOOD\nslot = 4\ninv_weight = 0.3\neat_health = 0.05\neat_power = 0\n\
+        [bolt]\nclass = II_BOLT\nvisual = v\nslot = 5\ninv_weight = 0\n\
+        [bread]\nclass = II_FOOD\nvisual = v\nslot = 4\ninv_weight = 0.3\neat_health = 0.05\neat_power = 0\n\
         eat_satiety = 0.2\neat_radiation = 0\nwounds_heal_perc = 0\neat_portions_num = -1\n\
-        [af_medusa]\nclass = ARTEFACT\nbelt = true\ndefault_to_ruck = false\ninv_weight = 0.5\n\
-        [medkit]\nclass = II_MEDKI\ninv_weight = 0.1\n\
+        [af_medusa]\nclass = ARTEFACT\nvisual = v\nbelt = true\ndefault_to_ruck = false\ninv_weight = 0.5\n\
+        [medkit]\nclass = II_MEDKI\nvisual = v\ninv_weight = 0.1\n\
         [inventory]\nmax_weight = 50\nmax_belt = 5\n";
 
     fn system() -> Config {
@@ -1209,28 +1236,58 @@ mod tests {
         [inventory]\nmax_weight = 50\nmax_belt = 5\nslot_persistent_1 = true\n\
         slot_persistent_2 = false\nslot_persistent_3 = false\nslot_persistent_4 = true\n\
         slot_persistent_5 = true\nslot_persistent_7 = false\n\
-        [wpn_pm]\nclass = WP_PM\nslot = 1\ninv_weight = 1\ninv_grid_x = 0\ninv_grid_y = 0\n\
+        [wpn_pm]\nclass = WP_PM\nvisual = v\nscope_status = 0\nsilencer_status = 0\ngrenade_launcher_status = 0\nslot = 1\ninv_weight = 1\ninv_grid_x = 0\ninv_grid_y = 0\n\
         inv_grid_width = 2\ninv_grid_height = 1\n\
-        [wpn_ak74]\nclass = WP_AK74\nslot = 2\ninv_weight = 3\ninv_grid_x = 5\ninv_grid_y = 5\n\
+        [wpn_ak74]\nclass = WP_AK74\nvisual = v\nscope_status = 0\nsilencer_status = 0\ngrenade_launcher_status = 0\nslot = 2\ninv_weight = 3\ninv_grid_x = 5\ninv_grid_y = 5\n\
         inv_grid_width = 5\ninv_grid_height = 2\n\
-        [grenade_f1]\nclass = G_F1\nslot = 3\ninv_weight = 0.6\ninv_grid_x = 0\ninv_grid_y = 1\n\
+        [grenade_f1]\nclass = G_F1\nvisual = v\nslot = 3\ninv_weight = 0.6\ninv_grid_x = 0\ninv_grid_y = 1\n\
         inv_grid_width = 1\ninv_grid_height = 1\n\
-        [novice_outfit]\nclass = E_STLK\nslot = 6\ninv_weight = 3\ninv_grid_x = 0\n\
+        [novice_outfit]\nclass = E_STLK\nvisual = v\nadditional_inventory_weight = 0\nadditional_inventory_weight2 = 0\nslot = 6\ninv_weight = 3\ninv_grid_x = 0\n\
         inv_grid_y = 18\ninv_grid_width = 2\ninv_grid_height = 2\n\
-        [af_medusa]\nclass = ARTEFACT\nbelt = true\ninv_weight = 0.5\ninv_grid_x = 1\n\
+        [af_medusa]\nclass = ARTEFACT\nvisual = v\nbelt = true\ninv_weight = 0.5\ninv_grid_x = 1\n\
         inv_grid_y = 1\ninv_grid_width = 1\ninv_grid_height = 1\n\
-        [af_wide]\nclass = ARTEFACT\nbelt = true\ninv_weight = 0.5\ninv_grid_x = 1\n\
+        [af_wide]\nclass = ARTEFACT\nvisual = v\nbelt = true\ninv_weight = 0.5\ninv_grid_x = 1\n\
         inv_grid_y = 1\ninv_grid_width = 2\ninv_grid_height = 1\n\
-        [af_tall]\nclass = ARTEFACT\nbelt = true\ninv_weight = 0.5\ninv_grid_x = 1\n\
+        [af_tall]\nclass = ARTEFACT\nvisual = v\nbelt = true\ninv_weight = 0.5\ninv_grid_x = 1\n\
         inv_grid_y = 1\ninv_grid_width = 1\ninv_grid_height = 2\n\
-        [quest]\nclass = II_DOC\nquest_item = true\ninv_weight = 0.1\ninv_grid_x = 1\n\
+        [quest]\nclass = II_DOC\nvisual = v\nquest_item = true\ninv_weight = 0.1\ninv_grid_x = 1\n\
         inv_grid_y = 1\ninv_grid_width = 1\ninv_grid_height = 1\n\
-        [no_grid]\nclass = II_DOC\ninv_weight = 0.1\ninv_grid_x = 1\n";
+        [no_grid]\nclass = II_DOC\nvisual = v\ninv_weight = 0.1\ninv_grid_x = 1\n";
 
     fn screen_inventory() -> (Config, Inventory) {
         let system = ltx::parse(SCREEN_ITEMS.as_bytes()).unwrap();
         let inv = Inventory::new(InventoryConfig::read(&system).unwrap());
         (system, inv)
+    }
+
+    /// ltx-config.md 11: a key read for the item's kind, missing, is fatal;
+    /// a kind that does not read it, or an optional key, is not needed.
+    #[test]
+    fn a_missing_item_key_is_fatal() {
+        let system = ltx::parse(
+            b"[no_weight]\nclass = II_MEDKI\nvisual = v\n\
+              [no_visual]\nclass = II_MEDKI\ninv_weight = 1\n\
+              [gun]\nclass = WP_PM\nvisual = v\ninv_weight = 1\nscope_status = 0\nsilencer_status = 0\n\
+              [suit]\nclass = E_STLK\nvisual = v\ninv_weight = 1\nadditional_inventory_weight = 0\n\
+              [food]\nclass = II_FOOD\nvisual = v\ninv_weight = 1\neat_health = 0\neat_power = 0\n\
+              eat_satiety = 0\neat_radiation = 0\nwounds_heal_perc = 0\neat_portions_num = 1\n",
+        )
+        .unwrap();
+        for (section, key) in [
+            ("no_weight", "inv_weight"),
+            ("gun", "grenade_launcher_status"),
+            ("suit", "additional_inventory_weight2"),
+        ] {
+            let err = ItemConfig::read(&system, section).unwrap_err();
+            assert!(err.to_string().contains(key), "{section}: {err}");
+        }
+        // `visual` is set only if present (level-objects.md 3.2).
+        assert_eq!(ItemConfig::read(&system, "no_visual").unwrap().visual, "");
+        let food = ItemConfig::read(&system, "food").unwrap();
+        assert_eq!(
+            (food.scope_status, food.additional_inventory_weight),
+            (0, 0.0)
+        );
     }
 
     #[test]

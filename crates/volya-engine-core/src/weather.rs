@@ -74,53 +74,58 @@ pub struct WeatherSection {
 }
 
 impl WeatherSection {
-    /// Reads `section`; a missing key reads as zeros (the specs do not say
-    /// what the game does; every shipped section has them). TODO(#330).
-    pub fn read(section: &Section) -> Self {
-        let get = |key: &str| section.get(key).flatten().unwrap_or("");
-        let floats3 = |key: &str| value::floats::<3>(get(key));
-        let [altitude, longitude] = value::floats::<2>(get("sun_dir")).map(f32::to_radians);
-        let clouds = value::floats::<5>(get("clouds_color"));
+    /// Reads `section`: the keys of static-shading.md 9.1, sky.md 3.1 and
+    /// sound-rain-thunder.md 2.1. A missing key is fatal (ltx-config.md 11),
+    /// except the optional `sky_rotation` (absent = 0) and `env_ambient`
+    /// (absent = no set, sound-weather-ambient.md 2.4); `bolt_period` and
+    /// `bolt_duration` are read only with a collection.
+    pub fn read(section: &Section) -> io::Result<Self> {
+        let get = |key: &str| section.read(key);
+        let floats3 = |key: &str| get(key).map(value::floats::<3>);
+        let [altitude, longitude] = value::floats::<2>(get("sun_dir")?).map(f32::to_radians);
+        // `k` absent = 0 (sky.md 3.1): a missing vector component is 0.
+        let clouds = value::floats::<5>(get("clouds_color")?);
         let k = clouds[4] / 2.0;
-        let thunderbolt = get("thunderbolt").trim();
-        let bolt = |key: &str| {
+        let thunderbolt = get("thunderbolt")?.trim();
+        let bolt = |key: &str| -> io::Result<f32> {
             if thunderbolt.is_empty() {
-                0.0
+                Ok(0.0)
             } else {
-                value::float(get(key))
+                get(key).map(value::float)
             }
         };
-        Self {
+        Ok(Self {
             name: section.name().to_owned(),
-            ambient: floats3("ambient"),
-            hemi_color: value::floats::<4>(get("hemi_color")),
-            sun_color: floats3("sun_color"),
+            ambient: floats3("ambient")?,
+            hemi_color: value::floats::<4>(get("hemi_color")?),
+            sun_color: floats3("sun_color")?,
             sun_dir: [
                 -longitude.sin() * altitude.cos(),
                 altitude.sin(),
                 longitude.cos() * altitude.cos(),
             ],
-            fog_color: floats3("fog_color"),
-            fog_distance: value::float(get("fog_distance")),
-            fog_density: value::float(get("fog_density")),
-            far_plane: value::float(get("far_plane")),
-            sky_texture: texture_name(get("sky_texture")),
-            sky_color: floats3("sky_color").map(|c| c * 0.5),
-            sky_rotation: value::float(get("sky_rotation")).to_radians(),
-            clouds_texture: texture_name(get("clouds_texture")),
+            fog_color: floats3("fog_color")?,
+            fog_distance: value::float(get("fog_distance")?),
+            fog_density: value::float(get("fog_density")?),
+            far_plane: value::float(get("far_plane")?),
+            sky_texture: texture_name(get("sky_texture")?),
+            sky_color: floats3("sky_color")?.map(|c| c * 0.5),
+            sky_rotation: value::float(section.get("sky_rotation").flatten().unwrap_or(""))
+                .to_radians(),
+            clouds_texture: texture_name(get("clouds_texture")?),
             clouds_color: [clouds[0] * k, clouds[1] * k, clouds[2] * k],
             clouds_opacity: clouds[3],
-            flares: get("flares").trim().to_owned(),
+            flares: get("flares")?.trim().to_owned(),
             env_ambient: section
                 .get("env_ambient")
                 .flatten()
                 .filter(|v| !v.is_empty())
                 .map(str::to_owned),
-            rain_density: value::float(get("rain_density")).clamp(0.0, 1.0),
+            rain_density: value::float(get("rain_density")?).clamp(0.0, 1.0),
             thunderbolt: thunderbolt.to_owned(),
-            bolt_period: bolt("bolt_period"),
-            bolt_duration: bolt("bolt_duration"),
-        }
+            bolt_period: bolt("bolt_period")?,
+            bolt_duration: bolt("bolt_duration")?,
+        })
     }
 }
 
@@ -173,7 +178,7 @@ impl Weather {
                 let section = config
                     .section(name)
                     .ok_or_else(|| invalid(format!("no weather section [{name}]")))?;
-                Ok((time % DAY, WeatherSection::read(section)))
+                Ok((time % DAY, WeatherSection::read(section)?))
             })
             .collect::<io::Result<Vec<_>>>()?;
         if sections.is_empty() {
@@ -327,12 +332,41 @@ mod tests {
               sun_color = 0.7, 0.284, 0.096\nsun_dir = -10, 291\nfog_color = 0.3, 0.3, 0.4\n\
               fog_distance = 350\nfog_density = 0.9\nfar_plane = 350\nsky_texture = sky\\a.dds\n\
               sky_color = 0.8, 0.8, 0.8\nclouds_texture = sky\\c\nclouds_color = 0.4, 0.4, 0.4, 0.5, 2\n\
+              flares =\nrain_density = 0\nthunderbolt =\n\
               [w6]\nambient = 0.2, 0.2, 0.2\nhemi_color = 0.7, 0.8, 0.9, 0\n\
               sun_color = 0.818, 0.476, 0.108\nsun_dir = -14, 291\nfog_color = 0.3, 0.3, 0.4\n\
               fog_distance = 350\nfog_density = 0.9\nfar_plane = 300\nsky_texture = sky\\b\n\
-              sky_color = 1, 1, 1\nclouds_texture = sky\\c\nclouds_color = 0.4, 0.4, 0.4, 0.5\n",
+              sky_color = 1, 1, 1\nclouds_texture = sky\\c\nclouds_color = 0.4, 0.4, 0.4, 0.5\n\
+              flares =\nrain_density = 0\nthunderbolt =\n",
         )
         .unwrap()
+    }
+
+    /// ltx-config.md 11: a key the sections are read for, missing, is fatal;
+    /// the optional `sky_rotation` and `env_ambient` are not.
+    #[test]
+    fn a_missing_key_is_fatal() {
+        let config = sample();
+        let w5 = config.section("w5").unwrap();
+        assert!(WeatherSection::read(w5).is_ok());
+        let text = String::from_utf8(
+            b"[w]\nambient = 0\nhemi_color = 0\nsun_color = 0\nsun_dir = 0\nfog_color = 0\n\
+              fog_distance = 0\nfog_density = 0\nsky_texture = a\nsky_color = 0\n\
+              clouds_texture = c\nclouds_color = 0\nflares =\nrain_density = 0\nthunderbolt =\n"
+                .to_vec(),
+        )
+        .unwrap();
+        let config = volya_engine_formats::ltx::parse(text.as_bytes()).unwrap();
+        let err = WeatherSection::read(config.section("w").unwrap()).unwrap_err();
+        assert!(err.to_string().contains("far_plane"), "{err}");
+        // A collection makes `bolt_period` read.
+        let with = text.replace(
+            "thunderbolt =",
+            "thunderbolt = t\nfar_plane = 1\nbolt_duration = 1",
+        );
+        let config = volya_engine_formats::ltx::parse(with.as_bytes()).unwrap();
+        let err = WeatherSection::read(config.section("w").unwrap()).unwrap_err();
+        assert!(err.to_string().contains("bolt_period"), "{err}");
     }
 
     #[test]

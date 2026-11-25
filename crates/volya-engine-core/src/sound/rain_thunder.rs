@@ -77,14 +77,18 @@ impl BoltCommon {
         let section = config
             .section("thunderbolt_common")
             .ok_or_else(|| invalid("no section [thunderbolt_common]"))?;
-        // A missing key reads as 0. TODO(#330).
-        let get = |key: &str| section.get(key).flatten().unwrap_or("");
-        let [a0, a1] = value::floats::<2>(get("altitude"));
+        // Every key of 2.2 is read: a missing one is fatal (ltx-config.md
+        // 11), the picture's too.
+        let get = |key: &str| section.read(key);
+        for key in ["tilt", "sky_color", "sun_color", "fog_color"] {
+            get(key)?;
+        }
+        let [a0, a1] = value::floats::<2>(get("altitude")?);
         Ok(Self {
             altitude: (a0, a1),
-            delta_longitude: value::float(get("delta_longitude")),
-            min_dist_factor: value::float(get("min_dist_factor")).min(FAR),
-            second_probability: value::float(get("second_propability")).clamp(0.0, 1.0),
+            delta_longitude: value::float(get("delta_longitude")?),
+            min_dist_factor: value::float(get("min_dist_factor")?).min(FAR),
+            second_probability: value::float(get("second_propability")?).clamp(0.0, 1.0),
         })
     }
 }
@@ -103,12 +107,9 @@ pub fn collection_sounds(config: &Config, name: &str) -> io::Result<Vec<Option<S
             let bolt = config
                 .section(e.key())
                 .ok_or_else(|| invalid(format!("[{name}]: no bolt section [{}]", e.key())))?;
-            // A missing `sound` is as an empty one. TODO(#330).
-            Ok(bolt
-                .get("sound")
-                .flatten()
-                .filter(|s| !s.is_empty())
-                .map(str::to_owned))
+            // `sound` is read: missing, it is fatal (ltx-config.md 11).
+            let sound = bolt.read("sound")?;
+            Ok((!sound.is_empty()).then(|| sound.to_owned()))
         })
         .collect()
 }

@@ -64,6 +64,8 @@ pub struct MenuFrame {
     pub store_config: bool,
     /// A screen failed to open: fatal, as in the original (ui-layout.md
     /// 1.2 – 1.4, 7.2; text-and-fonts.md 2.5, 2.6).
+    // TODO(#339): 1.2 (a missing include) and 1.4 (a missing required
+    // element) say "error", not fatal; no spec says what follows.
     pub fatal: Option<String>,
 }
 
@@ -394,7 +396,9 @@ impl MenuScreens {
         Ok(())
     }
 
-    /// Shows box `name`, with text key `text` in place of the data's.
+    /// Shows box `name`, with text key `text` in place of the data's. A box
+    /// the data lacks fails (ui-layout.md 1.4).
+    // TODO(#339): 1.4 says "error", not fatal.
     fn show_box(
         &mut self,
         (tree, data, video): (&dyn Vfs, &GameData, Resolution),

@@ -69,6 +69,19 @@ fn sets_read_as_section_2_2() {
     assert_eq!(evening.effect_period, None);
 }
 
+/// ltx-config.md 11: a period or distance read (the set has sounds or
+/// effects, 2.2) and missing is fatal; without sounds it is not read.
+#[test]
+fn a_missing_period_is_fatal() {
+    let c = config(
+        "[with_sounds]\nsounds = x\nsound_period = 5, 10\n\
+         [without]\neffects =\n",
+    );
+    let err = SetData::read(&c, "with_sounds").unwrap_err();
+    assert!(err.to_string().contains("sound_dist"), "{err}");
+    assert!(SetData::read(&c, "without").is_ok());
+}
+
 fn sound(name: &str) -> Sound {
     Sound {
         name: name.into(),

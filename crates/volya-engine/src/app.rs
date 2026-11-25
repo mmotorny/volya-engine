@@ -161,7 +161,9 @@ impl Intro {
     /// level is loaded whenever this runs), then plays, each of
     /// `quit_presses` skipping a stoppable item (startup.md section 6.5).
     /// Returns whether game time is paused: the current item's
-    /// `pause_state` is on.
+    /// `pause_state` is on. Data without `intro_game` fails when the intro
+    /// is due: the original starts the sequence then (loading-screen.md 7),
+    /// and a missing element is fatal.
     fn frame(
         &mut self,
         data: &GameData,
@@ -169,28 +171,34 @@ impl Intro {
         overlay_frames_left: Option<u32>,
         quit_presses: u32,
         audio: &mut dyn AudioOut,
-    ) -> bool {
+    ) -> io::Result<bool> {
         if !self.checked
             && let Some(left) = overlay_frames_left
             && intro_due(true, left, SERVER_NEW_GAME)
         {
             self.checked = true;
-            // Without a measured `intro_game` there is none to play (our
-            // choice).
+            if data.intro_game.is_none() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "game_tutorials.xml: no intro_game",
+                ));
+            }
+            // Unmeasured (data read without its media) there is none to
+            // play.
             if data.intro_game().is_some() {
                 self.player = Some(MoviePlayer::new(now));
             }
         }
         let (Some(player), Some(seq)) = (self.player.as_mut(), data.intro_game()) else {
-            return false;
+            return Ok(false);
         };
         player.update(seq, data, now, quit_presses, audio);
         if player.finished(seq) {
             // Section 2.3, step 4: then the level is visible.
             self.player = None;
-            return false;
+            return Ok(false);
         }
-        player.pauses(seq)
+        Ok(player.pauses(seq))
     }
 
     fn stop(&mut self, audio: &mut dyn AudioOut) {
@@ -934,9 +942,16 @@ impl App {
                 // input goes to it alone (our choice; the level is paused
                 // under it anyway).
                 let playing = intro.player.is_some();
-                if intro.frame(data, now, left, quit_presses(data, input), audio) {
-                    level.paused(now);
-                    return;
+                match intro.frame(data, now, left, quit_presses(data, input), audio) {
+                    Ok(true) => {
+                        level.paused(now);
+                        return;
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        self.failed.get_or_insert(e.to_string());
+                        return;
+                    }
                 }
                 if playing || intro.player.is_some() {
                     // An item without `pause_state`, or the intro's end: the
@@ -1147,6 +1162,8 @@ impl App {
     /// the game ([`App::fatal`]); except what this engine does not support
     /// (`ErrorKind::Unsupported`: AVI, a DDS or Theora layout our decoders
     /// lack), which the original plays, so it is returned, not fatal.
+    // TODO(#339): a storage read failing while drawing (a platform failure,
+    // not a missing file) is fatal too; no spec covers it.
     pub fn scene(&mut self, tree: &dyn Vfs, resolution: Resolution) -> io::Result<Scene> {
         let scene = self.compose_scene(tree, resolution);
         if let Err(e) = &scene
@@ -1604,7 +1621,9 @@ mod tests {
         let mut intro = Intro::default();
         let mut started = None;
         for (frame, left) in (1..OVERLAY_FRAMES).rev().enumerate() {
-            let paused = intro.frame(&data, frame as u64 * 16, Some(left), 0, &mut audio);
+            let paused = intro
+                .frame(&data, frame as u64 * 16, Some(left), 0, &mut audio)
+                .unwrap();
             if started.is_none() && intro.player.is_some() {
                 started = Some(left);
             }
@@ -1625,11 +1644,19 @@ mod tests {
         // After the overlay: plays its 3 s, then the level resumes; it is
         // not started again.
         let start = u64::from(OVERLAY_FRAMES - 3) * 16;
-        assert!(intro.frame(&data, start + 2999, None, 0, &mut audio));
-        assert!(!intro.frame(&data, start + 3000, None, 0, &mut audio));
+        assert!(
+            intro
+                .frame(&data, start + 2999, None, 0, &mut audio)
+                .unwrap()
+        );
+        assert!(
+            !intro
+                .frame(&data, start + 3000, None, 0, &mut audio)
+                .unwrap()
+        );
         assert!(intro.player.is_none());
         assert!(audio.playing.is_empty(), "its sounds ended");
-        assert!(!intro.frame(&data, 4000, Some(1), 0, &mut audio));
+        assert!(!intro.frame(&data, 4000, Some(1), 0, &mut audio).unwrap());
         assert!(intro.player.is_none());
     }
 
@@ -1664,7 +1691,7 @@ mod tests {
         let s = compose(level(), &intro, Some(&overlay), &mut ctx).unwrap();
         assert_eq!(layers(&s)[..2], ["level", "loading background"]);
         // The intro starts under the last two overlay frames.
-        intro.frame(&data, 0, Some(2), 0, &mut audio);
+        intro.frame(&data, 0, Some(2), 0, &mut audio).unwrap();
         let s = compose(level(), &intro, Some(&overlay), &mut ctx).unwrap();
         assert_eq!(
             layers(&s)[..5],
@@ -1686,7 +1713,7 @@ mod tests {
         let data = fixture::data(&tree);
         let mut audio = FakeAudio::default();
         let mut intro = Intro::default();
-        assert!(intro.frame(&data, 0, Some(2), 0, &mut audio));
+        assert!(intro.frame(&data, 0, Some(2), 0, &mut audio).unwrap());
         let mut assets = fixture::assets();
         let mut ctx = Ctx {
             tree: &tree,
@@ -1716,7 +1743,7 @@ mod tests {
             pressed: true,
         });
         assert_eq!(quit_presses(&data, &input), 1);
-        assert!(!intro.frame(&data, 32, Some(1), 1, &mut audio));
+        assert!(!intro.frame(&data, 32, Some(1), 1, &mut audio).unwrap());
         assert!(intro.player.is_none());
         assert!(audio.playing.is_empty());
         let mut input = Input::new();
@@ -2241,6 +2268,70 @@ mod tests {
             }
         ));
         assert!(menu_open(&app), "the menu opens in the first live frame");
+    }
+
+    /// A fatal error the level met while running (the simulation's switch
+    /// pass, offline-simulation.md 6.2) ends the game at the end of the
+    /// update: the title menu opens saying why.
+    #[test]
+    fn a_fatal_error_of_the_running_level_ends_the_game() {
+        let (tree, mut app, input, mut audio) = in_level();
+        let Some(Phase::Level { level, .. }) = &mut app.phase else {
+            panic!()
+        };
+        level.record_fatal("lamp: no renderer type set for hanging-lamp".into());
+        app.update(&tree, 32.0, &input, &mut audio);
+        let AppState::Menu { menu, .. } = app.state() else {
+            panic!("{:?}", app.state())
+        };
+        assert!(menu.error.unwrap().contains("hanging-lamp"));
+    }
+
+    /// `App::fatal`: the title menu that already says why, failing again
+    /// with the same error, stays as it is; another error opens it anew.
+    #[test]
+    fn the_menu_saying_why_is_not_opened_again_for_the_same_error() {
+        let (tree, mut app, input, mut audio) = in_level();
+        let error = "x: fatal".to_owned();
+        app.failed = Some(error.clone());
+        app.update(&tree, 32.0, &input, &mut audio);
+        assert!(matches!(app.state(), AppState::Menu { .. }));
+        let opened = audio.started.len();
+        assert!(opened > 0, "the menu's music started");
+        for t in [48.0, 64.0] {
+            app.failed = Some(error.clone());
+            app.update(&tree, t, &input, &mut audio);
+        }
+        assert_eq!(audio.started.len(), opened, "not opened again");
+        app.failed = Some("y: fatal".into());
+        app.update(&tree, 80.0, &input, &mut audio);
+        assert!(audio.started.len() > opened, "opened anew");
+        let AppState::Menu { menu, .. } = app.state() else {
+            panic!("{:?}", app.state())
+        };
+        assert!(menu.error.unwrap().contains("y: fatal"));
+    }
+
+    /// loading-screen.md 7: data without `intro_game` loads; the New Game
+    /// fails when it reaches the intro, under the last overlay frames.
+    #[test]
+    fn a_new_game_without_its_intro_ends_when_the_intro_is_due() {
+        let (tree, mut app, input, mut audio) = in_level();
+        app.data.intro_game = None;
+        let Some(Phase::Level { overlay, .. }) = &mut app.phase else {
+            panic!()
+        };
+        let mut o = Overlay::new(LoadingScreen::default(), &mut audio);
+        o.frames_left = 4;
+        *overlay = Some(o);
+        // Three and two frames left after this one: not yet due.
+        app.update(&tree, 32.0, &input, &mut audio);
+        assert!(matches!(app.state(), AppState::Level { .. }));
+        app.update(&tree, 48.0, &input, &mut audio);
+        let AppState::Menu { menu, .. } = app.state() else {
+            panic!("{:?}", app.state())
+        };
+        assert!(menu.error.unwrap().contains("intro_game"));
     }
 
     #[test]
