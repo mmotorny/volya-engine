@@ -6,6 +6,7 @@
 //! page to POST its report back (see tests/browser/harness.js).
 
 use std::net::TcpListener;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
@@ -22,8 +23,9 @@ const SUITES: &[&str] = &[
 ];
 const TARGETS: &[&str] = &["chrome", "iphone"];
 const REPORT_TIMEOUT: Duration = Duration::from_secs(60);
-/// Suites importing gigabytes from the installer get longer.
-const SLOW_SUITES: &[(&str, Duration)] = &[("menu", Duration::from_secs(300))];
+/// Suites importing gigabytes from the installer get longer; the menu
+/// suite also transcodes a level's textures where the GPU has no BC (#113).
+const SLOW_SUITES: &[(&str, Duration)] = &[("menu", Duration::from_secs(1500))];
 
 fn report_timeout(suite: &str) -> Duration {
     SLOW_SUITES
@@ -221,8 +223,100 @@ fn chrome(url: &str, id: &str, reports: &Receiver<String>, timeout: Duration) ->
 fn iphone(url: &str, id: &str, reports: &Receiver<String>, timeout: Duration) -> Result<String> {
     let udid = simulator()?;
     run_cmd(cmd("xcrun", &["simctl", "bootstatus", &udid, "-b"]).stdout(Stdio::null()))?;
+    // With VOLYA_SIM_MEDIA, the run is recorded and its end screenshotted.
+    let media = env::var_os("VOLYA_SIM_MEDIA").map(PathBuf::from);
+    let recording = match &media {
+        Some(dir) => {
+            fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            Some(Recording::start(&udid, &dir.join(format!("{id}.mp4")))?)
+        }
+        None => None,
+    };
     run_cmd(&mut cmd("xcrun", &["simctl", "openurl", &udid, url]))?;
-    wait_report(id, reports, timeout)
+    let report = wait_report(id, reports, timeout);
+    if let Some(dir) = &media {
+        screenshot_to(&udid, &dir.join(format!("{id}.png")))?;
+    }
+    if let Some(recording) = recording {
+        recording.stop()?;
+    }
+    report
+}
+
+/// A screenshot of the test simulator into `path` (default: a new file in
+/// the system's temporary directory); returns where.
+pub fn screenshot(path: Option<&Path>) -> Result<PathBuf> {
+    let udid = simulator()?;
+    run_cmd(cmd("xcrun", &["simctl", "bootstatus", &udid, "-b"]).stdout(Stdio::null()))?;
+    let path = path.map_or_else(|| media_path("png"), Path::to_path_buf);
+    screenshot_to(&udid, &path)?;
+    Ok(path)
+}
+
+/// Records the test simulator's screen into `path` for `duration`.
+pub fn record_for(path: &Path, duration: Duration) -> Result {
+    let udid = simulator()?;
+    run_cmd(cmd("xcrun", &["simctl", "bootstatus", &udid, "-b"]).stdout(Stdio::null()))?;
+    let recording = Recording::start(&udid, path)?;
+    thread::sleep(duration);
+    recording.stop()
+}
+
+/// A new file name for simulator media in the system's temporary
+/// directory (outside the repository).
+fn media_path(extension: &str) -> PathBuf {
+    let dir = env::temp_dir().join("volya-simulator");
+    let _ = fs::create_dir_all(&dir);
+    dir.join(format!("{}.{extension}", run_id("iphone", "media")))
+}
+
+fn screenshot_to(udid: &str, path: &Path) -> Result {
+    let path_str = path.to_str().ok_or("non-UTF-8 path")?;
+    run_cmd(cmd("xcrun", &["simctl", "io", udid, "screenshot", path_str]).stderr(Stdio::null()))?;
+    println!("screenshot: {}", path.display());
+    Ok(())
+}
+
+/// `simctl io recordVideo` running; stopped with SIGINT, which makes it
+/// finish the file (a killed recorder leaves it unreadable).
+struct Recording {
+    child: Child,
+    path: PathBuf,
+}
+
+impl Recording {
+    fn start(udid: &str, path: &Path) -> Result<Self> {
+        let path_str = path.to_str().ok_or("non-UTF-8 path")?;
+        let child = cmd(
+            "xcrun",
+            &[
+                "simctl",
+                "io",
+                udid,
+                "recordVideo",
+                "--codec=h264",
+                "--force",
+                path_str,
+            ],
+        )
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("recordVideo: {e}"))?;
+        // The recorder needs a moment before frames arrive.
+        thread::sleep(Duration::from_millis(500));
+        Ok(Self {
+            child,
+            path: path.to_path_buf(),
+        })
+    }
+
+    fn stop(mut self) -> Result {
+        run_cmd(&mut cmd("kill", &["-INT", &self.child.id().to_string()]))?;
+        self.child.wait().map_err(|e| format!("recordVideo: {e}"))?;
+        println!("recording: {}", self.path.display());
+        Ok(())
+    }
 }
 
 /// Runs `steps` (one per argument; see tools/simdriver) in the test

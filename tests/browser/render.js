@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Rendering in the engine worker: startup with or without WebGPU, the frame
-// loop on the transferred canvas, and the path from an imported archive
-// through DDS (or Theora) to the screen, read back through the renderer
-// (`debug_capture`), not the DOM.
+// Rendering in the engine worker: startup with WebGPU, else WebGL 2 (#113),
+// else without graphics; the frame loop on the transferred canvas, and the
+// path from an imported archive through DDS (or Theora) to the screen, read
+// back through the renderer (`debug_capture`), not the DOM.
 
 import { assert, assertEqual, skip } from "./harness.js";
 
@@ -47,7 +47,7 @@ function decodeMasked(bytes) {
   return { width, height, texels };
 }
 
-/** Fails unless WebGPU is up (the iOS Simulator has none: a known failure). */
+/** Fails unless graphics are up (WebGPU, or WebGL 2 where there's no WebGPU adapter). */
 function needsGpu() {
   assertEqual(gpu.state, "ready", `graphics: ${gpu.message}`);
 }
@@ -63,14 +63,14 @@ export const tests = {
     const line = document.getElementById("status").textContent;
     if (gpu.state === "ready") {
       assert(!line.includes("unavailable"), `status line: ${line}`);
-      return `${gpu.format}, ${gpu.size.join("×")}, BC ${gpu.bc ? "yes" : "no"}`;
+      return `${gpu.backend}, ${gpu.format}, ${gpu.size.join("×")}, textures ${gpu.textures}`;
     }
     assertEqual(gpu.state, "unavailable", "state");
     assert(gpu.message && line.includes(`graphics unavailable: ${gpu.message}`), `status line: ${line}`);
     return gpu.message;
   },
 
-  "WebGPU renderer runs in the engine worker": async () => {
+  "renderer runs in the engine worker": async () => {
     needsGpu();
     // The canvas covers the viewport in device pixels.
     const expected = [innerWidth, innerHeight].map((css) => Math.round(css * devicePixelRatio));
@@ -87,7 +87,7 @@ export const tests = {
   "imports an archive with textures": async () => {
     const response = await fetch(`${installerBase()}/index.json`);
     if (response.status === 404) skip("VOLYA_GOG_INSTALLER is unset");
-    if (gpu.state !== "ready") skip("no WebGPU: nothing to draw");
+    if (gpu.state !== "ready") skip("no graphics: nothing to draw");
     installer = await response.json();
     const exe = installer.find((f) => f.name.endsWith(".exe")).name;
     const bin = installer.find((f) => f.name.endsWith("-1.bin")).name;
@@ -114,21 +114,16 @@ export const tests = {
     return `${width}×${height}, largest difference ${worst.toFixed(2)}`;
   },
 
-  "draws a BC game texture as stored": async () => {
+  "draws a BC game texture (as stored, transcoded to ETC2 or decoded)": async () => {
     needsGpu();
     if (!installer) skip("no installer");
-    if (!gpu.bc) {
-      const error = await volya.call("debug_draw", { path: BC }).then(() => null, (e) => e.message);
-      assert(error?.includes("texture-compression-bc"), `expected a clear error, got ${error}`);
-      return "no BC support: clear error";
-    }
     const info = await volya.call("debug_draw", { path: BC });
     assertEqual(info.format, "Bc1", "format");
     const rgba = await capture(info.width, info.height);
     const distinct = new Set();
     for (let i = 0; i < rgba.length; i += 4) distinct.add(rgba.slice(i, i + 3).join());
     assert(distinct.size > 4, `${distinct.size} distinct colours`);
-    return `${distinct.size} distinct colours`;
+    return `${gpu.textures}: ${distinct.size} distinct colours`;
   },
 
   "plays a game video as a texture": async () => {

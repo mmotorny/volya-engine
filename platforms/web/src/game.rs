@@ -410,6 +410,8 @@ pub async fn forget() -> Result<(), JsValue> {
     // Absent entries are fine.
     let _ = opfs::remove(&namespace, GAME_DIR).await;
     let _ = opfs::remove(&namespace, MANIFEST).await;
+    // Derived from the game: stored texture transcodings (#113).
+    let _ = opfs::remove(&namespace, crate::textures::CACHE_DIR).await;
     Ok(())
 }
 

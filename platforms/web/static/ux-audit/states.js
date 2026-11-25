@@ -17,7 +17,7 @@ export const SECTIONS = [
       { id: "import", name: "First start", game: fresh },
       { id: "import-tab", name: "First start in a browser tab", game: fresh, tab: true, persisted: false },
       { id: "import-deleted", name: "The browser deleted the imported game", game: fresh, tab: true, persisted: false, deleted: true },
-      { id: "import-no-webgpu", name: "WebGPU not working (before or after import)", game: fresh, gpu: false },
+      { id: "import-no-graphics", name: "Neither WebGPU nor WebGL 2 working (before or after import)", game: fresh, gpu: false },
       { id: "import-pick", name: "Picked the wrong files", game: fresh, snapshot: { error: "pick" } },
       { id: "import-not-installer", name: "Not the game's installer", game: fresh, snapshot: { error: "Inno Setup headers: unexpected signature" } },
       {

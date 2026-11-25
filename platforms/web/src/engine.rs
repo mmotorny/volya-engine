@@ -90,6 +90,9 @@ pub async fn launch() -> Result<serde_json::Value, JsValue> {
                 data.set_user_config(user);
             }
             let mut app = App::new(data).map_err(error)?;
+            // A GPU without BC gets the level's textures transcoded while
+            // it loads (#113).
+            app.set_prepare_textures(crate::textures::wanted());
             app.resized(native);
             app.set_saved_games(saves);
             Ok(app)
@@ -158,6 +161,35 @@ fn store_user_config(bytes: Vec<u8>) {
 /// otherwise (the splash and the page draw at the canvas's size).
 pub fn render_size() -> Option<Resolution> {
     RUNNING.with(|r| r.borrow().as_ref().map(|running| running.app.video_mode()))
+}
+
+/// The texture files of the level shown, if any.
+pub fn level_texture_paths() -> Option<Vec<String>> {
+    RUNNING.with(|r| r.borrow().as_ref()?.app.level_texture_paths())
+}
+
+/// The level's texture files, while its loading waits for them to be
+/// prepared ([`App::textures_to_prepare`]).
+pub fn textures_to_prepare() -> Option<Vec<String>> {
+    RUNNING.with(|r| Some(r.borrow().as_ref()?.app.textures_to_prepare()?.to_vec()))
+}
+
+/// Whether a level's loading waits for its textures.
+pub fn preparing_textures() -> bool {
+    RUNNING.with(|r| {
+        r.borrow()
+            .as_ref()
+            .is_some_and(|r| r.app.textures_to_prepare().is_some())
+    })
+}
+
+/// The level's textures are prepared: its loading goes on.
+pub fn textures_prepared() {
+    RUNNING.with(|r| {
+        if let Some(running) = r.borrow_mut().as_mut() {
+            running.app.textures_prepared();
+        }
+    });
 }
 
 /// The output was resized to `resolution` pixels.

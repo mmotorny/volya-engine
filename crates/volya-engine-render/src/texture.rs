@@ -116,6 +116,84 @@ pub fn transcode(dds: &Dds) -> Option<Transcoded> {
     Some(Transcoded { format, data })
 }
 
+/// Stored transcodings (#113): derived data a platform keeps beside the
+/// game, never in its files, so a texture is transcoded once. An entry
+/// names its source file and holds the source's size and CRC-32 and the
+/// encoder's version: a changed source or encoder makes it stale.
+pub mod cache {
+    use super::{Etc2Format, Transcoded};
+
+    const MAGIC: &[u8; 4] = b"VETC";
+
+    /// The entry's file name for source file `path`: a 64-bit FNV-1a hash
+    /// of the path, in hex (the entry itself holds the path).
+    pub fn name(path: &str) -> String {
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in path.bytes() {
+            hash ^= u64::from(b);
+            hash = hash.wrapping_mul(0x0100_0000_01b3);
+        }
+        format!("{hash:016x}.etc2")
+    }
+
+    fn format_code(format: Etc2Format) -> u8 {
+        match format {
+            Etc2Format::Rgb8 => 1,
+            Etc2Format::Rgb8A1 => 2,
+            Etc2Format::Rgba8 => 3,
+        }
+    }
+
+    /// The entry for `transcoded`, made from the file at `path` holding
+    /// `source`: magic, encoder version, source size and CRC-32, format,
+    /// path, then the data.
+    pub fn entry(path: &str, source: &[u8], transcoded: &Transcoded) -> Vec<u8> {
+        let mut out = Vec::with_capacity(32 + path.len() + transcoded.data.len());
+        out.extend_from_slice(MAGIC);
+        out.extend_from_slice(&volya_engine_formats::etc2::ENCODER_VERSION.to_le_bytes());
+        out.extend_from_slice(&(source.len() as u64).to_le_bytes());
+        out.extend_from_slice(&crc32fast::hash(source).to_le_bytes());
+        out.push(format_code(transcoded.format));
+        out.extend_from_slice(&(path.len() as u16).to_le_bytes());
+        out.extend_from_slice(path.as_bytes());
+        out.extend_from_slice(&transcoded.data);
+        out
+    }
+
+    /// The transcoding `entry` holds if it was made from the file at `path`
+    /// holding `source` by this encoder; `None` when stale or damaged (the
+    /// data's length is checked when uploading).
+    pub fn read(path: &str, source: &[u8], entry: &[u8]) -> Option<Transcoded> {
+        let mut at = 0;
+        let mut take = |n: usize| {
+            let bytes = entry.get(at..at + n)?;
+            at += n;
+            Some(bytes)
+        };
+        let fits = take(4)? == MAGIC
+            && take(4)? == volya_engine_formats::etc2::ENCODER_VERSION.to_le_bytes()
+            && take(8)? == (source.len() as u64).to_le_bytes()
+            && take(4)? == crc32fast::hash(source).to_le_bytes();
+        if !fits {
+            return None;
+        }
+        let format = match take(1)?[0] {
+            1 => Etc2Format::Rgb8,
+            2 => Etc2Format::Rgb8A1,
+            3 => Etc2Format::Rgba8,
+            _ => return None,
+        };
+        let length = u16::from_le_bytes(take(2)?.try_into().ok()?) as usize;
+        if take(length)? != path.as_bytes() {
+            return None;
+        }
+        Some(Transcoded {
+            format,
+            data: entry[at..].to_vec(),
+        })
+    }
+}
+
 fn etc2_format(format: Etc2Format) -> wgpu::TextureFormat {
     match format {
         Etc2Format::Rgb8 => wgpu::TextureFormat::Etc2Rgb8Unorm,

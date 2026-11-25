@@ -6,8 +6,9 @@
 // logo sequence is skipped with synthesized Escape presses, and the menu is
 // driven with synthesized keyboard, mouse and touch input. State comes from
 // the `menu_state` and `menu_scene` ops; pixels from `debug_capture` (the
-// renderer, not the DOM) where WebGPU exists. Without WebGPU (the iOS
-// Simulator) everything but the pixels still runs.
+// renderer, not the DOM) where graphics exist: WebGPU, or WebGL 2 with the
+// textures transcoded to ETC2 (the iOS Simulator, #113). Without graphics
+// everything but the pixels still runs.
 
 import { assert, assertEqual, skip } from "./harness.js";
 
@@ -357,7 +358,7 @@ export const tests = {
       assertEqual(gpu.state, "unavailable", "graphics");
       const line = document.getElementById("status").textContent;
       assert(line.includes("graphics unavailable"), `status line: ${line}`);
-      return `no WebGPU (${gpu.message}): the menu runs without graphics`;
+      return `no graphics (${gpu.message}): the menu runs without them`;
     }
     const { rgba } = await volya.call("debug_capture", { width: 1024, height: 768 });
     const luma = (x, y) => rgba[(y * 1024 + x) * 4] + rgba[(y * 1024 + x) * 4 + 1] + rgba[(y * 1024 + x) * 4 + 2];
@@ -472,7 +473,9 @@ export const tests = {
     assert(frame.sprites.some((s) => s.layer === "loading caption"), "caption");
     // After the last stage the image covers the level's first 30 frames;
     // the intro starts under the last two (loading-screen.md section 7).
-    const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", 60000);
+    // Transcoding the level's textures (WebGL 2 without BC, #113) takes
+    // longer the first time; later loads read the stored transcodings.
+    const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", gpu.textures === "etc2" ? 900000 : 60000);
     // The wasm heap at the end of the last frame under each caption.
     const stages = [];
     for (const e of await volya.call("heap_log", { on: false })) {
@@ -508,7 +511,27 @@ export const tests = {
       note += `, ${colours.size} colours`;
     }
     const stats = await volya.call("level_stats");
-    return `${note}; ${JSON.stringify(stats)}`;
+    if (gpu.textures === "etc2") assertEqual(stats.textures.textures > 300, true, `textures prepared: ${JSON.stringify(stats.textures)}`);
+    return `${gpu.backend}, textures ${gpu.textures}; ${note}; ${JSON.stringify(stats)}`;
+  },
+
+  "transcoding to ETC2 costs: the level's textures and a few large ones": async () => {
+    needsGame();
+    await until((s) => s.phase === "level" && !s.intro, "the level");
+    // Measured on every target (Chrome uploads BC, but the wasm
+    // transcoder's cost is the same work).
+    const large = [
+      "gamedata\\textures\\detail\\detail_grnd_grass.dds",
+      "gamedata\\levels\\l01_escape\\terrain\\terrain_escape.dds",
+      "gamedata\\levels\\l01_escape\\lmap#1_1.dds",
+      "gamedata\\textures\\sky\\sky_2_cube.dds",
+      "gamedata\\textures\\crete\\crete_walls16.dds",
+    ];
+    const each = await volya.call("debug_transcode", { paths: large });
+    const level = await volya.call("debug_transcode", {});
+    assert(level.textures > 300, `${level.textures} textures`);
+    const per = each.per.map((p) => `${p.path.split("\\").pop()} ${p.size.join("×")} ${p.format} ${p.ms.toFixed(0)} ms (${p.ms_per_mpx.toFixed(0)} ms/Mpx)`);
+    return `level: ${level.textures} textures, ${level.mpx.toFixed(1)} Mpx in ${(level.ms / 1000).toFixed(1)} s (${level.ms_per_mpx.toFixed(0)} ms/Mpx), wasm heap ${mib(level.heap_before)} → at most ${mib(level.heap_max)}; ${per.join("; ")}`;
   },
 
   "desktop: full screen with Keyboard Lock is offered in the level; accepting locks the keys, then asks for full screen": async () => {

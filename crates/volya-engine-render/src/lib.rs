@@ -22,6 +22,7 @@ pub mod world;
 
 use std::ops::Range;
 
+pub use texture::cache as texture_cache;
 pub use texture::{TextureError, TexturePath, Transcoded, transcode, transcoded_len};
 pub use video::VideoTexture;
 pub use wgpu;

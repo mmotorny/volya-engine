@@ -49,8 +49,8 @@ globalThis.volyaImportedBefore = Boolean(state.deleted);
 Object.defineProperty(navigator.storage, "persisted", { value: async () => state.persisted ?? true });
 Object.defineProperty(navigator.storage, "persist", { value: async () => state.persisted ?? true });
 
-// The engine's own message for a browser without WebGPU (platforms/web/src/gpu.rs).
-const gpu = state.gpu === false ? { state: "unavailable", message: "this browser has no WebGPU" } : { state: "ready" };
+// The engine's own message for a browser with neither WebGPU nor WebGL 2 (platforms/web/src/gpu.rs).
+const gpu = state.gpu === false ? { state: "unavailable", message: "no WebGPU; no WebGL 2 adapter" } : { state: "ready" };
 const call = async (op) => {
   switch (op) {
     case "status":

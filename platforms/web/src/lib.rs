@@ -14,6 +14,7 @@ mod gpu;
 mod import;
 mod input;
 mod opfs;
+mod textures;
 
 use serde::Serialize;
 use volya_engine::core::audio::{Category, Playback};
@@ -64,7 +65,7 @@ thread_local! {
 }
 
 /// The wasm heap (linear memory) size, bytes.
-fn heap_bytes() -> f64 {
+pub(crate) fn heap_bytes() -> f64 {
     wasm_bindgen::memory()
         .dyn_into::<js_sys::WebAssembly::Memory>()
         .map(|m| {
@@ -91,6 +92,7 @@ pub fn frame(time: f64) {
     engine::frame(time);
     gpu::frame(time);
     input::end_frame();
+    textures::poll();
     let cpu = now() - start;
     if HEAP_LOG.with(|l| l.borrow().is_some()) {
         let state = engine::state();
@@ -139,6 +141,8 @@ struct LevelStats {
     /// GPU memory of the static world (buffers and textures).
     #[serde(flatten)]
     gpu: serde_json::Value,
+    /// The latest level's texture preparation (#113).
+    textures: textures::Stats,
     /// Averages over the latest frames, milliseconds.
     frame_cpu_ms: f64,
     frame_cpu_max_ms: f64,
@@ -154,6 +158,7 @@ fn level_stats() -> LevelStats {
         LevelStats {
             wasm_heap_bytes: heap,
             gpu: gpu::world_stats(),
+            textures: textures::stats(),
             frame_cpu_ms: average(&s.cpu),
             frame_cpu_max_ms: s.cpu.iter().copied().fold(0.0, f64::max),
             frame_interval_ms: average(&s.interval),
@@ -261,6 +266,7 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         }
         "input_state" => to_json(&input::state()),
         "level_stats" => to_json(&level_stats()),
+        "debug_transcode" => to_json(&textures::bench(&args)?),
         "ui_images" => to_json(&engine::ui_images(&args)?),
         // `{"on": true}` starts logging each frame's loading caption and
         // wasm heap; `{"on": false}` stops and returns the log.

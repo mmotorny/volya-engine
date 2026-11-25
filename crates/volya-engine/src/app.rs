@@ -881,6 +881,15 @@ impl App {
         }
     }
 
+    /// The texture files of the level shown, if any (tests: transcoding
+    /// cost).
+    pub fn level_texture_paths(&self) -> Option<Vec<String>> {
+        match &self.phase {
+            Some(Phase::Level { level, .. }) => Some(level.world().texture_paths()),
+            _ => None,
+        }
+    }
+
     /// While the player's controls are live (the level shows with no
     /// loading image or intro over it): whether the crouch toggle is engaged
     /// (and in the low crouch), a sprint is requested and the sprint lock

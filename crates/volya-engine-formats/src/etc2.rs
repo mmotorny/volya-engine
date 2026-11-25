@@ -77,6 +77,10 @@ const GOOD_ENOUGH: u64 = 16 * 3;
 /// three levels per channel on average.
 const TRY_T_AND_H: u64 = 16 * 3 * 9;
 
+/// The encoder's version: changes whenever its output for some input does,
+/// so stored transcodings from an earlier one are made again.
+pub const ENCODER_VERSION: u32 = 1;
+
 /// Which ETC2 format a transcoded texture takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Etc2Format {
