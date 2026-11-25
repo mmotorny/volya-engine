@@ -11,13 +11,15 @@
 //! `volya` (every crate of ours); [`TraceLayer`] records them:
 //!
 //! - A span is timed each time it is entered and exited. Per name, its
-//!   mean, maximum and count over each period become a counter event
-//!   (`"<name> ms"`). A root span (one without a parent, e.g. `frame`)
+//!   mean, maximum and count over each period become series of the
+//!   period's `time ms` counter event (`"<name> mean"`, `max`, `n`). A root span (one without a parent, e.g. `frame`)
 //!   lasting at least [`long_ms`] is written as a complete event (`X`) with
 //!   the spans that ran inside it.
 //! - [`metric`] adds a value (`tracing` fields `metric`, `value`); per name
-//!   its minimum, mean and maximum over each period become a counter event.
-//! - [`count`] adds to a count (`count`, `n`): its period's sum, a counter.
+//!   its minimum, mean and maximum over each period become series of the
+//!   period's `metrics` counter event.
+//! - [`count`] adds to a count (`count`, `n`): its period's sum, a series
+//!   of `metrics` too.
 //! - Any other event is an instant event (`i`), named by its message, its
 //!   fields as arguments; at most [`EVENTS_PER_NAME`] per name per period.
 //!
@@ -304,8 +306,10 @@ impl Diagnostics {
             instants: Vec::new(),
             children: Vec::new(),
         };
+        // The version's last word: its commit (e.g. `b0fa5b8`).
         let mut cat = String::from("volya,v:");
-        cat.extend(version.chars().map(|c| match c {
+        let short = version.split_whitespace().last().unwrap_or("");
+        cat.extend(short.chars().map(|c| match c {
             ',' | '"' | '\\' => '_',
             c if c.is_whitespace() => '_',
             c => c,
@@ -370,36 +374,43 @@ impl Diagnostics {
         stat(&mut self.state().counts, name).add(1, 0.0, n as f64, 0.0);
     }
 
-    /// Ends the period: a counter event per span name (`"<name> ms"`:
-    /// mean, max, n), per metric (min, mean, max) and per count (count),
-    /// and one instant event for instants over the limit.
+    /// Ends the period: a counter event `time ms` with each span's mean,
+    /// max and n (`"<span> mean"`, …), one `metrics` with each metric's min,
+    /// mean and max and each count's sum, and one instant event for
+    /// instants over the limit.
     pub fn summarize(&self) {
         let mut s = self.state();
         let now = s.now();
         let mut lines = Vec::new();
-        for (kind, stats) in [(0, &s.spans), (1, &s.metrics), (2, &s.counts)] {
-            for st in stats.iter().filter(|st| kind == 2 || st.count > 0) {
-                let mean = st.sum / st.count as f64;
-                let (name, args) = match kind {
-                    0 => (
-                        format!("{} ms", st.name),
-                        vec![
-                            ("mean", Value::Number(mean)),
-                            ("max", Value::Number(st.max)),
-                            ("n", Value::Number(st.count as f64)),
-                        ],
-                    ),
-                    1 => (
-                        st.name.to_string(),
-                        vec![
-                            ("min", Value::Number(st.min)),
-                            ("mean", Value::Number(mean)),
-                            ("max", Value::Number(st.max)),
-                        ],
-                    ),
-                    _ => (st.name.to_string(), vec![("count", Value::Number(st.sum))]),
-                };
-                lines.push(s.line('C', &name, now, None, 1, &args));
+        // Two counter events a period, each argument a series (Perfetto
+        // makes a track of each): the spans' times, then the metrics and
+        // counts. One event's overhead instead of one per series.
+        let mut times: Vec<(String, Value)> = Vec::new();
+        for st in s.spans.iter().filter(|st| st.count > 0) {
+            times.push((
+                format!("{} mean", st.name),
+                Value::Number(st.sum / st.count as f64),
+            ));
+            times.push((format!("{} max", st.name), Value::Number(st.max)));
+            times.push((format!("{} n", st.name), Value::Number(st.count as f64)));
+        }
+        let mut values: Vec<(String, Value)> = Vec::new();
+        for st in s.metrics.iter().filter(|st| st.count > 0) {
+            values.push((format!("{} min", st.name), Value::Number(st.min)));
+            values.push((
+                format!("{} mean", st.name),
+                Value::Number(st.sum / st.count as f64),
+            ));
+            values.push((format!("{} max", st.name), Value::Number(st.max)));
+        }
+        for st in &s.counts {
+            values.push((st.name.to_string(), Value::Number(st.sum)));
+        }
+        for (name, args) in [("time ms", times), ("metrics", values)] {
+            if !args.is_empty() {
+                let args: Vec<(&str, Value)> =
+                    args.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
+                lines.push(s.line('C', name, now, None, 1, &args));
             }
         }
         let over: Vec<(&str, Value)> = s

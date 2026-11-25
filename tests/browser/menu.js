@@ -1565,17 +1565,21 @@ export const tests = {
     assert(count("i", "game started") >= 2, `games started ${count("i", "game started")}`);
     assertEqual(count("i", "game ended"), count("i", "game started"), "games ended");
     assert(count("i", "level loading") >= 2 && count("i", "level made") >= 2, "levels");
-    for (const name of ["frame ms", "engine ms", "render ms", "frame.interval_ms", "wasm heap", "diagnostics.write_ms"]) {
-      assert(count("C", name) > 10, `${name}: ${count("C", name)}`);
+    const series = (key) => mine.filter((e) => e.ph === "C" && key in e.args).length;
+    for (const key of ["frame max", "engine max", "render max", "frame.interval_ms max", "MiB", "diagnostics.write_ms max"]) {
+      assert(series(key) > 10, `${key}: ${series(key)}`);
     }
     // The level's first frame creates its sounds: long, with what ran.
     const long = mine.filter((e) => e.ph === "X" && e.name === "frame");
     assert(long.length > 0, "no long frame");
     const audio = volya.audioState() === "running";
-    if (audio) assert(count("C", "audio.fill_ms") > 10 && count("C", "decode ms") > 10, "audio");
+    if (audio) assert(series("audio.fill_ms min") > 10 && series("decode max") > 10, "audio");
     await volya.diagnostics.setEnabled(false, volya.call);
     const worst = Math.max(...long.map((e) => e.dur)) / 1000;
-    return `${mine.length} events this session, ${long.length} long frames (worst ${worst.toFixed(0)} ms), ${text.length} bytes; audio ${audio ? "running" : volya.audioState()}`;
+    // The log's rate while a game runs: this session's bytes over its time.
+    const seconds = (mine.at(-1).ts - mine.find((e) => e.ts > 0).ts) / 1e6;
+    const bytes = mine.reduce((sum, e) => sum + JSON.stringify(e).length + 2, 0);
+    return `${mine.length} events, ${(bytes / seconds).toFixed(0)} B/s over ${seconds.toFixed(0)} s; ${long.length} long frames (worst ${worst.toFixed(0)} ms); audio ${audio ? "running" : volya.audioState()}`;
   },
 
   "forgets the game": async () => {

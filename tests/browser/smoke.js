@@ -615,9 +615,12 @@ export const tests = {
     for (const key of ["version", "user_agent", "screen", "dpr", "cores", "build", "gpu_state"]) assert(key in session, `session lacks ${key}`);
     if (session.gpu_state === "ready") assert(["webgpu", "webgl2"].includes(session.gpu_backend) && session.gpu_textures, "no backend");
     assert(find("i", "test marker")[0]?.tid === 2, "no page event");
-    assertEqual(JSON.stringify(find("C", "test.page_ms")[0]?.args), '{"min":2,"mean":3,"max":4}', "page metric");
-    for (const name of ["frame ms", "engine ms", "render ms", "sound ms", "frame.interval_ms", "frame.late", "wasm heap"]) {
-      assert(find("C", name).length > 0, `no ${name} counter`);
+    // A period's series: the spans' times, the metrics and counts.
+    const series = (key) => mine.filter((e) => e.ph === "C" && key in e.args).length;
+    const page = mine.find((e) => e.ph === "C" && "test.page_ms mean" in e.args)?.args;
+    assertEqual([page?.["test.page_ms min"], page?.["test.page_ms mean"], page?.["test.page_ms max"]].join(), "2,3,4", "page metric");
+    for (const key of ["frame mean", "frame max", "frame n", "engine max", "render max", "sound max", "frame.interval_ms max", "frame.late", "MiB"]) {
+      assert(series(key) > 0, `no ${key} series`);
     }
     const long = find("X", "frame").filter((e) => e.dur >= 50000);
     assert(long.length > 0, "no long frame");
@@ -626,8 +629,8 @@ export const tests = {
       "a long frame without what ran in it",
     );
     if (volya.audioState() === "running") {
-      for (const name of ["audio.fill_ms", "audio.reply_wait_ms", "audio.underrun_frames", "audio.mix ms"]) {
-        assert(find("C", name).length > 0, `no ${name} counter`);
+      for (const key of ["audio.fill_ms min", "audio.reply_wait_ms max", "audio.underrun_frames", "audio.mix max"]) {
+        assert(series(key) > 0, `no ${key} series`);
       }
     }
     assertEqual(trace.otherData.cap_bytes, 2 * 2 ** 20, "cap");

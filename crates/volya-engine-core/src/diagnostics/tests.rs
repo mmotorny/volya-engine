@@ -163,7 +163,7 @@ fn records_spans_metrics_and_events() {
     assert_eq!(complete[0]["dur"], 61_000);
     assert_eq!(complete[1]["name"], "sound");
     assert_eq!(complete[1]["dur"], 60_000);
-    assert_eq!(complete[0]["cat"], "volya,v:2026-11-24_00:47_·_b0fa5b8");
+    assert_eq!(complete[0]["cat"], "volya,v:b0fa5b8");
     assert_eq!(complete[0]["pid"], 7);
     let instants = events(&t, "i");
     let fatal: Vec<_> = instants
@@ -190,20 +190,21 @@ fn records_spans_metrics_and_events() {
             .unwrap_or_else(|| panic!("no counter {name}"))["args"]
             .clone()
     };
+    let times = counter("time ms");
     assert_eq!(
-        counter("frame ms"),
-        serde_json::json!({"mean": 33.5, "max": 61, "n": 2})
+        [&times["frame mean"], &times["frame max"], &times["frame n"]],
+        [33.5, 61.0, 2.0]
     );
+    assert_eq!(times["sound max"], 60);
     assert_eq!(
-        counter("audio.fill_ms"),
-        serde_json::json!({"min": 10, "mean": 20, "max": 30})
+        counter("metrics"),
+        serde_json::json!({"audio.fill_ms min": 10, "audio.fill_ms mean": 20, "audio.fill_ms max": 30, "audio.underruns": 3})
     );
-    assert_eq!(counter("audio.underruns"), serde_json::json!({"count": 3}));
     // The next period: counts go on (0), the rest only with values.
     d.summarize();
     let next = d.take_pending();
     assert_eq!(next.lines().count(), 1);
-    assert!(next.contains("\"audio.underruns\"") && next.contains("{\"count\":0}"));
+    assert!(next.contains("{\"audio.underruns\":0}"));
 }
 
 #[test]
