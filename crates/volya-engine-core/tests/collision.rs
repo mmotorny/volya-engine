@@ -282,8 +282,7 @@ fn escape_collision_mesh() {
              {loaded:.1?}, {:.1} MB",
             world.memory_bytes() as f64 / 1e6
         );
-        let tris = world.triangles();
-        let pass = (0..tris.len() as u32).filter(|&t| !world.is_solid(t));
+        let pass = (0..world.triangle_count() as u32).filter(|&t| !world.is_solid(t));
         assert_eq!(pass.clone().count(), 115_596);
         assert_eq!(
             pass.filter(|&t| world.material(t).has(ACTOR_OBSTACLE))
@@ -328,7 +327,7 @@ fn start_position(vfs: &dyn Vfs, world: &CollisionWorld) {
     assert!(crossings.iter().all(|c| c.0 > 0.0));
     let (dy, t, n) = crossings[0];
     assert_eq!(t, 424_895);
-    assert_eq!(world.triangles()[t as usize], [250_888, 247_104, 247_153]);
+    assert_eq!(world.triangle(t), [250_888, 247_104, 247_153]);
     assert!((dy - 0.000_13).abs() < 0.000_01, "{dy}");
     assert!(
         n[1] > WALKABLE_NORMAL_Y && (n[0] + 0.004_37).abs() < 1e-4,

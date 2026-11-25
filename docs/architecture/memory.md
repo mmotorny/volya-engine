@@ -13,7 +13,7 @@ There are no arenas: every allocation goes to one general heap, the target's sys
 
 Two reuse fixes from #357 stand in for arenas:
 
-- The collision world's five arrays are kept when it is dropped (a thread-local spare in `volya-engine-core::collision`) and reused by the next world when large enough, so a second New Game's collision world finds its 42 MB without new memory (it needed up to 13 MiB more before, measured in headless Chrome).
+- The collision world's five arrays are kept when it is dropped (a thread-local spare in `volya-engine-core::collision`) and reused by the next world when large enough, so a second New Game's collision world finds its 30 MB without new memory (it needed up to 13 MiB more before, measured in headless Chrome).
 - Prepared textures share one read buffer and one transcoding buffer, and texture writes go in bands of 2 MiB.
 
 ## Measurements by lifetime (#399)
@@ -26,7 +26,7 @@ Measured natively (release, M-series Mac) with counting allocators: `volya-engin
 |---|---|---|
 | The archive tree (`DbVfs`: every file's entry and every directory's names, `HashMap<String, _>`, `BTreeSet<String>`) | 7.7 MB | 87,747 |
 | The game's data before any game (`GameData`): the system configuration 5.6 MB, string tables 1.8 MB, UI 0.2 MB | 7.6 MB | 118,008 |
-| The collision world's spare arrays after a level (#357) | 42.0 MB | 5 |
+| The collision world's spare arrays after a level (#357) | 30.1 MB (42.0 before #371) | 5 |
 
 ### Held for the level
 
@@ -37,14 +37,14 @@ What each loading stage keeps, and the blocks it leaves live:
 | `st_creating_new_game` | 4.7 MB | 66 | 452 | 12.8 MB |
 | `st_server_connecting` (the offline simulation: registry 14.8, navigation 7.1, graph and paths 1.8) | 19.8 MB | 108,551 | 603,156 | 19.8 MB |
 | `st_opening_stream` (the `level` file's parts) | 7.8 MB | 6,887 | 41,503 | 12.6 MB |
-| `st_loading_cform` (collision: vertices 8.4, triangles 16.5, materials 1.4, grid 15.8) | 42.7 MB | 9,639 | 14,906 | 45.0 MB |
+| `st_loading_cform` (collision: vertices 8.4, triangles 11.0, materials 1.4, grid 9.3; before #371 triangles 16.5 and grid 15.8) | 30.7 MB (42.7 before) | 9,654 | 14,924 | 35.1 MB (45.0 before) |
 | `st_loading_geometry` | 0.4 MB | 121 | 205 | 0.7 MB |
 | `st_loading_spatial_db` | −6.0 MB | −6,486 | 117 | 5.4 MB |
 | `st_loading_ai_objects` (the particles' effect library) | 1.9 MB | 8,417 | 18,083 | 3.3 MB |
 | `st_client_spawning` (objects' models, weather, level sounds; the objects' geometry 4.9 until uploaded) | 6.2 MB | 6,929 | 2,459,422 | 11.0 MB |
 | `st_loading_textures` | 0.3 MB | 1,639 | 103,158 | 3.1 MB |
 
-The level keeps 77.9 MB at the end of loading in 135,765 blocks, 73 MB once its geometry is uploaded; the load's peak is 82.3 MB above its start. The game data a level needs resident is about 48 MB (`level.cform` as stored 30.4, the navigation positions 7.1, `all.spawn` 4.5, the graph's tables 1.8, the configuration's text 1.4, the strings 1.8, the effect library 1.9); the rest lives on the GPU as stored.
+The level keeps 66.0 MB at the end of loading in 136,065 blocks (77.9 MB before #371), 61 MB once its geometry is uploaded; the load's peak is 70.3 MB above its start (82.3 before). The game data a level needs resident is about 48 MB (`level.cform` as stored 30.4, the navigation positions 7.1, `all.spawn` 4.5, the graph's tables 1.8, the configuration's text 1.4, the strings 1.8, the effect library 1.9); the rest lives on the GPU as stored.
 
 ### Loading temporaries
 
@@ -135,7 +135,7 @@ The heap grew in every variant: under `st_loading_cform` by 37 MiB for 39 MiB mo
 
 ### Open
 
-What the measurements leave, for the user to decide (#401): the level's large blocks are what needs new memory (the collision world's four arrays, up to 16.5 MB each, the game graph and the spawn file read whole, 8.1 and 4.5 MB, the navigation 7.1 MB), not its small ones. Ways that keep one heap's sharing:
+What the measurements leave, for the user to decide (#401): the level's large blocks are what needs new memory (the collision world's arrays, up to 11 MB each since #371 (16.5 before), the game graph and the spawn file read whole, 8.1 and 4.5 MB, the navigation 7.1 MB), not its small ones. Ways that keep one heap's sharing:
 
 - make the large blocks smaller: the collision grid and triangles packed (#371), the registry compacted (#370), the game graph and spawn file streamed (#403);
 - split the large blocks into fixed pieces (1 MiB, say) that any free space of that size takes, and that the next level's pieces reuse;

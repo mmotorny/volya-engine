@@ -704,7 +704,7 @@ fn loading_stage_times() {
     }
     let screen = load.finish(0).unwrap();
     let collision = screen.collision();
-    assert_eq!(collision.triangles().len(), 1_375_470);
+    assert_eq!(collision.triangle_count(), 1_375_470);
     eprintln!(
         "collision world: {:.1} MB",
         collision.memory_bytes() as f64 / 1e6

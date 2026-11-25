@@ -85,7 +85,7 @@ const STAGE_BUDGETS: [(Stage, f64); 9] = [
     (Stage::CreatingNewGame, 14.5),  // 12.8: the spawn file and game graph
     (Stage::ServerConnecting, 23.0), // 19.8: the offline simulation
     (Stage::OpeningStream, 14.0),    // 12.6: the `level` file and its parse
-    (Stage::LoadingCform, 48.0),     // 44.3: the collision world it keeps
+    (Stage::LoadingCform, 38.0),     // 35.1: the collision world it keeps (#371)
     (Stage::LoadingGeometry, 1.5),   // 0.7: the geometry's layout only
     (Stage::LoadingSpatialDb, 7.0),  // 5.4: index pieces and the draw list
     // 3.3: `particles.xr` and the effect library it keeps (1.9).
@@ -96,9 +96,9 @@ const STAGE_BUDGETS: [(Stage, f64); 9] = [
 ];
 /// Any other stage's peak, MB.
 const OTHER_BUDGET: f64 = 0.5;
-/// The whole load's peak above its start, MB (80.0 measured; 188.3 before
-/// #79).
-const LOADING_BUDGET: f64 = 88.0;
+/// The whole load's peak above its start, MB (70.3 measured; 82.3 before
+/// #371, 188.3 before #79).
+const LOADING_BUDGET: f64 = 76.0;
 
 #[test]
 fn loading_stage_memory() {
