@@ -265,7 +265,8 @@ fn checked_items(list: &str, longest: usize, pair: u32) -> io::Result<Vec<String
             items.len()
         )));
     }
-    if let Some(long) = items.iter().find(|i| i.len() > longest) {
+    // Bytes of the stored (single-byte) text, one per character.
+    if let Some(long) = items.iter().find(|i| i.chars().count() > longest) {
         return Err(invalid(format!(
             "material pair {pair}: item '{long}' longer than {longest} bytes"
         )));

@@ -370,14 +370,17 @@ fn footsteps_from_game_data() {
         for _ in 0..n {
             now += FRAME_MS;
             // The footsteps' own cost: the same frame on a copy of them.
+            // The step clock: the frames' real time (the app's level sound
+            // clock), here the frame time itself.
+            let clock = now as u32;
             let mut copy = level.footsteps().unwrap().clone();
             level.update(now, input);
             input.end_frame();
             let t = Instant::now();
-            copy.frame(FRAME_MS, level.player(), true).unwrap();
+            copy.frame(clock, level.player(), true).unwrap();
             let d = t.elapsed();
             cost = (cost.0 + d, cost.1.max(d), cost.2 + 1);
-            assert!(level.take_fatal().is_none());
+            level.footsteps_frame(clock).unwrap();
             let f = level.footsteps().unwrap();
             let ground = level.player().body().ground_material().unwrap_or(0);
             let id = level.collision().materials()[ground as usize].id;
@@ -401,7 +404,7 @@ fn footsteps_from_game_data() {
             system.update(now, &mut NoDevice);
             frames.push((
                 now,
-                f.clock(),
+                clock,
                 f.leg_cycle().map(str::to_owned),
                 f.sounds().to_vec(),
                 id,

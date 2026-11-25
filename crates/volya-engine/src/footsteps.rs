@@ -12,10 +12,10 @@
 //! frame that advances game time, and [`PairSounds::play`] plays what they
 //! give.
 //!
-//! The step clock (S11 3.1) counts the real time of the frames that advance
-//! game time, so it stops while the game is paused, as the specs' clocks of
-//! the level's sounds do (crate::level_sound); its rate factor is 1 and it
-//! has no fixed-step mode, the original's initial values.
+//! The step clock (S11 3.1) is the engine's global clock of
+//! sound-weather-ambient.md 3.1, which the level's sounds keep
+//! (crate::level_sound::SoundRun); the app gives it to each frame.
+//! TODO(#328): that clock follows the spec's global clock.
 
 use std::io;
 use std::sync::Arc;
@@ -149,8 +149,6 @@ pub struct PlayerFootsteps {
     cycles: Cycles,
     table: StepTable,
     state: Footsteps,
-    /// The step clock (ms; module docs).
-    clock: u32,
     stepped: Vec<Step>,
     /// The steps of the latest frame that are heard.
     sounds: Vec<StepSound>,
@@ -179,7 +177,6 @@ impl PlayerFootsteps {
             cycles,
             table,
             state: Footsteps::default(),
-            clock: 0,
             stepped: Vec::new(),
             sounds: Vec::new(),
         })
@@ -202,29 +199,19 @@ impl PlayerFootsteps {
         self.state.playing()
     }
 
-    /// The step clock (ms).
-    pub fn clock(&self) -> u32 {
-        self.clock
-    }
-
     /// The steps of the latest frame that are heard.
     pub fn sounds(&self) -> &[StepSound] {
         &self.sounds
     }
 
-    /// A frame that does not advance game time: nothing steps.
-    pub fn paused(&mut self) {
-        self.sounds.clear();
-    }
-
-    /// A frame that advanced game time by `elapsed` ms, after the player's
-    /// movement update: the leg cycle chosen from its state (S11 2.1), then
+    /// A frame that advanced game time, at step clock `now` (ms; module
+    /// docs), after the player's movement update: the leg cycle chosen from
+    /// its state (S11 2.1), then
     /// its steps updated (3.3; the order within a frame is unestablished,
     /// section 8), the player `alive` (health above 0). Fatal when the pair
     /// lookup is (an index beyond the materials, S9 section 5).
-    pub fn frame(&mut self, elapsed: u64, player: &Player, alive: bool) -> Result<(), Fatal> {
+    pub fn frame(&mut self, now: u32, player: &Player, alive: bool) -> Result<(), Fatal> {
         self.sounds.clear();
-        self.clock = self.clock.wrapping_add(elapsed as u32);
         if !alive {
             return Ok(());
         }
@@ -241,7 +228,6 @@ impl PlayerFootsteps {
             turning: false,
         };
         let name = leg_cycle(&legs);
-        let now = self.clock;
         self.state.choose(&name, now, &self.cycles, &self.table);
         // S11 4.1: the ground material, `default` before any contact.
         // TODO(#325): standing on a physical object (S11's review gap): only

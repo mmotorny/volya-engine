@@ -39,6 +39,7 @@ use crate::core::object_light::SkyVisibility;
 use crate::core::simulation::graph::Graph;
 use crate::core::simulation::navigation::Navigation;
 use crate::core::simulation::{AlifeConfig, Changes, Simulation};
+use crate::core::sound::Fatal;
 use crate::core::vfs::{self, Vfs};
 use crate::core::weather::{Environment, Weather};
 use crate::data::GameData;
@@ -160,8 +161,6 @@ pub struct LevelScreen {
     /// The player's footsteps (S11); `None` only in the unit tests' empty
     /// level.
     footsteps: Option<PlayerFootsteps>,
-    /// A fatal error of the frame, for the app.
-    fatal: Option<String>,
     /// The player's sky visibility (level-objects.md 5.4), for the sounds
     /// of the weather.
     sky_visibility: SkyVisibility,
@@ -1111,7 +1110,6 @@ impl NewGameLoad {
             collision: Arc::new(collision),
             sound_data: self.sound,
             footsteps: Some(footsteps),
-            fatal: None,
             sky_visibility: SkyVisibility::default(),
             advanced: None,
             player,
@@ -1217,9 +1215,6 @@ impl LevelScreen {
         self.clock.set_paused(true);
         self.clock.advance(elapsed);
         self.player.paused(now);
-        if let Some(f) = &mut self.footsteps {
-            f.paused();
-        }
     }
 
     /// One frame at `now` with this frame's `input`. The game clock
@@ -1256,13 +1251,6 @@ impl LevelScreen {
                 },
             );
         }
-        // S11: the leg cycle and the steps after the movement update.
-        if let Some(f) = &mut self.footsteps {
-            let alive = self.character.as_ref().is_none_or(|c| c.conditions.alive());
-            if let Err(e) = f.frame(elapsed, &self.player, alive) {
-                self.fatal = Some(e.0);
-            }
-        }
         self.back |= back;
         self.simulate();
         // sky.md 7.3, k_t from the game clock.
@@ -1288,9 +1276,15 @@ impl LevelScreen {
         self.footsteps.as_ref()
     }
 
-    /// A fatal error of the latest frame, once (the app ends the game).
-    pub fn take_fatal(&mut self) -> Option<String> {
-        self.fatal.take()
+    /// The player's footsteps on a frame that advanced game time, after
+    /// its update, at step clock `now` (S11 3.1; crate::footsteps): the
+    /// leg cycle and the steps (S11 2, 3). Fatal as the pair lookup is.
+    pub fn footsteps_frame(&mut self, now: u32) -> Result<(), Fatal> {
+        let Some(f) = &mut self.footsteps else {
+            return Ok(());
+        };
+        let alive = self.character.as_ref().is_none_or(|c| c.conditions.alive());
+        f.frame(now, &self.player, alive)
     }
 
     /// The level's sound data, once (the app creates its sounds).
@@ -1646,7 +1640,6 @@ impl LevelScreen {
             ),
             sound_data: None,
             footsteps: None,
-            fatal: None,
             sky_visibility: SkyVisibility::default(),
             advanced: None,
             player,

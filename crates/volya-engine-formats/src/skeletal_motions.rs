@@ -225,22 +225,24 @@ fn read_at(reader: &mut (impl Read + Seek), offset: u64, out: &mut [u8]) -> io::
     reader.read_exact(out)
 }
 
-fn uncompressed(header: &ChunkHeader, what: &str) -> io::Result<()> {
-    if header.is_compressed() {
-        return Err(invalid(format!("{what}: compressed chunk {}", header.id())));
-    }
-    Ok(())
-}
-
 /// The key counts of chunk 14 (section 3) at `header`, for `count`
 /// definitions: the head of each sub-chunk *k* + 1, found by id, read as
-/// the name `stringZ` and the `u32` key count.
+/// the name `stringZ` and the `u32` key count. A compressed chunk is
+/// decoded (chunks.md section 5), the whole chunk or one motion.
 fn key_counts(
     reader: &mut (impl Read + Seek),
     header: &ChunkHeader,
     count: usize,
 ) -> io::Result<Vec<u32>> {
-    uncompressed(header, "motion keys")?;
+    if header.is_compressed() {
+        let content = header.read_content(reader)?;
+        let whole = ChunkHeader {
+            id_word: header.id(),
+            offset: 0,
+            size: content.len() as u32,
+        };
+        return key_counts(&mut io::Cursor::new(content), &whole, count);
+    }
     let end = header.offset + u64::from(header.size);
     let mut found: Vec<Option<ChunkHeader>> = vec![None; count + 1];
     let mut offset = header.offset;
@@ -269,14 +271,20 @@ fn key_counts(
         }
         offset += 8 + u64::from(size);
     }
-    let mut head = vec![0u8; MOTION_HEAD];
+    let mut buffer = vec![0u8; MOTION_HEAD];
     (1..=count)
         .map(|id| {
             let sub = found[id].ok_or_else(|| invalid(format!("motion keys: no motion {id}")))?;
-            uncompressed(&sub, "motion keys")?;
-            let n = (sub.size as usize).min(MOTION_HEAD);
-            read_at(reader, sub.offset, &mut head[..n])?;
-            let name_end = head[..n]
+            let decoded;
+            let head = if sub.is_compressed() {
+                decoded = sub.read_content(reader)?;
+                &decoded[..decoded.len().min(MOTION_HEAD)]
+            } else {
+                let n = (sub.size as usize).min(MOTION_HEAD);
+                read_at(reader, sub.offset, &mut buffer[..n])?;
+                &buffer[..n]
+            };
+            let name_end = head
                 .iter()
                 .position(|&b| b == 0)
                 .ok_or_else(|| invalid(format!("motion {id}: name not terminated")))?;
@@ -298,8 +306,7 @@ fn motion_set(
 ) -> io::Result<MotionSet> {
     let params = chunks::find_header(headers, PARAMS_CHUNK)
         .ok_or_else(|| invalid(format!("Old skinned model version unsupported! ({what})")))?;
-    uncompressed(params, what)?;
-    let params = parse_params(&params.read_payload(reader)?)?;
+    let params = parse_params(&params.read_content(reader)?)?;
     let keys = chunks::find_header(headers, KEYS_CHUNK)
         .ok_or_else(|| invalid(format!("{what}: no motion keys")))?;
     let key_counts = key_counts(reader, keys, params.definitions.len())?;
@@ -328,9 +335,8 @@ pub enum ModelMotions {
 pub fn read_model_motions(reader: &mut (impl Read + Seek), what: &str) -> io::Result<ModelMotions> {
     let headers = chunks::index(reader)?;
     if let Some(list) = chunks::find_header(&headers, MOTION_FILES_CHUNK) {
-        uncompressed(list, what)?;
         return Ok(ModelMotions::Files(motion_files(
-            &list.read_payload(reader)?,
+            &list.read_content(reader)?,
         )?));
     }
     if chunks::find_header(&headers, PARAMS_CHUNK).is_some() {
@@ -431,6 +437,38 @@ pub(crate) mod tests {
         assert_eq!(
             read_model_motions(&mut std::io::Cursor::new(&bare), "m").unwrap(),
             ModelMotions::None
+        );
+    }
+
+    #[test]
+    fn decodes_compressed_chunks() {
+        // chunks.md section 5: the content of a compressed chunk is decoded,
+        // for the whole chunk 14, one motion of it, chunk 15 and chunk 19.
+        use crate::chunks::COMPRESSED;
+        use crate::db::encode_literals;
+        let defs = [("walk", 8, 1.0), ("run", 8, 1.0)];
+        let plain = motion_file(&defs, &[26, 40]);
+        let chunks = crate::chunks::Chunks::parse(&plain).unwrap();
+        let c14 = chunks.find(KEYS_CHUNK).unwrap().payload;
+        let c15 = chunks.find(PARAMS_CHUNK).unwrap().payload;
+        let mut file = chunk(COMPRESSED | KEYS_CHUNK, &encode_literals(c14));
+        file.extend(chunk(COMPRESSED | PARAMS_CHUNK, &encode_literals(c15)));
+        let set = read_motion_file(&mut std::io::Cursor::new(&file), "t").unwrap();
+        assert_eq!(set.key_counts, [26, 40]);
+        assert_eq!(set.params.definitions[1].name, "run");
+        let mut motion = b"run\0".to_vec();
+        motion.extend(40u32.to_le_bytes());
+        let mut c14 = chunk(0, &2u32.to_le_bytes());
+        c14.extend(chunk(1, b"walk\0\x1a\0\0\0"));
+        c14.extend(chunk(COMPRESSED | 2, &encode_literals(&motion)));
+        let mut file = chunk(KEYS_CHUNK, &c14);
+        file.extend(chunk(PARAMS_CHUNK, c15));
+        let set = read_motion_file(&mut std::io::Cursor::new(&file), "t").unwrap();
+        assert_eq!(set.key_counts, [26, 40]);
+        let model = chunk(COMPRESSED | MOTION_FILES_CHUNK, &encode_literals(b"a,b\0"));
+        assert_eq!(
+            read_model_motions(&mut std::io::Cursor::new(&model), "m").unwrap(),
+            ModelMotions::Files(vec!["a".into(), "b".into()])
         );
     }
 
