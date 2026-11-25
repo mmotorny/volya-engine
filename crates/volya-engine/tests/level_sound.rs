@@ -18,6 +18,8 @@ use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
+use volya_engine::audio::SoundHost;
+use volya_engine::core::audio::{Category, Mixer, VoiceId};
 use volya_engine::core::collision::geometry::normalize;
 use volya_engine::core::config;
 use volya_engine::core::pause::GlobalClock;
@@ -469,6 +471,76 @@ fn first_level_sounds_from_game_data() {
         rules / 600,
         update / 600
     );
+
+    // The tape recorder (S3 5, source 2) at a New Game's start, on a mixer:
+    // 30 s of 16 ms frames from the start eye, a block mixed every 3 frames
+    // as the AudioWorklet asks. Its voice keeps playing the file on (S2 4.2:
+    // looped data repeats without a gap): one mixer voice, advancing by
+    // exactly its step per output frame, its gain ramp small.
+    sounds.discard(&mut system);
+    let mut host = SoundHost::new(16);
+    host.system.set_volume(Category::Effects, 1.0);
+    let mut sounds = LevelSounds::create(&mut host.system, &tree, &data.aliases, &sound).unwrap();
+    host.system.occlusion_mut().level = Some(level.shared_collision());
+    host.set_listener(Listener {
+        position: v.eye,
+        direction: v.direction,
+        up: v.up,
+    });
+    let mut mixer = Mixer::new(48_000);
+    let (mut run, mut clock) = (SoundRun::default(), GlobalClock::default());
+    let tape = "scripts\\magnitofon\\magnitofon_2";
+    let mut last: Option<(VoiceId, f64)> = None;
+    let (mut switches, mut worst_jump) = (0, 0f32);
+    for frame in 0..30_000 / frame_ms {
+        let time = frame * frame_ms;
+        run.frame_time(0.016, false);
+        run.frame(
+            &mut host.system,
+            &mut sounds,
+            &level.sound_inputs(),
+            clock.frame(time, false),
+            false,
+        )
+        .unwrap();
+        host.update(time as f64, Some(&mut mixer), Some(&tree));
+        if frame % 3 != 0 {
+            continue;
+        }
+        let voice = host
+            .system
+            .emitters()
+            .into_iter()
+            .find(|e| e.name == tape)
+            .and_then(|e| e.voice)
+            .and_then(|v| host.mixer_voice(v));
+        let before = voice.and_then(|id| mixer.probe(id));
+        mixer.mix(2400);
+        let (Some(id), Some(before)) = (voice, before) else {
+            assert!(last.is_none(), "the tape recorder stopped at {time} ms");
+            continue;
+        };
+        let after = mixer.probe(id).unwrap();
+        match last {
+            Some((prev, advanced)) if prev == id => {
+                assert_eq!(before.advanced, advanced, "skipped at {time} ms")
+            }
+            Some(_) => switches += 1,
+            None => {}
+        }
+        assert!((after.advanced - before.advanced - 2400.0 * after.step).abs() < 1e-6);
+        // After its first block, which ramps from gain 0 (MixerDevice).
+        if last.is_some() {
+            worst_jump = worst_jump.max((after.gains.0 - before.gains.0).abs());
+        }
+        last = Some((id, after.advanced));
+    }
+    eprintln!(
+        "tape recorder over 30 s: {switches} voice switches, worst gain change per block {worst_jump:.4}"
+    );
+    assert!(last.is_some(), "the tape recorder never played");
+    assert_eq!(switches, 0, "the tape recorder's voice changed");
+    assert!(worst_jump < 0.05, "gain jumps by {worst_jump}");
 }
 
 /// Draws 0 first (the jitter's θ = 0), then the shared generator.
