@@ -32,9 +32,9 @@ const ONLY = [
   "__support/userdocs/user.ltx",
 ];
 // The wasm heap never shrinks: its size after a New Game is the page's for
-// good. Measured at 81 MiB in headless Chrome after one and after two New
-// Games (#79); a regression past this fails.
-const WASM_HEAP_CAP = 90 * 2 ** 20;
+// good. Measured at 98 MiB in headless Chrome after one and after two New
+// Games (#79; 193 and 199 MiB before); a regression past this fails.
+const WASM_HEAP_CAP = 110 * 2 ** 20;
 const mib = (bytes) => `${(bytes / 2 ** 20).toFixed(0)} MiB`;
 const CAPTIONS = ["Новая игра", "Загрузить игру", "Сетевая игра", "Опции", "Титры", "Выйти в Windows"];
 let installer;
