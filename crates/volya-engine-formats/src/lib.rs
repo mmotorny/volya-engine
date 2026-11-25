@@ -19,6 +19,7 @@ pub mod lanims;
 pub mod level;
 pub mod level_ai;
 pub mod level_cform;
+pub mod level_details;
 pub mod level_geom;
 pub mod ltx;
 pub mod lzo1x;

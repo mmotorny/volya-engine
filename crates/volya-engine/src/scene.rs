@@ -183,6 +183,9 @@ pub struct WorldScene {
     /// [`crate::level::LevelWorld::glow_shaders`].
     #[serde(skip)]
     pub glows: Vec<crate::core::glows::GlowSprite>,
+    /// The detail objects drawn (docs/behavior/detail-objects.md).
+    #[serde(skip)]
+    pub details: Option<crate::level_details::DetailsScene>,
 }
 
 impl PartialEq for WorldScene {
@@ -201,6 +204,14 @@ impl PartialEq for WorldScene {
             && self.particles == other.particles
             && self.lights == other.lights
             && self.glows == other.glows
+            && self
+                .details
+                .as_ref()
+                .map(|d| std::sync::Arc::as_ptr(&d.frame))
+                == other
+                    .details
+                    .as_ref()
+                    .map(|d| std::sync::Arc::as_ptr(&d.frame))
     }
 }
 
@@ -213,6 +224,13 @@ pub struct Scene {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub world: Option<WorldScene>,
     pub sprites: Vec<Sprite>,
+    /// The display's gamma ramp the picture is shown through
+    /// (docs/behavior/display-gamma.md); `None` for the identity.
+    #[serde(skip)]
+    pub ramp: Option<[u16; 256]>,
+    /// How a world frame reaches the screen (frame-presentation.md).
+    #[serde(skip)]
+    pub presentation: crate::render::present::Presentation,
 }
 
 fn resolution<S: serde::Serializer>(r: &Resolution, s: S) -> Result<S::Ok, S::Error> {
@@ -225,6 +243,8 @@ impl Scene {
             resolution,
             world: None,
             sprites: Vec::new(),
+            ramp: None,
+            presentation: Default::default(),
         }
     }
 

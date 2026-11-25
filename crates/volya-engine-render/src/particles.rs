@@ -3,8 +3,8 @@
 
 //! Particle effects in the world pass (docs/behavior/particle-drawing.md
 //! sections 4.4 – 7): each effect one indexed batch of quads with its pass,
-//! queued where section 7.4 puts it, and the distortion target composed
-//! into the frame (section 6). Vertex and index data are written anew each
+//! queued where section 7.4 puts it, and the distortion pass (section
+//! 6.2; the composition is the presentation's `postprocess_d`, 6.3). Vertex and index data are written anew each
 //! frame into buffers kept and grown; indices are absolute (no base vertex), and nothing reads a
 //! storage buffer, so the WebGL 2 path draws them alike.
 
@@ -168,9 +168,6 @@ pub(crate) struct ParticlePipelines {
     /// The frames' vertex and index buffers, kept and grown.
     vertices: Option<wgpu::Buffer>,
     indices: Option<wgpu::Buffer>,
-    compose_layout: wgpu::BindGroupLayout,
-    compose: wgpu::RenderPipeline,
-    compose_sampler: wgpu::Sampler,
 }
 
 /// A batch ready to draw.
@@ -319,14 +316,6 @@ impl ParticlePipelines {
             anisotropy_clamp: 16,
             ..linear.clone()
         });
-        let compose_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("distortion compose"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            ..linear.clone()
-        });
         let glow = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("glow"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -365,45 +354,6 @@ impl ParticlePipelines {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let compose_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("distortion compose"),
-            entries: &[texture(0), texture(1), sampler(2)],
-        });
-        let compose_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("distortion"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("distortion.wgsl").into()),
-        });
-        let compose_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("distortion compose"),
-                bind_group_layouts: &[Some(&compose_layout)],
-                immediate_size: 0,
-            });
-        let compose = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("distortion compose"),
-            layout: Some(&compose_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &compose_shader,
-                entry_point: Some("vs_screen"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &compose_shader,
-                entry_point: Some("fs_compose"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
         let frame_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("particle frame"),
             layout: &frame_layout,
@@ -427,9 +377,6 @@ impl ParticlePipelines {
             frame_group,
             vertices: None,
             indices: None,
-            compose_layout,
-            compose,
-            compose_sampler,
         };
         // Every pass the effects' shaders resolve to, with each culling,
         // and buffers for the first level's effects: nothing of this is
@@ -703,92 +650,48 @@ impl ParticlePipelines {
         })
     }
 
-    /// The distortion pass and composition (section 6.2, 6.3): `scene` (the
-    /// world as drawn) is composed into `target` through the distortion
-    /// target `distortion`, after the distortion list is drawn into it,
-    /// back to front, against the scene's `depth`.
-    #[allow(clippy::too_many_arguments)]
+    /// The distortion pass (section 6.2): the distortion list drawn into
+    /// the cleared `distortion` target, back to front, against the
+    /// scene's `depth`.
     pub fn distort(
         &self,
-        device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         frame: &PreparedFrame,
-        scene: &wgpu::TextureView,
         distortion: &wgpu::TextureView,
         depth: &wgpu::TextureView,
-        target: &wgpu::TextureView,
     ) {
-        {
-            let grey = 127.0 / 255.0;
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("distortion"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: distortion,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: grey,
-                            g: grey,
-                            b: grey,
-                            a: grey,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: depth,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Discard,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            for d in sorted(frame, ParticleQueue::Distortion) {
-                frame.draw(self, &mut pass, d);
-            }
-        }
-        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("distortion compose"),
-            layout: &self.compose_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(scene),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(distortion),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.compose_sampler),
-                },
-            ],
-        });
+        let grey = 127.0 / 255.0;
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("distortion compose"),
+            label: Some("distortion"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
+                view: distortion,
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: grey,
+                        g: grey,
+                        b: grey,
+                        a: grey,
+                    }),
                     store: wgpu::StoreOp::Store,
                 },
             })],
-            depth_stencil_attachment: None,
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Discard,
+                }),
+                stencil_ops: None,
+            }),
             timestamp_writes: None,
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&self.compose);
-        pass.set_bind_group(0, &group, &[]);
-        pass.draw(0..3, 0..1);
+        for d in sorted(frame, ParticleQueue::Distortion) {
+            frame.draw(self, &mut pass, d);
+        }
     }
 }
 

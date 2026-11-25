@@ -164,6 +164,8 @@ pub enum Origin {
     Zone,
     /// The weather's ambient effect (P11 3).
     Weather,
+    /// An artefact's idle effect (P10 4).
+    Artefact,
 }
 
 /// One particle object: its instance with its update times.
@@ -344,6 +346,34 @@ impl PlacedEffects {
             return;
         };
         p.instance.place(m, w, Mode::World);
+        p.instance.play();
+        p.last = clock.wrapping_sub(STEP_MS);
+        p.update(
+            clock,
+            &self.library,
+            &mut self.random,
+            self.world.as_deref(),
+        );
+        p.register();
+    }
+
+    /// Places object `i` by `m` with velocity `w` in world mode and
+    /// registers its visibility sphere (P10 4.2 step 5, 4.4 step 1).
+    pub fn place_registered(&mut self, i: usize, m: &Matrix, w: Vec3) {
+        if let Some(Some(p)) = self.effects.get_mut(i) {
+            p.instance.place(m, w, Mode::World);
+            p.register();
+        }
+    }
+
+    /// Plays object `i` with its immediate 33 ms update, its last-update
+    /// time the clock minus 33, and registers its visibility sphere (P9
+    /// 4.5, P8 5.4).
+    pub fn play(&mut self, i: usize) {
+        let clock = self.clock;
+        let Some(Some(p)) = self.effects.get_mut(i) else {
+            return;
+        };
         p.instance.play();
         p.last = clock.wrapping_sub(STEP_MS);
         p.update(

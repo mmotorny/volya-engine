@@ -179,10 +179,16 @@ export const tests = {
     const plain = await draw("plain", 256);
     assertEqual([plain.at(124, 64), plain.at(124, 192)], [[255, 255, 255], [0, 0, 0]], "the top left quarter");
     // The distortion texel's red of 1 reads the scene (1 − 0.5) · 0.05 of
-    // the width to the right: about 6 pixels.
-    const shifted = await draw("distort", 256);
+    // the width to the right: about 6 pixels. A frame drawn straight to the
+    // screen doesn't show its distortion; the one after goes through the
+    // target, presented with postprocess_d (frame-presentation.md 3.1),
+    // at the renderer's own colour base (254/255).
+    await draw("distort", 256);
+    const rgba = await capture(256, 256);
+    const shifted = { at: (x, y) => Array.from(rgba.slice(4 * (y * 256 + x), 4 * (y * 256 + x) + 3)) };
     assertEqual(shifted.at(124, 64), [0, 0, 0], "shifted");
-    assertEqual([shifted.at(112, 64), shifted.at(112, 192)], [[255, 255, 255], [0, 0, 0]], "still white, the right way up");
+    near(shifted.at(112, 64), [254, 254, 254], "still white");
+    assertEqual(shifted.at(112, 192), [0, 0, 0], "the right way up");
     await volya.call("debug_draw", {});
     return `${gpu.backend}${blend.compat ? ", compat path" : ""}`;
   },

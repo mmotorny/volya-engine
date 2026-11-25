@@ -21,6 +21,7 @@ use crate::audio::AudioOut;
 use crate::core::audio::Category;
 use crate::core::console::Console;
 use crate::core::diagnostics;
+use crate::core::display::DisplayColour;
 use crate::core::input::{Action, Control, Input};
 use crate::core::lights::LightSettings;
 use crate::core::pause::{GlobalClock, Pause};
@@ -38,6 +39,7 @@ use crate::loading_screen::{
     intro_due,
 };
 use crate::menu_screens::{Frame, MenuFrame, MenuScreens, MenuState};
+use crate::render::present::Presentation;
 use crate::save_load::FieldFont;
 use crate::saved_games::SavedGames;
 use crate::scene::{Scene, Sprite, TextureId};
@@ -411,6 +413,9 @@ pub struct App {
     /// The resolution drawn at: `vid_mode` as the last video restart
     /// applied it (sections 5.4, 9).
     video: Resolution,
+    /// `r__supersample` as the last video restart applied it (the target is
+    /// built at device creation and every reset, frame-presentation.md 1.2).
+    supersample: u32,
     /// The user configuration file to store, once something asked for it.
     save: Option<Vec<u8>>,
     /// The console's generation as last applied to the game data.
@@ -456,6 +461,24 @@ pub struct App {
     shown: bool,
     /// The inventory screen's menu font at the size drawn at.
     menu_font: Option<(Resolution, FieldFont)>,
+    /// The display colour settings and their ramp as last computed.
+    ramp: Option<(DisplayColour, Option<[u16; 256]>)>,
+}
+
+/// `r__supersample`, 1 … 4.
+fn supersample(console: &Console) -> u32 {
+    (console.number("r__supersample") as u32).clamp(1, 4)
+}
+
+/// `r1_pps_u` and `r1_pps_v` (frame-presentation.md 3.2): reals −1 … 1, 0
+/// before set; a stored value out of range is clamped (our choice).
+fn pps(console: &Console) -> [f32; 2] {
+    ["r1_pps_u", "r1_pps_v"].map(|name| {
+        (console.status(name))
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .filter(|v| v.is_finite())
+            .map_or(0.0, |v| v.clamp(-1.0, 1.0))
+    })
 }
 
 /// The resolution of `vid_mode`.
@@ -514,12 +537,14 @@ impl App {
         TitleMenu::check(&data)?;
         let console = data.console();
         let video = video_mode(&console);
+        let supersample = supersample(&console);
         Ok(Self {
             applied: console.generation(),
             console,
             screens: MenuScreens::default(),
             native: video,
             video,
+            supersample,
             save: None,
             volumes: None,
             sound_voices_set: false,
@@ -539,6 +564,7 @@ impl App {
             hidden: false,
             shown: false,
             menu_font: None,
+            ramp: None,
             data,
             assets: Assets::default(),
             origin: None,
@@ -956,6 +982,14 @@ impl App {
                 .and_then(|v| v.trim().parse::<u32>().ok())
                 .map_or(GLOWS_PER_FRAME, |v| v.clamp(2, 32));
             level.set_light_settings(settings, glows);
+            level.set_supersample(self.supersample);
+            // detail-objects.md 7; weather-ambient-effects.md 4.3: the wind
+            // as the sound rules last updated it (without audio output
+            // they do not run, #352).
+            level.set_detail_settings(
+                self.console.number("r__detail_density"),
+                self.sound_run.wind.strength,
+            );
         }
         let now = self.clock;
         let title = self.opening(false);
@@ -994,6 +1028,7 @@ impl App {
                 if out.video_restart {
                     // `vid_restart` (options-screens.md section 5.4).
                     self.video = video_mode(&self.console);
+                    self.supersample = supersample(&self.console);
                     menu.resized(data, self.video);
                 }
                 if out.store_config || menu.quit_requested() {
@@ -1107,6 +1142,7 @@ impl App {
                 }
                 if out.video_restart {
                     self.video = video_mode(&self.console);
+                    self.supersample = supersample(&self.console);
                     menu.resized(data, self.video);
                 }
                 if out.store_config || menu.quit_requested() {
@@ -1397,7 +1433,21 @@ impl App {
     // TODO(#339): a storage read failing while drawing (a platform failure,
     // not a missing file) is fatal too; no spec covers it.
     pub fn scene(&mut self, tree: &dyn Vfs, resolution: Resolution) -> io::Result<Scene> {
-        let scene = self.compose_scene(tree, resolution);
+        let mut scene = self.compose_scene(tree, resolution);
+        // display-gamma.md: the ramp of the display colour settings acts
+        // on everything presented.
+        let colour = DisplayColour::of(&self.console);
+        if self.ramp.is_none_or(|(c, _)| c != colour) {
+            self.ramp = Some((colour, colour.ramp()));
+        }
+        if let Ok(scene) = &mut scene {
+            scene.ramp = self.ramp.and_then(|(_, r)| r);
+            scene.presentation = Presentation {
+                supersample: self.supersample,
+                pps: pps(&self.console),
+                frame_time: self.frame_ms as f32 / 1000.0,
+            };
+        }
         if let Err(e) = &scene
             && e.kind() != io::ErrorKind::Unsupported
         {
@@ -1437,10 +1487,7 @@ impl App {
             }) => {
                 // Nothing of the game is drawn behind the menu; the world
                 // stays in the scene, covered, so it stays on the GPU.
-                let mut scene = level.scene(resolution, self.clock);
-                if let Some(world) = &mut scene.world {
-                    world.covered = true;
-                }
+                let mut scene = level.covered_scene(resolution, self.clock);
                 scene
                     .sprites
                     .extend(self.screens.scene(menu, &mut ctx)?.sprites);
@@ -1778,6 +1825,27 @@ mod tests {
         app.update(&tree, 5400.0, &input, &mut audio);
         assert!(app.quit_requested());
         assert!(audio.playing.is_empty());
+    }
+
+    #[test]
+    fn the_display_colour_settings_give_every_frame_its_ramp() {
+        // display-gamma.md 3.1, 3.2: the stored values from the first frame;
+        // a variable executed later at once.
+        let tree = fixture::tree();
+        let mut data = fixture::data(&tree);
+        data.set_user_config(b"rs_c_brightness 1.5\r\n".to_vec());
+        let mut app = App::new(data).unwrap();
+        app.assets = fixture::assets();
+        let (input, mut audio) = (Input::new(), FakeAudio::default());
+        app.update(&tree, 5000.0, &input, &mut audio);
+        let scene = app.scene(&tree, Resolution::new(1024, 768)).unwrap();
+        assert_eq!(scene.ramp.map(|r| [r[0], r[128]]), Some([8192, 41088]));
+        app.console.exec("rs_c_brightness 1");
+        let scene = app.scene(&tree, Resolution::new(1024, 768)).unwrap();
+        assert_eq!(scene.ramp, None);
+        app.console.exec("rs_c_gamma 0.5");
+        let scene = app.scene(&tree, Resolution::new(1024, 768)).unwrap();
+        assert_eq!(scene.ramp.map(|r| r[64]), Some(4128));
     }
 
     #[test]
