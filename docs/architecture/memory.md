@@ -68,12 +68,12 @@ Live memory grew 0.49 MB over the 600 frames.
 
 Headless Chrome, `menu` suite (MiB, the wasm heap and the most live meanwhile, from `heap_log` in test builds):
 
-| Path | After the first New Game | After the second |
-|---|---|---|
-| WebGPU | 98 heap, 87 live at most | 98 heap, 87 live at most |
-| WebGL 2 (BC textures as stored) | 106 heap, 95 live at most | 110 heap, 97 live at most |
+| Path | After the first New Game | After the second | Before #370 and #371: first, second |
+|---|---|---|---|
+| WebGPU | 82 heap, 70 live at most | 82 heap, 71 live at most | 98/87, 98/87 |
+| WebGL 2 (BC textures as stored) | 97 heap, 83 live at most | 101 heap, 82 live at most | 106/95, 110/97 |
 
-The audio worker's instance adds 3–4 MiB (#354). Before the New Game the heap already stands at 59 MiB with 11 MiB live: the import and the menus reached 35 MiB live, and what they left split the free space, so the collision world's arrays (up to 16 MB each) did not fit and the heap grew from 59 to 87 MiB under `st_loading_cform` with 39 MiB more live. On WebGL 2 the level holds about 6 MiB more live than on WebGPU, and its first world frame peaks about 10 MiB above the frame before: wgpu records the world's render bundles in our heap there (#372).
+One run each (the heap varies by a few MiB from run to run). The audio worker's instance adds 3–4 MiB (#354). Before the New Game the heap already stands at 59 MiB with 11 MiB live: the import and the menus reached 35 MiB live, and what they left split the free space, so the collision world's arrays (up to 11 MB each) do not fit and the heap grows from 59 to 76 MiB under `st_loading_cform` with 29 MiB more live (87 MiB with 39 more before #371). What stands between the heap and its live peak, 12 MiB on WebGPU and 14–19 MiB on WebGL 2, is that split free space. On WebGL 2 the level holds about 6 MiB more live than on WebGPU, and its first world frame peaks about 10 MiB above the frame before: wgpu records the world's render bundles in our heap there (#372).
 
 ### What fragments the heap
 
