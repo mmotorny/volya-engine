@@ -20,6 +20,10 @@ workspace = true
 # Engine ops only tests use (`debug_give_item`): in the dev and test builds,
 # never in the deployed one.
 test-ops = []
+# The build for browsers that give no WebGPU adapter: draws through WebGL 2
+# (#113). The page loads it only there, so wgpu's GL backend stays out of
+# the WebGPU build's download (#186).
+webgl = ["volya-engine/webgl"]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 volya-engine = { path = "../../crates/volya-engine" }

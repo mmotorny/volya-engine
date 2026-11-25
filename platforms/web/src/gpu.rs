@@ -101,7 +101,11 @@ async fn connect(canvas: OffscreenCanvas) -> Result<Gpu, String> {
         Err("no WebGPU")
     };
     let (instance, backend, why) = match webgpu {
-        Ok(instance) => (instance, "webgpu", None),
+        Ok(instance) => (instance, "webgpu", None::<&str>),
+        // The build for WebGPU: no other way to draw.
+        #[cfg(not(feature = "webgl"))]
+        Err(why) => return Err(why.to_owned()),
+        #[cfg(feature = "webgl")]
         Err(why) => {
             web_sys::console::info_1(&format!("{why}: trying WebGL 2").into());
             let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {

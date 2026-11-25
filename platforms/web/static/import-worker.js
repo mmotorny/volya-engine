@@ -9,9 +9,14 @@
 // `exe` and `bin` are Files (or, in tests, `{ url, size }` served with range
 // support); `only` optionally restricts the import to some paths.
 
-import init, { plan_import, run_import } from "./pkg/volya_engine_web.js";
+import { wasmBuild, wasmModule } from "./wasm-build.js";
 
-const ready = init();
+// The same build as the engine's, so a device keeps only one (wasm-build.js).
+const ready = (async () => {
+  const module = await wasmModule(await wasmBuild());
+  await module.default();
+  return module;
+})();
 
 /** A synchronous byte source over a File or a range-capable URL. */
 function source(input) {
@@ -38,7 +43,7 @@ function source(input) {
 
 onmessage = async ({ data }) => {
   try {
-    await ready;
+    const { plan_import, run_import } = await ready;
     if (data.type === "plan") {
       // The installer's language is chosen from its data, preferring the
       // device's languages among those it offers.

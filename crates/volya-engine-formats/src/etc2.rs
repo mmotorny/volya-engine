@@ -1040,6 +1040,9 @@ pub fn encode_alpha(alpha: &[u8; 16]) -> [u8; 8] {
         let e = error(base, multiplier, table, best.0);
         if e < best.0 {
             best = (e, base, multiplier, t);
+            if e == 0 {
+                break;
+            }
         }
     }
     let (_, centre, m0, t) = best;

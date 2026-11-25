@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // The engine thread (docs/architecture.md). Messages from the page:
-//   { type: "start", canvas, size }  → { type: "started" } | { type: "error", message }
+//   { type: "start", canvas, size }  → { type: "started", build } | { type: "error", message }
+//   (`build`: the wasm build loaded, wasm-build.js)
 //   { type: "resize", width, height, dpr }: the canvas's CSS size and the
 //   page's devicePixelRatio (`size` in "start" has the same fields).
 //   { type: "call", id, op, args }  → { type: "result", id, result } | { type: "result", id, error }
@@ -27,20 +28,15 @@
 // workers have it, otherwise on a 60 Hz timer; it idles while the page is
 // hidden, drawing nothing.
 
-import init, {
-  start,
-  call,
-  resize,
-  frame,
-  visibility,
-  audio_init,
-  audio_mix,
-  input,
-  input_capture,
-  level_controls,
-  text_field,
-  cursor_shown,
-} from "./pkg/volya_engine_web.js";
+import { wasmBuild, wasmModule } from "./wasm-build.js";
+
+/** The wasm build's exports, once "start" loaded it (wasm-build.js). */
+let engine = null;
+/** The engine's exports; throws until they are loaded. */
+const e = () => {
+  if (!engine) throw new Error("the engine is not started");
+  return engine;
+};
 
 const message = (error) => String(error?.message ?? error);
 
@@ -54,12 +50,12 @@ let field = "";
 let cursor = false;
 /** Tells the page when input capture or the level's controls changed (after calls and frames). */
 function syncCapture() {
-  const on = input_capture();
+  const on = e().input_capture();
   if (on !== capture) {
     capture = on;
     postMessage({ type: "capture", on });
   }
-  const bits = level_controls();
+  const bits = e().level_controls();
   if (bits !== controls) {
     controls = bits;
     postMessage({
@@ -72,12 +68,12 @@ function syncCapture() {
       keys: (bits & 32) !== 0,
     });
   }
-  const shown = cursor_shown();
+  const shown = e().cursor_shown();
   if (shown !== cursor) {
     cursor = shown;
     postMessage({ type: "cursor", shown });
   }
-  const f = text_field();
+  const f = e().text_field();
   const key = f ? Array.from(f).join() : "";
   if (key !== field) {
     field = key;
@@ -105,7 +101,7 @@ function loop(time) {
   // Hidden after this frame was asked for: idle until shown.
   if (hidden) return;
   try {
-    frame(time);
+    e().frame(time);
     syncCapture();
   } catch (error) {
     // A broken engine stops drawing; calls report their own errors.
@@ -120,32 +116,36 @@ let started;
 
 onmessage = async ({ data }) => {
   if (data.type === "start") {
+    let build;
     started = (async () => {
-      await init();
-      await start(data.canvas);
-      resize(data.size.width, data.size.height, data.size.dpr);
+      build = await wasmBuild();
+      const module = await wasmModule(build);
+      await module.default();
+      engine = module;
+      await engine.start(data.canvas);
+      engine.resize(data.size.width, data.size.height, data.size.dpr);
     })();
     try {
       await started;
-      postMessage({ type: "started" });
+      postMessage({ type: "started", build });
       schedule();
     } catch (error) {
       postMessage({ type: "error", message: message(error) });
     }
   } else if (data.type === "resize") {
     await started;
-    resize(data.width, data.height, data.dpr);
+    e().resize(data.width, data.height, data.dpr);
   } else if (data.type === "audio") {
-    audio_init(data.sampleRate);
+    e().audio_init(data.sampleRate);
     data.port.onmessage = ({ data: request }) => {
-      const block = audio_mix(request.need);
+      const block = e().audio_mix(request.need);
       data.port.postMessage(block, [block.buffer]);
     };
   } else if (data.type === "visibility") {
     await started;
     hidden = data.hidden;
     try {
-      visibility(hidden);
+      e().visibility(hidden);
       syncCapture();
     } catch (error) {
       console.warn(`visibility: ${message(error)}`);
@@ -153,14 +153,14 @@ onmessage = async ({ data }) => {
     schedule();
   } else if (data.type === "input") {
     try {
-      input(data.event);
+      e().input(data.event);
     } catch (error) {
       console.warn(`input: ${message(error)}`);
     }
   } else if (data.type === "call") {
     let reply;
     try {
-      reply = { type: "result", id: data.id, result: JSON.parse(await call(data.op, JSON.stringify(data.args ?? {}))) };
+      reply = { type: "result", id: data.id, result: JSON.parse(await e().call(data.op, JSON.stringify(data.args ?? {}))) };
     } catch (error) {
       reply = { type: "result", id: data.id, error: message(error) };
     }

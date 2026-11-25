@@ -29,9 +29,12 @@ use wasm_bindgen::JsValue;
 pub struct Stats {
     pub textures: u32,
     pub transcoded: u32,
-    /// Milliseconds: in all (frames between included), and transcoding.
+    /// Milliseconds: in all (frames between included), reading the files,
+    /// transcoding, and uploading.
     pub total_ms: f64,
+    pub read_ms: f64,
     pub transcode_ms: f64,
+    pub upload_ms: f64,
     /// Megapixels transcoded (every face and level).
     pub transcoded_mpx: f64,
     /// Milliseconds uploading the level's geometry (frames between
@@ -125,15 +128,18 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
         if !crate::engine::preparing_textures() {
             break;
         }
+        let t = now();
         let Ok(bytes) = crate::game::read(&path) else {
             continue;
         };
+        stats.read_ms += now() - t;
         let Ok(dds) = Dds::parse(&bytes) else {
             continue;
         };
         let t = now();
         let transcoded = transcode(&dds);
         stats.transcode_ms += now() - t;
+        let t = now();
         if transcoded.is_some() {
             stats.transcoded += 1;
             stats.transcoded_mpx += megapixels(&dds);
@@ -150,6 +156,7 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
         }
         drop(transcoded);
         drop(bytes);
+        stats.upload_ms += now() - t;
         stats.total_ms = now() - start;
         STATS.with(|s| *s.borrow_mut() = stats.clone());
         // A task turn for frames to run once this one has taken its share;
@@ -184,10 +191,13 @@ async fn prepare_world(level: Arc<LevelWorld>) -> Result<(), JsValue> {
         if done {
             break;
         }
-        // None while the page is hidden (#93).
-        crate::opfs::sleep(0).await?;
-        while crate::engine::page_hidden() {
-            crate::opfs::sleep(100).await?;
+        // Until two frames ran, so WebGL can report the pieces written
+        // done and their staging goes (it may not in the frame they were
+        // written in, documented by the WebGL 2 specification); none while
+        // the page is hidden (#93).
+        let since = crate::frames();
+        while crate::frames() < since + 2 || crate::engine::page_hidden() {
+            crate::opfs::sleep(if crate::engine::page_hidden() { 100 } else { 4 }).await?;
         }
     }
     Ok(())

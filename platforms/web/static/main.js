@@ -31,7 +31,11 @@ let setCursor = () => {};
 
 const started = new Promise((resolve, reject) => {
   worker.onmessage = ({ data }) => {
-    if (data.type === "started") resolve();
+    if (data.type === "started") {
+      resolve();
+      // The service worker keeps the wasm build this browser runs (sw.js).
+      navigator.serviceWorker?.ready.then((r) => r.active?.postMessage({ type: "build", build: data.build }));
+    }
     else if (data.type === "error") reject(new Error(data.message));
     else if (data.type === "capture") setCapture(data.on);
     else if (data.type === "controls") setLevel(data);

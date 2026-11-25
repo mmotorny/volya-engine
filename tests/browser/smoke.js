@@ -138,15 +138,28 @@ export const tests = {
     assert(registration.scope.endsWith("/volya-engine/"), `scope ${registration.scope}`);
   },
 
-  "the whole app works offline once installed": async () => {
+  "the whole app works offline once installed, with only the wasm build it runs": async () => {
     const registration = await navigator.serviceWorker.ready;
     // The page must be controlled to use the kept copies.
     if (!navigator.serviceWorker.controller) {
       await new Promise((resolve) => navigator.serviceWorker.addEventListener("controllerchange", resolve, { once: true }));
     }
     assert(registration.active, "no active service worker");
-    const files = precacheOf(await (await fetch(`${base}sw.js`, { cache: "no-store" })).text()).map(([path]) => path);
+    const precache = precacheOf(await (await fetch(`${base}sw.js`, { cache: "no-store" })).text());
+    // Of the two wasm builds (#186), the one this browser runs, which the
+    // page told the worker to keep once the engine started.
+    const { build } = await volya.status();
+    const files = precache.filter(([, , , b]) => !b || b === build).map(([path]) => path);
+    const others = precache.filter(([, , , b]) => b && b !== build).map(([path]) => path);
     assert(files.includes("./") && files.includes("index.html") && files.some((f) => f.endsWith(".wasm")), `files ${files.join(" ")}`);
+    assert(others.some((f) => f.endsWith(".wasm")), `no other wasm build: ${precache.map(([p]) => p).join(" ")}`);
+    const cache = await caches.open("volya-engine-app");
+    const kept = async (path) => Boolean(await cache.match(new URL(path, registration.scope).href));
+    for (let i = 0; i < 100 && !(await Promise.all(files.map(kept))).every(Boolean); i++) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    const downloaded = (await Promise.all(others.map(kept))).some(Boolean);
+    assert(!downloaded, `the other wasm build is kept too: ${others.join(" ")}`);
     const offline = (on) => fetch(`${base}__test/offline/${on ? "on" : "off"}`, { method: "POST" });
     await offline(true);
     try {
@@ -259,6 +272,25 @@ export const tests = {
     assertEqual(kept(), "c.css", "removed files are dropped on activation");
     assert(store.has(`${scope}__settings.json`), "settings dropped");
     assertEqual(removal.state.claimed, 1, "claims once active");
+
+    // Two wasm builds (#186): a browser keeps only the one it runs.
+    const builds = (gpu, gl) => [["c.css", "dddd", 300], ["pkg/e.wasm", gpu, 1000, "webgpu"], ["pkg-webgl/e.wasm", gl, 2000, "webgl"]];
+    await install("b5", builds("g1", "l1"));
+    assertEqual(downloaded.join(" "), "", "a wasm build kept before it is known to run");
+    const told5 = worker("b5", builds("g1", "l1"));
+    await told5.run("message", { type: "build", build: "webgl" });
+    assertEqual(downloaded.join(" "), "pkg-webgl/e.wasm", "the build the page runs");
+    downloaded = [];
+    await told5.run("message", { type: "build", build: "webgl" });
+    assertEqual(downloaded.join(" "), "", "a kept build again");
+    await told5.run("message", { type: "build", build: "none such" });
+    assertEqual(downloaded.join(" "), "", "an unknown build");
+    // Updates bring the kept build only, and count only it.
+    const both = await install("b6", builds("g2", "l2"));
+    assertEqual(downloaded.join(" "), "pkg-webgl/e.wasm", "update of the kept build");
+    assertEqual(JSON.stringify(told), '[{"type":"update-downloading","build":"b6","bytes":2000,"files":1}]', "update size");
+    await both.run("activate");
+    assertEqual(kept(), "c.css pkg-webgl/e.wasm", "kept after activation");
 
   },
 

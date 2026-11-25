@@ -13,6 +13,10 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+# Draws through WebGL 2 where there is no WebGPU (volya-engine-render).
+webgl = ["volya-engine-render/webgl"]
+
 [dependencies]
 volya-engine-core = { path = "../volya-engine-core" }
 volya-engine-formats = { path = "../volya-engine-formats" }
