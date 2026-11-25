@@ -515,7 +515,7 @@ const CHECK_RESULT_MS = 3000;
 function checkButton() {
   if (!updates) return null;
   const label = "Check for updates";
-  const button = element("button", { className: "wide", textContent: label });
+  const button = element("button", { className: "panel-action", textContent: label });
   button.setAttribute("aria-live", "polite");
   const RESULTS = { none: "Up to date", offline: "Can't check while offline", failed: "Couldn't check for updates" };
   button.addEventListener("click", async () => {
