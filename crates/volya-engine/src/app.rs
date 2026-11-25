@@ -339,6 +339,11 @@ pub struct App {
     frames: u64,
     /// The update in which a lost pointer lock opened the menu.
     unlock_opened: Option<u64>,
+    /// The menu was asked for (the `quit` key, a gamepad's east button,
+    /// the touch Menu button, a lost pointer lock) while the loading image
+    /// covered the level: it opens once the player's controls are live
+    /// (our design, #96).
+    menu_asked: bool,
     /// The page is hidden: nothing runs ([`App::set_hidden`]).
     hidden: bool,
     /// The page showed again: the next update takes the engine clock on
@@ -381,6 +386,10 @@ pub enum AppState {
         load_ms: Option<f64>,
         /// Frames the loading image still covers, this one included.
         overlay_frames: u32,
+        /// The menu was asked for under the loading image and opens once
+        /// the controls are live (#96).
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        menu_asked: bool,
         /// The New Game intro while it plays.
         #[serde(skip_serializing_if = "Option::is_none")]
         intro: Option<MovieSequenceState>,
@@ -406,6 +415,7 @@ impl App {
             console_touched: false,
             frames: 0,
             unlock_opened: None,
+            menu_asked: false,
             hidden: false,
             shown: false,
             data,
@@ -555,6 +565,7 @@ impl App {
                     Ok(Some((level, screen))) => {
                         self.error = None;
                         self.loaded_since = self.load_started.take();
+                        self.menu_asked = false;
                         *phase = Phase::Level {
                             level: Box::new(level),
                             overlay: Some(Overlay::new(screen, audio)),
@@ -646,6 +657,14 @@ impl App {
                     // An item without `pause_state`, or the intro's end: the
                     // level runs without this frame's input.
                     level.update(now, &Input::new());
+                    // The intro's end makes the controls live: a menu asked
+                    // for under the loading image opens now (#96).
+                    if intro.player.is_none() && overlay.is_none() && self.menu_asked {
+                        self.menu_asked = false;
+                        *menu = Some(Box::new(TitleMenu::open(data, now, input, audio, in_game)));
+                        self.screens.menu_opened();
+                        self.unlock_opened = None;
+                    }
                     return;
                 }
                 level.update(now, input);
@@ -658,8 +677,13 @@ impl App {
                 let asked =
                     level.take_back_requested() || quit_key_pressed(data, input) || unlocked;
                 // The menu opens while the player's controls are live, not
-                // under the loading image (our choice).
-                if asked && overlay.is_none() {
+                // under the loading image (our choice). Asked for under the
+                // image, it is not dropped: it opens at the first frame the
+                // controls are live, after the intro if one plays (our
+                // design, #96; presses during the intro skip it instead).
+                if overlay.is_some() {
+                    self.menu_asked |= asked;
+                } else if asked || std::mem::take(&mut self.menu_asked) {
                     *menu = Some(Box::new(TitleMenu::open(data, now, input, audio, in_game)));
                     self.screens.menu_opened();
                     self.unlock_opened = unlocked.then_some(self.frames);
@@ -841,6 +865,18 @@ impl App {
         }
     }
 
+    /// The save screen's name field (UI units) and whether it has focus,
+    /// while it shows: a platform puts its text entry over it (the
+    /// device's keyboard on touch screens; our design, #94).
+    pub fn text_field(&self) -> Option<(volya_engine_formats::ui::layout::Rect, bool)> {
+        match &self.phase {
+            Some(Phase::Menu(_)) | Some(Phase::Level { menu: Some(_), .. }) => {
+                self.screens.text_field()
+            }
+            _ => None,
+        }
+    }
+
     pub fn quit_requested(&self) -> bool {
         match &self.phase {
             Some(Phase::Menu(m)) => m.quit_requested(),
@@ -906,6 +942,7 @@ impl App {
                 level: Box::new(level.state()),
                 load_ms: self.load_ms,
                 overlay_frames: overlay.as_ref().map_or(0, |o| o.frames_left),
+                menu_asked: self.menu_asked,
                 intro: intro.state(&self.data, clock),
                 menu: menu
                     .as_ref()
@@ -1409,6 +1446,112 @@ mod tests {
         };
         assert_eq!(intro.elapsed_ms, 0);
         drop(tree);
+    }
+
+    #[test]
+    fn the_menu_asked_for_under_the_loading_image_opens_once_the_controls_are_live() {
+        for gamepad in [false, true] {
+            let (tree, mut app, mut input, mut audio) = in_level();
+            let Some(Phase::Level { overlay, .. }) = &mut app.phase else {
+                panic!()
+            };
+            let mut o = Overlay::new(LoadingScreen::default(), &mut audio);
+            o.frames_left = 4;
+            *overlay = Some(o);
+            let mut t = 32.0;
+            let mut step = |app: &mut App, input: &mut Input| {
+                app.update(&tree, t, input, &mut audio);
+                input.end_frame();
+                t += 16.0;
+            };
+            if gamepad {
+                // A gamepad's east button.
+                for pressed in [true, false] {
+                    input.handle(Event::GamepadButton {
+                        button: crate::core::input::GamepadButton::East,
+                        pressed,
+                    });
+                }
+            } else {
+                press(&mut input, Key::Escape);
+            }
+            step(&mut app, &mut input);
+            assert!(!menu_open(&app), "not under the loading image");
+            let asked = |app: &App| {
+                matches!(
+                    app.state(),
+                    AppState::Level {
+                        menu_asked: true,
+                        ..
+                    }
+                )
+            };
+            assert!(asked(&app));
+            // The image's last frames, with the intro under the last two,
+            // then the intro: still nothing.
+            for _ in 0..4 {
+                step(&mut app, &mut input);
+            }
+            assert!(!menu_open(&app));
+            assert!(app.level_controls().is_none());
+            assert!(matches!(
+                app.state(),
+                AppState::Level {
+                    intro: Some(_),
+                    overlay_frames: 0,
+                    ..
+                }
+            ));
+            // An Escape during the intro skips it; the controls go live
+            // and the menu opens in that frame.
+            press(&mut input, Key::Escape);
+            step(&mut app, &mut input);
+            assert!(
+                menu_open(&app),
+                "the menu opens once the controls are live: {:?}",
+                app.state()
+            );
+            assert!(!asked(&app));
+            // Escape on it returns to the game, which then runs as usual.
+            press(&mut input, Key::Escape);
+            step(&mut app, &mut input);
+            assert!(!menu_open(&app));
+            step(&mut app, &mut input);
+            assert!(!menu_open(&app), "asked for once");
+            assert!(app.level_controls().is_some());
+        }
+    }
+
+    #[test]
+    fn without_an_intro_the_menu_asked_for_opens_as_the_loading_image_goes() {
+        let (tree, mut app, mut input, mut audio) = in_level();
+        let Some(Phase::Level { overlay, intro, .. }) = &mut app.phase else {
+            panic!()
+        };
+        // The intro checked already (none plays).
+        intro.checked = true;
+        let mut o = Overlay::new(LoadingScreen::default(), &mut audio);
+        o.frames_left = 3;
+        *overlay = Some(o);
+        press(&mut input, Key::Escape);
+        let mut t = 32.0;
+        for _ in 0..2 {
+            app.update(&tree, t, &input, &mut audio);
+            input.end_frame();
+            t += 16.0;
+            assert!(!menu_open(&app), "not under the loading image");
+        }
+        // The image's last frame ends: the controls are live, the menu opens.
+        app.update(&tree, t, &input, &mut audio);
+        assert!(matches!(
+            app.state(),
+            AppState::Level {
+                intro: None,
+                overlay_frames: 0,
+                ..
+            }
+        ));
+        assert!(menu_open(&app), "the menu opens in the first live frame");
     }
 
     #[test]

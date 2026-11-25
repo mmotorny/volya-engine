@@ -451,6 +451,104 @@ button.touch-button.down .touch-edges {
   opacity: 0.6;
 }
 
+/* The text entry over the save screen's name field on touch screens
+   (text-entry.js, #94): laid out as the canvas, an unseen input over the
+   field the engine draws. 16 px text: iOS zooms into smaller fields on
+   focus (believed). */
+#text-entry {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+@media (orientation: portrait) and (pointer: coarse) {
+  #text-entry {
+    inset: auto;
+    top: 50%;
+    left: 50%;
+    width: 100vh;
+    height: 100vw;
+    width: 100dvh;
+    height: 100dvw;
+    transform: translate(-50%, -50%) rotate(90deg);
+  }
+}
+
+#text-entry input {
+  position: absolute;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+  font-size: 16px;
+  pointer-events: auto;
+}
+
+/* The offer of full screen with Keyboard Lock in the level (fullscreen.js,
+   #85): small, in the top right corner over the game, with the system
+   pointer showing while it does (the engine draws none in the level). */
+html[data-engine-input][data-offer] {
+  cursor: auto;
+}
+
+.fullscreen-offer {
+  position: fixed;
+  padding-right: 2.5rem;
+  top: 16px;
+  right: 16px;
+  z-index: 2;
+  box-sizing: border-box;
+  max-width: 17rem;
+  padding: 0.75rem 0.9rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  border: 1px solid var(--panel-edge);
+  border-radius: 12px;
+  background: var(--panel);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  font-size: 0.875rem;
+  line-height: 1.4;
+  user-select: none;
+}
+
+.fullscreen-offer p {
+  margin: 0;
+  color: var(--ink-2);
+}
+
+.fullscreen-offer button {
+  min-height: 36px;
+}
+
+/* Its close control, in the corner. */
+.fullscreen-offer button.close {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  min-height: 0;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.fullscreen-offer p {
+  padding-right: 0.5rem;
+}
+
 main {
   position: relative;
   box-sizing: border-box;

@@ -282,6 +282,34 @@ pub fn level_controls() -> Option<app::LevelControls> {
     RUNNING.with(|r| r.borrow().as_ref()?.app.level_controls())
 }
 
+/// The save screen's name field while it shows ([`App::text_field`]), in
+/// canvas CSS pixels, and whether it has focus.
+pub fn text_field() -> Option<([f32; 4], bool)> {
+    let (rect, focused) = RUNNING.with(|r| r.borrow().as_ref()?.app.text_field())?;
+    Some((crate::input::css_from_ui(rect), focused))
+}
+
+/// The `bound_keys` op: the names of the keys bound to any action, which
+/// the page's full screen locks (#85); empty while the game is not running.
+pub fn bound_keys() -> Vec<&'static str> {
+    RUNNING.with(|r| {
+        let r = r.borrow();
+        let Some(running) = r.as_ref() else {
+            return Vec::new();
+        };
+        let console = running.app.console();
+        let mut keys: Vec<&'static str> = (0..volya_engine::core::console::ACTIONS.len())
+            .flat_map(|a| console.keys(a))
+            .flatten()
+            .filter_map(volya_engine::core::input::Key::from_dik_name)
+            .map(|k| k.name())
+            .collect();
+        keys.sort_unstable();
+        keys.dedup();
+        keys
+    })
+}
+
 /// The `menu_state` op: the app's state, or `{"phase": "none"}` (or
 /// `"loading"` during the splash).
 pub fn state() -> serde_json::Value {
@@ -332,9 +360,15 @@ pub fn ui_images(args: &serde_json::Value) -> Result<serde_json::Value, JsValue>
                 (None, Some(id)) => Source::Id(id.into()),
                 _ => return json!({ "error": "neither `path` nor `id`" }),
             };
-            let region = request
-                .get("region")
-                .and_then(|v| serde_json::from_value::<[u32; 4]>(v.clone()).ok());
+            let region = match request.get("region") {
+                None | Some(serde_json::Value::Null) => None,
+                Some(v) => match serde_json::from_value::<[u32; 4]>(v.clone()) {
+                    Ok(region) => Some(region),
+                    Err(_) => {
+                        return json!({ "error": format!("`region` must be [x, y, width, height]: {v}") });
+                    }
+                },
+            };
             let image =
                 match ui_image::load(tree, &data.aliases, &data.descriptions, &source, region) {
                     Ok(image) => image,

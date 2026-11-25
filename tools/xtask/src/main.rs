@@ -307,9 +307,16 @@ fn copy_dir(from: &Path, to: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Third-party sources kept as released, under their own licences.
+const VENDORED: &str = "/vendor/";
+
 /// Source files that must carry SPDX headers.
 const SPDX_PATTERNS: &[&str] = &[
     "*.rs",
+    "*.c",
+    "*.h",
+    "*.S",
+    "*.lua",
     "*.sh",
     "*.js",
     "*.mjs",
@@ -333,6 +340,7 @@ fn check_spdx() -> Result {
     )?;
     let missing: Vec<&str> = files
         .lines()
+        .filter(|file| !file.contains(VENDORED))
         .filter(|file| {
             fs::read_to_string(root().join(file))
                 .map(|text| !has_spdx_headers(&text))

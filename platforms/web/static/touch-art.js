@@ -98,21 +98,32 @@ let loaded = null;
 
 /**
  * The controls' art from the imported game, once per session: `call` runs
- * an engine op. Rejects (and is tried again next time) when the engine
- * can't give it.
+ * an engine op. A picture the engine can't give is replaced by its
+ * approximation (named in `missing`), so the rest is kept and nothing is
+ * decoded again. Rejects (and is tried again next time) only when the op
+ * itself fails.
  */
 export function gameArt(call) {
   loaded ??= (async () => {
     const started = performance.now();
     const answer = await call("ui_images", { images: REQUESTS.map(([, request]) => request) });
     // For measuring: the engine's decoding time and the whole wait.
-    const art = { game: true, ms: answer.ms };
+    const art = { game: true, ms: answer.ms, missing: [] };
+    let approximate = null;
+    const images = {};
     REQUESTS.forEach(([name], i) => {
-      const image = answer.images[i];
-      if (!image || image.error) throw new Error(`${name}: ${image?.error ?? "missing"}`);
-      art[name] = pictureCanvas(image, TRIMMED.has(name));
+      const image = answer.images?.[i];
+      if (image && !image.error) {
+        images[name] = image;
+        art[name] = pictureCanvas(image, TRIMMED.has(name));
+      } else {
+        approximate ??= approximateArt();
+        art[name] = approximate[name];
+        art.missing.push(name);
+        console.warn(`touch controls: the game's ${name} picture: ${image?.error ?? "missing"}`);
+      }
     });
-    const teal = answer.images[1].mean ?? APPROXIMATE_TEAL;
+    const teal = images.crouch?.mean ?? APPROXIMATE_TEAL;
     const cross = answer.cross_color;
     const grey = cross ? cross.slice(0, 3).map((c) => Math.round(c * 255)) : APPROXIMATE_GREY;
     art.totalMs = performance.now() - started;

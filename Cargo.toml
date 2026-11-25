@@ -33,6 +33,8 @@ crc32fast = "1"
 # WebGPU in browsers, Metal on Apple platforms; no GL, Vulkan or DX12.
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "webgpu", "metal"] }
 pollster = "1"
+# Builds the vendored LuaJIT (crates/volya-engine-script).
+cc = "1"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

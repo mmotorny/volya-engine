@@ -515,6 +515,12 @@ pub enum Event {
     },
     /// The pointer lock the page held (mouse look in a level) was lost.
     PointerUnlocked,
+    /// A character typed through the platform's text entry (a device's
+    /// own keyboard on touch screens), not a key press: a Volya Engine
+    /// addition for the save screen's name field (#94).
+    Text {
+        ch: char,
+    },
 }
 
 /// A touch contact, in screen units.
@@ -650,6 +656,8 @@ pub struct Input {
     sticks_released: [bool; 2],
     /// The pointer lock was lost this frame.
     pointer_unlocked: bool,
+    /// Characters typed through text entry this frame ([`Event::Text`]).
+    text: Vec<char>,
 }
 
 impl Default for Input {
@@ -679,6 +687,7 @@ impl Default for Input {
             motion: [0.0; 2],
             sticks_released: [false; 2],
             pointer_unlocked: false,
+            text: Vec::new(),
         }
     }
 }
@@ -842,6 +851,7 @@ impl Input {
     pub fn end_frame(&mut self) {
         self.actions.clear();
         self.pointer_unlocked = false;
+        self.text.clear();
         self.touch_starts = 0;
         self.pointer_delta = [0.0; 2];
         self.drag_delta = [0.0; 2];
@@ -888,9 +898,16 @@ impl Input {
         self.pointer_unlocked
     }
 
+    /// The characters typed through text entry this frame
+    /// ([`Event::Text`]), in order.
+    pub fn text(&self) -> &[char] {
+        &self.text
+    }
+
     pub fn handle(&mut self, event: Event) {
         match event {
             Event::PointerUnlocked => self.pointer_unlocked = true,
+            Event::Text { ch } => self.text.push(ch),
             Event::PointerMoved { at } => {
                 self.pointer_to(at);
                 self.move_to(at)
@@ -1571,5 +1588,17 @@ mod tests {
         for button in TouchButton::ALL {
             assert_eq!(TouchButton::from_name(button.name()), Some(button));
         }
+    }
+
+    #[test]
+    fn typed_text_lasts_its_frame_and_presses_nothing() {
+        let mut input = Input::new();
+        for ch in "Ab".chars() {
+            input.handle(Event::Text { ch });
+        }
+        assert_eq!(input.text(), ['A', 'b']);
+        assert!(input.actions().is_empty() && input.device_changes().is_empty());
+        input.end_frame();
+        assert!(input.text().is_empty());
     }
 }

@@ -17,6 +17,7 @@ workspace = true
 volya-engine-core = { path = "../volya-engine-core" }
 volya-engine-formats = { path = "../volya-engine-formats" }
 volya-engine-render = { path = "../volya-engine-render" }
+volya-engine-script = { path = "../volya-engine-script" }
 serde.workspace = true
 
 [dev-dependencies]

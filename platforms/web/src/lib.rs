@@ -167,6 +167,14 @@ pub fn level_controls() -> u32 {
     })
 }
 
+/// The save screen's name field while it shows, for the page's text entry
+/// (#94): `[x, y, width, height, focused]`, canvas CSS pixels and 1 or 0.
+#[wasm_bindgen]
+pub fn text_field() -> Option<Vec<f32>> {
+    engine::text_field()
+        .map(|([x, y, w, h], focused)| vec![x, y, w, h, f32::from(u8::from(focused))])
+}
+
 /// Engine interface for the page, tests and debugging: runs `op` with JSON
 /// `args` and returns its JSON result.
 #[wasm_bindgen]
@@ -176,6 +184,7 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
     match op.as_str() {
         "status" => to_json(&status()),
         "vfs_selftest" => vfs_selftest().await.map(|()| "null".into()),
+        "script_selftest" => script_selftest(),
         "game_status" => to_json(&game::status().await?),
         "unmount_game" => {
             game::unmount();
@@ -225,6 +234,7 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         "ui_images" => to_json(&engine::ui_images(&args)?),
         "launch" => to_json(&engine::launch().await?),
         "menu_state" => to_json(&engine::state()),
+        "bound_keys" => to_json(&engine::bound_keys()),
         "menu_scene" => {
             let size = |key| args.get(key).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
             to_json(&engine::scene(Resolution::new(
@@ -292,6 +302,19 @@ fn status() -> Status {
         frames: FRAME_STATS.with(|s| s.borrow().frames),
         gpu: gpu::status(),
     }
+}
+
+/// Runs the script runtime's shared self-test, then a chunk in a new state;
+/// returns that chunk's result, the runtime's `_VERSION`.
+fn script_selftest() -> Result<String, JsValue> {
+    use volya_engine::script::{Lua, selftest};
+    selftest::check().map_err(|e| JsValue::from_str(&e))?;
+    let error = |e: volya_engine::script::Error| JsValue::from_str(&e.message);
+    let version = Lua::new()
+        .map_err(error)?
+        .exec("=version", b"return _VERSION")
+        .map_err(error)?;
+    to_json(&version.first().and_then(|v| v.as_str()))
 }
 
 /// Runs the shared VFS conformance check against [`opfs::OpfsVfs`] on a

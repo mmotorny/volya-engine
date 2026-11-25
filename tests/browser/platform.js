@@ -57,6 +57,10 @@ export const tests = {
     await volya.call("vfs_selftest");
   },
 
+  "script runtime passes its self-test in the engine worker": async () => {
+    assertEqual(await volya.call("script_selftest"), "Lua 5.1 (alpha) + LuaJIT 1.0.3");
+  },
+
   "OPFS sync access handle works in a worker": async () => {
     assertEqual(await inWorker("opfs"), "volya");
   },

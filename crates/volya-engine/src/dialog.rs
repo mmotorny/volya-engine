@@ -58,12 +58,27 @@ pub enum Ev {
     },
     /// A gamepad's d-pad: move the cursor to the nearest target this way.
     Navigate([f32; 2]),
+    /// A character typed through the platform's text entry (the device's
+    /// own keyboard on touch screens; our design, #94).
+    Text(char),
 }
 
 /// This frame's events, the cursor starting at `cursor`, `dt` seconds after
 /// the previous frame (the left stick's cursor speed). The console key and
 /// F12 are not the screens' (section 3.1); nothing here uses them.
 pub fn events(data: &GameData, input: &Input, cursor: [f32; 2], dt: f32) -> Vec<Ev> {
+    events_from(data, input, cursor, dt, true)
+}
+
+/// [`events`], without the gamepad's unless `pad` (the save screen's
+/// on-screen keyboard takes them while open).
+pub fn events_from(
+    data: &GameData,
+    input: &Input,
+    cursor: [f32; 2],
+    dt: f32,
+    pad: bool,
+) -> Vec<Ev> {
     let mut out = Vec::new();
     for a in input.actions() {
         match *a {
@@ -86,6 +101,10 @@ pub fn events(data: &GameData, input: &Input, cursor: [f32; 2], dt: f32) -> Vec<
                 out.push(Ev::Quit { pressed });
             }
         }
+    }
+    out.extend(input.text().iter().map(|&c| Ev::Text(c)));
+    if !pad {
+        return out;
     }
     for &(b, pressed) in input.pad_changes() {
         let nav = |d| if pressed { Some(Ev::Navigate(d)) } else { None };
