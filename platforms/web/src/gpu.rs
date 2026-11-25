@@ -63,7 +63,12 @@ struct Playing {
 }
 
 thread_local! {
+    /// Whether the detail objects are drawn (`debug_render`).
+    static DETAILS_DRAWN: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+
     static GPU: RefCell<Option<Gpu>> = const { RefCell::new(None) };
+    /// The Graphics setting's stored choice, empty when none (#121).
+    static CHOICE: RefCell<String> = const { RefCell::new(String::new()) };
     /// Why there is no GPU, once initialisation failed.
     static UNAVAILABLE: RefCell<Option<String>> = const { RefCell::new(None) };
     /// Milliseconds from a frame's submission until the browser reported
@@ -76,6 +81,12 @@ thread_local! {
     /// log.
     static DRAWN: std::cell::Cell<Option<(Resolution, Resolution)>> =
         const { std::cell::Cell::new(None) };
+    /// The latest frames' GPU times by pass (#387).
+    static PASS_RECENT: RefCell<std::collections::BTreeMap<&'static str, std::collections::VecDeque<f64>>> =
+        Default::default();
+    /// The draw calls and state changes of the last frame drawn (#387).
+    static LAST_STATS: std::cell::Cell<volya_engine::render::stats::FrameStats> =
+        std::cell::Cell::new(Default::default());
 }
 
 fn error(e: impl std::fmt::Display) -> JsValue {
@@ -96,6 +107,19 @@ fn watch_context_loss(canvas: &OffscreenCanvas) {
         canvas.add_event_listener_with_callback("webglcontextlost", lost.as_ref().unchecked_ref());
     // For the canvas's lifetime, the engine's.
     lost.forget();
+}
+
+/// Keeps the Graphics setting's stored choice (`""` when none), for the
+/// diagnostic log's `settings` event.
+pub fn set_choice(choice: String) {
+    CHOICE.with(|c| *c.borrow_mut() = choice);
+}
+
+/// The Graphics setting as stored (`""` when none) and the backend drawing
+/// (`""` without graphics).
+pub fn graphics() -> (String, &'static str) {
+    let backend = GPU.with(|g| g.borrow().as_ref().map_or("", |gpu| gpu.backend));
+    (CHOICE.with(|c| c.borrow().clone()), backend)
 }
 
 /// Sets up WebGPU, or WebGL 2 where there is no WebGPU or `webgl` asks for
@@ -460,7 +484,37 @@ pub fn world_stats() -> serde_json::Value {
             "object_draws": world.map(|w| w.object_draw_count()),
             "gpu_object_bytes": world.map(|w| w.object_gpu_bytes()),
             "gpu_object_texture_bytes": world.map(|w| w.object_texture_bytes()),
+            "frame_commands": frame_commands(),
+            "gpu_pass_ms": PASS_RECENT.with_borrow(|r| {
+                r.iter()
+                    .map(|(k, q)| (k.to_string(), json!(q.iter().sum::<f64>() / q.len().max(1) as f64)))
+                    .collect::<serde_json::Map<_, _>>()
+            }),
         })
+    })
+}
+
+/// The last frame's draw calls and state changes, in all and by part.
+fn frame_commands() -> serde_json::Value {
+    use volya_engine::render::stats::{Counts, Part};
+    let s = LAST_STATS.get();
+    let counts = |c: Counts| {
+        json!({
+            "draws": c.draws,
+            "pipelines": c.pipelines,
+            "bind_groups": c.bind_groups,
+            "buffers": c.buffers,
+        })
+    };
+    let parts: serde_json::Map<String, serde_json::Value> = Part::ALL
+        .iter()
+        .map(|&p| (p.name().to_owned(), counts(s.part(p))))
+        .collect();
+    json!({
+        "total": counts(s.total()),
+        "passes": s.passes,
+        "submits": s.submits,
+        "parts": parts,
     })
 }
 
@@ -472,6 +526,12 @@ pub fn set_splash(image: &Rgba) {
     });
 }
 
+/// Whether the detail objects are drawn (tests, #415).
+#[cfg(feature = "test-ops")]
+pub fn set_details_drawn(on: bool) {
+    DETAILS_DRAWN.set(on);
+}
+
 /// One animation frame at `time` (milliseconds): advances video and
 /// presents if anything changed.
 pub fn frame(time: f64) {
@@ -479,7 +539,8 @@ pub fn frame(time: f64) {
         // wgpu's GL backend runs buffer-mapping callbacks (captures) and
         // frees finished uploads only when polled; the browser's WebGPU
         // does both on its own (this is then a no-op).
-        let _ = gpu.renderer.device().poll(wgpu::PollType::Poll);
+        let _ = tracing::info_span!("render.poll")
+            .in_scope(|| gpu.renderer.device().poll(wgpu::PollType::Poll));
         // A world drawn ahead of its level (`warm_up`) is held only while
         // the loading waits for it.
         if crate::engine::world_to_prepare().is_none() {
@@ -497,7 +558,12 @@ pub fn frame(time: f64) {
             crate::engine::draw_list(&mut gpu.renderer, &mut gpu.presenter, resolution)
         });
         match list {
-            Some(list) => {
+            Some(mut list) => {
+                if !DETAILS_DRAWN.get()
+                    && let Some(world) = &mut list.world
+                {
+                    world.details = None;
+                }
                 if DRAWN.get() != Some((resolution, canvas)) {
                     DRAWN.set(Some((resolution, canvas)));
                     tracing::info!(
@@ -553,6 +619,25 @@ impl Gpu {
             volya_engine::core::diagnostics::metric("gpu.time_ms", ms);
             keep(0, ms);
         }
+        for (pass, ms) in self.renderer.take_gpu_pass_times() {
+            let name = match pass {
+                "world" => "gpu.pass.world_ms",
+                "distortion" => "gpu.pass.distortion_ms",
+                "presentation" => "gpu.pass.presentation_ms",
+                "ui" => "gpu.pass.ui_ms",
+                "fit" => "gpu.pass.fit_ms",
+                "ramp" => "gpu.pass.ramp_ms",
+                _ => "gpu.pass.other_ms",
+            };
+            volya_engine::core::diagnostics::metric(name, ms);
+            PASS_RECENT.with_borrow_mut(|r| {
+                let q = r.entry(pass).or_default();
+                if q.len() == RECENT_FRAMES {
+                    q.pop_front();
+                }
+                q.push_back(ms);
+            });
+        }
         for ms in DONE_MS.with(|d| std::mem::take(&mut *d.borrow_mut())) {
             volya_engine::core::diagnostics::metric("gpu.done_ms", ms);
             keep(1, ms);
@@ -578,7 +663,9 @@ impl Gpu {
 
     /// Presents `list` drawn at `size`, scaled to fit the canvas.
     fn present_at(&mut self, list: &DrawList, size: (u32, u32)) {
-        let texture = match self.surface.get_current_texture() {
+        let current =
+            tracing::info_span!("render.acquire").in_scope(|| self.surface.get_current_texture());
+        let texture = match current {
             wgpu::CurrentSurfaceTexture::Success(t)
             | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
@@ -588,10 +675,21 @@ impl Gpu {
             }
             _ => return,
         };
+        self.renderer.take_frame_stats();
         tracing::info_span!("render.encode").in_scope(|| {
             self.renderer
                 .render_scaled(&texture.texture, list, CLEAR, size);
         });
+        let stats = self.renderer.take_frame_stats();
+        LAST_STATS.set(stats);
+        if list.world.is_some() {
+            use volya_engine::core::diagnostics::metric;
+            let t = stats.total();
+            metric("render.draws", f64::from(t.draws));
+            metric("render.pipelines", f64::from(t.pipelines));
+            metric("render.bind_groups", f64::from(t.bind_groups));
+            metric("render.buffers", f64::from(t.buffers));
+        }
         self.watch_done();
         tracing::info_span!("render.present").in_scope(|| self.queue.present(texture));
         self.dirty = false;

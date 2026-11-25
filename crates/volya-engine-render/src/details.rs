@@ -397,9 +397,13 @@ impl DetailPipelines {
             return;
         };
         let room = (level.instances.size() / INSTANCE_BYTES) as u32;
+        crate::stats::bind_group();
         pass.set_bind_group(0, &self.frame_group, &[]);
+        crate::stats::bind_group();
         pass.set_bind_group(1, &level.texture, &[]);
+        crate::stats::buffer();
         pass.set_vertex_buffer(0, level.vertices.slice(..));
+        crate::stats::buffer();
         pass.set_index_buffer(level.indices.slice(..), wgpu::IndexFormat::Uint16);
         let mut current = None;
         for d in &frame.draws {
@@ -417,10 +421,13 @@ impl DetailPipelines {
             };
             if current != Some(pipeline) {
                 current = Some(pipeline);
+                crate::stats::pipeline();
                 pass.set_pipeline(&self.pipelines[pipeline]);
             }
             let bytes = u64::from(d.first) * INSTANCE_BYTES..u64::from(end) * INSTANCE_BYTES;
+            crate::stats::buffer();
             pass.set_vertex_buffer(1, level.instances.slice(bytes));
+            crate::stats::draw();
             pass.draw_indexed(range.clone(), 0, 0..end - d.first);
         }
     }

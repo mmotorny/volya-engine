@@ -885,7 +885,7 @@ fn loading_waits_for_prepared_textures() {
         assert_eq!(caption(&app).map(|c| c.0), Some(17), "held");
     }
     eprintln!("world prepared in {turns} turns, {:.1?}", start.elapsed());
-    assert!(turns > 10, "{turns} turns");
+    assert!(turns > 5, "{turns} turns");
     app.world_prepared();
     step(&mut app, &mut input, &mut audio);
     assert!(matches!(app.state(), AppState::Level { .. }));

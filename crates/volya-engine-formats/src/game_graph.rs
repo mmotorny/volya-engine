@@ -7,7 +7,7 @@
 //! read-only data the simulation does not use (1.5), so they are read on
 //! demand from the file rather than kept.
 
-use std::io;
+use std::io::{self, BufReader, Cursor, Read, Seek, SeekFrom};
 
 use crate::packet::Reader;
 
@@ -93,12 +93,20 @@ pub struct GameGraph {
     pub trailing: Vec<u8>,
 }
 
-impl GameGraph {
-    /// Parses every table but the level points, which are checked to fit.
-    /// A version other than 8 is the game's fatal error (1.8). An edge or
-    /// level point offset that is not a whole record from its table's start
-    /// is an error (our choice: the spec states they always are).
-    pub fn parse(file: &[u8]) -> io::Result<Self> {
+/// The header and the level table (1.1, 1.2).
+struct Header {
+    version: u8,
+    vertex_count: usize,
+    edge_count: usize,
+    point_count: u32,
+    identifier: [u8; 16],
+    levels: Vec<GraphLevel>,
+}
+
+impl Header {
+    /// The header and level table at the start of `file`, with the offset
+    /// of the vertex table after them.
+    fn parse(file: &[u8]) -> io::Result<(Self, usize)> {
         let mut r = Reader::new(file);
         let version = r.u8()?;
         if version != VERSION {
@@ -120,7 +128,55 @@ impl GameGraph {
                 })
             })
             .collect::<io::Result<Vec<_>>>()?;
-        let table_start = file.len() - r.rest().len();
+        let header = Self {
+            version,
+            vertex_count,
+            edge_count,
+            point_count,
+            identifier,
+            levels,
+        };
+        Ok((header, file.len() - r.rest().len()))
+    }
+}
+
+impl GameGraph {
+    /// Parses every table but the level points, which are checked to fit.
+    /// A version other than 8 is the game's fatal error (1.8). An edge or
+    /// level point offset that is not a whole record from its table's start
+    /// is an error (our choice: the spec states they always are).
+    pub fn parse(file: &[u8]) -> io::Result<Self> {
+        Self::read(&mut Cursor::new(file))
+    }
+
+    /// As [`Self::parse`], reading the file from `reader` a record at a
+    /// time: neither the file nor its tables' bytes are held whole.
+    pub fn read(reader: &mut (impl Read + Seek)) -> io::Result<Self> {
+        let size = reader.seek(SeekFrom::End(0))?;
+        // The header and the level table from the file's start, read again
+        // longer until they fit in it (or the whole file is read and they
+        // do not).
+        let mut want: u64 = 64 << 10;
+        let (head, table_start) = loop {
+            let n = want.min(size);
+            let mut prefix = vec![0; n as usize];
+            reader.seek(SeekFrom::Start(0))?;
+            reader.read_exact(&mut prefix)?;
+            match Header::parse(&prefix) {
+                Ok(h) => break h,
+                Err(_) if n < size => want *= 4,
+                Err(e) => return Err(e),
+            }
+        };
+        let Header {
+            version,
+            vertex_count,
+            edge_count,
+            point_count,
+            identifier,
+            levels,
+        } = head;
+        let rest = (size - table_start as u64) as usize;
         // The three tables must fit the bytes left before anything is
         // allocated for them.
         let edges_start = VERTEX_SIZE * vertex_count;
@@ -133,7 +189,7 @@ impl GameGraph {
         };
         if points_rel
             .checked_add(points_bytes)
-            .is_none_or(|end| end > r.rest().len())
+            .is_none_or(|end| end > rest)
         {
             return Err(invalid("game.graph: tables beyond the end of the file"));
         }
@@ -144,9 +200,13 @@ impl GameGraph {
                 .ok_or_else(|| invalid(format!("game.graph: {what} offset {offset}")))?;
             Ok::<u32, io::Error>((rel / size) as u32)
         };
+        reader.seek(SeekFrom::Start(table_start as u64))?;
+        let mut tables = BufReader::with_capacity(64 << 10, &mut *reader);
         let mut vertices = Vec::with_capacity(vertex_count);
+        let mut record = [0u8; VERTEX_SIZE];
         for i in 0..vertex_count {
-            let mut v = Reader::new(r.take(VERTEX_SIZE)?);
+            tables.read_exact(&mut record)?;
+            let mut v = Reader::new(&record);
             let level_point = v.float3()?;
             let global_point = v.float3()?;
             let level_id = v.u8()?;
@@ -183,16 +243,21 @@ impl GameGraph {
             });
         }
         let mut edges = Vec::with_capacity(edge_count);
+        let mut record = [0u8; EDGE_SIZE];
         for _ in 0..edge_count {
-            let target = r.u16()?;
-            let distance = r.float()?;
+            tables.read_exact(&mut record)?;
+            let mut e = Reader::new(&record);
+            let target = e.u16()?;
+            let distance = e.float()?;
             if usize::from(target) >= vertex_count {
                 return Err(invalid(format!("game.graph: edge to vertex {target}")));
             }
             edges.push(GraphEdge { target, distance });
         }
         let points_start = table_start + points_rel;
-        r.take(points_bytes)?;
+        tables.seek_relative(points_bytes as i64)?;
+        let mut trailing = Vec::new();
+        tables.read_to_end(&mut trailing)?;
         Ok(Self {
             version,
             identifier,
@@ -201,7 +266,7 @@ impl GameGraph {
             edges,
             point_count,
             points_start,
-            trailing: r.rest().to_vec(),
+            trailing,
         })
     }
 

@@ -91,12 +91,14 @@ mod counting {
 
 /// Starts the engine on the canvas transferred from the page, drawing
 /// through WebGL 2 even where WebGPU works when `webgl` (the player's
-/// Graphics setting, #121). Without graphics the engine still starts;
-/// `status` reports why they are unavailable.
+/// Graphics setting, #121; `graphics` is the stored choice, empty when
+/// none). Without graphics the engine still starts; `status` reports why
+/// they are unavailable.
 #[wasm_bindgen]
-pub async fn start(canvas: OffscreenCanvas, webgl: bool) {
+pub async fn start(canvas: OffscreenCanvas, webgl: bool, graphics: String) {
+    gpu::set_choice(graphics);
     gpu::init(canvas, webgl).await;
-    diagnostics::started();
+    diagnostics::started().await;
 }
 
 /// The canvas's size in CSS pixels and the page's devicePixelRatio, on start
@@ -436,6 +438,11 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
             to_json(&diagnostics::bench(frames as u32))
         }
         #[cfg(feature = "test-ops")]
+        "debug_session_event" => {
+            diagnostics::repeat_session_event().await;
+            to_json(&serde_json::Value::Null)
+        }
+        #[cfg(feature = "test-ops")]
         "debug_diagnostics_fill" => {
             let events = args.get("events").and_then(|v| v.as_u64()).unwrap_or(0);
             to_json(&diagnostics::fill(events as u32)?)
@@ -522,6 +529,19 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
             let side = |key: &str| args.get(key).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
             let mode = Resolution::new(side("width").max(1), side("height").max(1));
             engine::set_video_mode(mode).map(|()| "null".into())
+        }
+        // `{"supersample": …, "details": …}`: `r__supersample` applied as
+        // a video restart would, and whether the detail objects are drawn
+        // (a frame's cost with each, #415).
+        #[cfg(feature = "test-ops")]
+        "debug_render" => {
+            if let Some(n) = args.get("supersample").and_then(|v| v.as_u64()) {
+                engine::set_supersample(n as u32)?;
+            }
+            if let Some(on) = args.get("details").and_then(|v| v.as_bool()) {
+                gpu::set_details_drawn(on);
+            }
+            Ok("null".into())
         }
         // `{"ms": …}`: every frame takes at least that long from now on.
         // `{"on": …}`: the mixer's commands wait while on (`audio::hold`).

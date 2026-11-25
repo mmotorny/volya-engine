@@ -1405,6 +1405,13 @@ impl App {
 
     /// Sets `vid_mode` to `mode` and applies it, as a video restart would
     /// (tests and measurements: the frame's cost at a given size).
+    /// Sets `r__supersample` to `value` and applies it, as a video restart
+    /// would (tests).
+    pub fn set_supersample(&mut self, value: u32) {
+        self.console.exec(&format!("r__supersample {value}"));
+        self.supersample = supersample(&self.console);
+    }
+
     pub fn set_video_mode(&mut self, mode: Resolution) {
         self.console
             .exec(&format!("vid_mode {}x{}", mode.width, mode.height));

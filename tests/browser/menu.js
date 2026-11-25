@@ -159,6 +159,27 @@ function client(x, y) {
   return [rect.left + cx, rect.top + cy];
 }
 
+/** Whether `box` is turned 90° clockwise on the screen (upright phones, style.css). */
+const turned = (box) => {
+  const r = box.getBoundingClientRect();
+  return r.width < r.height !== box.clientWidth < box.clientHeight;
+};
+
+/** Page position of point `[x, y]` in `box`'s own layout, as the page's `local` reads it back. */
+function toClient(box, [x, y]) {
+  const b = box.getBoundingClientRect();
+  return turned(box) ? [b.right - y, b.top + x] : [b.left + x, b.top + y];
+}
+
+/** `el`'s rectangle in `box`'s own layout (not turned). */
+function localRect(el, box) {
+  const [b, r] = [box.getBoundingClientRect(), el.getBoundingClientRect()];
+  const [left, top, right, bottom] = turned(box)
+    ? [r.top - b.top, b.right - r.right, r.bottom - b.top, b.right - r.left]
+    : [r.left - b.left, r.top - b.top, r.right - b.left, r.bottom - b.top];
+  return { left, top, right, bottom };
+}
+
 function pointer(type, [x, y], init = {}) {
   document.body.dispatchEvent(
     new PointerEvent(type, {
@@ -661,13 +682,31 @@ export const tests = {
         await sleep(1000 + 60 * 34);
         const s = await volya.call("level_stats");
         const ms = (v) => (v == null ? "–" : v.toFixed(1));
-        rows.push(`${width}×${height}: interval ${ms(s.frame_interval_ms)}, CPU ${ms(s.frame_cpu_ms)}, GPU ${ms(s.gpu_time_ms)}, done ${ms(s.gpu_done_ms)}`);
+        const passes = Object.entries(s.gpu_pass_ms ?? {}).map(([name, t]) => `${name} ${ms(t)}`).join(", ");
+        rows.push(`${width}×${height}: interval ${ms(s.frame_interval_ms)}, CPU ${ms(s.frame_cpu_ms)}, GPU ${ms(s.gpu_time_ms)} (${passes}), done ${ms(s.gpu_done_ms)}`);
         assert(s.gpu_done_ms > 0, `no GPU done time at ${width}×${height}`);
       }
+      // At 1024×768: r__supersample 1 instead of 2, and the grass left
+      // undrawn (#415).
+      for (const [what, change] of [["r__supersample 1", { supersample: 1 }], ["no grass", { supersample: 2, details: false }]]) {
+        await volya.call("debug_render", change);
+        await sleep(1000 + 60 * 34);
+        const s = await volya.call("level_stats");
+        const ms = (v) => (v == null ? "–" : v.toFixed(1));
+        rows.push(`1024×768, ${what}: interval ${ms(s.frame_interval_ms)}, CPU ${ms(s.frame_cpu_ms)}, GPU ${ms(s.gpu_time_ms)}, done ${ms(s.gpu_done_ms)}`);
+      }
     } finally {
+      await volya.call("debug_render", { supersample: 2, details: true });
       await volya.call("debug_video_mode", { width: 1024, height: 768 });
     }
-    return `ms per frame: ${rows.join("; ")} (before: GPU ${before.gpu_time_ms?.toFixed(1)}, done ${before.gpu_done_ms?.toFixed(1)})`;
+    // #387: what a frame asks of the GPU, in all and by part.
+    const c = before.frame_commands;
+    const parts = Object.entries(c?.parts ?? {})
+      .filter(([, p]) => p.draws > 0)
+      .map(([name, p]) => `${name} ${p.draws}`)
+      .join(", ");
+    const commands = c ? `; ${c.total.draws} draws (${parts}), ${c.total.pipelines} pipelines, ${c.total.bind_groups} bind groups, ${c.total.buffers} buffers set` : "";
+    return `ms per frame: ${rows.join("; ")} (before: GPU ${before.gpu_time_ms?.toFixed(1)}, done ${before.gpu_done_ms?.toFixed(1)})${commands}`;
   },
 
   "transcoding to ETC2 costs: the level's textures and a few large ones": async () => {
@@ -926,6 +965,15 @@ export const tests = {
     // before I walks on (inventory-screen.md 1.3).
     const down = (code, init = {}) => document.body.dispatchEvent(new KeyboardEvent("keydown", { code, bubbles: true, cancelable: true, ...init }));
     const up = (code, init = {}) => document.body.dispatchEvent(new KeyboardEvent("keyup", { code, bubbles: true, cancelable: true, ...init }));
+    // The walk goes back the way the keyboard test came, the one way known
+    // clear: ahead the turn's overshoot (a frame's turn: a quarter radian
+    // at the iOS Simulator's 80 ms frames) can leave a wall 0.2 m away
+    // (measured there), which stops the player under the screen.
+    const yaw = s.level.yaw;
+    const turnedBy = (s) => (((s.level.yaw - yaw) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+    down("ArrowRight");
+    await until((s) => turnedBy(s) > 2.9, "the right arrow to turn round", 3000);
+    up("ArrowRight");
     // Headless Chrome grants no pointer lock: then it is stubbed (the
     // lock element, its request and exit, each exit's change event), so the
     // page's exit path runs.
@@ -1021,9 +1069,11 @@ export const tests = {
     for (let i = 0; i < 50 && controls.hidden; i++) await sleep(20);
     assert(!controls.hidden, "the touch controls show");
     const button = controls.querySelector(".touch-button.inventory");
+    // In the game's picture, turned with it on upright phones.
+    const local = localRect(button, controls);
+    const look = localRect(controls.querySelector(".touch-look"), controls);
+    assert(local.left > look.left && local.top < 100, `at the top right: ${JSON.stringify(local)}`);
     const r = button.getBoundingClientRect();
-    const look = controls.querySelector(".touch-look").getBoundingClientRect();
-    assert(r.left > look.left && r.top < 100, `at the top right: ${JSON.stringify(r)}`);
     const centre = [(r.left + r.right) / 2, (r.top + r.bottom) / 2];
     for (const type of ["pointerdown", "pointerup"]) {
       button.dispatchEvent(
@@ -1152,12 +1202,15 @@ export const tests = {
     pointer("pointerup", client(512, 100), { ...tap, buttons: 0 });
     for (let i = 0; i < 50 && controls.hidden; i++) await sleep(20);
     assert(!controls.hidden, "the touch controls show");
+    // Points in the controls' own layout (the game's picture, turned with
+    // it on upright phones), given to the page in its coordinates.
     const centre = (el) => {
-      const r = el.getBoundingClientRect();
+      const r = localRect(el, controls);
       return [(r.left + r.right) / 2, (r.top + r.bottom) / 2];
     };
-    const touchOn = (el, type, id, [x, y]) =>
-      el.dispatchEvent(
+    const touchOn = (el, type, id, at) => {
+      const [x, y] = toClient(controls, at);
+      return el.dispatchEvent(
         new PointerEvent(type, {
           clientX: x,
           clientY: y,
@@ -1170,11 +1223,12 @@ export const tests = {
           cancelable: true,
         }),
       );
+    };
     const start = (await state()).level;
-    // The stick pulled fully down runs back the way the keyboard test came
-    // (clear for its whole run, 0.8 m or more), held until the player has
-    // gone half a metre from where this test started, however long the
-    // frames take; a second finger then drags right to look.
+    // The stick pulled fully down runs back the way the inventory test's
+    // walk came (clear for its whole run), held until the player has gone
+    // half a metre from where this test started, however long the frames
+    // take; a second finger then drags right to look.
     const move = controls.querySelector(".touch-move");
     const look = controls.querySelector(".touch-look");
     const [mx, my] = centre(move);
@@ -1225,7 +1279,7 @@ export const tests = {
     // drop area just below the safe area's top edge), or at the very top
     // turned aside; either way on the screen, and the engine locks where
     // it is drawn.
-    const top = controls.querySelector(".touch-button.menu").offsetTop;
+    const top = localRect(controls.querySelector(".touch-button.menu"), controls).top;
     const lockTarget = controls.querySelector(".touch-lock");
     let id = 50;
     for (const [y, what] of [
@@ -1233,7 +1287,7 @@ export const tests = {
       [top + 4, "aside"],
     ]) {
       touchOn(move, "pointerdown", ++id, [mx, y]);
-      const r = lockTarget.getBoundingClientRect();
+      const r = localRect(lockTarget, controls);
       assert(r.top >= top - 1 && r.left >= 0, `the ${what} lock target on the screen: ${JSON.stringify(r)}`);
       const [tx, ty] = [(r.left + r.right) / 2, (r.top + r.bottom) / 2];
       const d = Math.hypot(tx - mx, ty - y);
@@ -1423,7 +1477,8 @@ export const tests = {
       assertEqual((await volya.call("particles_state")).clock, effects, "the effects' clock while hidden");
       const idle = (await volya.status()).frames;
       assert(idle - frames <= 1, `${idle - frames} frames ran while hidden`);
-      assertEqual(volya.audioState(), "suspended", "audio while hidden");
+      // Suspended if it ran; else as the browser holds it (below).
+      assertEqual(volya.audioState(), audioBefore === "running" ? "suspended" : audioBefore, "audio while hidden");
       assertEqual((await storedEnds()).at(-1)?.args.reason, "page_hidden", "the end in the diagnostic log");
     } finally {
       setVisibility("visible");
@@ -1437,9 +1492,13 @@ export const tests = {
     const ran = back.clock - hiddenClock;
     assert(ran < 300, `the engine clock ran ${ran} ms over the return`);
     assertEqual(back.level.game_time, s.level.game_time, "the game clock, paused under the menu");
-    // Chrome runs with autoplay allowed (docs/testing.md), so audio was running.
-    assertEqual(audioBefore, "running", "audio before hiding");
-    await until(() => volya.audioState() === "running", "audio to resume");
+    // Chrome runs with autoplay allowed (docs/testing.md), so audio was
+    // running and resumes. Where the AudioContext needs a gesture it never
+    // ran: WebKit holds it "interrupted" from its creation (measured in the
+    // iOS Simulator, where synthesized input is no gesture), and there is
+    // nothing to suspend or resume.
+    assert(["running", "interrupted"].includes(audioBefore), `audio before hiding: ${audioBefore}`);
+    if (audioBefore === "running") await until(() => volya.audioState() === "running", "audio to resume");
     // The player resumes deliberately.
     await sleep(100);
     key("Escape");
@@ -1508,11 +1567,17 @@ export const tests = {
     const pad = { index: 0, mapping: "standard", axes: [0, 0, 0, 0], buttons: Array.from({ length: 17 }, () => ({ pressed: false, value: 0 })) };
     const getGamepads = navigator.getGamepads;
     navigator.getGamepads = () => [pad];
+    // The page polls gamepads once an animation frame: each state is held
+    // for two frames at least, however slow the page's frames are (the
+    // iOS Simulator's can outlast a fixed wait).
+    const frames = (n) => new Promise((resolve) => requestAnimationFrame(() => (n > 1 ? frames(n - 1).then(resolve) : resolve())));
     const button = async (i) => {
       pad.buttons[i].pressed = true;
       await sleep(80);
+      await frames(2);
       pad.buttons[i].pressed = false;
       await sleep(80);
+      await frames(2);
     };
     try {
       await button(0);
@@ -1815,6 +1880,16 @@ export const tests = {
     const ends = mine.filter((e) => e.name === "engine.end");
     const left = ends.filter((e) => e.args.message === "left the game").length;
     assertEqual(left, count("i", "game started"), "games left");
+    // Each game starts with its settings; a change writes them again.
+    const settings = mine.filter((e) => e.name === "settings");
+    for (const start of mine.filter((e) => e.name === "game started")) {
+      const next = mine.find((e) => e.ts >= start.ts && (e.name === "settings" || e.name === "engine.end"));
+      assertEqual(next?.name, "settings", "the settings at a game's start");
+    }
+    for (const key of ["renderer", "vid_mode", "r__supersample", "_preset", "r__detail_density", "r1_dlights", "rs_c_gamma", "rs_vis_distance", "graphics", "backend"]) {
+      assert(settings.every((e) => key in e.args), `settings without ${key}`);
+    }
+    assert(settings.some((e) => e.args.vid_mode === "2868x1320"), "no settings at a changed video mode");
     const reasons = new Set(ends.map((e) => e.args.reason));
     for (const reason of ["quit", "page_hidden", "load_failed"]) assert(reasons.has(reason), `no ${reason} end`);
     const levels = (name) => mine.filter((e) => e.name === name && e.args?.level === "l01_escape").length;

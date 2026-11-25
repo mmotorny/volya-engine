@@ -591,27 +591,41 @@ impl SkyResources {
     /// Section 10's step 3: the sky box, the sun sprite, the cloud dome.
     pub(crate) fn draw(&self, pass: &mut wgpu::RenderPass, frame: &SkyFrame, size: (u32, u32)) {
         let (w, h) = (size.0 as f32, size.1 as f32);
+        crate::stats::bind_group();
         pass.set_bind_group(0, &self.uniform_group, &[]);
         pass.set_viewport(0.0, 0.0, w, h, SKY_DEPTH.0, SKY_DEPTH.1);
+        crate::stats::pipeline();
         pass.set_pipeline(&self.sky);
         let a = frame.section % self.cubes.len();
+        crate::stats::bind_group();
         pass.set_bind_group(1, &self.cubes[a], &[]);
+        crate::stats::buffer();
         pass.set_vertex_buffer(0, self.box_vertices.slice(..));
+        crate::stats::buffer();
         pass.set_index_buffer(self.box_indices.slice(..), wgpu::IndexFormat::Uint16);
+        crate::stats::draw();
         pass.draw_indexed(0..60, 0, 0..1);
         pass.set_viewport(0.0, 0.0, w, h, 0.0, 1.0);
         let sun = self.sun.get(frame.sun_section).and_then(Option::as_ref);
         if let (Some(_), Some(sun)) = (frame.sun, sun) {
+            crate::stats::pipeline();
             pass.set_pipeline(&self.sun_pipeline);
+            crate::stats::bind_group();
             pass.set_bind_group(1, sun, &[]);
+            crate::stats::draw();
             pass.draw(0..6, 0..1);
         }
         if frame.clouds.is_some() {
             pass.set_viewport(0.0, 0.0, w, h, SKY_DEPTH.0, SKY_DEPTH.1);
+            crate::stats::pipeline();
             pass.set_pipeline(&self.clouds_pipeline);
+            crate::stats::bind_group();
             pass.set_bind_group(1, &self.clouds[a], &[]);
+            crate::stats::buffer();
             pass.set_vertex_buffer(0, self.dome_vertices.slice(..));
+            crate::stats::buffer();
             pass.set_index_buffer(self.dome_indices.slice(..), wgpu::IndexFormat::Uint16);
+            crate::stats::draw();
             pass.draw_indexed(0..self.dome_index_count, 0, 0..1);
             pass.set_viewport(0.0, 0.0, w, h, 0.0, 1.0);
         }

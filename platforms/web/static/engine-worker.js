@@ -182,7 +182,7 @@ onmessage = async ({ data }) => {
         diagnostics = JSON.parse(await engine.call("diagnostics_set", JSON.stringify(args)));
         logging = diagnostics.on;
       }
-      await engine.start(data.canvas, backend === "webgl2");
+      await engine.start(data.canvas, backend === "webgl2", data.graphics ?? "");
       engine.resize(data.size.width, data.size.height, data.size.dpr);
     })();
     try {

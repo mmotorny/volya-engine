@@ -17,7 +17,7 @@ use volya_engine_installer::{GameFile, Installer, extract, hex};
 use wasm_bindgen::prelude::*;
 use web_sys::{FileSystemReadWriteOptions, FileSystemSyncAccessHandle};
 
-use crate::game::{GAME_DIR, MANIFEST, Manifest, ManifestFile};
+use crate::game::{GAME_DIR, InstallerIdentity, MANIFEST, Manifest, ManifestFile};
 use crate::opfs;
 
 /// `Read + Seek` over a JS source.
@@ -26,6 +26,8 @@ struct Source {
     read: Function,
     size: u64,
     pos: u64,
+    /// The file's name (the source's `name`).
+    name: String,
 }
 
 impl Source {
@@ -34,11 +36,15 @@ impl Source {
             .as_f64()
             .ok_or("source has no size")? as u64;
         let read = Reflect::get(&object, &"read".into())?.dyn_into()?;
+        let name = Reflect::get(&object, &"name".into())?
+            .as_string()
+            .unwrap_or_default();
         Ok(Self {
             object,
             read,
             size,
             pos: 0,
+            name,
         })
     }
 }
@@ -89,10 +95,18 @@ fn wanted(file: &GameFile) -> bool {
         || file.path == volya_engine::data::DEFAULT_USER_LTX
 }
 
+/// What `plan_import` found, for `run_import`.
+#[derive(Default)]
+struct Planned {
+    /// The language (empty when the installer tags none).
+    language: String,
+    files: Vec<GameFile>,
+    /// The installer, its `.bin` named once the import runs.
+    installer: InstallerIdentity,
+}
+
 thread_local! {
-    /// The planned files and their language (empty when the installer tags
-    /// none), for `run_import`.
-    static PLAN: RefCell<(String, Vec<GameFile>)> = const { RefCell::new((String::new(), Vec::new())) };
+    static PLAN: RefCell<Option<Planned>> = const { RefCell::new(None) };
 }
 
 #[derive(Serialize)]
@@ -143,7 +157,20 @@ pub fn plan_import(exe: JsValue, preferred: Vec<String>) -> Result<String, JsVal
             })
             .collect(),
     };
-    PLAN.with(|p| *p.borrow_mut() = (language, files));
+    let installer = InstallerIdentity {
+        exe: source.name.clone(),
+        bin: String::new(),
+        app_name: installer.app_name,
+        app_version: installer.app_version,
+        install_vers: installer.install_vers,
+    };
+    PLAN.with(|p| {
+        *p.borrow_mut() = Some(Planned {
+            language,
+            files,
+            installer,
+        })
+    });
     serde_json::to_string(&plan).map_err(error)
 }
 
@@ -185,20 +212,24 @@ pub async fn run_import(bin: JsValue, only: JsValue, progress: Function) -> Resu
     } else {
         Some(serde_wasm_only(&only)?)
     };
-    let (language, files): (String, Vec<GameFile>) = PLAN.with(|p| {
+    let (language, files, mut installer) = PLAN.with(|p| {
         let plan = p.borrow();
-        let files = plan
-            .1
+        let Some(plan) = plan.as_ref() else {
+            return Default::default();
+        };
+        let files: Vec<GameFile> = plan
+            .files
             .iter()
             .filter(|f| only.as_ref().is_none_or(|o| o.contains(&f.path)))
             .cloned()
             .collect();
-        (plan.0.clone(), files)
+        (plan.language.clone(), files, plan.installer.clone())
     });
     if files.is_empty() {
         return Err(error("nothing to import; plan first"));
     }
     let mut bin = Source::new(bin)?;
+    installer.bin = bin.name.clone();
     let namespace = opfs::namespace().await?;
     let dir = opfs::create_dir(&namespace, GAME_DIR).await?;
     // An unreadable record can't vouch for any file: start afresh.
@@ -209,6 +240,7 @@ pub async fn run_import(bin: JsValue, only: JsValue, progress: Function) -> Resu
         .unwrap_or_default();
     manifest.language = language;
     manifest.complete = false;
+    manifest.installer = Some(installer);
 
     let total: u64 = files.iter().map(|f| f.size).sum();
     manifest.total_bytes = total;

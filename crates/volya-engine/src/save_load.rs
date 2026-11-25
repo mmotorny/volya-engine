@@ -24,7 +24,7 @@ use crate::core::clock::GameClock;
 use crate::core::config::{self, Config};
 use crate::core::input::{GamepadButton, Input, Key};
 use crate::core::ui::load_ui_file;
-use crate::core::vfs::{self, Vfs};
+use crate::core::vfs::Vfs;
 use crate::data::GameData;
 use crate::dialog::{
     self, Answer, Ev, MessageBox, MessageBoxDesc, MessageBoxState, Over, PushButton, Pushed,
@@ -1443,10 +1443,7 @@ fn alife(tree: &dyn Vfs, data: &GameData) -> io::Result<Config> {
 }
 
 fn game_graph(tree: &dyn Vfs, data: &GameData) -> io::Result<GameGraph> {
-    GameGraph::parse(&vfs::read(
-        tree,
-        &data.aliases.path("$game_data$", "game.graph")?,
-    )?)
+    GameGraph::read(&mut tree.open(&data.aliases.path("$game_data$", "game.graph")?)?)
 }
 
 impl SaveInfo {

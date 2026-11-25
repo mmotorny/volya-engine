@@ -14,16 +14,18 @@ import init, { plan_import, run_import } from "./pkg/volya_engine_web.js";
 /** The engine's wasm, initialized on the first message. */
 let ready = null;
 
-/** A synchronous byte source over a File or a range-capable URL. */
+/** A synchronous byte source over a File or a range-capable URL, with its file name. */
 function source(input) {
   if (input instanceof Blob) {
     const reader = new FileReaderSync();
     return {
+      name: input.name,
       size: input.size,
       read: (offset, length) => new Uint8Array(reader.readAsArrayBuffer(input.slice(offset, offset + length))),
     };
   }
   return {
+    name: decodeURIComponent(new URL(input.url, location.href).pathname.split("/").pop()),
     size: input.size,
     read: (offset, length) => {
       const request = new XMLHttpRequest();

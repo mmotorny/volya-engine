@@ -43,6 +43,21 @@ struct Draw {
 @group(0) @binding(0) var<uniform> frame: Frame;
 @group(0) @binding(1) var<storage, read> draws: array<Draw>;
 
+fn record(i: u32) -> Draw {
+    return draws[i];
+}
+
+// A level vertex's id when draws share it: the draw is then the instance.
+const SHARED: u32 = 0xffffffffu;
+
+// The record of a level vertex's draw. Vertices only one draw uses carry
+// its index (id), so draws merged into one draw call each keep their own
+// record; shared vertices (e.g. a tree's instances) are drawn one draw a
+// call with the draw as the instance.
+fn level_record(id: u32, instance: u32) -> Draw {
+    return record(select(id, instance, id == SHARED));
+}
+
 @group(1) @binding(0) var t_base: texture_2d<f32>;
 @group(1) @binding(1) var t_second: texture_2d<f32>;
 @group(1) @binding(2) var t_hemi: texture_2d<f32>;
@@ -78,6 +93,8 @@ struct Out {
 
 struct LightMapped {
     @builtin(instance_index) draw: u32,
+    // The draw this vertex belongs to, or SHARED (see `level_record`).
+    @location(7) id: u32,
     @location(0) position: vec3<f32>,
     @location(1) normal: vec4<f32>,
     @location(2) tangent: vec4<f32>,
@@ -88,6 +105,8 @@ struct LightMapped {
 
 struct VertexLit {
     @builtin(instance_index) draw: u32,
+    // The draw this vertex belongs to, or SHARED (see `level_record`).
+    @location(7) id: u32,
     @location(0) position: vec3<f32>,
     @location(1) normal: vec4<f32>,
     @location(2) tangent: vec4<f32>,
@@ -98,6 +117,8 @@ struct VertexLit {
 
 struct TreeVertex {
     @builtin(instance_index) draw: u32,
+    // The draw this vertex belongs to, or SHARED (see `level_record`).
+    @location(7) id: u32,
     @location(0) position: vec3<f32>,
     @location(1) normal: vec4<f32>,
     @location(2) tangent: vec4<f32>,
@@ -165,7 +186,7 @@ fn uses_detail(d: Draw) -> bool {
 // lmap / lmap_dt (section 7.1).
 @vertex
 fn vs_lmap(v: LightMapped) -> Out {
-    let d = draws[v.draw];
+    let d = level_record(v.id, v.draw);
     let detail = uses_detail(d);
     var out = start(d, v.position, detail);
     let n = unpack_vec(v.normal);
@@ -217,7 +238,7 @@ fn fs_lmap(in: Out) -> @location(0) vec4<f32> {
 // impl_dt, terrain (section 7.4).
 @vertex
 fn vs_terrain(v: LightMapped) -> Out {
-    let d = draws[v.draw];
+    let d = level_record(v.id, v.draw);
     var out = start(d, v.position, d.params.z > 0.0);
     let n = unpack_vec(v.normal);
     out.uv = base_uv(v.tc0, v.tangent, v.binormal);
@@ -250,7 +271,7 @@ fn vertex_light(v: VertexLit, n: vec3<f32>) -> vec3<f32> {
 
 @vertex
 fn vs_vert(v: VertexLit) -> Out {
-    let d = draws[v.draw];
+    let d = level_record(v.id, v.draw);
     let detail = uses_detail(d);
     var out = start(d, v.position, detail);
     let n = unpack_vec(v.normal);
@@ -290,7 +311,7 @@ fn tree_wave(world: vec3<f32>, x: mat4x4<f32>, m: vec4<f32>) -> vec3<f32> {
 // tree_w / tree_s (with _dt), section 7.3.
 @vertex
 fn vs_tree(v: TreeVertex) -> Out {
-    let d = draws[v.draw];
+    let d = level_record(v.id, v.draw);
     let x = d.transform;
     let detail = uses_detail(d);
     let m = vec4<f32>(v.tc);
@@ -325,7 +346,7 @@ fn wmark_position(position: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
 // wmark (section 8.3).
 @vertex
 fn vs_wmark(v: VertexLit) -> Out {
-    let d = draws[v.draw];
+    let d = level_record(v.id, v.draw);
     let n = unpack_vec(v.normal);
     let p = wmark_position(v.position, n);
     var out = start(d, p, false);
@@ -337,7 +358,7 @@ fn vs_wmark(v: VertexLit) -> Out {
 // simple: self-lit (section 8.1).
 @vertex
 fn vs_simple(v: VertexLit) -> Out {
-    let d = draws[v.draw];
+    let d = level_record(v.id, v.draw);
     var out = start(d, v.position, false);
     out.uv = base_uv(v.tc0, v.tangent, v.binormal);
     return out;
@@ -352,7 +373,7 @@ fn fs_simple(in: Out) -> @location(0) vec4<f32> {
 // base_lplanes (section 8.2).
 @vertex
 fn vs_lplanes(v: VertexLit) -> Out {
-    let d = draws[v.draw];
+    let d = level_record(v.id, v.draw);
     var out = start(d, v.position, false);
     out.uv = base_uv(v.tc0, v.tangent, v.binormal);
     let pv = normalize((frame.view * vec4(v.position, 1.0)).xyz);
@@ -408,7 +429,7 @@ fn model_light(d: Draw, n: vec3<f32>) -> vec3<f32> {
 // model_def_lq; the pixel stage is fs_vert's C = 2 · Q · B.rgb, A = B.a.
 @vertex
 fn vs_model(v: ModelVertex) -> Out {
-    let d = draws[v.draw];
+    let d = record(v.draw);
     let m = model_point(d, v);
     var out = start(d, m.p, false);
     out.uv = m.uv;
@@ -420,7 +441,7 @@ fn vs_model(v: ModelVertex) -> Out {
 // environment texel (our reading of calc_reflection).
 @vertex
 fn vs_model_env(v: ModelVertex) -> Out {
-    let d = draws[v.draw];
+    let d = record(v.draw);
     let m = model_point(d, v);
     var out = start(d, m.p, false);
     out.uv = m.uv;
@@ -440,7 +461,7 @@ fn fs_model_env(in: Out) -> @location(0) vec4<f32> {
 // model_def_lqs with simple: the base texel, unlit.
 @vertex
 fn vs_model_simple(v: ModelVertex) -> Out {
-    let d = draws[v.draw];
+    let d = record(v.draw);
     let m = model_point(d, v);
     var out = start(d, m.p, false);
     out.uv = m.uv;
@@ -450,7 +471,7 @@ fn vs_model_simple(v: ModelVertex) -> Out {
 // model_def_lplanes: faded by |view direction · normal| (as 8.2).
 @vertex
 fn vs_model_lplanes(v: ModelVertex) -> Out {
-    let d = draws[v.draw];
+    let d = record(v.draw);
     let m = model_point(d, v);
     var out = start(d, m.p, false);
     out.uv = m.uv;
@@ -521,7 +542,7 @@ fn light_vertex(d: Draw, p: vec3<f32>, n: vec3<f32>, uv: vec2<f32>) -> LightOut 
 // lmap_*, impl_* (section 6.5): the vertex position and unpacked normal.
 @vertex
 fn vs_light_lmap(v: LightMapped) -> LightOut {
-    let d = draws[v.draw];
+    let d = level_record(v.id, v.draw);
     return light_vertex(d, v.position, unpack_vec(v.normal),
         base_uv(v.tc0, v.tangent, v.binormal));
 }
@@ -529,7 +550,7 @@ fn vs_light_lmap(v: LightMapped) -> LightOut {
 // vert_*, simple_*.
 @vertex
 fn vs_light_vert(v: VertexLit) -> LightOut {
-    let d = draws[v.draw];
+    let d = level_record(v.id, v.draw);
     return light_vertex(d, v.position, unpack_vec(v.normal),
         base_uv(v.tc0, v.tangent, v.binormal));
 }
@@ -537,7 +558,7 @@ fn vs_light_vert(v: VertexLit) -> LightOut {
 // wmark_*: the wall mark's shifted position.
 @vertex
 fn vs_light_wmark(v: VertexLit) -> LightOut {
-    let d = draws[v.draw];
+    let d = level_record(v.id, v.draw);
     let n = unpack_vec(v.normal);
     return light_vertex(d, wmark_position(v.position, n), n,
         base_uv(v.tc0, v.tangent, v.binormal));
@@ -547,7 +568,7 @@ fn vs_light_wmark(v: VertexLit) -> LightOut {
 // the normal turned by X's rotation and normalised.
 @vertex
 fn vs_light_tree(v: TreeVertex) -> LightOut {
-    let d = draws[v.draw];
+    let d = level_record(v.id, v.draw);
     let x = d.transform;
     let m = vec4<f32>(v.tc);
     var p = (x * vec4(v.position, 1.0)).xyz;
@@ -561,7 +582,7 @@ fn vs_light_tree(v: TreeVertex) -> LightOut {
 // model_def_*: the model at rest by the object's matrix.
 @vertex
 fn vs_light_model(v: ModelVertex) -> LightOut {
-    let d = draws[v.draw];
+    let d = record(v.draw);
     let m = model_point(d, v);
     return light_vertex(d, m.p, m.n, m.uv);
 }
