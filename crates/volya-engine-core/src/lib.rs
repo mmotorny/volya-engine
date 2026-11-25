@@ -16,6 +16,7 @@ pub mod level;
 pub mod movement;
 pub mod object_light;
 pub mod simulation;
+pub mod sound;
 pub mod switching;
 pub mod text;
 pub mod ui;

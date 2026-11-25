@@ -33,16 +33,46 @@ pub fn ogg_end_granule(bytes: &[u8]) -> Option<u64> {
     None
 }
 
+/// How far from the end of a stream its last page is searched for: an Ogg
+/// page is at most 65,307 bytes (RFC 3533).
+const LAST_PAGE_SEARCH: u64 = 65_307 * 2;
+
+/// The end granule of the Ogg stream read from `reader` (see
+/// [`ogg_end_granule`]), searched in its last bytes; leaves the position at
+/// the start.
+fn end_granule<R: Read + Seek>(reader: &mut R) -> io::Result<Option<u64>> {
+    let len = reader.seek(SeekFrom::End(0))?;
+    let start = len.saturating_sub(LAST_PAGE_SEARCH);
+    reader.seek(SeekFrom::Start(start))?;
+    let mut tail = Vec::with_capacity((len - start) as usize);
+    reader.by_ref().take(len - start).read_to_end(&mut tail)?;
+    reader.seek(SeekFrom::Start(0))?;
+    Ok(ogg_end_granule(&tail))
+}
+
 /// A Vorbis stream read from an Ogg file, decoded block by block.
+///
+/// The output ends at the last page's granule position, which the Vorbis I
+/// specification (section A.2) defines as the stream's last sample: `lewton`
+/// 0.10.2 decodes the whole last block instead when the stream is a single
+/// page (its issue 106; measured: `ambient\indoors\small_fan.ogg` gives 666
+/// frames too many).
 pub struct VorbisStream<R: Read + Seek> {
     reader: Option<OggStreamReader<R>>,
+    /// The end granule; `None` when the stream has none.
+    end: Option<u64>,
+    /// Frames returned so far.
+    frames: u64,
 }
 
 impl<R: Read + Seek> VorbisStream<R> {
-    pub fn open(reader: R) -> io::Result<Self> {
+    pub fn open(mut reader: R) -> io::Result<Self> {
+        let end = end_granule(&mut reader)?;
         let reader = OggStreamReader::new(reader).map_err(|e| invalid(format!("Vorbis: {e}")))?;
         Ok(Self {
             reader: Some(reader),
+            end,
+            frames: 0,
         })
     }
 
@@ -70,11 +100,21 @@ impl<R: Read + Seek> VorbisStream<R> {
     /// Appends the next decoded block to `out` as interleaved samples in
     /// [-1, 1]; returns `false` at the end of the stream.
     pub fn read_block(&mut self, out: &mut Vec<f32>) -> io::Result<bool> {
+        let channels = u64::from(self.channels().max(1));
         loop {
             match self.reader().read_dec_packet_itl() {
                 Ok(Some(samples)) if samples.is_empty() => continue,
                 Ok(Some(samples)) => {
-                    out.extend(samples.iter().map(|&s| f32::from(s) / 32768.0));
+                    let mut frames = samples.len() as u64 / channels;
+                    if let Some(end) = self.end {
+                        frames = frames.min(end.saturating_sub(self.frames));
+                        if frames == 0 {
+                            return Ok(false);
+                        }
+                    }
+                    self.frames += frames;
+                    let kept = &samples[..(frames * channels) as usize];
+                    out.extend(kept.iter().map(|&s| f32::from(s) / 32768.0));
                     return Ok(true);
                 }
                 Ok(None) => return Ok(false),
