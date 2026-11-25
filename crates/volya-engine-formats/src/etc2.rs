@@ -771,7 +771,7 @@ fn pack_alpha(
     bits.to_be_bytes()
 }
 
-#[cfg(test)]
-mod decode;
+#[cfg(any(test, feature = "etc2-decode"))]
+pub mod decode;
 #[cfg(test)]
 mod tests;
