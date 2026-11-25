@@ -835,6 +835,21 @@ impl App {
                         }
                     }
                 }
+                // The torches' night-vision sounds of this frame (torch.md
+                // 14), made by its update.
+                for sound in level.take_torch_sounds() {
+                    if let Some(level_sounds) = &mut self.level_sounds
+                        && let Err(e) = level_sounds.torch(
+                            sounds,
+                            tree,
+                            &self.data.aliases,
+                            sound,
+                            level.torches().night_vision(sound.torch),
+                        )
+                    {
+                        fatal = Some(e);
+                    }
+                }
                 (true, menu.is_some())
             }
             _ => (false, false),
