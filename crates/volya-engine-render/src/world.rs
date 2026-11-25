@@ -2072,7 +2072,10 @@ impl Renderer {
             };
             (list(&early), list(&late))
         } else {
-            (Static::Bundle(record(&early)), Static::Bundle(record(&late)))
+            (
+                Static::Bundle(record(&early)),
+                Static::Bundle(record(&late)),
+            )
         };
         let (sky, sky_error) =
             match sky.map(|t| SkyResources::new(&device, &queue, &pipelines.sky, t)) {

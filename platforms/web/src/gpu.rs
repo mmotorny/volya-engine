@@ -593,7 +593,8 @@ impl Gpu {
 
     /// Presents `list` drawn at `size`, scaled to fit the canvas.
     fn present_at(&mut self, list: &DrawList, size: (u32, u32)) {
-        let current = tracing::info_span!("render.acquire").in_scope(|| self.surface.get_current_texture());
+        let current =
+            tracing::info_span!("render.acquire").in_scope(|| self.surface.get_current_texture());
         let texture = match current {
             wgpu::CurrentSurfaceTexture::Success(t)
             | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,

@@ -174,9 +174,6 @@ pub fn render_size() -> Option<Resolution> {
     RUNNING.with(|r| r.borrow().as_ref().map(|running| running.app.video_mode()))
 }
 
-/// The `debug_video_mode` op (tests): draws at `mode` from now on
-/// ([`App::set_video_mode`]).
-#[cfg(feature = "test-ops")]
 /// Sets `r__supersample` as a video restart applies it (tests).
 #[cfg(feature = "test-ops")]
 pub fn set_supersample(value: u32) -> Result<(), JsValue> {
@@ -188,6 +185,9 @@ pub fn set_supersample(value: u32) -> Result<(), JsValue> {
     })
 }
 
+/// The `debug_video_mode` op (tests): draws at `mode` from now on
+/// ([`App::set_video_mode`]).
+#[cfg(feature = "test-ops")]
 pub fn set_video_mode(mode: Resolution) -> Result<(), JsValue> {
     RUNNING.with(|r| {
         let mut r = r.borrow_mut();
@@ -366,9 +366,10 @@ pub fn draw_list(
             let scene: Scene = tracing::info_span!("render.app_scene")
                 .in_scope(|| running.app.scene(tree, resolution))
                 .map_err(error)?;
-            Ok::<_, JsValue>(tracing::info_span!("render.draw_list").in_scope(|| {
-                presenter.draw_list(renderer, tree, &scene, running.app.clock())
-            }))
+            Ok::<_, JsValue>(
+                tracing::info_span!("render.draw_list")
+                    .in_scope(|| presenter.draw_list(renderer, tree, &scene, running.app.clock())),
+            )
         });
         Some(list.and_then(|l| l))
     })?;
