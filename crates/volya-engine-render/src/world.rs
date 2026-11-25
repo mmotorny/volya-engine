@@ -1743,12 +1743,22 @@ impl Renderer {
         };
         let mut jobs = Vec::new();
         let mut buffer_bytes = 0;
+        // WebGPU: vertex buffers made room for at least 65,536 vertices
+        // past any base, so no 16-bit index can read past them. WebKit
+        // then draws a new index range at once; otherwise it checks the
+        // range first with a draw of its own on the GPU, a memory barrier
+        // and an indirect draw, until the command buffer completes (its
+        // `RenderPassEncoder::clampIndexBufferToValidValues`; #437: about
+        // 3 s of the warm-up's frame on an iPhone, as culled and merged
+        // draws make new ranges).
+        let room = |stride: u64| if compat { 0 } else { 65_536 * stride };
         let mut vertex_buffers = Vec::with_capacity(layout.vertex_buffers.len() + 1);
         for (i, b) in layout.vertex_buffers.iter().enumerate() {
             let bytes = b.bytes();
-            buffer_bytes += bytes;
+            let min = room(b.stride as u64);
+            buffer_bytes += bytes.max(min);
             let label = "level.geom vertices";
-            let buffer = new_buffer(label, wgpu::BufferUsages::VERTEX, bytes, 0);
+            let buffer = new_buffer(label, wgpu::BufferUsages::VERTEX, bytes, min);
             vertex_buffers.push(buffer.clone());
             jobs.push(Job {
                 buffer,
@@ -1837,9 +1847,10 @@ impl Renderer {
                 continue;
             }
             let bytes = 4 * u64::from(b.vertex_count);
-            buffer_bytes += bytes;
+            let min = room(4).max(4);
+            buffer_bytes += bytes.max(min);
             let label = "level.geom draw ids";
-            let buffer = new_buffer(label, wgpu::BufferUsages::VERTEX, bytes, 4);
+            let buffer = new_buffer(label, wgpu::BufferUsages::VERTEX, bytes, min);
             id_buffers.push(Some(buffer.clone()));
             jobs.push(Job {
                 buffer,
@@ -1855,7 +1866,9 @@ impl Renderer {
             // Whole 16-byte vertices: a multiple of 4 bytes, as buffers need.
             let bytes = objects.vertices.len() as u64;
             let label = "object vertices";
-            let buffer = new_buffer(label, wgpu::BufferUsages::VERTEX, bytes, 0);
+            // Room past the last vertex, as the objects draw from bases.
+            let min = bytes + room(MODEL_VERTEX_BYTES as u64);
+            let buffer = new_buffer(label, wgpu::BufferUsages::VERTEX, bytes, min);
             vertex_buffers.push(buffer.clone());
             jobs.push(Job {
                 buffer,
@@ -1863,7 +1876,7 @@ impl Renderer {
                 source: Source::ObjectVertices,
                 bytes,
             });
-            object_buffer_bytes += bytes;
+            object_buffer_bytes += min;
             let label = "object indices";
             if compat {
                 // Rebased as they are uploaded, as the level's are (a

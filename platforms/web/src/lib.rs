@@ -557,8 +557,7 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
             let on = args.get("on").and_then(|v| v.as_bool()).unwrap_or(false);
             let session = args.get("session").cloned().unwrap_or_default();
             let previous = args.get("previous_end").cloned().unwrap_or_default();
-            diagnostics::set(on, &session, &previous).await;
-            to_json(&diagnostics::status().await)
+            to_json(&diagnostics::set(on, &session, &previous).await)
         }
         #[cfg(feature = "test-ops")]
         "debug_diagnostics_bench" => {
