@@ -248,6 +248,8 @@ pub(crate) struct PostProcess {
     noise_sampler: wgpu::Sampler,
     /// `fx\fx_noise2` once given; white until then.
     noise: wgpu::TextureView,
+    /// One texel of the distortion target's clear value (127 / 255).
+    cleared: wgpu::TextureView,
     pub(crate) targets: Option<Targets>,
     /// The values last handed over, or the defaults since the target was
     /// built (2.3).
@@ -391,9 +393,31 @@ impl PostProcess {
                 &[255; 4],
             )
             .create_view(&Default::default());
+        let cleared = device
+            .create_texture_with_data(
+                queue,
+                &wgpu::TextureDescriptor {
+                    label: Some("$user$distort cleared"),
+                    size: wgpu::Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: DISTORT_FORMAT,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                },
+                wgpu::util::TextureDataOrder::LayerMajor,
+                &[127; 2],
+            )
+            .create_view(&Default::default());
         Self {
             format,
             layout,
+            cleared,
             postprocess,
             postprocess_d,
             constants,
@@ -478,7 +502,8 @@ impl PostProcess {
     }
 
     /// The presentation quad (3.1 step 5) into `screen`, with
-    /// `postprocess_d` when `distorted`, then `overlay` (the menus and HUD)
+    /// `postprocess_d` after a distortion pass (reading a texel of the
+    /// target's clear value where the pass was not drawn), then `overlay` (the menus and HUD)
     /// in the same pass, so the frame is written once (#433). `last`: the
     /// pass ends the timed frame. Returns whether it drew (a target was
     /// built).
@@ -490,7 +515,7 @@ impl PostProcess {
         encoder: &mut wgpu::CommandEncoder,
         screen: &wgpu::TextureView,
         presentation: &Presentation,
-        distorted: bool,
+        distortion: crate::Distortion,
         last: bool,
         overlay: impl FnOnce(&mut wgpu::RenderPass<'_>),
     ) -> bool {
@@ -533,7 +558,11 @@ impl PostProcess {
         push([t.screen.0 as f32, t.screen.1 as f32, 0.0, 0.0]);
         queue.write_buffer(&self.constants, 0, &bytes);
         let colour = t.colour.create_view(&Default::default());
-        let distort = t.distort.create_view(&Default::default());
+        let distort = if distortion.drawn {
+            t.distort.create_view(&Default::default())
+        } else {
+            self.cleared.clone()
+        };
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("postprocess"),
             layout: &self.layout,
@@ -583,7 +612,7 @@ impl PostProcess {
             multiview_mask: None,
         });
         crate::stats::pipeline();
-        pass.set_pipeline(if distorted {
+        pass.set_pipeline(if distortion.pass {
             &self.postprocess_d
         } else {
             &self.postprocess
