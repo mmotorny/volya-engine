@@ -5,6 +5,7 @@
 
 mod deploy;
 mod e2e;
+mod spec_lint;
 
 use std::fs;
 use std::io;
@@ -24,6 +25,7 @@ Tasks:
               steps, e.g. 'open URL' 'tap-text Play' 'screenshot out.png'.
   web [--dev] Build the web app into dist/ (release unless --dev).
   deploy      Check, build and publish to GitHub Pages (gh-pages branch).
+  spec-lint   Flag decompiler output, code and mangled names in clean-room spec drafts.
   update      Move to the latest stable Rust and dependencies, then check.";
 
 /// Crates that never build for the web target.
@@ -43,6 +45,7 @@ fn main() -> ExitCode {
         ["web"] => web(Profile::Release),
         ["web", "--dev"] => web(Profile::Dev),
         ["deploy"] => deploy::run_deploy(),
+        ["spec-lint", paths @ ..] => spec_lint::run(paths),
         ["update"] => update(),
         ["-h" | "--help"] | [] => {
             println!("{USAGE}");
