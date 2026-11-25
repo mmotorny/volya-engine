@@ -31,6 +31,11 @@ const ONLY = [
   "bin/XR_3DA.exe",
   "__support/userdocs/user.ltx",
 ];
+// The wasm heap never shrinks: its size after a New Game is the page's for
+// good. Measured at 98 MiB in headless Chrome after one and after two New
+// Games (#79; 193 and 199 MiB before); a regression past this fails.
+const WASM_HEAP_CAP = 110 * 2 ** 20;
+const mib = (bytes) => `${(bytes / 2 ** 20).toFixed(0)} MiB`;
 const CAPTIONS = ["Новая игра", "Загрузить игру", "Сетевая игра", "Опции", "Титры", "Выйти в Windows"];
 let installer;
 let gpu;
@@ -487,14 +492,14 @@ export const tests = {
     const playing = await volya.call("level_stats");
     const grown = (playing.wasm_heap_bytes - before.wasm_heap_bytes) / 2 ** 20;
     assert(grown < 40, `wasm heap grew ${grown.toFixed(0)} MiB during the intro`);
-    // The whole level's heap: 195 MiB measured (with the offline
-    // simulation), plus a modest margin.
-    assert(playing.wasm_heap_bytes < 210 * 2 ** 20, `wasm heap ${(playing.wasm_heap_bytes / 2 ** 20).toFixed(0)} MiB during the intro`);
+    // The whole level's heap, with the level's geometry streamed from its
+    // file to the GPU (#79): under its cap.
+    assert(playing.wasm_heap_bytes <= WASM_HEAP_CAP, `wasm heap ${mib(playing.wasm_heap_bytes)} during the intro, over ${mib(WASM_HEAP_CAP)}`);
     // A key bound to quit skips it (startup.md section 6.5).
     key("Escape");
     const shown = await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
     assertEqual(shown.phase, "level", "still in the level");
-    let note = `wasm heap by caption (MiB): ${stages.map(([n, m]) => `${n} ${m}`).join(", ")}; "${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; intro skipped, wasm heap ${(before.wasm_heap_bytes / 2 ** 20).toFixed(0)} MiB before it, ${(playing.wasm_heap_bytes / 2 ** 20).toFixed(0)} MiB while it played`;
+    let note = `wasm heap by caption (MiB): ${stages.map(([n, m]) => `${n} ${m}`).join(", ")}; "${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; intro skipped, wasm heap ${mib(before.wasm_heap_bytes)} before it, ${mib(playing.wasm_heap_bytes)} while it played`;
     if (gpu.state === "ready") {
       const { rgba } = await volya.call("debug_capture", { width: 256, height: 192 });
       const colours = new Set();
@@ -925,7 +930,10 @@ export const tests = {
       }
       assertEqual(stats.world_draws, 7782, "world draws on the GPU");
     }
-    return `loaded again in ${s.load_ms.toFixed(0)} ms`;
+    // A second load reuses the heap the first one grew.
+    const heap = (await volya.call("level_stats")).wasm_heap_bytes;
+    assert(heap <= WASM_HEAP_CAP, `wasm heap ${mib(heap)} after the second New Game, over ${mib(WASM_HEAP_CAP)}`);
+    return `loaded again in ${s.load_ms.toFixed(0)} ms; wasm heap ${mib(heap)}`;
   },
 
   "hidden: the menu opens, the clock, the frame loop and audio stop; shown: the game takes on from there": async () => {

@@ -5,10 +5,8 @@
 //! (section 5), the cloud dome (6) and the sun sprite (7.4, 7.5), drawn
 //! after the opaque world (section 10).
 
-use wgpu::util::DeviceExt;
-
 use crate::Texture;
-use crate::world::{DEPTH_FORMAT, Mat4, multiply, push_mat, push_vec4};
+use crate::world::{DEPTH_FORMAT, Mat4, multiply, push_mat, push_vec4, upload_buffer};
 
 /// The sky box: positions and texture coordinates (section 5.1).
 pub const SKY_BOX: [([f32; 3], [f32; 3]); 12] = [
@@ -416,6 +414,7 @@ impl SkyResources {
     /// texture.
     pub(crate) fn new(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         pipelines: &SkyPipelines,
         textures: &SkyTextures<Texture>,
     ) -> Result<Self, String> {
@@ -487,13 +486,8 @@ impl SkyResources {
                 })
             })
             .collect();
-        let init = |label, contents: &[u8], usage| {
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(label),
-                contents,
-                usage,
-            })
-        };
+        let init =
+            |label, contents: &[u8], usage| upload_buffer(device, queue, label, usage, contents);
         let box_vertices = init(
             "sky box",
             &bytes_of(&SKY_BOX, |(p, c), out| {

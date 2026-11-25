@@ -208,15 +208,21 @@ impl Installer {
     }
 }
 
+/// Compressed bytes read from the `.bin` slice at a time.
+const READ_PIECE: usize = 4 << 20;
+/// Inflated bytes produced, hashed and written at a time.
+const WRITE_PIECE: usize = 1 << 20;
+
 /// Writes `file`, read from the `.bin` slice, to `out`, verifying each part's
-/// and the whole file's MD5.
+/// and the whole file's MD5. Parts are inflated as streams through two
+/// fixed-size buffers, whatever their sizes.
 pub fn extract(
     file: &GameFile,
     bin: &mut (impl Read + Seek),
     out: &mut impl Write,
 ) -> io::Result<()> {
-    let mut compressed = Vec::new();
-    let mut inflated = Vec::new();
+    let mut compressed = vec![0; READ_PIECE];
+    let mut inflated = vec![0; WRITE_PIECE];
     let mut whole = Md5::new();
     for (i, part) in file.parts.iter().enumerate() {
         let what = || format!("{} part {}/{}", file.path, i + 1, file.parts.len());
@@ -226,22 +232,59 @@ pub fn extract(
         if &magic != CHUNK_MAGIC {
             return Err(invalid(format!("{}: no chunk at offset", what())));
         }
-        compressed.resize(part.compressed_size as usize, 0);
-        bin.read_exact(&mut compressed)?;
-        inflated.resize(part.size as usize, 0);
-        let (output, status) = zlib_rs::decompress_slice(
-            &mut inflated,
-            &compressed,
-            zlib_rs::InflateConfig::default(),
-        );
-        if status != zlib_rs::ReturnCode::Ok || output.len() != inflated.len() {
-            return Err(invalid(format!("{}: inflate failed ({status:?})", what())));
+        let failed = |status: &dyn std::fmt::Debug| {
+            invalid(format!("{}: inflate failed ({status:?})", what()))
+        };
+        // A zlib stream with the default window, as `decompress_slice`
+        // takes it.
+        let mut inflate = zlib_rs::Inflate::new(true, 15);
+        let mut md5 = Md5::new();
+        let mut read = 0u64;
+        let mut produced = 0u64;
+        // The compressed bytes read but not yet consumed.
+        let mut start = 0;
+        let mut end = 0;
+        loop {
+            if start == end && read < part.compressed_size {
+                let n = (part.compressed_size - read).min(READ_PIECE as u64) as usize;
+                bin.read_exact(&mut compressed[..n])?;
+                start = 0;
+                end = n;
+                read += n as u64;
+            }
+            // Never room for more than the part's size: more is an error.
+            let room = (part.size - produced).min(WRITE_PIECE as u64) as usize;
+            let total_in = inflate.total_in();
+            let total_out = inflate.total_out();
+            let status = inflate
+                .decompress(
+                    &compressed[start..end],
+                    &mut inflated[..room],
+                    zlib_rs::InflateFlush::NoFlush,
+                )
+                .map_err(|e| failed(&e))?;
+            let used = (inflate.total_in() - total_in) as usize;
+            let made = (inflate.total_out() - total_out) as usize;
+            start += used;
+            produced += made as u64;
+            let bytes = &inflated[..made];
+            md5.update(bytes);
+            whole.update(bytes);
+            out.write_all(bytes)?;
+            match status {
+                zlib_rs::Status::StreamEnd => break,
+                // The input used up or the part's size reached, the stream
+                // unended.
+                _ if used == 0 && made == 0 => return Err(failed(&status)),
+                _ => {}
+            }
         }
-        if <[u8; 16]>::from(Md5::digest(&inflated)) != part.md5 {
+        if produced != part.size {
+            return Err(failed(&"short output"));
+        }
+        if <[u8; 16]>::from(md5.finalize()) != part.md5 {
             return Err(invalid(format!("{}: MD5 mismatch", what())));
         }
-        whole.update(&inflated);
-        out.write_all(&inflated)?;
     }
     if <[u8; 16]>::from(whole.finalize()) != file.md5 {
         return Err(invalid(format!("{}: MD5 mismatch", file.path)));
