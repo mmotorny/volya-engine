@@ -9,10 +9,10 @@
 //! the user configuration file and `savedgames/` the saved games.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::io::Read;
 use std::rc::Rc;
 
-use js_sys::Reflect;
 use serde::{Deserialize, Serialize};
 use volya_engine::core::audio::Playback;
 use volya_engine::core::vfs::db::DbVfs;
@@ -288,38 +288,46 @@ pub async fn write_user_config(bytes: Vec<u8>) -> Result<(), JsValue> {
 pub const SAVED_GAMES: &str = "savedgames";
 
 thread_local! {
-    /// The saved-games folder, its files open with read-only handles.
-    static SAVES: RefCell<Option<opfs::OpfsVfs>> = const { RefCell::new(None) };
+    /// The `.sav` files directly in the saved-games folder, as the `File`
+    /// snapshots the listing took (no access handle is held).
+    static SAVES: RefCell<HashMap<String, web_sys::File>> = RefCell::new(HashMap::new());
 }
 
-/// Reads the saved-games folder's files through [`SAVES`].
+/// The bytes of `blob`, read synchronously (`FileReaderSync`, which
+/// dedicated workers have; documented).
+fn read_blob(blob: &web_sys::Blob) -> Result<Vec<u8>, JsValue> {
+    let buffer = web_sys::FileReaderSync::new()?.read_as_array_buffer(blob)?;
+    Ok(js_sys::Uint8Array::new(&buffer).to_vec())
+}
+
+/// Reads the `.sav` files of [`SAVES`] when the load screen asks.
 struct SaveReader;
 
 impl SaveFiles for SaveReader {
     fn read(&self, path: &str) -> std::io::Result<Vec<u8>> {
-        SAVES.with(|s| match s.borrow().as_ref() {
-            Some(vfs) => volya_engine::core::vfs::read(vfs, path),
-            None => Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "the saved games are closed",
-            )),
-        })
+        let file = SAVES.with(|s| s.borrow().get(path).cloned());
+        let file =
+            file.ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, path.to_owned()))?;
+        // A file changed since the listing fails to read (the snapshot is
+        // stale); the screen then treats it as not valid.
+        read_blob(&file).map_err(|e| std::io::Error::other(format!("{path}: {e:?}")))
     }
 }
 
-/// The saved-games folder's files with their modification times and the
+/// The saved-games folder's files with their modification times, and the
 /// first bytes of the `.sav` files directly in it (what the validity test
-/// reads); the files stay open read-only for the load screen. Empty
-/// without the folder.
+/// reads); those files' contents are read when the load screen asks. No
+/// file stays open, so another copy of the app can delete saves meanwhile.
+/// Empty without the folder.
 pub async fn saved_games() -> Result<SavedGames, JsValue> {
     close_saved_games();
     let namespace = opfs::namespace().await?;
     let Some(root) = opfs::existing_dir(&namespace, SAVED_GAMES).await? else {
         return Ok(SavedGames::default());
     };
-    // Modification times first, before any handle holds a file.
     let mut files = Vec::new();
-    let mut pending = vec![(String::new(), root.clone())];
+    let mut snapshots = HashMap::new();
+    let mut pending = vec![(String::new(), root)];
     while let Some((path, dir)) = pending.pop() {
         for handle in opfs::entries(&dir).await? {
             let name = handle.name();
@@ -333,10 +341,8 @@ pub async fn saved_games() -> Result<SavedGames, JsValue> {
                 continue;
             }
             let file: FileSystemFileHandle = handle.dyn_into()?;
-            let blob = JsFuture::from(file.get_file()).await?;
-            let ms = Reflect::get(&blob, &"lastModified".into())?
-                .as_f64()
-                .unwrap_or(0.0);
+            let blob: web_sys::File = JsFuture::from(file.get_file()).await?.dyn_into()?;
+            let ms = blob.last_modified();
             // The browser's local time zone.
             let date = js_sys::Date::new(&JsValue::from_f64(ms));
             let modified = LocalTime {
@@ -346,41 +352,33 @@ pub async fn saved_games() -> Result<SavedGames, JsValue> {
                 hour: date.get_hours(),
                 minute: date.get_minutes(),
             };
+            let mut head = Vec::new();
+            if path.is_empty() && name.to_lowercase().ends_with(".sav") {
+                let first = blob.slice_with_i32_and_i32(0, HEAD as i32)?;
+                head = read_blob(&first).unwrap_or_default();
+                snapshots.insert(child.clone(), blob);
+            }
             files.push(SavedFile {
                 path: child,
                 modified_ms: ms,
                 modified,
-                head: Vec::new(),
+                head,
             });
         }
     }
-    let vfs = opfs::OpfsVfs::mount(&root).await?;
-    for f in &mut files {
-        if !f.path.contains('\\') && f.path.to_lowercase().ends_with(".sav") {
-            let mut head = Vec::new();
-            if let Ok(file) = vfs.open(&f.path) {
-                let _ = file.take(HEAD as u64).read_to_end(&mut head);
-            }
-            f.head = head;
-        }
-    }
-    SAVES.with(|s| *s.borrow_mut() = Some(vfs));
+    SAVES.with(|s| *s.borrow_mut() = snapshots);
     Ok(SavedGames::new(files, Some(Rc::new(SaveReader))))
 }
 
-/// Releases the saved games' handles.
+/// Forgets the saved games' snapshots.
 pub fn close_saved_games() {
-    SAVES.with(|s| s.borrow_mut().take());
+    SAVES.with(|s| s.borrow_mut().clear());
 }
 
 /// Deletes file `path` (relative to the saved-games folder, `\` between
-/// folders) from it: its handle is closed first; only that file goes.
+/// folders) from it; only that file goes.
 pub async fn delete_saved_file(path: &str) -> Result<(), JsValue> {
-    SAVES.with(|s| {
-        if let Some(vfs) = s.borrow_mut().as_mut() {
-            vfs.forget(path);
-        }
-    });
+    SAVES.with(|s| s.borrow_mut().remove(path));
     let namespace = opfs::namespace().await?;
     let Some(mut dir) = opfs::existing_dir(&namespace, SAVED_GAMES).await? else {
         return Ok(());

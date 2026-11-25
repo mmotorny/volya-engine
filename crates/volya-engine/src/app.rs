@@ -335,6 +335,10 @@ pub struct App {
     volumes: Option<[f32; 2]>,
     /// The console may have changed this frame.
     console_touched: bool,
+    /// Updates so far.
+    frames: u64,
+    /// The update in which a lost pointer lock opened the menu.
+    unlock_opened: Option<u64>,
 }
 
 /// The resolution of `vid_mode`.
@@ -395,6 +399,8 @@ impl App {
             save: None,
             volumes: None,
             console_touched: false,
+            frames: 0,
+            unlock_opened: None,
             data,
             assets: Assets::default(),
             origin: None,
@@ -446,6 +452,7 @@ impl App {
         input: &Input,
         audio: &mut dyn AudioOut,
     ) {
+        self.frames += 1;
         if let Some(at) = self.loaded_since.take() {
             self.load_ms = Some(time_ms - at);
         }
@@ -577,7 +584,12 @@ impl App {
                 if out.store_config || menu.quit_requested() {
                     self.save = Some(self.console.save());
                 }
-                if out.return_to_game {
+                // An Escape that follows a lost pointer lock in the same
+                // frame or the next is the one the browser used to leave the
+                // lock (when it lets the press through as well): it does not
+                // close the menu the unlock opened (our choice).
+                let guarded = self.unlock_opened.is_some_and(|at| self.frames <= at + 1);
+                if out.return_to_game && !guarded {
                     // `main_menu off`: the menu screen is discarded, which
                     // stops its music; the pause is released.
                     menu.stop(audio);
@@ -623,16 +635,19 @@ impl App {
                 }
                 level.update(now, input);
                 // Pointer lock lost while the controls are live opens the menu
-                // too (our choice: the browser takes Escape to leave pointer
-                // lock, so the key may never reach the game).
-                let asked = level.take_back_requested()
-                    || quit_key_pressed(data, input)
-                    || input.pointer_unlocked();
+                // too (our choice). The browser takes Escape to leave pointer
+                // lock: documented by the Pointer Lock specification (the
+                // user agent's exit gesture), believed for Chrome, so the key
+                // need not reach the game.
+                let unlocked = input.pointer_unlocked();
+                let asked =
+                    level.take_back_requested() || quit_key_pressed(data, input) || unlocked;
                 // The menu opens while the player's controls are live, not
                 // under the loading image (our choice).
                 if asked && overlay.is_none() {
                     *menu = Some(Box::new(TitleMenu::open(data, now, input, audio, in_game)));
                     self.screens.menu_opened();
+                    self.unlock_opened = unlocked.then_some(self.frames);
                 }
             }
         }
@@ -1180,6 +1195,100 @@ mod tests {
         let o = Overlay::new(LoadingScreen::default(), &mut audio);
         o.next_frame(&mut audio).unwrap().end(&mut audio);
         assert_eq!(audio.master_gains, [0.0, 1.0]);
+    }
+
+    /// An app in an empty level whose controls are live.
+    fn in_level() -> (fixture::MemVfs, App, Input, FakeAudio) {
+        let tree = fixture::tree();
+        let mut app = App::new(fixture::data(&tree)).unwrap();
+        app.assets = fixture::assets();
+        let (input, mut audio) = (Input::new(), FakeAudio::default());
+        app.update(&tree, 0.0, &input, &mut audio);
+        let controls = app.data.controls.clone();
+        app.phase = Some(Phase::Level {
+            level: Box::new(LevelScreen::empty(controls, 0)),
+            overlay: None,
+            intro: Intro::default(),
+            menu: None,
+        });
+        app.update(&tree, 16.0, &input, &mut audio);
+        assert!(app.level_controls().is_some(), "the controls are live");
+        (tree, app, input, audio)
+    }
+
+    fn menu_open(app: &App) -> bool {
+        matches!(app.state(), AppState::Level { menu: Some(_), .. })
+    }
+
+    #[test]
+    fn a_lost_pointer_lock_opens_the_menu_and_its_escape_does_not_close_it() {
+        let (tree, mut app, mut input, mut audio) = in_level();
+        input.handle(Event::PointerUnlocked);
+        app.update(&tree, 32.0, &input, &mut audio);
+        input.end_frame();
+        assert!(menu_open(&app), "the unlock opened the menu");
+        assert!(app.level_controls().is_none());
+        // The Escape the browser used to leave the lock, arriving a frame
+        // later, leaves it open.
+        press(&mut input, Key::Escape);
+        app.update(&tree, 48.0, &input, &mut audio);
+        input.end_frame();
+        assert!(menu_open(&app), "the following Escape is ignored");
+        // A later Escape closes it.
+        app.update(&tree, 64.0, &input, &mut audio);
+        press(&mut input, Key::Escape);
+        app.update(&tree, 80.0, &input, &mut audio);
+        input.end_frame();
+        assert!(!menu_open(&app), "a later Escape returns to the game");
+        // Escape opens it too, and closes it the next frame (no unlock).
+        press(&mut input, Key::Escape);
+        app.update(&tree, 96.0, &input, &mut audio);
+        input.end_frame();
+        assert!(menu_open(&app));
+        press(&mut input, Key::Escape);
+        app.update(&tree, 112.0, &input, &mut audio);
+        input.end_frame();
+        assert!(!menu_open(&app));
+    }
+
+    #[test]
+    fn a_setting_changed_in_the_menu_reaches_the_running_level() {
+        let (tree, mut app, mut input, mut audio) = in_level();
+        press(&mut input, Key::Escape);
+        app.update(&tree, 32.0, &input, &mut audio);
+        input.end_frame();
+        assert!(menu_open(&app));
+        // What the options screen's controls set (options-screens.md 5.3).
+        for line in [
+            "mouse_sens 0.5",
+            "mouse_invert on",
+            "g_always_run off",
+            "bind forward kT",
+        ] {
+            app.console.exec(line);
+        }
+        app.update(&tree, 48.0, &input, &mut audio);
+        let Some(Phase::Level { level, .. }) = &app.phase else {
+            panic!("not in the level")
+        };
+        let settings = level.controls().settings;
+        assert_eq!(
+            (
+                settings.mouse_sens,
+                settings.mouse_invert,
+                settings.always_run
+            ),
+            (0.5, true, false)
+        );
+        assert_eq!(level.player().settings.mouse_sens, 0.5);
+        assert_eq!(
+            level
+                .controls()
+                .bindings
+                .controls(crate::controls::MoveAction::Forward)
+                .collect::<Vec<_>>(),
+            [Control::Key(Key::T)]
+        );
     }
 
     #[test]

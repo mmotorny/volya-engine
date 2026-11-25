@@ -932,3 +932,94 @@ impl LevelScreen {
         self.player.settings = controls.settings;
     }
 }
+
+#[cfg(test)]
+impl LevelScreen {
+    /// A level with nothing in it, its player standing at the origin with
+    /// `controls` (unit tests of what runs a level; not drawn).
+    pub(crate) fn empty(controls: Controls, now: u64) -> Self {
+        use crate::core::collision::body::BodyConfig;
+        use crate::core::movement::Bobbing;
+        let weather = Weather::load(
+            &volya_engine_formats::ltx::parse(
+                b"[weathers]\ndefault = cycle\n[cycle]\n00:00:00 = w\n[w]\nfar_plane = 100\n",
+            )
+            .expect("weather"),
+            "default",
+        )
+        .expect("weather");
+        let clock = GameClock::new_game(&volya_engine_formats::ltx::parse(b"").expect("alife"))
+            .expect("clock");
+        let movement = MovementConfig {
+            walk_accel: 17.0,
+            run_coef: 2.1,
+            run_back_coef: 1.8,
+            walk_back_coef: 0.8,
+            crouch_coef: 0.45,
+            sprint_koef: 2.6,
+            walk_strafe_coef: 1.0,
+            run_strafe_coef: 1.0,
+            jump_speed: 6.0,
+            air_control_param: 0.1,
+            camera_height_factor: 0.85,
+            crash_speed_min: 14.0,
+            crash_speed_max: 30.0,
+            body: BodyConfig {
+                boxes: [[0.35, 0.9, 0.35], [0.35, 0.75, 0.35], [0.35, 0.6, 0.35]],
+                mass: 80.0,
+            },
+            lim_pitch: [-1.5, 1.5],
+            rot_speed: [3.0, 3.0, 0.0],
+            bobbing: Bobbing {
+                run_amplitude: 0.0075,
+                run_speed: 10.0,
+                walk_amplitude: 0.005,
+                walk_speed: 7.0,
+            },
+        };
+        let player = Player::new(
+            movement,
+            controls.settings,
+            [0.0; 3],
+            Angles::default(),
+            now,
+        );
+        let (a, b, t) = weather.bracket(clock.time_of_day());
+        let environment = Environment::blend(a, b, t, &[], player.view().eye, VIS_DISTANCE);
+        LevelScreen {
+            world: Arc::new(LevelWorld {
+                name: "empty".into(),
+                dir: String::new(),
+                shaders: Vec::new(),
+                draw_items: Vec::new(),
+                spheres: Vec::new(),
+                surfaces: Vec::new(),
+                draw_surfaces: Vec::new(),
+                not_drawn: Vec::new(),
+                sky: SkyTextures {
+                    sections: Vec::new(),
+                },
+                flares: vec![Flares {
+                    name: String::new(),
+                    rise: 0.0,
+                    down: 0.0,
+                    sun: None,
+                }],
+                geometry: Mutex::new(None),
+                objects: LevelObjects::default(),
+            }),
+            collision: CollisionWorld::new(Default::default(), Vec::new()).expect("collision"),
+            player,
+            controls,
+            near: camera::NEAR,
+            environment,
+            weather,
+            clock,
+            modifiers: Vec::new(),
+            shown: now,
+            last: now,
+            back: false,
+            sun_fade: SunFade::default(),
+        }
+    }
+}

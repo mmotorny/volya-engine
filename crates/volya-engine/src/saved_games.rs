@@ -167,7 +167,8 @@ impl SavedGames {
     /// Deletes the save at `path` and its picture, the `.dds` of the same
     /// name (section 3.6); returns the paths removed. Only that save's
     /// files go: a picture differing in case is taken when no exact one
-    /// exists and it is the only one (our choice).
+    /// exists, it is the only one, and no listed save has its exact name
+    /// (our choice).
     pub fn delete(&mut self, path: &str) -> Vec<String> {
         let Some(stem) = path.get(..path.len().saturating_sub(SAV.len())) else {
             return Vec::new();
@@ -178,10 +179,20 @@ impl SavedGames {
             .iter()
             .filter(|f| normal(&f.path) == normal(&exact))
             .collect();
+        // A picture differing in case is another save's when a save of its
+        // exact name is listed.
+        let owned = |p: &SavedFile| {
+            let stem = &p.path[..p.path.len() - DDS.len()];
+            self.files.iter().any(|f| {
+                f.path != path
+                    && has_ext(&f.path, SAV)
+                    && &f.path[..f.path.len() - SAV.len()] == stem
+            })
+        };
         let picture = pictures
             .iter()
             .find(|f| f.path == exact)
-            .or_else(|| (pictures.len() == 1).then(|| &pictures[0]))
+            .or_else(|| (pictures.len() == 1 && !owned(pictures[0])).then(|| &pictures[0]))
             .map(|f| f.path.clone());
         let mut removed = Vec::new();
         for doomed in std::iter::once(path.to_owned()).chain(picture) {
@@ -295,9 +306,11 @@ pub mod tests {
             None,
         );
         // Names differing in case are distinct rows; each delete takes one.
+        // A.dds is A.sav's picture, not a.sav's.
         assert_eq!(saves.rows(false).len(), 3);
-        assert_eq!(saves.delete("a.sav"), ["a.sav", "A.dds"]);
-        assert_eq!(saves.delete("A.sav"), ["A.sav"]);
+        assert_eq!(saves.delete("a.sav"), ["a.sav"]);
+        assert_eq!(saves.delete("A.sav"), ["A.sav", "A.dds"]);
+        // A picture differing in case, with no save of its exact name.
         assert_eq!(saves.delete("b.sav"), ["b.sav", "b.DDS"]);
         assert!(saves.files().is_empty());
     }

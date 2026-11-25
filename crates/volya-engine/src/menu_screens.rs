@@ -277,7 +277,6 @@ impl MenuScreens {
             pressed && matches!(c, Control::Key(k) if data.quit_keys.contains(&k))
         });
         if menu.in_game() && quit_key {
-            menu.stop(audio);
             out.return_to_game = true;
             return out;
         }

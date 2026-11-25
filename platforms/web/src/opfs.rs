@@ -207,17 +207,6 @@ impl OpfsVfs {
         }
     }
 
-    /// Closes file `path` and drops it from the tree (before it is
-    /// removed).
-    pub fn forget(&mut self, path: &str) {
-        let Ok(path) = normalize(path) else { return };
-        self.files.remove(&path);
-        let (dir, name) = path.rsplit_once('/').unwrap_or(("", &path));
-        if let Some(entries) = self.dirs.get_mut(dir) {
-            entries.retain(|e| e.name != name);
-        }
-    }
-
     /// Mounts the tree under `root`, opening every file read-only.
     pub async fn mount(root: &FileSystemDirectoryHandle) -> Result<Self, JsValue> {
         let mut vfs = Self {
