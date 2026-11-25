@@ -423,8 +423,19 @@ impl Simulation {
         system: &Config,
         supplies: &mut dyn FnMut(&ObjectRecord, u16) -> io::Result<u16>,
     ) -> io::Result<()> {
+        self.new_game_in(&mut io::Cursor::new(spawn_file), system, supplies)
+    }
+
+    /// As [`Self::new_game`], reading the spawn file from `spawn_file` an
+    /// object at a time.
+    pub fn new_game_in(
+        &mut self,
+        spawn_file: &mut (impl io::Read + io::Seek),
+        system: &Config,
+        supplies: &mut dyn FnMut(&ObjectRecord, u16) -> io::Result<u16>,
+    ) -> io::Result<()> {
         let mut next = self.next_id;
-        spawn::for_each_record(spawn_file, |r| {
+        spawn::for_each_record_in(spawn_file, |r| {
             let section = volya_engine_formats::object::section(r.spawn)?;
             let class = class_of(system, &section)?;
             let mut record = ObjectRecord::parse(r.spawn, r.update, class, true)?;

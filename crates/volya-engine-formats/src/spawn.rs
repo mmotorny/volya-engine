@@ -8,10 +8,10 @@
 //! of every object, which [`crate::object`] parses in full
 //! (docs/formats/sav.md, section 7).
 
-use std::io;
+use std::io::{self, BufReader, Cursor, Read, Seek, SeekFrom};
 use std::ops::ControlFlow;
 
-use crate::chunks::Chunks;
+use crate::chunks::{self, Chunks};
 use crate::packet::Reader;
 
 /// Top-level chunk holding the header.
@@ -143,43 +143,109 @@ pub struct Record<'a> {
 /// (chunks.md, section 2) of chunk 1's sub-chunk 1.
 pub fn for_each_record(
     file: &[u8],
+    visit: impl FnMut(Record<'_>) -> io::Result<ControlFlow<()>>,
+) -> io::Result<()> {
+    for_each_record_in(&mut Cursor::new(file), visit)
+}
+
+/// As [`for_each_record`], reading the file from `reader` a chunk at a
+/// time: only one object's chunk is held at once (a compressed chunk of
+/// the objects is read whole, as it must be decoded whole).
+pub fn for_each_record_in(
+    reader: &mut (impl Read + Seek),
     mut visit: impl FnMut(Record<'_>) -> io::Result<ControlFlow<()>>,
 ) -> io::Result<()> {
-    let top = Chunks::parse(file)?;
-    let objects = top.require(OBJECTS_CHUNK, "spawn file")?.content()?;
-    let objects = Chunks::parse(&objects)?;
-    let list = objects
-        .require(OBJECT_LIST_CHUNK, "spawn objects")?
-        .content()?;
-    let list = Chunks::parse(&list)?;
-    for object in list.list() {
-        let index = object.id();
-        let content = object.content()?;
-        let chunks = Chunks::parse(&content)?;
-        let what = format!("spawn object {index}");
-        let packets = chunks.require(PACKETS_CHUNK, &what)?.content()?;
-        let packets = Chunks::parse(&packets)?;
-        let spawn = packets.require(SPAWN_PACKET_CHUNK, &what)?.content()?;
-        let update = packets.require(UPDATE_PACKET_CHUNK, &what)?.content()?;
-        let record = Record {
-            index,
-            spawn: packet_data(&spawn)?,
-            update: packet_data(&update)?,
-        };
-        if visit(record)?.is_break() {
+    let end = reader.seek(SeekFrom::End(0))?;
+    // Headers and objects are read in stored order: through a buffer, few
+    // reads reach the file.
+    reader.seek(SeekFrom::Start(0))?;
+    let reader = &mut BufReader::with_capacity(64 << 10, reader);
+    let top = chunks::index_in(reader, 0, end)?;
+    let objects = chunks::require_header(&top, OBJECTS_CHUNK, "spawn file")?;
+    if objects.is_compressed() {
+        return objects_in(&objects.read_content(reader)?, &mut visit);
+    }
+    let range = |h: &chunks::ChunkHeader| (h.offset, h.offset + u64::from(h.size));
+    let (start, end) = range(objects);
+    let sub = chunks::index_in(reader, start, end)?;
+    let list = chunks::require_header(&sub, OBJECT_LIST_CHUNK, "spawn objects")?;
+    if list.is_compressed() {
+        return list_in(&list.read_content(reader)?, &mut visit);
+    }
+    let (start, end) = range(list);
+    let entries = chunks::index_in(reader, start, end)?;
+    for object in chunks::list_headers(&entries) {
+        let content = object.read_content(reader)?;
+        if visit_object(object.id(), &content, &mut visit)?.is_break() {
             break;
         }
     }
     Ok(())
 }
 
+/// The objects of chunk 1's content `objects`.
+fn objects_in(
+    objects: &[u8],
+    visit: &mut impl FnMut(Record<'_>) -> io::Result<ControlFlow<()>>,
+) -> io::Result<()> {
+    let objects = Chunks::parse(objects)?;
+    let list = objects
+        .require(OBJECT_LIST_CHUNK, "spawn objects")?
+        .content()?;
+    list_in(&list, visit)
+}
+
+/// The objects of the object list's content `list`.
+fn list_in(
+    list: &[u8],
+    visit: &mut impl FnMut(Record<'_>) -> io::Result<ControlFlow<()>>,
+) -> io::Result<()> {
+    let list = Chunks::parse(list)?;
+    for object in list.list() {
+        if visit_object(object.id(), &object.content()?, visit)?.is_break() {
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// Object `index`, the content of its chunk `content`.
+fn visit_object(
+    index: u32,
+    content: &[u8],
+    visit: &mut impl FnMut(Record<'_>) -> io::Result<ControlFlow<()>>,
+) -> io::Result<ControlFlow<()>> {
+    let chunks = Chunks::parse(content)?;
+    let what = format!("spawn object {index}");
+    let packets = chunks.require(PACKETS_CHUNK, &what)?.content()?;
+    let packets = Chunks::parse(&packets)?;
+    let spawn = packets.require(SPAWN_PACKET_CHUNK, &what)?.content()?;
+    let update = packets.require(UPDATE_PACKET_CHUNK, &what)?.content()?;
+    visit(Record {
+        index,
+        spawn: packet_data(&spawn)?,
+        update: packet_data(&update)?,
+    })
+}
+
 /// Calls `visit` with the common part of every object's spawn packet, in
 /// object-index order, until it breaks.
 pub fn for_each_object(
     file: &[u8],
+    visit: impl FnMut(&SpawnObject<'_>) -> ControlFlow<()>,
+) -> io::Result<()> {
+    for_each_object_in(&mut Cursor::new(file), visit)
+}
+
+/// As [`for_each_object`], reading the file from `reader` as
+/// [`for_each_record_in`] does.
+pub fn for_each_object_in(
+    reader: &mut (impl Read + Seek),
     mut visit: impl FnMut(&SpawnObject<'_>) -> ControlFlow<()>,
 ) -> io::Result<()> {
-    for_each_record(file, |r| Ok(visit(&parse_spawn_packet(r.index, r.spawn)?)))
+    for_each_record_in(reader, |r| {
+        Ok(visit(&parse_spawn_packet(r.index, r.spawn)?))
+    })
 }
 
 /// The spawn file's identifier: bytes 4 … 19 of its header, chunk 0
@@ -212,8 +278,13 @@ pub struct ActorStart {
 
 /// Finds the actor in spawn file `file`.
 pub fn actor_start(file: &[u8]) -> io::Result<ActorStart> {
+    actor_start_in(&mut Cursor::new(file))
+}
+
+/// Finds the actor in the spawn file read from `reader`, a chunk at a time.
+pub fn actor_start_in(reader: &mut (impl Read + Seek)) -> io::Result<ActorStart> {
     let mut found = None;
-    for_each_object(file, |o| {
+    for_each_object_in(reader, |o| {
         if o.section != ACTOR_SECTION {
             return ControlFlow::Continue(());
         }

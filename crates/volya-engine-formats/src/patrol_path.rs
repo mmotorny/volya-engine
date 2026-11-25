@@ -7,9 +7,9 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::io;
+use std::io::{self, Read, Seek, SeekFrom};
 
-use crate::chunks::Chunks;
+use crate::chunks::{self, Chunks};
 use crate::packet::Reader;
 
 /// Top-level chunk of the spawn file holding the paths.
@@ -119,6 +119,16 @@ impl PatrolPaths {
         let content = top
             .require(PATHS_CHUNK, "spawn file: patrol paths")?
             .content()?;
+        Self::parse_chunk(&content)
+    }
+
+    /// As [`Self::parse`], reading only chunk 3 of the spawn file from
+    /// `reader`.
+    pub fn read(reader: &mut (impl Read + Seek)) -> io::Result<Self> {
+        let end = reader.seek(SeekFrom::End(0))?;
+        let top = chunks::index_in(reader, 0, end)?;
+        let content = chunks::require_header(&top, PATHS_CHUNK, "spawn file: patrol paths")?
+            .read_content(reader)?;
         Self::parse_chunk(&content)
     }
 

@@ -34,8 +34,8 @@ What each loading stage keeps, and the blocks it leaves live:
 
 | Stage | Keeps | Blocks kept | Allocations made | Peak above the stage's start |
 |---|---|---|---|---|
-| `st_creating_new_game` | 4.7 MB | 66 | 452 | 12.8 MB |
-| `st_server_connecting` (the offline simulation: registry 7.9, navigation 7.1, graph and paths 1.8; the registry 14.8 before #370) | 12.7 MB (19.8 before) | 109,329 | 603,934 | 14.1 MB (19.8 before) |
+| `st_creating_new_game` (the game graph; `all.spawn` and `game.graph` read as streams since #403) | 0.2 MB (4.7 before: the spawn file kept) | 66 | 519 | 0.7 MB (12.8 before) |
+| `st_server_connecting` (the offline simulation: registry 7.9, navigation 7.1, graph and paths 1.8; the registry 14.8 before #370) | 17.2 MB with the graph from the stage before (12.7 before #403, the spawn file freed here) | 109,329 | 612,580 | 17.2 MB (14.1 before #403, 19.8 before #370) |
 | `st_opening_stream` (the `level` file's parts) | 7.8 MB | 6,887 | 41,503 | 12.6 MB |
 | `st_loading_cform` (collision: vertices 8.4, triangles 11.0, materials 1.4, grid 9.3; before #371 triangles 16.5 and grid 15.8) | 30.7 MB (42.7 before) | 9,654 | 14,924 | 35.1 MB (45.0 before) |
 | `st_loading_geometry` | 0.4 MB | 121 | 205 | 0.7 MB |
@@ -49,7 +49,7 @@ The registry is one list indexed by id with each object's record inline; the thr
 
 ### Loading temporaries
 
-Each stage's peak above what it keeps: about 24 MB in all, the largest 8.1 MB (`st_creating_new_game`: the spawn file and the game graph read whole), 4.8 (`st_client_spawning`), 4.8 (`st_opening_stream`), 5.4 (`st_loading_spatial_db`), 2.8 (`st_loading_textures`), 2.3 (`st_loading_cform`). By count they are the many: `st_client_spawning` makes 2.46 million allocations to keep 6,929 blocks, `st_server_connecting` 603,156 to keep 108,551.
+Each stage's peak above what it keeps: about 16 MB in all (24 before `all.spawn` and `game.graph` were streamed, #403, whose 8.1 MB under `st_creating_new_game` is gone: the spawn file is read an object at a time through a 64 KiB buffer, the graph a record at a time), the largest 4.8 (`st_client_spawning`), 4.8 (`st_opening_stream`), 5.4 (`st_loading_spatial_db`), 2.8 (`st_loading_textures`), 2.3 (`st_loading_cform`). By count they are the many: `st_client_spawning` makes 2.46 million allocations to keep 6,929 blocks, `st_server_connecting` 603,156 to keep 108,551.
 
 ### Per-frame temporaries
 
@@ -92,7 +92,7 @@ Measured in headless Chrome (`menu` suite, `level_stats`) for the first level: t
 
 ## Design: one heap, its large blocks small or streamed (#399)
 
-User decision (2026-11-25), from the measurements below: the engine keeps one heap. What needs new memory is the level's large blocks, not its small ones, so each large block is made smaller or read as a stream into its final form (#403): the collision world (done, #371), the registry (done, #370), `game.graph` and `all.spawn`, the navigation data, and anything else large. The one arena is a bump arena for a frame's temporaries (the scene, the draw list), all freed at the frame's end (#402); pools (#404) and replacing the level's `BTreeMap`s (#405) follow only if measurement shows they matter. Heap minus live is measured after the first and second New Game on both paths after each step; arenas are revisited only if it stays large. No other allocator algorithm is tried (#400, not planned).
+User decision (2026-11-25), from the measurements below: the engine keeps one heap. What needs new memory is the level's large blocks, not its small ones, so each large block is made smaller or read as a stream into its final form (#403): the collision world (done, #371), the registry (done, #370), `game.graph` and `all.spawn` (streamed, #403), the navigation data, and anything else large. The one arena is a bump arena for a frame's temporaries (the scene, the draw list), all freed at the frame's end (#402); pools (#404) and replacing the level's `BTreeMap`s (#405) follow only if measurement shows they matter. Heap minus live is measured after the first and second New Game on both paths after each step; arenas are revisited only if it stays large. No other allocator algorithm is tried (#400, not planned).
 
 Done when heap minus live after the first and the second New Game is near zero on both paths (#399). Each step is measured natively (`loading_memory.rs`: each stage's peak, kept bytes, allocations and blocks kept; `frame_memory.rs`) and in the browser (`heap_log`).
 

@@ -172,7 +172,7 @@ impl ChunkHeader {
 
     /// Reads the stored payload.
     pub fn read_payload(&self, reader: &mut (impl Read + Seek)) -> io::Result<Vec<u8>> {
-        reader.seek(SeekFrom::Start(self.offset))?;
+        seek_to(reader, self.offset)?;
         let mut payload = vec![0; self.size as usize];
         reader.read_exact(&mut payload)?;
         Ok(payload)
@@ -194,8 +194,21 @@ impl ChunkHeader {
 /// returns the headers in stored order, validated as [`Chunks::parse`] does.
 pub fn index(reader: &mut (impl Read + Seek)) -> io::Result<Vec<ChunkHeader>> {
     let end = reader.seek(SeekFrom::End(0))?;
+    index_in(reader, 0, end)
+}
+
+/// Walks the chunk sequence filling bytes `start`…`end` of `reader` (a
+/// chunk's payload, for nested sequences) and returns the headers in stored
+/// order, validated as [`Chunks::parse`] does, offsets in the errors
+/// counted from `start` as there.
+pub fn index_in(
+    reader: &mut (impl Read + Seek),
+    start: u64,
+    end: u64,
+) -> io::Result<Vec<ChunkHeader>> {
     let mut headers = Vec::new();
-    let mut offset = 0u64;
+    let mut offset = start;
+    seek_to(reader, start)?;
     while offset < end {
         let remaining = end - offset;
         if remaining < HEADER_SIZE as u64 {
@@ -204,14 +217,14 @@ pub fn index(reader: &mut (impl Read + Seek)) -> io::Result<Vec<ChunkHeader>> {
             )));
         }
         let mut header = [0u8; HEADER_SIZE];
-        reader.seek(SeekFrom::Start(offset))?;
         reader.read_exact(&mut header)?;
         let id_word = u32::from_le_bytes(header[..4].try_into().unwrap());
         let size = u32::from_le_bytes(header[4..].try_into().unwrap());
         if u64::from(size) > remaining - HEADER_SIZE as u64 {
             return Err(invalid(format!(
-                "chunk {:#x} at {offset} claims {size} bytes, {} remain",
+                "chunk {:#x} at {} claims {size} bytes, {} remain",
                 id_word & !COMPRESSED,
+                offset - start,
                 remaining - HEADER_SIZE as u64
             )));
         }
@@ -221,8 +234,38 @@ pub fn index(reader: &mut (impl Read + Seek)) -> io::Result<Vec<ChunkHeader>> {
             size,
         });
         offset += HEADER_SIZE as u64 + u64::from(size);
+        reader.seek_relative(i64::from(size))?;
     }
     Ok(headers)
+}
+
+/// Moves `reader` to `offset` by a relative seek, which a `BufReader`
+/// serves from its buffer when the offset is within it.
+fn seek_to(reader: &mut (impl Read + Seek), offset: u64) -> io::Result<()> {
+    let at = reader.stream_position()?;
+    reader.seek_relative(offset as i64 - at as i64)
+}
+
+/// The headers of a list stored as sub-chunks 0, 1, 2, … among `headers`,
+/// as [`Chunks::list`] finds it.
+pub fn list_headers(headers: &[ChunkHeader]) -> Vec<&ChunkHeader> {
+    let mut first = HashMap::new();
+    for h in headers {
+        first.entry(h.id()).or_insert(h);
+    }
+    (0..)
+        .map_while(|id| first.get(&id).copied().filter(|h| h.size != 0))
+        .collect()
+}
+
+/// The first header with id `id`, or an error naming `what` if missing,
+/// as [`Chunks::require`].
+pub fn require_header<'h>(
+    headers: &'h [ChunkHeader],
+    id: u32,
+    what: &str,
+) -> io::Result<&'h ChunkHeader> {
+    find_header(headers, id).ok_or_else(|| invalid(format!("{what}: chunk {id:#x} missing")))
 }
 
 /// The first header with id `id`, compressed flag ignored (section 3).
