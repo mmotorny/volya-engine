@@ -66,6 +66,16 @@ thread_local! {
     static GPU: RefCell<Option<Gpu>> = const { RefCell::new(None) };
     /// Why there is no GPU, once initialisation failed.
     static UNAVAILABLE: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// Milliseconds from a frame's submission until the browser reported
+    /// the GPU done with it, for frames reported since the last frame.
+    static DONE_MS: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
+    /// The latest frames' GPU times and submitted-to-done times while the
+    /// diagnostic log is on, milliseconds, for `level_stats`.
+    static RECENT: RefCell<[std::collections::VecDeque<f64>; 2]> = Default::default();
+    /// The size the game last drew at and the canvas's, for the diagnostic
+    /// log.
+    static DRAWN: std::cell::Cell<Option<(Resolution, Resolution)>> =
+        const { std::cell::Cell::new(None) };
 }
 
 fn error(e: impl std::fmt::Display) -> JsValue {
@@ -225,6 +235,11 @@ pub struct Status {
     /// (decoded).
     #[serde(skip_serializing_if = "Option::is_none")]
     textures: Option<&'static str>,
+    /// How the diagnostic log times frames on the GPU: `timestamp-query`
+    /// (`gpu.time_ms` and `gpu.done_ms`) or `submitted-work-done`
+    /// (`gpu.done_ms` only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timing: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     format: Option<String>,
     /// Canvas size in pixels.
@@ -257,6 +272,11 @@ pub fn status() -> Status {
                     .features()
                     .contains(wgpu::Features::TEXTURE_COMPRESSION_BC),
             ),
+            timing: Some(if gpu.renderer.can_time_gpu() {
+                "timestamp-query"
+            } else {
+                "submitted-work-done"
+            }),
             format: Some(format!("{:?}", gpu.config.format)),
             size: Some([gpu.config.width, gpu.config.height]),
         })
@@ -273,6 +293,7 @@ pub fn status() -> Status {
             backend: None,
             textures: None,
             bc: None,
+            timing: None,
             format: None,
             size: None,
         }
@@ -289,6 +310,38 @@ pub fn prepare_world(level: &Arc<LevelWorld>, budget: u64) -> Result<bool, JsVal
         })?
         .map_err(error)
     })
+}
+
+/// Frames whose GPU times `level_stats` averages.
+const RECENT_FRAMES: usize = 60;
+
+/// The longest [`submitted_work_done`] waits, milliseconds.
+const WORK_DONE_TIMEOUT_MS: f64 = 30_000.0;
+
+/// Resolves once the browser reports the GPU done with all work submitted
+/// so far (`onSubmittedWorkDone` on WebGPU; on WebGL 2 wgpu's fences,
+/// checked when the frame loop polls the device), or after
+/// [`WORK_DONE_TIMEOUT_MS`]; at once without graphics.
+pub async fn submitted_work_done() -> Result<(), JsValue> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let done = Arc::new(AtomicBool::new(false));
+    let set = done.clone();
+    let asked = GPU.with(|g| {
+        g.borrow().as_ref().map(|gpu| {
+            gpu.queue
+                .on_submitted_work_done(move || set.store(true, Ordering::Release))
+        })
+    });
+    if asked.is_none() {
+        return Ok(());
+    }
+    // A lost device may never report: given up on after a while (our
+    // choice), the loading going on.
+    let start = crate::now();
+    while !done.load(Ordering::Acquire) && crate::now() - start < WORK_DONE_TIMEOUT_MS {
+        crate::opfs::sleep(2).await?;
+    }
+    Ok(())
 }
 
 /// Runs `f` with the renderer, `None` without graphics.
@@ -341,7 +394,14 @@ pub fn world_stats() -> serde_json::Value {
     GPU.with(|g| {
         let g = g.borrow();
         let world = g.as_ref().and_then(|gpu| gpu.presenter.world());
+        let [time, done] = RECENT.with(|r| {
+            r.borrow()
+                .clone()
+                .map(|q| (!q.is_empty()).then(|| q.iter().sum::<f64>() / q.len() as f64))
+        });
         json!({
+            "gpu_time_ms": time,
+            "gpu_done_ms": done,
             "gpu_world_bytes": world.map(|w| w.gpu_bytes()),
             "gpu_texture_bytes": world.map(|w| w.texture_bytes()),
             "skipped_draws": world.map(|w| w.skipped()),
@@ -377,8 +437,21 @@ pub fn frame(time: f64) {
         });
         // The game's screen, redrawn every frame while it runs (videos and
         // the cursor animate); otherwise what `debug_draw` set.
-        match crate::engine::draw_list(&mut gpu.renderer, &mut gpu.presenter, resolution) {
+        let list = tracing::info_span!("render.scene").in_scope(|| {
+            crate::engine::draw_list(&mut gpu.renderer, &mut gpu.presenter, resolution)
+        });
+        match list {
             Some(list) => {
+                if DRAWN.get() != Some((resolution, canvas)) {
+                    DRAWN.set(Some((resolution, canvas)));
+                    tracing::info!(
+                        width = resolution.width,
+                        height = resolution.height,
+                        canvas_width = canvas.width,
+                        canvas_height = canvas.height,
+                        "video mode"
+                    );
+                }
                 gpu.present_at(&list, (resolution.width, resolution.height));
                 // Once the game stops, the debug list is drawn over it.
                 gpu.dirty = true;
@@ -392,11 +465,57 @@ pub fn frame(time: f64) {
                 }
             }
         }
+        gpu.gpu_times();
         Ok(())
     });
 }
 
 impl Gpu {
+    /// The diagnostic log's GPU times (#355), while it is on: each frame's
+    /// GPU time by timestamp queries where the device has them
+    /// (`gpu.time_ms`), and everywhere the time from a frame's submission
+    /// until the browser reports the GPU done with all work submitted so
+    /// far (`gpu.done_ms`, `onSubmittedWorkDone`; on WebGL 2 wgpu checks its
+    /// fences when polled, once a frame, so it is then rounded up to
+    /// frames).
+    fn gpu_times(&mut self) {
+        let on = crate::diagnostics::on();
+        self.renderer.set_gpu_timing(on);
+        if !on {
+            return;
+        }
+        let keep = |i: usize, ms: f64| {
+            RECENT.with(|r| {
+                let q = &mut r.borrow_mut()[i];
+                if q.len() == RECENT_FRAMES {
+                    q.pop_front();
+                }
+                q.push_back(ms);
+            });
+        };
+        for ms in self.renderer.take_gpu_times() {
+            volya_engine::core::diagnostics::metric("gpu.time_ms", ms);
+            keep(0, ms);
+        }
+        for ms in DONE_MS.with(|d| std::mem::take(&mut *d.borrow_mut())) {
+            volya_engine::core::diagnostics::metric("gpu.done_ms", ms);
+            keep(1, ms);
+        }
+    }
+
+    /// Asks to be told when the GPU is done with the work submitted so far
+    /// (`gpu.done_ms`), while the diagnostic log is on.
+    fn watch_done(&self) {
+        if !crate::diagnostics::on() {
+            return;
+        }
+        let submitted = crate::now();
+        self.queue.on_submitted_work_done(move || {
+            let ms = crate::now() - submitted;
+            DONE_MS.with(|d| d.borrow_mut().push(ms));
+        });
+    }
+
     fn present(&mut self, list: &DrawList) {
         self.present_at(list, (self.config.width, self.config.height));
     }
@@ -413,9 +532,12 @@ impl Gpu {
             }
             _ => return,
         };
-        self.renderer
-            .render_scaled(&texture.texture, list, CLEAR, size);
-        self.queue.present(texture);
+        tracing::info_span!("render.encode").in_scope(|| {
+            self.renderer
+                .render_scaled(&texture.texture, list, CLEAR, size);
+        });
+        self.watch_done();
+        tracing::info_span!("render.present").in_scope(|| self.queue.present(texture));
         self.dirty = false;
     }
 

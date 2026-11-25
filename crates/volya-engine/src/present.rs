@@ -304,7 +304,8 @@ impl Presenter {
             // now rather than while the level runs.
             renderer.reserve_particles(scene.world.particle_capacity);
             self.load_lights(renderer, tree, &scene.world);
-            let world = self.upload_world(renderer, tree, &scene.world);
+            let world = tracing::info_span!("render.upload_world")
+                .in_scope(|| self.upload_world(renderer, tree, &scene.world));
             let world = world
                 .map_err(|e| self.errors.push(format!("{}: {e}", scene.world.dir)))
                 .ok();

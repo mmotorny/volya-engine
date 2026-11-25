@@ -698,7 +698,10 @@ export const tests = {
     assert(meta?.args.name.startsWith("Volya Engine "), "no process name");
     const session = find("i", "session")[0].args;
     for (const key of ["version", "user_agent", "screen", "dpr", "cores", "gpu_state"]) assert(key in session, `session lacks ${key}`);
-    if (session.gpu_state === "ready") assert(["webgpu", "webgl2"].includes(session.gpu_backend) && session.gpu_textures, "no backend");
+    if (session.gpu_state === "ready") {
+      assert(["webgpu", "webgl2"].includes(session.gpu_backend) && session.gpu_textures, "no backend");
+      assert(["timestamp-query", "submitted-work-done"].includes(session.gpu_timing), `gpu_timing ${session.gpu_timing}`);
+    }
     assert(find("i", "test marker")[0]?.tid === 2, "no page event");
     // A period's series: the spans' times, the metrics and counts.
     const series = (key) => mine.filter((e) => e.ph === "C" && key in e.args).length;

@@ -1317,6 +1317,17 @@ impl App {
         self.video
     }
 
+    /// Sets `vid_mode` to `mode` and applies it, as a video restart would
+    /// (tests and measurements: the frame's cost at a given size).
+    pub fn set_video_mode(&mut self, mode: Resolution) {
+        self.console
+            .exec(&format!("vid_mode {}x{}", mode.width, mode.height));
+        self.video = video_mode(&self.console);
+        if let Some(Phase::Menu(menu)) = &mut self.phase {
+            menu.resized(&self.data, self.video);
+        }
+    }
+
     /// The user configuration file to store (section 12.3), once asked for:
     /// when the options screen closes and when the player quits.
     pub fn take_save(&mut self) -> Option<Vec<u8>> {

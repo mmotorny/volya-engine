@@ -92,9 +92,9 @@ pub async fn launch() -> Result<serde_json::Value, JsValue> {
                 data.set_user_config(user);
             }
             let mut app = App::new(data).map_err(error)?;
-            // Where WebGL 2 draws, the level's textures (transcoded on a
-            // GPU without BC) and geometry are uploaded while it loads, a
-            // piece at a time (#113, #184).
+            // The level's textures (transcoded on a GPU without BC) and
+            // geometry are uploaded while it loads, a piece at a time
+            // (#113, #184, #355).
             app.set_prepare_textures(crate::textures::wanted());
             app.resized(native);
             app.set_saved_games(saves);
@@ -171,6 +171,18 @@ fn store_user_config(bytes: Vec<u8>) {
 /// otherwise (the splash and the page draw at the canvas's size).
 pub fn render_size() -> Option<Resolution> {
     RUNNING.with(|r| r.borrow().as_ref().map(|running| running.app.video_mode()))
+}
+
+/// The `debug_video_mode` op (tests): draws at `mode` from now on
+/// ([`App::set_video_mode`]).
+#[cfg(feature = "test-ops")]
+pub fn set_video_mode(mode: Resolution) -> Result<(), JsValue> {
+    RUNNING.with(|r| {
+        let mut r = r.borrow_mut();
+        let running = r.as_mut().ok_or_else(|| error("the game is not running"))?;
+        running.app.set_video_mode(mode);
+        Ok(())
+    })
 }
 
 /// The texture files of the level shown, if any.
