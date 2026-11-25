@@ -435,6 +435,102 @@ export const tests = {
     return `${note}; ${JSON.stringify(stats)}`;
   },
 
+  "desktop: full screen with Keyboard Lock is offered in the level; accepting locks the keys, then asks for full screen": async () => {
+    needsGame();
+    await until((s) => s.phase === "level" && !s.menu && !s.intro, "the level's controls");
+    const offer = document.getElementById("fullscreen-offer");
+    const request = Element.prototype.requestFullscreen;
+    const native = Boolean(navigator.keyboard?.lock);
+    // Headless Chrome can't enter full screen without a real gesture: the
+    // APIs are stubbed, recording their calls.
+    const calls = [];
+    const keyboard = { lock: async (codes) => calls.push(["lock", codes]), unlock: () => calls.push(["unlock"]) };
+    Object.defineProperty(navigator, "keyboard", { value: keyboard, configurable: true });
+    Element.prototype.requestFullscreen = async function () {
+      calls.push(["fullscreen", this === document.documentElement]);
+      Object.defineProperty(document, "fullscreenElement", { value: document.documentElement, configurable: true });
+      document.dispatchEvent(new Event("fullscreenchange"));
+    };
+    // Not offered on macOS (our choice): the platform reads as Windows here.
+    Object.defineProperty(navigator, "userAgentData", { value: { platform: "Windows" }, configurable: true });
+    const exit = document.exitFullscreen;
+    document.exitFullscreen = async () => {
+      calls.push(["exit"]);
+      delete document.fullscreenElement;
+      document.dispatchEvent(new Event("fullscreenchange"));
+    };
+    const render = () => document.dispatchEvent(new Event("fullscreenchange"));
+    // The engine stops owning the screen (as when the player quits), then
+    // owns it again: to the offer, the game ended and a new one began.
+    const newGame = async () => {
+      await volya.call("input_capture", { on: false });
+      await volya.call("input_capture", { on: true });
+    };
+    const shown = async (want) => {
+      for (let i = 0; i < 50 && offer.hidden === want; i++) await sleep(20);
+      return !offer.hidden;
+    };
+    try {
+      // Shown now that the APIs are there (it shows again on any change).
+      render();
+      assert(await shown(true), "the offer shows");
+      const button = offer.querySelector("button:not(.close)");
+      const close = offer.querySelector("button.close");
+      assertEqual([button.textContent, offer.querySelector("p").textContent], ["Full screen", "Keeps shortcuts such as Ctrl+W in the game. Hold Esc to leave full screen."], "text");
+      assertEqual(close.getAttribute("aria-label"), "Close", "the close control");
+      // Closed, it stays away in this game, through the menu too.
+      close.click();
+      assert(offer.hidden, "closed");
+      render();
+      key("Escape");
+      await until((s) => inGame(s), "the in-game menu");
+      key("Escape");
+      await until((s) => s.phase === "level" && !s.menu, "back in the game");
+      assert(!(await shown(true)), "not shown again after the menu");
+      // The next game offers it again.
+      await newGame();
+      render();
+      assert(await shown(true), "offered in the next game");
+      calls.length = 0;
+      // A press on it is the page's, not the game's.
+      const before = await volya.call("input_state");
+      const at = button.getBoundingClientRect();
+      button.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: at.x + 5, clientY: at.y + 5, pointerType: "mouse", button: 0, buttons: 1 }));
+      const after = await volya.call("input_state");
+      assert(!after.recent.some((a) => a.seq > before.count && a.action === "press"), "no press reached the game");
+      button.click();
+      await until(() => calls.some(([c]) => c === "fullscreen"), "full screen asked for");
+      assertEqual(calls[0][0], "lock", "the keyboard locked first");
+      for (const code of ["KeyW", "KeyT", "KeyN", "Escape", "ControlLeft", "KeyA", "Space"]) {
+        assert(calls[0][1].includes(code), `${code} locked: ${calls[0][1]}`);
+      }
+      // The system's ways out stay its own, bound or not.
+      for (const code of ["Tab", "F4", "MetaLeft", "MetaRight"]) {
+        assert(!calls[0][1].includes(code), `${code} not locked`);
+      }
+      assertEqual(calls[1], ["fullscreen", true], "the page's root in full screen");
+      assert(offer.hidden, "no offer in full screen");
+      // Escape (a short press under the lock) still opens the menu.
+      key("Escape");
+      await until((s) => inGame(s), "the in-game menu");
+      key("Escape");
+      await until((s) => s.phase === "level" && !s.menu, "back in the game");
+      // The game ends: the page leaves full screen, then the lock ends.
+      await volya.call("input_capture", { on: false });
+      await until(() => calls.some(([c]) => c === "exit"), "full screen left on quitting");
+      await until(() => calls.some(([c]) => c === "unlock"), "unlocked");
+      await volya.call("input_capture", { on: true });
+      return `navigator.keyboard.lock ${native ? "present" : "absent"} in headless Chrome; locked ${calls[0][1].length} keys`;
+    } finally {
+      delete navigator.keyboard;
+      delete navigator.userAgentData;
+      Element.prototype.requestFullscreen = request;
+      document.exitFullscreen = exit;
+      delete document.fullscreenElement;
+      document.dispatchEvent(new Event("fullscreenchange"));
+    }
+  },
+
   "keyboard: W walks forward and Space jumps, leaving and regaining the ground": async () => {
     needsGame();
     const player = async () => (await state()).level.player;
@@ -672,21 +768,32 @@ export const tests = {
     return `moved ${moved.toFixed(2)} m, turned ${turned.toFixed(2)} rad, sprint-locked ${sprinted.toFixed(2)} m`;
   },
 
-  "New Game again after returning: the level loads anew": async () => {
+  "New Game again after returning: the level loads anew; Escape under the loading image opens the menu once the controls are live": async () => {
     needsGame();
     pointer("pointermove", row(0));
     await until((s) => s.menu.selected === 0, "item 0");
     key("Enter");
     await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
     key("Enter");
+    // Escape while the loading image covers the level's first frames,
+    // before the intro starts under its last two: kept (#96).
+    await until((s) => s.phase === "level" && s.overlay_frames > 6, "the loading image over the level", 60000);
+    key("Escape");
+    const asked = await until((s) => s.menu_asked || s.intro || s.menu, "the Escape taken");
+    const seen = { menu_asked: asked.menu_asked, overlay: asked.overlay_frames, intro: Boolean(asked.intro) };
+    assert(asked.menu_asked && !asked.menu, `the menu asked for, not open: ${JSON.stringify(seen)}`);
     const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level again", 60000);
     assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
-    // The intro again; a tap skips it (our design for touch).
-    assert(s.intro, "the intro plays");
+    // The intro again; a tap skips it (our design for touch). The controls
+    // go live then, and the menu opens at once.
+    assert(s.intro && !s.menu, "the intro plays, no menu");
     const tap = { pointerType: "touch", pointerId: 21, isPrimary: true, button: 0 };
     pointer("pointerdown", client(512, 384), { ...tap, buttons: 1 });
     pointer("pointerup", client(512, 384), { ...tap, buttons: 0 });
-    await until((s) => s.phase === "level" && !s.intro, "the tap to skip the intro");
+    const opened = await until((s) => s.phase === "level" && !s.intro, "the tap to skip the intro");
+    assert(inGame(opened), "the in-game menu opened as the controls went live");
+    key("Escape");
+    await until((s) => s.phase === "level" && !s.menu, "back in the game");
     // A gamepad (the Gamepad API, faked): the left stick pushed up runs.
     const start = (await state()).level.player;
     const pad = { index: 0, mapping: "standard", axes: [0, -1, 0, 0], buttons: Array.from({ length: 17 }, () => ({ pressed: false, value: 0 })) };
@@ -750,6 +857,101 @@ export const tests = {
     key("Escape");
     await until((s) => s.phase === "level" && !s.menu, "back in the game");
     return `audio ${audioBefore} before hiding; engine clock +${ran} ms over the return`;
+  },
+
+  "the save screen's name: typed through the device keyboard's input on touch, and the on-screen keyboard with a gamepad": async () => {
+    needsGame();
+    key("Escape");
+    await until((s) => inGame(s), "the in-game menu");
+    await selectInGame("btn_save");
+    key("Enter");
+    const save = async () => (await until((s) => s.menu?.save_screen, "the save screen")).menu.save_screen;
+    const [fx, fy, fw, fh] = (await save()).field;
+    // Touch (seen earlier in this page): the text entry lies over the field.
+    const entry = document.querySelector("#text-entry input");
+    for (let i = 0; i < 50 && entry.parentElement.hidden; i++) await sleep(20);
+    assert(!entry.parentElement.hidden, "the text entry shows");
+    const [x, y] = client(fx + fw / 2, fy + fh / 2);
+    assertEqual(document.elementFromPoint(x, y), entry, "the text entry over the field");
+    // A tap on it reaches the engine: the field takes focus. (A synthesized
+    // tap can't focus the input or raise a keyboard: focused by hand.)
+    const touch = { pointerType: "touch", pointerId: 31, isPrimary: true, button: 0, bubbles: true, cancelable: true, clientX: x, clientY: y };
+    entry.dispatchEvent(new PointerEvent("pointerdown", { ...touch, buttons: 1 }));
+    entry.dispatchEvent(new PointerEvent("pointerup", { ...touch, buttons: 0 }));
+    await until((s) => s.menu?.save_screen?.focused, "the field focused by the tap");
+    entry.focus();
+    // Typed text reaches the field by its own rules (Cyrillic types nothing).
+    entry.value = "Ab1ж";
+    entry.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: "Ab1ж", bubbles: true }));
+    await until((s) => s.menu?.save_screen?.name === "Ab1", "the typed name");
+    assertEqual(entry.value, "", "the input emptied");
+    // An input method's composition: nothing until it ends, then its text.
+    entry.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    entry.value = "x";
+    entry.dispatchEvent(new InputEvent("input", { inputType: "insertCompositionText", data: "x", isComposing: true, bubbles: true }));
+    await sleep(100);
+    assertEqual((await save()).name, "Ab1", "nothing while composing");
+    assertEqual(entry.value, "x", "the composition kept in the input");
+    entry.dispatchEvent(new CompositionEvent("compositionend", { data: "x", bubbles: true }));
+    await until((s) => s.menu?.save_screen?.name === "Ab1x", "the composed text");
+    assertEqual(entry.value, "", "the input emptied after composing");
+    // Typographic quotes as plain ones.
+    entry.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: "\u2019", bubbles: true }));
+    await until((s) => s.menu?.save_screen?.name === "Ab1x'", "a curly quote typed as '");
+    const del = () => entry.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", code: "", bubbles: true, cancelable: true }));
+    del();
+    del();
+    await until((s) => s.menu?.save_screen?.name === "Ab1", "deleted again");
+    // The device keyboard's Backspace and Enter without key codes.
+    const press = (key) => entry.dispatchEvent(new KeyboardEvent("keydown", { key, code: "", bubbles: true, cancelable: true }));
+    press("Backspace");
+    await until((s) => s.menu?.save_screen?.name === "Ab", "Backspace");
+    press("Enter");
+    await until((s) => s.menu?.save_screen && !s.menu.save_screen.focused, "Enter ends the focus");
+    for (let i = 0; i < 50 && document.activeElement === entry; i++) await sleep(20);
+    assert(document.activeElement !== entry, "the device keyboard closes");
+    // A gamepad (faked): south on the field opens the on-screen keyboard.
+    const pad = { index: 0, mapping: "standard", axes: [0, 0, 0, 0], buttons: Array.from({ length: 17 }, () => ({ pressed: false, value: 0 })) };
+    const getGamepads = navigator.getGamepads;
+    navigator.getGamepads = () => [pad];
+    const button = async (i) => {
+      pad.buttons[i].pressed = true;
+      await sleep(80);
+      pad.buttons[i].pressed = false;
+      await sleep(80);
+    };
+    try {
+      await button(0);
+      let s = await save();
+      assert(s.focused && s.keyboard, `the keyboard opens: ${JSON.stringify({ focused: s.focused, keyboard: s.keyboard })}`);
+      assertEqual(s.keyboard.selected, "1", "the first key highlighted");
+      // Down twice (13), south (0): "a"; west (2): Backspace.
+      await button(13);
+      await button(13);
+      assertEqual((await save()).keyboard.selected, "a", "highlighted");
+      await button(0);
+      await until((s) => s.menu?.save_screen?.name === "Aba", "a typed");
+      await button(2);
+      await until((s) => s.menu?.save_screen?.name === "Ab", "Backspace");
+      if (gpu.state === "ready") {
+        const scene = await volya.call("menu_scene", { width: 1024, height: 768 });
+        assert(scene.sprites.some((p) => p.layer === "keyboard key"), "the keyboard drawn");
+      }
+      // East (1): Done; the screen stays.
+      await button(1);
+      s = (await until((s) => s.menu?.save_screen && !s.menu.save_screen.keyboard, "the keyboard closes")).menu.save_screen;
+      await sleep(200);
+      assert((await state()).menu?.save_screen, "east's release leaves the screen open");
+      assert(!s.focused, "the focus ends");
+      assertEqual(s.name, "Ab", "the name kept");
+    } finally {
+      navigator.getGamepads = getGamepads;
+    }
+    // Back to the menu, then the game.
+    key("Escape");
+    await until((s) => inGame(s) && !s.menu.save_screen, "the in-game menu");
+    key("Escape");
+    await until((s) => s.phase === "level" && !s.menu, "back in the game");
   },
 
   "the in-game menu: Escape opens it and stops the clock, Return resumes, Load lists no saves, quitting asks": async () => {

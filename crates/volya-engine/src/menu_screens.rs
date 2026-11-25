@@ -137,6 +137,15 @@ impl MenuScreens {
         self.sub
     }
 
+    /// The save screen's name field (UI units) and whether it has focus,
+    /// while it shows with no box over it (#94).
+    pub fn text_field(&self) -> Option<(volya_engine_formats::ui::layout::Rect, bool)> {
+        match self.sub {
+            Some(Sub::Save) => self.save.as_ref()?.text_field(),
+            _ => None,
+        }
+    }
+
     /// The save screen's name-field font, while it shows.
     pub fn field_font(&self) -> Option<volya_engine_formats::text::font::UiFont> {
         match self.sub {

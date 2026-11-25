@@ -25,6 +25,7 @@ pub mod level;
 pub mod loading_screen;
 pub mod menu_screens;
 pub mod objects;
+pub mod on_screen_keyboard;
 pub mod options;
 pub mod present;
 pub mod save_load;
