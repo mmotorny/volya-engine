@@ -34,7 +34,8 @@ Conventions:
 - Bracketed ids name the checks that reproduce the statement, all in the dirty workspace's `checks/glows/`:
   `R…` in `binary_r1.py` (the first renderer), `X…` in `binary_x3.py` (the engine and the collision library),
   `G…` in `binary_game.py` (the game library), `D…` in `data.py` (game data), `M…` in `model.py` (numbers
-  computed from this text); `run.py` runs them all.
+  computed from this text), `X11`–`X14` in `binary_ray.py` (what the occlusion ray tests), `D8` in
+  `data_ray.py` (the occlusion ray on `levels\l01_escape\`); `run.py` runs them all.
 
 ## 1. What a glow is
 
@@ -183,9 +184,34 @@ The ray hits when either holds [X3]:
   one of its bone elements (box, sphere or cylinder, in the current pose; elements without a shape are
   skipped) from either side [X4]. The bone shapes and their placement are those of the model's bones
   (`objects` section 4.4); the intersection tests are the usual ray–box, ray–sphere and ray–cylinder tests
-  (believed);
+  (believed).
+
+  Only objects in the level's spatial index that are marked collidable are considered [X13]: an object enters
+  the index when it is spawned on the client (comes online) and leaves it when destroyed (goes offline); it
+  also leaves it while attached to a parent object (e.g. an item carried in an inventory or held in hand) and
+  re-enters when detached [X13]. It is marked collidable while it is enabled and has a collision form, and
+  unmarked while disabled [X13]. Being hidden (not drawn) does not affect this [X13]. Which game objects are
+  disabled, and when, is decided per object kind by the game library and is **unestablished** [X14]. The
+  material flags play no part in the object test (a skeleton form has no materials) [X4];
 - **static**: it hits a triangle of the level's collision mesh (`level.cform`) at a distance *t* with
-  0 < *t* ≤ *D*, from either side (no back-face culling) [X3, X10]; no material is excluded (believed).
+  0 < *t* ≤ *D*, from either side (no back-face culling) [X3, X10].
+
+**Every triangle of `level.cform` is tested; none is skipped, by material or otherwise** [X11, X12]. The mesh the
+ray is cast against is built at level load from all the file's vertices and triangles; the only change made to
+it is the material mapping of `level-cform` section 3.3 (which rewrites the attribute bits 0–15 and removes no
+triangle) [X11, X12]. The triangle test does not read the material or any attribute bit; in particular the
+triangles of materials with the **pass-through** flag 0x80 (`materials\water`, `materials\bush`,
+`materials\fake`, `materials\death`), with the **actor obstacle** flag 0x1000 (`materials\fake`), or with the
+flags 0x400 / 0x800 (attribute bits 14 / 15) occlude glows like any other triangle [X12]. So the static test,
+expressed against `gamemtl.xr`'s flags, is: a triangle occludes whatever its material's flags are.
+
+On `levels\l01_escape\` the camera at the New Game start (`SP`: eye (−246.72630, −23.263261, −134.43387)) is
+close to `materials\fake` triangles: rays from it to the level glows cross coincident pairs of `fake` triangles
+0.75 … 1.69 m from the eye for 12 of the 22 level glows. The static part alone gives, for that eye (section 7,
+[D8]): 20 of the 22 level glows hit, 2 not hit (glows 7 and 20); of the 20, glows 6 and 21 are hit only by
+`fake` triangles, the other 18 also by triangles of other materials. Glows are therefore not all occluded once
+tested at the start (level glows start occluded, section 2.1): glows 7 and 20 have a clear static ray, and whether they are then occluded depends only on the
+object part.
 
 Each glow remembers its last static test: ray start, direction, length, result, and the triangle hit. When the
 start differs by less than 0.001 on every axis, |1 − **dir** · **dir**ₚᵣₑᵥ| < 10⁻⁵ and the length differs by less
@@ -240,6 +266,13 @@ All 30 shipped levels [D1]:
 
 `levels\l01_escape\` [D2, D4]:
 
+- Static occlusion ray (section 5.1) from the New Game eye (−246.72630, −23.263261, −134.43387) to each of the
+  22 level glows (in chunk 7 order, numbered from 0), all triangles tested [D8]: not hit for glows 7 and 20
+  (both at (−249.74, −21.28, −134.44), *D* = 3.6); hit only by `materials\fake` triangles (a coincident pair at
+  *t* = 0.87) for glows 6 and 21 (both at (−244.53, −21.92, −134.42), *D* = 2.6); the nearest hit is a
+  `materials\fake` pair for glows 2, 3, 6, 8, 9, 10, 13, 14, 15, 16, 17, 21; the other 18 hit glows are also hit
+  by non-`fake` triangles. The level has 1,516 `materials\fake` triangles [D8].
+
 - 22 level glows: `effects\glow/glow\glow_04` 12 (radius 1.0), `effects\glow/glow\glow_red2` 6 (0.5),
   `effects\glow/glow\glow_white` 4 (two 0.7, two 0.5); sum of radii 17.4; glow 0 at (30.484, 19.756, 679.066),
   radius 1.0.
@@ -255,16 +288,17 @@ All 30 shipped levels [D1]:
   level-wide condition of the far torch case; the player's torch heading offset and aim smoothing law
   (section 2.2).
 - Whether the full-frustum pre-selection of section 3 step 1 can drop a glow that step 4 would keep (believed
-  not); the exact ray–shape tests for object bone shapes and whether any `level.cform` material is skipped by
-  the static test (believed none) (section 5.1).
+  not); the exact ray–shape tests for object bone shapes; which objects the game disables, and when (which
+  removes them from the object part of the ray) (section 5.1).
 - Whether any object uses `equipments\camera.ogf`'s `projector_definition` (specification P14).
 
 ## 9. Provenance
 
-- Date: 2026-11-24.
+- Date: 2026-11-24; section 5.1 (which triangles and objects the ray tests) revised 2026-11-25.
 - Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG), archives `gamedata.db0` … `gamedata.dbd`;
   binaries `bin\xrRender_R1.dll`, `bin\XR_3DA.exe`, `bin\xrCDB.dll`, `bin\xrGame.dll`.
-- Data examined: `level` (chunks 2 and 7) of all 30 shipped levels; `shaders.xr`; the hanging-lamp records of
+- Data examined: `level` (chunks 2 and 7) of all 30 shipped levels; `levels\l01_escape\level.cform` and
+  `gamemtl.xr` (the occlusion ray at the start); `shaders.xr`; the hanging-lamp records of
   `spawns\all.spawn`; the user data of `meshes\equipments\projector.ogf` and `camera.ogf`;
   `config\models\objects\light_night.ltx`; `config\rspec_*.ltx`; the archive listings and DDS headers of the
   glow textures.
@@ -274,4 +308,4 @@ All 30 shipped levels [D1]:
 
 ## Gaps found in review
 
-- Section 5.1: which objects the object part of the ray considers beyond the bounding-sphere test (for example objects that are offline, hidden, or whose collision form is not registered for queries) is not stated.
+- Section 5.1: an object is marked collidable when it is enabled while it has a collision form; whether a collision form given to an object that is already enabled also marks it is not stated.
