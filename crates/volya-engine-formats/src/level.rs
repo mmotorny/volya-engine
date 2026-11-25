@@ -292,6 +292,16 @@ impl Level {
     /// [`INDEX_PIECE`] bytes. The first visual in drawing order that fails
     /// is reported, as when the indices are all in memory.
     pub fn static_draw_items_from(&self, geom: &mut dyn GeomSource) -> io::Result<Vec<DrawItem>> {
+        self.static_draw_items_in_pieces(geom, INDEX_PIECE)
+    }
+
+    /// [`Level::static_draw_items_from`] reading `piece` bytes of indices
+    /// at a time (an even number, at least 2).
+    fn static_draw_items_in_pieces(
+        &self,
+        geom: &mut dyn GeomSource,
+        piece: usize,
+    ) -> io::Result<Vec<DrawItem>> {
         let mut visited = vec![false; self.visuals.len()];
         let mut stack: Vec<u32> = self.sectors.iter().rev().map(|s| s.root).collect();
         let mut items = Vec::new();
@@ -316,7 +326,7 @@ impl Level {
         }
         // The items before the first that failed its ranges, checked for
         // indices beyond their vertices.
-        if let Some(k) = first_index_beyond(&items, geom)? {
+        if let Some(k) = first_index_beyond(&items, geom, piece)? {
             return Err(invalid(format!(
                 "visual {}: index beyond the drawn vertices",
                 items[k].visual
@@ -397,7 +407,11 @@ pub const INDEX_PIECE: usize = 2 << 20;
 
 /// The position in `items` of the first item that draws an index reaching
 /// past its vertices, reading each index buffer's used range in pieces.
-fn first_index_beyond(items: &[DrawItem], geom: &mut dyn GeomSource) -> io::Result<Option<usize>> {
+fn first_index_beyond(
+    items: &[DrawItem],
+    geom: &mut dyn GeomSource,
+    piece_bytes: usize,
+) -> io::Result<Option<usize>> {
     let mut by_buffer: Vec<Vec<usize>> = vec![Vec::new(); geom.layout().index_counts.len()];
     for (k, d) in items.iter().enumerate() {
         if d.triangle_count > 0 {
@@ -408,7 +422,7 @@ fn first_index_beyond(items: &[DrawItem], geom: &mut dyn GeomSource) -> io::Resu
         let first = u64::from(d.first_index);
         (first, first + 3 * u64::from(d.triangle_count))
     };
-    let per_piece = (INDEX_PIECE / 2) as u64;
+    let per_piece = (piece_bytes / 2).max(1) as u64;
     let mut first = None::<usize>;
     let mut piece = Vec::new();
     for (buffer, mut users) in by_buffer.into_iter().enumerate() {
@@ -856,6 +870,59 @@ mod tests {
             broken(|_| {}, |g| g.vertex_count = 2),
             "visual 3: index beyond the drawn vertices"
         );
+    }
+
+    #[test]
+    fn indices_read_in_pieces_agree_with_one_read() {
+        use crate::level_geom::VertexBuffer;
+        let geom = |indices: Vec<u16>| LevelGeom {
+            header: None,
+            vertex_buffers: vec![VertexBuffer {
+                elements: Vec::new(),
+                layout: None,
+                stride: 12,
+                vertex_count: 3,
+                data: vec![0; 36],
+            }],
+            index_buffers: vec![indices],
+            progressive_meshes: Vec::new(),
+        };
+        // Mesh 0 (drawn first) draws indices 6..9, tree 3 indices 0..6.
+        let mut level = Level::parse(&sample()).unwrap();
+        for (visual, first, count) in [(0, 6, 3), (3, 0, 6)] {
+            let g = level.visuals[visual].geometry.as_mut().unwrap();
+            g.first_index = first;
+            g.index_count = count;
+        }
+        let run = |indices: &[u16], piece| {
+            level
+                .static_draw_items_in_pieces(&mut geom(indices.to_vec()).source(), piece)
+                .map_err(|e| e.to_string())
+        };
+        let good = [0, 1, 2, 2, 1, 0, 1, 2, 0];
+        let whole = run(&good, INDEX_PIECE).unwrap();
+        assert_eq!(whole.len(), 2);
+        for piece in [2, 4, 6, 8, 10, 16] {
+            assert_eq!(run(&good, piece), Ok(whole.clone()), "{piece}-byte pieces");
+            // Tree 3's bad index comes in an earlier piece than mesh 0's,
+            // whose range straddles pieces: mesh 0 is reported.
+            let mut bad = good;
+            bad[2] = 3;
+            bad[7] = 3;
+            assert_eq!(
+                run(&bad, piece),
+                Err("visual 0: index beyond the drawn vertices".into()),
+                "{piece}-byte pieces"
+            );
+            // Only the tree's, across a piece boundary for most sizes.
+            let mut bad = good;
+            bad[3] = 3;
+            assert_eq!(
+                run(&bad, piece),
+                Err("visual 3: index beyond the drawn vertices".into()),
+                "{piece}-byte pieces"
+            );
+        }
     }
 
     #[test]

@@ -52,7 +52,7 @@ use std::collections::HashMap;
 use volya_engine_formats::env_mod::{self, EnvModifier};
 use volya_engine_formats::game_graph::GameGraph;
 use volya_engine_formats::gamemtl;
-use volya_engine_formats::level_geom::GeomFile;
+use volya_engine_formats::level_geom::{GeomBuffer, GeomFile, GeomLayout, GeomSource};
 use volya_engine_formats::model as model_math;
 use volya_engine_formats::object::{self as record, ObjectRecord};
 use volya_engine_formats::patrol_path::PatrolPaths;
@@ -696,6 +696,24 @@ fn hour(clock: &GameClock) -> u32 {
     (clock.time_of_day() / 3600.0) as u32
 }
 
+/// A geometry source that remembers whether a read failed.
+struct ReadFailures<S> {
+    source: S,
+    failed: bool,
+}
+
+impl<S: GeomSource> GeomSource for ReadFailures<S> {
+    fn layout(&self) -> &GeomLayout {
+        self.source.layout()
+    }
+
+    fn read(&mut self, buffer: GeomBuffer, offset: u64, out: &mut [u8]) -> io::Result<()> {
+        let result = self.source.read(buffer, offset, out);
+        self.failed |= result.is_err();
+        result
+    }
+}
+
 /// What a stage needs from an earlier one, or an error naming it.
 fn earlier<T>(value: Option<T>, what: &str) -> io::Result<T> {
     value.ok_or_else(|| invalid(format!("loading stages out of order: no {what}")))
@@ -791,9 +809,22 @@ impl NewGameLoad {
                 let mut f = tree
                     .open(&format!("{dir}\\level.geom"))
                     .map_err(|e| file("level.geom", e))?;
-                let draw_items = level
-                    .static_draw_items_from(&mut geom.reader(&mut f))
-                    .map_err(|e| file("level", e))?;
+                let mut indices = ReadFailures {
+                    source: geom.reader(&mut f),
+                    failed: false,
+                };
+                let draw_items = level.static_draw_items_from(&mut indices).map_err(|e| {
+                    // A read that failed is the file's; anything else the
+                    // level's visuals.
+                    file(
+                        if indices.failed {
+                            "level.geom"
+                        } else {
+                            "level"
+                        },
+                        e,
+                    )
+                })?;
                 self.spheres = draw_items
                     .iter()
                     .map(|d| {

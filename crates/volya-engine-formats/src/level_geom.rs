@@ -697,7 +697,10 @@ impl<R: Read + Seek> GeomSource for GeomReader<'_, R> {
         let (Some(start), Some(bytes)) = (start, bytes) else {
             return Err(outside(buffer));
         };
-        if offset + out.len() as u64 > bytes {
+        if offset
+            .checked_add(out.len() as u64)
+            .is_none_or(|end| end > bytes)
+        {
             return Err(outside(buffer));
         }
         self.reader.seek(SeekFrom::Start(start + offset))?;

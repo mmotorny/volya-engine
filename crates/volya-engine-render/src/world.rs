@@ -801,7 +801,7 @@ pub(crate) fn upload_buffer(
 
 /// A buffer of `bytes` bytes (rounded up to whole 4-byte words, zero-padded,
 /// at least `min_size`) filled by `fill(offset, out)` in pieces of at most
-/// [`UPLOAD_PIECE`] bytes through `piece`, each written with
+/// `piece_size` bytes (a multiple of 4) through `piece`, each written with
 /// `Queue::write_buffer` (see [`upload_buffer`]).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn stream_buffer(
@@ -811,6 +811,7 @@ pub(crate) fn stream_buffer(
     usage: wgpu::BufferUsages,
     bytes: u64,
     min_size: u64,
+    piece_size: usize,
     piece: &mut Vec<u8>,
     mut fill: impl FnMut(u64, &mut [u8]) -> io::Result<()>,
 ) -> Result<wgpu::Buffer, String> {
@@ -825,7 +826,7 @@ pub(crate) fn stream_buffer(
     });
     let mut at = 0;
     while at < bytes {
-        let n = (bytes - at).min(UPLOAD_PIECE as u64) as usize;
+        let n = (bytes - at).min(piece_size as u64) as usize;
         piece.clear();
         piece.resize(n.next_multiple_of(4), 0);
         fill(at, &mut piece[..n]).map_err(|e| format!("{label}: {e}"))?;
@@ -922,6 +923,7 @@ impl Renderer {
                 wgpu::BufferUsages::VERTEX,
                 bytes,
                 0,
+                UPLOAD_PIECE,
                 &mut piece,
                 |at, out| geom.read(GeomBuffer::Vertices(i as u32), at, out),
             )?);
@@ -937,6 +939,7 @@ impl Renderer {
                 wgpu::BufferUsages::INDEX,
                 bytes,
                 4,
+                UPLOAD_PIECE,
                 &mut piece,
                 |at, out| geom.read(GeomBuffer::Indices(i as u32), at, out),
             )?);
@@ -963,6 +966,7 @@ impl Renderer {
                 wgpu::BufferUsages::INDEX,
                 index_bytes,
                 4,
+                UPLOAD_PIECE,
                 &mut piece,
                 |at, out| {
                     for (j, o) in out.iter_mut().enumerate() {
@@ -1417,6 +1421,86 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn streamed_buffers_hold_every_piece_and_a_padded_tail() {
+        let (device, queue) = pollster::block_on(async {
+            let adapter = wgpu::Instance::default()
+                .request_adapter(&Default::default())
+                .await
+                .unwrap();
+            adapter.request_device(&Default::default()).await.unwrap()
+        });
+        let read_back = |buffer: &wgpu::Buffer| {
+            let out = device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: buffer.size(),
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let mut encoder = device.create_command_encoder(&Default::default());
+            encoder.copy_buffer_to_buffer(buffer, 0, &out, 0, buffer.size());
+            queue.submit([encoder.finish()]);
+            out.slice(..).map_async(wgpu::MapMode::Read, |r| r.unwrap());
+            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            out.slice(..).get_mapped_range().unwrap().to_vec()
+        };
+        // 23 bytes in 8-byte pieces: two whole, a tail of 7 padded to 8.
+        let mut piece = Vec::new();
+        let mut calls = Vec::new();
+        let buffer = stream_buffer(
+            &device,
+            &queue,
+            "test",
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_SRC,
+            23,
+            0,
+            8,
+            &mut piece,
+            |at, out| {
+                calls.push((at, out.len()));
+                for (j, o) in out.iter_mut().enumerate() {
+                    *o = (at as usize + j) as u8 + 1;
+                }
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(calls, [(0, 8), (8, 8), (16, 7)]);
+        assert!(piece.len() <= 8);
+        let mut expected: Vec<u8> = (1..=23).collect();
+        expected.push(0);
+        assert_eq!(read_back(&buffer), expected);
+        // Empty, held at its minimum size; a failed read names the buffer.
+        let empty = stream_buffer(
+            &device,
+            &queue,
+            "empty",
+            wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_SRC,
+            0,
+            4,
+            8,
+            &mut piece,
+            |_, _| unreachable!(),
+        )
+        .unwrap();
+        assert_eq!(read_back(&empty), [0; 4]);
+        let failed = stream_buffer(
+            &device,
+            &queue,
+            "failing",
+            wgpu::BufferUsages::INDEX,
+            20,
+            4,
+            8,
+            &mut piece,
+            |at, _| match at {
+                0 => Ok(()),
+                _ => Err(io::Error::other("short")),
+            },
+        );
+        assert_eq!(failed.err(), Some("failing: short".to_string()));
+    }
 
     #[test]
     fn multiply_is_row_vector_composition() {
