@@ -12,6 +12,7 @@
 pub use volya_engine_core as core;
 pub use volya_engine_formats as formats;
 pub use volya_engine_render as render;
+pub use volya_engine_script as script;
 
 pub mod app;
 pub mod audio;

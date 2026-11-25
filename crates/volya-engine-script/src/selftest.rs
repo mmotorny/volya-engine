@@ -1,0 +1,192 @@
+// SPDX-FileCopyrightText: 2026 Maksym Motorny
+// SPDX-License-Identifier: BSD-3-Clause
+
+//! The runtime's behaviour, checked on every target: natively by
+//! `cargo test`, in the browser by the `script_selftest` op (docs/testing.md,
+//! Shared conformance checks).
+
+use crate::{ErrorKind, Lua, Value};
+
+/// Runs every check; `Err` lists the failures.
+pub fn check() -> Result<(), String> {
+    let mut failures = Vec::new();
+    let mut fail = |what: String| failures.push(what);
+    if let Err(e) = lua_checks() {
+        fail(e);
+    }
+    if let Err(e) = api_checks() {
+        fail(e);
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("\n"))
+    }
+}
+
+/// selftest.lua: the libraries, numbers, strings, tables, errors,
+/// coroutines and `jit`.
+fn lua_checks() -> Result<(), String> {
+    let mut lua = Lua::new().map_err(|e| e.message)?;
+    let results = lua
+        .exec("=selftest", include_bytes!("selftest.lua"))
+        .map_err(|e| format!("selftest.lua: {e}"))?;
+    let Some(Value::Table(failures)) = results.first() else {
+        return Err(format!("selftest.lua returned {results:?}"));
+    };
+    let mut failures: Vec<(f64, String)> = failures
+        .iter()
+        .map(|(k, v)| {
+            let text = match v {
+                Value::String(s) => String::from_utf8_lossy(s).into_owned(),
+                v => format!("{v:?}"),
+            };
+            (k.as_number().unwrap_or(0.0), text)
+        })
+        .collect();
+    failures.sort_by(|a, b| a.0.total_cmp(&b.0));
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures
+            .into_iter()
+            .map(|(_, t)| t)
+            .collect::<Vec<_>>()
+            .join("\n"))
+    }
+}
+
+fn ensure(ok: bool, what: impl FnOnce() -> String) -> Result<(), String> {
+    if ok { Ok(()) } else { Err(what()) }
+}
+
+/// The Rust API: values both ways, globals, Rust functions, errors.
+fn api_checks() -> Result<(), String> {
+    let mut lua = Lua::new().map_err(|e| e.message)?;
+
+    let values = lua
+        .exec("=values", b"return nil, true, 1.5, 'text', {1, 2, k = 'v'}")
+        .map_err(|e| e.message)?;
+    ensure(values.len() == 5, || format!("results: {values:?}"))?;
+    ensure(
+        values[..4] == [Value::Nil, true.into(), 1.5.into(), "text".into()],
+        || format!("scalars: {values:?}"),
+    )?;
+    let table = &values[4];
+    ensure(
+        table.get(&1.0.into()) == Some(&1.0.into())
+            && table.get(&2.0.into()) == Some(&2.0.into())
+            && table.get(&"k".into()) == Some(&"v".into()),
+        || format!("table: {table:?}"),
+    )?;
+
+    lua.exec(
+        "=define",
+        b"function describe(...) local t = {} for i = 1, select('#', ...) do t[i] = type((select(i, ...))) end return table.concat(t, ',') end
+          function sum(t) local s = 0 for _, v in ipairs(t) do s = s + v end return s end",
+    )
+    .map_err(|e| e.message)?;
+    let args = [
+        Value::Nil,
+        false.into(),
+        2.0.into(),
+        Value::string(vec![0xC0, 0]),
+        Value::Table(vec![]),
+    ];
+    let described = lua.call("describe", &args).map_err(|e| e.message)?;
+    ensure(
+        described == ["nil,boolean,number,string,table".into()],
+        || format!("describe: {described:?}"),
+    )?;
+    let list = Value::Table(
+        (1..=4)
+            .map(|i| (f64::from(i).into(), f64::from(i).into()))
+            .collect(),
+    );
+    let sum = lua.call("sum", &[list]).map_err(|e| e.message)?;
+    ensure(sum == [10.0.into()], || format!("sum: {sum:?}"))?;
+
+    let missing = lua.call("missing", &[]);
+    ensure(
+        matches!(&missing, Err(e) if e.kind == ErrorKind::Runtime && e.message.contains("attempt to call")),
+        || format!("missing function: {missing:?}"),
+    )?;
+    let syntax = lua.exec("=bad", b"return +");
+    ensure(
+        matches!(&syntax, Err(e) if e.kind == ErrorKind::Syntax && e.message.starts_with("bad:1:")),
+        || format!("syntax error: {syntax:?}"),
+    )?;
+    let raised = lua.exec("=raise", b"error('boom', 0)");
+    ensure(
+        matches!(&raised, Err(e) if e.kind == ErrorKind::Runtime && e.message == "boom"),
+        || format!("raised: {raised:?}"),
+    )?;
+    let table_error = lua.exec("=raise", b"error({})");
+    ensure(
+        matches!(&table_error, Err(e) if e.message == "(error object is a table value)"),
+        || format!("table error: {table_error:?}"),
+    )?;
+    ensure(lua.compile("=compile", b"error('not run')").is_ok(), || {
+        "compile ran the chunk".into()
+    })?;
+    let function = lua.exec("=function", b"return print");
+    ensure(function == Ok(vec![Value::Other("function")]), || {
+        format!("function: {function:?}")
+    })?;
+    let cyclic = lua.exec("=cyclic", b"local t = {} t.t = t return t");
+    ensure(
+        matches!(&cyclic, Err(e) if e.kind == ErrorKind::Api),
+        || format!("cyclic: {cyclic:?}"),
+    )?;
+    let other = lua.call("describe", &[Value::Other("function")]);
+    ensure(matches!(&other, Err(e) if e.kind == ErrorKind::Api), || {
+        format!("other: {other:?}")
+    })?;
+    let nil_key = lua.call("describe", &[Value::Table(vec![(Value::Nil, 1.0.into())])]);
+    ensure(
+        matches!(&nil_key, Err(e) if e.message.contains("table index is nil")),
+        || format!("nil key: {nil_key:?}"),
+    )?;
+
+    let mut calls = 0;
+    lua.register("rust_add", move |args| {
+        calls += 1;
+        match args {
+            [Value::Number(a), Value::Number(b)] => {
+                Ok(vec![(a + b).into(), f64::from(calls).into()])
+            }
+            _ => Err(format!("rust_add: two numbers expected, got {args:?}")),
+        }
+    })
+    .map_err(|e| e.message)?;
+    lua.register("rust_table", |_| {
+        Ok(vec![Value::Table(vec![
+            ("name".into(), "volya".into()),
+            ("list".into(), Value::Table(vec![(1.0.into(), true.into())])),
+        ])])
+    })
+    .map_err(|e| e.message)?;
+    let added = lua
+        .exec(
+            "=rust",
+            b"local s, n = rust_add(2, 3)
+              local s2, n2 = rust_add(s, 1)
+              local t = rust_table()
+              local ok, err = pcall(rust_add, 'x')
+              local co = coroutine.wrap(function() return rust_add(1, 1) end)
+              return s2, n2, t.name, t.list[1], ok, err, co()",
+        )
+        .map_err(|e| e.message)?;
+    let want: Vec<Value> = vec![
+        6.0.into(),
+        2.0.into(),
+        "volya".into(),
+        true.into(),
+        false.into(),
+        "rust_add: two numbers expected, got [String([120])]".into(),
+        2.0.into(),
+        4.0.into(),
+    ];
+    ensure(added == want, || format!("Rust functions: {added:?}"))?;
+    Ok(())
+}

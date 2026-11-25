@@ -31,6 +31,7 @@ Open the [live version](https://mmotorny.github.io/volya-engine/) in a supported
 To run locally on macOS:
 
 1. Install [rustup](https://rustup.rs); the stable toolchain and the wasm target install automatically on first build.
+   Install LLVM's clang (`brew install llvm`): the web build compiles the script runtime's C for wasm with it.
 2. Build and serve (the first build also installs the matching `wasm-bindgen` CLI into `.cache/`):
 
    ```sh
