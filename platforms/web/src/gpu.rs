@@ -206,7 +206,18 @@ async fn connect(canvas: OffscreenCanvas, webgl: bool) -> Result<Gpu, String> {
         })?;
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
-            required_features: volya_engine::render::device_features(&adapter),
+            // On WebGL 2, ETC2 when offered rather than BC (#443): the iPhone's
+            // WebContent process was killed at 2.5 GB holding BC textures.
+            required_features: {
+                let features = volya_engine::render::device_features(&adapter);
+                if backend == "webgl2"
+                    && features.contains(wgpu::Features::TEXTURE_COMPRESSION_ETC2)
+                {
+                    features - wgpu::Features::TEXTURE_COMPRESSION_BC
+                } else {
+                    features
+                }
+            },
             // WebGL 2 offers less than WebGPU's defaults: what it has.
             required_limits: if backend == "webgl2" {
                 adapter.limits()
