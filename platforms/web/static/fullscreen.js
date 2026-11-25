@@ -12,8 +12,9 @@
 // it) while the level's controls are live and the mouse is free (before
 // the click that takes pointer lock; it can't be clicked under the lock).
 // Accepting, in the click (full screen needs a user gesture):
-// `navigator.keyboard.lock(codes)` with the game's bound keys and W, T, N
-// and Escape, then `requestFullscreen()`, in the order the specification
+// `navigator.keyboard.lock(codes)` with the game's bound keys (never Tab,
+// F4 or the OS keys: Alt+Tab, Alt+F4 and the OS key stay the system's) and
+// W, T, N and Escape, then `requestFullscreen()`, in the order the specification
 // recommends (lock first, so the browser shows one exit notice). Under the
 // lock a short Escape reaches the game (the menu opens as usual) and
 // holding it two seconds leaves full screen (documented: the
@@ -27,6 +28,10 @@ import { KEYS } from "./input.js";
 /** Keys locked whatever the bindings: the browser's tab and window
  * shortcuts with Control, and Escape (the menu). */
 const ALWAYS = ["KeyW", "KeyT", "KeyN", "Escape"];
+
+/** Keys never locked, even when bound (our choice): the system's own ways
+ * out stay its own (Alt+Tab, Alt+F4, the OS key). */
+const NEVER = new Set(["Tab", "F4", "MetaLeft", "MetaRight"]);
 
 /** Engine key name → KeyboardEvent.code. */
 const CODES = Object.fromEntries(Object.entries(KEYS).map(([code, name]) => [name, code]));
@@ -109,7 +114,7 @@ export function createFullscreenOffer(boundKeys, { show = false } = {}) {
       if (started) {
         boundKeys()
           .then((names) => {
-            const bound = names.map((name) => CODES[name]).filter(Boolean);
+            const bound = names.map((name) => CODES[name]).filter((code) => code && !NEVER.has(code));
             codes = [...new Set([...ALWAYS, ...bound])];
           })
           .catch(() => {});

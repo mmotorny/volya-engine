@@ -14,7 +14,10 @@
 //! Shift, here a toggle) plus Backspace and Done (Enter), and each acts as
 //! the field's key, so the field's rules hold: the characters it types and
 //! its width limit. Drawn plainly by the engine over the screen's bottom:
-//! flat keys, the highlighted one in the field's text colour.
+//! flat keys, the highlighted one in the field's text colour; the four
+//! special keys carry line symbols, not words (the game's language is not
+//! ours to add to): an arrow up (Shift), a space bar's bracket (Space), an
+//! arrow left (Backspace) and a check mark (Done).
 
 use std::io;
 
@@ -270,6 +273,8 @@ impl OnScreenKeyboard {
         }
     }
 
+    /// The key's name in the state (tests, debugging); the special keys
+    /// draw symbols instead.
     fn label(&self, k: &KeyCap) -> String {
         match k.kind {
             Kind::Char(Key::Space) => "Space".into(),
@@ -331,10 +336,80 @@ impl OnScreenKeyboard {
                 },
                 line_gap: 0.0,
             };
-            let label = crate::data::encode(&self.label(k));
-            ctx.text(scene, "keyboard label", &label, &text, font)?;
+            if let Kind::Char(key) = k.kind
+                && key != Key::Space
+            {
+                let label = crate::data::encode(&self.label(k));
+                ctx.text(scene, "keyboard label", &label, &text, font)?;
+            } else {
+                for [a, b] in symbol(k.kind, r) {
+                    scene.sprites.push(segment(a, b, (sx, sy), text.color));
+                }
+            }
         }
         Ok(())
+    }
+}
+
+/// The line segments (UI units) of a special key's symbol, centred in `r`.
+fn symbol(kind: Kind, r: Rect) -> Vec<[[f32; 2]; 2]> {
+    let (cx, cy) = (r.x + r.width / 2.0, r.y + r.height / 2.0);
+    let p = |x: f32, y: f32| [cx + x, cy + y];
+    let path = |points: &[[f32; 2]]| -> Vec<[[f32; 2]; 2]> {
+        points.windows(2).map(|w| [w[0], w[1]]).collect()
+    };
+    match kind {
+        // An outlined arrow up.
+        Kind::Shift => path(&[
+            p(0.0, -9.0),
+            p(9.0, 0.0),
+            p(4.0, 0.0),
+            p(4.0, 8.0),
+            p(-4.0, 8.0),
+            p(-4.0, 0.0),
+            p(-9.0, 0.0),
+            p(0.0, -9.0),
+        ]),
+        // A space bar's bracket.
+        Kind::Char(_) => path(&[p(-14.0, -3.0), p(-14.0, 4.0), p(14.0, 4.0), p(14.0, -3.0)]),
+        // An arrow left.
+        Kind::Backspace => {
+            let mut s = path(&[p(-7.0, -6.0), p(-13.0, 0.0), p(-7.0, 6.0)]);
+            s.push([p(-13.0, 0.0), p(12.0, 0.0)]);
+            s
+        }
+        // A check mark.
+        Kind::Done => path(&[p(-9.0, 0.0), p(-3.0, 6.0), p(9.0, -7.0)]),
+    }
+}
+
+/// Line width of the symbols, UI units.
+const STROKE: f32 = 2.0;
+
+/// A line from `a` to `b` (UI units), [`STROKE`] wide with square caps,
+/// as a quad in output pixels.
+fn segment(a: [f32; 2], b: [f32; 2], (sx, sy): (f32, f32), color: Color) -> Sprite {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let len = dx.hypot(dy).max(f32::EPSILON);
+    let h = STROKE / 2.0;
+    let (ux, uy) = (dx / len * h, dy / len * h);
+    let (nx, ny) = (-uy, ux);
+    let at = |x: f32, y: f32| [x * sx - 0.5, y * sy - 0.5];
+    let (a0, a1) = (a[0] - ux, a[1] - uy);
+    let (b0, b1) = (b[0] + ux, b[1] + uy);
+    Sprite {
+        layer: "keyboard symbol".into(),
+        texture: TextureId::White,
+        corners: [
+            at(a0 + nx, a1 + ny),
+            at(b0 + nx, b1 + ny),
+            at(b0 - nx, b1 - ny),
+            at(a0 - nx, a1 - ny),
+        ],
+        uv_min: [0.0, 0.0],
+        uv_max: [1.0, 1.0],
+        color,
+        corner_colors: None,
     }
 }
 

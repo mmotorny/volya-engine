@@ -471,6 +471,10 @@ export const tests = {
       for (const code of ["KeyW", "KeyT", "KeyN", "Escape", "ControlLeft", "KeyA", "Space"]) {
         assert(calls[0][1].includes(code), `${code} locked: ${calls[0][1]}`);
       }
+      // The system's ways out stay its own, bound or not.
+      for (const code of ["Tab", "F4", "MetaLeft", "MetaRight"]) {
+        assert(!calls[0][1].includes(code), `${code} not locked`);
+      }
       assertEqual(calls[1], ["fullscreen", true], "the page's root in full screen");
       assert(offer.hidden, "no offer in full screen");
       // Escape (a short press under the lock) still opens the menu.

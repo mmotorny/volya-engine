@@ -270,7 +270,10 @@ fn in_game_menu_and_save_load_screens_from_game_data() {
     assert_eq!(s.save_screen.expect("the save screen").name, "1");
     let scene = draw(&menu, &screens, "VOLYA_DUMP_KEYBOARD");
     assert_eq!(scene.layer("keyboard key").count(), 50);
-    assert!(scene.layer("keyboard label").count() >= 50);
+    // 46 character keys with labels; Shift, Space, Backspace, Done drawn
+    // as symbols.
+    assert!(scene.layer("keyboard label").count() >= 46);
+    assert_eq!(scene.layer("keyboard symbol").count(), 7 + 3 + 3 + 2);
     pad(&mut input, GamepadButton::East);
     let s = frame(&[], &mut menu, &mut screens, &mut input);
     let save = s.save_screen.expect("east's release leaves the screen");
