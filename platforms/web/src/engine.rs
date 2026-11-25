@@ -609,6 +609,89 @@ pub fn particles_bench(frames: u32) -> Result<serde_json::Value, JsValue> {
     })
 }
 
+/// The `debug_rays_bench` op (tests, #396): `count` pseudo-random rays
+/// from within 1 m of the player's sky-ray origin against the level's
+/// collision world, short (a particle's step, 1 mm to 0.5 m) and long
+/// (5 to 100 m), each cast 5 times: the mean CPU time of a ray
+/// (microseconds) by `ray_nearest` under the particles' test and by
+/// `ray_any` under the sound occlusion's, and how many hit.
+#[cfg(feature = "test-ops")]
+pub fn rays_bench(count: u32) -> Result<serde_json::Value, JsValue> {
+    use volya_engine::core::particles::collision::front_hit;
+    use volya_engine::core::sound::occlusion::crosses;
+    RUNNING.with(|r| {
+        let r = r.borrow();
+        let running = r.as_ref().ok_or_else(|| error("the game is not running"))?;
+        let level = running.app.level().ok_or_else(|| error("no level"))?;
+        let world = level.collision();
+        let p = level.sky_ray_origin();
+        let mut state = 396u64;
+        let mut unit = move || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 40) as f32 / (1u64 << 24) as f32
+        };
+        let mut rays = |short: bool| {
+            (0..count)
+                .map(|_| {
+                    let o = [
+                        p[0] + unit() * 2.0 - 1.0,
+                        p[1] + unit() * 2.0 - 1.0,
+                        p[2] + unit() * 2.0 - 1.0,
+                    ];
+                    let d = loop {
+                        let v = [unit() * 2.0 - 1.0, unit() * 2.0 - 1.0, unit() * 2.0 - 1.0];
+                        let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                        if l > 0.1 && l <= 1.0 {
+                            break v.map(|x| x / l);
+                        }
+                    };
+                    let length = if short {
+                        1e-3 * 500f32.powf(unit())
+                    } else {
+                        5.0 + 95.0 * unit()
+                    };
+                    (o, d, length)
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut result = serde_json::Map::new();
+        for (name, rays) in [("short", rays(true)), ("long", rays(false))] {
+            let time = |f: &dyn Fn(([f32; 3], [f32; 3], f32)) -> bool| {
+                let begin = crate::now();
+                let mut hits = 0;
+                for _ in 0..5 {
+                    hits = rays.iter().filter(|&&r| f(r)).count();
+                }
+                let us = (crate::now() - begin) * 1000.0 / (5.0 * f64::from(count.max(1)));
+                (us, hits)
+            };
+            let (nearest_us, nearest_hits) = time(&|(o, d, l)| {
+                world
+                    .ray_nearest(o, d, l, |i| {
+                        front_hit(o, d, &world.corners(i)).filter(|&t| t < l)
+                    })
+                    .is_some()
+            });
+            let (any_us, any_hits) =
+                time(&|(o, d, l)| world.ray_any(o, d, l, |t| crosses(o, d, l, t, true)));
+            result.insert(
+                name.into(),
+                json!({
+                    "nearest_us": nearest_us,
+                    "nearest_hits": nearest_hits,
+                    "any_us": any_us,
+                    "any_hits": any_hits,
+                }),
+            );
+        }
+        result.insert("rays".into(), json!(count));
+        result.insert("index_bytes".into(), json!(world.memory_bytes()));
+        Ok(serde_json::Value::Object(result))
+    })
+}
+
 /// The `menu_scene` op: the sprites of the current frame at `resolution`.
 pub fn scene(resolution: Resolution) -> Result<serde_json::Value, JsValue> {
     RUNNING.with(|r| {
