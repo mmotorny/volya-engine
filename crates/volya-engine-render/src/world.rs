@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::io;
 use std::rc::Rc;
 
-use volya_engine_formats::level_geom::{GeomBuffer, GeomSource, Layout, LevelGeom};
+use volya_engine_formats::level_geom::{GeomBuffer, GeomLayout, GeomSource, Layout, LevelGeom};
 use wgpu::util::DeviceExt;
 
 use crate::sky::{SkyFrame, SkyPipelines, SkyResources, SkyTextures};
@@ -864,53 +864,6 @@ pub(crate) fn upload_buffer(
     buffer
 }
 
-/// A buffer of `bytes` bytes (rounded up to whole 4-byte words, zero-padded,
-/// at least `min_size`) filled by `fill(offset, out)` in pieces of at most
-/// `piece_size` bytes (a multiple of 4) through `piece`, each written with
-/// `Queue::write_buffer` (see [`upload_buffer`]). With `flush`, each piece
-/// is submitted at once: wgpu's GL backend stages written bytes in CPU
-/// memory (the wasm heap on the web) until the next submission, so a whole
-/// level's geometry would gather there (#113; believed from wgpu's design,
-/// not measured).
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn stream_buffer(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    label: &str,
-    usage: wgpu::BufferUsages,
-    bytes: u64,
-    min_size: u64,
-    piece_size: usize,
-    flush: bool,
-    piece: &mut Vec<u8>,
-    mut fill: impl FnMut(u64, &mut [u8]) -> io::Result<()>,
-) -> Result<wgpu::Buffer, String> {
-    let size = bytes
-        .next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT)
-        .max(min_size);
-    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size,
-        usage: usage | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    let mut at = 0;
-    while at < bytes {
-        let n = (bytes - at).min(piece_size as u64) as usize;
-        piece.clear();
-        piece.resize(n.next_multiple_of(4), 0);
-        fill(at, &mut piece[..n]).map_err(|e| format!("{label}: {e}"))?;
-        queue.write_buffer(&buffer, at, piece);
-        if flush {
-            queue.submit([]);
-            // Frees the staging of finished submissions.
-            let _ = device.poll(wgpu::PollType::Poll);
-        }
-        at += n as u64;
-    }
-    Ok(buffer)
-}
-
 /// [`Renderer::compat`]: an index range of a stored index buffer, uploaded
 /// with `base` added at index `at` of the rebased buffer.
 #[derive(Clone, Copy)]
@@ -982,6 +935,135 @@ fn fill_rebased(
     Ok(())
 }
 
+/// Where a buffer of a level's geometry takes its bytes from.
+enum Source {
+    /// Stored vertex buffer `i` of the level's geometry.
+    Vertices(u32),
+    /// Stored index buffer `i`, as stored.
+    Indices(u32),
+    /// Stored index buffer `i`, rebased by its segments
+    /// ([`Renderer::compat`]).
+    Rebased(u32),
+    /// The objects' vertices.
+    ObjectVertices,
+    /// The objects' indices, as held.
+    ObjectIndices,
+    /// Bytes made when the upload began (the objects' rebased indices).
+    Held(Vec<u8>),
+}
+
+/// A buffer of a [`GeometryUpload`] and where its bytes come from.
+struct Job {
+    buffer: wgpu::Buffer,
+    label: &'static str,
+    source: Source,
+    bytes: u64,
+}
+
+/// A level's static geometry and the objects' models on their way to the
+/// GPU ([`Renderer::begin_geometry`]): filled a piece at a time by
+/// [`GeometryUpload::step`], so a platform can spread it over task turns.
+/// On wgpu's GL backend written bytes stay staged in CPU memory (the wasm
+/// heap on the web) until a submission is known finished, which WebGL
+/// reports only after control returns to the browser (documented: the
+/// WebGL 2 specification's sync objects never signal in the frame they
+/// were issued), so an upload done at once gathers all of it there (#184).
+pub struct GeometryUpload {
+    jobs: Vec<Job>,
+    /// The job being filled, and how far.
+    next: usize,
+    at: u64,
+    piece: Vec<u8>,
+    compat: bool,
+    segments: Vec<Vec<Segment>>,
+    rebased: Rebased,
+    vertex_buffers: Vec<wgpu::Buffer>,
+    index_buffers: Vec<wgpu::Buffer>,
+    index_formats: Vec<wgpu::IndexFormat>,
+    vertex_layouts: Vec<Option<Layout>>,
+    buffer_bytes: u64,
+    object_buffer_bytes: u64,
+    object_vb: u32,
+    object_ib: u32,
+    /// The draws' index ranges it was begun for.
+    ranges: Vec<(bool, u32, u32, u32, u32)>,
+}
+
+impl GeometryUpload {
+    /// Uploads about `budget` more bytes (whole pieces of at most
+    /// [`UPLOAD_PIECE`]), reading the level's buffers from `geom` and the
+    /// objects' from `objects` (those it was begun with). Returns whether
+    /// everything is uploaded.
+    pub fn step(
+        &mut self,
+        renderer: &Renderer,
+        geom: &mut dyn GeomSource,
+        objects: &ObjectGeometry,
+        budget: u64,
+    ) -> Result<bool, String> {
+        let mut spent = 0;
+        while let Some(job) = self.jobs.get(self.next) {
+            if self.at >= job.bytes {
+                self.next += 1;
+                self.at = 0;
+                continue;
+            }
+            if spent >= budget {
+                return Ok(false);
+            }
+            let at = self.at;
+            let n = (job.bytes - at).min(UPLOAD_PIECE as u64) as usize;
+            self.piece.clear();
+            self.piece.resize(n.next_multiple_of(4), 0);
+            let out = &mut self.piece[..n];
+            let range = at as usize..at as usize + n;
+            match &job.source {
+                Source::Vertices(i) => geom.read(GeomBuffer::Vertices(*i), at, out),
+                Source::Indices(i) => geom.read(GeomBuffer::Indices(*i), at, out),
+                Source::Rebased(i) => fill_rebased(
+                    geom,
+                    GeomBuffer::Indices(*i),
+                    &self.segments[*i as usize],
+                    at,
+                    out,
+                ),
+                Source::ObjectVertices => objects
+                    .vertices
+                    .get(range)
+                    .map(|v| out.copy_from_slice(v))
+                    .ok_or_else(|| io::Error::other("the objects' vertices changed")),
+                Source::ObjectIndices => {
+                    for (j, o) in out.iter_mut().enumerate() {
+                        let at = at as usize + j;
+                        *o = objects.indices[at / 2].to_le_bytes()[at % 2];
+                    }
+                    Ok(())
+                }
+                Source::Held(bytes) => {
+                    out.copy_from_slice(&bytes[range]);
+                    Ok(())
+                }
+            }
+            .map_err(|e| format!("{}: {e}", job.label))?;
+            renderer.queue.write_buffer(&job.buffer, at, &self.piece);
+            if self.compat {
+                // Each piece submitted at once, so the staging of finished
+                // ones can go (see the type's description).
+                renderer.queue.submit([]);
+                let _ = renderer.device.poll(wgpu::PollType::Poll);
+            }
+            self.at += n as u64;
+            spent += n as u64;
+        }
+        Ok(true)
+    }
+
+    /// The bytes it uploads in all.
+    pub fn bytes(&self) -> u64 {
+        self.jobs.iter().map(|j| j.bytes).sum()
+    }
+}
+
 impl Renderer {
     /// Uploads `geom`'s buffers as stored and records `draws` with
     /// `surfaces`. A draw whose vertex layout does not suit its surface's
@@ -1026,11 +1108,26 @@ impl Renderer {
         draws: &[WorldDraw],
         sky: Option<&SkyTextures<Texture>>,
     ) -> Result<World, String> {
+        let mut upload = self.begin_geometry(geom.layout(), objects, draws)?;
+        upload.step(self, geom, objects, u64::MAX)?;
+        self.finish_world(upload, objects, surfaces, draws, sky)
+    }
+
+    /// Begins uploading a level's static geometry laid out as `layout` and
+    /// the objects' models for `draws` ([`Renderer::create_world_from`] in
+    /// steps): the buffers are made, empty, and filled by
+    /// [`GeometryUpload::step`]; [`Renderer::finish_world`] then makes the
+    /// world. Fails when a draw names a buffer the geometry lacks.
+    pub fn begin_geometry(
+        &mut self,
+        layout: &GeomLayout,
+        objects: &ObjectGeometry,
+        draws: &[WorldDraw],
+    ) -> Result<GeometryUpload, String> {
         if !objects.vertices.len().is_multiple_of(MODEL_VERTEX_BYTES) {
             return Err("object vertices are not whole model vertices".into());
         }
         let object_vertices = (objects.vertices.len() / MODEL_VERTEX_BYTES) as u64;
-        let layout = geom.layout();
         for d in draws {
             let fits = if d.object.is_some() {
                 u64::from(d.first_index) + u64::from(d.index_count) <= objects.indices.len() as u64
@@ -1045,43 +1142,40 @@ impl Renderer {
         }
         let vertex_layouts: Vec<Option<Layout>> =
             layout.vertex_buffers.iter().map(|b| b.layout).collect();
-        let vertex_bytes: Vec<u64> = layout.vertex_buffers.iter().map(|b| b.bytes()).collect();
-        let index_bytes: Vec<u64> = layout
-            .index_counts
-            .iter()
-            .map(|&n| 2 * u64::from(n))
-            .collect();
-        let device = self.device.clone();
-        let queue = self.queue.clone();
-        let format = self.format;
         let compat = self.compat;
-        let pipelines = self
-            .world_pipelines
-            .get_or_insert_with(|| WorldPipelines::new(&device, &queue, format, compat));
+        let device = &self.device;
+        let new_buffer = |label: &str, usage: wgpu::BufferUsages, bytes: u64, min_size: u64| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: bytes
+                    .next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT)
+                    .max(min_size),
+                usage: usage | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        let mut jobs = Vec::new();
         let mut buffer_bytes = 0;
-        let mut piece = Vec::new();
-        let mut vertex_buffers = Vec::with_capacity(vertex_bytes.len() + 1);
-        for (i, &bytes) in vertex_bytes.iter().enumerate() {
+        let mut vertex_buffers = Vec::with_capacity(layout.vertex_buffers.len() + 1);
+        for (i, b) in layout.vertex_buffers.iter().enumerate() {
+            let bytes = b.bytes();
             buffer_bytes += bytes;
-            vertex_buffers.push(stream_buffer(
-                &device,
-                &queue,
-                "level.geom vertices",
-                wgpu::BufferUsages::VERTEX,
+            let label = "level.geom vertices";
+            let buffer = new_buffer(label, wgpu::BufferUsages::VERTEX, bytes, 0);
+            vertex_buffers.push(buffer.clone());
+            jobs.push(Job {
+                buffer,
+                label,
+                source: Source::Vertices(i as u32),
                 bytes,
-                0,
-                UPLOAD_PIECE,
-                compat,
-                &mut piece,
-                |at, out| geom.read(GeomBuffer::Vertices(i as u32), at, out),
-            )?);
+            });
         }
         // Without base vertices (compat), each index range a draw uses is
         // uploaded with its draw's first vertex added, ranges one after
         // another per index buffer (a range drawn from two bases twice);
         // the draws then read from vertex 0.
         let mut rebased = Rebased::default();
-        let mut segments: Vec<Vec<Segment>> = vec![Vec::new(); index_bytes.len()];
+        let mut segments: Vec<Vec<Segment>> = vec![Vec::new(); layout.index_counts.len()];
         if compat {
             for d in draws.iter().filter(|d| d.object.is_none()) {
                 let segments = &mut segments[d.index_buffer as usize];
@@ -1097,52 +1191,48 @@ impl Renderer {
                 });
             }
         }
-        let mut index_buffers = Vec::with_capacity(index_bytes.len() + 1);
-        let mut index_formats = Vec::with_capacity(index_bytes.len() + 1);
-        for (i, &stored) in index_bytes.iter().enumerate() {
-            let source = GeomBuffer::Indices(i as u32);
-            let segments = &segments[i];
+        let mut index_buffers = Vec::with_capacity(layout.index_counts.len() + 1);
+        let mut index_formats = Vec::with_capacity(layout.index_counts.len() + 1);
+        for (i, &count) in layout.index_counts.iter().enumerate() {
             let bytes = if compat {
-                2 * segments.last().map_or(0, |s| u64::from(s.at + s.count))
+                2 * segments[i].last().map_or(0, |s| u64::from(s.at + s.count))
             } else {
-                stored
+                2 * u64::from(count)
             };
             // Index buffers are at least 4 bytes, as before any were empty.
             buffer_bytes += bytes.next_multiple_of(4).max(4);
             index_formats.push(wgpu::IndexFormat::Uint16);
-            index_buffers.push(stream_buffer(
-                &device,
-                &queue,
-                "level.geom indices",
-                wgpu::BufferUsages::INDEX,
-                bytes,
-                4,
-                UPLOAD_PIECE,
-                compat,
-                &mut piece,
-                |at, out| {
-                    if compat {
-                        fill_rebased(&mut *geom, source, segments, at, out)
-                    } else {
-                        geom.read(source, at, out)
-                    }
+            let label = "level.geom indices";
+            let buffer = new_buffer(label, wgpu::BufferUsages::INDEX, bytes, 4);
+            index_buffers.push(buffer.clone());
+            jobs.push(Job {
+                buffer,
+                label,
+                source: if compat {
+                    Source::Rebased(i as u32)
+                } else {
+                    Source::Indices(i as u32)
                 },
-            )?);
+                bytes,
+            });
         }
         // The objects' buffers follow the level's.
         let (object_vb, object_ib) = (vertex_buffers.len() as u32, index_buffers.len() as u32);
         let mut object_buffer_bytes = 0;
         if !objects.vertices.is_empty() {
             // Whole 16-byte vertices: a multiple of 4 bytes, as buffers need.
-            let vertices = &objects.vertices;
-            vertex_buffers.push(upload_buffer(
-                &device,
-                &queue,
-                "object vertices",
-                wgpu::BufferUsages::VERTEX,
-                vertices,
-            ));
-            object_buffer_bytes += vertices.len() as u64;
+            let bytes = objects.vertices.len() as u64;
+            let label = "object vertices";
+            let buffer = new_buffer(label, wgpu::BufferUsages::VERTEX, bytes, 0);
+            vertex_buffers.push(buffer.clone());
+            jobs.push(Job {
+                buffer,
+                label,
+                source: Source::ObjectVertices,
+                bytes,
+            });
+            object_buffer_bytes += bytes;
+            let label = "object indices";
             if compat {
                 // Rebased in memory (the objects' indices are held there),
                 // 32-bit once they pass 16 bits.
@@ -1161,51 +1251,104 @@ impl Renderer {
                     });
                 }
                 let wide = out.iter().any(|&i| i > u32::from(u16::MAX));
-                let mut bytes: Vec<u8> = if wide {
+                let mut held: Vec<u8> = if wide {
                     out.iter().flat_map(|i| i.to_le_bytes()).collect()
                 } else {
                     out.iter().flat_map(|&i| (i as u16).to_le_bytes()).collect()
                 };
                 drop(out);
-                bytes.resize(bytes.len().max(4), 0);
-                object_buffer_bytes += (bytes.len() as u64).next_multiple_of(4);
+                held.resize(held.len().max(4), 0);
+                let bytes = held.len() as u64;
+                object_buffer_bytes += bytes.next_multiple_of(4);
                 index_formats.push(if wide {
                     wgpu::IndexFormat::Uint32
                 } else {
                     wgpu::IndexFormat::Uint16
                 });
-                index_buffers.push(upload_buffer(
-                    &device,
-                    &queue,
-                    "object indices",
-                    wgpu::BufferUsages::INDEX,
-                    &bytes,
-                ));
+                let buffer = new_buffer(label, wgpu::BufferUsages::INDEX, bytes, 0);
+                index_buffers.push(buffer.clone());
+                jobs.push(Job {
+                    buffer,
+                    label,
+                    source: Source::Held(held),
+                    bytes,
+                });
             } else {
-                let index_bytes = 2 * objects.indices.len() as u64;
-                object_buffer_bytes += index_bytes.next_multiple_of(4).max(4);
+                let bytes = 2 * objects.indices.len() as u64;
+                object_buffer_bytes += bytes.next_multiple_of(4).max(4);
                 index_formats.push(wgpu::IndexFormat::Uint16);
-                index_buffers.push(stream_buffer(
-                    &device,
-                    &queue,
-                    "object indices",
-                    wgpu::BufferUsages::INDEX,
-                    index_bytes,
-                    4,
-                    UPLOAD_PIECE,
-                    compat,
-                    &mut piece,
-                    |at, out| {
-                        for (j, o) in out.iter_mut().enumerate() {
-                            let at = at as usize + j;
-                            *o = objects.indices[at / 2].to_le_bytes()[at % 2];
-                        }
-                        Ok(())
-                    },
-                )?);
+                let buffer = new_buffer(label, wgpu::BufferUsages::INDEX, bytes, 4);
+                index_buffers.push(buffer.clone());
+                jobs.push(Job {
+                    buffer,
+                    label,
+                    source: Source::ObjectIndices,
+                    bytes,
+                });
             }
         }
-        drop(piece);
+        Ok(GeometryUpload {
+            jobs,
+            next: 0,
+            at: 0,
+            piece: Vec::new(),
+            compat,
+            segments,
+            rebased,
+            vertex_buffers,
+            index_buffers,
+            index_formats,
+            vertex_layouts,
+            buffer_bytes,
+            object_buffer_bytes,
+            object_vb,
+            object_ib,
+            ranges: draws.iter().map(Rebased::key).collect(),
+        })
+    }
+
+    /// The world of a finished [`GeometryUpload`] (begun with the same
+    /// `objects` and `draws`), with `surfaces` and `sky` as
+    /// [`Renderer::create_world_from`] takes them.
+    pub fn finish_world(
+        &mut self,
+        upload: GeometryUpload,
+        objects: &ObjectGeometry,
+        surfaces: &[Surface<Texture>],
+        draws: &[WorldDraw],
+        sky: Option<&SkyTextures<Texture>>,
+    ) -> Result<World, String> {
+        if upload.next < upload.jobs.len() {
+            return Err("the geometry is not all uploaded".into());
+        }
+        if upload.ranges.len() != draws.len()
+            || upload
+                .ranges
+                .iter()
+                .zip(draws)
+                .any(|(r, d)| *r != Rebased::key(d))
+        {
+            return Err("the geometry was uploaded for other draws".into());
+        }
+        let GeometryUpload {
+            rebased,
+            vertex_buffers,
+            index_buffers,
+            index_formats,
+            vertex_layouts,
+            mut buffer_bytes,
+            mut object_buffer_bytes,
+            object_vb,
+            object_ib,
+            ..
+        } = upload;
+        let device = self.device.clone();
+        let queue = self.queue.clone();
+        let format = self.format;
+        let compat = self.compat;
+        let pipelines = self
+            .world_pipelines
+            .get_or_insert_with(|| WorldPipelines::new(&device, &queue, format, compat));
         buffer_bytes += object_buffer_bytes;
 
         // Draws that can be drawn: surface present, layouts agree. Object
@@ -1771,89 +1914,6 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn streamed_buffers_hold_every_piece_and_a_padded_tail() {
-        let (device, queue) = pollster::block_on(async {
-            let adapter = wgpu::Instance::default()
-                .request_adapter(&Default::default())
-                .await
-                .unwrap();
-            adapter.request_device(&Default::default()).await.unwrap()
-        });
-        let read_back = |buffer: &wgpu::Buffer| {
-            let out = device.create_buffer(&wgpu::BufferDescriptor {
-                label: None,
-                size: buffer.size(),
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            let mut encoder = device.create_command_encoder(&Default::default());
-            encoder.copy_buffer_to_buffer(buffer, 0, &out, 0, buffer.size());
-            queue.submit([encoder.finish()]);
-            out.slice(..).map_async(wgpu::MapMode::Read, |r| r.unwrap());
-            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-            out.slice(..).get_mapped_range().unwrap().to_vec()
-        };
-        // 23 bytes in 8-byte pieces: two whole, a tail of 7 padded to 8.
-        let mut piece = Vec::new();
-        let mut calls = Vec::new();
-        let buffer = stream_buffer(
-            &device,
-            &queue,
-            "test",
-            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_SRC,
-            23,
-            0,
-            8,
-            false,
-            &mut piece,
-            |at, out| {
-                calls.push((at, out.len()));
-                for (j, o) in out.iter_mut().enumerate() {
-                    *o = (at as usize + j) as u8 + 1;
-                }
-                Ok(())
-            },
-        )
-        .unwrap();
-        assert_eq!(calls, [(0, 8), (8, 8), (16, 7)]);
-        assert!(piece.len() <= 8);
-        let mut expected: Vec<u8> = (1..=23).collect();
-        expected.push(0);
-        assert_eq!(read_back(&buffer), expected);
-        // Empty, held at its minimum size; a failed read names the buffer.
-        let empty = stream_buffer(
-            &device,
-            &queue,
-            "empty",
-            wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_SRC,
-            0,
-            4,
-            8,
-            false,
-            &mut piece,
-            |_, _| unreachable!(),
-        )
-        .unwrap();
-        assert_eq!(read_back(&empty), [0; 4]);
-        let failed = stream_buffer(
-            &device,
-            &queue,
-            "failing",
-            wgpu::BufferUsages::INDEX,
-            20,
-            4,
-            8,
-            false,
-            &mut piece,
-            |at, _| match at {
-                0 => Ok(()),
-                _ => Err(io::Error::other("short")),
-            },
-        );
-        assert_eq!(failed.err(), Some("failing: short".to_string()));
-    }
 
     #[test]
     fn multiply_is_row_vector_composition() {

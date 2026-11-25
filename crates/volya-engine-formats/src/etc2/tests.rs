@@ -111,7 +111,7 @@ fn every_mode_decodes_as_fitted() {
         let block = opaque(&texels);
         for (mode, candidate) in [
             ("etc1", etc1(&block, Modes::All)),
-            ("planar", planar(&block)),
+            ("planar", planar(&block, &plane_sums(&block))),
             ("t/h", t_and_h(&block)),
         ] {
             let decoded = decode_rgb(candidate.bits.to_be_bytes());
@@ -153,7 +153,10 @@ fn modes_are_selected_by_their_bits() {
     let mut rng = Rng(7);
     for texels in blocks(&mut rng, 500) {
         let block = opaque(&texels);
-        assert_eq!(mode(planar(&block).bits.to_be_bytes()), "planar");
+        assert_eq!(
+            mode(planar(&block, &plane_sums(&block)).bits.to_be_bytes()),
+            "planar"
+        );
         let th = mode(t_and_h(&block).bits.to_be_bytes());
         assert!(th == "t" || th == "h", "{th}");
         let e = mode(etc1(&block, Modes::All).bits.to_be_bytes());
@@ -235,7 +238,7 @@ fn punch_through_blocks() {
         };
         let mut candidates = vec![etc1(&block, modes), t_and_h(&block)];
         if modes == Modes::Opaque {
-            candidates.push(planar(&block));
+            candidates.push(planar(&block, &plane_sums(&block)));
         }
         for mut c in candidates {
             if modes == Modes::Punch {
@@ -377,4 +380,116 @@ fn transcodes_images_and_picks_formats() {
     );
     let colour = decode_rgb(out[8..].try_into().unwrap());
     assert!(squared_error(&colour, &source) < 16 * 3 * 24 * 24);
+}
+
+/// BC1 blocks of several kinds, as stored: random, gradients across the
+/// block (near endpoints, indices in palette order along x), two halves far
+/// apart, and with BC1's transparent texels where `cut`.
+fn bc1_blocks(rng: &mut Rng, n: usize, cut: bool) -> Vec<[u8; 8]> {
+    (0..n)
+        .map(|k| {
+            let mut bc1 = [0u8; 8];
+            bc1.iter_mut().for_each(|b| *b = rng.byte());
+            let (mut c0, mut c1) = (
+                u16::from_le_bytes([bc1[0], bc1[1]]),
+                u16::from_le_bytes([bc1[2], bc1[3]]),
+            );
+            let mut indices = u32::from_le_bytes([bc1[4], bc1[5], bc1[6], bc1[7]]);
+            match k % 3 {
+                1 => {
+                    // Endpoints a step or two apart in each channel.
+                    let step = 1 + (rng.next() % 2) as u16;
+                    c1 = c0.saturating_sub(step << 11 | step << 6 | step);
+                    // Along x: c0, ⅔ c0, ⅓ c0, c1 (indices 0, 2, 3, 1).
+                    indices = (0..16).fold(0, |v, i| v | [0, 2, 3, 1][i % 4] << (2 * i));
+                }
+                2 => {
+                    // Left half one end, right half the other.
+                    indices = (0..16).fold(0, |v, i| v | u32::from(i % 4 >= 2) << (2 * i));
+                }
+                _ => {}
+            }
+            // Four-colour mode (opaque) unless cut: three-colour mode,
+            // index 3 transparent.
+            if (c0 <= c1) != cut {
+                std::mem::swap(&mut c0, &mut c1);
+            }
+            if c0 == c1 {
+                c0 = c0.wrapping_add(1);
+            }
+            bc1[..2].copy_from_slice(&c0.to_le_bytes());
+            bc1[2..4].copy_from_slice(&c1.to_le_bytes());
+            bc1[4..].copy_from_slice(&indices.to_le_bytes());
+            bc1
+        })
+        .collect()
+}
+
+/// What `transcode_bc` emits for BC blocks (from their four colours, the
+/// path the game's textures take): every mode, each block the candidate of
+/// the mode its bits select, decoding by the oracle with that candidate's
+/// error.
+#[test]
+fn transcoded_bc1_blocks_use_every_mode() {
+    let mut rng = Rng(11);
+    for (target, cut) in [(Etc2Format::Rgb8, false), (Etc2Format::Rgb8A1, true)] {
+        let mut seen = std::collections::BTreeMap::new();
+        for bc1 in bc1_blocks(&mut rng, 6000, cut) {
+            let out = transcode_bc(Format::Bc1, &bc1, target);
+            let bits: [u8; 8] = out.as_slice().try_into().unwrap();
+            let punch = target == Etc2Format::Rgb8A1;
+            let (palette, indices) = Format::Bc1.colour_block(&bc1).unwrap();
+            let block = Block::from_palette(&palette, indices, |t| punch && t[3] < 128, punch);
+            let modes = match target {
+                Etc2Format::Rgb8A1 if block.has_clear() => Modes::Punch,
+                Etc2Format::Rgb8A1 => Modes::Opaque,
+                _ => Modes::All,
+            };
+            // RGB8A1's bit 33 is the opaque flag: its blocks are read as
+            // differential, T, H or planar.
+            let m = mode(if punch {
+                (u64::from_be_bytes(bits) | 1 << 33).to_be_bytes()
+            } else {
+                bits
+            });
+            let mut candidate = match m {
+                "individual" | "differential" => etc1(&block, modes),
+                "planar" => planar(&block, &plane_sums(&block)),
+                _ => t_and_h(&block),
+            };
+            if modes == Modes::Punch {
+                candidate.bits &= !(1 << 33);
+            }
+            assert_eq!(candidate.bits.to_be_bytes(), bits, "{m}: {bc1:?}");
+            let texels = Format::Bc1.decode_block(&bc1);
+            let decoded = super::decode::rgb(bits, punch);
+            assert_eq!(
+                squared_error_where(&texels, &decoded, |t| t[3] != 0),
+                candidate.error,
+                "{m}: {bc1:?}"
+            );
+            for (t, d) in texels.iter().zip(&decoded) {
+                assert_eq!(d[3], t[3], "{m}: {bc1:?}");
+            }
+            let key = if modes == Modes::Punch {
+                format!("{m}, transparent")
+            } else {
+                m.to_owned()
+            };
+            *seen.entry(key).or_insert(0) += 1;
+        }
+        eprintln!("{target:?}: {seen:?}");
+        let wanted: &[&str] = if cut {
+            &[
+                "differential, transparent",
+                "t, transparent",
+                "h, transparent",
+            ]
+        } else {
+            &["individual", "differential", "planar", "t", "h"]
+        };
+        for m in wanted {
+            assert!(seen.contains_key(*m), "{target:?} never {m}: {seen:?}");
+        }
+    }
 }

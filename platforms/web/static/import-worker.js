@@ -7,11 +7,14 @@
 //                                      (plan: { language, files: [{ path, size }], total })
 //   { type: "run", bin, only }       → { type: "progress", done, total, path }…, { type: "done" } | error
 // `exe` and `bin` are Files (or, in tests, `{ url, size }` served with range
-// support); `only` optionally restricts the import to some paths.
+// support); `only` optionally restricts the import to some paths. Each
+// message also names `build`, the wasm build the engine worker runs.
 
-import init, { plan_import, run_import } from "./pkg/volya_engine_web.js";
+import { loadEngine } from "./wasm-build.js";
 
-const ready = init();
+// The engine worker's build, which each message names, so a device keeps
+// only one (wasm-build.js); loaded on the first message.
+let ready = null;
 
 /** A synchronous byte source over a File or a range-capable URL. */
 function source(input) {
@@ -38,7 +41,8 @@ function source(input) {
 
 onmessage = async ({ data }) => {
   try {
-    await ready;
+    ready ??= loadEngine(data.build).then(({ module }) => module);
+    const { plan_import, run_import } = await ready;
     if (data.type === "plan") {
       // The installer's language is chosen from its data, preferring the
       // device's languages among those it offers.

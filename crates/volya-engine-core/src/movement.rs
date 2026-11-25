@@ -303,7 +303,10 @@ pub struct Flags {
     pub sprint: bool,
     pub jump: bool,
     pub falling: bool,
+    /// A landing flag is set (6.7): the 0.1 s one or the hard landing's.
     pub landing: bool,
+    /// The landing flag set is the hard landing's 0.3 s one (6.7).
+    pub hard_landing: bool,
 }
 
 impl Flags {
@@ -648,6 +651,7 @@ impl Player {
         // The landing flag's time runs out (its clock is our choice).
         self.landing_left = (self.landing_left - dt_m).max(0.0);
         self.state.landing = self.landing_left > 0.0;
+        self.state.hard_landing &= self.state.landing;
 
         // 3.1 item 2, 5.4: unable to move, on every frame, air frames
         // included: a direction key's request and the state's direction
@@ -990,12 +994,14 @@ impl Player {
             .and_then(|m| world.materials().get(m as usize))
             .is_some_and(|m| m.has(DEADLY));
         if self.state.falling && v_i > LANDING_SPEED {
-            self.landing_left = if v_i > self.config.crash_speed_min || deadly {
+            let hard = v_i > self.config.crash_speed_min || deadly;
+            self.landing_left = if hard {
                 HARD_LANDING_TIME
             } else {
                 LANDING_TIME
             };
             self.state.landing = true;
+            self.state.hard_landing = hard;
         }
         self.state.falling = false;
         self.state.jump = false;

@@ -11,6 +11,7 @@
 //! page's import/browser interface.
 
 use std::cell::RefCell;
+use std::sync::Arc;
 
 use serde_json::json;
 use volya_engine::app::{self, App};
@@ -18,6 +19,7 @@ use volya_engine::audio::{MixerOut, Silent};
 use volya_engine::core::audio::VoiceId;
 use volya_engine::data::GameData;
 use volya_engine::formats::ui::Resolution;
+use volya_engine::level::LevelWorld;
 use volya_engine::present::Presenter;
 use volya_engine::render::{DrawList, Renderer};
 use volya_engine::scene::Scene;
@@ -90,8 +92,9 @@ pub async fn launch() -> Result<serde_json::Value, JsValue> {
                 data.set_user_config(user);
             }
             let mut app = App::new(data).map_err(error)?;
-            // A GPU without BC gets the level's textures transcoded while
-            // it loads (#113).
+            // Where WebGL 2 draws, the level's textures (transcoded on a
+            // GPU without BC) and geometry are uploaded while it loads, a
+            // piece at a time (#113, #184).
             app.set_prepare_textures(crate::textures::wanted());
             app.resized(native);
             app.set_saved_games(saves);
@@ -181,6 +184,21 @@ pub fn preparing_textures() -> bool {
             .as_ref()
             .is_some_and(|r| r.app.textures_to_prepare().is_some())
     })
+}
+
+/// The level's world, while its loading waits for it to be prepared for
+/// the GPU ([`App::world_to_prepare`]).
+pub fn world_to_prepare() -> Option<Arc<LevelWorld>> {
+    RUNNING.with(|r| Some(r.borrow().as_ref()?.app.world_to_prepare()?.clone()))
+}
+
+/// The level's world is prepared: the level shows.
+pub fn world_prepared() {
+    RUNNING.with(|r| {
+        if let Some(running) = r.borrow_mut().as_mut() {
+            running.app.world_prepared();
+        }
+    });
 }
 
 /// The level's textures are prepared: its loading goes on.

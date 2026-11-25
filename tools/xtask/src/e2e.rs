@@ -23,11 +23,13 @@ const SUITES: &[&str] = &[
 ];
 const TARGETS: &[&str] = &["chrome", "iphone"];
 const REPORT_TIMEOUT: Duration = Duration::from_secs(60);
-/// Suites importing gigabytes from the installer get longer; the menu
+/// Suites importing gigabytes from the installer get longer (the audio
+/// suite takes about a minute in the iOS Simulator); the menu
 /// suite also transcodes a level's textures where the GPU has no BC (#113).
 const SLOW_SUITES: &[(&str, Duration)] = &[
     ("menu", Duration::from_secs(1500)),
     ("render", Duration::from_secs(240)),
+    ("audio", Duration::from_secs(240)),
 ];
 
 fn report_timeout(suite: &str) -> Duration {

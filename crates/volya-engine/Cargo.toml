@@ -13,6 +13,10 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+# Draws through WebGL 2 where there is no WebGPU (volya-engine-render).
+webgl = ["volya-engine-render/webgl"]
+
 [dependencies]
 volya-engine-core = { path = "../volya-engine-core" }
 volya-engine-formats = { path = "../volya-engine-formats" }
@@ -25,4 +29,5 @@ md-5.workspace = true
 sha2.workspace = true
 serde_json.workspace = true
 pollster.workspace = true
+volya-engine-formats = { path = "../volya-engine-formats", features = ["etc2-decode"] }
 volya-engine-installer = { path = "../volya-engine-installer" }

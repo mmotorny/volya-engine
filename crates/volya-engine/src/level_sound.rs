@@ -5,26 +5,22 @@
 //! sources (S3, docs/behavior/sound-static-sources.md), the weather's
 //! ambient sounds (S4, sound-weather-ambient.md), the level music (S5,
 //! sound-level-music.md), the rain and thunder (S8, sound-rain-thunder.md),
-//! and what occludes them (S6, sound-occlusion.md), on the positional
-//! sound system (S2).
+//! what occludes them (S6, sound-occlusion.md) and the material pairs'
+//! sounds (S9, material-pairs.md; the player's footsteps play them,
+//! crate::footsteps), on the positional sound system (S2).
 //!
 //! [`LevelSoundData`] is read while the level loads; [`LevelSounds`] are
 //! the sounds created from it in the sound system once the level runs;
 //! [`SoundRun`] is the state the specs keep for the whole run, across
 //! levels (S4 4.2, S8 3.2), with the clock they share.
 //!
-//! The clock (S3 4.1, S4 3.1, S5 4.1, S8 3.1): the engine clock's real
-//! time counted only on frames that advance the level's game time, so it
-//! stops while the game is paused (the menu, the intro) and while the page
-//! is hidden (#93), and never counts the time outside a level (our choice:
-//! the specs do not say whether it runs during the title menu and the
-//! loading). Its rate is 1 and it has no fixed-step mode: the spec's
-//! timer speed factor (1 unless changed) and the device flag 0x100 (20 ms
-//! per frame, off initially) are at their initial values, and nothing of
-//! Volya Engine changes them (S3's review gap; S4 3.1).
+//! The clock (S3 4.1, S4 3.1, S5 4.1, S8 3.1) is the engine's global
+//! clock of S4 3.1 (`volya-engine-core::pause`), which the app keeps; the
+//! rules run on the level's frames while the pause is off.
 
 use std::collections::HashMap;
 use std::io;
+use std::sync::Arc;
 
 use crate::core::config::{self, LEVEL, PathAliases};
 use crate::core::sound::Fatal;
@@ -39,6 +35,7 @@ use crate::core::sound::system::{SoundId, SoundSystem, Vec3};
 use crate::core::vfs::{self, Vfs};
 use crate::core::weather::Weather;
 use crate::data::GameData;
+use crate::footsteps::{MaterialPairs, PairSounds};
 
 /// Reads `name` in the level directory `dir`, `None` when it is missing.
 fn optional(tree: &dyn Vfs, dir: &str, name: &str) -> io::Result<Option<Vec<u8>>> {
@@ -72,6 +69,9 @@ pub struct LevelSoundData {
     /// descriptions' sounds (S8 2.2).
     pub collections: HashMap<String, Vec<Option<String>>>,
     pub bolt_common: Option<BoltCommon>,
+    /// The material pairs, whose sounds are created with the level's (S9
+    /// section 4); read with the materials.
+    pub pairs: Option<Arc<MaterialPairs>>,
 }
 
 impl LevelSoundData {
@@ -131,6 +131,7 @@ impl LevelSoundData {
             sets,
             collections,
             bolt_common,
+            pairs: None,
         })
     }
 }
@@ -145,6 +146,7 @@ pub struct LevelSounds {
     pub bolt_common: Option<BoltCommon>,
     /// `ambient\rain` (S8 4.1).
     pub rain: SoundId,
+    pub pairs: PairSounds,
 }
 
 impl LevelSounds {
@@ -191,6 +193,12 @@ impl LevelSounds {
             rain_thunder::RAIN,
             crate::core::audio::Category::Effects,
         )?;
+        // S9 section 4: when the library loads, here with the level (the
+        // library is read with it, crate::level).
+        let pairs = match &data.pairs {
+            Some(p) => PairSounds::create(system, tree, aliases, p)?,
+            None => PairSounds::default(),
+        };
         let occlusion = system.occlusion_mut();
         occlusion.scale = data.occlusion_scale;
         if let Some(mesh) = &data.occlusion_mesh {
@@ -205,6 +213,7 @@ impl LevelSounds {
             collections,
             bolt_common: data.bolt_common.clone(),
             rain,
+            pairs,
         })
     }
 
@@ -221,6 +230,7 @@ impl LevelSounds {
             c.discard(system);
         }
         system.discard(self.rain);
+        self.pairs.discard(system);
         system.occlusion_mut().level = None;
     }
 }
@@ -243,11 +253,9 @@ pub struct SoundInputs<'a> {
     pub sky_visibility: f32,
 }
 
-/// The state kept for the whole run (S4 4.2, S8 3.2) and the clock.
+/// The state kept for the whole run (S4 4.2, S8 3.2).
 #[derive(Debug, Default)]
 pub struct SoundRun {
-    /// The global clock (ms; module docs).
-    pub clock: u64,
     pub ambient: AmbientState,
     pub rain: Rain,
     pub thunder: ThunderState,
@@ -258,25 +266,24 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 }
 
 impl SoundRun {
-    /// Advances the clock by a level frame of `elapsed` ms of game-time
-    /// advance.
-    pub fn advance(&mut self, elapsed: u64) {
-        self.clock += elapsed;
-    }
-
     /// The level was left (S4 4.2).
     pub fn level_left(&mut self) {
         self.ambient.level_left();
     }
 
-    /// A level frame on which the game is paused: the thunder's frame time
-    /// is 0 (S8 3.1).
-    pub fn paused_frame(&mut self) {
-        self.thunder.paused_frame();
+    /// The engine's frame time *dt* of a frame `real_s` seconds of real
+    /// time after the previous one (S8 3.1): smoothed, or 0 while the game
+    /// is `paused`. Every frame, in a level or not.
+    pub fn frame_time(&mut self, real_s: f32, paused: bool) {
+        if paused {
+            self.thunder.paused_frame();
+        } else {
+            self.thunder.smooth_frame_time(real_s);
+        }
     }
 
-    /// The rules of one running frame `elapsed_s` seconds after the last,
-    /// in the original's order: the static sources, then the music (S5
+    /// The rules of one frame of the running level, the pause off, at
+    /// global clock `now` (ms), in the original's order: the static sources, then the music (S5
     /// 4.1), then the environment's thunder and rain (S8 3.2), then the
     /// ambient sounds after the engine's frame (S4 4.1). Under the loading
     /// image (`loading_image`) the static sources and the music do not run
@@ -288,10 +295,12 @@ impl SoundRun {
         system: &mut SoundSystem,
         sounds: &mut LevelSounds,
         inputs: &SoundInputs,
-        elapsed_s: f32,
+        now: u64,
         loading_image: bool,
     ) -> Result<(), Fatal> {
-        let now = self.clock as u32;
+        // Unsigned 32-bit milliseconds (S3 4.1, S4 3.1).
+        let seconds = now as f32 / 1000.0;
+        let now = now as u32;
         if !loading_image {
             sounds.statics.frame(system, now, inputs.tau)?;
             sounds.music.frame(system, now, inputs.tau);
@@ -308,9 +317,8 @@ impl SoundRun {
             far_plane: inputs.far_plane,
             sun_dir: inputs.sun_dir,
         };
-        let dt = self.thunder.smooth_frame_time(elapsed_s);
+        let dt = self.thunder.frame_time;
         if let Some(common) = &sounds.bolt_common {
-            let seconds = self.clock as f32 / 1000.0;
             let f = self
                 .thunder
                 .frame(system.random(), seconds, dt, &weather, common, inputs.eye);

@@ -379,6 +379,14 @@ struct Status {
     /// Frames the worker's loop has run.
     frames: u64,
     gpu: gpu::Status,
+    /// The wasm build running (static/wasm-build.js, #186): `webgpu`, or
+    /// `webgl` with WebGL 2 too.
+    build: &'static str,
+}
+
+/// Frames the worker's loop has run.
+pub fn frames() -> u64 {
+    FRAME_STATS.with(|s| s.borrow().frames)
 }
 
 fn status() -> Status {
@@ -390,8 +398,13 @@ fn status() -> Status {
         } else {
             "main"
         },
-        frames: FRAME_STATS.with(|s| s.borrow().frames),
+        frames: frames(),
         gpu: gpu::status(),
+        build: if cfg!(feature = "webgl") {
+            "webgl"
+        } else {
+            "webgpu"
+        },
     }
 }
 

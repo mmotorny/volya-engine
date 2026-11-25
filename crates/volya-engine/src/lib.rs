@@ -22,6 +22,7 @@ pub mod dialog;
 pub mod draw;
 #[cfg(test)]
 mod fixture;
+pub mod footsteps;
 pub mod inventory_screen;
 pub mod level;
 pub mod level_sound;

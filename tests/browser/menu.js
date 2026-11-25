@@ -34,20 +34,18 @@ const ONLY = [
 ];
 // The wasm heap never shrinks: its size after a New Game is the page's for
 // good. Measured at 98 MiB in headless Chrome after one and after two New
-// Games (#79; 193 and 199 MiB before); a regression past this fails.
+// Games (#79; 193 and 199 MiB before), and at 107–110 MiB after the first in
+// the iOS Simulator, drawing through WebGL 2 (#184: the level's geometry
+// uploaded a few pieces per task turn, since wgpu's GL backend keeps what
+// is written in the heap until WebGL reports it done); a regression past
+// this fails.
 const WASM_HEAP_CAP = 110 * 2 ** 20;
-// Drawing through WebGL 2 (#113), measured at 147 MiB after the first New
-// Game in the iOS Simulator: wgpu's GL backend stages every upload in the
-// wasm heap until the submission is known finished, which a WebGL sync
-// object reports only once the worker yields (believed, not measured), so
-// a level's geometry and textures pass through it at once.
-const WASM_HEAP_CAP_WEBGL = 160 * 2 ** 20;
-const heapCap = () => (gpu?.backend === "webgl2" ? WASM_HEAP_CAP_WEBGL : WASM_HEAP_CAP);
 // Touch devices: no full screen offer, touch controls from the start.
 const coarse = () => matchMedia("(pointer: coarse)").matches;
 // How long a level may take to load: transcoding its textures (WebGL 2
-// without BC, #113) takes about 40 s in the iOS Simulator, on every load.
-const loadMs = () => (gpu?.textures === "etc2" ? 300000 : 60000);
+// without BC, #113) takes about 7 s in the iOS Simulator, on every load
+// (#183).
+const loadMs = () => (gpu?.textures === "etc2" ? 120000 : 60000);
 const mib = (bytes) => `${(bytes / 2 ** 20).toFixed(0)} MiB`;
 const CAPTIONS = ["Новая игра", "Загрузить игру", "Сетевая игра", "Опции", "Титры", "Выйти в Windows"];
 let installer;
@@ -515,7 +513,7 @@ export const tests = {
     const shown = await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
     assertEqual(shown.phase, "level", "still in the level");
     const byCaption = stages.map(([n, m]) => `${n} ${m}`).join(", ");
-    assert(playing.wasm_heap_bytes <= heapCap(), `wasm heap ${mib(playing.wasm_heap_bytes)} during the intro, over ${mib(heapCap())}; by caption (MiB): ${byCaption}; textures ${JSON.stringify(playing.textures)}`);
+    assert(playing.wasm_heap_bytes <= WASM_HEAP_CAP, `wasm heap ${mib(playing.wasm_heap_bytes)} during the intro, over ${mib(WASM_HEAP_CAP)}; by caption (MiB): ${byCaption}; textures ${JSON.stringify(playing.textures)}`);
     let note = `wasm heap by caption (MiB): ${byCaption}; "${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; intro skipped, wasm heap ${mib(before.wasm_heap_bytes)} before it, ${mib(playing.wasm_heap_bytes)} while it played`;
     if (gpu.state === "ready") {
       const { rgba } = await volya.call("debug_capture", { width: 256, height: 192 });
@@ -1173,7 +1171,7 @@ export const tests = {
     }
     // A second load reuses the heap the first one grew.
     const heap = (await volya.call("level_stats")).wasm_heap_bytes;
-    assert(heap <= heapCap(), `wasm heap ${mib(heap)} after the second New Game, over ${mib(heapCap())}`);
+    assert(heap <= WASM_HEAP_CAP, `wasm heap ${mib(heap)} after the second New Game, over ${mib(WASM_HEAP_CAP)}`);
     return `loaded again in ${s.load_ms.toFixed(0)} ms; wasm heap ${mib(heap)}`;
   },
 

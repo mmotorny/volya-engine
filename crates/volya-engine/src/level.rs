@@ -40,9 +40,11 @@ use crate::core::particles::placed::PlacedEffects;
 use crate::core::simulation::graph::Graph;
 use crate::core::simulation::navigation::Navigation;
 use crate::core::simulation::{AlifeConfig, Changes, Simulation};
+use crate::core::sound::Fatal;
 use crate::core::vfs::{self, Vfs};
 use crate::core::weather::{Environment, Weather};
 use crate::data::GameData;
+use crate::footsteps::{self, MaterialPairs, PlayerFootsteps};
 use crate::level_sound::{LevelSoundData, SoundInputs};
 use crate::loading_screen::Stage;
 use crate::objects::{self, Characters, LevelObjects, ObjectsReport};
@@ -171,12 +173,12 @@ pub struct LevelScreen {
     collision: Arc<CollisionWorld>,
     /// The level's sound data until the app creates its sounds.
     sound_data: Option<LevelSoundData>,
+    /// The player's footsteps (S11); `None` only in the unit tests' empty
+    /// level.
+    footsteps: Option<PlayerFootsteps>,
     /// The player's sky visibility (level-objects.md 5.4), for the sounds
     /// of the weather.
     sky_visibility: SkyVisibility,
-    /// The real time the last frame advanced game time by (ms), `None` for
-    /// a paused frame.
-    advanced: Option<u64>,
     player: Player,
     /// The player character's state (docs/behavior/player-state.md); `None`
     /// only in the unit tests' empty level.
@@ -923,6 +925,11 @@ pub struct NewGameLoad {
     particle_shaders: Vec<Option<ParticleShader<String>>>,
     /// The level's placed effects and the clock they were started at.
     effects: Option<(PlacedEffects, u64)>,
+    /// The material pairs, read with the materials (S9).
+    pairs: Option<Arc<MaterialPairs>>,
+    /// The player's visual, from its record.
+    player_visual: Option<String>,
+    footsteps: Option<PlayerFootsteps>,
 }
 
 /// The game hour of `clock`, 0 … 23 (the scripts' switch rules,
@@ -1007,6 +1014,10 @@ impl NewGameLoad {
                 let spawn_file = std::mem::take(&mut self.spawn_file);
                 let (sim, character) =
                     new_game_simulation(tree, data, spawn_file, graph, &dir, &clock)?;
+                self.player_visual = sim
+                    .object(character.owner.id)
+                    .and_then(|o| o.record.object.visual())
+                    .map(|v| v.model.clone());
                 self.character = Some(character);
                 self.level_objects = objects::level_objects(&sim);
                 self.simulation = Some(sim);
@@ -1026,17 +1037,25 @@ impl NewGameLoad {
             }
             // The collision mesh with its materials mapped and indexed
             // (level-cform.md sections 2, 3.3). `gamemtl.xr` is read here,
-            // not at game start as the game does (our choice; only this
-            // needs it). Without it there are no materials, so the mapping
-            // fails as the game's does (section 1).
+            // not at game start as the game does (our choice; only the
+            // level needs it), with its material pairs (S9). Without it
+            // there are no materials, so the mapping fails as the game's
+            // does (section 1).
             Stage::LoadingCform => {
                 let path = data.aliases.path("$game_data$", "gamemtl.xr")?;
-                let materials = match vfs::read(tree, &path) {
-                    Ok(bytes) => gamemtl::parse(&bytes)
-                        .map_err(|e| io::Error::new(e.kind(), format!("{path}: {e}")))?,
-                    Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
+                let at = |e: io::Error| io::Error::new(e.kind(), format!("{path}: {e}"));
+                let (materials, pairs) = match vfs::read(tree, &path) {
+                    Ok(bytes) => {
+                        let materials = gamemtl::parse(&bytes).map_err(at)?;
+                        let pairs = MaterialPairs::read(&bytes, &materials).map_err(at)?;
+                        (materials, pairs)
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                        (Vec::new(), MaterialPairs::empty())
+                    }
                     Err(e) => return Err(e),
                 };
+                self.pairs = Some(Arc::new(pairs));
                 // Read as a stream into the world's own form, so the file
                 // is never held whole.
                 let f = tree
@@ -1123,7 +1142,22 @@ impl NewGameLoad {
                 let weather = Weather::load(&data.system, &weather_name)?;
                 // The level's sound data (docs/behavior/level-sound-scope.md),
                 // placed under this caption by us, with the weather it needs.
-                self.sound = Some(LevelSoundData::read(tree, data, &dir, name, &weather)?);
+                let mut sound = LevelSoundData::read(tree, data, &dir, name, &weather)?;
+                // The player's footsteps (S11) on its cycles (S10), placed
+                // under this caption by us, with the player's movement.
+                let pairs = earlier(self.pairs.clone(), "gamemtl.xr")?;
+                let collision = earlier(self.collision.as_ref(), "level.cform")?;
+                let visual = earlier(self.player_visual.as_deref(), "player's visual")?;
+                let cycles = footsteps::read_cycles(tree, data, &dir, visual)?;
+                self.footsteps = Some(PlayerFootsteps::new(
+                    data,
+                    spawn::ACTOR_SECTION,
+                    collision.materials(),
+                    pairs.clone(),
+                    cycles,
+                )?);
+                sound.pairs = Some(pairs);
+                self.sound = Some(sound);
                 self.weather = Some(weather);
                 let level_objects = std::mem::take(&mut self.level_objects);
                 self.spawned = Some(objects::spawn(tree, data, &dir, &level_objects)?);
@@ -1265,6 +1299,7 @@ impl NewGameLoad {
         let character = earlier(self.character, "player character")?;
         let spawned = earlier(self.spawned, "objects")?;
         let simulation = earlier(self.simulation, "simulation")?;
+        let footsteps = earlier(self.footsteps, "footsteps")?;
         if self.dynamic_props.len() != spawned.instances.len() {
             return Err(invalid("loading stages out of order: no light inputs"));
         }
@@ -1321,8 +1356,8 @@ impl NewGameLoad {
             }),
             collision: Arc::new(collision),
             sound_data: self.sound,
+            footsteps: Some(footsteps),
             sky_visibility: SkyVisibility::default(),
-            advanced: None,
             player,
             character: Some(character),
             controls,
@@ -1426,10 +1461,24 @@ impl LevelScreen {
         let elapsed = now.saturating_sub(self.last);
         self.shown += elapsed;
         self.last = now;
-        self.advanced = None;
         self.clock.set_paused(true);
         self.clock.advance(elapsed);
         self.player.paused(now);
+    }
+
+    /// The level waits until `now` before it first shows (the platform
+    /// preparing its world for the GPU, #184): no clock moves, as if it
+    /// were made at `now`, but the placed effects' world clock: the wait is
+    /// the rest of the load, which their first update receives
+    /// (level-placed-effects.md section 5.3).
+    pub fn wait(&mut self, now: u64) {
+        let elapsed = now.saturating_sub(self.last);
+        self.shown += elapsed;
+        self.last = now;
+        self.player.paused(now);
+        if let Some(effects) = &mut self.effects {
+            effects.advance(elapsed);
+        }
     }
 
     /// One frame at `now` with this frame's `input`. The game clock
@@ -1440,7 +1489,6 @@ impl LevelScreen {
         let elapsed = now.saturating_sub(self.last);
         let dt = (elapsed as f32 / 1000.0).min(MAX_STEP);
         self.last = now;
-        self.advanced = Some(elapsed);
         self.clock.set_paused(false);
         self.clock.advance(elapsed);
         let player = self.player.state();
@@ -1468,8 +1516,12 @@ impl LevelScreen {
         }
         self.back |= back;
         self.simulate();
-        // The placed effects on the world clock, which stands still while
-        // the game is paused (no update runs then) or the page hidden.
+        // The placed effects on the world clock, which is the global clock
+        // (autosave-timing.md 1, sound-weather-ambient.md 3.1): it stands
+        // still while the pause is on (the menu, a `pause_state on` intro
+        // item, the hidden page), when the app runs no update but
+        // [`LevelScreen::paused`] or none at all, so the elapsed time here is
+        // the global clock's.
         if let Some(effects) = &mut self.effects {
             effects.frame(elapsed, self.player.view().eye);
         }
@@ -1492,6 +1544,22 @@ impl LevelScreen {
             .update(&self.collision, eye, elapsed as f32 / 1000.0);
     }
 
+    /// The player's footsteps.
+    pub fn footsteps(&self) -> Option<&PlayerFootsteps> {
+        self.footsteps.as_ref()
+    }
+
+    /// The player's footsteps on a frame of the level while the pause is
+    /// off, after its update, at step clock `now` (S11 3.1; crate::footsteps): the
+    /// leg cycle and the steps (S11 2, 3). Fatal as the pair lookup is.
+    pub fn footsteps_frame(&mut self, now: u32) -> Result<(), Fatal> {
+        let Some(f) = &mut self.footsteps else {
+            return Ok(());
+        };
+        let alive = self.character.as_ref().is_none_or(|c| c.conditions.alive());
+        f.frame(now, &self.player, alive)
+    }
+
     /// The level's sound data, once (the app creates its sounds).
     pub fn take_sound_data(&mut self) -> Option<LevelSoundData> {
         self.sound_data.take()
@@ -1500,12 +1568,6 @@ impl LevelScreen {
     /// The collision world, shared.
     pub fn shared_collision(&self) -> Arc<CollisionWorld> {
         self.collision.clone()
-    }
-
-    /// The real time the last frame advanced game time by (ms), `None` when
-    /// it was paused.
-    pub fn advanced(&self) -> Option<u64> {
-        self.advanced
     }
 
     /// What this frame's sound rules read.
@@ -1912,8 +1974,8 @@ impl LevelScreen {
                 CollisionWorld::new(Default::default(), Vec::new()).expect("collision"),
             ),
             sound_data: None,
+            footsteps: None,
             sky_visibility: SkyVisibility::default(),
-            advanced: None,
             player,
             character: None,
             controls,
