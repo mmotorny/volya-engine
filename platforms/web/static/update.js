@@ -16,7 +16,7 @@
 // reopening the app finishes it too (browsers activate a waiting worker once
 // no page uses the old one).
 //
-// The setting lives in the service worker's cache, where sw.js reads it.
+// The setting lives in a cache, where sw.js reads it.
 
 /** This build's commit and its time (ISO 8601), set by `cargo xtask web`. */
 export const BUILD = "dev";
@@ -34,17 +34,23 @@ export function versionText(build = BUILD, built = BUILT) {
   return `${date} ${two(time.getHours())}:${two(time.getMinutes())} · ${build}`;
 }
 
-const CACHE = "volya-engine-app";
+const CACHE = "volya-engine-settings";
+/** Where versions before #444 kept them; sw.js moves them on activation. */
+const LEGACY = "volya-engine-app";
 const SETTINGS = "__settings.json";
 const MIN_INTERVAL_MS = 60 * 60 * 1000;
 
-/** The settings shared with sw.js, kept in its cache. */
+/** The settings shared with sw.js, kept in a cache of their own. */
 export const settingsStore = (scope, cacheStorage = caches) => {
   const url = new URL(SETTINGS, scope).href;
   return {
     async read() {
-      const response = await (await cacheStorage.open(CACHE)).match(url);
-      return response ? response.json() : {};
+      for (const name of [CACHE, LEGACY]) {
+        if (!(await cacheStorage.has(name))) continue;
+        const response = await (await cacheStorage.open(name)).match(url);
+        if (response) return response.json();
+      }
+      return {};
     },
     async write(settings) {
       await (await cacheStorage.open(CACHE)).put(url, new Response(JSON.stringify(settings)));

@@ -248,13 +248,55 @@ fn web(profile: Profile) -> Result {
             &wasm,
         ],
     ))?;
+    stamp_engine(&dist)?;
     inject_build(&dist)
+}
+
+/// Stamps the engine's wasm and its wasm-bindgen glue with one id (a hash of
+/// the wasm), so the engine worker can tell when they come from different
+/// builds (engine-worker.js): a custom section `volya-engine-build` in the
+/// wasm, `export const BUILD_ID` in the glue.
+fn stamp_engine(dist: &Path) -> Result {
+    use sha2::{Digest, Sha256};
+    let wasm_path = dist.join("pkg/volya_engine_web_bg.wasm");
+    let mut wasm = fs::read(&wasm_path).map_err(|e| format!("{}: {e}", wasm_path.display()))?;
+    let id: String = Sha256::digest(&wasm)[..8]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let name = b"volya-engine-build";
+    let mut section = leb128(name.len());
+    section.extend_from_slice(name);
+    section.extend_from_slice(id.as_bytes());
+    wasm.push(0);
+    wasm.extend(leb128(section.len()));
+    wasm.extend(section);
+    fs::write(&wasm_path, wasm).map_err(|e| format!("{}: {e}", wasm_path.display()))?;
+    let glue = dist.join("pkg/volya_engine_web.js");
+    let mut text = fs::read_to_string(&glue).map_err(|e| format!("{}: {e}", glue.display()))?;
+    text.push_str(&format!("\nexport const BUILD_ID = \"{id}\";\n"));
+    fs::write(&glue, text).map_err(|e| format!("{}: {e}", glue.display()))
+}
+
+/// `n` as unsigned LEB128.
+fn leb128(mut n: usize) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    loop {
+        let byte = (n & 0x7f) as u8;
+        n >>= 7;
+        if n == 0 {
+            bytes.push(byte);
+            return bytes;
+        }
+        bytes.push(byte | 0x80);
+    }
 }
 
 /// Injects what the page and its service worker need to know about this
 /// build: the commit and its date into `update.js` (`BUILD`, `BUILT`: the
 /// version shown), and the commit plus every file with a hash of its content,
-/// and its size into `sw.js` (`BUILD`, `PRECACHE`; static/sw.js).
+/// and its size into `sw.js` (`BUILD`, `PRECACHE`, and `CACHE`, named by
+/// them; static/sw.js).
 fn inject_build(dist: &Path) -> Result {
     use sha2::{Digest, Sha256};
     let commit = output(&mut cmd("git", &["rev-parse", "--short", "HEAD"]))?;
@@ -292,6 +334,16 @@ fn inject_build(dist: &Path) -> Result {
             entries.push(format!(r#"["./","{hash}",{size}]"#));
         }
     }
+    // Each build's cache is named by its files, so two builds never share one.
+    let id: String = Sha256::digest(entries.join(",").as_bytes())[..8]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    replace_once(
+        &dist.join("sw.js"),
+        r#"const CACHE = "volya-engine-build-dev";"#,
+        &format!(r#"const CACHE = "volya-engine-build-{id}";"#),
+    )?;
     replace_once(
         &dist.join("sw.js"),
         r#"const BUILD = "dev";"#,

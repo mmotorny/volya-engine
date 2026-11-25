@@ -59,6 +59,19 @@ const e = () => {
 const message = (error) => String(error?.message ?? error);
 
 /**
+ * The engine's compiled wasm, once it is known to be the glue's build
+ * (`cargo xtask web` stamps both with one id): mixed, the glue would call
+ * exports that aren't there.
+ */
+async function engineModule() {
+  const module = await WebAssembly.compileStreaming(fetch(new URL("./pkg/volya_engine_web_bg.wasm", import.meta.url)));
+  const [section] = WebAssembly.Module.customSections(module, "volya-engine-build");
+  const id = section ? new TextDecoder().decode(section) : "none";
+  if (id !== wasm.BUILD_ID) throw new Error(`the engine's code and wasm come from different builds (${wasm.BUILD_ID ?? "none"}, ${id})`);
+  return module;
+}
+
+/**
  * Records how the engine ended in the diagnostic log (`engine.end`, stored
  * at once; nothing while it is off), on thread `tid` (1: this worker, 2:
  * the page, 3: the audio worklet).
@@ -174,7 +187,7 @@ onmessage = async ({ data }) => {
     started = (async () => {
       available = await supported();
       backend = choose(data.graphics, available);
-      await init();
+      await init({ module_or_path: await engineModule() });
       engine = wasm;
       // The player's setting, before anything else runs (#346).
       if (data.diagnostics) {

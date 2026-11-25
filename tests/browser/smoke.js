@@ -277,10 +277,12 @@ export const tests = {
       await new Promise((resolve) => navigator.serviceWorker.addEventListener("controllerchange", resolve, { once: true }));
     }
     assert(registration.active, "no active service worker");
-    const precache = precacheOf(await (await fetch(`${base}sw.js`, { cache: "no-store" })).text());
-    const files = precache.map(([path]) => path);
+    const source = await (await fetch(`${base}sw.js`, { cache: "no-store" })).text();
+    const files = precacheOf(source).map(([path]) => path);
     assert(files.includes("./") && files.includes("index.html") && files.some((f) => f.endsWith(".wasm")), `files ${files.join(" ")}`);
-    const cache = await caches.open("volya-engine-app");
+    const name = source.match(/const CACHE = "(volya-engine-build-[0-9a-f]+)";/)?.[1];
+    assert(name, "no build cache name injected");
+    const cache = await caches.open(name);
     const kept = async (path) => Boolean(await cache.match(new URL(path, registration.scope).href));
     for (let i = 0; i < 100 && !(await Promise.all(files.map(kept))).every(Boolean); i++) {
       await new Promise((r) => setTimeout(r, 100));
@@ -301,102 +303,148 @@ export const tests = {
     }
   },
 
-  "an update downloads only changed files, with consent, waits, and drops removed ones": async () => {
+  "an update installs into a cache of its own, with consent, verified, and waits; the running build is untouched": async () => {
     const source = await (await fetch(`${base}sw.js`, { cache: "no-store" })).text();
     const scope = "https://example.test/app/";
-    const store = new Map();
-    let downloaded = [];
-    let told = [];
-    const cache = {
-      match: async (key) => store.get(typeof key === "string" ? key : key.url)?.clone(),
-      put: async (key, response) => store.set(typeof key === "string" ? key : key.url, response),
-      addAll: async (requests) => {
-        downloaded.push(...requests.map((r) => r.url.slice(scope.length)));
-        for (const r of requests) store.set(r.url, new Response(`body of ${r.url}`));
+    const hashOf = async (text) =>
+      Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))).slice(0, 8), (b) => b.toString(16).padStart(2, "0")).join("");
+    // A fake CacheStorage: name → (url → response).
+    const storage = new Map();
+    const caches = {
+      open: async (name) => {
+        if (!storage.has(name)) storage.set(name, new Map());
+        const entries = storage.get(name);
+        return { match: async (url) => entries.get(url)?.clone(), put: async (url, response) => void entries.set(url, response) };
       },
-      keys: async () => [...store.keys()].map((url) => ({ url })),
-      delete: async (key) => store.delete(typeof key === "string" ? key : key.url),
+      has: async (name) => storage.has(name),
+      keys: async () => [...storage.keys()],
+      delete: async (name) => storage.delete(name),
     };
-    const setSettings = (settings) => store.set(`${scope}__settings.json`, new Response(JSON.stringify(settings)));
-    // Runs the real sw.js (with a given build and PRECACHE) against fakes.
-    const worker = (build, precache) => {
+    const SETTINGS = "volya-engine-settings";
+    const setSettings = async (settings) => (await caches.open(SETTINGS)).put(`${scope}__settings.json`, new Response(JSON.stringify(settings)));
+    // The network: path → body; what install fetched.
+    let network = {};
+    let downloaded = [];
+    const fakeFetch = async (url) => {
+      const path = (url.url ?? url).slice(scope.length);
+      downloaded.push(path);
+      const body = network[path];
+      return body === undefined ? new Response("", { status: 404 }) : new Response(body, { headers: { "Content-Type": "text/plain" } });
+    };
+    let told = [];
+    const registration = { scope, active: null };
+    // Runs the real sw.js for a build of `files` (path → body) against fakes.
+    const worker = async (build, files) => {
+      const precache = await Promise.all(Object.entries(files).map(async ([path, body]) => [path, await hashOf(body), body.length]));
       const listeners = {};
       const state = { skipped: 0, claimed: 0 };
       const client = { postMessage: (m) => told.push(m) };
       const self = {
         addEventListener: (type, f) => (listeners[type] = f),
         skipWaiting: () => state.skipped++,
-        registration: { scope },
+        registration,
         clients: { claim: async () => state.claimed++, matchAll: async () => [client] },
       };
       const code = source
+        .replace(/const CACHE = ".*?";/, `const CACHE = "volya-engine-build-${build}";`)
         .replace(/const BUILD = ".*?";/, `const BUILD = ${JSON.stringify(build)};`)
         .replace(/const PRECACHE = \[.*?\];/s, `const PRECACHE = ${JSON.stringify(precache)};`);
-      class FakeRequest {
-        constructor(url) {
-          this.url = url;
-        }
-      }
-      new Function("self", "caches", "Request", code)(self, { open: async () => cache }, FakeRequest);
+      new Function("self", "caches", "fetch", code)(self, caches, fakeFetch);
       const run = async (type, data) => {
         let done;
         listeners[type]({ data, waitUntil: (p) => (done = p) });
         await done;
       };
-      return { state, run };
+      const install = async () => {
+        downloaded = [];
+        told = [];
+        let error = null;
+        await run("install").catch((e) => (error = e));
+        return error;
+      };
+      const activate = async () => {
+        await run("activate");
+        registration.active = self;
+      };
+      // What this worker serves for `path`, or null when it leaves it to the network.
+      const serve = async (path) => {
+        let response = null;
+        listeners.fetch({ request: { method: "GET", url: `${scope}${path}` }, respondWith: (p) => (response = p) });
+        return response && (await response).text();
+      };
+      return { state, run, install, activate, serve };
     };
-    const install = async (build, precache) => {
-      downloaded = [];
-      told = [];
-      const w = worker(build, precache);
-      let error = null;
-      await w.run("install").catch((e) => (error = e));
-      return { ...w, error };
-    };
-    const kept = () =>
-      [...store.keys()]
-        .filter((u) => !u.includes("__"))
-        .map((u) => u.slice(scope.length))
-        .sort()
-        .join(" ");
+    const files = (name) => [...(storage.get(`volya-engine-build-${name}`)?.keys() ?? [])].map((u) => u.slice(scope.length)).sort().join(" ");
 
-    // The first install downloads even when opted out.
-    setSettings({ auto: false });
-    await install("b1", [["a.js", "aaaa", 10], ["b.wasm", "bbbb", 20]]);
+    // The first install downloads even when opted out, and serves its build.
+    await setSettings({ auto: false });
+    const v1 = { "a.js": "a1", "b.wasm": "b1" };
+    network = { ...v1 };
+    const b1 = await worker("b1", v1);
+    assertEqual(await b1.install(), null, "first install failed");
     assertEqual(downloaded.sort().join(" "), "a.js b.wasm", "first install");
     assertEqual(told.length, 0, "a first install announced as an update");
+    await b1.activate();
+    assertEqual(await b1.serve("b.wasm"), "b1", "served");
+    assertEqual(await b1.serve("elsewhere.js"), null, "a file outside the build served from the cache");
     // Opted out: no download; the pages hear the size; the install fails.
-    const v2 = [["a.js", "aaaa", 10], ["b.wasm", "cccc", 2000], ["c.css", "dddd", 300]];
-    const refused = await install("b2", v2);
+    const v2 = { "a.js": "a1", "b.wasm": "b2-wasm", "c.css": "c2" };
+    network = { ...v2 };
+    const b2 = await worker("b2", v2);
+    assert(await b2.install(), "install succeeded without consent");
     assertEqual(downloaded.join(" "), "", "downloaded without consent");
-    assert(refused.error, "install succeeded without consent");
-    assertEqual(JSON.stringify(told), '[{"type":"update-available","build":"b2","bytes":2300,"files":2}]', "told");
-    // Consent for that build: only the changed files download; it waits.
-    setSettings({ auto: false, consent: "b2" });
-    const update = await install("b2", v2);
+    assertEqual(JSON.stringify(told), '[{"type":"update-available","build":"b2","bytes":9,"files":2}]', "told");
+    // Consent for that build: only the changed files download, the
+    // unchanged one is copied; it waits.
+    await setSettings({ auto: false, consent: "b2" });
+    assertEqual(await b2.install(), null, "install with consent failed");
     assertEqual(downloaded.sort().join(" "), "b.wasm c.css", "update");
+    assertEqual(files("b2"), "a.js b.wasm c.css", "the update's cache");
     assertEqual(told[0]?.type, "update-downloading", "told downloading");
-    assertEqual(update.state.skipped, 0, "took over without being asked");
-    await update.run("message", { type: "something else" });
-    assertEqual(update.state.skipped, 0, "took over on another message");
-    await update.run("message", { type: "take-over" });
-    assertEqual(update.state.skipped, 1, "did not take over when asked");
+    assertEqual(b2.state.skipped, 0, "took over without being asked");
+    // The mix of #444: the running build still serves its own files.
+    assertEqual([await b1.serve("a.js"), await b1.serve("b.wasm")].join(" "), "a1 b1", "the running build got the update's files");
+    assertEqual(files("b1"), "a.js b.wasm", "the running build's cache changed");
+    await b2.run("message", { type: "something else" });
+    assertEqual(b2.state.skipped, 0, "took over on another message");
+    await b2.run("message", { type: "take-over" });
+    assertEqual(b2.state.skipped, 1, "did not take over when asked");
     // Consent was for b2 only.
-    assert((await install("b3", [...v2, ["d.js", "eeee", 5]])).error, "b3 installed on b2's consent");
-    // Automatic: no changes, nothing downloads; an evicted copy comes back.
-    setSettings({ auto: true });
-    await install("b2", v2);
+    assert(await (await worker("b3", { ...v2, "d.js": "d3" })).install(), "b3 installed on b2's consent");
+    // A download that isn't the build's (stale, half deployed) fails the
+    // install; the next try downloads only what is still missing.
+    await setSettings({ auto: true });
+    const v4 = { "a.js": "a1", "b.wasm": "b4-wasm", "d.js": "d4" };
+    network = { ...v4, "b.wasm": "b2-wasm" };
+    const b4 = await worker("b4", v4);
+    const mismatch = await b4.install();
+    assert(String(mismatch).includes("b.wasm"), `a stale download installed: ${mismatch}`);
+    await sleep(20);
+    assertEqual(await b1.serve("b.wasm"), "b1", "the running build changed by a failed install");
+    network = { ...v4 };
+    assertEqual(await b4.install(), null, "retry failed");
+    assertEqual(downloaded.join(" "), "b.wasm", "retry");
+    // Nothing missing, nothing downloads; an evicted copy comes from another
+    // build's cache, else the network.
+    await b4.install();
     assertEqual(downloaded.join(" "), "", "no changes");
-    store.delete(`${scope}a.js`);
-    await install("b2", v2);
+    storage.get("volya-engine-build-b4").delete(`${scope}a.js`);
+    await b4.install();
+    assertEqual(downloaded.join(" "), "", "evicted copy downloaded though kept elsewhere");
+    for (const name of ["b1", "b2", "b3", "b4"]) storage.get(`volya-engine-build-${name}`).delete(`${scope}a.js`);
+    await b4.install();
     assertEqual(downloaded.join(" "), "a.js", "evicted copy");
-    // Activation drops files that left the build, keeping the settings.
-    const removal = worker("b4", [["c.css", "dddd", 300]]);
-    await removal.run("install");
-    await removal.run("activate");
-    assertEqual(kept(), "c.css", "removed files are dropped on activation");
-    assert(store.has(`${scope}__settings.json`), "settings dropped");
-    assertEqual(removal.state.claimed, 1, "claims once active");
+    // Activation deletes the other builds' caches and the legacy one, whose
+    // settings move unless there are newer.
+    storage.delete(SETTINGS);
+    const legacy = await caches.open("volya-engine-app");
+    await legacy.put(`${scope}__settings.json`, new Response('{"auto":false}'));
+    await legacy.put(`${scope}a.js`, new Response("a0"));
+    await b4.activate();
+    assertEqual([...storage.keys()].sort().join(" "), `volya-engine-build-b4 ${SETTINGS}`, "caches after activation");
+    assertEqual(await (await (await caches.open(SETTINGS)).match(`${scope}__settings.json`)).text(), '{"auto":false}', "settings moved");
+    assertEqual(b4.state.claimed, 1, "claims once active");
+    assertEqual(await b4.serve("d.js"), "d4", "served after activation");
   },
 
   "Graphics: the stored choice where the browser supports it, else the first option it supports": async () => {
