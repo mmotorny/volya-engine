@@ -30,10 +30,9 @@ use std::sync::Arc;
 
 use serde::Serialize;
 use volya_engine::level::LevelWorld;
+use volya_engine::render::transcode;
 use volya_engine::render::world::UPLOAD_PIECE;
-use volya_engine::render::{TexturePath, Transcoded, transcode, transcode_into};
 use volya_engine_formats::dds::Dds;
-use volya_engine_formats::etc2::Etc2Format;
 use wasm_bindgen::JsValue;
 
 /// The latest preparation, for `level_stats`.
@@ -42,7 +41,8 @@ pub struct Stats {
     pub textures: u32,
     pub transcoded: u32,
     /// Milliseconds: in all (frames between included), reading the files,
-    /// transcoding, and uploading.
+    /// transcoding (with the upload of what is transcoded, done band by
+    /// band with it), and uploading the rest.
     pub total_ms: f64,
     pub read_ms: f64,
     pub transcode_ms: f64,
@@ -163,19 +163,15 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
         textures: paths.len() as u32,
         ..Default::default()
     };
-    let etc2 =
-        crate::gpu::with_renderer(|r| r.texture_path() == TexturePath::Etc2).unwrap_or(false);
     let compat = crate::gpu::with_renderer(|r| r.compat()).unwrap_or(false);
     let written = || crate::gpu::with_renderer(|r| r.texture_bytes_written()).unwrap_or(0);
     // Where WebGL 2 draws: the bytes written since WebGL last reported the
     // writes done.
     let mut staged_from = written();
-    // Every file is read into this one, and transcoded into the other.
+    // Every file is read into this one, and each band transcoded into the
+    // other.
     let mut bytes = Vec::new();
-    let mut transcoding = Transcoded {
-        format: Etc2Format::Rgb8,
-        data: Vec::new(),
-    };
+    let mut scratch = Vec::new();
     let mut turn = now();
     for path in paths {
         // The game was quit or unmounted meanwhile.
@@ -192,34 +188,55 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
             continue;
         };
         let t = now();
-        let transcoded = (etc2 && transcode_into(&dds, &mut transcoding)).then_some(&transcoding);
-        stats.transcode_ms += now() - t;
-        // Where WebGL 2 draws, the writes before are waited for when this
-        // texture (about its file's size) would take the staging past its
-        // bound.
-        if compat
-            && written() > staged_from
-            && written() - staged_from + bytes.len() as u64 > STAGING_BYTES
-        {
-            gpu_done(&mut stats.gpu_wait_ms).await?;
-            staged_from = written();
-        }
-        let t = now();
-        if transcoded.is_some() {
+        let Some(Ok(mut upload)) = crate::gpu::with_renderer(|r| r.begin_texture(&dds)) else {
+            continue;
+        };
+        let transcoded = upload.transcoded();
+        if transcoded {
             stats.transcoded += 1;
             stats.transcoded_mpx += megapixels(&dds);
         }
-        let texture = crate::gpu::with_renderer(|r| match transcoded {
-            Some(t) => r.create_transcoded_texture(&dds, t),
-            None => r.create_texture(&dds),
-        });
-        if let Some(Ok(texture)) = texture {
-            crate::gpu::with_renderer(|r| {
-                r.add_prepared(&path, texture);
+        let mut waited = 0.0;
+        loop {
+            // Where WebGL 2 draws, the writes before are waited for when
+            // the next band would take the staging past its bound.
+            let staged = written() - staged_from;
+            if compat
+                && staged > 0
+                && upload
+                    .next_bytes()
+                    .is_some_and(|n| staged + n > STAGING_BYTES)
+            {
+                let w = now();
+                gpu_done(&mut stats.gpu_wait_ms).await?;
+                waited += now() - w;
+                staged_from = written();
+            }
+            let budget = if compat {
+                STAGING_BYTES.saturating_sub(written() - staged_from)
+            } else {
+                u64::MAX
+            };
+            let done = crate::gpu::with_renderer(|r| {
+                let done = upload.step(r, &dds, &mut scratch, budget);
                 r.flush_uploads();
+                done
             });
+            if done != Some(false) {
+                break;
+            }
         }
-        stats.upload_ms += now() - t;
+        if let Some(texture) = crate::gpu::with_renderer(|r| upload.finish(r)) {
+            crate::gpu::with_renderer(|r| r.add_prepared(&path, texture));
+        }
+        // Transcoding and uploading go band by band: a transcoded texture's
+        // time is the transcoding's.
+        let took = now() - t - waited;
+        if transcoded {
+            stats.transcode_ms += took;
+        } else {
+            stats.upload_ms += took;
+        }
         stats.total_ms = now() - start;
         STATS.with(|s| *s.borrow_mut() = stats.clone());
         // A task turn for frames to run once this one has taken its share;
