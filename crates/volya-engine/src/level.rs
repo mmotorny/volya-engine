@@ -31,6 +31,7 @@ use crate::core::camera::{self, Angles, Mat4, Vec3};
 use crate::core::character::condition::Activity;
 use crate::core::character::inventory::Place;
 use crate::core::character::{self, CharacterState, SpecificCharacter};
+use crate::core::climbing::Ladder;
 use crate::core::clock::GameClock;
 use crate::core::collision::{CollisionWorld, geometry};
 use crate::core::config;
@@ -615,6 +616,8 @@ pub struct PlayerReport {
     pub jump: bool,
     pub falling: bool,
     pub landing: bool,
+    /// On a ladder (docs/behavior/climbing.md 3.6).
+    pub climbing: bool,
     /// The toggles the touch controls show.
     pub crouch_toggled: bool,
     pub sprint_requested: bool,
@@ -1377,9 +1380,16 @@ impl NewGameLoad {
                 let f = tree
                     .open(&format!("{dir}\\level.cform"))
                     .map_err(|e| file("level.cform", e))?;
-                self.collision = Some(Arc::new(
-                    CollisionWorld::read(f, materials).map_err(|e| file("level.cform", e))?,
-                ));
+                let mut collision =
+                    CollisionWorld::read(f, materials).map_err(|e| file("level.cform", e))?;
+                // docs/behavior/climbing.md 1.1 – 1.3: every ladder of the
+                // level is present from the first frame, its box in the
+                // collision world.
+                let ladders = (self.level_objects.iter())
+                    .filter_map(|o| Ladder::from_record(&o.record))
+                    .collect();
+                collision.set_ladders(ladders)?;
+                self.collision = Some(Arc::new(collision));
             }
             Stage::LoadingGeometry => {
                 let mut f = tree
@@ -2053,6 +2063,9 @@ impl LevelScreen {
         if let Some(c) = &mut self.character {
             self.player.limits = c.movement_limits();
         }
+        // The climbing states' clock is the footsteps' step clock
+        // (climbing.md, conventions): the global clock.
+        self.player.set_step_clock(self.global_ms as u32);
         self.player.frame(&self.collision, now, &request);
         if let Some(c) = &mut self.character {
             if self.player.jump_started() {
@@ -2507,7 +2520,7 @@ impl LevelScreen {
     }
 
     /// The level's dynamic light records, for the sources that create and
-    /// update their lights each frame (docs/architecture.md, Lights).
+    /// update their lights each frame (docs/architecture/simulation.md).
     /// The zones' idle lights given to their records among the level's
     /// dynamic lights (zone-idle-effects.md 4.4), each made the first time.
     /// The artefacts' lights too (artefact-idle-effects.md 5).
@@ -2762,6 +2775,7 @@ impl LevelScreen {
             jump,
             falling,
             landing,
+            climbing,
             ..
         } = p.flags;
         let angles = self.player.angles();
@@ -2792,6 +2806,7 @@ impl LevelScreen {
                 jump,
                 falling,
                 landing,
+                climbing,
                 crouch_toggled: p.crouch_toggled,
                 sprint_requested: p.sprint_requested,
                 sprint_locked: self.controls.sprint_lock.locked(),
@@ -2889,6 +2904,7 @@ impl LevelScreen {
             run_back_coef: 1.8,
             walk_back_coef: 0.8,
             crouch_coef: 0.45,
+            climb_coef: 0.7,
             sprint_koef: 2.6,
             walk_strafe_coef: 1.0,
             run_strafe_coef: 1.0,

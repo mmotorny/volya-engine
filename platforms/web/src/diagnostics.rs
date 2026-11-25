@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! The diagnostic log on the web (#346; `volya_engine::core::diagnostics`,
-//! docs/architecture.md, Diagnostic log). Off by default; the player turns
+//! docs/architecture/diagnostics.md). Off by default; the player turns
 //! it on in Settings. While on, the session's recorder is the global
 //! `tracing` subscriber and its events are appended once per period to the
 //! log kept in OPFS (`volya-engine/diagnostic-log/0` … `7`, one sync access

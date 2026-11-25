@@ -26,6 +26,12 @@
 //! | `torch` (docs/behavior/torch.md 8) | d-pad up | Torch, at the top right beside Inventory (#363) |
 //! | `night_vision` (15.3) | d-pad down | Night vision, beside Torch, shown while it can act (#363) |
 //!
+//! Climbing ladders (docs/behavior/climbing.md) has no control of its own
+//! on any path: forward climbs up, back or looking down past 20° climbs
+//! down, sideways lets go (on a leaning ladder a stick's diagonal sector
+//! too, as W with A does on the keys), and jump jumps off, all through the
+//! actions above.
+//!
 //! While a screen that takes the mouse is open over the running level (the
 //! inventory screen, docs/behavior/inventory-screen.md section 1.3), only
 //! the keyboard's keys reach the character, but those the screen uses
@@ -1200,10 +1206,18 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
         };
         let world = CollisionWorld::new(
             cform,
-            vec![GameMaterial {
-                id: 0,
-                ..GameMaterial::default()
-            }],
+            vec![
+                GameMaterial {
+                    id: 0,
+                    ..GameMaterial::default()
+                },
+                // For ladders (docs/behavior/climbing.md 1.2).
+                GameMaterial {
+                    id: 82,
+                    name: "materials\\fake_ladders".into(),
+                    ..GameMaterial::default()
+                },
+            ],
         )
         .unwrap();
         let config = MovementConfig {
@@ -1212,6 +1226,7 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
             run_back_coef: 1.8,
             walk_back_coef: 0.8,
             crouch_coef: 0.45,
+            climb_coef: 0.7,
             sprint_koef: 2.6,
             walk_strafe_coef: 1.0,
             run_strafe_coef: 1.0,
@@ -1292,6 +1307,78 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
                 self.i.end_frame();
             }
             self.p.state()
+        }
+    }
+
+    /// Climbing a ladder (docs/behavior/climbing.md) by the touch stick,
+    /// look drag and Jump, and by the gamepad's sticks and south button:
+    /// the same actions as the keys and the mouse.
+    #[test]
+    fn ladders_are_climbed_by_touch_and_gamepad() {
+        use crate::core::camera::Angles;
+        use crate::core::climbing::{ClimbState, Ladder};
+        for pad in [false, true] {
+            let mut w = Walk::new();
+            let ladder = Ladder::new("l", [0.0, 2.0, 0.0], [0.0; 3], [0.4, 2.0, 0.02]);
+            w.world.set_ladders(vec![ladder]).unwrap();
+            let facing = Angles {
+                yaw: std::f32::consts::PI,
+                ..Angles::default()
+            };
+            w.p.place([0.0, 0.0, 0.6], facing);
+            w.frames(10);
+            // Forward climbs (2.5).
+            if pad {
+                w.event(Event::GamepadAxis {
+                    axis: GamepadAxis::LeftY,
+                    value: -1.0,
+                });
+            } else {
+                w.stick([0.0, -1.0]);
+            }
+            let s = w.frames(40);
+            assert!(s.flags.climbing && s.position[1] > 0.5, "{pad}: {s:?}");
+            assert_eq!(w.p.climber().state(), ClimbState::ClimbingUp);
+            // Looking down past 20° while still pushing climbs down.
+            if pad {
+                w.event(Event::GamepadAxis {
+                    axis: GamepadAxis::RightY,
+                    value: 1.0,
+                });
+                w.frames(12);
+                w.event(Event::GamepadAxis {
+                    axis: GamepadAxis::RightY,
+                    value: 0.0,
+                });
+            } else {
+                w.event(Event::TouchLook {
+                    delta: [0.0, 300.0],
+                    speed: 100.0,
+                });
+            }
+            let high = w.frames(1).position[1];
+            let s = w.frames(20);
+            assert!(w.p.angles().pitch > 0.35, "{pad}: {:?}", w.p.angles());
+            assert_eq!(w.p.climber().state(), ClimbState::ClimbingDown, "{pad}");
+            assert!(s.position[1] < high, "{pad}: {s:?}");
+            // Jump lets go (3.5).
+            for pressed in [true, false] {
+                w.event(if pad {
+                    Event::GamepadButton {
+                        button: GamepadButton::South,
+                        pressed,
+                    }
+                } else {
+                    Event::TouchButton {
+                        button: TouchButton::Jump,
+                        pressed,
+                    }
+                });
+                w.frames(1);
+            }
+            let s = w.p.state();
+            assert!(s.airborne && !s.flags.climbing, "{pad}: {s:?}");
+            assert_eq!(w.p.climber().state(), ClimbState::Leaving, "{pad}");
         }
     }
 

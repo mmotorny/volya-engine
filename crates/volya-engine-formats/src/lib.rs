@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! Game file format parsers over `Read + Seek`, with no I/O of their own; see
-//! docs/architecture.md (Crates). Each format follows its clean-room spec in
+//! docs/architecture/README.md. Each format follows its clean-room spec in
 //! docs/formats/.
 
 pub mod audio;

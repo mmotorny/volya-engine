@@ -8,10 +8,10 @@
 - No status disclaimers in docs ("currently", "early days", "coming next"); they go stale. Track status in issues.
 - AGENTS.md is not README.md: project descriptions go in README.md; only agent instructions go here.
 - Every source file starts with SPDX headers: `SPDX-FileCopyrightText: 2026 Maksym Motorny` (current year for new files) and `SPDX-License-Identifier: BSD-3-Clause`, in the file's comment syntax.
-- Naming: product crate `volya-engine`, role sub-crates `volya-engine-<role>` in `crates/`, platform packages `platforms/<platform>` with crate `volya-engine-<platform>`, tools `tools/<tool>` with crate `volya-engine-<tool>` (except `xtask`, by Cargo convention) (see docs/architecture.md). Create a crate only when its code exists.
+- Naming: product crate `volya-engine`, role sub-crates `volya-engine-<role>` in `crates/`, platform packages `platforms/<platform>` with crate `volya-engine-<platform>`, tools `tools/<tool>` with crate `volya-engine-<tool>` (except `xtask`, by Cargo convention) (see docs/architecture/README.md). Create a crate only when its code exists.
 - Never open pull requests, issues or comments on other people's repositories; forks under the user's account are fine.
 - Never add URL query parameters (`?…`) without the user's explicit approval.
-- Follow docs/architecture.md; update it when a decision changes.
+- Follow docs/architecture/; update the document a decision belongs to when it changes.
 - Verify how browsers and platforms behave (storage, caching, APIs) before relying on it, and say whether it's measured, documented, or believed. Before inventing a mechanism or a design, check how it's commonly done.
 - No shell scripts: project tasks live in `tools/xtask` (`cargo xtask <task>`).
 - Run shell pipelines with `set -o pipefail`.

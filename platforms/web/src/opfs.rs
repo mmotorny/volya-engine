@@ -24,7 +24,7 @@ use web_sys::{
 };
 
 /// Every file the engine stores lives under this OPFS directory: the
-/// github.io origin is shared with unrelated sites (docs/architecture.md).
+/// github.io origin is shared with unrelated sites (docs/architecture/web-platform.md).
 pub const NAMESPACE: &str = "volya-engine";
 
 /// The engine's OPFS namespace directory, created if needed.

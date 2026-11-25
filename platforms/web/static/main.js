@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Page side: owns the DOM, starts the engine worker and talks to it only by
-// message (docs/architecture.md).
+// message (docs/architecture/web-platform.md).
 
 import { blockZoom } from "./zoom.js";
 import { startInput } from "./input.js";
@@ -298,7 +298,7 @@ const started = startEngine();
 const status = document.getElementById("status");
 try {
   await started;
-  // One version: the build's time and commit (docs/architecture.md, Hosting).
+  // One version: the build's time and commit (docs/architecture/web-platform.md).
   const name = `Volya Engine · ${versionText()}`;
   // Missing graphics is explained in the page itself (game-ui.js).
   status.textContent = name;

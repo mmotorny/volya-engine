@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Module worker for the platform suite: exercises the engine-worker
-// architecture (docs/architecture.md) from inside a worker.
+// architecture (docs/architecture/web-platform.md) from inside a worker.
 
 // The app lives above `__test/` (which may be `__test/run/<id>/`). Imported
 // lazily: `onmessage` must be set before any await, or early messages are lost.

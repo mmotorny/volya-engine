@@ -13,7 +13,7 @@
 ** coroutine.coco exist; coroutines are Lua 5.1's own, so a yield across a
 ** C call (a metamethod, pcall, an iterator or a function registered from
 ** Rust) raises "attempt to yield across metamethod/C-call boundary" where
-** Coco would switch stacks (#100). See docs/architecture.md (Scripts).
+** Coco would switch stacks (#100). See docs/architecture/scripts.md.
 */
 
 #define LUA_CORE

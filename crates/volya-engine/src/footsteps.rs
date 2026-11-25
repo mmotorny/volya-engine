@@ -218,9 +218,8 @@ impl PlayerFootsteps {
         let legs = LegState {
             flags: state.flags,
             runs: player.state_runs(),
-            // TODO(#325): climbing is out of the movement's scope
-            // (player-movement.md section 10).
-            climbing: false,
+            // climbing.md 3.6: the movement state's climbing flag.
+            climbing: state.flags.climbing,
             // TODO(#325): when the flag for turning the body while standing
             // is set is not stated (S11's review gap); the body never turns
             // on its own here (crate::core::movement), so never.

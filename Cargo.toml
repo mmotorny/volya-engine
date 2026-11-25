@@ -81,6 +81,6 @@ lto = true
 [profile.release.package.volya-engine-formats]
 opt-level = 3
 
-# File install conditions exposed (docs/architecture.md, Game data).
+# File install conditions exposed (docs/architecture/game-data.md).
 [patch.crates-io]
 inno = { git = "https://github.com/mmotorny/inno", branch = "expose-file-conditions" }

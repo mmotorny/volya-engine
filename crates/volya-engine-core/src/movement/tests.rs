@@ -18,6 +18,7 @@ fn config() -> MovementConfig {
         run_back_coef: 1.8,
         walk_back_coef: 0.8,
         crouch_coef: 0.45,
+        climb_coef: 0.7,
         sprint_koef: 2.6,
         walk_strafe_coef: 1.0,
         run_strafe_coef: 1.0,
@@ -808,4 +809,185 @@ fn unable_to_run_crouches_and_bobs_as_walking() {
     run(&mut p, &world, now, &crouch, 0.5);
     // 4.2: entering a crouch while walking goes to the low crouch.
     assert_eq!(p.state().posture, 2);
+}
+
+/// A floor, a thin upright ladder facing +z from (0, 0, 0) to (0, 4, 0)
+/// (its box behind z = 0) and a platform at its top behind it
+/// (climbing.md 1.2).
+fn ladder_world() -> CollisionWorld {
+    use crate::climbing::Ladder;
+    let mut b = Builder::default();
+    b.floor([-20.0, 20.0], [0.0, 20.0], 0.0, true);
+    b.floor([-20.0, 20.0], [-20.0, 0.0], 4.0, true);
+    let mut w = b.world();
+    w.set_ladders(vec![Ladder::new(
+        "test",
+        [0.0, 2.0, 0.0],
+        [0.0; 3],
+        [0.4, 2.0, 0.02],
+    )])
+    .unwrap();
+    w
+}
+
+/// Frames of 16 ms with `request` (held) until `done` or `seconds`; the
+/// clock after and whether `done` held.
+fn run_until(
+    p: &mut Player,
+    world: &CollisionWorld,
+    mut now: u64,
+    request: &Request,
+    seconds: f32,
+    mut done: impl FnMut(&Player) -> bool,
+) -> (u64, bool) {
+    for _ in 0..(seconds / 0.016).round() as u32 {
+        now += 16;
+        p.frame(world, now, request);
+        if done(p) {
+            return (now, true);
+        }
+    }
+    (now, false)
+}
+
+/// A player standing 0.6 m in front of [`ladder_world`]'s ladder, facing
+/// it (yaw π looks along −z), the camera level, after 0.2 s.
+fn at_the_ladder(world: &CollisionWorld) -> (Player, u64) {
+    let angles = Angles {
+        yaw: PI,
+        ..Angles::default()
+    };
+    let mut p = Player::new(config(), settings(), [0.0, 0.0, 0.6], angles, 0);
+    let now = run(&mut p, world, 0, &Request::default(), 0.2);
+    (p, now)
+}
+
+#[test]
+fn climbs_a_ladder() {
+    use crate::climbing::ClimbState;
+    let world = ladder_world();
+    let (mut p, now) = at_the_ladder(&world);
+    assert_eq!(p.climber().ladder(), Some(0));
+    // Running towards it takes it upwards (2.5).
+    let (now, up) = run_until(&mut p, &world, now, &FORWARD, 1.0, |p| {
+        p.climber().state() == ClimbState::ClimbingUp
+    });
+    assert!(up, "{:?}", p.climber());
+    let (now, _) = run_until(&mut p, &world, now, &FORWARD, 0.5, |_| false);
+    let s = p.state();
+    assert!(s.flags.climbing && !s.airborne && !s.flags.sprint);
+    // 3.3: the speed on the ladder is capped at 0.1 · 24.99.
+    let speed = length(s.velocity);
+    assert!((speed - 2.499).abs() < 0.01, "{speed} {s:?}");
+    // 3.6: facing the ladder, the yaw limited to ±1 rad about it; turning
+    // further is clamped.
+    let [lo, hi] = p.yaw_limits().unwrap();
+    assert!((lo - (PI - 1.0)).abs() < 1e-4 && (hi - (PI + 1.0)).abs() < 1e-4);
+    // (Without moving: moving turned away by more than 45° lets go, 2.5.)
+    let turn = Request {
+        mouse: [2.0 / p.mouse_scale(), 0.0],
+        ..Request::default()
+    };
+    p.frame(&world, now + 16, &turn);
+    assert!((p.angles().yaw - (PI + 1.0)).abs() < 1e-4);
+    let back = Request {
+        mouse: [-1.0 / p.mouse_scale(), 0.0],
+        ..Request::default()
+    };
+    p.frame(&world, now + 32, &back);
+    let now = now + 32;
+    // No input: hanging still (3.1), climbing up kept.
+    let height = p.state().position[1];
+    let now = run(&mut p, &world, now, &Request::default(), 0.5);
+    let s = p.state();
+    assert!(s.flags.climbing, "{:?}", p.climber());
+    assert!(length(s.velocity) < 0.01, "{s:?}");
+    assert!((s.position[1] - height).abs() < 0.01, "{height} {s:?}");
+    // On up to the top: at the top, the flag and the limits cleared.
+    let (now, top) = run_until(&mut p, &world, now, &FORWARD, 4.0, |p| {
+        p.climber().state() == ClimbState::AtTop
+    });
+    assert!(top, "{:?} {:?}", p.climber(), p.state());
+    assert!(p.state().position[1] > 3.85, "{:?}", p.state());
+    run(&mut p, &world, now, &FORWARD, 1.0);
+    let s = p.state();
+    assert!(!s.flags.climbing && p.yaw_limits().is_none());
+    // Steered onto the platform behind the top.
+    assert!(
+        s.position[2] < 0.0 && (s.position[1] - 4.0).abs() < 0.05,
+        "{s:?}"
+    );
+}
+
+#[test]
+fn gets_off_a_ladder_sideways() {
+    use crate::climbing::ClimbState;
+    let world = ladder_world();
+    let (mut p, now) = at_the_ladder(&world);
+    let (now, high) = run_until(&mut p, &world, now, &FORWARD, 1.5, |p| {
+        p.state().position[1] > 1.0
+    });
+    assert!(high && p.state().flags.climbing);
+    // Sideways input lets go (2.5): leaving, gravity on, back on the floor.
+    let right = Request {
+        right: true,
+        ..Request::default()
+    };
+    let (now, left) = run_until(&mut p, &world, now, &right, 0.2, |p| {
+        p.climber().state() == ClimbState::Leaving
+    });
+    assert!(left, "{:?}", p.climber());
+    run(&mut p, &world, now, &Request::default(), 1.5);
+    let s = p.state();
+    assert!(!s.flags.climbing && s.position[1].abs() < 0.05, "{s:?}");
+}
+
+#[test]
+fn jumps_off_a_ladder() {
+    use crate::climbing::ClimbState;
+    let world = ladder_world();
+    let (mut p, now) = at_the_ladder(&world);
+    let (now, high) = run_until(&mut p, &world, now, &FORWARD, 1.5, |p| {
+        p.state().position[1] > 1.0
+    });
+    assert!(high);
+    // 3.5: 3 m/s along N̂ (no sideways input), leaving, airborne.
+    let jump = Request {
+        jump_pressed: true,
+        ..Request::default()
+    };
+    p.frame(&world, now + 16, &jump);
+    p.frame(&world, now + 32, &Request::default());
+    assert_eq!(p.climber().state(), ClimbState::Leaving);
+    let s = p.state();
+    assert!(s.airborne && !s.flags.climbing, "{s:?}");
+    assert!(s.velocity[2] > 2.5 && s.velocity[0].abs() < 0.1, "{s:?}");
+    run(&mut p, &world, now + 32, &Request::default(), 1.5);
+    let s = p.state();
+    assert!(s.position[2] > 0.7 && !s.airborne, "{s:?}");
+}
+
+#[test]
+fn climbing_scales_the_acceleration() {
+    // climbing.md 3.3: |a| × climb_coef 0.7 while climbing.
+    let world = ladder_world();
+    let (mut p, now) = at_the_ladder(&world);
+    let (now, on) = run_until(&mut p, &world, now, &FORWARD, 1.0, |p| {
+        p.state().flags.climbing
+    });
+    assert!(on);
+    p.frame(&world, now + 16, &FORWARD);
+    assert!((p.speed_limit - 2.499).abs() < 1e-3, "{}", p.speed_limit);
+    let walk = Request {
+        accel: true,
+        ..FORWARD
+    };
+    p.frame(&world, now + 32, &walk);
+    assert!((p.speed_limit - 1.19).abs() < 1e-3, "{}", p.speed_limit);
+    let back = Request {
+        back: true,
+        ..Request::default()
+    };
+    p.frame(&world, now + 48, &back);
+    assert!((p.speed_limit - 2.142).abs() < 1e-3, "{}", p.speed_limit);
 }

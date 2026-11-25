@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-// The engine thread (docs/architecture.md). Messages from the page:
+// The engine thread (docs/architecture/web-platform.md). Messages from the page:
 //   { type: "start", canvas, size, graphics, diagnostics, previousEnd }
 //     → { type: "started", available, backend, diagnostics } | { type: "error", message }
 //   (`graphics`: the stored Graphics choice or null; `available`: what the
