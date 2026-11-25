@@ -1,17 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! A level prepared for a GPU without BC (#113), where WebGL 2 draws: while
-//! a New Game's loading waits under `st_loading_textures`
+//! A level prepared where WebGL 2 draws (#113): while a New Game's loading
+//! waits under `st_loading_textures`
 //! ([`volya_engine::app::App::textures_to_prepare`]), each texture is
-//! transcoded to ETC2 and uploaded, a frame's worth per task turn so frames
-//! run in between (the loading screen keeps drawing). Nothing is stored:
-//! every load transcodes again (decided by the user: a level's transcodings
-//! would take as much storage as its BC textures, on top of the game). Then,
-//! while it waits under its last caption
-//! ([`volya_engine::app::App::world_to_prepare`]), its geometry is uploaded
-//! a few pieces per task turn (#184): wgpu's GL backend keeps what is
-//! written in the wasm heap until WebGL reports the work done, which it
+//! uploaded (on a GPU without BC transcoded to ETC2 first), a frame's worth
+//! per task turn so frames run in between (the loading screen keeps
+//! drawing). Nothing is stored: every load transcodes again (decided by the
+//! user: a level's transcodings would take as much storage as its BC
+//! textures, on top of the game). Then, while it waits under its last
+//! caption ([`volya_engine::app::App::world_to_prepare`]), its geometry is
+//! uploaded a few pieces per task turn (#184): wgpu's GL backend keeps what
+//! is written in the wasm heap until WebGL reports the work done, which it
 //! does only after the turn ends.
 
 use std::cell::RefCell;
@@ -74,10 +74,13 @@ fn megapixels(dds: &Dds) -> f64 {
         .sum()
 }
 
-/// Whether this GPU's textures are prepared while a level loads: when they
-/// are transcoded.
+/// Whether a level is prepared while it loads: where WebGL 2 draws (no
+/// storage buffers, [`volya_engine::render::Renderer::compat`]), whose
+/// uploads stay in the wasm heap until WebGL reports them done, and where
+/// textures are transcoded.
 pub fn wanted() -> bool {
-    crate::gpu::with_renderer(|r| r.texture_path() == TexturePath::Etc2).unwrap_or(false)
+    crate::gpu::with_renderer(|r| r.compat() || r.texture_path() == TexturePath::Etc2)
+        .unwrap_or(false)
 }
 
 /// Starts preparing the textures the loading waits for, if it does and no
@@ -89,14 +92,17 @@ pub fn poll() {
     if let Some(level) = crate::engine::world_to_prepare() {
         RUNNING.with(|r| *r.borrow_mut() = true);
         wasm_bindgen_futures::spawn_local(async move {
-            let result = prepare_world(level).await;
+            let result = prepare_world(level.clone()).await;
             RUNNING.with(|r| *r.borrow_mut() = false);
             if let Err(e) = result {
                 web_sys::console::error_1(&e);
             }
             // What is left is uploaded, or the failure reported, when the
-            // level is first drawn.
-            crate::engine::world_prepared();
+            // level is first drawn; unless the game was quit meanwhile (a
+            // later load's hold is its own task's to release).
+            if crate::engine::world_to_prepare().is_some_and(|w| Arc::ptr_eq(&w, &level)) {
+                crate::engine::world_prepared();
+            }
         });
         return;
     }
@@ -122,6 +128,8 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
         textures: paths.len() as u32,
         ..Default::default()
     };
+    let etc2 =
+        crate::gpu::with_renderer(|r| r.texture_path() == TexturePath::Etc2).unwrap_or(false);
     let mut turn = now();
     for path in paths {
         // The game was quit or unmounted meanwhile.
@@ -137,7 +145,7 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
             continue;
         };
         let t = now();
-        let transcoded = transcode(&dds);
+        let transcoded = if etc2 { transcode(&dds) } else { None };
         stats.transcode_ms += now() - t;
         let t = now();
         if transcoded.is_some() {

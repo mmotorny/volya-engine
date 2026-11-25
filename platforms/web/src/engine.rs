@@ -92,8 +92,9 @@ pub async fn launch() -> Result<serde_json::Value, JsValue> {
                 data.set_user_config(user);
             }
             let mut app = App::new(data).map_err(error)?;
-            // A GPU without BC gets the level's textures transcoded while
-            // it loads (#113).
+            // Where WebGL 2 draws, the level's textures (transcoded on a
+            // GPU without BC) and geometry are uploaded while it loads, a
+            // piece at a time (#113, #184).
             app.set_prepare_textures(crate::textures::wanted());
             app.resized(native);
             app.set_saved_games(saves);

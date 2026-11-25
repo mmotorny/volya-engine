@@ -28,7 +28,7 @@
 // workers have it, otherwise on a 60 Hz timer; it idles while the page is
 // hidden, drawing nothing.
 
-import { wasmBuild, wasmModule } from "./wasm-build.js";
+import { loadEngine } from "./wasm-build.js";
 
 /** The wasm build's exports, once "start" loaded it (wasm-build.js). */
 let engine = null;
@@ -118,10 +118,7 @@ onmessage = async ({ data }) => {
   if (data.type === "start") {
     let build;
     started = (async () => {
-      build = await wasmBuild();
-      const module = await wasmModule(build);
-      await module.default();
-      engine = module;
+      ({ build, module: engine } = await loadEngine());
       await engine.start(data.canvas);
       engine.resize(data.size.width, data.size.height, data.size.dpr);
     })();

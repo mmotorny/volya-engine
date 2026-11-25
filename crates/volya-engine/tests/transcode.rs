@@ -138,16 +138,30 @@ fn level_textures_transcode() {
         .iter()
         .zip(&classes)
     {
+        // The alpha's time is in its colour's.
+        let time = if c.time.is_zero() {
+            String::new()
+        } else {
+            format!(", {:.2?}", c.time)
+        };
         eprintln!(
-            "{name}: {:.1} Mpx, {:.2?}, PSNR {:.2} dB",
+            "{name}: {:.1} Mpx{time}, PSNR {:.2} dB",
             c.texels as f64 / 1e6,
-            c.time,
             c.psnr()
         );
     }
-    // #113's encoder measured 43.38, 35.71, 38.91 and 47.77 dB; #183's may
-    // lose up to about 0.5 dB a kind for its speed.
-    for (c, floor) in classes.iter().zip([42.88, 35.21, 38.41, 47.27]) {
-        assert!(c.psnr() > floor, "{:.2} dB, below {floor}", c.psnr());
+    // #113's encoder measured 43.38, 35.71, 38.91 and 47.77 dB; #183's
+    // 43.38, 35.69, 38.85 and 47.66 dB (the encoder is deterministic): held
+    // to 0.05 dB below that, per kind.
+    for ((name, c), floor) in ["RGB8", "RGB8A1", "RGBA8 colour", "RGBA8 alpha"]
+        .iter()
+        .zip(&classes)
+        .zip([43.33, 35.64, 38.80, 47.61])
+    {
+        assert!(
+            c.psnr() > floor,
+            "{name}: {:.2} dB, below {floor}",
+            c.psnr()
+        );
     }
 }

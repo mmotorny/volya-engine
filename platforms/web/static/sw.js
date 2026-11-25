@@ -19,7 +19,10 @@
 // runs one: their files are marked with the build's name in PRECACHE, and
 // only the builds this browser ran are kept (BUILDS, recorded when the page
 // says which it runs, or when one of their files is fetched). The first
-// install keeps none: the page then tells it.
+// install keeps none: the page then tells it. A build's copies kept from
+// before builds were recorded (an install older than #186 kept `pkg/`) are
+// updated like any kept file until the page says which build it runs; then
+// those of builds it doesn't run go.
 //
 // Downloading an update needs consent: automatic updates (the default), or
 // the player's tap for this version when they turned them off (metered
@@ -66,7 +69,7 @@ self.addEventListener("install", (event) => {
       const builds = (await readJson(cache, BUILDS)) ?? [];
       const changed = [];
       for (const [path, hash, size, build] of PRECACHE) {
-        if (build && !builds.includes(build)) continue;
+        if (build && !builds.includes(build) && !(await cache.match(absolute(path)))) continue;
         if (hashes.get(path) !== hash || !(await cache.match(absolute(path)))) changed.push([path, size]);
       }
       const settings = (await readJson(cache, SETTINGS)) ?? {};
@@ -91,14 +94,19 @@ const recordBuild = async (cache, build) => {
   if (!builds.includes(build)) await cache.put(absolute(BUILDS), new Response(JSON.stringify([...builds, build])));
 };
 
-/** Keeps wasm build `build` from now on: recorded, its files fetched if missing. */
+/**
+ * Keeps wasm build `build` from now on: recorded, its files fetched if
+ * missing; copies of builds never recorded (kept before builds were) go.
+ */
 const keepBuild = async (build) => {
   if (!PRECACHE.some((entry) => entry[3] === build)) return;
   const cache = await caches.open(CACHE);
   await recordBuild(cache, build);
+  const builds = (await readJson(cache, BUILDS)) ?? [];
   const missing = [];
   for (const [path, , , b] of PRECACHE) {
-    if (b === build && !(await cache.match(absolute(path)))) missing.push(new Request(absolute(path), { cache: "no-cache" }));
+    if (b && !builds.includes(b)) await cache.delete(absolute(path));
+    else if (b === build && !(await cache.match(absolute(path)))) missing.push(new Request(absolute(path), { cache: "no-cache" }));
   }
   await cache.addAll(missing);
 };

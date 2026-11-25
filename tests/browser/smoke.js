@@ -190,7 +190,7 @@ export const tests = {
         for (const r of requests) store.set(r.url, new Response(`body of ${r.url}`));
       },
       keys: async () => [...store.keys()].map((url) => ({ url })),
-      delete: async (request) => store.delete(request.url),
+      delete: async (key) => store.delete(typeof key === "string" ? key : key.url),
     };
     const setSettings = (settings) => store.set(`${scope}__settings.json`, new Response(JSON.stringify(settings)));
     // Runs the real sw.js (with a given build and PRECACHE) against fakes.
@@ -291,7 +291,19 @@ export const tests = {
     assertEqual(JSON.stringify(told), '[{"type":"update-downloading","build":"b6","bytes":2000,"files":1}]', "update size");
     await both.run("activate");
     assertEqual(kept(), "c.css pkg-webgl/e.wasm", "kept after activation");
-
+    // Kept from before builds were recorded (one build, in pkg/): updated
+    // until the page says which it runs, then dropped if not that one.
+    store.clear();
+    store.set(`${scope}__precache.json`, new Response(JSON.stringify([["c.css", "dddd", 300], ["pkg/e.wasm", "g0", 1000]])));
+    store.set(`${scope}c.css`, new Response("css"));
+    store.set(`${scope}pkg/e.wasm`, new Response("old wasm"));
+    setSettings({ auto: true });
+    await install("b7", builds("g3", "l3"));
+    assertEqual(downloaded.join(" "), "pkg/e.wasm", "a build kept before builds were recorded");
+    downloaded = [];
+    await worker("b7", builds("g3", "l3")).run("message", { type: "build", build: "webgl" });
+    assertEqual(downloaded.join(" "), "pkg-webgl/e.wasm", "the build the page runs, after an old install");
+    assertEqual(kept(), "c.css pkg-webgl/e.wasm", "the build it doesn't run dropped");
   },
 
   "a game the browser deleted is said so, on the import screen": async () => {
