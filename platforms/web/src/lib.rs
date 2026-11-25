@@ -91,10 +91,12 @@ mod counting {
 
 /// Starts the engine on the canvas transferred from the page, drawing
 /// through WebGL 2 even where WebGPU works when `webgl` (the player's
-/// Graphics setting, #121). Without graphics the engine still starts;
-/// `status` reports why they are unavailable.
+/// Graphics setting, #121; `graphics` is the stored choice, empty when
+/// none). Without graphics the engine still starts; `status` reports why
+/// they are unavailable.
 #[wasm_bindgen]
-pub async fn start(canvas: OffscreenCanvas, webgl: bool) {
+pub async fn start(canvas: OffscreenCanvas, webgl: bool, graphics: String) {
+    gpu::set_choice(graphics);
     gpu::init(canvas, webgl).await;
     diagnostics::started().await;
 }

@@ -1864,6 +1864,16 @@ export const tests = {
     const ends = mine.filter((e) => e.name === "engine.end");
     const left = ends.filter((e) => e.args.message === "left the game").length;
     assertEqual(left, count("i", "game started"), "games left");
+    // Each game starts with its settings; a change writes them again.
+    const settings = mine.filter((e) => e.name === "settings");
+    for (const start of mine.filter((e) => e.name === "game started")) {
+      const next = mine.find((e) => e.ts >= start.ts && (e.name === "settings" || e.name === "engine.end"));
+      assertEqual(next?.name, "settings", "the settings at a game's start");
+    }
+    for (const key of ["renderer", "vid_mode", "r__supersample", "_preset", "r__detail_density", "r1_dlights", "rs_c_gamma", "rs_vis_distance", "graphics", "backend"]) {
+      assert(settings.every((e) => key in e.args), `settings without ${key}`);
+    }
+    assert(settings.some((e) => e.args.vid_mode === "2868x1320"), "no settings at a changed video mode");
     const reasons = new Set(ends.map((e) => e.args.reason));
     for (const reason of ["quit", "page_hidden", "load_failed"]) assert(reasons.has(reason), `no ${reason} end`);
     const levels = (name) => mine.filter((e) => e.name === name && e.args?.level === "l01_escape").length;

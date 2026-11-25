@@ -67,6 +67,8 @@ thread_local! {
     static DETAILS_DRAWN: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 
     static GPU: RefCell<Option<Gpu>> = const { RefCell::new(None) };
+    /// The Graphics setting's stored choice, empty when none (#121).
+    static CHOICE: RefCell<String> = const { RefCell::new(String::new()) };
     /// Why there is no GPU, once initialisation failed.
     static UNAVAILABLE: RefCell<Option<String>> = const { RefCell::new(None) };
     /// Milliseconds from a frame's submission until the browser reported
@@ -99,6 +101,19 @@ fn watch_context_loss(canvas: &OffscreenCanvas) {
         canvas.add_event_listener_with_callback("webglcontextlost", lost.as_ref().unchecked_ref());
     // For the canvas's lifetime, the engine's.
     lost.forget();
+}
+
+/// Keeps the Graphics setting's stored choice (`""` when none), for the
+/// diagnostic log's `settings` event.
+pub fn set_choice(choice: String) {
+    CHOICE.with(|c| *c.borrow_mut() = choice);
+}
+
+/// The Graphics setting as stored (`""` when none) and the backend drawing
+/// (`""` without graphics).
+pub fn graphics() -> (String, &'static str) {
+    let backend = GPU.with(|g| g.borrow().as_ref().map_or("", |gpu| gpu.backend));
+    (CHOICE.with(|c| c.borrow().clone()), backend)
 }
 
 /// Sets up WebGPU, or WebGL 2 where there is no WebGPU or `webgl` asks for
