@@ -707,6 +707,29 @@ impl NewGameLoad {
         self.name.as_deref()
     }
 
+    /// Every texture file the level uploads (its surfaces', its objects'
+    /// and the sky's), each once, once `st_loading_textures` has run.
+    pub fn texture_paths(&self) -> Vec<String> {
+        let mut paths: Vec<String> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let surfaces = self
+            .surfaces
+            .iter()
+            .flat_map(|s| s.textures.iter().chain([&s.env]).flatten());
+        let sky = self.sky.iter().flat_map(|sky| {
+            sky.sections
+                .iter()
+                .flat_map(|s| [Some(&s.cube), Some(&s.clouds), s.sun.as_ref()])
+                .flatten()
+        });
+        for path in surfaces.chain(sky) {
+            if seen.insert(path.as_str()) {
+                paths.push(path.clone());
+            }
+        }
+        paths
+    }
+
     /// Does the work of `stage`.
     pub fn run(&mut self, stage: Stage, tree: &dyn Vfs, data: &GameData) -> io::Result<()> {
         let dir = self.dir.clone();

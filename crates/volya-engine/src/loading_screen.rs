@@ -16,6 +16,11 @@
 //! caption's work, whose content is not established (section 2, step 2),
 //! is not presented: the next caption's image follows directly.
 //!
+//! A platform that prepares textures before they are uploaded (transcodes
+//! them for its GPU, #113) holds the loading under `st_loading_textures`
+//! once that caption's work is done ([`Loading::prepare_textures`]), for
+//! as many frames as preparing takes, the caption showing.
+//!
 //! After the last stage the app draws the image over the level's first
 //! [`OVERLAY_FRAMES`] frames with sound muted (sections 2, 6), and starts
 //! the New Game intro under its last frames ([`intro_due`], section 7).
@@ -398,6 +403,20 @@ pub struct Loading {
     current: usize,
     screen: LoadingScreen,
     load: NewGameLoad,
+    /// Whether the platform prepares the level's textures.
+    prepare: bool,
+    hold: Hold,
+}
+
+/// Where the loading stands with the platform's texture preparation.
+#[derive(Default)]
+enum Hold {
+    #[default]
+    None,
+    /// The level's texture files, while the platform prepares them.
+    Preparing(Vec<String>),
+    /// Prepared: the next step goes on to the next caption.
+    Prepared,
 }
 
 impl Loading {
@@ -411,6 +430,30 @@ impl Loading {
             current: 0,
             screen,
             load: NewGameLoad::default(),
+            prepare: false,
+            hold: Hold::None,
+        }
+    }
+
+    /// Holds the loading under `st_loading_textures`, once its work is
+    /// done, until [`Loading::textures_prepared`]: the platform prepares
+    /// [`Loading::textures_to_prepare`] meanwhile.
+    pub fn prepare_textures(&mut self) {
+        self.prepare = true;
+    }
+
+    /// The level's texture files, while the platform is to prepare them.
+    pub fn textures_to_prepare(&self) -> Option<&[String]> {
+        match &self.hold {
+            Hold::Preparing(paths) => Some(paths),
+            _ => None,
+        }
+    }
+
+    /// The platform has prepared the textures: the next step goes on.
+    pub fn textures_prepared(&mut self) {
+        if matches!(self.hold, Hold::Preparing(_)) {
+            self.hold = Hold::Prepared;
         }
     }
 
@@ -431,13 +474,26 @@ impl Loading {
         data: &GameData,
         now: u64,
     ) -> io::Result<Option<LevelScreen>> {
-        let stage = self.stage();
-        self.load.run(stage, tree, data)?;
-        if stage == Stage::CreatingNewGame
-            && let Some(level) = self.load.level_name()
-        {
-            // Section 4.5: the level is determined here.
-            self.screen.set_level(tree, data, level)?;
+        match std::mem::take(&mut self.hold) {
+            Hold::Preparing(paths) => {
+                self.hold = Hold::Preparing(paths);
+                return Ok(None);
+            }
+            Hold::Prepared => {}
+            Hold::None => {
+                let stage = self.stage();
+                self.load.run(stage, tree, data)?;
+                if stage == Stage::CreatingNewGame
+                    && let Some(level) = self.load.level_name()
+                {
+                    // Section 4.5: the level is determined here.
+                    self.screen.set_level(tree, data, level)?;
+                }
+                if stage == Stage::LoadingTextures && self.prepare {
+                    self.hold = Hold::Preparing(self.load.texture_paths());
+                    return Ok(None);
+                }
+            }
         }
         if self.current + 1 < self.stages.len() {
             self.current += 1;

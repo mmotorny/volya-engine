@@ -222,6 +222,56 @@ pub struct WorldDraw {
 
 /// Bytes of one draw's record in the draws buffer.
 const DRAW_BYTES: usize = 144;
+/// [`Renderer::compat`]: RGBA32F texels per draw record, and records per
+/// row of the draws texture.
+const DRAW_TEXELS: u32 = (DRAW_BYTES / 16) as u32;
+const DRAWS_PER_ROW: u32 = 64;
+
+/// The world program's source: as written, or for [`Renderer::compat`] with
+/// the draws read from a texture (`draw_texels`, [`DRAW_TEXELS`] texels per
+/// draw, [`DRAWS_PER_ROW`] draws per row) instead of a storage buffer, which
+/// WebGL 2's vertex programs lack.
+pub fn world_source(compat: bool) -> String {
+    let source = include_str!("world.wgsl");
+    if !compat {
+        return source.to_owned();
+    }
+    const STORAGE: &str = "@group(0) @binding(1) var<storage, read> draws: array<Draw>;";
+    let texture = format!(
+        "@group(0) @binding(1) var draw_texels: texture_2d<f32>;
+
+fn draw_at(i: u32) -> Draw {{
+    let x = i32((i % {DRAWS_PER_ROW}u) * {DRAW_TEXELS}u);
+    let y = i32(i / {DRAWS_PER_ROW}u);
+    let t = array<vec4<f32>, {DRAW_TEXELS}>(
+        textureLoad(draw_texels, vec2(x, y), 0),
+        textureLoad(draw_texels, vec2(x + 1, y), 0),
+        textureLoad(draw_texels, vec2(x + 2, y), 0),
+        textureLoad(draw_texels, vec2(x + 3, y), 0),
+        textureLoad(draw_texels, vec2(x + 4, y), 0),
+        textureLoad(draw_texels, vec2(x + 5, y), 0),
+        textureLoad(draw_texels, vec2(x + 6, y), 0),
+        textureLoad(draw_texels, vec2(x + 7, y), 0),
+        textureLoad(draw_texels, vec2(x + 8, y), 0),
+    );
+    return Draw(mat4x4(t[0], t[1], t[2], t[3]), t[4], t[5], t[6], t[7], t[8]);
+}}"
+    );
+    assert!(
+        source.contains(STORAGE),
+        "world.wgsl: the draws binding changed"
+    );
+    source
+        .replace(STORAGE, &texture)
+        .replace("draws[v.draw]", "draw_at(v.draw)")
+}
+
+/// The per-draw records on the GPU.
+enum DrawData {
+    Buffer(wgpu::Buffer),
+    /// [`Renderer::compat`]: an RGBA32F texture ([`world_source`]).
+    Texture(wgpu::Texture),
+}
 /// Bytes of the frame constants.
 const FRAME_BYTES: u64 = 288;
 
@@ -335,6 +385,7 @@ impl WorldPipelines {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
+        compat: bool,
     ) -> Self {
         let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("world frame"),
@@ -352,10 +403,18 @@ impl WorldPipelines {
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    ty: if compat {
+                        wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        }
+                    } else {
+                        wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        }
                     },
                     count: None,
                 },
@@ -390,7 +449,7 @@ impl WorldPipelines {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("world"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("world.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(world_source(compat).into()),
         });
         // Section 4.4: s_base / s_detail wrap, anisotropic (linear
         // min/mag/mip with anisotropy); s_lmap wrap, linear; s_hemi clamp,
@@ -627,8 +686,11 @@ struct Inner {
     /// Kept for as long as the bundles that draw from them.
     vertex_buffers: Vec<wgpu::Buffer>,
     index_buffers: Vec<wgpu::Buffer>,
+    /// Each index buffer's format: 16-bit as stored, 32-bit for indices
+    /// rebased past 16 bits ([`Renderer::compat`]).
+    index_formats: Vec<wgpu::IndexFormat>,
     /// Per-draw data, one record per kept draw; placements rewrite it.
-    draw_buffer: wgpu::Buffer,
+    draw_data: DrawData,
     /// Each draw given to the world: its index among the kept draws.
     kept_of: Vec<Option<u32>>,
     _textures: Vec<Texture>,
@@ -835,6 +897,77 @@ pub(crate) fn stream_buffer(
     Ok(buffer)
 }
 
+/// [`Renderer::compat`]: an index range of a stored index buffer, uploaded
+/// with `base` added at index `at` of the rebased buffer.
+#[derive(Clone, Copy)]
+struct Segment {
+    at: u32,
+    first: u32,
+    count: u32,
+    base: u32,
+}
+
+/// [`Renderer::compat`]: where each draw's rebased index range begins, by
+/// (object draw, index buffer, first index, index count, base vertex).
+#[derive(Default)]
+struct Rebased(HashMap<(bool, u32, u32, u32, u32), u32>);
+
+impl Rebased {
+    fn key(d: &WorldDraw) -> (bool, u32, u32, u32, u32) {
+        (
+            d.object.is_some(),
+            d.index_buffer,
+            d.first_index,
+            d.index_count,
+            d.first_vertex,
+        )
+    }
+
+    /// Places `d`'s range with `place` (which returns where it begins)
+    /// unless a draw with the same range and base placed it already.
+    fn add(&mut self, d: &WorldDraw, place: impl FnOnce() -> u32) {
+        self.0.entry(Self::key(d)).or_insert_with(place);
+    }
+
+    fn first_index(&self, d: &WorldDraw) -> u32 {
+        self.0.get(&Self::key(d)).copied().unwrap_or(d.first_index)
+    }
+}
+
+/// Fills `out`, the bytes from `at` of a rebased index buffer laid out by
+/// `segments`, from stored index buffer `source` of `geom`.
+fn fill_rebased(
+    geom: &mut dyn GeomSource,
+    source: GeomBuffer,
+    segments: &[Segment],
+    at: u64,
+    out: &mut [u8],
+) -> io::Result<()> {
+    let first = (at / 2) as u32;
+    let n = (out.len() / 2) as u32;
+    let mut k = segments.partition_point(|s| s.at + s.count <= first);
+    let mut done = 0;
+    while done < n {
+        let s = segments
+            .get(k)
+            .ok_or_else(|| io::Error::other("rebased indices past their ranges"))?;
+        let from = first + done - s.at;
+        let take = (s.count - from).min(n - done);
+        let dst = &mut out[2 * done as usize..2 * (done + take) as usize];
+        geom.read(source, 2 * u64::from(s.first + from), dst)?;
+        for pair in dst.chunks_exact_mut(2) {
+            let index = u32::from(u16::from_le_bytes([pair[0], pair[1]])) + s.base;
+            let index = u16::try_from(index).map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, "a rebased index passes 16 bits")
+            })?;
+            pair.copy_from_slice(&index.to_le_bytes());
+        }
+        done += take;
+        k += 1;
+    }
+    Ok(())
+}
+
 impl Renderer {
     /// Uploads `geom`'s buffers as stored and records `draws` with
     /// `surfaces`. A draw whose vertex layout does not suit its surface's
@@ -907,9 +1040,10 @@ impl Renderer {
         let device = self.device.clone();
         let queue = self.queue.clone();
         let format = self.format;
+        let compat = self.compat;
         let pipelines = self
             .world_pipelines
-            .get_or_insert_with(|| WorldPipelines::new(&device, &queue, format));
+            .get_or_insert_with(|| WorldPipelines::new(&device, &queue, format, compat));
         let mut buffer_bytes = 0;
         let mut piece = Vec::new();
         let mut vertex_buffers = Vec::with_capacity(vertex_bytes.len() + 1);
@@ -926,10 +1060,40 @@ impl Renderer {
                 |at, out| geom.read(GeomBuffer::Vertices(i as u32), at, out),
             )?);
         }
+        // Without base vertices (compat), each index range a draw uses is
+        // uploaded with its draw's first vertex added, ranges one after
+        // another per index buffer (a range drawn from two bases twice);
+        // the draws then read from vertex 0.
+        let mut rebased = Rebased::default();
+        let mut segments: Vec<Vec<Segment>> = vec![Vec::new(); index_bytes.len()];
+        if compat {
+            for d in draws.iter().filter(|d| d.object.is_none()) {
+                let segments = &mut segments[d.index_buffer as usize];
+                rebased.add(d, || {
+                    let at = segments.last().map_or(0, |s| s.at + s.count);
+                    segments.push(Segment {
+                        at,
+                        first: d.first_index,
+                        count: d.index_count,
+                        base: d.first_vertex,
+                    });
+                    at
+                });
+            }
+        }
         let mut index_buffers = Vec::with_capacity(index_bytes.len() + 1);
-        for (i, &bytes) in index_bytes.iter().enumerate() {
+        let mut index_formats = Vec::with_capacity(index_bytes.len() + 1);
+        for (i, &stored) in index_bytes.iter().enumerate() {
+            let source = GeomBuffer::Indices(i as u32);
+            let segments = &segments[i];
+            let bytes = if compat {
+                2 * segments.last().map_or(0, |s| u64::from(s.at + s.count))
+            } else {
+                stored
+            };
             // Index buffers are at least 4 bytes, as before any were empty.
             buffer_bytes += bytes.next_multiple_of(4).max(4);
+            index_formats.push(wgpu::IndexFormat::Uint16);
             index_buffers.push(stream_buffer(
                 &device,
                 &queue,
@@ -938,7 +1102,13 @@ impl Renderer {
                 bytes,
                 4,
                 &mut piece,
-                |at, out| geom.read(GeomBuffer::Indices(i as u32), at, out),
+                |at, out| {
+                    if compat {
+                        fill_rebased(&mut *geom, source, segments, at, out)
+                    } else {
+                        geom.read(source, at, out)
+                    }
+                },
             )?);
         }
         // The objects' buffers follow the level's.
@@ -947,8 +1117,6 @@ impl Renderer {
         if !objects.vertices.is_empty() {
             // Whole 16-byte vertices: a multiple of 4 bytes, as buffers need.
             let vertices = &objects.vertices;
-            let index_bytes = 2 * objects.indices.len() as u64;
-            object_buffer_bytes += vertices.len() as u64 + index_bytes.next_multiple_of(4).max(4);
             vertex_buffers.push(upload_buffer(
                 &device,
                 &queue,
@@ -956,22 +1124,66 @@ impl Renderer {
                 wgpu::BufferUsages::VERTEX,
                 vertices,
             ));
-            index_buffers.push(stream_buffer(
-                &device,
-                &queue,
-                "object indices",
-                wgpu::BufferUsages::INDEX,
-                index_bytes,
-                4,
-                &mut piece,
-                |at, out| {
-                    for (j, o) in out.iter_mut().enumerate() {
-                        let at = at as usize + j;
-                        *o = objects.indices[at / 2].to_le_bytes()[at % 2];
-                    }
-                    Ok(())
-                },
-            )?);
+            object_buffer_bytes += vertices.len() as u64;
+            if compat {
+                // Rebased in memory (the objects' indices are held there),
+                // 32-bit once they pass 16 bits.
+                let mut out: Vec<u32> = Vec::new();
+                for d in draws.iter().filter(|d| d.object.is_some()) {
+                    rebased.add(d, || {
+                        let at = out.len() as u32;
+                        let range =
+                            d.first_index as usize..(d.first_index + d.index_count) as usize;
+                        out.extend(
+                            objects.indices[range]
+                                .iter()
+                                .map(|&i| u32::from(i) + d.first_vertex),
+                        );
+                        at
+                    });
+                }
+                let wide = out.iter().any(|&i| i > u32::from(u16::MAX));
+                let mut bytes: Vec<u8> = if wide {
+                    out.iter().flat_map(|i| i.to_le_bytes()).collect()
+                } else {
+                    out.iter().flat_map(|&i| (i as u16).to_le_bytes()).collect()
+                };
+                drop(out);
+                bytes.resize(bytes.len().max(4), 0);
+                object_buffer_bytes += (bytes.len() as u64).next_multiple_of(4);
+                index_formats.push(if wide {
+                    wgpu::IndexFormat::Uint32
+                } else {
+                    wgpu::IndexFormat::Uint16
+                });
+                index_buffers.push(upload_buffer(
+                    &device,
+                    &queue,
+                    "object indices",
+                    wgpu::BufferUsages::INDEX,
+                    &bytes,
+                ));
+            } else {
+                let index_bytes = 2 * objects.indices.len() as u64;
+                object_buffer_bytes += index_bytes.next_multiple_of(4).max(4);
+                index_formats.push(wgpu::IndexFormat::Uint16);
+                index_buffers.push(stream_buffer(
+                    &device,
+                    &queue,
+                    "object indices",
+                    wgpu::BufferUsages::INDEX,
+                    index_bytes,
+                    4,
+                    &mut piece,
+                    |at, out| {
+                        for (j, o) in out.iter_mut().enumerate() {
+                            let at = at as usize + j;
+                            *o = objects.indices[at / 2].to_le_bytes()[at % 2];
+                        }
+                        Ok(())
+                    },
+                )?);
+            }
         }
         drop(piece);
         buffer_bytes += object_buffer_bytes;
@@ -1001,6 +1213,10 @@ impl Renderer {
             .copied()
             .filter(usable)
             .map(|mut d| {
+                if compat {
+                    d.first_index = rebased.first_index(&d);
+                    d.first_vertex = 0;
+                }
                 if d.object.is_some() {
                     d.vertex_buffer = object_vb;
                     d.index_buffer = object_ib;
@@ -1018,13 +1234,52 @@ impl Renderer {
         records.resize(records.len().max(DRAW_BYTES), 0);
         buffer_bytes += records.len() as u64;
         object_buffer_bytes += (object_draws * DRAW_BYTES) as u64;
-        let draw_buffer = upload_buffer(
-            &device,
-            &queue,
-            "world draws",
-            wgpu::BufferUsages::STORAGE,
-            &records,
-        );
+        let draw_data = if compat {
+            // Whole rows of the draws texture.
+            let rows = (kept.len().max(1) as u32).div_ceil(DRAWS_PER_ROW);
+            records.resize(rows as usize * DRAWS_PER_ROW as usize * DRAW_BYTES, 0);
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("world draws"),
+                size: wgpu::Extent3d {
+                    width: DRAWS_PER_ROW * DRAW_TEXELS,
+                    height: rows,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba32Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            queue.write_texture(
+                texture.as_image_copy(),
+                &records,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(DRAWS_PER_ROW * DRAW_BYTES as u32),
+                    rows_per_image: None,
+                },
+                texture.size(),
+            );
+            DrawData::Texture(texture)
+        } else {
+            DrawData::Buffer(upload_buffer(
+                &device,
+                &queue,
+                "world draws",
+                wgpu::BufferUsages::STORAGE,
+                &records,
+            ))
+        };
+        let draw_view;
+        let draw_resource = match &draw_data {
+            DrawData::Buffer(b) => b.as_entire_binding(),
+            DrawData::Texture(t) => {
+                draw_view = t.create_view(&Default::default());
+                wgpu::BindingResource::TextureView(&draw_view)
+            }
+        };
         let frame = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("world frame"),
             size: FRAME_BYTES,
@@ -1041,7 +1296,7 @@ impl Renderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: draw_buffer.as_entire_binding(),
+                    resource: draw_resource,
                 },
             ],
         });
@@ -1199,7 +1454,7 @@ impl Renderer {
                         .set_vertex_buffer(0, vertex_buffers[d.vertex_buffer as usize].slice(..));
                     encoder.set_index_buffer(
                         index_buffers[d.index_buffer as usize].slice(..),
-                        wgpu::IndexFormat::Uint16,
+                        index_formats[d.index_buffer as usize],
                     );
                 }
                 let instance = i as u32;
@@ -1232,7 +1487,8 @@ impl Renderer {
         Ok(World(Rc::new(Inner {
             vertex_buffers,
             index_buffers,
-            draw_buffer,
+            index_formats,
+            draw_data,
             kept_of,
             _textures: textures,
             frame,
@@ -1267,8 +1523,34 @@ impl Renderer {
         let mut bytes = Vec::with_capacity(80);
         push_mat(&mut bytes, transform);
         push_vec4(&mut bytes, sphere);
-        self.queue
-            .write_buffer(&inner.draw_buffer, k as u64 * DRAW_BYTES as u64, &bytes);
+        match &inner.draw_data {
+            DrawData::Buffer(b) => self
+                .queue
+                .write_buffer(b, k as u64 * DRAW_BYTES as u64, &bytes),
+            DrawData::Texture(t) => self.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: t,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: k % DRAWS_PER_ROW * DRAW_TEXELS,
+                        y: k / DRAWS_PER_ROW,
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &bytes,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes.len() as u32),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width: (bytes.len() / 16) as u32,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+            ),
+        }
         inner.spheres.borrow_mut()[k as usize] = sphere;
         for (i, d) in inner.strict.borrow_mut().iter_mut() {
             if *i == k as usize {
@@ -1402,7 +1684,7 @@ impl Renderer {
             pass.set_vertex_buffer(0, inner.vertex_buffers[d.vertex_buffer as usize].slice(..));
             pass.set_index_buffer(
                 inner.index_buffers[d.index_buffer as usize].slice(..),
-                wgpu::IndexFormat::Uint16,
+                inner.index_formats[d.index_buffer as usize],
             );
             let instance = i as u32;
             pass.draw_indexed(

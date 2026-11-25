@@ -1168,6 +1168,7 @@ dependencies = [
 name = "volya-engine-render"
 version = "0.1.0"
 dependencies = [
+ "naga",
  "pollster",
  "volya-engine-formats",
  "volya-engine-installer",

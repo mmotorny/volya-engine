@@ -18,5 +18,6 @@ volya-engine-formats = { path = "../volya-engine-formats" }
 wgpu.workspace = true
 
 [dev-dependencies]
+naga = { version = "30", features = ["wgsl-in", "glsl-out"] }
 pollster.workspace = true
 volya-engine-installer = { path = "../volya-engine-installer" }

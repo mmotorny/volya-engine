@@ -86,8 +86,13 @@ impl Player {
     }
 }
 
-/// Reads the DDS file at `path` of `tree` and uploads it as stored.
+/// The texture of the DDS file at `path` of `tree`: as the platform
+/// prepared it, else read and uploaded ([`Renderer::create_texture`]).
 fn load_texture(renderer: &Renderer, tree: &dyn Vfs, path: &str) -> Result<Texture, String> {
+    // Prepared while the level loaded (transcoded for this GPU, #113).
+    if let Some(texture) = renderer.take_prepared(path) {
+        return Ok(texture);
+    }
     let bytes = vfs::read(tree, path).map_err(|e| e.to_string())?;
     let dds = Dds::parse(&bytes).map_err(|e| e.to_string())?;
     renderer.create_texture(&dds).map_err(|e| e.to_string())
@@ -404,6 +409,8 @@ impl Presenter {
             .collect::<Option<Vec<_>>>()
             .map(|sections| SkyTextures { sections });
         self.first_object_draw = draws.len() - level.objects.draws.len();
+        // Prepared textures no surface took are not kept.
+        renderer.clear_prepared();
         // The static geometry streams from its file to the GPU, a piece
         // at a time.
         let path = level.geometry_path();

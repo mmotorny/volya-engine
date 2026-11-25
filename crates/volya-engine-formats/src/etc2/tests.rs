@@ -193,21 +193,24 @@ fn flat_and_two_colour_blocks() {
         }
     });
     let decoded = decode_rgb(encode_rgb(&red_green));
-    assert!(squared_error(&red_green, &decoded) <= 16 * 3 * 9, "{decoded:?}");
+    assert!(
+        squared_error(&red_green, &decoded) <= 16 * 3 * 9,
+        "{decoded:?}"
+    );
 }
 
+/// Colours under alpha 0 are fitted too (BC3's alpha is often data).
 #[test]
-fn transparent_texels_are_not_fitted() {
-    // Black transparent texels beside a colour: the colour is exact.
+fn colours_under_zero_alpha_are_fitted() {
     let texels: [[u8; 4]; 16] = std::array::from_fn(|i| {
         if i < 8 {
-            [0, 0, 0, 0]
+            [0x80, 0x40, 0x20, 0]
         } else {
             [0x33, 0x66, 0x99, 255]
         }
     });
     let decoded = decode_rgb(encode_rgb(&texels));
-    assert!(close(&decoded[8..], &texels[8..], 2), "{decoded:?}");
+    assert!(close(&decoded, &texels, 4), "{decoded:?}");
 }
 
 /// Whether every channel of `a` is within `tolerance` of `b`'s.
@@ -342,20 +345,32 @@ fn transcodes_images_and_picks_formats() {
     let solid = [0x00, 0xf8, 0x1f, 0x00, 0b1110_0100, 0, 0, 0];
     // Three-colour mode, its first row transparent.
     let cut = [0x1f, 0x00, 0x00, 0xf8, 0b1111_1111, 0, 0, 0];
-    assert_eq!(Etc2Format::for_bc(Format::Bc1, &solid), Some(Etc2Format::Rgb8));
+    assert_eq!(
+        Etc2Format::for_bc(Format::Bc1, &solid),
+        Some(Etc2Format::Rgb8)
+    );
     let both = [solid, cut].concat();
     assert_eq!(
         Etc2Format::for_bc(Format::Bc1, &both),
         Some(Etc2Format::Rgb8A1)
     );
-    assert_eq!(Etc2Format::for_bc(Format::Bc3, &[]), Some(Etc2Format::Rgba8));
-    assert_eq!(Etc2Format::for_bc(Format::Bc2, &[]), Some(Etc2Format::Rgba8));
+    assert_eq!(
+        Etc2Format::for_bc(Format::Bc3, &[]),
+        Some(Etc2Format::Rgba8)
+    );
+    assert_eq!(
+        Etc2Format::for_bc(Format::Bc2, &[]),
+        Some(Etc2Format::Rgba8)
+    );
 
     let out = transcode_bc(Format::Bc1, &both, Etc2Format::Rgb8A1);
     assert_eq!(out.len(), 16);
     let alpha = |bits: &[u8]| decode_rgb_a1(bits.try_into().unwrap()).map(|t| t[3]);
     assert_eq!(alpha(&out[..8]), [255; 16]);
-    assert_eq!(alpha(&out[8..]), Format::Bc1.decode_block(&cut).map(|t| t[3]));
+    assert_eq!(
+        alpha(&out[8..]),
+        Format::Bc1.decode_block(&cut).map(|t| t[3])
+    );
 
     // BC3: alpha and colour halves.
     let mut bc3 = [0u8; 16];

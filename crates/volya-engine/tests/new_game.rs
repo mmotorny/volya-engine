@@ -27,19 +27,24 @@ use volya_engine::data::GameData;
 use volya_engine::level::{self, LevelScreen};
 use volya_engine::loading_screen::Stage;
 use volya_engine::present::Presenter;
-use volya_engine::render::{Renderer, wgpu};
+use volya_engine::render::{Renderer, TexturePath, wgpu};
 use volya_engine::scene::TextureId;
 use volya_engine_formats::ui::Resolution;
 
 const SIZE: Resolution = Resolution::new(1024, 768);
 
 fn renderer() -> Renderer {
+    renderer_with(wgpu::Features::all())
+}
+
+/// A renderer whose device has the renderer's features within `allowed`.
+fn renderer_with(allowed: wgpu::Features) -> Renderer {
     pollster::block_on(async {
         let instance = wgpu::Instance::default();
         let adapter = instance.request_adapter(&Default::default()).await.unwrap();
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
-                required_features: volya_engine::render::device_features(&adapter),
+                required_features: volya_engine::render::device_features(&adapter) & allowed,
                 ..Default::default()
             })
             .await
@@ -685,4 +690,173 @@ fn loading_stage_times() {
         "collision world: {:.1} MB",
         collision.memory_bytes() as f64 / 1e6
     );
+}
+
+/// The level's start view and an outdoor view drawn as on WebGL 2 (#113):
+/// textures transcoded to ETC2 (where the GPU has no BC) or decoded to
+/// RGBA8 (where it has neither), per-draw data from a texture, indices
+/// rebased; each close to the WebGPU path's picture. Reports each path's
+/// texture memory and the transcoding time.
+#[test]
+fn webgl_paths_match_from_game_data() {
+    let Some(archives) = gog_archives::archives() else {
+        return;
+    };
+    let root = StdVfs::new(archives[0].file.parent().unwrap());
+    let tree = DbVfs::open_game(&root, Some("mods")).unwrap();
+    let data = GameData::read(&tree, None, SIZE).unwrap();
+    let views = |r: &mut Renderer| {
+        let mut screen = LevelScreen::load(&tree, &data, 0).unwrap();
+        let mut presenter = Presenter::new();
+        let start = Instant::now();
+        let mut pictures = Vec::new();
+        let mut first = None;
+        for (eye, yaw, pitch) in [(None, 0.0, 0.0), (Some([-180.0, 5.0, -120.0]), 1.2, 0.15)] {
+            if let Some(eye) = eye {
+                screen.set_camera(
+                    eye,
+                    volya_engine::core::camera::Angles {
+                        yaw,
+                        pitch,
+                        roll: 0.0,
+                    },
+                );
+            }
+            let scene = screen.scene(SIZE, 0);
+            let list = presenter.draw_list(r, &tree, &scene, 0);
+            pictures.push(
+                pollster::block_on(r.capture(&list, SIZE.width, SIZE.height, wgpu::Color::BLACK))
+                    .unwrap(),
+            );
+            first.get_or_insert(start.elapsed());
+        }
+        let errors = presenter.take_errors();
+        assert!(errors.is_empty(), "{errors:?}");
+        let world = presenter.world().unwrap();
+        (pictures, world.texture_bytes(), first.unwrap())
+    };
+    let psnr = |a: &[u8], b: &[u8]| {
+        let se: f64 = a
+            .chunks(4)
+            .zip(b.chunks(4))
+            .flat_map(|(x, y)| (0..3).map(move |c| (f64::from(x[c]) - f64::from(y[c])).powi(2)))
+            .sum();
+        10.0 * (255.0f64.powi(2) / (se / (a.len() / 4 * 3) as f64)).log10()
+    };
+    let mut webgpu = renderer();
+    assert_eq!(webgpu.texture_path(), TexturePath::Bc);
+    let (reference, bc_bytes, bc_first) = views(&mut webgpu);
+    let mib = |b: u64| b as f64 / (1 << 20) as f64;
+    eprintln!(
+        "BC, storage buffer: textures {:.1} MiB, first frame {bc_first:.1?}",
+        mib(bc_bytes)
+    );
+    for (allowed, path) in [
+        (wgpu::Features::TEXTURE_COMPRESSION_ETC2, TexturePath::Etc2),
+        (wgpu::Features::empty(), TexturePath::Rgba8),
+    ] {
+        let mut r = renderer_with(allowed);
+        if r.texture_path() != path {
+            eprintln!("skipped {path:?}: the GPU lacks it");
+            continue;
+        }
+        r.set_compat(true);
+        let (pictures, bytes, first) = views(&mut r);
+        let quality: Vec<f64> = pictures
+            .iter()
+            .zip(&reference)
+            .map(|(a, b)| psnr(a, b))
+            .collect();
+        eprintln!(
+            "{path:?}, draws texture, rebased indices: textures {:.1} MiB, first frame (with \
+             transcoding) {first:.1?}, PSNR against BC {quality:.1?} dB",
+            mib(bytes)
+        );
+        for q in quality {
+            assert!(q > 30.0, "{path:?}: {q:.1} dB");
+        }
+        match path {
+            TexturePath::Etc2 => assert_eq!(bytes, bc_bytes, "ETC2 as large as BC"),
+            _ => assert!(bytes > 4 * bc_bytes, "RGBA8 at least four times BC"),
+        }
+    }
+}
+
+/// With the platform preparing textures (#113), a New Game's loading waits
+/// under `st_loading_textures`, its caption showing, until they are
+/// prepared; the world then takes the prepared textures.
+#[test]
+fn loading_waits_for_prepared_textures() {
+    let Some(archives) = gog_archives::archives() else {
+        return;
+    };
+    let root = StdVfs::new(archives[0].file.parent().unwrap());
+    let tree = DbVfs::open_game(&root, Some("mods")).unwrap();
+    let mut data = GameData::read(&tree, None, SIZE).unwrap();
+    data.intro_lengths = vec![0.0; data.intro.items.len()];
+    let mut app = App::new(data).unwrap();
+    app.set_prepare_textures(true);
+    let (mut input, mut audio) = (Input::new(), Gains::default());
+    let mut t = 0.0;
+    let mut step = |app: &mut App, input: &mut Input, audio: &mut Gains| {
+        t += 16.0;
+        app.update(&tree, t, input, audio);
+        input.end_frame();
+    };
+    for _ in 0..20 {
+        if matches!(app.state(), AppState::Menu { .. }) {
+            break;
+        }
+        press(&mut input, Key::Escape);
+        step(&mut app, &mut input, &mut audio);
+    }
+    for _ in 0..2 {
+        press(&mut input, Key::Enter);
+        step(&mut app, &mut input, &mut audio);
+    }
+    let caption = |app: &App| match app.state() {
+        AppState::Loading {
+            loading: Some(l), ..
+        } => Some((l.captions, l.caption.clone())),
+        _ => None,
+    };
+    let mut frames = 0;
+    while app.textures_to_prepare().is_none() {
+        step(&mut app, &mut input, &mut audio);
+        frames += 1;
+        assert!(frames < 40, "never asked to prepare: {:?}", app.state());
+    }
+    let waiting = caption(&app);
+    assert_eq!(waiting, Some((16, "Загрузка текстур...".to_owned())));
+    for _ in 0..3 {
+        step(&mut app, &mut input, &mut audio);
+        assert_eq!(caption(&app), waiting, "held");
+    }
+    let paths = app.textures_to_prepare().unwrap().to_vec();
+    assert!(paths.iter().any(|p| p.ends_with("_cube.dds")), "the sky");
+    assert!(paths.iter().any(|p| p.contains("lmap#")), "light maps");
+    let mut gpu = renderer();
+    for p in &paths {
+        let bytes = volya_engine::core::vfs::read(&tree, p).unwrap();
+        let texture = gpu
+            .create_texture(&volya_engine_formats::dds::Dds::parse(&bytes).unwrap())
+            .unwrap();
+        gpu.add_prepared(p, texture);
+    }
+    eprintln!("{} textures prepared", paths.len());
+    app.textures_prepared();
+    step(&mut app, &mut input, &mut audio);
+    assert_eq!(caption(&app).map(|c| c.0), Some(17), "went on");
+    step(&mut app, &mut input, &mut audio);
+    assert!(matches!(app.state(), AppState::Level { .. }));
+    let scene = app.scene(&tree, SIZE).unwrap();
+    let mut presenter = Presenter::new();
+    presenter.draw_list(&mut gpu, &tree, &scene, 0);
+    let errors = presenter.take_errors();
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(
+        paths.iter().all(|p| gpu.take_prepared(p).is_none()),
+        "taken or dropped"
+    );
+    assert!(presenter.world().is_some());
 }

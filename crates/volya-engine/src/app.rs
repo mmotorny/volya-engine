@@ -339,6 +339,9 @@ pub struct App {
     frames: u64,
     /// The update in which a lost pointer lock opened the menu.
     unlock_opened: Option<u64>,
+    /// Whether the platform prepares a level's textures while it loads
+    /// ([`App::set_prepare_textures`]).
+    prepare_textures: bool,
     /// The menu was asked for (the `quit` key, a gamepad's east button,
     /// the touch Menu button, a lost pointer lock) while the loading image
     /// covered the level: it opens once the player's controls are live
@@ -415,6 +418,7 @@ impl App {
             console_touched: false,
             frames: 0,
             unlock_opened: None,
+            prepare_textures: false,
             menu_asked: false,
             hidden: false,
             shown: false,
@@ -433,6 +437,38 @@ impl App {
 
     pub fn data(&self) -> &GameData {
         &self.data
+    }
+
+    /// Whether a New Game's loading waits under `st_loading_textures`
+    /// while the platform prepares the level's textures
+    /// ([`App::textures_to_prepare`]; our addition, #113: a platform whose
+    /// GPU lacks the textures' format transcodes them there).
+    pub fn set_prepare_textures(&mut self, on: bool) {
+        self.prepare_textures = on;
+    }
+
+    /// The level's texture files, while the loading waits for the platform
+    /// to prepare them.
+    pub fn textures_to_prepare(&self) -> Option<&[String]> {
+        match &self.phase {
+            Some(Phase::Loading {
+                stages: NewGame::Stages(loading),
+                ..
+            }) => loading.textures_to_prepare(),
+            _ => None,
+        }
+    }
+
+    /// The platform has prepared [`App::textures_to_prepare`]: the loading
+    /// goes on at the next update.
+    pub fn textures_prepared(&mut self) {
+        if let Some(Phase::Loading {
+            stages: NewGame::Stages(loading),
+            ..
+        }) = &mut self.phase
+        {
+            loading.textures_prepared();
+        }
     }
 
     /// The saved-games folder as the platform found it.
@@ -553,7 +589,11 @@ impl App {
                         let changed = self.game_type != Some(GAME_TYPE);
                         self.game_type = Some(GAME_TYPE);
                         self.load_started = Some(time_ms);
-                        *stages = NewGame::Stages(Box::new(Loading::start(data, changed)));
+                        let mut loading = Loading::start(data, changed);
+                        if self.prepare_textures {
+                            loading.prepare_textures();
+                        }
+                        *stages = NewGame::Stages(Box::new(loading));
                         Ok(None)
                     }
                     NewGame::Stages(loading) => loading

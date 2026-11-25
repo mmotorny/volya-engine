@@ -313,9 +313,11 @@ enum Modes {
 }
 
 /// Encodes a 4×4 block of RGBA texels (row order) as an ETC2 RGB8 block
-/// (also RGBA8's colour block); texels whose alpha is 0 are not fitted.
+/// (also RGBA8's colour block). Every texel's colour is fitted, whatever
+/// its alpha: the game's alpha is often data (light maps keep a lighting
+/// term there, 0 in places), not coverage.
 pub fn encode_rgb(texels: &[[u8; 4]; 16]) -> [u8; 8] {
-    let block = Block::new(texels, |t| t[3] == 0, false);
+    let block = Block::new(texels, |_| false, false);
     encode(&block, Modes::All)
 }
 
@@ -369,7 +371,13 @@ fn etc1(block: &Block, modes: Modes) -> Candidate {
                     weight += 1;
                 }
             }
-            sum.map(|s| if weight == 0 { 0 } else { (s + weight / 2) / weight })
+            sum.map(|s| {
+                if weight == 0 {
+                    0
+                } else {
+                    (s + weight / 2) / weight
+                }
+            })
         });
         // Differential: 5-bit bases, the second within −4 … 3 of the first
         // (clamped there when the means are further apart).
@@ -413,7 +421,12 @@ fn etc1_palette(base: Rgb, [a, b]: [i32; 2], punch: bool) -> [Option<Rgb>; 4] {
 }
 
 /// Each half's best table with `bases`: (error, tables, indices).
-fn half_pair(block: &Block, flip: bool, bases: [Rgb; 2], punch: bool) -> (u64, [u32; 2], [u32; 16]) {
+fn half_pair(
+    block: &Block,
+    flip: bool,
+    bases: [Rgb; 2],
+    punch: bool,
+) -> (u64, [u32; 2], [u32; 16]) {
     let mut indices = [0u32; 16];
     let mut tables = [0u32; 2];
     let mut total = 0u64;
@@ -591,7 +604,12 @@ fn t_and_h(block: &Block) -> Candidate {
     let punch = block.punch;
     let mut best = Candidate::NONE;
     let tried = centre.saturating_sub(1)..(centre + 2).min(DISTANCES.len());
-    for (d_index, &d) in DISTANCES.iter().enumerate().skip(tried.start).take(tried.len()) {
+    for (d_index, &d) in DISTANCES
+        .iter()
+        .enumerate()
+        .skip(tried.start)
+        .take(tried.len())
+    {
         let plus = |c: Rgb| Some(c.map(|v| clamp(v + d)));
         let minus = |c: Rgb| Some(c.map(|v| clamp(v - d)));
         // T: one colour alone, the other with ± d; either cluster alone.
@@ -612,7 +630,12 @@ fn t_and_h(block: &Block) -> Candidate {
             continue;
         }
         let (ea, eb) = (a.map(extend4), b.map(extend4));
-        let palette = [plus(ea), minus(ea), if punch { None } else { plus(eb) }, minus(eb)];
+        let palette = [
+            plus(ea),
+            minus(ea),
+            if punch { None } else { plus(eb) },
+            minus(eb),
+        ];
         let (error, indices) = block.fit(&palette);
         best.keep_better(pack_h(error, &indices, a, b, d_index as u64));
     }
