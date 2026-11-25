@@ -246,6 +246,11 @@ impl SoundHost {
         self.voices.clear();
     }
 
+    /// The mixer voice playing device voice `voice`, if one does.
+    pub fn mixer_voice(&self, voice: usize) -> Option<VoiceId> {
+        self.voices.get(voice).copied().flatten()
+    }
+
     /// Sets the listener (section 7.2).
     pub fn set_listener(&mut self, listener: Listener) {
         self.system.set_listener(listener);

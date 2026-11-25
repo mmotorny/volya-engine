@@ -75,7 +75,11 @@ fn damaged_segments_count_as_empty() {
     store.write_at(0, 0, b"someone else's file\n").unwrap();
     // A write cut short: its partial line goes.
     store
-        .write_at(1, 0, format!("{HEADER}3\n{{\"kept\":1}}\n{{\"cut").as_bytes())
+        .write_at(
+            1,
+            0,
+            format!("{HEADER}3\n{{\"kept\":1}}\n{{\"cut").as_bytes(),
+        )
         .unwrap();
     let mut log = Log::open(store).unwrap();
     assert_eq!(log.lines().unwrap(), ["{\"kept\":1}"]);
@@ -100,7 +104,8 @@ fn advance(us: f64) {
 /// The trace assembled from `d`'s pending events.
 fn trace(d: &Diagnostics) -> Json {
     let mut log = Log::open(MemoryStore::default()).unwrap();
-    log.append(&d.take_pending(), &d.session_metadata()).unwrap();
+    log.append(&d.take_pending(), &d.session_metadata())
+        .unwrap();
     let text = log.trace("", "{\"version\":\"test\"}").unwrap();
     serde_json::from_str(&text).unwrap()
 }
@@ -136,7 +141,11 @@ fn records_spans_metrics_and_events() {
         // Not ours: not recorded.
         tracing::error!(target: "wgpu", "ignored");
     });
-    d.instant("AudioContext state", 2, &[("state", Value::Text("running".into()))]);
+    d.instant(
+        "AudioContext state",
+        2,
+        &[("state", Value::Text("running".into()))],
+    );
     d.summarize();
     let t = trace(&d);
     assert_eq!(t["otherData"]["version"], "test");
@@ -153,11 +162,21 @@ fn records_spans_metrics_and_events() {
     assert_eq!(complete[0]["cat"], "volya,v:2026-11-24_00:47_·_b0fa5b8");
     assert_eq!(complete[0]["pid"], 7);
     let instants = events(&t, "i");
-    let fatal: Vec<_> = instants.iter().filter(|e| e["name"] == "fatal error").collect();
+    let fatal: Vec<_> = instants
+        .iter()
+        .filter(|e| e["name"] == "fatal error")
+        .collect();
     assert_eq!(fatal.len(), EVENTS_PER_NAME as usize);
     assert_eq!(fatal[0]["args"]["error"], "bad \"thing\" 0\n");
-    assert!(instants.iter().any(|e| e["name"] == "AudioContext state" && e["tid"] == 2));
-    let over = instants.iter().find(|e| e["name"] == "events over the limit").unwrap();
+    assert!(
+        instants
+            .iter()
+            .any(|e| e["name"] == "AudioContext state" && e["tid"] == 2)
+    );
+    let over = instants
+        .iter()
+        .find(|e| e["name"] == "events over the limit")
+        .unwrap();
     assert_eq!(over["args"]["fatal error"], 3);
     assert!(!instants.iter().any(|e| e["name"] == "ignored"));
     let counter = |name: &str| {
@@ -167,8 +186,14 @@ fn records_spans_metrics_and_events() {
             .unwrap_or_else(|| panic!("no counter {name}"))["args"]
             .clone()
     };
-    assert_eq!(counter("frame ms"), serde_json::json!({"mean": 33.5, "max": 61, "n": 2}));
-    assert_eq!(counter("audio.fill_ms"), serde_json::json!({"min": 10, "mean": 20, "max": 30}));
+    assert_eq!(
+        counter("frame ms"),
+        serde_json::json!({"mean": 33.5, "max": 61, "n": 2})
+    );
+    assert_eq!(
+        counter("audio.fill_ms"),
+        serde_json::json!({"min": 10, "mean": 20, "max": 30})
+    );
     assert_eq!(counter("audio.underruns"), serde_json::json!({"count": 3}));
     // The next period: counts go on (0), the rest only with values.
     d.summarize();
@@ -182,6 +207,9 @@ fn long_text_is_cut() {
     let d = Diagnostics::new(clock, "v", 1, "p");
     d.instant("x", 1, &[("text", Value::Text("y".repeat(5000)))]);
     let t = trace(&d);
-    let text = events(&t, "i")[0]["args"]["text"].as_str().unwrap().to_owned();
+    let text = events(&t, "i")[0]["args"]["text"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert_eq!(text.chars().count(), MAX_TEXT_CHARS + 1);
 }

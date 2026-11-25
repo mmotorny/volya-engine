@@ -69,15 +69,24 @@ pub fn audio_init(sample_rate: u32) {
 }
 
 /// Mixes the next `frames` frames (stereo, interleaved); silence before init.
+/// `underrun` is how many frames the AudioWorklet played as silence for
+/// want of mixed ones since its last request, `queued` how many it holds.
 #[wasm_bindgen]
-pub fn audio_mix(frames: u32) -> Vec<f32> {
+pub fn audio_mix(frames: u32, underrun: u32, queued: u32) -> Vec<f32> {
+    #[cfg(feature = "test-ops")]
+    let before = capture::before_mix();
     // Decoding included (the mixer's `decode` spans).
-    tracing::info_span!("audio.mix").in_scope(|| {
+    let out = tracing::info_span!("audio.mix").in_scope(|| {
         MIXER.with(|m| match m.borrow_mut().as_mut() {
             Some(mixer) => mixer.mix(frames as usize),
             None => vec![0.0; frames as usize * 2],
         })
-    })
+    });
+    #[cfg(feature = "test-ops")]
+    capture::after_mix(before, frames, underrun, queued);
+    #[cfg(not(feature = "test-ops"))]
+    let _ = (underrun, queued);
+    out
 }
 
 fn error(e: impl std::fmt::Display) -> JsValue {
@@ -202,4 +211,137 @@ pub fn sound_state() -> serde_json::Value {
             })).collect::<Vec<_>>(),
         })
     })
+}
+
+/// The `audio_capture` op (tests): records, for the emitter of one sound
+/// name, every mixed block (its mixer voice, how far the voice advanced, its
+/// gains) with the AudioWorklet's underruns, and every worker frame (its
+/// time and the emitter's state), to find gaps and jumps in what is heard.
+#[cfg(feature = "test-ops")]
+pub mod capture {
+    use super::{MIXER, with_sounds};
+    use std::cell::RefCell;
+    use volya_engine::core::audio::VoiceId;
+
+    struct Capture {
+        name: String,
+        start: f64,
+        blocks: Vec<serde_json::Value>,
+        frames: Vec<serde_json::Value>,
+    }
+
+    thread_local! {
+        static CAPTURE: RefCell<Option<Capture>> = const { RefCell::new(None) };
+    }
+
+    /// Starts capturing the emitter of `name`, replacing any capture.
+    pub fn start(name: &str) {
+        CAPTURE.with(|c| {
+            *c.borrow_mut() = Some(Capture {
+                name: name.to_owned(),
+                start: crate::now(),
+                blocks: Vec::new(),
+                frames: Vec::new(),
+            });
+        });
+    }
+
+    /// Stops capturing; returns `{blocks, frames}` (null when none ran):
+    /// blocks `[t ms, frames, mix ms, underrun frames, queued frames, mixer
+    /// voice or -1, advanced before, advanced after, step, left gain at the
+    /// block's start, at its end]`, frames `[t ms, frame CPU ms, phase, device voice or
+    /// -1, output volume, occlusion]`.
+    pub fn stop() -> serde_json::Value {
+        CAPTURE.with(|c| match c.borrow_mut().take() {
+            Some(c) => serde_json::json!({ "blocks": c.blocks, "frames": c.frames }),
+            None => serde_json::Value::Null,
+        })
+    }
+
+    fn name() -> Option<String> {
+        CAPTURE.with(|c| c.borrow().as_ref().map(|c| c.name.clone()))
+    }
+
+    /// The emitter's mixer voice.
+    fn voice(name: &str) -> Option<VoiceId> {
+        with_sounds(|host| {
+            host.system
+                .emitters()
+                .into_iter()
+                .find(|e| e.name == name)
+                .and_then(|e| e.voice)
+                .and_then(|v| host.mixer_voice(v))
+        })
+    }
+
+    pub struct Before {
+        t: f64,
+        voice: Option<VoiceId>,
+        advanced: f64,
+        gain: f32,
+    }
+
+    pub fn before_mix() -> Option<Before> {
+        let name = name()?;
+        let voice = voice(&name);
+        let probe = voice.and_then(|id| MIXER.with(|m| m.borrow().as_ref()?.probe(id)));
+        Some(Before {
+            t: crate::now(),
+            voice,
+            advanced: probe.map_or(0.0, |p| p.advanced),
+            gain: probe.map_or(0.0, |p| p.gains.0),
+        })
+    }
+
+    pub fn after_mix(before: Option<Before>, frames: u32, underrun: u32, queued: u32) {
+        let Some(before) = before else {
+            return;
+        };
+        let probe = before
+            .voice
+            .and_then(|id| MIXER.with(|m| m.borrow().as_ref()?.probe(id)));
+        let took = crate::now() - before.t;
+        CAPTURE.with(|c| {
+            if let Some(c) = c.borrow_mut().as_mut() {
+                c.blocks.push(serde_json::json!([
+                    before.t - c.start,
+                    frames,
+                    took,
+                    underrun,
+                    queued,
+                    before.voice.map_or(-1, |v| i64::from(v.index())),
+                    before.advanced,
+                    probe.map_or(0.0, |p| p.advanced),
+                    probe.map_or(0.0, |p| p.step),
+                    before.gain,
+                    probe.map_or(0.0, |p| p.gains.0),
+                ]));
+            }
+        });
+    }
+
+    /// After a worker frame that took `cpu` ms.
+    pub fn frame(cpu: f64) {
+        let Some(name) = name() else {
+            return;
+        };
+        let emitter =
+            with_sounds(|host| host.system.emitters().into_iter().find(|e| e.name == name));
+        let t = crate::now();
+        CAPTURE.with(|c| {
+            if let Some(c) = c.borrow_mut().as_mut() {
+                c.frames.push(match emitter {
+                    Some(e) => serde_json::json!([
+                        t - c.start,
+                        cpu,
+                        format!("{:?}", e.phase).to_lowercase(),
+                        e.voice.map_or(-1, |v| v as i64),
+                        e.out,
+                        e.occlusion,
+                    ]),
+                    None => serde_json::json!([t - c.start, cpu, "none", -1, 0.0, 0.0]),
+                });
+            }
+        });
+    }
 }

@@ -30,6 +30,7 @@
 
 use std::fmt::{self, Write as _};
 use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use tracing::field::{Field, Visit};
@@ -53,6 +54,23 @@ pub const EVENTS_PER_NAME: u32 = 20;
 const MAX_CHILDREN: usize = 256;
 /// Events waiting for the platform kept at most (oldest dropped).
 const MAX_PENDING_BYTES: usize = CAP_BYTES as usize;
+
+/// Whether layers record (on by default). Off, their callsites are
+/// disabled: a span or event then costs `tracing`'s check of a cached
+/// interest, and nothing is recorded.
+static RECORDING: AtomicBool = AtomicBool::new(true);
+
+/// Turns recording by every [`TraceLayer`] on or off (the player's setting).
+pub fn set_recording(on: bool) {
+    if RECORDING.swap(on, Ordering::Relaxed) != on {
+        tracing::callsite::rebuild_interest_cache();
+    }
+}
+
+/// Whether layers record.
+pub fn recording() -> bool {
+    RECORDING.load(Ordering::Relaxed)
+}
 
 /// The duration from which a root span named `name` is written whole: 50
 /// ms for a frame (three frames at 60 Hz), 10 ms for anything else (e.g.
@@ -333,10 +351,7 @@ impl Diagnostics {
 
     /// A counter event (`C`) now: each argument a series.
     pub fn counter(&self, name: &str, tid: u32, values: &[(&str, f64)]) {
-        let args: Vec<(&str, Value)> = values
-            .iter()
-            .map(|&(k, v)| (k, Value::Number(v)))
-            .collect();
+        let args: Vec<(&str, Value)> = values.iter().map(|&(k, v)| (k, Value::Number(v))).collect();
         let mut s = self.state();
         let line = s.line('C', name, s.now(), None, tid, &args);
         s.push(&line);
@@ -433,7 +448,7 @@ struct Entered(f64);
 pub struct TraceLayer(Diagnostics);
 
 fn ours(metadata: &Metadata<'_>) -> bool {
-    metadata.target().starts_with("volya")
+    recording() && metadata.target().starts_with("volya")
 }
 
 #[derive(Default)]
@@ -654,7 +669,10 @@ impl<S: SegmentStore> Log<S> {
         if log.sequence[newest] > 0 {
             let mut data = vec![0; log.len[newest] as usize];
             let n = log.store.read_at(newest, 0, &mut data)?;
-            let whole = data[..n].iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+            let whole = data[..n]
+                .iter()
+                .rposition(|&b| b == b'\n')
+                .map_or(0, |i| i + 1);
             if (whole as u64) < log.len[newest] {
                 log.store.truncate(newest, whole as u64)?;
                 log.len[newest] = whole as u64;
@@ -676,9 +694,7 @@ impl<S: SegmentStore> Log<S> {
     /// Starts a new newest segment in the oldest one, with `prefix`.
     fn rotate(&mut self, prefix: &str) -> io::Result<()> {
         let next = self.sequence[self.newest] + 1;
-        let oldest = (0..SEGMENTS)
-            .min_by_key(|&s| self.sequence[s])
-            .unwrap_or(0);
+        let oldest = (0..SEGMENTS).min_by_key(|&s| self.sequence[s]).unwrap_or(0);
         let mut head = header(next);
         if (head.len() + prefix.len()) as u64 <= SEGMENT_BYTES / 2 {
             head.push_str(prefix);
@@ -757,7 +773,8 @@ impl<S: SegmentStore> Log<S> {
         let extra = extra
             .lines()
             .filter(|l| l.starts_with('{') && l.ends_with('}'));
-        let mut out = String::with_capacity(self.bytes() as usize + extra.clone().count() * 128 + 256);
+        let mut out =
+            String::with_capacity(self.bytes() as usize + extra.clone().count() * 128 + 256);
         out.push_str("{\"traceEvents\":[\n");
         for (i, line) in lines.iter().map(String::as_str).chain(extra).enumerate() {
             if i > 0 {
