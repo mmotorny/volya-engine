@@ -67,6 +67,19 @@ function checkTraceFormat(trace) {
   }
 }
 
+/** Counts the engine workers the page starts until `restore()`. */
+function countEngineWorkers() {
+  const Original = globalThis.Worker;
+  const counter = { count: 0, restore: () => (globalThis.Worker = Original) };
+  globalThis.Worker = class extends Original {
+    constructor(url, options) {
+      super(url, options);
+      if (String(url).includes("engine-worker.js")) counter.count++;
+    }
+  };
+  return counter;
+}
+
 export const tests = {
   "engine reports ready": async () => {
     const status = await volya.status();
@@ -395,6 +408,24 @@ export const tests = {
       await volya.call("debug_draw", {});
       return `${gpu.backend}, textures ${gpu.textures}${info.compat ? ", compat path" : ""}`;
     } finally {
+      localStorage.removeItem("volya-engine.graphics");
+      await graphics.apply();
+    }
+  },
+
+  "Graphics: applied twice at once (Play pressed again while the engine starts anew), the engine starts anew once": async () => {
+    const { graphics } = volya;
+    const current = (await volya.status()).gpu.backend;
+    const target = ["webgpu", "webgl2"].find((b) => graphics.available[b] && b !== current);
+    if (!target) skip(`only ${current} here: nothing to start anew on`);
+    const engines = countEngineWorkers();
+    graphics.choose(target);
+    try {
+      await Promise.all([graphics.apply(), graphics.apply()]);
+      assertEqual(engines.count, 1, "engines started");
+      assertEqual((await volya.status()).gpu.backend, target, "backend");
+    } finally {
+      engines.restore();
       localStorage.removeItem("volya-engine.graphics");
       await graphics.apply();
     }
