@@ -77,10 +77,6 @@ const GOOD_ENOUGH: u64 = 16 * 3;
 /// three levels per channel on average.
 const TRY_T_AND_H: u64 = 16 * 3 * 9;
 
-/// The encoder's version: changes whenever its output for some input does,
-/// so stored transcodings from an earlier one are made again.
-pub const ENCODER_VERSION: u32 = 1;
-
 /// Which ETC2 format a transcoded texture takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Etc2Format {
@@ -110,7 +106,9 @@ impl Etc2Format {
         match format {
             Format::Bc1 => Some(
                 if blocks
-                    .chunks_exact(8)
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
                     .any(|b| format.block_has_transparency(b))
                 {
                     Self::Rgb8A1
@@ -522,8 +520,8 @@ fn planar(block: &Block) -> Candidate {
     }
     let extend = |c: usize, v: i32| if c == 1 { extend7(v) } else { extend6(v) };
     let mut error = 0u64;
-    for i in 0..16 {
-        if block.texels[i] == CLEAR {
+    for (i, &texel) in block.texels.iter().enumerate() {
+        if texel == CLEAR {
             continue;
         }
         let (x, y) = ((i % 4) as i32, (i / 4) as i32);
@@ -773,5 +771,7 @@ fn pack_alpha(
     bits.to_be_bytes()
 }
 
+#[cfg(test)]
+mod decode;
 #[cfg(test)]
 mod tests;

@@ -900,6 +900,8 @@ pub(crate) fn stream_buffer(
         queue.write_buffer(&buffer, at, piece);
         if flush {
             queue.submit([]);
+            // Frees the staging of finished submissions.
+            let _ = device.poll(wgpu::PollType::Poll);
         }
         at += n as u64;
     }
@@ -964,12 +966,12 @@ fn fill_rebased(
         let take = (s.count - from).min(n - done);
         let dst = &mut out[2 * done as usize..2 * (done + take) as usize];
         geom.read(source, 2 * u64::from(s.first + from), dst)?;
-        for pair in dst.chunks_exact_mut(2) {
-            let index = u32::from(u16::from_le_bytes([pair[0], pair[1]])) + s.base;
+        for pair in dst.as_chunks_mut::<2>().0 {
+            let index = u32::from(u16::from_le_bytes(*pair)) + s.base;
             let index = u16::try_from(index).map_err(|_| {
                 io::Error::new(io::ErrorKind::InvalidData, "a rebased index passes 16 bits")
             })?;
-            pair.copy_from_slice(&index.to_le_bytes());
+            *pair = index.to_le_bytes();
         }
         done += take;
         k += 1;
@@ -1483,6 +1485,10 @@ impl Renderer {
                 label: Some("world"),
             })
         };
+        if compat {
+            self.queue.submit([]);
+            let _ = device.poll(wgpu::PollType::Poll);
+        }
         let early = record(&early);
         let late = record(&late);
         let (sky, sky_error) =

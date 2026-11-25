@@ -16,7 +16,6 @@ workspace = true
 [dependencies]
 volya-engine-formats = { path = "../volya-engine-formats" }
 wgpu.workspace = true
-crc32fast.workspace = true
 
 [dev-dependencies]
 naga = { version = "30", features = ["wgsl-in", "glsl-out"] }

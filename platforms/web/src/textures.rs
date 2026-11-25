@@ -4,39 +4,26 @@
 //! A level's textures prepared for a GPU without BC (#113): while a New
 //! Game's loading waits under `st_loading_textures`
 //! ([`volya_engine::app::App::textures_to_prepare`]), each texture is
-//! transcoded to ETC2, or read from the stored transcodings, and uploaded,
-//! one texture per task turn so frames run in between (the loading screen
-//! keeps drawing). Stored transcodings live in `cache/etc2/` of the OPFS
-//! namespace, derived data beside the game, never in its files
-//! ([`volya_engine::render::texture_cache`]); a write that fails (another
-//! copy of the app writing the same entry) is skipped.
+//! transcoded to ETC2 and uploaded, one texture per task turn so frames run
+//! in between (the loading screen keeps drawing). Nothing is stored: every
+//! load transcodes again (decided by the user: a level's transcodings would
+//! take as much storage as its BC textures, on top of the game).
 
 use std::cell::RefCell;
 
 use serde::Serialize;
-use volya_engine::render::{TexturePath, texture_cache, transcode};
+use volya_engine::render::{TexturePath, transcode};
 use volya_engine_formats::dds::Dds;
 use wasm_bindgen::JsValue;
-
-use crate::opfs;
-
-/// Where stored transcodings live, under the namespace.
-pub const CACHE_DIR: &str = "cache";
-const ETC2_DIR: &str = "etc2";
 
 /// The latest preparation, for `level_stats`.
 #[derive(Clone, Default, Serialize)]
 pub struct Stats {
     pub textures: u32,
-    /// Transcoded now, and read from stored transcodings.
     pub transcoded: u32,
-    pub stored: u32,
-    /// Milliseconds: in all (frames between included), transcoding,
-    /// reading and writing stored transcodings.
+    /// Milliseconds: in all (frames between included), and transcoding.
     pub total_ms: f64,
     pub transcode_ms: f64,
-    pub cache_read_ms: f64,
-    pub cache_write_ms: f64,
     /// Megapixels transcoded (every face and level).
     pub transcoded_mpx: f64,
 }
@@ -52,6 +39,16 @@ pub fn stats() -> Stats {
 
 fn now() -> f64 {
     crate::now()
+}
+
+/// Megapixels of every face and level of `dds`.
+fn megapixels(dds: &Dds) -> f64 {
+    (0..dds.mip_levels)
+        .map(|m| {
+            let (w, h) = dds.mip_size(m);
+            f64::from(w * h) * f64::from(dds.faces) / 1e6
+        })
+        .sum()
 }
 
 /// Whether this GPU's textures are prepared while a level loads: when they
@@ -88,8 +85,6 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
         textures: paths.len() as u32,
         ..Default::default()
     };
-    let namespace = opfs::namespace().await?;
-    let cache = opfs::create_dir(&opfs::create_dir(&namespace, CACHE_DIR).await?, ETC2_DIR).await?;
     for path in paths {
         // The game was quit or unmounted meanwhile.
         if !crate::engine::preparing_textures() {
@@ -101,54 +96,29 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
         let Ok(dds) = Dds::parse(&bytes) else {
             continue;
         };
-        let name = texture_cache::name(&path);
         let t = now();
-        let stored = opfs::read_file(&cache, &name)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|entry| texture_cache::read(&path, &bytes, &entry));
-        stats.cache_read_ms += now() - t;
-        let transcoded = match stored {
-            Some(t) => {
-                stats.stored += 1;
-                Some(t)
-            }
-            None => {
-                let t = now();
-                let transcoded = transcode(&dds);
-                stats.transcode_ms += now() - t;
-                if let Some(transcoded) = &transcoded {
-                    stats.transcoded += 1;
-                    stats.transcoded_mpx += (0..dds.mip_levels)
-                        .map(|m| {
-                            let (w, h) = dds.mip_size(m);
-                            f64::from(w * h) * f64::from(dds.faces) / 1e6
-                        })
-                        .sum::<f64>();
-                    let entry = texture_cache::entry(&path, &bytes, transcoded);
-                    let t = now();
-                    if let Err(e) = opfs::write_file(&cache, &name, &entry).await {
-                        web_sys::console::warn_1(&e);
-                    }
-                    stats.cache_write_ms += now() - t;
-                }
-                transcoded
-            }
-        };
+        let transcoded = transcode(&dds);
+        stats.transcode_ms += now() - t;
+        if transcoded.is_some() {
+            stats.transcoded += 1;
+            stats.transcoded_mpx += megapixels(&dds);
+        }
         let texture = crate::gpu::with_renderer(|r| match &transcoded {
             Some(t) => r.create_transcoded_texture(&dds, t),
             None => r.create_texture(&dds),
         });
         if let Some(Ok(texture)) = texture {
-            crate::gpu::with_renderer(|r| r.add_prepared(&path, texture));
+            crate::gpu::with_renderer(|r| {
+                r.add_prepared(&path, texture);
+                r.flush_uploads();
+            });
         }
         drop(transcoded);
         drop(bytes);
         stats.total_ms = now() - start;
         STATS.with(|s| *s.borrow_mut() = stats.clone());
         // A task turn for frames to run.
-        opfs::sleep(0).await?;
+        crate::opfs::sleep(0).await?;
     }
     stats.total_ms = now() - start;
     STATS.with(|s| *s.borrow_mut() = stats);
@@ -185,12 +155,7 @@ pub fn bench(args: &serde_json::Value) -> Result<serde_json::Value, JsValue> {
         let took = now() - t;
         heap_max = heap_max.max(crate::heap_bytes());
         drop(transcoded);
-        let megapixels = (0..dds.mip_levels)
-            .map(|m| {
-                let (w, h) = dds.mip_size(m);
-                f64::from(w * h) * f64::from(dds.faces) / 1e6
-            })
-            .sum::<f64>();
+        let megapixels = megapixels(&dds);
         textures += 1;
         mpx += megapixels;
         ms += took;

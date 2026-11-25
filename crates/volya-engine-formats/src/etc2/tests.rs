@@ -1,8 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! The encoder checked against an independent decoder (`texture2ddecoder`):
-//! every mode's bits decode to the colours the encoder fitted.
+//! The encoder checked against a decoder written apart from it from the
+//! specification's decoding rules (`decode`): every mode's bits decode to
+//! the colours the encoder fitted. (During development both were also
+//! checked against the `texture2ddecoder` crate; the GPU's decoder checks
+//! them in `volya-engine-render`'s tests.)
 
 use super::*;
 
@@ -22,32 +25,19 @@ impl Rng {
     }
 }
 
-fn rgba(p: u32) -> [u8; 4] {
-    let [b, g, r, a] = p.to_le_bytes();
-    [r, g, b, a]
-}
-
-/// RGBA texels (row order) of an ETC2 RGB8 block, by the oracle.
+/// RGBA texels (row order) of an ETC2 RGB8 block.
 fn decode_rgb(bits: [u8; 8]) -> [[u8; 4]; 16] {
-    let mut out = [0u32; 16];
-    texture2ddecoder::decode_etc2_rgb_block(&bits, &mut out);
-    out.map(rgba)
+    super::decode::rgb(bits, false)
 }
 
-/// RGBA texels (row order) of an ETC2 RGB8A1 block, by the oracle.
+/// RGBA texels (row order) of an ETC2 RGB8A1 block.
 fn decode_rgb_a1(bits: [u8; 8]) -> [[u8; 4]; 16] {
-    let mut out = [0u32; 16];
-    texture2ddecoder::decode_etc2_rgba1_block(&bits, &mut out);
-    out.map(rgba)
+    super::decode::rgb(bits, true)
 }
 
-/// Alpha (row order) of an ETC2 RGBA8 block whose alpha half is `alpha`.
+/// Alpha (row order) of an EAC block.
 fn decode_alpha(alpha: [u8; 8]) -> [u8; 16] {
-    let mut block = [0u8; 16];
-    block[..8].copy_from_slice(&alpha);
-    let mut out = [0u32; 16];
-    texture2ddecoder::decode_etc2_rgba8_block(&block, &mut out);
-    out.map(|p| p.to_le_bytes()[3])
+    super::decode::alpha(alpha)
 }
 
 fn opaque(texels: &[[u8; 4]; 16]) -> Block {
@@ -300,7 +290,8 @@ fn psnr(squared: u64, samples: usize) -> f64 {
 /// with near endpoints (smooth content).
 #[test]
 fn quality_over_bc1_blocks() {
-    let quality = |pairs: &[([[u8; 4]; 16], [[u8; 4]; 16])]| {
+    type Pair = ([[u8; 4]; 16], [[u8; 4]; 16]);
+    let quality = |pairs: &[Pair]| {
         let total: u64 = pairs.iter().map(|(a, b)| squared_error(a, b)).sum();
         psnr(total, pairs.len() * 48)
     };

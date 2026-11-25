@@ -36,6 +36,18 @@ const ONLY = [
 // good. Measured at 98 MiB in headless Chrome after one and after two New
 // Games (#79; 193 and 199 MiB before); a regression past this fails.
 const WASM_HEAP_CAP = 110 * 2 ** 20;
+// Drawing through WebGL 2 (#113), measured at 147 MiB after the first New
+// Game in the iOS Simulator: wgpu's GL backend stages every upload in the
+// wasm heap until the submission is known finished, which a WebGL sync
+// object reports only once the worker yields (believed, not measured), so
+// a level's geometry and textures pass through it at once.
+const WASM_HEAP_CAP_WEBGL = 160 * 2 ** 20;
+const heapCap = () => (gpu?.backend === "webgl2" ? WASM_HEAP_CAP_WEBGL : WASM_HEAP_CAP);
+// Touch devices: no full screen offer, touch controls from the start.
+const coarse = () => matchMedia("(pointer: coarse)").matches;
+// How long a level may take to load: transcoding its textures (WebGL 2
+// without BC, #113) takes about 40 s in the iOS Simulator, on every load.
+const loadMs = () => (gpu?.textures === "etc2" ? 300000 : 60000);
 const mib = (bytes) => `${(bytes / 2 ** 20).toFixed(0)} MiB`;
 const CAPTIONS = ["Новая игра", "Загрузить игру", "Сетевая игра", "Опции", "Титры", "Выйти в Windows"];
 let installer;
@@ -474,8 +486,8 @@ export const tests = {
     // After the last stage the image covers the level's first 30 frames;
     // the intro starts under the last two (loading-screen.md section 7).
     // Transcoding the level's textures (WebGL 2 without BC, #113) takes
-    // longer the first time; later loads read the stored transcodings.
-    const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", gpu.textures === "etc2" ? 900000 : 60000);
+    // longer, on every load.
+    const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", loadMs());
     // The wasm heap at the end of the last frame under each caption.
     const stages = [];
     for (const e of await volya.call("heap_log", { on: false })) {
@@ -497,12 +509,14 @@ export const tests = {
     assert(grown < 40, `wasm heap grew ${grown.toFixed(0)} MiB during the intro`);
     // The whole level's heap, with the level's geometry streamed from its
     // file to the GPU (#79): under its cap.
-    assert(playing.wasm_heap_bytes <= WASM_HEAP_CAP, `wasm heap ${mib(playing.wasm_heap_bytes)} during the intro, over ${mib(WASM_HEAP_CAP)}`);
-    // A key bound to quit skips it (startup.md section 6.5).
+    // A key bound to quit skips it (startup.md section 6.5), before the
+    // heap is judged, so a failure leaves the game where later tests expect.
     key("Escape");
     const shown = await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
     assertEqual(shown.phase, "level", "still in the level");
-    let note = `wasm heap by caption (MiB): ${stages.map(([n, m]) => `${n} ${m}`).join(", ")}; "${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; intro skipped, wasm heap ${mib(before.wasm_heap_bytes)} before it, ${mib(playing.wasm_heap_bytes)} while it played`;
+    const byCaption = stages.map(([n, m]) => `${n} ${m}`).join(", ");
+    assert(playing.wasm_heap_bytes <= heapCap(), `wasm heap ${mib(playing.wasm_heap_bytes)} during the intro, over ${mib(heapCap())}; by caption (MiB): ${byCaption}; textures ${JSON.stringify(playing.textures)}`);
+    let note = `wasm heap by caption (MiB): ${byCaption}; "${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; intro skipped, wasm heap ${mib(before.wasm_heap_bytes)} before it, ${mib(playing.wasm_heap_bytes)} while it played`;
     if (gpu.state === "ready") {
       const { rgba } = await volya.call("debug_capture", { width: 256, height: 192 });
       const colours = new Set();
@@ -538,6 +552,10 @@ export const tests = {
     needsGame();
     await until((s) => s.phase === "level" && !s.menu && !s.intro, "the level's controls");
     const offer = document.getElementById("fullscreen-offer");
+    if (coarse()) {
+      assert(offer.hidden, "no offer on a touch device");
+      skip("desktop only: a touch device gets no offer");
+    }
     const request = Element.prototype.requestFullscreen;
     const native = Boolean(navigator.keyboard?.lock);
     // Headless Chrome can't enter full screen without a real gesture: the
@@ -675,7 +693,8 @@ export const tests = {
     const touchControls = document.getElementById("touch-controls");
     for (let i = 0; i < 100 && touchControls.dataset.live !== "true"; i++) await sleep(20);
     assertEqual(touchControls.dataset.live, "true", "the level's controls are live");
-    assert(touchControls.hidden, "touch controls shown without a touch");
+    // A touch device shows them from the start.
+    assertEqual(touchControls.hidden, !coarse(), "touch controls hidden until a touch, on desktop");
     return `ran ${moved.toFixed(2)} m, jumped ${height.toFixed(2)} m`;
   },
   "touch: the controls are drawn from the game's textures": async () => {
@@ -1093,12 +1112,12 @@ export const tests = {
     key("Enter");
     // Escape while the loading image covers the level's first frames,
     // before the intro starts under its last two: kept (#96).
-    await until((s) => s.phase === "level" && s.overlay_frames > 6, "the loading image over the level", 60000);
+    await until((s) => s.phase === "level" && s.overlay_frames > 6, "the loading image over the level", loadMs());
     key("Escape");
     const asked = await until((s) => s.menu_asked || s.intro || s.menu, "the Escape taken");
     const seen = { menu_asked: asked.menu_asked, overlay: asked.overlay_frames, intro: Boolean(asked.intro) };
     assert(asked.menu_asked && !asked.menu, `the menu asked for, not open: ${JSON.stringify(seen)}`);
-    const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level again", 60000);
+    const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level again", loadMs());
     assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
     // The intro again; a tap skips it (our design for touch). The controls
     // go live then, and the menu opens at once.
@@ -1137,7 +1156,7 @@ export const tests = {
     }
     // A second load reuses the heap the first one grew.
     const heap = (await volya.call("level_stats")).wasm_heap_bytes;
-    assert(heap <= WASM_HEAP_CAP, `wasm heap ${mib(heap)} after the second New Game, over ${mib(WASM_HEAP_CAP)}`);
+    assert(heap <= heapCap(), `wasm heap ${mib(heap)} after the second New Game, over ${mib(heapCap())}`);
     return `loaded again in ${s.load_ms.toFixed(0)} ms; wasm heap ${mib(heap)}`;
   },
 
@@ -1459,7 +1478,7 @@ export const tests = {
     key("Enter");
     await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
     key("Enter");
-    await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", 60000);
+    await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", loadMs());
     const tap = { pointerType: "touch", pointerId: 22, isPrimary: true, button: 0 };
     pointer("pointerdown", client(512, 384), { ...tap, buttons: 1 });
     pointer("pointerup", client(512, 384), { ...tap, buttons: 0 });

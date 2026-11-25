@@ -22,7 +22,6 @@ pub mod world;
 
 use std::ops::Range;
 
-pub use texture::cache as texture_cache;
 pub use texture::{TextureError, TexturePath, Transcoded, transcode, transcoded_len};
 pub use video::VideoTexture;
 pub use wgpu;
@@ -294,6 +293,14 @@ impl Renderer {
     /// The texture prepared for `path`, if any (it is then forgotten).
     pub fn take_prepared(&self, path: &str) -> Option<Texture> {
         self.prepared.borrow_mut().remove(path)
+    }
+
+    /// Submits the uploads written so far and frees the staging of finished
+    /// submissions: wgpu's GL backend holds written bytes in CPU memory (the
+    /// wasm heap on the web) until then (#113).
+    pub fn flush_uploads(&self) {
+        self.queue.submit([]);
+        let _ = self.device.poll(wgpu::PollType::Poll);
     }
 
     /// Forgets every prepared texture.

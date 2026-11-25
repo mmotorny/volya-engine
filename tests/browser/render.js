@@ -73,8 +73,16 @@ export const tests = {
   "renderer runs in the engine worker": async () => {
     needsGpu();
     // The canvas covers the viewport in device pixels.
+    // The page reports its size after startup; read the status anew until
+    // the worker has applied it.
     const expected = [innerWidth, innerHeight].map((css) => Math.round(css * devicePixelRatio));
-    assertEqual(gpu.size, expected, "canvas size");
+    let size;
+    for (let i = 0; i < 40; i++) {
+      size = (await volya.status()).gpu.size;
+      if (size.join() === expected.join()) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assertEqual(size, expected, "canvas size");
   },
 
   "empty draw list renders black": async () => {

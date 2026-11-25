@@ -143,6 +143,8 @@ fn wait_report(id: &str, reports: &Receiver<String>, timeout: Duration) -> Resul
 /// Tests a target is known not to support, with the reason. Verified: the iOS
 /// Simulator exposes `navigator.gpu` but never returns an adapter, on the main
 /// thread or in workers; WebGPU needs the real device.
+/// The iOS Simulator draws through WebGL 2 (#113); only the checks of
+/// WebGPU itself fail there.
 const KNOWN_FAILURES: &[(&str, &str, &str)] = &[
     ("iphone", "WebGPU adapter on the main thread", NO_WEBGPU),
     (
@@ -150,22 +152,9 @@ const KNOWN_FAILURES: &[(&str, &str, &str)] = &[
         "WebGPU renders from a worker to an OffscreenCanvas",
         NO_WEBGPU,
     ),
-    (
-        "iphone",
-        "WebGPU renderer runs in the engine worker",
-        NO_WEBGPU,
-    ),
-    ("iphone", "empty draw list renders black", NO_WEBGPU),
-    (
-        "iphone",
-        "draws an uncompressed game texture exactly",
-        NO_WEBGPU,
-    ),
-    ("iphone", "draws a BC game texture as stored", NO_WEBGPU),
-    ("iphone", "plays a game video as a texture", NO_WEBGPU),
 ];
 
-const NO_WEBGPU: &str = "iOS Simulator has no WebGPU adapter; check on a real device";
+const NO_WEBGPU: &str = "iOS Simulator has no WebGPU adapter (the app draws there through WebGL 2); check WebGPU on a real device";
 
 /// Turns `fail` lines of tests in [`KNOWN_FAILURES`] for `target` into
 /// `skip` lines carrying the known reason.
