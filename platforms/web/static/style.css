@@ -471,6 +471,7 @@ html[data-engine-input][data-offer] {
 
 .fullscreen-offer {
   position: fixed;
+  padding-right: 2.5rem;
   top: 16px;
   right: 16px;
   z-index: 2;
@@ -498,6 +499,27 @@ html[data-engine-input][data-offer] {
 
 .fullscreen-offer button {
   min-height: 36px;
+}
+
+/* Its close control, in the corner. */
+.fullscreen-offer button.close {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  min-height: 0;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.fullscreen-offer p {
+  padding-right: 0.5rem;
 }
 
 main {

@@ -36,15 +36,28 @@ const NEVER = new Set(["Tab", "F4", "MetaLeft", "MetaRight"]);
 /** Engine key name → KeyboardEvent.code. */
 const CODES = Object.fromEntries(Object.entries(KEYS).map(([code, name]) => [name, code]));
 
+/** Whether this runs on macOS, from the data the browser gives
+ * (`navigator.userAgentData.platform`, else `navigator.platform`). */
+const mac = () => /^mac/i.test(navigator.userAgentData?.platform || navigator.platform || "");
+
 /** Whether this is a desktop browser that can lock the keyboard in full
- * screen. */
+ * screen, not on macOS: there the browser's shortcuts use Command, which
+ * is never locked, so the offer's benefit doesn't apply (our choice). */
 export const supported = () =>
-  Boolean(navigator.keyboard?.lock && document.documentElement.requestFullscreen && document.fullscreenEnabled !== false) && !matchMedia("(pointer: coarse)").matches;
+  Boolean(navigator.keyboard?.lock && document.documentElement.requestFullscreen && document.fullscreenEnabled !== false) &&
+  !matchMedia("(pointer: coarse)").matches &&
+  !mac();
 
 /**
  * The offer. `boundKeys()` resolves to the engine's names of the keys the
- * game binds. `update({ level })` follows the level's controls; `leave()` ends full screen when the game ends. `show: true`
- * shows it without a browser that supports it (UX audit page).
+ * game binds. `update({ level })` follows the level's controls; `leave()`
+ * ends full screen when the game ends. `show: true` shows it without a
+ * browser that supports it (UX audit page).
+ *
+ * Shown at most once per game, from Play until the player leaves (our
+ * choice): it goes once anything hides it (the click that takes pointer
+ * lock, the menu, accepting it, or its close button) and doesn't come
+ * back until the next game.
  */
 export function createFullscreenOffer(boundKeys, { show = false } = {}) {
   const root = document.createElement("div");
@@ -56,7 +69,12 @@ export function createFullscreenOffer(boundKeys, { show = false } = {}) {
   button.textContent = "Full screen";
   const note = document.createElement("p");
   note.textContent = "Keeps shortcuts such as Ctrl+W in the game. Hold Esc to leave full screen.";
-  root.append(button, note);
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "close";
+  close.setAttribute("aria-label", "Close");
+  close.textContent = "×";
+  root.append(close, button, note);
 
   // The mouse here is the page's, not the engine's (input.js leaves it).
   for (const type of ["pointerdown", "pointerup", "pointermove", "click", "contextmenu"]) {
@@ -66,20 +84,28 @@ export function createFullscreenOffer(boundKeys, { show = false } = {}) {
   let codes = [...ALWAYS];
   let live = false;
   let entered = false;
+  // Shown and then hidden in this game: not shown again.
+  let spent = false;
   const fullscreen = () => Boolean(document.fullscreenElement);
 
   // Shown while the controls are live, the mouse is free and the page is
-  // not in full screen.
+  // not in full screen, once.
   const render = () => {
-    const shown = (show || supported()) && live && !document.pointerLockElement && !fullscreen();
+    const shown = (show || supported()) && !spent && live && !document.pointerLockElement && !fullscreen();
+    if (!shown && !root.hidden) spent = true;
     root.hidden = !shown;
     // The system pointer shows while the offer does: the engine draws no
     // cursor in the level.
     document.documentElement.toggleAttribute("data-offer", shown);
   };
 
+  close.addEventListener("click", () => {
+    spent = true;
+    render();
+  });
   button.addEventListener("click", () => {
     if (!supported()) return;
+    spent = true;
     // Both in the click: the lock first (the specification's order), then
     // full screen, which needs the gesture.
     navigator.keyboard.lock(codes).catch((error) => console.warn(`keyboard lock: ${error.message}`));
@@ -115,7 +141,13 @@ export function createFullscreenOffer(boundKeys, { show = false } = {}) {
         boundKeys()
           .then((names) => {
             const bound = names.map((name) => CODES[name]).filter((code) => code && !NEVER.has(code));
-            codes = [...new Set([...ALWAYS, ...bound])];
+            const next = [...new Set([...ALWAYS, ...bound])];
+            const changed = next.join() !== codes.join();
+            codes = next;
+            // In full screen already: the new bindings are locked now.
+            if (changed && entered && fullscreen()) {
+              navigator.keyboard?.lock(codes).catch((error) => console.warn(`keyboard lock: ${error.message}`));
+            }
           })
           .catch(() => {});
       }
@@ -130,6 +162,7 @@ export function createFullscreenOffer(boundKeys, { show = false } = {}) {
           .finally(() => navigator.keyboard?.unlock?.());
       }
       entered = false;
+      spent = false;
     },
     /** For tests: the codes the next lock takes. */
     codes: () => codes,

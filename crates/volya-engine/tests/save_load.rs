@@ -17,7 +17,7 @@
 mod gog_archives;
 
 use volya_engine::audio::Silent;
-use volya_engine::core::input::{Event, GamepadButton, Input, Key};
+use volya_engine::core::input::{Event, GamepadButton, Input, Key, MouseButton};
 use volya_engine::core::ui;
 use volya_engine::core::vfs::StdVfs;
 use volya_engine::core::vfs::db::DbVfs;
@@ -268,6 +268,22 @@ fn in_game_menu_and_save_load_screens_from_game_data() {
     pad(&mut input, GamepadButton::South);
     let s = frame(&[], &mut menu, &mut screens, &mut input);
     assert_eq!(s.save_screen.expect("the save screen").name, "1");
+    // A click on Cancel while it shows doesn't reach the screen.
+    let cancel = [792.0 + 140.0, 595.0 + 24.0];
+    input.handle(Event::PointerMoved { at: cancel });
+    for pressed in [true, false] {
+        input.handle(Event::PointerButton {
+            at: Some(cancel),
+            button: MouseButton::Left,
+            pressed,
+            time: 0.0,
+        });
+    }
+    let s = frame(&[], &mut menu, &mut screens, &mut input);
+    assert!(
+        s.save_screen.is_some_and(|s| s.keyboard.is_some()),
+        "the click is swallowed"
+    );
     let scene = draw(&menu, &screens, "VOLYA_DUMP_KEYBOARD");
     assert_eq!(scene.layer("keyboard key").count(), 50);
     // 46 character keys with labels; Shift, Space, Backspace, Done drawn

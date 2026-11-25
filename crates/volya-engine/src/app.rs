@@ -1523,6 +1523,38 @@ mod tests {
     }
 
     #[test]
+    fn without_an_intro_the_menu_asked_for_opens_as_the_loading_image_goes() {
+        let (tree, mut app, mut input, mut audio) = in_level();
+        let Some(Phase::Level { overlay, intro, .. }) = &mut app.phase else {
+            panic!()
+        };
+        // The intro checked already (none plays).
+        intro.checked = true;
+        let mut o = Overlay::new(LoadingScreen::default(), &mut audio);
+        o.frames_left = 3;
+        *overlay = Some(o);
+        press(&mut input, Key::Escape);
+        let mut t = 32.0;
+        for _ in 0..2 {
+            app.update(&tree, t, &input, &mut audio);
+            input.end_frame();
+            t += 16.0;
+            assert!(!menu_open(&app), "not under the loading image");
+        }
+        // The image's last frame ends: the controls are live, the menu opens.
+        app.update(&tree, t, &input, &mut audio);
+        assert!(matches!(
+            app.state(),
+            AppState::Level {
+                intro: None,
+                overlay_frames: 0,
+                ..
+            }
+        ));
+        assert!(menu_open(&app), "the menu opens in the first live frame");
+    }
+
+    #[test]
     fn a_setting_changed_in_the_menu_reaches_the_running_level() {
         let (tree, mut app, mut input, mut audio) = in_level();
         press(&mut input, Key::Escape);

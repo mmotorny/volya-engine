@@ -856,6 +856,13 @@ impl NameField {
     /// Character `c` typed through text entry (our design, #94): typed as
     /// a key typing it would, if one does (section 4.4) and it fits.
     fn insert(&mut self, c: char, font: Option<&FieldFont>) {
+        // Typographic quotes (a device keyboard's smart punctuation) as
+        // the plain ones the field's keys type.
+        let c = match c {
+            '\u{2018}' | '\u{2019}' => '\'',
+            '\u{201C}' | '\u{201D}' => '"',
+            c => c,
+        };
         let typeable = Key::ALL
             .iter()
             .any(|&k| typed(k, false) == Some(c) || typed(k, true) == Some(c));
@@ -1232,6 +1239,11 @@ impl SaveScreen {
             if out.closed {
                 break;
             }
+            // The keyboard over the screen: the mouse and touch don't reach
+            // what is under it (our choice); keys still do.
+            if typing && !matches!(e, Ev::Key { .. } | Ev::Text(_) | Ev::Quit { .. }) {
+                continue;
+            }
             self.screen.follow(&mut e);
             let c = self.screen.cursor;
             if let Some((m, purpose)) = &mut self.screen.message {
@@ -1295,7 +1307,9 @@ impl SaveScreen {
             && self.keyboard.is_none()
             && GamepadButton::ALL.iter().any(|&b| input.pad_held(b));
         self.field.frame(now, font);
-        self.screen.hold(now, input, last_hold);
+        if !typing {
+            self.screen.hold(now, input, last_hold);
+        }
         self.screen.frame();
         out
     }
@@ -1984,6 +1998,15 @@ mod tests {
             f.insert(c, None);
         }
         assert_eq!((f.text.as_str(), f.caret), ("Ab 1_?", 6));
+        // Typographic quotes as the plain ones.
+        for c in "\u{2019}\u{201C}".chars() {
+            f.insert(c, None);
+        }
+        assert_eq!(f.text, "Ab 1_?'\"");
+        f.key(Key::Backspace, true, None);
+        f.key(Key::Backspace, false, None);
+        f.key(Key::Backspace, true, None);
+        f.key(Key::Backspace, false, None);
         // The on-screen keyboard: its own shift, Backspace, Done.
         f.keyboard(Press::Char(Key::Digit1, true), None);
         f.keyboard(Press::Char(Key::Q, false), None);

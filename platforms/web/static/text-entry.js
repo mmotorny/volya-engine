@@ -43,9 +43,22 @@ export function createTextEntry(send) {
   input.enterKeyHint = "done";
   root.append(input);
 
+  // An input method composing text (e.g. a Japanese keyboard) keeps it in
+  // the input until done: the composed text is sent then.
+  let composing = false;
+  input.addEventListener("compositionstart", () => {
+    composing = true;
+  });
+  input.addEventListener("compositionend", (event) => {
+    composing = false;
+    if (event.data) send(["text", event.data]);
+    input.value = "";
+  });
   input.addEventListener("input", (event) => {
-    if (event.inputType?.startsWith("insert") && event.data) send(["text", event.data]);
-    else if (event.inputType === "deleteContentBackward") tap("backspace");
+    const type = event.inputType ?? "";
+    if (composing || event.isComposing || type === "insertCompositionText" || type === "insertFromComposition") return;
+    if (type.startsWith("insert") && event.data) send(["text", event.data]);
+    else if (type === "deleteContentBackward") tap("backspace");
     input.value = "";
   });
   input.addEventListener("keydown", (event) => {

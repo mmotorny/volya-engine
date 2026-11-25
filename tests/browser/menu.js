@@ -451,16 +451,49 @@ export const tests = {
       Object.defineProperty(document, "fullscreenElement", { value: document.documentElement, configurable: true });
       document.dispatchEvent(new Event("fullscreenchange"));
     };
+    // Not offered on macOS (our choice): the platform reads as Windows here.
+    Object.defineProperty(navigator, "userAgentData", { value: { platform: "Windows" }, configurable: true });
+    const exit = document.exitFullscreen;
+    document.exitFullscreen = async () => {
+      calls.push(["exit"]);
+      delete document.fullscreenElement;
+      document.dispatchEvent(new Event("fullscreenchange"));
+    };
+    const render = () => document.dispatchEvent(new Event("fullscreenchange"));
+    // The engine stops owning the screen (as when the player quits), then
+    // owns it again: to the offer, the game ended and a new one began.
+    const newGame = async () => {
+      await volya.call("input_capture", { on: false });
+      await volya.call("input_capture", { on: true });
+    };
+    const shown = async (want) => {
+      for (let i = 0; i < 50 && offer.hidden === want; i++) await sleep(20);
+      return !offer.hidden;
+    };
     try {
       // Shown now that the APIs are there (it shows again on any change).
-      document.dispatchEvent(new Event("fullscreenchange"));
+      render();
+      assert(await shown(true), "the offer shows");
+      const button = offer.querySelector("button:not(.close)");
+      const close = offer.querySelector("button.close");
+      assertEqual([button.textContent, offer.querySelector("p").textContent], ["Full screen", "Keeps shortcuts such as Ctrl+W in the game. Hold Esc to leave full screen."], "text");
+      assertEqual(close.getAttribute("aria-label"), "Close", "the close control");
+      // Closed, it stays away in this game, through the menu too.
+      close.click();
+      assert(offer.hidden, "closed");
+      render();
+      key("Escape");
+      await until((s) => inGame(s), "the in-game menu");
+      key("Escape");
+      await until((s) => s.phase === "level" && !s.menu, "back in the game");
+      assert(!(await shown(true)), "not shown again after the menu");
+      // The next game offers it again.
+      await newGame();
+      render();
+      assert(await shown(true), "offered in the next game");
       calls.length = 0;
-      for (let i = 0; i < 50 && offer.hidden; i++) await sleep(20);
-      assert(!offer.hidden, "the offer shows");
-      assertEqual(offer.innerText.replace(/\s+/g, " ").trim(), "Full screen Keeps shortcuts such as Ctrl+W in the game. Hold Esc to leave full screen.", "text");
       // A press on it is the page's, not the game's.
       const before = await volya.call("input_state");
-      const button = offer.querySelector("button");
       const at = button.getBoundingClientRect();
       button.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: at.x + 5, clientY: at.y + 5, pointerType: "mouse", button: 0, buttons: 1 }));
       const after = await volya.call("input_state");
@@ -482,16 +515,17 @@ export const tests = {
       await until((s) => inGame(s), "the in-game menu");
       key("Escape");
       await until((s) => s.phase === "level" && !s.menu, "back in the game");
-      // Left (the long Escape): the lock ends, the offer is back.
-      delete document.fullscreenElement;
-      document.dispatchEvent(new Event("fullscreenchange"));
-      assert(calls.some(([c]) => c === "unlock"), "unlocked on leaving");
-      for (let i = 0; i < 50 && offer.hidden; i++) await sleep(20);
-      assert(!offer.hidden, "the offer is back");
+      // The game ends: the page leaves full screen, then the lock ends.
+      await volya.call("input_capture", { on: false });
+      await until(() => calls.some(([c]) => c === "exit"), "full screen left on quitting");
+      await until(() => calls.some(([c]) => c === "unlock"), "unlocked");
+      await volya.call("input_capture", { on: true });
       return `navigator.keyboard.lock ${native ? "present" : "absent"} in headless Chrome; locked ${calls[0][1].length} keys`;
     } finally {
       delete navigator.keyboard;
+      delete navigator.userAgentData;
       Element.prototype.requestFullscreen = request;
+      document.exitFullscreen = exit;
       delete document.fullscreenElement;
       document.dispatchEvent(new Event("fullscreenchange"));
     }
@@ -851,6 +885,23 @@ export const tests = {
     entry.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: "Ab1ж", bubbles: true }));
     await until((s) => s.menu?.save_screen?.name === "Ab1", "the typed name");
     assertEqual(entry.value, "", "the input emptied");
+    // An input method's composition: nothing until it ends, then its text.
+    entry.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    entry.value = "x";
+    entry.dispatchEvent(new InputEvent("input", { inputType: "insertCompositionText", data: "x", isComposing: true, bubbles: true }));
+    await sleep(100);
+    assertEqual((await save()).name, "Ab1", "nothing while composing");
+    assertEqual(entry.value, "x", "the composition kept in the input");
+    entry.dispatchEvent(new CompositionEvent("compositionend", { data: "x", bubbles: true }));
+    await until((s) => s.menu?.save_screen?.name === "Ab1x", "the composed text");
+    assertEqual(entry.value, "", "the input emptied after composing");
+    // Typographic quotes as plain ones.
+    entry.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: "\u2019", bubbles: true }));
+    await until((s) => s.menu?.save_screen?.name === "Ab1x'", "a curly quote typed as '");
+    const del = () => entry.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", code: "", bubbles: true, cancelable: true }));
+    del();
+    del();
+    await until((s) => s.menu?.save_screen?.name === "Ab1", "deleted again");
     // The device keyboard's Backspace and Enter without key codes.
     const press = (key) => entry.dispatchEvent(new KeyboardEvent("keydown", { key, code: "", bubbles: true, cancelable: true }));
     press("Backspace");
