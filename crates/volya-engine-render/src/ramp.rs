@@ -144,6 +144,8 @@ impl RampPass {
                 },
             ],
         });
+        let timed = crate::timing::pass_writes("ramp", false);
+        crate::stats::pass();
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("ramp"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -156,12 +158,15 @@ impl RampPass {
                 },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes: crate::timing::writes(&timed),
             occlusion_query_set: None,
             multiview_mask: None,
         });
+        crate::stats::pipeline();
         pass.set_pipeline(&self.pipeline);
+        crate::stats::bind_group();
         pass.set_bind_group(0, &group, &[]);
+        crate::stats::draw();
         pass.draw(0..3, 0..1);
     }
 }

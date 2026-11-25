@@ -104,6 +104,7 @@ fn read_texture(
         },
         texture.size(),
     );
+    crate::stats::submit();
     queue.submit([encoder.finish()]);
 
     let (sender, receiver) = oneshot();

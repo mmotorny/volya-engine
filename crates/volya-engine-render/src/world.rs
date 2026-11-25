@@ -322,9 +322,11 @@ fn draw_at(i: u32) -> Draw {{
         source.contains(STORAGE),
         "world.wgsl: the draws binding changed"
     );
+    const RECORD: &str = "return draws[i];";
+    assert!(source.contains(RECORD), "world.wgsl: `record` changed");
     source
         .replace(STORAGE, &texture)
-        .replace("draws[v.draw]", "draw_at(v.draw)")
+        .replace(RECORD, "return draw_at(i);")
 }
 
 /// The per-draw records on the GPU.
@@ -441,44 +443,6 @@ fn meets(planes: &[[f32; 4]; 6], s: [f32; 4]) -> bool {
         .all(|p| p[0] * s[0] + p[1] * s[1] + p[2] * s[2] + p[3] >= -s[3])
 }
 
-/// The draws of one step of the static world: a render bundle replayed
-/// every frame, or on [`Renderer::compat`] the draws themselves, encoded
-/// each frame with only those that can show (#415): wgpu's GL backend
-/// replays a bundle as one GL call sequence per draw, and WebGL's cost per
-/// call made the 7,782 draws of `l01_escape` about 10 ms of every frame's
-/// CPU in headless Chrome.
-enum Static {
-    Bundle(wgpu::RenderBundle),
-    Draws(Vec<StaticDraw>),
-}
-
-/// A static draw as [`Static::Draws`] keeps it.
-#[derive(Clone, Copy, Debug)]
-struct StaticDraw {
-    /// Its index among the kept draws (its record and instance).
-    kept: u32,
-    surface: u32,
-    vertex_buffer: u32,
-    index_buffer: u32,
-    first_vertex: i32,
-    first_index: u32,
-    index_count: u32,
-}
-
-/// Whether a draw with bounding sphere `s` can show in a frame whose camera
-/// has frustum `camera`, at `eye` with ssa_min `ssa`: a superset of what the
-/// world program draws (its test of section 10.2, `visible` in
-/// `world.wgsl`, here with a margin for rounding), less what lies wholly
-/// outside the frustum, which yields no pixels.
-fn can_show(camera: &[[f32; 4]; 6], eye: [f32; 3], ssa: f32, s: [f32; 4]) -> bool {
-    if s[3] <= 0.0 {
-        return false;
-    }
-    let d2: f32 = (0..3).map(|i| (eye[i] - s[i]).powi(2)).sum();
-    // The margins only keep more draws; the program decides.
-    s[3] / (d2 + 1e-5) > ssa * 0.99 && meets(camera, [s[0], s[1], s[2], s[3] * 1.01 + 0.01])
-}
-
 /// A kept draw whose surface has light elements of priority 0 or 1
 /// (section 5.5, rule 4).
 #[derive(Clone, Copy, Debug)]
@@ -574,6 +538,25 @@ fn vertex_layout(layout: VertexLayout) -> wgpu::VertexBufferLayout<'static> {
         },
     }
 }
+
+/// The vertex buffers a program reads: its layout's, and for the level's
+/// layouts each vertex's draw (`id` in world.wgsl, [`SHARED`] where draws
+/// share the vertex) from a buffer of its own.
+fn vertex_buffers(layout: VertexLayout) -> Vec<Option<wgpu::VertexBufferLayout<'static>>> {
+    const ID: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![7 => Uint32];
+    let mut buffers = vec![Some(vertex_layout(layout))];
+    if layout != VertexLayout::Model {
+        buffers.push(Some(wgpu::VertexBufferLayout {
+            array_stride: 4,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &ID,
+        }));
+    }
+    buffers
+}
+
+/// A level vertex's draw where draws share it (world.wgsl's `SHARED`).
+const SHARED: u32 = u32::MAX;
 
 impl WorldPipelines {
     pub(crate) fn new(
@@ -773,7 +756,7 @@ impl WorldPipelines {
                         module: &shader,
                         entry_point: Some(program.entry_point()),
                         compilation_options: Default::default(),
-                        buffers: &[Some(vertex_layout(program.layout()))],
+                        buffers: &vertex_buffers(program.layout()),
                     },
                     primitive: wgpu::PrimitiveState {
                         front_face: wgpu::FrontFace::Cw,
@@ -922,7 +905,7 @@ impl WorldPipelines {
                     module: shader,
                     entry_point: Some(vs),
                     compilation_options: Default::default(),
-                    buffers: &[Some(vertex_layout(key.program.layout()))],
+                    buffers: &vertex_buffers(key.program.layout()),
                 },
                 // Triangles that appear counter-clockwise on screen are
                 // culled (section 10.1).
@@ -1034,6 +1017,110 @@ pub fn texture_bytes(t: &wgpu::Texture) -> u64 {
         * u64::from(t.depth_or_array_layers())
 }
 
+/// What a draw's call needs.
+#[derive(Clone, Copy, Debug)]
+struct DrawCall {
+    surface: u32,
+    vertex_buffer: u32,
+    index_buffer: u32,
+    first_index: u32,
+    index_count: u32,
+    first_vertex: i32,
+}
+
+/// Whether a draw with bounding sphere `s` may show in a frame with view
+/// frustum `planes`, camera position `eye` and `ssa_min`: false only where
+/// the shaders would drop all of it (outside the clip volume, or below
+/// ssa_min, section 10.2), with margins so that rounding never culls what
+/// they would draw.
+fn may_show(s: [f32; 4], planes: &[[f32; 4]; 6], eye: [f32; 3], ssa_min: f32) -> bool {
+    if s[3] <= 0.0 {
+        // The shaders' size test never passes.
+        return false;
+    }
+    let r = s[3] * 1.001 + 0.01;
+    if planes
+        .iter()
+        .any(|p| p[0] * s[0] + p[1] * s[1] + p[2] * s[2] + p[3] < -r)
+    {
+        return false;
+    }
+    let d2: f32 = (0..3).map(|i| (eye[i] - s[i]).powi(2)).sum();
+    s[3] / (d2 + 1e-5) > ssa_min * 0.99
+}
+
+/// Encodes the draws of `order` into `pass` that [`may_show`], in that
+/// order: consecutive draws of one surface and buffers whose vertices are
+/// their own and whose ranges follow one another as one call (the same
+/// triangles in the same order, #387).
+fn encode_static(
+    pass: &mut wgpu::RenderPass<'_>,
+    inner: &Inner,
+    order: &[u32],
+    shows: impl Fn(u32) -> bool,
+) {
+    crate::stats::bind_group();
+    pass.set_bind_group(0, &inner.frame_group, &[]);
+    let mut pipeline = None;
+    let mut surface = None;
+    let mut buffers = None;
+    let mut run: Option<std::ops::Range<u32>> = None;
+    let flush = |pass: &mut wgpu::RenderPass<'_>, run: &mut Option<std::ops::Range<u32>>| {
+        if let Some(r) = run.take() {
+            crate::stats::draw();
+            pass.draw_indexed(r, 0, 0..1);
+        }
+    };
+    for &i in order {
+        if !shows(i) {
+            continue;
+        }
+        let d = &inner.calls[i as usize];
+        if surface != Some(d.surface) {
+            flush(pass, &mut run);
+            surface = Some(d.surface);
+            let p = &inner.surface_pipelines[d.surface as usize];
+            if pipeline != Some(p) {
+                pipeline = Some(p);
+                crate::stats::pipeline();
+                pass.set_pipeline(p);
+            }
+            crate::stats::bind_group();
+            pass.set_bind_group(1, &inner.surface_groups[d.surface as usize], &[]);
+        }
+        if buffers != Some((d.vertex_buffer, d.index_buffer)) {
+            flush(pass, &mut run);
+            buffers = Some((d.vertex_buffer, d.index_buffer));
+            crate::stats::buffer();
+            pass.set_vertex_buffer(0, inner.vertex_buffers[d.vertex_buffer as usize].slice(..));
+            crate::stats::buffer();
+            pass.set_index_buffer(
+                inner.index_buffers[d.index_buffer as usize].slice(..),
+                inner.index_formats[d.index_buffer as usize],
+            );
+            if let Some(Some(ids)) = inner.id_buffers.get(d.vertex_buffer as usize) {
+                crate::stats::buffer();
+                pass.set_vertex_buffer(1, ids.slice(..));
+            }
+        }
+        let range = d.first_index..d.first_index + d.index_count;
+        if inner.exclusive[i as usize] {
+            match &mut run {
+                Some(r) if r.end == range.start => r.end = range.end,
+                _ => {
+                    flush(pass, &mut run);
+                    run = Some(range);
+                }
+            }
+            continue;
+        }
+        flush(pass, &mut run);
+        crate::stats::draw();
+        pass.draw_indexed(range, d.first_vertex, i..i + 1);
+    }
+    flush(pass, &mut run);
+}
+
 struct Inner {
     /// Kept for as long as the bundles that draw from them.
     vertex_buffers: Vec<wgpu::Buffer>,
@@ -1051,13 +1138,21 @@ struct Inner {
     surface_groups: Vec<wgpu::BindGroup>,
     /// Pipeline of each surface.
     surface_pipelines: Vec<wgpu::RenderPipeline>,
-    /// Section 10.3 step 1 (priority 0–1, not strict) and step 5 (2–3).
-    early: Static,
-    late: Static,
+    /// Section 10.3 step 1 (priority 0–1, not strict) and step 5 (2–3):
+    /// the draws in their fixed order.
+    early: Vec<u32>,
+    late: Vec<u32>,
+    /// Every draw's call.
+    calls: Vec<DrawCall>,
+    /// Whether each draw's vertices are its own ([`owned_spans`]), so its
+    /// call can merge with the next.
+    exclusive: Vec<bool>,
     /// Step 6: strict-sorted draws, ordered each frame.
     strict: RefCell<Vec<(usize, WorldDraw)>>,
     /// The draws light passes may draw again.
     lit: Vec<LitDraw>,
+    /// Each level vertex buffer's draw ids (world.wgsl's `id`).
+    id_buffers: Vec<Option<wgpu::Buffer>>,
     /// The bounding sphere each kept draw's record holds now.
     spheres: RefCell<Vec<[f32; 4]>>,
     sky: Option<SkyResources>,
@@ -1216,20 +1311,36 @@ pub(crate) fn upload_buffer(
     buffer
 }
 
-/// [`Renderer::compat`]: an index range of a stored index buffer, uploaded
-/// with `base` added at index `at` of the rebased buffer.
+/// An index range of a stored index buffer, uploaded with `base` added at
+/// index `at` of the rebased buffer (the level's draws read vertex buffer
+/// `vb` from vertex 0).
 #[derive(Clone, Copy)]
 struct Segment {
     at: u32,
     first: u32,
     count: u32,
     base: u32,
+    vb: u32,
+}
+
+/// What the upload learns of a level segment: the first draw using it, how
+/// many do, and the vertices its indices reach (`[min, max]`, empty while
+/// `min > max`).
+#[derive(Clone, Copy)]
+struct SegmentUse {
+    draw: u32,
+    uses: u32,
+    span: [u32; 2],
 }
 
 /// [`Renderer::compat`]: where each draw's rebased index range begins, by
 /// (object draw, index buffer, first index, index count, base vertex).
+/// A draw's index range: (object draw, index buffer, first index, index
+/// count, base vertex).
+type RangeKey = (bool, u32, u32, u32, u32);
+
 #[derive(Default)]
-struct Rebased(HashMap<(bool, u32, u32, u32, u32), u32>);
+struct Rebased(HashMap<RangeKey, u32>);
 
 impl Rebased {
     fn key(d: &WorldDraw) -> (bool, u32, u32, u32, u32) {
@@ -1254,37 +1365,105 @@ impl Rebased {
 }
 
 /// Fills `out`, the bytes from `at` of a rebased index buffer laid out by
-/// `segments`, from stored index buffer `source` of `geom`.
+/// `segments` (32-bit indices when `wide`, else 16-bit), from stored index
+/// buffer `source` of `geom`, widening each segment's span in `uses` by
+/// the vertices it reaches.
 fn fill_rebased(
     geom: &mut dyn GeomSource,
     source: GeomBuffer,
     segments: &[Segment],
+    uses: &mut [SegmentUse],
+    wide: bool,
     at: u64,
     out: &mut [u8],
 ) -> io::Result<()> {
-    let first = (at / 2) as u32;
-    let n = (out.len() / 2) as u32;
+    let size = if wide { 4 } else { 2 };
+    let first = (at / size) as u32;
+    let n = (out.len() / size as usize) as u32;
     let mut k = segments.partition_point(|s| s.at + s.count <= first);
     let mut done = 0;
+    let mut stored = Vec::new();
     while done < n {
         let s = segments
             .get(k)
             .ok_or_else(|| io::Error::other("rebased indices past their ranges"))?;
         let from = first + done - s.at;
         let take = (s.count - from).min(n - done);
-        let dst = &mut out[2 * done as usize..2 * (done + take) as usize];
-        geom.read(source, 2 * u64::from(s.first + from), dst)?;
-        for pair in dst.as_chunks_mut::<2>().0 {
+        stored.resize(2 * take as usize, 0);
+        geom.read(source, 2 * u64::from(s.first + from), &mut stored)?;
+        let dst = &mut out[size as usize * done as usize..size as usize * (done + take) as usize];
+        let span = &mut uses[k].span;
+        for (j, pair) in stored.as_chunks::<2>().0.iter().enumerate() {
             let index = u32::from(u16::from_le_bytes(*pair)) + s.base;
-            let index = u16::try_from(index).map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidData, "a rebased index passes 16 bits")
-            })?;
-            *pair = index.to_le_bytes();
+            span[0] = span[0].min(index);
+            span[1] = span[1].max(index);
+            if wide {
+                dst[4 * j..4 * j + 4].copy_from_slice(&index.to_le_bytes());
+            } else {
+                let index = u16::try_from(index).map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidData, "a rebased index passes 16 bits")
+                })?;
+                dst[2 * j..2 * j + 2].copy_from_slice(&index.to_le_bytes());
+            }
         }
         done += take;
         k += 1;
     }
     Ok(())
+}
+
+/// Each level vertex buffer's vertices that one draw alone reaches, as
+/// sorted `(first, last, draw)`: those of segments used by one draw whose
+/// spans meet no other segment's on the same buffer.
+fn owned_spans(
+    segments: &[Vec<Segment>],
+    uses: &[Vec<SegmentUse>],
+    vertex_buffers: usize,
+) -> Vec<Vec<(u32, u32, u32)>> {
+    let mut spans: Vec<Vec<(u32, u32, u32, bool)>> = vec![Vec::new(); vertex_buffers];
+    for (segments, uses) in segments.iter().zip(uses) {
+        for (s, u) in segments.iter().zip(uses) {
+            if u.span[0] <= u.span[1] {
+                spans[s.vb as usize].push((u.span[0], u.span[1], u.draw, u.uses == 1));
+            }
+        }
+    }
+    spans
+        .into_iter()
+        .map(|mut v| {
+            v.sort_unstable();
+            let mut owned = Vec::with_capacity(v.len());
+            // The furthest vertex reached by the spans before each.
+            let mut reach: Option<u32> = None;
+            for (i, &(first, last, draw, single)) in v.iter().enumerate() {
+                let before = reach.is_some_and(|r| r >= first);
+                let after = v.get(i + 1).is_some_and(|n| n.0 <= last);
+                if single && !before && !after {
+                    owned.push((first, last, draw));
+                }
+                reach = Some(reach.map_or(last, |r| r.max(last)));
+            }
+            owned
+        })
+        .collect()
+}
+
+/// Fills `out`, the bytes from `at` of vertex buffer `vb`'s draw ids: each
+/// vertex's owning draw, else [`SHARED`].
+fn fill_draw_ids(owned: &[(u32, u32, u32)], at: u64, out: &mut [u8]) {
+    let first = (at / 4) as u32;
+    let mut k = owned.partition_point(|o| o.1 < first);
+    for (j, slot) in out.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+        let v = first + j as u32;
+        while owned.get(k).is_some_and(|o| o.1 < v) {
+            k += 1;
+        }
+        let id = match owned.get(k) {
+            Some(&(f, _, draw)) if f <= v => draw,
+            _ => SHARED,
+        };
+        slot.copy_from_slice(&id.to_le_bytes());
+    }
 }
 
 /// Fills `out`, the bytes from `at` of the objects' rebased index buffer
@@ -1327,11 +1506,10 @@ fn fill_object_rebased(
 enum Source {
     /// Stored vertex buffer `i` of the level's geometry.
     Vertices(u32),
-    /// Stored index buffer `i`, as stored.
-    Indices(u32),
-    /// Stored index buffer `i`, rebased by its segments
-    /// ([`Renderer::compat`]).
+    /// Stored index buffer `i`, rebased by its segments.
     Rebased(u32),
+    /// Vertex buffer `i`'s draw ids ([`fill_draw_ids`]).
+    DrawIds(u32),
     /// The objects' vertices.
     ObjectVertices,
     /// The objects' indices, as held.
@@ -1365,6 +1543,15 @@ pub struct GeometryUpload {
     piece: Vec<u8>,
     compat: bool,
     segments: Vec<Vec<Segment>>,
+    /// Per index buffer and segment, what is learned of it.
+    uses: Vec<Vec<SegmentUse>>,
+    /// Whether each index buffer is rebased to 32 bits.
+    wide: Vec<bool>,
+    /// Each level draw's segment, by its range: (index buffer, segment).
+    level_segments: HashMap<RangeKey, (u32, u32)>,
+    /// [`owned_spans`], once every index buffer is filled.
+    owned: Option<Vec<Vec<(u32, u32, u32)>>>,
+    id_buffers: Vec<Option<wgpu::Buffer>>,
     rebased: Rebased,
     vertex_buffers: Vec<wgpu::Buffer>,
     index_buffers: Vec<wgpu::Buffer>,
@@ -1410,14 +1597,22 @@ impl GeometryUpload {
             let range = at as usize..at as usize + n;
             match &job.source {
                 Source::Vertices(i) => geom.read(GeomBuffer::Vertices(*i), at, out),
-                Source::Indices(i) => geom.read(GeomBuffer::Indices(*i), at, out),
                 Source::Rebased(i) => fill_rebased(
                     geom,
                     GeomBuffer::Indices(*i),
                     &self.segments[*i as usize],
+                    &mut self.uses[*i as usize],
+                    self.wide[*i as usize],
                     at,
                     out,
                 ),
+                Source::DrawIds(i) => {
+                    let owned = self.owned.get_or_insert_with(|| {
+                        owned_spans(&self.segments, &self.uses, self.vertex_layouts.len())
+                    });
+                    fill_draw_ids(&owned[*i as usize], at, out);
+                    Ok(())
+                }
                 Source::ObjectVertices => objects
                     .vertices
                     .get(range)
@@ -1439,6 +1634,7 @@ impl GeometryUpload {
             if self.compat {
                 // Each piece submitted at once, so the staging of finished
                 // ones can go (see the type's description).
+                crate::stats::submit();
                 renderer.queue.submit([]);
                 let _ = renderer.device.poll(wgpu::PollType::Poll);
             }
@@ -1561,49 +1757,94 @@ impl Renderer {
                 bytes,
             });
         }
-        // Without base vertices (compat), each index range a draw uses is
-        // uploaded with its draw's first vertex added, ranges one after
-        // another per index buffer (a range drawn from two bases twice);
-        // the draws then read from vertex 0.
+        // Each index range a level draw uses is uploaded with its draw's
+        // first vertex added (a range drawn from two bases twice), ranges
+        // one after another per index buffer, by surface, vertex buffer and
+        // draw: the draws read from vertex 0 (WebGL has no base vertex), and
+        // draws of a surface and buffers drawn one after another read
+        // consecutive ranges, which one draw call can then cover (#387).
         let mut rebased = Rebased::default();
         let mut segments: Vec<Vec<Segment>> = vec![Vec::new(); layout.index_counts.len()];
-        if compat {
-            for d in draws.iter().filter(|d| d.object.is_none()) {
-                let segments = &mut segments[d.index_buffer as usize];
-                rebased.add(d, || {
+        let mut uses: Vec<Vec<SegmentUse>> = vec![Vec::new(); layout.index_counts.len()];
+        let mut level_segments = HashMap::new();
+        let mut order: Vec<u32> = (0..draws.len() as u32)
+            .filter(|&i| draws[i as usize].object.is_none())
+            .collect();
+        order.sort_by_key(|&i| {
+            let d = &draws[i as usize];
+            (d.index_buffer, d.surface, d.vertex_buffer, i)
+        });
+        for i in order {
+            let d = &draws[i as usize];
+            let ib = d.index_buffer as usize;
+            let (segments, uses) = (&mut segments[ib], &mut uses[ib]);
+            match level_segments.entry(Rebased::key(d)) {
+                std::collections::hash_map::Entry::Occupied(e) => {
+                    let (_, k): (u32, u32) = *e.get();
+                    uses[k as usize].uses += 1;
+                }
+                std::collections::hash_map::Entry::Vacant(e) => {
                     let at = segments.last().map_or(0, |s| s.at + s.count);
+                    e.insert((ib as u32, segments.len() as u32));
                     segments.push(Segment {
                         at,
                         first: d.first_index,
                         count: d.index_count,
                         base: d.first_vertex,
+                        vb: d.vertex_buffer,
                     });
-                    at
-                });
+                    uses.push(SegmentUse {
+                        draw: i,
+                        uses: 1,
+                        span: [u32::MAX, 0],
+                    });
+                }
             }
         }
         let mut index_buffers = Vec::with_capacity(layout.index_counts.len() + 1);
         let mut index_formats = Vec::with_capacity(layout.index_counts.len() + 1);
-        for (i, &count) in layout.index_counts.iter().enumerate() {
-            let bytes = if compat {
-                2 * segments[i].last().map_or(0, |s| u64::from(s.at + s.count))
-            } else {
-                2 * u64::from(count)
-            };
+        let mut wide = Vec::with_capacity(layout.index_counts.len());
+        for (i, list) in segments.iter().enumerate() {
+            // 32-bit indices where a vertex buffer drawn from passes 16 bits.
+            let w = list.iter().any(|s| {
+                layout.vertex_buffers[s.vb as usize].vertex_count > u32::from(u16::MAX) + 1
+            });
+            wide.push(w);
+            let count = list.last().map_or(0, |s| u64::from(s.at + s.count));
+            let bytes = count * if w { 4 } else { 2 };
             // Index buffers are at least 4 bytes, as before any were empty.
             buffer_bytes += bytes.next_multiple_of(4).max(4);
-            index_formats.push(wgpu::IndexFormat::Uint16);
+            index_formats.push(if w {
+                wgpu::IndexFormat::Uint32
+            } else {
+                wgpu::IndexFormat::Uint16
+            });
             let label = "level.geom indices";
             let buffer = new_buffer(label, wgpu::BufferUsages::INDEX, bytes, 4);
             index_buffers.push(buffer.clone());
             jobs.push(Job {
                 buffer,
                 label,
-                source: if compat {
-                    Source::Rebased(i as u32)
-                } else {
-                    Source::Indices(i as u32)
-                },
+                source: Source::Rebased(i as u32),
+                bytes,
+            });
+        }
+        // Each level vertex's draw, after the indices that tell it.
+        let mut id_buffers = Vec::with_capacity(layout.vertex_buffers.len() + 1);
+        for (i, b) in layout.vertex_buffers.iter().enumerate() {
+            if b.layout.is_none() {
+                id_buffers.push(None);
+                continue;
+            }
+            let bytes = 4 * u64::from(b.vertex_count);
+            buffer_bytes += bytes;
+            let label = "level.geom draw ids";
+            let buffer = new_buffer(label, wgpu::BufferUsages::VERTEX, bytes, 4);
+            id_buffers.push(Some(buffer.clone()));
+            jobs.push(Job {
+                buffer,
+                label,
+                source: Source::DrawIds(i as u32),
                 bytes,
             });
         }
@@ -1643,6 +1884,7 @@ impl Renderer {
                             first: d.first_index,
                             count: d.index_count,
                             base: d.first_vertex,
+                            vb: object_vb,
                         });
                         at
                     });
@@ -1688,6 +1930,11 @@ impl Renderer {
             piece: Vec::new(),
             compat,
             segments,
+            uses,
+            wide,
+            level_segments,
+            owned: None,
+            id_buffers,
             rebased,
             vertex_buffers,
             index_buffers,
@@ -1726,6 +1973,10 @@ impl Renderer {
         }
         let GeometryUpload {
             rebased,
+            segments,
+            level_segments,
+            owned,
+            id_buffers,
             vertex_buffers,
             index_buffers,
             index_formats,
@@ -1739,7 +1990,6 @@ impl Renderer {
         } = upload;
         let device = self.device.clone();
         let queue = self.queue.clone();
-        let format = self.format;
         let compat = self.compat;
         if self.world_pipelines.is_none() {
             self.make_world_pipelines();
@@ -1759,35 +2009,45 @@ impl Renderer {
                 }
             })
         };
-        let mut kept_of = Vec::with_capacity(draws.len());
-        let mut next = 0u32;
-        for d in draws {
-            kept_of.push(usable(d).then(|| {
-                next += 1;
-                next - 1
-            }));
-        }
+        // Every draw keeps its place (its record's index, which the level's
+        // vertices name); those that can't be drawn never are.
+        let kept_of: Vec<Option<u32>> = (draws.iter().enumerate())
+            .map(|(i, d)| usable(d).then_some(i as u32))
+            .collect();
+        // Level draws read their rebased ranges from vertex 0.
         let kept: Vec<WorldDraw> = draws
             .iter()
             .copied()
-            .filter(usable)
             .map(|mut d| {
-                if compat {
-                    d.first_index = rebased.first_index(&d);
-                    d.first_vertex = 0;
-                }
                 if d.object.is_some() {
+                    if compat {
+                        d.first_index = rebased.first_index(&d);
+                        d.first_vertex = 0;
+                    }
                     d.vertex_buffer = object_vb;
                     d.index_buffer = object_ib;
+                } else if let Some(&(ib, k)) = level_segments.get(&Rebased::key(&d)) {
+                    d.first_index = segments[ib as usize][k as usize].at;
+                    d.first_vertex = 0;
                 }
                 d
             })
             .collect();
-        let skipped = draws.len() - kept.len();
-        let object_draws = kept.iter().filter(|d| d.object.is_some()).count();
+        // The level draws whose vertices are their own, which draw calls
+        // can merge (their records named by the vertices).
+        let mut exclusive = vec![false; draws.len()];
+        for o in owned.iter().flatten().flatten() {
+            exclusive[o.2 as usize] = true;
+        }
+        let usable_count = kept_of.iter().flatten().count();
+        let skipped = draws.len() - usable_count;
+        let object_draws = (kept.iter().zip(&kept_of))
+            .filter(|(d, k)| k.is_some() && d.object.is_some())
+            .count();
         // The draws light passes may draw again (dynamic-lights.md 5.5
         // rule 4), grouped by program and surface.
         let mut lit: Vec<LitDraw> = (kept.iter().enumerate())
+            .filter(|(k, _)| kept_of[*k].is_some())
             .filter_map(|(k, d)| {
                 let s = &surfaces[d.surface as usize];
                 let light = s.light.filter(|l| l.priority <= 1)?;
@@ -1807,8 +2067,11 @@ impl Renderer {
         lit.shrink_to_fit();
 
         let mut records = Vec::with_capacity(kept.len().max(1) * DRAW_BYTES);
-        for d in &kept {
-            draw_record(&surfaces[d.surface as usize], d, &mut records);
+        for (d, k) in kept.iter().zip(&kept_of) {
+            match (k, surfaces.get(d.surface as usize)) {
+                (Some(_), Some(s)) => draw_record(s, d, &mut records),
+                _ => records.resize(records.len() + DRAW_BYTES, 0),
+            }
         }
         records.resize(records.len().max(DRAW_BYTES), 0);
         buffer_bytes += records.len() as u64;
@@ -1884,7 +2147,8 @@ impl Renderer {
         // texture counts as the objects' when no static draw's surface uses
         // it.
         let mut static_surface = vec![false; surfaces.len()];
-        for d in kept.iter().filter(|d| d.object.is_none()) {
+        for (d, _) in (kept.iter().zip(&kept_of)).filter(|(d, k)| k.is_some() && d.object.is_none())
+        {
             static_surface[d.surface as usize] = true;
         }
         let mut textures: Vec<(Texture, bool)> = Vec::new();
@@ -1982,6 +2246,9 @@ impl Renderer {
         let mut late = Vec::new();
         let mut strict = Vec::new();
         for (i, d) in kept.iter().enumerate() {
+            if kept_of[i].is_none() {
+                continue;
+            }
             let s = &surfaces[d.surface as usize];
             if s.strict {
                 strict.push((i, *d));
@@ -2004,79 +2271,24 @@ impl Renderer {
         };
         early.sort_by_key(order_key);
         late.sort_by_key(order_key);
-        let record = |order: &[usize]| {
-            let mut encoder =
-                device.create_render_bundle_encoder(&wgpu::RenderBundleEncoderDescriptor {
-                    label: Some("world"),
-                    color_formats: &[Some(format)],
-                    depth_stencil: Some(wgpu::RenderBundleDepthStencil {
-                        format: DEPTH_FORMAT,
-                        depth_read_only: false,
-                        stencil_read_only: true,
-                    }),
-                    sample_count: 1,
-                    multiview: None,
-                });
-            encoder.set_bind_group(0, &frame_group, &[]);
-            let mut surface = None;
-            let mut buffers = None;
-            for &i in order {
-                let d = &kept[i];
-                if surface != Some(d.surface) {
-                    surface = Some(d.surface);
-                    encoder.set_pipeline(&surface_pipelines[d.surface as usize]);
-                    encoder.set_bind_group(1, &surface_groups[d.surface as usize], &[]);
-                }
-                if buffers != Some((d.vertex_buffer, d.index_buffer)) {
-                    buffers = Some((d.vertex_buffer, d.index_buffer));
-                    encoder
-                        .set_vertex_buffer(0, vertex_buffers[d.vertex_buffer as usize].slice(..));
-                    encoder.set_index_buffer(
-                        index_buffers[d.index_buffer as usize].slice(..),
-                        index_formats[d.index_buffer as usize],
-                    );
-                }
-                let instance = i as u32;
-                encoder.draw_indexed(
-                    d.first_index..d.first_index + d.index_count,
-                    d.first_vertex as i32,
-                    instance..instance + 1,
-                );
-            }
-            encoder.finish(&wgpu::RenderBundleDescriptor {
-                label: Some("world"),
-            })
-        };
         if compat {
+            crate::stats::submit();
             self.queue.submit([]);
             let _ = device.poll(wgpu::PollType::Poll);
         }
-        let (early, late) = if compat {
-            let list = |order: &[usize]| {
-                Static::Draws(
-                    (order.iter())
-                        .map(|&i| {
-                            let d = &kept[i];
-                            StaticDraw {
-                                kept: i as u32,
-                                surface: d.surface,
-                                vertex_buffer: d.vertex_buffer,
-                                index_buffer: d.index_buffer,
-                                first_vertex: d.first_vertex as i32,
-                                first_index: d.first_index,
-                                index_count: d.index_count,
-                            }
-                        })
-                        .collect(),
-                )
-            };
-            (list(&early), list(&late))
-        } else {
-            (
-                Static::Bundle(record(&early)),
-                Static::Bundle(record(&late)),
-            )
-        };
+        let order = |v: Vec<usize>| v.into_iter().map(|i| i as u32).collect::<Vec<u32>>();
+        let (early, late) = (order(early), order(late));
+        let calls: Vec<DrawCall> = kept
+            .iter()
+            .map(|d| DrawCall {
+                surface: d.surface,
+                vertex_buffer: d.vertex_buffer,
+                index_buffer: d.index_buffer,
+                first_index: d.first_index,
+                index_count: d.index_count,
+                first_vertex: d.first_vertex as i32,
+            })
+            .collect();
         let (sky, sky_error) =
             match sky.map(|t| SkyResources::new(&device, &queue, &pipelines.sky, t)) {
                 Some(Ok(sky)) => {
@@ -2104,12 +2316,15 @@ impl Renderer {
             surface_pipelines,
             early,
             late,
+            calls,
+            exclusive,
             strict: RefCell::new(strict),
             lit,
             spheres: RefCell::new(kept.iter().map(|d| d.sphere).collect()),
+            id_buffers,
             sky,
             sky_error,
-            draws: kept.len() - object_draws,
+            draws: usable_count - object_draws,
             skipped,
             buffer_bytes,
             texture_bytes,
@@ -2290,6 +2505,8 @@ impl Renderer {
         });
         let light_pipelines = self.world_pipelines.as_ref().filter(|_| !lights.is_empty());
         let [r, g, b] = frame.clear.map(f64::from);
+        let timed = crate::timing::pass_writes("world", false);
+        crate::stats::pass();
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("world"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -2313,7 +2530,7 @@ impl Renderer {
                 }),
                 stencil_ops: None,
             }),
-            timestamp_writes: None,
+            timestamp_writes: crate::timing::writes(&timed),
             occlusion_query_set: None,
             multiview_mask: None,
         });
@@ -2321,28 +2538,38 @@ impl Renderer {
         // 5, then step 6; the effects within steps 1, 5 and 6
         // (particle-drawing.md 7.4).
         use crate::particles::ParticleQueue;
-        let camera = frustum_planes(&view_projection);
+        use crate::stats::{Part, set_part};
+        // The static draws that may show (the camera's frustum and the size
+        // test, conservatively; the shaders still drop the rest).
+        let planes = frustum_planes(&view_projection);
         let ssa = ssa_min(size.0, size.1, frame.fov_y_degrees);
         let spheres = inner.spheres.borrow();
-        let shown = |k: u32| can_show(&camera, frame.eye, ssa, spheres[k as usize]);
-        self.encode_static(&mut pass, inner, &inner.early, &shown);
+        let shows = |i: u32| may_show(spheres[i as usize], &planes, frame.eye, ssa);
+        set_part(Part::WorldEarly);
+        encode_static(&mut pass, inner, &inner.early, shows);
         if let Some((pipelines, prepared)) = particles {
+            set_part(Part::Particles);
             prepared.draw_queue(pipelines, &mut pass, ParticleQueue::Early);
         }
         // The detail objects after the priority 0–1 draws, before the sky
         // (detail-objects.md 6.1).
         if let Some(d) = details {
+            set_part(Part::Details);
             self.details.draw(&mut pass, d);
         }
         if let Some((resources, sky_frame)) = sky {
+            set_part(Part::Sky);
             resources.draw(&mut pass, sky_frame, size);
         }
+        set_part(Part::Lights);
         // The light passes follow the sky (dynamic-lights.md 5.1).
         if let Some(p) = light_pipelines
             && let Some(groups) = &p.light_groups
         {
+            crate::stats::bind_group();
             pass.set_bind_group(0, &inner.frame_group, &[]);
             for (offset, spot, draws) in &lights {
+                crate::stats::bind_group();
                 pass.set_bind_group(2, &groups[usize::from(*spot)], &[*offset]);
                 let mut program = None;
                 let mut surface = None;
@@ -2351,23 +2578,32 @@ impl Renderer {
                     let d = &inner.lit[j as usize];
                     if program != Some(d.program) {
                         program = Some(d.program);
+                        crate::stats::pipeline();
                         pass.set_pipeline(&p.light_pipelines[&d.program]);
                     }
                     if surface != Some(d.surface) {
                         surface = Some(d.surface);
+                        crate::stats::bind_group();
                         pass.set_bind_group(1, &inner.surface_groups[d.surface as usize], &[]);
                     }
                     if buffers != Some((d.vertex_buffer, d.index_buffer)) {
                         buffers = Some((d.vertex_buffer, d.index_buffer));
+                        crate::stats::buffer();
                         pass.set_vertex_buffer(
                             0,
                             inner.vertex_buffers[d.vertex_buffer as usize].slice(..),
                         );
+                        crate::stats::buffer();
                         pass.set_index_buffer(
                             inner.index_buffers[d.index_buffer as usize].slice(..),
                             inner.index_formats[d.index_buffer as usize],
                         );
+                        if let Some(Some(ids)) = inner.id_buffers.get(d.vertex_buffer as usize) {
+                            crate::stats::buffer();
+                            pass.set_vertex_buffer(1, ids.slice(..));
+                        }
                     }
+                    crate::stats::draw();
                     pass.draw_indexed(
                         d.first_index..d.first_index + d.index_count,
                         d.first_vertex as i32,
@@ -2376,30 +2612,44 @@ impl Renderer {
                 }
             }
         }
-        self.encode_static(&mut pass, inner, &inner.late, &shown);
+        set_part(Part::WorldLate);
+        encode_static(&mut pass, inner, &inner.late, shows);
         if let Some((pipelines, prepared)) = particles {
+            set_part(Part::Particles);
             prepared.draw_queue(pipelines, &mut pass, ParticleQueue::Late);
         }
         for (_, item) in sorted {
             let (i, d) = match item {
-                Sorted::Static(i, _) if self.compat && !shown(i as u32) => continue,
+                Sorted::Static(i, _) if !shows(i as u32) => continue,
                 Sorted::Static(i, d) => (i, d),
                 Sorted::Effect(e) => {
                     if let Some((pipelines, prepared)) = particles {
+                        set_part(Part::Particles);
                         prepared.draw(pipelines, &mut pass, e);
                     }
                     continue;
                 }
             };
+            set_part(Part::Strict);
+            crate::stats::bind_group();
             pass.set_bind_group(0, &inner.frame_group, &[]);
+            crate::stats::pipeline();
             pass.set_pipeline(&inner.surface_pipelines[d.surface as usize]);
+            crate::stats::bind_group();
             pass.set_bind_group(1, &inner.surface_groups[d.surface as usize], &[]);
+            crate::stats::buffer();
             pass.set_vertex_buffer(0, inner.vertex_buffers[d.vertex_buffer as usize].slice(..));
+            crate::stats::buffer();
             pass.set_index_buffer(
                 inner.index_buffers[d.index_buffer as usize].slice(..),
                 inner.index_formats[d.index_buffer as usize],
             );
+            if let Some(Some(ids)) = inner.id_buffers.get(d.vertex_buffer as usize) {
+                crate::stats::buffer();
+                pass.set_vertex_buffer(1, ids.slice(..));
+            }
             let instance = i as u32;
+            crate::stats::draw();
             pass.draw_indexed(
                 d.first_index..d.first_index + d.index_count,
                 d.first_vertex as i32,
@@ -2408,8 +2658,10 @@ impl Renderer {
         }
         // Step 7: the glows (glows.md section 4).
         if let Some((pipelines, prepared)) = particles {
+            set_part(Part::Particles);
             prepared.draw_queue(pipelines, &mut pass, ParticleQueue::Glow);
         }
+        set_part(Part::Screen);
     }
 
     /// The world's pipelines for the current mode, with the light
@@ -2445,48 +2697,6 @@ impl Renderer {
     /// camera's pass.
     // TODO(#347): the first-person models' part of each pass (section 5.5)
     // waits for hud-scope.md item 26.
-    /// Encodes one step of the static world into `pass`: its bundle, or
-    /// its draws that `shown` keeps (by kept index), as the bundle would
-    /// draw them.
-    fn encode_static(
-        &self,
-        pass: &mut wgpu::RenderPass<'_>,
-        inner: &Inner,
-        step: &Static,
-        shown: &dyn Fn(u32) -> bool,
-    ) {
-        let draws = match step {
-            Static::Bundle(bundle) => {
-                pass.execute_bundles([bundle]);
-                return;
-            }
-            Static::Draws(draws) => draws,
-        };
-        pass.set_bind_group(0, &inner.frame_group, &[]);
-        let mut surface = None;
-        let mut buffers = None;
-        for d in draws.iter().filter(|d| shown(d.kept)) {
-            if surface != Some(d.surface) {
-                surface = Some(d.surface);
-                pass.set_pipeline(&inner.surface_pipelines[d.surface as usize]);
-                pass.set_bind_group(1, &inner.surface_groups[d.surface as usize], &[]);
-            }
-            if buffers != Some((d.vertex_buffer, d.index_buffer)) {
-                buffers = Some((d.vertex_buffer, d.index_buffer));
-                pass.set_vertex_buffer(0, inner.vertex_buffers[d.vertex_buffer as usize].slice(..));
-                pass.set_index_buffer(
-                    inner.index_buffers[d.index_buffer as usize].slice(..),
-                    inner.index_formats[d.index_buffer as usize],
-                );
-            }
-            pass.draw_indexed(
-                d.first_index..d.first_index + d.index_count,
-                d.first_vertex,
-                d.kept..d.kept + 1,
-            );
-        }
-    }
-
     fn prepare_lights(&mut self, frame: &WorldFrame, camera: &Mat4) -> Vec<(u32, bool, Vec<u32>)> {
         let Some(p) = self.world_pipelines.as_mut() else {
             return Vec::new();
@@ -2550,18 +2760,21 @@ mod tests {
                 first: 3,
                 count: 9,
                 base: 0,
+                vb: 0,
             },
             Segment {
                 at: 9,
                 first: 0,
                 count: 14,
                 base: 70_000,
+                vb: 0,
             },
             Segment {
                 at: 23,
                 first: 20,
                 count: 11,
                 base: 5,
+                vb: 0,
             },
         ];
         for wide in [false, true] {

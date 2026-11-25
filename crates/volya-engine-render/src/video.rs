@@ -127,6 +127,7 @@ impl Renderer {
             view_formats: &[],
         });
         let mut encoder = self.device.create_command_encoder(&Default::default());
+        crate::stats::pass();
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("video fill"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -143,6 +144,7 @@ impl Renderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
+        crate::stats::submit();
         self.queue.submit([encoder.finish()]);
         VideoTexture {
             texture: self.wrap_video(texture),
@@ -194,6 +196,7 @@ impl Renderer {
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("yuv") });
         {
+            crate::stats::pass();
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("yuv"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -213,10 +216,14 @@ impl Renderer {
                 multiview_mask: None,
             });
             pass.set_viewport(0.0, 0.0, video.width as f32, video.height as f32, 0.0, 1.0);
+            crate::stats::pipeline();
             pass.set_pipeline(&self.video.pipeline);
+            crate::stats::bind_group();
             pass.set_bind_group(0, &planes.bind_group, &[]);
+            crate::stats::draw();
             pass.draw(0..3, 0..1);
         }
+        crate::stats::submit();
         self.queue.submit([encoder.finish()]);
     }
 

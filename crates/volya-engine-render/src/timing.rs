@@ -11,15 +11,62 @@
 //! resolved and copied to a buffer read back once the GPU is done; a few
 //! frames are in flight at once, and a frame finding none free goes
 //! untimed.
+//!
+//! Each render pass of a timed frame also writes timestamps at its
+//! beginning and end ([`pass_writes`], at most [`PASSES`] a frame; the
+//! frame's last pass ends at the frame's end), so a frame's GPU time is
+//! split by pass (#387).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 /// Frames timed at once.
 const SLOTS: u32 = 4;
-/// Where a slot's two timestamps are resolved: resolve offsets must be
+/// Passes of a frame timed one by one.
+pub(crate) const PASSES: u32 = 8;
+/// Timestamps of a slot: the frame's two, then two a pass.
+const QUERIES: u32 = 2 + 2 * PASSES;
+/// Where a slot's timestamps are resolved: resolve offsets must be
 /// multiples of 256 bytes (WebGPU).
 const RESOLVE_STRIDE: u64 = 256;
+
+thread_local! {
+    /// The frame being timed: its query set, first query and the passes
+    /// named so far.
+    static TIMED: std::cell::RefCell<Option<(wgpu::QuerySet, u32, Vec<&'static str>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The timestamp writes for the next pass of the frame being timed, named
+/// `name`, `None` when no frame is timed or it has [`PASSES`] already.
+/// `last`: the frame's last pass, which ends the frame too.
+pub(crate) fn pass_writes(name: &'static str, last: bool) -> Option<(wgpu::QuerySet, u32, u32)> {
+    TIMED.with_borrow_mut(|t| {
+        let (queries, first, names) = t.as_mut()?;
+        if names.len() as u32 >= PASSES {
+            return None;
+        }
+        let begin = *first + 2 + 2 * names.len() as u32;
+        names.push(name);
+        Some((
+            queries.clone(),
+            begin,
+            if last { *first + 1 } else { begin + 1 },
+        ))
+    })
+}
+
+/// [`pass_writes`] as a pass descriptor's field.
+pub(crate) fn writes(
+    t: &Option<(wgpu::QuerySet, u32, u32)>,
+) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
+    t.as_ref()
+        .map(|(q, begin, end)| wgpu::RenderPassTimestampWrites {
+            query_set: q,
+            beginning_of_pass_write_index: Some(*begin),
+            end_of_pass_write_index: Some(*end),
+        })
+}
 
 const FREE: u8 = 0;
 const PENDING: u8 = 1;
@@ -30,6 +77,8 @@ const FAILED: u8 = 3;
 struct Slot {
     readback: wgpu::Buffer,
     state: Arc<AtomicU8>,
+    /// The timed passes' names, in order.
+    passes: Vec<&'static str>,
 }
 
 pub(crate) struct FrameTimer {
@@ -40,6 +89,8 @@ pub(crate) struct FrameTimer {
     slots: Vec<Slot>,
     /// Nanoseconds per timestamp tick.
     period_ns: f64,
+    /// The passes' times of the frames read back, milliseconds.
+    pass_times: Vec<(&'static str, f64)>,
 }
 
 impl FrameTimer {
@@ -55,7 +106,7 @@ impl FrameTimer {
         let queries = device.create_query_set(&wgpu::QuerySetDescriptor {
             label: Some("frame time"),
             ty: wgpu::QueryType::Timestamp,
-            count: SLOTS * 2,
+            count: SLOTS * QUERIES,
         });
         let resolve = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("frame time resolve"),
@@ -67,11 +118,12 @@ impl FrameTimer {
             .map(|_| Slot {
                 readback: device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("frame time readback"),
-                    size: 16,
+                    size: 8 * u64::from(QUERIES),
                     usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 }),
                 state: Arc::new(AtomicU8::new(FREE)),
+                passes: Vec::new(),
             })
             .collect();
         let texel = device.create_texture(&wgpu::TextureDescriptor {
@@ -94,6 +146,7 @@ impl FrameTimer {
             texel,
             slots,
             period_ns: f64::from(queue.get_timestamp_period()),
+            pass_times: Vec::new(),
         })
     }
 
@@ -109,6 +162,7 @@ impl FrameTimer {
             label: Some("frame time begin"),
         });
         let view = self.texel.create_view(&Default::default());
+        crate::stats::pass();
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("frame time begin"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -123,23 +177,20 @@ impl FrameTimer {
             depth_stencil_attachment: None,
             timestamp_writes: Some(wgpu::RenderPassTimestampWrites {
                 query_set: &self.queries,
-                beginning_of_pass_write_index: Some(slot as u32 * 2),
+                beginning_of_pass_write_index: Some(slot as u32 * QUERIES),
                 end_of_pass_write_index: None,
             }),
             occlusion_query_set: None,
             multiview_mask: None,
         });
+        crate::stats::submit();
         queue.submit([encoder.finish()]);
+        TIMED.set(Some((
+            self.queries.clone(),
+            slot as u32 * QUERIES,
+            Vec::new(),
+        )));
         Some(slot)
-    }
-
-    /// The timestamp writes of the last pass of the frame of `slot`.
-    pub(crate) fn last_pass(&self, slot: usize) -> wgpu::RenderPassTimestampWrites<'_> {
-        wgpu::RenderPassTimestampWrites {
-            query_set: &self.queries,
-            beginning_of_pass_write_index: None,
-            end_of_pass_write_index: Some(slot as u32 * 2 + 1),
-        }
     }
 
     /// Ends timing the frame of `slot`, once its last pass is submitted:
@@ -149,11 +200,15 @@ impl FrameTimer {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("frame time end"),
         });
-        let first = slot as u32 * 2;
+        let passes = TIMED.take().map(|t| t.2).unwrap_or_default();
+        let used = 2 + 2 * passes.len() as u32;
+        let first = slot as u32 * QUERIES;
         let offset = RESOLVE_STRIDE * slot as u64;
-        encoder.resolve_query_set(&self.queries, first..first + 2, &self.resolve, offset);
-        let s = &self.slots[slot];
-        encoder.copy_buffer_to_buffer(&self.resolve, offset, &s.readback, 0, 16);
+        encoder.resolve_query_set(&self.queries, first..first + used, &self.resolve, offset);
+        let s = &mut self.slots[slot];
+        s.passes = passes;
+        encoder.copy_buffer_to_buffer(&self.resolve, offset, &s.readback, 0, 8 * u64::from(used));
+        crate::stats::submit();
         queue.submit([encoder.finish()]);
         let state = s.state.clone();
         s.readback
@@ -170,7 +225,7 @@ impl FrameTimer {
     /// Metal some frames' last timestamp is zero, measured) is left out.
     pub(crate) fn take(&mut self) -> Vec<f64> {
         let mut times = Vec::new();
-        for s in &self.slots {
+        for s in &mut self.slots {
             if s.state.load(Ordering::Acquire) != MAPPED {
                 continue;
             }
@@ -182,7 +237,17 @@ impl FrameTimer {
                 .and_then(|view| {
                     let at =
                         |i: usize| u64::from_le_bytes(view[i * 8..i * 8 + 8].try_into().unwrap());
-                    at(1).checked_sub(at(0)).filter(|&t| t > 0)
+                    let ms = |ticks: u64| ticks as f64 * self.period_ns / 1e6;
+                    let frame = at(1).checked_sub(at(0)).filter(|&t| t > 0)?;
+                    // A pass's end: its own, or the frame's for the last.
+                    let n = s.passes.len();
+                    for (k, name) in s.passes.iter().enumerate() {
+                        let end = if k + 1 == n { at(1) } else { at(3 + 2 * k) };
+                        if let Some(t) = end.checked_sub(at(2 + 2 * k)).filter(|&t| t > 0) {
+                            self.pass_times.push((name, ms(t)));
+                        }
+                    }
+                    Some(frame)
                 });
             s.readback.unmap();
             s.state.store(FREE, Ordering::Release);
@@ -191,5 +256,11 @@ impl FrameTimer {
             }
         }
         times
+    }
+
+    /// The passes' GPU times of the frames read back since the last call,
+    /// milliseconds, by name.
+    pub(crate) fn take_passes(&mut self) -> Vec<(&'static str, f64)> {
+        std::mem::take(&mut self.pass_times)
     }
 }

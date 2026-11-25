@@ -202,11 +202,17 @@ impl PreparedFrame {
         let Some(pipeline) = pipelines.pipelines.get(&draw.key_pipeline) else {
             return;
         };
+        crate::stats::pipeline();
         pass.set_pipeline(pipeline);
+        crate::stats::bind_group();
         pass.set_bind_group(0, &self.frame_group, &[]);
+        crate::stats::bind_group();
         pass.set_bind_group(1, &draw.group, &[]);
+        crate::stats::buffer();
         pass.set_vertex_buffer(0, self.vertices.slice(..));
+        crate::stats::buffer();
         pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+        crate::stats::draw();
         pass.draw_indexed(draw.indices.clone(), 0, 0..1);
     }
 
@@ -661,6 +667,8 @@ impl ParticlePipelines {
         depth: &wgpu::TextureView,
     ) {
         let grey = 127.0 / 255.0;
+        let timed = crate::timing::pass_writes("distortion", false);
+        crate::stats::pass();
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("distortion"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -685,7 +693,7 @@ impl ParticlePipelines {
                 }),
                 stencil_ops: None,
             }),
-            timestamp_writes: None,
+            timestamp_writes: crate::timing::writes(&timed),
             occlusion_query_set: None,
             multiview_mask: None,
         });

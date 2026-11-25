@@ -674,7 +674,8 @@ export const tests = {
         await sleep(1000 + 60 * 34);
         const s = await volya.call("level_stats");
         const ms = (v) => (v == null ? "–" : v.toFixed(1));
-        rows.push(`${width}×${height}: interval ${ms(s.frame_interval_ms)}, CPU ${ms(s.frame_cpu_ms)}, GPU ${ms(s.gpu_time_ms)}, done ${ms(s.gpu_done_ms)}`);
+        const passes = Object.entries(s.gpu_pass_ms ?? {}).map(([name, t]) => `${name} ${ms(t)}`).join(", ");
+        rows.push(`${width}×${height}: interval ${ms(s.frame_interval_ms)}, CPU ${ms(s.frame_cpu_ms)}, GPU ${ms(s.gpu_time_ms)} (${passes}), done ${ms(s.gpu_done_ms)}`);
         assert(s.gpu_done_ms > 0, `no GPU done time at ${width}×${height}`);
       }
       // At 1024×768: r__supersample 1 instead of 2, and the grass left
@@ -690,7 +691,14 @@ export const tests = {
       await volya.call("debug_render", { supersample: 2, details: true });
       await volya.call("debug_video_mode", { width: 1024, height: 768 });
     }
-    return `ms per frame: ${rows.join("; ")} (before: GPU ${before.gpu_time_ms?.toFixed(1)}, done ${before.gpu_done_ms?.toFixed(1)})`;
+    // #387: what a frame asks of the GPU, in all and by part.
+    const c = before.frame_commands;
+    const parts = Object.entries(c?.parts ?? {})
+      .filter(([, p]) => p.draws > 0)
+      .map(([name, p]) => `${name} ${p.draws}`)
+      .join(", ");
+    const commands = c ? `; ${c.total.draws} draws (${parts}), ${c.total.pipelines} pipelines, ${c.total.bind_groups} bind groups, ${c.total.buffers} buffers set` : "";
+    return `ms per frame: ${rows.join("; ")} (before: GPU ${before.gpu_time_ms?.toFixed(1)}, done ${before.gpu_done_ms?.toFixed(1)})${commands}`;
   },
 
   "transcoding to ETC2 costs: the level's textures and a few large ones": async () => {
