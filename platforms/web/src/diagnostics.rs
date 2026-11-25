@@ -386,7 +386,8 @@ fn with<T>(f: impl FnOnce(&Diagnostics) -> T) -> Option<T> {
     SESSION.with(|s| s.borrow().as_ref().map(|s| f(&s.diagnostics)))
 }
 
-fn instant(name: &str, tid: u32, args: &[(String, Value)]) {
+/// An instant event `name` on thread `tid` with `args`, while logging is on.
+pub fn instant(name: &str, tid: u32, args: &[(String, Value)]) {
     let args: Vec<(&str, Value)> = args.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
     with(|d| d.instant(name, tid, &args));
 }

@@ -6,8 +6,9 @@
 //! page to POST its report back (see tests/browser/harness.js).
 
 use std::net::TcpListener;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
@@ -17,6 +18,7 @@ use std::{env, fs};
 use volya_engine_devserver::{BASE, Server};
 
 use super::{Profile, Result, cmd, output, root, run as run_cmd, step, web};
+use crate::machine::SimulatorLock;
 
 const SUITES: &[&str] = &[
     "smoke", "platform", "import", "audio", "render", "input", "menu",
@@ -63,8 +65,8 @@ pub fn run(args: &[&str]) -> Result {
     let targets = named(TARGETS);
     let suites = named(SUITES);
     crate::machine::wait_memory()?;
-    let _simulator = if targets.contains(&"iphone") {
-        Some(crate::machine::SimulatorLock::acquire()?)
+    let simulator = if targets.contains(&"iphone") {
+        Some(Simulator::take()?)
     } else {
         None
     };
@@ -102,7 +104,13 @@ pub fn run(args: &[&str]) -> Result {
             let url = format!("http://localhost:{port}{BASE}__test/run/{id}/{suite}.html");
             let outcome = match target {
                 "chrome" => chrome(&url, &id, &reports, report_timeout(suite)),
-                "iphone" => iphone(&url, &id, &reports, report_timeout(suite)),
+                "iphone" => iphone(
+                    simulator.as_ref().expect("taken for iphone"),
+                    &url,
+                    &id,
+                    &reports,
+                    report_timeout(suite),
+                ),
                 _ => unreachable!(),
             };
             match outcome.map(|report| known_failures(target, &report)) {
@@ -220,25 +228,41 @@ fn chrome(url: &str, id: &str, reports: &Receiver<String>, timeout: Duration) ->
     report
 }
 
-/// Opens `url` in Mobile Safari on a dedicated iPhone 17 Pro Max simulator,
-/// creating and booting it as needed. The simulator is left booted so later
-/// runs start fast.
-fn iphone(url: &str, id: &str, reports: &Receiver<String>, timeout: Duration) -> Result<String> {
-    let udid = simulator()?;
-    run_cmd(cmd("xcrun", &["simctl", "bootstatus", &udid, "-b"]).stdout(Stdio::null()))?;
+/// Opens `url` in Mobile Safari on the test simulator, in a Safari started
+/// for it and quit after it (see [`Simulator`]).
+fn iphone(
+    sim: &Simulator,
+    url: &str,
+    id: &str,
+    reports: &Receiver<String>,
+    timeout: Duration,
+) -> Result<String> {
+    quit_safari(&sim.udid);
+    let report = iphone_suite(&sim.udid, url, id, reports, timeout);
+    quit_safari(&sim.udid);
+    report
+}
+
+fn iphone_suite(
+    udid: &str,
+    url: &str,
+    id: &str,
+    reports: &Receiver<String>,
+    timeout: Duration,
+) -> Result<String> {
     // With VOLYA_SIM_MEDIA, the run is recorded and its end screenshotted.
     let media = env::var_os("VOLYA_SIM_MEDIA").map(PathBuf::from);
     let recording = match &media {
         Some(dir) => {
             fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-            Some(Recording::start(&udid, &dir.join(format!("{id}.mp4")))?)
+            Some(Recording::start(udid, &dir.join(format!("{id}.mp4")))?)
         }
         None => None,
     };
-    run_cmd(&mut cmd("xcrun", &["simctl", "openurl", &udid, url]))?;
+    run_cmd(&mut cmd("xcrun", &["simctl", "openurl", udid, url]))?;
     let report = wait_report(id, reports, timeout);
     if let Some(dir) = &media {
-        screenshot_to(&udid, &dir.join(format!("{id}.png")))?;
+        screenshot_to(udid, &dir.join(format!("{id}.png")))?;
     }
     if let Some(recording) = recording {
         recording.stop()?;
@@ -325,8 +349,9 @@ impl Recording {
 /// Runs `steps` (one per argument; see tools/simdriver) in the test
 /// simulator with real touches, through an XCUITest that drives Safari.
 pub fn sim(steps: &[&str]) -> Result {
-    let udid = simulator()?;
-    run_cmd(cmd("xcrun", &["simctl", "bootstatus", &udid, "-b"]).stdout(Stdio::null()))?;
+    crate::machine::wait_memory()?;
+    let sim = Simulator::take()?;
+    let udid = &sim.udid;
     let derived = root().join("target/simdriver");
     let derived = derived.to_str().ok_or("non-UTF-8 path")?;
     let out = cmd(
@@ -364,6 +389,88 @@ pub fn sim(steps: &[&str]) -> Result {
         Err("simulator steps failed (see above)".into())
     }
 }
+
+/// The test simulator, held by this process (one user at a time), with
+/// Safari quit and its tabs closed when taken and when released: a suite
+/// page left open keeps its engines' GPU memory, tens of GiB of the Mac's
+/// (#430). A helper process does the same if this one dies holding it.
+pub struct Simulator {
+    udid: String,
+    reaper: Option<Child>,
+    _lock: SimulatorLock,
+}
+
+impl Simulator {
+    pub fn take() -> Result<Self> {
+        let lock = SimulatorLock::acquire()?;
+        let udid = simulator()?;
+        run_cmd(cmd("xcrun", &["simctl", "bootstatus", &udid, "-b"]).stdout(Stdio::null()))?;
+        quit_safari(&udid);
+        // In its own process group, so a Ctrl-C of this one doesn't reach it.
+        let reaper = env::current_exe().ok().and_then(|exe| {
+            Command::new(exe)
+                .args([REAPER, &std::process::id().to_string(), &udid])
+                .process_group(0)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .ok()
+        });
+        Ok(Self {
+            udid,
+            reaper,
+            _lock: lock,
+        })
+    }
+}
+
+impl Drop for Simulator {
+    fn drop(&mut self) {
+        if let Some(mut reaper) = self.reaper.take() {
+            let _ = reaper.kill();
+            let _ = reaper.wait();
+        }
+        quit_safari(&self.udid);
+    }
+}
+
+/// The hidden task [`Simulator`] starts: `<REAPER> <pid> <udid>`.
+pub const REAPER: &str = "simulator-reaper";
+
+/// Waits for process `holder` to end, then quits Safari in simulator `udid`
+/// unless another process holds the simulator by then.
+pub fn reap(holder: &str, udid: &str) -> Result {
+    let holder: u32 = holder.parse().map_err(|e| format!("pid: {e}"))?;
+    while crate::machine::alive(holder) {
+        thread::sleep(Duration::from_secs(2));
+    }
+    match crate::machine::simulator_holder() {
+        Some(pid) if pid != holder && crate::machine::alive(pid) => {}
+        _ => quit_safari(udid),
+    }
+    Ok(())
+}
+
+/// Quits Safari in simulator `udid` (which ends its web content and GPU
+/// processes) and deletes its tabs, so the next launch restores none.
+/// Measured: Safari creates a fresh tab database holding only a start page.
+fn quit_safari(udid: &str) {
+    // Fails when Safari isn't running.
+    let _ = cmd("xcrun", &["simctl", "terminate", udid, SAFARI])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    let Ok(home) = output(&mut cmd("xcrun", &["simctl", "getenv", udid, "HOME"])) else {
+        return;
+    };
+    let safari = Path::new(home.trim()).join("Library/Safari");
+    for file in ["SafariTabs.db", "SafariTabs.db-wal", "SafariTabs.db-shm"] {
+        let _ = fs::remove_file(safari.join(file));
+    }
+}
+
+const SAFARI: &str = "com.apple.mobilesafari";
 
 fn simulator() -> Result<String> {
     let devices = output(&mut cmd(

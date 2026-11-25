@@ -44,13 +44,35 @@ pub fn wait_memory() -> Result {
     }
 }
 
+fn lock_dir() -> PathBuf {
+    std::env::temp_dir().join("volya-engine-simulator.lock")
+}
+
+/// Whether process `pid` exists.
+pub fn alive(pid: u32) -> bool {
+    Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// The PID in the iOS Simulator's lock, if it is held.
+pub fn simulator_holder() -> Option<u32> {
+    fs::read_to_string(lock_dir().join("pid"))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
 /// The iOS Simulator held by this process until dropped: a lock directory
 /// with the holder's PID; a lock whose holder is gone is taken over.
 pub struct SimulatorLock(PathBuf);
 
 impl SimulatorLock {
     pub fn acquire() -> Result<Self> {
-        let dir = std::env::temp_dir().join("volya-engine-simulator.lock");
+        let dir = lock_dir();
         let mut told = false;
         loop {
             match fs::create_dir(&dir) {
@@ -61,12 +83,7 @@ impl SimulatorLock {
                 }
                 Err(e) if e.kind() == ErrorKind::AlreadyExists => {
                     let holder = fs::read_to_string(dir.join("pid")).unwrap_or_default();
-                    let alive = holder.trim().parse::<u32>().is_ok_and(|pid| {
-                        Command::new("kill")
-                            .args(["-0", &pid.to_string()])
-                            .status()
-                            .is_ok_and(|s| s.success())
-                    });
+                    let alive = holder.trim().parse::<u32>().is_ok_and(alive);
                     if !alive && !holder.is_empty() {
                         let _ = fs::remove_dir_all(&dir);
                         continue;

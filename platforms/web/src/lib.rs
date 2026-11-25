@@ -91,10 +91,12 @@ mod counting {
 
 /// Starts the engine on the canvas transferred from the page, drawing
 /// through WebGL 2 even where WebGPU works when `webgl` (the player's
-/// Graphics setting, #121). Without graphics the engine still starts;
-/// `status` reports why they are unavailable.
+/// Graphics setting, #121; `graphics` is the stored choice, empty when
+/// none). Without graphics the engine still starts; `status` reports why
+/// they are unavailable.
 #[wasm_bindgen]
-pub async fn start(canvas: OffscreenCanvas, webgl: bool) {
+pub async fn start(canvas: OffscreenCanvas, webgl: bool, graphics: String) {
+    gpu::set_choice(graphics);
     gpu::init(canvas, webgl).await;
     diagnostics::started().await;
 }
@@ -511,6 +513,12 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         "debug_particles_bench" => {
             let frames = args.get("frames").and_then(|v| v.as_u64()).unwrap_or(600);
             to_json(&engine::particles_bench(frames as u32)?)
+        }
+        // `{count}`: the collision world's ray cost in wasm (#396).
+        #[cfg(feature = "test-ops")]
+        "debug_rays_bench" => {
+            let count = args.get("count").and_then(|v| v.as_u64()).unwrap_or(2000);
+            to_json(&engine::rays_bench(count as u32)?)
         }
         // `{"name": …}` starts capturing that sound's emitter; `{}` stops
         // and returns the capture (`audio::capture::stop`).

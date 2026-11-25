@@ -642,6 +642,14 @@ export const tests = {
     return `${fx.particles} particles, period ${fx.records[0].period} ms; a frame's update in wasm: mean ${bench.mean_us.toFixed(2)} µs over ${bench.frames} frames, the slowest under ${bench.max_us.toFixed(0)} µs (the timer's resolution)`;
   },
 
+  "the collision world's rays at the player's start; their cost in wasm": async () => {
+    needsGame();
+    const b = await volya.call("debug_rays_bench", { count: 2000 });
+    assert(b.short.nearest_hits > 0 && b.long.any_hits > 0, JSON.stringify(b));
+    const f = (r) => `ray_nearest ${r.nearest_us.toFixed(2)} µs (${r.nearest_hits} hit), ray_any ${r.any_us.toFixed(2)} µs (${r.any_hits} hit)`;
+    return `${b.rays} rays each: short (1 mm – 0.5 m) ${f(b.short)}; long (5 – 100 m) ${f(b.long)}; collision world ${(b.index_bytes / 1e6).toFixed(1)} MB`;
+  },
+
   "the zones' idle effects play, the campfires among them": async () => {
     needsGame();
     // docs/behavior/zone-idle-effects.md 8: 178 zone records online, 160
@@ -1872,6 +1880,16 @@ export const tests = {
     const ends = mine.filter((e) => e.name === "engine.end");
     const left = ends.filter((e) => e.args.message === "left the game").length;
     assertEqual(left, count("i", "game started"), "games left");
+    // Each game starts with its settings; a change writes them again.
+    const settings = mine.filter((e) => e.name === "settings");
+    for (const start of mine.filter((e) => e.name === "game started")) {
+      const next = mine.find((e) => e.ts >= start.ts && (e.name === "settings" || e.name === "engine.end"));
+      assertEqual(next?.name, "settings", "the settings at a game's start");
+    }
+    for (const key of ["renderer", "vid_mode", "r__supersample", "_preset", "r__detail_density", "r1_dlights", "rs_c_gamma", "rs_vis_distance", "graphics", "backend"]) {
+      assert(settings.every((e) => key in e.args), `settings without ${key}`);
+    }
+    assert(settings.some((e) => e.args.vid_mode === "2868x1320"), "no settings at a changed video mode");
     const reasons = new Set(ends.map((e) => e.args.reason));
     for (const reason of ["quit", "page_hidden", "load_failed"]) assert(reasons.has(reason), `no ${reason} end`);
     const levels = (name) => mine.filter((e) => e.name === name && e.args?.level === "l01_escape").length;
