@@ -308,7 +308,9 @@ updated without stopping, is stopped by the time limit in step *k*, the first *k
 - `tests\muhi` unplaced (identity, **w** = 0), empty list, generator from state 1, one step of its `source`: *z* =
   0.561, U = 41/32767 gives *n* = 1; the particle: **x** = **x**ₚ = (−0.178081, 0, 0.075190), **w**ₚ =
   (−0.060986, 0.058501, −0.007754), **ρ** = (84.5949, 0.6175, 0.6175), **s** = (0.01, 0.01, 0), colour
-  0xFF7F7F7F, age 0; generator state afterwards 752,224,798.
+  0xFF7F7F7F, age 0; generator state 752,224,798 after these seven draws. The effect's birth notice (3.2; flag
+  word 0x1401, 4 frames, P7 3.2) then draws an eighth: *k* = 29358, frame number floor((29358 mod 4) · 255) =
+  510, frame flags 0; generator state afterwards 1,924,036,713 (`data.py`, `bin_notice.py`).
 
 ## 10. Unestablished
 
