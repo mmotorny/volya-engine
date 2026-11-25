@@ -547,14 +547,23 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("ui") });
         let target_size = (target.width(), target.height());
         let target = &target.create_view(&Default::default());
-        if let Some(frame) = &list.world {
-            self.present_frame(&mut encoder, target, target_size, frame);
-        }
+        let drawn = match &list.world {
+            Some(frame) => self.present_frame(
+                &mut encoder,
+                target,
+                target_size,
+                frame,
+                timed.is_some(),
+                &list.quads,
+                &batches,
+            ),
+            None => false,
+        };
         let load = match list.world {
             Some(_) => wgpu::LoadOp::Load,
             None => wgpu::LoadOp::Clear(clear),
         };
-        {
+        if !drawn {
             let timed = crate::timing::pass_writes("ui", timed.is_some());
             crate::stats::pass();
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -573,23 +582,7 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            if !batches.is_empty() {
-                crate::stats::buffer();
-                pass.set_vertex_buffer(0, self.vertices.slice(..));
-                for (texture, vertices) in batches {
-                    let texture = &list.quads[texture].texture;
-                    crate::stats::pipeline();
-                    pass.set_pipeline(if texture.ycbcr {
-                        &self.movie_pipeline
-                    } else {
-                        &self.pipeline
-                    });
-                    crate::stats::bind_group();
-                    pass.set_bind_group(0, &texture.bind_group, &[]);
-                    crate::stats::draw();
-                    pass.draw(vertices, 0..1);
-                }
-            }
+            self.draw_quads(&mut pass, &list.quads, &batches);
         }
         crate::stats::submit();
         tracing::info_span!("render.submit").in_scope(|| self.queue.submit([encoder.finish()]));
@@ -781,16 +774,39 @@ impl Renderer {
         self.post.set_noise(texture.wgpu());
     }
 
+    /// Draws `quads` in their `batches` ([`Renderer::upload_vertices`])
+    /// into `pass`.
+    fn draw_quads(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        quads: &[Quad],
+        batches: &[(usize, Range<u32>)],
+    ) {
+        draw_quads(
+            pass,
+            &self.vertices,
+            [&self.pipeline, &self.movie_pipeline],
+            quads,
+            batches,
+        );
+    }
+
     /// One world frame into the `screen` of `size` (frame-presentation.md
     /// 3.1): the world into the off-screen target and the presentation quad
-    /// onto the screen, or the world straight onto the screen.
+    /// onto the screen with `quads` over it in the same pass, or the world
+    /// straight onto the screen. Returns whether `quads` were drawn; `last`:
+    /// the presentation ends the timed frame.
+    #[allow(clippy::too_many_arguments)]
     fn present_frame(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         screen: &wgpu::TextureView,
         size: (u32, u32),
         frame: &WorldFrame,
-    ) {
+        last: bool,
+        quads: &[Quad],
+        batches: &[(usize, Range<u32>)],
+    ) -> bool {
         let p = frame.presentation;
         self.post.prepare(&self.device, size, p.supersample);
         // The hand-over of the frame's camera update (2.2).
@@ -799,6 +815,7 @@ impl Renderer {
         }
         let through = self.post.use_target(p.supersample);
         self.post.used = through;
+        let mut drawn = false;
         let distorted = match self.post.targets.clone().filter(|_| through) {
             Some(t) => {
                 let colour = t.colour.create_view(&Default::default());
@@ -807,9 +824,19 @@ impl Renderer {
                 let distorted = tracing::info_span!("render.world").in_scope(|| {
                     self.encode_frame(encoder, &colour, t.size, &depth, frame, Some(&distort))
                 });
-                tracing::info_span!("render.post").in_scope(|| {
-                    self.post
-                        .draw(&self.device, &self.queue, encoder, screen, &p, distorted)
+                let (vertices, pipelines) =
+                    (&self.vertices, [&self.pipeline, &self.movie_pipeline]);
+                drawn = tracing::info_span!("render.post").in_scope(|| {
+                    self.post.draw(
+                        &self.device,
+                        &self.queue,
+                        encoder,
+                        screen,
+                        &p,
+                        distorted,
+                        last,
+                        |pass| draw_quads(pass, vertices, pipelines, quads, batches),
+                    )
                 });
                 distorted
             }
@@ -820,6 +847,7 @@ impl Renderer {
             }
         };
         self.post.distorted = distorted;
+        drawn
     }
 
     /// The world pass of `frame` with its particle effects into `target` of
@@ -923,6 +951,31 @@ impl Renderer {
             self.queue.write_buffer(&self.vertices, 0, &data);
         }
         batches
+    }
+}
+
+/// Draws `quads` in their `batches` from `vertices` into `pass`, with the
+/// UI pipeline or, for Y'CbCr textures, the movie pipeline.
+fn draw_quads(
+    pass: &mut wgpu::RenderPass<'_>,
+    vertices: &wgpu::Buffer,
+    [pipeline, movie]: [&wgpu::RenderPipeline; 2],
+    quads: &[Quad],
+    batches: &[(usize, Range<u32>)],
+) {
+    if batches.is_empty() {
+        return;
+    }
+    crate::stats::buffer();
+    pass.set_vertex_buffer(0, vertices.slice(..));
+    for (texture, range) in batches {
+        let texture = &quads[*texture].texture;
+        crate::stats::pipeline();
+        pass.set_pipeline(if texture.ycbcr { movie } else { pipeline });
+        crate::stats::bind_group();
+        pass.set_bind_group(0, &texture.bind_group, &[]);
+        crate::stats::draw();
+        pass.draw(range.clone(), 0..1);
     }
 }
 

@@ -682,6 +682,13 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
             let mode = Resolution::new(side("width").max(1), side("height").max(1));
             engine::set_video_mode(mode).map(|()| "null".into())
         }
+        // `{"on": …}`: WebGL 2's calls counted by name from now, or the
+        // counts so far with the frames presented (#429).
+        #[cfg(feature = "test-ops")]
+        "debug_gl_calls" => {
+            let on = args.get("on").and_then(|v| v.as_bool()).unwrap_or(false);
+            to_json(&gpu::gl_calls(on)?)
+        }
         // `{"supersample": …, "details": …}`: `r__supersample` applied as
         // a video restart would, and whether the detail objects are drawn
         // (a frame's cost with each, #415).

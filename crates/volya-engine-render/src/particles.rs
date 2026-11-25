@@ -504,7 +504,13 @@ impl ParticlePipelines {
                 entry_point: Some(entry),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: self.format,
+                    // The distortion program draws only into the
+                    // distortion target.
+                    format: if key.program == ParticleProgram::Distort {
+                        crate::present::DISTORT_FORMAT
+                    } else {
+                        self.format
+                    },
                     blend: blend_state(key.blend),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
