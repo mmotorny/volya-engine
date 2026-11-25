@@ -10,7 +10,7 @@ use std::io;
 
 use crate::chunks::Chunks;
 use crate::cp1251;
-use crate::level_geom::LevelGeom;
+use crate::level_geom::{GeomBuffer, GeomLayout, GeomSource, LevelGeom};
 use crate::ogf::{TreeInstance, Visual, VisualType};
 
 /// Top-level chunk ids (section 1).
@@ -284,9 +284,28 @@ impl Level {
     /// drawn, meshes and trees whole, progressive visuals at level 0. A
     /// visual reached twice is drawn once (level.md section 9.3).
     pub fn static_draw_items(&self, geom: &LevelGeom) -> io::Result<Vec<DrawItem>> {
+        self.static_draw_items_from(&mut geom.source())
+    }
+
+    /// [`Level::static_draw_items`] over geometry read on demand: only the
+    /// index buffers' ranges the draws use are read, in pieces of at most
+    /// [`INDEX_PIECE`] bytes. The first visual in drawing order that fails
+    /// is reported, as when the indices are all in memory.
+    pub fn static_draw_items_from(&self, geom: &mut dyn GeomSource) -> io::Result<Vec<DrawItem>> {
+        self.static_draw_items_in_pieces(geom, INDEX_PIECE)
+    }
+
+    /// [`Level::static_draw_items_from`] reading `piece` bytes of indices
+    /// at a time (an even number, at least 2).
+    fn static_draw_items_in_pieces(
+        &self,
+        geom: &mut dyn GeomSource,
+        piece: usize,
+    ) -> io::Result<Vec<DrawItem>> {
         let mut visited = vec![false; self.visuals.len()];
         let mut stack: Vec<u32> = self.sectors.iter().rev().map(|s| s.root).collect();
         let mut items = Vec::new();
+        let mut failed = None;
         while let Some(i) = stack.pop() {
             if std::mem::replace(&mut visited[i as usize], true) {
                 continue;
@@ -296,13 +315,32 @@ impl Level {
                 VisualType::Group | VisualType::BillboardGroup => {
                     stack.extend(v.children.iter().rev());
                 }
-                _ => items.push(self.draw_item(i, v, geom)?),
+                _ => match self.draw_item(i, v, geom.layout()) {
+                    Ok(item) => items.push(item),
+                    Err(e) => {
+                        failed = Some(e);
+                        break;
+                    }
+                },
             }
         }
-        Ok(items)
+        // The items before the first that failed its ranges, checked for
+        // indices beyond their vertices.
+        if let Some(k) = first_index_beyond(&items, geom, piece)? {
+            return Err(invalid(format!(
+                "visual {}: index beyond the drawn vertices",
+                items[k].visual
+            )));
+        }
+        match failed {
+            Some(e) => Err(e),
+            None => Ok(items),
+        }
     }
 
-    fn draw_item(&self, index: u32, v: &Visual, geom: &LevelGeom) -> io::Result<DrawItem> {
+    /// The draw item of visual `index`, its ranges checked against the
+    /// buffers' sizes (its indices are not read).
+    fn draw_item(&self, index: u32, v: &Visual, geom: &GeomLayout) -> io::Result<DrawItem> {
         let what = |m: &str| invalid(format!("visual {index}: {m}"));
         let g = v.geometry.ok_or_else(|| what("no geometry"))?;
         let (offset, triangles, vertices) = if v.header.kind.is_progressive() {
@@ -332,14 +370,13 @@ impl Level {
             .first_index
             .checked_add(offset)
             .ok_or_else(|| what("index range outside its buffer"))?;
-        let drawn = geom
-            .index_buffers
+        let indices_fit = geom
+            .index_counts
             .get(g.index_buffer as usize)
-            .and_then(|ib| {
-                ib.get(first_index as usize..)?
-                    .get(..3 * triangles as usize)
-            })
-            .ok_or_else(|| what("index range outside its buffer"))?;
+            .is_some_and(|&n| u64::from(first_index) + 3 * u64::from(triangles) <= u64::from(n));
+        if !indices_fit {
+            return Err(what("index range outside its buffer"));
+        }
         let vertices_fit = geom
             .vertex_buffers
             .get(g.vertex_buffer as usize)
@@ -348,9 +385,6 @@ impl Level {
             });
         if !vertices_fit {
             return Err(what("vertex range outside its buffer"));
-        }
-        if drawn.iter().any(|&i| u32::from(i) >= vertices) {
-            return Err(what("index beyond the drawn vertices"));
         }
         Ok(DrawItem {
             visual: index,
@@ -366,6 +400,68 @@ impl Level {
             tree: v.tree,
         })
     }
+}
+
+/// Bytes of an index buffer read at a time to check draw items' indices.
+pub const INDEX_PIECE: usize = 2 << 20;
+
+/// The position in `items` of the first item that draws an index reaching
+/// past its vertices, reading each index buffer's used range in pieces.
+fn first_index_beyond(
+    items: &[DrawItem],
+    geom: &mut dyn GeomSource,
+    piece_bytes: usize,
+) -> io::Result<Option<usize>> {
+    let mut by_buffer: Vec<Vec<usize>> = vec![Vec::new(); geom.layout().index_counts.len()];
+    for (k, d) in items.iter().enumerate() {
+        if d.triangle_count > 0 {
+            by_buffer[d.index_buffer as usize].push(k);
+        }
+    }
+    let range = |d: &DrawItem| {
+        let first = u64::from(d.first_index);
+        (first, first + 3 * u64::from(d.triangle_count))
+    };
+    let per_piece = (piece_bytes / 2).max(1) as u64;
+    let mut first = None::<usize>;
+    let mut piece = Vec::new();
+    for (buffer, mut users) in by_buffer.into_iter().enumerate() {
+        let Some(start) = users.iter().map(|&k| range(&items[k]).0).min() else {
+            continue;
+        };
+        let end = users
+            .iter()
+            .map(|&k| range(&items[k]).1)
+            .max()
+            .unwrap_or(start);
+        users.sort_by_key(|&k| range(&items[k]).0);
+        let mut at = start;
+        while at < end {
+            let n = (end - at).min(per_piece);
+            piece.resize(2 * n as usize, 0);
+            geom.read(GeomBuffer::Indices(buffer as u32), 2 * at, &mut piece)?;
+            let indices = piece.as_chunks::<2>().0;
+            // The users whose ranges begin before the piece ends.
+            let started = users.partition_point(|&k| range(&items[k]).0 < at + n);
+            for &k in &users[..started] {
+                if first.is_some_and(|f| f < k) {
+                    continue;
+                }
+                let d = &items[k];
+                let (a, b) = range(d);
+                let (a, b) = (a.max(at), b.min(at + n));
+                if a < b
+                    && indices[(a - at) as usize..(b - at) as usize]
+                        .iter()
+                        .any(|i| u32::from(u16::from_le_bytes(*i)) >= d.vertex_count)
+                {
+                    first = Some(k);
+                }
+            }
+            at += n;
+        }
+    }
+    Ok(first)
 }
 
 const IDENTITY: [[f32; 4]; 4] = [
@@ -748,6 +844,85 @@ mod tests {
         assert!(with_mesh(&geometry(|g| g.first_index = 1)).is_err());
         assert!(with_mesh(&geometry(|g| g.first_vertex = 1)).is_err());
         assert!(with_mesh(&geometry(|g| g.vertex_buffer = 1)).is_err());
+    }
+
+    #[test]
+    fn the_first_visual_drawn_that_fails_is_reported() {
+        let base = Level::parse(&sample()).unwrap();
+        let geom = geom();
+        let broken = |mesh: fn(&mut GeometryRef), tree: fn(&mut GeometryRef)| {
+            let mut level = base.clone();
+            mesh(level.visuals[0].geometry.as_mut().unwrap());
+            tree(level.visuals[3].geometry.as_mut().unwrap());
+            level.static_draw_items(&geom).unwrap_err().to_string()
+        };
+        // Visual 0 is drawn before visual 3: its index error wins over the
+        // tree's range error, found first, and the other way round.
+        assert_eq!(
+            broken(|g| g.vertex_count = 2, |g| g.vertex_buffer = 1),
+            "visual 0: index beyond the drawn vertices"
+        );
+        assert_eq!(
+            broken(|g| g.vertex_buffer = 1, |g| g.vertex_count = 2),
+            "visual 0: vertex range outside its buffer"
+        );
+        assert_eq!(
+            broken(|_| {}, |g| g.vertex_count = 2),
+            "visual 3: index beyond the drawn vertices"
+        );
+    }
+
+    #[test]
+    fn indices_read_in_pieces_agree_with_one_read() {
+        use crate::level_geom::VertexBuffer;
+        let geom = |indices: Vec<u16>| LevelGeom {
+            header: None,
+            vertex_buffers: vec![VertexBuffer {
+                elements: Vec::new(),
+                layout: None,
+                stride: 12,
+                vertex_count: 3,
+                data: vec![0; 36],
+            }],
+            index_buffers: vec![indices],
+            progressive_meshes: Vec::new(),
+        };
+        // Mesh 0 (drawn first) draws indices 6..9, tree 3 indices 0..6.
+        let mut level = Level::parse(&sample()).unwrap();
+        for (visual, first, count) in [(0, 6, 3), (3, 0, 6)] {
+            let g = level.visuals[visual].geometry.as_mut().unwrap();
+            g.first_index = first;
+            g.index_count = count;
+        }
+        let run = |indices: &[u16], piece| {
+            level
+                .static_draw_items_in_pieces(&mut geom(indices.to_vec()).source(), piece)
+                .map_err(|e| e.to_string())
+        };
+        let good = [0, 1, 2, 2, 1, 0, 1, 2, 0];
+        let whole = run(&good, INDEX_PIECE).unwrap();
+        assert_eq!(whole.len(), 2);
+        for piece in [2, 4, 6, 8, 10, 16] {
+            assert_eq!(run(&good, piece), Ok(whole.clone()), "{piece}-byte pieces");
+            // Tree 3's bad index comes in an earlier piece than mesh 0's,
+            // whose range straddles pieces: mesh 0 is reported.
+            let mut bad = good;
+            bad[2] = 3;
+            bad[7] = 3;
+            assert_eq!(
+                run(&bad, piece),
+                Err("visual 0: index beyond the drawn vertices".into()),
+                "{piece}-byte pieces"
+            );
+            // Only the tree's, across a piece boundary for most sizes.
+            let mut bad = good;
+            bad[3] = 3;
+            assert_eq!(
+                run(&bad, piece),
+                Err("visual 3: index beyond the drawn vertices".into()),
+                "{piece}-byte pieces"
+            );
+        }
     }
 
     #[test]

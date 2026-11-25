@@ -12,13 +12,14 @@
 //! offline by the offline simulation as the player moves
 //! (docs/behavior/offline-simulation.md).
 //!
-//! [`LevelScreen::load`] reads everything synchronously through the VFS;
-//! the GPU copy of the geometry is made by the presenter on the first frame
-//! drawn ([`LevelWorld::take_geometry`]), after which the CPU copy is gone.
+//! [`LevelScreen::load`] reads everything synchronously through the VFS
+//! but the geometry's buffers: only their layout is read
+//! ([`LevelWorld::geometry`]), and the presenter streams them from the file
+//! to the GPU on the first frame drawn, so the CPU never holds them whole.
 
 use std::borrow::Cow;
 use std::io;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use serde::Serialize;
 
@@ -32,7 +33,7 @@ use crate::core::collision::{CollisionWorld, geometry};
 use crate::core::config;
 use crate::core::config::Config;
 use crate::core::input::Input;
-use crate::core::level::{DrawItem, Level, LevelGeom};
+use crate::core::level::{DrawItem, Level};
 use crate::core::movement::{Flags, MovementConfig, Player};
 use crate::core::simulation::graph::Graph;
 use crate::core::simulation::navigation::Navigation;
@@ -51,6 +52,7 @@ use std::collections::HashMap;
 use volya_engine_formats::env_mod::{self, EnvModifier};
 use volya_engine_formats::game_graph::GameGraph;
 use volya_engine_formats::gamemtl;
+use volya_engine_formats::level_geom::{GeomBuffer, GeomFile, GeomLayout, GeomSource};
 use volya_engine_formats::model as model_math;
 use volya_engine_formats::object::{self as record, ObjectRecord};
 use volya_engine_formats::patrol_path::PatrolPaths;
@@ -97,20 +99,24 @@ pub struct LevelWorld {
     /// The lens-flare section of each hourly section, the sun sprite's
     /// texture as a file path (sky.md 7.2).
     pub flares: Vec<Flares>,
-    /// The vertex and index buffers until the presenter uploads them.
-    geometry: Mutex<Option<LevelGeom>>,
+    /// The layout of `level.geom`'s vertex and index buffers, which stay
+    /// in the file until the presenter uploads them.
+    geometry: GeomFile,
     /// The spawned objects drawn with the static world
     /// (docs/behavior/level-objects.md).
     pub objects: LevelObjects,
 }
 
 impl LevelWorld {
-    /// The geometry, once: whoever takes it owns the only copy.
-    pub fn take_geometry(&self) -> Option<LevelGeom> {
-        self.geometry
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take()
+    /// The layout of the static geometry's buffers, to be read from
+    /// [`LevelWorld::geometry_path`].
+    pub fn geometry(&self) -> &GeomFile {
+        &self.geometry
+    }
+
+    /// The path of `level.geom` in the game tree.
+    pub fn geometry_path(&self) -> String {
+        format!("{}\\level.geom", self.dir)
     }
 }
 
@@ -655,7 +661,7 @@ pub struct NewGameLoad {
     actor: Option<spawn::ActorStart>,
     dir: String,
     level: Option<Level>,
-    geom: Option<LevelGeom>,
+    geom: Option<GeomFile>,
     collision: Option<CollisionWorld>,
     draw_items: Vec<DrawItem>,
     spheres: Vec<[f32; 4]>,
@@ -688,6 +694,24 @@ pub struct NewGameLoad {
 /// level-objects.md 2.5).
 fn hour(clock: &GameClock) -> u32 {
     (clock.time_of_day() / 3600.0) as u32
+}
+
+/// A geometry source that remembers whether a read failed.
+struct ReadFailures<S> {
+    source: S,
+    failed: bool,
+}
+
+impl<S: GeomSource> GeomSource for ReadFailures<S> {
+    fn layout(&self) -> &GeomLayout {
+        self.source.layout()
+    }
+
+    fn read(&mut self, buffer: GeomBuffer, offset: u64, out: &mut [u8]) -> io::Result<()> {
+        let result = self.source.read(buffer, offset, out);
+        self.failed |= result.is_err();
+        result
+    }
 }
 
 /// What a stage needs from an earlier one, or an error naming it.
@@ -771,16 +795,36 @@ impl NewGameLoad {
                 let mut f = tree
                     .open(&format!("{dir}\\level.geom"))
                     .map_err(|e| file("level.geom", e))?;
-                self.geom = Some(LevelGeom::read(&mut f).map_err(|e| file("level.geom", e))?);
+                // The buffers' layout only: the presenter reads the
+                // buffers themselves as it uploads them.
+                self.geom = Some(GeomFile::read(&mut f).map_err(|e| file("level.geom", e))?);
             }
             // The static visuals' draw list and bounding spheres (placed
             // under this caption by us: the spec names the spatial index).
             Stage::LoadingSpatialDb => {
                 let level = earlier(self.level.as_ref(), "level")?;
                 let geom = earlier(self.geom.as_ref(), "level.geom")?;
-                let draw_items = level
-                    .static_draw_items(geom)
-                    .map_err(|e| file("level", e))?;
+                // The draws' indices are checked as they are read from the
+                // file, a piece at a time.
+                let mut f = tree
+                    .open(&format!("{dir}\\level.geom"))
+                    .map_err(|e| file("level.geom", e))?;
+                let mut indices = ReadFailures {
+                    source: geom.reader(&mut f),
+                    failed: false,
+                };
+                let draw_items = level.static_draw_items_from(&mut indices).map_err(|e| {
+                    // A read that failed is the file's; anything else the
+                    // level's visuals.
+                    file(
+                        if indices.failed {
+                            "level.geom"
+                        } else {
+                            "level"
+                        },
+                        e,
+                    )
+                })?;
                 self.spheres = draw_items
                     .iter()
                     .map(|d| {
@@ -790,6 +834,19 @@ impl NewGameLoad {
                     })
                     .collect();
                 self.draw_items = draw_items;
+                // Only the shader table is read after this stage; the
+                // visuals and the rest go now.
+                if let Some(level) = &mut self.level {
+                    *level = Level {
+                        header: level.header,
+                        shaders: std::mem::take(&mut level.shaders),
+                        visuals: Vec::new(),
+                        portals: Vec::new(),
+                        sectors: Vec::new(),
+                        lights: Vec::new(),
+                        glows: Vec::new(),
+                    };
+                }
             }
             // `level.env_mod` comes after the sectors (optional, sky.md 9.1).
             Stage::LoadingSectorsPortals => {
@@ -960,7 +1017,7 @@ impl NewGameLoad {
                 not_drawn: self.not_drawn,
                 sky,
                 flares: self.flares,
-                geometry: Mutex::new(Some(geom)),
+                geometry: geom,
                 objects,
             }),
             collision,
@@ -1394,7 +1451,7 @@ impl LevelScreen {
                     down: 0.0,
                     sun: None,
                 }],
-                geometry: Mutex::new(None),
+                geometry: GeomFile::default(),
                 objects: LevelObjects::default(),
             }),
             collision: CollisionWorld::new(Default::default(), Vec::new()).expect("collision"),

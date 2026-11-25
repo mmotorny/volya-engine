@@ -13,6 +13,7 @@
 mod gog_archives;
 
 use std::collections::BTreeMap;
+use std::io::Cursor;
 use std::ops::ControlFlow;
 use std::time::Instant;
 
@@ -404,6 +405,13 @@ fn level_geometry_from_game_data() {
                 let ids: Vec<u32> = ids_and_sizes(&data).iter().map(|c| c.0).collect();
                 assert_eq!(ids, [1, 9, 10, 11], "{path}");
                 let g = LevelGeom::parse(&data).unwrap();
+                // Read as a stream, each buffer straight from the file: the
+                // same geometry.
+                assert_eq!(
+                    LevelGeom::read(&mut Cursor::new(&data)).unwrap(),
+                    g,
+                    "{path}"
+                );
                 assert_eq!(g.header.unwrap().0, 14, "{path}");
                 for b in &g.vertex_buffers {
                     assert!(b.vertex_count <= 65_535, "{path}");

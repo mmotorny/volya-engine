@@ -13,9 +13,9 @@
 //! vertex program as section 8 does. [`VertexBuffer::decode`] gives the same
 //! values on the CPU.
 
-use std::io::{self, Read, Seek};
+use std::io::{self, Cursor, Read, Seek, SeekFrom};
 
-use crate::chunks::{self, Chunks};
+use crate::chunks::{self, ChunkHeader, Chunks};
 
 /// Chunk ids (section 2).
 pub const HEADER_CHUNK: u32 = 1;
@@ -451,73 +451,396 @@ impl LevelGeom {
         let get = |id| -> io::Result<Option<&[u8]>> {
             chunks.find(id).map(|c| c.uncompressed()).transpose()
         };
-        Self::from_chunks(
-            get(HEADER_CHUNK)?,
-            get(VERTEX_BUFFERS_CHUNK)?,
-            get(INDEX_BUFFERS_CHUNK)?,
-            get(PROGRESSIVE_MESHES_CHUNK)?,
-        )
+        let header = get(HEADER_CHUNK)?;
+        let vertices = get(VERTEX_BUFFERS_CHUNK)?;
+        let indices = get(INDEX_BUFFERS_CHUNK)?;
+        let progressive = get(PROGRESSIVE_MESHES_CHUNK)?;
+        let vertices = vertices.ok_or_else(no_vertex_buffers)?;
+        Ok(Self {
+            header: header.and_then(parse_header),
+            vertex_buffers: parse_vertex_buffers(vertices)?,
+            index_buffers: indices.map_or(Ok(Vec::new()), parse_index_buffers)?,
+            progressive_meshes: progressive.map_or(Ok(Vec::new()), parse_progressive_meshes)?,
+        })
     }
 
-    /// Reads a file from a stream, reading only the chunks it needs.
+    /// Reads a file from a stream, each buffer straight into its own
+    /// exactly sized one (no chunk is held whole).
+    pub fn read(reader: &mut (impl Read + Seek)) -> io::Result<Self> {
+        let file = GeomFile::read(reader)?;
+        let mut source = file.reader(reader);
+        let layout = &file.layout;
+        let mut vertex_buffers = Vec::with_capacity(layout.vertex_buffers.len());
+        for (i, h) in layout.vertex_buffers.iter().enumerate() {
+            let mut data = vec![0; usize::try_from(h.bytes()).map_err(|_| too_large())?];
+            source.read(GeomBuffer::Vertices(i as u32), 0, &mut data)?;
+            vertex_buffers.push(VertexBuffer {
+                elements: h.elements.clone(),
+                layout: h.layout,
+                stride: h.stride,
+                vertex_count: h.vertex_count,
+                data,
+            });
+        }
+        let mut index_buffers = Vec::with_capacity(layout.index_counts.len());
+        let mut piece = Vec::new();
+        for (i, &n) in layout.index_counts.iter().enumerate() {
+            let mut indices = Vec::with_capacity(n as usize);
+            let bytes = 2 * u64::from(n);
+            let mut at = 0;
+            while at < bytes {
+                let len = (bytes - at).min(READ_PIECE as u64) as usize;
+                piece.resize(len, 0);
+                source.read(GeomBuffer::Indices(i as u32), at, &mut piece)?;
+                indices.extend(
+                    piece
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|b| u16::from_le_bytes(*b)),
+                );
+                at += len as u64;
+            }
+            index_buffers.push(indices);
+        }
+        Ok(Self {
+            header: layout.header,
+            vertex_buffers,
+            index_buffers,
+            progressive_meshes: file.layout.progressive_meshes,
+        })
+    }
+
+    /// This geometry as a [`GeomSource`].
+    pub fn source(&self) -> GeomMemory<'_> {
+        GeomMemory {
+            layout: GeomLayout {
+                header: self.header,
+                vertex_buffers: self
+                    .vertex_buffers
+                    .iter()
+                    .map(|b| VertexBufferHeader {
+                        elements: b.elements.clone(),
+                        layout: b.layout,
+                        stride: b.stride,
+                        vertex_count: b.vertex_count,
+                    })
+                    .collect(),
+                index_counts: self.index_buffers.iter().map(|b| b.len() as u32).collect(),
+                progressive_meshes: self.progressive_meshes.clone(),
+            },
+            geom: self,
+        }
+    }
+}
+
+/// Bytes read at a time where a buffer is read in pieces.
+const READ_PIECE: usize = 64 * 1024;
+
+fn no_vertex_buffers() -> io::Error {
+    invalid("level geometry: no vertex buffers")
+}
+
+fn too_large() -> io::Error {
+    invalid("level geometry: buffer too large")
+}
+
+fn parse_header(h: &[u8]) -> Option<(u16, u16)> {
+    let h: [u8; 4] = h.try_into().ok()?;
+    Some((
+        u16::from_le_bytes([h[0], h[1]]),
+        u16::from_le_bytes([h[2], h[3]]),
+    ))
+}
+
+/// A vertex buffer's declaration and vertex count (section 3): what
+/// precedes its vertices.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VertexBufferHeader {
+    /// Declaration elements, end marker excluded.
+    pub elements: Vec<Element>,
+    /// The declaration's layout, if it is one of section 4.1's.
+    pub layout: Option<Layout>,
+    /// Vertex size: the maximum `offset + size` over the elements.
+    pub stride: usize,
+    pub vertex_count: u32,
+}
+
+impl VertexBufferHeader {
+    /// Stored size of the vertices: `vertex_count × stride` bytes.
+    pub fn bytes(&self) -> u64 {
+        u64::from(self.vertex_count) * self.stride as u64
+    }
+}
+
+/// Everything of a `level.geom` or `level.geomx` but its vertices and
+/// indices.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GeomLayout {
+    /// As [`LevelGeom::header`].
+    pub header: Option<(u16, u16)>,
+    pub vertex_buffers: Vec<VertexBufferHeader>,
+    /// The index count of each index buffer of chunk 10.
+    pub index_counts: Vec<u32>,
+    pub progressive_meshes: Vec<ProgressiveMesh>,
+}
+
+/// A buffer of a geometry file: vertex buffer or index buffer `n`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GeomBuffer {
+    Vertices(u32),
+    Indices(u32),
+}
+
+/// Geometry whose buffers are read on demand: the layout, and the stored
+/// bytes of each buffer (vertices as stored, indices as little-endian
+/// `u16`).
+pub trait GeomSource {
+    fn layout(&self) -> &GeomLayout;
+
+    /// Fills `out` with `buffer`'s stored bytes from byte `offset`. Fails
+    /// when the range lies outside the buffer.
+    fn read(&mut self, buffer: GeomBuffer, offset: u64, out: &mut [u8]) -> io::Result<()>;
+}
+
+/// A geometry file's layout with where each buffer's bytes lie in it, read
+/// without its vertices and indices.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GeomFile {
+    pub layout: GeomLayout,
+    vertex_offsets: Vec<u64>,
+    index_offsets: Vec<u64>,
+}
+
+impl GeomFile {
+    /// Reads the layout from a stream, skipping over the vertices and
+    /// indices. Fails as [`LevelGeom::read`] does on everything but the
+    /// buffers' contents.
     pub fn read(reader: &mut (impl Read + Seek)) -> io::Result<Self> {
         let headers = chunks::index(reader)?;
-        let mut get = |id| -> io::Result<Option<Vec<u8>>> {
+        let find = |id| -> io::Result<Option<ChunkHeader>> {
             let Some(h) = chunks::find_header(&headers, id) else {
                 return Ok(None);
             };
             if h.is_compressed() {
                 return Err(invalid(format!("level geometry: chunk {id} is compressed")));
             }
-            h.read_payload(reader).map(Some)
+            Ok(Some(*h))
         };
-        let header = get(HEADER_CHUNK)?;
-        let vertices = get(VERTEX_BUFFERS_CHUNK)?;
-        let indices = get(INDEX_BUFFERS_CHUNK)?;
-        let progressive = get(PROGRESSIVE_MESHES_CHUNK)?;
-        Self::from_chunks(
-            header.as_deref(),
-            vertices.as_deref(),
-            indices.as_deref(),
-            progressive.as_deref(),
-        )
+        let header = find(HEADER_CHUNK)?;
+        let vertices = find(VERTEX_BUFFERS_CHUNK)?;
+        let indices = find(INDEX_BUFFERS_CHUNK)?;
+        let progressive = find(PROGRESSIVE_MESHES_CHUNK)?;
+        let header = match header {
+            Some(h) if h.size == 4 => parse_header(&h.read_payload(reader)?),
+            _ => None,
+        };
+        let vertices = vertices.ok_or_else(no_vertex_buffers)?;
+        let (vertex_buffers, vertex_offsets) =
+            read_vertex_headers(&mut Window::new(reader, &vertices, "vertex buffers"))?
+                .into_iter()
+                .unzip();
+        let (index_counts, index_offsets) = match indices {
+            Some(h) => read_index_headers(&mut Window::new(reader, &h, "index buffers"))?
+                .into_iter()
+                .unzip(),
+            None => Default::default(),
+        };
+        let progressive_meshes = match progressive {
+            Some(h) => parse_progressive_meshes(&h.read_payload(reader)?)?,
+            None => Vec::new(),
+        };
+        Ok(Self {
+            layout: GeomLayout {
+                header,
+                vertex_buffers,
+                index_counts,
+                progressive_meshes,
+            },
+            vertex_offsets,
+            index_offsets,
+        })
     }
 
-    fn from_chunks(
-        header: Option<&[u8]>,
-        vertices: Option<&[u8]>,
-        indices: Option<&[u8]>,
-        progressive: Option<&[u8]>,
-    ) -> io::Result<Self> {
-        let header = header.and_then(|h| {
-            let h: [u8; 4] = h.try_into().ok()?;
-            Some((
-                u16::from_le_bytes([h[0], h[1]]),
-                u16::from_le_bytes([h[2], h[3]]),
-            ))
-        });
-        let vertices = vertices.ok_or_else(|| invalid("level geometry: no vertex buffers"))?;
-        Ok(Self {
-            header,
-            vertex_buffers: parse_vertex_buffers(vertices)?,
-            index_buffers: indices.map_or(Ok(Vec::new()), parse_index_buffers)?,
-            progressive_meshes: progressive.map_or(Ok(Vec::new()), parse_progressive_meshes)?,
-        })
+    /// This layout over `reader`, the file it was read from.
+    pub fn reader<R: Read + Seek>(&self, reader: R) -> GeomReader<'_, R> {
+        GeomReader { file: self, reader }
     }
 }
 
-/// Chunk 9 (section 3).
-pub fn parse_vertex_buffers(chunk: &[u8]) -> io::Result<Vec<VertexBuffer>> {
-    let mut b = Bytes {
-        data: chunk,
-        what: "vertex buffers",
-    };
+/// A [`GeomFile`]'s buffers read from its file.
+pub struct GeomReader<'a, R> {
+    file: &'a GeomFile,
+    reader: R,
+}
+
+impl<R: Read + Seek> GeomSource for GeomReader<'_, R> {
+    fn layout(&self) -> &GeomLayout {
+        &self.file.layout
+    }
+
+    fn read(&mut self, buffer: GeomBuffer, offset: u64, out: &mut [u8]) -> io::Result<()> {
+        let layout = &self.file.layout;
+        let (start, bytes) = match buffer {
+            GeomBuffer::Vertices(i) => (
+                self.file.vertex_offsets.get(i as usize),
+                layout.vertex_buffers.get(i as usize).map(|h| h.bytes()),
+            ),
+            GeomBuffer::Indices(i) => (
+                self.file.index_offsets.get(i as usize),
+                layout
+                    .index_counts
+                    .get(i as usize)
+                    .map(|&n| 2 * u64::from(n)),
+            ),
+        };
+        let (Some(start), Some(bytes)) = (start, bytes) else {
+            return Err(outside(buffer));
+        };
+        if offset
+            .checked_add(out.len() as u64)
+            .is_none_or(|end| end > bytes)
+        {
+            return Err(outside(buffer));
+        }
+        self.reader.seek(SeekFrom::Start(start + offset))?;
+        self.reader.read_exact(out)
+    }
+}
+
+fn outside(buffer: GeomBuffer) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("level geometry: read outside {buffer:?}"),
+    )
+}
+
+/// A [`LevelGeom`] in memory as a [`GeomSource`].
+pub struct GeomMemory<'a> {
+    layout: GeomLayout,
+    geom: &'a LevelGeom,
+}
+
+impl GeomSource for GeomMemory<'_> {
+    fn layout(&self) -> &GeomLayout {
+        &self.layout
+    }
+
+    fn read(&mut self, buffer: GeomBuffer, offset: u64, out: &mut [u8]) -> io::Result<()> {
+        let end = offset
+            .checked_add(out.len() as u64)
+            .ok_or_else(|| outside(buffer))?;
+        match buffer {
+            GeomBuffer::Vertices(i) => {
+                let data = &self
+                    .geom
+                    .vertex_buffers
+                    .get(i as usize)
+                    .ok_or_else(|| outside(buffer))?
+                    .data;
+                let bytes = usize::try_from(offset)
+                    .ok()
+                    .zip(usize::try_from(end).ok())
+                    .and_then(|(a, b)| data.get(a..b))
+                    .ok_or_else(|| outside(buffer))?;
+                out.copy_from_slice(bytes);
+            }
+            GeomBuffer::Indices(i) => {
+                let ib = self
+                    .geom
+                    .index_buffers
+                    .get(i as usize)
+                    .ok_or_else(|| outside(buffer))?;
+                if end > 2 * ib.len() as u64 {
+                    return Err(outside(buffer));
+                }
+                for (j, o) in out.iter_mut().enumerate() {
+                    let at = offset as usize + j;
+                    *o = ib[at / 2].to_le_bytes()[at % 2];
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A little-endian reader over a chunk of a stream that fails on overrun
+/// as [`Bytes`] does, with the same messages.
+struct Window<'r, R> {
+    reader: &'r mut R,
+    at: u64,
+    end: u64,
+    what: &'static str,
+}
+
+impl<'r, R: Read + Seek> Window<'r, R> {
+    fn new(reader: &'r mut R, chunk: &ChunkHeader, what: &'static str) -> Self {
+        Self {
+            reader,
+            at: chunk.offset,
+            end: chunk.offset + u64::from(chunk.size),
+            what,
+        }
+    }
+
+    /// Skips `n` bytes, returning where they start.
+    fn skip(&mut self, n: usize) -> io::Result<u64> {
+        let remaining = self.end - self.at;
+        if n as u64 > remaining {
+            return Err(invalid(format!(
+                "{}: needs {n} bytes, {remaining} remain",
+                self.what
+            )));
+        }
+        let start = self.at;
+        self.at += n as u64;
+        Ok(start)
+    }
+
+    fn take<const N: usize>(&mut self) -> io::Result<[u8; N]> {
+        let start = self.skip(N)?;
+        let mut out = [0; N];
+        self.reader.seek(SeekFrom::Start(start))?;
+        self.reader.read_exact(&mut out)?;
+        Ok(out)
+    }
+
+    fn u32(&mut self) -> io::Result<u32> {
+        self.take().map(u32::from_le_bytes)
+    }
+
+    /// Skips `count × size` bytes, failing as [`Bytes::array`] does.
+    fn array(&mut self, count: u32, size: usize) -> io::Result<u64> {
+        let n = (count as usize)
+            .checked_mul(size)
+            .ok_or_else(|| invalid(format!("{}: count {count} too large", self.what)))?;
+        self.skip(n)
+    }
+
+    fn finish(&self) -> io::Result<()> {
+        if self.at == self.end {
+            Ok(())
+        } else {
+            Err(invalid(format!(
+                "{}: {} bytes left over",
+                self.what,
+                self.end - self.at
+            )))
+        }
+    }
+}
+
+/// Chunk 9's buffer headers (section 3), each with where its vertices
+/// start.
+fn read_vertex_headers<R: Read + Seek>(
+    b: &mut Window<R>,
+) -> io::Result<Vec<(VertexBufferHeader, u64)>> {
     let count = b.u32()?;
     let mut buffers = Vec::new();
     for i in 0..count {
         let mut elements = Vec::new();
         loop {
-            let e = b.take(8)?;
+            let e: [u8; 8] = b.take()?;
             let element = Element {
                 stream: u16::from_le_bytes([e[0], e[1]]),
                 offset: u16::from_le_bytes([e[2], e[3]]),
@@ -560,40 +883,78 @@ pub fn parse_vertex_buffers(chunk: &[u8]) -> io::Result<Vec<VertexBuffer>> {
                 "vertex buffer {i}: vertices without elements"
             )));
         }
-        let data = b.array(vertex_count, stride)?.to_vec();
-        buffers.push(VertexBuffer {
-            layout: Layout::recognize(&elements),
-            elements,
-            stride,
-            vertex_count,
-            data,
-        });
+        let start = b.array(vertex_count, stride)?;
+        buffers.push((
+            VertexBufferHeader {
+                layout: Layout::recognize(&elements),
+                elements,
+                stride,
+                vertex_count,
+            },
+            start,
+        ));
     }
     b.finish()?;
     Ok(buffers)
 }
 
-/// Chunk 10 (section 5).
-pub fn parse_index_buffers(chunk: &[u8]) -> io::Result<Vec<Vec<u16>>> {
-    let mut b = Bytes {
-        data: chunk,
-        what: "index buffers",
-    };
+/// Chunk 10's index counts (section 5), each with where its indices start.
+fn read_index_headers<R: Read + Seek>(b: &mut Window<R>) -> io::Result<Vec<(u32, u64)>> {
     let count = b.u32()?;
     let mut buffers = Vec::new();
     for _ in 0..count {
         let n = b.u32()?;
-        let data = b.array(n, 2)?;
-        buffers.push(
-            data.as_chunks::<2>()
-                .0
-                .iter()
-                .map(|i| u16::from_le_bytes(*i))
-                .collect(),
-        );
+        buffers.push((n, b.array(n, 2)?));
     }
     b.finish()?;
     Ok(buffers)
+}
+
+/// The whole of `chunk` as a window of a stream over it.
+fn chunk_window(chunk: &[u8]) -> (Cursor<&[u8]>, ChunkHeader) {
+    let header = ChunkHeader {
+        id_word: 0,
+        offset: 0,
+        size: chunk.len() as u32,
+    };
+    (Cursor::new(chunk), header)
+}
+
+/// Chunk 9 (section 3).
+pub fn parse_vertex_buffers(chunk: &[u8]) -> io::Result<Vec<VertexBuffer>> {
+    let (mut cursor, header) = chunk_window(chunk);
+    let headers = read_vertex_headers(&mut Window::new(&mut cursor, &header, "vertex buffers"))?;
+    Ok(headers
+        .into_iter()
+        .map(|(h, start)| {
+            let start = start as usize;
+            VertexBuffer {
+                data: chunk[start..start + h.bytes() as usize].to_vec(),
+                elements: h.elements,
+                layout: h.layout,
+                stride: h.stride,
+                vertex_count: h.vertex_count,
+            }
+        })
+        .collect())
+}
+
+/// Chunk 10 (section 5).
+pub fn parse_index_buffers(chunk: &[u8]) -> io::Result<Vec<Vec<u16>>> {
+    let (mut cursor, header) = chunk_window(chunk);
+    let headers = read_index_headers(&mut Window::new(&mut cursor, &header, "index buffers"))?;
+    Ok(headers
+        .into_iter()
+        .map(|(n, start)| {
+            let start = start as usize;
+            chunk[start..start + 2 * n as usize]
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|i| u16::from_le_bytes(*i))
+                .collect()
+        })
+        .collect())
 }
 
 /// Chunk 11 (section 6). The spec does not say that the records fill the
@@ -931,6 +1292,59 @@ mod tests {
         compressed[8 + 4 + 3] |= 0x80;
         assert!(LevelGeom::parse(&compressed).is_err());
         assert!(LevelGeom::read(&mut Cursor::new(&compressed)).is_err());
+    }
+
+    #[test]
+    fn reads_the_layout_and_buffers_on_demand() {
+        let file = sample_file(true, true);
+        let geom = LevelGeom::parse(&file).unwrap();
+        let mut cursor = Cursor::new(&file);
+        let layout = GeomFile::read(&mut cursor).unwrap();
+        let mut memory = geom.source();
+        assert_eq!(&layout.layout, memory.layout());
+        assert_eq!(layout.layout.index_counts, [3, 0]);
+        assert_eq!(layout.layout.vertex_buffers[0].bytes(), 36);
+        let mut from_file = layout.reader(&mut cursor);
+        for (buffer, offset, len) in [
+            (GeomBuffer::Vertices(0), 0, 36),
+            (GeomBuffer::Vertices(0), 12, 13),
+            (GeomBuffer::Indices(0), 0, 6),
+            (GeomBuffer::Indices(0), 1, 4),
+        ] {
+            let (mut a, mut b) = (vec![0; len], vec![0; len]);
+            from_file.read(buffer, offset, &mut a).unwrap();
+            memory.read(buffer, offset, &mut b).unwrap();
+            assert_eq!(a, b, "{buffer:?} {offset}");
+        }
+        assert_eq!(
+            {
+                let mut b = [0; 6];
+                from_file.read(GeomBuffer::Indices(0), 0, &mut b).unwrap();
+                b
+            },
+            [0, 0, 1, 0, 2, 0]
+        );
+        // Outside a buffer, or no such buffer.
+        for source in [&mut from_file as &mut dyn GeomSource, &mut memory] {
+            assert!(
+                source
+                    .read(GeomBuffer::Vertices(0), 30, &mut [0; 7])
+                    .is_err()
+            );
+            assert!(source.read(GeomBuffer::Indices(1), 0, &mut [0; 1]).is_err());
+            assert!(source.read(GeomBuffer::Indices(2), 0, &mut []).is_err());
+            assert!(source.read(GeomBuffer::Vertices(1), 0, &mut []).is_err());
+        }
+        // The layout fails as the whole file does.
+        let mut compressed = file.clone();
+        compressed[8 + 4 + 3] |= 0x80;
+        assert!(GeomFile::read(&mut Cursor::new(&compressed)).is_err());
+        let truncated = &sample_file(false, true)[..];
+        let mut short = truncated.to_vec();
+        short[4] -= 1; // chunk 9 claims a byte less
+        short.remove(8);
+        assert!(GeomFile::read(&mut Cursor::new(&short)).is_err());
+        assert!(LevelGeom::read(&mut Cursor::new(&short)).is_err());
     }
 
     #[test]
