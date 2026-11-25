@@ -339,6 +339,11 @@ pub struct App {
     frames: u64,
     /// The update in which a lost pointer lock opened the menu.
     unlock_opened: Option<u64>,
+    /// The page is hidden: nothing runs ([`App::set_hidden`]).
+    hidden: bool,
+    /// The page showed again: the next update takes the engine clock on
+    /// from where it stopped.
+    shown: bool,
 }
 
 /// The resolution of `vid_mode`.
@@ -401,6 +406,8 @@ impl App {
             console_touched: false,
             frames: 0,
             unlock_opened: None,
+            hidden: false,
+            shown: false,
             data,
             assets: Assets::default(),
             origin: None,
@@ -452,9 +459,17 @@ impl App {
         input: &Input,
         audio: &mut dyn AudioOut,
     ) {
+        if self.hidden {
+            return;
+        }
         self.frames += 1;
         if let Some(at) = self.loaded_since.take() {
             self.load_ms = Some(time_ms - at);
+        }
+        if std::mem::take(&mut self.shown) {
+            // The hidden time never reaches the engine clock: this frame's
+            // delta is zero (our design, #93).
+            self.origin = Some(time_ms - self.clock as f64);
         }
         let origin = *self.origin.get_or_insert(time_ms);
         self.clock = self.clock.max((time_ms - origin).max(0.0) as u64);
@@ -652,6 +667,49 @@ impl App {
             }
         }
         self.after_update(audio);
+    }
+
+    /// The page was hidden (`hidden`) or shown again. Our design (#93),
+    /// not the original's: hidden pages are throttled or suspended by every
+    /// browser, so while hidden the engine stops. No update runs, the
+    /// engine clock (and with it game time, movement and movies) stands
+    /// still, and on return it takes on from where it stopped. Hiding opens
+    /// the menu in a level whose controls are live, as a lost pointer lock
+    /// does, with the same guard against an Escape closing it at once; the
+    /// menu or a screen of it already open stays as it is, and nothing opens
+    /// during the loading or the intro. The platform suspends its audio
+    /// output and idles its frame loop meanwhile.
+    pub fn set_hidden(&mut self, hidden: bool, input: &Input, audio: &mut dyn AudioOut) {
+        if hidden == self.hidden {
+            return;
+        }
+        self.hidden = hidden;
+        if !hidden {
+            self.shown = true;
+            return;
+        }
+        let in_game = self.opening(true);
+        if let Some(Phase::Level {
+            overlay: None,
+            intro,
+            menu: menu @ None,
+            ..
+        }) = &mut self.phase
+            && intro.player.is_none()
+        {
+            *menu = Some(Box::new(TitleMenu::open(
+                &self.data, self.clock, input, audio, in_game,
+            )));
+            self.screens.menu_opened();
+            // The first two updates after the return, like the update a
+            // lost pointer lock opened the menu in and the next.
+            self.unlock_opened = Some(self.frames + 1);
+        }
+    }
+
+    /// Whether the page is hidden ([`App::set_hidden`]).
+    pub fn hidden(&self) -> bool {
+        self.hidden
     }
 
     /// What the settings changed this frame do: the bindings and movement
@@ -1249,6 +1307,108 @@ mod tests {
         app.update(&tree, 112.0, &input, &mut audio);
         input.end_frame();
         assert!(!menu_open(&app));
+    }
+
+    fn game_time(app: &App) -> u64 {
+        match app.state() {
+            AppState::Level { level, .. } => level.game_time,
+            s => panic!("not in the level: {s:?}"),
+        }
+    }
+
+    #[test]
+    fn hiding_in_a_level_opens_the_menu_and_hidden_time_never_runs() {
+        let (tree, mut app, mut input, mut audio) = in_level();
+        app.update(&tree, 1016.0, &input, &mut audio);
+        let (clock, time) = (app.clock(), game_time(&app));
+        assert!(time > 0, "the game clock runs");
+        app.set_hidden(true, &input, &mut audio);
+        assert!(menu_open(&app), "hiding opened the menu");
+        assert!(app.level_controls().is_none());
+        // Updates while hidden (a platform still calling) do nothing.
+        app.update(&tree, 30_000.0, &input, &mut audio);
+        assert_eq!((app.clock(), game_time(&app)), (clock, time));
+        // The first frame back has a zero delta, then the clock runs on;
+        // the menu's pause holds the game clock. An Escape in the first two
+        // frames back (one the browser used to leave pointer lock) leaves
+        // the menu open.
+        app.set_hidden(false, &input, &mut audio);
+        press(&mut input, Key::Escape);
+        app.update(&tree, 600_000.0, &input, &mut audio);
+        input.end_frame();
+        assert_eq!(app.clock(), clock, "the hidden time is not counted");
+        assert!(menu_open(&app), "the guarded Escape is ignored");
+        app.update(&tree, 600_016.0, &input, &mut audio);
+        assert_eq!(app.clock(), clock + 16);
+        assert_eq!(game_time(&app), time, "paused under the menu");
+        press(&mut input, Key::Escape);
+        app.update(&tree, 600_032.0, &input, &mut audio);
+        input.end_frame();
+        assert!(!menu_open(&app), "a later Escape returns to the game");
+        app.update(&tree, 601_064.0, &input, &mut audio);
+        // About a second shown ran, at the game's time factor; the ~10
+        // minutes hidden did not.
+        let ran = game_time(&app) - time;
+        assert!(ran < 60_000, "only shown time ran: {ran} ms of game time");
+    }
+
+    #[test]
+    fn hiding_leaves_an_open_menu_and_opens_nothing_outside_the_level() {
+        // The menu already open, its selection moved: left as it is.
+        let (tree, mut app, mut input, mut audio) = in_level();
+        press(&mut input, Key::Escape);
+        app.update(&tree, 32.0, &input, &mut audio);
+        input.end_frame();
+        press(&mut input, Key::Down);
+        app.update(&tree, 48.0, &input, &mut audio);
+        input.end_frame();
+        let menu = |app: &App| match app.state() {
+            AppState::Level { menu: Some(m), .. } => (m.menu.list, m.menu.selected),
+            s => panic!("no menu: {s:?}"),
+        };
+        let before = menu(&app);
+        app.set_hidden(true, &input, &mut audio);
+        assert_eq!(menu(&app), before);
+
+        // The logo sequence: nothing opens and its clock stands still.
+        let tree = fixture::tree();
+        let mut app = App::new(fixture::data(&tree)).unwrap();
+        app.assets = fixture::assets();
+        app.update(&tree, 0.0, &input, &mut audio);
+        app.update(&tree, 100.0, &input, &mut audio);
+        app.set_hidden(true, &input, &mut audio);
+        app.update(&tree, 5000.0, &input, &mut audio);
+        app.set_hidden(false, &input, &mut audio);
+        app.update(&tree, 9000.0, &input, &mut audio);
+        assert!(matches!(app.state(), AppState::Startup { clock: 100, .. }));
+
+        // Under the loading image and during the intro: nothing opens.
+        let (tree, mut app, input, mut audio) = in_level();
+        let Some(Phase::Level { overlay, .. }) = &mut app.phase else {
+            panic!()
+        };
+        *overlay = Some(Overlay::new(LoadingScreen::default(), &mut audio));
+        app.set_hidden(true, &input, &mut audio);
+        assert!(!menu_open(&app), "not under the loading image");
+        let (tree2, mut app, input, mut audio) = in_level();
+        let Some(Phase::Level { intro, .. }) = &mut app.phase else {
+            panic!()
+        };
+        intro.checked = true;
+        intro.player = Some(MoviePlayer::new(16));
+        app.set_hidden(true, &input, &mut audio);
+        assert!(!menu_open(&app), "not during the intro");
+        app.set_hidden(false, &input, &mut audio);
+        app.update(&tree2, 50_000.0, &input, &mut audio);
+        // The intro takes on where it stopped.
+        let AppState::Level {
+            intro: Some(intro), ..
+        } = app.state()
+        else {
+            panic!("the intro plays: {:?}", app.state())
+        };
+        assert_eq!(intro.elapsed_ms, 0);
+        drop(tree);
     }
 
     #[test]

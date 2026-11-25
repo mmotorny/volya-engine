@@ -260,6 +260,8 @@ export function startInput(view, send) {
     for (const last of pads.values()) last.axes = {};
   };
   addEventListener("blur", () => capture && releaseAll());
+  // Nor do releases reach a hidden page (our design, #93).
+  document.addEventListener("visibilitychange", () => capture && document.visibilityState === "hidden" && releaseAll());
   // Losing pointer lock (Escape, or the browser taking it back) may swallow
   // releases: nothing stays held. The browser takes Escape to leave pointer
   // lock (documented: the Pointer Lock specification's exit gesture; believed

@@ -64,7 +64,29 @@ async function connectAudio(context) {
   return node;
 }
 
-globalThis.volya = { call, status: () => call("status"), connectAudio };
+// The page's live audio context, once made (below).
+let audio = null;
+
+globalThis.volya = { call, status: () => call("status"), connectAudio, audioState: () => audio?.state };
+
+// Our design (#93): every browser throttles or suspends hidden pages, so the
+// engine stops while the page is hidden (another tab, a minimised window, an
+// app sent to the background): in a level the menu opens, the engine clock
+// stands still, the worker's frame loop idles and audio is suspended; the
+// player resumes from the menu. `visibilitychange` is the one event every
+// browser fires on all of these (documented, MDN); Chrome's `freeze` only
+// ever follows it (documented, Page Lifecycle API) and `pagehide` ends the
+// worker anyway (below).
+function visibilityChanged() {
+  const hidden = document.visibilityState === "hidden";
+  worker.postMessage({ type: "visibility", hidden });
+  if (!audio) return;
+  if (hidden) audio.suspend().catch(() => {});
+  // iOS may have interrupted it meanwhile; resuming without a gesture may be
+  // refused, then the next gesture resumes it (below).
+  else if (audio.state !== "running") audio.resume().catch(() => {});
+}
+document.addEventListener("visibilitychange", visibilityChanged);
 
 // The engine worker holds OPFS file locks. Browsers keep left pages alive in
 // the back-forward cache, which would keep those locks from the next page:
@@ -91,6 +113,7 @@ setLevel = (controls) => {
 };
 const canvas = view.transferControlToOffscreen();
 worker.postMessage({ type: "start", canvas, size: size() }, [canvas]);
+if (document.visibilityState === "hidden") visibilityChanged();
 const resized = () => worker.postMessage({ type: "resize", ...size() });
 new ResizeObserver(resized).observe(view);
 // devicePixelRatio changes alone (e.g. moving to another display) resize nothing.
@@ -115,9 +138,11 @@ try {
   status.dataset.text = status.textContent;
   status.dataset.state = "ready";
   // Browsers start audio suspended until a user gesture (iOS especially).
-  const audio = new AudioContext();
+  audio = new AudioContext();
+  // Made while hidden: suspended until shown.
+  if (document.visibilityState === "hidden") audio.suspend().catch(() => {});
   await connectAudio(audio);
-  const resume = () => audio.state !== "running" && audio.resume();
+  const resume = () => document.visibilityState === "visible" && audio.state !== "running" && audio.resume();
   for (const event of ["pointerdown", "keydown", "touchend"]) addEventListener(event, resume);
   await import("./game-ui.js").then((ui) => ui.start(call, updates));
 } catch (error) {

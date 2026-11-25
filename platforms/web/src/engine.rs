@@ -215,6 +215,33 @@ pub fn frame(time: f64) {
     }
 }
 
+/// The page was hidden or shown again ([`App::set_hidden`]; our design,
+/// #93): in a level the menu opens; the frame loop idles meanwhile.
+pub fn set_hidden(hidden: bool) {
+    RUNNING.with(|r| {
+        let mut r = r.borrow_mut();
+        let Some(Running { app, voices }) = r.as_mut() else {
+            return;
+        };
+        let _ = crate::game::with_trees(|tree, _| {
+            crate::input::with_input(|input| {
+                crate::audio::with_mixer_opt(|mixer| match mixer {
+                    Some(mixer) => app.set_hidden(
+                        hidden,
+                        input,
+                        &mut MixerOut {
+                            mixer,
+                            tree,
+                            voices,
+                        },
+                    ),
+                    None => app.set_hidden(hidden, input, &mut Silent),
+                })
+            })
+        });
+    });
+}
+
 /// The draw list of the engine's screen at `resolution`, `None` when the
 /// game does not run.
 pub fn draw_list(

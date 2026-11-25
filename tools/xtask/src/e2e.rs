@@ -197,6 +197,9 @@ fn chrome(url: &str, id: &str, reports: &Receiver<String>, timeout: Duration) ->
             "--headless=new",
             "--no-first-run",
             "--no-default-browser-check",
+            // The page's AudioContext runs without a gesture (synthesized
+            // input is not one), so suites see it suspended and resumed.
+            "--autoplay-policy=no-user-gesture-required",
             &format!("--user-data-dir={}", profile.display()),
             url,
         ],

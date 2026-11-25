@@ -52,6 +52,8 @@ struct FrameStats {
     /// Animation-frame time between consecutive frames.
     interval: std::collections::VecDeque<f64>,
     last: Option<f64>,
+    /// Frames run so far.
+    frames: u64,
 }
 
 thread_local! {
@@ -88,7 +90,18 @@ pub fn frame(time: f64) {
             push(&mut s.interval, time - last);
         }
         s.last = Some(time);
+        s.frames += 1;
     });
+}
+
+/// The page was hidden (`hidden`) or shown again (our design, #93): the
+/// engine stops while hidden; the worker's frame loop idles meanwhile and
+/// the page suspends audio output.
+#[wasm_bindgen]
+pub fn visibility(hidden: bool) {
+    engine::set_hidden(hidden);
+    // The interval spanning the hidden time is not a frame time.
+    FRAME_STATS.with(|s| s.borrow_mut().last = None);
 }
 
 #[derive(Serialize)]
@@ -261,6 +274,8 @@ struct Status {
     render: Option<[u32; 2]>,
     /// `worker` when running in a worker, as the architecture requires.
     thread: &'static str,
+    /// Frames the worker's loop has run.
+    frames: u64,
     gpu: gpu::Status,
 }
 
@@ -273,6 +288,7 @@ fn status() -> Status {
         } else {
             "main"
         },
+        frames: FRAME_STATS.with(|s| s.borrow().frames),
         gpu: gpu::status(),
     }
 }

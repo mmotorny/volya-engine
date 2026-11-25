@@ -9,6 +9,8 @@
 //   { type: "audio", port, sampleRate } connects the page's AudioWorklet; it
 //   then asks this worker for mixed blocks directly over `port`.
 //   { type: "input", event }: one input event (format in src/input.rs).
+//   { type: "visibility", hidden }: the page was hidden or shown again; the
+//   engine stops while hidden (our design, #93).
 // To the page, besides replies: { type: "capture", on } whenever the engine
 // starts or stops owning the screen; the page forwards input only while on.
 // { type: "controls", level, crouch, sprint, low, lock } whenever the
@@ -16,9 +18,10 @@
 // toggle engaged, sprint requested, the toggled crouch low, the sprint lock
 // holding): the page's touch controls and pointer lock follow it.
 // Once started, the worker runs a frame loop on requestAnimationFrame where
-// workers have it, otherwise on a 60 Hz timer.
+// workers have it, otherwise on a 60 Hz timer; it idles while the page is
+// hidden, drawing nothing.
 
-import init, { start, call, resize, frame, audio_init, audio_mix, input, input_capture, level_controls } from "./pkg/volya_engine_web.js";
+import init, { start, call, resize, frame, visibility, audio_init, audio_mix, input, input_capture, level_controls } from "./pkg/volya_engine_web.js";
 
 const message = (error) => String(error?.message ?? error);
 
@@ -49,16 +52,30 @@ function syncCapture() {
   }
 }
 
+let hidden = false;
+let scheduled = false;
+let broken = false;
+/** Asks for the next frame unless one is asked for, the page is hidden or the engine broke. */
+function schedule() {
+  if (scheduled || hidden || broken) return;
+  scheduled = true;
+  nextFrame(loop);
+}
+
 function loop(time) {
+  scheduled = false;
+  // Hidden after this frame was asked for: idle until shown.
+  if (hidden) return;
   try {
     frame(time);
     syncCapture();
   } catch (error) {
     // A broken engine stops drawing; calls report their own errors.
     console.error(`frame: ${message(error)}`);
+    broken = true;
     return;
   }
-  nextFrame(loop);
+  schedule();
 }
 
 let started;
@@ -73,7 +90,7 @@ onmessage = async ({ data }) => {
     try {
       await started;
       postMessage({ type: "started" });
-      nextFrame(loop);
+      schedule();
     } catch (error) {
       postMessage({ type: "error", message: message(error) });
     }
@@ -86,6 +103,16 @@ onmessage = async ({ data }) => {
       const block = audio_mix(request.need);
       data.port.postMessage(block, [block.buffer]);
     };
+  } else if (data.type === "visibility") {
+    await started;
+    hidden = data.hidden;
+    try {
+      visibility(hidden);
+      syncCapture();
+    } catch (error) {
+      console.warn(`visibility: ${message(error)}`);
+    }
+    schedule();
   } else if (data.type === "input") {
     try {
       input(data.event);

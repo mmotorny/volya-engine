@@ -177,6 +177,20 @@ async function quitToTitle() {
   return until((s) => s.phase === "menu", "the title menu");
 }
 
+/**
+ * Simulates the page being hidden or shown: the visibility the page reads,
+ * then the event (a real hide needs the browser's own controls).
+ */
+function setVisibility(state) {
+  Object.defineProperty(document, "visibilityState", { value: state, configurable: true });
+  Object.defineProperty(document, "hidden", { value: state === "hidden", configurable: true });
+  document.dispatchEvent(new Event("visibilitychange"));
+  if (state === "visible") {
+    delete document.visibilityState;
+    delete document.hidden;
+  }
+}
+
 /** Opens the options screen from the title menu's main page. */
 async function openOptions() {
   pointer("pointermove", row(3));
@@ -699,6 +713,41 @@ export const tests = {
       assertEqual(stats.world_draws, 7782, "world draws on the GPU");
     }
     return `loaded again in ${s.load_ms.toFixed(0)} ms`;
+  },
+
+  "hidden: the menu opens, the clock, the frame loop and audio stop; shown: the game takes on from there": async () => {
+    needsGame();
+    let s = await until((s) => s.phase === "level" && !s.menu && !s.intro, "the level's controls");
+    const audioBefore = volya.audioState();
+    setVisibility("hidden");
+    try {
+      s = await until((s) => inGame(s), "the in-game menu");
+      const { clock, level } = s;
+      const frames = (await volya.status()).frames;
+      await sleep(500);
+      s = await state();
+      assertEqual([s.clock, s.level.game_time], [clock, level.game_time], "the engine and game clocks while hidden");
+      const idle = (await volya.status()).frames;
+      assert(idle - frames <= 1, `${idle - frames} frames ran while hidden`);
+      assertEqual(volya.audioState(), "suspended", "audio while hidden");
+    } finally {
+      setVisibility("visible");
+    }
+    const hiddenClock = s.clock;
+    const frames = (await volya.status()).frames;
+    for (let i = 0; i < 50 && (await volya.status()).frames < frames + 3; i++) await sleep(20);
+    const back = await state();
+    assert(inGame(back), "the menu stays open on return");
+    // The first frame back has a zero delta; a few frames ran since.
+    const ran = back.clock - hiddenClock;
+    assert(ran < 300, `the engine clock ran ${ran} ms over the return`);
+    assertEqual(back.level.game_time, s.level.game_time, "the game clock, paused under the menu");
+    if (audioBefore === "running") await until(() => volya.audioState() === "running", "audio to resume");
+    // The player resumes deliberately.
+    await sleep(100);
+    key("Escape");
+    await until((s) => s.phase === "level" && !s.menu, "back in the game");
+    return `audio ${audioBefore} before hiding; engine clock +${ran} ms over the return`;
   },
 
   "the in-game menu: Escape opens it and stops the clock, Return resumes, Load lists no saves, quitting asks": async () => {
