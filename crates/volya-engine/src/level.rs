@@ -1227,6 +1227,24 @@ impl LevelScreen {
         self.simulation.as_ref()
     }
 
+    /// An id for an item created in the level: from the simulation's pool;
+    /// without a simulation (unit tests), one above every id the player
+    /// character holds.
+    pub fn take_item_id(&mut self) -> io::Result<u16> {
+        if let Some(s) = &mut self.simulation {
+            return s.take_id();
+        }
+        let held = self
+            .character
+            .iter()
+            .flat_map(|c| c.inventory.items.iter().map(|i| i.id))
+            .max()
+            .unwrap_or(0);
+        held.checked_add(1)
+            .filter(|&id| id != character::inventory::NO_ID)
+            .ok_or_else(|| invalid("no id left"))
+    }
+
     /// The game clock.
     pub fn clock(&self) -> &GameClock {
         &self.clock
@@ -1363,9 +1381,20 @@ impl LevelScreen {
         self.character.as_ref()
     }
 
+    /// The player character's state, to change (the inventory screen).
+    pub fn character_mut(&mut self) -> Option<&mut CharacterState> {
+        self.character.as_mut()
+    }
+
     /// The player's controls.
     pub fn controls(&self) -> &Controls {
         &self.controls
+    }
+
+    /// The player's controls, to change (a screen over the level keeping
+    /// the mouse, [`Controls::keys_only`]).
+    pub fn controls_mut(&mut self) -> &mut Controls {
+        &mut self.controls
     }
 
     /// Takes the bindings and movement settings of `controls` (the options
@@ -1379,6 +1408,12 @@ impl LevelScreen {
 
 #[cfg(test)]
 impl LevelScreen {
+    /// The level with `character` as its player character.
+    pub(crate) fn with_character(mut self, character: CharacterState) -> Self {
+        self.character = Some(character);
+        self
+    }
+
     /// A level with nothing in it, its player standing at the origin with
     /// `controls` (unit tests of what runs a level; not drawn).
     pub(crate) fn empty(controls: Controls, now: u64) -> Self {

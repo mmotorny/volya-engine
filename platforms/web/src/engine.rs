@@ -282,6 +282,15 @@ pub fn level_controls() -> Option<app::LevelControls> {
     RUNNING.with(|r| r.borrow().as_ref()?.app.level_controls())
 }
 
+/// Whether the character takes keyboard keys ([`App::character_takes_keys`]).
+pub fn character_takes_keys() -> bool {
+    RUNNING.with(|r| {
+        r.borrow()
+            .as_ref()
+            .is_some_and(|r| r.app.character_takes_keys())
+    })
+}
+
 /// Whether the game shows its mouse cursor ([`App::cursor_shown`]): the
 /// page's touch is a touchpad then (#108).
 pub fn cursor_shown() -> bool {
@@ -330,6 +339,17 @@ pub fn state() -> serde_json::Value {
     RUNNING.with(|r| match r.borrow().as_ref() {
         Some(running) => serde_json::to_value(running.app.state()).unwrap_or_default(),
         None => json!({ "phase": "none" }),
+    })
+}
+
+/// The `debug_give_item` op (tests): an item of `section` put into the
+/// player's inventory ([`App::give_item`]); its id.
+#[cfg(feature = "test-ops")]
+pub fn give_item(section: &str) -> Result<u16, JsValue> {
+    RUNNING.with(|r| {
+        let mut r = r.borrow_mut();
+        let running = r.as_mut().ok_or_else(|| error("the game is not running"))?;
+        running.app.give_item(section).map_err(error)
     })
 }
 

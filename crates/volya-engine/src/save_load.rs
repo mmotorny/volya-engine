@@ -726,7 +726,8 @@ pub struct FieldFont {
 }
 
 impl FieldFont {
-    fn width(&self, text: &str) -> f32 {
+    /// The width of `text` in UI units.
+    pub fn width(&self, text: &str) -> f32 {
         self.font.width(&crate::data::encode(text)) / self.scale_x
     }
 }

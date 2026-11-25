@@ -426,7 +426,12 @@ fn check_configuration(system: &volya_engine::core::config::Config, state: &Char
         InventoryConfig::read(system).unwrap(),
         InventoryConfig {
             max_weight: 50.0,
-            max_belt: 5
+            max_belt: 5,
+            // inventory-screen.md section 9: slots 1, 2 and 6 and 10 are
+            // not persistent.
+            persistent: [
+                true, false, false, true, true, true, false, true, true, true, false
+            ],
         }
     );
     // Invariant: every [spawn] section exists and has a slot, distinct with

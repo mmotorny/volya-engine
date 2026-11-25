@@ -22,6 +22,12 @@
 //! | crouch | west (X / square), as `crouch_toggle` | Crouch, as `crouch_toggle` |
 //! | sprint | left stick pressed, as `sprint_toggle` | the stick pushed forward past its rim, kept by the sprint lock ([`SprintLock`]) |
 //! | open the menu | east (B / circle), as the key bound to `quit` | Menu |
+//! | open the inventory screen | north (Y / triangle) | Inventory, at the top right |
+//!
+//! While a screen that takes the mouse is open over the running level (the
+//! inventory screen, docs/behavior/inventory-screen.md section 1.3), only
+//! the keyboard's keys reach the character, but those the screen uses
+//! ([`Controls::keys_only`]).
 //!
 //! Sticks give the spec's digital directions: eight sectors of 45°
 //! ([`stick_directions`]). Crouch is a toggle on both, since holding it
@@ -51,7 +57,8 @@ use crate::core::input::{
 use crate::core::movement::{PlayerState, Request, Settings};
 use volya_engine_formats::cp1251;
 
-/// The actions of section 2.2 this engine acts on.
+/// The actions of section 2.2 this engine acts on, and the inventory
+/// screen's (`inventory`, `drop`; docs/behavior/inventory-screen.md 6.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MoveAction {
     Forward,
@@ -68,10 +75,12 @@ pub enum MoveAction {
     Up,
     Down,
     WpnFire,
+    Inventory,
+    Drop,
 }
 
 impl MoveAction {
-    pub const ALL: [MoveAction; 14] = [
+    pub const ALL: [MoveAction; 16] = [
         MoveAction::Forward,
         MoveAction::Back,
         MoveAction::LStrafe,
@@ -86,6 +95,8 @@ impl MoveAction {
         MoveAction::Up,
         MoveAction::Down,
         MoveAction::WpnFire,
+        MoveAction::Inventory,
+        MoveAction::Drop,
     ];
 
     /// The action's name in `bind` lines.
@@ -105,6 +116,8 @@ impl MoveAction {
             MoveAction::Up => "up",
             MoveAction::Down => "down",
             MoveAction::WpnFire => "wpn_fire",
+            MoveAction::Inventory => "inventory",
+            MoveAction::Drop => "drop",
         }
     }
 }
@@ -400,6 +413,12 @@ pub struct Controls {
     /// Each stick's peak deflection in the current push, 0 when released.
     peak: [f32; 2],
     pub sprint_lock: SprintLock,
+    /// While a screen over the level takes the mouse (the inventory
+    /// screen): only keyboard keys reach the character, not these (the keys
+    /// the screen uses); mouse, wheel, gamepad and touch do not
+    /// (inventory-screen.md 1.3; the gamepad and touch part is our design,
+    /// since the screen takes them).
+    pub keys_only: Option<Vec<Control>>,
 }
 
 impl Controls {
@@ -410,7 +429,44 @@ impl Controls {
             walk: [None; 2],
             peak: [0.0; 2],
             sprint_lock: SprintLock::default(),
+            keys_only: None,
         }
+    }
+
+    /// The keys bound to `action`.
+    pub fn keys(&self, action: MoveAction) -> Vec<Key> {
+        self.bindings
+            .controls(action)
+            .filter_map(|c| match c {
+                Control::Key(k) => Some(k),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Whether the player asked for the inventory screen this frame: a
+    /// press of a keyboard key bound to `inventory` (inventory-screen.md
+    /// 1.1), the touch Inventory button or a gamepad's north button (our
+    /// design).
+    pub fn inventory_pressed(&self, input: &Input) -> bool {
+        let key = input.device_changes().iter().any(|&(c, pressed)| {
+            pressed
+                && matches!(c, Control::Key(_))
+                && self
+                    .bindings
+                    .controls(MoveAction::Inventory)
+                    .any(|b| b == c)
+        });
+        let touch = input.actions().iter().any(|a| {
+            matches!(
+                a,
+                Action::Press {
+                    control: Control::Touch(TouchButton::Inventory),
+                    ..
+                }
+            )
+        });
+        key || touch || input.pad_changes().contains(&(GamepadButton::North, true))
     }
 }
 
@@ -422,20 +478,32 @@ impl Controls {
     /// is the player after the previous frame (its sprint request for the
     /// sprint lock, its crouch toggle for the touch low crouch).
     pub fn request(&mut self, input: &Input, player: &PlayerState) -> (Request, bool) {
-        let held = |a| self.bindings.controls(a).any(|c| input.device_held(c));
-        let changed = |a, pressed: bool| {
-            input
-                .device_changes()
-                .iter()
-                .any(|&(c, p)| p == pressed && self.bindings.controls(a).any(|b| b == c))
+        let only = self.keys_only.clone();
+        let keys_only = only.is_some();
+        let reaches = |c: Control| match &only {
+            None => true,
+            Some(kept) => matches!(c, Control::Key(_)) && !kept.contains(&c),
         };
-        let pad = |b: GamepadButton, pressed: bool| input.pad_changes().contains(&(b, pressed));
-        let touch = |b: TouchButton, pressed: bool| {
-            input.actions().iter().any(|a| match a {
-                Action::Press { control, .. } => pressed && *control == Control::Touch(b),
-                Action::Release { control } => !pressed && *control == Control::Touch(b),
-                Action::Cursor { .. } | Action::Wheel { .. } => false,
+        let held = |a| {
+            self.bindings
+                .controls(a)
+                .any(|c| reaches(c) && input.device_held(c))
+        };
+        let changed = |a, pressed: bool| {
+            input.device_changes().iter().any(|&(c, p)| {
+                p == pressed && reaches(c) && self.bindings.controls(a).any(|b| b == c)
             })
+        };
+        let pad = |b: GamepadButton, pressed: bool| {
+            !keys_only && input.pad_changes().contains(&(b, pressed))
+        };
+        let touch = |b: TouchButton, pressed: bool| {
+            !keys_only
+                && input.actions().iter().any(|a| match a {
+                    Action::Press { control, .. } => pressed && *control == Control::Touch(b),
+                    Action::Release { control } => !pressed && *control == Control::Touch(b),
+                    Action::Cursor { .. } | Action::Wheel { .. } => false,
+                })
         };
         let mut r = Request {
             forward: held(MoveAction::Forward),
@@ -457,7 +525,11 @@ impl Controls {
                 || pad(GamepadButton::South, false)
                 || touch(TouchButton::Jump, false),
             fire: changed(MoveAction::WpnFire, true),
-            mouse: input.pointer_motion(),
+            mouse: if keys_only {
+                [0.0; 2]
+            } else {
+                input.pointer_motion()
+            },
             turn: [
                 f32::from(u8::from(held(MoveAction::Right)))
                     - f32::from(u8::from(held(MoveAction::Left))),
@@ -467,12 +539,19 @@ impl Controls {
         };
         // The touch stick: its reach within the rim, or full forward while
         // the sprint lock holds it.
-        r.sprint_toggle ^= self.sprint_lock.frame(
-            input.touch_stick_values(),
-            input.sticks_released()[1],
-            player.sprint_requested,
-            lock_target(input.touch_lock_target()),
-        );
+        // Under a screen the touch stick is gone (the page hides it): as
+        // everything released, its lock ends.
+        r.sprint_toggle ^= if keys_only {
+            self.sprint_lock
+                .frame(&[], true, player.sprint_requested, lock_target(None))
+        } else {
+            self.sprint_lock.frame(
+                input.touch_stick_values(),
+                input.sticks_released()[1],
+                player.sprint_requested,
+                lock_target(input.touch_lock_target()),
+            )
+        };
         // Crouch swiped down (our design): the low crouch, the crouch
         // toggle engaged with the touch stick's latch walking (4.2), as a
         // light push let go would leave it. A lock holding the stick
@@ -487,18 +566,20 @@ impl Controls {
             self.walk[1] = Some(true);
             self.peak[1] = 0.0;
         }
-        let [x, y] = input.touch_stick();
+        let [x, y] = if keys_only {
+            [0.0; 2]
+        } else {
+            input.touch_stick()
+        };
         let reach = x.hypot(y).max(1.0);
         let touch_stick = if self.sprint_lock.locked() {
             [0.0, -1.0]
         } else {
             [x / reach, y / reach]
         };
+        let axis = |a| if keys_only { 0.0 } else { input.axis(a) };
         let pads = [
-            [
-                input.axis(GamepadAxis::LeftX),
-                input.axis(GamepadAxis::LeftY),
-            ],
+            [axis(GamepadAxis::LeftX), axis(GamepadAxis::LeftY)],
             touch_stick,
         ];
         // Sticks and the touch stick: directions, and walking below the
@@ -507,7 +588,11 @@ impl Controls {
             // Keyboard movement: the sticks' latches give way.
             self.walk = [None; 2];
         }
-        let released = input.sticks_released();
+        let released = if keys_only {
+            [false; 2]
+        } else {
+            input.sticks_released()
+        };
         for (i, stick) in pads.into_iter().enumerate() {
             if released[i] {
                 // Released by a blur or lost pointer lock, not let go: the
@@ -527,9 +612,14 @@ impl Controls {
             }
         }
         let dead = |v: f32| if v.abs() < DEAD_ZONE { 0.0 } else { v };
-        r.turn[0] = (r.turn[0] + dead(input.axis(GamepadAxis::RightX))).clamp(-1.0, 1.0);
-        r.turn[1] = (r.turn[1] + dead(input.axis(GamepadAxis::RightY))).clamp(-1.0, 1.0);
-        for &(delta, speed) in input.touch_look_moves() {
+        r.turn[0] = (r.turn[0] + dead(axis(GamepadAxis::RightX))).clamp(-1.0, 1.0);
+        r.turn[1] = (r.turn[1] + dead(axis(GamepadAxis::RightY))).clamp(-1.0, 1.0);
+        let looks: &[([f32; 2], f32)] = if keys_only {
+            &[]
+        } else {
+            input.touch_look_moves()
+        };
+        for &(delta, speed) in looks {
             let gain = look_gain(speed);
             r.mouse[0] += delta[0] * gain;
             r.mouse[1] += delta[1] * gain;
@@ -1204,5 +1294,67 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
         assert_eq!(w.frames(30).posture, 0);
         w.tap(TouchButton::CrouchLow);
         assert_eq!(w.frames(30).posture, 2);
+    }
+
+    #[test]
+    fn under_a_screen_only_its_unused_keys_reach_the_character() {
+        let mut c = controls();
+        c.bindings = Bindings::read(&[DEFAULTS, b"bind inventory kI\nbind drop kG\n"]);
+        assert_eq!(c.keys(MoveAction::Inventory), [Key::I]);
+        c.keys_only = Some(vec![Control::Key(Key::I), Control::Key(Key::W)]);
+        let mut i = Input::new();
+        key(&mut i, Key::A, true);
+        key(&mut i, Key::W, true);
+        i.handle(Event::PointerMotion { delta: [5.0, 0.0] });
+        i.handle(Event::PointerButton {
+            at: None,
+            button: MouseButton::Left,
+            pressed: true,
+            time: 0.0,
+        });
+        i.handle(Event::GamepadButton {
+            button: GamepadButton::South,
+            pressed: true,
+        });
+        i.handle(Event::GamepadAxis {
+            axis: GamepadAxis::LeftY,
+            value: -1.0,
+        });
+        i.handle(Event::TouchButton {
+            button: TouchButton::Menu,
+            pressed: true,
+        });
+        let (r, back) = req(&mut c, &i);
+        // A reaches it; W is the screen's; the mouse, the gamepad and touch
+        // do not.
+        assert!(r.left && !r.forward && !r.fire && !r.jump_pressed && !back);
+        assert_eq!(r.mouse, [0.0, 0.0]);
+        // Without the screen, all of it does.
+        c.keys_only = None;
+        let (r, back) = req(&mut c, &i);
+        assert!(r.forward && r.fire && r.jump_pressed && back);
+    }
+
+    #[test]
+    fn the_inventory_is_asked_for_by_key_touch_and_gamepad() {
+        let mut c = controls();
+        c.bindings = Bindings::read(&[DEFAULTS, b"bind inventory kI\n"]);
+        let mut i = Input::new();
+        assert!(!c.inventory_pressed(&i));
+        key(&mut i, Key::I, true);
+        assert!(c.inventory_pressed(&i));
+        i.end_frame();
+        assert!(!c.inventory_pressed(&i), "held, not pressed");
+        i.handle(Event::TouchButton {
+            button: TouchButton::Inventory,
+            pressed: true,
+        });
+        assert!(c.inventory_pressed(&i));
+        i.end_frame();
+        i.handle(Event::GamepadButton {
+            button: GamepadButton::North,
+            pressed: true,
+        });
+        assert!(c.inventory_pressed(&i));
     }
 }

@@ -417,6 +417,15 @@ button.touch-button.down .touch-edges {
   height: 44px;
 }
 
+/* Inventory (#110) in the top right corner, Menu's counterpart, above the
+   look area and clear of the right thumb's zone. */
+#touch-controls button.touch-button.inventory {
+  right: calc(var(--safe-right) + var(--edge));
+  top: calc(var(--safe-top) + var(--edge));
+  width: 44px;
+  height: 44px;
+}
+
 /* Jump, the primary, at the corner; Crouch to its left. */
 .touch-actions {
   position: absolute;

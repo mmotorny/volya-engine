@@ -101,6 +101,62 @@ const LAYOUT: &str = r#"<window>
 <menu_sound random="0"><menu_music>music\wasteland2</menu_music></menu_sound>
 </window>"#;
 
+/// The inventory screen's layout with the values of
+/// docs/behavior/inventory-screen.md section 3 (normal layout), its
+/// textures reduced to what the fixture holds.
+pub const INVENTORY: &str = r#"<w>
+<properties_box><texture>ui_cb_listbox</texture>
+<list x="0" y="0" width="10" height="10" item_height="18" bottom_indent="10" right_ident="10" left_ident="20">
+<font_s r="218" g="217" b="213"/><font r="131" g="131" b="131" font="letterica16"/></list></properties_box>
+<belt_slots x="0" y="80" width="1024" height="172"/>
+<back x="10" y="243" width="1005" height="483"><texture>ui_inventory_main</texture></back>
+<bottom_static x="0" y="736" width="1024" height="32"/>
+<dragdrop_bag x="22" y="33" width="310" height="442" cell_width="41" cell_height="41" rows_num="10" cols_num="7" unlimited="1" group_similar="1"/>
+<dragdrop_belt x="645" y="136" width="410" height="60" cell_width="60" cell_height="60" rows_num="1" cols_num="5"/>
+<dragdrop_outfit x="858" y="290" width="104" height="260" cell_width="57" cell_height="57" rows_num="4" cols_num="4" custom_placement="0"/>
+<dragdrop_pistol x="38" y="118" width="156" height="104" cell_width="52" cell_height="52" rows_num="2" cols_num="3" custom_placement="0"/>
+<dragdrop_automatic x="237" y="118" width="312" height="104" cell_width="52" cell_height="52" rows_num="2" cols_num="6" custom_placement="0"/>
+<bag_static x="15" y="240" width="350" height="480" complex_mode="1"><text x="30" y="8" font="graffiti22">ui_inv_bag</text></bag_static>
+<money_static x="744" y="530" width="108" height="33" stretch="1"><text font="graffiti22" align="c" vert_align="c"/></money_static>
+<descr_static x="370" y="253" width="335" height="475"><text x="25" y="0" font="graffiti22">ui_inv_description</text></descr_static>
+<character_frame_window x="730" y="260" width="268" height="460"><title x="80" y="-8" width="240" height="60"><text font="graffiti22">ui_inv_personal</text></title></character_frame_window>
+<outfit_info x="740" y="550" width="260" height="180"><auto_static x="140" y="0"><text font="graffiti22" complex_mode="0">ui_st_params</text></auto_static>
+<scroll_view x="10" y="33" width="240" height="147" always_show_scroll="0"/>
+<static_burn_immunity width="230" height="15" complex_mode="1"><text font="letterica16" x="17"/></static_burn_immunity>
+<static_strike_immunity width="230" height="15" complex_mode="1"><text font="letterica16" x="17"/></static_strike_immunity>
+<static_shock_immunity width="230" height="15" complex_mode="1"><text font="letterica16" x="17"/></static_shock_immunity>
+<static_wound_immunity width="230" height="15" complex_mode="1"><text font="letterica16" x="17"/></static_wound_immunity>
+<static_radiation_immunity width="230" height="15" complex_mode="1"><text font="letterica16" x="17"/></static_radiation_immunity>
+<static_telepatic_immunity width="230" height="15" complex_mode="1"><text font="letterica16" x="17"/></static_telepatic_immunity>
+<static_chemical_burn_immunity width="230" height="15" complex_mode="1"><text font="letterica16" x="17"/></static_chemical_burn_immunity>
+<static_explosion_immunity width="230" height="15" complex_mode="1"><text font="letterica16" x="17"/></static_explosion_immunity>
+<static_fire_wound_immunity width="230" height="15" complex_mode="1"><text font="letterica16" x="17"/></static_fire_wound_immunity>
+</outfit_info>
+<progress_background x="739" y="340" width="59" height="215"/>
+<progress_bar_health x="8" y="22" width="10" height="124" horz="0" min="0" max="100"><progress/></progress_bar_health>
+<progress_bar_psy x="26" y="22" width="10" height="124" horz="0" min="0" max="100"><progress/></progress_bar_psy>
+<progress_bar_radiation x="45" y="22" width="10" height="124" horz="0" min="0" max="100"><progress/></progress_bar_radiation>
+<time_static x="15" y="730" width="200" height="30"><text x="20" y="8" font="letterica16">ui_inv_time</text></time_static>
+<time_static_str x="115" y="7" width="107" height="30"><text font="letterica16"/></time_static_str>
+<exit_button x="870" y="725" width="157" height="48"><texture>ui_button_main02</texture><text font="graffiti22">ui_inv_exit</text></exit_button>
+<action_sounds><snd_open>interface\inv_open</snd_open><snd_close>interface\inv_close</snd_close>
+<snd_item_to_slot>interface\inv_slot</snd_item_to_slot><snd_item_to_belt>interface\inv_belt</snd_item_to_belt>
+<snd_item_to_ruck>interface\inv_ruck</snd_item_to_ruck><snd_properties>interface\inv_properties</snd_properties>
+<snd_drop_item>interface\inv_drop</snd_drop_item><snd_attach_addon>interface\inv_attach_addon</snd_attach_addon>
+<snd_detach_addon>interface\inv_detach_addon</snd_detach_addon><snd_item_use>interface\inv_slot</snd_item_use></action_sounds>
+</w>"#;
+
+/// The information panel (inventory-screen.md section 4.6).
+pub const INVENTORY_ITEM: &str = r#"<w>
+<static_name x="23" y="188" width="185" height="30" stretch="1"><text font="letterica18" complex_mode="1" align="l" vert_align="c"/></static_name>
+<static_weight x="23" y="222" width="90" height="20" stretch="1"><text align="l" font="letterica18"/></static_weight>
+<static_cost x="215" y="188" width="110" height="30" stretch="1"><text font="letterica18" align="c" vert_align="c"/></static_cost>
+<static_condition x="113" y="222" width="95" height="20" stretch="1"><text align="r" font="letterica18">st_condition</text></static_condition>
+<descr_list x="24" y="245" width="300" height="193" left_ident="16"><font font="letterica16" r="240" g="217" b="182"/></descr_list>
+<image_static x="170" y="100" width="300" height="160" alignment="c" stretch="1"/>
+<condition_progress x="215" y="227" width="107" height="8" horz="1" min="0" max="100"><min_color r="255" g="0" b="0"/><max_color r="0" g="255" b="0"/><progress/></condition_progress>
+</w>"#;
+
 /// The menu's boxes (save-load-screens.md section 6), all at the same
 /// rectangles.
 fn message_boxes() -> String {
@@ -270,7 +326,7 @@ pub fn tree() -> MemVfs {
     let c = "gamedata/config/";
     add(
         &format!("{c}system.ltx"),
-        b"[texture_desc]\nfiles = ui_mainmenu, ui_asus_intro, ui_common\n".into(),
+        b"[texture_desc]\nfiles = ui_mainmenu, ui_asus_intro, ui_common, ui_inventory\n".into(),
     );
     add(&format!("{c}game.ltx"), b"[levels]\nx = 1\n".into());
     add(
@@ -296,7 +352,14 @@ pub fn tree() -> MemVfs {
         <texture id="ui_asus_02" x="512" y="0" width="512" height="512"/></ui_texture>"#
             .into(),
     );
-    add(&format!("{c}ui/color_defs.xml"), b"<colors/>".into());
+    // The colours the inventory screen's texts name (inventory-screen.md
+    // 4.5, 4.8).
+    add(
+        &format!("{c}ui/color_defs.xml"),
+        br#"<colors><color name="UI_orange" r="238" g="153" b="26"/>
+        <color name="red" r="255" g="0" b="0"/><color name="green" r="0" g="255" b="0"/></colors>"#
+            .into(),
+    );
     add(&format!("{c}ui/message_box.xml"), message_boxes().into());
     add(
         &format!("{c}ui/ui_mm_save_dlg.xml"),
@@ -328,10 +391,24 @@ pub fn tree() -> MemVfs {
         <texture id="ui_listline_b" x="0" y="37" width="4" height="18"/>
         <texture id="ui_listline_back" x="4" y="37" width="28" height="18"/>
         <texture id="ui_listline_e" x="32" y="37" width="4" height="18"/>
+        <texture id="ui_button_main02_e" x="0" y="662" width="157" height="48"/>
+        <texture id="ui_button_main02_h" x="0" y="758" width="157" height="48"/>
+        <texture id="ui_button_main02_t" x="0" y="710" width="157" height="48"/>
+        <texture id="ui_button_main02_d" x="0" y="614" width="157" height="48"/>
         </ui_texture>"#
             .into(),
     );
     add(&format!("{c}ui/ui_mm_main.xml"), LAYOUT.into());
+    add(&format!("{c}ui/inventory_new.xml"), INVENTORY.into());
+    add(&format!("{c}ui/inventory_item.xml"), INVENTORY_ITEM.into());
+    add(
+        &format!("{c}ui/ui_inventory.xml"),
+        br#"<ui_texture><file_name>ui\ui_inventory</file_name>
+        <texture id="ui_inventory_main" x="0" y="0" width="1005" height="483"/>
+        <texture id="npc_icon_without_outfit" x="384" y="384" width="128" height="320"/>
+        </ui_texture>"#
+            .into(),
+    );
     add(
         &format!("{c}ui/game_tutorials.xml"),
         b"<window>\r\n#include \"ui\\ui_movies.xml\"\r\n</window>".into(),
@@ -369,6 +446,10 @@ pub fn tree() -> MemVfs {
     add(&format!("{t}ui/font.dds"), dds(256, 256));
     add(&format!("{t}ui/ui_mainmenu.dds"), dds(1024, 1024));
     add(&format!("{t}ui/ui_common.dds"), dds(1024, 1024));
+    // The inventory screen (inventory-screen.md section 9).
+    add(&format!("{t}ui/ui_inventory.dds"), dds(1024, 1024));
+    add(&format!("{t}ui/ui_icon_equipment.dds"), dds(1024, 2048));
+    add(&format!("{t}ui/ui_grid.dds"), dds(128, 64));
     add(&format!("{t}ui/ui_static_mm_back_04.dds"), dds(1024, 1024));
     add(
         &format!("{t}ui/ui_noise.seq"),
