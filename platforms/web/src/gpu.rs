@@ -512,3 +512,144 @@ pub async fn debug_capture(width: u32, height: u32) -> Result<Capture, JsValue> 
         rgba,
     })
 }
+
+/// The `debug_draw_particles` op (tests): sets the debug draw list to a
+/// world without geometry holding particle batches of `case`, the scenes
+/// of the native `particles_queue_blend_cull_and_distort` render test
+/// (docs/behavior/particle-drawing.md 4.5 – 7), so `debug_capture` reads
+/// them back through this browser's backend (WebGL 2 where there is no
+/// WebGPU): `blend` (two `BLEND` sprites back to front, 64 × 64), `set`
+/// (the `SET` alpha test and culling, 64 × 64), `plain` (a `SET` sprite
+/// over the top left quarter, 256 × 256) and `distort` (`plain` with a
+/// distortion sprite over the screen, 256 × 256).
+#[cfg(feature = "test-ops")]
+pub fn debug_draw_particles(case: &str) -> Result<serde_json::Value, JsValue> {
+    use volya_engine::render::particles::{
+        ParticleBatch, ParticleBlend, ParticleCull, ParticlePass, ParticleProgram, ParticleQueue,
+        ParticleVertex,
+    };
+    use volya_engine::render::world::WorldLight;
+    use volya_engine::render::{Texture, WorldFrame};
+
+    /// A facing quad of particle-drawing.md 4.4 at depth `z`.
+    fn sprite(x0: f32, x1: f32, y0: f32, y1: f32, z: f32, argb: u32) -> Vec<ParticleVertex> {
+        [
+            ([x0, y0, z], [0.0, 1.0]),
+            ([x0, y1, z], [0.0, 0.0]),
+            ([x1, y0, z], [1.0, 1.0]),
+            ([x1, y1, z], [1.0, 0.0]),
+        ]
+        .into_iter()
+        .map(|(position, uv)| ParticleVertex {
+            position,
+            colour: argb,
+            uv,
+        })
+        .collect()
+    }
+    let pass = |program, blend, base: &Texture| ParticlePass {
+        program,
+        blend,
+        depth_write: program == ParticleProgram::Set,
+        clamp: true,
+        base: Some(base.clone()),
+        distort: None,
+    };
+    let batch = |pass, queue, key, vertices| ParticleBatch {
+        pass,
+        queue,
+        cull: ParticleCull::None,
+        key,
+        vertices,
+    };
+    with_gpu(|gpu| {
+        let r = &mut gpu.renderer;
+        let white = r.create_rgba_texture(1, 1, &[255; 4]);
+        let world = (r.create_world(&Default::default(), &[], &[], None)).map_err(error)?;
+        let blend = |key, argb| {
+            batch(
+                pass(ParticleProgram::Blended, ParticleBlend::Alpha, &white),
+                ParticleQueue::Strict,
+                key,
+                sprite(-0.25, 0.25, -0.25, 0.25, 0.5, argb),
+            )
+        };
+        let set = |x0, x1, argb| {
+            batch(
+                pass(ParticleProgram::Set, ParticleBlend::Off, &white),
+                ParticleQueue::Early,
+                1.0,
+                sprite(x0, x1, -0.25, 0.25, 0.5, argb),
+            )
+        };
+        let left = batch(
+            pass(ParticleProgram::Set, ParticleBlend::Off, &white),
+            ParticleQueue::Early,
+            1.0,
+            sprite(-2.0, 0.0, 0.0, 2.0, 0.5, 0xFFFF_FFFF),
+        );
+        let particles = match case {
+            // Nearer first in the queue; drawn farther (larger key) first.
+            "blend" => vec![blend(1.0, 0x8000_FF00), blend(2.0, 0x80FF_0000)],
+            "set" => {
+                let mut culled = blend(1.0, 0xFFFF_FFFF);
+                culled.cull = ParticleCull::Clockwise;
+                vec![
+                    set(-0.25, 0.0, 0xC7FF_FFFF),
+                    set(0.0, 0.25, 0xCAFF_FFFF),
+                    culled,
+                ]
+            }
+            "plain" => vec![left],
+            "distort" => {
+                let red = r.create_rgba_texture(1, 1, &[255, 127, 0, 255]);
+                let mut distort = pass(ParticleProgram::Distort, ParticleBlend::Alpha, &white);
+                distort.distort = Some(red);
+                vec![
+                    left,
+                    batch(
+                        distort,
+                        ParticleQueue::Distortion,
+                        1.0,
+                        sprite(-2.0, 2.0, -2.0, 2.0, 0.4, 0xFFFF_FFFF),
+                    ),
+                ]
+            }
+            other => return Err(error(format!("unknown case {other}"))),
+        };
+        // Looking along +z from the origin, near 0.1, far 100, square.
+        let (n, z) = (0.1, 100.0);
+        let mut identity = [[0.0; 4]; 4];
+        (0..4).for_each(|i| identity[i][i] = 1.0);
+        let mut projection = identity;
+        projection[2] = [0.0, 0.0, z / (z - n), 1.0];
+        projection[3] = [0.0, 0.0, -n * z / (z - n), 0.0];
+        gpu.list = DrawList {
+            world: Some(WorldFrame {
+                world,
+                view: identity,
+                projection,
+                eye: [0.0; 3],
+                forward: [0.0, 0.0, 1.0],
+                fov_y_degrees: 90.0,
+                light: WorldLight {
+                    ambient: [0.0; 3],
+                    hemi: [0.0; 3],
+                    sun_color: [0.0; 3],
+                    sun_dir: [0.0, -1.0, 0.0],
+                    fog_color: [0.0; 3],
+                    fog_near: 10.0,
+                    fog_far: 90.0,
+                },
+                time: 0.0,
+                sky: None,
+                clear: [0.0; 3],
+                particles,
+            }),
+            quads: Vec::new(),
+        };
+        gpu.video = None;
+        gpu.dirty = true;
+        Ok(json!({ "compat": gpu.renderer.compat() }))
+    })
+}

@@ -158,6 +158,35 @@ export const tests = {
     return `${info.width}×${info.height} at ${info.fps.toFixed(2)} fps`;
   },
 
+  // docs/behavior/particle-drawing.md 4.5 – 7 through this browser's
+  // backend (WebGL 2 in the iOS Simulator: no storage buffers, no base
+  // vertex): the scenes of the native render test.
+  "draws particle effects: back to front, the SET alpha test, culling, distortion": async () => {
+    needsGpu();
+    const draw = async (name, size) => {
+      const info = await volya.call("debug_draw_particles", { case: name });
+      const rgba = await capture(size, size);
+      return { compat: info.compat, at: (x, y) => Array.from(rgba.slice(4 * (y * size + x), 4 * (y * size + x) + 3)) };
+    };
+    const near = (got, want, what) => assert(got.every((v, i) => Math.abs(v - want[i]) <= 3), `${what}: ${got}, expected ${want}`);
+    const blend = await draw("blend", 64);
+    // Red at half over black, then green at half over that.
+    near(blend.at(32, 32), [64, 128, 0], "green over red");
+    const set = await draw("set", 64);
+    assertEqual(set.at(28, 32), [0, 0, 0], "alpha 199 is cut");
+    assertEqual(set.at(36, 32), [255, 255, 255], "alpha 202 passes");
+    // A white top left quarter: the scene composed the right way up.
+    const plain = await draw("plain", 256);
+    assertEqual([plain.at(124, 64), plain.at(124, 192)], [[255, 255, 255], [0, 0, 0]], "the top left quarter");
+    // The distortion texel's red of 1 reads the scene (1 − 0.5) · 0.05 of
+    // the width to the right: about 6 pixels.
+    const shifted = await draw("distort", 256);
+    assertEqual(shifted.at(124, 64), [0, 0, 0], "shifted");
+    assertEqual([shifted.at(112, 64), shifted.at(112, 192)], [[255, 255, 255], [0, 0, 0]], "still white, the right way up");
+    await volya.call("debug_draw", {});
+    return `${gpu.backend}${blend.compat ? ", compat path" : ""}`;
+  },
+
   "clears and forgets the game": async () => {
     if (gpu.state === "ready") await volya.call("debug_draw", {});
     if (installer) await volya.call("forget_game");
