@@ -57,9 +57,38 @@ function failedResources() {
     .map((r) => `HTTP ${r.responseStatus}: ${r.name}`);
 }
 
+/**
+ * Silent on the machine running the tests: whatever connects to a live
+ * AudioContext's speakers goes through a gain of 0 first. The iOS Simulator
+ * plays through one of the Mac's real output devices and has no setting for
+ * none (measured: CoreSimulator falls back to the default device for any
+ * other route). Suites measure audio before it (the AudioWorklet's output,
+ * `OfflineAudioContext`, which this leaves alone, and engine state); the
+ * context's state is unaffected.
+ */
+function muteSpeakers() {
+  const connect = AudioNode.prototype.connect;
+  const mutes = new WeakMap();
+  AudioNode.prototype.connect = function (target, ...rest) {
+    const context = target?.context;
+    if (!(target instanceof AudioDestinationNode && context instanceof AudioContext)) {
+      return connect.call(this, target, ...rest);
+    }
+    let mute = mutes.get(context);
+    if (!mute) {
+      mute = new GainNode(context, { gain: 0 });
+      connect.call(mute, target);
+      mutes.set(context, mute);
+    }
+    connect.call(this, mute, ...rest);
+    return target;
+  };
+}
+
 /** Runs `suite` against the app. Entry point of every suite page. */
 export async function runPage(suite) {
   captureErrors();
+  muteSpeakers();
   // Each run tests the build being served: a service worker left by an
   // earlier run would serve its own build's copies (sw.js is cache-first, and
   // a new build waits until asked). Drop it and its copies, then start over.
