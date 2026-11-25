@@ -28,6 +28,7 @@ use crate::core::camera::{self, Angles, Mat4, Vec3};
 use crate::core::character::condition::Activity;
 use crate::core::character::inventory::Place;
 use crate::core::character::{self, CharacterState, SpecificCharacter};
+use crate::core::climbing::Ladder;
 use crate::core::clock::GameClock;
 use crate::core::collision::{CollisionWorld, geometry};
 use crate::core::config;
@@ -596,6 +597,8 @@ pub struct PlayerReport {
     pub jump: bool,
     pub falling: bool,
     pub landing: bool,
+    /// On a ladder (docs/behavior/climbing.md 3.6).
+    pub climbing: bool,
     /// The toggles the touch controls show.
     pub crouch_toggled: bool,
     pub sprint_requested: bool,
@@ -1441,6 +1444,13 @@ impl NewGameLoad {
                 self.sound = Some(sound);
                 self.weather = Some(weather);
                 let level_objects = std::mem::take(&mut self.level_objects);
+                // docs/behavior/climbing.md 1.1 – 1.3: every ladder of the
+                // level is present from the first frame, its box in the
+                // collision world.
+                let ladders = (level_objects.iter())
+                    .filter_map(|o| Ladder::from_record(&o.record))
+                    .collect();
+                earlier(self.collision.as_mut(), "level.cform")?.set_ladders(ladders)?;
                 self.spawned = Some(objects::spawn(tree, data, &dir, &level_objects)?);
                 // The lamps' colour animations (docs/formats/lanims-xr.md),
                 // read here with the lamps (our choice: when the game reads
@@ -1901,6 +1911,9 @@ impl LevelScreen {
         if let Some(c) = &mut self.character {
             self.player.limits = c.movement_limits();
         }
+        // The climbing states' clock is the footsteps' step clock
+        // (climbing.md, conventions): the global clock.
+        self.player.set_step_clock(self.global_ms as u32);
         self.player.frame(&self.collision, now, &request);
         if let Some(c) = &mut self.character {
             if self.player.jump_started() {
@@ -2498,6 +2511,7 @@ impl LevelScreen {
             jump,
             falling,
             landing,
+            climbing,
             ..
         } = p.flags;
         let angles = self.player.angles();
@@ -2528,6 +2542,7 @@ impl LevelScreen {
                 jump,
                 falling,
                 landing,
+                climbing,
                 crouch_toggled: p.crouch_toggled,
                 sprint_requested: p.sprint_requested,
                 sprint_locked: self.controls.sprint_lock.locked(),
@@ -2624,6 +2639,7 @@ impl LevelScreen {
             run_back_coef: 1.8,
             walk_back_coef: 0.8,
             crouch_coef: 0.45,
+            climb_coef: 0.7,
             sprint_koef: 2.6,
             walk_strafe_coef: 1.0,
             run_strafe_coef: 1.0,

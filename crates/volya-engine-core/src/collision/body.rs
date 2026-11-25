@@ -80,6 +80,16 @@ pub const POSTURE_PENETRATION: f32 = 0.01;
 /// The material assigned to the player's shapes: index 0, `default`
 /// (section 5.1).
 pub const PLAYER_MATERIAL: usize = 0;
+/// A contact with ladder `i`'s triangle `k` records triangle
+/// `LADDER_TRIANGLES + 12·i + k` (our numbering, apart from the level's).
+pub const LADDER_TRIANGLES: u32 = 0x8000_0000;
+/// The world's error-reduction parameter `E` and constraint-force mixing
+/// `C` at the step `h` (section 4.2): `K·h / (K·h + D₀)` and
+/// `1 / (K·h + D₀)`.
+pub fn world_erp_cfm() -> (f32, f32) {
+    let k = WORLD_SPRING * STEP;
+    (k / (k + WORLD_DAMPING), 1.0 / (k + WORLD_DAMPING))
+}
 
 const UP: Vec3 = [0.0, 1.0, 0.0];
 
@@ -250,6 +260,9 @@ pub struct PlayerBody {
     ground_material: Option<u32>,
     /// The last refused posture change: target box, time, centre.
     refused: Option<(usize, u64, Vec3)>,
+    /// The player is climbing (docs/behavior/climbing.md 3.1, 3.4): not
+    /// airborne, and its contacts while moving take the world's softness.
+    climbing: bool,
     contacts: Vec<Contact>,
     step: StepContacts,
     scratch: Vec<u32>,
@@ -286,6 +299,7 @@ impl PlayerBody {
             jump_in_progress: false,
             ground_material: None,
             refused: None,
+            climbing: false,
             contacts: Vec::new(),
             step: StepContacts::default(),
             scratch: Vec::new(),
@@ -335,6 +349,11 @@ impl PlayerBody {
 
     pub fn airborne(&self) -> bool {
         self.airborne
+    }
+
+    /// Sets whether the player is climbing (climbing.md 3.1, 3.4).
+    pub fn set_climbing(&mut self, climbing: bool) {
+        self.climbing = climbing;
     }
 
     /// The material most recently touched, a pass-through one taking
@@ -441,6 +460,17 @@ impl PlayerBody {
         if jump_applied {
             self.airborne = true;
             self.jump_in_progress = true;
+        } else if self.climbing {
+            // climbing.md 3.1: the airborne state ends on the first
+            // climbing step and is not entered while climbing; a climbing
+            // contact ends the jump too (player-movement.md 6.6, our
+            // reading of its jump assistance). The departure point of 6.4
+            // follows the body, so leaving the ladder counts from where it
+            // is let go (our choice).
+            landed = self.airborne;
+            self.airborne = false;
+            self.jump_in_progress = false;
+            self.departure = Some(self.centre);
         } else {
             if self.step.walkable {
                 self.jump_in_progress = false;
@@ -641,19 +671,32 @@ impl PlayerBody {
         let c = self.centre;
         let p = self.previous;
         let margin = shapes.r + 0.05;
-        world.query(
-            [
-                c[0].min(p[0]) - margin,
-                c[1].min(p[1]) - margin,
-                c[2].min(p[2]) - margin,
-            ],
-            [
-                c[0].max(p[0]) + margin,
-                c[1].max(p[1]) + shapes.top() + 0.05,
-                c[2].max(p[2]) + margin,
-            ],
-            found,
-        );
+        let min = [
+            c[0].min(p[0]) - margin,
+            c[1].min(p[1]) - margin,
+            c[2].min(p[2]) - margin,
+        ];
+        let max = [
+            c[0].max(p[0]) + margin,
+            c[1].max(p[1]) + shapes.top() + 0.05,
+            c[2].max(p[2]) + margin,
+        ];
+        world.query(min, max, found);
+        // climbing.md 1.3: a ladder's box keeps its contacts with the player
+        // only while the body is in front of it by front(−0.1); its faces
+        // follow the level's triangles here, by ladder and triangle.
+        let ladders: Vec<usize> = (world.ladders().iter().enumerate())
+            .filter(|(_, l)| {
+                (0..3).all(|k| l.min[k] <= max[k] && l.max[k] >= min[k])
+                    && l.front(c, shapes.r, -0.1)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        let ladder_triangles = ladders.iter().flat_map(|&i| {
+            let base = LADDER_TRIANGLES + 12 * i as u32;
+            (world.ladders()[i].triangles.iter().enumerate())
+                .map(move |(k, t)| (base + k as u32, *t))
+        });
         let mut result = Collided {
             traction: 0.0,
             blocked: rules.blocked,
@@ -670,9 +713,11 @@ impl PlayerBody {
         let torso = [0.0, torso_at, 0.0];
         let (mut solid, mut passing) = (None, None);
         let mut head_seen = false;
+        let (world_erp, world_cfm) = world_erp_cfm();
         for shape in [Shape::Head, Shape::Bottom, Shape::Torso] {
-            for &t in found.iter() {
-                let corners = world.corners(t);
+            let level = found.iter().map(|&t| (t, world.corners(t)));
+            for (t, corners) in level.chain(ladder_triangles.clone()) {
+                let ladder = t >= LADDER_TRIANGLES;
                 let raw = match shape {
                     Shape::Head => geometry::sphere(add(c, head), small, add(p, head), &corners),
                     Shape::Bottom => geometry::sphere(c, shapes.r, p, &corners),
@@ -693,12 +738,22 @@ impl PlayerBody {
                     continue;
                 };
                 let generated_normal = normal;
-                let material = world.material_index(t);
+                let material = if ladder {
+                    world.ladder_material()
+                } else {
+                    world.material_index(t)
+                };
                 let m = &world.materials()[material as usize];
                 let pass = m.has(PASS_THROUGH);
                 // 4.4: impact speed and the material touched, over the
                 // contacts kept (a dropped one is no contact; our reading).
                 let mut touch = |normal: Vec3| {
+                    // TODO(#391): whether a ladder's contacts give the impact
+                    // speed or set the ground material is unestablished
+                    // (climbing.md 3.7, 4); here they do neither.
+                    if ladder {
+                        return;
+                    }
                     let v = self.velocity;
                     let speed = if pass {
                         length(v)
@@ -746,6 +801,12 @@ impl PlayerBody {
                 let d = player.damping * m.damping * WORLD_DAMPING;
                 let mut erp = k / (k + d);
                 let mut cfm = 1.0 / (k + d);
+                // climbing.md 3.4: climbing and moving, the world's error
+                // reduction and twice its constraint-force mixing (friction
+                // is zero while moving anyway).
+                if self.climbing && rules.moving {
+                    (erp, cfm) = (world_erp, 2.0 * world_cfm);
+                }
                 let soften = |erp: &mut f32, cfm: &mut f32, q: f32| {
                     let f = 1.0 / ((1.0 - *erp) * q + *erp * 0.5);
                     *cfm *= f;

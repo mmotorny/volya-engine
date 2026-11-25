@@ -25,6 +25,7 @@ use volya_engine_formats::gamemtl::{DYNAMIC, PASS_THROUGH, TRIANGLE_BIT_14, TRIA
 use volya_engine_formats::level_cform::{BIT_14, BIT_15, MATERIAL_MASK};
 
 use self::geometry::Vec3;
+use crate::climbing::{LADDER_MATERIAL, Ladder};
 
 /// The large arrays of the collision world dropped last, kept for the
 /// next one (#357). In the wasm heap, which never shrinks, a level's
@@ -233,6 +234,10 @@ pub struct CollisionWorld {
     material_of: Vec<u8>,
     materials: Vec<GameMaterial>,
     grid: Grid,
+    /// The level's ladders (docs/behavior/climbing.md 1.2) and the index of
+    /// their material.
+    ladders: Vec<Ladder>,
+    ladder_material: u32,
 }
 
 impl Drop for CollisionWorld {
@@ -325,7 +330,35 @@ impl CollisionWorld {
             material_of,
             materials,
             grid,
+            ladders: Vec::new(),
+            ladder_material: 0,
         })
+    }
+
+    /// Gives the world the level's ladders (climbing.md 1.2): their boxes
+    /// collide with the player (1.3). Their material,
+    /// `materials\fake_ladders`, must be in the library (our choice: an
+    /// error otherwise, as the game's data has it).
+    pub fn set_ladders(&mut self, ladders: Vec<Ladder>) -> io::Result<()> {
+        if !ladders.is_empty() {
+            let index = self
+                .materials
+                .iter()
+                .position(|m| m.name.eq_ignore_ascii_case(LADDER_MATERIAL))
+                .ok_or_else(|| invalid(format!("no material {LADDER_MATERIAL}")))?;
+            self.ladder_material = index as u32;
+        }
+        self.ladders = ladders;
+        Ok(())
+    }
+
+    pub fn ladders(&self) -> &[Ladder] {
+        &self.ladders
+    }
+
+    /// The ladders' material index (climbing.md 1.2).
+    pub fn ladder_material(&self) -> u32 {
+        self.ladder_material
     }
 
     pub fn vertices(&self) -> &[Vec3] {
@@ -517,7 +550,8 @@ pub(crate) mod test_world {
     use super::*;
 
     /// Material ids of the test library: 0 `default` (index 0), 1 a solid
-    /// floor, 2 pass-through, 3 pass-through actor obstacle, 4 dynamic.
+    /// floor, 2 pass-through, 3 pass-through actor obstacle, 4 dynamic, 5
+    /// the ladders' (index 5).
     pub fn materials() -> Vec<GameMaterial> {
         let m = |id, name: &str, flags| GameMaterial {
             id,
@@ -535,6 +569,7 @@ pub(crate) mod test_world {
             ),
             m(3, "materials\\fake", PASS_THROUGH | 0x1000),
             m(4, "objects\\box", DYNAMIC),
+            m(5, "materials\\fake_ladders", 0xC20),
         ]
     }
 
@@ -609,6 +644,7 @@ mod tests {
     #[test]
     fn maps_ids_to_indices_and_flag_bits() {
         let mut lib = materials();
+        lib.truncate(5);
         // Ids need not follow indices: move `default` to the end.
         lib.rotate_left(1);
         let mut t = [
