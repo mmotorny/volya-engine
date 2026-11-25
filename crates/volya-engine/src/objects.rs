@@ -510,12 +510,10 @@ pub fn lamp_lights(
         direction: row(&main_m, 2),
         right: row(&main_m, 0),
     };
-    let bone = if lamp.ambient_light_bone.is_empty() {
-        &lamp.light_bone
-    } else {
-        &lamp.ambient_light_bone
-    };
-    let ambient_m = place(bone);
+    // hanging-lamps.md 3.4, 4.2, 10: an empty ambient bone is no bone, so
+    // the ambient light is placed at X (every record is of version 118;
+    // the light bone stands in only in older records).
+    let ambient_m = place(&lamp.ambient_light_bone);
     let ambient = (flags & LAMP_AMBIENT != 0).then(|| {
         let m = ambient_m;
         Light {
@@ -881,7 +879,15 @@ mod tests {
         let ambient = l.ambient.expect("bit 0x20");
         assert_eq!((ambient.kind, ambient.range), (LightKind::Point, 3.0));
         assert_eq!(ambient.colour, l.main.colour.map(|c| c * 0.5));
+        // An empty ambient bone is no bone: at X (hanging-lamps.md 4.2).
+        assert_eq!(ambient.position, [1.0, 2.0, 3.0]);
         assert_eq!(l.glow.unwrap().position, [1.0, 2.5, 3.0]);
+        let at_bone = HangingLamp {
+            ambient_light_bone: "bone_lamp".into(),
+            ..lamp.clone()
+        };
+        let l = lamp_lights(("tv", 7, true), &at_bone, &x, Some(&model));
+        assert_eq!(l.ambient.unwrap().position, [1.0, 2.5, 3.0]);
         // Without the bone, at X.
         let l = lamp_lights(("tv", 7, true), &lamp, &x, None);
         assert_eq!(l.main.position, [1.0, 2.0, 3.0]);

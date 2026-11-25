@@ -458,7 +458,7 @@ impl LevelLights {
             |from, dir, length| {
                 let mut hit = None;
                 collision.ray_any(from, dir, length, |t| {
-                    let found = geometry::segment_hits_triangle(from, dir, length, t);
+                    let found = crate::core::glows::ray_meets(from, dir, length, t);
                     if found {
                         hit = Some(*t);
                     }

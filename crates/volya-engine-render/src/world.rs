@@ -2339,17 +2339,21 @@ impl Renderer {
         p.light_room(&self.device, frame.lights.len() as u64);
         let inner = &frame.world.0;
         let spheres = inner.spheres.borrow();
+        // The lit draws the camera's frustum meets, once for every pass.
         let camera = frustum_planes(camera);
+        let seen: Vec<u32> = (inner.lit.iter().enumerate())
+            .filter(|(_, d)| {
+                let s = spheres[d.kept as usize];
+                s[3] > 0.0 && meets(&camera, s)
+            })
+            .map(|(j, _)| j as u32)
+            .collect();
         let mut constants = vec![0u8; frame.lights.len() * LIGHT_SLOT as usize];
         let mut out = Vec::new();
         for (i, l) in frame.lights.iter().enumerate() {
             let planes = frustum_planes(&l.frustum);
-            let draws: Vec<u32> = (inner.lit.iter().enumerate())
-                .filter(|(_, d)| {
-                    let s = spheres[d.kept as usize];
-                    s[3] > 0.0 && meets(&planes, s) && meets(&camera, s)
-                })
-                .map(|(j, _)| j as u32)
+            let draws: Vec<u32> = (seen.iter().copied())
+                .filter(|&j| meets(&planes, spheres[inner.lit[j as usize].kept as usize]))
                 .collect();
             if draws.is_empty() {
                 continue;
