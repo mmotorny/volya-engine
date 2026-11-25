@@ -130,16 +130,16 @@ html[data-engine-input] canvas#view {
   }
 }
 
-/* Over the game, our design after mobile shooters (Rainbow Six Mobile):
-   translucent grey bases without outlines and white line glyphs, readable
-   over any scene; the blueprint's light blue is the accent of what is
-   active or on. */
+/* Over the game, instruments in the style of its HUD (design A of #105;
+   the art is touch-art.js): gunmetal discs with thin rims at the weight of
+   the minimap's ring, teal glyphs. The colours come from the game when it
+   is imported (touch-controls.js sets them): teal, the HUD's posture
+   icons'; grey, the crosshair's. These are the approximations'. */
 #touch-controls {
-  --touch-base: rgba(150, 160, 176, 0.3);
-  --touch-base-down: rgba(196, 206, 222, 0.48);
-  --touch-glyph: #fff;
-  --touch-accent: #8fc4ff;
-  --touch-shadow: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.45));
+  --hud-teal: 36, 178, 162;
+  --hud-teal-hi: 112, 205, 195;
+  --hud-grey: 178, 178, 178;
+  --hud-rim: 1.5px;
 }
 
 .touch-move,
@@ -159,48 +159,59 @@ html[data-engine-input] canvas#view {
   right: 0;
 }
 
-/* The move stick: a faint disc resting at the bottom left; held, a thin
-   accent ring centred under the thumb. Its radius (56 px) is the full
-   deflection; beyond it the sprint chevrons and the sprint lock target,
-   placed by touch-controls.js (2.1 radii up, controls.rs LOCK_REACH, or
-   closer or turned where that won't fit). */
+/* The art's canvases, centred in their element at their own CSS size
+   (touch-controls.js sizes them). */
+#touch-controls canvas {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+/* The move stick: a gunmetal disc resting at the bottom left; held, centred
+   under the thumb. Its radius (56 px) is the full deflection; beyond it the
+   sprint chevrons and the sprint lock target, placed by touch-controls.js
+   (2.1 radii up, controls.rs LOCK_REACH, or closer or turned where that
+   won't fit). Past the rim and locked the segmented ring shows. */
 .touch-stick {
   position: absolute;
   left: calc(var(--safe-left) + var(--edge) + 64px);
   top: calc(100% - var(--safe-bottom) - var(--edge) - 64px);
-  box-sizing: border-box;
   width: 112px;
   height: 112px;
   margin: -56px 0 0 -56px;
   border-radius: 50%;
-  border: 2px solid transparent;
-  background: var(--touch-base);
   pointer-events: none;
   transition: opacity 0.6s;
 }
 
-.touch-stick.held,
-.touch-stick.locked {
-  background: rgba(10, 24, 48, 0.12);
-  border-color: var(--touch-accent);
-}
-
 .touch-rim {
   position: absolute;
-  inset: -2px;
-  width: 112px;
-  height: 112px;
-  fill: none;
-  stroke: var(--touch-glyph);
-  stroke-width: 2.5;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  opacity: 0.55;
+  inset: 0;
+  border-radius: 50%;
+  border: var(--hud-rim) solid rgba(var(--hud-grey), 0.7);
 }
 
 .touch-stick.held .touch-rim {
-  stroke: var(--touch-accent);
-  opacity: 0.9;
+  border-color: rgb(var(--hud-teal-hi));
+}
+
+.touch-stick:is(.past, .locked) .touch-rim {
+  border-color: transparent;
+}
+
+.touch-stick.held > .touch-disc {
+  opacity: 0.75;
+}
+
+.touch-segments {
+  visibility: hidden;
+  opacity: 0.8;
+}
+
+.touch-stick:is(.past, .locked) .touch-segments {
+  visibility: visible;
 }
 
 .touch-knob {
@@ -211,23 +222,36 @@ html[data-engine-input] canvas#view {
   width: 48px;
   height: 48px;
   margin: -24px 0 0 -24px;
-  border-radius: 50%;
-  border: 1.5px solid rgba(255, 255, 255, 0.85);
-  background: rgba(16, 26, 42, 0.5);
 }
 
-.touch-stick.held .touch-knob {
-  background: rgba(16, 26, 42, 0.62);
+.touch-knob::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: var(--hud-rim) solid rgba(var(--hud-grey), 0.85);
+}
+
+.touch-stick.held .touch-knob::after {
+  border-color: rgb(var(--hud-teal-hi));
 }
 
 /* Past the rim the knob goes translucent: the chevrons and the target it
-   moves over stay readable. */
-.touch-stick.past .touch-knob {
-  background: rgba(16, 26, 42, 0.2);
+   moves over stay readable; on the target and locked only its rim shows. */
+.touch-stick.past .touch-knob .touch-disc {
+  opacity: 0.35;
+}
+
+.touch-stick:is(.on-target, .locked) .touch-knob::after {
+  border-color: #fff;
+}
+
+.touch-stick:is(.on-target, .locked) .touch-knob .touch-disc {
+  visibility: hidden;
 }
 
 /* Sprint ahead and the lock target: shown while the stick is held, bright
-   past the rim, filled with the knob on it and once locked. */
+   past the rim, filled teal with the knob on it and once locked. */
 .touch-sprint-hint,
 .touch-lock {
   position: absolute;
@@ -242,21 +266,23 @@ html[data-engine-input] canvas#view {
   width: 22px;
   height: 22px;
   fill: none;
-  stroke: var(--touch-glyph);
-  stroke-width: 2.5;
+  stroke: rgb(var(--hud-grey));
+  stroke-width: 1.5;
   stroke-linecap: round;
   stroke-linejoin: round;
-  filter: var(--touch-shadow);
 }
 
 .touch-lock {
   box-sizing: border-box;
   width: 44px;
   height: 44px;
-
+  padding: 3px;
   border-radius: 50%;
-  border: 2px solid var(--touch-glyph);
-  background: rgba(10, 24, 48, 0.18);
+  background: rgba(10, 12, 16, 0.3) content-box;
+}
+
+.touch-figure.lit {
+  visibility: hidden;
 }
 
 .touch-stick:is(.held, .locked) :is(.touch-sprint-hint, .touch-lock) {
@@ -265,27 +291,28 @@ html[data-engine-input] canvas#view {
 
 .touch-stick:is(.past, .locked) .touch-sprint-hint {
   opacity: 1;
-  stroke: var(--touch-accent);
+  stroke: rgb(var(--hud-teal-hi));
 }
 
-.touch-stick.past .touch-lock {
+.touch-stick:is(.past, .locked) .touch-lock {
   opacity: 1;
-  border-color: var(--touch-accent);
   transform: scale(1.15);
 }
 
 .touch-stick:is(.on-target, .locked) .touch-lock {
-  opacity: 1;
-  border-color: var(--touch-accent);
-  background: var(--touch-accent);
-  transform: scale(1.15);
+  background-color: rgba(var(--hud-teal), 0.45);
 }
 
-.touch-stick:is(.on-target, .locked) .touch-knob {
-  border-color: #fff;
-  background: transparent;
+.touch-stick:is(.on-target, .locked) .touch-figure {
+  visibility: hidden;
 }
 
+.touch-stick:is(.on-target, .locked) .touch-figure.lit {
+  visibility: visible;
+}
+
+/* Buttons: the disc, then the glyph, then the rim (grey; white held; bright
+   teal over a faint teal fill when on). */
 #touch-controls button.touch-button {
   position: absolute;
   box-sizing: border-box;
@@ -295,87 +322,92 @@ html[data-engine-input] canvas#view {
   padding: 0;
   border: none;
   border-radius: 50%;
-  background: var(--touch-base);
-  color: var(--touch-glyph);
-  -webkit-backdrop-filter: blur(6px);
-  backdrop-filter: blur(6px);
+  background: none;
+  color: rgb(var(--hud-grey));
+  isolation: isolate;
   transition: opacity 0.6s;
   transform: none;
 }
 
+#touch-controls button.touch-button::before,
+#touch-controls button.touch-button::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+#touch-controls button.touch-button::before {
+  z-index: 1;
+}
+
+#touch-controls button.touch-button::after {
+  z-index: 3;
+  border: var(--hud-rim) solid rgba(var(--hud-grey), 0.7);
+}
+
+#touch-controls button.touch-button .touch-glyph {
+  z-index: 2;
+}
+
 #touch-controls button.touch-button:focus-visible {
-  outline: 2px solid var(--touch-accent);
+  outline: 2px solid rgb(var(--hud-teal-hi));
   outline-offset: 3px;
 }
 
 #touch-controls button.touch-button.down {
-  background: var(--touch-base-down);
   transform: scale(0.92);
 }
 
-.touch-glyph {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 56%;
-  height: 56%;
-  transform: translate(-50%, -50%);
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  filter: var(--touch-shadow);
+#touch-controls button.touch-button.down::after {
+  border-color: #fff;
 }
 
-/* The gestures a button takes, as chevrons at its edges. */
+#touch-controls button.touch-button.crouch[aria-pressed="true"]::before {
+  background: rgba(var(--hud-teal), 0.16);
+}
+
+#touch-controls button.touch-button.crouch[aria-pressed="true"]::after {
+  border-color: rgb(var(--hud-teal-hi));
+}
+
+#touch-controls button.touch-button.crouch[aria-pressed="true"].down::after {
+  border-color: #fff;
+}
+
+/* Crouch: the crouch icon; brighter when on; the creep icon in the low
+   crouch. */
+button.touch-button.crouch .touch-glyph:is(.on, .low),
+button.touch-button.crouch[aria-pressed="true"] .touch-glyph,
+button.touch-button.crouch.low .touch-glyph.on {
+  visibility: hidden;
+}
+
+button.touch-button.crouch[aria-pressed="true"]:not(.low) .touch-glyph.on,
+button.touch-button.crouch.low .touch-glyph.low {
+  visibility: visible;
+}
+
+/* The gestures a button takes, as chevrons at its edges while it is held
+   (our design: no permanent arrows). */
 .touch-edges {
   position: absolute;
+  z-index: 3;
   inset: 0;
   width: 100%;
   height: 100%;
   fill: none;
   stroke: currentColor;
-  stroke-width: 4;
+  stroke-width: 2.5;
   stroke-linecap: round;
   stroke-linejoin: round;
-  opacity: 0.45;
-}
-
-/* Crouch on: the accent base, navy line work. The low crouch: the lower
-   figure and the down chevron lit. */
-#touch-controls button.touch-button.crouch[aria-pressed="true"] {
-  background: var(--touch-accent);
-  color: var(--navy-3);
-}
-
-#touch-controls button.touch-button.crouch[aria-pressed="true"] .touch-glyph {
-  filter: none;
-}
-
-.touch-glyph.low,
-button.touch-button.crouch.low .touch-glyph {
-  display: none;
-}
-
-button.touch-button.crouch.low .touch-glyph.low {
-  display: block;
-}
-
-button.touch-button.crouch.low .touch-edges .down {
-  stroke-width: 6;
-}
-
-button.touch-button.crouch[aria-pressed="true"] .touch-edges {
   opacity: 0.6;
+  visibility: hidden;
 }
 
-button.touch-button.crouch.low .touch-edges {
-  opacity: 1;
-}
-
-button.touch-button.crouch.low .touch-edges :is(.left, .right) {
-  opacity: 0.6;
+button.touch-button.down .touch-edges {
+  visibility: visible;
 }
 
 #touch-controls button.touch-button.menu {
@@ -383,11 +415,6 @@ button.touch-button.crouch.low .touch-edges :is(.left, .right) {
   top: calc(var(--safe-top) + var(--edge));
   width: 44px;
   height: 44px;
-}
-
-#touch-controls button.touch-button.menu .touch-glyph {
-  width: 50%;
-  height: 50%;
 }
 
 /* Jump, the primary, at the corner; Crouch to its left. */

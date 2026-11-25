@@ -111,7 +111,7 @@ const send = (event) => worker.postMessage({ type: "input", event });
 const entry = createTextEntry(send);
 const forward = startInput(view, send, { onClick: () => entry.click() });
 setCursor = (shown) => forward.setCursor(shown);
-const touch = createTouchControls(send);
+const touch = createTouchControls(send, { call });
 document.body.append(touch.element);
 // Full screen with Keyboard Lock, offered in the level (#85).
 const offer = createFullscreenOffer(() => call("bound_keys"));

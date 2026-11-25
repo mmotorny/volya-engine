@@ -70,9 +70,11 @@ export const SECTIONS = [
   },
   // In the level, over a plain backdrop (the board can't show the game's
   // own frames): on desktop the full screen offer, on touch devices the
-  // touch controls.
+  // touch controls (approximations of the game's textures: the board has no
+  // game data).
   {
     title: "In the level",
+    note: "Touch controls: approximations; the app draws them from the imported game's textures.",
     states: [
       { id: "level-fullscreen-offer", name: "Full screen offered (desktop Chrome)", level: { offer: true }, devices: ["desktop"] },
       { id: "level-touch", name: "Idle", level: {}, devices: TOUCH },
@@ -105,6 +107,7 @@ export const SECTIONS = [
       },
       { id: "level-touch-locked", name: "Sprint locked", level: { lock: true, sprint: true }, devices: TOUCH },
       { id: "level-touch-crouched", name: "Crouched", level: { crouch: true }, devices: TOUCH },
+      { id: "level-touch-crouch-held", name: "Crouched, Crouch held", level: { down: "crouch", crouch: true }, devices: TOUCH },
       {
         id: "level-touch-low",
         name: "Crouch swiped down: low crouch",

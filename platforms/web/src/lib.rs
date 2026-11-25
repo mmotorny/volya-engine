@@ -61,7 +61,7 @@ thread_local! {
 }
 
 /// `performance.now()` of the worker, milliseconds.
-fn now() -> f64 {
+pub(crate) fn now() -> f64 {
     js_sys::global()
         .dyn_into::<WorkerGlobalScope>()
         .ok()
@@ -240,6 +240,7 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         }
         "input_state" => to_json(&input::state()),
         "level_stats" => to_json(&level_stats()),
+        "ui_images" => to_json(&engine::ui_images(&args)?),
         "launch" => to_json(&engine::launch().await?),
         "menu_state" => to_json(&engine::state()),
         "bound_keys" => to_json(&engine::bound_keys()),
