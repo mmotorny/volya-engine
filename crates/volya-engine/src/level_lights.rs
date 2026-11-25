@@ -379,6 +379,11 @@ impl LevelLights {
         Ok(s)
     }
 
+    /// The colour animations of `lanims.xr`.
+    pub fn animations(&self) -> &ColourAnimations {
+        &self.animations
+    }
+
     /// The object `id` came online: a lamp starts from its record (hanging-
     /// lamps.md 3, 8).
     pub fn object_online(&mut self, id: u16) {
@@ -480,11 +485,6 @@ impl LevelLights {
             |p| Self::has_sector(collision, portals, p),
             |from, dir, length| static_ray(collision, from, dir, length),
         );
-    }
-
-    /// The colour animations (`lanims.xr`).
-    pub fn animations(&self) -> &ColourAnimations {
-        &self.animations
     }
 
     /// The colour animations, the records and the glows, for a source

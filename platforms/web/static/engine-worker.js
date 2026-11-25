@@ -2,19 +2,28 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // The engine thread (docs/architecture.md). Messages from the page:
-//   { type: "start", canvas, size, graphics, diagnostics }
-//     → { type: "started", available, backend } | { type: "error", message }
+//   { type: "start", canvas, size, graphics, diagnostics, previousEnd }
+//     → { type: "started", available, backend, diagnostics } | { type: "error", message }
 //   (`graphics`: the stored Graphics choice or null; `available`: what the
 //   browser supports, `backend`: the one chosen, graphics.js; `diagnostics`:
 //   the session as diagnostics.js tells it when the player keeps a
-//   diagnostic log, else null)
+//   diagnostic log, else null, and in the reply the log's status;
+//   `previousEnd`: how an earlier session's page ended, kept by
+//   diagnostics.js)
 //   { type: "diag", kind, name, … }: the page's events for the diagnostic
 //   log (diagnostics.js), dropped while it is off.
+//   { type: "end", reason, message }: how the page ended (an uncaught
+//   error, closed), recorded as `engine.end` and stored at once.
 //   { type: "resize", width, height, dpr }: the canvas's CSS size and the
 //   page's devicePixelRatio (`size` in "start" has the same fields).
 //   { type: "call", id, op, args }  → { type: "result", id, result } | { type: "result", id, error }
-//   { type: "audio", port, sampleRate } connects the page's AudioWorklet; it
-//   then asks this worker for mixed blocks directly over `port`.
+//   { type: "audio", memory, port, sampleRate } connects a new output:
+//   `memory` is its shared memory (audio-ring.js), `port` goes to the audio
+//   worker (audio-worker.js), which mixes for the AudioWorklet. After every
+//   frame, call and visibility change this worker writes the mixer's
+//   commands to the ring of commands and posts the files they play to
+//   `port`; it takes the audio worker's reports from it. `worklet` is the
+//   AudioWorklet's port, which reports its errors.
 //   { type: "input", event }: one input event (format in src/input.rs).
 //   { type: "visibility", hidden }: the page was hidden or shown again; the
 //   engine stops while hidden (our design, #93).
@@ -46,6 +55,26 @@ const e = () => {
 };
 
 const message = (error) => String(error?.message ?? error);
+
+/**
+ * Records how the engine ended in the diagnostic log (`engine.end`, stored
+ * at once; nothing while it is off), on thread `tid` (1: this worker, 2:
+ * the page, 3: the audio worklet).
+ */
+function ended(reason, text, tid = 1) {
+  try {
+    engine?.diagnostics_end(reason, String(text), tid);
+  } catch {
+    // The engine can't record any more.
+  }
+}
+// Uncaught errors here end the engine as far as anyone knows.
+addEventListener("error", (event) =>
+  ended("worker_error", `${event.message} (${event.filename}:${event.lineno}:${event.colno})`),
+);
+addEventListener("unhandledrejection", (event) =>
+  ended("worker_error", `unhandled rejection: ${event.reason?.stack ?? message(event.reason)}`),
+);
 
 const nextFrame = self.requestAnimationFrame
   ? (callback) => self.requestAnimationFrame(callback)
@@ -103,36 +132,41 @@ function schedule() {
   nextFrame(loop);
 }
 
+let started;
+/** The port to the audio worker, once an output is connected. */
+let audioPort = null;
+/** Sends the audio worker the mixer's commands since the last time, and the files they play. */
+function flushAudio() {
+  if (!audioPort || !engine) return;
+  const files = engine.audio_flush();
+  if (files) for (const file of files) audioPort.postMessage(file, [file[1].buffer]);
+}
+
 function loop(time) {
   scheduled = false;
   // Hidden after this frame was asked for: idle until shown.
   if (hidden) return;
   try {
     e().frame(time);
+    flushAudio();
     syncCapture();
   } catch (error) {
     // A broken engine stops drawing; calls report their own errors.
     console.error(`frame: ${message(error)}`);
     broken = true;
-    try {
-      e().diagnostics_event("engine stopped", 1, JSON.stringify({ error: message(error) }));
-    } catch {
-      // The engine can't record any more.
-    }
+    ended("engine_error", error?.stack ?? message(error));
     return;
   }
   schedule();
 }
 
-let started;
 /** Whether the diagnostic log is on (the `diagnostics_set` op's result). */
 let logging = false;
-/** The port of the AudioWorklet pulling mixed blocks, once connected. */
-let audioPort = null;
 
 onmessage = async ({ data }) => {
   if (data.type === "start") {
     let available, backend;
+    let diagnostics = null;
     started = (async () => {
       available = await supported();
       backend = choose(data.graphics, available);
@@ -140,14 +174,16 @@ onmessage = async ({ data }) => {
       engine = wasm;
       // The player's setting, before anything else runs (#346).
       if (data.diagnostics) {
-        logging = JSON.parse(await engine.call("diagnostics_set", JSON.stringify({ on: true, session: data.diagnostics }))).on;
+        const args = { on: true, session: data.diagnostics, previous_end: data.previousEnd };
+        diagnostics = JSON.parse(await engine.call("diagnostics_set", JSON.stringify(args)));
+        logging = diagnostics.on;
       }
       await engine.start(data.canvas, backend === "webgl2");
       engine.resize(data.size.width, data.size.height, data.size.dpr);
     })();
     try {
       await started;
-      postMessage({ type: "started", available, backend });
+      postMessage({ type: "started", available, backend, diagnostics });
       schedule();
     } catch (error) {
       postMessage({ type: "error", message: message(error) });
@@ -156,29 +192,33 @@ onmessage = async ({ data }) => {
     await started;
     e().resize(data.width, data.height, data.dpr);
   } else if (data.type === "audio") {
-    e().audio_init(data.sampleRate);
-    // One output pulls from the mixer: a replaced one gets nothing more.
+    e().audio_init(data.sampleRate, data.memory);
+    // One output: a replaced one gets nothing more.
     audioPort?.close();
     audioPort = data.port;
-    const rate = data.sampleRate;
-    data.port.onmessage = ({ data: request }) => {
-      if (logging) {
-        const [min, sum, max, n] = request.fill;
-        e().diagnostics_audio(request.underrun, request.wait, n ? min : 0, sum, max, n, request.overrun, rate);
+    data.port.onmessage = ({ data: report }) => {
+      try {
+        e().audio_report(report);
+      } catch (error) {
+        console.warn(`audio: ${message(error)}`);
       }
-      const block = e().audio_mix(request.need, request.underrun, request.queued);
-      data.port.postMessage(block, [block.buffer]);
     };
+    // The worklet's processor failed (audio-worklet.js).
+    data.worklet.onmessage = ({ data: { error } }) => ended("worklet_error", error, 3);
+    flushAudio();
   } else if (data.type === "visibility") {
     await started;
     hidden = data.hidden;
     try {
       e().visibility(hidden);
+      flushAudio();
       syncCapture();
     } catch (error) {
       console.warn(`visibility: ${message(error)}`);
     }
     schedule();
+  } else if (data.type === "end") {
+    ended(data.reason, data.message, 2);
   } else if (data.type === "diag") {
     // The page's events for the diagnostic log (diagnostics.js).
     if (!logging) return;
@@ -203,6 +243,8 @@ onmessage = async ({ data }) => {
     } catch (error) {
       reply = { type: "result", id: data.id, error: message(error) };
     }
+    // Before the reply, so what the call played is on its way.
+    flushAudio();
     // Before the reply, so a caller turning capture on finds the page forwarding.
     try {
       syncCapture();

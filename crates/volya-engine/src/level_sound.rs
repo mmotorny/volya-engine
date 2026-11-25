@@ -24,17 +24,19 @@ use std::sync::Arc;
 
 use crate::core::config::{self, LEVEL, PathAliases};
 use crate::core::sound::Fatal;
-use crate::core::sound::ambient::{self, AmbientSet, AmbientState, SetData};
+use crate::core::sound::ambient::{self, AmbientParticles, AmbientSet, AmbientState, SetData};
 use crate::core::sound::music::{self, LevelMusic, TrackParams};
 use crate::core::sound::occlusion::{self, SoundOcclusionMesh};
 use crate::core::sound::rain_thunder::{
     self, BoltCommon, Collection, Rain, ThunderState, ThunderWeather,
 };
 use crate::core::sound::static_sources::{self, SourceRecord, StaticSources};
-use crate::core::sound::system::{SoundId, SoundSystem, Vec3};
+use crate::core::sound::system::{PlayFlags, SoundId, SoundSystem, Vec3};
 use crate::core::torch::NightVisionSection;
 use crate::core::vfs::{self, Vfs};
 use crate::core::weather::Weather;
+use crate::core::weather::wind::Wind;
+use crate::core::zones::{self, SoundEvent};
 use crate::data::GameData;
 use crate::footsteps::{MaterialPairs, PairSounds};
 use crate::torch::{TorchSound, TorchSounds};
@@ -77,7 +79,13 @@ pub struct LevelSoundData {
     /// The night vision of each of the player's torches with it, by item
     /// id: its sounds are loaded with its section (torch.md 14).
     pub torches: Vec<(u16, NightVisionSection)>,
+    /// The sounds of each zone object (S15 2.1), by zone, created with the
+    /// level's.
+    pub zones: Vec<ZoneSoundNames>,
 }
+
+/// A zone's sound names, by the index of S15 2.1's keys.
+pub type ZoneSoundNames = [Option<String>; 8];
 
 impl LevelSoundData {
     /// Reads the sound data of level `name` in `dir` under `weather`:
@@ -138,6 +146,7 @@ impl LevelSoundData {
             bolt_common,
             pairs: None,
             torches: Vec::new(),
+            zones: Vec::new(),
         })
     }
 
@@ -165,6 +174,26 @@ pub struct LevelSounds {
     pub torches: HashMap<u16, TorchSounds>,
     /// The level directory, for the sounds of torches that come later.
     dir: String,
+    /// Each zone's sounds (S15 2.1), by zone.
+    pub zones: Vec<[Option<SoundId>; 8]>,
+}
+
+/// Creates a zone's sounds in the effects category (S15 2.1): each key a
+/// sound of its own.
+fn zone_sounds(
+    system: &mut SoundSystem,
+    tree: &dyn Vfs,
+    aliases: &PathAliases,
+    names: &ZoneSoundNames,
+) -> Result<[Option<SoundId>; 8], Fatal> {
+    let mut ids = [None; 8];
+    for (id, name) in ids.iter_mut().zip(names) {
+        if let Some(name) = name {
+            *id =
+                Some(system.create(tree, aliases, name, crate::core::audio::Category::Effects)?);
+        }
+    }
+    Ok(ids)
 }
 
 impl LevelSounds {
@@ -221,6 +250,9 @@ impl LevelSounds {
         for (id, section) in &data.torches {
             torches.insert(*id, TorchSounds::create(system, tree, aliases, section)?);
         }
+        let zones = (data.zones.iter())
+            .map(|names| zone_sounds(system, tree, aliases, names))
+            .collect::<Result<_, _>>()?;
         let occlusion = system.occlusion_mut();
         occlusion.scale = data.occlusion_scale;
         if let Some(mesh) = &data.occlusion_mesh {
@@ -238,6 +270,7 @@ impl LevelSounds {
             pairs,
             torches,
             dir: data.dir.clone(),
+            zones,
         })
     }
 
@@ -268,6 +301,53 @@ impl LevelSounds {
         Ok(())
     }
 
+    /// Creates the sounds of zones that came online after the level's
+    /// sounds were made (`names` from the first zone on), each zone's as
+    /// its object is loaded (S15 2.1); fatal as creating any is.
+    pub fn add_zones(
+        &mut self,
+        system: &mut SoundSystem,
+        tree: &dyn Vfs,
+        aliases: &PathAliases,
+        dir: &str,
+        names: &[ZoneSoundNames],
+    ) -> Result<(), Fatal> {
+        if names.len() <= self.zones.len() {
+            return Ok(());
+        }
+        let mut aliases = aliases.clone();
+        aliases.set_dir(LEVEL, dir);
+        for n in &names[self.zones.len()..] {
+            let ids = system.all_or_none(|system| zone_sounds(system, tree, &aliases, n))?;
+            self.zones.push(ids);
+        }
+        Ok(())
+    }
+
+    /// The zones' idle sounds start and stop (P9 4.1, 4.2; S15 3): played
+    /// at position, looped, not 2D, delay 0, without an owner; stopped at
+    /// once.
+    pub fn zone_events(&self, system: &mut SoundSystem, events: &[SoundEvent]) {
+        for e in events {
+            match *e {
+                SoundEvent::Play { zone, position } => {
+                    if let Some(Some(id)) = self.zones.get(zone).map(|z| z[zones::IDLE]) {
+                        let looped = PlayFlags {
+                            looped: true,
+                            ..PlayFlags::default()
+                        };
+                        system.play_at(id, position, looped);
+                    }
+                }
+                SoundEvent::Stop { zone } => {
+                    if let Some(Some(id)) = self.zones.get(zone).map(|z| z[zones::IDLE]) {
+                        system.stop(id);
+                    }
+                }
+            }
+        }
+    }
+
     /// The level was left: every sound is discarded (S5 section 6; S3's
     /// own sources' fate is unestablished, S3 section 7, with no audible
     /// difference), and the sound system loses the level mesh (S6 3).
@@ -284,6 +364,9 @@ impl LevelSounds {
         self.pairs.discard(system);
         for t in self.torches.values() {
             t.discard(system);
+        }
+        for &id in self.zones.iter().flatten().flatten() {
+            system.discard(id);
         }
         system.occlusion_mut().level = None;
     }
@@ -313,6 +396,8 @@ pub struct SoundRun {
     pub ambient: AmbientState,
     pub rain: Rain,
     pub thunder: ThunderState,
+    /// The environment's wind (weather-ambient-effects.md 4).
+    pub wind: Wind,
 }
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
@@ -351,6 +436,7 @@ impl SoundRun {
         inputs: &SoundInputs,
         now: u64,
         loading_image: bool,
+        particles: &mut dyn AmbientParticles,
     ) -> Result<(), Fatal> {
         // Unsigned 32-bit milliseconds (S3 4.1, S4 3.1).
         let seconds = now as f32 / 1000.0;
@@ -371,6 +457,9 @@ impl SoundRun {
             far_plane: inputs.far_plane,
             sun_dir: inputs.sun_dir,
         };
+        // The environment's wind with the gust the previous frame's rule
+        // left (P11 3.6, 4.3).
+        self.wind.update(self.ambient.wind_gust_factor, seconds);
         let dt = self.thunder.frame_time;
         if let Some(common) = &sounds.bolt_common {
             let f = self
@@ -387,8 +476,14 @@ impl SoundRun {
             s.env_ambient.as_ref().and_then(|n| sounds.sets.get(n))
         };
         let outdoors = inputs.sky_visibility >= ambient::OUTDOORS;
-        self.ambient
-            .frame(system, now, (set(a), set(b), t), outdoors, inputs.eye)?;
+        self.ambient.frame(
+            system,
+            now,
+            (set(a), set(b), t),
+            outdoors,
+            inputs.eye,
+            particles,
+        )?;
         Ok(())
     }
 }

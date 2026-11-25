@@ -185,15 +185,76 @@ export const tests = {
     }
   },
 
-  // GitHub Pages cannot send COOP/COEP; the engine must not depend on them.
-  "page is not cross-origin isolated": () => {
-    assertEqual(self.crossOriginIsolated, false);
+  // Audio output needs SharedArrayBuffer (#354). GitHub Pages can't send
+  // COOP/COEP: the service worker adds them; test pages run without it, so
+  // the dev server sends them for everything but the app's page.
+  "page is cross-origin isolated": () => {
+    assertEqual(self.crossOriginIsolated, true);
+    assert(typeof SharedArrayBuffer === "function", "no SharedArrayBuffer");
+  },
+
+  "a page the service worker didn't serve reloads once, as soon as it can": async () => {
+    const { ensureIsolated } = await import(`${base}isolation.js`);
+    const tick = () => new Promise((r) => setTimeout(r));
+    const env = ({ controller = null, active = null, installing = null, stored = {} } = {}) => {
+      const container = Object.assign(new EventTarget(), { controller });
+      const items = { ...stored };
+      const storage = { getItem: (k) => items[k] ?? null, setItem: (k, v) => (items[k] = v), removeItem: (k) => delete items[k] };
+      const registration = { active, installing, waiting: null };
+      const e = { container, storage, reloads: 0, items, isolated: false };
+      e.run = () => ensureIsolated({ ...e, registered: Promise.resolve(registration), reload: () => e.reloads++ });
+      return e;
+    };
+    // Isolated: nothing to do.
+    const ok = env();
+    assertEqual(await ensureIsolated({ ...ok, isolated: true, reload: () => ok.reloads++ }), "isolated", "isolated");
+    // A hard reload, the worker installed: reloads at once.
+    const hard = env({ active: {} });
+    assertEqual([await hard.run(), hard.reloads].join(), "reloading,1", "hard reload");
+    // The reload didn't isolate it: no second reload in the page session.
+    assertEqual([await hard.run(), hard.reloads].join(), "blocked,1", "a second time");
+    // Once isolated, a later hard reload reloads again.
+    assertEqual(await ensureIsolated({ ...hard, isolated: true }), "isolated", "isolated after all");
+    assertEqual([await hard.run(), hard.reloads].join(), "reloading,2", "a later hard reload");
+    // First visit: reloads once the worker installed and claimed the page.
+    const installing = Object.assign(new EventTarget(), { state: "installing" });
+    const first = env({ installing });
+    const outcome = first.run();
+    await tick();
+    assertEqual(first.reloads, 0, "reloaded before the worker controls the page");
+    first.container.dispatchEvent(new Event("controllerchange"));
+    assertEqual([await outcome, first.reloads].join(), "reloading,1", "first visit");
+    // An install that fails: no reload, the player is told.
+    const failing = Object.assign(new EventTarget(), { state: "installing" });
+    const failed = env({ installing: failing });
+    const failure = failed.run();
+    await tick();
+    failing.state = "redundant";
+    failing.dispatchEvent(new Event("statechange"));
+    assertEqual([await failure, failed.reloads].join(), "blocked,0", "failed install");
+    // Served by the worker and not isolated: the browser ignores the headers.
+    const ignored = env({ controller: {}, active: {} });
+    assertEqual([await ignored.run(), ignored.reloads].join(), "blocked,0", "headers ignored");
   },
 
   "service worker controls the app scope": async () => {
     const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 10000));
     const registration = await Promise.race([navigator.serviceWorker.ready, timeout]);
     assert(registration.scope.endsWith("/volya-engine/"), `scope ${registration.scope}`);
+  },
+
+  // The dev server sends the app's page without them, as GitHub Pages does.
+  "the service worker serves the app with COOP and COEP": async () => {
+    if (!navigator.serviceWorker.controller) {
+      await new Promise((resolve) => navigator.serviceWorker.addEventListener("controllerchange", resolve, { once: true }));
+    }
+    const page = await fetch(base);
+    const worker = await fetch(`${base}audio-worker.js`);
+    for (const [name, response] of [["page", page], ["audio worker", worker]]) {
+      assertEqual(response.headers.get("Cross-Origin-Opener-Policy"), "same-origin", `${name} COOP`);
+      assertEqual(response.headers.get("Cross-Origin-Embedder-Policy"), "require-corp", `${name} COEP`);
+    }
+    for (const response of [page, worker]) await response.arrayBuffer();
   },
 
   "the whole app works offline once installed": async () => {
@@ -714,7 +775,7 @@ export const tests = {
       "a long frame without what ran in it",
     );
     if (volya.audioState() === "running") {
-      for (const key of ["audio.fill_ms min", "audio.reply_wait_ms max", "audio.underrun_frames", "audio.mix max"]) {
+      for (const key of ["audio.fill_ms min", "audio.underrun_frames", "audio.mix_ms max"]) {
         assert(series(key) > 0, `no ${key} series`);
       }
     }
@@ -766,6 +827,81 @@ export const tests = {
       await frame.contentWindow.volya.diagnostics.setEnabled(false, call);
     } finally {
       localStorage.removeItem("volya-engine.diagnostic-log");
+      frame.remove();
+    }
+  },
+
+  "diagnostic log: a lost GPU device and each reload end the session with engine.end, stored": async () => {
+    const END_KEY = "volya-engine.diagnostic-log-end";
+    // A copy of the app logging on from its start (this page's log is off),
+    // finding the end an earlier session's page kept as it closed.
+    localStorage.setItem("volya-engine.diagnostic-log", "on");
+    const kept = { pid: 12345, cat: "volya,v:test", ts: Date.now() * 1000, reason: "page_closed", message: "the page was closed" };
+    localStorage.setItem(END_KEY, JSON.stringify(kept));
+    const frame = Object.assign(document.createElement("iframe"), { width: 400, height: 800 });
+    frame.style.cssText = "position: fixed; left: -5000px; top: 0";
+    frame.src = base;
+    document.body.append(frame);
+    /** The copy's session once its log is on (not session `not`): `{call, pid}`. */
+    const started = async (not) => {
+      let found = null;
+      await until(
+        async () => {
+          const call = frame.contentWindow.volya?.call;
+          const status = await call?.("diagnostic_log_status").catch(() => null);
+          const pid = status?.on ? status.session?.pid : undefined;
+          if (pid !== undefined && pid !== not) found = { call, pid };
+          return found;
+        },
+        "the copy's log isn't on",
+        20000,
+      );
+      return found;
+    };
+    /**
+     * Session `pid`'s events as stored (not those waiting for the period's
+     * end), once the copy's log is open (it opens after logging turns on).
+     */
+    const stored = async (call, pid) => {
+      let log = null;
+      await until(async () => (log = await call("diagnostic_log", { stored_only: true }).catch(() => null)), "the copy's log didn't open");
+      return JSON.parse(log.text).traceEvents.filter((e) => e.pid === pid);
+    };
+    try {
+      let session = await started();
+      const added = (await stored(session.call, kept.pid)).at(-1);
+      assertEqual([added?.name, added?.args.reason, added?.args.recorded_by], ["engine.end", "page_closed", "page"], "the kept end");
+      assertEqual(localStorage.getItem(END_KEY), null, "the kept end is taken");
+      const notes = [];
+      // A lost device: recorded and stored at once.
+      const gpu = (await session.call("status")).gpu;
+      if (gpu.state === "ready") {
+        await session.call("debug_lose_device");
+        let lost;
+        await until(async () => (lost = (await stored(session.call, session.pid)).findLast((e) => e.name === "engine.end")), "no stored engine.end");
+        assertEqual(lost.args.reason, "device_lost", "reason");
+        notes.push(`device lost: ${lost.args.message}`);
+      } else notes.push(`no GPU: ${gpu.message}`);
+      // Reloads: each session's last stored event is its end (sessions are
+      // numbered by their start in seconds).
+      const by = {};
+      for (let i = 0; i < 3; i++) {
+        await sleep(1100);
+        frame.contentWindow.location.reload();
+        const next = await started(session.pid);
+        const last = (await stored(next.call, session.pid)).at(-1);
+        assertEqual(last?.name, "engine.end", `reload ${i}: the session's last event`);
+        assert(["page_closed", "page_hidden"].includes(last.args.reason), `reason ${last.args.reason}`);
+        const key = `${last.args.reason} by the ${last.args.recorded_by ?? "engine worker"}`;
+        by[key] = (by[key] ?? 0) + 1;
+        session = next;
+      }
+      await frame.contentWindow.volya.diagnostics.setEnabled(false, session.call);
+      notes.push(`reloads: ${Object.entries(by).map(([k, n]) => `${n}× ${k}`).join(", ")}`);
+      return notes.join("; ");
+    } finally {
+      localStorage.removeItem("volya-engine.diagnostic-log");
+      localStorage.removeItem(END_KEY);
       frame.remove();
     }
   },

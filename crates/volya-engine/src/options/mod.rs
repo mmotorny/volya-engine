@@ -64,6 +64,12 @@ const SOUND_RESTART: &str = "snd_efx";
 /// established (section 17). Our choice is a value that is neither 0 nor
 /// 1, so every toggle of the box is applied.
 const MOUSE_INVERT_BACKUP: u8 = 0xcd;
+/// The renderer list's dynamic entries, `renderer_r2a` and `renderer_r2`:
+/// disabled while Volya Engine draws only the static renderer (decided by
+/// the user, a deviation). A stored value naming one is kept as written and
+/// drawn as `renderer_r1`, which the list shows.
+// TODO(#364): enable them once the dynamic renderers exist.
+const DYNAMIC_RENDERERS: [usize; 2] = [1, 2];
 /// Real values differ when they are this far apart (section 5.2).
 const CHANGED_EPSILON: f32 = 0.000_01;
 /// The page windows' top-left, absolute (section 3.2).
@@ -721,10 +727,9 @@ impl OptionsScreen {
 
     /// Opens the screen at `now` (section 2.1): every control refreshed
     /// from its variable and the backups taken; the tab and page shown when
-    /// it last closed stay. The renderer list stays enabled: Volya Engine
-    /// counts as supporting the dynamic-lighting renderers (our choice; the
-    /// test's criteria are not established, section 17, and the renderer
-    /// setting changes nothing here).
+    /// it last closed stay. The renderer list stays enabled, without the
+    /// hardware test (our choice; its criteria are not established, section
+    /// 17); its dynamic entries are disabled instead ([`DYNAMIC_RENDERERS`]).
     pub fn open(
         &mut self,
         data: &GameData,
@@ -1517,7 +1522,7 @@ impl OptionsScreen {
             return None;
         }
         let k = ((p[1] - r.y + l.bar.pos as f32) / ROW_HEIGHT) as usize;
-        (k < l.dd.entries.len()).then_some(k)
+        (k < l.dd.entries.len() && l.dd.enabled(k)).then_some(k)
     }
 
     /// Item `i`'s rectangle as shown: scrolled with its view.
@@ -1626,6 +1631,7 @@ impl OptionsScreen {
             };
             let w = r.width - self.scroll.width - 5.0;
             return (0..s.dd.entries.len())
+                .filter(|&k| s.dd.enabled(k))
                 .map(|k| {
                     let y = r.y + k as f32 * ROW_HEIGHT - s.bar.pos as f32;
                     (Target::Entry(l, k), Rect::new(r.x, y, w, ROW_HEIGHT))
@@ -1977,7 +1983,15 @@ impl OptionsScreen {
                 align: HAlign::Left,
                 vert_align: VAlign::Centre,
                 complex: false,
-                color: if selected { sel_color } else { row_color },
+                color: match (selected, l.dd.enabled(k)) {
+                    (true, _) => sel_color,
+                    (false, true) => row_color,
+                    // Section 4.6: a disabled row's text alpha is halved.
+                    (false, false) => Color {
+                        a: 128,
+                        ..row_color
+                    },
+                },
                 line_gap: 0.0,
             };
             ctx.text(
@@ -2366,8 +2380,15 @@ impl Builder {
                     backup: 0.0,
                 }
             }
-            (Some(_), Some("list")) => Kind::List(Box::new(ListState {
-                dd: DropDown::default(),
+            (Some((v, _, _)), Some("list")) => Kind::List(Box::new(ListState {
+                dd: DropDown {
+                    disabled: if v == "renderer" {
+                        DYNAMIC_RENDERERS.to_vec()
+                    } else {
+                        Vec::new()
+                    },
+                    ..DropDown::default()
+                },
                 backup: 0,
                 backup_status: String::new(),
                 open: false,
