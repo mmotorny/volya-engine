@@ -39,8 +39,12 @@ const ONLY = [
 // uploaded a few pieces per task turn, since wgpu's GL backend keeps what
 // is written in the heap until WebGL reports it done); a regression past
 // this is reported as an "OVER BUDGET" note, not failed: budgets are
-// measured and tracked in issues, never a release gate (AGENTS.md).
+// measured and tracked in issues, never a release gate (AGENTS.md). The
+// audio worker's instance (#354) counts too (`audio_heap_bytes`, which
+// `heap` adds).
 const WASM_HEAP_CAP = 110 * 2 ** 20;
+/** Both wasm instances' heaps in `level_stats`: the engine's and the audio worker's. */
+const heap = (stats) => stats.wasm_heap_bytes + stats.audio_heap_bytes;
 const overBudget = (bytes, what) => (bytes > WASM_HEAP_CAP ? `OVER BUDGET: ${what} ${mib(bytes)} > ${mib(WASM_HEAP_CAP)}; ` : "");
 // Touch devices: no full screen offer, touch controls from the start.
 const coarse = () => matchMedia("(pointer: coarse)").matches;
@@ -546,8 +550,8 @@ export const tests = {
     const shown = await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
     assertEqual(shown.phase, "level", "still in the level");
     const byCaption = stages.map(([n, m]) => `${n} ${m}`).join(", ");
-    const heapNote = overBudget(playing.wasm_heap_bytes, "wasm heap during the intro");
-    let note = `${heapNote}wasm heap by caption (MiB): ${byCaption}; "${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; intro skipped, wasm heap ${mib(before.wasm_heap_bytes)} before it, ${mib(playing.wasm_heap_bytes)} while it played; at the start ${lights.passes} light passes, ${lights.sprites} glows drawn`;
+    const heapNote = overBudget(heap(playing), "wasm heaps during the intro");
+    let note = `${heapNote}wasm heap by caption (MiB): ${byCaption}; "${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; intro skipped, wasm heap ${mib(before.wasm_heap_bytes)} before it, ${mib(playing.wasm_heap_bytes)} while it played, the audio worker's ${mib(playing.audio_heap_bytes)}; at the start ${lights.passes} light passes, ${lights.sprites} glows drawn`;
     if (gpu.state === "ready") {
       const { rgba } = await volya.call("debug_capture", { width: 256, height: 192 });
       const colours = new Set();
@@ -1246,9 +1250,9 @@ export const tests = {
       assertEqual(stats.world_draws, 7782, "world draws on the GPU");
     }
     // A second load reuses the heap the first one grew.
-    const heap = (await volya.call("level_stats")).wasm_heap_bytes;
-    const heapNote = overBudget(heap, "wasm heap after the second New Game");
-    return `${heapNote}loaded again in ${s.load_ms.toFixed(0)} ms; wasm heap ${mib(heap)}; by caption (MiB): ${byCaption}`;
+    const stats = await volya.call("level_stats");
+    const heapNote = overBudget(heap(stats), "wasm heaps after the second New Game");
+    return `${heapNote}loaded again in ${s.load_ms.toFixed(0)} ms; wasm heap ${mib(stats.wasm_heap_bytes)}, the audio worker's ${mib(stats.audio_heap_bytes)}; by caption (MiB): ${byCaption}`;
   },
 
   "hidden: the menu opens, the clock, the frame loop and audio stop; shown: the game takes on from there": async () => {
@@ -1671,7 +1675,7 @@ export const tests = {
     const long = mine.filter((e) => e.ph === "X" && e.name === "frame");
     assert(long.length > 0, "no long frame");
     const audio = volya.audioState() === "running";
-    if (audio) assert(series("audio.fill_ms min") > 10 && series("decode max") > 10, "audio");
+    if (audio) assert(series("audio.fill_ms min") > 10 && series("audio.mix_ms max") > 10, "audio");
     await volya.diagnostics.setEnabled(false, volya.call);
     const worst = Math.max(...long.map((e) => e.dur)) / 1000;
     // The log's rate while a game runs: this session's bytes over its time.

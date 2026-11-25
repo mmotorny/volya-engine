@@ -198,15 +198,76 @@ export const tests = {
     }
   },
 
-  // GitHub Pages cannot send COOP/COEP; the engine must not depend on them.
-  "page is not cross-origin isolated": () => {
-    assertEqual(self.crossOriginIsolated, false);
+  // Audio output needs SharedArrayBuffer (#354). GitHub Pages can't send
+  // COOP/COEP: the service worker adds them; test pages run without it, so
+  // the dev server sends them for everything but the app's page.
+  "page is cross-origin isolated": () => {
+    assertEqual(self.crossOriginIsolated, true);
+    assert(typeof SharedArrayBuffer === "function", "no SharedArrayBuffer");
+  },
+
+  "a page the service worker didn't serve reloads once, as soon as it can": async () => {
+    const { ensureIsolated } = await import(`${base}isolation.js`);
+    const tick = () => new Promise((r) => setTimeout(r));
+    const env = ({ controller = null, active = null, installing = null, stored = {} } = {}) => {
+      const container = Object.assign(new EventTarget(), { controller });
+      const items = { ...stored };
+      const storage = { getItem: (k) => items[k] ?? null, setItem: (k, v) => (items[k] = v), removeItem: (k) => delete items[k] };
+      const registration = { active, installing, waiting: null };
+      const e = { container, storage, reloads: 0, items, isolated: false };
+      e.run = () => ensureIsolated({ ...e, registered: Promise.resolve(registration), reload: () => e.reloads++ });
+      return e;
+    };
+    // Isolated: nothing to do.
+    const ok = env();
+    assertEqual(await ensureIsolated({ ...ok, isolated: true, reload: () => ok.reloads++ }), "isolated", "isolated");
+    // A hard reload, the worker installed: reloads at once.
+    const hard = env({ active: {} });
+    assertEqual([await hard.run(), hard.reloads].join(), "reloading,1", "hard reload");
+    // The reload didn't isolate it: no second reload in the page session.
+    assertEqual([await hard.run(), hard.reloads].join(), "blocked,1", "a second time");
+    // Once isolated, a later hard reload reloads again.
+    assertEqual(await ensureIsolated({ ...hard, isolated: true }), "isolated", "isolated after all");
+    assertEqual([await hard.run(), hard.reloads].join(), "reloading,2", "a later hard reload");
+    // First visit: reloads once the worker installed and claimed the page.
+    const installing = Object.assign(new EventTarget(), { state: "installing" });
+    const first = env({ installing });
+    const outcome = first.run();
+    await tick();
+    assertEqual(first.reloads, 0, "reloaded before the worker controls the page");
+    first.container.dispatchEvent(new Event("controllerchange"));
+    assertEqual([await outcome, first.reloads].join(), "reloading,1", "first visit");
+    // An install that fails: no reload, the player is told.
+    const failing = Object.assign(new EventTarget(), { state: "installing" });
+    const failed = env({ installing: failing });
+    const failure = failed.run();
+    await tick();
+    failing.state = "redundant";
+    failing.dispatchEvent(new Event("statechange"));
+    assertEqual([await failure, failed.reloads].join(), "blocked,0", "failed install");
+    // Served by the worker and not isolated: the browser ignores the headers.
+    const ignored = env({ controller: {}, active: {} });
+    assertEqual([await ignored.run(), ignored.reloads].join(), "blocked,0", "headers ignored");
   },
 
   "service worker controls the app scope": async () => {
     const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 10000));
     const registration = await Promise.race([navigator.serviceWorker.ready, timeout]);
     assert(registration.scope.endsWith("/volya-engine/"), `scope ${registration.scope}`);
+  },
+
+  // The dev server sends the app's page without them, as GitHub Pages does.
+  "the service worker serves the app with COOP and COEP": async () => {
+    if (!navigator.serviceWorker.controller) {
+      await new Promise((resolve) => navigator.serviceWorker.addEventListener("controllerchange", resolve, { once: true }));
+    }
+    const page = await fetch(base);
+    const worker = await fetch(`${base}audio-worker.js`);
+    for (const [name, response] of [["page", page], ["audio worker", worker]]) {
+      assertEqual(response.headers.get("Cross-Origin-Opener-Policy"), "same-origin", `${name} COOP`);
+      assertEqual(response.headers.get("Cross-Origin-Embedder-Policy"), "require-corp", `${name} COEP`);
+    }
+    for (const response of [page, worker]) await response.arrayBuffer();
   },
 
   "the whole app works offline once installed": async () => {
@@ -745,7 +806,7 @@ export const tests = {
       "a long frame without what ran in it",
     );
     if (volya.audioState() === "running") {
-      for (const key of ["audio.fill_ms min", "audio.reply_wait_ms max", "audio.underrun_frames", "audio.mix max"]) {
+      for (const key of ["audio.fill_ms min", "audio.underrun_frames", "audio.mix_ms max"]) {
         assert(series(key) > 0, `no ${key} series`);
       }
     }

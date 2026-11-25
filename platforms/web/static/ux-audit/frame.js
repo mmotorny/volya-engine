@@ -181,7 +181,7 @@ if (state.level) {
   status.textContent = name;
   status.dataset.text = status.textContent;
   status.dataset.state = "ready";
-  await start(call, updates, graphics);
+  await start(call, updates, graphics, { isolated: state.isolated !== false });
   if (state.screen === "settings") await globalThis.volya.showSettings();
   // Check for updates pressed, its result held on screen.
   if (state.check) {

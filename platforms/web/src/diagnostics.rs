@@ -403,35 +403,32 @@ pub fn diagnostics_count(name: &str, n: f64) {
     with(|d| d.count(name, n.max(0.0) as u64));
 }
 
-/// The AudioWorklet's report with each request (#343), in frames at
-/// `rate`: those played as silence for want of mixed ones since the last
-/// request; how long the last reply took to arrive; the buffer's least,
-/// summed and greatest fill over the `fill_n` process calls since; and
-/// whether the last reply left it over-full.
-#[allow(clippy::too_many_arguments)]
-#[wasm_bindgen]
-pub fn diagnostics_audio(
-    underrun: f64,
-    wait: f64,
-    fill_min: f64,
-    fill_sum: f64,
-    fill_max: f64,
-    fill_n: f64,
-    overrun: f64,
-    rate: f64,
-) {
+/// The audio worker's numbers since its last report (#354), in frames at
+/// `rate`: the frames the AudioWorklet played as silence for want of mixed
+/// ones; the ring of mixed frames' fill each time the audio worker woke
+/// (least, sum, greatest, count); and its mixing time per block, ms (the
+/// same).
+pub struct AudioRing {
+    pub underrun: f64,
+    pub fill: [f64; 4],
+    pub mix: [f64; 4],
+    pub rate: f64,
+}
+
+/// Records [`AudioRing`] while the log is on.
+pub fn audio_ring(a: &AudioRing) {
     with(|d| {
-        let ms = 1000.0 / rate.max(1.0);
-        d.count("audio.underrun_frames", underrun.max(0.0) as u64);
-        d.count("audio.overruns", overrun.max(0.0) as u64);
-        d.metrics("audio.reply_wait_ms", 1, wait * ms, wait * ms, wait * ms);
-        d.metrics(
-            "audio.fill_ms",
-            fill_n.max(0.0) as u64,
-            fill_min * ms,
-            fill_sum * ms,
-            fill_max * ms,
-        );
+        let ms = 1000.0 / a.rate.max(1.0);
+        let n = |v: f64| v.max(0.0) as u64;
+        d.count("audio.underrun_frames", n(a.underrun));
+        if a.fill[3] > 0.0 {
+            let [min, sum, max, count] = a.fill;
+            d.metrics("audio.fill_ms", n(count), min * ms, sum * ms, max * ms);
+        }
+        if a.mix[3] > 0.0 {
+            let [min, sum, max, count] = a.mix;
+            d.metrics("audio.mix_ms", n(count), min, sum, max);
+        }
     });
 }
 

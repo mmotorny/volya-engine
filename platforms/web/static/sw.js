@@ -24,6 +24,14 @@
 //
 // The cache name is namespaced: the github.io origin is shared
 // (docs/architecture.md).
+//
+// Every response it serves carries COOP and COEP (ISOLATION), which GitHub
+// Pages can't send: they make the page cross-origin isolated, so it has
+// SharedArrayBuffer, which audio output needs (#354). Browsers apply a
+// navigation's headers as the service worker's response gives them
+// (documented, the Fetch and HTML standards; the method of the common
+// coi-serviceworker). A page the service worker didn't serve (the first
+// visit, a hard reload) reloads once to be (isolation.js).
 
 const CACHE = "volya-engine-app";
 /** This build's commit (injected). */
@@ -34,6 +42,17 @@ const PRECACHE = [/* injected by cargo xtask web */];
 const KEPT = "__precache.json";
 /** Settings shared with the page (update.js): `{ auto, consent }`. */
 const SETTINGS = "__settings.json";
+
+/** The headers that make a page cross-origin isolated. */
+const ISOLATION = { "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp" };
+
+/** `response` with ISOLATION's headers. */
+const isolated = (response) => {
+  if (response.status === 0) return response;
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(ISOLATION)) headers.set(name, value);
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+};
 
 const scope = () => self.registration.scope;
 const absolute = (path) => new URL(path, scope()).href;
@@ -101,7 +120,8 @@ self.addEventListener("fetch", (event) => {
   event.respondWith(
     (async () => {
       const cache = await caches.open(CACHE);
-      return (await cache.match(url.href)) ?? fetch(request);
+      const kept = await cache.match(url.href);
+      return kept ? isolated(kept) : isolated(await fetch(request));
     })(),
   );
 });
