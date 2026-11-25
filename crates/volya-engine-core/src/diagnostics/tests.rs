@@ -107,6 +107,10 @@ fn trace(d: &Diagnostics) -> Json {
     log.append(&d.take_pending(), &d.session_metadata())
         .unwrap();
     let text = log.trace("", "{\"version\":\"test\"}").unwrap();
+    // A trace to open elsewhere (Perfetto's trace processor).
+    if let Some(path) = std::env::var_os("VOLYA_DUMP_TRACE") {
+        std::fs::write(path, &text).unwrap();
+    }
     serde_json::from_str(&text).unwrap()
 }
 

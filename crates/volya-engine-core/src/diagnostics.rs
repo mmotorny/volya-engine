@@ -707,11 +707,13 @@ impl<S: SegmentStore> Log<S> {
         Ok(())
     }
 
-    /// Appends `text`, whole lines, then flushes the store. A new segment
-    /// starts with `prefix` (whole lines: the session's metadata events).
+    /// Appends `text`, whole lines, then flushes the store. A segment begun
+    /// by a rotation starts with `prefix` (whole lines: the session's
+    /// metadata events, so a trimmed log still names its sessions).
     pub fn append(&mut self, text: &str, prefix: &str) -> io::Result<()> {
+        // The first segment: the text starts with the metadata itself.
         if self.sequence[self.newest] == 0 {
-            self.rotate(prefix)?;
+            self.rotate("")?;
         }
         let mut fresh = false;
         let mut rest = text;

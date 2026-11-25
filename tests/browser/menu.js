@@ -294,6 +294,12 @@ export const tests = {
     return `${(result.status.bytes / 2 ** 30).toFixed(2)} GiB in ${((performance.now() - started) / 1000).toFixed(1)} s`;
   },
 
+  "the diagnostic log is turned on for the games that follow": async () => {
+    needsGame();
+    const status = await volya.diagnostics.setEnabled(true, volya.call);
+    assert(status.on, "not on");
+  },
+
   "launch loads under the splash and starts the logo sequence": async () => {
     needsGame();
     const launched = await volya.call("launch");
@@ -1546,6 +1552,30 @@ export const tests = {
     assertEqual((await volya.call("input_state")).capture, false, "capture");
     await sleep(50);
     assertEqual(document.querySelector("main").hidden, false, "page interface hidden");
+  },
+
+  "the diagnostic log holds the games, their levels and their frames, after the game ended": async () => {
+    needsGame();
+    const { text } = await volya.call("diagnostic_log");
+    const events = JSON.parse(text).traceEvents;
+    const pid = events.findLast((e) => e.name === "session").pid;
+    const mine = events.filter((e) => e.pid === pid);
+    const count = (ph, name) => mine.filter((e) => e.ph === ph && e.name === name).length;
+    // Two New Games and the options' game, each ended.
+    assert(count("i", "game started") >= 2, `games started ${count("i", "game started")}`);
+    assertEqual(count("i", "game ended"), count("i", "game started"), "games ended");
+    assert(count("i", "level loading") >= 2 && count("i", "level made") >= 2, "levels");
+    for (const name of ["frame ms", "engine ms", "render ms", "frame.interval_ms", "wasm heap", "diagnostics.write_ms"]) {
+      assert(count("C", name) > 10, `${name}: ${count("C", name)}`);
+    }
+    // The level's first frame creates its sounds: long, with what ran.
+    const long = mine.filter((e) => e.ph === "X" && e.name === "frame");
+    assert(long.length > 0, "no long frame");
+    const audio = volya.audioState() === "running";
+    if (audio) assert(count("C", "audio.fill_ms") > 10 && count("C", "decode ms") > 10, "audio");
+    await volya.diagnostics.setEnabled(false, volya.call);
+    const worst = Math.max(...long.map((e) => e.dur)) / 1000;
+    return `${mine.length} events this session, ${long.length} long frames (worst ${worst.toFixed(0)} ms), ${text.length} bytes; audio ${audio ? "running" : volya.audioState()}`;
   },
 
   "forgets the game": async () => {
