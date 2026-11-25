@@ -626,11 +626,7 @@ impl WorldPipelines {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("world"),
-            bind_group_layouts: &[
-                Some(&frame_layout),
-                Some(&maps_layout),
-                Some(&base_layout),
-            ],
+            bind_group_layouts: &[Some(&frame_layout), Some(&maps_layout), Some(&base_layout)],
             immediate_size: 0,
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -741,11 +737,7 @@ impl WorldPipelines {
         let light_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("world light"),
-                bind_group_layouts: &[
-                    Some(&frame_layout),
-                    Some(&light_layout),
-                    Some(&base_layout),
-                ],
+                bind_group_layouts: &[Some(&frame_layout), Some(&light_layout), Some(&base_layout)],
                 immediate_size: 0,
             });
         // One / one, the result added and clamped (section 6.2).
