@@ -174,10 +174,16 @@ impl FrameTimer {
             if s.state.load(Ordering::Acquire) != MAPPED {
                 continue;
             }
-            let ticks = s.readback.slice(..).get_mapped_range().ok().and_then(|view| {
-                let at = |i: usize| u64::from_le_bytes(view[i * 8..i * 8 + 8].try_into().unwrap());
-                at(1).checked_sub(at(0)).filter(|&t| t > 0)
-            });
+            let ticks = s
+                .readback
+                .slice(..)
+                .get_mapped_range()
+                .ok()
+                .and_then(|view| {
+                    let at =
+                        |i: usize| u64::from_le_bytes(view[i * 8..i * 8 + 8].try_into().unwrap());
+                    at(1).checked_sub(at(0)).filter(|&t| t > 0)
+                });
             s.readback.unmap();
             s.state.store(FREE, Ordering::Release);
             if let Some(ticks) = ticks {

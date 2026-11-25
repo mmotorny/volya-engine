@@ -189,7 +189,10 @@ fn frames_are_timed_on_the_gpu_while_timing_is_on() {
         for _ in 0..8 {
             pollster::block_on(renderer.capture_scaled(&list, (32, 24), 64, 48, BLACK)).unwrap();
         }
-        renderer.device().poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        renderer
+            .device()
+            .poll(wgpu::PollType::wait_indefinitely())
+            .unwrap();
         renderer.take_gpu_times()
     };
     assert!(frames(&mut renderer).is_empty(), "off by default");
@@ -197,7 +200,10 @@ fn frames_are_timed_on_the_gpu_while_timing_is_on() {
     // Not every frame: Metal leaves some frames' last timestamp zero
     // (measured), and those are left out.
     let times = frames(&mut renderer);
-    assert!(!times.is_empty() && times.len() <= 8, "frames timed: {times:?}");
+    assert!(
+        !times.is_empty() && times.len() <= 8,
+        "frames timed: {times:?}"
+    );
     assert!(times.iter().all(|&ms| ms > 0.0 && ms < 1000.0), "{times:?}");
     renderer.set_gpu_timing(false);
     assert!(frames(&mut renderer).is_empty(), "off again");

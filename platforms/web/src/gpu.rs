@@ -370,20 +370,24 @@ pub fn warm_up() -> Result<bool, JsValue> {
         for e in gpu.presenter.take_errors() {
             web_sys::console::error_1(&format!("drawing: {e}").into());
         }
-        let target = gpu.renderer.device().create_texture(&wgpu::TextureDescriptor {
-            label: Some("warm-up"),
-            size: wgpu::Extent3d {
-                width: size.width,
-                height: size.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: gpu.config.format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
+        let target = gpu
+            .renderer
+            .device()
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("warm-up"),
+                size: wgpu::Extent3d {
+                    width: size.width,
+                    height: size.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: gpu.config.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
         tracing::info_span!("render.encode")
             .in_scope(|| gpu.renderer.render(&target, &list, CLEAR));
         target.destroy();
