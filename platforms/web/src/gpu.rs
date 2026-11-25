@@ -808,8 +808,53 @@ pub fn debug_draw(path: Option<&str>) -> Result<serde_json::Value, JsValue> {
 pub struct Capture {
     width: u32,
     height: u32,
-    /// RGBA, 8 bits per channel, rows top to bottom.
+    /// RGBA, 8 bits per channel, rows top to bottom, as base64, which the
+    /// engine worker turns back into a `Uint8Array` named `rgba`: written
+    /// as a JSON array of numbers, a 1024 × 768 frame took about 35 MiB of
+    /// the wasm heap to send, which never shrinks (#432).
+    #[serde(rename = "rgba_base64", serialize_with = "base64")]
     rgba: Vec<u8>,
+}
+
+impl Capture {
+    /// The capture as JSON, written into a buffer of its final size.
+    pub fn to_json(&self) -> String {
+        let mut out = Vec::with_capacity(self.rgba.len().div_ceil(3) * 4 + 64);
+        serde_json::to_writer(&mut out, self).expect("a capture serializes");
+        String::from_utf8(out).expect("JSON is UTF-8")
+    }
+}
+
+/// `bytes` as standard base64 (RFC 4648, with padding), written straight
+/// into the serializer's output.
+fn base64<S: serde::Serializer>(bytes: &[u8], s: S) -> Result<S::Ok, S::Error> {
+    struct Base64<'a>(&'a [u8]);
+    impl std::fmt::Display for Base64<'_> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            const DIGITS: &[u8; 64] =
+                b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            let mut quad = [0u8; 4];
+            for chunk in self.0.chunks(3) {
+                let b = [
+                    chunk[0],
+                    *chunk.get(1).unwrap_or(&0),
+                    *chunk.get(2).unwrap_or(&0),
+                ];
+                let n = u32::from(b[0]) << 16 | u32::from(b[1]) << 8 | u32::from(b[2]);
+                for (k, q) in quad.iter_mut().enumerate() {
+                    *q = if k <= chunk.len() {
+                        DIGITS[(n >> (18 - 6 * k) & 63) as usize]
+                    } else {
+                        b'='
+                    };
+                }
+                // ASCII digits only.
+                f.write_str(std::str::from_utf8(&quad).unwrap())?;
+            }
+            Ok(())
+        }
+    }
+    s.collect_str(&Base64(bytes))
 }
 
 /// Debugging and tests: renders the current frame offscreen at

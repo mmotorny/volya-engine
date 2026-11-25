@@ -69,12 +69,12 @@ Live memory grew 0.49 MB over the 600 frames.
 
 Headless Chrome, `menu` suite (MiB, the wasm heap and the most live meanwhile, from `heap_log` in test builds):
 
-| Path | After the first New Game | After the second | Without the detail objects (#411) | Before #370 and #371, without them |
-|---|---|---|---|---|
-| WebGPU | 90 heap, 81 live at most | 90 heap, 81 live at most | 82/70, 82/71 | 98/87, 98/87 |
-| WebGL 2 (BC textures as stored) | 104 heap, 93 live at most | 104 heap, 89 live at most | 97/83, 101/82 | 106/95, 110/97 |
+| Path | Before the New Game | After the first New Game | After the second | Before #432 (first, second) | Before #370 and #371, without the detail objects (#411) |
+|---|---|---|---|---|---|
+| WebGPU | 34 heap, 16 live | 89 heap, 79 live at most | 93 heap, 82 live at most | 59/16 before it; 90/81, 90/81 | 98/87, 98/87 |
+| WebGL 2 (BC textures as stored) | 25 heap, 20 live (a fresh engine) | 98 heap, 86 live at most | 100 heap, 88 live at most | 104/93, 104/89 | 106/95, 110/97 |
 
-One run each (the heap varies by a few MiB from run to run). The audio worker's instance adds 3–4 MiB (#354). Before the New Game the heap already stands at 59 MiB with 11 MiB live: the import and the menus reached 35 MiB live, and what they left split the free space, so the collision world's arrays (up to 11 MB each) do not fit and the heap grows from 59 to 76 MiB under `st_loading_cform` with 29 MiB more live (87 MiB with 39 more before #371). What stands between the heap and its live peak, 9 MiB on WebGPU and 11–15 MiB on WebGL 2, is that split free space. On WebGL 2 the level holds about 6 MiB more live than on WebGPU, and its first world frame peaks about 10 MiB above the frame before: wgpu records the world's render bundles in our heap there (#372).
+One run each (the heap varies by a few MiB from run to run). The audio worker's instance adds 3–4 MiB (#354). Where the live bytes sit (the `heap_map` op of test builds, #432; WebGPU): after the launch the heap is 17 MiB with 10 live (the archive tree and the game's data), at the title menu 24 MiB with 16 live, packed from the heap's start (its largest blocks 0.4–1.4 MiB, believed the menu videos' frames and the UI textures). The game itself leaves no split free space before a New Game. What took the heap to 59 MiB before #432 was the `menu` suite's own capture of the title menu: a 1024 × 768 frame sent to the page as a JSON array of numbers, about 35 MiB at the heap's top, freed at once. Captures are now sent as base64 and decoded in the engine worker; the suite's capture still takes the heap from 24 to 34 MiB, all of it free at the top. The WebGL 2 row starts a fresh engine straight into the game. What stands between the heap and its live peak, 10–11 MiB on WebGPU and 12 MiB on WebGL 2, arises during the loading itself. On WebGL 2 the level holds about 6 MiB more live than on WebGPU, and its first world frame peaks about 10 MiB above the frame before: wgpu records the world's render bundles in our heap there (#372).
 
 ### What fragments the heap
 
