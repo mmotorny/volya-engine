@@ -441,6 +441,44 @@ fn meets(planes: &[[f32; 4]; 6], s: [f32; 4]) -> bool {
         .all(|p| p[0] * s[0] + p[1] * s[1] + p[2] * s[2] + p[3] >= -s[3])
 }
 
+/// The draws of one step of the static world: a render bundle replayed
+/// every frame, or on [`Renderer::compat`] the draws themselves, encoded
+/// each frame with only those that can show (#415): wgpu's GL backend
+/// replays a bundle as one GL call sequence per draw, and WebGL's cost per
+/// call made the 7,782 draws of `l01_escape` about 10 ms of every frame's
+/// CPU in headless Chrome.
+enum Static {
+    Bundle(wgpu::RenderBundle),
+    Draws(Vec<StaticDraw>),
+}
+
+/// A static draw as [`Static::Draws`] keeps it.
+#[derive(Clone, Copy, Debug)]
+struct StaticDraw {
+    /// Its index among the kept draws (its record and instance).
+    kept: u32,
+    surface: u32,
+    vertex_buffer: u32,
+    index_buffer: u32,
+    first_vertex: i32,
+    first_index: u32,
+    index_count: u32,
+}
+
+/// Whether a draw with bounding sphere `s` can show in a frame whose camera
+/// has frustum `camera`, at `eye` with ssa_min `ssa`: a superset of what the
+/// world program draws (its test of section 10.2, `visible` in
+/// `world.wgsl`, here with a margin for rounding), less what lies wholly
+/// outside the frustum, which yields no pixels.
+fn can_show(camera: &[[f32; 4]; 6], eye: [f32; 3], ssa: f32, s: [f32; 4]) -> bool {
+    if s[3] <= 0.0 {
+        return false;
+    }
+    let d2: f32 = (0..3).map(|i| (eye[i] - s[i]).powi(2)).sum();
+    // The margins only keep more draws; the program decides.
+    s[3] / (d2 + 1e-5) > ssa * 0.99 && meets(camera, [s[0], s[1], s[2], s[3] * 1.01 + 0.01])
+}
+
 /// A kept draw whose surface has light elements of priority 0 or 1
 /// (section 5.5, rule 4).
 #[derive(Clone, Copy, Debug)]
@@ -1014,8 +1052,8 @@ struct Inner {
     /// Pipeline of each surface.
     surface_pipelines: Vec<wgpu::RenderPipeline>,
     /// Section 10.3 step 1 (priority 0–1, not strict) and step 5 (2–3).
-    early: wgpu::RenderBundle,
-    late: wgpu::RenderBundle,
+    early: Static,
+    late: Static,
     /// Step 6: strict-sorted draws, ordered each frame.
     strict: RefCell<Vec<(usize, WorldDraw)>>,
     /// The draws light passes may draw again.
@@ -2013,8 +2051,29 @@ impl Renderer {
             self.queue.submit([]);
             let _ = device.poll(wgpu::PollType::Poll);
         }
-        let early = record(&early);
-        let late = record(&late);
+        let (early, late) = if compat {
+            let list = |order: &[usize]| {
+                Static::Draws(
+                    (order.iter())
+                        .map(|&i| {
+                            let d = &kept[i];
+                            StaticDraw {
+                                kept: i as u32,
+                                surface: d.surface,
+                                vertex_buffer: d.vertex_buffer,
+                                index_buffer: d.index_buffer,
+                                first_vertex: d.first_vertex as i32,
+                                first_index: d.first_index,
+                                index_count: d.index_count,
+                            }
+                        })
+                        .collect(),
+                )
+            };
+            (list(&early), list(&late))
+        } else {
+            (Static::Bundle(record(&early)), Static::Bundle(record(&late)))
+        };
         let (sky, sky_error) =
             match sky.map(|t| SkyResources::new(&device, &queue, &pipelines.sky, t)) {
                 Some(Ok(sky)) => {
@@ -2218,6 +2277,7 @@ impl Renderer {
 
         let lights = self.prepare_lights(frame, &view_projection);
         let details = frame.details.as_ref().filter(|d| {
+            let _span = tracing::info_span!("render.details").entered();
             self.details.prepare(
                 &self.queue,
                 d,
@@ -2258,7 +2318,11 @@ impl Renderer {
         // 5, then step 6; the effects within steps 1, 5 and 6
         // (particle-drawing.md 7.4).
         use crate::particles::ParticleQueue;
-        pass.execute_bundles([&inner.early]);
+        let camera = frustum_planes(&view_projection);
+        let ssa = ssa_min(size.0, size.1, frame.fov_y_degrees);
+        let spheres = inner.spheres.borrow();
+        let shown = |k: u32| can_show(&camera, frame.eye, ssa, spheres[k as usize]);
+        self.encode_static(&mut pass, inner, &inner.early, &shown);
         if let Some((pipelines, prepared)) = particles {
             prepared.draw_queue(pipelines, &mut pass, ParticleQueue::Early);
         }
@@ -2309,12 +2373,13 @@ impl Renderer {
                 }
             }
         }
-        pass.execute_bundles([&inner.late]);
+        self.encode_static(&mut pass, inner, &inner.late, &shown);
         if let Some((pipelines, prepared)) = particles {
             prepared.draw_queue(pipelines, &mut pass, ParticleQueue::Late);
         }
         for (_, item) in sorted {
             let (i, d) = match item {
+                Sorted::Static(i, _) if self.compat && !shown(i as u32) => continue,
                 Sorted::Static(i, d) => (i, d),
                 Sorted::Effect(e) => {
                     if let Some((pipelines, prepared)) = particles {
@@ -2377,6 +2442,48 @@ impl Renderer {
     /// camera's pass.
     // TODO(#347): the first-person models' part of each pass (section 5.5)
     // waits for hud-scope.md item 26.
+    /// Encodes one step of the static world into `pass`: its bundle, or
+    /// its draws that `shown` keeps (by kept index), as the bundle would
+    /// draw them.
+    fn encode_static(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        inner: &Inner,
+        step: &Static,
+        shown: &dyn Fn(u32) -> bool,
+    ) {
+        let draws = match step {
+            Static::Bundle(bundle) => {
+                pass.execute_bundles([bundle]);
+                return;
+            }
+            Static::Draws(draws) => draws,
+        };
+        pass.set_bind_group(0, &inner.frame_group, &[]);
+        let mut surface = None;
+        let mut buffers = None;
+        for d in draws.iter().filter(|d| shown(d.kept)) {
+            if surface != Some(d.surface) {
+                surface = Some(d.surface);
+                pass.set_pipeline(&inner.surface_pipelines[d.surface as usize]);
+                pass.set_bind_group(1, &inner.surface_groups[d.surface as usize], &[]);
+            }
+            if buffers != Some((d.vertex_buffer, d.index_buffer)) {
+                buffers = Some((d.vertex_buffer, d.index_buffer));
+                pass.set_vertex_buffer(0, inner.vertex_buffers[d.vertex_buffer as usize].slice(..));
+                pass.set_index_buffer(
+                    inner.index_buffers[d.index_buffer as usize].slice(..),
+                    inner.index_formats[d.index_buffer as usize],
+                );
+            }
+            pass.draw_indexed(
+                d.first_index..d.first_index + d.index_count,
+                d.first_vertex,
+                d.kept..d.kept + 1,
+            );
+        }
+    }
+
     fn prepare_lights(&mut self, frame: &WorldFrame, camera: &Mat4) -> Vec<(u32, bool, Vec<u32>)> {
         let Some(p) = self.world_pipelines.as_mut() else {
             return Vec::new();

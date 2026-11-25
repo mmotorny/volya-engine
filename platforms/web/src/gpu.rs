@@ -63,6 +63,9 @@ struct Playing {
 }
 
 thread_local! {
+    /// Whether the detail objects are drawn (`debug_render`).
+    static DETAILS_DRAWN: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+
     static GPU: RefCell<Option<Gpu>> = const { RefCell::new(None) };
     /// Why there is no GPU, once initialisation failed.
     static UNAVAILABLE: RefCell<Option<String>> = const { RefCell::new(None) };
@@ -472,6 +475,12 @@ pub fn set_splash(image: &Rgba) {
     });
 }
 
+/// Whether the detail objects are drawn (tests, #415).
+#[cfg(feature = "test-ops")]
+pub fn set_details_drawn(on: bool) {
+    DETAILS_DRAWN.set(on);
+}
+
 /// One animation frame at `time` (milliseconds): advances video and
 /// presents if anything changed.
 pub fn frame(time: f64) {
@@ -479,7 +488,8 @@ pub fn frame(time: f64) {
         // wgpu's GL backend runs buffer-mapping callbacks (captures) and
         // frees finished uploads only when polled; the browser's WebGPU
         // does both on its own (this is then a no-op).
-        let _ = gpu.renderer.device().poll(wgpu::PollType::Poll);
+        let _ = tracing::info_span!("render.poll")
+            .in_scope(|| gpu.renderer.device().poll(wgpu::PollType::Poll));
         // A world drawn ahead of its level (`warm_up`) is held only while
         // the loading waits for it.
         if crate::engine::world_to_prepare().is_none() {
@@ -497,7 +507,12 @@ pub fn frame(time: f64) {
             crate::engine::draw_list(&mut gpu.renderer, &mut gpu.presenter, resolution)
         });
         match list {
-            Some(list) => {
+            Some(mut list) => {
+                if !DETAILS_DRAWN.get()
+                    && let Some(world) = &mut list.world
+                {
+                    world.details = None;
+                }
                 if DRAWN.get() != Some((resolution, canvas)) {
                     DRAWN.set(Some((resolution, canvas)));
                     tracing::info!(
@@ -578,7 +593,8 @@ impl Gpu {
 
     /// Presents `list` drawn at `size`, scaled to fit the canvas.
     fn present_at(&mut self, list: &DrawList, size: (u32, u32)) {
-        let texture = match self.surface.get_current_texture() {
+        let current = tracing::info_span!("render.acquire").in_scope(|| self.surface.get_current_texture());
+        let texture = match current {
             wgpu::CurrentSurfaceTexture::Success(t)
             | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {

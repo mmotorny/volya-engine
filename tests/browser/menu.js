@@ -626,7 +626,17 @@ export const tests = {
         rows.push(`${width}×${height}: interval ${ms(s.frame_interval_ms)}, CPU ${ms(s.frame_cpu_ms)}, GPU ${ms(s.gpu_time_ms)}, done ${ms(s.gpu_done_ms)}`);
         assert(s.gpu_done_ms > 0, `no GPU done time at ${width}×${height}`);
       }
+      // At 1024×768: r__supersample 1 instead of 2, and the grass left
+      // undrawn (#415).
+      for (const [what, change] of [["r__supersample 1", { supersample: 1 }], ["no grass", { supersample: 2, details: false }]]) {
+        await volya.call("debug_render", change);
+        await sleep(1000 + 60 * 34);
+        const s = await volya.call("level_stats");
+        const ms = (v) => (v == null ? "–" : v.toFixed(1));
+        rows.push(`1024×768, ${what}: interval ${ms(s.frame_interval_ms)}, CPU ${ms(s.frame_cpu_ms)}, GPU ${ms(s.gpu_time_ms)}, done ${ms(s.gpu_done_ms)}`);
+      }
     } finally {
+      await volya.call("debug_render", { supersample: 2, details: true });
       await volya.call("debug_video_mode", { width: 1024, height: 768 });
     }
     return `ms per frame: ${rows.join("; ")} (before: GPU ${before.gpu_time_ms?.toFixed(1)}, done ${before.gpu_done_ms?.toFixed(1)})`;

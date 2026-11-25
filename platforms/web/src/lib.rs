@@ -514,6 +514,19 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
             let mode = Resolution::new(side("width").max(1), side("height").max(1));
             engine::set_video_mode(mode).map(|()| "null".into())
         }
+        // `{"supersample": …, "details": …}`: `r__supersample` applied as
+        // a video restart would, and whether the detail objects are drawn
+        // (a frame's cost with each, #415).
+        #[cfg(feature = "test-ops")]
+        "debug_render" => {
+            if let Some(n) = args.get("supersample").and_then(|v| v.as_u64()) {
+                engine::set_supersample(n as u32)?;
+            }
+            if let Some(on) = args.get("details").and_then(|v| v.as_bool()) {
+                gpu::set_details_drawn(on);
+            }
+            Ok("null".into())
+        }
         // `{"ms": …}`: every frame takes at least that long from now on.
         // `{"on": …}`: the mixer's commands wait while on (`audio::hold`).
         #[cfg(feature = "test-ops")]
