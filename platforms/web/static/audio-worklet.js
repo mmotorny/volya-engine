@@ -9,10 +9,15 @@
 // so a reply has to last a whole frame however long frames are (#343: a
 // fixed 50 ms per reply starved the output once frames took longer). Each
 // request also says how many frames played as silence for want of mixed
-// ones since the last (underrun) and how many are queued.
+// ones since the last (underrun) and how many are queued; for the diagnostic
+// log (#346), also the last reply's wait, the queue's least, summed and
+// greatest fill over the process calls since the last request, and whether
+// the last reply left it over-full (overrun: over OVERFULL_SECONDS).
 
 const TARGET_SECONDS = 0.15;
 const REQUEST_SECONDS = 0.05;
+// More than the most a reply asks for (TARGET + REQUEST + TARGET).
+const OVERFULL_SECONDS = 0.5;
 
 class VolyaOutput extends AudioWorkletProcessor {
   constructor() {
@@ -24,12 +29,22 @@ class VolyaOutput extends AudioWorkletProcessor {
     this.pending = false;
     this.sent = 0; // currentFrame when the pending request was sent
     this.wait = 0; // frames the last reply took
+    this.overrun = 0; // replies that left the queue over-full
+    this.resetFill();
     this.port.onmessage = ({ data }) => {
       this.queue.push(data);
       this.queued += data.length / 2;
       this.pending = false;
       this.wait = currentFrame - this.sent;
+      if (this.queued > sampleRate * OVERFULL_SECONDS) this.overrun++;
     };
+  }
+
+  resetFill() {
+    this.fillMin = Infinity;
+    this.fillMax = 0;
+    this.fillSum = 0;
+    this.fillN = 0;
   }
 
   process(_inputs, outputs) {
@@ -50,13 +65,26 @@ class VolyaOutput extends AudioWorkletProcessor {
         this.offset = 0;
       }
     }
+    this.fillMin = Math.min(this.fillMin, this.queued);
+    this.fillMax = Math.max(this.fillMax, this.queued);
+    this.fillSum += this.queued;
+    this.fillN++;
     const target = sampleRate * TARGET_SECONDS;
     if (!this.pending && this.queued < target) {
       this.pending = true;
       this.sent = currentFrame;
       const need = Math.round(target + sampleRate * REQUEST_SECONDS + Math.min(this.wait, target) - this.queued);
-      this.port.postMessage({ need, underrun: this.underrun, queued: this.queued });
+      this.port.postMessage({
+        need,
+        underrun: this.underrun,
+        queued: this.queued,
+        wait: this.wait,
+        fill: [this.fillMin, this.fillSum, this.fillMax, this.fillN],
+        overrun: this.overrun,
+      });
       this.underrun = 0;
+      this.overrun = 0;
+      this.resetFill();
     }
     return true;
   }

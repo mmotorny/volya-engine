@@ -3,7 +3,8 @@
 
 //! Rendering in the engine worker on the `OffscreenCanvas` the page
 //! transferred (docs/architecture.md, Threading): WebGPU when the browser
-//! gives an adapter, else WebGL 2 (#113). The page reports the canvas's CSS
+//! gives an adapter, else WebGL 2 (#113), or WebGL 2 where the player chose
+//! it (#121). The page reports the canvas's CSS
 //! size and devicePixelRatio ([`resize`]); `engine-worker.js` calls
 //! [`frame`] once per animation frame. Without either the engine runs on
 //! without graphics and [`status`] says why.
@@ -71,15 +72,16 @@ fn error(e: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&e.to_string())
 }
 
-/// Sets up WebGPU on `canvas`; on failure records why and returns normally.
-pub async fn init(canvas: OffscreenCanvas) {
-    match connect(canvas).await {
+/// Sets up WebGPU, or WebGL 2 where there is no WebGPU or `webgl` asks for
+/// it, on `canvas`; on failure records why and returns normally.
+pub async fn init(canvas: OffscreenCanvas, webgl: bool) {
+    match connect(canvas, webgl).await {
         Ok(gpu) => GPU.with(|g| *g.borrow_mut() = Some(gpu)),
         Err(reason) => UNAVAILABLE.with(|u| *u.borrow_mut() = Some(reason)),
     }
 }
 
-async fn connect(canvas: OffscreenCanvas) -> Result<Gpu, String> {
+async fn connect(canvas: OffscreenCanvas, webgl: bool) -> Result<Gpu, String> {
     // A canvas keeps the first kind of context it gives, so WebGPU's
     // adapter is asked for before any surface: without one, WebGL 2 takes
     // the canvas (the iOS Simulator's WebKit has `navigator.gpu` but gives
@@ -88,31 +90,32 @@ async fn connect(canvas: OffscreenCanvas) -> Result<Gpu, String> {
         .map_err(|_| "no navigator in the engine worker")?;
     let has_gpu = js_sys::Reflect::get(&navigator, &"gpu".into())
         .is_ok_and(|gpu| !gpu.is_undefined() && !gpu.is_null());
-    let webgpu = if has_gpu {
+    let webgpu = if webgl {
+        Err(None)
+    } else if has_gpu {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::BROWSER_WEBGPU,
             ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
         match instance.request_adapter(&Default::default()).await {
             Ok(_) => Ok(instance),
-            Err(_) => Err("no WebGPU adapter"),
+            Err(_) => Err(Some("no WebGPU adapter")),
         }
     } else {
-        Err("no WebGPU")
+        Err(Some("no WebGPU"))
     };
     let (instance, backend, why) = match webgpu {
         Ok(instance) => (instance, "webgpu", None::<&str>),
-        // The build for WebGPU: no other way to draw.
-        #[cfg(not(feature = "webgl"))]
-        Err(why) => return Err(why.to_owned()),
-        #[cfg(feature = "webgl")]
+        // Without WebGPU, or WebGL 2 chosen (`why` is then `None`).
         Err(why) => {
-            web_sys::console::info_1(&format!("{why}: trying WebGL 2").into());
+            if let Some(why) = why {
+                web_sys::console::info_1(&format!("{why}: trying WebGL 2").into());
+            }
             let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
                 backends: wgpu::Backends::GL,
                 ..wgpu::InstanceDescriptor::new_without_display_handle()
             });
-            (instance, "webgl2", Some(why))
+            (instance, "webgl2", why)
         }
     };
     let (width, height) = (canvas.width().max(1), canvas.height().max(1));
@@ -125,9 +128,10 @@ async fn connect(canvas: OffscreenCanvas) -> Result<Gpu, String> {
             ..Default::default()
         })
         .await
-        .map_err(|_| match why {
-            Some(why) => format!("{why}; no WebGL 2 adapter"),
-            None => "no WebGPU adapter for the canvas".to_owned(),
+        .map_err(|_| match (backend, why) {
+            ("webgpu", _) => "no WebGPU adapter for the canvas".to_owned(),
+            (_, Some(why)) => format!("{why}; no WebGL 2 adapter"),
+            (_, None) => "no WebGL 2 adapter".to_owned(),
         })?;
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
@@ -145,6 +149,7 @@ async fn connect(canvas: OffscreenCanvas) -> Result<Gpu, String> {
     // Report instead of panicking, which would stop the whole engine.
     device.on_uncaptured_error(Arc::new(move |e| {
         web_sys::console::error_1(&format!("{backend}: {e}").into());
+        tracing::error!(backend, error = %e, "GPU error");
     }));
     // Colour values pass through: a non-sRGB format, preferred one first.
     let format = surface

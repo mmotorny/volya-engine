@@ -294,6 +294,12 @@ export const tests = {
     return `${(result.status.bytes / 2 ** 30).toFixed(2)} GiB in ${((performance.now() - started) / 1000).toFixed(1)} s`;
   },
 
+  "the diagnostic log is turned on for the games that follow": async () => {
+    needsGame();
+    const status = await volya.diagnostics.setEnabled(true, volya.call);
+    assert(status.on, "not on");
+  },
+
   "launch loads under the splash and starts the logo sequence": async () => {
     needsGame();
     const launched = await volya.call("launch");
@@ -1563,6 +1569,87 @@ export const tests = {
     assertEqual((await volya.call("input_state")).capture, false, "capture");
     await sleep(50);
     assertEqual(document.querySelector("main").hidden, false, "page interface hidden");
+  },
+
+  "the diagnostic log holds the games, their levels and their frames, after the game ended": async () => {
+    needsGame();
+    const { text } = await volya.call("diagnostic_log");
+    const events = JSON.parse(text).traceEvents;
+    const pid = events.findLast((e) => e.name === "session").pid;
+    const mine = events.filter((e) => e.pid === pid);
+    const count = (ph, name) => mine.filter((e) => e.ph === ph && e.name === name).length;
+    // Two New Games and the options' game, each ended.
+    assert(count("i", "game started") >= 2, `games started ${count("i", "game started")}`);
+    assertEqual(count("i", "game ended"), count("i", "game started"), "games ended");
+    assert(count("i", "level loading") >= 2 && count("i", "level made") >= 2, "levels");
+    const series = (key) => mine.filter((e) => e.ph === "C" && key in e.args).length;
+    for (const key of ["frame max", "engine max", "render max", "frame.interval_ms max", "MiB", "diagnostics.write_ms max"]) {
+      assert(series(key) > 10, `${key}: ${series(key)}`);
+    }
+    // The level's first frame creates its sounds: long, with what ran.
+    const long = mine.filter((e) => e.ph === "X" && e.name === "frame");
+    assert(long.length > 0, "no long frame");
+    const audio = volya.audioState() === "running";
+    if (audio) assert(series("audio.fill_ms min") > 10 && series("decode max") > 10, "audio");
+    await volya.diagnostics.setEnabled(false, volya.call);
+    const worst = Math.max(...long.map((e) => e.dur)) / 1000;
+    // The log's rate while a game runs: this session's bytes over its time.
+    const seconds = (mine.at(-1).ts - mine.find((e) => e.ts > 0).ts) / 1e6;
+    const bytes = mine.reduce((sum, e) => sum + JSON.stringify(e).length + 2, 0);
+    return `${mine.length} events, ${(bytes / seconds).toFixed(0)} B/s over ${seconds.toFixed(0)} s; ${long.length} long frames (worst ${worst.toFixed(0)} ms); audio ${audio ? "running" : volya.audioState()}`;
+  },
+
+  "WebGL 2 chosen in Settings: Play starts the engine anew on it, and the level draws": async () => {
+    needsGame();
+    const { graphics } = volya;
+    if (!graphics.available.webgl2) skip("no WebGL 2 here");
+    if (!graphics.available.webgpu) skip("no WebGPU here: the New Games above drew through WebGL 2");
+    await volya.showSettings();
+    document.querySelector('#game input[name="graphics"][value="webgl2"]').click();
+    try {
+      await volya.refresh();
+      document.querySelector("#game button.play").click();
+      // Calls made while the engine starts anew fail: asked again.
+      for (const deadline = performance.now() + 30000; ; await sleep(100)) {
+        const s = await state().catch(() => null);
+        if (s?.phase === "startup" || s?.phase === "menu") break;
+        assert(performance.now() < deadline, `the game did not start: ${JSON.stringify(s)?.slice(0, 300)}`);
+      }
+      const { gpu: drawn } = await volya.status();
+      assertEqual([drawn.state, drawn.backend], ["ready", "webgl2"], "graphics");
+      // Escape skips the logos, then the title menu's New Game.
+      for (let s = await state(); s.phase !== "menu"; s = await state()) {
+        key("Escape");
+        await sleep(100);
+      }
+      await readRender();
+      pointer("pointermove", row(0));
+      await until((s) => s.menu?.selected === 0 && !s.menu.moving, "item 0", 5000);
+      key("Enter");
+      await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
+      key("Enter");
+      const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", drawn.textures === "etc2" ? 120000 : 60000);
+      assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
+      key("Escape");
+      await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
+      // Frame times over a few seconds of the level.
+      await sleep(3000);
+      const { rgba } = await volya.call("debug_capture", { width: 256, height: 192 });
+      const colours = new Set();
+      for (let i = 0; i < rgba.length; i += 4) colours.add((rgba[i] << 16) | (rgba[i + 1] << 8) | rgba[i + 2]);
+      assert(colours.size > 200, `${colours.size} colours`);
+      const stats = await volya.call("level_stats");
+      return `${drawn.backend}, textures ${drawn.textures}; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; ${colours.size} colours; ${JSON.stringify(stats)}`;
+    } finally {
+      localStorage.removeItem("volya-engine.graphics");
+      // Leaves the game for the tests after (a failure above is the one told).
+      if ((await state()).phase !== "none") {
+        if ((await state()).menu) key("Escape");
+        await sleep(100);
+        key("KeyQ");
+        await until((s) => s.phase === "none", "the game to end").catch((e) => console.warn(e.message));
+      }
+    }
   },
 
   "forgets the game": async () => {
