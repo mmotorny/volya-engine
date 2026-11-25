@@ -58,17 +58,22 @@ fn level_record(id: u32, instance: u32) -> Draw {
     return record(select(id, instance, id == SHARED));
 }
 
-@group(1) @binding(0) var t_base: texture_2d<f32>;
-@group(1) @binding(1) var t_second: texture_2d<f32>;
-@group(1) @binding(2) var t_hemi: texture_2d<f32>;
-@group(1) @binding(3) var t_detail: texture_2d<f32>;
+// A surface's textures in two groups: its light maps and environment map,
+// which many surfaces share, and its base and detail textures, which change
+// from surface to surface; one group of each per distinct set (#429). The
+// latter is last: wgpu binds every group after one that is set again, and
+// its GL backend binds every texture of a group it binds.
+@group(1) @binding(0) var t_second: texture_2d<f32>;
+@group(1) @binding(1) var t_hemi: texture_2d<f32>;
+// The cube environment map of the objects' MODELEbB surfaces.
+@group(1) @binding(2) var t_env: texture_cube<f32>;
 // s_base, s_detail: wrap, anisotropic; s_lmap: wrap, linear;
 // s_hemi: clamp, linear, no mip (section 4.4).
-@group(1) @binding(4) var s_aniso: sampler;
-@group(1) @binding(5) var s_linear: sampler;
-@group(1) @binding(6) var s_clamp: sampler;
-// The cube environment map of the objects' MODELEbB surfaces.
-@group(1) @binding(7) var t_env: texture_cube<f32>;
+@group(1) @binding(3) var s_linear: sampler;
+@group(1) @binding(4) var s_clamp: sampler;
+@group(2) @binding(0) var t_base: texture_2d<f32>;
+@group(2) @binding(1) var t_detail: texture_2d<f32>;
+@group(2) @binding(2) var s_aniso: sampler;
 
 // Element 0 (near) when |E − C| − r < 44 m (section 5).
 const NEAR_DISTANCE: f32 = 44.0;
@@ -496,11 +501,12 @@ struct Light {
     kind: vec4<f32>,
 }
 
-@group(2) @binding(0) var<uniform> light: Light;
+// In place of the light maps' group (its bindings after theirs).
+@group(1) @binding(5) var<uniform> light: Light;
 // s_lmap and s_att: clamped, linear, the first level only (section 6.2).
-@group(2) @binding(1) var t_lmap: texture_2d<f32>;
-@group(2) @binding(2) var t_att: texture_2d<f32>;
-@group(2) @binding(3) var s_att: sampler;
+@group(1) @binding(6) var t_lmap: texture_2d<f32>;
+@group(1) @binding(7) var t_att: texture_2d<f32>;
+@group(1) @binding(8) var s_att: sampler;
 
 struct LightOut {
     @invariant @builtin(position) clip: vec4<f32>,
