@@ -1919,6 +1919,61 @@ mod tests {
     }
 
     #[test]
+    fn a_touchpad_double_tap_and_hold_drags_the_load_list_thumb() {
+        use crate::core::input::{Event, Input, MouseButton};
+        let tree = crate::fixture::tree();
+        let data = crate::fixture::data(&tree);
+        let mut l = list(30);
+        let mut input = Input::new();
+        let mut cursor = input.cursor_ui();
+        let mut events = Vec::new();
+        let mut frame = |input: &mut Input, l: &mut SaveList| {
+            for e in crate::dialog::events(&data, input, cursor, 0.016) {
+                if let Ev::Move(at) = e {
+                    cursor = at;
+                }
+                events.push(l.event(e, cursor));
+            }
+            input.end_frame();
+        };
+        let to = |input: &Input, [x, y]: [f32; 2]| {
+            // Slow: one to one, then section 7 on a 1024 × 768 screen.
+            let ([cx, cy], s) = (input.cursor_ui(), input.sensitivity());
+            Event::TouchpadMotion {
+                delta: [2.0 * (x - cx) / s, 2.0 * (y - cy) / s],
+                speed: 0.0,
+            }
+        };
+        let button = |pressed, double, time| Event::TouchpadButton {
+            button: MouseButton::Left,
+            pressed,
+            double,
+            time,
+        };
+        // The cursor on the thumb (from y 415, 16 below the bar's top);
+        // a tap, then the second touch drags with a single press, however
+        // soon after the first.
+        let thumb = l.thumb_rect();
+        input.handle(to(&input, [thumb.x + 8.0, thumb.y + 4.0]));
+        frame(&mut input, &mut l);
+        input.handle(button(true, false, 0.0));
+        input.handle(button(false, false, 0.0));
+        frame(&mut input, &mut l);
+        input.handle(button(true, false, 100.0));
+        frame(&mut input, &mut l);
+        let start = l.drag.expect("the thumb taken");
+        input.handle(to(&input, [thumb.x + 8.0, thumb.y + 4.0 + 40.0]));
+        frame(&mut input, &mut l);
+        assert!((l.drag.unwrap() - start - 40.0).abs() < 0.01);
+        assert!(l.first > 0, "the list scrolled");
+        input.handle(button(false, false, 900.0));
+        frame(&mut input, &mut l);
+        assert_eq!(l.drag, None);
+        // Never a double click (which would load a save).
+        assert!(!events.contains(&ListEvent::Double));
+    }
+
+    #[test]
     fn the_caret_counts_characters() {
         let mut f = NameField::default();
         f.set("сейв");

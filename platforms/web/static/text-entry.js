@@ -11,8 +11,9 @@
 // only. Touch is a touchpad for the cursor there (#108), so the field is
 // clicked with the cursor like everything else, and the input never takes
 // taps itself. A device's keyboard rises only for an input focused within a
-// user gesture (iOS, believed; not measured): so the engine reports
-// whether the cursor is over the field, and when a touchpad gesture presses
+// user gesture (iOS; that a pointerup handler counts is believed, not
+// measured): so the engine reports whether the cursor is over the field,
+// and when a touchpad gesture presses
 // the left button over it, input.js calls `click()` in that very event
 // handler, which focuses the input; the same press reaches the engine and
 // focuses its field as a mouse click does. What is typed into the input is

@@ -16,7 +16,8 @@
 //! | `["button", x, y, "left"\|"right"\|"middle", pressed, time]` | mouse button |
 //! | `["touch", x, y, "start"\|"move"\|"end", time, id, primary]` | a touch contact (`id`, `primary` optional: a primary contact without id), while the game shows no cursor |
 //! | `["cursor_motion", dx, dy, speed]` | a touchpad swipe's motion while the game shows its cursor (#108), and its smoothed speed in CSS pixels per second |
-//! | `["cursor_button", "left"\|"right", pressed, time]` | a touchpad gesture pressing or releasing a mouse button at the cursor (#108) |
+//! | `["cursor_button", "left"\|"right", pressed, time, double]` | a touchpad gesture pressing or releasing a mouse button at the cursor (#108); `double` for a double click's second press |
+//! | `["touch_drop"]` | the touches down when the cursor appeared are dropped: their left button released where the cursor is (#108) |
 //! | `["key", name, pressed]` | key ([`Key::name`]), no auto-repeat |
 //! | `["pad", name, pressed]` | gamepad button ([`GamepadButton::name`]) |
 //! | `["axis", name, value]` | gamepad axis ([`GamepadAxis::name`]) |
@@ -214,6 +215,10 @@ impl State {
                 }
                 Event::Touch { at, phase, time }
             }
+            Event::TouchDropped => {
+                self.touch_down = false;
+                Event::TouchDropped
+            }
             Event::Contact { id, at, phase } => Event::Contact {
                 id,
                 at: self.place(at),
@@ -284,8 +289,10 @@ fn decode(message: &Array) -> Result<Option<Vec<Event>>, JsValue> {
         "cursor_button" => Event::TouchpadButton {
             button: MouseButton::from_name(&text(1)?).ok_or_else(bad)?,
             pressed: flag(2)?,
+            double: message.get(4).as_bool().unwrap_or(false),
             time: num(3)?,
         },
+        "touch_drop" => Event::TouchDropped,
         "key" => Event::Key {
             key: Key::from_name(&text(1)?).ok_or_else(bad)?,
             pressed: flag(2)?,

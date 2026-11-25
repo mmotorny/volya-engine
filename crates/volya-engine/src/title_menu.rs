@@ -1045,6 +1045,7 @@ mod tests {
                 r.input.handle(Event::TouchpadButton {
                     button: MouseButton::Left,
                     pressed,
+                    double: false,
                     time: now as f64,
                 });
             }

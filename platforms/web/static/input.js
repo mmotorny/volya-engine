@@ -15,7 +15,17 @@
 // Whenever the game shows its mouse cursor, touch is a touchpad for it
 // (touchpad.js, #108): swipes move the cursor, taps click at it, and a
 // touch never clicks where it lands. Elsewhere touches go as contacts.
-// Each touch stays with the way it began.
+// Each touchpad touch stays one until lifted; direct touches still down
+// when the cursor appears are dropped (their button released, the cursor
+// left where it is).
+//
+// The page's text entry is focused in the handler of the touchpad's click
+// (`onClick`): that the device's keyboard rises for a focus in a pointerup
+// handler is believed, not measured (WebKit dispatches pointer events from
+// its touch events). While the cursor shows, touchend is cancelled too: the
+// Touch Events specification documents that this suppresses the
+// compatibility mouse events and the click, so no synthetic mousedown blurs
+// the input just focused.
 
 import { createTouchpad } from "./touchpad.js";
 
@@ -236,6 +246,7 @@ export function startInput(view, send, { onClick = () => {} } = {}) {
         touchpad(event);
         return;
       }
+      if (route !== "direct") return;
       // Every contact, with its id; the primary one also drives the cursor.
       const phase = { pointerdown: "start", pointermove: "move" }[event.type] ?? "end";
       send(["touch", ...at(event), phase, event.timeStamp, event.pointerId, event.isPrimary]);
@@ -262,6 +273,9 @@ export function startInput(view, send, { onClick = () => {} } = {}) {
     addEventListener(type, pointer, { passive: false });
   }
   addEventListener("contextmenu", (event) => capture && event.preventDefault());
+  addEventListener("touchend", (event) => capture && cursor && event.cancelable && event.preventDefault(), {
+    passive: false,
+  });
   // Wheel steps (our choice): one per line or page, one per WHEEL_PIXELS of
   // pixel scrolling (trackpads send many small deltas); negative is up.
   let wheel = 0;
@@ -354,12 +368,17 @@ export function startInput(view, send, { onClick = () => {} } = {}) {
     requestAnimationFrame(poll);
   };
 
-  // Touches already down when the cursor shows or hides go on as they
-  // began; a touchpad drag under a cursor that hides is released.
+  // Touchpad touches down when the cursor hides are forgotten (a drag
+  // released); direct touches down when it shows are dropped.
   const setCursor = (shown) => {
     if (shown === cursor) return;
     cursor = shown;
     if (!shown) padSend(pad.reset(performance.now()));
+    const direct = [...routes].filter(([, route]) => route === "direct");
+    if (shown && direct.length > 0) {
+      for (const [id] of direct) routes.set(id, "dropped");
+      send(["touch_drop"]);
+    }
   };
 
   const setLevel = (on) => {

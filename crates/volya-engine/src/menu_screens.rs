@@ -571,6 +571,7 @@ mod tests {
                 self.input.handle(Event::TouchpadButton {
                     button: MouseButton::Left,
                     pressed,
+                    double: false,
                     time: self.now as f64 * 100.0,
                 });
             }

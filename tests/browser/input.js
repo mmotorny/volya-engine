@@ -168,7 +168,7 @@ export const tests = {
     late.down(1, 0, 0, 1000);
     assertEqual(late.deadline(), 1000 + LONG_PRESS_MS, "deadline");
     assertEqual(late.tick(1000 + LONG_PRESS_MS - 1), [], "not yet");
-    assertEqual(plain(late.up(1, 0, 0, 1000 + LONG_PRESS_MS)), [], "no tap");
+    assertEqual(plain(late.up(1, 0, 0, 1000 + LONG_PRESS_MS)), [`right down @${1000 + LONG_PRESS_MS}`, `right up @${1000 + LONG_PRESS_MS}`], "a long press, no tap");
     // Moved past the slop: a move, from where it began, then no tap.
     const moved = createTouchpad();
     moved.down(1, 0, 0, 0);
@@ -194,47 +194,76 @@ export const tests = {
     assert(Math.abs(last[0][3] - 133) < 10, `slow speed ${last[0][3]}`);
   },
 
-  "touchpad: a long press is a right click; double-tap and hold drags; a quick second tap is a double click": async () => {
+  "touchpad: a long press is a right click; double-tap and hold drags with a single press; a quick second tap is a double click": async () => {
     const { createTouchpad, LONG_PRESS_MS, DOUBLE_TAP_MS, TAP_SLOP } = await touchpad();
     const pad = createTouchpad();
     pad.down(1, 50, 50, 0);
     assertEqual(plain(pad.tick(LONG_PRESS_MS)), [`right down @${LONG_PRESS_MS}`, `right up @${LONG_PRESS_MS}`], "long press");
     assertEqual(pad.tick(LONG_PRESS_MS + 100), [], "once");
     assertEqual(plain(pad.up(1, 50, 50, 900)), [], "no tap after it");
-    // A tap, then a touch soon after: pressed at once, held while moving.
+    // Lifted past the long press before its timer ran: the right click then.
+    const late = createTouchpad();
+    late.down(1, 0, 0, 0);
+    assertEqual(plain(late.up(1, 0, 0, LONG_PRESS_MS)), [`right down @${LONG_PRESS_MS}`, `right up @${LONG_PRESS_MS}`], "late lift");
+    // A tap, then a touch soon after: moved past the slop, it presses (a
+    // single press) and drags.
     pad.down(2, 0, 0, 1000);
     pad.up(2, 0, 0, 1050);
-    assertEqual(plain(pad.down(3, 300, 300, 1050 + DOUBLE_TAP_MS)), [`left down @${1050 + DOUBLE_TAP_MS}`], "drag pressed");
+    const t2 = 1050 + DOUBLE_TAP_MS - 1;
+    assertEqual(pad.down(3, 300, 300, t2), [], "nothing yet");
+    assertEqual(pad.move(3, 300 + TAP_SLOP, 300, t2 + 10), [], "within the slop");
+    const pressed = pad.move(3, 301 + TAP_SLOP, 300, t2 + 20);
+    assertEqual(plain(pressed), [`left down @${t2 + 20}`, `motion ${TAP_SLOP + 1},0`], "drag pressed");
+    assertEqual(pressed[0][4], false, "a single press");
     assertEqual(pad.deadline(), null, "no long press while dragging");
-    assertEqual(plain(pad.move(3, 302, 300, 1400)), ["motion 2,0"], "dragging moves at once");
+    assertEqual(plain(pad.move(3, 303 + TAP_SLOP, 300, 1400)), ["motion 2,0"], "dragging");
     assertEqual(pad.tick(5000), [], "held, not a right click");
-    // A second finger while dragging does nothing.
+    // A second finger while dragging does nothing; it lifting first leaves
+    // the drag on.
     assertEqual(pad.down(4, 0, 0, 5000), [], "second finger");
     assertEqual(pad.move(4, 0, 300, 5010), [], "no scroll while dragging");
-    assertEqual(plain(pad.up(3, 302, 300, 5100)), ["left up @5100"], "released");
-    assertEqual(pad.up(4, 0, 300, 5110), [], "nothing more");
-    // Too late for a drag: a fresh touch.
+    assertEqual(pad.up(4, 0, 300, 5020), [], "the second finger lifted");
+    assertEqual(plain(pad.move(3, 305 + TAP_SLOP, 300, 5030)), ["motion 2,0"], "still dragging");
+    assertEqual(plain(pad.up(3, 305 + TAP_SLOP, 300, 5100)), ["left up @5100"], "released");
+    // Held still after a tap: the press once the long press's time comes.
     pad.down(5, 0, 0, 6000);
     pad.up(5, 0, 0, 6010);
-    assertEqual(pad.down(6, 0, 0, 6011 + DOUBLE_TAP_MS), [], "too late");
-    pad.cancel(6, 6400);
-    // Two quick taps: two clicks, the second pressed on touching.
+    pad.down(6, 0, 0, 6020);
+    assertEqual(pad.deadline(), 6020 + LONG_PRESS_MS, "deadline");
+    assertEqual(plain(pad.tick(6020 + LONG_PRESS_MS)), [`left down @${6020 + LONG_PRESS_MS}`], "held press");
+    assertEqual(plain(pad.up(6, 0, 0, 7000)), ["left up @7000"], "held release");
+    // Too late for a second touch: a fresh one.
+    pad.down(7, 0, 0, 8000);
+    pad.up(7, 0, 0, 8010);
+    pad.down(8, 0, 0, 8010 + DOUBLE_TAP_MS);
+    assertEqual(plain(pad.up(8, 0, 0, 8300)), ["left down @8300", "left up @8300"], "a plain tap");
+    // Two quick taps: a click, then a double click.
     const twice = createTouchpad();
     twice.down(1, 0, 0, 0);
-    const first = plain(twice.up(1, 0, 0, 40));
-    const second = [...twice.down(1, TAP_SLOP * 5, 0, 120), ...twice.up(1, TAP_SLOP * 5, 0, 160)];
-    assertEqual([...first, ...plain(second)], ["left down @40", "left up @40", "left down @120", "left up @160"], "double tap");
-    // A cancelled drag releases; a reset too.
+    const first = twice.up(1, 0, 0, 40);
+    assertEqual(twice.down(1, TAP_SLOP * 5, 0, 120), [], "the second touch waits");
+    const second = twice.up(1, TAP_SLOP * 5, 0, 160);
+    assertEqual(plain([...first, ...second]), ["left down @40", "left up @40", "left down @160", "left up @160"], "double tap");
+    assertEqual([first[0][4], second[0][4]], [false, true], "the second is a double click");
+    // A drag is released by a cancel of any finger, and by a reset.
+    const drag = (p, t) => {
+      p.down(1, 0, 0, t);
+      p.up(1, 0, 0, t + 10);
+      p.down(1, 0, 0, t + 20);
+      return p.move(1, 50, 0, t + 30);
+    };
     const cancelled = createTouchpad();
-    cancelled.down(1, 0, 0, 0);
-    cancelled.up(1, 0, 0, 10);
-    cancelled.down(1, 0, 0, 20);
-    assertEqual(plain(cancelled.cancel(1, 30)), ["left up @30"], "cancel");
-    cancelled.down(1, 0, 0, 40);
-    cancelled.up(1, 0, 0, 50);
-    cancelled.down(1, 0, 0, 60);
-    assertEqual(plain(cancelled.reset(70)), ["left up @70"], "reset");
-    assertEqual(cancelled.move(1, 50, 50, 80), [], "forgotten");
+    drag(cancelled, 0);
+    cancelled.down(2, 0, 0, 40);
+    assertEqual(plain(cancelled.cancel(2, 50)), ["left up @50"], "cancel of the other finger");
+    assertEqual(cancelled.move(1, 90, 0, 60), [], "then nothing");
+    assertEqual(cancelled.up(1, 90, 0, 70), [], "no second release");
+    drag(cancelled, 1000);
+    assertEqual(plain(cancelled.cancel(1, 1040)), ["left up @1040"], "cancel of the lead");
+    drag(cancelled, 2000);
+    assertEqual(plain(cancelled.reset(2040)), ["left up @2040"], "reset");
+    assertEqual(cancelled.move(1, 90, 50, 2050), [], "forgotten");
+    assertEqual(cancelled.reset(2060), [], "nothing held");
   },
 
   "touchpad: two fingers swiped up or down scroll; no tap or move after": async () => {

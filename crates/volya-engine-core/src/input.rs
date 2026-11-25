@@ -493,12 +493,18 @@ pub enum Event {
         speed: f32,
     },
     /// A touchpad gesture pressed or released a mouse button at the cursor
-    /// (#108) at `time` ms.
+    /// (#108) at `time` ms. The platform's recognizer decides a double
+    /// click (`double`, for a press): a drag's press never is one.
     TouchpadButton {
         button: MouseButton,
         pressed: bool,
+        double: bool,
         time: f64,
     },
+    /// The touches down when the cursor appeared are dropped (#108): the
+    /// left button they hold is released where the cursor is, their
+    /// contacts end.
+    TouchDropped,
     /// A primary touch contact began, moved or ended at `at`.
     Touch {
         at: [f32; 2],
@@ -650,6 +656,7 @@ enum Source {
     Keyboard,
     Mouse,
     Touch,
+    Touchpad,
     Pad,
     Stick,
 }
@@ -982,8 +989,29 @@ impl Input {
             Event::TouchpadButton {
                 button,
                 pressed,
-                time,
-            } => self.mouse_button(Source::Touch, button, pressed, time),
+                double,
+                time: _,
+            } => {
+                // The recognizer's double click, not the press times'.
+                self.last_press[button as usize] = None;
+                self.set(
+                    Source::Touchpad,
+                    Control::Mouse(button),
+                    pressed,
+                    double && pressed,
+                )
+            }
+            Event::TouchDropped => {
+                self.set(
+                    Source::Touch,
+                    Control::Mouse(MouseButton::Left),
+                    false,
+                    false,
+                );
+                for c in &mut self.contacts {
+                    c.ended = true;
+                }
+            }
             Event::Touch { at, phase, time } => {
                 self.move_to(at);
                 match phase {
@@ -1271,12 +1299,20 @@ mod tests {
         assert_eq!(input.cursor()[0], 1.0);
         input.end_frame();
         let at = input.cursor();
-        // A click at the cursor: the left button, double on a quick second.
-        for time in [0.0, 0.0, 100.0, 100.0] {
-            let pressed = !input.is_held(Control::Mouse(MouseButton::Left));
+        // A click at the cursor: the left button, double as the recognizer
+        // says, whatever the times (a drag's quick press is single).
+        for (pressed, double, time) in [
+            (true, false, 0.0),
+            (false, false, 0.0),
+            (true, true, 900.0),
+            (false, true, 900.0),
+            (true, false, 950.0),
+            (false, false, 950.0),
+        ] {
             input.handle(Event::TouchpadButton {
                 button: MouseButton::Left,
                 pressed,
+                double,
                 time,
             });
         }
@@ -1292,6 +1328,8 @@ mod tests {
                     double: true
                 },
                 Action::Release { control: left },
+                press(left),
+                Action::Release { control: left },
             ]
         );
         // Not the mouse's own: the level's controls don't see it.
@@ -1299,9 +1337,34 @@ mod tests {
         input.handle(Event::TouchpadButton {
             button: MouseButton::Right,
             pressed: true,
+            double: false,
             time: 500.0,
         });
         input.release_all();
+        assert!(input.held().is_empty());
+        // Held apart from direct touch: dropping the touches down when the
+        // cursor appeared releases theirs only, where the cursor is.
+        input.handle(Event::Touch {
+            at: [0.0, 0.0],
+            phase: TouchPhase::Start,
+            time: 1000.0,
+        });
+        input.handle(Event::TouchpadButton {
+            button: MouseButton::Left,
+            pressed: true,
+            double: false,
+            time: 1000.0,
+        });
+        let at = input.cursor();
+        input.handle(Event::TouchDropped);
+        assert_eq!(input.cursor(), at);
+        assert_eq!(input.held(), [left], "the touchpad's press kept");
+        input.handle(Event::TouchpadButton {
+            button: MouseButton::Left,
+            pressed: false,
+            double: false,
+            time: 1100.0,
+        });
         assert!(input.held().is_empty());
     }
 

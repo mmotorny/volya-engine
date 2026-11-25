@@ -482,6 +482,7 @@ fn options_screen_from_game_data() {
             run.input.handle(Event::TouchpadButton {
                 button: MouseButton::Left,
                 pressed,
+                double: false,
                 time: run.now as f64 * 10.0,
             });
             run.frame();

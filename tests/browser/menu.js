@@ -1154,9 +1154,17 @@ export const tests = {
     await sleep(100);
     assertEqual((await volya.call("input_state")).held, ["mouse_left"], "held while dragging");
     assertEqual(await value(), 0, "dragged to the bar's start");
-    pointer("pointerup", client(fingerAt[0] + travel, fingerAt[1]), { ...t, pointerId: id, buttons: 0 });
+    // The page losing focus mid-drag releases it, and the touchpad forgets
+    // the finger: its further motion and its lift do nothing.
+    dispatchEvent(new Event("blur"));
     await sleep(100);
-    assertEqual((await volya.call("input_state")).held, [], "released");
+    const blurred = await volya.call("input_state");
+    assertEqual(blurred.held, [], "released by the blur");
+    pointer("pointermove", client(fingerAt[0] + travel + 60, fingerAt[1]), { ...t, pointerId: id, buttons: 1 });
+    pointer("pointerup", client(fingerAt[0] + travel + 60, fingerAt[1]), { ...t, pointerId: id, buttons: 0 });
+    await sleep(100);
+    const after = await volya.call("input_state");
+    assertEqual([after.ui, after.count], [blurred.ui, blurred.count], "the forgotten finger");
     // The controls tab; two fingers on the key table swiped up scroll it
     // down, swiped down back.
     await swipeTo(centreOf(button(await options(), "tab 3")));
