@@ -455,7 +455,17 @@ impl LevelLights {
             dt,
             self.glows_per_frame,
             |p| Self::has_sector(collision, portals, p),
-            |from, dir, length| collision.ray_hits(from, dir, length),
+            |from, dir, length| {
+                let mut hit = None;
+                collision.ray_any(from, dir, length, |t| {
+                    let found = geometry::segment_hits_triangle(from, dir, length, t);
+                    if found {
+                        hit = Some(*t);
+                    }
+                    found
+                });
+                hit
+            },
         );
     }
 

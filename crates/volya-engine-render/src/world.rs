@@ -2321,6 +2321,8 @@ impl Renderer {
     /// camera's pass submitted (section 5.5, rule 1, as level.md 9.2
     /// allows); the projected-size rule 3 is the shaders' as in the
     /// camera's pass.
+    // TODO(#347): the first-person models' part of each pass (section 5.5)
+    // waits for hud-scope.md item 26.
     fn prepare_lights(&mut self, frame: &WorldFrame, camera: &Mat4) -> Vec<(u32, bool, Vec<u32>)> {
         let Some(p) = self.world_pipelines.as_mut() else {
             return Vec::new();

@@ -640,4 +640,55 @@ mod tests {
         );
         assert!(resolve("details\\lod/level_lods").is_err());
     }
+
+    #[test]
+    fn light_elements() {
+        // dynamic-lights.md 6.1.
+        let light = |entry: &str| {
+            resolve(entry)
+                .unwrap()
+                .light
+                .map(|l| (l.program, l.alpha_ref, l.priority))
+        };
+        assert_eq!(
+            light("default/mtl\\mtl_a,lmap#5_1,lmap#5_2"),
+            Some((LightProgram::LightMapped, 0, 1))
+        );
+        assert_eq!(
+            light("def_shaders\\def_vertex/mtl\\a"),
+            Some((LightProgram::VertexLit, 0, 1))
+        );
+        // `LM_AREF ` with alpha blending: none (and priority 2).
+        assert_eq!(light("def_shaders\\def_trans/a,b,c"), None);
+        assert_eq!(
+            light("flora\\leaf_wave/trees\\a"),
+            Some((LightProgram::Tree, 0, 1))
+        );
+        assert_eq!(
+            light("levels\\escape_grass/terrain\\a,b"),
+            Some((LightProgram::LightMapped, 0, 1))
+        );
+        assert_eq!(
+            light("models\\model/wood\\a"),
+            Some((LightProgram::Model, 0, 1))
+        );
+        assert_eq!(
+            light("models\\model_aref/wood\\a"),
+            Some((LightProgram::Model, 128, 1))
+        );
+        // Scripted: the helpers' alpha reference 0 and priority 1.
+        assert_eq!(
+            light("selflight/mtl\\lamp"),
+            Some((LightProgram::VertexLit, 0, 1))
+        );
+        assert_eq!(
+            light("effects\\wallmarkblend/wm\\a"),
+            Some((LightProgram::Wallmark, 0, 1))
+        );
+        assert_eq!(
+            light("models\\selflight/a"),
+            Some((LightProgram::Model, 0, 1))
+        );
+        assert_eq!(light("models\\lightplanes/a"), None);
+    }
 }

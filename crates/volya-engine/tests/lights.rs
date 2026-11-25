@@ -411,3 +411,45 @@ fn a_lamp_lights_the_level_on_both_paths_from_game_data() {
         }
     });
 }
+
+/// The lights' cost per frame on the CPU: the lamps' updates, the sun's
+/// records, the choice of lights and their passes, and the glows with
+/// their occlusion rays, at the start position and beside the trader's
+/// lamps (run with `--release` for meaningful times).
+#[test]
+fn lights_frame_cost_from_game_data() {
+    with_game(|tree, data| {
+        let mut screen = LevelScreen::load(tree, data, 0).unwrap();
+        let (_, _, _, _, _, p, d) = LAMPS[3];
+        let at = [p[0] + 1.5 * d[0], p[1] - 0.4, p[2] + 1.5 * d[2]];
+        let eye = [p[0] - 0.6 * d[0], p[1] + 0.5, p[2] - 0.6 * d[2]];
+        for (what, place) in [("start", None), ("trader", Some((eye, look(eye, at))))] {
+            if let Some((eye, angles)) = place {
+                screen.set_camera(eye, angles);
+            }
+            let (view, projection) = screen.view_projection(SIZE.width, SIZE.height);
+            let camera = volya_engine::level_lights::LightCamera {
+                eye: screen.player().view().eye,
+                view,
+                projection,
+                far: 350.0,
+            };
+            let sun = ([0.9132, -0.2079, 0.3505], [0.759, 0.380, 0.102]);
+            let collision = screen.shared_collision();
+            let frames = 2_000u32;
+            let started = Instant::now();
+            for i in 0..frames {
+                let lights = screen.level_lights_mut();
+                lights.lamps_frame(i as f32 * 0.016, 0.016);
+                lights.frame(&collision, &camera, sun, 0.016);
+            }
+            let per = started.elapsed() / frames;
+            let report = screen.level_lights().report();
+            eprintln!(
+                "{what}: {per:.1?} a frame, {} passes, {} glow sprites",
+                report.passes, report.sprites
+            );
+            assert!(per.as_micros() < 5_000, "{what}: {per:?}");
+        }
+    });
+}

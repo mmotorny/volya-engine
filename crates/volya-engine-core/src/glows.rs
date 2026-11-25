@@ -11,6 +11,7 @@
 //! allows): a glow's sector matters only as whether it has one.
 
 use crate::camera::Vec3;
+use crate::collision::geometry::segment_hits_triangle;
 use crate::lights::Frustum;
 
 fn dot(a: Vec3, b: Vec3) -> f32 {
@@ -46,6 +47,18 @@ pub struct Glow {
     sector_due: bool,
     /// The frame it was last tested for occlusion in.
     tested: Option<u64>,
+    /// Its last static test (section 5.1).
+    last: Option<StaticTest>,
+}
+
+/// A glow's remembered static occlusion test (section 5.1): the ray's
+/// start, direction and length, the result and the triangle hit.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct StaticTest {
+    from: Vec3,
+    dir: Vec3,
+    length: f32,
+    hit: Option<[Vec3; 3]>,
 }
 
 /// A glow of [`Glows`].
@@ -119,6 +132,7 @@ impl Glows {
             in_sector: false,
             sector_due: true,
             tested: None,
+            last: None,
         })
     }
 
@@ -136,6 +150,7 @@ impl Glows {
             in_sector: false,
             sector_due: true,
             tested: None,
+            last: None,
         })
     }
 
@@ -204,8 +219,8 @@ impl Glows {
     /// One frame (sections 3 – 6): the glows gathered from `view` and
     /// faded by the frame time `dt` (0 while paused), then up to
     /// `per_frame` (`r1_glows_per_frame`) of the listed ones tested with
-    /// `occluded(from, direction, length)`, then the sprites of the listed
-    /// glows. `in_sector` tells whether the downward ray of `level.md` 9.1
+    /// `occluded(from, direction, length)` (the triangle of the static
+    /// world the ray hits, if any), then the sprites of the listed glows. `in_sector` tells whether the downward ray of `level.md` 9.1
     /// from a point finds a sector.
     pub fn frame(
         &mut self,
@@ -213,7 +228,7 @@ impl Glows {
         dt: f32,
         per_frame: u32,
         mut in_sector: impl FnMut(Vec3) -> bool,
-        mut occluded: impl FnMut(Vec3, Vec3, f32) -> bool,
+        mut occluded: impl FnMut(Vec3, Vec3, f32) -> Option<[Vec3; 3]>,
     ) -> Vec<GlowSprite> {
         self.frame += 1;
         let e = view.eye;
@@ -270,7 +285,8 @@ impl Glows {
             let to = sub(g.position, e);
             let d = dot(to, to).sqrt();
             if d > 1e-7 {
-                g.occluded = occluded(e, to.map(|c| c / d), d);
+                let dir = to.map(|c| c / d);
+                g.occluded = static_test(g, e, dir, d, &mut occluded);
             }
             self.k += 1;
         }
@@ -318,14 +334,57 @@ impl Glows {
     }
 }
 
+/// The static part of the occlusion ray (section 5.1) with the glow's
+/// remembered test: reused when the ray is the same within the tolerances,
+/// "hit" when the remembered triangle is hit again, otherwise the full
+/// test, remembered.
+fn static_test(
+    g: &mut Glow,
+    from: Vec3,
+    dir: Vec3,
+    length: f32,
+    full: &mut impl FnMut(Vec3, Vec3, f32) -> Option<[Vec3; 3]>,
+) -> bool {
+    if let Some(last) = &g.last {
+        let same = (0..3).all(|k| (from[k] - last.from[k]).abs() < 0.001)
+            && (1.0 - dot(dir, last.dir)).abs() < 1e-5
+            && (length - last.length).abs() < 1e-5;
+        if same {
+            return last.hit.is_some();
+        }
+        if let Some(t) = last.hit
+            && segment_hits_triangle(from, dir, length, &t)
+        {
+            return true;
+        }
+    }
+    let hit = full(from, dir, length);
+    g.last = Some(StaticTest {
+        from,
+        dir,
+        length,
+        hit,
+    });
+    hit.is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// A triangle the tests' rays report hit, away from them (so the
+    /// remembered triangle is never hit again).
+    const TRI: [Vec3; 3] = [[-1.0, -1.0, -50.0], [-1.0, 3.0, -50.0], [3.0, -1.0, -50.0]];
+
     /// A view from the origin along +z seeing everything.
     fn view() -> GlowView {
+        view_at([0.0; 3])
+    }
+
+    /// The same from `eye`.
+    fn view_at(eye: Vec3) -> GlowView {
         GlowView {
-            eye: [0.0; 3],
+            eye,
             forward: [0.0, 0.0, 1.0],
             up: [0.0, 1.0, 0.0],
             right: [1.0, 0.0, 0.0],
@@ -362,19 +421,21 @@ mod tests {
         let id = glows.create(0);
         glows.set_position(id, [0.0, 0.0, 10.0]);
         glows.set_on(id, true);
-        let clear = |_: Vec3, _: Vec3, _: f32| false;
+        let clear = |_: Vec3, _: Vec3, _: f32| None;
         glows.frame(&view(), 0.031, 16, |_| true, clear);
         assert!((glows.get(id).unwrap().fade - (1.0 + 4096.0 * 0.031)).abs() < 1e-3);
         // 254 / 4096 = 0.0620 s in all.
         glows.frame(&view(), 0.032, 16, |_| true, clear);
         assert_eq!(glows.get(id).unwrap().fade, 255.0);
-        // Occluded from now: falls by 1024 a second, to 1.
-        glows.frame(&view(), 0.0, 16, |_| true, |_, _, _| true);
+        // Occluded from now (seen from elsewhere, so the ray is tested
+        // again): falls by 1024 a second, to 1.
+        let moved = view_at([0.0, 0.0, 0.01]);
+        glows.frame(&moved, 0.0, 16, |_| true, |_, _, _| Some(TRI));
         assert!(glows.get(id).unwrap().occluded);
-        glows.frame(&view(), 0.124, 16, |_| true, |_, _, _| true);
+        glows.frame(&moved, 0.124, 16, |_| true, |_, _, _| Some(TRI));
         assert!((glows.get(id).unwrap().fade - (255.0 - 1024.0 * 0.124)).abs() < 1e-3);
         // 254 / 1024 = 0.248 s in all.
-        glows.frame(&view(), 0.125, 16, |_| true, |_, _, _| true);
+        glows.frame(&moved, 0.125, 16, |_| true, |_, _, _| Some(TRI));
         assert_eq!(glows.get(id).unwrap().fade, 1.0);
         // Beyond the far plane: not listed, fading out.
         glows.frame(&view(), 0.0, 16, |_| true, clear);
@@ -402,35 +463,67 @@ mod tests {
             |_| true,
             |_, _, l| {
                 tested.push(l);
-                false
+                None
             },
         );
         assert_eq!(tested, [10.0, 11.0, 12.0]);
         tested.clear();
         glows.frame(
-            &view(),
+            &view_at([0.0, 0.0, 0.01]),
             0.0,
             3,
             |_| true,
             |_, _, l| {
                 tested.push(l);
-                false
+                None
             },
         );
-        assert_eq!(tested, [13.0, 14.0, 10.0]);
+        // From elsewhere, so each ray is tested again; the lengths shrink.
+        assert_eq!(tested, [12.99, 13.99, 9.99]);
         tested.clear();
         glows.frame(
-            &view(),
+            &view_at([0.0, 0.0, 0.02]),
             0.0,
             32,
             |_| true,
             |_, _, l| {
                 tested.push(l);
-                false
+                None
             },
         );
         assert_eq!(tested.len(), 5);
         assert!(ids.iter().all(|&id| !glows.get(id).unwrap().occluded));
+    }
+
+    #[test]
+    fn the_static_test_is_remembered() {
+        // Section 5.1: the same ray within the tolerances reuses the
+        // result; the remembered triangle hit again is a hit.
+        let wall = [[-1.0, -1.0, 5.0], [-1.0, 3.0, 5.0], [3.0, -1.0, 5.0]];
+        let mut glows = Glows::default();
+        let id = glows.add_level([0.0, 0.0, 10.0], 0.5, 0);
+        let mut full = 0;
+        let mut test = |glows: &mut Glows, eye: Vec3, hit: Option<[Vec3; 3]>| {
+            glows.frame(
+                &view_at(eye),
+                0.0,
+                16,
+                |_| true,
+                |_, _, _| {
+                    full += 1;
+                    hit
+                },
+            );
+            glows.get(id).unwrap().occluded
+        };
+        assert!(test(&mut glows, [0.0; 3], Some(wall)));
+        // The same ray: remembered, even if the world now says otherwise.
+        assert!(test(&mut glows, [0.0005, 0.0, 0.0], None));
+        // Another ray through the remembered triangle: a hit.
+        assert!(test(&mut glows, [0.5, 0.0, 0.0], None));
+        // One that misses it: the full test.
+        assert!(!test(&mut glows, [0.0, 0.0, 6.0], None));
+        assert_eq!(full, 2);
     }
 
     #[test]
@@ -440,12 +533,12 @@ mod tests {
         // Without a sector: never considered.
         assert!(
             glows
-                .frame(&view(), 0.1, 16, |_| false, |_, _, _| false)
+                .frame(&view(), 0.1, 16, |_| false, |_, _, _| None)
                 .is_empty()
         );
         let mut glows = Glows::default();
         glows.add_level([0.0, 0.0, 10.0], 2.0, 4);
-        let s = glows.frame(&view(), 0.0, 16, |_| true, |_, _, _| false);
+        let s = glows.frame(&view(), 0.0, 16, |_| true, |_, _, _| None);
         assert_eq!(s.len(), 1);
         assert_eq!(s[0].shader, 4);
         assert_eq!(
@@ -461,7 +554,7 @@ mod tests {
         assert_eq!(s[0].b, (0.99f32 * 255.0) as u8);
         // Within 0.2 m in front of the camera: t = 0, not drawn.
         glows.add_level([0.5, 0.0, 0.1], 0.1, 4);
-        let s = glows.frame(&view(), 0.0, 16, |_| true, |_, _, _| false);
+        let s = glows.frame(&view(), 0.0, 16, |_| true, |_, _, _| None);
         assert_eq!(s.len(), 1);
         // A directed glow seen from behind is not drawn.
         let mut glows = Glows::default();
@@ -472,14 +565,14 @@ mod tests {
         for _ in 0..3 {
             assert!(
                 glows
-                    .frame(&view(), 0.1, 16, |_| true, |_, _, _| false)
+                    .frame(&view(), 0.1, 16, |_| true, |_, _, _| None)
                     .is_empty()
             );
         }
         glows.set_direction(id2, [0.0, 0.0, -1.0]);
         assert_eq!(
             glows
-                .frame(&view(), 0.1, 16, |_| true, |_, _, _| false)
+                .frame(&view(), 0.1, 16, |_| true, |_, _, _| None)
                 .len(),
             1
         );
