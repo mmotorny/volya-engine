@@ -28,7 +28,9 @@ use web_sys::{OffscreenCanvas, WorkerGlobalScope};
 
 /// Test builds count the wasm heap's live bytes and their high-water mark
 /// (the `heap_log` op), to tell what a stage holds from what fragmentation
-/// adds to the heap (#357), as `loading_memory.rs` does natively.
+/// adds to the heap (#357), as `loading_memory.rs` does natively; and where
+/// the live bytes sit (the `heap_map` op, #432): per MiB of the heap, and
+/// each live block of 256 KiB or more.
 #[cfg(feature = "test-ops")]
 #[allow(unsafe_code)] // `GlobalAlloc` is unsafe to implement; this forwards.
 mod counting {
@@ -37,6 +39,12 @@ mod counting {
 
     static LIVE: AtomicUsize = AtomicUsize::new(0);
     static PEAK: AtomicUsize = AtomicUsize::new(0);
+    /// Live bytes per MiB of addresses (wasm32: at most 4 GiB).
+    static BY_MIB: [AtomicUsize; 4096] = [const { AtomicUsize::new(0) }; 4096];
+    /// Live blocks of at least `LARGE` bytes: (address, size), 0 for free.
+    const LARGE: usize = 256 << 10;
+    static LARGE_BLOCKS: [(AtomicUsize, AtomicUsize); 512] =
+        [const { (AtomicUsize::new(0), AtomicUsize::new(0)) }; 512];
 
     struct Counting;
 
@@ -44,11 +52,43 @@ mod counting {
         PEAK.fetch_max(LIVE.fetch_add(by, Relaxed) + by, Relaxed);
     }
 
+    /// Adds (or with `add` false removes) `size` bytes at `p` to the map.
+    fn mapped(p: *mut u8, size: usize, add: bool) {
+        let (start, end) = (p as usize, p as usize + size);
+        let mut at = start;
+        while at < end {
+            let mib = at >> 20;
+            let next = ((mib + 1) << 20).min(end);
+            if let Some(b) = BY_MIB.get(mib) {
+                if add {
+                    b.fetch_add(next - at, Relaxed);
+                } else {
+                    b.fetch_sub(next - at, Relaxed);
+                }
+            }
+            at = next;
+        }
+        if size >= LARGE {
+            if add {
+                if let Some(slot) = LARGE_BLOCKS.iter().find(|s| s.0.load(Relaxed) == 0) {
+                    slot.1.store(size, Relaxed);
+                    slot.0.store(p as usize, Relaxed);
+                }
+            } else if let Some(slot) = LARGE_BLOCKS
+                .iter()
+                .find(|s| s.0.load(Relaxed) == p as usize)
+            {
+                slot.0.store(0, Relaxed);
+            }
+        }
+    }
+
     unsafe impl GlobalAlloc for Counting {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
             let p = unsafe { System.alloc(layout) };
             if !p.is_null() {
                 grew(layout.size());
+                mapped(p, layout.size(), true);
             }
             p
         }
@@ -57,6 +97,7 @@ mod counting {
             let p = unsafe { System.alloc_zeroed(layout) };
             if !p.is_null() {
                 grew(layout.size());
+                mapped(p, layout.size(), true);
             }
             p
         }
@@ -64,11 +105,14 @@ mod counting {
         unsafe fn dealloc(&self, p: *mut u8, layout: Layout) {
             unsafe { System.dealloc(p, layout) };
             LIVE.fetch_sub(layout.size(), Relaxed);
+            mapped(p, layout.size(), false);
         }
 
         unsafe fn realloc(&self, p: *mut u8, layout: Layout, size: usize) -> *mut u8 {
             let q = unsafe { System.realloc(p, layout, size) };
             if !q.is_null() {
+                mapped(p, layout.size(), false);
+                mapped(q, size, true);
                 if size > layout.size() {
                     grew(size - layout.size());
                 } else {
@@ -86,6 +130,26 @@ mod counting {
     pub fn take() -> (usize, usize) {
         let live = LIVE.load(Relaxed);
         (live, PEAK.swap(live, Relaxed))
+    }
+
+    pub fn live() -> usize {
+        LIVE.load(Relaxed)
+    }
+
+    /// Live KiB in each MiB of the first `mibs` MiB, and the live blocks of
+    /// 256 KiB or more as (address MiB, size KiB), by address.
+    pub fn map(mibs: usize) -> (Vec<usize>, Vec<(f64, usize)>) {
+        let per = (BY_MIB.iter().take(mibs))
+            .map(|b| b.load(Relaxed) >> 10)
+            .collect();
+        let mut large: Vec<(f64, usize)> = (LARGE_BLOCKS.iter())
+            .filter_map(|s| {
+                let p = s.0.load(Relaxed);
+                (p != 0).then(|| (p as f64 / (1 << 20) as f64, s.1.load(Relaxed) >> 10))
+            })
+            .collect();
+        large.sort_by(|a, b| a.0.total_cmp(&b.0));
+        (per, large)
     }
 }
 
@@ -453,6 +517,19 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
             let on = args.get("on").and_then(|v| v.as_bool()).unwrap_or(false);
             let log = HEAP_LOG.with(|l| std::mem::replace(&mut *l.borrow_mut(), on.then(Vec::new)));
             to_json(&log.unwrap_or_default())
+        }
+        // Where the live bytes sit (#432): live KiB per MiB of the heap and
+        // the live blocks of 256 KiB or more (address MiB, KiB).
+        #[cfg(feature = "test-ops")]
+        "heap_map" => {
+            let (per_mib, large) = counting::map((heap_bytes() as usize).div_ceil(1 << 20));
+            let live = counting::live();
+            to_json(&serde_json::json!({
+                "wasm_heap_bytes": heap_bytes(),
+                "live_bytes": live,
+                "live_kib_per_mib": per_mib,
+                "large": large,
+            }))
         }
         "launch" => to_json(&engine::launch().await?),
         "menu_state" => to_json(&engine::state()),

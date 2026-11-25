@@ -108,6 +108,19 @@ async function drawMenuFrames(scenes) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const state = () => volya.call("menu_state");
+// Where the wasm heap's live bytes sit before the New Game (#432), from the
+// `heap_map` op: per MiB of the heap "#" for 1000 KiB or more live, "+" for
+// 512, "." for 64, "_" for less; then the live blocks of 256 KiB or more
+// (MiB address: KiB).
+const heapMaps = [];
+async function noteHeap(label) {
+  const m = await volya.call("heap_map").catch(() => null);
+  if (!m) return;
+  const mib = (b) => Math.round(b / 2 ** 20);
+  const occupancy = m.live_kib_per_mib.map((k) => (k >= 1000 ? "#" : k >= 512 ? "+" : k >= 64 ? "." : "_")).join("");
+  const large = m.large.map(([at, kib]) => `${at.toFixed(1)}:${kib}`).join(" ");
+  heapMaps.push(`${label} ${mib(m.wasm_heap_bytes)}/${mib(m.live_bytes)} MiB [${occupancy}] large ${large}`);
+}
 const view = () => document.getElementById("view");
 
 function installerBase() {
@@ -403,6 +416,7 @@ export const tests = {
     assertEqual([s.startup.item, s.startup.items], [0, 5], "sequence");
     assertEqual((await volya.call("input_state")).capture, true, "capture");
     assertEqual(document.querySelector("main").hidden, true, "page interface hidden");
+    await noteHeap("launched");
     return `loaded in ${launched.loading_ms.toFixed(0)} ms`;
   },
 
@@ -429,6 +443,7 @@ export const tests = {
     // The installer's settings: 1024 × 768 (options-screens.md 12.4).
     assertEqual(render, [1024, 768], "drawn at vid_mode");
     assertEqual(s.menu.list, "menu_main", "list");
+    await noteHeap("the title menu");
     assertEqual(
       s.menu.items.map((i) => i.caption),
       CAPTIONS,
@@ -565,6 +580,7 @@ export const tests = {
     await until((s) => s.menu.selected === 0, "item 0");
     key("Enter");
     await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
+    await noteHeap("before the New Game");
     await volya.call("heap_log", { on: true });
     key("Enter");
     // The loading screen (docs/behavior/loading-screen.md): a caption per
@@ -614,7 +630,7 @@ export const tests = {
     const shown = await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
     assertEqual(shown.phase, "level", "still in the level");
     const heapNote = overBudget(heap(playing), "wasm heaps during the intro");
-    let note = `${heapNote}wasm heap by caption (MiB, heap/live): ${stages}; "${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; intro skipped, wasm heap ${mib(before.wasm_heap_bytes)} before it, ${mib(playing.wasm_heap_bytes)} while it played, the audio worker's ${mib(playing.audio_heap_bytes)}; at the start ${lights.passes} light passes, ${lights.sprites} glows drawn`;
+    let note = `${heapNote}${heapMaps.join("; ")}; wasm heap by caption (MiB, heap/live): ${stages}; "${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; intro skipped, wasm heap ${mib(before.wasm_heap_bytes)} before it, ${mib(playing.wasm_heap_bytes)} while it played, the audio worker's ${mib(playing.audio_heap_bytes)}; at the start ${lights.passes} light passes, ${lights.sprites} glows drawn`;
     if (gpu.state === "ready") {
       const { rgba } = await volya.call("debug_capture", { width: 256, height: 192 });
       const colours = new Set();
