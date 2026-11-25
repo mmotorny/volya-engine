@@ -297,7 +297,7 @@ export const tests = {
           // The level's states show the touch controls (or the full screen
           // offer) instead of a screen.
           const overlay = state.level?.offer ? "fullscreen-offer" : "touch-controls";
-          const shown = state.level ? doc?.getElementById(overlay)?.hidden === false : doc?.getElementById("game").children.length > 0;
+          const shown = state.level ? doc?.getElementById(overlay)?.hidden === false : doc?.getElementById("game")?.children.length > 0;
           ok = doc?.documentElement.dataset.ready === "true" && (shown || state.startError);
         }
         if (!ok) failed.push(`${device.id}/${state.id}`);

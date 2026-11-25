@@ -332,3 +332,72 @@ pub fn scene(resolution: Resolution) -> Result<serde_json::Value, JsValue> {
         serde_json::to_value(scene).map_err(error)
     })
 }
+
+/// The `ui_images` op (#105): pictures of the game's UI textures for the
+/// page's own controls, each `{path}` (a texture path) or `{id}` (a
+/// texture description id), with an optional `region` `[x, y, width,
+/// height]` and `silhouette` (the HUD icon transform of
+/// [`volya_engine::ui_image::silhouette`]). Answers `{images, cross_color,
+/// ms}`: per request `{width, height, rgba, mean}` (RGBA as base64, `mean`
+/// the alpha-weighted mean colour) or `{error}`; the crosshair's colour
+/// (`[hud_cursor] cross_color`, 0 to 1, or null); the decoding time.
+pub fn ui_images(args: &serde_json::Value) -> Result<serde_json::Value, JsValue> {
+    use volya_engine::ui_image::{self, Source};
+    let started = crate::now();
+    let requests = args
+        .get("images")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    RUNNING.with(|r| {
+        let r = r.borrow();
+        let running = r.as_ref().ok_or_else(|| error("the game is not running"))?;
+        let data = running.app.data();
+        let picture = |tree: &dyn volya_engine::core::vfs::Vfs, request: &serde_json::Value| {
+            let text = |key| request.get(key).and_then(|v| v.as_str());
+            let source = match (text("path"), text("id")) {
+                (Some(path), _) => Source::Path(path.into()),
+                (None, Some(id)) => Source::Id(id.into()),
+                _ => return json!({ "error": "neither `path` nor `id`" }),
+            };
+            let region = match request.get("region") {
+                None | Some(serde_json::Value::Null) => None,
+                Some(v) => match serde_json::from_value::<[u32; 4]>(v.clone()) {
+                    Ok(region) => Some(region),
+                    Err(_) => {
+                        return json!({ "error": format!("`region` must be [x, y, width, height]: {v}") });
+                    }
+                },
+            };
+            let image =
+                match ui_image::load(tree, &data.aliases, &data.descriptions, &source, region) {
+                    Ok(image) => image,
+                    Err(e) => return json!({ "error": e.to_string() }),
+                };
+            let (image, mean) = if request.get("silhouette").and_then(|v| v.as_bool()) == Some(true)
+            {
+                ui_image::silhouette(&image)
+            } else {
+                let mean = ui_image::mean_color(&image);
+                (image, mean)
+            };
+            json!({
+                "width": image.width,
+                "height": image.height,
+                "rgba": crate::game::base64(&image.pixels),
+                "mean": mean,
+            })
+        };
+        let images = crate::game::with_trees(|tree, _| {
+            requests
+                .iter()
+                .map(|request| picture(tree, request))
+                .collect::<Vec<_>>()
+        })?;
+        Ok(json!({
+            "images": images,
+            "cross_color": ui_image::cross_color(&data.system),
+            "ms": crate::now() - started,
+        }))
+    })
+}

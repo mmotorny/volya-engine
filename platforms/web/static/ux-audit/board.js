@@ -59,6 +59,7 @@ function render() {
     const block = document.createElement("section");
     block.id = id;
     block.innerHTML = `<h2>${section.title}</h2>`;
+    if (section.note) block.insertAdjacentHTML("beforeend", `<p class="note">${section.note}</p>`);
     for (const state of section.states) {
       const row = document.createElement("div");
       row.className = "state";

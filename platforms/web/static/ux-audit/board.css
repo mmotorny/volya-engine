@@ -114,6 +114,13 @@ a:hover {
   font-weight: 600;
 }
 
+/* A section's note, e.g. that its art is approximate. */
+.board .note {
+  margin: -0.5rem 0 1rem;
+  font-size: 13px;
+  color: var(--muted);
+}
+
 .state {
   scroll-margin-top: 90px;
   margin-bottom: 2rem;
