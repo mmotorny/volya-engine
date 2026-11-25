@@ -22,6 +22,10 @@ Builds on (not repeated here):
   weather inputs, fog, render-state vocabulary, dynamic light passes.
 - `docs/formats/level.md` (screen thresholds, section 9.4); `docs/formats/level-cform.md` (used only for
   evidence); `docs/behavior/level-loading.md` (game graph, section 5.11).
+- `docs/behavior/offline-simulation.md` (6.2, 7.1): the switch pass and the scheduled updates.
+
+Bracketed ids (`[LO0-1]`, …) name the checks of the dirty workspace's `checks/level-objects/lo0.py` that
+back the statement beside them.
 
 Conventions as in those specifications: little-endian; `u8`/`u16`/`u32`, `s16`, `f32`; `float3` =
 3 × `f32`; `stringZ` zero-terminated Windows-1251; "chunk" = `u32 id`, `u32 size`, payload, found by id;
@@ -109,9 +113,17 @@ For each object of the actor's level, whenever the simulation evaluates it:
 - **online** object: if *off* is false, it stays online. Otherwise, if *on* is false it switches
   offline; otherwise it switches offline when its distance to the actor is > 165 m.
 
-All objects start offline at a New Game. The simulation spreads the evaluation over updates, limited by
-the `[alife]` keys `process_time` (900 µs) and `objects_per_update` (10); how the two limits combine is
-**unestablished**. The level's objects are believed to have all been evaluated once during the 30 frames
+All objects start offline at a New Game. Each simulation update begins with a switch pass over the
+level's objects (offline-simulation.md 6.2), which stops when it comes back to an object already visited
+in this pass or after a time limit of `process_time` − `update_monster_factor` · `process_time` · 10⁻⁶
+seconds of real time [LO0-4b, LO0-5a, LO0-6]. `process_time` is read as an integer number of seconds
+in this formula, although the comment beside it in `config\alife.ltx` says microseconds [LO0-1,
+LO0-4a, LO0-4b, LO0-5a]; with the `[alife]` values `process_time = 900` and
+`update_monster_factor = 0.1` [LO0-1] the limit is about 900 s (899.99991 s) [LO0-2, LO0-3], so every
+pass visits every object of the level [LO0-3, LO0-5a].
+`objects_per_update` (`[alife]`: 10) [LO0-1] limits only the scheduled updates that follow the switch
+pass in the same update (offline-simulation.md 7.1), not the switch pass [LO0-5b, LO0-5c, LO0-6].
+The level's objects are believed to have all been evaluated once during the 30 frames
 in which the loading image is still shown (level-loading.md 2.3), so the first visible frame shows the
 result of one evaluation at the start positions: an object is present if *on* and (not *off* or
 distance ≤ 135 m).
@@ -734,8 +746,7 @@ total — and over all 1,581 `.ogf` files of the archives (2,146,420 vertices, 3
 ## 8. Unestablished
 
 - Whether smart-terrain jobs force characters online before the first frame (2.5), the exact run-time
-  script state at the first switch evaluation (believed as stated in 2.5), and how `process_time` and
-  `objects_per_update` limit the switch pass (2.4).
+  script state at the first switch evaluation (believed as stated in 2.5).
 - The effect of the visual flags byte (3.2).
 - The detail value used for skinned progressive meshes of objects (4.9); the small-object test (5.1).
 - The content of the projected light texture (5.5) and the order in which receivers are chosen (5.3).
@@ -745,7 +756,8 @@ total — and over all 1,581 `.ogf` files of the archives (2,146,420 vertices, 3
 
 ## 9. Provenance
 
-- Date: 2026-11-24.
+- Date: 2026-11-24; revised the same day: section 2.4's limits of the switch pass and the matching item
+  of section 8, after offline-simulation.md.
 - Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG), archives `gamedata.db0` …
   `gamedata.dbd`; binaries `bin\XR_3DA.exe`, `bin\xrGame.dll`, `bin\xrRender_R1.dll`; default
   `__support\userdocs\user.ltx`.
@@ -765,4 +777,7 @@ total — and over all 1,581 `.ogf` files of the archives (2,146,420 vertices, 3
   scripts and shader programs as data. A throwaway decoder written from this text (spawn records with
   every block layout, game-graph levels, LTX inheritance, model files) reproduces the numbers of
   section 7 over all records and all model files; the bind-pose and transform conventions were checked
-  against the data as described in 4.4 and 7.2.
+  against the data as described in 4.4 and 7.2. For the revision of 2.4: the `[alife]` values read
+  from `config\alife.ltx`, the constant of the time limit read from `bin\xrGame.dll`, and static analysis
+  of the binary's reading of the `[alife]` keys, the setup of the two limits, the switch pass and the
+  scheduled updates (checks LO0-1 … LO0-6).
