@@ -19,6 +19,7 @@
 //! particle's position, size, colour, rotation and frame values, with the
 //! effect record's sprite and frames.
 
+pub mod collision;
 pub mod effect;
 pub mod group;
 pub mod placed;

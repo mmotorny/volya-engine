@@ -8,6 +8,7 @@ use volya_engine_formats::particles::{Library, Member, member_flags as flags};
 
 use super::effect::Notice;
 use super::{Bounds, EffectInstance, IDENTITY, Matrix, Mode, Random, Sphere, Vec3};
+use crate::collision::CollisionWorld;
 
 /// The message of a name that is not an effect of the library (P6 2.1).
 pub const NO_EFFECT: &str = "Particle effect doesn't exist";
@@ -157,8 +158,20 @@ impl GroupInstance {
         }
     }
 
-    /// The update with `e` ms (P6 5).
+    /// The update with `e` ms (P6 5), with no collision mesh.
     pub fn update(&mut self, e: u32, library: &Library, random: &mut Random) {
+        self.update_in(e, library, random, None);
+    }
+
+    /// The update with `e` ms (P6 5), every effect instance's collision
+    /// rays cast against `world` (P5 2).
+    pub fn update_in(
+        &mut self,
+        e: u32,
+        library: &Library,
+        random: &mut Random,
+        world: Option<&CollisionWorld>,
+    ) {
         if self.fatal.is_some() {
             return;
         }
@@ -188,7 +201,7 @@ impl GroupInstance {
         let mut collected = Bounds::EMPTY;
         let mut playing = false;
         for m in &mut self.members {
-            match m.update(e, library, random, &mut collected) {
+            match m.update(e, library, random, world, &mut collected) {
                 Ok(p) => playing |= p,
                 Err(fatal) => {
                     self.fatal = Some(fatal);
@@ -328,10 +341,11 @@ impl MemberInstance {
         e: u32,
         library: &Library,
         random: &mut Random,
+        world: Option<&CollisionWorld>,
         collected: &mut Bounds,
     ) -> Result<bool, String> {
         let mut playing = false;
-        self.effect.update(e, random);
+        self.effect.update_in(e, random, world);
         self.notices(library)?;
         if self.effect.is_playing() {
             playing = true;
@@ -346,7 +360,7 @@ impl MemberInstance {
             }
         }
         for c in &mut self.per_particle {
-            c.update(e, random);
+            c.update_in(e, random, world);
             if c.is_playing() {
                 playing = true;
                 collected.merge(&c.bounds());
@@ -355,7 +369,7 @@ impl MemberInstance {
             }
         }
         self.free.retain_mut(|c| {
-            c.update(e, random);
+            c.update_in(e, random, world);
             if c.is_playing() {
                 playing = true;
                 collected.merge(&c.bounds());

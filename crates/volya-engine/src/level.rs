@@ -1072,7 +1072,7 @@ pub struct NewGameLoad {
     dir: String,
     level: Option<Level>,
     geom: Option<GeomFile>,
-    collision: Option<CollisionWorld>,
+    collision: Option<Arc<CollisionWorld>>,
     draw_items: Vec<DrawItem>,
     spheres: Vec<[f32; 4]>,
     modifiers: Vec<EnvModifier>,
@@ -1301,8 +1301,9 @@ impl NewGameLoad {
                 let f = tree
                     .open(&format!("{dir}\\level.cform"))
                     .map_err(|e| file("level.cform", e))?;
-                self.collision =
-                    Some(CollisionWorld::read(f, materials).map_err(|e| file("level.cform", e))?);
+                self.collision = Some(Arc::new(
+                    CollisionWorld::read(f, materials).map_err(|e| file("level.cform", e))?,
+                ));
             }
             Stage::LoadingGeometry => {
                 let mut f = tree
@@ -1388,7 +1389,7 @@ impl NewGameLoad {
                 // The player's footsteps (S11) on its cycles (S10), placed
                 // under this caption by us, with the player's movement.
                 let pairs = earlier(self.pairs.clone(), "gamemtl.xr")?;
-                let collision = earlier(self.collision.as_ref(), "level.cform")?;
+                let collision = earlier(self.collision.as_deref(), "level.cform")?;
                 let visual = earlier(self.player_visual.as_deref(), "player's visual")?;
                 let cycles = footsteps::read_cycles(tree, data, &dir, visual)?;
                 self.footsteps = Some(PlayerFootsteps::new(
@@ -1619,7 +1620,7 @@ impl NewGameLoad {
             // caption by us. They are kept while the level runs (our
             // choice: the game retests them, the sun's ray as the sun moves).
             Stage::ClientSynchronising => {
-                let collision = earlier(self.collision.as_ref(), "level.cform")?;
+                let collision = earlier(self.collision.as_deref(), "level.cform")?;
                 let weather = earlier(self.weather.as_ref(), "weather")?;
                 let clock = earlier(self.clock.as_ref(), "game clock")?;
                 let actor = earlier(self.actor.as_ref(), "actor")?;
@@ -1651,8 +1652,11 @@ impl NewGameLoad {
                     Err(e) if e.kind() == io::ErrorKind::NotFound => Library::default(),
                     Err(e) => return Err(e),
                 };
-                let effects = PlacedEffects::new(Arc::new(library), &records, self.now as u32)
-                    .map_err(|e| invalid(format!("{dir}\\level.ps_static: {e}")))?;
+                // The effects collide with the level (particle-collision.md).
+                let world = self.collision.clone();
+                let effects =
+                    PlacedEffects::new_in(Arc::new(library), &records, self.now as u32, world)
+                        .map_err(|e| invalid(format!("{dir}\\level.ps_static: {e}")))?;
                 self.effects = Some((effects, self.now));
             }
             Stage::PrefetchingObjects
@@ -1741,7 +1745,7 @@ impl NewGameLoad {
                 glow_shaders,
                 light_textures: self.light_textures,
             }),
-            collision: Arc::new(collision),
+            collision,
             sound_data: self.sound,
             fatal: None,
             footsteps: Some(footsteps),
