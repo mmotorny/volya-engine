@@ -672,21 +672,32 @@ export const tests = {
     return `moved ${moved.toFixed(2)} m, turned ${turned.toFixed(2)} rad, sprint-locked ${sprinted.toFixed(2)} m`;
   },
 
-  "New Game again after returning: the level loads anew": async () => {
+  "New Game again after returning: the level loads anew; Escape under the loading image opens the menu once the controls are live": async () => {
     needsGame();
     pointer("pointermove", row(0));
     await until((s) => s.menu.selected === 0, "item 0");
     key("Enter");
     await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
     key("Enter");
+    // Escape while the loading image covers the level's first frames,
+    // before the intro starts under its last two: kept (#96).
+    await until((s) => s.phase === "level" && s.overlay_frames > 6, "the loading image over the level", 60000);
+    key("Escape");
+    const asked = await until((s) => s.menu_asked || s.intro || s.menu, "the Escape taken");
+    const seen = { menu_asked: asked.menu_asked, overlay: asked.overlay_frames, intro: Boolean(asked.intro) };
+    assert(asked.menu_asked && !asked.menu, `the menu asked for, not open: ${JSON.stringify(seen)}`);
     const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level again", 60000);
     assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
-    // The intro again; a tap skips it (our design for touch).
-    assert(s.intro, "the intro plays");
+    // The intro again; a tap skips it (our design for touch). The controls
+    // go live then, and the menu opens at once.
+    assert(s.intro && !s.menu, "the intro plays, no menu");
     const tap = { pointerType: "touch", pointerId: 21, isPrimary: true, button: 0 };
     pointer("pointerdown", client(512, 384), { ...tap, buttons: 1 });
     pointer("pointerup", client(512, 384), { ...tap, buttons: 0 });
-    await until((s) => s.phase === "level" && !s.intro, "the tap to skip the intro");
+    const opened = await until((s) => s.phase === "level" && !s.intro, "the tap to skip the intro");
+    assert(inGame(opened), "the in-game menu opened as the controls went live");
+    key("Escape");
+    await until((s) => s.phase === "level" && !s.menu, "back in the game");
     // A gamepad (the Gamepad API, faked): the left stick pushed up runs.
     const start = (await state()).level.player;
     const pad = { index: 0, mapping: "standard", axes: [0, -1, 0, 0], buttons: Array.from({ length: 17 }, () => ({ pressed: false, value: 0 })) };
