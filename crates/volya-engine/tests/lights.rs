@@ -81,6 +81,7 @@ fn near3(a: [f32; 3], b: [f32; 3], tol: f32) -> bool {
 
 /// hanging-lamps.md 9.3: record, brightness, animator, range, glow radius,
 /// main light position and direction at rest.
+#[allow(clippy::type_complexity)]
 const LAMPS: [(&str, f32, &str, f32, f32, [f32; 3], [f32; 3]); 5] = [
     (
         "trader_light_0000",
@@ -333,6 +334,28 @@ fn first_level_lights_from_game_data() {
         assert_eq!((total, unlit), (380, 5));
         let d_b = sun_b_direction([0.9132, -0.2079, 0.3505]);
         assert!(near3(d_b, [0.6670, -0.6997, 0.2560], 1e-4));
+
+        // glows.md 3, 5, 6: glow 0 (30.484, 19.756, 679.066) seen from
+        // 6 m: tested, faded in and drawn as one sprite of its radius.
+        let glow = [30.484, 19.756, 679.066];
+        let eye = [glow[0], glow[1], glow[2] - 6.0];
+        let mut now = 1_000;
+        for _ in 0..30 {
+            screen.set_camera(eye, look(eye, glow));
+            now += 16;
+            screen.update(now, &Input::new());
+        }
+        let ll = screen.level_lights();
+        let g = ll
+            .glows
+            .iter()
+            .find(|g| near3(g.position, glow, 1e-3))
+            .unwrap();
+        assert!(g.in_sector && !g.occluded && g.fade == 255.0, "{g:?}");
+        let sprite = (ll.sprites().iter())
+            .find(|s| near3(s.corners[0], [glow[0] - 1.0, glow[1] - 1.0, glow[2]], 0.05))
+            .expect("glow 0's sprite");
+        assert!(sprite.b > 200, "{sprite:?}");
     });
 }
 
