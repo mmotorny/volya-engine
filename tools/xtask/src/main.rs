@@ -142,6 +142,20 @@ fn check() -> Result {
             .args(exclude_native_only())
             .args(lint),
     )?;
+    // The web build with WebGL 2 too (WASM_BUILDS).
+    run(cmd(
+        "cargo",
+        &[
+            "clippy",
+            "-p",
+            "volya-engine-web",
+            "--target",
+            WASM_TARGET,
+            "--features",
+            "webgl",
+        ],
+    )
+    .args(lint))?;
     step("Static checks passed");
     Ok(())
 }
@@ -208,43 +222,62 @@ enum Profile {
     Test,
 }
 
+/// The web build's two wasm builds (static/wasm-build.js, #186): the
+/// directory each goes to in `dist/`, the build's name and its features.
+const WASM_BUILDS: &[(&str, &str, &[&str])] =
+    &[("pkg", "webgpu", &[]), ("pkg-webgl", "webgl", &["webgl"])];
+
 fn web(profile: Profile) -> Result {
     let wasm_bindgen = wasm_bindgen_cli()?;
-    step("Web build");
-    let (flags, dir): (&[&str], _) = match profile {
-        Profile::Dev => (&["--features", "test-ops"], "debug"),
-        Profile::Release => (&["--release"], "release"),
-        Profile::Test => (&["--release", "--features", "test-ops"], "release"),
+    let (release, test_ops, dir) = match profile {
+        Profile::Dev => (false, true, "debug"),
+        Profile::Release => (true, false, "release"),
+        Profile::Test => (true, true, "release"),
     };
-    run(cmd(
-        "cargo",
-        &["build", "-p", "volya-engine-web", "--target", WASM_TARGET],
-    )
-    .args(flags))?;
     let dist = root().join("dist");
     if dist.exists() {
         fs::remove_dir_all(&dist).map_err(|e| format!("remove dist: {e}"))?;
     }
     copy_dir(&root().join("platforms/web/static"), &dist).map_err(|e| format!("copy web: {e}"))?;
-    let wasm = format!("target/{WASM_TARGET}/{dir}/volya_engine_web.wasm");
-    run(&mut cmd(
-        &wasm_bindgen.to_string_lossy(),
-        &[
-            "--target",
-            "web",
-            "--no-typescript",
-            "--out-dir",
-            "dist/pkg",
-            &wasm,
-        ],
-    ))?;
+    for &(out, build, build_features) in WASM_BUILDS {
+        step(&format!("Web build ({build})"));
+        let mut features: Vec<&str> = build_features.to_vec();
+        if test_ops {
+            features.push("test-ops");
+        }
+        let mut command = cmd(
+            "cargo",
+            &["build", "-p", "volya-engine-web", "--target", WASM_TARGET],
+        );
+        if release {
+            command.arg("--release");
+        }
+        if !features.is_empty() {
+            command.args(["--features", &features.join(",")]);
+        }
+        run(&mut command)?;
+        // Each build writes the same file: bound before the next.
+        let wasm = format!("target/{WASM_TARGET}/{dir}/volya_engine_web.wasm");
+        run(&mut cmd(
+            &wasm_bindgen.to_string_lossy(),
+            &[
+                "--target",
+                "web",
+                "--no-typescript",
+                "--out-dir",
+                &format!("dist/{out}"),
+                &wasm,
+            ],
+        ))?;
+    }
     inject_build(&dist)
 }
 
 /// Injects what the page and its service worker need to know about this
 /// build: the commit and its date into `update.js` (`BUILD`, `BUILT`: the
-/// version shown), and the commit plus every file with a hash of its content
-/// and its size into `sw.js` (`BUILD`, `PRECACHE`; static/sw.js).
+/// version shown), and the commit plus every file with a hash of its content,
+/// its size and, for a wasm build's files, that build's name into `sw.js`
+/// (`BUILD`, `PRECACHE`; static/sw.js).
 fn inject_build(dist: &Path) -> Result {
     use sha2::{Digest, Sha256};
     let commit = output(&mut cmd("git", &["rev-parse", "--short", "HEAD"]))?;
@@ -277,7 +310,12 @@ fn inject_build(dist: &Path) -> Result {
             .map(|b| format!("{b:02x}"))
             .collect();
         let size = bytes.len();
-        entries.push(format!(r#"["{file}","{hash}",{size}]"#));
+        let build = WASM_BUILDS
+            .iter()
+            .find(|(out, ..)| file.starts_with(&format!("{out}/")))
+            .map(|(_, build, _)| format!(r#","{build}""#))
+            .unwrap_or_default();
+        entries.push(format!(r#"["{file}","{hash}",{size}{build}]"#));
         if file == "index.html" {
             entries.push(format!(r#"["./","{hash}",{size}]"#));
         }

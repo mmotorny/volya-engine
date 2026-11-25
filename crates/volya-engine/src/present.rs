@@ -14,7 +14,7 @@ use crate::core::vfs::read_ahead::ReadAhead;
 use crate::core::vfs::{self, Vfs};
 use crate::level::LevelWorld;
 use crate::render::sky::{SkySection, SkyTextures};
-use crate::render::world::{Surface, TreeLight, WorldLight};
+use crate::render::world::{GeometryUpload, ObjectGeometry, Surface, TreeLight, WorldLight};
 use crate::render::{
     DrawList, Quad, Rect, Renderer, Texture, VideoTexture, World, WorldDraw, WorldFrame,
 };
@@ -98,6 +98,51 @@ fn load_texture(renderer: &Renderer, tree: &dyn Vfs, path: &str) -> Result<Textu
     renderer.create_texture(&dds).map_err(|e| e.to_string())
 }
 
+/// The world's draws of `level`: its static draws, then its objects'.
+fn world_draws(level: &LevelWorld) -> Vec<WorldDraw> {
+    level
+        .draw_items
+        .iter()
+        .zip(&level.draw_surfaces)
+        .zip(&level.spheres)
+        .filter_map(|((d, surface), sphere)| {
+            Some(WorldDraw {
+                surface: (*surface)?,
+                vertex_buffer: d.vertex_buffer,
+                first_vertex: d.first_vertex,
+                index_buffer: d.index_buffer,
+                first_index: d.first_index,
+                index_count: 3 * d.triangle_count,
+                transform: d.transform,
+                sphere: *sphere,
+                tree: d.tree.map(|t| TreeLight {
+                    scale: t.scale,
+                    bias: t.bias,
+                }),
+                object: None,
+            })
+        })
+        .chain(level.objects.draws.iter().map(|d| WorldDraw {
+            surface: d.surface,
+            vertex_buffer: 0,
+            first_vertex: d.first_vertex,
+            index_buffer: 0,
+            first_index: d.first_index,
+            index_count: d.index_count,
+            transform: d.transform,
+            // Offline at the start: uploaded hidden (a radius of 0,
+            // [`Presenter::place_objects`]).
+            sphere: if level.objects.instances[d.instance].online {
+                d.sphere
+            } else {
+                [d.sphere[0], d.sphere[1], d.sphere[2], 0.0]
+            },
+            tree: None,
+            object: Some(d.dynamic_props),
+        }))
+        .collect()
+}
+
 /// GPU resources of the scenes drawn.
 #[derive(Default)]
 pub struct Presenter {
@@ -114,7 +159,19 @@ pub struct Presenter {
     placed: Option<Arc<Vec<Option<Mat4>>>>,
     /// The world's draw index of the first object draw.
     first_object_draw: usize,
+    /// A level's geometry uploaded while it loaded
+    /// ([`Presenter::prepare_world`]).
+    prepared: Option<PreparedWorld>,
     errors: Vec<String>,
+}
+
+/// A level's geometry on its way to the GPU before the level shows (#184).
+struct PreparedWorld {
+    level: Arc<LevelWorld>,
+    upload: GeometryUpload,
+    objects: ObjectGeometry,
+    draws: Vec<WorldDraw>,
+    done: bool,
 }
 
 impl Presenter {
@@ -313,16 +370,70 @@ impl Presenter {
         self.placed = Some(scene.objects.clone());
     }
 
+    /// Uploads about `budget` more bytes of `level`'s geometry before it
+    /// shows (a platform spreading the upload over task turns, #184); the
+    /// world is then made from it when the level is first drawn. Returns
+    /// whether all of it is uploaded.
+    pub fn prepare_world(
+        &mut self,
+        renderer: &mut Renderer,
+        tree: &dyn Vfs,
+        level: &Arc<LevelWorld>,
+        budget: u64,
+    ) -> Result<bool, String> {
+        if !self
+            .prepared
+            .as_ref()
+            .is_some_and(|p| Arc::ptr_eq(&p.level, level))
+        {
+            self.prepared = None;
+            let objects = level
+                .objects
+                .take_geometry()
+                .ok_or("object geometry already uploaded elsewhere")?;
+            let draws = world_draws(level);
+            let upload = renderer.begin_geometry(&level.geometry().layout, &objects, &draws)?;
+            self.prepared = Some(PreparedWorld {
+                level: level.clone(),
+                upload,
+                objects,
+                draws,
+                done: false,
+            });
+        }
+        let Some(p) = self.prepared.as_mut().filter(|p| !p.done) else {
+            return Ok(true);
+        };
+        let path = level.geometry_path();
+        let mut file = tree.open(&path).map_err(|e| format!("{path}: {e}"))?;
+        let mut source = level.geometry().reader(&mut file);
+        p.done = p.upload.step(renderer, &mut source, &p.objects, budget)?;
+        Ok(p.done)
+    }
+
     fn upload_world(
         &mut self,
         renderer: &mut Renderer,
         tree: &dyn Vfs,
         level: &LevelWorld,
     ) -> Result<World, String> {
-        let objects = level
-            .objects
-            .take_geometry()
-            .ok_or("object geometry already uploaded elsewhere")?;
+        // Prepared while the level loaded, finished here if need be.
+        let mut prepared = self
+            .prepared
+            .take()
+            .filter(|p| std::ptr::eq(Arc::as_ptr(&p.level), level));
+        let (objects, draws) = match &prepared {
+            Some(p) => (None, p.draws.clone()),
+            None => (
+                Some(
+                    level
+                        .objects
+                        .take_geometry()
+                        .ok_or("object geometry already uploaded elsewhere")?,
+                ),
+                world_draws(level),
+            ),
+        };
         // Each texture file once; one that fails is left unbound (reported).
         let mut textures: HashMap<String, Option<Texture>> = HashMap::new();
         let surfaces: Vec<Surface<Texture>> = level
@@ -340,47 +451,6 @@ impl Presenter {
                         .clone()
                 })
             })
-            .collect();
-        let draws: Vec<WorldDraw> = level
-            .draw_items
-            .iter()
-            .zip(&level.draw_surfaces)
-            .zip(&level.spheres)
-            .filter_map(|((d, surface), sphere)| {
-                Some(WorldDraw {
-                    surface: (*surface)?,
-                    vertex_buffer: d.vertex_buffer,
-                    first_vertex: d.first_vertex,
-                    index_buffer: d.index_buffer,
-                    first_index: d.first_index,
-                    index_count: 3 * d.triangle_count,
-                    transform: d.transform,
-                    sphere: *sphere,
-                    tree: d.tree.map(|t| TreeLight {
-                        scale: t.scale,
-                        bias: t.bias,
-                    }),
-                    object: None,
-                })
-            })
-            .chain(level.objects.draws.iter().map(|d| WorldDraw {
-                surface: d.surface,
-                vertex_buffer: 0,
-                first_vertex: d.first_vertex,
-                index_buffer: 0,
-                first_index: d.first_index,
-                index_count: d.index_count,
-                transform: d.transform,
-                // Offline at the start: uploaded hidden (a radius of 0,
-                // [`Presenter::place_objects`]).
-                sphere: if level.objects.instances[d.instance].online {
-                    d.sphere
-                } else {
-                    [d.sphere[0], d.sphere[1], d.sphere[2], 0.0]
-                },
-                tree: None,
-                object: Some(d.dynamic_props),
-            }))
             .collect();
         let mut texture = |path: &String| {
             textures
@@ -415,13 +485,23 @@ impl Presenter {
         // at a time.
         let path = level.geometry_path();
         let mut file = tree.open(&path).map_err(|e| format!("{path}: {e}"))?;
-        let world = renderer.create_world_from(
-            &mut level.geometry().reader(&mut file),
-            &objects,
-            &surfaces,
-            &draws,
-            sky.as_ref(),
-        )?;
+        let mut source = level.geometry().reader(&mut file);
+        let world = match (prepared.take(), objects) {
+            (Some(mut p), _) => {
+                if !p.done {
+                    p.upload.step(renderer, &mut source, &p.objects, u64::MAX)?;
+                }
+                renderer.finish_world(p.upload, &p.objects, &surfaces, &draws, sky.as_ref())?
+            }
+            (None, Some(objects)) => renderer.create_world_from(
+                &mut source,
+                &objects,
+                &surfaces,
+                &draws,
+                sky.as_ref(),
+            )?,
+            (None, None) => unreachable!("the objects are taken without a prepared world"),
+        };
         if let Some(e) = world.sky_error() {
             self.errors.push(format!("{}: sky: {e}", level.dir));
         }

@@ -30,9 +30,10 @@ theora_nrp = "0.2"
 zlib-rs = { version = "0.6", default-features = false, features = ["std"] }
 lzokay-native = { version = "0.2", default-features = false }
 crc32fast = "1"
-# WebGPU in browsers, WebGL 2 where they give no WebGPU adapter (#113),
-# Metal on Apple platforms; no native GL, Vulkan or DX12.
-wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "webgpu", "webgl", "metal"] }
+# WebGPU in browsers, Metal on Apple platforms; no native GL, Vulkan or
+# DX12. WebGL 2, where browsers give no WebGPU adapter (#113), only in the
+# web build made for that (volya-engine-render's `webgl` feature, #186).
+wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "webgpu", "metal"] }
 pollster = "1"
 # Builds the vendored LuaJIT (crates/volya-engine-script).
 cc = "1"
@@ -70,6 +71,11 @@ opt-level = 1
 [profile.release]
 opt-level = "s"
 lto = true
+
+# The ETC2 encoder (#183) runs on every WebGL 2 level load: about twice as
+# fast at opt-level 3 as at "s" (measured natively).
+[profile.release.package.volya-engine-formats]
+opt-level = 3
 
 # File install conditions exposed (docs/architecture.md, Game data).
 [patch.crates-io]

@@ -13,6 +13,11 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+# wgpu's WebGL 2 backend (#113), in the web build for browsers without a
+# WebGPU adapter only (#186).
+webgl = ["wgpu/webgl"]
+
 [dependencies]
 volya-engine-formats = { path = "../volya-engine-formats" }
 wgpu.workspace = true

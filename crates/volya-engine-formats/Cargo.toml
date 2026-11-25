@@ -17,6 +17,11 @@ workspace = true
 name = "volya-engine-db"
 path = "src/bin/db.rs"
 
+[features]
+# The ETC2 / EAC decoder written apart from the encoder (`etc2::decode`),
+# for other crates' tests (the transcoding quality of a level's textures).
+etc2-decode = []
+
 [dependencies]
 lzokay-native = { workspace = true, features = ["decompress"] }
 lewton.workspace = true

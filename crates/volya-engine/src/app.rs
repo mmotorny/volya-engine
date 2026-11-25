@@ -13,6 +13,7 @@
 //! turns true and the platform returns to its own interface.
 
 use std::io;
+use std::sync::Arc;
 
 use serde::Serialize;
 
@@ -26,7 +27,7 @@ use crate::core::vfs::{self, Vfs};
 use crate::data::{Assets, GameData};
 use crate::draw::Ctx;
 use crate::inventory_screen::{self, InventoryScreen, InventoryState};
-use crate::level::{LevelScreen, LevelState};
+use crate::level::{LevelScreen, LevelState, LevelWorld};
 use crate::level_sound::{LevelSounds, SoundRun};
 use crate::loading_screen::{
     GAME_TYPE, Loading, LoadingScreen, LoadingScreenState, OVERLAY_FRAMES, SERVER_NEW_GAME,
@@ -527,6 +528,30 @@ impl App {
         }) = &mut self.phase
         {
             loading.textures_prepared();
+        }
+    }
+
+    /// The level's world, while the loading waits for the platform to
+    /// prepare it for the GPU (with [`App::set_prepare_textures`], #184).
+    pub fn world_to_prepare(&self) -> Option<&Arc<LevelWorld>> {
+        match &self.phase {
+            Some(Phase::Loading {
+                stages: NewGame::Stages(loading),
+                ..
+            }) => loading.world_to_prepare(),
+            _ => None,
+        }
+    }
+
+    /// The platform has prepared [`App::world_to_prepare`]: the level shows
+    /// at the next update.
+    pub fn world_prepared(&mut self) {
+        if let Some(Phase::Loading {
+            stages: NewGame::Stages(loading),
+            ..
+        }) = &mut self.phase
+        {
+            loading.world_prepared();
         }
     }
 
