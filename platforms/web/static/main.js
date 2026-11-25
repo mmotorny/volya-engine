@@ -42,6 +42,13 @@ const storedGraphics = () => {
 let worker;
 const pending = new Map();
 diagnostics.connect((message) => worker.postMessage(message));
+// Uncaught errors on the page end the engine as far as anyone knows (#356).
+addEventListener("error", (event) =>
+  diagnostics.end("page_error", `${event.message} (${event.filename}:${event.lineno}:${event.colno})`),
+);
+addEventListener("unhandledrejection", (event) =>
+  diagnostics.end("page_error", `unhandled rejection: ${event.reason?.stack ?? event.reason?.message ?? event.reason}`),
+);
 let nextId = 0;
 // Set once the canvas exists, below; capture starts off, and so do the
 // level's controls.
@@ -79,6 +86,8 @@ async function connectAudio(context) {
     worklets.add(context);
   }
   const node = new AudioWorkletNode(context, "volya-output", { numberOfInputs: 0, outputChannelCount: [2] });
+  // The processor failed (its constructor too; errors it caught it reports itself).
+  node.onprocessorerror = () => diagnostics.end("worklet_error", "the audio worklet's processor failed");
   node.connect(context.destination);
   worker.postMessage({ type: "audio", port: node.port, sampleRate: context.sampleRate }, [node.port]);
   return node;
@@ -94,6 +103,10 @@ async function connectAudio(context) {
 // worker anyway (below).
 function visibilityChanged() {
   const hidden = document.visibilityState === "hidden";
+  // The engine records the end and stores it (a hidden page may be ended
+  // without notice); kept here too should the worker be ended first.
+  if (hidden) diagnostics.keepEnd("page_hidden", "the page was hidden");
+  else diagnostics.forgetEnd();
   worker.postMessage({ type: "visibility", hidden });
   if (!audio) return;
   if (hidden) audio.suspend().catch(() => {});
@@ -106,7 +119,14 @@ document.addEventListener("visibilitychange", visibilityChanged);
 // The engine worker holds OPFS file locks. Browsers keep left pages alive in
 // the back-forward cache, which would keep those locks from the next page:
 // end the worker when the page is hidden, and reload if it is restored.
-addEventListener("pagehide", () => worker.terminate());
+// The worker is told why first, and the page keeps the end itself, as the
+// worker may be ended before it stores it (#356).
+addEventListener("pagehide", () => {
+  const message = "the page was closed";
+  diagnostics.keepEnd("page_closed", message);
+  worker.postMessage({ type: "end", reason: "page_closed", message });
+  worker.terminate();
+});
 addEventListener("pageshow", (event) => event.persisted && location.reload());
 
 // The engine sizes the canvas in device pixels from these. A canvas gives
@@ -124,6 +144,7 @@ function startEngine() {
     worker.onmessage = ({ data }) => {
       if (data.type === "started") {
         ({ available, backend } = data);
+        diagnostics.setStatus(data.diagnostics);
         resolve();
       } else if (data.type === "error") reject(new Error(data.message));
       else if (data.type === "capture") setCapture(data.on);
@@ -142,9 +163,12 @@ function startEngine() {
     };
   });
   const canvas = view.transferControlToOffscreen();
-  // The diagnostic log, when the player keeps one (#346).
-  const log = diagnostics.enabled() ? diagnostics.session() : null;
-  worker.postMessage({ type: "start", canvas, size: size(), graphics: storedGraphics(), diagnostics: log }, [canvas]);
+  // The diagnostic log, when the player keeps one (#346), and how an
+  // earlier session's page ended (#356).
+  const logging = diagnostics.enabled();
+  const log = logging ? diagnostics.session() : null;
+  const previousEnd = logging ? diagnostics.takeKeptEnd() : null;
+  worker.postMessage({ type: "start", canvas, size: size(), graphics: storedGraphics(), diagnostics: log, previousEnd }, [canvas]);
   if (document.visibilityState === "hidden") visibilityChanged();
   sizes.observe(view);
   return started;
@@ -157,6 +181,9 @@ function startEngine() {
 async function restartEngine() {
   // The imported files' locks released first, for the next engine.
   await call("unmount_game").catch(() => {});
+  // Why, in the diagnostic log (#356): handled before the call after it.
+  worker.postMessage({ type: "end", reason: "restart", message: "the engine was restarted for the Graphics setting" });
+  await call("status").catch(() => {});
   worker.terminate();
   for (const { reject } of pending.values()) reject(new Error("the engine was restarted"));
   pending.clear();
