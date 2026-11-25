@@ -7,9 +7,10 @@
 // visit or a hard reload (which bypasses it), reloads once as soon as the
 // service worker can serve it: at once when it is installed, else once it
 // is (it then claims the page). This happens before anything shows, so it
-// looks like a redirect. At most once a page session (sessionStorage), so a
-// browser that ignores the headers isn't reloaded again and again; the
-// player is told instead (game-ui.js).
+// looks like a redirect. A reload that didn't make the page isolated isn't
+// tried again in the page session (sessionStorage, cleared once a page is
+// isolated), so a browser that ignores the headers isn't reloaded again and
+// again; the player is told instead (game-ui.js).
 
 const KEY = "volya-engine.isolation-reload";
 
@@ -26,7 +27,14 @@ export async function ensureIsolated({
   storage = globalThis.sessionStorage,
   reload = () => location.reload(),
 } = {}) {
-  if (isolated) return "isolated";
+  if (isolated) {
+    try {
+      storage.removeItem(KEY);
+    } catch {
+      // Nothing kept.
+    }
+    return "isolated";
+  }
   if (!container) return "blocked";
   let reloaded = true;
   try {

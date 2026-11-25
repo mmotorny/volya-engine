@@ -1576,7 +1576,7 @@ export const tests = {
     const long = mine.filter((e) => e.ph === "X" && e.name === "frame");
     assert(long.length > 0, "no long frame");
     const audio = volya.audioState() === "running";
-    if (audio) assert(series("audio.fill_ms min") > 10 && series("decode max") > 10, "audio");
+    if (audio) assert(series("audio.fill_ms min") > 10 && series("audio.mix_ms max") > 10, "audio");
     await volya.diagnostics.setEnabled(false, volya.call);
     const worst = Math.max(...long.map((e) => e.dur)) / 1000;
     // The log's rate while a game runs: this session's bytes over its time.

@@ -199,7 +199,7 @@ export const tests = {
     const env = ({ controller = null, active = null, installing = null, stored = {} } = {}) => {
       const container = Object.assign(new EventTarget(), { controller });
       const items = { ...stored };
-      const storage = { getItem: (k) => items[k] ?? null, setItem: (k, v) => (items[k] = v) };
+      const storage = { getItem: (k) => items[k] ?? null, setItem: (k, v) => (items[k] = v), removeItem: (k) => delete items[k] };
       const registration = { active, installing, waiting: null };
       const e = { container, storage, reloads: 0, items, isolated: false };
       e.run = () => ensureIsolated({ ...e, registered: Promise.resolve(registration), reload: () => e.reloads++ });
@@ -211,8 +211,11 @@ export const tests = {
     // A hard reload, the worker installed: reloads at once.
     const hard = env({ active: {} });
     assertEqual([await hard.run(), hard.reloads].join(), "reloading,1", "hard reload");
-    // The same page session again (still not isolated): no second reload.
+    // The reload didn't isolate it: no second reload in the page session.
     assertEqual([await hard.run(), hard.reloads].join(), "blocked,1", "a second time");
+    // Once isolated, a later hard reload reloads again.
+    assertEqual(await ensureIsolated({ ...hard, isolated: true }), "isolated", "isolated after all");
+    assertEqual([await hard.run(), hard.reloads].join(), "reloading,2", "a later hard reload");
     // First visit: reloads once the worker installed and claimed the page.
     const installing = Object.assign(new EventTarget(), { state: "installing" });
     const first = env({ installing });
