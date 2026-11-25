@@ -6,6 +6,8 @@
 
 import { startInput } from "./input.js";
 import { createTouchControls } from "./touch-controls.js";
+import { createFullscreenOffer } from "./fullscreen.js";
+import { createTextEntry } from "./text-entry.js";
 // Early: Chrome offers installing the app once, soon after load.
 import "./install.js";
 import { startUpdates, versionText } from "./update.js";
@@ -24,6 +26,7 @@ let nextId = 0;
 // level's controls.
 let setCapture = () => {};
 let setLevel = () => {};
+let setTextField = () => {};
 
 const started = new Promise((resolve, reject) => {
   worker.onmessage = ({ data }) => {
@@ -31,6 +34,7 @@ const started = new Promise((resolve, reject) => {
     else if (data.type === "error") reject(new Error(data.message));
     else if (data.type === "capture") setCapture(data.on);
     else if (data.type === "controls") setLevel(data);
+    else if (data.type === "text_field") setTextField(data);
     else if (data.type === "result") {
       const { resolve, reject } = pending.get(data.id);
       pending.delete(data.id);
@@ -103,13 +107,22 @@ const send = (event) => worker.postMessage({ type: "input", event });
 const forward = startInput(view, send);
 const touch = createTouchControls(send);
 document.body.append(touch.element);
+// Full screen with Keyboard Lock, offered in the level (#85).
+const offer = createFullscreenOffer(() => call("bound_keys"));
+document.body.append(offer.element);
+// The device's keyboard for the save screen's name field on touch screens (#94).
+const entry = createTextEntry(send);
+document.body.append(entry.element);
+setTextField = (field) => entry.update(field);
 setCapture = (on) => {
   forward.setCapture(on);
   document.querySelector("main").hidden = on;
+  if (!on) offer.leave();
 };
 setLevel = (controls) => {
   forward.setLevel(controls.level);
   touch.update(controls);
+  offer.update(controls);
 };
 const canvas = view.transferControlToOffscreen();
 worker.postMessage({ type: "start", canvas, size: size() }, [canvas]);

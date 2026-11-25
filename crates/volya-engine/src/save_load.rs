@@ -22,7 +22,7 @@ use serde::Serialize;
 
 use crate::core::clock::GameClock;
 use crate::core::config::{self, Config};
-use crate::core::input::{Input, Key};
+use crate::core::input::{GamepadButton, Input, Key};
 use crate::core::ui::load_ui_file;
 use crate::core::vfs::{self, Vfs};
 use crate::data::GameData;
@@ -31,6 +31,7 @@ use crate::dialog::{
     contains,
 };
 use crate::draw::Ctx;
+use crate::on_screen_keyboard::{KeyboardState, OnScreenKeyboard, Press};
 use crate::saved_games::{SaveRow, SavedGames};
 use crate::scene::Scene;
 use volya_engine_formats::game_graph::GameGraph;
@@ -655,7 +656,7 @@ fn pixels(r: Rect, (sx, sy): (f32, f32)) -> [f32; 4] {
 }
 
 /// The character key `key` types (section 4.4), lower or shifted.
-fn typed(key: Key, shift: bool) -> Option<char> {
+pub(crate) fn typed(key: Key, shift: bool) -> Option<char> {
     let letters = [
         (Key::A, 'a'),
         (Key::B, 'b'),
@@ -852,6 +853,50 @@ impl NameField {
         }
     }
 
+    /// Character `c` typed through text entry (our design, #94): typed as
+    /// a key typing it would, if one does (section 4.4) and it fits.
+    fn insert(&mut self, c: char, font: Option<&FieldFont>) {
+        // Typographic quotes (a device keyboard's smart punctuation) as
+        // the plain ones the field's keys type.
+        let c = match c {
+            '\u{2018}' | '\u{2019}' => '\'',
+            '\u{201C}' | '\u{201D}' => '"',
+            c => c,
+        };
+        let typeable = Key::ALL
+            .iter()
+            .any(|&k| typed(k, false) == Some(c) || typed(k, true) == Some(c));
+        if !self.focused || !typeable {
+            return;
+        }
+        if font.is_none_or(|f| f.width(&self.text) <= FIELD_MAX_WIDTH) {
+            let at = self.byte(self.caret);
+            self.text.insert(at, c);
+            self.caret += 1;
+        }
+        self.repeat = None;
+    }
+
+    /// A press on the on-screen keyboard (our design, #94): its character
+    /// key with its own shift, Backspace, or Done (Enter).
+    fn keyboard(&mut self, press: Press, font: Option<&FieldFont>) {
+        match press {
+            Press::Char(key, shift) => {
+                if let Some(c) = typed(key, shift) {
+                    self.insert(c, font);
+                }
+            }
+            Press::Backspace => {
+                self.key(Key::Backspace, true, font);
+                self.key(Key::Backspace, false, font);
+            }
+            Press::Done => {
+                self.key(Key::Enter, true, font);
+                self.key(Key::Enter, false, font);
+            }
+        }
+    }
+
     fn focus(&mut self) {
         if !self.focused {
             self.focused = true;
@@ -890,6 +935,8 @@ struct Screen {
     last_update: Option<u64>,
     left_was_held: bool,
     stubbed: Vec<Stubbed>,
+    /// The save screen's name field, a d-pad target (our design, #94).
+    field: Option<Rect>,
 }
 
 impl Screen {
@@ -906,6 +953,7 @@ impl Screen {
             last_update: None,
             left_was_held: false,
             stubbed: Vec::new(),
+            field: None,
         }
     }
 
@@ -963,6 +1011,7 @@ impl Screen {
             return m.targets();
         }
         let mut t = self.list.targets();
+        t.extend(self.field);
         t.extend((0..3).map(|i| self.button_rect(i)));
         t
     }
@@ -1041,10 +1090,11 @@ impl Screen {
     }
 
     /// This frame's events; the cursor moves with them.
-    fn events(&mut self, data: &GameData, now: u64, input: &Input) -> Vec<Ev> {
+    /// This frame's events, the gamepad's only when `pad`.
+    fn events(&mut self, data: &GameData, now: u64, input: &Input, pad: bool) -> Vec<Ev> {
         let dt = now.saturating_sub(self.last_update.unwrap_or(now)).min(100) as f32 / 1000.0;
         self.last_update = Some(now);
-        dialog::events(data, input, self.cursor, dt)
+        dialog::events_from(data, input, self.cursor, dt, pad)
     }
 
     /// Moves the cursor for `e`; a d-pad press goes to the nearest target.
@@ -1105,14 +1155,23 @@ fn delete_selected(list: &mut SaveList, saves: &mut SavedGames, out: &mut Outcom
 pub struct SaveScreen {
     screen: Screen,
     field: NameField,
+    /// The on-screen keyboard, while a gamepad types the name (#94).
+    keyboard: Option<OnScreenKeyboard>,
+    /// Gamepad buttons held as the keyboard closed are not yet released.
+    pad_swallowed: bool,
 }
 
 impl SaveScreen {
     /// Creates the screen (section 4.2): the list filled from `saves`.
     pub fn new(sl: &SaveLoadData, saves: &SavedGames) -> Self {
+        let mut screen = Screen::new(&sl.save, sl, saves.rows(true));
+        let d = &sl.save;
+        screen.field = d.edit.as_ref().map(|e| d.abs(e));
         Self {
-            screen: Screen::new(&sl.save, sl, saves.rows(true)),
+            screen,
             field: NameField::default(),
+            keyboard: None,
+            pad_swallowed: false,
         }
     }
 
@@ -1120,10 +1179,22 @@ impl SaveScreen {
     /// state from an earlier visit (section 12).
     pub fn open(&mut self, now: u64, cursor: [f32; 2]) {
         self.screen.open(now, cursor);
+        self.keyboard = None;
+        self.pad_swallowed = false;
     }
 
     pub fn cursor(&self) -> [f32; 2] {
         self.screen.cursor
+    }
+
+    /// The name field's rectangle (UI units) and whether it has focus, for
+    /// a platform's text entry over it (the device's keyboard on touch
+    /// screens, #94); `None` while a box covers the screen.
+    pub fn text_field(&self) -> Option<(Rect, bool)> {
+        if self.screen.message.is_some() {
+            return None;
+        }
+        Some((self.field_rect(), self.field.focused))
     }
 
     /// The name field's font (its `text` child's).
@@ -1155,9 +1226,23 @@ impl SaveScreen {
         last_hold: &mut u64,
     ) -> Outcome {
         let mut out = Outcome::default();
-        for mut e in self.screen.events(data, now, input) {
+        // While the on-screen keyboard shows it takes the gamepad (#94).
+        let typing = self.keyboard.is_some();
+        let pad = !typing && !self.pad_swallowed;
+        if let Some(k) = &mut self.keyboard {
+            let presses = input.pad_changes().iter().filter(|c| c.1);
+            for p in presses.filter_map(|&(b, _)| k.press(b)) {
+                self.field.keyboard(p, font);
+            }
+        }
+        for mut e in self.screen.events(data, now, input, pad) {
             if out.closed {
                 break;
+            }
+            // The keyboard over the screen: the mouse and touch don't reach
+            // what is under it (our choice); keys still do.
+            if typing && !matches!(e, Ev::Key { .. } | Ev::Text(_) | Ev::Quit { .. }) {
+                continue;
             }
             self.screen.follow(&mut e);
             let c = self.screen.cursor;
@@ -1181,6 +1266,7 @@ impl SaveScreen {
             }
             match e {
                 Ev::Key { key, pressed } => self.field.key(key, pressed, font),
+                Ev::Text(c) => self.field.insert(c, font),
                 Ev::Quit { .. } => {
                     // Section 3.7: a press or a release.
                     out.closed = true;
@@ -1205,8 +1291,25 @@ impl SaveScreen {
                 }
             }
         }
+        // A gamepad's south pressing inside the field (giving it focus)
+        // opens the on-screen keyboard; it closes with the focus (#94).
+        let south = input.pad_changes().contains(&(GamepadButton::South, true));
+        if !typing && south && self.field.focused && contains(self.field_rect(), self.screen.cursor)
+        {
+            self.keyboard = Some(OnScreenKeyboard::default());
+        }
+        if !self.field.focused || out.closed || self.screen.message.is_some() {
+            self.keyboard = None;
+        }
+        // The buttons held as it closes stay its until released: Done's
+        // release would otherwise close the screen (section 3.7).
+        self.pad_swallowed = (typing || self.pad_swallowed)
+            && self.keyboard.is_none()
+            && GamepadButton::ALL.iter().any(|&b| input.pad_held(b));
         self.field.frame(now, font);
-        self.screen.hold(now, input, last_hold);
+        if !typing {
+            self.screen.hold(now, input, last_hold);
+        }
         self.screen.frame();
         out
     }
@@ -1287,16 +1390,22 @@ impl SaveScreen {
             ctx.text(s, "edit caret", b"_", &caret, font)?;
         }
         self.screen.draw_list_and_buttons(ctx, s)?;
+        if let Some(k) = &self.keyboard {
+            k.draw(ctx, s, self.field_font())?;
+        }
         self.screen.draw_top(ctx, s)?;
         Ok(scene)
     }
 
     pub fn state(&self) -> SaveScreenState {
+        let f = self.field_rect();
         SaveScreenState {
             screen: self.screen.state(),
             name: self.field.text.clone(),
             focused: self.field.focused,
             caret: self.field.caret,
+            field: [f.x, f.y, f.width, f.height],
+            keyboard: self.keyboard.as_ref().map(OnScreenKeyboard::state),
         }
     }
 }
@@ -1480,7 +1589,7 @@ impl LoadScreen {
         last_hold: &mut u64,
     ) -> Outcome {
         let mut out = Outcome::default();
-        for mut e in self.screen.events(data, now, input) {
+        for mut e in self.screen.events(data, now, input, true) {
             if out.closed {
                 break;
             }
@@ -1687,6 +1796,11 @@ pub struct SaveScreenState {
     pub name: String,
     pub focused: bool,
     pub caret: usize,
+    /// The name field, UI units.
+    pub field: [f32; 4],
+    /// The on-screen keyboard while it shows (#94).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keyboard: Option<KeyboardState>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1870,5 +1984,39 @@ mod tests {
         assert!(!f.focused);
         assert_eq!(typed(Key::Slash, true), Some('?'));
         assert_eq!(typed(Key::Numpad1, false), None);
+    }
+
+    #[test]
+    fn text_entry_and_the_on_screen_keyboard_type_the_fields_characters_only() {
+        let mut f = NameField::default();
+        f.insert('a', None);
+        assert_eq!(f.text, "", "no focus, no typing");
+        f.focus();
+        // The device keyboard's characters: those a key types, others
+        // (Cyrillic, a tab, an accent) dropped.
+        for c in "Ab 1жé\t_?".chars() {
+            f.insert(c, None);
+        }
+        assert_eq!((f.text.as_str(), f.caret), ("Ab 1_?", 6));
+        // Typographic quotes as the plain ones.
+        for c in "\u{2019}\u{201C}".chars() {
+            f.insert(c, None);
+        }
+        assert_eq!(f.text, "Ab 1_?'\"");
+        f.key(Key::Backspace, true, None);
+        f.key(Key::Backspace, false, None);
+        f.key(Key::Backspace, true, None);
+        f.key(Key::Backspace, false, None);
+        // The on-screen keyboard: its own shift, Backspace, Done.
+        f.keyboard(Press::Char(Key::Digit1, true), None);
+        f.keyboard(Press::Char(Key::Q, false), None);
+        assert_eq!(f.text, "Ab 1_?!q");
+        f.keyboard(Press::Backspace, None);
+        assert_eq!(f.text, "Ab 1_?!");
+        assert!(f.focused);
+        f.keyboard(Press::Done, None);
+        assert!(!f.focused, "Done is Enter: the focus ends");
+        // The field's shift flag is untouched by either.
+        assert!(!f.shift);
     }
 }

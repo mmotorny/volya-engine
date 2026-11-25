@@ -27,6 +27,7 @@
 //! | `["wheel", steps]` | mouse-wheel steps, negative up |
 //! | `["blur"]` | the page lost focus: release everything |
 //! | `["unlock"]` | the page lost its pointer lock (sent after `["blur"]`) |
+//! | `["text", s]` | the characters of `s`, typed through the page's text entry (the device's keyboard, #94) |
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -115,6 +116,22 @@ pub fn set_render(render: Option<Resolution>) {
             s.fit();
         }
     });
+}
+
+/// UI rectangle `r` (1024 × 768 over the drawn area) in canvas CSS pixels:
+/// x, y, width, height.
+pub fn css_from_ui(r: volya_engine::formats::ui::layout::Rect) -> [f32; 4] {
+    STATE.with(|s| {
+        let s = s.borrow();
+        let [w, h] = s.input.screen();
+        let (sx, sy) = (w / 1024.0, h / 768.0);
+        [
+            s.offset[0] + r.x * sx,
+            s.offset[1] + r.y * sy,
+            r.width * sx,
+            r.height * sy,
+        ]
+    })
 }
 
 /// Runs `f` on the input state (this frame's actions, the cursor).
@@ -286,6 +303,10 @@ fn decode(message: &Array) -> Result<Option<Vec<Event>>, JsValue> {
         },
         "blur" => return Ok(None),
         "unlock" => Event::PointerUnlocked,
+        "text" => {
+            let s = text(1)?;
+            return Ok(Some(s.chars().map(|ch| Event::Text { ch }).collect()));
+        }
         _ => return Err(bad()),
     };
     Ok(Some(vec![event]))

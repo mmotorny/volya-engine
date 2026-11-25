@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+
+[package]
+name = "volya-engine-script"
+description = "Volya Engine script runtime: the public LuaJIT 1.0.3 interpreter (vendored C) behind a thin safe Rust API."
+version.workspace = true
+edition.workspace = true
+# The vendored LuaJIT 1.0.3 (vendor/luajit-1.0.3) is MIT.
+license = "BSD-3-Clause AND MIT"
+repository.workspace = true
+publish = false
+links = "volya_luajit"
+
+[lints]
+workspace = true
+
+[build-dependencies]
+cc.workspace = true
+
+[dev-dependencies]
+volya-engine-core = { path = "../volya-engine-core" }
+volya-engine-installer = { path = "../volya-engine-installer" }

@@ -68,11 +68,13 @@ export const SECTIONS = [
       { id: "home-finish", name: "Update downloaded", game: imported, updates: { status: "ready" } },
     ],
   },
-  // The level's touch controls over a plain backdrop (the board can't show
-  // the game's own frames), on touch devices only.
+  // In the level, over a plain backdrop (the board can't show the game's
+  // own frames): on desktop the full screen offer, on touch devices the
+  // touch controls.
   {
     title: "In the level",
     states: [
+      { id: "level-fullscreen-offer", name: "Full screen offered (desktop Chrome)", level: { offer: true }, devices: ["desktop"] },
       { id: "level-touch", name: "Idle", level: {}, devices: TOUCH },
       { id: "level-touch-faded", name: "Idle a while: faded", level: { fade: true }, devices: TOUCH },
       { id: "level-touch-moving", name: "Moving with the stick", level: { stick: [0.45, -0.85] }, devices: TOUCH },
