@@ -18,8 +18,10 @@ The orchestrating session is clean. Nothing dirty reaches it.
 - **Dirty workspace:** `~/Sources/mmotorny/volya-dirty/`, outside the repository, never committed. Only dirty roles read or write it.
 - **Investigator → reviewer:** files only, `specs/<format>.md` in the dirty workspace.
 - **Reviewer → repository:** an approved spec is copied verbatim to `docs/formats/<format>.md` (formats) or `docs/behavior/<name>.md` (behavior); a rejected one never reaches the clean side in any form.
-- **Rejection → revision:** the investigator revises the draft in place, from the reviewer's reasons in the dirty workspace. Every review round, including after a revision, is done by a fresh reviewer that reviews the whole spec.
-- **Dirty roles report to the orchestrator only a verdict and a path** (`SPEC READY <path>`, `APPROVED <path>`, `REJECTED`, `BLOCKED`), never findings or reasons that carry content.
+- **Scope is agreed before investigating:** one format or one behaviour per spec, listed in its issue. Narrowing or widening it needs the user's OK; anything cut becomes its own issue.
+- **Runnable evidence:** every claim in a draft carries a check (a script in the dirty workspace that reproduces it from the data or binaries). The investigator runs all checks and `cargo xtask spec-lint <draft>` before reporting `SPEC READY`; the reviewer runs the same checks first, then looks for what they miss.
+- **Rejection → revision:** the reviewer lists every defect found in one pass, each tagged clean, wrong, unbacked, gap or wording, in the dirty workspace. The investigator revises the draft in place, addresses every item and reruns every check; a fresh investigator takes over once the previous one's context is large. Every review round, including after a revision, is done by a fresh reviewer that reviews the whole spec.
+- **Dirty roles report to the orchestrator only a verdict, a path and counts** (`SPEC READY <path>`, `APPROVED <path>`, `REJECTED: <n> clean, <n> wrong, <n> unbacked, <n> gap, <n> wording`, `BLOCKED`), never findings or reasons that carry content.
 - **Implementers start fresh** with only the approved spec's path; they never see dirty prompts, reports or files.
 
 ## What a clean spec may contain
