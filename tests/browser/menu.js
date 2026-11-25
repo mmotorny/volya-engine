@@ -121,6 +121,16 @@ async function noteHeap(label) {
   const large = m.large.map(([at, kib]) => `${at.toFixed(1)}:${kib}`).join(" ");
   heapMaps.push(`${label} ${mib(m.wasm_heap_bytes)}/${mib(m.live_bytes)} MiB [${occupancy}] large ${large}`);
 }
+// The most the wasm heap held live during a load, and by what (#440): the
+// `heap_record` op's bytes per block size and its largest blocks (KiB).
+async function heapRecord(reset) {
+  const r = await volya.call("heap_record", { reset }).catch(() => null);
+  if (!r || reset) return "";
+  const kib = (k) => (k >= 1024 ? `${(k / 1024).toFixed(1)}M` : `${k}K`);
+  const size = (b) => (b >= 2 ** 20 ? `${b / 2 ** 20}M` : b >= 1024 ? `${b / 1024}K` : `${b}`);
+  const sizes = r.sizes_kib.map(([at, k]) => `≥${size(at)}: ${kib(k)}`).join(", ");
+  return `the most live ${mib(r.live_bytes)} (by block size ${sizes}; largest ${r.large.slice(0, 40).map(([, k]) => kib(k)).join(" ")})`;
+}
 const view = () => document.getElementById("view");
 
 function installerBase() {
@@ -582,6 +592,7 @@ export const tests = {
     await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
     await noteHeap("before the New Game");
     await volya.call("heap_log", { on: true });
+    await heapRecord(true);
     key("Enter");
     // The loading screen (docs/behavior/loading-screen.md): a caption per
     // stage over the background and the progress strip. Whichever loading
@@ -603,6 +614,7 @@ export const tests = {
     // longer, on every load.
     const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", loadMs());
     const stages = byCaption(await volya.call("heap_log", { on: false }));
+    const record = await heapRecord(false);
     assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
     // The level's objects (docs/behavior/level-objects.md section 7.1).
     assertEqual([s.level.objects.online, s.level.objects.with_model], [671, 352], "objects");
@@ -630,7 +642,7 @@ export const tests = {
     const shown = await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
     assertEqual(shown.phase, "level", "still in the level");
     const heapNote = overBudget(heap(playing), "wasm heaps during the intro");
-    let note = `${heapNote}${heapMaps.join("; ")}; wasm heap by caption (MiB, heap/live): ${stages}; "${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; intro skipped, wasm heap ${mib(before.wasm_heap_bytes)} before it, ${mib(playing.wasm_heap_bytes)} while it played, the audio worker's ${mib(playing.audio_heap_bytes)}; at the start ${lights.passes} light passes, ${lights.sprites} glows drawn`;
+    let note = `${heapNote}${heapMaps.join("; ")}; wasm heap by caption (MiB, heap/live): ${stages}; ${record}; "${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; intro skipped, wasm heap ${mib(before.wasm_heap_bytes)} before it, ${mib(playing.wasm_heap_bytes)} while it played, the audio worker's ${mib(playing.audio_heap_bytes)}; at the start ${lights.passes} light passes, ${lights.sprites} glows drawn`;
     if (gpu.state === "ready") {
       const { rgba } = await volya.call("debug_capture", { width: 256, height: 192 });
       const colours = new Set();
@@ -1997,14 +2009,17 @@ export const tests = {
       // wasm heap through each load and its first frames (#357), against
       // the budget.
       const level = drawn.textures === "etc2" ? 120000 : 60000;
+      const records = [];
       const newGame = async () => {
         pointer("pointermove", row(0));
         await until((s) => s.menu?.selected === 0 && !s.menu.moving, "item 0", 5000);
         key("Enter");
         await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
         await volya.call("heap_log", { on: true });
+        await heapRecord(true);
         key("Enter");
         const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", level);
+        records.push(await heapRecord(false));
         assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
         key("Escape");
         await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
@@ -2050,7 +2065,7 @@ export const tests = {
         menuNote.push(what);
       });
       await volya.call("quit_game");
-      return `${heapNote}${drawn.backend}, textures ${drawn.textures}; ${menuNote.map((n) => `${n}; `).join("")}first caption to first level frame in ${s.load_ms.toFixed(0)} ms, ${again.load_ms.toFixed(0)} ms again; ${colours.size} colours; wasm heap ${mib(stats.wasm_heap_bytes)}, ${mib(after.wasm_heap_bytes)} after the second; by caption (MiB, heap/live): ${first}; the second: ${second}; ${JSON.stringify(stats)}`;
+      return `${heapNote}${drawn.backend}, textures ${drawn.textures}; ${menuNote.map((n) => `${n}; `).join("")}first caption to first level frame in ${s.load_ms.toFixed(0)} ms, ${again.load_ms.toFixed(0)} ms again; ${colours.size} colours; wasm heap ${mib(stats.wasm_heap_bytes)}, ${mib(after.wasm_heap_bytes)} after the second; by caption (MiB, heap/live): ${first}; the second: ${second}; ${records.join("; the second: ")}; ${JSON.stringify(stats)}`;
     } finally {
       globalThis.Worker = Original;
       localStorage.removeItem("volya-engine.graphics");

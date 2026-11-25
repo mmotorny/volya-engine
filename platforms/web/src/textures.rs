@@ -10,13 +10,14 @@
 //! user: a level's transcodings would take as much storage as its BC
 //! textures, on top of the game). Then, while it waits under its last
 //! caption ([`volya_engine::app::App::world_to_prepare`]), its geometry is
-//! uploaded a few pieces per task turn (#184): wgpu's GL backend keeps what
+//! uploaded a few pieces per task turn (#184). wgpu's GL backend keeps what
 //! is written in the wasm heap until WebGL reports the work done, which it
-//! does only after the turn ends.
+//! does only after the turn ends: where WebGL 2 draws, the textures' writes
+//! are waited for every [`STAGING_BYTES`] and the geometry's every piece
+//! (#440).
 //!
-//! On WebGPU, after each turn the next waits until the browser reports the
-//! GPU done with what was submitted (#355; where WebGL 2 draws, the turns
-//! wait for frames instead, which WebGL's reports need anyway): the browser's GPU process copies the
+//! After each turn the next waits until the browser reports the GPU done
+//! with what was submitted (#355): the browser's GPU process copies the
 //! uploads after the engine has handed them over, so without the wait a
 //! level's uploads all reach it with the level's first frame, and the
 //! engine worker waits at that frame's presentation for all of them
@@ -62,43 +63,17 @@ pub struct Stats {
 const TURN_MS: f64 = 30.0;
 
 /// Bytes of texture data written while WebGL 2 draws before the
-/// preparation waits for their staging to be freed: what the wasm heap
-/// holds of them at most (#357; with a 30 ms turn alone, up to 40 MiB of BC
+/// preparation waits for WebGL to report them done, which frees their
+/// staging: with the texture being written, what the wasm heap holds of
+/// them at most (#357, #440; with a 30 ms turn alone, up to 40 MiB of BC
 /// textures in desktop Chrome, measured).
-const STAGING_BYTES: u64 = 4 << 20;
-
-/// The texture bytes written as frames were seen, to tell which writes
-/// WebGL may still hold: those made since the frame two frames back.
-struct Staging {
-    /// (frames run, bytes written then), oldest first; the first is the
-    /// latest at least two frames old.
-    seen: std::collections::VecDeque<(u64, u64)>,
-}
-
-impl Staging {
-    /// Counting from `written` bytes written, after `frames` frames.
-    fn new(frames: u64, written: u64) -> Self {
-        Self {
-            seen: [(frames.saturating_sub(2), written)].into(),
-        }
-    }
-
-    /// The bytes that may still be staged, `written` written after
-    /// `frames` frames.
-    fn staged(&mut self, frames: u64, written: u64) -> u64 {
-        if self.seen.back().is_some_and(|&(f, _)| f < frames) {
-            self.seen.push_back((frames, written));
-        }
-        while self.seen.len() > 1 && self.seen[1].0 + 2 <= frames {
-            self.seen.pop_front();
-        }
-        written - self.seen.front().map_or(written, |&(_, w)| w)
-    }
-}
+const STAGING_BYTES: u64 = 2 << 20;
 
 /// Bytes of the level's geometry uploaded per task turn: what the wasm heap
-/// holds of it at most per turn.
+/// holds of it at most per turn. Where WebGL 2 draws, one piece, waited
+/// for before the next (#440).
 const WORLD_TURN_BYTES: u64 = 2 * UPLOAD_PIECE as u64;
+const WORLD_TURN_BYTES_COMPAT: u64 = UPLOAD_PIECE as u64;
 
 thread_local! {
     static RUNNING: RefCell<bool> = const { RefCell::new(false) };
@@ -192,7 +167,9 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
         crate::gpu::with_renderer(|r| r.texture_path() == TexturePath::Etc2).unwrap_or(false);
     let compat = crate::gpu::with_renderer(|r| r.compat()).unwrap_or(false);
     let written = || crate::gpu::with_renderer(|r| r.texture_bytes_written()).unwrap_or(0);
-    let mut staging = Staging::new(crate::frames(), written());
+    // Where WebGL 2 draws: the bytes written since WebGL last reported the
+    // writes done.
+    let mut staged_from = written();
     // Every file is read into this one, and transcoded into the other.
     let mut bytes = Vec::new();
     let mut transcoding = Transcoded {
@@ -217,6 +194,16 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
         let t = now();
         let transcoded = (etc2 && transcode_into(&dds, &mut transcoding)).then_some(&transcoding);
         stats.transcode_ms += now() - t;
+        // Where WebGL 2 draws, the writes before are waited for when this
+        // texture (about its file's size) would take the staging past its
+        // bound.
+        if compat
+            && written() > staged_from
+            && written() - staged_from + bytes.len() as u64 > STAGING_BYTES
+        {
+            gpu_done(&mut stats.gpu_wait_ms).await?;
+            staged_from = written();
+        }
         let t = now();
         if transcoded.is_some() {
             stats.transcoded += 1;
@@ -239,31 +226,19 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
         // none while the page is hidden (#93). Yielding after every texture
         // cost as much as the transcoding itself (each turn waits for a
         // timer and frames; measured in the iOS Simulator).
-        let staged = if compat {
-            staging.staged(crate::frames(), written())
-        } else {
-            0
-        };
-        if now() - turn >= TURN_MS || staged >= STAGING_BYTES {
+        if now() - turn >= TURN_MS {
             drop(_span);
             if !compat {
                 gpu_done(&mut stats.gpu_wait_ms).await?;
             }
             crate::opfs::sleep(0).await?;
-            // Until WebGL can have reported the writes done (two frames,
-            // as for the geometry below) and their staging is freed.
-            let since = crate::frames();
-            while (staged >= STAGING_BYTES && crate::frames() < since + 2)
-                || crate::engine::page_hidden()
-            {
-                crate::opfs::sleep(if crate::engine::page_hidden() { 100 } else { 4 }).await?;
+            while crate::engine::page_hidden() {
+                crate::opfs::sleep(100).await?;
             }
             turn = now();
         }
     }
-    if !compat {
-        gpu_done(&mut stats.gpu_wait_ms).await?;
-    }
+    gpu_done(&mut stats.gpu_wait_ms).await?;
     stats.total_ms = now() - start;
     STATS.with(|s| *s.borrow_mut() = stats);
     Ok(())
@@ -277,11 +252,17 @@ async fn prepare_world(level: Arc<LevelWorld>) -> Result<(), JsValue> {
     // Until done, or the game was quit or unmounted meanwhile.
     while crate::engine::world_to_prepare().is_some_and(|w| Arc::ptr_eq(&w, &level)) {
         turns += 1;
+        let budget = if compat {
+            WORLD_TURN_BYTES_COMPAT
+        } else {
+            WORLD_TURN_BYTES
+        };
         let done = tracing::info_span!("prepare.world")
-            .in_scope(|| crate::gpu::prepare_world(&level, WORLD_TURN_BYTES))?;
-        if !compat {
-            gpu_done(&mut wait_ms).await?;
-        }
+            .in_scope(|| crate::gpu::prepare_world(&level, budget))?;
+        // Where WebGL 2 draws, until WebGL reports the pieces written done
+        // and their staging goes (it may not in the task they were written
+        // in, documented by the WebGL 2 specification).
+        gpu_done(&mut wait_ms).await?;
         STATS.with(|s| {
             let mut s = s.borrow_mut();
             s.world_ms = now() - start;
@@ -302,16 +283,10 @@ async fn prepare_world(level: Arc<LevelWorld>) -> Result<(), JsValue> {
             }
             break;
         }
-        // Where WebGL 2 draws, until two frames ran, so WebGL can report the
-        // pieces written done and their staging goes (it may not in the
-        // frame they were written in, documented by the WebGL 2
-        // specification); on WebGPU a task turn. None while the page is
-        // hidden (#93).
-        let since = crate::frames();
-        let frames = if compat { 2 } else { 0 };
+        // A task turn; none while the page is hidden (#93).
         crate::opfs::sleep(0).await?;
-        while crate::frames() < since + frames || crate::engine::page_hidden() {
-            crate::opfs::sleep(if crate::engine::page_hidden() { 100 } else { 4 }).await?;
+        while crate::engine::page_hidden() {
+            crate::opfs::sleep(100).await?;
         }
     }
     Ok(())
