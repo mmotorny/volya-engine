@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-// The page's side of the diagnostic log (#346; docs/architecture.md,
-// Diagnostic log). The log lives in the engine worker; the page sends its
-// own events there, only while the player's setting is on (off by
+// The page's side of the diagnostic log (#346;
+// docs/architecture/diagnostics.md). The log lives in the engine worker;
+// the page sends its own events there, only while the player's setting is on (off by
 // default), so nothing is done for it otherwise:
 //
 //   event(name, args)    an instant event (args: a flat object)

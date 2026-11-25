@@ -13,10 +13,13 @@
 //! actions of the frame (a platform's input mapped onto the spec's actions
 //! of section 2 elsewhere). The character's condition limits it through
 //! [`Limits`] (docs/behavior/player-state.md section 4.3, kept by
-//! [`crate::character`]). Out of scope, as the spec allows a first version
-//! (section 10): leaning, aiming, climbing, impulses from other objects, and
-//! the body turning on its own (the heading follows the camera, see
-//! [`HEADING_SLACK`]).
+//! [`crate::character`]). Climbing ladders follows
+//! docs/behavior/climbing.md (S12; [`crate::climbing`]): its states run at
+//! each physics step, and the climbing flag, set after the physics, changes
+//! the movement as sections 4, 5 and 6 say. Out of scope, as the spec
+//! allows a first version (section 10): leaning, aiming, impulses from
+//! other objects, and the body turning on its own (the heading follows the
+//! camera, see [`HEADING_SLACK`]).
 
 use std::f32::consts::{FRAC_PI_4, PI};
 use std::io;
@@ -25,10 +28,11 @@ use volya_engine_formats::cp1251;
 use volya_engine_formats::gamemtl::DEADLY;
 
 use crate::camera::{self, Angles};
+use crate::climbing::{CLIMB_DRIVE, Climber, Drive, StepView, jump_velocity, yaw_limits};
 use crate::collision::CollisionWorld;
 use crate::collision::body::{
-    BodyConfig, PlayerBody, STEP, StepContacts, StepInput, drive_direction, side_force_coefficient,
-    step_assisted_drive,
+    BodyConfig, MOVE_THRESHOLD, PlayerBody, STEP, STEP_ASSIST_FACTOR, StepContacts, StepInput,
+    drive_direction, side_force_coefficient, step_assisted_drive,
 };
 use crate::collision::geometry::{Vec3, add, cross, dot, length, normalize, scale, sub};
 use crate::config::{Config, Section, value};
@@ -124,6 +128,8 @@ pub struct MovementConfig {
     pub run_back_coef: f32,
     pub walk_back_coef: f32,
     pub crouch_coef: f32,
+    /// The factor while climbing (climbing.md 3.3).
+    pub climb_coef: f32,
     pub sprint_koef: f32,
     pub walk_strafe_coef: f32,
     pub run_strafe_coef: f32,
@@ -182,6 +188,7 @@ impl MovementConfig {
             run_back_coef: float("run_back_coef")?,
             walk_back_coef: float("walk_back_coef")?,
             crouch_coef: float("crouch_coef")?,
+            climb_coef: float("climb_coef")?,
             sprint_koef: float("sprint_koef")?,
             walk_strafe_coef: optional("walk_strafe_coef"),
             run_strafe_coef: optional("run_strafe_coef"),
@@ -307,6 +314,9 @@ pub struct Flags {
     pub landing: bool,
     /// The landing flag set is the hard landing's 0.3 s one (6.7).
     pub hard_landing: bool,
+    /// Climbing a ladder (climbing.md 3.6): set after the physics of each
+    /// frame on which the player is climbing.
+    pub climbing: bool,
 }
 
 impl Flags {
@@ -404,6 +414,16 @@ pub struct Player {
     /// The previous frame's eye and direction, for camera inertia.
     inert: Option<(Vec3, Vec3)>,
     view: View,
+    /// The ladder and climbing state (climbing.md 2.2).
+    climber: Climber,
+    /// The yaw limits taken on a ladder (climbing.md 3.6).
+    yaw_limits: Option<[f32; 2]>,
+    /// The step clock of this frame (climbing.md, conventions: the
+    /// footsteps' clock, ms), and the one given for the next frame.
+    clock: u32,
+    next_clock: Option<u32>,
+    /// The previous step was moving, `|a_k| > 0.1` (climbing.md 3.1).
+    was_moving: bool,
 }
 
 /// What the engine interface reports about the player.
@@ -473,6 +493,11 @@ impl Player {
                 direction: [0.0, 0.0, 1.0],
                 up: [0.0, 1.0, 0.0],
             },
+            climber: Climber::default(),
+            yaw_limits: None,
+            clock: now as u32,
+            next_clock: None,
+            was_moving: false,
         };
         p.view = p.compute_view(0.0);
         p
@@ -498,8 +523,30 @@ impl Player {
         self.angles
     }
 
+    /// The body's heading `θ` (5.3).
+    pub fn heading(&self) -> f32 {
+        self.heading
+    }
+
     pub fn body(&self) -> &PlayerBody {
         &self.body
+    }
+
+    /// The ladder (an index into the world's) and the climbing state
+    /// (climbing.md 2.2).
+    pub fn climber(&self) -> &Climber {
+        &self.climber
+    }
+
+    /// The yaw limits while on a ladder (climbing.md 3.6).
+    pub fn yaw_limits(&self) -> Option<[f32; 2]> {
+        self.yaw_limits
+    }
+
+    /// The step clock (ms) for the next frame (climbing.md, conventions);
+    /// without one a frame takes its engine clock.
+    pub fn set_step_clock(&mut self, ms: u32) {
+        self.next_clock = Some(ms);
     }
 
     pub fn state(&self) -> PlayerState {
@@ -568,14 +615,16 @@ impl Player {
         // (6.1, 6.6), the physics steps (6.1), the direction clearing of 9.1
         // (after the steps, on the speed they leave: our choice), the camera
         // (7, 9).
+        self.clock = self.next_clock.take().unwrap_or(now as u32);
         self.look(request, dt_f);
         let (a, take_off) = self.movement_update(world, now, request, dt_m);
         self.jump_started = take_off;
         self.hand_over(a);
         if take_off {
-            self.evaluate_take_off();
+            self.evaluate_take_off(world);
         }
         self.physics(world, dt_f);
+        self.climbing_flag(world);
         // 9.1: blocked, the state stops "moving".
         let v = self.body.velocity();
         if length(v) < SLOW_SPEED && !self.state.jump && !self.state.falling {
@@ -594,7 +643,14 @@ impl Player {
             1.0
         };
         let rot = self.config.rot_speed;
-        self.angles.yaw += request.mouse[0] * s + request.turn[0] * rot[0] * dt_f;
+        let turn = request.mouse[0] * s + request.turn[0] * rot[0] * dt_f;
+        self.angles.yaw += turn;
+        // climbing.md 3.6: a change of yaw is then clamped into the limits.
+        if let Some([lo, hi]) = self.yaw_limits
+            && turn != 0.0
+        {
+            self.angles.yaw = self.angles.yaw.clamp(lo, hi);
+        }
         self.angles.pitch +=
             request.mouse[1] * s * MOUSE_PITCH_FACTOR * invert + request.turn[1] * rot[1] * dt_f;
         let [lo, hi] = self.config.lim_pitch;
@@ -703,7 +759,9 @@ impl Player {
             // Unable to run, both sets walk (3.1, 4.1).
             let request_runs = self.runs(request.accel) && self.able_to_run();
             let mut keep_accel = false;
-            if crouch && !self.state.crouch {
+            if self.state.climbing {
+                // While climbing a crouch request is ignored (4.2).
+            } else if crouch && !self.state.crouch {
                 let target = if request_runs { 1 } else { 2 };
                 if self.body.request_box(world, target, now) {
                     self.state.crouch = true;
@@ -724,7 +782,8 @@ impl Player {
             // ability (the ability is part of "can sprint" below).
             let request_runs_raw = self.runs(request.accel);
             let s = &mut self.state;
-            let cancel = !(s.forward || s.left || s.right) || s.crouch || !request_runs_raw;
+            let cancel =
+                !(s.forward || s.left || s.right) || s.crouch || s.climbing || !request_runs_raw;
             if cancel {
                 self.sprint_request = false;
                 s.sprint = false;
@@ -754,8 +813,11 @@ impl Player {
             }
             self.desired_acceleration(x, z)
         };
-        // 4.2: standing up, on every frame.
-        if self.state.crouch && !crouch && self.body.request_box(world, 0, now) {
+        // 4.2: standing up, on every frame, and on starting to climb.
+        if self.state.crouch
+            && (!crouch || self.state.climbing)
+            && self.body.request_box(world, 0, now)
+        {
             self.state.crouch = false;
         }
         // 5.3: the heading for the next frame.
@@ -767,7 +829,32 @@ impl Player {
                 self.heading = self.angles.yaw - HEADING_SLACK.copysign(off);
             }
         }
+        // climbing.md 3.6: on a ladder with the yaw not limited, the player
+        // cannot move.
+        let a = if self.state.climbing && self.yaw_limits.is_none() {
+            [0.0; 3]
+        } else {
+            a
+        };
         (a, take_off)
+    }
+
+    /// climbing.md 3.6: the climbing flag after the frame's physics; on
+    /// the frame it is set the sprint flag clears and the yaw limits are
+    /// taken, on the frame it clears they are reset.
+    fn climbing_flag(&mut self, world: &CollisionWorld) {
+        let climbing = self.climber.state().climbing();
+        if climbing && !self.state.climbing {
+            self.state.sprint = false;
+            self.yaw_limits = self
+                .climber
+                .ladder()
+                .and_then(|i| world.ladders().get(i))
+                .and_then(|l| yaw_limits(l.normal_dir, self.heading, self.angles.yaw));
+        } else if !climbing && self.state.climbing {
+            self.yaw_limits = None;
+        }
+        self.state.climbing = climbing;
     }
 
     /// Section 5 items 2 and 3 on a frame that is not an air frame.
@@ -786,13 +873,14 @@ impl Player {
             (false, false) => 1.0,
         };
         let crouch = if s.crouch { c.crouch_coef } else { 1.0 };
+        let climb = if s.climbing { c.climb_coef } else { 1.0 };
         let sprint = if s.sprint { c.sprint_koef } else { 1.0 };
         let strafe = match (s.left || s.right, s.crouch, running) {
             (true, false, true) => c.run_strafe_coef,
             (true, false, false) => c.walk_strafe_coef,
             _ => 1.0,
         };
-        let magnitude = c.walk_accel * m * crouch * sprint * strafe;
+        let magnitude = c.walk_accel * m * crouch * sprint * strafe * climb;
         scale(self.turn_by_heading(x / len, z / len), magnitude)
     }
 
@@ -815,8 +903,15 @@ impl Player {
     }
 
     /// 6.6: a take-off is accepted on a recorded contact normal steeper than
-    /// [`TAKE_OFF_NORMAL_Y`] while not airborne.
-    fn evaluate_take_off(&mut self) {
+    /// [`TAKE_OFF_NORMAL_Y`] while not airborne, or while climbing, then off
+    /// the ladder (climbing.md 3.5).
+    fn evaluate_take_off(&mut self, world: &CollisionWorld) {
+        if self.climber.state().climbing() {
+            if let Some(l) = self.climber.ladder().and_then(|i| world.ladders().get(i)) {
+                self.take_off = Some(jump_velocity(l, self.accepted));
+            }
+            return;
+        }
         let ground = self.last_ground.is_some_and(|n| n[1] > TAKE_OFF_NORMAL_Y);
         if self.body.airborne() || !ground {
             return;
@@ -844,14 +939,42 @@ impl Player {
         self.accumulator = self.accumulator.min(STEP * MAX_STEPS as f32);
     }
 
+    /// What the climbing rules of a step read (climbing.md 2.5).
+    fn step_view(&self) -> StepView {
+        StepView {
+            centre: self.body.centre(),
+            r: self.body.shapes().r,
+            a: self.accepted,
+            camera: self.angles.direction_up().0,
+            velocity: self.body.velocity(),
+            clock: self.clock,
+            mass: self.config.body.mass,
+            gravity: GRAVITY,
+        }
+    }
+
     fn step(&mut self, world: &CollisionWorld) {
         let m = self.config.body.mass;
         let a = self.accepted;
+        let ladders = world.ladders();
         let take_off = self.take_off.take();
         if let Some(v) = take_off {
             self.body.set_velocity(v);
             self.jump_assist = Some(self.body.position());
+            // climbing.md 3.5: a jump off the ladder leaves it.
+            if self.climber.state().climbing() {
+                self.climber.jumped(&self.step_view());
+            }
         }
+        // climbing.md 2.5: the state's rules before the step's forces.
+        let held = self.climber.rules(ladders, &self.step_view());
+        // 3.1: stopping on the ladder stops the body.
+        let moving = length(a) > MOVE_THRESHOLD;
+        if self.climber.state().climbing() && self.was_moving && !moving {
+            self.body.set_velocity([0.0; 3]);
+        }
+        self.was_moving = moving;
+        self.body.set_climbing(self.climber.state().climbing());
         let airborne = self.body.airborne();
         let before = self.body.position();
         let c = self.body.begin_step(
@@ -864,7 +987,22 @@ impl Player {
         if c.ground.is_some() {
             self.last_ground = c.ground;
         }
-        let force = self.forces(&c, airborne, take_off.is_some());
+        // climbing.md 2.4: the ladders the physics world finds near the
+        // player. TODO(#392): when it does is believed, not traced: here
+        // the ladder's sphere (its radius about C) meeting the player's
+        // outer sphere (level-cform.md 5.1: radius 2r, 2.5r above the
+        // feet), after the step's contacts.
+        let view = self.step_view();
+        let outer = add(view.centre, [0.0, 1.5 * view.r, 0.0]);
+        for (i, l) in ladders.iter().enumerate() {
+            if length(sub(outer, l.centre)) < l.radius + 2.0 * view.r {
+                self.climber.found(ladders, i, &view);
+            }
+        }
+        let climbing = self.climber.state().climbing();
+        self.body.set_climbing(climbing);
+        let drive = self.climber.drive(ladders, &view);
+        let force = self.forces(&c, airborne, take_off.is_some(), climbing, drive, held);
         let r = self.body.finish_step(force, take_off.is_some());
 
         // 6.3: the speed cap, then the drag.
@@ -877,7 +1015,8 @@ impl Player {
         let mut v = self.body.velocity();
         let speed = length(v);
         if speed > limit {
-            let loose = r.airborne || !c.walkable;
+            // Loose: airborne, or off walkable ground and not climbing.
+            let loose = r.airborne || (!c.walkable && !climbing);
             if limit < TINY {
                 v = [0.0; 3];
             } else if loose && v[1] < 0.0 && v[1] > -FREE_SPEED {
@@ -898,13 +1037,15 @@ impl Player {
         v = sub(v, scale(v, k * STEP / m));
         self.body.set_velocity(v);
 
-        // 6.6: jump assistance ends on walkable ground.
-        if take_off.is_none() && c.walkable {
+        // 6.6: jump assistance ends on walkable ground or on a ladder.
+        if take_off.is_none() && (c.walkable || climbing) {
             self.jump_assist = None;
         }
         // 6.7, 9.2: the step the character first touches something while
-        // airborne (the step applying a take-off is not yet airborne).
-        if airborne && take_off.is_none() && c.ground.is_some() && !self.touched {
+        // airborne (the step applying a take-off is not yet airborne); taking
+        // a ladder counts as that touch (climbing.md 3.7).
+        let touches = c.ground.is_some() || climbing;
+        if airborne && take_off.is_none() && touches && !self.touched {
             self.touched = true;
             self.land(world, c.impact_speed);
         } else if r.landed && self.state.falling {
@@ -921,40 +1062,78 @@ impl Player {
         }
     }
 
-    /// The character's forces of a step (6.2–6.6), gravity included, within
-    /// the force limit of 6.1.
-    fn forces(&self, c: &StepContacts, airborne: bool, taking_off: bool) -> Vec3 {
+    /// The character's forces of a step (6.2–6.6, climbing.md 3.2), gravity
+    /// included unless climbing, within the force limit of 6.1; `held` the
+    /// climbing rules' own forces (climbing.md 2.5).
+    fn forces(
+        &self,
+        c: &StepContacts,
+        airborne: bool,
+        taking_off: bool,
+        climbing: bool,
+        drive: Option<Drive>,
+        held: Vec3,
+    ) -> Vec3 {
         let m = self.config.body.mass;
-        let f = c.traction;
+        // climbing.md 3.1: traction 1 and no gravity while climbing.
+        let f = if climbing { 1.0 } else { c.traction };
         let a = self.accepted;
-        let mut force = [0.0, -GRAVITY * m, 0.0];
-        let input = normalize(horizontal(c.direction));
-        let side = |force: &mut Vec3| {
-            if let Some(d) = input {
-                let s = cross(d, [0.0, 1.0, 0.0]);
+        let mut force = if climbing {
+            held
+        } else {
+            add([0.0, -GRAVITY * m, 0.0], held)
+        };
+        // climbing.md 3.2: steering onto a ladder's end replaces the input's
+        // direction in the ground rules.
+        let (steer, no_assist_factor) = match drive {
+            Some(Drive::Ground {
+                steer,
+                no_assist_factor,
+            }) => (steer, no_assist_factor),
+            _ => (None, false),
+        };
+        let c = &StepContacts {
+            direction: steer.map_or(c.direction, |w| {
+                normalize(horizontal(w)).unwrap_or([0.0; 3])
+            }),
+            ..*c
+        };
+        let side = |force: &mut Vec3, along: Option<Vec3>| {
+            if let Some(s) = along.and_then(|d| normalize(cross(d, [0.0, 1.0, 0.0]))) {
                 let k = side_force_coefficient(c);
-                let along = dot(self.body.velocity(), s);
-                *force = add(*force, scale(s, -k * f * along));
+                let v = dot(self.body.velocity(), s);
+                *force = add(*force, scale(s, -k * f * v));
             }
         };
-        if c.moving && !airborne {
+        let input = normalize(horizontal(c.direction));
+        if let Some(Drive::Climb(dir)) = drive {
+            if c.moving {
+                force = add(force, scale(dir, CLIMB_DRIVE * f * m));
+                side(&mut force, Some(dir));
+            }
+        } else if c.moving && !airborne {
             let drive = if c.walkable {
                 scale(drive_direction(c), DRIVE * f * m)
             } else {
                 scale(drive_direction(c), DRIVE_STEEP * f * m)
             };
             let drive = if c.step_assist {
-                step_assisted_drive(drive, c, m)
+                let d = step_assisted_drive(drive, c, m);
+                if no_assist_factor {
+                    scale(d, 1.0 / STEP_ASSIST_FACTOR)
+                } else {
+                    d
+                }
             } else {
                 drive
             };
             force = add(force, drive);
-            side(&mut force);
+            side(&mut force, input);
             if c.ground.is_none() {
                 force[1] -= DOWN_FORCE * m;
             }
         } else if c.moving && c.step_assist {
-            side(&mut force);
+            side(&mut force, input);
         }
         if airborne {
             force = add(force, scale(a, m * self.config.air_control_param));

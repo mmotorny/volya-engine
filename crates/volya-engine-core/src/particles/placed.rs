@@ -23,6 +23,7 @@ use std::sync::Arc;
 use volya_engine_formats::particles::{Library, PlacedRecord};
 
 use super::{EffectInstance, GroupInstance, Matrix, Mode, Random, STEP_MS, Sphere, Vec3, sub};
+use crate::collision::CollisionWorld;
 
 /// What a record made (section 2).
 #[derive(Clone, Debug)]
@@ -83,10 +84,16 @@ impl Instance {
         }
     }
 
-    fn update(&mut self, e: u32, library: &Library, random: &mut Random) {
+    fn update(
+        &mut self,
+        e: u32,
+        library: &Library,
+        random: &mut Random,
+        world: Option<&CollisionWorld>,
+    ) {
         match self {
-            Instance::Effect(i) => i.update(e, random),
-            Instance::Group(g) => g.update(e, library, random),
+            Instance::Effect(i) => i.update_in(e, random, world),
+            Instance::Group(g) => g.update_in(e, library, random, world),
         }
     }
 
@@ -157,6 +164,8 @@ pub enum Origin {
     Zone,
     /// The weather's ambient effect (P11 3).
     Weather,
+    /// An artefact's idle effect (P10 4).
+    Artefact,
 }
 
 /// One particle object: its instance with its update times.
@@ -192,10 +201,16 @@ impl PlacedEffect {
     }
 
     /// The elapsed-time update of section 5.1 at `clock`.
-    fn update(&mut self, clock: u32, library: &Library, random: &mut Random) {
+    fn update(
+        &mut self,
+        clock: u32,
+        library: &Library,
+        random: &mut Random,
+        world: Option<&CollisionWorld>,
+    ) {
         let e = clock.wrapping_sub(self.last);
         if e != 0 {
-            self.instance.update(e, library, random);
+            self.instance.update(e, library, random, world);
             self.last = clock;
             self.updates += 1;
         }
@@ -242,6 +257,9 @@ pub fn period(distance: f64) -> u32 {
 #[derive(Clone, Debug)]
 pub struct PlacedEffects {
     library: Arc<Library>,
+    /// The level's collision mesh the effects' collision rays are cast
+    /// against (particle-collision.md); none in checks without a level.
+    world: Option<Arc<CollisionWorld>>,
     random: Random,
     /// The objects; a deleted one leaves its slot to the next made.
     effects: Vec<Option<PlacedEffect>>,
@@ -264,8 +282,20 @@ impl PlacedEffects {
         records: &[PlacedRecord],
         clock: u32,
     ) -> Result<Self, String> {
+        Self::new_in(library, records, clock, None)
+    }
+
+    /// As [`PlacedEffects::new`], the effects colliding with `world`
+    /// (particle-collision.md).
+    pub fn new_in(
+        library: Arc<Library>,
+        records: &[PlacedRecord],
+        clock: u32,
+        world: Option<Arc<CollisionWorld>>,
+    ) -> Result<Self, String> {
         let mut effects = Self {
             library,
+            world,
             random: Random::default(),
             effects: Vec::with_capacity(records.len()),
             queued: Vec::new(),
@@ -318,7 +348,40 @@ impl PlacedEffects {
         p.instance.place(m, w, Mode::World);
         p.instance.play();
         p.last = clock.wrapping_sub(STEP_MS);
-        p.update(clock, &self.library, &mut self.random);
+        p.update(
+            clock,
+            &self.library,
+            &mut self.random,
+            self.world.as_deref(),
+        );
+        p.register();
+    }
+
+    /// Places object `i` by `m` with velocity `w` in world mode and
+    /// registers its visibility sphere (P10 4.2 step 5, 4.4 step 1).
+    pub fn place_registered(&mut self, i: usize, m: &Matrix, w: Vec3) {
+        if let Some(Some(p)) = self.effects.get_mut(i) {
+            p.instance.place(m, w, Mode::World);
+            p.register();
+        }
+    }
+
+    /// Plays object `i` with its immediate 33 ms update, its last-update
+    /// time the clock minus 33, and registers its visibility sphere (P9
+    /// 4.5, P8 5.4).
+    pub fn play(&mut self, i: usize) {
+        let clock = self.clock;
+        let Some(Some(p)) = self.effects.get_mut(i) else {
+            return;
+        };
+        p.instance.play();
+        p.last = clock.wrapping_sub(STEP_MS);
+        p.update(
+            clock,
+            &self.library,
+            &mut self.random,
+            self.world.as_deref(),
+        );
         p.register();
     }
 
@@ -413,7 +476,12 @@ impl PlacedEffects {
             let c = p.instance.sphere().centre;
             let d = sub(c, camera).map(f64::from);
             p.period = period((d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt());
-            p.update(clock, &self.library, &mut self.random);
+            p.update(
+                clock,
+                &self.library,
+                &mut self.random,
+                self.world.as_deref(),
+            );
             p.register();
             p.due = clock.wrapping_add(p.period);
         }
@@ -425,7 +493,12 @@ impl PlacedEffects {
     pub fn draw_update(&mut self, i: usize) {
         let clock = self.clock;
         if let Some(Some(p)) = self.effects.get_mut(i) {
-            p.update(clock, &self.library, &mut self.random);
+            p.update(
+                clock,
+                &self.library,
+                &mut self.random,
+                self.world.as_deref(),
+            );
         }
     }
 
@@ -455,6 +528,7 @@ impl PlacedEffects {
     pub fn copy_of(&self, origin: Origin) -> Self {
         Self {
             library: self.library.clone(),
+            world: self.world.clone(),
             random: self.random.clone(),
             effects: (self.effects())
                 .filter(|p| p.origin == origin)

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-// The audio worker (docs/architecture.md, Audio; #354): mixes on the
+// The audio worker (docs/architecture/audio.md; #354): mixes on the
 // output's own schedule, as an audio device mixes apart from the game's
 // frames. It runs the engine's wasm build in an instance of its own
 // (src/audio_host.rs) over the output's shared memory (audio-ring.js): it

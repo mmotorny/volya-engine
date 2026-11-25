@@ -24,19 +24,24 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use crate::controls::Controls;
+use crate::core::artefacts::{
+    ArtefactRecord, ArtefactSection, Artefacts, Behaviour as ArtefactBehaviour,
+};
 use crate::core::camera::{self, Angles, Mat4, Vec3};
 use crate::core::character::condition::Activity;
 use crate::core::character::inventory::Place;
 use crate::core::character::{self, CharacterState, SpecificCharacter};
+use crate::core::climbing::Ladder;
 use crate::core::clock::GameClock;
 use crate::core::collision::{CollisionWorld, geometry};
 use crate::core::config;
 use crate::core::config::Config;
+use crate::core::detector::DetectorSection;
 use crate::core::input::Input;
 use crate::core::level::{DrawItem, Level};
 use crate::core::lights::{LightSettings, Lights};
 use crate::core::movement::{Flags, MovementConfig, Player};
-use crate::core::object_light::SkyVisibility;
+use crate::core::object_light::{self, SkyVisibility};
 use crate::core::particles::placed::{Origin, PlacedEffect, PlacedEffects, particle_capacity};
 use crate::core::simulation::graph::Graph;
 use crate::core::simulation::navigation::Navigation;
@@ -47,6 +52,7 @@ use crate::core::vfs::{self, Vfs};
 use crate::core::weather::{Environment, Weather, texture_name as weather_texture_name};
 use crate::core::zones::{Behaviour, SoundEvent, ZoneRecord, ZoneSection, Zones};
 use crate::data::GameData;
+use crate::detector::{DetectorReport, DetectorSound, PlayerDetectors};
 use crate::footsteps::{self, MaterialPairs, PlayerFootsteps};
 use crate::level_details::{self, DetailsScene, DetailsWorld, LevelDetailObjects};
 use crate::level_lights::{self, GlowShader, LevelLights, LightCamera, LightsData};
@@ -227,9 +233,15 @@ pub struct LevelScreen {
     /// The player's footsteps (S11); `None` only in the unit tests' empty
     /// level.
     footsteps: Option<PlayerFootsteps>,
-    /// The player's sky visibility (level-objects.md 5.4), for the sounds
-    /// of the weather.
+    /// The player's sky visibility (level-objects.md 5.4,
+    /// sound-weather-ambient.md 4.3), for the sounds of the weather; the
+    /// player's model's header sphere (ogf.md section 2), centre and radius
+    /// in model space, its rays start from; the level's frame count and
+    /// the latest frame's time (s), for its once-per-frame steps.
     sky_visibility: SkyVisibility,
+    player_sphere: ([f32; 3], f32),
+    frames: u64,
+    frame_s: f32,
     player: Player,
     /// The player character's state (docs/behavior/player-state.md); `None`
     /// only in the unit tests' empty level.
@@ -267,6 +279,10 @@ pub struct LevelScreen {
     zones: Zones,
     /// The zone sections read, by name.
     zone_sections: HashMap<String, ZoneSection>,
+    /// The artefact objects (artefact-idle-effects.md) and the artefact
+    /// sections read, by name.
+    artefacts: Artefacts,
+    artefact_sections: HashMap<String, ArtefactSection>,
     /// The weather's ambient effect object, while it exists (P11 3).
     weather_effect: Option<usize>,
     /// The size of the latest frame drawn, for the effects' view test.
@@ -275,8 +291,8 @@ pub struct LevelScreen {
     /// size thresholds (static-shading.md 10.2, frame-presentation.md 1.1).
     supersample: u32,
     /// Which effect objects are drawn, by origin (tests compare frames
-    /// without them): placed, zones', weather's.
-    effects_drawn: [bool; 3],
+    /// without them): placed, zones', weather's, artefacts'.
+    effects_drawn: [bool; 4],
     /// The level's dynamic light records (docs/behavior/dynamic-lights.md):
     /// chunk 6's, the sun's and every source's; its glows and lamps.
     lights: LevelLights,
@@ -294,6 +310,8 @@ pub struct LevelScreen {
     wind: f32,
     /// The engine's frame number: one per update, paused or not.
     frame: u64,
+    /// The player's detectors (docs/behavior/sound-detector.md).
+    detectors: PlayerDetectors,
 }
 
 /// What the engine interface reports.
@@ -325,6 +343,8 @@ pub struct LevelState {
     /// The player's attached torch (torch.md).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub torch: Option<TorchReport>,
+    /// The player's detectors (sound-detector.md).
+    pub detectors: Vec<DetectorReport>,
 }
 
 /// The level's placed effects as the engine interface reports them.
@@ -625,6 +645,8 @@ pub struct PlayerReport {
     pub jump: bool,
     pub falling: bool,
     pub landing: bool,
+    /// On a ladder (docs/behavior/climbing.md 3.6).
+    pub climbing: bool,
     /// The toggles the touch controls show.
     pub crouch_toggled: bool,
     pub sprint_requested: bool,
@@ -1101,7 +1123,7 @@ pub struct NewGameLoad {
     dir: String,
     level: Option<Level>,
     geom: Option<GeomFile>,
-    collision: Option<CollisionWorld>,
+    collision: Option<Arc<CollisionWorld>>,
     draw_items: Vec<DrawItem>,
     spheres: Vec<[f32; 4]>,
     modifiers: Vec<EnvModifier>,
@@ -1145,10 +1167,17 @@ pub struct NewGameLoad {
     zone_sections: HashMap<String, ZoneSection>,
     /// The section of each zone record of the level's objects.
     zone_record_sections: Vec<String>,
+    /// The artefact objects online at the start, the sections of every
+    /// artefact of the level's objects, and each artefact record's section.
+    artefacts: Artefacts,
+    artefact_sections: HashMap<String, ArtefactSection>,
+    artefact_record_sections: Vec<String>,
     /// The material pairs, read with the materials (S9).
     pairs: Option<Arc<MaterialPairs>>,
     /// The player's visual, from its record.
     player_visual: Option<String>,
+    /// Its model's header sphere (sound-weather-ambient.md 4.3).
+    player_sphere: Option<([f32; 3], f32)>,
     footsteps: Option<PlayerFootsteps>,
     /// The level's lights, glows and their shaders
     /// (docs/behavior/dynamic-lights.md, glows.md), and chunk 7's records
@@ -1160,6 +1189,8 @@ pub struct NewGameLoad {
     presentation_noise: Option<String>,
     /// The player's torches' data (torch.md 1, 3).
     torches: Option<PlayerTorchData>,
+    /// The player's detectors' sections (sound-detector.md 2.1).
+    detectors: Option<Vec<DetectorSection>>,
 }
 
 /// The zone objects of `level_objects` (zone-idle-effects.md 1.1: the
@@ -1189,6 +1220,54 @@ fn zone_objects<'a>(
         out.push((o, record));
     }
     Ok(out)
+}
+
+/// The section of artefact record `record` (artefact-idle-effects.md 1.1:
+/// class id `ARTEFACT` or `SCRPTART`), read from `system` once
+/// (`sections`, by name): fatal where a required key is missing. `None`
+/// for other records.
+fn artefact_section<'a>(
+    record: &ObjectRecord,
+    system: &Config,
+    sections: &'a mut HashMap<String, ArtefactSection>,
+) -> io::Result<Option<&'a ArtefactSection>> {
+    let Some(behaviour) = ArtefactBehaviour::of(record.class_id.as_str()) else {
+        return Ok(None);
+    };
+    let name = &record.header.section;
+    if !sections.contains_key(name) {
+        let section = system
+            .section(name)
+            .ok_or_else(|| invalid(format!("no section [{name}]")))?;
+        sections.insert(name.clone(), ArtefactSection::read(section, behaviour)?);
+    }
+    Ok(sections.get(name))
+}
+
+/// What artefact object `id` takes from its record and its loaded model,
+/// if any (artefact-idle-effects.md 3.1, 4.1, 6.2): *X*, its parent, row 3
+/// of bone 0's bind matrix (the rest pose; a model without bones is placed
+/// at the object's origin) and the model header's sphere.
+fn artefact_record(
+    id: u16,
+    record: &ObjectRecord,
+    model: Option<&objects::LoadedModel>,
+) -> ArtefactRecord {
+    let h = &record.header;
+    let bone = model
+        .and_then(|m| m.bones.first())
+        .map_or([0.0; 3], |(_, b)| [b[3][0], b[3][1], b[3][2]]);
+    let sphere = model.map_or(([0.0; 3], 0.0), |m| {
+        (m.header.sphere_centre, m.header.sphere_radius)
+    });
+    ArtefactRecord {
+        id,
+        name: h.name.clone(),
+        transform: model_math::transform(h.position, h.angles),
+        parent: h.parent_id != crate::core::simulation::NO_ID,
+        bone,
+        sphere,
+    }
 }
 
 /// The game hour of `clock`, 0 … 23 (the scripts' switch rules,
@@ -1345,8 +1424,16 @@ impl NewGameLoad {
                 let f = tree
                     .open(&format!("{dir}\\level.cform"))
                     .map_err(|e| file("level.cform", e))?;
-                self.collision =
-                    Some(CollisionWorld::read(f, materials).map_err(|e| file("level.cform", e))?);
+                let mut collision =
+                    CollisionWorld::read(f, materials).map_err(|e| file("level.cform", e))?;
+                // docs/behavior/climbing.md 1.1 – 1.3: every ladder of the
+                // level is present from the first frame, its box in the
+                // collision world.
+                let ladders = (self.level_objects.iter())
+                    .filter_map(|o| Ladder::from_record(&o.record))
+                    .collect();
+                collision.set_ladders(ladders)?;
+                self.collision = Some(Arc::new(collision));
             }
             Stage::LoadingGeometry => {
                 let mut f = tree
@@ -1432,9 +1519,16 @@ impl NewGameLoad {
                 // The player's footsteps (S11) on its cycles (S10), placed
                 // under this caption by us, with the player's movement.
                 let pairs = earlier(self.pairs.clone(), "gamemtl.xr")?;
-                let collision = earlier(self.collision.as_ref(), "level.cform")?;
+                let collision = earlier(self.collision.as_deref(), "level.cform")?;
                 let visual = earlier(self.player_visual.as_deref(), "player's visual")?;
                 let cycles = footsteps::read_cycles(tree, data, &dir, visual)?;
+                // The sky rays' origin (sound-weather-ambient.md 4.3): the
+                // player's model's header, read with its skeleton as the
+                // torches read it.
+                let path = objects::locate_model(tree, data, &dir, visual)?;
+                let (header, _) = volya_engine_formats::model::skeleton(&vfs::read(tree, &path)?)
+                    .map_err(|e| io::Error::new(e.kind(), format!("{path}: {e}")))?;
+                self.player_sphere = Some((header.sphere_centre, header.sphere_radius));
                 self.footsteps = Some(PlayerFootsteps::new(
                     data,
                     spawn::ACTOR_SECTION,
@@ -1459,6 +1553,18 @@ impl NewGameLoad {
                     })
                     .collect();
                 self.torches = Some(torches);
+                // The player's detectors' sections (sound-detector.md 2.1),
+                // read as their items are made; their sound lists are loaded
+                // with them (2.2).
+                let detectors = crate::detector::read_sections(&data.system, character)?;
+                sound.detectors = (character.inventory.items.iter())
+                    .filter_map(|i| {
+                        let s = detectors.iter().find(|s| s.name == i.config.section)?;
+                        crate::detector::is_detector(i.config.class_id.as_str())
+                            .then(|| (i.id, s.clone()))
+                    })
+                    .collect();
+                self.detectors = Some(detectors);
                 // The zones online at the start are created as the client
                 // creates its objects (zone-idle-effects.md 3.1), on the
                 // effects' clock brought to this frame; their sounds are
@@ -1485,7 +1591,29 @@ impl NewGameLoad {
                 self.sound = Some(sound);
                 self.weather = Some(weather);
                 let level_objects = std::mem::take(&mut self.level_objects);
-                self.spawned = Some(objects::spawn(tree, data, &dir, &level_objects)?);
+                let spawned = objects::spawn(tree, data, &dir, &level_objects)?;
+                // The artefacts online at the start are created as the
+                // client creates its objects (artefact-idle-effects.md 3.1),
+                // with their models' bones, on the effects' clock.
+                let (effects, _) = earlier(self.effects.as_mut(), "particles.xr")?;
+                for o in &level_objects {
+                    let Some(section) =
+                        artefact_section(&o.record, &data.system, &mut self.artefact_sections)?
+                    else {
+                        continue;
+                    };
+                    self.artefact_record_sections.push(section.name.clone());
+                    if o.online {
+                        let model = (spawned.instances.iter())
+                            .find(|i| i.id == o.id)
+                            .map(|i| &spawned.models[i.model]);
+                        let record = artefact_record(o.id, &o.record, model);
+                        self.artefacts
+                            .create(&record, section.clone(), effects)
+                            .map_err(invalid)?;
+                    }
+                }
+                self.spawned = Some(spawned);
                 // The lamps' colour animations (docs/formats/lanims-xr.md),
                 // read here with the lamps (our choice: when the game reads
                 // the file is unestablished); without the file, none.
@@ -1645,13 +1773,18 @@ impl NewGameLoad {
                         .flat_map(|s| &s.effects)
                         .map(|e| e.particles.as_str())
                         .collect();
-                    let names: Vec<&str> = zones.chain(weather.iter().copied()).collect();
+                    let artefacts =
+                        (self.artefact_sections.values()).filter_map(|s| s.particles.as_deref());
+                    let names: Vec<&str> = (zones.chain(artefacts))
+                        .chain(weather.iter().copied())
+                        .collect();
                     let (shaders, not_drawn) =
                         particle_shaders(tree, data, &definitions, effects, &names, &mut locate)?;
                     self.particle_shaders = shaders;
                     self.not_drawn.extend(not_drawn);
-                    // The most particles at once: every placed record's and
-                    // zone's (each may come online) and the largest ambient
+                    // The most particles at once: every placed record's,
+                    // zone's and artefact's (each may come online) and the
+                    // largest ambient
                     // effect (one at a time).
                     let library = effects.library();
                     let capacity = |n: &str| particle_capacity(library, n).unwrap_or(0);
@@ -1661,12 +1794,18 @@ impl NewGameLoad {
                         .filter_map(|s| s.idle_particles.as_deref())
                         .map(capacity)
                         .sum();
+                    let artefact_sections = &self.artefact_sections;
+                    let artefacts: usize = (self.artefact_record_sections.iter())
+                        .filter_map(|s| artefact_sections.get(s))
+                        .filter_map(|s| s.particles.as_deref())
+                        .map(capacity)
+                        .sum();
                     let placed: usize = (effects.effects())
                         .filter(|p| p.origin == Origin::Placed)
                         .map(|p| capacity(&p.name))
                         .sum();
                     let ambient = weather.iter().map(|n| capacity(n)).max().unwrap_or(0);
-                    self.particle_capacity = placed + zones + ambient;
+                    self.particle_capacity = placed + zones + artefacts + ambient;
                 }
             }
             // The objects' light inputs against the static collision under
@@ -1674,7 +1813,7 @@ impl NewGameLoad {
             // caption by us. They are kept while the level runs (our
             // choice: the game retests them, the sun's ray as the sun moves).
             Stage::ClientSynchronising => {
-                let collision = earlier(self.collision.as_ref(), "level.cform")?;
+                let collision = earlier(self.collision.as_deref(), "level.cform")?;
                 let weather = earlier(self.weather.as_ref(), "weather")?;
                 let clock = earlier(self.clock.as_ref(), "game clock")?;
                 let actor = earlier(self.actor.as_ref(), "actor")?;
@@ -1706,8 +1845,11 @@ impl NewGameLoad {
                     Err(e) if e.kind() == io::ErrorKind::NotFound => Library::default(),
                     Err(e) => return Err(e),
                 };
-                let effects = PlacedEffects::new(Arc::new(library), &records, self.now as u32)
-                    .map_err(|e| invalid(format!("{dir}\\level.ps_static: {e}")))?;
+                // The effects collide with the level (particle-collision.md).
+                let world = self.collision.clone();
+                let effects =
+                    PlacedEffects::new_in(Arc::new(library), &records, self.now as u32, world)
+                        .map_err(|e| invalid(format!("{dir}\\level.ps_static: {e}")))?;
                 self.effects = Some((effects, self.now));
             }
             // detail-objects.md 2.1: the file, the sway values and the
@@ -1739,7 +1881,9 @@ impl NewGameLoad {
         let spawned = earlier(self.spawned, "objects")?;
         let simulation = earlier(self.simulation, "simulation")?;
         let footsteps = earlier(self.footsteps, "footsteps")?;
+        let player_sphere = earlier(self.player_sphere, "player's model")?;
         let torches = earlier(self.torches, "torches")?;
+        let detectors = earlier(self.detectors, "detectors")?;
         if self.dynamic_props.len() != spawned.instances.len() {
             return Err(invalid("loading stages out of order: no light inputs"));
         }
@@ -1802,11 +1946,14 @@ impl NewGameLoad {
                 presentation_noise: self.presentation_noise,
                 details: self.details_world,
             }),
-            collision: Arc::new(collision),
+            collision,
             sound_data: self.sound,
             fatal: None,
             footsteps: Some(footsteps),
             sky_visibility: SkyVisibility::default(),
+            player_sphere,
+            frames: 0,
+            frame_s: 0.0,
             player,
             character: Some(character),
             controls,
@@ -1827,8 +1974,10 @@ impl NewGameLoad {
             supersample: 1,
             zones: self.zones,
             zone_sections: self.zone_sections,
+            artefacts: self.artefacts,
+            artefact_sections: self.artefact_sections,
             weather_effect: None,
-            effects_drawn: [true; 3],
+            effects_drawn: [true; 4],
             lights,
             global_ms: 0,
             torches: PlayerTorches::new(torches, &name_for_torches),
@@ -1836,11 +1985,18 @@ impl NewGameLoad {
             detail_density: level_details::DENSITY_DEFAULT,
             wind: 0.0,
             frame: 0,
+            detectors: PlayerDetectors::new(detectors),
         };
         screen.torches_frame(0.0);
         screen.update_view();
         screen.sync_zone_lights();
         screen.lights_frame(0.0);
+        // TODO(#365, sound-weather-ambient.md 4.3, disputed): whether a frame
+        // draws the level, updating the player's sky visibility, before the
+        // rule's first read is unestablished; we take that it does (the
+        // level drawn under the loading image), so the first read sees the
+        // first update's target rather than the initial 0.5.
+        screen.objects_gathered();
         Ok(screen)
     }
 }
@@ -1957,6 +2113,12 @@ impl LevelScreen {
         let elapsed = now.saturating_sub(self.last);
         let dt = (elapsed as f32 / 1000.0).min(MAX_STEP);
         self.last = now;
+        // The previous frame's drawing gathers its objects after that
+        // frame's sound rules (sound-weather-ambient.md 4.3): the player's
+        // sky rays from where it ended, before this frame moves anything.
+        self.objects_gathered();
+        self.frames += 1;
+        self.frame_s = elapsed as f32 / 1000.0;
         // The previous frame's idle sound starts and stops were the sound
         // side's to play.
         self.zones.clear_events();
@@ -1970,6 +2132,9 @@ impl LevelScreen {
         if let Some(c) = &mut self.character {
             self.player.limits = c.movement_limits();
         }
+        // The climbing states' clock is the footsteps' step clock
+        // (climbing.md, conventions): the global clock.
+        self.player.set_step_clock(self.global_ms as u32);
         self.player.frame(&self.collision, now, &request);
         if let Some(c) = &mut self.character {
             if self.player.jump_started() {
@@ -1990,6 +2155,8 @@ impl LevelScreen {
         // The player's torches (torch.md 4, 6, 8, 15.3) after the
         // movement, aimed by this frame's camera.
         self.torches.take_sounds();
+        // The previous frame's detector sounds were the sound side's.
+        self.detectors.take_sounds();
         let alive = self
             .character
             .as_ref()
@@ -2028,6 +2195,22 @@ impl LevelScreen {
             if let Err(e) = self.zones.frame(&frame, effects) {
                 self.fatal.get_or_insert(e);
             }
+            // The artefacts' client and scheduled updates in the same pass
+            // (artefact-idle-effects.md 6).
+            let frame = crate::core::artefacts::Frame {
+                clock: effects.clock(),
+                camera: eye,
+            };
+            self.artefacts.frame(&frame, effects);
+            // The player's detectors (sound-detector.md 3 – 5) in the same
+            // pass over the objects and the scheduler's after it, on the
+            // same clock, following the inventory as it stands.
+            let feet = self.player.state().position;
+            if let Some(c) = &self.character {
+                self.detectors.sync(c, feet);
+            }
+            self.detectors
+                .frame(effects.clock(), elapsed as u32, feet, eye, &self.zones);
         }
         // The idle lights of zones updated or created this frame.
         self.sync_zone_lights();
@@ -2041,14 +2224,48 @@ impl LevelScreen {
             self.clock.time_factor(),
         );
         self.update_view();
-        // TODO(#320, docs/behavior/level-objects.md 5.4): the rays start at the
-        // centre of the player's model sphere raised by 0.3 of its radius;
-        // the player's model is not loaded, so they start at the eye (our
-        // choice).
-        let eye = self.player.view().eye;
-        self.sky_visibility
-            .update(&self.collision, eye, elapsed as f32 / 1000.0);
         self.lights_frame(elapsed as f32 / 1000.0);
+    }
+
+    /// The player's transform (sound-weather-ambient.md 4.3): at its feet,
+    /// turned about y by the body's heading so that the model's +z points
+    /// along it (start-position.md 5: the heading turns about y only).
+    /// TODO(#365): the specs do not give the actor's transform in
+    /// first-person view; this is our reading.
+    fn player_transform(&self) -> volya_engine_formats::model::Mat4 {
+        let feet = self.player.state().position;
+        volya_engine_formats::model::transform(feet, [0.0, -self.player.heading(), 0.0])
+    }
+
+    /// The origin of the player's sky rays (sound-weather-ambient.md 4.3):
+    /// its transform applied to its model's sphere centre *C*, raised by
+    /// 0.3 *R*.
+    pub fn sky_ray_origin(&self) -> Vec3 {
+        let (c, r) = self.player_sphere;
+        let c = volya_engine_formats::model::transform_point(&self.player_transform(), c);
+        object_light::ray_origin(c, r)
+    }
+
+    /// The drawing of the current frame gathers the level's objects
+    /// (sound-weather-ambient.md 4.3): the player's sky visibility is
+    /// updated, at most once per frame, from [`Self::sky_ray_origin`]
+    /// against the static collision.
+    fn objects_gathered(&mut self) {
+        let origin = self.sky_ray_origin();
+        self.sky_visibility
+            .update(self.frames, &self.collision, origin, self.frame_s);
+    }
+
+    /// The player's sky visibility as the current frame's rules read it
+    /// (sound-weather-ambient.md 4.3): the frame's smoothing step applied
+    /// if it has not run, no rays cast.
+    pub fn read_sky_visibility(&mut self) -> f32 {
+        self.sky_visibility.read(self.frames, self.frame_s)
+    }
+
+    /// The player's sky visibility: its latest value and target.
+    pub fn sky_visibility(&self) -> (f32, f32) {
+        (self.sky_visibility.value(), self.sky_visibility.target())
     }
 
     /// The player's torches placed and coloured for a frame of `dt`
@@ -2098,6 +2315,23 @@ impl LevelScreen {
         self.torches.take_sounds()
     }
 
+    /// The player's detectors.
+    pub fn detectors(&self) -> &PlayerDetectors {
+        &self.detectors
+    }
+
+    /// Adds the section of a detector item made after the level loaded
+    /// (sound-detector.md 2.1).
+    pub fn add_detector_section(&mut self, section: DetectorSection) {
+        self.detectors.add_section(section);
+    }
+
+    /// The detectors' sound commands of this frame, taken (played by the app
+    /// on the level's sounds, sound-detector.md 6).
+    pub fn take_detector_sounds(&mut self) -> Vec<DetectorSound> {
+        self.detectors.take_sounds()
+    }
+
     /// The player's footsteps.
     pub fn footsteps(&self) -> Option<&PlayerFootsteps> {
         self.footsteps.as_ref()
@@ -2125,7 +2359,8 @@ impl LevelScreen {
     }
 
     /// What this frame's sound rules read.
-    pub fn sound_inputs(&self) -> SoundInputs<'_> {
+    pub fn sound_inputs(&mut self) -> SoundInputs<'_> {
+        let sky_visibility = self.read_sky_visibility();
         let (a, b, t) = self.weather.bracket(self.clock.time_of_day());
         SoundInputs {
             tau: (self.clock.time() % crate::core::clock::DAY_MS) as u32,
@@ -2134,13 +2369,14 @@ impl LevelScreen {
             far_plane: self.environment.far_plane,
             sun_dir: self.environment.sun_dir,
             eye: self.player.view().eye,
-            sky_visibility: self.sky_visibility.value(),
+            sky_visibility,
         }
     }
 
     /// What this frame's sound rules read, with the level's side of the
     /// weather's ambient effect objects (weather-ambient-effects.md 3).
     pub fn sound_frame_parts(&mut self) -> (SoundInputs<'_>, WeatherParticles<'_>) {
+        let sky_visibility = self.read_sky_visibility();
         let (a, b, t) = self.weather.bracket(self.clock.time_of_day());
         let inputs = SoundInputs {
             tau: (self.clock.time() % crate::core::clock::DAY_MS) as u32,
@@ -2149,7 +2385,7 @@ impl LevelScreen {
             far_plane: self.environment.far_plane,
             sun_dir: self.environment.sun_dir,
             eye: self.player.view().eye,
-            sky_visibility: self.sky_visibility.value(),
+            sky_visibility,
         };
         let particles = WeatherParticles {
             effects: &mut self.effects,
@@ -2167,6 +2403,11 @@ impl LevelScreen {
     /// The zone objects (zone-idle-effects.md).
     pub fn zones(&self) -> &Zones {
         &self.zones
+    }
+
+    /// The artefact objects (artefact-idle-effects.md).
+    pub fn artefacts(&self) -> &Artefacts {
+        &self.artefacts
     }
 
     /// The zones' idle sound starts and stops of this frame (S15 3).
@@ -2301,6 +2542,32 @@ impl LevelScreen {
                 }
             }
         }
+        // An artefact record coming online creates its artefact object;
+        // going offline or removed destroys it (artefact-idle-effects.md
+        // 3).
+        if let Some(effects) = &mut self.effects {
+            for &id in changes.offline.iter().chain(&changes.removed) {
+                self.artefacts.destroy(id, effects);
+            }
+            for &id in &changes.online {
+                let Some(o) = sim.object(id).filter(|_| !self.artefacts.contains(id)) else {
+                    continue;
+                };
+                let Some(section) = self.artefact_sections.get(&o.record.header.section) else {
+                    continue;
+                };
+                if ArtefactBehaviour::of(o.record.class_id.as_str()).is_none() {
+                    continue;
+                }
+                let objects = &self.world.objects;
+                let model =
+                    (self.instances.get(&id)).map(|&k| &objects.models[objects.instances[k].model]);
+                let record = artefact_record(id, &o.record, model);
+                if let Err(e) = self.artefacts.create(&record, section.clone(), effects) {
+                    self.fatal.get_or_insert(e);
+                }
+            }
+        }
         let mut placements = (*self.placements).clone();
         let mut changed = false;
         for &id in &changes.online {
@@ -2322,13 +2589,17 @@ impl LevelScreen {
     }
 
     /// The level's dynamic light records, for the sources that create and
-    /// update their lights each frame (docs/architecture.md, Lights).
+    /// update their lights each frame (docs/architecture/simulation.md).
     /// The zones' idle lights given to their records among the level's
     /// dynamic lights (zone-idle-effects.md 4.4), each made the first time.
+    /// The artefacts' lights too (artefact-idle-effects.md 5).
     fn sync_zone_lights(&mut self) {
         let mut zones = std::mem::take(&mut self.zones);
         zones.sync_lights(self.lights_mut());
         self.zones = zones;
+        let mut artefacts = std::mem::take(&mut self.artefacts);
+        artefacts.sync_lights(self.lights_mut());
+        self.artefacts = artefacts;
     }
 
     pub fn lights_mut(&mut self) -> &mut Lights {
@@ -2427,6 +2698,7 @@ impl LevelScreen {
             Origin::Placed => 0,
             Origin::Zone => 1,
             Origin::Weather => 2,
+            Origin::Artefact => 3,
         };
         particle_drawing::visible(effects, view, projection)
             .into_iter()
@@ -2441,13 +2713,18 @@ impl LevelScreen {
     /// Leaves the effects out of the frames drawn, or draws them again
     /// (tests compare frames with and without them).
     pub fn set_effects_drawn(&mut self, drawn: bool) {
-        self.effects_drawn = [drawn; 3];
+        self.effects_drawn = [drawn; 4];
     }
 
     /// Draws only the effect objects of `origins` (tests).
     pub fn set_effect_origins_drawn(&mut self, origins: &[Origin]) {
-        self.effects_drawn =
-            [Origin::Placed, Origin::Zone, Origin::Weather].map(|o| origins.contains(&o));
+        self.effects_drawn = [
+            Origin::Placed,
+            Origin::Zone,
+            Origin::Weather,
+            Origin::Artefact,
+        ]
+        .map(|o| origins.contains(&o));
     }
 
     /// The effects queued for a frame of `view` and `projection` at
@@ -2639,6 +2916,7 @@ impl LevelScreen {
             jump,
             falling,
             landing,
+            climbing,
             ..
         } = p.flags;
         let angles = self.player.angles();
@@ -2669,6 +2947,7 @@ impl LevelScreen {
                 jump,
                 falling,
                 landing,
+                climbing,
                 crouch_toggled: p.crouch_toggled,
                 sprint_requested: p.sprint_requested,
                 sprint_locked: self.controls.sprint_lock.locked(),
@@ -2677,6 +2956,7 @@ impl LevelScreen {
             objects: self.objects_report(),
             lights: self.lights.report(),
             torch: self.torches.report(&self.lights.lights, &self.lights.glows),
+            detectors: self.detectors.report(&self.zones),
         }
     }
 
@@ -2765,6 +3045,7 @@ impl LevelScreen {
             run_back_coef: 1.8,
             walk_back_coef: 0.8,
             crouch_coef: 0.45,
+            climb_coef: 0.7,
             sprint_koef: 2.6,
             walk_strafe_coef: 1.0,
             run_strafe_coef: 1.0,
@@ -2832,6 +3113,9 @@ impl LevelScreen {
             fatal: None,
             footsteps: None,
             sky_visibility: SkyVisibility::default(),
+            player_sphere: ([0.0; 3], 0.0),
+            frames: 0,
+            frame_s: 0.0,
             player,
             character: None,
             controls,
@@ -2852,14 +3136,17 @@ impl LevelScreen {
             supersample: 1,
             zones: Zones::default(),
             zone_sections: HashMap::new(),
+            artefacts: Artefacts::default(),
+            artefact_sections: HashMap::new(),
             weather_effect: None,
-            effects_drawn: [true; 3],
+            effects_drawn: [true; 4],
             lights: LevelLights::default(),
             torches: PlayerTorches::default(),
             details: None,
             detail_density: level_details::DENSITY_DEFAULT,
             wind: 0.0,
             frame: 0,
+            detectors: PlayerDetectors::default(),
             global_ms: 0,
         }
     }

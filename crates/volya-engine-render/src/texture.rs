@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! Textures from DDS files (#29): block-compressed formats upload as stored
-//! when the GPU has BC (docs/architecture.md, Game data); without it they
+//! when the GPU has BC (docs/architecture/rendering.md); without it they
 //! are transcoded to ETC2 where the GPU has that (#113,
 //! `volya_engine_formats::etc2`), and decoded to RGBA8 where it has neither.
 //! Uncompressed formats convert to RGBA8.

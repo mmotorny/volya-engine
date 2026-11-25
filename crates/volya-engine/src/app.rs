@@ -627,6 +627,20 @@ impl App {
         }
     }
 
+    /// The level's start view at `resolution`, while the loading waits for
+    /// the platform to prepare its world ([`App::world_to_prepare`]): the
+    /// platform draws it once, unseen, so the GPU's first-draw work is done
+    /// under the loading image (#355, #376).
+    pub fn level_to_prepare_scene(&self, resolution: Resolution) -> Option<Scene> {
+        match &self.phase {
+            Some(Phase::Loading {
+                stages: NewGame::Stages(loading),
+                ..
+            }) => Some(loading.level_to_prepare()?.scene(resolution, self.clock)),
+            _ => None,
+        }
+    }
+
     /// The platform has prepared [`App::world_to_prepare`]: the level shows
     /// at the next update.
     pub fn world_prepared(&mut self) {
@@ -877,6 +891,21 @@ impl App {
                             &self.data.aliases,
                             sound,
                             level.torches().night_vision(sound.torch),
+                        )
+                    {
+                        fatal = Some(e);
+                    }
+                }
+                // The detectors' ticks and stops of this frame
+                // (sound-detector.md 3, 6), made by its update.
+                for sound in level.take_detector_sounds() {
+                    if let Some(level_sounds) = &mut self.level_sounds
+                        && let Err(e) = level_sounds.detector(
+                            sounds,
+                            tree,
+                            &self.data.aliases,
+                            sound,
+                            level.detectors().section(sound.detector),
                         )
                     {
                         fatal = Some(e);
@@ -1374,6 +1403,17 @@ impl App {
         self.video
     }
 
+    /// Sets `vid_mode` to `mode` and applies it, as a video restart would
+    /// (tests and measurements: the frame's cost at a given size).
+    pub fn set_video_mode(&mut self, mode: Resolution) {
+        self.console
+            .exec(&format!("vid_mode {}x{}", mode.width, mode.height));
+        self.video = video_mode(&self.console);
+        if let Some(Phase::Menu(menu)) = &mut self.phase {
+            menu.resized(&self.data, self.video);
+        }
+    }
+
     /// The user configuration file to store (section 12.3), once asked for:
     /// when the options screen closes and when the player quits.
     pub fn take_save(&mut self) -> Option<Vec<u8>> {
@@ -1567,6 +1607,12 @@ impl App {
             return Err(io::Error::other("no level"));
         };
         let config = ItemConfig::read(&self.data.system, section)?;
+        // A detector reads its section as it is made (sound-detector.md 2.1).
+        if crate::detector::is_detector(config.class_id.as_str()) {
+            let detector =
+                crate::core::detector::DetectorSection::read(&self.data.system, section)?;
+            level.add_detector_section(detector);
+        }
         if level.character().is_none() {
             return Err(io::Error::other("no player character"));
         }

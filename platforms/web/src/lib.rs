@@ -3,7 +3,7 @@
 
 //! Volya Engine for web browsers. Runs inside the engine worker
 //! (`static/engine-worker.js`); the page talks to it only by message
-//! (docs/architecture.md). Builds to nothing on other targets.
+//! (docs/architecture/web-platform.md). Builds to nothing on other targets.
 
 #![cfg(target_arch = "wasm32")]
 
@@ -109,6 +109,10 @@ pub fn resize(width: f64, height: f64, dpr: f64) {
     // The canvas's own size: what the resolution list offers (#49).
     engine::resized(gpu::resolution().unwrap_or(Resolution::new(pixels(width), pixels(height))));
 }
+
+/// An interval between frames the diagnostic log records as an event,
+/// milliseconds.
+const GAP_MS: f64 = 250.0;
 
 /// Frames whose timings [`FrameStats`] averages.
 const STATS_FRAMES: usize = 60;
@@ -224,6 +228,10 @@ pub fn frame(time: f64) {
             volya_engine::core::diagnostics::metric("frame.interval_ms", time - last);
             // Over one and a half frames at 60 Hz.
             volya_engine::core::diagnostics::count("frame.late", u64::from(time - last > 25.0));
+            // A gap long enough to stall sound: when it came (#355).
+            if time - last > GAP_MS {
+                tracing::warn!(interval_ms = time - last, "frame gap");
+            }
         }
         s.last = Some(time);
         s.frames += 1;
@@ -498,6 +506,14 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         }
         // `{"name": …}` starts capturing that sound's emitter; `{}` stops
         // and returns the capture (`audio::capture::stop`).
+        // `{"width": …, "height": …}`: the game draws at that size from now
+        // on (the frame's cost at a size, #355).
+        #[cfg(feature = "test-ops")]
+        "debug_video_mode" => {
+            let side = |key: &str| args.get(key).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            let mode = Resolution::new(side("width").max(1), side("height").max(1));
+            engine::set_video_mode(mode).map(|()| "null".into())
+        }
         // `{"ms": …}`: every frame takes at least that long from now on.
         // `{"on": …}`: the mixer's commands wait while on (`audio::hold`).
         #[cfg(feature = "test-ops")]

@@ -92,9 +92,9 @@ pub async fn launch() -> Result<serde_json::Value, JsValue> {
                 data.set_user_config(user);
             }
             let mut app = App::new(data).map_err(error)?;
-            // Where WebGL 2 draws, the level's textures (transcoded on a
-            // GPU without BC) and geometry are uploaded while it loads, a
-            // piece at a time (#113, #184).
+            // The level's textures (transcoded on a GPU without BC) and
+            // geometry are uploaded while it loads, a piece at a time
+            // (#113, #184, #355).
             app.set_prepare_textures(crate::textures::wanted());
             app.resized(native);
             app.set_saved_games(saves);
@@ -173,6 +173,18 @@ pub fn render_size() -> Option<Resolution> {
     RUNNING.with(|r| r.borrow().as_ref().map(|running| running.app.video_mode()))
 }
 
+/// The `debug_video_mode` op (tests): draws at `mode` from now on
+/// ([`App::set_video_mode`]).
+#[cfg(feature = "test-ops")]
+pub fn set_video_mode(mode: Resolution) -> Result<(), JsValue> {
+    RUNNING.with(|r| {
+        let mut r = r.borrow_mut();
+        let running = r.as_mut().ok_or_else(|| error("the game is not running"))?;
+        running.app.set_video_mode(mode);
+        Ok(())
+    })
+}
+
 /// The texture files of the level shown, if any.
 pub fn level_texture_paths() -> Option<Vec<String>> {
     RUNNING.with(|r| r.borrow().as_ref()?.app.level_texture_paths())
@@ -197,6 +209,12 @@ pub fn preparing_textures() -> bool {
 /// the GPU ([`App::world_to_prepare`]).
 pub fn world_to_prepare() -> Option<Arc<LevelWorld>> {
     RUNNING.with(|r| Some(r.borrow().as_ref()?.app.world_to_prepare()?.clone()))
+}
+
+/// The level's start view while its world is prepared
+/// ([`App::level_to_prepare_scene`]).
+pub fn level_to_prepare_scene(resolution: Resolution) -> Option<Scene> {
+    RUNNING.with(|r| r.borrow().as_ref()?.app.level_to_prepare_scene(resolution))
 }
 
 /// The level's world is prepared: the level shows.

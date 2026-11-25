@@ -12,7 +12,7 @@
 ** code). Volya Engine runs the interpreter: the engine's mode flags change
 ** as LuaJIT's do (jit.on, jit.off, jit.debug and luaJIT_setmode), but
 ** nothing is ever compiled; every function runs as bytecode with the status
-** JIT_S_ENGINE_OFF. See docs/architecture.md (Scripts).
+** JIT_S_ENGINE_OFF. See docs/architecture/scripts.md.
 */
 
 #define LUA_CORE

@@ -4,7 +4,7 @@
 // No browser zoom anywhere in the app (decided by the user, #345): once
 // zoomed, the game takes every touch and the page can't be zoomed back out.
 // Three layers, each enough alone against a pinch in the iOS Simulator's
-// Safari (docs/architecture.md, "Browser zoom"):
+// Safari (docs/architecture/web-platform.md, "Browser zoom"):
 // - the viewport meta's `maximum-scale=1, user-scalable=no` (index.html),
 //   which Safari ignores in tabs since iOS 10 (documented; measured);
 // - `touch-action: pan-x pan-y` on every element, `none` where the engine

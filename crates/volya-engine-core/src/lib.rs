@@ -2,17 +2,20 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! Volya Engine core: platform-free engine code. Must not depend on any
-//! platform API; see docs/architecture.md (Crates).
+//! platform API; see docs/architecture/README.md.
 
+pub mod artefacts;
 pub mod audio;
 pub mod camera;
 pub mod character;
+pub mod climbing;
 pub mod clock;
 pub mod collision;
 pub mod config;
 pub mod console;
 pub mod cycles;
 pub mod details;
+pub mod detector;
 pub mod diagnostics;
 pub mod display;
 pub mod footsteps;

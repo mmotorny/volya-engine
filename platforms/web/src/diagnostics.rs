@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! The diagnostic log on the web (#346; `volya_engine::core::diagnostics`,
-//! docs/architecture.md, Diagnostic log). Off by default; the player turns
+//! docs/architecture/diagnostics.md). Off by default; the player turns
 //! it on in Settings. While on, the session's recorder is the global
 //! `tracing` subscriber and its events are appended once per period to the
 //! log kept in OPFS (`volya-engine/diagnostic-log/0` … `7`, one sync access
@@ -302,7 +302,7 @@ fn session_event() {
     let gpu = serde_json::to_value(crate::gpu::status()).unwrap_or_default();
     let page = SESSION.with(|s| s.borrow().as_ref().map(|s| s.page.clone()));
     let mut args = args_of(&page.unwrap_or_default());
-    for key in ["state", "backend", "textures", "message"] {
+    for key in ["state", "backend", "textures", "timing", "message"] {
         if let Some(v) = gpu.get(key).and_then(|v| v.as_str()) {
             args.push((format!("gpu_{key}"), Value::Text(v.into())));
         }

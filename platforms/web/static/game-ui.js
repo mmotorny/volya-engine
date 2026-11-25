@@ -481,7 +481,7 @@ async function cover() {
  * Whether an import finished here earlier: a mark set when it did. Under
  * storage pressure Chromium evicts a site's quota-managed storage (the
  * imported files, the service worker's cache) but not localStorage (measured,
- * docs/architecture.md), so the app can tell a deleted game from a first
+ * docs/architecture/game-data.md), so the app can tell a deleted game from a first
  * start; where the mark goes too (Safari's 7-day limit, clearing site data),
  * it's a first start. localStorage, not a cookie: nothing to send to the
  * server. Namespaced: the github.io origin is shared. The UX page sets

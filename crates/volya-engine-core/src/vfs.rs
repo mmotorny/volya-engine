@@ -3,7 +3,7 @@
 
 //! Virtual filesystem: synchronous, read-only `Read + Seek` access to a tree
 //! of files, independent of where they live (`std::fs` natively, OPFS in the
-//! browser). See docs/architecture.md (Threading: I/O is synchronous).
+//! browser). See docs/architecture/web-platform.md (I/O is synchronous).
 //!
 //! Paths are relative, `/`-separated and case-sensitive; `\` is accepted as a
 //! separator, `.` and empty segments are ignored, and `..` is rejected.
