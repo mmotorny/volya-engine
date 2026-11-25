@@ -788,11 +788,14 @@ impl App {
                 // online since are created; created this frame, the sounds
                 // play as the zones stand, else as this frame changed them.
                 if let Some(level_sounds) = &mut self.level_sounds {
-                    let names = level.zone_sound_names();
-                    let dir = level.world().dir.clone();
-                    if let Err(e) =
+                    let added = if level.zones().zones().len() > level_sounds.zones.len() {
+                        let names = level.zone_sound_names();
+                        let dir = level.world().dir.clone();
                         level_sounds.add_zones(sounds, tree, &self.data.aliases, &dir, &names)
-                    {
+                    } else {
+                        Ok(())
+                    };
+                    if let Err(e) = added {
                         fatal = Some(e);
                     } else if created_now {
                         level_sounds.zone_events(sounds, &level.zone_sounds_playing());

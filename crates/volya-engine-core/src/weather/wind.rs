@@ -63,9 +63,10 @@ impl Tables {
 /// The environment's wind (4.2, 4.3): kept for the whole run.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Wind {
-    /// *s*.
-    seed: u32,
-    tables: Option<Box<Tables>>,
+    /// The tables of seed *s*, built when the wind is made rather than at
+    /// the first evaluation
+    /// (4.2): unobservable, and the block stays out of a level's heap.
+    tables: Box<Tables>,
     /// *o*₀, *o*₁.
     offsets: [f32; 2],
     /// φ.
@@ -94,8 +95,7 @@ impl Wind {
     /// *s* = *r* mod 65,535.
     pub fn new(r: u32) -> Self {
         Self {
-            seed: r % 65_535,
-            tables: None,
+            tables: Box::new(Tables::build(r % 65_535)),
             offsets: [0.0; 2],
             frequency: 1.0,
             amplitude: AMPLITUDE,
@@ -108,13 +108,9 @@ impl Wind {
         self.offsets
     }
 
-    /// The continuous value *V*(*T*) at `t` seconds (4.2), building the
-    /// tables at the first evaluation.
+    /// The continuous value *V*(*T*) at `t` seconds (4.2).
     fn value(&mut self, t: f32) -> f32 {
-        let seed = self.seed;
-        let tables = self
-            .tables
-            .get_or_insert_with(|| Box::new(Tables::build(seed)));
+        let tables = &self.tables;
         let mut d = self.frequency * (t - self.last);
         self.last = t;
         let mut sum = 0f32;

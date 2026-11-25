@@ -1140,6 +1140,7 @@ export const tests = {
     await until((s) => s.menu.selected === 0, "item 0");
     key("Enter");
     await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
+    await volya.call("heap_log", { on: true });
     key("Enter");
     // Escape while the loading image covers the level's first frames,
     // before the intro starts under its last two: kept (#96).
@@ -1149,6 +1150,15 @@ export const tests = {
     const seen = { menu_asked: asked.menu_asked, overlay: asked.overlay_frames, intro: Boolean(asked.intro) };
     assert(asked.menu_asked && !asked.menu, `the menu asked for, not open: ${JSON.stringify(seen)}`);
     const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level again", loadMs());
+    // The wasm heap at the end of the last frame under each caption.
+    const stages = [];
+    for (const e of await volya.call("heap_log", { on: false })) {
+      const name = e.caption ?? e.phase;
+      const m = Math.round(e.wasm_heap_bytes / 2 ** 20);
+      if (stages.length && stages[stages.length - 1][0] === name) stages[stages.length - 1][1] = m;
+      else stages.push([name, m]);
+    }
+    const byCaption = stages.map(([n, m]) => `${n} ${m}`).join(", ");
     assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
     // The intro again; a tap skips it (our design for touch). The controls
     // go live then, and the menu opens at once.
@@ -1187,8 +1197,8 @@ export const tests = {
     }
     // A second load reuses the heap the first one grew.
     const heap = (await volya.call("level_stats")).wasm_heap_bytes;
-    assert(heap <= WASM_HEAP_CAP, `wasm heap ${mib(heap)} after the second New Game, over ${mib(WASM_HEAP_CAP)}`);
-    return `loaded again in ${s.load_ms.toFixed(0)} ms; wasm heap ${mib(heap)}`;
+    assert(heap <= WASM_HEAP_CAP, `wasm heap ${mib(heap)} after the second New Game, over ${mib(WASM_HEAP_CAP)}; by caption (MiB): ${byCaption}`);
+    return `loaded again in ${s.load_ms.toFixed(0)} ms; wasm heap ${mib(heap)}; by caption (MiB): ${byCaption}`;
   },
 
   "hidden: the menu opens, the clock, the frame loop and audio stop; shown: the game takes on from there": async () => {

@@ -13,7 +13,9 @@
 //! ([`crate::particles::placed`]); the sounds are played by the level's
 //! sound side from [`Zones::sound_events`]; the idle light is kept here as
 //! the light record's values (P16) for the dynamic lights to take
-//! ([`Zones::lights`]).
+//! ([`Zones::lights`]). Their destruction with the level (3.2) is the
+//! level's: its sounds are stopped and discarded, its particle objects and
+//! zones dropped.
 //!
 //! What waits for other specifications:
 //! - The contact test and the zones' reaction to objects (awaking,
@@ -690,14 +692,6 @@ impl Zones {
             self.scheduled_update(i, elapsed, frame, effects)?;
         }
         Ok(())
-    }
-
-    /// The zones are destroyed with the level (P9 3.2): each idle stop
-    /// runs; their effect objects go with the level's.
-    pub fn destroy(&mut self, effects: &mut PlacedEffects) {
-        for i in 0..self.zones.len() {
-            self.idle_stop(i, effects);
-        }
     }
 }
 

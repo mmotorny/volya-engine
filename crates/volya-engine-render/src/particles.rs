@@ -107,8 +107,11 @@ pub struct ParticleBatch {
 /// Bytes of one vertex: position, colour, uv (24, section 4.4).
 const VERTEX_BYTES: u64 = 24;
 
-/// The vertex and index buffers' first size: 682 particles' vertices.
-const INITIAL_BYTES: u64 = 64 * 1024;
+/// The vertex and index buffers' first size: 10,922 particles' vertices,
+/// more than `l01_escape`'s effect objects can hold at once (8,122). Made
+/// with the renderer: buffers made with a level's world stay allocated amid
+/// the level freed after it and split the wasm heap.
+const INITIAL_BYTES: u64 = 1024 * 1024;
 
 /// The passes of the effects' shaders (program, blending, depth write):
 /// class `PARTICLE`'s six blendings (section 5.2) and the scripted
