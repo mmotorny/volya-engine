@@ -184,6 +184,7 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
     match op.as_str() {
         "status" => to_json(&status()),
         "vfs_selftest" => vfs_selftest().await.map(|()| "null".into()),
+        "script_selftest" => script_selftest(),
         "game_status" => to_json(&game::status().await?),
         "unmount_game" => {
             game::unmount();
@@ -300,6 +301,19 @@ fn status() -> Status {
         frames: FRAME_STATS.with(|s| s.borrow().frames),
         gpu: gpu::status(),
     }
+}
+
+/// Runs the script runtime's shared self-test, then a chunk in a new state;
+/// returns that chunk's result, the runtime's `_VERSION`.
+fn script_selftest() -> Result<String, JsValue> {
+    use volya_engine::script::{Lua, selftest};
+    selftest::check().map_err(|e| JsValue::from_str(&e))?;
+    let error = |e: volya_engine::script::Error| JsValue::from_str(&e.message);
+    let version = Lua::new()
+        .map_err(error)?
+        .exec("=version", b"return _VERSION")
+        .map_err(error)?;
+    to_json(&version.first().and_then(|v| v.as_str()))
 }
 
 /// Runs the shared VFS conformance check against [`opfs::OpfsVfs`] on a
