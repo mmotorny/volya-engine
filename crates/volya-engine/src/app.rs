@@ -601,6 +601,20 @@ impl App {
         }
     }
 
+    /// The level's start view at `resolution`, while the loading waits for
+    /// the platform to prepare its world ([`App::world_to_prepare`]): the
+    /// platform draws it once, unseen, so the GPU's first-draw work is done
+    /// under the loading image (#355, #376).
+    pub fn level_to_prepare_scene(&self, resolution: Resolution) -> Option<Scene> {
+        match &self.phase {
+            Some(Phase::Loading {
+                stages: NewGame::Stages(loading),
+                ..
+            }) => Some(loading.level_to_prepare()?.scene(resolution, self.clock)),
+            _ => None,
+        }
+    }
+
     /// The platform has prepared [`App::world_to_prepare`]: the level shows
     /// at the next update.
     pub fn world_prepared(&mut self) {
@@ -1336,6 +1350,17 @@ impl App {
     /// applied (#49: shown scaled to fit the screen, aspect kept).
     pub fn video_mode(&self) -> Resolution {
         self.video
+    }
+
+    /// Sets `vid_mode` to `mode` and applies it, as a video restart would
+    /// (tests and measurements: the frame's cost at a given size).
+    pub fn set_video_mode(&mut self, mode: Resolution) {
+        self.console
+            .exec(&format!("vid_mode {}x{}", mode.width, mode.height));
+        self.video = video_mode(&self.console);
+        if let Some(Phase::Menu(menu)) = &mut self.phase {
+            menu.resized(&self.data, self.video);
+        }
     }
 
     /// The user configuration file to store (section 12.3), once asked for:

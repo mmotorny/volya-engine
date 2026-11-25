@@ -18,6 +18,7 @@ mod capture;
 pub mod particles;
 pub mod sky;
 mod texture;
+mod timing;
 mod video;
 pub mod world;
 
@@ -38,7 +39,9 @@ pub const UI_HEIGHT: f32 = 768.0;
 /// request these when creating the device.
 pub fn device_features(adapter: &wgpu::Adapter) -> wgpu::Features {
     adapter.features()
-        & (wgpu::Features::TEXTURE_COMPRESSION_BC | wgpu::Features::TEXTURE_COMPRESSION_ETC2)
+        & (wgpu::Features::TEXTURE_COMPRESSION_BC
+            | wgpu::Features::TEXTURE_COMPRESSION_ETC2
+            | wgpu::Features::TIMESTAMP_QUERY)
 }
 
 /// An axis-aligned rectangle: UI units for screen positions, texels for
@@ -171,6 +174,8 @@ pub struct Renderer {
     /// distortion pass (particle-drawing.md 6.2), sized to the latest
     /// target.
     distortion_targets: Option<(wgpu::Texture, wgpu::Texture)>,
+    /// Times frames on the GPU while on ([`Renderer::set_gpu_timing`]).
+    timer: Option<timing::FrameTimer>,
 }
 
 impl Renderer {
@@ -288,6 +293,7 @@ impl Renderer {
             // from 99 to 112 MiB).
             particles: Some(particles::ParticlePipelines::new(device, queue, format)),
             distortion_targets: None,
+            timer: None,
         };
         // The world's pipelines too (the light passes' among them).
         renderer.make_world_pipelines();
@@ -435,6 +441,17 @@ impl Renderer {
     /// Draws `list` into `target` (cleared to `clear` first, or to the
     /// world's clear colour when it has a world) and submits.
     pub fn render(&mut self, target: &wgpu::Texture, list: &DrawList, clear: wgpu::Color) {
+        self.draw(target, list, clear, None);
+    }
+
+    /// [`Renderer::render`]; its last pass ends the frame timed in `timed`.
+    fn draw(
+        &mut self,
+        target: &wgpu::Texture,
+        list: &DrawList,
+        clear: wgpu::Color,
+        timed: Option<usize>,
+    ) {
         let batches = self.upload_vertices(list);
         let mut encoder = self
             .device
@@ -461,7 +478,7 @@ impl Renderer {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: timed.and_then(|slot| Some(self.timer.as_ref()?.last_pass(slot))),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -485,6 +502,9 @@ impl Renderer {
     /// Draws `list` at `size` pixels and shows the result in `target`
     /// scaled to fit with its aspect ratio kept, centred, black around it
     /// (#49). At the target's own size it draws straight into it.
+    ///
+    /// While GPU timing is on ([`Renderer::set_gpu_timing`]) the frame is
+    /// timed ([`Renderer::take_gpu_times`]).
     pub fn render_scaled(
         &mut self,
         target: &wgpu::Texture,
@@ -492,8 +512,56 @@ impl Renderer {
         clear: wgpu::Color,
         size: (u32, u32),
     ) {
+        let timed = self
+            .timer
+            .as_mut()
+            .and_then(|t| t.begin(&self.device, &self.queue));
+        self.draw_scaled(target, list, clear, size, timed);
+        if let (Some(timer), Some(slot)) = (self.timer.as_mut(), timed) {
+            timer.end(&self.device, &self.queue, slot);
+        }
+    }
+
+    /// Whether the device can time frames on the GPU (timestamp queries).
+    pub fn can_time_gpu(&self) -> bool {
+        self.device
+            .features()
+            .contains(wgpu::Features::TIMESTAMP_QUERY)
+    }
+
+    /// Turns timing frames on the GPU on or off (off by default; nothing
+    /// where the device can't, [`Renderer::can_time_gpu`]).
+    pub fn set_gpu_timing(&mut self, on: bool) {
+        if on != self.timer.is_some() {
+            self.timer = if on {
+                timing::FrameTimer::new(&self.device, &self.queue, self.format)
+            } else {
+                None
+            };
+        }
+    }
+
+    /// The GPU times of the frames [`Renderer::render_scaled`] drew that
+    /// were read back since the last call, milliseconds: from the start of
+    /// a frame's first pass to the end of its last. Read back once the GPU
+    /// is done, a few frames late; the browser's WebGPU maps buffers on its
+    /// own, other backends when the device is polled.
+    pub fn take_gpu_times(&mut self) -> Vec<f64> {
+        self.timer.as_mut().map(|t| t.take()).unwrap_or_default()
+    }
+
+    /// [`Renderer::render_scaled`]'s drawing; its last pass ends the
+    /// frame timed in `timed`.
+    fn draw_scaled(
+        &mut self,
+        target: &wgpu::Texture,
+        list: &DrawList,
+        clear: wgpu::Color,
+        size: (u32, u32),
+        timed: Option<usize>,
+    ) {
         if size == (target.width(), target.height()) || size.0 == 0 || size.1 == 0 {
-            self.render(target, list, clear);
+            self.draw(target, list, clear, timed);
             return;
         }
         let stale = self.offscreen.as_ref().is_none_or(|t| t.size() != size);
@@ -516,7 +584,7 @@ impl Renderer {
             self.offscreen = Some(self.wrap(texture));
         }
         let frame = self.offscreen.clone().expect("offscreen frame");
-        self.render(frame.wgpu(), list, clear);
+        self.draw(frame.wgpu(), list, clear, None);
         let [x, y, w, h] = volya_engine_formats::ui::Resolution::new(size.0, size.1)
             .letterbox((target.width() as f32, target.height() as f32));
         let blit = DrawList {
@@ -541,7 +609,7 @@ impl Renderer {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: timed.and_then(|slot| Some(self.timer.as_ref()?.last_pass(slot))),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });

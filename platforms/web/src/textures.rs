@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! A level prepared where WebGL 2 draws (#113): while a New Game's loading
+//! A level prepared while it loads (#113, #355): while a New Game's loading
 //! waits under `st_loading_textures`
 //! ([`volya_engine::app::App::textures_to_prepare`]), each texture is
 //! uploaded (on a GPU without BC transcoded to ETC2 first), a frame's worth
@@ -13,6 +13,16 @@
 //! uploaded a few pieces per task turn (#184): wgpu's GL backend keeps what
 //! is written in the wasm heap until WebGL reports the work done, which it
 //! does only after the turn ends.
+//!
+//! On WebGPU, after each turn the next waits until the browser reports the
+//! GPU done with what was submitted (#355; where WebGL 2 draws, the turns
+//! wait for frames instead, which WebGL's reports need anyway): the browser's GPU process copies the
+//! uploads after the engine has handed them over, so without the wait a
+//! level's uploads all reach it with the level's first frame, and the
+//! engine worker waits at that frame's presentation for all of them
+//! (believed from the iPhone's diagnostic log: a 6.2 s gap after the
+//! level's first frame, outside every span of the frame, with no audio
+//! mixed meanwhile).
 
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -42,6 +52,9 @@ pub struct Stats {
     /// included), and the task turns it took.
     pub world_ms: f64,
     pub world_turns: u32,
+    /// Milliseconds waiting for the GPU to be done with the uploads, in
+    /// all (included in the totals above).
+    pub gpu_wait_ms: f64,
 }
 
 /// Milliseconds of preparation per task turn, about a frame of the loading
@@ -110,13 +123,24 @@ fn megapixels(dds: &Dds) -> f64 {
         .sum()
 }
 
-/// Whether a level is prepared while it loads: where WebGL 2 draws (no
-/// storage buffers, [`volya_engine::render::Renderer::compat`]), whose
-/// uploads stay in the wasm heap until WebGL reports them done, and where
-/// textures are transcoded.
+/// Whether a level is prepared while it loads: wherever it draws (#355).
+/// Where WebGL 2 draws, its uploads stay in the wasm heap until WebGL
+/// reports them done; where textures are transcoded, that is done there;
+/// on WebGPU, the GPU process copies them while the loading image shows.
 pub fn wanted() -> bool {
-    crate::gpu::with_renderer(|r| r.compat() || r.texture_path() == TexturePath::Etc2)
-        .unwrap_or(false)
+    crate::gpu::with_renderer(|_| ()).is_some()
+}
+
+/// Waits until the browser reports the GPU done with all work submitted so
+/// far ([`crate::gpu::submitted_work_done`]) and records how long it took:
+/// the metric `load.gpu_wait_ms`, and in `wait_ms`.
+async fn gpu_done(wait_ms: &mut f64) -> Result<(), JsValue> {
+    let t = now();
+    crate::gpu::submitted_work_done().await?;
+    let ms = now() - t;
+    *wait_ms += ms;
+    volya_engine::core::diagnostics::metric("load.gpu_wait_ms", ms);
+    Ok(())
 }
 
 /// Starts preparing the textures the loading waits for, if it does and no
@@ -181,6 +205,7 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
         if !crate::engine::preparing_textures() {
             break;
         }
+        let _span = tracing::info_span!("prepare.texture").entered();
         let t = now();
         if crate::game::read_into(&path, &mut bytes).is_err() {
             continue;
@@ -220,6 +245,10 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
             0
         };
         if now() - turn >= TURN_MS || staged >= STAGING_BYTES {
+            drop(_span);
+            if !compat {
+                gpu_done(&mut stats.gpu_wait_ms).await?;
+            }
             crate::opfs::sleep(0).await?;
             // Until WebGL can have reported the writes done (two frames,
             // as for the geometry below) and their staging is freed.
@@ -232,6 +261,9 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
             turn = now();
         }
     }
+    if !compat {
+        gpu_done(&mut stats.gpu_wait_ms).await?;
+    }
     stats.total_ms = now() - start;
     STATS.with(|s| *s.borrow_mut() = stats);
     Ok(())
@@ -240,24 +272,45 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
 async fn prepare_world(level: Arc<LevelWorld>) -> Result<(), JsValue> {
     let start = now();
     let mut turns = 0;
+    let mut wait_ms = 0.0;
+    let compat = crate::gpu::with_renderer(|r| r.compat()).unwrap_or(false);
     // Until done, or the game was quit or unmounted meanwhile.
     while crate::engine::world_to_prepare().is_some_and(|w| Arc::ptr_eq(&w, &level)) {
         turns += 1;
-        let done = crate::gpu::prepare_world(&level, WORLD_TURN_BYTES)?;
+        let done = tracing::info_span!("prepare.world")
+            .in_scope(|| crate::gpu::prepare_world(&level, WORLD_TURN_BYTES))?;
+        if !compat {
+            gpu_done(&mut wait_ms).await?;
+        }
         STATS.with(|s| {
             let mut s = s.borrow_mut();
             s.world_ms = now() - start;
             s.world_turns = turns;
+            s.gpu_wait_ms += std::mem::take(&mut wait_ms);
         });
         if done {
+            // The level's start view drawn once, unseen, and the GPU's
+            // work on it waited for.
+            let warmed = tracing::info_span!("prepare.warm_up").in_scope(crate::gpu::warm_up)?;
+            if warmed {
+                gpu_done(&mut wait_ms).await?;
+                STATS.with(|s| {
+                    let mut s = s.borrow_mut();
+                    s.world_ms = now() - start;
+                    s.gpu_wait_ms += std::mem::take(&mut wait_ms);
+                });
+            }
             break;
         }
-        // Until two frames ran, so WebGL can report the pieces written
-        // done and their staging goes (it may not in the frame they were
-        // written in, documented by the WebGL 2 specification); none while
-        // the page is hidden (#93).
+        // Where WebGL 2 draws, until two frames ran, so WebGL can report the
+        // pieces written done and their staging goes (it may not in the
+        // frame they were written in, documented by the WebGL 2
+        // specification); on WebGPU a task turn. None while the page is
+        // hidden (#93).
         let since = crate::frames();
-        while crate::frames() < since + 2 || crate::engine::page_hidden() {
+        let frames = if compat { 2 } else { 0 };
+        crate::opfs::sleep(0).await?;
+        while crate::frames() < since + frames || crate::engine::page_hidden() {
             crate::opfs::sleep(if crate::engine::page_hidden() { 100 } else { 4 }).await?;
         }
     }

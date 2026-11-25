@@ -176,6 +176,9 @@ pub struct Presenter {
     /// A level's geometry uploaded while it loaded
     /// ([`Presenter::prepare_world`]).
     prepared: Option<PreparedWorld>,
+    /// The level whose world is kept through scenes without one
+    /// ([`Presenter::hold_world`]).
+    held: Option<Arc<LevelWorld>>,
     errors: Vec<String>,
 }
 
@@ -304,7 +307,8 @@ impl Presenter {
             // now rather than while the level runs.
             renderer.reserve_particles(scene.world.particle_capacity);
             self.load_lights(renderer, tree, &scene.world);
-            let world = self.upload_world(renderer, tree, &scene.world);
+            let world = tracing::info_span!("render.upload_world")
+                .in_scope(|| self.upload_world(renderer, tree, &scene.world));
             let world = world
                 .map_err(|e| self.errors.push(format!("{}: {e}", scene.world.dir)))
                 .ok();
@@ -693,9 +697,23 @@ impl Presenter {
         Ok(world)
     }
 
+    /// Keeps the GPU world of `level`, once made, through scenes without a
+    /// world (the loading screen's, after the level was drawn unseen ahead
+    /// of showing, #355), until called with `None`.
+    pub fn hold_world(&mut self, level: Option<Arc<LevelWorld>>) {
+        self.held = level;
+    }
+
+    fn holds_world(&self) -> bool {
+        match (&self.held, &self.world) {
+            (Some(held), Some((level, _))) => Arc::ptr_eq(held, level),
+            _ => false,
+        }
+    }
+
     /// The draw list of `scene` at engine clock `clock`. Images and videos
     /// no longer in the scene are released, and so is a world no longer
-    /// shown.
+    /// shown (unless held, [`Presenter::hold_world`]).
     pub fn draw_list(
         &mut self,
         renderer: &mut Renderer,
@@ -717,6 +735,7 @@ impl Presenter {
                 let frame = self.world_frame(renderer, tree, world);
                 list.world = frame.filter(|_| !world.covered);
             }
+            None if self.holds_world() => {}
             None => {
                 self.world = None;
                 self.particle_shaders.clear();
