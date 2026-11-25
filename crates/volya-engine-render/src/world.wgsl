@@ -47,15 +47,15 @@ fn record(i: u32) -> Draw {
     return draws[i];
 }
 
-// A level vertex's id when draws share it: the draw is then the instance.
+// A level vertex's id when draws share it.
 const SHARED: u32 = 0xffffffffu;
 
 // The record of a level vertex's draw. Vertices only one draw uses carry
 // its index (id), so draws merged into one draw call each keep their own
-// record; shared vertices (e.g. a tree's instances) are drawn one draw a
-// call with the draw as the instance.
-fn level_record(id: u32, instance: u32) -> Draw {
-    return record(select(id, instance, id == SHARED));
+// record; shared vertices (e.g. a tree's instances) take the instance's
+// record, so consecutive draws of one mesh are one instanced call.
+fn level_record(id: u32, shared_record: u32) -> Draw {
+    return record(select(id, shared_record, id == SHARED));
 }
 
 // A surface's textures in two groups: its light maps and environment map,
@@ -97,7 +97,9 @@ struct Out {
 }
 
 struct LightMapped {
-    @builtin(instance_index) draw: u32,
+    // The record of a draw whose vertices are shared: from an
+    // instance-step buffer (WebGPU), or the instance (WebGL 2).
+    @location(8) record: u32,
     // The draw this vertex belongs to, or SHARED (see `level_record`).
     @location(7) id: u32,
     @location(0) position: vec3<f32>,
@@ -109,7 +111,9 @@ struct LightMapped {
 }
 
 struct VertexLit {
-    @builtin(instance_index) draw: u32,
+    // The record of a draw whose vertices are shared: from an
+    // instance-step buffer (WebGPU), or the instance (WebGL 2).
+    @location(8) record: u32,
     // The draw this vertex belongs to, or SHARED (see `level_record`).
     @location(7) id: u32,
     @location(0) position: vec3<f32>,
@@ -121,7 +125,9 @@ struct VertexLit {
 }
 
 struct TreeVertex {
-    @builtin(instance_index) draw: u32,
+    // The record of a draw whose vertices are shared: from an
+    // instance-step buffer (WebGPU), or the instance (WebGL 2).
+    @location(8) record: u32,
     // The draw this vertex belongs to, or SHARED (see `level_record`).
     @location(7) id: u32,
     @location(0) position: vec3<f32>,
@@ -191,7 +197,7 @@ fn uses_detail(d: Draw) -> bool {
 // lmap / lmap_dt (section 7.1).
 @vertex
 fn vs_lmap(v: LightMapped) -> Out {
-    let d = level_record(v.id, v.draw);
+    let d = level_record(v.id, v.record);
     let detail = uses_detail(d);
     var out = start(d, v.position, detail);
     let n = unpack_vec(v.normal);
@@ -243,7 +249,7 @@ fn fs_lmap(in: Out) -> @location(0) vec4<f32> {
 // impl_dt, terrain (section 7.4).
 @vertex
 fn vs_terrain(v: LightMapped) -> Out {
-    let d = level_record(v.id, v.draw);
+    let d = level_record(v.id, v.record);
     var out = start(d, v.position, d.params.z > 0.0);
     let n = unpack_vec(v.normal);
     out.uv = base_uv(v.tc0, v.tangent, v.binormal);
@@ -276,7 +282,7 @@ fn vertex_light(v: VertexLit, n: vec3<f32>) -> vec3<f32> {
 
 @vertex
 fn vs_vert(v: VertexLit) -> Out {
-    let d = level_record(v.id, v.draw);
+    let d = level_record(v.id, v.record);
     let detail = uses_detail(d);
     var out = start(d, v.position, detail);
     let n = unpack_vec(v.normal);
@@ -316,7 +322,7 @@ fn tree_wave(world: vec3<f32>, x: mat4x4<f32>, m: vec4<f32>) -> vec3<f32> {
 // tree_w / tree_s (with _dt), section 7.3.
 @vertex
 fn vs_tree(v: TreeVertex) -> Out {
-    let d = level_record(v.id, v.draw);
+    let d = level_record(v.id, v.record);
     let x = d.transform;
     let detail = uses_detail(d);
     let m = vec4<f32>(v.tc);
@@ -351,7 +357,7 @@ fn wmark_position(position: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
 // wmark (section 8.3).
 @vertex
 fn vs_wmark(v: VertexLit) -> Out {
-    let d = level_record(v.id, v.draw);
+    let d = level_record(v.id, v.record);
     let n = unpack_vec(v.normal);
     let p = wmark_position(v.position, n);
     var out = start(d, p, false);
@@ -363,7 +369,7 @@ fn vs_wmark(v: VertexLit) -> Out {
 // simple: self-lit (section 8.1).
 @vertex
 fn vs_simple(v: VertexLit) -> Out {
-    let d = level_record(v.id, v.draw);
+    let d = level_record(v.id, v.record);
     var out = start(d, v.position, false);
     out.uv = base_uv(v.tc0, v.tangent, v.binormal);
     return out;
@@ -378,7 +384,7 @@ fn fs_simple(in: Out) -> @location(0) vec4<f32> {
 // base_lplanes (section 8.2).
 @vertex
 fn vs_lplanes(v: VertexLit) -> Out {
-    let d = level_record(v.id, v.draw);
+    let d = level_record(v.id, v.record);
     var out = start(d, v.position, false);
     out.uv = base_uv(v.tc0, v.tangent, v.binormal);
     let pv = normalize((frame.view * vec4(v.position, 1.0)).xyz);
@@ -548,7 +554,7 @@ fn light_vertex(d: Draw, p: vec3<f32>, n: vec3<f32>, uv: vec2<f32>) -> LightOut 
 // lmap_*, impl_* (section 6.5): the vertex position and unpacked normal.
 @vertex
 fn vs_light_lmap(v: LightMapped) -> LightOut {
-    let d = level_record(v.id, v.draw);
+    let d = level_record(v.id, v.record);
     return light_vertex(d, v.position, unpack_vec(v.normal),
         base_uv(v.tc0, v.tangent, v.binormal));
 }
@@ -556,7 +562,7 @@ fn vs_light_lmap(v: LightMapped) -> LightOut {
 // vert_*, simple_*.
 @vertex
 fn vs_light_vert(v: VertexLit) -> LightOut {
-    let d = level_record(v.id, v.draw);
+    let d = level_record(v.id, v.record);
     return light_vertex(d, v.position, unpack_vec(v.normal),
         base_uv(v.tc0, v.tangent, v.binormal));
 }
@@ -564,7 +570,7 @@ fn vs_light_vert(v: VertexLit) -> LightOut {
 // wmark_*: the wall mark's shifted position.
 @vertex
 fn vs_light_wmark(v: VertexLit) -> LightOut {
-    let d = level_record(v.id, v.draw);
+    let d = level_record(v.id, v.record);
     let n = unpack_vec(v.normal);
     return light_vertex(d, wmark_position(v.position, n), n,
         base_uv(v.tc0, v.tangent, v.binormal));
@@ -574,7 +580,7 @@ fn vs_light_wmark(v: VertexLit) -> LightOut {
 // the normal turned by X's rotation and normalised.
 @vertex
 fn vs_light_tree(v: TreeVertex) -> LightOut {
-    let d = level_record(v.id, v.draw);
+    let d = level_record(v.id, v.record);
     let x = d.transform;
     let m = vec4<f32>(v.tc);
     var p = (x * vec4(v.position, 1.0)).xyz;

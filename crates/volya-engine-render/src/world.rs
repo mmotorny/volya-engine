@@ -117,6 +117,11 @@ impl Program {
         self.layout() == VertexLayout::Model
     }
 
+    /// Its name in the frame statistics.
+    pub fn name(self) -> &'static str {
+        self.entry_points().0
+    }
+
     fn entry_points(self) -> (&'static str, &'static str) {
         match self {
             Self::LightMapped => ("vs_lmap", "fs_lmap"),
@@ -297,6 +302,13 @@ pub fn world_source(compat: bool) -> String {
     if !compat {
         return source.to_owned();
     }
+    // No instance-step records: the draw is the instance.
+    const SHARED_RECORD: &str = "@location(8) record: u32";
+    assert!(
+        source.contains(SHARED_RECORD),
+        "world.wgsl: `record` input changed"
+    );
+    let source = &source.replace(SHARED_RECORD, "@builtin(instance_index) record: u32");
     const STORAGE: &str = "@group(0) @binding(1) var<storage, read> draws: array<Draw>;";
     let texture = format!(
         "@group(0) @binding(1) var draw_texels: texture_2d<f32>;
@@ -468,6 +480,10 @@ struct PipelineKey {
 /// Pipelines and layouts shared by every world drawn into one format.
 pub(crate) struct WorldPipelines {
     format: wgpu::TextureFormat,
+    /// [`Renderer::compat`]: no instance-step records.
+    compat: bool,
+    /// [`Renderer::set_unblended_trees`].
+    pub(crate) unblended_trees: bool,
     frame_layout: wgpu::BindGroupLayout,
     /// A surface's light maps and environment map (group 1), and its base
     /// and detail textures (group 2).
@@ -545,8 +561,14 @@ fn vertex_layout(layout: VertexLayout) -> wgpu::VertexBufferLayout<'static> {
 /// The vertex buffers a program reads: its layout's, and for the level's
 /// layouts each vertex's draw (`id` in world.wgsl, [`SHARED`] where draws
 /// share the vertex) from a buffer of its own.
-fn vertex_buffers(layout: VertexLayout) -> Vec<Option<wgpu::VertexBufferLayout<'static>>> {
+/// On WebGPU (not `compat`) also, from a third, instance-step buffer, the
+/// record of a draw whose vertices are shared (`record`, [`RECORDS`]).
+fn vertex_buffers(
+    layout: VertexLayout,
+    compat: bool,
+) -> Vec<Option<wgpu::VertexBufferLayout<'static>>> {
     const ID: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![7 => Uint32];
+    const RECORD: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![8 => Uint32];
     let mut buffers = vec![Some(vertex_layout(layout))];
     if layout != VertexLayout::Model {
         buffers.push(Some(wgpu::VertexBufferLayout {
@@ -554,9 +576,19 @@ fn vertex_buffers(layout: VertexLayout) -> Vec<Option<wgpu::VertexBufferLayout<'
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &ID,
         }));
+        if !compat {
+            buffers.push(Some(wgpu::VertexBufferLayout {
+                array_stride: 4,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &RECORD,
+            }));
+        }
     }
     buffers
 }
+
+/// The vertex buffer slot of the records of shared draws.
+const RECORDS: u32 = 2;
 
 /// A level vertex's draw where draws share it (world.wgsl's `SHARED`).
 const SHARED: u32 = u32::MAX;
@@ -756,7 +788,7 @@ impl WorldPipelines {
                         module: &shader,
                         entry_point: Some(program.entry_point()),
                         compilation_options: Default::default(),
-                        buffers: &vertex_buffers(program.layout()),
+                        buffers: &vertex_buffers(program.layout(), compat),
                     },
                     primitive: wgpu::PrimitiveState {
                         front_face: wgpu::FrontFace::Cw,
@@ -793,6 +825,8 @@ impl WorldPipelines {
             .collect();
         Self {
             format,
+            compat,
+            unblended_trees: false,
             frame_layout,
             maps_layout,
             base_layout,
@@ -878,6 +912,8 @@ impl WorldPipelines {
     fn pipeline(&mut self, device: &wgpu::Device, key: PipelineKey) -> &wgpu::RenderPipeline {
         let Self {
             format,
+            compat,
+            unblended_trees,
             pipeline_layout,
             shader,
             pipelines,
@@ -890,7 +926,8 @@ impl WorldPipelines {
                 dst_factor: wgpu::BlendFactor::One,
                 operation: wgpu::BlendOperation::Add,
             };
-            let blend = match key.blend {
+            let unblended = *unblended_trees && key.program == Program::Tree;
+            let blend = match if unblended { Blend::Off } else { key.blend } {
                 Blend::Off => None,
                 // Direct3D 9 applies the colour factors to alpha too.
                 Blend::Alpha => Some(alpha_blending()),
@@ -906,7 +943,7 @@ impl WorldPipelines {
                     module: shader,
                     entry_point: Some(vs),
                     compilation_options: Default::default(),
-                    buffers: &vertex_buffers(key.program.layout()),
+                    buffers: &vertex_buffers(key.program.layout(), *compat),
                 },
                 // Triangles that appear counter-clockwise on screen are
                 // culled (section 10.1).
@@ -1059,26 +1096,73 @@ fn encode_static(
     inner: &Inner,
     order: &[u32],
     shows: impl Fn(u32) -> bool,
+    shared: &mut Vec<u32>,
 ) {
+    use crate::stats::StaticCall;
+    /// A call being gathered: draws whose vertices are their own with
+    /// consecutive index ranges, or draws of one mesh whose vertices are
+    /// shared, as instances (their records listed in `shared`).
+    enum Pending {
+        Merged {
+            range: std::ops::Range<u32>,
+            surface: u32,
+            draws: u32,
+        },
+        Instanced {
+            draw: u32,
+            first: u32,
+            count: u32,
+        },
+    }
+    let base = inner.calls.len() as u32;
+    let flush =
+        |pass: &mut wgpu::RenderPass<'_>, pending: &mut Option<Pending>| match pending.take() {
+            Some(Pending::Merged {
+                range,
+                surface,
+                draws,
+            }) => {
+                crate::stats::draw();
+                crate::stats::static_call(
+                    inner.programs[surface as usize].name(),
+                    StaticCall::Merged,
+                    draws,
+                );
+                pass.draw_indexed(range, 0, 0..1);
+            }
+            Some(Pending::Instanced { draw, first, count }) => {
+                let d = &inner.calls[draw as usize];
+                crate::stats::draw();
+                crate::stats::static_call(
+                    inner.programs[d.surface as usize].name(),
+                    StaticCall::Shared,
+                    count,
+                );
+                pass.draw_indexed(
+                    d.first_index..d.first_index + d.index_count,
+                    d.first_vertex,
+                    base + first..base + first + count,
+                );
+            }
+            None => {}
+        };
     crate::stats::bind_group();
     pass.set_bind_group(0, &inner.frame_group, &[]);
+    if let Some(records) = &inner.records {
+        crate::stats::buffer();
+        pass.set_vertex_buffer(RECORDS, records.slice(..));
+    }
     let mut pipeline = None;
     let mut surface = None;
     let (mut vertex_buffer, mut index_buffer) = (None, None);
-    let mut run: Option<std::ops::Range<u32>> = None;
-    let flush = |pass: &mut wgpu::RenderPass<'_>, run: &mut Option<std::ops::Range<u32>>| {
-        if let Some(r) = run.take() {
-            crate::stats::draw();
-            pass.draw_indexed(r, 0, 0..1);
-        }
-    };
+    let mut pending: Option<Pending> = None;
     for &i in order {
         if !shows(i) {
             continue;
         }
         let d = &inner.calls[i as usize];
         if surface != Some(d.surface) {
-            flush(pass, &mut run);
+            flush(pass, &mut pending);
             surface = Some(d.surface);
             let p = &inner.surface_pipelines[d.surface as usize];
             if pipeline != Some(p) {
@@ -1094,7 +1178,7 @@ fn encode_static(
         // Each set only when it changes: wgpu's GL backend specifies every
         // vertex attribute again on a vertex buffer set (#429).
         if vertex_buffer != Some(d.vertex_buffer) {
-            flush(pass, &mut run);
+            flush(pass, &mut pending);
             vertex_buffer = Some(d.vertex_buffer);
             crate::stats::buffer();
             pass.set_vertex_buffer(0, inner.vertex_buffers[d.vertex_buffer as usize].slice(..));
@@ -1104,7 +1188,7 @@ fn encode_static(
             }
         }
         if index_buffer != Some(d.index_buffer) {
-            flush(pass, &mut run);
+            flush(pass, &mut pending);
             index_buffer = Some(d.index_buffer);
             crate::stats::buffer();
             pass.set_index_buffer(
@@ -1113,21 +1197,62 @@ fn encode_static(
             );
         }
         let range = d.first_index..d.first_index + d.index_count;
+        let program = inner.programs[d.surface as usize];
         if inner.exclusive[i as usize] {
-            match &mut run {
-                Some(r) if r.end == range.start => r.end = range.end,
+            match &mut pending {
+                Some(Pending::Merged {
+                    range: r, draws, ..
+                }) if r.end == range.start => {
+                    r.end = range.end;
+                    *draws += 1;
+                }
                 _ => {
-                    flush(pass, &mut run);
-                    run = Some(range);
+                    flush(pass, &mut pending);
+                    pending = Some(Pending::Merged {
+                        range,
+                        surface: d.surface,
+                        draws: 1,
+                    });
                 }
             }
             continue;
         }
-        flush(pass, &mut run);
-        crate::stats::draw();
-        pass.draw_indexed(range, d.first_vertex, i..i + 1);
+        if program.is_model() || inner.records.is_none() {
+            flush(pass, &mut pending);
+            crate::stats::draw();
+            let kind = if program.is_model() {
+                StaticCall::Object
+            } else {
+                StaticCall::Shared
+            };
+            crate::stats::static_call(program.name(), kind, 1);
+            pass.draw_indexed(range, d.first_vertex, i..i + 1);
+            continue;
+        }
+        // A level draw whose vertices are shared: an instance of the call
+        // before when that draws the same mesh.
+        match &mut pending {
+            Some(Pending::Instanced { draw, count, .. })
+                if {
+                    let p = &inner.calls[*draw as usize];
+                    (p.first_index, p.index_count, p.first_vertex)
+                        == (d.first_index, d.index_count, d.first_vertex)
+                } =>
+            {
+                *count += 1;
+            }
+            _ => {
+                flush(pass, &mut pending);
+                pending = Some(Pending::Instanced {
+                    draw: i,
+                    first: shared.len() as u32,
+                    count: 1,
+                });
+            }
+        }
+        shared.push(i);
     }
-    flush(pass, &mut run);
+    flush(pass, &mut pending);
 }
 
 /// Each surface's groups 1 and 2 (`world.wgsl`), shared by surfaces with
@@ -1166,6 +1291,13 @@ struct Inner {
     surface_groups: SurfaceGroups,
     /// Pipeline of each surface.
     surface_pipelines: Vec<wgpu::RenderPipeline>,
+    /// Program of each surface.
+    programs: Vec<Program>,
+    /// WebGPU: the records of draws whose vertices are shared, an
+    /// instance-step buffer (`record` in world.wgsl): each draw's index at
+    /// its own place (single calls draw it as the instance), then a
+    /// frame's instanced calls' draws.
+    records: Option<wgpu::Buffer>,
     /// Section 10.3 step 1 (priority 0–1, not strict) and step 5 (2–3):
     /// the draws in their fixed order.
     early: Vec<u32>,
@@ -2368,6 +2500,20 @@ impl Renderer {
         }
         let order = |v: Vec<usize>| v.into_iter().map(|i| i as u32).collect::<Vec<u32>>();
         let (early, late) = (order(early), order(late));
+        let records = (!compat).then(|| {
+            let identity: Vec<u32> = (0..kept.len() as u32).collect();
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("world shared records"),
+                size: (8 * kept.len() as u64).max(4),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            if !identity.is_empty() {
+                queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&identity));
+            }
+            buffer
+        });
+        buffer_bytes += records.as_ref().map_or(0, wgpu::Buffer::size);
         let calls: Vec<DrawCall> = kept
             .iter()
             .map(|d| DrawCall {
@@ -2404,6 +2550,8 @@ impl Renderer {
             frame_group,
             surface_groups,
             surface_pipelines,
+            programs: surfaces.iter().map(|s| s.program).collect(),
+            records,
             early,
             late,
             calls,
@@ -2636,7 +2784,9 @@ impl Renderer {
         let spheres = inner.spheres.borrow();
         let shows = |i: u32| may_show(spheres[i as usize], &planes, frame.eye, ssa);
         set_part(Part::WorldEarly);
-        encode_static(&mut pass, inner, &inner.early, shows);
+        // The records of the instanced calls' draws, written below.
+        let mut shared = Vec::new();
+        encode_static(&mut pass, inner, &inner.early, shows, &mut shared);
         if let Some((pipelines, prepared)) = particles {
             set_part(Part::Particles);
             prepared.draw_queue(pipelines, &mut pass, ParticleQueue::Early);
@@ -2658,6 +2808,10 @@ impl Renderer {
         {
             crate::stats::bind_group();
             pass.set_bind_group(0, &inner.frame_group, &[]);
+            if let Some(records) = &inner.records {
+                crate::stats::buffer();
+                pass.set_vertex_buffer(RECORDS, records.slice(..));
+            }
             for (offset, spot, draws) in &lights {
                 crate::stats::bind_group();
                 pass.set_bind_group(1, &groups[usize::from(*spot)], &[*offset]);
@@ -2706,7 +2860,16 @@ impl Renderer {
             }
         }
         set_part(Part::WorldLate);
-        encode_static(&mut pass, inner, &inner.late, shows);
+        encode_static(&mut pass, inner, &inner.late, shows, &mut shared);
+        if let Some(records) = inner.records.as_ref().filter(|_| !shared.is_empty()) {
+            // After the identity records (one a draw), before the frame's
+            // submission.
+            self.queue.write_buffer(
+                records,
+                4 * inner.calls.len() as u64,
+                bytemuck::cast_slice(&shared),
+            );
+        }
         if let Some((pipelines, prepared)) = particles {
             set_part(Part::Particles);
             prepared.draw_queue(pipelines, &mut pass, ParticleQueue::Late);
@@ -2743,6 +2906,10 @@ impl Renderer {
                 crate::stats::buffer();
                 pass.set_vertex_buffer(1, ids.slice(..));
             }
+            if let Some(records) = &inner.records {
+                crate::stats::buffer();
+                pass.set_vertex_buffer(RECORDS, records.slice(..));
+            }
             let instance = i as u32;
             crate::stats::draw();
             pass.draw_indexed(
@@ -2763,10 +2930,20 @@ impl Renderer {
     /// textures given so far.
     pub(crate) fn make_world_pipelines(&mut self) {
         let mut p = WorldPipelines::new(&self.device, &self.queue, self.format, self.compat);
+        p.unblended_trees = self.unblended_trees;
         if let Some(t) = self.light_textures.clone() {
             p.light_groups(&self.device, t);
         }
         self.world_pipelines = Some(p);
+    }
+
+    /// Tests only: draws the trees without blending (worlds made after).
+    /// The Mac's GPU doesn't repeat the blended trees' pixels exactly from
+    /// one drawing of a frame to the next (#435), so frames that should be
+    /// the same are compared exactly this way.
+    pub fn set_unblended_trees(&mut self, on: bool) {
+        self.unblended_trees = on;
+        self.make_world_pipelines();
     }
 
     /// The draws the last frame's light passes drew, over all passes.

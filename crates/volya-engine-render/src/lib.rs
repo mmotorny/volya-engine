@@ -187,6 +187,8 @@ pub struct Renderer {
     ramp: ramp::RampPass,
     /// Times frames on the GPU while on ([`Renderer::set_gpu_timing`]).
     timer: Option<timing::FrameTimer>,
+    /// [`Renderer::set_unblended_trees`].
+    unblended_trees: bool,
 }
 
 impl Renderer {
@@ -307,6 +309,7 @@ impl Renderer {
             details: details::DetailPipelines::new(device, format),
             ramp: ramp::RampPass::new(device, format),
             timer: None,
+            unblended_trees: false,
         };
         // The world's pipelines too (the light passes' among them).
         renderer.make_world_pipelines();
@@ -612,6 +615,12 @@ impl Renderer {
     /// (#387).
     pub fn take_frame_stats(&self) -> stats::FrameStats {
         stats::take()
+    }
+
+    /// The static world's draw calls by program and kind since the last
+    /// call (#387).
+    pub fn take_static_calls(&self) -> stats::StaticCalls {
+        stats::take_static()
     }
 
     /// Whether the device can time frames on the GPU (timestamp queries).

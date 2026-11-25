@@ -81,6 +81,15 @@ fn report(view: &str, compat: bool, s: &FrameStats, encode: Duration) {
     }
 }
 
+/// The static world's calls by program and kind.
+fn report_static(calls: &volya_engine::render::stats::StaticCalls) {
+    let mut rows = calls.rows.clone();
+    rows.sort_by_key(|r| std::cmp::Reverse(r.2));
+    for (program, kind, n, draws) in rows {
+        eprintln!("    static {program:<18} {kind:?}: {n} calls for {draws} draws");
+    }
+}
+
 // The turned views' yaws, quarter turns rounded, are those of reference
 // pictures already written.
 #[allow(clippy::approx_constant)]
@@ -100,7 +109,10 @@ fn draw_calls_from_game_data() {
         ..Default::default()
     };
     let mut compared = 0;
-    for compat in [false, true] {
+    // Each path with the trees blended, as drawn, and unblended
+    // (`Renderer::set_unblended_trees`), which the Mac's GPU repeats
+    // exactly, so comparisons there are exact everywhere.
+    for (compat, unblended) in [(false, false), (false, true), (true, false), (true, true)] {
         let mut screen = LevelScreen::load(&tree, &data, 0).unwrap();
         screen.set_detail_settings(0.2, 0.5);
         screen.set_supersample(2);
@@ -138,6 +150,7 @@ fn draw_calls_from_game_data() {
             ),
         ];
         let mut r = renderer(compat);
+        r.set_unblended_trees(unblended);
         let mut presenter = Presenter::new();
         let mut now = 0;
         for (name, camera) in views {
@@ -147,6 +160,7 @@ fn draw_calls_from_game_data() {
             // A few frames for the detail objects' cache (#407), the last
             // one measured.
             let mut stats = FrameStats::default();
+            let mut calls = Default::default();
             let mut encode = Duration::ZERO;
             for _ in 0..3 {
                 now += 16;
@@ -154,14 +168,19 @@ fn draw_calls_from_game_data() {
                 let mut scene = screen.scene(SIZE, 0);
                 scene.presentation = presentation;
                 r.take_frame_stats();
+                r.take_static_calls();
                 let start = Instant::now();
                 let list = presenter.draw_list(&mut r, &tree, &scene, 0);
                 let frame = r.capture(&list, SIZE.width, SIZE.height, wgpu::Color::BLACK);
                 encode = start.elapsed();
                 stats = r.take_frame_stats();
+                calls = r.take_static_calls();
                 pollster::block_on(frame).unwrap();
             }
-            report(name, compat, &stats, encode);
+            if !unblended {
+                report(name, compat, &stats, encode);
+                report_static(&calls);
+            }
             // The particles left out of the pixels compared: their
             // simulation does not repeat from run to run (measured).
             let mut scene = screen.scene(SIZE, 0);
@@ -192,7 +211,11 @@ fn draw_calls_from_game_data() {
                 })
                 .count();
             eprintln!("{name}: {unstable} pixels vary between drawings of the same list");
-            let file = format!("{name}-{}.rgba", if compat { "webgl2" } else { "webgpu" });
+            let file = format!(
+                "{name}-{}{}.rgba",
+                if compat { "webgl2" } else { "webgpu" },
+                if unblended { "-unblended" } else { "" }
+            );
             if let Some(dir) = &dump {
                 std::fs::create_dir_all(dir).unwrap();
                 std::fs::write(dir.join(&file), drawings.concat()).unwrap();
@@ -227,15 +250,14 @@ fn draw_calls_from_game_data() {
                      varies at {varying}, where {outside} take another value; this build \
                      varies at {unstable}"
                 );
-                // Where the GPU doesn't repeat the reference itself, another
-                // run of the same build differs at some pixels it repeated
-                // in its own drawings too (measured: 9 to 17 of 118 for the
-                // outdoor view, 100 of 825 from above), so a view that
-                // varies is held to that.
+                // Where the GPU doesn't repeat the reference itself (the
+                // blended trees, #435), other runs and other ways of
+                // issuing the same draws differ at pixels it repeated too
+                // (measured: up to about 430 of 803 from above, while with
+                // the trees unblended every way matched exactly), so only
+                // views that repeat themselves are held to it.
                 if varying == 0 {
                     assert_eq!(differ, 0, "{file}: {differ} pixels differ");
-                } else {
-                    assert!(differ <= varying / 4, "{file}: {differ} pixels differ");
                 }
                 compared += 1;
             }

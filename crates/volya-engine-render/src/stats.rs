@@ -145,3 +145,43 @@ pub(crate) fn take() -> FrameStats {
     PART.set(Part::Screen);
     FRAME.take()
 }
+
+/// How a static draw call was made.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StaticCall {
+    /// Covering one or more draws whose vertices are their own.
+    Merged,
+    /// One level draw whose vertices others share (as the instance).
+    Shared,
+    /// One object draw.
+    Object,
+}
+
+/// The static world's calls of a frame by program and kind, and the draws
+/// the merged calls covered.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StaticCalls {
+    /// (program, kind, calls, draws covered).
+    pub rows: Vec<(&'static str, StaticCall, u32, u32)>,
+}
+
+thread_local! {
+    static STATIC: std::cell::RefCell<StaticCalls> = Default::default();
+}
+
+pub(crate) fn static_call(program: &'static str, kind: StaticCall, draws: u32) {
+    STATIC.with_borrow_mut(
+        |s| match s.rows.iter_mut().find(|r| r.0 == program && r.1 == kind) {
+            Some(r) => {
+                r.2 += 1;
+                r.3 += draws;
+            }
+            None => s.rows.push((program, kind, 1, draws)),
+        },
+    );
+}
+
+/// The static calls since the last call.
+pub(crate) fn take_static() -> StaticCalls {
+    STATIC.take()
+}
