@@ -112,8 +112,9 @@ function pointer(type, [x, y], init = {}) {
   );
 }
 
-/** The centre of item row `i` (title-menu.md section 4.2). */
-const row = (i) => client(782, 419 + 30 * i + 15);
+/** The centre of item row `i` (title-menu.md section 4.2), UI units and page. */
+const centreOfRow = (i) => [782, 419 + 30 * i + 15];
+const row = (i) => client(...centreOfRow(i));
 
 function needsGame() {
   if (!installer) skip("no installer");
@@ -151,6 +152,58 @@ function clickAt(at) {
   pointer("pointermove", p);
   pointer("pointerdown", p, { button: 0, buttons: 1 });
   pointer("pointerup", p, { button: 0, buttons: 0 });
+}
+
+// Touch where the game shows its cursor is a touchpad (touchpad.js, #108).
+let touchId = 100;
+/** Slow enough for the touchpad's one-to-one speed, CSS pixels per event
+ * 25 ms apart (120 px/s; the curve rises from 200). */
+const SLOW_STEP = 3;
+/** CSS pixels per UI unit of the drawn picture. */
+const cssPerUi = () => {
+  const [a, b] = [client(0, 0), client(100, 0)];
+  return Math.hypot(b[0] - a[0], b[1] - a[1]) / 100;
+};
+
+/** Fingers at UI points `starts` moving slowly by `travel` (UI units), then lifted. */
+async function swipe(starts, [tx, ty], { lift = true, ids } = {}) {
+  ids ??= starts.map(() => ++touchId);
+  const t = (id) => ({ pointerType: "touch", pointerId: id, isPrimary: id === ids[0], button: -1 });
+  const at = (i, f) => client(starts[i][0] + tx * f, starts[i][1] + ty * f);
+  starts.forEach((_, i) => pointer("pointerdown", at(i, 0), { ...t(ids[i]), button: 0, buttons: 1 }));
+  const steps = Math.max(1, Math.ceil((Math.hypot(tx, ty) * cssPerUi()) / SLOW_STEP));
+  for (let n = 1; n <= steps; n++) {
+    await sleep(25);
+    starts.forEach((_, i) => pointer("pointermove", at(i, n / steps), { ...t(ids[i]), buttons: 1 }));
+  }
+  if (lift) starts.forEach((_, i) => pointer("pointerup", at(i, 1), { ...t(ids[i]), button: 0, buttons: 0 }));
+  return ids;
+}
+
+/** Moves the cursor to UI point `target` with slow touchpad swipes. */
+async function swipeTo(target) {
+  // Past the double-tap time of an earlier tap (a touch then would drag).
+  await sleep(300);
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const { ui, sensitivity } = await volya.call("input_state");
+    const [dx, dy] = [target[0] - ui[0], target[1] - ui[1]];
+    if (Math.hypot(dx, dy) < 1.5) return;
+    // One to one when slow: the cursor moves s/2 times the finger's travel
+    // in UI units (title-menu.md section 7, over 2 normalised units).
+    const travel = [(2 * dx) / sensitivity, (2 * dy) / sensitivity];
+    await swipe([[512 - travel[0] / 2, 384 - travel[1] / 2]], travel);
+    await sleep(50);
+  }
+  const { ui } = await volya.call("input_state");
+  throw new Error(`the cursor at ${ui}, not ${target}`);
+}
+
+/** A touchpad tap at UI point `at` (anywhere: it clicks at the cursor). */
+async function tapAt(at = [512, 384]) {
+  await sleep(300);
+  const t = { pointerType: "touch", pointerId: ++touchId, isPrimary: true, button: 0 };
+  pointer("pointerdown", client(...at), { ...t, buttons: 1 });
+  pointer("pointerup", client(...at), { ...t, buttons: 0 });
 }
 
 /** The in-game menu's item list (save-load-screens.md section 2). */
@@ -359,19 +412,23 @@ export const tests = {
     assertEqual((await state()).menu.activations.length, 1, "activations");
   },
 
-  "touch: a tap selects a row, a second tap activates it": async () => {
+  "touch is a touchpad: a tap on an item clicks at the cursor, not there; a swipe moves the cursor, a tap anywhere clicks under it": async () => {
     needsGame();
-    const touch = { pointerType: "touch", button: 0, buttons: 1 };
-    const tap = (at) => {
-      pointer("pointerdown", at, touch);
-      pointer("pointerup", at, { ...touch, buttons: 0 });
-    };
+    // The cursor away from the items.
+    await swipeTo([300, 650]);
+    let s = await state();
+    const [activations, selected] = [s.menu.activations.length, s.menu.selected];
+    const ui = (await volya.call("input_state")).ui;
+    await tapAt(centreOfRow(4));
     await sleep(300);
-    tap(row(4));
-    let s = await until((s) => s.menu.selected === 4 && !s.menu.moving, "item 4 at rest", 2000);
-    assertEqual(s.menu.activations.length, 1, "the first tap activated");
-    tap(row(4));
-    s = await until((s) => s.menu.activations.length === 2, "an activation");
+    s = await state();
+    assertEqual([s.menu.activations.length, s.menu.selected], [activations, selected], "a tap on item 4 clicked it");
+    assertEqual((await volya.call("input_state")).ui, ui, "the tap moved the cursor");
+    // A swipe onto item 4 selects it (hover); a tap elsewhere activates it.
+    await swipeTo(centreOfRow(4));
+    await until((s) => s.menu.selected === 4 && !s.menu.moving, "item 4 at rest", 2000);
+    await tapAt([150, 150]);
+    s = await until((s) => s.menu.activations.length === activations + 1, "an activation");
     assertEqual(s.menu.activations.at(-1).item, "btn_credits", "activated");
   },
 
@@ -397,6 +454,7 @@ export const tests = {
     await until((s) => s.menu.selected === 0, "item 0");
     key("Enter");
     await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
+    await volya.call("heap_log", { on: true });
     key("Enter");
     // The loading screen (docs/behavior/loading-screen.md): a caption per
     // stage over the background and the progress strip. Whichever loading
@@ -415,21 +473,33 @@ export const tests = {
     // After the last stage the image covers the level's first 30 frames;
     // the intro starts under the last two (loading-screen.md section 7).
     const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", 60000);
+    // The wasm heap at the end of the last frame under each caption.
+    const stages = [];
+    for (const e of await volya.call("heap_log", { on: false })) {
+      const name = e.caption ?? e.phase;
+      const mib = Math.round(e.wasm_heap_bytes / 2 ** 20);
+      if (stages.length && stages[stages.length - 1][0] === name) stages[stages.length - 1][1] = mib;
+      else stages.push([name, mib]);
+    }
     assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
     // The level's objects (docs/behavior/level-objects.md section 7.1).
     assertEqual([s.level.objects.online, s.level.objects.with_model], [671, 352], "objects");
     assertEqual([s.intro?.items, s.intro?.kind], [1, "video"], "the intro plays");
-    // The intro's 120 MB video streams from the file (#53), and the
-    // level's geometry from its file to the GPU (#79): the heap stays under
-    // its cap.
+    // The intro's 120 MB video streams from the file (#53): playing it
+    // keeps the wasm heap near its size before.
+    const before = await volya.call("level_stats");
     await until((s) => s.intro?.elapsed_ms > 1500, "the intro to play a while", 10000);
     const playing = await volya.call("level_stats");
+    const grown = (playing.wasm_heap_bytes - before.wasm_heap_bytes) / 2 ** 20;
+    assert(grown < 40, `wasm heap grew ${grown.toFixed(0)} MiB during the intro`);
+    // The whole level's heap, with the level's geometry streamed from its
+    // file to the GPU (#79): under its cap.
     assert(playing.wasm_heap_bytes <= WASM_HEAP_CAP, `wasm heap ${mib(playing.wasm_heap_bytes)} during the intro, over ${mib(WASM_HEAP_CAP)}`);
     // A key bound to quit skips it (startup.md section 6.5).
     key("Escape");
     const shown = await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
     assertEqual(shown.phase, "level", "still in the level");
-    let note = `"${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; intro skipped, wasm heap ${mib(playing.wasm_heap_bytes)} while it played`;
+    let note = `wasm heap by caption (MiB): ${stages.map(([n, m]) => `${n} ${m}`).join(", ")}; "${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; intro skipped, wasm heap ${mib(before.wasm_heap_bytes)} before it, ${mib(playing.wasm_heap_bytes)} while it played`;
     if (gpu.state === "ready") {
       const { rgba } = await volya.call("debug_capture", { width: 256, height: 192 });
       const colours = new Set();
@@ -796,12 +866,12 @@ export const tests = {
     await sleep(100);
     const held = (await volya.call("input_state")).held;
     assert(!held.some((h) => h.startsWith("touch_")), `held after hiding: ${held}`);
-    // A tap on "Возврат к игре", selected and under the glass once the bar
-    // rests, activates it; the controls show again.
-    const menuTap = { pointerType: "touch", pointerId: 36, isPrimary: true, button: 0 };
+    // The touchpad (#108): "Возврат к игре" under the cursor, selected and
+    // under the glass once the bar rests; a tap activates it; the controls
+    // show again.
+    await swipeTo(centreOfRow(0));
     await until((s) => inGame(s)?.selected === 0 && !inGame(s).moving, "item 0 at rest", 3000);
-    pointer("pointerdown", row(0), { ...menuTap, buttons: 1 });
-    pointer("pointerup", row(0), { ...menuTap, buttons: 0 });
+    await tapAt([200, 200]);
     await until((s) => s.phase === "level" && !s.menu, "back in the game");
     for (let i = 0; i < 50 && controls.hidden; i++) await sleep(20);
     assert(!controls.hidden, "the touch controls show again");
@@ -911,19 +981,25 @@ export const tests = {
     key("Enter");
     const save = async () => (await until((s) => s.menu?.save_screen, "the save screen")).menu.save_screen;
     const [fx, fy, fw, fh] = (await save()).field;
-    // Touch (seen earlier in this page): the text entry lies over the field.
+    // Touch (seen earlier in this page): the text entry is where the field
+    // is, but takes no taps itself (#108).
     const entry = document.querySelector("#text-entry input");
     for (let i = 0; i < 50 && entry.parentElement.hidden; i++) await sleep(20);
     assert(!entry.parentElement.hidden, "the text entry shows");
-    const [x, y] = client(fx + fw / 2, fy + fh / 2);
-    assertEqual(document.elementFromPoint(x, y), entry, "the text entry over the field");
-    // A tap on it reaches the engine: the field takes focus. (A synthesized
-    // tap can't focus the input or raise a keyboard: focused by hand.)
-    const touch = { pointerType: "touch", pointerId: 31, isPrimary: true, button: 0, bubbles: true, cancelable: true, clientX: x, clientY: y };
-    entry.dispatchEvent(new PointerEvent("pointerdown", { ...touch, buttons: 1 }));
-    entry.dispatchEvent(new PointerEvent("pointerup", { ...touch, buttons: 0 }));
+    const centre = [fx + fw / 2, fy + fh / 2];
+    assert(document.elementFromPoint(...client(...centre)) !== entry, "the text entry takes taps");
+    // A tap on the field with the cursor elsewhere focuses nothing.
+    await swipeTo([100, 100]);
+    await tapAt(centre);
+    await sleep(200);
+    assert(document.activeElement !== entry && !(await save()).focused, "a tap on the field focused it");
+    // The cursor over the field: a tap anywhere clicks it, and the page
+    // focuses its input in that tap (the device's keyboard rises only so).
+    await swipeTo(centre);
+    await sleep(200);
+    await tapAt([fx + fw / 2, fy - 100]);
+    assertEqual(document.activeElement, entry, "the input focused in the tap");
     await until((s) => s.menu?.save_screen?.focused, "the field focused by the tap");
-    entry.focus();
     // Typed text reaches the field by its own rules (Cyrillic types nothing).
     entry.value = "Ab1ж";
     entry.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: "Ab1ж", bubbles: true }));
@@ -1053,21 +1129,81 @@ export const tests = {
     const scene = await volya.call("menu_scene", { width: 1024, height: 768 });
     assertEqual(bounds(scene, "dialog").slice(0, 2), [414.5, 167.5], "dialog");
     assert(scene.sprites.some((s) => s.layer === "list_renderer line"), "renderer line");
-    // A tap in the black bars beside a 4:3 picture is ignored, not taken to
-    // the picture's edge (our choice).
+    // A tap in the black bars beside a 4:3 picture clicks at the cursor
+    // (the touchpad, #108), which stays where it is.
     const rect = view().getBoundingClientRect();
     const rotated = rect.width < rect.height !== view().clientWidth < view().clientHeight;
     if (rotated || view().clientWidth / view().clientHeight < render[0] / render[1] + 0.05) {
       return "no bars at the sides here";
     }
-    const before = (await options()).cursor;
-    const touch = { pointerType: "touch", pointerId: 40, isPrimary: true, button: 0 };
+    // The cursor on nothing (the screen's top left).
+    pointer("pointermove", client(5, 5));
+    await sleep(100);
+    const before = await volya.call("input_state");
+    await sleep(300);
+    const touch = { pointerType: "touch", pointerId: ++touchId, isPrimary: true, button: 0 };
     const bar = [rect.left + 2, rect.top + rect.height / 2];
     pointer("pointerdown", bar, { ...touch, buttons: 1 });
     pointer("pointerup", bar, { ...touch, buttons: 0 });
     await sleep(100);
-    assertEqual((await options()).cursor, before, "cursor after a tap in the bar");
-    return "a tap in the bar ignored";
+    const after = await volya.call("input_state");
+    const actions = after.recent.filter((a) => a.seq > before.count).map((a) => `${a.action} ${a.control}`);
+    assertEqual(actions, ["press mouse_left", "release mouse_left"], "a click");
+    assertEqual(after.ui, before.ui, "the cursor after a tap in the bar");
+    return "a tap in the bar clicks at the cursor";
+  },
+
+  "touchpad: a double-tap-hold drag moves a slider; a two-finger swipe scrolls the key table": async () => {
+    needsGame();
+    await swipeTo(centreOf(button(await options(), "tab 1")));
+    await tapAt();
+    let o = await untilOptions((o) => o.page === "sound", "the sound tab");
+    // On the music volume's bar: a tap, then a touch at once, held and
+    // moved left past the bar's start.
+    const bar = control(o, "track_musicvolume");
+    await swipeTo(centreOf(bar));
+    const value = () => options().then((o) => parseFloat(control(o, "track_musicvolume").value));
+    await sleep(300);
+    const fingerAt = [512, 384];
+    const t = { pointerType: "touch", isPrimary: true, button: 0 };
+    pointer("pointerdown", client(...fingerAt), { ...t, pointerId: ++touchId, buttons: 1 });
+    pointer("pointerup", client(...fingerAt), { ...t, pointerId: touchId, buttons: 0 });
+    await sleep(50);
+    const s = (await volya.call("input_state")).sensitivity;
+    const id = ++touchId;
+    const travel = (-2 * (bar.rect[2] / 2 + 40)) / s;
+    await swipe([fingerAt], [travel, 0], { lift: false, ids: [id] });
+    await sleep(100);
+    assertEqual((await volya.call("input_state")).held, ["mouse_left"], "held while dragging");
+    assertEqual(await value(), 0, "dragged to the bar's start");
+    // The page losing focus mid-drag releases it, and the touchpad forgets
+    // the finger: its further motion and its lift do nothing.
+    dispatchEvent(new Event("blur"));
+    await sleep(100);
+    const blurred = await volya.call("input_state");
+    assertEqual(blurred.held, [], "released by the blur");
+    pointer("pointermove", client(fingerAt[0] + travel + 60, fingerAt[1]), { ...t, pointerId: id, buttons: 1 });
+    pointer("pointerup", client(fingerAt[0] + travel + 60, fingerAt[1]), { ...t, pointerId: id, buttons: 0 });
+    await sleep(100);
+    const after = await volya.call("input_state");
+    assertEqual([after.ui, after.count], [blurred.ui, blurred.count], "the forgotten finger");
+    // The controls tab; two fingers on the key table swiped up scroll it
+    // down, swiped down back.
+    await swipeTo(centreOf(button(await options(), "tab 3")));
+    await tapAt();
+    o = await untilOptions((o) => o.page === "controls", "the controls tab");
+    const cell = o.cells.find((c) => c.action === "forward" && c.slot === 0);
+    await swipeTo(centreOf(cell));
+    const top = o.scroll[1];
+    await sleep(300);
+    await swipe([[400, 500], [470, 500]], [0, -120 / cssPerUi()]);
+    o = await untilOptions((o) => o.scroll[1] > top, "the key table to scroll");
+    const scrolled = o.scroll[1];
+    await sleep(300);
+    await swipe([[400, 300], [470, 300]], [0, 300 / cssPerUi()]);
+    o = await untilOptions((o) => o.scroll[1] === top, "the key table to scroll back");
+    assertEqual(o.page, "controls", "nothing clicked");
+    return `scrolled ${scrolled - top} positions`;
   },
 
   "a setting, a tap and a key changed, Apply stores them": async () => {
@@ -1089,16 +1225,14 @@ export const tests = {
     await untilOptions((o) => o.waiting === "forward:0", "the cell to wait");
     key("KeyT");
     o = await untilOptions((o) => o.cells.find((c) => c.action === "forward" && c.slot === 0).key === "kT", "kT");
-    // Touch: a tap on the sound tab, then on the EAX check box.
-    const touch = { pointerType: "touch", pointerId: 41, isPrimary: true, button: 0 };
-    const tap = (at) => {
-      pointer("pointerdown", at, { ...touch, buttons: 1 });
-      pointer("pointerup", at, { ...touch, buttons: 0 });
-    };
-    tap(client(...centreOf(button(o, "tab 1"))));
+    // Touch (the touchpad): the cursor to the sound tab, a tap; then to the
+    // EAX check box, a tap.
+    await swipeTo(centreOf(button(o, "tab 1")));
+    await tapAt();
     o = await untilOptions((o) => o.page === "sound", "the sound tab");
     const eax = control(o, "check_eax").value;
-    tap(client(...centreOf(control(o, "check_eax"))));
+    await swipeTo(centreOf(control(o, "check_eax")));
+    await tapAt();
     o = await untilOptions((o) => control(o, "check_eax").value !== eax, "the tap to toggle EAX");
     clickAt(centreOf(button(o, "btn_accept")));
     await until((s) => s.phase === "menu" && !s.options, "Apply to close the screen");

@@ -3,7 +3,8 @@
 
 //! The level's spawned objects drawn at rest on New Game
 //! (docs/behavior/level-objects.md): which records of `spawns\all.spawn`
-//! are online (section 2, [`crate::core::switching`]), each one's visual
+//! are online (section 2, the offline simulation's switch pass,
+//! [`crate::core::simulation`]), each one's visual
 //! and transform (section 3), its model file (section 4,
 //! [`volya_engine_formats::model`]) drawn at its stored positions
 //! quantized as the first renderer stores them (4.7, 4.8), and the
@@ -17,23 +18,21 @@
 
 use std::collections::HashMap;
 use std::io;
-use std::ops::ControlFlow;
 use std::sync::Mutex;
 
 use serde::Serialize;
 
 use crate::core::character::SpecificCharacter;
 use crate::core::collision::CollisionWorld;
-use crate::core::config::{Config, value};
+use crate::core::config::value;
 use crate::core::object_light;
-use crate::core::switching::{Candidate, StartState, SwitchDistances};
+use crate::core::simulation::{NO_ID, Simulation};
 use crate::core::vfs::{self, Vfs};
 use crate::data::GameData;
 use crate::render::world::{ObjectGeometry, model_vertex};
 use volya_engine_formats::cp1251;
-use volya_engine_formats::game_graph::GameGraph;
 use volya_engine_formats::model::{self, Mat4, Model, transform, transform_point};
-use volya_engine_formats::object::{self, HangingLamp, Kind, Object, ObjectRecord, TraderLike};
+use volya_engine_formats::object::{HangingLamp, Kind, Object, ObjectRecord, TraderLike};
 
 use volya_engine_formats::xml;
 
@@ -41,61 +40,40 @@ fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 
-/// A record of the level online at the start (section 2.6).
+/// An object of the current level whose visual is loaded with the level:
+/// one online at the start (section 2.6) or one that may come online later
+/// (offline-simulation.md 6.2).
 #[derive(Clone, Debug)]
-pub struct OnlineObject {
-    /// Object index in the spawn file.
+pub struct LevelObject {
+    /// Its simulation id.
+    pub id: u16,
+    /// Object index in the spawn file (its id where it has none).
     pub index: u32,
+    /// Online at the start.
+    pub online: bool,
     pub record: ObjectRecord,
 }
 
-/// The switch pass (sections 2.1–2.4): the records of `spawn_file` whose
-/// game-graph vertex lies on level `level`, without a parent, online at the
-/// start for the actor at `start`. Objects inside a container are left out
-/// (our choice: none on the level has one, section 2.1).
-pub fn online_objects(
-    spawn_file: &[u8],
-    graph: &GameGraph,
-    level: &str,
-    system: &Config,
-    start: &StartState,
-    distances: &SwitchDistances,
-) -> io::Result<Vec<OnlineObject>> {
-    let mut online = Vec::new();
-    volya_engine_formats::spawn::for_each_record(spawn_file, |r| {
-        let section = object::section(r.spawn)?;
-        let class = system
-            .get(&section, "class")
-            .flatten()
-            .map(str::trim)
-            .ok_or_else(|| invalid(format!("section [{section}] has no class")))?;
-        // The Object block (game-graph vertex first) starts the state of
-        // every layout but the stalker's, whose Trader-like block comes
-        // first: other levels' records are skipped unparsed where it can.
-        if Kind::from_class_id(class)? != Kind::Stalker {
-            let state = volya_engine_formats::spawn::parse_spawn_packet(r.index, r.spawn)?.data;
-            let vertex = state
-                .first_chunk::<2>()
-                .map(|b| u16::from_le_bytes(*b))
-                .ok_or_else(|| invalid(format!("spawn object {}: no object state", r.index)))?;
-            if graph.vertex_level(vertex)?.name != level {
-                return Ok(ControlFlow::Continue(()));
-            }
-        }
-        let record = ObjectRecord::parse(r.spawn, r.update, class, true)?;
-        let vertex = record.object.object_block().game_graph_vertex;
-        if graph.vertex_level(vertex)?.name == level
-            && record.header.parent_id == 0xFFFF
-            && Candidate::of(&record).online_at_start(start, distances)?
-        {
-            online.push(OnlineObject {
-                index: r.index,
-                record,
-            });
-        }
-        Ok(ControlFlow::Continue(()))
-    })?;
-    Ok(online)
+/// The objects of `simulation`'s current level whose visuals the level
+/// loads: those of its list without a parent that are online, or for which
+/// the engine's *on* can hold (level-objects.md 2.3). The others never come
+/// online here: the scripts' replacements only make *on* false where the
+/// engine's is (section 2.5; a job-online value set true by a smart
+/// terrain's script would not, but no script runs yet). Objects inside a
+/// container are left out (our choice: none on the level has one, section
+/// 2.1).
+pub fn level_objects(simulation: &Simulation) -> Vec<LevelObject> {
+    simulation
+        .level_list()
+        .filter_map(|id| simulation.object(id))
+        .filter(|o| o.record.header.parent_id == NO_ID && (o.online || o.may_switch_online()))
+        .map(|o| LevelObject {
+            id: o.id,
+            index: o.spawn_index.unwrap_or(u32::from(o.id)),
+            online: o.online,
+            record: o.record.clone(),
+        })
+        .collect()
 }
 
 /// The visual name an online object shows (section 3.2): the record's
@@ -108,7 +86,7 @@ pub fn online_objects(
 /// a body with a non-zero death time, and every dead body of the shipped
 /// file has death time 0 (our omission).
 pub fn visual_name(
-    object: &OnlineObject,
+    object: &LevelObject,
     character_visual: &mut dyn FnMut(&TraderLike) -> io::Result<Option<String>>,
 ) -> io::Result<Option<String>> {
     let record = &object.record;
@@ -377,7 +355,12 @@ pub fn add_model(
 /// An object drawn with a model.
 #[derive(Clone, Debug)]
 pub struct Instance {
+    /// Its simulation id.
+    pub id: u16,
+    /// Object index in the spawn file.
     pub index: u32,
+    /// Online at the start; offline ones are loaded but not drawn.
+    pub online: bool,
     pub name: String,
     pub class_id: String,
     pub kind: Kind,
@@ -391,12 +374,14 @@ pub struct Instance {
 }
 
 impl Instance {
-    pub fn new(object: &OnlineObject, visual: String, model: usize, loaded: &LoadedModel) -> Self {
+    pub fn new(object: &LevelObject, visual: String, model: usize, loaded: &LoadedModel) -> Self {
         let h = &object.record.header;
         let transform = transform(h.position, h.angles);
         let c = transform_point(&transform, loaded.header.sphere_centre);
         Self {
+            id: object.id,
             index: object.index,
+            online: object.online,
             name: h.name.clone(),
             class_id: object.record.class_id.as_str().to_owned(),
             kind: object.record.kind(),
@@ -543,7 +528,7 @@ pub fn lamp_lights(
 /// The objects spawned on the level, once their models are loaded.
 #[derive(Debug, Default)]
 pub struct Spawned {
-    /// Online objects (section 2.6).
+    /// Online objects at the start (section 2.6).
     pub online: usize,
     /// Online objects per class id.
     pub online_by_class: Vec<(String, usize)>,
@@ -553,24 +538,26 @@ pub struct Spawned {
     pub geometry: ObjectGeometry,
 }
 
-/// Loads the visuals of `online` (sections 3, 4): each model file once.
+/// Loads the visuals of `objects` (sections 3, 4): each model file once.
 pub fn spawn(
     tree: &dyn Vfs,
     data: &GameData,
     dir: &str,
-    online: &[OnlineObject],
+    objects: &[LevelObject],
 ) -> io::Result<Spawned> {
     let mut characters = Characters::new(tree, data);
     // Models by file path, and by visual name (located once each).
     let mut by_path: HashMap<String, usize> = HashMap::new();
     let mut by_name: HashMap<String, usize> = HashMap::new();
     let mut s = Spawned {
-        online: online.len(),
+        online: objects.iter().filter(|o| o.online).count(),
         ..Default::default()
     };
     let mut classes: HashMap<&str, usize> = HashMap::new();
-    for o in online {
-        *classes.entry(o.record.class_id.as_str()).or_default() += 1;
+    for o in objects {
+        if o.online {
+            *classes.entry(o.record.class_id.as_str()).or_default() += 1;
+        }
         let name = visual_name(o, &mut |t| characters.visual(t))?;
         let model = match &name {
             Some(name) if by_name.contains_key(&name.to_lowercase()) => {
@@ -623,6 +610,8 @@ pub fn spawn(
 /// the object's transform, world sphere and `L_dynamic_props`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ObjectDraw {
+    /// Its instance in [`LevelObjects::instances`].
+    pub instance: usize,
     pub surface: u32,
     pub first_vertex: u32,
     pub first_index: u32,
@@ -635,8 +624,10 @@ pub struct ObjectDraw {
 /// The objects as the level keeps them.
 #[derive(Debug, Default)]
 pub struct LevelObjects {
+    /// Online at the start.
     pub online: usize,
     pub online_by_class: Vec<(String, usize)>,
+    /// Every object whose visual is loaded, online or not.
     pub instances: Vec<Instance>,
     pub models: Vec<LoadedModel>,
     pub draws: Vec<ObjectDraw>,
@@ -665,7 +656,7 @@ impl LevelObjects {
         not_drawn: Vec<(String, String)>,
     ) -> Self {
         let mut draws = Vec::new();
-        for (instance, props) in spawned.instances.iter().zip(props) {
+        for (i, (instance, props)) in spawned.instances.iter().zip(props).enumerate() {
             let model = &spawned.models[instance.model];
             for (mesh, surface) in model.meshes.iter().zip(&mesh_surfaces[instance.model]) {
                 let Some(surface) = *surface else { continue };
@@ -673,6 +664,7 @@ impl LevelObjects {
                     continue;
                 }
                 draws.push(ObjectDraw {
+                    instance: i,
                     surface,
                     first_vertex: mesh.first_vertex,
                     first_index: mesh.first_index,
@@ -717,9 +709,12 @@ pub fn light_inputs(
 /// What the engine interface reports about the objects.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct ObjectsReport {
+    /// Online objects of the level.
     pub online: usize,
     /// Online objects drawn with a model.
     pub with_model: usize,
+    /// Objects whose visual is loaded, online or not.
+    pub loaded: usize,
     pub models: usize,
     pub draws: usize,
     pub vertices: usize,
@@ -739,7 +734,8 @@ impl LevelObjects {
             });
         ObjectsReport {
             online: self.online,
-            with_model: self.instances.len(),
+            with_model: self.instances.iter().filter(|i| i.online).count(),
+            loaded: self.instances.len(),
             models: self.models.len(),
             draws: self.draws.len(),
             vertices,

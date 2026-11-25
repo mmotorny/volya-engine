@@ -71,19 +71,20 @@ fn mb(bytes: usize) -> f64 {
 /// `l01_escape`, #79) with a margin, so a regression fails. Stages not
 /// listed allocate next to nothing.
 const STAGE_BUDGETS: [(Stage, f64); 8] = [
-    (Stage::CreatingNewGame, 14.0),  // 12.6: the spawn file and game graph
-    (Stage::ServerConnecting, 12.5), // 10.6
+    (Stage::CreatingNewGame, 14.5),  // 12.8: the spawn file and game graph
+    (Stage::ServerConnecting, 23.0), // 19.8: the offline simulation
     (Stage::OpeningStream, 14.0),    // 12.6: the `level` file and its parse
     (Stage::LoadingCform, 48.0),     // 44.3: the collision world it keeps
     (Stage::LoadingGeometry, 1.5),   // 0.7: the geometry's layout only
     (Stage::LoadingSpatialDb, 7.0),  // 5.4: index pieces and the draw list
-    (Stage::ClientSpawning, 6.5),    // 5.1
+    (Stage::ClientSpawning, 11.0),   // 9.4: the objects' models
     (Stage::LoadingTextures, 4.5),   // 3.2
 ];
 /// Any other stage's peak, MB.
 const OTHER_BUDGET: f64 = 0.5;
-/// The whole load's peak above its start, MB (56.5 measured).
-const LOADING_BUDGET: f64 = 62.0;
+/// The whole load's peak above its start, MB (80.0 measured; 188.3 before
+/// #79).
+const LOADING_BUDGET: f64 = 88.0;
 
 #[test]
 fn loading_stage_memory() {
@@ -120,6 +121,10 @@ fn loading_stage_memory() {
             "{stage:?} peaks at +{:.1} MB, over its {budget} MB budget",
             mb(peak - before)
         );
+        if stage == Stage::ServerConnecting {
+            // The offline simulation keeps 19.8 MB (measured).
+            assert!(mb(after) - mb(before) < 23.0, "{stage:?} kept");
+        }
     }
     eprintln!("loading peak: {:.1} MB above the start", mb(highest));
     assert!(

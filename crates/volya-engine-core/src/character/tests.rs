@@ -42,7 +42,7 @@ fn system() -> Config {
 }
 
 /// A player's record as `all.spawn` holds it (section 7).
-fn record() -> ObjectRecord {
+pub(crate) fn record() -> ObjectRecord {
     let creature = Creature {
         object: ObjectBlock {
             game_graph_vertex: 12,
@@ -87,7 +87,7 @@ fn record() -> ObjectRecord {
         },
         class_id: ClassId::new("O_ACTOR").unwrap(),
         single_player: true,
-        object: Object::Player(Player {
+        object: Object::Player(Box::new(Player {
             creature,
             trader: TraderLike {
                 money: 40,
@@ -133,7 +133,7 @@ fn record() -> ObjectRecord {
                 active_weapon: 0,
                 physics: PlayerPhysics::None,
             },
-        }),
+        })),
     }
 }
 
@@ -158,6 +158,12 @@ fn new_game(record: &ObjectRecord, system: &Config) -> CharacterState {
         communities: &communities,
         character_name: "Меченый",
         seed: 1,
+        first_id: 1,
+    })
+    .and_then(|mut s| {
+        // The next id after the five supplies.
+        s.receive_bolt(system, 6)?;
+        Ok(s)
     })
     .unwrap()
 }

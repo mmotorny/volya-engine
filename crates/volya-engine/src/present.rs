@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::core::camera::Mat4;
 use crate::core::vfs::read_ahead::ReadAhead;
 use crate::core::vfs::{self, Vfs};
 use crate::level::LevelWorld;
@@ -19,6 +20,7 @@ use crate::render::{
 };
 use crate::scene::{Scene, TextureId, WorldScene};
 use volya_engine_formats::dds::Dds;
+use volya_engine_formats::model::transform_point;
 use volya_engine_formats::pe::Rgba;
 use volya_engine_formats::ui::{UI_HEIGHT, UI_WIDTH};
 use volya_engine_formats::video::TheoraVideo;
@@ -102,6 +104,11 @@ pub struct Presenter {
     /// The static world on the GPU and the level it was made from; `None`
     /// inside when the upload failed (reported once).
     world: Option<(Arc<LevelWorld>, Option<World>)>,
+    /// The objects' placements last applied to the world's draws; `None`
+    /// as uploaded.
+    placed: Option<Arc<Vec<Option<Mat4>>>>,
+    /// The world's draw index of the first object draw.
+    first_object_draw: usize,
     errors: Vec<String>,
 }
 
@@ -210,6 +217,7 @@ impl Presenter {
         if !current {
             // The previous world's buffers go before the next's arrive.
             self.world = None;
+            self.placed = None;
             let world = self.upload_world(renderer, tree, &scene.world);
             let world = world
                 .map_err(|e| self.errors.push(format!("{}: {e}", scene.world.dir)))
@@ -217,6 +225,7 @@ impl Presenter {
             self.world = Some((scene.world.clone(), world));
         }
         let world = self.world.as_ref()?.1.clone()?;
+        self.place_objects(renderer, &world, scene);
         let e = &scene.environment;
         Some(WorldFrame {
             world,
@@ -240,6 +249,63 @@ impl Presenter {
             // the sky box encloses the eye; sky.md 14) and without a sky.
             clear: e.fog_rgb(),
         })
+    }
+
+    /// Moves, hides or shows the objects' draws whose instances' placements
+    /// differ from those last applied (the objects switching online and
+    /// offline, offline-simulation.md 6.3). A hidden draw gets a bounding
+    /// radius of 0, so it is never drawn.
+    /// The world's draw index of object draw `j` of the level's
+    /// [`crate::objects::LevelObjects::draws`] (tests).
+    pub fn object_draw_index(&self, j: usize) -> usize {
+        self.first_object_draw + j
+    }
+
+    fn place_objects(&mut self, renderer: &Renderer, world: &World, scene: &WorldScene) {
+        if self
+            .placed
+            .as_ref()
+            .is_some_and(|p| Arc::ptr_eq(p, &scene.objects))
+        {
+            return;
+        }
+        let objects = &scene.world.objects;
+        let before = self.placed.take();
+        let first = self.first_object_draw;
+        for (j, d) in objects.draws.iter().enumerate() {
+            let k = d.instance;
+            let now = scene.objects.get(k).copied().flatten();
+            let was = match &before {
+                Some(b) => b.get(k).copied().flatten(),
+                // As uploaded: the instance's own placement if online,
+                // hidden otherwise.
+                None => objects.instances[k]
+                    .online
+                    .then_some(objects.instances[k].transform),
+            };
+            if now == was {
+                continue;
+            }
+            let instance = &objects.instances[k];
+            let (transform, sphere) = match now {
+                Some(t) => {
+                    let h = &objects.models[instance.model].header;
+                    let c = transform_point(&t, h.sphere_centre);
+                    (t, [c[0], c[1], c[2], h.sphere_radius])
+                }
+                None => (
+                    instance.transform,
+                    [
+                        instance.sphere[0],
+                        instance.sphere[1],
+                        instance.sphere[2],
+                        0.0,
+                    ],
+                ),
+            };
+            renderer.place_draw(world, first + j, &transform, sphere);
+        }
+        self.placed = Some(scene.objects.clone());
     }
 
     fn upload_world(
@@ -300,7 +366,13 @@ impl Presenter {
                 first_index: d.first_index,
                 index_count: d.index_count,
                 transform: d.transform,
-                sphere: d.sphere,
+                // Offline at the start: uploaded hidden (a radius of 0,
+                // [`Presenter::place_objects`]).
+                sphere: if level.objects.instances[d.instance].online {
+                    d.sphere
+                } else {
+                    [d.sphere[0], d.sphere[1], d.sphere[2], 0.0]
+                },
                 tree: None,
                 object: Some(d.dynamic_props),
             }))
@@ -331,6 +403,7 @@ impl Presenter {
             })
             .collect::<Option<Vec<_>>>()
             .map(|sections| SkyTextures { sections });
+        self.first_object_draw = draws.len() - level.objects.draws.len();
         // The static geometry streams from its file to the GPU, a piece
         // at a time.
         let path = level.geometry_path();

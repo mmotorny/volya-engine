@@ -8,7 +8,9 @@
 //! docs/behavior/static-shading.md section 9), with its collision world
 //! (docs/formats/level-cform.md), walked by the player in first person
 //! (docs/behavior/player-movement.md) within its character's condition
-//! (docs/behavior/player-state.md).
+//! (docs/behavior/player-state.md), its objects switched online and
+//! offline by the offline simulation as the player moves
+//! (docs/behavior/offline-simulation.md).
 //!
 //! [`LevelScreen::load`] reads everything synchronously through the VFS
 //! but the geometry's buffers: only their layout is read
@@ -33,7 +35,9 @@ use crate::core::config::Config;
 use crate::core::input::Input;
 use crate::core::level::{DrawItem, Level};
 use crate::core::movement::{Flags, MovementConfig, Player};
-use crate::core::switching::{StartState, SwitchDistances};
+use crate::core::simulation::graph::Graph;
+use crate::core::simulation::navigation::Navigation;
+use crate::core::simulation::{AlifeConfig, Changes, Simulation};
 use crate::core::vfs::{self, Vfs};
 use crate::core::weather::{Environment, Weather};
 use crate::data::GameData;
@@ -49,7 +53,9 @@ use volya_engine_formats::env_mod::{self, EnvModifier};
 use volya_engine_formats::game_graph::GameGraph;
 use volya_engine_formats::gamemtl;
 use volya_engine_formats::level_geom::GeomFile;
+use volya_engine_formats::model as model_math;
 use volya_engine_formats::object::{self as record, ObjectRecord};
+use volya_engine_formats::patrol_path::PatrolPaths;
 use volya_engine_formats::shaders_xr;
 use volya_engine_formats::spawn;
 use volya_engine_formats::ui::Resolution;
@@ -138,6 +144,14 @@ pub struct LevelScreen {
     back: bool,
     /// The sun's fade (sky.md 7.3).
     sun_fade: SunFade,
+    /// The offline simulation (offline-simulation.md); `None` only in the
+    /// unit tests' empty level.
+    simulation: Option<Simulation>,
+    /// Where each of the objects' instances is drawn; `None` while it is
+    /// not online. Shared with the scenes, replaced when it changes.
+    placements: Arc<Vec<Option<Mat4>>>,
+    /// Instance of each object id with a loaded visual.
+    instances: HashMap<u16, usize>,
 }
 
 /// What the engine interface reports.
@@ -369,11 +383,13 @@ pub fn player_record(spawn_file: &[u8], index: u32, system: &Config) -> io::Resu
 /// from its record `player`: the profile's specific character, the
 /// communities of `[game_relations]` (`config\creatures\game_relations.ltx`
 /// unless the system configuration holds the section) and the name's
-/// translation.
+/// translation. Its items take ids from `first_id` on
+/// (offline-simulation.md 8.1).
 pub fn new_game_character(
     tree: &dyn Vfs,
     data: &GameData,
     player: &ObjectRecord,
+    first_id: u16,
 ) -> io::Result<CharacterState> {
     let record::Object::Player(p) = &player.object else {
         return Err(invalid(format!("{}: not the player", player.header.name)));
@@ -412,6 +428,7 @@ pub fn new_game_character(
         communities: &communities,
         character_name: data.strings.get(&specific.name),
         seed: SUPPLY_SEED,
+        first_id,
     })
 }
 
@@ -423,19 +440,67 @@ pub fn new_game_player(
 ) -> io::Result<(ObjectRecord, CharacterState)> {
     let new = read_new_game(tree, data)?;
     let player = player_record(&new.spawn_file, new.actor.index, &data.system)?;
-    let character = new_game_character(tree, data, &player)?;
+    let dir = data.aliases.path("$game_levels$", &new.level)?;
+    let clock = GameClock::new_game(&*alife(tree, data)?)?;
+    let (_, character) = new_game_simulation(tree, data, new.spawn_file, new.graph, &dir, &clock)?;
     Ok((player, character))
 }
 
 /// `config\alife.ltx`, or the system configuration where it holds
-/// `[alife]` already (borrowed, not copied).
+/// `[alife]` already.
 fn alife<'a>(tree: &dyn Vfs, data: &'a GameData) -> io::Result<Cow<'a, Config>> {
     match data.system.section("alife") {
         Some(_) => Ok(Cow::Borrowed(&data.system)),
-        None => {
-            config::load(tree, &data.aliases.path("$game_config$", "alife.ltx")?).map(Cow::Owned)
-        }
+        None => Ok(Cow::Owned(config::load(
+            tree,
+            &data.aliases.path("$game_config$", "alife.ltx")?,
+        )?)),
     }
+}
+
+/// A New Game's offline simulation (offline-simulation.md) and player
+/// character: every record of `spawn_file` created and registered (8.1),
+/// the player character supplying the player (player-state.md sections 2,
+/// 3), the spawn file then dropped, the current level's navigation data
+/// read from its directory `dir` (6.1), and the first switch pass at
+/// `clock`'s time (6.2, level-objects.md 2.4: all objects evaluated once
+/// while the loading image shows), which brings the player online: it then
+/// receives its bolt (player-state.md 3.2) with the next id.
+fn new_game_simulation(
+    tree: &dyn Vfs,
+    data: &GameData,
+    spawn_file: Vec<u8>,
+    graph: GameGraph,
+    dir: &str,
+    clock: &GameClock,
+) -> io::Result<(Simulation, CharacterState)> {
+    let alife = alife(tree, data)?;
+    let paths = PatrolPaths::parse(&spawn_file)?;
+    let mut sim = Simulation::new(
+        Graph::new(graph),
+        paths,
+        AlifeConfig::read(&alife, &data.system)?,
+    );
+    let mut character = None;
+    sim.new_game(&spawn_file, &data.system, &mut |player, first_id| {
+        let c = new_game_character(tree, data, player, first_id)?;
+        let n = u16::try_from(c.item_count()).map_err(|_| invalid("too many items"))?;
+        character = Some(c);
+        Ok(n)
+    })?;
+    drop(spawn_file);
+    let mut character = earlier(character, "player character")?;
+    let level = sim
+        .current_level()
+        .ok_or_else(|| invalid("spawn file: no actor"))?;
+    sim.set_navigation(Navigation::read(tree, dir, &sim.graph.graph, level)?)?;
+    sim.update(
+        clock.time(),
+        clock.game_time().normal_time_factor,
+        hour(clock),
+    )?;
+    character.receive_bolt(&data.system, sim.take_id()?)?;
+    Ok((sim, character))
 }
 
 /// The file of texture `name`: `$level$<name>.dds`, then
@@ -615,12 +680,20 @@ pub struct NewGameLoad {
     /// switch pass.
     spawn_file: Vec<u8>,
     graph: Option<GameGraph>,
-    online: Vec<objects::OnlineObject>,
+    simulation: Option<Simulation>,
+    /// The objects whose visuals the level loads.
+    level_objects: Vec<objects::LevelObject>,
     spawned: Option<objects::Spawned>,
     /// Per model, per mesh: its surface.
     mesh_surfaces: Vec<Vec<Option<u32>>>,
     objects_not_drawn: Vec<(String, String)>,
     dynamic_props: Vec<[f32; 4]>,
+}
+
+/// The game hour of `clock`, 0 … 23 (the scripts' switch rules,
+/// level-objects.md 2.5).
+fn hour(clock: &GameClock) -> u32 {
+    (clock.time_of_day() / 3600.0) as u32
 }
 
 /// What a stage needs from an earlier one, or an error naming it.
@@ -649,32 +722,22 @@ impl NewGameLoad {
                 self.spawn_file = new.spawn_file;
                 self.graph = Some(new.graph);
             }
-            // The New Game's clock (sav.md section 5), the player character
-            // the simulation supplies (player-state.md sections 2, 3) and the
-            // switch pass over the level's objects (level-objects.md section
-            // 2), placed under this caption by us (the server has created
-            // the game).
+            // The New Game's clock (sav.md section 5); the offline
+            // simulation's New Game (offline-simulation.md 8.1), the player
+            // character supplying the player (player-state.md sections 2,
+            // 3), the current level's navigation data (6.1); and its first
+            // switch pass (6.2, level-objects.md 2.4: all objects
+            // evaluated once while the loading image shows), placed under
+            // this caption by us (the server has created the game).
             Stage::ServerConnecting => {
-                let name = earlier(self.name.as_deref(), "level")?;
-                let actor = earlier(self.actor.as_ref(), "actor")?;
-                let player = player_record(&self.spawn_file, actor.index, &data.system)?;
-                self.character = Some(new_game_character(tree, data, &player)?);
-                let alife = alife(tree, data)?;
-                let clock = GameClock::new_game(&alife)?;
-                let start = StartState {
-                    actor: actor.position,
-                    hour: (clock.time_of_day() / 3600.0) as u32,
-                };
+                let clock = GameClock::new_game(&*alife(tree, data)?)?;
                 let graph = earlier(self.graph.take(), "game graph")?;
                 let spawn_file = std::mem::take(&mut self.spawn_file);
-                self.online = objects::online_objects(
-                    &spawn_file,
-                    &graph,
-                    name,
-                    &data.system,
-                    &start,
-                    &SwitchDistances::read(&alife)?,
-                )?;
+                let (sim, character) =
+                    new_game_simulation(tree, data, spawn_file, graph, &dir, &clock)?;
+                self.character = Some(character);
+                self.level_objects = objects::level_objects(&sim);
+                self.simulation = Some(sim);
                 self.clock = Some(clock);
             }
             // `level.ltx` is read under this caption; a level's files must
@@ -773,8 +836,8 @@ impl NewGameLoad {
                 self.controls = Some(data.controls.clone());
                 let weather_name = start_weather(tree, data, name)?;
                 self.weather = Some(Weather::load(&data.system, &weather_name)?);
-                let online = std::mem::take(&mut self.online);
-                self.spawned = Some(objects::spawn(tree, data, &dir, &online)?);
+                let level_objects = std::mem::take(&mut self.level_objects);
+                self.spawned = Some(objects::spawn(tree, data, &dir, &level_objects)?);
             }
             // Every texture file the level needs is located here. The
             // presenter reads and uploads them with the first frame that
@@ -878,6 +941,7 @@ impl NewGameLoad {
         let clock = earlier(self.clock, "game clock")?;
         let character = earlier(self.character, "player character")?;
         let spawned = earlier(self.spawned, "objects")?;
+        let simulation = earlier(self.simulation, "simulation")?;
         if self.dynamic_props.len() != spawned.instances.len() {
             return Err(invalid("loading stages out of order: no light inputs"));
         }
@@ -887,6 +951,17 @@ impl NewGameLoad {
             &self.dynamic_props,
             self.objects_not_drawn,
         );
+        let placements = objects
+            .instances
+            .iter()
+            .map(|i| i.online.then_some(i.transform))
+            .collect();
+        let instances = objects
+            .instances
+            .iter()
+            .enumerate()
+            .map(|(k, i)| (i.id, k))
+            .collect();
         // start-position.md sections 4 and 5: standing at the stored
         // position, the camera at the spawn's angles.
         let player = Player::new(
@@ -927,6 +1002,9 @@ impl NewGameLoad {
             last: now,
             back: false,
             sun_fade: SunFade::default(),
+            simulation: Some(simulation),
+            placements: Arc::new(placements),
+            instances,
         };
         screen.update_view();
         Ok(screen)
@@ -1050,6 +1128,7 @@ impl LevelScreen {
             );
         }
         self.back |= back;
+        self.simulate();
         // sky.md 7.3, k_t from the game clock.
         let (a, b, t) = self.weather.bracket_indices(self.clock.time_of_day());
         self.sun_fade.frame(
@@ -1059,6 +1138,62 @@ impl LevelScreen {
             self.clock.time_factor(),
         );
         self.update_view();
+    }
+
+    /// One update of the offline simulation (offline-simulation.md 6.2)
+    /// with the actor where the player stands, at the clock's game time,
+    /// and the objects' visuals following what switched. Runs only in
+    /// [`LevelScreen::update`], so it stands still while the game is paused
+    /// or the page hidden. A simulation error leaves the objects as they
+    /// are (our choice: the frame goes on).
+    fn simulate(&mut self) {
+        let Some(sim) = &mut self.simulation else {
+            return;
+        };
+        sim.set_actor_position(self.player.state().position);
+        let changes = sim.update(
+            self.clock.time(),
+            self.clock.game_time().normal_time_factor,
+            hour(&self.clock),
+        );
+        if let Ok(changes) = changes {
+            self.place_objects(&changes);
+        }
+    }
+
+    /// Shows the instances of objects that came online, at their records'
+    /// placements (level-objects.md 3.4), and hides those that went
+    /// offline or were removed. An object online without a loaded visual
+    /// (one that came onto the level by travel) stays undrawn (our
+    /// limitation: visuals load with the level).
+    fn place_objects(&mut self, changes: &Changes) {
+        if changes.is_empty() {
+            return;
+        }
+        let Some(sim) = &self.simulation else { return };
+        let mut placements = (*self.placements).clone();
+        let mut changed = false;
+        for &id in &changes.online {
+            if let (Some(&k), Some(o)) = (self.instances.get(&id), sim.object(id)) {
+                let h = &o.record.header;
+                placements[k] = Some(model_math::transform(h.position, h.angles));
+                changed = true;
+            }
+        }
+        for &id in changes.offline.iter().chain(&changes.removed) {
+            if let Some(&k) = self.instances.get(&id) {
+                placements[k] = None;
+                changed = true;
+            }
+        }
+        if changed {
+            self.placements = Arc::new(placements);
+        }
+    }
+
+    /// The offline simulation.
+    pub fn simulation(&self) -> Option<&Simulation> {
+        self.simulation.as_ref()
     }
 
     /// The game clock.
@@ -1110,6 +1245,7 @@ impl LevelScreen {
             // The shaders' clock starts when the level is shown (our choice;
             // which clock is unestablished, ogf.md section 10).
             time: clock_ms.saturating_sub(self.shown) as f32 / 1000.0,
+            objects: self.placements.clone(),
             sky: Some(sky::sky_frame(
                 &self.environment,
                 a,
@@ -1168,8 +1304,22 @@ impl LevelScreen {
                 sprint_locked: self.controls.sprint_lock.locked(),
             },
             character: self.character.as_ref().map(CharacterReport::of),
-            objects: self.world.objects.report(),
+            objects: self.objects_report(),
         }
+    }
+
+    /// The objects' report with the current online objects and drawn
+    /// instances.
+    fn objects_report(&self) -> ObjectsReport {
+        let mut report = self.world.objects.report();
+        if let Some(sim) = &self.simulation {
+            report.online = sim
+                .level_list()
+                .filter(|&id| sim.object(id).is_some_and(|o| o.online))
+                .count();
+        }
+        report.with_model = self.placements.iter().filter(|p| p.is_some()).count();
+        report
     }
 
     /// The player in the level.
@@ -1286,6 +1436,9 @@ impl LevelScreen {
             last: now,
             back: false,
             sun_fade: SunFade::default(),
+            simulation: None,
+            placements: Arc::new(Vec::new()),
+            instances: HashMap::new(),
         }
     }
 }

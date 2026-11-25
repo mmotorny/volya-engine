@@ -11,6 +11,23 @@
 // lock (mouse look needs relative motion), and leaving the level releases
 // it. The on-screen touch controls (touch-controls.js) send their own
 // messages; touches on them don't arrive here.
+//
+// Whenever the game shows its mouse cursor, touch is a touchpad for it
+// (touchpad.js, #108): swipes move the cursor, taps click at it, and a
+// touch never clicks where it lands. Elsewhere touches go as contacts.
+// Each touchpad touch stays one until lifted; direct touches still down
+// when the cursor appears are dropped (their button released, the cursor
+// left where it is).
+//
+// The page's text entry is focused in the handler of the touchpad's click
+// (`onClick`): that the device's keyboard rises for a focus in a pointerup
+// handler is believed, not measured (WebKit dispatches pointer events from
+// its touch events). While the cursor shows, touchend is cancelled too: the
+// Touch Events specification documents that this suppresses the
+// compatibility mouse events and the click, so no synthetic mousedown blurs
+// the input just focused.
+
+import { createTouchpad } from "./touchpad.js";
 
 // KeyboardEvent.code → engine key name (layout-independent positions): the
 // W3C UI Events code values (a public standard) paired with the game's key
@@ -163,17 +180,46 @@ const AXIS_EPSILON = 0.02;
 
 /**
  * Starts listening; `send(event)` posts one message to the engine worker.
- * Returns `setCapture(on)`, called when the engine reports capture changes,
- * and `setLevel(on)`, called when the level's controls go live or stop.
+ * `onClick()` runs in the event handler of a touchpad gesture pressing the
+ * left button (the page may focus its text entry there: a device's keyboard
+ * rises only in a user gesture). Returns `setCapture(on)`, called when the
+ * engine reports capture changes, `setLevel(on)`, called when the level's
+ * controls go live or stop, and `setCursor(shown)`, called when the game's
+ * cursor shows or hides.
  */
-export function startInput(view, send) {
+export function startInput(view, send, { onClick = () => {} } = {}) {
   let capture = false;
-  // The page's text entry over the save screen's name field
-  // (text-entry.js): a tap on it reaches the engine too, but its default
-  // (focus, the device's keyboard) stays; characters typed into it arrive
-  // as text.
+  // The page's text entry for the save screen's name field
+  // (text-entry.js): characters typed into it arrive as text.
   const entry = (event) => event.target?.closest?.("#text-entry");
   let level = false;
+  // The touchpad while the game shows its cursor; which way each touch
+  // down goes ("pad" or "direct").
+  let cursor = false;
+  const pad = createTouchpad();
+  const routes = new Map();
+  let longPress = null;
+  const padSend = (messages) => {
+    for (const message of messages) send(message);
+    clearTimeout(longPress);
+    const due = pad.deadline();
+    if (due !== null) {
+      longPress = setTimeout(() => padSend(pad.tick(performance.now())), Math.max(0, due - performance.now()));
+    }
+  };
+  const touchpad = (event) => {
+    const [x, y] = at(event);
+    const time = event.timeStamp;
+    const id = event.pointerId;
+    const out = {
+      pointerdown: () => pad.down(id, x, y, time),
+      pointermove: () => pad.move(id, x, y, time),
+      pointerup: () => pad.up(id, x, y, time),
+      pointercancel: () => pad.cancel(id, time),
+    }[event.type]();
+    if (out.some(([type, name, pressed]) => type === "cursor_button" && name === "left" && pressed)) onClick();
+    padSend(out);
+  };
   // The page's root takes the lock: the canvas lets pointer events through
   // (style.css), and locked events then target the root and reach `pointer`.
   const root = document.documentElement;
@@ -192,10 +238,18 @@ export function startInput(view, send) {
   const pointer = (event) => {
     if (!capture) return;
     if (event.pointerType === "touch") {
+      event.preventDefault();
+      if (event.type === "pointerdown") routes.set(event.pointerId, cursor ? "pad" : "direct");
+      const route = routes.get(event.pointerId);
+      if (event.type === "pointerup" || event.type === "pointercancel") routes.delete(event.pointerId);
+      if (route === "pad") {
+        touchpad(event);
+        return;
+      }
+      if (route !== "direct") return;
       // Every contact, with its id; the primary one also drives the cursor.
       const phase = { pointerdown: "start", pointermove: "move" }[event.type] ?? "end";
       send(["touch", ...at(event), phase, event.timeStamp, event.pointerId, event.isPrimary]);
-      if (!entry(event)) event.preventDefault();
       return;
     }
     // Mouse and pen. A button pressed or released while another is held
@@ -219,6 +273,9 @@ export function startInput(view, send) {
     addEventListener(type, pointer, { passive: false });
   }
   addEventListener("contextmenu", (event) => capture && event.preventDefault());
+  addEventListener("touchend", (event) => capture && cursor && event.cancelable && event.preventDefault(), {
+    passive: false,
+  });
   // Wheel steps (our choice): one per line or page, one per WHEEL_PIXELS of
   // pixel scrolling (trackpads send many small deltas); negative is up.
   let wheel = 0;
@@ -263,6 +320,7 @@ export function startInput(view, send) {
   // a fresh press: a toggle, a jump, an Escape); stick and trigger values are
   // sent again by the next poll.
   const releaseAll = () => {
+    padSend(pad.reset(performance.now()));
     send(["blur"]);
     for (const last of pads.values()) last.axes = {};
   };
@@ -310,6 +368,19 @@ export function startInput(view, send) {
     requestAnimationFrame(poll);
   };
 
+  // Touchpad touches down when the cursor hides are forgotten (a drag
+  // released); direct touches down when it shows are dropped.
+  const setCursor = (shown) => {
+    if (shown === cursor) return;
+    cursor = shown;
+    if (!shown) padSend(pad.reset(performance.now()));
+    const direct = [...routes].filter(([, route]) => route === "direct");
+    if (shown && direct.length > 0) {
+      for (const [id] of direct) routes.set(id, "dropped");
+      send(["touch_drop"]);
+    }
+  };
+
   const setLevel = (on) => {
     level = on;
     if (!on && locked()) document.exitPointerLock();
@@ -318,6 +389,8 @@ export function startInput(view, send) {
   const setCapture = (on) => {
     if (on === capture) return;
     capture = on;
+    padSend(pad.reset(performance.now()));
+    routes.clear();
     // The engine takes touch gestures (no scrolling or zooming).
     document.documentElement.toggleAttribute("data-engine-input", on);
     pads.clear();
@@ -326,5 +399,5 @@ export function startInput(view, send) {
       requestAnimationFrame(poll);
     }
   };
-  return { setCapture, setLevel };
+  return { setCapture, setLevel, setCursor };
 }

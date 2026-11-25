@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! Builds the vendored LuaJIT 1.0.3 interpreter (vendor/luajit-1.0.3, left
-//! unmodified) with our shims (csrc/): natively with the system C compiler,
-//! for wasm32 with Homebrew LLVM clang against our minimal C library
-//! (csrc/wasm). See docs/architecture.md (Scripts).
+//! unmodified; [`PATCHES`] change a copy) with our shims (csrc/): natively
+//! with the system C compiler, for wasm32 with Homebrew LLVM clang against
+//! our minimal C library (csrc/wasm). See docs/architecture.md (Scripts).
 
 use std::env;
 use std::fs;
@@ -33,9 +33,11 @@ const SHIMS: &[&str] = &[
     "volya_rand",
 ];
 
-/// The build's only change to a vendored file, applied to a copy in OUT_DIR:
+/// The build's changes to vendored files, applied to a copy in OUT_DIR. Each
+/// `(from, to)` must match exactly once.
+const PATCHES: &[(&str, &[(&str, &str)])] = &[("luaconf.h", LUACONF_PATCH), ("llex.c", LLEX_PATCH)];
+
 /// `luaconf.h` is Lua's configuration header, meant to be edited by embedders.
-/// Each `(from, to)` must match exactly once.
 const LUACONF_PATCH: &[(&str, &str)] = &[
     // The original's x86 build converts numbers to integers by rounding
     // (docs/behavior/script-environment.md 2.5), with this file's x86 branch:
@@ -63,6 +65,36 @@ const LUACONF_PATCH: &[(&str, &str)] = &[
          #define lua_str2number(s,p)\tvolya_strtod((s), (p))\n",
     ),
 ];
+
+/// The original's runtime extends the lexer with C-style comments
+/// (docs/behavior/script-loading.md 1), in every chunk it compiles: a case for
+/// `/` in `luaX_lex`, where a token can start, so never inside strings or `--`
+/// comments. `//` runs up to, not including, the next LF (1.3). `/*` skips
+/// bytes, a `*` together with the byte after it, until that byte is `/`; it
+/// needs no end and doesn't count its line breaks (1.4). Any other `/` is
+/// division, as before.
+const LLEX_PATCH: &[(&str, &str)] = &[(
+    "      case EOZ: {\n        return TK_EOS;\n      }\n",
+    "      case '/': {  /* Volya Engine: C-style comments. */\n\
+     \x20       next(ls);\n\
+     \x20       if (ls->current == '/') {\n\
+     \x20         while (ls->current != '\\n' && ls->current != EOZ)\n\
+     \x20           next(ls);\n\
+     \x20         continue;\n\
+     \x20       }\n\
+     \x20       if (ls->current != '*') return '/';\n\
+     \x20       next(ls);\n\
+     \x20       while (ls->current != EOZ) {\n\
+     \x20         int star = (ls->current == '*');\n\
+     \x20         next(ls);\n\
+     \x20         if (!star) continue;\n\
+     \x20         if (ls->current == '/') { next(ls); break; }\n\
+     \x20         if (ls->current != EOZ) next(ls);\n\
+     \x20       }\n\
+     \x20       continue;\n\
+     \x20     }\n\
+     \x20     case EOZ: {\n        return TK_EOS;\n      }\n",
+)];
 
 fn main() {
     let root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
@@ -107,16 +139,16 @@ fn main() {
     shims.compile("volya_luajit_shims");
 }
 
-/// Copies the vendored sources to `to`, patching `luaconf.h`.
+/// Copies the vendored sources to `to`, applying [`PATCHES`].
 fn copy_patched(from: &Path, to: &Path) {
     fs::create_dir_all(to).unwrap();
     for entry in fs::read_dir(from).unwrap() {
         let path = entry.unwrap().path();
         let name = path.file_name().unwrap();
         let mut text = fs::read_to_string(&path).unwrap();
-        if name == "luaconf.h" {
-            for (from, to) in LUACONF_PATCH {
-                assert_eq!(text.matches(from).count(), 1, "luaconf.h patch: {from:?}");
+        if let Some((file, patch)) = PATCHES.iter().find(|(file, _)| name == *file) {
+            for (from, to) in *patch {
+                assert_eq!(text.matches(from).count(), 1, "{file} patch: {from:?}");
                 text = text.replacen(from, to, 1);
             }
         }

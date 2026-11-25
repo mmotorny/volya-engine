@@ -142,6 +142,12 @@ impl Candidate {
         }
     }
 
+    /// One of the electra artefacts, with a scripted *on* of their own
+    /// (section 2.5).
+    pub fn is_electra(&self) -> bool {
+        self.class_id == "SCRPTART" && ELECTRA_ARTEFACTS.contains(&self.section.as_str())
+    }
+
     /// The engine's "can switch online" (section 2.3).
     pub fn engine_on(&self, m: bool) -> bool {
         m && self.state_flags & STATE_SWITCH_ONLINE != 0
@@ -163,35 +169,62 @@ impl Candidate {
     }
 
     /// Both predicates `(on, off)` of an offline object at a New Game: the
-    /// engine's, or the shipped scripts' replacements (section 2.5). A
-    /// `[spawner]` condition never holds at a New Game (section 2.5: each
-    /// requires an information portion the actor lacks; we do not evaluate
-    /// condition lists, and take any for false).
+    /// engine's, or the shipped scripts' replacements (section 2.5), with
+    /// the scripts' distances from the record's position.
     pub fn predicates(&self, start: &StartState) -> io::Result<(bool, bool)> {
+        self.predicates_in(start, false, self.position)
+    }
+
+    /// Both predicates `(on, off)` of the object, `online` or not, the
+    /// scripts' distances measured from `node`, the position of its
+    /// level-graph node (section 2.5). A `[spawner]` condition never holds
+    /// (section 2.5: each requires an information portion the actor lacks
+    /// at the start; we do not evaluate condition lists, and take any for
+    /// false). The actor exists and is alive (our choice: the player's
+    /// death is not modelled).
+    pub fn predicates_in(
+        &self,
+        state: &StartState,
+        online: bool,
+        node: [f32; 3],
+    ) -> io::Result<(bool, bool)> {
         let m = self.renderer_match()?;
         let on = self.engine_on(m);
         let off = self.engine_off(m);
         let class = self.class_id.as_str();
-        Ok(if class == "AI_STL_S" || class.starts_with("SM_") {
-            let job = self.job_online;
-            // Offline, with the actor alive: the job value if set; else the
-            // engine's without a spawner; else the (failing) condition. A
-            // stalker's `dont_spawn_online` field is a script variable no
-            // shipped script sets (section 2.5), so it is taken as false
-            // (our omission: no scripts run here).
+        let job = self.job_online;
+        let off_scripted = job.map_or(off, |j| !j);
+        Ok(if class == "AI_STL_S" {
+            // The job value if set; else the engine's without a spawner;
+            // else the condition (false), which while offline also needs
+            // the engine's. A stalker's `dont_spawn_online` field is a
+            // script variable no shipped script sets (section 2.5), so it
+            // is taken as false (our omission: no scripts run here).
             let on = match job {
                 Some(j) => j,
                 None if !self.spawner => on,
                 None => false,
             };
-            (on, job.map_or(off, |j| !j))
-        } else if class == "SCRPTART" && ELECTRA_ARTEFACTS.contains(&self.section.as_str()) {
+            (on, off_scripted)
+        } else if class.starts_with("SM_") {
+            // As the stalker's, except that an online monster with a
+            // spawner whose condition fails keeps the engine's `on` (no
+            // record sets `check_distance`).
+            let on = match job {
+                Some(j) => j,
+                None if !self.spawner || online => on,
+                None => false,
+            };
+            (on, off_scripted)
+        } else if self.is_electra() {
+            let night = state.hour <= 4;
+            let d = distance(node, state.actor);
             let on = if self.has_parent {
                 true
+            } else if online {
+                night || d < ELECTRA_DISTANCE
             } else {
-                // Measured from the record's position, not its level-graph
-                // node (our approximation: the level graph is not read).
-                start.hour <= 4 && distance(self.position, start.actor) >= ELECTRA_DISTANCE
+                night && d >= ELECTRA_DISTANCE
             };
             (on, off)
         } else if class == "SCRPTCAR" {
@@ -212,6 +245,22 @@ impl Candidate {
     ) -> io::Result<bool> {
         let (on, off) = self.predicates(start)?;
         Ok(on && (!off || distance(self.position, start.actor) <= distances.online))
+    }
+}
+
+/// The rule of section 2.4: whether an object, `online` or not, is online
+/// after one evaluation with predicates `on` and `off` at `distance` from
+/// the actor.
+pub fn switched(
+    online: bool,
+    (on, off): (bool, bool),
+    distance: f32,
+    distances: &SwitchDistances,
+) -> bool {
+    if online {
+        !off || (on && distance <= distances.offline)
+    } else {
+        on && (!off || distance <= distances.online)
     }
 }
 

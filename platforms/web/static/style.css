@@ -451,10 +451,11 @@ button.touch-button.down .touch-edges {
   opacity: 0.6;
 }
 
-/* The text entry over the save screen's name field on touch screens
+/* The text entry for the save screen's name field on touch screens
    (text-entry.js, #94): laid out as the canvas, an unseen input over the
-   field the engine draws. 16 px text: iOS zooms into smaller fields on
-   focus (believed). */
+   field the engine draws, never taking taps itself (the cursor clicks the
+   field, #108). 16 px text: iOS zooms into smaller fields on focus
+   (believed). */
 #text-entry {
   position: fixed;
   inset: 0;
@@ -486,7 +487,7 @@ button.touch-button.down .touch-edges {
   color: transparent;
   caret-color: transparent;
   font-size: 16px;
-  pointer-events: auto;
+  pointer-events: none;
 }
 
 /* The offer of full screen with Keyboard Lock in the level (fullscreen.js,

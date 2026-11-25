@@ -1,11 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! The runtime's behaviour, checked on every target: natively by
+//! The runtime's behaviour and the script loader, checked on every target: natively by
 //! `cargo test`, in the browser by the `script_selftest` op (docs/testing.md,
 //! Shared conformance checks).
 
 use crate::{ErrorKind, Lua, Value};
+
+mod loading;
 
 /// Runs every check; `Err` lists the failures.
 pub fn check() -> Result<(), String> {
@@ -15,6 +17,9 @@ pub fn check() -> Result<(), String> {
         fail(e);
     }
     if let Err(e) = api_checks() {
+        fail(e);
+    }
+    if let Err(e) = loading::check() {
         fail(e);
     }
     if failures.is_empty() {
