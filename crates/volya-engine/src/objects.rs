@@ -22,8 +22,9 @@ use std::sync::Mutex;
 
 use serde::Serialize;
 
+use crate::core::character::SpecificCharacter;
 use crate::core::collision::CollisionWorld;
-use crate::core::config::Config;
+use crate::core::config::{Config, value};
 use crate::core::object_light;
 use crate::core::switching::{Candidate, StartState, SwitchDistances};
 use crate::core::vfs::{self, Vfs};
@@ -135,16 +136,16 @@ fn plain_name(name: &str) -> String {
     }
 }
 
-/// The specific characters' visuals (section 3.2, item 3), read on first
-/// use: `config\gameplay\npc_profile.xml` and the files of `[profiles]
-/// specific_characters_files`.
+/// The specific characters (section 3.2, item 3; player-state.md 2.2),
+/// read on first use: `config\gameplay\npc_profile.xml` and the files of
+/// `[profiles] specific_characters_files`.
 pub struct Characters<'a> {
     tree: &'a dyn Vfs,
     data: &'a GameData,
     /// Profile id → its named specific character.
     profiles: Option<HashMap<String, String>>,
-    /// Specific character id → its `<visual>`.
-    visuals: Option<HashMap<String, String>>,
+    /// Specific character id → its description.
+    descriptions: Option<HashMap<String, SpecificCharacter>>,
 }
 
 impl<'a> Characters<'a> {
@@ -153,7 +154,7 @@ impl<'a> Characters<'a> {
             tree,
             data,
             profiles: None,
-            visuals: None,
+            descriptions: None,
         }
     }
 
@@ -168,15 +169,27 @@ impl<'a> Characters<'a> {
         xml::parse(&text).map_err(|e| invalid(format!("{path}: {e}")))
     }
 
-    /// The `<visual>` of the trader-like block's specific character: the
-    /// block's own if named, else its profile's `<specific_character>`.
-    /// Profiles and descriptions are found by their `id` attribute, and a
-    /// file named in `specific_characters_files` without `.xml` gets it
-    /// appended (our reading: the spec says only that they name them).
-    /// A profile that names none would choose at random among the
-    /// descriptions of its class; we keep the record's visual then (our
-    /// choice).
+    /// The `<visual>` of the trader-like block's specific character
+    /// ([`Self::specific_character`]) as a visual name; without one the
+    /// record's visual is kept (our choice).
     pub fn visual(&mut self, trader: &TraderLike) -> io::Result<Option<String>> {
+        Ok(self
+            .specific_character(trader)?
+            .map(|c| plain_name(&c.visual))
+            .filter(|v| !v.is_empty()))
+    }
+
+    /// The trader-like block's specific character: the block's own if
+    /// named, else its profile's `<specific_character>`. Profiles and
+    /// descriptions are found by their `id` attribute, and a file named in
+    /// `specific_characters_files` without `.xml` gets it appended (our
+    /// reading: the spec says only that they name them). A profile that
+    /// names none would choose at random among the descriptions of its
+    /// class; we give none then (our choice).
+    pub fn specific_character(
+        &mut self,
+        trader: &TraderLike,
+    ) -> io::Result<Option<&SpecificCharacter>> {
         let id = if trader.specific_character.is_empty() {
             if self.profiles.is_none() {
                 let doc = self.document("npc_profile.xml")?;
@@ -204,14 +217,14 @@ impl<'a> Characters<'a> {
         } else {
             trader.specific_character.clone()
         };
-        if self.visuals.is_none() {
+        if self.descriptions.is_none() {
             let files = self
                 .data
                 .system
                 .get("profiles", "specific_characters_files")
                 .flatten()
                 .unwrap_or("");
-            let mut visuals = HashMap::new();
+            let mut descriptions = HashMap::new();
             for file in files.split(',').map(str::trim).filter(|f| !f.is_empty()) {
                 let name = if file.ends_with(".xml") {
                     file.to_owned()
@@ -224,22 +237,42 @@ impl<'a> Characters<'a> {
                     xml::Node::Text(_) => None,
                 }) {
                     for c in d.children_named("specific_character") {
-                        if let (Some(id), Some(v)) =
-                            (c.attr("id"), c.child("visual").and_then(|e| e.value()))
-                        {
-                            visuals.insert(id.to_owned(), plain_name(v));
-                        }
+                        let Some(id) = c.attr("id") else {
+                            continue;
+                        };
+                        let text = |name: &str| {
+                            c.child(name)
+                                .and_then(|e| e.value())
+                                .unwrap_or("")
+                                .to_owned()
+                        };
+                        // Rank and reputation as integers (`00` is 0).
+                        let int = |name: &str| value::int(&text(name)) as i32;
+                        descriptions.insert(
+                            id.to_owned(),
+                            SpecificCharacter {
+                                id: id.to_owned(),
+                                community: text("community"),
+                                rank: int("rank"),
+                                reputation: int("reputation"),
+                                name: text("name"),
+                                visual: text("visual"),
+                                // The text writes its line breaks as `\n`
+                                // (player-state.md 3.1 item 3; that they
+                                // break lines is our reading).
+                                supplies: c
+                                    .child("supplies")
+                                    .and_then(|e| e.raw_value())
+                                    .unwrap_or("")
+                                    .replace("\\n", "\n"),
+                            },
+                        );
                     }
                 }
             }
-            self.visuals = Some(visuals);
+            self.descriptions = Some(descriptions);
         }
-        Ok(self
-            .visuals
-            .as_ref()
-            .and_then(|v| v.get(&id))
-            .filter(|v| !v.is_empty())
-            .cloned())
+        Ok(self.descriptions.as_ref().and_then(|d| d.get(&id)))
     }
 }
 

@@ -243,6 +243,19 @@ fn new_game_start_view_from_game_data() {
         at_six.len() / 4
     );
     assert!(presenter.take_errors().is_empty());
+
+    // The player character (player-state.md 4.1, 4.2): the first update
+    // had dt 0; 10 real seconds standing later (100 game seconds) satiety is
+    // 0.0015 lower, and paused time counts nothing.
+    let c = state.character.as_ref().unwrap();
+    assert_eq!((c.health, c.power, c.satiety, c.money), (1.0, 1.0, 1.0, 40));
+    assert_eq!(c.active_slot, Some(4));
+    screen.update(215_000, &Input::new());
+    let satiety = screen.state().character.unwrap().satiety;
+    assert!((satiety - (1.0 - 0.0015)).abs() < 1e-5, "{satiety}");
+    screen.paused(300_000);
+    screen.update(300_000, &Input::new());
+    assert_eq!(screen.state().character.unwrap().satiety, satiety);
 }
 
 /// Records the master gains set; plays nothing.

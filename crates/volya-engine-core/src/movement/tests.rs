@@ -37,6 +37,8 @@ fn config() -> MovementConfig {
             run_speed: 10.0,
             walk_amplitude: 0.005,
             walk_speed: 7.0,
+            limp_amplitude: 0.011,
+            limp_speed: 6.0,
         },
     }
 }
@@ -708,4 +710,61 @@ fn a_jump_pressed_again_in_the_air_waits_for_a_release() {
     now = run(&mut p, &world, now, &release, 0.016);
     run(&mut p, &world, now, &press, 0.016);
     assert!(p.state().flags.jump && p.state().airborne);
+}
+
+#[test]
+fn the_condition_limits_running_sprinting_and_moving() {
+    // player-state.md 4.3, through the ability to run (4.1), the condition's
+    // part of sprinting (4.3) and the unable-to-move check (5, item 4).
+    let world = floor();
+    let (mut p, now) = player(&world);
+    p.limits.limping = true;
+    let now = run(&mut p, &world, now, &FORWARD, 2.0);
+    assert!(
+        (horizontal_speed(&p) - 1.7).abs() < 0.05,
+        "{}",
+        horizontal_speed(&p)
+    );
+    // The state still runs for the condition's power use.
+    assert!(p.state_runs());
+    p.limits = Limits {
+        cant_sprint: true,
+        ..Limits::default()
+    };
+    let sprint = Request {
+        sprint_toggle: true,
+        ..FORWARD
+    };
+    let now = run(&mut p, &world, now, &sprint, 2.0);
+    let s = p.state();
+    assert!(!s.flags.sprint && s.sprint_requested);
+    assert!((horizontal_speed(&p) - 3.57).abs() < 0.05);
+    // The request stays: sprint resumes once the condition allows it.
+    p.limits = Limits::default();
+    let now = run(&mut p, &world, now, &FORWARD, 2.0);
+    assert!(p.state().flags.sprint);
+    p.limits.unable_to_move = true;
+    let now = run(&mut p, &world, now, &FORWARD, 2.0);
+    assert!(horizontal_speed(&p) < 0.01);
+    assert!(!p.state().flags.forward && !p.state().sprint_requested);
+    // A direction key ignored blocks the jump; without one it starts.
+    let jump = Request {
+        jump_pressed: true,
+        ..FORWARD
+    };
+    let now = run(&mut p, &world, now, &jump, 0.5);
+    assert!(!p.state().airborne && !p.jump_started());
+    let release = Request {
+        jump_released: true,
+        ..Request::default()
+    };
+    let now = run(&mut p, &world, now, &release, 0.1);
+    let press = Request {
+        jump_pressed: true,
+        ..Request::default()
+    };
+    p.frame(&world, now + 16, &press);
+    assert!(p.jump_started());
+    p.frame(&world, now + 32, &Request::default());
+    assert!(!p.jump_started());
 }

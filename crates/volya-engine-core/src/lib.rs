@@ -6,6 +6,7 @@
 
 pub mod audio;
 pub mod camera;
+pub mod character;
 pub mod clock;
 pub mod collision;
 pub mod config;

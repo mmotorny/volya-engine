@@ -11,11 +11,12 @@
 //!
 //! [`Player::frame`] runs one rendered frame from a [`Request`], the
 //! actions of the frame (a platform's input mapped onto the spec's actions
-//! of section 2 elsewhere). Out of scope, as the spec allows a first
-//! version (section 10): leaning, aiming, climbing, the character's
-//! condition (always able to run, sprint and move), impulses from other
-//! objects, and the body turning on its own (the heading follows the
-//! camera, see [`HEADING_SLACK`]).
+//! of section 2 elsewhere). The character's condition limits it through
+//! [`Limits`] (docs/behavior/player-state.md section 4.3, kept by
+//! [`crate::character`]). Out of scope, as the spec allows a first version
+//! (section 10): leaning, aiming, climbing, impulses from other objects, and
+//! the body turning on its own (the heading follows the camera, see
+//! [`HEADING_SLACK`]).
 
 use std::f32::consts::{FRAC_PI_4, PI};
 use std::io;
@@ -139,14 +140,15 @@ pub struct MovementConfig {
     pub bobbing: Bobbing,
 }
 
-/// `[bobbing_effector]` (9.1). Limping is out of scope, so its values are
-/// not read.
+/// `[bobbing_effector]` (9.1).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Bobbing {
     pub run_amplitude: f32,
     pub run_speed: f32,
     pub walk_amplitude: f32,
     pub walk_speed: f32,
+    pub limp_amplitude: f32,
+    pub limp_speed: f32,
 }
 
 fn required<'a>(section: &'a Section, key: &str) -> io::Result<&'a str> {
@@ -196,6 +198,8 @@ impl MovementConfig {
                 run_speed: bob_float("run_speed")?,
                 walk_amplitude: bob_float("walk_amplitude")?,
                 walk_speed: bob_float("walk_speed")?,
+                limp_amplitude: bob_float("limp_amplitude")?,
+                limp_speed: bob_float("limp_speed")?,
             },
         })
     }
@@ -315,6 +319,20 @@ impl Flags {
     }
 }
 
+/// What the character's condition allows the movement
+/// (docs/behavior/player-state.md section 4.3); the default limits nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Limits {
+    /// The character cannot run (4.1, ability to run) or sprint (4.3); its
+    /// bobbing is the limping row (9.1).
+    pub limping: bool,
+    /// The character's condition does not allow sprinting (4.3).
+    pub cant_sprint: bool,
+    /// Unable to move at all (5, item 4): too little power, too much
+    /// weight, or in a conversation.
+    pub unable_to_move: bool,
+}
+
 /// What the camera shows this frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct View {
@@ -328,6 +346,10 @@ pub struct View {
 pub struct Player {
     pub config: MovementConfig,
     pub settings: Settings,
+    /// The condition's limits, set before each frame.
+    pub limits: Limits,
+    /// A jump started in the latest frame (4.4).
+    jump_started: bool,
     body: PlayerBody,
     /// The camera's yaw and pitch (8; start-position.md 5).
     angles: Angles,
@@ -414,6 +436,8 @@ impl Player {
         let mut p = Self {
             config,
             settings,
+            limits: Limits::default(),
+            jump_started: false,
             body: PlayerBody::new(config.body, position),
             angles,
             heading: angles.yaw,
@@ -489,13 +513,29 @@ impl Player {
     pub fn paused(&mut self, now: u64) {
         self.last_ms = now;
         self.frame_time = 0.0;
+        self.jump_started = false;
     }
 
-    /// Whether flags `f` run (4.1); leaning and aiming are out of scope, so
-    /// only `g_always_run` and `accel` decide, and the character is always
-    /// able to run.
+    /// Whether flags `f` run (4.1) without the ability part; leaning and
+    /// aiming are out of scope, so only `g_always_run` and `accel` decide.
     fn runs(&self, accel: bool) -> bool {
         self.settings.always_run != accel
+    }
+
+    /// Whether the state runs (4.1) without the ability part, as the
+    /// condition's power use reads it (player-state.md 4.2).
+    pub fn state_runs(&self) -> bool {
+        self.runs(self.state.accel)
+    }
+
+    /// Whether the latest frame started a jump (4.4).
+    pub fn jump_started(&self) -> bool {
+        self.jump_started
+    }
+
+    /// The ability to run (4.1): not limping (player-state.md 4.3).
+    fn able_to_run(&self) -> bool {
+        !self.limits.limping
     }
 
     /// One rendered frame at engine clock `now` (ms) with `request`.
@@ -516,6 +556,7 @@ impl Player {
         // (7, 9).
         self.look(request, dt_f);
         let (a, take_off) = self.movement_update(world, now, request, dt_m);
+        self.jump_started = take_off;
         self.hand_over(a);
         if take_off {
             self.evaluate_take_off();
@@ -597,8 +638,24 @@ impl Player {
         self.landing_left = (self.landing_left - dt_m).max(0.0);
         self.state.landing = self.landing_left > 0.0;
 
-        // 5.1: the local direction (the unable-to-move check of 5.4 always
-        // passes: condition is out of scope).
+        // 5.4: unable to move, a direction key's request is ignored this
+        // frame, and with it the jump request (on frames that are not air
+        // frames: the check belongs to section 5's acceleration).
+        let blocked = !air
+            && self.limits.unable_to_move
+            && (request.forward || request.back || request.left || request.right);
+        let request = &if blocked {
+            Request {
+                forward: false,
+                back: false,
+                left: false,
+                right: false,
+                ..*request
+            }
+        } else {
+            *request
+        };
+        // 5.1: the local direction.
         let flag = |b: bool| f32::from(u8::from(b));
         let z = flag(request.forward) - flag(request.back);
         let x = flag(request.right) - flag(request.left);
@@ -649,11 +706,21 @@ impl Player {
                 self.sprint_request = false;
                 s.sprint = false;
             } else {
-                s.sprint = self.sprint_request && !s.left && !s.right;
+                // The ability to run and the condition (player-state.md 4.3).
+                s.sprint = self.sprint_request
+                    && !s.left
+                    && !s.right
+                    && !self.limits.limping
+                    && !self.limits.cant_sprint;
             }
             // 4.4: jump.
             self.cooldown -= dt_m;
-            if self.jump_request && !s.jump && self.cooldown <= 0.0 && self.jump_released {
+            if self.jump_request
+                && !blocked
+                && !s.jump
+                && self.cooldown <= 0.0
+                && self.jump_released
+            {
                 s.jump = true;
                 self.cooldown = JUMP_COOLDOWN;
                 self.jump_released = false;
@@ -688,7 +755,7 @@ impl Player {
             return [0.0; 3];
         }
         let c = &self.config;
-        let running = self.runs(s.accel);
+        let running = self.runs(s.accel) && self.able_to_run();
         let m = match (running, s.back) {
             (true, true) => c.run_back_coef,
             (true, false) => c.run_coef,
@@ -954,6 +1021,9 @@ impl Player {
             let bob = &self.config.bobbing;
             let (amplitude, rate) = if self.runs(self.state.accel) {
                 (bob.run_amplitude, bob.run_speed)
+            } else if self.limits.limping {
+                // player-state.md 4.3: believed to be the limping state.
+                (bob.limp_amplitude, bob.limp_speed)
             } else {
                 (bob.walk_amplitude, bob.walk_speed)
             };

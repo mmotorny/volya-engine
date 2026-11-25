@@ -1089,6 +1089,8 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
                 run_speed: 10.0,
                 walk_amplitude: 0.005,
                 walk_speed: 7.0,
+                limp_amplitude: 0.011,
+                limp_speed: 6.0,
             },
         };
         (world, config)

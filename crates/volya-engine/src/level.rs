@@ -7,7 +7,8 @@
 //! time of day (docs/formats/sav.md sections 5 and 12,
 //! docs/behavior/static-shading.md section 9), with its collision world
 //! (docs/formats/level-cform.md), walked by the player in first person
-//! (docs/behavior/player-movement.md).
+//! (docs/behavior/player-movement.md) within its character's condition
+//! (docs/behavior/player-state.md).
 //!
 //! [`LevelScreen::load`] reads everything synchronously through the VFS;
 //! the GPU copy of the geometry is made by the presenter on the first frame
@@ -20,6 +21,9 @@ use serde::Serialize;
 
 use crate::controls::Controls;
 use crate::core::camera::{self, Angles, Mat4, Vec3};
+use crate::core::character::condition::Activity;
+use crate::core::character::inventory::Place;
+use crate::core::character::{self, CharacterState, SpecificCharacter};
 use crate::core::clock::GameClock;
 use crate::core::collision::{CollisionWorld, geometry};
 use crate::core::config;
@@ -32,7 +36,7 @@ use crate::core::vfs::{self, Vfs};
 use crate::core::weather::{Environment, Weather};
 use crate::data::GameData;
 use crate::loading_screen::Stage;
-use crate::objects::{self, LevelObjects, ObjectsReport};
+use crate::objects::{self, Characters, LevelObjects, ObjectsReport};
 use crate::render::sky::{SkySection, SkyTextures};
 use crate::render::world::Surface;
 use crate::scene::{Scene, WorldScene};
@@ -42,6 +46,7 @@ use std::collections::HashMap;
 use volya_engine_formats::env_mod::{self, EnvModifier};
 use volya_engine_formats::game_graph::GameGraph;
 use volya_engine_formats::gamemtl;
+use volya_engine_formats::object::{self as record, ObjectRecord};
 use volya_engine_formats::shaders_xr;
 use volya_engine_formats::spawn;
 use volya_engine_formats::ui::Resolution;
@@ -107,6 +112,9 @@ pub struct LevelScreen {
     world: Arc<LevelWorld>,
     collision: CollisionWorld,
     player: Player,
+    /// The player character's state (docs/behavior/player-state.md); `None`
+    /// only in the unit tests' empty level.
+    character: Option<CharacterState>,
     controls: Controls,
     /// The near plane of the current view (start-position.md section 7).
     near: f32,
@@ -144,7 +152,105 @@ pub struct LevelState {
     /// The bracketing hourly sections A and B.
     pub weather_sections: [String; 2],
     pub player: PlayerReport,
+    /// The player character's state (player-state.md).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub character: Option<CharacterReport>,
     pub objects: ObjectsReport,
+}
+
+/// The player character's state as the engine interface reports it
+/// (player-state.md sections 2–4).
+#[derive(Clone, Debug, Serialize)]
+pub struct CharacterReport {
+    pub health: f32,
+    pub max_health: f32,
+    pub power: f32,
+    pub max_power: f32,
+    pub satiety: f32,
+    pub radiation: f32,
+    pub psy_health: f32,
+    pub morale: f32,
+    pub alcohol: f32,
+    pub limping: bool,
+    pub cant_walk: bool,
+    pub cant_sprint: bool,
+    pub money: u32,
+    pub specific_character: String,
+    pub character_profile: String,
+    pub community: i32,
+    pub rank: i32,
+    pub reputation: i32,
+    pub character_name: String,
+    /// The carried weight (3.4).
+    pub weight: f32,
+    /// `None` for no active slot.
+    pub active_slot: Option<u8>,
+    /// In the order the player lists them.
+    pub items: Vec<ItemReport>,
+}
+
+/// One inventory item as the engine interface reports it.
+#[derive(Clone, Debug, Serialize)]
+pub struct ItemReport {
+    pub id: u16,
+    pub section: String,
+    pub class_id: String,
+    /// `slot`, `belt`, `backpack` or `none`.
+    pub place: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slot: Option<u8>,
+    pub condition: f32,
+}
+
+impl CharacterReport {
+    fn of(s: &CharacterState) -> Self {
+        let c = &s.conditions;
+        let p = &s.profile;
+        Self {
+            health: c.health,
+            max_health: c.max_health,
+            power: c.power,
+            max_power: c.max_power,
+            satiety: c.satiety,
+            radiation: c.radiation,
+            psy_health: c.psy_health,
+            morale: c.morale,
+            alcohol: c.alcohol,
+            limping: c.limping,
+            cant_walk: c.cant_walk,
+            cant_sprint: c.cant_sprint,
+            money: p.money,
+            specific_character: p.specific_character.clone(),
+            character_profile: p.character_profile.clone(),
+            community: p.community,
+            rank: p.rank,
+            reputation: p.reputation,
+            character_name: p.character_name.clone(),
+            weight: s.inventory.weight(),
+            active_slot: s.inventory.active_slot,
+            items: s
+                .inventory
+                .items
+                .iter()
+                .map(|i| ItemReport {
+                    id: i.id,
+                    section: i.config.section.clone(),
+                    class_id: i.config.class_id.as_str().to_owned(),
+                    place: match i.place {
+                        Place::None => "none",
+                        Place::Slot(_) => "slot",
+                        Place::Belt => "belt",
+                        Place::Backpack => "backpack",
+                    },
+                    slot: match i.place {
+                        Place::Slot(s) => Some(s),
+                        _ => None,
+                    },
+                    condition: i.condition,
+                })
+                .collect(),
+        }
+    }
 }
 
 /// The player's movement as the engine interface reports it.
@@ -217,6 +323,101 @@ fn start_weather(tree: &dyn Vfs, data: &GameData, level: &str) -> io::Result<Str
         // Our choice when the level has no `weathers` key.
         .unwrap_or("default")
         .to_owned())
+}
+
+/// The supply's generator seed (player-state.md 3.1: the game seeds it
+/// from a timer and any 15-bit generator serves; a fixed seed is our
+/// choice).
+const SUPPLY_SEED: u32 = 0;
+
+/// The player's record in `spawn_file`: object `index`, whose class must be
+/// the player's (level-objects.md: index 63, the only `O_ACTOR` record).
+pub fn player_record(spawn_file: &[u8], index: u32, system: &Config) -> io::Result<ObjectRecord> {
+    let mut found = None;
+    spawn::for_each_record(spawn_file, |r| {
+        if r.index != index {
+            return Ok(std::ops::ControlFlow::Continue(()));
+        }
+        let section = record::section(r.spawn)?;
+        let class = system
+            .get(&section, "class")
+            .flatten()
+            .map(str::trim)
+            .ok_or_else(|| invalid(format!("section [{section}] has no class")))?;
+        found = Some(ObjectRecord::parse(r.spawn, r.update, class, true)?);
+        Ok(std::ops::ControlFlow::Break(()))
+    })?;
+    let found = found.ok_or_else(|| invalid(format!("spawn file: no object {index}")))?;
+    if found.kind() != record::Kind::Player {
+        return Err(invalid(format!(
+            "{}: {} is not the player's class",
+            found.header.name,
+            found.class_id.as_str()
+        )));
+    }
+    Ok(found)
+}
+
+/// The player character at a New Game (player-state.md sections 2, 3)
+/// from its record `player`: the profile's specific character, the
+/// communities of `[game_relations]` (`config\creatures\game_relations.ltx`
+/// unless the system configuration holds the section) and the name's
+/// translation.
+pub fn new_game_character(
+    tree: &dyn Vfs,
+    data: &GameData,
+    player: &ObjectRecord,
+) -> io::Result<CharacterState> {
+    let record::Object::Player(p) = &player.object else {
+        return Err(invalid(format!("{}: not the player", player.header.name)));
+    };
+    let mut characters = Characters::new(tree, data);
+    let specific = characters
+        .specific_character(&p.trader)?
+        .cloned()
+        .unwrap_or_else(|| SpecificCharacter {
+            // Our choice: a profile without a description supplies nothing
+            // and fills nothing.
+            id: p.trader.specific_character.clone(),
+            rank: character::NOT_SET,
+            reputation: character::NOT_SET,
+            ..SpecificCharacter::default()
+        });
+    let relations = match data.system.section("game_relations") {
+        Some(_) => data.system.clone(),
+        None => config::load(
+            tree,
+            &data
+                .aliases
+                .path("$game_config$", "creatures\\game_relations.ltx")?,
+        )?,
+    };
+    let communities = character::communities(
+        relations
+            .get("game_relations", "communities")
+            .flatten()
+            .unwrap_or(""),
+    );
+    CharacterState::new_game(&character::NewGame {
+        record: player,
+        system: &data.system,
+        character: &specific,
+        communities: &communities,
+        character_name: data.strings.get(&specific.name),
+        seed: SUPPLY_SEED,
+    })
+}
+
+/// The New Game's player record and character, read as a New Game reads
+/// them (tests and debugging).
+pub fn new_game_player(
+    tree: &dyn Vfs,
+    data: &GameData,
+) -> io::Result<(ObjectRecord, CharacterState)> {
+    let new = read_new_game(tree, data)?;
+    let player = player_record(&new.spawn_file, new.actor.index, &data.system)?;
+    let character = new_game_character(tree, data, &player)?;
+    Ok((player, character))
 }
 
 /// `config\alife.ltx`, or the system configuration where it holds
@@ -395,6 +596,7 @@ pub struct NewGameLoad {
     controls: Option<Controls>,
     weather: Option<Weather>,
     clock: Option<GameClock>,
+    character: Option<CharacterState>,
     surfaces: Vec<Surface<String>>,
     draw_surfaces: Vec<Option<u32>>,
     not_drawn: Vec<(String, String)>,
@@ -438,12 +640,16 @@ impl NewGameLoad {
                 self.spawn_file = new.spawn_file;
                 self.graph = Some(new.graph);
             }
-            // The New Game's clock (sav.md section 5) and the switch pass
-            // over the level's objects (level-objects.md section 2), placed
-            // under this caption by us (the server has created the game).
+            // The New Game's clock (sav.md section 5), the player character
+            // the simulation supplies (player-state.md sections 2, 3) and the
+            // switch pass over the level's objects (level-objects.md section
+            // 2), placed under this caption by us (the server has created
+            // the game).
             Stage::ServerConnecting => {
                 let name = earlier(self.name.as_deref(), "level")?;
                 let actor = earlier(self.actor.as_ref(), "actor")?;
+                let player = player_record(&self.spawn_file, actor.index, &data.system)?;
+                self.character = Some(new_game_character(tree, data, &player)?);
                 let alife = alife(tree, data)?;
                 let clock = GameClock::new_game(&alife)?;
                 let start = StartState {
@@ -641,6 +847,7 @@ impl NewGameLoad {
         let weather = earlier(self.weather, "weather")?;
         let sky = earlier(self.sky, "sky")?;
         let clock = earlier(self.clock, "game clock")?;
+        let character = earlier(self.character, "player character")?;
         let spawned = earlier(self.spawned, "objects")?;
         if self.dynamic_props.len() != spawned.instances.len() {
             return Err(invalid("loading stages out of order: no light inputs"));
@@ -680,6 +887,7 @@ impl NewGameLoad {
             }),
             collision,
             player,
+            character: Some(character),
             controls,
             near: camera::NEAR,
             environment,
@@ -791,7 +999,27 @@ impl LevelScreen {
         self.clock.advance(elapsed);
         let player = self.player.state();
         let (request, back) = self.controls.request(input, &player);
+        // player-state.md 4.3: the condition's limits for this frame's
+        // movement; 4.4: a jump's cost; 4.1, 4.2: the conditions over the
+        // game time this frame advanced, with the state the movement left.
+        if let Some(c) = &mut self.character {
+            self.player.limits = c.movement_limits();
+        }
         self.player.frame(&self.collision, now, &request);
+        if let Some(c) = &mut self.character {
+            if self.player.jump_started() {
+                c.jump();
+            }
+            let f = self.player.state().flags;
+            c.update(
+                self.clock.time(),
+                Activity {
+                    moving: f.forward || f.back || f.left || f.right,
+                    runs: self.player.state_runs(),
+                    sprints: f.sprint,
+                },
+            );
+        }
         self.back |= back;
         // sky.md 7.3, k_t from the game clock.
         let (a, b, t) = self.weather.bracket_indices(self.clock.time_of_day());
@@ -910,6 +1138,7 @@ impl LevelScreen {
                 sprint_requested: p.sprint_requested,
                 sprint_locked: self.controls.sprint_lock.locked(),
             },
+            character: self.character.as_ref().map(CharacterReport::of),
             objects: self.world.objects.report(),
         }
     }
@@ -917,6 +1146,11 @@ impl LevelScreen {
     /// The player in the level.
     pub fn player(&self) -> &Player {
         &self.player
+    }
+
+    /// The player character's state (player-state.md).
+    pub fn character(&self) -> Option<&CharacterState> {
+        self.character.as_ref()
     }
 
     /// The player's controls.
@@ -975,6 +1209,8 @@ impl LevelScreen {
                 run_speed: 10.0,
                 walk_amplitude: 0.005,
                 walk_speed: 7.0,
+                limp_amplitude: 0.011,
+                limp_speed: 6.0,
             },
         };
         let player = Player::new(
@@ -1010,6 +1246,7 @@ impl LevelScreen {
             }),
             collision: CollisionWorld::new(Default::default(), Vec::new()).expect("collision"),
             player,
+            character: None,
             controls,
             near: camera::NEAR,
             environment,
