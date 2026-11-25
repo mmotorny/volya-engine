@@ -754,6 +754,23 @@ export const tests = {
     return `decoded in ${art.ms.toFixed(1)} ms (engine), ${art.totalMs.toFixed(1)} ms with the page's part; sources ${(sources / 1024).toFixed(0)} KiB, canvases ${(bytes / 1024).toFixed(0)} KiB at ${devicePixelRatio}x`;
   },
 
+  "zoom: in the level the engine's layers take every touch, pinches are cancelled on the controls, the page is at scale 1": async () => {
+    needsGame();
+    const root = document.documentElement;
+    const controls = document.getElementById("touch-controls");
+    assert(root.hasAttribute("data-engine-input"), "the engine doesn't own the screen");
+    for (const el of [root, document.getElementById("view"), controls]) {
+      assertEqual(getComputedStyle(el).touchAction, "none", `touch-action of ${el.id || el.tagName.toLowerCase()}`);
+    }
+    // The guard cancels pinches on the controls' layer too (zoom.js).
+    for (const type of ["gesturestart", "gesturechange", "gestureend"]) {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      controls.dispatchEvent(event);
+      assert(event.defaultPrevented, `${type} not cancelled`);
+    }
+    assertEqual(visualViewport.scale, 1, "visualViewport.scale");
+  },
+
   "the inventory: I opens it over the running level (a held W walks on, Control crouches under it), the outfit dragged to the backpack, bread eaten, the touch button opens it, the touchpad selects, opens the menu and drags, Escape and the exit button close it": async () => {
     needsGame();
     const controls = document.getElementById("touch-controls");

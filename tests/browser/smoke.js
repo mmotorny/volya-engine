@@ -617,6 +617,45 @@ export const tests = {
     return result.shared ? "shared" : `exclusive: ${result.error}`;
   },
 
+  "zoom: the viewport forbids scaling, every element pans without zooming, the guard cancels pinches, the page is at scale 1": async () => {
+    // Safari ignores the viewport's limits in tabs (documented); the rest is
+    // what blocks zoom there (zoom.js). Real gestures: docs/testing.md.
+    const index = new DOMParser().parseFromString(await (await fetch(`${base}index.html`)).text(), "text/html");
+    const viewport = index.querySelector('meta[name="viewport"]').content;
+    assertEqual(viewport, "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover", "index.html's viewport");
+    assertEqual(document.querySelector('meta[name="viewport"]').content, viewport, "the test page's viewport");
+    const touchAction = (el) => getComputedStyle(el).touchAction;
+    const root = document.documentElement;
+    for (const el of [root, document.body, document.querySelector("main"), document.getElementById("status")]) {
+      assertEqual(touchAction(el), "pan-x pan-y", `touch-action of ${el.tagName.toLowerCase()}`);
+    }
+    // The engine's layers take every touch.
+    const controls = document.getElementById("touch-controls");
+    assert(controls, "the touch controls' layer");
+    assert(!root.hasAttribute("data-engine-input"), "the engine owns the screen");
+    root.toggleAttribute("data-engine-input", true);
+    try {
+      for (const el of [root, document.body, document.getElementById("view"), controls]) {
+        assertEqual(touchAction(el), "none", `touch-action of ${el.id || el.tagName.toLowerCase()} while the engine takes input`);
+      }
+    } finally {
+      root.toggleAttribute("data-engine-input", false);
+    }
+    // WebKit's gesture events and two-finger moves are cancelled; one-finger
+    // moves (scrolling) are not.
+    const cancelled = (type, touches) => {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      if (touches !== undefined) Object.defineProperty(event, "touches", { value: { length: touches } });
+      controls.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    for (const type of ["gesturestart", "gesturechange", "gestureend"]) assert(cancelled(type), `${type} not cancelled`);
+    assert(cancelled("touchmove", 2), "a two-finger touchmove not cancelled");
+    assert(!cancelled("touchmove", 1), "a one-finger touchmove cancelled");
+    assertEqual(visualViewport.scale, 1, "visualViewport.scale");
+    assert(!root.hasAttribute("data-zoomed"), "marked zoomed at scale 1");
+  },
+
   "diagnostic log: off by default, and nothing runs for it per frame": async () => {
     localStorage.removeItem("volya-engine.diagnostic-log");
     await volya.diagnostics.setEnabled(false, volya.call);
