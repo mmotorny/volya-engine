@@ -226,7 +226,7 @@ fn flesh(id: u16, gv: u16, lv: u32, position: [f32; 3]) -> ObjectRecord {
         header: header(id, "flesh", position),
         class_id: ClassId::new("AI_FLESH").unwrap(),
         single_player: true,
-        object: Object::Monster(Monster {
+        object: Object::Monster(Box::new(Monster {
             state: MonsterState {
                 monster: MonsterLike {
                     creature: creature(block(gv, lv, 0.0, 0xFFFF_FFBF), 1.0),
@@ -246,7 +246,7 @@ fn flesh(id: u16, gv: u16, lv: u32, position: [f32; 3]) -> ObjectRecord {
                 distance_from_previous: 0.0,
                 distance_to_next: 0.0,
             },
-        }),
+        })),
     }
 }
 
@@ -658,6 +658,56 @@ fn dead_bodies_are_removed_with_what_they_carry() {
     let c = sim.update(START + 36 * HOUR_MS, 10.0, 5).unwrap();
     assert_eq!(c.removed, [2, 1]);
     assert!(sim.object(1).is_none() && sim.object(2).is_none());
+}
+
+#[test]
+fn removal_ends_on_a_cycle_of_parents() {
+    let mut body = flesh(1, 3, 120, [7.0, 0.0, 7.0]);
+    if let Some(c) = body.object.creature_mut() {
+        c.health = 0.0;
+        c.death_time = START;
+    }
+    body.object.object_block_mut().state_flags = 0x05;
+    // Malformed: the body carries 2, 2 carries 3, 3 carries the body.
+    body.header.parent_id = NO_ID;
+    let mut a = bread(2, 1);
+    a.header.parent_id = 1;
+    let mut b = bread(3, 2);
+    b.header.parent_id = 2;
+    let mut sim = simulation(vec![actor([0.0; 3], 0, 0), body, a, b], config(0.5, 1.0));
+    sim.object_mut(1).unwrap().record.header.parent_id = 3;
+    // In the list despite its parent (it is no item): removed with both.
+    sim.level_list.insert(1);
+    let mut changes = Changes::default();
+    sim.remove(1, &mut changes);
+    let mut removed = changes.removed.clone();
+    removed.sort();
+    assert_eq!(removed, [1, 2, 3]);
+}
+
+#[test]
+fn client_data_kept_by_the_level_of_the_top_container() {
+    // A box on level one with direct control 0: not in the list, but on
+    // the current level, so its client data stays (sav.md 8).
+    let mut b = inventory_box(1, 0, 0, [0.0; 3]);
+    b.object.object_block_mut().direct_control = 0;
+    let sim = simulation(vec![actor([0.0; 3], 0, 0), b], config(0.5, 1.0));
+    assert!(!sim.level_list().any(|id| id == 1));
+    assert_eq!(sim.object(1).unwrap().record.header.client_data.len(), 3);
+}
+
+#[test]
+fn ids_after_a_load_and_fractional_hours() {
+    let mut sim = simulation(
+        vec![actor([0.0; 3], 0, 0), inventory_box(40, 0, 0, [0.0; 3])],
+        config(0.5, 1.0),
+    );
+    assert_eq!(sim.take_id().unwrap(), 41);
+    assert_eq!(sim.take_id().unwrap(), 42);
+    let alife = ltx::parse(b"[alife]\nswitch_distance = 150\nswitch_factor = 0.1\n").unwrap();
+    let system = ltx::parse(b"[monsters_common]\nstay_after_death_time_interval = 0.5\n").unwrap();
+    let c = AlifeConfig::read(&alife, &system).unwrap();
+    assert_eq!(c.stay_after_death, HOUR_MS / 2);
 }
 
 #[test]

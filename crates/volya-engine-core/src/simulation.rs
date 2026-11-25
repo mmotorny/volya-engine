@@ -79,12 +79,12 @@ impl AlifeConfig {
                 .get("alife", "objects_per_update")
                 .flatten()
                 .map_or(10, |v| value::int(v).max(0) as usize),
-            stay_after_death: system
+            stay_after_death: (system
                 .get("monsters_common", "stay_after_death_time_interval")
                 .flatten()
                 .map_or(36.0, value::float)
-                .max(0.0) as u64
-                * HOUR_MS,
+                .max(0.0) as f64
+                * HOUR_MS as f64) as u64,
         })
     }
 }
@@ -173,13 +173,16 @@ impl SimObject {
         KEEPS_CLIENT_DATA.contains(&self.record.class_id.as_str())
     }
 
-    /// Whether the engine's predicate *on* can hold for it
-    /// (level-objects.md 2.3: the renderer match and state flags bit 0x02;
-    /// the scripts' replacements aside).
+    /// Whether *on* can hold for it: the engine's predicate
+    /// (level-objects.md 2.3: the renderer match and state flags bit 0x02),
+    /// or the electra artefacts' scripted rule, which does not test the
+    /// engine's (2.5: true at night 50 m away or more).
     pub fn may_switch_online(&self) -> bool {
-        self.candidate
-            .renderer_match()
-            .is_ok_and(|m| self.candidate.engine_on(m))
+        self.candidate.is_electra()
+            || self
+                .candidate
+                .renderer_match()
+                .is_ok_and(|m| self.candidate.engine_on(m))
     }
 
     /// The predicates' inputs as they stand.
@@ -266,6 +269,68 @@ impl Changes {
     }
 }
 
+/// The objects by id: a dense list indexed by id (ids are handed out from
+/// 1 upwards, 8.1), `None` where no object has that id.
+#[derive(Clone, Debug, Default)]
+struct Registry {
+    slots: Vec<Option<SimObject>>,
+    len: usize,
+}
+
+impl Registry {
+    fn get(&self, id: &u16) -> Option<&SimObject> {
+        self.slots.get(usize::from(*id))?.as_ref()
+    }
+
+    fn get_mut(&mut self, id: &u16) -> Option<&mut SimObject> {
+        self.slots.get_mut(usize::from(*id))?.as_mut()
+    }
+
+    fn contains_key(&self, id: &u16) -> bool {
+        self.get(id).is_some()
+    }
+
+    fn insert(&mut self, id: u16, object: SimObject) {
+        let i = usize::from(id);
+        if self.slots.len() <= i {
+            self.slots.resize_with(i + 1, || None);
+        }
+        if self.slots[i].replace(object).is_none() {
+            self.len += 1;
+        }
+    }
+
+    fn remove(&mut self, id: &u16) -> Option<SimObject> {
+        let o = self.slots.get_mut(usize::from(*id))?.take();
+        self.len -= usize::from(o.is_some());
+        o
+    }
+
+    fn keys(&self) -> impl Iterator<Item = &u16> + '_ {
+        self.values().map(|o| &o.id)
+    }
+
+    fn values(&self) -> impl Iterator<Item = &SimObject> + '_ {
+        self.slots.iter().flatten()
+    }
+
+    fn values_mut(&mut self) -> impl Iterator<Item = &mut SimObject> + '_ {
+        self.slots.iter_mut().flatten()
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+}
+
+impl std::ops::Index<&u16> for Registry {
+    type Output = SimObject;
+
+    fn index(&self, id: &u16) -> &SimObject {
+        self.get(id).expect("no object with this id")
+    }
+}
+
 /// The current level (6.1).
 #[derive(Clone, Debug)]
 struct CurrentLevel {
@@ -278,7 +343,7 @@ pub struct Simulation {
     pub graph: Graph,
     pub paths: PatrolPaths,
     pub config: AlifeConfig,
-    objects: BTreeMap<u16, SimObject>,
+    objects: Registry,
     level: Option<CurrentLevel>,
     /// The current level's list, in increasing id (6.1).
     level_list: BTreeSet<u16>,
@@ -294,6 +359,8 @@ pub struct Simulation {
     smart_terrains: BTreeSet<u16>,
     /// Ids the actor's supplies took (8.1), held by its character state.
     actor_items: Range<u16>,
+    /// The next id the pool hands out.
+    next_id: u16,
     scripts: Box<dyn SmartTerrains>,
 }
 
@@ -323,7 +390,7 @@ impl Simulation {
             graph,
             paths,
             config,
-            objects: BTreeMap::new(),
+            objects: Registry::default(),
             level: None,
             level_list: BTreeSet::new(),
             schedule: BTreeSet::new(),
@@ -332,6 +399,7 @@ impl Simulation {
             story_ids: BTreeMap::new(),
             smart_terrains: BTreeSet::new(),
             actor_items: 0..0,
+            next_id: 1,
             scripts: Box::new(NoScripts),
         }
     }
@@ -355,15 +423,7 @@ impl Simulation {
         system: &Config,
         supplies: &mut dyn FnMut(&ObjectRecord, u16) -> io::Result<u16>,
     ) -> io::Result<()> {
-        fn take(next: &mut u16, n: u16) -> io::Result<u16> {
-            let first = *next;
-            *next = next
-                .checked_add(n)
-                .filter(|&n| n < NO_ID)
-                .ok_or_else(|| invalid("the id pool is used up"))?;
-            Ok(first)
-        }
-        let mut next: u16 = 1;
+        let mut next = self.next_id;
         spawn::for_each_record(spawn_file, |r| {
             let section = volya_engine_formats::object::section(r.spawn)?;
             let class = class_of(system, &section)?;
@@ -380,8 +440,16 @@ impl Simulation {
             }
             Ok(ControlFlow::Continue(()))
         })?;
+        self.next_id = next;
         self.post_register();
         Ok(())
+    }
+
+    /// An id from the pool for an object created after the New Game's
+    /// records (the bolt the online player receives, player-state.md 3.2;
+    /// held by its owner's state, not registered here).
+    pub fn take_id(&mut self) -> io::Result<u16> {
+        take(&mut self.next_id, 1)
     }
 
     /// A load (8.2): `records` with their saved ids registered in
@@ -392,6 +460,9 @@ impl Simulation {
             if self.objects.contains_key(&r.header.id) {
                 return Err(invalid(format!("object id {} saved twice", r.header.id)));
             }
+            // Fresh ids come after every saved one (our choice: any unused
+            // id serves).
+            self.next_id = self.next_id.max(r.header.id.saturating_add(1));
             self.register(r, None, system)?;
         }
         self.post_register();
@@ -488,7 +559,10 @@ impl Simulation {
         let ids: Vec<u16> = self.objects.keys().copied().collect();
         for id in ids {
             let top = self.top_level(id);
-            let on_level = self.level_list.contains(&top);
+            let on_level = self
+                .objects
+                .get(&top)
+                .is_some_and(|o| self.on_current_level(o.game_vertex()));
             if let Some(o) = self.objects.get_mut(&id)
                 && !on_level
                 && !o.keeps_client_data()
@@ -552,7 +626,7 @@ impl Simulation {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.objects.is_empty()
+        self.objects.len() == 0
     }
 
     /// The current level's list in increasing id.
@@ -698,16 +772,26 @@ impl Simulation {
     }
 
     /// Removes `id` and the objects it carries (6.2 step 1).
+    /// Iterative, each object once, so a cycle of parent ids ends.
     fn remove(&mut self, id: u16, changes: &mut Changes) {
-        let carried: Vec<u16> = self
-            .objects
-            .values()
-            .filter(|o| o.parent() == id)
-            .map(|o| o.id)
-            .collect();
-        for c in carried {
-            self.remove(c, changes);
+        let mut doomed = vec![id];
+        let mut i = 0;
+        while i < doomed.len() {
+            let parent = doomed[i];
+            for o in self.objects.values() {
+                if o.parent() == parent && !doomed.contains(&o.id) {
+                    doomed.push(o.id);
+                }
+            }
+            i += 1;
         }
+        // The carried first, deepest last found first.
+        for &id in doomed.iter().rev() {
+            self.remove_one(id, changes);
+        }
+    }
+
+    fn remove_one(&mut self, id: u16, changes: &mut Changes) {
         if let Some(o) = self.objects.remove(&id) {
             let block = o.record.object.object_block();
             if block.story_id != -1 {
@@ -964,6 +1048,16 @@ impl Simulation {
             .vertex(vertex)
             .is_some_and(|v| Some(v.level_id) == level)
     }
+}
+
+/// `n` ids from the pool at `next`: the first of them.
+fn take(next: &mut u16, n: u16) -> io::Result<u16> {
+    let first = *next;
+    *next = next
+        .checked_add(n)
+        .filter(|&n| n < NO_ID)
+        .ok_or_else(|| invalid("the id pool is used up"))?;
+    Ok(first)
 }
 
 /// Whether `record` is the actor's (6.1: spawn flags bit 0x08 and direct

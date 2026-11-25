@@ -5,7 +5,7 @@
 //! vertex's position (docs/behavior/offline-simulation.md section 3). Not
 //! chunked; read as a stream, keeping 6 of each vertex's 21 bytes.
 
-use std::io::{self, Read};
+use std::io::{self, Read, Seek, SeekFrom};
 
 use crate::packet::Reader;
 
@@ -60,7 +60,9 @@ pub struct LevelAi {
 impl LevelAi {
     /// Reads `file` to its end, which must come right after the last
     /// vertex. A version other than 8 is an error.
-    pub fn read(mut file: impl Read) -> io::Result<Self> {
+    pub fn read(mut file: impl Read + Seek) -> io::Result<Self> {
+        let length = file.seek(SeekFrom::End(0))?;
+        file.seek(SeekFrom::Start(0))?;
         let mut head = [0u8; HEADER_SIZE];
         file.read_exact(&mut head)?;
         let mut h = Reader::new(&head);
@@ -76,6 +78,15 @@ impl LevelAi {
             box_max: h.float3()?,
             identifier: h.take(16)?.try_into().unwrap(),
         };
+        // The vertices must fill the rest of the stream exactly before
+        // anything is allocated for them.
+        let expected = u64::from(header.vertex_count) * VERTEX_SIZE as u64 + HEADER_SIZE as u64;
+        if expected != length {
+            return Err(invalid(format!(
+                "level.ai: {} vertices need {expected} bytes, the file has {length}",
+                header.vertex_count
+            )));
+        }
         let n = header.vertex_count as usize;
         let mut packed = Vec::with_capacity(n);
         let mut heights = Vec::with_capacity(n);
@@ -92,9 +103,6 @@ impl LevelAi {
                 heights.push(u16::from_le_bytes([p[3], p[4]]));
             }
             left -= batch;
-        }
-        if file.read(&mut [0u8; 1])? != 0 {
-            return Err(invalid("level.ai: bytes after the last vertex"));
         }
         Ok(Self {
             header,
@@ -190,7 +198,7 @@ pub(crate) mod tests {
     #[test]
     fn decodes_positions_and_cells() {
         let file = level_ai_file(7.0, 3.5, &[(0, 0, 0), (2, 3, 65535)]);
-        let ai = LevelAi::read(&file[..]).unwrap();
+        let ai = LevelAi::read(io::Cursor::new(&file[..])).unwrap();
         assert_eq!(ai.header.row_length(), 6);
         assert_eq!(ai.header.column_count(), 11);
         let p = ai.position(1).unwrap();
@@ -202,9 +210,12 @@ pub(crate) mod tests {
         assert_eq!(ai.packed_at([-0.3, 0.0, 0.0]), Some(0));
         assert_eq!(ai.packed_at([-0.4, 0.0, 0.0]), None);
         assert_eq!(ai.packed_at([7.3, 0.0, 0.0]), Some(10 * 6));
-        assert!(LevelAi::read(&file[..file.len() - 1]).is_err());
+        assert!(LevelAi::read(io::Cursor::new(&file[..file.len() - 1])).is_err());
         let mut longer = file.clone();
         longer.push(0);
-        assert!(LevelAi::read(&longer[..]).is_err());
+        assert!(LevelAi::read(io::Cursor::new(&longer[..])).is_err());
+        let mut huge = file.clone();
+        huge[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(LevelAi::read(io::Cursor::new(&huge[..])).is_err());
     }
 }

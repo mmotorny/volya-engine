@@ -773,13 +773,14 @@ pub struct MonsterGroup {
 const SMART_TERRAIN: &str = "SMRTTRRN";
 const RESPAWN: &str = "RE_SPAWN";
 
-/// The state and update of an object, by kind.
+/// The state and update of an object, by kind. The largest kinds are
+/// boxed, so a registry of every object does not pay their size for each.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Object {
-    Player(Player),
-    Stalker(Stalker),
+    Player(Box<Player>),
+    Stalker(Box<Stalker>),
     Trader(Trader),
-    Monster(Monster),
+    Monster(Box<Monster>),
     CrowOrPhantom(CrowOrPhantom),
     Vehicle(Vehicle),
     Helicopter(Helicopter),
@@ -823,14 +824,14 @@ impl Object {
         cx: &Context,
     ) -> io::Result<Self> {
         Ok(match kind {
-            Kind::Player => Self::Player(Player::read(s, u)?),
-            Kind::Stalker => Self::Stalker(Stalker::read(s, u, cx)?),
+            Kind::Player => Self::Player(Box::new(Player::read(s, u)?)),
+            Kind::Stalker => Self::Stalker(Box::new(Stalker::read(s, u, cx)?)),
             Kind::Trader => Self::Trader(Trader {
                 object: ObjectBlock::read(s)?,
                 visual: Visual::read(s)?,
                 trader: TraderLike::read(s)?,
             }),
-            Kind::Monster => Self::Monster(Monster {
+            Kind::Monster => Self::Monster(Box::new(Monster {
                 state: MonsterState::read(s)?,
                 script: if has_character_script(cx, false) {
                     Some(CharacterScript::read(s, cx, false)?)
@@ -838,7 +839,7 @@ impl Object {
                     None
                 },
                 update: MonsterLikeUpdate::read(u)?,
-            }),
+            })),
             Kind::CrowOrPhantom => Self::CrowOrPhantom(CrowOrPhantom {
                 creature: Creature::read(s)?,
                 update: CreatureUpdate::read(u)?,

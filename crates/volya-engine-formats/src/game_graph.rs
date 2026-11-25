@@ -121,8 +121,22 @@ impl GameGraph {
             })
             .collect::<io::Result<Vec<_>>>()?;
         let table_start = file.len() - r.rest().len();
+        // The three tables must fit the bytes left before anything is
+        // allocated for them.
         let edges_start = VERTEX_SIZE * vertex_count;
-        let points_rel = edges_start + EDGE_SIZE * edge_count;
+        let points_bytes = POINT_SIZE.checked_mul(point_count as usize);
+        let points_rel = EDGE_SIZE
+            .checked_mul(edge_count)
+            .and_then(|e| e.checked_add(edges_start));
+        let (Some(points_rel), Some(points_bytes)) = (points_rel, points_bytes) else {
+            return Err(invalid("game.graph: table sizes overflow"));
+        };
+        if points_rel
+            .checked_add(points_bytes)
+            .is_none_or(|end| end > r.rest().len())
+        {
+            return Err(invalid("game.graph: tables beyond the end of the file"));
+        }
         let index = |offset: u32, start: usize, size: usize, count: usize, what: &str| {
             let rel = (offset as usize)
                 .checked_sub(start)
@@ -178,7 +192,7 @@ impl GameGraph {
             edges.push(GraphEdge { target, distance });
         }
         let points_start = table_start + points_rel;
-        r.take(POINT_SIZE * point_count as usize)?;
+        r.take(points_bytes)?;
         Ok(Self {
             version,
             identifier,
@@ -228,9 +242,11 @@ impl GameGraph {
         let Some(v) = self.vertex(vertex) else {
             return Ok(Vec::new());
         };
-        let start = self.points_start + POINT_SIZE * v.first_point as usize;
-        let bytes = file
-            .get(start..start + POINT_SIZE * usize::from(v.point_count))
+        let start = (v.first_point as usize)
+            .checked_mul(POINT_SIZE)
+            .and_then(|o| o.checked_add(self.points_start));
+        let bytes = start
+            .and_then(|start| file.get(start..start + POINT_SIZE * usize::from(v.point_count)))
             .ok_or_else(|| invalid("game.graph: level points beyond the file"))?;
         bytes
             .as_chunks::<POINT_SIZE>()
@@ -368,6 +384,12 @@ pub(crate) mod tests {
         let mut wrong = file.clone();
         wrong[0] = 7;
         assert!(GameGraph::parse(&wrong).is_err());
+        // Counts beyond the file fail before allocating for them.
+        for (at, count) in [(3, u32::MAX), (7, u32::MAX), (7, 1_000_000)] {
+            let mut big = file.clone();
+            big[at..at + 4].copy_from_slice(&count.to_le_bytes());
+            assert!(GameGraph::parse(&big).is_err(), "{at}");
+        }
     }
 
     #[test]

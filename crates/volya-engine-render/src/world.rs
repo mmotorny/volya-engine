@@ -641,6 +641,8 @@ struct Inner {
     late: wgpu::RenderBundle,
     /// Step 6: strict-sorted draws, ordered each frame.
     strict: RefCell<Vec<(usize, WorldDraw)>>,
+    /// The bounding sphere each kept draw's record holds now.
+    spheres: RefCell<Vec<[f32; 4]>>,
     sky: Option<SkyResources>,
     sky_error: Option<String>,
     draws: usize,
@@ -708,6 +710,14 @@ impl World {
     /// Why the sky could not be set up, if it could not.
     pub fn sky_error(&self) -> Option<&str> {
         self.0.sky_error.as_deref()
+    }
+
+    /// The bounding sphere draw `draw` (its index among the draws the world
+    /// was created with) is drawn with now; radius 0: hidden. `None` for a
+    /// draw left out.
+    pub fn draw_sphere(&self, draw: usize) -> Option<[f32; 4]> {
+        let k = (*self.0.kept_of.get(draw)?)?;
+        Some(self.0.spheres.borrow()[k as usize])
     }
 
     pub fn same(&self, other: &World) -> bool {
@@ -1127,6 +1137,7 @@ impl Renderer {
             early,
             late,
             strict: RefCell::new(strict),
+            spheres: RefCell::new(kept.iter().map(|d| d.sphere).collect()),
             sky,
             sky_error,
             draws: kept.len() - object_draws,
@@ -1153,6 +1164,7 @@ impl Renderer {
         push_vec4(&mut bytes, sphere);
         self.queue
             .write_buffer(&inner.draw_buffer, k as u64 * DRAW_BYTES as u64, &bytes);
+        inner.spheres.borrow_mut()[k as usize] = sphere;
         for (i, d) in inner.strict.borrow_mut().iter_mut() {
             if *i == k as usize {
                 d.transform = *transform;

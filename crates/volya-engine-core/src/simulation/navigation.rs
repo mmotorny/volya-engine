@@ -7,7 +7,7 @@
 
 use std::io::{self, BufReader};
 
-use crate::vfs::{self, Vfs};
+use crate::vfs::Vfs;
 use volya_engine_formats::cross_table::CrossTable;
 use volya_engine_formats::game_graph::GameGraph;
 use volya_engine_formats::level_ai::LevelAi;
@@ -71,7 +71,7 @@ impl Navigation {
         })
     }
 
-    /// Reads level `level_id`'s `level.ai` (as a stream) and `level.gct`
+    /// Reads level `level_id`'s `level.ai` and `level.gct` (as streams)
     /// from its directory `dir` in `tree`, with [`Navigation::new`]'s
     /// checks. A missing cross table is the game's "Can't open cross
     /// table!".
@@ -82,8 +82,8 @@ impl Navigation {
             .open(&format!("{dir}\\level.ai"))
             .map_err(|e| file("level.ai", e))?;
         let ai = LevelAi::read(BufReader::new(f)).map_err(|e| file("level.ai", e))?;
-        let cross = match vfs::read(tree, &format!("{dir}\\level.gct")) {
-            Ok(bytes) => CrossTable::parse(&bytes).map_err(|e| file("level.gct", e))?,
+        let cross = match tree.open(&format!("{dir}\\level.gct")) {
+            Ok(f) => CrossTable::read(BufReader::new(f)).map_err(|e| file("level.gct", e))?,
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 return Err(invalid("Can't open cross table!"));
             }

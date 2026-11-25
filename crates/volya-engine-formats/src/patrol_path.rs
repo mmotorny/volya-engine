@@ -5,6 +5,7 @@
 //! (docs/behavior/offline-simulation.md section 4): named paths of points,
 //! each with a position, a level vertex and a game vertex, and links.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io;
 
@@ -53,8 +54,9 @@ pub struct PatrolPaths {
     by_name: HashMap<String, usize>,
 }
 
-fn sub<'a>(chunks: &Chunks<'a>, id: u32, what: &str) -> io::Result<Vec<u8>> {
-    Ok(chunks.require(id, what)?.content()?.into_owned())
+/// Chunk `id`'s content, borrowed unless it is compressed.
+fn sub<'a>(chunks: &Chunks<'a>, id: u32, what: &str) -> io::Result<Cow<'a, [u8]>> {
+    chunks.require(id, what)?.content()
 }
 
 fn path(content: &[u8], index: usize) -> io::Result<PatrolPath> {
@@ -66,7 +68,8 @@ fn path(content: &[u8], index: usize) -> io::Result<PatrolPath> {
     let n = Reader::new(&sub(&body, 0, &what)?).u32()?;
     let list = sub(&body, 1, &what)?;
     let list = Chunks::parse(&list)?;
-    let mut points = Vec::with_capacity(n as usize);
+    // Each point is a chunk of the list: the count cannot exceed them.
+    let mut points = Vec::with_capacity((n as usize).min(list.len()));
     for j in 0..n {
         let point = sub(&list, j, &what)?;
         let point = Chunks::parse(&point)?;
@@ -125,8 +128,10 @@ impl PatrolPaths {
         let count = Reader::new(&sub(&chunks, 0, "patrol paths")?).u32()?;
         let list = sub(&chunks, 1, "patrol paths")?;
         let list = Chunks::parse(&list)?;
-        let mut paths = Vec::with_capacity(count as usize);
-        let mut by_name = HashMap::with_capacity(count as usize);
+        // Each path is a chunk of the list: the count cannot exceed them.
+        let capacity = (count as usize).min(list.len());
+        let mut paths = Vec::with_capacity(capacity);
+        let mut by_name = HashMap::with_capacity(capacity);
         for i in 0..count {
             let p = path(&sub(&list, i, "patrol paths")?, i as usize)?;
             by_name.insert(p.name.clone(), paths.len());
@@ -226,5 +231,10 @@ pub(crate) mod tests {
         );
         assert_eq!(p.get("b").unwrap().points[0].position, [4.0, 0.0, 0.0]);
         assert!(p.get("c").is_none());
+        // A path count beyond the paths stored fails without allocating
+        // for it.
+        let mut big = content.clone();
+        big[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(PatrolPaths::parse_chunk(&big).is_err());
     }
 }

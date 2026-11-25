@@ -142,6 +142,12 @@ impl Candidate {
         }
     }
 
+    /// One of the electra artefacts, with a scripted *on* of their own
+    /// (section 2.5).
+    pub fn is_electra(&self) -> bool {
+        self.class_id == "SCRPTART" && ELECTRA_ARTEFACTS.contains(&self.section.as_str())
+    }
+
     /// The engine's "can switch online" (section 2.3).
     pub fn engine_on(&self, m: bool) -> bool {
         m && self.state_flags & STATE_SWITCH_ONLINE != 0
@@ -210,7 +216,7 @@ impl Candidate {
                 None => false,
             };
             (on, off_scripted)
-        } else if class == "SCRPTART" && ELECTRA_ARTEFACTS.contains(&self.section.as_str()) {
+        } else if self.is_electra() {
             let night = state.hour <= 4;
             let d = distance(node, state.actor);
             let on = if self.has_parent {

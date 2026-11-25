@@ -255,6 +255,12 @@ impl Presenter {
     /// differ from those last applied (the objects switching online and
     /// offline, offline-simulation.md 6.3). A hidden draw gets a bounding
     /// radius of 0, so it is never drawn.
+    /// The world's draw index of object draw `j` of the level's
+    /// [`crate::objects::LevelObjects::draws`] (tests).
+    pub fn object_draw_index(&self, j: usize) -> usize {
+        self.first_object_draw + j
+    }
+
     fn place_objects(&mut self, renderer: &Renderer, world: &World, scene: &WorldScene) {
         if self
             .placed
@@ -271,7 +277,8 @@ impl Presenter {
             let now = scene.objects.get(k).copied().flatten();
             let was = match &before {
                 Some(b) => b.get(k).copied().flatten(),
-                // As uploaded: the instance's own placement if online.
+                // As uploaded: the instance's own placement if online,
+                // hidden otherwise.
                 None => objects.instances[k]
                     .online
                     .then_some(objects.instances[k].transform),
@@ -362,7 +369,13 @@ impl Presenter {
                 first_index: d.first_index,
                 index_count: d.index_count,
                 transform: d.transform,
-                sphere: d.sphere,
+                // Offline at the start: uploaded hidden (a radius of 0,
+                // [`Presenter::place_objects`]).
+                sphere: if level.objects.instances[d.instance].online {
+                    d.sphere
+                } else {
+                    [d.sphere[0], d.sphere[1], d.sphere[2], 0.0]
+                },
                 tree: None,
                 object: Some(d.dynamic_props),
             }))

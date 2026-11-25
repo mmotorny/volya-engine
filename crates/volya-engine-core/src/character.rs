@@ -172,10 +172,9 @@ pub struct CharacterState {
 impl CharacterState {
     /// The state after a New Game (sections 2, 3): the record's health and
     /// profile resolved, the conditions of 2.3, the items supplied by the
-    /// simulation (3.1) taken by the online character in their order, then
-    /// the bolt (3.2). The items take consecutive ids from `first_id`, the
-    /// bolt's after them (our choice: the bolt comes with the online
-    /// character, whose id the spec does not give).
+    /// simulation (3.1) taken by the online character in their order. The
+    /// items take consecutive ids from `first_id`. The bolt (3.2) comes
+    /// later, when the player comes online: [`CharacterState::receive_bolt`].
     pub fn new_game(n: &NewGame) -> io::Result<Self> {
         let Object::Player(player) = &n.record.object else {
             return Err(invalid(format!(
@@ -238,19 +237,11 @@ impl CharacterState {
                 &mut children,
             )?;
         }
-        // The online character takes them in their order, then the bolt
-        // (3.2, 3.3: believed).
+        // The online character takes them in their order (3.3: believed).
         let mut inventory = Inventory::new(InventoryConfig::read(n.system)?);
         for item in children {
             inventory.take(item);
         }
-        inventory.take(InventoryItem::create(
-            ItemConfig::read(n.system, BOLT_SECTION)?,
-            ids.take()?,
-            None,
-            owner.id,
-            &profile.specific_character,
-        ));
         Ok(Self {
             owner,
             profile,
@@ -259,6 +250,20 @@ impl CharacterState {
             inventory,
             last_update: None,
         })
+    }
+
+    /// The bolt the online player receives (3.2), after its supplies, with
+    /// id `id` from the simulation's pool (offline-simulation.md: requested
+    /// once every New Game record exists).
+    pub fn receive_bolt(&mut self, system: &Config, id: u16) -> io::Result<()> {
+        self.inventory.take(InventoryItem::create(
+            ItemConfig::read(system, BOLT_SECTION)?,
+            id,
+            None,
+            self.owner.id,
+            &self.profile.specific_character,
+        ));
+        Ok(())
     }
 
     /// The carried weight and the worn outfit's limits (3.4, 4.2).
@@ -364,13 +369,14 @@ impl CharacterState {
         Ok(())
     }
 
-    /// The records of the items a save writes after the player's, in the
-    /// order it lists them (3.1; the bolt is never saved).
-    /// How many ids the items took, the bolt's included.
+    /// How many items it holds (after a New Game, before the bolt: how many
+    /// ids its supplies took).
     pub fn item_count(&self) -> usize {
         self.inventory.items.len()
     }
 
+    /// The records of the items a save writes after the player's, in the
+    /// order it lists them (3.1; the bolt is never saved).
     pub fn item_records(&self) -> io::Result<Vec<ObjectRecord>> {
         self.inventory
             .items

@@ -16,6 +16,7 @@
 //! the GPU copy of the geometry is made by the presenter on the first frame
 //! drawn ([`LevelWorld::take_geometry`]), after which the CPU copy is gone.
 
+use std::borrow::Cow;
 use std::io;
 use std::sync::{Arc, Mutex};
 
@@ -433,20 +434,67 @@ pub fn new_game_player(
 ) -> io::Result<(ObjectRecord, CharacterState)> {
     let new = read_new_game(tree, data)?;
     let player = player_record(&new.spawn_file, new.actor.index, &data.system)?;
-    // The ids a New Game gives them (offline-simulation.md 8.1): the
-    // records before the player's take 1 … its index.
-    let first_id = u16::try_from(new.actor.index + 1).map_err(|_| invalid("too many objects"))?;
-    let character = new_game_character(tree, data, &player, first_id)?;
+    let dir = data.aliases.path("$game_levels$", &new.level)?;
+    let clock = GameClock::new_game(&*alife(tree, data)?)?;
+    let (_, character) = new_game_simulation(tree, data, new.spawn_file, new.graph, &dir, &clock)?;
     Ok((player, character))
 }
 
 /// `config\alife.ltx`, or the system configuration where it holds
 /// `[alife]` already.
-fn alife(tree: &dyn Vfs, data: &GameData) -> io::Result<Config> {
+fn alife<'a>(tree: &dyn Vfs, data: &'a GameData) -> io::Result<Cow<'a, Config>> {
     match data.system.section("alife") {
-        Some(_) => Ok(data.system.clone()),
-        None => config::load(tree, &data.aliases.path("$game_config$", "alife.ltx")?),
+        Some(_) => Ok(Cow::Borrowed(&data.system)),
+        None => Ok(Cow::Owned(config::load(
+            tree,
+            &data.aliases.path("$game_config$", "alife.ltx")?,
+        )?)),
     }
+}
+
+/// A New Game's offline simulation (offline-simulation.md) and player
+/// character: every record of `spawn_file` created and registered (8.1),
+/// the player character supplying the player (player-state.md sections 2,
+/// 3), the spawn file then dropped, the current level's navigation data
+/// read from its directory `dir` (6.1), and the first switch pass at
+/// `clock`'s time (6.2, level-objects.md 2.4: all objects evaluated once
+/// while the loading image shows), which brings the player online: it then
+/// receives its bolt (player-state.md 3.2) with the next id.
+fn new_game_simulation(
+    tree: &dyn Vfs,
+    data: &GameData,
+    spawn_file: Vec<u8>,
+    graph: GameGraph,
+    dir: &str,
+    clock: &GameClock,
+) -> io::Result<(Simulation, CharacterState)> {
+    let alife = alife(tree, data)?;
+    let paths = PatrolPaths::parse(&spawn_file)?;
+    let mut sim = Simulation::new(
+        Graph::new(graph),
+        paths,
+        AlifeConfig::read(&alife, &data.system)?,
+    );
+    let mut character = None;
+    sim.new_game(&spawn_file, &data.system, &mut |player, first_id| {
+        let c = new_game_character(tree, data, player, first_id)?;
+        let n = u16::try_from(c.item_count()).map_err(|_| invalid("too many items"))?;
+        character = Some(c);
+        Ok(n)
+    })?;
+    drop(spawn_file);
+    let mut character = earlier(character, "player character")?;
+    let level = sim
+        .current_level()
+        .ok_or_else(|| invalid("spawn file: no actor"))?;
+    sim.set_navigation(Navigation::read(tree, dir, &sim.graph.graph, level)?)?;
+    sim.update(
+        clock.time(),
+        clock.game_time().normal_time_factor,
+        hour(clock),
+    )?;
+    character.receive_bolt(&data.system, sim.take_id()?)?;
+    Ok((sim, character))
 }
 
 /// The file of texture `name`: `$level$<name>.dds`, then
@@ -676,33 +724,12 @@ impl NewGameLoad {
             // evaluated once while the loading image shows), placed under
             // this caption by us (the server has created the game).
             Stage::ServerConnecting => {
-                let alife = alife(tree, data)?;
-                let clock = GameClock::new_game(&alife)?;
+                let clock = GameClock::new_game(&*alife(tree, data)?)?;
                 let graph = earlier(self.graph.take(), "game graph")?;
                 let spawn_file = std::mem::take(&mut self.spawn_file);
-                let paths = PatrolPaths::parse(&spawn_file)?;
-                let mut sim = Simulation::new(
-                    Graph::new(graph),
-                    paths,
-                    AlifeConfig::read(&alife, &data.system)?,
-                );
-                let mut character = None;
-                sim.new_game(&spawn_file, &data.system, &mut |player, first_id| {
-                    let c = new_game_character(tree, data, player, first_id)?;
-                    let n = u16::try_from(c.item_count()).map_err(|_| invalid("too many items"))?;
-                    character = Some(c);
-                    Ok(n)
-                })?;
-                self.character = Some(earlier(character, "player character")?);
-                let level = sim
-                    .current_level()
-                    .ok_or_else(|| invalid("spawn file: no actor"))?;
-                sim.set_navigation(Navigation::read(tree, &dir, &sim.graph.graph, level)?)?;
-                sim.update(
-                    clock.time(),
-                    clock.game_time().normal_time_factor,
-                    hour(&clock),
-                )?;
+                let (sim, character) =
+                    new_game_simulation(tree, data, spawn_file, graph, &dir, &clock)?;
+                self.character = Some(character);
                 self.level_objects = objects::level_objects(&sim);
                 self.simulation = Some(sim);
                 self.clock = Some(clock);

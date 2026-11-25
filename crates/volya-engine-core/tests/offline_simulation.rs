@@ -457,7 +457,7 @@ fn cross_tables_and_level_ai_of_every_level() {
             let ai_file = read(vfs, &format!("{dir}/level.ai")).unwrap();
             assert_eq!((gct.len(), ai_file.len()), (gct_bytes, ai_bytes), "{name}");
             let cross = CrossTable::parse(&gct).unwrap();
-            let ai = LevelAi::read(&ai_file[..]).unwrap();
+            let ai = LevelAi::read(std::io::Cursor::new(&ai_file[..])).unwrap();
             assert_eq!((cross.len(), ai.len()), (n, n), "{name}");
             assert_eq!(ai.header.row_length(), row, "{name}");
             assert_eq!(ai.header.cell_size, 0.7, "{name}");
@@ -928,8 +928,8 @@ fn new_game(vfs: &dyn Vfs) -> Simulation {
         paths,
         AlifeConfig::read(&alife, &system).unwrap(),
     );
-    // Five supplies and the bolt (player-state.md 3.1, 3.2).
-    sim.new_game(&spawn_file, &system, &mut |_, _| Ok(6))
+    // The five supplies (player-state.md 3.1); the bolt comes later (3.2).
+    sim.new_game(&spawn_file, &system, &mut |_, _| Ok(5))
         .unwrap();
     let level = sim.current_level().unwrap();
     let name = g.level(level).unwrap().name.clone();
@@ -952,9 +952,12 @@ fn new_game_registry_and_walking_across_the_switch_distance() {
         assert_eq!(sim.current_level(), Some(1));
         let actor = sim.object(ACTOR_ID).unwrap();
         assert_eq!(actor.record.header.name, "level_prefix_actor_0001");
-        assert_eq!(sim.by_name("escape_trader").unwrap().id, 84 + 6);
-        assert_eq!(sim.actor_items(), 64..70);
-        assert_eq!(sim.by_name("esc_wolf").unwrap().id, 100 + 6);
+        assert_eq!(sim.by_name("escape_trader").unwrap().id, 84 + 5);
+        assert_eq!(sim.actor_items(), 64..69);
+        assert_eq!(sim.by_name("esc_wolf").unwrap().id, 100 + 5);
+        // The next id, the bolt's once the player is online: after every
+        // record and the supplies.
+        assert_eq!(sim.take_id().unwrap(), 8_641 + 5);
         assert_eq!(sim.level_list().count(), 870);
         assert!(sim.objects().all(|o| !o.online));
         // Every stalker and monster alive with direct control is scheduled.

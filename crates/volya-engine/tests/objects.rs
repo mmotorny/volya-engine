@@ -528,16 +528,42 @@ fn level_objects_from_game_data() {
 
         // Walking (offline-simulation.md 6.2): the stalker
         // `esc_novice_attacker1`, loaded but offline, is drawn once the
-        // player is within 135 m and no longer beyond 165 m.
+        // player is within 135 m and no longer beyond 165 m: what the
+        // presenter has the renderer draw (a draw's bounding radius of 0
+        // hides it).
         let sim = screen.simulation().unwrap();
         let o = sim.by_name("esc_novice_attacker1").unwrap();
         let (id, at) = (o.id, o.record.header.position);
         let k = objects.instances.iter().position(|i| i.id == id).unwrap();
         assert!(!objects.instances[k].online);
-        let drawn = |screen: &LevelScreen| {
-            let scene = screen.scene(SIZE, 0);
-            scene.world.unwrap().objects[k].is_some()
+        let draws: Vec<(usize, usize)> = objects
+            .draws
+            .iter()
+            .enumerate()
+            .map(|(j, d)| (j, d.instance))
+            .collect();
+        let mut gpu = renderer();
+        let mut presenter = Presenter::new();
+        // Per instance: whether the renderer draws any of its draws.
+        let mut drawn = |screen: &LevelScreen| -> Vec<bool> {
+            let list = presenter.draw_list(&mut gpu, tree, &screen.scene(SIZE, 0), 0);
+            let world = list.world.expect("the world").world;
+            let mut shown = vec![false; screen.world().objects.instances.len()];
+            for &(j, i) in &draws {
+                let sphere = world.draw_sphere(presenter.object_draw_index(j));
+                shown[i] |= sphere.is_some_and(|s| s[3] > 0.0);
+            }
+            shown
         };
+        // From the first frame, only the online instances are drawn.
+        let first = drawn(&screen);
+        let with_draws: Vec<usize> = draws.iter().map(|d| d.1).collect();
+        for (i, instance) in screen.world().objects.instances.iter().enumerate() {
+            if with_draws.contains(&i) {
+                assert_eq!(first[i], instance.online, "{}", instance.name);
+            }
+        }
+        assert!(!first[k]);
         let report = screen.state().objects;
         assert_eq!((report.online, report.with_model), (671, 352));
         let mut now = 0;
@@ -547,13 +573,13 @@ fn level_objects_from_game_data() {
             screen.update(now, &Default::default());
         };
         walk(&mut screen, 130.0);
-        assert!(drawn(&screen));
+        assert!(drawn(&screen)[k]);
         let report = screen.state().objects;
         assert!(report.with_model > 352, "{report:?}");
         walk(&mut screen, 160.0);
-        assert!(drawn(&screen));
+        assert!(drawn(&screen)[k]);
         walk(&mut screen, 170.0);
-        assert!(!drawn(&screen));
+        assert!(!drawn(&screen)[k]);
     });
 }
 

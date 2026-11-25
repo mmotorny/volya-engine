@@ -58,6 +58,21 @@ struct FrameStats {
 
 thread_local! {
     static FRAME_STATS: std::cell::RefCell<FrameStats> = Default::default();
+    /// While on (tests: the `heap_log` op), each frame's loading caption
+    /// and wasm heap size at its end.
+    static HEAP_LOG: std::cell::RefCell<Option<Vec<serde_json::Value>>> = Default::default();
+}
+
+/// The wasm heap (linear memory) size, bytes.
+fn heap_bytes() -> f64 {
+    wasm_bindgen::memory()
+        .dyn_into::<js_sys::WebAssembly::Memory>()
+        .map(|m| {
+            m.buffer()
+                .unchecked_into::<js_sys::ArrayBuffer>()
+                .byte_length() as f64
+        })
+        .unwrap_or(0.0)
 }
 
 /// `performance.now()` of the worker, milliseconds.
@@ -77,6 +92,19 @@ pub fn frame(time: f64) {
     gpu::frame(time);
     input::end_frame();
     let cpu = now() - start;
+    if HEAP_LOG.with(|l| l.borrow().is_some()) {
+        let state = engine::state();
+        let entry = serde_json::json!({
+            "phase": state.get("phase"),
+            "caption": state.get("loading").and_then(|l| l.get("caption")),
+            "wasm_heap_bytes": heap_bytes(),
+        });
+        HEAP_LOG.with(|l| {
+            if let Some(log) = l.borrow_mut().as_mut() {
+                log.push(entry);
+            }
+        });
+    }
     FRAME_STATS.with(|s| {
         let mut s = s.borrow_mut();
         let push = |q: &mut std::collections::VecDeque<f64>, v: f64| {
@@ -118,14 +146,7 @@ struct LevelStats {
 }
 
 fn level_stats() -> LevelStats {
-    let heap = wasm_bindgen::memory()
-        .dyn_into::<js_sys::WebAssembly::Memory>()
-        .map(|m| {
-            m.buffer()
-                .unchecked_into::<js_sys::ArrayBuffer>()
-                .byte_length() as f64
-        })
-        .unwrap_or(0.0);
+    let heap = heap_bytes();
     let average =
         |q: &std::collections::VecDeque<f64>| q.iter().sum::<f64>() / q.len().max(1) as f64;
     FRAME_STATS.with(|s| {
@@ -231,6 +252,13 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         }
         "input_state" => to_json(&input::state()),
         "level_stats" => to_json(&level_stats()),
+        // `{"on": true}` starts logging each frame's loading caption and
+        // wasm heap; `{"on": false}` stops and returns the log.
+        "heap_log" => {
+            let on = args.get("on").and_then(|v| v.as_bool()).unwrap_or(false);
+            let log = HEAP_LOG.with(|l| std::mem::replace(&mut *l.borrow_mut(), on.then(Vec::new)));
+            to_json(&log.unwrap_or_default())
+        }
         "launch" => to_json(&engine::launch().await?),
         "menu_state" => to_json(&engine::state()),
         "bound_keys" => to_json(&engine::bound_keys()),

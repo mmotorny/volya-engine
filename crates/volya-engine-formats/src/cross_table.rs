@@ -6,9 +6,9 @@
 //! of the level's `level.ai`, the nearest game vertex and its distance. A
 //! chunk sequence of two chunks.
 
-use std::io;
+use std::io::{self, Read, Seek, SeekFrom};
 
-use crate::chunks::Chunks;
+use crate::chunks;
 use crate::packet::Reader;
 
 /// The only cross-table version read.
@@ -38,17 +38,76 @@ pub struct CrossTable {
 }
 
 impl CrossTable {
-    /// Parses the file. A missing chunk 0 or 1, or a chunk 0 of another
-    /// size, is the game's "Cross table is corrupted!"; a version other than
-    /// 8 its "Cross table version mismatch!".
+    /// Parses the file in memory ([`CrossTable::read`]).
     pub fn parse(file: &[u8]) -> io::Result<Self> {
-        let chunks = Chunks::parse(file)?;
+        Self::read(io::Cursor::new(file))
+    }
+
+    /// Reads the file as a stream, one chunk header at a time, the cells in
+    /// batches, without holding the file. The first chunk of each id counts
+    /// (chunks.md 3). A missing chunk 0 or 1, a chunk 0 of another size, or
+    /// cells that are not *N* × 6 bytes are the game's "Cross table is
+    /// corrupted!"; a version other than 8 its "Cross table version
+    /// mismatch!". A compressed chunk is an error (our choice: the shipped
+    /// tables are stored).
+    pub fn read(mut file: impl Read + Seek) -> io::Result<Self> {
         let corrupted = || invalid("Cross table is corrupted!");
-        let header = chunks.find(HEADER_CHUNK).ok_or_else(corrupted)?.content()?;
-        let cells = chunks.find(CELLS_CHUNK).ok_or_else(corrupted)?.content()?;
-        if header.len() != HEADER_SIZE {
-            return Err(corrupted());
+        let length = file.seek(SeekFrom::End(0))?;
+        let mut at = file.seek(SeekFrom::Start(0))?;
+        let mut header: Option<[u8; HEADER_SIZE]> = None;
+        let mut cells: Option<(Vec<u16>, Vec<f32>)> = None;
+        while at < length {
+            let mut head = [0u8; chunks::HEADER_SIZE];
+            file.read_exact(&mut head)?;
+            let id_word = u32::from_le_bytes(head[..4].try_into().unwrap());
+            let size = u64::from(u32::from_le_bytes(head[4..].try_into().unwrap()));
+            let payload = at + chunks::HEADER_SIZE as u64;
+            if size > length - payload {
+                return Err(corrupted());
+            }
+            let id = id_word & !chunks::COMPRESSED;
+            let wanted = match id {
+                HEADER_CHUNK => header.is_none(),
+                CELLS_CHUNK => cells.is_none(),
+                _ => false,
+            };
+            if wanted && id_word & chunks::COMPRESSED != 0 {
+                return Err(invalid("cross table: compressed chunk"));
+            }
+            if wanted && id == HEADER_CHUNK {
+                if size != HEADER_SIZE as u64 {
+                    return Err(corrupted());
+                }
+                let mut h = [0u8; HEADER_SIZE];
+                file.read_exact(&mut h)?;
+                header = Some(h);
+            } else if wanted {
+                if size % CELL_SIZE as u64 != 0 {
+                    return Err(corrupted());
+                }
+                // Bounded by the stream's length, checked above.
+                let n = (size / CELL_SIZE as u64) as usize;
+                let mut vertices = Vec::with_capacity(n);
+                let mut distances = Vec::with_capacity(n);
+                let mut buffer = vec![0u8; CELL_SIZE * 4096];
+                let mut left = n;
+                while left > 0 {
+                    let batch = left.min(4096);
+                    let bytes = &mut buffer[..CELL_SIZE * batch];
+                    file.read_exact(bytes)?;
+                    for c in bytes.as_chunks::<CELL_SIZE>().0 {
+                        vertices.push(u16::from_le_bytes([c[0], c[1]]));
+                        distances.push(f32::from_le_bytes([c[2], c[3], c[4], c[5]]));
+                    }
+                    left -= batch;
+                }
+                cells = Some((vertices, distances));
+            }
+            at = payload + size;
+            file.seek(SeekFrom::Start(at))?;
         }
+        let header = header.ok_or_else(corrupted)?;
+        let (game_vertices, distances) = cells.ok_or_else(corrupted)?;
         let mut h = Reader::new(&header);
         if h.u32()? != VERSION {
             return Err(invalid("Cross table version mismatch!"));
@@ -57,14 +116,8 @@ impl CrossTable {
         let game_vertex_count = h.u32()?;
         let level_identifier = h.take(16)?.try_into().unwrap();
         let game_identifier = h.take(16)?.try_into().unwrap();
-        if cells.len() != CELL_SIZE * n {
+        if game_vertices.len() != n {
             return Err(corrupted());
-        }
-        let mut game_vertices = Vec::with_capacity(n);
-        let mut distances = Vec::with_capacity(n);
-        for c in cells.as_chunks::<CELL_SIZE>().0 {
-            game_vertices.push(u16::from_le_bytes([c[0], c[1]]));
-            distances.push(f32::from_le_bytes([c[2], c[3], c[4], c[5]]));
         }
         Ok(Self {
             game_vertex_count,
@@ -126,5 +179,20 @@ pub(crate) mod tests {
         assert_eq!(t.cell(2), None);
         assert_eq!((t.level_identifier, t.game_identifier), ([1; 16], [2; 16]));
         assert!(CrossTable::parse(&file[..52]).is_err());
+        // A count other than the cells', a chunk beyond the file.
+        let mut wrong = file.clone();
+        wrong[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(CrossTable::parse(&wrong).is_err());
+        let mut long = file.clone();
+        long[56..60].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(CrossTable::parse(&long).is_err());
+        // Another chunk between them is skipped.
+        let mut other = 7u32.to_le_bytes().to_vec();
+        other.extend(2u32.to_le_bytes());
+        other.extend([0, 0]);
+        let mut with = file[..52].to_vec();
+        with.extend(other);
+        with.extend(&file[52..]);
+        assert_eq!(CrossTable::parse(&with).unwrap(), t);
     }
 }
