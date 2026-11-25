@@ -427,17 +427,23 @@ pub fn instant(name: &str, tid: u32, args: &[(String, Value)]) {
 /// A step of a level's GPU work about to run (#443): an instant event
 /// `name` on the engine's thread with `args` and the bytes handed to the
 /// GPU so far by kind, stored at once, so the last record before the page
-/// dies names the step. While logging is on.
-pub fn gpu_step(name: &str, renderer: &volya_engine::render::Renderer, args: &[(&str, Value)]) {
+/// dies names the step (the byte totals left out without `renderer`).
+/// While logging is on.
+pub fn gpu_step(
+    name: &str,
+    renderer: Option<&volya_engine::render::Renderer>,
+    args: &[(&str, Value)],
+) {
     if !on() {
         return;
     }
-    let textures = renderer.texture_bytes_written();
-    let geometry = renderer.geometry_bytes_written();
     let mib = |b: u64| Value::Number(b as f64 / f64::from(1 << 20));
     let mut all: Vec<(&str, Value)> = args.to_vec();
-    all.push(("texture_MiB", mib(textures)));
-    all.push(("geometry_MiB", mib(geometry)));
+    if let Some(r) = renderer {
+        all.push(("texture_MiB", mib(r.texture_bytes_written())));
+        all.push(("geometry_MiB", mib(r.geometry_bytes_written())));
+        all.push(("particle_buffer_MiB", mib(r.particle_buffer_size())));
+    }
     all.push(("heap_MiB", mib(crate::heap_bytes() as u64)));
     let _ = SESSION.try_with(|s| {
         if let Ok(mut s) = s.try_borrow_mut()

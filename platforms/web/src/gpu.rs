@@ -427,7 +427,7 @@ pub fn warm_up(window: Option<std::ops::Range<u32>>) -> Result<Option<u32>, JsVa
             ("height", Value::Number(f64::from(size.height))),
         ];
         // The world is made here (its buffers, records and programs).
-        crate::diagnostics::gpu_step("gpu.world_make", &gpu.renderer, &mode);
+        crate::diagnostics::gpu_step("gpu.world_make", Some(&gpu.renderer), &mode);
         let list = tracing::info_span!("render.scene").in_scope(|| {
             crate::game::with_trees(|tree, _| {
                 gpu.presenter.draw_list(&mut gpu.renderer, tree, &scene, 0)
@@ -454,13 +454,13 @@ pub fn warm_up(window: Option<std::ops::Range<u32>>) -> Result<Option<u32>, JsVa
                     | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             });
-        crate::diagnostics::gpu_step("gpu.warm_up_draw", &gpu.renderer, &mode);
+        crate::diagnostics::gpu_step("gpu.warm_up_draw", Some(&gpu.renderer), &mode);
         gpu.renderer.set_call_window(window);
         tracing::info_span!("render.encode")
             .in_scope(|| gpu.renderer.render(&target, &list, CLEAR));
         gpu.renderer.set_call_window(None);
         target.destroy();
-        crate::diagnostics::gpu_step("gpu.warm_up_submitted", &gpu.renderer, &mode);
+        crate::diagnostics::gpu_step("gpu.warm_up_submitted", Some(&gpu.renderer), &mode);
         LEVEL_FRAMES.set(0);
         Ok(Some(gpu.renderer.world_calls()))
     })
@@ -676,15 +676,23 @@ pub fn frame(time: f64) {
                 }
                 // The level's first frames, each a step of its GPU work
                 // named in the diagnostic log (#443).
-                if list.world.is_some() && LEVEL_FRAMES.get() < LOGGED_LEVEL_FRAMES {
+                let logged = list.world.is_some() && LEVEL_FRAMES.get() < LOGGED_LEVEL_FRAMES;
+                let frame = [("frame", Value::Number(f64::from(LEVEL_FRAMES.get() + 1)))];
+                if logged {
                     LEVEL_FRAMES.set(LEVEL_FRAMES.get() + 1);
-                    crate::diagnostics::gpu_step(
-                        "gpu.level_frame",
-                        &gpu.renderer,
-                        &[("frame", Value::Number(f64::from(LEVEL_FRAMES.get())))],
-                    );
+                    crate::diagnostics::gpu_step("gpu.level_frame", Some(&gpu.renderer), &frame);
                 }
                 gpu.present_at(&list, (resolution.width, resolution.height));
+                if logged {
+                    // Submitted and presented; then once the browser
+                    // reports the GPU done with it.
+                    crate::diagnostics::gpu_step("gpu.level_frame_presented", None, &frame);
+                    let n = LEVEL_FRAMES.get();
+                    gpu.queue.on_submitted_work_done(move || {
+                        let frame = [("frame", Value::Number(f64::from(n)))];
+                        crate::diagnostics::gpu_step("gpu.level_frame_done", None, &frame);
+                    });
+                }
                 // Once the game stops, the debug list is drawn over it.
                 gpu.dirty = true;
             }

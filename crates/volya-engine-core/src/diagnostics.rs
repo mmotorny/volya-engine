@@ -62,6 +62,19 @@ pub const MAX_TEXT_CHARS: usize = 16 * 1024;
 pub const END: &str = "engine.end";
 /// Instant events kept per name per period; the rest are counted.
 pub const EVENTS_PER_NAME: u32 = 20;
+
+/// The limit per period for instants named `gpu.…`: a level's GPU steps,
+/// one per prepared texture (#443).
+pub const GPU_STEPS_PER_NAME: u32 = 1000;
+
+/// At most how many instants named `name` a period keeps.
+fn limit(name: &str) -> u64 {
+    u64::from(if name.starts_with("gpu.") {
+        GPU_STEPS_PER_NAME
+    } else {
+        EVENTS_PER_NAME
+    })
+}
 /// Spans written inside one long root span at most.
 const MAX_CHILDREN: usize = 256;
 /// Events waiting for the platform kept at most (oldest dropped).
@@ -310,7 +323,7 @@ impl State {
         }
         let s = stat(&mut self.instants, name);
         s.count += 1;
-        if s.count > u64::from(EVENTS_PER_NAME) {
+        if s.count > limit(name) {
             return;
         }
         self.push(&line);
@@ -506,11 +519,11 @@ impl Diagnostics {
         let over: Vec<(&str, Value)> = s
             .instants
             .iter()
-            .filter(|st| st.count > u64::from(EVENTS_PER_NAME))
+            .filter(|st| st.count > limit(&st.name))
             .map(|st| {
                 (
                     &*st.name,
-                    Value::Number((st.count - u64::from(EVENTS_PER_NAME)) as f64),
+                    Value::Number((st.count - limit(&st.name)) as f64),
                 )
             })
             .collect();

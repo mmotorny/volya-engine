@@ -198,7 +198,7 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
             ("width", width),
             ("height", height),
         ];
-        crate::gpu::with_renderer(|r| crate::diagnostics::gpu_step("gpu.texture", r, &step));
+        crate::gpu::with_renderer(|r| crate::diagnostics::gpu_step("gpu.texture", Some(r), &step));
         let Some(Ok(mut upload)) = crate::gpu::with_renderer(|r| r.begin_texture(&dds)) else {
             continue;
         };
@@ -293,7 +293,7 @@ async fn prepare_world(level: Arc<LevelWorld>) -> Result<(), JsValue> {
         crate::gpu::with_renderer(|r| {
             crate::diagnostics::gpu_step(
                 "gpu.geometry",
-                r,
+                Some(r),
                 &[("turn", Value::Number(f64::from(turns)))],
             )
         });
