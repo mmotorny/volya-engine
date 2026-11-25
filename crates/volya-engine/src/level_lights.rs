@@ -379,13 +379,13 @@ impl LevelLights {
         Ok(s)
     }
 
-    /// The object `id` came online: a lamp starts from its record (hanging-
-    /// lamps.md 3, 8).
     /// The colour animations of `lanims.xr`.
     pub fn animations(&self) -> &ColourAnimations {
         &self.animations
     }
 
+    /// The object `id` came online: a lamp starts from its record (hanging-
+    /// lamps.md 3, 8).
     pub fn object_online(&mut self, id: u16) {
         if self.lamps.iter().any(|l| l.id == id) {
             return;
@@ -485,6 +485,12 @@ impl LevelLights {
             |p| Self::has_sector(collision, portals, p),
             |from, dir, length| static_ray(collision, from, dir, length),
         );
+    }
+
+    /// The colour animations, the records and the glows, for a source
+    /// updating its own.
+    pub fn parts_mut(&mut self) -> (&ColourAnimations, &mut Lights, &mut Glows) {
+        (&self.animations, &mut self.lights, &mut self.glows)
     }
 
     /// The frame's light passes.
