@@ -7,12 +7,15 @@
 //! applies them to its [`Mixer`] as they arrive and mixes whenever the
 //! output asks, as an audio device mixes apart from the game's frames.
 //!
-//! The commands of one message apply together before the next block, so a
-//! [`Host`] mixes exactly what a [`Mixer`] driven directly does when the
-//! same changes come between the same blocks. Voices are numbered by the
-//! [`Remote`]; it learns that one ended from the [`Host`]'s reports
-//! ([`Remote::ended`]). Compressed files travel with the commands and are
-//! decoded by the host, block by block.
+//! The commands are a byte stream (the web platform passes it through a
+//! ring buffer in shared memory); those taken together apply together
+//! before the next block, so a [`Host`] mixes exactly what a [`Mixer`]
+//! driven directly does when the same changes come between the same
+//! blocks. Voices are numbered by the [`Remote`]; it learns that one ended
+//! from the [`Host`]'s reports ([`Remote::ended`]). Compressed files travel
+//! apart from the commands, numbered ([`Host::add_file`]), and are decoded
+//! by the host, block by block; commands playing a file not yet arrived
+//! wait for it, with every command taken with them.
 
 use std::io::{self, Cursor};
 
@@ -35,18 +38,21 @@ const CATEGORIES: [Category; Category::COUNT] =
 /// The engine's side: a [`MixerControl`] recording commands for a [`Host`].
 pub struct Remote {
     next_id: u32,
+    /// The number of the next file sent.
+    next_file: u32,
     /// Voices started and not known to have ended.
     playing: Vec<VoiceId>,
     volumes: [f32; Category::COUNT],
     master: f32,
     commands: Vec<u8>,
-    files: Vec<Vec<u8>>,
+    files: Vec<(u32, Vec<u8>)>,
 }
 
-/// One message for a [`Host`]: commands, and the files they play.
+/// What a [`Host`] is sent at once: commands, and the files they play with
+/// their numbers.
 pub struct Message {
     pub commands: Vec<u8>,
-    pub files: Vec<Vec<u8>>,
+    pub files: Vec<(u32, Vec<u8>)>,
 }
 
 impl Remote {
@@ -54,6 +60,7 @@ impl Remote {
     pub fn new(rate: u32) -> Self {
         let mut remote = Self {
             next_id: 0,
+            next_file: 0,
             playing: Vec::new(),
             volumes: [1.0; Category::COUNT],
             master: 1.0,
@@ -66,7 +73,8 @@ impl Remote {
 
     /// A new host at `rate` Hz: commands not yet taken are dropped, every
     /// voice is gone, and the volumes and the master gain carry over. Voice
-    /// numbers go on, so reports of the old host's voices change nothing.
+    /// and file numbers go on, so reports of the old host's voices change
+    /// nothing.
     pub fn connect(&mut self, rate: u32) {
         self.commands.clear();
         self.files.clear();
@@ -87,13 +95,15 @@ impl Remote {
         self.next_id = self.next_id.wrapping_add(1);
         self.commands.push(PLAY);
         self.u32(id.0);
-        self.u32(self.files.len() as u32);
+        let file = self.next_file;
+        self.next_file = self.next_file.wrapping_add(1);
+        self.u32(file);
         self.commands.extend_from_slice(&skip.to_le_bytes());
         self.commands.push(u8::from(playback.looping));
         self.f32(playback.gain);
         self.f32(playback.pan);
         self.commands.push(playback.category.index() as u8);
-        self.files.push(bytes);
+        self.files.push((file, bytes));
         self.playing.push(id);
         id
     }
@@ -205,6 +215,8 @@ pub type Opener = fn(Vec<u8>, u64) -> io::Result<Box<dyn Source>>;
 pub struct Host {
     /// `None` until the first command (`INIT`): silence.
     mixer: Option<Mixer>,
+    /// Files arrived and not yet played, by number.
+    files: Vec<(u32, Vec<u8>)>,
     open: Opener,
     /// Voices that ended since the last [`Host::take_ended`].
     ended: Vec<u32>,
@@ -250,78 +262,134 @@ impl Reader<'_> {
     }
 }
 
+/// A decoded command.
+enum Command {
+    Init(u32),
+    Play {
+        id: VoiceId,
+        file: u32,
+        skip: u64,
+        playback: Playback,
+    },
+    Stop(VoiceId),
+    StopAll,
+    SetVoice {
+        id: VoiceId,
+        gain: f32,
+        pan: f32,
+        pitch: f32,
+    },
+    SetVolume(Category, f32),
+    SetMaster(f32),
+    Watch(Option<Option<VoiceId>>),
+}
+
+/// The commands of `bytes`, which must be whole.
+fn decode(bytes: &[u8]) -> io::Result<Vec<Command>> {
+    let mut r = Reader(bytes);
+    let mut out = Vec::new();
+    while !r.0.is_empty() {
+        out.push(match r.u8()? {
+            INIT => Command::Init(r.u32()?),
+            PLAY => Command::Play {
+                id: VoiceId(r.u32()?),
+                file: r.u32()?,
+                skip: r.u64()?,
+                playback: Playback {
+                    looping: r.u8()? != 0,
+                    gain: r.f32()?,
+                    pan: r.f32()?,
+                    category: r.category()?,
+                },
+            },
+            STOP => Command::Stop(VoiceId(r.u32()?)),
+            STOP_ALL => Command::StopAll,
+            SET_VOICE => Command::SetVoice {
+                id: VoiceId(r.u32()?),
+                gain: r.f32()?,
+                pan: r.f32()?,
+                pitch: r.f32()?,
+            },
+            SET_VOLUME => Command::SetVolume(r.category()?, r.f32()?),
+            SET_MASTER => Command::SetMaster(r.f32()?),
+            WATCH => Command::Watch(match r.u64()? as i64 {
+                -2 => None,
+                -1 => Some(None),
+                id => Some(Some(VoiceId(id as u32))),
+            }),
+            _ => return Err(malformed()),
+        });
+    }
+    Ok(out)
+}
+
 impl Host {
     /// A host opening files with `open` ([`open_vorbis`] for the game's).
     pub fn new(open: Opener) -> Self {
         Self {
             mixer: None,
+            files: Vec::new(),
             open,
             ended: Vec::new(),
             watch: None,
         }
     }
 
-    /// Applies one [`Message`] of commands. A file that does not open ends
-    /// its voice at once (reported as ended); a malformed message stops
-    /// where it fails.
-    pub fn apply(&mut self, commands: &[u8], mut files: Vec<Vec<u8>>) -> io::Result<()> {
-        let mut r = Reader(commands);
-        while !r.0.is_empty() {
-            match r.u8()? {
-                INIT => {
-                    let rate = r.u32()?;
+    /// File `number` arrived.
+    pub fn add_file(&mut self, number: u32, bytes: Vec<u8>) {
+        self.files.push((number, bytes));
+    }
+
+    /// Applies `commands` (whole ones) once every file they play has
+    /// arrived, all of them together, so none of them is mixed apart from
+    /// the others; returns how many bytes it applied: all, or 0 while a
+    /// file is missing. A file that does not open ends its voice at once
+    /// (reported as ended); malformed commands are an error.
+    pub fn apply(&mut self, commands: &[u8]) -> io::Result<usize> {
+        let decoded = decode(commands)?;
+        let missing = decoded.iter().any(|c| match c {
+            Command::Play { file, .. } => !self.files.iter().any(|(n, _)| n == file),
+            _ => false,
+        });
+        if missing {
+            return Ok(0);
+        }
+        for command in decoded {
+            match command {
+                Command::Init(rate) => {
                     if let Some(old) = self.mixer.take() {
                         self.ended.extend(old.voices().map(VoiceId::index));
                     }
                     self.mixer = Some(Mixer::new(rate));
                 }
-                PLAY => {
-                    let id = VoiceId(r.u32()?);
-                    let file = r.u32()? as usize;
-                    let skip = r.u64()?;
-                    let playback = Playback {
-                        looping: r.u8()? != 0,
-                        gain: r.f32()?,
-                        pan: r.f32()?,
-                        category: r.category()?,
-                    };
-                    let bytes = files.get_mut(file).map(std::mem::take).ok_or_else(malformed)?;
+                Command::Play {
+                    id,
+                    file,
+                    skip,
+                    playback,
+                } => {
+                    let i = self.files.iter().position(|(n, _)| *n == file);
+                    let (_, bytes) = self.files.swap_remove(i.ok_or_else(malformed)?);
                     match (self.open)(bytes, skip) {
                         Ok(source) => self.mixer()?.play_as(id, source, playback),
                         // Errors end the sound rather than the mix.
                         Err(_) => self.ended.push(id.0),
                     }
                 }
-                STOP => {
-                    let id = VoiceId(r.u32()?);
-                    self.mixer()?.stop(id);
-                }
-                STOP_ALL => self.mixer()?.stop_all(),
-                SET_VOICE => {
-                    let id = VoiceId(r.u32()?);
-                    let (gain, pan, pitch) = (r.f32()?, r.f32()?, r.f32()?);
-                    self.mixer()?.set_voice(id, gain, pan, pitch);
-                }
-                SET_VOLUME => {
-                    let category = r.category()?;
-                    let volume = r.f32()?;
-                    self.mixer()?.set_volume(category, volume);
-                }
-                SET_MASTER => {
-                    let gain = r.f32()?;
-                    self.mixer()?.set_master_gain(gain);
-                }
-                WATCH => {
-                    self.watch = match r.u64()? as i64 {
-                        -2 => None,
-                        -1 => Some(None),
-                        id => Some(Some(VoiceId(id as u32))),
-                    };
-                }
-                _ => return Err(malformed()),
+                Command::Stop(id) => self.mixer()?.stop(id),
+                Command::StopAll => self.mixer()?.stop_all(),
+                Command::SetVoice {
+                    id,
+                    gain,
+                    pan,
+                    pitch,
+                } => self.mixer()?.set_voice(id, gain, pan, pitch),
+                Command::SetVolume(category, volume) => self.mixer()?.set_volume(category, volume),
+                Command::SetMaster(gain) => self.mixer()?.set_master_gain(gain),
+                Command::Watch(watch) => self.watch = watch,
             }
         }
-        Ok(())
+        Ok(commands.len())
     }
 
     fn mixer(&mut self) -> io::Result<&mut Mixer> {

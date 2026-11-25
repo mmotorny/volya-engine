@@ -670,6 +670,7 @@ impl App {
         if matches!(self.phase, Some(Phase::Menu(_))) && self.error.as_ref() == Some(&error) {
             return;
         }
+        tracing::error!(error = %error, "fatal error");
         self.error = Some(error);
         let now = self.clock;
         let title = self.opening(false);
@@ -844,6 +845,7 @@ impl App {
         self.frames += 1;
         if let Some(at) = self.loaded_since.take() {
             self.load_ms = Some(time_ms - at);
+            tracing::info!(load_ms = time_ms - at, "level made");
         }
         if std::mem::take(&mut self.shown) {
             // The hidden time never reaches the engine clock: this frame's
@@ -932,6 +934,7 @@ impl App {
                         let changed = self.game_type != Some(GAME_TYPE);
                         self.game_type = Some(GAME_TYPE);
                         self.load_started = Some(time_ms);
+                        tracing::info!("level loading");
                         let mut loading = Loading::start(data, changed);
                         if self.prepare_textures {
                             loading.prepare_textures();
@@ -964,6 +967,7 @@ impl App {
                                 };
                             }
                             Err(e) => {
+                                tracing::error!(error = %e, "loading failed");
                                 self.error = Some(e.to_string());
                                 *phase =
                                     Phase::Menu(TitleMenu::open(data, now, input, audio, title));
@@ -973,6 +977,7 @@ impl App {
                     }
                     Err(e) => {
                         // Back to the menu, saying why (our choice).
+                        tracing::error!(error = %e, "loading failed");
                         self.error = Some(e.to_string());
                         *phase = Phase::Menu(TitleMenu::open(data, now, input, audio, title));
                         self.screens.menu_opened();

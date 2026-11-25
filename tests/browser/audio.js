@@ -146,10 +146,17 @@ export const tests = {
     // Each render adds one file, inverted and panned to its side, to the
     // track: if the file plays exactly that channel (from the same frame as
     // the track), the channel cancels out and the other stays.
-    const cancel = (side, pan) => () =>
-      volya
-        .call("play_music", { track: MUSIC })
-        .then(() => volya.call("play_sound", { path: `${TRACK}_${side}.ogg`, pan, gain: -1 }));
+    // Both calls' commands reach the audio worker together, as one frame's
+    // do: it mixes on its own schedule, so calls apart may fall apart.
+    const cancel = (side, pan) => async () => {
+      await volya.call("debug_audio_hold", { on: true });
+      try {
+        await volya.call("play_music", { track: MUSIC });
+        await volya.call("play_sound", { path: `${TRACK}_${side}.ogg`, pan, gain: -1 });
+      } finally {
+        await volya.call("debug_audio_hold", { on: false });
+      }
+    };
     const [leftCancelled, right] = await render(cancel("l", -1));
     const [left, rightCancelled] = await render(cancel("r", 1));
     for (const [name, rms] of [["left", rmsOf(left)], ["right", rmsOf(right)]]) {

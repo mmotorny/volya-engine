@@ -2,8 +2,12 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! Static file server that mimics GitHub Pages for local development:
-//! serves a directory under [`BASE`], sends no custom headers (so no
-//! cross-origin isolation).
+//! serves a directory under [`BASE`]. The app's page comes without custom
+//! headers, as from GitHub Pages, so only the service worker makes it
+//! cross-origin isolated (`static/sw.js`, #354); every other response
+//! carries [`ISOLATION_HEADERS`], so the browser test pages (which run
+//! without the service worker) are isolated, and the files they load can
+//! be.
 //!
 //! With [`Server::with_tests`] it also serves the browser test harness under
 //! [`TEST_BASE`] (kept out of `dist/`) and accepts test reports POSTed to
@@ -30,6 +34,11 @@ pub const OFFLINE_BASE: &str = "/volya-engine/__test/offline/";
 /// URL prefix of the game installer served to tests (BYOA, local only), with
 /// `index.json` listing its files.
 pub const INSTALLER_BASE: &str = "/volya-engine/__test/installer/";
+
+/// What makes a page cross-origin isolated (COOP and COEP), as the service
+/// worker adds them.
+pub const ISOLATION_HEADERS: &str =
+    "Cross-Origin-Opener-Policy: same-origin\r\nCross-Origin-Embedder-Policy: require-corp\r\n";
 
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 const MAX_BODY_BYTES: usize = 1024 * 1024;
@@ -122,7 +131,7 @@ impl Server {
                 }
                 _ => match percent_decode(name) {
                     Some(name) if !name.contains(['/', '\\']) && dir.join(&name).is_file() => {
-                        serve_file(&mut stream, &dir.join(name), request.range, head_only)
+                        serve_file(&mut stream, &dir.join(name), request.range, head_only, true)
                     }
                     _ => write_status(&mut stream, 404, "Not Found"),
                 },
@@ -138,7 +147,11 @@ impl Server {
                 "HTTP/1.1 302 Found\r\nLocation: {BASE}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
             ),
             Route::NotFound => write_status(&mut stream, 404, "Not Found"),
-            Route::File(path) => serve_file(&mut stream, &path, request.range, head_only),
+            Route::File(path) => {
+                // The app's page: as GitHub Pages serves it.
+                let page = request.path == BASE || request.path == format!("{BASE}index.html");
+                serve_file(&mut stream, &path, request.range, head_only, !page)
+            }
         }
     }
 
@@ -199,12 +212,14 @@ struct Request {
     range: Option<(u64, Option<u64>)>,
 }
 
-/// Serves `path`, honoring a single byte range.
+/// Serves `path`, honoring a single byte range, with
+/// [`ISOLATION_HEADERS`] when `isolated`.
 fn serve_file(
     stream: &mut impl Write,
     path: &Path,
     range: Option<(u64, Option<u64>)>,
     head_only: bool,
+    isolated: bool,
 ) -> io::Result<()> {
     let mut file = File::open(path)?;
     let size = file.metadata()?.len();
@@ -226,7 +241,8 @@ fn serve_file(
     };
     write!(
         stream,
-        "{status}Content-Type: {kind}\r\nContent-Length: {len}\r\nAccept-Ranges: bytes\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"
+        "{status}Content-Type: {kind}\r\nContent-Length: {len}\r\nAccept-Ranges: bytes\r\nCache-Control: no-store\r\n{}Connection: close\r\n\r\n",
+        if isolated { ISOLATION_HEADERS } else { "" }
     )?;
     if !head_only {
         file.seek(SeekFrom::Start(start))?;
@@ -438,14 +454,21 @@ mod tests {
     }
 
     #[test]
-    fn serves_over_http_without_isolation_headers() {
+    fn serves_the_page_without_isolation_headers_and_the_rest_with() {
         let (dir, server) = fixture("http");
         let response = exchange(server, "GET /volya-engine/ HTTP/1.1\r\nHost: x\r\n\r\n");
         assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
         assert!(response.contains("Content-Type: text/html; charset=utf-8\r\n"));
         assert!(response.ends_with("<p>hi</p>"));
         assert!(!response.contains("Cross-Origin"));
+        let (dir2, server) = fixture("http-isolated");
+        let response = exchange(
+            server,
+            "GET /volya-engine/pkg/a%20b.wasm HTTP/1.1\r\nHost: x\r\n\r\n",
+        );
+        assert!(response.contains(ISOLATION_HEADERS), "{response}");
         fs::remove_dir_all(dir).unwrap();
+        fs::remove_dir_all(dir2).unwrap();
     }
 
     #[test]

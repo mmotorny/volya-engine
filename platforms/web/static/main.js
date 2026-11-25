@@ -11,6 +11,9 @@ import { createTextEntry } from "./text-entry.js";
 // Early: Chrome offers installing the app once, soon after load.
 import "./install.js";
 import { startUpdates, versionText } from "./update.js";
+import * as diagnostics from "./diagnostics.js";
+import { ensureIsolated } from "./isolation.js";
+import { createRing, ringTarget } from "./audio-ring.js";
 
 // Installable app: offline start and updates (sw.js, update.js). Registered
 // relative to this module so the scope is the app's base path.
@@ -18,9 +21,15 @@ const registration = navigator.serviceWorker?.register(new URL("./sw.js", import
   console.warn(`service worker: ${error.message}`);
 });
 const updates = navigator.serviceWorker ? startUpdates(registration) : null;
+// Audio output needs a cross-origin isolated page (isolation.js): one
+// reload when that makes it so, before anything starts; otherwise the
+// interface says so (game-ui.js).
+const isolation = await ensureIsolated({ registered: registration });
+if (isolation === "reloading") await new Promise(() => {});
 
 const worker = new Worker(new URL("./engine-worker.js", import.meta.url), { type: "module" });
 const pending = new Map();
+diagnostics.connect((message) => worker.postMessage(message));
 let nextId = 0;
 /** The wasm build the engine worker runs, once started (wasm-build.js). */
 let build = null;
@@ -71,26 +80,33 @@ let audioWorker = null;
 
 /**
  * Connects an audio context (live or offline) to the engine's mixer: an
- * AudioWorklet pulling from the audio worker, which the engine worker
- * drives over a channel of their own.
+ * AudioWorklet playing what the audio worker mixes, which the engine worker
+ * drives, all over the output's shared memory (audio-ring.js). Needs a
+ * cross-origin isolated page.
  */
 async function connectAudio(context) {
   await started;
   await context.audioWorklet.addModule(new URL("./audio-worklet.js", import.meta.url));
-  const node = new AudioWorkletNode(context, "volya-output", { numberOfInputs: 0, outputChannelCount: [2] });
+  const memory = createRing();
+  const sampleRate = context.sampleRate;
+  const target = ringTarget(sampleRate);
+  const node = new AudioWorkletNode(context, "volya-output", {
+    numberOfInputs: 0,
+    outputChannelCount: [2],
+    processorOptions: { memory, target },
+  });
   node.connect(context.destination);
   audioWorker ??= new Worker(new URL("./audio-worker.js", import.meta.url), { type: "module" });
   const link = new MessageChannel();
-  const sampleRate = context.sampleRate;
-  audioWorker.postMessage({ type: "connect", build, sampleRate, worklet: node.port, engine: link.port1 }, [node.port, link.port1]);
-  worker.postMessage({ type: "audio", port: link.port2, sampleRate }, [link.port2]);
+  audioWorker.postMessage({ type: "connect", build, sampleRate, target, memory, engine: link.port1 }, [link.port1]);
+  worker.postMessage({ type: "audio", memory, port: link.port2, sampleRate }, [link.port2]);
   return node;
 }
 
 // The page's live audio context, once made (below).
 let audio = null;
 
-globalThis.volya = { call, status: () => call("status"), connectAudio, audioState: () => audio?.state };
+globalThis.volya = { call, status: () => call("status"), connectAudio, audioState: () => audio?.state, diagnostics };
 
 // Our design (#93): every browser throttles or suspends hidden pages, so the
 // engine stops while the page is hidden (another tab, a minimised window, an
@@ -149,7 +165,8 @@ setLevel = (controls) => {
   offer.update(controls);
 };
 const canvas = view.transferControlToOffscreen();
-worker.postMessage({ type: "start", canvas, size: size() }, [canvas]);
+// The diagnostic log, when the player keeps one (#346).
+worker.postMessage({ type: "start", canvas, size: size(), diagnostics: diagnostics.enabled() ? diagnostics.session() : null }, [canvas]);
 if (document.visibilityState === "hidden") visibilityChanged();
 const resized = () => worker.postMessage({ type: "resize", ...size() });
 new ResizeObserver(resized).observe(view);
@@ -176,12 +193,15 @@ try {
   status.dataset.state = "ready";
   // Browsers start audio suspended until a user gesture (iOS especially).
   audio = new AudioContext();
+  diagnostics.event("AudioContext state", { state: audio.state, sample_rate: audio.sampleRate });
+  audio.addEventListener("statechange", () => diagnostics.event("AudioContext state", { state: audio.state }));
   // Made while hidden: suspended until shown.
   if (document.visibilityState === "hidden") audio.suspend().catch(() => {});
-  await connectAudio(audio);
+  // Not isolated, nothing plays: the interface says so before anything else.
+  if (isolation === "isolated") await connectAudio(audio);
   const resume = () => document.visibilityState === "visible" && audio.state !== "running" && audio.resume();
   for (const event of ["pointerdown", "keydown", "touchend"]) addEventListener(event, resume);
-  await import("./game-ui.js").then((ui) => ui.start(call, updates));
+  await import("./game-ui.js").then((ui) => ui.start(call, updates, { isolated: isolation === "isolated" }));
 } catch (error) {
   // The same panel as the interface's other problems, drawn without the engine.
   status.textContent = `Volya Engine · ${versionText()}`;

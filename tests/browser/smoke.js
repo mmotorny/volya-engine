@@ -9,6 +9,64 @@ const base = location.pathname.slice(0, location.pathname.indexOf("/__test/") + 
 /** The `[path, hash]` list injected into a deployed sw.js. */
 const precacheOf = (source) => JSON.parse(source.match(/const PRECACHE = (\[.*?\]);/s)[1]);
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** Waits for `ok` (may be async) to hold, failing with `what`. */
+async function until(ok, what, ms = 5000) {
+  const end = performance.now() + ms;
+  while (!(await ok())) {
+    assert(performance.now() < end, what);
+    await sleep(20);
+  }
+}
+
+/** The diagnostic log's Download button in Settings. */
+const logDownload = () => [...document.querySelectorAll("#game .panel-action")].find((b) => /diagnostic log|Preparing|log$/.test(b.textContent));
+
+/** Opens Settings; its diagnostic log check box. */
+async function openSettingsLog() {
+  await volya.showSettings();
+  const label = [...document.querySelectorAll("#game .switch")].find((l) => l.textContent.includes("diagnostic log"));
+  assert(label, "no diagnostic log setting");
+  return label.querySelector("input");
+}
+
+/** Presses Download diagnostic log; the saved file's name and its trace. */
+async function downloadLog() {
+  const click = HTMLAnchorElement.prototype.click;
+  let link = null;
+  HTMLAnchorElement.prototype.click = function () {
+    link = this;
+  };
+  try {
+    logDownload().click();
+    await until(() => link, "nothing was saved", 15000);
+  } finally {
+    HTMLAnchorElement.prototype.click = click;
+  }
+  const text = await (await fetch(link.href)).text();
+  const trace = JSON.parse(text);
+  checkTraceFormat(trace);
+  return { name: link.download, trace };
+}
+
+/**
+ * The Trace Event Format's JSON Object Format, as documented: a
+ * `traceEvents` array of events, each with `ph`, `name`, `pid`, `tid` and
+ * `ts` (µs); `X` with `dur`; `C` with numeric `args`; `i` with a scope.
+ */
+function checkTraceFormat(trace) {
+  assert(Array.isArray(trace.traceEvents), "no traceEvents");
+  for (const e of trace.traceEvents) {
+    const where = JSON.stringify(e).slice(0, 120);
+    assert(["X", "C", "i", "M"].includes(e.ph), `phase: ${where}`);
+    assert(typeof e.name === "string" && Number.isInteger(e.pid) && Number.isInteger(e.tid), `fields: ${where}`);
+    assert(typeof e.ts === "number", `ts: ${where}`);
+    if (e.ph === "X") assert(typeof e.dur === "number" && e.dur >= 0, `dur: ${where}`);
+    if (e.ph === "C") assert(Object.values(e.args ?? {}).every((v) => typeof v === "number"), `counter: ${where}`);
+    if (e.ph === "i") assert(["t", "p", "g"].includes(e.s), `scope: ${where}`);
+  }
+}
+
 export const tests = {
   "engine reports ready": async () => {
     const status = await volya.status();
@@ -127,15 +185,73 @@ export const tests = {
     }
   },
 
-  // GitHub Pages cannot send COOP/COEP; the engine must not depend on them.
-  "page is not cross-origin isolated": () => {
-    assertEqual(self.crossOriginIsolated, false);
+  // Audio output needs SharedArrayBuffer (#354). GitHub Pages can't send
+  // COOP/COEP: the service worker adds them; test pages run without it, so
+  // the dev server sends them for everything but the app's page.
+  "page is cross-origin isolated": () => {
+    assertEqual(self.crossOriginIsolated, true);
+    assert(typeof SharedArrayBuffer === "function", "no SharedArrayBuffer");
+  },
+
+  "a page the service worker didn't serve reloads once, as soon as it can": async () => {
+    const { ensureIsolated } = await import(`${base}isolation.js`);
+    const tick = () => new Promise((r) => setTimeout(r));
+    const env = ({ controller = null, active = null, installing = null, stored = {} } = {}) => {
+      const container = Object.assign(new EventTarget(), { controller });
+      const items = { ...stored };
+      const storage = { getItem: (k) => items[k] ?? null, setItem: (k, v) => (items[k] = v) };
+      const registration = { active, installing, waiting: null };
+      const e = { container, storage, reloads: 0, items, isolated: false };
+      e.run = () => ensureIsolated({ ...e, registered: Promise.resolve(registration), reload: () => e.reloads++ });
+      return e;
+    };
+    // Isolated: nothing to do.
+    const ok = env();
+    assertEqual(await ensureIsolated({ ...ok, isolated: true, reload: () => ok.reloads++ }), "isolated", "isolated");
+    // A hard reload, the worker installed: reloads at once.
+    const hard = env({ active: {} });
+    assertEqual([await hard.run(), hard.reloads].join(), "reloading,1", "hard reload");
+    // The same page session again (still not isolated): no second reload.
+    assertEqual([await hard.run(), hard.reloads].join(), "blocked,1", "a second time");
+    // First visit: reloads once the worker installed and claimed the page.
+    const installing = Object.assign(new EventTarget(), { state: "installing" });
+    const first = env({ installing });
+    const outcome = first.run();
+    await tick();
+    assertEqual(first.reloads, 0, "reloaded before the worker controls the page");
+    first.container.dispatchEvent(new Event("controllerchange"));
+    assertEqual([await outcome, first.reloads].join(), "reloading,1", "first visit");
+    // An install that fails: no reload, the player is told.
+    const failing = Object.assign(new EventTarget(), { state: "installing" });
+    const failed = env({ installing: failing });
+    const failure = failed.run();
+    await tick();
+    failing.state = "redundant";
+    failing.dispatchEvent(new Event("statechange"));
+    assertEqual([await failure, failed.reloads].join(), "blocked,0", "failed install");
+    // Served by the worker and not isolated: the browser ignores the headers.
+    const ignored = env({ controller: {}, active: {} });
+    assertEqual([await ignored.run(), ignored.reloads].join(), "blocked,0", "headers ignored");
   },
 
   "service worker controls the app scope": async () => {
     const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 10000));
     const registration = await Promise.race([navigator.serviceWorker.ready, timeout]);
     assert(registration.scope.endsWith("/volya-engine/"), `scope ${registration.scope}`);
+  },
+
+  // The dev server sends the app's page without them, as GitHub Pages does.
+  "the service worker serves the app with COOP and COEP": async () => {
+    if (!navigator.serviceWorker.controller) {
+      await new Promise((resolve) => navigator.serviceWorker.addEventListener("controllerchange", resolve, { once: true }));
+    }
+    const page = await fetch(base);
+    const worker = await fetch(`${base}audio-worker.js`);
+    for (const [name, response] of [["page", page], ["audio worker", worker]]) {
+      assertEqual(response.headers.get("Cross-Origin-Opener-Policy"), "same-origin", `${name} COOP`);
+      assertEqual(response.headers.get("Cross-Origin-Embedder-Policy"), "require-corp", `${name} COEP`);
+    }
+    for (const response of [page, worker]) await response.arrayBuffer();
   },
 
   "the whole app works offline once installed, with only the wasm build it runs": async () => {
@@ -511,6 +627,120 @@ export const tests = {
     worker.terminate();
     if (navigator.userAgentData) assert(result.shared, `Chromium refused a second read-only handle: ${result.error}`);
     return result.shared ? "shared" : `exclusive: ${result.error}`;
+  },
+
+  "diagnostic log: off by default, and nothing runs for it per frame": async () => {
+    localStorage.removeItem("volya-engine.diagnostic-log");
+    await volya.diagnostics.setEnabled(false, volya.call);
+    assert(!volya.diagnostics.enabled(), "on by default");
+    const toggle = await openSettingsLog();
+    assert(!toggle.checked, "the check box is ticked by default");
+    const label = toggle.closest("label").querySelector("strong").textContent;
+    assertEqual(label, "Keep a diagnostic log", "label");
+    const off = await volya.call("debug_diagnostics_bench", { frames: 20000 });
+    assert(!off.on, "on");
+    // The size of the kept log doesn't change while off.
+    const before = (await volya.call("diagnostic_log_status")).bytes;
+    await sleep(300);
+    assertEqual((await volya.call("diagnostic_log_status")).bytes, before, "log grew while off");
+    return `recording a frame's spans while off: ${off.us_per_frame.toFixed(3)} µs`;
+  },
+
+  "diagnostic log: on, it records; the download is one trace file with its sections": async () => {
+    const toggle = await openSettingsLog();
+    toggle.click();
+    await until(() => !logDownload()?.hidden, "no Download diagnostic log once on");
+    assert(volya.diagnostics.enabled(), "the setting isn't on");
+    assertEqual(localStorage.getItem("volya-engine.diagnostic-log"), "on", "setting not kept");
+    const on = await volya.call("debug_diagnostics_bench", { frames: 20000 });
+    // A few long frames, and a page event.
+    await volya.call("debug_frame_cost", { ms: 70 });
+    await sleep(400);
+    await volya.call("debug_frame_cost", { ms: 0 });
+    volya.diagnostics.event("test marker", { run: "smoke" });
+    volya.diagnostics.metric("test.page_ms", 2);
+    volya.diagnostics.metric("test.page_ms", 4);
+    await sleep(1300);
+    const { name, trace } = await downloadLog();
+    assert(/^volya-engine-log-\d{4}-\d\d-\d\d-version-[0-9A-Za-z+-]+\.json$/.test(name), `file name ${name}`);
+    const events = trace.traceEvents;
+    const pid = events.findLast((e) => e.name === "session").pid;
+    const mine = events.filter((e) => e.pid === pid);
+    const find = (ph, name) => mine.filter((e) => e.ph === ph && e.name === name);
+    const meta = find("M", "process_name")[0];
+    assert(meta?.args.name.startsWith("Volya Engine "), "no process name");
+    const session = find("i", "session")[0].args;
+    for (const key of ["version", "user_agent", "screen", "dpr", "cores", "build", "gpu_state"]) assert(key in session, `session lacks ${key}`);
+    if (session.gpu_state === "ready") assert(["webgpu", "webgl2"].includes(session.gpu_backend) && session.gpu_textures, "no backend");
+    assert(find("i", "test marker")[0]?.tid === 2, "no page event");
+    // A period's series: the spans' times, the metrics and counts.
+    const series = (key) => mine.filter((e) => e.ph === "C" && key in e.args).length;
+    const page = mine.find((e) => e.ph === "C" && "test.page_ms mean" in e.args)?.args;
+    assertEqual([page?.["test.page_ms min"], page?.["test.page_ms mean"], page?.["test.page_ms max"]].join(), "2,3,4", "page metric");
+    for (const key of ["frame mean", "frame max", "frame n", "engine max", "render max", "sound max", "frame.interval_ms max", "frame.late", "MiB"]) {
+      assert(series(key) > 0, `no ${key} series`);
+    }
+    const long = find("X", "frame").filter((e) => e.dur >= 50000);
+    assert(long.length > 0, "no long frame");
+    assert(
+      mine.some((e) => e.ph === "X" && e.name === "engine" && e.ts >= long[0].ts && e.ts < long[0].ts + long[0].dur),
+      "a long frame without what ran in it",
+    );
+    if (volya.audioState() === "running") {
+      for (const key of ["audio.fill_ms min", "audio.underrun_frames", "audio.mix_ms max"]) {
+        assert(series(key) > 0, `no ${key} series`);
+      }
+    }
+    assertEqual(trace.otherData.cap_bytes, 2 * 2 ** 20, "cap");
+    return `recording a frame's spans while on: ${on.us_per_frame.toFixed(2)} µs; ${events.length} events; audio ${volya.audioState()}`;
+  },
+
+  "diagnostic log: the 2 MiB cap holds, the oldest go first": async () => {
+    const { bytes } = await volya.call("debug_diagnostics_fill", { events: 25000 });
+    assert(bytes <= 2 * 2 ** 20 && bytes > 1.5 * 2 ** 20, `log of ${bytes} bytes`);
+    const { trace } = await downloadLog();
+    const fill = trace.traceEvents.filter((e) => e.name?.startsWith("fill "));
+    const first = Number(fill[0].name.slice(5));
+    assert(first > 0, "the oldest weren't dropped");
+    assertEqual(fill.at(-1).name, "fill 0024999", "the newest");
+    assertEqual(fill.length, 25000 - first, "a gap");
+    return `kept ${bytes} bytes: fill ${first} on`;
+  },
+
+  "diagnostic log: off, it is kept and offered; it survives a reload, in a new session": async () => {
+    volya.diagnostics.event("test kept", { run: "smoke" });
+    const toggle = await openSettingsLog();
+    toggle.click();
+    await until(() => !toggle.disabled, "never turned off");
+    assert(!volya.diagnostics.enabled(), "still on");
+    assertEqual(localStorage.getItem("volya-engine.diagnostic-log"), null, "setting not cleared");
+    assert(!logDownload().hidden, "a kept log isn't offered");
+    const kept = await downloadLog();
+    assert(kept.trace.traceEvents.some((e) => e.name === "test kept"), "the event wasn't kept");
+    // A new copy of the app, logging on from its start.
+    localStorage.setItem("volya-engine.diagnostic-log", "on");
+    const frame = Object.assign(document.createElement("iframe"), { width: 400, height: 800 });
+    frame.style.cssText = "position: fixed; left: -5000px; top: 0";
+    frame.src = base;
+    document.body.append(frame);
+    try {
+      await until(() => frame.contentWindow.volya?.call, "the app didn't start", 15000);
+      const call = frame.contentWindow.volya.call;
+      // Calls fail until its engine has started.
+      const status = () => call("diagnostic_log_status").catch(() => null);
+      await until(async () => (await status())?.on, "the reloaded app's log isn't on", 20000);
+      const { text } = await call("diagnostic_log");
+      const events = JSON.parse(text).traceEvents;
+      assert(events.some((e) => e.name === "test kept"), "the log didn't survive the reload");
+      // Its own session, after the earlier one's events.
+      const now = events.findLast((e) => e.name === "session");
+      const before = events.find((e) => e.name === "test kept");
+      assert(now && now.pid !== before.pid && now.ts > before.ts, `sessions ${now?.pid} ${before.pid}`);
+      await frame.contentWindow.volya.diagnostics.setEnabled(false, call);
+    } finally {
+      localStorage.removeItem("volya-engine.diagnostic-log");
+      frame.remove();
+    }
   },
 
   "layout fits the viewport": () => {

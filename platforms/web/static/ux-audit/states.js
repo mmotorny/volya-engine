@@ -18,6 +18,8 @@ export const SECTIONS = [
       { id: "import-tab", name: "First start in a browser tab", game: fresh, tab: true, persisted: false },
       { id: "import-deleted", name: "The browser deleted the imported game", game: fresh, tab: true, persisted: false, deleted: true },
       { id: "import-no-graphics", name: "Neither WebGPU nor WebGL 2 working (before or after import)", game: fresh, gpu: false },
+      { id: "import-not-isolated", name: "Not cross-origin isolated after the one reload (no shared memory for sound)", game: fresh, isolated: false },
+      { id: "import-not-isolated-no-graphics", name: "Not isolated, and no WebGPU or WebGL 2", game: fresh, isolated: false, gpu: false },
       { id: "import-pick", name: "Picked the wrong files", game: fresh, snapshot: { error: "pick" } },
       { id: "import-not-installer", name: "Not the game's installer", game: fresh, snapshot: { error: "Inno Setup headers: unexpected signature" } },
       {
@@ -137,6 +139,24 @@ export const SECTIONS = [
         screen: "settings",
         check: "failed",
       },
+      // The diagnostic log (#346): off by default.
+      { id: "settings-log-on-empty", name: "Diagnostic log on, nothing recorded yet", game: imported, screen: "settings", log: { on: true, entries: false } },
+      { id: "settings-log-on", name: "Diagnostic log on, with a log to download", game: imported, screen: "settings", log: { on: true, entries: true } },
+      {
+        id: "settings-log-preparing",
+        name: "Download diagnostic log pressed: preparing the file",
+        game: imported,
+        screen: "settings",
+        log: { on: true, entries: true, download: "preparing" },
+      },
+      {
+        id: "settings-log-failed",
+        name: "Download failed: the log couldn't be read (for a few seconds)",
+        game: imported,
+        screen: "settings",
+        log: { on: true, entries: true, download: "failed" },
+      },
+      { id: "settings-log-off-kept", name: "Diagnostic log turned off, its log kept", game: imported, screen: "settings", log: { on: false, entries: true } },
       { id: "settings-no-game", name: "No game imported", game: fresh, screen: "settings" },
     ],
   },

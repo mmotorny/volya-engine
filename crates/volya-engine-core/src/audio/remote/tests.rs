@@ -61,6 +61,14 @@ fn open_tone(bytes: Vec<u8>, skip: u64) -> io::Result<Box<dyn Source>> {
     }))
 }
 
+/// Hands `m` to `host`: its files, then its commands, all applied.
+fn deliver(host: &mut Host, m: Message) {
+    for (n, f) in m.files {
+        host.add_file(n, f);
+    }
+    assert_eq!(host.apply(&m.commands).unwrap(), m.commands.len());
+}
+
 /// A mixer driven directly and one driven through a remote and its host.
 struct Pair {
     direct: Mixer,
@@ -108,7 +116,7 @@ impl Pair {
     /// Mixes a block on both; they must agree exactly.
     fn mix(&mut self, frames: usize) -> Vec<f32> {
         if let Some(m) = self.remote.take() {
-            self.host.apply(&m.commands, m.files).unwrap();
+            deliver(&mut self.host, m);
         }
         let direct = self.direct.mix(frames);
         let hosted = self.host.mix(frames);
@@ -153,7 +161,12 @@ fn a_hosted_mixer_mixes_what_a_direct_one_does() {
     let mut heard = 0.0f32;
     for frame in 0..200u32 {
         let t = frame as f32 * 0.05;
-        pair.set_voice(looped, 0.5 + 0.4 * t.sin(), t.cos(), 1.0 + 0.2 * (t * 0.7).sin());
+        pair.set_voice(
+            looped,
+            0.5 + 0.4 * t.sin(),
+            t.cos(),
+            1.0 + 0.2 * (t * 0.7).sin(),
+        );
         match frame {
             20 => pair.remote.set_volume(Category::Music, 0.3),
             40 => {
@@ -186,10 +199,12 @@ fn ended_voices_are_reported() {
     pair.mix(10);
     assert!(!pair.remote.is_playing(short), "ended in the host");
     // A file that does not open ends at once.
-    let bad = pair.remote.play_unchecked(Vec::new(), 0, Playback::default());
+    let bad = pair
+        .remote
+        .play_unchecked(Vec::new(), 0, Playback::default());
     assert!(pair.remote.is_playing(bad));
     let m = pair.remote.take().unwrap();
-    pair.host.apply(&m.commands, m.files).unwrap();
+    deliver(&mut pair.host, m);
     pair.remote.ended(&pair.host.take_ended());
     assert!(!pair.remote.is_playing(bad));
 }
@@ -201,7 +216,7 @@ fn a_new_host_keeps_volumes_and_drops_voices() {
     remote.set_volume(Category::Effects, 0.5);
     let id = remote.play_unchecked(tone_file(100, 1, 1_000), 0, Playback::default());
     let m = remote.take().unwrap();
-    host.apply(&m.commands, m.files).unwrap();
+    deliver(&mut host, m);
     assert_eq!(host.mix(4)[2], (0.01f32).sin() * 0.5 * 0.5);
     // Reconnected: a fresh host from the first message on.
     remote.connect(100);
@@ -210,12 +225,12 @@ fn a_new_host_keeps_volumes_and_drops_voices() {
     assert_ne!(next, id, "numbers go on");
     let mut fresh = Host::new(open_tone);
     let m = remote.take().unwrap();
-    fresh.apply(&m.commands, m.files).unwrap();
+    deliver(&mut fresh, m);
     assert_eq!(fresh.mix(4)[2], (0.01f32).sin() * 0.5 * 0.5, "volume kept");
     // The old host's voice is reported ended on a new INIT.
     remote.connect(100);
     let m = remote.take().unwrap();
-    host.apply(&m.commands, m.files).unwrap();
+    deliver(&mut host, m);
     assert_eq!(host.take_ended(), [id.index()]);
     assert!(remote.take().is_none(), "nothing more to send");
 }
@@ -224,10 +239,42 @@ fn a_new_host_keeps_volumes_and_drops_voices() {
 fn malformed_messages_are_errors_and_silence_comes_first() {
     let mut host = Host::default();
     assert!(host.mix(3).iter().all(|&s| s == 0.0));
-    assert!(host.apply(&[99], Vec::new()).is_err());
-    assert!(host.apply(&[INIT, 1, 2], Vec::new()).is_err());
+    assert!(host.apply(&[99]).is_err());
+    assert!(host.apply(&[INIT, 1, 2]).is_err());
     // A command before INIT has no mixer.
-    assert!(host.apply(&[STOP_ALL], Vec::new()).is_err());
+    assert!(host.apply(&[STOP_ALL]).is_err());
+}
+
+#[test]
+fn commands_wait_for_every_file_they_play_and_apply_together() {
+    // A frame starting two voices whose files arrive one at a time: blocks
+    // mixed between the arrivals have neither, and both start together.
+    let mut pair = Pair::new(100);
+    let left = pair.play(tone_file(100, 1, 1_000), 0, Playback::default());
+    let right = pair.play(tone_file(100, 1, 1_000), 0, Playback::default());
+    MixerControl::set_master_gain(&mut pair.remote, 0.5);
+    let m = pair.remote.take().unwrap();
+    let mut files = m.files.into_iter();
+    let (n, f) = files.next().unwrap();
+    pair.host.add_file(n, f);
+    assert_eq!(
+        pair.host.apply(&m.commands).unwrap(),
+        0,
+        "a file is missing"
+    );
+    assert!(pair.host.mix(3).iter().all(|&s| s == 0.0));
+    for (n, f) in files {
+        pair.host.add_file(n, f);
+    }
+    assert_eq!(pair.host.apply(&m.commands).unwrap(), m.commands.len());
+    let mixer = pair.host.mixer_ref().unwrap();
+    assert_eq!(mixer.master_gain(), 0.5);
+    let (l, r) = (mixer.probe(left).unwrap(), mixer.probe(right).unwrap());
+    assert_eq!(
+        (l.advanced, r.advanced),
+        (0.0, 0.0),
+        "neither started before the other"
+    );
 }
 
 #[test]
@@ -236,17 +283,21 @@ fn watch_is_carried() {
     let mut host = Host::new(open_tone);
     remote.watch(Some(Some(VoiceId(7))));
     let m = remote.take().unwrap();
-    host.apply(&m.commands, m.files).unwrap();
+    deliver(&mut host, m);
     assert_eq!(host.watched(), Some(Some(VoiceId(7))));
     remote.watch(Some(None));
     remote.watch(None);
     let m = remote.take().unwrap();
-    host.apply(&m.commands, m.files).unwrap();
+    deliver(&mut host, m);
     assert_eq!(host.watched(), None);
 }
 
 #[test]
 fn checked_plays_need_a_vorbis_stream() {
     let mut remote = Remote::new(100);
-    assert!(remote.play_file(vec![1, 2, 3], 0, Playback::default()).is_none());
+    assert!(
+        remote
+            .play_file(vec![1, 2, 3], 0, Playback::default())
+            .is_none()
+    );
 }

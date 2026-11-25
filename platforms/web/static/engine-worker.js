@@ -2,15 +2,21 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // The engine thread (docs/architecture.md). Messages from the page:
-//   { type: "start", canvas, size }  → { type: "started", build } | { type: "error", message }
-//   (`build`: the wasm build loaded, wasm-build.js)
+//   { type: "start", canvas, size, diagnostics }  → { type: "started", build } | { type: "error", message }
+//   (`build`: the wasm build loaded, wasm-build.js; `diagnostics`: the
+//   session as diagnostics.js tells it when the player keeps a diagnostic
+//   log, else null)
+//   { type: "diag", kind, name, … }: the page's events for the diagnostic
+//   log (diagnostics.js), dropped while it is off.
 //   { type: "resize", width, height, dpr }: the canvas's CSS size and the
 //   page's devicePixelRatio (`size` in "start" has the same fields).
 //   { type: "call", id, op, args }  → { type: "result", id, result } | { type: "result", id, error }
-//   { type: "audio", port, sampleRate } connects a new output: `port` goes
-//   to the audio worker (audio-worker.js), which mixes for the AudioWorklet;
-//   this worker sends it the mixer's commands after every frame, call and
-//   visibility change, and takes its reports.
+//   { type: "audio", memory, port, sampleRate } connects a new output:
+//   `memory` is its shared memory (audio-ring.js), `port` goes to the audio
+//   worker (audio-worker.js), which mixes for the AudioWorklet. After every
+//   frame, call and visibility change this worker writes the mixer's
+//   commands to the ring of commands and posts the files they play to
+//   `port`; it takes the audio worker's reports from it.
 //   { type: "input", event }: one input event (format in src/input.rs).
 //   { type: "visibility", hidden }: the page was hidden or shown again; the
 //   engine stops while hidden (our design, #93).
@@ -101,11 +107,11 @@ function schedule() {
 let started;
 /** The port to the audio worker, once an output is connected. */
 let audioPort = null;
-/** Sends the audio worker the mixer's commands since the last time. */
+/** Sends the audio worker the mixer's commands since the last time, and the files they play. */
 function flushAudio() {
   if (!audioPort || !engine) return;
-  const message = engine.audio_take();
-  if (message) audioPort.postMessage(message, [message.commands.buffer, ...message.files.map((f) => f.buffer)]);
+  const files = engine.audio_flush();
+  if (files) for (const file of files) audioPort.postMessage(file, [file[1].buffer]);
 }
 
 function loop(time) {
@@ -120,16 +126,28 @@ function loop(time) {
     // A broken engine stops drawing; calls report their own errors.
     console.error(`frame: ${message(error)}`);
     broken = true;
+    try {
+      e().diagnostics_event("engine stopped", 1, JSON.stringify({ error: message(error) }));
+    } catch {
+      // The engine can't record any more.
+    }
     return;
   }
   schedule();
 }
+
+/** Whether the diagnostic log is on (the `diagnostics_set` op's result). */
+let logging = false;
 
 onmessage = async ({ data }) => {
   if (data.type === "start") {
     let build;
     started = (async () => {
       ({ build, module: engine } = await loadEngine());
+      // The player's setting, before anything else runs (#346).
+      if (data.diagnostics) {
+        logging = JSON.parse(await engine.call("diagnostics_set", JSON.stringify({ on: true, session: data.diagnostics }))).on;
+      }
       await engine.start(data.canvas);
       engine.resize(data.size.width, data.size.height, data.size.dpr);
     })();
@@ -144,7 +162,7 @@ onmessage = async ({ data }) => {
     await started;
     e().resize(data.width, data.height, data.dpr);
   } else if (data.type === "audio") {
-    e().audio_init(data.sampleRate);
+    e().audio_init(data.sampleRate, data.memory);
     // One output: a replaced one gets nothing more.
     audioPort?.close();
     audioPort = data.port;
@@ -167,6 +185,16 @@ onmessage = async ({ data }) => {
       console.warn(`visibility: ${message(error)}`);
     }
     schedule();
+  } else if (data.type === "diag") {
+    // The page's events for the diagnostic log (diagnostics.js).
+    if (!logging) return;
+    try {
+      if (data.kind === "event") e().diagnostics_event(data.name, 2, JSON.stringify(data.args ?? {}));
+      else if (data.kind === "metrics") e().diagnostics_metrics(data.name, data.n, data.min, data.sum, data.max);
+      else if (data.kind === "count") e().diagnostics_count(data.name, data.n);
+    } catch (error) {
+      console.warn(`diagnostics: ${message(error)}`);
+    }
   } else if (data.type === "input") {
     try {
       e().input(data.event);
@@ -177,6 +205,7 @@ onmessage = async ({ data }) => {
     let reply;
     try {
       reply = { type: "result", id: data.id, result: JSON.parse(await e().call(data.op, JSON.stringify(data.args ?? {}))) };
+      if (data.op === "diagnostics_set") logging = reply.result.on;
     } catch (error) {
       reply = { type: "result", id: data.id, error: message(error) };
     }

@@ -12,10 +12,12 @@
 // menu's last item).
 //
 // Home holds Play only; secondary actions (an update offer, Settings) sit at
-// the bottom, away from it. Settings holds updates, storage and, in a danger
-// zone, removing the import.
+// the bottom, away from it. Settings holds updates, the diagnostic log and,
+// in a danger zone, removing the import.
 
 import { SHARE_ICON, canOffer, chromium, install, installed, platform } from "./install.js";
+import * as diagnostics from "./diagnostics.js";
+import { BUILD, versionText } from "./update.js";
 
 
 let call;
@@ -60,9 +62,10 @@ function element(tag, props = {}, ...children) {
 }
 
 /** Entry point, called by main.js once the engine runs. */
-export async function start(engineCall, updateState = null) {
+export async function start(engineCall, updateState = null, { isolated = true } = {}) {
   call = engineCall;
   updates = updateState;
+  pageIsolated = isolated;
   globalThis.volya.importGame = importGame;
   globalThis.volya.showSettings = showSettings;
   globalThis.volya.refresh = refresh;
@@ -105,6 +108,12 @@ function settingsButton() {
   return button;
 }
 
+/** Whether the page is cross-origin isolated, which sound needs (isolation.js). */
+let pageIsolated = true;
+
+/** Why the game can't play its sound here: one sentence. */
+const ISOLATION_PROBLEM = "Volya Engine plays the game's sound through shared memory, which this browser doesn't allow this page to use.";
+
 /** Whether the engine can draw (without WebGPU or WebGL 2 the game would run unseen). */
 const graphics = async () => (await call("status")).gpu.state === "ready";
 
@@ -118,14 +127,16 @@ const GRAPHICS_PROBLEM = "Volya Engine draws the game with WebGPU or WebGL 2, an
  */
 async function showUnsupported() {
   const { gpu } = await call("status");
+  const drawn = gpu.state === "ready";
   show(
     element(
       "div",
       { className: "panel" },
       element("p", { className: "label", textContent: "Unavailable here" }),
       element("h2", { textContent: "This browser can't run the game" }),
-      element("p", { textContent: GRAPHICS_PROBLEM }),
-      gpu?.message ? element("p", { className: "note", textContent: `Details: ${gpu.message}.` }) : null,
+      drawn ? null : element("p", { textContent: GRAPHICS_PROBLEM }),
+      !drawn && gpu?.message ? element("p", { className: "note", textContent: `Details: ${gpu.message}.` }) : null,
+      pageIsolated ? null : element("p", { textContent: ISOLATION_PROBLEM }),
     ),
     bottom(updateOffer(), settingsButton()),
   );
@@ -137,7 +148,7 @@ async function refresh() {
   try {
     const status = await call("game_status");
     // Without graphics nothing else matters: neither importing nor playing.
-    if (!(await graphics())) await showUnsupported();
+    if (!pageIsolated || !(await graphics())) await showUnsupported();
     else if (status.imported) await showHome(status);
     else showImport(status, null, { kept: await navigator.storage.persisted(), deleted: !status.problem && deletedByBrowser(status) });
   } catch (error) {
@@ -542,9 +553,88 @@ function checkButton() {
   return button;
 }
 
-/** Settings: updates and removing the import (danger zone). */
+/** The downloaded log's file name: the app's version and today's date. */
+export function logFileName(now = new Date()) {
+  const two = (n) => String(n).padStart(2, "0");
+  const date = `${now.getFullYear()}-${two(now.getMonth() + 1)}-${two(now.getDate())}`;
+  const version = versionText().replace(" · ", "-").replace(/[^0-9A-Za-z+-]+/g, "-");
+  return `volya-engine-log-${date}-version-${version || BUILD}.json`;
+}
+
+/**
+ * Download diagnostic log: the engine assembles the log (a trace, JSON)
+ * and the page saves it as one file. A failure shows in the button's place
+ * for a moment.
+ */
+function downloadButton() {
+  const label = "Download diagnostic log";
+  const button = element("button", { className: "panel-action", textContent: label });
+  button.setAttribute("aria-live", "polite");
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    button.textContent = "Preparing…";
+    try {
+      const { text } = await call("diagnostic_log");
+      const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+      const link = element("a", { href: url, download: logFileName() });
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      button.disabled = false;
+      button.textContent = label;
+    } catch (error) {
+      console.warn(`diagnostic log: ${error.message}`);
+      button.textContent = "Couldn't read the log";
+      if (globalThis.volyaHoldCheckResult) return;
+      await new Promise((resolve) => setTimeout(resolve, CHECK_RESULT_MS));
+      button.disabled = false;
+      button.textContent = label;
+    }
+  });
+  return button;
+}
+
+/**
+ * The diagnostic log (#346): off by default; while on, the app records its
+ * performance and errors here. The log stays when it is turned off, and can
+ * be downloaded while there is one.
+ */
+async function diagnosticsPanel() {
+  const log = await call("diagnostic_log_status").catch(() => null);
+  const on = element("input", { type: "checkbox", checked: diagnostics.enabled() });
+  const download = downloadButton();
+  download.hidden = !log?.entries;
+  on.addEventListener("change", async () => {
+    on.disabled = true;
+    try {
+      const status = await diagnostics.setEnabled(on.checked, call);
+      download.hidden = !status?.entries;
+    } finally {
+      on.disabled = false;
+    }
+  });
+  return element(
+    "div",
+    { className: "panel" },
+    element("p", { className: "label", textContent: "Diagnostics" }),
+    element(
+      "label",
+      { className: "switch" },
+      on,
+      element(
+        "span",
+        {},
+        element("strong", { textContent: "Keep a diagnostic log" }),
+        element("small", { textContent: "Records the app's performance and errors on this device, up to 2 MB, for reporting problems." }),
+      ),
+    ),
+    download,
+  );
+}
+
+/** Settings: updates, the diagnostic log and removing the import (danger zone). */
 async function showSettings() {
   const status = await call("game_status");
+  const diagnosticsSection = await diagnosticsPanel();
   const back = element("button", { className: "back", textContent: "‹ Back" });
   back.addEventListener("click", () => navigate("back", refresh));
 
@@ -575,6 +665,7 @@ async function showSettings() {
         : null,
       check,
     ),
+    diagnosticsSection,
     status.imported
       ? element(
           "div",

@@ -18,11 +18,19 @@ use volya_engine::core::audio::{self as mix, Category, MixerControl, Playback, V
 use volya_engine::core::vfs::Vfs;
 use wasm_bindgen::prelude::*;
 
+use crate::audio_ring::Ring;
+
 thread_local! {
     static OUTPUT: RefCell<Option<Remote>> = const { RefCell::new(None) };
     /// The voices of the music track playing, left and right.
     static MUSIC: RefCell<Option<[VoiceId; 2]>> = const { RefCell::new(None) };
     static SOUNDS: RefCell<Option<SoundHost>> = const { RefCell::new(None) };
+    /// The output's shared memory, and commands that did not fit in it.
+    static RING: RefCell<Option<(Ring, Vec<u8>)>> = const { RefCell::new(None) };
+    /// Tests (`debug_audio_hold`): the mixer's commands wait, so those of
+    /// several calls reach the audio worker together, as one frame's do.
+    #[cfg(feature = "test-ops")]
+    static HOLD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The audio worker's latest report.
     static HOST_STATS: RefCell<HostStats> = RefCell::new(HostStats::default());
 }
@@ -71,11 +79,11 @@ pub fn sound_frame(time: f64) {
 /// under it (`$game_data$`, docs/formats/ltx-config.md section 10).
 const GAME_DATA: &str = "gamedata\\";
 
-/// (Re)starts audio output at the output's sample rate, on a new
-/// connection to the audio worker; stops any sounds and keeps the category
-/// volumes and the master gain.
+/// (Re)starts audio output at the output's sample rate on `memory`, a new
+/// output's shared memory (`crate::audio_ring`); stops any sounds and keeps
+/// the category volumes and the master gain.
 #[wasm_bindgen]
-pub fn audio_init(sample_rate: u32) {
+pub fn audio_init(sample_rate: u32, memory: JsValue) {
     OUTPUT.with(|m| {
         let mut m = m.borrow_mut();
         match m.as_mut() {
@@ -83,32 +91,58 @@ pub fn audio_init(sample_rate: u32) {
             None => *m = Some(Remote::new(sample_rate)),
         }
     });
+    RING.with(|r| *r.borrow_mut() = Some((Ring::new(&memory), Vec::new())));
     MUSIC.with(|m| *m.borrow_mut() = None);
     with_sounds(SoundHost::mixer_replaced);
 }
 
-/// The mixer commands since the last call, for the audio worker:
-/// `{commands: Uint8Array, files: Uint8Array[]}`, or null when there are
-/// none. The files leave the engine's heap.
+/// Sends the mixer's commands since the last call to the audio worker
+/// through the ring of commands (no message, nothing for a garbage
+/// collector) and wakes it; returns the files they play, `[number,
+/// Uint8Array]` pairs for the worker to post, or null. The files leave the
+/// engine's heap.
 #[wasm_bindgen]
-pub fn audio_take() -> JsValue {
-    let Some(message) = OUTPUT.with(|m| m.borrow_mut().as_mut().and_then(Remote::take)) else {
+pub fn audio_flush() -> JsValue {
+    #[cfg(feature = "test-ops")]
+    if HOLD.with(std::cell::Cell::get) {
+        return JsValue::NULL;
+    }
+    let message = OUTPUT.with(|m| m.borrow_mut().as_mut().and_then(Remote::take));
+    let connected = RING.with(|r| {
+        let mut r = r.borrow_mut();
+        let (ring, backlog) = r.as_mut()?;
+        if let Some(m) = &message {
+            backlog.extend_from_slice(&m.commands);
+        }
+        // A full ring (the audio worker stalled) keeps them, whole, for the
+        // next call.
+        if !backlog.is_empty() && ring.write_commands(backlog) {
+            backlog.clear();
+            ring.wake();
+        }
+        Some(())
+    });
+    let Some(message) = message.filter(|m| connected.is_some() && !m.files.is_empty()) else {
         return JsValue::NULL;
     };
-    let files: js_sys::Array = message
+    message
         .files
         .iter()
-        .map(|f| js_sys::Uint8Array::from(f.as_slice()))
-        .collect();
-    let out = js_sys::Object::new();
-    let commands = js_sys::Uint8Array::from(message.commands.as_slice());
-    let _ = js_sys::Reflect::set(&out, &"commands".into(), &commands);
-    let _ = js_sys::Reflect::set(&out, &"files".into(), &files);
-    out.into()
+        .map(|(n, f)| js_sys::Array::of2(&(*n).into(), &js_sys::Uint8Array::from(f.as_slice())))
+        .collect::<js_sys::Array>()
+        .into()
+}
+
+/// The `debug_audio_hold` op (tests): while `on`, the mixer's commands
+/// wait ([`audio_flush`] sends nothing).
+#[cfg(feature = "test-ops")]
+pub fn hold(on: bool) {
+    HOLD.with(|h| h.set(on));
 }
 
 /// A report of the audio worker (`crate::audio_host::audio_host_report`):
-/// the voices that ended, its counters and, while capturing, its blocks.
+/// the voices that ended, its counters, the diagnostic log's numbers and,
+/// while capturing, its blocks.
 #[wasm_bindgen]
 pub fn audio_report(report: &str) -> Result<(), JsValue> {
     let report: serde_json::Value = serde_json::from_str(report).map_err(error)?;
@@ -135,6 +169,15 @@ pub fn audio_report(report: &str) -> Result<(), JsValue> {
             audio_underrun_frames: number("underrun"),
         }
     });
+    if let Some(d) = report["diagnostics"].as_array() {
+        let v = |i: usize| d.get(i).and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+        crate::diagnostics::audio_ring(&crate::diagnostics::AudioRing {
+            underrun: v(0),
+            fill: [v(1), v(2), v(3), v(4)],
+            mix: [v(5), v(6), v(7), v(8)],
+            rate: number("rate"),
+        });
+    }
     #[cfg(feature = "test-ops")]
     if let Some(blocks) = report["blocks"].as_array() {
         capture::blocks(blocks);
