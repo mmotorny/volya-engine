@@ -23,7 +23,9 @@ pub mod world;
 
 use std::ops::Range;
 
-pub use texture::{TextureError, TexturePath, Transcoded, transcode, transcoded_len};
+pub use texture::{
+    TextureError, TexturePath, Transcoded, transcode, transcode_into, transcoded_len,
+};
 pub use video::VideoTexture;
 pub use wgpu;
 pub use world::{World, WorldDraw, WorldFrame};
@@ -157,6 +159,8 @@ pub struct Renderer {
     /// Textures made ahead of their first use, by source path
     /// ([`Renderer::add_prepared`]).
     prepared: std::cell::RefCell<std::collections::HashMap<String, Texture>>,
+    /// Bytes of texture data written so far ([`Renderer::texture_bytes_written`]).
+    texture_bytes: std::cell::Cell<u64>,
     /// Whether the world reads per-draw data from a texture and draws
     /// without base vertices ([`Renderer::compat`]).
     compat: bool,
@@ -275,6 +279,7 @@ impl Renderer {
             depth: None,
             offscreen: None,
             prepared: Default::default(),
+            texture_bytes: Default::default(),
             compat: device.limits().max_storage_buffers_per_shader_stage == 0,
             // Made with the renderer, before any level: what lives across
             // levels is allocated below their data, so a level's freed
@@ -312,6 +317,13 @@ impl Renderer {
     /// [`Renderer::take_prepared`].
     pub fn add_prepared(&self, path: &str, texture: Texture) {
         self.prepared.borrow_mut().insert(path.to_owned(), texture);
+    }
+
+    /// Bytes of texture data written since the renderer was made: on the
+    /// GL backend what is held in the wasm heap until WebGL reports the
+    /// writes done ([`Renderer::flush_uploads`]).
+    pub fn texture_bytes_written(&self) -> u64 {
+        self.texture_bytes.get()
     }
 
     /// The texture prepared for `path`, if any (it is then forgotten).

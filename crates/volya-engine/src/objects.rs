@@ -645,6 +645,10 @@ pub fn spawn(
         .collect();
     by_class.sort();
     s.online_by_class = by_class;
+    // Grown model by model: the spare capacity (a third of it for
+    // `l01_escape`, measured) goes, shrunk in place (#357).
+    s.geometry.vertices.shrink_to_fit();
+    s.geometry.indices.shrink_to_fit();
     Ok(s)
 }
 

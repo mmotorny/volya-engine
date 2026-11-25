@@ -586,6 +586,10 @@ impl Presenter {
         let mut file = tree.open(&path).map_err(|e| format!("{path}: {e}"))?;
         let mut source = level.geometry().reader(&mut file);
         p.done = p.upload.step(renderer, &mut source, &p.objects, budget)?;
+        if p.done {
+            // Uploaded: the CPU copy goes before the level shows.
+            p.objects = ObjectGeometry::default();
+        }
         Ok(p.done)
     }
 
@@ -669,7 +673,7 @@ impl Presenter {
                 if !p.done {
                     p.upload.step(renderer, &mut source, &p.objects, u64::MAX)?;
                 }
-                renderer.finish_world(p.upload, &p.objects, &surfaces, &draws, sky.as_ref())?
+                renderer.finish_world(p.upload, &surfaces, &draws, sky.as_ref())?
             }
             (None, Some(objects)) => renderer.create_world_from(
                 &mut source,

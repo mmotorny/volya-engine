@@ -20,8 +20,9 @@ use std::sync::Arc;
 use serde::Serialize;
 use volya_engine::level::LevelWorld;
 use volya_engine::render::world::UPLOAD_PIECE;
-use volya_engine::render::{TexturePath, transcode};
+use volya_engine::render::{TexturePath, Transcoded, transcode, transcode_into};
 use volya_engine_formats::dds::Dds;
+use volya_engine_formats::etc2::Etc2Format;
 use wasm_bindgen::JsValue;
 
 /// The latest preparation, for `level_stats`.
@@ -46,6 +47,41 @@ pub struct Stats {
 /// Milliseconds of preparation per task turn, about a frame of the loading
 /// screen at 30 Hz.
 const TURN_MS: f64 = 30.0;
+
+/// Bytes of texture data written while WebGL 2 draws before the
+/// preparation waits for their staging to be freed: what the wasm heap
+/// holds of them at most (#357; with a 30 ms turn alone, up to 40 MiB of BC
+/// textures in desktop Chrome, measured).
+const STAGING_BYTES: u64 = 4 << 20;
+
+/// The texture bytes written as frames were seen, to tell which writes
+/// WebGL may still hold: those made since the frame two frames back.
+struct Staging {
+    /// (frames run, bytes written then), oldest first; the first is the
+    /// latest at least two frames old.
+    seen: std::collections::VecDeque<(u64, u64)>,
+}
+
+impl Staging {
+    /// Counting from `written` bytes written, after `frames` frames.
+    fn new(frames: u64, written: u64) -> Self {
+        Self {
+            seen: [(frames.saturating_sub(2), written)].into(),
+        }
+    }
+
+    /// The bytes that may still be staged, `written` written after
+    /// `frames` frames.
+    fn staged(&mut self, frames: u64, written: u64) -> u64 {
+        if self.seen.back().is_some_and(|&(f, _)| f < frames) {
+            self.seen.push_back((frames, written));
+        }
+        while self.seen.len() > 1 && self.seen[1].0 + 2 <= frames {
+            self.seen.pop_front();
+        }
+        written - self.seen.front().map_or(written, |&(_, w)| w)
+    }
+}
 
 /// Bytes of the level's geometry uploaded per task turn: what the wasm heap
 /// holds of it at most per turn.
@@ -130,6 +166,15 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
     };
     let etc2 =
         crate::gpu::with_renderer(|r| r.texture_path() == TexturePath::Etc2).unwrap_or(false);
+    let compat = crate::gpu::with_renderer(|r| r.compat()).unwrap_or(false);
+    let written = || crate::gpu::with_renderer(|r| r.texture_bytes_written()).unwrap_or(0);
+    let mut staging = Staging::new(crate::frames(), written());
+    // Every file is read into this one, and transcoded into the other.
+    let mut bytes = Vec::new();
+    let mut transcoding = Transcoded {
+        format: Etc2Format::Rgb8,
+        data: Vec::new(),
+    };
     let mut turn = now();
     for path in paths {
         // The game was quit or unmounted meanwhile.
@@ -137,22 +182,22 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
             break;
         }
         let t = now();
-        let Ok(bytes) = crate::game::read(&path) else {
+        if crate::game::read_into(&path, &mut bytes).is_err() {
             continue;
-        };
+        }
         stats.read_ms += now() - t;
         let Ok(dds) = Dds::parse(&bytes) else {
             continue;
         };
         let t = now();
-        let transcoded = if etc2 { transcode(&dds) } else { None };
+        let transcoded = (etc2 && transcode_into(&dds, &mut transcoding)).then_some(&transcoding);
         stats.transcode_ms += now() - t;
         let t = now();
         if transcoded.is_some() {
             stats.transcoded += 1;
             stats.transcoded_mpx += megapixels(&dds);
         }
-        let texture = crate::gpu::with_renderer(|r| match &transcoded {
+        let texture = crate::gpu::with_renderer(|r| match transcoded {
             Some(t) => r.create_transcoded_texture(&dds, t),
             None => r.create_texture(&dds),
         });
@@ -162,8 +207,6 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
                 r.flush_uploads();
             });
         }
-        drop(transcoded);
-        drop(bytes);
         stats.upload_ms += now() - t;
         stats.total_ms = now() - start;
         STATS.with(|s| *s.borrow_mut() = stats.clone());
@@ -171,10 +214,20 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
         // none while the page is hidden (#93). Yielding after every texture
         // cost as much as the transcoding itself (each turn waits for a
         // timer and frames; measured in the iOS Simulator).
-        if now() - turn >= TURN_MS {
+        let staged = if compat {
+            staging.staged(crate::frames(), written())
+        } else {
+            0
+        };
+        if now() - turn >= TURN_MS || staged >= STAGING_BYTES {
             crate::opfs::sleep(0).await?;
-            while crate::engine::page_hidden() {
-                crate::opfs::sleep(100).await?;
+            // Until WebGL can have reported the writes done (two frames,
+            // as for the geometry below) and their staging is freed.
+            let since = crate::frames();
+            while (staged >= STAGING_BYTES && crate::frames() < since + 2)
+                || crate::engine::page_hidden()
+            {
+                crate::opfs::sleep(if crate::engine::page_hidden() { 100 } else { 4 }).await?;
             }
             turn = now();
         }
