@@ -243,6 +243,14 @@ onmessage = async ({ data }) => {
     let reply;
     try {
       reply = { type: "result", id: data.id, result: JSON.parse(await e().call(data.op, JSON.stringify(data.args ?? {}))) };
+      // Captures carry their pixels as base64 (gpu.rs, Capture).
+      if (typeof reply.result?.rgba_base64 === "string") {
+        const text = atob(reply.result.rgba_base64);
+        const rgba = new Uint8Array(text.length);
+        for (let i = 0; i < text.length; i++) rgba[i] = text.charCodeAt(i);
+        delete reply.result.rgba_base64;
+        reply.result.rgba = rgba;
+      }
       if (data.op === "diagnostics_set") logging = reply.result.on;
     } catch (error) {
       reply = { type: "result", id: data.id, error: message(error) };
@@ -255,6 +263,6 @@ onmessage = async ({ data }) => {
     } catch {
       // The engine is not initialized: capture is still off.
     }
-    postMessage(reply);
+    postMessage(reply, reply.result?.rgba instanceof Uint8Array ? [reply.result.rgba.buffer] : []);
   }
 };
