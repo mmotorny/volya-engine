@@ -177,6 +177,17 @@ impl ChunkHeader {
         reader.read_exact(&mut payload)?;
         Ok(payload)
     }
+
+    /// Reads the chunk's content: the payload, decoded if compressed
+    /// (section 5), for formats whose files the game loads whole.
+    pub fn read_content(&self, reader: &mut (impl Read + Seek)) -> io::Result<Vec<u8>> {
+        let payload = self.read_payload(reader)?;
+        if !self.is_compressed() {
+            return Ok(payload);
+        }
+        decompress_directory(&payload)
+            .map_err(|e| invalid(format!("compressed chunk {:#x}: {e}", self.id())))
+    }
 }
 
 /// Walks the top-level chunk sequence filling `reader` (start to end) and

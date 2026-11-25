@@ -742,17 +742,31 @@ impl App {
                         Err(e) => fatal = Some(e),
                     }
                 }
-                if !paused
-                    && let Some(level_sounds) = &mut self.level_sounds
-                    && let Err(e) = self.sound_run.frame(
-                        sounds,
-                        level_sounds,
-                        &level.sound_inputs(),
-                        self.global_clock.now(),
-                        overlay.is_some(),
-                    )
-                {
-                    fatal = Some(e);
+                if !paused {
+                    let now = self.global_clock.now();
+                    if let Some(level_sounds) = &mut self.level_sounds
+                        && let Err(e) = self.sound_run.frame(
+                            sounds,
+                            level_sounds,
+                            &level.sound_inputs(),
+                            now,
+                            overlay.is_some(),
+                        )
+                    {
+                        fatal = Some(e);
+                    }
+                    // The player's steps of this frame (S11) on the global
+                    // clock, which is the step clock (S11 3.1), played
+                    // independently (4.3).
+                    if let Err(e) = level.footsteps_frame(now as u32) {
+                        fatal = Some(e);
+                    } else if let (Some(level_sounds), Some(f)) =
+                        (&self.level_sounds, level.footsteps())
+                    {
+                        for step in f.sounds() {
+                            level_sounds.pairs.play(sounds, step);
+                        }
+                    }
                 }
                 (true, menu.is_some())
             }

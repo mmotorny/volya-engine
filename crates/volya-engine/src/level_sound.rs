@@ -5,8 +5,9 @@
 //! sources (S3, docs/behavior/sound-static-sources.md), the weather's
 //! ambient sounds (S4, sound-weather-ambient.md), the level music (S5,
 //! sound-level-music.md), the rain and thunder (S8, sound-rain-thunder.md),
-//! and what occludes them (S6, sound-occlusion.md), on the positional
-//! sound system (S2).
+//! what occludes them (S6, sound-occlusion.md) and the material pairs'
+//! sounds (S9, material-pairs.md; the player's footsteps play them,
+//! crate::footsteps), on the positional sound system (S2).
 //!
 //! [`LevelSoundData`] is read while the level loads; [`LevelSounds`] are
 //! the sounds created from it in the sound system once the level runs;
@@ -19,6 +20,7 @@
 
 use std::collections::HashMap;
 use std::io;
+use std::sync::Arc;
 
 use crate::core::config::{self, LEVEL, PathAliases};
 use crate::core::sound::Fatal;
@@ -33,6 +35,7 @@ use crate::core::sound::system::{SoundId, SoundSystem, Vec3};
 use crate::core::vfs::{self, Vfs};
 use crate::core::weather::Weather;
 use crate::data::GameData;
+use crate::footsteps::{MaterialPairs, PairSounds};
 
 /// Reads `name` in the level directory `dir`, `None` when it is missing.
 fn optional(tree: &dyn Vfs, dir: &str, name: &str) -> io::Result<Option<Vec<u8>>> {
@@ -66,6 +69,9 @@ pub struct LevelSoundData {
     /// descriptions' sounds (S8 2.2).
     pub collections: HashMap<String, Vec<Option<String>>>,
     pub bolt_common: Option<BoltCommon>,
+    /// The material pairs, whose sounds are created with the level's (S9
+    /// section 4); read with the materials.
+    pub pairs: Option<Arc<MaterialPairs>>,
 }
 
 impl LevelSoundData {
@@ -125,6 +131,7 @@ impl LevelSoundData {
             sets,
             collections,
             bolt_common,
+            pairs: None,
         })
     }
 }
@@ -139,6 +146,7 @@ pub struct LevelSounds {
     pub bolt_common: Option<BoltCommon>,
     /// `ambient\rain` (S8 4.1).
     pub rain: SoundId,
+    pub pairs: PairSounds,
 }
 
 impl LevelSounds {
@@ -185,6 +193,12 @@ impl LevelSounds {
             rain_thunder::RAIN,
             crate::core::audio::Category::Effects,
         )?;
+        // S9 section 4: when the library loads, here with the level (the
+        // library is read with it, crate::level).
+        let pairs = match &data.pairs {
+            Some(p) => PairSounds::create(system, tree, aliases, p)?,
+            None => PairSounds::default(),
+        };
         let occlusion = system.occlusion_mut();
         occlusion.scale = data.occlusion_scale;
         if let Some(mesh) = &data.occlusion_mesh {
@@ -199,6 +213,7 @@ impl LevelSounds {
             collections,
             bolt_common: data.bolt_common.clone(),
             rain,
+            pairs,
         })
     }
 
@@ -215,6 +230,7 @@ impl LevelSounds {
             c.discard(system);
         }
         system.discard(self.rain);
+        self.pairs.discard(system);
         system.occlusion_mut().level = None;
     }
 }

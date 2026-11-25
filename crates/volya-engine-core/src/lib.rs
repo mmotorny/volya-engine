@@ -11,6 +11,8 @@ pub mod clock;
 pub mod collision;
 pub mod config;
 pub mod console;
+pub mod cycles;
+pub mod footsteps;
 pub mod input;
 pub mod level;
 pub mod movement;

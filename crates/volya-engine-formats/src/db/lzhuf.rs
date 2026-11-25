@@ -261,8 +261,15 @@ impl Model {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// `data` encoded as literals only, for other formats' tests of
+    /// compressed chunks.
+    pub(crate) fn encode_literals(data: &[u8]) -> Vec<u8> {
+        let tokens: Vec<Token> = data.iter().map(|&b| Token::Literal(b)).collect();
+        encode(data.len() as u32, &tokens)
+    }
 
     #[test]
     fn distance_tables_match_spec() {
