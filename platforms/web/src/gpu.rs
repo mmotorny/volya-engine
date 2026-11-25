@@ -344,7 +344,8 @@ const WORK_DONE_TIMEOUT_MS: f64 = 30_000.0;
 
 /// Resolves once the browser reports the GPU done with all work submitted
 /// so far (`onSubmittedWorkDone` on WebGPU; on WebGL 2 wgpu's fences,
-/// checked when the frame loop polls the device), or after
+/// checked by polling the device each task turn, which also frees the
+/// staging of the finished submissions, #440), or after
 /// [`WORK_DONE_TIMEOUT_MS`]; at once without graphics.
 pub async fn submitted_work_done() -> Result<(), JsValue> {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -364,6 +365,11 @@ pub async fn submitted_work_done() -> Result<(), JsValue> {
     let start = crate::now();
     while !done.load(Ordering::Acquire) && crate::now() - start < WORK_DONE_TIMEOUT_MS {
         crate::opfs::sleep(2).await?;
+        GPU.with(|g| {
+            if let Some(gpu) = g.borrow().as_ref() {
+                let _ = gpu.renderer.device().poll(wgpu::PollType::Poll);
+            }
+        });
     }
     Ok(())
 }
