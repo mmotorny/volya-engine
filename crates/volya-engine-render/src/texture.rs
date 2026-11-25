@@ -155,40 +155,44 @@ impl Renderer {
     /// [`TexturePath`] (transcoding here when it is ETC2). Cube maps become
     /// 6-layer textures; drawing uses the first layer.
     pub fn create_texture(&self, dds: &Dds) -> Result<Texture, TextureError> {
-        let transcoded = match self.texture_path() {
-            TexturePath::Etc2 => transcode(dds),
-            _ => None,
-        };
-        self.upload(dds, transcoded.as_ref())
+        let mut upload = self.begin_texture(dds)?;
+        upload.step(self, dds, &mut Vec::new(), u64::MAX);
+        Ok(upload.finish(self))
     }
 
-    /// Uploads `dds` from its ETC2 transcoding `transcoded` (made by
-    /// [`transcode`], perhaps earlier and stored). The device must have
-    /// ETC2.
-    pub fn create_transcoded_texture(
-        &self,
-        dds: &Dds,
-        transcoded: &Transcoded,
-    ) -> Result<Texture, TextureError> {
-        if transcoded.data.len() != transcoded_len(dds, transcoded.format) {
-            return Err(TextureError::Transcoded);
-        }
-        self.upload(dds, Some(transcoded))
-    }
-
-    fn upload(&self, dds: &Dds, transcoded: Option<&Transcoded>) -> Result<Texture, TextureError> {
+    /// Begins uploading `dds` by this device's [`TexturePath`]
+    /// ([`Renderer::create_texture`] in steps): the texture is made, empty,
+    /// and filled by [`TextureUpload::step`], so a platform can spread the
+    /// writes and wait between them (#440).
+    pub fn begin_texture(&self, dds: &Dds) -> Result<TextureUpload, TextureError> {
         let (width, height) = (dds.width, dds.height);
         let size_error = |reason| TextureError::Size {
             width,
             height,
             reason,
         };
-        let bc = self.texture_path() == TexturePath::Bc;
+        let path = self.texture_path();
+        let etc2 = match (path, dds.format) {
+            (TexturePath::Etc2, Format::Bc1) => {
+                let transparent = (0..dds.faces)
+                    .flat_map(|f| (0..dds.mip_levels).map(move |m| (f, m)))
+                    .any(|(f, m)| {
+                        Etc2Format::for_bc(dds.format, dds.level(f, m)) == Some(Etc2Format::Rgb8A1)
+                    });
+                Some(if transparent {
+                    Etc2Format::Rgb8A1
+                } else {
+                    Etc2Format::Rgb8
+                })
+            }
+            (TexturePath::Etc2, f) => Etc2Format::for_bc(f, &[]),
+            _ => None,
+        };
         // (format, bytes per block) of what is uploaded; RGBA8 is decoded.
-        let (format, block) = match (dds.format, transcoded) {
+        let (format, block) = match (dds.format, etc2) {
             (Format::Masked(_), _) => (wgpu::TextureFormat::Rgba8Unorm, None),
-            (_, Some(t)) => (etc2_format(t.format), Some(t.format.block_bytes())),
-            (f, None) if bc => (
+            (_, Some(t)) => (etc2_format(t), Some(t.block_bytes())),
+            (f, None) if path == TexturePath::Bc => (
                 match f {
                     Format::Bc1 => wgpu::TextureFormat::Bc1RgbaUnorm,
                     Format::Bc2 => wgpu::TextureFormat::Bc2RgbaUnorm,
@@ -224,65 +228,182 @@ impl Renderer {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
-        let mut at = 0;
-        for face in 0..dds.faces {
-            for mip in 0..dds.mip_levels {
-                let (w, h) = dds.mip_size(mip);
-                let level = dds.level(face, mip);
-                let converted;
-                let (bw, bh) = (w.div_ceil(4), h.div_ceil(4));
-                // Copies of compressed levels cover whole blocks.
-                let (data, row_bytes, rows, extent) = match (block, transcoded) {
-                    (Some(block), Some(t)) => {
-                        let n = (bw * bh) as usize * block;
-                        let data = &t.data[at..at + n];
-                        at += n;
-                        (data, bw * block as u32, bh, (bw * 4, bh * 4))
+        Ok(TextureUpload {
+            texture,
+            etc2,
+            block,
+            face: 0,
+            mip: 0,
+            row: 0,
+        })
+    }
+}
+
+/// A texture on its way to the GPU ([`Renderer::begin_texture`]), written
+/// in bands of rows of at most [`UPLOAD_PIECE`] bytes: wgpu stages each
+/// write whole, in the wasm heap on its GL backend until WebGL reports it
+/// done, where a large one needs new memory once the heap is fragmented
+/// (#357). A transcoded texture is transcoded a band at a time, so no more
+/// than a band of the transcoding is held (#440).
+pub struct TextureUpload {
+    texture: wgpu::Texture,
+    /// The ETC2 format transcoded to, if any.
+    etc2: Option<Etc2Format>,
+    /// Bytes per block uploaded; `None` where levels are decoded to RGBA8.
+    block: Option<usize>,
+    /// The next band's face, level and first row (of blocks, or of texels
+    /// where decoded).
+    face: u32,
+    mip: u32,
+    row: u32,
+}
+
+impl TextureUpload {
+    /// Writes bands of `dds` (the file it was begun with) while they fit in
+    /// `budget` bytes, at least one, transcoding each into `scratch` where
+    /// the texture is transcoded (a level decoded to RGBA8 is written
+    /// whole). Returns whether every band is written.
+    pub fn step(
+        &mut self,
+        renderer: &Renderer,
+        dds: &Dds,
+        scratch: &mut Vec<u8>,
+        budget: u64,
+    ) -> bool {
+        let mut spent = 0u64;
+        while let Some((face, mip, first, rows, row_bytes)) = self.next_band() {
+            if spent > 0 && spent + u64::from(rows * row_bytes) > budget {
+                return false;
+            }
+            let level = dds.level(face, mip);
+            let band = |row_bytes: usize| {
+                &level[first as usize * row_bytes..(first + rows) as usize * row_bytes]
+            };
+            spent += match (self.block, self.etc2) {
+                (Some(block), Some(etc2)) => {
+                    let blocks_per_row = row_bytes as usize / block;
+                    let stored = blocks_per_row * dds.format.block_bytes().unwrap_or(0);
+                    let n = rows as usize * row_bytes as usize;
+                    scratch.clear();
+                    if scratch.capacity() < n {
+                        // Freed before its replacement is made.
+                        *scratch = Vec::new();
+                        scratch.reserve_exact(n);
                     }
-                    (Some(block), None) => (level, bw * block as u32, bh, (bw * 4, bh * 4)),
-                    (None, _) => {
-                        converted = dds.format.to_rgba8(level, w, h);
-                        (converted.as_slice(), w * 4, h, (w, h))
-                    }
-                };
-                self.texture_bytes
-                    .set(self.texture_bytes.get() + data.len() as u64);
-                // Written in bands of rows of at most [`UPLOAD_PIECE`]
-                // bytes: wgpu stages each write whole, in the wasm heap on
-                // its GL backend, where a large one needs new memory once
-                // the heap is fragmented (#357).
-                let row_height = extent.1 / rows;
-                let band = (UPLOAD_PIECE as u32 / row_bytes).clamp(1, rows);
-                for first in (0..rows).step_by(band as usize) {
-                    let n = band.min(rows - first);
-                    let start = (first * row_bytes) as usize;
-                    self.queue.write_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &texture,
-                            mip_level: mip,
-                            origin: wgpu::Origin3d {
-                                x: 0,
-                                y: first * row_height,
-                                z: face,
-                            },
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        &data[start..start + (n * row_bytes) as usize],
-                        wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(row_bytes),
-                            rows_per_image: Some(n),
-                        },
-                        wgpu::Extent3d {
-                            width: extent.0,
-                            height: n * row_height,
-                            depth_or_array_layers: 1,
-                        },
-                    );
+                    etc2::transcode_bc_into(dds.format, band(stored), etc2, scratch);
+                    // Not BC after all: the band is left blank.
+                    scratch.resize(n, 0);
+                    self.write(renderer, rows, row_bytes, scratch)
                 }
+                (Some(_), None) => self.write(renderer, rows, row_bytes, band(row_bytes as usize)),
+                (None, _) => {
+                    // Decoded whole, its bands written now.
+                    let (w, h) = dds.mip_size(mip);
+                    let rgba = dds.format.to_rgba8(level, w, h);
+                    let mut n = 0;
+                    while let Some((f, m, first, rows, row_bytes)) = self.next_band() {
+                        if (f, m) != (face, mip) {
+                            break;
+                        }
+                        let at = first as usize * row_bytes as usize;
+                        let band = &rgba[at..at + rows as usize * row_bytes as usize];
+                        n += self.write(renderer, rows, row_bytes, band);
+                    }
+                    n
+                }
+            };
+        }
+        true
+    }
+
+    /// The bytes the next band writes; `None` once all are written.
+    pub fn next_bytes(&self) -> Option<u64> {
+        (self.next_band()).map(|(_, _, _, rows, row_bytes)| u64::from(rows * row_bytes))
+    }
+
+    /// Whether it is transcoded to ETC2.
+    pub fn transcoded(&self) -> bool {
+        self.etc2.is_some()
+    }
+
+    /// The texture, once every band is written.
+    pub fn finish(self, renderer: &Renderer) -> Texture {
+        renderer.wrap(self.texture)
+    }
+
+    /// Level `mip`'s rows (of blocks, or of texels where decoded) and the
+    /// bytes a row uploads.
+    fn rows(&self, mip: u32) -> (u32, u32) {
+        let size = self.texture.size();
+        let (w, h) = ((size.width >> mip).max(1), (size.height >> mip).max(1));
+        match self.block {
+            Some(block) => (h.div_ceil(4), w.div_ceil(4) * block as u32),
+            None => (h, w * 4),
+        }
+    }
+
+    /// The next band: face, level, first row, rows and bytes a row; `None`
+    /// once all are written.
+    fn next_band(&self) -> Option<(u32, u32, u32, u32, u32)> {
+        let size = self.texture.size();
+        (self.face < size.depth_or_array_layers).then(|| {
+            let (rows, row_bytes) = self.rows(self.mip);
+            let band = (UPLOAD_PIECE as u32 / row_bytes).clamp(1, rows);
+            (
+                self.face,
+                self.mip,
+                self.row,
+                band.min(rows - self.row),
+                row_bytes,
+            )
+        })
+    }
+
+    /// Writes the next band, `rows` rows of `row_bytes` from `data`, and
+    /// moves on past it; the bytes written.
+    fn write(&mut self, renderer: &Renderer, rows: u32, row_bytes: u32, data: &[u8]) -> u64 {
+        let size = self.texture.size();
+        let width = (size.width >> self.mip).max(1);
+        // Copies of compressed levels cover whole blocks.
+        let (width, row_height) = match self.block {
+            Some(_) => (width.div_ceil(4) * 4, 4),
+            None => (width, 1),
+        };
+        renderer.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.texture,
+                mip_level: self.mip,
+                origin: wgpu::Origin3d {
+                    x: 0,
+                    y: self.row * row_height,
+                    z: self.face,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            &data[..(rows * row_bytes) as usize],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(row_bytes),
+                rows_per_image: Some(rows),
+            },
+            wgpu::Extent3d {
+                width,
+                height: rows * row_height,
+                depth_or_array_layers: 1,
+            },
+        );
+        let bytes = u64::from(rows * row_bytes);
+        (renderer.texture_bytes).set(renderer.texture_bytes.get() + bytes);
+        self.row += rows;
+        if self.row >= self.rows(self.mip).0 {
+            self.row = 0;
+            self.mip += 1;
+            if self.mip == self.texture.mip_level_count() {
+                self.mip = 0;
+                self.face += 1;
             }
         }
-        Ok(self.wrap(texture))
+        bytes
     }
 }
 
@@ -318,5 +439,42 @@ mod tests {
         }
         let rgba = file(1, 1, 0, false, PixelFormat::BGRA8, &[0, 0, 255, 255]);
         assert_eq!(transcode(&Dds::parse(&rgba).unwrap()), None);
+    }
+
+    /// A level transcoded a band of block rows at a time, as
+    /// [`TextureUpload::step`] does, gives the bytes of the level transcoded
+    /// whole (#440).
+    #[test]
+    fn bands_transcode_as_the_whole_level() {
+        let mut seed = 0x9e37_79b9u32;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed as u8
+        };
+        // 16 × 12 blocks, runs of equal blocks across the bands' edges.
+        for (format, block, target) in [
+            (Format::Bc1, 8, Etc2Format::Rgb8),
+            (Format::Bc3, 16, Etc2Format::Rgba8),
+        ] {
+            let mut level = Vec::new();
+            for i in 0..16 * 12 {
+                let b: Vec<u8> = (0..block).map(|_| next()).collect();
+                let copies = if i % 7 == 0 { 3 } else { 1 };
+                for _ in 0..copies {
+                    level.extend_from_slice(&b);
+                }
+            }
+            level.truncate(16 * 12 * block);
+            let mut whole = Vec::new();
+            assert!(etc2::transcode_bc_into(format, &level, target, &mut whole));
+            let row = 16 * block;
+            let mut banded = Vec::new();
+            for band in level.chunks(5 * row) {
+                assert!(etc2::transcode_bc_into(format, band, target, &mut banded));
+            }
+            assert_eq!(banded, whole, "{format:?}");
+        }
     }
 }

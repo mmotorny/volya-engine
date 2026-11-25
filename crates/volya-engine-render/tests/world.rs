@@ -1037,13 +1037,41 @@ fn particles_queue_blend_cull_and_distort() {
     );
     // A frame after one with a distortion pass goes through the target;
     // the next goes straight to the screen again.
-    let mut f = frame(world, None);
+    let mut f = frame(world.clone(), None);
     f.particles = vec![left.clone()];
     pixels(&mut r, f.clone(), size);
     assert_eq!(r.presentation_target(), Some(((size, size), true)));
     let again = pixels(&mut r, f, size);
     assert_eq!(r.presentation_target(), Some(((size, size), false)));
     assert_eq!(at(&again, size, 124, 128)[..3], [255, 255, 255]);
+
+    // A distortion list whose sprites all lie off the screen is presented
+    // as one drawn that changes nothing (a black vertex colour: alpha 0),
+    // without its pass (#433).
+    let mut drawn = 0;
+    let mut presented = Vec::new();
+    for x in [-2.0, 3.0] {
+        let mut distort = pass(ParticleProgram::Distort, ParticleBlend::Alpha, &white);
+        distort.distort = Some(r.create_rgba_texture(1, 1, &[255, 127, 0, 255]));
+        let mut f = frame(world.clone(), None);
+        f.particles = vec![
+            left.clone(),
+            batch(
+                distort,
+                ParticleQueue::Distortion,
+                1.0,
+                sprite(x, x + 4.0, -2.0, 2.0, 0.4, 0xFF00_0000),
+            ),
+        ];
+        pixels(&mut r, f.clone(), size);
+        r.take_frame_stats();
+        presented.push(pixels(&mut r, f, size));
+        assert_eq!(r.presentation_target(), Some(((size, size), true)));
+        let passes = r.take_frame_stats().passes;
+        drawn = if x < 0.0 { passes } else { drawn - passes };
+    }
+    assert_eq!(drawn, 1, "the distortion pass left out");
+    assert!(presented[0] == presented[1], "the same picture");
 }
 
 /// A light pass whose frustum holds everything (clip (0, 0, ½, 1)).

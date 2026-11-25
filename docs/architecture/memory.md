@@ -14,7 +14,7 @@ There are no arenas: every allocation goes to one general heap, the target's sys
 Two reuse fixes from #357 stand in for arenas:
 
 - The collision world's large arrays are kept when it is dropped (a thread-local spare in `volya-engine-core::collision`) and reused by the next world when large enough, so a second New Game's collision world finds its 28 MB without new memory (it needed up to 13 MiB more before, measured in headless Chrome).
-- Prepared textures share one read buffer and one transcoding buffer, and texture writes go in bands of 2 MiB.
+- Prepared textures share one read buffer, and are written in bands of at most 2 MiB, a transcoded one transcoded a band at a time into one reused buffer (`TextureUpload`, #440): a whole transcoding of the largest texture held 8 MiB beside its file.
 
 ## Measurements by lifetime (#399)
 
@@ -40,12 +40,12 @@ What each loading stage keeps, and the blocks it leaves live:
 | `st_loading_cform` (collision: vertices 8.4, triangles 11.0, materials 1.4, tree 7.3; before #396 a grid of 9.3, before #371 triangles 16.5 and grid 15.8) | 28.7 MB (30.7 before #396, 42.7 before #371) | 9,653 | 14,921 | 28.9 MB (35.1, 45.0) |
 | `st_loading_geometry` | 0.4 MB | 121 | 205 | 0.7 MB |
 | `st_loading_spatial_db` | −6.0 MB | −6,486 | 117 | 5.4 MB |
-| `st_loading_details` (the detail objects' slot grid 8.4 and cache, #411) | 9.5 MB | 91 | 176 | 9.5 MB |
+| `st_loading_details` (the detail objects' slot grid 4.3, compact, and cache, #411; 9.5 with the grid as stored) | 5.5 MB | 94 | 181 | 5.5 MB |
 | `st_loading_ai_objects` (the particles' effect library) | 1.9 MB | 8,417 | 18,083 | 3.3 MB |
 | `st_client_spawning` (objects' models, weather, level sounds; the objects' geometry 4.9 until uploaded) | 6.2 MB | 6,929 | 2,459,422 | 11.0 MB |
 | `st_loading_textures` | 0.3 MB | 1,639 | 103,158 | 3.1 MB |
 
-The registry is one list indexed by id with each object's record inline; the three kinds largest inline (hanging lamps, monster groups and helicopters, 256–416 bytes) are boxed, and the list is shrunk to its length once every object is registered, so it no longer keeps the half its growth left spare (#370). The level keeps 68.7 MB at the end of loading in 136,973 blocks (77.9 MB before #370 and #371, without the detail objects), 64 MB once its geometry is uploaded; the load's peak is 72.8 MB above its start (82.3 before). The game data a level needs resident is about 48 MB (`level.cform` as stored 30.4, the navigation positions 7.1, `all.spawn` 4.5, the graph's tables 1.8, the configuration's text 1.4, the strings 1.8, the effect library 1.9); the rest lives on the GPU as stored.
+The registry is one list indexed by id with each object's record inline; the three kinds largest inline (hanging lamps, monster groups and helicopters, 256–416 bytes) are boxed, and the list is shrunk to its length once every object is registered, so it no longer keeps the half its growth left spare (#370). The level keeps 62.7 MB at the end of loading (66.8 before the compact detail grid, #411; 77.9 MB before #370 and #371, without the detail objects), 64 MB once its geometry is uploaded; the load's peak is 72.8 MB above its start (82.3 before). The game data a level needs resident is about 48 MB (`level.cform` as stored 30.4, the navigation positions 7.1, `all.spawn` 4.5, the graph's tables 1.8, the configuration's text 1.4, the strings 1.8, the effect library 1.9); the rest lives on the GPU as stored.
 
 ### Loading temporaries
 
@@ -71,8 +71,8 @@ Headless Chrome, `menu` suite (MiB, the wasm heap and the most live meanwhile, f
 
 | Path | Before the New Game | After the first New Game | After the second | Before #440 | Before #432 (first, second) | Before #370 and #371, without the detail objects (#411) |
 |---|---|---|---|---|---|---|
-| WebGPU | 34 heap, 16 live | 90 heap, 77 live at most | 93 heap, 82 live at most | | 59/16 before it; 90/81, 90/81 | 98/87, 98/87 |
-| WebGL 2 (BC textures as stored) | 25 heap, 20 live (a fresh engine) | 93 heap, 82 live at most | 93 heap, 84 live at most | 97/85, 99/86 | 104/93, 104/89 | 106/95, 110/97 |
+| WebGPU | 34 heap, 16 live | 82 heap, 74 live at most | 93 heap, 82 live at most (before #440) | 90/77 | 59/16 before it; 90/81, 90/81 | 98/87, 98/87 |
+| WebGL 2 (BC textures as stored) | 25 heap, 20 live (a fresh engine) | 87 heap, 79 live at most | 91 heap, 80 live at most | 97/85, 99/86 | 104/93, 104/89 | 106/95, 110/97 |
 
 One run each (the heap varies by a few MiB from run to run). The audio worker's instance adds 3–4 MiB (#354). Where the live bytes sit (the `heap_map` op of test builds, #432; WebGPU): after the launch the heap is 17 MiB with 10 live (the archive tree and the game's data), at the title menu 24 MiB with 16 live, packed from the heap's start (its largest blocks 0.4–1.4 MiB, believed the menu videos' frames and the UI textures). The game itself leaves no split free space before a New Game. What took the heap to 59 MiB before #432 was the `menu` suite's own capture of the title menu: a 1024 × 768 frame sent to the page as a JSON array of numbers, about 35 MiB at the heap's top, freed at once. Captures are now sent as base64 and decoded in the engine worker; the suite's capture still takes the heap from 24 to 34 MiB, all of it free at the top. The WebGL 2 row starts a fresh engine straight into the game. What stands between the heap and its live peak, 10–11 MiB on WebGPU and 12 MiB on WebGL 2, arises during the loading itself. With the level shown WebGL 2 holds about 3 MiB more live than WebGPU (79 against 76), believed wgpu-core's and naga's state, in blocks under 64 KiB, which the browser holds on WebGPU. At the load's peak the two paths hold the same large blocks; what WebGL 2 adds is staging, wgpu-core's copies of what was written, kept in our heap until WebGL reports the writes done (the `heap_record` op of test builds: live bytes by block size and the largest blocks at the load's most live, #440).
 

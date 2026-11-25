@@ -29,7 +29,7 @@ pub mod world;
 use std::ops::Range;
 
 pub use texture::{
-    TextureError, TexturePath, Transcoded, transcode, transcode_into, transcoded_len,
+    TextureError, TexturePath, TextureUpload, Transcoded, transcode, transcode_into, transcoded_len,
 };
 pub use video::VideoTexture;
 pub use wgpu;
@@ -601,10 +601,7 @@ impl Renderer {
         clear: wgpu::Color,
         size: (u32, u32),
     ) {
-        let timed = self
-            .timer
-            .as_mut()
-            .and_then(|t| t.begin(&self.device, &self.queue));
+        let timed = self.timer.as_mut().and_then(|t| t.begin());
         self.draw_scaled(target, list, clear, size, timed);
         if let (Some(timer), Some(slot)) = (self.timer.as_mut(), timed) {
             timer.end(&self.device, &self.queue, slot);
@@ -629,7 +626,7 @@ impl Renderer {
     pub fn set_gpu_timing(&mut self, on: bool) {
         if on != self.timer.is_some() {
             self.timer = if on {
-                timing::FrameTimer::new(&self.device, &self.queue, self.format)
+                timing::FrameTimer::new(&self.device, &self.queue)
             } else {
                 None
             };
@@ -637,8 +634,8 @@ impl Renderer {
     }
 
     /// The GPU times of the frames [`Renderer::render_scaled`] drew that
-    /// were read back since the last call, milliseconds: from the start of
-    /// a frame's first pass to the end of its last. Read back once the GPU
+    /// were read back since the last call, milliseconds: the time its passes
+    /// kept the GPU busy, the sum of [`Renderer::take_gpu_pass_times`]'. Read back once the GPU
     /// is done, a few frames late; the browser's WebGPU maps buffers on its
     /// own, other backends when the device is polled.
     pub fn take_gpu_times(&mut self) -> Vec<f64> {
@@ -821,7 +818,7 @@ impl Renderer {
                 let colour = t.colour.create_view(&Default::default());
                 let distort = t.distort.create_view(&Default::default());
                 let depth = t.depth.create_view(&Default::default());
-                let distorted = tracing::info_span!("render.world").in_scope(|| {
+                let distortion = tracing::info_span!("render.world").in_scope(|| {
                     self.encode_frame(encoder, &colour, t.size, &depth, frame, Some(&distort))
                 });
                 let (vertices, pipelines) =
@@ -833,17 +830,18 @@ impl Renderer {
                         encoder,
                         screen,
                         &p,
-                        distorted,
+                        distortion,
                         last,
                         |pass| draw_quads(pass, vertices, pipelines, quads, batches),
                     )
                 });
-                distorted
+                distortion.pass
             }
             None => {
                 let depth = self.depth_view(size.0, size.1);
                 tracing::info_span!("render.world")
                     .in_scope(|| self.encode_frame(encoder, screen, size, &depth, frame, None))
+                    .pass
             }
         };
         self.post.distorted = distorted;
@@ -853,7 +851,7 @@ impl Renderer {
     /// The world pass of `frame` with its particle effects into `target` of
     /// `size` with `depth`, then, with a distortion list, the distortion
     /// pass into `distort` (particle-drawing.md 6.2). Returns whether the
-    /// frame had a distortion pass. Drawn straight to the screen (no
+    /// frame had a distortion pass and whether it was drawn. Drawn straight to the screen (no
     /// `distort`), the pass's picture would not be shown
     /// (frame-presentation.md 3.1), so it is left undrawn, but the frame
     /// still counts as one with a distortion pass.
@@ -865,7 +863,7 @@ impl Renderer {
         depth: &wgpu::TextureView,
         frame: &WorldFrame,
         distort: Option<&wgpu::TextureView>,
-    ) -> bool {
+    ) -> Distortion {
         let mut pipelines = self.particles.take();
         let prepared = if frame.particles.is_empty() {
             None
@@ -885,7 +883,11 @@ impl Renderer {
         };
         let both = pipelines.as_ref().zip(prepared.as_ref());
         let distorted = both.is_some_and(|(_, p)| p.has(particles::ParticleQueue::Distortion));
-        let shown = distort.filter(|_| distorted);
+        // A distortion list none of whose sprites reaches the screen
+        // leaves the target as cleared: the presentation reads a texel of
+        // the clear value instead and the pass is not drawn (#433).
+        let drawn = both.is_some_and(|(_, p)| p.distortion_shown);
+        let shown = distort.filter(|_| distorted && drawn);
         self.encode_world(encoder, target, size, depth, frame, both, shown.is_some());
         if let (Some((pipelines, prepared)), Some(distort)) = (both, shown) {
             // TODO(#329): particle-drawing.md 6.2 does not state the view
@@ -896,7 +898,10 @@ impl Renderer {
             stats::set_part(stats::Part::Screen);
         }
         self.particles = pipelines;
-        distorted
+        Distortion {
+            pass: distorted,
+            drawn: shown.is_some(),
+        }
     }
 
     /// Writes the vertices of `list` and returns its draw batches: runs of
@@ -952,6 +957,15 @@ impl Renderer {
         }
         batches
     }
+}
+
+/// A world frame's distortion pass (particle-drawing.md 6.2).
+#[derive(Clone, Copy)]
+pub(crate) struct Distortion {
+    /// The frame has a distortion list (frame-presentation.md 3.1).
+    pub pass: bool,
+    /// The pass was drawn into the distortion target.
+    pub drawn: bool,
 }
 
 /// Draws `quads` in their `batches` from `vertices` into `pass`, with the
