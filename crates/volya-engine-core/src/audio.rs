@@ -178,7 +178,8 @@ impl Voice {
             if self.ended {
                 return false;
             }
-            match self.source.read(&mut self.input) {
+            let read = tracing::info_span!("decode").in_scope(|| self.source.read(&mut self.input));
+            match read {
                 Ok(true) => {}
                 Ok(false) if self.looping => {
                     if self.source.rewind().is_err() {
