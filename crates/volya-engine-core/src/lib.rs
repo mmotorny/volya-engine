@@ -15,6 +15,7 @@ pub mod cycles;
 pub mod footsteps;
 pub mod input;
 pub mod level;
+pub mod lights;
 pub mod movement;
 pub mod object_light;
 pub mod particles;

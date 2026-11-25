@@ -34,6 +34,7 @@ use crate::core::config;
 use crate::core::config::Config;
 use crate::core::input::Input;
 use crate::core::level::{DrawItem, Level};
+use crate::core::lights::Lights;
 use crate::core::movement::{Flags, MovementConfig, Player};
 use crate::core::object_light::SkyVisibility;
 use crate::core::particles::placed::PlacedEffects;
@@ -215,6 +216,9 @@ pub struct LevelScreen {
     view_size: std::cell::Cell<(u32, u32)>,
     /// Whether the effects are drawn (tests compare frames without them).
     effects_drawn: bool,
+    /// The level's dynamic light records (docs/behavior/dynamic-lights.md):
+    /// chunk 6's, the sun's and every source's.
+    lights: Lights,
 }
 
 /// What the engine interface reports.
@@ -1416,6 +1420,7 @@ impl NewGameLoad {
             effects,
             view_size: std::cell::Cell::new((1024, 768)),
             effects_drawn: true,
+            lights: Lights::default(),
         };
         screen.update_view();
         Ok(screen)
@@ -1684,6 +1689,17 @@ impl LevelScreen {
         if changed {
             self.placements = Arc::new(placements);
         }
+    }
+
+    /// The level's dynamic light records, for the sources that create and
+    /// update their lights each frame (docs/architecture.md, Lights).
+    pub fn lights_mut(&mut self) -> &mut Lights {
+        &mut self.lights
+    }
+
+    /// The level's dynamic light records.
+    pub fn lights(&self) -> &Lights {
+        &self.lights
     }
 
     /// The level's placed effects (level-placed-effects.md).
@@ -2053,6 +2069,7 @@ impl LevelScreen {
             effects: None,
             view_size: std::cell::Cell::new((1024, 768)),
             effects_drawn: true,
+            lights: Lights::default(),
         }
     }
 }
