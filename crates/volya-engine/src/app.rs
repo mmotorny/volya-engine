@@ -20,6 +20,7 @@ use serde::Serialize;
 use crate::audio::AudioOut;
 use crate::core::audio::Category;
 use crate::core::console::Console;
+use crate::core::diagnostics;
 use crate::core::input::{Action, Control, Input};
 use crate::core::pause::{GlobalClock, Pause};
 use crate::core::sound::Fatal;
@@ -670,7 +671,7 @@ impl App {
         if matches!(self.phase, Some(Phase::Menu(_))) && self.error.as_ref() == Some(&error) {
             return;
         }
-        tracing::error!(error = %error, "fatal error");
+        diagnostics::end("fatal", &error);
         self.error = Some(error);
         let now = self.clock;
         let title = self.opening(false);
@@ -845,7 +846,11 @@ impl App {
         self.frames += 1;
         if let Some(at) = self.loaded_since.take() {
             self.load_ms = Some(time_ms - at);
-            tracing::info!(load_ms = time_ms - at, "level made");
+            let level = match &self.phase {
+                Some(Phase::Level { level, .. }) => level.world().name.as_str(),
+                _ => "",
+            };
+            tracing::info!(level, load_ms = time_ms - at, "level made");
         }
         if std::mem::take(&mut self.shown) {
             // The hidden time never reaches the engine clock: this frame's
@@ -934,7 +939,6 @@ impl App {
                         let changed = self.game_type != Some(GAME_TYPE);
                         self.game_type = Some(GAME_TYPE);
                         self.load_started = Some(time_ms);
-                        tracing::info!("level loading");
                         let mut loading = Loading::start(data, changed);
                         if self.prepare_textures {
                             loading.prepare_textures();
@@ -967,7 +971,7 @@ impl App {
                                 };
                             }
                             Err(e) => {
-                                tracing::error!(error = %e, "loading failed");
+                                diagnostics::end("load_failed", &e.to_string());
                                 self.error = Some(e.to_string());
                                 *phase =
                                     Phase::Menu(TitleMenu::open(data, now, input, audio, title));
@@ -977,7 +981,7 @@ impl App {
                     }
                     Err(e) => {
                         // Back to the menu, saying why (our choice).
-                        tracing::error!(error = %e, "loading failed");
+                        diagnostics::end("load_failed", &e.to_string());
                         self.error = Some(e.to_string());
                         *phase = Phase::Menu(TitleMenu::open(data, now, input, audio, title));
                         self.screens.menu_opened();
@@ -1033,6 +1037,7 @@ impl App {
                 } else if out.disconnect {
                     // `disconnect`: the game ends; with no level the title
                     // screen's menu opens.
+                    diagnostics::end("quit", "quit to the title menu");
                     menu.stop(audio);
                     intro.stop(audio);
                     if let Some(o) = overlay.take() {

@@ -71,6 +71,22 @@ fn error(e: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&e.to_string())
 }
 
+/// Records a lost WebGL context as the engine's end: the WebGL
+/// specification fires `webglcontextlost` at the canvas, an
+/// `OffscreenCanvas` too (documented, not measured).
+fn watch_context_loss(canvas: &OffscreenCanvas) {
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen::closure::Closure;
+    let lost = Closure::<dyn FnMut()>::new(|| {
+        let message = "webgl2: the WebGL context was lost";
+        crate::diagnostics::end(1, "device_lost", message, &[]);
+    });
+    let _ =
+        canvas.add_event_listener_with_callback("webglcontextlost", lost.as_ref().unchecked_ref());
+    // For the canvas's lifetime, the engine's.
+    lost.forget();
+}
+
 /// Sets up WebGPU on `canvas`; on failure records why and returns normally.
 pub async fn init(canvas: OffscreenCanvas) {
     match connect(canvas).await {
@@ -116,6 +132,9 @@ async fn connect(canvas: OffscreenCanvas) -> Result<Gpu, String> {
         }
     };
     let (width, height) = (canvas.width().max(1), canvas.height().max(1));
+    if backend == "webgl2" {
+        watch_context_loss(&canvas);
+    }
     let surface = instance
         .create_surface(wgpu::SurfaceTarget::OffscreenCanvas(canvas))
         .map_err(|e| format!("no {backend} canvas: {e}"))?;
@@ -147,6 +166,13 @@ async fn connect(canvas: OffscreenCanvas) -> Result<Gpu, String> {
         web_sys::console::error_1(&format!("{backend}: {e}").into());
         tracing::error!(backend, error = %e, "GPU error");
     }));
+    // WebGPU's `device.lost` (wgpu's GL backend doesn't report a lost
+    // context here: `watch_context_loss`).
+    device.set_device_lost_callback(move |reason, message| {
+        let message = format!("{backend}: {reason:?}: {message}");
+        web_sys::console::error_1(&message.clone().into());
+        crate::diagnostics::end(1, "device_lost", &message, &[]);
+    });
     // Colour values pass through: a non-sRGB format, preferred one first.
     let format = surface
         .get_capabilities(&adapter)
@@ -200,6 +226,18 @@ pub struct Status {
     /// Canvas size in pixels.
     #[serde(skip_serializing_if = "Option::is_none")]
     size: Option<[u32; 2]>,
+}
+
+/// The `debug_lose_device` op (tests): destroys the GPU device, as a lost
+/// one; drawing stops for the rest of the run.
+#[cfg(feature = "test-ops")]
+pub fn lose_device() -> Result<(), JsValue> {
+    GPU.with(|g| {
+        let g = g.borrow();
+        let gpu = g.as_ref().ok_or_else(|| error("no GPU"))?;
+        gpu.renderer.device().destroy();
+        Ok(())
+    })
 }
 
 pub fn status() -> Status {

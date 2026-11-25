@@ -246,6 +246,26 @@ async function quitToTitle() {
   return until((s) => s.phase === "menu", "the title menu");
 }
 
+/** From the title menu's main page: New game, the first difficulty. */
+async function newGame() {
+  pointer("pointermove", row(0));
+  await until((s) => s.menu.selected === 0, "item 0");
+  key("Enter");
+  await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
+  key("Enter");
+}
+
+/**
+ * This session's `engine.end` events in the diagnostic log as stored now
+ * (not those waiting for the period's end).
+ */
+async function storedEnds() {
+  const { text } = await volya.call("diagnostic_log", { stored_only: true });
+  const events = JSON.parse(text).traceEvents;
+  const pid = events.findLast((e) => e.name === "session").pid;
+  return events.filter((e) => e.pid === pid && e.name === "engine.end");
+}
+
 /**
  * Simulates the page being hidden or shown: the visibility the page reads,
  * then the event (a real hide needs the browser's own controls).
@@ -1198,6 +1218,7 @@ export const tests = {
       const idle = (await volya.status()).frames;
       assert(idle - frames <= 1, `${idle - frames} frames ran while hidden`);
       assertEqual(volya.audioState(), "suspended", "audio while hidden");
+      assertEqual((await storedEnds()).at(-1)?.args.reason, "page_hidden", "the end in the diagnostic log");
     } finally {
       setVisibility("visible");
     }
@@ -1367,7 +1388,27 @@ export const tests = {
     await answerBox("yes");
     const title = await until((s) => s.phase === "menu", "the title menu");
     assertEqual(title.menu.list, "menu_main", "list");
+    const end = (await storedEnds()).at(-1);
+    assertEqual([end?.args.reason, end?.args.message], ["quit", "quit to the title menu"], "the end in the diagnostic log");
   },
+
+  "a level sound file missing at a New Game fails the load; the diagnostic log stores why at once": async () => {
+    needsGame();
+    await volya.call("debug_hide_file", { suffix: "sounds/ambient/rain.ogg" });
+    try {
+      await newGame();
+      await until((s) => s.phase !== "menu", "the New Game to start");
+      const s = await until((s) => s.phase === "menu" && s.error, "the title menu saying why", loadMs());
+      assert(s.error.includes("rain.ogg"), `error: ${s.error}`);
+    } finally {
+      await volya.call("debug_hide_file", {});
+    }
+    const end = (await storedEnds()).at(-1);
+    assertEqual(end?.args.reason, "load_failed", "reason");
+    assert(end.args.message.includes("rain.ogg"), `message: ${end.args.message}`);
+    return end.args.message;
+  },
+
 
   "Options opens from the title menu": async () => {
     needsGame();
@@ -1552,6 +1593,8 @@ export const tests = {
     assertEqual((await volya.call("input_state")).capture, false, "capture");
     await sleep(50);
     assertEqual(document.querySelector("main").hidden, false, "page interface hidden");
+    const end = (await storedEnds()).at(-1);
+    assertEqual([end?.args.reason, end?.args.message], ["quit", "left the game"], "the end in the diagnostic log");
   },
 
   "the diagnostic log holds the games, their levels and their frames, after the game ended": async () => {
@@ -1561,10 +1604,15 @@ export const tests = {
     const pid = events.findLast((e) => e.name === "session").pid;
     const mine = events.filter((e) => e.pid === pid);
     const count = (ph, name) => mine.filter((e) => e.ph === ph && e.name === name).length;
-    // Two New Games and the options' game, each ended.
+    // Two New Games and the options' game, each left; each level named.
     assert(count("i", "game started") >= 2, `games started ${count("i", "game started")}`);
-    assertEqual(count("i", "game ended"), count("i", "game started"), "games ended");
-    assert(count("i", "level loading") >= 2 && count("i", "level made") >= 2, "levels");
+    const ends = mine.filter((e) => e.name === "engine.end");
+    const left = ends.filter((e) => e.args.message === "left the game").length;
+    assertEqual(left, count("i", "game started"), "games left");
+    const reasons = new Set(ends.map((e) => e.args.reason));
+    for (const reason of ["quit", "page_hidden", "load_failed"]) assert(reasons.has(reason), `no ${reason} end`);
+    const levels = (name) => mine.filter((e) => e.name === name && e.args?.level === "l01_escape").length;
+    assert(levels("level loading") >= 2 && levels("level made") >= 2, "levels");
     const series = (key) => mine.filter((e) => e.ph === "C" && key in e.args).length;
     for (const key of ["frame max", "engine max", "render max", "frame.interval_ms max", "MiB", "diagnostics.write_ms max"]) {
       assert(series(key) > 10, `${key}: ${series(key)}`);

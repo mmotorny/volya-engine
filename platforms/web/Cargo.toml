@@ -39,6 +39,7 @@ wasm-bindgen-futures.workspace = true
 web-sys = { workspace = true, features = [
   "Blob",
   "console",
+  "EventTarget",
   "File",
   "FileReaderSync",
   "FileSystemDirectoryHandle",

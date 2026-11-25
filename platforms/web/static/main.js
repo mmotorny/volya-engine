@@ -23,6 +23,13 @@ const updates = navigator.serviceWorker ? startUpdates(registration) : null;
 const worker = new Worker(new URL("./engine-worker.js", import.meta.url), { type: "module" });
 const pending = new Map();
 diagnostics.connect((message) => worker.postMessage(message));
+// Uncaught errors on the page end the engine as far as anyone knows (#356).
+addEventListener("error", (event) =>
+  diagnostics.end("page_error", `${event.message} (${event.filename}:${event.lineno}:${event.colno})`),
+);
+addEventListener("unhandledrejection", (event) =>
+  diagnostics.end("page_error", `unhandled rejection: ${event.reason?.stack ?? event.reason?.message ?? event.reason}`),
+);
 let nextId = 0;
 // Set once the canvas exists, below; capture starts off, and so do the
 // level's controls.
@@ -34,6 +41,7 @@ let setCursor = () => {};
 const started = new Promise((resolve, reject) => {
   worker.onmessage = ({ data }) => {
     if (data.type === "started") {
+      diagnostics.setStatus(data.diagnostics);
       resolve();
       // The service worker keeps the wasm build this browser runs (sw.js).
       navigator.serviceWorker?.ready.then((r) => r.active?.postMessage({ type: "build", build: data.build }));
@@ -71,6 +79,8 @@ function call(op, args = {}) {
 async function connectAudio(context) {
   await context.audioWorklet.addModule(new URL("./audio-worklet.js", import.meta.url));
   const node = new AudioWorkletNode(context, "volya-output", { numberOfInputs: 0, outputChannelCount: [2] });
+  // The processor failed (its constructor too; errors it caught it reports itself).
+  node.onprocessorerror = () => diagnostics.end("worklet_error", "the audio worklet's processor failed");
   node.connect(context.destination);
   worker.postMessage({ type: "audio", port: node.port, sampleRate: context.sampleRate }, [node.port]);
   return node;
@@ -91,6 +101,10 @@ globalThis.volya = { call, status: () => call("status"), connectAudio, audioStat
 // worker anyway (below).
 function visibilityChanged() {
   const hidden = document.visibilityState === "hidden";
+  // The engine records the end and stores it (a hidden page may be ended
+  // without notice); kept here too should the worker be ended first.
+  if (hidden) diagnostics.keepEnd("page_hidden", "the page was hidden");
+  else diagnostics.forgetEnd();
   worker.postMessage({ type: "visibility", hidden });
   if (!audio) return;
   if (hidden) audio.suspend().catch(() => {});
@@ -103,7 +117,14 @@ document.addEventListener("visibilitychange", visibilityChanged);
 // The engine worker holds OPFS file locks. Browsers keep left pages alive in
 // the back-forward cache, which would keep those locks from the next page:
 // end the worker when the page is hidden, and reload if it is restored.
-addEventListener("pagehide", () => worker.terminate());
+// The worker is told why first, and the page keeps the end itself, as the
+// worker may be ended before it stores it (#356).
+addEventListener("pagehide", () => {
+  const message = "the page was closed";
+  diagnostics.keepEnd("page_closed", message);
+  worker.postMessage({ type: "end", reason: "page_closed", message });
+  worker.terminate();
+});
 addEventListener("pageshow", (event) => event.persisted && location.reload());
 
 // The engine sizes the canvas in device pixels from these.
@@ -136,7 +157,11 @@ setLevel = (controls) => {
 };
 const canvas = view.transferControlToOffscreen();
 // The diagnostic log, when the player keeps one (#346).
-worker.postMessage({ type: "start", canvas, size: size(), diagnostics: diagnostics.enabled() ? diagnostics.session() : null }, [canvas]);
+const logging = diagnostics.enabled();
+worker.postMessage(
+  { type: "start", canvas, size: size(), diagnostics: logging ? diagnostics.session() : null, previousEnd: logging ? diagnostics.takeKeptEnd() : null },
+  [canvas],
+);
 if (document.visibilityState === "hidden") visibilityChanged();
 const resized = () => worker.postMessage({ type: "resize", ...size() });
 new ResizeObserver(resized).observe(view);

@@ -12,7 +12,9 @@
 // ones since the last (underrun) and how many are queued; for the diagnostic
 // log (#346), also the last reply's wait, the queue's least, summed and
 // greatest fill over the process calls since the last request, and whether
-// the last reply left it over-full (overrun: over OVERFULL_SECONDS).
+// the last reply left it over-full (overrun: over OVERFULL_SECONDS). An
+// error here is sent as `{ error }` before it ends the processor, for the
+// log's `engine.end`.
 
 const TARGET_SECONDS = 0.15;
 const REQUEST_SECONDS = 0.05;
@@ -32,12 +34,35 @@ class VolyaOutput extends AudioWorkletProcessor {
     this.overrun = 0; // replies that left the queue over-full
     this.resetFill();
     this.port.onmessage = ({ data }) => {
-      this.queue.push(data);
-      this.queued += data.length / 2;
-      this.pending = false;
-      this.wait = currentFrame - this.sent;
-      if (this.queued > sampleRate * OVERFULL_SECONDS) this.overrun++;
+      try {
+        this.queue.push(data);
+        this.queued += data.length / 2;
+        this.pending = false;
+        this.wait = currentFrame - this.sent;
+        if (this.queued > sampleRate * OVERFULL_SECONDS) this.overrun++;
+      } catch (error) {
+        this.report(error);
+        throw error;
+      }
     };
+  }
+
+  /** Tells the engine worker of an error (its diagnostic log). */
+  report(error) {
+    try {
+      this.port.postMessage({ error: String(error?.stack ?? error) });
+    } catch {
+      // The port is gone.
+    }
+  }
+
+  process(inputs, outputs) {
+    try {
+      return this.play(inputs, outputs);
+    } catch (error) {
+      this.report(error);
+      throw error;
+    }
   }
 
   resetFill() {
@@ -47,7 +72,7 @@ class VolyaOutput extends AudioWorkletProcessor {
     this.fillN = 0;
   }
 
-  process(_inputs, outputs) {
+  play(_inputs, outputs) {
     const [left, right = left] = outputs[0];
     for (let i = 0; i < left.length; i++) {
       const block = this.queue[0];
