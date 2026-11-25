@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! Rendering in the engine worker: WebGPU on the `OffscreenCanvas` the page
-//! transferred (docs/architecture.md, Threading). The page reports the
-//! canvas's CSS size and devicePixelRatio ([`resize`]); `engine-worker.js`
-//! calls [`frame`] once per animation frame. Without WebGPU the engine runs
-//! on without graphics and [`status`] says why.
+//! Rendering in the engine worker on the `OffscreenCanvas` the page
+//! transferred (docs/architecture.md, Threading): WebGPU when the browser
+//! gives an adapter, else WebGL 2 (#113). The page reports the canvas's CSS
+//! size and devicePixelRatio ([`resize`]); `engine-worker.js` calls
+//! [`frame`] once per animation frame. Without either the engine runs on
+//! without graphics and [`status`] says why.
 
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -30,6 +31,8 @@ const MAX_CATCH_UP: u64 = 4;
 const MAX_CAPTURE: u32 = 4096;
 
 struct Gpu {
+    /// `webgpu` or `webgl2`.
+    backend: &'static str,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     queue: wgpu::Queue,
@@ -76,38 +79,67 @@ pub async fn init(canvas: OffscreenCanvas) {
 }
 
 async fn connect(canvas: OffscreenCanvas) -> Result<Gpu, String> {
+    // A canvas keeps the first kind of context it gives, so WebGPU's
+    // adapter is asked for before any surface: without one, WebGL 2 takes
+    // the canvas (the iOS Simulator's WebKit has `navigator.gpu` but gives
+    // no adapter, measured).
     let navigator = js_sys::Reflect::get(&js_sys::global(), &"navigator".into())
         .map_err(|_| "no navigator in the engine worker")?;
     let has_gpu = js_sys::Reflect::get(&navigator, &"gpu".into())
         .is_ok_and(|gpu| !gpu.is_undefined() && !gpu.is_null());
-    if !has_gpu {
-        return Err("this browser has no WebGPU".into());
-    }
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::BROWSER_WEBGPU,
-        ..wgpu::InstanceDescriptor::new_without_display_handle()
-    });
+    let webgpu = if has_gpu {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::BROWSER_WEBGPU,
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        match instance.request_adapter(&Default::default()).await {
+            Ok(_) => Ok(instance),
+            Err(_) => Err("no WebGPU adapter"),
+        }
+    } else {
+        Err("no WebGPU")
+    };
+    let (instance, backend, why) = match webgpu {
+        Ok(instance) => (instance, "webgpu", None),
+        Err(why) => {
+            web_sys::console::info_1(&format!("{why}: trying WebGL 2").into());
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                backends: wgpu::Backends::GL,
+                ..wgpu::InstanceDescriptor::new_without_display_handle()
+            });
+            (instance, "webgl2", Some(why))
+        }
+    };
     let (width, height) = (canvas.width().max(1), canvas.height().max(1));
     let surface = instance
         .create_surface(wgpu::SurfaceTarget::OffscreenCanvas(canvas))
-        .map_err(|e| format!("no WebGPU canvas: {e}"))?;
+        .map_err(|e| format!("no {backend} canvas: {e}"))?;
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
             compatible_surface: Some(&surface),
             ..Default::default()
         })
         .await
-        .map_err(|_| "no WebGPU adapter (no usable GPU)")?;
+        .map_err(|_| match why {
+            Some(why) => format!("{why}; no WebGL 2 adapter"),
+            None => "no WebGPU adapter for the canvas".to_owned(),
+        })?;
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             required_features: volya_engine::render::device_features(&adapter),
+            // WebGL 2 offers less than WebGPU's defaults: what it has.
+            required_limits: if backend == "webgl2" {
+                adapter.limits()
+            } else {
+                wgpu::Limits::default()
+            },
             ..Default::default()
         })
         .await
-        .map_err(|e| format!("no WebGPU device: {e}"))?;
+        .map_err(|e| format!("no {backend} device: {e}"))?;
     // Report instead of panicking, which would stop the whole engine.
-    device.on_uncaptured_error(Arc::new(|e| {
-        web_sys::console::error_1(&format!("WebGPU: {e}").into());
+    device.on_uncaptured_error(Arc::new(move |e| {
+        web_sys::console::error_1(&format!("{backend}: {e}").into());
     }));
     // Colour values pass through: a non-sRGB format, preferred one first.
     let format = surface
@@ -129,6 +161,7 @@ async fn connect(canvas: OffscreenCanvas) -> Result<Gpu, String> {
     };
     surface.configure(&device, &config);
     Ok(Gpu {
+        backend,
         surface,
         config,
         renderer: Renderer::new(&device, &queue, format),
@@ -146,9 +179,16 @@ pub struct Status {
     state: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
+    /// `webgpu` or `webgl2`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    backend: Option<&'static str>,
     /// Whether BC textures upload as stored.
     #[serde(skip_serializing_if = "Option::is_none")]
     bc: Option<bool>,
+    /// How BC textures reach the GPU: `bc`, `etc2` (transcoded) or `rgba8`
+    /// (decoded).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    textures: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     format: Option<String>,
     /// Canvas size in pixels.
@@ -161,6 +201,8 @@ pub fn status() -> Status {
         g.borrow().as_ref().map(|gpu| Status {
             state: "ready",
             message: None,
+            backend: Some(gpu.backend),
+            textures: Some(gpu.renderer.texture_path().name()),
             bc: Some(
                 gpu.renderer
                     .device()
@@ -180,11 +222,18 @@ pub fn status() -> Status {
                 "starting"
             },
             message,
+            backend: None,
+            textures: None,
             bc: None,
             format: None,
             size: None,
         }
     })
+}
+
+/// Runs `f` with the renderer, `None` without graphics.
+pub fn with_renderer<T>(f: impl FnOnce(&Renderer) -> T) -> Option<T> {
+    GPU.with(|g| g.borrow().as_ref().map(|gpu| f(&gpu.renderer)))
 }
 
 fn with_gpu<T>(f: impl FnOnce(&mut Gpu) -> Result<T, JsValue>) -> Result<T, JsValue> {
@@ -256,6 +305,10 @@ pub fn set_splash(image: &Rgba) {
 /// presents if anything changed.
 pub fn frame(time: f64) {
     let _ = with_gpu(|gpu| {
+        // wgpu's GL backend runs buffer-mapping callbacks (captures) and
+        // frees finished uploads only when polled; the browser's WebGPU
+        // does both on its own (this is then a no-op).
+        let _ = gpu.renderer.device().poll(wgpu::PollType::Poll);
         let canvas = Resolution::new(gpu.config.width, gpu.config.height);
         // The game draws at its video mode (#49), within the GPU's limit.
         let max = gpu.renderer.device().limits().max_texture_dimension_2d;

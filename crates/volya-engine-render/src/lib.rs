@@ -22,7 +22,7 @@ pub mod world;
 
 use std::ops::Range;
 
-pub use texture::TextureError;
+pub use texture::{TextureError, TexturePath, Transcoded, transcode, transcoded_len};
 pub use video::VideoTexture;
 pub use wgpu;
 pub use world::{World, WorldDraw, WorldFrame};
@@ -34,7 +34,8 @@ pub const UI_HEIGHT: f32 = 768.0;
 /// Optional device features the renderer uses when the adapter has them:
 /// request these when creating the device.
 pub fn device_features(adapter: &wgpu::Adapter) -> wgpu::Features {
-    adapter.features() & wgpu::Features::TEXTURE_COMPRESSION_BC
+    adapter.features()
+        & (wgpu::Features::TEXTURE_COMPRESSION_BC | wgpu::Features::TEXTURE_COMPRESSION_ETC2)
 }
 
 /// An axis-aligned rectangle: UI units for screen positions, texels for
@@ -148,6 +149,12 @@ pub struct Renderer {
     depth: Option<wgpu::Texture>,
     /// The frame [`Renderer::render_scaled`] draws into.
     offscreen: Option<Texture>,
+    /// Textures made ahead of their first use, by source path
+    /// ([`Renderer::add_prepared`]).
+    prepared: std::cell::RefCell<std::collections::HashMap<String, Texture>>,
+    /// Whether the world reads per-draw data from a texture and draws
+    /// without base vertices ([`Renderer::compat`]).
+    compat: bool,
 }
 
 impl Renderer {
@@ -253,7 +260,52 @@ impl Renderer {
             world_pipelines: None,
             depth: None,
             offscreen: None,
+            prepared: Default::default(),
+            compat: device.limits().max_storage_buffers_per_shader_stage == 0,
         }
+    }
+
+    /// Whether the world is drawn the way WebGL 2 allows: per-draw data read
+    /// from a texture rather than a storage buffer (which WebGL's vertex
+    /// programs lack), and indices rebased at upload rather than drawn with
+    /// base vertices (which WebGL lacks). Set for devices without storage
+    /// buffers.
+    pub fn compat(&self) -> bool {
+        self.compat
+    }
+
+    /// Draws the world in [`Renderer::compat`] mode even where storage
+    /// buffers exist (tests: the WebGL path on a native GPU). Takes effect
+    /// for worlds created afterwards.
+    pub fn set_compat(&mut self, on: bool) {
+        if on != self.compat {
+            self.compat = on;
+            self.world_pipelines = None;
+        }
+    }
+
+    /// Keeps `texture`, made from the file at `path`, for
+    /// [`Renderer::take_prepared`].
+    pub fn add_prepared(&self, path: &str, texture: Texture) {
+        self.prepared.borrow_mut().insert(path.to_owned(), texture);
+    }
+
+    /// The texture prepared for `path`, if any (it is then forgotten).
+    pub fn take_prepared(&self, path: &str) -> Option<Texture> {
+        self.prepared.borrow_mut().remove(path)
+    }
+
+    /// Submits the uploads written so far and frees the staging of finished
+    /// submissions: wgpu's GL backend holds written bytes in CPU memory (the
+    /// wasm heap on the web) until then (#113).
+    pub fn flush_uploads(&self) {
+        self.queue.submit([]);
+        let _ = self.device.poll(wgpu::PollType::Poll);
+    }
+
+    /// Forgets every prepared texture.
+    pub fn clear_prepared(&self) {
+        self.prepared.borrow_mut().clear();
     }
 
     pub fn device(&self) -> &wgpu::Device {

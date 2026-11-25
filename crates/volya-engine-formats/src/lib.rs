@@ -12,6 +12,7 @@ pub mod cross_table;
 pub mod db;
 pub mod dds;
 pub mod env_mod;
+pub mod etc2;
 pub mod game_graph;
 pub mod gamemtl;
 pub mod level;

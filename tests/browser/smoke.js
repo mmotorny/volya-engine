@@ -263,8 +263,8 @@ export const tests = {
   },
 
   "a game the browser deleted is said so, on the import screen": async () => {
-    // Without WebGPU the app says it can't run the game instead (no import screen).
-    if ((await volya.status()).gpu.state !== "ready") skip("no WebGPU here");
+    // Without graphics the app says it can't run the game instead (no import screen).
+    if ((await volya.status()).gpu.state !== "ready") skip("no graphics here");
     localStorage.setItem("volya-engine.imported", "1");
     try {
       await volya.refresh();
@@ -278,7 +278,7 @@ export const tests = {
   },
 
   "a damaged import record is said so, on the import screen": async () => {
-    if ((await volya.status()).gpu.state !== "ready") skip("no WebGPU here");
+    if ((await volya.status()).gpu.state !== "ready") skip("no graphics here");
     const status = await volya.call("game_status");
     if (status.imported || status.written > 0) skip("a real import is present");
     const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle("volya-engine", { create: true });

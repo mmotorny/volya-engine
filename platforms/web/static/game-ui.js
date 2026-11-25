@@ -105,11 +105,11 @@ function settingsButton() {
   return button;
 }
 
-/** Whether the engine can draw (without WebGPU the game would run unseen). */
+/** Whether the engine can draw (without WebGPU or WebGL 2 the game would run unseen). */
 const graphics = async () => (await call("status")).gpu.state === "ready";
 
 /** Why the game can't be drawn here: one sentence; the browser's own words go in details. */
-const GRAPHICS_PROBLEM = "Volya Engine draws the game with WebGPU, which isn't working in this browser.";
+const GRAPHICS_PROBLEM = "Volya Engine draws the game with WebGPU or WebGL 2, and neither is working in this browser.";
 
 /**
  * The screen when this browser can't draw the game, imported or not: said

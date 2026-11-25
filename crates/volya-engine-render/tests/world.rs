@@ -26,8 +26,41 @@ const IDENTITY: Mat4 = [
     [0.0, 0.0, 0.0, 1.0],
 ];
 
+thread_local! {
+    /// Whether this test's renderer draws the world as on WebGL 2
+    /// ([`Renderer::compat`]): set by the `_compat` twin of each test.
+    static COMPAT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Each test twice: as on WebGPU, and as on WebGL 2 (per-draw data from a
+/// texture, indices rebased at upload) on the same native GPU.
+macro_rules! both {
+    ($($name:ident),* $(,)?) => {
+        mod compat {
+            $(
+                #[test]
+                fn $name() {
+                    super::COMPAT.with(|c| c.set(true));
+                    super::$name();
+                }
+            )*
+        }
+    };
+}
+
+both!(
+    every_program_builds_and_base_coordinates_decode,
+    vertex_colour_bytes_swap,
+    tree_coordinates_and_constants,
+    sky_shows_where_the_world_does_not,
+    objects_draw_quantized_models,
+    placed_draws_hide_show_and_move,
+    environment_mapped_models,
+    shared_index_ranges_with_different_bases,
+);
+
 fn renderer() -> Renderer {
-    pollster::block_on(async {
+    let mut r = pollster::block_on(async {
         let instance = wgpu::Instance::default();
         let adapter = instance.request_adapter(&Default::default()).await.unwrap();
         let (device, queue) = adapter
@@ -38,7 +71,55 @@ fn renderer() -> Renderer {
             .await
             .unwrap();
         Renderer::new(&device, &queue, wgpu::TextureFormat::Bgra8Unorm)
-    })
+    });
+    r.set_compat(COMPAT.with(|c| c.get()));
+    r
+}
+
+/// Two draws of one index range from different first vertices: the second's
+/// triangle (green, nearer) covers the first's (red). Without base vertices
+/// the range is uploaded twice, rebased for each.
+#[test]
+fn shared_index_ranges_with_different_bases() {
+    let mut r = renderer();
+    let white = r.create_rgba_texture(1, 1, &[255; 4]);
+    // Vertex colour bytes b0 b1 b2 b3: red is (0, 0, 0x7F), green
+    // (0, 0x7F, 0) (vert doubles them, level-geom.md 4).
+    let corners = [[-3.0, -3.0], [-3.0, 9.0], [9.0, -3.0]];
+    let mut data = Vec::new();
+    for (z, colour) in [(1.0, [0, 0, 0x7F, 0xFF]), (0.5, [0, 0x7F, 0, 0xFF])] {
+        let mut rest = [0u8; 8];
+        rest[..4].copy_from_slice(&colour);
+        for [x, y] in corners {
+            data.extend(vertex([x, y, z], 0, 0, rest));
+        }
+    }
+    let g = LevelGeom {
+        header: None,
+        vertex_buffers: vec![VertexBuffer {
+            elements: Layout::VertexLit.elements(),
+            layout: Some(Layout::VertexLit),
+            stride: 32,
+            vertex_count: 6,
+            data,
+        }],
+        index_buffers: vec![vec![0, 1, 2]],
+        progressive_meshes: Vec::new(),
+    };
+    let surfaces = [surface(Program::VertexLit, Some(white))];
+    let red = draw(0, None);
+    let green = WorldDraw {
+        first_vertex: 3,
+        ..red
+    };
+    let world = r.create_world(&g, &surfaces, &[red], None).unwrap();
+    assert_near(centre(&mut r, frame(world, None)), [0xFE, 0, 0], "red");
+    let world = r.create_world(&g, &surfaces, &[red, green], None).unwrap();
+    assert_near(
+        centre(&mut r, frame(world, None)),
+        [0, 0xFE, 0],
+        "green over red",
+    );
 }
 
 /// A vertex of 32 bytes: position, normal, tangent, binormal (D3DCOLOR

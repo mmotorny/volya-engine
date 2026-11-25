@@ -107,7 +107,33 @@ pub struct LevelWorld {
     pub objects: LevelObjects,
 }
 
+/// Every texture file of `surfaces` and `sky`, each once.
+fn texture_paths(surfaces: &[Surface<String>], sky: Option<&SkyTextures<String>>) -> Vec<String> {
+    let mut paths: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let surfaces = surfaces
+        .iter()
+        .flat_map(|s| s.textures.iter().chain([&s.env]).flatten());
+    let sky = sky.into_iter().flat_map(|sky| {
+        sky.sections
+            .iter()
+            .flat_map(|s| [Some(&s.cube), Some(&s.clouds), s.sun.as_ref()])
+            .flatten()
+    });
+    for path in surfaces.chain(sky) {
+        if seen.insert(path.as_str()) {
+            paths.push(path.clone());
+        }
+    }
+    paths
+}
+
 impl LevelWorld {
+    /// Every texture file the level uploads, each once.
+    pub fn texture_paths(&self) -> Vec<String> {
+        texture_paths(&self.surfaces, Some(&self.sky))
+    }
+
     /// The layout of the static geometry's buffers, to be read from
     /// [`LevelWorld::geometry_path`].
     pub fn geometry(&self) -> &GeomFile {
@@ -723,6 +749,12 @@ impl NewGameLoad {
     /// The level directory name, once the new game is created.
     pub fn level_name(&self) -> Option<&str> {
         self.name.as_deref()
+    }
+
+    /// Every texture file the level uploads (its surfaces', its objects'
+    /// and the sky's), each once, once `st_loading_textures` has run.
+    pub fn texture_paths(&self) -> Vec<String> {
+        texture_paths(&self.surfaces, self.sky.as_ref())
     }
 
     /// Does the work of `stage`.
