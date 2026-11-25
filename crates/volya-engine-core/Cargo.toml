@@ -17,5 +17,7 @@ workspace = true
 volya-engine-formats = { path = "../volya-engine-formats" }
 
 [dev-dependencies]
+crc32fast.workspace = true
 md-5.workspace = true
+sha2.workspace = true
 volya-engine-installer = { path = "../volya-engine-installer" }

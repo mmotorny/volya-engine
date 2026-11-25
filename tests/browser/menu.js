@@ -449,6 +449,7 @@ export const tests = {
     await until((s) => s.menu.selected === 0, "item 0");
     key("Enter");
     await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
+    await volya.call("heap_log", { on: true });
     key("Enter");
     // The loading screen (docs/behavior/loading-screen.md): a caption per
     // stage over the background and the progress strip. Whichever loading
@@ -467,20 +468,33 @@ export const tests = {
     // After the last stage the image covers the level's first 30 frames;
     // the intro starts under the last two (loading-screen.md section 7).
     const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", 60000);
+    // The wasm heap at the end of the last frame under each caption.
+    const stages = [];
+    for (const e of await volya.call("heap_log", { on: false })) {
+      const name = e.caption ?? e.phase;
+      const mib = Math.round(e.wasm_heap_bytes / 2 ** 20);
+      if (stages.length && stages[stages.length - 1][0] === name) stages[stages.length - 1][1] = mib;
+      else stages.push([name, mib]);
+    }
     assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
     // The level's objects (docs/behavior/level-objects.md section 7.1).
     assertEqual([s.level.objects.online, s.level.objects.with_model], [671, 352], "objects");
     assertEqual([s.intro?.items, s.intro?.kind], [1, "video"], "the intro plays");
     // The intro's 120 MB video streams from the file (#53): playing it
-    // keeps the wasm heap near its size before (about 137 MB).
+    // keeps the wasm heap near its size before.
+    const before = await volya.call("level_stats");
     await until((s) => s.intro?.elapsed_ms > 1500, "the intro to play a while", 10000);
     const playing = await volya.call("level_stats");
-    assert(playing.wasm_heap_bytes < 180 * 2 ** 20, `wasm heap ${(playing.wasm_heap_bytes / 2 ** 20).toFixed(0)} MiB during the intro`);
+    const grown = (playing.wasm_heap_bytes - before.wasm_heap_bytes) / 2 ** 20;
+    assert(grown < 40, `wasm heap grew ${grown.toFixed(0)} MiB during the intro`);
+    // The whole level's heap: 195 MiB measured (with the offline
+    // simulation), plus a modest margin.
+    assert(playing.wasm_heap_bytes < 210 * 2 ** 20, `wasm heap ${(playing.wasm_heap_bytes / 2 ** 20).toFixed(0)} MiB during the intro`);
     // A key bound to quit skips it (startup.md section 6.5).
     key("Escape");
     const shown = await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
     assertEqual(shown.phase, "level", "still in the level");
-    let note = `"${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; intro skipped, wasm heap ${(playing.wasm_heap_bytes / 2 ** 20).toFixed(0)} MiB while it played`;
+    let note = `wasm heap by caption (MiB): ${stages.map(([n, m]) => `${n} ${m}`).join(", ")}; "${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; intro skipped, wasm heap ${(before.wasm_heap_bytes / 2 ** 20).toFixed(0)} MiB before it, ${(playing.wasm_heap_bytes / 2 ** 20).toFixed(0)} MiB while it played`;
     if (gpu.state === "ready") {
       const { rgba } = await volya.call("debug_capture", { width: 256, height: 192 });
       const colours = new Set();

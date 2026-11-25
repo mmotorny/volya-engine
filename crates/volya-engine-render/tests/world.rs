@@ -506,6 +506,56 @@ fn objects_draw_quantized_models() {
     );
 }
 
+/// Placing a draw after the world is made: hidden with a radius of 0,
+/// shown again, moved (objects switching online and offline).
+#[test]
+fn placed_draws_hide_show_and_move() {
+    let mut r = renderer();
+    let base = quadrants(&r);
+    let g = geom(Layout::VertexLit, 0, 0, [0; 8]);
+    let surfaces = [
+        surface(Program::ModelSelfLight, Some(base)),
+        surface(Program::Model, None),
+    ];
+    // Draw 0 is left out (a model surface on a level draw), so the object
+    // is draw 1 given, the first kept.
+    let draws = [draw(1, None), object_draw(0, [0.0; 4])];
+    let world = r
+        .create_world_with(&g, &object_geometry(UP), &surfaces, &draws, None)
+        .unwrap();
+    assert_eq!(world.skipped(), 1);
+    let shown = draws[1];
+    assert_near(
+        centre(&mut r, frame(world.clone(), None)),
+        [0, 255, 0],
+        "shown",
+    );
+    r.place_draw(&world, 1, &shown.transform, [0.0, 0.0, 1.0, 0.0]);
+    assert_near(
+        centre(&mut r, frame(world.clone(), None)),
+        [0, 0, 0],
+        "hidden",
+    );
+    r.place_draw(&world, 1, &shown.transform, shown.sphere);
+    assert_near(
+        centre(&mut r, frame(world.clone(), None)),
+        [0, 255, 0],
+        "shown again",
+    );
+    // Moved behind the eye: not in view.
+    let mut behind = shown.transform;
+    behind[3] = [0.0, 0.0, -5.0, 1.0];
+    r.place_draw(&world, 1, &behind, [0.0, 0.0, -5.0, 10.0]);
+    assert_near(
+        centre(&mut r, frame(world.clone(), None)),
+        [0, 0, 0],
+        "moved",
+    );
+    // A draw left out, or beyond the list, is ignored.
+    r.place_draw(&world, 0, &IDENTITY, [0.0; 4]);
+    r.place_draw(&world, 7, &IDENTITY, [0.0; 4]);
+}
+
 /// A cube map whose six 4 × 4 faces (+x, −x, +y, −y, +z, −z) each have
 /// one colour (BGRA), so filtering near a face's centre stays on it.
 fn faces_cube(r: &Renderer, faces: [[u8; 4]; 6]) -> Texture {

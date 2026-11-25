@@ -149,6 +149,10 @@ pub struct NewGame<'a> {
     pub character_name: &'a str,
     /// Seeds the supply's generator (the game seeds it from a timer, 3.1).
     pub seed: u32,
+    /// The first id the items take from the simulation's id pool
+    /// (offline-simulation.md 8.1: the ids after the player's
+    /// registration), each next item the next id.
+    pub first_id: u16,
 }
 
 /// The player character's state.
@@ -168,10 +172,9 @@ pub struct CharacterState {
 impl CharacterState {
     /// The state after a New Game (sections 2, 3): the record's health and
     /// profile resolved, the conditions of 2.3, the items supplied by the
-    /// simulation (3.1) taken by the online character in their order, then
-    /// the bolt (3.2). The items' ids come from a pool of our own (the
-    /// simulation's pool is not modelled yet), the bolt's after them (our
-    /// choice).
+    /// simulation (3.1) taken by the online character in their order. The
+    /// items take consecutive ids from `first_id`. The bolt (3.2) comes
+    /// later, when the player comes online: [`CharacterState::receive_bolt`].
     pub fn new_game(n: &NewGame) -> io::Result<Self> {
         let Object::Player(player) = &n.record.object else {
             return Err(invalid(format!(
@@ -197,7 +200,7 @@ impl CharacterState {
         };
 
         // 3.1: what the simulation creates, in order.
-        let mut ids = IdPool::default();
+        let mut ids = IdPool::starting_at(n.first_id);
         let mut rng = Rand15(n.seed);
         let mut children = Vec::new();
         let mut supply = |entries: &[SupplyEntry], children: &mut Vec<InventoryItem>| {
@@ -234,19 +237,11 @@ impl CharacterState {
                 &mut children,
             )?;
         }
-        // The online character takes them in their order, then the bolt
-        // (3.2, 3.3: believed).
+        // The online character takes them in their order (3.3: believed).
         let mut inventory = Inventory::new(InventoryConfig::read(n.system)?);
         for item in children {
             inventory.take(item);
         }
-        inventory.take(InventoryItem::create(
-            ItemConfig::read(n.system, BOLT_SECTION)?,
-            ids.take()?,
-            None,
-            owner.id,
-            &profile.specific_character,
-        ));
         Ok(Self {
             owner,
             profile,
@@ -255,6 +250,20 @@ impl CharacterState {
             inventory,
             last_update: None,
         })
+    }
+
+    /// The bolt the online player receives (3.2), after its supplies, with
+    /// id `id` from the simulation's pool (offline-simulation.md: requested
+    /// once every New Game record exists).
+    pub fn receive_bolt(&mut self, system: &Config, id: u16) -> io::Result<()> {
+        self.inventory.take(InventoryItem::create(
+            ItemConfig::read(system, BOLT_SECTION)?,
+            id,
+            None,
+            self.owner.id,
+            &self.profile.specific_character,
+        ));
+        Ok(())
     }
 
     /// The carried weight and the worn outfit's limits (3.4, 4.2).
@@ -360,6 +369,12 @@ impl CharacterState {
         Ok(())
     }
 
+    /// How many items it holds (after a New Game, before the bolt: how many
+    /// ids its supplies took).
+    pub fn item_count(&self) -> usize {
+        self.inventory.items.len()
+    }
+
     /// The records of the items a save writes after the player's, in the
     /// order it lists them (3.1; the bolt is never saved).
     pub fn item_records(&self) -> io::Result<Vec<ObjectRecord>> {
@@ -412,4 +427,4 @@ impl InventoryItem {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
