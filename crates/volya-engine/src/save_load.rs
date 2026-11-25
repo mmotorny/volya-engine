@@ -1004,6 +1004,7 @@ impl Screen {
 
     /// A box the data lacks is fatal (ui-layout.md 1.4: elements a builder
     /// requires must exist).
+    // TODO(#339): 1.4 says "error", not fatal.
     fn show(&mut self, data: &GameData, sl: &SaveLoadData, name: &str, purpose: BoxFor) {
         match sl.message_box(data, name) {
             Ok(desc) => self.message = Some((MessageBox::new(desc, self.cursor), purpose)),

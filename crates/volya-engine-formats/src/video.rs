@@ -188,8 +188,9 @@ impl<R: Read + Seek> TheoraVideo<R> {
             }
         }
         let setup = setup.ok_or_else(|| invalid("missing Theora setup header"))?;
-        let decoder =
-            DecCtx::alloc(&info, &setup).ok_or_else(|| invalid("unsupported Theora stream"))?;
+        let decoder = DecCtx::alloc(&info, &setup).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::Unsupported, "unsupported Theora stream")
+        })?;
         let chroma = match info.pixel_fmt {
             PixelFmt::Pf420 => Chroma::Yuv420,
             PixelFmt::Pf422 => Chroma::Yuv422,
@@ -231,8 +232,9 @@ impl<R: Read + Seek> TheoraVideo<R> {
         let mut inner = self.reader.take().expect("reader present").into_inner();
         inner.seek(SeekFrom::Start(0))?;
         self.reader = Some(ogg::PacketReader::new(inner));
-        self.decoder = DecCtx::alloc(&self.info, &self.setup)
-            .ok_or_else(|| invalid("unsupported Theora stream"))?;
+        self.decoder = DecCtx::alloc(&self.info, &self.setup).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::Unsupported, "unsupported Theora stream")
+        })?;
         self.packets = 0;
         self.frames = 0;
         Ok(())

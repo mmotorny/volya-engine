@@ -772,7 +772,7 @@ impl App {
                 );
                 self.console_touched = true;
                 if let Some(error) = &out.fatal {
-                    self.failed = Some(error.clone());
+                    self.failed.get_or_insert(error.clone());
                 }
                 if out.video_restart {
                     // `vid_restart` (options-screens.md section 5.4).
@@ -884,7 +884,7 @@ impl App {
                 );
                 self.console_touched = true;
                 if let Some(error) = &out.fatal {
-                    self.failed = Some(error.clone());
+                    self.failed.get_or_insert(error.clone());
                 }
                 if out.video_restart {
                     self.video = video_mode(&self.console);
@@ -962,7 +962,7 @@ impl App {
                         match menu_font(tree, data, &mut self.assets, screen, self.video) {
                             Ok(f) => self.menu_font = Some((self.video, f)),
                             Err(e) => {
-                                self.failed = Some(e.to_string());
+                                self.failed.get_or_insert(e.to_string());
                                 return;
                             }
                         }
@@ -989,7 +989,7 @@ impl App {
                     match out {
                         Ok(out) => dropped.extend(out.dropped),
                         Err(e) => {
-                            self.failed = Some(e.to_string());
+                            self.failed.get_or_insert(e.to_string());
                             return;
                         }
                     }
@@ -1039,7 +1039,9 @@ impl App {
                             level.controls_mut().keys_only = Some(keys.used());
                         }
                         // An error is fatal, as in the original.
-                        Err(e) => self.failed = Some(e.to_string()),
+                        Err(e) => {
+                            self.failed.get_or_insert(e.to_string());
+                        }
                     }
                 }
             }
@@ -1142,10 +1144,14 @@ impl App {
 
     /// The frame at the current clock for `resolution`. An error is fatal
     /// (as ui-layout.md 6.3 makes a missing texture): the next update ends
-    /// the game ([`App::fatal`]).
+    /// the game ([`App::fatal`]); except what this engine does not support
+    /// (`ErrorKind::Unsupported`: AVI, a DDS or Theora layout our decoders
+    /// lack), which the original plays, so it is returned, not fatal.
     pub fn scene(&mut self, tree: &dyn Vfs, resolution: Resolution) -> io::Result<Scene> {
         let scene = self.compose_scene(tree, resolution);
-        if let Err(e) = &scene {
+        if let Err(e) = &scene
+            && e.kind() != io::ErrorKind::Unsupported
+        {
             self.failed.get_or_insert(e.to_string());
         }
         scene

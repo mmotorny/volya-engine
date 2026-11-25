@@ -78,6 +78,7 @@ pub fn associations(textures_ltx: &Config) -> HashMap<String, Association> {
 /// Whether a scripted definition's source defines `normal` or `l_special`
 /// (section 3.4): a textual check for `function normal(` or
 /// `function l_special(` (our approximation; no Lua runs here).
+// TODO(#340): detect them as the original does.
 pub fn defines_normal_or_special(source: &str) -> bool {
     let compact: String = source.split_whitespace().collect::<Vec<_>>().join(" ");
     [
