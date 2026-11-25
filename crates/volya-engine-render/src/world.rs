@@ -469,7 +469,10 @@ struct PipelineKey {
 pub(crate) struct WorldPipelines {
     format: wgpu::TextureFormat,
     frame_layout: wgpu::BindGroupLayout,
-    surface_layout: wgpu::BindGroupLayout,
+    /// A surface's light maps and environment map (group 1), and its base
+    /// and detail textures (group 2).
+    maps_layout: wgpu::BindGroupLayout,
+    base_layout: wgpu::BindGroupLayout,
     pipeline_layout: wgpu::PipelineLayout,
     shader: wgpu::ShaderModule,
     pipelines: HashMap<PipelineKey, wgpu::RenderPipeline>,
@@ -598,18 +601,19 @@ impl WorldPipelines {
                 },
             ],
         });
-        let surface_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("world surface"),
+        let base_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("world surface base"),
+            entries: &[texture_entry(0), texture_entry(1), sampler_entry(2)],
+        });
+        let maps_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("world surface maps"),
             entries: &[
                 texture_entry(0),
                 texture_entry(1),
-                texture_entry(2),
-                texture_entry(3),
+                sampler_entry(3),
                 sampler_entry(4),
-                sampler_entry(5),
-                sampler_entry(6),
                 wgpu::BindGroupLayoutEntry {
-                    binding: 7,
+                    binding: 2,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
@@ -622,7 +626,11 @@ impl WorldPipelines {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("world"),
-            bind_group_layouts: &[Some(&frame_layout), Some(&surface_layout)],
+            bind_group_layouts: &[
+                Some(&frame_layout),
+                Some(&maps_layout),
+                Some(&base_layout),
+            ],
             immediate_size: 0,
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -716,7 +724,7 @@ impl WorldPipelines {
             label: Some("world light"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
-                    binding: 0,
+                    binding: 5,
                     visibility: wgpu::ShaderStages::VERTEX,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
@@ -725,9 +733,9 @@ impl WorldPipelines {
                     },
                     count: None,
                 },
-                texture_entry(1),
-                texture_entry(2),
-                sampler_entry(3),
+                texture_entry(6),
+                texture_entry(7),
+                sampler_entry(8),
             ],
         });
         let light_pipeline_layout =
@@ -735,8 +743,8 @@ impl WorldPipelines {
                 label: Some("world light"),
                 bind_group_layouts: &[
                     Some(&frame_layout),
-                    Some(&surface_layout),
                     Some(&light_layout),
+                    Some(&base_layout),
                 ],
                 immediate_size: 0,
             });
@@ -794,7 +802,8 @@ impl WorldPipelines {
         Self {
             format,
             frame_layout,
-            surface_layout,
+            maps_layout,
+            base_layout,
             pipeline_layout,
             shader,
             pipelines: HashMap::new(),
@@ -833,7 +842,7 @@ impl WorldPipelines {
                 layout: &self.light_layout,
                 entries: &[
                     wgpu::BindGroupEntry {
-                        binding: 0,
+                        binding: 5,
                         resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                             buffer: &self.light_constants,
                             offset: 0,
@@ -841,15 +850,15 @@ impl WorldPipelines {
                         }),
                     },
                     wgpu::BindGroupEntry {
-                        binding: 1,
+                        binding: 6,
                         resource: wgpu::BindingResource::TextureView(&lmap),
                     },
                     wgpu::BindGroupEntry {
-                        binding: 2,
+                        binding: 7,
                         resource: wgpu::BindingResource::TextureView(&att),
                     },
                     wgpu::BindGroupEntry {
-                        binding: 3,
+                        binding: 8,
                         resource: wgpu::BindingResource::Sampler(&self.light_sampler),
                     },
                 ],
@@ -1086,7 +1095,9 @@ fn encode_static(
                 pass.set_pipeline(p);
             }
             crate::stats::bind_group();
-            pass.set_bind_group(1, &inner.surface_groups[d.surface as usize], &[]);
+            pass.set_bind_group(1, inner.surface_groups.maps(d.surface), &[]);
+            crate::stats::bind_group();
+            pass.set_bind_group(2, inner.surface_groups.base(d.surface), &[]);
         }
         if buffers != Some((d.vertex_buffer, d.index_buffer)) {
             flush(pass, &mut run);
@@ -1121,6 +1132,25 @@ fn encode_static(
     flush(pass, &mut run);
 }
 
+/// Each surface's groups 1 and 2 (`world.wgsl`), shared by surfaces with
+/// the same textures.
+struct SurfaceGroups {
+    maps: Vec<wgpu::BindGroup>,
+    base: Vec<wgpu::BindGroup>,
+    /// Each surface's maps and base groups.
+    of: Vec<(u32, u32)>,
+}
+
+impl SurfaceGroups {
+    fn maps(&self, surface: u32) -> &wgpu::BindGroup {
+        &self.maps[self.of[surface as usize].0 as usize]
+    }
+
+    fn base(&self, surface: u32) -> &wgpu::BindGroup {
+        &self.base[self.of[surface as usize].1 as usize]
+    }
+}
+
 struct Inner {
     /// Kept for as long as the bundles that draw from them.
     vertex_buffers: Vec<wgpu::Buffer>,
@@ -1135,7 +1165,7 @@ struct Inner {
     _textures: Vec<Texture>,
     frame: wgpu::Buffer,
     frame_group: wgpu::BindGroup,
-    surface_groups: Vec<wgpu::BindGroup>,
+    surface_groups: SurfaceGroups,
     /// Pipeline of each surface.
     surface_pipelines: Vec<wgpu::RenderPipeline>,
     /// Section 10.3 step 1 (priority 0–1, not strict) and step 5 (2–3):
@@ -2182,58 +2212,104 @@ impl Renderer {
             }
         }
         let mut textures: Vec<Texture> = textures.into_iter().map(|(t, _)| t).collect();
-        let surface_groups: Vec<wgpu::BindGroup> = surfaces
-            .iter()
-            .map(|s| {
-                let mut views: Vec<wgpu::TextureView> = s
-                    .textures
-                    .iter()
-                    .map(|t| match t {
+        // Each surface's two groups (`world.wgsl`), one group per distinct
+        // set of textures, so that draws of surfaces sharing textures don't
+        // bind them again (#429).
+        let view_2d = |t: &Option<Texture>| match t {
+            Some(t) => t.texture.create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(wgpu::TextureViewDimension::D2),
+                array_layer_count: Some(1),
+                ..Default::default()
+            }),
+            None => pipelines.white.clone(),
+        };
+        // A map that is not a 6-face square texture binds white (our
+        // choice).
+        fn cube(t: &Option<Texture>) -> Option<&Texture> {
+            t.as_ref().filter(|t| {
+                t.texture.depth_or_array_layers() == 6 && t.texture.width() == t.texture.height()
+            })
+        }
+        let key = |t: Option<&Texture>| t.map(|t| t.texture.clone());
+        let mut maps_keys = HashMap::new();
+        let mut base_keys = HashMap::new();
+        let mut maps_groups = Vec::new();
+        let mut base_groups = Vec::new();
+        let mut surface_groups = Vec::with_capacity(surfaces.len());
+        for s in surfaces {
+            let [base, second, hemi, detail] = &s.textures;
+            let env = cube(&s.env);
+            let m = *maps_keys
+                .entry([key(second.as_ref()), key(hemi.as_ref()), key(env)])
+                .or_insert_with(|| {
+                    let (second, hemi) = (view_2d(second), view_2d(hemi));
+                    let env = match env {
                         Some(t) => t.texture.create_view(&wgpu::TextureViewDescriptor {
-                            dimension: Some(wgpu::TextureViewDimension::D2),
-                            array_layer_count: Some(1),
-                            ..Default::default()
-                        }),
-                        None => pipelines.white.clone(),
-                    })
-                    .collect();
-                // A map that is not a 6-face square texture binds white (our
-                // choice).
-                views.push(match &s.env {
-                    Some(t)
-                        if t.texture.depth_or_array_layers() == 6
-                            && t.texture.width() == t.texture.height() =>
-                    {
-                        t.texture.create_view(&wgpu::TextureViewDescriptor {
                             dimension: Some(wgpu::TextureViewDimension::Cube),
                             array_layer_count: Some(6),
                             ..Default::default()
-                        })
-                    }
-                    _ => pipelines.white_cube.clone(),
+                        }),
+                        None => pipelines.white_cube.clone(),
+                    };
+                    maps_groups.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("world surface maps"),
+                        layout: &pipelines.maps_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(&second),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::TextureView(&hemi),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: wgpu::BindingResource::TextureView(&env),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 3,
+                                resource: wgpu::BindingResource::Sampler(&pipelines.samplers[1]),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 4,
+                                resource: wgpu::BindingResource::Sampler(&pipelines.samplers[2]),
+                            },
+                        ],
+                    }));
+                    maps_groups.len() as u32 - 1
                 });
-                let mut entries: Vec<wgpu::BindGroupEntry> = views
-                    .iter()
-                    .enumerate()
-                    .map(|(i, v)| wgpu::BindGroupEntry {
-                        // The cube map is binding 7, after the samplers.
-                        binding: if i < 4 { i as u32 } else { 7 },
-                        resource: wgpu::BindingResource::TextureView(v),
-                    })
-                    .collect();
-                for (i, sampler) in pipelines.samplers.iter().enumerate() {
-                    entries.push(wgpu::BindGroupEntry {
-                        binding: 4 + i as u32,
-                        resource: wgpu::BindingResource::Sampler(sampler),
-                    });
-                }
-                device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("world surface"),
-                    layout: &pipelines.surface_layout,
-                    entries: &entries,
-                })
-            })
-            .collect();
+            let b = *base_keys
+                .entry([key(base.as_ref()), key(detail.as_ref())])
+                .or_insert_with(|| {
+                    let (base, detail) = (view_2d(base), view_2d(detail));
+                    base_groups.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("world surface base"),
+                        layout: &pipelines.base_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(&base),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::TextureView(&detail),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: wgpu::BindingResource::Sampler(&pipelines.samplers[0]),
+                            },
+                        ],
+                    }));
+                    base_groups.len() as u32 - 1
+                });
+            surface_groups.push((m, b));
+        }
+        let surface_groups = SurfaceGroups {
+            maps: maps_groups,
+            base: base_groups,
+            of: surface_groups,
+        };
         let surface_pipelines: Vec<wgpu::RenderPipeline> = surfaces
             .iter()
             .map(|s| {
@@ -2583,7 +2659,7 @@ impl Renderer {
             pass.set_bind_group(0, &inner.frame_group, &[]);
             for (offset, spot, draws) in &lights {
                 crate::stats::bind_group();
-                pass.set_bind_group(2, &groups[usize::from(*spot)], &[*offset]);
+                pass.set_bind_group(1, &groups[usize::from(*spot)], &[*offset]);
                 let mut program = None;
                 let mut surface = None;
                 let mut buffers = None;
@@ -2597,7 +2673,7 @@ impl Renderer {
                     if surface != Some(d.surface) {
                         surface = Some(d.surface);
                         crate::stats::bind_group();
-                        pass.set_bind_group(1, &inner.surface_groups[d.surface as usize], &[]);
+                        pass.set_bind_group(2, inner.surface_groups.base(d.surface), &[]);
                     }
                     if buffers != Some((d.vertex_buffer, d.index_buffer)) {
                         buffers = Some((d.vertex_buffer, d.index_buffer));
@@ -2649,7 +2725,9 @@ impl Renderer {
             crate::stats::pipeline();
             pass.set_pipeline(&inner.surface_pipelines[d.surface as usize]);
             crate::stats::bind_group();
-            pass.set_bind_group(1, &inner.surface_groups[d.surface as usize], &[]);
+            pass.set_bind_group(1, inner.surface_groups.maps(d.surface), &[]);
+            crate::stats::bind_group();
+            pass.set_bind_group(2, inner.surface_groups.base(d.surface), &[]);
             crate::stats::buffer();
             pass.set_vertex_buffer(0, inner.vertex_buffers[d.vertex_buffer as usize].slice(..));
             crate::stats::buffer();
