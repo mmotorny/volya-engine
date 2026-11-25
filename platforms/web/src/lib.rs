@@ -8,6 +8,7 @@
 #![cfg(target_arch = "wasm32")]
 
 mod audio;
+mod diagnostics;
 mod engine;
 mod game;
 mod gpu;
@@ -30,6 +31,7 @@ use web_sys::{OffscreenCanvas, WorkerGlobalScope};
 #[wasm_bindgen]
 pub async fn start(canvas: OffscreenCanvas, webgl: bool) {
     gpu::init(canvas, webgl).await;
+    diagnostics::started();
 }
 
 /// The canvas's size in CSS pixels and the page's devicePixelRatio, on start
@@ -95,17 +97,20 @@ pub(crate) fn now() -> f64 {
 /// Runs one animation frame; `time` in milliseconds.
 #[wasm_bindgen]
 pub fn frame(time: f64) {
+    // The diagnostic log's spans (#346): the frame and what runs in it.
+    let span = tracing::info_span!("frame").entered();
     let start = now();
-    engine::frame(time);
+    tracing::info_span!("engine").in_scope(|| engine::frame(time));
     let sound_start = now();
-    audio::sound_frame(time);
+    tracing::info_span!("sound").in_scope(|| audio::sound_frame(time));
     let sound = now() - sound_start;
-    gpu::frame(time);
+    tracing::info_span!("render").in_scope(|| gpu::frame(time));
     input::end_frame();
-    textures::poll();
+    tracing::info_span!("textures").in_scope(textures::poll);
     #[cfg(feature = "test-ops")]
     while now() - start < FRAME_COST.with(std::cell::Cell::get) {}
     let cpu = now() - start;
+    drop(span);
     #[cfg(feature = "test-ops")]
     audio::capture::frame(cpu);
     if HEAP_LOG.with(|l| l.borrow().is_some()) {
@@ -133,10 +138,14 @@ pub fn frame(time: f64) {
         push(&mut s.sound, sound);
         if let Some(last) = s.last {
             push(&mut s.interval, time - last);
+            volya_engine::core::diagnostics::metric("frame.interval_ms", time - last);
+            // Over one and a half frames at 60 Hz.
+            volya_engine::core::diagnostics::count("frame.late", u64::from(time - last > 25.0));
         }
         s.last = Some(time);
         s.frames += 1;
     });
+    diagnostics::tick(false);
 }
 
 /// The page was hidden (`hidden`) or shown again (our design, #93): the
@@ -148,6 +157,9 @@ pub fn visibility(hidden: bool) {
     audio::with_sounds(|host| host.set_hidden(hidden));
     // The interval spanning the hidden time is not a frame time.
     FRAME_STATS.with(|s| s.borrow_mut().last = None);
+    tracing::info!(hidden, "page visibility");
+    // Hidden pages may be ended without notice (iOS): stored now.
+    diagnostics::tick(hidden);
 }
 
 #[derive(Serialize)]
@@ -289,6 +301,29 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         }
         "input_state" => to_json(&input::state()),
         "level_stats" => to_json(&level_stats()),
+        "diagnostic_log" => to_json(&diagnostics::trace().await?),
+        "diagnostic_log_status" => to_json(&diagnostics::status().await),
+        // `{on, session}`: the player's setting, and what the page tells
+        // of the session (diagnostics.js).
+        "diagnostics_set" => {
+            let on = args.get("on").and_then(|v| v.as_bool()).unwrap_or(false);
+            let session = args.get("session").cloned().unwrap_or_default();
+            diagnostics::set(on, &session).await;
+            to_json(&diagnostics::status().await)
+        }
+        #[cfg(feature = "test-ops")]
+        "debug_diagnostics_bench" => {
+            let frames = args
+                .get("frames")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(10_000);
+            to_json(&diagnostics::bench(frames as u32))
+        }
+        #[cfg(feature = "test-ops")]
+        "debug_diagnostics_fill" => {
+            let events = args.get("events").and_then(|v| v.as_u64()).unwrap_or(0);
+            to_json(&diagnostics::fill(events as u32)?)
+        }
         "debug_transcode" => to_json(&textures::bench(&args)?),
         "ui_images" => to_json(&engine::ui_images(&args)?),
         // `{"on": true}` starts logging each frame's loading caption and

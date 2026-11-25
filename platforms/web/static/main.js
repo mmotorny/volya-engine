@@ -12,6 +12,7 @@ import { choose } from "./graphics.js";
 // Early: Chrome offers installing the app once, soon after load.
 import "./install.js";
 import { startUpdates, versionText } from "./update.js";
+import * as diagnostics from "./diagnostics.js";
 
 // Installable app: offline start and updates (sw.js, update.js). Registered
 // relative to this module so the scope is the app's base path.
@@ -36,6 +37,7 @@ const storedGraphics = () => {
 
 let worker;
 const pending = new Map();
+diagnostics.connect((message) => worker.postMessage(message));
 let nextId = 0;
 // Set once the canvas exists, below; capture starts off, and so do the
 // level's controls.
@@ -136,7 +138,9 @@ function startEngine() {
     };
   });
   const canvas = view.transferControlToOffscreen();
-  worker.postMessage({ type: "start", canvas, size: size(), graphics: storedGraphics() }, [canvas]);
+  // The diagnostic log, when the player keeps one (#346).
+  const log = diagnostics.enabled() ? diagnostics.session() : null;
+  worker.postMessage({ type: "start", canvas, size: size(), graphics: storedGraphics(), diagnostics: log }, [canvas]);
   if (document.visibilityState === "hidden") visibilityChanged();
   sizes.observe(view);
   return started;
@@ -187,7 +191,7 @@ const graphics = {
   },
 };
 
-globalThis.volya = { call, status: () => call("status"), connectAudio, audioState: () => audio?.state, graphics };
+globalThis.volya = { call, status: () => call("status"), connectAudio, audioState: () => audio?.state, diagnostics, graphics };
 
 // Input goes to the engine only while it owns the screen (input.js); the
 // page's own interface hides meanwhile.
@@ -238,6 +242,8 @@ try {
   status.dataset.state = "ready";
   // Browsers start audio suspended until a user gesture (iOS especially).
   audio = new AudioContext();
+  diagnostics.event("AudioContext state", { state: audio.state, sample_rate: audio.sampleRate });
+  audio.addEventListener("statechange", () => diagnostics.event("AudioContext state", { state: audio.state }));
   // Made while hidden: suspended until shown.
   if (document.visibilityState === "hidden") audio.suspend().catch(() => {});
   output = await connectAudio(audio);

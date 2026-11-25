@@ -149,6 +149,7 @@ async fn connect(canvas: OffscreenCanvas, webgl: bool) -> Result<Gpu, String> {
     // Report instead of panicking, which would stop the whole engine.
     device.on_uncaptured_error(Arc::new(move |e| {
         web_sys::console::error_1(&format!("{backend}: {e}").into());
+        tracing::error!(backend, error = %e, "GPU error");
     }));
     // Colour values pass through: a non-sRGB format, preferred one first.
     let format = surface

@@ -42,6 +42,10 @@ globalThis.volyaChromium = !device.touch;
 globalThis.volyaInstalled = state.tab ? false : true;
 if (state.tab && !device.touch) globalThis.volyaInstallOffer = { prompt: async () => {}, userChoice: Promise.resolve({ outcome: "dismissed" }) };
 
+// The diagnostic log's setting and whether there is a log (#346).
+const log = { on: false, entries: false, ...state.log };
+globalThis.volyaDiagnostics = log.on;
+
 // Whether an import finished here before (the cookie mark in game-ui.js).
 globalThis.volyaImportedBefore = Boolean(state.deleted);
 
@@ -60,6 +64,13 @@ const call = async (op) => {
     case "launch":
       if (state.launchError) throw new Error(state.launchError);
       return null;
+    case "diagnostic_log_status":
+    case "diagnostics_set":
+      return log;
+    case "diagnostic_log":
+      // Preparing never settles.
+      if (log.download === "preparing") return new Promise(() => {});
+      throw new Error("the diagnostic log is held by another copy of the app");
     case "game_status":
       if (state.game instanceof Error) throw state.game;
       return state.game;
@@ -174,6 +185,12 @@ if (state.level) {
   if (state.check) {
     globalThis.volyaHoldCheckResult = true;
     [...document.querySelectorAll("#game button")].find((b) => b.textContent === "Check for updates").click();
+    await new Promise((resolve) => setTimeout(resolve));
+  }
+  // Download diagnostic log pressed, its outcome held on screen.
+  if (state.log?.download) {
+    globalThis.volyaHoldCheckResult = true;
+    [...document.querySelectorAll("#game button")].find((b) => b.textContent === "Download diagnostic log").click();
     await new Promise((resolve) => setTimeout(resolve));
   }
   if (state.snapshot) screens.showImport(state.game, state.snapshot);

@@ -75,9 +75,12 @@ pub fn audio_init(sample_rate: u32) {
 pub fn audio_mix(frames: u32, underrun: u32, queued: u32) -> Vec<f32> {
     #[cfg(feature = "test-ops")]
     let before = capture::before_mix();
-    let out = MIXER.with(|m| match m.borrow_mut().as_mut() {
-        Some(mixer) => mixer.mix(frames as usize),
-        None => vec![0.0; frames as usize * 2],
+    // Decoding included (the mixer's `decode` spans).
+    let out = tracing::info_span!("audio.mix").in_scope(|| {
+        MIXER.with(|m| match m.borrow_mut().as_mut() {
+            Some(mixer) => mixer.mix(frames as usize),
+            None => vec![0.0; frames as usize * 2],
+        })
     });
     #[cfg(feature = "test-ops")]
     capture::after_mix(before, frames, underrun, queued);

@@ -35,6 +35,10 @@ crc32fast = "1"
 # feature).
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "webgpu", "metal"] }
 pollster = "1"
+# Instrumentation for the diagnostic log (#346): spans and events, recorded
+# by our layer (volya-engine-core::diagnostics) on the registry.
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
 # Builds the vendored LuaJIT (crates/volya-engine-script).
 cc = "1"
 
