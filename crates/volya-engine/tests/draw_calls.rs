@@ -25,6 +25,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use volya_engine::core::camera::Angles;
+use volya_engine::core::input::Input;
 use volya_engine::core::vfs::StdVfs;
 use volya_engine::core::vfs::db::DbVfs;
 use volya_engine::data::GameData;
@@ -116,6 +117,8 @@ fn draw_calls_from_game_data() {
         let mut screen = LevelScreen::load(&tree, &data, 0).unwrap();
         screen.set_detail_settings(0.2, 0.5);
         screen.set_supersample(2);
+        // One update: the level's lamps on, so the frames have light passes.
+        screen.update(16, &Input::new());
         let start_eye = screen.state().eye;
         let (x, z) = (-205.0, -112.0);
         let (ground, _) = screen
