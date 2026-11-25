@@ -1703,16 +1703,29 @@ export const tests = {
     return `${mine.length} events, ${(bytes / seconds).toFixed(0)} B/s over ${seconds.toFixed(0)} s; ${long.length} long frames (worst ${worst.toFixed(0)} ms); audio ${audio ? "running" : volya.audioState()}`;
   },
 
-  "WebGL 2 chosen in Settings: Play starts the engine anew on it, and the level draws": async () => {
+  "WebGL 2 chosen in Settings: one press of Play starts the engine anew on it and the game, and the level draws": async () => {
     needsGame();
     const { graphics } = volya;
     if (!graphics.available.webgl2) skip("no WebGL 2 here");
     if (!graphics.available.webgpu) skip("no WebGPU here: the New Games above drew through WebGL 2");
     await volya.showSettings();
     document.querySelector('#game input[name="graphics"][value="webgl2"]').click();
+    // The engine workers started from here on (#369).
+    const Original = globalThis.Worker;
+    let engines = 0;
+    globalThis.Worker = class extends Original {
+      constructor(url, options) {
+        super(url, options);
+        if (String(url).includes("engine-worker.js")) engines++;
+      }
+    };
     try {
       await volya.refresh();
-      document.querySelector("#game button.play").click();
+      const play = document.querySelector("#game button.play");
+      play.click();
+      // Pressed again while the engine starts anew: nothing more happens.
+      assert(play.disabled && play.textContent === "Starting…", `Play while starting: ${play.disabled} ${play.textContent}`);
+      play.click();
       // Calls made while the engine starts anew fail: asked again.
       for (const deadline = performance.now() + 30000; ; await sleep(100)) {
         const s = await state().catch(() => null);
@@ -1721,6 +1734,7 @@ export const tests = {
       }
       const { gpu: drawn } = await volya.status();
       assertEqual([drawn.state, drawn.backend], ["ready", "webgl2"], "graphics");
+      assertEqual(engines, 1, "engines started");
       // Escape skips the logos, then the title menu's New Game.
       for (let s = await state(); s.phase !== "menu"; s = await state()) {
         key("Escape");
@@ -1745,6 +1759,7 @@ export const tests = {
       const stats = await volya.call("level_stats");
       return `${drawn.backend}, textures ${drawn.textures}; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; ${colours.size} colours; ${JSON.stringify(stats)}`;
     } finally {
+      globalThis.Worker = Original;
       localStorage.removeItem("volya-engine.graphics");
       // Leaves the game for the tests after (a failure above is the one told).
       if ((await state()).phase !== "none") {

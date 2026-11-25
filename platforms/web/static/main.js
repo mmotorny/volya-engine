@@ -226,6 +226,8 @@ async function restartEngine() {
  * supports, the stored choice, storing one, and applying it before the game
  * starts.
  */
+/** The Graphics choice being applied (`graphics.apply`), while it is. */
+let applying = null;
 const graphics = {
   get available() {
     return available;
@@ -240,9 +242,16 @@ const graphics = {
       console.warn(`graphics setting: ${error.message}`);
     }
   },
-  /** Starts the engine anew where the choice differs from the backend it runs. */
-  async apply() {
-    if (choose(storedGraphics(), available) !== backend) await restartEngine();
+  /**
+   * Starts the engine anew where the choice differs from the backend it
+   * runs. One restart at a time: `backend` changes only once the new engine
+   * runs, so a second restart would end the one awaited (#369).
+   */
+  apply() {
+    applying ??= (async () => {
+      if (choose(storedGraphics(), available) !== backend) await restartEngine();
+    })().finally(() => (applying = null));
+    return applying;
   },
 };
 

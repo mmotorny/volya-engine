@@ -52,6 +52,7 @@ export const SECTIONS = [
     title: "Home",
     states: [
       { id: "home", name: "Ready", game: imported },
+      { id: "home-starting", name: "Starting the game (Play pressed)", game: imported, starting: true },
       { id: "home-play-failed", name: "Play failed", game: imported, launchError: "level.geom: unexpected end of file" },
       // An update, in order: offered (automatic downloads off), downloading
       // on request or after Check for updates found it, downloaded (either way).
