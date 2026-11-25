@@ -46,7 +46,7 @@ The library (`volya-engine-formats::particles`, docs/formats/particles-xr.md) an
 - The zone records of the level's objects (the class ids of the specs' behaviours: `Z_MBALD`, `Z_MINCER`, `Z_GALANT`, `Z_BFUZZ`, `Z_TORRID`, `Z_RADIO` and their scripted ids) are read under `st_client_spawning`, where those online are created (their idle effect started, their sounds the level's); one coming online later is created then.
 - Each frame of the running level the zones' updates follow the effects' scheduler pass: fast-mode zones every frame, then the zones' scheduled pass. A state change arrives at once, the round trip being unestablished (#350).
 - The idle light is a record of the level's dynamic lights, given the zone's values after every frame's updates (`Zones::sync_lights`), its colour from `lanims.xr`. The idle sounds play from the zones' per-frame start and stop events on the level's sounds.
-- The ambient rule's effect object is made, stopped and removed through the `AmbientParticles` trait (`volya-engine-core::sound::ambient`, P11 3), a removed one deleted at the next frame's start; the wind (`weather::wind`) moves with the gust.
+- The ambient rule's effect object is made, stopped and removed through the `AmbientParticles` trait (`volya-engine-core::sound::ambient`, P11 3), a removed one deleted at the next frame's start; the wind (`weather::wind`) moves with the gust; the detail objects' sway reads it ([rendering.md](rendering.md#detail-objects)), the rain drops are not drawn.
 
 ## Dynamic lights
 

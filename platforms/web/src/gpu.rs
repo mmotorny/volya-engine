@@ -884,8 +884,11 @@ pub fn debug_draw_particles(case: &str) -> Result<serde_json::Value, JsValue> {
                 clear: [0.0; 3],
                 particles,
                 lights: Vec::new(),
+                presentation: Default::default(),
+                effects: None,
+                details: None,
             }),
-            quads: Vec::new(),
+            ..Default::default()
         };
         gpu.video = None;
         gpu.dirty = true;
@@ -1047,8 +1050,11 @@ pub fn debug_draw_lights(case: &str) -> Result<serde_json::Value, JsValue> {
                 clear: [0.0; 3],
                 particles,
                 lights,
+                presentation: Default::default(),
+                effects: None,
+                details: None,
             }),
-            quads: Vec::new(),
+            ..Default::default()
         };
         gpu.video = None;
         gpu.dirty = true;

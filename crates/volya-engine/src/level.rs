@@ -54,6 +54,7 @@ use crate::core::zones::{Behaviour, SoundEvent, ZoneRecord, ZoneSection, Zones};
 use crate::data::GameData;
 use crate::detector::{DetectorReport, DetectorSound, PlayerDetectors};
 use crate::footsteps::{self, MaterialPairs, PlayerFootsteps};
+use crate::level_details::{self, DetailsScene, DetailsWorld, LevelDetailObjects};
 use crate::level_lights::{self, GlowShader, LevelLights, LightCamera, LightsData};
 use crate::level_sound::ZoneSoundNames;
 use crate::level_sound::{LevelSoundData, SoundInputs};
@@ -139,6 +140,12 @@ pub struct LevelWorld {
     /// The light passes' attenuation textures as file paths: `att`,
     /// `attclip`, `attpoint` (dynamic-lights.md 6.4).
     pub light_textures: Option<[String; 3]>,
+    /// The presentation's noise texture `fx\fx_noise2` as a file path
+    /// (frame-presentation.md 3.4).
+    pub presentation_noise: Option<String>,
+    /// The detail models, their texture and shader (detail-objects.md 6);
+    /// `None` for a level without `level.details`.
+    pub details: Option<DetailsWorld>,
 }
 
 /// Every texture file of `surfaces` and `sky`, each once.
@@ -188,6 +195,16 @@ impl LevelWorld {
             }
         }
         light_texture_paths(&mut paths, &self.glow_shaders, self.light_textures.as_ref());
+        if let Some(d) = &self.details
+            && !paths.contains(&d.texture)
+        {
+            paths.push(d.texture.clone());
+        }
+        if let Some(t) = &self.presentation_noise
+            && !paths.contains(t)
+        {
+            paths.push(t.clone());
+        }
         paths
     }
 
@@ -270,6 +287,9 @@ pub struct LevelScreen {
     weather_effect: Option<usize>,
     /// The size of the latest frame drawn, for the effects' view test.
     view_size: std::cell::Cell<(u32, u32)>,
+    /// `r__supersample` in force: the frame's target size, and with it the
+    /// size thresholds (static-shading.md 10.2, frame-presentation.md 1.1).
+    supersample: u32,
     /// Which effect objects are drawn, by origin (tests compare frames
     /// without them): placed, zones', weather's, artefacts'.
     effects_drawn: [bool; 4],
@@ -281,6 +301,15 @@ pub struct LevelScreen {
     global_ms: u64,
     /// The player's torches (docs/behavior/torch.md).
     torches: PlayerTorches,
+    /// The detail objects (docs/behavior/detail-objects.md), run by the
+    /// frames drawn.
+    details: Option<std::cell::RefCell<LevelDetailObjects>>,
+    /// `r__detail_density` and the wind strength *W* as the app last gave
+    /// them.
+    detail_density: f32,
+    wind: f32,
+    /// The engine's frame number: one per update, paused or not.
+    frame: u64,
     /// The player's detectors (docs/behavior/sound-detector.md).
     detectors: PlayerDetectors,
 }
@@ -1125,6 +1154,10 @@ pub struct NewGameLoad {
     now: u64,
     particle_shaders: Vec<Option<ParticleShader<String>>>,
     particle_capacity: usize,
+    /// The level's detail objects (detail-objects.md 2.1) and what the
+    /// presenter uploads of them.
+    details: Option<LevelDetailObjects>,
+    details_world: Option<DetailsWorld>,
     /// The level's particle objects and the engine clock their clock was
     /// last brought to.
     effects: Option<(PlacedEffects, u64)>,
@@ -1153,6 +1186,7 @@ pub struct NewGameLoad {
     glow_records: Vec<volya_engine_formats::level::Glow>,
     /// The light passes' attenuation textures (dynamic-lights.md 6.4).
     light_textures: Option<[String; 3]>,
+    presentation_noise: Option<String>,
     /// The player's torches' data (torch.md 1, 3).
     torches: Option<PlayerTorchData>,
     /// The player's detectors' sections (sound-detector.md 2.1).
@@ -1287,6 +1321,16 @@ impl NewGameLoad {
             &self.lights.glow_shaders,
             self.light_textures.as_ref(),
         );
+        if let Some(d) = &self.details_world
+            && !paths.contains(&d.texture)
+        {
+            paths.push(d.texture.clone());
+        }
+        if let Some(t) = &self.presentation_noise
+            && !paths.contains(t)
+        {
+            paths.push(t.clone());
+        }
         paths
     }
 
@@ -1703,6 +1747,17 @@ impl NewGameLoad {
                     locate("internal\\internal_light_attclip")?,
                     locate("internal\\internal_light_attpoint")?,
                 ]);
+                // The detail models' shader and texture (detail-objects.md
+                // 6.2), located like the level's.
+                if let Some(d) = &self.details {
+                    self.details_world = Some(level_details::resolve(
+                        d.cache.grid(),
+                        &definitions,
+                        &mut locate,
+                    )?);
+                }
+                // The presentation's noise (frame-presentation.md 3.4).
+                self.presentation_noise = Some(locate("fx\\fx_noise2")?);
                 self.flares = flares;
                 // The shaders of the effects the level can show
                 // (particle-drawing.md 5.1), their textures located like
@@ -1797,11 +1852,15 @@ impl NewGameLoad {
                         .map_err(|e| invalid(format!("{dir}\\level.ps_static: {e}")))?;
                 self.effects = Some((effects, self.now));
             }
+            // detail-objects.md 2.1: the file, the sway values and the
+            // cache.
+            Stage::LoadingDetails => {
+                self.details = level_details::read(tree, &dir, &data.system)?;
+            }
             Stage::PrefetchingObjects
             | Stage::ServerStarting
             | Stage::LoadingAlifeSimulator
-            | Stage::LoadingShaders
-            | Stage::LoadingDetails => {}
+            | Stage::LoadingShaders => {}
         }
         Ok(())
     }
@@ -1884,6 +1943,8 @@ impl NewGameLoad {
                 particle_capacity: self.particle_capacity,
                 glow_shaders,
                 light_textures: self.light_textures,
+                presentation_noise: self.presentation_noise,
+                details: self.details_world,
             }),
             collision,
             sound_data: self.sound,
@@ -1910,6 +1971,7 @@ impl NewGameLoad {
             instances,
             effects,
             view_size: std::cell::Cell::new((1024, 768)),
+            supersample: 1,
             zones: self.zones,
             zone_sections: self.zone_sections,
             artefacts: self.artefacts,
@@ -1919,6 +1981,10 @@ impl NewGameLoad {
             lights,
             global_ms: 0,
             torches: PlayerTorches::new(torches, &name_for_torches),
+            details: self.details.map(std::cell::RefCell::new),
+            detail_density: level_details::DENSITY_DEFAULT,
+            wind: 0.0,
+            frame: 0,
             detectors: PlayerDetectors::new(detectors),
         };
         screen.torches_frame(0.0);
@@ -2011,6 +2077,7 @@ impl LevelScreen {
     /// not change either (our choice: the specs do not say what k_t is
     /// while game time is paused).
     pub fn paused(&mut self, now: u64) {
+        self.frame += 1;
         let elapsed = now.saturating_sub(self.last);
         self.shown += elapsed;
         self.last = now;
@@ -2027,6 +2094,7 @@ impl LevelScreen {
     /// the rest of the load, which their first update receives
     /// (level-placed-effects.md section 5.3).
     pub fn wait(&mut self, now: u64) {
+        self.frame += 1;
         let elapsed = now.saturating_sub(self.last);
         self.shown += elapsed;
         self.last = now;
@@ -2041,6 +2109,7 @@ impl LevelScreen {
     /// choice: the specs cap only the movement's and the display's frame
     /// times, player-movement.md 3.2).
     pub fn update(&mut self, now: u64, input: &Input) {
+        self.frame += 1;
         let elapsed = now.saturating_sub(self.last);
         let dt = (elapsed as f32 / 1000.0).min(MAX_STEP);
         self.last = now;
@@ -2558,6 +2627,24 @@ impl LevelScreen {
         self.global_ms = ms;
     }
 
+    /// `r__detail_density` now (read when a cell is built,
+    /// detail-objects.md 7; clamped to its range) and the wind strength *W*
+    /// (weather-ambient-effects.md 4.3).
+    pub fn set_detail_settings(&mut self, density: f32, wind: f32) {
+        self.detail_density = density.clamp(level_details::DENSITY_MIN, level_details::DENSITY_MAX);
+        self.wind = wind;
+    }
+
+    /// The detail objects' cache (tests and reports).
+    pub fn details(&self) -> Option<std::cell::Ref<'_, LevelDetailObjects>> {
+        self.details.as_ref().map(|d| d.borrow())
+    }
+
+    /// `r__supersample` as the last video restart applied it.
+    pub fn set_supersample(&mut self, supersample: u32) {
+        self.supersample = supersample;
+    }
+
     /// The settings of dynamic-lights.md 8 and `r1_glows_per_frame`.
     pub fn set_light_settings(&mut self, settings: LightSettings, glows_per_frame: u32) {
         self.lights.settings = settings;
@@ -2658,7 +2745,11 @@ impl LevelScreen {
             forward: v.direction,
             up: v.up,
         };
-        let (w, h) = crate::render::world::supersampled(resolution.width, resolution.height);
+        let (w, h) = crate::render::present::target_size(
+            resolution.width,
+            resolution.height,
+            self.supersample,
+        );
         let ssa_min = crate::render::world::ssa_min(w, h, camera::FOV_Y_DEGREES);
         let records = self.drawn(effects, view, projection);
         particle_drawing::queue(
@@ -2724,9 +2815,58 @@ impl LevelScreen {
         (view, projection)
     }
 
+    /// The frame for `resolution`, its world hidden under an opaque picture
+    /// (kept on the GPU, not drawn): the detail objects' pass does not run
+    /// (detail-objects.md 5.1).
+    pub fn covered_scene(&self, resolution: Resolution, clock_ms: u64) -> Scene {
+        self.compose(resolution, clock_ms, true)
+    }
+
     /// The frame for `resolution`.
     pub fn scene(&self, resolution: Resolution, clock_ms: u64) -> Scene {
+        self.compose(resolution, clock_ms, false)
+    }
+
+    /// The detail objects' pass of this frame (detail-objects.md 5.1): the
+    /// cache's update and selection for the frame's view.
+    fn details_pass(
+        &self,
+        resolution: Resolution,
+        view: &Mat4,
+        projection: &Mat4,
+    ) -> Option<DetailsScene> {
+        let details = self.details.as_ref()?;
+        let mut d = details.borrow_mut();
+        let (w, h) = crate::render::present::target_size(
+            resolution.width,
+            resolution.height,
+            self.supersample,
+        );
+        let pass = crate::core::details::Pass {
+            frame: self.frame,
+            eye: self.player.view().eye,
+            view_projection: crate::render::world::multiply(view, projection),
+            ssa_min: crate::render::world::ssa_min(w, h, camera::FOV_Y_DEGREES),
+            density: self.detail_density,
+        };
+        let frame = d.cache.pass(&pass, &self.collision);
+        let sway = crate::core::details::Sway::blend(&d.normal, &d.fast, self.wind);
+        Some(DetailsScene {
+            frame,
+            sway,
+            // The global time (6.5, believed: the clock of
+            // weather-ambient-effects.md 4.3).
+            time: self.global_ms as f64 / 1000.0,
+        })
+    }
+
+    fn compose(&self, resolution: Resolution, clock_ms: u64, covered: bool) -> Scene {
         let (view, projection) = self.view_projection(resolution.width, resolution.height);
+        let details = if covered {
+            None
+        } else {
+            self.details_pass(resolution, &view, &projection)
+        };
         let v = self.player.view();
         let d = v.direction;
         let (a, _, _) = self.weather.bracket_indices(self.clock.time_of_day());
@@ -2740,7 +2880,8 @@ impl LevelScreen {
             particles,
             lights: self.lights.passes().to_vec(),
             glows: self.lights.sprites().to_vec(),
-            covered: false,
+            covered,
+            details,
             world: self.world.clone(),
             eye: v.eye,
             forward: d,
@@ -2962,6 +3103,8 @@ impl LevelScreen {
                 particle_capacity: 0,
                 glow_shaders: Vec::new(),
                 light_textures: None,
+                presentation_noise: None,
+                details: None,
             }),
             collision: Arc::new(
                 CollisionWorld::new(Default::default(), Vec::new()).expect("collision"),
@@ -2990,6 +3133,7 @@ impl LevelScreen {
             instances: HashMap::new(),
             effects: None,
             view_size: std::cell::Cell::new((1024, 768)),
+            supersample: 1,
             zones: Zones::default(),
             zone_sections: HashMap::new(),
             artefacts: Artefacts::default(),
@@ -2998,6 +3142,10 @@ impl LevelScreen {
             effects_drawn: [true; 4],
             lights: LevelLights::default(),
             torches: PlayerTorches::default(),
+            details: None,
+            detail_density: level_details::DENSITY_DEFAULT,
+            wind: 0.0,
+            frame: 0,
             detectors: PlayerDetectors::default(),
             global_ms: 0,
         }

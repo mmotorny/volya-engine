@@ -40,11 +40,12 @@ What each loading stage keeps, and the blocks it leaves live:
 | `st_loading_cform` (collision: vertices 8.4, triangles 11.0, materials 1.4, grid 9.3; before #371 triangles 16.5 and grid 15.8) | 30.7 MB (42.7 before) | 9,654 | 14,924 | 35.1 MB (45.0 before) |
 | `st_loading_geometry` | 0.4 MB | 121 | 205 | 0.7 MB |
 | `st_loading_spatial_db` | −6.0 MB | −6,486 | 117 | 5.4 MB |
+| `st_loading_details` (the detail objects' slot grid 8.4 and cache, #411) | 9.5 MB | 91 | 176 | 9.5 MB |
 | `st_loading_ai_objects` (the particles' effect library) | 1.9 MB | 8,417 | 18,083 | 3.3 MB |
 | `st_client_spawning` (objects' models, weather, level sounds; the objects' geometry 4.9 until uploaded) | 6.2 MB | 6,929 | 2,459,422 | 11.0 MB |
 | `st_loading_textures` | 0.3 MB | 1,639 | 103,158 | 3.1 MB |
 
-The registry is one list indexed by id with each object's record inline; the three kinds largest inline (hanging lamps, monster groups and helicopters, 256–416 bytes) are boxed, and the list is shrunk to its length once every object is registered, so it no longer keeps the half its growth left spare (#370). The level keeps 59.1 MB at the end of loading in 136,837 blocks (77.9 MB before #370 and #371), 54 MB once its geometry is uploaded; the load's peak is 63.3 MB above its start (82.3 before). The game data a level needs resident is about 48 MB (`level.cform` as stored 30.4, the navigation positions 7.1, `all.spawn` 4.5, the graph's tables 1.8, the configuration's text 1.4, the strings 1.8, the effect library 1.9); the rest lives on the GPU as stored.
+The registry is one list indexed by id with each object's record inline; the three kinds largest inline (hanging lamps, monster groups and helicopters, 256–416 bytes) are boxed, and the list is shrunk to its length once every object is registered, so it no longer keeps the half its growth left spare (#370). The level keeps 68.7 MB at the end of loading in 136,973 blocks (77.9 MB before #370 and #371, without the detail objects), 64 MB once its geometry is uploaded; the load's peak is 72.8 MB above its start (82.3 before). The game data a level needs resident is about 48 MB (`level.cform` as stored 30.4, the navigation positions 7.1, `all.spawn` 4.5, the graph's tables 1.8, the configuration's text 1.4, the strings 1.8, the effect library 1.9); the rest lives on the GPU as stored.
 
 ### Loading temporaries
 

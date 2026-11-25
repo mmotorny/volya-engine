@@ -65,6 +65,8 @@ both!(
     particles_queue_blend_cull_and_distort,
     light_passes_add_to_the_image,
     glows_add_after_the_world,
+    the_presentation_reduces_a_supersampled_target,
+    detail_objects_are_cut_lit_and_swayed,
 );
 
 fn renderer() -> Renderer {
@@ -252,13 +254,16 @@ fn frame(world: volya_engine_render::World, sky: Option<SkyFrame>) -> WorldFrame
         clear: [0.0; 3],
         particles: Vec::new(),
         lights: Vec::new(),
+        presentation: Default::default(),
+        effects: None,
+        details: None,
     }
 }
 
 fn centre(renderer: &mut Renderer, frame: WorldFrame) -> [u8; 4] {
     let list = DrawList {
         world: Some(frame),
-        quads: Vec::new(),
+        ..Default::default()
     };
     let pixels =
         pollster::block_on(renderer.capture(&list, SIZE, SIZE, wgpu::Color::BLACK)).unwrap();
@@ -750,7 +755,7 @@ fn batch(
 fn pixels(renderer: &mut Renderer, frame: WorldFrame, size: u32) -> Vec<u8> {
     let list = DrawList {
         world: Some(frame),
-        quads: Vec::new(),
+        ..Default::default()
     };
     pollster::block_on(renderer.capture(&list, size, size, wgpu::Color::BLACK)).unwrap()
 }
@@ -758,6 +763,162 @@ fn pixels(renderer: &mut Renderer, frame: WorldFrame, size: u32) -> Vec<u8> {
 fn at(pixels: &[u8], size: u32, x: u32, y: u32) -> [u8; 4] {
     let i = ((y * size + x) * 4) as usize;
     pixels[i..i + 4].try_into().unwrap()
+}
+
+/// detail-objects.md 6: an instance of a still model lit by the ambient
+/// colour (texel × colour × 2), an instance whose texels fail the alpha
+/// test cut away, both faces drawn, a swaying instance's colour within its
+/// pulse's range, and an instance turned and scaled.
+#[test]
+fn detail_objects_are_cut_lit_and_swayed() {
+    use std::sync::Arc;
+    use volya_engine_render::details::{DetailDraw, DetailFrame, DetailGeometry, STILL, SWAY_1};
+    let mut r = renderer();
+    let black = r.create_rgba_texture(1, 1, &[0, 0, 0, 255]);
+    let g = geom(Layout::VertexLit, 0, 0, [0; 8]);
+    let world = r
+        .create_world(
+            &g,
+            &[surface(Program::SelfLight, Some(black))],
+            &[draw(0, None)],
+            None,
+        )
+        .unwrap();
+    // Left texel opaque white, right texel white below the reference.
+    let texture = r.create_rgba_texture(2, 1, &[255, 255, 255, 255, 255, 255, 255, 128]);
+    // A unit quad standing on y = 0, x −0.5 … 0.5, its texels at u.
+    let quad = |u: f32, clockwise: bool| {
+        let v = [
+            ([-0.5, 0.0, 0.0], [u, 0.5]),
+            ([0.5, 0.0, 0.0], [u, 0.5]),
+            ([-0.5, 1.0, 0.0], [u, 0.5]),
+            ([0.5, 1.0, 0.0], [u, 0.5]),
+        ];
+        let i: &[u16] = if clockwise {
+            &[0, 2, 1, 1, 2, 3]
+        } else {
+            &[0, 1, 2, 2, 1, 3]
+        };
+        DetailGeometry::new(&v, i)
+    };
+    r.set_details(
+        &[quad(0.25, false), quad(0.75, false), quad(0.25, true)],
+        &texture,
+        true,
+        16,
+    );
+    let size = 64;
+    let at_ = |p: &[u8], x: u32, y: u32| at(p, size, x, y);
+    let mut f = frame(world, None);
+    f.light.ambient = [0.25; 3];
+    // In front of the world's triangle (depth 1).
+    let instance =
+        |x: f32, scale: f32, turn: f32| [x, -0.2, 0.8, scale, turn.cos(), turn.sin(), 0.0, 0.0];
+    let details = |instances: Vec<[f32; 8]>, draws: Vec<DetailDraw>| DetailFrame {
+        instances: Arc::new(instances),
+        draws,
+        sway: [0.0, 0.0, 1.0, 1.0, 1.0],
+        time: 0.0,
+    };
+    let one = |model, list, first| DetailDraw {
+        model,
+        list,
+        first,
+        count: 1,
+    };
+    // Model 0 at the centre, model 1 (cut) left, model 2 (wound the other
+    // way: both faces drawn) right.
+    f.details = Some(details(
+        vec![
+            instance(0.0, 0.4, 0.0),
+            instance(-0.5, 0.4, 0.0),
+            instance(0.5, 0.4, 0.0),
+        ],
+        vec![one(0, STILL, 0), one(1, STILL, 1), one(2, STILL, 2)],
+    ));
+    let p = pixels(&mut r, f.clone(), size);
+    assert_near(at_(&p, 32, 30), [128, 128, 128], "ambient × 2");
+    assert_eq!(at_(&p, 8, 30)[..3], [0, 0, 0], "cut by the alpha test");
+    assert_near(at_(&p, 56, 30), [128, 128, 128], "the other face");
+    // Turned a quarter about y, the quad is seen edge on: nothing at the
+    // centre; scaled by 0.5 it no longer reaches the top.
+    f.details = Some(details(
+        vec![instance(0.0, 0.4, std::f32::consts::FRAC_PI_2)],
+        vec![one(0, STILL, 0)],
+    ));
+    let p = pixels(&mut r, f.clone(), size);
+    assert_eq!(at_(&p, 25, 30)[..3], [0, 0, 0], "edge on");
+    f.details = Some(details(
+        vec![instance(0.0, 0.2, 0.0)],
+        vec![one(0, STILL, 0)],
+    ));
+    let p = pixels(&mut r, f.clone(), size);
+    assert_eq!(at_(&p, 32, 28)[..3], [0, 0, 0], "half height");
+    assert_near(at_(&p, 32, 36), [128, 128, 128], "half height");
+    // Sway 1 without amplitude: in place, the colour × (0.9 + 0.25
+    // max(0, γ) φ).
+    f.details = Some(details(
+        vec![instance(0.0, 0.4, 0.0)],
+        vec![one(0, SWAY_1, 0)],
+    ));
+    let p = pixels(&mut r, f, size);
+    let c = at_(&p, 32, 30)[0];
+    assert!((114..=147).contains(&c), "swaying colour {c}");
+}
+
+/// frame-presentation.md 1.1, 3.1, 3.5: at `r__supersample` 2 the world is
+/// drawn into a target √2 times the screen per axis and reduced by one
+/// bilinear sample per pixel; with the identity in force white stays white.
+#[test]
+fn the_presentation_reduces_a_supersampled_target() {
+    use volya_engine_render::present::{Presentation, ScreenEffects};
+    let mut r = renderer();
+    let white = r.create_rgba_texture(1, 1, &[255; 4]);
+    let black = r.create_rgba_texture(1, 1, &[0, 0, 0, 255]);
+    let g = geom(Layout::VertexLit, 0, 0, [0; 8]);
+    let world = r
+        .create_world(
+            &g,
+            &[surface(Program::SelfLight, Some(black))],
+            &[draw(0, None)],
+            None,
+        )
+        .unwrap();
+    // A white sprite over the left half, its edge off the pixel grid.
+    let left = batch(
+        pass(ParticleProgram::Set, ParticleBlend::Off, &white),
+        ParticleQueue::Early,
+        1.0,
+        sprite(-2.0, 0.013, -2.0, 2.0, 0.5, 0xFFFF_FFFF),
+    );
+    let size = 128;
+    let mut f = frame(world.clone(), None);
+    f.particles = vec![left.clone()];
+    let straight = pixels(&mut r, f.clone(), size);
+    f.presentation = Presentation {
+        supersample: 2,
+        ..Default::default()
+    };
+    f.effects = Some(ScreenEffects::identity());
+    let reduced = pixels(&mut r, f, size);
+    // 128 · √2 = 181.02: 181, made even.
+    assert_eq!(r.presentation_target(), Some(((180, 180), true)));
+    assert_eq!(at(&reduced, size, 8, 64)[..3], [255, 255, 255]);
+    assert_eq!(at(&reduced, size, 120, 64)[..3], [0, 0, 0]);
+    // The edge's pixel blends texels of both sides, where the screen's
+    // own frame has one or the other.
+    let edge = (60..72).map(|x| at(&reduced, size, x, 64)[0]);
+    assert!(
+        edge.clone().any(|v| v > 0 && v < 255),
+        "{:?}",
+        edge.collect::<Vec<_>>()
+    );
+    let edge = (60..72).map(|x| at(&straight, size, x, 64)[0]);
+    assert!(
+        edge.clone().all(|v| v == 0 || v == 255),
+        "{:?}",
+        edge.collect::<Vec<_>>()
+    );
 }
 
 /// particle-drawing.md sections 4.5 – 7: blended effects back to front by
@@ -840,9 +1001,9 @@ fn particles_queue_blend_cull_and_distort() {
     let red = r.create_rgba_texture(1, 1, &[255, 127, 0, 255]);
     let mut distort = pass(ParticleProgram::Distort, ParticleBlend::Alpha, &white);
     distort.distort = Some(red);
-    let mut f = frame(world, None);
+    let mut f = frame(world.clone(), None);
     f.particles = vec![
-        left,
+        left.clone(),
         batch(
             distort,
             ParticleQueue::Distortion,
@@ -850,14 +1011,37 @@ fn particles_queue_blend_cull_and_distort() {
             sprite(-2.0, 2.0, -2.0, 2.0, 0.4, 0xFFFF_FFFF),
         ),
     ];
+    // Drawn straight to the screen (r__supersample 1, no effect), the
+    // first frame's distortion is not shown; the next frame goes through
+    // the target and is presented with postprocess_d
+    // (frame-presentation.md 3.1, particle-drawing.md 6.3).
+    let first = pixels(&mut r, f.clone(), size);
+    assert_eq!(
+        at(&first, size, 124, 128)[..3],
+        [255, 255, 255],
+        "not shown"
+    );
+    assert_eq!(r.presentation_target(), Some(((size, size), false)));
     let shifted = pixels(&mut r, f, size);
+    assert_eq!(r.presentation_target(), Some(((size, size), true)));
     // About 6 pixels: at 124 the scene is read from 130, right of the edge.
     assert_eq!(at(&shifted, size, 124, 128)[..3], [0, 0, 0], "shifted");
+    // The renderer's own colour base (127, no hand-over) scales by
+    // 254/255 (frame-presentation.md 3.5).
     assert_eq!(
         at(&shifted, size, 112, 128)[..3],
-        [255, 255, 255],
+        [254, 254, 254],
         "still white"
     );
+    // A frame after one with a distortion pass goes through the target;
+    // the next goes straight to the screen again.
+    let mut f = frame(world, None);
+    f.particles = vec![left.clone()];
+    pixels(&mut r, f.clone(), size);
+    assert_eq!(r.presentation_target(), Some(((size, size), true)));
+    let again = pixels(&mut r, f, size);
+    assert_eq!(r.presentation_target(), Some(((size, size), false)));
+    assert_eq!(at(&again, size, 124, 128)[..3], [255, 255, 255]);
 }
 
 /// A light pass whose frustum holds everything (clip (0, 0, ½, 1)).

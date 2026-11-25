@@ -5,9 +5,8 @@
 //! (docs/behavior/weather-ambient-effects.md section 4): the gust in force
 //! moves a one-dimensional gradient noise whose value gives the wind
 //! strength *W*; and what *W* changes (section 5): a rain drop's mean
-//! direction and the detail objects' sway values. Neither consumer is
-//! drawn yet (no approved specification covers the rain's or the detail
-//! objects' drawing), so they are values here.
+//! direction and the detail objects' sway values (drawn by
+//! `crate::details`; no approved specification covers the rain's drawing).
 
 use crate::particles::random::Generator;
 

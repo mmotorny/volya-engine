@@ -57,7 +57,9 @@ fn programs_translate_to_webgl2() {
         ("yuv", include_str!("../src/yuv.wgsl")),
         ("sky", include_str!("../src/sky.wgsl")),
         ("particle", include_str!("../src/particle.wgsl")),
-        ("distortion", include_str!("../src/distortion.wgsl")),
+        ("ramp", include_str!("../src/ramp.wgsl")),
+        ("postprocess", include_str!("../src/postprocess.wgsl")),
+        ("details", include_str!("../src/details.wgsl")),
     ] {
         assert_eq!(untranslatable(source), Vec::<String>::new(), "{name}");
     }

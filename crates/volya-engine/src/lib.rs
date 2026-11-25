@@ -26,6 +26,7 @@ mod fixture;
 pub mod footsteps;
 pub mod inventory_screen;
 pub mod level;
+pub mod level_details;
 pub mod level_lights;
 pub mod level_sound;
 pub mod loading_screen;

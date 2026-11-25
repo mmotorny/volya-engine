@@ -81,13 +81,15 @@ fn mb(bytes: usize) -> f64 {
 /// Each stage's peak above its start, MB: the measured peak (native,
 /// `l01_escape`, #79) with a margin, so a regression is noted. Stages not
 /// listed allocate next to nothing.
-const STAGE_BUDGETS: [(Stage, f64); 9] = [
+const STAGE_BUDGETS: [(Stage, f64); 10] = [
     (Stage::CreatingNewGame, 14.5),  // 12.8: the spawn file and game graph
     (Stage::ServerConnecting, 16.0), // 14.1: the offline simulation (#370)
     (Stage::OpeningStream, 14.0),    // 12.6: the `level` file and its parse
     (Stage::LoadingCform, 38.0),     // 35.1: the collision world it keeps (#371)
     (Stage::LoadingGeometry, 1.5),   // 0.7: the geometry's layout only
     (Stage::LoadingSpatialDb, 7.0),  // 5.4: index pieces and the draw list
+    // 9.5: `level.details`' slot grid (8.4) and the cache (#411).
+    (Stage::LoadingDetails, 10.5),
     // 3.3: `particles.xr` and the effect library it keeps (1.9).
     (Stage::LoadingAiObjects, 4.0),
     // 11.0: the objects' models (9.4) and the zones' effect objects.
@@ -96,9 +98,10 @@ const STAGE_BUDGETS: [(Stage, f64); 9] = [
 ];
 /// Any other stage's peak, MB.
 const OTHER_BUDGET: f64 = 0.5;
-/// The whole load's peak above its start, MB (63.3 measured; 82.3 before
-/// #370 and #371, 188.3 before #79).
-const LOADING_BUDGET: f64 = 69.0;
+/// The whole load's peak above its start, MB (72.8 measured with the
+/// detail objects' grid, #411; 63.3 without it, 82.3 before #370 and #371,
+/// 188.3 before #79).
+const LOADING_BUDGET: f64 = 79.0;
 
 #[test]
 fn loading_stage_memory() {
