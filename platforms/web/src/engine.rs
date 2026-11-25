@@ -91,6 +91,7 @@ pub async fn launch() -> Result<serde_json::Value, JsValue> {
             if let Some(user) = user {
                 data.set_user_config(user);
             }
+            data.version = crate::game::version_string()?;
             let mut app = App::new(data).map_err(error)?;
             // The level's textures (transcoded on a GPU without BC) and
             // geometry are uploaded while it loads, a piece at a time
@@ -171,6 +172,17 @@ fn store_user_config(bytes: Vec<u8>) {
 /// otherwise (the splash and the page draw at the canvas's size).
 pub fn render_size() -> Option<Resolution> {
     RUNNING.with(|r| r.borrow().as_ref().map(|running| running.app.video_mode()))
+}
+
+/// Sets `r__supersample` as a video restart applies it (tests).
+#[cfg(feature = "test-ops")]
+pub fn set_supersample(value: u32) -> Result<(), JsValue> {
+    RUNNING.with(|r| {
+        let mut r = r.borrow_mut();
+        let running = r.as_mut().ok_or_else(|| error("the game is not running"))?;
+        running.app.set_supersample(value);
+        Ok(())
+    })
 }
 
 /// The `debug_video_mode` op (tests): draws at `mode` from now on
@@ -351,8 +363,13 @@ pub fn draw_list(
         let mut r = r.borrow_mut();
         let running = r.as_mut()?;
         let list = crate::game::with_trees(|tree, _| {
-            let scene: Scene = running.app.scene(tree, resolution).map_err(error)?;
-            Ok::<_, JsValue>(presenter.draw_list(renderer, tree, &scene, running.app.clock()))
+            let scene: Scene = tracing::info_span!("render.app_scene")
+                .in_scope(|| running.app.scene(tree, resolution))
+                .map_err(error)?;
+            Ok::<_, JsValue>(
+                tracing::info_span!("render.draw_list")
+                    .in_scope(|| presenter.draw_list(renderer, tree, &scene, running.app.clock())),
+            )
         });
         Some(list.and_then(|l| l))
     })?;

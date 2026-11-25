@@ -789,7 +789,11 @@ export const tests = {
     const meta = find("M", "process_name")[0];
     assert(meta?.args.name.startsWith("Volya Engine "), "no process name");
     const session = find("i", "session")[0].args;
-    for (const key of ["version", "user_agent", "screen", "dpr", "cores", "gpu_state"]) assert(key in session, `session lacks ${key}`);
+    for (const key of ["version", "user_agent", "screen", "dpr", "cores", "gpu_state", "game"]) assert(key in session, `session lacks ${key}`);
+    assert(session.version, "no version");
+    assert(/^volya,v:\S+$/.test(find("i", "session")[0].cat), "no commit");
+    if (session.game === "imported") assert(/^ver\. \S+$/.test(session.game_version) && "game_language" in session, "no game version");
+    else assertEqual(session.game, "not imported", "game");
     if (session.gpu_state === "ready") {
       assert(["webgpu", "webgl2"].includes(session.gpu_backend) && session.gpu_textures, "no backend");
       assert(["timestamp-query", "submitted-work-done"].includes(session.gpu_timing), `gpu_timing ${session.gpu_timing}`);
@@ -815,6 +819,47 @@ export const tests = {
     }
     assertEqual(trace.otherData.cap_bytes, 2 * 2 ** 20, "cap");
     return `recording a frame's spans while on: ${on.us_per_frame.toFixed(2)} µs; ${events.length} events; audio ${volya.audioState()}`;
+  },
+
+  "diagnostic log: the session records the imported game's version and installer": async () => {
+    const status = await volya.call("game_status");
+    if (status.imported || status.written > 0) skip("a real import is present");
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle("volya-engine", { create: true });
+    const write = async (manifest) => {
+      const writable = await (await dir.getFileHandle("import.json", { create: true })).createWritable();
+      await writable.write(JSON.stringify(manifest));
+      await writable.close();
+    };
+    /** The session event as a new session would make it now. */
+    const session = async () => {
+      await volya.call("debug_session_event");
+      const { text } = await volya.call("diagnostic_log");
+      return JSON.parse(text).traceEvents.findLast((e) => e.name === "session").args;
+    };
+    const installer = { exe: "setup_test.exe", bin: "setup_test-1.bin", app_name: "Test Game", app_version: "2.0 test" };
+    try {
+      await write({ language: "ru-RU", complete: true, files: [], installer });
+      let s = await session();
+      assert(s.version, "no Volya Engine version");
+      assertEqual(
+        [s.game, s.game_version, s.game_language, s.installer_exe, s.installer_bin, s.installer_name, s.installer_version].join("|"),
+        "imported|ver. 1.0006|ru-RU|setup_test.exe|setup_test-1.bin|Test Game|2.0 test",
+        "imported game",
+      );
+      // The value the installer writes where the menu reads its version.
+      await write({ language: "", complete: false, files: [], installer: { ...installer, install_vers: "1.0004" } });
+      s = await session();
+      assertEqual([s.game, s.game_version, s.game_language].join("|"), "partly imported|ver. 1.0004|", "partial import");
+      // Recorded before the installer was.
+      await write({ language: "en-US", complete: true, files: [] });
+      s = await session();
+      assertEqual([s.game, s.game_version, "installer_exe" in s].join("|"), "imported|ver. 1.0006|false", "older record");
+      await dir.removeEntry("import.json");
+      s = await session();
+      assertEqual([s.game, "game_version" in s].join("|"), "not imported|false", "no game");
+    } finally {
+      await dir.removeEntry("import.json").catch(() => {});
+    }
   },
 
   "diagnostic log: the 2 MiB cap holds, the oldest go first": async () => {
@@ -851,7 +896,9 @@ export const tests = {
       // Calls fail until its engine has started.
       const status = () => call("diagnostic_log_status").catch(() => null);
       await until(async () => (await status())?.on, "the reloaded app's log isn't on", 20000);
-      const { text } = await call("diagnostic_log");
+      // On is the setting: the log's store may still be opening.
+      let text;
+      await until(async () => ({ text } = (await call("diagnostic_log").catch(() => ({}))))?.text, "the reloaded app's log can't be read", 10000);
       const events = JSON.parse(text).traceEvents;
       assert(events.some((e) => e.name === "test kept"), "the log didn't survive the reload");
       // Its own session, after the earlier one's events.

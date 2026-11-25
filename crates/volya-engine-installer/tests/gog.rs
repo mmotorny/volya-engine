@@ -63,3 +63,27 @@ fn lists_and_extracts_game_files() {
         assert_eq!(out.len() as u64, file.size);
     }
 }
+
+#[test]
+fn reads_the_installer_identity() {
+    let Some((exe, _)) = installer() else {
+        return;
+    };
+    let parsed = Installer::parse(BufReader::new(File::open(exe).unwrap())).unwrap();
+    assert_eq!(
+        parsed.app_name.as_deref(),
+        Some("S.T.A.L.K.E.R. - Shadow of Chernobyl")
+    );
+    // docs/formats/gog-installer.md: GOG's installer version.
+    assert!(
+        parsed
+            .app_version
+            .as_deref()
+            .is_some_and(|v| v.starts_with("2.1.0.10 ")),
+        "{:?}",
+        parsed.app_version
+    );
+    // Its registry entries write no `InstallVers` under the title menu's
+    // key: the menu shows the built-in version.
+    assert_eq!(parsed.install_vers, None);
+}

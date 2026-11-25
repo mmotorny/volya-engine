@@ -167,7 +167,7 @@ pub async fn set(on: bool, page: &serde_json::Value, previous_end: &serde_json::
         tracing::info!("diagnostic log on");
     }
     if STARTED.with(Cell::get) {
-        session_event();
+        session_event().await;
     }
     let (mut log, stored) = open_log().await;
     if let Some(end) = recorded_end(previous_end) {
@@ -289,16 +289,26 @@ async fn open_log() -> (Log<Store>, bool) {
 }
 
 /// Graphics are set up: the session's event, if logging is on.
-pub fn started() {
+pub async fn started() {
     STARTED.with(|s| s.set(true));
     if on() {
-        session_event();
+        session_event().await;
     }
 }
 
-/// The session's event: what the page told and the engine's backend and
-/// texture path.
-fn session_event() {
+/// The `debug_session_event` op (tests): the session's event again, as a
+/// new session would make it now, if logging is on.
+#[cfg(feature = "test-ops")]
+pub async fn repeat_session_event() {
+    if on() {
+        session_event().await;
+    }
+}
+
+/// The session's event: what the page told, the engine's backend and
+/// texture path, and the imported game (`game::identity`).
+async fn session_event() {
+    let game = crate::game::identity().await;
     let gpu = serde_json::to_value(crate::gpu::status()).unwrap_or_default();
     let page = SESSION.with(|s| s.borrow().as_ref().map(|s| s.page.clone()));
     let mut args = args_of(&page.unwrap_or_default());
@@ -307,6 +317,7 @@ fn session_event() {
             args.push((format!("gpu_{key}"), Value::Text(v.into())));
         }
     }
+    args.extend(args_of(&game.into()));
     instant("session", 1, &args);
 }
 

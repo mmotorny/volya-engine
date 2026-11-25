@@ -582,7 +582,7 @@ impl Renderer {
                 }
             }
         }
-        self.queue.submit([encoder.finish()]);
+        tracing::info_span!("render.submit").in_scope(|| self.queue.submit([encoder.finish()]));
     }
 
     /// Draws `list` at `size` pixels and shows the result in `target`
@@ -694,7 +694,7 @@ impl Renderer {
                 }
             }
         }
-        self.queue.submit([encoder.finish()]);
+        tracing::info_span!("render.submit_fit").in_scope(|| self.queue.submit([encoder.finish()]));
     }
 
     /// The level's detail models (docs/behavior/detail-objects.md), their
@@ -771,15 +771,19 @@ impl Renderer {
                 let colour = t.colour.create_view(&Default::default());
                 let distort = t.distort.create_view(&Default::default());
                 let depth = t.depth.create_view(&Default::default());
-                let distorted =
-                    self.encode_frame(encoder, &colour, t.size, &depth, frame, Some(&distort));
-                self.post
-                    .draw(&self.device, &self.queue, encoder, screen, &p, distorted);
+                let distorted = tracing::info_span!("render.world").in_scope(|| {
+                    self.encode_frame(encoder, &colour, t.size, &depth, frame, Some(&distort))
+                });
+                tracing::info_span!("render.post").in_scope(|| {
+                    self.post
+                        .draw(&self.device, &self.queue, encoder, screen, &p, distorted)
+                });
                 distorted
             }
             None => {
                 let depth = self.depth_view(size.0, size.1);
-                self.encode_frame(encoder, screen, size, &depth, frame, None)
+                tracing::info_span!("render.world")
+                    .in_scope(|| self.encode_frame(encoder, screen, size, &depth, frame, None))
             }
         };
         self.post.distorted = distorted;

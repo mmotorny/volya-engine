@@ -1330,6 +1330,7 @@ dependencies = [
  "bytemuck",
  "naga",
  "pollster",
+ "tracing",
  "volya-engine-formats",
  "volya-engine-installer",
  "wgpu",
