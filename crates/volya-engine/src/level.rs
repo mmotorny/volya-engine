@@ -159,9 +159,6 @@ pub struct LevelScreen {
     /// The player's sky visibility (level-objects.md 5.4), for the sounds
     /// of the weather.
     sky_visibility: SkyVisibility,
-    /// The real time the last frame advanced game time by (ms), `None` for
-    /// a paused frame.
-    advanced: Option<u64>,
     player: Player,
     /// The player character's state (docs/behavior/player-state.md); `None`
     /// only in the unit tests' empty level.
@@ -1072,7 +1069,6 @@ impl NewGameLoad {
             collision: Arc::new(collision),
             sound_data: self.sound,
             sky_visibility: SkyVisibility::default(),
-            advanced: None,
             player,
             character: Some(character),
             controls,
@@ -1172,7 +1168,6 @@ impl LevelScreen {
         let elapsed = now.saturating_sub(self.last);
         self.shown += elapsed;
         self.last = now;
-        self.advanced = None;
         self.clock.set_paused(true);
         self.clock.advance(elapsed);
         self.player.paused(now);
@@ -1196,7 +1191,6 @@ impl LevelScreen {
         let elapsed = now.saturating_sub(self.last);
         let dt = (elapsed as f32 / 1000.0).min(MAX_STEP);
         self.last = now;
-        self.advanced = Some(elapsed);
         self.clock.set_paused(false);
         self.clock.advance(elapsed);
         let player = self.player.state();
@@ -1250,12 +1244,6 @@ impl LevelScreen {
     /// The collision world, shared.
     pub fn shared_collision(&self) -> Arc<CollisionWorld> {
         self.collision.clone()
-    }
-
-    /// The real time the last frame advanced game time by (ms), `None` when
-    /// it was paused.
-    pub fn advanced(&self) -> Option<u64> {
-        self.advanced
     }
 
     /// What this frame's sound rules read.
@@ -1595,7 +1583,6 @@ impl LevelScreen {
             ),
             sound_data: None,
             sky_visibility: SkyVisibility::default(),
-            advanced: None,
             player,
             character: None,
             controls,

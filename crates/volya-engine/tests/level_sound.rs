@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 use sha2::{Digest, Sha256};
 use volya_engine::core::collision::geometry::normalize;
 use volya_engine::core::config;
+use volya_engine::core::pause::GlobalClock;
 use volya_engine::core::sound::ambient::list_items;
 use volya_engine::core::sound::occlusion::Occlusion;
 use volya_engine::core::sound::random::SharedRandom;
@@ -393,13 +394,14 @@ fn first_level_sounds_from_game_data() {
         up: v.up,
     });
     let mut run = SoundRun::default();
+    let mut clock = GlobalClock::default();
     let frame_ms = 16;
-    run.advance(frame_ms);
+    run.frame_time(0.016, false);
     run.frame(
         &mut system,
         &mut sounds,
         &level.sound_inputs(),
-        0.016,
+        clock.frame(frame_ms, false),
         false,
     )
     .unwrap();
@@ -444,12 +446,12 @@ fn first_level_sounds_from_game_data() {
             up: v.up,
         });
         let t = Instant::now();
-        run.advance(frame_ms);
+        run.frame_time(0.016, false);
         run.frame(
             &mut system,
             &mut sounds,
             &level.sound_inputs(),
-            0.016,
+            clock.frame((frame + 1) * frame_ms, false),
             false,
         )
         .unwrap();

@@ -160,6 +160,13 @@ impl MoviePlayer {
             .is_some_and(|i| i.pause_state.as_deref() == Some("on"))
     }
 
+    /// The current item, with its `pause_state` (sound-weather-ambient.md
+    /// section 3.1), until the sequence has finished.
+    pub fn current<'a>(&self, seq: Sequence<'a>) -> Option<(usize, Option<&'a str>)> {
+        let item = seq.movies.items.get(self.item)?;
+        Some((self.item, item.pause_state.as_deref()))
+    }
+
     fn next(&mut self, at: u64, audio: &mut dyn AudioOut) {
         for v in self.voices.drain(..) {
             audio.stop(v);
@@ -355,6 +362,11 @@ impl Startup {
 
     pub fn stop(&mut self, audio: &mut dyn AudioOut) {
         self.0.stop(audio);
+    }
+
+    /// See [`MoviePlayer::current`].
+    pub fn current<'a>(&self, data: &'a GameData) -> Option<(usize, Option<&'a str>)> {
+        self.0.current(data.intro_logo())
     }
 
     /// The frame at `ctx.clock_ms`.
