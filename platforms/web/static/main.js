@@ -8,6 +8,7 @@ import { startInput } from "./input.js";
 import { createTouchControls } from "./touch-controls.js";
 import { createFullscreenOffer } from "./fullscreen.js";
 import { createTextEntry } from "./text-entry.js";
+import { choose } from "./graphics.js";
 // Early: Chrome offers installing the app once, soon after load.
 import "./install.js";
 import { startUpdates, versionText } from "./update.js";
@@ -19,7 +20,21 @@ const registration = navigator.serviceWorker?.register(new URL("./sw.js", import
 });
 const updates = navigator.serviceWorker ? startUpdates(registration) : null;
 
-const worker = new Worker(new URL("./engine-worker.js", import.meta.url), { type: "module" });
+/**
+ * The Graphics choice (graphics.js), stored only when the player made one.
+ * localStorage: the page alone reads it, and tells the engine worker.
+ * Namespaced: the github.io origin is shared.
+ */
+const GRAPHICS = "volya-engine.graphics";
+const storedGraphics = () => {
+  try {
+    return localStorage.getItem(GRAPHICS);
+  } catch {
+    return null;
+  }
+};
+
+let worker;
 const pending = new Map();
 let nextId = 0;
 // Set once the canvas exists, below; capture starts off, and so do the
@@ -28,30 +43,9 @@ let setCapture = () => {};
 let setLevel = () => {};
 let setTextField = () => {};
 let setCursor = () => {};
-
-const started = new Promise((resolve, reject) => {
-  worker.onmessage = ({ data }) => {
-    if (data.type === "started") {
-      resolve();
-      // The service worker keeps the wasm build this browser runs (sw.js).
-      navigator.serviceWorker?.ready.then((r) => r.active?.postMessage({ type: "build", build: data.build }));
-    }
-    else if (data.type === "error") reject(new Error(data.message));
-    else if (data.type === "capture") setCapture(data.on);
-    else if (data.type === "controls") setLevel(data);
-    else if (data.type === "text_field") setTextField(data);
-    else if (data.type === "cursor") setCursor(data.shown);
-    else if (data.type === "result") {
-      const { resolve, reject } = pending.get(data.id);
-      pending.delete(data.id);
-      data.error === undefined ? resolve(data.result) : reject(new Error(data.error));
-    }
-  };
-  worker.onerror = (event) => {
-    event.preventDefault();
-    reject(new Error(`engine worker: ${event.message ?? "failed to load"}`));
-  };
-});
+/** What the browser supports and the backend the engine started with (graphics.js). */
+let available = {};
+let backend = null;
 
 /** Engine interface (docs/testing.md): runs `op` with `args` in the engine. */
 function call(op, args = {}) {
@@ -62,22 +56,27 @@ function call(op, args = {}) {
   });
 }
 
+// The page's live audio context, once made (below), and its connection to
+// the engine's mixer.
+let audio = null;
+let output = null;
+/** Contexts holding the AudioWorklet's module (added once per context). */
+const worklets = new WeakSet();
+
 /**
  * Connects an audio context (live or offline) to the engine's mixer through
  * an AudioWorklet whose port goes straight to the engine worker.
  */
 async function connectAudio(context) {
-  await context.audioWorklet.addModule(new URL("./audio-worklet.js", import.meta.url));
+  if (!worklets.has(context)) {
+    await context.audioWorklet.addModule(new URL("./audio-worklet.js", import.meta.url));
+    worklets.add(context);
+  }
   const node = new AudioWorkletNode(context, "volya-output", { numberOfInputs: 0, outputChannelCount: [2] });
   node.connect(context.destination);
   worker.postMessage({ type: "audio", port: node.port, sampleRate: context.sampleRate }, [node.port]);
   return node;
 }
-
-// The page's live audio context, once made (below).
-let audio = null;
-
-globalThis.volya = { call, status: () => call("status"), connectAudio, audioState: () => audio?.state };
 
 // Our design (#93): every browser throttles or suspends hidden pages, so the
 // engine stops while the page is hidden (another tab, a minimised window, an
@@ -104,16 +103,99 @@ document.addEventListener("visibilitychange", visibilityChanged);
 addEventListener("pagehide", () => worker.terminate());
 addEventListener("pageshow", (event) => event.persisted && location.reload());
 
-// The engine sizes the canvas in device pixels from these.
-const view = document.getElementById("view");
+// The engine sizes the canvas in device pixels from these. A canvas gives
+// its drawing to one worker for good, and keeps the first kind of context it
+// gives: an engine started anew gets a new one.
+let view = document.getElementById("view");
 const size = () => ({ width: view.clientWidth, height: view.clientHeight, dpr: devicePixelRatio });
+const resized = () => worker.postMessage({ type: "resize", ...size() });
+const sizes = new ResizeObserver(resized);
+
+/** Starts an engine worker on the canvas; resolves once it runs. */
+function startEngine() {
+  worker = new Worker(new URL("./engine-worker.js", import.meta.url), { type: "module" });
+  const started = new Promise((resolve, reject) => {
+    worker.onmessage = ({ data }) => {
+      if (data.type === "started") {
+        ({ available, backend } = data);
+        resolve();
+      } else if (data.type === "error") reject(new Error(data.message));
+      else if (data.type === "capture") setCapture(data.on);
+      else if (data.type === "controls") setLevel(data);
+      else if (data.type === "text_field") setTextField(data);
+      else if (data.type === "cursor") setCursor(data.shown);
+      else if (data.type === "result") {
+        const { resolve, reject } = pending.get(data.id);
+        pending.delete(data.id);
+        data.error === undefined ? resolve(data.result) : reject(new Error(data.error));
+      }
+    };
+    worker.onerror = (event) => {
+      event.preventDefault();
+      reject(new Error(`engine worker: ${event.message ?? "failed to load"}`));
+    };
+  });
+  const canvas = view.transferControlToOffscreen();
+  worker.postMessage({ type: "start", canvas, size: size(), graphics: storedGraphics() }, [canvas]);
+  if (document.visibilityState === "hidden") visibilityChanged();
+  sizes.observe(view);
+  return started;
+}
+
+/**
+ * Starts the engine anew, on a new canvas, so the Graphics choice applies:
+ * only outside a game (the app's own interface, where Settings is).
+ */
+async function restartEngine() {
+  // The imported files' locks released first, for the next engine.
+  await call("unmount_game").catch(() => {});
+  worker.terminate();
+  for (const { reject } of pending.values()) reject(new Error("the engine was restarted"));
+  pending.clear();
+  output?.disconnect();
+  sizes.unobserve(view);
+  const fresh = document.createElement("canvas");
+  fresh.id = "view";
+  view.replaceWith(fresh);
+  view = fresh;
+  await startEngine();
+  if (audio) output = await connectAudio(audio);
+}
+
+/**
+ * The Graphics setting for the interface (game-ui.js): what the browser
+ * supports, the stored choice, storing one, and applying it before the game
+ * starts.
+ */
+const graphics = {
+  get available() {
+    return available;
+  },
+  get chosen() {
+    return storedGraphics();
+  },
+  choose(choice) {
+    try {
+      localStorage.setItem(GRAPHICS, choice);
+    } catch (error) {
+      console.warn(`graphics setting: ${error.message}`);
+    }
+  },
+  /** Starts the engine anew where the choice differs from the backend it runs. */
+  async apply() {
+    if (choose(storedGraphics(), available) !== backend) await restartEngine();
+  },
+};
+
+globalThis.volya = { call, status: () => call("status"), connectAudio, audioState: () => audio?.state, graphics };
+
 // Input goes to the engine only while it owns the screen (input.js); the
 // page's own interface hides meanwhile.
 const send = (event) => worker.postMessage({ type: "input", event });
 // The device's keyboard for the save screen's name field on touch screens
 // (#94), raised in the touchpad's click on it (#108).
 const entry = createTextEntry(send);
-const forward = startInput(view, send, { onClick: () => entry.click() });
+const forward = startInput(() => view, send, { onClick: () => entry.click() });
 setCursor = (shown) => forward.setCursor(shown);
 const touch = createTouchControls(send, { call });
 document.body.append(touch.element);
@@ -132,11 +214,7 @@ setLevel = (controls) => {
   touch.update(controls);
   offer.update(controls);
 };
-const canvas = view.transferControlToOffscreen();
-worker.postMessage({ type: "start", canvas, size: size() }, [canvas]);
-if (document.visibilityState === "hidden") visibilityChanged();
-const resized = () => worker.postMessage({ type: "resize", ...size() });
-new ResizeObserver(resized).observe(view);
+const started = startEngine();
 // devicePixelRatio changes alone (e.g. moving to another display) resize nothing.
 (function watchPixelRatio() {
   matchMedia(`(resolution: ${devicePixelRatio}dppx)`).addEventListener(
@@ -162,10 +240,10 @@ try {
   audio = new AudioContext();
   // Made while hidden: suspended until shown.
   if (document.visibilityState === "hidden") audio.suspend().catch(() => {});
-  await connectAudio(audio);
+  output = await connectAudio(audio);
   const resume = () => document.visibilityState === "visible" && audio.state !== "running" && audio.resume();
   for (const event of ["pointerdown", "keydown", "touchend"]) addEventListener(event, resume);
-  await import("./game-ui.js").then((ui) => ui.start(call, updates));
+  await import("./game-ui.js").then((ui) => ui.start(call, updates, graphics));
 } catch (error) {
   // The same panel as the interface's other problems, drawn without the engine.
   status.textContent = `Volya Engine · ${versionText()}`;

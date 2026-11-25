@@ -798,6 +798,24 @@ button.back {
   color: var(--ink-3);
 }
 
+/* Options, one below the other (Graphics); one the browser can't run is
+   dimmed and can't be picked. */
+[role="radiogroup"] .switch {
+  margin: 0.75rem 0 0;
+}
+
+[role="radiogroup"] .switch:first-child {
+  margin-top: 0;
+}
+
+.switch:has(input:disabled) {
+  cursor: default;
+}
+
+.switch input:disabled + span strong {
+  color: var(--ink-3);
+}
+
 .panel .wide:not([hidden]) {
   margin-top: 0.75rem;
 }

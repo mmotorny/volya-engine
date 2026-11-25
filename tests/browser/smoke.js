@@ -138,7 +138,7 @@ export const tests = {
     assert(registration.scope.endsWith("/volya-engine/"), `scope ${registration.scope}`);
   },
 
-  "the whole app works offline once installed, with only the wasm build it runs": async () => {
+  "the whole app works offline once installed": async () => {
     const registration = await navigator.serviceWorker.ready;
     // The page must be controlled to use the kept copies.
     if (!navigator.serviceWorker.controller) {
@@ -146,20 +146,13 @@ export const tests = {
     }
     assert(registration.active, "no active service worker");
     const precache = precacheOf(await (await fetch(`${base}sw.js`, { cache: "no-store" })).text());
-    // Of the two wasm builds (#186), the one this browser runs, which the
-    // page told the worker to keep once the engine started.
-    const { build } = await volya.status();
-    const files = precache.filter(([, , , b]) => !b || b === build).map(([path]) => path);
-    const others = precache.filter(([, , , b]) => b && b !== build).map(([path]) => path);
+    const files = precache.map(([path]) => path);
     assert(files.includes("./") && files.includes("index.html") && files.some((f) => f.endsWith(".wasm")), `files ${files.join(" ")}`);
-    assert(others.some((f) => f.endsWith(".wasm")), `no other wasm build: ${precache.map(([p]) => p).join(" ")}`);
     const cache = await caches.open("volya-engine-app");
     const kept = async (path) => Boolean(await cache.match(new URL(path, registration.scope).href));
     for (let i = 0; i < 100 && !(await Promise.all(files.map(kept))).every(Boolean); i++) {
       await new Promise((r) => setTimeout(r, 100));
     }
-    const downloaded = (await Promise.all(others.map(kept))).some(Boolean);
-    assert(!downloaded, `the other wasm build is kept too: ${others.join(" ")}`);
     const offline = (on) => fetch(`${base}__test/offline/${on ? "on" : "off"}`, { method: "POST" });
     await offline(true);
     try {
@@ -272,38 +265,81 @@ export const tests = {
     assertEqual(kept(), "c.css", "removed files are dropped on activation");
     assert(store.has(`${scope}__settings.json`), "settings dropped");
     assertEqual(removal.state.claimed, 1, "claims once active");
+  },
 
-    // Two wasm builds (#186): a browser keeps only the one it runs.
-    const builds = (gpu, gl) => [["c.css", "dddd", 300], ["pkg/e.wasm", gpu, 1000, "webgpu"], ["pkg-webgl/e.wasm", gl, 2000, "webgl"]];
-    await install("b5", builds("g1", "l1"));
-    assertEqual(downloaded.join(" "), "", "a wasm build kept before it is known to run");
-    const told5 = worker("b5", builds("g1", "l1"));
-    await told5.run("message", { type: "build", build: "webgl" });
-    assertEqual(downloaded.join(" "), "pkg-webgl/e.wasm", "the build the page runs");
-    downloaded = [];
-    await told5.run("message", { type: "build", build: "webgl" });
-    assertEqual(downloaded.join(" "), "", "a kept build again");
-    await told5.run("message", { type: "build", build: "none such" });
-    assertEqual(downloaded.join(" "), "", "an unknown build");
-    // Updates bring the kept build only, and count only it.
-    const both = await install("b6", builds("g2", "l2"));
-    assertEqual(downloaded.join(" "), "pkg-webgl/e.wasm", "update of the kept build");
-    assertEqual(JSON.stringify(told), '[{"type":"update-downloading","build":"b6","bytes":2000,"files":1}]', "update size");
-    await both.run("activate");
-    assertEqual(kept(), "c.css pkg-webgl/e.wasm", "kept after activation");
-    // Kept from before builds were recorded (one build, in pkg/): updated
-    // until the page says which it runs, then dropped if not that one.
-    store.clear();
-    store.set(`${scope}__precache.json`, new Response(JSON.stringify([["c.css", "dddd", 300], ["pkg/e.wasm", "g0", 1000]])));
-    store.set(`${scope}c.css`, new Response("css"));
-    store.set(`${scope}pkg/e.wasm`, new Response("old wasm"));
-    setSettings({ auto: true });
-    await install("b7", builds("g3", "l3"));
-    assertEqual(downloaded.join(" "), "pkg/e.wasm", "a build kept before builds were recorded");
-    downloaded = [];
-    await worker("b7", builds("g3", "l3")).run("message", { type: "build", build: "webgl" });
-    assertEqual(downloaded.join(" "), "pkg-webgl/e.wasm", "the build the page runs, after an old install");
-    assertEqual(kept(), "c.css pkg-webgl/e.wasm", "the build it doesn't run dropped");
+  "Graphics: the stored choice where the browser supports it, else the first option it supports": async () => {
+    const { choose } = await import(`${base}graphics.js`);
+    const both = { webgpu: true, webgl2: true };
+    const noWebgpu = { webgpu: false, webgl2: true };
+    assertEqual(choose(null, both), "webgpu", "default");
+    assertEqual(choose("webgl2", both), "webgl2", "chosen");
+    assertEqual(choose(null, noWebgpu), "webgl2", "default without WebGPU");
+    assertEqual(choose("webgpu", noWebgpu), "webgl2", "chosen, unsupported");
+    assertEqual(choose("webgpu", { webgpu: true, webgl2: false }), "webgpu", "without WebGL 2");
+    assertEqual(choose("webgl2", { webgpu: true, webgl2: false }), "webgpu", "WebGL 2 chosen, unsupported");
+    assertEqual(choose("webgl2", { webgpu: false, webgl2: false }), null, "neither");
+    assertEqual(choose("something else", both), "webgpu", "an unknown choice");
+  },
+
+  "Settings shows Graphics: what the browser can't run disabled, the backend used checked; a choice is stored": async () => {
+    const { graphics } = volya;
+    const { available } = graphics;
+    // What this page finds itself: a WebGPU adapter; WebGL 2 on a canvas.
+    const adapter = await navigator.gpu?.requestAdapter().catch(() => null);
+    assertEqual(available.webgpu, Boolean(adapter), "WebGPU supported");
+    const used = (await volya.status()).gpu.backend ?? null;
+    const before = localStorage.getItem("volya-engine.graphics");
+    // A choice the browser can't run (where there is one) gives way to the
+    // first it can, and stays stored.
+    const unsupported = ["webgpu", "webgl2"].find((b) => !available[b]);
+    if (unsupported) localStorage.setItem("volya-engine.graphics", unsupported);
+    try {
+      await volya.showSettings();
+      const options = [...document.querySelectorAll('#game input[name="graphics"]')];
+      const rows = options.map((o) => o.closest("label").textContent);
+      assertEqual(options.map((o) => o.value).join(" "), "webgpu webgl2", "options");
+      for (const [i, option] of options.entries()) {
+        const supported = Boolean(available[option.value]);
+        assertEqual(option.disabled, !supported, `${option.value} disabled`);
+        assertEqual(rows[i].includes("Not supported by this browser"), !supported, `${option.value}: ${rows[i]}`);
+      }
+      assert(rows[0].startsWith("WebGPU (Recommended)"), rows[0]);
+      assertEqual(options.find((o) => o.checked)?.value ?? null, used, "checked: the backend the engine runs");
+      if (unsupported) assertEqual(localStorage.getItem("volya-engine.graphics"), unsupported, "the stored choice kept");
+      // Picking another option the browser runs stores it.
+      const other = options.find((o) => !o.disabled && !o.checked);
+      if (other) {
+        other.click();
+        assertEqual(localStorage.getItem("volya-engine.graphics"), other.value, "stored");
+      }
+      return rows.join("; ");
+    } finally {
+      if (before === null) localStorage.removeItem("volya-engine.graphics");
+      else localStorage.setItem("volya-engine.graphics", before);
+      await volya.refresh();
+    }
+  },
+
+  "Graphics: WebGL 2 chosen, the engine starts anew drawing through it, also where WebGPU works": async () => {
+    const { graphics } = volya;
+    if (!graphics.available.webgl2) skip("no WebGL 2 here");
+    graphics.choose("webgl2");
+    try {
+      await graphics.apply();
+      const { gpu } = await volya.status();
+      assertEqual([gpu.state, gpu.backend], ["ready", "webgl2"], "graphics");
+      // It draws (the render suite's particle scene): green at half over
+      // red at half over black, read back from the renderer.
+      const info = await volya.call("debug_draw_particles", { case: "blend" });
+      const { rgba } = await volya.call("debug_capture", { width: 64, height: 64 });
+      const at = Array.from(rgba.slice(4 * (32 * 64 + 32), 4 * (32 * 64 + 32) + 3));
+      assert(at.every((v, i) => Math.abs(v - [64, 128, 0][i]) <= 3), `drawn ${at}`);
+      await volya.call("debug_draw", {});
+      return `${gpu.backend}, textures ${gpu.textures}${info.compat ? ", compat path" : ""}`;
+    } finally {
+      localStorage.removeItem("volya-engine.graphics");
+      await graphics.apply();
+    }
   },
 
   "a game the browser deleted is said so, on the import screen": async () => {
@@ -354,7 +390,7 @@ export const tests = {
     for (let i = 0; i < 50 && scrollY !== 0; i++) await new Promise((r) => setTimeout(r, 20));
     assertEqual(scrollY, 0, "Settings opened scrolled");
     document.body.style.minHeight = "";
-    const toggle = document.querySelector("#game .switch input");
+    const toggle = document.querySelector('#game .switch input[type="checkbox"]');
     assert(toggle && toggle.checked, "automatic updates not on by default");
     assert(
       [...document.querySelectorAll("#game .panel button")].some((b) => b.textContent === "Check for updates"),

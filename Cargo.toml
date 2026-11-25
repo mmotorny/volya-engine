@@ -31,8 +31,8 @@ zlib-rs = { version = "0.6", default-features = false, features = ["std"] }
 lzokay-native = { version = "0.2", default-features = false }
 crc32fast = "1"
 # WebGPU in browsers, Metal on Apple platforms; no native GL, Vulkan or
-# DX12. WebGL 2, where browsers give no WebGPU adapter (#113), only in the
-# web build made for that (volya-engine-render's `webgl` feature, #186).
+# DX12. WebGL 2 (#113) in the web build (volya-engine-render's `webgl`
+# feature).
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "webgpu", "metal"] }
 pollster = "1"
 # Builds the vendored LuaJIT (crates/volya-engine-script).

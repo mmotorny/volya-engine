@@ -1548,6 +1548,59 @@ export const tests = {
     assertEqual(document.querySelector("main").hidden, false, "page interface hidden");
   },
 
+  "WebGL 2 chosen in Settings: Play starts the engine anew on it, and the level draws": async () => {
+    needsGame();
+    const { graphics } = volya;
+    if (!graphics.available.webgl2) skip("no WebGL 2 here");
+    if (!graphics.available.webgpu) skip("no WebGPU here: the New Games above drew through WebGL 2");
+    await volya.showSettings();
+    document.querySelector('#game input[name="graphics"][value="webgl2"]').click();
+    try {
+      await volya.refresh();
+      document.querySelector("#game button.play").click();
+      // Calls made while the engine starts anew fail: asked again.
+      for (const deadline = performance.now() + 30000; ; await sleep(100)) {
+        const s = await state().catch(() => null);
+        if (s?.phase === "startup" || s?.phase === "menu") break;
+        assert(performance.now() < deadline, `the game did not start: ${JSON.stringify(s)?.slice(0, 300)}`);
+      }
+      const { gpu: drawn } = await volya.status();
+      assertEqual([drawn.state, drawn.backend], ["ready", "webgl2"], "graphics");
+      // Escape skips the logos, then the title menu's New Game.
+      for (let s = await state(); s.phase !== "menu"; s = await state()) {
+        key("Escape");
+        await sleep(100);
+      }
+      await readRender();
+      pointer("pointermove", row(0));
+      await until((s) => s.menu?.selected === 0 && !s.menu.moving, "item 0", 5000);
+      key("Enter");
+      await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
+      key("Enter");
+      const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", drawn.textures === "etc2" ? 120000 : 60000);
+      assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
+      key("Escape");
+      await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
+      // Frame times over a few seconds of the level.
+      await sleep(3000);
+      const { rgba } = await volya.call("debug_capture", { width: 256, height: 192 });
+      const colours = new Set();
+      for (let i = 0; i < rgba.length; i += 4) colours.add((rgba[i] << 16) | (rgba[i + 1] << 8) | rgba[i + 2]);
+      assert(colours.size > 200, `${colours.size} colours`);
+      const stats = await volya.call("level_stats");
+      return `${drawn.backend}, textures ${drawn.textures}; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; ${colours.size} colours; ${JSON.stringify(stats)}`;
+    } finally {
+      localStorage.removeItem("volya-engine.graphics");
+      // Leaves the game for the tests after (a failure above is the one told).
+      if ((await state()).phase !== "none") {
+        if ((await state()).menu) key("Escape");
+        await sleep(100);
+        key("KeyQ");
+        await until((s) => s.phase === "none", "the game to end").catch((e) => console.warn(e.message));
+      }
+    }
+  },
+
   "forgets the game": async () => {
     if (installer) await volya.call("forget_game");
     await volya.call("forget_user_config");

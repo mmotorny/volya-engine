@@ -14,8 +14,7 @@ publish = false
 workspace = true
 
 [features]
-# wgpu's WebGL 2 backend (#113), in the web build for browsers without a
-# WebGPU adapter only (#186).
+# wgpu's WebGL 2 backend (#113), in the web build.
 webgl = ["wgpu/webgl"]
 
 [dependencies]

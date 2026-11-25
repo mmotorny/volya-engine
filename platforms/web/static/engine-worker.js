@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // The engine thread (docs/architecture.md). Messages from the page:
-//   { type: "start", canvas, size }  → { type: "started", build } | { type: "error", message }
-//   (`build`: the wasm build loaded, wasm-build.js)
+//   { type: "start", canvas, size, graphics }
+//     → { type: "started", available, backend } | { type: "error", message }
+//   (`graphics`: the stored Graphics choice or null; `available`: what the
+//   browser supports, `backend`: the one chosen, graphics.js)
 //   { type: "resize", width, height, dpr }: the canvas's CSS size and the
 //   page's devicePixelRatio (`size` in "start" has the same fields).
 //   { type: "call", id, op, args }  → { type: "result", id, result } | { type: "result", id, error }
@@ -28,9 +30,10 @@
 // workers have it, otherwise on a 60 Hz timer; it idles while the page is
 // hidden, drawing nothing.
 
-import { loadEngine } from "./wasm-build.js";
+import init, * as wasm from "./pkg/volya_engine_web.js";
+import { choose, supported } from "./graphics.js";
 
-/** The wasm build's exports, once "start" loaded it (wasm-build.js). */
+/** The engine's exports, once "start" initialized them. */
 let engine = null;
 /** The engine's exports; throws until they are loaded. */
 const e = () => {
@@ -118,15 +121,18 @@ let audioPort = null;
 
 onmessage = async ({ data }) => {
   if (data.type === "start") {
-    let build;
+    let available, backend;
     started = (async () => {
-      ({ build, module: engine } = await loadEngine());
-      await engine.start(data.canvas);
+      available = await supported();
+      backend = choose(data.graphics, available);
+      await init();
+      engine = wasm;
+      await engine.start(data.canvas, backend === "webgl2");
       engine.resize(data.size.width, data.size.height, data.size.dpr);
     })();
     try {
       await started;
-      postMessage({ type: "started", build });
+      postMessage({ type: "started", available, backend });
       schedule();
     } catch (error) {
       postMessage({ type: "error", message: message(error) });
