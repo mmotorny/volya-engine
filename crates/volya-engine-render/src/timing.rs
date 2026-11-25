@@ -2,21 +2,17 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! The GPU time of frames (#355), where the device has timestamp queries
-//! (WebGPU's optional `timestamp-query`): a pass clearing a texel, submitted
-//! before the frame, writes a timestamp at its beginning, and the frame's
-//! last pass (the one showing the frame in the target, after what it shows
-//! is drawn) one at its end, so the time between them is the GPU's from the
-//! start of the frame to the end of its last pass. Empty passes write no
-//! timestamps on Metal (measured: zeros). The two timestamps are
-//! resolved and copied to a buffer read back once the GPU is done; a few
-//! frames are in flight at once, and a frame finding none free goes
-//! untimed.
-//!
-//! Each render pass of a timed frame also writes timestamps at its
-//! beginning and end ([`pass_writes`], at most [`PASSES`] a frame; the
-//! frame's last pass ends at the frame's end), so a frame's GPU time is
-//! split by pass (#387): each pass from the later of its beginning and the
-//! previous pass's end, as passes overlap (#433).
+//! (WebGPU's optional `timestamp-query`): each render pass of a timed frame
+//! writes timestamps at its beginning and end ([`pass_writes`], at most
+//! [`PASSES`] a frame; the frame's last pass, the one showing the frame in
+//! the target, writes the frame's end), so a frame's GPU time is split by
+//! pass (#387): each pass from the later of its beginning and the previous
+//! pass's end, as passes overlap (#433). The frame's time is the sum of its
+//! passes', the GPU's work on it without the idle time between them, such
+//! as while the CPU encodes the next submission (#441). Empty passes write
+//! no timestamps on Metal (measured: zeros). The timestamps are resolved
+//! and copied to a buffer read back once the GPU is done; a few frames are
+//! in flight at once, and a frame finding none free goes untimed.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -25,8 +21,8 @@ use std::sync::atomic::{AtomicU8, Ordering};
 const SLOTS: u32 = 4;
 /// Passes of a frame timed one by one.
 pub(crate) const PASSES: u32 = 8;
-/// Timestamps of a slot: the frame's two, then two a pass.
-const QUERIES: u32 = 2 + 2 * PASSES;
+/// Timestamps of a slot: the frame's end, then two a pass.
+const QUERIES: u32 = 1 + 2 * PASSES;
 /// Where a slot's timestamps are resolved: resolve offsets must be
 /// multiples of 256 bytes (WebGPU).
 const RESOLVE_STRIDE: u64 = 256;
@@ -47,12 +43,12 @@ pub(crate) fn pass_writes(name: &'static str, last: bool) -> Option<(wgpu::Query
         if names.len() as u32 >= PASSES {
             return None;
         }
-        let begin = *first + 2 + 2 * names.len() as u32;
+        let begin = *first + 1 + 2 * names.len() as u32;
         names.push(name);
         Some((
             queries.clone(),
             begin,
-            if last { *first + 1 } else { begin + 1 },
+            if last { *first } else { begin + 1 },
         ))
     })
 }
@@ -85,8 +81,6 @@ struct Slot {
 pub(crate) struct FrameTimer {
     queries: wgpu::QuerySet,
     resolve: wgpu::Buffer,
-    /// The texel the first pass clears.
-    texel: wgpu::Texture,
     slots: Vec<Slot>,
     /// Nanoseconds per timestamp tick.
     period_ns: f64,
@@ -96,11 +90,7 @@ pub(crate) struct FrameTimer {
 
 impl FrameTimer {
     /// A timer, `None` where the device has no timestamp queries.
-    pub(crate) fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        format: wgpu::TextureFormat,
-    ) -> Option<Self> {
+    pub(crate) fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Self> {
         if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
             return None;
         }
@@ -127,65 +117,23 @@ impl FrameTimer {
                 passes: Vec::new(),
             })
             .collect();
-        let texel = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("frame time begin"),
-            size: wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
         Some(Self {
             queries,
             resolve,
-            texel,
             slots,
             period_ns: f64::from(queue.get_timestamp_period()),
             pass_times: Vec::new(),
         })
     }
 
-    /// Starts timing a frame: submits the pass writing its first
-    /// timestamp. The slot to end it with, `None` when every slot is busy.
-    pub(crate) fn begin(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> Option<usize> {
+    /// Starts timing a frame: the slot to end it with, `None` when every
+    /// slot is busy.
+    pub(crate) fn begin(&mut self) -> Option<usize> {
         let slot = self
             .slots
             .iter()
             .position(|s| s.state.load(Ordering::Acquire) == FREE)?;
         self.slots[slot].state.store(PENDING, Ordering::Release);
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("frame time begin"),
-        });
-        let view = self.texel.create_view(&Default::default());
-        crate::stats::pass();
-        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("frame time begin"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: Some(wgpu::RenderPassTimestampWrites {
-                query_set: &self.queries,
-                beginning_of_pass_write_index: Some(slot as u32 * QUERIES),
-                end_of_pass_write_index: None,
-            }),
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        crate::stats::submit();
-        queue.submit([encoder.finish()]);
         TIMED.set(Some((
             self.queries.clone(),
             slot as u32 * QUERIES,
@@ -195,7 +143,7 @@ impl FrameTimer {
     }
 
     /// Ends timing the frame of `slot`, once its last pass is submitted:
-    /// submits the copy of both timestamps and asks for them to be read
+    /// submits the copy of its timestamps and asks for them to be read
     /// back.
     pub(crate) fn end(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, slot: usize) {
         // Natively on Metal a resolve submitted while the frame's passes
@@ -208,7 +156,7 @@ impl FrameTimer {
             label: Some("frame time end"),
         });
         let passes = TIMED.take().map(|t| t.2).unwrap_or_default();
-        let used = 2 + 2 * passes.len() as u32;
+        let used = 1 + 2 * passes.len() as u32;
         let first = slot as u32 * QUERIES;
         let offset = RESOLVE_STRIDE * slot as u64;
         encoder.resolve_query_set(&self.queries, first..first + used, &self.resolve, offset);
@@ -227,9 +175,10 @@ impl FrameTimer {
     }
 
     /// The GPU times of the frames read back since the last call,
-    /// milliseconds. A frame whose last timestamp is not after its first
-    /// (timestamps may be zero or reset, documented by WebGPU; natively on
-    /// Metal some frames' last timestamp is zero, measured) is left out.
+    /// milliseconds: the sum of their passes'. A frame whose end is not
+    /// after its first pass's beginning (timestamps may be zero or reset,
+    /// documented by WebGPU; natively on Metal some frames' last timestamp
+    /// is zero, measured) is left out.
     pub(crate) fn take(&mut self) -> Vec<f64> {
         let mut times = Vec::new();
         for s in &mut self.slots {
@@ -245,7 +194,7 @@ impl FrameTimer {
                     let at =
                         |i: usize| u64::from_le_bytes(view[i * 8..i * 8 + 8].try_into().unwrap());
                     let ms = |ticks: u64| ticks as f64 * self.period_ns / 1e6;
-                    let frame = at(1).checked_sub(at(0)).filter(|&t| t > 0)?;
+                    at(0).checked_sub(at(1)).filter(|&t| t > 0)?;
                     // A pass's end: its own, or the frame's for the last.
                     // A pass begins while the one before still draws (its
                     // vertex stage overlaps the previous fragment stage:
@@ -255,15 +204,17 @@ impl FrameTimer {
                     // previous pass's end.
                     let n = s.passes.len();
                     let mut previous = 0;
+                    let mut frame = 0;
                     for (k, name) in s.passes.iter().enumerate() {
-                        let end = if k + 1 == n { at(1) } else { at(3 + 2 * k) };
-                        let begin = at(2 + 2 * k).max(previous);
+                        let end = if k + 1 == n { at(0) } else { at(2 + 2 * k) };
+                        let begin = at(1 + 2 * k).max(previous);
                         if let Some(t) = end.checked_sub(begin).filter(|&t| t > 0) {
                             self.pass_times.push((name, ms(t)));
+                            frame += t;
                         }
                         previous = previous.max(end);
                     }
-                    Some(frame)
+                    (frame > 0).then_some(frame)
                 });
             s.readback.unmap();
             s.state.store(FREE, Ordering::Release);

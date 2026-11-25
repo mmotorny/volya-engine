@@ -233,6 +233,10 @@ fn frames_are_timed_on_the_gpu_while_timing_is_on() {
         "frames timed: {times:?}"
     );
     assert!(times.iter().all(|&ms| ms > 0.0 && ms < 1000.0), "{times:?}");
+    // A frame's time is its passes' (#441).
+    let passes: f64 = renderer.take_gpu_pass_times().iter().map(|p| p.1).sum();
+    let total: f64 = times.iter().sum();
+    assert!((total - passes).abs() < 1e-9, "{total} {passes}");
     renderer.set_gpu_timing(false);
     assert!(frames(&mut renderer).is_empty(), "off again");
 }

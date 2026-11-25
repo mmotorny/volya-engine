@@ -601,10 +601,7 @@ impl Renderer {
         clear: wgpu::Color,
         size: (u32, u32),
     ) {
-        let timed = self
-            .timer
-            .as_mut()
-            .and_then(|t| t.begin(&self.device, &self.queue));
+        let timed = self.timer.as_mut().and_then(|t| t.begin());
         self.draw_scaled(target, list, clear, size, timed);
         if let (Some(timer), Some(slot)) = (self.timer.as_mut(), timed) {
             timer.end(&self.device, &self.queue, slot);
@@ -629,7 +626,7 @@ impl Renderer {
     pub fn set_gpu_timing(&mut self, on: bool) {
         if on != self.timer.is_some() {
             self.timer = if on {
-                timing::FrameTimer::new(&self.device, &self.queue, self.format)
+                timing::FrameTimer::new(&self.device, &self.queue)
             } else {
                 None
             };
@@ -637,8 +634,8 @@ impl Renderer {
     }
 
     /// The GPU times of the frames [`Renderer::render_scaled`] drew that
-    /// were read back since the last call, milliseconds: from the start of
-    /// a frame's first pass to the end of its last. Read back once the GPU
+    /// were read back since the last call, milliseconds: the time its passes
+    /// kept the GPU busy, the sum of [`Renderer::take_gpu_pass_times`]'. Read back once the GPU
     /// is done, a few frames late; the browser's WebGPU maps buffers on its
     /// own, other backends when the device is polled.
     pub fn take_gpu_times(&mut self) -> Vec<f64> {
