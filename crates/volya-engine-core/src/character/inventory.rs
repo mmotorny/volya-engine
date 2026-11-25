@@ -764,7 +764,7 @@ impl Inventory {
 
     /// The carried weight `M` (3.4): every item's `inv_weight`, in any
     /// place. A weapon's installed addons and loaded rounds are not added
-    /// (our omission: the spec does not give their weights' keys).
+    /// (our omission: the spec does not give their weights' keys; TODO(#111)).
     pub fn weight(&self) -> f32 {
         self.items.iter().map(|i| i.config.inv_weight).sum()
     }

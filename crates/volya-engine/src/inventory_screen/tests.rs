@@ -700,3 +700,38 @@ fn it_draws_the_layout_and_items() {
     assert!(scene.first("dragdrop_outfit picture").is_some());
     assert_eq!(scene.sprites.last().unwrap().layer, "cursor");
 }
+
+#[test]
+fn bars_follow_their_values_and_jump_from_nothing_drawn() {
+    let tree = fixture::tree();
+    let data = fixture::data(&tree);
+    let layout = Layout::load(&tree, &data, XGA).unwrap();
+    let d = &layout.bars[0];
+    let mut bar = Bar::default();
+    // Not drawn before: jumps.
+    bar.set(d, 80.0, 0.1);
+    assert_eq!(bar.drawn, Some(80.0));
+    // Drawn: at most the whole range per second (inertion 0).
+    bar.set(d, 0.0, 0.1);
+    assert!((bar.drawn.unwrap() - 70.0).abs() < 1e-4);
+    // At 0 it drew nothing, so the next value jumps.
+    bar.drawn = Some(0.0);
+    bar.set(d, 50.0, 0.1);
+    assert_eq!(bar.drawn, Some(50.0));
+    // Clamped to the range.
+    bar.set(d, 500.0, 10.0);
+    assert_eq!(bar.drawn, Some(100.0));
+}
+
+#[test]
+fn only_class_ammo_counts_rounds() {
+    let system = ltx::parse(
+        b"[ammo_5.45x39_fmj]\nclass = AMMO\ninv_weight = 0.3\n\
+          [ammo_vog-25]\nclass = A_VOG25\ninv_weight = 0.3\n",
+    )
+    .unwrap();
+    let item =
+        |s| InventoryItem::create(ItemConfig::read(&system, s).unwrap(), 1, None, 0, "actor");
+    assert!(list::is_ammunition(&item("ammo_5.45x39_fmj")));
+    assert!(!list::is_ammunition(&item("ammo_vog-25")));
+}

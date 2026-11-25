@@ -166,15 +166,16 @@ struct Bar {
 impl Bar {
     /// Sets value `v` of `d` after `dt` seconds: moves towards it by at most
     /// (1 − `inertion`) · range · `dt` when drawn the frame before, else
-    /// jumps to it.
+    /// jumps to it. A bar at 0 or below drew nothing (its length was not
+    /// positive), so it jumps.
     fn set(&mut self, d: &BarDesc, v: f32, dt: f32) {
         let v = v.clamp(d.min.min(d.max), d.max.max(d.min));
         self.drawn = Some(match self.drawn {
-            Some(old) => {
+            Some(old) if (d.max - d.min) * old > 0.0 => {
                 let most = (1.0 - d.inertion) * (d.max - d.min).abs() * dt;
                 old + (v - old).clamp(-most, most)
             }
-            None => v,
+            _ => v,
         });
     }
 }
@@ -355,7 +356,8 @@ impl InventoryScreen {
         self.menu = None;
         self.exit = PushButton::default();
         self.bars = [Bar::default(); 3];
-        self.lines.clear();
+        // The protection lines keep their order of first appearance for the
+        // screen's whole life, the level's (4.8).
         self.last_update = Some(now);
         self.per_frame(data, character, time_of_day, 0.0);
         self.exit.frame(self.layout.exit.rect, cursor);
@@ -472,6 +474,7 @@ impl InventoryScreen {
         Panel {
             item: item.id,
             name: data.strings.get(name).to_owned(),
+            // TODO(#111): a weapon's addons and magazine (4.6).
             weight: format!("{:3.2} kg", item.config.inv_weight),
             cost: format!("{cost} RU"),
             condition: item.condition,
@@ -503,6 +506,8 @@ impl InventoryScreen {
         if !self.open {
             return Ok(a.out);
         }
+        // A frame counts 100 ms at most (our choice: a stalled frame doesn't
+        // jump the bars' animation).
         let dt = now.saturating_sub(self.last_update.unwrap_or(now)).min(100) as f32 / 1000.0;
         self.last_update = Some(now);
         // 1.2 item 4: the character's death closes it.
@@ -511,7 +516,8 @@ impl InventoryScreen {
             a.out.closed = true;
             return Ok(a.out);
         }
-        // 4.3: an item entered or left the inventory.
+        // 4.3: an item entered or left the inventory. The rebuild also ends
+        // a drag and closes the menu (our choice: their items may be gone).
         if sorted_ids(&a.character.inventory) != self.known {
             self.drag = None;
             self.menu = None;
@@ -660,6 +666,9 @@ impl InventoryScreen {
             }
             In::PadQuit | In::PadInventory => return Ok(true),
             In::Move(p) => self.moved(p, a),
+            // `double`: the input's rule (title-menu.md 4.4): a second press
+            // of the button within 250 ms of the previous single press; a
+            // third starts a new pair.
             In::Press { right, double } => return self.press(right, double, a),
             In::Release { right } => return self.release(right, a),
             In::Wheel { up } => {
@@ -706,7 +715,9 @@ impl InventoryScreen {
     fn press(&mut self, right: bool, double: bool, a: &mut Act) -> io::Result<bool> {
         let p = self.cursor;
         if let Some(m) = self.menu.take() {
-            // 5.6: the menu takes all mouse input.
+            // 5.6: the menu takes all mouse input. A press inside it but on
+            // no row (its frame's margin) closes it like one outside (our
+            // choice: the spec names presses on rows and outside).
             if !right && let Some(row) = m.row_at(p, self.layout.menu.top_indent) {
                 self.choose(a, m.item, m.entries[row])?;
             }

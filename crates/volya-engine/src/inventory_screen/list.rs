@@ -10,7 +10,6 @@ use std::io;
 use super::layout::ListDesc;
 use crate::core::character::inventory::{Inventory, InventoryItem};
 use crate::dialog::contains;
-use volya_engine_formats::object::Kind;
 use volya_engine_formats::ui::layout::Rect;
 
 /// Items whose conditions differ by less than this are similar (4.3).
@@ -56,9 +55,10 @@ pub fn addons(i: &InventoryItem) -> u8 {
     }
 }
 
-/// Whether the item is ammunition (4.2: the count text of its boxes).
+/// Whether the item is of class `AMMO` (4.2: the count text of its
+/// boxes; grenade-launcher ammunition is of other classes).
 pub fn is_ammunition(i: &InventoryItem) -> bool {
-    i.config.class_id.kind() == Kind::Ammunition
+    i.config.class_id.as_str() == "AMMO"
 }
 
 /// An item list.

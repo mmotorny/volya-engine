@@ -69,6 +69,7 @@ function syncCapture() {
       sprint: (bits & 4) !== 0,
       low: (bits & 8) !== 0,
       lock: (bits & 16) !== 0,
+      keys: (bits & 32) !== 0,
     });
   }
   const shown = cursor_shown();

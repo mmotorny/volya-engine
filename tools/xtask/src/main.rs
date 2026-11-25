@@ -186,16 +186,21 @@ fn wasm_bindgen_cli() -> Result<PathBuf> {
 
 #[derive(Clone, Copy)]
 enum Profile {
+    /// Unoptimised, with the test ops.
     Dev,
+    /// Optimised, as deployed.
     Release,
+    /// Optimised, with the test ops (`cargo xtask e2e`).
+    Test,
 }
 
 fn web(profile: Profile) -> Result {
     let wasm_bindgen = wasm_bindgen_cli()?;
     step("Web build");
     let (flags, dir): (&[&str], _) = match profile {
-        Profile::Dev => (&[], "debug"),
+        Profile::Dev => (&["--features", "test-ops"], "debug"),
         Profile::Release => (&["--release"], "release"),
+        Profile::Test => (&["--release", "--features", "test-ops"], "release"),
     };
     run(cmd(
         "cargo",

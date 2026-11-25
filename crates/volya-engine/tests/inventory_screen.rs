@@ -216,21 +216,37 @@ fn inventory_screen_from_game_data() {
         .texture(tree, &data, "ui\\ui_icon_equipment", 0)
         .unwrap();
     assert_eq!(icons.size(), (1024, 2048));
+    // Every section with the four keys as integers counts, whether or not
+    // the rest of it reads as an item; and the item reader agrees.
     let mut sections = 0;
     let mut outside = Vec::new();
+    let int = |s: &volya_engine::core::config::Section, key: &str| {
+        s.get(key)
+            .flatten()
+            .and_then(|v| v.trim().parse::<i64>().ok())
+            .map(|v| v as u32)
+    };
     for s in data.system.sections() {
-        let Ok(c) = ItemConfig::read(&data.system, s.name()) else {
+        let (Some(x), Some(y), Some(w), Some(h)) = (
+            int(s, "inv_grid_x"),
+            int(s, "inv_grid_y"),
+            int(s, "inv_grid_width"),
+            int(s, "inv_grid_height"),
+        ) else {
             continue;
         };
-        let Some(g) = c.inv_grid else { continue };
         sections += 1;
-        if (g.x + g.width) * 50 > 1024 || (g.y + g.height) * 50 > 2048 {
+        if (x + w) * 50 > 1024 || (y + h) * 50 > 2048 {
             outside.push(s.name().to_owned());
+        }
+        if let Ok(c) = ItemConfig::read(&data.system, s.name()) {
+            let g = c.inv_grid.expect("the grid keys read");
+            assert_eq!((g.x, g.y, g.width, g.height), (x, y, w, h), "{}", s.name());
         }
     }
     outside.sort();
+    assert_eq!(sections, 309, "sections with the four grid keys");
     assert_eq!(outside, ["mp_wpn_colt1911", "wpn_colt1911"]);
-    eprintln!("{sections} item sections with icons");
 
     // A New Game's character (player-state.md) on the screen.
     let (_, mut character) = level::new_game_player(tree, &data).unwrap();
@@ -384,6 +400,9 @@ fn inventory_screen_from_game_data() {
     // the outfit.
     assert_eq!(scene.layer("dragdrop_bag cell").count(), 70);
     assert_eq!(scene.layer("dragdrop_belt cell").count(), 5);
+    assert_eq!(scene.layer("dragdrop_pistol cell").count(), 6);
+    assert_eq!(scene.layer("dragdrop_automatic cell").count(), 12);
+    assert_eq!(scene.layer("dragdrop_outfit cell").count(), 0);
 
     // Escape the menu (a key closes it), then drag the outfit to the
     // backpack: undressed, the bare picture.

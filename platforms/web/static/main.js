@@ -124,7 +124,7 @@ setCapture = (on) => {
   if (!on) offer.leave();
 };
 setLevel = (controls) => {
-  forward.setLevel(controls.level);
+  forward.setLevel(controls.level, controls.keys);
   touch.update(controls);
   offer.update(controls);
 };

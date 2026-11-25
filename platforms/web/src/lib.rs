@@ -174,13 +174,15 @@ pub fn input_capture() -> bool {
     input::capture()
 }
 
-/// The level's controls for the page: 0 while they are not live, else 1,
+/// The level's controls for the page: bit 1 while they are live,
 /// plus 2 while the crouch toggle is engaged, 4 while a sprint is
 /// requested, 8 while the toggled crouch is the low crouch and 16 while the
-/// sprint lock holds the touch stick.
+/// sprint lock holds the touch stick; 32 while the character takes keys
+/// (the level's controls live, or the inventory screen over them, #110).
 #[wasm_bindgen]
 pub fn level_controls() -> u32 {
-    engine::level_controls().map_or(0, |c| {
+    let keys = u32::from(engine::character_takes_keys()) << 5;
+    keys | engine::level_controls().map_or(0, |c| {
         1 | u32::from(c.crouch) << 1
             | u32::from(c.sprint) << 2
             | u32::from(c.low_crouch) << 3
@@ -272,6 +274,7 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         "launch" => to_json(&engine::launch().await?),
         "menu_state" => to_json(&engine::state()),
         "bound_keys" => to_json(&engine::bound_keys()),
+        #[cfg(feature = "test-ops")]
         "debug_give_item" => to_json(&engine::give_item(text("section"))?),
         "menu_scene" => {
             let size = |key| args.get(key).and_then(|v| v.as_u64()).unwrap_or(0) as u32;

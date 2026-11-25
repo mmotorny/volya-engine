@@ -384,6 +384,8 @@ pub struct App {
     /// The page showed again: the next update takes the engine clock on
     /// from where it stopped.
     shown: bool,
+    /// The inventory screen's menu font at the size drawn at.
+    menu_font: Option<(Resolution, FieldFont)>,
 }
 
 /// The resolution of `vid_mode`.
@@ -456,6 +458,7 @@ impl App {
             menu_asked: false,
             hidden: false,
             shown: false,
+            menu_font: None,
             data,
             assets: Assets::default(),
             origin: None,
@@ -728,7 +731,13 @@ impl App {
                     // screen does not use reach the character.
                     let keys = inventory_keys(data, level.controls());
                     level.controls_mut().keys_only = Some(keys.used());
-                    let font = menu_font(tree, data, &mut self.assets, screen, self.video);
+                    // Measured with once per size drawn at.
+                    if self.menu_font.as_ref().map(|(r, _)| *r) != Some(self.video) {
+                        self.menu_font =
+                            menu_font(tree, data, &mut self.assets, screen, self.video)
+                                .map(|f| (self.video, f));
+                    }
+                    let font = self.menu_font.as_ref().map(|(_, f)| f);
                     let time_of_day = level.clock().time_of_day();
                     let out = match level.character_mut() {
                         Some(character) => screen.update(inventory_screen::Frame {
@@ -739,7 +748,7 @@ impl App {
                             now,
                             input,
                             audio,
-                            menu_font: font.as_ref(),
+                            menu_font: font,
                         }),
                         None => {
                             screen.close(data, audio);
@@ -1017,6 +1026,15 @@ impl App {
             }
             _ => None,
         }
+    }
+
+    /// Whether the player character takes keyboard keys: its controls are
+    /// live, or the inventory screen over the running level passes on the
+    /// keys it doesn't use (inventory-screen.md 1.3). Platforms forward
+    /// keys pressed with Control then (it crouches).
+    pub fn character_takes_keys(&self) -> bool {
+        self.level_controls().is_some()
+            || matches!(&self.phase, Some(Phase::Level { inventory: Some(i), menu: None, .. }) if i.is_open())
     }
 
     /// Whether the inventory screen is open.
@@ -1550,6 +1568,8 @@ mod tests {
         assert!(app.level_controls().is_none());
         // Touch is a touchpad for its cursor (#108).
         assert!(app.cursor_shown());
+        // Keys still reach the character: the page forwards Control.
+        assert!(app.character_takes_keys());
         assert!(audio.started.last().unwrap().1.ends_with("inv_open.ogg"));
         let t = game_time(&app);
         // A key the screen does not use reaches the character: W walks.
