@@ -9,7 +9,7 @@ use std::{fs, io::ErrorKind, path::PathBuf, process::Command, thread, time::Dura
 use crate::Result;
 
 /// The least system-wide free memory, in percent, at which heavy work starts.
-const MIN_FREE_PERCENT: u32 = 30;
+const MIN_FREE_PERCENT: u32 = 20;
 
 /// macOS's system-wide free memory percentage, from `memory_pressure`.
 fn free_percent() -> Option<u32> {
