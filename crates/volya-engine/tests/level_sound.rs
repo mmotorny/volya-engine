@@ -264,6 +264,65 @@ fn first_level_sounds_from_game_data() {
         .filter(|(_, s)| s.thunderbolt.is_empty() && s.rain_density == 0.0)
         .count();
     assert_eq!(others, 20);
+    // S8 8.1 (M1): the rain is on, to the whole second, 00:00:18 – 01:59:41,
+    // 11:00:05 – 12:59:55, 15:00:05 – 17:58:47; 8.2 (M2): a collection is in
+    // effect 00:30:00 – 01:29:59, 11:30:00 – 12:29:59, 15:30:00 – 17:29:59.
+    let lerp = |x: f32, y: f32, t: f32| x * (1.0 - t) + y * t;
+    let spans = |on: &dyn Fn(f32) -> bool| {
+        let mut spans = Vec::new();
+        let mut start = None;
+        for second in 0..=86_400u32 {
+            let is = second < 86_400 && on(second as f32);
+            match (is, start) {
+                (true, None) => start = Some(second),
+                (false, Some(s)) => {
+                    spans.push((s, second - 1));
+                    start = None;
+                }
+                _ => {}
+            }
+        }
+        spans
+    };
+    let hms = |h: u32, m: u32, s: u32| h * 3600 + m * 60 + s;
+    let rain_on = spans(&|tau| {
+        let (a, b, t) = weather.bracket(tau);
+        lerp(a.rain_density, b.rain_density, t) >= 0.001
+    });
+    assert_eq!(
+        rain_on,
+        [
+            (hms(0, 0, 18), hms(1, 59, 41)),
+            (hms(11, 0, 5), hms(12, 59, 55)),
+            (hms(15, 0, 5), hms(17, 58, 47)),
+        ]
+    );
+    let thunder_on = spans(&|tau| {
+        let (a, b, t) = weather.bracket(tau);
+        !(if t >= 0.5 { b } else { a }).thunderbolt.is_empty()
+    });
+    assert_eq!(
+        thunder_on,
+        [
+            (hms(0, 30, 0), hms(1, 29, 59)),
+            (hms(11, 30, 0), hms(12, 29, 59)),
+            (hms(15, 30, 0), hms(17, 29, 59)),
+        ]
+    );
+    for (tau, period, duration) in [
+        (hms(0, 30, 0), 2.25, 0.175),
+        (hms(1, 0, 0), 4.5, 0.35),
+        (hms(16, 30, 0), 6.0, 0.25),
+        (hms(17, 0, 0), 7.0, 0.25),
+    ] {
+        let (a, b, t) = weather.bracket(tau as f32);
+        let p = lerp(a.bolt_period, b.bolt_period, t);
+        let d = lerp(a.bolt_duration, b.bolt_duration, t);
+        assert!(
+            (p - period).abs() < 1e-4 && (d - duration).abs() < 1e-4,
+            "{tau}: {p} {d}"
+        );
+    }
     assert_eq!(
         sound.collections["thunderbolt_collection_default"],
         (0..4)

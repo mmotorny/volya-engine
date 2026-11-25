@@ -13,7 +13,7 @@
 //! is also what the spec gives with reverb active (section 9: the none
 //! environment, room −10000 mB).
 //!
-//! TODO(#reverb-output, docs/behavior/sound-reverb.md sections 3 – 7): the
+//! TODO(#320, docs/behavior/sound-reverb.md sections 3 – 7): the
 //! reverb-output decision (whether and how to render the environments of
 //! `senvironment.xr` and `level.snd_env` on a device of ours, given that the
 //! reverb itself is the device's) goes to the user; until then nothing of

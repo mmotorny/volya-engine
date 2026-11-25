@@ -13,7 +13,43 @@ const TRACK = "gamedata/sounds/characters_voice/scenario/video/intro_gsc_wp";
 const MUSIC = "characters_voice\\scenario\\video\\intro_gsc_wp";
 const RATE = 48000;
 const SECONDS = 1;
+// What a New Game reads (as the menu suite imports it).
+const NEW_GAME = [
+  "gamedata.db0",
+  "gamedata.db4",
+  "gamedata.db5",
+  "gamedata.db6",
+  "gamedata.db7",
+  "gamedata.db8",
+  "gamedata.db9",
+  "gamedata.dba",
+  "gamedata.dbb",
+  "gamedata.dbc",
+  "gamedata.dbd",
+  "bin/XR_3DA.exe",
+  "__support/userdocs/user.ltx",
+];
 let installer;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const state = () => volya.call("menu_state");
+
+async function until(test, what, ms = 5000) {
+  const deadline = performance.now() + ms;
+  let s;
+  while (performance.now() < deadline) {
+    s = await state();
+    if (test(s)) return s;
+    await sleep(30);
+  }
+  throw new Error(`timed out waiting for ${what}; state ${JSON.stringify(s).slice(0, 400)}`);
+}
+
+function key(code) {
+  for (const type of ["keydown", "keyup"]) {
+    document.body.dispatchEvent(new KeyboardEvent(type, { code, bubbles: true, cancelable: true }));
+  }
+}
 
 function installerBase() {
   const path = location.pathname;
@@ -158,7 +194,80 @@ export const tests = {
     }
   },
 
+  // The first level's own sounds (docs/behavior/sound-static-sources.md,
+  // sound-weather-ambient.md, sound-level-music.md, sound-occlusion.md):
+  // a New Game, as the menu suite starts one, then the sound system's state.
+  "imports what a New Game reads": async () => {
+    if (!installer) skip("no installer");
+    const exe = installer.find((f) => f.name.endsWith(".exe")).name;
+    const bin = installer.find((f) => f.name.endsWith("-1.bin")).name;
+    await volya.call("forget_game");
+    const started = performance.now();
+    const result = await volya.importGame({ exe: source(exe), bin: source(bin), only: NEW_GAME });
+    assert(result.status.written === NEW_GAME.length, `files written ${result.status.written}`);
+    return `${(result.status.bytes / 2 ** 30).toFixed(2)} GiB in ${((performance.now() - started) / 1000).toFixed(1)} s`;
+  },
+
+  "a New Game's level plays its sounds": async () => {
+    if (!installer) skip("no installer");
+    await volya.call("forget_user_config");
+    await volya.call("launch");
+    // The logos, then the title menu's New Game with its first difficulty.
+    await until((s) => s.phase === "startup", "the logo sequence");
+    for (let i = 0; i < 40; i++) {
+      if ((await state()).phase === "menu") break;
+      key("Escape");
+      await sleep(150);
+    }
+    await until((s) => s.phase === "menu" && s.menu.list === "menu_main", "the menu");
+    key("Enter");
+    await until((s) => s.menu?.list === "menu_new_game", "the difficulty page");
+    key("Enter");
+    await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", 60000);
+    await until((s) => s.intro, "the intro", 10000).catch(() => null);
+    key("Escape");
+    await until((s) => s.phase === "level" && !s.intro && !s.menu, "the level's controls", 10000);
+    // S3 section 5: sources 0, 1, 2 and 4 start looped on the first frame
+    // after the loading image (the radio waits for 02:00); S5 section 7: no
+    // music at 05:30; S4 4.2: the first frame starts a random sound.
+    const statics = [
+      "nature\\new_flies1",
+      "ambient\\sparks1",
+      "scripts\\magnitofon\\magnitofon_2",
+      "ambient\\indoors\\small_fan",
+    ];
+    let sounds;
+    for (const deadline = performance.now() + 5000; performance.now() < deadline; await sleep(50)) {
+      sounds = await volya.call("sound_state");
+      if (statics.every((n) => sounds.emitters.some((e) => e.name === n))) break;
+    }
+    for (const name of statics) {
+      const e = sounds.emitters.find((e) => e.name === name);
+      assert(e?.looped && !e.two_d, `${name}: ${JSON.stringify(e)}`);
+    }
+    const names = sounds.emitters.map((e) => e.name);
+    assert(!names.some((n) => n.includes("radio_noise")), `the radio plays: ${names}`);
+    assert(!names.some((n) => n.startsWith("music\\")), `music plays: ${names}`);
+    assert(
+      names.some((n) => n.startsWith("ambient\\rnd_outdoor\\")),
+      `no ambient sound: ${names}`,
+    );
+    const heard = sounds.emitters.filter((e) => e.phase === "playing").map((e) => e.name);
+    assert(heard.length > 0, `nothing heard: ${JSON.stringify(sounds.emitters)}`);
+    // The sound update with occlusion on the level, over the latest frames.
+    await sleep(2000);
+    const stats = await volya.call("level_stats");
+    const sparks = (await volya.call("sound_state")).emitters.find((e) => e.name === "ambient\\sparks1");
+    return (
+      `playing: ${heard.join(", ")}; sparks1 occlusion ${sparks?.occlusion}; ` +
+      `sound update ${(stats.sound_update_ms * 1000).toFixed(0)} µs average, ` +
+      `${(stats.sound_update_max_ms * 1000).toFixed(0)} µs worst; ` +
+      `frame CPU ${stats.frame_cpu_ms.toFixed(2)} ms; wasm heap ${(stats.wasm_heap_bytes / 2 ** 20).toFixed(0)} MiB`
+    );
+  },
+
   "forgets the game": async () => {
+    await volya.call("quit_game").catch(() => null);
     if (!installer) skip("no installer");
     await volya.call("forget_game");
   },

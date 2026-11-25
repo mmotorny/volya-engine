@@ -94,7 +94,7 @@ pub fn collection_sounds(config: &Config, name: &str) -> io::Result<Vec<Option<S
     let section = config
         .section(name)
         .ok_or_else(|| invalid(format!("no thunderbolt collection [{name}]")))?;
-    // TODO(P21): `lightning_model` and the picture keys are the bolt's
+    // TODO(#320, P21): `lightning_model` and the picture keys are the bolt's
     // picture; a missing model is an error there, not checked here.
     section
         .entries()

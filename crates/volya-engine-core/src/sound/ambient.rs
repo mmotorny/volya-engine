@@ -295,7 +295,7 @@ impl AmbientState {
         }
         // Removal: stopped particles that no longer play are removed at the
         // end of the frame.
-        // TODO(P11, docs/behavior/particles-and-lights-scope.md): when stopped
+        // TODO(#320, P11, docs/behavior/particles-and-lights-scope.md): when stopped
         // particles count as no longer playing is P11's; until particles
         // exist they are gone in the frame they are told to stop.
         if self.particles.as_ref().is_some_and(|p| p.stopping) {

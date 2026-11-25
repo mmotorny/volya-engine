@@ -1223,7 +1223,7 @@ impl LevelScreen {
             self.clock.time_factor(),
         );
         self.update_view();
-        // TODO(docs/behavior/level-objects.md 5.4): the rays start at the
+        // TODO(#320, docs/behavior/level-objects.md 5.4): the rays start at the
         // centre of the player's model sphere raised by 0.3 of its radius;
         // the player's model is not loaded, so they start at the eye (our
         // choice).
