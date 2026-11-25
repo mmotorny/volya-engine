@@ -725,8 +725,9 @@ fn the_condition_limits_running_sprinting_and_moving() {
         "{}",
         horizontal_speed(&p)
     );
-    // The state still runs for the condition's power use.
-    assert!(p.state_runs());
+    // Unable to run, the state is switched to walking (3.1, 4.1).
+    assert!(!p.state_runs());
+    assert!(p.state().flags.accel);
     p.limits = Limits {
         cant_sprint: true,
         ..Limits::default()
@@ -767,4 +768,44 @@ fn the_condition_limits_running_sprinting_and_moving() {
     assert!(p.jump_started());
     p.frame(&world, now + 32, &Request::default());
     assert!(!p.jump_started());
+}
+
+#[test]
+fn unable_to_move_in_the_air_loses_air_control() {
+    // 3.1 item 2: the unable-to-move check runs on air frames too and
+    // clears the request's and the state's direction flags.
+    let world = floor();
+    let (mut p, now) = player(&world);
+    let now = run(&mut p, &world, now, &FORWARD, 1.0);
+    let jump = Request {
+        jump_pressed: true,
+        ..FORWARD
+    };
+    let mut now = run(&mut p, &world, now, &jump, 0.05);
+    assert!(p.state().airborne && p.state().flags.forward);
+    p.limits.unable_to_move = true;
+    now += 16;
+    p.frame(&world, now, &FORWARD);
+    let s = p.state();
+    assert!(s.airborne && !s.flags.forward);
+    // No acceleration from the keys while airborne.
+    assert_eq!(p.accepted, [0.0; 3]);
+    // Able again, the air frame takes the keys' direction once more.
+    p.limits.unable_to_move = false;
+    p.frame(&world, now + 16, &FORWARD);
+    assert!(p.state().airborne && p.accepted != [0.0; 3]);
+}
+
+#[test]
+fn unable_to_run_crouches_and_bobs_as_walking() {
+    let world = floor();
+    let (mut p, now) = player(&world);
+    p.limits.limping = true;
+    let crouch = Request {
+        crouch: true,
+        ..Request::default()
+    };
+    run(&mut p, &world, now, &crouch, 0.5);
+    // 4.2: entering a crouch while walking goes to the low crouch.
+    assert_eq!(p.state().posture, 2);
 }

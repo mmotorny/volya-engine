@@ -244,9 +244,12 @@ fn new_game_start_view_from_game_data() {
     );
     assert!(presenter.take_errors().is_empty());
 
-    // The player character (player-state.md 4.1, 4.2): the first update
-    // had dt 0; 10 real seconds standing later (100 game seconds) satiety is
-    // 0.0015 lower, and paused time counts nothing.
+    // The player character (player-state.md 4.1, 4.2). The update above was
+    // its first and advanced the game clock 2,050 game seconds, yet satiety
+    // is still 1 (it would be 0.969 otherwise): the first update has dt 0.
+    // 10 real seconds standing later (100 game seconds) satiety is 0.0015
+    // lower, and paused time counts nothing.
+    assert_eq!(state.game_time, 63_471_533_400_000 + 2_050_000);
     let c = state.character.as_ref().unwrap();
     assert_eq!((c.health, c.power, c.satiety, c.money), (1.0, 1.0, 1.0, 40));
     assert_eq!(c.active_slot, Some(4));

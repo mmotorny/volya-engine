@@ -323,8 +323,10 @@ impl Flags {
 /// (docs/behavior/player-state.md section 4.3); the default limits nothing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Limits {
-    /// The character cannot run (4.1, ability to run) or sprint (4.3); its
-    /// bobbing is the limping row (9.1).
+    /// The character is unable to run (4.1): its state is switched to
+    /// walking on every frame (3.1), so it walks, does not sprint (4.3),
+    /// crouches as walking does (4.2), uses walking's power (player-state.md
+    /// 4.2) and bobs with the limping row (9.1).
     pub limping: bool,
     /// The character's condition does not allow sprinting (4.3).
     pub cant_sprint: bool,
@@ -522,8 +524,9 @@ impl Player {
         self.settings.always_run != accel
     }
 
-    /// Whether the state runs (4.1) without the ability part, as the
-    /// condition's power use reads it (player-state.md 4.2).
+    /// Whether the state runs (4.1 without the ability part, on the state
+    /// switched to walking when unable to run), as the condition's power use
+    /// reads it (player-state.md 4.2).
     pub fn state_runs(&self) -> bool {
         self.runs(self.state.accel)
     }
@@ -536,6 +539,14 @@ impl Player {
     /// The ability to run (4.1): not limping (player-state.md 4.3).
     fn able_to_run(&self) -> bool {
         !self.limits.limping
+    }
+
+    /// 3.1, 4.1: on every frame, a character unable to run has its state
+    /// switched to walking (its accel flag made the walking one).
+    fn walk_if_unable_to_run(&mut self) {
+        if !self.able_to_run() {
+            self.state.accel = self.settings.always_run;
+        }
     }
 
     /// One rendered frame at engine clock `now` (ms) with `request`.
@@ -638,12 +649,14 @@ impl Player {
         self.landing_left = (self.landing_left - dt_m).max(0.0);
         self.state.landing = self.landing_left > 0.0;
 
-        // 5.4: unable to move, a direction key's request is ignored this
-        // frame, and with it the jump request (on frames that are not air
-        // frames: the check belongs to section 5's acceleration).
-        let blocked = !air
-            && self.limits.unable_to_move
+        // 3.1 item 2, 5.4: unable to move, on every frame, air frames
+        // included: a direction key's request and the state's direction
+        // flags are cleared this frame, and the jump request is ignored.
+        let blocked = self.limits.unable_to_move
             && (request.forward || request.back || request.left || request.right);
+        if blocked {
+            self.state.clear_directions();
+        }
         let request = &if blocked {
             Request {
                 forward: false,
@@ -663,7 +676,9 @@ impl Player {
         let mut take_off = false;
         let a = if air {
             // 3.1: the raw direction turned by the heading; the state keeps
-            // its direction, accel and sprint flags.
+            // its direction, accel and sprint flags, but walks when unable to
+            // run.
+            self.walk_if_unable_to_run();
             self.turn_by_heading(x, z)
         } else {
             let s = &mut self.state;
@@ -681,7 +696,8 @@ impl Player {
             }
             // 4.2: entering a crouch, and changing its height while crouched
             // (also on the frame the crouch request ends, before standing up).
-            let request_runs = self.runs(request.accel);
+            // Unable to run, both sets walk (3.1, 4.1).
+            let request_runs = self.runs(request.accel) && self.able_to_run();
             let mut keep_accel = false;
             if crouch && !self.state.crouch {
                 let target = if request_runs { 1 } else { 2 };
@@ -699,9 +715,12 @@ impl Player {
             if !keep_accel {
                 self.state.accel = request.accel;
             }
-            // 4.3: sprint.
+            self.walk_if_unable_to_run();
+            // 4.3: sprint; the request's run test here is 4.1's without the
+            // ability (the ability is part of "can sprint" below).
+            let request_runs_raw = self.runs(request.accel);
             let s = &mut self.state;
-            let cancel = !(s.forward || s.left || s.right) || s.crouch || !request_runs;
+            let cancel = !(s.forward || s.left || s.right) || s.crouch || !request_runs_raw;
             if cancel {
                 self.sprint_request = false;
                 s.sprint = false;
@@ -755,7 +774,7 @@ impl Player {
             return [0.0; 3];
         }
         let c = &self.config;
-        let running = self.runs(s.accel) && self.able_to_run();
+        let running = self.runs(s.accel);
         let m = match (running, s.back) {
             (true, true) => c.run_back_coef,
             (true, false) => c.run_coef,
