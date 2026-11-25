@@ -14,7 +14,9 @@
 //! | `["move", x, y]` | mouse moved |
 //! | `["motion", dx, dy]` | relative mouse motion (pointer lock) |
 //! | `["button", x, y, "left"\|"right"\|"middle", pressed, time]` | mouse button |
-//! | `["touch", x, y, "start"\|"move"\|"end", time, id, primary]` | a touch contact (`id`, `primary` optional: a primary contact without id) |
+//! | `["touch", x, y, "start"\|"move"\|"end", time, id, primary]` | a touch contact (`id`, `primary` optional: a primary contact without id), while the game shows no cursor |
+//! | `["cursor_motion", dx, dy, speed]` | a touchpad swipe's motion while the game shows its cursor (#108), and its smoothed speed in CSS pixels per second |
+//! | `["cursor_button", "left"\|"right", pressed, time]` | a touchpad gesture pressing or releasing a mouse button at the cursor (#108) |
 //! | `["key", name, pressed]` | key ([`Key::name`]), no auto-repeat |
 //! | `["pad", name, pressed]` | gamepad button ([`GamepadButton::name`]) |
 //! | `["axis", name, value]` | gamepad axis ([`GamepadAxis::name`]) |
@@ -275,6 +277,15 @@ fn decode(message: &Array) -> Result<Option<Vec<Event>>, JsValue> {
             }
             return Ok(Some(events));
         }
+        "cursor_motion" => Event::TouchpadMotion {
+            delta: at()?,
+            speed: num(3)? as f32,
+        },
+        "cursor_button" => Event::TouchpadButton {
+            button: MouseButton::from_name(&text(1)?).ok_or_else(bad)?,
+            pressed: flag(2)?,
+            time: num(3)?,
+        },
         "key" => Event::Key {
             key: Key::from_name(&text(1)?).ok_or_else(bad)?,
             pressed: flag(2)?,

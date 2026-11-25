@@ -484,7 +484,7 @@ pub struct MenuState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::input::{Event, GamepadButton, Key, MouseButton, TouchPhase};
+    use crate::core::input::{Event, GamepadButton, Key, MouseButton};
     use crate::fixture::{self, FakeAudio};
     use crate::save_load::Stubbed;
     use crate::saved_games::{LocalTime, SavedFile};
@@ -559,12 +559,18 @@ mod tests {
             self.key(Key::Enter)
         }
 
-        /// A tap at UI point `at`.
+        /// The touchpad (#108): a slow swipe bringing the cursor to UI point
+        /// `at` (section 7 on a 1024 × 768 screen), then a tap.
         fn tap(&mut self, at: [f32; 2]) -> MenuFrame {
-            for phase in [TouchPhase::Start, TouchPhase::End] {
-                self.input.handle(Event::Touch {
-                    at,
-                    phase,
+            let ([x, y], s) = (self.input.cursor_ui(), self.input.sensitivity());
+            self.input.handle(Event::TouchpadMotion {
+                delta: [2.0 * (at[0] - x) / s, 2.0 * (at[1] - y) / s],
+                speed: 0.0,
+            });
+            for pressed in [true, false] {
+                self.input.handle(Event::TouchpadButton {
+                    button: MouseButton::Left,
+                    pressed,
                     time: self.now as f64 * 100.0,
                 });
             }

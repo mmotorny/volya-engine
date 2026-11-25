@@ -167,12 +167,21 @@ pub fn level_controls() -> u32 {
     })
 }
 
+/// Whether the game shows its mouse cursor: the page's touch is a
+/// touchpad then, elsewhere direct (#108).
+#[wasm_bindgen]
+pub fn cursor_shown() -> bool {
+    engine::cursor_shown()
+}
+
 /// The save screen's name field while it shows, for the page's text entry
-/// (#94): `[x, y, width, height, focused]`, canvas CSS pixels and 1 or 0.
+/// (#94): `[x, y, width, height, focused, over]`, canvas CSS pixels, then 1
+/// or 0 for its focus and for the cursor over it (#108).
 #[wasm_bindgen]
 pub fn text_field() -> Option<Vec<f32>> {
+    let flag = |b: bool| f32::from(u8::from(b));
     engine::text_field()
-        .map(|([x, y, w, h], focused)| vec![x, y, w, h, f32::from(u8::from(focused))])
+        .map(|([x, y, w, h], focused, over)| vec![x, y, w, h, flag(focused), flag(over)])
 }
 
 /// Engine interface for the page, tests and debugging: runs `op` with JSON

@@ -58,6 +58,16 @@ function assertNear(actual, expected, message) {
   assert(close, `${message}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
 }
 
+/** The app's touchpad recognizer (touchpad.js, #108), unit-tested here. */
+async function touchpad() {
+  const path = location.pathname;
+  return import(`${path.slice(0, path.indexOf("/__test/") + 1)}touchpad.js`);
+}
+
+/** The messages' kinds and values, speeds left out. */
+const plain = (messages) =>
+  messages.map((m) => (m[0] === "cursor_motion" ? `motion ${m[1]},${m[2]}` : m[0] === "wheel" ? `wheel ${m[1]}` : `${m[1]} ${m[2] ? "down" : "up"} @${m[3]}`));
+
 const summary = (actions) =>
   actions.map((a) => (a.action === "cursor" ? "cursor" : `${a.action} ${a.control}${a.double ? " double" : ""}`));
 
@@ -145,6 +155,106 @@ export const tests = {
       "release mouse_right",
       "release mouse_left",
     ]);
+  },
+
+  "touchpad: a tap clicks at once; small jitter stays a tap; a long touch or a move is no tap": async () => {
+    const { createTouchpad, TAP_SLOP, LONG_PRESS_MS } = await touchpad();
+    const pad = createTouchpad();
+    assertEqual(pad.down(1, 100, 100, 0), [], "down");
+    assertEqual(pad.move(1, 100 + TAP_SLOP, 100, 50), [], "within the slop");
+    assertEqual(plain(pad.up(1, 100 + TAP_SLOP, 100, 100)), ["left down @100", "left up @100"], "tap");
+    // Lifted at the long press's time: no tap (the long press had fired).
+    const late = createTouchpad();
+    late.down(1, 0, 0, 1000);
+    assertEqual(late.deadline(), 1000 + LONG_PRESS_MS, "deadline");
+    assertEqual(late.tick(1000 + LONG_PRESS_MS - 1), [], "not yet");
+    assertEqual(plain(late.up(1, 0, 0, 1000 + LONG_PRESS_MS)), [], "no tap");
+    // Moved past the slop: a move, from where it began, then no tap.
+    const moved = createTouchpad();
+    moved.down(1, 0, 0, 0);
+    assertEqual(plain(moved.move(1, TAP_SLOP + 1, 0, 20)), [`motion ${TAP_SLOP + 1},0`], "past the slop");
+    assertEqual(plain(moved.move(1, TAP_SLOP + 1, 7, 40)), ["motion 0,7"], "then by its motion");
+    assertEqual(plain(moved.move(1, 0, 0, 60)), [`motion ${-TAP_SLOP - 1},-7`], "back");
+    assertEqual(plain(moved.up(1, 0, 0, 80)), [], "no tap after a move");
+    assertEqual(moved.deadline(), null, "no long press");
+  },
+
+  "touchpad: swipe speed is smoothed from the events' times": async () => {
+    const { createTouchpad, SPEED_SMOOTH_MS } = await touchpad();
+    const pad = createTouchpad();
+    pad.down(1, 0, 0, 0);
+    let last;
+    // 10 px every 10 ms: 1000 px/s, approached.
+    for (let i = 2; i <= 40; i++) last = pad.move(1, i * 10, 0, i * 10)[0];
+    assert(Math.abs(last[3] - 1000) < 10, `speed ${last[3]}`);
+    // Slowing to 100 px/s: the speed follows within a few smoothing times.
+    let t = 400;
+    let x = 400;
+    for (let i = 0; i < 8; i++) last = pad.move(1, (x += 10), 0, (t += SPEED_SMOOTH_MS));
+    assert(Math.abs(last[0][3] - 133) < 10, `slow speed ${last[0][3]}`);
+  },
+
+  "touchpad: a long press is a right click; double-tap and hold drags; a quick second tap is a double click": async () => {
+    const { createTouchpad, LONG_PRESS_MS, DOUBLE_TAP_MS, TAP_SLOP } = await touchpad();
+    const pad = createTouchpad();
+    pad.down(1, 50, 50, 0);
+    assertEqual(plain(pad.tick(LONG_PRESS_MS)), [`right down @${LONG_PRESS_MS}`, `right up @${LONG_PRESS_MS}`], "long press");
+    assertEqual(pad.tick(LONG_PRESS_MS + 100), [], "once");
+    assertEqual(plain(pad.up(1, 50, 50, 900)), [], "no tap after it");
+    // A tap, then a touch soon after: pressed at once, held while moving.
+    pad.down(2, 0, 0, 1000);
+    pad.up(2, 0, 0, 1050);
+    assertEqual(plain(pad.down(3, 300, 300, 1050 + DOUBLE_TAP_MS)), [`left down @${1050 + DOUBLE_TAP_MS}`], "drag pressed");
+    assertEqual(pad.deadline(), null, "no long press while dragging");
+    assertEqual(plain(pad.move(3, 302, 300, 1400)), ["motion 2,0"], "dragging moves at once");
+    assertEqual(pad.tick(5000), [], "held, not a right click");
+    // A second finger while dragging does nothing.
+    assertEqual(pad.down(4, 0, 0, 5000), [], "second finger");
+    assertEqual(pad.move(4, 0, 300, 5010), [], "no scroll while dragging");
+    assertEqual(plain(pad.up(3, 302, 300, 5100)), ["left up @5100"], "released");
+    assertEqual(pad.up(4, 0, 300, 5110), [], "nothing more");
+    // Too late for a drag: a fresh touch.
+    pad.down(5, 0, 0, 6000);
+    pad.up(5, 0, 0, 6010);
+    assertEqual(pad.down(6, 0, 0, 6011 + DOUBLE_TAP_MS), [], "too late");
+    pad.cancel(6, 6400);
+    // Two quick taps: two clicks, the second pressed on touching.
+    const twice = createTouchpad();
+    twice.down(1, 0, 0, 0);
+    const first = plain(twice.up(1, 0, 0, 40));
+    const second = [...twice.down(1, TAP_SLOP * 5, 0, 120), ...twice.up(1, TAP_SLOP * 5, 0, 160)];
+    assertEqual([...first, ...plain(second)], ["left down @40", "left up @40", "left down @120", "left up @160"], "double tap");
+    // A cancelled drag releases; a reset too.
+    const cancelled = createTouchpad();
+    cancelled.down(1, 0, 0, 0);
+    cancelled.up(1, 0, 0, 10);
+    cancelled.down(1, 0, 0, 20);
+    assertEqual(plain(cancelled.cancel(1, 30)), ["left up @30"], "cancel");
+    cancelled.down(1, 0, 0, 40);
+    cancelled.up(1, 0, 0, 50);
+    cancelled.down(1, 0, 0, 60);
+    assertEqual(plain(cancelled.reset(70)), ["left up @70"], "reset");
+    assertEqual(cancelled.move(1, 50, 50, 80), [], "forgotten");
+  },
+
+  "touchpad: two fingers swiped up or down scroll; no tap or move after": async () => {
+    const { createTouchpad, SCROLL_STEP } = await touchpad();
+    const pad = createTouchpad();
+    pad.down(1, 100, 300, 0);
+    pad.down(2, 200, 300, 10);
+    assertEqual(pad.deadline(), null, "no long press");
+    // Both up by a step: the content follows, wheel down.
+    assertEqual(pad.move(1, 100, 300 - SCROLL_STEP, 20), [], "half a step");
+    assertEqual(pad.move(2, 200, 300 - SCROLL_STEP, 30), [["wheel", 1]], "a step down");
+    assertEqual(pad.move(1, 100, 300 + SCROLL_STEP * 3, 40), [["wheel", -2]], "back up");
+    assertEqual(pad.up(1, 100, 300 + SCROLL_STEP * 3, 50), [], "lifted");
+    assertEqual(pad.move(2, 200, 0, 60), [], "one finger left does nothing");
+    assertEqual(pad.up(2, 200, 0, 70), [], "no tap");
+    // A moving finger joined by a second scrolls too.
+    pad.down(3, 0, 0, 100);
+    pad.move(3, 50, 0, 110);
+    pad.down(4, 0, 100, 120);
+    assertEqual(pad.move(4, 0, 100 + SCROLL_STEP * 2, 130), [["wheel", -1]], "scroll after a move");
   },
 
   "touch moves the cursor there and presses": async () => {

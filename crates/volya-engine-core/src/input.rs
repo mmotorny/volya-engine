@@ -11,22 +11,28 @@
 //! the original game's (it has no touch or gamepad support), chosen to give
 //! every input path the same reach:
 //!
-//! - **Touch** (a primary touch pointer): the contact point moves the cursor
-//!   there, then presses the left mouse button; lifting releases it. Moving
-//!   while touching moves the cursor. On the title menu a tap on a row
-//!   selects it (hover), and a tap on the selected row, now under the glass,
-//!   activates it. Screens that react to keys only (the logo sequence,
-//!   skipped with the quit key) treat a tap as that key
+//! - **Touch as a touchpad** wherever the game shows its cursor (a Volya
+//!   Engine addition, decided by the user, #108): the platform recognises
+//!   the gestures (swipe, tap, double-tap-and-hold, long press, two-finger
+//!   swipe) and sends relative motion ([`Event::TouchpadMotion`], through
+//!   [`touchpad_gain`] and then the sensitivity rule of §7), button presses
+//!   at the cursor ([`Event::TouchpadButton`]) and wheel steps. A touch
+//!   never clicks where it lands there.
+//! - **Touch** elsewhere (a primary touch pointer, [`Event::Touch`]): the
+//!   contact point moves the cursor there, then presses the left mouse
+//!   button; lifting releases it. Screens that react to keys only (the logo
+//!   sequence, skipped with the quit key) treat a tap as that key
 //!   ([`Input::touch_starts`]).
 //! - **Gamepad** ([`GamepadButton`], [`GamepadAxis`]): south (A / cross) is
 //!   Enter, east (B / circle) is Escape, the d-pad is the arrow keys, and the
 //!   left stick acts as the arrow keys once pushed past [`STICK_PRESS`]
 //!   (released below [`STICK_RELEASE`]). The stick does not move the cursor.
 //! - **Absolute pointers** (a mouse over the page without pointer lock, and
-//!   touch): the cursor is placed under the pointer, inverting the screen
+//!   [`Event::Touch`]): the cursor is placed under the pointer, inverting the screen
 //!   mapping, so the drawn cursor and the system pointer agree. The
 //!   sensitivity rule of §7 applies to relative motion only
-//!   ([`Event::PointerMotion`], e.g. under pointer lock).
+//!   ([`Event::PointerMotion`], e.g. under pointer lock, and
+//!   [`Event::TouchpadMotion`]).
 //! - Keyboard auto-repeat is not a key press: platforms report physical
 //!   presses only.
 //!
@@ -86,6 +92,28 @@ pub fn normalized_from_screen([x, y]: [f32; 2], [w, h]: [f32; 2]) -> [f32; 2] {
 /// *n* += (Δx · *s* / W, Δy · *s* / H), clamped to −1 … +1.
 pub fn apply_motion([nx, ny]: [f32; 2], [dx, dy]: [f32; 2], [w, h]: [f32; 2], s: f32) -> [f32; 2] {
     [clamp_unit(nx + dx * s / w), clamp_unit(ny + dy * s / h)]
+}
+
+/// Below this speed of a touchpad swipe (screen units per second) the
+/// cursor follows the finger one to one before the sensitivity rule (§7).
+/// Our design (#108), after the level's look curve.
+pub const TOUCHPAD_PRECISE_SPEED: f32 = 200.0;
+/// From this speed on a swipe moves the cursor [`TOUCHPAD_MAX_GAIN`] times
+/// as far.
+pub const TOUCHPAD_FAST_SPEED: f32 = 1200.0;
+pub const TOUCHPAD_MAX_GAIN: f32 = 2.5;
+
+/// The touchpad's acceleration (our design, #108): the gain on a swipe's
+/// motion at `speed` (the platform's smoothed speed of that swipe): 1 up
+/// to [`TOUCHPAD_PRECISE_SPEED`], precise when slow; rising linearly to
+/// [`TOUCHPAD_MAX_GAIN`] at [`TOUCHPAD_FAST_SPEED`], so a quick swipe
+/// crosses the screen; level beyond.
+pub fn touchpad_gain(speed: f32) -> f32 {
+    let t = (speed - TOUCHPAD_PRECISE_SPEED) / (TOUCHPAD_FAST_SPEED - TOUCHPAD_PRECISE_SPEED);
+    if t.is_nan() {
+        return 1.0;
+    }
+    1.0 + t.clamp(0.0, 1.0) * (TOUCHPAD_MAX_GAIN - 1.0)
 }
 
 fn clamp_unit(v: f32) -> f32 {
@@ -453,6 +481,20 @@ pub enum Event {
     /// A mouse button changed at `at` (absolute pointers) at `time` ms.
     PointerButton {
         at: Option<[f32; 2]>,
+        button: MouseButton,
+        pressed: bool,
+        time: f64,
+    },
+    /// Touchpad motion of the cursor (#108): a swipe's motion in screen
+    /// units at `speed` screen units per second (the platform's smoothed
+    /// speed of that swipe).
+    TouchpadMotion {
+        delta: [f32; 2],
+        speed: f32,
+    },
+    /// A touchpad gesture pressed or released a mouse button at the cursor
+    /// (#108) at `time` ms.
+    TouchpadButton {
         button: MouseButton,
         pressed: bool,
         time: f64,
@@ -931,6 +973,17 @@ impl Input {
                 }
                 self.mouse_button(Source::Mouse, button, pressed, time);
             }
+            Event::TouchpadMotion { delta, speed } => {
+                let gain = touchpad_gain(speed);
+                let delta = delta.map(|d| if d.is_finite() { d * gain } else { 0.0 });
+                let to = apply_motion(self.cursor, delta, self.screen, self.sensitivity);
+                self.set_cursor(to);
+            }
+            Event::TouchpadButton {
+                button,
+                pressed,
+                time,
+            } => self.mouse_button(Source::Touch, button, pressed, time),
             Event::Touch { at, phase, time } => {
                 self.move_to(at);
                 match phase {
@@ -1174,6 +1227,82 @@ mod tests {
         input.handle(Event::PointerMotion { delta: [1e6, -1e6] });
         assert_eq!(input.cursor(), [1.0, -1.0]);
         assert_eq!(input.cursor_ui(), [1024.0, 0.0]);
+    }
+
+    #[test]
+    fn the_touchpad_curve_is_one_to_one_when_slow_and_rises_when_fast() {
+        assert_eq!(touchpad_gain(0.0), 1.0);
+        assert_eq!(touchpad_gain(TOUCHPAD_PRECISE_SPEED), 1.0);
+        assert!((touchpad_gain(700.0) - 1.75).abs() < 1e-6);
+        assert_eq!(touchpad_gain(TOUCHPAD_FAST_SPEED), TOUCHPAD_MAX_GAIN);
+        assert_eq!(touchpad_gain(1e9), TOUCHPAD_MAX_GAIN);
+        assert_eq!(touchpad_gain(f32::NAN), 1.0);
+        assert_eq!(touchpad_gain(-5.0), 1.0);
+        let mut last = 1.0;
+        for speed in (0..3000).step_by(10) {
+            let g = touchpad_gain(speed as f32);
+            assert!(g >= last && (1.0..=TOUCHPAD_MAX_GAIN).contains(&g));
+            last = g;
+        }
+    }
+
+    #[test]
+    fn touchpad_motion_follows_section_7_after_the_curve_and_clicks_at_the_cursor() {
+        let mut input = Input::new();
+        input.set_screen(SCREEN);
+        // Slow: as relative mouse motion (§7: Δ · s / W).
+        input.handle(Event::TouchpadMotion {
+            delta: [192.0, 108.0],
+            speed: 100.0,
+        });
+        assert_eq!(input.cursor(), [0.15, 0.15]);
+        // Fast: the same swipe moves 2.5 times as far.
+        input.handle(Event::TouchpadMotion {
+            delta: [-192.0, -108.0],
+            speed: 5000.0,
+        });
+        assert!((input.cursor()[0] - (0.15 - 0.375)).abs() < 1e-6);
+        // The sensitivity applies; the screen clamps.
+        input.set_sensitivity(1.0);
+        input.handle(Event::TouchpadMotion {
+            delta: [1e6, f32::NAN],
+            speed: 100.0,
+        });
+        assert_eq!(input.cursor()[0], 1.0);
+        input.end_frame();
+        let at = input.cursor();
+        // A click at the cursor: the left button, double on a quick second.
+        for time in [0.0, 0.0, 100.0, 100.0] {
+            let pressed = !input.is_held(Control::Mouse(MouseButton::Left));
+            input.handle(Event::TouchpadButton {
+                button: MouseButton::Left,
+                pressed,
+                time,
+            });
+        }
+        assert_eq!(input.cursor(), at);
+        let left = Control::Mouse(MouseButton::Left);
+        assert_eq!(
+            input.actions(),
+            [
+                press(left),
+                Action::Release { control: left },
+                Action::Press {
+                    control: left,
+                    double: true
+                },
+                Action::Release { control: left },
+            ]
+        );
+        // Not the mouse's own: the level's controls don't see it.
+        assert!(input.device_changes().is_empty());
+        input.handle(Event::TouchpadButton {
+            button: MouseButton::Right,
+            pressed: true,
+            time: 500.0,
+        });
+        input.release_all();
+        assert!(input.held().is_empty());
     }
 
     #[test]

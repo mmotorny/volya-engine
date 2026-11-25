@@ -282,11 +282,22 @@ pub fn level_controls() -> Option<app::LevelControls> {
     RUNNING.with(|r| r.borrow().as_ref()?.app.level_controls())
 }
 
+/// Whether the game shows its mouse cursor ([`App::cursor_shown`]): the
+/// page's touch is a touchpad then (#108).
+pub fn cursor_shown() -> bool {
+    RUNNING.with(|r| r.borrow().as_ref().is_some_and(|r| r.app.cursor_shown()))
+}
+
 /// The save screen's name field while it shows ([`App::text_field`]), in
-/// canvas CSS pixels, and whether it has focus.
-pub fn text_field() -> Option<([f32; 4], bool)> {
+/// canvas CSS pixels, whether it has focus, and whether the cursor is over
+/// it (a click now would focus it: the page raises the device's keyboard
+/// in the tap, #108).
+pub fn text_field() -> Option<([f32; 4], bool, bool)> {
     let (rect, focused) = RUNNING.with(|r| r.borrow().as_ref()?.app.text_field())?;
-    Some((crate::input::css_from_ui(rect), focused))
+    let [x, y] = crate::input::with_input(|i| i.cursor_ui());
+    let over =
+        (rect.x..rect.x + rect.width).contains(&x) && (rect.y..rect.y + rect.height).contains(&y);
+    Some((crate::input::css_from_ui(rect), focused, over))
 }
 
 /// The `bound_keys` op: the names of the keys bound to any action, which

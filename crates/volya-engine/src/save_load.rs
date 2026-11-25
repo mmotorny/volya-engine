@@ -1189,9 +1189,10 @@ impl SaveScreen {
 
     /// The name field's rectangle (UI units) and whether it has focus, for
     /// a platform's text entry over it (the device's keyboard on touch
-    /// screens, #94); `None` while a box covers the screen.
+    /// screens, #94); `None` while a box or the on-screen keyboard covers
+    /// the screen.
     pub fn text_field(&self) -> Option<(Rect, bool)> {
-        if self.screen.message.is_some() {
+        if self.screen.message.is_some() || self.keyboard.is_some() {
             return None;
         }
         Some((self.field_rect(), self.field.focused))

@@ -6,26 +6,37 @@
 // takes only key presses (docs/behavior/save-load-screens.md section 4.4),
 // which a touch screen has none of.
 //
-// A transparent text input lies over the field while the save screen shows
+// An unseen text input lies where the field is while the save screen shows
 // it (the engine reports where: {type: "text_field"}), on touch devices
-// only. A tap on the field lands on it: the browser focuses it and raises
-// its keyboard (which needs the tap itself; a page can't raise it later),
-// and the same tap reaches the engine, focusing its field as a click would.
-// What is typed into the input is sent as text (["text", s]) and the input
-// emptied at once; the engine keeps the field's own rules (the characters
-// a key types, its width limit). Backspace, Enter and the arrows arrive as
-// keys: from input.js when the keyboard reports a key code, otherwise from
-// here. Enter (or Esc) ending the field's focus closes the keyboard.
+// only. Touch is a touchpad for the cursor there (#108), so the field is
+// clicked with the cursor like everything else, and the input never takes
+// taps itself. A device's keyboard rises only for an input focused within a
+// user gesture (iOS, believed; not measured): so the engine reports
+// whether the cursor is over the field, and when a touchpad gesture presses
+// the left button over it, input.js calls `click()` in that very event
+// handler, which focuses the input; the same press reaches the engine and
+// focuses its field as a mouse click does. What is typed into the input is
+// sent as text (["text", s]) and the input emptied at once; the engine
+// keeps the field's own rules (the characters a key types, its width
+// limit). Backspace, Enter and the arrows arrive as keys: from input.js
+// when the keyboard reports a key code, otherwise from here. Enter (or
+// Esc) ending the field's focus closes the keyboard.
 
 import { KEYS } from "./input.js";
+
+/** A click the engine doesn't answer by focusing its field within this
+ * long, milliseconds, closes the keyboard it raised (our choice). */
+const FOCUS_WAIT_MS = 500;
 
 /** Editing keys a device keyboard may report without a key code. */
 const EDITING = { Backspace: "backspace", Delete: "delete", Enter: "enter", ArrowLeft: "left", ArrowRight: "right" };
 
 /**
  * The text entry; `send(message)` posts one input message to the engine.
- * `update({ rect, focused })` follows the engine's field: canvas CSS
- * pixels, or `rect: null` when it doesn't show.
+ * `update({ rect, focused, over })` follows the engine's field: canvas CSS
+ * pixels, or `rect: null` when it doesn't show; `over` while the cursor is
+ * over it. `click()` runs in the handler of a gesture clicking at the
+ * cursor.
  */
 export function createTextEntry(send) {
   // Laid out as the canvas is (turned on upright phones, style.css), so the
@@ -78,18 +89,33 @@ export function createTextEntry(send) {
     if (event.pointerType === "touch") touched = true;
   }, { capture: true });
 
+  let field = { rect: null, focused: false, over: false };
+  let wait = null;
+  const update = ({ rect, focused, over = false }) => {
+    field = { rect, focused, over };
+    const shown = Boolean(rect) && touched;
+    root.hidden = !shown;
+    if (!shown) {
+      input.blur();
+      return;
+    }
+    const [x, y, width, height] = rect;
+    Object.assign(input.style, { left: `${x}px`, top: `${y}px`, width: `${width}px`, height: `${height}px` });
+    if (!focused && document.activeElement === input) input.blur();
+  };
   return {
     element: root,
-    update({ rect, focused }) {
-      const shown = Boolean(rect) && touched;
-      root.hidden = !shown;
-      if (!shown) {
-        input.blur();
-        return;
-      }
-      const [x, y, width, height] = rect;
-      Object.assign(input.style, { left: `${x}px`, top: `${y}px`, width: `${width}px`, height: `${height}px` });
-      if (!focused && document.activeElement === input) input.blur();
+    update,
+    click() {
+      if (!field.rect || !field.over) return;
+      // A touchpad click is a touch device's.
+      touched = true;
+      update(field);
+      input.focus({ preventScroll: true });
+      clearTimeout(wait);
+      wait = setTimeout(() => {
+        if (!field.focused && document.activeElement === input) input.blur();
+      }, FOCUS_WAIT_MS);
     },
   };
 }

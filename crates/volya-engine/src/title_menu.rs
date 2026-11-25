@@ -728,7 +728,7 @@ pub struct TitleMenuState {
 mod tests {
     use super::*;
     use crate::core::audio::Category;
-    use crate::core::input::{Event, TouchPhase};
+    use crate::core::input::Event;
     use crate::fixture::{self, FakeAudio, GLYPH};
     use crate::scene::TextureId;
 
@@ -1037,24 +1037,37 @@ mod tests {
     }
 
     #[test]
-    fn touch_taps_select_then_activate() {
+    fn the_touchpad_selects_by_moving_the_cursor_and_clicks_at_it() {
         let mut r = Run::open(0);
         r.frame(1000);
-        let tap = |r: &mut Run, now: u64| {
-            for phase in [TouchPhase::Start, TouchPhase::End] {
-                r.input.handle(Event::Touch {
-                    at: [782.0, 419.0 + 120.0 + 15.0],
-                    phase,
+        let click = |r: &mut Run, now: u64| {
+            for pressed in [true, false] {
+                r.input.handle(Event::TouchpadButton {
+                    button: MouseButton::Left,
+                    pressed,
                     time: now as f64,
                 });
             }
             r.frame(now);
         };
-        tap(&mut r, 1000);
+        // A click with the cursor at the centre, on no item: nothing.
+        click(&mut r, 1000);
         let s = r.state(1000);
+        assert_eq!((s.selected, s.activations.len()), (0, 0));
+        // A slow swipe onto item 4 (one to one, then section 7: the cursor
+        // moves s / 2 UI units per screen unit here) selects it.
+        let [x, y] = r.input.cursor_ui();
+        let s = r.input.sensitivity();
+        let target = [782.0, 419.0 + 120.0 + 15.0];
+        r.input.handle(Event::TouchpadMotion {
+            delta: [2.0 * (target[0] - x) / s, 2.0 * (target[1] - y) / s],
+            speed: 100.0,
+        });
+        r.frame(1500);
+        let s = r.state(1500);
         assert_eq!((s.selected, s.activations.len()), (4, 0));
-        tap(&mut r, 2000);
-        assert_eq!(r.state(2000).activations[0].item, "btn_credits");
+        click(&mut r, 3000);
+        assert_eq!(r.state(3000).activations[0].item, "btn_credits");
     }
 
     #[test]

@@ -5,10 +5,10 @@
 //! (docs/behavior/save-load-screens.md sections 3.1, 3.2 and 6): their
 //! input events, the push button, and the message box.
 //!
-//! **Input.** These screens are mouse screens (section 3.1). Touch and
-//! gamepads reach them through the options screen's mapping (our design,
-//! [`crate::options`]): a touch moves the cursor there and presses the left
-//! button; a gamepad's d-pad moves the cursor to the nearest target that
+//! **Input.** These screens are mouse screens (section 3.1). Touch reaches
+//! them as a touchpad for the cursor (#108, [`crate::core::input`]), gamepads
+//! through the options screen's mapping (our design, [`crate::options`]): a
+//! gamepad's d-pad moves the cursor to the nearest target that
 //! way, its left stick moves it freely, south (A / cross) is the left
 //! button and east (B / circle) is the key bound to `quit`.
 
