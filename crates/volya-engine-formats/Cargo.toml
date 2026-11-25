@@ -27,4 +27,6 @@ theora_nrp.workspace = true
 crc32fast.workspace = true
 lzokay-native = { workspace = true, features = ["compress", "decompress"] }
 md-5.workspace = true
+# An independent ETC2/EAC decoder checks the encoder (src/etc2.rs).
+texture2ddecoder = "0.1"
 volya-engine-installer = { path = "../volya-engine-installer" }

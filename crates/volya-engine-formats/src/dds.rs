@@ -163,6 +163,41 @@ impl Format {
     }
 }
 
+impl Format {
+    /// Decodes one 4×4 block of a block-compressed format (its
+    /// [`block_bytes`](Self::block_bytes) bytes) to RGBA texels in row
+    /// order, as [`to_rgba8`](Self::to_rgba8) does. An uncompressed format
+    /// gives transparent black.
+    pub fn decode_block(self, bytes: &[u8]) -> [[u8; 4]; 16] {
+        let mut texels = match self {
+            Self::Bc1 => return decode_colour_block(bytes, true),
+            Self::Bc2 | Self::Bc3 => decode_colour_block(&bytes[8..16], false),
+            Self::Masked(_) => return [[0; 4]; 16],
+        };
+        let alphas = if self == Self::Bc2 {
+            explicit_alpha(&bytes[..8])
+        } else {
+            interpolated_alpha(&bytes[..8])
+        };
+        for (t, a) in texels.iter_mut().zip(alphas) {
+            t[3] = a;
+        }
+        texels
+    }
+
+    /// Whether a BC1 block has a transparent texel (BC1's three-colour mode
+    /// with index 3); false for other formats.
+    pub fn block_has_transparency(self, bytes: &[u8]) -> bool {
+        if self != Self::Bc1 {
+            return false;
+        }
+        let raw0 = u16::from_le_bytes([bytes[0], bytes[1]]);
+        let raw1 = u16::from_le_bytes([bytes[2], bytes[3]]);
+        let indices = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+        raw0 <= raw1 && (0..16).any(|i| (indices >> (2 * i)) & 3 == 3)
+    }
+}
+
 fn rgb565(value: u16) -> [u32; 3] {
     let (r, g, b) = (
         u32::from(value >> 11),
