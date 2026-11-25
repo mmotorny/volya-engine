@@ -212,7 +212,10 @@ mod tests {
         out
     }
 
-    fn file(version: Option<u16>, entries: &[(&[u8], f32, i32, &[(i32, u32)])]) -> Vec<u8> {
+    /// An entry to write: name, rate, frame count, keys.
+    type Written<'a> = (&'a [u8], f32, i32, &'a [(i32, u32)]);
+
+    fn file(version: Option<u16>, entries: &[Written]) -> Vec<u8> {
         let mut list = Vec::new();
         for (i, (name, rate, count, keys)) in entries.iter().enumerate() {
             let mut common = name.to_vec();
