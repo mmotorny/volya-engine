@@ -5,6 +5,7 @@
 
 mod deploy;
 mod e2e;
+mod machine;
 mod spec_lint;
 
 use std::fs;
@@ -34,6 +35,7 @@ Tasks:
   web [--dev] Build the web app into dist/ (release unless --dev).
   deploy      Check, build and publish to GitHub Pages (gh-pages branch).
   spec-lint   Flag decompiler output, code and mangled names in clean-room spec drafts.
+  wait-memory Return once memory pressure is normal (run before heavy work).
   update      Move to the latest stable Rust and dependencies, then check.";
 
 /// Crates that never build for the web target.
@@ -49,6 +51,7 @@ fn main() -> ExitCode {
     let result = match args.as_slice() {
         ["check"] => check(),
         ["e2e", targets @ ..] => e2e::run(targets),
+        ["wait-memory"] => machine::wait_memory(),
         ["sim", steps @ ..] if !steps.is_empty() => e2e::sim(steps),
         ["simshot"] => e2e::screenshot(None).map(drop),
         ["simshot", path] => e2e::screenshot(Some(Path::new(path))).map(drop),
