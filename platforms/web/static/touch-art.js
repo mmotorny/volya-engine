@@ -15,7 +15,8 @@
 // - Glyphs: the HUD's posture icons (`ui_hud_soldier_crouch`, `_creep`,
 //   `_sprint`) as silhouettes (their alpha with the one-texel scanline gaps
 //   closed by the engine) and our own Jump arrow (after the proportions of
-//   `ui\ui_map_arrow_02`) and Menu bars, redrawn with scanlines at device
+//   `ui\ui_map_arrow_02`), Menu bars and Inventory backpack (the UI
+//   textures have no inventory icon), redrawn with scanlines at device
 //   pixels (every third row dimmed), so they can't beat against the
 //   screen's pixels.
 // - The stick's segmented ring (`ui_hud_grenadetarget_d`) and the lock
@@ -330,8 +331,20 @@ const BARS = [
   [13.5, 5.5, 3, 13],
 ];
 
-/** A vector glyph source (our Jump arrow or Menu bars) at `size` device
- * pixels. */
+/** Our Inventory glyph in 24 × 24: a backpack's carry loop (x, y, width,
+ * height, radius, and its hole), its bag, the flap's edge and a pocket
+ * outline (cut, then its inside filled back). */
+const BAG = {
+  loop: [8.5, 1.5, 7, 5.5, 2],
+  hole: [10.3, 3.2, 3.4, 3.8, 1],
+  bag: [4.5, 5.5, 15, 16.5, 3.5],
+  flap: [4.5, 11, 15, 1.6],
+  pocket: [8, 14.4, 8, 5.2, 1.4],
+  inside: [9.5, 15.9, 5, 2.2, 0.6],
+};
+
+/** A vector glyph source (our Jump arrow, Menu bars or Inventory
+ * backpack) at `size` device pixels. */
 export function vectorGlyph(name, size) {
   const [c, g] = canvas(size, size);
   g.scale(size / 24, size / 24);
@@ -342,6 +355,23 @@ export function vectorGlyph(name, size) {
     g.closePath();
     g.fill();
     g.fillRect(...GROUND);
+  } else if (name === "inventory") {
+    g.beginPath();
+    g.roundRect(...BAG.loop);
+    g.roundRect(...BAG.hole);
+    g.fill("evenodd");
+    g.beginPath();
+    g.roundRect(...BAG.bag);
+    g.fill();
+    g.globalCompositeOperation = "destination-out";
+    g.fillRect(...BAG.flap);
+    g.beginPath();
+    g.roundRect(...BAG.pocket);
+    g.fill();
+    g.globalCompositeOperation = "source-over";
+    g.beginPath();
+    g.roundRect(...BAG.inside);
+    g.fill();
   } else {
     for (const bar of BARS) g.fillRect(...bar);
   }

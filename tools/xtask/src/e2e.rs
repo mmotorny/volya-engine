@@ -62,7 +62,7 @@ pub fn run(args: &[&str]) -> Result {
         step("Native tests");
         run_cmd(&mut cmd("cargo", &["test", "--workspace"]))?;
     }
-    web(Profile::Release)?;
+    web(Profile::Test)?;
 
     let (tx, reports) = mpsc::channel();
     let server = Server::new(&root().join("dist"))

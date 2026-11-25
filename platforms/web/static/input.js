@@ -162,6 +162,7 @@ const PAD_BUTTONS = {
   0: "south",
   1: "east",
   2: "west",
+  3: "north",
   4: "left_shoulder",
   5: "right_shoulder",
   10: "left_stick",
@@ -183,9 +184,10 @@ const AXIS_EPSILON = 0.02;
  * `onClick()` runs in the event handler of a touchpad gesture pressing the
  * left button (the page may focus its text entry there: a device's keyboard
  * rises only in a user gesture). Returns `setCapture(on)`, called when the
- * engine reports capture changes, `setLevel(on)`, called when the level's
- * controls go live or stop, and `setCursor(shown)`, called when the game's
- * cursor shows or hides.
+ * engine reports capture changes, `setLevel(on, keys)`, called when the
+ * level's controls go live or stop and when the character takes the
+ * keyboard's keys under a screen (the inventory screen, #110), and
+ * `setCursor(shown)`, called when the game's cursor shows or hides.
  */
 export function startInput(view, send, { onClick = () => {} } = {}) {
   let capture = false;
@@ -193,6 +195,13 @@ export function startInput(view, send, { onClick = () => {} } = {}) {
   // (text-entry.js): characters typed into it arrive as text.
   const entry = (event) => event.target?.closest?.("#text-entry");
   let level = false;
+  // The character takes keys: the level's controls are live, or a screen
+  // over the running level passes the keys it doesn't use on (#110).
+  let keys = false;
+  // The page itself is leaving pointer lock (the level's controls stopped):
+  // no release is swallowed then, so nothing is released and no unlock is
+  // told (#110: held keys walk on under the inventory screen).
+  let leaving = false;
   // The touchpad while the game shows its cursor; which way each touch
   // down goes ("pad" or "direct").
   let cursor = false;
@@ -306,9 +315,10 @@ export function startInput(view, send, { onClick = () => {} } = {}) {
     if (!BROWSER_KEYS.has(event.code)) event.preventDefault();
     const pressed = event.type === "keydown";
     // Physical presses only; shortcuts with modifiers belong to the
-    // browser. While the level's controls are live Control is a game key
-    // (crouch), so keys pressed with it are the game's there.
-    if (pressed && (event.repeat || event.metaKey || event.altKey || (event.ctrlKey && !level))) return;
+    // browser. While the character takes keys Control is a game key
+    // (crouch), so keys pressed with it are the game's there; the engine
+    // decides which reach the character.
+    if (pressed && (event.repeat || event.metaKey || event.altKey || (event.ctrlKey && !keys))) return;
     send(["key", name, pressed]);
   };
   addEventListener("keydown", key);
@@ -333,7 +343,12 @@ export function startInput(view, send, { onClick = () => {} } = {}) {
   // for Chrome), so the engine is told: in a level it opens the menu, as
   // Escape would have.
   document.addEventListener("pointerlockchange", () => {
-    if (!capture || locked()) return;
+    if (locked()) return;
+    if (leaving) {
+      leaving = false;
+      return;
+    }
+    if (!capture) return;
     releaseAll();
     send(["unlock"]);
   });
@@ -381,9 +396,13 @@ export function startInput(view, send, { onClick = () => {} } = {}) {
     }
   };
 
-  const setLevel = (on) => {
+  const setLevel = (on, takesKeys = on) => {
     level = on;
-    if (!on && locked()) document.exitPointerLock();
+    keys = takesKeys;
+    if (!on && locked()) {
+      leaving = true;
+      document.exitPointerLock();
+    }
   };
 
   const setCapture = (on) => {

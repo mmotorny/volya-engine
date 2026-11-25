@@ -321,6 +321,9 @@ pub enum GamepadButton {
     South,
     East,
     West,
+    /// Y on Xbox, triangle on PlayStation: opens the inventory screen in a
+    /// level (our design, #110).
+    North,
     DpadUp,
     DpadDown,
     DpadLeft,
@@ -332,10 +335,11 @@ pub enum GamepadButton {
 }
 
 impl GamepadButton {
-    pub const ALL: [GamepadButton; 10] = [
+    pub const ALL: [GamepadButton; 11] = [
         GamepadButton::South,
         GamepadButton::East,
         GamepadButton::West,
+        GamepadButton::North,
         GamepadButton::DpadUp,
         GamepadButton::DpadDown,
         GamepadButton::DpadLeft,
@@ -350,6 +354,7 @@ impl GamepadButton {
             GamepadButton::South => "south",
             GamepadButton::East => "east",
             GamepadButton::West => "west",
+            GamepadButton::North => "north",
             GamepadButton::DpadUp => "dpad_up",
             GamepadButton::DpadDown => "dpad_down",
             GamepadButton::DpadLeft => "dpad_left",
@@ -442,14 +447,17 @@ pub enum TouchButton {
     CrouchLow,
     /// Does what Escape does.
     Menu,
+    /// Opens the inventory screen (#110).
+    Inventory,
 }
 
 impl TouchButton {
-    pub const ALL: [TouchButton; 4] = [
+    pub const ALL: [TouchButton; 5] = [
         TouchButton::Jump,
         TouchButton::Crouch,
         TouchButton::CrouchLow,
         TouchButton::Menu,
+        TouchButton::Inventory,
     ];
 
     pub fn name(self) -> &'static str {
@@ -458,6 +466,7 @@ impl TouchButton {
             TouchButton::Crouch => "crouch",
             TouchButton::CrouchLow => "crouch_low",
             TouchButton::Menu => "menu",
+            TouchButton::Inventory => "inventory",
         }
     }
 
@@ -622,8 +631,8 @@ impl Control {
             Control::Touch(TouchButton::Jump) => "touch_jump",
             Control::Touch(TouchButton::Crouch) => "touch_crouch",
             Control::Touch(TouchButton::CrouchLow) => "touch_crouch_low",
-
             Control::Touch(TouchButton::Menu) => "touch_menu",
+            Control::Touch(TouchButton::Inventory) => "touch_inventory",
         }
     }
 }

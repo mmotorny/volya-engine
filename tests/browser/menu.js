@@ -714,6 +714,177 @@ export const tests = {
     return `decoded in ${art.ms.toFixed(1)} ms (engine), ${art.totalMs.toFixed(1)} ms with the page's part; sources ${(sources / 1024).toFixed(0)} KiB, canvases ${(bytes / 1024).toFixed(0)} KiB at ${devicePixelRatio}x`;
   },
 
+  "the inventory: I opens it over the running level (a held W walks on, Control crouches under it), the outfit dragged to the backpack, bread eaten, the touch button opens it, the touchpad selects, opens the menu and drags, Escape and the exit button close it": async () => {
+    needsGame();
+    const controls = document.getElementById("touch-controls");
+    const centreOf4 = ([x, y, w, h], within) => {
+      // Within the list (the outfit's cell item is wider than it).
+      const [lx, ly, lw, lh] = within ?? [x, y, w, h];
+      return [Math.min(x + w / 2, lx + lw / 2), Math.min(y + h / 2, ly + lh / 2)];
+    };
+    const items = (s) => s.level.character.items;
+    const item = (s, section) => items(s).find((i) => i.section === section);
+    const live = async (on) => {
+      for (let i = 0; i < 100 && controls.dataset.live !== String(on); i++) await sleep(20);
+      assertEqual(controls.dataset.live, String(on), "the level's controls live");
+    };
+    // The key bound to `inventory` (I, docs/behavior/inventory-screen.md
+    // 1.1) opens it; the game runs on behind it.
+    let s = await state();
+    const clock = s.level.game_time;
+    // A click in the level takes pointer lock where the browser grants it;
+    // opening the screen leaves it without releasing held keys: W held
+    // before I walks on (inventory-screen.md 1.3).
+    const down = (code, init = {}) => document.body.dispatchEvent(new KeyboardEvent("keydown", { code, bubbles: true, cancelable: true, ...init }));
+    const up = (code, init = {}) => document.body.dispatchEvent(new KeyboardEvent("keyup", { code, bubbles: true, cancelable: true, ...init }));
+    // Headless Chrome grants no pointer lock: then it is stubbed (the
+    // lock element, its request and exit, each exit's change event), so the
+    // page's exit path runs.
+    const root = document.documentElement;
+    let stubbed = null;
+    const stub = () => {
+      stubbed = null;
+      const change = () => document.dispatchEvent(new Event("pointerlockchange"));
+      Object.defineProperty(document, "pointerLockElement", { get: () => stubbed, configurable: true });
+      root.requestPointerLock = () => {
+        stubbed = root;
+        change();
+        return Promise.resolve();
+      };
+      document.exitPointerLock = () => {
+        stubbed = null;
+        change();
+      };
+    };
+    const unstub = () => {
+      delete document.pointerLockElement;
+      delete root.requestPointerLock;
+      delete document.exitPointerLock;
+    };
+    clickAt([512, 600]);
+    for (let i = 0; i < 25 && !document.pointerLockElement; i++) await sleep(20);
+    const granted = Boolean(document.pointerLockElement);
+    if (!granted) {
+      stub();
+      clickAt([512, 600]);
+    }
+    assert(document.pointerLockElement === root, "the pointer locked");
+    down("KeyW");
+    await until((s) => s.level.player.moving, "W to walk");
+    key("KeyI");
+    s = await until((s) => s.inventory, "the inventory screen");
+    await live(false);
+    assert(!document.pointerLockElement, "the pointer released");
+    if (!granted) unstub();
+    await sleep(300);
+    s = await state();
+    assert(s.inventory && s.level.player.moving, `W walks on under the screen: ${JSON.stringify(s.level.player)}`);
+    up("KeyW");
+    await until((s) => !s.level.player.moving, "the player to stop");
+    // Control (the crouch key; its keydown carries ctrlKey) crouches under
+    // the screen: the page forwards it while the character takes keys.
+    down("ControlLeft", { ctrlKey: true });
+    await until((s) => s.level.player.crouch, "Control to crouch under the screen");
+    up("ControlLeft");
+    await until((s) => !s.level.player.crouch, "the crouch released");
+    const outfitList = s.inventory.lists.find((l) => l.list === "outfit");
+    const outfit = outfitList.cells[0];
+    assertEqual(outfit.section, "novice_outfit", "the worn outfit's cell item");
+    assertEqual(s.inventory.money, "40 RU", "money");
+    assert(s.inventory.weight_line.includes("4.3"), `the weight line: ${s.inventory.weight_line}`);
+    s = await until((s) => s.level.game_time > clock, "game time to run under the screen");
+    // A mouse drag of the outfit onto the backpack list undresses it.
+    const from = client(...centreOf4(outfit.rect, outfitList.rect));
+    pointer("pointermove", from);
+    pointer("pointerdown", from, { button: 0, buttons: 1 });
+    pointer("pointermove", [from[0] + 6, from[1] + 6], { buttons: 1 });
+    await until((s) => s.inventory?.dragging === outfit.items[0], "the drag to begin");
+    const to = client(100, 600);
+    pointer("pointermove", to, { buttons: 1 });
+    pointer("pointerup", to, { button: 0, buttons: 0 });
+    s = await until((s) => item(s, "novice_outfit")?.place === "backpack", "the outfit in the backpack");
+    assert(s.inventory.lists.find((l) => l.list === "bag").cells.some((c) => c.section === "novice_outfit"), "drawn in the backpack");
+    assertEqual(s.inventory.protections, [], "no protection without an outfit");
+    // Bread (given through the test interface: nothing to pick up yet) is
+    // eaten with a double click: satiety rises, the bread is gone.
+    const bread = await volya.call("debug_give_item", { section: "bread" });
+    s = await until((s) => s.inventory.lists.find((l) => l.list === "bag").cells.some((c) => c.items.includes(bread)), "the bread in the backpack");
+    const satiety = s.level.character.satiety;
+    const cell = s.inventory.lists.find((l) => l.list === "bag").cells.find((c) => c.items.includes(bread));
+    const at = client(...centreOf4(cell.rect));
+    pointer("pointermove", at);
+    for (let i = 0; i < 2; i++) {
+      pointer("pointerdown", at, { button: 0, buttons: 1 });
+      pointer("pointerup", at, { button: 0, buttons: 0 });
+    }
+    s = await until((s) => !items(s).some((i) => i.id === bread), "the bread eaten");
+    assert(s.level.character.satiety > satiety, `satiety ${satiety} → ${s.level.character.satiety}`);
+    // Escape closes it (the screen has the key: no menu opens).
+    key("Escape");
+    s = await until((s) => s.phase === "level" && !s.inventory, "the screen closed");
+    assert(!s.menu, "Escape opened the menu");
+    await live(true);
+    // On a touch device, the HUD button at the top right opens it; the
+    // touch controls go away while it shows.
+    const tap = { pointerType: "touch", pointerId: 60, isPrimary: true, button: 0 };
+    pointer("pointerdown", client(512, 100), { ...tap, buttons: 1 });
+    pointer("pointerup", client(512, 100), { ...tap, buttons: 0 });
+    for (let i = 0; i < 50 && controls.hidden; i++) await sleep(20);
+    assert(!controls.hidden, "the touch controls show");
+    const button = controls.querySelector(".touch-button.inventory");
+    const r = button.getBoundingClientRect();
+    const look = controls.querySelector(".touch-look").getBoundingClientRect();
+    assert(r.left > look.left && r.top < 100, `at the top right: ${JSON.stringify(r)}`);
+    const centre = [(r.left + r.right) / 2, (r.top + r.bottom) / 2];
+    for (const type of ["pointerdown", "pointerup"]) {
+      button.dispatchEvent(
+        new PointerEvent(type, { clientX: centre[0], clientY: centre[1], pointerId: 61, pointerType: "touch", isPrimary: true, button: 0, buttons: type === "pointerdown" ? 1 : 0, bubbles: true, cancelable: true }),
+      );
+    }
+    s = await until((s) => s.inventory, "the touch button to open the screen");
+    for (let i = 0; i < 50 && !controls.hidden; i++) await sleep(20);
+    assert(controls.hidden, "the touch controls hide under the screen");
+    // Touch is the touchpad here (#108): the cursor swiped onto the outfit
+    // in the backpack, a tap selects it, a long press opens its menu, whose
+    // first row («одеть костюм») a tap at the cursor chooses.
+    const bag = s.inventory.lists.find((l) => l.list === "bag");
+    const suitCell = bag.cells.find((c) => c.section === "novice_outfit");
+    await swipeTo(centreOf4(suitCell.rect));
+    await tapAt();
+    s = await until((s) => s.inventory?.selected === suitCell.items[0], "a tap to select the outfit");
+    await sleep(300);
+    const press = { pointerType: "touch", pointerId: ++touchId, isPrimary: true, button: 0 };
+    pointer("pointerdown", client(512, 384), { ...press, buttons: 1 });
+    await sleep(650);
+    pointer("pointerup", client(512, 384), { ...press, buttons: 0 });
+    s = await until((s) => s.inventory?.menu, "a long press to open the context menu");
+    assertEqual(s.inventory.menu.entries, ["st_dress_outfit", "st_drop"], "the outfit's entries");
+    await swipeTo(centreOf({ rect: s.inventory.menu.rows[0] }));
+    await tapAt();
+    s = await until((s) => item(s, "novice_outfit")?.place === "slot", "the outfit worn again");
+    // A double-tap-hold on the character picture drags the outfit; let go
+    // on its own list, nothing moves.
+    const worn = s.inventory.lists.find((l) => l.list === "outfit");
+    await swipeTo(centreOf4(worn.cells[0].rect, worn.rect));
+    await sleep(300);
+    const finger = [512, 384];
+    pointer("pointerdown", client(...finger), { ...press, pointerId: ++touchId, buttons: 1 });
+    pointer("pointerup", client(...finger), { ...press, pointerId: touchId, buttons: 0 });
+    await sleep(50);
+    const id = ++touchId;
+    await swipe([finger], [0, 30], { lift: false, ids: [id] });
+    s = await until((s) => s.inventory?.dragging === worn.cells[0].items[0], "a double-tap-hold to drag");
+    pointer("pointerup", client(finger[0], finger[1] + 30), { ...press, pointerId: id, buttons: 0 });
+    s = await until((s) => s.inventory && s.inventory.dragging == null, "the drag to end");
+    assertEqual(item(s, "novice_outfit").place, "slot", "dropped on its own list");
+    // The exit button closes it.
+    clickAt(centreOf({ rect: s.inventory.exit }));
+    s = await until((s) => s.phase === "level" && !s.inventory, "the exit button to close the screen");
+    assert(!s.menu, "no menu");
+    await live(true);
+    return `game time ran ${((s.level.game_time - clock) / 1000).toFixed(1)} s under the screen; pointer lock ${granted ? "granted" : "stubbed"}`;
+  },
+
   "touch: the stick walks and its sprint lock sprints, drags look (from Jump too), Crouch and its swipe down, Menu opens the menu": async () => {
     needsGame();
     const controls = document.getElementById("touch-controls");
@@ -830,12 +1001,23 @@ export const tests = {
     // A drag begun on Jump jumps and turns too.
     const jump = controls.querySelector(".touch-button.jump");
     const [jx, jy] = centre(jump);
-    const yaw = s.level.yaw;
-    touchOn(jump, "pointerdown", 38, [jx, jy]);
-    touchOn(jump, "pointermove", 38, [jx - 20, jy]);
-    touchOn(jump, "pointermove", 38, [jx - 100, jy]);
-    await until((s) => s.level.player.airborne, "Jump to jump");
-    touchOn(jump, "pointerup", 38, [jx - 100, jy]);
+    // A jump needs the player standing on the ground, not landing: wait for
+    // that, then press; a press the movement layer didn't take (a frame
+    // still landing) is let go and tried again.
+    await until((s) => !s.level.player.airborne && !s.level.player.landing && !s.level.player.moving, "a state to jump from", 3000);
+    const yaw = (await state()).level.yaw;
+    let jumped = false;
+    for (let attempt = 0, id = 380; attempt < 3 && !jumped; attempt++, id++) {
+      touchOn(jump, "pointerdown", id, [jx, jy]);
+      touchOn(jump, "pointermove", id, [jx - 20, jy]);
+      touchOn(jump, "pointermove", id, [jx - 100, jy]);
+      jumped = await until((s) => s.level.player.airborne, "Jump to jump", 1500).then(
+        () => true,
+        () => false,
+      );
+      touchOn(jump, "pointerup", id, [jx - 100, jy]);
+    }
+    assert(jumped, "Jump to jump");
     s = await until((s) => s.level.yaw < yaw - 0.15, "the drag from Jump to turn left");
     s = await until((s) => !s.level.player.airborne, "the jump to land", 3000);
     // Crouch toggles: the engine reports it back to the button.

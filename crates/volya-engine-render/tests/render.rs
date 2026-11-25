@@ -14,35 +14,27 @@ use volya_engine_formats::dds::Dds;
 use volya_engine_formats::dds::build::{PixelFormat, file};
 use volya_engine_formats::video::{Chroma, Frame, Plane};
 use volya_engine_render::wgpu;
-use volya_engine_render::{DrawList, Quad, Rect, Renderer, TextureError};
+use volya_engine_render::{DrawList, Quad, Rect, Renderer, TexturePath};
 
 const BLACK: wgpu::Color = wgpu::Color::BLACK;
 
 /// The device (with BC support), shared by the tests.
 fn gpu() -> &'static (wgpu::Device, wgpu::Queue) {
     static GPU: OnceLock<(wgpu::Device, wgpu::Queue)> = OnceLock::new();
-    GPU.get_or_init(|| device(true))
+    GPU.get_or_init(|| device_with(wgpu::Features::all()))
 }
 
-fn device(bc: bool) -> (wgpu::Device, wgpu::Queue) {
+/// A device with the renderer's features within `allowed`.
+fn device_with(allowed: wgpu::Features) -> (wgpu::Device, wgpu::Queue) {
     pollster::block_on(async {
         let instance = wgpu::Instance::default();
         let adapter = instance
             .request_adapter(&Default::default())
             .await
             .expect("a GPU adapter (Metal on the Mac)");
-        let mut features = volya_engine_render::device_features(&adapter);
-        if bc {
-            assert!(
-                features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC),
-                "the Mac's GPU supports BC"
-            );
-        } else {
-            features.remove(wgpu::Features::TEXTURE_COMPRESSION_BC);
-        }
         adapter
             .request_device(&wgpu::DeviceDescriptor {
-                required_features: features,
+                required_features: volya_engine_render::device_features(&adapter) & allowed,
                 ..Default::default()
             })
             .await
@@ -226,9 +218,44 @@ fn bc1_block(color: u16) -> [u8; 8] {
     [a, b, 0, 0, 0, 0, 0, 0]
 }
 
+/// BC textures by each path (#113): as stored where the device has BC,
+/// transcoded to ETC2 where it has only that, decoded to RGBA8 where it has
+/// neither; the same colours (exact, or within ETC2's error).
 #[test]
-fn uploads_bc_formats_as_stored() {
-    let mut renderer = renderer();
+fn bc_textures_by_every_path() {
+    use wgpu::TextureFormat as F;
+    for (allowed, path, formats, tolerance) in [
+        (
+            wgpu::Features::all(),
+            TexturePath::Bc,
+            [F::Bc1RgbaUnorm, F::Bc2RgbaUnorm, F::Bc3RgbaUnorm],
+            0,
+        ),
+        (
+            wgpu::Features::TEXTURE_COMPRESSION_ETC2,
+            TexturePath::Etc2,
+            [F::Etc2Rgb8Unorm, F::Etc2Rgba8Unorm, F::Etc2Rgba8Unorm],
+            4,
+        ),
+        (
+            wgpu::Features::empty(),
+            TexturePath::Rgba8,
+            [F::Rgba8Unorm; 3],
+            0,
+        ),
+    ] {
+        let (device, queue) = device_with(allowed);
+        let mut renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Bgra8Unorm);
+        if renderer.texture_path() != path {
+            assert_ne!(path, TexturePath::Bc, "the Mac's GPU supports BC");
+            eprintln!("skipped {path:?}: the GPU lacks it");
+            continue;
+        }
+        check_bc_formats(&mut renderer, formats, tolerance);
+    }
+}
+
+fn check_bc_formats(renderer: &mut Renderer, formats: [wgpu::TextureFormat; 3], tolerance: u8) {
     // BC1: 8 × 8, 2 × 2 blocks: red, green / blue, white.
     let blocks: Vec<u8> = [0xf800, 0x07e0, 0x001f, 0xffff]
         .into_iter()
@@ -245,57 +272,40 @@ fn uploads_bc_formats_as_stored() {
     let bc3 = file(4, 4, 0, false, PixelFormat::FourCc(b"DXT5"), &bc3);
 
     let mut list = DrawList::default();
-    let texture = renderer.create_texture(&Dds::parse(&bc1).unwrap()).unwrap();
-    list.quads
-        .push(Quad::new(Rect::new(0.0, 0.0, 512.0, 768.0), &texture));
-    let texture = renderer.create_texture(&Dds::parse(&bc2).unwrap()).unwrap();
-    assert_eq!(texture.wgpu().format(), wgpu::TextureFormat::Bc2RgbaUnorm);
-    list.quads
-        .push(Quad::new(Rect::new(512.0, 0.0, 256.0, 768.0), &texture));
-    let texture = renderer.create_texture(&Dds::parse(&bc3).unwrap()).unwrap();
-    list.quads
-        .push(Quad::new(Rect::new(768.0, 0.0, 256.0, 768.0), &texture));
-    let image = capture(&mut renderer, &list, 16, 8);
+    let mut rects = [
+        Rect::new(0.0, 0.0, 512.0, 768.0),
+        Rect::new(512.0, 0.0, 256.0, 768.0),
+        Rect::new(768.0, 0.0, 256.0, 768.0),
+    ]
+    .into_iter();
+    for (bytes, format) in [bc1, bc2, bc3].iter().zip(formats) {
+        let texture = renderer
+            .create_texture(&Dds::parse(bytes).unwrap())
+            .unwrap();
+        assert_eq!(texture.wgpu().format(), format);
+        list.quads.push(Quad::new(rects.next().unwrap(), &texture));
+    }
+    let image = capture(renderer, &list, 16, 8);
     for (x, y, expected) in [(0, 0, RED), (7, 0, GREEN), (0, 7, BLUE), (7, 7, WHITE)] {
-        assert_eq!(pixel(&image, 16, x, y), expected, "BC1 ({x}, {y})");
+        assert_near(
+            pixel(&image, 16, x, y),
+            expected,
+            tolerance,
+            &format!("BC1 ({x}, {y})"),
+        );
     }
     assert_near(
         pixel(&image, 16, 9, 3),
         [136, 0, 0, 255],
-        1,
+        1 + tolerance,
         "BC2 red at 136/255",
     );
     assert_near(
         pixel(&image, 16, 13, 3),
         [0, 64, 0, 255],
-        1,
+        1 + tolerance,
         "BC3 green at 64/255",
     );
-}
-
-#[test]
-fn bc_without_device_support_is_a_clear_error() {
-    let (device, queue) = device(false);
-    let renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Bgra8Unorm);
-    let bc1 = file(4, 4, 0, false, PixelFormat::FourCc(b"DXT1"), &[0; 8]);
-    let error = renderer
-        .create_texture(&Dds::parse(&bc1).unwrap())
-        .unwrap_err();
-    assert_eq!(
-        error,
-        TextureError::NoBcSupport {
-            format: "BC1 (DXT1)"
-        }
-    );
-    assert_eq!(
-        error.to_string(),
-        "BC1 (DXT1) texture needs the GPU feature texture-compression-bc, which this device lacks"
-    );
-    // Uncompressed textures still work.
-    let rgba = file(1, 1, 0, false, PixelFormat::BGRA8, &[0, 0, 255, 255]);
-    renderer
-        .create_texture(&Dds::parse(&rgba).unwrap())
-        .unwrap();
 }
 
 #[test]
