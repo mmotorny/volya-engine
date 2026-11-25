@@ -483,6 +483,40 @@ export const tests = {
     assert(touchControls.hidden, "touch controls shown without a touch");
     return `ran ${moved.toFixed(2)} m, jumped ${height.toFixed(2)} m`;
   },
+  "touch: the controls are drawn from the game's textures": async () => {
+    needsGame();
+    // Asked for once the level's controls were live (the `ui_images` op),
+    // drawn even while hidden.
+    const controls = document.getElementById("touch-controls");
+    for (let i = 0; i < 250 && controls.dataset.art !== "game"; i++) await sleep(20);
+    assertEqual(controls.dataset.art, "game", "the controls' art");
+    // The page's own art, cached for the session (the same module as the
+    // app's: the harness imports the app from the same base).
+    const base = location.pathname.slice(0, location.pathname.indexOf("/__test/") + 1);
+    const { gameArt } = await import(`${base}touch-art.js`);
+    const art = await gameArt(() => Promise.reject(new Error("the textures asked for twice")));
+    // Every canvas holds a picture, in device pixels.
+    let bytes = 0;
+    for (const canvas of controls.querySelectorAll("canvas")) {
+      const g = canvas.getContext("2d");
+      const pixels = g.getImageData(0, 0, canvas.width, canvas.height).data;
+      let alpha = 0;
+      for (let i = 3; i < pixels.length; i += 4) alpha += pixels[i];
+      assert(alpha > 0, `an empty canvas: ${canvas.className} in ${canvas.parentElement.className}`);
+      bytes += canvas.width * canvas.height * 4;
+    }
+    // The op itself: a posture icon's silhouette is teal and closed, the
+    // crosshair's colour is read.
+    const answer = await volya.call("ui_images", { images: [{ id: "ui_hud_soldier_crouch", silhouette: true }, { id: "no such id" }] });
+    const [icon, missing] = answer.images;
+    assertEqual([icon.width, icon.height], [65, 75], "the crouch icon's size");
+    const [r, g, b] = icon.mean;
+    assert(g > r + 60 && b > r + 60, `the crouch icon is teal: ${icon.mean}`);
+    assert(missing.error, "an unknown id answers an error");
+    assert(answer.cross_color?.length === 4, `the crosshair's colour: ${answer.cross_color}`);
+    const sources = ["frame", "crouch", "creep", "sprint", "segments", "spot"].reduce((n, k) => n + art[k].width * art[k].height * 4, 0);
+    return `decoded in ${art.ms.toFixed(1)} ms (engine), ${art.totalMs.toFixed(1)} ms with the page's part; sources ${(sources / 1024).toFixed(0)} KiB, canvases ${(bytes / 1024).toFixed(0)} KiB at ${devicePixelRatio}x`;
+  },
 
   "touch: the stick walks and its sprint lock sprints, drags look (from Jump too), Crouch and its swipe down, Menu opens the menu": async () => {
     needsGame();

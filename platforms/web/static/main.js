@@ -101,7 +101,7 @@ const size = () => ({ width: view.clientWidth, height: view.clientHeight, dpr: d
 // page's own interface hides meanwhile.
 const send = (event) => worker.postMessage({ type: "input", event });
 const forward = startInput(view, send);
-const touch = createTouchControls(send);
+const touch = createTouchControls(send, { call });
 document.body.append(touch.element);
 setCapture = (on) => {
   forward.setCapture(on);

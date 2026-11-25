@@ -69,14 +69,17 @@ export const SECTIONS = [
     ],
   },
   // The level's touch controls over a plain backdrop (the board can't show
-  // the game's own frames), on touch devices only.
+  // the game's own frames), on touch devices only. The board has no game
+  // data, so the controls show the approximations of the game's textures.
   {
     title: "In the level",
+    note: "Approximations: the app draws these controls from the imported game's textures.",
     states: [
       { id: "level-touch", name: "Idle", level: {}, devices: TOUCH },
       { id: "level-touch-faded", name: "Idle a while: faded", level: { fade: true }, devices: TOUCH },
       { id: "level-touch-moving", name: "Moving with the stick", level: { stick: [0.45, -0.85] }, devices: TOUCH },
       { id: "level-touch-jump", name: "Jump held", level: { down: "jump" }, devices: TOUCH },
+      { id: "level-touch-crouch-held", name: "Crouch held", level: { down: "crouch" }, devices: TOUCH },
       {
         id: "level-touch-past-rim",
         name: "Past the rim: sprinting, the lock target shown",

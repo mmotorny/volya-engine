@@ -14,18 +14,27 @@
 //   for it): let go there, the sprint locks hands-free until the stick is
 //   touched again (the engine decides, SprintLock);
 // - the right half looks: drags send their motion;
-// - Jump and Crouch (a toggle, shown on, and lower in the low crouch) at
-//   the bottom right act on their press; a drag begun on either then looks
-//   too, and Crouch swiped down is the low crouch. Menu at the top left
-//   does what Escape does.
+// - Jump and Crouch (a toggle, shown on, with its own icon in the low
+//   crouch) at the bottom right act on their press; a drag begun on either
+//   then looks too, and Crouch swiped down is the low crouch. Menu at the
+//   top left does what Escape does.
 //
-// No text on the controls: glyphs are ours, names are aria-labels. Touches
-// on the controls go to them alone, not to input.js. Positions are in the
-// controls' own frame, which is turned with the canvas on upright phones
-// (style.css).
+// They look like instruments of the game's HUD, drawn from its own UI
+// textures (touch-art.js; design A of #105). No text on the controls: names
+// are aria-labels. Touches on the controls go to them alone, not to
+// input.js. Positions are in the controls' own frame, which is turned with
+// the canvas on upright phones (style.css).
+
+import { approximateArt, gameArt, paintDisc, paintGlyph, paintPicture, vectorGlyph } from "./touch-art.js";
 
 /** Stick radius, CSS pixels: a full deflection (matches style.css). */
 const RADIUS = 56;
+/** Sizes in CSS pixels (match style.css): the buttons, the knob, the lock
+ * target, and the segmented ring around the stick. */
+const SIZE = { menu: 44, jump: 80, crouch: 64 };
+const KNOB = 48;
+const TARGET = 44;
+const SEGMENTS = 2 * RADIUS + 6;
 // The sprint lock's geometry in stick radii, as the engine's (controls.rs:
 // SPRINT_RIM, SPRINT_RIM_EXIT, SPRINT_CONE, LOCK_REACH, LOCK_RADIUS,
 // LOCK_MIN_REACH).
@@ -51,9 +60,9 @@ const LOOK_SMOOTH_MS = 75;
 
 const SVG = "http://www.w3.org/2000/svg";
 
-/** A decorative line drawing of `paths` (`[d, className]` or `d`) and
- * `circles` in a `size` × `size` frame. */
-function drawing(className, size, paths, circles = []) {
+/** A decorative line drawing of `paths` (`[d, className]` or `d`) in a
+ * `size` × `size` frame. */
+function drawing(className, size, paths) {
   const svg = document.createElementNS(SVG, "svg");
   svg.setAttribute("viewBox", `0 0 ${size} ${size}`);
   svg.setAttribute("class", className);
@@ -65,35 +74,25 @@ function drawing(className, size, paths, circles = []) {
     if (name) p.setAttribute("class", name);
     svg.append(p);
   }
-  for (const [cx, cy, r] of circles) {
-    const c = document.createElementNS(SVG, "circle");
-    c.setAttribute("cx", cx);
-    c.setAttribute("cy", cy);
-    c.setAttribute("r", r);
-    svg.append(c);
-  }
   return svg;
 }
 
-// Our glyphs (24 × 24, drawn with round 2-unit strokes in style.css).
-/** Jump: an arrow up off a ground line. */
-const JUMP = [["M12 17V4", "M6.5 9.5 12 4l5.5 5.5", "M5 20.5h14"]];
-/** Crouch: a figure on one knee. */
-const CROUCH = [["M11 8.5 10 14", "M10.8 10.5l3.7 2.3", "M10 14l5 .5V20", "M10 14l-1.5 6H5"], [[11.5, 5, 2]]];
-/** Low crouch: the figure lower and leaning forward. */
-const LOW_CROUCH = [["M13 11.5 8.5 15", "M12 12.8l3.2 2.4", "M8.5 15l4.5 1.5V20", "M8.5 15 7 20H3.5"], [[15, 9.5, 2]]];
-/** Menu: pause bars. */
-const MENU = [["M9 6v12", "M15 6v12"]];
-/** The gesture chevrons at a button's edges (a 100 × 100 frame): dragging
- * sideways looks, Crouch swiped down is the low crouch. */
+/** The gestures a held button takes, as chevrons at its edges (a 100 × 100
+ * frame), shown only while it is held (our design: no permanent arrows):
+ * dragging sideways looks, Crouch swiped down is the low crouch. */
 const EDGES = { left: "M11 42 4 50l7 8", right: "M89 42l7 8-7 8", down: "M42 89l8 7 8-7" };
-/** The move stick's rim chevrons (its 112 × 112 frame). */
-const RIM = ["M50 13l6-6 6 6", "M50 99l6 6 6-6", "M13 50l-6 6 6 6", "M99 50l6 6-6 6"];
 /** Sprint ahead: a double chevron up, between the rim and the lock target. */
 const SPRINT = ["M7 13l5-5 5 5", "M7 19l5-5 5 5"];
 
-const glyph = (className, paths, circles) => drawing(className, 24, paths, circles);
 const edges = (sides) => drawing("touch-edges", 100, sides.map((side) => [EDGES[side], side]));
+
+/** A canvas the art is drawn into. */
+function artCanvas(className) {
+  const c = document.createElement("canvas");
+  c.className = className;
+  c.setAttribute("aria-hidden", "true");
+  return c;
+}
 
 /** The position of `event` in `box`'s own frame, turned like the canvas. */
 function local(box, event) {
@@ -123,12 +122,14 @@ function pastRim([x, y], centre, was) {
 const onTarget = ([x, y], centre) => Math.hypot(x - centre[0], y - centre[1]) <= LOCK_RADIUS;
 
 /**
- * The controls; `send(message)` posts one input message to the engine.
- * `update({ level, crouch, low, sprint, lock })` follows the engine's
- * state. `touch` says the device has touch without waiting for one, and
- * `fade: false` keeps the controls from fading when idle (UX audit page).
+ * The controls; `send(message)` posts one input message to the engine, and
+ * `call(op, args)` runs an engine op (for the game's textures; without it
+ * the approximations stay). `update({ level, crouch, low, sprint, lock })`
+ * follows the engine's state. `touch` says the device has touch without
+ * waiting for one, and `fade: false` keeps the controls from fading when
+ * idle (UX audit page).
  */
-export function createTouchControls(send, { touch = false, fade = true } = {}) {
+export function createTouchControls(send, { call = null, touch = false, fade = true } = {}) {
   const root = element("div", "touch-controls");
   root.id = "touch-controls";
   root.hidden = true;
@@ -138,23 +139,34 @@ export function createTouchControls(send, { touch = false, fade = true } = {}) {
   const ring = element("div", "touch-stick");
   const target = element("div", "touch-lock");
   const knob = element("div", "touch-knob");
-  const hint = glyph("touch-sprint-hint", SPRINT);
-  ring.append(drawing("touch-rim", 112, RIM), target, knob, hint);
+  const hint = drawing("touch-sprint-hint", 24, SPRINT);
+  const base = artCanvas("touch-disc");
+  const rim = element("div", "touch-rim");
+  const segments = artCanvas("touch-segments");
+  const knobDisc = artCanvas("touch-disc");
+  const spot = artCanvas("touch-spot");
+  const figure = artCanvas("touch-figure");
+  const figureLit = artCanvas("touch-figure lit");
+  knob.append(knobDisc);
+  target.append(spot, figure, figureLit);
+  ring.append(base, rim, segments, target, knob, hint);
   move.append(ring);
   const look = element("div", "touch-look");
-  const button = (name, label, art, sides) => {
+  const button = (name, label, sides, glyphs = [""]) => {
     const b = element("button", `touch-button ${name}`);
     b.type = "button";
     b.dataset.button = name;
     b.setAttribute("aria-label", label);
+    b.append(artCanvas("touch-disc"));
+    for (const variant of glyphs) b.append(artCanvas(`touch-glyph ${variant}`.trim()));
     if (sides) b.append(edges(sides));
-    b.append(glyph("touch-glyph", ...art));
     return b;
   };
-  const menu = button("menu", "Menu", MENU);
-  const jump = button("jump", "Jump", JUMP, ["left", "right"]);
-  const crouch = button("crouch", "Crouch", CROUCH, ["left", "right", "down"]);
-  crouch.append(glyph("touch-glyph low", ...LOW_CROUCH));
+  const menu = button("menu", "Menu");
+  const jump = button("jump", "Jump", ["left", "right"]);
+  // Crouch: the upright crouch icon; brighter when on; the creep icon in
+  // the low crouch.
+  const crouch = button("crouch", "Crouch", ["left", "right", "down"], ["", "on", "low"]);
   crouch.setAttribute("aria-pressed", "false");
   const actions = element("div", "touch-actions");
   actions.append(crouch, jump);
@@ -230,11 +242,11 @@ export function createTouchControls(send, { touch = false, fade = true } = {}) {
   };
   /** Draws the target and the sprint chevrons toward `centre`. */
   const drawTarget = (centre) => {
-    // In the ring's frame: its centre 56 px into the 112-pixel box, inside
-    // a 2-pixel border; the target is 44 px, the chevrons 22 px.
+    // In the ring's frame: its centre 56 px into the 112-pixel box; the
+    // target is 44 px, the chevrons 22 px.
     const reach = Math.hypot(...centre);
     const toward = [centre[0] / reach, centre[1] / reach];
-    const at = (r) => [56 + toward[0] * r - 2, 56 + toward[1] * r - 2];
+    const at = (r) => [56 + toward[0] * r, 56 + toward[1] * r];
     const [tx, ty] = at(reach * RADIUS);
     target.style.left = `${tx - 22}px`;
     target.style.top = `${ty - 22}px`;
@@ -429,6 +441,69 @@ export function createTouchControls(send, { touch = false, fade = true } = {}) {
     });
   }
 
+  // The art: approximations until the game's textures arrive (asked for
+  // once the level's controls are first live), redrawn at a new
+  // devicePixelRatio. For tests: `data-art` says which is drawn.
+  let art = approximateArt();
+  const paint = () => {
+    const { teal, tealHi, grey, pale } = art;
+    for (const [b, size] of [
+      [menu, SIZE.menu],
+      [jump, SIZE.jump],
+      [crouch, SIZE.crouch],
+    ]) {
+      paintDisc(b.querySelector(".touch-disc"), art, size);
+    }
+    const k = devicePixelRatio || 1;
+    const menuGlyph = SIZE.menu * 0.5;
+    paintGlyph(menu.querySelector(".touch-glyph"), vectorGlyph("menu", Math.round(menuGlyph * k)), menuGlyph, menuGlyph, grey);
+    const jumpGlyph = SIZE.jump * 0.56;
+    paintGlyph(jump.querySelector(".touch-glyph"), vectorGlyph("jump", Math.round(jumpGlyph * k)), jumpGlyph, jumpGlyph, teal);
+    const crouchGlyph = SIZE.crouch * 0.62;
+    const [normal, on, low] = crouch.querySelectorAll(".touch-glyph");
+    paintGlyph(normal, art.crouch, crouchGlyph, crouchGlyph, teal);
+    paintGlyph(on, art.crouch, crouchGlyph, crouchGlyph, tealHi);
+    paintGlyph(low, art.creep, crouchGlyph, crouchGlyph, tealHi);
+    paintDisc(base, art, 2 * RADIUS, { backing: 0.3, opacity: 0.75 });
+    paintPicture(segments, art.segments, SEGMENTS, teal);
+    paintDisc(knobDisc, art, KNOB, { texel: 0.6, backing: 0.55, opacity: 1 });
+    paintPicture(spot, art.spot, TARGET);
+    paintGlyph(figure, art.sprint, TARGET * 0.55, TARGET * 0.55, teal);
+    paintGlyph(figureLit, art.sprint, TARGET * 0.55, TARGET * 0.55, pale);
+    for (const [name, color] of Object.entries({ teal, "teal-hi": tealHi, grey })) {
+      root.style.setProperty(`--hud-${name}`, color.join(", "));
+    }
+    root.dataset.art = art.game ? "game" : "approximate";
+  };
+  paint();
+  (function watchPixelRatio() {
+    matchMedia(`(resolution: ${devicePixelRatio}dppx)`).addEventListener(
+      "change",
+      () => {
+        paint();
+        watchPixelRatio();
+      },
+      { once: true },
+    );
+  })();
+  let asked = false;
+  const askArt = () => {
+    if (asked || !call) return;
+    asked = true;
+    gameArt(call).then(
+      (game) => {
+        art = game;
+        paint();
+      },
+      (error) => {
+        // The approximations stay; asked again when the controls are next
+        // live.
+        asked = false;
+        console.warn(`touch controls: the game's textures: ${error.message}`);
+      },
+    );
+  };
+
   // Shown on touch devices: a coarse pointer, or once a touch is seen in
   // the level.
   let touched = touch || matchMedia("(pointer: coarse)").matches;
@@ -475,6 +550,7 @@ export function createTouchControls(send, { touch = false, fade = true } = {}) {
     update({ level, crouch: on, low, sprint, lock }) {
       crouched = Boolean(on);
       live = level;
+      if (level) askArt();
       sprinting = Boolean(sprint);
       // For tests: whether the engine's message says the controls are live.
       root.dataset.live = String(Boolean(level));
