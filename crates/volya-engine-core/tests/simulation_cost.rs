@@ -153,7 +153,8 @@ fn simulation_memory_and_update_time() {
         mb(held() - base),
     );
     assert!(switches > 671);
-    // Budgets: measured (23.7 MB kept, 23.7 MB peak), plus a modest
+    // Budgets: measured (16.8 MB kept, 16.9 MB peak; 23.7 and 23.7 before
+    // #370), plus a modest
     // margin; the update time only where optimized (21 µs median, 37 µs
     // 99th percentile, measured).
     // Reported, never failed (budgets are not gates).
@@ -162,8 +163,8 @@ fn simulation_memory_and_update_time() {
             eprintln!("OVER BUDGET: {what}");
         }
     };
-    over("kept 27 MB or more", mb(after_navigation - base) >= 27.0);
-    over("peak 27 MB or more", mb(peak - base) >= 27.0);
+    over("kept 20 MB or more", mb(after_navigation - base) >= 20.0);
+    over("peak 20 MB or more", mb(peak - base) >= 20.0);
     if !cfg!(debug_assertions) {
         over(
             "median update 200 µs or more",

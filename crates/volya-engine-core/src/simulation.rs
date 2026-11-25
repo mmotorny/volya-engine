@@ -556,6 +556,9 @@ impl Simulation {
     /// client-data rule of sav.md 8 (the scripts' `on_register` does not
     /// run here).
     fn post_register(&mut self) {
+        // Every object is registered: the list's spare room from growing
+        // (up to half of it, 5.5 MB for a New Game) goes (#370).
+        self.objects.slots.shrink_to_fit();
         let ids: Vec<u16> = self.objects.keys().copied().collect();
         for id in ids {
             let top = self.top_level(id);

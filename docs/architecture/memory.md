@@ -35,7 +35,7 @@ What each loading stage keeps, and the blocks it leaves live:
 | Stage | Keeps | Blocks kept | Allocations made | Peak above the stage's start |
 |---|---|---|---|---|
 | `st_creating_new_game` | 4.7 MB | 66 | 452 | 12.8 MB |
-| `st_server_connecting` (the offline simulation: registry 14.8, navigation 7.1, graph and paths 1.8) | 19.8 MB | 108,551 | 603,156 | 19.8 MB |
+| `st_server_connecting` (the offline simulation: registry 7.9, navigation 7.1, graph and paths 1.8; the registry 14.8 before #370) | 12.7 MB (19.8 before) | 109,329 | 603,934 | 14.1 MB (19.8 before) |
 | `st_opening_stream` (the `level` file's parts) | 7.8 MB | 6,887 | 41,503 | 12.6 MB |
 | `st_loading_cform` (collision: vertices 8.4, triangles 11.0, materials 1.4, grid 9.3; before #371 triangles 16.5 and grid 15.8) | 30.7 MB (42.7 before) | 9,654 | 14,924 | 35.1 MB (45.0 before) |
 | `st_loading_geometry` | 0.4 MB | 121 | 205 | 0.7 MB |
@@ -44,7 +44,7 @@ What each loading stage keeps, and the blocks it leaves live:
 | `st_client_spawning` (objects' models, weather, level sounds; the objects' geometry 4.9 until uploaded) | 6.2 MB | 6,929 | 2,459,422 | 11.0 MB |
 | `st_loading_textures` | 0.3 MB | 1,639 | 103,158 | 3.1 MB |
 
-The level keeps 66.0 MB at the end of loading in 136,065 blocks (77.9 MB before #371), 61 MB once its geometry is uploaded; the load's peak is 70.3 MB above its start (82.3 before). The game data a level needs resident is about 48 MB (`level.cform` as stored 30.4, the navigation positions 7.1, `all.spawn` 4.5, the graph's tables 1.8, the configuration's text 1.4, the strings 1.8, the effect library 1.9); the rest lives on the GPU as stored.
+The registry is one list indexed by id with each object's record inline; the three kinds largest inline (hanging lamps, monster groups and helicopters, 256–416 bytes) are boxed, and the list is shrunk to its length once every object is registered, so it no longer keeps the half its growth left spare (#370). The level keeps 59.1 MB at the end of loading in 136,837 blocks (77.9 MB before #370 and #371), 54 MB once its geometry is uploaded; the load's peak is 63.3 MB above its start (82.3 before). The game data a level needs resident is about 48 MB (`level.cform` as stored 30.4, the navigation positions 7.1, `all.spawn` 4.5, the graph's tables 1.8, the configuration's text 1.4, the strings 1.8, the effect library 1.9); the rest lives on the GPU as stored.
 
 ### Loading temporaries
 
@@ -79,7 +79,7 @@ The audio worker's instance adds 3–4 MiB (#354). Before the New Game the heap 
 
 A source is substantial when it leaves many small long-lived blocks between large ones, or makes large temporaries where long-lived blocks then settle:
 
-- the offline simulation's registry: 108,551 blocks for 8,641 objects (#370), made after the previous level's blocks were freed and before the collision world's are allocated;
+- the offline simulation's registry: 109,329 blocks for 8,641 objects, made after the previous level's blocks were freed and before the collision world's are allocated;
 - the loading temporaries: 2.46 million allocations under `st_client_spawning` alone, interleaved with what the stage keeps;
 - the level's other small long-lived blocks: the `level` file's parts (6,887), the effect library (8,417), the objects (6,929);
 - the collision world's large arrays, which need contiguous space (#371);
@@ -137,7 +137,7 @@ The heap grew in every variant: under `st_loading_cform` by 37 MiB for 39 MiB mo
 
 What the measurements leave, for the user to decide (#401): the level's large blocks are what needs new memory (the collision world's arrays, up to 11 MB each since #371 (16.5 before), the game graph and the spawn file read whole, 8.1 and 4.5 MB, the navigation 7.1 MB), not its small ones. Ways that keep one heap's sharing:
 
-- make the large blocks smaller: the collision grid and triangles packed (#371), the registry compacted (#370), the game graph and spawn file streamed (#403);
+- make the large blocks smaller: the collision grid and triangles packed (#371), the game graph and spawn file streamed (#403);
 - split the large blocks into fixed pieces (1 MiB, say) that any free space of that size takes, and that the next level's pieces reuse;
 - a level arena of such pieces released whole, with the level's temporaries kept out of it (an experiment, not yet measured).
 
