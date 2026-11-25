@@ -70,9 +70,9 @@ pub struct Polygon {
 pub fn parse(bytes: &[u8]) -> io::Result<Vec<Polygon>> {
     let chunks = Chunks::parse(bytes)?;
     chunks.require(0, "level.som version")?;
-    // TODO(docs/behavior/sound-occlusion.md section 8): a missing chunk 1,
-    // one not a multiple of 44 bytes or a short chunk 0 is unestablished;
-    // we fail on the first two (no shipped file has any).
+    // TODO(#320, docs/behavior/sound-occlusion.md section 8): a missing
+    // chunk 1, one not a multiple of 44 bytes or a short chunk 0 is
+    // unestablished; we fail on the first two (no shipped file has any).
     let data = chunks.require(1, "level.som polygons")?.content()?;
     if data.len() % RECORD != 0 {
         return Err(invalid(format!(
@@ -254,14 +254,15 @@ impl Occlusion {
     /// The occlusion target *o\** of an emitter at `position` heard at
     /// `listener` (4.2 – 4.4), drawing the jitter from `random`.
     pub fn target(&self, listener: Vec3, position: Vec3, random: &mut SharedRandom) -> f32 {
+        // The two draws are made whether or not a mesh is present (4.2).
+        let j = jitter(random.draw(), random.draw());
         if self.level.is_none() && self.sound.is_none() {
-            // Both factors are 1; the draws change nothing audible.
             return 1.0;
         }
-        let j = jitter(random.draw(), random.draw());
         let x = [position[0] + j[0], position[1] + j[1], position[2] + j[2]];
-        // TODO(docs/behavior/sound-occlusion.md, Gaps found in review): the
-        // target for a segment of length 0 is unestablished; we take 1.
+        // TODO(#320, docs/behavior/sound-occlusion.md, Gaps found in
+        // review): the target for a segment of length 0 is unestablished; we
+        // take 1.
         let Some((dir, length)) = segment(listener, x) else {
             return 1.0;
         };

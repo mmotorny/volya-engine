@@ -142,13 +142,15 @@ fn run(outdoors: bool) -> Vec<(u32, &'static str, AmbientFrame)> {
     let mut events = Vec::new();
     for k in 1..=3_000 {
         let now = 20 * k;
-        let f = state.frame(
-            &mut s,
-            now,
-            (Some(&tuman), Some(&morning), 0.5),
-            outdoors,
-            EYE,
-        );
+        let f = state
+            .frame(
+                &mut s,
+                now,
+                (Some(&tuman), Some(&morning), 0.5),
+                outdoors,
+                EYE,
+            )
+            .unwrap();
         let set = if f.chose_b { "morning" } else { "tuman" };
         if f.sound.is_some() || f.effect.is_some() || f.effect_ended {
             events.push((now, set, f));
@@ -218,7 +220,9 @@ fn without_sets_nothing_plays_but_a_number_is_drawn() {
     // Section 7 (M5).
     let mut s = SoundSystem::new(16);
     let mut state = AmbientState::default();
-    let f = state.frame(&mut s, 20, (None, None, 0.5), true, EYE);
+    let f = state
+        .frame(&mut s, 20, (None, None, 0.5), true, EYE)
+        .unwrap();
     assert_eq!(f, AmbientFrame::default());
     // The first draw (41) was taken: the next is 18,467.
     assert_eq!(s.random().draw(), 18_467);
@@ -231,12 +235,16 @@ fn an_effect_ends_at_its_time_without_a_set() {
     let mut s = SoundSystem::new(16);
     let morning = create(&mut s, SetData::read(&c, "ambient_env_morning").unwrap());
     let mut state = AmbientState::default();
-    let f = state.frame(&mut s, 20, (Some(&morning), Some(&morning), 0.5), true, EYE);
+    let f = state
+        .frame(&mut s, 20, (Some(&morning), Some(&morning), 0.5), true, EYE)
+        .unwrap();
     assert_eq!(f.effect, Some(0));
     assert_eq!(state.wind_gust_factor, 0.015);
     let mut ended = None;
     for k in 2..1_000 {
-        let f = state.frame(&mut s, 20 * k, (None, None, 0.5), true, EYE);
+        let f = state
+            .frame(&mut s, 20 * k, (None, None, 0.5), true, EYE)
+            .unwrap();
         if f.effect_ended {
             ended = Some(20 * k);
             break;
@@ -249,5 +257,21 @@ fn an_effect_ends_at_its_time_without_a_set() {
     assert!(
         wind.iter()
             .any(|e| e.name.ends_with("rnd_wind_2") && !e.stopping)
+    );
+}
+
+#[test]
+fn a_period_with_equal_bounds_is_fatal() {
+    // 4.7: the original faults at the set's first random sound.
+    let c = tuman_and_morning();
+    let mut s = SoundSystem::new(16);
+    let mut data = SetData::read(&c, "ambient_env_tuman").unwrap();
+    data.sound_period = Some((5_000, 5_000));
+    let tuman = create(&mut s, data);
+    let mut state = AmbientState::default();
+    assert!(
+        state
+            .frame(&mut s, 20, (Some(&tuman), Some(&tuman), 0.5), false, EYE)
+            .is_err()
     );
 }

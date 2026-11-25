@@ -617,3 +617,17 @@ fn a_restart_stops_everything_and_changes_the_voices() {
     assert!(device.0.contains(&Event::Stop(0)));
     assert_eq!(SoundSystem::new(1).voice_count(), MIN_VOICES);
 }
+
+#[test]
+fn a_failed_creation_leaves_no_sound_behind() {
+    let mut s = system(16, &[sparks1()]);
+    let kept = create(&mut s, "ambient\\sparks1", Category::Effects);
+    let tree = DbVfs::<io::Empty>::new();
+    let aliases = PathAliases::default();
+    let created = s.all_or_none(|s| {
+        s.create(&tree, &aliases, "ambient\\sparks1", Category::Effects)?;
+        s.create(&tree, &aliases, "ambient\\missing", Category::Effects)
+    });
+    assert!(created.is_err());
+    assert_eq!(s.sound_ids().collect::<Vec<_>>(), [kept]);
+}

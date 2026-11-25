@@ -489,6 +489,33 @@ impl SoundSystem {
         }
     }
 
+    /// The sounds that exist (created and not discarded).
+    pub fn sound_ids(&self) -> impl Iterator<Item = SoundId> + '_ {
+        (0..self.slots.len())
+            .filter(|&i| self.slots[i].is_some())
+            .map(SoundId)
+    }
+
+    /// Runs `create`, which creates sounds; when it fails, every sound it
+    /// created is discarded, so a fatal error leaves none behind.
+    pub fn all_or_none<T>(
+        &mut self,
+        create: impl FnOnce(&mut Self) -> Result<T, Fatal>,
+    ) -> Result<T, Fatal> {
+        let before: Vec<bool> = self.slots.iter().map(Option::is_some).collect();
+        let created = create(self);
+        if created.is_err() {
+            let made: Vec<SoundId> = self
+                .sound_ids()
+                .filter(|id| !before.get(id.0).copied().unwrap_or(false))
+                .collect();
+            for id in made {
+                self.discard(id);
+            }
+        }
+        created
+    }
+
     fn slot(&self, id: SoundId) -> Option<&SoundSlot> {
         self.slots.get(id.0)?.as_ref()
     }
@@ -857,12 +884,13 @@ impl SoundSystem {
                         e.end = now + e.sound.duration_ms() as f64;
                     }
                     e.fade = 1.0;
-                    if !e.two_d {
-                        // S6 4.1: the target at the start, from p.
-                        let (listener, position) = (self.listener.position, e.position);
-                        let target =
-                            self.occlusion
-                                .target(listener, position, &mut self.shared_random);
+                    // S6 4.1: the target at the start of every emitter, from
+                    // p; a 2D emitter's has no effect.
+                    let (listener, position) = (self.listener.position, e.position);
+                    let target = self
+                        .occlusion
+                        .target(listener, position, &mut self.shared_random);
+                    if !self.emitters[i].two_d {
                         self.emitters[i].occlusion = target;
                     }
                     let e = &mut self.emitters[i];

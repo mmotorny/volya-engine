@@ -152,8 +152,8 @@ pub fn track_list(game: &Config, level: &str) -> io::Result<Vec<(String, TrackPa
     section
         .entries()
         .map(|e| {
-            // TODO(docs/behavior/sound-level-music.md section 2.2): an entry
-            // without a value is unestablished; we fail the load.
+            // TODO(#320, docs/behavior/sound-level-music.md section 2.2): an
+            // entry without a value is unestablished; we fail the load.
             let value = e.value().ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,

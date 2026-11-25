@@ -150,8 +150,17 @@ pub struct LevelSounds {
 impl LevelSounds {
     /// Creates every sound of `data` in `system` (each file resolved with
     /// `$level$` at the level's directory, S1 section 2): fatal when a file
-    /// cannot be opened.
+    /// cannot be opened (S1 section 5), and then none of them is kept.
     pub fn create(
+        system: &mut SoundSystem,
+        tree: &dyn Vfs,
+        aliases: &PathAliases,
+        data: &LevelSoundData,
+    ) -> Result<Self, Fatal> {
+        system.all_or_none(|system| Self::create_all(system, tree, aliases, data))
+    }
+
+    fn create_all(
         system: &mut SoundSystem,
         tree: &dyn Vfs,
         aliases: &PathAliases,
@@ -260,20 +269,33 @@ impl SoundRun {
         self.ambient.level_left();
     }
 
+    /// A level frame on which the game is paused: the thunder's frame time
+    /// is 0 (S8 3.1).
+    pub fn paused_frame(&mut self) {
+        self.thunder.paused_frame();
+    }
+
     /// The rules of one running frame `elapsed_s` seconds after the last,
     /// in the original's order: the static sources, then the music (S5
     /// 4.1), then the environment's thunder and rain (S8 3.2), then the
-    /// ambient sounds after the engine's frame (S4 4.1).
+    /// ambient sounds after the engine's frame (S4 4.1). Under the loading
+    /// image (`loading_image`) the static sources and the music do not run
+    /// (S3 4.1, S5 4.1); the specs of the others make no such exception.
+    /// Fatal when a rule draws from a range with equal bounds (S3 4.2, S4
+    /// 4.7).
     pub fn frame(
         &mut self,
         system: &mut SoundSystem,
         sounds: &mut LevelSounds,
         inputs: &SoundInputs,
         elapsed_s: f32,
-    ) {
+        loading_image: bool,
+    ) -> Result<(), Fatal> {
         let now = self.clock as u32;
-        sounds.statics.frame(system, now, inputs.tau);
-        sounds.music.frame(system, now, inputs.tau);
+        if !loading_image {
+            sounds.statics.frame(system, now, inputs.tau)?;
+            sounds.music.frame(system, now, inputs.tau);
+        }
         let [a, b] = inputs.sections;
         let t = inputs.t;
         // S8 2.3.
@@ -304,6 +326,7 @@ impl SoundRun {
         };
         let outdoors = inputs.sky_visibility >= ambient::OUTDOORS;
         self.ambient
-            .frame(system, now, (set(a), set(b), t), outdoors, inputs.eye);
+            .frame(system, now, (set(a), set(b), t), outdoors, inputs.eye)?;
+        Ok(())
     }
 }

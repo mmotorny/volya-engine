@@ -87,7 +87,7 @@ impl EffectData {
         let section = config
             .section(name)
             .ok_or_else(|| invalid(format!("no ambient effect section [{name}]")))?;
-        // TODO(docs/behavior/sound-weather-ambient.md section 2.3): what a
+        // TODO(#320, docs/behavior/sound-weather-ambient.md section 2.3): what a
         // missing `life_time`, `particles`, `offset` or `wind_gust_factor`
         // does is unestablished; we read it as 0 or empty (every shipped
         // section has them).
@@ -247,12 +247,12 @@ pub struct AmbientState {
     pub wind_gust_factor: f32,
 }
 
-/// A period from bounds `a`, `b` (3.2). With equal bounds the original
-/// faults (believed, 4.7); no shipped set has them, and we take *a* (our
-/// choice).
-fn period(system: &mut SoundSystem, (a, b): (u32, u32)) -> u32 {
+/// A period from bounds `a`, `b` (3.2) of the set `set`. With equal bounds
+/// the original faults (an integer division by zero, believed, 4.7), so it
+/// is fatal here; no shipped set has them.
+fn period(system: &mut SoundSystem, set: &str, (a, b): (u32, u32)) -> Result<u32, Fatal> {
     let r = system.random().draw();
-    range(r, a, b).unwrap_or(a)
+    range(r, a, b).ok_or_else(|| Fatal(format!("[{set}]: a period from {a} to {b} ms")))
 }
 
 impl AmbientState {
@@ -265,7 +265,8 @@ impl AmbientState {
     /// The rule of one frame (4.4 – 4.6) at global clock `now` (ms): the
     /// current sections' sets `a` and `b` with blend weight `t`, whether
     /// the view is `outdoors` (4.3), and the camera's eye `eye`. Run once
-    /// per frame while a level runs and the game is not paused (4.1).
+    /// per frame while a level runs and the game is not paused (4.1). A
+    /// period drawn from equal bounds is fatal (4.7).
     pub fn frame(
         &mut self,
         system: &mut SoundSystem,
@@ -273,15 +274,15 @@ impl AmbientState {
         (a, b, t): (Option<&AmbientSet>, Option<&AmbientSet>, f32),
         outdoors: bool,
         eye: Vec3,
-    ) -> AmbientFrame {
+    ) -> Result<AmbientFrame, Fatal> {
         let mut out = AmbientFrame::default();
         // 4.4: both sides in 32-bit float.
         let r = system.random().draw();
         out.chose_b = 1.0 - t <= r as f32 * (1.0 / MAX as f32);
         let set = if out.chose_b { b } else { a };
         if let Some(set) = set {
-            self.random_sound(system, now, set, eye, &mut out);
-            self.start_effect(system, now, set, outdoors, eye, &mut out);
+            self.random_sound(system, now, set, eye, &mut out)?;
+            self.start_effect(system, now, set, outdoors, eye, &mut out)?;
         }
         // End (4.6), whether or not the frame has a set.
         if !(outdoors && now < self.effect_end) {
@@ -301,7 +302,7 @@ impl AmbientState {
         if self.particles.as_ref().is_some_and(|p| p.stopping) {
             self.particles = None;
         }
-        out
+        Ok(out)
     }
 
     /// 4.5.
@@ -312,21 +313,22 @@ impl AmbientState {
         set: &AmbientSet,
         eye: Vec3,
         out: &mut AmbientFrame,
-    ) {
+    ) -> Result<(), Fatal> {
         if self.next_sound >= now {
-            return;
+            return Ok(());
         }
         let n = set.sounds.len();
         let item = (n > 0).then(|| system.random().draw() as usize % n);
-        // TODO(docs/behavior/sound-weather-ambient.md section 4.7): a set
-        // without `sounds` draws its period from bounds never read, which
-        // is unestablished; we draw none and leave N_s (no shipped set).
+        // TODO(#320, docs/behavior/sound-weather-ambient.md section 4.7): a
+        // set without `sounds` draws its period from bounds never read,
+        // which is unestablished; we draw none and leave N_s (no shipped
+        // set).
         let Some(bounds) = set.data.sound_period else {
-            return;
+            return Ok(());
         };
-        self.next_sound = now.wrapping_add(period(system, bounds));
+        self.next_sound = now.wrapping_add(period(system, &set.data.section, bounds)?);
         let Some(item) = item else {
-            return;
+            return Ok(());
         };
         let angle = system.random().draw() as f32 * ANGLE;
         let (d0, d1) = set.data.sound_dist.unwrap_or((0.0, 0.0));
@@ -338,6 +340,7 @@ impl AmbientState {
         ];
         system.play_at(set.sounds[item], position, PlayFlags::default());
         out.sound = Some((item, position));
+        Ok(())
     }
 
     /// 4.6, Start.
@@ -349,16 +352,16 @@ impl AmbientState {
         outdoors: bool,
         eye: Vec3,
         out: &mut AmbientFrame,
-    ) {
+    ) -> Result<(), Fatal> {
         let n = set.data.effects.len();
         if !outdoors || self.particles.is_some() || self.next_effect >= now || n == 0 {
-            return;
+            return Ok(());
         }
         let item = system.random().draw() as usize % n;
         let effect = &set.data.effects[item];
         self.wind_gust_factor = effect.wind_gust_factor;
         let bounds = set.data.effect_period.unwrap_or((0, 0));
-        self.next_effect = now.wrapping_add(period(system, bounds));
+        self.next_effect = now.wrapping_add(period(system, &set.data.section, bounds)?);
         self.effect_end = now.wrapping_add(effect.life);
         let o = effect.offset;
         let position = [eye[0] + o[0], eye[1] + o[1], eye[2] + o[2]];
@@ -371,6 +374,7 @@ impl AmbientState {
             system.play_at(sound, position, PlayFlags::default());
         }
         out.effect = Some(item);
+        Ok(())
     }
 }
 

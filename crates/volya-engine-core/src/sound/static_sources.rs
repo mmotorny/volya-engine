@@ -68,9 +68,9 @@ pub fn parse(bytes: &[u8]) -> io::Result<Vec<SourceRecord>> {
 fn read_record(r: &[u8]) -> Option<SourceRecord> {
     let end = r.iter().position(|&b| b == 0)?;
     let name = volya_engine_formats::cp1251::decode(&r[..end]);
-    // TODO(docs/behavior/sound-static-sources.md section 7): what a record
-    // shorter than 44 bytes after the name holds is unestablished (the
-    // original does not detect it); we reject it.
+    // TODO(#320, docs/behavior/sound-static-sources.md section 7): what a
+    // record shorter than 44 bytes after the name holds is unestablished
+    // (the original does not detect it); we reject it.
     let f = r.get(end + 1..end + 45)?;
     let word = |k: usize| u32::from_le_bytes(f[4 * k..4 * k + 4].try_into().unwrap());
     let float = |k: usize| f32::from_bits(word(k));
@@ -150,7 +150,8 @@ impl StaticSources {
     /// The rule of section 4.2 for every source in file order, at clock
     /// `now` (ms) and time of day `tau` (ms). Run once per frame of the
     /// running level, not while paused nor under the loading image (4.1).
-    pub fn frame(&mut self, system: &mut SoundSystem, now: u32, tau: u32) {
+    /// A draw from a range with equal bounds is fatal (4.2).
+    pub fn frame(&mut self, system: &mut SoundSystem, now: u32, tau: u32) -> Result<(), Fatal> {
         for source in &mut self.sources {
             let playing = system.has_emitter(source.sound);
             let r = source.record.clone();
@@ -175,25 +176,27 @@ impl StaticSources {
                 start(system, source, false);
                 source.stop_time = NEVER;
                 let duration = system.duration_ms(source.sound).unwrap_or(0) as u32;
-                let pause = draw(system, r.pause_min, r.pause_max);
+                let pause = draw(system, r.pause_min, r.pause_max)?;
                 source.next_start = now.wrapping_add(duration).wrapping_add(pause);
             } else {
                 start(system, source, true);
-                source.stop_time = now.wrapping_add(draw(system, r.play_min, r.play_max));
+                source.stop_time = now.wrapping_add(draw(system, r.play_min, r.play_max)?);
                 source.next_start =
                     source
                         .stop_time
-                        .wrapping_add(draw(system, r.pause_min, r.pause_max));
+                        .wrapping_add(draw(system, r.pause_min, r.pause_max)?);
             }
         }
+        Ok(())
     }
 }
 
-/// R(*a*, *b*) (4.2). With *b* = *a* the original divides by zero; no
-/// shipped source does (6.2), and we take *a* (our choice).
-fn draw(system: &mut SoundSystem, a: u32, b: u32) -> u32 {
+/// R(*a*, *b*) (4.2). With *b* = *a* the original divides by zero and
+/// fails, so it is fatal here (no shipped source draws from such a range,
+/// 6.2).
+fn draw(system: &mut SoundSystem, a: u32, b: u32) -> Result<u32, Fatal> {
     let n = system.random().draw();
-    range(n, a, b).unwrap_or(a)
+    range(n, a, b).ok_or_else(|| Fatal(format!("{FILE}: a range from {a} to {b} ms")))
 }
 
 /// Start, looped or once (4.2): play at the position, 3D, without delay;

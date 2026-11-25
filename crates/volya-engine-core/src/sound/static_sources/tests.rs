@@ -162,7 +162,7 @@ const NIGHT: u32 = 9_000_000;
 fn escape_at_new_game_starts_four_looped_sources() {
     let records = escape();
     let (mut s, mut sources) = system_with(&records);
-    sources.frame(&mut s, 100, START);
+    sources.frame(&mut s, 100, START).unwrap();
     s.update(100, &mut NoDevice);
     let playing: Vec<bool> = sources
         .sources
@@ -185,10 +185,10 @@ fn escape_at_new_game_starts_four_looped_sources() {
             .all(|(i, src)| i == 3 || (src.stop_time == u32::MAX && src.next_start == 0))
     );
     // Source 3 starts at 02:00 and is stopped with fade at 03:00.
-    sources.frame(&mut s, 200, NIGHT);
+    sources.frame(&mut s, 200, NIGHT).unwrap();
     s.update(200, &mut NoDevice);
     assert!(s.has_emitter(sources.sources[3].sound));
-    sources.frame(&mut s, 300, 10_800_000);
+    sources.frame(&mut s, 300, 10_800_000).unwrap();
     let radio = s
         .emitters()
         .into_iter()
@@ -196,7 +196,7 @@ fn escape_at_new_game_starts_four_looped_sources() {
         .unwrap();
     assert!(radio.stopping);
     // It counts as playing while it fades: not restarted.
-    sources.frame(&mut s, 316, NIGHT);
+    sources.frame(&mut s, 316, NIGHT).unwrap();
     assert!(
         s.emitters()
             .iter()
@@ -213,7 +213,7 @@ fn a_once_source_with_a_pause_restarts_after_duration_and_pause() {
         ..source("ambient\\bar\\kitchen_1", [0.0; 3], 1.0)
     };
     let (mut s, mut sources) = system_with(std::slice::from_ref(&rec));
-    sources.frame(&mut s, 1_000, START);
+    sources.frame(&mut s, 1_000, START).unwrap();
     let e = &s.emitters()[0];
     assert!(!e.looped);
     let src = &sources.sources[0];
@@ -226,7 +226,7 @@ fn a_once_source_with_a_pause_restarts_after_duration_and_pause() {
         now += 20;
         s.update(u64::from(now), &mut NoDevice);
         let had = s.has_emitter(sources.sources[0].sound);
-        sources.frame(&mut s, now, START);
+        sources.frame(&mut s, now, START).unwrap();
         if !had && s.has_emitter(sources.sources[0].sound) {
             starts.push(now);
         }
@@ -245,14 +245,14 @@ fn a_looped_source_with_play_and_pause_ranges() {
         ..source("a", [0.0; 3], 1.0)
     };
     let (mut s, mut sources) = system_with(std::slice::from_ref(&rec));
-    sources.frame(&mut s, 10, START);
+    sources.frame(&mut s, 10, START).unwrap();
     let src = &sources.sources[0];
     // Draws 41 then 18,467: stop = 10 + 1,041; next = stop + 500 + 67.
     assert_eq!(src.stop_time, 1_051);
     assert_eq!(src.next_start, 1_051 + 567);
     assert!(s.emitters()[0].looped);
     s.update(10, &mut NoDevice);
-    sources.frame(&mut s, 1_051, START);
+    sources.frame(&mut s, 1_051, START).unwrap();
     assert!(s.emitters()[0].stopping);
 }
 
@@ -273,6 +273,18 @@ fn windows_compare_signed_and_never_wrap() {
 fn identical_records_are_separate_sources() {
     let r = source("a", [1.0, 2.0, 3.0], 1.0);
     let (mut s, mut sources) = system_with(&[r.clone(), r]);
-    sources.frame(&mut s, 10, START);
+    sources.frame(&mut s, 10, START).unwrap();
     assert_eq!(s.emitters().len(), 2);
+}
+
+#[test]
+fn a_range_with_equal_bounds_is_fatal() {
+    // 4.2: with b = a the original divides by zero and fails.
+    let rec = SourceRecord {
+        pause_min: 500,
+        pause_max: 500,
+        ..source("a", [0.0; 3], 1.0)
+    };
+    let (mut s, mut sources) = system_with(std::slice::from_ref(&rec));
+    assert!(sources.frame(&mut s, 10, START).is_err());
 }

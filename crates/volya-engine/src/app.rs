@@ -20,6 +20,7 @@ use crate::audio::AudioOut;
 use crate::core::audio::Category;
 use crate::core::console::Console;
 use crate::core::input::{Action, Control, Input};
+use crate::core::sound::Fatal;
 use crate::core::sound::system::Listener;
 use crate::core::vfs::{self, Vfs};
 use crate::data::{Assets, GameData};
@@ -567,7 +568,39 @@ impl App {
             return;
         }
         self.update_phase(tree, time_ms, input, audio);
-        self.sound_frame(tree, audio);
+        if let Err(fatal) = self.sound_frame(tree, audio) {
+            self.fatal(tree, fatal.to_string(), input, audio);
+        }
+    }
+
+    /// A fatal error during play (as sound-ogg-params.md section 5 makes a
+    /// sound file that cannot be opened): the game ends, as when loading
+    /// fails, and the title menu opens saying why.
+    fn fatal(&mut self, tree: &dyn Vfs, error: String, input: &Input, audio: &mut dyn AudioOut) {
+        self.error = Some(error);
+        let now = self.clock;
+        let title = self.opening(false);
+        if let Some(Phase::Level {
+            menu,
+            intro,
+            overlay,
+            ..
+        }) = &mut self.phase
+        {
+            if let Some(m) = menu {
+                m.stop(audio);
+            }
+            intro.stop(audio);
+            if let Some(o) = overlay.take() {
+                o.end(audio);
+            }
+        }
+        self.phase = Some(Phase::Menu(TitleMenu::open(
+            &self.data, now, input, audio, title,
+        )));
+        self.screens.menu_opened();
+        // The level's sounds go as when the level is left.
+        let _ = self.sound_frame(tree, audio);
     }
 
     /// What the sound system takes from this frame
@@ -577,11 +610,11 @@ impl App {
     /// stopped when the level is left (section 4.4). The level's own sounds
     /// (crate::level_sound) are created once the level runs and the sound
     /// system exists, and their rules run on the frames that advance game
-    /// time without the loading image or the intro over the level. The
-    /// platform runs the sound system's update.
-    fn sound_frame(&mut self, tree: &dyn Vfs, audio: &mut dyn AudioOut) {
+    /// time with no menu open. The platform runs the sound system's update.
+    /// A fatal error of theirs is returned.
+    fn sound_frame(&mut self, tree: &dyn Vfs, audio: &mut dyn AudioOut) -> Result<(), Fatal> {
         let Some(sounds) = audio.sounds() else {
-            return;
+            return Ok(());
         };
         if !self.sound_voices_set {
             self.sound_voices_set = true;
@@ -593,12 +626,12 @@ impl App {
                 sounds.restart(voices);
             }
         }
+        let mut fatal = None;
         let (in_level, menu_open) = match &mut self.phase {
             Some(Phase::Level {
                 level,
                 menu,
                 overlay,
-                intro,
                 ..
             }) => {
                 let v = level.player().view();
@@ -613,26 +646,26 @@ impl App {
                             sounds.occlusion_mut().level = Some(level.shared_collision());
                             self.level_sounds = Some(created);
                         }
-                        // The original stops with a fatal error; the level
-                        // plays on without its sounds, saying why (our
-                        // choice).
-                        Err(e) => self.error = Some(e.to_string()),
+                        Err(e) => fatal = Some(e),
                     }
                 }
-                if let Some(elapsed) = level.advanced() {
-                    self.sound_run.advance(elapsed);
-                    if let Some(level_sounds) = &mut self.level_sounds
-                        && overlay.is_none()
-                        && intro.player.is_none()
-                        && menu.is_none()
-                    {
-                        self.sound_run.frame(
-                            sounds,
-                            level_sounds,
-                            &level.sound_inputs(),
-                            elapsed as f32 / 1000.0,
-                        );
+                match level.advanced() {
+                    Some(elapsed) => {
+                        self.sound_run.advance(elapsed);
+                        if let Some(level_sounds) = &mut self.level_sounds
+                            && menu.is_none()
+                            && let Err(e) = self.sound_run.frame(
+                                sounds,
+                                level_sounds,
+                                &level.sound_inputs(),
+                                elapsed as f32 / 1000.0,
+                                overlay.is_some(),
+                            )
+                        {
+                            fatal = Some(e);
+                        }
                     }
+                    None => self.sound_run.paused_frame(),
                 }
                 (true, menu.is_some())
             }
@@ -654,6 +687,7 @@ impl App {
             }
             self.sound_paused = menu_open;
         }
+        fatal.map_or(Ok(()), Err)
     }
 
     fn update_phase(

@@ -395,7 +395,14 @@ fn first_level_sounds_from_game_data() {
     let mut run = SoundRun::default();
     let frame_ms = 16;
     run.advance(frame_ms);
-    run.frame(&mut system, &mut sounds, &level.sound_inputs(), 0.016);
+    run.frame(
+        &mut system,
+        &mut sounds,
+        &level.sound_inputs(),
+        0.016,
+        false,
+    )
+    .unwrap();
     system.update(16, &mut NoDevice);
     let playing: Vec<String> = system.emitters().iter().map(|e| e.name.clone()).collect();
     eprintln!("first frame: {playing:?}");
@@ -438,7 +445,14 @@ fn first_level_sounds_from_game_data() {
         });
         let t = Instant::now();
         run.advance(frame_ms);
-        run.frame(&mut system, &mut sounds, &level.sound_inputs(), 0.016);
+        run.frame(
+            &mut system,
+            &mut sounds,
+            &level.sound_inputs(),
+            0.016,
+            false,
+        )
+        .unwrap();
         rules += t.elapsed();
         let t = Instant::now();
         system.update(16 + frame * frame_ms, &mut NoDevice);

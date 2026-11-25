@@ -261,6 +261,11 @@ pub struct ThunderState {
 }
 
 impl ThunderState {
+    /// A frame while the game is paused: its frame time is 0 (3.1).
+    pub fn paused_frame(&mut self) {
+        self.frame_time = 0.0;
+    }
+
     /// The smoothed frame time of a frame `real` seconds after the previous
     /// one (3.1): 0.9 · real + 0.1 · *dt*, at most 0.1.
     pub fn smooth_frame_time(&mut self, real: f32) -> f32 {
@@ -316,9 +321,9 @@ impl ThunderState {
         self.elapsed = 0.0;
         self.life = d + draws.uniform(-0.5 * d, 0.5 * d);
         let n = collection.descriptions.len();
-        // TODO(docs/behavior/sound-rain-thunder.md, Gaps found in review): a
-        // collection without descriptions is unestablished; we draw and take
-        // none (no shipped collection is empty).
+        // TODO(#320, docs/behavior/sound-rain-thunder.md, Gaps found in
+        // review): a collection without descriptions is unestablished; we
+        // draw and take none (no shipped collection is empty).
         let r = draws.draw() as usize;
         let description = (n > 0).then(|| r % n);
         let altitude = draws
