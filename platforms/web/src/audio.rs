@@ -18,15 +18,16 @@ use volya_engine::core::audio::{self as mix, Category, MixerControl, Playback, V
 use volya_engine::core::vfs::Vfs;
 use wasm_bindgen::prelude::*;
 
-use crate::audio_ring::Ring;
+use crate::audio_ring::{CMD_BYTES, Ring};
 
 thread_local! {
     static OUTPUT: RefCell<Option<Remote>> = const { RefCell::new(None) };
     /// The voices of the music track playing, left and right.
     static MUSIC: RefCell<Option<[VoiceId; 2]>> = const { RefCell::new(None) };
     static SOUNDS: RefCell<Option<SoundHost>> = const { RefCell::new(None) };
-    /// The output's shared memory, and commands that did not fit in it.
-    static RING: RefCell<Option<(Ring, Vec<u8>)>> = const { RefCell::new(None) };
+    /// The output's shared memory, its sample rate, and commands that did
+    /// not fit in it.
+    static RING: RefCell<Option<(Ring, u32, Vec<u8>)>> = const { RefCell::new(None) };
     /// Tests (`debug_audio_hold`): the mixer's commands wait, so those of
     /// several calls reach the audio worker together, as one frame's do.
     #[cfg(feature = "test-ops")]
@@ -91,7 +92,7 @@ pub fn audio_init(sample_rate: u32, memory: JsValue) {
             None => *m = Some(Remote::new(sample_rate)),
         }
     });
-    RING.with(|r| *r.borrow_mut() = Some((Ring::new(&memory), Vec::new())));
+    RING.with(|r| *r.borrow_mut() = Some((Ring::new(&memory), sample_rate, Vec::new())));
     MUSIC.with(|m| *m.borrow_mut() = None);
     with_sounds(SoundHost::mixer_replaced);
 }
@@ -108,9 +109,10 @@ pub fn audio_flush() -> JsValue {
         return JsValue::NULL;
     }
     let message = OUTPUT.with(|m| m.borrow_mut().as_mut().and_then(Remote::take));
+    let mut stalled = None;
     let connected = RING.with(|r| {
         let mut r = r.borrow_mut();
-        let (ring, backlog) = r.as_mut()?;
+        let (ring, rate, backlog) = r.as_mut()?;
         if let Some(m) = &message {
             backlog.extend_from_slice(&m.commands);
         }
@@ -119,9 +121,24 @@ pub fn audio_flush() -> JsValue {
         if !backlog.is_empty() && ring.write_commands(backlog) {
             backlog.clear();
             ring.wake();
+        } else if backlog.len() > CMD_BYTES as usize {
+            // More than the ring holds: they would never fit, and would
+            // grow without end. Dropped; the mixer starts afresh below.
+            backlog.clear();
+            stalled = Some(*rate);
         }
         Some(())
     });
+    if let Some(rate) = stalled {
+        web_sys::console::warn_1(&"audio: the audio worker fell behind; sounds stopped".into());
+        OUTPUT.with(|m| {
+            if let Some(remote) = m.borrow_mut().as_mut() {
+                remote.connect(rate);
+            }
+        });
+        MUSIC.with(|m| *m.borrow_mut() = None);
+        with_sounds(SoundHost::mixer_replaced);
+    }
     let Some(message) = message.filter(|m| connected.is_some() && !m.files.is_empty()) else {
         return JsValue::NULL;
     };
