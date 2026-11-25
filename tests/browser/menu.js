@@ -742,7 +742,9 @@ export const tests = {
     const ran = back.clock - hiddenClock;
     assert(ran < 300, `the engine clock ran ${ran} ms over the return`);
     assertEqual(back.level.game_time, s.level.game_time, "the game clock, paused under the menu");
-    if (audioBefore === "running") await until(() => volya.audioState() === "running", "audio to resume");
+    // Chrome runs with autoplay allowed (docs/testing.md), so audio was running.
+    assertEqual(audioBefore, "running", "audio before hiding");
+    await until(() => volya.audioState() === "running", "audio to resume");
     // The player resumes deliberately.
     await sleep(100);
     key("Escape");

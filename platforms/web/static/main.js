@@ -82,9 +82,9 @@ function visibilityChanged() {
   worker.postMessage({ type: "visibility", hidden });
   if (!audio) return;
   if (hidden) audio.suspend().catch(() => {});
-  // iOS may have interrupted it meanwhile; resuming without a gesture may be
-  // refused, then the next gesture resumes it (below).
-  else if (audio.state !== "running") audio.resume().catch(() => {});
+  // Resume unconditionally: a suspend just requested may not show in `state`
+  // yet. iOS may refuse without a gesture; the next gesture resumes it (below).
+  else audio.resume().catch(() => {});
 }
 document.addEventListener("visibilitychange", visibilityChanged);
 
