@@ -1064,7 +1064,7 @@ fn encode_static(
     pass.set_bind_group(0, &inner.frame_group, &[]);
     let mut pipeline = None;
     let mut surface = None;
-    let mut buffers = None;
+    let (mut vertex_buffer, mut index_buffer) = (None, None);
     let mut run: Option<std::ops::Range<u32>> = None;
     let flush = |pass: &mut wgpu::RenderPass<'_>, run: &mut Option<std::ops::Range<u32>>| {
         if let Some(r) = run.take() {
@@ -1091,20 +1091,26 @@ fn encode_static(
             crate::stats::bind_group();
             pass.set_bind_group(2, inner.surface_groups.base(d.surface), &[]);
         }
-        if buffers != Some((d.vertex_buffer, d.index_buffer)) {
+        // Each set only when it changes: wgpu's GL backend specifies every
+        // vertex attribute again on a vertex buffer set (#429).
+        if vertex_buffer != Some(d.vertex_buffer) {
             flush(pass, &mut run);
-            buffers = Some((d.vertex_buffer, d.index_buffer));
+            vertex_buffer = Some(d.vertex_buffer);
             crate::stats::buffer();
             pass.set_vertex_buffer(0, inner.vertex_buffers[d.vertex_buffer as usize].slice(..));
+            if let Some(Some(ids)) = inner.id_buffers.get(d.vertex_buffer as usize) {
+                crate::stats::buffer();
+                pass.set_vertex_buffer(1, ids.slice(..));
+            }
+        }
+        if index_buffer != Some(d.index_buffer) {
+            flush(pass, &mut run);
+            index_buffer = Some(d.index_buffer);
             crate::stats::buffer();
             pass.set_index_buffer(
                 inner.index_buffers[d.index_buffer as usize].slice(..),
                 inner.index_formats[d.index_buffer as usize],
             );
-            if let Some(Some(ids)) = inner.id_buffers.get(d.vertex_buffer as usize) {
-                crate::stats::buffer();
-                pass.set_vertex_buffer(1, ids.slice(..));
-            }
         }
         let range = d.first_index..d.first_index + d.index_count;
         if inner.exclusive[i as usize] {
@@ -2657,7 +2663,7 @@ impl Renderer {
                 pass.set_bind_group(1, &groups[usize::from(*spot)], &[*offset]);
                 let mut program = None;
                 let mut surface = None;
-                let mut buffers = None;
+                let (mut vertex_buffer, mut index_buffer) = (None, None);
                 for &j in draws {
                     let d = &inner.lit[j as usize];
                     if program != Some(d.program) {
@@ -2670,22 +2676,25 @@ impl Renderer {
                         crate::stats::bind_group();
                         pass.set_bind_group(2, inner.surface_groups.base(d.surface), &[]);
                     }
-                    if buffers != Some((d.vertex_buffer, d.index_buffer)) {
-                        buffers = Some((d.vertex_buffer, d.index_buffer));
+                    if vertex_buffer != Some(d.vertex_buffer) {
+                        vertex_buffer = Some(d.vertex_buffer);
                         crate::stats::buffer();
                         pass.set_vertex_buffer(
                             0,
                             inner.vertex_buffers[d.vertex_buffer as usize].slice(..),
                         );
+                        if let Some(Some(ids)) = inner.id_buffers.get(d.vertex_buffer as usize) {
+                            crate::stats::buffer();
+                            pass.set_vertex_buffer(1, ids.slice(..));
+                        }
+                    }
+                    if index_buffer != Some(d.index_buffer) {
+                        index_buffer = Some(d.index_buffer);
                         crate::stats::buffer();
                         pass.set_index_buffer(
                             inner.index_buffers[d.index_buffer as usize].slice(..),
                             inner.index_formats[d.index_buffer as usize],
                         );
-                        if let Some(Some(ids)) = inner.id_buffers.get(d.vertex_buffer as usize) {
-                            crate::stats::buffer();
-                            pass.set_vertex_buffer(1, ids.slice(..));
-                        }
                     }
                     crate::stats::draw();
                     pass.draw_indexed(
