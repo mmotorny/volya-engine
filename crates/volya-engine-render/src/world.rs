@@ -2222,7 +2222,10 @@ impl Renderer {
                 t.texture.depth_or_array_layers() == 6 && t.texture.width() == t.texture.height()
             })
         }
-        let key = |t: Option<&Texture>| t.map(|t| t.texture.clone());
+        // Textures by their place among the world's.
+        let key = |t: Option<&Texture>| {
+            t.and_then(|t| textures.iter().position(|k| k.texture == t.texture))
+        };
         let mut maps_keys = HashMap::new();
         let mut base_keys = HashMap::new();
         let mut maps_groups = Vec::new();
