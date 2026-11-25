@@ -783,7 +783,7 @@ pub enum Object {
     Monster(Box<Monster>),
     CrowOrPhantom(CrowOrPhantom),
     Vehicle(Vehicle),
-    Helicopter(Helicopter),
+    Helicopter(Box<Helicopter>),
     Item(PlainItem),
     Torch(Torch),
     Pda(Pda),
@@ -804,13 +804,13 @@ pub enum Object {
     TeamBase(TeamBase),
     PlainVisual(PlainVisual),
     StationaryGun(StationaryGun),
-    HangingLamp(HangingLamp),
+    HangingLamp(Box<HangingLamp>),
     PhysicsObject(PhysicsObject),
     Breakable(Breakable),
     Climbable(Climbable),
     SkeletonObject(SkeletonObject),
     OnOffGroup(OnOffGroup),
-    MonsterGroup(MonsterGroup),
+    MonsterGroup(Box<MonsterGroup>),
 }
 
 use super::Kind;
@@ -850,14 +850,14 @@ impl Object {
                 skeleton: Skeleton::read(s)?,
                 health: s.float()?,
             }),
-            Kind::Helicopter => Self::Helicopter(Helicopter {
+            Kind::Helicopter => Self::Helicopter(Box::new(Helicopter {
                 object: ObjectBlock::read(s)?,
                 visual: Visual::read(s)?,
                 motion: s.string()?,
                 skeleton: Skeleton::read(s)?,
                 startup_animation: s.string()?,
                 engine_sound: s.string()?,
-            }),
+            })),
             Kind::Item => Self::Item(PlainItem {
                 item: Item::read(s)?,
                 update: ItemUpdate::read(u)?,
@@ -972,7 +972,7 @@ impl Object {
                 working: u.bool8()?,
                 aim_direction: u.float3()?,
             }),
-            Kind::HangingLamp => Self::HangingLamp(HangingLamp {
+            Kind::HangingLamp => Self::HangingLamp(Box::new(HangingLamp {
                 object: ObjectBlock::read(s)?,
                 visual: Visual::read(s)?,
                 skeleton: Skeleton::read(s)?,
@@ -994,7 +994,7 @@ impl Object {
                 glow_texture: s.string()?,
                 glow_radius: s.float()?,
                 ambient_light_bone: s.string()?,
-            }),
+            })),
             Kind::PhysicsObject => Self::PhysicsObject(PhysicsObject {
                 object: ObjectBlock::read(s)?,
                 visual: Visual::read(s)?,
@@ -1021,14 +1021,14 @@ impl Object {
                 object: ObjectBlock::read(s)?,
                 member_ids: ids(s)?,
             }),
-            Kind::MonsterGroup => Self::MonsterGroup(MonsterGroup {
+            Kind::MonsterGroup => Self::MonsterGroup(Box::new(MonsterGroup {
                 state: MonsterState::read(s)?,
                 flag: s.u32()?,
                 unestablished: s.u16()?,
                 member_ids: ids(s)?,
                 update: MonsterLikeUpdate::read(u)?,
                 update_flag: u.u32()?,
-            }),
+            })),
         })
     }
 

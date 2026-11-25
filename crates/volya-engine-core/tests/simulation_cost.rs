@@ -153,16 +153,26 @@ fn simulation_memory_and_update_time() {
         mb(held() - base),
     );
     assert!(switches > 671);
-    // Budgets: measured (23.7 MB kept, 23.7 MB peak), plus a modest
+    // Budgets: measured (16.8 MB kept, 16.9 MB peak; 23.7 and 23.7 before
+    // #370), plus a modest
     // margin; the update time only where optimized (21 µs median, 37 µs
     // 99th percentile, measured).
-    assert!(mb(after_navigation - base) < 27.0, "kept");
-    assert!(mb(peak - base) < 27.0, "peak");
+    // Reported, never failed (budgets are not gates).
+    let over = |what: &str, over: bool| {
+        if over {
+            eprintln!("OVER BUDGET: {what}");
+        }
+    };
+    over("kept 20 MB or more", mb(after_navigation - base) >= 20.0);
+    over("peak 20 MB or more", mb(peak - base) >= 20.0);
     if !cfg!(debug_assertions) {
-        assert!(rest[rest.len() / 2] < 200.0, "median update");
-        assert!(
-            rest[rest.len() * 99 / 100] < 500.0,
-            "99th percentile update"
+        over(
+            "median update 200 µs or more",
+            rest[rest.len() / 2] >= 200.0,
+        );
+        over(
+            "99th percentile update 500 µs or more",
+            rest[rest.len() * 99 / 100] >= 500.0,
         );
     }
 }

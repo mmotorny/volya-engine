@@ -29,8 +29,8 @@ use crate::climbing::{LADDER_MATERIAL, Ladder};
 
 /// The large arrays of the collision world dropped last, kept for the
 /// next one (#357). In the wasm heap, which never shrinks, a level's
-/// largest blocks (16 MiB of triangles, 13 MiB of grid entries for
-/// `l01_escape`) are freed when it is left, and the next load's earlier
+/// largest blocks (11 MB of triangles, 8.4 MB of vertices, 7 MB of grid
+/// entries for `l01_escape`) are freed when it is left, and the next load's earlier
 /// stages (the offline simulation's many small allocations) split that
 /// space before its collision world is read, so the world needed new
 /// memory: up to 13 MiB more for a second New Game (measured in headless
@@ -38,10 +38,11 @@ use crate::climbing::{LADDER_MATERIAL, Ladder};
 #[derive(Default)]
 struct Spare {
     vertices: Vec<Vec3>,
-    triangles: Vec<[u32; 3]>,
+    packed: Vec<u64>,
+    wide: Vec<[u32; 3]>,
     material_of: Vec<u8>,
     starts: Vec<u32>,
-    items: Vec<u32>,
+    items: Vec<u16>,
 }
 
 thread_local! {
@@ -138,15 +139,135 @@ fn material_byte(mapped: u32) -> io::Result<u8> {
     })
 }
 
+/// Bits of a packed vertex index: three in a `u64` (#371).
+const INDEX_BITS: u32 = 21;
+const INDEX_MASK: u64 = (1 << INDEX_BITS) - 1;
+
+/// Each triangle's vertex indices: three in a `u64` of 21 bits each where
+/// every index fits (8 bytes a triangle, not 12; our choice, #371), else
+/// as stored.
+#[derive(Clone, Debug, Default)]
+struct Triangles {
+    packed: Vec<u64>,
+    wide: Vec<[u32; 3]>,
+    /// Whether `wide` holds them.
+    is_wide: bool,
+}
+
+impl Triangles {
+    /// Empty, with room for `n` triangles over `vertex_count` vertices,
+    /// in the spare arrays when they have the room.
+    fn with_capacity(n: usize, vertex_count: usize) -> Self {
+        if vertex_count <= 1 << INDEX_BITS {
+            Self {
+                packed: spare(|s| &mut s.packed, n),
+                wide: Vec::new(),
+                is_wide: false,
+            }
+        } else {
+            Self {
+                packed: Vec::new(),
+                wide: spare(|s| &mut s.wide, n),
+                is_wide: true,
+            }
+        }
+    }
+
+    /// Appends a triangle whose indices are below the vertex count given
+    /// to [`Self::with_capacity`].
+    fn push(&mut self, t: [u32; 3]) {
+        if self.is_wide {
+            self.wide.push(t);
+        } else {
+            self.packed.push(pack(t));
+        }
+    }
+
+    fn len(&self) -> usize {
+        if self.is_wide {
+            self.wide.len()
+        } else {
+            self.packed.len()
+        }
+    }
+
+    fn get(&self, i: usize) -> [u32; 3] {
+        if !self.is_wide {
+            let p = self.packed[i];
+            [
+                (p & INDEX_MASK) as u32,
+                (p >> INDEX_BITS & INDEX_MASK) as u32,
+                (p >> (2 * INDEX_BITS) & INDEX_MASK) as u32,
+            ]
+        } else {
+            self.wide[i]
+        }
+    }
+
+    fn bytes(&self) -> usize {
+        self.packed.len() * 8 + self.wide.len() * 12
+    }
+}
+
+fn pack(t: [u32; 3]) -> u64 {
+    u64::from(t[0]) | u64::from(t[1]) << INDEX_BITS | u64::from(t[2]) << (2 * INDEX_BITS)
+}
+
+/// Grid entries are 16-bit words (#371): in each cell its triangles in
+/// ascending order, the first as its index and each next as the step from
+/// the one before, one word below 2¹⁵ and two above (the first with the
+/// top bit set, then the low 16 bits).
+const LONG: u16 = 0x8000;
+
+/// Appends `v` (below 2³¹) as entry words.
+fn encode(v: u32, out: &mut [u16], at: &mut u32) {
+    if v < u32::from(LONG) {
+        out[*at as usize] = v as u16;
+        *at += 1;
+    } else {
+        out[*at as usize] = LONG | (v >> 16) as u16;
+        out[*at as usize + 1] = v as u16;
+        *at += 2;
+    }
+}
+
+fn encoded_len(v: u32) -> u32 {
+    if v < u32::from(LONG) { 1 } else { 2 }
+}
+
+/// One cell's triangles, decoded from its entry words in ascending order.
+struct CellItems<'a> {
+    words: std::slice::Iter<'a, u16>,
+    /// The triangle before, `None` before the first.
+    last: Option<u32>,
+}
+
+impl Iterator for CellItems<'_> {
+    type Item = u32;
+
+    fn next(&mut self) -> Option<u32> {
+        let w = *self.words.next()?;
+        let v = if w & LONG == 0 {
+            u32::from(w)
+        } else {
+            u32::from(w & !LONG) << 16 | u32::from(*self.words.next()?)
+        };
+        let t = self.last.map_or(v, |l| l + v);
+        self.last = Some(t);
+        Some(t)
+    }
+}
+
 /// A uniform grid over x and z.
 #[derive(Clone, Debug)]
 struct Grid {
     origin: [f32; 2],
     cell: f32,
     size: [usize; 2],
-    /// Start of each cell's run in `items`; one more than the cell count.
+    /// Start of each cell's run in `items` (words); one more than the cell
+    /// count.
     starts: Vec<u32>,
-    items: Vec<u32>,
+    items: Vec<u16>,
 }
 
 impl Grid {
@@ -155,6 +276,14 @@ impl Grid {
         let at =
             |v: f32| (((v - self.origin[axis]) / self.cell).floor().max(0.0) as usize).min(last);
         (at(min), at(max))
+    }
+
+    /// The triangles of cell `c`.
+    fn items(&self, c: usize) -> CellItems<'_> {
+        CellItems {
+            words: self.items[self.starts[c] as usize..self.starts[c + 1] as usize].iter(),
+            last: None,
+        }
     }
 
     /// The cells triangle `t` overlaps: x range, z range.
@@ -169,7 +298,7 @@ impl Grid {
     /// The grid over `min`…`max` listing each triangle in every cell its
     /// bounding box overlaps. Ranges are computed from the vertices in both
     /// passes rather than stored.
-    fn build(min: Vec3, max: Vec3, vertices: &[Vec3], triangles: &[[u32; 3]]) -> io::Result<Self> {
+    fn build(min: Vec3, max: Vec3, vertices: &[Vec3], triangles: &Triangles) -> io::Result<Self> {
         let extent = [(max[0] - min[0]).max(0.0), (max[2] - min[2]).max(0.0)];
         let mut cell = CELL_SIZE;
         while (extent[0] / cell + 1.0) * (extent[1] / cell + 1.0) > MAX_CELLS {
@@ -184,10 +313,20 @@ impl Grid {
             items: Vec::new(),
         };
         grid.starts.resize(size[0] * size[1] + 1, 0);
-        let corners = |t: &[u32; 3]| t.map(|i| vertices[i as usize]);
+        let corners = |i: usize| triangles.get(i).map(|v| vertices[v as usize]);
+        if triangles.len() > 1 << 31 {
+            return Err(invalid("level.cform: more than 2³¹ triangles"));
+        }
+        // Each cell's last triangle so far, for the steps' lengths.
+        let mut last = vec![u32::MAX; size[0] * size[1]];
+        let step = |last: &mut u32, i: u32| {
+            let v = if *last == u32::MAX { i } else { i - *last };
+            *last = i;
+            v
+        };
         let mut total = 0u64;
-        for t in triangles {
-            let ((x0, x1), (z0, z1)) = grid.cells(&corners(t));
+        for i in 0..triangles.len() {
+            let ((x0, x1), (z0, z1)) = grid.cells(&corners(i));
             total += ((x1 - x0 + 1) * (z1 - z0 + 1)) as u64;
             if total > MAX_GRID_ENTRIES {
                 return Err(invalid(format!(
@@ -196,24 +335,27 @@ impl Grid {
             }
             for z in z0..=z1 {
                 for x in x0..=x1 {
-                    grid.starts[z * size[0] + x + 1] += 1;
+                    let c = z * size[0] + x;
+                    grid.starts[c + 1] += encoded_len(step(&mut last[c], i as u32));
                 }
             }
         }
-        // Within u32: the total is capped below it.
+        // Within u32: at most two words an entry, the entries capped.
         for i in 1..grid.starts.len() {
             grid.starts[i] += grid.starts[i - 1];
         }
+        let words = grid.starts[grid.starts.len() - 1] as usize;
         let mut next = grid.starts.clone();
-        grid.items = spare(|s| &mut s.items, total as usize);
-        grid.items.resize(total as usize, 0);
-        for (i, t) in triangles.iter().enumerate() {
-            let ((x0, x1), (z0, z1)) = grid.cells(&corners(t));
+        last.fill(u32::MAX);
+        grid.items = spare(|s| &mut s.items, words);
+        grid.items.resize(words, 0);
+        for i in 0..triangles.len() {
+            let ((x0, x1), (z0, z1)) = grid.cells(&corners(i));
             for z in z0..=z1 {
                 for x in x0..=x1 {
-                    let slot = &mut next[z * size[0] + x];
-                    grid.items[*slot as usize] = i as u32;
-                    *slot += 1;
+                    let c = z * size[0] + x;
+                    let v = step(&mut last[c], i as u32);
+                    encode(v, &mut grid.items, &mut next[c]);
                 }
             }
         }
@@ -229,7 +371,7 @@ pub struct CollisionWorld {
     pub bbox_min: Vec3,
     pub bbox_max: Vec3,
     vertices: Vec<Vec3>,
-    triangles: Vec<[u32; 3]>,
+    triangles: Triangles,
     /// Each triangle's material index (section 3.3).
     material_of: Vec<u8>,
     materials: Vec<GameMaterial>,
@@ -246,7 +388,8 @@ impl Drop for CollisionWorld {
         SPARE.with(|s| {
             *s.borrow_mut() = Spare {
                 vertices: std::mem::take(&mut self.vertices),
-                triangles: std::mem::take(&mut self.triangles),
+                packed: std::mem::take(&mut self.triangles.packed),
+                wide: std::mem::take(&mut self.triangles.wide),
                 material_of: std::mem::take(&mut self.material_of),
                 starts: std::mem::take(&mut grid.starts),
                 items: std::mem::take(&mut grid.items),
@@ -267,7 +410,7 @@ impl CollisionWorld {
         reader.vertices_into(&mut vertices)?;
         let map = MaterialMap::new(&materials);
         let count = header.triangle_count as usize;
-        let mut triangles = spare(|s| &mut s.triangles, count);
+        let mut triangles = Triangles::with_capacity(count, header.vertex_count as usize);
         let mut material_of = spare(|s| &mut s.material_of, count);
         reader.triangles(|_, t| {
             material_of.push(material_byte(map.map(t.attributes)?)?);
@@ -292,7 +435,10 @@ impl CollisionWorld {
             .iter()
             .map(|t| material_byte(map.map(t.attributes)?))
             .collect::<io::Result<_>>()?;
-        let triangles = cform.triangles.iter().map(|t| t.vertices).collect();
+        let mut triangles = Triangles::with_capacity(cform.triangles.len(), cform.vertices.len());
+        for t in &cform.triangles {
+            triangles.push(t.vertices);
+        }
         Self::from_parts(
             cform.bbox_min,
             cform.bbox_max,
@@ -307,7 +453,7 @@ impl CollisionWorld {
         bbox_min: Vec3,
         bbox_max: Vec3,
         vertices: Vec<Vec3>,
-        triangles: Vec<[u32; 3]>,
+        triangles: Triangles,
         material_of: Vec<u8>,
         materials: Vec<GameMaterial>,
     ) -> io::Result<Self> {
@@ -365,9 +511,13 @@ impl CollisionWorld {
         &self.vertices
     }
 
-    /// Each triangle's vertex indices.
-    pub fn triangles(&self) -> &[[u32; 3]] {
-        &self.triangles
+    pub fn triangle_count(&self) -> usize {
+        self.triangles.len()
+    }
+
+    /// Triangle `i`'s vertex indices.
+    pub fn triangle(&self, i: u32) -> [u32; 3] {
+        self.triangles.get(i as usize)
     }
 
     pub fn materials(&self) -> &[GameMaterial] {
@@ -376,7 +526,9 @@ impl CollisionWorld {
 
     /// The corner positions of triangle `i`.
     pub fn corners(&self, i: u32) -> [Vec3; 3] {
-        self.triangles[i as usize].map(|v| self.vertices[v as usize])
+        self.triangles
+            .get(i as usize)
+            .map(|v| self.vertices[v as usize])
     }
 
     /// The material index of triangle `i` (section 3.3).
@@ -398,9 +550,10 @@ impl CollisionWorld {
     /// Bytes held (vertices, triangles, materials, index), for reporting.
     pub fn memory_bytes(&self) -> usize {
         self.vertices.len() * 12
-            + self.triangles.len() * 12
+            + self.triangles.bytes()
             + self.material_of.len()
-            + (self.grid.starts.len() + self.grid.items.len()) * 4
+            + self.grid.starts.len() * 4
+            + self.grid.items.len() * 2
     }
 
     /// Appends to `out` the triangles whose bounding box overlaps the box
@@ -413,7 +566,7 @@ impl CollisionWorld {
         for z in z0..=z1 {
             for x in x0..=x1 {
                 let c = z * g.size[0] + x;
-                for &t in &g.items[g.starts[c] as usize..g.starts[c + 1] as usize] {
+                for t in g.items(c) {
                     let [a, b, c] = self.corners(t);
                     let overlaps = (0..3).all(|k| {
                         a[k].min(b[k]).min(c[k]) <= max[k] && a[k].max(b[k]).max(c[k]) >= min[k]
@@ -459,8 +612,8 @@ impl CollisionWorld {
         mut hit: impl FnMut(&[Vec3; 3]) -> bool,
     ) -> bool {
         let mut found = false;
-        self.walk(origin, dir, length, |items, _| {
-            found = items.iter().any(|&t| hit(&self.corners(t)));
+        self.walk(origin, dir, length, |mut items, _| {
+            found = items.any(|t| hit(&self.corners(t)));
             !found
         });
         found
@@ -483,7 +636,7 @@ impl CollisionWorld {
     ) -> Option<(f32, u32)> {
         let mut best: Option<(f32, u32)> = None;
         self.walk(origin, dir, length, |items, exit| {
-            for &t in items {
+            for t in items {
                 if let Some(d) = hit(t)
                     && best.is_none_or(|(b, _)| d < b)
                 {
@@ -504,7 +657,7 @@ impl CollisionWorld {
         origin: Vec3,
         dir: Vec3,
         length: f32,
-        mut visit: impl FnMut(&[u32], f32) -> bool,
+        mut visit: impl FnMut(CellItems<'_>, f32) -> bool,
     ) {
         let g = &self.grid;
         let start = [origin[0], origin[2]];
@@ -547,7 +700,7 @@ impl CollisionWorld {
         }
         loop {
             let c = cell[1] * g.size[0] + cell[0];
-            let items = &g.items[g.starts[c] as usize..g.starts[c + 1] as usize];
+            let items = g.items(c);
             let a = if next[0] < next[1] { 0 } else { 1 };
             if !visit(items, next[a]) || next[a] > t1 {
                 return;
@@ -757,24 +910,61 @@ mod tests {
             }
         }
         let w = CollisionWorld::read(std::io::Cursor::new(&bytes), materials()).unwrap();
-        assert_eq!(w.triangles(), [[0, 1, 2], [0, 2, 3]]);
+        let triangles = |w: &CollisionWorld| [w.triangle(0), w.triangle(1)];
+        assert_eq!(triangles(&w), [[0, 1, 2], [0, 2, 3]]);
         assert_eq!((w.material_index(0), w.material(1).id), (1, 1));
         assert_eq!(
-            w.memory_bytes() - (w.grid.starts.len() + w.grid.items.len()) * 4,
-            4 * 12 + 2 * 13
+            w.memory_bytes() - w.grid.starts.len() * 4 - w.grid.items.len() * 2,
+            4 * 12 + 2 * 9
         );
         // Read again once dropped: the same arrays, the same world (#357).
-        let (triangles, items) = (w.triangles().as_ptr(), w.grid.items.as_ptr());
+        let (packed, items) = (w.triangles.packed.as_ptr(), w.grid.items.as_ptr());
         drop(w);
         let again = CollisionWorld::read(std::io::Cursor::new(&bytes), materials()).unwrap();
-        assert_eq!(again.triangles(), [[0, 1, 2], [0, 2, 3]]);
+        assert_eq!(triangles(&again), [[0, 1, 2], [0, 2, 3]]);
         assert_eq!(
-            (again.triangles().as_ptr(), again.grid.items.as_ptr()),
-            (triangles, items)
+            (again.triangles.packed.as_ptr(), again.grid.items.as_ptr()),
+            (packed, items)
         );
         let mut out = Vec::new();
         again.query([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0], &mut out);
         assert_eq!(out, [0, 1]);
+    }
+
+    #[test]
+    fn entries_and_triangles_pack_without_loss() {
+        // Steps of one word, of two, and the first entry of each kind.
+        let values = [0, 1, 0x7FFF, 0x8000, 0xFFFF, 0x1_0000, (1 << 31) - 1];
+        let mut words = vec![0u16; values.len() * 2];
+        let mut at = 0;
+        for &v in &values {
+            encode(v, &mut words, &mut at);
+        }
+        let lens: u32 = values.iter().map(|&v| encoded_len(v)).sum();
+        assert_eq!(at, lens);
+        // Read as steps after a triangle 0.
+        let steps: Vec<u32> = CellItems {
+            words: words[..at as usize].iter(),
+            last: Some(0),
+        }
+        .collect();
+        let mut sum = 0u32;
+        let expected: Vec<u32> = values
+            .iter()
+            .map(|&v| {
+                sum += v;
+                sum
+            })
+            .collect();
+        assert_eq!(steps, expected);
+        // Indices of 21 bits packed; more vertices keep them as stored.
+        let t = [(1 << 21) - 1, 0, 1_234_567];
+        for vertices in [1 << 21, (1 << 21) + 1] {
+            let mut ts = Triangles::with_capacity(1, vertices);
+            ts.push(t);
+            assert_eq!((ts.get(0), ts.len()), (t, 1));
+            assert_eq!(ts.bytes(), if vertices == 1 << 21 { 8 } else { 12 });
+        }
     }
 
     #[test]
