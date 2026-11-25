@@ -97,10 +97,53 @@ pub fn audio_host_connect(sample_rate: f64, target: u32, memory: JsValue) {
     });
 }
 
-/// File `number` arrived from the engine worker (`audio_flush`).
+/// File `number` arrived from the engine worker (`audio_flush`). It
+/// stays in JavaScript memory, read a piece at a time ([`JsFile`]), so the
+/// wasm heap, which never shrinks, holds none of it.
 #[wasm_bindgen]
 pub fn audio_host_file(number: u32, bytes: js_sys::Uint8Array) {
-    STATE.with(|s| s.borrow_mut().host.add_file(number, bytes.to_vec()));
+    let file = JsFile { bytes, pos: 0 };
+    STATE.with(|s| s.borrow_mut().host.add_file(number, Box::new(file)));
+}
+
+/// A compressed file in a JavaScript `Uint8Array`.
+struct JsFile {
+    bytes: js_sys::Uint8Array,
+    pos: u64,
+}
+
+impl std::io::Read for JsFile {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let len = u64::from(self.bytes.length());
+        let n = (len.saturating_sub(self.pos) as usize).min(buf.len());
+        if n > 0 {
+            let at = self.pos as u32;
+            self.bytes
+                .subarray(at, at + n as u32)
+                .copy_to(&mut buf[..n]);
+            self.pos += n as u64;
+        }
+        Ok(n)
+    }
+}
+
+impl std::io::Seek for JsFile {
+    fn seek(&mut self, to: std::io::SeekFrom) -> std::io::Result<u64> {
+        let len = i128::from(self.bytes.length());
+        let pos = match to {
+            std::io::SeekFrom::Start(p) => i128::from(p),
+            std::io::SeekFrom::End(d) => len + i128::from(d),
+            std::io::SeekFrom::Current(d) => i128::from(self.pos) + i128::from(d),
+        };
+        if pos < 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "seek before the start",
+            ));
+        }
+        self.pos = pos as u64;
+        Ok(self.pos)
+    }
 }
 
 /// Applies the commands the ring holds and fills the ring of frames to its

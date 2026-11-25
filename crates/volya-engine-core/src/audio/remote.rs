@@ -21,7 +21,7 @@ use std::io::{self, Cursor};
 
 use volya_engine_formats::audio::VorbisStream;
 
-use super::{Category, Mixer, MixerControl, Playback, Source, VoiceId, open_vorbis};
+use super::{Category, File, Mixer, MixerControl, Playback, Source, VoiceId, open_vorbis_file};
 
 const INIT: u8 = 0;
 const PLAY: u8 = 1;
@@ -208,7 +208,7 @@ impl MixerControl for Remote {
 }
 
 /// Opens a voice's compressed file, so many frames in.
-pub type Opener = fn(Vec<u8>, u64) -> io::Result<Box<dyn Source>>;
+pub type Opener = fn(Box<dyn File>, u64) -> io::Result<Box<dyn Source>>;
 
 /// The output's side: applies a [`Remote`]'s commands to its mixer and
 /// mixes on the output's schedule.
@@ -216,7 +216,7 @@ pub struct Host {
     /// `None` until the first command (`INIT`): silence.
     mixer: Option<Mixer>,
     /// Files arrived and not yet played, by number.
-    files: Vec<(u32, Vec<u8>)>,
+    files: Vec<(u32, Box<dyn File>)>,
     open: Opener,
     /// Voices that ended since the last [`Host::take_ended`].
     ended: Vec<u32>,
@@ -225,7 +225,7 @@ pub struct Host {
 
 impl Default for Host {
     fn default() -> Self {
-        Self::new(open_vorbis)
+        Self::new(open_vorbis_file)
     }
 }
 
@@ -324,7 +324,8 @@ fn decode(bytes: &[u8]) -> io::Result<Vec<Command>> {
 }
 
 impl Host {
-    /// A host opening files with `open` ([`open_vorbis`] for the game's).
+    /// A host opening files with `open` ([`open_vorbis_file`] for the
+    /// game's).
     pub fn new(open: Opener) -> Self {
         Self {
             mixer: None,
@@ -336,8 +337,10 @@ impl Host {
     }
 
     /// File `number` arrived.
-    pub fn add_file(&mut self, number: u32, bytes: Vec<u8>) {
-        self.files.push((number, bytes));
+    /// Any [`File`]: the web platform's stay in JavaScript memory, outside
+    /// the wasm heap, which never shrinks.
+    pub fn add_file(&mut self, number: u32, file: Box<dyn File>) {
+        self.files.push((number, file));
     }
 
     /// Applies `commands` (whole ones) once every file they play has

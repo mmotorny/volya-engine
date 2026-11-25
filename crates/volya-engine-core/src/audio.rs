@@ -54,9 +54,19 @@ impl<R: Read + Seek> Source for VorbisStream<R> {
     }
 }
 
+/// A compressed file a voice decodes from.
+pub trait File: Read + Seek {}
+
+impl<T: Read + Seek> File for T {}
+
 /// Opens compressed Ogg Vorbis `bytes` for a voice, `skip` frames in.
 pub fn open_vorbis(bytes: Vec<u8>, skip: u64) -> io::Result<Box<dyn Source>> {
-    let mut stream = VorbisStream::open(Cursor::new(bytes))?;
+    open_vorbis_file(Box::new(Cursor::new(bytes)), skip)
+}
+
+/// [`open_vorbis`] on a file of any kind.
+pub fn open_vorbis_file(file: Box<dyn File>, skip: u64) -> io::Result<Box<dyn Source>> {
+    let mut stream = VorbisStream::open(file)?;
     stream.skip(skip)?;
     Ok(Box::new(stream))
 }

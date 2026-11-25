@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 use super::*;
+use std::io::Read;
 
 /// A source of a known signal: frame `i` of channel `c` is
 /// `sin(i · (c + 1) · 0.01) · 0.5`, in blocks of 37 frames.
@@ -46,7 +47,9 @@ fn tone_file(rate: u32, channels: u16, frames: u64) -> Vec<u8> {
     b
 }
 
-fn open_tone(bytes: Vec<u8>, skip: u64) -> io::Result<Box<dyn Source>> {
+fn open_tone(mut file: Box<dyn File>, skip: u64) -> io::Result<Box<dyn Source>> {
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
     if bytes.len() != 14 {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "not a tone"));
     }
@@ -64,7 +67,7 @@ fn open_tone(bytes: Vec<u8>, skip: u64) -> io::Result<Box<dyn Source>> {
 /// Hands `m` to `host`: its files, then its commands, all applied.
 fn deliver(host: &mut Host, m: Message) {
     for (n, f) in m.files {
-        host.add_file(n, f);
+        host.add_file(n, Box::new(io::Cursor::new(f)));
     }
     assert_eq!(host.apply(&m.commands).unwrap(), m.commands.len());
 }
@@ -89,9 +92,10 @@ impl Pair {
     }
 
     fn play(&mut self, file: Vec<u8>, skip: u64, playback: Playback) -> VoiceId {
-        let direct = self
-            .direct
-            .play(open_tone(file.clone(), skip).unwrap(), playback);
+        let direct = self.direct.play(
+            open_tone(Box::new(io::Cursor::new(file.clone())), skip).unwrap(),
+            playback,
+        );
         let remote = self.remote.play_unchecked(file, skip, playback);
         self.ids.push((remote, direct));
         remote
@@ -256,7 +260,7 @@ fn commands_wait_for_every_file_they_play_and_apply_together() {
     let m = pair.remote.take().unwrap();
     let mut files = m.files.into_iter();
     let (n, f) = files.next().unwrap();
-    pair.host.add_file(n, f);
+    pair.host.add_file(n, Box::new(io::Cursor::new(f)));
     assert_eq!(
         pair.host.apply(&m.commands).unwrap(),
         0,
@@ -264,7 +268,7 @@ fn commands_wait_for_every_file_they_play_and_apply_together() {
     );
     assert!(pair.host.mix(3).iter().all(|&s| s == 0.0));
     for (n, f) in files {
-        pair.host.add_file(n, f);
+        pair.host.add_file(n, Box::new(io::Cursor::new(f)));
     }
     assert_eq!(pair.host.apply(&m.commands).unwrap(), m.commands.len());
     let mixer = pair.host.mixer_ref().unwrap();
