@@ -606,6 +606,31 @@ export const tests = {
     return `${withEffect.length - off.length} idle effects playing, ${off.length} galantines off; frame CPU ${stats.frame_cpu_ms.toFixed(2)} ms average, ${stats.frame_cpu_max_ms.toFixed(2)} ms worst; wasm heap ${mib(stats.wasm_heap_bytes)}`;
   },
 
+  "the level's frame and GPU times at a few video modes": async () => {
+    needsGame();
+    await until((s) => s.phase === "level" && !s.intro, "the level");
+    // #355: the phone's own size (landscape), the original's default target
+    // (1024×768 with r__supersample 2: √2 per axis, made even), common
+    // sizes. The diagnostic log is on, so the GPU is timed.
+    const sizes = [[2868, 1320], [1448, 1086], [1280, 720], [1024, 768]];
+    const before = await volya.call("level_stats");
+    const rows = [];
+    try {
+      for (const [width, height] of sizes) {
+        await volya.call("debug_video_mode", { width, height });
+        // A second to settle, then the latest 60 frames' averages.
+        await sleep(1000 + 60 * 34);
+        const s = await volya.call("level_stats");
+        const ms = (v) => (v == null ? "–" : v.toFixed(1));
+        rows.push(`${width}×${height}: interval ${ms(s.frame_interval_ms)}, CPU ${ms(s.frame_cpu_ms)}, GPU ${ms(s.gpu_time_ms)}, done ${ms(s.gpu_done_ms)}`);
+        assert(s.gpu_done_ms > 0, `no GPU done time at ${width}×${height}`);
+      }
+    } finally {
+      await volya.call("debug_video_mode", { width: 1024, height: 768 });
+    }
+    return `ms per frame: ${rows.join("; ")} (before: GPU ${before.gpu_time_ms?.toFixed(1)}, done ${before.gpu_done_ms?.toFixed(1)})`;
+  },
+
   "transcoding to ETC2 costs: the level's textures and a few large ones": async () => {
     needsGame();
     await until((s) => s.phase === "level" && !s.intro, "the level");
@@ -1759,6 +1784,21 @@ export const tests = {
     for (const key of ["frame max", "engine max", "render max", "frame.interval_ms max", "MiB", "diagnostics.write_ms max"]) {
       assert(series(key) > 10, `${key}: ${series(key)}`);
     }
+    // The GPU's times (#355): by timestamp queries where the device has
+    // them, the submission to the GPU done everywhere; what was drawn at.
+    const session = mine.find((e) => e.name === "session").args;
+    const timed = session.gpu_timing === "timestamp-query";
+    if (session.gpu_state === "ready") {
+      assert(["timestamp-query", "submitted-work-done"].includes(session.gpu_timing), `gpu_timing ${session.gpu_timing}`);
+      assert(series("gpu.done_ms max") > 10, `gpu.done_ms: ${series("gpu.done_ms max")}`);
+      if (timed) assert(series("gpu.time_ms max") > 10, `gpu.time_ms: ${series("gpu.time_ms max")}`);
+      const mode = mine.find((e) => e.name === "video mode")?.args;
+      assert(mode?.width > 0 && mode?.canvas_width > 0, `video mode ${JSON.stringify(mode)}`);
+    }
+    const means = (key) => {
+      const values = mine.filter((e) => e.ph === "C" && `${key} mean` in e.args).map((e) => e.args[`${key} mean`]);
+      return values.length ? (values.reduce((a, b) => a + b, 0) / values.length).toFixed(2) : "none";
+    };
     // The level's first frame creates its sounds: long, with what ran.
     const long = mine.filter((e) => e.ph === "X" && e.name === "frame");
     assert(long.length > 0, "no long frame");
@@ -1769,7 +1809,8 @@ export const tests = {
     // The log's rate while a game runs: this session's bytes over its time.
     const seconds = (mine.at(-1).ts - mine.find((e) => e.ts > 0).ts) / 1e6;
     const bytes = mine.reduce((sum, e) => sum + JSON.stringify(e).length + 2, 0);
-    return `${mine.length} events, ${(bytes / seconds).toFixed(0)} B/s over ${seconds.toFixed(0)} s; ${long.length} long frames (worst ${worst.toFixed(0)} ms); audio ${audio ? "running" : volya.audioState()}`;
+    const gpu = `GPU ${session.gpu_timing}: time ${means("gpu.time_ms")} ms, submitted to done ${means("gpu.done_ms")} ms (means of periods)`;
+    return `${mine.length} events, ${(bytes / seconds).toFixed(0)} B/s over ${seconds.toFixed(0)} s; ${long.length} long frames (worst ${worst.toFixed(0)} ms); ${gpu}; audio ${audio ? "running" : volya.audioState()}`;
   },
 
   "WebGL 2 chosen in Settings: one press of Play starts the engine anew on it and the game, and the level draws": async () => {

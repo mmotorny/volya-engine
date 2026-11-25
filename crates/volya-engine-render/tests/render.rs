@@ -179,6 +179,37 @@ fn a_smaller_frame_fits_the_target_with_its_aspect_kept() {
 }
 
 #[test]
+fn frames_are_timed_on_the_gpu_while_timing_is_on() {
+    let mut renderer = renderer();
+    assert!(renderer.can_time_gpu(), "Metal has timestamp queries");
+    let texture = renderer.create_rgba_texture(1, 1, &RED);
+    let mut list = DrawList::default();
+    list.quads.push(Quad::new(Rect::SCREEN, &texture));
+    let frames = |renderer: &mut Renderer| {
+        for _ in 0..8 {
+            pollster::block_on(renderer.capture_scaled(&list, (32, 24), 64, 48, BLACK)).unwrap();
+        }
+        renderer
+            .device()
+            .poll(wgpu::PollType::wait_indefinitely())
+            .unwrap();
+        renderer.take_gpu_times()
+    };
+    assert!(frames(&mut renderer).is_empty(), "off by default");
+    renderer.set_gpu_timing(true);
+    // Not every frame: Metal leaves some frames' last timestamp zero
+    // (measured), and those are left out.
+    let times = frames(&mut renderer);
+    assert!(
+        !times.is_empty() && times.len() <= 8,
+        "frames timed: {times:?}"
+    );
+    assert!(times.iter().all(|&ms| ms > 0.0 && ms < 1000.0), "{times:?}");
+    renderer.set_gpu_timing(false);
+    assert!(frames(&mut renderer).is_empty(), "off again");
+}
+
+#[test]
 fn draws_in_order_with_tint_and_alpha() {
     let mut renderer = renderer();
     let red = renderer.create_rgba_texture(1, 1, &RED);

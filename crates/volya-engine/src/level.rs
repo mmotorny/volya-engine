@@ -33,11 +33,12 @@ use crate::core::clock::GameClock;
 use crate::core::collision::{CollisionWorld, geometry};
 use crate::core::config;
 use crate::core::config::Config;
+use crate::core::detector::DetectorSection;
 use crate::core::input::Input;
 use crate::core::level::{DrawItem, Level};
 use crate::core::lights::{LightSettings, Lights};
 use crate::core::movement::{Flags, MovementConfig, Player};
-use crate::core::object_light::SkyVisibility;
+use crate::core::object_light::{self, SkyVisibility};
 use crate::core::particles::placed::{Origin, PlacedEffect, PlacedEffects, particle_capacity};
 use crate::core::simulation::graph::Graph;
 use crate::core::simulation::navigation::Navigation;
@@ -48,6 +49,7 @@ use crate::core::vfs::{self, Vfs};
 use crate::core::weather::{Environment, Weather, texture_name as weather_texture_name};
 use crate::core::zones::{Behaviour, SoundEvent, ZoneRecord, ZoneSection, Zones};
 use crate::data::GameData;
+use crate::detector::{DetectorReport, DetectorSound, PlayerDetectors};
 use crate::footsteps::{self, MaterialPairs, PlayerFootsteps};
 use crate::level_lights::{self, GlowShader, LevelLights, LightCamera, LightsData};
 use crate::level_sound::ZoneSoundNames;
@@ -211,9 +213,15 @@ pub struct LevelScreen {
     /// The player's footsteps (S11); `None` only in the unit tests' empty
     /// level.
     footsteps: Option<PlayerFootsteps>,
-    /// The player's sky visibility (level-objects.md 5.4), for the sounds
-    /// of the weather.
+    /// The player's sky visibility (level-objects.md 5.4,
+    /// sound-weather-ambient.md 4.3), for the sounds of the weather; the
+    /// player's model's header sphere (ogf.md section 2), centre and radius
+    /// in model space, its rays start from; the level's frame count and
+    /// the latest frame's time (s), for its once-per-frame steps.
     sky_visibility: SkyVisibility,
+    player_sphere: ([f32; 3], f32),
+    frames: u64,
+    frame_s: f32,
     player: Player,
     /// The player character's state (docs/behavior/player-state.md); `None`
     /// only in the unit tests' empty level.
@@ -266,6 +274,8 @@ pub struct LevelScreen {
     global_ms: u64,
     /// The player's torches (docs/behavior/torch.md).
     torches: PlayerTorches,
+    /// The player's detectors (docs/behavior/sound-detector.md).
+    detectors: PlayerDetectors,
 }
 
 /// What the engine interface reports.
@@ -297,6 +307,8 @@ pub struct LevelState {
     /// The player's attached torch (torch.md).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub torch: Option<TorchReport>,
+    /// The player's detectors (sound-detector.md).
+    pub detectors: Vec<DetectorReport>,
 }
 
 /// The level's placed effects as the engine interface reports them.
@@ -1075,7 +1087,7 @@ pub struct NewGameLoad {
     dir: String,
     level: Option<Level>,
     geom: Option<GeomFile>,
-    collision: Option<CollisionWorld>,
+    collision: Option<Arc<CollisionWorld>>,
     draw_items: Vec<DrawItem>,
     spheres: Vec<[f32; 4]>,
     modifiers: Vec<EnvModifier>,
@@ -1119,6 +1131,8 @@ pub struct NewGameLoad {
     pairs: Option<Arc<MaterialPairs>>,
     /// The player's visual, from its record.
     player_visual: Option<String>,
+    /// Its model's header sphere (sound-weather-ambient.md 4.3).
+    player_sphere: Option<([f32; 3], f32)>,
     footsteps: Option<PlayerFootsteps>,
     /// The level's lights, glows and their shaders
     /// (docs/behavior/dynamic-lights.md, glows.md), and chunk 7's records
@@ -1129,6 +1143,8 @@ pub struct NewGameLoad {
     light_textures: Option<[String; 3]>,
     /// The player's torches' data (torch.md 1, 3).
     torches: Option<PlayerTorchData>,
+    /// The player's detectors' sections (sound-detector.md 2.1).
+    detectors: Option<Vec<DetectorSection>>,
 }
 
 /// The zone objects of `level_objects` (zone-idle-effects.md 1.1: the
@@ -1304,8 +1320,9 @@ impl NewGameLoad {
                 let f = tree
                     .open(&format!("{dir}\\level.cform"))
                     .map_err(|e| file("level.cform", e))?;
-                self.collision =
-                    Some(CollisionWorld::read(f, materials).map_err(|e| file("level.cform", e))?);
+                self.collision = Some(Arc::new(
+                    CollisionWorld::read(f, materials).map_err(|e| file("level.cform", e))?,
+                ));
             }
             Stage::LoadingGeometry => {
                 let mut f = tree
@@ -1391,9 +1408,16 @@ impl NewGameLoad {
                 // The player's footsteps (S11) on its cycles (S10), placed
                 // under this caption by us, with the player's movement.
                 let pairs = earlier(self.pairs.clone(), "gamemtl.xr")?;
-                let collision = earlier(self.collision.as_ref(), "level.cform")?;
+                let collision = earlier(self.collision.as_deref(), "level.cform")?;
                 let visual = earlier(self.player_visual.as_deref(), "player's visual")?;
                 let cycles = footsteps::read_cycles(tree, data, &dir, visual)?;
+                // The sky rays' origin (sound-weather-ambient.md 4.3): the
+                // player's model's header, read with its skeleton as the
+                // torches read it.
+                let path = objects::locate_model(tree, data, &dir, visual)?;
+                let (header, _) = volya_engine_formats::model::skeleton(&vfs::read(tree, &path)?)
+                    .map_err(|e| io::Error::new(e.kind(), format!("{path}: {e}")))?;
+                self.player_sphere = Some((header.sphere_centre, header.sphere_radius));
                 self.footsteps = Some(PlayerFootsteps::new(
                     data,
                     spawn::ACTOR_SECTION,
@@ -1418,6 +1442,18 @@ impl NewGameLoad {
                     })
                     .collect();
                 self.torches = Some(torches);
+                // The player's detectors' sections (sound-detector.md 2.1),
+                // read as their items are made; their sound lists are loaded
+                // with them (2.2).
+                let detectors = crate::detector::read_sections(&data.system, character)?;
+                sound.detectors = (character.inventory.items.iter())
+                    .filter_map(|i| {
+                        let s = detectors.iter().find(|s| s.name == i.config.section)?;
+                        crate::detector::is_detector(i.config.class_id.as_str())
+                            .then(|| (i.id, s.clone()))
+                    })
+                    .collect();
+                self.detectors = Some(detectors);
                 // The zones online at the start are created as the client
                 // creates its objects (zone-idle-effects.md 3.1), on the
                 // effects' clock brought to this frame; their sounds are
@@ -1629,7 +1665,7 @@ impl NewGameLoad {
             // caption by us. They are kept while the level runs (our
             // choice: the game retests them, the sun's ray as the sun moves).
             Stage::ClientSynchronising => {
-                let collision = earlier(self.collision.as_ref(), "level.cform")?;
+                let collision = earlier(self.collision.as_deref(), "level.cform")?;
                 let weather = earlier(self.weather.as_ref(), "weather")?;
                 let clock = earlier(self.clock.as_ref(), "game clock")?;
                 let actor = earlier(self.actor.as_ref(), "actor")?;
@@ -1661,8 +1697,11 @@ impl NewGameLoad {
                     Err(e) if e.kind() == io::ErrorKind::NotFound => Library::default(),
                     Err(e) => return Err(e),
                 };
-                let effects = PlacedEffects::new(Arc::new(library), &records, self.now as u32)
-                    .map_err(|e| invalid(format!("{dir}\\level.ps_static: {e}")))?;
+                // The effects collide with the level (particle-collision.md).
+                let world = self.collision.clone();
+                let effects =
+                    PlacedEffects::new_in(Arc::new(library), &records, self.now as u32, world)
+                        .map_err(|e| invalid(format!("{dir}\\level.ps_static: {e}")))?;
                 self.effects = Some((effects, self.now));
             }
             Stage::PrefetchingObjects
@@ -1690,7 +1729,9 @@ impl NewGameLoad {
         let spawned = earlier(self.spawned, "objects")?;
         let simulation = earlier(self.simulation, "simulation")?;
         let footsteps = earlier(self.footsteps, "footsteps")?;
+        let player_sphere = earlier(self.player_sphere, "player's model")?;
         let torches = earlier(self.torches, "torches")?;
+        let detectors = earlier(self.detectors, "detectors")?;
         if self.dynamic_props.len() != spawned.instances.len() {
             return Err(invalid("loading stages out of order: no light inputs"));
         }
@@ -1751,11 +1792,14 @@ impl NewGameLoad {
                 glow_shaders,
                 light_textures: self.light_textures,
             }),
-            collision: Arc::new(collision),
+            collision,
             sound_data: self.sound,
             fatal: None,
             footsteps: Some(footsteps),
             sky_visibility: SkyVisibility::default(),
+            player_sphere,
+            frames: 0,
+            frame_s: 0.0,
             player,
             character: Some(character),
             controls,
@@ -1780,11 +1824,18 @@ impl NewGameLoad {
             lights,
             global_ms: 0,
             torches: PlayerTorches::new(torches, &name_for_torches),
+            detectors: PlayerDetectors::new(detectors),
         };
         screen.torches_frame(0.0);
         screen.update_view();
         screen.sync_zone_lights();
         screen.lights_frame(0.0);
+        // TODO(#365, sound-weather-ambient.md 4.3, disputed): whether a frame
+        // draws the level, updating the player's sky visibility, before the
+        // rule's first read is unestablished; we take that it does (the
+        // level drawn under the loading image), so the first read sees the
+        // first update's target rather than the initial 0.5.
+        screen.objects_gathered();
         Ok(screen)
     }
 }
@@ -1898,6 +1949,12 @@ impl LevelScreen {
         let elapsed = now.saturating_sub(self.last);
         let dt = (elapsed as f32 / 1000.0).min(MAX_STEP);
         self.last = now;
+        // The previous frame's drawing gathers its objects after that
+        // frame's sound rules (sound-weather-ambient.md 4.3): the player's
+        // sky rays from where it ended, before this frame moves anything.
+        self.objects_gathered();
+        self.frames += 1;
+        self.frame_s = elapsed as f32 / 1000.0;
         // The previous frame's idle sound starts and stops were the sound
         // side's to play.
         self.zones.clear_events();
@@ -1934,6 +1991,8 @@ impl LevelScreen {
         // The player's torches (torch.md 4, 6, 8, 15.3) after the
         // movement, aimed by this frame's camera.
         self.torches.take_sounds();
+        // The previous frame's detector sounds were the sound side's.
+        self.detectors.take_sounds();
         let alive = self
             .character
             .as_ref()
@@ -1972,6 +2031,15 @@ impl LevelScreen {
             if let Err(e) = self.zones.frame(&frame, effects) {
                 self.fatal.get_or_insert(e);
             }
+            // The player's detectors (sound-detector.md 3 – 5) in the same
+            // pass over the objects and the scheduler's after it, on the
+            // same clock, following the inventory as it stands.
+            let feet = self.player.state().position;
+            if let Some(c) = &self.character {
+                self.detectors.sync(c, feet);
+            }
+            self.detectors
+                .frame(effects.clock(), elapsed as u32, feet, eye, &self.zones);
         }
         // The idle lights of zones updated or created this frame.
         self.sync_zone_lights();
@@ -1985,14 +2053,48 @@ impl LevelScreen {
             self.clock.time_factor(),
         );
         self.update_view();
-        // TODO(#320, docs/behavior/level-objects.md 5.4): the rays start at the
-        // centre of the player's model sphere raised by 0.3 of its radius;
-        // the player's model is not loaded, so they start at the eye (our
-        // choice).
-        let eye = self.player.view().eye;
-        self.sky_visibility
-            .update(&self.collision, eye, elapsed as f32 / 1000.0);
         self.lights_frame(elapsed as f32 / 1000.0);
+    }
+
+    /// The player's transform (sound-weather-ambient.md 4.3): at its feet,
+    /// turned about y by the body's heading so that the model's +z points
+    /// along it (start-position.md 5: the heading turns about y only).
+    /// TODO(#365): the specs do not give the actor's transform in
+    /// first-person view; this is our reading.
+    fn player_transform(&self) -> volya_engine_formats::model::Mat4 {
+        let feet = self.player.state().position;
+        volya_engine_formats::model::transform(feet, [0.0, -self.player.heading(), 0.0])
+    }
+
+    /// The origin of the player's sky rays (sound-weather-ambient.md 4.3):
+    /// its transform applied to its model's sphere centre *C*, raised by
+    /// 0.3 *R*.
+    pub fn sky_ray_origin(&self) -> Vec3 {
+        let (c, r) = self.player_sphere;
+        let c = volya_engine_formats::model::transform_point(&self.player_transform(), c);
+        object_light::ray_origin(c, r)
+    }
+
+    /// The drawing of the current frame gathers the level's objects
+    /// (sound-weather-ambient.md 4.3): the player's sky visibility is
+    /// updated, at most once per frame, from [`Self::sky_ray_origin`]
+    /// against the static collision.
+    fn objects_gathered(&mut self) {
+        let origin = self.sky_ray_origin();
+        self.sky_visibility
+            .update(self.frames, &self.collision, origin, self.frame_s);
+    }
+
+    /// The player's sky visibility as the current frame's rules read it
+    /// (sound-weather-ambient.md 4.3): the frame's smoothing step applied
+    /// if it has not run, no rays cast.
+    pub fn read_sky_visibility(&mut self) -> f32 {
+        self.sky_visibility.read(self.frames, self.frame_s)
+    }
+
+    /// The player's sky visibility: its latest value and target.
+    pub fn sky_visibility(&self) -> (f32, f32) {
+        (self.sky_visibility.value(), self.sky_visibility.target())
     }
 
     /// The player's torches placed and coloured for a frame of `dt`
@@ -2042,6 +2144,23 @@ impl LevelScreen {
         self.torches.take_sounds()
     }
 
+    /// The player's detectors.
+    pub fn detectors(&self) -> &PlayerDetectors {
+        &self.detectors
+    }
+
+    /// Adds the section of a detector item made after the level loaded
+    /// (sound-detector.md 2.1).
+    pub fn add_detector_section(&mut self, section: DetectorSection) {
+        self.detectors.add_section(section);
+    }
+
+    /// The detectors' sound commands of this frame, taken (played by the app
+    /// on the level's sounds, sound-detector.md 6).
+    pub fn take_detector_sounds(&mut self) -> Vec<DetectorSound> {
+        self.detectors.take_sounds()
+    }
+
     /// The player's footsteps.
     pub fn footsteps(&self) -> Option<&PlayerFootsteps> {
         self.footsteps.as_ref()
@@ -2069,7 +2188,8 @@ impl LevelScreen {
     }
 
     /// What this frame's sound rules read.
-    pub fn sound_inputs(&self) -> SoundInputs<'_> {
+    pub fn sound_inputs(&mut self) -> SoundInputs<'_> {
+        let sky_visibility = self.read_sky_visibility();
         let (a, b, t) = self.weather.bracket(self.clock.time_of_day());
         SoundInputs {
             tau: (self.clock.time() % crate::core::clock::DAY_MS) as u32,
@@ -2078,13 +2198,14 @@ impl LevelScreen {
             far_plane: self.environment.far_plane,
             sun_dir: self.environment.sun_dir,
             eye: self.player.view().eye,
-            sky_visibility: self.sky_visibility.value(),
+            sky_visibility,
         }
     }
 
     /// What this frame's sound rules read, with the level's side of the
     /// weather's ambient effect objects (weather-ambient-effects.md 3).
     pub fn sound_frame_parts(&mut self) -> (SoundInputs<'_>, WeatherParticles<'_>) {
+        let sky_visibility = self.read_sky_visibility();
         let (a, b, t) = self.weather.bracket(self.clock.time_of_day());
         let inputs = SoundInputs {
             tau: (self.clock.time() % crate::core::clock::DAY_MS) as u32,
@@ -2093,7 +2214,7 @@ impl LevelScreen {
             far_plane: self.environment.far_plane,
             sun_dir: self.environment.sun_dir,
             eye: self.player.view().eye,
-            sky_visibility: self.sky_visibility.value(),
+            sky_visibility,
         };
         let particles = WeatherParticles {
             effects: &mut self.effects,
@@ -2551,6 +2672,7 @@ impl LevelScreen {
             objects: self.objects_report(),
             lights: self.lights.report(),
             torch: self.torches.report(&self.lights.lights, &self.lights.glows),
+            detectors: self.detectors.report(&self.zones),
         }
     }
 
@@ -2705,6 +2827,9 @@ impl LevelScreen {
             fatal: None,
             footsteps: None,
             sky_visibility: SkyVisibility::default(),
+            player_sphere: ([0.0; 3], 0.0),
+            frames: 0,
+            frame_s: 0.0,
             player,
             character: None,
             controls,
@@ -2728,6 +2853,7 @@ impl LevelScreen {
             effects_drawn: [true; 3],
             lights: LevelLights::default(),
             torches: PlayerTorches::default(),
+            detectors: PlayerDetectors::default(),
             global_ms: 0,
         }
     }

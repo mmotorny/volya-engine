@@ -5,7 +5,7 @@
 //! action list, its live particles, placement (section 5), play and stop
 //! (section 7) and the update in 33 ms steps (section 8).
 
-use volya_engine_formats::particles::{ActionKind, Effect, action_flags, effect_flags};
+use volya_engine_formats::particles::{ActionKind, Collision, Effect, action_flags, effect_flags};
 
 use super::actions::{Step, run};
 use super::region::place;
@@ -13,6 +13,7 @@ use super::{
     Bounds, IDENTITY, Matrix, Particle, Random, STEP, STEP_MS, Sphere, Vec3, place_direction,
     place_point, scale, translation_only, without_translation,
 };
+use crate::collision::CollisionWorld;
 
 /// How an owner places an instance (P2 5.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,6 +56,8 @@ pub struct EffectInstance {
     max: usize,
     time_limit: f32,
     frames: volya_engine_formats::particles::Frames,
+    /// Chunk 33's values (P5).
+    collision: Collision,
     actions: Vec<InstanceAction>,
     particles: Vec<Particle>,
     playing: bool,
@@ -94,6 +97,7 @@ impl EffectInstance {
             max: effect.max_particles as usize,
             time_limit: effect.time_limit,
             frames: effect.frames,
+            collision: effect.collision,
             actions,
             particles: Vec::new(),
             playing: false,
@@ -209,8 +213,15 @@ impl EffectInstance {
         self.playing = false;
     }
 
-    /// The update with `e` ms of elapsed real time (P2 8.2).
+    /// The update with `e` ms of elapsed real time (P2 8.2), with no
+    /// collision mesh (the collision step's rays hit nothing).
     pub fn update(&mut self, e: u32, random: &mut Random) {
+        self.update_in(e, random, None);
+    }
+
+    /// The update with `e` ms of elapsed real time (P2 8.2), the
+    /// collision step's rays cast against `world` (P5).
+    pub fn update_in(&mut self, e: u32, random: &mut Random, world: Option<&CollisionWorld>) {
         if !self.playing {
             self.bounds = Bounds::around(self.position);
             self.sphere = self.bounds.sphere();
@@ -223,14 +234,14 @@ impl EffectInstance {
         let n = (self.accumulator / STEP_MS).min(3);
         self.accumulator %= STEP_MS;
         for _ in 0..n {
-            if !self.step(random) {
+            if !self.step(random, world) {
                 break;
             }
         }
     }
 
     /// One step (P2 8.3); `false` when it ends the update.
-    fn step(&mut self, random: &mut Random) -> bool {
+    fn step(&mut self, random: &mut Random, world: Option<&CollisionWorld>) -> bool {
         if self.flags & effect_flags::TIME_LIMIT != 0 && !self.stopping {
             self.remaining -= STEP;
             if self.remaining < 0.0 {
@@ -261,9 +272,22 @@ impl EffectInstance {
                 STEP,
             );
         }
-        // TODO(#342): collision (particle-collision.md, P5) when it has
-        // 0x10000.
+        // The collision step (P5 2). The box and the end of a deferred stop
+        // use the count before it, over the same storage: removed
+        // particles' slots count (P5 5).
         let count = self.particles.len();
+        let live = if self.flags & effect_flags::COLLIDE != 0 {
+            super::collision::step(
+                &mut self.particles,
+                count,
+                self.flags,
+                &self.collision,
+                world,
+                self.notices.as_mut(),
+            )
+        } else {
+            count
+        };
         if count > 0 {
             let mut b = Bounds::EMPTY;
             let mut grow = 0.0f32;
@@ -281,6 +305,7 @@ impl EffectInstance {
             self.bounds = b;
             self.sphere = b.sphere();
         }
+        self.particles.truncate(live);
         if self.stopping && count == 0 {
             self.playing = false;
             self.stopping = false;

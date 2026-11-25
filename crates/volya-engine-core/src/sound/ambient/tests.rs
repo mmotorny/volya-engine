@@ -375,3 +375,54 @@ fn a_stopped_effect_is_removed_once_it_no_longer_plays() {
     assert_eq!(particles.removed, 1);
     assert!(state.particles.is_none());
 }
+
+#[test]
+fn random_sounds_are_heard_at_section_6_1_levels() {
+    use crate::sound::system::{ROLLOFF, distance_factor, distance_gain};
+    let db = |g: f32| 20.0 * g.log10();
+    // Section 6.1: the distance gain at d = 30, 45, 60 m (δ = √(d² + 100))
+    // for the default weather's min distances, max distance 75 m.
+    let table: [(f32, [f32; 3]); 7] = [
+        (1.0, [0.04172, 0.02872, 0.02180]),
+        (1.5, [0.06226, 0.04292, 0.03261]),
+        (2.0, [0.08259, 0.05702, 0.04336]),
+        (3.0, [0.12261, 0.08493, 0.06470]),
+        (4.0, [0.16183, 0.11244, 0.08580]),
+        (5.0, [0.20026, 0.13957, 0.10668]),
+        (6.0, [0.23793, 0.16633, 0.12733]),
+    ];
+    let deltas = [30.0f32, 45.0, 60.0].map(|d| (d * d + 100.0).sqrt());
+    for (m, gains) in table {
+        for (delta, want) in deltas.iter().zip(gains) {
+            let g = distance_gain(m, 75.0, ROLLOFF, *delta);
+            assert!((g - want).abs() < 5e-5, "m {m} at {delta}: {g}");
+        }
+    }
+    // No random sound fades out: a ≥ 0.02192 > 0.01 (m = 1 at 60.83 m);
+    // with an effects volume below 0.45621 the m = 1 files would.
+    let a = distance_factor(1.0, deltas[2]);
+    assert!((a - 0.02192).abs() < 5e-6, "{a}");
+    assert!((0.01 / a - 0.45621).abs() < 5e-4);
+    // Heard gain V · g with V = o: outdoors unoccluded −12.5 … −33.2 dB, in
+    // the bunker (o = 0.4, −8.0 dB) −20.4 … −41.2 dB; m = 5 at the middle
+    // distance −17.1 and −25.1 dB.
+    let near = distance_gain(6.0, 75.0, ROLLOFF, deltas[0]);
+    let far = distance_gain(1.0, 75.0, ROLLOFF, deltas[2]);
+    let mid = distance_gain(5.0, 75.0, ROLLOFF, deltas[1]);
+    for (got, want) in [
+        (db(near), -12.5),
+        (db(far), -33.2),
+        (db(0.4 * near), -20.4),
+        (db(0.4 * far), -41.2),
+        (db(mid), -17.1),
+        (db(0.4 * mid), -25.1),
+        (db(0.4), -8.0),
+    ] {
+        assert!((got - want).abs() < 0.05, "{got} dB, not {want}");
+    }
+    // Priorities P = V · a in the bunker (6.1, Voices): 0.00877 … 0.10119.
+    let p_far = 0.4 * distance_factor(1.0, deltas[2]);
+    let p_near = 0.4 * distance_factor(6.0, deltas[0]);
+    assert!((p_far - 0.00877).abs() < 5e-6, "{p_far}");
+    assert!((p_near - 0.10119).abs() < 5e-6, "{p_near}");
+}

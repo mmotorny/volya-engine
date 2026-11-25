@@ -22,17 +22,23 @@ use volya_engine::audio::SoundHost;
 use volya_engine::core::audio::{Category, Mixer, VoiceId};
 use volya_engine::core::collision::geometry::normalize;
 use volya_engine::core::config;
+use volya_engine::core::input::Input;
+use volya_engine::core::object_light::SkyVisibility;
 use volya_engine::core::pause::GlobalClock;
-use volya_engine::core::sound::ambient::{NoParticles, list_items};
+use volya_engine::core::sound::ambient::{AmbientParticles, NoParticles, list_items};
 use volya_engine::core::sound::occlusion::Occlusion;
 use volya_engine::core::sound::random::SharedRandom;
-use volya_engine::core::sound::system::{Listener, NoDevice, SoundSystem, Vec3};
-use volya_engine::core::vfs::StdVfs;
+use volya_engine::core::sound::system::{
+    Device, DeviceListener, DeviceSource, Listener, NoDevice, ROLLOFF, SoundSystem, Vec3,
+    distance_factor, distance_gain, heard as heard_gain,
+};
+use volya_engine::core::sound::{Fatal, Sound};
 use volya_engine::core::vfs::db::DbVfs;
+use volya_engine::core::vfs::{StdVfs, Vfs};
 use volya_engine::core::weather::Weather;
 use volya_engine::data::GameData;
 use volya_engine::level::LevelScreen;
-use volya_engine::level_sound::{LevelSounds, SoundRun};
+use volya_engine::level_sound::{LevelSoundData, LevelSounds, SoundRun};
 use volya_engine_formats::ui::Resolution;
 
 const SIZE: Resolution = Resolution::new(1024, 768);
@@ -544,6 +550,287 @@ fn first_level_sounds_from_game_data() {
     assert!(last.is_some(), "the tape recorder never played");
     assert_eq!(switches, 0, "the tape recorder's voice changed");
     assert!(worst_jump < 0.05, "gain jumps by {worst_jump}");
+    host.system.stop_all();
+    sounds.discard(&mut host.system);
+
+    sky_visibility_and_heard_levels(&tree, &data, &sound, &mut level);
+}
+
+/// S4 4.3 (H2 – H6) and 6.1 (L1 – L9) on `level` at a New Game's start:
+/// the player's sky visibility in the bunker and outdoors above it, and how
+/// loud the random sounds are heard in each.
+fn sky_visibility_and_heard_levels(
+    tree: &dyn Vfs,
+    data: &GameData,
+    sound: &LevelSoundData,
+    level: &mut LevelScreen,
+) {
+    // 4.3: the rays start at the model's header sphere centre raised by
+    // 0.3 R, 1.35098 m above the feet (H2), 0.0228 m ahead of them.
+    let feet = level.player().state().position;
+    let origin = level.sky_ray_origin();
+    assert!((origin[1] - feet[1] - 1.350_98).abs() < 1e-4, "{origin:?}");
+    let ahead = ((origin[0] - feet[0]).powi(2) + (origin[2] - feet[2]).powi(2)).sqrt();
+    assert!((ahead - 0.022_80).abs() < 1e-5, "{ahead}");
+    // H3, H4: no ray is free in the bunker, so h = 0 from the first update
+    // on (made with the level) and the view is not outdoors.
+    assert_eq!(level.sky_visibility(), (0.0, 0.0));
+
+    // L5, L7, L8: 30 s at the start in the bunker; the level runs, its
+    // rules and the sound update every 16 ms, as the app runs them.
+    let mut now = 0;
+    let bunker = heard_levels(tree, data, sound, level, &mut now, 30_000, None);
+    assert_eq!(bunker.effects, 0, "an ambient effect started in the bunker");
+    assert_eq!(level.sky_visibility(), (0.0, 0.0));
+    assert!(bunker.sounds >= 3, "{} random sounds", bunker.sounds);
+    // Every placement is occluded: o = 0.4, so V = 0.4 from the start on,
+    // heard at −20.4 … −41.2 dB, and the priority P = V · a.
+    assert!(
+        bunker.occlusion.iter().all(|&o| (o - 0.4).abs() < 1e-6),
+        "{:?}",
+        bunker.occlusion
+    );
+    assert!(
+        bunker.db.0 >= -41.25 && bunker.db.1 <= -20.35,
+        "{:?}",
+        bunker.db
+    );
+
+    // H5: outdoors on the ground above the start (y −7.659), 13 of the 26
+    // rays are free, 4 of the first 5: h = 0.8 at a first update.
+    let ground = [EYE[0], -7.659, EYE[2]];
+    let h = level.player().config.eye_height(0);
+    let eye = [ground[0], ground[1] + h, ground[2]];
+    level.set_camera(eye, level.player().angles());
+    let mut fresh = SkyVisibility::default();
+    for frame in 0..6 {
+        fresh.update(frame, level.collision(), level.sky_ray_origin(), 1.0 / 60.0);
+        if frame == 0 {
+            assert!((fresh.value() - 0.8).abs() < 1e-6, "{}", fresh.value());
+        }
+    }
+    assert_eq!(fresh.target(), 0.5);
+    // H6: coming out of the bunker with h = 0, at 60 frames per second h
+    // reaches 0.05 after 8 – 10 frames (the disputed range), so the view
+    // turns outdoors. The player is held there: the body does not stand on
+    // that ground (it falls through to a floor below).
+    let angles = level.player().angles();
+    let mut frames = 0;
+    while level.read_sky_visibility() < 0.05 {
+        frames += 1;
+        now += if frames % 3 == 0 { 16 } else { 17 };
+        level.update(now, &Input::new());
+        level.set_camera(eye, angles);
+        assert!(frames < 60, "never outdoors");
+    }
+    assert!((8..=10).contains(&frames), "outdoors after {frames} frames");
+
+    // L6, L7: outdoors, unoccluded −12.5 … −33.2 dB, behind terrain as in
+    // the bunker; an ambient effect starts.
+    let outdoors = heard_levels(tree, data, sound, level, &mut now, 30_000, Some(eye));
+    assert!(outdoors.effects >= 1, "no ambient effect outdoors");
+    assert!(outdoors.sounds >= 3, "{} random sounds", outdoors.sounds);
+    assert!(
+        outdoors.occlusion.iter().all(|&o| o > 0.0 && o <= 1.0),
+        "{:?}",
+        outdoors.occlusion
+    );
+    assert!(
+        outdoors.db.0 >= -41.25 && outdoors.db.1 <= -12.45,
+        "{:?}",
+        outdoors.db
+    );
+    let (h, target) = level.sky_visibility();
+    assert!(h >= 0.05 && (target - 0.5).abs() < 1e-6, "{h} {target}");
+    // L6's placements (36 angles × d = 30, 60 m, 10 m above the eye, no
+    // jitter) from this point: each target is 1 or the level's 0.4.
+    let occlusion = Occlusion {
+        level: Some(level.shared_collision()),
+        sound: sound.occlusion_mesh.clone(),
+        scale: 0.4,
+    };
+    let mut free = 0;
+    for k in 0..36 {
+        let a = k as f32 * std::f32::consts::TAU / 36.0;
+        for d in [30.0, 60.0] {
+            let to = [eye[0] + d * a.cos(), eye[1] + 10.0, eye[2] + d * a.sin()];
+            let v = [to[0] - eye[0], to[1] - eye[1], to[2] - eye[2]];
+            let o = occlusion.target_along(eye, normalize(v).unwrap(), distance(eye, to));
+            assert!(o == 1.0 || (o - 0.4).abs() < 1e-6, "{o}");
+            free += usize::from(o == 1.0);
+        }
+    }
+    let unoccluded = outdoors.occlusion.iter().filter(|&&o| o == 1.0).count();
+    // Outdoors part of them are unoccluded, unlike from the bunker.
+    assert!((1..72).contains(&free), "{free} of 72 unoccluded");
+    eprintln!("outdoor placements unoccluded: {free} of 72");
+    eprintln!(
+        "heard random sounds: bunker {} sounds, {:.1} … {:.1} dB, no effect; outdoors after \
+         {frames} frames, {} sounds ({unoccluded} unoccluded), {:.1} … {:.1} dB, {} effects",
+        bunker.sounds,
+        bunker.db.0,
+        bunker.db.1,
+        outdoors.sounds,
+        outdoors.db.0,
+        outdoors.db.1,
+        outdoors.effects
+    );
+}
+
+/// What [`heard_levels`] found of the random sounds.
+struct Heard {
+    /// Random sounds started, effects started.
+    sounds: usize,
+    effects: usize,
+    /// Each random sound's occlusion as it started.
+    occlusion: Vec<f32>,
+    /// The quietest and loudest heard gain of a playing random sound, dB.
+    db: (f32, f32),
+}
+
+/// `ms` of the level from engine clock `now` in 16 ms frames, with fresh
+/// level sounds and rules at the default settings (S4 6.1: effects volume
+/// 1, 24 voices), the player held with its eye at `hold` if given: each
+/// frame the level's update, its sound rules, and the
+/// sound update on a device that keeps what it is sent. Checks that every
+/// playing random sound (S4 4.5) is heard at the gain chain's level: the
+/// output volume is its occlusion (V = b · v · c · φ · o with b, v, c, φ =
+/// 1), the device's gain V · g with S2's distance gain g, and its priority
+/// V · a.
+fn heard_levels(
+    tree: &dyn Vfs,
+    data: &GameData,
+    sound: &LevelSoundData,
+    level: &mut LevelScreen,
+    now: &mut u64,
+    ms: u64,
+    hold: Option<Vec3>,
+) -> Heard {
+    let mut system = SoundSystem::new(24);
+    system.set_volume(Category::Effects, 1.0);
+    let mut sounds = LevelSounds::create(&mut system, tree, &data.aliases, sound).unwrap();
+    system.occlusion_mut().level = Some(level.shared_collision());
+    let mut device = Recording::default();
+    let mut particles = Counting::default();
+    let (mut run, mut clock) = (SoundRun::default(), GlobalClock::default());
+    let mut heard = Heard {
+        sounds: 0,
+        effects: 0,
+        occlusion: Vec::new(),
+        db: (f32::INFINITY, f32::NEG_INFINITY),
+    };
+    let mut seen = HashSet::new();
+    let start = *now;
+    let angles = level.player().angles();
+    while *now < start + ms {
+        *now += 16;
+        level.update(*now, &Input::new());
+        if let Some(eye) = hold {
+            level.set_camera(eye, angles);
+        }
+        let v = level.player().view();
+        let listener = Listener {
+            position: v.eye,
+            direction: v.direction,
+            up: v.up,
+        };
+        system.set_listener(listener);
+        run.frame_time(0.016, false);
+        run.frame(
+            &mut system,
+            &mut sounds,
+            &level.sound_inputs(),
+            clock.frame(*now - start, false),
+            false,
+            &mut particles,
+        )
+        .unwrap();
+        system.update(*now - start, &mut device);
+        for e in system.emitters() {
+            if !e.name.starts_with("ambient\\rnd_outdoor\\") || e.name.contains("rnd_wind_") {
+                continue;
+            }
+            if seen.insert(e.id) {
+                heard.sounds += 1;
+                heard.occlusion.push(e.occlusion);
+            }
+            let Some(voice) = e.voice else { continue };
+            let source = device.sources[voice].unwrap();
+            let (gain, _) = heard_gain(&source, &device.listener.unwrap());
+            let delta = distance(v.eye, e.position);
+            let (m, max) = e.range;
+            assert_eq!(max, 75.0, "{}", e.name);
+            let g = distance_gain(m, max, ROLLOFF, delta);
+            assert_eq!(e.fade, 1.0, "{} fades", e.name);
+            assert!(
+                (e.out - e.occlusion).abs() < 1e-3,
+                "{}: V {} o {}",
+                e.name,
+                e.out,
+                e.occlusion
+            );
+            assert!((gain - e.out * g).abs() < 1e-6, "{}: {gain}", e.name);
+            assert!(
+                (e.priority - e.out * distance_factor(m, delta)).abs() < 1e-6,
+                "{}: P {}",
+                e.name,
+                e.priority
+            );
+            let db = 20.0 * gain.log10();
+            heard.db = (heard.db.0.min(db), heard.db.1.max(db));
+        }
+    }
+    heard.effects = particles.started;
+    system.stop_all();
+    sounds.discard(&mut system);
+    heard
+}
+
+/// A device that keeps the listener and each voice's source it was sent.
+#[derive(Default)]
+struct Recording {
+    listener: Option<DeviceListener>,
+    sources: Vec<Option<DeviceSource>>,
+}
+
+impl Device for Recording {
+    fn start(&mut self, _: usize, _: &Sound, _: bool, _: u64) {}
+    fn stop(&mut self, voice: usize) {
+        if let Some(s) = self.sources.get_mut(voice) {
+            *s = None;
+        }
+    }
+    fn set_listener(&mut self, listener: &DeviceListener) {
+        self.listener = Some(*listener);
+    }
+    fn set_source(&mut self, voice: usize, source: &DeviceSource) {
+        if self.sources.len() <= voice {
+            self.sources.resize(voice + 1, None);
+        }
+        self.sources[voice] = Some(*source);
+    }
+}
+
+/// Effect objects counted as they start, gone at once when stopped.
+#[derive(Default)]
+struct Counting {
+    started: usize,
+    playing: bool,
+}
+
+impl AmbientParticles for Counting {
+    fn start(&mut self, _: &str, _: Vec3) -> Result<(), Fatal> {
+        self.started += 1;
+        self.playing = true;
+        Ok(())
+    }
+    fn stop(&mut self) {
+        self.playing = false;
+    }
+    fn is_playing(&self) -> bool {
+        self.playing
+    }
+    fn remove(&mut self) {}
 }
 
 /// Draws 0 first (the jitter's θ = 0), then the shared generator.

@@ -523,6 +523,11 @@ impl Player {
         self.angles
     }
 
+    /// The body's heading `θ` (5.3).
+    pub fn heading(&self) -> f32 {
+        self.heading
+    }
+
     pub fn body(&self) -> &PlayerBody {
         &self.body
     }
