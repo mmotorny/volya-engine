@@ -532,6 +532,59 @@ pub fn set_details_drawn(on: bool) {
     DETAILS_DRAWN.set(on);
 }
 
+thread_local! {
+    /// Frames presented, for `debug_gl_calls`.
+    static PRESENTED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// `PRESENTED` when the count began.
+    #[cfg(feature = "test-ops")]
+    static COUNTED_FROM: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The `debug_gl_calls` op (tests, #429): with `on`, every WebGL 2 call in
+/// this worker is counted by name from now on (`WebGL2RenderingContext`'s
+/// methods wrapped); off, they are restored and the counts returned with
+/// the frames presented meanwhile.
+#[cfg(feature = "test-ops")]
+pub fn gl_calls(on: bool) -> Result<serde_json::Value, JsValue> {
+    const BODY: &str = "
+        const p = globalThis.WebGL2RenderingContext?.prototype;
+        if (!p) return null;
+        const counting = globalThis.__volyaGlCalls;
+        if (on) {
+            if (counting) return null;
+            const counts = {};
+            const originals = {};
+            for (const name of Object.getOwnPropertyNames(p)) {
+                const d = Object.getOwnPropertyDescriptor(p, name);
+                if (name === 'constructor' || typeof d.value !== 'function') continue;
+                const f = d.value;
+                originals[name] = f;
+                p[name] = function () {
+                    counts[name] = (counts[name] ?? 0) + 1;
+                    return f.apply(this, arguments);
+                };
+            }
+            globalThis.__volyaGlCalls = { counts, originals };
+            return null;
+        }
+        if (!counting) return null;
+        for (const [name, f] of Object.entries(counting.originals)) p[name] = f;
+        delete globalThis.__volyaGlCalls;
+        return JSON.stringify(counting.counts);
+    ";
+    let f = js_sys::Function::new_with_args("on", BODY);
+    let counts = f.call1(&JsValue::NULL, &JsValue::from_bool(on))?;
+    if on {
+        COUNTED_FROM.set(PRESENTED.get());
+        return Ok(serde_json::Value::Null);
+    }
+    let counts: serde_json::Value = counts
+        .as_string()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    Ok(json!({ "frames": PRESENTED.get() - COUNTED_FROM.get(), "calls": counts }))
+}
+
 /// One animation frame at `time` (milliseconds): advances video and
 /// presents if anything changed.
 pub fn frame(time: f64) {
@@ -692,6 +745,7 @@ impl Gpu {
         }
         self.watch_done();
         tracing::info_span!("render.present").in_scope(|| self.queue.present(texture));
+        PRESENTED.set(PRESENTED.get() + 1);
         self.dirty = false;
     }
 

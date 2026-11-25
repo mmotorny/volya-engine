@@ -107,6 +107,31 @@ async function drawMenuFrames(scenes) {
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * WebGL 2's calls per frame over 2 s (`debug_gl_calls`): the total and the
+ * most frequent kinds, and render.submit's mean from the diagnostic log
+ * meanwhile, where it is on (#429).
+ */
+async function glCalls() {
+  const since = (performance.timeOrigin + performance.now()) * 1000;
+  await volya.call("debug_gl_calls", { on: true });
+  await sleep(2000);
+  const { frames, calls } = await volya.call("debug_gl_calls", { on: false });
+  const per = Object.entries(calls ?? {})
+    .map(([name, n]) => [name, n / frames])
+    .sort((a, b) => b[1] - a[1]);
+  const total = per.reduce((sum, [, n]) => sum + n, 0);
+  // Without the counting's own cost: a second more, then the log's periods.
+  await sleep(3000);
+  const { text } = await volya.call("diagnostic_log");
+  let [sum, n] = [0, 0];
+  for (const e of JSON.parse(text).traceEvents) {
+    const count = e.name === "time ms" && e.ts >= since + 2.5e6 ? e.args["render.submit n"] : 0;
+    if (count) [sum, n] = [sum + e.args["render.submit mean"] * count, n + count];
+  }
+  const submit = n ? `, render.submit ${(sum / n).toFixed(2)} ms` : "";
+  return `${total.toFixed(0)} GL calls a frame (${per.slice(0, 10).map(([name, n]) => `${name} ${n.toFixed(0)}`).join(", ")})${submit}`;
+}
 const state = () => volya.call("menu_state");
 // Where the wasm heap's live bytes sit before the New Game (#432), from the
 // `heap_map` op: per MiB of the heap "#" for 1000 KiB or more live, "+" for
@@ -702,6 +727,7 @@ export const tests = {
         rows.push(`${width}×${height}: interval ${ms(s.frame_interval_ms)}, CPU ${ms(s.frame_cpu_ms)}, GPU ${ms(s.gpu_time_ms)} (${passes}), done ${ms(s.gpu_done_ms)}`);
         assert(s.gpu_done_ms > 0, `no GPU done time at ${width}×${height}`);
       }
+      if (gpu.backend === "webgl2") rows.push(`1024×768: ${await glCalls()}`);
       // At 1024×768: r__supersample 1 instead of 2, and the grass left
       // undrawn (#415).
       for (const [what, change] of [["r__supersample 1", { supersample: 1 }], ["no grass", { supersample: 2, details: false }]]) {
@@ -2013,6 +2039,7 @@ export const tests = {
       const s = await newGame();
       // Frame times over a few seconds of the level.
       await sleep(3000);
+      const calls = await glCalls();
       const first = byCaption(await volya.call("heap_log", { on: false }));
       const { rgba } = await volya.call("debug_capture", { width: 256, height: 192 });
       const colours = new Set();
@@ -2050,7 +2077,7 @@ export const tests = {
         menuNote.push(what);
       });
       await volya.call("quit_game");
-      return `${heapNote}${drawn.backend}, textures ${drawn.textures}; ${menuNote.map((n) => `${n}; `).join("")}first caption to first level frame in ${s.load_ms.toFixed(0)} ms, ${again.load_ms.toFixed(0)} ms again; ${colours.size} colours; wasm heap ${mib(stats.wasm_heap_bytes)}, ${mib(after.wasm_heap_bytes)} after the second; by caption (MiB, heap/live): ${first}; the second: ${second}; ${JSON.stringify(stats)}`;
+      return `${heapNote}${drawn.backend}, textures ${drawn.textures}; ${menuNote.map((n) => `${n}; `).join("")}first caption to first level frame in ${s.load_ms.toFixed(0)} ms, ${again.load_ms.toFixed(0)} ms again; at the start ${calls}; ${colours.size} colours; wasm heap ${mib(stats.wasm_heap_bytes)}, ${mib(after.wasm_heap_bytes)} after the second; by caption (MiB, heap/live): ${first}; the second: ${second}; ${JSON.stringify(stats)}`;
     } finally {
       globalThis.Worker = Original;
       localStorage.removeItem("volya-engine.graphics");
