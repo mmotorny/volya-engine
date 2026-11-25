@@ -54,15 +54,20 @@ impl<R: Read + Seek> Source for VorbisStream<R> {
 pub enum Category {
     Effects,
     Music,
+    /// Gains that already hold their category's volume: the voices of the
+    /// sound system (`crate::sound::system`, docs/behavior/sound-positional.md
+    /// section 5.4). Only the master gain applies.
+    Scaled,
 }
 
 impl Category {
-    const COUNT: usize = 2;
+    const COUNT: usize = 3;
 
     fn index(self) -> usize {
         match self {
             Category::Effects => 0,
             Category::Music => 1,
+            Category::Scaled => 2,
         }
     }
 }
@@ -122,6 +127,12 @@ fn balance(pan: f32) -> (f32, f32) {
     ((1.0 - pan).min(1.0), (1.0 + pan).min(1.0))
 }
 
+/// Left and right gains for `gain` at `pan`.
+fn gains(gain: f32, pan: f32) -> (f32, f32) {
+    let (l, r) = balance(pan);
+    (l * gain, r * gain)
+}
+
 /// Identifies a playing sound.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct VoiceId(u32);
@@ -141,12 +152,17 @@ struct Voice {
     category: Category,
     /// Gains of the left and right channels: playback gain and pan.
     gains: (f32, f32),
+    /// The gains [`Mixer::set_voice`] asked for, reached by a linear ramp
+    /// over the next mixed block (so changes don't click).
+    target: (f32, f32),
     /// Decoded input not yet consumed, interleaved.
     input: Vec<f32>,
     /// Position in input frames (fractional for resampling).
     pos: f64,
     /// Input frames per output frame.
     step: f64,
+    /// The step at a pitch of 1.
+    base_step: f64,
     ended: bool,
 }
 
@@ -189,8 +205,19 @@ impl Voice {
     /// Mixes into `out` (stereo, interleaved) with the voice's gains scaled
     /// by `volume`; returns false when finished.
     fn mix_into(&mut self, out: &mut [f32], volume: f32) -> bool {
-        let (gl, gr) = (self.gains.0 * volume, self.gains.1 * volume);
-        for frame in out.as_chunks_mut::<2>().0 {
+        let frames = out.len() / 2;
+        let (from, to) = (self.gains, self.target);
+        self.gains = to;
+        let ramp = |a: f32, b: f32, k: usize| a + (b - a) * (k + 1) as f32 / frames.max(1) as f32;
+        for (k, frame) in out.as_chunks_mut::<2>().0.iter_mut().enumerate() {
+            let (gl, gr) = if from == to {
+                (to.0 * volume, to.1 * volume)
+            } else {
+                (
+                    ramp(from.0, to.0, k) * volume,
+                    ramp(from.1, to.1, k) * volume,
+                )
+            };
             let i = self.pos as usize;
             if !self.fill(i + 2) && i + 1 >= self.frames() {
                 if i < self.frames() {
@@ -275,16 +302,24 @@ impl Mixer {
             channels,
             looping: playback.looping,
             category: playback.category,
-            gains: {
-                let (l, r) = balance(playback.pan);
-                (l * playback.gain, r * playback.gain)
-            },
+            gains: gains(playback.gain, playback.pan),
+            target: gains(playback.gain, playback.pan),
             input: Vec::new(),
             pos: 0.0,
             step,
+            base_step: step,
             ended: false,
         });
         id
+    }
+
+    /// Changes a playing voice's gain, pan and pitch (a playback-rate
+    /// factor, which also changes its pitch); nothing if it has ended.
+    pub fn set_voice(&mut self, id: VoiceId, gain: f32, pan: f32, pitch: f32) {
+        if let Some(v) = self.voices.iter_mut().find(|v| v.id == id) {
+            v.target = gains(gain, pan);
+            v.step = v.base_step * f64::from(pitch);
+        }
     }
 
     pub fn stop(&mut self, id: VoiceId) {
@@ -371,6 +406,39 @@ mod tests {
         let left = out.iter().step_by(2).copied().collect();
         let right = out.iter().skip(1).step_by(2).copied().collect();
         (left, right)
+    }
+
+    #[test]
+    fn set_voice_ramps_gain_and_pan_and_changes_pitch() {
+        let mut mixer = Mixer::new(100);
+        mixer.set_volume(Category::Effects, 0.0);
+        let id = mixer.play(
+            ramp(100, 1, 1000),
+            Playback {
+                gain: 0.0,
+                category: Category::Scaled,
+                ..Playback::default()
+            },
+        );
+        mixer.set_voice(id, 0.5, 1.0, 1.0);
+        let (left, right) = channels(&mixer.mix(10));
+        assert!(left.iter().all(|&s| s == 0.0));
+        // Frame k of the block at gain 0.5 · (k + 1) / 10: the ramp's value
+        // k / 100 times that.
+        for (k, s) in right.iter().enumerate() {
+            let want = k as f32 / 100.0 * 0.5 * (k + 1) as f32 / 10.0;
+            assert!((s - want).abs() < 1e-6, "{k}: {s} vs {want}");
+        }
+        // At pitch 2 the voice steps two input frames per output frame.
+        mixer.set_voice(id, 0.5, 1.0, 2.0);
+        let (_, right) = channels(&mixer.mix(3));
+        for (k, s) in right.iter().enumerate() {
+            let want = (10 + 2 * k) as f32 / 100.0 * 0.5;
+            assert!((s - want).abs() < 1e-6, "{k}: {s} vs {want}");
+        }
+        // Category volumes don't scale a Scaled voice; the master gain does.
+        mixer.set_master_gain(0.0);
+        assert!(mixer.mix(3).iter().all(|&s| s == 0.0));
     }
 
     #[test]
