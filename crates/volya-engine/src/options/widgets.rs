@@ -81,6 +81,8 @@ pub struct DropDown {
     pub stored: usize,
     /// The closed line's text.
     pub line: String,
+    /// Values of the entries that can't be chosen (disabled rows).
+    pub disabled: Vec<usize>,
 }
 
 impl DropDown {
@@ -88,17 +90,35 @@ impl DropDown {
     /// closed line set to `text` (the variable's status through the string
     /// table), the entry whose text equals it selected and its value
     /// stored; with no match nothing is selected and the stored value is 1.
+    /// A match that is disabled shows the first enabled entry instead,
+    /// selected and stored (our rule for disabled rows, which the spec's
+    /// lists never have).
     pub fn refresh(&mut self, entries: Vec<(String, String)>, text: String) {
         self.entries = entries;
         self.selected = self.entries.iter().position(|(_, t)| *t == text);
-        self.stored = self.selected.unwrap_or(1);
         self.line = text;
+        if self.selected.is_some_and(|k| !self.enabled(k))
+            && let Some(k) = (0..self.entries.len()).find(|&k| self.enabled(k))
+        {
+            self.selected = Some(k);
+            self.line = self.entries[k].1.clone();
+        }
+        self.stored = self.selected.unwrap_or(1);
+    }
+
+    /// Whether entry `k` can be chosen.
+    pub fn enabled(&self, k: usize) -> bool {
+        !self.disabled.contains(&k)
     }
 
     /// A click on entry `k`: selected, its text on the line; returns the
     /// entry's name when its value differs from the stored one (it is then
-    /// stored, and the variable is to be set).
+    /// stored, and the variable is to be set). A disabled entry changes
+    /// nothing.
     pub fn choose(&mut self, k: usize) -> Option<String> {
+        if !self.enabled(k) {
+            return None;
+        }
         let (name, text) = self.entries.get(k)?.clone();
         self.selected = Some(k);
         self.line = text;
@@ -378,6 +398,28 @@ mod tests {
         );
         assert_eq!(d.choose(1), None);
         assert_eq!(d.line, "1024x768");
+    }
+
+    #[test]
+    fn disabled_entries_are_never_chosen_or_shown() {
+        let entries = || {
+            ["r1", "r2a", "r2"]
+                .map(|m| (m.to_owned(), m.to_uppercase()))
+                .to_vec()
+        };
+        let mut d = DropDown {
+            disabled: vec![1, 2],
+            ..DropDown::default()
+        };
+        // A variable naming a disabled entry shows the first enabled one.
+        d.refresh(entries(), "R2".into());
+        assert_eq!((d.selected, d.stored, d.line.as_str()), (Some(0), 0, "R1"));
+        assert_eq!(d.choose(2), None);
+        assert_eq!((d.selected, d.stored, d.line.as_str()), (Some(0), 0, "R1"));
+        assert_eq!(d.choose(0), None, "already shown: nothing to set");
+        // No match keeps the spec's rule.
+        d.refresh(entries(), "R3".into());
+        assert_eq!((d.selected, d.stored), (None, 1));
     }
 
     #[test]

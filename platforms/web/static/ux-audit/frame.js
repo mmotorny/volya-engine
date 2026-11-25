@@ -63,6 +63,8 @@ const call = async (op) => {
       return placeholderArt();
     case "launch":
       if (state.launchError) throw new Error(state.launchError);
+      // Starting never settles.
+      if (state.starting) return new Promise(() => {});
       return null;
     case "diagnostic_log_status":
     case "diagnostics_set":
@@ -179,7 +181,7 @@ if (state.level) {
   status.textContent = name;
   status.dataset.text = status.textContent;
   status.dataset.state = "ready";
-  await start(call, updates, graphics);
+  await start(call, updates, graphics, { isolated: state.isolated !== false });
   if (state.screen === "settings") await globalThis.volya.showSettings();
   // Check for updates pressed, its result held on screen.
   if (state.check) {
@@ -194,8 +196,8 @@ if (state.level) {
     await new Promise((resolve) => setTimeout(resolve));
   }
   if (state.snapshot) screens.showImport(state.game, state.snapshot);
-  // Play pressed, and the game failed to start.
-  if (state.launchError) {
+  // Play pressed: the game failed to start, or is starting.
+  if (state.launchError || state.starting) {
     document.querySelector("button.play").click();
     await new Promise((resolve) => setTimeout(resolve));
   }

@@ -65,10 +65,11 @@ function element(tag, props = {}, ...children) {
 }
 
 /** Entry point, called by main.js once the engine runs. */
-export async function start(engineCall, updateState = null, graphicsSetting = null) {
+export async function start(engineCall, updateState = null, graphicsSetting = null, { isolated = true } = {}) {
   call = engineCall;
   updates = updateState;
   backends = graphicsSetting;
+  pageIsolated = isolated;
   globalThis.volya.importGame = importGame;
   globalThis.volya.showSettings = showSettings;
   globalThis.volya.refresh = refresh;
@@ -111,6 +112,12 @@ function settingsButton() {
   return button;
 }
 
+/** Whether the page is cross-origin isolated, which sound needs (isolation.js). */
+let pageIsolated = true;
+
+/** Why the game can't play its sound here: one sentence. */
+const ISOLATION_PROBLEM = "Volya Engine plays the game's sound through shared memory, which this browser doesn't allow this page to use.";
+
 /** Whether the engine can draw (without WebGPU or WebGL 2 the game would run unseen). */
 const graphics = async () => (await call("status")).gpu.state === "ready";
 
@@ -124,14 +131,16 @@ const GRAPHICS_PROBLEM = "Volya Engine draws the game with WebGPU or WebGL 2, an
  */
 async function showUnsupported() {
   const { gpu } = await call("status");
+  const drawn = gpu.state === "ready";
   show(
     element(
       "div",
       { className: "panel" },
       element("p", { className: "label", textContent: "Unavailable here" }),
       element("h2", { textContent: "This browser can't run the game" }),
-      element("p", { textContent: GRAPHICS_PROBLEM }),
-      gpu?.message ? element("p", { className: "note", textContent: `Details: ${gpu.message}.` }) : null,
+      drawn ? null : element("p", { textContent: GRAPHICS_PROBLEM }),
+      !drawn && gpu?.message ? element("p", { className: "note", textContent: `Details: ${gpu.message}.` }) : null,
+      pageIsolated ? null : element("p", { textContent: ISOLATION_PROBLEM }),
     ),
     bottom(updateOffer(), settingsButton()),
   );
@@ -143,7 +152,7 @@ async function refresh() {
   try {
     const status = await call("game_status");
     // Without graphics nothing else matters: neither importing nor playing.
-    if (!(await graphics())) await showUnsupported();
+    if (!pageIsolated || !(await graphics())) await showUnsupported();
     else if (status.imported) await showHome(status);
     else showImport(status, null, { kept: await navigator.storage.persisted(), deleted: !status.problem && deletedByBrowser(status) });
   } catch (error) {
@@ -404,6 +413,11 @@ async function showHome(status) {
   const problem = element("div", { className: "callout problem", hidden: true });
   const launch = element("button", { className: "primary play", textContent: "Play" });
   launch.addEventListener("click", async () => {
+    // One start at a time: starting anew on the Graphics choice can take
+    // seconds, and a second press would start the engine anew again (#369).
+    // Click serves the pointer, touch and the keyboard alike.
+    launch.disabled = true;
+    launch.textContent = "Starting…";
     problem.hidden = true;
     try {
       // The Graphics choice applies as the game starts: the engine starts
@@ -421,6 +435,10 @@ async function showHome(status) {
         element("span", { textContent: reported(error.message) }),
       );
       problem.hidden = false;
+    } finally {
+      // Home shows again as it was once the game ends.
+      launch.disabled = false;
+      launch.textContent = "Play";
     }
   });
 

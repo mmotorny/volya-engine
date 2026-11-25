@@ -79,7 +79,8 @@ const STAGE_BUDGETS: [(Stage, f64); 9] = [
     (Stage::LoadingSpatialDb, 7.0),  // 5.4: index pieces and the draw list
     // 3.3: `particles.xr` and the effect library it keeps (1.9).
     (Stage::LoadingAiObjects, 4.0),
-    (Stage::ClientSpawning, 11.0), // 9.4: the objects' models
+    // 11.0: the objects' models (9.4) and the zones' effect objects.
+    (Stage::ClientSpawning, 12.5),
     (Stage::LoadingTextures, 4.5), // 3.2
 ];
 /// Any other stage's peak, MB.

@@ -210,11 +210,112 @@ fn records_spans_metrics_and_events() {
 #[test]
 fn long_text_is_cut() {
     let d = Diagnostics::new(clock, "v", 1, "p");
-    d.instant("x", 1, &[("text", Value::Text("y".repeat(5000)))]);
+    let long = Value::Text("y".repeat(MAX_TEXT_CHARS + 100));
+    d.instant("x", 1, &[("text", long)]);
     let t = trace(&d);
     let text = events(&t, "i")[0]["args"]["text"]
         .as_str()
         .unwrap()
         .to_owned();
     assert_eq!(text.chars().count(), MAX_TEXT_CHARS + 1);
+}
+
+#[test]
+fn an_end_is_recorded_whole_and_asks_for_a_store() {
+    let d = Diagnostics::new(clock, "v abc1234", 3, "p");
+    let subscriber = tracing_subscriber::registry().with(d.layer());
+    let message = format!("sound file not found: {}", "x".repeat(1000));
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::info!(target: "volya", level = "l01_escape", "level loading");
+        assert!(!d.take_ended());
+        // Never limited per period.
+        for _ in 0..EVENTS_PER_NAME + 5 {
+            end("fatal", &message);
+        }
+    });
+    assert!(d.take_ended());
+    assert!(!d.take_ended());
+    d.end(2, "page_hidden", "the page was hidden", &[]);
+    d.end(
+        1,
+        "panic",
+        "boom",
+        &[("location", Value::Text("src/x.rs:1:2".into()))],
+    );
+    assert!(d.take_ended());
+    // The period's counters, after the ends were recorded.
+    d.count("frame.late", 1);
+    d.summarize();
+    let t = trace(&d);
+    let all = t["traceEvents"].as_array().unwrap();
+    assert_eq!(all.last().unwrap()["name"], END, "the batch's last event");
+    let instants = events(&t, "i");
+    assert_eq!(instants[0]["args"]["level"], "l01_escape");
+    let ends: Vec<_> = instants.iter().filter(|e| e["name"] == END).collect();
+    assert_eq!(ends.len(), EVENTS_PER_NAME as usize + 7);
+    assert_eq!(ends[0]["args"]["reason"], "fatal");
+    assert_eq!(ends[0]["args"]["message"], message.as_str());
+    assert_eq!(ends[0]["tid"], 1);
+    let hidden = ends[ends.len() - 2];
+    assert_eq!(hidden["args"]["reason"], "page_hidden");
+    assert_eq!(hidden["tid"], 2);
+    let panic = ends[ends.len() - 1];
+    assert_eq!(panic["args"]["location"], "src/x.rs:1:2");
+    assert_eq!((d.pid(), d.cat().as_str()), (3, "volya,v:abc1234"));
+}
+
+#[test]
+fn a_recorded_end_is_added_only_when_its_session_ended_without_one() {
+    let d = Diagnostics::new(clock, "v abc1234", 5, "p");
+    d.instant("frame", 1, &[]);
+    let mut log = Log::open(MemoryStore::default()).unwrap();
+    log.append(&d.take_pending(), &d.session_metadata())
+        .unwrap();
+    let end = RecordedEnd {
+        pid: 5,
+        cat: d.cat(),
+        ts: d.now_us() + 1000.0,
+        tid: 2,
+        reason: "page_closed".into(),
+        message: "the page was closed".into(),
+    };
+    // Older than the session's last stored event: kept from an earlier
+    // hide, not this end.
+    let stale = RecordedEnd {
+        ts: d.now_us() - 1000.0,
+        ..end.clone()
+    };
+    assert!(!log.add_recorded_end(&stale, "").unwrap());
+    assert!(log.add_recorded_end(&end, "").unwrap());
+    // Once there, not again.
+    assert!(!log.add_recorded_end(&end, "").unwrap());
+    let lines = log.lines().unwrap();
+    let last: Json = serde_json::from_str(lines.last().unwrap()).unwrap();
+    assert_eq!(last["name"], END);
+    assert_eq!(last["pid"], 5);
+    assert_eq!(last["cat"], "volya,v:abc1234");
+    assert_eq!(last["args"]["reason"], "page_closed");
+    assert_eq!(last["args"]["recorded_by"], "page");
+    // An earlier end stored (the session went on): the page's is added.
+    let d = Diagnostics::new(clock, "v abc1234", 7, "p");
+    d.end(1, "device_lost", "lost", &[]);
+    let mut log = Log::open(MemoryStore::default()).unwrap();
+    log.append(&d.take_pending(), "").unwrap();
+    advance(2_000_000.0);
+    let closed = RecordedEnd {
+        pid: 7,
+        ts: d.now_us(),
+        ..end.clone()
+    };
+    assert!(log.add_recorded_end(&closed, "").unwrap());
+    // A session that stored its own end for the same cause (after the
+    // page kept its own) gets none from the page.
+    advance(500.0);
+    d.end(2, "page_closed", "the page was closed", &[]);
+    let mut log = Log::open(MemoryStore::default()).unwrap();
+    log.append(&d.take_pending(), "").unwrap();
+    assert!(!log.add_recorded_end(&closed, "").unwrap());
+    // A session nothing of which was stored gets it.
+    let other = RecordedEnd { pid: 6, ..end };
+    assert!(log.add_recorded_end(&other, "").unwrap());
 }

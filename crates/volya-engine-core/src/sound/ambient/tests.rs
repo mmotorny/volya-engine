@@ -152,6 +152,7 @@ fn run(outdoors: bool) -> Vec<(u32, &'static str, AmbientFrame)> {
     let tuman = create(&mut s, SetData::read(&c, "ambient_env_tuman").unwrap());
     let morning = create(&mut s, SetData::read(&c, "ambient_env_morning").unwrap());
     let mut state = AmbientState::default();
+    let mut particles = NoParticles::default();
     let mut events = Vec::new();
     for k in 1..=3_000 {
         let now = 20 * k;
@@ -162,6 +163,7 @@ fn run(outdoors: bool) -> Vec<(u32, &'static str, AmbientFrame)> {
                 (Some(&tuman), Some(&morning), 0.5),
                 outdoors,
                 EYE,
+                &mut particles,
             )
             .unwrap();
         let set = if f.chose_b { "morning" } else { "tuman" };
@@ -234,7 +236,14 @@ fn without_sets_nothing_plays_but_a_number_is_drawn() {
     let mut s = SoundSystem::new(16);
     let mut state = AmbientState::default();
     let f = state
-        .frame(&mut s, 20, (None, None, 0.5), true, EYE)
+        .frame(
+            &mut s,
+            20,
+            (None, None, 0.5),
+            true,
+            EYE,
+            &mut NoParticles::default(),
+        )
         .unwrap();
     assert_eq!(f, AmbientFrame::default());
     // The first draw (41) was taken: the next is 18,467.
@@ -248,15 +257,23 @@ fn an_effect_ends_at_its_time_without_a_set() {
     let mut s = SoundSystem::new(16);
     let morning = create(&mut s, SetData::read(&c, "ambient_env_morning").unwrap());
     let mut state = AmbientState::default();
+    let mut particles = NoParticles::default();
     let f = state
-        .frame(&mut s, 20, (Some(&morning), Some(&morning), 0.5), true, EYE)
+        .frame(
+            &mut s,
+            20,
+            (Some(&morning), Some(&morning), 0.5),
+            true,
+            EYE,
+            &mut particles,
+        )
         .unwrap();
     assert_eq!(f.effect, Some(0));
     assert_eq!(state.wind_gust_factor, 0.015);
     let mut ended = None;
     for k in 2..1_000 {
         let f = state
-            .frame(&mut s, 20 * k, (None, None, 0.5), true, EYE)
+            .frame(&mut s, 20 * k, (None, None, 0.5), true, EYE, &mut particles)
             .unwrap();
         if f.effect_ended {
             ended = Some(20 * k);
@@ -284,7 +301,77 @@ fn a_period_with_equal_bounds_is_fatal() {
     let mut state = AmbientState::default();
     assert!(
         state
-            .frame(&mut s, 20, (Some(&tuman), Some(&tuman), 0.5), false, EYE)
+            .frame(
+                &mut s,
+                20,
+                (Some(&tuman), Some(&tuman), 0.5),
+                false,
+                EYE,
+                &mut NoParticles::default()
+            )
             .is_err()
     );
+}
+
+/// Particles that play on for `after` frames once stopped.
+#[derive(Default)]
+struct Lingering {
+    started: Vec<(String, Vec3)>,
+    stopped_for: Option<u32>,
+    after: u32,
+    removed: u32,
+}
+
+impl AmbientParticles for Lingering {
+    fn start(&mut self, particles: &str, position: Vec3) -> Result<(), Fatal> {
+        self.started.push((particles.to_owned(), position));
+        self.stopped_for = None;
+        Ok(())
+    }
+    fn stop(&mut self) {
+        self.stopped_for = Some(self.stopped_for.map_or(0, |n| n + 1));
+    }
+    fn is_playing(&self) -> bool {
+        self.stopped_for.is_none_or(|n| n < self.after)
+    }
+    fn remove(&mut self) {
+        self.removed += 1;
+    }
+}
+
+#[test]
+fn a_stopped_effect_is_removed_once_it_no_longer_plays() {
+    // P11 3.4, 3.5: stopped deferred at its end, in every frame; removed in
+    // the first frame its group no longer plays.
+    let c = tuman_and_morning();
+    let mut s = SoundSystem::new(16);
+    let morning = create(&mut s, SetData::read(&c, "ambient_env_morning").unwrap());
+    let mut state = AmbientState::default();
+    let mut particles = Lingering {
+        after: 10,
+        ..Lingering::default()
+    };
+    let sets = (Some(&morning), Some(&morning), 0.5);
+    state
+        .frame(&mut s, 20, sets, true, EYE, &mut particles)
+        .unwrap();
+    assert_eq!(
+        particles.started,
+        [("nature\\fog_foggy_00".to_owned(), EYE)]
+    );
+    let mut removed_at = None;
+    for k in 2..2_000 {
+        let f = state
+            .frame(&mut s, 20 * k, (None, None, 0.5), true, EYE, &mut particles)
+            .unwrap();
+        assert!(f.effect.is_none());
+        if particles.removed == 1 && removed_at.is_none() {
+            removed_at = Some(20 * k);
+        }
+    }
+    // Ended at 15,020; stopped there and in each frame after while it
+    // plays: gone in the frame its tenth repeated stop leaves it silent.
+    assert_eq!(removed_at, Some(15_020 + 20 * 10));
+    assert_eq!(particles.removed, 1);
+    assert!(state.particles.is_none());
 }

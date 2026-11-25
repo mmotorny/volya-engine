@@ -3,7 +3,10 @@
 
 //! Audio mixing: decoded sources mixed into one stereo stream at the output's
 //! sample rate. Platform-free; platforms pull mixed blocks with
-//! [`Mixer::mix`].
+//! [`Mixer::mix`]. The engine drives a mixer through [`MixerControl`]: a
+//! [`Mixer`] it mixes itself, or a [`remote::Remote`] whose commands a
+//! [`remote::Host`] applies to a mixer mixing on the output's own schedule
+//! (the web platform's audio worker).
 //!
 //! Each voice has a stereo pan and a volume category. Panning is a linear
 //! balance: a pan `p` in [-1, 1] scales the left channel by `min(1, 1 - p)`
@@ -17,7 +20,9 @@
 //! 3D positioning: callers choose the pan (the music pair uses -1 and +1, full
 //! separation, reproducing the two channels as recorded).
 
-use std::io::{self, Read, Seek};
+pub mod remote;
+
+use std::io::{self, Cursor, Read, Seek};
 
 use volya_engine_formats::audio::VorbisStream;
 
@@ -46,6 +51,73 @@ impl<R: Read + Seek> Source for VorbisStream<R> {
 
     fn rewind(&mut self) -> io::Result<()> {
         VorbisStream::rewind(self)
+    }
+}
+
+/// A compressed file a voice decodes from.
+pub trait File: Read + Seek {}
+
+impl<T: Read + Seek> File for T {}
+
+/// Opens compressed Ogg Vorbis `bytes` for a voice, `skip` frames in.
+pub fn open_vorbis(bytes: Vec<u8>, skip: u64) -> io::Result<Box<dyn Source>> {
+    open_vorbis_file(Box::new(Cursor::new(bytes)), skip)
+}
+
+/// [`open_vorbis`] on a file of any kind.
+pub fn open_vorbis_file(file: Box<dyn File>, skip: u64) -> io::Result<Box<dyn Source>> {
+    let mut stream = VorbisStream::open(file)?;
+    stream.skip(skip)?;
+    Ok(Box::new(stream))
+}
+
+/// How the engine drives a mixer: the [`Mixer`] itself, or a
+/// [`remote::Remote`] standing for one that mixes elsewhere. Changes made
+/// between two mixed blocks apply together, from the next block.
+pub trait MixerControl {
+    /// Starts the compressed Ogg Vorbis file `bytes`, `skip` frames in;
+    /// `None` when it is not a stream that can play.
+    fn play_file(&mut self, bytes: Vec<u8>, skip: u64, playback: Playback) -> Option<VoiceId>;
+    /// Changes a playing voice's gain, pan and pitch ([`Mixer::set_voice`]).
+    fn set_voice(&mut self, id: VoiceId, gain: f32, pan: f32, pitch: f32);
+    fn stop(&mut self, id: VoiceId);
+    fn stop_all(&mut self);
+    /// Whether the voice plays: started, not stopped and not known to have
+    /// ended.
+    fn is_playing(&self, id: VoiceId) -> bool;
+    fn volume(&self, category: Category) -> f32;
+    fn set_volume(&mut self, category: Category, volume: f32);
+    fn master_gain(&self) -> f32;
+    fn set_master_gain(&mut self, gain: f32);
+}
+
+impl MixerControl for Mixer {
+    fn play_file(&mut self, bytes: Vec<u8>, skip: u64, playback: Playback) -> Option<VoiceId> {
+        Some(self.play(open_vorbis(bytes, skip).ok()?, playback))
+    }
+    fn set_voice(&mut self, id: VoiceId, gain: f32, pan: f32, pitch: f32) {
+        Mixer::set_voice(self, id, gain, pan, pitch);
+    }
+    fn stop(&mut self, id: VoiceId) {
+        Mixer::stop(self, id);
+    }
+    fn stop_all(&mut self) {
+        Mixer::stop_all(self);
+    }
+    fn is_playing(&self, id: VoiceId) -> bool {
+        Mixer::is_playing(self, id)
+    }
+    fn volume(&self, category: Category) -> f32 {
+        Mixer::volume(self, category)
+    }
+    fn set_volume(&mut self, category: Category, volume: f32) {
+        Mixer::set_volume(self, category, volume);
+    }
+    fn master_gain(&self) -> f32 {
+        Mixer::master_gain(self)
+    }
+    fn set_master_gain(&mut self, gain: f32) {
+        Mixer::set_master_gain(self, gain);
     }
 }
 
@@ -311,6 +383,13 @@ impl Mixer {
     pub fn play(&mut self, source: Box<dyn Source>, playback: Playback) -> VoiceId {
         let id = VoiceId(self.next_id);
         self.next_id = self.next_id.wrapping_add(1);
+        self.play_as(id, source, playback);
+        id
+    }
+
+    /// [`Mixer::play`] with an id chosen by the caller ([`remote::Host`]:
+    /// the engine's), not one of a voice playing.
+    fn play_as(&mut self, id: VoiceId, source: Box<dyn Source>, playback: Playback) {
         let channels = usize::from(source.channels().max(1));
         let step = f64::from(source.sample_rate()) / f64::from(self.rate);
         self.voices.push(Voice {
@@ -328,7 +407,11 @@ impl Mixer {
             advanced: 0.0,
             ended: false,
         });
-        id
+    }
+
+    /// The voices playing.
+    pub fn voices(&self) -> impl Iterator<Item = VoiceId> + '_ {
+        self.voices.iter().map(|v| v.id)
     }
 
     /// Changes a playing voice's gain, pan and pitch (a playback-rate

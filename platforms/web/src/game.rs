@@ -232,12 +232,73 @@ pub fn play_music(track: &str) -> Result<[u32; 2], JsValue> {
 
 /// Runs `f` on the combined archive tree and the game root (loose files).
 pub fn with_trees<T>(f: impl FnOnce(&dyn Vfs, &dyn Vfs) -> T) -> Result<T, JsValue> {
-    with_game(|game| Ok(f(&game.tree, game.opfs)))
+    with_game(|game| {
+        #[cfg(feature = "test-ops")]
+        if let Some(suffix) = hidden::active() {
+            let tree = hidden::Hiding {
+                inner: &game.tree,
+                suffix,
+            };
+            return Ok(f(&tree, game.opfs));
+        }
+        Ok(f(&game.tree, game.opfs))
+    })
+}
+
+/// A file the archive tree hides (tests: the `debug_hide_file` op), as a
+/// missing one would be: a fatal error the game meets.
+#[cfg(feature = "test-ops")]
+pub mod hidden {
+    use std::cell::RefCell;
+    use std::io;
+
+    use volya_engine::core::vfs::{self, DirEntry, Vfs, VfsFile};
+
+    thread_local! {
+        /// The end of the paths hidden, lowercase.
+        static HIDDEN: RefCell<Option<String>> = const { RefCell::new(None) };
+    }
+
+    /// Hides the paths ending in `suffix` (`None`: none).
+    pub fn set(suffix: Option<&str>) {
+        HIDDEN.with(|h| *h.borrow_mut() = suffix.map(str::to_ascii_lowercase));
+    }
+
+    /// The end of the paths hidden now.
+    pub fn active() -> Option<String> {
+        HIDDEN.with(|h| h.borrow().clone())
+    }
+
+    pub struct Hiding<'a> {
+        pub inner: &'a dyn Vfs,
+        pub suffix: String,
+    }
+
+    impl Hiding<'_> {
+        fn hides(&self, path: &str) -> bool {
+            vfs::normalize(path).is_ok_and(|p| p.to_ascii_lowercase().ends_with(&self.suffix))
+        }
+    }
+
+    impl Vfs for Hiding<'_> {
+        fn open(&self, path: &str) -> io::Result<Box<dyn VfsFile + '_>> {
+            if self.hides(path) {
+                return Err(io::ErrorKind::NotFound.into());
+            }
+            self.inner.open(path)
+        }
+        fn read_dir(&self, path: &str) -> io::Result<Vec<DirEntry>> {
+            self.inner.read_dir(path)
+        }
+        fn exists(&self, path: &str) -> bool {
+            !self.hides(path) && self.inner.exists(path)
+        }
+    }
 }
 
 /// Releases the imported files so they can be rewritten or removed.
 pub fn unmount() {
-    crate::engine::stop();
+    crate::engine::stop("unmounted", "the game's files were released");
     crate::audio::stop_all();
     if let Some(game) = GAME.with(|g| g.borrow_mut().take()) {
         drop(game.tree);

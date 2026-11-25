@@ -10,11 +10,15 @@
 //! copy of the app holds them), the log is kept in memory for the session.
 //! While off, recording's callsites are disabled and nothing runs per frame
 //! beyond `tracing`'s check of them; the log is kept.
+//!
+//! Every way the engine or a game ends records an `engine.end` event and
+//! stores the period at once ([`end`], and after a frame whose engine
+//! recorded one), before the context can go away.
 
 use std::cell::{Cell, RefCell};
 
 use volya_engine::core::diagnostics::{
-    self, Diagnostics, Log, MemoryStore, SEGMENTS, SegmentStore, Value,
+    self, Diagnostics, Log, MemoryStore, RecordedEnd, SEGMENTS, SegmentStore, Value,
 };
 use wasm_bindgen::prelude::*;
 use web_sys::{FileSystemReadWriteOptions, FileSystemSyncAccessHandle, WorkerGlobalScope};
@@ -135,10 +139,12 @@ pub fn on() -> bool {
 /// The `diagnostics_set` op: turns logging on or off (the player's
 /// setting). On, the session's recorder starts (the first time in this run:
 /// `page` is what the page tells of it, a JSON object: `version`,
-/// `user_agent`, `screen`, `dpr`, `cores`) and the log's store opens. Off,
-/// the period so far is stored, recording stops and the store closes; the
-/// log is kept.
-pub async fn set(on: bool, page: &serde_json::Value) {
+/// `user_agent`, `screen`, `dpr`, `cores`) and the log's store opens, and
+/// `previous_end` (the `engine.end` an earlier session's page kept as it
+/// closed: `{pid, cat, ts, reason, message}`) is added to the log unless
+/// that session stored its own. Off, the period so far is stored,
+/// recording stops and the store closes; the log is kept.
+pub async fn set(on: bool, page: &serde_json::Value, previous_end: &serde_json::Value) {
     if on == self::on() {
         return;
     }
@@ -163,7 +169,17 @@ pub async fn set(on: bool, page: &serde_json::Value) {
     if STARTED.with(Cell::get) {
         session_event();
     }
-    let (log, stored) = open_log().await;
+    let (mut log, stored) = open_log().await;
+    if let Some(end) = recorded_end(previous_end) {
+        let prefix = SESSION.with(|s| {
+            s.borrow()
+                .as_ref()
+                .map(|s| s.diagnostics.session_metadata())
+        });
+        if let Err(e) = log.add_recorded_end(&end, &prefix.unwrap_or_default()) {
+            tracing::error!(error = %e, "diagnostic log write failed");
+        }
+    }
     SESSION.with(|s| {
         if let Some(s) = s.borrow_mut().as_mut()
             && self::on()
@@ -172,6 +188,19 @@ pub async fn set(on: bool, page: &serde_json::Value) {
             s.stored = stored;
         }
     });
+}
+
+/// The `engine.end` a page kept as it closed (main.js), if `value` is one.
+fn recorded_end(value: &serde_json::Value) -> Option<RecordedEnd> {
+    let text = |key: &str| value.get(key)?.as_str().map(str::to_owned);
+    Some(RecordedEnd {
+        pid: u32::try_from(value.get("pid")?.as_u64()?).ok()?,
+        cat: text("cat")?,
+        ts: value.get("ts")?.as_f64()?,
+        tid: 2,
+        reason: text("reason")?,
+        message: text("message").unwrap_or_default(),
+    })
 }
 
 /// The session's recorder, as the global `tracing` subscriber.
@@ -191,14 +220,17 @@ fn begin(page: &serde_json::Value) {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         // Recorded and stored at once: the engine stops here.
-        tracing::error!(error = %info, "panic");
-        let _ = SESSION.try_with(|s| {
-            if let Ok(mut s) = s.try_borrow_mut()
-                && let Some(s) = s.as_mut()
-            {
-                store(s);
-            }
-        });
+        let payload = info.payload();
+        let message = payload
+            .downcast_ref::<&str>()
+            .map(|s| (*s).to_owned())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| info.to_string());
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_default();
+        end(1, "panic", &message, &[("location", Value::Text(location))]);
         previous(info);
     }));
     SESSION.with(|s| {
@@ -296,6 +328,45 @@ fn args_of(value: &serde_json::Value) -> Vec<(String, Value)> {
         .collect()
 }
 
+/// Records how the engine or a game ended (an `engine.end` event on
+/// thread `tid`, 1: the engine, 2: the page, 3: the audio worklet) and
+/// stores the period at once, while logging is on. Safe in a panic hook
+/// (skipped where the session is in use: the panic came from inside it).
+pub fn end(tid: u32, reason: &str, message: &str, more: &[(&str, Value)]) {
+    if !on() {
+        return;
+    }
+    let _ = SESSION.try_with(|s| {
+        if let Ok(mut s) = s.try_borrow_mut()
+            && let Some(s) = s.as_mut()
+        {
+            s.diagnostics.end(tid, reason, message, more);
+            store(s);
+        }
+    });
+}
+
+/// Stores the period at once if an `engine.end` was recorded since the
+/// last store (by the engine, through `tracing`).
+pub fn store_if_ended() {
+    let _ = SESSION.try_with(|s| {
+        if let Ok(mut s) = s.try_borrow_mut()
+            && let Some(s) = s.as_mut()
+            && s.diagnostics.take_ended()
+        {
+            store(s);
+        }
+    });
+}
+
+/// The JS bridge: how the engine or a game ended (`engine.end`, on thread
+/// `tid`), stored at once: an uncaught error or rejection in the page, the
+/// engine worker or the audio worklet, the page hidden or closed.
+#[wasm_bindgen]
+pub fn diagnostics_end(reason: &str, message: &str, tid: u32) {
+    end(tid, reason, message, &[]);
+}
+
 /// Runs `f` on the recorder while logging is on.
 fn with<T>(f: impl FnOnce(&Diagnostics) -> T) -> Option<T> {
     if !on() {
@@ -332,40 +403,38 @@ pub fn diagnostics_count(name: &str, n: f64) {
     with(|d| d.count(name, n.max(0.0) as u64));
 }
 
-/// The AudioWorklet's report with each request (#343), in frames at
-/// `rate`: those played as silence for want of mixed ones since the last
-/// request; how long the last reply took to arrive; the buffer's least,
-/// summed and greatest fill over the `fill_n` process calls since; and
-/// whether the last reply left it over-full.
-#[allow(clippy::too_many_arguments)]
-#[wasm_bindgen]
-pub fn diagnostics_audio(
-    underrun: f64,
-    wait: f64,
-    fill_min: f64,
-    fill_sum: f64,
-    fill_max: f64,
-    fill_n: f64,
-    overrun: f64,
-    rate: f64,
-) {
+/// The audio worker's numbers since its last report (#354), in frames at
+/// `rate`: the frames the AudioWorklet played as silence for want of mixed
+/// ones; the ring of mixed frames' fill each time the audio worker woke
+/// (least, sum, greatest, count); and its mixing time per block, ms (the
+/// same).
+pub struct AudioRing {
+    pub underrun: f64,
+    pub fill: [f64; 4],
+    pub mix: [f64; 4],
+    pub rate: f64,
+}
+
+/// Records [`AudioRing`] while the log is on.
+pub fn audio_ring(a: &AudioRing) {
     with(|d| {
-        let ms = 1000.0 / rate.max(1.0);
-        d.count("audio.underrun_frames", underrun.max(0.0) as u64);
-        d.count("audio.overruns", overrun.max(0.0) as u64);
-        d.metrics("audio.reply_wait_ms", 1, wait * ms, wait * ms, wait * ms);
-        d.metrics(
-            "audio.fill_ms",
-            fill_n.max(0.0) as u64,
-            fill_min * ms,
-            fill_sum * ms,
-            fill_max * ms,
-        );
+        let ms = 1000.0 / a.rate.max(1.0);
+        let n = |v: f64| v.max(0.0) as u64;
+        d.count("audio.underrun_frames", n(a.underrun));
+        if a.fill[3] > 0.0 {
+            let [min, sum, max, count] = a.fill;
+            d.metrics("audio.fill_ms", n(count), min * ms, sum * ms, max * ms);
+        }
+        if a.mix[3] > 0.0 {
+            let [min, sum, max, count] = a.mix;
+            d.metrics("audio.mix_ms", n(count), min, sum, max);
+        }
     });
 }
 
 /// Ends the period and appends its events to the log (one write).
 fn store(s: &mut Session) {
+    s.diagnostics.take_ended();
     let heap = crate::heap_bytes() / f64::from(1 << 20);
     s.diagnostics.counter("wasm heap", 1, &[("MiB", heap)]);
     s.diagnostics.summarize();
@@ -403,6 +472,9 @@ pub fn tick(force: bool) {
             store(s);
         }
     });
+    // The engine recorded how it or the game ended: stored now, not at the
+    // period's end.
+    store_if_ended();
 }
 
 /// The trace's `otherData`.
@@ -421,15 +493,20 @@ fn io_error(e: std::io::Error) -> JsValue {
 }
 
 /// The `diagnostic_log` op: the whole log as a trace (Trace Event Format,
-/// JSON Object Format), `{text, bytes}`, after storing the period so far;
-/// while logging is off, the log kept from before.
-pub async fn trace() -> Result<serde_json::Value, JsValue> {
+/// JSON Object Format), `{text, bytes}`, after storing the period so far
+/// (unless `stored_only`, for tests: what is in storage now); while logging
+/// is off, the log kept from before.
+pub async fn trace(stored_only: bool) -> Result<serde_json::Value, JsValue> {
     let open = SESSION.with(|s| {
         let mut s = s.borrow_mut();
         let s = s.as_mut()?;
         s.log.as_ref()?;
-        store(s);
-        let pending = s.diagnostics.take_pending();
+        let pending = if stored_only {
+            String::new()
+        } else {
+            store(s);
+            s.diagnostics.take_pending()
+        };
         let stored = s.stored;
         let log = s.log.as_mut()?;
         Some(
@@ -451,9 +528,11 @@ pub async fn trace() -> Result<serde_json::Value, JsValue> {
     Ok(serde_json::json!({ "text": text, "bytes": bytes }))
 }
 
-/// The `diagnostic_log_status` op: `{on, entries, bytes}`: whether logging
-/// is on, whether there is a log to download (stored, or waiting to be)
-/// and the stored log's size.
+/// The `diagnostic_log_status` op: `{on, entries, bytes, session}`:
+/// whether logging is on, whether there is a log to download (stored, or
+/// waiting to be), the stored log's size and, once logging was on in this
+/// run, the session's `{pid, cat}` (for the page's record of how it ended,
+/// main.js).
 pub async fn status() -> serde_json::Value {
     let open = SESSION.with(|s| Some(s.borrow().as_ref()?.log.as_ref()?.bytes()));
     let bytes = match open {
@@ -464,7 +543,17 @@ pub async fn status() -> serde_json::Value {
         },
     };
     let waiting = on() && SESSION.with(|s| s.borrow().is_some());
-    serde_json::json!({ "on": on(), "entries": bytes > 0 || waiting, "bytes": bytes })
+    let session = SESSION.with(|s| {
+        let s = s.borrow();
+        let d = &s.as_ref()?.diagnostics;
+        Some(serde_json::json!({ "pid": d.pid(), "cat": d.cat() }))
+    });
+    serde_json::json!({
+        "on": on(),
+        "entries": bytes > 0 || waiting,
+        "bytes": bytes,
+        "session": session,
+    })
 }
 
 /// The `debug_diagnostics_bench` op (tests): the recording a frame makes

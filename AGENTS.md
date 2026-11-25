@@ -15,10 +15,13 @@
 - Verify how browsers and platforms behave (storage, caching, APIs) before relying on it, and say whether it's measured, documented, or believed. Before inventing a mechanism or a design, check how it's commonly done.
 - No shell scripts: project tasks live in `tools/xtask` (`cargo xtask <task>`).
 - Run shell pipelines with `set -o pipefail`.
+- Never wait on a process with `pgrep -f` of a pattern that also matches the waiting shell's own command line; wait on a PID or a file. Stop every background loop you start before finishing.
 - Live at head: run `cargo xtask update` when starting a chunk of work; fix what it breaks rather than pinning.
 - Run `cargo xtask check` (fast static checks) before every push; it must pass.
+- Performance and memory budgets are measured and reported, never release gates: ship working features, file an issue for any regression past a budget, and optimise separately.
 - Iteration speed first: before reporting done, run the cheapest tests that prove the change: unit tests, then one browser suite on one target (`cargo xtask e2e <target> <suite>`). The full `cargo xtask e2e` only for changes crossing page and engine, or on demand; never block normal interaction on it.
 - Avoid GitHub CI whenever possible (cost); all testing runs locally.
+- This machine's memory is shared by every agent: at most two agents build, run game-data tests or run browser suites at once (each worktree compiles its own `target/`), and only one uses the iOS Simulator at a time. Dirty spec work without builds may run alongside. A kernel panic from memory exhaustion (2026-11-25) came from exceeding this.
 - Tests and investigations are silent on this machine: Chrome muted (`--mute-audio`), suite pages send live audio through a gain of 0 (`harness.js`; the iOS Simulator can't be routed to no device), the original run with Wine's audio driver disabled in its prefix. Never change the Mac's system volume.
 - Work by the priorities in docs/roadmap.md; record roadmap decisions there, not here.
 - Exactly two browser targets; don't add more. Desktop Chrome (headless, on WebGPU, where fidelity is judged) is the default. The iOS Simulator (no WebGPU: WebKit refuses its GPU; it draws through WebGL 2 with textures transcoded to ETC2) for changes to the page, input, audio or storage, and to the WebGL 2 path. WebKit drawing is checked by the user's use of the deployed app; a drawing bug Chrome can't reproduce gets a one-off look in desktop Safari, not a target. The user is not QA: never ask them to run tests or checks; real-device feedback comes only from them using the deployed app.

@@ -320,6 +320,33 @@ Over all extracted files: all 16,308 `.ogg` and all 39 `.ogm` files begin with `
 `.dds` files begin with `DDS `, and the 3,749 `.ltx`, `.xml` and `.script` files are text
 (29 of them contain a few stray control bytes, such as a single NUL, in the original data).
 
+## 9. Read failures
+
+How the game behaves when a file of the combined tree is read. "The game stops" means: the error
+text named (where one is named) is written to the game's log, a crash report is produced and the
+program ends; the game does not carry on in any form [EP-E0]. **Disputed in review:** only part of this is established. The error report never returns to the code that raised it, so no reader gets a default and the operation does not continue. That the program then ends is not established: all the game's binaries are built so that catch-all exception handlers also catch the trap raised by the error report (and access faults), they contain many such handlers, and it has not been shown that none of them is active above the point of the error. This applies equally to the faults of archive members below.
+
+- A path that is not in the combined index is "not found"; the open makes no report, and what that
+  means is up to the reader of each format [EP-R1].
+- A path that is in the index is never reported back to its reader as "not found" or as empty when
+  its bytes can't be read; every such failure stops the game, at whatever moment the read happens,
+  with no fallback:
+  - **Archive member.** The bytes are read through a memory mapping of a view of the archive file
+    covering the member; a member stored compressed (section 6) is decompressed from that view into
+    memory. A failure to map the view is not checked [EP-R2, EP-R2b]: the first read through it
+    faults, and the program ends with a crash report and no error text. An I/O error while the
+    mapped bytes are read also faults at that moment (documented behaviour of memory-mapped files
+    on Windows; not measured).
+  - **Loose file (section 7) smaller than 16,384 bytes.** It is read whole into memory [EP-R3].
+    If it can't be opened, the open is retried once after 1 ms; if that fails too, the game stops
+    with an error text naming the file [EP-R4]. If fewer bytes are read than the file's length, the
+    game stops with the error text "Can't read file data:" and the file name [EP-R5].
+  - **Loose file of 16,384 bytes or more.** It is memory-mapped [EP-R3]. A failure to open it, a
+    length of 0 when it is opened, or a failure to map it stops the game with an error text naming
+    the file and the system's description of the error [EP-R6].
+- Reads happen when the data is first needed. A texture, for example, can be read while a frame is
+  drawn (UI layout specification section 6.3), and the rules above apply there unchanged.
+
 ## Provenance
 
 - **Date:** 2026-11-23.
@@ -342,3 +369,12 @@ Over all extracted files: all 16,308 `.ogg` and all 39 `.ogm` files begin with `
 - **Sources not used:** no leaked or derived engine source code, no third-party reimplementations
   and no third-party documentation of this game's formats. The only external references are the
   public descriptions of the generic LZHUF, LZO1X and CRC-32 algorithms.
+- **Revision 2026-11-25** (what the game does when a file can't be read; same edition and tools,
+  plus a static reading of the core library's file opening and reading for archive members and
+  loose files and of its error-report path and exception handling). Bracketed ids [EP-…] name the
+  checks in the investigation workspace that reproduce each statement from the binaries. Changes
+  against the previously approved text: section 9 added.
+
+## Gaps found in review
+
+- Whether a catch-all exception handler of the engine, active above a failing read (including a read while a frame is drawn), keeps the game running after the error report or access fault of a read failure.

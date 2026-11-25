@@ -381,13 +381,35 @@ overflows it.
 
 The text is split into lines and coloured segments, then each line is drawn.
 
-**Colour codes.** The text is cut at every `%c[` … `]`. Text before the first code has the
-element's text colour. The code sets the colour of the following text up to the next code:
+**Colour codes.** A code is a `%c[` together with the first `]` at or after it; its *content* is
+what lies between the two. The text is cut into pieces [EP-C1, EP-C2, EP-C3]:
 
-- `%c[default]` — the element's text colour;
-- `%c[<name>]` — the colour `<name>` of `color_defs.xml` (exact, case-sensitive match of the whole
-  bracket content);
-- otherwise `%c[A,R,G,B]` — four decimal numbers (a missing comma is an error).
+- If the first `%c[` of the text has no `]` anywhere after it, the text has no code: all of it is
+  drawn as it is, `%c[` included, in the element's text colour.
+- Otherwise the text before the first code has the element's text colour, and each code starts a
+  piece that runs up to the next code, or to the end of the text when there is none. A further
+  `%c[` counts as a code only if a `]` follows it; otherwise it is ordinary text of the current
+  piece, drawn as it is.
+
+The code sets the colour of its piece. It is chosen from the content, in this order:
+
+- the content is `default` or any beginning of it, including empty (`%c[]`, `%c[d]`, `%c[def]`):
+  the element's text colour [EP-C4]. **Disputed in review:** the test is a search, not a comparison at the code: the element's text colour is chosen when `%c[` followed by the first *n* characters of `default` (*n* = the content's length) occurs anywhere in the piece from the code on. This is the content being a beginning of `default`, or, besides, an unclosed `%c[` later in the same piece followed by those characters (e.g. `%c[1,2]x%c[def` gives the element's text colour). A content of 8 or more characters never selects it;
+- the content equals the name of a colour of `color_defs.xml` (exact, case-sensitive match): that
+  colour [EP-C5];
+- otherwise four numbers are read from the piece: A from just after `%c[`, R, G and B from just
+  after the first, second and third comma of the piece, the commas being searched from the code on
+  to the end of the piece, past the `]` if need be. Each number is a leading decimal integer as C
+  `atoi` reads it (optional white space and sign, then digits; none gives 0); R, G and B are used
+  modulo 256 [EP-C6, EP-C7, EP-C8]. If the piece has fewer than three commas, the game stops with
+  an error report: the error text is written to the game's log, a crash report is produced and the
+  program ends (UI layout specification section 1) [EP-C6, EP-E0]. **Disputed in review:** that the program ends is not established (see the review note in UI layout specification section 1); established is that the text is not drawn on with a default colour.
+
+Examples, each code being the last one of its text: `%c[255,200,100,50]Hello` → RGB (200, 100, 50);
+`%c[255,200,100]Hello, world` → RGB (200, 100, 0), the third comma being the one after `Hello` and
+B read from ` world`; `%c[255,200,100]Hello` → the game stops; `%c[]Hello` → the element's text
+colour; `%c[red` (no `]`) → the whole text drawn as it is [EP-C10]. All 22 colour codes of the shipped
+string tables, layouts and scripts are `default` or four numbers [EP-C9].
 
 In every case only the red, green and blue come from the code; the **alpha is always the element's
 text alpha**. The codes themselves are not drawn.
@@ -509,3 +531,13 @@ pen y = 0.78125 · (419 + (30 − 21/0.78125)/2) = 328.5625; *x*₀ = 610 − 40
     end-of-segment cases); the whitespace classification of high bytes added to section 6.
   - 5: the vertical centring of the title-menu captions is confirmed from the code that builds the
     menu items (no change to the numbers) and stated to come from that code, not from the data.
+- **Revision 2026-11-25** (what a malformed colour code does; same edition and tools, plus a
+  re-reading at instruction level in the game library of the cutting of complex-mode text at colour
+  codes and of the reading of a code's colour, a static reading of the core library's error-report
+  path, and a survey of the colour codes in the shipped string tables, layouts and scripts).
+  Bracketed ids [EP-…] name the checks in the investigation workspace that reproduce each statement
+  from the binaries and data. Changes against the previously approved text:
+  - 4.3: how a code and the pieces are delimited, including an unclosed `%c[`; that any beginning of
+    `default` selects the element colour; that the commas are searched to the end of the piece,
+    past the `]`; how the numbers are read; that fewer than three commas stop the game (was "a
+    missing comma is an error"); examples added.

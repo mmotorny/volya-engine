@@ -18,6 +18,8 @@ export const SECTIONS = [
       { id: "import-tab", name: "First start in a browser tab", game: fresh, tab: true, persisted: false },
       { id: "import-deleted", name: "The browser deleted the imported game", game: fresh, tab: true, persisted: false, deleted: true },
       { id: "import-no-graphics", name: "Neither WebGPU nor WebGL 2 working (before or after import)", game: fresh, gpu: false },
+      { id: "import-not-isolated", name: "Not cross-origin isolated after the one reload (no shared memory for sound)", game: fresh, isolated: false },
+      { id: "import-not-isolated-no-graphics", name: "Not isolated, and no WebGPU or WebGL 2", game: fresh, isolated: false, gpu: false },
       { id: "import-pick", name: "Picked the wrong files", game: fresh, snapshot: { error: "pick" } },
       { id: "import-not-installer", name: "Not the game's installer", game: fresh, snapshot: { error: "Inno Setup headers: unexpected signature" } },
       {
@@ -50,6 +52,7 @@ export const SECTIONS = [
     title: "Home",
     states: [
       { id: "home", name: "Ready", game: imported },
+      { id: "home-starting", name: "Starting the game (Play pressed)", game: imported, starting: true },
       { id: "home-play-failed", name: "Play failed", game: imported, launchError: "level.geom: unexpected end of file" },
       // An update, in order: offered (automatic downloads off), downloading
       // on request or after Check for updates found it, downloaded (either way).

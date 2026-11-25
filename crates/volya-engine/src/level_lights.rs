@@ -381,6 +381,11 @@ impl LevelLights {
 
     /// The object `id` came online: a lamp starts from its record (hanging-
     /// lamps.md 3, 8).
+    /// The colour animations of `lanims.xr`.
+    pub fn animations(&self) -> &ColourAnimations {
+        &self.animations
+    }
+
     pub fn object_online(&mut self, id: u16) {
         if self.lamps.iter().any(|l| l.id == id) {
             return;

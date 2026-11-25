@@ -22,6 +22,7 @@ use std::time::Instant;
 use volya_engine::app::{App, AppState};
 use volya_engine::audio::{AudioOut, Voice};
 use volya_engine::core::audio::Playback;
+use volya_engine::core::diagnostics::{self, Diagnostics};
 use volya_engine::core::input::{Event, Input, Key};
 use volya_engine::core::sound::system::SoundSystem;
 use volya_engine::core::vfs::db::DbVfs;
@@ -929,6 +930,8 @@ fn placed_effects_are_drawn_from_game_data() {
             screen.update(16 * (t + 1), &Input::new());
         }
         screen.set_camera(eye, angles);
+        // The placed effect alone: the zones' effects are zones.rs's.
+        screen.set_effect_origins_drawn(&[volya_engine::core::particles::placed::Origin::Placed]);
         let mut r = renderer();
         r.set_compat(compat);
         let mut presenter = Presenter::new();
@@ -1118,9 +1121,11 @@ fn a_missing_level_sound_file_is_fatal() {
         data.intro_lengths = vec![0.0; data.intro.items.len()];
         data
     };
-    let fatal = |e: Option<String>| {
+    // The error, and the diagnostic log's end (#356) with its reason.
+    let fatal = |(e, end): (Option<String>, Vec<(String, String)>), reason: &str| {
         let e = e.expect("fatal");
         assert!(e.contains("rain.ogg"), "{e}");
+        assert_eq!(end, [(reason.to_owned(), e)]);
     };
     tree.hidden.set(true);
     for sounds in [None, Some(SoundSystem::new(32))] {
@@ -1128,18 +1133,37 @@ fn a_missing_level_sound_file_is_fatal() {
             sounds,
             ..Default::default()
         };
-        fatal(new_game_error(&tree, data(), &mut audio, |_| {}));
+        let failed = ends(|| new_game_error(&tree, data(), &mut audio, |_| {}));
+        fatal(failed, "load_failed");
     }
     // Loaded without audio output, the file present; then the output
-    // appears and the file is gone.
+    // appears and the file is gone: `App::fatal`.
     tree.hidden.set(false);
-    fatal(new_game_error(
-        &tree,
-        data(),
-        &mut Output::default(),
-        |audio| {
+    let failed = ends(|| {
+        new_game_error(&tree, data(), &mut Output::default(), |audio| {
             tree.hidden.set(true);
             audio.sounds = Some(SoundSystem::new(32));
-        },
-    ));
+        })
+    });
+    fatal(failed, "fatal");
+}
+
+/// `f`'s result and the `engine.end` events (reason, message) the
+/// diagnostic log records while it runs.
+fn ends<T>(f: impl FnOnce() -> T) -> (T, Vec<(String, String)>) {
+    use tracing_subscriber::layer::SubscriberExt;
+    let d = Diagnostics::new(|| 0.0, "test", 1, "test");
+    let subscriber = tracing_subscriber::registry().with(d.layer());
+    let out = tracing::subscriber::with_default(subscriber, f);
+    let ends = d
+        .take_pending()
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|e| e["name"] == diagnostics::END)
+        .map(|e| {
+            let text = |k: &str| e["args"][k].as_str().unwrap_or_default().to_owned();
+            (text("reason"), text("message"))
+        })
+        .collect();
+    (out, ends)
 }

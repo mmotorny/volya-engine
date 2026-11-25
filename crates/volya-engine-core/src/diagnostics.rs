@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! The diagnostic log (#346; docs/architecture.md, Diagnostic log): always
-//! on, technical only (timings, counts, states, errors; no game content, no
-//! personal data), kept by size, downloaded as a trace in Chrome's Trace
+//! The diagnostic log (#346; docs/architecture.md, Diagnostic log):
+//! technical only (timings, counts, states, errors with their messages,
+//! level and file names; no personal data), kept by size, downloaded as a trace in Chrome's Trace
 //! Event Format (the JSON Object Format: `{"traceEvents": [...]}`), which
 //! Perfetto and `chrome://tracing` open.
 //!
@@ -22,6 +22,9 @@
 //!   of `metrics` too.
 //! - Any other event is an instant event (`i`), named by its message, its
 //!   fields as arguments; at most [`EVENTS_PER_NAME`] per name per period.
+//! - [`end`] records how the engine or a game ended (an [`END`] event, never
+//!   limited); the platform then stores the period at once
+//!   ([`Diagnostics::take_ended`]), before the context can go away.
 //!
 //! The platform feeds its own events in through [`Diagnostics`] (the page's
 //! JS, the audio worklet), ends each period with [`Diagnostics::summarize`]
@@ -49,7 +52,14 @@ pub const SEGMENT_BYTES: u64 = 256 * 1024;
 /// The log's size limit: 2 MiB.
 pub const CAP_BYTES: u64 = SEGMENTS as u64 * SEGMENT_BYTES;
 /// A string argument's length limit (characters); longer ones are cut.
-pub const MAX_TEXT_CHARS: usize = 300;
+/// Error messages are kept whole (the engine's are far shorter): this only
+/// keeps a line well inside a segment.
+pub const MAX_TEXT_CHARS: usize = 16 * 1024;
+/// The instant event recording how the engine or a game ended: `reason`
+/// (a short kind: `fatal`, `load_failed`, `quit`, `panic`, `device_lost`,
+/// `page_hidden`, `page_closed`, …) and `message`. A session whose last
+/// event isn't one ended abruptly.
+pub const END: &str = "engine.end";
 /// Instant events kept per name per period; the rest are counted.
 pub const EVENTS_PER_NAME: u32 = 20;
 /// Spans written inside one long root span at most.
@@ -91,6 +101,13 @@ pub fn metric(name: &str, value: f64) {
 /// logged.
 pub fn count(name: &str, n: u64) {
     tracing::info!(target: "volya", count = name, n);
+}
+
+/// Records how the engine or a game ended: an [`END`] event with `reason`
+/// (a short kind, e.g. `fatal`) and `message`. The platform stores the
+/// period at once after it ([`Diagnostics::take_ended`]).
+pub fn end(reason: &str, message: &str) {
+    tracing::warn!(target: "volya", end_reason = reason, end_message = message);
 }
 
 /// An argument of an event recorded by the platform.
@@ -153,6 +170,10 @@ struct State {
     instants: Vec<Stat>,
     /// Complete events of spans inside the open root span.
     children: Vec<String>,
+    /// An [`END`] event was recorded since [`Diagnostics::take_ended`].
+    ended: bool,
+    /// [`END`] events waiting, written after the rest of their batch.
+    ends: String,
 }
 
 /// Writes `text` as a JSON string, cut to [`MAX_TEXT_CHARS`].
@@ -203,13 +224,53 @@ fn json_args(out: &mut String, args: &[(&str, Value)]) {
     out.push('}');
 }
 
+/// Where an event is: its session's `cat` and `pid`, its thread.
+struct At<'a> {
+    cat: &'a str,
+    pid: u32,
+    tid: u32,
+}
+
+/// One event line: `ph`, `name`, `ts` (µs), the duration for `X`, the
+/// session and thread, the arguments.
+fn event_line(
+    at: At<'_>,
+    ph: char,
+    name: &str,
+    ts: f64,
+    dur: Option<f64>,
+    args: &[(&str, Value)],
+) -> String {
+    let mut out = String::with_capacity(128);
+    let _ = write!(out, "{{\"ph\":\"{ph}\",\"name\":");
+    json_string(&mut out, name);
+    out.push_str(",\"cat\":");
+    json_string(&mut out, at.cat);
+    out.push_str(",\"ts\":");
+    json_number(&mut out, ts.round());
+    if let Some(dur) = dur {
+        out.push_str(",\"dur\":");
+        json_number(&mut out, dur.round());
+    }
+    let _ = write!(out, ",\"pid\":{},\"tid\":{}", at.pid, at.tid);
+    if ph == 'i' {
+        out.push_str(",\"s\":\"t\"");
+    }
+    if !args.is_empty() {
+        out.push_str(",\"args\":");
+        json_args(&mut out, args);
+    }
+    out.push('}');
+    out
+}
+
 impl State {
     fn now(&self) -> f64 {
         (self.clock)()
     }
 
-    /// One event line: `ph`, `name`, `ts` (µs), the duration for `X`, the
-    /// thread, the arguments.
+    /// One event line of this session: `ph`, `name`, `ts` (µs), the
+    /// duration for `X`, the thread, the arguments.
     fn line(
         &self,
         ph: char,
@@ -219,27 +280,12 @@ impl State {
         tid: u32,
         args: &[(&str, Value)],
     ) -> String {
-        let mut out = String::with_capacity(128);
-        let _ = write!(out, "{{\"ph\":\"{ph}\",\"name\":");
-        json_string(&mut out, name);
-        out.push_str(",\"cat\":");
-        json_string(&mut out, &self.cat);
-        out.push_str(",\"ts\":");
-        json_number(&mut out, ts.round());
-        if let Some(dur) = dur {
-            out.push_str(",\"dur\":");
-            json_number(&mut out, dur.round());
-        }
-        let _ = write!(out, ",\"pid\":{},\"tid\":{tid}", self.pid);
-        if ph == 'i' {
-            out.push_str(",\"s\":\"t\"");
-        }
-        if !args.is_empty() {
-            out.push_str(",\"args\":");
-            json_args(&mut out, args);
-        }
-        out.push('}');
-        out
+        let at = At {
+            cat: &self.cat,
+            pid: self.pid,
+            tid,
+        };
+        event_line(at, ph, name, ts, dur, args)
     }
 
     fn push(&mut self, line: &str) {
@@ -253,12 +299,20 @@ impl State {
     }
 
     fn instant(&mut self, name: &str, tid: u32, args: &[(&str, Value)]) {
+        let line = self.line('i', name, self.now(), None, tid, args);
+        if name == END {
+            // Last in its batch, after the period's counters: a session's
+            // last event is its end.
+            self.ended = true;
+            self.ends.push_str(&line);
+            self.ends.push('\n');
+            return;
+        }
         let s = stat(&mut self.instants, name);
         s.count += 1;
         if s.count > u64::from(EVENTS_PER_NAME) {
             return;
         }
-        let line = self.line('i', name, self.now(), None, tid, args);
         self.push(&line);
     }
 
@@ -305,6 +359,8 @@ impl Diagnostics {
             counts: Vec::new(),
             instants: Vec::new(),
             children: Vec::new(),
+            ended: false,
+            ends: String::new(),
         };
         // The version's last word: its commit (e.g. `b0fa5b8`).
         let mut cat = String::from("volya,v:");
@@ -351,6 +407,40 @@ impl Diagnostics {
     /// audio worklet).
     pub fn instant(&self, name: &str, tid: u32, args: &[(&str, Value)]) {
         self.state().instant(name, tid, args);
+    }
+
+    /// Records how the engine or a game ended (an [`END`] event on thread
+    /// `tid`: `reason`, `message`, then `more`), as [`end`] does. Safe in a
+    /// panic hook: skipped, rather than waiting, while the recorder is
+    /// busy (the panic came from inside it).
+    pub fn end(&self, tid: u32, reason: &str, message: &str, more: &[(&str, Value)]) {
+        let mut s = match self.0.try_lock() {
+            Ok(s) => s,
+            Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return,
+        };
+        let mut args = vec![
+            ("reason", Value::Text(reason.to_owned())),
+            ("message", Value::Text(message.to_owned())),
+        ];
+        args.extend(more.iter().cloned());
+        s.instant(END, tid, &args);
+    }
+
+    /// Whether an [`END`] event was recorded since the last call: the
+    /// platform then stores the period at once.
+    pub fn take_ended(&self) -> bool {
+        std::mem::take(&mut self.state().ended)
+    }
+
+    /// This session's number (its events' `pid`).
+    pub fn pid(&self) -> u32 {
+        self.state().pid
+    }
+
+    /// This session's events' `cat`.
+    pub fn cat(&self) -> String {
+        self.state().cat.clone()
     }
 
     /// A counter event (`C`) now: each argument a series.
@@ -440,9 +530,13 @@ impl Diagnostics {
         s.instants.clear();
     }
 
-    /// The events recorded since the last call, one per line.
+    /// The events recorded since the last call, one per line; [`END`]
+    /// events last.
     pub fn take_pending(&self) -> String {
-        std::mem::take(&mut self.state().pending)
+        let mut s = self.state();
+        let mut pending = std::mem::take(&mut s.pending);
+        pending.push_str(&std::mem::take(&mut s.ends));
+        pending
     }
 
     /// This session's metadata events, one per line.
@@ -465,6 +559,8 @@ fn ours(metadata: &Metadata<'_>) -> bool {
 #[derive(Default)]
 struct Fields {
     message: Option<String>,
+    end_reason: Option<String>,
+    end_message: Option<String>,
     metric: Option<String>,
     value: Option<f64>,
     count: Option<String>,
@@ -500,6 +596,8 @@ impl Visit for Fields {
             "metric" => self.metric = Some(value.to_owned()),
             "count" => self.count = Some(value.to_owned()),
             "message" => self.message = Some(value.to_owned()),
+            "end_reason" => self.end_reason = Some(value.to_owned()),
+            "end_message" => self.end_message = Some(value.to_owned()),
             name => self.args.push((name, Value::Text(value.to_owned()))),
         }
     }
@@ -553,6 +651,14 @@ where
             self.0.metrics(name, 1, value, value, value);
         } else if let (Some(name), Some(n)) = (&fields.count, fields.n) {
             self.0.count(name, n);
+        } else if let Some(reason) = &fields.end_reason {
+            let message = fields.end_message.as_deref().unwrap_or_default();
+            let mut args = vec![
+                ("reason", Value::Text(reason.clone())),
+                ("message", Value::Text(message.to_owned())),
+            ];
+            args.extend(fields.args);
+            self.0.state().instant(END, 1, &args);
         } else {
             let name = fields
                 .message
@@ -619,6 +725,20 @@ impl SegmentStore for MemoryStore {
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
+}
+
+/// An [`END`] event the page kept in its own storage as its session's
+/// context went (a closed page, whose engine worker may be ended before it
+/// stores its own), for the next session to add ([`Log::add_recorded_end`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecordedEnd {
+    pub pid: u32,
+    pub cat: String,
+    /// Microseconds since the Unix epoch.
+    pub ts: f64,
+    pub tid: u32,
+    pub reason: String,
+    pub message: String,
 }
 
 /// A segment's first line, followed by its sequence number.
@@ -756,6 +876,41 @@ impl<S: SegmentStore> Log<S> {
             fresh = false;
         }
         self.store.flush()
+    }
+
+    /// Adds `end`, recorded by the page when its session's context went,
+    /// unless the session stored anything from then on: its own [`END`]
+    /// event for the same cause (recorded after the page's, the message
+    /// taking its time), or later events (a hidden page shown again). A
+    /// segment begun by a rotation starts with `prefix`, as [`Log::append`].
+    /// Whether it was added.
+    pub fn add_recorded_end(&mut self, end: &RecordedEnd, prefix: &str) -> io::Result<bool> {
+        let pid = format!(",\"pid\":{},", end.pid);
+        let lines = self.lines()?;
+        if let Some(last) = lines.iter().rev().find(|l| l.contains(&pid)) {
+            let ts = last
+                .split_once(",\"ts\":")
+                .and_then(|(_, rest)| rest.split(',').next())
+                .and_then(|ts| ts.parse::<f64>().ok())
+                .unwrap_or(0.0);
+            if ts >= end.ts {
+                return Ok(false);
+            }
+        }
+        let at = At {
+            cat: &end.cat,
+            pid: end.pid,
+            tid: end.tid,
+        };
+        let args = [
+            ("reason", Value::Text(end.reason.clone())),
+            ("message", Value::Text(end.message.clone())),
+            ("recorded_by", Value::Text("page".into())),
+        ];
+        let mut line = event_line(at, 'i', END, end.ts, None, &args);
+        line.push('\n');
+        self.append(&line, prefix)?;
+        Ok(true)
     }
 
     /// The log's event lines, oldest first.

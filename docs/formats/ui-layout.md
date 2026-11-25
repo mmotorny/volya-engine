@@ -27,6 +27,10 @@ This document specifies what the data means once an element is read.
 
 ## 1. Files and loading
 
+"The game stops" in this section means: the error text named (where one is named) is written to the
+game's log, a crash report is produced and the program ends; the game does not carry on in any form,
+and no reader gets a default in its place [EP-E0]. **Disputed in review:** only part of this is established. The error report never returns to the code that raised it, so no reader gets a default and the operation does not continue. That the program then ends is not established: all the game's binaries are built so that catch-all exception handlers also catch the trap raised by the error report (and access faults), they contain many such handlers, and it has not been shown that none of them is active above the point of the error.
+
 ### 1.1 Layout files
 
 - Layout files live in `config\ui\`. A screen builder names a file (e.g. `ui_mm_main.xml`) and the
@@ -58,6 +62,23 @@ This document specifies what the data means once an element is read.
     `stretch="1"` is added. Example, `motion_icon.xml` → `motion_icon_16.xml`: `background`
     (0, 640, 125 × 125) → (0, 640, 94 × 125, `stretch="1"`); `state_normal` (27, 22, 65 × 75) →
     (20, 22, 50 × 75, `stretch="1"`); `power_progress` (32, 94, 57 × 7) → (24, 94, 43 × 7).
+- **A layout file that can't be opened** (neither the `_16` variant nor the requested name is in the
+  data tree): opening it makes no report; the document is left without a root element [EP-L1, EP-L4].
+  What follows depends on the builder, but in every case the game stops before the screen is shown:
+  - Screens built by the game's scripts open their file through a call that ignores the result, so
+    they stop at the first element they read (section 1.4) [EP-L6, EP-L6b, EP-L7]. These are
+    `ui_mm_main.xml` (title menu), `ui_mm_opt.xml` (options), `ui_mm_load_dlg.xml`,
+    `ui_mm_save_dlg.xml`, `ui_mm_mp.xml`, `ui_numpad_wnd.xml` and `ui_game_over.xml`; each script
+    reads an element right after opening its file [EP-L7b].
+  - Most screens built by the game's own code check the result and stop the game at once with an
+    error text, in most cases "xml file not found" and the file name, among them `message_box.xml` (message
+    boxes) and `color_defs.xml` (named colours) [EP-L9, EP-L9b, EP-M1]. The others don't check and
+    stop at their first lookup, e.g. `ui_keybinding.xml` (the key-binding list of the options
+    screen) [EP-L9, EP-L9c].
+  - A file that opens but contains no element (e.g. the three 0-byte files of the Evidence summary)
+    behaves like a file that can't be opened once anything is read from it [EP-L4, EP-L5]. **Disputed in review:** this holds for the files that contain only comments, not for the 0-byte files: an empty file is a parse error ("Error document empty."), so the game stops when the file is opened, as in section 1.3.
+  - A file that is in the data tree but whose bytes can't be read stops the game while it is read
+    (archive specification section 9).
 
 ### 1.2 `#include` lines
 
@@ -69,7 +90,8 @@ between the first pair of double quotes. All other lines are kept as they are.
 - If the included path starts with `ui\`, the remainder is passed through the `_16` rule (as a file
   of the `ui` directory) and the result is opened as `ui\<result>` relative to the same root as the
   including file (`config\`). If that fails, or the path does not start with `ui\`, the path is
-  opened literally relative to that root. A missing include file is an error.
+  opened literally relative to that root. If that fails too, the game stops with an error text
+  naming the layout file and the include path [EP-L3].
 - Evidence: 24 include lines in the Russian edition, all at column 0 and all of the form
   `#include "ui\<file>.xml"`, e.g. `map_spots.xml` includes ten `ui\map_spots_*.xml` files,
   `ui_mm_mp.xml` includes `ui\ui_mm_mp_tabclient.xml`, `…_tabserver.xml`, `…_taboptions.xml`,
@@ -94,7 +116,7 @@ shipped data (a strict parser rejects 18 of the 154 `config\ui\*.xml` files):
   such as `<texture> ui\ui_dg_info</texture>`).
 - Not established: how a mismatched end tag is handled (`ingame_msglog_mp.xml` and
   `ingame_msglog_sp.xml` open `<_window>` and close `</window>`). A parse error in a loaded file
-  is fatal in the original.
+  stops the game with an error text naming the file and the parser's description [EP-L2].
 
 ### 1.4 Document model and lookup
 
@@ -114,8 +136,29 @@ shipped data (a strict parser rejects 18 of the 154 `config\ui\*.xml` files):
   (integers: leading digits, `"false"` → 0, `"1.5"` → 1) or `atof` (floats); an absent attribute
   gives the default stated for it. A flag attribute is "on" when its integer value is non-zero,
   unless stated otherwise.
-- Elements a builder requires must exist (missing → error). Optional child elements (`texture`,
-  `text`, `font`, `texture_offset`, …) are simply skipped when absent.
+- **Required elements.** A builder creates each element it needs (window, static, button, edit
+  box, list, scroll view, frame, …) by reading it from its path. If no element is found at that
+  path, the game stops with the error text "XML node not found" and the path; this holds for every
+  kind of element, whether the screen is built by the game's code or by a script [EP-L8, EP-L8b,
+  EP-L6c]. Optional child elements (`texture`, `text`, `font`, `texture_offset`, …) are looked up
+  first by the code that reads them and simply skipped when absent; an absent attribute or value
+  gives its default without a report.
+- **A document without a root** (its file couldn't be opened, or has no element, section 1.1):
+  every element, attribute, value or child-count lookup from the root stops the game with an error
+  text naming the file; it never yields a default [EP-L4, EP-L5, EP-L5b].
+- **Message boxes.** A message box is built by name from `config\ui\message_box.xml`, whose root
+  has one child per box (33 boxes, e.g. `message_box_quit_windows`, `select_map`) [EP-M7].
+  - If the file can't be loaded, the game stops ("xml file not found") [EP-M1].
+  - The first element read is `<name>:picture`, as a required static element: a name missing from
+    the file stops the game with "XML node not found" and the path `<name>:picture`
+    [EP-M2, EP-M3].
+  - `<name>:message_text` is optional [EP-M4]. The attribute `type` of `<name>` is required (absent:
+    the game stops) [EP-M5]. Its value is compared without regard to case with `ok`, `yes_no`,
+    `yes_no_cancel`, `direct_ip`, `password`, `quit_windows`, `quit_game` and `info`; any other
+    value is treated as `ok` [EP-M6]. The buttons a type uses are required elements, e.g.
+    `<name>:button_ok` for `ok` and `button_yes`, `button_no`, `button_cancel` for
+    `yes_no_cancel` [EP-M8].
+  - All 10 box names the shipped scripts use exist in the file [EP-M7].
 
 ## 2. Colours
 
@@ -335,7 +378,14 @@ case-insensitive (archive specification).
 - **Still images**: a trailing extension `.tga`, `.dds`, `.bmp` or `.ogm` (case-insensitive) is
   removed from the name, then `<name>.dds` is searched in the current level's directory, then in
   the saved-games directory, then in `textures\`; the first found is used (on the title screen no
-  level exists, so effectively `textures\<name>.dds`). A missing texture is fatal in the original.
+  level exists, so effectively `textures\<name>.dds`). A texture found under none of these names
+  stops the game with the error text "Can't find texture '<name>'". A texture whose file is found
+  but can't be read (archive specification section 9), or whose bytes don't decode as an image,
+  stops the game too [EP-R7].
+- **When a texture is read.** Either when the texture is first created (when the element that uses
+  it is built), or, when the engine defers loading, the first time it is used for drawing (or in a
+  batch when a game starts); so in the original a texture file can be read while a frame is drawn.
+  Which of the two applies depends on engine state that was not established [EP-R8, EP-R9].
 - Shaders: a static's picture uses the shader `hud\default`, except that a path for which
   `textures\<path>.ogm` exists uses `hud\movie` (on hardware with pixel shader model 2.0 or higher;
   a reimplementation can assume this). Section 8.
@@ -620,3 +670,23 @@ archive that has them), `map_spots_darkvalley.xml`, `map_spots_military.xml` and
     break points are searched only in the current segment, never at its position 0 (was "the
     line"); the character widths are stated to include the font's interval factor; the full rule is
     referenced to the text-and-fonts specification.
+- **Revision 2026-11-25** (what the original does when a layout can't be opened or built, a message
+  box is missing, or a texture can't be read; same edition and tools, plus a static reading of the
+  error-report path of the core library and the process's exception handling, of the script binding
+  layer of the script library, of every place in the game library that opens an XML file, of the
+  element initialisers, the message-box builder, the script call that opens layout files, and the
+  texture creation and loading of the engine executable and the renderer; and a survey of the
+  shipped scripts and of `message_box.xml`). Bracketed ids [EP-…] name the checks in the
+  investigation workspace that reproduce each statement from the binaries and data. Changes against
+  the previously approved text:
+  - 1: "the game stops" defined.
+  - 1.1: what happens when a layout file can't be opened (added).
+  - 1.2: a missing include file stops the game (was "an error").
+  - 1.3: a parse error stops the game (was "fatal"; same meaning).
+  - 1.4: required elements, documents without a root and message boxes (was "missing → error").
+  - 6.3: what a missing or unreadable texture does, and when texture files are read (added).
+
+## Gaps found in review
+
+- Whether a catch-all exception handler of the engine, active above the point of an error report, keeps the game running after a layout, message-box or texture error (what "the game stops" means at run time; section 1).
+- A layout document that already holds a loaded file keeps that file's root when a later open of another file fails (the failed open leaves the root unchanged); section 1.1 describes a document that has not loaded a file before. Whether any builder reuses a document this way is not established.

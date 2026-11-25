@@ -320,6 +320,9 @@ pub struct EmitterState {
     pub occlusion: f32,
 }
 
+/// Emitters the system has room for when made.
+const EMITTERS: usize = 256;
+
 /// The sound system (sections 2 – 7).
 pub struct SoundSystem {
     files: Sounds,
@@ -352,7 +355,9 @@ impl SoundSystem {
         Self {
             files: Sounds::new(),
             slots: Vec::new(),
-            emitters: Vec::new(),
+            // Room for a level's looped sounds (the first level's zones play
+            // 111) made with the system, not grown amid a level's heap.
+            emitters: Vec::with_capacity(EMITTERS),
             next_emitter: 0,
             voices: vec![FREE; voices.clamp(MIN_VOICES, MAX_VOICES)],
             now: 0,

@@ -8,6 +8,8 @@
 #![cfg(target_arch = "wasm32")]
 
 mod audio;
+mod audio_host;
+mod audio_ring;
 mod diagnostics;
 mod engine;
 mod game;
@@ -157,6 +159,16 @@ pub(crate) fn now() -> f64 {
         .map_or_else(js_sys::Date::now, |p| p.now())
 }
 
+/// Milliseconds since the epoch, comparable between workers (each
+/// worker's `performance.now()` counts from its own start).
+pub(crate) fn epoch_now() -> f64 {
+    js_sys::global()
+        .dyn_into::<WorkerGlobalScope>()
+        .ok()
+        .and_then(|g| g.performance())
+        .map_or_else(js_sys::Date::now, |p| p.time_origin() + p.now())
+}
+
 /// Runs one animation frame; `time` in milliseconds.
 #[wasm_bindgen]
 pub fn frame(time: f64) {
@@ -229,8 +241,11 @@ pub fn visibility(hidden: bool) {
     // The interval spanning the hidden time is not a frame time.
     FRAME_STATS.with(|s| s.borrow_mut().last = None);
     tracing::info!(hidden, "page visibility");
-    // Hidden pages may be ended without notice (iOS): stored now.
-    diagnostics::tick(hidden);
+    if hidden {
+        // Hidden pages may be ended without notice (iOS): recorded as an
+        // end and stored now. Shown again, the session goes on.
+        diagnostics::end(2, "page_hidden", "the page was hidden", &[]);
+    }
 }
 
 #[derive(Serialize)]
@@ -249,6 +264,9 @@ struct LevelStats {
     /// The sound system's update per frame: average and worst.
     sound_update_ms: f64,
     sound_update_max_ms: f64,
+    /// The audio worker's own (its heap, mixing time, underruns).
+    #[serde(flatten)]
+    audio: audio::HostStats,
 }
 
 fn level_stats() -> LevelStats {
@@ -266,6 +284,7 @@ fn level_stats() -> LevelStats {
             frame_interval_ms: average(&s.interval),
             sound_update_ms: average(&s.sound),
             sound_update_max_ms: s.sound.iter().copied().fold(0.0, f64::max),
+            audio: audio::host_stats(),
         }
     })
 }
@@ -372,14 +391,20 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         }
         "input_state" => to_json(&input::state()),
         "level_stats" => to_json(&level_stats()),
-        "diagnostic_log" => to_json(&diagnostics::trace().await?),
+        // `{stored_only}` (tests): only what is in storage now.
+        "diagnostic_log" => {
+            let stored_only = args.get("stored_only").and_then(|v| v.as_bool());
+            to_json(&diagnostics::trace(stored_only.unwrap_or(false)).await?)
+        }
         "diagnostic_log_status" => to_json(&diagnostics::status().await),
-        // `{on, session}`: the player's setting, and what the page tells
-        // of the session (diagnostics.js).
+        // `{on, session, previous_end}`: the player's setting, what the
+        // page tells of the session and how an earlier session's page
+        // ended (diagnostics.js).
         "diagnostics_set" => {
             let on = args.get("on").and_then(|v| v.as_bool()).unwrap_or(false);
             let session = args.get("session").cloned().unwrap_or_default();
-            diagnostics::set(on, &session).await;
+            let previous = args.get("previous_end").cloned().unwrap_or_default();
+            diagnostics::set(on, &session, &previous).await;
             to_json(&diagnostics::status().await)
         }
         #[cfg(feature = "test-ops")]
@@ -407,6 +432,15 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         "launch" => to_json(&engine::launch().await?),
         "menu_state" => to_json(&engine::state()),
         "bound_keys" => to_json(&engine::bound_keys()),
+        #[cfg(feature = "test-ops")]
+        "debug_lose_device" => gpu::lose_device().map(|()| "null".into()),
+        // `{suffix}`: the archive tree hides the paths ending in `suffix`
+        // (none without one).
+        #[cfg(feature = "test-ops")]
+        "debug_hide_file" => {
+            game::hidden::set(args.get("suffix").and_then(|v| v.as_str()));
+            Ok("null".into())
+        }
         #[cfg(feature = "test-ops")]
         "debug_give_item" => to_json(&engine::give_item(text("section"))?),
         // `{name, position: [x, y, z], category, looped, two_d, delay}`.
@@ -438,6 +472,9 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         "debug_draw_lights" => to_json(&gpu::debug_draw_lights(text("case"))?),
         #[cfg(feature = "test-ops")]
         "particles_state" => to_json(&engine::particles_state()?),
+        // The zones and the weather's ambient effect (tests).
+        #[cfg(feature = "test-ops")]
+        "zones_state" => to_json(&engine::zones_state()?),
         // `{frames}`: the placed effects' update cost in wasm.
         #[cfg(feature = "test-ops")]
         "debug_particles_bench" => {
@@ -447,6 +484,12 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         // `{"name": …}` starts capturing that sound's emitter; `{}` stops
         // and returns the capture (`audio::capture::stop`).
         // `{"ms": …}`: every frame takes at least that long from now on.
+        // `{"on": …}`: the mixer's commands wait while on (`audio::hold`).
+        #[cfg(feature = "test-ops")]
+        "debug_audio_hold" => {
+            audio::hold(args.get("on").and_then(|v| v.as_bool()).unwrap_or(false));
+            Ok("null".into())
+        }
         #[cfg(feature = "test-ops")]
         "debug_frame_cost" => {
             let ms = args.get("ms").and_then(|v| v.as_f64()).unwrap_or(0.0);
@@ -474,7 +517,7 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         }
         "forget_user_config" => game::forget_user_config().await.map(|()| "null".into()),
         "quit_game" => {
-            engine::stop();
+            engine::stop("quit", "left the game");
             Ok("null".into())
         }
         "input_capture" => {

@@ -252,7 +252,8 @@ fn meets(planes: &[[f32; 4]; 6], centre: [f32; 3], radius: f32) -> bool {
 /// transform) meets the view of `view` and `projection` (7.1).
 pub fn visible(effects: &PlacedEffects, view: &Mat4, projection: &Mat4) -> Vec<usize> {
     let planes = frustum(&multiply(view, projection));
-    (effects.effects().iter().enumerate())
+    effects
+        .indexed()
         .filter(|(_, p)| {
             p.registered()
                 .is_some_and(|s| meets(&planes, s.centre, s.radius))
@@ -277,7 +278,10 @@ pub fn queue(
     // The level's effect objects keep the identity transform (P8 3).
     let t: Matrix = IDENTITY;
     for &r in records {
-        for e in effects.effects()[r].instance.effects() {
+        let Some(object) = effects.get(r) else {
+            continue;
+        };
+        for e in object.instance.effects() {
             let i = e.record();
             let Some(Some(shader)) = shaders.get(i) else {
                 continue;

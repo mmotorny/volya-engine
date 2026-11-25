@@ -303,6 +303,20 @@ impl Renderer {
         self.compat
     }
 
+    /// Grows the particles' vertex and index buffers to hold `particles`
+    /// sprites at once, so that no buffer is made while a level runs (made
+    /// with its world).
+    pub fn reserve_particles(&mut self, particles: usize) {
+        if let Some(p) = &mut self.particles {
+            p.reserve(&self.device, particles);
+        }
+    }
+
+    /// The particles' vertex and index buffers' sizes in bytes.
+    pub fn particle_buffer_sizes(&self) -> (u64, u64) {
+        self.particles.as_ref().map_or((0, 0), |p| p.buffer_sizes())
+    }
+
     /// Draws the world in [`Renderer::compat`] mode even where storage
     /// buffers exist (tests: the WebGL path on a native GPU). Takes effect
     /// for worlds created afterwards.
