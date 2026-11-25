@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! Importing the game from a GOG installer into OPFS, run in the import
-//! worker (`static/import-worker.js`); docs/architecture.md (Game data).
+//! worker (`static/import-worker.js`); docs/architecture/game-data.md.
 //!
 //! Installer files arrive as JS *sources*: objects with a `size` and a
 //! synchronous `read(offset, length) -> Uint8Array` (a picked `File` read with

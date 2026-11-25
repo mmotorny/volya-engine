@@ -23,7 +23,7 @@
 // the page itself was just loaded from the network.
 //
 // The cache name is namespaced: the github.io origin is shared
-// (docs/architecture.md).
+// (docs/architecture/web-platform.md).
 //
 // Every response it serves carries COOP and COEP (ISOLATION), which GitHub
 // Pages can't send: they make the page cross-origin isolated, so it has

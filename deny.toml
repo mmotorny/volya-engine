@@ -32,5 +32,5 @@ allow-wildcard-paths = true
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-# Fork carrying our inno patch (docs/architecture.md, Game data).
+# Fork carrying our inno patch (docs/architecture/game-data.md).
 allow-git = ["https://github.com/mmotorny/inno"]

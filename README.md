@@ -48,7 +48,7 @@ To run locally on macOS:
 - `cargo xtask deploy`: publish to GitHub Pages.
 - `cargo xtask update`: move to the latest stable Rust and dependencies.
 
-See [docs/testing.md](docs/testing.md) and [docs/architecture.md](docs/architecture.md).
+See [docs/testing.md](docs/testing.md) and [docs/architecture/](docs/architecture/README.md).
 
 ## License
 

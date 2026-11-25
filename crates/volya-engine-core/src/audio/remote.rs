@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! A mixer that mixes on the output's own schedule, apart from the engine
-//! (docs/architecture.md, Audio): the engine drives a [`Remote`], which
+//! (docs/architecture/audio.md): the engine drives a [`Remote`], which
 //! records what it is asked as commands; a [`Host`] beside the output
 //! applies them to its [`Mixer`] as they arrive and mixes whenever the
 //! output asks, as an audio device mixes apart from the game's frames.

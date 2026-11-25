@@ -2387,7 +2387,7 @@ impl LevelScreen {
     }
 
     /// The level's dynamic light records, for the sources that create and
-    /// update their lights each frame (docs/architecture.md, Lights).
+    /// update their lights each frame (docs/architecture/simulation.md).
     /// The zones' idle lights given to their records among the level's
     /// dynamic lights (zone-idle-effects.md 4.4), each made the first time.
     fn sync_zone_lights(&mut self) {

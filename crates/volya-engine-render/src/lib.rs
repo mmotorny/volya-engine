@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! `wgpu` renderer (docs/architecture.md, Crates). Platform-free: the platform
+//! `wgpu` renderer (docs/architecture/README.md). Platform-free: the platform
 //! supplies a device, a queue and a target (a surface texture or any render
 //! attachment) in the format given to [`Renderer::new`].
 //!

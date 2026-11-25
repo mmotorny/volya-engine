@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! The diagnostic log (#346; docs/architecture.md, Diagnostic log):
+//! The diagnostic log (#346; docs/architecture/diagnostics.md):
 //! technical only (timings, counts, states, errors with their messages,
 //! level and file names; no personal data), kept by size, downloaded as a trace in Chrome's Trace
 //! Event Format (the JSON Object Format: `{"traceEvents": [...]}`), which

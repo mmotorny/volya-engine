@@ -68,7 +68,7 @@ const MOUSE_INVERT_BACKUP: u8 = 0xcd;
 /// disabled while Volya Engine draws only the static renderer (decided by
 /// the user, a deviation). A stored value naming one is kept as written and
 /// drawn as `renderer_r1`, which the list shows.
-// TODO(#364): enable them once the dynamic renderers exist.
+// TODO(#385): enable them once the dynamic renderers exist.
 const DYNAMIC_RENDERERS: [usize; 2] = [1, 2];
 /// Real values differ when they are this far apart (section 5.2).
 const CHANGED_EPSILON: f32 = 0.000_01;
