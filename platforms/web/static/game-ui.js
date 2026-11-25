@@ -12,9 +12,10 @@
 // menu's last item).
 //
 // Home holds Play only; secondary actions (an update offer, Settings) sit at
-// the bottom, away from it. Settings holds updates, the diagnostic log and,
-// in a danger zone, removing the import.
+// the bottom, away from it. Settings holds graphics, updates, the
+// diagnostic log and, in a danger zone, removing the import.
 
+import { BACKENDS, choose } from "./graphics.js";
 import { SHARE_ICON, canOffer, chromium, install, installed, platform } from "./install.js";
 import * as diagnostics from "./diagnostics.js";
 import { BUILD, versionText } from "./update.js";
@@ -22,6 +23,8 @@ import { BUILD, versionText } from "./update.js";
 
 let call;
 let updates = null;
+/** The Graphics setting (main.js): `{ available, chosen, choose(backend), apply() }`. */
+let backends = null;
 const root = () => document.getElementById("game");
 /** Replaces the game section's content, skipping absent (null) parts. */
 const show = (...children) => {
@@ -62,9 +65,10 @@ function element(tag, props = {}, ...children) {
 }
 
 /** Entry point, called by main.js once the engine runs. */
-export async function start(engineCall, updateState = null) {
+export async function start(engineCall, updateState = null, graphicsSetting = null) {
   call = engineCall;
   updates = updateState;
+  backends = graphicsSetting;
   globalThis.volya.importGame = importGame;
   globalThis.volya.showSettings = showSettings;
   globalThis.volya.refresh = refresh;
@@ -153,8 +157,6 @@ async function refresh() {
  */
 export async function importGame({ exe, bin, only }, onProgress = () => {}) {
   await call("unmount_game");
-  // The import worker loads the engine worker's wasm build (wasm-build.js).
-  const { build } = await call("status");
   const worker = new Worker(new URL("./import-worker.js", import.meta.url), { type: "module" });
   const request = (message) =>
     new Promise((resolve, reject) => {
@@ -167,7 +169,7 @@ export async function importGame({ exe, bin, only }, onProgress = () => {}) {
         event.preventDefault();
         reject(new Error(`import worker: ${event.message ?? "failed to load"}`));
       };
-      worker.postMessage({ ...message, build });
+      worker.postMessage(message);
     });
   try {
     const { plan } = await request({ type: "plan", exe });
@@ -404,6 +406,13 @@ async function showHome(status) {
   launch.addEventListener("click", async () => {
     problem.hidden = true;
     try {
+      // The Graphics choice applies as the game starts: the engine starts
+      // anew where it differs from the backend running.
+      await backends?.apply();
+      if (!(await graphics())) {
+        await refresh();
+        return;
+      }
       await call("launch");
     } catch (error) {
       // Only what's known: the engine's own words.
@@ -544,6 +553,40 @@ function checkButton() {
   return button;
 }
 
+/**
+ * The Graphics setting (#121): the backends, recommended first; those the
+ * browser can't run are disabled, saying so. The one checked is the one the
+ * game starts with: the stored choice where the browser runs it, else the
+ * first it runs (the choice stays stored).
+ */
+function graphicsPanel() {
+  if (!backends) return null;
+  const { available, chosen } = backends;
+  const used = choose(chosen, available);
+  const label = element("p", { className: "label", id: "graphics-label", textContent: "Graphics" });
+  const group = element("div", { role: "radiogroup" });
+  group.setAttribute("aria-labelledby", label.id);
+  for (const [backend, name] of BACKENDS) {
+    const supported = Boolean(available[backend]);
+    const input = element("input", { type: "radio", name: "graphics", value: backend, checked: backend === used, disabled: !supported });
+    input.addEventListener("change", () => input.checked && backends.choose(backend));
+    group.append(
+      element(
+        "label",
+        { className: "switch" },
+        input,
+        element(
+          "span",
+          {},
+          element("strong", { textContent: backend === BACKENDS[0][0] ? `${name} (Recommended)` : name }),
+          supported ? null : element("small", { textContent: "Not supported by this browser" }),
+        ),
+      ),
+    );
+  }
+  return element("div", { className: "panel" }, label, group);
+}
+
 /** The downloaded log's file name: the app's version and today's date. */
 export function logFileName(now = new Date()) {
   const two = (n) => String(n).padStart(2, "0");
@@ -622,7 +665,7 @@ async function diagnosticsPanel() {
   );
 }
 
-/** Settings: updates, the diagnostic log and removing the import (danger zone). */
+/** Settings: graphics, updates, the diagnostic log and removing the import (danger zone). */
 async function showSettings() {
   const status = await call("game_status");
   const diagnosticsSection = await diagnosticsPanel();
@@ -647,6 +690,7 @@ async function showSettings() {
 
   show(
     element("div", { className: "screen-head" }, back, element("h2", { textContent: "Settings" })),
+    graphicsPanel(),
     element(
       "div",
       { className: "panel" },

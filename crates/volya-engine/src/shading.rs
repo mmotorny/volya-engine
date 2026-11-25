@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 use crate::core::config::{Config, value};
 use crate::core::weather::texture_name;
-use crate::render::world::{Blend, Program, Surface};
+use crate::render::world::{Blend, LightElement, LightProgram, Program, Surface};
 use volya_engine_formats::level::split_shader_entry;
 use volya_engine_formats::shaders_xr::{Definition, Value};
 
@@ -119,7 +119,18 @@ fn surface(program: Program, textures: [Option<String>; 4]) -> Surface<String> {
         object_lod: false,
         textures,
         env: None,
+        light: None,
     }
+}
+
+/// Light elements of priority 1 with alpha reference 0: the scripted
+/// helpers' (dynamic-lights.md 6.1).
+fn scripted_light(program: LightProgram) -> Option<LightElement> {
+    Some(LightElement {
+        program,
+        alpha_ref: 0,
+        priority: 1,
+    })
 }
 
 fn nonempty(t: Option<&String>) -> Option<String> {
@@ -258,6 +269,28 @@ impl ShaderLibrary<'_> {
         };
         s.priority = def.priority().clamp(0, 3) as u8;
         s.strict = def.strict();
+        // dynamic-lights.md 6.1: the classes with light elements, at the
+        // definition's priority.
+        let light = |program, alpha_ref: Option<u8>| {
+            Some(LightElement {
+                program,
+                alpha_ref: alpha_ref.unwrap_or(0),
+                priority: s.priority,
+            })
+        };
+        let blended = def.boolean("Alpha-blend").unwrap_or(false);
+        s.light = match def.tag.as_str() {
+            "LM      " | "LmEbB   " | "BmmDold " => light(LightProgram::LightMapped, None),
+            "LM_AREF " if !blended => light(LightProgram::LightMapped, aref(def)),
+            "V       " => light(LightProgram::VertexLit, None),
+            "V_AREF  " => light(LightProgram::VertexLit, aref(def)),
+            "D_TREE  " => light(LightProgram::Tree, None),
+            "MODEL   " if def.boolean("Use alpha-channel").unwrap_or(false) => {
+                light(LightProgram::Model, aref(def))
+            }
+            "MODEL   " | "MODELEbB" => light(LightProgram::Model, None),
+            _ => None,
+        };
         Ok(s)
     }
 }
@@ -281,7 +314,10 @@ fn environment_map(def: &Definition) -> Option<String> {
 fn scripted(module: &str, t0: Option<String>) -> Result<Surface<String>, NotDrawn> {
     let base = [t0, None, None, None];
     Ok(match module {
-        "selflight" => surface(Program::SelfLight, base),
+        "selflight" => Surface {
+            light: scripted_light(LightProgram::VertexLit),
+            ..surface(Program::SelfLight, base)
+        },
         "effects_lightplanes" => Surface {
             fog: false,
             depth_write: false,
@@ -295,6 +331,7 @@ fn scripted(module: &str, t0: Option<String>) -> Result<Surface<String>, NotDraw
             blend: Blend::Alpha,
             alpha_ref: Some(0),
             priority: 2,
+            light: scripted_light(LightProgram::Wallmark),
             ..surface(Program::Wallmark, base)
         },
         "details_lod" => {
@@ -303,7 +340,10 @@ fn scripted(module: &str, t0: Option<String>) -> Result<Surface<String>, NotDraw
             ));
         }
         // The objects' scripted model shaders (level-objects.md 5.2).
-        "models_selflight" | "models_selflightl" => surface(Program::ModelSelfLight, base),
+        "models_selflight" | "models_selflightl" => Surface {
+            light: scripted_light(LightProgram::Model),
+            ..surface(Program::ModelSelfLight, base)
+        },
         // Additive source-alpha / one, depth write off; fog off, alpha ref 0
         // and priority 2 as `effects\lightplanes` (our choice: the spec
         // gives only blending, depth write and the fade).
@@ -599,5 +639,56 @@ mod tests {
             (Program::Wallmark, Blend::Alpha, false, Some(0), 2)
         );
         assert!(resolve("details\\lod/level_lods").is_err());
+    }
+
+    #[test]
+    fn light_elements() {
+        // dynamic-lights.md 6.1.
+        let light = |entry: &str| {
+            resolve(entry)
+                .unwrap()
+                .light
+                .map(|l| (l.program, l.alpha_ref, l.priority))
+        };
+        assert_eq!(
+            light("default/mtl\\mtl_a,lmap#5_1,lmap#5_2"),
+            Some((LightProgram::LightMapped, 0, 1))
+        );
+        assert_eq!(
+            light("def_shaders\\def_vertex/mtl\\a"),
+            Some((LightProgram::VertexLit, 0, 1))
+        );
+        // `LM_AREF ` with alpha blending: none (and priority 2).
+        assert_eq!(light("def_shaders\\def_trans/a,b,c"), None);
+        assert_eq!(
+            light("flora\\leaf_wave/trees\\a"),
+            Some((LightProgram::Tree, 0, 1))
+        );
+        assert_eq!(
+            light("levels\\escape_grass/terrain\\a,b"),
+            Some((LightProgram::LightMapped, 0, 1))
+        );
+        assert_eq!(
+            light("models\\model/wood\\a"),
+            Some((LightProgram::Model, 0, 1))
+        );
+        assert_eq!(
+            light("models\\model_aref/wood\\a"),
+            Some((LightProgram::Model, 128, 1))
+        );
+        // Scripted: the helpers' alpha reference 0 and priority 1.
+        assert_eq!(
+            light("selflight/mtl\\lamp"),
+            Some((LightProgram::VertexLit, 0, 1))
+        );
+        assert_eq!(
+            light("effects\\wallmarkblend/wm\\a"),
+            Some((LightProgram::Wallmark, 0, 1))
+        );
+        assert_eq!(
+            light("models\\selflight/a"),
+            Some((LightProgram::Model, 0, 1))
+        );
+        assert_eq!(light("models\\lightplanes/a"), None);
     }
 }

@@ -61,7 +61,8 @@ const NEAR_DISTANCE: f32 = 44.0;
 const DETAIL_FADE: f32 = 0.02;
 
 struct Out {
-    @builtin(position) clip: vec4<f32>,
+    // Invariant: the light passes draw the same positions again.
+    @invariant @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
     // Light-map coordinate (light-mapped) or detail coordinate.
     @location(1) uv2: vec2<f32>,
@@ -273,6 +274,19 @@ fn fs_vert(in: Out) -> @location(0) vec4<f32> {
     return finish(c, b.a, in);
 }
 
+// The waving position of tree_w (section 7.3).
+fn tree_wave(world: vec3<f32>, x: mat4x4<f32>, m: vec4<f32>) -> vec3<f32> {
+    var p = world;
+    let frac = m.z / 2048.0;
+    let h = p.y - x[3].y;
+    let phi = frame.wave.w + dot(p, frame.wave.xyz);
+    let s = 2.0 * sqrt(2.0) * fract(phi) - sqrt(2.0);
+    let c = s * s - 1.0;
+    p.x += frame.wind.x * h * c * frac;
+    p.z += frame.wind.z * h * c * frac;
+    return p;
+}
+
 // tree_w / tree_s (with _dt), section 7.3.
 @vertex
 fn vs_tree(v: TreeVertex) -> Out {
@@ -283,13 +297,7 @@ fn vs_tree(v: TreeVertex) -> Out {
     var p = (x * vec4(v.position, 1.0)).xyz;
     // Element 0 of a tree without object LOD waves; everything else stays.
     if near(d) && d.flags.y < 0.5 {
-        let frac = m.z / 2048.0;
-        let h = p.y - x[3].y;
-        let phi = frame.wave.w + dot(p, frame.wave.xyz);
-        let s = 2.0 * sqrt(2.0) * fract(phi) - sqrt(2.0);
-        let c = s * s - 1.0;
-        p.x += frame.wind.x * h * c * frac;
-        p.z += frame.wind.z * h * c * frac;
+        p = tree_wave(p, x, m);
     }
     var out = start(d, p, detail);
     let nw = (x * vec4(unpack_vec(v.normal), 0.0)).xyz;
@@ -305,15 +313,21 @@ fn vs_tree(v: TreeVertex) -> Out {
     return out;
 }
 
+// The wall marks' position pushed off the surface (section 8.3).
+fn wmark_position(position: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
+    let e = frame.eye.xyz;
+    var p = position + 0.007 * n;
+    let s = mix(0.003, 0.011, length(e - position));
+    p -= normalize(frame.forward.xyz + normalize(p - e)) * s;
+    return p;
+}
+
 // wmark (section 8.3).
 @vertex
 fn vs_wmark(v: VertexLit) -> Out {
     let d = draws[v.draw];
     let n = unpack_vec(v.normal);
-    let e = frame.eye.xyz;
-    var p = v.position + 0.007 * n;
-    let s = mix(0.003, 0.011, length(e - v.position));
-    p -= normalize(frame.forward.xyz + normalize(p - e)) * s;
+    let p = wmark_position(v.position, n);
     var out = start(d, p, false);
     out.uv = base_uv(v.tc0, v.tangent, v.binormal);
     out.c0 = vec4(vertex_light(v, n), 0.0);
@@ -444,4 +458,125 @@ fn vs_model_lplanes(v: ModelVertex) -> Out {
     let nv = normalize((frame.view * vec4(m.n, 0.0)).xyz);
     out.c0 = vec4(0.0, 0.0, 0.0, abs(dot(pv, nv)));
     return out;
+}
+
+// The dynamic light passes (docs/behavior/dynamic-lights.md section 6):
+// elements 2 (point, `add_point`) and 3 (spot, `add_spot`) of the
+// shaders that have them, drawn again over the lit geometry, adding.
+
+struct Light {
+    // L_dynamic_pos: the light's position, 0.5 / r (point) or 1 / r (spot).
+    pos: vec4<f32>,
+    // L_dynamic_color: the colour times the fade, alpha 1.
+    color: vec4<f32>,
+    // L_dynamic_xform (spot passes).
+    xform: mat4x4<f32>,
+    // x: 1 for a spot pass, 0 for a point pass.
+    kind: vec4<f32>,
+}
+
+@group(2) @binding(0) var<uniform> light: Light;
+// s_lmap and s_att: clamped, linear, the first level only (section 6.2).
+@group(2) @binding(1) var t_lmap: texture_2d<f32>;
+@group(2) @binding(2) var t_att: texture_2d<f32>;
+@group(2) @binding(3) var s_att: sampler;
+
+struct LightOut {
+    @invariant @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    // c, a colour output (clamped).
+    @location(1) c: vec4<f32>,
+    // t₁ with its divisor (spot: projective; point: 1), and t₂.
+    @location(2) t1: vec3<f32>,
+    @location(3) t2: vec2<f32>,
+    // The light elements' alpha reference.
+    @location(4) @interpolate(flat) aref: f32,
+}
+
+// Section 6.3's vertex stage at world position p with normal n.
+fn light_vertex(d: Draw, p: vec3<f32>, n: vec3<f32>, uv: vec2<f32>) -> LightOut {
+    var out: LightOut;
+    out.clip = frame.view_projection * vec4(p, 1.0);
+    // The projected-size measure, as in the camera's pass (5.5 rule 3).
+    if !visible(d) {
+        out.clip = vec4(2.0, 2.0, 2.0, 1.0);
+    }
+    out.uv = uv;
+    let l = normalize(p - light.pos.xyz);
+    let s = dot(n, -l);
+    out.c = saturate(light.color * s * fog_factor(p));
+    if light.kind.x > 0.5 {
+        let sigma = light.xform * vec4(p, 1.0);
+        out.t1 = vec3(sigma.x, sigma.y, sigma.w);
+        out.t2 = vec2(sigma.z, sigma.z);
+    } else {
+        let q = (p - light.pos.xyz) * light.pos.w + vec3(0.5);
+        out.t1 = vec3(q.x, q.z, 1.0);
+        out.t2 = q.xy;
+    }
+    out.aref = d.flags.z;
+    return out;
+}
+
+// lmap_*, impl_* (section 6.5): the vertex position and unpacked normal.
+@vertex
+fn vs_light_lmap(v: LightMapped) -> LightOut {
+    let d = draws[v.draw];
+    return light_vertex(d, v.position, unpack_vec(v.normal),
+        base_uv(v.tc0, v.tangent, v.binormal));
+}
+
+// vert_*, simple_*.
+@vertex
+fn vs_light_vert(v: VertexLit) -> LightOut {
+    let d = draws[v.draw];
+    return light_vertex(d, v.position, unpack_vec(v.normal),
+        base_uv(v.tc0, v.tangent, v.binormal));
+}
+
+// wmark_*: the wall mark's shifted position.
+@vertex
+fn vs_light_wmark(v: VertexLit) -> LightOut {
+    let d = draws[v.draw];
+    let n = unpack_vec(v.normal);
+    return light_vertex(d, wmark_position(v.position, n), n,
+        base_uv(v.tc0, v.tangent, v.binormal));
+}
+
+// tree_w_* (waving) unless the definition is object LOD (tree_s_*), with
+// the normal turned by X's rotation and normalised.
+@vertex
+fn vs_light_tree(v: TreeVertex) -> LightOut {
+    let d = draws[v.draw];
+    let x = d.transform;
+    let m = vec4<f32>(v.tc);
+    var p = (x * vec4(v.position, 1.0)).xyz;
+    if d.flags.y < 0.5 {
+        p = tree_wave(p, x, m);
+    }
+    let n = normalize((x * vec4(unpack_vec(v.normal), 0.0)).xyz);
+    return light_vertex(d, p, n, m.xy / 2048.0);
+}
+
+// model_def_*: the model at rest by the object's matrix.
+@vertex
+fn vs_light_model(v: ModelVertex) -> LightOut {
+    let d = draws[v.draw];
+    let m = model_point(d, v);
+    return light_vertex(d, m.p, m.n, m.uv);
+}
+
+// add_point / add_spot: C = 2 · B.rgb · B.a · a₁.rgb · a₂.rgb · c.rgb,
+// A = 2 · B.a · a₁.a · a₂.a · c.a, clamped, then the alpha test.
+@fragment
+fn fs_light(in: LightOut) -> @location(0) vec4<f32> {
+    let b = textureSample(t_base, s_aniso, in.uv);
+    let a1 = textureSample(t_lmap, s_att, in.t1.xy / in.t1.z);
+    let a2 = textureSample(t_att, s_att, in.t2);
+    let color = saturate(2.0 * b.rgb * b.a * a1.rgb * a2.rgb * in.c.rgb);
+    let alpha = saturate(2.0 * b.a * a1.a * a2.a * in.c.a);
+    if alpha * 255.0 <= in.aref {
+        discard;
+    }
+    return vec4(color, alpha);
 }

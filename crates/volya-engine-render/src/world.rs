@@ -134,6 +134,64 @@ impl Program {
     }
 }
 
+/// The vertex program of a surface's light elements (2 point, 3 spot;
+/// docs/behavior/dynamic-lights.md section 6.5), with `add_point` or
+/// `add_spot`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum LightProgram {
+    /// `lmap_*`, `impl_*` (the light-mapped layout).
+    LightMapped,
+    /// `vert_*`, `simple_*` (the vertex-lit layout).
+    VertexLit,
+    /// `wmark_*`.
+    Wallmark,
+    /// `tree_s_*` with object LOD, else `tree_w_*`.
+    Tree,
+    /// `model_def_*`.
+    Model,
+}
+
+impl LightProgram {
+    const ALL: [Self; 5] = [
+        Self::LightMapped,
+        Self::VertexLit,
+        Self::Wallmark,
+        Self::Tree,
+        Self::Model,
+    ];
+
+    fn entry_point(self) -> &'static str {
+        match self {
+            Self::LightMapped => "vs_light_lmap",
+            Self::VertexLit => "vs_light_vert",
+            Self::Wallmark => "vs_light_wmark",
+            Self::Tree => "vs_light_tree",
+            Self::Model => "vs_light_model",
+        }
+    }
+
+    /// The vertex layout the program reads.
+    pub fn layout(self) -> VertexLayout {
+        match self {
+            Self::LightMapped => VertexLayout::Level(Layout::LightMapped),
+            Self::VertexLit | Self::Wallmark => VertexLayout::Level(Layout::VertexLit),
+            Self::Tree => VertexLayout::Level(Layout::Tree),
+            Self::Model => VertexLayout::Model,
+        }
+    }
+}
+
+/// A shader's light elements (dynamic-lights.md section 6.1): their vertex
+/// program, alpha reference and priority. Only priorities 0 and 1 are ever
+/// lit (section 5.5, rule 4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LightElement {
+    pub program: LightProgram,
+    /// Passes when alpha·255 > it.
+    pub alpha_ref: u8,
+    pub priority: u8,
+}
+
 /// Blending of a pass.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Blend {
@@ -164,6 +222,8 @@ pub struct Surface<T> {
     pub textures: [Option<T>; 4],
     /// The cube environment map (`MODELEbB`, level-objects.md 5.2).
     pub env: Option<T>,
+    /// The light elements, if the shader has them.
+    pub light: Option<LightElement>,
 }
 
 impl<T> Surface<T> {
@@ -186,6 +246,7 @@ impl<T> Surface<T> {
                 d.and_then(&mut f),
             ],
             env: self.env.and_then(&mut f),
+            light: self.light,
         }
     }
 }
@@ -308,8 +369,84 @@ pub struct WorldFrame {
     /// What shows where nothing is drawn (RGB, 0 … 1).
     pub clear: [f32; 3],
     /// The particle effects drawn (particle-drawing.md), each with its
-    /// place in the frame.
+    /// place in the frame, and the glows (glows.md section 6).
     pub particles: Vec<crate::particles::ParticleBatch>,
+    /// The frame's dynamic light passes in their order
+    /// (dynamic-lights.md 5.1).
+    pub lights: Vec<LightPass>,
+}
+
+/// One dynamic light's pass (docs/behavior/dynamic-lights.md sections 5,
+/// 6): the static draws and objects its frustum meets are drawn again
+/// with their light element, adding to the image.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LightPass {
+    /// Element 3 (spot) or 2 (point).
+    pub spot: bool,
+    /// `L_dynamic_pos`.
+    pub position: [f32; 4],
+    /// `L_dynamic_color`.
+    pub colour: [f32; 4],
+    /// `L_dynamic_xform`.
+    pub xform: Mat4,
+    /// M = V · Q_L: the light's frustum is its clip volume (5.3).
+    pub frustum: Mat4,
+}
+
+/// The attenuation textures of the light passes (section 6.4):
+/// `internal\internal_light_att`, `…_attclip`, `…_attpoint`.
+#[derive(Clone, Debug)]
+pub struct LightTextures {
+    pub att: Texture,
+    pub attclip: Texture,
+    pub attpoint: Texture,
+}
+
+/// Bytes of one light pass's constants, a uniform buffer offset apart.
+const LIGHT_SLOT: u64 = 256;
+/// Light passes the constants buffer holds at first; it grows beyond.
+const LIGHT_SLOTS: u64 = 64;
+
+/// A frustum's planes (a, b, c, d), `a x + b y + c z + d ≥ 0` inside,
+/// normalised, from a row-vector clip matrix (0 ≤ z ≤ w).
+fn frustum_planes(m: &Mat4) -> [[f32; 4]; 6] {
+    let col = |c: usize| [m[0][c], m[1][c], m[2][c], m[3][c]];
+    let (x, y, z, w) = (col(0), col(1), col(2), col(3));
+    let plane = |p: [f32; 4]| {
+        let l = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt().max(1e-20);
+        p.map(|v| v / l)
+    };
+    let add = |a: [f32; 4], b: [f32; 4], s: f32| std::array::from_fn(|i| a[i] + s * b[i]);
+    [
+        plane(add(w, x, 1.0)),
+        plane(add(w, x, -1.0)),
+        plane(add(w, y, 1.0)),
+        plane(add(w, y, -1.0)),
+        plane(z),
+        plane(add(w, z, -1.0)),
+    ]
+}
+
+/// Whether a sphere is not outside the planes by more than its radius.
+fn meets(planes: &[[f32; 4]; 6], s: [f32; 4]) -> bool {
+    planes
+        .iter()
+        .all(|p| p[0] * s[0] + p[1] * s[1] + p[2] * s[2] + p[3] >= -s[3])
+}
+
+/// A kept draw whose surface has light elements of priority 0 or 1
+/// (section 5.5, rule 4).
+#[derive(Clone, Copy, Debug)]
+struct LitDraw {
+    /// Its index among the kept draws (its record).
+    kept: u32,
+    program: LightProgram,
+    surface: u32,
+    vertex_buffer: u32,
+    index_buffer: u32,
+    first_vertex: u32,
+    first_index: u32,
+    index_count: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -331,6 +468,16 @@ pub(crate) struct WorldPipelines {
     white: wgpu::TextureView,
     white_cube: wgpu::TextureView,
     sky: SkyPipelines,
+    /// The light passes (dynamic-lights.md 6): their layout, pipelines,
+    /// the attenuation sampler, the constants (one slot per pass) and the
+    /// point and spot bind groups once the textures are given.
+    light_layout: wgpu::BindGroupLayout,
+    light_pipelines: HashMap<LightProgram, wgpu::RenderPipeline>,
+    light_sampler: wgpu::Sampler,
+    light_constants: wgpu::Buffer,
+    light_slots: u64,
+    light_textures: Option<LightTextures>,
+    light_groups: Option<[wgpu::BindGroup; 2]>,
 }
 
 fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
@@ -524,6 +671,98 @@ impl WorldPipelines {
             Default::default(),
             &[255; 24],
         );
+        // dynamic-lights.md 6.2: s_lmap and s_att clamp, linear, the first
+        // level only.
+        let light_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("s_att"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            lod_max_clamp: 0.0,
+            ..Default::default()
+        });
+        let light_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("world light"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: true,
+                        min_binding_size: wgpu::BufferSize::new(LIGHT_SLOT),
+                    },
+                    count: None,
+                },
+                texture_entry(1),
+                texture_entry(2),
+                sampler_entry(3),
+            ],
+        });
+        let light_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("world light"),
+                bind_group_layouts: &[
+                    Some(&frame_layout),
+                    Some(&surface_layout),
+                    Some(&light_layout),
+                ],
+                immediate_size: 0,
+            });
+        // One / one, the result added and clamped (section 6.2).
+        let add = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        };
+        let light_pipelines = LightProgram::ALL
+            .iter()
+            .map(|&program| {
+                let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some(program.entry_point()),
+                    layout: Some(&light_pipeline_layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: Some(program.entry_point()),
+                        compilation_options: Default::default(),
+                        buffers: &[Some(vertex_layout(program.layout()))],
+                    },
+                    primitive: wgpu::PrimitiveState {
+                        front_face: wgpu::FrontFace::Cw,
+                        cull_mode: Some(wgpu::Face::Back),
+                        ..Default::default()
+                    },
+                    // Depth test on (less or equal), write off.
+                    depth_stencil: Some(wgpu::DepthStencilState {
+                        format: DEPTH_FORMAT,
+                        depth_write_enabled: Some(false),
+                        depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                        stencil: Default::default(),
+                        bias: Default::default(),
+                    }),
+                    multisample: Default::default(),
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: Some("fs_light"),
+                        compilation_options: Default::default(),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format,
+                            blend: Some(wgpu::BlendState {
+                                color: add,
+                                alpha: add,
+                            }),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                    }),
+                    multiview_mask: None,
+                    cache: None,
+                });
+                (program, pipeline)
+            })
+            .collect();
         Self {
             format,
             frame_layout,
@@ -538,6 +777,72 @@ impl WorldPipelines {
                 ..Default::default()
             }),
             sky: SkyPipelines::new(device, format),
+            light_layout,
+            light_pipelines,
+            light_sampler,
+            light_constants: light_buffer(device, LIGHT_SLOTS),
+            light_slots: LIGHT_SLOTS,
+            light_textures: None,
+            light_groups: None,
+        }
+    }
+
+    /// The point and spot bind groups over the constants and `textures`
+    /// (section 6.2: point `s_lmap` and `s_att` the round falloff; spot
+    /// `s_lmap` the projected pattern, `s_att` the depth falloff).
+    fn light_groups(&mut self, device: &wgpu::Device, textures: LightTextures) {
+        let view = |t: &Texture| {
+            t.texture.create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(wgpu::TextureViewDimension::D2),
+                array_layer_count: Some(1),
+                ..Default::default()
+            })
+        };
+        let group = |lmap: &Texture, att: &Texture| {
+            let (lmap, att) = (view(lmap), view(att));
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("world light"),
+                layout: &self.light_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &self.light_constants,
+                            offset: 0,
+                            size: wgpu::BufferSize::new(LIGHT_SLOT),
+                        }),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&lmap),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&att),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::Sampler(&self.light_sampler),
+                    },
+                ],
+            })
+        };
+        self.light_groups = Some([
+            group(&textures.attpoint, &textures.attpoint),
+            group(&textures.att, &textures.attclip),
+        ]);
+        self.light_textures = Some(textures);
+    }
+
+    /// Room for `passes` light passes' constants, grown as needed.
+    fn light_room(&mut self, device: &wgpu::Device, passes: u64) {
+        if passes <= self.light_slots {
+            return;
+        }
+        self.light_slots = passes.next_power_of_two();
+        self.light_constants = light_buffer(device, self.light_slots);
+        if let Some(t) = self.light_textures.take() {
+            self.light_groups(device, t);
         }
     }
 
@@ -604,6 +909,16 @@ impl WorldPipelines {
             })
         })
     }
+}
+
+/// The light passes' constants buffer for `slots` passes.
+fn light_buffer(device: &wgpu::Device, slots: u64) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("world lights"),
+        size: slots * LIGHT_SLOT,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
 }
 
 pub(crate) fn push_vec4(out: &mut Vec<u8>, v: [f32; 4]) {
@@ -707,6 +1022,8 @@ struct Inner {
     late: wgpu::RenderBundle,
     /// Step 6: strict-sorted draws, ordered each frame.
     strict: RefCell<Vec<(usize, WorldDraw)>>,
+    /// The draws light passes may draw again.
+    lit: Vec<LitDraw>,
     /// The bounding sphere each kept draw's record holds now.
     spheres: RefCell<Vec<[f32; 4]>>,
     sky: Option<SkyResources>,
@@ -824,7 +1141,8 @@ fn draw_record(surface: &Surface<Texture>, d: &WorldDraw, out: &mut Vec<u8>) {
         [
             f32::from(u8::from(surface.fog)),
             f32::from(u8::from(surface.object_lod)),
-            0.0,
+            // The light elements' alpha reference.
+            surface.light.map_or(0.0, |l| f32::from(l.alpha_ref)),
             0.0,
         ],
     );
@@ -1346,9 +1664,10 @@ impl Renderer {
         let queue = self.queue.clone();
         let format = self.format;
         let compat = self.compat;
-        let pipelines = self
-            .world_pipelines
-            .get_or_insert_with(|| WorldPipelines::new(&device, &queue, format, compat));
+        if self.world_pipelines.is_none() {
+            self.make_world_pipelines();
+        }
+        let pipelines = self.world_pipelines.as_mut().expect("made");
         buffer_bytes += object_buffer_bytes;
 
         // Draws that can be drawn: surface present, layouts agree. Object
@@ -1389,6 +1708,26 @@ impl Renderer {
             .collect();
         let skipped = draws.len() - kept.len();
         let object_draws = kept.iter().filter(|d| d.object.is_some()).count();
+        // The draws light passes may draw again (dynamic-lights.md 5.5
+        // rule 4), grouped by program and surface.
+        let mut lit: Vec<LitDraw> = (kept.iter().enumerate())
+            .filter_map(|(k, d)| {
+                let s = &surfaces[d.surface as usize];
+                let light = s.light.filter(|l| l.priority <= 1)?;
+                (light.program.layout() == s.program.layout()).then_some(LitDraw {
+                    kept: k as u32,
+                    program: light.program,
+                    surface: d.surface,
+                    vertex_buffer: d.vertex_buffer,
+                    index_buffer: d.index_buffer,
+                    first_vertex: d.first_vertex,
+                    first_index: d.first_index,
+                    index_count: d.index_count,
+                })
+            })
+            .collect();
+        lit.sort_by_key(|l| (l.program as u8, l.surface, l.vertex_buffer, l.index_buffer));
+        lit.shrink_to_fit();
 
         let mut records = Vec::with_capacity(kept.len().max(1) * DRAW_BYTES);
         for d in &kept {
@@ -1665,6 +2004,7 @@ impl Renderer {
             early,
             late,
             strict: RefCell::new(strict),
+            lit,
             spheres: RefCell::new(kept.iter().map(|d| d.sphere).collect()),
             sky,
             sky_error,
@@ -1840,6 +2180,8 @@ impl Renderer {
         sorted.sort_by(|a, b| b.0.total_cmp(&a.0));
 
         let depth = self.depth_view(size.0, size.1);
+        let lights = self.prepare_lights(frame, &view_projection);
+        let light_pipelines = self.world_pipelines.as_ref().filter(|_| !lights.is_empty());
         let [r, g, b] = frame.clear.map(f64::from);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("world"),
@@ -1879,6 +2221,45 @@ impl Renderer {
         if let Some((resources, sky_frame)) = sky {
             resources.draw(&mut pass, sky_frame, size);
         }
+        // The light passes follow the sky (dynamic-lights.md 5.1).
+        if let Some(p) = light_pipelines
+            && let Some(groups) = &p.light_groups
+        {
+            pass.set_bind_group(0, &inner.frame_group, &[]);
+            for (offset, spot, draws) in &lights {
+                pass.set_bind_group(2, &groups[usize::from(*spot)], &[*offset]);
+                let mut program = None;
+                let mut surface = None;
+                let mut buffers = None;
+                for &j in draws {
+                    let d = &inner.lit[j as usize];
+                    if program != Some(d.program) {
+                        program = Some(d.program);
+                        pass.set_pipeline(&p.light_pipelines[&d.program]);
+                    }
+                    if surface != Some(d.surface) {
+                        surface = Some(d.surface);
+                        pass.set_bind_group(1, &inner.surface_groups[d.surface as usize], &[]);
+                    }
+                    if buffers != Some((d.vertex_buffer, d.index_buffer)) {
+                        buffers = Some((d.vertex_buffer, d.index_buffer));
+                        pass.set_vertex_buffer(
+                            0,
+                            inner.vertex_buffers[d.vertex_buffer as usize].slice(..),
+                        );
+                        pass.set_index_buffer(
+                            inner.index_buffers[d.index_buffer as usize].slice(..),
+                            inner.index_formats[d.index_buffer as usize],
+                        );
+                    }
+                    pass.draw_indexed(
+                        d.first_index..d.first_index + d.index_count,
+                        d.first_vertex as i32,
+                        d.kept..d.kept + 1,
+                    );
+                }
+            }
+        }
         pass.execute_bundles([&inner.late]);
         if let Some((pipelines, prepared)) = particles {
             prepared.draw_queue(pipelines, &mut pass, ParticleQueue::Late);
@@ -1908,6 +2289,89 @@ impl Renderer {
                 instance..instance + 1,
             );
         }
+        // Step 7: the glows (glows.md section 4).
+        if let Some((pipelines, prepared)) = particles {
+            prepared.draw_queue(pipelines, &mut pass, ParticleQueue::Glow);
+        }
+    }
+
+    /// The world's pipelines for the current mode, with the light
+    /// textures given so far.
+    pub(crate) fn make_world_pipelines(&mut self) {
+        let mut p = WorldPipelines::new(&self.device, &self.queue, self.format, self.compat);
+        if let Some(t) = self.light_textures.clone() {
+            p.light_groups(&self.device, t);
+        }
+        self.world_pipelines = Some(p);
+    }
+
+    /// The draws the last frame's light passes drew, over all passes.
+    pub fn light_draws(&self) -> usize {
+        self.light_draws
+    }
+
+    /// Gives the light passes their attenuation textures
+    /// (dynamic-lights.md 6.4); without them no light pass is drawn.
+    pub fn set_light_textures(&mut self, textures: LightTextures) {
+        self.light_textures = Some(textures.clone());
+        if let Some(p) = &mut self.world_pipelines {
+            p.light_groups(&self.device, textures);
+        }
+    }
+
+    /// Writes the constants of `frame`'s light passes and returns each
+    /// pass with draws: its constants' offset, whether it is a spot pass,
+    /// and the lit draws (indices into the world's) that its frustum and
+    /// the camera's view-projection `camera` meet: a superset of those the
+    /// camera's pass submitted (section 5.5, rule 1, as level.md 9.2
+    /// allows); the projected-size rule 3 is the shaders' as in the
+    /// camera's pass.
+    // TODO(#347): the first-person models' part of each pass (section 5.5)
+    // waits for hud-scope.md item 26.
+    fn prepare_lights(&mut self, frame: &WorldFrame, camera: &Mat4) -> Vec<(u32, bool, Vec<u32>)> {
+        let Some(p) = self.world_pipelines.as_mut() else {
+            return Vec::new();
+        };
+        self.light_draws = 0;
+        if frame.lights.is_empty() || p.light_groups.is_none() {
+            return Vec::new();
+        }
+        p.light_room(&self.device, frame.lights.len() as u64);
+        let inner = &frame.world.0;
+        let spheres = inner.spheres.borrow();
+        // The lit draws the camera's frustum meets, once for every pass.
+        let camera = frustum_planes(camera);
+        let seen: Vec<u32> = (inner.lit.iter().enumerate())
+            .filter(|(_, d)| {
+                let s = spheres[d.kept as usize];
+                s[3] > 0.0 && meets(&camera, s)
+            })
+            .map(|(j, _)| j as u32)
+            .collect();
+        let mut constants = vec![0u8; frame.lights.len() * LIGHT_SLOT as usize];
+        let mut out = Vec::new();
+        for (i, l) in frame.lights.iter().enumerate() {
+            let planes = frustum_planes(&l.frustum);
+            let draws: Vec<u32> = (seen.iter().copied())
+                .filter(|&j| meets(&planes, spheres[inner.lit[j as usize].kept as usize]))
+                .collect();
+            if draws.is_empty() {
+                continue;
+            }
+            let at = i * LIGHT_SLOT as usize;
+            let mut bytes = Vec::with_capacity(112);
+            push_vec4(&mut bytes, l.position);
+            push_vec4(&mut bytes, l.colour);
+            push_mat(&mut bytes, &l.xform);
+            push_vec4(&mut bytes, [f32::from(u8::from(l.spot)), 0.0, 0.0, 0.0]);
+            constants[at..at + bytes.len()].copy_from_slice(&bytes);
+            out.push((at as u32, l.spot, draws));
+        }
+        if !out.is_empty() {
+            self.queue.write_buffer(&p.light_constants, 0, &constants);
+        }
+        self.light_draws = out.iter().map(|(_, _, d)| d.len()).sum();
+        out
     }
 }
 

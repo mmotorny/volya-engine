@@ -296,13 +296,12 @@ pub fn started() {
     }
 }
 
-/// The session's event: what the page told and the engine's build, backend
-/// and texture path.
+/// The session's event: what the page told and the engine's backend and
+/// texture path.
 fn session_event() {
     let gpu = serde_json::to_value(crate::gpu::status()).unwrap_or_default();
     let page = SESSION.with(|s| s.borrow().as_ref().map(|s| s.page.clone()));
     let mut args = args_of(&page.unwrap_or_default());
-    args.push(("build".into(), Value::Text(crate::build().into())));
     for key in ["state", "backend", "textures", "message"] {
         if let Some(v) = gpu.get(key).and_then(|v| v.as_str()) {
             args.push((format!("gpu_{key}"), Value::Text(v.into())));

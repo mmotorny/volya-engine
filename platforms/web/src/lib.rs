@@ -24,22 +24,14 @@ use volya_engine::formats::ui::Resolution;
 use wasm_bindgen::prelude::*;
 use web_sys::{OffscreenCanvas, WorkerGlobalScope};
 
-/// Starts the engine on the canvas transferred from the page. Without
-/// WebGPU the engine still starts; `status` reports why graphics are
-/// unavailable.
+/// Starts the engine on the canvas transferred from the page, drawing
+/// through WebGL 2 even where WebGPU works when `webgl` (the player's
+/// Graphics setting, #121). Without graphics the engine still starts;
+/// `status` reports why they are unavailable.
 #[wasm_bindgen]
-pub async fn start(canvas: OffscreenCanvas) {
-    gpu::init(canvas).await;
+pub async fn start(canvas: OffscreenCanvas, webgl: bool) {
+    gpu::init(canvas, webgl).await;
     diagnostics::started();
-}
-
-/// The wasm build running (static/wasm-build.js, #186).
-fn build() -> &'static str {
-    if cfg!(feature = "webgl") {
-        "webgl"
-    } else {
-        "webgpu"
-    }
 }
 
 /// The canvas's size in CSS pixels and the page's devicePixelRatio, on start
@@ -388,6 +380,9 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         // `{case}`: particle batches drawn through this backend (tests).
         #[cfg(feature = "test-ops")]
         "debug_draw_particles" => to_json(&gpu::debug_draw_particles(text("case"))?),
+        // `{case}`: a light pass or a glow drawn through this backend (tests).
+        #[cfg(feature = "test-ops")]
+        "debug_draw_lights" => to_json(&gpu::debug_draw_lights(text("case"))?),
         #[cfg(feature = "test-ops")]
         "particles_state" => to_json(&engine::particles_state()?),
         // `{frames}`: the placed effects' update cost in wasm.
@@ -466,9 +461,6 @@ struct Status {
     /// Frames the worker's loop has run.
     frames: u64,
     gpu: gpu::Status,
-    /// The wasm build running (static/wasm-build.js, #186): `webgpu`, or
-    /// `webgl` with WebGL 2 too.
-    build: &'static str,
 }
 
 /// Frames the worker's loop has run.
@@ -487,7 +479,6 @@ fn status() -> Status {
         },
         frames: frames(),
         gpu: gpu::status(),
-        build: build(),
     }
 }
 

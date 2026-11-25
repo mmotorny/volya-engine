@@ -523,6 +523,11 @@ export const tests = {
     assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
     // The level's objects (docs/behavior/level-objects.md section 7.1).
     assertEqual([s.level.objects.online, s.level.objects.with_model], [671, 352], "objects");
+    // Its lamps on, with their seven records; chunk 6's 40 records and the
+    // sun's two besides; 22 glows of its own and the lamps' 5
+    // (hanging-lamps.md 9.3, dynamic-lights.md 3.3, glows.md 7).
+    const lights = s.level.lights;
+    assertEqual([lights.lamps, lights.lamps_on, lights.records, lights.glows], [5, 5, 49, 27], "lights");
     assertEqual([s.intro?.items, s.intro?.kind], [1, "video"], "the intro plays");
     // The intro's 120 MB video streams from the file (#53): playing it
     // keeps the wasm heap near its size before.
@@ -540,7 +545,7 @@ export const tests = {
     assertEqual(shown.phase, "level", "still in the level");
     const byCaption = stages.map(([n, m]) => `${n} ${m}`).join(", ");
     assert(playing.wasm_heap_bytes <= WASM_HEAP_CAP, `wasm heap ${mib(playing.wasm_heap_bytes)} during the intro, over ${mib(WASM_HEAP_CAP)}; by caption (MiB): ${byCaption}; textures ${JSON.stringify(playing.textures)}`);
-    let note = `wasm heap by caption (MiB): ${byCaption}; "${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; intro skipped, wasm heap ${mib(before.wasm_heap_bytes)} before it, ${mib(playing.wasm_heap_bytes)} while it played`;
+    let note = `wasm heap by caption (MiB): ${byCaption}; "${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; intro skipped, wasm heap ${mib(before.wasm_heap_bytes)} before it, ${mib(playing.wasm_heap_bytes)} while it played; at the start ${lights.passes} light passes, ${lights.sprites} glows drawn`;
     if (gpu.state === "ready") {
       const { rgba } = await volya.call("debug_capture", { width: 256, height: 192 });
       const colours = new Set();
@@ -772,6 +777,23 @@ export const tests = {
     assert(answer.cross_color?.length === 4, `the crosshair's colour: ${answer.cross_color}`);
     const sources = ["frame", "crouch", "creep", "sprint", "segments", "spot"].reduce((n, k) => n + art[k].width * art[k].height * 4, 0);
     return `decoded in ${art.ms.toFixed(1)} ms (engine), ${art.totalMs.toFixed(1)} ms with the page's part; sources ${(sources / 1024).toFixed(0)} KiB, canvases ${(bytes / 1024).toFixed(0)} KiB at ${devicePixelRatio}x`;
+  },
+
+  "zoom: in the level the engine's layers take every touch, pinches are cancelled on the controls, the page is at scale 1": async () => {
+    needsGame();
+    const root = document.documentElement;
+    const controls = document.getElementById("touch-controls");
+    assert(root.hasAttribute("data-engine-input"), "the engine doesn't own the screen");
+    for (const el of [root, document.getElementById("view"), controls]) {
+      assertEqual(getComputedStyle(el).touchAction, "none", `touch-action of ${el.id || el.tagName.toLowerCase()}`);
+    }
+    // The guard cancels pinches on the controls' layer too (zoom.js).
+    for (const type of ["gesturestart", "gesturechange", "gestureend"]) {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      controls.dispatchEvent(event);
+      assert(event.defaultPrevented, `${type} not cancelled`);
+    }
+    assertEqual(visualViewport.scale, 1, "visualViewport.scale");
   },
 
   "the inventory: I opens it over the running level (a held W walks on, Control crouches under it), the outfit dragged to the backpack, bread eaten, the touch button opens it, the touchpad selects, opens the menu and drags, Escape and the exit button close it": async () => {
@@ -1628,6 +1650,59 @@ export const tests = {
     const seconds = (mine.at(-1).ts - mine.find((e) => e.ts > 0).ts) / 1e6;
     const bytes = mine.reduce((sum, e) => sum + JSON.stringify(e).length + 2, 0);
     return `${mine.length} events, ${(bytes / seconds).toFixed(0)} B/s over ${seconds.toFixed(0)} s; ${long.length} long frames (worst ${worst.toFixed(0)} ms); audio ${audio ? "running" : volya.audioState()}`;
+  },
+
+  "WebGL 2 chosen in Settings: Play starts the engine anew on it, and the level draws": async () => {
+    needsGame();
+    const { graphics } = volya;
+    if (!graphics.available.webgl2) skip("no WebGL 2 here");
+    if (!graphics.available.webgpu) skip("no WebGPU here: the New Games above drew through WebGL 2");
+    await volya.showSettings();
+    document.querySelector('#game input[name="graphics"][value="webgl2"]').click();
+    try {
+      await volya.refresh();
+      document.querySelector("#game button.play").click();
+      // Calls made while the engine starts anew fail: asked again.
+      for (const deadline = performance.now() + 30000; ; await sleep(100)) {
+        const s = await state().catch(() => null);
+        if (s?.phase === "startup" || s?.phase === "menu") break;
+        assert(performance.now() < deadline, `the game did not start: ${JSON.stringify(s)?.slice(0, 300)}`);
+      }
+      const { gpu: drawn } = await volya.status();
+      assertEqual([drawn.state, drawn.backend], ["ready", "webgl2"], "graphics");
+      // Escape skips the logos, then the title menu's New Game.
+      for (let s = await state(); s.phase !== "menu"; s = await state()) {
+        key("Escape");
+        await sleep(100);
+      }
+      await readRender();
+      pointer("pointermove", row(0));
+      await until((s) => s.menu?.selected === 0 && !s.menu.moving, "item 0", 5000);
+      key("Enter");
+      await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
+      key("Enter");
+      const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", drawn.textures === "etc2" ? 120000 : 60000);
+      assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
+      key("Escape");
+      await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
+      // Frame times over a few seconds of the level.
+      await sleep(3000);
+      const { rgba } = await volya.call("debug_capture", { width: 256, height: 192 });
+      const colours = new Set();
+      for (let i = 0; i < rgba.length; i += 4) colours.add((rgba[i] << 16) | (rgba[i + 1] << 8) | rgba[i + 2]);
+      assert(colours.size > 200, `${colours.size} colours`);
+      const stats = await volya.call("level_stats");
+      return `${drawn.backend}, textures ${drawn.textures}; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; ${colours.size} colours; ${JSON.stringify(stats)}`;
+    } finally {
+      localStorage.removeItem("volya-engine.graphics");
+      // Leaves the game for the tests after (a failure above is the one told).
+      if ((await state()).phase !== "none") {
+        if ((await state()).menu) key("Escape");
+        await sleep(100);
+        key("KeyQ");
+        await until((s) => s.phase === "none", "the game to end").catch((e) => console.warn(e.message));
+      }
+    }
   },
 
   "forgets the game": async () => {

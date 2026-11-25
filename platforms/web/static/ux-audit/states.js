@@ -126,7 +126,21 @@ export const SECTIONS = [
   {
     title: "Settings",
     states: [
-      { id: "settings", name: "Imported game", game: imported, screen: "settings" },
+      { id: "settings", name: "Imported game; WebGPU and WebGL 2 supported", game: imported, screen: "settings" },
+      {
+        id: "settings-no-webgpu",
+        name: "WebGPU not supported by this browser",
+        game: imported,
+        screen: "settings",
+        graphics: { available: { webgpu: false, webgl2: true } },
+      },
+      {
+        id: "settings-webgl2",
+        name: "WebGL 2 chosen",
+        game: imported,
+        screen: "settings",
+        graphics: { chosen: "webgl2" },
+      },
       { id: "settings-checking", name: "Check for updates pressed: checking", game: imported, screen: "settings", check: "checking" },
       { id: "settings-up-to-date", name: "Checked: up to date (for a few seconds)", game: imported, screen: "settings", check: "none" },
       { id: "settings-check-offline", name: "Checked while offline (for a few seconds)", game: imported, screen: "settings", check: "offline" },

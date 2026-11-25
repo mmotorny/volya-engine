@@ -31,6 +31,7 @@ use crate::core::vfs::{self, Vfs};
 use crate::data::GameData;
 use crate::render::world::{ObjectGeometry, model_vertex};
 use volya_engine_formats::cp1251;
+use volya_engine_formats::lanims;
 use volya_engine_formats::model::{self, Mat4, Model, transform, transform_point};
 use volya_engine_formats::object::{HangingLamp, Kind, Object, ObjectRecord, TraderLike};
 
@@ -413,7 +414,7 @@ pub struct Light {
     /// Cone angle, radians (spot lights).
     pub cone: f32,
     pub texture: String,
-    /// An entry of `lanims.xr`; its animation is out of scope.
+    /// An entry of `lanims.xr` (docs/behavior/hanging-lamps.md 4.3).
     pub colour_animator: String,
     /// Translation row of the placement matrix (believed).
     pub position: [f32; 3],
@@ -432,18 +433,35 @@ pub struct Glow {
     pub position: [f32; 3],
 }
 
-/// The lights of a hanging lamp (section 6).
+/// The lights of a hanging lamp (section 6; docs/behavior/hanging-lamps.md
+/// 2, 3), at rest.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct LampLights {
     pub name: String,
+    /// Its simulation id.
+    pub id: u16,
+    /// Online at the start.
+    pub online: bool,
+    /// The record's health.
+    pub health: f32,
+    pub brightness: f32,
+    pub ambient_power: f32,
     /// The lamp's health is above 0.
     pub on: bool,
     /// Light flags bit 0x01.
     pub physics_shell: bool,
+    /// The lamp has a model.
+    pub has_model: bool,
     pub main: Light,
     /// Bit 0x20.
     pub ambient: Option<Light>,
     pub glow: Option<Glow>,
+    /// The main light's matrix M = B(light bone) · X, and the ambient
+    /// light's M′ (hanging-lamps.md 4.2), at rest.
+    #[serde(skip)]
+    pub main_matrix: Mat4,
+    #[serde(skip)]
+    pub ambient_matrix: Mat4,
 }
 
 /// Light flags (section 6).
@@ -460,7 +478,7 @@ fn row(m: &Mat4, r: usize) -> [f32; 3] {
 /// (`None` without a visual): each light's matrix is its bone's bind
 /// matrix · X, or X when the bone is not one of the visual's.
 pub fn lamp_lights(
-    name: &str,
+    object: (&str, u16, bool),
     lamp: &HangingLamp,
     x: &Mat4,
     model: Option<&LoadedModel>,
@@ -472,8 +490,9 @@ pub fn lamp_lights(
             None => *x,
         }
     };
+    // hanging-lamps.md 3.2: (v × K) × brightness, each product in f32.
     let c = lamp.colour;
-    let rgb = [(c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF].map(|v| v as f32 / 255.0);
+    let rgb = [(c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF].map(|v| v as f32 * lanims::K);
     let main_m = place(&lamp.light_bone);
     let main = Light {
         kind: if flags & LAMP_SPOT != 0 {
@@ -491,13 +510,12 @@ pub fn lamp_lights(
         direction: row(&main_m, 2),
         right: row(&main_m, 0),
     };
+    // hanging-lamps.md 3.4, 4.2, 10: an empty ambient bone is no bone, so
+    // the ambient light is placed at X (every record is of version 118;
+    // the light bone stands in only in older records).
+    let ambient_m = place(&lamp.ambient_light_bone);
     let ambient = (flags & LAMP_AMBIENT != 0).then(|| {
-        let bone = if lamp.ambient_light_bone.is_empty() {
-            &lamp.light_bone
-        } else {
-            &lamp.ambient_light_bone
-        };
-        let m = place(bone);
+        let m = ambient_m;
         Light {
             kind: LightKind::Point,
             shadows: false,
@@ -517,9 +535,17 @@ pub fn lamp_lights(
         position: main.position,
     });
     LampLights {
-        name: name.to_owned(),
+        name: object.0.to_owned(),
+        id: object.1,
+        online: object.2,
+        health: lamp.health,
+        brightness: lamp.brightness,
+        ambient_power: lamp.ambient_power,
+        main_matrix: main_m,
+        ambient_matrix: ambient_m,
         on: lamp.health > 0.0,
         physics_shell: flags & LAMP_PHYSICS != 0,
+        has_model: model.is_some(),
         main,
         ambient,
         glow,
@@ -594,8 +620,23 @@ pub fn spawn(
         if let Object::HangingLamp(lamp) = &o.record.object {
             let h = &o.record.header;
             let x = transform(h.position, h.angles);
+            let model = model.map(|m| &s.models[m]);
+            // hanging-lamps.md 3.4 step 4: a physics shell's fixed bones
+            // (comma-separated; empty: the root) must be bones of the
+            // model. The shell itself is not built (TODO(#347)); with the
+            // flag and no model the game logs a warning, which Volya
+            // Engine has nowhere to write.
+            if lamp.light_flags & LAMP_PHYSICS != 0
+                && let Some(m) = model
+            {
+                for bone in lamp.fixed_bones.split(',').filter(|b| !b.is_empty()) {
+                    if !m.bones.iter().any(|(n, _)| n == bone) {
+                        return Err(invalid(format!("{}: wrong fixed bone", h.name)));
+                    }
+                }
+            }
             s.lamps
-                .push(lamp_lights(&h.name, lamp, &x, model.map(|m| &s.models[m])));
+                .push(lamp_lights((&h.name, o.id, o.online), lamp, &x, model));
         }
     }
     let mut by_class: Vec<(String, usize)> = classes
@@ -819,32 +860,43 @@ mod tests {
             meshes: Vec::new(),
             bones: vec![("bone_lamp".into(), bone)],
         };
-        let l = lamp_lights("tv", &lamp, &x, Some(&model));
+        let l = lamp_lights(("tv", 7, true), &lamp, &x, Some(&model));
         assert_eq!(
             (l.main.kind, l.main.shadows, l.on),
             (LightKind::Spot, false, true)
         );
         assert!(!l.physics_shell);
+        // (v × K) × brightness (hanging-lamps.md 3.2).
+        let k = lanims::K;
         assert_eq!(
             l.main.colour,
-            [0.5 * 128.0 / 255.0, 0.5 * 64.0 / 255.0, 0.5]
+            [128.0 * k * 0.5, 64.0 * k * 0.5, 255.0 * k * 0.5]
         );
+        assert_eq!((l.id, l.online, l.health), (7, true, 100.0));
         // At the bone: its bind matrix · X.
         assert_eq!(l.main.position, [1.0, 2.5, 3.0]);
         assert_eq!(l.main.direction, [0.0, -1.0, 0.0]);
         let ambient = l.ambient.expect("bit 0x20");
         assert_eq!((ambient.kind, ambient.range), (LightKind::Point, 3.0));
         assert_eq!(ambient.colour, l.main.colour.map(|c| c * 0.5));
+        // An empty ambient bone is no bone: at X (hanging-lamps.md 4.2).
+        assert_eq!(ambient.position, [1.0, 2.0, 3.0]);
         assert_eq!(l.glow.unwrap().position, [1.0, 2.5, 3.0]);
+        let at_bone = HangingLamp {
+            ambient_light_bone: "bone_lamp".into(),
+            ..lamp.clone()
+        };
+        let l = lamp_lights(("tv", 7, true), &at_bone, &x, Some(&model));
+        assert_eq!(l.ambient.unwrap().position, [1.0, 2.5, 3.0]);
         // Without the bone, at X.
-        let l = lamp_lights("tv", &lamp, &x, None);
+        let l = lamp_lights(("tv", 7, true), &lamp, &x, None);
         assert_eq!(l.main.position, [1.0, 2.0, 3.0]);
         let off = HangingLamp {
             health: 0.0,
             light_flags: 0xB55D,
             ..lamp
         };
-        let l = lamp_lights("lamp", &off, &x, None);
+        let l = lamp_lights(("lamp", 8, false), &off, &x, None);
         assert!(!l.on && l.physics_shell && l.ambient.is_none());
     }
 }

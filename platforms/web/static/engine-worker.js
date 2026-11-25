@@ -2,11 +2,14 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // The engine thread (docs/architecture.md). Messages from the page:
-//   { type: "start", canvas, size, diagnostics, previousEnd }  → { type: "started", build, diagnostics } | { type: "error", message }
-//   (`build`: the wasm build loaded, wasm-build.js; `diagnostics`: the
-//   session as diagnostics.js tells it when the player keeps a diagnostic
-//   log, else null, and in the reply the log's status; `previousEnd`: how
-//   an earlier session's page ended, kept by diagnostics.js)
+//   { type: "start", canvas, size, graphics, diagnostics, previousEnd }
+//     → { type: "started", available, backend, diagnostics } | { type: "error", message }
+//   (`graphics`: the stored Graphics choice or null; `available`: what the
+//   browser supports, `backend`: the one chosen, graphics.js; `diagnostics`:
+//   the session as diagnostics.js tells it when the player keeps a
+//   diagnostic log, else null, and in the reply the log's status;
+//   `previousEnd`: how an earlier session's page ended, kept by
+//   diagnostics.js)
 //   { type: "diag", kind, name, … }: the page's events for the diagnostic
 //   log (diagnostics.js), dropped while it is off.
 //   { type: "end", reason, message }: how the page ended (an uncaught
@@ -35,9 +38,10 @@
 // workers have it, otherwise on a 60 Hz timer; it idles while the page is
 // hidden, drawing nothing.
 
-import { loadEngine } from "./wasm-build.js";
+import init, * as wasm from "./pkg/volya_engine_web.js";
+import { choose, supported } from "./graphics.js";
 
-/** The wasm build's exports, once "start" loaded it (wasm-build.js). */
+/** The engine's exports, once "start" initialized them. */
 let engine = null;
 /** The engine's exports; throws until they are loaded. */
 const e = () => {
@@ -148,22 +152,25 @@ let audioPort = null;
 
 onmessage = async ({ data }) => {
   if (data.type === "start") {
-    let build;
+    let available, backend;
     let diagnostics = null;
     started = (async () => {
-      ({ build, module: engine } = await loadEngine());
+      available = await supported();
+      backend = choose(data.graphics, available);
+      await init();
+      engine = wasm;
       // The player's setting, before anything else runs (#346).
       if (data.diagnostics) {
         const args = { on: true, session: data.diagnostics, previous_end: data.previousEnd };
         diagnostics = JSON.parse(await engine.call("diagnostics_set", JSON.stringify(args)));
         logging = diagnostics.on;
       }
-      await engine.start(data.canvas);
+      await engine.start(data.canvas, backend === "webgl2");
       engine.resize(data.size.width, data.size.height, data.size.dpr);
     })();
     try {
       await started;
-      postMessage({ type: "started", build, diagnostics });
+      postMessage({ type: "started", available, backend, diagnostics });
       schedule();
     } catch (error) {
       postMessage({ type: "error", message: message(error) });

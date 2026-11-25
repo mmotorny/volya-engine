@@ -196,7 +196,7 @@ export const tests = {
     assert(registration.scope.endsWith("/volya-engine/"), `scope ${registration.scope}`);
   },
 
-  "the whole app works offline once installed, with only the wasm build it runs": async () => {
+  "the whole app works offline once installed": async () => {
     const registration = await navigator.serviceWorker.ready;
     // The page must be controlled to use the kept copies.
     if (!navigator.serviceWorker.controller) {
@@ -204,20 +204,13 @@ export const tests = {
     }
     assert(registration.active, "no active service worker");
     const precache = precacheOf(await (await fetch(`${base}sw.js`, { cache: "no-store" })).text());
-    // Of the two wasm builds (#186), the one this browser runs, which the
-    // page told the worker to keep once the engine started.
-    const { build } = await volya.status();
-    const files = precache.filter(([, , , b]) => !b || b === build).map(([path]) => path);
-    const others = precache.filter(([, , , b]) => b && b !== build).map(([path]) => path);
+    const files = precache.map(([path]) => path);
     assert(files.includes("./") && files.includes("index.html") && files.some((f) => f.endsWith(".wasm")), `files ${files.join(" ")}`);
-    assert(others.some((f) => f.endsWith(".wasm")), `no other wasm build: ${precache.map(([p]) => p).join(" ")}`);
     const cache = await caches.open("volya-engine-app");
     const kept = async (path) => Boolean(await cache.match(new URL(path, registration.scope).href));
     for (let i = 0; i < 100 && !(await Promise.all(files.map(kept))).every(Boolean); i++) {
       await new Promise((r) => setTimeout(r, 100));
     }
-    const downloaded = (await Promise.all(others.map(kept))).some(Boolean);
-    assert(!downloaded, `the other wasm build is kept too: ${others.join(" ")}`);
     const offline = (on) => fetch(`${base}__test/offline/${on ? "on" : "off"}`, { method: "POST" });
     await offline(true);
     try {
@@ -330,38 +323,81 @@ export const tests = {
     assertEqual(kept(), "c.css", "removed files are dropped on activation");
     assert(store.has(`${scope}__settings.json`), "settings dropped");
     assertEqual(removal.state.claimed, 1, "claims once active");
+  },
 
-    // Two wasm builds (#186): a browser keeps only the one it runs.
-    const builds = (gpu, gl) => [["c.css", "dddd", 300], ["pkg/e.wasm", gpu, 1000, "webgpu"], ["pkg-webgl/e.wasm", gl, 2000, "webgl"]];
-    await install("b5", builds("g1", "l1"));
-    assertEqual(downloaded.join(" "), "", "a wasm build kept before it is known to run");
-    const told5 = worker("b5", builds("g1", "l1"));
-    await told5.run("message", { type: "build", build: "webgl" });
-    assertEqual(downloaded.join(" "), "pkg-webgl/e.wasm", "the build the page runs");
-    downloaded = [];
-    await told5.run("message", { type: "build", build: "webgl" });
-    assertEqual(downloaded.join(" "), "", "a kept build again");
-    await told5.run("message", { type: "build", build: "none such" });
-    assertEqual(downloaded.join(" "), "", "an unknown build");
-    // Updates bring the kept build only, and count only it.
-    const both = await install("b6", builds("g2", "l2"));
-    assertEqual(downloaded.join(" "), "pkg-webgl/e.wasm", "update of the kept build");
-    assertEqual(JSON.stringify(told), '[{"type":"update-downloading","build":"b6","bytes":2000,"files":1}]', "update size");
-    await both.run("activate");
-    assertEqual(kept(), "c.css pkg-webgl/e.wasm", "kept after activation");
-    // Kept from before builds were recorded (one build, in pkg/): updated
-    // until the page says which it runs, then dropped if not that one.
-    store.clear();
-    store.set(`${scope}__precache.json`, new Response(JSON.stringify([["c.css", "dddd", 300], ["pkg/e.wasm", "g0", 1000]])));
-    store.set(`${scope}c.css`, new Response("css"));
-    store.set(`${scope}pkg/e.wasm`, new Response("old wasm"));
-    setSettings({ auto: true });
-    await install("b7", builds("g3", "l3"));
-    assertEqual(downloaded.join(" "), "pkg/e.wasm", "a build kept before builds were recorded");
-    downloaded = [];
-    await worker("b7", builds("g3", "l3")).run("message", { type: "build", build: "webgl" });
-    assertEqual(downloaded.join(" "), "pkg-webgl/e.wasm", "the build the page runs, after an old install");
-    assertEqual(kept(), "c.css pkg-webgl/e.wasm", "the build it doesn't run dropped");
+  "Graphics: the stored choice where the browser supports it, else the first option it supports": async () => {
+    const { choose } = await import(`${base}graphics.js`);
+    const both = { webgpu: true, webgl2: true };
+    const noWebgpu = { webgpu: false, webgl2: true };
+    assertEqual(choose(null, both), "webgpu", "default");
+    assertEqual(choose("webgl2", both), "webgl2", "chosen");
+    assertEqual(choose(null, noWebgpu), "webgl2", "default without WebGPU");
+    assertEqual(choose("webgpu", noWebgpu), "webgl2", "chosen, unsupported");
+    assertEqual(choose("webgpu", { webgpu: true, webgl2: false }), "webgpu", "without WebGL 2");
+    assertEqual(choose("webgl2", { webgpu: true, webgl2: false }), "webgpu", "WebGL 2 chosen, unsupported");
+    assertEqual(choose("webgl2", { webgpu: false, webgl2: false }), null, "neither");
+    assertEqual(choose("something else", both), "webgpu", "an unknown choice");
+  },
+
+  "Settings shows Graphics: what the browser can't run disabled, the backend used checked; a choice is stored": async () => {
+    const { graphics } = volya;
+    const { available } = graphics;
+    // What this page finds itself: a WebGPU adapter; WebGL 2 on a canvas.
+    const adapter = await navigator.gpu?.requestAdapter().catch(() => null);
+    assertEqual(available.webgpu, Boolean(adapter), "WebGPU supported");
+    const used = (await volya.status()).gpu.backend ?? null;
+    const before = localStorage.getItem("volya-engine.graphics");
+    // A choice the browser can't run (where there is one) gives way to the
+    // first it can, and stays stored.
+    const unsupported = ["webgpu", "webgl2"].find((b) => !available[b]);
+    if (unsupported) localStorage.setItem("volya-engine.graphics", unsupported);
+    try {
+      await volya.showSettings();
+      const options = [...document.querySelectorAll('#game input[name="graphics"]')];
+      const rows = options.map((o) => o.closest("label").textContent);
+      assertEqual(options.map((o) => o.value).join(" "), "webgpu webgl2", "options");
+      for (const [i, option] of options.entries()) {
+        const supported = Boolean(available[option.value]);
+        assertEqual(option.disabled, !supported, `${option.value} disabled`);
+        assertEqual(rows[i].includes("Not supported by this browser"), !supported, `${option.value}: ${rows[i]}`);
+      }
+      assert(rows[0].startsWith("WebGPU (Recommended)"), rows[0]);
+      assertEqual(options.find((o) => o.checked)?.value ?? null, used, "checked: the backend the engine runs");
+      if (unsupported) assertEqual(localStorage.getItem("volya-engine.graphics"), unsupported, "the stored choice kept");
+      // Picking another option the browser runs stores it.
+      const other = options.find((o) => !o.disabled && !o.checked);
+      if (other) {
+        other.click();
+        assertEqual(localStorage.getItem("volya-engine.graphics"), other.value, "stored");
+      }
+      return rows.join("; ");
+    } finally {
+      if (before === null) localStorage.removeItem("volya-engine.graphics");
+      else localStorage.setItem("volya-engine.graphics", before);
+      await volya.refresh();
+    }
+  },
+
+  "Graphics: WebGL 2 chosen, the engine starts anew drawing through it, also where WebGPU works": async () => {
+    const { graphics } = volya;
+    if (!graphics.available.webgl2) skip("no WebGL 2 here");
+    graphics.choose("webgl2");
+    try {
+      await graphics.apply();
+      const { gpu } = await volya.status();
+      assertEqual([gpu.state, gpu.backend], ["ready", "webgl2"], "graphics");
+      // It draws (the render suite's particle scene): green at half over
+      // red at half over black, read back from the renderer.
+      const info = await volya.call("debug_draw_particles", { case: "blend" });
+      const { rgba } = await volya.call("debug_capture", { width: 64, height: 64 });
+      const at = Array.from(rgba.slice(4 * (32 * 64 + 32), 4 * (32 * 64 + 32) + 3));
+      assert(at.every((v, i) => Math.abs(v - [64, 128, 0][i]) <= 3), `drawn ${at}`);
+      await volya.call("debug_draw", {});
+      return `${gpu.backend}, textures ${gpu.textures}${info.compat ? ", compat path" : ""}`;
+    } finally {
+      localStorage.removeItem("volya-engine.graphics");
+      await graphics.apply();
+    }
   },
 
   "a game the browser deleted is said so, on the import screen": async () => {
@@ -405,6 +441,16 @@ export const tests = {
     // Scrolled down to reach it, as on a short screen: Settings opens at its top.
     document.body.style.minHeight = "300vh";
     scrollTo(0, document.documentElement.scrollHeight);
+    // Settled before the tap, as a player's scroll is: iOS Safari scrolls
+    // asynchronously, and a scroll still on its way may land after the
+    // app's scroll to the top (measured: the iOS Simulator kept the bottom
+    // in 4 runs of 5 before this wait, in none of 3 since).
+    const frame = () => new Promise((r) => requestAnimationFrame(r));
+    for (let i = 0, last = -1; i < 50 && scrollY !== last; i++) {
+      last = scrollY;
+      await frame();
+      await frame();
+    }
     settings.click();
     for (let i = 0; i < 50 && !document.querySelector(".screen-head"); i++) await new Promise((r) => setTimeout(r, 20));
     const labels = [...document.querySelectorAll("#game .label")].map((l) => l.textContent);
@@ -412,7 +458,7 @@ export const tests = {
     for (let i = 0; i < 50 && scrollY !== 0; i++) await new Promise((r) => setTimeout(r, 20));
     assertEqual(scrollY, 0, "Settings opened scrolled");
     document.body.style.minHeight = "";
-    const toggle = document.querySelector("#game .switch input");
+    const toggle = document.querySelector('#game .switch input[type="checkbox"]');
     assert(toggle && toggle.checked, "automatic updates not on by default");
     assert(
       [...document.querySelectorAll("#game .panel button")].some((b) => b.textContent === "Check for updates"),
@@ -571,6 +617,45 @@ export const tests = {
     return result.shared ? "shared" : `exclusive: ${result.error}`;
   },
 
+  "zoom: the viewport forbids scaling, every element pans without zooming, the guard cancels pinches, the page is at scale 1": async () => {
+    // Safari ignores the viewport's limits in tabs (documented); the rest is
+    // what blocks zoom there (zoom.js). Real gestures: docs/testing.md.
+    const index = new DOMParser().parseFromString(await (await fetch(`${base}index.html`)).text(), "text/html");
+    const viewport = index.querySelector('meta[name="viewport"]').content;
+    assertEqual(viewport, "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover", "index.html's viewport");
+    assertEqual(document.querySelector('meta[name="viewport"]').content, viewport, "the test page's viewport");
+    const touchAction = (el) => getComputedStyle(el).touchAction;
+    const root = document.documentElement;
+    for (const el of [root, document.body, document.querySelector("main"), document.getElementById("status")]) {
+      assertEqual(touchAction(el), "pan-x pan-y", `touch-action of ${el.tagName.toLowerCase()}`);
+    }
+    // The engine's layers take every touch.
+    const controls = document.getElementById("touch-controls");
+    assert(controls, "the touch controls' layer");
+    assert(!root.hasAttribute("data-engine-input"), "the engine owns the screen");
+    root.toggleAttribute("data-engine-input", true);
+    try {
+      for (const el of [root, document.body, document.getElementById("view"), controls]) {
+        assertEqual(touchAction(el), "none", `touch-action of ${el.id || el.tagName.toLowerCase()} while the engine takes input`);
+      }
+    } finally {
+      root.toggleAttribute("data-engine-input", false);
+    }
+    // WebKit's gesture events and two-finger moves are cancelled; one-finger
+    // moves (scrolling) are not.
+    const cancelled = (type, touches) => {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      if (touches !== undefined) Object.defineProperty(event, "touches", { value: { length: touches } });
+      controls.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    for (const type of ["gesturestart", "gesturechange", "gestureend"]) assert(cancelled(type), `${type} not cancelled`);
+    assert(cancelled("touchmove", 2), "a two-finger touchmove not cancelled");
+    assert(!cancelled("touchmove", 1), "a one-finger touchmove cancelled");
+    assertEqual(visualViewport.scale, 1, "visualViewport.scale");
+    assert(!root.hasAttribute("data-zoomed"), "marked zoomed at scale 1");
+  },
+
   "diagnostic log: off by default, and nothing runs for it per frame": async () => {
     localStorage.removeItem("volya-engine.diagnostic-log");
     await volya.diagnostics.setEnabled(false, volya.call);
@@ -612,7 +697,7 @@ export const tests = {
     const meta = find("M", "process_name")[0];
     assert(meta?.args.name.startsWith("Volya Engine "), "no process name");
     const session = find("i", "session")[0].args;
-    for (const key of ["version", "user_agent", "screen", "dpr", "cores", "build", "gpu_state"]) assert(key in session, `session lacks ${key}`);
+    for (const key of ["version", "user_agent", "screen", "dpr", "cores", "gpu_state"]) assert(key in session, `session lacks ${key}`);
     if (session.gpu_state === "ready") assert(["webgpu", "webgl2"].includes(session.gpu_backend) && session.gpu_textures, "no backend");
     assert(find("i", "test marker")[0]?.tid === 2, "no page event");
     // A period's series: the spans' times, the metrics and counts.
