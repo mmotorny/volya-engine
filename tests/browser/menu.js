@@ -542,9 +542,11 @@ export const tests = {
     // Its lamps on, with their seven records; chunk 6's 40 records and the
     // sun's two besides; 22 glows of its own and the lamps' 5
     // (hanging-lamps.md 9.3, dynamic-lights.md 3.3, glows.md 7); the
-    // player's torch's two records and glow, off (torch.md 12).
+    // player's torch's two records and glow, off (torch.md 12); the
+    // record of `esc_af_medusa`, the artefact online at the start, off
+    // (artefact-idle-effects.md 8).
     const lights = s.level.lights;
-    assertEqual([lights.lamps, lights.lamps_on, lights.records, lights.glows], [5, 5, 51, 28], "lights");
+    assertEqual([lights.lamps, lights.lamps_on, lights.records, lights.glows], [5, 5, 52, 28], "lights");
     assert(s.level.torch?.attached && !s.level.torch.on, "the torch attached and off");
     assertEqual([s.intro?.items, s.intro?.kind], [1, "video"], "the intro plays");
     // The intro's 120 MB video streams from the file (#53): playing it
