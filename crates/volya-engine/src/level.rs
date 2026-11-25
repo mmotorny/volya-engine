@@ -689,6 +689,7 @@ fn locate_texture(tree: &dyn Vfs, data: &GameData, dir: &str, name: &str) -> io:
 fn particle_shaders(
     tree: &dyn Vfs,
     data: &GameData,
+    definitions: &HashMap<String, shaders_xr::Definition>,
     effects: &PlacedEffects,
     locate: &mut dyn FnMut(&str) -> io::Result<String>,
 ) -> io::Result<(Vec<Option<ParticleShader<String>>>, Vec<(String, String)>)> {
@@ -720,15 +721,7 @@ fn particle_shaders(
             }
         }
     }
-    let aliases = &data.aliases;
-    let definitions: HashMap<String, shaders_xr::Definition> = shaders_xr::parse(&vfs::read(
-        tree,
-        &aliases.path("$game_data$", "shaders.xr")?,
-    )?)?
-    .into_iter()
-    .map(|d| (d.name.clone(), d))
-    .collect();
-    let shader_dir = aliases.path("$game_shaders$", "r1")?;
+    let shader_dir = data.aliases.path("$game_shaders$", "r1")?;
     let scripted = |module: &str| {
         vfs::read(tree, &format!("{shader_dir}\\{module}.s"))
             .is_ok_and(|text| shading::defines_normal_or_special(&String::from_utf8_lossy(&text)))
@@ -739,7 +732,7 @@ fn particle_shaders(
         let Some(sprite) = effect.sprite.as_ref().filter(|_| wanted[i]) else {
             continue;
         };
-        match particle_drawing::resolve(&definitions, &scripted, &sprite.shader, &sprite.texture) {
+        match particle_drawing::resolve(definitions, &scripted, &sprite.shader, &sprite.texture) {
             Ok(shader) => {
                 let mut paths = HashMap::new();
                 for t in shader.textures() {
@@ -764,6 +757,8 @@ struct Resolved {
     object_surfaces: Vec<Option<u32>>,
     /// Object entries not drawn, with why.
     objects_not_drawn: Vec<(String, String)>,
+    /// `shaders.xr`'s definitions, by name.
+    definitions: HashMap<String, shaders_xr::Definition>,
 }
 
 /// The surfaces of the shader entries `draw_items` use and of the objects'
@@ -877,6 +872,7 @@ fn resolve_surfaces(
         not_drawn,
         object_surfaces,
         objects_not_drawn,
+        definitions,
     })
 }
 
@@ -1162,6 +1158,7 @@ impl NewGameLoad {
                 self.draw_surfaces = resolved.draw_surfaces;
                 self.not_drawn = resolved.not_drawn;
                 self.objects_not_drawn = resolved.objects_not_drawn;
+                let definitions = resolved.definitions;
                 // The sky's textures for every hourly section of the cycle
                 // (sky.md 3.2; the weather effects' are not, our choice):
                 // cube maps, cloud textures and the sun sprites of their
@@ -1199,7 +1196,8 @@ impl NewGameLoad {
                 // (particle-drawing.md 5.1), their textures located like
                 // the level's.
                 if let Some((effects, _)) = &self.effects {
-                    let (shaders, not_drawn) = particle_shaders(tree, data, effects, &mut locate)?;
+                    let (shaders, not_drawn) =
+                        particle_shaders(tree, data, &definitions, effects, &mut locate)?;
                     self.particle_shaders = shaders;
                     self.not_drawn.extend(not_drawn);
                 }

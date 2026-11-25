@@ -118,7 +118,6 @@ struct PipelineKey {
 /// Pipelines and fixed resources for drawing particles into one format.
 pub(crate) struct ParticlePipelines {
     format: wgpu::TextureFormat,
-    frame_layout: wgpu::BindGroupLayout,
     texture_layout: wgpu::BindGroupLayout,
     layout: wgpu::PipelineLayout,
     shader: wgpu::ShaderModule,
@@ -131,6 +130,10 @@ pub(crate) struct ParticlePipelines {
     /// (0, 0, 0, 1): `s_distort` without a texture.
     black: wgpu::TextureView,
     frame: wgpu::Buffer,
+    frame_group: wgpu::BindGroup,
+    /// The frames' vertex and index buffers, kept and grown.
+    vertices: Option<wgpu::Buffer>,
+    indices: Option<wgpu::Buffer>,
     compose_layout: wgpu::BindGroupLayout,
     compose: wgpu::RenderPipeline,
     compose_sampler: wgpu::Sampler,
@@ -360,9 +363,16 @@ impl ParticlePipelines {
             multiview_mask: None,
             cache: None,
         });
+        let frame_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("particle frame"),
+            layout: &frame_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: frame.as_entire_binding(),
+            }],
+        });
         Self {
             format,
-            frame_layout,
             texture_layout,
             layout,
             shader,
@@ -372,6 +382,9 @@ impl ParticlePipelines {
             linear,
             black,
             frame,
+            frame_group,
+            vertices: None,
+            indices: None,
             compose_layout,
             compose,
             compose_sampler,
@@ -545,30 +558,29 @@ impl ParticlePipelines {
                 indices: start..index_data.len() as u32,
             });
         }
-        let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("particle vertices"),
-            contents: &vertex_bytes,
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("particle indices"),
-            contents: &index_data
-                .iter()
-                .flat_map(|i| i.to_le_bytes())
-                .collect::<Vec<u8>>(),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-        let frame_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("particle frame"),
-            layout: &self.frame_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: self.frame.as_entire_binding(),
-            }],
-        });
+        // Kept from frame to frame, grown as needed, and written with
+        // `Queue::write_buffer`, which copies nothing into the wasm heap on
+        // the web (unlike a buffer mapped at creation).
+        let index_bytes: Vec<u8> = index_data.iter().flat_map(|i| i.to_le_bytes()).collect();
+        let vertices = grown(
+            device,
+            &mut self.vertices,
+            vertex_bytes.len() as u64,
+            wgpu::BufferUsages::VERTEX,
+            "particle vertices",
+        );
+        let indices = grown(
+            device,
+            &mut self.indices,
+            index_bytes.len() as u64,
+            wgpu::BufferUsages::INDEX,
+            "particle indices",
+        );
+        queue.write_buffer(&vertices, 0, &vertex_bytes);
+        queue.write_buffer(&indices, 0, &index_bytes);
         Some(PreparedFrame {
             draws,
-            frame_group,
+            frame_group: self.frame_group.clone(),
             vertices,
             indices,
         })
@@ -661,6 +673,26 @@ impl ParticlePipelines {
         pass.set_bind_group(0, &group, &[]);
         pass.draw(0..3, 0..1);
     }
+}
+
+/// `buffer`, replaced by one of the next power of two (at least 1 KiB) when
+/// it holds fewer than `bytes`.
+fn grown(
+    device: &wgpu::Device,
+    buffer: &mut Option<wgpu::Buffer>,
+    bytes: u64,
+    usage: wgpu::BufferUsages,
+    label: &str,
+) -> wgpu::Buffer {
+    if buffer.as_ref().is_none_or(|b| b.size() < bytes) {
+        *buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: (bytes.next_power_of_two()).max(1024),
+            usage: usage | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
+    }
+    buffer.clone().expect("made")
 }
 
 /// The draws of `queue` in decreasing key order (back to front), equal
