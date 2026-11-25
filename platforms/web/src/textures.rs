@@ -272,6 +272,11 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
     Ok(())
 }
 
+/// The world's draw calls of the level's start view drawn a task turn
+/// while it loads (#437): on an iPhone the whole view at once (about 1,100
+/// calls) kept the browser's GPU process 2.5–2.9 s, about 2.5 ms a call.
+const WARM_UP_CALLS: u32 = 40;
+
 async fn prepare_world(level: Arc<LevelWorld>) -> Result<(), JsValue> {
     let start = now();
     let mut turns = 0;
@@ -305,16 +310,40 @@ async fn prepare_world(level: Arc<LevelWorld>) -> Result<(), JsValue> {
             s.gpu_wait_ms += std::mem::take(&mut wait_ms);
         });
         if done {
-            // The level's start view drawn once, unseen, and the GPU's
-            // work on it waited for.
-            let warmed = tracing::info_span!("prepare.warm_up").in_scope(crate::gpu::warm_up)?;
-            if warmed {
+            // The level's start view drawn unseen, WARM_UP_CALLS of the
+            // world's draw calls a task turn and then whole, the GPU's work
+            // on each waited for (#437).
+            let mut from = 0;
+            loop {
+                let window = from..from + WARM_UP_CALLS;
+                let calls = tracing::info_span!("prepare.warm_up")
+                    .in_scope(|| crate::gpu::warm_up(Some(window)))?;
+                let Some(calls) = calls else {
+                    break;
+                };
                 gpu_done(&mut wait_ms).await?;
                 STATS.with(|s| {
                     let mut s = s.borrow_mut();
                     s.world_ms = now() - start;
                     s.gpu_wait_ms += std::mem::take(&mut wait_ms);
                 });
+                from += WARM_UP_CALLS;
+                if from >= calls {
+                    let whole = tracing::info_span!("prepare.warm_up")
+                        .in_scope(|| crate::gpu::warm_up(None))?;
+                    if whole.is_some() {
+                        gpu_done(&mut wait_ms).await?;
+                        STATS.with(|s| s.borrow_mut().gpu_wait_ms += std::mem::take(&mut wait_ms));
+                    }
+                    break;
+                }
+                crate::opfs::sleep(0).await?;
+                while crate::engine::page_hidden() {
+                    crate::opfs::sleep(100).await?;
+                }
+                if !crate::engine::world_to_prepare().is_some_and(|w| Arc::ptr_eq(&w, &level)) {
+                    break;
+                }
             }
             break;
         }

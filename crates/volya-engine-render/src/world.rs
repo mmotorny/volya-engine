@@ -1094,7 +1094,7 @@ fn may_show(s: [f32; 4], planes: &[[f32; 4]; 6], eye: [f32; 3], ssa_min: f32) ->
 fn encode_static(
     pass: &mut wgpu::RenderPass<'_>,
     inner: &Inner,
-    order: &[u32],
+    step: &Step,
     shows: impl Fn(u32) -> bool,
     shared: &mut Vec<u32>,
 ) {
@@ -1128,7 +1128,9 @@ fn encode_static(
                     StaticCall::Merged,
                     draws,
                 );
-                pass.draw_indexed(range, 0, 0..1);
+                if in_window() {
+                    pass.draw_indexed(range, 0, 0..1);
+                }
             }
             Some(Pending::Instanced { draw, first, count }) => {
                 let d = &inner.calls[draw as usize];
@@ -1138,11 +1140,13 @@ fn encode_static(
                     StaticCall::Shared,
                     count,
                 );
-                pass.draw_indexed(
-                    d.first_index..d.first_index + d.index_count,
-                    d.first_vertex,
-                    base + first..base + first + count,
-                );
+                if in_window() {
+                    pass.draw_indexed(
+                        d.first_index..d.first_index + d.index_count,
+                        d.first_vertex,
+                        base + first..base + first + count,
+                    );
+                }
             }
             None => {}
         };
@@ -1156,8 +1160,14 @@ fn encode_static(
     let mut surface = None;
     let (mut vertex_buffer, mut index_buffer) = (None, None);
     let mut pending: Option<Pending> = None;
-    for &i in order {
-        if !shows(i) {
+    for group in &step.groups {
+        let members = &step.order[group.start as usize..group.end as usize];
+        let i = members[0];
+        // A group of draws with their own vertices is drawn whole when any
+        // of them may show (the rest yield no pixels), so its index range
+        // is the same every frame: WebKit checks each range a draw call
+        // hasn't used before on the GPU (#437).
+        if !members.iter().any(|&m| shows(m)) {
             continue;
         }
         let d = &inner.calls[i as usize];
@@ -1199,22 +1209,13 @@ fn encode_static(
         let range = d.first_index..d.first_index + d.index_count;
         let program = inner.programs[d.surface as usize];
         if inner.exclusive[i as usize] {
-            match &mut pending {
-                Some(Pending::Merged {
-                    range: r, draws, ..
-                }) if r.end == range.start => {
-                    r.end = range.end;
-                    *draws += 1;
-                }
-                _ => {
-                    flush(pass, &mut pending);
-                    pending = Some(Pending::Merged {
-                        range,
-                        surface: d.surface,
-                        draws: 1,
-                    });
-                }
-            }
+            flush(pass, &mut pending);
+            let last = &inner.calls[*members.last().expect("a member") as usize];
+            pending = Some(Pending::Merged {
+                range: range.start..last.first_index + last.index_count,
+                surface: d.surface,
+                draws: members.len() as u32,
+            });
             continue;
         }
         if program.is_model() || inner.records.is_none() {
@@ -1226,7 +1227,9 @@ fn encode_static(
                 StaticCall::Shared
             };
             crate::stats::static_call(program.name(), kind, 1);
-            pass.draw_indexed(range, d.first_vertex, i..i + 1);
+            if in_window() {
+                pass.draw_indexed(range, d.first_vertex, i..i + 1);
+            }
             continue;
         }
         // A level draw whose vertices are shared: an instance of the call
@@ -1274,6 +1277,57 @@ impl SurfaceGroups {
     }
 }
 
+thread_local! {
+    /// [`Renderer::set_call_window`]: the world's draw calls emitted.
+    static WINDOW: std::cell::Cell<Option<(u32, u32)>> = const { std::cell::Cell::new(None) };
+    /// The world's draw calls counted in the frame being encoded.
+    static CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Counts a world draw call; whether it is emitted
+/// ([`Renderer::set_call_window`]).
+fn in_window() -> bool {
+    let n = CALLS.get();
+    CALLS.set(n + 1);
+    WINDOW.get().is_none_or(|(a, b)| (a..b).contains(&n))
+}
+
+/// One step of the static world: its draws in their fixed order, and the
+/// groups they are drawn in (ranges of `order`): consecutive draws of one
+/// surface and buffers whose vertices are their own and whose index ranges
+/// follow one another, else a draw alone.
+struct Step {
+    order: Vec<u32>,
+    groups: Vec<std::ops::Range<u32>>,
+}
+
+/// Most draws in a group: a group drawn whole for one draw that may show
+/// draws the others' vertices too, which yield no pixels.
+const MAX_GROUP: u32 = 16;
+
+impl Step {
+    fn new(order: Vec<u32>, calls: &[DrawCall], exclusive: &[bool]) -> Self {
+        let mut groups: Vec<std::ops::Range<u32>> = Vec::new();
+        for (k, &i) in order.iter().enumerate() {
+            let d = &calls[i as usize];
+            let joins = groups.last().is_some_and(|g| {
+                let j = order[g.end as usize - 1];
+                let p = &calls[j as usize];
+                exclusive[i as usize]
+                    && exclusive[j as usize]
+                    && (p.surface, p.vertex_buffer, p.index_buffer)
+                        == (d.surface, d.vertex_buffer, d.index_buffer)
+                    && p.first_index + p.index_count == d.first_index
+            });
+            match groups.last_mut() {
+                Some(g) if joins && g.end - g.start < MAX_GROUP => g.end += 1,
+                _ => groups.push(k as u32..k as u32 + 1),
+            }
+        }
+        Self { order, groups }
+    }
+}
+
 struct Inner {
     /// Kept for as long as the bundles that draw from them.
     vertex_buffers: Vec<wgpu::Buffer>,
@@ -1300,8 +1354,8 @@ struct Inner {
     records: Option<wgpu::Buffer>,
     /// Section 10.3 step 1 (priority 0–1, not strict) and step 5 (2–3):
     /// the draws in their fixed order.
-    early: Vec<u32>,
-    late: Vec<u32>,
+    early: Step,
+    late: Step,
     /// Every draw's call.
     calls: Vec<DrawCall>,
     /// Whether each draw's vertices are its own ([`owned_spans`]), so its
@@ -2553,8 +2607,8 @@ impl Renderer {
             surface_pipelines,
             programs: surfaces.iter().map(|s| s.program).collect(),
             records,
-            early,
-            late,
+            early: Step::new(early, &calls, &exclusive),
+            late: Step::new(late, &calls, &exclusive),
             calls,
             exclusive,
             strict: RefCell::new(strict),
@@ -2670,6 +2724,7 @@ impl Renderer {
         keep_depth: bool,
     ) {
         let inner = &frame.world.0;
+        CALLS.set(0);
         let view_projection = multiply(&frame.view, &frame.projection);
         let l = &frame.light;
         let tau = std::f32::consts::TAU;
@@ -2852,11 +2907,13 @@ impl Renderer {
                         );
                     }
                     crate::stats::draw();
-                    pass.draw_indexed(
-                        d.first_index..d.first_index + d.index_count,
-                        d.first_vertex as i32,
-                        d.kept..d.kept + 1,
-                    );
+                    if in_window() {
+                        pass.draw_indexed(
+                            d.first_index..d.first_index + d.index_count,
+                            d.first_vertex as i32,
+                            d.kept..d.kept + 1,
+                        );
+                    }
                 }
             }
         }
@@ -2913,11 +2970,13 @@ impl Renderer {
             }
             let instance = i as u32;
             crate::stats::draw();
-            pass.draw_indexed(
-                d.first_index..d.first_index + d.index_count,
-                d.first_vertex as i32,
-                instance..instance + 1,
-            );
+            if in_window() {
+                pass.draw_indexed(
+                    d.first_index..d.first_index + d.index_count,
+                    d.first_vertex as i32,
+                    instance..instance + 1,
+                );
+            }
         }
         // Step 7: the glows (glows.md section 4).
         if let Some((pipelines, prepared)) = particles {
@@ -2936,6 +2995,20 @@ impl Renderer {
             p.light_groups(&self.device, t);
         }
         self.world_pipelines = Some(p);
+    }
+
+    /// Emits only the world's static, light and strict-sorted draw calls
+    /// numbered within `window` in the frames encoded next (all with
+    /// `None`), so a level's first frame can be drawn in pieces while it
+    /// loads (#437); [`Renderer::world_calls`] counts them.
+    pub fn set_call_window(&mut self, window: Option<std::ops::Range<u32>>) {
+        WINDOW.set(window.map(|w| (w.start, w.end)));
+    }
+
+    /// The world's static, light and strict-sorted draw calls of the last
+    /// world frame encoded, emitted or not.
+    pub fn world_calls(&self) -> u32 {
+        CALLS.get()
     }
 
     /// Tests only: draws the trees without blending (worlds made after).
