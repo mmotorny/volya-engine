@@ -6,6 +6,7 @@
 
 import { startInput } from "./input.js";
 import { createTouchControls } from "./touch-controls.js";
+import { createFullscreenOffer } from "./fullscreen.js";
 // Early: Chrome offers installing the app once, soon after load.
 import "./install.js";
 import { startUpdates, versionText } from "./update.js";
@@ -103,13 +104,18 @@ const send = (event) => worker.postMessage({ type: "input", event });
 const forward = startInput(view, send);
 const touch = createTouchControls(send);
 document.body.append(touch.element);
+// Full screen with Keyboard Lock, offered in the level (#85).
+const offer = createFullscreenOffer(() => call("bound_keys"));
+document.body.append(offer.element);
 setCapture = (on) => {
   forward.setCapture(on);
   document.querySelector("main").hidden = on;
+  if (!on) offer.leave();
 };
 setLevel = (controls) => {
   forward.setLevel(controls.level);
   touch.update(controls);
+  offer.update(controls);
 };
 const canvas = view.transferControlToOffscreen();
 worker.postMessage({ type: "start", canvas, size: size() }, [canvas]);

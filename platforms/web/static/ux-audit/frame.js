@@ -6,6 +6,7 @@
 // the address after `#` names the device and the state: `#iphone/home`.
 
 import { screens, start } from "../game-ui.js";
+import { createFullscreenOffer } from "../fullscreen.js";
 import { createTouchControls } from "../touch-controls.js";
 import { versionText } from "../update.js";
 import { DEVICES, STATES } from "./states.js";
@@ -119,24 +120,31 @@ const updates = {
 const status = document.getElementById("status");
 globalThis.volya = {};
 if (state.level) {
-  // In the level: the page's own interface hides, the touch controls show
-  // over a plain backdrop.
+  // In the level: the page's own interface hides; over a plain backdrop the
+  // full screen offer shows (desktop) or the touch controls do.
   document.documentElement.dataset.uxLevel = "";
   if (device.height > device.width) document.documentElement.dataset.uxTurned = "";
   document.querySelector("main").hidden = true;
-  const touch = createTouchControls(() => {}, { touch: true, fade: false });
-  document.body.append(touch.element);
-  const { stick, lock, fade, down, thumbY, ...toggles } = state.level;
-  touch.update({ level: true, ...toggles });
-  const box = touch.element;
-  const landscape = [Math.max(box.clientWidth, box.clientHeight), Math.min(box.clientWidth, box.clientHeight)];
-  // A thumb a little above the stick's resting place, or where the state
-  // says (high on the screen).
-  const thumb = [140, thumbY ?? landscape[1] - 150];
-  if (stick) touch.showStick(thumb, stick);
-  if (lock) touch.showLocked(thumb);
-  if (fade) touch.fadeNow();
-  if (down) box.querySelector(`.touch-button.${down}`).classList.add("down");
+  const { stick, lock, fade, down, thumbY, offer, ...toggles } = state.level;
+  if (offer) {
+    // As on desktop Chrome (fullscreen.js).
+    const fullscreen = createFullscreenOffer(async () => [], { show: true });
+    document.body.append(fullscreen.element);
+    fullscreen.update({ level: true });
+  } else {
+    const touch = createTouchControls(() => {}, { touch: true, fade: false });
+    document.body.append(touch.element);
+    touch.update({ level: true, ...toggles });
+    const box = touch.element;
+    const landscape = [Math.max(box.clientWidth, box.clientHeight), Math.min(box.clientWidth, box.clientHeight)];
+    // A thumb a little above the stick's resting place, or where the state
+    // says (high on the screen).
+    const thumb = [140, thumbY ?? landscape[1] - 150];
+    if (stick) touch.showStick(thumb, stick);
+    if (lock) touch.showLocked(thumb);
+    if (fade) touch.fadeNow();
+    if (down) box.querySelector(`.touch-button.${down}`).classList.add("down");
+  }
 } else if (state.startError) {
   status.textContent = `Volya Engine · ${versionText()}`;
   status.dataset.state = "ready";

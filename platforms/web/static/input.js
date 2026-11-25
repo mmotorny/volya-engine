@@ -17,7 +17,7 @@
 // names by the Windows scan code both stand for (the code tables of the
 // standard; Microsoft's DirectInput documentation for the key names). See the
 // key list in crates/volya-engine-core/src/input.rs.
-const KEYS = {
+export const KEYS = {
   Escape: "escape",
   Digit1: "1",
   Digit2: "2",

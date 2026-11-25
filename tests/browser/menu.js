@@ -435,6 +435,64 @@ export const tests = {
     return `${note}; ${JSON.stringify(stats)}`;
   },
 
+  "desktop: full screen with Keyboard Lock is offered in the level; accepting locks the keys, then asks for full screen": async () => {
+    needsGame();
+    await until((s) => s.phase === "level" && !s.menu && !s.intro, "the level's controls");
+    const offer = document.getElementById("fullscreen-offer");
+    const request = Element.prototype.requestFullscreen;
+    const native = Boolean(navigator.keyboard?.lock);
+    // Headless Chrome can't enter full screen without a real gesture: the
+    // APIs are stubbed, recording their calls.
+    const calls = [];
+    const keyboard = { lock: async (codes) => calls.push(["lock", codes]), unlock: () => calls.push(["unlock"]) };
+    Object.defineProperty(navigator, "keyboard", { value: keyboard, configurable: true });
+    Element.prototype.requestFullscreen = async function () {
+      calls.push(["fullscreen", this === document.documentElement]);
+      Object.defineProperty(document, "fullscreenElement", { value: document.documentElement, configurable: true });
+      document.dispatchEvent(new Event("fullscreenchange"));
+    };
+    try {
+      // Shown now that the APIs are there (it shows again on any change).
+      document.dispatchEvent(new Event("fullscreenchange"));
+      calls.length = 0;
+      for (let i = 0; i < 50 && offer.hidden; i++) await sleep(20);
+      assert(!offer.hidden, "the offer shows");
+      assertEqual(offer.innerText.replace(/\s+/g, " ").trim(), "Full screen Keeps shortcuts such as Ctrl+W in the game. Hold Esc to leave full screen.", "text");
+      // A press on it is the page's, not the game's.
+      const before = await volya.call("input_state");
+      const button = offer.querySelector("button");
+      const at = button.getBoundingClientRect();
+      button.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: at.x + 5, clientY: at.y + 5, pointerType: "mouse", button: 0, buttons: 1 }));
+      const after = await volya.call("input_state");
+      assert(!after.recent.some((a) => a.seq > before.count && a.action === "press"), "no press reached the game");
+      button.click();
+      await until(() => calls.some(([c]) => c === "fullscreen"), "full screen asked for");
+      assertEqual(calls[0][0], "lock", "the keyboard locked first");
+      for (const code of ["KeyW", "KeyT", "KeyN", "Escape", "ControlLeft", "KeyA", "Space"]) {
+        assert(calls[0][1].includes(code), `${code} locked: ${calls[0][1]}`);
+      }
+      assertEqual(calls[1], ["fullscreen", true], "the page's root in full screen");
+      assert(offer.hidden, "no offer in full screen");
+      // Escape (a short press under the lock) still opens the menu.
+      key("Escape");
+      await until((s) => inGame(s), "the in-game menu");
+      key("Escape");
+      await until((s) => s.phase === "level" && !s.menu, "back in the game");
+      // Left (the long Escape): the lock ends, the offer is back.
+      delete document.fullscreenElement;
+      document.dispatchEvent(new Event("fullscreenchange"));
+      assert(calls.some(([c]) => c === "unlock"), "unlocked on leaving");
+      for (let i = 0; i < 50 && offer.hidden; i++) await sleep(20);
+      assert(!offer.hidden, "the offer is back");
+      return `navigator.keyboard.lock ${native ? "present" : "absent"} in headless Chrome; locked ${calls[0][1].length} keys`;
+    } finally {
+      delete navigator.keyboard;
+      Element.prototype.requestFullscreen = request;
+      delete document.fullscreenElement;
+      document.dispatchEvent(new Event("fullscreenchange"));
+    }
+  },
+
   "keyboard: W walks forward and Space jumps, leaving and regaining the ground": async () => {
     needsGame();
     const player = async () => (await state()).level.player;
