@@ -15,7 +15,8 @@
 //! Each render pass of a timed frame also writes timestamps at its
 //! beginning and end ([`pass_writes`], at most [`PASSES`] a frame; the
 //! frame's last pass ends at the frame's end), so a frame's GPU time is
-//! split by pass (#387).
+//! split by pass (#387): each pass from the later of its beginning and the
+//! previous pass's end, as passes overlap (#433).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -197,6 +198,12 @@ impl FrameTimer {
     /// submits the copy of both timestamps and asks for them to be read
     /// back.
     pub(crate) fn end(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, slot: usize) {
+        // Natively on Metal a resolve submitted while the frame's passes
+        // still run reads some of their timestamps from before they were
+        // written (measured: the frame's last end and a few passes' ends
+        // were the frame before's), so it waits for them there.
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("frame time end"),
         });
@@ -240,12 +247,21 @@ impl FrameTimer {
                     let ms = |ticks: u64| ticks as f64 * self.period_ns / 1e6;
                     let frame = at(1).checked_sub(at(0)).filter(|&t| t > 0)?;
                     // A pass's end: its own, or the frame's for the last.
+                    // A pass begins while the one before still draws (its
+                    // vertex stage overlaps the previous fragment stage:
+                    // measured natively on Metal, the four passes of a
+                    // level frame all begin within its world pass), so a
+                    // pass counts from the later of its beginning and the
+                    // previous pass's end.
                     let n = s.passes.len();
+                    let mut previous = 0;
                     for (k, name) in s.passes.iter().enumerate() {
                         let end = if k + 1 == n { at(1) } else { at(3 + 2 * k) };
-                        if let Some(t) = end.checked_sub(at(2 + 2 * k)).filter(|&t| t > 0) {
+                        let begin = at(2 + 2 * k).max(previous);
+                        if let Some(t) = end.checked_sub(begin).filter(|&t| t > 0) {
                             self.pass_times.push((name, ms(t)));
                         }
+                        previous = previous.max(end);
                     }
                     Some(frame)
                 });
