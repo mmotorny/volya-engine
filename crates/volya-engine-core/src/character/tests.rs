@@ -42,7 +42,7 @@ fn system() -> Config {
 }
 
 /// A player's record as `all.spawn` holds it (section 7).
-fn record() -> ObjectRecord {
+pub(crate) fn record() -> ObjectRecord {
     let creature = Creature {
         object: ObjectBlock {
             game_graph_vertex: 12,
@@ -158,6 +158,7 @@ fn new_game(record: &ObjectRecord, system: &Config) -> CharacterState {
         communities: &communities,
         character_name: "Меченый",
         seed: 1,
+        first_id: 1,
     })
     .unwrap()
 }

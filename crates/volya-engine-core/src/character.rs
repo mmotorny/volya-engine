@@ -149,6 +149,10 @@ pub struct NewGame<'a> {
     pub character_name: &'a str,
     /// Seeds the supply's generator (the game seeds it from a timer, 3.1).
     pub seed: u32,
+    /// The first id the items take from the simulation's id pool
+    /// (offline-simulation.md 8.1: the ids after the player's
+    /// registration), each next item the next id.
+    pub first_id: u16,
 }
 
 /// The player character's state.
@@ -169,9 +173,9 @@ impl CharacterState {
     /// The state after a New Game (sections 2, 3): the record's health and
     /// profile resolved, the conditions of 2.3, the items supplied by the
     /// simulation (3.1) taken by the online character in their order, then
-    /// the bolt (3.2). The items' ids come from a pool of our own (the
-    /// simulation's pool is not modelled yet), the bolt's after them (our
-    /// choice).
+    /// the bolt (3.2). The items take consecutive ids from `first_id`, the
+    /// bolt's after them (our choice: the bolt comes with the online
+    /// character, whose id the spec does not give).
     pub fn new_game(n: &NewGame) -> io::Result<Self> {
         let Object::Player(player) = &n.record.object else {
             return Err(invalid(format!(
@@ -197,7 +201,7 @@ impl CharacterState {
         };
 
         // 3.1: what the simulation creates, in order.
-        let mut ids = IdPool::default();
+        let mut ids = IdPool::starting_at(n.first_id);
         let mut rng = Rand15(n.seed);
         let mut children = Vec::new();
         let mut supply = |entries: &[SupplyEntry], children: &mut Vec<InventoryItem>| {
@@ -362,6 +366,11 @@ impl CharacterState {
 
     /// The records of the items a save writes after the player's, in the
     /// order it lists them (3.1; the bolt is never saved).
+    /// How many ids the items took, the bolt's included.
+    pub fn item_count(&self) -> usize {
+        self.inventory.items.len()
+    }
+
     pub fn item_records(&self) -> io::Result<Vec<ObjectRecord>> {
         self.inventory
             .items
@@ -412,4 +421,4 @@ impl InventoryItem {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

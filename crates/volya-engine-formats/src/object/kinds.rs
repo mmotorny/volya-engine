@@ -1347,6 +1347,46 @@ impl Object {
         }
     }
 
+    /// The Object block, to change.
+    pub fn object_block_mut(&mut self) -> &mut ObjectBlock {
+        match self {
+            Self::Player(o) => &mut o.creature.object,
+            Self::Stalker(o) => &mut o.monster.creature.object,
+            Self::Trader(o) => &mut o.object,
+            Self::Monster(o) => &mut o.state.monster.creature.object,
+            Self::CrowOrPhantom(o) => &mut o.creature.object,
+            Self::Vehicle(o) => &mut o.object,
+            Self::Helicopter(o) => &mut o.object,
+            Self::Item(o) => &mut o.item.object,
+            Self::Torch(o) => &mut o.item.object,
+            Self::Pda(o) => &mut o.item.object,
+            Self::Document(o) => &mut o.item.object,
+            Self::Outfit(o) => &mut o.item.object,
+            Self::Ammunition(o) => &mut o.item.object,
+            Self::Knife(o) => &mut o.weapon.item.object,
+            Self::MagazineWeapon(o) => &mut o.weapon.item.object,
+            Self::WeaponWithGrenadeLauncher(o) => &mut o.weapon.item.object,
+            Self::Shotgun(o) => &mut o.weapon.item.object,
+            Self::Zone(o) => &mut o.object,
+            Self::Anomaly(o) => &mut o.anomaly.zone.object,
+            Self::VisualAnomaly(o) => &mut o.anomaly.zone.object,
+            Self::TorridZone(o) => &mut o.zone.object,
+            Self::LevelChanger(o) => &mut o.object,
+            Self::Restrictor(o) => &mut o.object,
+            Self::SmartZone(o) => &mut o.restrictor.object,
+            Self::TeamBase(o) => &mut o.restrictor.object,
+            Self::PlainVisual(o) => &mut o.object,
+            Self::StationaryGun(o) => &mut o.object,
+            Self::HangingLamp(o) => &mut o.object,
+            Self::PhysicsObject(o) => &mut o.object,
+            Self::Breakable(o) => &mut o.object,
+            Self::Climbable(o) => &mut o.object,
+            Self::SkeletonObject(o) => &mut o.object,
+            Self::OnOffGroup(o) => &mut o.object,
+            Self::MonsterGroup(o) => &mut o.state.monster.creature.object,
+        }
+    }
+
     /// The Visual block, for kinds that have one (section 7.4.2).
     pub fn visual(&self) -> Option<&Visual> {
         Some(match self {
@@ -1395,6 +1435,38 @@ impl Object {
             Self::Monster(o) => &o.state.monster.creature,
             Self::CrowOrPhantom(o) => &o.creature,
             Self::MonsterGroup(o) => &o.state.monster.creature,
+            _ => return None,
+        })
+    }
+
+    /// The Creature block, to change.
+    pub fn creature_mut(&mut self) -> Option<&mut Creature> {
+        Some(match self {
+            Self::Player(o) => &mut o.creature,
+            Self::Stalker(o) => &mut o.monster.creature,
+            Self::Monster(o) => &mut o.state.monster.creature,
+            Self::CrowOrPhantom(o) => &mut o.creature,
+            Self::MonsterGroup(o) => &mut o.state.monster.creature,
+            _ => return None,
+        })
+    }
+
+    /// The Monster-like block (stalkers, monsters, monster groups).
+    pub fn monster_like(&self) -> Option<&MonsterLike> {
+        Some(match self {
+            Self::Stalker(o) => &o.monster,
+            Self::Monster(o) => &o.state.monster,
+            Self::MonsterGroup(o) => &o.state.monster,
+            _ => return None,
+        })
+    }
+
+    /// The Monster-like block, to change.
+    pub fn monster_like_mut(&mut self) -> Option<&mut MonsterLike> {
+        Some(match self {
+            Self::Stalker(o) => &mut o.monster,
+            Self::Monster(o) => &mut o.state.monster,
+            Self::MonsterGroup(o) => &mut o.state.monster,
             _ => return None,
         })
     }

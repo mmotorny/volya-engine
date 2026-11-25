@@ -113,7 +113,7 @@ fn world_box(model: &Model, instance: &Instance) -> ([f32; 3], [f32; 3]) {
 fn level_objects_from_game_data() {
     with_game(|tree, data| {
         let start = Instant::now();
-        let screen = LevelScreen::load(tree, data, 0).unwrap();
+        let mut screen = LevelScreen::load(tree, data, 0).unwrap();
         eprintln!("level loaded in {:.1?}", start.elapsed());
         let objects = &screen.world().objects;
         let by_class: BTreeMap<&str, usize> = objects
@@ -128,15 +128,18 @@ fn level_objects_from_game_data() {
         );
         assert_eq!(objects.online, 671);
 
-        // Online objects with a model, without the actor: 352.
-        let instances = &objects.instances;
+        // Online objects with a model, without the actor: 352. The others
+        // loaded may come online as the player moves.
+        let instances: Vec<&Instance> = objects.instances.iter().filter(|i| i.online).collect();
         assert_eq!(instances.len(), 352);
+        assert!(objects.instances.len() > 352);
         let count = |class: &str| instances.iter().filter(|i| i.class_id == class).count();
         assert_eq!((count("AI_STL_S"), count("AI_TRD_S")), (32, 1));
         // The other 319: 101 model files, 163,064 vertices and 388,632
         // full-detail indices counted once per object.
         let others: Vec<&Instance> = instances
             .iter()
+            .copied()
             .filter(|i| !matches!(i.class_id.as_str(), "AI_STL_S" | "AI_TRD_S"))
             .collect();
         assert_eq!(others.len(), 319);
@@ -522,6 +525,35 @@ fn level_objects_from_game_data() {
             "{:?}",
             objects.not_drawn
         );
+
+        // Walking (offline-simulation.md 6.2): the stalker
+        // `esc_novice_attacker1`, loaded but offline, is drawn once the
+        // player is within 135 m and no longer beyond 165 m.
+        let sim = screen.simulation().unwrap();
+        let o = sim.by_name("esc_novice_attacker1").unwrap();
+        let (id, at) = (o.id, o.record.header.position);
+        let k = objects.instances.iter().position(|i| i.id == id).unwrap();
+        assert!(!objects.instances[k].online);
+        let drawn = |screen: &LevelScreen| {
+            let scene = screen.scene(SIZE, 0);
+            scene.world.unwrap().objects[k].is_some()
+        };
+        let report = screen.state().objects;
+        assert_eq!((report.online, report.with_model), (671, 352));
+        let mut now = 0;
+        let mut walk = |screen: &mut LevelScreen, d: f32| {
+            screen.set_camera([at[0] - d, at[1] + 1.6, at[2]], Default::default());
+            now += 16;
+            screen.update(now, &Default::default());
+        };
+        walk(&mut screen, 130.0);
+        assert!(drawn(&screen));
+        let report = screen.state().objects;
+        assert!(report.with_model > 352, "{report:?}");
+        walk(&mut screen, 160.0);
+        assert!(drawn(&screen));
+        walk(&mut screen, 170.0);
+        assert!(!drawn(&screen));
     });
 }
 

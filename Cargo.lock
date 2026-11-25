@@ -1092,7 +1092,9 @@ dependencies = [
 name = "volya-engine-core"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
  "md-5",
+ "sha2",
  "volya-engine-formats",
  "volya-engine-installer",
 ]

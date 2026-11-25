@@ -164,6 +164,11 @@ pub struct WorldScene {
     pub environment: Environment,
     /// Seconds since the level was shown (the shaders' `time`).
     pub time: f32,
+    /// Where each of the level's object instances
+    /// ([`crate::objects::LevelObjects::instances`]) is drawn; `None`: not
+    /// drawn (offline).
+    #[serde(skip)]
+    pub objects: Arc<Vec<Option<Mat4>>>,
     #[serde(skip)]
     pub sky: Option<crate::render::sky::SkyFrame>,
     /// Hidden under an opaque picture: kept on the GPU but not drawn.
@@ -181,6 +186,7 @@ impl PartialEq for WorldScene {
             && self.projection == other.projection
             && self.environment == other.environment
             && self.time == other.time
+            && Arc::ptr_eq(&self.objects, &other.objects)
             && self.sky == other.sky
             && self.covered == other.covered
     }
