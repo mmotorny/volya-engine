@@ -205,6 +205,10 @@ impl<R: Read + Seek> Vfs for DbVfs<R> {
         }))
     }
 
+    fn exists(&self, path: &str) -> bool {
+        key(path).is_ok_and(|k| self.files.contains_key(&k))
+    }
+
     fn read_dir(&self, path: &str) -> io::Result<Vec<DirEntry>> {
         let key = key(path)?;
         let Some(children) = self.dirs.get(&key) else {
@@ -384,6 +388,9 @@ mod tests {
             .collect();
         assert_eq!(names, [("x.ltx".into(), 4), ("y.ltx".into(), 4)]);
         assert_eq!(vfs.read_dir("").unwrap()[0].name, "gamedata");
+        assert!(vfs.exists("GameData\\A\\X.ltx"));
+        assert!(!vfs.exists("gamedata/a"), "a directory");
+        assert!(!vfs.exists("gamedata/a/z.ltx"));
     }
 
     #[test]

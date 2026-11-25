@@ -13,6 +13,8 @@ pub mod console;
 pub mod input;
 pub mod level;
 pub mod movement;
+pub mod object_light;
+pub mod switching;
 pub mod text;
 pub mod ui;
 pub mod vfs;

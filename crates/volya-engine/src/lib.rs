@@ -24,6 +24,7 @@ mod fixture;
 pub mod level;
 pub mod loading_screen;
 pub mod menu_screens;
+pub mod objects;
 pub mod options;
 pub mod present;
 pub mod save_load;

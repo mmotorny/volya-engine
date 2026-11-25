@@ -18,6 +18,7 @@ pub mod level_cform;
 pub mod level_geom;
 pub mod ltx;
 pub mod lzo1x;
+pub mod model;
 pub mod object;
 pub mod ogf;
 pub mod packet;

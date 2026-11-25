@@ -360,6 +360,32 @@ pub fn box_intersects(centre: Vec3, axes: [Vec3; 3], half: Vec3, t: &[Vec3; 3]) 
     true
 }
 
+/// Whether the segment from `origin` along the unit direction `dir` for
+/// `length` meets triangle `t` from either side (the Möller–Trumbore test;
+/// a segment in the triangle's plane does not meet it).
+pub fn segment_hits_triangle(origin: Vec3, dir: Vec3, length: f32, t: &[Vec3; 3]) -> bool {
+    let e1 = sub(t[1], t[0]);
+    let e2 = sub(t[2], t[0]);
+    let p = cross(dir, e2);
+    let det = dot(e1, p);
+    if det.abs() < 1e-12 {
+        return false;
+    }
+    let inv = 1.0 / det;
+    let s = sub(origin, t[0]);
+    let u = dot(s, p) * inv;
+    if !(0.0..=1.0).contains(&u) {
+        return false;
+    }
+    let q = cross(s, e1);
+    let v = dot(dir, q) * inv;
+    if v < 0.0 || u + v > 1.0 {
+        return false;
+    }
+    let distance = dot(e2, q) * inv;
+    (0.0..=length).contains(&distance)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
