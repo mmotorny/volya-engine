@@ -162,8 +162,9 @@ impl<'a> Characters<'a> {
     /// descriptions are found by their `id` attribute, and a file named in
     /// `specific_characters_files` without `.xml` gets it appended (our
     /// reading: the spec says only that they name them). A profile that
-    /// names none would choose at random among the descriptions of its
-    /// class; we give none then (our choice).
+    /// names none chooses at random among the descriptions of its class
+    /// (level-objects.md 3.2, item 3); we give none then.
+    // TODO(#338): the random choice.
     pub fn specific_character(
         &mut self,
         trader: &TraderLike,

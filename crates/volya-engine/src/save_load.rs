@@ -36,7 +36,7 @@ use crate::saved_games::{SaveRow, SavedGames};
 use crate::scene::Scene;
 use volya_engine_formats::game_graph::GameGraph;
 use volya_engine_formats::object::{self, Object, ObjectRecord};
-use volya_engine_formats::sav::{self, Save};
+use volya_engine_formats::sav::{self, MenuData};
 use volya_engine_formats::text::font::{Font, UiFont};
 use volya_engine_formats::text::layout::TextBox;
 use volya_engine_formats::ui::layout::{HAlign, Rect, StaticDesc, VAlign, require};
@@ -1452,8 +1452,10 @@ impl SaveInfo {
     /// What sav.md section 11.4 reads from save file `file`: chunk 5's game
     /// time, the first object record's (the player's) health and the level
     /// of its game-graph vertex; for a file that is not valid (section 2),
-    /// the defaults ([`SaveInfo::defaults`]). An error reading a valid one
-    /// is fatal (sections 3, 7.1: an assertion stops the game).
+    /// the defaults ([`SaveInfo::defaults`]). An error reading what the menu
+    /// reads of a valid one is fatal (sections 3, 7.1: an assertion stops the
+    /// game); the rest of the file is not read, and bytes after the record's
+    /// fields are left unread ([`ObjectRecord::parse_allowing_trailing`]).
     pub fn read(tree: &dyn Vfs, data: &GameData, file: &[u8]) -> io::Result<Self> {
         if !sav::is_valid(file) {
             return Self::defaults(tree, data);
@@ -1462,18 +1464,16 @@ impl SaveInfo {
     }
 
     fn read_valid(tree: &dyn Vfs, data: &GameData, file: &[u8]) -> io::Result<Self> {
-        let save = Save::read(file)?;
-        let first = save
-            .objects
-            .first()
-            .ok_or_else(|| invalid("saved game without objects"))?;
+        let save = MenuData::read(file)?;
+        let first = &save.first;
         let section = object::section(&first.spawn)?;
         let class = data
             .system
             .get(&section, "class")
             .flatten()
             .ok_or_else(|| invalid(format!("[{section}] without class")))?;
-        let record = ObjectRecord::parse(&first.spawn, &first.update, class, true)?;
+        let record =
+            ObjectRecord::parse_allowing_trailing(&first.spawn, &first.update, class, true)?;
         let Object::Player(player) = record.object else {
             return Err(invalid("the first record is not the player's"));
         };

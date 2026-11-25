@@ -291,12 +291,35 @@ pub struct ObjectRecord {
 impl ObjectRecord {
     /// Parses a spawn packet and an update packet (each without its `u16`
     /// length) of an object of class id `class_id`. Both must be filled
-    /// exactly.
+    /// exactly, and the object state its data size.
     pub fn parse(
         spawn: &[u8],
         update: &[u8],
         class_id: &str,
         single_player: bool,
+    ) -> io::Result<Self> {
+        Self::read(spawn, update, class_id, single_player, true)
+    }
+
+    /// As [`Self::parse`], but bytes after the last field of either packet,
+    /// or of the object state within its data size, are left unread: sav.md
+    /// does not make them fatal (sections 7.1, 7.2), so a reader of saves
+    /// the game wrote takes them as the game does.
+    pub fn parse_allowing_trailing(
+        spawn: &[u8],
+        update: &[u8],
+        class_id: &str,
+        single_player: bool,
+    ) -> io::Result<Self> {
+        Self::read(spawn, update, class_id, single_player, false)
+    }
+
+    fn read(
+        spawn: &[u8],
+        update: &[u8],
+        class_id: &str,
+        single_player: bool,
+        exact: bool,
     ) -> io::Result<Self> {
         let class = ClassId::new(class_id)?;
         let mut r = Reader::new(spawn);
@@ -332,7 +355,9 @@ impl ObjectRecord {
             )));
         }
         let mut state = Reader::new(r.take(size - 2)?);
-        r.finish(&format!("{name}: spawn packet"))?;
+        if exact {
+            r.finish(&format!("{name}: spawn packet"))?;
+        }
         let mut u = Reader::new(update);
         message(&mut u, UPDATE_MESSAGE, "update")?;
         let cx = Context {
@@ -342,8 +367,10 @@ impl ObjectRecord {
         };
         let object = Object::read(class.kind(), &mut state, &mut u, &cx)
             .map_err(|e| invalid(format!("{name} ({class_id}): {e}")))?;
-        state.finish(&format!("{name} ({class_id}): object state"))?;
-        u.finish(&format!("{name} ({class_id}): update packet"))?;
+        if exact {
+            state.finish(&format!("{name} ({class_id}): object state"))?;
+            u.finish(&format!("{name} ({class_id}): update packet"))?;
+        }
         Ok(Self {
             header: SpawnHeader {
                 section,

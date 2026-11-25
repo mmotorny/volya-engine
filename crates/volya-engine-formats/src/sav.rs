@@ -127,8 +127,9 @@ pub struct SpawnBinding {
     pub spawn_name: String,
     /// The spawn file's identifier.
     pub identifier: [u8; 16],
-    /// Ids of sub-chunk 1's empty chunks: the spawn points' object indices.
-    pub spawn_points: Vec<u32>,
+    /// Sub-chunk 1 as stored, `None` when missing. The game does not read
+    /// it (section 6), so whatever it holds is kept and written back.
+    pub spawn_points: Option<Vec<u8>>,
 }
 
 /// Sub-chunks of the spawn binding.
@@ -136,75 +137,46 @@ const BINDING_NAME_CHUNK: u32 = 0;
 const BINDING_POINTS_CHUNK: u32 = 1;
 
 impl SpawnBinding {
-    /// The binding of a spawn file with `objects` object records: one spawn
-    /// point per record (section 6, believed).
+    /// The binding of a spawn file with `objects` object records: sub-chunk
+    /// 1 holds one empty chunk per record, ids 0 … `objects` − 1 (section 6,
+    /// believed).
     pub fn new(spawn_name: &str, identifier: [u8; 16], objects: u32) -> Self {
+        let points = (0..objects)
+            .flat_map(|id| [id.to_le_bytes(), [0; 4]].concat())
+            .collect();
         Self {
             spawn_name: spawn_name.to_owned(),
             identifier,
-            spawn_points: (0..objects).collect(),
+            spawn_points: Some(points),
         }
     }
 
+    /// Reads chunk 1's payload as the game does: sub-chunk 0's name and
+    /// identifier (bytes after them are not read), and sub-chunk 1 kept as
+    /// stored, unread (section 6).
     pub fn read(payload: &[u8]) -> io::Result<Self> {
         let chunks = Chunks::parse(payload)?;
         let name = chunks.require(BINDING_NAME_CHUNK, "spawn binding")?;
         let mut r = Reader::new(name.uncompressed()?);
         let spawn_name = r.string()?;
         let identifier = r.take(16)?.try_into().unwrap();
-        // Bytes after the identifier are rejected (our choice).
-        r.finish("spawn binding name")?;
-        // Sub-chunk 1 is not read by the game; we keep its ids. A missing one
-        // reads as no spawn points, a non-empty chunk in it is rejected (our
-        // choices: only empty chunks round-trip as ids); ids must increase
-        // (section 6).
-        let spawn_points = match chunks.find(BINDING_POINTS_CHUNK) {
-            None => Vec::new(),
-            Some(points) => Chunks::parse(points.uncompressed()?)?
-                .iter()
-                .map(|c| {
-                    if c.payload.is_empty() {
-                        Ok(c.id_word)
-                    } else {
-                        Err(invalid(format!(
-                            "spawn point {:#x} is not empty",
-                            c.id_word
-                        )))
-                    }
-                })
-                .collect::<io::Result<_>>()?,
-        };
-        let binding = Self {
+        Ok(Self {
             spawn_name,
             identifier,
-            spawn_points,
-        };
-        binding.check_order()?;
-        Ok(binding)
-    }
-
-    /// Spawn-point ids in increasing order (section 6).
-    fn check_order(&self) -> io::Result<()> {
-        match self.spawn_points.windows(2).find(|w| w[0] >= w[1]) {
-            Some(w) => Err(invalid(format!(
-                "spawn points out of order: {} before {}",
-                w[0], w[1]
-            ))),
-            None => Ok(()),
-        }
+            spawn_points: chunks
+                .find(BINDING_POINTS_CHUNK)
+                .map(|c| c.payload.to_vec()),
+        })
     }
 
     pub fn write(&self) -> io::Result<Vec<u8>> {
-        self.check_order()?;
         let mut name = Writer::new();
         name.string(&self.spawn_name)?;
         name.bytes(&self.identifier);
-        let mut points = Vec::with_capacity(self.spawn_points.len() * 8);
-        for &id in &self.spawn_points {
-            points.extend(chunk_bytes(id, &[])?);
-        }
         let mut out = chunk_bytes(BINDING_NAME_CHUNK, &name.into_inner())?;
-        out.extend(chunk_bytes(BINDING_POINTS_CHUNK, &points)?);
+        if let Some(points) = &self.spawn_points {
+            out.extend(chunk_bytes(BINDING_POINTS_CHUNK, points)?);
+        }
         Ok(out)
     }
 }
@@ -217,18 +189,20 @@ pub struct RawRecord {
     pub update: Vec<u8>,
 }
 
-/// Chunk 2: `u32` count, then the records.
+/// One record's two packets (section 7.1).
+fn read_record(r: &mut Reader) -> io::Result<RawRecord> {
+    let n = usize::from(r.u16()?);
+    let spawn = r.take(n)?.to_vec();
+    let n = usize::from(r.u16()?);
+    let update = r.take(n)?.to_vec();
+    Ok(RawRecord { spawn, update })
+}
+
+/// Chunk 2: `u32` count, then the records. Bytes after the last record are
+/// not read (section 7.1 counts the records; nothing checks the chunk's
+/// end).
 pub fn read_objects(payload: &[u8]) -> io::Result<Vec<RawRecord>> {
-    let mut r = Reader::new(payload);
-    let records = r.list(|r| {
-        let n = usize::from(r.u16()?);
-        let spawn = r.take(n)?.to_vec();
-        let n = usize::from(r.u16()?);
-        let update = r.take(n)?.to_vec();
-        Ok(RawRecord { spawn, update })
-    })?;
-    r.finish("objects chunk")?;
-    Ok(records)
+    Reader::new(payload).list(read_record)
 }
 
 pub fn write_objects(records: &[RawRecord]) -> io::Result<Vec<u8>> {
@@ -287,35 +261,68 @@ fn missing(id: u32) -> &'static str {
     }
 }
 
+/// Chunk `id` of a body's chunks; a missing or empty one is an error naming
+/// it (section 3). A compressed one is rejected (no chunk of a save is stored
+/// compressed; our choice).
+fn body_chunk<'a>(chunks: &Chunks<'a>, id: u32) -> io::Result<&'a [u8]> {
+    match chunks.find(id) {
+        Some(c) if !c.payload.is_empty() => c.uncompressed(),
+        _ => Err(invalid(missing(id))),
+    }
+}
+
+/// Chunk 5's fields; bytes after them are not read.
+fn read_game_time(payload: &[u8]) -> io::Result<GameTime> {
+    let mut r = Reader::new(payload);
+    Ok(GameTime {
+        time: r.u64()?,
+        time_factor: r.float()?,
+        normal_time_factor: r.float()?,
+    })
+}
+
+/// What the load menu reads of a save (section 11.4): chunk 5's game time
+/// and the first object record of chunk 2.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MenuData {
+    pub game_time: GameTime,
+    /// The first record, which must be the player's.
+    pub first: RawRecord,
+}
+
+impl MenuData {
+    /// Reads a valid `.sav` file as the load menu does: of the body, only
+    /// chunk 5 and chunk 2's first record; the other chunks and records are
+    /// not read, so nothing in them can fail this.
+    pub fn read(file: &[u8]) -> io::Result<Self> {
+        let body = read_container(file)?;
+        let chunks = Chunks::parse(&body)?;
+        let game_time = read_game_time(body_chunk(&chunks, GAME_TIME_CHUNK)?)?;
+        let mut r = Reader::new(body_chunk(&chunks, OBJECTS_CHUNK)?);
+        if r.u32()? == 0 {
+            return Err(invalid("saved game without objects"));
+        }
+        Ok(Self {
+            game_time,
+            first: read_record(&mut r)?,
+        })
+    }
+}
+
 impl Save {
-    /// Reads a decompressed body. Each chunk is found by id; a missing or
-    /// empty one is an error (section 3). Compressed chunks are rejected
-    /// (no chunk of a save is stored compressed; our choice).
+    /// Reads a decompressed body as loading does (section 11.2). Each chunk
+    /// is found by id; a missing or empty one is an error (section 3). Bytes
+    /// after a chunk's fields are not read.
     pub fn read_body(body: &[u8]) -> io::Result<Self> {
         let chunks = Chunks::parse(body)?;
-        let get = |id| -> io::Result<&[u8]> {
-            match chunks.find(id) {
-                Some(c) if !c.payload.is_empty() => c.uncompressed(),
-                _ => Err(invalid(missing(id))),
-            }
-        };
-        let mut r = Reader::new(get(SIMULATION_HEADER_CHUNK)?);
-        let simulation_version = r.u32()?;
-        // Here and in chunk 5, bytes after the fields are rejected (our
-        // choice).
-        r.finish("simulation header")?;
+        let get = |id| body_chunk(&chunks, id);
+        let simulation_version = Reader::new(get(SIMULATION_HEADER_CHUNK)?).u32()?;
         if simulation_version < 2 {
             return Err(invalid(
                 "ALife version mismatch! (Delete saved game and try again)",
             ));
         }
-        let mut r = Reader::new(get(GAME_TIME_CHUNK)?);
-        let game_time = GameTime {
-            time: r.u64()?,
-            time_factor: r.float()?,
-            normal_time_factor: r.float()?,
-        };
-        r.finish("game time")?;
+        let game_time = read_game_time(get(GAME_TIME_CHUNK)?)?;
         Ok(Self {
             simulation_version,
             game_time,
@@ -480,18 +487,6 @@ mod tests {
         let mut save = sample();
         save.registries.clear();
         assert!(save.write_body().is_err());
-        // Spawn points out of order.
-        let mut save = sample();
-        save.spawn_binding.spawn_points = vec![0, 2, 1];
-        assert!(save.write_body().is_err());
-        let mut binding = sample().spawn_binding.write().unwrap()[..28].to_vec();
-        binding.extend(1u32.to_le_bytes());
-        binding.extend(16u32.to_le_bytes());
-        for id in [1u32, 0] {
-            binding.extend(id.to_le_bytes());
-            binding.extend([0; 4]);
-        }
-        assert!(SpawnBinding::read(&binding).is_err());
         // A huge declared body length: an error, without reserving it.
         let mut huge = file.clone();
         huge[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
@@ -500,5 +495,100 @@ mod tests {
         save.simulation_version = 1;
         assert!(Save::read_body(&save.write_body().unwrap()).is_err());
         assert!(read_objects(&[1, 0, 0, 0, 5, 0]).is_err());
+        // The load menu fails on what it reads: a missing chunk 5 or 2, a
+        // short chunk 5, no first record.
+        let without = |id: u32| {
+            let chunks = Chunks::parse(&body).unwrap();
+            let mut out = Vec::new();
+            for c in chunks.iter().filter(|c| c.id() != id) {
+                out.extend(chunk_bytes(c.id(), c.payload).unwrap());
+            }
+            write_container(&out).unwrap()
+        };
+        for (id, text) in [
+            (5, "Can't find chunk GAME_TIME_CHUNK_DATA!"),
+            (2, "Can't find chunk OBJECT_CHUNK_DATA!"),
+        ] {
+            let err = MenuData::read(&without(id)).unwrap_err();
+            assert_eq!(err.to_string(), text);
+        }
+        let mut save = sample();
+        save.objects.clear();
+        assert!(MenuData::read(&save.write().unwrap()).is_err());
+    }
+
+    /// A body with chunk `id`'s payload replaced by `payload`.
+    fn with_chunk(save: &Save, id: u32, payload: &[u8]) -> Vec<u8> {
+        let body = save.write_body().unwrap();
+        let mut out = Vec::new();
+        for c in Chunks::parse(&body).unwrap().iter() {
+            let p = if c.id() == id { payload } else { c.payload };
+            out.extend(chunk_bytes(c.id(), p).unwrap());
+        }
+        out
+    }
+
+    /// What the game does not check is accepted: bytes after the fields of
+    /// chunks 0, 5 and 2 and after the spawn binding's identifier, and
+    /// anything in the unread sub-chunk 1, or none (sections 3–7.1).
+    #[test]
+    fn accepts_what_the_game_does_not_check() {
+        let save = sample();
+        let extend = |id: u32, extra: &[u8]| {
+            let body = save.write_body().unwrap();
+            let chunks = Chunks::parse(&body).unwrap();
+            let mut p = chunks.find(id).unwrap().payload.to_vec();
+            p.extend(extra);
+            with_chunk(&save, id, &p)
+        };
+        for id in [SIMULATION_HEADER_CHUNK, GAME_TIME_CHUNK, OBJECTS_CHUNK] {
+            let read = Save::read_body(&extend(id, b"more")).unwrap();
+            assert_eq!(read, save, "chunk {id}");
+        }
+        let file = write_container(&extend(GAME_TIME_CHUNK, b"more")).unwrap();
+        assert_eq!(MenuData::read(&file).unwrap().game_time, save.game_time);
+
+        // Bytes after the identifier.
+        let mut name = b"all\0".to_vec();
+        name.extend([7; 16]);
+        name.extend(b"after");
+        let mut binding = chunk_bytes(BINDING_NAME_CHUNK, &name).unwrap();
+        // Sub-chunk 1 that is no sequence of empty, ordered chunks.
+        let mut points = chunk_bytes(2, b"x").unwrap();
+        points.extend(chunk_bytes(1, &[]).unwrap());
+        points.extend([1, 2, 3]);
+        binding.extend(chunk_bytes(BINDING_POINTS_CHUNK, &points).unwrap());
+        let read = SpawnBinding::read(&binding).unwrap();
+        assert_eq!(
+            (read.spawn_name.as_str(), read.identifier),
+            ("all", [7; 16])
+        );
+        assert_eq!(read.spawn_points.as_deref(), Some(&points[..]));
+        // Written back without the unread bytes after the identifier.
+        assert_eq!(SpawnBinding::read(&read.write().unwrap()).unwrap(), read);
+        // No sub-chunk 1.
+        let only_name = chunk_bytes(BINDING_NAME_CHUNK, &name).unwrap();
+        let read = SpawnBinding::read(&only_name).unwrap();
+        assert_eq!(read.spawn_points, None);
+        assert_eq!(read.write().unwrap().len(), 8 + 20);
+
+        // The load menu reads neither chunk 0, 1 or 9 nor the records after
+        // the first.
+        let body = with_chunk(&save, SPAWN_BINDING_CHUNK, b"garbage");
+        let chunks = Chunks::parse(&body).unwrap();
+        let mut trimmed = Vec::new();
+        for c in chunks.iter().filter(|c| ![0, 9].contains(&c.id())) {
+            let p: &[u8] = if c.id() == OBJECTS_CHUNK {
+                // Count 2, then the first record and a truncated second.
+                &c.payload[..c.payload.len() - 100]
+            } else {
+                c.payload
+            };
+            trimmed.extend(chunk_bytes(c.id(), p).unwrap());
+        }
+        assert!(Save::read_body(&trimmed).is_err());
+        let menu = MenuData::read(&write_container(&trimmed).unwrap()).unwrap();
+        assert_eq!(menu.game_time, save.game_time);
+        assert_eq!(menu.first, save.objects[0]);
     }
 }
