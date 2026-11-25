@@ -568,6 +568,12 @@ impl App {
             return;
         }
         self.update_phase(tree, time_ms, input, audio);
+        if let Some(Phase::Level { level, .. }) = &mut self.phase
+            && let Some(fatal) = level.take_fatal()
+        {
+            self.fatal(tree, fatal, input, audio);
+            return;
+        }
         if let Err(fatal) = self.sound_frame(tree, audio) {
             self.fatal(tree, fatal.to_string(), input, audio);
         }
@@ -663,6 +669,14 @@ impl App {
                             )
                         {
                             fatal = Some(e);
+                        }
+                        // The player's steps of this frame (S11 4.3).
+                        if let (Some(level_sounds), Some(f)) =
+                            (&self.level_sounds, level.footsteps())
+                        {
+                            for step in f.sounds() {
+                                level_sounds.pairs.play(sounds, step);
+                            }
                         }
                     }
                     None => self.sound_run.paused_frame(),

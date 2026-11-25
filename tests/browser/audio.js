@@ -266,6 +266,42 @@ export const tests = {
     );
   },
 
+  // The player's footsteps (docs/behavior/player-footsteps.md): running in
+  // the level plays step sounds from the ground's material pair, at the
+  // feet raised by 0.5 m, with the run's volume 1.
+  "running in the level makes step sounds": async () => {
+    if (!installer) skip("no installer");
+    const down = (code) => document.body.dispatchEvent(new KeyboardEvent("keydown", { code, bubbles: true, cancelable: true }));
+    const up = (code) => document.body.dispatchEvent(new KeyboardEvent("keyup", { code, bubbles: true, cancelable: true }));
+    // Collision stops a run along the start view after about 0.8 m
+    // (measured natively): run backwards, where the way is clear.
+    const steps = new Map();
+    const start = (await state()).level.player.position;
+    down("KeyS");
+    try {
+      for (const deadline = performance.now() + 2000; performance.now() < deadline; await sleep(30)) {
+        for (const e of (await volya.call("sound_state")).emitters) {
+          if (e.name.startsWith("material\\")) steps.set(e.name + e.position.join(), e);
+        }
+      }
+    } finally {
+      up("KeyS");
+    }
+    const end = (await state()).level.player.position;
+    const moved = Math.hypot(end[0] - start[0], end[2] - start[2]);
+    assert(moved > 2, `ran ${moved.toFixed(2)} m`);
+    assert(steps.size >= 2, `steps heard: ${JSON.stringify([...steps.values()])}`);
+    for (const e of steps.values()) {
+      assert(e.name.startsWith("material\\actor\\step\\"), `not a step sound: ${e.name}`);
+      assert(!e.looped && !e.two_d && e.volume === 1, `step played as ${JSON.stringify(e)}`);
+    }
+    const stats = await volya.call("level_stats");
+    return (
+      `ran ${moved.toFixed(1)} m: ${[...steps.values()].map((e) => e.name.split("\\").pop()).join(", ")}; ` +
+      `sound update ${(stats.sound_update_ms * 1000).toFixed(0)} µs average; frame CPU ${stats.frame_cpu_ms.toFixed(2)} ms`
+    );
+  },
+
   "forgets the game": async () => {
     await volya.call("quit_game").catch(() => null);
     if (!installer) skip("no installer");
