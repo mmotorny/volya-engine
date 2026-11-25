@@ -6,7 +6,7 @@
 // app opens (fetching sw.js, a few KB; sites can't turn that off); an
 // installed app is usually resumed rather than reopened, so with automatic
 // updates also ask (`registration.update()`) when it returns to the
-// foreground, at most hourly.
+// foreground, at most hourly. Settings' Check for updates asks at once.
 //
 // Downloads are automatic by default: the update downloads in the
 // background. Turned off, nothing downloads by itself (metered connections):
@@ -59,7 +59,10 @@ export const settingsStore = (scope, cacheStorage = caches) => {
  *   "downloading", or "ready" (waiting to take over);
  * - `auto` and `setAuto(on)`;
  * - `download()`: consent to and download the available update;
- * - `apply()` (finish: take over and reload), `check()`, `onChange(callback)`.
+ * - `apply()` (finish: take over and reload), `check()`, `onChange(callback)`;
+ * - `checkNow()`: the player's check, resolving with "found", "none",
+ *   "offline" or "failed"; once found, `requested` is set (the player waits
+ *   for this update, so its automatic download is shown too).
  */
 export function startUpdates(registration, { container = navigator.serviceWorker, store = null } = {}) {
   const listeners = new Set();
@@ -104,6 +107,37 @@ export function startUpdates(registration, { container = navigator.serviceWorker
       }
       changed();
     },
+    async checkNow() {
+      if (!reg) return "failed";
+      checked = Date.now();
+      // Found: a new worker installs (automatic downloads, or with consent),
+      // or the worker tells its size and refuses (opted out; it may say so
+      // after update() settles, but installs first).
+      let found = false;
+      const seen = () => (found = true);
+      const offered = ({ data }) => data?.type === "update-available" && seen();
+      reg.addEventListener("updatefound", seen);
+      container.addEventListener("message", offered);
+      let failed = false;
+      try {
+        await reg.update();
+      } catch {
+        // A TypeError whether the network is down or sw.js can't be had
+        // (Service Workers spec, Update; see docs/architecture.md).
+        failed = true;
+      } finally {
+        reg.removeEventListener("updatefound", seen);
+        container.removeEventListener("message", offered);
+      }
+      const update = container.controller && (found || reg.installing || reg.waiting || state.status !== "current");
+      if (update) state.requested = true;
+      changed();
+      if (update) return "found";
+      // Offline only when the browser knows it is (onLine true proves nothing).
+      if (failed) return navigator.onLine === false ? "offline" : "failed";
+      return "none";
+    },
+    requested: false,
     onChange(callback) {
       listeners.add(callback);
       return () => listeners.delete(callback);

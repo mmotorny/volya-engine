@@ -52,7 +52,7 @@ export const SECTIONS = [
       { id: "home", name: "Ready", game: imported },
       { id: "home-play-failed", name: "Play failed", game: imported, launchError: "level.geom: unexpected end of file" },
       // An update, in order: offered (automatic downloads off), downloading
-      // on request, downloaded (either way).
+      // on request or after Check for updates found it, downloaded (either way).
       {
         id: "home-offer",
         name: "Update available (automatic downloads off)",
@@ -64,6 +64,12 @@ export const SECTIONS = [
         name: "Downloading the update on request",
         game: imported,
         updates: { auto: false, status: "downloading", bytes: 1.9 * 2 ** 20 },
+      },
+      {
+        id: "home-checked-downloading",
+        name: "Downloading an update found by Check for updates",
+        game: imported,
+        updates: { status: "downloading", requested: true, bytes: 1.9 * 2 ** 20 },
       },
       { id: "home-finish", name: "Update downloaded", game: imported, updates: { status: "ready" } },
     ],
@@ -121,6 +127,16 @@ export const SECTIONS = [
     title: "Settings",
     states: [
       { id: "settings", name: "Imported game", game: imported, screen: "settings" },
+      { id: "settings-checking", name: "Check for updates pressed: checking", game: imported, screen: "settings", check: "checking" },
+      { id: "settings-up-to-date", name: "Checked: up to date (for a few seconds)", game: imported, screen: "settings", check: "none" },
+      { id: "settings-check-offline", name: "Checked while offline (for a few seconds)", game: imported, screen: "settings", check: "offline" },
+      {
+        id: "settings-check-failed",
+        name: "Check failed, not known to be offline (for a few seconds)",
+        game: imported,
+        screen: "settings",
+        check: "failed",
+      },
       { id: "settings-no-game", name: "No game imported", game: fresh, screen: "settings" },
     ],
   },

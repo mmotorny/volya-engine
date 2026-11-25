@@ -811,6 +811,11 @@ button.back {
   color: var(--danger);
 }
 
+/* Settings' actions sit at their content's width, one below the other. */
+.panel button.panel-action {
+  margin-top: 0.75rem;
+}
+
 button.danger.filled {
   margin-top: 0.75rem;
   background: #c4382c;

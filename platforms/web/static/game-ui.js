@@ -77,14 +77,15 @@ export async function start(engineCall, updateState = null) {
 /**
  * The update offer: Finish update once one is downloaded (the app never
  * restarts by itself); with automatic downloads off, Download update first.
- * Hidden while there's nothing to do (and while downloading automatically).
+ * Hidden while there's nothing to do, and while downloading automatically
+ * unless the player asked (Check for updates).
  */
 function updateOffer() {
   if (!updates) return null;
   const button = element("button", { className: "primary wide" });
   const render = () => {
-    const { status, bytes, auto } = updates;
-    button.hidden = !(status === "ready" || (!auto && (status === "available" || status === "downloading")));
+    const { status, bytes, auto, requested } = updates;
+    button.hidden = !(status === "ready" || (!auto && status === "available") || ((!auto || requested) && status === "downloading"));
     button.disabled = status === "downloading";
     button.textContent =
       status === "ready" ? "Finish update" : status === "downloading" ? "Downloading update…" : `Download update · ${formatBytes(bytes)}`;
@@ -503,16 +504,54 @@ function installAdvice() {
   return advice;
 }
 
+/** How long a check's result shows before the button returns. The UX page holds it. */
+const CHECK_RESULT_MS = 3000;
+
+/**
+ * Check for updates: asks now. An update found is offered on Home, where
+ * its row downloads or finishes it; otherwise the result shows in the
+ * button's place for a moment.
+ */
+function checkButton() {
+  if (!updates) return null;
+  const label = "Check for updates";
+  const button = element("button", { className: "panel-action", textContent: label });
+  button.setAttribute("aria-live", "polite");
+  const RESULTS = { none: "Up to date", offline: "Can't check while offline", failed: "Couldn't check for updates" };
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    button.textContent = "Checking…";
+    const outcome = await updates.checkNow();
+    if (!button.isConnected) return;
+    if (outcome === "found") {
+      await navigate("back", refresh);
+      return;
+    }
+    button.textContent = RESULTS[outcome] ?? RESULTS.failed;
+    if (globalThis.volyaHoldCheckResult) return;
+    await new Promise((resolve) => setTimeout(resolve, CHECK_RESULT_MS));
+    if (!button.isConnected) return;
+    // Disabling may have dropped keyboard focus: give it back.
+    const refocus = document.activeElement === button || document.activeElement === document.body;
+    button.disabled = false;
+    button.textContent = label;
+    if (refocus) button.focus();
+  });
+  return button;
+}
+
 /** Settings: updates and removing the import (danger zone). */
 async function showSettings() {
   const status = await call("game_status");
   const back = element("button", { className: "back", textContent: "‹ Back" });
   back.addEventListener("click", () => navigate("back", refresh));
 
-  // The download setting only: the version is in the footer, and the update
-  // itself is offered on Home (its bottom row), where Settings is reached from.
+  // The download setting and a check: the version is in the footer, and the
+  // update itself is offered on Home (its bottom row), where a check that
+  // finds one leads.
   const auto = element("input", { type: "checkbox", checked: updates?.auto ?? true });
   auto.addEventListener("change", () => updates?.setAuto(auto.checked));
+  const check = checkButton();
 
   const remove = element("button", { className: "danger filled", textContent: "Remove imported game" });
   remove.addEventListener("click", async () => {
@@ -532,6 +571,7 @@ async function showSettings() {
       updates
         ? element("label", { className: "switch" }, auto, element("span", {}, element("strong", { textContent: "Download updates automatically" })))
         : null,
+      check,
     ),
     status.imported
       ? element(
