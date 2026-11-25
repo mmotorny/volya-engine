@@ -12,6 +12,8 @@
 //   tap-text <label>              the first element with this label
 //   hold <x> <y> <seconds>
 //   drag <x1> <y1> <x2> <y2>
+//   double-tap <x> <y>
+//   pinch <scale>                 two fingers on Safari's web content
 //   screenshot <path>             PNG of the screen, written on the host
 //   expect-text <label>           fails unless an element has this label
 //
@@ -51,6 +53,17 @@ final class SimDriverUITests: XCTestCase {
         case "drag":
             point(try number(numbers, 0, step), try number(numbers, 1, step))
                 .press(forDuration: 0.1, thenDragTo: point(try number(numbers, 2, step), try number(numbers, 3, step)))
+        case "double-tap":
+            point(try number(numbers, 0, step), try number(numbers, 1, step)).doubleTap()
+        case "pinch":
+            // Above 1 spreads the fingers; XCUITest wants a velocity of the
+            // same sign (scale factor per second).
+            let scale = try number(numbers, 0, step)
+            // The page on screen (Safari keeps other tabs' web views too);
+            // a zoomed page's web view may be missing from the element tree,
+            // then Safari's window, whose middle is the page's.
+            let page = safari.webViews.allElementsBoundByIndex.first { $0.isHittable } ?? safari.windows.firstMatch
+            page.pinch(withScale: scale, velocity: scale > 1 ? 2 : -2)
         case "tap-text":
             // Its centre on screen, like a finger: XCUITest's hittability
             // check often rejects web content that is visible.

@@ -4,6 +4,7 @@
 // Page side: owns the DOM, starts the engine worker and talks to it only by
 // message (docs/architecture.md).
 
+import { blockZoom } from "./zoom.js";
 import { startInput } from "./input.js";
 import { createTouchControls } from "./touch-controls.js";
 import { createFullscreenOffer } from "./fullscreen.js";
@@ -11,6 +12,9 @@ import { createTextEntry } from "./text-entry.js";
 // Early: Chrome offers installing the app once, soon after load.
 import "./install.js";
 import { startUpdates, versionText } from "./update.js";
+
+// No browser zoom anywhere in the app, first (#345).
+blockZoom();
 
 // Installable app: offline start and updates (sw.js, update.js). Registered
 // relative to this module so the scope is the app's base path.
