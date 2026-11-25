@@ -13,6 +13,7 @@
 //! detail fade) is decided in the vertex programs from per-draw data. Only
 //! the strict-sorted draws are ordered on the CPU each frame (10.3).
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -625,7 +626,10 @@ struct Inner {
     /// Kept for as long as the bundles that draw from them.
     vertex_buffers: Vec<wgpu::Buffer>,
     index_buffers: Vec<wgpu::Buffer>,
-    _draw_buffer: wgpu::Buffer,
+    /// Per-draw data, one record per kept draw; placements rewrite it.
+    draw_buffer: wgpu::Buffer,
+    /// Each draw given to the world: its index among the kept draws.
+    kept_of: Vec<Option<u32>>,
     _textures: Vec<Texture>,
     frame: wgpu::Buffer,
     frame_group: wgpu::BindGroup,
@@ -636,7 +640,9 @@ struct Inner {
     early: wgpu::RenderBundle,
     late: wgpu::RenderBundle,
     /// Step 6: strict-sorted draws, ordered each frame.
-    strict: Vec<(usize, WorldDraw)>,
+    strict: RefCell<Vec<(usize, WorldDraw)>>,
+    /// The bounding sphere each kept draw's record holds now.
+    spheres: RefCell<Vec<[f32; 4]>>,
     sky: Option<SkyResources>,
     sky_error: Option<String>,
     draws: usize,
@@ -704,6 +710,14 @@ impl World {
     /// Why the sky could not be set up, if it could not.
     pub fn sky_error(&self) -> Option<&str> {
         self.0.sky_error.as_deref()
+    }
+
+    /// The bounding sphere draw `draw` (its index among the draws the world
+    /// was created with) is drawn with now; radius 0: hidden. `None` for a
+    /// draw left out.
+    pub fn draw_sphere(&self, draw: usize) -> Option<[f32; 4]> {
+        let k = (*self.0.kept_of.get(draw)?)?;
+        Some(self.0.spheres.borrow()[k as usize])
     }
 
     pub fn same(&self, other: &World) -> bool {
@@ -872,6 +886,14 @@ impl Renderer {
                 }
             })
         };
+        let mut kept_of = Vec::with_capacity(draws.len());
+        let mut next = 0u32;
+        for d in draws {
+            kept_of.push(usable(d).then(|| {
+                next += 1;
+                next - 1
+            }));
+        }
         let kept: Vec<WorldDraw> = draws
             .iter()
             .copied()
@@ -897,7 +919,7 @@ impl Renderer {
         let draw_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("world draws"),
             contents: &records,
-            usage: wgpu::BufferUsages::STORAGE,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
         let frame = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("world frame"),
@@ -1105,7 +1127,8 @@ impl Renderer {
         Ok(World(Rc::new(Inner {
             vertex_buffers,
             index_buffers,
-            _draw_buffer: draw_buffer,
+            draw_buffer,
+            kept_of,
             _textures: textures,
             frame,
             frame_group,
@@ -1113,7 +1136,8 @@ impl Renderer {
             surface_pipelines,
             early,
             late,
-            strict,
+            strict: RefCell::new(strict),
+            spheres: RefCell::new(kept.iter().map(|d| d.sphere).collect()),
             sky,
             sky_error,
             draws: kept.len() - object_draws,
@@ -1124,6 +1148,29 @@ impl Renderer {
             object_buffer_bytes,
             object_texture_bytes,
         })))
+    }
+
+    /// Places draw `draw` (its index among the draws `world` was created
+    /// with) at `transform` with bounding sphere `sphere`; a radius of 0
+    /// hides it (its screen size is then never above ssa_min, section
+    /// 10.2). A draw left out of the world is ignored.
+    pub fn place_draw(&self, world: &World, draw: usize, transform: &Mat4, sphere: [f32; 4]) {
+        let inner = &world.0;
+        let Some(Some(k)) = inner.kept_of.get(draw).copied() else {
+            return;
+        };
+        let mut bytes = Vec::with_capacity(80);
+        push_mat(&mut bytes, transform);
+        push_vec4(&mut bytes, sphere);
+        self.queue
+            .write_buffer(&inner.draw_buffer, k as u64 * DRAW_BYTES as u64, &bytes);
+        inner.spheres.borrow_mut()[k as usize] = sphere;
+        for (i, d) in inner.strict.borrow_mut().iter_mut() {
+            if *i == k as usize {
+                d.transform = *transform;
+                d.sphere = sphere;
+            }
+        }
     }
 
     /// The depth buffer for a `width` × `height` target.
@@ -1203,7 +1250,7 @@ impl Renderer {
         }
 
         // Step 6 order: decreasing squared distance (back to front).
-        let mut strict = inner.strict.clone();
+        let mut strict = inner.strict.borrow().clone();
         let distance = |d: &WorldDraw| {
             (0..3)
                 .map(|i| (d.sphere[i] - frame.eye[i]).powi(2))

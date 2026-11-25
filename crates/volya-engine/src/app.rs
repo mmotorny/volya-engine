@@ -991,6 +991,22 @@ impl App {
         }
     }
 
+    /// Whether the frame shows the game's mouse cursor: the title menu and
+    /// its screens, before a game and during one (their scenes draw it).
+    /// Platforms turn touch into a touchpad for the cursor then (a Volya
+    /// Engine addition, decided by the user, #108).
+    pub fn cursor_shown(&self) -> bool {
+        matches!(
+            &self.phase,
+            Some(Phase::Menu(_))
+                | Some(Phase::Loading {
+                    stages: NewGame::Closing(_),
+                    ..
+                })
+                | Some(Phase::Level { menu: Some(_), .. })
+        )
+    }
+
     /// The save screen's name field (UI units) and whether it has focus,
     /// while it shows: a platform puts its text entry over it (the
     /// device's keyboard on touch screens; our design, #94).
@@ -1168,6 +1184,9 @@ mod tests {
             panic!()
         };
         assert_eq!((startup.item, startup.skipped), (1, 1));
+        // No cursor during the logos: touch stays direct (#108).
+        let scene = app.scene(&tree, Resolution::new(1024, 768)).unwrap();
+        assert!(!app.cursor_shown() && scene.first("cursor").is_none());
         // Escape ends the last item: the menu shows in the same frame.
         press(&mut input, Key::Escape);
         app.update(&tree, 5300.0, &input, &mut audio);
@@ -1181,6 +1200,8 @@ mod tests {
         );
         let scene = app.scene(&tree, Resolution::new(1024, 768)).unwrap();
         assert!(scene.first("background").is_some());
+        // The menu draws its cursor: touch is a touchpad (#108).
+        assert!(app.cursor_shown() && scene.first("cursor").is_some());
         press(&mut input, Key::Q);
         app.update(&tree, 5400.0, &input, &mut audio);
         assert!(app.quit_requested());
@@ -1483,6 +1504,7 @@ mod tests {
         });
         app.update(&tree, 16.0, &input, &mut audio);
         assert!(app.level_controls().is_some(), "the controls are live");
+        assert!(!app.cursor_shown(), "no cursor in the level");
         (tree, app, input, audio)
     }
 
@@ -1671,6 +1693,8 @@ mod tests {
         input.end_frame();
         assert!(menu_open(&app), "the unlock opened the menu");
         assert!(app.level_controls().is_none());
+        let scene = app.scene(&tree, Resolution::new(1024, 768)).unwrap();
+        assert!(app.cursor_shown() && scene.first("cursor").is_some());
         // The Escape the browser used to leave the lock, arriving a frame
         // later, leaves it open.
         press(&mut input, Key::Escape);

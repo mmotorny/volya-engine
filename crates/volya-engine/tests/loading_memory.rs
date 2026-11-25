@@ -93,6 +93,14 @@ fn loading_stage_memory() {
             mb(after) - mb(before),
             mb(after - base)
         );
+        // Budgets: measured, plus a modest margin.
+        if stage == Stage::ServerConnecting {
+            // The offline simulation: 19.8 MB peak and kept, measured.
+            assert!(mb(peak - before) < 23.0, "{stage:?} peak");
+            assert!(mb(after) - mb(before) < 23.0, "{stage:?} kept");
+        }
     }
     eprintln!("loading peak: {:.1} MB above the start", mb(highest));
+    // 188.3 MB measured.
+    assert!(mb(highest) < 200.0, "loading peak");
 }

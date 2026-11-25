@@ -60,6 +60,7 @@ pub struct Run {
     pub len: usize,
     pub name: *const c_char,
     pub global: *const c_char,
+    pub registry: c_int,
     pub call: c_int,
     pub load_status: c_int,
     pub args: *const FlatValue,
@@ -93,6 +94,7 @@ unsafe extern "C" {
     pub fn volya_newstate(alloc: LuaAlloc, ud: *mut c_void) -> *mut LuaState;
     pub fn volya_run_protected(l: *mut LuaState, run: *mut Run) -> c_int;
     pub fn volya_register_protected(l: *mut LuaState, register: *mut Register) -> c_int;
+    pub fn volya_register_kept_protected(l: *mut LuaState, name: *const c_char) -> c_int;
 
     pub fn lua_close(l: *mut LuaState);
     pub fn lua_gettop(l: *mut LuaState) -> c_int;

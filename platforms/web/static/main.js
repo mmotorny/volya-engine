@@ -27,6 +27,7 @@ let nextId = 0;
 let setCapture = () => {};
 let setLevel = () => {};
 let setTextField = () => {};
+let setCursor = () => {};
 
 const started = new Promise((resolve, reject) => {
   worker.onmessage = ({ data }) => {
@@ -35,6 +36,7 @@ const started = new Promise((resolve, reject) => {
     else if (data.type === "capture") setCapture(data.on);
     else if (data.type === "controls") setLevel(data);
     else if (data.type === "text_field") setTextField(data);
+    else if (data.type === "cursor") setCursor(data.shown);
     else if (data.type === "result") {
       const { resolve, reject } = pending.get(data.id);
       pending.delete(data.id);
@@ -104,14 +106,16 @@ const size = () => ({ width: view.clientWidth, height: view.clientHeight, dpr: d
 // Input goes to the engine only while it owns the screen (input.js); the
 // page's own interface hides meanwhile.
 const send = (event) => worker.postMessage({ type: "input", event });
-const forward = startInput(view, send);
+// The device's keyboard for the save screen's name field on touch screens
+// (#94), raised in the touchpad's click on it (#108).
+const entry = createTextEntry(send);
+const forward = startInput(view, send, { onClick: () => entry.click() });
+setCursor = (shown) => forward.setCursor(shown);
 const touch = createTouchControls(send, { call });
 document.body.append(touch.element);
 // Full screen with Keyboard Lock, offered in the level (#85).
 const offer = createFullscreenOffer(() => call("bound_keys"));
 document.body.append(offer.element);
-// The device's keyboard for the save screen's name field on touch screens (#94).
-const entry = createTextEntry(send);
 document.body.append(entry.element);
 setTextField = (field) => entry.update(field);
 setCapture = (on) => {

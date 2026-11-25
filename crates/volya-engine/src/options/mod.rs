@@ -14,17 +14,17 @@
 //! (section 13). Touch and gamepads reach every control through the same
 //! mapping as the title menu (our design, like `volya-engine-core::input`):
 //!
-//! - a touch moves the cursor there and presses the left button; lifting
-//!   releases it, so a tap clicks and a drag drags a slider or scrolls a
-//!   list;
+//! - touch is a touchpad for the cursor (#108): a tap clicks at the cursor,
+//!   a double-tap-and-hold drags a slider or a scroll bar, two fingers
+//!   scroll a list;
 //! - a gamepad's d-pad moves the cursor to the nearest control in that
 //!   direction (scrolling a list to show it), the left stick moves it
 //!   freely ([`STICK_SPEED`]), south (A / cross) is the left button and
 //!   east (B / circle) is Escape.
 //!
 //! Key rebinding (section 11.4) waits for the next key or mouse button; a
-//! gamepad's south button or a tap on the waiting cell is a left press over
-//! it and binds `mouse1` (what the spec allows without a keyboard). Gamepad
+//! gamepad's south button or a tap with the cursor on the waiting cell is a
+//! left press over it and binds `mouse1` (what the spec allows without a keyboard). Gamepad
 //! buttons are not bindable: the gamepad's own mapping is fixed
 //! ([`crate::controls`]).
 

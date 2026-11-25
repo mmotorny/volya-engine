@@ -442,6 +442,14 @@ impl Default for IdPool {
 }
 
 impl IdPool {
+    /// A pool whose first id is `first` (our choice: 0 and 0xFFFF are not
+    /// ids, so they start it at 1).
+    pub fn starting_at(first: u16) -> Self {
+        Self {
+            next: first.clamp(1, NO_ID),
+        }
+    }
+
     /// The next id; fails when 1 … 65534 are used up.
     pub fn take(&mut self) -> io::Result<u16> {
         if self.next == NO_ID {

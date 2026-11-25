@@ -17,7 +17,7 @@ use std::fs::File;
 use std::io::BufReader;
 
 use volya_engine::core::console::{Console, action_index};
-use volya_engine::core::input::{Event, GamepadButton, Input, Key, MouseButton, TouchPhase};
+use volya_engine::core::input::{Event, GamepadButton, Input, Key, MouseButton};
 use volya_engine::core::ui;
 use volya_engine::core::vfs::StdVfs;
 use volya_engine::core::vfs::db::DbVfs;
@@ -467,15 +467,22 @@ fn options_screen_from_game_data() {
     assert_eq!(run.console.video_mode(), (1024, 768), "Cancel undid it");
     assert!(run.screen.take_closed().unwrap().video_restart);
 
-    // Touch and gamepad (our design): a tap is a click; the d-pad moves
-    // the cursor to the nearest control, south clicks, east is Escape.
+    // Touch and gamepad (our design): the touchpad (#108) moves the cursor
+    // and a tap clicks at it; the d-pad moves the cursor to the nearest
+    // control, south clicks, east is Escape.
     run.screen
         .open(run.data, &mut run.console, XGA, run.now, [512.0, 384.0]);
     let tap = |run: &mut Run, at: [f32; 2]| {
-        for phase in [TouchPhase::Start, TouchPhase::End] {
-            run.input.handle(Event::Touch {
-                at,
-                phase,
+        let ([x, y], s) = (run.input.cursor_ui(), run.input.sensitivity());
+        run.input.handle(Event::TouchpadMotion {
+            delta: [2.0 * (at[0] - x) / s, 2.0 * (at[1] - y) / s],
+            speed: 0.0,
+        });
+        for pressed in [true, false] {
+            run.input.handle(Event::TouchpadButton {
+                button: MouseButton::Left,
+                pressed,
+                double: false,
                 time: run.now as f64 * 10.0,
             });
             run.frame();
