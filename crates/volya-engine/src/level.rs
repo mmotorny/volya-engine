@@ -2013,6 +2013,16 @@ impl LevelScreen {
         &self.torches
     }
 
+    /// What the touch Torch and Night vision buttons show
+    /// ([`PlayerTorches::buttons`]): both hidden while the player can't use
+    /// the commands (health 0, torch.md 8).
+    pub fn torch_buttons(&self) -> (Option<bool>, Option<bool>) {
+        match &self.character {
+            Some(c) if c.conditions.alive() => self.torches.buttons(c),
+            _ => (None, None),
+        }
+    }
+
     /// This frame's night-vision sound commands, taken (the app plays them
     /// on the level's sounds, torch.md 14).
     pub fn take_torch_sounds(&mut self) -> Vec<TorchSound> {

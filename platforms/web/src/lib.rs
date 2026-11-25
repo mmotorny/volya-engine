@@ -314,15 +314,24 @@ pub fn input_capture() -> bool {
 /// plus 2 while the crouch toggle is engaged, 4 while a sprint is
 /// requested, 8 while the toggled crouch is the low crouch and 16 while the
 /// sprint lock holds the touch stick; 32 while the character takes keys
-/// (the level's controls live, or the inventory screen over them, #110).
+/// (the level's controls live, or the inventory screen over them, #110);
+/// 64 while the touch Torch button shows and 128 while the torch is on, 256
+/// while the Night vision button shows and 512 while night vision is
+/// active (#363).
 #[wasm_bindgen]
 pub fn level_controls() -> u32 {
     let keys = u32::from(engine::character_takes_keys()) << 5;
+    let button = |b: Option<bool>, shift: u32| match b {
+        None => 0,
+        Some(on) => (1 | u32::from(on) << 1) << shift,
+    };
     keys | engine::level_controls().map_or(0, |c| {
         1 | u32::from(c.crouch) << 1
             | u32::from(c.sprint) << 2
             | u32::from(c.low_crouch) << 3
             | u32::from(c.sprint_lock) << 4
+            | button(c.torch, 6)
+            | button(c.night_vision, 8)
     })
 }
 
@@ -451,6 +460,12 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         }
         #[cfg(feature = "test-ops")]
         "debug_give_item" => to_json(&engine::give_item(text("section"))?),
+        // `{wear}`: an outfit with night vision put on, or taken away.
+        #[cfg(feature = "test-ops")]
+        "debug_nightvision_outfit" => {
+            let wear = args.get("wear").and_then(|v| v.as_bool()).unwrap_or(true);
+            to_json(&engine::nightvision_outfit(wear)?)
+        }
         // `{name, position: [x, y, z], category, looped, two_d, delay}`.
         #[cfg(feature = "test-ops")]
         "debug_play_sound" => {

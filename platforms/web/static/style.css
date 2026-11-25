@@ -381,15 +381,15 @@ html[data-engine-input] canvas#view {
   border-color: #fff;
 }
 
-#touch-controls button.touch-button.crouch[aria-pressed="true"]::before {
+#touch-controls button.touch-button[aria-pressed="true"]::before {
   background: rgba(var(--hud-teal), 0.16);
 }
 
-#touch-controls button.touch-button.crouch[aria-pressed="true"]::after {
+#touch-controls button.touch-button[aria-pressed="true"]::after {
   border-color: rgb(var(--hud-teal-hi));
 }
 
-#touch-controls button.touch-button.crouch[aria-pressed="true"].down::after {
+#touch-controls button.touch-button[aria-pressed="true"].down::after {
   border-color: #fff;
 }
 
@@ -403,6 +403,16 @@ button.touch-button.crouch.low .touch-glyph.on {
 
 button.touch-button.crouch[aria-pressed="true"]:not(.low) .touch-glyph.on,
 button.touch-button.crouch.low .touch-glyph.low {
+  visibility: visible;
+}
+
+/* Torch and Night vision: their glyph; brighter when on. */
+button.touch-button:is(.torch, .night-vision) .touch-glyph.on,
+button.touch-button:is(.torch, .night-vision)[aria-pressed="true"] .touch-glyph:not(.on) {
+  visibility: hidden;
+}
+
+button.touch-button:is(.torch, .night-vision)[aria-pressed="true"] .touch-glyph.on {
   visibility: visible;
 }
 
@@ -441,6 +451,28 @@ button.touch-button.down .touch-edges {
   top: calc(var(--safe-top) + var(--edge));
   width: 44px;
   height: 44px;
+}
+
+/* Torch, then Night vision, in a row left of Inventory along the top edge
+   (#363): above the look area and clear of both thumbs' zones, away from
+   Menu's side, where the move stick's lock target reaches up. Fixed places:
+   Night vision showing or not moves nothing. */
+#touch-controls button.touch-button:is(.torch, .night-vision) {
+  top: calc(var(--safe-top) + var(--edge));
+  width: 44px;
+  height: 44px;
+}
+
+#touch-controls button.touch-button.torch {
+  right: calc(var(--safe-right) + var(--edge) + 56px);
+}
+
+#touch-controls button.touch-button.night-vision {
+  right: calc(var(--safe-right) + var(--edge) + 112px);
+}
+
+#touch-controls button.touch-button[hidden] {
+  display: none;
 }
 
 /* Jump, the primary, at the corner; Crouch to its left. */

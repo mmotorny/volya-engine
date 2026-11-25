@@ -29,10 +29,12 @@
 //   engine stops while hidden (our design, #93).
 // To the page, besides replies: { type: "capture", on } whenever the engine
 // starts or stops owning the screen; the page forwards input only while on.
-// { type: "controls", level, crouch, sprint, low, lock } whenever the
-// level's controls go live or stop (level) or their toggles change (crouch
-// toggle engaged, sprint requested, the toggled crouch low, the sprint lock
-// holding): the page's touch controls and pointer lock follow it.
+// { type: "controls", level, crouch, sprint, low, lock, keys, torch,
+// nightVision } whenever the level's controls go live or stop (level) or
+// their toggles change (crouch toggle engaged, sprint requested, the
+// toggled crouch low, the sprint lock holding; the torch and night vision
+// on, or null while their touch buttons are hidden): the page's touch
+// controls and pointer lock follow it.
 // { type: "text_field", rect, focused, over } whenever the save screen's
 // name field shows, moves, gains or loses focus, the cursor comes over it or
 // leaves it, or the field goes (rect null): canvas CSS pixels [x, y, width,
@@ -102,6 +104,8 @@ function syncCapture() {
       low: (bits & 8) !== 0,
       lock: (bits & 16) !== 0,
       keys: (bits & 32) !== 0,
+      torch: bits & 64 ? (bits & 128) !== 0 : null,
+      nightVision: bits & 256 ? (bits & 512) !== 0 : null,
     });
   }
   const shown = e().cursor_shown();

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! The pictures the web page's touch controls take from the Russian
-//! edition (BYOA, #105): sizes, the posture icons' colour and the
+//! edition (BYOA, #105, #363): sizes, the posture icons' colour and the
 //! crosshair's, with decode times. Skips when `VOLYA_GOG_INSTALLER` is
 //! unset.
 
@@ -41,8 +41,15 @@ fn touch_control_pictures_from_game_data() {
     let start = Instant::now();
     for (source, region, size) in &wanted {
         let begun = Instant::now();
-        let image =
-            ui_image::load(&tree, &data.aliases, &data.descriptions, source, *region).unwrap();
+        let image = ui_image::load(
+            &tree,
+            &data.aliases,
+            &data.descriptions,
+            &data.system,
+            source,
+            *region,
+        )
+        .unwrap();
         assert_eq!((image.width, image.height), *size, "{source:?}");
         bytes += image.pixels.len();
         if let Source::Id(name) = source
@@ -67,16 +74,39 @@ fn touch_control_pictures_from_game_data() {
         &tree,
         &data.aliases,
         &data.descriptions,
+        &data.system,
         &path("ui\\ui_hud"),
         None,
     )
     .unwrap();
     let crouch = id("ui_hud_soldier_crouch");
-    let part = ui_image::load(&tree, &data.aliases, &data.descriptions, &crouch, None).unwrap();
+    let part = ui_image::load(
+        &tree,
+        &data.aliases,
+        &data.descriptions,
+        &data.system,
+        &crouch,
+        None,
+    )
+    .unwrap();
     assert_eq!(
         part.pixels,
         ui_image::crop(&whole, [65, 354, 65, 75]).pixels
     );
+    // The torch's inventory icon (the touch Torch button, #363).
+    let torch = Source::Item("device_torch".into());
+    let icon = ui_image::load(
+        &tree,
+        &data.aliases,
+        &data.descriptions,
+        &data.system,
+        &torch,
+        None,
+    )
+    .unwrap();
+    assert_eq!((icon.width, icon.height), (100, 50));
+    let engraved = ui_image::engraving(&icon);
+    assert!(engraved.pixels.chunks(4).any(|p| p[3] == 255));
     let cross = ui_image::cross_color(&data.system).unwrap();
     println!("cross_color {cross:?}");
     assert!(cross.iter().all(|c| (0.0..=1.0).contains(c)));

@@ -31,3 +31,7 @@ Reference mobile device for real-device testing and performance and memory budge
 ## Saved games
 
 Volya Engine reads and writes the original game's saves. Saving and loading are built once every system whose state a save holds exists.
+
+## Renderers
+
+The first, static-lighting renderer is the one built. The dynamic renderers (`renderer_r2a`, `renderer_r2`; scoped in docs/behavior/r2-renderers-scope.md) wait until the game is more or less complete: a playable game comes before more graphics modes. Until then their entries in the options are disabled.

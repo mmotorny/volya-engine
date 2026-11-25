@@ -368,6 +368,12 @@ pub struct LevelControls {
     pub sprint: bool,
     /// The touch stick's sprint lock holds it forward.
     pub sprint_lock: bool,
+    /// The touch Torch button: `None` hidden, else whether the torch is on
+    /// ([`crate::torch::PlayerTorches::buttons`]).
+    pub torch: Option<bool>,
+    /// The touch Night vision button: `None` hidden, else whether night
+    /// vision is active.
+    pub night_vision: Option<bool>,
 }
 
 pub struct App {
@@ -1472,11 +1478,14 @@ impl App {
                 ..
             }) if intro.player.is_none() && !inventory.as_ref().is_some_and(|i| i.is_open()) => {
                 let p = level.player().state();
+                let (torch, night_vision) = level.torch_buttons();
                 Some(LevelControls {
                     crouch: p.crouch_toggled,
                     low_crouch: p.crouch_toggled && p.posture == 2,
                     sprint: p.sprint_requested,
                     sprint_lock: level.controls().sprint_lock.locked(),
+                    torch,
+                    night_vision,
                 })
             }
             _ => None,
@@ -1552,6 +1561,45 @@ impl App {
         );
         character.inventory.take(item);
         Ok(id)
+    }
+
+    /// Test interface: `wear` puts on an outfit with night vision (the
+    /// first section of the configuration that is an outfit with a
+    /// `nightvision_sect`, torch.md 15.1), given as [`App::give_item`] and
+    /// moved to its slot; otherwise the worn outfit, if it has night
+    /// vision, leaves the inventory. Returns the outfit's section.
+    pub fn nightvision_outfit(&mut self, wear: bool) -> io::Result<Option<String>> {
+        use crate::core::character::inventory::ItemConfig;
+        use volya_engine_formats::object::Kind;
+        if wear {
+            let section = (self.data.system.sections())
+                .filter_map(|s| ItemConfig::read(&self.data.system, s.name()).ok())
+                .find(|c| c.class_id.kind() == Kind::Outfit && c.nightvision_sect.is_some())
+                .map(|c| c.section)
+                .ok_or_else(|| io::Error::other("no outfit with night vision"))?;
+            let id = self.give_item(&section)?;
+            let character = self.character_mut()?;
+            if !character.inventory.move_to_slot_with_swap(id).succeeded() {
+                return Err(io::Error::other(format!("{section} not worn")));
+            }
+            return Ok(Some(section));
+        }
+        let character = self.character_mut()?;
+        let worn = (character.inventory.worn_outfit())
+            .filter(|i| i.config.nightvision_sect.is_some())
+            .map(|i| (i.id, i.config.section.clone()));
+        Ok(worn.map(|(id, section)| {
+            character.drop_item(id);
+            section
+        }))
+    }
+
+    fn character_mut(&mut self) -> io::Result<&mut crate::core::character::CharacterState> {
+        match &mut self.phase {
+            Some(Phase::Level { level, .. }) => level.character_mut(),
+            _ => None,
+        }
+        .ok_or_else(|| io::Error::other("no player character"))
     }
 
     /// The level while one runs.

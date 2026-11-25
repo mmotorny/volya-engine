@@ -435,6 +435,17 @@ pub fn state() -> serde_json::Value {
     })
 }
 
+/// The `debug_nightvision_outfit` op (tests): an outfit with night vision
+/// worn, or taken off and away ([`App::nightvision_outfit`]); its section.
+#[cfg(feature = "test-ops")]
+pub fn nightvision_outfit(wear: bool) -> Result<Option<String>, JsValue> {
+    RUNNING.with(|r| {
+        let mut r = r.borrow_mut();
+        let running = r.as_mut().ok_or_else(|| error("the game is not running"))?;
+        running.app.nightvision_outfit(wear).map_err(error)
+    })
+}
+
 /// The `debug_give_item` op (tests): an item of `section` put into the
 /// player's inventory ([`App::give_item`]); its id.
 #[cfg(feature = "test-ops")]
@@ -524,10 +535,12 @@ pub fn scene(resolution: Resolution) -> Result<serde_json::Value, JsValue> {
 }
 
 /// The `ui_images` op (#105): pictures of the game's UI textures for the
-/// page's own controls, each `{path}` (a texture path) or `{id}` (a
-/// texture description id), with an optional `region` `[x, y, width,
+/// page's own controls, each `{path}` (a texture path), `{id}` (a texture
+/// description id) or `{item}` (an item section's inventory icon), with an
+/// optional `region` `[x, y, width,
 /// height]` and `silhouette` (the HUD icon transform of
-/// [`volya_engine::ui_image::silhouette`]). Answers `{images, cross_color,
+/// [`volya_engine::ui_image::silhouette`]) or `engraving`
+/// ([`volya_engine::ui_image::engraving`]). Answers `{images, cross_color,
 /// ms}`: per request `{width, height, rgba, mean}` (RGBA as base64, `mean`
 /// the alpha-weighted mean colour) or `{error}`; the crosshair's colour
 /// (`[hud_cursor] cross_color`, 0 to 1, or null); the decoding time.
@@ -545,10 +558,11 @@ pub fn ui_images(args: &serde_json::Value) -> Result<serde_json::Value, JsValue>
         let data = running.app.data();
         let picture = |tree: &dyn volya_engine::core::vfs::Vfs, request: &serde_json::Value| {
             let text = |key| request.get(key).and_then(|v| v.as_str());
-            let source = match (text("path"), text("id")) {
-                (Some(path), _) => Source::Path(path.into()),
-                (None, Some(id)) => Source::Id(id.into()),
-                _ => return json!({ "error": "neither `path` nor `id`" }),
+            let source = match (text("path"), text("id"), text("item")) {
+                (Some(path), _, _) => Source::Path(path.into()),
+                (None, Some(id), _) => Source::Id(id.into()),
+                (None, None, Some(item)) => Source::Item(item.into()),
+                _ => return json!({ "error": "none of `path`, `id` and `item`" }),
             };
             let region = match request.get("region") {
                 None | Some(serde_json::Value::Null) => None,
@@ -560,13 +574,23 @@ pub fn ui_images(args: &serde_json::Value) -> Result<serde_json::Value, JsValue>
                 },
             };
             let image =
-                match ui_image::load(tree, &data.aliases, &data.descriptions, &source, region) {
+                match ui_image::load(
+                tree,
+                &data.aliases,
+                &data.descriptions,
+                &data.system,
+                &source,
+                region,
+            ) {
                     Ok(image) => image,
                     Err(e) => return json!({ "error": e.to_string() }),
                 };
-            let (image, mean) = if request.get("silhouette").and_then(|v| v.as_bool()) == Some(true)
-            {
+            let flag = |key| request.get(key).and_then(|v| v.as_bool()) == Some(true);
+            let (image, mean) = if flag("silhouette") {
                 ui_image::silhouette(&image)
+            } else if flag("engraving") {
+                let mean = ui_image::mean_color(&image);
+                (ui_image::engraving(&image), mean)
             } else {
                 let mean = ui_image::mean_color(&image);
                 (image, mean)

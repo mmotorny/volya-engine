@@ -3,15 +3,18 @@
 
 //! Pictures of the game's UI textures for a platform's own interface (the
 //! web page's touch controls, #105): a still image decoded to RGBA, whole
-//! or a rectangle of it, named by its texture path or by a texture
-//! description id (docs/formats/ui-layout.md sections 6.2–6.3), and the
-//! transforms our design applies to them.
+//! or a rectangle of it, named by its texture path, by a texture
+//! description id (docs/formats/ui-layout.md sections 6.2–6.3) or by an
+//! item section (its inventory icon), and the transforms our design
+//! applies to them.
 
 use std::io;
 
+use crate::core::character::inventory::ItemConfig;
 use crate::core::config::{Config, PathAliases};
 use crate::core::ui;
 use crate::core::vfs::{self, Vfs};
+use crate::inventory_screen::layout::{ICON_PIXELS, ICONS};
 use volya_engine_formats::dds::Dds;
 use volya_engine_formats::ltx::value;
 use volya_engine_formats::pe::Rgba;
@@ -26,6 +29,9 @@ pub enum Source {
     /// A texture description id (e.g. `ui_hud_soldier_crouch`): its
     /// rectangle of its texture.
     Id(String),
+    /// An item section (e.g. `device_torch`): its inventory icon
+    /// (docs/behavior/inventory-screen.md 4.2).
+    Item(String),
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -40,11 +46,20 @@ pub fn load(
     tree: &dyn Vfs,
     aliases: &PathAliases,
     descriptions: &TextureDescriptions,
+    system: &Config,
     source: &Source,
     region: Option<[u32; 4]>,
 ) -> io::Result<Rgba> {
     let (path, rect) = match source {
         Source::Path(path) => (path.as_str(), None),
+        Source::Item(section) => {
+            let grid = ItemConfig::read(system, section)?
+                .inv_grid
+                .ok_or_else(|| invalid(format!("{section}: no inv_grid keys")))?;
+            let pixels = ICON_PIXELS as u32;
+            let rect = [grid.x, grid.y, grid.width, grid.height].map(|v| v * pixels);
+            (ICONS, Some(rect))
+        }
         Source::Id(id) => {
             let desc = descriptions
                 .get(id)
@@ -169,6 +184,32 @@ pub fn silhouette(image: &Rgba) -> (Rgba, Option<[u8; 3]>) {
     (filled, mean)
 }
 
+/// The engraving our design draws a full-colour picture as (an item
+/// icon, #363): white, each texel's alpha scaled by its brightness
+/// relative to the picture's (the 99th percentile of the brightness of its
+/// texels with any alpha, so a few glints don't dim the rest), so its
+/// details stay where a silhouette would be one blot.
+pub fn engraving(image: &Rgba) -> Rgba {
+    let texels = image.pixels.as_chunks::<4>().0;
+    // Rec. 601 luma, 0–255.
+    let luma = |p: &[u8; 4]| {
+        (299 * u32::from(p[0]) + 587 * u32::from(p[1]) + 114 * u32::from(p[2])) / 1000
+    };
+    let mut lit: Vec<u32> = texels.iter().filter(|p| p[3] > 0).map(luma).collect();
+    lit.sort_unstable();
+    let top = lit.get(lit.len() * 99 / 100).copied().unwrap_or(0).max(1);
+    let mut pixels = Vec::with_capacity(image.pixels.len());
+    for p in texels {
+        let a = u32::from(p[3]) * luma(p).min(top) / top;
+        pixels.extend_from_slice(&[255, 255, 255, a as u8]);
+    }
+    Rgba {
+        width: image.width,
+        height: image.height,
+        pixels,
+    }
+}
+
 /// The crosshair's colour, `[hud_cursor] cross_color` of `system`
 /// (`config\system.ltx`): red, green, blue and alpha from 0 to 1; `None`
 /// when absent.
@@ -261,6 +302,20 @@ mod tests {
         let (shape, mean) = silhouette(&icon);
         assert_eq!(mean, Some([40, 80, 120]));
         assert_eq!(shape.pixels, [40, 80, 120, 255].repeat(3));
+    }
+
+    #[test]
+    fn engraving_is_white_with_alpha_by_brightness() {
+        let picture = image(4, 1, |x, _| match x {
+            0 => [200, 200, 200, 255],
+            1 => [100, 100, 100, 255],
+            2 => [200, 200, 200, 128],
+            _ => [255, 255, 255, 0],
+        });
+        let out = engraving(&picture);
+        let alphas: Vec<u8> = out.pixels.chunks(4).map(|p| p[3]).collect();
+        assert_eq!(alphas, [255, 127, 128, 0]);
+        assert!(out.pixels.chunks(4).all(|p| p[..3] == [255, 255, 255]));
     }
 
     #[test]

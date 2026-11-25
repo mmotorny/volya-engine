@@ -62,6 +62,12 @@ pub fn run(args: &[&str]) -> Result {
     };
     let targets = named(TARGETS);
     let suites = named(SUITES);
+    crate::machine::wait_memory()?;
+    let _simulator = if targets.contains(&"iphone") {
+        Some(crate::machine::SimulatorLock::acquire()?)
+    } else {
+        None
+    };
 
     if suites.len() == SUITES.len() {
         step("Native tests");

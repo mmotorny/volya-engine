@@ -463,6 +463,22 @@ impl PlayerTorches {
         }
     }
 
+    /// What the page's touch Torch and Night vision buttons show (our
+    /// design, #363), each `None` while its command would do nothing, else
+    /// whether it is on: the torch while one is attached (the command
+    /// reaches the first, 8); its night vision while that torch has it and
+    /// its effect is active or the worn outfit has an effect section (15.2:
+    /// without one a press only toggles the request).
+    pub fn buttons(&self, character: &CharacterState) -> (Option<bool>, Option<bool>) {
+        let Some(t) = self.torches.iter().find(|t| t.attached) else {
+            return (None, None);
+        };
+        let night = (t.torch.night_vision.as_ref())
+            .filter(|n| n.effect.is_some() || outfit_effect(character).is_some())
+            .map(|n| n.effect.is_some());
+        (Some(t.torch.on), night)
+    }
+
     /// The first attached torch, else the first, as the engine interface
     /// reports it.
     pub fn report(&self, lights: &Lights, glows: &Glows) -> Option<TorchReport> {

@@ -161,7 +161,9 @@ if (state.level) {
   } else {
     const touch = createTouchControls(() => {}, { touch: true, fade: false });
     document.body.append(touch.element);
-    touch.update({ level: true, ...toggles });
+    // As at a New Game's start unless the state says otherwise: the torch
+    // attached and off, no outfit with night vision.
+    touch.update({ level: true, torch: false, nightVision: null, ...toggles });
     const box = touch.element;
     const landscape = [Math.max(box.clientWidth, box.clientHeight), Math.min(box.clientWidth, box.clientHeight)];
     // A thumb a little above the stick's resting place, or where the state
