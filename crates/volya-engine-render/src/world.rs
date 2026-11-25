@@ -2305,6 +2305,11 @@ impl Renderer {
         self.world_pipelines = Some(p);
     }
 
+    /// The draws the last frame's light passes drew, over all passes.
+    pub fn light_draws(&self) -> usize {
+        self.light_draws
+    }
+
     /// Gives the light passes their attenuation textures
     /// (dynamic-lights.md 6.4); without them no light pass is drawn.
     pub fn set_light_textures(&mut self, textures: LightTextures) {
@@ -2327,6 +2332,7 @@ impl Renderer {
         let Some(p) = self.world_pipelines.as_mut() else {
             return Vec::new();
         };
+        self.light_draws = 0;
         if frame.lights.is_empty() || p.light_groups.is_none() {
             return Vec::new();
         }
@@ -2360,6 +2366,7 @@ impl Renderer {
         if !out.is_empty() {
             self.queue.write_buffer(&p.light_constants, 0, &constants);
         }
+        self.light_draws = out.iter().map(|(_, _, d)| d.len()).sum();
         out
     }
 }

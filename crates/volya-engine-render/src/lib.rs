@@ -148,6 +148,8 @@ pub struct Renderer {
     world_pipelines: Option<world::WorldPipelines>,
     /// The light passes' attenuation textures, once given.
     light_textures: Option<world::LightTextures>,
+    /// The draws the last frame's light passes drew.
+    light_draws: usize,
     /// The world pass's depth buffer, sized to the latest target.
     depth: Option<wgpu::Texture>,
     /// The frame [`Renderer::render_scaled`] draws into.
@@ -269,6 +271,7 @@ impl Renderer {
             video: video::Converter::new(device),
             world_pipelines: None,
             light_textures: None,
+            light_draws: 0,
             depth: None,
             offscreen: None,
             prepared: Default::default(),

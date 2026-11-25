@@ -397,10 +397,21 @@ fn a_lamp_lights_the_level_on_both_paths_from_game_data() {
                     wgpu::Color::BLACK,
                 ))
                 .unwrap();
-                (pixels, scene, start.elapsed())
+                (pixels, scene, start.elapsed(), r.light_draws())
             };
             let _ = capture(&screen);
-            let (on, scene, t_on) = capture(&screen);
+            // The median of 9 frames' times.
+            let median = |mut t: Vec<std::time::Duration>| {
+                t.sort();
+                t[t.len() / 2]
+            };
+            let mut times = Vec::new();
+            for _ in 0..8 {
+                times.push(capture(&screen).2);
+            }
+            let (on, scene, t, draws) = capture(&screen);
+            times.push(t);
+            let t_on = median(times);
             let passes = scene.world.as_ref().unwrap().lights.len();
             let settings = LightSettings {
                 dlights: false,
@@ -410,7 +421,13 @@ fn a_lamp_lights_the_level_on_both_paths_from_game_data() {
             // The same frame again (no time passes: the glows keep their
             // fade), its light passes made anew.
             screen.paused(16);
-            let (off, scene_off, t_off) = capture(&screen);
+            let mut times = Vec::new();
+            for _ in 0..8 {
+                times.push(capture(&screen).2);
+            }
+            let (off, scene_off, t, _) = capture(&screen);
+            times.push(t);
+            let t_off = median(times);
             assert!(presenter.take_errors().is_empty());
             assert!(scene_off.world.as_ref().unwrap().lights.is_empty());
             dump("VOLYA_DUMP_LIGHTS", &on);
@@ -425,8 +442,8 @@ fn a_lamp_lights_the_level_on_both_paths_from_game_data() {
                 darker += usize::from(sb > sa + 3);
             }
             eprintln!(
-                "compat {compat}: {passes} light passes, {brighter} pixels brighter, {darker} \
-                 darker; frame {t_on:.1?} with lights, {t_off:.1?} without"
+                "compat {compat}: {passes} light passes drawing {draws} draws, {brighter} pixels \
+                 brighter, {darker} darker; frame {t_on:.1?} with lights, {t_off:.1?} without"
             );
             assert!(passes >= 1, "compat {compat}");
             assert!(brighter > 2_000, "compat {compat}: {brighter} pixels lit");
