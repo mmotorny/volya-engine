@@ -397,11 +397,12 @@ fn gpu_cost_from_game_data() {
                     gpu_times(&mut r, &mut presenter, &tree, &scene, &target, 5);
                     let (frame, passes) =
                         gpu_times(&mut r, &mut presenter, &tree, &scene, &target, 30);
+                    let busy: f64 = passes.iter().map(|p| p.1).sum();
                     let passes: Vec<String> =
-                        passes.iter().map(|(n, t)| format!("{n} {t:.2}")).collect();
+                        passes.iter().map(|(n, t)| format!("{n} {t:.3}")).collect();
                     eprintln!(
                         "compat {compat}, {name}, r__supersample {supersample}, {variant}: GPU \
-                         {frame:.2} ms a frame ({}); target {:?}",
+                         {frame:.2} ms a frame, passes {busy:.3} ({}); target {:?}",
                         passes.join(", "),
                         r.presentation_target().map(|t| t.0)
                     );
