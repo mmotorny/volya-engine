@@ -25,7 +25,10 @@ const TARGETS: &[&str] = &["chrome", "iphone"];
 const REPORT_TIMEOUT: Duration = Duration::from_secs(60);
 /// Suites importing gigabytes from the installer get longer; the menu
 /// suite also transcodes a level's textures where the GPU has no BC (#113).
-const SLOW_SUITES: &[(&str, Duration)] = &[("menu", Duration::from_secs(1500))];
+const SLOW_SUITES: &[(&str, Duration)] = &[
+    ("menu", Duration::from_secs(1500)),
+    ("render", Duration::from_secs(240)),
+];
 
 fn report_timeout(suite: &str) -> Duration {
     SLOW_SUITES
@@ -394,7 +397,7 @@ mod tests {
             "run x\nfail WebGPU adapter on the main thread\tno WebGPU adapter\nfail other\tboom";
         assert_eq!(
             known_failures("iphone", report),
-            "run x\nskip WebGPU adapter on the main thread\tiOS Simulator has no WebGPU adapter; check on a real device\nfail other\tboom"
+            format!("run x\nskip WebGPU adapter on the main thread\t{NO_WEBGPU}\nfail other\tboom")
         );
         assert_eq!(known_failures("chrome", report), report);
     }

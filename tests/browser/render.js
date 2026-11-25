@@ -75,7 +75,9 @@ export const tests = {
     // The canvas covers the viewport in device pixels.
     // The page reports its size after startup; read the status anew until
     // the worker has applied it.
-    const expected = [innerWidth, innerHeight].map((css) => Math.round(css * devicePixelRatio));
+    // The game is drawn in landscape: an upright phone's canvas is turned.
+    const css = innerWidth >= innerHeight ? [innerWidth, innerHeight] : [innerHeight, innerWidth];
+    const expected = css.map((v) => Math.round(v * devicePixelRatio));
     let size;
     for (let i = 0; i < 40; i++) {
       size = (await volya.status()).gpu.size;

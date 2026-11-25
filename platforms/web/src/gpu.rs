@@ -305,6 +305,10 @@ pub fn set_splash(image: &Rgba) {
 /// presents if anything changed.
 pub fn frame(time: f64) {
     let _ = with_gpu(|gpu| {
+        // wgpu's GL backend runs buffer-mapping callbacks (captures) and
+        // frees finished uploads only when polled; the browser's WebGPU
+        // does both on its own (this is then a no-op).
+        let _ = gpu.renderer.device().poll(wgpu::PollType::Poll);
         let canvas = Resolution::new(gpu.config.width, gpu.config.height);
         // The game draws at its video mode (#49), within the GPU's limit.
         let max = gpu.renderer.device().limits().max_texture_dimension_2d;
