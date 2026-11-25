@@ -401,20 +401,23 @@ pub async fn submitted_work_done() -> Result<(), JsValue> {
     Ok(())
 }
 
-/// Draws the level's start view once into a frame of its own, never
-/// shown, while its loading waits ([`crate::engine::level_to_prepare_scene`]):
-/// the world is made from what was uploaded, and the browser and the GPU
-/// do their first-draw work (programs, the world's render bundles) under
-/// the loading image (#355, #376). Whether there was a view to draw.
-pub fn warm_up() -> Result<bool, JsValue> {
+/// Draws the level's start view into a frame of its own, never shown,
+/// while its loading waits ([`crate::engine::level_to_prepare_scene`]): the
+/// world is made from what was uploaded, and the browser and the GPU do
+/// their first-draw work (programs, each draw call's first use) under the
+/// loading image (#355, #376). With `window`, only the world's draw calls
+/// numbered within it, so that work is spread over task turns (#437: on an
+/// iPhone the whole view at once kept the GPU process 2.5–2.9 s). The
+/// world's draw calls in the view, `None` without a view to draw.
+pub fn warm_up(window: Option<std::ops::Range<u32>>) -> Result<Option<u32>, JsValue> {
     with_gpu(|gpu| {
         let max = gpu.renderer.device().limits().max_texture_dimension_2d;
         let Some(mode) = crate::engine::render_size() else {
-            return Ok(false);
+            return Ok(None);
         };
         let size = Resolution::new(mode.width.clamp(1, max), mode.height.clamp(1, max));
         let Some(scene) = crate::engine::level_to_prepare_scene(size) else {
-            return Ok(false);
+            return Ok(None);
         };
         // Kept through the loading screen's frames until the level shows.
         let level = scene.world.as_ref().map(|w| w.world.clone());
@@ -452,12 +455,14 @@ pub fn warm_up() -> Result<bool, JsValue> {
                 view_formats: &[],
             });
         crate::diagnostics::gpu_step("gpu.warm_up_draw", &gpu.renderer, &mode);
+        gpu.renderer.set_call_window(window);
         tracing::info_span!("render.encode")
             .in_scope(|| gpu.renderer.render(&target, &list, CLEAR));
+        gpu.renderer.set_call_window(None);
         target.destroy();
         crate::diagnostics::gpu_step("gpu.warm_up_submitted", &gpu.renderer, &mode);
         LEVEL_FRAMES.set(0);
-        Ok(true)
+        Ok(Some(gpu.renderer.world_calls()))
     })
 }
 
