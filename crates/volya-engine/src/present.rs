@@ -225,9 +225,11 @@ impl Presenter {
             .as_ref()
             .is_some_and(|(level, _)| Arc::ptr_eq(level, &scene.world));
         if !current {
-            // The previous world's buffers go before the next's arrive.
+            // The previous world's buffers go before the next's arrive,
+            // with its effects' textures.
             self.world = None;
             self.placed = None;
+            self.particle_shaders.clear();
             let world = self.upload_world(renderer, tree, &scene.world);
             let world = world
                 .map_err(|e| self.errors.push(format!("{}: {e}", scene.world.dir)))
@@ -517,7 +519,10 @@ impl Presenter {
                 let frame = self.world_frame(renderer, tree, world);
                 list.world = frame.filter(|_| !world.covered);
             }
-            None => self.world = None,
+            None => {
+                self.world = None;
+                self.particle_shaders.clear();
+            }
         }
         for sprite in &scene.sprites {
             let texture = match &sprite.texture {
