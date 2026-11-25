@@ -60,8 +60,23 @@ $screenshots$ =   true | false| $app_data_root$| screenshots\
 pub const DEFAULT_USER_LTX: &str = "__support/userdocs/user.ltx";
 
 /// The built-in version string shown when the registry has none
-/// (title-menu.md section 3.4). This platform has no registry.
+/// (title-menu.md section 3.4).
 pub const BUILT_IN_VERSION: &str = "1.0006";
+
+/// The version string of the title menu's caption (title-menu.md section
+/// 3.4), given the registry's `InstallVers`: this platform has no registry,
+/// so the value the installer's data writes there, if any. At most 128
+/// bytes of it; without one the built-in [`BUILT_IN_VERSION`].
+pub fn version_string(install_vers: Option<&str>) -> String {
+    let Some(value) = install_vers else {
+        return BUILT_IN_VERSION.to_owned();
+    };
+    let mut end = value.len().min(128);
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].to_owned()
+}
 
 const GAME_CONFIG: &str = "$game_config$";
 const GAME_SOUNDS: &str = "$game_sounds$";
@@ -154,7 +169,8 @@ pub struct GameData {
     /// ([`GameData::set_user_config`]), else the installer's
     /// [`DEFAULT_USER_LTX`].
     pub user_config: Vec<u8>,
-    /// The version string of the version caption.
+    /// The version string of the version caption: [`BUILT_IN_VERSION`]
+    /// until the platform sets [`version_string`]'s.
     pub version: String,
     /// `textures\ui\ui_ani_cursor`: the frames of the menu cursor.
     pub cursor: volya_engine_formats::ui::seq::Sequence,
@@ -590,6 +606,15 @@ pub fn video_meta(tree: &dyn Vfs, file: &str) -> io::Result<VideoMeta> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn version_string_from_install_vers() {
+        assert_eq!(version_string(None), "1.0006");
+        assert_eq!(version_string(Some("1.0004")), "1.0004");
+        assert_eq!(version_string(Some(&"9".repeat(200))).len(), 128);
+        // Cut on a character's boundary.
+        assert_eq!(version_string(Some(&"é".repeat(100))).len(), 128);
+    }
 
     #[test]
     fn quit_is_escape() {

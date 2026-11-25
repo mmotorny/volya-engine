@@ -41,6 +41,39 @@ pub struct Manifest {
     /// recorded), so an interrupted import can say how far it got.
     #[serde(default)]
     pub total_bytes: u64,
+    /// The installer the files came from (absent in manifests written
+    /// before it was recorded).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installer: Option<InstallerIdentity>,
+}
+
+/// Who the installer is, as its files and headers say (diagnostics), and
+/// what its registry entries write where the title menu reads its version.
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct InstallerIdentity {
+    /// The picked files' names.
+    pub exe: String,
+    pub bin: String,
+    /// The setup's `AppName` and `AppVersion`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_version: Option<String>,
+    /// `InstallVers` under the title menu's key, when the entries write it
+    /// (`volya_engine_installer::Installer::install_vers`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_vers: Option<String>,
+}
+
+impl Manifest {
+    /// The title menu's version string (`volya_engine::data::version_string`).
+    pub fn version_string(&self) -> String {
+        let install_vers = self
+            .installer
+            .as_ref()
+            .and_then(|i| i.install_vers.as_deref());
+        volya_engine::data::version_string(install_vers)
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -228,6 +261,68 @@ pub fn play_sound(path: &str, playback: Playback) -> Result<u32, JsValue> {
 /// Starts a music track from the game tree; returns the voice ids.
 pub fn play_music(track: &str) -> Result<[u32; 2], JsValue> {
     with_game(|game| crate::audio::play_music(&game.tree, track))
+}
+
+/// The version string the title menu shows for the mounted game.
+pub fn version_string() -> Result<String, JsValue> {
+    with_game(|game| Ok(game.manifest.version_string()))
+}
+
+/// The imported game as the diagnostic log's session event records it
+/// (docs/architecture/diagnostics.md): `game` (`imported`, `partly
+/// imported`, `not imported`, or `unreadable` with `game_problem`) and, from
+/// the import's record, `game_version` (the title menu's caption),
+/// `game_language` and, where recorded, the installer's `installer_exe`,
+/// `installer_bin`, `installer_name` and `installer_version`.
+pub async fn identity() -> serde_json::Map<String, serde_json::Value> {
+    let mounted = GAME.with(|g| {
+        let g = g.borrow();
+        let m = &g.as_ref()?.manifest;
+        Some(Manifest {
+            language: m.language.clone(),
+            complete: m.complete,
+            installer: m.installer.clone(),
+            ..Manifest::default()
+        })
+    });
+    let manifest = match mounted {
+        Some(m) => Ok(Some(m)),
+        None => read_manifest().await,
+    };
+    let mut args = serde_json::Map::new();
+    let mut text = |key: &str, value: &str| {
+        args.insert(key.into(), value.into());
+    };
+    match manifest {
+        Err(e) => {
+            text("game", "unreadable");
+            text("game_problem", &e.as_string().unwrap_or_default());
+        }
+        Ok(None) => text("game", "not imported"),
+        Ok(Some(m)) => {
+            text(
+                "game",
+                if m.complete {
+                    "imported"
+                } else {
+                    "partly imported"
+                },
+            );
+            text("game_version", &format!("ver. {}", m.version_string()));
+            text("game_language", &m.language);
+            if let Some(i) = &m.installer {
+                text("installer_exe", &i.exe);
+                text("installer_bin", &i.bin);
+                if let Some(name) = &i.app_name {
+                    text("installer_name", name);
+                }
+                if let Some(version) = &i.app_version {
+                    text("installer_version", version);
+                }
+            }
+        }
+    }
+    args
 }
 
 /// Runs `f` on the combined archive tree and the game root (loose files).

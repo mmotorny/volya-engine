@@ -61,10 +61,24 @@ impl GameFile {
 }
 
 /// The game files of a GOG installer, parsed from its `.exe`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Installer {
     pub files: Vec<GameFile>,
+    /// The setup's `AppName`, `AppVersion` and `AppVerName` (who and which
+    /// build the installer is, for diagnostics).
+    pub app_name: Option<String>,
+    pub app_version: Option<String>,
+    pub app_versioned_name: Option<String>,
+    /// The value `InstallVers` the installer's registry entries write under
+    /// `HKEY_LOCAL_MACHINE\Software\GSC Game World\STALKER-SHOC\`, where
+    /// the title menu reads its version string (title-menu.md section 3.4);
+    /// `None` when they write none.
+    pub install_vers: Option<String>,
 }
+
+/// The registry key the title menu reads `InstallVers` from (title-menu.md
+/// section 3.4), below `HKEY_LOCAL_MACHINE`.
+const VERSION_KEY: &str = "Software\\GSC Game World\\STALKER-SHOC";
 
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
@@ -160,7 +174,24 @@ impl Installer {
         if let Some((file, _)) = current {
             return Err(invalid(format!("{}: missing parts", file.path)));
         }
-        Ok(Self { files })
+        let header = inno.header();
+        let text = |s: Option<&str>| s.map(str::to_owned);
+        Ok(Self {
+            files,
+            app_name: text(header.app_name()),
+            app_version: text(header.app_version()),
+            app_versioned_name: text(header.app_versioned_name()),
+            install_vers: inno
+                .registry_entries()
+                .iter()
+                .find(|e| {
+                    e.registry_root() == inno::entry::RegRoot::HKeyLocalMachine
+                        && e.key().is_some_and(is_version_key)
+                        && e.name()
+                            .is_some_and(|n| n.eq_ignore_ascii_case("InstallVers"))
+                })
+                .and_then(|e| text(e.value())),
+        })
     }
 
     /// Game files (not redistributables) installed for `language`.
@@ -290,6 +321,12 @@ pub fn extract(
         return Err(invalid(format!("{}: MD5 mismatch", file.path)));
     }
     Ok(())
+}
+
+/// Whether a registry key names [`VERSION_KEY`] (registry keys ignore case
+/// and a trailing backslash).
+fn is_version_key(key: &str) -> bool {
+    key.trim_end_matches('\\').eq_ignore_ascii_case(VERSION_KEY)
 }
 
 /// Hex form of an MD5, as GOG writes it.
@@ -426,6 +463,7 @@ mod tests {
                     ..GameFile::default()
                 })
                 .collect(),
+            ..Installer::default()
         }
     }
 
@@ -466,6 +504,13 @@ mod tests {
             installer(&[("a", 1, &[])]).choose_language(&prefs(&["en"])),
             None
         );
+    }
+
+    #[test]
+    fn matches_the_version_key() {
+        assert!(is_version_key("Software\\GSC Game World\\STALKER-SHOC\\"));
+        assert!(is_version_key("SOFTWARE\\gsc game world\\stalker-shoc"));
+        assert!(!is_version_key("Software\\GSC Game World\\STALKER-CS"));
     }
 
     #[test]

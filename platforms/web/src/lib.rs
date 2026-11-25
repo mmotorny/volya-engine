@@ -96,7 +96,7 @@ mod counting {
 #[wasm_bindgen]
 pub async fn start(canvas: OffscreenCanvas, webgl: bool) {
     gpu::init(canvas, webgl).await;
-    diagnostics::started();
+    diagnostics::started().await;
 }
 
 /// The canvas's size in CSS pixels and the page's devicePixelRatio, on start
@@ -434,6 +434,11 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
                 .and_then(|v| v.as_u64())
                 .unwrap_or(10_000);
             to_json(&diagnostics::bench(frames as u32))
+        }
+        #[cfg(feature = "test-ops")]
+        "debug_session_event" => {
+            diagnostics::repeat_session_event().await;
+            to_json(&serde_json::Value::Null)
         }
         #[cfg(feature = "test-ops")]
         "debug_diagnostics_fill" => {
