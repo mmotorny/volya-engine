@@ -2,23 +2,20 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! How screens play sounds: [`AudioOut`] starts, stops and watches voices;
-//! [`MixerOut`] implements it on the core mixer, decoding files of the game
-//! tree. Screens take the trait so their timing is testable without audio.
+//! [`MixerOut`] implements it on a mixer (the core mixer or one mixing
+//! elsewhere, [`MixerControl`]), playing files of the game tree. Screens take the trait so their timing is testable without audio.
 //!
 //! The positional sound system (docs/behavior/sound-positional.md) runs on
 //! the same mixer: [`SoundHost`] owns it with its clock, and [`MixerDevice`]
 //! is its audio device, each voice a mixer voice whose gain and pan follow
 //! the device rules ([`heard`]).
 
-use std::io::Cursor;
-
-use crate::core::audio::{Category, Mixer, Playback, VoiceId};
+use crate::core::audio::{Category, MixerControl, Playback, VoiceId};
 use crate::core::sound::Sound;
 use crate::core::sound::system::{
     DEFAULT_VOICES, Device, DeviceListener, DeviceSource, Listener, NoDevice, SoundSystem, heard,
 };
 use crate::core::vfs::{self, Vfs};
-use volya_engine_formats::audio::VorbisStream;
 
 /// A voice as screens know it.
 pub type Voice = u32;
@@ -57,7 +54,7 @@ impl AudioOut for Silent {
 
 /// [`AudioOut`] on a mixer, reading files from `tree`.
 pub struct MixerOut<'a> {
-    pub mixer: &'a mut Mixer,
+    pub mixer: &'a mut dyn MixerControl,
     pub tree: &'a dyn Vfs,
     /// Voices started through this, by their index.
     pub voices: &'a mut Vec<VoiceId>,
@@ -70,8 +67,7 @@ impl AudioOut for MixerOut<'_> {
         let mixer = &*self.mixer;
         self.voices.retain(|v| mixer.is_playing(*v));
         let bytes = vfs::read(self.tree, path).ok()?;
-        let stream = VorbisStream::open(Cursor::new(bytes)).ok()?;
-        let id = self.mixer.play(Box::new(stream), playback);
+        let id = self.mixer.play_file(bytes, 0, playback)?;
         self.voices.push(id);
         Some(id.index())
     }
@@ -109,7 +105,7 @@ impl AudioOut for MixerOut<'_> {
 /// holds the category volume), reading the sound's file from `tree` when it
 /// starts. The listener's overall gain is the mixer's master gain.
 pub struct MixerDevice<'a> {
-    pub mixer: &'a mut Mixer,
+    pub mixer: &'a mut dyn MixerControl,
     /// `None` when no game is mounted: nothing starts.
     pub tree: Option<&'a dyn Vfs>,
     /// The mixer voice of each device voice.
@@ -135,14 +131,9 @@ impl Device for MixerDevice<'_> {
             return;
         };
         // Errors leave the voice silent: the file was checked when loaded.
-        let Ok(mut stream) = sound.open(tree) else {
+        let Ok(bytes) = sound.file(tree) else {
             return;
         };
-        // TODO(#309): resuming far into a long sound decodes up to the
-        // offset in this update; seek by pages if it shows as a hitch.
-        if stream.skip(offset).is_err() {
-            return;
-        }
         let playback = Playback {
             looping: looped,
             // Ramped to the source's gain from the first block mixed.
@@ -150,8 +141,11 @@ impl Device for MixerDevice<'_> {
             pan: 0.0,
             category: Category::Scaled,
         };
-        let id = self.mixer.play(Box::new(stream), playback);
-        *self.slot(voice) = Some(id);
+        // TODO(#309): resuming far into a long sound decodes up to the
+        // offset; seek by pages if it shows as a hitch.
+        if let Some(id) = self.mixer.play_file(bytes, offset, playback) {
+            *self.slot(voice) = Some(id);
+        }
     }
 
     fn stop(&mut self, voice: usize) {
@@ -220,7 +214,12 @@ impl SoundHost {
 
     /// The sound update of the frame at platform time `time_ms`, on `mixer`
     /// (or no device without audio output).
-    pub fn update(&mut self, time_ms: f64, mixer: Option<&mut Mixer>, tree: Option<&dyn Vfs>) {
+    pub fn update(
+        &mut self,
+        time_ms: f64,
+        mixer: Option<&mut dyn MixerControl>,
+        tree: Option<&dyn Vfs>,
+    ) {
         let now = self.tick(time_ms);
         match mixer {
             Some(mixer) => {

@@ -8,6 +8,7 @@
 #![cfg(target_arch = "wasm32")]
 
 mod audio;
+mod audio_host;
 mod engine;
 mod game;
 mod gpu;
@@ -91,6 +92,16 @@ pub(crate) fn now() -> f64 {
         .map_or_else(js_sys::Date::now, |p| p.now())
 }
 
+/// Milliseconds since the epoch, comparable between workers (each
+/// worker's `performance.now()` counts from its own start).
+pub(crate) fn epoch_now() -> f64 {
+    js_sys::global()
+        .dyn_into::<WorkerGlobalScope>()
+        .ok()
+        .and_then(|g| g.performance())
+        .map_or_else(js_sys::Date::now, |p| p.time_origin() + p.now())
+}
+
 /// Runs one animation frame; `time` in milliseconds.
 #[wasm_bindgen]
 pub fn frame(time: f64) {
@@ -165,6 +176,9 @@ struct LevelStats {
     /// The sound system's update per frame: average and worst.
     sound_update_ms: f64,
     sound_update_max_ms: f64,
+    /// The audio worker's own (its heap, mixing time, underruns).
+    #[serde(flatten)]
+    audio: audio::HostStats,
 }
 
 fn level_stats() -> LevelStats {
@@ -182,6 +196,7 @@ fn level_stats() -> LevelStats {
             frame_interval_ms: average(&s.interval),
             sound_update_ms: average(&s.sound),
             sound_update_max_ms: s.sound.iter().copied().fold(0.0, f64::max),
+            audio: audio::host_stats(),
         }
     })
 }

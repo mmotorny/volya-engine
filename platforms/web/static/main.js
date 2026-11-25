@@ -22,6 +22,8 @@ const updates = navigator.serviceWorker ? startUpdates(registration) : null;
 const worker = new Worker(new URL("./engine-worker.js", import.meta.url), { type: "module" });
 const pending = new Map();
 let nextId = 0;
+/** The wasm build the engine worker runs, once started (wasm-build.js). */
+let build = null;
 // Set once the canvas exists, below; capture starts off, and so do the
 // level's controls.
 let setCapture = () => {};
@@ -32,6 +34,7 @@ let setCursor = () => {};
 const started = new Promise((resolve, reject) => {
   worker.onmessage = ({ data }) => {
     if (data.type === "started") {
+      build = data.build;
       resolve();
       // The service worker keeps the wasm build this browser runs (sw.js).
       navigator.serviceWorker?.ready.then((r) => r.active?.postMessage({ type: "build", build: data.build }));
@@ -62,15 +65,25 @@ function call(op, args = {}) {
   });
 }
 
+// Mixes on the output's schedule for the AudioWorklet, from the engine
+// worker's commands (audio-worker.js); made with the first output.
+let audioWorker = null;
+
 /**
- * Connects an audio context (live or offline) to the engine's mixer through
- * an AudioWorklet whose port goes straight to the engine worker.
+ * Connects an audio context (live or offline) to the engine's mixer: an
+ * AudioWorklet pulling from the audio worker, which the engine worker
+ * drives over a channel of their own.
  */
 async function connectAudio(context) {
+  await started;
   await context.audioWorklet.addModule(new URL("./audio-worklet.js", import.meta.url));
   const node = new AudioWorkletNode(context, "volya-output", { numberOfInputs: 0, outputChannelCount: [2] });
   node.connect(context.destination);
-  worker.postMessage({ type: "audio", port: node.port, sampleRate: context.sampleRate }, [node.port]);
+  audioWorker ??= new Worker(new URL("./audio-worker.js", import.meta.url), { type: "module" });
+  const link = new MessageChannel();
+  const sampleRate = context.sampleRate;
+  audioWorker.postMessage({ type: "connect", build, sampleRate, worklet: node.port, engine: link.port1 }, [node.port, link.port1]);
+  worker.postMessage({ type: "audio", port: link.port2, sampleRate }, [link.port2]);
   return node;
 }
 
@@ -101,7 +114,10 @@ document.addEventListener("visibilitychange", visibilityChanged);
 // The engine worker holds OPFS file locks. Browsers keep left pages alive in
 // the back-forward cache, which would keep those locks from the next page:
 // end the worker when the page is hidden, and reload if it is restored.
-addEventListener("pagehide", () => worker.terminate());
+addEventListener("pagehide", () => {
+  worker.terminate();
+  audioWorker?.terminate();
+});
 addEventListener("pageshow", (event) => event.persisted && location.reload());
 
 // The engine sizes the canvas in device pixels from these.

@@ -7,8 +7,10 @@
 //   { type: "resize", width, height, dpr }: the canvas's CSS size and the
 //   page's devicePixelRatio (`size` in "start" has the same fields).
 //   { type: "call", id, op, args }  → { type: "result", id, result } | { type: "result", id, error }
-//   { type: "audio", port, sampleRate } connects the page's AudioWorklet; it
-//   then asks this worker for mixed blocks directly over `port`.
+//   { type: "audio", port, sampleRate } connects a new output: `port` goes
+//   to the audio worker (audio-worker.js), which mixes for the AudioWorklet;
+//   this worker sends it the mixer's commands after every frame, call and
+//   visibility change, and takes its reports.
 //   { type: "input", event }: one input event (format in src/input.rs).
 //   { type: "visibility", hidden }: the page was hidden or shown again; the
 //   engine stops while hidden (our design, #93).
@@ -96,12 +98,23 @@ function schedule() {
   nextFrame(loop);
 }
 
+let started;
+/** The port to the audio worker, once an output is connected. */
+let audioPort = null;
+/** Sends the audio worker the mixer's commands since the last time. */
+function flushAudio() {
+  if (!audioPort || !engine) return;
+  const message = engine.audio_take();
+  if (message) audioPort.postMessage(message, [message.commands.buffer, ...message.files.map((f) => f.buffer)]);
+}
+
 function loop(time) {
   scheduled = false;
   // Hidden after this frame was asked for: idle until shown.
   if (hidden) return;
   try {
     e().frame(time);
+    flushAudio();
     syncCapture();
   } catch (error) {
     // A broken engine stops drawing; calls report their own errors.
@@ -111,10 +124,6 @@ function loop(time) {
   }
   schedule();
 }
-
-let started;
-/** The port of the AudioWorklet pulling mixed blocks, once connected. */
-let audioPort = null;
 
 onmessage = async ({ data }) => {
   if (data.type === "start") {
@@ -136,18 +145,23 @@ onmessage = async ({ data }) => {
     e().resize(data.width, data.height, data.dpr);
   } else if (data.type === "audio") {
     e().audio_init(data.sampleRate);
-    // One output pulls from the mixer: a replaced one gets nothing more.
+    // One output: a replaced one gets nothing more.
     audioPort?.close();
     audioPort = data.port;
-    data.port.onmessage = ({ data: request }) => {
-      const block = e().audio_mix(request.need, request.underrun, request.queued);
-      data.port.postMessage(block, [block.buffer]);
+    data.port.onmessage = ({ data: report }) => {
+      try {
+        e().audio_report(report);
+      } catch (error) {
+        console.warn(`audio: ${message(error)}`);
+      }
     };
+    flushAudio();
   } else if (data.type === "visibility") {
     await started;
     hidden = data.hidden;
     try {
       e().visibility(hidden);
+      flushAudio();
       syncCapture();
     } catch (error) {
       console.warn(`visibility: ${message(error)}`);
@@ -166,6 +180,8 @@ onmessage = async ({ data }) => {
     } catch (error) {
       reply = { type: "result", id: data.id, error: message(error) };
     }
+    // Before the reply, so what the call played is on its way.
+    flushAudio();
     // Before the reply, so a caller turning capture on finds the page forwarding.
     try {
       syncCapture();

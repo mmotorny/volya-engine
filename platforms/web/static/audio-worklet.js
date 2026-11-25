@@ -1,18 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Audio output: plays stereo blocks mixed by the engine worker, which talks to
-// this processor directly over its port. Under the target it asks, one
-// request at a time, for what tops the queue up to the target plus a
-// request's worth plus what plays while the reply is on its way (the last
-// reply's wait, at most the target): the worker answers between its frames,
-// so a reply has to last a whole frame however long frames are (#343: a
-// fixed 50 ms per reply starved the output once frames took longer). Each
-// request also says how many frames played as silence for want of mixed
-// ones since the last (underrun) and how many are queued.
+// Audio output: plays stereo blocks mixed by the audio worker
+// (audio-worker.js), which talks to this processor directly over its port.
+// Under the target it asks, one request at a time, for what tops the queue
+// up to the target plus a request's worth plus what plays while the reply
+// is on its way (the last reply's wait, at most the target). The audio
+// worker mixes on this schedule, not between the engine's frames (#354), so
+// replies come within milliseconds and the target only has to cover its
+// scheduling. Each request also says how many frames played as silence for
+// want of mixed ones since the last (underrun) and how many are queued.
 
-const TARGET_SECONDS = 0.15;
-const REQUEST_SECONDS = 0.05;
+const TARGET_SECONDS = 0.06;
+const REQUEST_SECONDS = 0.02;
 
 class VolyaOutput extends AudioWorkletProcessor {
   constructor() {
