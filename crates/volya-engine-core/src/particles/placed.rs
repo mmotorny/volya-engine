@@ -245,6 +245,15 @@ impl PlacedEffects {
         self.schedule(camera);
     }
 
+    /// The fatal error a group met (particle-groups.md 2.3): the game ends
+    /// with it.
+    pub fn fatal(&self) -> Option<&str> {
+        self.effects.iter().find_map(|p| match &p.instance {
+            Instance::Group(g) => g.fatal(),
+            Instance::Effect(_) => None,
+        })
+    }
+
     /// Every effect instance of every record, for drawing.
     pub fn instances(&self) -> impl Iterator<Item = &EffectInstance> {
         self.effects.iter().flat_map(|p| p.instance.effects())

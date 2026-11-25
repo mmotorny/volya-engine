@@ -61,6 +61,16 @@ pub struct WeatherSection {
     pub clouds_opacity: f32,
     /// `flares`: the lens-flare section, or empty (sky.md 3.1).
     pub flares: String,
+    /// `env_ambient`: the ambient set, if any
+    /// (sound-weather-ambient.md 2.4).
+    pub env_ambient: Option<String>,
+    /// `rain_density`, clamped to 0 … 1 (sound-rain-thunder.md 2.1).
+    pub rain_density: f32,
+    /// `thunderbolt`: the collection, or empty for none; `bolt_period` and
+    /// `bolt_duration` (s), read only with a collection, else 0 (2.1).
+    pub thunderbolt: String,
+    pub bolt_period: f32,
+    pub bolt_duration: f32,
 }
 
 impl WeatherSection {
@@ -72,6 +82,14 @@ impl WeatherSection {
         let [altitude, longitude] = value::floats::<2>(get("sun_dir")).map(f32::to_radians);
         let clouds = value::floats::<5>(get("clouds_color"));
         let k = clouds[4] / 2.0;
+        let thunderbolt = get("thunderbolt").trim();
+        let bolt = |key: &str| {
+            if thunderbolt.is_empty() {
+                0.0
+            } else {
+                value::float(get(key))
+            }
+        };
         Self {
             name: section.name().to_owned(),
             ambient: floats3("ambient"),
@@ -93,6 +111,15 @@ impl WeatherSection {
             clouds_color: [clouds[0] * k, clouds[1] * k, clouds[2] * k],
             clouds_opacity: clouds[3],
             flares: get("flares").trim().to_owned(),
+            env_ambient: section
+                .get("env_ambient")
+                .flatten()
+                .filter(|v| !v.is_empty())
+                .map(str::to_owned),
+            rain_density: value::float(get("rain_density")).clamp(0.0, 1.0),
+            thunderbolt: thunderbolt.to_owned(),
+            bolt_period: bolt("bolt_period"),
+            bolt_duration: bolt("bolt_duration"),
         }
     }
 }

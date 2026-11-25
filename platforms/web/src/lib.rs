@@ -52,6 +52,8 @@ struct FrameStats {
     cpu: std::collections::VecDeque<f64>,
     /// Animation-frame time between consecutive frames.
     interval: std::collections::VecDeque<f64>,
+    /// Time spent in the sound system's update (occlusion included).
+    sound: std::collections::VecDeque<f64>,
     last: Option<f64>,
     /// Frames run so far.
     frames: u64,
@@ -90,7 +92,9 @@ pub(crate) fn now() -> f64 {
 pub fn frame(time: f64) {
     let start = now();
     engine::frame(time);
+    let sound_start = now();
     audio::sound_frame(time);
+    let sound = now() - sound_start;
     gpu::frame(time);
     input::end_frame();
     textures::poll();
@@ -117,6 +121,7 @@ pub fn frame(time: f64) {
             q.push_back(v);
         };
         push(&mut s.cpu, cpu);
+        push(&mut s.sound, sound);
         if let Some(last) = s.last {
             push(&mut s.interval, time - last);
         }
@@ -149,6 +154,9 @@ struct LevelStats {
     frame_cpu_ms: f64,
     frame_cpu_max_ms: f64,
     frame_interval_ms: f64,
+    /// The sound system's update per frame: average and worst.
+    sound_update_ms: f64,
+    sound_update_max_ms: f64,
 }
 
 fn level_stats() -> LevelStats {
@@ -164,6 +172,8 @@ fn level_stats() -> LevelStats {
             frame_cpu_ms: average(&s.cpu),
             frame_cpu_max_ms: s.cpu.iter().copied().fold(0.0, f64::max),
             frame_interval_ms: average(&s.interval),
+            sound_update_ms: average(&s.sound),
+            sound_update_max_ms: s.sound.iter().copied().fold(0.0, f64::max),
         }
     })
 }

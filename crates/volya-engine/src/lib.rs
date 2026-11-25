@@ -24,6 +24,7 @@ pub mod draw;
 mod fixture;
 pub mod inventory_screen;
 pub mod level;
+pub mod level_sound;
 pub mod loading_screen;
 pub mod menu_screens;
 pub mod objects;

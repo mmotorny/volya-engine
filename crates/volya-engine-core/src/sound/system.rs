@@ -16,6 +16,8 @@
 
 use std::rc::Rc;
 
+use super::occlusion::Occlusion;
+use super::random::SharedRandom;
 use super::{Fatal, Sound, Sounds};
 use crate::audio::Category;
 use crate::config::PathAliases;
@@ -311,6 +313,11 @@ pub struct EmitterState {
     pub out: f32,
     pub priority: f32,
     pub voice: Option<usize>,
+    /// Play volume *v*, frequency *f*, range, occlusion *o*.
+    pub volume: f32,
+    pub frequency: f32,
+    pub range: (f32, f32),
+    pub occlusion: f32,
 }
 
 /// The sound system (sections 2 – 7).
@@ -330,6 +337,11 @@ pub struct SoundSystem {
     effects_factor: f32,
     listener: Listener,
     random: u32,
+    /// The generator the level's sound rules and the occlusion share
+    /// (sound-weather-ambient.md 3.2).
+    shared_random: SharedRandom,
+    /// What occludes sound (S6, docs/behavior/sound-occlusion.md).
+    occlusion: Occlusion,
     /// The voice count a restart asked for, taken at the next update.
     restart_voices: Option<usize>,
 }
@@ -352,8 +364,35 @@ impl SoundSystem {
             effects_factor: 1.0,
             listener: Listener::default(),
             random: 1,
+            shared_random: SharedRandom::default(),
+            occlusion: Occlusion::default(),
             restart_voices: None,
         }
+    }
+
+    /// The shared generator (sound-weather-ambient.md 3.2).
+    pub fn random(&mut self) -> &mut SharedRandom {
+        &mut self.shared_random
+    }
+
+    /// The meshes and scale that occlude sound (S6).
+    pub fn occlusion_mut(&mut self) -> &mut Occlusion {
+        &mut self.occlusion
+    }
+
+    pub fn occlusion(&self) -> &Occlusion {
+        &self.occlusion
+    }
+
+    /// The duration *D* of sound `id`'s file (ms; section 2).
+    pub fn duration_ms(&self, id: SoundId) -> Option<u64> {
+        self.slot(id).map(|s| s.sound.duration_ms())
+    }
+
+    /// Keeps `sound` as loaded, so creating it needs no file (tests).
+    #[cfg(test)]
+    pub(crate) fn preload(&mut self, sound: Sound) {
+        self.files.loaded.insert(sound.name.clone(), Rc::new(sound));
     }
 
     /// The loaded sound files (S1), with their warnings.
@@ -448,6 +487,33 @@ impl SoundSystem {
         if let Some(slot) = self.slots.get_mut(id.0) {
             *slot = None;
         }
+    }
+
+    /// The sounds that exist (created and not discarded).
+    pub fn sound_ids(&self) -> impl Iterator<Item = SoundId> + '_ {
+        (0..self.slots.len())
+            .filter(|&i| self.slots[i].is_some())
+            .map(SoundId)
+    }
+
+    /// Runs `create`, which creates sounds; when it fails, every sound it
+    /// created is discarded, so a fatal error leaves none behind.
+    pub fn all_or_none<T>(
+        &mut self,
+        create: impl FnOnce(&mut Self) -> Result<T, Fatal>,
+    ) -> Result<T, Fatal> {
+        let before: Vec<bool> = self.slots.iter().map(Option::is_some).collect();
+        let created = create(self);
+        if created.is_err() {
+            let made: Vec<SoundId> = self
+                .sound_ids()
+                .filter(|id| !before.get(id.0).copied().unwrap_or(false))
+                .collect();
+            for id in made {
+                self.discard(id);
+            }
+        }
+        created
     }
 
     fn slot(&self, id: SoundId) -> Option<&SoundSlot> {
@@ -708,6 +774,10 @@ impl SoundSystem {
                 out: e.out,
                 priority: e.priority,
                 voice: e.voice,
+                volume: e.volume,
+                frequency: e.frequency,
+                range: (e.min, e.max),
+                occlusion: e.occlusion,
             })
             .collect()
     }
@@ -814,10 +884,16 @@ impl SoundSystem {
                         e.end = now + e.sound.duration_ms() as f64;
                     }
                     e.fade = 1.0;
-                    if !e.two_d {
-                        // Without S6 the occlusion target is 1.
-                        e.occlusion = 1.0;
+                    // S6 4.1: the target at the start of every emitter, from
+                    // p; a 2D emitter's has no effect.
+                    let (listener, position) = (self.listener.position, e.position);
+                    let target = self
+                        .occlusion
+                        .target(listener, position, &mut self.shared_random);
+                    if !self.emitters[i].two_d {
+                        self.emitters[i].occlusion = target;
                     }
+                    let e = &mut self.emitters[i];
                     let o = if e.two_d { 1.0 } else { e.occlusion };
                     e.out = e.base * e.volume * c * o;
                     e.phase = Phase::Silent;
@@ -869,6 +945,15 @@ impl SoundSystem {
     fn volume_step(&mut self, i: usize, dt: f32) -> bool {
         let c = self.category_volume(self.emitters[i].category);
         let listener = self.listener.position;
+        let e = &self.emitters[i];
+        // S6 4.1: computed at every volume step of a 3D emitter within its
+        // max distance.
+        let target = if !e.two_d && length(sub(listener, e.position)) <= e.max {
+            self.occlusion
+                .target(listener, e.position, &mut self.shared_random)
+        } else {
+            1.0
+        };
         let e = &mut self.emitters[i];
         let delta = length(sub(listener, e.position));
         let fade_step = FADE_RATE * dt;
@@ -894,8 +979,6 @@ impl SoundSystem {
                 e.fade + fade_step
             }
             .clamp(0.0, 1.0);
-            // Without S6 the occlusion target is 1.
-            let target = 1.0;
             let gap = target - e.occlusion;
             if gap.abs() >= 1e-7 {
                 e.occlusion += gap.clamp(-OCCLUSION_RATE * dt, OCCLUSION_RATE * dt);

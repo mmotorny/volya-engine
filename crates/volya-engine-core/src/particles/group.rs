@@ -39,9 +39,9 @@ pub struct GroupInstance {
     position: Vec3,
     bounds: Bounds,
     sphere: Sphere,
-    /// Fatal errors the game would stop at (P6 2.3), kept here instead:
-    /// the child is not made and the group goes on (our choice).
-    errors: Vec<String>,
+    /// The fatal error the game ends at (P6 2.3): the owner ends the game
+    /// with it; the group does nothing more.
+    fatal: Option<String>,
 }
 
 impl GroupInstance {
@@ -74,7 +74,7 @@ impl GroupInstance {
             position: [0.0; 3],
             bounds: Bounds::around([0.0; 3]),
             sphere: Bounds::around([0.0; 3]).sphere(),
-            errors: Vec::new(),
+            fatal: None,
         })
     }
 
@@ -104,9 +104,9 @@ impl GroupInstance {
         self.sphere
     }
 
-    /// Fatal errors met (P6 2.3).
-    pub fn errors(&self) -> &[String] {
-        &self.errors
+    /// The fatal error met (P6 2.3), which ends the game.
+    pub fn fatal(&self) -> Option<&str> {
+        self.fatal.as_deref()
     }
 
     /// Member `i`'s effect.
@@ -159,6 +159,9 @@ impl GroupInstance {
 
     /// The update with `e` ms (P6 5).
     pub fn update(&mut self, e: u32, library: &Library, random: &mut Random) {
+        if self.fatal.is_some() {
+            return;
+        }
         if !self.playing {
             self.bounds = Bounds::around(self.position);
             self.sphere = self.bounds.sphere();
@@ -185,7 +188,13 @@ impl GroupInstance {
         let mut collected = Bounds::EMPTY;
         let mut playing = false;
         for m in &mut self.members {
-            playing |= m.update(e, library, random, &mut collected, &mut self.errors);
+            match m.update(e, library, random, &mut collected) {
+                Ok(p) => playing |= p,
+                Err(fatal) => {
+                    self.fatal = Some(fatal);
+                    return;
+                }
+            }
         }
         if self.stopping && !playing {
             self.playing = false;
@@ -268,9 +277,9 @@ impl MemberInstance {
 
     /// The member effect's births and deaths (P6 6.1, 6.2), in the order
     /// they happened.
-    fn notices(&mut self, library: &Library, errors: &mut Vec<String>) {
+    fn notices(&mut self, library: &Library) -> Result<(), String> {
         let Some(notices) = self.effect.notices.as_mut().map(std::mem::take) else {
-            return;
+            return Ok(());
         };
         let f = self.member.flags;
         for n in &notices {
@@ -278,17 +287,13 @@ impl MemberInstance {
                 Notice::Birth { position, .. } => {
                     if f & flags::BIRTH_CHILD != 0 {
                         let name = self.member.birth_child.clone();
-                        match self.child(library, &name, position, position, true) {
-                            Ok(c) => self.free.push(c),
-                            Err(e) => errors.push(e),
-                        }
+                        let c = self.child(library, &name, position, position, true)?;
+                        self.free.push(c);
                     }
                     if f & flags::PER_PARTICLE_CHILD != 0 {
                         let name = self.member.per_particle_child.clone();
-                        match self.child(library, &name, position, position, false) {
-                            Ok(c) => self.per_particle.push(c),
-                            Err(e) => errors.push(e),
-                        }
+                        let c = self.child(library, &name, position, position, false)?;
+                        self.per_particle.push(c);
                     }
                 }
                 Notice::Death {
@@ -303,10 +308,8 @@ impl MemberInstance {
                     }
                     if f & flags::DEATH_CHILD != 0 {
                         let name = self.member.death_child.clone();
-                        match self.child(library, &name, position, previous, true) {
-                            Ok(c) => self.free.push(c),
-                            Err(e) => errors.push(e),
-                        }
+                        let c = self.child(library, &name, position, previous, true)?;
+                        self.free.push(c);
                     }
                 }
             }
@@ -315,20 +318,21 @@ impl MemberInstance {
         let mut notices = notices;
         notices.clear();
         self.effect.notices = Some(notices);
+        Ok(())
     }
 
-    /// The member's update (P6 5.3); whether anything of it is playing.
+    /// The member's update (P6 5.3); whether anything of it is playing,
+    /// or the fatal error a child met.
     fn update(
         &mut self,
         e: u32,
         library: &Library,
         random: &mut Random,
         collected: &mut Bounds,
-        errors: &mut Vec<String>,
-    ) -> bool {
+    ) -> Result<bool, String> {
         let mut playing = false;
         self.effect.update(e, random);
-        self.notices(library, errors);
+        self.notices(library)?;
         if self.effect.is_playing() {
             playing = true;
             collected.merge(&self.effect.bounds());
@@ -358,7 +362,7 @@ impl MemberInstance {
             }
             c.is_playing()
         });
-        playing
+        Ok(playing)
     }
 }
 

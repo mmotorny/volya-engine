@@ -179,7 +179,7 @@ fn birth_and_per_particle_children_follow_their_particles() {
         assert_eq!(c.position(), p.position);
     }
     // 3 births, each with a burst child of 0.1 s that has ended by now.
-    assert!(g.errors().is_empty());
+    assert!(g.fatal().is_none());
     // Particles die after 2 s; their per-particle children become free
     // and run until they end.
     for _ in 0..70 {
@@ -203,7 +203,7 @@ fn a_looped_birth_child_is_the_fatal_error() {
     g.play();
     g.update(33, &library, &mut Random::default());
     assert_eq!(
-        g.errors()[0],
+        g.fatal().unwrap(),
         "Can't use looped effect 'looped' as 'On Birth' child for group."
     );
 }

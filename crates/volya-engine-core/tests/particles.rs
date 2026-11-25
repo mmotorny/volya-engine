@@ -544,7 +544,36 @@ fn group_timelines_are_p6s() {
     );
     assert_eq!(stopped, Some(69));
 
-    // Every group that can be made (P6 9.1).
+    // P6 8: the first particle of `anomaly2\pux_blast00`'s member with an
+    // empty per-particle child name, and the first death in
+    // `static\bubble`'s member naming a missing death child, are fatal.
+    for (name, error) in [
+        ("anomaly2\\pux_blast00", "Particle effect doesn't exist"),
+        ("static\\bubble", "Particle effect doesn't exist"),
+    ] {
+        let mut g = GroupInstance::new(lib, lib.group(name).unwrap()).unwrap();
+        g.play();
+        let mut random = Random::default();
+        for _ in 0..2000 {
+            g.update(33, lib, &mut random);
+        }
+        assert_eq!(g.fatal(), Some(error), "{name}");
+    }
+    // Every group that can be made (P6 9.1), on its timeline: those two
+    // without the slots that end the game (their bits cleared; the members'
+    // starts and the groups' stops do not depend on children).
+    let mut patched = lib.clone();
+    for g in &mut patched.groups {
+        for m in &mut g.members {
+            if m.flags & member_flags::PER_PARTICLE_CHILD != 0 && m.per_particle_child.is_empty() {
+                m.flags &= !member_flags::PER_PARTICLE_CHILD;
+            }
+            if m.flags & member_flags::DEATH_CHILD != 0 && lib.effect(&m.death_child).is_none() {
+                m.flags &= !member_flags::DEATH_CHILD;
+            }
+        }
+    }
+    let lib = &patched;
     let mut made = 0;
     let mut used = 0;
     let mut start_sum = 0;
@@ -664,7 +693,7 @@ fn placed_effects_are_p8s() {
         for p in placed.effects() {
             assert!(p.instance.is_playing(), "{name}: {} ended", p.name);
             if let Instance::Group(g) = &p.instance {
-                assert!(g.errors().is_empty(), "{name}: {:?}", g.errors());
+                assert!(g.fatal().is_none(), "{name}: {:?}", g.fatal());
             }
         }
         if name == "l01_escape" {

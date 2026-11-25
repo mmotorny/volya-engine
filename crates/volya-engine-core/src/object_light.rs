@@ -78,6 +78,60 @@ pub fn sun_visibility(world: &CollisionWorld, origin: Vec3, sun_dir: Vec3) -> f3
     }
 }
 
+/// Directions tested per update (5.4).
+const PER_UPDATE: usize = 5;
+
+/// An object's sky visibility *h* followed over frames (5.4): five of the
+/// 26 directions tested per update, cycling in order; the target is the
+/// fraction of free results among the tested (the 26 latest once all were
+/// tested); *h* ← *k* · target + (1 − *k*) · *h* with *k* = clamp(frame
+/// time, 0, 1), 0.5 initially and the target itself at the first update.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SkyVisibility {
+    free: [Option<bool>; 26],
+    next: usize,
+    h: f32,
+    updated: bool,
+}
+
+impl Default for SkyVisibility {
+    fn default() -> Self {
+        Self {
+            free: [None; 26],
+            next: 0,
+            h: 0.5,
+            updated: false,
+        }
+    }
+}
+
+impl SkyVisibility {
+    /// *h* as last smoothed.
+    pub fn value(&self) -> f32 {
+        self.h
+    }
+
+    /// One update from `origin` after a frame of `frame_time` seconds.
+    pub fn update(&mut self, world: &CollisionWorld, origin: Vec3, frame_time: f32) {
+        for _ in 0..PER_UPDATE {
+            let free = normalize(SKY_DIRECTIONS[self.next])
+                .is_some_and(|d| !world.ray_hits(origin, d, SKY_RAY));
+            self.free[self.next] = Some(free);
+            self.next = (self.next + 1) % SKY_DIRECTIONS.len();
+        }
+        let tested = self.free.iter().flatten().count();
+        let free = self.free.iter().flatten().filter(|&&f| f).count();
+        let target = free as f32 / tested as f32;
+        if self.updated {
+            let k = frame_time.clamp(0.0, 1.0);
+            self.h = k * target + (1.0 - k) * self.h;
+        } else {
+            self.h = target;
+            self.updated = true;
+        }
+    }
+}
+
 /// `L_dynamic_props` = (0.5 s, 0.5 s, 0.5 s, 0.5 h).
 pub fn dynamic_props(h: f32, s: f32) -> [f32; 4] {
     [0.5 * s, 0.5 * s, 0.5 * s, 0.5 * h]
@@ -112,6 +166,26 @@ mod tests {
         // Low sun from +x: the roof does not block it.
         assert_eq!(sun_visibility(&world, under, [-1.0, -0.1, 0.0]), 1.0);
         assert_eq!(dynamic_props(0.5, 1.0), [0.5, 0.5, 0.5, 0.25]);
+    }
+
+    #[test]
+    fn sky_visibility_follows_over_updates() {
+        let mut b = Builder::default();
+        b.floor([-100.0, 100.0], [-100.0, 100.0], 0.0, true);
+        b.floor([-2.0, 2.0], [-2.0, 2.0], 3.0, false);
+        let world = b.world();
+        let under = ray_origin([0.0, 1.0, 0.0], 1.0);
+        let mut h = SkyVisibility::default();
+        assert_eq!(h.value(), 0.5);
+        // The first update: its five directions (the zenith and four at
+        // 58.3°, all under the roof), the target directly.
+        h.update(&world, under, 0.016);
+        assert_eq!(h.value(), 0.0);
+        // After all 26 are tested, it moves towards 20/26 by the frame time.
+        for _ in 0..200 {
+            h.update(&world, under, 0.5);
+        }
+        assert!((h.value() - 20.0 / 26.0).abs() < 1e-5, "{}", h.value());
     }
 
     #[test]
