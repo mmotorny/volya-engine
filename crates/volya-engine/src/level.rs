@@ -1320,9 +1320,16 @@ impl NewGameLoad {
                 let f = tree
                     .open(&format!("{dir}\\level.cform"))
                     .map_err(|e| file("level.cform", e))?;
-                self.collision = Some(Arc::new(
-                    CollisionWorld::read(f, materials).map_err(|e| file("level.cform", e))?,
-                ));
+                let mut collision =
+                    CollisionWorld::read(f, materials).map_err(|e| file("level.cform", e))?;
+                // docs/behavior/climbing.md 1.1 – 1.3: every ladder of the
+                // level is present from the first frame, its box in the
+                // collision world.
+                let ladders = (self.level_objects.iter())
+                    .filter_map(|o| Ladder::from_record(&o.record))
+                    .collect();
+                collision.set_ladders(ladders)?;
+                self.collision = Some(Arc::new(collision));
             }
             Stage::LoadingGeometry => {
                 let mut f = tree
@@ -1480,13 +1487,6 @@ impl NewGameLoad {
                 self.sound = Some(sound);
                 self.weather = Some(weather);
                 let level_objects = std::mem::take(&mut self.level_objects);
-                // docs/behavior/climbing.md 1.1 – 1.3: every ladder of the
-                // level is present from the first frame, its box in the
-                // collision world.
-                let ladders = (level_objects.iter())
-                    .filter_map(|o| Ladder::from_record(&o.record))
-                    .collect();
-                earlier(self.collision.as_mut(), "level.cform")?.set_ladders(ladders)?;
                 self.spawned = Some(objects::spawn(tree, data, &dir, &level_objects)?);
                 // The lamps' colour animations (docs/formats/lanims-xr.md),
                 // read here with the lamps (our choice: when the game reads
