@@ -34,7 +34,7 @@ use crate::core::config;
 use crate::core::config::Config;
 use crate::core::input::Input;
 use crate::core::level::{DrawItem, Level};
-use crate::core::lights::Lights;
+use crate::core::lights::{LightSettings, Lights};
 use crate::core::movement::{Flags, MovementConfig, Player};
 use crate::core::object_light::SkyVisibility;
 use crate::core::particles::placed::PlacedEffects;
@@ -43,9 +43,10 @@ use crate::core::simulation::navigation::Navigation;
 use crate::core::simulation::{AlifeConfig, Changes, Simulation};
 use crate::core::sound::Fatal;
 use crate::core::vfs::{self, Vfs};
-use crate::core::weather::{Environment, Weather};
+use crate::core::weather::{Environment, Weather, texture_name as weather_texture_name};
 use crate::data::GameData;
 use crate::footsteps::{self, MaterialPairs, PlayerFootsteps};
+use crate::level_lights::{self, GlowShader, LevelLights, LightCamera, LightsData};
 use crate::level_sound::{LevelSoundData, SoundInputs};
 use crate::loading_screen::Stage;
 use crate::objects::{self, Characters, LevelObjects, ObjectsReport};
@@ -59,6 +60,8 @@ use std::collections::HashMap;
 use volya_engine_formats::env_mod::{self, EnvModifier};
 use volya_engine_formats::game_graph::GameGraph;
 use volya_engine_formats::gamemtl;
+use volya_engine_formats::lanims::ColourAnimations;
+use volya_engine_formats::level::split_shader_entry;
 use volya_engine_formats::level_geom::{GeomBuffer, GeomFile, GeomLayout, GeomSource};
 use volya_engine_formats::model as model_math;
 use volya_engine_formats::object::{self as record, ObjectRecord};
@@ -117,6 +120,11 @@ pub struct LevelWorld {
     /// The spawned objects drawn with the static world
     /// (docs/behavior/level-objects.md).
     pub objects: LevelObjects,
+    /// The glows' shaders, textures as file paths (glows.md 6).
+    pub glow_shaders: Vec<GlowShader<String>>,
+    /// The light passes' attenuation textures as file paths: `att`,
+    /// `attclip`, `attpoint` (dynamic-lights.md 6.4).
+    pub light_textures: Option<[String; 3]>,
 }
 
 /// Every texture file of `surfaces` and `sky`, each once.
@@ -140,6 +148,20 @@ fn texture_paths(surfaces: &[Surface<String>], sky: Option<&SkyTextures<String>>
     paths
 }
 
+/// Adds the glows' and the light passes' textures to `paths`, each once.
+fn light_texture_paths(
+    paths: &mut Vec<String>,
+    glows: &[GlowShader<String>],
+    lights: Option<&[String; 3]>,
+) {
+    let glows = glows.iter().map(|g| &g.texture);
+    for t in glows.chain(lights.into_iter().flatten()) {
+        if !paths.contains(t) {
+            paths.push(t.clone());
+        }
+    }
+}
+
 impl LevelWorld {
     /// Every texture file the level uploads, each once.
     pub fn texture_paths(&self) -> Vec<String> {
@@ -151,6 +173,7 @@ impl LevelWorld {
                 }
             }
         }
+        light_texture_paths(&mut paths, &self.glow_shaders, self.light_textures.as_ref());
         paths
     }
 
@@ -217,8 +240,11 @@ pub struct LevelScreen {
     /// Whether the effects are drawn (tests compare frames without them).
     effects_drawn: bool,
     /// The level's dynamic light records (docs/behavior/dynamic-lights.md):
-    /// chunk 6's, the sun's and every source's.
-    lights: Lights,
+    /// chunk 6's, the sun's and every source's; its glows and lamps.
+    lights: LevelLights,
+    /// The global clock (sound-weather-ambient.md 3.1), ms, as the app
+    /// last gave it.
+    global_ms: u64,
 }
 
 /// What the engine interface reports.
@@ -244,6 +270,9 @@ pub struct LevelState {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub character: Option<CharacterReport>,
     pub objects: ObjectsReport,
+    /// The lights, glows and lamps (docs/behavior/dynamic-lights.md, glows.md,
+    /// hanging-lamps.md).
+    pub lights: crate::level_lights::LightsReport,
 }
 
 /// The level's placed effects as the engine interface reports them.
@@ -970,6 +999,13 @@ pub struct NewGameLoad {
     /// The player's visual, from its record.
     player_visual: Option<String>,
     footsteps: Option<PlayerFootsteps>,
+    /// The level's lights, glows and their shaders
+    /// (docs/behavior/dynamic-lights.md, glows.md), and chunk 7's records
+    /// until their shaders are resolved.
+    lights: LightsData,
+    glow_records: Vec<volya_engine_formats::level::Glow>,
+    /// The light passes' attenuation textures (dynamic-lights.md 6.4).
+    light_textures: Option<[String; 3]>,
 }
 
 /// The game hour of `clock`, 0 … 23 (the scripts' switch rules,
@@ -1018,6 +1054,11 @@ impl NewGameLoad {
                 }
             }
         }
+        light_texture_paths(
+            &mut paths,
+            &self.lights.glow_shaders,
+            self.light_textures.as_ref(),
+        );
         paths
     }
 
@@ -1073,7 +1114,17 @@ impl NewGameLoad {
             }
             Stage::OpeningStream => {
                 let bytes = vfs::read(tree, &format!("{dir}\\level"))?;
-                self.level = Some(Level::parse(&bytes).map_err(|e| file("level", e))?);
+                let level = Level::parse(&bytes).map_err(|e| file("level", e))?;
+                // Chunks 6 and 7 and the portals, for the lights
+                // (dynamic-lights.md 3.1, glows.md 2.1, level.md 9.1).
+                self.lights.level_lights = (level.lights.iter())
+                    .filter_map(level_lights::level_light)
+                    .collect();
+                self.lights.portals = (level.portals.iter())
+                    .flat_map(|p| level_lights::portal_triangles(&p.vertices))
+                    .collect();
+                self.glow_records = level.glows.clone();
+                self.level = Some(level);
             }
             // The collision mesh with its materials mapped and indexed
             // (level-cform.md sections 2, 3.3). `gamemtl.xr` is read here,
@@ -1204,6 +1255,16 @@ impl NewGameLoad {
                 self.weather = Some(weather);
                 let level_objects = std::mem::take(&mut self.level_objects);
                 self.spawned = Some(objects::spawn(tree, data, &dir, &level_objects)?);
+                // The lamps' colour animations (docs/formats/lanims-xr.md),
+                // read here with the lamps (our choice: when the game reads
+                // the file is unestablished); without the file, none.
+                let path = data.aliases.path("$game_data$", "lanims.xr")?;
+                self.lights.animations = match vfs::read(tree, &path) {
+                    Ok(bytes) => ColourAnimations::parse(&bytes)
+                        .map_err(|e| io::Error::new(e.kind(), format!("{path}: {e}")))?,
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => ColourAnimations::default(),
+                    Err(e) => return Err(e),
+                };
             }
             // Every texture file the level needs is located here. The
             // presenter reads and uploads them with the first frame that
@@ -1268,6 +1329,57 @@ impl NewGameLoad {
                     flares.push(f);
                 }
                 self.sky = Some(SkyTextures { sections });
+                // The glows' shaders (glows.md 2): chunk 7's entries, and
+                // `effects\glow` with each lamp's glow texture; a texture
+                // found nowhere fails the load, as the level's do.
+                let mut shader_of = |texture: &str, flare: bool| -> io::Result<u32> {
+                    let texture = locate(texture)?;
+                    let shader = GlowShader { texture, flare };
+                    let shaders = &mut self.lights.glow_shaders;
+                    Ok(match shaders.iter().position(|s| *s == shader) {
+                        Some(i) => i as u32,
+                        None => {
+                            shaders.push(shader);
+                            shaders.len() as u32 - 1
+                        }
+                    })
+                };
+                for g in std::mem::take(&mut self.glow_records) {
+                    let entry = &level.shaders[usize::from(g.shader)];
+                    let (shader, list) = split_shader_entry(entry).unwrap_or(("", ""));
+                    let flare = match shader {
+                        "effects\\glow" => false,
+                        "effects\\flare" => true,
+                        _ => {
+                            // TODO(#347): no shipped glow has another shader.
+                            self.not_drawn
+                                .push((entry.clone(), "glow shader not drawn".into()));
+                            continue;
+                        }
+                    };
+                    let texture = shading::texture_list(list)
+                        .into_iter()
+                        .next()
+                        .unwrap_or_default();
+                    let i = shader_of(&texture, flare)?;
+                    self.lights.level_glows.push((g.position, g.radius, i));
+                }
+                self.lights.lamp_glows = spawned
+                    .lamps
+                    .iter()
+                    .map(|l| {
+                        l.glow
+                            .as_ref()
+                            .map(|g| shader_of(&weather_texture_name(&g.texture), false))
+                            .transpose()
+                    })
+                    .collect::<io::Result<_>>()?;
+                // dynamic-lights.md 6.4.
+                self.light_textures = Some([
+                    locate("internal\\internal_light_att")?,
+                    locate("internal\\internal_light_attclip")?,
+                    locate("internal\\internal_light_attpoint")?,
+                ]);
                 self.flares = flares;
                 // The shaders of the effects the level can show
                 // (particle-drawing.md 5.1), their textures located like
@@ -1291,7 +1403,10 @@ impl NewGameLoad {
                 let spawned = earlier(self.spawned.as_ref(), "objects")?;
                 let (a, b, t) = weather.bracket(clock.time_of_day());
                 let sun = Environment::blend(a, b, t, &[], actor.position, VIS_DISTANCE).sun_dir;
-                self.dynamic_props = objects::light_inputs(collision, &spawned.instances, sun);
+                // The sun-visibility ray goes along −d_B, the direction of
+                // the sun's record B (dynamic-lights.md 3.1, 11).
+                let d_b = crate::core::lights::sun_b_direction(sun);
+                self.dynamic_props = objects::light_inputs(collision, &spawned.instances, d_b);
             }
             // `level.ps_static`'s effects, made, placed and started
             // (level-placed-effects.md sections 1 – 4): read after the
@@ -1328,7 +1443,7 @@ impl NewGameLoad {
     }
 
     /// The level after every stage ran, shown from engine clock `now`.
-    pub fn finish(self, now: u64) -> io::Result<LevelScreen> {
+    pub fn finish(mut self, now: u64) -> io::Result<LevelScreen> {
         let name = earlier(self.name, "level")?;
         let actor = earlier(self.actor, "actor")?;
         let level = earlier(self.level, "level")?;
@@ -1352,6 +1467,8 @@ impl NewGameLoad {
             &self.dynamic_props,
             self.objects_not_drawn,
         );
+        let glow_shaders = self.lights.glow_shaders.clone();
+        let lights = LevelLights::new(std::mem::take(&mut self.lights), objects.lamps.clone())?;
         let placements = objects
             .instances
             .iter()
@@ -1396,6 +1513,8 @@ impl NewGameLoad {
                 geometry: geom,
                 objects,
                 particle_shaders: self.particle_shaders,
+                glow_shaders,
+                light_textures: self.light_textures,
             }),
             collision: Arc::new(collision),
             sound_data: self.sound,
@@ -1420,9 +1539,11 @@ impl NewGameLoad {
             effects,
             view_size: std::cell::Cell::new((1024, 768)),
             effects_drawn: true,
-            lights: Lights::default(),
+            lights,
+            global_ms: 0,
         };
         screen.update_view();
+        screen.lights_frame(0.0);
         Ok(screen)
     }
 }
@@ -1509,6 +1630,8 @@ impl LevelScreen {
         self.clock.set_paused(true);
         self.clock.advance(elapsed);
         self.player.paused(now);
+        // The frame still draws its lights and glows; no time passes.
+        self.lights_frame(0.0);
     }
 
     /// The level waits until `now` before it first shows (the platform
@@ -1561,6 +1684,9 @@ impl LevelScreen {
         }
         self.back |= back;
         self.simulate();
+        // The lamps' frame updates (hanging-lamps.md 4) on the global clock.
+        self.lights
+            .lamps_frame(self.global_ms as f32 / 1000.0, elapsed as f32 / 1000.0);
         // The placed effects on the world clock, which is the global clock
         // (autosave-timing.md 1, sound-weather-ambient.md 3.1): it stands
         // still while the pause is on (the menu, a `pause_state on` intro
@@ -1587,6 +1713,7 @@ impl LevelScreen {
         let eye = self.player.view().eye;
         self.sky_visibility
             .update(&self.collision, eye, elapsed as f32 / 1000.0);
+        self.lights_frame(elapsed as f32 / 1000.0);
     }
 
     /// The player's footsteps.
@@ -1670,6 +1797,12 @@ impl LevelScreen {
         if changes.is_empty() {
             return;
         }
+        for &id in &changes.online {
+            self.lights.object_online(id);
+        }
+        for &id in changes.offline.iter().chain(&changes.removed) {
+            self.lights.object_offline(id);
+        }
         let Some(sim) = &self.simulation else { return };
         let mut placements = (*self.placements).clone();
         let mut changed = false;
@@ -1694,12 +1827,50 @@ impl LevelScreen {
     /// The level's dynamic light records, for the sources that create and
     /// update their lights each frame (docs/architecture.md, Lights).
     pub fn lights_mut(&mut self) -> &mut Lights {
-        &mut self.lights
+        &mut self.lights.lights
     }
 
     /// The level's dynamic light records.
     pub fn lights(&self) -> &Lights {
+        &self.lights.lights
+    }
+
+    /// The level's lights, glows and lamps.
+    pub fn level_lights(&self) -> &LevelLights {
         &self.lights
+    }
+
+    /// The level's lights, glows and lamps (tests: settings, hits).
+    pub fn level_lights_mut(&mut self) -> &mut LevelLights {
+        &mut self.lights
+    }
+
+    /// This frame's global clock (sound-weather-ambient.md 3.1), ms: the
+    /// lamps' colour animations' time (hanging-lamps.md 4.3).
+    pub fn set_global_clock(&mut self, ms: u64) {
+        self.global_ms = ms;
+    }
+
+    /// The settings of dynamic-lights.md 8 and `r1_glows_per_frame`.
+    pub fn set_light_settings(&mut self, settings: LightSettings, glows_per_frame: u32) {
+        self.lights.settings = settings;
+        self.lights.glows_per_frame = glows_per_frame;
+    }
+
+    /// The frame's lights and glows from the latest frame's view, a frame
+    /// of `dt` seconds (0 while paused).
+    fn lights_frame(&mut self, dt: f32) {
+        let (w, h) = self.view_size.get();
+        let (view, projection) = self.view_projection(w, h);
+        let e = &self.environment;
+        let camera = LightCamera {
+            eye: self.player.view().eye,
+            view,
+            projection,
+            far: e.far_plane,
+        };
+        let sun = (e.sun_dir, e.sun_color);
+        self.lights.frame(&self.collision, &camera, sun, dt);
     }
 
     /// The level's placed effects (level-placed-effects.md).
@@ -1830,6 +2001,8 @@ impl LevelScreen {
         let mut scene = Scene::new(resolution);
         scene.world = Some(WorldScene {
             particles,
+            lights: self.lights.passes().to_vec(),
+            glows: self.lights.sprites().to_vec(),
             covered: false,
             world: self.world.clone(),
             eye: v.eye,
@@ -1901,6 +2074,7 @@ impl LevelScreen {
             },
             character: self.character.as_ref().map(CharacterReport::of),
             objects: self.objects_report(),
+            lights: self.lights.report(),
         }
     }
 
@@ -2043,6 +2217,8 @@ impl LevelScreen {
                 geometry: GeomFile::default(),
                 objects: LevelObjects::default(),
                 particle_shaders: Vec::new(),
+                glow_shaders: Vec::new(),
+                light_textures: None,
             }),
             collision: Arc::new(
                 CollisionWorld::new(Default::default(), Vec::new()).expect("collision"),
@@ -2069,7 +2245,8 @@ impl LevelScreen {
             effects: None,
             view_size: std::cell::Cell::new((1024, 768)),
             effects_drawn: true,
-            lights: Lights::default(),
+            lights: LevelLights::default(),
+            global_ms: 0,
         }
     }
 }

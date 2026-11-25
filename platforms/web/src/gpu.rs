@@ -662,6 +662,170 @@ pub fn debug_draw_particles(case: &str) -> Result<serde_json::Value, JsValue> {
                 sky: None,
                 clear: [0.0; 3],
                 particles,
+                lights: Vec::new(),
+            }),
+            quads: Vec::new(),
+        };
+        gpu.video = None;
+        gpu.dirty = true;
+        Ok(json!({ "compat": gpu.renderer.compat() }))
+    })
+}
+
+/// The `debug_draw_lights` op (tests): sets the debug draw list to a black
+/// vertex-lit triangle at depth 1 facing up, the scenes of the native
+/// `light_passes_add_to_the_image` and `glows_add_after_the_world` render
+/// tests (docs/behavior/dynamic-lights.md 6, glows.md 6), 16 × 16, read
+/// back with `debug_capture` through this browser's backend: `none` (no
+/// light), `point` and `spot` (a light far above, colour (¼, ⅛, 0), white
+/// attenuation textures: 2 · c = (128, 64, 0) at the centre), `glow` (a
+/// glow sprite in front with b = 128: (64, 64, 64)) and `hidden` (the glow
+/// behind the triangle: black).
+#[cfg(feature = "test-ops")]
+pub fn debug_draw_lights(case: &str) -> Result<serde_json::Value, JsValue> {
+    use volya_engine::render::particles::{
+        ParticleBatch, ParticleBlend, ParticleCull, ParticlePass, ParticleProgram, ParticleQueue,
+        ParticleVertex,
+    };
+    use volya_engine::render::world::{
+        Blend, LightElement, LightPass, LightProgram, LightTextures, Program, Surface, WorldLight,
+    };
+    use volya_engine::render::{WorldDraw, WorldFrame};
+    use volya_engine_formats::level_geom::{Layout, LevelGeom, VertexBuffer};
+
+    let mut identity = [[0.0; 4]; 4];
+    (0..4).for_each(|i| identity[i][i] = 1.0);
+    // One screen-covering triangle at depth 1, normal (0, 1, 0), black.
+    let mut data = Vec::new();
+    for p in [[-3.0f32, -3.0, 1.0], [-3.0, 9.0, 1.0], [9.0, -3.0, 1.0]] {
+        data.extend(p.iter().flat_map(|c| c.to_le_bytes()));
+        data.extend([128, 255, 128, 255, 128, 128, 255, 0, 255, 128, 128, 0]);
+        data.extend([0; 8]);
+    }
+    let geom = LevelGeom {
+        header: None,
+        vertex_buffers: vec![VertexBuffer {
+            elements: Layout::VertexLit.elements(),
+            layout: Some(Layout::VertexLit),
+            stride: 32,
+            vertex_count: 3,
+            data,
+        }],
+        index_buffers: vec![vec![0, 1, 2]],
+        progressive_meshes: Vec::new(),
+    };
+    // A light pass whose frustum holds everything (clip (0, 0, ½, 1)).
+    let mut everywhere = [[0.0; 4]; 4];
+    everywhere[3] = [0.0, 0.0, 0.5, 1.0];
+    let light = |spot: bool| LightPass {
+        spot,
+        position: [0.0, 1000.0, 1.0, if spot { 0.125 } else { 0.0625 }],
+        colour: [0.25, 0.125, 0.0, 1.0],
+        xform: everywhere,
+        frustum: everywhere,
+    };
+    let glow = |white: &volya_engine::render::Texture, z: f32| ParticleBatch {
+        pass: ParticlePass {
+            program: ParticleProgram::Glow,
+            blend: ParticleBlend::AlphaAdd,
+            depth_write: false,
+            clamp: true,
+            base: Some(white.clone()),
+            distort: None,
+        },
+        queue: ParticleQueue::Glow,
+        cull: ParticleCull::CounterClockwise,
+        key: 0.0,
+        vertices: [
+            ([-0.25, -0.25, z], [0.0, 1.0]),
+            ([-0.25, 0.25, z], [0.0, 0.0]),
+            ([0.25, -0.25, z], [1.0, 1.0]),
+            ([0.25, 0.25, z], [1.0, 0.0]),
+        ]
+        .into_iter()
+        .map(|(position, uv)| ParticleVertex {
+            position,
+            colour: 0x8080_8080,
+            uv,
+        })
+        .collect(),
+    };
+    with_gpu(|gpu| {
+        let r = &mut gpu.renderer;
+        let white = r.create_rgba_texture(1, 1, &[255; 4]);
+        r.set_light_textures(LightTextures {
+            att: white.clone(),
+            attclip: white.clone(),
+            attpoint: white.clone(),
+        });
+        let surface = Surface {
+            program: Program::VertexLit,
+            blend: Blend::Off,
+            depth_write: true,
+            fog: false,
+            alpha_ref: None,
+            detail_scale: None,
+            priority: 1,
+            strict: false,
+            object_lod: true,
+            textures: [Some(white.clone()), None, None, None],
+            env: None,
+            light: Some(LightElement {
+                program: LightProgram::VertexLit,
+                alpha_ref: 0,
+                priority: 1,
+            }),
+        };
+        let draw = WorldDraw {
+            surface: 0,
+            vertex_buffer: 0,
+            first_vertex: 0,
+            index_buffer: 0,
+            first_index: 0,
+            index_count: 3,
+            transform: identity,
+            sphere: [0.0, 0.0, 1.0, 10.0],
+            tree: None,
+            object: None,
+        };
+        let world = r
+            .create_world(&geom, &[surface], &[draw], None)
+            .map_err(error)?;
+        let (lights, particles) = match case {
+            "none" => (Vec::new(), Vec::new()),
+            "point" => (vec![light(false)], Vec::new()),
+            "spot" => (vec![light(true)], Vec::new()),
+            "glow" => (Vec::new(), vec![glow(&white, 0.5)]),
+            "hidden" => (Vec::new(), vec![glow(&white, 2.0)]),
+            other => return Err(error(format!("unknown case {other}"))),
+        };
+        // Looking along +z from the origin, near 0.1, far 100, square.
+        let (n, z) = (0.1, 100.0);
+        let mut projection = identity;
+        projection[2] = [0.0, 0.0, z / (z - n), 1.0];
+        projection[3] = [0.0, 0.0, -n * z / (z - n), 0.0];
+        gpu.list = DrawList {
+            world: Some(WorldFrame {
+                world,
+                view: identity,
+                projection,
+                eye: [0.0; 3],
+                forward: [0.0, 0.0, 1.0],
+                fov_y_degrees: 90.0,
+                light: WorldLight {
+                    ambient: [0.0; 3],
+                    hemi: [0.0; 3],
+                    sun_color: [0.0; 3],
+                    sun_dir: [0.0, -1.0, 0.0],
+                    fog_color: [0.0; 3],
+                    fog_near: 10.0,
+                    fog_far: 90.0,
+                },
+                time: 0.0,
+                sky: None,
+                clear: [0.0; 3],
+                particles,
+                lights,
             }),
             quads: Vec::new(),
         };

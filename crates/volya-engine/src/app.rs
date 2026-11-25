@@ -21,6 +21,7 @@ use crate::audio::AudioOut;
 use crate::core::audio::Category;
 use crate::core::console::Console;
 use crate::core::input::{Action, Control, Input};
+use crate::core::lights::LightSettings;
 use crate::core::pause::{GlobalClock, Pause};
 use crate::core::sound::Fatal;
 use crate::core::sound::system::Listener;
@@ -29,6 +30,7 @@ use crate::data::{Assets, GameData};
 use crate::draw::Ctx;
 use crate::inventory_screen::{self, InventoryScreen, InventoryState};
 use crate::level::{LevelScreen, LevelState, LevelWorld};
+use crate::level_lights::GLOWS_PER_FRAME;
 use crate::level_sound::{LevelSounds, SoundRun};
 use crate::loading_screen::{
     GAME_TYPE, Loading, LoadingScreen, LoadingScreenState, OVERLAY_FRAMES, SERVER_NEW_GAME,
@@ -859,6 +861,22 @@ impl App {
         // clock starts at the first update and leaves out the hidden page's
         // time, during which the pause is on anyway (focus loss).
         self.global_clock.frame(self.clock, self.pause.is_on());
+        if let Some(Phase::Level { level, .. }) = &mut self.phase {
+            // The lamps' clock (hanging-lamps.md 4.3) and the renderer's
+            // light settings (dynamic-lights.md 8, glows.md 5).
+            level.set_global_clock(self.global_clock.now());
+            let c = &self.console;
+            let status = |name| c.status(name);
+            let settings = LightSettings::from_statuses(
+                status("r1_dlights").as_deref(),
+                status("r1_dlights_clip").as_deref(),
+                status("r2_sun_lumscale").as_deref(),
+            );
+            let glows = status("r1_glows_per_frame")
+                .and_then(|v| v.trim().parse::<u32>().ok())
+                .map_or(GLOWS_PER_FRAME, |v| v.clamp(2, 32));
+            level.set_light_settings(settings, glows);
+        }
         let now = self.clock;
         let title = self.opening(false);
         let in_game = self.opening(true);

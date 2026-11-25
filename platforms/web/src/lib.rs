@@ -318,6 +318,9 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         // `{case}`: particle batches drawn through this backend (tests).
         #[cfg(feature = "test-ops")]
         "debug_draw_particles" => to_json(&gpu::debug_draw_particles(text("case"))?),
+        // `{case}`: a light pass or a glow drawn through this backend (tests).
+        #[cfg(feature = "test-ops")]
+        "debug_draw_lights" => to_json(&gpu::debug_draw_lights(text("case"))?),
         #[cfg(feature = "test-ops")]
         "particles_state" => to_json(&engine::particles_state()?),
         // `{frames}`: the placed effects' update cost in wasm.
