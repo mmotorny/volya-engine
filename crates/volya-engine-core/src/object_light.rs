@@ -81,17 +81,24 @@ pub fn sun_visibility(world: &CollisionWorld, origin: Vec3, sun_dir: Vec3) -> f3
 /// Directions tested per update (5.4).
 const PER_UPDATE: usize = 5;
 
-/// An object's sky visibility *h* followed over frames (5.4): five of the
-/// 26 directions tested per update, cycling in order; the target is the
-/// fraction of free results among the tested (the 26 latest once all were
-/// tested); *h* ← *k* · target + (1 − *k*) · *h* with *k* = clamp(frame
-/// time, 0, 1), 0.5 initially and the target itself at the first update.
+/// An object's sky visibility *h* followed over frames
+/// (level-objects.md 5.4, sound-weather-ambient.md 4.3): each update tests
+/// five of the 26 directions, cycling in order, at most once per frame;
+/// the target is the fraction of free results among the tested (the 26
+/// latest once all were tested); *h* ← *k* · target + (1 − *k*) · *h*
+/// with *k* = clamp(frame time, 0, 1) once per frame, by the update or by
+/// a read that comes first; 0.5 initially and the target itself at the
+/// first update.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SkyVisibility {
     free: [Option<bool>; 26],
     next: usize,
     h: f32,
+    target: f32,
     updated: bool,
+    /// The frames of the last smoothing step and the last rays.
+    smoothed: Option<u64>,
+    cast: Option<u64>,
 }
 
 impl Default for SkyVisibility {
@@ -100,7 +107,10 @@ impl Default for SkyVisibility {
             free: [None; 26],
             next: 0,
             h: 0.5,
+            target: 0.5,
             updated: false,
+            smoothed: None,
+            cast: None,
         }
     }
 }
@@ -111,23 +121,58 @@ impl SkyVisibility {
         self.h
     }
 
-    /// One update from `origin` after a frame of `frame_time` seconds.
-    pub fn update(&mut self, world: &CollisionWorld, origin: Vec3, frame_time: f32) {
+    /// The target of the latest update (0.5 before the first).
+    pub fn target(&self) -> f32 {
+        self.target
+    }
+
+    /// The smoothing step of `frame`, `frame_time` seconds long, unless it
+    /// ran in that frame (4.3).
+    fn smooth(&mut self, frame: u64, frame_time: f32) {
+        if self.smoothed == Some(frame) {
+            return;
+        }
+        self.smoothed = Some(frame);
+        if self.updated {
+            let k = frame_time.clamp(0.0, 1.0);
+            self.h = k * self.target + (1.0 - k) * self.h;
+        }
+    }
+
+    /// *h* read in `frame` (4.3): the frame's smoothing step applied if it
+    /// has not run yet, no rays cast.
+    pub fn read(&mut self, frame: u64, frame_time: f32) -> f32 {
+        self.smooth(frame, frame_time);
+        self.h
+    }
+
+    /// The update of `frame`, `frame_time` seconds long, from `origin`
+    /// against `world`; nothing if `frame` already had one.
+    pub fn update(&mut self, frame: u64, world: &CollisionWorld, origin: Vec3, frame_time: f32) {
+        self.update_with(frame, frame_time, |d| !world.ray_hits(origin, d, SKY_RAY));
+    }
+
+    /// [`Self::update`] with `free` telling whether the ray along a
+    /// (normalised) direction is free.
+    pub fn update_with(&mut self, frame: u64, frame_time: f32, mut free: impl FnMut(Vec3) -> bool) {
+        if self.cast == Some(frame) {
+            return;
+        }
+        self.cast = Some(frame);
         for _ in 0..PER_UPDATE {
-            let free = normalize(SKY_DIRECTIONS[self.next])
-                .is_some_and(|d| !world.ray_hits(origin, d, SKY_RAY));
-            self.free[self.next] = Some(free);
+            let f = normalize(SKY_DIRECTIONS[self.next]).is_some_and(&mut free);
+            self.free[self.next] = Some(f);
             self.next = (self.next + 1) % SKY_DIRECTIONS.len();
         }
         let tested = self.free.iter().flatten().count();
         let free = self.free.iter().flatten().filter(|&&f| f).count();
-        let target = free as f32 / tested as f32;
+        self.target = free as f32 / tested as f32;
         if self.updated {
-            let k = frame_time.clamp(0.0, 1.0);
-            self.h = k * target + (1.0 - k) * self.h;
+            self.smooth(frame, frame_time);
         } else {
-            self.h = target;
+            self.h = self.target;
             self.updated = true;
+            self.smoothed = Some(frame);
         }
     }
 }
@@ -179,13 +224,94 @@ mod tests {
         assert_eq!(h.value(), 0.5);
         // The first update: its five directions (the zenith and four at
         // 58.3°, all under the roof), the target directly.
-        h.update(&world, under, 0.016);
+        h.update(0, &world, under, 0.016);
         assert_eq!(h.value(), 0.0);
         // After all 26 are tested, it moves towards 20/26 by the frame time.
-        for _ in 0..200 {
-            h.update(&world, under, 0.5);
+        for frame in 1..200 {
+            h.update(frame, &world, under, 0.5);
         }
         assert!((h.value() - 20.0 / 26.0).abs() < 1e-5, "{}", h.value());
+    }
+
+    /// The pattern of free directions `free` as a ray test.
+    fn pattern(free: &[usize]) -> impl Fn(Vec3) -> bool + '_ {
+        move |d| {
+            let i = SKY_DIRECTIONS
+                .iter()
+                .position(|&s| normalize(s).is_some_and(|s| s == d))
+                .unwrap();
+            free.contains(&i)
+        }
+    }
+
+    #[test]
+    fn sky_visibility_updates_once_per_frame_and_reads_smooth_without_rays() {
+        // sound-weather-ambient.md 4.3: before any update a read gives the
+        // initial 0.5; an update casts at most once per frame and smooths
+        // at most once per frame, also when a read of that frame came
+        // first.
+        let mut h = SkyVisibility::default();
+        assert_eq!(h.read(0, 0.5), 0.5);
+        let mut rays = 0;
+        h.update_with(1, 0.5, |_| {
+            rays += 1;
+            true
+        });
+        assert_eq!((rays, h.value(), h.target()), (5, 1.0, 1.0));
+        h.update_with(1, 0.5, |_| {
+            rays += 1;
+            false
+        });
+        assert_eq!((rays, h.value()), (5, 1.0));
+        // Frame 2: the rule reads first (the previous frame's target, 1),
+        // then the frame's rays make the target 5/10, not applied until
+        // frame 3's read.
+        assert_eq!(h.read(2, 0.5), 1.0);
+        h.update_with(2, 0.5, |_| false);
+        assert_eq!((h.value(), h.target()), (1.0, 0.5));
+        assert_eq!(h.read(3, 0.5), 0.75);
+        assert_eq!(h.read(3, 0.5), 0.75);
+        // Without a read, the update smooths with the new target.
+        h.update_with(4, 0.5, |_| false);
+        assert!((h.target() - 5.0 / 15.0).abs() < 1e-6);
+        assert!((h.value() - (0.75 + 5.0 / 15.0) / 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn sky_visibility_in_the_first_level() {
+        // sound-weather-ambient.md 4.3 (H3, H5): in the bunker no ray is
+        // free, so h = 0 from the first update on and stays there.
+        let mut h = SkyVisibility::default();
+        for frame in 0..30 {
+            h.update_with(frame, 1.0 / 60.0, pattern(&[]));
+            assert_eq!(h.value(), 0.0);
+        }
+        // Outdoors 13 of the 26 are free, 4 of the first 5: h = 0.8 at the
+        // first update, the target 0.5 once all 26 are tested (6 updates).
+        let free = [0, 1, 2, 3, 6, 7, 8, 11, 12, 16, 17, 18, 19];
+        let mut h = SkyVisibility::default();
+        h.update_with(0, 1.0 / 60.0, pattern(&free));
+        assert!((h.value() - 0.8).abs() < 1e-6);
+        for frame in 1..6 {
+            h.update_with(frame, 1.0 / 60.0, pattern(&free));
+        }
+        assert_eq!(h.target(), 0.5);
+        // The view is outdoors from h = 0.05 (4.3); from the bunker's h = 0
+        // at 60 frames per second it takes several frames (8 – 10 for the
+        // level's directions, H6; here, frames of 1/60 s, 7 – 12).
+        let mut h = SkyVisibility::default();
+        for frame in 0..30 {
+            h.update_with(frame, 1.0 / 60.0, pattern(&[]));
+        }
+        let mut frames = 0;
+        for frame in 30..100 {
+            h.update_with(frame, 1.0 / 60.0, pattern(&free));
+            frames += 1;
+            if h.read(frame, 1.0 / 60.0) >= 0.05 {
+                break;
+            }
+        }
+        assert!((7..=12).contains(&frames), "{frames}");
     }
 
     #[test]
