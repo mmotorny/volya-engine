@@ -3,8 +3,10 @@
 
 //! The script runtime: the public LuaJIT 1.0.3 (Lua 5.1 alpha) interpreter
 //! the original embeds (docs/behavior/script-environment.md), vendored
-//! unmodified in `vendor/luajit-1.0.3` and run without its machine-code
-//! compiler, behind a thin safe API. See docs/architecture.md (Scripts).
+//! unmodified in `vendor/luajit-1.0.3` (build.rs patches a copy, adding the
+//! original's C-style comments) and run without its machine-code compiler,
+//! behind a thin safe API; [`loader`] loads the game's script files. See
+//! docs/architecture.md (Scripts).
 //!
 //! Lua raises errors with longjmp, which must never cross Rust frames: every
 //! Lua call that can raise runs in C inside `lua_cpcall` (csrc/volya_glue.c),
@@ -17,6 +19,7 @@
 
 mod ffi;
 mod libc;
+pub mod loader;
 pub mod selftest;
 
 use std::collections::HashSet;
@@ -155,19 +158,36 @@ impl Lua {
     /// as it is, `@file` a file, else the source) and runs it.
     pub fn exec(&mut self, name: &str, code: &[u8]) -> Result<Vec<Value>, Error> {
         let name = cstring(name)?;
-        self.run(Some((code, &name)), None, &[], true)
+        self.run(Some((code, &name)), None, false, &[], true)
+    }
+
+    /// Runs `code` like [`Lua::exec`] and keeps its first result (or nil)
+    /// where only [`Lua::call_kept`] reaches it: Lua's registry, which scripts
+    /// can't read (there is no `debug` library).
+    pub(crate) fn exec_kept(&mut self, name: &str, code: &[u8], key: &str) -> Result<(), Error> {
+        let name = cstring(name)?;
+        let key = cstring(key)?;
+        self.run(Some((code, &name)), Some(&key), true, &[], true)
+            .map(drop)
+    }
+
+    /// Calls the function [`Lua::exec_kept`] kept at `key` with `args`.
+    pub(crate) fn call_kept(&mut self, key: &str, args: &[Value]) -> Result<Vec<Value>, Error> {
+        let key = cstring(key)?;
+        self.run(None, Some(&key), true, args, true)
     }
 
     /// Compiles `code` without running it.
     pub fn compile(&mut self, name: &str, code: &[u8]) -> Result<(), Error> {
         let name = cstring(name)?;
-        self.run(Some((code, &name)), None, &[], false).map(drop)
+        self.run(Some((code, &name)), None, false, &[], false)
+            .map(drop)
     }
 
     /// Calls the global `function` with `args`.
     pub fn call(&mut self, function: &str, args: &[Value]) -> Result<Vec<Value>, Error> {
         let function = cstring(function)?;
-        self.run(None, Some(&function), args, true)
+        self.run(None, Some(&function), false, args, true)
     }
 
     /// Sets the global `name` to a function running `f`. A returned `Err`
@@ -194,6 +214,7 @@ impl Lua {
         &mut self,
         chunk: Option<(&[u8], &CString)>,
         global: Option<&CString>,
+        registry: bool,
         args: &[Value],
         call: bool,
     ) -> Result<Vec<Value>, Error> {
@@ -207,6 +228,7 @@ impl Lua {
             len: chunk.map_or(0, |(code, _)| code.len()),
             name: chunk.map_or(std::ptr::null(), |(_, name)| name.as_ptr()),
             global: global.map_or(std::ptr::null(), |g| g.as_ptr()),
+            registry: c_int::from(registry),
             call: c_int::from(call),
             load_status: 0,
             args: flat.as_ptr(),

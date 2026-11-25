@@ -60,6 +60,7 @@ pub struct Run {
     pub len: usize,
     pub name: *const c_char,
     pub global: *const c_char,
+    pub registry: c_int,
     pub call: c_int,
     pub load_status: c_int,
     pub args: *const FlatValue,

@@ -1161,7 +1161,9 @@ name = "volya-engine-script"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "md-5",
  "volya-engine-core",
+ "volya-engine-formats",
  "volya-engine-installer",
 ]
 

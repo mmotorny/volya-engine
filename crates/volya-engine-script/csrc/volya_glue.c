@@ -153,6 +153,9 @@ typedef struct volya_run {
   size_t len;
   const char *name; /* The chunk's name. */
   const char *global;
+  /* `global` names a registry field instead: the function to call, or where
+  ** to keep the chunk's first result. */
+  int registry;
   int call; /* 0: only compile the chunk. */
   int load_status; /* Set when loading fails. */
   const volya_value *args;
@@ -169,11 +172,17 @@ static int run(lua_State *L)
     r->load_status = luaL_loadbuffer(L, r->code, r->len, r->name);
     if (r->load_status != 0) lua_error(L);
     if (!r->call) return 0;
+  } else if (r->registry) {
+    lua_getfield(L, LUA_REGISTRYINDEX, r->global);
   } else {
     lua_getglobal(L, r->global);
   }
   push_values(L, r->args, r->nargs);
   lua_call(L, (int)r->nargs, LUA_MULTRET);
+  if (r->code != NULL && r->registry) {
+    lua_settop(L, base + 1); /* The first result, or nil. */
+    lua_setfield(L, LUA_REGISTRYINDEX, r->global);
+  }
   luaL_checkstack(L, VOLYA_READ_SLOTS, "no stack space to read the results");
   r->read(r->ctx, L, base + 1, lua_gettop(L) - base);
   return 0;
