@@ -113,6 +113,8 @@ pub struct ZoneSection {
     pub accumulate_time: i64,
     /// `tele_height` (m), read by the `ZS_MINCE` behaviour (S15 2.1).
     pub tele_height: Option<f32>,
+    /// `visible_by_detector` (required; sound-detector.md 5.2).
+    pub visible_by_detector: bool,
 }
 
 /// A string key "if present": its value, `None` when absent. An empty
@@ -174,6 +176,7 @@ impl ZoneSection {
             } else {
                 None
             },
+            visible_by_detector: value::bool(section.read("visible_by_detector").map_err(at)?),
         })
     }
 }
@@ -194,6 +197,8 @@ pub fn zone_block(record: &ObjectRecord) -> Option<&ZoneBlock> {
 pub struct ZoneRecord {
     pub id: u16,
     pub name: String,
+    /// The record's class id (sound-detector.md 5.2).
+    pub class_id: String,
     pub position: Vec3,
     pub angles: Vec3,
     pub shapes: Vec<Shape>,
@@ -217,6 +222,7 @@ impl ZoneRecord {
         Some(Self {
             id,
             name: h.name.clone(),
+            class_id: record.class_id.as_str().to_owned(),
             position: h.position,
             angles: h.angles,
             shapes: block.shapes.clone(),
@@ -374,6 +380,8 @@ pub struct Zone {
     /// The object's id.
     pub id: u16,
     pub name: String,
+    /// The class id (sound-detector.md 5.2).
+    pub class_id: String,
     pub section: ZoneSection,
     /// The object's matrix *X* (level-objects.md 3.4); row 3 is **p**.
     pub transform: Matrix,
@@ -446,6 +454,12 @@ pub struct Frame<'a> {
 impl Zones {
     pub fn zones(&self) -> &[Zone] {
         &self.zones
+    }
+
+    /// The zones, to change in tests.
+    #[cfg(test)]
+    pub(crate) fn zones_mut(&mut self) -> &mut [Zone] {
+        &mut self.zones
     }
 
     /// The idle sound starts and stops since [`Zones::clear_events`].
@@ -521,6 +535,7 @@ impl Zones {
         let zone = Zone {
             id: record.id,
             name: record.name.clone(),
+            class_id: record.class_id.clone(),
             section,
             transform,
             enabled: e,

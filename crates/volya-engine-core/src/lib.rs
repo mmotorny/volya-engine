@@ -12,6 +12,7 @@ pub mod collision;
 pub mod config;
 pub mod console;
 pub mod cycles;
+pub mod detector;
 pub mod diagnostics;
 pub mod footsteps;
 pub mod glows;

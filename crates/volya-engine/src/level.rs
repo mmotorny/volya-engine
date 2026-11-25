@@ -32,6 +32,7 @@ use crate::core::clock::GameClock;
 use crate::core::collision::{CollisionWorld, geometry};
 use crate::core::config;
 use crate::core::config::Config;
+use crate::core::detector::DetectorSection;
 use crate::core::input::Input;
 use crate::core::level::{DrawItem, Level};
 use crate::core::lights::{LightSettings, Lights};
@@ -47,6 +48,7 @@ use crate::core::vfs::{self, Vfs};
 use crate::core::weather::{Environment, Weather, texture_name as weather_texture_name};
 use crate::core::zones::{Behaviour, SoundEvent, ZoneRecord, ZoneSection, Zones};
 use crate::data::GameData;
+use crate::detector::{DetectorReport, DetectorSound, PlayerDetectors};
 use crate::footsteps::{self, MaterialPairs, PlayerFootsteps};
 use crate::level_lights::{self, GlowShader, LevelLights, LightCamera, LightsData};
 use crate::level_sound::ZoneSoundNames;
@@ -271,6 +273,8 @@ pub struct LevelScreen {
     global_ms: u64,
     /// The player's torches (docs/behavior/torch.md).
     torches: PlayerTorches,
+    /// The player's detectors (docs/behavior/sound-detector.md).
+    detectors: PlayerDetectors,
 }
 
 /// What the engine interface reports.
@@ -302,6 +306,8 @@ pub struct LevelState {
     /// The player's attached torch (torch.md).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub torch: Option<TorchReport>,
+    /// The player's detectors (sound-detector.md).
+    pub detectors: Vec<DetectorReport>,
 }
 
 /// The level's placed effects as the engine interface reports them.
@@ -1134,6 +1140,8 @@ pub struct NewGameLoad {
     light_textures: Option<[String; 3]>,
     /// The player's torches' data (torch.md 1, 3).
     torches: Option<PlayerTorchData>,
+    /// The player's detectors' sections (sound-detector.md 2.1).
+    detectors: Option<Vec<DetectorSection>>,
 }
 
 /// The zone objects of `level_objects` (zone-idle-effects.md 1.1: the
@@ -1430,6 +1438,18 @@ impl NewGameLoad {
                     })
                     .collect();
                 self.torches = Some(torches);
+                // The player's detectors' sections (sound-detector.md 2.1),
+                // read as their items are made; their sound lists are loaded
+                // with them (2.2).
+                let detectors = crate::detector::read_sections(&data.system, character)?;
+                sound.detectors = (character.inventory.items.iter())
+                    .filter_map(|i| {
+                        let s = detectors.iter().find(|s| s.name == i.config.section)?;
+                        crate::detector::is_detector(i.config.class_id.as_str())
+                            .then(|| (i.id, s.clone()))
+                    })
+                    .collect();
+                self.detectors = Some(detectors);
                 // The zones online at the start are created as the client
                 // creates its objects (zone-idle-effects.md 3.1), on the
                 // effects' clock brought to this frame; their sounds are
@@ -1697,6 +1717,7 @@ impl NewGameLoad {
         let footsteps = earlier(self.footsteps, "footsteps")?;
         let player_sphere = earlier(self.player_sphere, "player's model")?;
         let torches = earlier(self.torches, "torches")?;
+        let detectors = earlier(self.detectors, "detectors")?;
         if self.dynamic_props.len() != spawned.instances.len() {
             return Err(invalid("loading stages out of order: no light inputs"));
         }
@@ -1789,6 +1810,7 @@ impl NewGameLoad {
             lights,
             global_ms: 0,
             torches: PlayerTorches::new(torches, &name_for_torches),
+            detectors: PlayerDetectors::new(detectors),
         };
         screen.torches_frame(0.0);
         screen.update_view();
@@ -1952,6 +1974,8 @@ impl LevelScreen {
         // The player's torches (torch.md 4, 6, 8, 15.3) after the
         // movement, aimed by this frame's camera.
         self.torches.take_sounds();
+        // The previous frame's detector sounds were the sound side's.
+        self.detectors.take_sounds();
         let alive = self
             .character
             .as_ref()
@@ -1990,6 +2014,15 @@ impl LevelScreen {
             if let Err(e) = self.zones.frame(&frame, effects) {
                 self.fatal.get_or_insert(e);
             }
+            // The player's detectors (sound-detector.md 3 – 5) in the same
+            // pass over the objects and the scheduler's after it, on the
+            // same clock, following the inventory as it stands.
+            let feet = self.player.state().position;
+            if let Some(c) = &self.character {
+                self.detectors.sync(c, feet);
+            }
+            self.detectors
+                .frame(effects.clock(), elapsed as u32, feet, eye, &self.zones);
         }
         // The idle lights of zones updated or created this frame.
         self.sync_zone_lights();
@@ -2092,6 +2125,23 @@ impl LevelScreen {
     /// on the level's sounds, torch.md 14).
     pub fn take_torch_sounds(&mut self) -> Vec<TorchSound> {
         self.torches.take_sounds()
+    }
+
+    /// The player's detectors.
+    pub fn detectors(&self) -> &PlayerDetectors {
+        &self.detectors
+    }
+
+    /// Adds the section of a detector item made after the level loaded
+    /// (sound-detector.md 2.1).
+    pub fn add_detector_section(&mut self, section: DetectorSection) {
+        self.detectors.add_section(section);
+    }
+
+    /// The detectors' sound commands of this frame, taken (played by the app
+    /// on the level's sounds, sound-detector.md 6).
+    pub fn take_detector_sounds(&mut self) -> Vec<DetectorSound> {
+        self.detectors.take_sounds()
     }
 
     /// The player's footsteps.
@@ -2603,6 +2653,7 @@ impl LevelScreen {
             objects: self.objects_report(),
             lights: self.lights.report(),
             torch: self.torches.report(&self.lights.lights, &self.lights.glows),
+            detectors: self.detectors.report(&self.zones),
         }
     }
 
@@ -2782,6 +2833,7 @@ impl LevelScreen {
             effects_drawn: [true; 3],
             lights: LevelLights::default(),
             torches: PlayerTorches::default(),
+            detectors: PlayerDetectors::default(),
             global_ms: 0,
         }
     }
