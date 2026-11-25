@@ -19,7 +19,7 @@ use volya_engine_core::vfs::{self, Vfs};
 use volya_engine_formats::cp1251;
 use volya_engine_formats::ltx::value;
 
-use crate::{Error, Lua, Value};
+use crate::{Error, ErrorKind, Lua, Value};
 
 /// The path alias of the scripts' directory (2.1).
 pub const GAME_SCRIPTS: &str = "$game_scripts$";
@@ -28,6 +28,7 @@ pub const GAME_SCRIPTS: &str = "$game_scripts$";
 pub const EXTENSION: &str = ".script";
 
 /// The name whose file is loaded into the globals, without a prefix (2.1).
+/// Compared case-sensitively (our choice).
 pub const GLOBALS: &str = "_G";
 
 /// Which namespace prefix chunks get (2.3).
@@ -147,15 +148,25 @@ pub struct Failure {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FailureKind {
-    /// The file exists but couldn't be read.
+    /// The file's path couldn't be made, or the file exists but couldn't be
+    /// read (the trees unmounted, for one).
     Read,
     /// The chunk doesn't compile; the namespace doesn't exist.
     Compile,
     /// Running the chunk raised; the namespace exists with what it defined.
     Run,
     /// The name is in use by a value that is neither nil nor a table: the
-    /// original stops the game (2.2). Raised in Lua too.
+    /// original stops the game (2.2), and the state stops (see [`Scripts`]).
     Fatal,
+}
+
+/// The game's file trees, lent for each read as the platforms lend them
+/// (the web platform's `with_trees`): the combined archive tree, then the game
+/// root with its loose files. Implementations own or borrow nothing they
+/// can't keep, as [`Scripts`] holds them for its lifetime.
+pub trait Trees {
+    /// Runs `f` on the trees; `Err` when they are unavailable (unmounted).
+    fn with_trees(&self, f: &mut dyn FnMut(&dyn Vfs, &dyn Vfs)) -> io::Result<()>;
 }
 
 /// `text` as the game's bytes (Windows-1251, as configuration files are).
@@ -163,60 +174,89 @@ fn lua_string(text: &str) -> Value {
     Value::String(cp1251::encode(text).unwrap_or_else(|| text.as_bytes().to_vec()))
 }
 
-/// The registry key of the loader's entry function (loader.lua).
+/// The registry key of the loader's entry function (loader.lua: ENTRY).
 const ENTRY: &str = "volya.script_loader";
+
+/// Why a chunk wasn't read, for Lua (`missing`, `unreadable`, `invalid`),
+/// and a failure to keep.
+type NotRead = (&'static str, Option<String>);
+
+/// Reads script `name`'s chunk: the chunk and its name, or why not.
+fn read_chunk(
+    trees: &dyn Trees,
+    aliases: &PathAliases,
+    prefix: Prefix,
+    bytes: &[u8],
+) -> Result<(Vec<u8>, String), NotRead> {
+    let name = cp1251::decode(bytes);
+    let path = script_path(aliases, &name).map_err(|e| ("unreadable", Some(e.to_string())))?;
+    // Scripts are files of the archive tree (2.1; db-archive.md precedence).
+    let mut file = Err(io::Error::other("the game's files are unavailable"));
+    let lent = trees.with_trees(&mut |tree, _root| file = vfs::read(tree, &path));
+    let file = match lent.and(file) {
+        Ok(file) => file,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Err(("missing", None)),
+        Err(e) => return Err(("unreadable", Some(format!("{path}: {e}")))),
+    };
+    // Our choice: the chunk is named after the path as [`PathAliases`]
+    // makes it (lowercase, relative to the game root), not the original's.
+    let chunk = chunk(bytes, &file, prefix).ok_or(("invalid", None))?;
+    Ok((chunk, format!("@{path}")))
+}
 
 /// A game script state: a [`Lua`] state with the loader installed (2.2):
 /// undefined globals load the script of their name, `prefetch(N)` loads N,
 /// and [`Scripts::load_globals`] and [`Scripts::load_namespace`] load what
 /// the engine asks for.
+///
+/// The fatal error (2.2) stops the game in the original; Lua 5.1 can't
+/// unwind past a script's `pcall`, so (our choice) the call during which it
+/// happened returns [`ErrorKind::Fatal`] whatever scripts did with it, and
+/// so does every later call: the state is stopped. In Lua, every later load
+/// raises it again.
+///
+/// Holds its [`Trees`] for its lifetime: drop it before the platform
+/// unmounts the game's files (reads after that fail as
+/// [`FailureKind::Read`]).
 pub struct Scripts {
     lua: Lua,
     failures: Rc<RefCell<Vec<Failure>>>,
+    /// The fatal error's message, once raised.
+    fatal: Rc<RefCell<Option<String>>>,
 }
 
 impl Scripts {
-    /// A state reading script files from `files` (the game's file tree,
-    /// paths as [`PathAliases`] resolves them).
-    pub fn new(files: Rc<dyn Vfs>, aliases: &PathAliases, prefix: Prefix) -> Result<Self, Error> {
+    /// A state reading script files from `trees` (paths as `aliases`
+    /// resolves them).
+    pub fn new(trees: Rc<dyn Trees>, aliases: &PathAliases, prefix: Prefix) -> Result<Self, Error> {
         let mut lua = Lua::new()?;
         let failures = Rc::new(RefCell::new(Vec::new()));
+        let fatal = Rc::new(RefCell::new(None));
         let aliases = aliases.clone();
         let read_failures = Rc::clone(&failures);
         lua.register("__volya_script_chunk", move |args| {
             let [Value::String(bytes)] = args else {
                 return Err(format!("script name expected, got {args:?}"));
             };
-            let name = cp1251::decode(bytes);
-            let not_loaded = |why: &str| Ok(vec![Value::Nil, why.into()]);
-            let path = match script_path(&aliases, &name) {
-                Ok(path) => path,
-                Err(e) => return Err(e.to_string()),
-            };
-            let file = match vfs::read(&*files, &path) {
-                Ok(file) => file,
-                Err(e) if e.kind() == io::ErrorKind::NotFound => return not_loaded("missing"),
-                Err(e) => {
-                    read_failures.borrow_mut().push(Failure {
-                        name,
-                        kind: FailureKind::Read,
-                        message: format!("{path}: {e}"),
-                    });
-                    return not_loaded("unreadable");
+            match read_chunk(&*trees, &aliases, prefix, bytes) {
+                Ok((chunk, name)) => Ok(vec![Value::String(chunk), name.as_str().into()]),
+                Err((why, message)) => {
+                    if let Some(message) = message {
+                        read_failures.borrow_mut().push(Failure {
+                            name: cp1251::decode(bytes),
+                            kind: FailureKind::Read,
+                            message,
+                        });
+                    }
+                    Ok(vec![Value::Nil, why.into()])
                 }
-            };
-            match chunk(bytes, &file, prefix) {
-                Some(chunk) => Ok(vec![
-                    Value::String(chunk),
-                    format!("@{path}").as_str().into(),
-                ]),
-                None => not_loaded("invalid"),
             }
         })?;
         let reported = Rc::clone(&failures);
+        let reported_fatal = Rc::clone(&fatal);
         lua.register("__volya_script_report", move |args| {
             let text = |v: &Value| match v {
-                Value::String(s) => String::from_utf8_lossy(s).into_owned(),
+                Value::String(s) => cp1251::decode(s),
                 v => format!("{v:?}"),
             };
             let [kind, name, message] = args else {
@@ -228,6 +268,9 @@ impl Scripts {
                 Some("fatal") => FailureKind::Fatal,
                 _ => return Err(format!("unknown failure {kind:?}")),
             };
+            if kind == FailureKind::Fatal {
+                *reported_fatal.borrow_mut() = Some(text(message));
+            }
             reported.borrow_mut().push(Failure {
                 name: text(name),
                 kind,
@@ -235,29 +278,60 @@ impl Scripts {
             });
             Ok(Vec::new())
         })?;
+        lua.register_kept_factory("__volya_kept")?;
         lua.exec_kept("=script_loader", include_bytes!("loader.lua"), ENTRY)?;
-        Ok(Scripts { lua, failures })
+        Ok(Scripts {
+            lua,
+            failures,
+            fatal,
+        })
+    }
+
+    /// Runs `f` on the state unless it is stopped; the fatal error if it
+    /// was raised before or during `f`.
+    fn guarded<T>(&mut self, f: impl FnOnce(&mut Lua) -> Result<T, Error>) -> Result<T, Error> {
+        let stopped = |fatal: &RefCell<Option<String>>| {
+            fatal.borrow().clone().map(|message| Error {
+                kind: ErrorKind::Fatal,
+                message,
+            })
+        };
+        if let Some(e) = stopped(&self.fatal) {
+            return Err(e);
+        }
+        let result = f(&mut self.lua);
+        match stopped(&self.fatal) {
+            Some(e) => Err(e),
+            None => result,
+        }
     }
 
     /// Startup (2.2.1): loads `_G`, `$game_scripts$_G.script`, into the
     /// globals, whether or not it is already loaded. The engine calls this
     /// after registering its script classes.
     pub fn load_globals(&mut self) -> Result<(), Error> {
-        self.lua.call_kept(ENTRY, &["globals".into()]).map(drop)
+        self.guarded(|lua| lua.call_kept(ENTRY, &["globals".into()]).map(drop))
     }
 
     /// Loads namespace `name` unless it is already loaded, as for an
     /// engine-called function's namespace or `prefetch` (2.2.4, 2.2.5). A
-    /// missing file loads nothing. `Err` only for the fatal error.
+    /// missing file loads nothing; other failures are kept
+    /// ([`Scripts::take_failures`]). `Err` only for the fatal error.
     pub fn load_namespace(&mut self, name: &str) -> Result<(), Error> {
-        self.lua
-            .call_kept(ENTRY, &["namespace".into(), lua_string(name)])
-            .map(drop)
+        self.guarded(|lua| {
+            lua.call_kept(ENTRY, &["namespace".into(), lua_string(name)])
+                .map(drop)
+        })
     }
 
-    /// The state, for running and calling scripts.
-    pub fn lua(&mut self) -> &mut Lua {
-        &mut self.lua
+    /// [`Lua::exec`] on the state (which may load scripts).
+    pub fn exec(&mut self, name: &str, code: &[u8]) -> Result<Vec<Value>, Error> {
+        self.guarded(|lua| lua.exec(name, code))
+    }
+
+    /// [`Lua::call`] on the state (which may load scripts).
+    pub fn call(&mut self, function: &str, args: &[Value]) -> Result<Vec<Value>, Error> {
+        self.guarded(|lua| lua.call(function, args))
     }
 
     /// The failures since the last call, oldest first.

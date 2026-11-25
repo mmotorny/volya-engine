@@ -19,7 +19,9 @@ use volya_engine_core::vfs::{EntryKind, StdVfs, Vfs, read};
 use volya_engine_script::loader::{self, Common, Prefix};
 use volya_engine_script::{Lua, Value};
 
-/// The aliases of the installer's `fsgame.ltx` that scripts use.
+/// The aliases scripts use, copied from the `fsgame.ltx` this edition's
+/// installer generates at install time (`volya_engine::data::INSTALLER_FSGAME`;
+/// not among the installer's files, so it can't be read from them).
 const FSGAME: &[u8] = b"$game_data$ =     false| true | $fs_root$      | gamedata\\\r\n\
     $game_scripts$ =  true | false| $game_data$    | scripts\\\r\n\
     $game_config$ =   true | false| $game_data$    | config\\\r\n";

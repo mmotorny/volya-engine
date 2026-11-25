@@ -14,7 +14,7 @@ use volya_engine_core::config::PathAliases;
 use volya_engine_core::vfs::{self, DirEntry, Vfs, VfsFile};
 
 use super::ensure;
-use crate::loader::{self, Common, FailureKind, Prefix, Scripts};
+use crate::loader::{self, Common, FailureKind, Prefix, Scripts, Trees};
 use crate::{ErrorKind, Lua, Value};
 
 /// Runs every check; `Err` lists the failures.
@@ -25,6 +25,7 @@ pub fn check() -> Result<(), String> {
         ("prefix", prefix_checks()),
         ("loader", loader_checks()),
         ("loader -_g", g_prefix_checks()),
+        ("loader paths", path_checks()),
     ] {
         if let Err(e) = result {
             failures.push(format!("{what}: {e}"));
@@ -213,6 +214,26 @@ struct Files {
     opened: RefCell<Vec<String>>,
 }
 
+impl Trees for Files {
+    fn with_trees(&self, f: &mut dyn FnMut(&dyn Vfs, &dyn Vfs)) -> io::Result<()> {
+        f(self, &NoFiles);
+        Ok(())
+    }
+}
+
+/// An empty game root.
+struct NoFiles;
+
+impl Vfs for NoFiles {
+    fn open(&self, path: &str) -> io::Result<Box<dyn VfsFile + '_>> {
+        Err(io::Error::new(io::ErrorKind::NotFound, path.to_owned()))
+    }
+
+    fn read_dir(&self, _: &str) -> io::Result<Vec<DirEntry>> {
+        Ok(Vec::new())
+    }
+}
+
 impl Vfs for Files {
     fn open(&self, path: &str) -> io::Result<Box<dyn VfsFile + '_>> {
         let key = vfs::normalize(path)?;
@@ -273,6 +294,14 @@ const SCRIPTS: &[(&str, &str)] = &[
         "/*\r\n\r\n*/ function f() error('here') end\r\n",
     ),
     ("bad_ns.script", "v = 1"),
+    (
+        "xr_nest.script",
+        "before = 1 local ok = pcall(prefetch, 'bad_ns') after = ok",
+    ),
+    (
+        "xr_obj.script",
+        "error(setmetatable({}, {__tostring = function() error('no') end}))",
+    ),
 ];
 
 fn scripts(prefix: Prefix) -> Result<(Scripts, Rc<Files>), String> {
@@ -307,17 +336,35 @@ fn loader_checks() -> Result<(), String> {
         let path = format!("gamedata/scripts/{name}.script");
         files.opened.borrow().iter().filter(|p| **p == path).count()
     };
-    let exec = |s: &mut Scripts, code: &str| s.lua().exec("=t", code.as_bytes());
+    let exec = |s: &mut Scripts, code: &str| s.exec("=t", code.as_bytes());
     let run = |s: &mut Scripts, code: &str| exec(s, code).map_err(|e| format!("{code}: {e}"));
 
+    // Scripts reach the loader only through C functions, whose upvalues
+    // jit.util doesn't read.
+    let isolated = run(
+        &mut s,
+        "return pcall(jit.util.upvalue, getmetatable(_G).__index, 0), \
+         (pcall(jit.util.upvalue, prefetch, 0))",
+    )?;
+    ensure(isolated == [false.into(), false.into()], || {
+        format!("upvalues: {isolated:?}")
+    })?;
     // Nothing of the loader is reachable but `prefetch` and the handler.
     let hidden = run(
         &mut s,
         "return type(prefetch), rawget(_G, '__volya_script_chunk'), \
-         rawget(_G, '__volya_script_report'), type(getmetatable(_G).__index)",
+         rawget(_G, '__volya_script_report'), type(getmetatable(_G).__index), \
+         rawget(_G, '__volya_kept')",
     )?;
     ensure(
-        hidden == ["function".into(), Value::Nil, Value::Nil, "function".into()],
+        hidden
+            == [
+                "function".into(),
+                Value::Nil,
+                Value::Nil,
+                "function".into(),
+                Value::Nil,
+            ],
         || format!("globals: {hidden:?}"),
     )?;
 
@@ -445,27 +492,62 @@ fn loader_checks() -> Result<(), String> {
     )?;
 
     // A name in use by a non-table is the fatal error (2.2).
-    let fatal = run(&mut s, "bad_ns = 5 return pcall(prefetch, 'bad_ns')")?;
-    ensure(
-        matches!(&fatal[..], [Value::Boolean(false), Value::String(m)]
-            if String::from_utf8_lossy(m).contains("the namespace name is already being used by the non-table object")),
-        || format!("fatal: {fatal:?}"),
-    )?;
-    let fatal = s.load_namespace("bad_ns");
-    ensure(
-        matches!(&fatal, Err(e) if e.kind == ErrorKind::Runtime),
-        || format!("fatal from Rust: {fatal:?}"),
-    )?;
+    // A failing `__tostring` of a raised value is discarded too (2.4).
+    run(&mut s, "local _ = xr_obj")?;
     let failures = s.take_failures();
     ensure(
-        failures.len() == 2 && failures.iter().all(|f| f.kind == FailureKind::Fatal),
-        || format!("fatal failures: {failures:?}"),
+        matches!(&failures[..], [f] if f.kind == FailureKind::Run
+            && f.message == "(error object is a table value)"),
+        || format!("xr_obj failures: {failures:?}"),
     )?;
-    ensure(opened(&files, "bad_ns") == 0, || "bad_ns read".into())?;
     let wrong = exec(&mut s, "prefetch({})");
     ensure(
         matches!(&wrong, Err(e) if e.message.contains("bad argument #1 to 'prefetch'")),
         || format!("prefetch({{}}): {wrong:?}"),
+    )?;
+
+    // A name in use by a non-table is the fatal error (2.2): the call it
+    // happens in fails whatever scripts do with it, even a script's pcall
+    // around a load whose run catches it, and the state stops.
+    run(&mut s, "bad_ns = 5")?;
+    let fatal = exec(&mut s, "return pcall(function() return xr_nest end)");
+    let is_fatal = |r: &Result<Vec<Value>, crate::Error>| {
+        matches!(r, Err(e) if e.kind == ErrorKind::Fatal && e.message.contains(
+            "the namespace name is already being used by the non-table object"))
+    };
+    ensure(is_fatal(&fatal), || format!("fatal: {fatal:?}"))?;
+    let failures = s.take_failures();
+    ensure(
+        matches!(&failures[..], [f] if f.kind == FailureKind::Fatal && f.name == "bad_ns"),
+        || format!("fatal failures: {failures:?}"),
+    )?;
+    ensure(opened(&files, "bad_ns") == 0, || "bad_ns read".into())?;
+    let after = s.load_namespace("xr_a").map(|()| Vec::new());
+    ensure(is_fatal(&after), || {
+        format!("after the fatal error: {after:?}")
+    })?;
+    let after = exec(&mut s, "return 1");
+    ensure(is_fatal(&after), || {
+        format!("after the fatal error: {after:?}")
+    })?;
+    Ok(())
+}
+
+/// A script path that can't be made is discarded like any failure (2.4).
+fn path_checks() -> Result<(), String> {
+    let (_, files) = scripts(Prefix::Default)?;
+    let aliases = PathAliases::parse(
+        b"$game_data$ = false| true | $fs_root$ | gamedata\\\r\n",
+        "",
+    )
+    .map_err(|e| e.to_string())?;
+    let mut s = Scripts::new(files, &aliases, Prefix::Default).map_err(|e| e.message)?;
+    let a = s.exec("=t", b"return xr_a").map_err(|e| e.message)?;
+    let failures = s.take_failures();
+    ensure(
+        a == [Value::Nil]
+            && matches!(&failures[..], [f] if f.kind == FailureKind::Read && f.name == "xr_a"),
+        || format!("no $game_scripts$: {a:?}, {failures:?}"),
     )?;
     Ok(())
 }
@@ -475,7 +557,6 @@ fn g_prefix_checks() -> Result<(), String> {
     let (mut s, _) = scripts(Prefix::G)?;
     s.load_namespace("xr_a").map_err(|e| e.message)?;
     let a = s
-        .lua()
         .exec(
             "=t",
             b"local v, n, this, p = xr_a.get() return xr_a._G == _G, n, this == xr_a, p",

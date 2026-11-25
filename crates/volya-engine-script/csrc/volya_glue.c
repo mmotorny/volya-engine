@@ -237,3 +237,42 @@ int volya_register_protected(lua_State *L, volya_register *r)
 {
   return lua_cpcall(L, set_function, r);
 }
+
+/* --- Kept functions ------------------------------------------------------ */
+
+/* Calls the registry's function at upvalue 1 with upvalue 2, then the
+** arguments. A C function: scripts holding one reach nothing behind it
+** (jit.util reads only Lua functions' upvalues; there is no debug library). */
+static int kept_call(lua_State *L)
+{
+  int n = lua_gettop(L);
+  lua_getfield(L, LUA_REGISTRYINDEX, lua_tostring(L, lua_upvalueindex(1)));
+  lua_pushvalue(L, lua_upvalueindex(2));
+  lua_insert(L, 1);
+  lua_insert(L, 1);
+  lua_call(L, n + 1, LUA_MULTRET);
+  return lua_gettop(L);
+}
+
+/* `factory(key, op)`: a C function calling registry[key](op, ...). */
+static int kept_function(lua_State *L)
+{
+  luaL_checkstring(L, 1);
+  luaL_checkstring(L, 2);
+  lua_settop(L, 2);
+  lua_pushcclosure(L, kept_call, 2);
+  return 1;
+}
+
+static int set_kept_factory(lua_State *L)
+{
+  lua_pushcfunction(L, kept_function);
+  lua_setglobal(L, (const char *)lua_touserdata(L, 1));
+  return 0;
+}
+
+/* Sets the global `name` to the kept-function factory. */
+int volya_register_kept_protected(lua_State *L, const char *name)
+{
+  return lua_cpcall(L, set_kept_factory, (void *)name);
+}

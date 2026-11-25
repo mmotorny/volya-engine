@@ -104,6 +104,9 @@ pub enum ErrorKind {
     ErrorHandler,
     /// A value or name that can't cross the API.
     Api,
+    /// The script loader's fatal error: the original stops the game
+    /// (docs/behavior/script-loading.md 2.2; [`loader::Scripts`]).
+    Fatal,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -175,6 +178,18 @@ impl Lua {
     pub(crate) fn call_kept(&mut self, key: &str, args: &[Value]) -> Result<Vec<Value>, Error> {
         let key = cstring(key)?;
         self.run(None, Some(&key), true, args, true)
+    }
+
+    /// Sets the global `name` to a factory: `name(key, op)` returns a C
+    /// function calling the function kept at `key` with `op`, then its own
+    /// arguments. Lua code can hand those out without exposing what they
+    /// call.
+    pub(crate) fn register_kept_factory(&mut self, name: &str) -> Result<(), Error> {
+        let name = cstring(name)?;
+        // SAFETY: the state is open; `name` outlives the call.
+        let status =
+            unsafe { ffi::volya_register_kept_protected(self.state.as_ptr(), name.as_ptr()) };
+        self.check(status)
     }
 
     /// Compiles `code` without running it.
