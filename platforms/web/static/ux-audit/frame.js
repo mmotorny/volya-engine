@@ -111,6 +111,8 @@ const updates = {
   async download() {},
   apply() {},
   async check() {},
+  // The state's check outcome; "checking" never settles.
+  checkNow: () => (state.check === "checking" ? new Promise(() => {}) : Promise.resolve(state.check ?? "none")),
   onChange(f) {
     listeners.add(f);
     return () => listeners.delete(f);
@@ -156,6 +158,12 @@ if (state.level) {
   status.dataset.state = "ready";
   await start(call, updates);
   if (state.screen === "settings") await globalThis.volya.showSettings();
+  // Check for updates pressed, its result held on screen.
+  if (state.check) {
+    globalThis.volyaHoldCheckResult = true;
+    [...document.querySelectorAll("#game button")].find((b) => b.textContent === "Check for updates").click();
+    await new Promise((resolve) => setTimeout(resolve));
+  }
   if (state.snapshot) screens.showImport(state.game, state.snapshot);
   // Play pressed, and the game failed to start.
   if (state.launchError) {

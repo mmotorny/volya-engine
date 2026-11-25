@@ -84,6 +84,49 @@ export const tests = {
     assertEqual(b.store().auto, true, "setting saved");
   },
 
+  "updates: Check for updates tells found, none, offline and failed apart": async () => {
+    const { startUpdates } = await import(`${base}update.js`);
+    const tick = () => new Promise((r) => setTimeout(r));
+    const fake = (update) => {
+      const registration = Object.assign(new EventTarget(), { waiting: null, installing: null, scope: "https://example.test/" });
+      const container = Object.assign(new EventTarget(), { controller: {} });
+      registration.update = () => update(registration, container);
+      const store = { read: async () => ({}), write: async () => {} };
+      return startUpdates(Promise.resolve(registration), { container, store });
+    };
+    const outcome = async (update) => {
+      const updates = fake(update);
+      await tick();
+      return [await updates.checkNow(), updates.requested];
+    };
+    // A new worker installs (automatic downloads, or consented).
+    const installs = async (registration) => {
+      registration.installing = Object.assign(new EventTarget(), { state: "installing" });
+      registration.dispatchEvent(new Event("updatefound"));
+    };
+    assertEqual(String(await outcome(installs)), "found,true", "installing");
+    // Opted out: the worker offers it and refuses; nothing is left installing.
+    const offers = async (registration, container) => {
+      registration.dispatchEvent(new Event("updatefound"));
+      container.dispatchEvent(new MessageEvent("message", { data: { type: "update-available", build: "b2", bytes: 1 } }));
+      throw new TypeError("install failed");
+    };
+    assertEqual(String(await outcome(offers)), "found,true", "offered");
+    // Already downloaded.
+    assertEqual(String(await outcome(async (r) => (r.waiting = {}))), "found,true", "waiting");
+    assertEqual(String(await outcome(async () => {})), "none,false", "none");
+    const rejects = async () => {
+      throw new TypeError("Failed to update a ServiceWorker");
+    };
+    assertEqual(String(await outcome(rejects)), "failed,false", "failed while the browser says it's online");
+    Object.defineProperty(navigator, "onLine", { configurable: true, get: () => false });
+    try {
+      assertEqual(String(await outcome(rejects)), "offline,false", "offline");
+    } finally {
+      delete navigator.onLine;
+    }
+  },
+
   // GitHub Pages cannot send COOP/COEP; the engine must not depend on them.
   "page is not cross-origin isolated": () => {
     assertEqual(self.crossOriginIsolated, false);
@@ -269,6 +312,10 @@ export const tests = {
     document.body.style.minHeight = "";
     const toggle = document.querySelector("#game .switch input");
     assert(toggle && toggle.checked, "automatic updates not on by default");
+    assert(
+      [...document.querySelectorAll("#game .panel button")].some((b) => b.textContent === "Check for updates"),
+      "no Check for updates button",
+    );
     assertEqual(document.activeElement?.textContent, "‹ Back", "focus starts on Back (keyboard)");
     // The logo leads Home too.
     document.querySelector(".brand").click();
@@ -279,6 +326,51 @@ export const tests = {
     document.activeElement.click();
     for (let i = 0; i < 50 && document.querySelector(".screen-head"); i++) await new Promise((r) => setTimeout(r, 20));
     assert(!document.querySelector(".screen-head"), "Back did not leave Settings");
+  },
+
+  "Check for updates: up to date, can't reach the server, found leads Home": async () => {
+    const registration = await navigator.serviceWorker.ready;
+    const wait = async (ok, what) => {
+      for (let i = 0; i < 250 && !ok(); i++) await new Promise((r) => setTimeout(r, 20));
+      assert(ok(), what);
+    };
+    const TEXTS = ["Check for updates", "Checking…", "Up to date", "Can't check while offline", "Couldn't check for updates"];
+    const button = () => [...document.querySelectorAll("#game .panel button")].find((b) => TEXTS.includes(b.textContent));
+    [...document.querySelectorAll("#game .bottom button")].find((b) => b.textContent === "Settings").click();
+    await wait(() => button()?.textContent === "Check for updates", "no Check for updates in Settings");
+    // This build is the one served: the real check finds nothing.
+    button().click();
+    assertEqual(button().textContent, "Checking…", "while checking");
+    assert(button().disabled, "enabled while checking");
+    await wait(() => button().textContent === "Up to date", `after the check: ${button().textContent}`);
+    await wait(() => button().textContent === "Check for updates" && !button().disabled, "the button didn't return");
+    // The server unreachable while the browser says it's online: the cause
+    // isn't known. What update() rejects with, as measured.
+    const offline = (on) => fetch(`${base}__test/offline/${on ? "on" : "off"}`, { method: "POST" });
+    let rejection;
+    await offline(true);
+    try {
+      rejection = await registration.update().then(
+        () => "resolved",
+        (e) => `${e.name}: ${e.message}`,
+      );
+      button().click();
+      await wait(() => button().textContent === "Couldn't check for updates", `unreachable: ${button().textContent}`);
+    } finally {
+      await offline(false);
+    }
+    // An update found (a new worker installing): Home, where its row is.
+    const update = registration.update;
+    registration.update = async () => registration.dispatchEvent(new Event("updatefound"));
+    try {
+      await wait(() => button()?.textContent === "Check for updates", "the button didn't return after failing");
+      button().click();
+      await wait(() => !document.querySelector(".screen-head"), "found didn't lead Home");
+      assert([...document.querySelectorAll("#game .bottom button")].some((b) => b.textContent === "Settings"), "not Home");
+    } finally {
+      registration.update = update;
+    }
+    return `update() unreachable: ${rejection}; navigator.onLine ${navigator.onLine}`;
   },
 
   "the UX audit page renders every state on every device": async () => {
