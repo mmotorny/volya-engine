@@ -213,18 +213,21 @@ pub fn frame(time: f64) {
         let Running { app, voices } = running;
         let updated = crate::game::with_trees(|tree, _| {
             crate::input::with_input(|input| {
-                crate::audio::with_mixer_opt(|mixer| match mixer {
-                    Some(mixer) => app.update(
-                        tree,
-                        time,
-                        input,
-                        &mut MixerOut {
-                            mixer,
+                crate::audio::with_sounds(|host| {
+                    crate::audio::with_mixer_opt(|mixer| match mixer {
+                        Some(mixer) => app.update(
                             tree,
-                            voices,
-                        },
-                    ),
-                    None => app.update(tree, time, input, &mut Silent),
+                            time,
+                            input,
+                            &mut MixerOut {
+                                mixer,
+                                tree,
+                                voices,
+                                sounds: Some(&mut host.system),
+                            },
+                        ),
+                        None => app.update(tree, time, input, &mut Silent),
+                    })
                 })
             })
         });
@@ -277,6 +280,7 @@ pub fn set_hidden(hidden: bool) {
                             mixer,
                             tree,
                             voices,
+                            sounds: None,
                         },
                     ),
                     None => app.set_hidden(hidden, input, &mut Silent),

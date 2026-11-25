@@ -29,6 +29,7 @@ pub mod patrol_path;
 pub mod pe;
 pub mod sav;
 pub mod shaders_xr;
+pub mod sound_params;
 pub mod spawn;
 pub mod text;
 pub mod ui;

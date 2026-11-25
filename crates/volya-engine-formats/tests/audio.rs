@@ -63,6 +63,21 @@ fn decodes_like_the_reference() {
     stream.rewind().unwrap();
     stream.read_block(&mut again).unwrap();
     assert_eq!(first, again);
+
+    // Skipping decodes and drops whole frames: what follows is the stream
+    // from that frame.
+    let mut all = Vec::new();
+    stream.rewind().unwrap();
+    while all.len() < 100_000 && stream.read_block(&mut all).unwrap() {}
+    for skip in [0, 1, 1_000, 44_100] {
+        stream.rewind().unwrap();
+        assert_eq!(stream.skip(skip).unwrap(), skip);
+        let mut rest = Vec::new();
+        while rest.len() < 10_000 && stream.read_block(&mut rest).unwrap() {}
+        assert_eq!(rest[..10_000], all[skip as usize..skip as usize + 10_000]);
+    }
+    stream.rewind().unwrap();
+    assert_eq!(stream.skip(u64::MAX).unwrap(), 1_144_576);
 }
 
 #[test]
