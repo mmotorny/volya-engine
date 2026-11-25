@@ -13,7 +13,7 @@ There are no arenas: every allocation goes to one general heap, the target's sys
 
 Two reuse fixes from #357 stand in for arenas:
 
-- The collision world's five arrays are kept when it is dropped (a thread-local spare in `volya-engine-core::collision`) and reused by the next world when large enough, so a second New Game's collision world finds its 30 MB without new memory (it needed up to 13 MiB more before, measured in headless Chrome).
+- The collision world's large arrays are kept when it is dropped (a thread-local spare in `volya-engine-core::collision`) and reused by the next world when large enough, so a second New Game's collision world finds its 28 MB without new memory (it needed up to 13 MiB more before, measured in headless Chrome).
 - Prepared textures share one read buffer and one transcoding buffer, and texture writes go in bands of 2 MiB.
 
 ## Measurements by lifetime (#399)
@@ -26,7 +26,7 @@ Measured natively (release, M-series Mac) with counting allocators: `volya-engin
 |---|---|---|
 | The archive tree (`DbVfs`: every file's entry and every directory's names, `HashMap<String, _>`, `BTreeSet<String>`) | 7.7 MB | 87,747 |
 | The game's data before any game (`GameData`): the system configuration 5.6 MB, string tables 1.8 MB, UI 0.2 MB | 7.6 MB | 118,008 |
-| The collision world's spare arrays after a level (#357) | 30.1 MB (42.0 before #371) | 5 |
+| The collision world's spare arrays after a level (#357) | 28.1 MB (30.1 before #396, 42.0 before #371) | 5 |
 
 ### Held for the level
 
@@ -37,7 +37,7 @@ What each loading stage keeps, and the blocks it leaves live:
 | `st_creating_new_game` | 4.7 MB | 66 | 452 | 12.8 MB |
 | `st_server_connecting` (the offline simulation: registry 7.9, navigation 7.1, graph and paths 1.8; the registry 14.8 before #370) | 12.7 MB (19.8 before) | 109,329 | 603,934 | 14.1 MB (19.8 before) |
 | `st_opening_stream` (the `level` file's parts) | 7.8 MB | 6,887 | 41,503 | 12.6 MB |
-| `st_loading_cform` (collision: vertices 8.4, triangles 11.0, materials 1.4, grid 9.3; before #371 triangles 16.5 and grid 15.8) | 30.7 MB (42.7 before) | 9,654 | 14,924 | 35.1 MB (45.0 before) |
+| `st_loading_cform` (collision: vertices 8.4, triangles 11.0, materials 1.4, tree 7.3; before #396 a grid of 9.3, before #371 triangles 16.5 and grid 15.8) | 28.7 MB (30.7 before #396, 42.7 before #371) | 9,653 | 14,921 | 28.9 MB (35.1, 45.0) |
 | `st_loading_geometry` | 0.4 MB | 121 | 205 | 0.7 MB |
 | `st_loading_spatial_db` | −6.0 MB | −6,486 | 117 | 5.4 MB |
 | `st_loading_details` (the detail objects' slot grid 8.4 and cache, #411) | 9.5 MB | 91 | 176 | 9.5 MB |

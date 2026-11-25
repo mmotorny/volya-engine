@@ -8,11 +8,14 @@
 //! spec's contact rules (sections 4–6).
 //!
 //! The spatial index is our choice (the spec only says the bounding box
-//! sizes the engine's spatial structures): a uniform grid over the
-//! horizontal plane whose cells list the triangles whose bounding box
-//! overlaps them, stored as one flat list.
+//! sizes the engine's spatial structures): a bounding-volume tree over runs
+//! of the triangles ([`bvh`], #396). Rays offer their triangles in the order
+//! of a uniform 2 m grid over the horizontal plane, walked cell by cell
+//! from the ray's start, each cell's triangles (those whose box overlaps
+//! it) in file order; the tree only leaves out those the ray cannot meet.
 
 pub mod body;
+pub mod bvh;
 pub mod geometry;
 
 use std::cell::RefCell;
@@ -24,13 +27,14 @@ pub use volya_engine_formats::level_cform::{Cform, CformReader, CformTriangle};
 use volya_engine_formats::gamemtl::{DYNAMIC, PASS_THROUGH, TRIANGLE_BIT_14, TRIANGLE_BIT_15};
 use volya_engine_formats::level_cform::{BIT_14, BIT_15, MATERIAL_MASK};
 
+use self::bvh::{Bvh, Segment};
 use self::geometry::Vec3;
 use crate::climbing::{LADDER_MATERIAL, Ladder};
 
 /// The large arrays of the collision world dropped last, kept for the
 /// next one (#357). In the wasm heap, which never shrinks, a level's
-/// largest blocks (11 MB of triangles, 8.4 MB of vertices, 7 MB of grid
-/// entries for `l01_escape`) are freed when it is left, and the next load's earlier
+/// largest blocks (11 MB of triangles, 8.4 MB of vertices for
+/// `l01_escape`) are freed when it is left, and the next load's earlier
 /// stages (the offline simulation's many small allocations) split that
 /// space before its collision world is read, so the world needed new
 /// memory: up to 13 MiB more for a second New Game (measured in headless
@@ -41,8 +45,7 @@ struct Spare {
     packed: Vec<u64>,
     wide: Vec<[u32; 3]>,
     material_of: Vec<u8>,
-    starts: Vec<u32>,
-    items: Vec<u16>,
+    nodes: Vec<bvh::Node>,
 }
 
 thread_local! {
@@ -66,15 +69,17 @@ fn spare<T>(pick: impl FnOnce(&mut Spare) -> &mut Vec<T>, n: usize) -> Vec<T> {
     SPARE.with(|s| reuse(pick(&mut s.borrow_mut()), n))
 }
 
-/// Grid cell edge, metres (our choice: about three player widths, a few
-/// triangles of the first level per cell on average).
+/// Grid cell edge, metres (our choice: about three player widths).
 pub const CELL_SIZE: f32 = 2.0;
 /// Most cells a grid may have; larger levels get larger cells (our choice).
 const MAX_CELLS: f32 = (1 << 22) as f32;
-/// Most cell entries the grid may hold (256 MB): a malformed file whose
-/// triangles span many cells fails the load instead (our choice; the first
-/// level needs about 5.5 million).
-pub const MAX_GRID_ENTRIES: u64 = 1 << 26;
+/// How far from a triangle's box a ray may pass and still be offered it
+/// (metres; our choice): every caller's test meets a triangle only where
+/// the ray does, within rounding far below this, except for a ray lying in
+/// the triangle's plane (or a sliver's), where the test divides rounding
+/// by rounding and may report a hit anywhere (`tests/collision_rays.rs`
+/// counts these, #396).
+pub const RAY_MARGIN: f32 = 0.01;
 
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
@@ -213,77 +218,34 @@ fn pack(t: [u32; 3]) -> u64 {
     u64::from(t[0]) | u64::from(t[1]) << INDEX_BITS | u64::from(t[2]) << (2 * INDEX_BITS)
 }
 
-/// Grid entries are 16-bit words (#371): in each cell its triangles in
-/// ascending order, the first as its index and each next as the step from
-/// the one before, one word below 2¹⁵ and two above (the first with the
-/// top bit set, then the low 16 bits).
-const LONG: u16 = 0x8000;
-
-/// Appends `v` (below 2³¹) as entry words.
-fn encode(v: u32, out: &mut [u16], at: &mut u32) {
-    if v < u32::from(LONG) {
-        out[*at as usize] = v as u16;
-        *at += 1;
-    } else {
-        out[*at as usize] = LONG | (v >> 16) as u16;
-        out[*at as usize + 1] = v as u16;
-        *at += 2;
-    }
-}
-
-fn encoded_len(v: u32) -> u32 {
-    if v < u32::from(LONG) { 1 } else { 2 }
-}
-
-/// One cell's triangles, decoded from its entry words in ascending order.
-struct CellItems<'a> {
-    words: std::slice::Iter<'a, u16>,
-    /// The triangle before, `None` before the first.
-    last: Option<u32>,
-}
-
-impl Iterator for CellItems<'_> {
-    type Item = u32;
-
-    fn next(&mut self) -> Option<u32> {
-        let w = *self.words.next()?;
-        let v = if w & LONG == 0 {
-            u32::from(w)
-        } else {
-            u32::from(w & !LONG) << 16 | u32::from(*self.words.next()?)
-        };
-        let t = self.last.map_or(v, |l| l + v);
-        self.last = Some(t);
-        Some(t)
-    }
-}
-
-/// A uniform grid over x and z.
+/// A uniform grid over x and z: the order in which a ray's cells are
+/// walked, and the cells each triangle's box overlaps.
 #[derive(Clone, Debug)]
 struct Grid {
     origin: [f32; 2],
     cell: f32,
     size: [usize; 2],
-    /// Start of each cell's run in `items` (words); one more than the cell
-    /// count.
-    starts: Vec<u32>,
-    items: Vec<u16>,
 }
 
 impl Grid {
+    fn new(min: Vec3, max: Vec3) -> Self {
+        let extent = [(max[0] - min[0]).max(0.0), (max[2] - min[2]).max(0.0)];
+        let mut cell = CELL_SIZE;
+        while (extent[0] / cell + 1.0) * (extent[1] / cell + 1.0) > MAX_CELLS {
+            cell *= 2.0;
+        }
+        Self {
+            origin: [min[0], min[2]],
+            cell,
+            size: extent.map(|e| (e / cell) as usize + 1),
+        }
+    }
+
     fn cell_range(&self, min: f32, max: f32, axis: usize) -> (usize, usize) {
         let last = self.size[axis] - 1;
         let at =
             |v: f32| (((v - self.origin[axis]) / self.cell).floor().max(0.0) as usize).min(last);
         (at(min), at(max))
-    }
-
-    /// The triangles of cell `c`.
-    fn items(&self, c: usize) -> CellItems<'_> {
-        CellItems {
-            words: self.items[self.starts[c] as usize..self.starts[c + 1] as usize].iter(),
-            last: None,
-        }
     }
 
     /// The cells triangle `t` overlaps: x range, z range.
@@ -294,73 +256,48 @@ impl Grid {
             self.cell_range(a[2].min(b[2]).min(c[2]), a[2].max(b[2]).max(c[2]), 1),
         )
     }
+}
 
-    /// The grid over `min`…`max` listing each triangle in every cell its
-    /// bounding box overlaps. Ranges are computed from the vertices in both
-    /// passes rather than stored.
-    fn build(min: Vec3, max: Vec3, vertices: &[Vec3], triangles: &Triangles) -> io::Result<Self> {
-        let extent = [(max[0] - min[0]).max(0.0), (max[2] - min[2]).max(0.0)];
-        let mut cell = CELL_SIZE;
-        while (extent[0] / cell + 1.0) * (extent[1] / cell + 1.0) > MAX_CELLS {
-            cell *= 2.0;
-        }
-        let size = extent.map(|e| (e / cell) as usize + 1);
-        let mut grid = Self {
-            origin: [min[0], min[2]],
-            cell,
-            size,
-            starts: spare(|s| &mut s.starts, size[0] * size[1] + 1),
-            items: Vec::new(),
-        };
-        grid.starts.resize(size[0] * size[1] + 1, 0);
-        let corners = |i: usize| triangles.get(i).map(|v| vertices[v as usize]);
-        if triangles.len() > 1 << 31 {
-            return Err(invalid("level.cform: more than 2³¹ triangles"));
-        }
-        // Each cell's last triangle so far, for the steps' lengths.
-        let mut last = vec![u32::MAX; size[0] * size[1]];
-        let step = |last: &mut u32, i: u32| {
-            let v = if *last == u32::MAX { i } else { i - *last };
-            *last = i;
-            v
-        };
-        let mut total = 0u64;
-        for i in 0..triangles.len() {
-            let ((x0, x1), (z0, z1)) = grid.cells(&corners(i));
-            total += ((x1 - x0 + 1) * (z1 - z0 + 1)) as u64;
-            if total > MAX_GRID_ENTRIES {
-                return Err(invalid(format!(
-                    "level.cform: the spatial index would need more than {MAX_GRID_ENTRIES} entries"
-                )));
-            }
-            for z in z0..=z1 {
-                for x in x0..=x1 {
-                    let c = z * size[0] + x;
-                    grid.starts[c + 1] += encoded_len(step(&mut last[c], i as u32));
-                }
-            }
-        }
-        // Within u32: at most two words an entry, the entries capped.
-        for i in 1..grid.starts.len() {
-            grid.starts[i] += grid.starts[i - 1];
-        }
-        let words = grid.starts[grid.starts.len() - 1] as usize;
-        let mut next = grid.starts.clone();
-        last.fill(u32::MAX);
-        grid.items = spare(|s| &mut s.items, words);
-        grid.items.resize(words, 0);
-        for i in 0..triangles.len() {
-            let ((x0, x1), (z0, z1)) = grid.cells(&corners(i));
-            for z in z0..=z1 {
-                for x in x0..=x1 {
-                    let c = z * size[0] + x;
-                    let v = step(&mut last[c], i as u32);
-                    encode(v, &mut grid.items, &mut next[c]);
-                }
-            }
-        }
-        Ok(grid)
+/// A triangle a ray may meet, with the cells its box overlaps.
+#[derive(Clone, Copy, Debug)]
+struct Candidate {
+    triangle: u32,
+    x: [u32; 2],
+    z: [u32; 2],
+}
+
+impl Candidate {
+    fn in_cell(&self, cell: [usize; 2]) -> bool {
+        let (x, z) = (cell[0] as u32, cell[1] as u32);
+        self.x[0] <= x && x <= self.x[1] && self.z[0] <= z && z <= self.z[1]
     }
+}
+
+thread_local! {
+    /// The rays' list of candidates, kept between rays.
+    static CANDIDATES: RefCell<Vec<Candidate>> = RefCell::default();
+}
+
+/// Offers `test`, in order, each of `pending` whose box overlaps `cell`,
+/// removing it, until `test` returns true; returns whether it did.
+fn offer(
+    pending: &mut Vec<Candidate>,
+    cell: [usize; 2],
+    mut test: impl FnMut(u32) -> bool,
+) -> bool {
+    let mut kept = 0;
+    let mut stop = false;
+    for r in 0..pending.len() {
+        let c = pending[r];
+        if !stop && c.in_cell(cell) {
+            stop = test(c.triangle);
+        } else {
+            pending[kept] = c;
+            kept += 1;
+        }
+    }
+    pending.truncate(kept);
+    stop
 }
 
 /// A level's static collision mesh with mapped materials and its index.
@@ -376,6 +313,7 @@ pub struct CollisionWorld {
     material_of: Vec<u8>,
     materials: Vec<GameMaterial>,
     grid: Grid,
+    tree: Bvh,
     /// The level's ladders (docs/behavior/climbing.md 1.2) and the index of
     /// their material.
     ladders: Vec<Ladder>,
@@ -384,15 +322,14 @@ pub struct CollisionWorld {
 
 impl Drop for CollisionWorld {
     fn drop(&mut self) {
-        let grid = &mut self.grid;
+        let nodes = std::mem::take(&mut self.tree).into_nodes();
         SPARE.with(|s| {
             *s.borrow_mut() = Spare {
                 vertices: std::mem::take(&mut self.vertices),
                 packed: std::mem::take(&mut self.triangles.packed),
                 wide: std::mem::take(&mut self.triangles.wide),
                 material_of: std::mem::take(&mut self.material_of),
-                starts: std::mem::take(&mut grid.starts),
-                items: std::mem::take(&mut grid.items),
+                nodes,
             }
         });
     }
@@ -467,7 +404,10 @@ impl CollisionWorld {
                 max[k] = max[k].max(v[k]);
             }
         }
-        let grid = Grid::build(min, max, &vertices, &triangles)?;
+        let nodes = SPARE.with(|s| std::mem::take(&mut s.borrow_mut().nodes));
+        let corners = |i: usize| triangles.get(i).map(|v| vertices[v as usize]);
+        let tree = Bvh::build(min, max, triangles.len(), corners, nodes)?;
+        let grid = Grid::new(min, max);
         Ok(Self {
             bbox_min,
             bbox_max,
@@ -476,6 +416,7 @@ impl CollisionWorld {
             material_of,
             materials,
             grid,
+            tree,
             ladders: Vec::new(),
             ladder_material: 0,
         })
@@ -552,40 +493,55 @@ impl CollisionWorld {
         self.vertices.len() * 12
             + self.triangles.bytes()
             + self.material_of.len()
-            + self.grid.starts.len() * 4
-            + self.grid.items.len() * 2
+            + self.tree.memory_bytes()
     }
 
     /// Appends to `out` the triangles whose bounding box overlaps the box
     /// `min`…`max`, each once, in ascending order.
     pub fn query(&self, min: Vec3, max: Vec3, out: &mut Vec<u32>) {
         let start = out.len();
-        let g = &self.grid;
-        let (x0, x1) = g.cell_range(min[0], max[0], 0);
-        let (z0, z1) = g.cell_range(min[2], max[2], 1);
-        for z in z0..=z1 {
-            for x in x0..=x1 {
-                let c = z * g.size[0] + x;
-                for t in g.items(c) {
-                    let [a, b, c] = self.corners(t);
-                    let overlaps = (0..3).all(|k| {
-                        a[k].min(b[k]).min(c[k]) <= max[k] && a[k].max(b[k]).max(c[k]) >= min[k]
-                    });
-                    if overlaps {
-                        out.push(t);
-                    }
+        self.tree.overlapping(min, max, |first, count| {
+            for t in first..first + count {
+                let (lo, hi) = bvh::triangle_box(&self.corners(t));
+                if (0..3).all(|k| lo[k] <= max[k] && hi[k] >= min[k]) {
+                    out.push(t);
                 }
             }
-        }
+        });
         out[start..].sort_unstable();
-        let mut w = start;
-        for r in start..out.len() {
-            if r == start || out[r] != out[w - 1] {
-                out[w] = out[r];
-                w += 1;
-            }
+    }
+
+    /// The triangles whose box, widened by [`RAY_MARGIN`], the segment from
+    /// `origin` along `dir` for `length` meets, in ascending order, with
+    /// their cells; none for a NaN segment, which meets nothing.
+    fn candidates(&self, origin: Vec3, dir: Vec3, length: f32) -> Vec<Candidate> {
+        let mut out = CANDIDATES.with(|c| std::mem::take(&mut *c.borrow_mut()));
+        out.clear();
+        if origin.iter().chain(&dir).any(|v| v.is_nan()) {
+            return out;
         }
-        out.truncate(w);
+        let segment = Segment::new(origin, dir, length);
+        self.tree.along(&segment, RAY_MARGIN, |first, count| {
+            for t in first..first + count {
+                let c = self.corners(t);
+                let (lo, hi) = bvh::triangle_box(&c);
+                if segment.meets(lo, hi, RAY_MARGIN) {
+                    let ((x0, x1), (z0, z1)) = self.grid.cells(&c);
+                    out.push(Candidate {
+                        triangle: t,
+                        x: [x0 as u32, x1 as u32],
+                        z: [z0 as u32, z1 as u32],
+                    });
+                }
+            }
+        });
+        out.sort_unstable_by_key(|c| c.triangle);
+        out
+    }
+
+    /// Keeps the candidates' list for the next ray.
+    fn recycle(list: Vec<Candidate>) {
+        CANDIDATES.with(|c| *c.borrow_mut() = list);
     }
 
     /// Whether the segment from `origin` along the unit direction `dir` for
@@ -603,7 +559,10 @@ impl CollisionWorld {
     /// Whether `hit` holds for any triangle (its corners) in the grid cells
     /// the segment from `origin` along the unit direction `dir` for `length`
     /// metres passes, walked in order from the origin and stopping at the
-    /// first. A triangle may be offered more than once.
+    /// first. `hit` must be the same for a triangle each time and hold only
+    /// where the segment meets it (within [`RAY_MARGIN`]); it is offered
+    /// only the triangles whose box the segment passes, each once, in that
+    /// order.
     pub fn ray_any(
         &self,
         origin: Vec3,
@@ -611,11 +570,15 @@ impl CollisionWorld {
         length: f32,
         mut hit: impl FnMut(&[Vec3; 3]) -> bool,
     ) -> bool {
+        let mut pending = self.candidates(origin, dir, length);
         let mut found = false;
-        self.walk(origin, dir, length, |mut items, _| {
-            found = items.any(|t| hit(&self.corners(t)));
-            !found
-        });
+        if !pending.is_empty() {
+            self.walk(origin, dir, length, |cell, _| {
+                found = offer(&mut pending, cell, |t| hit(&self.corners(t)));
+                !found && !pending.is_empty()
+            });
+        }
+        Self::recycle(pending);
         found
     }
 
@@ -625,8 +588,10 @@ impl CollisionWorld {
     /// later distance replaces a kept one only when strictly smaller. The
     /// cells are walked from the origin until one ends beyond the nearest
     /// so far (by a margin of 10⁻⁴ m, so that a triangle listed only in
-    /// the next cell through rounding is still offered). A triangle may be
-    /// offered more than once.
+    /// the next cell through rounding is still offered). `hit` must give
+    /// the same for a triangle each time and a distance only where the
+    /// segment meets it (within [`RAY_MARGIN`]); it is offered only the
+    /// triangles whose box the segment passes, each once, in that order.
     pub fn ray_nearest(
         &self,
         origin: Vec3,
@@ -634,30 +599,35 @@ impl CollisionWorld {
         length: f32,
         mut hit: impl FnMut(u32) -> Option<f32>,
     ) -> Option<(f32, u32)> {
+        let mut pending = self.candidates(origin, dir, length);
         let mut best: Option<(f32, u32)> = None;
-        self.walk(origin, dir, length, |items, exit| {
-            for t in items {
-                if let Some(d) = hit(t)
-                    && best.is_none_or(|(b, _)| d < b)
-                {
-                    best = Some((d, t));
-                }
-            }
-            best.is_none_or(|(b, _)| b >= exit - 1e-4)
-        });
+        if !pending.is_empty() {
+            self.walk(origin, dir, length, |cell, exit| {
+                offer(&mut pending, cell, |t| {
+                    if let Some(d) = hit(t)
+                        && best.is_none_or(|(b, _)| d < b)
+                    {
+                        best = Some((d, t));
+                    }
+                    false
+                });
+                !pending.is_empty() && best.is_none_or(|(b, _)| b >= exit - 1e-4)
+            });
+        }
+        Self::recycle(pending);
         best
     }
 
-    /// Calls `visit` with the triangles of each grid cell the segment from
-    /// `origin` along the unit direction `dir` for `length` metres passes,
-    /// in order from the origin, and the ray parameter where the segment
-    /// leaves that cell, while `visit` returns `true`.
+    /// Calls `visit` with each grid cell (x, z) the segment from `origin`
+    /// along the unit direction `dir` for `length` metres passes, in order
+    /// from the origin, and the ray parameter where the segment leaves that
+    /// cell, while `visit` returns `true`.
     fn walk(
         &self,
         origin: Vec3,
         dir: Vec3,
         length: f32,
-        mut visit: impl FnMut(CellItems<'_>, f32) -> bool,
+        mut visit: impl FnMut([usize; 2], f32) -> bool,
     ) {
         let g = &self.grid;
         let start = [origin[0], origin[2]];
@@ -699,10 +669,8 @@ impl CollisionWorld {
             }
         }
         loop {
-            let c = cell[1] * g.size[0] + cell[0];
-            let items = g.items(c);
             let a = if next[0] < next[1] { 0 } else { 1 };
-            if !visit(items, next[a]) || next[a] > t1 {
+            if !visit(cell, next[a]) || next[a] > t1 {
                 return;
             }
             let moved = cell[a] as isize + step[a];
@@ -871,22 +839,23 @@ mod tests {
     }
 
     #[test]
-    fn caps_the_grid_against_malformed_meshes() {
-        // 70 quads each spanning the whole 4 km grid: about 140 × 1 million
-        // entries, over the cap.
+    fn indexes_triangles_spanning_the_whole_grid_in_their_own_room() {
+        // 70 quads each spanning the whole 4 km grid: the tree's room
+        // follows the triangles, not the cells they cover.
         let mut b = Builder::default();
         for _ in 0..70 {
             b.floor([0.0, 4096.0], [0.0, 4096.0], 0.0, true);
         }
-        let cform = Cform {
-            bbox_min: [0.0; 3],
-            bbox_max: [4096.0, 0.0, 4096.0],
-            vertices: b.vertices.clone(),
-            triangles: b.triangles.clone(),
-        };
-        let e = CollisionWorld::new(cform, materials()).unwrap_err();
-        assert_eq!(e.kind(), io::ErrorKind::InvalidData);
-        assert!(e.to_string().contains("spatial index"), "{e}");
+        let w = b.world();
+        assert!(
+            w.tree.memory_bytes() <= 140 * 16,
+            "{}",
+            w.tree.memory_bytes()
+        );
+        assert!(w.ray_hits([4000.0, 1.0, 10.0], [0.0, -1.0, 0.0], 2.0));
+        let mut out = Vec::new();
+        w.query([1.0, -1.0, 1.0], [2.0, 1.0, 2.0], &mut out);
+        assert_eq!(out, (0..140).collect::<Vec<u32>>());
     }
 
     #[test]
@@ -913,58 +882,19 @@ mod tests {
         let triangles = |w: &CollisionWorld| [w.triangle(0), w.triangle(1)];
         assert_eq!(triangles(&w), [[0, 1, 2], [0, 2, 3]]);
         assert_eq!((w.material_index(0), w.material(1).id), (1, 1));
-        assert_eq!(
-            w.memory_bytes() - w.grid.starts.len() * 4 - w.grid.items.len() * 2,
-            4 * 12 + 2 * 9
-        );
+        assert_eq!(w.memory_bytes() - w.tree.memory_bytes(), 4 * 12 + 2 * 9);
         // Read again once dropped: the same arrays, the same world (#357).
-        let (packed, items) = (w.triangles.packed.as_ptr(), w.grid.items.as_ptr());
+        let (packed, nodes) = (w.triangles.packed.as_ptr(), w.tree.nodes().as_ptr());
         drop(w);
         let again = CollisionWorld::read(std::io::Cursor::new(&bytes), materials()).unwrap();
         assert_eq!(triangles(&again), [[0, 1, 2], [0, 2, 3]]);
         assert_eq!(
-            (again.triangles.packed.as_ptr(), again.grid.items.as_ptr()),
-            (packed, items)
+            (again.triangles.packed.as_ptr(), again.tree.nodes().as_ptr()),
+            (packed, nodes)
         );
         let mut out = Vec::new();
         again.query([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0], &mut out);
         assert_eq!(out, [0, 1]);
-    }
-
-    #[test]
-    fn entries_and_triangles_pack_without_loss() {
-        // Steps of one word, of two, and the first entry of each kind.
-        let values = [0, 1, 0x7FFF, 0x8000, 0xFFFF, 0x1_0000, (1 << 31) - 1];
-        let mut words = vec![0u16; values.len() * 2];
-        let mut at = 0;
-        for &v in &values {
-            encode(v, &mut words, &mut at);
-        }
-        let lens: u32 = values.iter().map(|&v| encoded_len(v)).sum();
-        assert_eq!(at, lens);
-        // Read as steps after a triangle 0.
-        let steps: Vec<u32> = CellItems {
-            words: words[..at as usize].iter(),
-            last: Some(0),
-        }
-        .collect();
-        let mut sum = 0u32;
-        let expected: Vec<u32> = values
-            .iter()
-            .map(|&v| {
-                sum += v;
-                sum
-            })
-            .collect();
-        assert_eq!(steps, expected);
-        // Indices of 21 bits packed; more vertices keep them as stored.
-        let t = [(1 << 21) - 1, 0, 1_234_567];
-        for vertices in [1 << 21, (1 << 21) + 1] {
-            let mut ts = Triangles::with_capacity(1, vertices);
-            ts.push(t);
-            assert_eq!((ts.get(0), ts.len()), (t, 1));
-            assert_eq!(ts.bytes(), if vertices == 1 << 21 { 8 } else { 12 });
-        }
     }
 
     #[test]

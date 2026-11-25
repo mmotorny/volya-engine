@@ -507,6 +507,12 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
             let frames = args.get("frames").and_then(|v| v.as_u64()).unwrap_or(600);
             to_json(&engine::particles_bench(frames as u32)?)
         }
+        // `{count}`: the collision world's ray cost in wasm (#396).
+        #[cfg(feature = "test-ops")]
+        "debug_rays_bench" => {
+            let count = args.get("count").and_then(|v| v.as_u64()).unwrap_or(2000);
+            to_json(&engine::rays_bench(count as u32)?)
+        }
         // `{"name": …}` starts capturing that sound's emitter; `{}` stops
         // and returns the capture (`audio::capture::stop`).
         // `{"width": …, "height": …}`: the game draws at that size from now

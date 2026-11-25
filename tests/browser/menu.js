@@ -621,6 +621,14 @@ export const tests = {
     return `${fx.particles} particles, period ${fx.records[0].period} ms; a frame's update in wasm: mean ${bench.mean_us.toFixed(2)} µs over ${bench.frames} frames, the slowest under ${bench.max_us.toFixed(0)} µs (the timer's resolution)`;
   },
 
+  "the collision world's rays at the player's start; their cost in wasm": async () => {
+    needsGame();
+    const b = await volya.call("debug_rays_bench", { count: 2000 });
+    assert(b.short.nearest_hits > 0 && b.long.any_hits > 0, JSON.stringify(b));
+    const f = (r) => `ray_nearest ${r.nearest_us.toFixed(2)} µs (${r.nearest_hits} hit), ray_any ${r.any_us.toFixed(2)} µs (${r.any_hits} hit)`;
+    return `${b.rays} rays each: short (1 mm – 0.5 m) ${f(b.short)}; long (5 – 100 m) ${f(b.long)}; collision world ${(b.index_bytes / 1e6).toFixed(1)} MB`;
+  },
+
   "the zones' idle effects play, the campfires among them": async () => {
     needsGame();
     // docs/behavior/zone-idle-effects.md 8: 178 zone records online, 160
