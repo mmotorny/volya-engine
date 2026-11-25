@@ -1153,9 +1153,20 @@ impl LevelScreen {
         self.character.as_ref()
     }
 
+    /// The player character's state, to change (the inventory screen).
+    pub fn character_mut(&mut self) -> Option<&mut CharacterState> {
+        self.character.as_mut()
+    }
+
     /// The player's controls.
     pub fn controls(&self) -> &Controls {
         &self.controls
+    }
+
+    /// The player's controls, to change (a screen over the level keeping
+    /// the mouse, [`Controls::keys_only`]).
+    pub fn controls_mut(&mut self) -> &mut Controls {
+        &mut self.controls
     }
 
     /// Takes the bindings and movement settings of `controls` (the options
@@ -1169,6 +1180,12 @@ impl LevelScreen {
 
 #[cfg(test)]
 impl LevelScreen {
+    /// The level with `character` as its player character.
+    pub(crate) fn with_character(mut self, character: CharacterState) -> Self {
+        self.character = Some(character);
+        self
+    }
+
     /// A level with nothing in it, its player standing at the origin with
     /// `controls` (unit tests of what runs a level; not drawn).
     pub(crate) fn empty(controls: Controls, now: u64) -> Self {

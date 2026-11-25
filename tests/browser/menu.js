@@ -615,6 +615,103 @@ export const tests = {
     return `decoded in ${art.ms.toFixed(1)} ms (engine), ${art.totalMs.toFixed(1)} ms with the page's part; sources ${(sources / 1024).toFixed(0)} KiB, canvases ${(bytes / 1024).toFixed(0)} KiB at ${devicePixelRatio}x`;
   },
 
+  "the inventory: I opens it over the running level, the outfit dragged to the backpack, bread eaten, the touch button opens it, Escape, the exit button and the menu's dress close or act": async () => {
+    needsGame();
+    const controls = document.getElementById("touch-controls");
+    const centreOf4 = ([x, y, w, h], within) => {
+      // Within the list (the outfit's cell item is wider than it).
+      const [lx, ly, lw, lh] = within ?? [x, y, w, h];
+      return [Math.min(x + w / 2, lx + lw / 2), Math.min(y + h / 2, ly + lh / 2)];
+    };
+    const items = (s) => s.level.character.items;
+    const item = (s, section) => items(s).find((i) => i.section === section);
+    const live = async (on) => {
+      for (let i = 0; i < 100 && controls.dataset.live !== String(on); i++) await sleep(20);
+      assertEqual(controls.dataset.live, String(on), "the level's controls live");
+    };
+    // The key bound to `inventory` (I, docs/behavior/inventory-screen.md
+    // 1.1) opens it; the game runs on behind it.
+    let s = await state();
+    const clock = s.level.game_time;
+    key("KeyI");
+    s = await until((s) => s.inventory, "the inventory screen");
+    await live(false);
+    const outfitList = s.inventory.lists.find((l) => l.list === "outfit");
+    const outfit = outfitList.cells[0];
+    assertEqual(outfit.section, "novice_outfit", "the worn outfit's cell item");
+    assertEqual(s.inventory.money, "40 RU", "money");
+    assert(s.inventory.weight_line.includes("4.3"), `the weight line: ${s.inventory.weight_line}`);
+    s = await until((s) => s.level.game_time > clock, "game time to run under the screen");
+    // A mouse drag of the outfit onto the backpack list undresses it.
+    const from = client(...centreOf4(outfit.rect, outfitList.rect));
+    pointer("pointermove", from);
+    pointer("pointerdown", from, { button: 0, buttons: 1 });
+    pointer("pointermove", [from[0] + 6, from[1] + 6], { buttons: 1 });
+    await until((s) => s.inventory?.dragging === outfit.items[0], "the drag to begin");
+    const to = client(100, 600);
+    pointer("pointermove", to, { buttons: 1 });
+    pointer("pointerup", to, { button: 0, buttons: 0 });
+    s = await until((s) => item(s, "novice_outfit")?.place === "backpack", "the outfit in the backpack");
+    assert(s.inventory.lists.find((l) => l.list === "bag").cells.some((c) => c.section === "novice_outfit"), "drawn in the backpack");
+    assertEqual(s.inventory.protections, [], "no protection without an outfit");
+    // Bread (given through the test interface: nothing to pick up yet) is
+    // eaten with a double click: satiety rises, the bread is gone.
+    const bread = await volya.call("debug_give_item", { section: "bread" });
+    s = await until((s) => s.inventory.lists.find((l) => l.list === "bag").cells.some((c) => c.items.includes(bread)), "the bread in the backpack");
+    const satiety = s.level.character.satiety;
+    const cell = s.inventory.lists.find((l) => l.list === "bag").cells.find((c) => c.items.includes(bread));
+    const at = client(...centreOf4(cell.rect));
+    pointer("pointermove", at);
+    for (let i = 0; i < 2; i++) {
+      pointer("pointerdown", at, { button: 0, buttons: 1 });
+      pointer("pointerup", at, { button: 0, buttons: 0 });
+    }
+    s = await until((s) => !items(s).some((i) => i.id === bread), "the bread eaten");
+    assert(s.level.character.satiety > satiety, `satiety ${satiety} → ${s.level.character.satiety}`);
+    // Escape closes it (the screen has the key: no menu opens).
+    key("Escape");
+    s = await until((s) => s.phase === "level" && !s.inventory, "the screen closed");
+    assert(!s.menu, "Escape opened the menu");
+    await live(true);
+    // On a touch device, the HUD button at the top right opens it; the
+    // touch controls go away while it shows.
+    const tap = { pointerType: "touch", pointerId: 60, isPrimary: true, button: 0 };
+    pointer("pointerdown", client(512, 100), { ...tap, buttons: 1 });
+    pointer("pointerup", client(512, 100), { ...tap, buttons: 0 });
+    for (let i = 0; i < 50 && controls.hidden; i++) await sleep(20);
+    assert(!controls.hidden, "the touch controls show");
+    const button = controls.querySelector(".touch-button.inventory");
+    const r = button.getBoundingClientRect();
+    const look = controls.querySelector(".touch-look").getBoundingClientRect();
+    assert(r.left > look.left && r.top < 100, `at the top right: ${JSON.stringify(r)}`);
+    const centre = [(r.left + r.right) / 2, (r.top + r.bottom) / 2];
+    for (const type of ["pointerdown", "pointerup"]) {
+      button.dispatchEvent(
+        new PointerEvent(type, { clientX: centre[0], clientY: centre[1], pointerId: 61, pointerType: "touch", isPrimary: true, button: 0, buttons: type === "pointerdown" ? 1 : 0, bubbles: true, cancelable: true }),
+      );
+    }
+    s = await until((s) => s.inventory, "the touch button to open the screen");
+    for (let i = 0; i < 50 && !controls.hidden; i++) await sleep(20);
+    assert(controls.hidden, "the touch controls hide under the screen");
+    // The context menu dresses the outfit again: a right click, its first
+    // row («одеть костюм»).
+    const bag = s.inventory.lists.find((l) => l.list === "bag");
+    const suit = client(...centreOf4(bag.cells.find((c) => c.section === "novice_outfit").rect));
+    pointer("pointermove", suit);
+    pointer("pointerdown", suit, { button: 2, buttons: 2 });
+    pointer("pointerup", suit, { button: 2, buttons: 0 });
+    s = await until((s) => s.inventory?.menu, "the context menu");
+    assertEqual(s.inventory.menu.entries, ["st_dress_outfit", "st_drop"], "the outfit's entries");
+    clickAt(centreOf({ rect: s.inventory.menu.rows[0] }));
+    s = await until((s) => item(s, "novice_outfit")?.place === "slot", "the outfit worn again");
+    // The exit button closes it.
+    clickAt(centreOf({ rect: s.inventory.exit }));
+    s = await until((s) => s.phase === "level" && !s.inventory, "the exit button to close the screen");
+    assert(!s.menu, "no menu");
+    await live(true);
+    return `game time ran ${((s.level.game_time - clock) / 1000).toFixed(1)} s under the screen`;
+  },
+
   "touch: the stick walks and its sprint lock sprints, drags look (from Jump too), Crouch and its swipe down, Menu opens the menu": async () => {
     needsGame();
     const controls = document.getElementById("touch-controls");

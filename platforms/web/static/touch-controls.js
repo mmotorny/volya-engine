@@ -17,7 +17,8 @@
 // - Jump and Crouch (a toggle, shown on, with its own icon in the low
 //   crouch) at the bottom right act on their press; a drag begun on either
 //   then looks too, and Crouch swiped down is the low crouch. Menu at the
-//   top left does what Escape does.
+//   top left does what Escape does; Inventory at the top right opens the
+//   inventory screen (#110), both clear of the thumbs' zones.
 //
 // They look like instruments of the game's HUD, drawn from its own UI
 // textures (touch-art.js; design A of #105). No text on the controls: names
@@ -31,7 +32,7 @@ import { approximateArt, gameArt, paintDisc, paintGlyph, paintPicture, vectorGly
 const RADIUS = 56;
 /** Sizes in CSS pixels (match style.css): the buttons, the knob, the lock
  * target, and the segmented ring around the stick. */
-const SIZE = { menu: 44, jump: 80, crouch: 64 };
+const SIZE = { menu: 44, inventory: 44, jump: 80, crouch: 64 };
 const KNOB = 48;
 const TARGET = 44;
 const SEGMENTS = 2 * RADIUS + 6;
@@ -163,6 +164,7 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
     return b;
   };
   const menu = button("menu", "Menu");
+  const inventory = button("inventory", "Inventory");
   const jump = button("jump", "Jump", ["left", "right"]);
   // Crouch: the upright crouch icon; brighter when on; the creep icon in
   // the low crouch.
@@ -170,7 +172,7 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
   crouch.setAttribute("aria-pressed", "false");
   const actions = element("div", "touch-actions");
   actions.append(crouch, jump);
-  root.append(move, look, menu, actions);
+  root.append(move, look, menu, inventory, actions);
 
   // Every touch or pen contact on the controls stays with them (a pen
   // can't use pointer lock); a mouse passes through to input.js (pointer
@@ -382,9 +384,9 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
   // cancelled touch does nothing.
   let crouched = false;
   const releases = [];
-  for (const b of [menu, jump, crouch]) {
+  for (const b of [menu, inventory, jump, crouch]) {
     const held = new Map(); // pointerId → { start, waiting }
-    const drags = b !== menu;
+    const drags = b !== menu && b !== inventory;
     let pressed = false; // the press sent, its release not yet
     const press = () => {
       if (pressed) return;
@@ -449,6 +451,7 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
     const { teal, tealHi, grey, pale } = art;
     for (const [b, size] of [
       [menu, SIZE.menu],
+      [inventory, SIZE.inventory],
       [jump, SIZE.jump],
       [crouch, SIZE.crouch],
     ]) {
@@ -457,6 +460,10 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
     const k = devicePixelRatio || 1;
     const menuGlyph = SIZE.menu * 0.5;
     paintGlyph(menu.querySelector(".touch-glyph"), vectorGlyph("menu", Math.round(menuGlyph * k)), menuGlyph, menuGlyph, grey);
+    // The game's UI textures have no inventory or backpack icon: our
+    // backpack, drawn as the Menu bars are.
+    const bagGlyph = SIZE.inventory * 0.56;
+    paintGlyph(inventory.querySelector(".touch-glyph"), vectorGlyph("inventory", Math.round(bagGlyph * k)), bagGlyph, bagGlyph, grey);
     const jumpGlyph = SIZE.jump * 0.56;
     paintGlyph(jump.querySelector(".touch-glyph"), vectorGlyph("jump", Math.round(jumpGlyph * k)), jumpGlyph, jumpGlyph, teal);
     const crouchGlyph = SIZE.crouch * 0.62;

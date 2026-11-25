@@ -322,6 +322,16 @@ pub fn state() -> serde_json::Value {
     })
 }
 
+/// The `debug_give_item` op (tests): an item of `section` put into the
+/// player's inventory ([`App::give_item`]); its id.
+pub fn give_item(section: &str) -> Result<u16, JsValue> {
+    RUNNING.with(|r| {
+        let mut r = r.borrow_mut();
+        let running = r.as_mut().ok_or_else(|| error("the game is not running"))?;
+        running.app.give_item(section).map_err(error)
+    })
+}
+
 /// The `menu_scene` op: the sprites of the current frame at `resolution`.
 pub fn scene(resolution: Resolution) -> Result<serde_json::Value, JsValue> {
     RUNNING.with(|r| {

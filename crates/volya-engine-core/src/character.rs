@@ -166,6 +166,25 @@ pub struct CharacterState {
 }
 
 impl CharacterState {
+    /// A state from its parts, not yet updated (the first update's `dt` is
+    /// 0, 4.1).
+    pub fn new(
+        owner: Owner,
+        profile: Profile,
+        conditions: Conditions,
+        condition_config: ConditionConfig,
+        inventory: Inventory,
+    ) -> Self {
+        Self {
+            owner,
+            profile,
+            conditions,
+            condition_config,
+            inventory,
+            last_update: None,
+        }
+    }
+
     /// The state after a New Game (sections 2, 3): the record's health and
     /// profile resolved, the conditions of 2.3, the items supplied by the
     /// simulation (3.1) taken by the online character in their order, then
@@ -342,6 +361,18 @@ impl CharacterState {
         Ok(())
     }
 
+    /// **Drop** of item `id` (inventory-screen.md section 5.7): nothing for
+    /// an item of a quest (`quest_item = true`) or one not in the inventory;
+    /// otherwise it leaves its place (put away if in the hands) and the
+    /// inventory, lowering the carried weight, and is returned. Where it
+    /// goes in the world is the caller's.
+    pub fn drop_item(&mut self, id: u16) -> Option<InventoryItem> {
+        if self.inventory.item(id)?.config.quest_item {
+            return None;
+        }
+        self.inventory.remove(id)
+    }
+
     /// Writes the state into the player's record (section 6): its id (2.1),
     /// health in the Creature block and update, the Trader-like block, and
     /// the update's radiation (believed to carry the condition's).
@@ -402,6 +433,14 @@ impl CharacterState {
 }
 
 impl InventoryItem {
+    /// Whether the item can still be used (inventory-screen.md section 5.7,
+    /// believed: it has portions left): an eatable whose portions are not 0.
+    /// A count of −1, which every shipped food has, is not 0 (section 5
+    /// item 8 uses it up at once).
+    pub fn usable(&self) -> bool {
+        self.config.is_eatable() && self.portions != Some(0)
+    }
+
     /// The client data's item block (section 6, believed): the place, the
     /// condition, and no physics state.
     pub fn item_block(&self, w: &mut Writer) {

@@ -235,6 +235,7 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         "launch" => to_json(&engine::launch().await?),
         "menu_state" => to_json(&engine::state()),
         "bound_keys" => to_json(&engine::bound_keys()),
+        "debug_give_item" => to_json(&engine::give_item(text("section"))?),
         "menu_scene" => {
             let size = |key| args.get(key).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
             to_json(&engine::scene(Resolution::new(

@@ -4,8 +4,11 @@
 //! The player character's inventory (docs/behavior/player-state.md, cited
 //! by section): the items supplied at a New Game (3.1, 3.2), their state
 //! and the records a save holds for them (3.1), where each goes (3.3, 6),
-//! the active slot (3.3) and the carried weight (3.4).
+//! the active slot (3.3) and the carried weight (3.4); and the moves
+//! between places the inventory screen makes
+//! (docs/behavior/inventory-screen.md section 5.4, cited as `screen`).
 
+use std::cmp::Ordering;
 use std::io;
 
 use volya_engine_formats::cp1251;
@@ -52,11 +55,18 @@ pub const NO_ID: u16 = 0xFFFF;
 /// Probabilities this small count as 1 (3.1).
 const PROBABILITY_EPSILON: f32 = 1e-7;
 
+/// The slot of grenades, whose item the screen shows in the backpack list
+/// (screen 3.2).
+pub const GRENADE_SLOT: u8 = 3;
+
 /// `[inventory]` (section 1).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct InventoryConfig {
     pub max_weight: f32,
     pub max_belt: usize,
+    /// Each slot's `slot_persistent_<n + 1>`, false when absent (screen
+    /// section 9: slot 10 has no key and is not persistent).
+    pub persistent: [bool; SLOT_COUNT],
 }
 
 fn required<'a>(section: &'a Section, key: &str) -> io::Result<&'a str> {
@@ -72,11 +82,30 @@ impl InventoryConfig {
         let s = system
             .section("inventory")
             .ok_or_else(|| invalid("no section [inventory]"))?;
+        let mut persistent = [false; SLOT_COUNT];
+        for (n, p) in persistent.iter_mut().enumerate() {
+            *p = s
+                .get(&format!("slot_persistent_{}", n + 1))
+                .flatten()
+                .is_some_and(value::bool);
+        }
         Ok(Self {
             max_weight: value::float(required(s, "max_weight")?),
             max_belt: value::int(required(s, "max_belt")?).max(0) as usize,
+            persistent,
         })
     }
+}
+
+/// An item's grid keys (screen 4.2): its icon at (`inv_grid_x`,
+/// `inv_grid_y`) grid units of the icon texture, `inv_grid_width` ×
+/// `inv_grid_height` cells.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InvGrid {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
 }
 
 /// An item section's keys that the player's state reads.
@@ -110,6 +139,11 @@ pub struct ItemConfig {
     pub power_loss: Option<f32>,
     /// The eatable keys (section 5), for eatable items.
     pub eatable: Option<Eatable>,
+    /// The four `inv_grid_*` keys, read as unsigned 32-bit; `None` when one
+    /// is missing (the screen stops with an error then, screen 4.2).
+    pub inv_grid: Option<InvGrid>,
+    /// `quest_item = true`: never dropped (screen 5.6, 5.7).
+    pub quest_item: bool,
 }
 
 impl ItemConfig {
@@ -123,6 +157,21 @@ impl ItemConfig {
         let float = |key: &str| get(key).map_or(0.0, value::float);
         let int = |key: &str| get(key).map_or(0, value::int);
         let eatable = Eatable::read(s, class_id.as_str())?;
+        let grid = |key: &str| get(key).map(|v| value::int(v) as u32);
+        let inv_grid = match (
+            grid("inv_grid_x"),
+            grid("inv_grid_y"),
+            grid("inv_grid_width"),
+            grid("inv_grid_height"),
+        ) {
+            (Some(x), Some(y), Some(width), Some(height)) => Some(InvGrid {
+                x,
+                y,
+                width,
+                height,
+            }),
+            _ => None,
+        };
         Ok(Self {
             section: s.name().to_owned(),
             slot: get("slot").map(value::int),
@@ -139,6 +188,8 @@ impl ItemConfig {
             additional_inventory_weight2: float("additional_inventory_weight2"),
             power_loss: get("power_loss").map(value::float),
             eatable,
+            inv_grid,
+            quest_item: get("quest_item").is_some_and(value::bool),
             class_id,
         })
     }
@@ -162,6 +213,66 @@ impl ItemConfig {
 
     fn food_or_drink(&self) -> bool {
         matches!(self.class_id.as_str(), FOOD_CLASS | DRINK_CLASS)
+    }
+
+    /// The grid size *w* × *h* in cells (screen 4.2), 0 × 0 without the
+    /// grid keys.
+    pub fn grid_size(&self) -> (u32, u32) {
+        self.inv_grid.map_or((0, 0), |g| (g.width, g.height))
+    }
+
+    /// Whether the item is a weapon (knives and the guns).
+    pub fn is_weapon(&self) -> bool {
+        matches!(
+            self.class_id.kind(),
+            Kind::Knife | Kind::MagazineWeapon | Kind::WeaponWithGrenadeLauncher | Kind::Shotgun
+        )
+    }
+
+    /// Whether the item is eatable (section 5).
+    pub fn is_eatable(&self) -> bool {
+        self.eatable.is_some()
+    }
+
+    /// The bolt (screen 5.6: the one item that may not go to the
+    /// backpack).
+    pub fn is_bolt(&self) -> bool {
+        self.class_id.as_str() == "II_BOLT"
+    }
+}
+
+/// The order of the screen's backpack and of the belt test (screen 4.3):
+/// `a` before `b` when its grid is wider, then taller; of the same section,
+/// the higher object id first; of different sections, by section name (the
+/// original's order there is unestablished; the spec allows this one).
+pub fn placement_order(a: &InventoryItem, b: &InventoryItem) -> Ordering {
+    let (aw, ah) = a.config.grid_size();
+    let (bw, bh) = b.config.grid_size();
+    bw.cmp(&aw).then(bh.cmp(&ah)).then_with(|| {
+        if a.config.section == b.config.section {
+            b.id.cmp(&a.id)
+        } else {
+            a.config.section.cmp(&b.config.section)
+        }
+    })
+}
+
+/// What a move to an item's slot did (screen 5.4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SlotMove {
+    /// Nothing changed.
+    Failed,
+    /// The item is in its slot now (and in the hands when the slot can be
+    /// active).
+    Moved,
+    /// The slot is the grenades' (3), shown in no slot list: nothing
+    /// further happens, but the move counts as done.
+    Done,
+}
+
+impl SlotMove {
+    pub fn succeeded(self) -> bool {
+        self != SlotMove::Failed
     }
 }
 
@@ -656,6 +767,155 @@ impl Inventory {
             .and_then(|id| self.item(id))
             .filter(|i| i.state == ItemState::Outfit)
     }
+
+    /// The item in the hands: the active slot's.
+    pub fn in_hands(&self) -> Option<u16> {
+        self.slots[usize::from(self.active_slot?)]
+    }
+
+    /// Whether slot `slot` is persistent (`slot_persistent_<slot + 1>`).
+    pub fn is_persistent(&self, slot: u8) -> bool {
+        self.config.persistent.get(usize::from(slot)) == Some(&true)
+    }
+
+    /// Item `id` leaves its slot or the belt; if it was in the hands it is
+    /// put away first: the active slot becomes none (screen 5.4).
+    fn leave_place(&mut self, id: u16) {
+        if self.in_hands() == Some(id) {
+            self.active_slot = None;
+        }
+        for s in self.slots.iter_mut().filter(|s| **s == Some(id)) {
+            *s = None;
+        }
+        self.belt.retain(|&b| b != id);
+    }
+
+    fn set_place(&mut self, id: u16, place: Place) {
+        if let Some(i) = self.items.iter_mut().find(|i| i.id == id) {
+            i.place = place;
+        }
+    }
+
+    /// **To backpack** (screen 5.4): fails for an item not in the
+    /// inventory or already in the backpack; otherwise it leaves its slot or
+    /// the belt (put away if in the hands) and goes to the backpack. The
+    /// carried weight is unchanged.
+    pub fn move_to_backpack(&mut self, id: u16) -> bool {
+        match self.item(id).map(|i| i.place) {
+            None | Some(Place::Backpack) => false,
+            Some(_) => {
+                self.leave_place(id);
+                self.set_place(id, Place::Backpack);
+                true
+            }
+        }
+    }
+
+    /// Whether item `id` **can go on the belt** (screen 5.4): it is not on
+    /// it, its section has `belt = true`, the belt holds fewer than
+    /// `max_belt` items, and the belt's items with it, in the order of
+    /// [`placement_order`], fit one row of `max_belt` cells by first-free
+    /// placement.
+    pub fn can_go_on_belt(&self, id: u16) -> bool {
+        let Some(item) = self.item(id) else {
+            return false;
+        };
+        if self.belt.contains(&id) || !item.config.belt || self.belt.len() >= self.config.max_belt {
+            return false;
+        }
+        let mut items: Vec<&InventoryItem> =
+            self.belt.iter().filter_map(|&b| self.item(b)).collect();
+        items.push(item);
+        items.sort_by(|a, b| placement_order(a, b));
+        let sizes: Vec<(u32, u32)> = items.iter().map(|i| i.config.grid_size()).collect();
+        fits_in_row(&sizes, self.config.max_belt)
+    }
+
+    /// **To belt** (screen 5.4): fails unless the item can go on the belt;
+    /// it then leaves its slot (put away if in the hands) or the backpack
+    /// and is appended to the belt.
+    pub fn move_to_belt(&mut self, id: u16) -> bool {
+        if !self.can_go_on_belt(id) {
+            return false;
+        }
+        self.leave_place(id);
+        self.belt.push(id);
+        self.set_place(id, Place::Belt);
+        true
+    }
+
+    /// Whether item `id` **can go to its slot** (screen 5.4): its section's
+    /// `slot` names a slot and that slot is empty.
+    pub fn can_go_to_slot(&self, id: u16) -> bool {
+        self.item(id)
+            .and_then(|i| i.config.slot_number())
+            .is_some_and(|s| self.slots[usize::from(s)].is_none())
+    }
+
+    /// **To slot**, without swap (screen 5.4): fails unless the item can go
+    /// to its slot. For the grenades' slot nothing further happens
+    /// ([`SlotMove::Done`]). Otherwise the item goes into the slot (out of
+    /// the backpack and the belt) and the slot is asked to become the
+    /// active slot: when it can be active, the item in the hands is put away
+    /// and this one taken. For slots 0, 4, 5 and 7–10 the original's outcome
+    /// is unestablished; they are treated as slots 1, 2 and 6 (our choice).
+    pub fn move_to_slot(&mut self, id: u16) -> SlotMove {
+        if !self.can_go_to_slot(id) {
+            return SlotMove::Failed;
+        }
+        let Some(slot) = self.item(id).and_then(|i| i.config.slot_number()) else {
+            return SlotMove::Failed;
+        };
+        if slot == GRENADE_SLOT {
+            return SlotMove::Done;
+        }
+        self.leave_place(id);
+        self.slots[usize::from(slot)] = Some(id);
+        self.set_place(id, Place::Slot(slot));
+        if !INACTIVE_SLOTS.contains(&slot) {
+            // Taken at once, nothing animates it (our choice, as in 3.3).
+            self.active_slot = Some(slot);
+        }
+        SlotMove::Moved
+    }
+
+    /// **To slot with swap** (screen 5.4): as [`Inventory::move_to_slot`] when
+    /// the item can go to its slot; otherwise, if its slot is 1, 2 or 6 and
+    /// not persistent, the slot's item goes to the backpack first and the
+    /// move is tried once more without swap.
+    pub fn move_to_slot_with_swap(&mut self, id: u16) -> SlotMove {
+        if self.can_go_to_slot(id) {
+            return self.move_to_slot(id);
+        }
+        let Some(slot) = self.item(id).and_then(|i| i.config.slot_number()) else {
+            return SlotMove::Failed;
+        };
+        if !matches!(slot, 1 | 2 | OUTFIT_SLOT) || self.is_persistent(slot) {
+            return SlotMove::Failed;
+        }
+        match self.slots[usize::from(slot)] {
+            Some(old) if old != id => {
+                self.move_to_backpack(old);
+                self.move_to_slot(id)
+            }
+            _ => SlotMove::Failed,
+        }
+    }
+}
+
+/// Whether items of grid sizes `sizes`, in order, fit one row of `cells`
+/// cells by first-free placement (screen 5.4 rule 4). In a single row each
+/// item lands right after the previous ones, so they fit exactly when none
+/// is taller than one cell and their widths add up to at most `cells`.
+pub fn fits_in_row(sizes: &[(u32, u32)], cells: usize) -> bool {
+    let mut used = 0u64;
+    for &(w, h) in sizes {
+        if h > 1 {
+            return false;
+        }
+        used += u64::from(w);
+    }
+    used <= cells as u64
 }
 
 #[cfg(test)]
@@ -934,5 +1194,171 @@ mod tests {
         let mut full = IdPool { next: 0xFFFE };
         assert_eq!(full.take().unwrap(), 0xFFFE);
         assert!(full.take().is_err());
+    }
+
+    /// Sections with the screen's keys (inventory-screen.md 4.2, 5.4).
+    const SCREEN_ITEMS: &str = "\
+        [inventory]\nmax_weight = 50\nmax_belt = 5\nslot_persistent_1 = true\n\
+        slot_persistent_2 = false\nslot_persistent_3 = false\nslot_persistent_4 = true\n\
+        slot_persistent_5 = true\nslot_persistent_7 = false\n\
+        [wpn_pm]\nclass = WP_PM\nslot = 1\ninv_weight = 1\ninv_grid_x = 0\ninv_grid_y = 0\n\
+        inv_grid_width = 2\ninv_grid_height = 1\n\
+        [wpn_ak74]\nclass = WP_AK74\nslot = 2\ninv_weight = 3\ninv_grid_x = 5\ninv_grid_y = 5\n\
+        inv_grid_width = 5\ninv_grid_height = 2\n\
+        [grenade_f1]\nclass = G_F1\nslot = 3\ninv_weight = 0.6\ninv_grid_x = 0\ninv_grid_y = 1\n\
+        inv_grid_width = 1\ninv_grid_height = 1\n\
+        [novice_outfit]\nclass = E_STLK\nslot = 6\ninv_weight = 3\ninv_grid_x = 0\n\
+        inv_grid_y = 18\ninv_grid_width = 2\ninv_grid_height = 2\n\
+        [af_medusa]\nclass = ARTEFACT\nbelt = true\ninv_weight = 0.5\ninv_grid_x = 1\n\
+        inv_grid_y = 1\ninv_grid_width = 1\ninv_grid_height = 1\n\
+        [af_wide]\nclass = ARTEFACT\nbelt = true\ninv_weight = 0.5\ninv_grid_x = 1\n\
+        inv_grid_y = 1\ninv_grid_width = 2\ninv_grid_height = 1\n\
+        [af_tall]\nclass = ARTEFACT\nbelt = true\ninv_weight = 0.5\ninv_grid_x = 1\n\
+        inv_grid_y = 1\ninv_grid_width = 1\ninv_grid_height = 2\n\
+        [quest]\nclass = II_DOC\nquest_item = true\ninv_weight = 0.1\ninv_grid_x = 1\n\
+        inv_grid_y = 1\ninv_grid_width = 1\ninv_grid_height = 1\n\
+        [no_grid]\nclass = II_DOC\ninv_weight = 0.1\ninv_grid_x = 1\n";
+
+    fn screen_inventory() -> (Config, Inventory) {
+        let system = ltx::parse(SCREEN_ITEMS.as_bytes()).unwrap();
+        let inv = Inventory::new(InventoryConfig::read(&system).unwrap());
+        (system, inv)
+    }
+
+    #[test]
+    fn reads_the_screen_keys() {
+        let (system, inv) = screen_inventory();
+        assert_eq!(
+            inv.config.persistent,
+            [
+                true, false, false, true, true, false, false, false, false, false, false
+            ]
+        );
+        let ak = ItemConfig::read(&system, "wpn_ak74").unwrap();
+        assert_eq!(
+            ak.inv_grid,
+            Some(InvGrid {
+                x: 5,
+                y: 5,
+                width: 5,
+                height: 2
+            })
+        );
+        assert!(ak.is_weapon() && !ak.quest_item);
+        assert!(ItemConfig::read(&system, "quest").unwrap().quest_item);
+        assert_eq!(ItemConfig::read(&system, "no_grid").unwrap().inv_grid, None);
+        assert_eq!(
+            ItemConfig::read(&system, "no_grid").unwrap().grid_size(),
+            (0, 0)
+        );
+    }
+
+    #[test]
+    fn orders_by_size_then_id_then_section() {
+        let (system, _) = screen_inventory();
+        // inventory-screen.md 4.3's example, by our rule 4 for sections.
+        let mut items = [
+            item(&system, "af_medusa", 103),
+            item(&system, "novice_outfit", 101),
+            item(&system, "wpn_ak74", 100),
+            item(&system, "novice_outfit", 102),
+            item(&system, "af_wide", 104),
+            item(&system, "wpn_pm", 105),
+        ];
+        items.sort_by(placement_order);
+        let order: Vec<u16> = items.iter().map(|i| i.id).collect();
+        // 5 × 2, then 2 × 2 (higher id first), then 2 × 1 by section name,
+        // then 1 × 1.
+        assert_eq!(order, [100, 102, 101, 104, 105, 103]);
+    }
+
+    #[test]
+    fn a_row_fits_by_widths_and_single_heights() {
+        assert!(fits_in_row(&[(1, 1); 5], 5));
+        assert!(!fits_in_row(&[(1, 1); 6], 5));
+        assert!(fits_in_row(&[(2, 1), (3, 1)], 5));
+        assert!(!fits_in_row(&[(2, 1), (3, 1), (1, 1)], 5));
+        assert!(!fits_in_row(&[(1, 2)], 5));
+        assert!(fits_in_row(&[], 0));
+    }
+
+    #[test]
+    fn moves_to_the_backpack_and_the_belt() {
+        let (system, mut inv) = screen_inventory();
+        inv.take(item(&system, "wpn_pm", 1));
+        assert_eq!((inv.slots[1], inv.active_slot), (Some(1), Some(1)));
+        assert_eq!(inv.in_hands(), Some(1));
+        // The item in the hands is put away.
+        assert!(inv.move_to_backpack(1));
+        assert_eq!(inv.item(1).unwrap().place, Place::Backpack);
+        assert_eq!(
+            (inv.slots[1], inv.active_slot, inv.in_hands()),
+            (None, None, None)
+        );
+        // Already in the backpack: fails; unknown: fails.
+        assert!(!inv.move_to_backpack(1));
+        assert!(!inv.move_to_backpack(99));
+        // No `belt = true`: never on the belt.
+        assert!(!inv.can_go_on_belt(1) && !inv.move_to_belt(1));
+        // Belt items until the row is full.
+        for id in 10..13 {
+            inv.take_stored(item(&system, "af_medusa", id), 3);
+            assert!(inv.move_to_belt(id));
+        }
+        inv.take_stored(item(&system, "af_wide", 13), 3);
+        assert!(inv.move_to_belt(13), "3 + 2 cells fit 5");
+        assert_eq!(inv.belt, [10, 11, 12, 13]);
+        inv.take_stored(item(&system, "af_medusa", 14), 3);
+        assert!(!inv.can_go_on_belt(14), "6 cells do not fit 5");
+        // Fewer than max_belt items but no room; a tall item never fits.
+        inv.move_to_backpack(13);
+        assert_eq!(inv.item(13).unwrap().place, Place::Backpack);
+        inv.take_stored(item(&system, "af_tall", 15), 3);
+        assert!(!inv.can_go_on_belt(15));
+        assert!(inv.move_to_belt(14));
+        assert!(!inv.can_go_on_belt(14), "already on it");
+        // Weight is unchanged by moves.
+        assert!((inv.weight() - (1.0 + 0.5 * 6.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn moves_to_slots_and_swaps() {
+        let (system, mut inv) = screen_inventory();
+        inv.take_stored(item(&system, "wpn_ak74", 1), 3);
+        inv.take_stored(item(&system, "wpn_ak74", 2), 3);
+        inv.take_stored(item(&system, "wpn_pm", 3), 3);
+        // To its slot: taken into the hands.
+        assert_eq!(inv.move_to_slot(1), SlotMove::Moved);
+        assert_eq!((inv.slots[2], inv.active_slot), (Some(1), Some(2)));
+        // The slot is taken: no swap fails, with swap the old rifle goes to
+        // the backpack and the new one into the hands.
+        assert_eq!(inv.move_to_slot(2), SlotMove::Failed);
+        assert_eq!(inv.move_to_slot_with_swap(2), SlotMove::Moved);
+        assert_eq!(inv.slots[2], Some(2));
+        assert_eq!(inv.item(1).unwrap().place, Place::Backpack);
+        assert_eq!(inv.in_hands(), Some(2));
+        // Another active slot: its item is put away, this one taken.
+        assert_eq!(inv.move_to_slot(3), SlotMove::Moved);
+        assert_eq!((inv.active_slot, inv.in_hands()), (Some(1), Some(3)));
+        assert_eq!(inv.item(2).unwrap().place, Place::Slot(2));
+        // The outfit slot cannot be active.
+        inv.take_stored(item(&system, "novice_outfit", 4), 3);
+        assert_eq!(inv.move_to_slot(4), SlotMove::Moved);
+        assert_eq!((inv.slots[6], inv.active_slot), (Some(4), Some(1)));
+        assert_eq!(inv.worn_outfit().map(|o| o.id), Some(4));
+        // Grenades: their slot empty, the move counts as done, nothing moves.
+        inv.take_stored(item(&system, "grenade_f1", 5), 3);
+        assert_eq!(inv.move_to_slot(5), SlotMove::Done);
+        assert_eq!(inv.item(5).unwrap().place, Place::Backpack);
+        // A persistent slot is never swapped: slot 3 taken, a second
+        // grenade fails with swap.
+        inv.slots[3] = Some(5);
+        inv.set_place(5, Place::Slot(3));
+        inv.take_stored(item(&system, "grenade_f1", 6), 3);
+        assert_eq!(inv.move_to_slot_with_swap(6), SlotMove::Failed);
+        // No slot: fails.
+        inv.take_stored(item(&system, "af_medusa", 7), 3);
+        assert_eq!(inv.move_to_slot_with_swap(7), SlotMove::Failed);
+        assert!(!SlotMove::Failed.succeeded() && SlotMove::Done.succeeded());
     }
 }

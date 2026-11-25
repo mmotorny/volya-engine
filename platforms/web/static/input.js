@@ -145,6 +145,7 @@ const PAD_BUTTONS = {
   0: "south",
   1: "east",
   2: "west",
+  3: "north",
   4: "left_shoulder",
   5: "right_shoulder",
   10: "left_stick",

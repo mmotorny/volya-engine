@@ -23,6 +23,7 @@ use crate::core::input::{Action, Control, Input};
 use crate::core::vfs::{self, Vfs};
 use crate::data::{Assets, GameData};
 use crate::draw::Ctx;
+use crate::inventory_screen::{self, InventoryScreen, InventoryState};
 use crate::level::{LevelScreen, LevelState};
 use crate::loading_screen::{
     GAME_TYPE, Loading, LoadingScreen, LoadingScreenState, OVERLAY_FRAMES, SERVER_NEW_GAME,
@@ -91,6 +92,13 @@ enum Phase {
         /// The menu opened during the game: the level stays loaded, paused
         /// and not drawn (save-load-screens.md section 2).
         menu: Option<Box<TitleMenu>>,
+        /// The level's inventory screen (docs/behavior/inventory-screen.md;
+        /// `None` only in unit tests of other screens).
+        inventory: Option<Box<InventoryScreen>>,
+        /// Items the player dropped, released from the inventory: kept
+        /// until the world can place them (inventory-screen.md 5.7).
+        /// TODO(#111): placed into the level near the character.
+        dropped: Vec<crate::core::character::inventory::InventoryItem>,
     },
 }
 
@@ -284,6 +292,33 @@ fn menu_frame(
     )
 }
 
+/// The keys the inventory screen reads, from the effective bindings
+/// (inventory-screen.md 6.1).
+fn inventory_keys(data: &GameData, controls: &crate::controls::Controls) -> inventory_screen::Keys {
+    use crate::controls::MoveAction;
+    inventory_screen::Keys {
+        inventory: controls.keys(MoveAction::Inventory),
+        drop: controls.keys(MoveAction::Drop),
+        quit: data.quit_keys.clone(),
+    }
+}
+
+/// The inventory screen's menu font at the size drawn at (its width,
+/// inventory-screen.md 5.6).
+fn menu_font(
+    tree: &dyn Vfs,
+    data: &GameData,
+    assets: &mut Assets,
+    screen: &InventoryScreen,
+    video: Resolution,
+) -> Option<FieldFont> {
+    let fonts = assets.fonts(tree, data, video.height).ok()?;
+    Some(FieldFont {
+        font: fonts.get(screen.layout().menu.font).clone(),
+        scale_x: video.scale().0,
+    })
+}
+
 /// See [`App::level_controls`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LevelControls {
@@ -396,6 +431,9 @@ pub enum AppState {
         /// The menu while it is open.
         #[serde(skip_serializing_if = "Option::is_none")]
         menu: Option<Box<MenuState>>,
+        /// The inventory screen while it is open.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        inventory: Option<Box<InventoryState>>,
     },
 }
 
@@ -563,15 +601,30 @@ impl App {
                 match step {
                     Ok(None) => {}
                     Ok(Some((level, screen))) => {
-                        self.error = None;
-                        self.loaded_since = self.load_started.take();
-                        self.menu_asked = false;
-                        *phase = Phase::Level {
-                            level: Box::new(level),
-                            overlay: Some(Overlay::new(screen, audio)),
-                            intro: Intro::default(),
-                            menu: None,
-                        };
+                        // The level's in-game interface: the inventory
+                        // screen's layout at the `_16` rule of now
+                        // (inventory-screen.md section 2).
+                        match InventoryScreen::load(tree, data, self.video) {
+                            Ok(inventory) => {
+                                self.error = None;
+                                self.loaded_since = self.load_started.take();
+                                self.menu_asked = false;
+                                *phase = Phase::Level {
+                                    level: Box::new(level),
+                                    overlay: Some(Overlay::new(screen, audio)),
+                                    intro: Intro::default(),
+                                    menu: None,
+                                    inventory: Some(Box::new(inventory)),
+                                    dropped: Vec::new(),
+                                };
+                            }
+                            Err(e) => {
+                                self.error = Some(e.to_string());
+                                *phase =
+                                    Phase::Menu(TitleMenu::open(data, now, input, audio, title));
+                                self.screens.menu_opened();
+                            }
+                        }
                     }
                     Err(e) => {
                         // Back to the menu, saying why (our choice).
@@ -586,6 +639,7 @@ impl App {
                 overlay,
                 intro,
                 menu: Some(menu),
+                ..
             } => {
                 // The menu pauses the game for its whole duration, its
                 // screens and boxes included (save-load-screens.md section 2).
@@ -640,6 +694,8 @@ impl App {
                 overlay,
                 intro,
                 menu,
+                inventory,
+                dropped,
             } => {
                 if let Some(o) = overlay.take() {
                     *overlay = o.next_frame(audio);
@@ -667,6 +723,49 @@ impl App {
                     }
                     return;
                 }
+                if let Some(screen) = inventory.as_deref_mut().filter(|s| s.is_open()) {
+                    // inventory-screen.md 1.3: the game runs on; keys the
+                    // screen does not use reach the character.
+                    let keys = inventory_keys(data, level.controls());
+                    level.controls_mut().keys_only = Some(keys.used());
+                    let font = menu_font(tree, data, &mut self.assets, screen, self.video);
+                    let time_of_day = level.clock().time_of_day();
+                    let out = match level.character_mut() {
+                        Some(character) => screen.update(inventory_screen::Frame {
+                            data,
+                            character,
+                            keys: &keys,
+                            time_of_day,
+                            now,
+                            input,
+                            audio,
+                            menu_font: font.as_ref(),
+                        }),
+                        None => {
+                            screen.close(data, audio);
+                            Ok(Default::default())
+                        }
+                    };
+                    match out {
+                        Ok(out) => dropped.extend(out.dropped),
+                        Err(e) => {
+                            // The original stops with a fatal error; the
+                            // screen closes, saying why (our choice).
+                            self.error = Some(e.to_string());
+                            screen.close(data, audio);
+                        }
+                    }
+                    level.update(now, input);
+                    // The screen has the quit key (1.2), and the page holds
+                    // no pointer lock while it shows: a back request or an
+                    // unlock opens no menu.
+                    level.take_back_requested();
+                    if !screen.is_open() {
+                        level.controls_mut().keys_only = None;
+                    }
+                    self.after_update(audio);
+                    return;
+                }
                 level.update(now, input);
                 // Pointer lock lost while the controls are live opens the menu
                 // too (our choice). The browser takes Escape to leave pointer
@@ -687,6 +786,22 @@ impl App {
                     *menu = Some(Box::new(TitleMenu::open(data, now, input, audio, in_game)));
                     self.screens.menu_opened();
                     self.unlock_opened = unlocked.then_some(self.frames);
+                } else if let Some(screen) = inventory.as_deref_mut()
+                    && level.controls().inventory_pressed(input)
+                    && let Some(character) = level.character()
+                    && character.conditions.alive()
+                {
+                    // inventory-screen.md 1.1: the level runs, the game is
+                    // not paused, the character is alive, no other window
+                    // is open.
+                    let time_of_day = level.clock().time_of_day();
+                    match screen.open(data, character, time_of_day, now, input.cursor_ui(), audio) {
+                        Ok(()) => {
+                            let keys = inventory_keys(data, level.controls());
+                            level.controls_mut().keys_only = Some(keys.used());
+                        }
+                        Err(e) => self.error = Some(e.to_string()),
+                    }
                 }
             }
         }
@@ -832,12 +947,21 @@ impl App {
                 overlay,
                 intro,
                 menu: None,
-            }) => compose(
-                level.scene(resolution, self.clock),
-                intro,
-                overlay.as_ref(),
-                &mut ctx,
-            ),
+                inventory,
+                ..
+            }) => {
+                let mut scene = compose(
+                    level.scene(resolution, self.clock),
+                    intro,
+                    overlay.as_ref(),
+                    &mut ctx,
+                )?;
+                // inventory-screen.md 3.1: over the rendered level.
+                if let (Some(screen), Some(character)) = (inventory, level.character()) {
+                    screen.draw(&mut ctx, &mut scene, character)?;
+                }
+                Ok(scene)
+            }
         }
     }
 
@@ -852,7 +976,9 @@ impl App {
                 overlay: None,
                 intro,
                 menu: None,
-            }) if intro.player.is_none() => {
+                inventory,
+                ..
+            }) if intro.player.is_none() && !inventory.as_ref().is_some_and(|i| i.is_open()) => {
                 let p = level.player().state();
                 Some(LevelControls {
                     crouch: p.crouch_toggled,
@@ -875,6 +1001,46 @@ impl App {
             }
             _ => None,
         }
+    }
+
+    /// Whether the inventory screen is open.
+    pub fn inventory_open(&self) -> bool {
+        matches!(&self.phase, Some(Phase::Level { inventory: Some(i), .. }) if i.is_open())
+    }
+
+    /// Test interface: puts an item of section `section` into the player's
+    /// inventory, taken by the rules of player-state.md 3.3, with an id one
+    /// above every id the inventory holds (the game takes items from the
+    /// world, which does not exist yet; this op is not a game action).
+    /// Returns its id.
+    pub fn give_item(&mut self, section: &str) -> io::Result<u16> {
+        use crate::core::character::inventory::{InventoryItem, ItemConfig};
+        let Some(Phase::Level { level, .. }) = &mut self.phase else {
+            return Err(io::Error::other("no level"));
+        };
+        let character = level
+            .character_mut()
+            .ok_or_else(|| io::Error::other("no player character"))?;
+        let config = ItemConfig::read(&self.data.system, section)?;
+        let id = character
+            .inventory
+            .items
+            .iter()
+            .map(|i| i.id)
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .filter(|&id| id != crate::core::character::inventory::NO_ID)
+            .ok_or_else(|| io::Error::other("no id left"))?;
+        let item = InventoryItem::create(
+            config,
+            id,
+            None,
+            character.owner.id,
+            &character.profile.specific_character,
+        );
+        character.inventory.take(item);
+        Ok(id)
     }
 
     pub fn quit_requested(&self) -> bool {
@@ -937,6 +1103,8 @@ impl App {
                 overlay,
                 intro,
                 menu,
+                inventory,
+                ..
             }) => AppState::Level {
                 clock,
                 level: Box::new(level.state()),
@@ -947,6 +1115,11 @@ impl App {
                 menu: menu
                     .as_ref()
                     .map(|m| Box::new(self.screens.state(m, &self.data, clock))),
+                inventory: inventory
+                    .as_ref()
+                    .filter(|i| i.is_open())
+                    .zip(level.character())
+                    .map(|(i, c)| Box::new(i.state(c))),
             },
         }
     }
@@ -1305,6 +1478,8 @@ mod tests {
             overlay: None,
             intro: Intro::default(),
             menu: None,
+            inventory: None,
+            dropped: Vec::new(),
         });
         app.update(&tree, 16.0, &input, &mut audio);
         assert!(app.level_controls().is_some(), "the controls are live");
@@ -1313,6 +1488,179 @@ mod tests {
 
     fn menu_open(app: &App) -> bool {
         matches!(app.state(), AppState::Level { menu: Some(_), .. })
+    }
+
+    /// An app in an empty level with a player character holding bread and
+    /// an inventory screen, its controls bound as the game's defaults are
+    /// (`inventory` I, `forward` W, `wpn_fire` the left button).
+    fn in_level_with_inventory() -> (fixture::MemVfs, App, Input, FakeAudio) {
+        let tree = fixture::tree();
+        let mut app = App::new(fixture::data(&tree)).unwrap();
+        app.assets = fixture::assets();
+        let (input, mut audio) = (Input::new(), FakeAudio::default());
+        app.update(&tree, 0.0, &input, &mut audio);
+        let mut controls = app.data.controls.clone();
+        controls.bindings = crate::controls::Bindings::read(&[
+            b"bind inventory kI\nbind forward kW\nbind wpn_fire mouse1\nbind drop kG\n",
+        ]);
+        let character = crate::inventory_screen::tests::character(&[("bread", 5, 3)]);
+        let inventory =
+            InventoryScreen::load(&tree, &app.data, Resolution::new(1024, 768)).unwrap();
+        app.phase = Some(Phase::Level {
+            level: Box::new(LevelScreen::empty(controls, 0).with_character(character)),
+            overlay: None,
+            intro: Intro::default(),
+            menu: None,
+            inventory: Some(Box::new(inventory)),
+            dropped: Vec::new(),
+        });
+        app.update(&tree, 16.0, &input, &mut audio);
+        (tree, app, input, audio)
+    }
+
+    #[test]
+    fn the_inventory_key_opens_the_screen_over_the_running_level() {
+        let (tree, mut app, mut input, mut audio) = in_level_with_inventory();
+        let game_time = |app: &App| match app.state() {
+            AppState::Level { level, .. } => level.game_time,
+            _ => panic!(),
+        };
+        press(&mut input, Key::I);
+        app.update(&tree, 32.0, &input, &mut audio);
+        input.end_frame();
+        assert!(app.inventory_open());
+        // inventory-screen.md 1.3: the cursor shows, the page's touch
+        // controls and pointer lock go (our design), the game runs on.
+        assert!(app.level_controls().is_none());
+        assert!(audio.started.last().unwrap().1.ends_with("inv_open.ogg"));
+        let t = game_time(&app);
+        // A key the screen does not use reaches the character: W walks.
+        input.handle(Event::Key {
+            key: Key::W,
+            pressed: true,
+        });
+        app.update(&tree, 132.0, &input, &mut audio);
+        input.end_frame();
+        let AppState::Level {
+            level, inventory, ..
+        } = app.state()
+        else {
+            panic!()
+        };
+        assert!(level.game_time > t, "not paused");
+        assert!(level.player.moving, "W walks under the screen");
+        assert!(inventory.is_some());
+        input.handle(Event::Key {
+            key: Key::W,
+            pressed: false,
+        });
+        // Mouse buttons are the screen's: no fire, and a press on the bread
+        // selects it.
+        let scene = app.scene(&tree, Resolution::new(1024, 768)).unwrap();
+        assert!(scene.first("cursor").is_some());
+        assert!(
+            scene.world.as_ref().is_some_and(|w| !w.covered),
+            "the level shows"
+        );
+        // Escape closes the screen, not opening the menu (1.2 item 2).
+        press(&mut input, Key::Escape);
+        app.update(&tree, 148.0, &input, &mut audio);
+        input.end_frame();
+        assert!(!app.inventory_open() && !menu_open(&app));
+        assert!(app.level_controls().is_some());
+        assert!(audio.started.last().unwrap().1.ends_with("inv_close.ogg"));
+        // Escape again opens the menu as usual.
+        press(&mut input, Key::Escape);
+        app.update(&tree, 164.0, &input, &mut audio);
+        input.end_frame();
+        assert!(menu_open(&app));
+    }
+
+    #[test]
+    fn touch_and_gamepad_open_the_inventory_and_it_eats() {
+        let (tree, mut app, mut input, mut audio) = in_level_with_inventory();
+        // The touch Inventory button (our design).
+        for pressed in [true, false] {
+            input.handle(Event::TouchButton {
+                button: crate::core::input::TouchButton::Inventory,
+                pressed,
+            });
+        }
+        app.update(&tree, 32.0, &input, &mut audio);
+        input.end_frame();
+        assert!(app.inventory_open());
+        // The inventory key closes it.
+        press(&mut input, Key::I);
+        app.update(&tree, 48.0, &input, &mut audio);
+        input.end_frame();
+        assert!(!app.inventory_open());
+        // A gamepad's north button opens it (our design).
+        for pressed in [true, false] {
+            input.handle(Event::GamepadButton {
+                button: crate::core::input::GamepadButton::North,
+                pressed,
+            });
+        }
+        app.update(&tree, 64.0, &input, &mut audio);
+        input.end_frame();
+        assert!(app.inventory_open());
+        // A double click on the bread eats it.
+        let AppState::Level {
+            inventory: Some(inv),
+            ..
+        } = app.state()
+        else {
+            panic!()
+        };
+        let [x, y, w, h] = inv.lists[0].cells[0].rect;
+        let at = [x + w / 2.0, y + h / 2.0];
+        input.handle(Event::PointerMoved { at });
+        for time in [1000.0, 1100.0] {
+            for pressed in [true, false] {
+                input.handle(Event::PointerButton {
+                    at: None,
+                    button: crate::core::input::MouseButton::Left,
+                    pressed,
+                    time,
+                });
+            }
+        }
+        app.update(&tree, 80.0, &input, &mut audio);
+        input.end_frame();
+        let AppState::Level { level, .. } = app.state() else {
+            panic!()
+        };
+        let c = level.character.unwrap();
+        assert!(c.items.is_empty(), "the bread was eaten");
+        assert!((c.satiety - 0.7).abs() < 1e-6);
+        // Death closes it (1.2 item 4).
+        let Some(Phase::Level { level, .. }) = &mut app.phase else {
+            panic!()
+        };
+        level.character_mut().unwrap().conditions.health = 0.0;
+        app.update(&tree, 96.0, &input, &mut audio);
+        assert!(!app.inventory_open());
+        // Dead, the key opens nothing.
+        press(&mut input, Key::I);
+        app.update(&tree, 112.0, &input, &mut audio);
+        assert!(!app.inventory_open());
+    }
+
+    #[test]
+    fn the_test_interface_gives_items() {
+        let (_tree, mut app, _input, _audio) = in_level_with_inventory();
+        app.data.system = crate::inventory_screen::tests::items();
+        let id = app.give_item("medkit").unwrap();
+        assert_eq!(id, 6);
+        let AppState::Level { level, .. } = app.state() else {
+            panic!()
+        };
+        let c = level.character.unwrap();
+        assert_eq!(
+            c.items.last().map(|i| (i.id, i.place)),
+            Some((6, "backpack"))
+        );
+        assert!(app.give_item("no_such_section").is_err());
     }
 
     #[test]
