@@ -39,6 +39,7 @@ use crate::loading_screen::{
     intro_due,
 };
 use crate::menu_screens::{Frame, MenuFrame, MenuScreens, MenuState};
+use crate::render::present::Presentation;
 use crate::save_load::FieldFont;
 use crate::saved_games::SavedGames;
 use crate::scene::{Scene, Sprite, TextureId};
@@ -412,6 +413,9 @@ pub struct App {
     /// The resolution drawn at: `vid_mode` as the last video restart
     /// applied it (sections 5.4, 9).
     video: Resolution,
+    /// `r__supersample` as the last video restart applied it (the target is
+    /// built at device creation and every reset, frame-presentation.md 1.2).
+    supersample: u32,
     /// The user configuration file to store, once something asked for it.
     save: Option<Vec<u8>>,
     /// The console's generation as last applied to the game data.
@@ -459,6 +463,22 @@ pub struct App {
     menu_font: Option<(Resolution, FieldFont)>,
     /// The display colour settings and their ramp as last computed.
     ramp: Option<(DisplayColour, Option<[u16; 256]>)>,
+}
+
+/// `r__supersample`, 1 … 4.
+fn supersample(console: &Console) -> u32 {
+    (console.number("r__supersample") as u32).clamp(1, 4)
+}
+
+/// `r1_pps_u` and `r1_pps_v` (frame-presentation.md 3.2): reals −1 … 1, 0
+/// before set; a stored value out of range is clamped (our choice).
+fn pps(console: &Console) -> [f32; 2] {
+    ["r1_pps_u", "r1_pps_v"].map(|name| {
+        (console.status(name))
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .filter(|v| v.is_finite())
+            .map_or(0.0, |v| v.clamp(-1.0, 1.0))
+    })
 }
 
 /// The resolution of `vid_mode`.
@@ -517,12 +537,14 @@ impl App {
         TitleMenu::check(&data)?;
         let console = data.console();
         let video = video_mode(&console);
+        let supersample = supersample(&console);
         Ok(Self {
             applied: console.generation(),
             console,
             screens: MenuScreens::default(),
             native: video,
             video,
+            supersample,
             save: None,
             volumes: None,
             sound_voices_set: false,
@@ -931,6 +953,7 @@ impl App {
                 .and_then(|v| v.trim().parse::<u32>().ok())
                 .map_or(GLOWS_PER_FRAME, |v| v.clamp(2, 32));
             level.set_light_settings(settings, glows);
+            level.set_supersample(self.supersample);
         }
         let now = self.clock;
         let title = self.opening(false);
@@ -969,6 +992,7 @@ impl App {
                 if out.video_restart {
                     // `vid_restart` (options-screens.md section 5.4).
                     self.video = video_mode(&self.console);
+                    self.supersample = supersample(&self.console);
                     menu.resized(data, self.video);
                 }
                 if out.store_config || menu.quit_requested() {
@@ -1082,6 +1106,7 @@ impl App {
                 }
                 if out.video_restart {
                     self.video = video_mode(&self.console);
+                    self.supersample = supersample(&self.console);
                     menu.resized(data, self.video);
                 }
                 if out.store_config || menu.quit_requested() {
@@ -1370,6 +1395,11 @@ impl App {
         }
         if let Ok(scene) = &mut scene {
             scene.ramp = self.ramp.and_then(|(_, r)| r);
+            scene.presentation = Presentation {
+                supersample: self.supersample,
+                pps: pps(&self.console),
+                frame_time: self.frame_ms as f32 / 1000.0,
+            };
         }
         if let Err(e) = &scene
             && e.kind() != io::ErrorKind::Unsupported

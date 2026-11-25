@@ -217,6 +217,9 @@ pub struct Scene {
     /// (docs/behavior/display-gamma.md); `None` for the identity.
     #[serde(skip)]
     pub ramp: Option<[u16; 256]>,
+    /// How a world frame reaches the screen (frame-presentation.md).
+    #[serde(skip)]
+    pub presentation: crate::render::present::Presentation,
 }
 
 fn resolution<S: serde::Serializer>(r: &Resolution, s: S) -> Result<S::Ok, S::Error> {
@@ -230,6 +233,7 @@ impl Scene {
             world: None,
             sprites: Vec::new(),
             ramp: None,
+            presentation: Default::default(),
         }
     }
 

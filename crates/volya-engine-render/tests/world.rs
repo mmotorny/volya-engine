@@ -65,6 +65,7 @@ both!(
     particles_queue_blend_cull_and_distort,
     light_passes_add_to_the_image,
     glows_add_after_the_world,
+    the_presentation_reduces_a_supersampled_target,
 );
 
 fn renderer() -> Renderer {
@@ -252,6 +253,8 @@ fn frame(world: volya_engine_render::World, sky: Option<SkyFrame>) -> WorldFrame
         clear: [0.0; 3],
         particles: Vec::new(),
         lights: Vec::new(),
+        presentation: Default::default(),
+        effects: None,
     }
 }
 
@@ -760,6 +763,61 @@ fn at(pixels: &[u8], size: u32, x: u32, y: u32) -> [u8; 4] {
     pixels[i..i + 4].try_into().unwrap()
 }
 
+/// frame-presentation.md 1.1, 3.1, 3.5: at `r__supersample` 2 the world is
+/// drawn into a target √2 times the screen per axis and reduced by one
+/// bilinear sample per pixel; with the identity in force white stays white.
+#[test]
+fn the_presentation_reduces_a_supersampled_target() {
+    use volya_engine_render::present::{Presentation, ScreenEffects};
+    let mut r = renderer();
+    let white = r.create_rgba_texture(1, 1, &[255; 4]);
+    let black = r.create_rgba_texture(1, 1, &[0, 0, 0, 255]);
+    let g = geom(Layout::VertexLit, 0, 0, [0; 8]);
+    let world = r
+        .create_world(
+            &g,
+            &[surface(Program::SelfLight, Some(black))],
+            &[draw(0, None)],
+            None,
+        )
+        .unwrap();
+    // A white sprite over the left half, its edge off the pixel grid.
+    let left = batch(
+        pass(ParticleProgram::Set, ParticleBlend::Off, &white),
+        ParticleQueue::Early,
+        1.0,
+        sprite(-2.0, 0.013, -2.0, 2.0, 0.5, 0xFFFF_FFFF),
+    );
+    let size = 128;
+    let mut f = frame(world.clone(), None);
+    f.particles = vec![left.clone()];
+    let straight = pixels(&mut r, f.clone(), size);
+    f.presentation = Presentation {
+        supersample: 2,
+        ..Default::default()
+    };
+    f.effects = Some(ScreenEffects::identity());
+    let reduced = pixels(&mut r, f, size);
+    // 128 · √2 = 181.02: 181, made even.
+    assert_eq!(r.presentation_target(), Some(((180, 180), true)));
+    assert_eq!(at(&reduced, size, 8, 64)[..3], [255, 255, 255]);
+    assert_eq!(at(&reduced, size, 120, 64)[..3], [0, 0, 0]);
+    // The edge's pixel blends texels of both sides, where the screen's
+    // own frame has one or the other.
+    let edge = (60..72).map(|x| at(&reduced, size, x, 64)[0]);
+    assert!(
+        edge.clone().any(|v| v > 0 && v < 255),
+        "{:?}",
+        edge.collect::<Vec<_>>()
+    );
+    let edge = (60..72).map(|x| at(&straight, size, x, 64)[0]);
+    assert!(
+        edge.clone().all(|v| v == 0 || v == 255),
+        "{:?}",
+        edge.collect::<Vec<_>>()
+    );
+}
+
 /// particle-drawing.md sections 4.5 – 7: blended effects back to front by
 /// key, the `SET` alpha test, culling, and the distortion target composed
 /// into the frame.
@@ -840,9 +898,9 @@ fn particles_queue_blend_cull_and_distort() {
     let red = r.create_rgba_texture(1, 1, &[255, 127, 0, 255]);
     let mut distort = pass(ParticleProgram::Distort, ParticleBlend::Alpha, &white);
     distort.distort = Some(red);
-    let mut f = frame(world, None);
+    let mut f = frame(world.clone(), None);
     f.particles = vec![
-        left,
+        left.clone(),
         batch(
             distort,
             ParticleQueue::Distortion,
@@ -850,14 +908,37 @@ fn particles_queue_blend_cull_and_distort() {
             sprite(-2.0, 2.0, -2.0, 2.0, 0.4, 0xFFFF_FFFF),
         ),
     ];
+    // Drawn straight to the screen (r__supersample 1, no effect), the
+    // first frame's distortion is not shown; the next frame goes through
+    // the target and is presented with postprocess_d
+    // (frame-presentation.md 3.1, particle-drawing.md 6.3).
+    let first = pixels(&mut r, f.clone(), size);
+    assert_eq!(
+        at(&first, size, 124, 128)[..3],
+        [255, 255, 255],
+        "not shown"
+    );
+    assert_eq!(r.presentation_target(), Some(((size, size), false)));
     let shifted = pixels(&mut r, f, size);
+    assert_eq!(r.presentation_target(), Some(((size, size), true)));
     // About 6 pixels: at 124 the scene is read from 130, right of the edge.
     assert_eq!(at(&shifted, size, 124, 128)[..3], [0, 0, 0], "shifted");
+    // The renderer's own colour base (127, no hand-over) scales by
+    // 254/255 (frame-presentation.md 3.5).
     assert_eq!(
         at(&shifted, size, 112, 128)[..3],
-        [255, 255, 255],
+        [254, 254, 254],
         "still white"
     );
+    // A frame after one with a distortion pass goes through the target;
+    // the next goes straight to the screen again.
+    let mut f = frame(world, None);
+    f.particles = vec![left.clone()];
+    pixels(&mut r, f.clone(), size);
+    assert_eq!(r.presentation_target(), Some(((size, size), true)));
+    let again = pixels(&mut r, f, size);
+    assert_eq!(r.presentation_target(), Some(((size, size), false)));
+    assert_eq!(at(&again, size, 124, 128)[..3], [255, 255, 255]);
 }
 
 /// A light pass whose frustum holds everything (clip (0, 0, ½, 1)).

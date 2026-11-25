@@ -19,6 +19,7 @@ use crate::render::particles::{
     ParticleBatch, ParticleBlend, ParticleCull, ParticlePass as RenderPass, ParticleProgram,
     ParticleQueue, ParticleVertex,
 };
+use crate::render::present::ScreenEffects;
 use crate::render::sky::{SkySection, SkyTextures};
 use crate::render::world::{
     GeometryUpload, LightPass, LightTextures, ObjectGeometry, Surface, TreeLight, WorldLight,
@@ -304,6 +305,12 @@ impl Presenter {
             // now rather than while the level runs.
             renderer.reserve_particles(scene.world.particle_capacity);
             self.load_lights(renderer, tree, &scene.world);
+            if let Some(path) = &scene.world.presentation_noise {
+                match load_texture(renderer, tree, path) {
+                    Ok(t) => renderer.set_presentation_noise(&t),
+                    Err(e) => self.errors.push(format!("{path}: {e}")),
+                }
+            }
             let world = self.upload_world(renderer, tree, &scene.world);
             let world = world
                 .map_err(|e| self.errors.push(format!("{}: {e}", scene.world.dir)))
@@ -350,6 +357,8 @@ impl Presenter {
                     frustum: l.frustum,
                 })
                 .collect(),
+            presentation: Default::default(),
+            effects: None,
         })
     }
 
@@ -714,11 +723,22 @@ impl Presenter {
             ramp: scene.ramp,
             ..Default::default()
         };
+        // The off-screen target, made at the game's size before any level
+        // (frame-presentation.md 1.2).
+        let screen = (scene.resolution.width, scene.resolution.height);
+        renderer.prepare_presentation(screen, scene.presentation.supersample);
         match &scene.world {
             Some(world) => {
                 // Uploaded (or kept) even when covered, so it is ready.
                 let frame = self.world_frame(renderer, tree, world);
-                list.world = frame.filter(|_| !world.covered);
+                list.world = frame.filter(|_| !world.covered).map(|mut f| {
+                    f.presentation = scene.presentation;
+                    // The level hands over the identity: no screen effect
+                    // exists yet (frame-presentation.md 2.2 step 3).
+                    // TODO(#190): the effects' values (screen-effects).
+                    f.effects = Some(ScreenEffects::identity());
+                    f
+                });
             }
             None => {
                 self.world = None;

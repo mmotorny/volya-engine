@@ -16,6 +16,7 @@
 
 mod capture;
 pub mod particles;
+pub mod present;
 mod ramp;
 pub mod sky;
 mod texture;
@@ -172,10 +173,9 @@ pub struct Renderer {
     /// The particles' pipelines and buffers (always set; taken while a
     /// frame is encoded).
     particles: Option<particles::ParticlePipelines>,
-    /// The world as drawn and the distortion target, for frames with a
-    /// distortion pass (particle-drawing.md 6.2), sized to the latest
-    /// target.
-    distortion_targets: Option<(wgpu::Texture, wgpu::Texture)>,
+    /// The off-screen target and the presentation quad
+    /// (frame-presentation.md).
+    post: present::PostProcess,
     /// The display's gamma ramp (display-gamma.md).
     ramp: ramp::RampPass,
 }
@@ -294,7 +294,7 @@ impl Renderer {
             // the first effect drawn, the second New Game's wasm heap grew
             // from 99 to 112 MiB).
             particles: Some(particles::ParticlePipelines::new(device, queue, format)),
-            distortion_targets: None,
+            post: present::PostProcess::new(device, queue, format),
             ramp: ramp::RampPass::new(device, format),
         };
         // The world's pipelines too (the light passes' among them).
@@ -516,7 +516,7 @@ impl Renderer {
         let target_size = (target.width(), target.height());
         let target = &target.create_view(&Default::default());
         if let Some(frame) = &list.world {
-            self.encode_frame(&mut encoder, target, target_size, frame);
+            self.present_frame(&mut encoder, target, target_size, frame);
         }
         let load = match list.world {
             Some(_) => wgpu::LoadOp::Load,
@@ -617,17 +617,79 @@ impl Renderer {
         self.queue.submit([encoder.finish()]);
     }
 
-    /// The world pass of `frame` with its particle effects; with a
-    /// distortion list, the world is drawn into a texture of its own and
-    /// composed into `target` through the distortion target
-    /// (particle-drawing.md section 6).
+    /// Builds the off-screen target for a `screen` of the game's size and
+    /// `r__supersample` `supersample` when either changed
+    /// (frame-presentation.md 1.2: at device creation and every reset);
+    /// the platform calls it every frame, so it is made before a level is.
+    pub fn prepare_presentation(&mut self, screen: (u32, u32), supersample: u32) {
+        self.post.prepare(&self.device, screen, supersample);
+    }
+
+    /// The `$user$rendertarget` size and whether the last world frame went
+    /// through it (tests).
+    pub fn presentation_target(&self) -> Option<((u32, u32), bool)> {
+        self.post.targets.as_ref().map(|t| (t.size, self.post.used))
+    }
+
+    /// The noise texture of the presentation (`fx\fx_noise2`,
+    /// frame-presentation.md 3.4).
+    pub fn set_presentation_noise(&mut self, texture: &Texture) {
+        self.post.set_noise(texture.wgpu());
+    }
+
+    /// One world frame into the `screen` of `size` (frame-presentation.md
+    /// 3.1): the world into the off-screen target and the presentation quad
+    /// onto the screen, or the world straight onto the screen.
+    fn present_frame(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        screen: &wgpu::TextureView,
+        size: (u32, u32),
+        frame: &WorldFrame,
+    ) {
+        let p = frame.presentation;
+        self.post.prepare(&self.device, size, p.supersample);
+        // The hand-over of the frame's camera update (2.2).
+        if let Some(e) = frame.effects {
+            self.post.effects = e;
+        }
+        let through = self.post.use_target(p.supersample);
+        self.post.used = through;
+        let distorted = match self.post.targets.clone().filter(|_| through) {
+            Some(t) => {
+                let colour = t.colour.create_view(&Default::default());
+                let distort = t.distort.create_view(&Default::default());
+                let depth = t.depth.create_view(&Default::default());
+                let distorted =
+                    self.encode_frame(encoder, &colour, t.size, &depth, frame, Some(&distort));
+                self.post
+                    .draw(&self.device, &self.queue, encoder, screen, &p, distorted);
+                distorted
+            }
+            None => {
+                let depth = self.depth_view(size.0, size.1);
+                self.encode_frame(encoder, screen, size, &depth, frame, None)
+            }
+        };
+        self.post.distorted = distorted;
+    }
+
+    /// The world pass of `frame` with its particle effects into `target` of
+    /// `size` with `depth`, then, with a distortion list, the distortion
+    /// pass into `distort` (particle-drawing.md 6.2). Returns whether the
+    /// frame had a distortion pass. Drawn straight to the screen (no
+    /// `distort`), the pass's picture would not be shown
+    /// (frame-presentation.md 3.1), so it is left undrawn, but the frame
+    /// still counts as one with a distortion pass.
     fn encode_frame(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         size: (u32, u32),
+        depth: &wgpu::TextureView,
         frame: &WorldFrame,
-    ) {
+        distort: Option<&wgpu::TextureView>,
+    ) -> bool {
         let mut pipelines = self.particles.take();
         let prepared = if frame.particles.is_empty() {
             None
@@ -646,55 +708,17 @@ impl Renderer {
             )
         };
         let both = pipelines.as_ref().zip(prepared.as_ref());
-        let distort = both.is_some_and(|(_, p)| p.has(particles::ParticleQueue::Distortion));
-        if !distort {
-            self.encode_world(encoder, target, size, frame, both, false);
-        } else {
-            let stale = self
-                .distortion_targets
-                .as_ref()
-                .is_none_or(|(t, _)| (t.width(), t.height()) != size);
-            if stale {
-                let make = |label| {
-                    self.device.create_texture(&wgpu::TextureDescriptor {
-                        label: Some(label),
-                        size: wgpu::Extent3d {
-                            width: size.0,
-                            height: size.1,
-                            depth_or_array_layers: 1,
-                        },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: self.format,
-                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                            | wgpu::TextureUsages::TEXTURE_BINDING,
-                        view_formats: &[],
-                    })
-                };
-                self.distortion_targets = Some((make("scene"), make("distortion")));
-            }
-            let (scene, distortion) = self.distortion_targets.clone().expect("made");
-            let scene = scene.create_view(&Default::default());
-            let distortion = distortion.create_view(&Default::default());
-            self.encode_world(encoder, &scene, size, frame, both, true);
-            let depth = self.depth_view(size.0, size.1);
-            if let Some((pipelines, prepared)) = both {
-                // TODO(#329): particle-drawing.md 6.2 does not state the view
-                // and projection of the distortion pass; the scene's
-                // (believed).
-                pipelines.distort(
-                    &self.device,
-                    encoder,
-                    prepared,
-                    &scene,
-                    &distortion,
-                    &depth,
-                    target,
-                );
-            }
+        let distorted = both.is_some_and(|(_, p)| p.has(particles::ParticleQueue::Distortion));
+        let shown = distort.filter(|_| distorted);
+        self.encode_world(encoder, target, size, depth, frame, both, shown.is_some());
+        if let (Some((pipelines, prepared)), Some(distort)) = (both, shown) {
+            // TODO(#329): particle-drawing.md 6.2 does not state the view
+            // and projection of the distortion pass; the scene's
+            // (believed).
+            pipelines.distort(encoder, prepared, distort, depth);
         }
         self.particles = pipelines;
+        distorted
     }
 
     /// Writes the vertices of `list` and returns its draw batches: runs of

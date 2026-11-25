@@ -133,6 +133,9 @@ pub struct LevelWorld {
     /// The light passes' attenuation textures as file paths: `att`,
     /// `attclip`, `attpoint` (dynamic-lights.md 6.4).
     pub light_textures: Option<[String; 3]>,
+    /// The presentation's noise texture `fx\fx_noise2` as a file path
+    /// (frame-presentation.md 3.4).
+    pub presentation_noise: Option<String>,
 }
 
 /// Every texture file of `surfaces` and `sky`, each once.
@@ -182,6 +185,11 @@ impl LevelWorld {
             }
         }
         light_texture_paths(&mut paths, &self.glow_shaders, self.light_textures.as_ref());
+        if let Some(t) = &self.presentation_noise
+            && !paths.contains(t)
+        {
+            paths.push(t.clone());
+        }
         paths
     }
 
@@ -254,6 +262,9 @@ pub struct LevelScreen {
     weather_effect: Option<usize>,
     /// The size of the latest frame drawn, for the effects' view test.
     view_size: std::cell::Cell<(u32, u32)>,
+    /// `r__supersample` in force: the frame's target size, and with it the
+    /// size thresholds (static-shading.md 10.2, frame-presentation.md 1.1).
+    supersample: u32,
     /// Which effect objects are drawn, by origin (tests compare frames
     /// without them): placed, zones', weather's.
     effects_drawn: [bool; 3],
@@ -1124,6 +1135,7 @@ pub struct NewGameLoad {
     glow_records: Vec<volya_engine_formats::level::Glow>,
     /// The light passes' attenuation textures (dynamic-lights.md 6.4).
     light_textures: Option<[String; 3]>,
+    presentation_noise: Option<String>,
     /// The player's torches' data (torch.md 1, 3).
     torches: Option<PlayerTorchData>,
 }
@@ -1208,6 +1220,11 @@ impl NewGameLoad {
             &self.lights.glow_shaders,
             self.light_textures.as_ref(),
         );
+        if let Some(t) = &self.presentation_noise
+            && !paths.contains(t)
+        {
+            paths.push(t.clone());
+        }
         paths
     }
 
@@ -1575,6 +1592,8 @@ impl NewGameLoad {
                     locate("internal\\internal_light_attclip")?,
                     locate("internal\\internal_light_attpoint")?,
                 ]);
+                // The presentation's noise (frame-presentation.md 3.4).
+                self.presentation_noise = Some(locate("fx\\fx_noise2")?);
                 self.flares = flares;
                 // The shaders of the effects the level can show
                 // (particle-drawing.md 5.1), their textures located like
@@ -1740,6 +1759,7 @@ impl NewGameLoad {
                 particle_capacity: self.particle_capacity,
                 glow_shaders,
                 light_textures: self.light_textures,
+                presentation_noise: self.presentation_noise,
             }),
             collision: Arc::new(collision),
             sound_data: self.sound,
@@ -1763,6 +1783,7 @@ impl NewGameLoad {
             instances,
             effects,
             view_size: std::cell::Cell::new((1024, 768)),
+            supersample: 1,
             zones: self.zones,
             zone_sections: self.zone_sections,
             weather_effect: None,
@@ -2287,6 +2308,11 @@ impl LevelScreen {
         self.global_ms = ms;
     }
 
+    /// `r__supersample` as the last video restart applied it.
+    pub fn set_supersample(&mut self, supersample: u32) {
+        self.supersample = supersample;
+    }
+
     /// The settings of dynamic-lights.md 8 and `r1_glows_per_frame`.
     pub fn set_light_settings(&mut self, settings: LightSettings, glows_per_frame: u32) {
         self.lights.settings = settings;
@@ -2381,7 +2407,11 @@ impl LevelScreen {
             forward: v.direction,
             up: v.up,
         };
-        let (w, h) = crate::render::world::supersampled(resolution.width, resolution.height);
+        let (w, h) = crate::render::present::target_size(
+            resolution.width,
+            resolution.height,
+            self.supersample,
+        );
         let ssa_min = crate::render::world::ssa_min(w, h, camera::FOV_Y_DEGREES);
         let records = self.drawn(effects, view, projection);
         particle_drawing::queue(
@@ -2681,6 +2711,7 @@ impl LevelScreen {
                 particle_capacity: 0,
                 glow_shaders: Vec::new(),
                 light_textures: None,
+                presentation_noise: None,
             }),
             collision: Arc::new(
                 CollisionWorld::new(Default::default(), Vec::new()).expect("collision"),
@@ -2706,6 +2737,7 @@ impl LevelScreen {
             instances: HashMap::new(),
             effects: None,
             view_size: std::cell::Cell::new((1024, 768)),
+            supersample: 1,
             zones: Zones::default(),
             zone_sections: HashMap::new(),
             weather_effect: None,

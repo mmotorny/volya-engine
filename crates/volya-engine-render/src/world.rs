@@ -374,6 +374,11 @@ pub struct WorldFrame {
     /// The frame's dynamic light passes in their order
     /// (dynamic-lights.md 5.1).
     pub lights: Vec<LightPass>,
+    /// How the frame reaches the screen (frame-presentation.md).
+    pub presentation: crate::present::Presentation,
+    /// The screen-effect values handed over for this frame
+    /// (frame-presentation.md 2.2); `None` keeps those in force.
+    pub effects: Option<crate::present::ScreenEffects>,
 }
 
 /// One dynamic light's pass (docs/behavior/dynamic-lights.md sections 5,
@@ -965,17 +970,6 @@ pub fn fog_plane(view_projection: &Mat4, fog_near: f32, fog_far: f32) -> [f32; 4
         -q[2] / (l * span),
         1.0 - (q[3] / l - fog_near) / span,
     ]
-}
-
-/// The original's render target for a `width` × `height` screen (section
-/// 10.2): each axis × √`r__supersample` (default 2), clamped to 128 … 2048
-/// and made even. Truncating the product and making it even by rounding
-/// down are our choices (the spec does not say how). We draw at the screen
-/// size; this target only feeds the size threshold, so culling matches the
-/// original's.
-pub fn supersampled(width: u32, height: u32) -> (u32, u32) {
-    let axis = |v: u32| ((v as f32 * 2f32.sqrt()) as u32).clamp(128, 2048) & !1;
-    (axis(width), axis(height))
 }
 
 /// ssa_min for a `width` × `height` render target and vertical field of
@@ -2149,6 +2143,7 @@ impl Renderer {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         size: (u32, u32),
+        depth: &wgpu::TextureView,
         frame: &WorldFrame,
         particles: Option<(
             &crate::particles::ParticlePipelines,
@@ -2171,10 +2166,7 @@ impl Renderer {
         push_mat(&mut constants, &frame.view);
         push_vec4(
             &mut constants,
-            vec4(frame.eye, {
-                let (w, h) = supersampled(size.0, size.1);
-                ssa_min(w, h, frame.fov_y_degrees)
-            }),
+            vec4(frame.eye, ssa_min(size.0, size.1, frame.fov_y_degrees)),
         );
         push_vec4(&mut constants, vec4(frame.forward, 0.0));
         push_vec4(&mut constants, vec4(l.ambient, 0.0));
@@ -2222,7 +2214,6 @@ impl Renderer {
         }
         sorted.sort_by(|a, b| b.0.total_cmp(&a.0));
 
-        let depth = self.depth_view(size.0, size.1);
         let lights = self.prepare_lights(frame, &view_projection);
         let light_pipelines = self.world_pipelines.as_ref().filter(|_| !lights.is_empty());
         let [r, g, b] = frame.clear.map(f64::from);
@@ -2238,7 +2229,7 @@ impl Renderer {
                 },
             })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &depth,
+                view: depth,
                 depth_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Clear(1.0),
                     store: if keep_depth {
