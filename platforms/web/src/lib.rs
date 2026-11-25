@@ -64,6 +64,10 @@ thread_local! {
     /// While on (tests: the `heap_log` op), each frame's loading caption
     /// and wasm heap size at its end.
     static HEAP_LOG: std::cell::RefCell<Option<Vec<serde_json::Value>>> = Default::default();
+    /// The least time a frame takes (tests: the `debug_frame_cost` op), ms:
+    /// a slower device's frames, the worker busy for that long.
+    #[cfg(feature = "test-ops")]
+    static FRAME_COST: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
 }
 
 /// The wasm heap (linear memory) size, bytes.
@@ -98,7 +102,11 @@ pub fn frame(time: f64) {
     gpu::frame(time);
     input::end_frame();
     textures::poll();
+    #[cfg(feature = "test-ops")]
+    while now() - start < FRAME_COST.with(std::cell::Cell::get) {}
     let cpu = now() - start;
+    #[cfg(feature = "test-ops")]
+    audio::capture::frame(cpu);
     if HEAP_LOG.with(|l| l.borrow().is_some()) {
         let state = engine::state();
         let entry = serde_json::json!({
@@ -326,6 +334,23 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
             let frames = args.get("frames").and_then(|v| v.as_u64()).unwrap_or(600);
             to_json(&engine::particles_bench(frames as u32)?)
         }
+        // `{"name": …}` starts capturing that sound's emitter; `{}` stops
+        // and returns the capture (`audio::capture::stop`).
+        // `{"ms": …}`: every frame takes at least that long from now on.
+        #[cfg(feature = "test-ops")]
+        "debug_frame_cost" => {
+            let ms = args.get("ms").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            FRAME_COST.with(|c| c.set(ms));
+            Ok("null".into())
+        }
+        #[cfg(feature = "test-ops")]
+        "audio_capture" => match args.get("name").and_then(|v| v.as_str()) {
+            Some(name) => {
+                audio::capture::start(name);
+                Ok("null".into())
+            }
+            None => to_json(&audio::capture::stop()),
+        },
         "menu_scene" => {
             let size = |key| args.get(key).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
             to_json(&engine::scene(Resolution::new(

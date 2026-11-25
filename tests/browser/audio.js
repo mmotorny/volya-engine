@@ -30,6 +30,14 @@ const NEW_GAME = [
   "__support/userdocs/user.ltx",
 ];
 let installer;
+// The live output of the New Game's tests.
+let live;
+const CAPTURE_SECONDS = 30;
+const SLOW_FROM = 10000;
+const FRAME_COST = 60;
+let levelStart;
+// S3 section 5, source 2 of `l01_escape`: a song on a tape recorder.
+const TAPE = "scripts\\magnitofon\\magnitofon_2";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const state = () => volya.call("menu_state");
@@ -211,6 +219,12 @@ export const tests = {
   "a New Game's level plays its sounds": async () => {
     if (!installer) skip("no installer");
     await volya.call("forget_user_config");
+    // A live output, as the app's: the level's sounds are mixed as heard.
+    live = new AudioContext();
+    await volya.connectAudio(live);
+    // Where it needs a gesture (the iOS Simulator), a real tap resumes it
+    // (`cargo xtask sim`); otherwise the continuity test skips.
+    for (const event of ["pointerdown", "touchend"]) addEventListener(event, () => live.resume());
     await volya.call("launch");
     // The logos, then the title menu's New Game with its first difficulty.
     await until((s) => s.phase === "startup", "the logo sequence");
@@ -222,8 +236,11 @@ export const tests = {
     await until((s) => s.phase === "menu" && s.menu.list === "menu_main", "the menu");
     key("Enter");
     await until((s) => s.menu?.list === "menu_new_game", "the difficulty page");
+    // The tape recorder's voice from its start (the next test).
+    await volya.call("audio_capture", { name: TAPE });
     key("Enter");
     await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", 60000);
+    levelStart = performance.now();
     await until((s) => s.intro, "the intro", 10000).catch(() => null);
     key("Escape");
     await until((s) => s.phase === "level" && !s.intro && !s.menu, "the level's controls", 10000);
@@ -264,6 +281,53 @@ export const tests = {
       `${(stats.sound_update_max_ms * 1000).toFixed(0)} µs worst; ` +
       `frame CPU ${stats.frame_cpu_ms.toFixed(2)} ms; wasm heap ${(stats.wasm_heap_bytes / 2 ** 20).toFixed(0)} MiB`
     );
+  },
+
+  // S2 4.2: a looped sound's data repeats without a gap. The tape recorder's
+  // voice, captured from the level's start (`audio_capture`): every mixed
+  // block continues the last on one mixer voice, and the AudioWorklet never
+  // runs out. For the first SLOW_FROM ms the frames are Chrome's own; then
+  // each takes FRAME_COST ms, a slower device's (#343: in the iOS Simulator
+  // frames of about 45 ms starved the output).
+  "the tape recorder plays continuously": async () => {
+    if (!installer) skip("no installer");
+    if (live.state !== "running") skip(`the AudioContext is ${live.state} (no user gesture)`);
+    await sleep(Math.max(0, levelStart + SLOW_FROM - performance.now()));
+    const slowAt = performance.now();
+    await volya.call("debug_frame_cost", { ms: FRAME_COST });
+    try {
+      await sleep(Math.max(0, levelStart + CAPTURE_SECONDS * 1000 - performance.now()));
+    } finally {
+      await volya.call("debug_frame_cost", { ms: 0 });
+    }
+    // Blocks: [t, frames, mix ms, underrun, queued, mixer voice, advanced
+    // before, after, step, gain from, to], t on the capture's clock.
+    const { blocks } = await volya.call("audio_capture");
+    // Roughly: the last block was asked for just before the capture ended.
+    const slowFrom = slowAt - (performance.now() - blocks.at(-1)[0]);
+    const first = blocks.findIndex((b) => b[5] >= 0);
+    assert(first >= 0, "the tape recorder never played");
+    const underruns = [0, 0];
+    let worstJump = 0;
+    // From the block after the first: the voice starts at gain 0 and
+    // ramps to its gain over its first block (MixerDevice).
+    for (let i = first + 1; i < blocks.length; i++) {
+      const [t, n, , underrun, , voice, before, after, step, from, to] = blocks[i];
+      const prev = blocks[i - 1];
+      const at = `at ${(t - blocks[first][0]).toFixed(0)} ms`;
+      assert(voice === prev[5], `${at} the voice changed from ${prev[5]} to ${voice}`);
+      assert(before === prev[7], `${at} the voice jumped from ${prev[7]} to ${before}`);
+      assert(Math.abs(after - before - n * step) < 1e-3, `${at} the voice advanced ${after - before}`);
+      underruns[t < slowFrom ? 0 : 1] += underrun;
+      worstJump = Math.max(worstJump, Math.abs(to - from));
+    }
+    const ms = (frames) => ((frames / live.sampleRate) * 1000).toFixed(0);
+    assert(
+      underruns[0] + underruns[1] === 0,
+      `silence for want of mixed audio: ${ms(underruns[0])} ms before the frames slow down, ${ms(underruns[1])} ms after`,
+    );
+    assert(worstJump < 0.05, `the gain jumped by ${worstJump}`);
+    return `${blocks.length - first} blocks on one voice, no underrun; worst gain change per block ${worstJump.toFixed(4)}`;
   },
 
   // The player's footsteps (docs/behavior/player-footsteps.md): running in
