@@ -194,6 +194,9 @@ fn chrome(url: &str, id: &str, reports: &Receiver<String>, timeout: Duration) ->
             // The page's AudioContext runs without a gesture (synthesized
             // input is not one), so suites see it suspended and resumed.
             "--autoplay-policy=no-user-gesture-required",
+            // Silent on the machine running the tests: audio still runs and
+            // is measured inside the page, only the device output is muted.
+            "--mute-audio",
             &format!("--user-data-dir={}", profile.display()),
             url,
         ],
