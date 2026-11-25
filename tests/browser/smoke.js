@@ -895,16 +895,19 @@ export const tests = {
       const call = frame.contentWindow.volya.call;
       // Calls fail until its engine has started.
       const status = () => call("diagnostic_log_status").catch(() => null);
-      await until(async () => (await status())?.on, "the reloaded app's log isn't on", 20000);
-      // On is the setting: the log's store may still be opening.
-      let text;
-      await until(async () => ({ text } = (await call("diagnostic_log").catch(() => ({}))))?.text, "the reloaded app's log can't be read", 10000);
-      const events = JSON.parse(text).traceEvents;
-      assert(events.some((e) => e.name === "test kept"), "the log didn't survive the reload");
-      // Its own session, after the earlier one's events.
-      const now = events.findLast((e) => e.name === "session");
-      const before = events.find((e) => e.name === "test kept");
-      assert(now && now.pid !== before.pid && now.ts > before.ts, `sessions ${now?.pid} ${before.pid}`);
+      let on;
+      await until(async () => (on = await status())?.on, "the reloaded app's log isn't on", 20000);
+      const read = async () => JSON.parse((await call("diagnostic_log")).text);
+      // On once its store is open (#428): read at once, from storage.
+      let trace = await read();
+      assert(trace.otherData.stored, "the reloaded app's log isn't stored");
+      assert(trace.traceEvents.some((e) => e.name === "test kept"), "the log didn't survive the reload");
+      // Its own session, after the earlier one's events: its event comes
+      // once its graphics are set up.
+      const mine = () => trace.traceEvents.findLast((e) => e.name === "session" && e.pid === on.session.pid);
+      await until(async () => mine() ?? ((trace = await read()), mine()), "no session event of its own", 20000);
+      const before = trace.traceEvents.find((e) => e.name === "test kept");
+      assert(on.session.pid !== before.pid && mine().ts > before.ts, `sessions ${on.session.pid} ${before.pid}`);
       await frame.contentWindow.volya.diagnostics.setEnabled(false, call);
     } finally {
       localStorage.removeItem("volya-engine.diagnostic-log");
@@ -939,13 +942,9 @@ export const tests = {
       );
       return found;
     };
-    /**
-     * Session `pid`'s events as stored (not those waiting for the period's
-     * end), once the copy's log is open (it opens after logging turns on).
-     */
+    /** Session `pid`'s events as stored (not those waiting for the period's end). */
     const stored = async (call, pid) => {
-      let log = null;
-      await until(async () => (log = await call("diagnostic_log", { stored_only: true }).catch(() => null)), "the copy's log didn't open");
+      const log = await call("diagnostic_log", { stored_only: true });
       return JSON.parse(log.text).traceEvents.filter((e) => e.pid === pid);
     };
     try {

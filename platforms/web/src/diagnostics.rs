@@ -118,6 +118,25 @@ thread_local! {
     static ON: Cell<bool> = const { Cell::new(false) };
     /// Whether graphics are set up (the session event can be made).
     static STARTED: Cell<bool> = const { Cell::new(false) };
+    /// Settles once the last op on the log's store is done ([`exclusive`]).
+    static STORE_OPS: RefCell<Option<js_sys::Promise>> = const { RefCell::new(None) };
+}
+
+/// Runs `f` once the ops on the log's store before it are done, so one
+/// can't open the store's handles while another holds them (#428): the
+/// log is reported on, and read, only once its store is open.
+async fn exclusive<T>(f: impl Future<Output = T>) -> T {
+    let mut done = None;
+    let mine = js_sys::Promise::new(&mut |resolve, _| done = Some(resolve));
+    let before = STORE_OPS.with(|o| o.borrow_mut().replace(mine));
+    if let Some(before) = before {
+        let _ = wasm_bindgen_futures::JsFuture::from(before).await;
+    }
+    let result = f.await;
+    if let Some(done) = done {
+        let _ = done.call0(&JsValue::UNDEFINED);
+    }
+    result
 }
 
 /// Microseconds since the Unix epoch, at `performance.now()`'s resolution:
@@ -143,8 +162,21 @@ pub fn on() -> bool {
 /// `previous_end` (the `engine.end` an earlier session's page kept as it
 /// closed: `{pid, cat, ts, reason, message}`) is added to the log unless
 /// that session stored its own. Off, the period so far is stored,
-/// recording stops and the store closes; the log is kept.
-pub async fn set(on: bool, page: &serde_json::Value, previous_end: &serde_json::Value) {
+/// recording stops and the store closes; the log is kept. Answers the
+/// log's status after ([`status`]).
+pub async fn set(
+    on: bool,
+    page: &serde_json::Value,
+    previous_end: &serde_json::Value,
+) -> serde_json::Value {
+    exclusive(async {
+        switch(on, page, previous_end).await;
+        status_now().await
+    })
+    .await
+}
+
+async fn switch(on: bool, page: &serde_json::Value, previous_end: &serde_json::Value) {
     if on == self::on() {
         return;
     }
@@ -509,6 +541,10 @@ fn io_error(e: std::io::Error) -> JsValue {
 /// (unless `stored_only`, for tests: what is in storage now); while logging
 /// is off, the log kept from before.
 pub async fn trace(stored_only: bool) -> Result<serde_json::Value, JsValue> {
+    exclusive(trace_now(stored_only)).await
+}
+
+async fn trace_now(stored_only: bool) -> Result<serde_json::Value, JsValue> {
     let open = SESSION.with(|s| {
         let mut s = s.borrow_mut();
         let s = s.as_mut()?;
@@ -546,6 +582,10 @@ pub async fn trace(stored_only: bool) -> Result<serde_json::Value, JsValue> {
 /// run, the session's `{pid, cat}` (for the page's record of how it ended,
 /// main.js).
 pub async fn status() -> serde_json::Value {
+    exclusive(status_now()).await
+}
+
+async fn status_now() -> serde_json::Value {
     let open = SESSION.with(|s| Some(s.borrow().as_ref()?.log.as_ref()?.bytes()));
     let bytes = match open {
         Some(bytes) => bytes,
