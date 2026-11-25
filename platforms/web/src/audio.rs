@@ -193,6 +193,9 @@ pub fn sound_state() -> serde_json::Value {
                 "two_d": e.two_d,
                 "out": e.out,
                 "voice": e.voice,
+                "looped": e.looped,
+                "volume": e.volume,
+                "occlusion": e.occlusion,
             })).collect::<Vec<_>>(),
         })
     })

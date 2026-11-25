@@ -352,6 +352,22 @@ impl CollisionWorld {
     /// segment's cells are walked in order from the origin, so a hit near it
     /// ends the walk early.
     pub fn ray_hits(&self, origin: Vec3, dir: Vec3, length: f32) -> bool {
+        self.ray_any(origin, dir, length, |t| {
+            geometry::segment_hits_triangle(origin, dir, length, t)
+        })
+    }
+
+    /// Whether `hit` holds for any triangle (its corners) in the grid cells
+    /// the segment from `origin` along the unit direction `dir` for `length`
+    /// metres passes, walked in order from the origin and stopping at the
+    /// first. A triangle may be offered more than once.
+    pub fn ray_any(
+        &self,
+        origin: Vec3,
+        dir: Vec3,
+        length: f32,
+        mut hit: impl FnMut(&[Vec3; 3]) -> bool,
+    ) -> bool {
         let g = &self.grid;
         let start = [origin[0], origin[2]];
         let d = [dir[0], dir[2]];
@@ -394,7 +410,7 @@ impl CollisionWorld {
         loop {
             let c = cell[1] * g.size[0] + cell[0];
             for &t in &g.items[g.starts[c] as usize..g.starts[c + 1] as usize] {
-                if geometry::segment_hits_triangle(origin, dir, length, &self.corners(t)) {
+                if hit(&self.corners(t)) {
                     return true;
                 }
             }
