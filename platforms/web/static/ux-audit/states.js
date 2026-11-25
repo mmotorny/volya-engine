@@ -67,7 +67,7 @@ export const SECTIONS = [
       },
       {
         id: "home-checked-downloading",
-        name: "Downloading the update Check for updates found (automatic downloads)",
+        name: "Downloading an update found by Check for updates",
         game: imported,
         updates: { status: "downloading", requested: true, bytes: 1.9 * 2 ** 20 },
       },
