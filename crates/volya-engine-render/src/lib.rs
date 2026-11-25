@@ -322,7 +322,7 @@ impl Renderer {
         self.compat
     }
 
-    /// Grows the particles' vertex and index buffers to hold `particles`
+    /// Grows the particles' vertex buffer to hold `particles`
     /// sprites at once, so that no buffer is made while a level runs (made
     /// with its world).
     pub fn reserve_particles(&mut self, particles: usize) {
@@ -331,9 +331,9 @@ impl Renderer {
         }
     }
 
-    /// The particles' vertex and index buffers' sizes in bytes.
-    pub fn particle_buffer_sizes(&self) -> (u64, u64) {
-        self.particles.as_ref().map_or((0, 0), |p| p.buffer_sizes())
+    /// The particles' vertex buffer's size in bytes.
+    pub fn particle_buffer_size(&self) -> u64 {
+        self.particles.as_ref().map_or(0, |p| p.buffer_size())
     }
 
     /// Draws the world in [`Renderer::compat`] mode even where storage

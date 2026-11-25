@@ -394,7 +394,7 @@ fn a_campfire_is_drawn_from_game_data() {
         screen.set_effects_drawn(false);
         let (off, _) = capture(&screen);
         assert!(presenter.take_errors().is_empty());
-        assert!(r.particle_buffer_sizes().0 >= screen.world().particle_capacity as u64 * 96);
+        assert!(r.particle_buffer_size() >= screen.world().particle_capacity as u64 * 144);
         dump("VOLYA_DUMP_CAMPFIRE", &on, SIZE.width, SIZE.height);
         dump("VOLYA_DUMP_CAMPFIRE_OFF", &off, SIZE.width, SIZE.height);
         // Where the fire projects: within 200 px of its position on screen.

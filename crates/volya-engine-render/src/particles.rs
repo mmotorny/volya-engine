@@ -2,11 +2,14 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! Particle effects in the world pass (docs/behavior/particle-drawing.md
-//! sections 4.4 – 7): each effect one indexed batch of quads with its pass,
-//! queued where section 7.4 puts it, and the distortion pass (section
-//! 6.2; the composition is the presentation's `postprocess_d`, 6.3). Vertex and index data are written anew each
-//! frame into buffers kept and grown; indices are absolute (no base vertex), and nothing reads a
-//! storage buffer, so the WebGL 2 path draws them alike.
+//! sections 4.4 – 7): each effect one batch of quads with its pass, queued
+//! where section 7.4 puts it, and the distortion pass (section 6.2; the
+//! composition is the presentation's `postprocess_d`, 6.3). The vertices
+//! are written anew each frame into a buffer kept and grown, six a sprite
+//! (its two triangles), and drawn without indices: WebKit's WebGPU checks
+//! each indexed draw of a range it hasn't seen with a draw of its own on
+//! the GPU, and the batches' ranges change every frame (#439). Nothing
+//! reads a storage buffer, so the WebGL 2 path draws them alike.
 
 use std::collections::HashMap;
 
@@ -116,11 +119,15 @@ pub struct ParticleBatch {
 /// Bytes of one vertex: position, colour, uv (24, section 4.4).
 const VERTEX_BYTES: u64 = 24;
 
-/// The vertex and index buffers' first size: 10,922 particles' vertices,
-/// more than `l01_escape`'s effect objects can hold at once (8,122). Made
+/// Vertices of a sprite: triangles (0, 1, 2) and (3, 2, 1) of its four
+/// corners.
+const SPRITE_VERTICES: [usize; 6] = [0, 1, 2, 3, 2, 1];
+
+/// The vertex buffer's first size: 14,563 particles' vertices, more than
+/// `l01_escape`'s effect objects can hold at once (8,122). Made
 /// with the renderer: buffers made with a level's world stay allocated amid
 /// the level freed after it and split the wasm heap.
-const INITIAL_BYTES: u64 = 1024 * 1024;
+const INITIAL_BYTES: u64 = 2 * 1024 * 1024;
 
 /// The passes of the effects' shaders (program, blending, depth write):
 /// class `PARTICLE`'s six blendings (section 5.2) and the scripted
@@ -165,9 +172,8 @@ pub(crate) struct ParticlePipelines {
     black: wgpu::TextureView,
     frame: wgpu::Buffer,
     frame_group: wgpu::BindGroup,
-    /// The frames' vertex and index buffers, kept and grown.
+    /// The frames' vertex buffer, kept and grown.
     vertices: Option<wgpu::Buffer>,
-    indices: Option<wgpu::Buffer>,
 }
 
 /// A batch ready to draw.
@@ -176,7 +182,7 @@ pub(crate) struct Prepared {
     pub key: f32,
     key_pipeline: PipelineKey,
     group: wgpu::BindGroup,
-    indices: std::ops::Range<u32>,
+    vertices: std::ops::Range<u32>,
 }
 
 /// The frame's particle draws, with their buffers.
@@ -187,7 +193,6 @@ pub(crate) struct PreparedFrame {
     pub distortion_shown: bool,
     frame_group: wgpu::BindGroup,
     vertices: wgpu::Buffer,
-    indices: wgpu::Buffer,
 }
 
 impl PreparedFrame {
@@ -213,10 +218,8 @@ impl PreparedFrame {
         pass.set_bind_group(1, &draw.group, &[]);
         crate::stats::buffer();
         pass.set_vertex_buffer(0, self.vertices.slice(..));
-        crate::stats::buffer();
-        pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
         crate::stats::draw();
-        pass.draw_indexed(draw.indices.clone(), 0, 0..1);
+        pass.draw(draw.vertices.clone(), 0..1);
     }
 
     /// Draws every batch of `queue` in queue order.
@@ -385,7 +388,6 @@ impl ParticlePipelines {
             frame,
             frame_group,
             vertices: None,
-            indices: None,
         };
         // Every pass the effects' shaders resolve to, with each culling,
         // and buffers for the first level's effects: nothing of this is
@@ -415,40 +417,23 @@ impl ParticlePipelines {
             usage,
             "particle vertices",
         );
-        let usage = wgpu::BufferUsages::INDEX;
-        grown(
-            device,
-            &mut pipelines.indices,
-            INITIAL_BYTES,
-            usage,
-            "particle indices",
-        );
         pipelines
     }
 
-    /// Grows the vertex and index buffers to hold `particles` sprites.
+    /// Grows the vertex buffer to hold `particles` sprites.
     pub fn reserve(&mut self, device: &wgpu::Device, particles: usize) {
-        let quads = particles as u64;
         grown(
             device,
             &mut self.vertices,
-            quads * 4 * VERTEX_BYTES,
+            particles as u64 * SPRITE_VERTICES.len() as u64 * VERTEX_BYTES,
             wgpu::BufferUsages::VERTEX,
             "particle vertices",
         );
-        grown(
-            device,
-            &mut self.indices,
-            quads * 6 * 4,
-            wgpu::BufferUsages::INDEX,
-            "particle indices",
-        );
     }
 
-    /// The vertex and index buffers' sizes in bytes.
-    pub fn buffer_sizes(&self) -> (u64, u64) {
-        let size = |b: &Option<wgpu::Buffer>| b.as_ref().map_or(0, wgpu::Buffer::size);
-        (size(&self.vertices), size(&self.indices))
+    /// The vertex buffer's size in bytes.
+    pub fn buffer_size(&self) -> u64 {
+        self.vertices.as_ref().map_or(0, wgpu::Buffer::size)
     }
 
     fn pipeline(&mut self, device: &wgpu::Device, key: PipelineKey) {
@@ -524,7 +509,7 @@ impl ParticlePipelines {
         self.pipelines.insert(key, pipeline);
     }
 
-    /// Writes the frame's vertices, indices and constants and makes each
+    /// Writes the frame's vertices and constants and makes each
     /// batch's bind group.
     pub fn prepare(
         &mut self,
@@ -558,7 +543,6 @@ impl ParticlePipelines {
         }
         queue.write_buffer(&self.frame, 0, &constants);
         let mut vertex_bytes = Vec::new();
-        let mut index_data: Vec<u32> = Vec::new();
         let mut draws = Vec::with_capacity(batches.len());
         let distortion_shown = batches.iter().any(|b| {
             b.queue == ParticleQueue::Distortion
@@ -568,23 +552,20 @@ impl ParticlePipelines {
         });
         for b in batches {
             let first = (vertex_bytes.len() as u64 / VERTEX_BYTES) as u32;
-            for v in &b.vertices {
-                for c in v.position {
-                    vertex_bytes.extend_from_slice(&c.to_le_bytes());
-                }
-                // A, R, G, B from the top byte to (R, G, B, A) bytes.
-                let [a, r, g, bl] = v.colour.to_be_bytes();
-                vertex_bytes.extend_from_slice(&[r, g, bl, a]);
-                for c in v.uv {
-                    vertex_bytes.extend_from_slice(&c.to_le_bytes());
+            for q in b.vertices.as_chunks::<4>().0 {
+                for v in SPRITE_VERTICES.map(|i| q[i]) {
+                    for c in v.position {
+                        vertex_bytes.extend_from_slice(&c.to_le_bytes());
+                    }
+                    // A, R, G, B from the top byte to (R, G, B, A) bytes.
+                    let [a, r, g, bl] = v.colour.to_be_bytes();
+                    vertex_bytes.extend_from_slice(&[r, g, bl, a]);
+                    for c in v.uv {
+                        vertex_bytes.extend_from_slice(&c.to_le_bytes());
+                    }
                 }
             }
-            let start = index_data.len() as u32;
-            for q in 0..(b.vertices.len() / 4) as u32 {
-                let o = first + 4 * q;
-                // Triangles (0, 1, 2) and (3, 2, 1).
-                index_data.extend([o, o + 1, o + 2, o + 3, o + 2, o + 1]);
-            }
+            let end = (vertex_bytes.len() as u64 / VERTEX_BYTES) as u32;
             let key = PipelineKey {
                 program: b.pass.program,
                 blend: b.pass.blend,
@@ -640,13 +621,12 @@ impl ParticlePipelines {
                 key: b.key,
                 key_pipeline: key,
                 group,
-                indices: start..index_data.len() as u32,
+                vertices: first..end,
             });
         }
         // Kept from frame to frame, grown as needed, and written with
         // `Queue::write_buffer`, which copies nothing into the wasm heap on
         // the web (unlike a buffer mapped at creation).
-        let index_bytes: Vec<u8> = index_data.iter().flat_map(|i| i.to_le_bytes()).collect();
         let vertices = grown(
             device,
             &mut self.vertices,
@@ -654,21 +634,12 @@ impl ParticlePipelines {
             wgpu::BufferUsages::VERTEX,
             "particle vertices",
         );
-        let indices = grown(
-            device,
-            &mut self.indices,
-            index_bytes.len() as u64,
-            wgpu::BufferUsages::INDEX,
-            "particle indices",
-        );
         queue.write_buffer(&vertices, 0, &vertex_bytes);
-        queue.write_buffer(&indices, 0, &index_bytes);
         Some(PreparedFrame {
             draws,
             distortion_shown,
             frame_group: self.frame_group.clone(),
             vertices,
-            indices,
         })
     }
 
