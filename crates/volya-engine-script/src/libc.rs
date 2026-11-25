@@ -17,7 +17,7 @@ fn layout(size: usize) -> Layout {
 }
 
 /// Lua's allocator (`lua_Alloc`): Rust's allocator, aborting when memory
-/// runs out, so Lua never raises a memory error.
+/// runs out, so Lua never raises a memory error (a recoverable budget is #107).
 pub unsafe extern "C" fn lua_alloc(
     _ud: *mut c_void,
     ptr: *mut c_void,

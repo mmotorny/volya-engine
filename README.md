@@ -52,7 +52,7 @@ See [docs/testing.md](docs/testing.md) and [docs/architecture.md](docs/architect
 
 ## License
 
-BSD-3-Clause.
+BSD-3-Clause. The vendored LuaJIT 1.0.3 (`crates/volya-engine-script/vendor/luajit-1.0.3`) and the files derived from it are MIT-licensed; see their notices.
 
 ## Trademarks
 

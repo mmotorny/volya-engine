@@ -139,18 +139,17 @@ unsigned long strtoul(const char *s, char **end, int base)
   return negative ? 0UL - n : n;
 }
 
-/* The C standard's example generator. */
-static unsigned long next_rand = 1;
+int volya_rand(void); /* csrc/volya_rand.c */
+void volya_srand(unsigned seed);
 
 int rand(void)
 {
-  next_rand = next_rand * 1103515245 + 12345;
-  return (int)((next_rand / 65536) % 32768);
+  return volya_rand();
 }
 
 void srand(unsigned seed)
 {
-  next_rand = seed;
+  volya_srand(seed);
 }
 
 int abs(int x)

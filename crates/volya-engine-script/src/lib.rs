@@ -234,16 +234,19 @@ impl Lua {
             return Ok(());
         }
         let l = self.state.as_ptr();
-        // SAFETY: a failed protected call leaves its error at the top.
+        // SAFETY: a failed protected call leaves its error at the top. Only
+        // scalars are read (a table isn't traversed): nothing is pushed.
         let message = unsafe {
-            let message = match read_value(l, -1, &mut HashSet::new()) {
-                Ok(Value::String(s)) => String::from_utf8_lossy(&s).into_owned(),
-                Ok(Value::Number(n)) => format!("{n}"),
-                Ok(Value::Nil) => "(error object is nil)".to_owned(),
-                Ok(Value::Boolean(b)) => format!("(error object is a boolean value: {b})"),
-                Ok(Value::Table(_)) => "(error object is a table value)".to_owned(),
-                Ok(Value::Other(kind)) => format!("(error object is a {kind} value)"),
-                Err(e) => e,
+            let message = match ffi::lua_type(l, -1) {
+                ffi::LUA_TTABLE => "(error object is a table value)".to_owned(),
+                _ => match read_value(l, -1, &mut HashSet::new()) {
+                    Ok(Value::String(s)) => String::from_utf8_lossy(&s).into_owned(),
+                    Ok(Value::Number(n)) => number_text(n),
+                    Ok(Value::Nil) => "(error object is nil)".to_owned(),
+                    Ok(Value::Boolean(b)) => format!("(error object is a boolean value: {b})"),
+                    Ok(Value::Other(kind)) => format!("(error object is a {kind} value)"),
+                    Ok(Value::Table(_)) | Err(_) => unreachable!("not a table"),
+                },
             };
             ffi::lua_settop(l, -2);
             message
@@ -264,6 +267,16 @@ impl Drop for Lua {
         // SAFETY: the state is open; its functions are dropped after it closes.
         unsafe { ffi::lua_close(self.state.as_ptr()) };
     }
+}
+
+/// A number as Lua writes it (`%.14g`, spec 2.5).
+fn number_text(n: f64) -> String {
+    let sign = if n.is_sign_negative() && !n.is_nan() {
+        "-"
+    } else {
+        ""
+    };
+    format!("{sign}{}", libc::format_double(n, b'g', 14, false))
 }
 
 fn cstring(s: &str) -> Result<CString, Error> {
@@ -300,6 +313,13 @@ fn flatten(v: &Value, out: &mut Vec<FlatValue>) -> Result<(), Error> {
             flat.len = pairs.len();
             out.push(flat);
             for (k, v) in pairs {
+                match k {
+                    Value::Nil => return Err(api_error("a table key can't be nil")),
+                    Value::Number(n) if n.is_nan() => {
+                        return Err(api_error("a table key can't be NaN"));
+                    }
+                    _ => {}
+                }
                 flatten(k, out)?;
                 flatten(v, out)?;
             }
@@ -336,11 +356,17 @@ unsafe extern "C" fn read_results(ctx: *mut c_void, l: *mut LuaState, first: c_i
     }
 }
 
+/// Tables nested deeper than this don't cross to Rust. C reserves the stack
+/// slots reading them takes (2 per level) before Rust reads
+/// (`VOLYA_READ_SLOTS`, csrc/volya_glue.c).
+const MAX_DEPTH: usize = 64;
+
 /// Reads the value at `idx`, raising nothing: no metamethods, no
-/// conversions, no allocation inside Lua.
+/// conversions, and no allocation inside Lua, as the stack slots it pushes
+/// were reserved in C beforehand.
 ///
 /// # Safety
-/// `l` is open and `idx` valid.
+/// `l` is open, `idx` valid, and 2 × [`MAX_DEPTH`] stack slots reserved.
 unsafe fn read_value(
     l: *mut LuaState,
     idx: c_int,
@@ -367,8 +393,10 @@ unsafe fn read_value(
                 if !open.insert(table) {
                     return Err("a table containing itself can't be passed to Rust".into());
                 }
-                if ffi::lua_checkstack(l, 2) == 0 {
-                    return Err("tables nested too deep to pass to Rust".into());
+                if open.len() > MAX_DEPTH {
+                    return Err(format!(
+                        "tables nested more than {MAX_DEPTH} deep can't be passed to Rust"
+                    ));
                 }
                 let mut pairs = Vec::new();
                 ffi::lua_pushnil(l);

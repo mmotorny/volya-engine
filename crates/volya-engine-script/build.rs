@@ -25,21 +25,34 @@ const VENDORED: &[&str] = &[
 ];
 
 /// Our C files, built on every target.
-const SHIMS: &[&str] = &["volya_jit", "volya_coco", "volya_glue", "volya_printf"];
+const SHIMS: &[&str] = &[
+    "volya_jit",
+    "volya_coco",
+    "volya_glue",
+    "volya_printf",
+    "volya_rand",
+];
 
 /// The build's only change to a vendored file, applied to a copy in OUT_DIR:
 /// `luaconf.h` is Lua's configuration header, meant to be edited by embedders.
 /// Each `(from, to)` must match exactly once.
 const LUACONF_PATCH: &[(&str, &str)] = &[
     // The original's x86 build converts numbers to integers by rounding
-    // (docs/behavior/script-environment.md 2.5); every target we build for
-    // would take the plain cast, which truncates. `rint` rounds to nearest,
-    // ties to even, as the x86 default rounding mode does.
+    // (docs/behavior/script-environment.md 2.5), with this file's x86 branch:
+    // add 2^52 + 2^51 and take the low 32 bits of the double, which rounds to
+    // nearest (ties to even) and wraps out-of-range values. Every target we
+    // build for would take the plain cast, which truncates; the same method
+    // on all of them gives the x86 results, in range and out of it.
     (
         "#define lua_number2int(i,d)\t((i)=(int)(d))\n\
          #define lua_number2integer(i,d)\t((i)=(lua_Integer)(d))\n",
-        "#define lua_number2int(i,d)\t((i)=(int)__builtin_rint(d))\n\
-         #define lua_number2integer(i,d)\t((i)=(lua_Integer)__builtin_rint(d))\n",
+        "static inline int volya_number2int(double d) {\n\
+         \x20 union { double d; unsigned long long u; } c;\n\
+         \x20 c.d = d + 6755399441055744.0;\n\
+         \x20 return (int)(unsigned int)(c.u & 0xffffffffu);\n\
+         }\n\
+         #define lua_number2int(i,d)\t((i)=volya_number2int(d))\n\
+         #define lua_number2integer(i,d)\t((i)=(lua_Integer)volya_number2int(d))\n",
     ),
     // One string-to-number conversion on every target (src/libc.rs):
     // C library `strtod`s differ (C99 ones also read hexadecimal, `inf` and
@@ -66,7 +79,9 @@ fn main() {
         .include(&src)
         .opt_level(2)
         .warnings(false)
-        .flag_if_supported("-w");
+        .flag_if_supported("-w")
+        .flag("-include")
+        .flag(root.join("csrc/volya_rand.h").to_str().unwrap());
     if wasm {
         wasm_toolchain(&mut build, &root);
     }

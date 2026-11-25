@@ -142,10 +142,43 @@ fn api_checks() -> Result<(), String> {
     ensure(matches!(&other, Err(e) if e.kind == ErrorKind::Api), || {
         format!("other: {other:?}")
     })?;
-    let nil_key = lua.call("describe", &[Value::Table(vec![(Value::Nil, 1.0.into())])]);
+    for key in [Value::Nil, f64::NAN.into()] {
+        let bad_key = lua.call("describe", &[Value::Table(vec![(key, 1.0.into())])]);
+        ensure(
+            matches!(&bad_key, Err(e) if e.kind == ErrorKind::Api),
+            || format!("nil or NaN key: {bad_key:?}"),
+        )?;
+    }
+    let number_error = lua.exec("=raise", b"error(-1/3, 0)");
     ensure(
-        matches!(&nil_key, Err(e) if e.message.contains("table index is nil")),
-        || format!("nil key: {nil_key:?}"),
+        matches!(&number_error, Err(e) if e.message == "-0.33333333333333"),
+        || format!("number error: {number_error:?}"),
+    )?;
+
+    // Bytes, NUL included, cross both ways unchanged.
+    lua.exec("=identity", b"function identity(...) return ... end")
+        .map_err(|e| e.message)?;
+    let bytes = Value::String(vec![b'a', 0, 0xC0, 0, 0xFF, b'z']);
+    let nested = Value::Table(vec![(bytes.clone(), bytes.clone())]);
+    let back = lua
+        .call("identity", &[bytes.clone(), nested.clone()])
+        .map_err(|e| e.message)?;
+    ensure(back == [bytes, nested], || format!("bytes: {back:?}"))?;
+    let len = lua
+        .exec("=len", b"return #'a\0b', string.byte('a\0b', 2)")
+        .map_err(|e| e.message)?;
+    ensure(len == [3.0.into(), 0.0.into()], || {
+        format!("NUL in Lua: {len:?}")
+    })?;
+
+    // Nesting: 64 levels cross, deeper ones are refused.
+    let deep = |n| format!("local t = {{}} for i = 1, {n} do t = {{t}} end return t");
+    let ok = lua.exec("=deep", deep(63).as_bytes());
+    ensure(ok.is_ok(), || format!("64 levels: {ok:?}"))?;
+    let too_deep = lua.exec("=deep", deep(64).as_bytes());
+    ensure(
+        matches!(&too_deep, Err(e) if e.kind == ErrorKind::Api),
+        || format!("65 levels: {too_deep:?}"),
     )?;
 
     let mut calls = 0;

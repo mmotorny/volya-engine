@@ -97,7 +97,6 @@ unsafe extern "C" {
     pub fn lua_close(l: *mut LuaState);
     pub fn lua_gettop(l: *mut LuaState) -> c_int;
     pub fn lua_settop(l: *mut LuaState, idx: c_int);
-    pub fn lua_checkstack(l: *mut LuaState, sz: c_int) -> c_int;
     pub fn lua_type(l: *mut LuaState, idx: c_int) -> c_int;
     pub fn lua_tonumber(l: *mut LuaState, idx: c_int) -> f64;
     pub fn lua_toboolean(l: *mut LuaState, idx: c_int) -> c_int;

@@ -1,6 +1,10 @@
 /*
 ** SPDX-FileCopyrightText: 2026 Maksym Motorny
-** SPDX-License-Identifier: BSD-3-Clause
+** SPDX-FileCopyrightText: 2004-2005 Mike Pall
+** SPDX-License-Identifier: BSD-3-Clause AND MIT
+**
+** Derived from LuaJIT 1.0.3's lcoco.c (MIT; the notice is in
+** vendor/luajit-1.0.3/src/lcoco.c, kept there though not built).
 **
 ** Coco's C API (lcoco.h) without C stacks, in place of lcoco.c, whose
 ** context switches (stack switching with setjmp, ucontext or fibers) can't

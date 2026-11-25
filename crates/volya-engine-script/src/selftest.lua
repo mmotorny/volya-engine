@@ -104,9 +104,11 @@ eq(math.ldexp(0.75, 4), 12, "math.ldexp")
 local i, f = math.modf(-3.25)
 eq(i, -3, "math.modf integer")
 eq(f, -0.25, "math.modf fraction")
+-- One generator on every target (#106): the C standard's example rand.
 math.randomseed(42)
-local r = math.random(10)
-eq(r >= 1 and r <= 10 and r == math.floor(r), true, "math.random(10)")
+eq(math.random(10), 6, "math.random(10) after randomseed(42)")
+math.randomseed(42)
+eq(math.random(), 19081 / 32767, "math.random() after randomseed(42)")
 local x = math.random()
 eq(x >= 0 and x < 1, true, "math.random()")
 
@@ -118,6 +120,10 @@ eq(string.format("%d", -2.7), "-3", "%d of -2.7")
 eq(string.rep("x", 2.6), "xxx", "string.rep count 2.6")
 eq(string.sub("abcdef", 1.6), "bcdef", "string.sub start 1.6")
 eq(string.char(65.4), "A", "string.char(65.4)")
+-- Out of range, as x86: the low 32 bits.
+eq(string.format("%d", 2 ^ 32 + 5), "5", "%d of 2^32 + 5 wraps")
+eq(string.format("%d", 2 ^ 31), "-2147483648", "%d of 2^31 wraps")
+eq(string.format("%d", -2 ^ 31 - 1), "2147483647", "%d of -2^31 - 1 wraps")
 
 -- string.format.
 eq(string.format("%5.2f|%-5d|%05d|%+d|% d", 3.14159, 42, 42, 7, 7), " 3.14|42   |00042|+7| 7", "format numbers")

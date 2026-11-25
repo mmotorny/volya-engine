@@ -29,6 +29,11 @@ typedef struct volya_value {
   size_t len;        /* VOLYA_STRING: bytes; VOLYA_TABLE: key-value pairs */
 } volya_value;
 
+/* Stack slots reserved before Rust reads values: 2 per table level, up to
+** MAX_DEPTH (src/lib.rs) levels. With them, reading pushes without growing
+** the stack, so it allocates nothing and can raise nothing. */
+#define VOLYA_READ_SLOTS (2 * 64 + 2)
+
 /* Reads `count` values from the stack, from index `first`. */
 typedef void (*volya_reader)(void *ctx, lua_State *L, int first, int count);
 
@@ -169,6 +174,7 @@ static int run(lua_State *L)
   }
   push_values(L, r->args, r->nargs);
   lua_call(L, (int)r->nargs, LUA_MULTRET);
+  luaL_checkstack(L, VOLYA_READ_SLOTS, "no stack space to read the results");
   r->read(r->ctx, L, base + 1, lua_gettop(L) - base);
   return 0;
 }
@@ -186,7 +192,9 @@ static int trampoline(lua_State *L)
   volya_function f = (volya_function)lua_touserdata(L, lua_upvalueindex(1));
   void *data = lua_touserdata(L, lua_upvalueindex(2));
   volya_reply reply = {NULL, 0, NULL, 0, NULL, NULL};
-  int top = lua_gettop(L);
+  int top;
+  luaL_checkstack(L, VOLYA_READ_SLOTS, "no stack space to read the arguments");
+  top = lua_gettop(L);
   f(data, L, &reply);
   /* No Rust frames from here on. If a push raises, the reply leaks. */
   if (reply.error != NULL) {
