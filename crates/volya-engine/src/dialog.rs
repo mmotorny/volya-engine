@@ -308,7 +308,9 @@ pub struct MessageBoxDesc {
     pub frame: StaticDesc,
     pub picture: StaticDesc,
     pub text: StaticDesc,
-    /// By the box's `type`: `yes_no` has Yes and No, `ok` has OK.
+    /// The box's `type`.
+    pub kind: Option<String>,
+    /// By the box's `type`: `ok` has OK, others Yes and No.
     pub buttons: Vec<(Answer, StaticDesc)>,
 }
 
@@ -317,8 +319,9 @@ impl MessageBoxDesc {
     pub fn read(doc: &Document, name: &str, colors: &ColorDefs) -> io::Result<Self> {
         let e = require(doc, name, 0)?;
         let part = |p: &str| StaticDesc::read(require(doc, &format!("{name}:{p}"), 0)?, colors);
-        // `ok` has OK; the others (`yes_no`, and the quit boxes' own types)
-        // have Yes and No (sections 6, title-menu.md 4.5).
+        // Section 6 gives `ok` OK and `yes_no` Yes and No. Every other type
+        // (the quit boxes' own) also gets Yes and No: our choice, from the
+        // buttons title-menu.md 4.5 names for those boxes.
         let answers: &[(Answer, &str)] = match e.attr("type") {
             Some("ok") => &[(Answer::Ok, "button_ok")],
             _ => &[(Answer::Yes, "button_yes"), (Answer::No, "button_no")],
@@ -332,8 +335,18 @@ impl MessageBoxDesc {
             frame: StaticDesc::read(e, colors)?,
             picture: part("picture")?,
             text: part("message_text")?,
+            kind: e.attr("type").map(str::to_owned),
             buttons,
         })
+    }
+
+    /// The box with text key `key` in place of the data's (the menu sets a
+    /// box's text, title-menu.md 4.5).
+    pub fn with_text(mut self, key: &str) -> Self {
+        if let Some(t) = &mut self.text.text {
+            t.key = Some(key.to_owned());
+        }
+        self
     }
 
     fn origin(&self) -> Rect {

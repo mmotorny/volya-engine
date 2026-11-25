@@ -17,15 +17,15 @@ use serde::Serialize;
 
 use crate::audio::AudioOut;
 use crate::core::console::Console;
-use crate::core::input::Input;
+use crate::core::input::{Control, Input};
 use crate::core::vfs::Vfs;
 use crate::data::GameData;
 use crate::dialog::{self, Answer, Ev, MessageBox, MessageBoxState};
 use crate::draw::Ctx;
 use crate::options::{OptionsData, OptionsScreen, OptionsState};
 use crate::save_load::{
-    CONFIRM_LOAD_SAVE, FieldFont, LoadScreen, LoadScreenState, QUIT_GAME, QUIT_WINDOWS,
-    SaveLoadData, SaveScreen, SaveScreenState,
+    CONFIRM_LOAD_SAVE, FieldFont, LoadScreen, LoadScreenState, QUIT_GAME, QUIT_GAME_TEXT,
+    QUIT_WINDOWS, SaveLoadData, SaveScreen, SaveScreenState,
 };
 use crate::saved_games::SavedGames;
 use crate::scene::Scene;
@@ -96,6 +96,9 @@ pub struct MenuScreens {
     error: Option<String>,
     /// The previous frame's time (the left stick's cursor speed).
     last_now: Option<u64>,
+    /// The time of the last hold step of any scroll bar, 0 at program
+    /// start (save-load-screens.md section 3.5).
+    last_hold: u64,
 }
 
 impl MenuScreens {
@@ -172,10 +175,10 @@ impl MenuScreens {
         match self.sub {
             Some(Sub::Options) => {
                 // The menu is hidden meanwhile (title-menu.md 4.5); its music
-                // plays on.
+                // plays on, not restarted (section 6).
                 let screen = self.options.as_mut().expect("open options");
                 screen.update(data, console, native, now, input);
-                menu.update(data, now, &none, audio);
+                menu.update_hidden(data, now);
                 if let Some(closed) = screen.take_closed() {
                     self.sub = None;
                     menu.set_cursor(data, input.cursor_ui());
@@ -189,9 +192,17 @@ impl MenuScreens {
                     self.sub = None;
                     return out;
                 };
-                let o = screen.update(data, sl, &mut self.saves, field_font, now, input);
+                let o = screen.update(
+                    data,
+                    sl,
+                    &mut self.saves,
+                    field_font,
+                    now,
+                    input,
+                    &mut self.last_hold,
+                );
                 self.deleted.extend(o.deleted);
-                menu.update(data, now, &none, audio);
+                menu.update_hidden(data, now);
                 if o.closed {
                     self.sub = None;
                     menu.set_cursor(data, screen.cursor());
@@ -203,9 +214,17 @@ impl MenuScreens {
                     self.sub = None;
                     return out;
                 };
-                let o = screen.update(tree, data, sl, &mut self.saves, now, input);
+                let o = screen.update(
+                    tree,
+                    data,
+                    sl,
+                    &mut self.saves,
+                    now,
+                    input,
+                    &mut self.last_hold,
+                );
                 self.deleted.extend(o.deleted);
-                menu.update(data, now, &none, audio);
+                menu.update_hidden(data, now);
                 if o.closed {
                     self.sub = None;
                     menu.set_cursor(data, screen.cursor());
@@ -252,6 +271,16 @@ impl MenuScreens {
             }
             return out;
         }
+        // During a game the key bound to `quit` toggles the menu
+        // (save-load-screens.md section 2): on its main page it closes it.
+        let quit_key = input.device_changes().iter().any(|&(c, pressed)| {
+            pressed && matches!(c, Control::Key(k) if data.quit_keys.contains(&k))
+        });
+        if menu.in_game() && quit_key {
+            menu.stop(audio);
+            out.return_to_game = true;
+            return out;
+        }
         menu.update(data, now, input, audio);
         out.new_game = menu.take_new_game();
         let Some(request) = menu.take_request() else {
@@ -274,21 +303,24 @@ impl MenuScreens {
                 menu.in_game(),
             ),
             Request::QuitWindows => self.show_box(
-                tree,
-                data,
-                video,
+                (tree, data, video),
                 QUIT_WINDOWS,
+                None,
                 MenuBox::QuitWindows,
                 cursor,
             ),
-            Request::QuitGame => {
-                self.show_box(tree, data, video, QUIT_GAME, MenuBox::QuitGame, cursor)
-            }
+            // Title-menu 4.5: the single-player text.
+            Request::QuitGame => self.show_box(
+                (tree, data, video),
+                QUIT_GAME,
+                Some(QUIT_GAME_TEXT),
+                MenuBox::QuitGame,
+                cursor,
+            ),
             Request::LastSave if menu.in_game() => self.show_box(
-                tree,
-                data,
-                video,
+                (tree, data, video),
                 CONFIRM_LOAD_SAVE,
+                None,
                 MenuBox::LastSave,
                 cursor,
             ),
@@ -361,16 +393,19 @@ impl MenuScreens {
         Ok(())
     }
 
+    /// Shows box `name`, with text key `text` in place of the data's.
     fn show_box(
         &mut self,
-        tree: &dyn Vfs,
-        data: &GameData,
-        video: Resolution,
+        (tree, data, video): (&dyn Vfs, &GameData, Resolution),
         name: &str,
+        text: Option<&str>,
         purpose: MenuBox,
         cursor: [f32; 2],
     ) -> io::Result<()> {
-        let desc = self.save_load(tree, data, video)?.message_box(data, name)?;
+        let mut desc = self.save_load(tree, data, video)?.message_box(data, name)?;
+        if let Some(key) = text {
+            desc = desc.with_text(key);
+        }
         self.message = Some((MessageBox::new(desc, cursor), purpose));
         Ok(())
     }
@@ -567,7 +602,7 @@ mod tests {
     #[test]
     fn quitting_the_game_asks_first() {
         let mut r = Run::new(true);
-        assert_eq!(r.item(5), MenuFrame::default());
+        assert_eq!(r.item(6), MenuFrame::default());
         let message = r.state().message.expect("the box");
         assert_eq!(message.name, "message_box_quit_game");
         assert_eq!(message.text, "ui_mm_quit_game_message");
@@ -581,7 +616,7 @@ mod tests {
         r.key(Key::Enter);
         r.key(Key::Escape);
         assert!(r.state().message.is_some());
-        assert_eq!(r.state().menu.selected, 5);
+        assert_eq!(r.state().menu.selected, 6);
         // "Нет" closes it; the menu stays.
         assert_eq!(r.tap(centre(message.buttons[1].rect)), MenuFrame::default());
         assert!(r.state().message.is_none());
@@ -608,7 +643,7 @@ mod tests {
     #[test]
     fn the_load_screen_lists_no_saves_and_escape_returns() {
         let mut r = Run::new(true);
-        r.item(1);
+        r.item(2);
         let load = r.state().load_screen.expect("the load screen");
         assert!(load.screen.list.rows.is_empty());
         assert!(!load.screen.list.scroll_bar);
@@ -638,7 +673,7 @@ mod tests {
         r.key(Key::Escape);
         let s = r.state();
         assert!(s.load_screen.is_none());
-        assert_eq!(s.menu.selected, 1);
+        assert_eq!(s.menu.selected, 2);
         // Cancel too.
         r.key(Key::Enter);
         let cancel = centre(r.state().load_screen.unwrap().screen.buttons[2].rect);
@@ -649,7 +684,7 @@ mod tests {
     #[test]
     fn the_save_screen_asks_for_a_name_and_saving_is_stubbed() {
         let mut r = Run::new(true);
-        r.item(2);
+        r.item(3);
         let s = r.state().save_screen.expect("the save screen");
         assert_eq!(s.screen.list.rect, [490.0, 274.0, 429.0, 287.0]);
         assert_eq!(s.screen.list.visible, 15);
@@ -680,9 +715,11 @@ mod tests {
         r.key(Key::Escape);
         assert!(r.state().save_screen.is_none());
         // The screen is kept within one menu opening (section 12) and made
-        // anew at the next.
+        // anew at the next; the field was cleared.
         r.key(Key::Enter);
-        assert_eq!(r.state().save_screen.unwrap().screen.stubbed.len(), 1);
+        let s = r.state().save_screen.unwrap();
+        assert_eq!(s.screen.stubbed.len(), 1);
+        assert_eq!(s.name, "", "Esc cleared the field");
         r.key(Key::Escape);
         r.screens.menu_opened();
         r.key(Key::Enter);
@@ -692,7 +729,7 @@ mod tests {
     #[test]
     fn a_name_with_a_forbidden_character_returns_without_saving() {
         let mut r = Run::new(true);
-        r.item(2);
+        r.item(3);
         r.tap([500.0, 234.0]);
         for (key, pressed) in [
             (Key::LeftShift, true),
@@ -712,17 +749,20 @@ mod tests {
     #[test]
     fn deleting_and_overwriting_ask_first() {
         let mut r = Run::new(true);
-        let file = |path: &str, contents: Option<Vec<u8>>| SavedFile {
+        let file = |path: &str, head: Vec<u8>| SavedFile {
             path: path.into(),
             modified_ms: 2.0,
             modified: LocalTime::default(),
-            contents,
+            head,
         };
-        r.screens.set_saves(SavedGames::new(vec![
-            file("Alpha.sav", Some(vec![0xff, 0xff, 0xff, 0xff, 3, 0, 0, 0])),
-            file("alpha.dds", None),
-        ]));
-        r.item(2);
+        r.screens.set_saves(SavedGames::new(
+            vec![
+                file("Alpha.sav", vec![0xff, 0xff, 0xff, 0xff, 3, 0, 0, 0]),
+                file("alpha.dds", Vec::new()),
+            ],
+            None,
+        ));
+        r.item(3);
         // A row click (the mouse over it first) puts its name in the field.
         r.input.handle(Event::PointerMoved {
             at: [600.0, 274.0 + 9.0],
@@ -760,10 +800,71 @@ mod tests {
     }
 
     #[test]
+    fn a_tapped_row_puts_its_name_in_the_field() {
+        let mut r = Run::new(true);
+        let file = |path: &str, ms: f64| SavedFile {
+            path: path.into(),
+            modified_ms: ms,
+            modified: LocalTime::default(),
+            head: Vec::new(),
+        };
+        r.screens.set_saves(SavedGames::new(
+            vec![file("first.sav", 2.0), file("second.sav", 1.0)],
+            None,
+        ));
+        r.item(3);
+        // No hover before: the tap moves, presses and releases at once.
+        r.tap([600.0, 274.0 + 18.0 + 9.0]);
+        let s = r.state().save_screen.unwrap();
+        assert_eq!(
+            (s.name.as_str(), s.screen.list.selected),
+            ("second", Some(1))
+        );
+        assert_eq!(s.screen.list.focused, Some(1));
+    }
+
+    #[test]
+    fn the_quit_key_closes_the_in_game_menu_even_rebound() {
+        let mut r = Run::new(true);
+        r.data.quit_keys = vec![Key::F10];
+        assert!(r.key(Key::F10).return_to_game);
+        // On the title screen it does nothing.
+        let mut r = Run::new(false);
+        r.data.quit_keys = vec![Key::F10];
+        assert_eq!(r.key(Key::F10), MenuFrame::default());
+    }
+
+    #[test]
+    fn the_in_game_last_save_item_asks_then_does_nothing_yet() {
+        let mut r = Run::new(true);
+        assert_eq!(r.state().menu.items[1].name, "btn_lastsave");
+        r.item(1);
+        let m = r.state().message.expect("the box");
+        assert_eq!(m.name, "message_box_confirm_load_save");
+        // TODO(#75): "Да" loads the last save; nothing happens yet.
+        assert_eq!(r.tap(centre(m.buttons[0].rect)), MenuFrame::default());
+        assert!(r.state().message.is_none());
+    }
+
+    #[test]
+    fn title_music_does_not_restart_under_a_sub_screen() {
+        let mut r = Run::new(false);
+        r.item(1);
+        assert!(r.state().load_screen.is_some());
+        let voices = r.state().menu.music.voices.unwrap();
+        r.audio.end(voices[0]);
+        r.frame();
+        assert_eq!(r.state().menu.music.starts, 1, "not under the load screen");
+        r.key(Key::Escape);
+        r.frame();
+        assert_eq!(r.state().menu.music.starts, 2, "again on the menu");
+    }
+
+    #[test]
     fn options_open_from_the_in_game_menu() {
         // The fixture has no options layout: the menu stays, saying why.
         let mut r = Run::new(true);
-        r.item(3);
+        r.item(4);
         let s = r.state();
         assert!(s.options.is_none());
         assert!(s.error.unwrap().contains("ui_mm_opt.xml"));

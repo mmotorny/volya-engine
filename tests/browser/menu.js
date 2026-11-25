@@ -705,10 +705,10 @@ export const tests = {
     needsGame();
     key("Escape");
     let s = await until((s) => inGame(s), "the in-game menu");
-    // title-menu.md section 4.1: no valid last save, so no last-save item.
+    // title-menu.md section 4.1: the data's list, the last-save item included.
     assertEqual(
       inGame(s).items.map((i) => i.name),
-      ["btn_ret", "btn_load", "btn_save", "btn_options", "btn_credits", "btn_quit_to_mm", "btn_quit"],
+      ["btn_ret", "btn_lastsave", "btn_load", "btn_save", "btn_options", "btn_credits", "btn_quit_to_mm", "btn_quit"],
       "items",
     );
     const stopped = s.level.game_time;

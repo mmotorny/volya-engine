@@ -26,6 +26,7 @@
 //! | `["tbutton", name, pressed]` | an on-screen button ([`TouchButton::name`]) |
 //! | `["wheel", steps]` | mouse-wheel steps, negative up |
 //! | `["blur"]` | the page lost focus: release everything |
+//! | `["unlock"]` | the page lost its pointer lock (sent after `["blur"]`) |
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -284,6 +285,7 @@ fn decode(message: &Array) -> Result<Option<Vec<Event>>, JsValue> {
             steps: num(1)? as i32,
         },
         "blur" => return Ok(None),
+        "unlock" => Event::PointerUnlocked,
         _ => return Err(bad()),
     };
     Ok(Some(vec![event]))

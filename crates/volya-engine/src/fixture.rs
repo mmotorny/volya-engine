@@ -108,10 +108,14 @@ fn message_boxes() -> String {
     for (name, kind, text) in [
         (
             "message_box_quit_windows",
-            "yes_no",
+            "quit_windows",
             "ui_mm_quit_windows_message",
         ),
-        ("message_box_quit_game", "yes_no", "ui_mm_quit_game_message"),
+        (
+            "message_box_quit_game",
+            "quit_game",
+            "ui_st_want_to_leave_game_q",
+        ),
         (
             "message_box_confirm_load_save",
             "yes_no",

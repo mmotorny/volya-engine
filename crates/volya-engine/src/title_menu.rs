@@ -36,8 +36,6 @@ use volya_engine_formats::ui::title_menu::MenuList;
 pub const MAIN_LIST: &str = "menu_main";
 pub const LAST_SAVE_LIST: &str = "menu_main_last_save";
 pub const SINGLE_LIST: &str = "menu_main_single";
-/// The last-save item, the only conditional one (section 4.1).
-const LAST_SAVE_ITEM: &str = "btn_lastsave";
 /// The difficulty page (section 4.5).
 pub const NEW_GAME_LIST: &str = "menu_new_game";
 /// Shortest bar move, milliseconds (section 4.3).
@@ -141,7 +139,7 @@ pub struct Activation {
 pub struct TitleMenu {
     /// The list shown: the main page's or [`NEW_GAME_LIST`].
     list: &'static str,
-    /// Its items, the last-save item only with a valid last save.
+    /// Its items.
     items: MenuList,
     /// The main page's list, chosen at opening.
     main: &'static str,
@@ -218,18 +216,13 @@ impl TitleMenu {
         menu
     }
 
-    /// List `name`'s items: the last-save item only with a valid last save
-    /// (section 4.1).
-    fn items(data: &GameData, name: &str, opening: Opening) -> MenuList {
-        let mut list = data
-            .menu
+    /// List `name`'s items as the data defines them (section 4.1: only the
+    /// title screen's choice of list depends on the last save).
+    fn items(data: &GameData, name: &str, _opening: Opening) -> MenuList {
+        data.menu
             .menu(name)
             .unwrap_or_else(|| panic!("ui_mm_main.xml has no {name}"))
-            .clone();
-        if !opening.last_save {
-            list.buttons.retain(|b| b.name != LAST_SAVE_ITEM);
-        }
-        list
+            .clone()
     }
 
     fn list(&self, _data: &GameData) -> &MenuList {
@@ -443,14 +436,7 @@ impl TitleMenu {
                 _ => {}
             }
         }
-        if let Some(m) = self.motion {
-            let y = m.y_at(now).unwrap_or(m.to);
-            if m.y_at(now).is_none() {
-                self.motion = None;
-            }
-            self.bar_y = y;
-            self.angle = wheel_angle(y, data.menu.left_anim.window.height);
-        }
+        self.animate(data, now);
         if self.quit {
             self.stop(audio);
             return;
@@ -464,6 +450,25 @@ impl TitleMenu {
         {
             self.start_music(data, audio);
         }
+    }
+
+    /// The bar's move and the wheels at `now`.
+    fn animate(&mut self, data: &GameData, now: u64) {
+        if let Some(m) = self.motion {
+            let y = m.y_at(now).unwrap_or(m.to);
+            if m.y_at(now).is_none() {
+                self.motion = None;
+            }
+            self.bar_y = y;
+            self.angle = wheel_angle(y, data.menu.left_anim.window.height);
+        }
+    }
+
+    /// A frame at `now` while a sub-screen hides the menu window: the bar
+    /// finishes its move; the music plays on but is not restarted, which
+    /// happens only while the window is open (section 6).
+    pub fn update_hidden(&mut self, data: &GameData, now: u64) {
+        self.animate(data, now);
     }
 
     /// Picks a track (pseudo-randomly, whatever `random` says) and starts
@@ -921,7 +926,7 @@ mod tests {
     }
 
     #[test]
-    fn in_game_list_without_a_valid_last_save() {
+    fn in_game_list_as_the_data_defines_it() {
         let tree = fixture::tree();
         let data = fixture::data(&tree);
         let mut audio = FakeAudio::default();
@@ -940,13 +945,15 @@ mod tests {
                 .map(|i| i.name)
                 .collect()
         };
-        // Section 4.1: `menu_main_single`, the last-save item only with a
-        // valid last save.
+        // Section 4.1: `menu_main_single` as the data defines it, the
+        // last-save item included (only the title screen's list depends on
+        // the last save).
         assert_eq!(menu.state(&data, 0).list, "menu_main_single");
         assert_eq!(
             names(&menu),
             [
                 "btn_ret",
+                "btn_lastsave",
                 "btn_load",
                 "btn_save",
                 "btn_options",
@@ -955,7 +962,7 @@ mod tests {
                 "btn_quit"
             ]
         );
-        assert_eq!(names(&open(true, &mut audio))[1], "btn_lastsave");
+        assert_eq!(names(&open(true, &mut audio)), names(&menu));
         assert!(menu.in_game());
         // Escape on the main page returns to the game; so does item 0.
         let mut input = Input::new();
@@ -967,11 +974,12 @@ mod tests {
         assert_eq!(menu.take_request(), Some(Request::Return));
         for (i, request) in [
             (0, Request::Return),
-            (1, Request::Load),
-            (2, Request::Save),
-            (3, Request::Options),
-            (5, Request::QuitGame),
-            (6, Request::QuitWindows),
+            (1, Request::LastSave),
+            (2, Request::Load),
+            (3, Request::Save),
+            (4, Request::Options),
+            (6, Request::QuitGame),
+            (7, Request::QuitWindows),
         ] {
             let mut menu = open(false, &mut audio);
             let mut input = Input::new();

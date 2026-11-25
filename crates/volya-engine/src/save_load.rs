@@ -52,6 +52,8 @@ pub const INVALID_SAVED_GAME: &str = "message_box_invalid_saved_game";
 /// The menu's own boxes (title-menu.md section 4.5).
 pub const QUIT_WINDOWS: &str = "message_box_quit_windows";
 pub const QUIT_GAME: &str = "message_box_quit_game";
+/// The quit-game box's text in single player (title-menu.md 4.5).
+pub const QUIT_GAME_TEXT: &str = "ui_mm_quit_game_message";
 
 /// Row texts (section 3.4): the name and the time, each at its position
 /// in the row, in its field.
@@ -228,7 +230,7 @@ impl SaveLoadData {
             p.thumb.clone(),
         ]);
         strings.extend(
-            ["st_level", "ui_inv_time", "ui_inv_health"]
+            ["st_level", "ui_inv_time", "ui_inv_health", QUIT_GAME_TEXT]
                 .iter()
                 .map(|s| s.to_string()),
         );
@@ -417,13 +419,15 @@ impl SaveList {
     }
 
     fn event(&mut self, e: Ev, cursor: [f32; 2]) -> ListEvent {
+        let previous = self.last_cursor;
         if matches!(e, Ev::Move(_) | Ev::Press { .. } | Ev::Release) {
             self.last_cursor = cursor;
         }
         if let (Some(top), Ev::Move(_)) = (self.drag, e) {
-            // The thumb takes every movement while dragged.
+            // The thumb takes every movement while dragged, moving by the
+            // cursor's vertical movement.
             let t = self.thumb_rect();
-            let dy = cursor[1] - (t.y + t.height / 2.0);
+            let dy = cursor[1] - previous[1];
             let near = cursor[0] >= t.x - DRAG_REACH
                 && cursor[0] < t.x + t.width + DRAG_REACH
                 && cursor[1] >= t.y - DRAG_REACH
@@ -451,7 +455,12 @@ impl SaveList {
         if let Ev::Press { .. } = e {
             for i in 0..self.rows.len() {
                 if let Some(r) = self.row_rect(i) {
-                    self.rows[i].1.frame(r, cursor);
+                    // A press finds the flags, and the focused row, as the
+                    // cursor stands (our choice, so a tap, which moves,
+                    // presses and releases in one frame, focuses its row).
+                    if self.rows[i].1.frame(r, cursor) == Some(Over::Entered) {
+                        self.focused = Some(i);
+                    }
                 }
             }
         }
@@ -512,10 +521,12 @@ impl SaveList {
         self.first = self.first.min(self.max_first());
     }
 
+    fn selected_row(&self) -> Option<&SaveRow> {
+        self.selected.and_then(|i| self.rows.get(i)).map(|(r, _)| r)
+    }
+
     fn selected_name(&self) -> Option<&str> {
-        self.selected
-            .and_then(|i| self.rows.get(i))
-            .map(|(r, _)| r.name.as_str())
+        self.selected_row().map(|r| r.name.as_str())
     }
 
     fn targets(&self) -> Vec<Rect> {
@@ -733,24 +744,45 @@ struct NameField {
 }
 
 impl NameField {
+    /// The text's length in characters.
+    fn chars(&self) -> usize {
+        self.text.chars().count()
+    }
+
+    /// The byte offset of character `i`.
+    fn byte(&self, i: usize) -> usize {
+        self.text
+            .char_indices()
+            .nth(i)
+            .map_or(self.text.len(), |(b, _)| b)
+    }
+
+    /// The text before the caret.
+    fn before_caret(&self) -> &str {
+        &self.text[..self.byte(self.caret)]
+    }
+
     /// Applies key `key` once.
     fn apply(&mut self, key: Key, font: Option<&FieldFont>) {
         match key {
             Key::LeftShift | Key::RightShift => self.shift = true,
             Key::Backspace if self.caret > 0 => {
                 self.caret -= 1;
-                self.text.remove(self.caret);
+                let at = self.byte(self.caret);
+                self.text.remove(at);
             }
-            Key::Delete if self.caret < self.text.len() => {
-                self.text.remove(self.caret);
+            Key::Delete if self.caret < self.chars() => {
+                let at = self.byte(self.caret);
+                self.text.remove(at);
             }
             Key::Left if self.caret > 0 => self.caret -= 1,
-            Key::Right if self.caret < self.text.len() => self.caret += 1,
+            Key::Right if self.caret < self.chars() => self.caret += 1,
             _ => {
                 if let Some(c) = typed(key, self.shift) {
                     let fits = font.is_none_or(|f| f.width(&self.text) <= FIELD_MAX_WIDTH);
                     if fits {
-                        self.text.insert(self.caret, c);
+                        let at = self.byte(self.caret);
+                        self.text.insert(at, c);
                         self.caret += 1;
                     }
                 }
@@ -823,14 +855,14 @@ impl NameField {
     fn focus(&mut self) {
         if !self.focused {
             self.focused = true;
-            self.caret = self.text.len();
+            self.caret = self.chars();
             self.repeat = None;
         }
     }
 
     fn set(&mut self, text: &str) {
         self.text = text.to_owned();
-        self.caret = self.caret.min(self.text.len());
+        self.caret = self.caret.min(self.chars());
     }
 }
 
@@ -857,8 +889,6 @@ struct Screen {
     cursor: [f32; 2],
     last_update: Option<u64>,
     left_was_held: bool,
-    /// The shared time of the last hold step (section 3.5).
-    last_hold: u64,
     stubbed: Vec<Stubbed>,
 }
 
@@ -875,7 +905,6 @@ impl Screen {
             cursor: [512.0, 384.0],
             last_update: None,
             left_was_held: false,
-            last_hold: 0,
             stubbed: Vec::new(),
         }
     }
@@ -1032,11 +1061,13 @@ impl Screen {
         }
     }
 
-    fn hold(&mut self, now: u64, input: &Input) {
+    /// Hold steps (section 3.5) at `now`; `last_hold` is the time of the
+    /// last one, shared by every scroll bar.
+    fn hold(&mut self, now: u64, input: &Input, last_hold: &mut u64) {
         let held = dialog::left_held(input);
         if held && self.left_was_held && self.message.is_none() {
             let c = self.cursor;
-            self.list.held(now, &mut self.last_hold, c);
+            self.list.held(now, last_hold, c);
         }
         self.left_was_held = held;
     }
@@ -1063,10 +1094,10 @@ impl Screen {
 
 /// Deletes the selected save (section 3.6) once confirmed.
 fn delete_selected(list: &mut SaveList, saves: &mut SavedGames, out: &mut Outcome) {
-    let Some(name) = list.selected_name().map(str::to_owned) else {
+    let Some(path) = list.selected_row().map(|r| r.path.clone()) else {
         return;
     };
-    out.deleted.extend(saves.delete(&name));
+    out.deleted.extend(saves.delete(&path));
     list.remove_selected();
 }
 
@@ -1112,6 +1143,7 @@ impl SaveScreen {
     }
 
     /// One frame at `now`.
+    #[allow(clippy::too_many_arguments)]
     pub fn update(
         &mut self,
         data: &GameData,
@@ -1120,6 +1152,7 @@ impl SaveScreen {
         font: Option<&FieldFont>,
         now: u64,
         input: &Input,
+        last_hold: &mut u64,
     ) -> Outcome {
         let mut out = Outcome::default();
         for mut e in self.screen.events(data, now, input) {
@@ -1173,7 +1206,7 @@ impl SaveScreen {
             }
         }
         self.field.frame(now, font);
-        self.screen.hold(now, input);
+        self.screen.hold(now, input, last_hold);
         self.screen.frame();
         out
     }
@@ -1242,7 +1275,7 @@ impl SaveScreen {
         )?;
         if self.field.focused {
             let (sx, _) = ctx.scale();
-            let before = crate::data::encode(&self.field.text[..self.field.caret]);
+            let before = crate::data::encode(self.field.before_caret());
             let width = ctx
                 .assets
                 .fonts(ctx.tree, ctx.data, ctx.resolution.height)?
@@ -1444,6 +1477,7 @@ impl LoadScreen {
         saves: &mut SavedGames,
         now: u64,
         input: &Input,
+        last_hold: &mut u64,
     ) -> Outcome {
         let mut out = Outcome::default();
         for mut e in self.screen.events(data, now, input) {
@@ -1496,7 +1530,7 @@ impl LoadScreen {
                 }
             }
         }
-        self.screen.hold(now, input);
+        self.screen.hold(now, input, last_hold);
         self.screen.frame();
         out
     }
@@ -1507,14 +1541,22 @@ impl LoadScreen {
             return;
         };
         self.caption = name.clone();
-        let contents = saves.get(&name).and_then(|f| f.contents.clone());
-        match contents {
+        let path = self
+            .screen
+            .list
+            .selected_row()
+            .map(|r| r.path.clone())
+            .unwrap_or_default();
+        match saves.read(&path) {
             None => {
                 // The file is gone: its row goes too.
                 self.data_text = "no file data".to_owned();
                 self.screen.list.remove_selected();
             }
             Some(file) => {
+                // A file that cannot be read shows what a file that is not
+                // valid shows (our choice).
+                let file = file.unwrap_or_default();
                 self.data_text = SaveInfo::read(tree, data, &file)
                     .map(|i| i.text(data))
                     .unwrap_or_default();
@@ -1528,10 +1570,11 @@ impl LoadScreen {
     }
 
     fn load_pressed(&mut self, data: &GameData, sl: &SaveLoadData, saves: &SavedGames) {
-        let Some(n) = self.screen.list.selected_name().map(str::to_owned) else {
+        let Some(row) = self.screen.list.selected_row().cloned() else {
             return;
         };
-        if !saves.is_valid(&n) {
+        let n = row.name;
+        if !saves.is_valid(&row.path) {
             self.screen
                 .show(data, sl, INVALID_SAVED_GAME, BoxFor::Notice);
         } else if self.in_game {
@@ -1675,6 +1718,7 @@ mod tests {
         (0..n)
             .map(|i| SaveRow {
                 name: format!("s{i}"),
+                path: format!("s{i}.sav"),
                 modified: LocalTime::default(),
             })
             .collect()
@@ -1735,6 +1779,46 @@ mod tests {
         assert_eq!(l.thumb(), (255.0, 131.0, 16.0));
         l.first = 15;
         assert_eq!(l.thumb().2, 140.0);
+    }
+
+    #[test]
+    fn a_dragged_thumb_moves_with_the_cursor() {
+        let mut l = SaveList::new(Rect::new(490.0, 274.0, 429.0, 287.0), 18.0, 16.0, rows(30));
+        // The thumb: 131 units from 16 below the bar's top (y 290).
+        let at = [910.0, 300.0];
+        l.event(Ev::Move(at), at);
+        l.event(Ev::Press { double: false }, at);
+        assert_eq!(l.drag, Some(16.0));
+        // Down by 62 units of cursor movement, wherever on the thumb.
+        let to = [910.0, 362.0];
+        l.event(Ev::Move(to), to);
+        assert_eq!(l.drag, Some(78.0));
+        // Half the range: (78 − 16) / (255 − 131) · 15 rows, rounded.
+        assert_eq!(l.first, 8);
+        // Far from the thumb, a movement does nothing.
+        let away = [600.0, 700.0];
+        l.event(Ev::Move(away), away);
+        assert_eq!(l.drag, Some(78.0));
+        l.event(Ev::Release, away);
+        assert_eq!(l.drag, None);
+    }
+
+    #[test]
+    fn the_caret_counts_characters() {
+        let mut f = NameField::default();
+        f.set("сейв");
+        f.focus();
+        assert_eq!(f.caret, 4);
+        assert_eq!(f.before_caret(), "сейв");
+        f.key(Key::Left, true, None);
+        f.key(Key::Backspace, true, None);
+        assert_eq!((f.text.as_str(), f.caret), ("сев", 2));
+        assert_eq!(f.before_caret(), "се");
+        f.key(Key::A, true, None);
+        f.key(Key::Delete, true, None);
+        assert_eq!(f.text, "сеa");
+        f.key(Key::Right, true, None);
+        assert_eq!(f.caret, 3);
     }
 
     #[test]

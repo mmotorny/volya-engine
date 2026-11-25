@@ -10,13 +10,14 @@
 
 use std::cell::RefCell;
 use std::io::Read;
+use std::rc::Rc;
 
 use js_sys::Reflect;
 use serde::{Deserialize, Serialize};
 use volya_engine::core::audio::Playback;
 use volya_engine::core::vfs::db::DbVfs;
 use volya_engine::core::vfs::{EntryKind, Vfs, VfsFile};
-use volya_engine::saved_games::{LocalTime, SavedFile, SavedGames};
+use volya_engine::saved_games::{HEAD, LocalTime, SaveFiles, SavedFile, SavedGames};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{FileSystemFileHandle, FileSystemHandleKind};
@@ -286,15 +287,39 @@ pub async fn write_user_config(bytes: Vec<u8>) -> Result<(), JsValue> {
 /// creates it yet: saves are not written (#75).
 pub const SAVED_GAMES: &str = "savedgames";
 
-/// The saved-games folder's files with their modification times, and the
-/// contents of the `.sav` files directly in it; empty without the folder.
+thread_local! {
+    /// The saved-games folder, its files open with read-only handles.
+    static SAVES: RefCell<Option<opfs::OpfsVfs>> = const { RefCell::new(None) };
+}
+
+/// Reads the saved-games folder's files through [`SAVES`].
+struct SaveReader;
+
+impl SaveFiles for SaveReader {
+    fn read(&self, path: &str) -> std::io::Result<Vec<u8>> {
+        SAVES.with(|s| match s.borrow().as_ref() {
+            Some(vfs) => volya_engine::core::vfs::read(vfs, path),
+            None => Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "the saved games are closed",
+            )),
+        })
+    }
+}
+
+/// The saved-games folder's files with their modification times and the
+/// first bytes of the `.sav` files directly in it (what the validity test
+/// reads); the files stay open read-only for the load screen. Empty
+/// without the folder.
 pub async fn saved_games() -> Result<SavedGames, JsValue> {
+    close_saved_games();
     let namespace = opfs::namespace().await?;
     let Some(root) = opfs::existing_dir(&namespace, SAVED_GAMES).await? else {
         return Ok(SavedGames::default());
     };
+    // Modification times first, before any handle holds a file.
     let mut files = Vec::new();
-    let mut pending = vec![(String::new(), root)];
+    let mut pending = vec![(String::new(), root.clone())];
     while let Some((path, dir)) = pending.pop() {
         for handle in opfs::entries(&dir).await? {
             let name = handle.name();
@@ -321,25 +346,41 @@ pub async fn saved_games() -> Result<SavedGames, JsValue> {
                 hour: date.get_hours(),
                 minute: date.get_minutes(),
             };
-            let contents = if path.is_empty() && name.to_lowercase().ends_with(".sav") {
-                opfs::read_file(&dir, &name).await?
-            } else {
-                None
-            };
             files.push(SavedFile {
                 path: child,
                 modified_ms: ms,
                 modified,
-                contents,
+                head: Vec::new(),
             });
         }
     }
-    Ok(SavedGames::new(files))
+    let vfs = opfs::OpfsVfs::mount(&root).await?;
+    for f in &mut files {
+        if !f.path.contains('\\') && f.path.to_lowercase().ends_with(".sav") {
+            let mut head = Vec::new();
+            if let Ok(file) = vfs.open(&f.path) {
+                let _ = file.take(HEAD as u64).read_to_end(&mut head);
+            }
+            f.head = head;
+        }
+    }
+    SAVES.with(|s| *s.borrow_mut() = Some(vfs));
+    Ok(SavedGames::new(files, Some(Rc::new(SaveReader))))
+}
+
+/// Releases the saved games' handles.
+pub fn close_saved_games() {
+    SAVES.with(|s| s.borrow_mut().take());
 }
 
 /// Deletes file `path` (relative to the saved-games folder, `\` between
-/// folders) from it.
+/// folders) from it: its handle is closed first; only that file goes.
 pub async fn delete_saved_file(path: &str) -> Result<(), JsValue> {
+    SAVES.with(|s| {
+        if let Some(vfs) = s.borrow_mut().as_mut() {
+            vfs.forget(path);
+        }
+    });
     let namespace = opfs::namespace().await?;
     let Some(mut dir) = opfs::existing_dir(&namespace, SAVED_GAMES).await? else {
         return Ok(());
@@ -352,7 +393,7 @@ pub async fn delete_saved_file(path: &str) -> Result<(), JsValue> {
         };
         dir = d;
     }
-    opfs::remove(&dir, name).await
+    opfs::remove_file(&dir, name).await
 }
 
 /// Deletes the stored user configuration file (tests); the installer's copy

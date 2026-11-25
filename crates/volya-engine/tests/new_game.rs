@@ -545,11 +545,12 @@ fn new_game_loading_screen_from_game_data() {
     let m = menu(&app).expect("the menu opened");
     assert_eq!(m.menu.list, "menu_main_single");
     let items: Vec<&str> = m.menu.items.iter().map(|i| i.name.as_str()).collect();
-    // No valid last save: its item is absent (title-menu.md 4.1).
+    // The data's list (title-menu.md 4.1), the last-save item included.
     assert_eq!(
         items,
         [
             "btn_ret",
+            "btn_lastsave",
             "btn_load",
             "btn_save",
             "btn_options",
@@ -577,11 +578,11 @@ fn new_game_loading_screen_from_game_data() {
     step(&mut app, &mut input, &mut audio);
     assert!(game_time(&app) > stopped, "game time runs again");
 
-    // Load (item 1) shows the load screen with no saves; Escape returns to
-    // the menu. Quit game (item 5) asks first; "Yes" ends the game.
+    // Load (item 2) shows the load screen with no saves; Escape returns to
+    // the menu. Quit game (item 6) asks first; "Yes" ends the game.
     press(&mut input, Key::Escape);
     step(&mut app, &mut input, &mut audio);
-    for k in [Key::Down, Key::Enter] {
+    for k in [Key::Down, Key::Down, Key::Enter] {
         press(&mut input, k);
         step(&mut app, &mut input, &mut audio);
     }
@@ -590,7 +591,7 @@ fn new_game_loading_screen_from_game_data() {
     press(&mut input, Key::Escape);
     step(&mut app, &mut input, &mut audio);
     let m = menu(&app).unwrap();
-    assert!(m.load_screen.is_none() && m.menu.selected == 1);
+    assert!(m.load_screen.is_none() && m.menu.selected == 2);
     for k in [Key::Down, Key::Down, Key::Down, Key::Down, Key::Enter] {
         press(&mut input, k);
         step(&mut app, &mut input, &mut audio);

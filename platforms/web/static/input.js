@@ -261,8 +261,13 @@ export function startInput(view, send) {
   };
   addEventListener("blur", () => capture && releaseAll());
   // Losing pointer lock (Escape, or the browser taking it back) may swallow
-  // releases: nothing stays held.
-  document.addEventListener("pointerlockchange", () => capture && !locked() && releaseAll());
+  // releases: nothing stays held. The engine is told: in a level it opens the
+  // menu, as Escape would have.
+  document.addEventListener("pointerlockchange", () => {
+    if (!capture || locked()) return;
+    releaseAll();
+    send(["unlock"]);
+  });
   let polling = false;
   const poll = () => {
     if (!capture) {

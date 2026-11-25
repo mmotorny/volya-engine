@@ -133,6 +133,16 @@ fn in_game_menu_and_save_load_screens_from_game_data() {
         (quit.button_rect(0).x, quit.button_rect(1).x),
         (450.0, 570.0)
     );
+    // The quit boxes' own types (Yes and No, our reading), and the data's
+    // text for the quit-game box, which the menu replaces (title-menu.md
+    // 4.5).
+    let windows = sl.message_box(&data, "message_box_quit_windows").unwrap();
+    assert_eq!(windows.kind.as_deref(), Some("quit_windows"));
+    assert_eq!(quit.kind.as_deref(), Some("quit_game"));
+    assert_eq!(
+        quit.text.text.as_ref().and_then(|t| t.key.as_deref()),
+        Some("ui_st_want_to_leave_game_q")
+    );
 
     // Section 5.2's defaults for a file that is not valid: the New Game
     // start and the first level.
@@ -147,8 +157,8 @@ fn in_game_menu_and_save_load_screens_from_game_data() {
         "{text}"
     );
 
-    // The screens through the menu during a game: Save (item 2 without a
-    // last save), then Load (item 1).
+    // The screens through the menu during a game: Save (item 3), then
+    // Load (item 2).
     let mut console = data.console();
     let mut screens = MenuScreens::default();
     let mut input = Input::new();
@@ -212,7 +222,12 @@ fn in_game_menu_and_save_load_screens_from_game_data() {
         }
         scene
     };
-    frame(&[Key::Down, Key::Down], &mut menu, &mut screens, &mut input);
+    frame(
+        &[Key::Down, Key::Down, Key::Down],
+        &mut menu,
+        &mut screens,
+        &mut input,
+    );
     let s = frame(&[Key::Enter], &mut menu, &mut screens, &mut input);
     let save = s.save_screen.expect("the save screen");
     // Table 4.1 and section 13 fact 2.
@@ -245,7 +260,14 @@ fn in_game_menu_and_save_load_screens_from_game_data() {
         frame(&[Key::Down], &mut menu, &mut screens, &mut input);
     }
     let s = frame(&[Key::Enter], &mut menu, &mut screens, &mut input);
-    assert_eq!(s.message.unwrap().name, "message_box_quit_game");
+    let message = s.message.unwrap();
+    assert_eq!(message.name, "message_box_quit_game");
+    // Section 4.5: the single-player text is shown.
+    assert_eq!(message.text, "ui_mm_quit_game_message");
+    assert_eq!(
+        data.strings.get(&message.text),
+        "Действительно ли вы желаете покинуть игру?"
+    );
     let scene = draw(&menu, &screens, "VOLYA_DUMP_QUIT");
     assert!(scene.first("message").is_some());
 }

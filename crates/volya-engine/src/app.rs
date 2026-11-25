@@ -622,7 +622,12 @@ impl App {
                     return;
                 }
                 level.update(now, input);
-                let asked = level.take_back_requested() || quit_key_pressed(data, input);
+                // Pointer lock lost while the controls are live opens the menu
+                // too (our choice: the browser takes Escape to leave pointer
+                // lock, so the key may never reach the game).
+                let asked = level.take_back_requested()
+                    || quit_key_pressed(data, input)
+                    || input.pointer_unlocked();
                 // The menu opens while the player's controls are live, not
                 // under the loading image (our choice).
                 if asked && overlay.is_none() {
@@ -642,6 +647,12 @@ impl App {
             if generation != self.applied {
                 self.data.apply(&self.console);
                 self.applied = generation;
+                // Settings changed in the menu during a game reach the
+                // running level: mouse_sens, mouse_invert, g_always_run and
+                // the bindings.
+                if let Some(Phase::Level { level, .. }) = &mut self.phase {
+                    level.set_controls(&self.data.controls);
+                }
             }
         }
         let volumes = [

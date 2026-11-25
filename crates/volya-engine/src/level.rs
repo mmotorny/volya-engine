@@ -923,4 +923,12 @@ impl LevelScreen {
     pub fn controls(&self) -> &Controls {
         &self.controls
     }
+
+    /// Takes the bindings and movement settings of `controls` (the options
+    /// screen changed them during the game).
+    pub fn set_controls(&mut self, controls: &Controls) {
+        self.controls.bindings = controls.bindings.clone();
+        self.controls.settings = controls.settings;
+        self.player.settings = controls.settings;
+    }
 }

@@ -128,6 +128,7 @@ pub fn stop() {
         });
         crate::input::set_capture(false);
         crate::input::set_render(None);
+        crate::game::close_saved_games();
     }
 }
 

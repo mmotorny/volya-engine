@@ -513,6 +513,8 @@ pub enum Event {
     Wheel {
         steps: i32,
     },
+    /// The pointer lock the page held (mouse look in a level) was lost.
+    PointerUnlocked,
 }
 
 /// A touch contact, in screen units.
@@ -646,6 +648,8 @@ pub struct Input {
     /// Whether the gamepad's left stick and the touch stick read zero only
     /// because of [`Input::release_all`], until their next value.
     sticks_released: [bool; 2],
+    /// The pointer lock was lost this frame.
+    pointer_unlocked: bool,
 }
 
 impl Default for Input {
@@ -674,6 +678,7 @@ impl Default for Input {
             touch_look: [0.0; 2],
             motion: [0.0; 2],
             sticks_released: [false; 2],
+            pointer_unlocked: false,
         }
     }
 }
@@ -836,6 +841,7 @@ impl Input {
     /// Clears this frame's actions; call once per frame after the consumers.
     pub fn end_frame(&mut self) {
         self.actions.clear();
+        self.pointer_unlocked = false;
         self.touch_starts = 0;
         self.pointer_delta = [0.0; 2];
         self.drag_delta = [0.0; 2];
@@ -876,8 +882,15 @@ impl Input {
         self.sticks_released
     }
 
+    /// Whether the pointer lock was lost this frame
+    /// ([`Event::PointerUnlocked`]).
+    pub fn pointer_unlocked(&self) -> bool {
+        self.pointer_unlocked
+    }
+
     pub fn handle(&mut self, event: Event) {
         match event {
+            Event::PointerUnlocked => self.pointer_unlocked = true,
             Event::PointerMoved { at } => {
                 self.pointer_to(at);
                 self.move_to(at)
@@ -1364,6 +1377,16 @@ mod tests {
             pressed: false,
         });
         assert!(!input.is_held(enter));
+    }
+
+    #[test]
+    fn a_lost_pointer_lock_shows_for_one_frame() {
+        let mut input = Input::new();
+        assert!(!input.pointer_unlocked());
+        input.handle(Event::PointerUnlocked);
+        assert!(input.pointer_unlocked());
+        input.end_frame();
+        assert!(!input.pointer_unlocked());
     }
 
     #[test]

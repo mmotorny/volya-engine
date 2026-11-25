@@ -174,6 +174,13 @@ pub async fn remove(dir: &FileSystemDirectoryHandle, name: &str) -> Result<(), J
         .map(drop)
 }
 
+/// Removes file `name` from `dir` (not recursively: never a directory).
+pub async fn remove_file(dir: &FileSystemDirectoryHandle, name: &str) -> Result<(), JsValue> {
+    let handle = JsFuture::from(dir.get_file_handle(name)).await?;
+    let _: FileSystemFileHandle = handle.dyn_into()?;
+    JsFuture::from(dir.remove_entry(name)).await.map(drop)
+}
+
 struct File {
     handle: FileSystemSyncAccessHandle,
     size: u64,
@@ -197,6 +204,17 @@ impl OpfsVfs {
     pub fn close(&self) {
         for file in self.files.values() {
             file.handle.close();
+        }
+    }
+
+    /// Closes file `path` and drops it from the tree (before it is
+    /// removed).
+    pub fn forget(&mut self, path: &str) {
+        let Ok(path) = normalize(path) else { return };
+        self.files.remove(&path);
+        let (dir, name) = path.rsplit_once('/').unwrap_or(("", &path));
+        if let Some(entries) = self.dirs.get_mut(dir) {
+            entries.retain(|e| e.name != name);
         }
     }
 
