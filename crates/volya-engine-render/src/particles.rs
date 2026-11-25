@@ -5,7 +5,7 @@
 //! sections 4.4 – 7): each effect one indexed batch of quads with its pass,
 //! queued where section 7.4 puts it, and the distortion target composed
 //! into the frame (section 6). Vertex and index data are written anew each
-//! frame; indices are absolute (no base vertex), and nothing reads a
+//! frame into buffers kept and grown; indices are absolute (no base vertex), and nothing reads a
 //! storage buffer, so the WebGL 2 path draws them alike.
 
 use std::collections::HashMap;
@@ -106,6 +106,23 @@ pub struct ParticleBatch {
 
 /// Bytes of one vertex: position, colour, uv (24, section 4.4).
 const VERTEX_BYTES: u64 = 24;
+
+/// The vertex and index buffers' first size: 682 particles' vertices.
+const INITIAL_BYTES: u64 = 64 * 1024;
+
+/// The passes of the effects' shaders (program, blending, depth write):
+/// class `PARTICLE`'s six blendings (section 5.2) and the scripted
+/// shaders' normal and distortion passes (5.3).
+const PASSES: &[(ParticleProgram, ParticleBlend, bool)] = &[
+    (ParticleProgram::Set, ParticleBlend::Off, true),
+    (ParticleProgram::Blended, ParticleBlend::Alpha, false),
+    (ParticleProgram::Blended, ParticleBlend::Add, false),
+    (ParticleProgram::Blended, ParticleBlend::Mul, false),
+    (ParticleProgram::Blended, ParticleBlend::Mul2x, false),
+    (ParticleProgram::Blended, ParticleBlend::AlphaAdd, false),
+    (ParticleProgram::Plain, ParticleBlend::Add, false),
+    (ParticleProgram::Distort, ParticleBlend::Alpha, false),
+];
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct PipelineKey {
@@ -371,12 +388,12 @@ impl ParticlePipelines {
                 resource: frame.as_entire_binding(),
             }],
         });
-        Self {
+        let mut pipelines = Self {
             format,
             texture_layout,
             layout,
             shader,
-            pipelines: HashMap::new(),
+            pipelines: HashMap::with_capacity(PASSES.len() * 3),
             clamp,
             wrap,
             linear,
@@ -388,7 +405,44 @@ impl ParticlePipelines {
             compose_layout,
             compose,
             compose_sampler,
+        };
+        // Every pass the effects' shaders resolve to, with each culling,
+        // and buffers for the first level's effects: nothing of this is
+        // allocated while a level's data fills the heap.
+        for &(program, blend, depth_write) in PASSES {
+            for cull in [
+                ParticleCull::None,
+                ParticleCull::Clockwise,
+                ParticleCull::CounterClockwise,
+            ] {
+                pipelines.pipeline(
+                    device,
+                    PipelineKey {
+                        program,
+                        blend,
+                        depth_write,
+                        cull,
+                    },
+                );
+            }
         }
+        let usage = wgpu::BufferUsages::VERTEX;
+        grown(
+            device,
+            &mut pipelines.vertices,
+            INITIAL_BYTES,
+            usage,
+            "particle vertices",
+        );
+        let usage = wgpu::BufferUsages::INDEX;
+        grown(
+            device,
+            &mut pipelines.indices,
+            INITIAL_BYTES,
+            usage,
+            "particle indices",
+        );
+        pipelines
     }
 
     fn pipeline(&mut self, device: &wgpu::Device, key: PipelineKey) {

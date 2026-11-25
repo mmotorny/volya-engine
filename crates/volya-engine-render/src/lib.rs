@@ -156,7 +156,8 @@ pub struct Renderer {
     /// Whether the world reads per-draw data from a texture and draws
     /// without base vertices ([`Renderer::compat`]).
     compat: bool,
-    /// Created with the first particle effect drawn.
+    /// The particles' pipelines and buffers (always set; taken while a
+    /// frame is encoded).
     particles: Option<particles::ParticlePipelines>,
     /// The world as drawn and the distortion target, for frames with a
     /// distortion pass (particle-drawing.md 6.2), sized to the latest
@@ -269,7 +270,12 @@ impl Renderer {
             offscreen: None,
             prepared: Default::default(),
             compat: device.limits().max_storage_buffers_per_shader_stage == 0,
-            particles: None,
+            // Made with the renderer, before any level: what lives across
+            // levels is allocated below their data, so a level's freed
+            // memory stays one block for the next load (measured: made with
+            // the first effect drawn, the second New Game's wasm heap grew
+            // from 99 to 112 MiB).
+            particles: Some(particles::ParticlePipelines::new(device, queue, format)),
             distortion_targets: None,
         }
     }
