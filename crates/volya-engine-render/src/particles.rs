@@ -182,6 +182,9 @@ pub(crate) struct Prepared {
 /// The frame's particle draws, with their buffers.
 pub(crate) struct PreparedFrame {
     pub draws: Vec<Prepared>,
+    /// Some sprite of the distortion list may reach the screen: none can
+    /// when every sprite lies wholly outside one plane of the view volume.
+    pub distortion_shown: bool,
     frame_group: wgpu::BindGroup,
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
@@ -557,6 +560,12 @@ impl ParticlePipelines {
         let mut vertex_bytes = Vec::new();
         let mut index_data: Vec<u32> = Vec::new();
         let mut draws = Vec::with_capacity(batches.len());
+        let distortion_shown = batches.iter().any(|b| {
+            b.queue == ParticleQueue::Distortion
+                && b.vertices
+                    .chunks(4)
+                    .any(|q| !outside_view(&view_projection, q))
+        });
         for b in batches {
             let first = (vertex_bytes.len() as u64 / VERTEX_BYTES) as u32;
             for v in &b.vertices {
@@ -656,6 +665,7 @@ impl ParticlePipelines {
         queue.write_buffer(&indices, 0, &index_bytes);
         Some(PreparedFrame {
             draws,
+            distortion_shown,
             frame_group: self.frame_group.clone(),
             vertices,
             indices,
@@ -707,6 +717,27 @@ impl ParticlePipelines {
             frame.draw(self, &mut pass, d);
         }
     }
+}
+
+/// Whether the sprite of `corners` lies wholly outside one plane of the
+/// view volume of `view_projection` (row vectors; depth 0 … w), by a
+/// margin, so it draws no pixel.
+fn outside_view(view_projection: &Mat4, corners: &[ParticleVertex]) -> bool {
+    let clip: Vec<[f32; 4]> = corners
+        .iter()
+        .map(|v| {
+            let p = [v.position[0], v.position[1], v.position[2], 1.0];
+            std::array::from_fn(|i| (0..4).map(|k| p[k] * view_projection[k][i]).sum())
+        })
+        .collect();
+    let margin = |c: &[f32; 4]| 1e-3 * c[3].abs() + 1e-6;
+    let all = |f: &dyn Fn(&[f32; 4]) -> bool| clip.iter().all(f);
+    all(&|c| c[0] > c[3] + margin(c))
+        || all(&|c| c[0] < -c[3] - margin(c))
+        || all(&|c| c[1] > c[3] + margin(c))
+        || all(&|c| c[1] < -c[3] - margin(c))
+        || all(&|c| c[2] > c[3] + margin(c))
+        || all(&|c| c[2] < -margin(c))
 }
 
 /// `buffer`, replaced by one of the next power of two (at least 1 KiB) when
