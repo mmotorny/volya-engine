@@ -307,6 +307,9 @@ pub struct WorldFrame {
     pub sky: Option<SkyFrame>,
     /// What shows where nothing is drawn (RGB, 0 … 1).
     pub clear: [f32; 3],
+    /// The particle effects drawn (particle-drawing.md), each with its
+    /// place in the frame.
+    pub particles: Vec<crate::particles::ParticleBatch>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1582,7 +1585,7 @@ impl Renderer {
     }
 
     /// The depth buffer for a `width` × `height` target.
-    fn depth_view(&mut self, width: u32, height: u32) -> wgpu::TextureView {
+    pub(crate) fn depth_view(&mut self, width: u32, height: u32) -> wgpu::TextureView {
         let fits = self
             .depth
             .as_ref()
@@ -1612,12 +1615,20 @@ impl Renderer {
     /// Records the world pass of `frame` into `encoder`: cleared to the
     /// frame's clear colour, then the static world in the order of section
     /// 10.3.
+    /// `particles` are the frame's prepared effects; `keep_depth` stores
+    /// the depth for the distortion pass.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn encode_world(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         size: (u32, u32),
         frame: &WorldFrame,
+        particles: Option<(
+            &crate::particles::ParticlePipelines,
+            &crate::particles::PreparedFrame,
+        )>,
+        keep_depth: bool,
     ) {
         let inner = &frame.world.0;
         let view_projection = multiply(&frame.view, &frame.projection);
@@ -1657,14 +1668,33 @@ impl Renderer {
             resources.write(&self.queue, sky_frame, frame.eye, &view_projection, t);
         }
 
-        // Step 6 order: decreasing squared distance (back to front).
-        let mut strict = inner.strict.borrow().clone();
+        // Step 6 order: decreasing squared distance (back to front), the
+        // strict-sorted effects among them by their keys (particle-drawing.md
+        // 7.3; on equal keys the static draws first, our choice: the queue
+        // order of the two is not stated).
+        let strict = inner.strict.borrow().clone();
         let distance = |d: &WorldDraw| {
             (0..3)
                 .map(|i| (d.sphere[i] - frame.eye[i]).powi(2))
                 .sum::<f32>()
         };
-        strict.sort_by(|a, b| distance(&b.1).total_cmp(&distance(&a.1)));
+        enum Sorted<'a> {
+            Static(usize, WorldDraw),
+            Effect(&'a crate::particles::Prepared),
+        }
+        let mut sorted: Vec<(f32, Sorted)> = strict
+            .into_iter()
+            .map(|(i, d)| (distance(&d), Sorted::Static(i, d)))
+            .collect();
+        if let Some((_, prepared)) = particles {
+            let queue = crate::particles::ParticleQueue::Strict;
+            sorted.extend(
+                (prepared.draws.iter())
+                    .filter(|d| d.queue == queue)
+                    .map(|d| (d.key, Sorted::Effect(d))),
+            );
+        }
+        sorted.sort_by(|a, b| b.0.total_cmp(&a.0));
 
         let depth = self.depth_view(size.0, size.1);
         let [r, g, b] = frame.clear.map(f64::from);
@@ -1683,7 +1713,11 @@ impl Renderer {
                 view: &depth,
                 depth_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Clear(1.0),
-                    store: wgpu::StoreOp::Discard,
+                    store: if keep_depth {
+                        wgpu::StoreOp::Store
+                    } else {
+                        wgpu::StoreOp::Discard
+                    },
                 }),
                 stencil_ops: None,
             }),
@@ -1692,14 +1726,31 @@ impl Renderer {
             multiview_mask: None,
         });
         // Section 10.3: step 1, the sky (step 3, sky.md section 10), step
-        // 5, then step 6.
+        // 5, then step 6; the effects within steps 1, 5 and 6
+        // (particle-drawing.md 7.4).
+        use crate::particles::ParticleQueue;
         pass.execute_bundles([&inner.early]);
+        if let Some((pipelines, prepared)) = particles {
+            prepared.draw_queue(pipelines, &mut pass, ParticleQueue::Early);
+        }
         if let Some((resources, sky_frame)) = sky {
             resources.draw(&mut pass, sky_frame, size);
         }
         pass.execute_bundles([&inner.late]);
-        pass.set_bind_group(0, &inner.frame_group, &[]);
-        for (i, d) in strict {
+        if let Some((pipelines, prepared)) = particles {
+            prepared.draw_queue(pipelines, &mut pass, ParticleQueue::Late);
+        }
+        for (_, item) in sorted {
+            let (i, d) = match item {
+                Sorted::Static(i, d) => (i, d),
+                Sorted::Effect(e) => {
+                    if let Some((pipelines, prepared)) = particles {
+                        prepared.draw(pipelines, &mut pass, e);
+                    }
+                    continue;
+                }
+            };
+            pass.set_bind_group(0, &inner.frame_group, &[]);
             pass.set_pipeline(&inner.surface_pipelines[d.surface as usize]);
             pass.set_bind_group(1, &inner.surface_groups[d.surface as usize], &[]);
             pass.set_vertex_buffer(0, inner.vertex_buffers[d.vertex_buffer as usize].slice(..));

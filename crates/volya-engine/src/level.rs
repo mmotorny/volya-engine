@@ -46,6 +46,7 @@ use crate::data::GameData;
 use crate::level_sound::{LevelSoundData, SoundInputs};
 use crate::loading_screen::Stage;
 use crate::objects::{self, Characters, LevelObjects, ObjectsReport};
+use crate::particle_drawing::{self, ParticleShader};
 use crate::render::sky::{SkySection, SkyTextures};
 use crate::render::world::Surface;
 use crate::scene::{Scene, WorldScene};
@@ -106,6 +107,10 @@ pub struct LevelWorld {
     /// The layout of `level.geom`'s vertex and index buffers, which stay
     /// in the file until the presenter uploads them.
     geometry: GeomFile,
+    /// Each library effect's shader with located textures, for the
+    /// effects the level's records can show (particle-drawing.md 5.1);
+    /// `None` for the others and those not drawn.
+    pub particle_shaders: Vec<Option<ParticleShader<String>>>,
     /// The spawned objects drawn with the static world
     /// (docs/behavior/level-objects.md).
     pub objects: LevelObjects,
@@ -135,7 +140,15 @@ fn texture_paths(surfaces: &[Surface<String>], sky: Option<&SkyTextures<String>>
 impl LevelWorld {
     /// Every texture file the level uploads, each once.
     pub fn texture_paths(&self) -> Vec<String> {
-        texture_paths(&self.surfaces, Some(&self.sky))
+        let mut paths = texture_paths(&self.surfaces, Some(&self.sky));
+        for s in self.particle_shaders.iter().flatten() {
+            for t in s.textures() {
+                if !paths.contains(t) {
+                    paths.push(t.clone());
+                }
+            }
+        }
+        paths
     }
 
     /// The layout of the static geometry's buffers, to be read from
@@ -194,6 +207,10 @@ pub struct LevelScreen {
     instances: HashMap<u16, usize>,
     /// The effects of `level.ps_static` (level-placed-effects.md).
     effects: Option<PlacedEffects>,
+    /// The size of the latest frame drawn, for the effects' view test.
+    view_size: std::cell::Cell<(u32, u32)>,
+    /// Whether the effects are drawn (tests compare frames without them).
+    effects_drawn: bool,
 }
 
 /// What the engine interface reports.
@@ -663,6 +680,79 @@ fn locate_texture(tree: &dyn Vfs, data: &GameData, dir: &str, name: &str) -> io:
     Ok(path)
 }
 
+/// The shaders of the effects the level's placed records can show (the
+/// records' effects, their groups' member effects and the children their
+/// member flags use; particle-drawing.md 5.1), by library index, with
+/// their textures located by `locate` (a texture found nowhere fails the
+/// load, as the level's do); and the effects not drawn, with why.
+#[allow(clippy::type_complexity)]
+fn particle_shaders(
+    tree: &dyn Vfs,
+    data: &GameData,
+    effects: &PlacedEffects,
+    locate: &mut dyn FnMut(&str) -> io::Result<String>,
+) -> io::Result<(Vec<Option<ParticleShader<String>>>, Vec<(String, String)>)> {
+    use crate::core::particles::placed::Instance;
+    use volya_engine_formats::particles::member_flags as m;
+    let library = effects.library();
+    let mut wanted = vec![false; library.effects.len()];
+    let mut want = |name: &str| {
+        if let Some(i) = library.effect(name) {
+            wanted[i] = true;
+        }
+    };
+    for p in effects.effects() {
+        match &p.instance {
+            Instance::Effect(e) => want(&library.effects[e.record()].name),
+            Instance::Group(g) => {
+                for member in &library.groups[g.record()].members {
+                    want(&member.effect);
+                    for (bit, child) in [
+                        (m::PER_PARTICLE_CHILD, &member.per_particle_child),
+                        (m::BIRTH_CHILD, &member.birth_child),
+                        (m::DEATH_CHILD, &member.death_child),
+                    ] {
+                        if member.flags & bit != 0 {
+                            want(child);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let aliases = &data.aliases;
+    let definitions: HashMap<String, shaders_xr::Definition> = shaders_xr::parse(&vfs::read(
+        tree,
+        &aliases.path("$game_data$", "shaders.xr")?,
+    )?)?
+    .into_iter()
+    .map(|d| (d.name.clone(), d))
+    .collect();
+    let shader_dir = aliases.path("$game_shaders$", "r1")?;
+    let scripted = |module: &str| {
+        vfs::read(tree, &format!("{shader_dir}\\{module}.s"))
+            .is_ok_and(|text| shading::defines_normal_or_special(&String::from_utf8_lossy(&text)))
+    };
+    let mut shaders = vec![None; library.effects.len()];
+    let mut not_drawn = Vec::new();
+    for (i, effect) in library.effects.iter().enumerate() {
+        let Some(sprite) = effect.sprite.as_ref().filter(|_| wanted[i]) else {
+            continue;
+        };
+        match particle_drawing::resolve(&definitions, &scripted, &sprite.shader, &sprite.texture) {
+            Ok(shader) => {
+                let mut paths = HashMap::new();
+                for t in shader.textures() {
+                    paths.insert(t.clone(), locate(t)?);
+                }
+                shaders[i] = Some(shader.map(|t| paths.get(&t).cloned()));
+            }
+            Err(why) => not_drawn.push((effect.name.clone(), why)),
+        }
+    }
+    Ok((shaders, not_drawn))
+}
+
 /// Every surface the level draws: the static world's and the objects'.
 struct Resolved {
     surfaces: Vec<Surface<String>>,
@@ -834,6 +924,7 @@ pub struct NewGameLoad {
     sound: Option<LevelSoundData>,
     /// The engine clock of the frame a stage runs in (ms).
     now: u64,
+    particle_shaders: Vec<Option<ParticleShader<String>>>,
     /// The level's placed effects and the clock they were started at.
     effects: Option<(PlacedEffects, u64)>,
 }
@@ -876,7 +967,15 @@ impl NewGameLoad {
     /// Every texture file the level uploads (its surfaces', its objects'
     /// and the sky's), each once, once `st_loading_textures` has run.
     pub fn texture_paths(&self) -> Vec<String> {
-        texture_paths(&self.surfaces, self.sky.as_ref())
+        let mut paths = texture_paths(&self.surfaces, self.sky.as_ref());
+        for s in self.particle_shaders.iter().flatten() {
+            for t in s.textures() {
+                if !paths.contains(t) {
+                    paths.push(t.clone());
+                }
+            }
+        }
+        paths
     }
 
     /// The engine clock of the frame the next stage runs in.
@@ -1096,6 +1195,14 @@ impl NewGameLoad {
                 }
                 self.sky = Some(SkyTextures { sections });
                 self.flares = flares;
+                // The shaders of the effects the level can show
+                // (particle-drawing.md 5.1), their textures located like
+                // the level's.
+                if let Some((effects, _)) = &self.effects {
+                    let (shaders, not_drawn) = particle_shaders(tree, data, effects, &mut locate)?;
+                    self.particle_shaders = shaders;
+                    self.not_drawn.extend(not_drawn);
+                }
             }
             // The objects' light inputs against the static collision under
             // the start's sun (level-objects.md 5.4), placed under this
@@ -1212,6 +1319,7 @@ impl NewGameLoad {
                 flares: self.flares,
                 geometry: geom,
                 objects,
+                particle_shaders: self.particle_shaders,
             }),
             collision: Arc::new(collision),
             sound_data: self.sound,
@@ -1233,6 +1341,8 @@ impl NewGameLoad {
             placements: Arc::new(placements),
             instances,
             effects,
+            view_size: std::cell::Cell::new((1024, 768)),
+            effects_drawn: true,
         };
         screen.update_view();
         Ok(screen)
@@ -1365,6 +1475,7 @@ impl LevelScreen {
         if let Some(effects) = &mut self.effects {
             effects.frame(elapsed, self.player.view().eye);
         }
+        self.draw_updates();
         // sky.md 7.3, k_t from the game clock.
         let (a, b, t) = self.weather.bracket_indices(self.clock.time_of_day());
         self.sun_fade.frame(
@@ -1469,6 +1580,61 @@ impl LevelScreen {
         self.effects.as_ref()
     }
 
+    /// The drawing update (level-placed-effects.md 5.3,
+    /// particle-drawing.md 7.1 step 1): every effect whose culling sphere
+    /// meets the view is advanced to the clock before it is drawn, after
+    /// the scheduler's pass of the frame. The view is that of the latest
+    /// frame's size.
+    fn draw_updates(&mut self) {
+        let (w, h) = self.view_size.get();
+        let (view, projection) = self.view_projection(w, h);
+        let Some(effects) = &mut self.effects else {
+            return;
+        };
+        if !self.effects_drawn {
+            return;
+        }
+        for i in particle_drawing::visible(effects, &view, &projection) {
+            effects.draw_update(i);
+        }
+    }
+
+    /// Leaves the effects out of the frames drawn, or draws them again
+    /// (tests compare frames with and without them).
+    pub fn set_effects_drawn(&mut self, drawn: bool) {
+        self.effects_drawn = drawn;
+    }
+
+    /// The effects queued for a frame of `view` and `projection` at
+    /// `resolution` (particle-drawing.md 7.1, 7.2).
+    fn particle_draws(
+        &self,
+        resolution: Resolution,
+        view: &Mat4,
+        projection: &Mat4,
+    ) -> Vec<particle_drawing::ParticleDraw> {
+        self.view_size.set((resolution.width, resolution.height));
+        let Some(effects) = self.effects.as_ref().filter(|_| self.effects_drawn) else {
+            return Vec::new();
+        };
+        let v = self.player.view();
+        let camera = crate::core::particles::sprite::Camera {
+            eye: v.eye,
+            forward: v.direction,
+            up: v.up,
+        };
+        let (w, h) = crate::render::world::supersampled(resolution.width, resolution.height);
+        let ssa_min = crate::render::world::ssa_min(w, h, camera::FOV_Y_DEGREES);
+        let records = particle_drawing::visible(effects, view, projection);
+        particle_drawing::queue(
+            effects,
+            &records,
+            &self.world.particle_shaders,
+            &camera,
+            ssa_min,
+        )
+    }
+
     /// What the engine interface reports of the placed effects.
     pub fn effects_report(&self) -> EffectsReport {
         effects_report(self.effects.as_ref())
@@ -1533,8 +1699,10 @@ impl LevelScreen {
             let sun = self.world.flares.get(s)?.sun.as_ref()?;
             Some((s, sun))
         });
+        let particles = self.particle_draws(resolution, &view, &projection);
         let mut scene = Scene::new(resolution);
         scene.world = Some(WorldScene {
+            particles,
             covered: false,
             world: self.world.clone(),
             eye: v.eye,
@@ -1740,6 +1908,7 @@ impl LevelScreen {
                 }],
                 geometry: GeomFile::default(),
                 objects: LevelObjects::default(),
+                particle_shaders: Vec::new(),
             }),
             collision: Arc::new(
                 CollisionWorld::new(Default::default(), Vec::new()).expect("collision"),
@@ -1763,6 +1932,8 @@ impl LevelScreen {
             placements: Arc::new(Vec::new()),
             instances: HashMap::new(),
             effects: None,
+            view_size: std::cell::Cell::new((1024, 768)),
+            effects_drawn: true,
         }
     }
 }

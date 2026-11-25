@@ -13,6 +13,8 @@ use crate::core::camera::Mat4;
 use crate::core::vfs::read_ahead::ReadAhead;
 use crate::core::vfs::{self, Vfs};
 use crate::level::LevelWorld;
+use crate::particle_drawing::{ParticleDraw, ParticleShader};
+use crate::render::particles::{ParticleBatch, ParticlePass as RenderPass};
 use crate::render::sky::{SkySection, SkyTextures};
 use crate::render::world::{Surface, TreeLight, WorldLight};
 use crate::render::{
@@ -114,6 +116,9 @@ pub struct Presenter {
     placed: Option<Arc<Vec<Option<Mat4>>>>,
     /// The world's draw index of the first object draw.
     first_object_draw: usize,
+    /// The level's effect shaders with their textures, by library index
+    /// (particle-drawing.md 5.1), loaded with the world.
+    particle_shaders: Vec<Option<ParticleShader<Texture>>>,
     errors: Vec<String>,
 }
 
@@ -228,6 +233,7 @@ impl Presenter {
                 .map_err(|e| self.errors.push(format!("{}: {e}", scene.world.dir)))
                 .ok();
             self.world = Some((scene.world.clone(), world));
+            self.particle_shaders = self.load_particle_shaders(renderer, tree, &scene.world);
         }
         let world = self.world.as_ref()?.1.clone()?;
         self.place_objects(renderer, &world, scene);
@@ -253,7 +259,66 @@ impl Presenter {
             // Where neither the world nor the sky draws (does not occur:
             // the sky box encloses the eye; sky.md 14) and without a sky.
             clear: e.fog_rgb(),
+            particles: self.particle_batches(&scene.particles),
         })
+    }
+
+    /// Every effect shader's textures, each file read once; one that fails
+    /// is reported and leaves its pass without it (not drawn).
+    fn load_particle_shaders(
+        &mut self,
+        renderer: &Renderer,
+        tree: &dyn Vfs,
+        level: &LevelWorld,
+    ) -> Vec<Option<ParticleShader<Texture>>> {
+        let mut loaded: HashMap<String, Option<Texture>> = HashMap::new();
+        level
+            .particle_shaders
+            .iter()
+            .map(|s| {
+                s.clone().map(|s| {
+                    s.map(|path| {
+                        loaded
+                            .entry(path.clone())
+                            .or_insert_with(|| {
+                                load_texture(renderer, tree, &path)
+                                    .map_err(|e| self.errors.push(format!("{path}: {e}")))
+                                    .ok()
+                            })
+                            .clone()
+                    })
+                })
+            })
+            .collect()
+    }
+
+    /// The renderer's batches of the scene's queued effects.
+    fn particle_batches(&self, draws: &[ParticleDraw]) -> Vec<ParticleBatch> {
+        draws
+            .iter()
+            .filter_map(|d| {
+                let shader = self.particle_shaders.get(d.effect)?.as_ref()?;
+                let pass = if d.distortion {
+                    shader.distortion.as_ref()?
+                } else {
+                    shader.normal.as_ref()?
+                };
+                Some(ParticleBatch {
+                    pass: RenderPass {
+                        program: pass.program,
+                        blend: pass.blend,
+                        depth_write: pass.depth_write,
+                        clamp: pass.clamp,
+                        base: pass.base.clone(),
+                        distort: pass.distort.clone(),
+                    },
+                    queue: d.queue,
+                    cull: d.cull,
+                    key: d.key,
+                    vertices: d.vertices.clone(),
+                })
+            })
+            .collect()
     }
 
     /// Moves, hides or shows the objects' draws whose instances' placements

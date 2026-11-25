@@ -6,8 +6,9 @@
 //! placed once, played and updated once at the load, then updated by the
 //! engine's scheduler with a period growing with the camera's distance.
 //!
-//! The drawing update of section 5.3 comes with drawing (P7, #322); until
-//! then the schedule alone updates them. The scheduler's per-frame budget
+//! The drawing update of section 5.3 is [`PlacedEffects::draw_update`],
+//! which the level runs for the instances it draws. The scheduler's
+//! per-frame budget
 //! is unestablished (5.2): every due instance runs in the frame (our
 //! choice).
 
@@ -235,6 +236,16 @@ impl PlacedEffects {
             p.update(clock, &self.library, &mut self.random);
             p.register();
             p.due = clock.wrapping_add(p.period);
+        }
+    }
+
+    /// The drawing update of record `i` (section 5.3): advanced to the
+    /// clock before it is drawn; the visibility sphere is left as it was
+    /// (5.1, as disputed in review).
+    pub fn draw_update(&mut self, i: usize) {
+        let clock = self.clock;
+        if let Some(p) = self.effects.get_mut(i) {
+            p.update(clock, &self.library, &mut self.random);
         }
     }
 

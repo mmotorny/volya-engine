@@ -24,6 +24,7 @@ pub mod group;
 pub mod placed;
 pub mod random;
 pub mod region;
+pub mod sprite;
 
 mod actions;
 #[cfg(test)]
@@ -54,6 +55,8 @@ pub fn apply(
     let mut s = actions::Step {
         particles,
         max,
+        effect_flags: 0,
+        frame_count: 16,
         random,
         notices: None,
         dt,

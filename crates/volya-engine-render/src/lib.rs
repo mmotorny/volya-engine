@@ -15,6 +15,7 @@
 //! non-sRGB target format.
 
 mod capture;
+pub mod particles;
 pub mod sky;
 mod texture;
 mod video;
@@ -155,6 +156,12 @@ pub struct Renderer {
     /// Whether the world reads per-draw data from a texture and draws
     /// without base vertices ([`Renderer::compat`]).
     compat: bool,
+    /// Created with the first particle effect drawn.
+    particles: Option<particles::ParticlePipelines>,
+    /// The world as drawn and the distortion target, for frames with a
+    /// distortion pass (particle-drawing.md 6.2), sized to the latest
+    /// target.
+    distortion_targets: Option<(wgpu::Texture, wgpu::Texture)>,
 }
 
 impl Renderer {
@@ -262,6 +269,8 @@ impl Renderer {
             offscreen: None,
             prepared: Default::default(),
             compat: device.limits().max_storage_buffers_per_shader_stage == 0,
+            particles: None,
+            distortion_targets: None,
         }
     }
 
@@ -392,7 +401,7 @@ impl Renderer {
         let target_size = (target.width(), target.height());
         let target = &target.create_view(&Default::default());
         if let Some(frame) = &list.world {
-            self.encode_world(&mut encoder, target, target_size, frame);
+            self.encode_frame(&mut encoder, target, target_size, frame);
         }
         let load = match list.world {
             Some(_) => wgpu::LoadOp::Load,
@@ -506,6 +515,86 @@ impl Renderer {
             }
         }
         self.queue.submit([encoder.finish()]);
+    }
+
+    /// The world pass of `frame` with its particle effects; with a
+    /// distortion list, the world is drawn into a texture of its own and
+    /// composed into `target` through the distortion target
+    /// (particle-drawing.md section 6).
+    fn encode_frame(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        size: (u32, u32),
+        frame: &WorldFrame,
+    ) {
+        let mut pipelines = self.particles.take();
+        let prepared = if frame.particles.is_empty() {
+            None
+        } else {
+            let pipelines = pipelines.get_or_insert_with(|| {
+                particles::ParticlePipelines::new(&self.device, &self.queue, self.format)
+            });
+            let l = &frame.light;
+            pipelines.prepare(
+                &self.device,
+                &self.queue,
+                &frame.particles,
+                &frame.view,
+                &frame.projection,
+                (l.fog_color, l.fog_near, l.fog_far),
+            )
+        };
+        let both = pipelines.as_ref().zip(prepared.as_ref());
+        let distort = both.is_some_and(|(_, p)| p.has(particles::ParticleQueue::Distortion));
+        if !distort {
+            self.encode_world(encoder, target, size, frame, both, false);
+        } else {
+            let stale = self
+                .distortion_targets
+                .as_ref()
+                .is_none_or(|(t, _)| (t.width(), t.height()) != size);
+            if stale {
+                let make = |label| {
+                    self.device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some(label),
+                        size: wgpu::Extent3d {
+                            width: size.0,
+                            height: size.1,
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: self.format,
+                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                            | wgpu::TextureUsages::TEXTURE_BINDING,
+                        view_formats: &[],
+                    })
+                };
+                self.distortion_targets = Some((make("scene"), make("distortion")));
+            }
+            let (scene, distortion) = self.distortion_targets.clone().expect("made");
+            let scene = scene.create_view(&Default::default());
+            let distortion = distortion.create_view(&Default::default());
+            self.encode_world(encoder, &scene, size, frame, both, true);
+            let depth = self.depth_view(size.0, size.1);
+            if let Some((pipelines, prepared)) = both {
+                // TODO(#329): particle-drawing.md 6.2 does not state the view
+                // and projection of the distortion pass; the scene's
+                // (believed).
+                pipelines.distort(
+                    &self.device,
+                    encoder,
+                    prepared,
+                    &scene,
+                    &distortion,
+                    &depth,
+                    target,
+                );
+            }
+        }
+        self.particles = pipelines;
     }
 
     /// Writes the vertices of `list` and returns its draw batches: runs of

@@ -30,6 +30,7 @@ pub mod menu_screens;
 pub mod objects;
 pub mod on_screen_keyboard;
 pub mod options;
+pub mod particle_drawing;
 pub mod present;
 pub mod save_load;
 pub mod saved_games;

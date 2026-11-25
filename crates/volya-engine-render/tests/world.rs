@@ -12,6 +12,10 @@
 use volya_engine_formats::dds::Dds;
 use volya_engine_formats::dds::build::{PixelFormat, file};
 use volya_engine_formats::level_geom::{Layout, LevelGeom, VertexBuffer};
+use volya_engine_render::particles::{
+    ParticleBatch, ParticleBlend, ParticleCull, ParticlePass, ParticleProgram, ParticleQueue,
+    ParticleVertex,
+};
 use volya_engine_render::sky::{SkyFrame, SkySection, SkyTextures};
 use volya_engine_render::world::{
     Blend, Mat4, ObjectGeometry, Program, Surface, TreeLight, WorldLight, model_vertex,
@@ -57,6 +61,7 @@ both!(
     placed_draws_hide_show_and_move,
     environment_mapped_models,
     shared_index_ranges_with_different_bases,
+    particles_queue_blend_cull_and_distort,
 );
 
 fn renderer() -> Renderer {
@@ -218,6 +223,7 @@ fn frame(world: volya_engine_render::World, sky: Option<SkyFrame>) -> WorldFrame
         time: 0.0,
         sky,
         clear: [0.0; 3],
+        particles: Vec::new(),
     }
 }
 
@@ -665,4 +671,163 @@ fn environment_mapped_models() {
     assert_near(px, [200, 200, 0], "reflected towards the camera");
     let px = at(&mut r, UP, env);
     assert_near(px, [200, 160, 0], "reflected past the upward normal");
+}
+
+/// A quad of particle-drawing.md 4.4 at depth `z` spanning `x0 … x1` and
+/// `y0 … y1`, coloured `argb`: vertices X − A − B, X − A + B, X + A − B,
+/// X + A + B (clockwise on screen, as a facing sprite).
+fn sprite(x0: f32, x1: f32, y0: f32, y1: f32, z: f32, argb: u32) -> Vec<ParticleVertex> {
+    [
+        ([x0, y0, z], [0.0, 1.0]),
+        ([x0, y1, z], [0.0, 0.0]),
+        ([x1, y0, z], [1.0, 1.0]),
+        ([x1, y1, z], [1.0, 0.0]),
+    ]
+    .into_iter()
+    .map(|(position, uv)| ParticleVertex {
+        position,
+        colour: argb,
+        uv,
+    })
+    .collect()
+}
+
+fn pass(program: ParticleProgram, blend: ParticleBlend, base: &Texture) -> ParticlePass {
+    ParticlePass {
+        program,
+        blend,
+        depth_write: program == ParticleProgram::Set,
+        clamp: true,
+        base: Some(base.clone()),
+        distort: None,
+    }
+}
+
+fn batch(
+    pass: ParticlePass,
+    queue: ParticleQueue,
+    key: f32,
+    vertices: Vec<ParticleVertex>,
+) -> ParticleBatch {
+    ParticleBatch {
+        pass,
+        queue,
+        cull: ParticleCull::None,
+        key,
+        vertices,
+    }
+}
+
+/// Pixels of `frame` at `size` × `size`.
+fn pixels(renderer: &mut Renderer, frame: WorldFrame, size: u32) -> Vec<u8> {
+    let list = DrawList {
+        world: Some(frame),
+        quads: Vec::new(),
+    };
+    pollster::block_on(renderer.capture(&list, size, size, wgpu::Color::BLACK)).unwrap()
+}
+
+fn at(pixels: &[u8], size: u32, x: u32, y: u32) -> [u8; 4] {
+    let i = ((y * size + x) * 4) as usize;
+    pixels[i..i + 4].try_into().unwrap()
+}
+
+/// particle-drawing.md sections 4.5 – 7: blended effects back to front by
+/// key, the `SET` alpha test, culling, and the distortion target composed
+/// into the frame.
+#[test]
+fn particles_queue_blend_cull_and_distort() {
+    let mut r = renderer();
+    let white = r.create_rgba_texture(1, 1, &[255; 4]);
+    let black = r.create_rgba_texture(1, 1, &[0, 0, 0, 255]);
+    let g = geom(Layout::VertexLit, 0, 0, [0; 8]);
+    let world = r
+        .create_world(
+            &g,
+            &[surface(Program::SelfLight, Some(black))],
+            &[draw(0, None)],
+            None,
+        )
+        .unwrap();
+    let blend = |key, argb| {
+        batch(
+            pass(ParticleProgram::Blended, ParticleBlend::Alpha, &white),
+            ParticleQueue::Strict,
+            key,
+            sprite(-0.25, 0.25, -0.25, 0.25, 0.5, argb),
+        )
+    };
+    // Half-transparent red farther (larger key) and green nearer, queued
+    // nearer first: drawn back to front, green over red.
+    let mut f = frame(world.clone(), None);
+    f.particles = vec![blend(1.0, 0x8000_FF00), blend(2.0, 0x80FF_0000)];
+    let p = pixels(&mut r, f, 64);
+    let c = at(&p, 64, 32, 32);
+    // Red at half over black, then green at half over that: (64, 128, 0).
+    assert_near(c, [64, 128, 0], "green over red");
+    // `SET` passes alpha above 200 only (199 and 202 here: 200 itself rounds
+    // either way in the unit); culling of clockwise faces drops
+    // a facing sprite.
+    let mut f = frame(world.clone(), None);
+    let mut culled = blend(1.0, 0xFFFF_FFFF);
+    culled.cull = ParticleCull::Clockwise;
+    f.particles = vec![
+        batch(
+            pass(ParticleProgram::Set, ParticleBlend::Off, &white),
+            ParticleQueue::Early,
+            1.0,
+            sprite(-0.25, 0.0, -0.25, 0.25, 0.5, 0xC7FF_FFFF),
+        ),
+        batch(
+            pass(ParticleProgram::Set, ParticleBlend::Off, &white),
+            ParticleQueue::Early,
+            1.0,
+            sprite(0.0, 0.25, -0.25, 0.25, 0.5, 0xCAFF_FFFF),
+        ),
+        culled,
+    ];
+    let p = pixels(&mut r, f, 64);
+    assert_eq!(at(&p, 64, 28, 32)[..3], [0, 0, 0], "alpha 199 is cut");
+    assert_eq!(at(&p, 64, 36, 32)[..3], [255, 255, 255], "alpha 202 passes");
+    let mut f = frame(world.clone(), None);
+    let mut kept = blend(1.0, 0xFFFF_FFFF);
+    kept.cull = ParticleCull::CounterClockwise;
+    f.particles = vec![kept];
+    assert_eq!(at(&pixels(&mut r, f, 64), 64, 32, 32)[..3], [255, 255, 255]);
+
+    // Distortion: a white sprite over the left half; a distortion sprite
+    // over the screen whose texel's red is 1 offsets every scene look-up
+    // by (1 − 0.5) · 0.05 of the width to the right.
+    let size = 256;
+    let left = batch(
+        pass(ParticleProgram::Set, ParticleBlend::Off, &white),
+        ParticleQueue::Early,
+        1.0,
+        sprite(-2.0, 0.0, -2.0, 2.0, 0.5, 0xFFFF_FFFF),
+    );
+    let mut f = frame(world.clone(), None);
+    f.particles = vec![left.clone()];
+    let plain = pixels(&mut r, f, size);
+    assert_eq!(at(&plain, size, 124, 128)[..3], [255, 255, 255]);
+    let red = r.create_rgba_texture(1, 1, &[255, 127, 0, 255]);
+    let mut distort = pass(ParticleProgram::Distort, ParticleBlend::Alpha, &white);
+    distort.distort = Some(red);
+    let mut f = frame(world, None);
+    f.particles = vec![
+        left,
+        batch(
+            distort,
+            ParticleQueue::Distortion,
+            1.0,
+            sprite(-2.0, 2.0, -2.0, 2.0, 0.4, 0xFFFF_FFFF),
+        ),
+    ];
+    let shifted = pixels(&mut r, f, size);
+    // About 6 pixels: at 124 the scene is read from 130, right of the edge.
+    assert_eq!(at(&shifted, size, 124, 128)[..3], [0, 0, 0], "shifted");
+    assert_eq!(
+        at(&shifted, size, 112, 128)[..3],
+        [255, 255, 255],
+        "still white"
+    );
 }

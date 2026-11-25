@@ -54,6 +54,7 @@ pub struct EffectInstance {
     flags: u32,
     max: usize,
     time_limit: f32,
+    frames: volya_engine_formats::particles::Frames,
     actions: Vec<InstanceAction>,
     particles: Vec<Particle>,
     playing: bool,
@@ -92,6 +93,7 @@ impl EffectInstance {
             flags: effect.flags,
             max: effect.max_particles as usize,
             time_limit: effect.time_limit,
+            frames: effect.frames,
             actions,
             particles: Vec::new(),
             playing: false,
@@ -115,6 +117,11 @@ impl EffectInstance {
     /// The live particles, in list order (not birth order).
     pub fn particles(&self) -> &[Particle] {
         &self.particles
+    }
+
+    #[cfg(test)]
+    pub(crate) fn particles_mut(&mut self) -> &mut Vec<Particle> {
+        &mut self.particles
     }
 
     pub fn is_playing(&self) -> bool {
@@ -235,6 +242,8 @@ impl EffectInstance {
         let mut s = Step {
             particles: &mut self.particles,
             max: self.max,
+            effect_flags: self.flags,
+            frame_count: self.frames.count,
             random,
             notices: self.notices.as_mut(),
             dt: STEP,
@@ -242,8 +251,16 @@ impl EffectInstance {
         for a in &mut self.actions {
             run(&a.placed, a.flags, &mut a.time, &mut s);
         }
-        // TODO(#322): the frame animation (P7) when the flag word has both
-        // 0x400 and 0x800.
+        // The frame animation (particle-drawing.md 3.3).
+        let animated = effect_flags::FRAMES | effect_flags::ANIMATED;
+        if self.flags & animated == animated {
+            super::actions::animate_frames(
+                &mut self.particles,
+                self.frames.rate,
+                self.frames.count,
+                STEP,
+            );
+        }
         // TODO(#152): collision (P5) when it has 0x10000.
         let count = self.particles.len();
         if count > 0 {

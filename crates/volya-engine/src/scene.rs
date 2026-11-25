@@ -174,6 +174,8 @@ pub struct WorldScene {
     /// Hidden under an opaque picture: kept on the GPU but not drawn.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub covered: bool,
+    /// The particle effects drawn (docs/behavior/particle-drawing.md).
+    pub particles: Vec<crate::particle_drawing::ParticleDraw>,
 }
 
 impl PartialEq for WorldScene {
@@ -189,6 +191,7 @@ impl PartialEq for WorldScene {
             && Arc::ptr_eq(&self.objects, &other.objects)
             && self.sky == other.sky
             && self.covered == other.covered
+            && self.particles == other.particles
     }
 }
 

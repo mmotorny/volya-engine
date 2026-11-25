@@ -58,6 +58,8 @@ fn step(
     let mut s = Step {
         particles: &mut particles,
         max: 100,
+        effect_flags: 0,
+        frame_count: 16,
         random: &mut random,
         notices: Some(&mut notices),
         dt,

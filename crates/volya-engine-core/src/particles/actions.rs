@@ -17,6 +17,10 @@ pub(crate) struct Step<'a> {
     pub particles: &'a mut Vec<Particle>,
     /// The effect's maximum *N*.
     pub max: usize,
+    /// The effect's flag word and frame count (chunk 6), for the frame
+    /// values at birth (particle-drawing.md 3.2).
+    pub effect_flags: u32,
+    pub frame_count: i32,
     pub random: &'a mut Random,
     /// The owner's notices (P2 3.2); `None` for an effect alone.
     pub notices: Option<&'a mut Vec<Notice>>,
@@ -413,14 +417,61 @@ fn birth(source: &Source, flags: u32, s: &mut Step) {
             frame: 0,
             frame_flags: 0,
         });
-        // TODO(#322): the effect's own birth notice sets the frame values
-        // (P7).
+        // The effect's own birth notice: the frame values (P7 3.2).
+        let random = &mut *s.random;
+        let p = s.particles.last_mut().expect("just added");
+        birth_frame(p, s.effect_flags, s.frame_count, random);
         if let Some(n) = s.notices.as_deref_mut() {
             n.push(Notice::Birth {
                 index: s.particles.len() - 1,
                 position,
             });
         }
+    }
+}
+
+/// The frame values a new particle takes (particle-drawing.md 3.2): with
+/// effect flag 0x1000 a random start frame of the `count`, then with 0x800
+/// and 0x2000 backwards on an odd draw. A frame count of 0 or less (none
+/// in the data) gives frame 0 (our choice: the spec divides by it).
+pub(crate) fn birth_frame(p: &mut Particle, flags: u32, count: i32, random: &mut Random) {
+    use volya_engine_formats::particles::effect_flags as f;
+    if flags & f::RANDOM_FRAME != 0 {
+        let k = random.uniform.next_k();
+        p.frame = if count > 0 {
+            ((k % count as u32) * 255) as u16
+        } else {
+            0
+        };
+    }
+    if flags & f::ANIMATED != 0
+        && flags & f::RANDOM_PLAYBACK != 0
+        && random.uniform.next_k() & 1 == 1
+    {
+        p.frame_flags |= 1;
+    }
+}
+
+/// 1/255 as the `f32` 0x3B808081 (particle-drawing.md 3.1, 3.3).
+pub(crate) const FRAME_UNIT: f32 = f32::from_bits(0x3B80_8081);
+
+/// The frame animation of a step (particle-drawing.md 3.3), `rate` frames
+/// per second over `count` frames. TODO(#329): a frame number beyond 16
+/// bits keeps its low 16 bits (the spec leaves it unstated; no shipped
+/// effect reaches it).
+pub(crate) fn animate_frames(particles: &mut [Particle], rate: f32, count: i32, dt: f32) {
+    let n = count as f32;
+    let advance = rate * dt;
+    for p in particles {
+        let sigma = if p.frame_flags & 1 != 0 { -1.0 } else { 1.0 };
+        let mut g = f32::from(p.frame) * FRAME_UNIT + sigma * advance;
+        if g > n {
+            g -= n;
+        }
+        if g < 0.0 {
+            g += n;
+        }
+        p.frame = (g * 255.0).floor() as i64 as u16;
     }
 }
 
