@@ -440,6 +440,19 @@ pub fn particles_state() -> Result<serde_json::Value, JsValue> {
     })
 }
 
+/// The `zones_state` op (tests): the level's zones and the weather's
+/// ambient effect (docs/behavior/zone-idle-effects.md,
+/// weather-ambient-effects.md).
+#[cfg(feature = "test-ops")]
+pub fn zones_state() -> Result<serde_json::Value, JsValue> {
+    RUNNING.with(|r| {
+        let r = r.borrow();
+        let running = r.as_ref().ok_or_else(|| error("the game is not running"))?;
+        let level = running.app.level().ok_or_else(|| error("no level"))?;
+        serde_json::to_value(level.zones_report()).map_err(error)
+    })
+}
+
 /// The `debug_particles_bench` op (tests): a copy of the level's placed
 /// effects runs `frames` frames of 16 ms with the camera at the first
 /// record; the CPU time of a frame's update by `performance.now()`
@@ -453,8 +466,14 @@ pub fn particles_bench(frames: u32) -> Result<serde_json::Value, JsValue> {
         let mut effects = level
             .effects()
             .ok_or_else(|| error("no placed effects"))?
-            .clone();
-        let camera = effects.effects()[0].instance.sphere().centre;
+            .copy_of(volya_engine::core::particles::placed::Origin::Placed);
+        let camera = effects
+            .effects()
+            .next()
+            .ok_or_else(|| error("no placed effects"))?
+            .instance
+            .sphere()
+            .centre;
         // The timer's resolution (coarsened without cross-origin
         // isolation) is far above a frame's update: the mean is the whole
         // run's time over its frames, the max a single frame's.

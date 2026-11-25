@@ -385,6 +385,9 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         "debug_draw_lights" => to_json(&gpu::debug_draw_lights(text("case"))?),
         #[cfg(feature = "test-ops")]
         "particles_state" => to_json(&engine::particles_state()?),
+        // The zones and the weather's ambient effect (tests).
+        #[cfg(feature = "test-ops")]
+        "zones_state" => to_json(&engine::zones_state()?),
         // `{frames}`: the placed effects' update cost in wasm.
         #[cfg(feature = "test-ops")]
         "debug_particles_bench" => {

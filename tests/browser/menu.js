@@ -573,6 +573,22 @@ export const tests = {
     return `${fx.particles} particles, period ${fx.records[0].period} ms; a frame's update in wasm: mean ${bench.mean_us.toFixed(2)} µs over ${bench.frames} frames, the slowest under ${bench.max_us.toFixed(0)} µs (the timer's resolution)`;
   },
 
+  "the zones' idle effects play, the campfires among them": async () => {
+    needsGame();
+    // docs/behavior/zone-idle-effects.md 8: 178 zone records online, 160
+    // with an idle effect; only the galantines switch off.
+    const { zones } = await volya.call("zones_state");
+    assertEqual(zones.length, 178, "zones");
+    const withEffect = zones.filter((z) => z.effect);
+    assertEqual(withEffect.length, 160, "zones with an idle effect");
+    const off = withEffect.filter((z) => !z.playing);
+    assert(off.every((z) => z.section === "zone_witches_galantine" && z.state === "disabled"), `off: ${JSON.stringify(off)}`);
+    const fires = zones.filter((z) => z.effect === "explosions\\campfire_05");
+    assertEqual(fires.map((z) => z.playing && z.sound_on), Array(11).fill(true), "campfires");
+    const stats = await volya.call("level_stats");
+    return `${withEffect.length - off.length} idle effects playing, ${off.length} galantines off; frame CPU ${stats.frame_cpu_ms.toFixed(2)} ms average, ${stats.frame_cpu_max_ms.toFixed(2)} ms worst; wasm heap ${mib(stats.wasm_heap_bytes)}`;
+  },
+
   "transcoding to ETC2 costs: the level's textures and a few large ones": async () => {
     needsGame();
     await until((s) => s.phase === "level" && !s.intro, "the level");
@@ -1172,6 +1188,7 @@ export const tests = {
     await until((s) => s.menu.selected === 0, "item 0");
     key("Enter");
     await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
+    await volya.call("heap_log", { on: true });
     key("Enter");
     // Escape while the loading image covers the level's first frames,
     // before the intro starts under its last two: kept (#96).
@@ -1181,6 +1198,15 @@ export const tests = {
     const seen = { menu_asked: asked.menu_asked, overlay: asked.overlay_frames, intro: Boolean(asked.intro) };
     assert(asked.menu_asked && !asked.menu, `the menu asked for, not open: ${JSON.stringify(seen)}`);
     const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level again", loadMs());
+    // The wasm heap at the end of the last frame under each caption.
+    const stages = [];
+    for (const e of await volya.call("heap_log", { on: false })) {
+      const name = e.caption ?? e.phase;
+      const m = Math.round(e.wasm_heap_bytes / 2 ** 20);
+      if (stages.length && stages[stages.length - 1][0] === name) stages[stages.length - 1][1] = m;
+      else stages.push([name, m]);
+    }
+    const byCaption = stages.map(([n, m]) => `${n} ${m}`).join(", ");
     assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
     // The intro again; a tap skips it (our design for touch). The controls
     // go live then, and the menu opens at once.
@@ -1219,8 +1245,8 @@ export const tests = {
     }
     // A second load reuses the heap the first one grew.
     const heap = (await volya.call("level_stats")).wasm_heap_bytes;
-    assert(heap <= WASM_HEAP_CAP, `wasm heap ${mib(heap)} after the second New Game, over ${mib(WASM_HEAP_CAP)}`);
-    return `loaded again in ${s.load_ms.toFixed(0)} ms; wasm heap ${mib(heap)}`;
+    assert(heap <= WASM_HEAP_CAP, `wasm heap ${mib(heap)} after the second New Game, over ${mib(WASM_HEAP_CAP)}; by caption (MiB): ${byCaption}`);
+    return `loaded again in ${s.load_ms.toFixed(0)} ms; wasm heap ${mib(heap)}; by caption (MiB): ${byCaption}`;
   },
 
   "hidden: the menu opens, the clock, the frame loop and audio stop; shown: the game takes on from there": async () => {

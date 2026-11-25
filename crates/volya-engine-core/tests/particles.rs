@@ -686,7 +686,7 @@ fn placed_effects_are_p8s() {
         for p in placed.effects() {
             assert!(p.instance.is_playing(), "{name}: {}", p.name);
         }
-        let camera = placed.effects()[0].instance.sphere().centre;
+        let camera = placed.effects().next().unwrap().instance.sphere().centre;
         for _ in 0..600 {
             placed.frame(16, camera);
         }
@@ -697,7 +697,7 @@ fn placed_effects_are_p8s() {
             }
         }
         if name == "l01_escape" {
-            let p = &placed.effects()[0];
+            let p = &placed.effects().next().unwrap();
             let Instance::Effect(e) = &p.instance else {
                 panic!()
             };

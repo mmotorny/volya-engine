@@ -930,6 +930,8 @@ fn placed_effects_are_drawn_from_game_data() {
             screen.update(16 * (t + 1), &Input::new());
         }
         screen.set_camera(eye, angles);
+        // The placed effect alone: the zones' effects are zones.rs's.
+        screen.set_effect_origins_drawn(&[volya_engine::core::particles::placed::Origin::Placed]);
         let mut r = renderer();
         r.set_compat(compat);
         let mut presenter = Presenter::new();

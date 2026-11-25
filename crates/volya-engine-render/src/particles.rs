@@ -116,8 +116,11 @@ pub struct ParticleBatch {
 /// Bytes of one vertex: position, colour, uv (24, section 4.4).
 const VERTEX_BYTES: u64 = 24;
 
-/// The vertex and index buffers' first size: 682 particles' vertices.
-const INITIAL_BYTES: u64 = 64 * 1024;
+/// The vertex and index buffers' first size: 10,922 particles' vertices,
+/// more than `l01_escape`'s effect objects can hold at once (8,122). Made
+/// with the renderer: buffers made with a level's world stay allocated amid
+/// the level freed after it and split the wasm heap.
+const INITIAL_BYTES: u64 = 1024 * 1024;
 
 /// The passes of the effects' shaders (program, blending, depth write):
 /// class `PARTICLE`'s six blendings (section 5.2) and the scripted
@@ -465,6 +468,31 @@ impl ParticlePipelines {
             "particle indices",
         );
         pipelines
+    }
+
+    /// Grows the vertex and index buffers to hold `particles` sprites.
+    pub fn reserve(&mut self, device: &wgpu::Device, particles: usize) {
+        let quads = particles as u64;
+        grown(
+            device,
+            &mut self.vertices,
+            quads * 4 * VERTEX_BYTES,
+            wgpu::BufferUsages::VERTEX,
+            "particle vertices",
+        );
+        grown(
+            device,
+            &mut self.indices,
+            quads * 6 * 4,
+            wgpu::BufferUsages::INDEX,
+            "particle indices",
+        );
+    }
+
+    /// The vertex and index buffers' sizes in bytes.
+    pub fn buffer_sizes(&self) -> (u64, u64) {
+        let size = |b: &Option<wgpu::Buffer>| b.as_ref().map_or(0, wgpu::Buffer::size);
+        (size(&self.vertices), size(&self.indices))
     }
 
     fn pipeline(&mut self, device: &wgpu::Device, key: PipelineKey) {

@@ -23,7 +23,7 @@ use volya_engine::core::audio::{Category, Mixer, VoiceId};
 use volya_engine::core::collision::geometry::normalize;
 use volya_engine::core::config;
 use volya_engine::core::pause::GlobalClock;
-use volya_engine::core::sound::ambient::list_items;
+use volya_engine::core::sound::ambient::{NoParticles, list_items};
 use volya_engine::core::sound::occlusion::Occlusion;
 use volya_engine::core::sound::random::SharedRandom;
 use volya_engine::core::sound::system::{Listener, NoDevice, SoundSystem, Vec3};
@@ -405,6 +405,7 @@ fn first_level_sounds_from_game_data() {
         &level.sound_inputs(),
         clock.frame(frame_ms, false),
         false,
+        &mut NoParticles::default(),
     )
     .unwrap();
     system.update(16, &mut NoDevice);
@@ -455,6 +456,7 @@ fn first_level_sounds_from_game_data() {
             &level.sound_inputs(),
             clock.frame((frame + 1) * frame_ms, false),
             false,
+            &mut NoParticles::default(),
         )
         .unwrap();
         rules += t.elapsed();
@@ -501,6 +503,7 @@ fn first_level_sounds_from_game_data() {
             &level.sound_inputs(),
             clock.frame(time, false),
             false,
+            &mut NoParticles::default(),
         )
         .unwrap();
         host.update(time as f64, Some(&mut mixer), Some(&tree));

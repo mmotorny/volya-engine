@@ -7,9 +7,10 @@
 //! listener and starting and ending effects (section 4).
 //!
 //! An effect's particles and wind are P11's
-//! (docs/behavior/particles-and-lights-scope.md); here the active effect is
-//! kept as the data P11 will need (its particle effect, where it started,
-//! whether it was told to stop) and the wind gust factor in force.
+//! (docs/behavior/weather-ambient-effects.md): the rule makes, stops and
+//! removes the effect object through [`AmbientParticles`], and keeps the
+//! wind gust factor in force, which the wind
+//! ([`crate::weather::wind`]) reads.
 //!
 //! Section numbers below are the spec's.
 
@@ -217,7 +218,44 @@ impl AmbientSet {
     }
 }
 
-/// The active effect's particles (4.2), as P11 will need them.
+/// The level's side of the rule's effect objects
+/// (docs/behavior/weather-ambient-effects.md section 3): at most one exists.
+pub trait AmbientParticles {
+    /// Makes the object of group or effect `particles`, places it at
+    /// `position` in world axes and plays it (P11 3.1, 3.2). Fatal when no
+    /// effect or group has the name.
+    fn start(&mut self, particles: &str, position: Vec3) -> Result<(), Fatal>;
+    /// The deferred stop (P11 3.4).
+    fn stop(&mut self);
+    /// Whether the object's group still plays (P11 3.5).
+    fn is_playing(&self) -> bool;
+    /// Asks the object to be destroyed (P11 3.5).
+    fn remove(&mut self);
+}
+
+/// Effect objects without particles: playing from their start until
+/// stopped, then gone at once (the rule without a level's particles).
+#[derive(Clone, Debug, Default)]
+pub struct NoParticles {
+    playing: bool,
+}
+
+impl AmbientParticles for NoParticles {
+    fn start(&mut self, _: &str, _: Vec3) -> Result<(), Fatal> {
+        self.playing = true;
+        Ok(())
+    }
+    fn stop(&mut self) {
+        self.playing = false;
+    }
+    fn is_playing(&self) -> bool {
+        self.playing
+    }
+    fn remove(&mut self) {}
+}
+
+/// The active effect (4.2): its particles' name, where it started, and
+/// whether it was told to stop.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EffectParticles {
     pub particles: String,
@@ -270,8 +308,9 @@ impl AmbientState {
     /// The rule of one frame (4.4 – 4.6) at global clock `now` (ms): the
     /// current sections' sets `a` and `b` with blend weight `t`, whether
     /// the view is `outdoors` (4.3), and the camera's eye `eye`. Run once
-    /// per frame while a level runs and the game is not paused (4.1). A
-    /// period drawn from equal bounds is fatal (4.7).
+    /// per frame while a level runs and the game is not paused (4.1). The
+    /// effect objects are `particles`' (P11 3). A period drawn from equal
+    /// bounds is fatal (4.7), as is an effect that cannot be made (P11 3.1).
     pub fn frame(
         &mut self,
         system: &mut SoundSystem,
@@ -279,6 +318,7 @@ impl AmbientState {
         (a, b, t): (Option<&AmbientSet>, Option<&AmbientSet>, f32),
         outdoors: bool,
         eye: Vec3,
+        particles: &mut dyn AmbientParticles,
     ) -> Result<AmbientFrame, Fatal> {
         let mut out = AmbientFrame::default();
         // 4.4: both sides in 32-bit float.
@@ -287,24 +327,24 @@ impl AmbientState {
         let set = if out.chose_b { b } else { a };
         if let Some(set) = set {
             self.random_sound(system, now, set, eye, &mut out)?;
-            self.start_effect(system, now, set, outdoors, eye, &mut out)?;
+            out.effect = self.start_effect(system, now, set, outdoors, eye, particles)?;
         }
-        // End (4.6), whether or not the frame has a set.
+        // End (4.6), whether or not the frame has a set: a deferred stop in
+        // every frame it applies while the object exists (P11 3.4).
         if !(outdoors && now < self.effect_end) {
-            if let Some(p) = &mut self.particles
-                && !p.stopping
-            {
-                p.stopping = true;
-                out.effect_ended = true;
+            if let Some(p) = &mut self.particles {
+                particles.stop();
+                if !p.stopping {
+                    p.stopping = true;
+                    out.effect_ended = true;
+                }
             }
             self.wind_gust_factor = 0.0;
         }
-        // Removal: stopped particles that no longer play are removed at the
-        // end of the frame.
-        // TODO(#320, P11, docs/behavior/particles-and-lights-scope.md): when stopped
-        // particles count as no longer playing is P11's; until particles
-        // exist they are gone in the frame they are told to stop.
-        if self.particles.as_ref().is_some_and(|p| p.stopping) {
+        // Removal: an object whose group no longer plays is asked to be
+        // destroyed and forgotten (P11 3.5).
+        if self.particles.is_some() && !particles.is_playing() {
+            particles.remove();
             self.particles = None;
         }
         Ok(out)
@@ -356,11 +396,11 @@ impl AmbientState {
         set: &AmbientSet,
         outdoors: bool,
         eye: Vec3,
-        out: &mut AmbientFrame,
-    ) -> Result<(), Fatal> {
+        particles: &mut dyn AmbientParticles,
+    ) -> Result<Option<usize>, Fatal> {
         let n = set.data.effects.len();
         if !outdoors || self.particles.is_some() || self.next_effect >= now || n == 0 {
-            return Ok(());
+            return Ok(None);
         }
         let item = system.random().draw() as usize % n;
         let effect = &set.data.effects[item];
@@ -370,6 +410,7 @@ impl AmbientState {
         self.effect_end = now.wrapping_add(effect.life);
         let o = effect.offset;
         let position = [eye[0] + o[0], eye[1] + o[1], eye[2] + o[2]];
+        particles.start(&effect.particles, position)?;
         self.particles = Some(EffectParticles {
             particles: effect.particles.clone(),
             position,
@@ -378,8 +419,7 @@ impl AmbientState {
         if let Some(sound) = set.effect_sounds[item] {
             system.play_at(sound, position, PlayFlags::default());
         }
-        out.effect = Some(item);
-        Ok(())
+        Ok(Some(item))
     }
 }
 

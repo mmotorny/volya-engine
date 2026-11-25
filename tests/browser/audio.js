@@ -269,6 +269,9 @@ export const tests = {
       names.some((n) => n.startsWith("ambient\\rnd_outdoor\\")),
       `no ambient sound: ${names}`,
     );
+    // S15 9.1: the zones' idle sounds play looped at their zones.
+    const idle = sounds.emitters.filter((e) => e.looped && ["ambient\\fire2", "anomaly\\gravi_rumble1"].includes(e.name));
+    assert(new Set(idle.map((e) => e.name)).size === 2, `the zones' idle sounds: ${names}`);
     const heard = sounds.emitters.filter((e) => e.phase === "playing").map((e) => e.name);
     assert(heard.length > 0, `nothing heard: ${JSON.stringify(sounds.emitters)}`);
     // The sound update with occlusion on the level, over the latest frames.
