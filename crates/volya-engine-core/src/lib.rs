@@ -4,6 +4,7 @@
 //! Volya Engine core: platform-free engine code. Must not depend on any
 //! platform API; see docs/architecture.md (Crates).
 
+pub mod artefacts;
 pub mod audio;
 pub mod camera;
 pub mod character;
