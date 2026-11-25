@@ -113,6 +113,8 @@ function loop(time) {
 }
 
 let started;
+/** The port of the AudioWorklet pulling mixed blocks, once connected. */
+let audioPort = null;
 
 onmessage = async ({ data }) => {
   if (data.type === "start") {
@@ -134,8 +136,11 @@ onmessage = async ({ data }) => {
     e().resize(data.width, data.height, data.dpr);
   } else if (data.type === "audio") {
     e().audio_init(data.sampleRate);
+    // One output pulls from the mixer: a replaced one gets nothing more.
+    audioPort?.close();
+    audioPort = data.port;
     data.port.onmessage = ({ data: request }) => {
-      const block = e().audio_mix(request.need);
+      const block = e().audio_mix(request.need, request.underrun, request.queued);
       data.port.postMessage(block, [block.buffer]);
     };
   } else if (data.type === "visibility") {

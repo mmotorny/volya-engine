@@ -144,6 +144,19 @@ impl VoiceId {
     }
 }
 
+/// A playing voice's state ([`Mixer::probe`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VoiceProbe {
+    /// Input frames advanced since the voice started, loops included.
+    pub advanced: f64,
+    /// The left and right gains the last mixed block ended at.
+    pub gains: (f32, f32),
+    /// The gains the next block ramps to.
+    pub target: (f32, f32),
+    /// Input frames per output frame.
+    pub step: f64,
+}
+
 struct Voice {
     id: VoiceId,
     source: Box<dyn Source>,
@@ -163,6 +176,8 @@ struct Voice {
     step: f64,
     /// The step at a pitch of 1.
     base_step: f64,
+    /// Input frames advanced since the voice started, loops included.
+    advanced: f64,
     ended: bool,
 }
 
@@ -233,6 +248,7 @@ impl Voice {
             frame[0] += (l0 + (l1 - l0) * t) * gl;
             frame[1] += (r0 + (r1 - r0) * t) * gr;
             self.pos += self.step;
+            self.advanced += self.step;
         }
         // Drop consumed input, keeping the frame interpolation still needs.
         let consumed = (self.pos as usize).min(self.frames());
@@ -308,6 +324,7 @@ impl Mixer {
             pos: 0.0,
             step,
             base_step: step,
+            advanced: 0.0,
             ended: false,
         });
         id
@@ -332,6 +349,16 @@ impl Mixer {
 
     pub fn is_playing(&self, id: VoiceId) -> bool {
         self.voices.iter().any(|v| v.id == id)
+    }
+
+    /// Where a playing voice is: for tests and measurements.
+    pub fn probe(&self, id: VoiceId) -> Option<VoiceProbe> {
+        self.voices.iter().find(|v| v.id == id).map(|v| VoiceProbe {
+            advanced: v.advanced,
+            gains: v.gains,
+            target: v.target,
+            step: v.step,
+        })
     }
 
     /// Mixes the next `frames` output frames: stereo, interleaved. Finished
