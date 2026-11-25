@@ -15,6 +15,7 @@ pub mod env_mod;
 pub mod etc2;
 pub mod game_graph;
 pub mod gamemtl;
+pub mod lanims;
 pub mod level;
 pub mod level_ai;
 pub mod level_cform;
