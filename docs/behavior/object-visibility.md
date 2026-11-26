@@ -181,7 +181,8 @@ processing of GL 3 (fade and listing; no occlusion test by the grid, GL 5) [B8].
 
 An entry of the light kind is a light record [B9]:
 
-1. skipped if it has no sector (always already true here, section 5);
+1. skipped if it has no sector (never the case here, since section 5 already skipped such entries; this is the
+   only check before item 2: whether the record is enabled is not tested here) [B9];
 2. its box *C* ± *R* (its sphere, DL 2.3) is built anew and tested with the cache of OT 5 (kept in the record);
    a hidden record is skipped;
 3. it is listed by DL 4 rules 3 – 4 (not already listed this frame; not excluded, `r1_dlights` on, range at least
@@ -252,8 +253,3 @@ gets a full update in this frame. In the next pass with 7 results the index is 0
 - Analysis: static analysis of the shipped binaries (headless decompilation and disassembly, read-only; tables of
   virtual functions and run-time type information; constants and section layout read from the binaries); a
   single-precision model of the index's placement rules on random entries; arithmetic.
-
-## Gaps found in review
-
-- `docs/behavior/occlusion-tests.md` 6 says a light whose record is not enabled is skipped before its occlusion test;
-  the check made there is whether the record has a sector (section 6.3 here); the two specifications differ.

@@ -195,7 +195,7 @@ unless one of the following holds (rules applied in this order):
    cos the absolute cosine between **n** and the direction from the camera to the centre, the portal's
    screen measure is *m* = *r*² / *D*² × cos. The portal is skipped if *m* < *T*\_min, and also if
    *m* < *T*\_B (thresholds in section 9.4). Portals with *m* < *T*\_A are additionally drawn as a
-   darkening fade (not part of the stored world; out of scope).
+   darkening fade (not part of the stored world; which portals and how: `docs/behavior/portal-fade.md`).
 5. The portal polygon, clipped against the current frustum, is empty.
 6. The portal is hidden by the occlusion mesh `level.hom`: the clipped portal polygon of rule 5 is tested by the
    polygon test of `docs/behavior/occlusion-tests.md` 2.3 (not cached; visible without a test while occlusion is
@@ -311,8 +311,3 @@ portals, 709 sectors, 1,682 lights, 1,166 glows.
   from this text and `ogf.md`, run over all 30 levels, reproduces every number in section 10.
 - Section 9 revised 2026-11-25 (field of view, no camera sector, portal occlusion) by further static analysis of
   `bin\XR_3DA.exe` and `bin\xrRender_R1.dll`.
-
-## Gaps found in review
-
-- Section 9.2 rule 4 still calls the darkening fade of small portals out of scope; it is specified in
-  `docs/behavior/portal-fade.md`, which section 9 does not reference.
