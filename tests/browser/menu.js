@@ -704,7 +704,7 @@ export const tests = {
     return `textures ${gpu.textures}; ${note}; ${await jsMemory(stats)}; ${JSON.stringify(stats)}`;
   },
 
-  "a phone's second game: the first game played 60 s, quit to the title menu, a New Game 5 s later": async () => {
+  "a phone's second game: the first game played 20 s, quit to the title menu, a New Game 5 s later": async () => {
     needsGame();
     // The path of a device's log (#487): the game quit to the title menu
     // (not left), then a New Game.
@@ -712,7 +712,7 @@ export const tests = {
     const start = await volya.call("level_stats");
     // Walking and turning about, as a player does.
     const hold = (code, down) => document.body.dispatchEvent(new KeyboardEvent(down ? "keydown" : "keyup", { code, bubbles: true, cancelable: true }));
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 10; i++) {
       hold("KeyW", true);
       await sleep(1500);
       hold("KeyW", false);
@@ -721,7 +721,12 @@ export const tests = {
       hold("ArrowRight", false);
     }
     const played = await volya.call("level_stats");
-    await quitToTitle();
+    key("Escape");
+    await until((s) => inGame(s), "the in-game menu");
+    await selectInGame("btn_quit_to_mm");
+    key("Enter");
+    await answerBox("yes");
+    await until((s) => s.phase === "menu", "the title menu");
     await sleep(5000);
     const title = await volya.call("level_stats");
     await noteHeap("the title menu 5 s after quitting");
@@ -736,7 +741,7 @@ export const tests = {
     key("Escape");
     await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
     const gpu = (st) => `textures ${mib(st.gpu_texture_bytes ?? 0)}, world ${mib(st.gpu_world_bytes ?? 0)}`;
-    return `wasm heap: the level ${mib(start.wasm_heap_bytes)}, after 60 s ${mib(played.wasm_heap_bytes)}, the title menu ${mib(title.wasm_heap_bytes)}, the second game ${mib(loaded.wasm_heap_bytes)}; GPU: the level ${gpu(start)}, the title menu ${gpu(title)}, the second game ${gpu(loaded)}; ${heapMaps.slice(-2).join("; ")}; by caption (MiB, heap/live): ${stages}; ${record}`;
+    return `wasm heap: the level ${mib(start.wasm_heap_bytes)}, after 20 s ${mib(played.wasm_heap_bytes)}, the title menu ${mib(title.wasm_heap_bytes)}, the second game ${mib(loaded.wasm_heap_bytes)}; GPU: the level ${gpu(start)}, the title menu ${gpu(title)}, the second game ${gpu(loaded)}; ${heapMaps.slice(-2).join("; ")}; by caption (MiB, heap/live): ${stages}; ${record}`;
   },
 
   "the game left from its level and launched again: a New Game there at 2868×1320 is served by the heap the first grew": async () => {

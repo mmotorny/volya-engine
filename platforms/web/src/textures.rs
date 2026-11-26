@@ -89,35 +89,7 @@ const STAGING_BYTES: u64 = 2 << 20;
 /// for before the next (#440).
 const WORLD_TURN_BYTES: u64 = UPLOAD_PIECE as u64;
 
-/// The file buffer and the band buffer of the last preparation, kept for
-/// the next (#487): freed, the next load's earlier stages split their
-/// space, and its preparation grew the heap by them (4.0 and 2.2 MiB for a
-/// second New Game, measured in headless Chrome). Each grows to the
-/// largest texture file and band met.
-#[derive(Default)]
-struct Buffers {
-    bytes: Vec<u8>,
-    scratch: Vec<u8>,
-}
-
-/// The kept buffers, taken for a preparation and given back at its end
-/// (also when it fails).
-struct Kept(Buffers);
-
-impl Kept {
-    fn take() -> Self {
-        Self(BUFFERS.take())
-    }
-}
-
-impl Drop for Kept {
-    fn drop(&mut self) {
-        BUFFERS.set(std::mem::take(&mut self.0));
-    }
-}
-
 thread_local! {
-    static BUFFERS: std::cell::Cell<Buffers> = std::cell::Cell::default();
     static RUNNING: RefCell<bool> = const { RefCell::new(false) };
     static STATS: RefCell<Stats> = RefCell::new(Stats::default());
 }
@@ -206,10 +178,10 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
     let written = || crate::gpu::with_renderer(|r| r.texture_bytes_written()).unwrap_or(0);
     // The bytes written since WebGL last reported the writes done.
     let mut staged_from = written();
-    // Every file is read into one, and each band transcoded into the
+    // Every file is read into this one, and each band transcoded into the
     // other.
-    let mut kept = Kept::take();
-    let Buffers { bytes, scratch } = &mut kept.0;
+    let mut bytes = Vec::new();
+    let mut scratch = Vec::new();
     let mut turn = now();
     for path in paths {
         // The game was quit or unmounted meanwhile.
@@ -218,14 +190,11 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
         }
         let _span = tracing::info_span!("prepare.texture").entered();
         let t = now();
-        crate::heap_tag(1);
-        let read = crate::game::read_into(&path, bytes);
-        crate::heap_tag(0);
-        if read.is_err() {
+        if crate::game::read_into(&path, &mut bytes).is_err() {
             continue;
         }
         stats.read_ms += now() - t;
-        let Ok(dds) = Dds::parse(bytes) else {
+        let Ok(dds) = Dds::parse(&bytes) else {
             continue;
         };
         let t = now();
@@ -263,13 +232,11 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
                 staged_from = written();
             }
             let budget = STAGING_BYTES.saturating_sub(written() - staged_from);
-            crate::heap_tag(2);
             let done = crate::gpu::with_renderer(|r| {
-                let done = upload.step(r, &dds, scratch, budget);
+                let done = upload.step(r, &dds, &mut scratch, budget);
                 r.flush_uploads();
                 done
             });
-            crate::heap_tag(0);
             if done != Some(false) {
                 break;
             }
@@ -320,11 +287,8 @@ async fn prepare_world(level: Arc<LevelWorld>) -> Result<(), JsValue> {
                 &[("turn", Value::Number(f64::from(turns)))],
             )
         });
-        crate::heap_tag(3);
         let done = tracing::info_span!("prepare.world")
-            .in_scope(|| crate::gpu::prepare_world(&level, WORLD_TURN_BYTES));
-        crate::heap_tag(0);
-        let done = done?;
+            .in_scope(|| crate::gpu::prepare_world(&level, WORLD_TURN_BYTES))?;
         // Until WebGL reports the pieces written done (it may not in the
         // task they were written in, documented by the WebGL 2
         // specification).

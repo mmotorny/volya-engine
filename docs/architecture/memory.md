@@ -18,7 +18,7 @@ Where the engine's memory goes, by lifetime and owner; the design it follows (on
 | `render-level` suite's "a level frame's heap traffic" (`volya_engine::selftest::frame_memory`) | browser, the test build's counting allocator | Allocations and bytes a frame of the running level makes on the wasm heap, by part. |
 | `heap_log` op (test builds) | browser | The wasm heap and the most live under each loading caption. |
 | `heap_map` op (test builds) | browser | Live KiB per MiB of the heap and every live block of 256 KiB or more, by address. |
-| `heap_record` op (test builds) | browser | At the load's most live: live bytes by block size and the largest blocks. |
+| `heap_record` op (test builds) | browser | At the load's most live: live bytes by block size and the largest blocks; every allocation that grew the wasm memory since the reset, by size and address. |
 | `level_stats` op | browser | The wasm heaps (engine, audio worker) and the GPU world's buffers and textures. |
 | `menu` suite's JS memory | Chrome | `performance.measureUserAgentSpecificMemory()` after the New Game (cross-origin isolated pages only, documented, MDN): each context's JavaScript, the wasm memories not among it (measured: 8 MiB in all beside a 87 MiB heap). |
 | `footprint` of the Simulator's processes | iOS Simulator | Per-process footprints; ETC2 textures there are held as RGBA8, so they don't show the device's (#443). |
@@ -96,7 +96,7 @@ Where the gap comes from:
 - **Large blocks meeting split free space.** The heap grows by 26 MiB under the collision stage for 23 MiB more live: its arrays (up to 10.5 MiB each) find no hole that size in the free space the earlier stages left (measured, `heap_log`; #373). It is the only stage that grows the heap by more than it keeps.
 - **Loading transients among long-lived blocks.** `st_client_spawning` (2.52 million allocations, 6,800 kept) and `st_server_connecting` (536,685, 83,406 kept) leave their kept blocks scattered through the space their temporaries used, so the next large block needs new memory above them. At the load's most live, blocks under 64 KiB hold about 14 MiB, blocks of 1 MiB or more 58 MiB (measured, `heap_record`).
 - **The preparation's buffers.** The texture read buffer and the band buffer arrive last, above the level's data.
-- **A third New Game grows the heap by 4 MiB more** than the second (both runs): a block the first game's layout doesn't fit (believed; which is unknown).
+- **A second New Game grows the heap by 4 MiB once**, the third none (the `menu` suite's path of a phone's log: the first game played, quit to the title menu, a New Game 5 s later; 74 → 78 → 78 MiB). Two allocations of the texture stage grow it, 2.2 and 4.0 MiB (measured, `heap_record`'s growths), as the first game's layout leaves no hole that size there. Keeping the texture file buffer as a spare (alone, or shared with the geometry's upload piece) does not pay off: live, it takes the space the geometry's upload reused, so the first game's heap grows by more (76–82 against 74, the second 79–82 against 78; one run each, #487). The navigation's and the details' stages grow nothing in the second game, so their spares would not help either.
 
 The program's data leaves no split free space before a game (`heap_map`, #432).
 

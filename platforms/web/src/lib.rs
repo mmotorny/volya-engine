@@ -70,9 +70,6 @@ mod counting {
         )
     }; 64];
     static GROWTH_COUNT: AtomicUsize = AtomicUsize::new(0);
-    static GROWTH_TAGS: [AtomicUsize; 64] = [const { AtomicUsize::new(0) }; 64];
-    /// What runs now, for the growths (TEMPORARY, #487).
-    pub static TAG: AtomicUsize = AtomicUsize::new(0);
 
     fn memory_bytes() -> usize {
         #[cfg(target_arch = "wasm32")]
@@ -90,7 +87,6 @@ mod counting {
                 g.0.store(size, Relaxed);
                 g.1.store(p as usize, Relaxed);
                 g.2.store(after, Relaxed);
-                GROWTH_TAGS[n].store(TAG.load(Relaxed), Relaxed);
             }
         }
     }
@@ -101,12 +97,11 @@ mod counting {
         let n = GROWTH_COUNT.load(Relaxed);
         let mib = |b: usize| b as f64 / (1 << 20) as f64;
         let list = (GROWTHS.iter().take(n))
-            .zip(&GROWTH_TAGS)
-            .map(|(g, t)| {
+            .map(|g| {
                 (
                     g.0.load(Relaxed) >> 10,
                     mib(g.1.load(Relaxed)),
-                    mib(g.2.load(Relaxed)) + t.load(Relaxed) as f64 * 1000.0,
+                    mib(g.2.load(Relaxed)),
                 )
             })
             .collect();
@@ -353,12 +348,6 @@ thread_local! {
 }
 
 /// The wasm heap (linear memory) size, bytes.
-pub(crate) fn heap_tag(t: usize) {
-    #[cfg(feature = "test-ops")]
-    counting::TAG.store(t, std::sync::atomic::Ordering::Relaxed);
-    let _ = t;
-}
-
 pub(crate) fn heap_bytes() -> f64 {
     wasm_bindgen::memory()
         .dyn_into::<js_sys::WebAssembly::Memory>()
