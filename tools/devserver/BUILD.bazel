@@ -13,6 +13,9 @@ volya_library(name = "volya-engine-devserver")
 volya_binary(
     name = "devserver",
     srcs = ["src/main.rs"],
+    # `bazel run //tools/devserver` serves the dev site.
+    data = ["//platforms/web:site_dev"],
+    env = {"VOLYA_SITE": "$(rootpath //platforms/web:site_dev)"},
     deps = [":volya-engine-devserver"],
 )
 

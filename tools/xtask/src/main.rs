@@ -3,6 +3,7 @@
 
 //! Project tasks: `cargo xtask <task>`.
 
+mod bazel;
 mod deploy;
 mod e2e;
 mod machine;
@@ -19,7 +20,7 @@ use std::time::Duration;
 use volya_engine_site::{Stamp, copy_dir};
 
 const USAGE: &str = "\
-Usage: cargo xtask <task>
+Usage: bazel run //tools/xtask -- <task>   (or cargo xtask <task>)
 
 Tasks:
   check       Fast static checks (SPDX, licenses, fmt, clippy). Gates every push.
@@ -61,7 +62,10 @@ Tasks:
   original views [--again] [NAME...]
               Capture the original's frame of each view of the fidelity
               suite (tests/fidelity/views.rs) not yet cached.
-  update      Move to the latest stable Rust and dependencies, then check.";
+  update      Move to the latest stable Rust and dependencies, then check
+              (under `bazel run`: also Bazel, its modules, the wasm LLVM,
+              and the wasm-bindgen CLI's pin).
+  gc          Remove Bazel's output bases of deleted worktrees.";
 
 /// Crates that never build for the web target.
 const NATIVE_ONLY: &[&str] = &["volya-engine-devserver", "xtask"];
@@ -71,6 +75,11 @@ const WASM_TARGET: &str = "wasm32-unknown-unknown";
 type Result<T = ()> = std::result::Result<T, String>;
 
 fn main() -> ExitCode {
+    // `bazel run`: paths given are the caller's (commands still run in the
+    // workspace, `cmd`).
+    if let Some(dir) = std::env::var_os("BUILD_WORKING_DIRECTORY") {
+        let _ = std::env::set_current_dir(dir);
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let result = match args.as_slice() {
@@ -91,7 +100,9 @@ fn main() -> ExitCode {
         ["web", "--dev"] => web(Profile::Dev),
         ["deploy"] => deploy::run_deploy(),
         ["spec-lint", paths @ ..] => spec_lint::run(paths),
+        ["update"] if std::env::var_os("BUILD_WORKSPACE_DIRECTORY").is_some() => bazel::update(),
         ["update"] => update(),
+        ["gc"] => bazel::gc(),
         ["wine", rest @ ..] => match wine::main(rest) {
             Ok(code) => return ExitCode::from(code),
             Err(error) => Err(error),

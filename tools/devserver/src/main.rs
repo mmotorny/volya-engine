@@ -11,7 +11,8 @@ use volya_engine_devserver::{BASE, Server};
 const USAGE: &str = "\
 Usage: volya-engine-devserver [--root DIR] [--tests DIR] [--installer DIR] [--port PORT]
 
-Serves --root (default: dist) under /volya-engine/ like GitHub Pages, and the
+Serves --root (default: dist; under `bazel run //tools/devserver`, the dev
+site) under /volya-engine/ like GitHub Pages, and the
 browser test suites (default: tests/browser, if present) under
 /volya-engine/__test/; open /volya-engine/__test/<suite>.html to run a suite
 and print its report here. --installer serves a GOG installer directory to
@@ -30,8 +31,17 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<(), String> {
-    let mut root = PathBuf::from("dist");
-    let mut tests = Some(PathBuf::from("tests/browser")).filter(|d| d.is_dir());
+    // `bazel run //tools/devserver`: the dev site from its runfiles and the
+    // workspace's suites (the server serves nothing reached through a link
+    // out of its mount, and runfiles are links).
+    let workspace = std::env::var_os("BUILD_WORKSPACE_DIRECTORY").map(PathBuf::from);
+    let mut root =
+        std::env::var_os("VOLYA_SITE").map_or_else(|| PathBuf::from("dist"), PathBuf::from);
+    let mut tests = Some(workspace.map_or_else(
+        || PathBuf::from("tests/browser"),
+        |w| w.join("tests/browser"),
+    ))
+    .filter(|d| d.is_dir());
     let mut port = 8080u16;
     let mut installer = std::env::var_os("VOLYA_GOG_INSTALLER").map(PathBuf::from);
     let mut args = std::env::args().skip(1);

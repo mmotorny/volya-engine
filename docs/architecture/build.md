@@ -105,7 +105,7 @@ One test target per suite and target: `//tests/browser:<suite>_<target>` (e.g. `
 
 ## Commands
 
-Operational tasks are `bazel run //tools/xtask -- <task>` (the xtask binary built by Bazel, its root from `BUILD_WORKSPACE_DIRECTORY`, paths it is given from `BUILD_WORKING_DIRECTORY`): `deploy`, `update`, `wait-memory`, `sim`, `simshot`, `simrec`, `wine`, `original`, `parity`, `spec-lint`, `gc`. Aliases in the root package shorten the common ones (`bazel run //:deploy`). `deploy` takes `//platforms/web:site` from runfiles, injects the commit, and publishes; it first runs `bazel test //:checks`. The dev server is `bazel run //tools/devserver -- --site dev` (serving `:site_dev`).
+Operational tasks are `bazel run //tools/xtask -- <task>`: the xtask binary built by Bazel, its root from `BUILD_WORKSPACE_DIRECTORY`, the paths it is given relative to `BUILD_WORKING_DIRECTORY` (where `bazel run` was called): `deploy`, `update`, `wait-memory`, `sim`, `simshot`, `simrec`, `wine`, `original`, `parity`, `spec-lint`, `gc`. `update` under `bazel run` moves Rust (from its stable channel), Bazel (`.bazelversion`, its latest release), every `bazel_dep` (the registry's latest), wasi-sdk (its latest release, the checksum computed), the crates (`cargo update` through rules_rust's cargo) and the wasm-bindgen CLI's pin (from Cargo.lock), then runs `//:checks` and cargo-deny's advisories. `gc` removes the output bases (`~/Library/Caches/bazel/_bazel_<user>/<hash>/`) whose workspace is gone, leaving one whose server still runs. The dev server is `bazel run //tools/devserver` (serving `:site_dev` and the workspace's `tests/browser`; `--root` and `--tests` as before).
 
 ## Cargo after the switch
 
