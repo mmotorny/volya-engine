@@ -34,7 +34,9 @@ Conventions:
    T[0], T[1], … (section 4).
 2. A resolved shader produces up to five **elements** (section 5). Element 0 and element 1 are the two
    variants of the normal opaque/translucent pass (near and far), elements 2 and 3 are additive dynamic
-   point/spot light passes, element 4 is a special pass. Each element here has exactly one pass.
+   point/spot light passes, element 4 is a special pass (for the library classes of section 7 except
+   `D_TREE  ` and `S_SET   `, and for `selflight`, it draws into the projected light texture of objects,
+   `docs/behavior/object-projected-light.md` section 4.4). Each element here has exactly one pass.
 3. A pass = vertex program + pixel program (HLSL files in `shaders\r1\`), up to four textures bound to
    named samplers with sampler states, and render states (depth, blend, alpha test, fog). The program
    files define the colour equation (sections 7, 8).
@@ -262,7 +264,7 @@ clamp(`r__tf_aniso`, 1, 16) (default 16) and the mip LOD bias is `r1_tf_mipbias`
 | 0 | normal pass, near variant (may use detail) |
 | 1 | normal pass, far variant (never detail) |
 | 2, 3 | additive dynamic point / spot light pass (section 12) |
-| 4 | special pass (used by the LOD billboards, section 8.4) |
+| 4 | special pass: the LOD billboards' opaque cut-out pass (section 8.4); for `LM      `, `LM_AREF `, `V       `, `V_AREF  `, `BmmDold ` and `selflight` the pass that draws the static geometry's baked light into the projected light texture of objects (`object-projected-light.md` 4.4); `D_TREE  ` and `S_SET   ` have none |
 
 For a static mesh visual with bounding-sphere centre C and radius r, and camera position E, the normal
 phase draws element 0 if |E − C| − r < 44 (metres) and element 1 otherwise.
@@ -589,7 +591,8 @@ in-group order of non-sorted blended passes (10.3).
 
 ## 15. Provenance
 
-Date 2026-11-23. Russian edition (GOG), archives `gamedata.db0` … `gamedata.dbd`. Data examined:
+Date 2026-11-23; revised 2026-11-26: sections 1 and 5, element 4 of the library classes (after
+object-projected-light.md). Russian edition (GOG), archives `gamedata.db0` … `gamedata.dbd`. Data examined:
 `shaders.xr`, `shaders\r1\*.s` and program sources, `textures\textures.ltx`, `config\weathers\
 weather_default.ltx`, the shipped default `user.ltx`, `level` and `level.geom` of `l01_escape`, chunk 2 of
 the `level` files of all 30 shipped levels. Analysis: parsing of the data files with throwaway tools;
