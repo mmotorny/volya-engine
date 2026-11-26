@@ -27,14 +27,14 @@ async fn statistics_overlay(cx: &Context<'_>) -> Outcome {
     let data = GameData::load(tree, None, XGA).map_err(|e| format!("game data: {e}"))?;
     let mut app = App::new(data).map_err(|e| format!("app: {e}"))?;
     let empty = DbVfs::<std::io::Empty>::new();
-    let input = Input::new();
+    let mut input = Input::new();
     let mut gpu = cx.renderer();
     let mut presenter = Presenter::new();
     let mut frames = Vec::new();
     let mut glyphs = 0;
     // The THQ video, 2.5 s in, drawn without the overlay and with it.
-    app.update(&empty, 1000.0, &input, &mut Silent);
-    app.update(&empty, 3500.0, &input, &mut Silent);
+    app.update(&empty, 1000.0, &mut input, &mut Silent);
+    app.update(&empty, 3500.0, &mut input, &mut Silent);
     for on in [false, true] {
         app.exec(if on { "rs_stats on" } else { "rs_stats off" });
         let s = app.scene(tree, XGA).map_err(|e| format!("scene: {e}"))?;

@@ -77,8 +77,16 @@ pub enum MovieItemKind {
         pictures: Vec<TimedPicture>,
         /// `guard_key`, when present.
         guard_key: Option<String>,
+        /// Where the item puts the cursor when it starts, UI units
+        /// (title-menu.md section 7): its `cursor_pos` child's `x` and `y`;
+        /// without the child (1024, 768).
+        cursor_pos: [f32; 2],
     },
 }
+
+/// The cursor position of an image item without `cursor_pos`
+/// (title-menu.md section 7).
+pub const NO_CURSOR_POS: [f32; 2] = [1024.0, 768.0];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct MovieItem {
@@ -140,6 +148,15 @@ impl MovieSequence {
                         .transpose()?
                         .unwrap_or_default(),
                     guard_key: child_value(item, "guard_key").map(str::to_owned),
+                    // A `cursor_pos` lacking one of its attributes is not
+                    // covered by the spec: that coordinate keeps the value
+                    // without the child (our choice).
+                    cursor_pos: item.child("cursor_pos").map_or(NO_CURSOR_POS, |c| {
+                        [
+                            float_attr(c, "x", NO_CURSOR_POS[0]),
+                            float_attr(c, "y", NO_CURSOR_POS[1]),
+                        ]
+                    }),
                 },
                 other => {
                     return Err(invalid(format!(
@@ -185,6 +202,7 @@ mod tests {
               <main_wnd><auto_static start_time="4" length_sec="4" x="0" y="0" width="1024"
                 height="768" stretch="1" light_anim="asus_logo_01" la_alpha="1">
                 <texture>ui_asus_02</texture></auto_static></main_wnd></item>
+            <item type="image"><length_sec>1</length_sec><cursor_pos x="100" y="200"/></item>
             </intro_logo></w>"#,
         )
         .unwrap();
@@ -193,7 +211,7 @@ mod tests {
         assert!(s.play_each_item);
         let global = s.global_wnd.unwrap();
         assert_eq!(global.window.auto_statics.len(), 1);
-        assert_eq!(s.items.len(), 2);
+        assert_eq!(s.items.len(), 3);
         let MovieItemKind::Video {
             delay,
             sound,
@@ -213,11 +231,17 @@ mod tests {
             length_sec,
             pictures,
             guard_key,
+            cursor_pos,
         } = &s.items[1].kind
         else {
             panic!("not an image");
         };
         assert_eq!((*length_sec, guard_key), (9.0, &None));
+        assert_eq!(*cursor_pos, NO_CURSOR_POS);
+        let MovieItemKind::Image { cursor_pos, .. } = &s.items[2].kind else {
+            panic!("not an image");
+        };
+        assert_eq!(*cursor_pos, [100.0, 200.0]);
         let p = &pictures[0];
         assert_eq!((p.start_time, p.length_sec), (4.0, 4.0));
         assert_eq!(p.light_anim.as_deref(), Some("asus_logo_01"));

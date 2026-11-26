@@ -246,7 +246,7 @@ impl Game {
     /// One 16 ms frame, sound off.
     fn step(&mut self, tree: &dyn Vfs) {
         self.t += 16.0;
-        self.app.update(tree, self.t, &self.input, &mut Silent);
+        self.app.update(tree, self.t, &mut self.input, &mut Silent);
         self.input.end_frame();
     }
 }

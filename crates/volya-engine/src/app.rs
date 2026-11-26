@@ -164,6 +164,8 @@ impl Overlay {
 struct Intro {
     checked: bool,
     player: Option<MoviePlayer>,
+    /// Where its image items put the cursor, until the app takes it.
+    cursor: Option<[f32; 2]>,
 }
 
 impl Intro {
@@ -203,6 +205,7 @@ impl Intro {
             return Ok(false);
         };
         player.update(seq, data, now, quit_presses, audio);
+        self.cursor = player.take_cursor().or(self.cursor);
         if player.finished(seq) {
             // Section 2.3, step 4: then the level is visible.
             self.player = None;
@@ -800,13 +803,14 @@ impl App {
         self.clock
     }
 
-    /// One frame at platform time `time_ms` with this frame's `input`.
-    /// Loading a level reads from `tree`.
+    /// One frame at platform time `time_ms` with this frame's `input`,
+    /// whose cursor the UI sequences' image items place (title-menu.md
+    /// section 7). Loading a level reads from `tree`.
     pub fn update(
         &mut self,
         tree: &dyn Vfs,
         time_ms: f64,
-        input: &Input,
+        input: &mut Input,
         audio: &mut dyn AudioOut,
     ) {
         if self.hidden {
@@ -1060,7 +1064,7 @@ impl App {
         &mut self,
         tree: &dyn Vfs,
         time_ms: f64,
-        input: &Input,
+        input: &mut Input,
         audio: &mut dyn AudioOut,
     ) {
         if self.hidden {
@@ -1114,6 +1118,9 @@ impl App {
         match phase {
             Phase::Startup(startup) => {
                 startup.update(data, now, quit_presses(data, input), audio);
+                if let Some(at) = startup.take_cursor() {
+                    input.place_cursor(at);
+                }
                 if startup.finished(data) {
                     // Shown within one frame of the sequence's end.
                     *phase = Phase::Menu(TitleMenu::open(data, now, input, audio, title));
@@ -1314,7 +1321,11 @@ impl App {
                 // input goes to it alone (our choice; the level is paused
                 // under it anyway).
                 let playing = intro.player.is_some();
-                match intro.frame(data, now, left, quit_presses(data, input), audio) {
+                let frame = intro.frame(data, now, left, quit_presses(data, input), audio);
+                if let Some(at) = intro.cursor.take() {
+                    input.place_cursor(at);
+                }
+                match frame {
                     Ok(true) => {
                         level.paused(now);
                         return;
@@ -1982,11 +1993,11 @@ mod tests {
         let (mut input, mut audio) = (Input::new(), FakeAudio::default());
         assert!(matches!(app.state(), AppState::Loaded { .. }));
         // The clock starts at the first update.
-        app.update(&tree, 5000.0, &input, &mut audio);
+        app.update(&tree, 5000.0, &mut input, &mut audio);
         assert!(matches!(app.state(), AppState::Startup { clock: 0, .. }));
         // Keys other than quit do nothing; a tap counts as quit.
         press(&mut input, Key::Enter);
-        app.update(&tree, 5100.0, &input, &mut audio);
+        app.update(&tree, 5100.0, &mut input, &mut audio);
         input.end_frame();
         let AppState::Startup { startup, .. } = app.state() else {
             panic!()
@@ -1997,7 +2008,7 @@ mod tests {
             phase: TouchPhase::Start,
             time: 0.0,
         });
-        app.update(&tree, 5200.0, &input, &mut audio);
+        app.update(&tree, 5200.0, &mut input, &mut audio);
         input.end_frame();
         let AppState::Startup { startup, .. } = app.state() else {
             panic!()
@@ -2008,7 +2019,7 @@ mod tests {
         assert!(!app.cursor_shown() && scene.first("cursor").is_none());
         // Escape ends the last item: the menu shows in the same frame.
         press(&mut input, Key::Escape);
-        app.update(&tree, 5300.0, &input, &mut audio);
+        app.update(&tree, 5300.0, &mut input, &mut audio);
         input.end_frame();
         let AppState::Menu { clock, menu, .. } = app.state() else {
             panic!()
@@ -2022,7 +2033,7 @@ mod tests {
         // The menu draws its cursor: touch is a touchpad (#108).
         assert!(app.cursor_shown() && scene.first("cursor").is_some());
         press(&mut input, Key::Q);
-        app.update(&tree, 5400.0, &input, &mut audio);
+        app.update(&tree, 5400.0, &mut input, &mut audio);
         assert!(app.quit_requested());
         assert!(audio.playing.is_empty());
     }
@@ -2036,8 +2047,8 @@ mod tests {
         data.set_user_config(b"rs_c_brightness 1.5\r\n".to_vec());
         let mut app = App::new(data).unwrap();
         app.assets = fixture::assets();
-        let (input, mut audio) = (Input::new(), FakeAudio::default());
-        app.update(&tree, 5000.0, &input, &mut audio);
+        let (mut input, mut audio) = (Input::new(), FakeAudio::default());
+        app.update(&tree, 5000.0, &mut input, &mut audio);
         let scene = app.scene(&tree, Resolution::new(1024, 768)).unwrap();
         assert_eq!(scene.ramp.map(|r| [r[0], r[128]]), Some([8192, 41088]));
         app.console.exec("rs_c_brightness 1");
@@ -2066,7 +2077,7 @@ mod tests {
         app.assets = fixture::assets();
         assert_eq!(app.video_mode(), Resolution::new(800, 600));
         let (mut input, mut audio) = (Input::new(), FakeAudio::default());
-        app.update(&tree, 0.0, &input, &mut audio);
+        app.update(&tree, 0.0, &mut input, &mut audio);
         // Section 6.4: the volumes at once (built-in effects volume 1).
         assert_eq!(
             audio.volumes,
@@ -2074,18 +2085,18 @@ mod tests {
         );
         for _ in 0..5 {
             press(&mut input, Key::Escape);
-            app.update(&tree, 10.0, &input, &mut audio);
+            app.update(&tree, 10.0, &mut input, &mut audio);
             input.end_frame();
         }
         // Options (item 3): the fixture has no options layout, so the menu
         // stays, saying why.
         for _ in 0..3 {
             press(&mut input, Key::Down);
-            app.update(&tree, 20.0, &input, &mut audio);
+            app.update(&tree, 20.0, &mut input, &mut audio);
             input.end_frame();
         }
         press(&mut input, Key::Enter);
-        app.update(&tree, 30.0, &input, &mut audio);
+        app.update(&tree, 30.0, &mut input, &mut audio);
         input.end_frame();
         let AppState::Menu { menu, .. } = app.state() else {
             panic!("not in the menu")
@@ -2094,7 +2105,7 @@ mod tests {
         assert!(menu.error.unwrap().contains("ui_mm_opt.xml"));
         // Quitting stores the settings.
         press(&mut input, Key::Q);
-        app.update(&tree, 40.0, &input, &mut audio);
+        app.update(&tree, 40.0, &mut input, &mut audio);
         let saved = String::from_utf8(app.take_save().unwrap()).unwrap();
         assert!(
             saved.contains("snd_volume_music 0.5\r\n") && saved.contains("bind forward kT\r\n")
@@ -2107,17 +2118,17 @@ mod tests {
         let mut app = App::new(fixture::data(&tree)).unwrap();
         app.assets = fixture::assets();
         let (mut input, mut audio) = (Input::new(), FakeAudio::default());
-        app.update(&tree, 0.0, &input, &mut audio);
+        app.update(&tree, 0.0, &mut input, &mut audio);
         for _ in 0..5 {
             press(&mut input, Key::Escape);
-            app.update(&tree, 10.0, &input, &mut audio);
+            app.update(&tree, 10.0, &mut input, &mut audio);
             input.end_frame();
         }
         assert!(matches!(app.state(), AppState::Menu { .. }));
         // New game, then the first difficulty.
         for t in [20.0, 30.0] {
             press(&mut input, Key::Enter);
-            app.update(&tree, t, &input, &mut audio);
+            app.update(&tree, t, &mut input, &mut audio);
             input.end_frame();
         }
         let AppState::Loading {
@@ -2141,18 +2152,18 @@ mod tests {
             } => (l.captions, l.caption),
             s => panic!("not loading: {s:?}"),
         };
-        app.update(&tree, 40.0, &input, &mut audio);
+        app.update(&tree, 40.0, &mut input, &mut audio);
         assert_eq!(caption(&app), (1, "Кэширование объектов...".into()));
         let scene = app.scene(&tree, res).unwrap();
         assert!(scene.first("background").is_none(), "menu gone");
         assert_eq!(scene.layer("loading strip").count(), 40);
-        app.update(&tree, 50.0, &input, &mut audio);
+        app.update(&tree, 50.0, &mut input, &mut audio);
         assert_eq!(caption(&app), (2, "Сервер: Старт...".into()));
-        app.update(&tree, 60.0, &input, &mut audio);
-        app.update(&tree, 70.0, &input, &mut audio);
+        app.update(&tree, 60.0, &mut input, &mut audio);
+        app.update(&tree, 70.0, &mut input, &mut audio);
         assert_eq!(caption(&app), (4, "st_creating_new_game...".into()));
         // The fixture has no spawn file: back to the menu, saying why.
-        app.update(&tree, 80.0, &input, &mut audio);
+        app.update(&tree, 80.0, &mut input, &mut audio);
         let AppState::Menu { menu, .. } = app.state() else {
             panic!("not in the menu: {:?}", app.state())
         };
@@ -2163,7 +2174,7 @@ mod tests {
         // A later New Game of the same type skips prefetching.
         for t in [90.0, 100.0, 110.0] {
             press(&mut input, Key::Enter);
-            app.update(&tree, t, &input, &mut audio);
+            app.update(&tree, t, &mut input, &mut audio);
             input.end_frame();
         }
         assert_eq!(caption(&app), (1, "Сервер: Старт...".into()));
@@ -2341,8 +2352,8 @@ mod tests {
         let tree = fixture::tree();
         let mut app = App::new(fixture::data(&tree)).unwrap();
         app.assets = fixture::assets();
-        let (input, mut audio) = (Input::new(), FakeAudio::default());
-        app.update(&tree, 0.0, &input, &mut audio);
+        let (mut input, mut audio) = (Input::new(), FakeAudio::default());
+        app.update(&tree, 0.0, &mut input, &mut audio);
         let controls = app.data.controls.clone();
         app.phase = Some(Phase::Level {
             level: Box::new(LevelScreen::empty(controls, 0)),
@@ -2352,7 +2363,7 @@ mod tests {
             inventory: None,
             dropped: Vec::new(),
         });
-        app.update(&tree, 16.0, &input, &mut audio);
+        app.update(&tree, 16.0, &mut input, &mut audio);
         assert!(app.level_controls().is_some(), "the controls are live");
         assert!(!app.cursor_shown(), "no cursor in the level");
         (tree, app, input, audio)
@@ -2363,14 +2374,14 @@ mod tests {
     /// weather has 100 m).
     #[test]
     fn the_view_distance_scales_the_far_plane() {
-        let (tree, mut app, input, mut audio) = in_level();
+        let (tree, mut app, mut input, mut audio) = in_level();
         let far = |app: &App| match &app.phase {
             Some(Phase::Level { level, .. }) => level.far_plane(),
             _ => panic!("not in a level"),
         };
         assert_eq!(far(&app), 100.0);
         app.console.exec("rs_vis_distance 0.5");
-        app.update(&tree, 32.0, &input, &mut audio);
+        app.update(&tree, 32.0, &mut input, &mut audio);
         assert_eq!(far(&app), 50.0);
     }
 
@@ -2380,10 +2391,10 @@ mod tests {
     /// from the first update after a video restart to it.
     #[test]
     fn the_camera_pass_takes_the_video_mode() {
-        let (tree, mut app, input, mut audio) = in_level();
+        let (tree, mut app, mut input, mut audio) = in_level();
         app.set_supersample(1);
         app.set_video_mode(Resolution::new(1920, 1080));
-        app.update(&tree, 32.0, &input, &mut audio);
+        app.update(&tree, 32.0, &mut input, &mut audio);
         let Some(Phase::Level { level, .. }) = &app.phase else {
             panic!("not in a level");
         };
@@ -2423,8 +2434,8 @@ mod tests {
         let tree = fixture::tree();
         let mut app = App::new(fixture::data(&tree)).unwrap();
         app.assets = fixture::assets();
-        let (input, mut audio) = (Input::new(), FakeAudio::default());
-        app.update(&tree, 0.0, &input, &mut audio);
+        let (mut input, mut audio) = (Input::new(), FakeAudio::default());
+        app.update(&tree, 0.0, &mut input, &mut audio);
         let mut controls = app.data.controls.clone();
         controls.bindings = crate::controls::Bindings::read(&[
             b"bind inventory kI\nbind forward kW\nbind wpn_fire mouse1\nbind drop kG\n",
@@ -2440,7 +2451,7 @@ mod tests {
             inventory: Some(Box::new(inventory)),
             dropped: Vec::new(),
         });
-        app.update(&tree, 16.0, &input, &mut audio);
+        app.update(&tree, 16.0, &mut input, &mut audio);
         (tree, app, input, audio)
     }
 
@@ -2452,7 +2463,7 @@ mod tests {
             _ => panic!(),
         };
         press(&mut input, Key::I);
-        app.update(&tree, 32.0, &input, &mut audio);
+        app.update(&tree, 32.0, &mut input, &mut audio);
         input.end_frame();
         assert!(app.inventory_open());
         // inventory-screen.md 1.3: the cursor shows, the page's touch
@@ -2469,7 +2480,7 @@ mod tests {
             key: Key::W,
             pressed: true,
         });
-        app.update(&tree, 132.0, &input, &mut audio);
+        app.update(&tree, 132.0, &mut input, &mut audio);
         input.end_frame();
         let AppState::Level {
             level, inventory, ..
@@ -2494,14 +2505,14 @@ mod tests {
         );
         // Escape closes the screen, not opening the menu (1.2 item 2).
         press(&mut input, Key::Escape);
-        app.update(&tree, 148.0, &input, &mut audio);
+        app.update(&tree, 148.0, &mut input, &mut audio);
         input.end_frame();
         assert!(!app.inventory_open() && !menu_open(&app) && !app.cursor_shown());
         assert!(app.level_controls().is_some());
         assert!(audio.started.last().unwrap().1.ends_with("inv_close.ogg"));
         // Escape again opens the menu as usual.
         press(&mut input, Key::Escape);
-        app.update(&tree, 164.0, &input, &mut audio);
+        app.update(&tree, 164.0, &mut input, &mut audio);
         input.end_frame();
         assert!(menu_open(&app));
     }
@@ -2530,14 +2541,14 @@ mod tests {
         let (tree, mut app, mut input, mut audio) = in_level_with_inventory();
         without_grid(&mut app);
         press(&mut input, Key::I);
-        app.update(&tree, 32.0, &input, &mut audio);
+        app.update(&tree, 32.0, &mut input, &mut audio);
         input.end_frame();
         ends_saying_why(&app);
         // While open: an item without them enters the inventory, which
         // rebuilds the screen (4.3).
         let (tree, mut app, mut input, mut audio) = in_level_with_inventory();
         press(&mut input, Key::I);
-        app.update(&tree, 32.0, &input, &mut audio);
+        app.update(&tree, 32.0, &mut input, &mut audio);
         input.end_frame();
         assert!(app.inventory_open());
         let Some(Phase::Level { level, .. }) = &mut app.phase else {
@@ -2548,7 +2559,7 @@ mod tests {
         item.id = 6;
         item.config.inv_grid = None;
         inv.take(item);
-        app.update(&tree, 48.0, &input, &mut audio);
+        app.update(&tree, 48.0, &mut input, &mut audio);
         ends_saying_why(&app);
     }
 
@@ -2562,12 +2573,12 @@ mod tests {
                 pressed,
             });
         }
-        app.update(&tree, 32.0, &input, &mut audio);
+        app.update(&tree, 32.0, &mut input, &mut audio);
         input.end_frame();
         assert!(app.inventory_open());
         // The inventory key closes it.
         press(&mut input, Key::I);
-        app.update(&tree, 48.0, &input, &mut audio);
+        app.update(&tree, 48.0, &mut input, &mut audio);
         input.end_frame();
         assert!(!app.inventory_open());
         // A gamepad's north button opens it (our design).
@@ -2577,7 +2588,7 @@ mod tests {
                 pressed,
             });
         }
-        app.update(&tree, 64.0, &input, &mut audio);
+        app.update(&tree, 64.0, &mut input, &mut audio);
         input.end_frame();
         assert!(app.inventory_open());
         // A double click on the bread eats it.
@@ -2601,7 +2612,7 @@ mod tests {
                 });
             }
         }
-        app.update(&tree, 80.0, &input, &mut audio);
+        app.update(&tree, 80.0, &mut input, &mut audio);
         input.end_frame();
         let AppState::Level { level, .. } = app.state() else {
             panic!()
@@ -2614,11 +2625,11 @@ mod tests {
             panic!()
         };
         level.character_mut().unwrap().conditions.health = 0.0;
-        app.update(&tree, 96.0, &input, &mut audio);
+        app.update(&tree, 96.0, &mut input, &mut audio);
         assert!(!app.inventory_open());
         // Dead, the key opens nothing.
         press(&mut input, Key::I);
-        app.update(&tree, 112.0, &input, &mut audio);
+        app.update(&tree, 112.0, &mut input, &mut audio);
         assert!(!app.inventory_open());
     }
 
@@ -2643,7 +2654,7 @@ mod tests {
     fn a_lost_pointer_lock_opens_the_menu_and_its_escape_does_not_close_it() {
         let (tree, mut app, mut input, mut audio) = in_level();
         input.handle(Event::PointerUnlocked);
-        app.update(&tree, 32.0, &input, &mut audio);
+        app.update(&tree, 32.0, &mut input, &mut audio);
         input.end_frame();
         assert!(menu_open(&app), "the unlock opened the menu");
         assert!(app.level_controls().is_none());
@@ -2652,22 +2663,22 @@ mod tests {
         // The Escape the browser used to leave the lock, arriving a frame
         // later, leaves it open.
         press(&mut input, Key::Escape);
-        app.update(&tree, 48.0, &input, &mut audio);
+        app.update(&tree, 48.0, &mut input, &mut audio);
         input.end_frame();
         assert!(menu_open(&app), "the following Escape is ignored");
         // A later Escape closes it.
-        app.update(&tree, 64.0, &input, &mut audio);
+        app.update(&tree, 64.0, &mut input, &mut audio);
         press(&mut input, Key::Escape);
-        app.update(&tree, 80.0, &input, &mut audio);
+        app.update(&tree, 80.0, &mut input, &mut audio);
         input.end_frame();
         assert!(!menu_open(&app), "a later Escape returns to the game");
         // Escape opens it too, and closes it the next frame (no unlock).
         press(&mut input, Key::Escape);
-        app.update(&tree, 96.0, &input, &mut audio);
+        app.update(&tree, 96.0, &mut input, &mut audio);
         input.end_frame();
         assert!(menu_open(&app));
         press(&mut input, Key::Escape);
-        app.update(&tree, 112.0, &input, &mut audio);
+        app.update(&tree, 112.0, &mut input, &mut audio);
         input.end_frame();
         assert!(!menu_open(&app));
     }
@@ -2682,14 +2693,14 @@ mod tests {
     #[test]
     fn hiding_in_a_level_opens_the_menu_and_hidden_time_never_runs() {
         let (tree, mut app, mut input, mut audio) = in_level();
-        app.update(&tree, 1016.0, &input, &mut audio);
+        app.update(&tree, 1016.0, &mut input, &mut audio);
         let (clock, time) = (app.clock(), game_time(&app));
         assert!(time > 0, "the game clock runs");
         app.set_hidden(true, &input, &mut audio);
         assert!(menu_open(&app), "hiding opened the menu");
         assert!(app.level_controls().is_none());
         // Updates while hidden (a platform still calling) do nothing.
-        app.update(&tree, 30_000.0, &input, &mut audio);
+        app.update(&tree, 30_000.0, &mut input, &mut audio);
         assert_eq!((app.clock(), game_time(&app)), (clock, time));
         // The first frame back has a zero delta, then the clock runs on;
         // the menu's pause holds the game clock. An Escape in the first two
@@ -2697,18 +2708,18 @@ mod tests {
         // the menu open.
         app.set_hidden(false, &input, &mut audio);
         press(&mut input, Key::Escape);
-        app.update(&tree, 600_000.0, &input, &mut audio);
+        app.update(&tree, 600_000.0, &mut input, &mut audio);
         input.end_frame();
         assert_eq!(app.clock(), clock, "the hidden time is not counted");
         assert!(menu_open(&app), "the guarded Escape is ignored");
-        app.update(&tree, 600_016.0, &input, &mut audio);
+        app.update(&tree, 600_016.0, &mut input, &mut audio);
         assert_eq!(app.clock(), clock + 16);
         assert_eq!(game_time(&app), time, "paused under the menu");
         press(&mut input, Key::Escape);
-        app.update(&tree, 600_032.0, &input, &mut audio);
+        app.update(&tree, 600_032.0, &mut input, &mut audio);
         input.end_frame();
         assert!(!menu_open(&app), "a later Escape returns to the game");
-        app.update(&tree, 601_064.0, &input, &mut audio);
+        app.update(&tree, 601_064.0, &mut input, &mut audio);
         // About a second shown ran, at the game's time factor; the ~10
         // minutes hidden did not.
         let ran = game_time(&app) - time;
@@ -2721,19 +2732,19 @@ mod tests {
         let mut app = App::new(fixture::data(&tree)).unwrap();
         app.assets = fixture::assets();
         let (mut input, mut audio) = (Input::new(), FakeAudio::default());
-        app.update(&tree, 1000.0, &input, &mut audio);
+        app.update(&tree, 1000.0, &mut input, &mut audio);
         // The fixture's logo items have no `pause_state`: the clock runs.
-        app.update(&tree, 1100.0, &input, &mut audio);
+        app.update(&tree, 1100.0, &mut input, &mut audio);
         assert_eq!(app.global_clock.now(), 100);
         assert!(!app.pause.is_on());
         for at in [1200.0, 1300.0] {
             press(&mut input, Key::Escape);
-            app.update(&tree, at, &input, &mut audio);
+            app.update(&tree, at, &mut input, &mut audio);
             input.end_frame();
         }
         assert!(matches!(app.state(), AppState::Menu { .. }));
         assert!(app.pause.is_on(), "the main menu");
-        app.update(&tree, 9300.0, &input, &mut audio);
+        app.update(&tree, 9300.0, &mut input, &mut audio);
         assert_eq!(app.global_clock.now(), 300);
     }
 
@@ -2790,10 +2801,10 @@ mod tests {
         // The menu already open, its selection moved: left as it is.
         let (tree, mut app, mut input, mut audio) = in_level();
         press(&mut input, Key::Escape);
-        app.update(&tree, 32.0, &input, &mut audio);
+        app.update(&tree, 32.0, &mut input, &mut audio);
         input.end_frame();
         press(&mut input, Key::Down);
-        app.update(&tree, 48.0, &input, &mut audio);
+        app.update(&tree, 48.0, &mut input, &mut audio);
         input.end_frame();
         let menu = |app: &App| match app.state() {
             AppState::Level { menu: Some(m), .. } => (m.menu.list, m.menu.selected),
@@ -2807,12 +2818,12 @@ mod tests {
         let tree = fixture::tree();
         let mut app = App::new(fixture::data(&tree)).unwrap();
         app.assets = fixture::assets();
-        app.update(&tree, 0.0, &input, &mut audio);
-        app.update(&tree, 100.0, &input, &mut audio);
+        app.update(&tree, 0.0, &mut input, &mut audio);
+        app.update(&tree, 100.0, &mut input, &mut audio);
         app.set_hidden(true, &input, &mut audio);
-        app.update(&tree, 5000.0, &input, &mut audio);
+        app.update(&tree, 5000.0, &mut input, &mut audio);
         app.set_hidden(false, &input, &mut audio);
-        app.update(&tree, 9000.0, &input, &mut audio);
+        app.update(&tree, 9000.0, &mut input, &mut audio);
         assert!(matches!(app.state(), AppState::Startup { clock: 100, .. }));
 
         // Under the loading image and during the intro: nothing opens.
@@ -2823,7 +2834,7 @@ mod tests {
         *overlay = Some(Overlay::new(LoadingScreen::default(), &mut audio));
         app.set_hidden(true, &input, &mut audio);
         assert!(!menu_open(&app), "not under the loading image");
-        let (tree2, mut app, input, mut audio) = in_level();
+        let (tree2, mut app, mut input, mut audio) = in_level();
         let Some(Phase::Level { intro, .. }) = &mut app.phase else {
             panic!()
         };
@@ -2832,7 +2843,7 @@ mod tests {
         app.set_hidden(true, &input, &mut audio);
         assert!(!menu_open(&app), "not during the intro");
         app.set_hidden(false, &input, &mut audio);
-        app.update(&tree2, 50_000.0, &input, &mut audio);
+        app.update(&tree2, 50_000.0, &mut input, &mut audio);
         // The intro takes on where it stopped.
         let AppState::Level {
             intro: Some(intro), ..
@@ -2932,13 +2943,13 @@ mod tests {
         press(&mut input, Key::Escape);
         let mut t = 32.0;
         for _ in 0..2 {
-            app.update(&tree, t, &input, &mut audio);
+            app.update(&tree, t, &mut input, &mut audio);
             input.end_frame();
             t += 16.0;
             assert!(!menu_open(&app), "not under the loading image");
         }
         // The image's last frame ends: the controls are live, the menu opens.
-        app.update(&tree, t, &input, &mut audio);
+        app.update(&tree, t, &mut input, &mut audio);
         assert!(matches!(
             app.state(),
             AppState::Level {
@@ -2955,12 +2966,12 @@ mod tests {
     /// update: the title menu opens saying why.
     #[test]
     fn a_fatal_error_of_the_running_level_ends_the_game() {
-        let (tree, mut app, input, mut audio) = in_level();
+        let (tree, mut app, mut input, mut audio) = in_level();
         let Some(Phase::Level { level, .. }) = &mut app.phase else {
             panic!()
         };
         level.record_fatal("lamp: no renderer type set for hanging-lamp".into());
-        app.update(&tree, 32.0, &input, &mut audio);
+        app.update(&tree, 32.0, &mut input, &mut audio);
         let AppState::Menu { menu, .. } = app.state() else {
             panic!("{:?}", app.state())
         };
@@ -2971,20 +2982,20 @@ mod tests {
     /// with the same error, stays as it is; another error opens it anew.
     #[test]
     fn the_menu_saying_why_is_not_opened_again_for_the_same_error() {
-        let (tree, mut app, input, mut audio) = in_level();
+        let (tree, mut app, mut input, mut audio) = in_level();
         let error = "x: fatal".to_owned();
         app.failed = Some(error.clone());
-        app.update(&tree, 32.0, &input, &mut audio);
+        app.update(&tree, 32.0, &mut input, &mut audio);
         assert!(matches!(app.state(), AppState::Menu { .. }));
         let opened = audio.started.len();
         assert!(opened > 0, "the menu's music started");
         for t in [48.0, 64.0] {
             app.failed = Some(error.clone());
-            app.update(&tree, t, &input, &mut audio);
+            app.update(&tree, t, &mut input, &mut audio);
         }
         assert_eq!(audio.started.len(), opened, "not opened again");
         app.failed = Some("y: fatal".into());
-        app.update(&tree, 80.0, &input, &mut audio);
+        app.update(&tree, 80.0, &mut input, &mut audio);
         assert!(audio.started.len() > opened, "opened anew");
         let AppState::Menu { menu, .. } = app.state() else {
             panic!("{:?}", app.state())
@@ -2996,7 +3007,7 @@ mod tests {
     /// fails when it reaches the intro, under the last overlay frames.
     #[test]
     fn a_new_game_without_its_intro_ends_when_the_intro_is_due() {
-        let (tree, mut app, input, mut audio) = in_level();
+        let (tree, mut app, mut input, mut audio) = in_level();
         app.data.intro_game = None;
         let Some(Phase::Level { overlay, .. }) = &mut app.phase else {
             panic!()
@@ -3005,9 +3016,9 @@ mod tests {
         o.frames_left = 4;
         *overlay = Some(o);
         // Three and two frames left after this one: not yet due.
-        app.update(&tree, 32.0, &input, &mut audio);
+        app.update(&tree, 32.0, &mut input, &mut audio);
         assert!(matches!(app.state(), AppState::Level { .. }));
-        app.update(&tree, 48.0, &input, &mut audio);
+        app.update(&tree, 48.0, &mut input, &mut audio);
         let AppState::Menu { menu, .. } = app.state() else {
             panic!("{:?}", app.state())
         };
@@ -3018,7 +3029,7 @@ mod tests {
     fn a_setting_changed_in_the_menu_reaches_the_running_level() {
         let (tree, mut app, mut input, mut audio) = in_level();
         press(&mut input, Key::Escape);
-        app.update(&tree, 32.0, &input, &mut audio);
+        app.update(&tree, 32.0, &mut input, &mut audio);
         input.end_frame();
         assert!(menu_open(&app));
         // What the options screen's controls set (options-screens.md 5.3).
@@ -3030,7 +3041,7 @@ mod tests {
         ] {
             app.console.exec(line);
         }
-        app.update(&tree, 48.0, &input, &mut audio);
+        app.update(&tree, 48.0, &mut input, &mut audio);
         let Some(Phase::Level { level, .. }) = &app.phase else {
             panic!("not in the level")
         };

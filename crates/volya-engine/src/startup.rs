@@ -120,6 +120,11 @@ pub struct MoviePlayer {
     sound_started: bool,
     /// Items skipped with the quit key.
     skipped: u32,
+    /// Whether the first item has started.
+    begun: bool,
+    /// Where an image item that started put the cursor, normalised, until
+    /// taken ([`MoviePlayer::take_cursor`]).
+    cursor: Option<[f32; 2]>,
 }
 
 /// The delay of a video item in milliseconds (absent, zero or negative:
@@ -140,6 +145,8 @@ impl MoviePlayer {
             voices: Vec::new(),
             sound_started: false,
             skipped: 0,
+            begun: false,
+            cursor: None,
         }
     }
 
@@ -168,13 +175,36 @@ impl MoviePlayer {
         Some((self.item, item.pause_state.as_deref()))
     }
 
-    fn next(&mut self, at: u64, audio: &mut dyn AudioOut) {
+    fn next(&mut self, seq: Sequence, at: u64, audio: &mut dyn AudioOut) {
         for v in self.voices.drain(..) {
             audio.stop(v);
         }
         self.item += 1;
         self.item_start = at;
         self.sound_started = false;
+        self.started(seq);
+    }
+
+    /// The current item has started: an image item puts the cursor at its
+    /// `cursor_pos` (title-menu.md section 7), each coordinate normalised
+    /// as *x* · 2/1024 − 1 and *y* · 2/768 − 1, clamped to −1 … +1; a video
+    /// item leaves it.
+    fn started(&mut self, seq: Sequence) {
+        if let Some(MovieItemKind::Image {
+            cursor_pos: [x, y], ..
+        }) = seq.movies.items.get(self.item).map(|i| &i.kind)
+        {
+            self.cursor = Some([
+                (x * 2.0 / UI_WIDTH - 1.0).clamp(-1.0, 1.0),
+                (y * 2.0 / UI_HEIGHT - 1.0).clamp(-1.0, 1.0),
+            ]);
+        }
+    }
+
+    /// Where the image items that started since the last call put the
+    /// cursor (the last one's), normalised, once.
+    pub fn take_cursor(&mut self) -> Option<[f32; 2]> {
+        self.cursor.take()
     }
 
     /// Advances to `now`: items end when their time is up (the next starts
@@ -189,12 +219,15 @@ impl MoviePlayer {
         quit_presses: u32,
         audio: &mut dyn AudioOut,
     ) {
+        if !std::mem::replace(&mut self.begun, true) {
+            self.started(seq);
+        }
         while !self.finished(seq) {
             let end = self.item_start + Self::length_ms(seq, self.item);
             if end > now {
                 break;
             }
-            self.next(end, audio);
+            self.next(seq, end, audio);
         }
         for _ in 0..quit_presses {
             if self.finished(seq) {
@@ -202,7 +235,7 @@ impl MoviePlayer {
             }
             if self.stoppable(seq) {
                 self.skipped += 1;
-                self.next(now, audio);
+                self.next(seq, now, audio);
             }
         }
         if self.finished(seq) {
@@ -365,6 +398,11 @@ impl Startup {
         self.0.stop(audio);
     }
 
+    /// See [`MoviePlayer::take_cursor`].
+    pub fn take_cursor(&mut self) -> Option<[f32; 2]> {
+        self.0.take_cursor()
+    }
+
     /// See [`MoviePlayer::current`].
     pub fn current<'a>(&self, data: &'a GameData) -> Option<(usize, Option<&'a str>)> {
         self.0.current(data.intro_logo())
@@ -460,6 +498,25 @@ mod tests {
         assert!(!s.finished(&data));
         s.update(&data, 12_600, 0, &mut audio);
         assert!(s.finished(&data));
+    }
+
+    /// An image item without `cursor_pos` puts the cursor at the bottom-right
+    /// corner when it starts, skipped into or not (title-menu.md section 7);
+    /// a video item leaves it.
+    #[test]
+    fn an_image_item_places_the_cursor() {
+        let tree = fixture::tree();
+        let data = fixture::data(&tree);
+        let mut audio = FakeAudio::default();
+        let mut s = Startup::new(0);
+        s.update(&data, 1000, 0, &mut audio);
+        assert_eq!(s.take_cursor(), None, "the video item");
+        s.update(&data, 3600, 0, &mut audio);
+        assert_eq!(s.take_cursor(), Some([1.0, 1.0]));
+        assert_eq!(s.take_cursor(), None, "once");
+        let mut s = Startup::new(0);
+        s.update(&data, 10, 1, &mut audio);
+        assert_eq!(s.take_cursor(), Some([1.0, 1.0]));
     }
 
     #[test]

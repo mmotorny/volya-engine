@@ -208,8 +208,8 @@ impl TitleMenu {
             request: None,
         };
         // The cursor already over a row does not select it; only entering
-        // a row does (the spec does not cover the cursor's position at
-        // opening).
+        // a row does (after the startup sequence it is in none, section 7;
+        // elsewhere the spec does not cover it).
         menu.hovered = menu.row_at(data, menu.cursor);
         menu.select(data, 0, now);
         menu.start_music(data, audio);

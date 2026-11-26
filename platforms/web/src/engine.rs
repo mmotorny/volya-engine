@@ -345,7 +345,7 @@ pub fn frame(time: f64) {
             settings: logged,
         } = running;
         let updated = crate::game::with_trees(|tree, _| {
-            crate::input::with_input(|input| {
+            crate::input::with_input_mut(|input| {
                 crate::audio::with_sounds(|host| {
                     crate::audio::with_mixer_opt(|mixer| match mixer {
                         Some(mixer) => app.update(

@@ -142,6 +142,12 @@ pub fn with_input<T>(f: impl FnOnce(&Input) -> T) -> T {
     STATE.with(|s| f(&s.borrow().input))
 }
 
+/// Runs `f` on the input state, which it may change: the engine's frame,
+/// which UI sequences let place the cursor.
+pub fn with_input_mut<T>(f: impl FnOnce(&mut Input) -> T) -> T {
+    STATE.with(|s| f(&mut s.borrow_mut().input))
+}
+
 /// Ends the frame: this frame's actions have been consumed.
 pub fn end_frame() {
     STATE.with(|s| s.borrow_mut().input.end_frame());

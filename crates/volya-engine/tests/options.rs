@@ -619,7 +619,7 @@ fn the_title_menu_opens_the_options_screen() {
         key: Key::T,
         pressed: true,
     });
-    app.update(&tree, 3100.0, &input, &mut Silent);
+    app.update(&tree, 3100.0, &mut input, &mut Silent);
     input.end_frame();
     click(&mut app, &mut input, [712.0, 621.0], 4000.0);
     let AppState::Menu { menu, .. } = app.state() else {

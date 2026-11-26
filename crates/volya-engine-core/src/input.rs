@@ -685,8 +685,8 @@ enum Source {
 pub struct Input {
     screen: [f32; 2],
     sensitivity: f32,
-    /// Normalised; the initial position is not established by the spec
-    /// (§7), the centre is our choice.
+    /// Normalised; the centre when the program starts (§7), moved by input
+    /// and by UI sequences ([`Input::place_cursor`]).
     cursor: [f32; 2],
     held: Vec<(Source, Control)>,
     actions: Vec<Action>,
@@ -793,6 +793,13 @@ impl Input {
     /// Cursor position in UI units.
     pub fn cursor_ui(&self) -> [f32; 2] {
         ui_from_normalized(self.cursor)
+    }
+
+    /// Puts the cursor at normalised `to` (clamped to −1 … +1), as a UI
+    /// sequence's image item does when it starts (title-menu.md §7): not
+    /// input, so no action is recorded.
+    pub fn place_cursor(&mut self, [x, y]: [f32; 2]) {
+        self.cursor = [clamp_unit(x), clamp_unit(y)];
     }
 
     /// Whether any source holds `control`.
