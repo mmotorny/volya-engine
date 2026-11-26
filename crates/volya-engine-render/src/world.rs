@@ -1128,7 +1128,7 @@ fn encode_static(
                     StaticCall::Merged,
                     draws,
                 );
-                if static_in_window() {
+                if emits(Kind::Merged) {
                     pass.draw_indexed(range, 0, 0..1);
                 }
             }
@@ -1140,7 +1140,7 @@ fn encode_static(
                     StaticCall::Shared,
                     count,
                 );
-                if in_window() {
+                if emits(Kind::Instanced) {
                     pass.draw_indexed(
                         d.first_index..d.first_index + d.index_count,
                         d.first_vertex,
@@ -1227,7 +1227,11 @@ fn encode_static(
                 StaticCall::Shared
             };
             crate::stats::static_call(program.name(), kind, 1);
-            if in_window() {
+            if emits(if program.is_model() {
+                Kind::Object
+            } else {
+                Kind::Single
+            }) {
                 pass.draw_indexed(range, d.first_vertex, i..i + 1);
             }
             continue;
@@ -1282,14 +1286,38 @@ thread_local! {
     static WINDOW: std::cell::Cell<Option<(u32, u32)>> = const { std::cell::Cell::new(None) };
     /// The world's draw calls counted in the frame being encoded.
     static CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-    /// Experiment (#443): the static world's merged draws left out on WebGL 2.
-    static SKIP_STATIC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Experiment (#443): the light passes and strict-sorted draws left out
+    /// on WebGL 2.
+    static SKIP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The world's draw calls emitted in the frame being encoded, by
+    /// [`Kind`] (#443).
+    static EMITTED: std::cell::Cell<[u32; 6]> = const { std::cell::Cell::new([0; 6]) };
 }
 
-/// [`in_window`] for a merged draw of the static world, left
-/// out on WebGL 2 by the experiment of #443.
-fn static_in_window() -> bool {
-    in_window() && !SKIP_STATIC.get()
+/// The kinds of the world's draw calls, for the diagnostic log (#443).
+#[derive(Clone, Copy)]
+enum Kind {
+    Merged,
+    Instanced,
+    Single,
+    Object,
+    Light,
+    Strict,
+}
+
+/// The names of [`Kind`]s, in order.
+pub const CALL_KINDS: [&str; 6] = ["merged", "instanced", "single", "object", "light", "strict"];
+
+/// Whether a draw call of `kind` is emitted ([`in_window`]), counted in
+/// [`EMITTED`]; the experiment of #443 leaves out light and strict ones.
+fn emits(kind: Kind) -> bool {
+    if !in_window() || (SKIP.get() && matches!(kind, Kind::Light | Kind::Strict)) {
+        return false;
+    }
+    let mut e = EMITTED.get();
+    e[kind as usize] += 1;
+    EMITTED.set(e);
+    true
 }
 
 /// Counts a world draw call; whether it is emitted
@@ -2733,7 +2761,8 @@ impl Renderer {
     ) {
         let inner = &frame.world.0;
         CALLS.set(0);
-        SKIP_STATIC.set(self.compat);
+        SKIP.set(self.compat);
+        EMITTED.set([0; 6]);
         let view_projection = multiply(&frame.view, &frame.projection);
         let l = &frame.light;
         let tau = std::f32::consts::TAU;
@@ -2916,7 +2945,7 @@ impl Renderer {
                         );
                     }
                     crate::stats::draw();
-                    if in_window() {
+                    if emits(Kind::Light) {
                         pass.draw_indexed(
                             d.first_index..d.first_index + d.index_count,
                             d.first_vertex as i32,
@@ -2979,7 +3008,7 @@ impl Renderer {
             }
             let instance = i as u32;
             crate::stats::draw();
-            if in_window() {
+            if emits(Kind::Strict) {
                 pass.draw_indexed(
                     d.first_index..d.first_index + d.index_count,
                     d.first_vertex as i32,
@@ -3018,6 +3047,12 @@ impl Renderer {
     /// world frame encoded, emitted or not.
     pub fn world_calls(&self) -> u32 {
         CALLS.get()
+    }
+
+    /// The world's draw calls emitted in the last world frame encoded, by
+    /// kind ([`CALL_KINDS`]; #443).
+    pub fn world_calls_emitted(&self) -> [u32; 6] {
+        EMITTED.get()
     }
 
     /// Tests only: draws the trees without blending (worlds made after).

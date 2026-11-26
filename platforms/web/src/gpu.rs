@@ -454,13 +454,31 @@ pub fn warm_up(window: Option<std::ops::Range<u32>>) -> Result<Option<u32>, JsVa
                     | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             });
-        crate::diagnostics::gpu_step("gpu.warm_up_draw", Some(&gpu.renderer), &mode);
+        // Which of the world's calls this piece emits (none: the whole
+        // view at once).
+        let piece = match &window {
+            Some(w) => [
+                ("from", Value::Number(f64::from(w.start))),
+                ("to", Value::Number(f64::from(w.end))),
+            ],
+            None => [
+                ("from", Value::Text("whole".into())),
+                ("to", Value::Text("whole".into())),
+            ],
+        };
+        crate::diagnostics::gpu_step("gpu.warm_up_draw", Some(&gpu.renderer), &piece);
         gpu.renderer.set_call_window(window);
         tracing::info_span!("render.encode")
             .in_scope(|| gpu.renderer.render(&target, &list, CLEAR));
         gpu.renderer.set_call_window(None);
         target.destroy();
-        crate::diagnostics::gpu_step("gpu.warm_up_submitted", Some(&gpu.renderer), &mode);
+        let emitted = gpu.renderer.world_calls_emitted();
+        let kinds: Vec<(&str, Value)> = volya_engine::render::world::CALL_KINDS
+            .iter()
+            .zip(emitted)
+            .map(|(&k, n)| (k, Value::Number(f64::from(n))))
+            .collect();
+        crate::diagnostics::gpu_step("gpu.warm_up_submitted", None, &kinds);
         LEVEL_FRAMES.set(0);
         Ok(Some(gpu.renderer.world_calls()))
     })
