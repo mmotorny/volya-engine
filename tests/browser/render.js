@@ -87,6 +87,10 @@ export const tests = {
     assertEqual(size, expected, "canvas size");
   },
 
+  "the GL layer draws, reads back and skips unchanged state": async () => {
+    return await volya.call("gl_selftest");
+  },
+
   "empty draw list renders black": async () => {
     needsGpu();
     await volya.call("debug_draw", {});

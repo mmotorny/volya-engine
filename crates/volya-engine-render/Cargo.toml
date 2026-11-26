@@ -20,7 +20,21 @@ webgl = ["wgpu/webgl"]
 [dependencies]
 volya-engine-formats = { path = "../volya-engine-formats" }
 bytemuck.workspace = true
+js-sys.workspace = true
 tracing.workspace = true
+# The GL layer's WebGL 2 (src/gl.rs).
+web-sys = { workspace = true, features = [
+  "WebGl2RenderingContext",
+  "WebGlBuffer",
+  "WebGlFramebuffer",
+  "WebGlProgram",
+  "WebGlSampler",
+  "WebGlShader",
+  "WebGlSync",
+  "WebGlTexture",
+  "WebGlUniformLocation",
+  "WebGlVertexArrayObject",
+] }
 wgpu.workspace = true
 
 [build-dependencies]

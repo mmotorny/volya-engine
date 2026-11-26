@@ -562,6 +562,8 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
             to_json(&diagnostics::bench(frames as u32))
         }
         #[cfg(feature = "test-ops")]
+        "gl_selftest" => to_json(&gl_selftest()?),
+        #[cfg(feature = "test-ops")]
         "debug_session_event" => {
             diagnostics::repeat_session_event().await;
             to_json(&serde_json::Value::Null)
@@ -800,6 +802,18 @@ fn status() -> Status {
 
 /// Runs the script runtime's shared self-test, then a chunk in a new state;
 /// returns that chunk's result, the runtime's `_VERSION`.
+/// Runs the GL layer's self-test on a WebGL 2 context of its own (#469).
+#[cfg(feature = "test-ops")]
+fn gl_selftest() -> Result<String, JsValue> {
+    use wasm_bindgen::JsCast;
+    let canvas = web_sys::OffscreenCanvas::new(4, 4)?;
+    let context = canvas
+        .get_context("webgl2")?
+        .ok_or_else(|| JsValue::from_str("no WebGL 2"))?
+        .dyn_into::<web_sys::WebGl2RenderingContext>()?;
+    volya_engine::render::gl::selftest(context).map_err(|e| JsValue::from_str(&e))
+}
+
 fn script_selftest() -> Result<String, JsValue> {
     use volya_engine::script::{Lua, selftest};
     selftest::check().map_err(|e| JsValue::from_str(&e))?;

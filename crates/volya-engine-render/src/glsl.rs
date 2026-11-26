@@ -10,7 +10,7 @@
 
 /// One entry point of a program.
 #[derive(Debug)]
-pub(crate) struct Stage {
+pub struct Stage {
     /// The WGSL file's name, without `.wgsl`.
     pub module: &'static str,
     /// The entry point's name.
@@ -27,7 +27,7 @@ pub(crate) struct Stage {
 /// A GLSL sampler: the WGSL texture and sampler it combines, as (group,
 /// binding).
 #[derive(Debug)]
-pub(crate) struct Sampled {
+pub struct Sampled {
     pub name: &'static str,
     pub texture: (u32, u32),
     pub sampler: Option<(u32, u32)>,
@@ -36,7 +36,7 @@ pub(crate) struct Sampled {
 /// A GLSL uniform block and the WGSL uniform buffer it is, as (group,
 /// binding).
 #[derive(Debug)]
-pub(crate) struct Block {
+pub struct Block {
     pub name: &'static str,
     pub binding: (u32, u32),
 }
@@ -44,7 +44,7 @@ pub(crate) struct Block {
 include!(concat!(env!("OUT_DIR"), "/shaders.rs"));
 
 /// The entry point `entry` of the program `module`.
-pub(crate) fn stage(module: &str, entry: &str) -> Option<&'static Stage> {
+pub fn stage(module: &str, entry: &str) -> Option<&'static Stage> {
     STAGES
         .iter()
         .find(|s| s.module == module && s.entry == entry)

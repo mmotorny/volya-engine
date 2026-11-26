@@ -16,7 +16,8 @@
 
 mod capture;
 pub mod details;
-mod glsl;
+pub mod gl;
+pub mod glsl;
 pub mod particles;
 pub mod present;
 mod ramp;
