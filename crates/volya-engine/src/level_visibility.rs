@@ -14,6 +14,7 @@ use crate::core::collision::CollisionWorld;
 use crate::core::occlusion::{Cached, Occlusion, OcclusionMesh, View};
 use crate::core::particles::random::Generator;
 use crate::core::visibility::{CameraFrame, CameraSector, PassBuffers, Sectors, triangle_below};
+use crate::render::billboards::{BillboardDraw, BillboardFrame, BillboardGroup, QUAD_VERTICES};
 use crate::render::particles::ParticleVertex;
 use volya_engine_formats::level::{Level, Thresholds};
 
@@ -33,6 +34,10 @@ pub struct LevelVisibility {
     /// those of visual `v` are `draws[starts[v] .. starts[v + 1]]`.
     starts: Vec<u32>,
     draws: Vec<u32>,
+    /// The billboard groups (ogf.md 7), each with its texture set (none:
+    /// not drawn), and each visual's group (`u32::MAX`: none).
+    billboards: Vec<(BillboardGroup, Option<u32>)>,
+    billboard_of: Vec<u32>,
     /// The dynamic items' state (object-visibility.md 4, occlusion-tests.md
     /// 5): the level's object instances, and its effect objects by slot.
     pub objects: Vec<Item>,
@@ -63,6 +68,8 @@ impl Default for LevelVisibility {
             thresholds: None,
             starts: vec![0],
             draws: Vec::new(),
+            billboards: Vec::new(),
+            billboard_of: Vec::new(),
             objects: Vec::new(),
             effects: Vec::new(),
         }
@@ -71,11 +78,13 @@ impl Default for LevelVisibility {
 
 impl LevelVisibility {
     /// The sectors of `level`, its occlusion mesh (none without
-    /// `level.hom`) and the visual of each of its static draws.
+    /// `level.hom`), the visual of each of its static draws and its
+    /// billboard groups by visual.
     pub fn new(
         level: &Level,
         mesh: Option<OcclusionMesh>,
         draw_visuals: impl Iterator<Item = u32>,
+        billboards: Vec<(u32, BillboardGroup)>,
     ) -> io::Result<Self> {
         let sectors = Sectors::new(level)?;
         let occlusion = Occlusion::new(mesh, sectors.visual_count());
@@ -92,13 +101,72 @@ impl LevelVisibility {
             draws.extend(d);
             starts.push(draws.len() as u32);
         }
+        let mut billboard_of = vec![u32::MAX; sectors.visual_count()];
+        let billboards = (billboards.into_iter().enumerate())
+            .map(|(k, (v, g))| {
+                if let Some(b) = billboard_of.get_mut(v as usize) {
+                    *b = k as u32;
+                }
+                (g, None)
+            })
+            .collect();
         Ok(Self {
             sectors,
             occlusion,
             starts,
             draws,
+            billboards,
+            billboard_of,
             ..Self::default()
         })
+    }
+
+    /// The texture set of each billboard group, in the order they were
+    /// given ([`LevelVisibility::new`]).
+    pub fn set_billboard_sets(&mut self, sets: impl IntoIterator<Item = Option<u32>>) {
+        for (b, s) in self.billboards.iter_mut().zip(sets) {
+            b.1 = s;
+        }
+    }
+
+    /// The billboard groups.
+    pub fn billboard_count(&self) -> usize {
+        self.billboards.len()
+    }
+
+    /// The billboards of the latest pass's visuals into `out` (ogf.md 7,
+    /// 8.2: each listed billboard group's quad for the pass's eye), drawn
+    /// set by set, in the pass's order within a set.
+    pub fn billboards_into(&self, out: &mut BillboardFrame) {
+        let vertices = std::sync::Arc::make_mut(&mut out.vertices);
+        vertices.clear();
+        out.draws.clear();
+        let (Some(view), Some(t)) = (self.view.as_ref(), self.thresholds.as_ref()) else {
+            return;
+        };
+        let mut listed: Vec<(u32, &BillboardGroup)> = (self.frame.visuals.iter().flatten())
+            .filter_map(|&v| {
+                let &k = self.billboard_of.get(v as usize)?;
+                let (g, set) = self.billboards.get(k as usize)?;
+                Some(((*set)?, g))
+            })
+            .collect();
+        listed.sort_by_key(|&(set, _)| set);
+        for (set, g) in listed {
+            let first = vertices.len() as u32;
+            vertices.extend(
+                g.quad(view.eye, g.measure(view.eye), t.t_a, t.t_b)
+                    .map(|v| v.packed()),
+            );
+            match out.draws.last_mut() {
+                Some(d) if d.set == set => d.count += QUAD_VERTICES as u32,
+                _ => out.draws.push(BillboardDraw {
+                    set,
+                    first,
+                    count: QUAD_VERTICES as u32,
+                }),
+            }
+        }
     }
 
     /// The static draws of the latest pass's visuals, by draw item (of
@@ -249,6 +317,8 @@ pub struct Seen {
     /// The portal fade's triangles, each as a quad of its three corners and
     /// the last again (docs/behavior/portal-fade.md 2).
     pub fade: Vec<ParticleVertex>,
+    /// The billboards of the billboard groups drawn (ogf.md 7).
+    pub billboards: BillboardFrame,
 }
 
 /// The portal fade of the latest pass of `visibility` (portal-fade.md 1 –

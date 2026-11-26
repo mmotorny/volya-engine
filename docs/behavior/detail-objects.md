@@ -387,6 +387,26 @@ arithmetic in rare positions [DO-13]:
 Instances per model id at *ρ* = 0.3: 1: 28, 4: 14, 5: 9, 6: 3, 8: 326, 9: 457, 10: 3, 12: 251, 13: 218,
 14: 26, 15: 172, 16: 45, 17: 32, 18: 10, 19: 244, 20: 143 [DO-13].
 
+### 8.3 The leaves of the first level's ground
+
+Models 13 – 20 of `levels\l01_escape\level.details` are the level's **leaves**: each draws one of the four leaf
+pictures of `build_details` (texture u 0.25 – 0.5, v 0 – 0.5; olive and brown leaves) and is flat, all its vertices
+within 0.021 m of the model's base height, 0.10 – 0.20 m across before scaling (scale 0.8 – 1.3 in the file) [LV-1, LV-7].
+Placed by section 4 they lie on the ground, so from above they look like single leaves scattered over it; they
+are detail instances, not particles (no ambient effect of the morning weather sets draws a leaf texture,
+`docs/behavior/weather-ambient-effects.md` 2.3) [LV-5].
+
+Worked example, the fidelity view `artefact` (eye (−244.8057, −11.6224, −34.1349), yaw 0, pitch 1.25 rad, vertical
+field of view 67.5°, 4:3, `r__detail_density` 0.2 and `r__geometry_lod` 1 of the shipped `user.ltx`, render target
+1448 × 1086): the slot under the view's centre holds parts 17, 13, 19 and 16 at density 3 in all four corners
+[LV-2]; section 4 places 60 leaf instances whose positions project into the frame (model 13: 16, 16: 16, 17: 17,
+19: 11), 1.1 – 3.4 m from the eye, and none is dropped by the size test of 5.3 [LV-3]. **Measured** (one capture of
+the unmodified game, 150 s after play of a New Game began, headless, `renderer_r1`, 1024 × 768): about two dozen
+leaves are visible over the frame, each within 16 pixels of a predicted instance centre (the others are hidden
+by grass or too dark to pick out), and they keep their places over 18 s of captures [LV-4, LV-6]. Positions come from
+the cell's own generators (4.1), so they are the same in every run; only the variant (sway) uses the shared
+generator.
+
 ## 9. Not established
 
 - Which shared-generator values the original draws (variants, occlusion and refresh delays): not
@@ -410,6 +430,10 @@ Instances per model id at *ρ* = 0.3: 1: 28, 4: 14, 5: 9, 6: 3, 8: 326, 9: 457, 
   layout, device capabilities), `xrCDB.dll` (the box query) and `xrGame.dll` (uses of the device flags);
   constants read directly from the files. No execution or debugging.
 - A placement model written from this text reproduces section 8.2.
+- Targeted fix (issue 557, 2026-11-26): section 8.3, from `level.details` (models' texture coordinates and
+  heights, the slots around the view), `build_details.dds` decoded and viewed, the placement model applied to
+  the cells around the view, and one capture of the unmodified game made by the clean side and inspected in the
+  dirty workspace. Checks `[LV-n]` are in `hud4/checks/run.py` of the dirty workspace.
 - No leaked source code, derived projects or third-party documentation of the engine were used.
 
 ## Gaps found in review

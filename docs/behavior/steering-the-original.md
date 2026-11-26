@@ -152,6 +152,9 @@ Example `steer.ltx` (in the user-data folder):
     hud_crosshair off
     hud_info off
 
+`hud_crosshair off` hides only the crosshair and `hud_info off` only the target information; neither
+hides the rest of the HUD (section 5.1) [HD-1, HD-2].
+
 Dialogs to avoid [CL-2, CL-3, CL-9]: the memory error box (`--skipmemcheck`), the missing-`fsgame.ltx` box
 (working folder), the crash dialog (`-silent_error_mode`). A second instance exits silently while one runs
 [CL-2]. The splash window takes no input (`docs/behavior/startup.md` §3). No other startup dialog was found
@@ -388,6 +391,92 @@ way to place a view.
   therefore either a key sent to the game window from outside, or capture of the window from outside while a
   camera track holds the view (4.2) — in a window, or full screen.
 
+
+### 5.1 The HUD
+
+The HUD (minimap, panels, bars, icons and crosshair) is drawn over every frame of a level, also while a
+camera track holds the view (**measured**, issue 549). The facts below say what hides it.
+
+**What gates it** [HD-1 – HD-3]. A flag word holds the HUD's switches; its bits and their console
+commands:
+
+| Bit | Command | Hides when off |
+|---|---|---|
+| 0x1 | `hud_crosshair` | the crosshair |
+| 0x2 | `hud_crosshair_dist` | the aim-distance text |
+| 0x4 | `hud_weapon` | the first-person weapon model |
+| 0x8 | `hud_info` | the target information |
+| 0x10 | none | the main HUD window (minimap, panels, bars, icons) and the recorder's overlay text |
+| 0x80 | `cl_dynamiccrosshair` | (the crosshair's dispersion radius; not a hiding switch) |
+
+Bit 0x10 is set at startup and no console command or key changes it. The main HUD window is drawn only
+while bits 0x10 and 0x400 are both set and the game interface's "indicators" are on; the crosshair needs
+bits 0x1, 0x20 and 0x200. Bits 0x200 and 0x400 are set again in every frame by the player character's
+update; 0x400 is cleared only while the player zooms with a weapon that has a scope (which also changes
+the field of view, section 4.2) (**Disputed in review:** 0x200 is not always set: the same per-frame update
+clears it in every frame in which the player zooms, with any weapon, so the crosshair is hidden while zoomed;
+both bits are written only while the player character is the object the view belongs to), and the indicators are switched only by scripts (the shipped scripts
+switch them on when the player character comes online) and by full-screen dialogs such as the
+inventory, which cover the view. In benchmark mode `demo_play` runs `hud_draw 0`, which is not a
+registered command (section 4.1), so it hides nothing [HD-1, HD-12, HD-13; CN-3]. **No console command or key hides the
+whole HUD in the displayed frames.**
+
+**A screenshot without the HUD: the camera recorder's F12** [HD-4 – HD-9]. While the recorder of 4.3
+runs, it receives the keyboard; its keys (DirectInput scan codes) are `` ` `` (0x29) console, Space
+(0x39) store a key, Backspace (0x0E) cube map, F11 (0x57) level-map picture, F12 (0x58) screenshot,
+Esc (0x01) end. F12 (the key itself, whatever `bind screenshot` says) asks for a screenshot; in the next
+frame the recorder saves the HUD flag word and sets it to 0, so that frame is drawn with no main HUD
+window, no crosshair, no weapon model, no target information and no recorder overlay; in the frame after,
+the screenshot is taken by the same call as the `screenshot` command (section 5: full screen only,
+front buffer, JPEG in the screenshots folder) and the flag word is restored. The displayed frames keep
+the HUD, plus the recorder's red "RECORDING" overlay, drawn in two of every three 750 ms periods; only
+the saved picture is clean. The picture is **believed** to be the HUD-free frame: the front buffer is
+read before the frame in which the flags are restored is drawn (the order of presentation and capture
+within a frame was not traced further). Not measured.
+
+The recorder starts from the current view, so a held track view can be kept for it:
+
+1. Hold the view with a track (4.2.2) and wait until its precache has ended.
+2. Run `demo_record <scratch name>` (a name that is not the track's: the recorder deletes and rewrites
+   `<saves folder>\<name>.xrdemo` at once). The recorder and the track are camera effects of the same
+   kind, and adding one removes the other, so the recorder replaces the track; the recorder then starts
+   from the inverse of the device's view matrix of the last drawn frame, i.e. the track's view: same
+   position; direction kept as yaw and pitch, roll 0 (tracks of section 4.2 have no roll). Without key
+   or mouse input it stays there (its speeds decay to 0); it ends by itself only after 3,600,000 s of
+   frame time. It starts no precache (4.2.1).
+3. Press F12 (the key, not the console command, which keeps the HUD), wait two frames or more, then Esc
+   to end the recorder (the player's camera returns; the track does not resume).
+4. The screenshot is `ss_<user>_<date>_<time>_(<level>).jpg` as in section 5. Quitting afterwards is
+   safe (no precache is pending, section 7).
+
+Field of view and everything else in the frame are the player's, as under the track (4.2). Whether the
+world keeps animating while the recorder holds the view is not established (as for tracks, Gaps).
+
+**Regions to mask** in a capture from outside, which keeps the HUD. At 1024 × 768 one UI unit is one
+pixel (`docs/formats/ui-layout.md`); the HUD of a New Game's first minutes occupies these rectangles
+(left, top, right, bottom; right and bottom exclusive), read from the layout files (`config\ui\`,
+the normal files, not the `_16` variants) [HD-10, HD-11]:
+
+| Part | Source | Rectangle |
+|---|---|---|
+| minimap with its frame, distance text and compass | `zone_map.xml` `background` (9, 6) 177 × 185 | (9, 6, 186, 191) **Disputed in review:** too small; see below the table |
+| flashing icon below the minimap | `maingame.xml` `flashing_icon` (13, 210) 48 × 29 | (13, 210, 61, 239) |
+| motion icon (posture, noise, light and stamina bars) | `motion_icon.xml` `background` (0, 640) 125 × 125 | (0, 640, 125, 765) |
+| armour, health and weapon panels | `maingame.xml` `static_armor` (860, 622), `static_health` (860, 660), `static_weapon` (860, 692); pictures drawn 164 × 38, 164 × 34, 157 × 65 | (860, 622, 1024, 757) |
+
+Pictures are drawn at their texture rectangles' size, which can exceed the element's own rectangle
+(the panels'), so the panel rectangle above uses the drawn sizes. The warning icons (`icons_scroll_view`,
+(955, 100) 65 × 455), on-screen messages, the pick-up text, the game log and the crosshair are not
+shown at the start of a New Game without events (**believed**: none of their conditions holds then); a
+mask that must also cover them adds (955, 100, 1020, 555) and the screen centre. Whether the minimap's
+compass reaches beyond the background rectangle is **unestablished** (its rectangle (150, 146) 32 × 32
+is relative to a parent not traced here; relative to the background it ends at (191, 184)).
+**Disputed in review:** the minimap's parts do reach beyond (9, 6, 186, 191). Measured in one capture of the
+unmodified game (New Game, 129 s after a camera track began, 1024 × 768, the clean side's `artefact` view): the
+compass box is drawn at about (149, 174, 179, 200), a frame ornament to its right reaches about x 192, and a
+bracket left of the box reaches about y 195. A mask of (9, 6, 193, 201) covers the minimap there. The other
+rectangles of the table matched that capture to within a pixel.
+
 ## 6. Unattended sequences
 
 ### 6.1 Benchmark mode (`-batch_benchmark`)
@@ -455,7 +544,7 @@ the expected sequence does not happen. The line needs a game started as well, e.
 | 1 Start without dialogs, size, render settings | working folder `bin\`; `--skipmemcheck -silent_error_mode`; configuration file with `rs_fullscreen`, `vid_mode`, `renderer`, render settings | — |
 | 2 Level or New Game, reach gameplay | `-start server(all/single/alife/new) client(localhost)` or `…<save>/single/alife/load…` | any level other than `l01_escape` without a save made there (no-A-Life start unestablished); whether `-nointro` with `-start` opens the menu is unestablished |
 | 3 Position, direction, fov, time, weather | camera track file + `demo_play` (or `-demomode`), shown after its 50-frame black precache (4.2.1, 4.2.2); `sv_setweather`; start time from `config\alife.ltx` | moving the player; setting the fov (fixed 67.5°); placing a view with the recorder or its designer commands; `sv_setenvtime` in single player unestablished |
-| 4 Save or hold the frame | full screen + `screenshot` command or F12 → JPEG (TGA with `-ss_tga`) in the screenshots folder; or a held camera track for outside capture, after its precache | a screenshot without a key press or typed command; screenshots in a window; a picture during a precache (black) |
+| 4 Save or hold the frame | full screen + `screenshot` command or F12 → JPEG (TGA with `-ss_tga`) in the screenshots folder; or a held camera track for outside capture, after its precache; without the HUD: the recorder's F12 started over a held track (5.1) | a screenshot without a key press or typed command; screenshots in a window; a picture during a precache (black); hiding the HUD in the displayed frames (mask its regions, 5.1) |
 | 5 Quit | `quit` once no precache is pending (else a crash at exit, exit code 5 under Wine); benchmark mode quits after its track | — |
 
 ## Provenance
@@ -480,6 +569,12 @@ the expected sequence does not happen. The line needs a game started as well, e.
   under box64, Xvfb 1024 × 768, full screen, `renderer_r1`) made by the clean side with `cargo xtask original`
   and kept in its local cache; most reached gameplay in a New Game, and four of them played camera tracks with
   `demo_play`.
+- Targeted fix (issue 560, 2026-11-26): static analysis with Ghidra of the HUD flag word's commands and
+  uses in `xrGame.dll` and `XR_3DA.exe`, the game interface's draw, the player character's per-frame
+  update, the camera recorder (keys, screenshot, cube-map and level-map captures, start), the camera
+  manager's effect list and the device view matrix; layout rectangles from `config\ui\zone_map.xml`,
+  `motion_icon.xml` and `maingame.xml`. Checks `[HD-n]` are in `hud4/checks/run.py` of the dirty
+  workspace. Nothing of 5.1 was executed.
 - No leaked source code, derived engines, third-party documentation or recollection was used.
 
 ## Gaps found in review

@@ -342,9 +342,19 @@ In this order (A11):
 
 - **Plain** (`SCRPTART`): with a parent, *X* becomes the parent's transform (A13).
 - **Jumping** (`ARTEFACT`): with a parent (and the artefact's physics shell not in charge), *X* becomes the parent's
-  transform; otherwise, if `jump_height` ≠ 0: a ray is cast from **p** straight down for `jump_height` m; if it hits
-  something, the physics shell gets an upward impulse of the shell's mass × the frame's elapsed seconds × a constant
-  (A13). How the physics simulation moves the artefact is not specified here; the effect and the light follow the
+  transform; otherwise, if `jump_height` ≠ 0: a ray is cast from **p** along (0, −1, 0) for `jump_height` m against
+  the level and its objects, the artefact itself excluded; if it hits something, the physics shell gets an impulse
+  along (0, 1, 0) of the shell's mass × the frame's elapsed seconds × **30** (A13; `hud4/checks/run.py` AJ-1). The
+  impulse is a velocity change of 30 m/s² × the frame's elapsed seconds, whatever the mass;
+  **Disputed in review:** unbacked: how the physics shell turns the given impulse value into motion (whether it
+  is divided by the mass, and in which units) was not read, so the velocity change, and the comparison with
+  gravity that follows, are unestablished; the frame's elapsed
+  seconds are the game's frame time (at most 0.1 s, `docs/behavior/steering-the-original.md` 4.2). So while the
+  artefact is within `jump_height` above a surface it is pushed up by 30 m/s², more than the pull of gravity
+  (**believed**: the physics simulation's gravity was not read; at 9.8 m/s² the push wins), and above it only
+  gravity acts: a lying `ARTEFACT` with `jump_height` ≠ 0 keeps rising and falling instead of resting where its
+  record put it. How the physics simulation moves it (gravity, bounces off sloping ground, contacts) is not
+  specified here, so its position at a later time is **unestablished**; the effect and the light follow the
   resulting *X* (4.4, 5.3).
 
 ## 7. Activation (shared with S16)
@@ -398,6 +408,21 @@ electra phases at 5, 7, 7 and 9 s.
   is (−244.8057, −13.1224, −33.6349) (M2). Its model sphere is centred at (0.0062, 0.1543, −0.0049), radius 0.23
   (D10), placed at (−244.7696, −13.0158, −33.6089); it is fast while the camera is within 50.23 m of that centre
   (M2).
+- These are its values **at creation**. `af_medusa` has class `ARTEFACT` and `jump_height` 0.5 (AJ-2), so from its
+  first processed frame the jumping work of 6.4 pushes it up whenever it is within 0.5 m above a surface; it does
+  not stay at its record position, and where it is at a later moment is **unestablished** (6.4). Its record is
+  online from the start (level-objects.md 2: 101.5 m from the actor, within the 135 m online distance) and
+  no shipped script names `esc_af_medusa`, and the only script naming `af_medusa` is a dialogue of
+  `escape_dialog.script` that gives the player one (AJ-3) (**believed**: no character picks
+  it up; not traced). **Measured** (one capture of the unmodified game, headless, Wine 11 under box64, 1024 × 768,
+  `renderer_r1`): 150 s after play of a New Game began, a view from 1.5 m above the effect point looking down
+  (pitch 1.25 rad, vertical field of view 67.5°, the point at the frame's centre), covering level ground from about
+  0.9 m behind to 1.4 m ahead of the point and about 1.4 m to each side of it (AJ-4), showed neither the model nor
+  its effect. A drawing at the record position 150 s after play is therefore not what the original shows; a
+  view of the artefact's effect must find the artefact first.
+- Consequence for comparisons with the original: the effect's drawn brightness (e.g. a count of bright pixels
+  around the effect point) cannot be compared with black-box frames of the record position; where the original
+  draws the effect at that moment is unestablished.
 - Four records of the level have lights (`esc_af_cristall_flower`, `esc_af_electra_flash`, `esc_af_electra_sparkler`,
   `esc_af_electra_sparkler_0000`); none is online at the start (M4). No artefact light is on at the start.
 
@@ -431,7 +456,8 @@ Sections 4.2, 4.3, 6.2 and 8 give them (M1 – M5).
 - For an artefact created with a parent (no shipped record; such artefacts are made during play), whether its creation
   starts the effect and the light before it is taken (believed: yes, and the taking ends them at once).
 - The frame number the fast test compares with (believed: 0 for good, 6.2).
-- How the physics simulation responds to the jumping impulse (6.4).
+- How the physics simulation responds to the jumping impulse (6.4), hence where a jumping artefact is at a
+  given time (8); the physics simulation's gravity.
 
 ## 11. Provenance
 
@@ -449,6 +475,10 @@ Sections 4.2, 4.3, 6.2 and 8 give them (M1 – M5).
   the general object schedule scale, centre and radius; the renderer's light colour setting; the class registration
   and the game-type names. Parsing of the data with throwaway tools written from the approved specifications and this
   text (`model.py` implements sections 4.2, 4.3 and 6.2). No execution or debugging of the game.
+- Targeted fix (issue 556, 2026-11-26): static analysis with Ghidra of the jumping work (ray, impulse constant and
+  direction); `config\misc\artefacts.ltx` and the shipped scripts read for `af_medusa`. Checks AJ-1, AJ-2 are in
+  `hud4/checks/run.py` of the dirty workspace. The measured statement of section 8 comes from one capture of the
+  unmodified game made by the clean side and inspected in the dirty workspace.
 - No leaked source code, derived projects or third-party documentation of the engine were used. The checks in
   `checks/artefact-idle-effects/` reproduce every fact.
 

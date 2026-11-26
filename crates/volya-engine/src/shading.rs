@@ -161,6 +161,23 @@ impl From<NotDrawn> for String {
 }
 
 impl ShaderLibrary<'_> {
+    /// The textures of a billboard group's entry (static-shading.md 8.4):
+    /// the scripted `details\lod` with T[0], its atlas, and T[0] + `_nm`;
+    /// or why it is not drawn.
+    pub fn billboard_textures(&self, entry: &str) -> Result<[String; 2], NotDrawn> {
+        let (shader, list) =
+            split_shader_entry(entry).ok_or_else(|| NotDrawn::Unsupported("empty entry".into()))?;
+        let module = shader.replace('\\', "_");
+        if module != "details_lod" || !(self.scripted)(&module) {
+            return Err(NotDrawn::Unsupported(format!(
+                "billboards with {shader:?} are not drawn"
+            )));
+        }
+        let t0 = nonempty(texture_list(list).first())
+            .ok_or_else(|| NotDrawn::Unsupported("billboards without a texture".into()))?;
+        Ok([t0.clone(), format!("{t0}_nm")])
+    }
+
     /// The surface of a non-empty shader table entry, or why it is not
     /// drawn.
     pub fn resolve(&self, entry: &str) -> Result<Surface<String>, NotDrawn> {
@@ -334,9 +351,11 @@ fn scripted(module: &str, t0: Option<String>) -> Result<Surface<String>, NotDraw
             light: scripted_light(LightProgram::Wallmark),
             ..surface(Program::Wallmark, base)
         },
+        // Billboard groups only (ogf.md 7): never a draw of the static
+        // world's (ShaderLibrary::billboard_textures).
         "details_lod" => {
             return Err(NotDrawn::Unsupported(
-                "distant billboards are not drawn".into(),
+                "billboards are drawn from their groups".into(),
             ));
         }
         // The objects' scripted model shaders (level-objects.md 5.2).
@@ -639,6 +658,23 @@ mod tests {
             (Program::Wallmark, Blend::Alpha, false, Some(0), 2)
         );
         assert!(resolve("details\\lod/level_lods").is_err());
+    }
+
+    #[test]
+    fn billboard_textures() {
+        let definitions = library();
+        let associations = HashMap::new();
+        let scripted = |m: &str| m == "details_lod";
+        let library = ShaderLibrary {
+            definitions: &definitions,
+            scripted: &scripted,
+            associations: &associations,
+        };
+        assert_eq!(
+            library.billboard_textures("details\\lod/Level_Lods.dds"),
+            Ok(["level_lods".to_owned(), "level_lods_nm".to_owned()])
+        );
+        assert!(library.billboard_textures("default/x").is_err());
     }
 
     #[test]

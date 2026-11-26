@@ -1457,6 +1457,10 @@ impl Renderer {
                 filtering.mip_bias,
             )
         });
+        let billboards = frame
+            .billboards
+            .as_ref()
+            .filter(|b| (self.billboards).prepare(&gl, b, &view_projection, l, filtering.mip_bias));
         let programs = self
             .world_programs
             .as_ref()
@@ -1499,9 +1503,19 @@ impl Renderer {
             set_part(Part::Details);
             self.details.draw(&gl, d);
         }
+        // The billboards: element 4 before the sky, element 1 after it
+        // (static-shading.md 10.3 steps 2 – 4).
+        if let Some(b) = billboards {
+            set_part(Part::Billboards);
+            self.billboards.draw(&gl, b, true);
+        }
         if let Some((resources, sky_frame)) = sky {
             set_part(Part::Sky);
             resources.draw(&gl, &programs.sky, sky_frame, size);
+        }
+        if let Some(b) = billboards {
+            set_part(Part::Billboards);
+            self.billboards.draw(&gl, b, false);
         }
         set_part(Part::Lights);
         // The light passes follow the sky (dynamic-lights.md 5.1).

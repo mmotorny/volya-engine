@@ -354,6 +354,23 @@ impl Presenter {
                     Err(e) => self.errors.push(format!("{}: {e}", d.texture)),
                 }
             }
+            // The billboards' sets with the world (static-shading.md 8.4).
+            renderer.clear_billboards();
+            if let Some(b) = &scene.world.billboards {
+                let sets: Result<Vec<_>, _> = (b.sets.iter())
+                    .map(|[a, h]| {
+                        let t = |p: &String| {
+                            load_texture(renderer, tree, &quality, p)
+                                .map_err(|e| format!("{p}: {e}"))
+                        };
+                        Ok::<_, String>((t(a)?, t(h)?))
+                    })
+                    .collect();
+                match sets {
+                    Ok(sets) => renderer.set_billboards(&sets, b.groups),
+                    Err(e) => self.errors.push(e),
+                }
+            }
             if let Some(path) = &scene.world.presentation_noise {
                 match load_texture(renderer, tree, &quality, path) {
                     Ok(t) => renderer.set_presentation_noise(&t),
@@ -414,6 +431,9 @@ impl Presenter {
             filtering: Default::default(),
             geometry_lod: GEOMETRY_LOD,
             effects: None,
+            billboards: (scene.seen.as_ref())
+                .map(|s| s.billboards.clone())
+                .filter(|b| !b.draws.is_empty()),
             details: scene.details.as_ref().map(|d| DetailFrame {
                 instances: d.frame.instances.clone(),
                 draws: (d.frame.draws.iter())
@@ -862,6 +882,7 @@ impl Presenter {
             None => {
                 if self.world.take().is_some() {
                     renderer.clear_details();
+                    renderer.clear_billboards();
                 }
                 self.particle_shaders.clear();
                 self.glow_shaders.clear();

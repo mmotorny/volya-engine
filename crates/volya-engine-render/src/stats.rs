@@ -21,6 +21,8 @@ pub enum Part {
     Lights,
     /// The detail objects.
     Details,
+    /// The billboard groups' billboards.
+    Billboards,
     /// The sky box, sun and clouds.
     Sky,
     /// Particle effects and glows, the distortion pass included.
@@ -30,12 +32,13 @@ pub enum Part {
 }
 
 impl Part {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::WorldEarly,
         Self::WorldLate,
         Self::Strict,
         Self::Lights,
         Self::Details,
+        Self::Billboards,
         Self::Sky,
         Self::Particles,
         Self::Screen,
@@ -48,6 +51,7 @@ impl Part {
             Self::Strict => "strict",
             Self::Lights => "lights",
             Self::Details => "details",
+            Self::Billboards => "billboards",
             Self::Sky => "sky",
             Self::Particles => "particles",
             Self::Screen => "screen",
@@ -77,7 +81,7 @@ impl Counts {
 /// A frame's commands by part, plus render passes and submissions.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FrameStats {
-    pub parts: [Counts; 8],
+    pub parts: [Counts; 9],
     pub passes: u32,
     pub submits: u32,
 }
