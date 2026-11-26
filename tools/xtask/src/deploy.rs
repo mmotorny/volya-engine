@@ -20,9 +20,18 @@ pub fn run_deploy() -> Result {
     {
         return Err("working tree is dirty; commit first".into());
     }
-    let unpushed = output(&mut cmd("git", &["rev-list", "--count", "@{u}..HEAD"]))?;
-    if unpushed.trim() != "0" {
-        return Err("HEAD is not pushed; push first".into());
+    // Deploy only what main holds, whatever branch HEAD is on (worktree
+    // branches have no upstream).
+    run(&mut cmd("git", &["fetch", "-q", "origin", "main"]))?;
+    if !cmd(
+        "git",
+        &["merge-base", "--is-ancestor", "HEAD", "origin/main"],
+    )
+    .status()
+    .map_err(|e| format!("git merge-base: {e}"))?
+    .success()
+    {
+        return Err("HEAD is not in origin/main; merge and push first".into());
     }
     let sha = output(&mut cmd("git", &["rev-parse", "--short", "HEAD"]))?;
     let sha = sha.trim();
