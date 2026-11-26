@@ -251,15 +251,29 @@ fn meets(planes: &[[f32; 4]; 6], centre: [f32; 3], radius: f32) -> bool {
 /// sphere, level-placed-effects.md 5.4, mapped by the identity object
 /// transform) meets the view of `view` and `projection` (7.1).
 pub fn visible(effects: &PlacedEffects, view: &Mat4, projection: &Mat4) -> Vec<usize> {
+    let mut out = Vec::new();
+    visible_into(effects, view, projection, &mut out);
+    out
+}
+
+/// [`visible`] into `out`, cleared first.
+pub fn visible_into(effects: &PlacedEffects, view: &Mat4, projection: &Mat4, out: &mut Vec<usize>) {
     let planes = frustum(&multiply(view, projection));
-    effects
-        .indexed()
-        .filter(|(_, p)| {
-            p.registered()
-                .is_some_and(|s| meets(&planes, s.centre, s.radius))
-        })
-        .map(|(i, _)| i)
-        .collect()
+    out.clear();
+    out.extend(
+        effects
+            .indexed()
+            .filter(|(_, p)| {
+                p.registered()
+                    .is_some_and(|s| meets(&planes, s.centre, s.radius))
+            })
+            .map(|(i, _)| i),
+    );
+}
+
+thread_local! {
+    /// [`queue`]'s sprite vertices, kept between frames.
+    static SCRATCH: std::cell::Cell<Vec<sprite::SpriteVertex>> = const { std::cell::Cell::new(Vec::new()) };
 }
 
 /// The effects of the visible records `records`, queued with their
@@ -297,16 +311,20 @@ pub fn queue(
             if s.radius / key <= ssa_min {
                 continue;
             }
-            let mut vertices = Vec::new();
-            sprite::quads(record, e, camera, &mut vertices);
-            let vertices: Vec<ParticleVertex> = vertices
-                .into_iter()
-                .map(|v| ParticleVertex {
+            // The sprites built once into a scratch of their size, then
+            // copied into each draw's own list, sized exactly.
+            let mut scratch = SCRATCH.take();
+            scratch.clear();
+            sprite::quads(record, e, camera, &mut scratch);
+            let vertices = || -> Vec<ParticleVertex> {
+                let mut v = Vec::with_capacity(scratch.len());
+                v.extend(scratch.iter().map(|v| ParticleVertex {
                     position: v.position,
                     colour: v.colour,
                     uv: v.uv,
-                })
-                .collect();
+                }));
+                v
+            };
             let draw = |distortion: bool, queue: ParticleQueue| ParticleDraw {
                 effect: i,
                 distortion,
@@ -314,7 +332,7 @@ pub fn queue(
                 cull: cull(record.flags),
                 key,
                 particles: e.particles().len(),
-                vertices: vertices.clone(),
+                vertices: vertices(),
             };
             if shader.distortion.is_some() {
                 out.push(draw(true, ParticleQueue::Distortion));
@@ -322,6 +340,7 @@ pub fn queue(
             if let Some(p) = &shader.normal {
                 out.push(draw(false, p.queue()));
             }
+            SCRATCH.set(scratch);
         }
     }
     out

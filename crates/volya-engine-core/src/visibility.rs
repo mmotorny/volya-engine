@@ -323,6 +323,17 @@ pub struct CameraFrame {
     pub visuals: Vec<Vec<u32>>,
 }
 
+/// The camera pass's working lists, kept from frame to frame with the
+/// result they fill ([`Sectors::camera_pass_into`]), so a running frame
+/// allocates none of them (docs/architecture/memory.md).
+#[derive(Clone, Debug, Default)]
+pub struct PassBuffers {
+    passed: Vec<bool>,
+    touched: Vec<bool>,
+    drawn: Vec<bool>,
+    stack: Vec<(u32, u32)>,
+}
+
 impl Sectors {
     /// The sectors, portals and visual hierarchy of `level`; fails on an
     /// invalid portal (level.md 5) or a reference out of range.
@@ -441,16 +452,49 @@ impl Sectors {
         m: &Mat4,
         options: Options,
         thresholds: &Thresholds,
-        mut hidden: impl FnMut(&[Vec3]) -> bool,
+        hidden: impl FnMut(&[Vec3]) -> bool,
     ) -> Traversal {
+        let mut out = Traversal::default();
+        let mut buffers = PassBuffers::default();
+        let mut hidden = hidden;
+        self.traverse_into(
+            (start, frustum, eye, m),
+            options,
+            thresholds,
+            &mut hidden,
+            &mut out,
+            &mut buffers,
+        );
+        out
+    }
+
+    /// [`Sectors::traverse`] into `out`, its lists cleared first, with
+    /// `buffers` (kept between frames): from `start` with the frustum,
+    /// eye and matrix of `from`.
+    pub fn traverse_into(
+        &self,
+        (start, frustum, eye, m): (u16, Frustum, Vec3, &Mat4),
+        options: Options,
+        thresholds: &Thresholds,
+        hidden: &mut impl FnMut(&[Vec3]) -> bool,
+        out: &mut Traversal,
+        buffers: &mut PassBuffers,
+    ) {
         // Portals the box around the eye meets are touched (rule 2).
         let axes = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
-        let touched = (self.portals.iter())
-            .map(|p| {
-                p.triangles()
-                    .any(|t| box_intersects(eye, axes, [TOUCH; 3], &t))
-            })
-            .collect();
+        buffers.touched.clear();
+        buffers.touched.extend(self.portals.iter().map(|p| {
+            p.triangles()
+                .any(|t| box_intersects(eye, axes, [TOUCH; 3], &t))
+        }));
+        buffers.passed.clear();
+        buffers.passed.resize(self.portals.len(), false);
+        out.visited.clear();
+        out.fade.clear();
+        out.frusta.resize_with(self.sector_portals.len(), Vec::new);
+        for f in &mut out.frusta {
+            f.clear();
+        }
         let mut walk = Walk {
             sectors: self,
             start,
@@ -458,17 +502,12 @@ impl Sectors {
             options,
             thresholds,
             m,
-            passed: vec![false; self.portals.len()],
-            touched,
-            hidden: &mut hidden,
-            out: Traversal {
-                visited: Vec::new(),
-                frusta: vec![Vec::new(); self.sector_portals.len()],
-                fade: Vec::new(),
-            },
+            passed: &mut buffers.passed,
+            touched: &mut buffers.touched,
+            hidden,
+            out,
         };
         walk.enter(start, frustum);
-        walk.out
     }
 
     /// The static visuals of the visited sectors (level.md 9.3, ogf.md 8)
@@ -484,59 +523,82 @@ impl Sectors {
         thresholds: &Thresholds,
         mut hidden: impl FnMut(u32, Vec3, Vec3) -> bool,
     ) -> Vec<Vec<u32>> {
-        let mut drawn = vec![false; self.nodes.len()];
-        let mut stack = Vec::new();
-        traversal
-            .visited
-            .iter()
-            .map(|&s| {
-                let mut out = Vec::new();
-                for f in &traversal.frusta[usize::from(s)] {
-                    stack.push((self.roots[usize::from(s)], f.all()));
-                    while let Some((i, planes)) = stack.pop() {
-                        let n = &self.nodes[i as usize];
-                        let planes = match planes {
-                            0 => 0,
-                            p => match f.sphere_box(p, n.centre, n.radius, n.box_min, n.box_max) {
-                                Some(p) => p,
-                                None => continue,
-                            },
-                        };
-                        if hidden(i, n.box_min, n.box_max) {
-                            continue;
+        let mut out = Vec::new();
+        let mut buffers = PassBuffers::default();
+        self.static_visuals_into(
+            traversal,
+            eye,
+            thresholds,
+            &mut hidden,
+            &mut out,
+            &mut buffers,
+        );
+        out
+    }
+
+    /// [`Sectors::static_visuals`] into `out` (one list per visited
+    /// sector, each cleared first), with `buffers` (kept between frames).
+    pub fn static_visuals_into(
+        &self,
+        traversal: &Traversal,
+        eye: Vec3,
+        thresholds: &Thresholds,
+        hidden: &mut impl FnMut(u32, Vec3, Vec3) -> bool,
+        out: &mut Vec<Vec<u32>>,
+        buffers: &mut PassBuffers,
+    ) {
+        let PassBuffers { drawn, stack, .. } = buffers;
+        drawn.clear();
+        drawn.resize(self.nodes.len(), false);
+        stack.clear();
+        out.resize_with(traversal.visited.len(), Vec::new);
+        out.truncate(traversal.visited.len());
+        for (&s, out) in traversal.visited.iter().zip(out.iter_mut()) {
+            out.clear();
+            for f in &traversal.frusta[usize::from(s)] {
+                stack.push((self.roots[usize::from(s)], f.all()));
+                while let Some((i, planes)) = stack.pop() {
+                    let n = &self.nodes[i as usize];
+                    let planes = match planes {
+                        0 => 0,
+                        p => match f.sphere_box(p, n.centre, n.radius, n.box_min, n.box_max) {
+                            Some(p) => p,
+                            None => continue,
+                        },
+                    };
+                    if hidden(i, n.box_min, n.box_max) {
+                        continue;
+                    }
+                    let children = n.children.iter().rev().map(|&c| (c, planes));
+                    let d = sub(n.centre, eye);
+                    let sigma = n.radius / (dot(d, d) + 1e-5) * n.coverage;
+                    let mut draw = |out: &mut Vec<u32>| {
+                        if !std::mem::replace(&mut drawn[i as usize], true) {
+                            out.push(i);
                         }
-                        let children = n.children.iter().rev().map(|&c| (c, planes));
-                        let d = sub(n.centre, eye);
-                        let sigma = n.radius / (dot(d, d) + 1e-5) * n.coverage;
-                        let mut draw = |out: &mut Vec<u32>| {
-                            if !std::mem::replace(&mut drawn[i as usize], true) {
-                                out.push(i);
+                    };
+                    match n.kind {
+                        VisualType::Group => stack.extend(children),
+                        VisualType::BillboardGroup => {
+                            if sigma < thresholds.t_min {
+                                continue;
                             }
-                        };
-                        match n.kind {
-                            VisualType::Group => stack.extend(children),
-                            VisualType::BillboardGroup => {
-                                if sigma < thresholds.t_min {
-                                    continue;
-                                }
-                                if sigma < thresholds.t_a {
-                                    draw(&mut out);
-                                }
-                                if sigma > thresholds.t_b {
-                                    stack.extend(children);
-                                }
+                            if sigma < thresholds.t_a {
+                                draw(out);
                             }
-                            _ => {
-                                if sigma > thresholds.t_min {
-                                    draw(&mut out);
-                                }
+                            if sigma > thresholds.t_b {
+                                stack.extend(children);
+                            }
+                        }
+                        _ => {
+                            if sigma > thresholds.t_min {
+                                draw(out);
                             }
                         }
                     }
                 }
-                out
-            })
-            .collect()
+            }
+        }
     }
 
     /// The camera pass for one frame (visibility-scope.md 1): the
@@ -554,24 +616,48 @@ impl Sectors {
         occlusion: &mut Occlusion,
         random: &mut Generator,
     ) -> CameraFrame {
+        let mut out = CameraFrame::default();
+        let mut buffers = PassBuffers::default();
+        let pass = (sector, view, thresholds);
+        self.camera_pass_into(pass, occlusion, random, &mut out, &mut buffers);
+        out
+    }
+
+    /// [`Sectors::camera_pass`] of the camera sector, view and thresholds
+    /// of `pass` into `out`, with `buffers`, both kept between frames.
+    pub fn camera_pass_into(
+        &self,
+        (sector, view, thresholds): (Option<u16>, &View, &Thresholds),
+        occlusion: &mut Occlusion,
+        random: &mut Generator,
+        out: &mut CameraFrame,
+        buffers: &mut PassBuffers,
+    ) {
         let (m, eye) = (&view.view_projection, view.eye);
         occlusion.camera_pass(view, random);
         let Some(sector) = sector.filter(|&s| usize::from(s) < self.roots.len()) else {
-            return CameraFrame::default();
+            out.traversal.visited.clear();
+            out.traversal.fade.clear();
+            out.traversal.frusta.clear();
+            out.visuals.clear();
+            return;
         };
-        let traversal = self.traverse(
-            sector,
-            Frustum::view(m),
-            eye,
-            m,
+        self.traverse_into(
+            (sector, Frustum::view(m), eye, m),
             CAMERA_PASS,
             thresholds,
-            |p| occlusion.portal_hidden(p, view, random),
+            &mut |p| occlusion.portal_hidden(p, view, random),
+            &mut out.traversal,
+            buffers,
         );
-        let visuals = self.static_visuals(&traversal, eye, thresholds, |i, a, b| {
-            occlusion.visual_hidden(i, a, b, view, random)
-        });
-        CameraFrame { traversal, visuals }
+        self.static_visuals_into(
+            &out.traversal,
+            eye,
+            thresholds,
+            &mut |i, a, b| occlusion.visual_hidden(i, a, b, view, random),
+            &mut out.visuals,
+            buffers,
+        );
     }
 
     /// The number of static visuals (the size of [`Occlusion`]'s cache).
@@ -588,10 +674,10 @@ struct Walk<'a, H> {
     options: Options,
     thresholds: &'a Thresholds,
     m: &'a Mat4,
-    passed: Vec<bool>,
-    touched: Vec<bool>,
+    passed: &'a mut Vec<bool>,
+    touched: &'a mut Vec<bool>,
     hidden: &'a mut H,
-    out: Traversal,
+    out: &'a mut Traversal,
 }
 
 impl<H: FnMut(&[Vec3]) -> bool> Walk<'_, H> {

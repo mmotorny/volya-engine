@@ -113,11 +113,13 @@ impl Instance {
     }
 
     /// Every effect instance it holds.
-    pub fn effects(&self) -> Box<dyn Iterator<Item = &EffectInstance> + '_> {
-        match self {
-            Instance::Effect(i) => Box::new(std::iter::once(i)),
-            Instance::Group(g) => Box::new(g.effects()),
-        }
+    pub fn effects(&self) -> impl Iterator<Item = &EffectInstance> + '_ {
+        // Not boxed: no allocation in a running frame.
+        let (one, group) = match self {
+            Instance::Effect(i) => (Some(i), None),
+            Instance::Group(g) => (None, Some(g.effects())),
+        };
+        one.into_iter().chain(group.into_iter().flatten())
     }
 }
 

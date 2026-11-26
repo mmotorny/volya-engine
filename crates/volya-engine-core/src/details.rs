@@ -275,6 +275,8 @@ pub struct Details {
     scratch: Vec<u32>,
     /// Drawing lists per list and model, reused from frame to frame.
     collect: Vec<Vec<DrawnInstance>>,
+    /// The entries a selection chose, reused from frame to frame.
+    chosen: Vec<usize>,
 }
 
 /// Physical index of a cache position.
@@ -324,6 +326,7 @@ impl Details {
             selected: None,
             scratch: Vec::new(),
             collect,
+            chosen: Vec::new(),
         };
         for m in 0..CACHE {
             for k in 0..CACHE {
@@ -616,7 +619,8 @@ impl Details {
         visible: &mut impl FnMut(&mut Cached, Vec3, Vec3, &mut Generator) -> bool,
     ) -> DetailFrame {
         let planes = frustum(&pass.view_projection);
-        let mut chosen: Vec<usize> = Vec::new();
+        let mut chosen = std::mem::take(&mut self.chosen);
+        chosen.clear();
         for gm in 0..GROUPS {
             for gk in 0..GROUPS {
                 let g = self.groups[gm * GROUPS + gk];
@@ -654,7 +658,7 @@ impl Details {
         for list in &mut self.collect {
             list.clear();
         }
-        for i in chosen {
+        for &i in &chosen {
             if pass.frame > self.entries[i].due {
                 let c = self.entries[i].sphere;
                 let d2: f32 = (0..3).map(|k| (pass.eye[k] - c[k]).powi(2)).sum();
@@ -676,6 +680,7 @@ impl Details {
                 }
             }
         }
+        self.chosen = chosen;
         let mut draws = Vec::new();
         let mut instances = Vec::new();
         for list in [SWAY_1, SWAY_2, STILL] {

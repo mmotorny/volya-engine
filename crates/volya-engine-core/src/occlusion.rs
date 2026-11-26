@@ -354,7 +354,11 @@ impl Occlusion {
                 let v = t.vertices.map(|k| mesh.vertices[k as usize]);
                 clip(&near, &v, clipped);
                 if clipped.len() >= 3 {
-                    let p: Vec<[f32; 3]> = clipped.iter().map(|&p| project(&screen, p)).collect();
+                    // Projected in place: no allocation in a frame.
+                    for p in clipped.iter_mut() {
+                        *p = project(&screen, *p);
+                    }
+                    let p = &clipped[..];
                     let neighbours = t.neighbours.map(|n| n.unwrap_or(NONE));
                     for k in 1..p.len() - 1 {
                         count += buffers.triangle(i, neighbours, [p[0], p[k], p[k + 1]]);

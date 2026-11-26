@@ -346,6 +346,8 @@ pub struct LevelLights {
     pub glows_per_frame: u32,
     passes: Vec<LightPass>,
     sprites: Vec<GlowSprite>,
+    /// The lights a frame lists, kept between frames.
+    listed: Vec<LightId>,
 }
 
 impl LevelLights {
@@ -461,21 +463,27 @@ impl LevelLights {
         let frustum = Frustum::of(&multiply(&camera.view, &camera.projection));
         // The dynamic part of the camera pass runs only with a camera
         // sector (object-visibility.md 1).
-        let listed = if camera_in_sector {
-            self.lights.choose(&self.settings, eye, |t| {
-                visibility.reached(t.sector, t.centre, t.radius).is_some()
-                    && visibility.cached_visible(t.cache, t.min, t.max, random)
-            })
+        let mut listed = std::mem::take(&mut self.listed);
+        if camera_in_sector {
+            self.lights.choose_into(
+                &self.settings,
+                eye,
+                |t| {
+                    visibility.reached(t.sector, t.centre, t.radius).is_some()
+                        && visibility.cached_visible(t.cache, t.min, t.max, random)
+                },
+                &mut listed,
+            );
         } else {
-            Vec::new()
-        };
+            listed.clear();
+        }
         // The light passes, occlusion off (occlusion-tests.md 4).
-        let (lights, clip) = (&self.lights, self.settings.clip);
-        self.passes = visibility.light_passes(|| {
-            (listed.iter())
-                .filter_map(|&id| light_pass(lights.get(id)?, eye, clip))
-                .collect()
+        let (lights, clip, passes) = (&self.lights, self.settings.clip, &mut self.passes);
+        visibility.light_passes(|| {
+            passes.clear();
+            passes.extend((listed.iter()).filter_map(|&id| light_pass(lights.get(id)?, eye, clip)));
         });
+        self.listed = listed;
         let v = &camera.view;
         let view = GlowView {
             eye,
@@ -486,12 +494,13 @@ impl LevelLights {
             far: camera.far,
             camera_in_sector,
         };
-        self.sprites = self.glows.frame(
+        self.glows.frame_into(
             &view,
             dt,
             self.glows_per_frame,
             |p| Self::has_sector(collision, portals, p),
             |from, dir, length| static_ray(collision, from, dir, length),
+            &mut self.sprites,
         );
     }
 

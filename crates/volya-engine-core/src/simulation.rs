@@ -353,6 +353,9 @@ pub struct Simulation {
     switch_cursor: Option<u16>,
     /// The last scheduled object served.
     schedule_cursor: Option<u16>,
+    /// The ids a pass visits, kept for the next pass (no allocation in a
+    /// running frame, docs/architecture/memory.md).
+    order: Vec<u16>,
     /// Story id → object id.
     story_ids: BTreeMap<i32, u16>,
     /// The smart terrains' ids (7.2).
@@ -396,6 +399,7 @@ impl Simulation {
             schedule: BTreeSet::new(),
             switch_cursor: None,
             schedule_cursor: None,
+            order: Vec::new(),
             story_ids: BTreeMap::new(),
             smart_terrains: BTreeSet::new(),
             actor_items: 0..0,
@@ -698,21 +702,31 @@ impl Simulation {
     /// at, wrapping around. The pass's time limit (about 900 s with the
     /// shipped values) never ends it early here (our choice).
     pub fn switch_pass(&mut self, now: u64, hour: u32, changes: &mut Changes) -> io::Result<()> {
-        let start = self.switch_cursor;
-        let order: Vec<u16> = match start {
-            Some(c) => self
-                .level_list
-                .range(c.saturating_add(1)..)
-                .chain(self.level_list.range(..=c))
-                .copied()
-                .collect(),
-            None => self.level_list.iter().copied().collect(),
-        };
+        let mut order = std::mem::take(&mut self.order);
+        order.clear();
+        match self.switch_cursor {
+            Some(c) => order.extend(
+                (self.level_list.range(c.saturating_add(1)..)).chain(self.level_list.range(..=c)),
+            ),
+            None => order.extend(&self.level_list),
+        }
+        let result = self.switch_objects(&order, now, hour, changes);
+        self.order = order;
+        result
+    }
+
+    fn switch_objects(
+        &mut self,
+        order: &[u16],
+        now: u64,
+        hour: u32,
+        changes: &mut Changes,
+    ) -> io::Result<()> {
         let state = StartState {
             actor: self.actor_position(),
             hour,
         };
-        for id in order {
+        for &id in order {
             if !self.objects.contains_key(&id) {
                 continue;
             }
@@ -951,20 +965,21 @@ impl Simulation {
     /// the last one served, wrapping around, each once.
     fn scheduled_updates(&mut self, now: u64, normal_time_factor: f32) {
         let n = self.config.objects_per_update;
-        let order: Vec<u16> = match self.schedule_cursor {
-            Some(c) => self
-                .schedule
-                .range(c.saturating_add(1)..)
-                .chain(self.schedule.range(..=c))
-                .take(n)
-                .copied()
-                .collect(),
-            None => self.schedule.iter().take(n).copied().collect(),
-        };
-        for id in order {
+        let mut order = std::mem::take(&mut self.order);
+        order.clear();
+        match self.schedule_cursor {
+            Some(c) => order.extend(
+                (self.schedule.range(c.saturating_add(1)..))
+                    .chain(self.schedule.range(..=c))
+                    .take(n),
+            ),
+            None => order.extend(self.schedule.iter().take(n)),
+        }
+        for &id in &order {
             self.schedule_cursor = Some(id);
             self.scheduled_update(id, now, normal_time_factor);
         }
+        self.order = order;
     }
 
     /// A stalker's or monster's scheduled update (7.1): with state flags

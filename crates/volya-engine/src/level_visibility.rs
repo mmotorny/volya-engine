@@ -13,7 +13,7 @@ use crate::core::camera::Vec3;
 use crate::core::collision::CollisionWorld;
 use crate::core::occlusion::{Cached, Occlusion, OcclusionMesh, View};
 use crate::core::particles::random::Generator;
-use crate::core::visibility::{CameraFrame, CameraSector, Sectors, triangle_below};
+use crate::core::visibility::{CameraFrame, CameraSector, PassBuffers, Sectors, triangle_below};
 use volya_engine_formats::level::{Level, Thresholds};
 
 /// The camera pass's state for a level's run.
@@ -23,6 +23,8 @@ pub struct LevelVisibility {
     occlusion: Occlusion,
     camera: CameraSector,
     frame: CameraFrame,
+    /// The pass's working lists, kept with `frame` between frames.
+    buffers: PassBuffers,
     /// The latest pass's view.
     view: Option<View>,
 }
@@ -35,6 +37,7 @@ impl Default for LevelVisibility {
             occlusion: Occlusion::new(None, 0),
             camera: CameraSector::default(),
             frame: CameraFrame::default(),
+            buffers: PassBuffers::default(),
             view: None,
         }
     }
@@ -64,8 +67,13 @@ impl LevelVisibility {
         random: &mut Generator,
     ) {
         let sector = self.camera.update(view.eye, &self.sectors, collision);
-        self.frame =
-            (self.sectors).camera_pass(sector, &view, thresholds, &mut self.occlusion, random);
+        (self.sectors).camera_pass_into(
+            (sector, &view, thresholds),
+            &mut self.occlusion,
+            random,
+            &mut self.frame,
+            &mut self.buffers,
+        );
         self.view = Some(view);
     }
 

@@ -102,6 +102,10 @@ pub struct Glows {
     /// The occlusion counter k (section 5): 0 at load, never reset.
     k: u64,
     frame: u64,
+    /// A frame's candidates and listed glows, kept between frames (no
+    /// allocation in a running frame, docs/architecture/memory.md).
+    candidates: Vec<(f32, usize)>,
+    listed: Vec<usize>,
 }
 
 impl Glows {
@@ -227,26 +231,46 @@ impl Glows {
         view: &GlowView,
         dt: f32,
         per_frame: u32,
+        in_sector: impl FnMut(Vec3) -> bool,
+        occluded: impl FnMut(Vec3, Vec3, f32) -> Option<[Vec3; 3]>,
+    ) -> Vec<GlowSprite> {
+        let mut sprites = Vec::new();
+        self.frame_into(view, dt, per_frame, in_sector, occluded, &mut sprites);
+        sprites
+    }
+
+    /// [`Glows::frame`] into `sprites`, cleared first.
+    pub fn frame_into(
+        &mut self,
+        view: &GlowView,
+        dt: f32,
+        per_frame: u32,
         mut in_sector: impl FnMut(Vec3) -> bool,
         mut occluded: impl FnMut(Vec3, Vec3, f32) -> Option<[Vec3; 3]>,
-    ) -> Vec<GlowSprite> {
+        sprites: &mut Vec<GlowSprite>,
+    ) {
+        sprites.clear();
         self.frame += 1;
         let e = view.eye;
         let distance2 = |g: &Glow| {
             let v = sub(g.position, e);
             dot(v, v)
         };
-        let mut listed: Vec<usize> = Vec::new();
+        let mut listed = std::mem::take(&mut self.listed);
+        listed.clear();
         if view.camera_in_sector {
             // Step 1: on and not outside the view, nearest first.
-            let mut candidates: Vec<(f32, usize)> = (self.glows.iter().enumerate())
-                .filter_map(|(i, g)| Some((i, g.as_ref()?)))
-                .filter(|(_, g)| g.on && view.frustum.meets(g.position, g.radius))
-                .map(|(i, g)| (distance2(g), i))
-                .collect();
+            let mut candidates = std::mem::take(&mut self.candidates);
+            candidates.clear();
+            candidates.extend(
+                (self.glows.iter().enumerate())
+                    .filter_map(|(i, g)| Some((i, g.as_ref()?)))
+                    .filter(|(_, g)| g.on && view.frustum.meets(g.position, g.radius))
+                    .map(|(i, g)| (distance2(g), i)),
+            );
             candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
             let z2 = view.far * view.far;
-            for (d2, i) in candidates {
+            for &(d2, i) in &candidates {
                 let g = self.glows[i].as_mut().expect("a candidate exists");
                 // Step 2.
                 if g.sector_due {
@@ -269,9 +293,11 @@ impl Glows {
                     g.fade = (g.fade - 1024.0 * dt).max(1.0);
                 }
             }
+            self.candidates = candidates;
         }
         if listed.is_empty() {
-            return Vec::new();
+            self.listed = listed;
+            return;
         }
         // Section 5.
         let len = listed.len() as u64;
@@ -294,8 +320,7 @@ impl Glows {
         let dl = dot(view.forward, view.forward).sqrt();
         let forward = view.forward.map(|c| c / dl);
         let z2 = view.far * view.far;
-        let mut sprites = Vec::with_capacity(listed.len());
-        for i in listed {
+        for &i in &listed {
             let g = self.glows[i].as_ref().expect("a listed glow exists");
             if g.fade <= 1.0 {
                 continue;
@@ -330,7 +355,7 @@ impl Glows {
                 b: a.clamp(0.0, 255.0) as u8,
             });
         }
-        sprites
+        self.listed = listed;
     }
 }
 

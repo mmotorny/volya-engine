@@ -154,7 +154,9 @@ impl StaticSources {
     pub fn frame(&mut self, system: &mut SoundSystem, now: u32, tau: u32) -> Result<(), Fatal> {
         for source in &mut self.sources {
             let playing = system.has_emitter(source.sound);
-            let r = source.record.clone();
+            let r = &source.record;
+            let [pause_min, pause_max, play_min, play_max] =
+                [r.pause_min, r.pause_max, r.play_min, r.play_max];
             if !source.active(tau) {
                 if playing {
                     system.stop_with_fade(source.sound);
@@ -167,24 +169,23 @@ impl StaticSources {
                 }
                 continue;
             }
-            if r.pause_min == 0 && r.pause_max == 0 {
+            if pause_min == 0 && pause_max == 0 {
                 start(system, source, true);
                 source.stop_time = NEVER;
             } else if now < source.next_start {
                 // Waiting for the next start.
-            } else if r.play_min == 0 && r.play_max == 0 {
+            } else if play_min == 0 && play_max == 0 {
                 start(system, source, false);
                 source.stop_time = NEVER;
                 let duration = system.duration_ms(source.sound).unwrap_or(0) as u32;
-                let pause = draw(system, r.pause_min, r.pause_max)?;
+                let pause = draw(system, pause_min, pause_max)?;
                 source.next_start = now.wrapping_add(duration).wrapping_add(pause);
             } else {
                 start(system, source, true);
-                source.stop_time = now.wrapping_add(draw(system, r.play_min, r.play_max)?);
-                source.next_start =
-                    source
-                        .stop_time
-                        .wrapping_add(draw(system, r.pause_min, r.pause_max)?);
+                source.stop_time = now.wrapping_add(draw(system, play_min, play_max)?);
+                source.next_start = source
+                    .stop_time
+                    .wrapping_add(draw(system, pause_min, pause_max)?);
             }
         }
         Ok(())

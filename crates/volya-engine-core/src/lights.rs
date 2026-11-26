@@ -348,6 +348,10 @@ pub struct Lights {
     free: Vec<u32>,
     /// The sun's records A and B (DL 3.1), once chunk 6 is read.
     sun: Option<(LightId, LightId)>,
+    /// [`Lights::choose_into`]'s lists, kept between frames (no allocation
+    /// in a running frame, docs/architecture/memory.md).
+    order: Vec<(u32, f32)>,
+    listed: Vec<(LightId, LightKind)>,
 }
 
 impl Lights {
@@ -590,18 +594,37 @@ impl Lights {
         &mut self,
         settings: &LightSettings,
         eye: Vec3,
-        mut seen: impl FnMut(Seen<'_>) -> bool,
+        seen: impl FnMut(Seen<'_>) -> bool,
     ) -> Vec<LightId> {
+        let mut out = Vec::new();
+        self.choose_into(settings, eye, seen, &mut out);
+        out
+    }
+
+    /// [`Lights::choose`] into `out`, cleared first.
+    pub fn choose_into(
+        &mut self,
+        settings: &LightSettings,
+        eye: Vec3,
+        mut seen: impl FnMut(Seen<'_>) -> bool,
+        out: &mut Vec<LightId>,
+    ) {
         let d2 = |r: &LightRecord| {
             let d = sub(r.centre, eye);
             dot(d, d)
         };
-        let mut order: Vec<(u32, f32)> = (self.records.iter().enumerate())
-            .filter_map(|(i, r)| r.as_ref().filter(|r| r.active).map(|r| (i as u32, d2(r))))
-            .collect();
+        let (mut order, mut listed) = (
+            std::mem::take(&mut self.order),
+            std::mem::take(&mut self.listed),
+        );
+        order.clear();
+        listed.clear();
+        order.extend(
+            (self.records.iter().enumerate())
+                .filter_map(|(i, r)| r.as_ref().filter(|r| r.active).map(|r| (i as u32, d2(r)))),
+        );
         order.sort_by(|a, b| a.1.total_cmp(&b.1));
-        let mut listed = Vec::new();
-        for (i, _) in order {
+        for &(i, _) in &order {
             let Some(r) = self.records[i as usize].as_mut() else {
                 continue;
             };
@@ -624,7 +647,9 @@ impl Lights {
         }
         let spots = listed.iter().filter(|(_, k)| *k != LightKind::Point);
         let points = listed.iter().filter(|(_, k)| *k == LightKind::Point);
-        spots.chain(points).map(|(id, _)| *id).collect()
+        out.clear();
+        out.extend(spots.chain(points).map(|(id, _)| *id));
+        (self.order, self.listed) = (order, listed);
     }
 
     /// The frame's light passes (DL 5) of the lights `choose` lists, seen

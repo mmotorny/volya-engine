@@ -292,6 +292,9 @@ pub struct LevelScreen {
     weather_effect: Option<usize>,
     /// The size of the latest frame drawn, for the effects' view test.
     view_size: std::cell::Cell<(u32, u32)>,
+    /// The effect objects a view draws ([`LevelScreen::drawn`]), kept
+    /// between frames.
+    drawn_effects: std::cell::RefCell<Vec<usize>>,
     /// `r__supersample` in force: the frame's target size, and with it the
     /// size thresholds (static-shading.md 10.2, frame-presentation.md 1.1).
     supersample: u32,
@@ -2014,6 +2017,7 @@ impl NewGameLoad {
             instances,
             effects,
             view_size: std::cell::Cell::new((1024, 768)),
+            drawn_effects: Default::default(),
             supersample: 1,
             zones: self.zones,
             zone_sections: self.zone_sections,
@@ -2769,31 +2773,31 @@ impl LevelScreen {
         let Some(effects) = &self.effects else {
             return;
         };
-        let drawn = self.drawn(effects, &view, &projection);
+        let mut drawn = self.drawn_effects.take();
+        self.drawn(effects, &view, &projection, &mut drawn);
         if let Some(effects) = &mut self.effects {
-            for i in drawn {
+            for &i in &drawn {
                 effects.draw_update(i);
             }
         }
+        self.drawn_effects.replace(drawn);
     }
 
-    /// The effect objects drawn in a view: those visible (7.1) of the
-    /// origins drawn.
-    fn drawn(&self, effects: &PlacedEffects, view: &Mat4, projection: &Mat4) -> Vec<usize> {
+    /// The effect objects drawn in a view, into `out`: those visible (7.1)
+    /// of the origins drawn.
+    fn drawn(&self, effects: &PlacedEffects, view: &Mat4, projection: &Mat4, out: &mut Vec<usize>) {
         let origin = |o: Origin| match o {
             Origin::Placed => 0,
             Origin::Zone => 1,
             Origin::Weather => 2,
             Origin::Artefact => 3,
         };
-        particle_drawing::visible(effects, view, projection)
-            .into_iter()
-            .filter(|&i| {
-                effects
-                    .get(i)
-                    .is_some_and(|p| self.effects_drawn[origin(p.origin)])
-            })
-            .collect()
+        particle_drawing::visible_into(effects, view, projection, out);
+        out.retain(|&i| {
+            effects
+                .get(i)
+                .is_some_and(|p| self.effects_drawn[origin(p.origin)])
+        });
     }
 
     /// Leaves the effects out of the frames drawn, or draws them again
@@ -2837,14 +2841,17 @@ impl LevelScreen {
             self.supersample,
         );
         let ssa_min = crate::render::world::ssa_min(w, h, camera::FOV_Y_DEGREES);
-        let records = self.drawn(effects, view, projection);
-        particle_drawing::queue(
+        let mut records = self.drawn_effects.take();
+        self.drawn(effects, view, projection, &mut records);
+        let draws = particle_drawing::queue(
             effects,
             &records,
             &self.world.particle_shaders,
             &camera,
             ssa_min,
-        )
+        );
+        self.drawn_effects.replace(records);
+        draws
     }
 
     /// What the engine interface reports of the placed effects.
@@ -3226,6 +3233,7 @@ impl LevelScreen {
             instances: HashMap::new(),
             effects: None,
             view_size: std::cell::Cell::new((1024, 768)),
+            drawn_effects: Default::default(),
             supersample: 1,
             zones: Zones::default(),
             zone_sections: HashMap::new(),
