@@ -783,11 +783,12 @@ export const tests = {
     const status = await volya.call("game_status");
     if (status.imported || status.written > 0) skip("a real import is present");
     const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle("volya-engine", { create: true });
-    const write = async (manifest) => {
-      const writable = await (await dir.getFileHandle("import.json", { create: true })).createWritable();
+    const write = async (manifest, at = dir, name = "import.json") => {
+      const writable = await (await at.getFileHandle(name, { create: true })).createWritable();
       await writable.write(JSON.stringify(manifest));
       await writable.close();
     };
+    const game = await dir.getDirectoryHandle("game", { create: true });
     /** The session event as a new session would make it now. */
     const session = async () => {
       await volya.call("debug_session_event");
@@ -804,8 +805,18 @@ export const tests = {
         "imported|ver. 1.0006|ru-RU|setup_test.exe|setup_test-1.bin|Test Game|2.0 test",
         "imported game",
       );
-      // The value the installer writes where the menu reads its version.
-      await write({ language: "", complete: false, files: [], installer: { ...installer, install_vers: "1.0004" } });
+      // The value the imported install script writes where the menu reads
+      // its version (gog-install-additions.md 4.3).
+      const setVersion = {
+        root: "HKEY_LOCAL_MACHINE",
+        subkey: "SOFTWARE\\GSC Game World\\STALKER-SHOC",
+        valueData: "1.0004",
+        valueName: "InstallVers",
+        valueType: "string",
+      };
+      const script = "goggame-1.script";
+      await write({ actions: [{ install: { action: "setRegistry", arguments: setVersion }, languages: ["*"] }] }, game, script);
+      await write({ language: "", complete: false, files: [{ path: script, size: 0, md5: "" }], installer });
       s = await session();
       assertEqual([s.game, s.game_version, s.game_language].join("|"), "partly imported|ver. 1.0004|", "partial import");
       // Recorded before the installer was.
@@ -817,6 +828,7 @@ export const tests = {
       assertEqual([s.game, "game_version" in s].join("|"), "not imported|false", "no game");
     } finally {
       await dir.removeEntry("import.json").catch(() => {});
+      await game.removeEntry("goggame-1.script").catch(() => {});
     }
   },
 
