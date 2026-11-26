@@ -98,11 +98,12 @@ pub const SETTINGS: &[(&str, &str)] = &[
     ("vid_mode", "1920x1080"),
 ];
 
-/// The views' own lines (steering-the-original.md section 3.1): silent,
-/// and the HUD's crosshair and object info off, as our views draw no HUD.
+/// The views' own lines (steering-the-original.md section 3.1): silent.
+/// No HUD line: none hides the whole HUD (section 5.1), and the capture
+/// leaves it out of the original's New Game frames by taking them with the
+/// camera recorder's screenshot, which draws its frame with every HUD
+/// switch off (section 5.1), as our views draw no HUD.
 pub const VIEW_SETTINGS: &[(&str, &str)] = &[
-    ("hud_crosshair", "off"),
-    ("hud_info", "off"),
     ("snd_volume_eff", "0."),
     ("snd_volume_music", "0."),
 ];
@@ -165,7 +166,8 @@ pub enum Place {
 pub enum Camera {
     /// The player's own view where the New Game puts it (start-position.md):
     /// no camera track. The original draws its HUD over every New Game view,
-    /// a track's too (measured, #549).
+    /// a track's too (measured, #549); its frames are the camera recorder's
+    /// screenshots, which leave it out (steering-the-original.md 5.1).
     Start,
     /// A camera track's (steering-the-original.md section 4.2): from `eye`
     /// (metres, level space) at `yaw` and `pitch` (radians,

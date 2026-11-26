@@ -7,7 +7,7 @@
 //!
 //! - `capture title|level OUT`: the frames of the views there, into
 //!   `OUT/fidelity/` (`xtask original capture`).
-//! - `capture merge OUT DIR...`: every `DIR/fidelity/*.png` into
+//! - `capture merge OUT DIR...`: every file of `DIR/fidelity/` into
 //!   `OUT/fidelity/`, the folder the fidelity suite is served.
 
 #![allow(dead_code)] // The modules' other tasks are xtask's.
@@ -51,6 +51,10 @@ fn merge(out: &Path, dirs: &[&str]) -> Result {
         let from = Path::new(dir).join("fidelity");
         for entry in fs::read_dir(&from).map_err(|e| format!("{}: {e}", from.display()))? {
             let path = entry.map_err(|e| e.to_string())?.path();
+            // Folders (the displays, `fidelity/display/`) are not served.
+            if path.is_dir() {
+                continue;
+            }
             let name = path.file_name().ok_or("no name")?;
             fs::copy(&path, to.join(name)).map_err(|e| format!("{}: {e}", path.display()))?;
         }

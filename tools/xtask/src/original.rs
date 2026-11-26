@@ -25,13 +25,15 @@ pub use views::capture;
 /// `bin\XR_3DA.exe`, working folder `bin`, no arguments) plus the options
 /// for an unattended start (steering-the-original.md sections 1.2 and 3.1:
 /// no memory-check box, no crash dialog, sound off, the run's configuration
-/// file instead of `user.ltx`).
+/// file instead of `user.ltx`), and `-ss_tga`: each screenshot also as an
+/// uncompressed TGA (section 5), not only a JPEG.
 const EXE: &str = "bin/XR_3DA.exe";
 const WORKING_DIR: &str = "bin";
-const ARGS: [&str; 5] = [
+const ARGS: [&str; 6] = [
     "--skipmemcheck",
     "-silent_error_mode",
     "-nosound",
+    "-ss_tga",
     "-ltx",
     STEER_LTX,
 ];
@@ -254,6 +256,7 @@ impl Install {
         let container = Container::spawn(&dir, &tail, &program, log.into(), err.into())?;
         Ok(Run {
             config: documents.join(USER_FOLDER).join(STEER_LTX),
+            screenshots: documents.join(USER_FOLDER).join("screenshots"),
             started,
             dir,
             frames,
@@ -272,6 +275,8 @@ pub struct Run {
     pub frames: PathBuf,
     /// Its configuration file ([`STEER_LTX`]).
     config: PathBuf,
+    /// The screenshots folder (steering-the-original.md section 5).
+    pub screenshots: PathBuf,
     /// When the run was started, after its configuration file was written.
     started: SystemTime,
     log_path: PathBuf,
@@ -299,11 +304,14 @@ impl Run {
 
     /// Runs `command` in the game's console: the grave key opens it (the
     /// shipped bindings, steering-the-original.md section 2.2), the line is
-    /// typed and entered (section 2.3).
+    /// typed and entered (section 2.3). Typed a key every 250 ms: at a
+    /// frame a second or slower, keys typed faster were lost, the Return
+    /// among them (measured, a 31-character line).
     pub fn console(&self, command: &str) -> Result {
         let typed = command.replace('\'', "");
         self.xdotool(&format!(
-            "xdotool key grave && sleep 1 && xdotool type '{typed}' && xdotool key Return"
+            "xdotool key grave && sleep 1 && xdotool type --delay 250 '{typed}' && sleep 1 \
+             && xdotool key Return"
         ))
     }
 

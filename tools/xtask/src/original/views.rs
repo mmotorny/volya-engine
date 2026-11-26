@@ -8,6 +8,12 @@
 //! a frame is captured again only when its inputs change. The `fidelity`
 //! browser suite compares ours with them.
 //!
+//! A New Game view's frame is the game's own screenshot taken by the camera
+//! recorder's F12, which leaves the whole HUD out of the frame it saves
+//! (section 5.1; the displayed frames keep it): [`without_hud`]. The
+//! display at that moment, HUD included, is kept beside it as
+//! `display/<view>.png` (not served to the suite).
+//!
 //! Besides each view's frame, `<view>.png`, it keeps the configuration file
 //! the run started from, `<view>.user.ltx` (`user_ltx`, which our check
 //! starts from too), and the file as the game rewrote it when it quit,
@@ -15,7 +21,7 @@
 //! with ours before any pixel (#561).
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::thread;
 use std::time::Duration;
@@ -70,6 +76,12 @@ const INTRO_TIMEOUT: u64 = 400;
 /// Seconds between looks at the display while waiting.
 const POLL: u64 = 2;
 
+/// Seconds the camera recorder gets to start before its F12 (section 5.1
+/// step 3: two frames or more; a frame takes up to about a second at the
+/// views' settings, measured), and the screenshot to be written after it.
+const RECORDER_START: u64 = 10;
+const SCREENSHOT_TIMEOUT: u64 = 120;
+
 /// Captures the original's frames of the views at `place` (`title`: the
 /// title menu's; `level`: a New Game's) into `out/fidelity/<view>.png`, one
 /// run of the game in the temporary directory, removed after.
@@ -105,7 +117,11 @@ pub fn capture(place: &str, out: &Path) -> Result {
     } else {
         capture_level(&install, &dir, &views)
     };
-    // The run's clone of the install, its Wine prefix and captures: scratch.
+    // The run's clone of the install, its Wine prefix and captures: scratch,
+    // kept when the capture failed, for a look (game assets: local only).
+    if let Err(e) = &result {
+        return Err(format!("{e}\nThe run is kept in {}", runs.display()));
+    }
     let _ = crate::run(
         std::process::Command::new("chmod")
             .arg("-R")
@@ -215,8 +231,8 @@ fn capture_title(install: &Install, out: &Path, views: &[&View]) -> Result {
 ///   is a picture on black, measured) it shows letterboxed, and the first
 ///   frame after it that isn't letterboxed is the start of play;
 /// - the start views ([`Camera::Start`]) captured at their `seconds` after
-///   that, before any track: a track's precache blacks the display
-///   (section 4.2.1);
+///   that ([`without_hud`], as every New Game view), before any track: a
+///   track's precache blacks the display (section 4.2.1);
 /// - each track view's track played from the console (`demo_play
 ///   <name>,<cycles>`, sections 4.2 and 4.2.2) [`PRECACHE`] + [`SETTLE`]
 ///   seconds before its `seconds`; once the display has gone black and is
@@ -284,7 +300,7 @@ fn capture_level(install: &Install, out: &Path, views: &[&View]) -> Result {
     let at = |s: u32| play + Duration::from_secs(u64::from(s));
     for (view, seconds) in starts {
         wait_until(&mut run, at(seconds))?;
-        let frame = run.capture().ok_or("no display")?;
+        let frame = without_hud(&mut run, out, view)?;
         keep(&run, out, view, frame)?;
     }
     for (view, seconds) in tracks {
@@ -310,7 +326,7 @@ fn capture_level(install: &Install, out: &Path, views: &[&View]) -> Result {
             }
         }
         wait_until(&mut run, capture)?;
-        let frame = run.capture().ok_or("no display")?;
+        let frame = without_hud(&mut run, out, view)?;
         println!(
             "{}: precache {} s, captured {} s after play",
             view.name,
@@ -320,6 +336,145 @@ fn capture_level(install: &Install, out: &Path, views: &[&View]) -> Result {
         keep(&run, out, view, frame)?;
     }
     end(run, out, views)
+}
+
+/// The frame of the view the game shows now, without its HUD: the camera
+/// recorder's screenshot (section 5.1). `demo_record` starts the recorder
+/// from the current view (a held track's, which it replaces, or the
+/// player's; roll 0, and without input it stays there); the F12 key (the
+/// key itself, not the `screenshot` command, which keeps the HUD) has it
+/// draw one frame with the HUD's flags cleared and save it (section 5:
+/// full screen, the front buffer, here also as TGA, `-ss_tga`); Esc ends
+/// the recorder and the player's camera returns. The display at the F12,
+/// HUD included, is kept as `display/<view>.png` in `out`.
+fn without_hud(run: &mut Run, out: &Path, view: &View) -> Result<(u32, u32, Vec<u8>)> {
+    let before = screenshots(&run.screenshots);
+    // A scratch name, not a track's: the recorder replaces its file.
+    run.console("demo_record recorder")?;
+    thread::sleep(Duration::from_secs(RECORDER_START));
+    let display = run.capture().ok_or("no display")?;
+    let path = run.frames.join(format!("{}-recorder.png", view.name));
+    let _ = fs::write(path, png(display.0, display.1, &display.2));
+    run.xdotool("xdotool key F12")?;
+    let until = run.elapsed() + Duration::from_secs(SCREENSHOT_TIMEOUT);
+    let mut looks = 0;
+    let tga = loop {
+        thread::sleep(Duration::from_secs(POLL));
+        // The display while waiting, in the run's captures.
+        if let Some((w, h, rgb)) = run.capture() {
+            let path = run.frames.join(format!("{}-f12-{looks:02}.png", view.name));
+            let _ = fs::write(path, png(w, h, &rgb));
+            looks += 1;
+        }
+        if let Some(status) = run.container.try_wait()? {
+            return Err(format!(
+                "the game ended ({status}) before {}'s screenshot",
+                view.name
+            ));
+        }
+        // Decoded once written whole: the file holds all its pixels.
+        let frame = screenshots(&run.screenshots)
+            .into_iter()
+            .filter(|p| !before.contains(p))
+            .find_map(|p| fs::read(p).ok().and_then(|b| tga_rgb(&b)));
+        if let Some(frame) = frame {
+            break frame;
+        }
+        if run.elapsed() > until {
+            let names: Vec<String> = fs::read_dir(&run.screenshots)
+                .map(|d| {
+                    d.filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            return Err(format!(
+                "{}: no screenshot within {SCREENSHOT_TIMEOUT} s of the recorder's F12 \
+                 (the screenshots folder holds {names:?})",
+                view.name
+            ));
+        }
+    };
+    run.xdotool("xdotool key Escape")?;
+    let dir = out.join("display");
+    fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let path = dir.join(format!("{}.png", view.name));
+    fs::write(&path, png(display.0, display.1, &display.2))
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    println!(
+        "{:>5} s  {}: the recorder's screenshot",
+        run.elapsed().as_secs(),
+        view.name
+    );
+    Ok(tga)
+}
+
+/// The TGA screenshots in `dir` (`ssq_…_(<level>).tga`, section 5).
+fn screenshots(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            let name = p.file_name().unwrap_or_default().to_string_lossy();
+            name.starts_with("ssq_") && name.ends_with(".tga")
+        })
+        .collect()
+}
+
+/// Decodes a true-colour TGA, uncompressed (image type 2) or run-length
+/// encoded (10), at 24 or 32 bits per pixel, into width, height and RGB
+/// bytes, top row first; `None` for anything else or a file shorter than
+/// its pixels.
+fn tga_rgb(tga: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+    let header = tga.get(..18)?;
+    let (id, colour_map, kind) = (header[0] as usize, header[1], header[2]);
+    let width = u16::from_le_bytes([header[12], header[13]]) as usize;
+    let height = u16::from_le_bytes([header[14], header[15]]) as usize;
+    let (bits, descriptor) = (header[16], header[17]);
+    // Bit 4 of the descriptor, rows right to left: refused.
+    if colour_map != 0
+        || !(kind == 2 || kind == 10)
+        || !(bits == 24 || bits == 32)
+        || descriptor & 0x10 != 0
+        || width == 0
+        || height == 0
+    {
+        return None;
+    }
+    let bytes = bits as usize / 8;
+    let mut data = tga.get(18 + id..)?;
+    let count = width * height;
+    let mut rgb: Vec<u8> = Vec::with_capacity(count * 3);
+    let mut push = |p: &[u8]| rgb.extend_from_slice(&[p[2], p[1], p[0]]);
+    if kind == 2 {
+        data.get(..count * bytes)?.chunks(bytes).for_each(&mut push);
+    } else {
+        let mut done = 0;
+        while done < count {
+            let (&packet, rest) = data.split_first()?;
+            let n = (packet & 0x7f) as usize + 1;
+            let run = if packet & 0x80 != 0 { bytes } else { n * bytes };
+            let pixels = rest.get(..run)?;
+            if packet & 0x80 != 0 {
+                (0..n).for_each(|_| push(pixels));
+            } else {
+                pixels.chunks(bytes).for_each(&mut push);
+            }
+            data = &rest[run..];
+            done += n;
+        }
+        if done != count {
+            return None;
+        }
+    }
+    // Bit 5 of the descriptor: the first row is the top one, else the
+    // bottom one.
+    if descriptor & 0x20 == 0 {
+        let row = width * 3;
+        rgb = rgb.chunks(row).rev().flatten().copied().collect();
+    }
+    Some((width as u32, height as u32, rgb))
 }
 
 /// Quits the game (section 7) and keeps its rewritten configuration file
@@ -439,6 +594,31 @@ mod tests {
         assert_eq!([f(12), f(13), f(14)], [-1.0, -2.0, -3.0]);
     }
 
+    /// Uncompressed bottom-up and run-length-encoded top-down TGAs of the
+    /// same 2 × 2 picture decode alike.
+    #[test]
+    fn decodes_tgas() {
+        let header = |kind: u8, bits: u8, descriptor: u8| {
+            let mut h = vec![0u8; 18];
+            h[2] = kind;
+            h[12] = 2;
+            h[14] = 2;
+            h[16] = bits;
+            h[17] = descriptor;
+            h
+        };
+        // Top row: red, green; bottom row: blue, white (BGR in the file).
+        let rgb = vec![255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255];
+        let mut plain = header(2, 24, 0);
+        plain.extend_from_slice(&[255, 0, 0, 255, 255, 255, 0, 0, 255, 0, 255, 0]);
+        assert_eq!(tga_rgb(&plain), Some((2, 2, rgb.clone())));
+        assert_eq!(tga_rgb(&plain[..plain.len() - 1]), None);
+        let mut rle = header(10, 32, 0x20);
+        rle.extend_from_slice(&[0x01, 0, 0, 255, 0, 0, 255, 0, 0]);
+        rle.extend_from_slice(&[0x00, 255, 0, 0, 0, 0x80, 255, 255, 255, 0]);
+        assert_eq!(tga_rgb(&rle), Some((2, 2, rgb)));
+    }
+
     #[test]
     fn the_letterbox() {
         let (w, h) = (4u32, 200u32);
@@ -468,8 +648,8 @@ mod tests {
         assert_eq!(lines[1], "ai_use_torch_dynamic_lights on");
         assert_eq!(&lines[2..4], ["unbindall", "bind left kLEFT"]);
         assert_eq!(lines[4], "g_always_run on");
-        assert_eq!(lines[5], "hud_crosshair off", "inserted after `g_…`");
         assert!(lines.contains(&"r__supersample 4"));
+        assert!(lines.contains(&"snd_volume_eff 0."), "inserted");
         assert_eq!(*lines.last().unwrap(), "vid_mode 1920x1080");
         assert!(text.ends_with("\r\n"));
         let places: Vec<&str> = lines
