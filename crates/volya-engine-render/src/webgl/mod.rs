@@ -726,22 +726,51 @@ impl Renderer {
     }
 
     /// One world frame into the `screen` (frame-presentation.md 3.1): the
-    /// world straight onto the screen (the presentation's target is #477's).
-    /// Returns whether `quads` were drawn.
+    /// world into the off-screen target and the presentation quad onto the
+    /// screen with `quads` over it in the same pass, or the world straight
+    /// onto the screen. Returns whether `quads` were drawn.
     fn present_frame(
         &mut self,
         screen: &Target,
         frame: &WorldFrame,
-        _quads: &[Quad],
-        _batches: &[(usize, Range<u32>)],
+        quads: &[Quad],
+        batches: &[(usize, Range<u32>)],
     ) -> bool {
         let size = screen.size();
-        self.post
-            .prepare(&self.gl, size, frame.presentation.supersample);
-        let framebuffer = self.world_framebuffer(screen);
-        tracing::info_span!("render.world")
-            .in_scope(|| self.encode_frame(&framebuffer, size, frame, None));
-        false
+        let p = frame.presentation;
+        self.post.prepare(&self.gl, size, p.supersample);
+        // The hand-over of the frame's camera update (2.2).
+        if let Some(e) = frame.effects {
+            self.post.effects = e;
+        }
+        let through = self.post.use_target(p.supersample);
+        self.post.used = through;
+        let mut drawn = false;
+        let distorted = match self.post.targets.clone().filter(|_| through) {
+            Some(t) => {
+                let distortion = tracing::info_span!("render.world")
+                    .in_scope(|| self.encode_frame(&t.scene, t.size, frame, Some(&t.distortion)));
+                let gl = self.gl.clone();
+                let (ui, movie) = (&self.ui, &self.movie);
+                let samplers = [&self.sampler, &self.movie_sampler];
+                let vertices = &self.vertices.array;
+                drawn = tracing::info_span!("render.post").in_scope(|| {
+                    self.post
+                        .draw(&gl, &self.empty, screen, &p, distortion, || {
+                            draw_quads(&gl, vertices, [ui, movie], samplers, quads, batches)
+                        })
+                });
+                distortion.pass
+            }
+            None => {
+                let framebuffer = self.world_framebuffer(screen);
+                tracing::info_span!("render.world")
+                    .in_scope(|| self.encode_frame(&framebuffer, size, frame, None))
+                    .pass
+            }
+        };
+        self.post.distorted = distorted;
+        drawn
     }
 
     /// The world pass of `frame` with its particle effects into
