@@ -159,7 +159,7 @@ Drawing tests run in headless Chrome only; non-drawing checks stay native cargo 
 
 ### Migration
 
-The GL renderer is built beside wgpu's in the render crate, behind a backend feature and the same engine-facing API: the engine and the platform use only the crate's own types (`Renderer`, `Texture`, `DrawList`, `World`, …); `gpu.rs` keeps a few backend branches (context, destination, fences) until the switch. Each step lands with the app working (merged into main, `check`, its suite):
+The GL renderer is built beside wgpu's in the render crate (`src/webgl/` beside `src/wgpu_backend/`, chosen by the `gl` feature; the GL layer, `glsl` and `stats` shared), behind the same engine-facing API: the engine and the platform use only the crate's own types (`Renderer`, `Texture`, `DrawList`, `World`, …); `gpu.rs` keeps a few backend branches (context, destination, fences) until the switch. Each step lands with the app working (merged into main, `check`, its suite):
 
 1. The shader build script (#468) and the GL layer (#469).
 2. Browser render checks (#470), then the drawing tests moved: the render crate's (#471), the level's (#472), the screens' (#473), draw calls (#474); on the wgpu renderer first, so the moved tests and their views are proven before the renderer changes.
