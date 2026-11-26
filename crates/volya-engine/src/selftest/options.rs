@@ -116,7 +116,7 @@ impl<'a> Walk<'a> {
             data: self.data,
             assets: &mut self.assets,
             resolution: XGA,
-            text_surface: crate::draw::Surface::screen(XGA),
+            surface: crate::draw::Surface::screen(XGA),
             clock_ms: self.now,
         };
         let scene = self

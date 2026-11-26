@@ -104,6 +104,8 @@ pub struct SamplerStates {
     in_force: SamplerState,
     /// Each variable's execution count when last applied.
     applied: [u64; 2],
+    /// Device resets since creation.
+    resets: u32,
 }
 
 impl SamplerStates {
@@ -113,6 +115,7 @@ impl SamplerStates {
         let mut s = Self {
             in_force: ENGINE_DEFAULTS,
             applied: [0; 2],
+            resets: 0,
         };
         s.apply_anisotropy(console);
         s.apply_bias(console);
@@ -122,6 +125,11 @@ impl SamplerStates {
     /// The values in force.
     pub fn in_force(&self) -> SamplerState {
         self.in_force
+    }
+
+    /// The device resets ([`SamplerStates::reset`]) since creation.
+    pub fn resets(&self) -> u32 {
+        self.resets
     }
 
     /// Applies each variable executed since the last call (6.1: every
@@ -140,6 +148,7 @@ impl SamplerStates {
     /// then the engine's values are set, which stay in force until a
     /// variable is next applied.
     pub fn reset(&mut self, console: &Console) {
+        self.resets = self.resets.wrapping_add(1);
         self.follow(console);
         self.apply_anisotropy(console);
         self.apply_bias(console);

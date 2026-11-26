@@ -57,6 +57,8 @@ pub(crate) struct PostProcess {
     pub(crate) distorted: bool,
     /// The last world frame went through the target.
     pub(crate) used: bool,
+    /// [`Presentation::resets`] as last prepared.
+    resets: u32,
 }
 
 impl PostProcess {
@@ -88,6 +90,7 @@ impl PostProcess {
             random: 1,
             distorted: false,
             used: false,
+            resets: 0,
         }
     }
 
@@ -98,8 +101,15 @@ impl PostProcess {
 
     /// Builds the target for a `screen` and `supersample` when either
     /// differs from the one built (as the original at device creation and
-    /// every reset, 1.2): the values in force return to the defaults.
-    pub(crate) fn prepare(&mut self, gl: &Gl, screen: (u32, u32), supersample: u32) {
+    /// every reset, 1.2): the values in force return to the defaults. A
+    /// reset that keeps both (`resets` changed) keeps the target and
+    /// returns to the defaults as well.
+    pub(crate) fn prepare(&mut self, gl: &Gl, screen: (u32, u32), supersample: u32, resets: u32) {
+        if self.resets != resets {
+            self.resets = resets;
+            self.effects = ScreenEffects::DEFAULTS;
+            self.countdown = 0.0;
+        }
         let built = self
             .targets
             .as_ref()

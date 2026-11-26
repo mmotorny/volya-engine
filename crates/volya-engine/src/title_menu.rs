@@ -809,13 +809,18 @@ mod tests {
         }
 
         fn scene(&self, r: Resolution, now: u64) -> Scene {
+            self.scene_on(crate::draw::Surface::screen(r), now)
+        }
+
+        /// The frame laid out on `surface`.
+        fn scene_on(&self, surface: crate::draw::Surface, now: u64) -> Scene {
             let mut assets = fixture::assets();
             let mut ctx = Ctx {
                 tree: &self.tree,
                 data: &self.data,
                 assets: &mut assets,
-                resolution: r,
-                text_surface: crate::draw::Surface::screen(r),
+                resolution: surface.screen,
+                surface,
                 clock_ms: now,
             };
             self.menu.scene(&mut ctx).unwrap()
@@ -1291,5 +1296,51 @@ mod tests {
         let x0 = (782.0f32 * 1.875).floor() - (w / 2.0).floor();
         let y0 = (1.40625f32 * (419.0 + (30.0 - 22.0 / 1.40625) / 2.0)).floor();
         assert_eq!(b, [x0, y0, x0 + w, y0 + 22.0]);
+    }
+
+    #[test]
+    fn scene_on_the_target_at_1920x1080_supersample_4() {
+        // frame-presentation.md 5.7: laid out on the 2048 × 2048 target;
+        // the sprites, in screen pixels, map back to the target's pixels
+        // where the layout put them.
+        let mut r = Run::open(0);
+        r.frame(600);
+        let surface = crate::app::main_menu_surface(HD, 4);
+        assert_eq!(surface.size, Resolution::new(2048, 2048));
+        let s = r.scene_on(surface, 600);
+        let on_target = |[x0, y0, x1, y1]: [f32; 4]| {
+            let (kx, ky) = (2048.0 / 1920.0, 2048.0 / 1080.0);
+            [
+                (x0 + 0.5) * kx - 0.5,
+                (y0 + 0.5) * ky - 0.5,
+                (x1 + 0.5) * kx - 0.5,
+                (y1 + 0.5) * ky - 0.5,
+            ]
+        };
+        let near = |a: [f32; 4], b: [f32; 4]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-3);
+        let background = on_target(s.first("background").unwrap().bounds());
+        assert!(
+            near(background, [-0.5, -0.5, 2047.5, 2047.5]),
+            "{background:?}"
+        );
+        // Bar at (599, 397): floor(599 · 2) = 1198, floor(397 · 2.6667) = 1058.
+        let (sx, sy) = (2.0, 2048.0 / 768.0);
+        let bar = on_target(s.first("bar").unwrap().bounds());
+        let want = [1197.5, 1057.5, 1197.5 + 392.0 * sx, 1057.5 + 73.0 * sy];
+        assert!(near(bar, want), "{bar:?} {want:?}");
+        // Glyph cells keep their screen size (text-and-fonts.md 4.4), the
+        // caption centred on its row's centre, x 782 units.
+        let b = s.layer_bounds("caption 0").unwrap();
+        assert!((b[3] - b[1] - 22.0).abs() < 1e-3, "{b:?}");
+        let centre = on_target(b);
+        assert!(
+            ((centre[0] + centre[2]) / 2.0 - 782.0 * sx).abs() <= 1.0,
+            "{centre:?}"
+        );
+        // The cursor goes straight onto the screen (title-menu.md 7).
+        assert_eq!(
+            s.first("cursor").map(|c| c.bounds()),
+            r.scene(HD, 600).first("cursor").map(|c| c.bounds())
+        );
     }
 }

@@ -345,7 +345,7 @@ fn inventory_screen_from_game_data() {
             data: &data,
             assets: &mut assets,
             resolution: XGA,
-            text_surface: volya_engine::draw::Surface::screen(XGA),
+            surface: volya_engine::draw::Surface::screen(XGA),
             clock_ms: 1000,
         };
         let mut scene = Scene::new(XGA);

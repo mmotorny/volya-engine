@@ -637,7 +637,8 @@ impl Renderer {
         clear: Color,
     ) -> bool {
         let p = lens.presentation;
-        self.post.prepare(&self.gl, screen.size(), p.supersample);
+        self.post
+            .prepare(&self.gl, screen.size(), p.supersample, p.resets);
         let Some(t) = self.post.targets.clone() else {
             return false;
         };
@@ -809,11 +810,12 @@ impl Renderer {
     }
 
     /// Builds the off-screen target for a `screen` of the game's size and
-    /// `r__supersample` `supersample` when either changed
+    /// the presentation's `r__supersample` when either changed, and returns
+    /// to the renderer's defaults at a device reset
     /// (frame-presentation.md 1.2: at device creation and every reset);
     /// the platform calls it every frame, so it is made before a level is.
-    pub fn prepare_presentation(&mut self, screen: (u32, u32), supersample: u32) {
-        self.post.prepare(&self.gl, screen, supersample);
+    pub fn prepare_presentation(&mut self, screen: (u32, u32), p: &crate::present::Presentation) {
+        self.post.prepare(&self.gl, screen, p.supersample, p.resets);
     }
 
     /// The `$user$rendertarget` size and whether the last world frame went
@@ -841,7 +843,7 @@ impl Renderer {
     ) -> bool {
         let size = screen.size();
         let p = frame.presentation;
-        self.post.prepare(&self.gl, size, p.supersample);
+        self.post.prepare(&self.gl, size, p.supersample, p.resets);
         // The hand-over of the frame's camera update (2.2).
         if let Some(e) = frame.effects {
             self.post.effects = e;

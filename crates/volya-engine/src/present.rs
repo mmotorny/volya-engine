@@ -953,7 +953,7 @@ impl Presenter {
         // The off-screen target, made at the game's size before any level
         // (frame-presentation.md 1.2).
         let screen = (scene.resolution.width, scene.resolution.height);
-        renderer.prepare_presentation(screen, scene.presentation.supersample);
+        renderer.prepare_presentation(screen, &scene.presentation);
         match &scene.world {
             Some(world) => {
                 // Uploaded (or kept) even when covered, so it is ready.

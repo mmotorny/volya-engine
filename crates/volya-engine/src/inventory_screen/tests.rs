@@ -673,7 +673,7 @@ fn it_draws_the_layout_and_items() {
         data: &r.data,
         assets: &mut assets,
         resolution: XGA,
-        text_surface: crate::draw::Surface::screen(XGA),
+        surface: crate::draw::Surface::screen(XGA),
         clock_ms: 0,
     };
     let mut scene = Scene::new(XGA);
@@ -790,7 +790,7 @@ fn an_addon_section_without_its_grid_keys_is_fatal() {
             data: &r.data,
             assets: &mut assets,
             resolution: XGA,
-            text_surface: crate::draw::Surface::screen(XGA),
+            surface: crate::draw::Surface::screen(XGA),
             clock_ms: 0,
         };
         let mut scene = Scene::new(XGA);

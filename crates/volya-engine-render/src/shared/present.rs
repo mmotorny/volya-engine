@@ -119,6 +119,9 @@ pub struct Presentation {
     pub pps: [f32; 2],
     /// The engine's frame time, seconds (the noise's countdown, 3.2).
     pub frame_time: f32,
+    /// The device resets so far (a video restart, a level's start): each
+    /// rebuilds the target, which brings back the defaults (1.2, 2.3).
+    pub resets: u32,
 }
 
 impl Default for Presentation {
@@ -127,6 +130,7 @@ impl Default for Presentation {
             supersample: 1,
             pps: [0.0; 2],
             frame_time: 0.0,
+            resets: 0,
         }
     }
 }

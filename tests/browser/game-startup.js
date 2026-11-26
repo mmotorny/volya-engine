@@ -105,27 +105,49 @@ export const tests = {
 
   "the menu scene follows the specs at 1024×768 and 1280×720": async () => {
     needsGame();
-    const xga = await volya.call("menu_scene", { width: 1024, height: 768 });
-    assertEqual(bounds(xga, "background"), [-0.5, -0.5, 1023.5, 767.5], "background");
-    assertEqual(bounds(xga, "back_movie"), [147.5, -0.5, 1023.5, 399.5], "back_movie");
-    assertEqual(bounds(xga, "fire_movie"), [524.5, 458.5, 652.5, 714.5], "fire_movie");
-    assertEqual(bounds(xga, "bar"), [598.5, 396.5, 990.5, 469.5], "bar");
-    // docs/formats/text-and-fonts.md section 5 at the shipped
-    // r__supersample 2: the menu's text is laid out on the off-screen
-    // target (1448 × 1086 here, 1810 × 1018 at 1280 × 720) and placed on
-    // the screen to a fraction of a pixel (section 4.4).
+    // At the shipped r__supersample 2 the title menu is laid out on the
+    // off-screen target (frame-presentation.md 5.1, text-and-fonts.md 4.4:
+    // 1448 × 1086 here, 1810 × 1018 at 1280 × 720). The scene gives what is
+    // drawn into the target in the screen pixels that the presenter maps to
+    // its target position t: (t + 0.5) · W / W′ − 0.5.
+    const onTarget = ([w, h], [tw, th]) => {
+      const [kx, ky] = [w / tw, h / th];
+      return ([x0, y0, x1, y1]) => [(x0 + 0.5) * kx - 0.5, (y0 + 0.5) * ky - 0.5, (x1 + 0.5) * kx - 0.5, (y1 + 0.5) * ky - 0.5];
+    };
+    // A picture at (x, y), w × h units (ui-layout.md 5.3) on the target.
+    const picture = ([tw, th], x, y, w, h) => {
+      const [sx, sy] = [tw / 1024, th / 768];
+      const [left, top] = [Math.floor(x * sx) - 0.5, Math.floor(y * sy) - 0.5];
+      return [left, top, left + w * sx, top + h * sy];
+    };
+    // A glyph box of text-and-fonts.md section 5, given there as layout
+    // positions times W / W′.
+    const text = ([w, h], [tw, th]) => {
+      const t = onTarget([w, h], [tw, th]);
+      return ([x0, y0, x1, y1]) => t([x0 * (tw / w), y0 * (th / h), x1 * (tw / w), y1 * (th / h)]);
+    };
     const near = (layer, scene, want) => {
       const got = bounds(scene, layer);
       assert(got.every((v, i) => Math.abs(v - want[i]) < 1.5e-3), `${layer}: expected ${want}, got ${got}`);
     };
-    near("caption 0", xga, [739.436, 425.724, 824.436, 447.724]);
-    near("caption 5", xga, [712.436, 575.646, 850.436, 597.646]);
-    near("version", xga, [14.851, 739.713, 93.851, 758.713]);
+    const XGA = [1024, 768];
+    const T = [1448, 1086];
+    const xga = await volya.call("menu_scene", { width: 1024, height: 768 });
+    const at = onTarget(XGA, T);
+    near("background", xga, [-0.5, -0.5, 1023.5, 767.5]);
+    near("back_movie", xga, at(picture(T, 148, 0, 876, 400)));
+    near("fire_movie", xga, at(picture(T, 525, 459, 128, 256)));
+    near("bar", xga, at(picture(T, 599, 397, 392, 73)));
+    const glyphs = text(XGA, T);
+    near("caption 0", xga, glyphs([739.436, 425.724, 824.436, 447.724]));
+    near("caption 5", xga, glyphs([712.436, 575.646, 850.436, 597.646]));
+    near("version", xga, glyphs([14.851, 739.713, 93.851, 758.713]));
     const wide = await volya.call("menu_scene", { width: 1280, height: 720 });
     // Computed from the same rules: pen y floor(1018 / 768 · 425.701) = 564
     // target pixels, 564 · 720 / 1018 on the screen.
-    near("caption 0", wide, [935.326, 398.9, 1020.326, 420.9]);
-    near("version", wide, [18.387, 693.124, 97.387, 712.124]);
+    const wideGlyphs = text([1280, 720], [1810, 1018]);
+    near("caption 0", wide, wideGlyphs([935.326, 398.9, 1020.326, 420.9]));
+    near("version", wide, wideGlyphs([18.387, 693.124, 97.387, 712.124]));
   },
 
   "renders the menu": async () => {

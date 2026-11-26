@@ -408,15 +408,25 @@ pub fn layout_text(
     surface: Surface,
     defs: &ColorDefs,
 ) -> Result<TextLayout, String> {
+    let mut layout = layout_text_on_surface(font, text, b, surface, defs)?;
+    for q in &mut layout.quads {
+        q.min = surface.to_screen(q.min);
+        q.max = surface.to_screen(q.max);
+    }
+    Ok(layout)
+}
+
+/// [`layout_text`] in the pixels of the layout surface (*W*′ × *H*′), as
+/// drawn into the off-screen target (section 4.4).
+pub fn layout_text_on_surface(
+    font: &Font,
+    text: &[u8],
+    b: &TextBox,
+    surface: Surface,
+    defs: &ColorDefs,
+) -> Result<TextLayout, String> {
     let (sx, sy) = surface.scale();
     let glyph = surface.glyph_scale();
-    let on_screen = |quads: Vec<GlyphQuad>| {
-        quads.into_iter().map(move |q| GlyphQuad {
-            min: surface.to_screen(q.min),
-            max: surface.to_screen(q.max),
-            ..q
-        })
-    };
     let mut layout = TextLayout {
         texture: font.texture.clone(),
         quads: Vec::new(),
@@ -440,7 +450,7 @@ pub fn layout_text(
     if !b.complex {
         let y = b.rect.y + b.offset.1 + ay(t);
         let quads = draw_scaled(font, text, (sx * x, sy * y), b.color, b.align, glyph);
-        layout.quads = on_screen(quads).collect();
+        layout.quads = quads;
         layout.lines = 1;
         return Ok(layout);
     }
@@ -452,14 +462,14 @@ pub fn layout_text(
         let y = top + i as f32 * pitch;
         let mut seg_x = x;
         for seg in line {
-            layout.quads.extend(on_screen(draw_scaled(
+            layout.quads.extend(draw_scaled(
                 font,
                 &seg.text,
                 (sx * seg_x, sy * y),
                 seg.color,
                 b.align,
                 glyph,
-            )));
+            ));
             seg_x += font.width(&seg.text) / sx;
         }
     }

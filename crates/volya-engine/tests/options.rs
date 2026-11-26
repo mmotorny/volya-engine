@@ -242,7 +242,7 @@ fn options_screen_from_game_data() {
             data: run.data,
             assets,
             resolution: XGA,
-            text_surface: volya_engine::draw::Surface::screen(XGA),
+            surface: volya_engine::draw::Surface::screen(XGA),
             clock_ms: run.now,
         };
         run.screen.scene(&mut ctx).unwrap()

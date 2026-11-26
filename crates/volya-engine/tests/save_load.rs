@@ -227,7 +227,7 @@ fn in_game_menu_and_save_load_screens_from_game_data() {
             data: &data,
             assets: &mut assets,
             resolution: XGA,
-            text_surface: volya_engine::draw::Surface::screen(XGA),
+            surface: volya_engine::draw::Surface::screen(XGA),
             clock_ms: 1000,
         };
         screens.scene(menu, &mut ctx).unwrap()

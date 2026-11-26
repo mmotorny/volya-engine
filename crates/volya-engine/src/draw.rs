@@ -12,7 +12,7 @@ use crate::data::{Assets, GameData};
 use crate::scene::{Scene, Sprite, TextureId};
 use volya_engine_formats::text::font::UiFont;
 pub use volya_engine_formats::text::layout::Surface;
-use volya_engine_formats::text::layout::{TextBox, draw_line, layout_text};
+use volya_engine_formats::text::layout::{TextBox, draw_line, layout_text_on_surface};
 use volya_engine_formats::ui::layout::{HAlign, Rect, StaticDesc, TextureRef, WindowDesc};
 use volya_engine_formats::ui::picture::{Picture, PicturePlacement};
 use volya_engine_formats::ui::{Color, Resolution};
@@ -23,16 +23,35 @@ pub struct Ctx<'a> {
     pub data: &'a GameData,
     pub assets: &'a mut Assets,
     pub resolution: Resolution,
-    /// Where UI text is laid out (text-and-fonts.md 4.4): the screen,
-    /// or the off-screen target while the main menu draws into it.
-    pub text_surface: Surface,
+    /// Where pictures and text are laid out (text-and-fonts.md 4.4): the
+    /// screen, or the off-screen target while the main menu draws into it
+    /// (frame-presentation.md 2.5). Sprites are still given in screen
+    /// pixels, mapped from the surface's ([`Ctx::to_screen`]).
+    pub surface: Surface,
     /// The engine clock, milliseconds.
     pub clock_ms: u64,
 }
 
 impl Ctx<'_> {
+    /// The screen's UI-to-pixel factors.
     pub fn scale(&self) -> (f32, f32) {
         self.resolution.scale()
+    }
+
+    /// A position in pixels of the layout surface as the screen position
+    /// the presenter maps to that same position of the target: the inverse
+    /// of its mapping of screen pixels to UI units (both with pixel centres
+    /// at whole numbers), so the sprite is drawn into the target exactly
+    /// where the surface placed it.
+    fn to_screen(&self, [x, y]: [f32; 2]) -> [f32; 2] {
+        let (s, w) = (self.surface.size, self.surface.screen);
+        if s == w {
+            return [x, y];
+        }
+        [
+            (x + 0.5) * w.width as f32 / s.width as f32 - 0.5,
+            (y + 0.5) * w.height as f32 / s.height as f32 - 0.5,
+        ]
     }
 
     /// Adds the picture of static `desc`, whose absolute rectangle is
@@ -60,12 +79,14 @@ impl Ctx<'_> {
         if let Some(color) = color {
             placement.color = color;
         }
-        let sprite = if desc.heading {
-            let q = placement.rotated(self.scale(), angle, None, self.resolution.is_wide());
+        let scale = self.surface.scale();
+        let mut sprite = if desc.heading {
+            let q = placement.rotated(scale, angle, None, self.resolution.is_wide());
             Sprite::rotated(layer, id, &q)
         } else {
-            Sprite::picture(layer, id, &placement.quad(self.scale()))
+            Sprite::picture(layer, id, &placement.quad(scale))
         };
+        sprite.corners = sprite.corners.map(|c| self.to_screen(c));
         scene.sprites.push(sprite);
         Ok(())
     }
@@ -106,8 +127,13 @@ impl Ctx<'_> {
             .assets
             .fonts(self.tree, self.data, self.resolution.height)?;
         let font = fonts.get(font).clone();
-        let layout = layout_text(&font, text, text_box, self.text_surface, &self.data.colors)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let mut layout =
+            layout_text_on_surface(&font, text, text_box, self.surface, &self.data.colors)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        for g in &mut layout.quads {
+            let [min, max] = [g.min, g.max].map(|(x, y)| self.to_screen([x, y]));
+            (g.min, g.max) = ((min[0], min[1]), (max[0], max[1]));
+        }
         let path = Assets::font_texture(self.data, &layout.texture)?;
         let size = self.assets.image_size(self.tree, &path)?;
         let id = TextureId::Image { path };
