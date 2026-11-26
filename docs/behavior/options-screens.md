@@ -439,10 +439,13 @@ variables only change what the next video restart will use.
   `snd_efx` marks a **sound restart** as needed. Because track bars and drop-down lists save on every
   change, moving the texture-quality or anti-aliasing slider, or choosing a resolution or preset,
   marks the restart at once. (`rs_v_sync`, edited by the vertical-sync check box, is **not** in this
-  list; `rs_no_v_sync` is not edited by any control.)
+  list; `rs_no_v_sync` is not edited by any control.) **Disputed in review:** `rs_no_v_sync` is not a
+  console variable at all (`docs/behavior/display-mode.md` A.8), so no control or command sets it.
 - The restart step (on Apply and on Cancel): if a video restart is marked, the console command
   `vid_restart` is executed (the graphics device is reset with the current resolution, full-screen,
-  refresh and vertical-sync settings; textures are reloaded); then, if a sound restart is marked,
+  refresh and vertical-sync settings; textures are reloaded) **Disputed in review:** the reset does not
+  use a vertical-sync setting: `rs_v_sync` has no effect and every reset presents with interval 1
+  (display-mode A.8, A.9); then, if a sound restart is marked,
   `snd_restart` (the sound device is restarted); then both marks are cleared. Cancel therefore also
   restarts video if, for example, a resolution was chosen and then undone.
 - Because a track bar sets its variable whenever it is refreshed (section 4.5), refreshing the
@@ -513,7 +516,7 @@ control (664, 252 + 30*j*).
 | 8 | `cap_light_distance` `ui_mm_light_distance` "Дальность освещения" | `track_light_distance`, real, step 0.1 | `r2_slight_fade` [`mm_opt_video_adv`] | 0.02–2.0 | 1.0 / 0.3333 | at once; enabled only with renderer entry 1 or 2 |
 | 9 | `cap_npc_torch` `ui_mm_npc_torch` "Свет фонариков НПС" | `check_npc_torch`, check box (243 × 21) | `ai_use_torch_dynamic_lights` [`mm_opt_video_adv`] | on/off | on / on | on Apply |
 | 10 | `cap_particles_distance` `ui_mm_sun_quality` "Качество теней" | `track_particles_distance`, real, step 0.1 | `r2_ls_squality` [`mm_opt_video_adv`] | 0.5–1.0 | 1.0 / 1. | at once; enabled only with renderer entry 1 or 2 |
-| 11 | `cap_vsync` `ui_mm_vsync` "Верт. синхронизация" | `check_vsync`, check box | `rs_v_sync` [`mm_opt_video_adv`] | on/off | off / off | on Apply; used at the next video restart (does not itself mark one) |
+| 11 | `cap_vsync` `ui_mm_vsync` "Верт. синхронизация" | `check_vsync`, check box | `rs_v_sync` [`mm_opt_video_adv`] | on/off | off / off | on Apply; no effect: the display always waits for the vertical retrace (display-mode A.8) |
 | 12 | `cap_60hz` `ui_mm_60_hz` "Частота 60Гц" | `check_60hz`, check box | `rs_refresh_60hz` [`mm_opt_video_adv`] | on/off | off / on | on Apply; marks a video restart |
 
 Note that the two sun-shadow check boxes belong to the group `mm_opt_video`, not `mm_opt_video_adv`.
@@ -643,11 +646,12 @@ the five scripts set for the controls of this screen:
 
 ## 9. The resolution list
 
-- The list is built when the graphics device is created (and discarded when it is destroyed; a video
-  restart resets the device and is believed to keep the list), from the display modes
-  the graphics adapter reports for the back-buffer pixel format in use (full screen: 32-bit colour if
-  `vid_bpp` is 32 — X8R8G8B8, else A8R8G8B8, else R8G8B8 — or for 16-bit R5G6B5, else X1R5G5B5, else
-  X4R4G4B4, the first the adapter supports; windowed: the desktop's format).
+- The list is built once, when the graphics device is created, from the display modes the graphics
+  adapter reports for the back-buffer pixel format chosen at creation (full screen: X8R8G8B8, else
+  A8R8G8B8, else R8G8B8, the first the adapter supports; the colour depth is always 32 and `vid_bpp` is
+  not a variable; windowed: the desktop's format). Every video restart resets the device and keeps the
+  list (display-mode A.6), also when it switches between window and full screen; the list is discarded
+  only when the device is destroyed.
 - Modes narrower than 800 pixels are skipped. Each remaining mode is written as `<width>x<height>`
   (decimal); a text already in the list (the same size at another refresh rate) is not added again.
   The order is the adapter's enumeration order. Entry *k* has the value *k*.
@@ -1021,3 +1025,7 @@ The screen, its controls and its behaviour are the same; the menu that opens it 
   input update in `XR_3DA.exe`): strict > 100 ms, shared last-repeat time, three steps for a held
   click; stated that the renderer list shows the variable again after a later refresh, and that key
   cells keep their changed mark across Cancel/Esc.
+- **Revision 5, 2026-11-26** (targeted fix after `docs/behavior/display-mode.md` A.10; same edition and
+  tools): the vertical-sync check box (section 6.2 row 11) has no effect; the resolution list (section 9)
+  is built once for the format chosen at device creation, always a 32-bit format in full screen, and kept
+  across every device reset. Checks FX-2 and FX-3 of the dirty workspace's `checks/spec-fix-532/run.py`.

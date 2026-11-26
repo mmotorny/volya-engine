@@ -254,8 +254,13 @@ association of `terrain\terrain_escape`).
 
 Library-definition samplers use: base-type samplers (`s_base`, `s_lmap`, `s_detail`) wrap addressing,
 linear min/mip/mag, with the `s_base`/`s_detail` rule turning min and mag into anisotropic; `s_hemi` clamp
-addressing, linear min, **no mip**, linear mag. On every sampler the maximum anisotropy is
-clamp(`r__tf_aniso`, 1, 16) (default 16) and the mip LOD bias is `r1_tf_mipbias` (default 0).
+addressing, linear min, **no mip**, linear mag. On every sampler the maximum anisotropy and the mip LOD
+bias are the values in force on the sampler's device stage (`docs/behavior/texture-quality-filtering.md`
+sections 5–7): clamp(`r__tf_aniso`, 1, 16) and `r1_tf_mipbias` after the variables were last applied, but 4
+and −0.5 after a device reset until then. A device reset happens at the start of every level, so a level
+drawn with the shipped settings and without a later change of either variable uses maximum anisotropy 4 and
+bias −0.5 (texture-quality-filtering 8.2). The maximum anisotropy matters only on samplers with anisotropic
+filtering.
 
 ## 5. Elements and the near/far choice
 
@@ -592,7 +597,9 @@ in-group order of non-sorted blended passes (10.3).
 ## 15. Provenance
 
 Date 2026-11-23; revised 2026-11-26: sections 1 and 5, element 4 of the library classes (after
-object-projected-light.md). Russian edition (GOG), archives `gamedata.db0` … `gamedata.dbd`. Data examined:
+object-projected-light.md); section 4.4, the maximum anisotropy and mip LOD bias in force on the samplers
+(after texture-quality-filtering.md section 9; checks FX-1 and FX-3 of the dirty workspace's
+`checks/spec-fix-532/run.py`). Russian edition (GOG), archives `gamedata.db0` … `gamedata.dbd`. Data examined:
 `shaders.xr`, `shaders\r1\*.s` and program sources, `textures\textures.ltx`, `config\weathers\
 weather_default.ltx`, the shipped default `user.ltx`, `level` and `level.geom` of `l01_escape`, chunk 2 of
 the `level` files of all 30 shipped levels. Analysis: parsing of the data files with throwaway tools;
