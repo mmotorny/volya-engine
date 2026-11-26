@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! The sky's platform-free part, both renderers' (docs/behavior/sky.md):
+//! The sky's platform-free part (docs/behavior/sky.md):
 //! the sky box, the cloud dome, a frame's values and its constants.
 
 use crate::world::{Mat4, multiply, push_mat, push_vec4};

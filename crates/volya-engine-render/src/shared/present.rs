@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! Frame presentation's platform-free part, both renderers'
+//! Frame presentation's platform-free part
 //! (docs/behavior/frame-presentation.md): the screen-effect values, the
 //! off-screen target's size and the presentation quad.
 

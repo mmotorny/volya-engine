@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! What surrounds the static world (docs/behavior/sky.md) on WebGL 2, as
-//! wgpu's renderer draws it: the sky box (section 5), the cloud dome (6)
+//! What surrounds the static world (docs/behavior/sky.md) on WebGL 2: the
+//! sky box (section 5), the cloud dome (6)
 //! and the sun sprite (7.4, 7.5), drawn after the opaque world (section
 //! 10).
 

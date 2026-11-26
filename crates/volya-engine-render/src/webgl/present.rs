@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! Frame presentation (docs/behavior/frame-presentation.md) on WebGL 2, as
-//! wgpu's renderer presents: the world drawn into an off-screen target
+//! Frame presentation (docs/behavior/frame-presentation.md) on WebGL 2: the
+//! world drawn into an off-screen target
 //! sized by `r__supersample` and reduced to the screen by the presentation
 //! quad, through `postprocess` or, after a distortion pass,
 //! `postprocess_d`.

@@ -8,8 +8,7 @@
 //! as the script runtime's self-test does; nothing draws natively.
 //!
 //! Each check gets a fresh [`Renderer`] from the platform and uses only the
-//! API both backends share (rendering.md, Design: direct WebGL 2), so it
-//! checks the GL renderer as it does wgpu's. A check fails by returning an
+//! renderer's API. A check fails by returning an
 //! error, never by panicking, which would stop the engine.
 
 use std::future::Future;

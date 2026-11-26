@@ -1,12 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! The direct WebGL 2 renderer over the GL layer (`crate::gl`), with the
-//! wgpu renderer's API (docs/architecture/rendering.md, Design: direct
-//! WebGL 2; #475, #476, #477): the same programs, states and passes, call
-//! by call, in the same coordinate space as wgpu's GL backend (the
-//! programs flip positions in y, so a texture's first row is the
-//! picture's top). Every pass draws into the renderer's own frame, which
+//! The renderer over the GL layer (`crate::gl`; docs/architecture/
+//! rendering.md, The GL renderer). The programs flip positions in y, so a
+//! texture's first row is the picture's top. Every pass draws into the renderer's own frame, which
 //! is then copied, flipped, into the [`Destination`].
 //!
 //! Colour values pass through unchanged (no sRGB conversion).
@@ -65,7 +62,7 @@ impl Color {
     }
 }
 
-/// Where a finished frame goes (rendering.md, Design: direct WebGL 2).
+/// Where a finished frame goes (rendering.md, The GL layer).
 #[derive(Clone, Copy, Debug)]
 pub enum Destination<'a> {
     /// The canvas's default framebuffer, `size` pixels.
@@ -380,7 +377,7 @@ impl Renderer {
             texture_bytes: Default::default(),
             geometry_bytes: Default::default(),
             // Made with the renderer, before any level: what lives across
-            // levels is allocated below their data (as wgpu's renderer).
+            // levels is allocated below their data.
             particles: particles::ParticlePrograms::new(g),
             post: present::PostProcess::new(g),
             details: details::DetailPrograms::new(g),
@@ -667,7 +664,7 @@ impl Renderer {
             None,
         );
         if w >= 1.0 && h >= 1.0 {
-            // As wgpu's GL backend sets a viewport: truncated.
+            // Truncated to whole pixels.
             self.gl.viewport(x as i32, y as i32, w as i32, h as i32);
             stats::buffer();
             self.gl.bind_vertex_array(&self.vertices.array);

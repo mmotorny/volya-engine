@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! The static world's platform-free part, both renderers'
+//! The static world's platform-free part
 //! (docs/behavior/static-shading.md): what a frame and its draws are, the
 //! per-draw records, the culling done on the CPU and the rebasing of the
 //! level's index ranges at upload.

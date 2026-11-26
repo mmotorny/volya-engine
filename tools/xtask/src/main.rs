@@ -33,10 +33,10 @@ Tasks:
               Records the test simulator's screen for SECONDS (H.264).
               VOLYA_SIM_MEDIA=DIR records every iphone suite of `e2e` and
               screenshots its end into DIR.
-  parity [wgpu]
-              Builds the test app with the wgpu renderer and the GL one and
-              compares their frames of the parity suite's views in headless
-              Chrome ('wgpu' compares the wgpu build with itself).
+  parity [REV]
+              Builds the test app at the git revision REV (default HEAD) and
+              from the working tree and compares their frames of the parity
+              suite's views in headless Chrome.
   web [--dev] Build the web app into dist/ (release unless --dev).
   deploy      Check, build and publish to GitHub Pages (gh-pages branch).
   spec-lint   Flag decompiler output, code and mangled names in clean-room spec drafts.
@@ -219,15 +219,13 @@ enum Profile {
 }
 
 fn web(profile: Profile) -> Result {
-    // The direct WebGL 2 renderer (docs/architecture/rendering.md, Design:
-    // direct WebGL 2); wgpu's with `VOLYA_RENDERER=wgpu`.
-    let wgpu = std::env::var("VOLYA_RENDERER").is_ok_and(|r| r == "wgpu");
-    let features: &[&str] = if wgpu { &[] } else { &["gl"] };
-    web_into(profile, features, &root().join("dist"))
+    web_into(profile, &root(), &root().join("dist"))
 }
 
-/// Builds the web app into `dist` with the web crate's `features` added.
-fn web_into(profile: Profile, features: &[&str], dist: &Path) -> Result {
+/// Builds the web app of the source tree `src` (the repository's root, or a
+/// checkout of another revision; in this repository's target directory)
+/// into `dist`.
+fn web_into(profile: Profile, src: &Path, dist: &Path) -> Result {
     let wasm_bindgen = wasm_bindgen_cli()?;
     let (release, test_ops, dir) = match profile {
         Profile::Dev => (false, true, "debug"),
@@ -237,24 +235,23 @@ fn web_into(profile: Profile, features: &[&str], dist: &Path) -> Result {
     if dist.exists() {
         fs::remove_dir_all(dist).map_err(|e| format!("remove {}: {e}", dist.display()))?;
     }
-    copy_dir(&root().join("platforms/web/static"), dist).map_err(|e| format!("copy web: {e}"))?;
+    copy_dir(&src.join("platforms/web/static"), dist).map_err(|e| format!("copy web: {e}"))?;
     step("Web build");
+    let target = root().join("target");
     let mut command = cmd(
         "cargo",
         &["build", "-p", "volya-engine-web", "--target", WASM_TARGET],
     );
+    command.current_dir(src).env("CARGO_TARGET_DIR", &target);
     if release {
         command.arg("--release");
     }
-    let mut features = features.to_vec();
     if test_ops {
-        features.push("test-ops");
-    }
-    if !features.is_empty() {
-        command.args(["--features", &features.join(",")]);
+        command.args(["--features", "test-ops"]);
     }
     run(&mut command)?;
-    let wasm = format!("target/{WASM_TARGET}/{dir}/volya_engine_web.wasm");
+    let wasm = target.join(format!("{WASM_TARGET}/{dir}/volya_engine_web.wasm"));
+    let wasm = wasm.to_string_lossy();
     run(&mut cmd(
         &wasm_bindgen.to_string_lossy(),
         &[

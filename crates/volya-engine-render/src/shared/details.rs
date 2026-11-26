@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! Detail objects' platform-free part, both renderers'
+//! Detail objects' platform-free part
 //! (docs/behavior/detail-objects.md section 6): the models as the programs
 //! read them, a frame's instances and draws, and the constants.
 

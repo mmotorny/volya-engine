@@ -143,7 +143,7 @@ fn records_spans_metrics_and_events() {
             tracing::error!(target: "volya", error = %format!("bad \"thing\" {i}\n"), "fatal error");
         }
         // Not ours: not recorded.
-        tracing::error!(target: "wgpu", "ignored");
+        tracing::error!(target: "other_crate", "ignored");
     });
     d.instant(
         "AudioContext state",

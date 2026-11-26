@@ -44,8 +44,7 @@ struct Gpu {
     /// Whether the canvas shows something other than the current state.
     dirty: bool,
     /// WebGL 2's renderer: `UNMASKED_RENDERER_WEBGL` where the browser
-    /// exposes `WEBGL_debug_renderer_info`, else `RENDERER` (wgpu-hal's
-    /// adapter name, read in its source).
+    /// exposes `WEBGL_debug_renderer_info`, else `RENDERER`.
     renderer_name: String,
 }
 
@@ -105,14 +104,11 @@ fn watch_context_loss(canvas: &OffscreenCanvas) {
     lost.forget();
 }
 
-/// Makes the canvas's WebGL 2 context, before wgpu asks for it, without a
-/// depth or stencil buffer: the renderer draws into textures of its own and
+/// Makes the canvas's WebGL 2 context without antialiasing or a depth or
+/// stencil buffer: the renderer draws into textures of its own and
 /// blits its frame into the default framebuffer, whose depth buffer (a
 /// canvas-size renderbuffer by default, Depth32Float on Metal: 15 MB at
-/// 2868 × 1320) nothing reads (#443). A canvas gives the same context to a
-/// later `getContext` of its kind, ignoring the attributes then asked for
-/// (HTML specification), so wgpu's own options (`antialias: false`) are
-/// repeated here.
+/// 2868 × 1320) nothing reads (#443).
 fn make_webgl_context(canvas: &OffscreenCanvas) -> Option<web_sys::WebGl2RenderingContext> {
     use wasm_bindgen::JsCast;
     let options = js_sys::Object::new();
@@ -122,8 +118,7 @@ fn make_webgl_context(canvas: &OffscreenCanvas) -> Option<web_sys::WebGl2Renderi
     let Ok(Some(gl)) = canvas.get_context_with_context_options("webgl2", &options) else {
         return None;
     };
-    // The first vertex provoking (wgpu's GL backend leaves WebGL's, the
-    // last): otherwise ANGLE's Metal backend rewrites the
+    // The first vertex provoking (WebGL's default is the last): otherwise ANGLE's Metal backend rewrites the
     // indices of every draw whose program has a flat varying, world.wgsl's
     // among them, into a buffer of each draw's own (`requiresIndexRewrite`,
     // `getProvokingVertexConversionBuffer`; documented, WebKit's ANGLE), all
@@ -415,9 +410,7 @@ pub fn world_stats() -> serde_json::Value {
     })
 }
 
-/// What the context holds now (the GL renderer's own count; `null` with
-/// wgpu's).
-#[cfg(feature = "gl")]
+/// What the context holds now.
 fn live(r: Option<&Renderer>) -> serde_json::Value {
     r.map_or(serde_json::Value::Null, |r| {
         let l = r.gpu_live();
@@ -429,11 +422,6 @@ fn live(r: Option<&Renderer>) -> serde_json::Value {
             "vertex_arrays": l.vertex_arrays,
         })
     })
-}
-
-#[cfg(not(feature = "gl"))]
-fn live(_: Option<&Renderer>) -> serde_json::Value {
-    serde_json::Value::Null
 }
 
 /// The last frame's draw calls and state changes, in all and by part.
@@ -546,8 +534,7 @@ pub fn gl_call_counts(on: bool) -> Result<Vec<(String, u64)>, JsValue> {
 /// presents if anything changed.
 pub fn frame(time: f64) {
     let _ = with_gpu(|gpu| {
-        // Callbacks waiting on fences run (wgpu's GL backend's, its
-        // buffer mappings and finished uploads, only when polled).
+        // Callbacks waiting on fences run.
         tracing::info_span!("render.poll").in_scope(|| gpu.device.poll());
         // A world drawn ahead of its level (`warm_up`) is held only while
         // the loading waits for it.
@@ -986,47 +973,22 @@ fn outcome_json(
     }
 }
 
-/// Fresh renderers on the self-test's device, polled while this lives
-/// (wgpu's GL backend runs buffer-mapping callbacks, the captures, only
-/// when polled).
+/// Fresh renderers on the self-test's device.
 #[cfg(feature = "test-ops")]
 struct SelftestRenderers {
     gpu: std::rc::Rc<device::SelftestDevice>,
-    interval: i32,
-    _poll: wasm_bindgen::closure::Closure<dyn FnMut()>,
 }
 
 #[cfg(feature = "test-ops")]
 impl SelftestRenderers {
     async fn new() -> Result<Self, JsValue> {
-        use wasm_bindgen::JsCast;
-        use wasm_bindgen::closure::Closure;
-        let gpu = selftest_gpu().await?;
-        let polled = gpu.clone();
-        let poll = Closure::<dyn FnMut()>::new(move || polled.poll());
-        let scope: web_sys::WorkerGlobalScope = js_sys::global().unchecked_into();
-        let interval = scope.set_interval_with_callback_and_timeout_and_arguments_0(
-            poll.as_ref().unchecked_ref(),
-            1,
-        )?;
         Ok(Self {
-            gpu,
-            interval,
-            _poll: poll,
+            gpu: selftest_gpu().await?,
         })
     }
 
     fn make(&self) -> Renderer {
         self.gpu.make()
-    }
-}
-
-#[cfg(feature = "test-ops")]
-impl Drop for SelftestRenderers {
-    fn drop(&mut self) {
-        use wasm_bindgen::JsCast;
-        let scope: web_sys::WorkerGlobalScope = js_sys::global().unchecked_into();
-        scope.clear_interval_with_handle(self.interval);
     }
 }
 

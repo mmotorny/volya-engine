@@ -109,8 +109,7 @@ impl Renderer {
 }
 
 /// A texture on its way to the GPU ([`Renderer::begin_texture`]), written
-/// in bands of rows of at most [`UPLOAD_PIECE`] bytes, as wgpu's renderer
-/// writes them. A transcoded texture is transcoded a band at a time, so no
+/// in bands of rows of at most [`UPLOAD_PIECE`] bytes. A transcoded texture is transcoded a band at a time, so no
 /// more than a band of the transcoding is held (#440).
 pub struct TextureUpload {
     texture: gl::Texture,

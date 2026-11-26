@@ -10,7 +10,7 @@
 //!
 //! A check gets the game's archive tree and fresh renderers from the
 //! platform, and keeps frames for inspection with [`Context::dump`]. It
-//! uses only the renderer API both backends share and fails by returning
+//! uses only the renderer's API and fails by returning
 //! an error, never by panicking.
 
 use std::cell::RefCell;
@@ -207,8 +207,8 @@ fn checks() -> impl Iterator<Item = (&'static str, &'static str, Run)> {
     })
 }
 
-/// The `parity` suite's checks (#478, `cargo xtask parity`): the views
-/// both renderers draw, compared pixel by pixel: the title menu and a
+/// The `parity` suite's checks (`cargo xtask parity`): the views two
+/// builds draw, compared pixel by pixel: the title menu and a
 /// video, a New Game's start view and an outdoor one, its objects, lights
 /// and glows, the torch, a campfire's and an artefact's particles, the
 /// placed distortion effect, the grass, the presentation at

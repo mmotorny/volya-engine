@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! The GL layer: the only code calling WebGL 2 (docs/architecture/rendering.md,
-//! Design: direct WebGL 2, #469). Safe wrappers over web-sys's
+//! The GL layer). Safe wrappers over web-sys's
 //! `WebGl2RenderingContext` with a state cache: a setter calls WebGL only
 //! when the value differs from what it last set, and every call is counted
 //! by kind ([`Gl::take_counts`]).
@@ -10,8 +10,7 @@
 //! It builds for any target (web-sys does), so the crate's platform-free code
 //! keeps its native tests; nothing calls it natively.
 //!
-//! Conventions follow wgpu's GL backend (wgpu-hal 30, read in its source),
-//! so the picture is the same: samplers always filter between mip levels,
+//! Conventions: samplers always filter between mip levels,
 //! an 8-bit attribute read as a float is normalized, a texture's base and top
 //! levels are set once, the program's positions are flipped in y (the
 //! shaders' `ADJUST_COORDINATE_SPACE`), so front faces are given flipped
@@ -372,8 +371,7 @@ impl Gl {
             width as i32,
             height as i32,
         );
-        // Set once: the levels every view reads (wgpu sets them at every
-        // bind).
+        // Set once: the levels every view reads.
         self.count(Call::Other);
         self.gl.tex_parameteri(target, C::TEXTURE_BASE_LEVEL, 0);
         self.count(Call::Other);
@@ -494,7 +492,7 @@ impl Gl {
             Filter::Nearest => C::NEAREST,
             Filter::Linear => C::LINEAR,
         };
-        // Always filtered between levels, as wgpu's GL backend.
+        // Always filtered between levels.
         let min = match (desc.min, desc.mip) {
             (Filter::Nearest, Filter::Nearest) => C::NEAREST_MIPMAP_NEAREST,
             (Filter::Nearest, Filter::Linear) => C::NEAREST_MIPMAP_LINEAR,
@@ -679,8 +677,7 @@ impl Gl {
                     at,
                 );
             } else {
-                // Always normalized, as wgpu's GL backend (a float format
-                // ignores it).
+                // Always normalized (a float format ignores it).
                 self.gl.vertex_attrib_pointer_with_i32(
                     a.location,
                     count,
@@ -875,8 +872,7 @@ impl Gl {
     }
 
     /// Discards the bound draw framebuffer's depth, which nothing reads
-    /// after (wgpu's `StoreOp::Discard`: wgpu-hal's GL backend invalidates
-    /// it so).
+    /// after.
     pub fn invalidate_depth(&self) {
         let depth = js_sys::Array::of1(&C::DEPTH_ATTACHMENT.into());
         self.count(Call::Other);
@@ -1324,12 +1320,12 @@ pub struct SamplerDesc {
     pub wrap: [Wrap; 3],
     /// 1 for none.
     pub anisotropy: u16,
-    /// Only the top level is read (wgpu's `lod_max_clamp` 0).
+    /// Only the top level is read (the maximum level of detail 0).
     pub top_level: bool,
 }
 
 impl Default for SamplerDesc {
-    /// wgpu's default: nearest everywhere, clamped.
+    /// Nearest everywhere, clamped.
     fn default() -> Self {
         Self {
             mag: Filter::Nearest,
@@ -1400,7 +1396,7 @@ pub struct Unit {
     pub sampler: Option<(u32, u32)>,
 }
 
-/// Vertex formats the renderer uses, as wgpu's.
+/// Vertex formats the renderer uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VertexFormat {
     Float32x2,
@@ -1413,8 +1409,7 @@ pub enum VertexFormat {
 }
 
 impl VertexFormat {
-    /// (components, type, read as integers), as wgpu's GL backend maps
-    /// them.
+    /// (components, type, read as integers).
     fn describe(self) -> (i32, u32, bool) {
         match self {
             VertexFormat::Float32x2 => (2, C::FLOAT, false),
@@ -1502,7 +1497,7 @@ pub struct Blend {
 }
 
 impl Blend {
-    /// Straight alpha: wgpu's `ALPHA_BLENDING`.
+    /// Straight alpha.
     pub const ALPHA: Self = Self {
         color: (C::SRC_ALPHA, C::ONE_MINUS_SRC_ALPHA, C::FUNC_ADD),
         alpha: (C::ONE, C::ONE_MINUS_SRC_ALPHA, C::FUNC_ADD),
@@ -1524,7 +1519,7 @@ pub enum FrontFace {
 }
 
 impl FrontFace {
-    /// Flipped: the programs flip positions in y (wgpu-hal's `conv.rs`).
+    /// Flipped: the programs flip positions in y.
     fn gl(self) -> u32 {
         match self {
             FrontFace::Ccw => C::CW,
@@ -1533,8 +1528,7 @@ impl FrontFace {
     }
 }
 
-/// A draw's fixed-function state: what a wgpu pipeline holds besides its
-/// programs.
+/// A draw's fixed-function state, besides its program.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RasterState {
     pub blend: Option<Blend>,

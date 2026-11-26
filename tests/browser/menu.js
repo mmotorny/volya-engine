@@ -36,8 +36,7 @@ const ONLY = [
 // good. Measured at 98 MiB in headless Chrome after one and after two New
 // Games (#79; 193 and 199 MiB before), and at 107–110 MiB after the first in
 // the iOS Simulator, drawing through WebGL 2 (#184: the level's geometry
-// uploaded a few pieces per task turn, since wgpu's GL backend keeps what
-// is written in the heap until WebGL reports it done); a regression past
+// uploaded a few pieces per task turn); a regression past
 // this is reported as an "OVER BUDGET" note, not failed: budgets are
 // measured and tracked in issues, never a release gate (AGENTS.md). The
 // audio worker's instance (#354) counts too (`audio_heap_bytes`, which

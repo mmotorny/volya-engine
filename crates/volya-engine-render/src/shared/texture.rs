@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! Textures' platform-free part, both renderers': the paths BC textures
+//! Textures' platform-free part: the paths BC textures
 //! take to the GPU and their transcoding to ETC2 (#113).
 
 use std::fmt;
