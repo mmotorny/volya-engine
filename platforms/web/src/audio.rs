@@ -83,7 +83,9 @@ impl WebMixer {
         while at < size {
             let n = (PIECE as u32).min(size - at) as usize;
             file.read_exact(&mut self.piece[..n]).ok()?;
-            array.subarray(at, at + n as u32).copy_from(&self.piece[..n]);
+            array
+                .subarray(at, at + n as u32)
+                .copy_from(&self.piece[..n]);
             at += n as u32;
         }
         Some(array)
@@ -94,7 +96,12 @@ impl MixerControl for WebMixer {
     fn play_file(&mut self, bytes: Vec<u8>, skip: u64, playback: Playback) -> Option<VoiceId> {
         self.remote.play_file(bytes, skip, playback)
     }
-    fn play_checked_file(&mut self, bytes: Vec<u8>, skip: u64, playback: Playback) -> Option<VoiceId> {
+    fn play_checked_file(
+        &mut self,
+        bytes: Vec<u8>,
+        skip: u64,
+        playback: Playback,
+    ) -> Option<VoiceId> {
         self.remote.play_checked_file(bytes, skip, playback)
     }
     fn play_path(

@@ -137,7 +137,10 @@ impl Device for MixerDevice<'_> {
             category: Category::Scaled,
         };
         // Errors leave the voice silent: the file was checked when loaded.
-        if let Some(id) = self.mixer.play_path(tree, &sound.path, true, offset, playback) {
+        if let Some(id) = self
+            .mixer
+            .play_path(tree, &sound.path, true, offset, playback)
+        {
             *self.slot(voice) = Some(id);
         }
     }
