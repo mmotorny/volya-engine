@@ -669,6 +669,41 @@ export const tests = {
     return `textures ${gpu.textures}; ${note}; ${JSON.stringify(stats)}`;
   },
 
+  "the game left from its level and launched again: a New Game there at 2868×1320 is served by the heap the first grew": async () => {
+    needsGame();
+    // A phone's flow (#451): the game left from its level, launched again,
+    // the video mode changed in the title menu, then a New Game.
+    await volya.call("quit_game");
+    await until((s) => s.phase === "none", "the game to end");
+    await volya.call("launch");
+    await until((s) => s.phase === "startup", "the logo sequence", 2000);
+    for (let item = 1; item <= 5; item++) {
+      key("Escape");
+      await until((s) => s.phase === "menu" || s.startup?.item === item, `item ${item}`);
+    }
+    await until((s) => s.phase === "menu", "the menu");
+    await audioFlows("in the title menu of the game launched again");
+    const before = await volya.call("level_stats");
+    await volya.call("debug_video_mode", { width: 2868, height: 1320 });
+    await noteHeap("before the New Game in the game launched again");
+    await volya.call("heap_log", { on: true });
+    await heapRecord(true);
+    try {
+      await newGame();
+      await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", loadMs());
+    } finally {
+      await volya.call("debug_video_mode", { width: 1024, height: 768 });
+    }
+    const stages = byCaption(await volya.call("heap_log", { on: false }));
+    const record = await heapRecord(false);
+    const stats = await volya.call("level_stats");
+    await noteHeap("in that level");
+    key("Escape");
+    await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
+    const heapNote = overBudget(heap(stats), "wasm heaps after a New Game in the game launched again");
+    return `${heapNote}wasm heap ${mib(before.wasm_heap_bytes)} before, ${mib(stats.wasm_heap_bytes)} after; ${heapMaps.slice(-2).join("; ")}; by caption (MiB, heap/live): ${stages}; ${record}`;
+  },
+
   "the level's placed effect runs on the world clock; its update cost in wasm": async () => {
     needsGame();
     await until((s) => s.phase === "level" && !s.intro, "the level");
@@ -1897,35 +1932,6 @@ export const tests = {
     await untilOptions((o) => o.cells.find((c) => c.action === "forward" && c.slot === 0).key === "kW", "the defaults");
     key("Escape");
     await until((s) => s.phase === "menu" && !s.options, "Escape to close the screen");
-  },
-
-  "a New Game in the game launched again, drawn at 2868×1320: the heap the earlier games grew serves it": async () => {
-    needsGame();
-    // A phone's flow (#451): the game left and launched again, the video
-    // mode changed in the title menu, then a New Game.
-    await audioFlows("in the title menu of the game launched again");
-    const before = await volya.call("level_stats");
-    await volya.call("debug_video_mode", { width: 2868, height: 1320 });
-    await noteHeap("before the New Game in the game launched again");
-    await volya.call("heap_log", { on: true });
-    await heapRecord(true);
-    try {
-      await newGame();
-      await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", loadMs());
-    } finally {
-      await volya.call("debug_video_mode", { width: 1024, height: 768 });
-    }
-    const stages = byCaption(await volya.call("heap_log", { on: false }));
-    const record = await heapRecord(false);
-    const stats = await volya.call("level_stats");
-    await noteHeap("in that level");
-    const tap = { pointerType: "touch", pointerId: 23, isPrimary: true, button: 0 };
-    pointer("pointerdown", client(512, 384), { ...tap, buttons: 1 });
-    pointer("pointerup", client(512, 384), { ...tap, buttons: 0 });
-    await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
-    await quitToTitle();
-    const heapNote = overBudget(heap(stats), "wasm heaps after a New Game in the game launched again");
-    return `${heapNote}wasm heap ${mib(before.wasm_heap_bytes)} before, ${mib(stats.wasm_heap_bytes)} after; ${heapMaps.slice(-2).join("; ")}; by caption (MiB, heap/live): ${stages}; ${record}`;
   },
 
   "Q quits to the app's own interface": async () => {
