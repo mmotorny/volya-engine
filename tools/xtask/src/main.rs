@@ -8,6 +8,7 @@ mod e2e;
 mod machine;
 mod parity;
 mod spec_lint;
+mod wine;
 
 use std::fs;
 use std::io;
@@ -41,6 +42,12 @@ Tasks:
   deploy      Check, build and publish to GitHub Pages (gh-pages branch).
   spec-lint   Flag decompiler output, code and mangled names in clean-room spec drafts.
   wait-memory Return once memory pressure is normal (run before heavy work).
+  wine image  Build the image that runs 32-bit Windows programs headless
+              (Wine under QEMU in Apple's container).
+  wine run DIR -- EXE [ARGS...]
+              Run EXE with Wine in that image, DIR mounted as its working
+              directory; passes on its exit code.
+  wine check  Build and run a Direct3D 9 smoke test there.
   update      Move to the latest stable Rust and dependencies, then check.";
 
 /// Crates that never build for the web target.
@@ -71,6 +78,13 @@ fn main() -> ExitCode {
         ["deploy"] => deploy::run_deploy(),
         ["spec-lint", paths @ ..] => spec_lint::run(paths),
         ["update"] => update(),
+        ["wine", rest @ ..] => match wine::main(rest) {
+            Ok(code) => return ExitCode::from(code),
+            Err(error) => Err(error),
+        },
+        [wine::REAPER, container, stop_service, stop_builder] => {
+            wine::reap(container, stop_service, stop_builder)
+        }
         ["-h" | "--help"] | [] => {
             println!("{USAGE}");
             Ok(())
@@ -475,6 +489,7 @@ const SPDX_PATTERNS: &[&str] = &[
     "*.swift",
     "*.pbxproj",
     "*.xcscheme",
+    "*Containerfile",
 ];
 
 fn check_spdx() -> Result {

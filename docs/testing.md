@@ -56,6 +56,10 @@ Dev CLI for archives: `cargo run -p volya-engine-formats --bin volya-engine-db -
 
 `cargo xtask sim STEP...` drives Safari in the test simulator with real touches (`tools/simdriver`, an XCUITest; no window, no extra permissions), for what in-page synthesized input can't reach: system sheets such as the file picker, iOS gestures, the path from the screen to the page. Steps: `open <url>`, `wait <s>`, `tap <x> <y>` (screen points), `tap-text <label>`, `hold <x> <y> <s>`, `drag <x1> <y1> <x2> <y2>`, `double-tap <x> <y>`, `pinch <scale>` (two fingers on the page; a pinch doesn't always zoom an unguarded page, so repeat it), `expect-text <label>`, `screenshot <path>`. A step that fails stops the run with the reason. Example: `cargo xtask sim "open http://localhost:8080/volya-engine/" "tap-text Play" "wait 3" "screenshot /tmp/s.png"`. Browser zoom (docs/architecture/web-platform.md) is checked against real gestures with `tests/browser/gestures.html` (not a suite; its flags and output are in the file), e.g. `cargo xtask sim "open http://localhost:8080/volya-engine/__test/run/1/gestures.html#play+controls" "wait 3" "double-tap 220 600" "pinch 3" "wait 1" "expect-text scale 1.00"`. What WebGL 2 holds per resource is measured with `tests/browser/webgl-memory.html` (not a suite; its experiments are in the file) while sampling `footprint` of the Simulator's processes (#443). XCUITest can't hold independent fingers on different spots at once; multi-finger input stays covered by in-page tests. Files for pickers go in the simulator's "On My iPhone" folder: the `File Provider Storage` directory of the `group.com.apple.FileProvider.LocalStorage` app group in the device's data.
 
+### Windows programs under Wine
+
+`cargo xtask wine run DIR -- EXE [ARGS...]` runs a 32-bit Windows program headless in Apple's `container`: Wine in an arm64 Debian VM, its i386 side under QEMU user mode (Rosetta runs no 32-bit x86 in Linux VMs, measured), drawing into Xvfb with Wine's audio driver set to none, so nothing shows or sounds on the Mac. `DIR` is the working directory (`/work` in the container) and what the program writes there stays on the Mac; the exit code is passed on. Each run is a fresh container with a fresh Wine prefix (about 10 s of setup), waits for memory first, starts the `container` service if it wasn't running and leaves it as it found it; the container is stopped afterwards, also on errors and Ctrl-C (a reaper process). `WINEDEBUG` is passed through (default `fixme-all`). `cargo xtask wine image` builds the image from `tools/xtask/wine/Containerfile` (run and check build it when missing); `cargo xtask wine check` builds a Direct3D 9 smoke test (`tools/xtask/wine/d3d9smoke.c`) with MinGW in the container, runs it, and checks the colour it cleared to. Wine, QEMU and MinGW in the image are copyleft tools that run only inside the container; nothing links them or ships them.
+
 ### Setup
 
 - rustup (installs the toolchain from `rust-toolchain.toml`; `xtask` installs the matching `wasm-bindgen` CLI).
@@ -63,6 +67,7 @@ Dev CLI for archives: `cargo run -p volya-engine-formats --bin volya-engine-db -
 - Homebrew LLVM (`brew install llvm`): its clang builds the script runtime's C for wasm32 (`cargo xtask web`, `cargo xtask check`).
 - Google Chrome.
 - Xcode with an iOS simulator runtime.
+- Apple's `container` (for `cargo xtask wine`).
 
 ### Dev server
 
