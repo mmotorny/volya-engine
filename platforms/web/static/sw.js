@@ -59,11 +59,17 @@ const LEGACY = "volya-engine-app";
 /** The headers that make a page cross-origin isolated. */
 const ISOLATION = { "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp" };
 
-/** `response` with ISOLATION's headers. */
+/**
+ * `response` with ISOLATION's headers, and `no-cache`: kept with GitHub
+ * Pages' `max-age=600`, Safari reused an earlier build's copy for a worker's
+ * module import without asking this worker, after an update took over
+ * (measured in the iOS Simulator, #446); revalidating, it asks.
+ */
 const isolated = (response) => {
   if (response.status === 0) return response;
   const headers = new Headers(response.headers);
   for (const [name, value] of Object.entries(ISOLATION)) headers.set(name, value);
+  headers.set("Cache-Control", "no-cache");
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 };
 

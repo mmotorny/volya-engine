@@ -31,6 +31,11 @@ pub const RESULTS_PATH: &str = "/volya-engine/__test/results";
 /// unreachable (connections close without a response, like a lost network),
 /// to check the service worker's offline copies. Test files stay reachable.
 pub const OFFLINE_BASE: &str = "/volya-engine/__test/offline/";
+/// With [`Server::with_next`], tests POST `on` or `off` under this prefix to
+/// serve the next build instead of the root (a deploy, for the update flow).
+pub const NEXT_BASE: &str = "/volya-engine/__test/next/";
+/// GitHub Pages' cache lifetime for every file (measured: `max-age=600`).
+const PAGES_CACHE_CONTROL: &str = "max-age=600";
 /// URL prefix of the game installer served to tests (BYOA, local only), with
 /// `index.json` listing its files.
 pub const INSTALLER_BASE: &str = "/volya-engine/__test/installer/";
@@ -52,6 +57,12 @@ pub struct Server {
     results: Option<ResultsSink>,
     installer: Option<PathBuf>,
     offline: AtomicBool,
+    /// The next build's directory, served while `use_next` is set.
+    next: Option<PathBuf>,
+    use_next: AtomicBool,
+    /// The app's files carry GitHub Pages' cache lifetime rather than
+    /// `no-store`.
+    pages_caching: bool,
 }
 
 impl Server {
@@ -61,7 +72,24 @@ impl Server {
             results: None,
             installer: None,
             offline: AtomicBool::new(false),
+            next: None,
+            use_next: AtomicBool::new(false),
+            pages_caching: false,
         })
+    }
+
+    /// Serves `dir` instead of the root while tests ask for it under
+    /// [`NEXT_BASE`].
+    pub fn with_next(mut self, dir: &Path) -> io::Result<Self> {
+        self.next = Some(dir.canonicalize()?);
+        Ok(self)
+    }
+
+    /// Gives the app's files GitHub Pages' cache lifetime, so browsers may
+    /// keep them as they do the deployed app's; test files stay `no-store`.
+    pub fn with_pages_caching(mut self) -> Self {
+        self.pages_caching = true;
+        self
     }
 
     /// Serves the test harness from `dir` and passes reports to `sink`.
@@ -112,6 +140,15 @@ impl Server {
                 self.offline.store(on, Ordering::SeqCst);
                 return write_status(&mut stream, 204, "No Content");
             }
+            ("POST", Some(_)) if self.next.is_some() && request.path.starts_with(NEXT_BASE) => {
+                let on = match &request.path[NEXT_BASE.len()..] {
+                    "on" => true,
+                    "off" => false,
+                    _ => return write_status(&mut stream, 404, "Not Found"),
+                };
+                self.use_next.store(on, Ordering::SeqCst);
+                return write_status(&mut stream, 204, "No Content");
+            }
             ("GET" | "HEAD", _) => {}
             _ => return write_status(&mut stream, 405, "Method Not Allowed"),
         }
@@ -131,7 +168,14 @@ impl Server {
                 }
                 _ => match percent_decode(name) {
                     Some(name) if !name.contains(['/', '\\']) && dir.join(&name).is_file() => {
-                        serve_file(&mut stream, &dir.join(name), request.range, head_only, true)
+                        serve_file(
+                            &mut stream,
+                            &dir.join(name),
+                            request.range,
+                            head_only,
+                            true,
+                            "no-store",
+                        )
                     }
                     _ => write_status(&mut stream, 404, "Not Found"),
                 },
@@ -150,7 +194,12 @@ impl Server {
             Route::File(path) => {
                 // The app's page: as GitHub Pages serves it.
                 let page = request.path == BASE || request.path == format!("{BASE}index.html");
-                serve_file(&mut stream, &path, request.range, head_only, !page)
+                let cache = if self.pages_caching && !request.path.starts_with(TEST_BASE) {
+                    PAGES_CACHE_CONTROL
+                } else {
+                    "no-store"
+                };
+                serve_file(&mut stream, &path, request.range, head_only, !page, cache)
             }
         }
     }
@@ -159,13 +208,19 @@ impl Server {
         if url_path == "/" || url_path == BASE.trim_end_matches('/') {
             return Route::Redirect;
         }
-        let Some((prefix, mut rest, dir)) = self
+        let Some((prefix, mut rest, mut dir)) = self
             .mounts
             .iter()
             .find_map(|(prefix, dir)| Some((*prefix, url_path.strip_prefix(prefix)?, dir)))
         else {
             return Route::NotFound;
         };
+        if prefix == BASE
+            && self.use_next.load(Ordering::SeqCst)
+            && let Some(next) = &self.next
+        {
+            dir = next;
+        }
         // `__test/run/<id>/<file>` serves `<file>`; the id only tags reports.
         if prefix == TEST_BASE
             && let Some(run) = rest.strip_prefix("run/")
@@ -213,13 +268,14 @@ struct Request {
 }
 
 /// Serves `path`, honoring a single byte range, with
-/// [`ISOLATION_HEADERS`] when `isolated`.
+/// [`ISOLATION_HEADERS`] when `isolated`, and `cache` as its Cache-Control.
 fn serve_file(
     stream: &mut impl Write,
     path: &Path,
     range: Option<(u64, Option<u64>)>,
     head_only: bool,
     isolated: bool,
+    cache: &str,
 ) -> io::Result<()> {
     let mut file = File::open(path)?;
     let size = file.metadata()?.len();
@@ -241,7 +297,7 @@ fn serve_file(
     };
     write!(
         stream,
-        "{status}Content-Type: {kind}\r\nContent-Length: {len}\r\nAccept-Ranges: bytes\r\nCache-Control: no-store\r\n{}Connection: close\r\n\r\n",
+        "{status}Content-Type: {kind}\r\nContent-Length: {len}\r\nAccept-Ranges: bytes\r\nCache-Control: {cache}\r\n{}Connection: close\r\n\r\n",
         if isolated { ISOLATION_HEADERS } else { "" }
     )?;
     if !head_only {

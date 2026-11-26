@@ -17,7 +17,7 @@ use std::{env, fs};
 
 use volya_engine_devserver::{BASE, Server};
 
-use super::{Profile, Result, cmd, output, root, run as run_cmd, step, web};
+use super::{Profile, Result, cmd, next_build, output, root, run as run_cmd, step, web};
 use crate::machine::SimulatorLock;
 
 const SUITES: &[&str] = &[
@@ -76,9 +76,13 @@ pub fn run(args: &[&str]) -> Result {
         run_cmd(&mut cmd("cargo", &["test", "--workspace"]))?;
     }
     web(Profile::Test)?;
+    let next = next_build()?;
 
     let (tx, reports) = mpsc::channel();
+    // Cached as GitHub Pages caches, so browser caches are tested too (#446).
     let server = Server::new(&root().join("dist"))
+        .and_then(|s| s.with_next(&next))
+        .map(Server::with_pages_caching)
         .and_then(|s| {
             s.with_tests(
                 &root().join("tests/browser"),

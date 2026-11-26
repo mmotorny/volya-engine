@@ -1034,6 +1034,61 @@ export const tests = {
     }
   },
 
+  // The update flow with a real next build (`cargo xtask e2e` serves
+  // dist-next on request; both with GitHub Pages' cache lifetime), in a copy
+  // of the app: after Finish update, and after a reload, its page and its
+  // engine are the next build's (#446). Near the end: the next build takes
+  // over this page's service worker too.
+  "Finish update runs the next build whole, also after a reload": async () => {
+    const current = volya.engineBuild;
+    assert(current, "no engine build id");
+    const next = (on) => fetch(`${base}__test/next/${on ? "on" : "off"}`, { method: "POST" });
+    const frame = Object.assign(document.createElement("iframe"), { width: 400, height: 800 });
+    frame.style.cssText = "position: fixed; left: -5000px; top: 0";
+    const load = () => new Promise((r) => frame.addEventListener("load", r, { once: true }));
+    /** The copy's engine build and version shown, once its engine runs. */
+    const started = async (when) => {
+      await until(
+        () => {
+          const doc = frame.contentDocument;
+          const problem = doc?.querySelector("#game h2")?.textContent.includes("couldn't start");
+          if (problem) throw new Error(`${when} (running ${current}): ${doc.getElementById("game").textContent}`);
+          return frame.contentWindow.volya?.engineBuild;
+        },
+        `${when}: the engine didn't start`,
+        30000,
+      );
+      return { build: frame.contentWindow.volya.engineBuild, version: frame.contentDocument.getElementById("status").textContent };
+    };
+    let loaded = load();
+    frame.src = base;
+    document.body.append(frame);
+    try {
+      await loaded;
+      assertEqual((await started("before")).build, current, "the engine before the update");
+      await next(true);
+      const updates = frame.contentWindow.volya.updates;
+      await updates.setAuto(true);
+      assertEqual(await updates.checkNow(), "found", "check for updates");
+      await until(() => updates.status === "ready", `the update didn't download (${updates.status})`, 30000);
+      loaded = load();
+      updates.apply();
+      await loaded;
+      const after = await started("after Finish update");
+      assert(after.build !== current, "the engine is still the running build's");
+      assert(after.version.endsWith("-next"), `the page is ${after.version}`);
+      loaded = load();
+      frame.contentWindow.location.reload();
+      await loaded;
+      const reloaded = await started("after a reload");
+      assertEqual([reloaded.build, reloaded.version], [after.build, after.version], "after a reload");
+      return `${current} → ${after.build}`;
+    } finally {
+      await next(false);
+      frame.remove();
+    }
+  },
+
   "layout fits the viewport": () => {
     const overflow = document.documentElement.scrollWidth - window.innerWidth;
     assert(overflow <= 0, `horizontal overflow ${overflow}px`);

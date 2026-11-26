@@ -3,13 +3,13 @@
 
 // The engine thread (docs/architecture/web-platform.md). Messages from the page:
 //   { type: "start", canvas, size, graphics, diagnostics, previousEnd }
-//     → { type: "started", available, backend, diagnostics } | { type: "error", message }
+//     → { type: "started", available, backend, diagnostics, build } | { type: "error", message }
 //   (`graphics`: the stored Graphics choice or null; `available`: what the
 //   browser supports, `backend`: the one chosen, graphics.js; `diagnostics`:
 //   the session as diagnostics.js tells it when the player keeps a
 //   diagnostic log, else null, and in the reply the log's status;
 //   `previousEnd`: how an earlier session's page ended, kept by
-//   diagnostics.js)
+//   diagnostics.js; `build`: the engine's build id, stamped by cargo xtask web)
 //   { type: "diag", kind, name, … }: the page's events for the diagnostic
 //   log (diagnostics.js), dropped while it is off.
 //   { type: "end", reason, message }: how the page ended (an uncaught
@@ -200,7 +200,7 @@ onmessage = async ({ data }) => {
     })();
     try {
       await started;
-      postMessage({ type: "started", available, backend, diagnostics });
+      postMessage({ type: "started", available, backend, diagnostics, build: wasm.BUILD_ID });
       schedule();
     } catch (error) {
       postMessage({ type: "error", message: message(error) });

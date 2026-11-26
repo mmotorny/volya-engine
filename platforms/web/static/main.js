@@ -67,6 +67,8 @@ let setCursor = () => {};
 /** What the browser supports and the backend the engine started with (graphics.js). */
 let available = {};
 let backend = null;
+/** The running engine's build id (engine-worker.js). */
+let engineBuild = null;
 
 /** Engine interface (docs/testing.md): runs `op` with `args` in the engine. */
 function call(op, args = {}) {
@@ -167,7 +169,7 @@ function startEngine() {
   const started = new Promise((resolve, reject) => {
     worker.onmessage = ({ data }) => {
       if (data.type === "started") {
-        ({ available, backend } = data);
+        ({ available, backend, build: engineBuild } = data);
         diagnostics.setStatus(data.diagnostics);
         resolve();
       } else if (data.type === "error") reject(new Error(data.message));
@@ -255,7 +257,18 @@ const graphics = {
   },
 };
 
-globalThis.volya = { call, status: () => call("status"), connectAudio, audioState: () => audio?.state, diagnostics, graphics };
+globalThis.volya = {
+  call,
+  status: () => call("status"),
+  connectAudio,
+  audioState: () => audio?.state,
+  diagnostics,
+  graphics,
+  updates,
+  get engineBuild() {
+    return engineBuild;
+  },
+};
 
 // Input goes to the engine only while it owns the screen (input.js); the
 // page's own interface hides meanwhile.

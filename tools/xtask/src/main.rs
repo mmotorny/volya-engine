@@ -249,7 +249,49 @@ fn web(profile: Profile) -> Result {
         ],
     ))?;
     stamp_engine(&dist)?;
-    inject_build(&dist)
+    inject_build(&dist, "")
+}
+
+/// `dist-next`: `dist` as the next deploy would be, for the update flow's
+/// test (tests/browser/smoke.js): the engine stamped with another id, and
+/// `update.js` and `sw.js` injected anew.
+fn next_build() -> Result<PathBuf> {
+    use sha2::{Digest, Sha256};
+    let next = root().join("dist-next");
+    if next.exists() {
+        fs::remove_dir_all(&next).map_err(|e| format!("remove dist-next: {e}"))?;
+    }
+    copy_dir(&root().join("dist"), &next).map_err(|e| format!("copy dist: {e}"))?;
+    let glue = next.join("pkg/volya_engine_web.js");
+    let text = fs::read_to_string(&glue).map_err(|e| format!("{}: {e}", glue.display()))?;
+    let id = text
+        .rsplit_once("export const BUILD_ID = \"")
+        .and_then(|(_, rest)| rest.split_once('"'))
+        .map(|(id, _)| id.to_owned())
+        .ok_or("no BUILD_ID in the glue")?;
+    let other: String = Sha256::digest(format!("{id} next").as_bytes())[..8]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    fs::write(&glue, text.replace(&id, &other)).map_err(|e| format!("{}: {e}", glue.display()))?;
+    // The id is the wasm's last bytes (stamp_engine).
+    let wasm_path = next.join("pkg/volya_engine_web_bg.wasm");
+    let mut wasm = fs::read(&wasm_path).map_err(|e| format!("{}: {e}", wasm_path.display()))?;
+    if !wasm.ends_with(id.as_bytes()) {
+        return Err("the wasm doesn't end with its id".into());
+    }
+    let at = wasm.len() - id.len();
+    wasm[at..].copy_from_slice(other.as_bytes());
+    fs::write(&wasm_path, wasm).map_err(|e| format!("{}: {e}", wasm_path.display()))?;
+    for file in ["update.js", "sw.js"] {
+        fs::copy(
+            root().join("platforms/web/static").join(file),
+            next.join(file),
+        )
+        .map_err(|e| format!("{file}: {e}"))?;
+    }
+    inject_build(&next, "-next")?;
+    Ok(next)
 }
 
 /// Stamps the engine's wasm and its wasm-bindgen glue with one id (a hash of
@@ -296,14 +338,14 @@ fn leb128(mut n: usize) -> Vec<u8> {
 /// build: the commit and its date into `update.js` (`BUILD`, `BUILT`: the
 /// version shown), and the commit plus every file with a hash of its content,
 /// and its size into `sw.js` (`BUILD`, `PRECACHE`, and `CACHE`, named by
-/// them; static/sw.js).
-fn inject_build(dist: &Path) -> Result {
+/// them; static/sw.js). `suffix` follows the commit (the next build's).
+fn inject_build(dist: &Path, suffix: &str) -> Result {
     use sha2::{Digest, Sha256};
     let commit = output(&mut cmd("git", &["rev-parse", "--short", "HEAD"]))?;
     let dirty = !output(&mut cmd("git", &["status", "--porcelain"]))?
         .trim()
         .is_empty();
-    let commit = format!("{}{}", commit.trim(), if dirty { "+" } else { "" });
+    let commit = format!("{}{}{suffix}", commit.trim(), if dirty { "+" } else { "" });
     let date = output(&mut cmd("git", &["show", "-s", "--format=%cI", "HEAD"]))?;
     replace_once(
         &dist.join("update.js"),
