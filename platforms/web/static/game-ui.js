@@ -602,24 +602,64 @@ function downloadButton() {
 
 /**
  * The diagnostic log (#346): off by default; while on, the app records its
- * performance and errors here. The log stays when it is turned off, and can
- * be downloaded while there is one.
+ * performance and errors here, downloadable while there is a log. Turning
+ * it off deletes the log (#536, for privacy), after a confirmation that
+ * leaves the download offered. A log left while off (not deleted, or kept
+ * by earlier versions) is offered with Delete diagnostic log.
  */
 async function diagnosticsPanel() {
   const log = await call("diagnostic_log_status").catch(() => null);
   const on = element("input", { type: "checkbox", checked: diagnostics.enabled() });
   const download = downloadButton();
-  download.hidden = !log?.entries;
+  const remove = element("button", { className: "panel-action danger", textContent: "Delete diagnostic log" });
+  const problem = element("p", { className: "note error", textContent: "Couldn't delete the diagnostic log.", hidden: true });
+  const reflect = (status) => {
+    const left = status?.entries || status?.deleted === false;
+    download.hidden = !status?.entries;
+    remove.hidden = diagnostics.enabled() || !left;
+    problem.hidden = status?.deleted !== false;
+  };
+  reflect(log);
+  /** Asks first; then turns the log off (if on) and deletes it. */
+  const deleteLog = async (question, actionLabel, after) => {
+    const ask = confirmation(question, "Download it first to keep a copy.", actionLabel);
+    on.disabled = true;
+    remove.hidden = true;
+    problem.hidden = true;
+    panel.append(ask.element);
+    ask.focus();
+    const confirmed = await ask.result;
+    if (confirmed) {
+      ask.busy();
+      try {
+        const status = await diagnostics.setEnabled(false, call);
+        on.checked = false;
+        reflect(status);
+      } catch (error) {
+        console.warn(`diagnostic log: ${error.message}`);
+        reflect({ entries: !download.hidden, deleted: false });
+      }
+    } else reflect(await call("diagnostic_log_status").catch(() => null));
+    ask.element.remove();
+    on.disabled = false;
+    (confirmed || !after.isConnected || after.hidden ? on : after).focus();
+  };
+  remove.addEventListener("click", () => deleteLog("Delete the diagnostic log?", "Delete", remove));
   on.addEventListener("change", async () => {
+    if (!on.checked) {
+      // Still on until confirmed.
+      on.checked = true;
+      await deleteLog("Turn off the diagnostic log and delete it?", "Turn off and delete", on);
+      return;
+    }
     on.disabled = true;
     try {
-      const status = await diagnostics.setEnabled(on.checked, call);
-      download.hidden = !status?.entries;
+      reflect(await diagnostics.setEnabled(true, call));
     } finally {
       on.disabled = false;
     }
   });
-  return element(
+  const panel = element(
     "div",
     { className: "panel" },
     element("p", { className: "label", textContent: "Diagnostics" }),
@@ -635,7 +675,10 @@ async function diagnosticsPanel() {
       ),
     ),
     download,
+    remove,
+    problem,
   );
+  return panel;
 }
 
 /**

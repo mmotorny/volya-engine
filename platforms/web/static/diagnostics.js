@@ -153,7 +153,8 @@ export function connect(postMessage) {
 
 /**
  * Stores the setting; `call` tells the engine (the `diagnostics_set` op),
- * whose answer is the log's status.
+ * whose answer is the log's status. Off, the engine deletes the log and
+ * the kept end goes too (#536).
  */
 export async function setEnabled(on, call) {
   try {
@@ -163,6 +164,7 @@ export async function setEnabled(on, call) {
     // Storage refused: the setting lasts this session.
   }
   if (globalThis.volyaDiagnostics !== undefined) globalThis.volyaDiagnostics = on;
+  if (!on) forgetEnd();
   const status = await call("diagnostics_set", { on, session: session(), previous_end: on ? takeKeptEnd() : null });
   setStatus(status);
   follow();

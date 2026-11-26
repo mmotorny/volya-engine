@@ -1,6 +1,6 @@
 # Diagnostic log
 
-For problems seen only on a player's device (#346). Settings has "Keep a diagnostic log" (off by default; localStorage `volya-engine.diagnostic-log`) and "Download diagnostic log", shown while a log exists, also after turning it off, which keeps it. Technical only: level and file names and error messages are kept whole, as they aren't personal data and the check box is the consent (decided by the user, #356); no per-voice events.
+For problems seen only on a player's device (#346). Settings has "Keep a diagnostic log" (off by default; localStorage `volya-engine.diagnostic-log`) and "Download diagnostic log", shown while a log exists. Turning it off deletes the log (decided by the user, for privacy, #536): first it asks, in place of the switch, with the download still offered; then the engine drops the events waiting, closes the store and removes `diagnostic-log/`, and the page removes the kept end (`volya-engine.diagnostic-log-end`). A log left while off (another copy of the app held its files, or an earlier version kept it) is offered with the download and "Delete diagnostic log", which asks the same way; "Couldn't delete the diagnostic log" shows when its files stay (`diagnostics_set` answers `deleted`). Technical only: level and file names and error messages are kept whole, as they aren't personal data and the check box is the consent (decided by the user, #356); no per-voice events.
 
 ## Format
 

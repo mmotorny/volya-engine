@@ -171,7 +171,32 @@ export const SECTIONS = [
         screen: "settings",
         log: { on: true, entries: true, download: "failed" },
       },
-      { id: "settings-log-off-kept", name: "Diagnostic log turned off, its log kept", game: imported, screen: "settings", log: { on: false, entries: true } },
+      // Turning it off deletes the log (#536), asked first.
+      {
+        id: "settings-log-off-confirm",
+        name: "Diagnostic log switched off: confirming the deletion",
+        game: imported,
+        screen: "settings",
+        log: { on: true, entries: true },
+        press: ["Keep a diagnostic log"],
+      },
+      {
+        id: "settings-log-not-deleted",
+        name: "Turned off, but the log couldn't be deleted",
+        game: imported,
+        screen: "settings",
+        log: { on: true, entries: true, deleteFails: true },
+        press: ["Keep a diagnostic log", "Turn off and delete"],
+      },
+      { id: "settings-log-left", name: "Diagnostic log off, a log left from before", game: imported, screen: "settings", log: { on: false, entries: true } },
+      {
+        id: "settings-log-left-confirm",
+        name: "Delete diagnostic log pressed: confirming",
+        game: imported,
+        screen: "settings",
+        log: { on: false, entries: true },
+        press: ["Delete diagnostic log"],
+      },
       // Danger zone: the game's settings and saved games (#535).
       {
         id: "settings-delete-user-data",

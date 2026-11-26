@@ -55,7 +55,7 @@ Object.defineProperty(navigator.storage, "persist", { value: async () => state.p
 
 // The engine's own message for a browser without WebGL 2 (platforms/web/src/gpu.rs).
 const gpu = state.gpu === false ? { state: "unavailable", message: "no WebGL 2 adapter" } : { state: "ready" };
-const call = async (op) => {
+const call = async (op, args) => {
   switch (op) {
     case "status":
       return { gpu };
@@ -67,8 +67,11 @@ const call = async (op) => {
       if (state.starting) return new Promise(() => {});
       return null;
     case "diagnostic_log_status":
-    case "diagnostics_set":
       return log;
+    case "diagnostics_set":
+      // Off deletes the log, unless the state says it can't.
+      if (args?.on) return log;
+      return { on: false, entries: log.deleteFails ? log.entries : false, deleted: !log.deleteFails };
     case "diagnostic_log":
       // Preparing never settles.
       if (log.download === "preparing") return new Promise(() => {});
@@ -187,9 +190,12 @@ if (state.level) {
     [...document.querySelectorAll("#game button")].find((b) => b.textContent === "Download diagnostic log").click();
     await new Promise((resolve) => setTimeout(resolve));
   }
-  // Buttons pressed in turn, by their text (a confirmation's, say).
+  // Buttons pressed in turn, by their text (a confirmation's, say), or a
+  // switch by its title.
   for (const label of state.press ?? []) {
-    [...document.querySelectorAll("#game button")].find((b) => b.textContent === label).click();
+    const button = [...document.querySelectorAll("#game button")].find((b) => b.textContent === label);
+    const toggle = [...document.querySelectorAll("#game .switch")].find((l) => l.querySelector("strong")?.textContent === label);
+    (button ?? toggle.querySelector("input")).click();
     await new Promise((resolve) => setTimeout(resolve));
   }
   if (state.snapshot) screens.showImport(state.game, state.snapshot);

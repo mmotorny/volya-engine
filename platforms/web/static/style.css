@@ -892,6 +892,10 @@ button.back {
   margin-top: 0.75rem;
 }
 
+.panel button.panel-action:not([hidden]) {
+  display: block;
+}
+
 button.danger.filled {
   margin-top: 0.75rem;
   background: #c4382c;
