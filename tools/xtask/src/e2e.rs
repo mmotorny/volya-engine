@@ -219,6 +219,9 @@ fn chrome(
     } else {
         env::temp_dir().join(format!("volya-chrome-{id}"))
     };
+    // The HTTP cache is the run's own, as in a fresh profile: a kept one
+    // would serve an earlier build's files (cached as GitHub Pages caches).
+    let cache = env::temp_dir().join(format!("volya-chrome-cache-{id}"));
     let mut child: Child = cmd(
         CHROME,
         &[
@@ -232,6 +235,7 @@ fn chrome(
             // is measured inside the page, only the device output is muted.
             "--mute-audio",
             &format!("--user-data-dir={}", profile.display()),
+            &format!("--disk-cache-dir={}", cache.display()),
             url,
         ],
     )
@@ -245,6 +249,7 @@ fn chrome(
     if !keep {
         let _ = fs::remove_dir_all(profile);
     }
+    let _ = fs::remove_dir_all(cache);
     report
 }
 
