@@ -365,12 +365,12 @@ fn the_cache_at_the_start_position() {
         // The first pass after loading draws nothing (TODO(#407)).
         assert!(
             details
-                .pass(&pass(1), &collision, &mut random)
+                .pass(&pass(1), &collision, &mut random, |_, _, _, _| true)
                 .instances
                 .is_empty()
         );
         let start = Instant::now();
-        let frame = details.pass(&pass(2), &collision, &mut random);
+        let frame = details.pass(&pass(2), &collision, &mut random, |_, _, _, _| true);
         let built = start.elapsed();
         assert_eq!(details.centre(), Details::camera_cell(eye));
         assert_eq!(details.pending(), 0);
@@ -380,7 +380,7 @@ fn the_cache_at_the_start_position() {
         let mut drawn = 0;
         for f in 3..3 + FRAMES {
             drawn = details
-                .pass(&pass(f), &collision, &mut random)
+                .pass(&pass(f), &collision, &mut random, |_, _, _, _| true)
                 .instances
                 .len();
         }
@@ -395,12 +395,20 @@ fn the_cache_at_the_start_position() {
         // Walking one cell along x: 49 new entries, at most 7 a frame.
         let mut walked = pass(3 + FRAMES);
         walked.eye[0] += 2.0;
-        details.pass(&walked, &collision, &mut random);
+        details.pass(&walked, &collision, &mut random, |_, _, _, _| true);
         assert_eq!(details.pending(), 42);
         for f in 4 + FRAMES..10 + FRAMES {
             walked.frame = f;
-            details.pass(&walked, &collision, &mut random);
+            details.pass(&walked, &collision, &mut random, |_, _, _, _| true);
         }
         assert_eq!(details.pending(), 0);
+        // Entries the occlusion test hides are not drawn (5.2 step 3).
+        walked.frame = 10 + FRAMES;
+        let mut tested = 0;
+        let hidden = details.pass(&walked, &collision, &mut random, |_, _, _, _| {
+            tested += 1;
+            false
+        });
+        assert!(tested > 0 && hidden.instances.is_empty());
     });
 }
