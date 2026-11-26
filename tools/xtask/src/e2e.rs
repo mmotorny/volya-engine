@@ -119,14 +119,19 @@ pub fn suite(target: &str, suite: &str) -> Result {
         None
     };
     let kept = target == "chrome" && KEPT_PROFILE.contains(&suite);
-    let _profile = if kept {
+    let profile = if kept {
         Some(KeptProfile::take()?)
     } else {
         None
     };
     let (server, port, reports) = serve(&site, &next, &tests, kept)?;
     step(&format!("Browser suite {suite} on {target}"));
-    run_suite(&server, port, &reports, simulator.as_ref(), target, suite)
+    let outcome = run_suite(&server, port, &reports, simulator.as_ref(), target, suite);
+    match profile.map(|p| p.check_size()) {
+        Some(Err(size)) if outcome.is_ok() => Err(size),
+        Some(Err(size)) => outcome.map_err(|e| format!("{e}; {size}")),
+        _ => outcome,
+    }
 }
 
 /// The dev server for the sites `dist` and `next` and the suites in
@@ -248,11 +253,23 @@ fn kept_profile() -> PathBuf {
         .join("chrome-profile")
 }
 
+/// The kept profile's port, the one every run holding it serves on: storage
+/// belongs to an origin, port included, so each port the profile saw kept
+/// a whole import of its own (39 GB, #564). Below macOS's ephemeral range
+/// (49152–65535), where the other runs' any-port binds land.
+const KEPT_PORT: u16 = 47613;
+
+/// The kept profile's origin, as the buckets of Chrome's quota database
+/// name it.
+const KEPT_ORIGIN: &str = "http://localhost:47613/";
+
 /// The kept profile, held by this process until dropped (an exclusive lock
 /// on `chrome-profile.lock` beside it): one Chrome uses it at a time.
 pub(crate) struct KeptProfile(#[allow(dead_code)] fs::File);
 
 impl KeptProfile {
+    /// Takes the profile, waiting for its holder, and deletes it when it
+    /// holds another origin's storage.
     pub(crate) fn take() -> Result<Self> {
         let dir = kept_profile();
         fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -266,8 +283,94 @@ impl KeptProfile {
             file.lock()
                 .map_err(|e| format!("{}: {e}", path.display()))?;
         }
+        // Where earlier runs remembered their port.
+        let _ = fs::remove_file(dir.join("port"));
+        let data = dir.join("data");
+        let others = other_origins(&data)?;
+        if !others.is_empty() {
+            // Chrome keeps an origin's storage across several databases of
+            // its own (OPFS's directories through a LevelDB index), so the
+            // profile goes whole and the game is imported again.
+            println!(
+                "==> Deleting the kept Chrome profile, which holds storage of {}",
+                others.join(", ")
+            );
+            fs::remove_dir_all(&data).map_err(|e| format!("{}: {e}", data.display()))?;
+        }
         Ok(Self(file))
     }
+
+    /// Reports the profile's size, and fails when it exceeds 1.5 times its
+    /// import (its OPFS) and 1 GB for Chrome's own files.
+    pub(crate) fn check_size(&self) -> Result {
+        let data = kept_profile().join("data");
+        let total = disk_usage(&data);
+        let import = disk_usage(&data.join("Default/File System"));
+        let gb = |bytes: u64| bytes as f64 / 1e9;
+        println!(
+            "==> Kept Chrome profile: {:.2} GB, its import {:.2} GB",
+            gb(total),
+            gb(import)
+        );
+        if total > import + import / 2 + 1_000_000_000 {
+            return Err(format!(
+                "the kept Chrome profile ({}) takes {:.2} GB, more than 1.5 times its import ({:.2} GB) and 1 GB",
+                data.display(),
+                gb(total),
+                gb(import)
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The web origins other than [`KEPT_ORIGIN`] with storage in the Chrome
+/// profile `data`, from its quota database (each origin using OPFS, the
+/// Cache API or IndexedDB has a bucket there; measured with Chrome 158).
+fn other_origins(data: &Path) -> Result<Vec<String>> {
+    let quota = data.join("Default/WebStorage/QuotaManager");
+    if !quota.exists() {
+        return Ok(Vec::new());
+    }
+    let keys = output(&mut cmd(
+        "/usr/bin/sqlite3",
+        &[
+            "-readonly",
+            &quota.to_string_lossy(),
+            "select storage_key from buckets",
+        ],
+    ))?;
+    Ok(foreign(&keys))
+}
+
+/// The web origins among the storage keys `keys` (one a line) other than
+/// [`KEPT_ORIGIN`].
+fn foreign(keys: &str) -> Vec<String> {
+    let mut origins: Vec<String> = keys
+        .lines()
+        .map(str::trim)
+        .filter(|k| (k.starts_with("http://") || k.starts_with("https://")) && *k != KEPT_ORIGIN)
+        .map(String::from)
+        .collect();
+    origins.sort();
+    origins.dedup();
+    origins
+}
+
+/// The bytes the files under `dir` take on disk (none when it is missing).
+fn disk_usage(dir: &Path) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(entries) = fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|entry| match entry.metadata() {
+            Ok(m) if m.is_dir() => disk_usage(&entry.path()),
+            Ok(m) => m.blocks() * 512,
+            Err(_) => 0,
+        })
+        .sum()
 }
 
 /// The server's port and sockets, on both loopback addresses (#503): pages
@@ -276,9 +379,8 @@ impl KeptProfile {
 /// simultaneous open; measured on macOS: one in a few hundred connects to
 /// an unused port in the ephemeral range), so the page reads its own
 /// request back as the response, a network error. With the kept profile
-/// (held by the caller), on the port it last saw when it is free, as storage
-/// belongs to an origin, port included (else any port, remembered for the
-/// next run); without it, any port.
+/// (held by the caller), on [`KEPT_PORT`], waiting a while for it and
+/// failing when another process keeps it; without it, any port.
 pub(crate) fn listen(kept: bool) -> Result<(u16, Vec<TcpListener>)> {
     let bind = |port: u16| -> std::io::Result<(u16, Vec<TcpListener>)> {
         let v4 = TcpListener::bind(("127.0.0.1", port))?;
@@ -286,29 +388,28 @@ pub(crate) fn listen(kept: bool) -> Result<(u16, Vec<TcpListener>)> {
         let v6 = TcpListener::bind(("::1", port))?;
         Ok((port, vec![v4, v6]))
     };
-    let file = kept_profile().join("port");
-    let last = fs::read_to_string(&file)
-        .ok()
-        .and_then(|p| p.trim().parse::<u16>().ok())
-        .filter(|_| kept);
-    if let Some(port) = last
-        && let Ok(bound) = bind(port)
-    {
-        return Ok(bound);
+    if kept {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            match bind(KEPT_PORT) {
+                Ok(bound) => return Ok(bound),
+                Err(e) if e.kind() != std::io::ErrorKind::AddrInUse => {
+                    return Err(format!("bind port {KEPT_PORT}: {e}"));
+                }
+                Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_secs(1)),
+                Err(e) => {
+                    return Err(format!(
+                        "port {KEPT_PORT}, the kept Chrome profile's, is taken by another process ({e}; `lsof -nP -iTCP:{KEPT_PORT}` names it)"
+                    ));
+                }
+            }
+        }
     }
     // A free port at 127.0.0.1 may be taken at ::1: a few tries.
     let mut error = None;
     for _ in 0..10 {
         match bind(0) {
-            Ok(bound) => {
-                if kept {
-                    fs::create_dir_all(kept_profile())
-                        .map_err(|e| format!("{}: {e}", file.display()))?;
-                    fs::write(&file, bound.0.to_string())
-                        .map_err(|e| format!("{}: {e}", file.display()))?;
-                }
-                return Ok(bound);
-            }
+            Ok(bound) => return Ok(bound),
             Err(e) => error = Some(e),
         }
     }
@@ -675,6 +776,17 @@ mod tests {
         assert!(passed("run x\nsuite s\nok a\nok b"));
         assert!(!passed("run x\nsuite s\nok a\nfail b\tboom"));
         assert!(!passed("run x\nsuite s"));
+    }
+
+    #[test]
+    fn finds_other_origins() {
+        assert_eq!(KEPT_ORIGIN, format!("http://localhost:{KEPT_PORT}/"));
+        let keys = "chrome-extension://nkeimhogjdpnpccoofpliimaahmaaome/\nhttp://localhost:47613/\nhttp://localhost:51234/\nhttp://localhost:51234/\nhttp://127.0.0.1:47613/\n";
+        assert_eq!(
+            foreign(keys),
+            ["http://127.0.0.1:47613/", "http://localhost:51234/"]
+        );
+        assert!(foreign("http://localhost:47613/\n").is_empty());
     }
 
     #[test]

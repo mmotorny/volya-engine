@@ -87,7 +87,7 @@ pub fn run(args: &[&str]) -> Result {
         })
         .map_err(|e| format!("dev server: {e}"))?;
     let server = Arc::new(server);
-    let _profile = e2e::KeptProfile::take()?;
+    let profile = e2e::KeptProfile::take()?;
     let (port, listeners) = e2e::listen(true)?;
     for listener in listeners {
         let running = Arc::clone(&server);
@@ -112,6 +112,7 @@ pub fn run(args: &[&str]) -> Result {
     server.set_references(Some(&frames_first)).map_err(io)?;
     server.set_next(true);
     let after = suite("working tree's")?;
+    profile.check_size()?;
     if e2e::passed(&after) {
         step(&format!("The working tree draws the views as {rev} does"));
         Ok(())
