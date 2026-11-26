@@ -997,6 +997,7 @@ impl App {
                 .map_or(GLOWS_PER_FRAME, |v| v.clamp(2, 32));
             level.set_light_settings(settings, glows);
             level.set_supersample(self.supersample);
+            level.set_vis_distance(self.console.number("rs_vis_distance"));
             // detail-objects.md 7; weather-ambient-effects.md 4.3: the wind
             // as the sound rules last updated it (without audio output
             // they do not run, #352).
@@ -2192,6 +2193,22 @@ mod tests {
         assert!(app.level_controls().is_some(), "the controls are live");
         assert!(!app.cursor_shown(), "no cursor in the level");
         (tree, app, input, audio)
+    }
+
+    /// r1-settings-scope.md 2.2: `rs_vis_distance` scales the far plane
+    /// from the next frame (start-position.md 7.1; the empty level's
+    /// weather has 100 m).
+    #[test]
+    fn the_view_distance_scales_the_far_plane() {
+        let (tree, mut app, input, mut audio) = in_level();
+        let far = |app: &App| match &app.phase {
+            Some(Phase::Level { level, .. }) => level.far_plane(),
+            _ => panic!("not in a level"),
+        };
+        assert_eq!(far(&app), 100.0);
+        app.console.exec("rs_vis_distance 0.5");
+        app.update(&tree, 32.0, &input, &mut audio);
+        assert_eq!(far(&app), 50.0);
     }
 
     fn menu_open(app: &App) -> bool {

@@ -747,8 +747,12 @@ export const tests = {
     const meta = find("M", "process_name")[0];
     assert(meta?.args.name.startsWith("Volya Engine "), "no process name");
     const session = find("i", "session")[0].args;
-    for (const key of ["version", "user_agent", "screen", "dpr", "cores", "gpu_state", "game"]) assert(key in session, `session lacks ${key}`);
+    for (const key of ["version", "user_agent", "screen", "dpr", "cores", "navigation", "restored_reload", "display_mode", "gpu_state", "game"]) {
+      assert(key in session, `session lacks ${key}`);
+    }
     assert(session.version, "no version");
+    assert(["navigate", "reload", "back_forward"].includes(session.navigation), `navigation ${session.navigation}`);
+    assertEqual([session.display_mode, session.restored_reload], ["browser", false], "display mode, restored reload");
     assert(/^volya,v:\S+$/.test(find("i", "session")[0].cat), "no commit");
     if (session.game === "imported") assert(/^ver\. \S+$/.test(session.game_version) && "game_language" in session, "no game version");
     else assertEqual(session.game, "not imported", "game");

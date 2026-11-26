@@ -137,14 +137,21 @@ document.addEventListener("visibilitychange", visibilityChanged);
 // end the worker when the page is hidden, and reload if it is restored.
 // The worker is told why first, and the page keeps the end itself, as the
 // worker may be ended before it stores it (#356).
-addEventListener("pagehide", () => {
+addEventListener("pagehide", (event) => {
   const message = "the page was closed";
+  // `persisted`: the page may be kept in the back-forward cache.
+  diagnostics.event("pagehide", { persisted: event.persisted });
   diagnostics.keepEnd("page_closed", message);
   worker.postMessage({ type: "end", reason: "page_closed", message });
   worker.terminate();
   audioWorker?.terminate();
 });
-addEventListener("pageshow", (event) => event.persisted && location.reload());
+addEventListener("pageshow", (event) => {
+  diagnostics.event("pageshow", { persisted: event.persisted });
+  if (!event.persisted) return;
+  diagnostics.restoredReload();
+  location.reload();
+});
 
 // The engine sizes the canvas in device pixels from these.
 const view = document.getElementById("view");
