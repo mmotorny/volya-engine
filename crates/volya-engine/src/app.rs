@@ -1685,6 +1685,20 @@ impl App {
         }
     }
 
+    /// The game ends with this app (it is dropped next): the level's
+    /// sounds leave `sounds`, which outlives it, as when the level is left,
+    /// and with them what they share (the collision world the occlusion
+    /// reads, #451: a game left from its level kept its 28 MB, and the next
+    /// game's collision world couldn't reuse its arrays).
+    pub fn end_sounds(&mut self, sounds: &mut crate::core::sound::system::SoundSystem) {
+        if let Some(level_sounds) = self.level_sounds.take() {
+            sounds.stop_all();
+            level_sounds.discard(sounds);
+        }
+        sounds.occlusion_mut().level = None;
+        self.sound_in_level = false;
+    }
+
     pub fn quit_requested(&self) -> bool {
         match &self.phase {
             Some(Phase::Menu(m)) => m.quit_requested(),

@@ -13,7 +13,7 @@ There are no arenas: every allocation goes to one general heap, the target's sys
 
 Two reuse fixes from #357 stand in for arenas:
 
-- The collision world's large arrays are kept when it is dropped (a thread-local spare in `volya-engine-core::collision`) and reused by the next world when large enough, so a second New Game's collision world finds its 28 MB without new memory (it needed up to 13 MiB more before, measured in headless Chrome).
+- The collision world's large arrays are kept when it is dropped (a thread-local spare in `volya-engine-core::collision`) and reused by the next world when large enough, so a second New Game's collision world finds its 28 MB without new memory (it needed up to 13 MiB more before, measured in headless Chrome). The sound system outlives a game (it is the web platform's), and its occlusion shares the world: a game ended from its level (`App::end_sounds`, #451) now lets the level's sounds go with it, as leaving the level does; before, the world stayed held and the next game's New Game made new arrays, the heap growing from 87 to 117 MiB in headless Chrome (88 to 118 on an iPhone, measured from its diagnostic log; 88 to 88 since).
 - Prepared textures share one read buffer, and are written in bands of at most 2 MiB, a transcoded one transcoded a band at a time into one reused buffer (`TextureUpload`, #440): a whole transcoding of the largest texture held 8 MiB beside its file.
 
 ## Measurements by lifetime (#399)

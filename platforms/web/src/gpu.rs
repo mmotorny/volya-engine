@@ -43,6 +43,10 @@ struct Gpu {
     presenter: Presenter,
     /// Whether the canvas shows something other than the current state.
     dirty: bool,
+    /// WebGL 2's renderer: `UNMASKED_RENDERER_WEBGL` where the browser
+    /// exposes `WEBGL_debug_renderer_info`, else `RENDERER` (wgpu-hal's
+    /// adapter name, read in its source).
+    renderer_name: String,
 }
 
 /// A video playing into a texture, looping.
@@ -226,6 +230,7 @@ async fn connect(canvas: OffscreenCanvas) -> Result<Gpu, String> {
         video: None,
         presenter: Presenter::new(),
         dirty: true,
+        renderer_name: adapter.get_info().name,
     })
 }
 
@@ -235,9 +240,9 @@ pub struct Status {
     state: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
-    /// Whether BC textures upload as stored.
+    /// WebGL 2's renderer string.
     #[serde(skip_serializing_if = "Option::is_none")]
-    bc: Option<bool>,
+    renderer: Option<String>,
     /// How BC textures reach the GPU: `bc`, `etc2` (transcoded) or `rgba8`
     /// (decoded).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -267,12 +272,7 @@ pub fn status() -> Status {
             state: "ready",
             message: None,
             textures: Some(gpu.renderer.texture_path().name()),
-            bc: Some(
-                gpu.renderer
-                    .device()
-                    .features()
-                    .contains(wgpu::Features::TEXTURE_COMPRESSION_BC),
-            ),
+            renderer: Some(gpu.renderer_name.clone()),
             format: Some(format!("{:?}", gpu.config.format)),
             size: Some([gpu.config.width, gpu.config.height]),
         })
@@ -287,7 +287,7 @@ pub fn status() -> Status {
             },
             message,
             textures: None,
-            bc: None,
+            renderer: None,
             format: None,
             size: None,
         }
