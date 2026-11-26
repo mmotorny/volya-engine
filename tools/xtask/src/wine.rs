@@ -10,7 +10,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::{ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 
 use crate::{Result, cmd, root, run, step};
 
@@ -103,30 +103,98 @@ fn centre_pixel(bmp: &[u8]) -> Option<u32> {
 }
 
 /// Runs `SETUP` then `tail` (a shell snippet given `args` as `$@`) in a new
-/// container with `dir` at /work; returns the container's exit code. The
-/// shell stays PID 1: `xvfb-run` as PID 1 never sees Xvfb's ready signal
-/// (measured: it hangs).
+/// container with `dir` at /work; returns the container's exit code.
 fn in_container(dir: &Path, tail: &str, args: &[&str]) -> Result<u8> {
-    let name = format!("volya-engine-wine-{}", std::process::id());
-    let session = Session::open(Some(&name))?;
-    if !quiet(&mut cmd("container", &["image", "inspect", IMAGE])) {
-        build_image()?;
-    }
-    let mount = format!("type=bind,source={},target=/work", dir.display());
-    let mut run = cmd("container", &["run", "--rm", "--progress", "none"]);
-    run.args(["--name", &name, "--cap-add", "ALL", "--memory", MEMORY])
-        .args(["--mount", &mount, "--workdir", "/work"]);
-    if std::env::var_os("WINEDEBUG").is_some() {
-        run.args(["--env", "WINEDEBUG"]);
-    }
-    let script = format!("{SETUP}{tail}");
-    run.args([IMAGE, "sh", "-c", &script, "sh"]).args(args);
-    let status = run.status().map_err(|e| format!("container: {e}"))?;
-    drop(session);
+    let mut container = Container::spawn(dir, tail, args, Stdio::inherit(), Stdio::inherit())?;
+    let status = container.wait()?;
     status
         .code()
         .and_then(|c| u8::try_from(c).ok())
         .ok_or_else(|| format!("container run ended with {status}"))
+}
+
+/// A container running `SETUP` then a shell snippet; stopped and deleted
+/// when dropped (or by the reaper if this process dies first).
+pub struct Container {
+    name: String,
+    child: Child,
+    session: Option<Session>,
+}
+
+impl Container {
+    /// Starts `SETUP` then `tail` (a shell snippet given `args` as `$@`) in a
+    /// new container with `dir` at /work, its output to `stdout` and
+    /// `stderr`. `WINEDEBUG` and `WINEDLLOVERRIDES` are passed through. The
+    /// shell stays PID 1: `xvfb-run` as PID 1 never sees Xvfb's ready signal
+    /// (measured: it hangs).
+    pub fn spawn(
+        dir: &Path,
+        tail: &str,
+        args: &[&str],
+        stdout: Stdio,
+        stderr: Stdio,
+    ) -> Result<Self> {
+        let name = format!("volya-engine-wine-{}", std::process::id());
+        let session = Session::open(Some(&name))?;
+        if !quiet(&mut cmd("container", &["image", "inspect", IMAGE])) {
+            build_image()?;
+        }
+        let mount = format!("type=bind,source={},target=/work", dir.display());
+        let mut run = cmd("container", &["run", "--rm", "--progress", "none"]);
+        run.args(["--name", &name, "--cap-add", "ALL", "--memory", MEMORY])
+            .args(["--mount", &mount, "--workdir", "/work"]);
+        for var in ["WINEDEBUG", "WINEDLLOVERRIDES"] {
+            if std::env::var_os(var).is_some() {
+                run.args(["--env", var]);
+            }
+        }
+        let script = format!("{SETUP}{tail}");
+        run.args([IMAGE, "sh", "-c", &script, "sh"]).args(args);
+        let child = run
+            .stdin(Stdio::null())
+            .stdout(stdout)
+            .stderr(stderr)
+            .spawn()
+            .map_err(|e| format!("container: {e}"))?;
+        Ok(Self {
+            name,
+            child,
+            session: Some(session),
+        })
+    }
+
+    /// The container's exit status if it has ended, without waiting.
+    pub fn try_wait(&mut self) -> Result<Option<ExitStatus>> {
+        self.child.try_wait().map_err(|e| format!("container: {e}"))
+    }
+
+    /// Waits for the container to end.
+    pub fn wait(&mut self) -> Result<ExitStatus> {
+        self.child.wait().map_err(|e| format!("container: {e}"))
+    }
+
+    /// Runs `args` in the running container; its standard output.
+    pub fn exec(&self, args: &[&str]) -> Result<Vec<u8>> {
+        let out = cmd("container", &["exec", &self.name])
+            .args(args)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .map_err(|e| format!("container exec: {e}"))?;
+        if out.status.success() {
+            Ok(out.stdout)
+        } else {
+            Err(format!("container exec {args:?}: {}", out.status))
+        }
+    }
+}
+
+impl Drop for Container {
+    fn drop(&mut self) {
+        // Stopping the container ends the `container run` child.
+        drop(self.session.take());
+        let _ = self.child.wait();
+    }
 }
 
 fn build_image() -> Result {
