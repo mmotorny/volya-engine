@@ -38,9 +38,7 @@ pub use wgpu;
 pub use wgpu::Color;
 pub use world::{World, WorldDraw, WorldFrame};
 
-/// Size of the UI space in units.
-pub const UI_WIDTH: f32 = 1024.0;
-pub const UI_HEIGHT: f32 = 768.0;
+pub use crate::shared::ui::*;
 
 /// Optional device features the renderer uses when the adapter has them:
 /// request these when creating the device.
@@ -50,31 +48,6 @@ pub fn device_features(adapter: &wgpu::Adapter) -> wgpu::Features {
             | wgpu::Features::TEXTURE_COMPRESSION_ETC2
             | wgpu::Features::TIMESTAMP_QUERY)
 }
-
-/// An axis-aligned rectangle: UI units for screen positions, texels for
-/// texture regions.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Rect {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-}
-
-impl Rect {
-    pub const fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
-        Self {
-            x,
-            y,
-            width,
-            height,
-        }
-    }
-
-    /// The whole UI space.
-    pub const SCREEN: Self = Self::new(0.0, 0.0, UI_WIDTH, UI_HEIGHT);
-}
-
 /// A texture the renderer can draw: cheap to clone (a handle).
 #[derive(Clone, Debug)]
 pub struct Texture {
@@ -123,57 +96,6 @@ impl Texture {
         }
     }
 }
-
-/// One textured rectangle.
-#[derive(Clone, Debug)]
-pub struct Quad {
-    /// Where to draw, in UI units.
-    pub rect: Rect,
-    pub texture: Texture,
-    /// The texture region to draw, in texels of the allocated texture.
-    pub source: Rect,
-    /// Multiplies the texel colour: RGBA, 255 = unchanged.
-    pub color: [u8; 4],
-    /// When set, the corners to draw at instead of `rect`, in UI units, in
-    /// the order top-left, top-right, bottom-right, bottom-left of `source`
-    /// (e.g. a rotated picture).
-    pub corners: Option<[[f32; 2]; 4]>,
-    /// When set, a colour per corner (in the order of `corners`) instead of
-    /// `color`, interpolated across the quad.
-    pub corner_colors: Option<[[u8; 4]; 4]>,
-}
-
-impl Quad {
-    /// The whole of `texture`, untinted.
-    pub fn new(rect: Rect, texture: &Texture) -> Self {
-        let (width, height) = texture.size();
-        Self {
-            rect,
-            texture: texture.clone(),
-            source: Rect::new(0.0, 0.0, width as f32, height as f32),
-            color: [255; 4],
-            corners: None,
-            corner_colors: None,
-        }
-    }
-}
-
-/// What to draw in one frame: the 3D world, if any, then the quads over
-/// it, back to front.
-#[derive(Clone, Debug, Default)]
-pub struct DrawList {
-    pub world: Option<WorldFrame>,
-    pub quads: Vec<Quad>,
-    /// The display's gamma ramp the picture is shown through
-    /// (docs/behavior/display-gamma.md): entry *i* / 65535 for channel
-    /// value *i*, the same for R, G and B; `None` for the identity.
-    pub ramp: Option<[u16; 256]>,
-}
-
-/// Bytes per vertex: position (2 × f32), texture coordinates (2 × f32),
-/// colour (4 × u8).
-const VERTEX_BYTES: u64 = 20;
-const VERTICES_PER_QUAD: u32 = 6;
 
 pub struct Renderer {
     device: wgpu::Device,
@@ -936,45 +858,7 @@ impl Renderer {
     /// quads sharing a texture, as (index of a quad with that texture, vertex
     /// range).
     fn upload_vertices(&mut self, list: &DrawList) -> Vec<(usize, Range<u32>)> {
-        let mut data = Vec::with_capacity(list.quads.len() * (VERTICES_PER_QUAD * 20) as usize);
-        let mut batches: Vec<(usize, Range<u32>)> = Vec::new();
-        for (i, quad) in list.quads.iter().enumerate() {
-            let (tw, th) = quad.texture.size();
-            let (r, s) = (quad.rect, quad.source);
-            let (u0, v0) = (s.x / tw as f32, s.y / th as f32);
-            let (u1, v1) = ((s.x + s.width) / tw as f32, (s.y + s.height) / th as f32);
-            let [tl, tr, br, bl] = quad.corners.unwrap_or([
-                [r.x, r.y],
-                [r.x + r.width, r.y],
-                [r.x + r.width, r.y + r.height],
-                [r.x, r.y + r.height],
-            ]);
-            // Two triangles: top-left, bottom-left, top-right; top-right,
-            // bottom-left, bottom-right.
-            let [ctl, ctr, cbr, cbl] = quad.corner_colors.unwrap_or([quad.color; 4]);
-            for ([x, y], u, v, color) in [
-                (tl, u0, v0, ctl),
-                (bl, u0, v1, cbl),
-                (tr, u1, v0, ctr),
-                (tr, u1, v0, ctr),
-                (bl, u0, v1, cbl),
-                (br, u1, v1, cbr),
-            ] {
-                for value in [x, y, u, v] {
-                    data.extend_from_slice(&value.to_le_bytes());
-                }
-                data.extend_from_slice(&color);
-            }
-            let end = (i as u32 + 1) * VERTICES_PER_QUAD;
-            match batches.last_mut() {
-                Some((first, range))
-                    if list.quads[*first].texture.bind_group == quad.texture.bind_group =>
-                {
-                    range.end = end;
-                }
-                _ => batches.push((i, end - VERTICES_PER_QUAD..end)),
-            }
-        }
+        let (data, batches) = quad_vertices(&list.quads, |a, b| a.bind_group == b.bind_group);
         if data.len() as u64 > self.vertices.size() {
             let quads =
                 (data.len() as u64 / (VERTEX_BYTES * VERTICES_PER_QUAD as u64)).next_power_of_two();
@@ -985,15 +869,6 @@ impl Renderer {
         }
         batches
     }
-}
-
-/// A world frame's distortion pass (particle-drawing.md 6.2).
-#[derive(Clone, Copy)]
-pub(crate) struct Distortion {
-    /// The frame has a distortion list (frame-presentation.md 3.1).
-    pub pass: bool,
-    /// The pass was drawn into the distortion target.
-    pub drawn: bool,
 }
 
 /// Draws `quads` in their `batches` from `vertices` into `pass`, with the

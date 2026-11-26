@@ -120,7 +120,7 @@ pub struct ZoneSection {
 /// A string key "if present": its value, `None` when absent. An empty
 /// value, which no shipped zone section has for these keys, is taken as
 /// absent (TODO(#330): unestablished, P9 10).
-fn optional(section: &Section, key: &str) -> Option<String> {
+fn optional(section: Section<'_>, key: &str) -> Option<String> {
     section
         .get(key)
         .flatten()
@@ -131,7 +131,7 @@ fn optional(section: &Section, key: &str) -> Option<String> {
 impl ZoneSection {
     /// Reads `section` as a zone of `behaviour` reads it. A required key
     /// that is missing is fatal (ltx-config.md): an error.
-    pub fn read(section: &Section, behaviour: Behaviour) -> io::Result<Self> {
+    pub fn read(section: Section<'_>, behaviour: Behaviour) -> io::Result<Self> {
         let name = section.name();
         let at = |e: io::Error| invalid(format!("[{name}]: {e}"));
         let float = |key: &str| section.read(key).map(value::float).map_err(at);

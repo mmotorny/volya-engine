@@ -99,6 +99,9 @@ const STAGE_BUDGETS: [(Stage, f64); 10] = [
 /// What the archive index keeps, MB: 1.3 measured, in 18 blocks (7.7 in
 /// 87,312 before #300).
 const INDEX_BUDGET: f64 = 2.0;
+/// What the configuration keeps, MB: 1.2 measured (5.6 in about 100,000
+/// blocks before #299).
+const CONFIG_BUDGET: f64 = 1.5;
 /// Any other stage's peak, MB.
 const OTHER_BUDGET: f64 = 0.5;
 /// The whole load's peak above its start, MB (72.8 measured with the
@@ -189,12 +192,17 @@ fn loading_stage_memory() {
     // What the steady level holds besides: the objects' geometry goes
     // once uploaded; the configuration and the string tables stay.
     let freed = |what: &str, f: &mut dyn FnMut()| {
-        let before = CURRENT.load(Ordering::Relaxed);
-        f();
-        eprintln!(
-            "{what}: {:.1} MB",
-            mb(before - CURRENT.load(Ordering::Relaxed))
+        let (before, blocks) = (
+            CURRENT.load(Ordering::Relaxed),
+            BLOCKS.load(Ordering::Relaxed),
         );
+        f();
+        let freed = mb(before - CURRENT.load(Ordering::Relaxed));
+        eprintln!(
+            "{what}: {freed:.1} MB in {} blocks",
+            blocks - BLOCKS.load(Ordering::Relaxed)
+        );
+        freed
     };
     freed("the objects' geometry until uploaded", &mut || {
         drop(screen.world().objects.take_geometry());
@@ -207,12 +215,15 @@ fn loading_stage_memory() {
         BLOCKS.load(Ordering::Relaxed) as isize - game_blocks.1 as isize
     );
     let (mut system, mut strings) = (Some(data.system), Some(data.strings));
-    freed(
+    let configuration = freed(
         "the configuration (system.ltx and its includes)",
         &mut || {
             drop(system.take());
         },
     );
+    if configuration > CONFIG_BUDGET {
+        eprintln!("  OVER BUDGET: the configuration keeps over {CONFIG_BUDGET} MB");
+    }
     freed("the string tables", &mut || drop(strings.take()));
     if mb(highest) > LOADING_BUDGET {
         eprintln!(

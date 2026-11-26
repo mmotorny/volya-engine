@@ -232,8 +232,15 @@ fn web(profile: Profile) -> Result {
     if release {
         command.arg("--release");
     }
-    if test_ops {
-        command.args(["--features", "test-ops"]);
+    // The direct WebGL 2 renderer instead of wgpu's (docs/architecture/
+    // rendering.md, Design: direct WebGL 2) with `VOLYA_RENDERER=gl`.
+    let gl = std::env::var("VOLYA_RENDERER").is_ok_and(|r| r == "gl");
+    let features: Vec<&str> = [test_ops.then_some("test-ops"), gl.then_some("gl")]
+        .into_iter()
+        .flatten()
+        .collect();
+    if !features.is_empty() {
+        command.args(["--features", &features.join(",")]);
     }
     run(&mut command)?;
     let wasm = format!("target/{WASM_TARGET}/{dir}/volya_engine_web.wasm");

@@ -63,7 +63,7 @@ pub struct TorchDefinition {
 
 impl TorchDefinition {
     /// From the `torch_definition` section; a missing key is an error.
-    pub fn read(s: &Section) -> io::Result<Self> {
+    pub fn read(s: Section<'_>) -> io::Result<Self> {
         let text = |key: &str| s.read(key).map(|v| value::unquote(v).to_owned());
         let float = |key: &str| s.read(key).map(value::float);
         let colour = |key: &str| s.read(key).map(value::floats::<4>);
@@ -114,7 +114,7 @@ pub struct TorchSection {
 
 impl TorchSection {
     /// From the torch's item section; a missing key is an error.
-    pub fn read(s: &Section) -> io::Result<Self> {
+    pub fn read(s: Section<'_>) -> io::Result<Self> {
         let text = |key: &str| s.read(key).map(|v| value::unquote(v).to_owned());
         let floats = |key: &str| s.read(key).map(value::floats::<3>);
         let night_vision = if s.get("night_vision").flatten().is_some_and(value::bool) {
@@ -176,7 +176,7 @@ pub struct Variant {
 
 /// The variants of sound key `key` (14): the lines `key`, `key1`, `key2`, …
 /// without a gap, each `name[, volume[, delay]]`; at least one is required.
-pub fn sound_variants(s: &Section, key: &str) -> io::Result<Vec<Variant>> {
+pub fn sound_variants(s: Section<'_>, key: &str) -> io::Result<Vec<Variant>> {
     let line = |k: &str| s.get(k).flatten();
     let mut out = Vec::new();
     let mut k = key.to_owned();
@@ -236,7 +236,7 @@ pub struct NightVisionSection {
 }
 
 impl NightVisionSection {
-    pub fn read(s: &Section) -> io::Result<Self> {
+    pub fn read(s: Section<'_>) -> io::Result<Self> {
         let [on, off, idle, broken] = NightVisionSound::ALL.map(|k| sound_variants(s, k.key()));
         let disabled_maps = s
             .get("disabled_maps")

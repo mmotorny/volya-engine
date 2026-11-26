@@ -157,14 +157,14 @@ pub struct Bobbing {
     pub limp_speed: f32,
 }
 
-fn required<'a>(section: &'a Section, key: &str) -> io::Result<&'a str> {
+fn required<'a>(section: Section<'a>, key: &str) -> io::Result<&'a str> {
     section
         .get(key)
         .flatten()
         .ok_or_else(|| invalid(format!("[{}] has no {key}", section.name())))
 }
 
-fn section<'a>(config: &'a Config, name: &str) -> io::Result<&'a Section> {
+fn section<'a>(config: &'a Config, name: &str) -> io::Result<Section<'a>> {
     config
         .section(name)
         .ok_or_else(|| invalid(format!("no section [{name}]")))

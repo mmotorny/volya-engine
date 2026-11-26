@@ -32,7 +32,7 @@ Where the engine's memory goes, by lifetime and owner; the design it follows (on
 | Owner | Live | Blocks | Notes |
 |---|---|---|---|
 | The archive tree (`DbVfs`: a region of every name once and a node table, each directory's children a sorted run) | 1.3 MB | 18 | 7.7 MB in 87,312 blocks as maps of paths before #300; building it peaks 7.0 MB above its start, one archive's table at a time. |
-| The system configuration (`Config`) | 5.6 MB | ~100,000 | A heap `Vec` per key and value; its text is 1.4 MB (#299). |
+| The system configuration (`Config`: one text buffer of every name, key and value; tables of sections, entries and each section's run of entry indices) | 1.2 MB | 4 | 5.6 MB in about 100,000 blocks, a heap string per key and value, before #299. |
 | The string tables | 1.8 MB | | |
 | The UI's data | 0.2 MB | | |
 | The particles' effect library (`particles.xr`) | 1.9 MB | 8,417 | Read with each level (`st_loading_ai_objects`), the same for every level. |
@@ -40,7 +40,7 @@ Where the engine's memory goes, by lifetime and owner; the design it follows (on
 | The audio worker's wasm instance | 2–4 MiB | | Its own heap (`level_stats`). |
 | JavaScript: the audio worker 3.1, the engine worker 2.0, the page 1.1–1.6, shared 0.9 MiB | 8 MiB | | Measured in headless Chrome after the New Game (two runs). The audio worker keeps the compressed sound files there (`JsFile`), not in a wasm heap. |
 
-The program's data holds about 118,000 of the heap's blocks before a game (measured: 453 with the archive tree, 118,460 with the game's data).
+The program's data holds about 18,000 of the heap's blocks before a game, 15,344 of them the string tables' (measured: 453 with the archive tree, 18,335 with the game's data).
 
 ### Session: a game, from its New Game to its end
 

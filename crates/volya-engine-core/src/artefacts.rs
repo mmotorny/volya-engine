@@ -82,7 +82,7 @@ pub struct ArtefactSection {
 impl ArtefactSection {
     /// Reads `section` as an artefact of `behaviour` reads it. A required
     /// key that is missing is fatal (ltx-config.md): an error.
-    pub fn read(section: &Section, behaviour: Behaviour) -> io::Result<Self> {
+    pub fn read(section: Section<'_>, behaviour: Behaviour) -> io::Result<Self> {
         let name = section.name();
         let at = |e: io::Error| invalid(format!("[{name}]: {e}"));
         let light = if value::bool(section.read("lights_enabled").map_err(at)?) {

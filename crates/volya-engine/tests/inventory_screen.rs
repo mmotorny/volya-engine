@@ -203,7 +203,7 @@ fn inventory_screen_from_game_data() {
     // the rest of it reads as an item; and the item reader agrees.
     let mut sections = 0;
     let mut outside = Vec::new();
-    let int = |s: &volya_engine::core::config::Section, key: &str| {
+    let int = |s: volya_engine::core::config::Section<'_>, key: &str| {
         s.get(key)
             .flatten()
             .and_then(|v| v.trim().parse::<i64>().ok())
