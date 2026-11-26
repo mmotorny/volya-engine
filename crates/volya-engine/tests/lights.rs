@@ -4,11 +4,10 @@
 //! The first level's lights on a New Game (BYOA): its hanging lamps
 //! (docs/behavior/hanging-lamps.md 9.3), their light records and the sun's
 //! (docs/behavior/dynamic-lights.md 3.1, 3.3, 10.1), the shader entries
-//! with light elements (10.1), the glows (docs/behavior/glows.md 7), and a
-//! lamp's light drawn against the same frame with
-//! `r1_dlights` off, with frame times. `VOLYA_DUMP_LIGHTS=<file.ppm>` and
-//! `VOLYA_DUMP_LIGHTS_OFF=<file.ppm>` write the frames locally. Skips when
-//! `VOLYA_GOG_INSTALLER` is unset.
+//! with light elements (10.1), the glows (docs/behavior/glows.md 7) and
+//! their occlusion rays, and the lights' cost per frame on the CPU. A
+//! lamp's light drawn is the render-level suite's (`selftest::lights`).
+//! Skips when `VOLYA_GOG_INSTALLER` is unset.
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -21,15 +20,13 @@ use std::time::Instant;
 use volya_engine::core::camera::Angles;
 use volya_engine::core::config;
 use volya_engine::core::input::Input;
-use volya_engine::core::lights::{LightKind, LightSettings, sun_b_direction};
+use volya_engine::core::lights::{LightKind, sun_b_direction};
 use volya_engine::core::vfs::db::DbVfs;
 use volya_engine::core::vfs::{self, StdVfs, Vfs};
 use volya_engine::data::GameData;
 use volya_engine::level::LevelScreen;
 use volya_engine::level_lights::{self, animated_colour};
-use volya_engine::present::Presenter;
 use volya_engine::render::world::LightProgram;
-use volya_engine::render::{Renderer, wgpu};
 use volya_engine::shading::{self, ShaderLibrary};
 use volya_engine_formats::level::Level;
 use volya_engine_formats::shaders_xr;
@@ -39,31 +36,6 @@ const SIZE: Resolution = Resolution::new(1024, 768);
 /// The placement table's tolerance: its values are given to 4 decimals and
 /// hold within 6·10⁻⁵ (hanging-lamps.md 9.3).
 const TABLE: f32 = 6e-5 + 5e-5;
-
-fn renderer() -> Renderer {
-    pollster::block_on(async {
-        let instance = wgpu::Instance::default();
-        let adapter = instance.request_adapter(&Default::default()).await.unwrap();
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                required_features: volya_engine::render::device_features(&adapter),
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm)
-    })
-}
-
-fn dump(var: &str, pixels: &[u8]) {
-    if let Some(path) = std::env::var_os(var) {
-        let mut ppm = format!("P6 {} {} 255\n", SIZE.width, SIZE.height).into_bytes();
-        for p in pixels.chunks(4) {
-            ppm.extend_from_slice(&p[..3]);
-        }
-        std::fs::write(path, ppm).unwrap();
-    }
-}
 
 fn with_game(f: impl FnOnce(&dyn Vfs, &GameData)) {
     let Some(archives) = gog_archives::archives() else {
@@ -373,81 +345,6 @@ fn look(eye: [f32; 3], at: [f32; 3]) -> Angles {
         pitch: (-d[1] / l).asin(),
         roll: 0.0,
     }
-}
-
-#[test]
-fn a_lamp_lights_the_level_from_game_data() {
-    with_game(|tree, data| {
-        // trader_tv_0000's light (range 3, cone 120°) on what is in front
-        // of it, seen from above and behind the set.
-        let (_, _, _, _, _, p, d) = LAMPS[3];
-        let at = [p[0] + 1.5 * d[0], p[1] - 0.4, p[2] + 1.5 * d[2]];
-        let eye = [p[0] - 0.6 * d[0], p[1] + 0.5, p[2] - 0.6 * d[2]];
-        let mut screen = LevelScreen::load(tree, data, 0).unwrap();
-        screen.set_effects_drawn(false);
-        screen.set_camera(eye, look(eye, at));
-        screen.update(16, &Input::new());
-        let mut r = renderer();
-        let mut presenter = Presenter::new();
-        let mut capture = |screen: &LevelScreen| {
-            let scene = screen.scene(SIZE, 16);
-            let list = presenter.draw_list(&mut r, tree, &scene, 16);
-            let start = Instant::now();
-            let pixels =
-                pollster::block_on(r.capture(&list, SIZE.width, SIZE.height, wgpu::Color::BLACK))
-                    .unwrap();
-            (pixels, scene, start.elapsed(), r.light_draws())
-        };
-        let _ = capture(&screen);
-        // The median of 9 frames' times.
-        let median = |mut t: Vec<std::time::Duration>| {
-            t.sort();
-            t[t.len() / 2]
-        };
-        let mut times = Vec::new();
-        for _ in 0..8 {
-            times.push(capture(&screen).2);
-        }
-        let (on, scene, t, draws) = capture(&screen);
-        times.push(t);
-        let t_on = median(times);
-        let passes = scene.world.as_ref().unwrap().lights.len();
-        let settings = LightSettings {
-            dlights: false,
-            ..LightSettings::default()
-        };
-        screen.set_light_settings(settings, 16);
-        // The same frame again (no time passes: the glows keep their
-        // fade), its light passes made anew.
-        screen.paused(16);
-        let mut times = Vec::new();
-        for _ in 0..8 {
-            times.push(capture(&screen).2);
-        }
-        let (off, scene_off, t, _) = capture(&screen);
-        times.push(t);
-        let t_off = median(times);
-        assert!(presenter.take_errors().is_empty());
-        assert!(scene_off.world.as_ref().unwrap().lights.is_empty());
-        dump("VOLYA_DUMP_LIGHTS", &on);
-        dump("VOLYA_DUMP_LIGHTS_OFF", &off);
-        let (mut brighter, mut darker) = (0, 0);
-        for (a, b) in on.chunks(4).zip(off.chunks(4)) {
-            let (sa, sb): (u32, u32) = (
-                a[..3].iter().map(|&c| u32::from(c)).sum(),
-                b[..3].iter().map(|&c| u32::from(c)).sum(),
-            );
-            brighter += usize::from(sa > sb + 3);
-            darker += usize::from(sb > sa + 3);
-        }
-        eprintln!(
-            "{passes} light passes drawing {draws} draws, {brighter} pixels \
-             brighter, {darker} darker; frame {t_on:.1?} with lights, {t_off:.1?} without"
-        );
-        assert!(passes >= 1);
-        assert!(brighter > 2_000, "{brighter} pixels lit");
-        assert!(darker < brighter / 50, "{darker} darker");
-    });
 }
 
 /// The lights' cost per frame on the CPU: the lamps' updates, the sun's

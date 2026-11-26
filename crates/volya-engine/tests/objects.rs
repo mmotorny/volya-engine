@@ -4,10 +4,10 @@
 //! The level's spawned objects on New Game from the Russian edition (BYOA):
 //! the verification facts of docs/behavior/level-objects.md section 7 (the
 //! online objects per class id, named objects' visuals, transforms and
-//! meshes, the invariants over every model file the records reference) and
-//! the start view rendered with and without them. `VOLYA_DUMP_OBJECTS=<file.ppm>`
-//! writes the start frame with objects locally. Skips when
-//! `VOLYA_GOG_INSTALLER` is unset.
+//! meshes, the invariants over every model file the records reference).
+//! Their drawing (the start view with and without them, an offline stalker
+//! drawn as the player walks) is the render-level suite's
+//! (`selftest::objects`). Skips when `VOLYA_GOG_INSTALLER` is unset.
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -23,8 +23,6 @@ use volya_engine::core::vfs::{StdVfs, Vfs, read};
 use volya_engine::data::GameData;
 use volya_engine::level::LevelScreen;
 use volya_engine::objects::{Instance, LightKind, locate_model};
-use volya_engine::present::Presenter;
-use volya_engine::render::{Renderer, wgpu};
 use volya_engine_formats::chunks::Chunks;
 use volya_engine_formats::game_graph::GameGraph;
 use volya_engine_formats::model::{Links, MeshType, Model, ModelType, transform_point};
@@ -42,21 +40,6 @@ fn with_game(test: impl FnOnce(&dyn Vfs, &GameData)) {
     let tree = DbVfs::open_game(&root, Some("mods")).unwrap();
     let data = GameData::read(&tree, None, SIZE).unwrap();
     test(&tree, &data);
-}
-
-fn renderer() -> Renderer {
-    pollster::block_on(async {
-        let instance = wgpu::Instance::default();
-        let adapter = instance.request_adapter(&Default::default()).await.unwrap();
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                required_features: volya_engine::render::device_features(&adapter),
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm)
-    })
 }
 
 #[track_caller]
@@ -527,59 +510,20 @@ fn level_objects_from_game_data() {
         );
 
         // Walking (offline-simulation.md 6.2): the stalker
-        // `esc_novice_attacker1`, loaded but offline, is drawn once the
-        // player is within 135 m and no longer beyond 165 m: what the
-        // presenter has the renderer draw (a draw's bounding radius of 0
-        // hides it).
+        // `esc_novice_attacker1`, loaded but offline, comes online once
+        // the player is within 135 m (its drawing is the render-level
+        // suite's).
         let sim = screen.simulation().unwrap();
         let o = sim.by_name("esc_novice_attacker1").unwrap();
         let (id, at) = (o.id, o.record.header.position);
         let k = objects.instances.iter().position(|i| i.id == id).unwrap();
         assert!(!objects.instances[k].online);
-        let draws: Vec<(usize, usize)> = objects
-            .draws
-            .iter()
-            .enumerate()
-            .map(|(j, d)| (j, d.instance))
-            .collect();
-        let mut gpu = renderer();
-        let mut presenter = Presenter::new();
-        // Per instance: whether the renderer draws any of its draws.
-        let mut drawn = |screen: &LevelScreen| -> Vec<bool> {
-            let list = presenter.draw_list(&mut gpu, tree, &screen.scene(SIZE, 0), 0);
-            let world = list.world.expect("the world").world;
-            let mut shown = vec![false; screen.world().objects.instances.len()];
-            for &(j, i) in &draws {
-                let sphere = world.draw_sphere(presenter.object_draw_index(j));
-                shown[i] |= sphere.is_some_and(|s| s[3] > 0.0);
-            }
-            shown
-        };
-        // From the first frame, only the online instances are drawn.
-        let first = drawn(&screen);
-        let with_draws: Vec<usize> = draws.iter().map(|d| d.1).collect();
-        for (i, instance) in screen.world().objects.instances.iter().enumerate() {
-            if with_draws.contains(&i) {
-                assert_eq!(first[i], instance.online, "{}", instance.name);
-            }
-        }
-        assert!(!first[k]);
         let report = screen.state().objects;
         assert_eq!((report.online, report.with_model), (671, 352));
-        let mut now = 0;
-        let mut walk = |screen: &mut LevelScreen, d: f32| {
-            screen.set_camera([at[0] - d, at[1] + 1.6, at[2]], Default::default());
-            now += 16;
-            screen.update(now, &Default::default());
-        };
-        walk(&mut screen, 130.0);
-        assert!(drawn(&screen)[k]);
+        screen.set_camera([at[0] - 130.0, at[1] + 1.6, at[2]], Default::default());
+        screen.update(16, &Default::default());
         let report = screen.state().objects;
         assert!(report.with_model > 352, "{report:?}");
-        walk(&mut screen, 160.0);
-        assert!(drawn(&screen)[k]);
-        walk(&mut screen, 170.0);
-        assert!(!drawn(&screen)[k]);
     });
 }
 
@@ -728,135 +672,5 @@ fn referenced_model_files_from_game_data() {
         );
         assert_eq!((vertices, indices), (931_510, 16_298_541));
         assert_eq!((unit, zero), (931_504, 6));
-    });
-}
-
-/// Projects world point `p` to pixel coordinates of a `SIZE` frame, if in
-/// front of the camera.
-fn project(view: &[[f32; 4]; 4], projection: &[[f32; 4]; 4], p: [f32; 3]) -> Option<(f32, f32)> {
-    let row = |v: [f32; 4], m: &[[f32; 4]; 4]| -> [f32; 4] {
-        std::array::from_fn(|c| (0..4).map(|k| v[k] * m[k][c]).sum())
-    };
-    let clip = row(row([p[0], p[1], p[2], 1.0], view), projection);
-    if clip[3] <= 0.0 {
-        return None;
-    }
-    let (x, y) = (clip[0] / clip[3], clip[1] / clip[3]);
-    Some((
-        (x + 1.0) / 2.0 * SIZE.width as f32,
-        (1.0 - y) / 2.0 * SIZE.height as f32,
-    ))
-}
-
-/// The start view with and without the objects: they show where section 3
-/// places them. Frame times are printed, not checked.
-#[test]
-fn start_view_shows_the_objects() {
-    with_game(|tree, data| {
-        let capture = |hide: bool| {
-            let mut screen = LevelScreen::load(tree, data, 0).unwrap();
-            if hide {
-                assert!(screen.hide_objects());
-            }
-            let mut gpu = renderer();
-            let mut presenter = Presenter::new();
-            let scene = screen.scene(SIZE, 0);
-            let list = presenter.draw_list(&mut gpu, tree, &scene, 0);
-            let pixels =
-                pollster::block_on(gpu.capture(&list, SIZE.width, SIZE.height, wgpu::Color::BLACK))
-                    .unwrap();
-            assert!(presenter.take_errors().is_empty());
-            let world = presenter.world().unwrap().clone();
-            const FRAMES: u32 = 10;
-            let start = Instant::now();
-            for _ in 0..FRAMES {
-                let list = presenter.draw_list(&mut gpu, tree, &scene, 0);
-                pollster::block_on(gpu.capture(&list, SIZE.width, SIZE.height, wgpu::Color::BLACK))
-                    .unwrap();
-            }
-            let frame = start.elapsed() / FRAMES;
-            eprintln!(
-                "objects {}: {frame:.1?} per frame with readback; object draws {}, GPU buffers {:.2} MiB, textures {:.2} MiB (all: {:.1} / {:.1} MiB)",
-                if hide { "hidden" } else { "shown" },
-                world.object_draw_count(),
-                world.object_gpu_bytes() as f64 / (1 << 20) as f64,
-                world.object_texture_bytes() as f64 / (1 << 20) as f64,
-                world.gpu_bytes() as f64 / (1 << 20) as f64,
-                world.texture_bytes() as f64 / (1 << 20) as f64,
-            );
-            (screen, pixels)
-        };
-        let (screen, with) = capture(false);
-        let (_, without) = capture(true);
-        if let Some(path) = std::env::var_os("VOLYA_DUMP_OBJECTS") {
-            let mut ppm = format!("P6 {} {} 255\n", SIZE.width, SIZE.height).into_bytes();
-            for p in with.chunks(4) {
-                ppm.extend_from_slice(&p[..3]);
-            }
-            std::fs::write(path, ppm).unwrap();
-        }
-        let differs = |x: usize, y: usize| {
-            let i = (y * SIZE.width as usize + x) * 4;
-            with[i..i + 3]
-                .iter()
-                .zip(&without[i..i + 3])
-                .any(|(a, b)| a.abs_diff(*b) > 8)
-        };
-        let changed = (0..SIZE.height as usize)
-            .flat_map(|y| (0..SIZE.width as usize).map(move |x| (x, y)))
-            .filter(|&(x, y)| differs(x, y))
-            .count();
-        eprintln!(
-            "{:.1} % of the start view changed by the objects",
-            100.0 * changed as f64 / f64::from(SIZE.width * SIZE.height)
-        );
-        // The changes lie where the objects are: within the screen square of
-        // each one's world sphere. The trader (behind his counter, his upper
-        // body in view) and the lamp on the counter, of section 7.2, show;
-        // every changed pixel is covered by the square of an object within
-        // the view.
-        let (view, projection) = screen.view_projection(SIZE.width, SIZE.height);
-        let eye = screen.state().eye;
-        let focal = projection[1][1] * SIZE.height as f32 / 2.0;
-        let mut squares = Vec::new();
-        for i in &screen.world().objects.instances {
-            let c = [i.sphere[0], i.sphere[1], i.sphere[2]];
-            let d = ((c[0] - eye[0]).powi(2) + (c[1] - eye[1]).powi(2) + (c[2] - eye[2]).powi(2))
-                .sqrt();
-            let Some((x, y)) = project(&view, &projection, c) else {
-                continue;
-            };
-            // Conservative: the sphere's radius at its centre's distance,
-            // less its radius, plus a pixel.
-            let r = focal * i.sphere[3] / (d - i.sphere[3]).max(0.1) + 1.0;
-            squares.push((i.name.clone(), x - r, y - r, x + r, y + r));
-        }
-        let changed_in = |s: &(String, f32, f32, f32, f32)| {
-            let (x0, y0) = (s.1.max(0.0) as usize, s.2.max(0.0) as usize);
-            let x1 = (s.3.max(0.0) as usize).min(SIZE.width as usize - 1);
-            let y1 = (s.4.max(0.0) as usize).min(SIZE.height as usize - 1);
-            (y0..=y1)
-                .flat_map(|y| (x0..=x1).map(move |x| (x, y)))
-                .filter(|&(x, y)| differs(x, y))
-                .count()
-        };
-        for name in ["escape_trader", "trader_light_0003"] {
-            let s = squares.iter().find(|s| s.0 == name).expect(name);
-            let n = changed_in(s);
-            eprintln!("{name}: {n} pixels changed in its square");
-            assert!(n > 500, "{name}: {n} pixels changed");
-        }
-        let outside = (0..SIZE.height as usize)
-            .flat_map(|y| (0..SIZE.width as usize).map(move |x| (x, y)))
-            .filter(|&(x, y)| differs(x, y))
-            .filter(|&(x, y)| {
-                let (x, y) = (x as f32, y as f32);
-                !squares
-                    .iter()
-                    .any(|s| x >= s.1 && x <= s.3 && y >= s.2 && y <= s.4)
-            })
-            .count();
-        assert_eq!(outside, 0, "changed pixels outside every object");
-        assert!(changed > 1000, "{changed} pixels changed");
     });
 }

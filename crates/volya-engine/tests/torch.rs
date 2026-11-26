@@ -5,10 +5,9 @@
 //! verification facts of section 17, the torch at the first level's start
 //! (12, 16), switched on with its key (its light records and glow, 3, 4,
 //! 7.4), night vision with the starting outfit (silent) and with one that
-//! has an effect (its sounds, 14, 15.2), the torch leaving its slot; and
-//! the level lit by it against the same view unlit.
-//! `VOLYA_DUMP_TORCH=<file.ppm>` and `VOLYA_DUMP_TORCH_OFF` write
-//! the frames locally. Skips when `VOLYA_GOG_INSTALLER` is unset.
+//! has an effect (its sounds, 14, 15.2), the torch leaving its slot. The
+//! level lit by it is the render-level suite's (`selftest::torch`). Skips
+//! when `VOLYA_GOG_INSTALLER` is unset.
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -25,8 +24,6 @@ use volya_engine::core::vfs::{self, StdVfs, Vfs};
 use volya_engine::data::GameData;
 use volya_engine::level::LevelScreen;
 use volya_engine::level_sound::LevelSounds;
-use volya_engine::present::Presenter;
-use volya_engine::render::{Renderer, wgpu};
 use volya_engine::torch::read_definition;
 use volya_engine_formats::lanims::ColourAnimations;
 use volya_engine_formats::model::{self, Model};
@@ -334,77 +331,5 @@ fn the_torch_on_a_new_game_from_game_data() {
         assert!(level.state().torch.is_none());
         assert!(level.lights().get(main).is_none());
         assert!(!playing(&system).iter().any(|(n, _, _)| n.contains("nv_")));
-    });
-}
-
-fn renderer() -> Renderer {
-    pollster::block_on(async {
-        let instance = wgpu::Instance::default();
-        let adapter = instance.request_adapter(&Default::default()).await.unwrap();
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                required_features: volya_engine::render::device_features(&adapter),
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm)
-    })
-}
-
-fn dump(var: &str, pixels: &[u8]) {
-    if let Some(path) = std::env::var_os(var) {
-        let mut ppm = format!("P6 {} {} 255\n", SIZE.width, SIZE.height).into_bytes();
-        for p in pixels.chunks(4) {
-            ppm.extend_from_slice(&p[..3]);
-        }
-        std::fs::write(path, ppm).unwrap();
-    }
-}
-
-#[test]
-fn the_torch_lights_the_level_from_game_data() {
-    with_game(|tree, data| {
-        let mut level = LevelScreen::load(tree, data, 0).unwrap();
-        level.set_effects_drawn(false);
-        let mut now = 0;
-        press(&mut level, &mut now, Key::L);
-        run(&mut level, &mut now, 1000);
-        let mut r = renderer();
-        let mut presenter = Presenter::new();
-        let mut capture = |level: &LevelScreen, now: u64| {
-            let scene = level.scene(SIZE, now);
-            let list = presenter.draw_list(&mut r, tree, &scene, now);
-            let pixels =
-                pollster::block_on(r.capture(&list, SIZE.width, SIZE.height, wgpu::Color::BLACK))
-                    .unwrap();
-            (pixels, scene.world.as_ref().unwrap().lights.len())
-        };
-        let _ = capture(&level, now);
-        let (lit, lit_passes) = capture(&level, now);
-        // Off with L: one frame later, the same view.
-        press(&mut level, &mut now, Key::L);
-        assert!(!level.state().torch.unwrap().on);
-        let _ = capture(&level, now);
-        let (unlit, unlit_passes) = capture(&level, now);
-        assert!(presenter.take_errors().is_empty());
-        dump("VOLYA_DUMP_TORCH", &lit);
-        dump("VOLYA_DUMP_TORCH_OFF", &unlit);
-        let (mut brighter, mut darker) = (0, 0);
-        for (a, b) in lit.chunks(4).zip(unlit.chunks(4)) {
-            let (sa, sb): (u32, u32) = (
-                a[..3].iter().map(|&c| u32::from(c)).sum(),
-                b[..3].iter().map(|&c| u32::from(c)).sum(),
-            );
-            brighter += usize::from(sa > sb + 3);
-            darker += usize::from(sb > sa + 3);
-        }
-        eprintln!(
-            "{lit_passes} light passes lit, {unlit_passes} unlit; \
-             {brighter} pixels brighter, {darker} darker"
-        );
-        assert_eq!(lit_passes, unlit_passes + 1);
-        assert!(brighter > 20_000, "{brighter} pixels lit");
-        assert!(darker < brighter / 50, "{darker} darker");
     });
 }

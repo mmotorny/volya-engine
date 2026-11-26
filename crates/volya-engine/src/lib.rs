@@ -39,6 +39,8 @@ pub mod present;
 pub mod save_load;
 pub mod saved_games;
 pub mod scene;
+#[cfg(feature = "render-selftest")]
+pub mod selftest;
 pub mod shading;
 pub mod sky;
 pub mod startup;

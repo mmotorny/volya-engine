@@ -5,7 +5,8 @@
 //! against docs/behavior/options-screens.md: its layout, strings and
 //! textures resolve, the controls sit where the spec puts them, the
 //! shipped user configuration file round-trips through the console, and a
-//! few controls work on the real data. Skips when `VOLYA_GOG_INSTALLER` is
+//! few controls work on the real data. Its drawing is the render-screens
+//! suite's (`selftest::options`). Skips when `VOLYA_GOG_INSTALLER` is
 //! unset.
 
 #![cfg(not(target_arch = "wasm32"))]
@@ -24,8 +25,6 @@ use volya_engine::core::vfs::db::DbVfs;
 use volya_engine::data::{Assets, DEFAULT_USER_LTX, GameData};
 use volya_engine::draw::Ctx;
 use volya_engine::options::{OptionsData, OptionsScreen, OptionsState, Page};
-use volya_engine::present::Presenter;
-use volya_engine::render::{Renderer, wgpu};
 use volya_engine_formats::ui::Resolution;
 use volya_engine_installer::{Installer, extract};
 
@@ -58,21 +57,6 @@ fn shipped_user_ltx() -> Vec<u8> {
     )
     .unwrap();
     data
-}
-
-fn renderer() -> Renderer {
-    pollster::block_on(async {
-        let instance = wgpu::Instance::default();
-        let adapter = instance.request_adapter(&Default::default()).await.unwrap();
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                required_features: volya_engine::render::device_features(&adapter),
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm)
-    })
 }
 
 struct Run<'a> {
@@ -124,19 +108,6 @@ impl Run<'_> {
             .find(|b| b.name == name)
             .unwrap();
         [b.rect[0] + b.rect[2] / 2.0, b.rect[1] + b.rect[3] / 2.0]
-    }
-}
-
-/// Writes the capture of `list` as a PPM when the variable `var` is set
-/// (kept locally, never committed).
-fn dump(var: &str, gpu: &mut Renderer, list: &volya_engine::render::DrawList) {
-    if let Some(path) = std::env::var_os(var) {
-        let pixels = pollster::block_on(gpu.capture(list, 1024, 768, wgpu::Color::BLACK)).unwrap();
-        let mut ppm = b"P6 1024 768 255\n".to_vec();
-        for p in pixels.chunks(4) {
-            ppm.extend_from_slice(&p[..3]);
-        }
-        std::fs::write(path, ppm).unwrap();
     }
 }
 
@@ -263,9 +234,7 @@ fn options_screen_from_game_data() {
     // (section 5.4).
     assert!(s.video_restart);
 
-    // Drawn: every texture loads.
-    let mut gpu = renderer();
-    let mut presenter = Presenter::new();
+    // The screen's scenes.
     let mut assets = Assets::default();
     let scene = |run: &Run, assets: &mut Assets| {
         let mut ctx = Ctx {
@@ -279,9 +248,6 @@ fn options_screen_from_game_data() {
     };
     let sc = scene(&run, &mut assets);
     assert!(sc.first("dialog").is_some() && sc.first("cursor").is_some());
-    let list = presenter.draw_list(&mut gpu, &tree, &sc, run.now);
-    assert_eq!(presenter.take_errors(), Vec::<String>::new());
-    dump("VOLYA_DUMP_OPTIONS", &mut gpu, &list);
 
     // The preset list: choosing "низкие" runs rspec_low.ltx at once
     // (section 8) and the advanced bars show it.
@@ -310,10 +276,7 @@ fn options_screen_from_game_data() {
     }
     assert_eq!(run.state().scroll[0], 78);
     assert_eq!(run.control("check_60hz").rect[1], 534.0);
-    let sc = scene(&run, &mut assets);
-    let list = presenter.draw_list(&mut gpu, &tree, &sc, run.now);
-    dump("VOLYA_DUMP_OPTIONS_ADVANCED", &mut gpu, &list);
-    assert_eq!(presenter.take_errors(), Vec::<String>::new());
+    scene(&run, &mut assets);
     // Escape returns to the basic page; Cancel undoes the preset.
     run.input.handle(Event::Key {
         key: Key::Escape,
@@ -331,10 +294,7 @@ fn options_screen_from_game_data() {
     run.screen
         .open(run.data, &mut run.console, XGA, run.now, [512.0, 384.0]);
     run.click(run.button("tab 3"));
-    let sc = scene(&run, &mut assets);
-    let list = presenter.draw_list(&mut gpu, &tree, &sc, run.now);
-    assert_eq!(presenter.take_errors(), Vec::<String>::new());
-    dump("VOLYA_DUMP_OPTIONS_CONTROLS", &mut gpu, &list);
+    scene(&run, &mut assets);
     let cell = run
         .state()
         .cells
@@ -356,23 +316,11 @@ fn options_screen_from_game_data() {
             .unwrap()
             .contains("bind forward kT\r\n")
     );
-    // Section 8.8 cost: frames with the controls tab open (the key table
-    // drawn), timed (native; a release build is the meaningful number).
+    // Section 8.8's cost of the controls tab's frames is the
+    // render-screens suite's.
     run.screen
         .open(run.data, &mut run.console, XGA, run.now, [512.0, 384.0]);
     run.click(run.button("tab 3"));
-    let start = std::time::Instant::now();
-    let frames = 100;
-    for _ in 0..frames {
-        run.input.handle(Event::PointerMoved { at: [700.0, 450.0] });
-        run.frame();
-        let sc = scene(&run, &mut assets);
-        presenter.draw_list(&mut gpu, &tree, &sc, run.now);
-    }
-    eprintln!(
-        "options frame (controls tab: update, scene, draw list): {:.3} ms",
-        start.elapsed().as_secs_f64() * 1000.0 / f64::from(frames)
-    );
     run.input.handle(Event::Key {
         key: Key::Escape,
         pressed: true,
@@ -565,9 +513,6 @@ fn options_screen_from_game_data() {
         "section 4.6's disabled rows"
     );
     assert_eq!(alpha(0), 255);
-    let list = presenter.draw_list(&mut gpu, &tree, &sc, run.now);
-    dump("VOLYA_DUMP_OPTIONS_RENDERERS", &mut gpu, &list);
-    assert_eq!(presenter.take_errors(), Vec::<String>::new());
     run.click(entry(2.0));
     tap(&mut run, entry(1.0));
     assert_eq!(run.state().open_list.as_deref(), Some("list_renderer"));

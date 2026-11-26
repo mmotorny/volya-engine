@@ -1309,10 +1309,8 @@ dependencies = [
  "bytemuck",
  "js-sys",
  "naga",
- "pollster",
  "tracing",
  "volya-engine-formats",
- "volya-engine-installer",
  "web-sys",
  "wgpu",
 ]

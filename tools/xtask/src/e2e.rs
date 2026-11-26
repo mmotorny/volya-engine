@@ -21,13 +21,22 @@ use super::{Profile, Result, cmd, next_build, output, root, run as run_cmd, step
 use crate::machine::SimulatorLock;
 
 const SUITES: &[&str] = &[
-    "smoke", "platform", "import", "audio", "render", "input", "menu",
+    "smoke",
+    "platform",
+    "import",
+    "audio",
+    "render",
+    "render-screens",
+    "render-level",
+    "draw-calls",
+    "input",
+    "menu",
 ];
 const TARGETS: &[&str] = &["chrome", "iphone"];
 /// Suites run in Chrome with the profile kept under `target/`, so the game
 /// data they read is imported once (they import only what the profile's
 /// storage lacks); the others get a fresh profile, as they test the import.
-const KEPT_PROFILE: &[&str] = &["render"];
+const KEPT_PROFILE: &[&str] = &["render", "render-screens", "render-level", "draw-calls"];
 const REPORT_TIMEOUT: Duration = Duration::from_secs(60);
 /// Suites importing gigabytes from the installer get longer (the audio
 /// suite takes about a minute in the iOS Simulator); the menu
@@ -35,6 +44,11 @@ const REPORT_TIMEOUT: Duration = Duration::from_secs(60);
 const SLOW_SUITES: &[(&str, Duration)] = &[
     ("menu", Duration::from_secs(1500)),
     ("render", Duration::from_secs(240)),
+    // The whole game imported on a profile's first run (minutes), then
+    // levels loaded by each check.
+    ("render-screens", Duration::from_secs(1500)),
+    ("render-level", Duration::from_secs(1500)),
+    ("draw-calls", Duration::from_secs(1500)),
     ("audio", Duration::from_secs(240)),
 ];
 
@@ -103,6 +117,10 @@ pub fn run(args: &[&str]) -> Result {
             Some(dir) => s.with_dumps(std::path::Path::new(&dir)),
             None => Ok(s),
         })
+        .and_then(|s| match std::env::var_os("VOLYA_COMPARE_DIR") {
+            Some(dir) => s.with_references(std::path::Path::new(&dir)),
+            None => Ok(s),
+        })
         .map_err(|e| format!("dev server: {e}"))?;
     let listener = listen()?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
@@ -162,7 +180,7 @@ fn kept_profile() -> PathBuf {
 /// The server's socket: on the port the kept profile last saw when it is
 /// free, as storage belongs to an origin, port included (else any port,
 /// remembered for the next run).
-fn listen() -> Result<TcpListener> {
+pub(crate) fn listen() -> Result<TcpListener> {
     let file = kept_profile().join("port");
     let kept = fs::read_to_string(&file)
         .ok()
@@ -179,7 +197,7 @@ fn listen() -> Result<TcpListener> {
     Ok(listener)
 }
 
-fn run_id(target: &str, suite: &str) -> String {
+pub(crate) fn run_id(target: &str, suite: &str) -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -202,12 +220,12 @@ fn wait_report(id: &str, reports: &Receiver<String>, timeout: Duration) -> Resul
     }
 }
 
-fn passed(report: &str) -> bool {
+pub(crate) fn passed(report: &str) -> bool {
     let mut lines = report.lines();
     lines.clone().any(|l| l.starts_with("ok ")) && !lines.any(|l| l.starts_with("fail "))
 }
 
-fn chrome(
+pub(crate) fn chrome(
     url: &str,
     id: &str,
     keep: bool,

@@ -29,6 +29,12 @@ pub enum Problem {
     Fail(String),
 }
 
+impl From<&str> for Problem {
+    fn from(message: &str) -> Self {
+        Self::Fail(message.into())
+    }
+}
+
 impl From<String> for Problem {
     fn from(message: String) -> Self {
         Self::Fail(message)
