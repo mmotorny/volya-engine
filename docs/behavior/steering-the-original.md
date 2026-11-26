@@ -5,7 +5,7 @@ through its normal inputs only — command-line options, the files it reads (fil
 files, a benchmark file, a demo list, camera-track files, game configuration), its console and console
 commands — so that it starts without dialogs at a chosen size and renderer, reaches gameplay, shows a chosen
 view, saves or holds the frame, and quits. Each fact cites its check `[ID]` (`steer/checks/run.py` in the
-dirty workspace).
+dirty workspace; the IDs PC-…, EX-…, RUN-2, RUN-3, CAM-7, DRP-… and LLS-… are in `steer549/checks.py`).
 
 Conventions:
 
@@ -16,8 +16,8 @@ Conventions:
 - Window details (style, placement, full-screen mode choice) are in `docs/behavior/display-mode.md`; this
   document only says which inputs select them.
 - Every fact is established from the shipped binaries and data (static analysis) unless marked
-  **measured**, **believed** (with why) or **unestablished**. No run of the game reached gameplay during this
-  investigation (Provenance), so the runtime sequence as a whole is not confirmed by observation.
+  **measured**, **believed** (with why) or **unestablished**. The first investigation had no run that
+  reached gameplay; facts marked measured come from later headless runs that did (Provenance).
 
 ## 1. Command line
 
@@ -173,7 +173,24 @@ Dialogs to avoid [CL-2, CL-3, CL-9]: the memory error box (`--skipmemcheck`), th
 | New Game | `start server(all/single/alife/new) client(localhost)` — what the menu's New Game runs (then `main_menu off`) [ST-2]; `all` is the spawn file `spawns\all.spawn` |
 | Load a save | `start server(<save>/single/alife/load) client(localhost)` — what the load menu runs when no game is running [ST-3]; the save is `<saves folder>\<save>.sav` [ST-3] |
 | Load a save during a game | `load <save>` [ST-3] |
+| Load a remembered save | `load_last_save <save>` (only remembers the name), then `load_last_save` (3.2.1) [LLS-1] |
 | A level without A-Life | `start server(<level>/single) client(localhost)`: the text before the first `/` is looked up as a level name; unknown → log `Can't find level: <name>` [ST-4] |
+
+#### 3.2.1 `load_last_save`
+
+[LLS-1] `load_last_save <name>` with an argument only remembers `<name>` (up to 519 characters) and does
+nothing else. `load_last_save` without an argument then runs `start server(<name>/single/alife/load)` (the
+client options become `localhost`, as above) when no world simulation exists, and `load <name>` when one does
+(**believed**: the value tested is the simulation's presence in the game's AI object; not traced further).
+With no name remembered it logs `! cannot load last saved game since it hasn't been specified`. It is an
+alternative route to goal 2 only: it places no camera. Example (configuration file lines, section 2.2, no
+`-start`):
+
+    load_last_save mysave
+    load_last_save
+
+starts the game from `<saves folder>\mysave.sav` (**believed** to behave as the `-start …alife/load…` form,
+whose command it runs; not measured).
 
 **Which level:** a New Game always starts in the actor's level of `spawns\all.spawn` (`l01_escape`,
 `docs/behavior/start-position.md`). Any other level is reached by loading a save made there. The
@@ -235,27 +252,98 @@ placed** at a chosen position by these inputs (other than where a New Game or a 
       view  = [ r.x u.x d.x 0 ; r.y u.y d.y 0 ; r.z u.z d.z 0 ; −e·r −e·u −e·d 1 ]
 
   for an orthonormal r, u, d. The game's own recorder (`demo_record`, 4.3) writes the same thing.
-- **Playback** [CAM-2, CAM-3]: one key per second. At time `s` since the start, with `k = floor(s)` and
+- **Playback** [CAM-2, CAM-3]: one key per second of **track time** (below). At track time `s`, with `k = floor(s)` and
   `t = s − k`, the four keys `k, k+1, k+2, k+3` (indices modulo the key count) are blended row by row with
   the Catmull-Rom weights `0.5(−t³+2t²−t)`, `0.5(3t³−5t²+2)`, `0.5(−3t³+4t²+t)`, `0.5(t³−t²)` (so at `t = 0`
   the result is key `k+1`); the blended matrix is inverted and its rows give the camera's up, direction and
   position. When `k` reaches the key count one cycle ends; after `<cycles>` cycles (missing or 0 → 1) the
-  track ends. Total time: cycles × key count seconds. A track whose keys are all equal holds **one fixed
-  view** for that long.
+  track ends. Total: cycles × key count seconds of track time. A track whose keys are all equal holds **one
+  fixed view** for that long. At its end the player's own camera returns.
+- **Track time** [PC-6, PC-7]: starts at 0 when the precache (4.2.1) has ended and advances each frame by the
+  game's frame time: 0.9 × the measured duration of the frame + 0.1 × the previous frame time, **at most
+  0.1 s**, and **0 while the game is paused**. So below 10 frames per second track time runs slower than real
+  time (at most 0.1 s per frame). No console command makes the frame time fixed [PC-7].
+- **A new `demo_play`** while a track runs replaces it: the running track is removed first [CAM-7]. The line
+  `* [DEMO] FPS: …` is logged when a track that has begun playing (after its precache) ends **or is
+  removed**, so this line alone does not show that a track ran to its end [CAM-7].
 - **Field of view:** a track changes only position and orientation (`docs/behavior/view-projection.md` §3.5);
   the player's field of view stays 67.5° vertical (unless the player is aiming). It cannot be set.
 - Worked example [CAM-6]: eye at the New Game start (−246.72630, −23.263261, −134.43387), yaw 1.3962544,
   pitch 0.0043165 (angles as in `docs/behavior/start-position.md` §5): d = (0.984797, −0.0043165, 0.173655),
   u = (0.0042509, 0.999991, 0.00074959), r = u × d (the camera's R·(1,0,0) of that document); the key is the `view` matrix above, written 1 or more times; `demo_play
-  start_eye,30` with that file as `savedgames\start_eye.xrdemo` holds the view for 30 × keys seconds. The
-  dirty workspace's generator `steer/run/mkdemo.py` writes such files.
+  start_eye,30` with that file as `savedgames\start_eye.xrdemo` holds the view for 30 × keys seconds of
+  track time, after the precache (4.2.1). The dirty workspace's generator `steer/run/mkdemo.py` writes such
+  files.
+
+#### 4.2.1 What playing a track does to the frame: the precache
+
+Every `demo_play` that finds its track (a key file of valid size, or an object animation) starts a
+**precache of 50 frames** [PC-1]; a missing file or a size that is not a multiple of 64 returns before it.
+(Loading a level precaches 30 frames, a device reset 20 [PC-8]; the interactive recorder, 4.3, none [PC-1].)
+While the precache runs:
+
+- **Every frame is cleared to black just before it is shown** [PC-3, PC-4]: after the scene and the HUD are
+  drawn, the loading-screen draw runs; the loading-screen picture is freed at the end of the level's own
+  precache and made again only when a level load begins, so outside a level load that draw clears the whole
+  render target to black instead. The **whole display is black, HUD included**, and a screenshot (section 5)
+  saves a black picture. This is the game's behaviour, not the environment's.
+- The track itself does nothing: its time does not advance and it does not set the camera [PC-6]. The device
+  camera instead turns about the vertical axis at its current position, through 2π × (frames left ÷ 50)
+  [PC-5] (not visible, the frames being black).
+- The sound level is 0 [PC-3]; a light (colour 255, 255, 255, range 5) is created at the camera position if
+  none exists [PC-2].
+- At the 50th frame [PC-3]: the gamma ramp is applied again, the light is removed, the sound level returns to
+  1, and the log gets `* MEMORY USAGE: <n> K`. From the next frame the scene shows and the track plays.
+
+The precache lasts **50 frames, not a fixed time**: about 1 s at 50 frames per second, **about 25 s at 2 frames
+per second** (measured under Wine and box64: averages of 1.4 to 8.9 frames per second in the `* [DEMO] FPS` lines).
+A new `demo_play` during a precache starts it again from 50 (the counter is set, not added to) [PC-2].
+Measured [RUN-3]: after `demo_play`, captures of the display are all black (every pixel 0) until
+`* MEMORY USAGE` is logged; after it the track's view shows, with the console closed and with it open.
+A display that "stays black after the track has ended" is a precache that has not ended: the track has not
+even started.
+
+The only input that skips the precache is the command-line switch `-gpu_ref`, which also makes the game ask
+Direct3D for the **reference device** instead of the hardware one [PC-2]; what that device does under Wine is
+**unestablished**, so it is not a way to capture views.
+
+#### 4.2.2 Holding a view for capture
+
+1. Write the track: N equal keys of the wanted view (4.2), e.g. N = 15.
+2. In a game (section 3), run `demo_play <name>,<cycles>`; the view then lasts cycles × N seconds of track
+   time.
+3. Wait until the precache has ended: until the display is no longer black, or until the log holds
+   `* MEMORY USAGE` after the `*** Playing demo: …` line (`flush` writes the log, section 2.3; the console
+   shows the same lines). A fixed wait must cover 50 frames at the slowest frame rate expected.
+4. Capture (section 5, or from outside) while track time is below cycles × N.
+5. Before quitting, let any precache end (section 7).
+
+Worked example, 2 frames per second (Wine and box64): `start_eye.xrdemo` with 15 equal keys, `demo_play
+start_eye,100`: black for 50 frames (about 25 s); then track time advances 0.1 s per frame (the cap), so the
+view holds for 100 × 15 = 1500 s of track time = 15000 frames, about 2 h 5 min of real time. At 60 frames per
+second the same track is black for about 0.8 s and then holds for 1500 s.
+
+Worked example, short track: `demo_play caged-lamp` (15 keys, 1 cycle) at 2 frames per second: black for
+about 25 s, then the view for 15 s of track time (150 frames, about 75 s), then the player's camera. Captures
+4 to 8 s after the command are black; a capture 30 s after it shows the view.
 
 ### 4.3 Recording a track interactively
 
 `demo_record <name>` (single-player, in a game) starts a free camera and writes `<saves folder>\<name>.xrdemo`
 (an existing file is replaced) [CAM-1, CAM-4]. Space stores the current view as a key, Esc ends recording,
 `` ` `` opens the console [CAM-5]; movement speeds come from `[demo_record]` in `config\system.ltx`
-[CAM-4]. The other movement keys are not specified here.
+[CAM-4]. The other movement keys are not specified here. The recorder starts **no precache** [PC-1], but it
+starts from the current view and is moved by keys and mouse, so it cannot be set to a given position and
+direction by numbers.
+
+**Designer commands** [DRP-1]: `demo_record_take_point`, `demo_record_clear_points`,
+`demo_record_use_points`, `demo_record_4step` and `demo_record_step` exist only when the command line
+contains `designer` (substring search, 1.1; e.g. `-designer`); otherwise they are unknown commands.
+`demo_record_take_point` widens a horizontal box (x, z) to include the current camera position and logs
+`Local BBox (…, …) - (…, …)`; `demo_record_clear_points` resets it; `demo_record_use_points 0|1`,
+`demo_record_4step 0|1` and `demo_record_step 0..3` choose whether that box, or one quarter of it, is the
+area of the recorder's top-down level-map picture. None of them places or steps the camera, so they are not a
+way to place a view.
 
 ### 4.4 Time of day
 
@@ -293,6 +381,9 @@ placed** at a chosen position by these inputs (other than where a New Game or a 
   same name (**believed** the second replaces the first). Example:
   `screenshots\ss_maksym_11-26-26_01-15-07_(l01_escape).jpg`. The `screenshot` command's argument is not used
   [SS-3].
+- **During a precache** (4.2.1) the saved picture is black (**measured** by the clean side: an F12 screenshot
+  in a track's first seconds was a black JPEG; explained by the black clear of every precache frame [PC-3,
+  PC-4]).
 - **Nothing in the inputs takes a screenshot without a key press or typed command.** Unattended capture is
   therefore either a key sent to the game window from outside, or capture of the window from outside while a
   camera track holds the view (4.2) — in a window, or full screen.
@@ -348,6 +439,14 @@ the expected sequence does not happen. The line needs a game started as well, e.
 - Benchmark mode quits by itself when a camera track ends (6.1).
 - Closing the window does not end the game (`docs/behavior/display-mode.md` A.2.1).
 - A normal exit rewrites the configuration file (2.2).
+- **Quitting during a precache** (4.2.1) crashes at exit [EX-1, RUN-2]: the precache's light is removed only at
+  the precache's last frame; still held at exit, it is released by an exit-time handler that calls into the
+  renderer's object, **believed** already gone then. Measured in 9 headless runs that ended with `quit`: the
+  3 that quit while a precache was pending (no `* MEMORY USAGE` after the last `*** Playing demo`) ended with
+  an unhandled access violation (exception code `c0000005`) in Wine's log; the 6 others (no track, or the
+  precache over) exited with code 0. **Exit code 5** is that exception code's low 8 bits, all a Linux process
+  exit status holds (**believed**: Wine passes the exception code on as the exit code; not checked here). So
+  wait for `* MEMORY USAGE` before `quit`.
 
 ## 8. Summary of what can and cannot be done
 
@@ -355,9 +454,9 @@ the expected sequence does not happen. The line needs a game started as well, e.
 |---|---|---|
 | 1 Start without dialogs, size, render settings | working folder `bin\`; `--skipmemcheck -silent_error_mode`; configuration file with `rs_fullscreen`, `vid_mode`, `renderer`, render settings | — |
 | 2 Level or New Game, reach gameplay | `-start server(all/single/alife/new) client(localhost)` or `…<save>/single/alife/load…` | any level other than `l01_escape` without a save made there (no-A-Life start unestablished); whether `-nointro` with `-start` opens the menu is unestablished |
-| 3 Position, direction, fov, time, weather | camera track file + `demo_play` (or `-demomode`); `sv_setweather`; start time from `config\alife.ltx` | moving the player; setting the fov (fixed 67.5°); `sv_setenvtime` in single player unestablished |
-| 4 Save or hold the frame | full screen + `screenshot` command or F12 → JPEG (TGA with `-ss_tga`) in the screenshots folder; or a held camera track for outside capture | a screenshot without a key press or typed command; screenshots in a window |
-| 5 Quit | `quit`; benchmark mode quits after its track | — |
+| 3 Position, direction, fov, time, weather | camera track file + `demo_play` (or `-demomode`), shown after its 50-frame black precache (4.2.1, 4.2.2); `sv_setweather`; start time from `config\alife.ltx` | moving the player; setting the fov (fixed 67.5°); placing a view with the recorder or its designer commands; `sv_setenvtime` in single player unestablished |
+| 4 Save or hold the frame | full screen + `screenshot` command or F12 → JPEG (TGA with `-ss_tga`) in the screenshots folder; or a held camera track for outside capture, after its precache | a screenshot without a key press or typed command; screenshots in a window; a picture during a precache (black) |
+| 5 Quit | `quit` once no precache is pending (else a crash at exit, exit code 5 under Wine); benchmark mode quits after its track | — |
 
 ## Provenance
 
@@ -374,12 +473,17 @@ the expected sequence does not happen. The line needs a game started as well, e.
   benchmark file was read, but within 150 s neither the demo list nor the camera track was opened [RUN-1] and
   no screenshot or log output resulted; the runs did not reach the menu or gameplay, so no behaviour above is
   confirmed by a run. That environment's failure is not specified as game behaviour.
+- Targeted fix (issue 549, 2026-11-26): static analysis with Ghidra of the camera-track start, the device's
+  precache, frame end, frame loop and frame time, the loading-screen draw, the camera-effect list, the
+  exit-time handlers, the Direct3D device creation, the recorder's designer commands and `load_last_save`.
+  Measured: the logs, Wine logs and display captures of 9 headless runs of the unmodified game (Wine 11 WoW64
+  under box64, Xvfb 1024 × 768, full screen, `renderer_r1`) made by the clean side with `cargo xtask original`
+  and kept in its local cache; most reached gameplay in a New Game, and four of them played camera tracks with
+  `demo_play`.
 - No leaked source code, derived engines, third-party documentation or recollection was used.
 
 ## Gaps found in review
 
 - New Game intro video (`intro_game`, 182.2 s per `docs/behavior/startup.md` §5): whether it ends by itself, whether it can be skipped by an input, and whether gameplay waits for it are not established; this affects the New Game route of 3.3.
-- The commands `demo_record_4step`, `demo_record_step`, `demo_record_take_point`, `demo_record_use_points` and `demo_record_clear_points` are registered and not specified; they may offer other ways to place or step the camera.
-- Whether the world (game time, weather, characters, scripted events, harm to the player) keeps running while a camera track holds a view, and whether pausing the game freezes it while the track still sets the camera, is not established.
+- Whether the world (game time, weather, characters, scripted events, harm to the player) keeps running while a camera track holds a view is not established; nor is whether the track still sets the camera while the game is paused (its track time then stands still, 4.2), or whether opening the console pauses a single-player game.
 - The configuration file name given with `-ltx` is held in a 64-byte buffer (at most 63 characters); what happens with a longer name is not established.
-- `load_last_save <save>` followed by `load_last_save` with no argument starts the game from that save (`start server(<save>/single/alife/load)`) when no game runs, and is believed to load it during a game; this alternative route for goal 2 is not described.
