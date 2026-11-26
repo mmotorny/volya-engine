@@ -141,8 +141,6 @@ impl Device for MixerDevice<'_> {
             pan: 0.0,
             category: Category::Scaled,
         };
-        // TODO(#309): resuming far into a long sound decodes up to the
-        // offset; seek by pages if it shows as a hitch.
         if let Some(id) = self.mixer.play_file(bytes, offset, playback) {
             *self.slot(voice) = Some(id);
         }

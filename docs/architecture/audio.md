@@ -24,8 +24,9 @@
 
 ## Decoder
 
-- `lewton` (MIT or Apache-2.0, pure Rust, runs in wasm); whether to keep it is #312. Symphonia is MPL-2.0 and so excluded; `vorbis_rs` wraps the C libvorbis.
-- `lewton` decodes a single-page stream's whole last block, so `VorbisStream` (`volya-engine-formats::audio`) ends its output at the last page's granule, the stream's end by the Vorbis I specification.
+- `lewton` (MIT or Apache-2.0, pure Rust, runs in wasm) decodes the packets that `VorbisStream` (`volya-engine-formats::audio`) reads with `ogg` (BSD-3-Clause); whether to keep it is #312. Symphonia is MPL-2.0 and so excluded; `vorbis_rs` wraps the C libvorbis.
+- `lewton` decodes a single-page stream's whole last block, so `VorbisStream` ends its output at the last page's granule, the stream's end by the Vorbis I specification.
+- A voice resumed far into its sound (sound-positional.md section 4.2) seeks to the last page whose first packet ends before the offset, found from the pages' headers and each packet's mode and window flags, and decodes from there. Decoding up to the offset is believed to have caused the single underruns of 260 to 380 ms in an iPhone's levels (#447): a 40 s offset decodes in about 30 ms natively. Granules aren't used for it: some of the game's files are off by 448 frames on some pages (measured).
 - The browser's `decodeAudioData` is not an option: Web Audio's contexts are `[Exposed=Window]`, not available to the engine worker, and WebKit reads Ogg Vorbis only from iOS 18.4 (documented: the Web Audio specification, WebKit's Safari 18.4 notes).
 
 ## Sounds by name
