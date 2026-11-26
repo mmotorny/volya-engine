@@ -388,7 +388,15 @@ pub fn frame(time: f64) {
     let sound_start = now();
     tracing::info_span!("sound").in_scope(|| audio::sound_frame(time));
     let sound = now() - sound_start;
+    let render_start = now();
     tracing::info_span!("render").in_scope(|| gpu::frame(time));
+    // For the statistics overlay (`rs_stats`), shown next frame.
+    engine::set_frame_times(volya_engine::statistics_overlay::FrameTimes {
+        engine_ms: sound_start - start,
+        render_ms: now() - render_start,
+        sound_ms: sound,
+        draws: gpu::last_draws(),
+    });
     input::end_frame();
     tracing::info_span!("textures").in_scope(textures::poll);
     #[cfg(feature = "test-ops")]

@@ -46,6 +46,7 @@ use crate::save_load::FieldFont;
 use crate::saved_games::SavedGames;
 use crate::scene::{Scene, Sprite, TextureId};
 use crate::startup::{MoviePlayer, MovieSequenceState, Startup};
+use crate::statistics_overlay::{FrameTimes, StatisticsOverlay};
 use crate::title_menu::{Opening, TitleMenu};
 use volya_engine_formats::pe::{self, Rgba};
 use volya_engine_formats::ui::Resolution;
@@ -477,6 +478,8 @@ pub struct App {
     /// Full screen to enter (true) or leave, asked of the page by a video
     /// restart ([`App::take_full_screen_request`]).
     full_screen_request: Option<bool>,
+    /// The statistics overlay of `rs_stats` (display-mode.md part B).
+    stats: StatisticsOverlay,
 }
 
 /// `r__supersample`, 1 … 4.
@@ -579,6 +582,8 @@ impl App {
         let video = video_mode(&console);
         let supersample = supersample(&console);
         let texture_list = TextureQuality::read_list(&data.system);
+        // Its `[evaluation]` lines are read at device creation (B.3).
+        let stats = StatisticsOverlay::new(&data.system)?;
         // The device is made once the user configuration has run (7.2).
         let samplers = SamplerStates::at_creation(&console);
         Ok(Self {
@@ -586,6 +591,7 @@ impl App {
             samplers,
             page_full_screen: None,
             full_screen_request: None,
+            stats,
             applied: console.generation(),
             console,
             screens: MenuScreens::default(),
@@ -1530,6 +1536,11 @@ impl App {
         TextureQuality::new(lod, self.texture_list.clone())
     }
 
+    /// Executes a console command (tests: Volya Engine has no console).
+    pub fn exec(&mut self, line: &str) {
+        self.console.exec(line);
+    }
+
     /// The console's settings.
     pub fn console(&self) -> &Console {
         &self.console
@@ -1565,12 +1576,32 @@ impl App {
             scene.texture_quality = self.texture_quality();
             scene.geometry_lod = self.console.number("r__geometry_lod");
         }
+        // display-mode.md B.1: over everything of the frame, measured only
+        // while on.
+        if self.console.on("rs_stats")
+            && let Ok(scene) = &mut scene
+        {
+            let camera = match &self.phase {
+                Some(Phase::Level { level, .. }) => level.state().eye,
+                _ => [0.0; 3],
+            };
+            self.stats.frame(self.frame_ms as f64 / 1000.0);
+            if let Err(e) = (self.stats).draw(tree, &self.data, &mut self.assets, scene, camera) {
+                self.failed.get_or_insert(e.to_string());
+            }
+        }
         if let Err(e) = &scene
             && e.kind() != io::ErrorKind::Unsupported
         {
             self.failed.get_or_insert(e.to_string());
         }
         scene
+    }
+
+    /// The platform's measurements of the frame just drawn, for the
+    /// statistics overlay (display-mode.md B.4.1).
+    pub fn set_frame_times(&mut self, times: FrameTimes) {
+        self.stats.measured(times);
     }
 
     fn compose_scene(&mut self, tree: &dyn Vfs, resolution: Resolution) -> io::Result<Scene> {

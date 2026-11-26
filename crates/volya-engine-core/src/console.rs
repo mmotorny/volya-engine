@@ -11,8 +11,8 @@
 //! `unbindall` edit the bindings (section 11.5). Setting `_preset` runs the
 //! preset's script (section 8).
 //!
-//! Volya Engine has only the variables of the options screen, and one that
-//! acts without a control (`r1_tf_mipbias`). Any other
+//! Volya Engine has only the variables of the options screen, and two that
+//! act without a control (`r1_tf_mipbias`, `rs_stats`). Any other
 //! `<name> <value>` line (the user file sets about 200 more, and the presets
 //! set some) is kept as written and saved again, so settings of systems
 //! Volya Engine lacks survive a round trip (our choice; the original knows
@@ -85,8 +85,8 @@ pub const PRESET_FILES: [&str; 5] = ["minimum", "low", "default", "high", "extre
 /// The difficulties of `g_game_difficulty`.
 pub const DIFFICULTIES: &[&str] = &["gd_novice", "gd_stalker", "gd_veteran", "gd_master"];
 
-/// The variables of section 7.2, with `r1_tf_mipbias`, which the options
-/// screen has no control for.
+/// The variables of section 7.2, with `r1_tf_mipbias` and `rs_stats`, which
+/// the options screen has no control for.
 pub const VARIABLES: &[VarDef] = &[
     VarDef {
         name: "renderer",
@@ -122,6 +122,8 @@ pub const VARIABLES: &[VarDef] = &[
     on_off("ai_use_torch_dynamic_lights", "on"),
     on_off("rs_v_sync", "off"),
     on_off("rs_refresh_60hz", "off"),
+    // display-mode.md A.1.
+    on_off("rs_stats", "off"),
     real("snd_volume_eff", 0.0, 1.0, "1"),
     real("snd_volume_music", 0.0, 1.0, "0.7"),
     on_off("snd_efx", "on"),
@@ -825,8 +827,8 @@ mod tests {
     fn counts() {
         assert_eq!(ACTIONS.len(), 77);
         assert_eq!(KEYS.len(), 129);
-        // Section 7.2's 31 and `r1_tf_mipbias`.
-        assert_eq!(VARIABLES.len(), 32);
+        // Section 7.2's 31, `r1_tf_mipbias` and `rs_stats`.
+        assert_eq!(VARIABLES.len(), 33);
     }
 
     #[test]

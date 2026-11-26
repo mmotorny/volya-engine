@@ -45,6 +45,7 @@ pub mod selftest;
 pub mod shading;
 pub mod sky;
 pub mod startup;
+pub mod statistics_overlay;
 pub mod title_menu;
 pub mod torch;
 pub mod ui_image;
