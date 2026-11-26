@@ -1742,32 +1742,8 @@ impl Renderer {
         EMITTED.set([0; 5]);
         let view_projection = multiply(&frame.view, &frame.projection);
         let l = &frame.light;
-        let tau = std::f32::consts::TAU;
         let t = frame.time;
-        let wind = {
-            let (x, z) = ((0.6283 * t).sin(), (0.6283 * t).cos());
-            let len = x.hypot(z).max(1e-9);
-            [0.005 * x / len, 0.0, 0.005 * z / len, 0.0]
-        };
-        let mut constants = Vec::with_capacity(FRAME_BYTES as usize);
-        push_mat(&mut constants, &view_projection);
-        push_mat(&mut constants, &frame.view);
-        push_vec4(
-            &mut constants,
-            vec4(frame.eye, ssa_min(size.0, size.1, frame.fov_y_degrees)),
-        );
-        push_vec4(&mut constants, vec4(frame.forward, 0.0));
-        push_vec4(&mut constants, vec4(l.ambient, 0.0));
-        push_vec4(&mut constants, vec4(l.hemi, 0.0));
-        push_vec4(&mut constants, vec4(l.sun_color, 0.0));
-        push_vec4(&mut constants, vec4(l.sun_dir, 0.0));
-        push_vec4(
-            &mut constants,
-            fog_plane(&view_projection, l.fog_near, l.fog_far),
-        );
-        push_vec4(&mut constants, vec4(l.fog_color, 0.0));
-        push_vec4(&mut constants, [0.1 / tau, 0.01 / tau, 0.11 / tau, t / tau]);
-        push_vec4(&mut constants, wind);
+        let constants = frame_constants(frame, &view_projection, size);
         self.queue.write_buffer(&inner.frame, 0, &constants);
         let sky = inner.sky.as_ref().zip(frame.sky.as_ref());
         if let Some((resources, sky_frame)) = sky {
@@ -2060,11 +2036,7 @@ impl Renderer {
                 continue;
             }
             let at = i * LIGHT_SLOT as usize;
-            let mut bytes = Vec::with_capacity(112);
-            push_vec4(&mut bytes, l.position);
-            push_vec4(&mut bytes, l.colour);
-            push_mat(&mut bytes, &l.xform);
-            push_vec4(&mut bytes, [f32::from(u8::from(l.spot)), 0.0, 0.0, 0.0]);
+            let bytes = light_constants(l);
             constants[at..at + bytes.len()].copy_from_slice(&bytes);
             out.push((at as u32, l.spot, draws));
         }
