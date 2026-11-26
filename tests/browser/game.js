@@ -14,8 +14,8 @@
 import { assert, assertEqual, skip } from "./harness.js";
 
 // What docs/behavior/startup.md and title-menu.md read (found by the native
-// game-data test), plus the splash's executable and the default user
-// settings.
+// game-data test), plus the splash's executable, the default user
+// settings and the install script.
 export const ONLY = [
   // The levels (a New Game's level, docs/behavior/level-loading.md).
   "gamedata.db0",
@@ -32,6 +32,8 @@ export const ONLY = [
   "gamedata.dbd",
   "bin/XR_3DA.exe",
   "__support/userdocs/user.ltx",
+  // Its `InstallVers` is the title menu's version (title-menu.md 3.4).
+  "goggame-1207660573.script",
 ];
 // The wasm heap never shrinks: its size after a New Game is the page's for
 // good. Measured at 98 MiB in headless Chrome after one and after two New

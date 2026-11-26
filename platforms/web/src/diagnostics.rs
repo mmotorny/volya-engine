@@ -158,7 +158,8 @@ pub fn on() -> bool {
 /// The `diagnostics_set` op: turns logging on or off (the player's
 /// setting). On, the session's recorder starts (the first time in this run:
 /// `page` is what the page tells of it, a JSON object: `version`,
-/// `user_agent`, `screen`, `dpr`, `cores`) and the log's store opens, and
+/// `user_agent`, `screen`, `dpr`, `cores`, `navigation`, `restored_reload`,
+/// `display_mode`) and the log's store opens, and
 /// `previous_end` (the `engine.end` an earlier session's page kept as it
 /// closed: `{pid, cat, ts, reason, message}`) is added to the log unless
 /// that session stored its own. Off, the period so far is stored,

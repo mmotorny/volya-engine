@@ -1,6 +1,6 @@
 # Memory
 
-Where the engine's memory goes, by lifetime and owner; the design it follows (one heap, owners that hold few large blocks, no level's resources outliving it); the order of the work. Numbers are for a New Game of `l01_escape` on the Russian edition unless a level is named, and are marked measured (with where), documented (with the source) or believed. MB is 10^6 bytes (native counts), MiB 2^20 (the browser's heap).
+Where the engine's memory goes, by lifetime and owner; the design it follows (one heap, owners that hold few large blocks, no level's resources outliving it); the open steps. Numbers are for a New Game of `l01_escape` on the Russian edition unless a level is named, and are marked measured (with where), documented (with the source) or believed. MB is 10^6 bytes (native counts), MiB 2^20 (the browser's heap).
 
 ## Limits
 
@@ -19,84 +19,88 @@ Where the engine's memory goes, by lifetime and owner; the design it follows (on
 | `heap_log` op (test builds) | browser | The wasm heap and the most live under each loading caption. |
 | `heap_map` op (test builds) | browser | Live KiB per MiB of the heap and every live block of 256 KiB or more, by address. |
 | `heap_record` op (test builds) | browser | At the load's most live: live bytes by block size and the largest blocks; every allocation that grew the wasm memory since the reset, by size and address. |
-| `level_stats` op | browser | The wasm heaps (engine, audio worker) and the GPU world's buffers and textures. |
-| `game-level` and `game-memory` suites' JS memory | Chrome | `performance.measureUserAgentSpecificMemory()` after the New Game (cross-origin isolated pages only, documented, MDN): each context's JavaScript, the wasm memories not among it (measured: 8 MiB in all beside a 87 MiB heap). |
+| `level_stats` op | browser | The wasm heaps (engine, audio worker); the GPU world's buffers and textures; everything the context holds (`gpu_live`), split into the level's (`gpu_level`) and what the renderer keeps across games (`gpu_kept`). |
+| `game-level` and `game-memory` suites' JS memory | Chrome | `performance.measureUserAgentSpecificMemory()` after the New Game (cross-origin isolated pages only, documented, MDN): each context's JavaScript, the wasm memories not among it. |
 | `footprint` of the Simulator's processes | iOS Simulator | Per-process footprints; ETC2 textures there are held as RGBA8, so they don't show the device's (#443). |
 
-`cargo xtask e2e chrome game-level game-memory` reports the browser's numbers; the native tests run with `VOLYA_GOG_INSTALLER` (release build for meaningful counts).
+`cargo xtask e2e chrome game-level game-memory render-level` reports the browser's numbers; the native tests run with `VOLYA_GOG_INSTALLER` (release build for meaningful counts).
 
 ## Inventory
 
+Native figures: `loading_memory.rs` and `level_memory.rs`, release, requested bytes (the allocator's overhead not in them). Browser figures: headless Chrome, one run of `game-level`, `game-memory` and `render-level`.
+
 ### Program: from the launch to closing the page
 
-| Owner | Live | Blocks | Notes |
-|---|---|---|---|
-| The archive tree (`DbVfs`: a region of every name once and a node table, each directory's children a sorted run) | 1.3 MB | 18 | 7.7 MB in 87,312 blocks as maps of paths before #300; building it peaks 7.0 MB above its start, one archive's table at a time. |
-| The system configuration (`Config`: one text buffer of every name, key and value; tables of sections, entries and each section's run of entry indices) | 1.2 MB | 4 | 5.6 MB in about 100,000 blocks, a heap string per key and value, before #299. |
-| The string tables (`StringTable`: one buffer of every key and text, the entries sorted by key) | 1.2 MB | 2 | 1.8 MB in 15,344 blocks, a map of heap strings, before #484. |
-| The UI's data | 0.2 MB | | |
-| The particles' effect library (`particles.xr`, `Library`: one buffer of every name, a table of every effect's actions and one of every group's members) | 1.4 MB | 1,095 | Read once at launch (`GameData`); with each level under `st_loading_ai_objects` before #484, 1.9 MB in 8,411 blocks. Its blocks are the boxed `source` actions. |
-| The renderer and its programs; the menus' textures and video frames | about 6 MiB | | The title menu's heap is 18 MiB with 11 live against 5 after the launch (measured, the `menu` suite in headless Chrome). |
-| The audio worker's wasm instance | 2–4 MiB | | Its own heap (`level_stats`). |
-| JavaScript: the audio worker 3.1, the engine worker 2.0, the page 1.1–1.6, shared 0.9 MiB | 8 MiB | | Measured in headless Chrome after the New Game (two runs). The compressed sound files are there, not in a wasm heap: the engine worker reads each into a JavaScript array a piece at a time and the audio worker keeps it (#491). |
+| Owner | Live | Blocks |
+|---|---|---|
+| The archive tree (`DbVfs`: a region of every name once and a node table, each directory's children a sorted run); building it peaks 7.0 MB above its start, one archive's table at a time | 1.3 MB | 18 |
+| The system configuration (`Config`: one text buffer of every name, key and value; tables of sections, entries and each section's run of entry indices) | 1.2 MB | 4 |
+| The string tables (`StringTable`: one buffer of every key and text, the entries sorted by key) | 1.2 MB | 2 |
+| The particles' effect library (`particles.xr`, `Library`: one buffer of every name, a table of every effect's actions and one of every group's members), read once at launch (`GameData`); its blocks are the boxed `source` actions | 1.4 MB | 1,095 |
+| The UI's data | 0.2 MB | |
+| The renderer and its programs; the menus' textures and video frames | about 6 MiB (believed) | |
+| The audio worker's wasm instance | 2 MiB | |
+| JavaScript: the audio worker 2.9, the page 1.4–1.8 (and its canvas 0.9), the engine worker 1.6, shared 0.7 MiB | 8 MiB | |
 
-The program's data holds about 4,100 of the heap's blocks before a game, 1,095 of them the effect library's (measured: 453 with the archive tree, 4,088 with the game's data).
+All measured natively but the last three (`level_stats`, JS memory). The program's data holds 4,087 of the heap's blocks before a game (452 with the archive tree alone). The compressed sound files are in JavaScript, not a wasm heap: the engine worker reads each into a JavaScript array a piece at a time (256 KiB) and the audio worker keeps it (#491). Before the first New Game the engine's heap is 16 MiB with 11 live (measured, `game-level`).
 
 ### Session: a game, from its New Game to its end
 
-The offline simulation's registry (6.3 MB, 54,735 blocks), the game graph and paths (1.8 MB) and the player character, made under `st_server_connecting`: 15.6 MB with the current level's navigation (below), 83,763 blocks, from 537,042 allocations (measured, native). Of the registry, the slot table of 8,646 objects of 392 bytes is about 3.4 MB in one block (448 bytes before #498: the rare large kinds, among them the crows, the visual anomalies and the trader, and every skeleton's saved bone state, which no New Game record has, are now boxed); the records' own strings and lists (every kind's names, section, custom data, restrictions, character fields) 2.4 MB in 51,204 blocks, the section and the name alone 17,282 of them; travel 0.2 MB in 2,698. The switch predicates' inputs kept per object held a copy of its class id, section and name until #485 (25,923 blocks, 1.0 MB). The script runtime's state joins this lifetime when the game's scripts run (`lua_alloc` is Rust's allocator, docs/architecture/scripts.md).
+The offline simulation's registry (6.3 MB, 54,735 blocks), the game graph and paths (1.8 MB) and the player character, made under `st_server_connecting`: 15.6 MB with the current level's navigation (below), 83,764 blocks, from 537,041 allocations (measured, native). Of the registry, the slot table of 8,646 objects of 392 bytes is about 3.4 MB in one block (the rare large kinds, among them the crows, the visual anomalies and the trader, and every skeleton's saved bone state, which no New Game record has, are boxed, #498); the records' own strings and lists (every kind's names, section, custom data, restrictions, character fields) 2.4 MB in 51,204 blocks, the section and the name alone 17,282 of them; travel 0.2 MB in 2,698. The switch predicates' inputs hold no copy of a record's names (#485). The script runtime's state joins this lifetime when the game's scripts run (`lua_alloc` is Rust's allocator, docs/architecture/scripts.md).
 
 ### Level: from its loading to leaving it
 
 | Owner | `l01_escape` | The largest level |
 |---|---|---|
-| The collision world (vertices, triangles, each triangle's material and sector in 2 bytes, tree) | 29.4 MB in 4 blocks (largest 10.5 MiB) | 44.5 MB, `l11_pripyat`; 39.4 `l10_radar`, 34.4 `l07_military` |
+| The collision world (vertices, triangles, each triangle's material and sector in 2 bytes (#490), tree) | 29.4 MB in 4 blocks (largest 10.5 MiB) | 44.5 MB, `l11_pripyat`; 39.4 `l10_radar`, 34.4 `l07_military` |
 | The navigation positions (6 of each vertex's 21 bytes) | 7.1 MB, one block (`level.ai` 12.5 MB) | `l01_escape`'s `level.ai` is the largest |
-| What the `level` file keeps after `st_loading_spatial_db` (the shader table; the static draw list and spheres) | 1.8 MB | |
-| The detail objects (slot grid, compact, and cache) | 5.5 MB | 11.9 MB, `l12_stancia` and `l12_stancia_2` |
-| The objects' models, weather, the level's sounds | 6.3 MB, 6,800 blocks | |
-| The objects' CPU geometry until uploaded | 4.9 MB | |
-| The level in all at the end of loading | 63.5 MB, 128,169 blocks above the program's data | `l11_pripyat` about 72 MB (believed: `l01_escape`'s with its own collision, details and navigation file) |
+| What the `level` file's stages keep (the shader table; the static draw list and spheres) | 3.4 MB | |
+| The detail objects (slot grid, compact, and cache) | 5.6 MB | 11.9 MB, `l12_stancia` and `l12_stancia_2` |
+| The objects' models, weather, the level's sounds, with the objects' CPU geometry until uploaded (4.9 MB, one block) | 6.4 MB, 6,743 blocks | |
+| The load in all at its end, the session included | 62.3 MB, 106,412 blocks above the program's data | `l11_pripyat` about 70 MB (believed: `l01_escape`'s with its own collision, details and navigation file) |
 
-Measured natively (`loading_memory.rs`, `level_memory.rs`; requested bytes, the allocator's overhead not in them). After the level is dropped, 29.4 MB and 4 blocks outlive it: the collision world's arrays, kept as spares for the next world (#357).
+Measured natively. After the level is dropped, 29.4 MB in 7 blocks outlive it: the collision world's arrays, kept as spares for the next world (#357).
 
 ### Loading transients
 
-Each stage's peak above what it keeps, measured natively: `st_opening_stream` 4.8 MB (the `level` file read whole, 12.6 MB peak; 12.9 for `l11_pripyat`), `st_loading_spatial_db` 5.4, `st_client_spawning` 4.7, `st_loading_textures` 2.8, `st_loading_cform` 0.2, `st_server_connecting` 0.0 (the spawn file and the graph streamed, #403). The load peaks 67.6 MB above its start against 63.5 kept. By count the transients are the many: `st_client_spawning` makes 2.52 million allocations to keep 6,800 blocks, `st_server_connecting` 536,685 to keep 83,406.
+Each stage's peak above its start and what it keeps, measured natively (MB): `st_server_connecting` 15.6 and 15.6 (the spawn file and the graph streamed, #403); `st_opening_stream` 12.6 and 7.9 (the `level` file read whole; 12.9 for `l11_pripyat`); `st_loading_cform` 30.3 and 30.1; `st_loading_spatial_db` 5.4, freeing 4.5; `st_loading_details` 5.6 and 5.6; `st_client_spawning` 11.0 and 6.4; `st_loading_textures` 2.4 and 0.3. The load peaks 66.2 MB above its start against 62.3 kept. By count the transients are the many: `st_client_spawning` makes 2.52 million allocations to keep 6,743 blocks, `st_server_connecting` 537,041 to keep 83,764.
 
 In the browser the level's preparation adds the texture read buffer (one file, up to 4.5 MB) and the band being transcoded (without BC); WebGL copies what is written at each call (docs/architecture/rendering.md).
 
 ### Frame
 
-A frame of the running level, on the wasm heap (the `render-level` suite, 600 frames after 60): 39 allocations and 63 KB (at most 161): the update 20.2 and 11.8 KB, the sounds 0.0, the scene 10.0 and 26.5 KB, the draw list 9.1 and 24.8 KB; live memory grew 0.48 MB over the 600 frames. Before #488 it was 324 allocations and 433 KB (the scene 237.8, nearly all of it the particles' sprites), and the camera pass of #466 took the update from 29 to 84 a frame; the passes' lists, the lights', glows' and simulation's, the effects drawn and the particle sprites' scratch are now kept and cleared (natively over 200 frames: the update 85 → 13, the scene 339 → 9). What is left (each particle draw's own vertex list, the details' frame, the draw list) needs the scene and the renderer to share kept buffers (#516). In the browser the heap stays flat while the level runs (87 MiB before and while the intro plays), so the frame's blocks reuse their own holes. On an iPhone it grew while a level ran (74.9 → 78 MiB about 110 s into the first game, 82 → 86.6 about 180 s into the second; its diagnostic log): at the level's first music track, `music\amb01` about 180 s into a New Game, whose two files (7.6 MB) were read whole into the heap until #491 (measured in the iOS Simulator: the most live 62.2 → 69.8 MiB at its start, unchanged after #491), and under the in-game menu, which holds 5.7 MB more while it shows (measured there; believed its videos' read-ahead windows and decoders, made again at each opening).
+A frame of the running level, on the wasm heap (the `render-level` suite, 600 frames after 60): 39 allocations and 63 KB (at most 161): the update 20.2 and 11.8 KB, the sounds 0.0, the scene 10.0 and 26.5 KB, the draw list 9.1 and 24.8 KB; live memory grew 0.48 MB over the 600 frames. The passes' lists (the camera pass's dynamic items among them), the lights', glows' and simulation's, the effects drawn and the particle sprites' scratch are kept and cleared (#488). In the browser the heap stays flat while the level runs (74 MiB before the intro, while it plays and after 20 s of walking), so the frame's blocks reuse their own holes.
+
+On an iPhone the heap grew while a level ran (74.9 → 78 MiB about 110 s into the first game, 82 → 86.6 about 180 s into the second; its diagnostic log): at the level's first music track (`music\amb01`, whose files no longer pass through the heap, #491; in the iOS Simulator the most live went 62.2 → 69.8 MiB at its start before and after that change) and under the in-game menu, which holds 5.7 MB more while it shows (measured there; believed its videos' read-ahead windows and decoders, made again at each opening, #517).
 
 ### The GPU
 
 | Owner | `l01_escape` | The largest level |
 |---|---|---|
-| The level's textures, as stored (BC) | 127 MiB (133.3 MB; the objects' 23.6 MB of it; 458 textures) | Its surfaces' alone: 91.2 MB `l07_military`, 83.3 for `l01_escape` |
-| The level's buffers (geometry, the objects', draw records) | 55.3 MB (the objects' 6.3) | `level.geom` 109.7 MB `l12_stancia_2` against 57.0 |
-| Render targets: the supersampled target and its Depth32Float depth, the video mode's frame, the surface | about 90 MB at 2868 × 1320 with `r__supersample` 2 (believed: computed from their sizes) | |
+| The level's textures, as stored (BC) | 127 MiB (the objects' 22.5 MiB of it; 458 textures) | Its surfaces' alone: 91.2 MB `l07_military`, 83.3 for `l01_escape` |
+| The level's buffers (geometry, the objects', draw records) | 52.7 MiB (the objects' 6.0) | `level.geom` 109.7 MB `l12_stancia_2` against 57.0 |
+| The level in all (`gpu_level`) | 461 textures, 133 MiB; 59 buffers, 60 MiB; 47 vertex arrays | |
+| Kept by the renderer (`gpu_kept`): its frame targets, the supersampled target and its depth, the world's depth, the UI's, particles' and lights' buffers | 11 textures, 11 MiB; 7 buffers, 2 MiB, at 1024 × 768; 48 MiB of textures after a game at 2868 × 1320 back at 1024 × 768 (#518) | |
 | The canvas's drawing buffers | up to 3 at canvas size, 15 MB each at 2868 × 1320 (documented, #443) | |
 
-Measured in headless Chrome (`level_stats`) and natively (`level_memory.rs`, as stored); the render targets are not reported by any tool. On the device BC is held as stored where Metal has BC (documented, #443). In the iOS Simulator a level of `l01_escape` takes its Metal host to 1.8 GB, nearly all textures held as RGBA8 there (measured, #443); ETC2 too is expanded there (measured), so the Simulator's footprint does not show the device's. What else WebKit and ANGLE hold: [GPU and JavaScript memory](#gpu-and-javascript-memory).
+Measured in headless Chrome (`level_stats`, `game-memory` and `render-level`) and natively (`level_memory.rs`, as stored). On the device BC is held as stored where Metal has BC (documented, #443). In the iOS Simulator a level of `l01_escape` takes its Metal host to 1.8 GB, nearly all textures held as RGBA8 there (measured, #443); ETC2 too is expanded there (measured), so the Simulator's footprint does not show the device's. What else WebKit and ANGLE hold: [GPU and JavaScript memory](#gpu-and-javascript-memory).
 
 ## Heap minus live
 
-Headless Chrome, `menu` suite, two runs (MiB, heap/most live):
+Headless Chrome, `game-level` and `game-memory`, one run (MiB, heap/most live):
 
-| | Launched | Title menu | Before the New Game | First New Game | Title menu after quitting | Second | Third |
-|---|---|---|---|---|---|---|---|
-| Heap / live | 18/11 | 25/16–18 | 35/17 | 87/79 | 87/45 | 89/80 | 93/80 |
+| | Before the first New Game | First New Game | Title menu after quitting | A New Game after relaunching the game, at 2868 × 1320 | Second New Game after quitting to the title menu | Third |
+|---|---|---|---|---|---|---|
+| Heap / live | 16/11 | 74/68 | 74/40 | 74/69 | 78/69 | 78/69 |
 
-The 10 MiB between the title menu and the New Game is the suite's own capture of the title menu, free at the heap's top. After quitting, 45 MiB stay live: 26 MiB of them are the collision world's spare arrays (three blocks of 8.0, 10.5 and 7.0 MiB), the rest the program's data and the menus'.
+After quitting, 40 MiB stay live: 25 MiB of them are the collision world's spare arrays (three blocks of 8.0, 10.5 and 7.0 MiB), the rest the program's data and the menus'.
 
 Where the gap comes from:
 
-- **Large blocks meeting split free space.** The heap grows by 26 MiB under the collision stage for 23 MiB more live: its arrays (up to 10.5 MiB each) find no hole that size in the free space the earlier stages left (measured, `heap_log`; #373). It is the only stage that grows the heap by more than it keeps.
-- **Loading transients among long-lived blocks.** `st_client_spawning` (2.52 million allocations, 6,800 kept) and `st_server_connecting` (536,685, 83,406 kept) leave their kept blocks scattered through the space their temporaries used, so the next large block needs new memory above them. At the load's most live, blocks under 64 KiB hold about 14 MiB, blocks of 1 MiB or more 58 MiB (measured, `heap_record`).
+- **Large blocks meeting split free space.** The heap grows by 26 MiB under the collision stage for 24 MiB more live: its arrays (up to 10.5 MiB each) find no hole that size in the free space the earlier stages left (measured, `heap_log`, `heap_record`'s growths; #373). It is the only stage that grows the heap by about what it keeps.
+- **Loading transients among long-lived blocks.** `st_client_spawning` (2.52 million allocations, 6,743 kept) and `st_server_connecting` (537,041, 83,764 kept) leave their kept blocks scattered through the space their temporaries used, so the next large block needs new memory above them. At the load's most live, blocks under 64 KiB hold about 7 MiB, blocks of 1 MiB or more 53 MiB (measured, `heap_record`).
 - **The preparation's buffers.** The texture read buffer and the band buffer arrive last, above the level's data.
-- **A second New Game grows the heap by 4 MiB once**, the third none (the `menu` suite's path of a phone's log: the first game played, quit to the title menu, a New Game 5 s later; 74 → 78 MiB in one run, 74 → 82 in another; the third game no further). Two allocations of the texture stage grow it, 2.2 and 4.0 MiB (measured, `heap_record`'s growths), as the first game's layout leaves no hole that size there. Keeping the texture file buffer as a spare (alone, or shared with the geometry's upload piece) does not pay off: live, it takes the space the geometry's upload reused, so the first game's heap grows by more (76–82 against 74, the second 79–82 against 78; one run each, #487). The navigation's and the details' stages grow nothing in the second game, so their spares would not help either.
+- **A second New Game grows the heap by 4 MiB once**, the third none: one allocation of the texture stage, 4.0 MiB, finds no hole that size in the first game's layout (measured, `heap_record`'s growths).
 
 The program's data leaves no split free space before a game (`heap_map`, #432).
 
@@ -106,8 +110,8 @@ The program's data leaves no split free space before a game (`heap_map`, #432).
 
 1. **One heap**: Rust's `System` allocator (dlmalloc over the wasm memory). No second allocator or other allocator algorithm (#400); no heap per lifetime: the experiment measured it to grow the heap ([Rejected](#rejected-heaps-by-lifetime-401)).
 2. **Shrink and stream first.** Files are read as streams into their final form; nothing large is read whole to be parsed. A file's form in memory is the smallest that serves its readers.
-3. **An owner of many small long-lived things holds them in a few large blocks** (a region): one text buffer and tables of ranges or indices into it, sized once from what is read and never grown afterwards. These are the "appropriate arenas" of the user's rule: plain `Vec`s on the one heap, reached by index, freed whole with their owner. They move the fragmentation sources (hundreds of thousands of small blocks) out of the general heap's free space without a second heap.
-4. **A lifetime's large blocks are kept for the next of their kind.** Freeing a large wasm block returns nothing to the device; keeping it as the owner's spare means the next level finds it whole instead of looking for a hole. Each spare grows to the largest level met and no further.
+3. **An owner of many small long-lived things holds them in a few large blocks** (a region): one text buffer and tables of ranges or indices into it, sized once from what is read and never grown afterwards. Plain `Vec`s on the one heap, reached by index, freed whole with their owner, they move the fragmentation sources (hundreds of thousands of small blocks) out of the general heap's free space without a second heap.
+4. **Only the collision world keeps its large blocks as spares.** Freeing a large wasm block returns nothing to the device, and the next load's earlier stages split its space before the collision world is read; kept, its arrays are reused whole when large enough, and each grows to the largest level met. No other owner keeps a spare: kept between loads, the texture file buffer took the space the geometry's upload reused, so the first game's heap grew by more than the second saved (76–82 against 74 MiB; the navigation's and the details' stages grow nothing in a second game; #487).
 5. **No allocation in a running frame.** Per-frame data goes into buffers its owner keeps and clears (`Vec::clear` keeps capacity); a bump arena is not added, as the heap already stays flat while the level runs (#402).
 6. **Nothing of a level outlives it on the GPU.** A level's GPU resources are released when the level ends, before the next load starts.
 
@@ -117,65 +121,61 @@ Nesting: the program holds sessions; a session holds levels; a level holds its l
 
 | Lifetime | Home | Size, `l01_escape` (largest level) |
 |---|---|---|
-| Program | Regions made at launch, before anything else: the archive index (one sorted path buffer with child ranges, #300), the configuration (one text buffer per file, sections, keys and values as ranges, #299), the string tables (one buffer and a sorted index, #484), the effect library (one name buffer, tables of actions and members; read once at launch rather than with each level: our choice, as `gamemtl.xr` is read with the level, #484). The persistent scratch (below). | about 9 MB (17.2 measured) in a few hundred blocks |
-| Program, scratch | Kept buffers, made once at launch: the stream buffer (64 KiB), the texture file buffer and the band buffer (sized to the largest texture file and band, 4.5 and 2 MiB), the upload staging of our GL layer if it needs one (2 MiB). | about 9 MiB |
-| Session | The offline simulation's registry with its names and sections as indices into the configuration's region and one string region of its own; the game graph; the character; the script runtime's state. | about 7 MB (9.1 measured: 16.2 with the navigation) |
-| Level | Its owners' large blocks, each kept as a spare after the level (rule 4): the collision world's arrays (#357), the navigation positions, the detail grid and cache. The level's small data (the objects' models, sounds, effects) as regions of the level's owners. | 62.7 MB (about 72, `l11_pripyat`) |
-| Loading | Streams through the program's scratch; stage temporaries freed by the stage's end. | under 5 MB above what the level keeps |
-| Frame | Buffers kept by the scene, the draw list, the update and the sounds, cleared each frame. | about 0.5 MB, held for the level |
+| Program | Regions made at launch, before anything else: the archive index (#300), the configuration (#299), the string tables and the effect library (#484; the library read once at launch rather than with each level: our choice, as `gamemtl.xr` is read with the level). | 5.3 MB in about 4,100 blocks |
+| Session | The offline simulation's registry (a slot table, each record's strings its own); the game graph; the character; the script runtime's state. | 8.7 MB (16 with the navigation) |
+| Level | Its owners' blocks: the collision world's arrays (kept as spares after the level, rule 4), the navigation positions, the detail grid and cache, the objects' models, sounds and effects. | about 54 MB (about 62, `l11_pripyat`; believed) |
+| Loading | Each reader's own stream buffer: 64 KiB for the spawn file and the graph, the geometry's read and the detail grid; 2 MiB pieces for the geometry's upload and the index runs; in the browser one texture file buffer and one band buffer per preparation. Stage temporaries freed by the stage's end. | under 10 MB above what each stage keeps |
+| Frame | Buffers kept by the scene, the update and the sounds, cleared each frame. | held for the level |
 
-So there is no arena besides the regions and spares above: none with an allocator of its own.
+There is no program scratch shared by the loaders: each owns its stream buffer for its read. Sizing kept scratch buffers from the measured loading peaks so they never raise the heap's peak is #489.
 
 ### Allocators and containers
 
 - The allocator is `std`'s `System` on every target; the test builds' counting wrapper only counts.
-- Containers are `std`'s: `Vec` for regions and tables, `HashMap` (std's is hashbrown) where a map is needed. Collections the level or the program holds that have many small keys become a sorted `Vec` or an index into a region (`BTreeMap`/`BTreeSet` of `String` keys: 17 and 11 uses in the engine's crates). No crate is needed: no container takes a custom allocator, so `allocator-api2`, `bumpalo` and the unstable `allocator_api` are not used.
-- Strings that many records repeat (section names, file paths, model names) are stored once in a region and referred to by index or range (`u32`), not as `String`s per record.
+- Containers are `std`'s: `Vec` for regions and tables, `HashMap` (std's is hashbrown) where a map is needed. No container takes a custom allocator, so `allocator-api2`, `bumpalo` and the unstable `allocator_api` are not used.
+- Strings that many records repeat (section names, file paths, model names) are stored once in a region and referred to by index or range (`u32`), not as `String`s per record. The registry's records keep their own strings: moving their sections and names to indices would cut a third of their blocks and about 0.3 MB, not worth changing the object records and the save writer (#485).
 
 ### What stays on the general heap as it is
 
-Small, short-lived or rare allocations: the UI's state, menus, the console, errors and diagnostics, a stage's temporaries that are small; the audio worker's own instance (2–4 MiB, its sounds in JavaScript); the script runtime's blocks (Lua allocates per object; its state is the session's). They are a few MiB and either short-lived or allocated where no large block follows them.
+Small, short-lived or rare allocations: the UI's state, menus, the console, errors and diagnostics, a stage's temporaries that are small; the audio worker's own instance (2 MiB, its sounds in JavaScript); the script runtime's blocks (Lua allocates per object; its state is the session's). They are a few MiB and either short-lived or allocated where no large block follows them.
 
 ### Budgets
 
-Reported against these, never gated (the game suites also note both wasm heaps over 110 MiB):
+Reported, never gated:
 
-| What | Budget |
-|---|---|
-| The program's data (native) | 12 MB |
-| The session (native) | 10 MB |
-| The level at the end of loading (native, `l01_escape`; the largest level) | 64 MB; 80 MB |
-| The load's peak above its start (native) | 70 MB |
-| A frame's allocations in a running level (native) | 0 |
-| The engine's wasm heap after the first, second and third New Game (browser) | heap minus live under 4 MiB; the second and third no larger than the first |
-| The level's GPU memory, as stored (largest level) | 250 MB |
-| JavaScript (Chrome) | 12 MiB |
+| What | Budget | Reported by |
+|---|---|---|
+| The program's data (native): the archive index, the configuration, the string tables, the effect library | 2.0, 1.5, 1.5, 1.8 MB | `loading_memory.rs` |
+| Each loading stage's peak above its start (native) | `STAGE_BUDGETS` | `loading_memory.rs` |
+| The load's peak above its start (native) | 79 MB | `loading_memory.rs` |
+| Each wasm heap after a New Game (browser) | 110 MiB | the game suites |
+
+Targets no tool reports against: a frame's allocations in a running level 0; heap minus live after the first New Game under 4 MiB, and the second and third no larger than the first; the level's GPU memory as stored 250 MB for the largest level; JavaScript 12 MiB (Chrome).
 
 ### Level change and the second New Game
 
 A level change goes through a save and a load in the original (docs/behavior/offline-simulation.md 6.1); a New Game after a game is a game's end and a load. Both run in this order:
 
-1. The level ends whole: its screen, its sounds (with the collision world they share, #451), the presenter's world (released with the first frame drawn without it) and any preparation in progress, every GPU resource of the level (rule 6). The level's large arrays go to their owners' spares.
-2. A game's end also ends the session (the registry and graph go; their regions leave holes the next session's fit exactly, as they are sized from the same files).
-3. The next load starts. Its large blocks come from the spares; its regions fit the holes the previous level's left, as both are sized from the level's files, and a larger level grows them at the top once.
+1. The level ends whole: its screen, its sounds (with the collision world they share, #451), the presenter's world (released with the first frame drawn without it) and any preparation in progress, every GPU resource of the level (rule 6). The collision world's arrays go to its spares.
+2. A game's end also ends the session (the registry and graph go; the next session's blocks fit their holes, as they are sized from the same files).
+3. The next load starts. The collision world's arrays come from the spares, and a larger level grows them at the top once.
 
-So the heap after any sequence of levels is what the program, the session, the largest level met and its spares need; the GPU holds one level at a time.
+So the heap after any sequence of levels is what the program, the session, the largest level met and the collision spares need, plus what a second game's layout adds once (4 MiB, measured above); the GPU holds one level at a time.
 
 ### GPU memory: what is owned and released when
 
-The renderer's own WebGL 2 layer (docs/architecture/rendering.md) creates and deletes its buffers, textures and vertex arrays, and no staging copy lives in the heap. What must be owned, and released when:
+The renderer's own WebGL 2 layer (docs/architecture/rendering.md) creates and deletes its buffers, textures and vertex arrays, and no staging copy lives in the heap. It counts every resource it makes, and apart those made for the renderer itself (`Gl::keeping`): `level_stats` reports them as `gpu_kept`, the rest as `gpu_level` (#512).
 
 | Lifetime | Resources | Released |
 |---|---|---|
-| Program | The UI's programs and vertex arrays; the menus' textures, by path, while drawn; video textures while their video plays. | A menu texture when no sprite draws it (`Presenter`'s images); a video's when it ends. |
-| Video mode | The supersampled target and its depth, the video mode's frame, the presentation targets. | When the video mode or `r__supersample` changes, before the new ones are made. |
-| Level | The world's geometry and draw records, its surfaces' and objects' textures, the detail models, the particles' buffers, the light and glow textures. | When the level ends (a quit, a game's end, a level change), before the next load's preparation starts. |
+| Program (the renderer's, `gpu_kept`) | The programs; the UI's vertex buffer; the particles' and the light passes' buffers, grown to the largest need; the menus' textures, by path, while drawn; video textures while their video plays. | A menu texture when no sprite draws it (`Presenter`'s images); a video's when it ends; the rest with the program. |
+| Video mode (the renderer's, `gpu_kept`) | The video mode's frame and the offscreen frame, the supersampled target with its distortion and depth textures, the world's depth. | Each when the size it is needed at changes, before the new one is made. After a game at 2868 × 1320 back at 1024 × 768 they hold 48 MiB against 11 before (#518). |
+| Level (`gpu_level`) | The world's geometry and draw records, its surfaces' and objects' textures, the detail models, the light and glow textures. | When the level ends (a quit, a game's end, a level change), before the next load's preparation starts. |
 | Loading | Textures and geometry prepared for the load in progress. | Given to the level when it is made; freed when the load is abandoned. |
-| Frame | Streaming buffers (sprites, UI quads), made once and reused. | With the program. |
 
-A level's world, its effect and glow shaders and its detail models go with the first frame drawn without a world (`Presenter::draw_list`): the title menu after a level holds no GPU world (measured, `level_stats` in the `menu` suite). What the iOS Simulator's Metal host keeps after a level, 200–300 MB above the title menu before one (#436), is therefore not the world; no tool attributes it to our resources or the browser's, so every GPU resource we hold is reported by owner (migration step 1).
+A level's world, its effect and glow shaders and its detail models go with the first frame drawn without a world (`Presenter::draw_list`): the title menu after a level holds no GPU world (measured, `level_stats` in `game-memory`), and a New Game after relaunching the game holds of its level what the first did. What the iOS Simulator's Metal host keeps after a level, 200–300 MB above the title menu before one (#436), is therefore not the world; no tool attributes it to our resources or the browser's (#482).
 
-What the platform prepares while a level loads belongs to that load (`App::load`, a number per New Game load, kept by the level it made): the texture task stops and reports nothing once its load is no longer the current one, and the prepared textures and geometry of a load quit or replaced are freed on the next frame (`platforms/web/src/textures.rs`, #262). The `game-memory` suite quits a New Game about 100 textures into its preparation: before, the GPU held 47 MiB of textures in the title menu after it against 24 before it (headless Chrome); now none of them, 28 against 30 (the iOS Simulator: 38 against 41).
+What the platform prepares while a level loads belongs to that load (`App::load`, a number per New Game load, kept by the level it made): the texture task stops and reports nothing once its load is no longer the current one, and the prepared textures and geometry of a load quit or replaced are freed on the next frame (`platforms/web/src/textures.rs`, #262). `game-memory` quits a New Game about 100 textures into its preparation: the GPU holds 28 MiB of textures in the title menu after it against 30 before it (headless Chrome).
 
 Data written each frame is never written into a buffer the GPU may still be reading: ANGLE's Metal backend copies such a buffer whole (documented, #443).
 
@@ -183,23 +183,20 @@ Data written each frame is never written into a buffer the GPU may still be read
 
 The specs in docs/ state nothing about how the original manages its memory (texture-quality-filtering.md leaves open which textures stay referenced across a level change); no comparison is made until they do or its working set is measured (#375, blocked by #341).
 
-## Migration
+## Open steps
 
-Ordered; each step is its own issue, measured before and after with the tools above (native and `cargo xtask e2e chrome game-level game-memory`), its gain checked against the expectation here.
+Each is its own issue, measured before and after with the tools above (native and `cargo xtask e2e chrome game-level game-memory render-level`), its gain checked against the expectation here, and stopped if it doesn't pay off.
 
-1. **Every GPU resource reported by owner.** `level_stats` reports the bytes of each lifetime's resources in the table above (the render targets, the menus' textures, the particles' buffers, the world), at the title menu as in a level. Expected: about 90 MB of render targets at 2868 × 1320 with `r__supersample` 2 measured rather than computed, and #436's 200–300 MB found ours or the browser's.
-2. **Preparation tied to its load** (#262): an id given with the load; the texture task checks it before it reports; an abandoned load's prepared textures and geometry freed at once; a test quits during preparation. Expected: a load quit during its preparation leaves no prepared resource (up to 127 MiB of textures for `l01_escape`), measured by step 1's report.
-3. **Stream the `level` file** into its parts, never holding it whole. Expected: `st_opening_stream`'s peak from 12.6 to about 8 MB native (l11: 12.9), its transient blocks gone.
-4. **The archive index as one region** (#300). Expected: 7.7 → about 3 MB, 87,747 → a few blocks.
-5. **The configuration as one region per file** (#299). Expected: 5.6 → about 2 MB, ~100,000 → a few hundred blocks.
-6. **The string tables and the effect library as program regions**, the library read once at launch instead of with each level. Expected: about 1 MB and 8,000 blocks less, the effect library's 3.3 MB peak out of every level's load.
-7. **The registry's names and sections as indices** into regions (the session's string region, the configuration's sections). Expected: 109,329 blocks to a few thousand; 7.9 MB by an estimated 2–3 MB (believed).
-8. **The objects' models, sounds and effects as regions of their owners** (`st_client_spawning`: 2.52 million allocations, 6,800 kept). Expected: the blocks kept to hundreds; its 4.7 MB transient peak lower; with steps 4–7, heap minus live after the first New Game under 4 MiB.
-9. **Spares for the level's other large blocks** (the navigation positions, the detail grid and cache), as the collision world's are. Expected: the third New Game no larger than the second (93 against 89 MiB, measured above), a larger level growing the heap once.
-10. **No allocation in a running frame**: the scene's and the draw list's buffers kept and cleared. Expected: 324 allocations and 452 KB a frame to 0; the 0.81 MB growth over 600 frames located and gone. Also CPU time (believed small).
-11. **Sorted `Vec`s for the `BTreeMap`/`BTreeSet`s of `String`s the program or the level holds** (#405), where a step above did not already replace them. Expected: their blocks; measured per container.
+- **Every GPU resource reported by owner** (#482): `level_stats` reports each lifetime's resources in the table above (the render targets, the menus' textures, the particles' buffers, the world) by owner. Expected: the render targets measured rather than computed (about 90 MB at 2868 × 1320 with `r__supersample` 2, believed), and #436's 200–300 MB found ours or the browser's.
+- **The kept targets follow the video mode back down** (#518). Expected: `gpu_kept` at 1024 × 768 after a game at 2868 × 1320 back to 11 MiB of textures from 48.
+- **Stream the `level` file** into its parts, never holding it whole (#483). Expected: `st_opening_stream`'s peak from 12.6 to about 8 MB native (`l11_pripyat`: 12.9).
+- **The objects' models, sounds and effects as regions of their owners** (#486; `st_client_spawning`: 2.52 million allocations, 6,743 kept). Expected: the blocks kept to hundreds, its 4.6 MB transient lower, heap minus live after the first New Game under 4 MiB.
+- **Kept scratch buffers sized from measured loading peaks** (#489), so they never raise the heap's peak. Expected: the second New Game's 4 MiB growth gone without growing the first's (which a kept texture file buffer did, rule 4).
+- **The frame's remaining allocations** (#516): each particle draw's own vertex list, the details' frame, the draw list, which need the scene and the renderer to share kept buffers. Expected: 39 allocations and 63 KB a frame to 0, and the 0.48 MB growth over 600 frames gone.
+- **The in-game menu's videos made once** (#517): their players or the decoder's frame buffers kept for the program. Expected: the 5.7 MB taken at each opening, and the iPhone's growth under the menu, gone.
+- **Sorted `Vec`s for the `BTreeMap`/`BTreeSet`s of `String`s the program or the level holds** (#405): the archive tree's, the console's, the storage's. Expected: their blocks; measured per container.
 
-Pools for particles, emitters and voices (#404) are not a step: the update and the sounds make 34 allocations a frame in all, which step 10 removes.
+Pools for particles, emitters and voices (#404) are not a step: the update and the sounds make about 20 allocations a frame in all, which #516 removes.
 
 ## GPU and JavaScript memory
 
@@ -212,13 +209,4 @@ JavaScript holds 8 MiB beside the wasm heaps in headless Chrome ([Program](#prog
 
 ## Rejected: heaps by lifetime (#401)
 
-The design first approved (#399) gave the level, loading and the frame each a heap of its own beside the general one: an instance of dlmalloc (the `dlmalloc` crate, MIT/Apache-2.0) over segments of 64 KiB pages taken from the general heap, each allocation placed by the scope its code ran in, a page table finding a block's heap when it is freed. Built on the branch `memory-heaps-experiment` (commit e6135e9), not merged. Natively it placed what it should: the loading heap emptied after each stage, the level heap reserved 83.6 MB for 77.7 MB live at the load's end. In headless Chrome the heap after the New Game grew in every variant (MiB, first and second New Game, one run each; before #370, #371 and #432):
-
-| Variant | First | Second |
-|---|---|---|
-| The general heap only | 106 | 110 |
-| Level heap, segments kept for good (256 KiB) | 119 | 132 |
-| Level and loading heaps, empty segments given back (256 KiB) | 120 | 131 |
-| The same, 64 KiB segments | 122 | 130 |
-
-Heaps apart from the general one need their segments whole: the general heap's free space before the game served its own small blocks but not the level heap's segments, so the level's blocks moved from the general heap's holes to new memory at its top, and each heap's free space was no longer the others'. Separate heaps cost the sharing of free space one heap has. The regions of this design differ in what they hold: an owner's data in a few blocks sized once from its files, on the one heap, so they fit the holes their predecessors left and cut the block count instead of moving it.
+The design first approved (#399) gave the level, loading and the frame each a heap of its own beside the general one: an instance of dlmalloc over segments of 64 KiB pages taken from the general heap (branch `memory-heaps-experiment`, commit e6135e9, not merged). In headless Chrome the heap after the New Game grew in every variant: 119–122 MiB against 106 for the general heap alone, 130–132 against 110 after the second (one run each). Each heap needs its segments whole, so the level's blocks moved from the general heap's holes to new memory at its top, and no heap's free space served the others. The regions of rule 3 differ: an owner's data in a few blocks on the one heap, sized from its files, so they cut the block count instead of moving it.
