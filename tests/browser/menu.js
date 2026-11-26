@@ -78,8 +78,8 @@ let render;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /**
  * WebGL 2's calls per frame over 2 s (`debug_gl_calls`): the total and the
- * most frequent kinds, and render.submit's mean from the diagnostic log
- * meanwhile, where it is on (#429).
+ * most frequent kinds; and, from the diagnostic log meanwhile, where it is
+ * on, the mean per frame of each span of the frame taking 0.1 ms or more.
  */
 async function glCalls() {
   const since = (performance.timeOrigin + performance.now()) * 1000;
@@ -93,13 +93,23 @@ async function glCalls() {
   // Without the counting's own cost: a second more, then the log's periods.
   await sleep(3000);
   const { text } = await volya.call("diagnostic_log");
-  let [sum, n] = [0, 0];
+  const spans = new Map();
+  let frameCount = 0;
   for (const e of JSON.parse(text).traceEvents) {
-    const count = e.name === "time ms" && e.ts >= since + 2.5e6 ? e.args["render.submit n"] : 0;
-    if (count) [sum, n] = [sum + e.args["render.submit mean"] * count, n + count];
+    if (e.name !== "time ms" || e.ts < since + 2.5e6) continue;
+    frameCount += e.args["frame n"] ?? 0;
+    for (const [key, mean] of Object.entries(e.args)) {
+      if (!key.endsWith(" mean")) continue;
+      const name = key.slice(0, -" mean".length);
+      spans.set(name, (spans.get(name) ?? 0) + mean * (e.args[`${name} n`] ?? 0));
+    }
   }
-  const submit = n ? `, render.submit ${(sum / n).toFixed(2)} ms` : "";
-  return `${total.toFixed(0)} GL calls a frame (${per.slice(0, 10).map(([name, n]) => `${name} ${n.toFixed(0)}`).join(", ")})${submit}`;
+  const times = [...spans]
+    .map(([name, sum]) => [name, sum / frameCount])
+    .filter(([, ms]) => ms >= 0.1)
+    .sort((a, b) => b[1] - a[1]);
+  const log = frameCount ? `; ms a frame: ${times.map(([name, ms]) => `${name} ${ms.toFixed(2)}`).join(", ")}` : "";
+  return `${total.toFixed(0)} GL calls a frame (${per.slice(0, 10).map(([name, n]) => `${name} ${n.toFixed(0)}`).join(", ")})${log}`;
 }
 const state = () => volya.call("menu_state");
 // Where the wasm heap's live bytes sit before the New Game (#432), from the

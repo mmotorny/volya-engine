@@ -269,9 +269,8 @@ const RECENT_FRAMES: usize = 60;
 const WORK_DONE_TIMEOUT_MS: f64 = 30_000.0;
 
 /// Resolves once the browser reports the GPU done with all work submitted
-/// so far (fences, checked by polling the device each task turn, which on
-/// wgpu also frees the staging of the finished submissions, #440), or
-/// after [`WORK_DONE_TIMEOUT_MS`]; at once without graphics.
+/// so far (fences, checked by polling the device each task turn), or after
+/// [`WORK_DONE_TIMEOUT_MS`]; at once without graphics.
 pub async fn submitted_work_done() -> Result<(), JsValue> {
     use std::sync::atomic::{AtomicBool, Ordering};
     let done = Arc::new(AtomicBool::new(false));
@@ -576,7 +575,7 @@ pub fn frame(time: f64) {
                     // reports the GPU done with it.
                     crate::diagnostics::gpu_step("gpu.level_frame_presented", None, &frame);
                     let n = LEVEL_FRAMES.get();
-                    gpu.device.on_done(move || {
+                    gpu.device.on_done_later(move || {
                         let frame = [("frame", Value::Number(f64::from(n)))];
                         crate::diagnostics::gpu_step("gpu.level_frame_done", None, &frame);
                     });
@@ -625,7 +624,7 @@ impl Gpu {
             return;
         }
         let submitted = crate::now();
-        self.device.on_done(move || {
+        self.device.on_done_later(move || {
             let ms = crate::now() - submitted;
             DONE_MS.with(|d| d.borrow_mut().push(ms));
         });

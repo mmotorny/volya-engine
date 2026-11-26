@@ -50,6 +50,8 @@ mod gl_device {
         /// Callbacks for when the GPU is done with the work before their
         /// fences, oldest first.
         waiting: RefCell<Vec<Waiting>>,
+        /// Callbacks whose fence the next [`Device::poll`] makes.
+        deferred: RefCell<Vec<Box<dyn FnOnce()>>>,
     }
 
     impl Device {
@@ -67,6 +69,7 @@ mod gl_device {
                 canvas,
                 gl,
                 waiting: RefCell::default(),
+                deferred: RefCell::default(),
             };
             Ok((device, renderer, name))
         }
@@ -90,7 +93,8 @@ mod gl_device {
             "Rgba8Unorm".into()
         }
 
-        /// Runs the callbacks whose work the GPU is done with.
+        /// Runs the callbacks whose work the GPU is done with, then fences
+        /// the deferred ones.
         pub(in crate::gpu) fn poll(&self) {
             loop {
                 let done = {
@@ -105,6 +109,14 @@ mod gl_device {
                     None => break,
                 }
             }
+            let deferred = std::mem::take(&mut *self.deferred.borrow_mut());
+            if !deferred.is_empty() {
+                let fence = self.gl.fence();
+                self.waiting.borrow_mut().push((
+                    fence,
+                    Box::new(move || deferred.into_iter().for_each(|f| f())),
+                ));
+            }
         }
 
         /// Calls `f` once the GPU is done with the work issued so far (a
@@ -112,6 +124,15 @@ mod gl_device {
         pub(in crate::gpu) fn on_done(&self, f: impl FnOnce() + 'static) {
             let fence = self.gl.fence();
             self.waiting.borrow_mut().push((fence, Box::new(f)));
+        }
+
+        /// Calls `f` once the GPU is done with the work issued so far and
+        /// until the next [`Device::poll`], which makes its fence: for a
+        /// frame's own work, whose fence made at once would wait for the
+        /// browser's GPU process to take all of it in (`fenceSync` is a
+        /// synchronous message to it in WebKit, read in its source).
+        pub(in crate::gpu) fn on_done_later(&self, f: impl FnOnce() + 'static) {
+            self.deferred.borrow_mut().push(Box::new(f));
         }
 
         pub(in crate::gpu) fn acquire(&mut self) -> Option<Frame> {
@@ -335,6 +356,11 @@ mod wgpu_device {
         /// (wgpu's fences, checked when polled).
         pub(in crate::gpu) fn on_done(&self, f: impl FnOnce() + Send + 'static) {
             self.queue.on_submitted_work_done(f);
+        }
+
+        /// As [`Device::on_done`].
+        pub(in crate::gpu) fn on_done_later(&self, f: impl FnOnce() + Send + 'static) {
+            self.on_done(f);
         }
 
         pub(in crate::gpu) fn acquire(&mut self) -> Option<Frame> {
