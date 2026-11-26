@@ -141,7 +141,7 @@ impl Device for MixerDevice<'_> {
             pan: 0.0,
             category: Category::Scaled,
         };
-        if let Some(id) = self.mixer.play_file(bytes, offset, playback) {
+        if let Some(id) = self.mixer.play_checked_file(bytes, offset, playback) {
             *self.slot(voice) = Some(id);
         }
     }

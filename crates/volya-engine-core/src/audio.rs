@@ -78,6 +78,17 @@ pub trait MixerControl {
     /// Starts the compressed Ogg Vorbis file `bytes`, `skip` frames in;
     /// `None` when it is not a stream that can play.
     fn play_file(&mut self, bytes: Vec<u8>, skip: u64, playback: Playback) -> Option<VoiceId>;
+    /// [`MixerControl::play_file`] for a file already checked to be a
+    /// stream that plays (a loaded sound's): a mixer playing elsewhere
+    /// leaves its headers to the side that decodes it.
+    fn play_checked_file(
+        &mut self,
+        bytes: Vec<u8>,
+        skip: u64,
+        playback: Playback,
+    ) -> Option<VoiceId> {
+        self.play_file(bytes, skip, playback)
+    }
     /// Changes a playing voice's gain, pan and pitch ([`Mixer::set_voice`]).
     fn set_voice(&mut self, id: VoiceId, gain: f32, pan: f32, pitch: f32);
     fn stop(&mut self, id: VoiceId);

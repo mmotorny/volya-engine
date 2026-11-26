@@ -12,9 +12,11 @@
 #[path = "../../volya-engine-formats/tests/support/gog_archives.rs"]
 mod gog_archives;
 
+use std::io::Cursor;
 use std::time::{Duration, Instant};
 
 use volya_engine::audio::SoundHost;
+use volya_engine::core::audio::remote::{Host, Remote};
 use volya_engine::core::audio::{Category, Mixer};
 use volya_engine::core::config::{LEVEL, PathAliases};
 use volya_engine::core::sound::system::{Listener, Phase, PlayFlags};
@@ -23,6 +25,18 @@ use volya_engine::core::vfs::db::DbVfs;
 use volya_engine::data::INSTALLER_FSGAME;
 
 const RATE: u32 = 48_000;
+
+/// The level's files the tests play.
+const NAMES: [&str; 8] = [
+    "nature\\new_flies1",
+    "ambient\\sparks1",
+    "scripts\\magnitofon\\magnitofon_2",
+    "script_replics\\radio\\message\\radio_noise_1",
+    "ambient\\indoors\\small_fan",
+    "music\\amb01_l",
+    "music\\amb20_l",
+    "music\\wasteland2_l",
+];
 
 fn rms(samples: impl Iterator<Item = f32>) -> f32 {
     let (sum, n) = samples.fold((0.0, 0), |(s, n), x| (s + x * x, n + 1));
@@ -79,23 +93,13 @@ fn positional_sounds_on_the_mixer() {
     // Every voice busy: 32 looped emitters of the level's files around the
     // listener for 10 s at 60 updates per second, each update's output
     // mixed. The 8 farthest stay silent.
-    let names = [
-        "nature\\new_flies1",
-        "ambient\\sparks1",
-        "scripts\\magnitofon\\magnitofon_2",
-        "script_replics\\radio\\message\\radio_noise_1",
-        "ambient\\indoors\\small_fan",
-        "music\\amb01_l",
-        "music\\amb20_l",
-        "music\\wasteland2_l",
-    ];
     let mut host = SoundHost::new(24);
     let mut mixer = Mixer::new(RATE);
     let start = Instant::now();
     for i in 0..32 {
         let id = host
             .system
-            .create(&tree, &aliases, names[i % names.len()], Category::Effects)
+            .create(&tree, &aliases, NAMES[i % NAMES.len()], Category::Effects)
             .unwrap();
         let angle = i as f32 * 0.7;
         let distance = 0.1 + i as f32 * 0.05;
@@ -135,4 +139,57 @@ fn positional_sounds_on_the_mixer() {
         mix / frames
     );
     assert_eq!(playing, 24);
+}
+
+/// Starting many voices in one update (#310), as the web platform does it:
+/// the engine's update on a [`Remote`], then the audio worker's [`Host`]
+/// applying it and mixing the first block. 24 voices of 8 files.
+#[test]
+fn starting_many_voices_at_once() {
+    let Some(archives) = gog_archives::archives() else {
+        return;
+    };
+    let root = StdVfs::new(archives[0].file.parent().unwrap());
+    let tree = DbVfs::open_game(&root, Some("mods")).unwrap();
+    let mut aliases = PathAliases::parse(INSTALLER_FSGAME.as_bytes(), "").unwrap();
+    aliases.set_dir(LEVEL, "gamedata\\levels\\l01_escape");
+    let looped = PlayFlags {
+        looped: true,
+        ..PlayFlags::default()
+    };
+    for round in 0..3 {
+        let mut host = SoundHost::new(24);
+        let mut remote = Remote::new(RATE);
+        for i in 0..24 {
+            let id = host
+                .system
+                .create(&tree, &aliases, NAMES[i % NAMES.len()], Category::Effects)
+                .unwrap();
+            host.system
+                .play_at(id, [1.0 + i as f32 * 0.1, 0.0, 0.0], looped);
+        }
+        let t = Instant::now();
+        host.update(0.0, Some(&mut remote), Some(&tree));
+        let update = t.elapsed();
+        let message = remote.take().unwrap();
+        let bytes: usize = message.files.iter().map(|(_, f)| f.len()).sum();
+        assert_eq!(message.files.len(), 24);
+        let mut worker = Host::default();
+        let t = Instant::now();
+        for (number, file) in message.files {
+            worker.add_file(number, Box::new(Cursor::new(file)));
+        }
+        assert_eq!(
+            worker.apply(&message.commands).unwrap(),
+            message.commands.len()
+        );
+        worker.mix(256);
+        let applied = t.elapsed();
+        assert!(worker.take_ended().is_empty());
+        eprintln!(
+            "round {round}: 24 voices ({} MiB of files) started: engine update {update:.1?}, \
+             audio worker {applied:.1?} with the first block",
+            bytes >> 20
+        );
+    }
 }

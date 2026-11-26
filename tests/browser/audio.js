@@ -429,6 +429,34 @@ export const tests = {
     );
   },
 
+  // #310: a level start or a loud event starts many voices in one update.
+  // 24 sounds of 8 of the level's files, heard 2D; the level's voices
+  // (16) start the loudest.
+  "starts many voices in one update": async () => {
+    if (!installer) skip("no installer");
+    const names = [
+      "nature\\new_flies1",
+      "ambient\\sparks1",
+      "scripts\\magnitofon\\magnitofon_2",
+      "script_replics\\radio\\message\\radio_noise_1",
+      "ambient\\indoors\\small_fan",
+      "music\\amb01_l",
+      "music\\amb20_l",
+      "music\\wasteland2_l",
+    ];
+    const before = (await volya.call("sound_state")).emitters.filter((e) => e.phase === "playing").length;
+    await volya.call("debug_play_sound", { names: [...names, ...names, ...names], two_d: true, looped: true });
+    await sleep(500);
+    const sounds = await volya.call("sound_state");
+    const playing = sounds.emitters.filter((e) => e.phase === "playing").length;
+    assert(playing > before, `playing ${before}, then ${playing}`);
+    const stats = await volya.call("level_stats");
+    return (
+      `${playing} playing, ${before} before; sound update ${stats.sound_update_max_ms.toFixed(1)} ms worst; ` +
+      `frame CPU ${stats.frame_cpu_max_ms.toFixed(1)} ms worst`
+    );
+  },
+
   "forgets the game": async () => {
     await volya.call("quit_game").catch(() => null);
     if (!installer) skip("no installer");
