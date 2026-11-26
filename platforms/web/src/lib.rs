@@ -353,6 +353,7 @@ pub fn frame(time: f64) {
         push(&mut s.sound, sound);
         if let Some(last) = s.last {
             push(&mut s.interval, time - last);
+            textures::frame_interval(time - last);
             volya_engine::core::diagnostics::metric("frame.interval_ms", time - last);
             // Over one and a half frames at 60 Hz.
             volya_engine::core::diagnostics::count("frame.late", u64::from(time - last > 25.0));
@@ -563,6 +564,12 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         }
         #[cfg(feature = "test-ops")]
         "gl_selftest" => to_json(&gl_selftest()?),
+        // `{check}`: runs that render check (`{note}` or `{skip}`); `{}`
+        // lists them.
+        #[cfg(feature = "test-ops")]
+        "render_selftest" => {
+            to_json(&gpu::render_selftest(args.get("check").and_then(|v| v.as_str())).await?)
+        }
         #[cfg(feature = "test-ops")]
         "debug_session_event" => {
             diagnostics::repeat_session_event().await;

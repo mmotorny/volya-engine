@@ -34,6 +34,8 @@ pub use texture::{
 };
 pub use video::VideoTexture;
 pub use wgpu;
+/// A clear colour, RGBA in 0 … 1.
+pub use wgpu::Color;
 pub use world::{World, WorldDraw, WorldFrame};
 
 pub use crate::shared::ui::*;
@@ -64,6 +66,34 @@ impl Texture {
     /// The underlying texture (every face and mip level).
     pub fn wgpu(&self) -> &wgpu::Texture {
         &self.texture
+    }
+
+    /// Its mip levels.
+    pub fn mip_levels(&self) -> u32 {
+        self.texture.mip_level_count()
+    }
+
+    /// Its layers: 6 for a cube map, else 1.
+    pub fn layers(&self) -> u32 {
+        self.texture.depth_or_array_layers()
+    }
+
+    /// Its format, by name: `bc1`, `bc2`, `bc3`, `etc2-rgb8`,
+    /// `etc2-rgb8a1`, `etc2-rgba8`, `rgba8`, `bgra8` or `other` (the same
+    /// names by either backend, for tests).
+    pub fn format_name(&self) -> &'static str {
+        use wgpu::TextureFormat as F;
+        match self.texture.format() {
+            F::Bc1RgbaUnorm => "bc1",
+            F::Bc2RgbaUnorm => "bc2",
+            F::Bc3RgbaUnorm => "bc3",
+            F::Etc2Rgb8Unorm => "etc2-rgb8",
+            F::Etc2Rgb8A1Unorm => "etc2-rgb8a1",
+            F::Etc2Rgba8Unorm => "etc2-rgba8",
+            F::Rgba8Unorm => "rgba8",
+            F::Bgra8Unorm => "bgra8",
+            _ => "other",
+        }
     }
 }
 
@@ -111,6 +141,8 @@ pub struct Renderer {
     timer: Option<timing::FrameTimer>,
     /// [`Renderer::set_unblended_trees`].
     unblended_trees: bool,
+    /// [`Renderer::set_texture_path`].
+    texture_path: TexturePath,
 }
 
 impl Renderer {
@@ -232,6 +264,7 @@ impl Renderer {
             ramp: ramp::RampPass::new(device, format),
             timer: None,
             unblended_trees: false,
+            texture_path: TexturePath::for_features(device.features()),
         };
         // The world's pipelines too (the light passes' among them).
         renderer.make_world_pipelines();

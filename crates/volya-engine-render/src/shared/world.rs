@@ -490,10 +490,6 @@ pub(crate) fn may_show(s: [f32; 4], planes: &[[f32; 4]; 6], eye: [f32; 3], ssa_m
 }
 
 thread_local! {
-    /// [`Renderer::set_call_window`]: the world's draw calls emitted.
-    pub(crate) static WINDOW: std::cell::Cell<Option<(u32, u32)>> = const { std::cell::Cell::new(None) };
-    /// The world's draw calls counted in the frame being encoded.
-    pub(crate) static CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
     /// The world's draw calls emitted in the frame being encoded, by
     /// [`Kind`] (#443).
     pub(crate) static EMITTED: std::cell::Cell<[u32; 5]> = const { std::cell::Cell::new([0; 5]) };
@@ -512,24 +508,11 @@ pub(crate) enum Kind {
 /// The names of [`Kind`]s, in order.
 pub const CALL_KINDS: [&str; 5] = ["merged", "single", "object", "light", "strict"];
 
-/// Whether a draw call of `kind` is emitted ([`in_window`]), counted in
-/// [`EMITTED`].
-pub(crate) fn emits(kind: Kind) -> bool {
-    if !in_window() {
-        return false;
-    }
+/// Counts a draw call of `kind` in [`EMITTED`].
+pub(crate) fn emitted(kind: Kind) {
     let mut e = EMITTED.get();
     e[kind as usize] += 1;
     EMITTED.set(e);
-    true
-}
-
-/// Counts a world draw call; whether it is emitted
-/// ([`Renderer::set_call_window`]).
-pub(crate) fn in_window() -> bool {
-    let n = CALLS.get();
-    CALLS.set(n + 1);
-    WINDOW.get().is_none_or(|(a, b)| (a..b).contains(&n))
 }
 
 /// One step of the static world: its draws in their fixed order, and the

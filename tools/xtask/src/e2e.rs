@@ -24,6 +24,10 @@ const SUITES: &[&str] = &[
     "smoke", "platform", "import", "audio", "render", "input", "menu",
 ];
 const TARGETS: &[&str] = &["chrome", "iphone"];
+/// Suites run in Chrome with the profile kept under `target/`, so the game
+/// data they read is imported once (they import only what the profile's
+/// storage lacks); the others get a fresh profile, as they test the import.
+const KEPT_PROFILE: &[&str] = &["render"];
 const REPORT_TIMEOUT: Duration = Duration::from_secs(60);
 /// Suites importing gigabytes from the installer get longer (the audio
 /// suite takes about a minute in the iOS Simulator); the menu
@@ -95,8 +99,12 @@ pub fn run(args: &[&str]) -> Result {
             Some(dir) => s.with_installer(std::path::Path::new(&dir)),
             None => Ok(s),
         })
+        .and_then(|s| match std::env::var_os("VOLYA_DUMP_DIR") {
+            Some(dir) => s.with_dumps(std::path::Path::new(&dir)),
+            None => Ok(s),
+        })
         .map_err(|e| format!("dev server: {e}"))?;
-    let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| format!("bind: {e}"))?;
+    let listener = listen()?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     thread::spawn(move || server.run(listener));
 
@@ -107,7 +115,13 @@ pub fn run(args: &[&str]) -> Result {
             let id = run_id(target, suite);
             let url = format!("http://localhost:{port}{BASE}__test/run/{id}/{suite}.html");
             let outcome = match target {
-                "chrome" => chrome(&url, &id, &reports, report_timeout(suite)),
+                "chrome" => chrome(
+                    &url,
+                    &id,
+                    KEPT_PROFILE.contains(&suite),
+                    &reports,
+                    report_timeout(suite),
+                ),
                 "iphone" => iphone(
                     simulator.as_ref().expect("taken for iphone"),
                     &url,
@@ -140,6 +154,31 @@ pub fn run(args: &[&str]) -> Result {
     }
 }
 
+/// The kept Chrome profile's directory (see [`KEPT_PROFILE`]).
+fn kept_profile() -> PathBuf {
+    root().join("target/chrome-profile")
+}
+
+/// The server's socket: on the port the kept profile last saw when it is
+/// free, as storage belongs to an origin, port included (else any port,
+/// remembered for the next run).
+fn listen() -> Result<TcpListener> {
+    let file = kept_profile().join("port");
+    let kept = fs::read_to_string(&file)
+        .ok()
+        .and_then(|p| p.trim().parse::<u16>().ok());
+    if let Some(port) = kept
+        && let Ok(listener) = TcpListener::bind(("127.0.0.1", port))
+    {
+        return Ok(listener);
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| format!("bind: {e}"))?;
+    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+    fs::create_dir_all(kept_profile()).map_err(|e| format!("{}: {e}", file.display()))?;
+    fs::write(&file, port.to_string()).map_err(|e| format!("{}: {e}", file.display()))?;
+    Ok(listener)
+}
+
 fn run_id(target: &str, suite: &str) -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -168,8 +207,21 @@ fn passed(report: &str) -> bool {
     lines.clone().any(|l| l.starts_with("ok ")) && !lines.any(|l| l.starts_with("fail "))
 }
 
-fn chrome(url: &str, id: &str, reports: &Receiver<String>, timeout: Duration) -> Result<String> {
-    let profile = env::temp_dir().join(format!("volya-chrome-{id}"));
+fn chrome(
+    url: &str,
+    id: &str,
+    keep: bool,
+    reports: &Receiver<String>,
+    timeout: Duration,
+) -> Result<String> {
+    let profile = if keep {
+        kept_profile().join("data")
+    } else {
+        env::temp_dir().join(format!("volya-chrome-{id}"))
+    };
+    // The HTTP cache is the run's own, as in a fresh profile: a kept one
+    // would serve an earlier build's files (cached as GitHub Pages caches).
+    let cache = env::temp_dir().join(format!("volya-chrome-cache-{id}"));
     let mut child: Child = cmd(
         CHROME,
         &[
@@ -183,6 +235,7 @@ fn chrome(url: &str, id: &str, reports: &Receiver<String>, timeout: Duration) ->
             // is measured inside the page, only the device output is muted.
             "--mute-audio",
             &format!("--user-data-dir={}", profile.display()),
+            &format!("--disk-cache-dir={}", cache.display()),
             url,
         ],
     )
@@ -193,7 +246,10 @@ fn chrome(url: &str, id: &str, reports: &Receiver<String>, timeout: Duration) ->
     let report = wait_report(id, reports, timeout);
     let _ = child.kill();
     let _ = child.wait();
-    let _ = fs::remove_dir_all(profile);
+    if !keep {
+        let _ = fs::remove_dir_all(profile);
+    }
+    let _ = fs::remove_dir_all(cache);
     report
 }
 

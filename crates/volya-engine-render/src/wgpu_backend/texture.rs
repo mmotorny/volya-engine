@@ -39,7 +39,23 @@ fn etc2_format(format: Etc2Format) -> wgpu::TextureFormat {
 impl Renderer {
     /// How BC textures reach this device.
     pub fn texture_path(&self) -> TexturePath {
-        TexturePath::for_features(self.device.features())
+        self.texture_path
+    }
+
+    /// Makes BC textures take `path` from now on, where the device has it
+    /// (tests: each path on one device); whether it does. Decoding to
+    /// RGBA8 is always possible.
+    pub fn set_texture_path(&mut self, path: TexturePath) -> bool {
+        let features = self.device.features();
+        let has = match path {
+            TexturePath::Bc => features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC),
+            TexturePath::Etc2 => features.contains(wgpu::Features::TEXTURE_COMPRESSION_ETC2),
+            TexturePath::Rgba8 => true,
+        };
+        if has {
+            self.texture_path = path;
+        }
+        has
     }
 
     /// Uploads every face and mip level of `dds`, by this device's
