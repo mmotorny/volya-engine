@@ -803,6 +803,7 @@ mod tests {
                 data: &self.data,
                 assets: &mut assets,
                 resolution: r,
+                text_surface: crate::draw::Surface::screen(r),
                 clock_ms: now,
             };
             self.menu.scene(&mut ctx).unwrap()

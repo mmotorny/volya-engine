@@ -482,6 +482,26 @@ pub struct App {
     stats: StatisticsOverlay,
 }
 
+/// The layout surface of the main menu's text on a `screen` at
+/// `r__supersample` `supersample` (text-and-fonts.md 4.4): the off-screen
+/// target when the menu's frames go through it, the screen otherwise. While
+/// the menu shows, its effects are the identity and nothing of a level is
+/// drawn (so no distortion pass), so its frames go through the target
+/// exactly when `supersample` > 1. At 1 the target has the screen's size up
+/// to 2048 pixels; above, whether the menu lays out on the smaller target
+/// was not established (section 5), and the screen is used.
+pub fn main_menu_surface(screen: Resolution, supersample: u32) -> crate::draw::Surface {
+    if supersample <= 1 {
+        return crate::draw::Surface::screen(screen);
+    }
+    let (width, height) =
+        crate::render::present::target_size(screen.width, screen.height, supersample);
+    crate::draw::Surface {
+        size: Resolution::new(width, height),
+        screen,
+    }
+}
+
 /// `r__supersample`, 1 … 4.
 pub fn supersample(console: &Console) -> u32 {
     (console.number("r__supersample") as u32).clamp(1, 4)
@@ -1648,16 +1668,24 @@ impl App {
             data: &self.data,
             assets: &mut self.assets,
             resolution,
+            text_surface: crate::draw::Surface::screen(resolution),
             clock_ms: self.clock,
         };
+        let menu_surface = main_menu_surface(resolution, self.supersample);
         match &self.phase {
             None => Ok(Scene::new(resolution)),
             Some(Phase::Startup(s)) => s.scene(&mut ctx),
-            Some(Phase::Menu(m)) => self.screens.scene(m, &mut ctx),
+            Some(Phase::Menu(m)) => {
+                ctx.text_surface = menu_surface;
+                self.screens.scene(m, &mut ctx)
+            }
             Some(Phase::Loading {
                 stages: NewGame::Closing(menu),
                 ..
-            }) => menu.scene(&mut ctx),
+            }) => {
+                ctx.text_surface = menu_surface;
+                menu.scene(&mut ctx)
+            }
             Some(Phase::Loading {
                 stages: NewGame::Stages(loading),
                 ..
@@ -1674,6 +1702,7 @@ impl App {
                 // Nothing of the game is drawn behind the menu; the world
                 // stays in the scene, covered, so it stays on the GPU.
                 let mut scene = level.covered_scene(resolution, self.clock);
+                ctx.text_surface = menu_surface;
                 scene
                     .sprites
                     .extend(self.screens.scene(menu, &mut ctx)?.sprites);
@@ -2230,6 +2259,7 @@ mod tests {
             data: &data,
             assets: &mut assets,
             resolution,
+            text_surface: crate::draw::Surface::screen(resolution),
             clock_ms: 16,
         };
         let level = || {
@@ -2276,6 +2306,7 @@ mod tests {
             data: &data,
             assets: &mut assets,
             resolution: Resolution::new(1024, 768),
+            text_surface: crate::draw::Surface::screen(Resolution::new(1024, 768)),
             clock_ms: 16,
         };
         let mut scene = Scene::new(ctx.resolution);

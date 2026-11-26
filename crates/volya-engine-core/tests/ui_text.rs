@@ -20,7 +20,7 @@ use volya_engine_core::vfs::db::DbVfs;
 use volya_engine_core::vfs::{EntryKind, StdVfs, Vfs, read};
 use volya_engine_formats::cp1251;
 use volya_engine_formats::text::font::{GlyphMetrics, UiFont};
-use volya_engine_formats::text::layout::{TextBox, layout_text};
+use volya_engine_formats::text::layout::{Surface, TextBox, layout_text};
 use volya_engine_formats::ui::layout::{HAlign, Rect, VAlign};
 use volya_engine_formats::ui::picture::{Picture, PicturePlacement};
 use volya_engine_formats::ui::seq::Sequence;
@@ -701,7 +701,7 @@ fn loads_fonts_and_lays_out_title_menu_text() {
     ];
     for (resolution, variant, boxes) in expected {
         let fonts = Fonts::load(&g.vfs, &g.aliases, &localization, resolution.height).unwrap();
-        let scale = resolution.scale();
+        let scale = Surface::screen(resolution);
         let extent = |l: &volya_engine_formats::text::layout::TextLayout| {
             let q = &l.quads;
             (
@@ -778,6 +778,114 @@ fn loads_fonts_and_lays_out_title_menu_text() {
             let close = |a: f32, b: f32| (a - b).abs() < 1e-6;
             assert!(close(uv0.0, 0.048_828) && close(uv1.0, 0.087_891));
             assert!(close(uv0.1, 0.431_641) && close(uv1.1, 0.517_578));
+        }
+    }
+
+    // Section 5 with r__supersample 2 and 4: the main menu laid out on the
+    // off-screen target (section 4.4), boxes in screen pixels to three
+    // decimals; (screen, surface, [item 0, item 5, version]).
+    type Fractional = [[f32; 4]; 3];
+    let on_target: [(Resolution, (u32, u32), Fractional); 8] = [
+        (
+            HD,
+            (2048, 1526),
+            [
+                [1405.25, 1527.25, 598.742, 630.742],
+                [1369.25, 1564.25, 809.646, 841.646],
+                [28.125, 143.125, 1040.367, 1070.367],
+            ],
+        ),
+        (
+            HD,
+            (2048, 2048),
+            [
+                [1405.25, 1527.25, 601.699, 633.699],
+                [1369.25, 1564.25, 812.637, 844.637],
+                [28.125, 143.125, 1040.449, 1070.449],
+            ],
+        ),
+        (
+            Resolution::new(1280, 1024),
+            (1810, 1448),
+            [
+                [916.326, 1038.326, 567.16, 599.16],
+                [880.326, 1075.326, 767.293, 799.293],
+                [18.387, 133.387, 986.519, 1016.519],
+            ],
+        ),
+        (
+            Resolution::new(1280, 1024),
+            (2048, 2048),
+            [
+                [916.5, 1038.5, 570.5, 602.5],
+                [880.5, 1075.5, 770.5, 802.5],
+                [18.75, 133.75, 986.5, 1016.5],
+            ],
+        ),
+        (
+            XGA,
+            (1448, 1086),
+            [
+                [739.436, 824.436, 425.724, 447.724],
+                [712.436, 850.436, 575.646, 597.646],
+                [14.851, 93.851, 739.713, 758.713],
+            ],
+        ),
+        (
+            XGA,
+            (2048, 1536),
+            [
+                [740.0, 825.0, 428.5, 450.5],
+                [713.0, 851.0, 578.5, 600.5],
+                [15.0, 94.0, 740.0, 759.0],
+            ],
+        ),
+        (
+            SVGA,
+            (1130, 848),
+            [
+                [570.265, 651.265, 331.132, 352.132],
+                [546.265, 675.265, 448.585, 469.585],
+                [11.327, 77.327, 578.066, 595.066],
+            ],
+        ),
+        (
+            SVGA,
+            (1600, 1200),
+            [
+                [570.5, 651.5, 333.5, 354.5],
+                [546.5, 675.5, 451.0, 472.0],
+                [11.5, 77.5, 578.0, 595.0],
+            ],
+        ),
+    ];
+    let boxes_of_menu = menu.caption_boxes(main);
+    let (version_box, _) = TextBox::of_static(version, version.window.absolute(0.0, 0.0));
+    for (screen, (w, h), want) in on_target {
+        let fonts = Fonts::load(&g.vfs, &g.aliases, &localization, screen.height).unwrap();
+        let surface = Surface {
+            size: Resolution::new(w, h),
+            screen,
+        };
+        let caption = |i: usize| cp1251::encode(table.get(&main.buttons[i].caption)).unwrap();
+        let cases = [
+            (UiFont::Graffiti22, caption(0), boxes_of_menu[0]),
+            (UiFont::Graffiti22, caption(5), boxes_of_menu[5]),
+            (UiFont::Graffiti19, version_text.clone(), version_box),
+        ];
+        for ((font, text, b), want) in cases.iter().zip(want) {
+            let l = layout_text(fonts.get(*font), text, b, surface, &colors).unwrap();
+            let q = &l.quads;
+            let got = [
+                q.iter().map(|q| q.min.0).fold(f32::MAX, f32::min),
+                q.iter().map(|q| q.max.0).fold(f32::MIN, f32::max),
+                q.iter().map(|q| q.min.1).fold(f32::MAX, f32::min),
+                q.iter().map(|q| q.max.1).fold(f32::MIN, f32::max),
+            ];
+            assert!(
+                got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1.5e-3),
+                "{screen:?} on {w} × {h}: {got:?}, want {want:?}"
+            );
         }
     }
 }

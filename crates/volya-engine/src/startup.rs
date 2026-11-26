@@ -417,6 +417,7 @@ mod tests {
             data,
             assets: &mut assets,
             resolution: r,
+            text_surface: crate::draw::Surface::screen(r),
             clock_ms: now,
         };
         s.scene(&mut ctx).unwrap()

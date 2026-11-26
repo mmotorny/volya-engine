@@ -93,6 +93,7 @@ async fn draw(cx: &Context<'_>, walk: &Walk<'_>, name: &str) -> Outcome {
         data: walk.data,
         assets: &mut assets,
         resolution: XGA,
+        text_surface: crate::draw::Surface::screen(XGA),
         clock_ms: 1000,
     };
     let mut scene = Scene::new(XGA);

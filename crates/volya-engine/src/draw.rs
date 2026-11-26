@@ -11,6 +11,7 @@ use crate::core::vfs::Vfs;
 use crate::data::{Assets, GameData};
 use crate::scene::{Scene, Sprite, TextureId};
 use volya_engine_formats::text::font::UiFont;
+pub use volya_engine_formats::text::layout::Surface;
 use volya_engine_formats::text::layout::{TextBox, draw_line, layout_text};
 use volya_engine_formats::ui::layout::{HAlign, Rect, StaticDesc, TextureRef, WindowDesc};
 use volya_engine_formats::ui::picture::{Picture, PicturePlacement};
@@ -22,6 +23,9 @@ pub struct Ctx<'a> {
     pub data: &'a GameData,
     pub assets: &'a mut Assets,
     pub resolution: Resolution,
+    /// Where UI text is laid out (text-and-fonts.md 4.4): the screen,
+    /// or the off-screen target while the main menu draws into it.
+    pub text_surface: Surface,
     /// The engine clock, milliseconds.
     pub clock_ms: u64,
 }
@@ -81,12 +85,12 @@ impl Ctx<'_> {
         text_box: &TextBox,
         font: UiFont,
     ) -> io::Result<()> {
-        let scale = self.scale();
+        // The font variant still follows the screen height (4.4).
         let fonts = self
             .assets
             .fonts(self.tree, self.data, self.resolution.height)?;
         let font = fonts.get(font).clone();
-        let layout = layout_text(&font, text, text_box, scale, &self.data.colors)
+        let layout = layout_text(&font, text, text_box, self.text_surface, &self.data.colors)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         let path = Assets::font_texture(self.data, &layout.texture)?;
         let size = self.assets.image_size(self.tree, &path)?;
