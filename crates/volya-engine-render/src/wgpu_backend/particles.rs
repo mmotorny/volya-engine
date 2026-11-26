@@ -16,6 +16,22 @@ use crate::world::{DEPTH_FORMAT, Mat4, alpha_blending, multiply};
 
 pub use crate::shared::particles::*;
 
+/// The passes of the effects' shaders (program, blending, depth write):
+/// class `PARTICLE`'s six blendings (section 5.2) and the scripted
+/// shaders' normal and distortion passes (5.3).
+const PASSES: &[(ParticleProgram, ParticleBlend, bool)] = &[
+    (ParticleProgram::Set, ParticleBlend::Off, true),
+    (ParticleProgram::Blended, ParticleBlend::Alpha, false),
+    (ParticleProgram::Blended, ParticleBlend::Add, false),
+    (ParticleProgram::Blended, ParticleBlend::Mul, false),
+    (ParticleProgram::Blended, ParticleBlend::Mul2x, false),
+    (ParticleProgram::Blended, ParticleBlend::AlphaAdd, false),
+    (ParticleProgram::Plain, ParticleBlend::Add, false),
+    (ParticleProgram::Distort, ParticleBlend::Alpha, false),
+    (ParticleProgram::Glow, ParticleBlend::AlphaAdd, false),
+    (ParticleProgram::Flare, ParticleBlend::AlphaAdd, false),
+];
+
 /// Pipelines and fixed resources for drawing particles into one format.
 pub(crate) struct ParticlePipelines {
     format: wgpu::TextureFormat,

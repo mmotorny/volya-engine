@@ -121,22 +121,6 @@ pub(crate) const SPRITE_VERTICES: [usize; 6] = [0, 1, 2, 3, 2, 1];
 /// the level freed after it and split the wasm heap.
 pub(crate) const INITIAL_BYTES: u64 = 2 * 1024 * 1024;
 
-/// The passes of the effects' shaders (program, blending, depth write):
-/// class `PARTICLE`'s six blendings (section 5.2) and the scripted
-/// shaders' normal and distortion passes (5.3).
-pub(crate) const PASSES: &[(ParticleProgram, ParticleBlend, bool)] = &[
-    (ParticleProgram::Set, ParticleBlend::Off, true),
-    (ParticleProgram::Blended, ParticleBlend::Alpha, false),
-    (ParticleProgram::Blended, ParticleBlend::Add, false),
-    (ParticleProgram::Blended, ParticleBlend::Mul, false),
-    (ParticleProgram::Blended, ParticleBlend::Mul2x, false),
-    (ParticleProgram::Blended, ParticleBlend::AlphaAdd, false),
-    (ParticleProgram::Plain, ParticleBlend::Add, false),
-    (ParticleProgram::Distort, ParticleBlend::Alpha, false),
-    (ParticleProgram::Glow, ParticleBlend::AlphaAdd, false),
-    (ParticleProgram::Flare, ParticleBlend::AlphaAdd, false),
-];
-
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct PipelineKey {
     pub(crate) program: ParticleProgram,

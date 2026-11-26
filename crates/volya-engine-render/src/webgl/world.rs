@@ -345,6 +345,8 @@ fn draw_static(
             continue;
         }
         let d = &inner.calls[i as usize];
+        // Rebased at upload: WebGL 2 has no base vertex.
+        debug_assert_eq!(d.first_vertex, 0);
         if surface != Some(d.surface) {
             flush(&mut pending);
             surface = Some(d.surface);
@@ -1455,6 +1457,7 @@ impl Renderer {
                 let mut array = None;
                 for &j in draws {
                     let d = &inner.lit[j as usize];
+                    debug_assert_eq!(d.first_vertex, 0);
                     let p = &programs.light_programs[&d.program];
                     if program != Some(d.program) {
                         program = Some(d.program);
