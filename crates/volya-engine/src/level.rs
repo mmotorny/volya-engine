@@ -313,7 +313,7 @@ pub struct LevelScreen {
     /// objects' and the occlusion's values (occlusion-tests.md 5).
     random: Shared,
     /// The camera pass (visibility-scope.md).
-    visibility: LevelVisibility,
+    visibility: std::cell::RefCell<LevelVisibility>,
     /// `r__detail_density` and the wind strength *W* as the app last gave
     /// them.
     detail_density: f32,
@@ -2026,7 +2026,7 @@ impl NewGameLoad {
             torches: PlayerTorches::new(torches, &name_for_torches),
             details: self.details.map(std::cell::RefCell::new),
             random: self.random,
-            visibility,
+            visibility: visibility.into(),
             detail_density: level_details::DENSITY_DEFAULT,
             wind: 0.0,
             frame: 0,
@@ -2669,7 +2669,11 @@ impl LevelScreen {
     /// The lights with the camera pass and the shared generator they are
     /// listed with (tests and benches).
     pub fn lights_with_visibility(&mut self) -> (&mut LevelLights, &mut LevelVisibility, Shared) {
-        (&mut self.lights, &mut self.visibility, self.random.clone())
+        (
+            &mut self.lights,
+            self.visibility.get_mut(),
+            self.random.clone(),
+        )
     }
 
     /// This frame's global clock (sound-weather-ambient.md 3.1), ms: the
@@ -2716,7 +2720,7 @@ impl LevelScreen {
         };
         let sun = (e.sun_dir, e.sun_color);
         self.camera_pass(w, h, &view, &projection);
-        let (collision, visibility) = (&self.collision, &mut self.visibility);
+        let (collision, visibility) = (&self.collision, self.visibility.get_mut());
         (self.random).with(|g| {
             (self.lights).frame(collision, &camera, sun, dt, visibility, g);
         });
@@ -2740,13 +2744,13 @@ impl LevelScreen {
             eye: self.player.view().eye,
             menu_shown: false,
         };
-        let (collision, visibility) = (&self.collision, &mut self.visibility);
+        let (collision, visibility) = (&self.collision, self.visibility.get_mut());
         (self.random).with(|g| visibility.camera_pass(view, &thresholds, collision, g));
     }
 
     /// The latest camera pass.
-    pub fn visibility(&self) -> &LevelVisibility {
-        &self.visibility
+    pub fn visibility(&self) -> std::cell::Ref<'_, LevelVisibility> {
+        self.visibility.borrow()
     }
 
     /// The level's placed effects (level-placed-effects.md).
@@ -2931,7 +2935,14 @@ impl LevelScreen {
             ssa_min: crate::render::world::ssa_min(w, h, camera::FOV_Y_DEGREES),
             density: self.detail_density,
         };
-        let frame = (self.random).with(|g| d.cache.pass(&pass, &self.collision, g));
+        // The entries' occlusion tests in the latest camera pass's view
+        // (detail-objects.md 5.2 step 3).
+        let mut visibility = self.visibility.borrow_mut();
+        let frame = (self.random).with(|g| {
+            (d.cache).pass(&pass, &self.collision, g, |c, a, b, g| {
+                visibility.cached_visible(c, a, b, g)
+            })
+        });
         let sway = crate::core::details::Sway::blend(&d.normal, &d.fast, self.wind);
         Some(DetailsScene {
             frame,
@@ -3226,7 +3237,7 @@ impl LevelScreen {
             torches: PlayerTorches::default(),
             details: None,
             random: Shared::default(),
-            visibility: LevelVisibility::default(),
+            visibility: Default::default(),
             detail_density: level_details::DENSITY_DEFAULT,
             wind: 0.0,
             frame: 0,

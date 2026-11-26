@@ -14,6 +14,7 @@ use volya_engine_formats::ltx::{Config, value};
 
 use crate::collision::CollisionWorld;
 use crate::collision::geometry::box_intersects;
+use crate::occlusion::Cached;
 use crate::particles::random::Generator;
 
 pub type Vec3 = [f32; 3];
@@ -208,6 +209,9 @@ struct Entry {
     due: u64,
     /// Per part, the lists of the last refresh: sway 1, sway 2, still.
     lists: [[Vec<DrawnInstance>; 3]; 4],
+    /// The cached occlusion test (occlusion-tests.md 5, 6): *N* 0 when
+    /// made.
+    occlusion: Cached,
 }
 
 impl Default for Entry {
@@ -223,6 +227,7 @@ impl Default for Entry {
             instances: Default::default(),
             due: 0,
             lists: Default::default(),
+            occlusion: Cached::default(),
         }
     }
 }
@@ -575,6 +580,8 @@ impl Details {
     /// One pass of frame `pass.frame` (5.1): the cache's update and the
     /// selection when the pass ran in the previous frame; otherwise nothing
     /// is drawn. A second pass in the same frame draws what the first did.
+    /// `visible` is the cached occlusion test of an entry's box with its
+    /// cache (5.2 step 3).
     // TODO(#407): whether the first frame after loading draws detail
     // objects is unestablished (5.1); here it does not.
     pub fn pass(
@@ -582,6 +589,7 @@ impl Details {
         pass: &Pass,
         collision: &CollisionWorld,
         random: &mut Generator,
+        mut visible: impl FnMut(&mut Cached, Vec3, Vec3, &mut Generator) -> bool,
     ) -> std::sync::Arc<DetailFrame> {
         if let Some((frame, selected)) = &self.selected
             && *frame == pass.frame
@@ -592,7 +600,7 @@ impl Details {
         self.last_pass = Some(pass.frame);
         let frame = if previous {
             self.update(pass.eye, pass.density, collision, random);
-            std::sync::Arc::new(self.select(pass, random))
+            std::sync::Arc::new(self.select(pass, random, &mut visible))
         } else {
             Default::default()
         };
@@ -601,7 +609,12 @@ impl Details {
     }
 
     /// The selection (5.2 – 5.4).
-    fn select(&mut self, pass: &Pass, random: &mut Generator) -> DetailFrame {
+    fn select(
+        &mut self,
+        pass: &Pass,
+        random: &mut Generator,
+        visible: &mut impl FnMut(&mut Cached, Vec3, Vec3, &mut Generator) -> bool,
+    ) -> DetailFrame {
         let planes = frustum(&pass.view_projection);
         let mut chosen: Vec<usize> = Vec::new();
         for gm in 0..GROUPS {
@@ -618,16 +631,18 @@ impl Details {
                 for m in gm * GROUP..(gm + 1) * GROUP {
                     for k in gk * GROUP..(gk + 1) * GROUP {
                         let i = self.physical(k, m);
-                        let e = &self.entries[i];
+                        let e = &mut self.entries[i];
                         if e.empty || e.bounds.is_empty() {
                             continue;
                         }
-                        // TODO(#407): the occlusion test against level.hom
-                        // (5.2 step 3) is not made: a superset is drawn.
                         if partial
                             && (test_sphere(&planes, e.sphere) == Side::Outside
                                 || !box_in(&planes, &e.bounds))
                         {
+                            continue;
+                        }
+                        let (min, max) = (e.bounds.min, e.bounds.max);
+                        if !visible(&mut e.occlusion, min, max, random) {
                             continue;
                         }
                         chosen.push(i);

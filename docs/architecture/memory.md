@@ -7,7 +7,7 @@ Where the engine's memory goes, by lifetime and owner; the design it follows (on
 - The product runs on an iPhone, where iOS kills the page's process at its per-process limit: 2,528 MB on the reference iPhone (measured: its Jetsam report, #443). Every ANGLE Metal resource and drawing buffer is attributed to that process (documented, #443), so the limit covers the wasm heaps, JavaScript, WebKit and the GPU's resources together.
 - A wasm memory never shrinks (documented: WebAssembly has no instruction to release memory): the heap's high-water mark is the page's for its life. Free space in it is only worth something to later allocations that fit it.
 - GPU resources are released to the browser when deleted; the GPU process frees them some time after (documented for WebGL; when exactly is the implementation's).
-- Budgets are measured and reported ("OVER BUDGET" notes in `loading_memory.rs` and the `menu` suite), never release gates.
+- Budgets are measured and reported ("OVER BUDGET" notes in `loading_memory.rs` and the game suites), never release gates.
 
 ## Measuring
 
@@ -20,10 +20,10 @@ Where the engine's memory goes, by lifetime and owner; the design it follows (on
 | `heap_map` op (test builds) | browser | Live KiB per MiB of the heap and every live block of 256 KiB or more, by address. |
 | `heap_record` op (test builds) | browser | At the load's most live: live bytes by block size and the largest blocks; every allocation that grew the wasm memory since the reset, by size and address. |
 | `level_stats` op | browser | The wasm heaps (engine, audio worker) and the GPU world's buffers and textures. |
-| `menu` suite's JS memory | Chrome | `performance.measureUserAgentSpecificMemory()` after the New Game (cross-origin isolated pages only, documented, MDN): each context's JavaScript, the wasm memories not among it (measured: 8 MiB in all beside a 87 MiB heap). |
+| `game-level` and `game-memory` suites' JS memory | Chrome | `performance.measureUserAgentSpecificMemory()` after the New Game (cross-origin isolated pages only, documented, MDN): each context's JavaScript, the wasm memories not among it (measured: 8 MiB in all beside a 87 MiB heap). |
 | `footprint` of the Simulator's processes | iOS Simulator | Per-process footprints; ETC2 textures there are held as RGBA8, so they don't show the device's (#443). |
 
-`cargo xtask e2e chrome menu` reports the browser's numbers; the native tests run with `VOLYA_GOG_INSTALLER` (release build for meaningful counts).
+`cargo xtask e2e chrome game-level game-memory` reports the browser's numbers; the native tests run with `VOLYA_GOG_INSTALLER` (release build for meaningful counts).
 
 ## Inventory
 
@@ -138,7 +138,7 @@ Small, short-lived or rare allocations: the UI's state, menus, the console, erro
 
 ### Budgets
 
-Reported against these, never gated (the `menu` suite also notes both wasm heaps over 110 MiB):
+Reported against these, never gated (the game suites also note both wasm heaps over 110 MiB):
 
 | What | Budget |
 |---|---|
@@ -185,7 +185,7 @@ The specs in docs/ state nothing about how the original manages its memory (text
 
 ## Migration
 
-Ordered; each step is its own issue, measured before and after with the tools above (native and `cargo xtask e2e chrome menu`), its gain checked against the expectation here.
+Ordered; each step is its own issue, measured before and after with the tools above (native and `cargo xtask e2e chrome game-level game-memory`), its gain checked against the expectation here.
 
 1. **Every GPU resource reported by owner.** `level_stats` reports the bytes of each lifetime's resources in the table above (the render targets, the menus' textures, the particles' buffers, the world), at the title menu as in a level. Expected: about 90 MB of render targets at 2868 × 1320 with `r__supersample` 2 measured rather than computed, and #436's 200–300 MB found ours or the browser's.
 2. **Preparation tied to its load** (#262): an id given with the load; the texture task checks it before it reports; an abandoned load's prepared textures and geometry freed at once; a test quits during preparation. Expected: a load quit during its preparation leaves no prepared resource (up to 127 MiB of textures for `l01_escape`), measured by step 1's report.

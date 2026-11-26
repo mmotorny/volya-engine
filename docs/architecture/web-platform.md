@@ -39,7 +39,7 @@ None on touch screens anywhere in the app, shell included (decided by the user, 
 - `static/zoom.js` cancels WebKit's `gesturestart`, `gesturechange` and `gestureend` and any `touchmove` with two or more touches, on the document. Pointer events, which the game and the touchpad read, still arrive; one-finger moves aren't cancelled, so the shell scrolls; text fields still focus (measured).
 - Stopping pinches is believed to stop double-tap zoom too: WebKit allows it on a `width=device-width` page only once its scale differs from the initial scale (its source). `touchend` and `dblclick` aren't cancelled: that would drop the shell's clicks, and the double-tap recogniser runs ahead of the page's events (believed).
 - A page found zoomed anyway (`visualViewport.scale` not 1) can't be reset by the page: there is no API, and changing the viewport meta doesn't (measured). So `zoom.js` marks it (`data-zoomed`) and stops cancelling, and `style.css` gives every element `manipulation`, letting the player pinch back out; at scale 1 the guard is back.
-- The `smoke` and `menu` suites check the viewport, the computed touch-action, the guard's cancelling and the scale.
+- The `smoke` and `game-input` suites check the viewport, the computed touch-action, the guard's cancelling and the scale.
 
 ## Hosting
 
