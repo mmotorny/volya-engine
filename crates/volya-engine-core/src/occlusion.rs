@@ -278,6 +278,15 @@ impl Occlusion {
         self.draw(view, random);
     }
 
+    /// The light passes and the wall-mark pass (OT 4): occlusion is off
+    /// while `f` runs, then on again exactly when the level has a mesh.
+    pub fn light_passes<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        self.on = false;
+        let r = f(self);
+        self.on = self.mesh.is_some();
+        r
+    }
+
     /// Draws the grid from `view` (OG 2 – 7), the skip counts' values from
     /// `random`.
     pub fn draw(&mut self, view: &View, random: &mut Generator) {

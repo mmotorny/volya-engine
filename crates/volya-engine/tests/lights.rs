@@ -374,9 +374,9 @@ fn lights_frame_cost_from_game_data() {
             let frames = 2_000u32;
             let started = Instant::now();
             for i in 0..frames {
-                let lights = screen.level_lights_mut();
+                let (lights, visibility, random) = screen.lights_with_visibility();
                 lights.lamps_frame(i as f32 * 0.016, 0.016);
-                lights.frame(&collision, &camera, sun, 0.016);
+                random.with(|g| lights.frame(&collision, &camera, sun, 0.016, visibility, g));
             }
             let per = started.elapsed() / frames;
             let report = screen.level_lights().report();

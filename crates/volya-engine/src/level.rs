@@ -42,6 +42,7 @@ use crate::core::level::{DrawItem, Level};
 use crate::core::lights::{LightSettings, Lights};
 use crate::core::movement::{Flags, MovementConfig, Player};
 use crate::core::object_light::{self, SkyVisibility};
+use crate::core::occlusion::{OcclusionMesh, View};
 use crate::core::particles::placed::{Origin, PlacedEffect, PlacedEffects, particle_capacity};
 use crate::core::particles::random::Shared;
 use crate::core::simulation::graph::Graph;
@@ -59,6 +60,7 @@ use crate::level_details::{self, DetailsScene, DetailsWorld, LevelDetailObjects}
 use crate::level_lights::{self, GlowShader, LevelLights, LightCamera, LightsData};
 use crate::level_sound::ZoneSoundNames;
 use crate::level_sound::{LevelSoundData, SoundInputs};
+use crate::level_visibility::LevelVisibility;
 use crate::loading_screen::Stage;
 use crate::objects::{self, Characters, LevelObjects, ObjectsReport};
 use crate::particle_drawing::{self, ParticleShader};
@@ -74,7 +76,9 @@ use volya_engine_formats::game_graph::GameGraph;
 use volya_engine_formats::gamemtl;
 use volya_engine_formats::lanims::ColourAnimations;
 use volya_engine_formats::level::split_shader_entry;
+use volya_engine_formats::level::{GEOMETRY_LOD, SSA_LOD_A, SSA_LOD_B, Thresholds};
 use volya_engine_formats::level_geom::{GeomBuffer, GeomFile, GeomLayout, GeomSource};
+use volya_engine_formats::level_hom;
 use volya_engine_formats::model as model_math;
 use volya_engine_formats::object::{self as record, ObjectRecord};
 use volya_engine_formats::particles as particle_records;
@@ -308,6 +312,8 @@ pub struct LevelScreen {
     /// The level's one shared generator: the particles', the detail
     /// objects' and the occlusion's values (occlusion-tests.md 5).
     random: Shared,
+    /// The camera pass (visibility-scope.md).
+    visibility: LevelVisibility,
     /// `r__detail_density` and the wind strength *W* as the app last gave
     /// them.
     detail_density: f32,
@@ -1184,6 +1190,10 @@ pub struct NewGameLoad {
     effects: Option<(PlacedEffects, u64)>,
     /// The level's one shared generator (occlusion-tests.md 5).
     random: Shared,
+    /// The occlusion mesh, none without `level.hom`.
+    occlusion_mesh: Option<OcclusionMesh>,
+    /// The camera pass, made from the level before its visuals go.
+    visibility: Option<LevelVisibility>,
     /// The zone objects online at the start and the sections of every zone
     /// of the level's objects.
     zones: Zones,
@@ -1420,6 +1430,15 @@ impl NewGameLoad {
                     .collect();
                 self.glow_records = level.glows.clone();
                 self.level = Some(level);
+                // The occlusion mesh, none without `level.hom` (level-hom.md 3;
+                // read here by us).
+                self.occlusion_mesh = match vfs::read(tree, &format!("{dir}\\level.hom")) {
+                    Ok(bytes) => Some(OcclusionMesh::new(
+                        &level_hom::parse(&bytes).map_err(|e| file("level.hom", e))?,
+                    )),
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+                    Err(e) => return Err(e),
+                };
             }
             // The collision mesh with its materials mapped and indexed
             // (level-cform.md sections 2, 3.3). `gamemtl.xr` is read here,
@@ -1501,6 +1520,9 @@ impl NewGameLoad {
                     })
                     .collect();
                 self.draw_items = draw_items;
+                // The camera pass keeps the sectors, portals and visual
+                // hierarchy in its own form.
+                self.visibility = Some(LevelVisibility::new(level, self.occlusion_mesh.take())?);
                 // Only the shader table is read after this stage; the
                 // visuals and the rest go now.
                 if let Some(level) = &mut self.level {
@@ -1890,6 +1912,7 @@ impl NewGameLoad {
         let name = earlier(self.name, "level")?;
         let actor = earlier(self.actor, "actor")?;
         let level = earlier(self.level, "level")?;
+        let visibility = earlier(self.visibility, "sectors")?;
         let geom = earlier(self.geom, "level.geom")?;
         let collision = earlier(self.collision, "level.cform")?;
         let movement = earlier(self.movement, "actor")?;
@@ -2003,6 +2026,7 @@ impl NewGameLoad {
             torches: PlayerTorches::new(torches, &name_for_torches),
             details: self.details.map(std::cell::RefCell::new),
             random: self.random,
+            visibility,
             detail_density: level_details::DENSITY_DEFAULT,
             wind: 0.0,
             frame: 0,
@@ -2642,6 +2666,12 @@ impl LevelScreen {
         &mut self.lights
     }
 
+    /// The lights with the camera pass and the shared generator they are
+    /// listed with (tests and benches).
+    pub fn lights_with_visibility(&mut self) -> (&mut LevelLights, &mut LevelVisibility, Shared) {
+        (&mut self.lights, &mut self.visibility, self.random.clone())
+    }
+
     /// This frame's global clock (sound-weather-ambient.md 3.1), ms: the
     /// lamps' colour animations' time (hanging-lamps.md 4.3).
     pub fn set_global_clock(&mut self, ms: u64) {
@@ -2685,7 +2715,38 @@ impl LevelScreen {
             far: e.far_plane,
         };
         let sun = (e.sun_dir, e.sun_color);
-        self.lights.frame(&self.collision, &camera, sun, dt);
+        self.camera_pass(w, h, &view, &projection);
+        let (collision, visibility) = (&self.collision, &mut self.visibility);
+        (self.random).with(|g| {
+            (self.lights).frame(collision, &camera, sun, dt, visibility, g);
+        });
+    }
+
+    /// The camera pass (visibility-scope.md 1) of the latest frame's view
+    /// at `w` × `h`.
+    fn camera_pass(&mut self, w: u32, h: u32, view: &Mat4, projection: &Mat4) {
+        let (tw, th) = crate::render::present::target_size(w, h, self.supersample);
+        let thresholds = Thresholds::new(
+            tw,
+            th,
+            camera::FOV_Y_DEGREES,
+            GEOMETRY_LOD,
+            SSA_LOD_A,
+            SSA_LOD_B,
+        );
+        let view = View {
+            frame: self.frame as u32,
+            view_projection: crate::render::world::multiply(view, projection),
+            eye: self.player.view().eye,
+            menu_shown: false,
+        };
+        let (collision, visibility) = (&self.collision, &mut self.visibility);
+        (self.random).with(|g| visibility.camera_pass(view, &thresholds, collision, g));
+    }
+
+    /// The latest camera pass.
+    pub fn visibility(&self) -> &LevelVisibility {
+        &self.visibility
     }
 
     /// The level's placed effects (level-placed-effects.md).
@@ -3165,6 +3226,7 @@ impl LevelScreen {
             torches: PlayerTorches::default(),
             details: None,
             random: Shared::default(),
+            visibility: LevelVisibility::default(),
             detail_density: level_details::DENSITY_DEFAULT,
             wind: 0.0,
             frame: 0,
