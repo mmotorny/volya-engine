@@ -21,7 +21,7 @@ workspace = true
 # never in the deployed one.
 test-ops = ["volya-engine/render-selftest"]
 # The direct WebGL 2 renderer instead of wgpu's (docs/architecture/
-# rendering.md, Design: direct WebGL 2), until it is the only one (#479).
+# rendering.md, Design: direct WebGL 2), the default (#479).
 gl = ["volya-engine/gl"]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

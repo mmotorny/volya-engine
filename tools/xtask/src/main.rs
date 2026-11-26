@@ -219,10 +219,10 @@ enum Profile {
 }
 
 fn web(profile: Profile) -> Result {
-    // The direct WebGL 2 renderer instead of wgpu's (docs/architecture/
-    // rendering.md, Design: direct WebGL 2) with `VOLYA_RENDERER=gl`.
-    let gl = std::env::var("VOLYA_RENDERER").is_ok_and(|r| r == "gl");
-    let features: &[&str] = if gl { &["gl"] } else { &[] };
+    // The direct WebGL 2 renderer (docs/architecture/rendering.md, Design:
+    // direct WebGL 2); wgpu's with `VOLYA_RENDERER=wgpu`.
+    let wgpu = std::env::var("VOLYA_RENDERER").is_ok_and(|r| r == "wgpu");
+    let features: &[&str] = if wgpu { &[] } else { &["gl"] };
     web_into(profile, features, &root().join("dist"))
 }
 
