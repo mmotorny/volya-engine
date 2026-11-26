@@ -12,8 +12,11 @@ the light passes 5.3 – 5.4), `docs/behavior/light-shadows-projection.md` (here
 
 Conventions: "the traversal" is that of LV 9.2: it starts in one sector with one frustum and enters further
 sectors through portals by rules 1 – 6 there. Every fact carries the id of the check that reproduces it; the checks
-are scripts in `checks/traversal-fade/` of the dirty workspace (`run.py` runs them all): `bin_traversal.py` [T…]
-reads `bin\xrRender_R1.dll` by static analysis (read-only decompilation; outputs kept in `out/`). All checks pass.
+are scripts in `checks/traversal-fade/` of the dirty workspace (`run.py` runs them all): `bin_traversal.py` [T1 – T8]
+reads `bin\xrRender_R1.dll` by static analysis (read-only decompilation; outputs kept in `out/`);
+`bin_portal_frustum.py` [T9 – T13] reads `bin\xrRender_R1.dll` and `bin\XR_3DA.exe` (which holds the frustum
+routines the renderer calls) the same way; `model_frustum.py` [M3] evaluates the construction of section 5 on test
+polygons. All checks pass.
 
 ## 1. Inputs of a traversal
 
@@ -102,7 +105,7 @@ With bit 4, for a portal that is not marked as touched and whose clipped polygon
 4. with bit 1, and only while occlusion is on for the pass (VS 3.2), this rectangle with its depth is tested
    (VS 3.3, the rectangle shape) and the portal is skipped when hidden; with occlusion off for the pass no test is
    made [T6];
-5. the target sector is entered with the narrowed frustum (LV 9.2) and this rectangle [T7].
+5. the target sector is entered with the frustum through the portal (section 5) and this rectangle [T7].
 
 Without bit 4, for a touched portal, and in case 2, the target is entered with the current entry's rectangle and
 depth unchanged, and bit 1 applies the polygon test of section 2.3 [T6, T7].
@@ -127,20 +130,64 @@ screen-rectangle mode is used by no pass [T1, T5].
 Shadow passes make no traversal: the traversal is started only by the two passes above, and the light pass only
 for the spot and point light phases [T1]; the projected object shadows (LS) take their casters from the camera
 pass (LS 3.1) and their receivers from a collision query (LS 5). During the light phases occlusion is switched
-off for the pass and restored after them (on exactly when `level.hom` exists, VS 7) [T6] (it has no effect on the traversal there, whose bit 1 is
-off).
+off for the pass and restored after them (on exactly when `level.hom` exists, VS 7) [T6] (it has no effect on the
+traversal there, whose bit 1 is off).
 
 The eye stored by a traversal remains after it ends; the portal fade's ordering reads it (PF) [T2].
 
-## 5. Unestablished
+## 5. The frustum through a portal
+
+Every portal the traversal enters through, touched or not and in every pass, gives its target sector a new frustum
+built the same way from the portal polygon clipped by rule 5, the traversal's eye **E** and the traversal's matrix
+M; a touched portal gets no special case, and no entry keeps the current frustum as it was [T9]. The new frustum
+does not inherit the current frustum's planes; the current frustum acts only through the clipping of the polygon
+[T10]. Its planes, each with its normal scaled to unit length and a point inside when its plane value
+**n**·**p** + *d* is negative [T11]:
+
+1. **Polygon replacement.** A clipped polygon with more than six vertices is first replaced by four vertices: the
+   rectangle bounding it in its own plane (normal as in item 2), with one pair of sides parallel to the reference
+   axis (0, 1, 0) made orthogonal to that normal, or to (1, 0, 0) instead when |*n*\_y| > 0.99 [T10, T13].
+2. **Portal plane.** The plane through the polygon's first vertex **v**₀ with normal
+   (**v**₀ − **v**₁) × (**v**₀ − **v**₂); the portal's stored plane (LV section 5) is not used here [T9, T10]. When
+   **E** lies strictly on the negative side of it, the polygon's vertex order is reversed and the plane taken again
+   from the reversed polygon [T10]. So, with **E** off the plane, the space on the far side of the portal plane from
+   **E** is inside, whichever side of the portal the eye is on [T10, M3].
+3. **Edge planes.** For each edge (**v**ᵢ, **v**ᵢ₊₁) of the polygon in that order, closing with (**v**ₙ₋₁, **v**₀), the
+   plane through **E** with normal (**E** − **v**ᵢ) × (**E** − **v**ᵢ₊₁) [T10].
+4. Then the portal plane of item 2 [T10].
+5. **Far plane.** The plane *z* − *w* = 0 of M: normal (M₀₂ − M₀₃, M₁₂ − M₁₃, M₂₂ − M₂₃), *d* = M₃₂ − M₃₃
+   (row-vector convention, section 1), normalised; inside where clip *z* < *w* [T10, M3].
+
+In items 2 and 3, a normal of length zero (for an edge plane: **E** on the edge's line) becomes (0, 1, 0), its
+plane still through the point given; any other normal, however short, is scaled to unit length [T12].
+
+The camera pass's view frustum is built from the same matrix it gives the traversal, with five planes: the four
+sides (clip −*w* < *x* < *w*, −*w* < *y* < *w*) and the far plane *z* < *w* in the same form as item 5; it has no
+near plane [T11]. So every frustum of the camera pass's traversal, through any number of portals, has the view
+frustum's far plane, and in place of a near plane the plane of the last portal passed [T10, T11].
+
+Consequences for a touched portal (the eye within the box of LV 9.2 rule 2) [M3]: with **E** off the portal's
+plane, the new frustum is the cone from **E** through the clipped polygon beyond the portal plane as seen from
+**E**; when **E** is already past the plane on the target's side, that cone opens toward the current sector's side,
+away from the target. With **E** exactly in the plane and inside the polygon, every edge plane coincides with the
+portal plane up to sign, and the frustum is the half-space on one side of the portal plane (cut by the far plane),
+the side set by the clipped polygon's vertex order.
+
+LV 9.2 describes the narrowed frustum as "the planes through the camera and the polygon's edges"; it also has the
+portal plane and the far plane (items 4, 5), and the polygon replacement of item 1 [T10].
+
+## 6. Unestablished
 
 - What reads the per-sector union rectangle and depth of the screen-rectangle mode (section 3).
 - The exact inputs and comparison of the rectangle and polygon occlusion tests (spec V4).
 - Whether anything besides passing a portal clears its touched mark (section 2.4).
+- The vertex order of the stored portal polygons relative to their stored plane, and so which side the frustum of
+  section 5 takes when the eye lies exactly in a portal's plane.
 
-## 6. Provenance
+## 7. Provenance
 
 - Date: 2026-11-25.
-- Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG); binary `bin\xrRender_R1.dll`.
-- Analysis: static analysis of the shipped binary (headless decompilation and disassembly, cross-references,
-  constants read from the binary's data).
+- Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG); binaries `bin\xrRender_R1.dll` and
+  `bin\XR_3DA.exe`.
+- Analysis: static analysis of the shipped binaries (headless decompilation and disassembly, cross-references,
+  constants read from the binaries' data).
