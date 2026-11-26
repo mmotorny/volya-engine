@@ -16,8 +16,10 @@ step of its own, and the 3.7 GB `.bin` is never hashed. As repositories:
 - `@gog_extractor` (build/gog_extractor.bzl): `tools/gog-extract`, built
   with the Rust toolchain's cargo.
 - `@gog_game` and `@gog_original` (build/gog_game.bzl): the game files and
-  the original's install folder, reproducible and keyed on the fingerprint,
-  so every worktree shares one copy through the repo contents cache.
+  the original's install folder, reproducible and keyed on the fingerprint
+  and the extraction format (`EXTRACTION_FORMAT` in
+  tools/gog-extract/src/main.rs), not the extractor's binary, so every
+  worktree shares one copy through the repo contents cache.
 """
 
 load(":gog_extractor.bzl", "gog_extractor")
@@ -78,13 +80,23 @@ gog_installer = repository_rule(
     doc = "The GOG installer's fingerprint (see the module's docstring).",
 )
 
+def _extraction_format(mctx):
+    """`EXTRACTION_FORMAT` in the extractor's source. Passed as an attribute,
+    so any other edit there runs this again and re-keys nothing."""
+    prefix = "const EXTRACTION_FORMAT: u32 = "
+    for line in mctx.read(Label("//tools/gog-extract:src/main.rs")).splitlines():
+        if line.startswith(prefix) and line.endswith(";"):
+            return int(line[len(prefix):-1])
+    fail("tools/gog-extract/src/main.rs has no `{}N;` line".format(prefix))
+
 def _gog_impl(mctx):
     # Read from @gog_installer, so the extension runs again when it changes.
     fingerprint = mctx.read(Label("@gog_installer//:fingerprint.txt"))
     exe = mctx.read(Label("@gog_installer//:exe.txt"))
+    format = _extraction_format(mctx)
     gog_extractor(name = "gog_extractor")
-    gog_game(name = "gog_game", exe = exe, fingerprint = fingerprint)
-    gog_original(name = "gog_original", fingerprint = fingerprint)
+    gog_game(name = "gog_game", exe = exe, fingerprint = fingerprint, format = format)
+    gog_original(name = "gog_original", fingerprint = fingerprint, format = format)
     return mctx.extension_metadata(reproducible = False)
 
 gog = module_extension(

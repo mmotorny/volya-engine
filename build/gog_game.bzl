@@ -13,8 +13,7 @@ exports_files(
 """
 
 def _extractor(rctx):
-    """The extractor, its digest read so a changed one re-keys this."""
-    rctx.read(Label("@gog_extractor//:digest.txt"))
+    """The extractor, not part of the key (the `format` attribute is)."""
     return rctx.path(Label("@gog_extractor//:gog-extract"))
 
 def _gog_game_impl(rctx):
@@ -35,6 +34,7 @@ gog_game = repository_rule(
     attrs = {
         "exe": attr.string(doc = "The installer's .exe; empty: no game data."),
         "fingerprint": attr.string(doc = "The installer's identity, the repository's key."),
+        "format": attr.int(doc = "The extraction format, the rest of the key."),
     },
 )
 
@@ -53,5 +53,8 @@ def _gog_original_impl(rctx):
 gog_original = repository_rule(
     implementation = _gog_original_impl,
     doc = "The original's install folder in `game/`, and `manifest.tsv`.",
-    attrs = {"fingerprint": attr.string(doc = "The installer's identity, the repository's key.")},
+    attrs = {
+        "fingerprint": attr.string(doc = "The installer's identity, the repository's key."),
+        "format": attr.int(doc = "The extraction format, the rest of the key."),
+    },
 )

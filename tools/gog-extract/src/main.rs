@@ -23,12 +23,26 @@ use std::time::Instant;
 
 use volya_engine_installer::{Installer, extract, hex};
 
+/// The extraction format: what `@gog_game` and `@gog_original` are keyed on
+/// with the installer's fingerprint, read from this line by build/gog.bzl
+/// (docs/architecture/build.md, Game data). Bumped only when the extracted
+/// layout or contents are meant to change; any other edit, or a new
+/// toolchain, rebuilds the extractor and extracts nothing again.
+const EXTRACTION_FORMAT: u32 = 1;
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.as_slice() {
+        [flag] if flag == "--version" => {
+            println!("gog-extract: extraction format {EXTRACTION_FORMAT}");
+            Ok(())
+        }
         [mode, files, out] if mode == "install" => install(Path::new(files), Path::new(out)),
         [exe, out] => run(Path::new(exe), Path::new(out)),
-        _ => Err("usage: gog-extract EXE OUT | gog-extract install FILES OUT".into()),
+        _ => Err(
+            "usage: gog-extract EXE OUT | gog-extract install FILES OUT | gog-extract --version"
+                .into(),
+        ),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

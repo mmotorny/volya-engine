@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Maksym Motorny
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The game data's extractor (build/gog.bzl declares it). Kept apart and
-loading nothing: a repository's key includes the file defining its rule,
-and the game files' repositories take this one's binary."""
+"""The game data's extractor (build/gog.bzl declares it). The game files'
+repositories run its binary but aren't keyed on it: they're keyed on the
+extraction format (`EXTRACTION_FORMAT` in tools/gog-extract/src/main.rs)."""
 
 # inno at Cargo.lock's version, with our patch (MODULE.bazel's annotation).
 _INNO = "inno"
@@ -76,16 +76,9 @@ def _gog_extractor_impl(rctx):
     if result.return_code != 0:
         fail("building gog-extract: " + result.stderr)
     rctx.symlink("target/release/gog-extract", "gog-extract")
-
-    # The binary's digest, which the game files' repositories read: an
-    # extractor that changed re-keys them.
-    result = rctx.execute(["shasum", "-a", "256", "target/release/gog-extract"])
-    if result.return_code != 0:
-        fail("hashing gog-extract: " + result.stderr)
-    rctx.file("digest.txt", result.stdout.split(" ")[0] + "\n")
     rctx.file("BUILD.bazel", """\
 exports_files(
-    ["digest.txt", "gog-extract"],
+    ["gog-extract"],
     visibility = ["//visibility:public"],
 )
 """)
