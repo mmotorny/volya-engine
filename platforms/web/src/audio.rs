@@ -21,7 +21,7 @@ use wasm_bindgen::prelude::*;
 use crate::audio_ring::{CMD_BYTES, Ring};
 
 thread_local! {
-    static OUTPUT: RefCell<Option<Remote>> = const { RefCell::new(None) };
+    static OUTPUT: RefCell<Option<WebMixer>> = const { RefCell::new(None) };
     /// The voices of the music track playing, left and right.
     static MUSIC: RefCell<Option<[VoiceId; 2]>> = const { RefCell::new(None) };
     static SOUNDS: RefCell<Option<SoundHost>> = const { RefCell::new(None) };
@@ -34,6 +34,113 @@ thread_local! {
     static HOLD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The audio worker's latest report.
     static HOST_STATS: RefCell<HostStats> = RefCell::new(HostStats::default());
+}
+
+/// The engine's mixer: a [`Remote`] whose files are read straight into
+/// JavaScript memory (#491), a piece at a time through one kept buffer, so
+/// no whole file (music files are several MB) passes through the wasm
+/// heap, which never shrinks.
+pub struct WebMixer {
+    remote: Remote,
+    /// Files read for the commands not yet taken, by number.
+    files: Vec<(u32, js_sys::Uint8Array)>,
+    /// The pieces' buffer.
+    piece: Vec<u8>,
+}
+
+/// Bytes read into JavaScript memory at a time: 64 KiB took the worst
+/// sound update of starting 24 voices from 4.1 to 7.4 ms in Chrome, this
+/// 4.5 (one run each).
+const PIECE: usize = 256 << 10;
+
+impl WebMixer {
+    fn new(rate: u32) -> Self {
+        Self {
+            remote: Remote::new(rate),
+            files: Vec::new(),
+            piece: Vec::new(),
+        }
+    }
+
+    fn connect(&mut self, rate: u32) {
+        self.remote.connect(rate);
+        self.files.clear();
+    }
+
+    /// The file at `path` of `tree` in a new JavaScript array; with
+    /// `check`, `None` unless it is an Ogg Vorbis stream (its headers).
+    fn read(&mut self, tree: &dyn Vfs, path: &str, check: bool) -> Option<js_sys::Uint8Array> {
+        use std::io::{Read, Seek};
+        let mut file = tree.open(path).ok()?;
+        if check {
+            volya_engine::formats::audio::VorbisStream::open(&mut file).ok()?;
+            file.rewind().ok()?;
+        }
+        let size = u32::try_from(file.size()).ok()?;
+        let array = js_sys::Uint8Array::new_with_length(size);
+        self.piece.resize(PIECE, 0);
+        let mut at = 0;
+        while at < size {
+            let n = (PIECE as u32).min(size - at) as usize;
+            file.read_exact(&mut self.piece[..n]).ok()?;
+            array
+                .subarray(at, at + n as u32)
+                .copy_from(&self.piece[..n]);
+            at += n as u32;
+        }
+        Some(array)
+    }
+}
+
+impl MixerControl for WebMixer {
+    fn play_file(&mut self, bytes: Vec<u8>, skip: u64, playback: Playback) -> Option<VoiceId> {
+        self.remote.play_file(bytes, skip, playback)
+    }
+    fn play_checked_file(
+        &mut self,
+        bytes: Vec<u8>,
+        skip: u64,
+        playback: Playback,
+    ) -> Option<VoiceId> {
+        self.remote.play_checked_file(bytes, skip, playback)
+    }
+    fn play_path(
+        &mut self,
+        tree: &dyn Vfs,
+        path: &str,
+        checked: bool,
+        skip: u64,
+        playback: Playback,
+    ) -> Option<VoiceId> {
+        let array = self.read(tree, path, !checked)?;
+        let (id, number) = self.remote.play_sent(skip, playback);
+        self.files.push((number, array));
+        Some(id)
+    }
+    fn set_voice(&mut self, id: VoiceId, gain: f32, pan: f32, pitch: f32) {
+        self.remote.set_voice(id, gain, pan, pitch);
+    }
+    fn stop(&mut self, id: VoiceId) {
+        self.remote.stop(id);
+    }
+    fn stop_all(&mut self) {
+        self.remote.stop_all();
+    }
+    fn is_playing(&self, id: VoiceId) -> bool {
+        self.remote.is_playing(id)
+    }
+    fn volume(&self, category: Category) -> f32 {
+        self.remote.volume(category)
+    }
+    fn set_volume(&mut self, category: Category, volume: f32) {
+        self.remote.set_volume(category, volume);
+    }
+    fn master_gain(&self) -> f32 {
+        self.remote.master_gain()
+    }
+    fn set_master_gain(&mut self, gain: f32) {
+        self.remote.set_master_gain(gain);
+    }
 }
 
 /// What the audio worker last reported of itself (`crate::audio_host`).
@@ -88,8 +195,8 @@ pub fn audio_init(sample_rate: u32, memory: JsValue) {
     OUTPUT.with(|m| {
         let mut m = m.borrow_mut();
         match m.as_mut() {
-            Some(remote) => remote.connect(sample_rate),
-            None => *m = Some(Remote::new(sample_rate)),
+            Some(mixer) => mixer.connect(sample_rate),
+            None => *m = Some(WebMixer::new(sample_rate)),
         }
     });
     RING.with(|r| *r.borrow_mut() = Some((Ring::new(&memory), sample_rate, Vec::new())));
@@ -108,7 +215,13 @@ pub fn audio_flush() -> JsValue {
     if HOLD.with(std::cell::Cell::get) {
         return JsValue::NULL;
     }
-    let message = OUTPUT.with(|m| m.borrow_mut().as_mut().and_then(Remote::take));
+    let (message, mut files) = OUTPUT.with(|m| {
+        let mut m = m.borrow_mut();
+        let Some(m) = m.as_mut() else {
+            return (None, Vec::new());
+        };
+        (m.remote.take(), std::mem::take(&mut m.files))
+    });
     let mut stalled = None;
     let connected = RING.with(|r| {
         let mut r = r.borrow_mut();
@@ -132,20 +245,28 @@ pub fn audio_flush() -> JsValue {
     if let Some(rate) = stalled {
         web_sys::console::warn_1(&"audio: the audio worker fell behind; sounds stopped".into());
         OUTPUT.with(|m| {
-            if let Some(remote) = m.borrow_mut().as_mut() {
-                remote.connect(rate);
+            if let Some(mixer) = m.borrow_mut().as_mut() {
+                mixer.connect(rate);
             }
         });
         MUSIC.with(|m| *m.borrow_mut() = None);
         with_sounds(SoundHost::mixer_replaced);
     }
-    let Some(message) = message.filter(|m| connected.is_some() && !m.files.is_empty()) else {
+    // Files of commands dropped above are dropped with them.
+    if connected.is_none() || stalled.is_some() {
         return JsValue::NULL;
-    };
-    message
-        .files
-        .iter()
-        .map(|(n, f)| js_sys::Array::of2(&(*n).into(), &js_sys::Uint8Array::from(f.as_slice())))
+    }
+    let sent = message.map(|m| m.files).unwrap_or_default();
+    files.extend(
+        sent.iter()
+            .map(|(n, f)| (*n, js_sys::Uint8Array::from(f.as_slice()))),
+    );
+    if files.is_empty() {
+        return JsValue::NULL;
+    }
+    files
+        .into_iter()
+        .map(|(n, f)| js_sys::Array::of2(&n.into(), &f))
         .collect::<js_sys::Array>()
         .into()
 }
@@ -173,8 +294,8 @@ pub fn audio_report(report: &str) -> Result<(), JsValue> {
         })
         .unwrap_or_default();
     OUTPUT.with(|m| {
-        if let Some(remote) = m.borrow_mut().as_mut() {
-            remote.ended(&ended);
+        if let Some(mixer) = m.borrow_mut().as_mut() {
+            mixer.remote.ended(&ended);
         }
     });
     let number = |k: &str| report[k].as_f64().unwrap_or(0.0);
@@ -208,12 +329,7 @@ fn error(e: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&e.to_string())
 }
 
-/// The file at `path` of `tree`, compressed.
-fn read(tree: &dyn Vfs, path: &str) -> Result<Vec<u8>, JsValue> {
-    volya_engine::core::vfs::read(tree, path).map_err(|e| error(format!("{path}: {e}")))
-}
-
-fn with_mixer<T>(f: impl FnOnce(&mut Remote) -> T) -> Result<T, JsValue> {
+fn with_mixer<T>(f: impl FnOnce(&mut WebMixer) -> T) -> Result<T, JsValue> {
     OUTPUT.with(|m| {
         let mut mixer = m.borrow_mut();
         let mixer = mixer
@@ -223,23 +339,22 @@ fn with_mixer<T>(f: impl FnOnce(&mut Remote) -> T) -> Result<T, JsValue> {
     })
 }
 
-/// Starts `bytes`, the file at `path`; fails when they are not a stream
-/// that plays.
+/// Starts the file at `path` of `tree`; fails when it cannot be read or is
+/// not a stream that plays.
 fn start(
-    mixer: &mut Remote,
+    mixer: &mut WebMixer,
+    tree: &dyn Vfs,
     path: &str,
-    bytes: Vec<u8>,
     playback: Playback,
 ) -> Result<VoiceId, JsValue> {
     mixer
-        .play_file(bytes, 0, playback)
-        .ok_or_else(|| error(format!("{path}: not an Ogg Vorbis stream")))
+        .play_path(tree, path, false, 0, playback)
+        .ok_or_else(|| error(format!("{path}: unreadable or not an Ogg Vorbis stream")))
 }
 
 /// Plays the Ogg Vorbis file at `path` in `tree`; returns the voice id.
 pub fn play(tree: &dyn Vfs, path: &str, playback: Playback) -> Result<u32, JsValue> {
-    let bytes = read(tree, path)?;
-    with_mixer(|mixer| start(mixer, path, bytes, playback))?.map(VoiceId::index)
+    with_mixer(|mixer| start(mixer, tree, path, playback))?.map(VoiceId::index)
 }
 
 /// Starts music track `track` (e.g. `music\wasteland2`) from its pair of
@@ -247,12 +362,16 @@ pub fn play(tree: &dyn Vfs, path: &str, playback: Playback) -> Result<u32, JsVal
 /// voice ids, left and right.
 pub fn play_music(tree: &dyn Vfs, track: &str) -> Result<[u32; 2], JsValue> {
     let paths = mix::music_files(track).map(|file| format!("{GAME_DATA}{file}"));
-    let [left, right] = [read(tree, &paths[0])?, read(tree, &paths[1])?];
+    for path in &paths {
+        if !tree.exists(path) {
+            return Err(error(format!("{path}: not found")));
+        }
+    }
     stop_music();
     // Both before the next message, so on the same output frame.
     let ids = with_mixer(|mixer| -> Result<_, JsValue> {
-        let l = start(mixer, &paths[0], left, mix::MUSIC_PLAYBACK[0])?;
-        match start(mixer, &paths[1], right, mix::MUSIC_PLAYBACK[1]) {
+        let l = start(mixer, tree, &paths[0], mix::MUSIC_PLAYBACK[0])?;
+        match start(mixer, tree, &paths[1], mix::MUSIC_PLAYBACK[1]) {
             Ok(r) => Ok([l, r]),
             Err(e) => {
                 mixer.stop(l);
@@ -365,8 +484,8 @@ pub mod capture {
 
     fn watch(voice: Option<Option<VoiceId>>) {
         OUTPUT.with(|m| {
-            if let Some(remote) = m.borrow_mut().as_mut() {
-                remote.watch(voice);
+            if let Some(mixer) = m.borrow_mut().as_mut() {
+                mixer.remote.watch(voice);
             }
         });
     }

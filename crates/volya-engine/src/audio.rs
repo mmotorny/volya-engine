@@ -15,7 +15,7 @@ use crate::core::sound::Sound;
 use crate::core::sound::system::{
     DEFAULT_VOICES, Device, DeviceListener, DeviceSource, Listener, NoDevice, SoundSystem, heard,
 };
-use crate::core::vfs::{self, Vfs};
+use crate::core::vfs::Vfs;
 
 /// A voice as screens know it.
 pub type Voice = u32;
@@ -66,8 +66,7 @@ impl AudioOut for MixerOut<'_> {
     fn play(&mut self, path: &str, playback: Playback) -> Option<Voice> {
         let mixer = &*self.mixer;
         self.voices.retain(|v| mixer.is_playing(*v));
-        let bytes = vfs::read(self.tree, path).ok()?;
-        let id = self.mixer.play_file(bytes, 0, playback)?;
+        let id = self.mixer.play_path(self.tree, path, false, 0, playback)?;
         self.voices.push(id);
         Some(id.index())
     }
@@ -130,10 +129,6 @@ impl Device for MixerDevice<'_> {
         let Some(tree) = self.tree else {
             return;
         };
-        // Errors leave the voice silent: the file was checked when loaded.
-        let Ok(bytes) = sound.file(tree) else {
-            return;
-        };
         let playback = Playback {
             looping: looped,
             // Ramped to the source's gain from the first block mixed.
@@ -141,7 +136,11 @@ impl Device for MixerDevice<'_> {
             pan: 0.0,
             category: Category::Scaled,
         };
-        if let Some(id) = self.mixer.play_checked_file(bytes, offset, playback) {
+        // Errors leave the voice silent: the file was checked when loaded.
+        if let Some(id) = self
+            .mixer
+            .play_path(tree, &sound.path, true, offset, playback)
+        {
             *self.slot(voice) = Some(id);
         }
     }

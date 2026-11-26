@@ -30,19 +30,37 @@ const SUITES: &[&str] = &[
     "render-level",
     "draw-calls",
     "input",
-    "menu",
+    "game-startup",
+    "game-level",
+    "game-input",
+    "game-screens",
+    "game-memory",
 ];
 const TARGETS: &[&str] = &["chrome", "iphone"];
 /// Suites run in Chrome with the profile kept under `target/`, so the game
 /// data they read is imported once (they import only what the profile's
 /// storage lacks); the others get a fresh profile, as they test the import.
-const KEPT_PROFILE: &[&str] = &["render", "render-screens", "render-level", "draw-calls"];
+const KEPT_PROFILE: &[&str] = &[
+    "render",
+    "render-screens",
+    "render-level",
+    "draw-calls",
+    "game-level",
+    "game-input",
+    "game-screens",
+    "game-memory",
+];
 const REPORT_TIMEOUT: Duration = Duration::from_secs(60);
 /// Suites importing gigabytes from the installer get longer (the audio
-/// suite takes about a minute in the iOS Simulator); the menu
-/// suite also transcodes a level's textures where the GPU has no BC (#113).
+/// suite takes about a minute in the iOS Simulator); the game suites
+/// also transcode a level's textures at each load where the GPU has no BC
+/// (#113).
 const SLOW_SUITES: &[(&str, Duration)] = &[
-    ("menu", Duration::from_secs(1500)),
+    ("game-startup", Duration::from_secs(1500)),
+    ("game-level", Duration::from_secs(1500)),
+    ("game-input", Duration::from_secs(1500)),
+    ("game-screens", Duration::from_secs(1500)),
+    ("game-memory", Duration::from_secs(1500)),
     ("render", Duration::from_secs(240)),
     // The whole game imported on a profile's first run (minutes), then
     // levels loaded by each check.

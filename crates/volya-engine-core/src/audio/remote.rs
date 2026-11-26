@@ -91,6 +91,15 @@ impl Remote {
     /// Starts `bytes` without checking that they are a stream that plays;
     /// one that is not ends at once, which a report tells.
     pub fn play_unchecked(&mut self, bytes: Vec<u8>, skip: u64, playback: Playback) -> VoiceId {
+        let (id, file) = self.play_sent(skip, playback);
+        self.files.push((file, bytes));
+        id
+    }
+
+    /// [`Remote::play_unchecked`] for a file its caller sends the host
+    /// itself, under the number returned ([`Host::add_file`]): the web
+    /// platform's, kept in JavaScript memory (#491).
+    pub fn play_sent(&mut self, skip: u64, playback: Playback) -> (VoiceId, u32) {
         let id = VoiceId(self.next_id);
         self.next_id = self.next_id.wrapping_add(1);
         self.commands.push(PLAY);
@@ -103,9 +112,8 @@ impl Remote {
         self.f32(playback.gain);
         self.f32(playback.pan);
         self.commands.push(playback.category.index() as u8);
-        self.files.push((file, bytes));
         self.playing.push(id);
-        id
+        (id, file)
     }
 
     /// The host reports that these voices ended.

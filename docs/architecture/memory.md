@@ -7,7 +7,7 @@ Where the engine's memory goes, by lifetime and owner; the design it follows (on
 - The product runs on an iPhone, where iOS kills the page's process at its per-process limit: 2,528 MB on the reference iPhone (measured: its Jetsam report, #443). Every ANGLE Metal resource and drawing buffer is attributed to that process (documented, #443), so the limit covers the wasm heaps, JavaScript, WebKit and the GPU's resources together.
 - A wasm memory never shrinks (documented: WebAssembly has no instruction to release memory): the heap's high-water mark is the page's for its life. Free space in it is only worth something to later allocations that fit it.
 - GPU resources are released to the browser when deleted; the GPU process frees them some time after (documented for WebGL; when exactly is the implementation's).
-- Budgets are measured and reported ("OVER BUDGET" notes in `loading_memory.rs` and the `menu` suite), never release gates.
+- Budgets are measured and reported ("OVER BUDGET" notes in `loading_memory.rs` and the game suites), never release gates.
 
 ## Measuring
 
@@ -20,10 +20,10 @@ Where the engine's memory goes, by lifetime and owner; the design it follows (on
 | `heap_map` op (test builds) | browser | Live KiB per MiB of the heap and every live block of 256 KiB or more, by address. |
 | `heap_record` op (test builds) | browser | At the load's most live: live bytes by block size and the largest blocks; every allocation that grew the wasm memory since the reset, by size and address. |
 | `level_stats` op | browser | The wasm heaps (engine, audio worker) and the GPU world's buffers and textures. |
-| `menu` suite's JS memory | Chrome | `performance.measureUserAgentSpecificMemory()` after the New Game (cross-origin isolated pages only, documented, MDN): each context's JavaScript, the wasm memories not among it (measured: 8 MiB in all beside a 87 MiB heap). |
+| `game-level` and `game-memory` suites' JS memory | Chrome | `performance.measureUserAgentSpecificMemory()` after the New Game (cross-origin isolated pages only, documented, MDN): each context's JavaScript, the wasm memories not among it (measured: 8 MiB in all beside a 87 MiB heap). |
 | `footprint` of the Simulator's processes | iOS Simulator | Per-process footprints; ETC2 textures there are held as RGBA8, so they don't show the device's (#443). |
 
-`cargo xtask e2e chrome menu` reports the browser's numbers; the native tests run with `VOLYA_GOG_INSTALLER` (release build for meaningful counts).
+`cargo xtask e2e chrome game-level game-memory` reports the browser's numbers; the native tests run with `VOLYA_GOG_INSTALLER` (release build for meaningful counts).
 
 ## Inventory
 
@@ -38,7 +38,7 @@ Where the engine's memory goes, by lifetime and owner; the design it follows (on
 | The particles' effect library (`particles.xr`, `Library`: one buffer of every name, a table of every effect's actions and one of every group's members) | 1.4 MB | 1,095 | Read once at launch (`GameData`); with each level under `st_loading_ai_objects` before #484, 1.9 MB in 8,411 blocks. Its blocks are the boxed `source` actions. |
 | The renderer and its programs; the menus' textures and video frames | about 6 MiB | | The title menu's heap is 18 MiB with 11 live against 5 after the launch (measured, the `menu` suite in headless Chrome). |
 | The audio worker's wasm instance | 2–4 MiB | | Its own heap (`level_stats`). |
-| JavaScript: the audio worker 3.1, the engine worker 2.0, the page 1.1–1.6, shared 0.9 MiB | 8 MiB | | Measured in headless Chrome after the New Game (two runs). The audio worker keeps the compressed sound files there (`JsFile`), not in a wasm heap. |
+| JavaScript: the audio worker 3.1, the engine worker 2.0, the page 1.1–1.6, shared 0.9 MiB | 8 MiB | | Measured in headless Chrome after the New Game (two runs). The compressed sound files are there, not in a wasm heap: the engine worker reads each into a JavaScript array a piece at a time and the audio worker keeps it (#491). |
 
 The program's data holds about 4,100 of the heap's blocks before a game, 1,095 of them the effect library's (measured: 453 with the archive tree, 4,088 with the game's data).
 
@@ -68,7 +68,7 @@ In the browser the level's preparation adds the texture read buffer (one file, u
 
 ### Frame
 
-A frame of the running level, on the wasm heap (the `render-level` suite, 600 frames after 60): 324 allocations and 433 KB (at most 904 allocations): the update 28.5 and 8.4 KB, the sounds 5.0 and 0.1 KB, the scene 237.8 and 356 KB, the draw list 52.8 and 69 KB. Live memory grew 0.81 MB over the 600 frames. In the browser the heap stays flat while the level runs (87 MiB before and while the intro plays), so the frame's blocks reuse their own holes.
+A frame of the running level, on the wasm heap (the `render-level` suite, 600 frames after 60): 324 allocations and 433 KB (at most 904 allocations): the update 28.5 and 8.4 KB, the sounds 5.0 and 0.1 KB, the scene 237.8 and 356 KB, the draw list 52.8 and 69 KB. Live memory grew 0.81 MB over the 600 frames. In the browser the heap stays flat while the level runs (87 MiB before and while the intro plays), so the frame's blocks reuse their own holes. On an iPhone it grew while a level ran (74.9 → 78 MiB about 110 s into the first game, 82 → 86.6 about 180 s into the second; its diagnostic log): at the level's first music track, `music\amb01` about 180 s into a New Game, whose two files (7.6 MB) were read whole into the heap until #491 (measured in the iOS Simulator: the most live 62.2 → 69.8 MiB at its start, unchanged after #491), and under the in-game menu, which holds 5.7 MB more while it shows (measured there; believed its videos' read-ahead windows and decoders, made again at each opening).
 
 ### The GPU
 
@@ -138,7 +138,7 @@ Small, short-lived or rare allocations: the UI's state, menus, the console, erro
 
 ### Budgets
 
-Reported against these, never gated (the `menu` suite also notes both wasm heaps over 110 MiB):
+Reported against these, never gated (the game suites also note both wasm heaps over 110 MiB):
 
 | What | Budget |
 |---|---|
@@ -185,7 +185,7 @@ The specs in docs/ state nothing about how the original manages its memory (text
 
 ## Migration
 
-Ordered; each step is its own issue, measured before and after with the tools above (native and `cargo xtask e2e chrome menu`), its gain checked against the expectation here.
+Ordered; each step is its own issue, measured before and after with the tools above (native and `cargo xtask e2e chrome game-level game-memory`), its gain checked against the expectation here.
 
 1. **Every GPU resource reported by owner.** `level_stats` reports the bytes of each lifetime's resources in the table above (the render targets, the menus' textures, the particles' buffers, the world), at the title menu as in a level. Expected: about 90 MB of render targets at 2868 × 1320 with `r__supersample` 2 measured rather than computed, and #436's 200–300 MB found ours or the browser's.
 2. **Preparation tied to its load** (#262): an id given with the load; the texture task checks it before it reports; an abandoned load's prepared textures and geometry freed at once; a test quits during preparation. Expected: a load quit during its preparation leaves no prepared resource (up to 127 MiB of textures for `l01_escape`), measured by step 1's report.
