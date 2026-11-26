@@ -86,6 +86,28 @@ pub fn transcode(dds: &Dds) -> Option<Transcoded> {
     transcode_into(dds, &mut out).then_some(out)
 }
 
+/// The ETC2 format BC texture `dds` is transcoded to by `path`, if any: a
+/// BC1 texture with transparent texels takes the format with punch-through
+/// alpha.
+pub(crate) fn etc2_target(path: TexturePath, dds: &Dds) -> Option<Etc2Format> {
+    match (path, dds.format) {
+        (TexturePath::Etc2, Format::Bc1) => {
+            let transparent = (0..dds.faces)
+                .flat_map(|f| (0..dds.mip_levels).map(move |m| (f, m)))
+                .any(|(f, m)| {
+                    Etc2Format::for_bc(dds.format, dds.level(f, m)) == Some(Etc2Format::Rgb8A1)
+                });
+            Some(if transparent {
+                Etc2Format::Rgb8A1
+            } else {
+                Etc2Format::Rgb8
+            })
+        }
+        (TexturePath::Etc2, f) => Etc2Format::for_bc(f, &[]),
+        _ => None,
+    }
+}
+
 /// [`transcode`] into `out`, whose buffer is reused when it has the room
 /// (many textures transcoded through one keep their bytes in one block of
 /// the wasm heap, #357); whether `dds` is BC.

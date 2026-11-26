@@ -79,22 +79,7 @@ impl Renderer {
             reason,
         };
         let path = self.texture_path();
-        let etc2 = match (path, dds.format) {
-            (TexturePath::Etc2, Format::Bc1) => {
-                let transparent = (0..dds.faces)
-                    .flat_map(|f| (0..dds.mip_levels).map(move |m| (f, m)))
-                    .any(|(f, m)| {
-                        Etc2Format::for_bc(dds.format, dds.level(f, m)) == Some(Etc2Format::Rgb8A1)
-                    });
-                Some(if transparent {
-                    Etc2Format::Rgb8A1
-                } else {
-                    Etc2Format::Rgb8
-                })
-            }
-            (TexturePath::Etc2, f) => Etc2Format::for_bc(f, &[]),
-            _ => None,
-        };
+        let etc2 = etc2_target(path, dds);
         // (format, bytes per block) of what is uploaded; RGBA8 is decoded.
         let (format, block) = match (dds.format, etc2) {
             (Format::Masked(_), _) => (wgpu::TextureFormat::Rgba8Unorm, None),

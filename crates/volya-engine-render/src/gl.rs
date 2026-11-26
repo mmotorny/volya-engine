@@ -145,9 +145,21 @@ struct State {
     /// Each uniform binding point's (buffer, offset, size).
     uniform_ranges: [(u32, i32, i32); UNIFORM_POINTS],
     viewport: [i32; 4],
+    /// The depth range's near and far, as bits (WebGL's default 0, 1).
+    depth_range: [u32; 2],
     raster: Option<RasterState>,
     /// The first-instance uniform's value by program.
     first_instance: HashMap<u32, u32>,
+}
+
+impl State {
+    /// A new context's state, as far as the cache tracks it.
+    fn fresh() -> Self {
+        Self {
+            depth_range: [0f32.to_bits(), 1f32.to_bits()],
+            ..Self::default()
+        }
+    }
 }
 
 /// Texture units the cache tracks (WebGL 2 guarantees 32 combined).
@@ -199,7 +211,7 @@ impl Gl {
         gl.pixel_storei(C::PACK_ALIGNMENT, 1);
         Self {
             gl,
-            state: RefCell::default(),
+            state: RefCell::new(State::fresh()),
             counts: Cell::default(),
             extensions,
             max_texture_size,
@@ -235,7 +247,7 @@ impl Gl {
 
     /// Forgets the cached state, after code outside the layer changed it.
     pub fn reset_state(&self) {
-        *self.state.borrow_mut() = State::default();
+        *self.state.borrow_mut() = State::fresh();
     }
 
     // Objects.
@@ -481,7 +493,9 @@ impl Gl {
         self.count(Call::Create);
         self.gl.sampler_parameterf(&raw, C::TEXTURE_MIN_LOD, 0.0);
         self.count(Call::Create);
-        self.gl.sampler_parameterf(&raw, C::TEXTURE_MAX_LOD, 32.0);
+        let max_lod = if desc.top_level { 0.0 } else { 32.0 };
+        self.gl
+            .sampler_parameterf(&raw, C::TEXTURE_MAX_LOD, max_lod);
         if desc.anisotropy > 1 && self.extensions.anisotropic {
             self.count(Call::Create);
             // TEXTURE_MAX_ANISOTROPY_EXT.
@@ -820,6 +834,28 @@ impl Gl {
             s.viewport = v;
             self.count(Call::State);
             self.gl.viewport(x, y, width, height);
+        }
+    }
+
+    /// The window depth range the viewport maps depth 0 … 1 to.
+    pub fn depth_range(&self, near: f32, far: f32) {
+        let r = [near.to_bits(), far.to_bits()];
+        let mut s = self.state.borrow_mut();
+        if s.depth_range != r {
+            s.depth_range = r;
+            self.count(Call::State);
+            self.gl.depth_range(near, far);
+        }
+    }
+
+    /// Discards the bound draw framebuffer's depth, which nothing reads
+    /// after (wgpu's `StoreOp::Discard`: wgpu-hal's GL backend invalidates
+    /// it so).
+    pub fn invalidate_depth(&self) {
+        let depth = js_sys::Array::of1(&C::DEPTH_ATTACHMENT.into());
+        self.count(Call::Other);
+        if let Err(e) = self.gl.invalidate_framebuffer(C::DRAW_FRAMEBUFFER, &depth) {
+            tracing::error!(error = ?e, "invalidateFramebuffer failed");
         }
     }
 
@@ -1233,6 +1269,8 @@ pub struct SamplerDesc {
     pub wrap: [Wrap; 3],
     /// 1 for none.
     pub anisotropy: u16,
+    /// Only the top level is read (wgpu's `lod_max_clamp` 0).
+    pub top_level: bool,
 }
 
 impl Default for SamplerDesc {
@@ -1244,6 +1282,7 @@ impl Default for SamplerDesc {
             mip: Filter::Nearest,
             wrap: [Wrap::Clamp; 3],
             anisotropy: 1,
+            top_level: false,
         }
     }
 }
