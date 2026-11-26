@@ -430,6 +430,54 @@ pub(crate) fn vec4(v: [f32; 3], w: f32) -> [f32; 4] {
     [v[0], v[1], v[2], w]
 }
 
+/// The frame constants of `frame` ([`FRAME_BYTES`]) with `view_projection`
+/// for a target of `size`.
+pub(crate) fn frame_constants(
+    frame: &WorldFrame,
+    view_projection: &Mat4,
+    size: (u32, u32),
+) -> Vec<u8> {
+    let l = &frame.light;
+    let tau = std::f32::consts::TAU;
+    let t = frame.time;
+    let wind = {
+        let (x, z) = ((0.6283 * t).sin(), (0.6283 * t).cos());
+        let len = x.hypot(z).max(1e-9);
+        [0.005 * x / len, 0.0, 0.005 * z / len, 0.0]
+    };
+    let mut constants = Vec::with_capacity(FRAME_BYTES as usize);
+    push_mat(&mut constants, view_projection);
+    push_mat(&mut constants, &frame.view);
+    push_vec4(
+        &mut constants,
+        vec4(frame.eye, ssa_min(size.0, size.1, frame.fov_y_degrees)),
+    );
+    push_vec4(&mut constants, vec4(frame.forward, 0.0));
+    push_vec4(&mut constants, vec4(l.ambient, 0.0));
+    push_vec4(&mut constants, vec4(l.hemi, 0.0));
+    push_vec4(&mut constants, vec4(l.sun_color, 0.0));
+    push_vec4(&mut constants, vec4(l.sun_dir, 0.0));
+    push_vec4(
+        &mut constants,
+        fog_plane(view_projection, l.fog_near, l.fog_far),
+    );
+    push_vec4(&mut constants, vec4(l.fog_color, 0.0));
+    push_vec4(&mut constants, [0.1 / tau, 0.01 / tau, 0.11 / tau, t / tau]);
+    push_vec4(&mut constants, wind);
+    constants
+}
+
+/// The light pass `l`'s constants, the start of its slot of
+/// [`LIGHT_SLOT`] bytes.
+pub(crate) fn light_constants(l: &LightPass) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(112);
+    push_vec4(&mut bytes, l.position);
+    push_vec4(&mut bytes, l.colour);
+    push_mat(&mut bytes, &l.xform);
+    push_vec4(&mut bytes, [f32::from(u8::from(l.spot)), 0.0, 0.0, 0.0]);
+    bytes
+}
+
 /// `a · b`, row-vector convention.
 pub fn multiply(a: &Mat4, b: &Mat4) -> Mat4 {
     std::array::from_fn(|r| std::array::from_fn(|c| (0..4).map(|k| a[r][k] * b[k][c]).sum()))

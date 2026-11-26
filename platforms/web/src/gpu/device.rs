@@ -40,13 +40,16 @@ mod gl_device {
     /// What a frame is drawn into: the canvas, at its size then.
     pub(in crate::gpu) struct Frame((u32, u32));
 
+    /// A callback and the fence it waits on.
+    type Waiting = (Fence, Box<dyn FnOnce()>);
+
     /// The canvas's WebGL 2 context and the work waited on.
     pub(in crate::gpu) struct Device {
         canvas: OffscreenCanvas,
         gl: Rc<Gl>,
         /// Callbacks for when the GPU is done with the work before their
         /// fences, oldest first.
-        waiting: RefCell<Vec<(Fence, Box<dyn FnOnce()>)>>,
+        waiting: RefCell<Vec<Waiting>>,
     }
 
     impl Device {

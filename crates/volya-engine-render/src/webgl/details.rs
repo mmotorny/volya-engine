@@ -1,10 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! Detail objects in the world pass on WebGL 2. Until #477 a stand-in.
+//! Detail objects in the world pass on WebGL 2. Until #477 a stand-in
+//! drawing nothing.
 
 use crate::Texture;
 use crate::gl::Gl;
+use crate::world::Mat4;
 
 pub use crate::shared::details::*;
 
@@ -31,4 +33,16 @@ impl DetailPrograms {
     pub(crate) fn gpu_bytes(&self) -> u64 {
         0
     }
+
+    pub(crate) fn prepare(
+        &self,
+        _gl: &Gl,
+        _frame: &DetailFrame,
+        _view_projection: &Mat4,
+        _light: [[f32; 3]; 3],
+    ) -> bool {
+        false
+    }
+
+    pub(crate) fn draw(&self, _gl: &Gl, _frame: &DetailFrame) {}
 }

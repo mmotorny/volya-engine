@@ -311,6 +311,8 @@ pub struct Renderer {
     light_draws: usize,
     /// The world pass's depth buffer, sized to the latest target.
     depth: Option<gl::Texture>,
+    /// The latest target drawn straight into with that depth buffer.
+    world_framebuffer: Option<Framebuffer>,
     /// The frame every pass ends in, shown in the destination.
     frame: Option<Target>,
     /// The frame [`Renderer::render_scaled`] draws into.
@@ -371,6 +373,7 @@ impl Renderer {
             light_textures: None,
             light_draws: 0,
             depth: None,
+            world_framebuffer: None,
             frame: None,
             offscreen: None,
             prepared: Default::default(),
@@ -720,6 +723,74 @@ impl Renderer {
     /// frame-presentation.md 3.4).
     pub fn set_presentation_noise(&mut self, texture: &Texture) {
         self.post.set_noise(texture);
+    }
+
+    /// One world frame into the `screen` (frame-presentation.md 3.1): the
+    /// world straight onto the screen (the presentation's target is #477's).
+    /// Returns whether `quads` were drawn.
+    fn present_frame(
+        &mut self,
+        screen: &Target,
+        frame: &WorldFrame,
+        _quads: &[Quad],
+        _batches: &[(usize, Range<u32>)],
+    ) -> bool {
+        let size = screen.size();
+        self.post
+            .prepare(&self.gl, size, frame.presentation.supersample);
+        let framebuffer = self.world_framebuffer(screen);
+        tracing::info_span!("render.world")
+            .in_scope(|| self.encode_frame(&framebuffer, size, frame, None));
+        false
+    }
+
+    /// The world pass of `frame` with its particle effects into
+    /// `framebuffer` of `size`, then, with a distortion list, the
+    /// distortion pass into `distort` (particle-drawing.md 6.2). Returns
+    /// whether the frame had a distortion pass and whether it was drawn.
+    /// Drawn straight to the screen (no `distort`), the pass's picture
+    /// would not be shown (frame-presentation.md 3.1), so it is left
+    /// undrawn, but the frame still counts as one with a distortion pass.
+    fn encode_frame(
+        &mut self,
+        framebuffer: &Framebuffer,
+        size: (u32, u32),
+        frame: &WorldFrame,
+        distort: Option<&Framebuffer>,
+    ) -> Distortion {
+        let prepared = if frame.particles.is_empty() {
+            None
+        } else {
+            let l = &frame.light;
+            self.particles.prepare(
+                &self.gl,
+                &frame.particles,
+                &frame.view,
+                &frame.projection,
+                (l.fog_color, l.fog_near, l.fog_far),
+            )
+        };
+        let distorted = prepared
+            .as_ref()
+            .is_some_and(|p| p.has(particles::ParticleQueue::Distortion));
+        // A distortion list none of whose sprites reaches the screen
+        // leaves the target as cleared: the presentation reads a texel of
+        // the clear value instead and the pass is not drawn (#433).
+        let drawn = prepared.as_ref().is_some_and(|p| p.distortion_shown);
+        let shown = distort.filter(|_| distorted && drawn);
+        self.encode_world(framebuffer, size, frame, prepared.as_ref(), shown.is_some());
+        if let (Some(prepared), Some(distort)) = (&prepared, shown) {
+            // TODO(#329): particle-drawing.md 6.2 does not state the view
+            // and projection of the distortion pass; the scene's
+            // (believed).
+            stats::set_part(stats::Part::Particles);
+            self.particles.distort(&self.gl, prepared, distort, size);
+            stats::set_part(stats::Part::Screen);
+        }
+        Distortion {
+            pass: distorted,
+            drawn: shown.is_some(),
+        }
     }
 
     /// Draws `quads` in their `batches` ([`Renderer::upload_vertices`])
