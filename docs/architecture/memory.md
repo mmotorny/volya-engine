@@ -38,7 +38,7 @@ Where the engine's memory goes, by lifetime and owner; the design it follows (on
 | The particles' effect library (`particles.xr`, `Library`: one buffer of every name, a table of every effect's actions and one of every group's members) | 1.4 MB | 1,095 | Read once at launch (`GameData`); with each level under `st_loading_ai_objects` before #484, 1.9 MB in 8,411 blocks. Its blocks are the boxed `source` actions. |
 | The renderer and its programs; the menus' textures and video frames | about 6 MiB | | The title menu's heap is 18 MiB with 11 live against 5 after the launch (measured, the `menu` suite in headless Chrome). |
 | The audio worker's wasm instance | 2–4 MiB | | Its own heap (`level_stats`). |
-| JavaScript: the audio worker 3.1, the engine worker 2.0, the page 1.1–1.6, shared 0.9 MiB | 8 MiB | | Measured in headless Chrome after the New Game (two runs). The audio worker keeps the compressed sound files there (`JsFile`), not in a wasm heap. |
+| JavaScript: the audio worker 3.1, the engine worker 2.0, the page 1.1–1.6, shared 0.9 MiB | 8 MiB | | Measured in headless Chrome after the New Game (two runs). The compressed sound files are there, not in a wasm heap: the engine worker reads each into a JavaScript array a piece at a time and the audio worker keeps it (#491). |
 
 The program's data holds about 4,100 of the heap's blocks before a game, 1,095 of them the effect library's (measured: 453 with the archive tree, 4,088 with the game's data).
 
@@ -68,7 +68,7 @@ In the browser the level's preparation adds the texture read buffer (one file, u
 
 ### Frame
 
-A frame of the running level, on the wasm heap (the `render-level` suite, 600 frames after 60): 324 allocations and 433 KB (at most 904 allocations): the update 28.5 and 8.4 KB, the sounds 5.0 and 0.1 KB, the scene 237.8 and 356 KB, the draw list 52.8 and 69 KB. Live memory grew 0.81 MB over the 600 frames. In the browser the heap stays flat while the level runs (87 MiB before and while the intro plays), so the frame's blocks reuse their own holes.
+A frame of the running level, on the wasm heap (the `render-level` suite, 600 frames after 60): 324 allocations and 433 KB (at most 904 allocations): the update 28.5 and 8.4 KB, the sounds 5.0 and 0.1 KB, the scene 237.8 and 356 KB, the draw list 52.8 and 69 KB. Live memory grew 0.81 MB over the 600 frames. In the browser the heap stays flat while the level runs (87 MiB before and while the intro plays), so the frame's blocks reuse their own holes. On an iPhone it grew while a level ran (74.9 → 78 MiB about 110 s into the first game, 82 → 86.6 about 180 s into the second; its diagnostic log): at the level's first music track, `music\amb01` about 180 s into a New Game, whose two files (7.6 MB) were read whole into the heap until #491 (measured in the iOS Simulator: the most live 62.2 → 69.8 MiB at its start, unchanged after #491), and under the in-game menu, which holds 5.7 MB more while it shows (measured there; believed its videos' read-ahead windows and decoders, made again at each opening).
 
 ### The GPU
 

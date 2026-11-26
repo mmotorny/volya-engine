@@ -26,6 +26,8 @@ use std::io::{self, Cursor, Read, Seek};
 
 use volya_engine_formats::audio::VorbisStream;
 
+use crate::vfs::Vfs;
+
 /// Decoded audio the mixer can play.
 pub trait Source {
     fn sample_rate(&self) -> u32;
@@ -88,6 +90,26 @@ pub trait MixerControl {
         playback: Playback,
     ) -> Option<VoiceId> {
         self.play_file(bytes, skip, playback)
+    }
+    /// Starts the file at `path` of `tree` ([`MixerControl::play_file`];
+    /// with `checked`, [`MixerControl::play_checked_file`]); `None` when it
+    /// cannot be read or does not play. Read whole into the heap here; a
+    /// mixer that keeps its files elsewhere reads them there (the web
+    /// platform's, into JavaScript memory, #491).
+    fn play_path(
+        &mut self,
+        tree: &dyn Vfs,
+        path: &str,
+        checked: bool,
+        skip: u64,
+        playback: Playback,
+    ) -> Option<VoiceId> {
+        let bytes = crate::vfs::read(tree, path).ok()?;
+        if checked {
+            self.play_checked_file(bytes, skip, playback)
+        } else {
+            self.play_file(bytes, skip, playback)
+        }
     }
     /// Changes a playing voice's gain, pan and pitch ([`Mixer::set_voice`]).
     fn set_voice(&mut self, id: VoiceId, gain: f32, pan: f32, pitch: f32);
