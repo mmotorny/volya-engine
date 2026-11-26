@@ -83,7 +83,7 @@ fn mb(bytes: usize) -> f64 {
 /// listed allocate next to nothing.
 const STAGE_BUDGETS: [(Stage, f64); 9] = [
     (Stage::CreatingNewGame, 1.5), // 0.7: both files streamed (12.8 before, #403)
-    (Stage::ServerConnecting, 19.0), // 17.2: the offline simulation (#370, #403)
+    (Stage::ServerConnecting, 19.0), // 16.2: the offline simulation (#370, #403, #485)
     (Stage::OpeningStream, 14.0),  // 12.6: the `level` file and its parse
     (Stage::LoadingCform, 38.0),   // 35.1: the collision world it keeps (#371)
     (Stage::LoadingGeometry, 1.5), // 0.7: the geometry's layout only
@@ -174,7 +174,7 @@ fn loading_stage_memory() {
         if mb(peak - before) > budget {
             eprintln!("  OVER BUDGET: {stage:?} peaks over its {budget} MB budget");
         }
-        // The offline simulation keeps 17.2 MB with the game graph
+        // The offline simulation keeps 16.2 MB with the game graph
         // (measured).
         if stage == Stage::ServerConnecting && mb(after) - mb(before) >= 19.0 {
             eprintln!("  OVER BUDGET: {stage:?} keeps 19 MB or more");

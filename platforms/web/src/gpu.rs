@@ -902,7 +902,7 @@ pub async fn render_game_selftest(
     check: Option<&str>,
     frames: bool,
 ) -> Result<serde_json::Value, JsValue> {
-    use volya_engine::selftest::{self, Context};
+    use volya_engine::selftest::{self, Context, HeapCount};
     let Some(check) = check else {
         return Ok(json!(selftest::names(suite.unwrap_or_default())));
     };
@@ -910,7 +910,17 @@ pub async fn render_game_selftest(
     let renderers = SelftestRenderers::new().await?;
     let make = || renderers.make();
     let count = |on: bool| gl_call_counts(on).unwrap_or_default();
-    let context = Context::new(tree.tree(), &make, frames).with_gl_calls(&count);
+    let heap = || {
+        let (allocations, bytes, live) = crate::counting::traffic();
+        HeapCount {
+            allocations,
+            bytes,
+            live,
+        }
+    };
+    let context = Context::new(tree.tree(), &make, frames)
+        .with_gl_calls(&count)
+        .with_heap(&heap);
     let outcome = selftest::run(check, &context).await;
     let kept = context.take_frames();
     drop(context);

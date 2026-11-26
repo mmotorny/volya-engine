@@ -60,7 +60,9 @@ impl Renderer {
 
     /// Uploads every face and mip level of `dds`, by this device's
     /// [`TexturePath`] (transcoding here when it is ETC2). Cube maps become
-    /// 6-layer textures; drawing uses the first layer.
+    /// 6-layer textures, for sampling as cube maps (the sky, environment
+    /// maps); drawn as a quad, which the game never does, they show
+    /// nothing defined (black on WebGL 2, #492).
     pub fn create_texture(&self, dds: &Dds) -> Result<Texture, TextureError> {
         let mut upload = self.begin_texture(dds)?;
         upload.step(self, dds, &mut Vec::new(), u64::MAX);

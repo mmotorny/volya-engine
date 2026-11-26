@@ -374,10 +374,9 @@ pub async fn converts_uncompressed_formats_and_uploads_mips_and_cube_faces(
     // A8: alpha only, over the white background → grey.
     let a8 = file(1, 1, 0, false, PixelFormat::A8, &[128]);
     let a8 = texture(&renderer, &a8)?;
-    // Cube map, BGRA8 1 × 1 per face, face i has red = 200 - 30 × i: six
-    // layers. Drawn as a quad it shows face 0 on Metal and black on WebGL 2
-    // (#492), so it isn't drawn here; cube maps are sampled as such in
-    // world.rs's environment and sky checks.
+    // Cube map, BGRA8 1 × 1 per face: six layers. The game samples cube
+    // maps only as such (every one is a sky or environment map, #492), so
+    // their faces' texels are checked by world.rs's environment check.
     let faces: Vec<u8> = (0..6).flat_map(|i| [0, 0, 200 - 30 * i, 255]).collect();
     let cube = file(1, 1, 0, true, PixelFormat::BGRA8, &faces);
     let cube = texture(&renderer, &cube)?;

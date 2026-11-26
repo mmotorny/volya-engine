@@ -107,8 +107,10 @@ pub async fn grass_from_game_data(cx: &Context<'_>) -> Outcome {
     let without_t = now_ms() - start;
     let errors = presenter.take_errors();
     ensure!(errors.is_empty(), "{errors:?}");
-    cx.dump("grass", SIZE.width, SIZE.height, &grass);
-    cx.dump("grass-off", SIZE.width, SIZE.height, &without);
+    // Their blended trees differ by a few pixels from run to run (#435):
+    // compared, not held.
+    cx.dump_compared("grass", SIZE.width, SIZE.height, &grass, false);
+    cx.dump_compared("grass-off", SIZE.width, SIZE.height, &without, false);
     let changed = grass
         .chunks(4)
         .zip(without.chunks(4))

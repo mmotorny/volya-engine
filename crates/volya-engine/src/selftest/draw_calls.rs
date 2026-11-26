@@ -184,8 +184,8 @@ pub async fn draw_calls_from_game_data(cx: &Context<'_>) -> Outcome {
                 notes.push(report_static(&calls));
                 notes.push(format!("{name}: {}", report_gl(&gl)));
             }
-            // The particles left out of the pixels compared: their
-            // simulation does not repeat from run to run (measured).
+            // The particles left out of the pixels compared (the level
+            // checks' views compare them in the parity suite).
             let mut scene = screen.scene(SIZE, 0);
             scene.presentation = presentation;
             if let Some(w) = scene.world.as_mut() {

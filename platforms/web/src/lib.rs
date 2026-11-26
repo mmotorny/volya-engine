@@ -39,6 +39,10 @@ mod counting {
 
     static LIVE: AtomicUsize = AtomicUsize::new(0);
     static PEAK: AtomicUsize = AtomicUsize::new(0);
+    /// Allocations made (a growing reallocation counts as one) and their
+    /// bytes (its new size), for a frame's heap traffic (#494).
+    static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+    static BYTES: AtomicUsize = AtomicUsize::new(0);
     /// Live bytes per MiB of addresses (wasm32: at most 4 GiB).
     static BY_MIB: [AtomicUsize; 4096] = [const { AtomicUsize::new(0) }; 4096];
     /// Live blocks of at least `LARGE` bytes: (address, size), 0 for free.
@@ -61,6 +65,21 @@ mod counting {
     fn grew(by: usize) {
         let live = LIVE.fetch_add(by, Relaxed) + by;
         PEAK.fetch_max(live, Relaxed);
+    }
+
+    /// A block of `size` bytes allocated, or grown to it.
+    fn allocated(size: usize) {
+        ALLOCATIONS.fetch_add(1, Relaxed);
+        BYTES.fetch_add(size, Relaxed);
+    }
+
+    /// Allocations made, their bytes, and the bytes live.
+    pub fn traffic() -> (usize, usize, usize) {
+        (
+            ALLOCATIONS.load(Relaxed),
+            BYTES.load(Relaxed),
+            LIVE.load(Relaxed),
+        )
     }
 
     /// After a block was added: a new record's sizes and large blocks.
@@ -150,6 +169,7 @@ mod counting {
             let p = unsafe { System.alloc(layout) };
             if !p.is_null() {
                 grew(layout.size());
+                allocated(layout.size());
                 mapped(p, layout.size(), true);
                 recorded();
             }
@@ -160,6 +180,7 @@ mod counting {
             let p = unsafe { System.alloc_zeroed(layout) };
             if !p.is_null() {
                 grew(layout.size());
+                allocated(layout.size());
                 mapped(p, layout.size(), true);
                 recorded();
             }
@@ -179,6 +200,7 @@ mod counting {
                 mapped(q, size, true);
                 if size > layout.size() {
                     grew(size - layout.size());
+                    allocated(size);
                     recorded();
                 } else {
                     LIVE.fetch_sub(layout.size() - size, Relaxed);
