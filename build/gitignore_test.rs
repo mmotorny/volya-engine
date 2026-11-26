@@ -17,6 +17,7 @@ const IGNORED: &[&str] = &[
     "/dist-next",
     "/.cache",
     "/rust-project.json",
+    "/.rules_rust_analyzer",
     "/user.bazelrc",
 ];
 

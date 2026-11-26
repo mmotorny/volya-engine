@@ -33,6 +33,7 @@ pub fn run_deploy() -> Result {
             "dist",
             "dist-next",
             ".cache",
+            ".rules_rust_analyzer",
             "target",
             ":(glob)bazel-*",
         ],
