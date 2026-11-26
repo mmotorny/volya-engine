@@ -53,14 +53,14 @@ fn every_sprite_resolves_as_section_5_says() {
     let (mut one, mut two) = (0, 0);
     for (e, s) in &sprites {
         *per_shader.entry(s.shader).or_default() += 1;
-        let list = texture_list(&s.texture);
+        let list = texture_list(s.texture);
         match list.len() {
             1 => one += 1,
             2 => two += 1,
             n => panic!("{}: {n} textures", e.name),
         }
         textures.extend(list);
-        let shader = resolve(&definitions, &scripted, &s.shader, &s.texture)
+        let shader = resolve(&definitions, &scripted, s.shader, s.texture)
             .unwrap_or_else(|why| panic!("{}: {why}", e.name));
         // Section 5.1's table.
         let normal = shader.normal.as_ref();
@@ -127,7 +127,7 @@ fn every_sprite_resolves_as_section_5_says() {
     let muhi = library.effect_at(library.effect("tests\\muhi").unwrap());
     let s = muhi.sprite.unwrap();
     assert_eq!(
-        (s.shader, texture_list(&s.texture)),
+        (s.shader, texture_list(s.texture)),
         ("particles\\blend", vec!["pfx\\pfx_leaves_01".to_owned()])
     );
 }
