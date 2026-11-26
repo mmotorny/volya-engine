@@ -96,6 +96,9 @@ const STAGE_BUDGETS: [(Stage, f64); 10] = [
     (Stage::ClientSpawning, 12.5),
     (Stage::LoadingTextures, 4.5), // 3.2
 ];
+/// What the archive index keeps, MB: 1.3 measured, in 18 blocks (7.7 in
+/// 87,312 before #300).
+const INDEX_BUDGET: f64 = 2.0;
 /// Any other stage's peak, MB.
 const OTHER_BUDGET: f64 = 0.5;
 /// The whole load's peak above its start, MB (72.8 measured with the
@@ -109,8 +112,22 @@ fn loading_stage_memory() {
         return;
     };
     let root = StdVfs::new(archives[0].file.parent().unwrap());
+    let (before, blocks) = (
+        CURRENT.load(Ordering::Relaxed),
+        BLOCKS.load(Ordering::Relaxed),
+    );
+    PEAK.store(before, Ordering::Relaxed);
     let tree = DbVfs::open_game(&root, Some("mods")).unwrap();
     let start = CURRENT.load(Ordering::Relaxed);
+    eprintln!(
+        "the archive index: keeps {:.1} MB in {} blocks, peak +{:.1} MB",
+        mb(start - before),
+        BLOCKS.load(Ordering::Relaxed) - blocks,
+        mb(PEAK.load(Ordering::Relaxed) - before)
+    );
+    if mb(start - before) > INDEX_BUDGET {
+        eprintln!("  OVER BUDGET: the archive index keeps over {INDEX_BUDGET} MB");
+    }
     let mut game_blocks = (BLOCKS.load(Ordering::Relaxed), 0);
     let data = GameData::read(&tree, None, Resolution::new(1024, 768)).unwrap();
     eprintln!(
