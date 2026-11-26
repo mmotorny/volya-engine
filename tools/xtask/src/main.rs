@@ -6,6 +6,7 @@
 mod deploy;
 mod e2e;
 mod machine;
+mod original;
 mod parity;
 mod spec_lint;
 mod wine;
@@ -48,6 +49,10 @@ Tasks:
               Run EXE with Wine in that image, DIR mounted as its working
               directory; passes on its exit code.
   wine check  Build and run a Direct3D 9 smoke test there.
+  original [SECONDS]
+              Run the original game from VOLYA_GOG_INSTALLER under Wine for
+              SECONDS (default 300), capturing its display to PNGs in the
+              local cache.
   update      Move to the latest stable Rust and dependencies, then check.";
 
 /// Crates that never build for the web target.
@@ -82,6 +87,7 @@ fn main() -> ExitCode {
             Ok(code) => return ExitCode::from(code),
             Err(error) => Err(error),
         },
+        ["original", rest @ ..] => original::main(rest),
         [wine::REAPER, container, stop_service, stop_builder] => {
             wine::reap(container, stop_service, stop_builder)
         }
