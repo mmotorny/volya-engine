@@ -303,6 +303,7 @@ impl LoadingScreen {
             data,
             assets,
             resolution,
+            text_surface: crate::draw::Surface::screen(resolution),
             clock_ms: 0,
         };
         self.draw(&mut ctx, &mut scene)?;

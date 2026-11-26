@@ -110,13 +110,22 @@ export const tests = {
     assertEqual(bounds(xga, "back_movie"), [147.5, -0.5, 1023.5, 399.5], "back_movie");
     assertEqual(bounds(xga, "fire_movie"), [524.5, 458.5, 652.5, 714.5], "fire_movie");
     assertEqual(bounds(xga, "bar"), [598.5, 396.5, 990.5, 469.5], "bar");
-    // docs/formats/text-and-fonts.md section 5.
-    assertEqual(bounds(xga, "caption 0"), [740, 423, 825, 445], "caption 0");
-    assertEqual(bounds(xga, "caption 5"), [713, 573, 851, 595], "caption 5");
-    assertEqual(bounds(xga, "version"), [15, 740, 94, 759], "version");
+    // docs/formats/text-and-fonts.md section 5 at the shipped
+    // r__supersample 2: the menu's text is laid out on the off-screen
+    // target (1448 × 1086 here, 1810 × 1018 at 1280 × 720) and placed on
+    // the screen to a fraction of a pixel (section 4.4).
+    const near = (layer, scene, want) => {
+      const got = bounds(scene, layer);
+      assert(got.every((v, i) => Math.abs(v - want[i]) < 1.5e-3), `${layer}: expected ${want}, got ${got}`);
+    };
+    near("caption 0", xga, [739.436, 425.724, 824.436, 447.724]);
+    near("caption 5", xga, [712.436, 575.646, 850.436, 597.646]);
+    near("version", xga, [14.851, 739.713, 93.851, 758.713]);
     const wide = await volya.call("menu_scene", { width: 1280, height: 720 });
-    assertEqual(bounds(wide, "caption 0"), [935, 395, 1020, 417], "wide caption 0");
-    assertEqual(bounds(wide, "version"), [18, 693, 97, 712], "wide version");
+    // Computed from the same rules: pen y floor(1018 / 768 · 425.701) = 564
+    // target pixels, 564 · 720 / 1018 on the screen.
+    near("caption 0", wide, [935.326, 398.9, 1020.326, 420.9]);
+    near("version", wide, [18.387, 693.124, 97.387, 712.124]);
   },
 
   "renders the menu": async () => {

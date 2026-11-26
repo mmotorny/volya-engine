@@ -605,6 +605,7 @@ mod tests {
                 data: &self.data,
                 assets: &mut assets,
                 resolution: XGA,
+                text_surface: crate::draw::Surface::screen(XGA),
                 clock_ms: self.now,
             };
             self.screens.scene(&self.menu, &mut ctx).unwrap()
