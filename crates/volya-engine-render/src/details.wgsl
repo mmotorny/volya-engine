@@ -16,7 +16,8 @@ struct Frame {
     ambient: vec4<f32>,
     hemi: vec4<f32>,
     sun: vec4<f32>,
-    // x: the alpha reference × 255 (−1: no alpha test).
+    // x: the alpha reference × 255 (−1: no alpha test); y: the mip bias in
+    // force (texture-quality-filtering.md 5).
     params: vec4<f32>,
 }
 
@@ -93,7 +94,7 @@ fn vs_wave2(v: Vertex) -> Out {
 // detail: t.rgb · C.rgb · 2, alpha t.a, then the alpha test (6.2, 6.4).
 @fragment
 fn fs_detail(in: Out) -> @location(0) vec4<f32> {
-    let t = textureSample(t_base, s_base, in.uv);
+    let t = textureSampleBias(t_base, s_base, in.uv, frame.params.y);
     if frame.params.x >= 0.0 && t.a * 255.0 <= frame.params.x {
         discard;
     }

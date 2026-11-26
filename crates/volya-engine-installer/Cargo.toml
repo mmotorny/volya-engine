@@ -16,4 +16,5 @@ workspace = true
 [dependencies]
 inno.workspace = true
 md-5.workspace = true
+serde_json.workspace = true
 zlib-rs.workspace = true

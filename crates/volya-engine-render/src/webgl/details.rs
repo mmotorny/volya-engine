@@ -68,6 +68,17 @@ pub(crate) struct DetailPrograms {
     level: Option<Level>,
 }
 
+/// s_base: wrap, anisotropic, linear mip (6.2; anisotropic at the value in
+/// force, texture-quality-filtering.md 5).
+const SAMPLER: SamplerDesc = SamplerDesc {
+    mag: Filter::Linear,
+    min: Filter::Linear,
+    mip: Filter::Linear,
+    wrap: [Wrap::Repeat; 3],
+    anisotropy: 16,
+    top_level: false,
+};
+
 impl DetailPrograms {
     pub(crate) fn new(gl: &Gl) -> Self {
         let program = |vs| link(gl, "details", vs, "fs_detail", &[(1, 0)], points::DETAILS);
@@ -78,18 +89,17 @@ impl DetailPrograms {
                 program("vs_wave1"),
                 program("vs_wave2"),
             ],
-            // s_base: wrap, anisotropic, linear mip (6.2; the anisotropy of
-            // static-shading.md 4.4 with its default).
-            sampler: gl.sampler(SamplerDesc {
-                mag: Filter::Linear,
-                min: Filter::Linear,
-                mip: Filter::Linear,
-                wrap: [Wrap::Repeat; 3],
-                anisotropy: 16,
-                top_level: false,
-            }),
+            sampler: gl.sampler(SAMPLER),
             level: None,
         }
+    }
+
+    /// `s_base` at maximum anisotropy `anisotropy`.
+    pub(crate) fn set_anisotropy(&mut self, gl: &Gl, anisotropy: u16) {
+        self.sampler = gl.sampler(SamplerDesc {
+            anisotropy,
+            ..SAMPLER
+        });
     }
 
     /// The level's models, their texture and alpha test, with room for
@@ -151,6 +161,7 @@ impl DetailPrograms {
         frame: &DetailFrame,
         view_projection: &Mat4,
         light: [[f32; 3]; 3],
+        mip_bias: f32,
     ) -> bool {
         let Some(level) = &self.level else {
             return false;
@@ -158,7 +169,7 @@ impl DetailPrograms {
         if frame.draws.is_empty() {
             return false;
         }
-        let constants = frame_constants(frame, view_projection, light, level.alpha_ref);
+        let constants = frame_constants(frame, view_projection, light, level.alpha_ref, mip_bias);
         gl.write_buffer(&self.frame, 0, &constants);
         let room = (level.instances.size() / INSTANCE_BYTES) as usize;
         let n = frame.instances.len().min(room);

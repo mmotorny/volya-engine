@@ -28,6 +28,7 @@ mod artefacts;
 mod details;
 mod draw_calls;
 mod frame_memory;
+mod geometry_lod;
 mod inventory_screen;
 mod lights;
 mod new_game;
@@ -35,6 +36,7 @@ mod objects;
 mod options;
 mod presentation;
 mod save_load;
+mod texture_settings;
 mod textures;
 mod title_menu;
 mod torch;
@@ -188,6 +190,8 @@ const SUITES: &[(&str, &[Checks])] = &[
         &[
             new_game::CHECKS,
             presentation::CHECKS,
+            texture_settings::CHECKS,
+            geometry_lod::CHECKS,
             objects::CHECKS,
             lights::CHECKS,
             torch::CHECKS,

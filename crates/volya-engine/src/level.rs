@@ -94,8 +94,8 @@ use volya_engine_formats::ui::Resolution;
 pub const SPAWN_NAME: &str = "all";
 /// Files a level directory must hold to be a level (section 2.2).
 pub const LEVEL_FILES: [&str; 4] = ["level", "level.ltx", "level.geom", "level.cform"];
-/// `rs_vis_distance` of the shipped `user.ltx` (start-position.md 7.1); the
-/// user settings are not read for it here (our choice).
+/// `rs_vis_distance` of the shipped `user.ltx` (start-position.md 7.1),
+/// in force until the app hands over the console's.
 pub const VIS_DISTANCE: f32 = 1.0;
 /// Longest frame the sun's fade advances by, seconds (our choice).
 const MAX_STEP: f32 = 0.1;
@@ -305,6 +305,11 @@ pub struct LevelScreen {
     /// `r__supersample` in force: the frame's target size, and with it the
     /// size thresholds (static-shading.md 10.2, frame-presentation.md 1.1).
     supersample: u32,
+    /// `rs_vis_distance`, read every frame (start-position.md 7.1).
+    vis_distance: f32,
+    /// `r__geometry_lod`, `r1_ssa_lod_a`, `r1_ssa_lod_b`, read every frame
+    /// (object-detail-level.md 1).
+    geometry_lod: [f32; 3],
     /// Which effect objects are drawn, by origin (tests compare frames
     /// without them): placed, zones', weather's, artefacts'.
     effects_drawn: [bool; 4],
@@ -2032,6 +2037,8 @@ impl NewGameLoad {
             effects,
             view_size: std::cell::Cell::new((1024, 768)),
             supersample: 1,
+            vis_distance: VIS_DISTANCE,
+            geometry_lod: [GEOMETRY_LOD, SSA_LOD_A, SSA_LOD_B],
             zones: self.zones,
             zone_sections: self.zone_sections,
             artefacts: self.artefacts,
@@ -2117,7 +2124,7 @@ impl LevelScreen {
     fn update_view(&mut self) {
         let eye = self.player.view().eye;
         let (a, b, t) = self.weather.bracket(self.clock.time_of_day());
-        self.environment = Environment::blend(a, b, t, &self.modifiers, eye, VIS_DISTANCE);
+        self.environment = Environment::blend(a, b, t, &self.modifiers, eye, self.vis_distance);
         let c = camera::NEAR_CLEARANCE;
         let mut found = Vec::new();
         self.collision.query(
@@ -2716,6 +2723,23 @@ impl LevelScreen {
         self.details.as_ref().map(|d| d.borrow())
     }
 
+    /// `r__geometry_lod`, `r1_ssa_lod_a` and `r1_ssa_lod_b`, taking effect
+    /// at the next camera pass and frame (object-detail-level.md 1).
+    pub fn set_geometry_lod(&mut self, geometry_lod: f32, ssa_lod_a: f32, ssa_lod_b: f32) {
+        self.geometry_lod = [geometry_lod, ssa_lod_a, ssa_lod_b];
+    }
+
+    /// `rs_vis_distance`, taking effect at the next view update
+    /// (r1-settings-scope.md 2.2).
+    pub fn set_vis_distance(&mut self, vis_distance: f32) {
+        self.vis_distance = vis_distance;
+    }
+
+    /// The far plane in force (tests).
+    pub fn far_plane(&self) -> f32 {
+        self.environment.far_plane
+    }
+
     /// `r__supersample` as the last video restart applied it.
     pub fn set_supersample(&mut self, supersample: u32) {
         self.supersample = supersample;
@@ -2875,14 +2899,8 @@ impl LevelScreen {
     /// at `w` × `h`.
     fn camera_pass(&mut self, w: u32, h: u32, view: &Mat4, projection: &Mat4) {
         let (tw, th) = crate::render::present::target_size(w, h, self.supersample);
-        let thresholds = Thresholds::new(
-            tw,
-            th,
-            camera::FOV_Y_DEGREES,
-            GEOMETRY_LOD,
-            SSA_LOD_A,
-            SSA_LOD_B,
-        );
+        let [lod, a, b] = self.geometry_lod;
+        let thresholds = Thresholds::new(tw, th, camera::FOV_Y_DEGREES, lod, a, b);
         let view = View {
             frame: self.frame as u32,
             view_projection: crate::render::world::multiply(view, projection),
@@ -2938,7 +2956,8 @@ impl LevelScreen {
             resolution.height,
             self.supersample,
         );
-        let ssa_min = crate::render::world::ssa_min(w, h, camera::FOV_Y_DEGREES);
+        let ssa_min =
+            crate::render::world::ssa_min(w, h, camera::FOV_Y_DEGREES, self.geometry_lod[0]);
         let origin = |o: Origin| match o {
             Origin::Placed => 0,
             Origin::Zone => 1,
@@ -3047,7 +3066,12 @@ impl LevelScreen {
             frame: self.frame,
             eye: self.player.view().eye,
             view_projection: crate::render::world::multiply(view, projection),
-            ssa_min: crate::render::world::ssa_min(w, h, camera::FOV_Y_DEGREES),
+            ssa_min: crate::render::world::ssa_min(
+                w,
+                h,
+                camera::FOV_Y_DEGREES,
+                self.geometry_lod[0],
+            ),
             density: self.detail_density,
         };
         // The entries' occlusion tests in the latest camera pass's view
@@ -3343,6 +3367,8 @@ impl LevelScreen {
             effects: None,
             view_size: std::cell::Cell::new((1024, 768)),
             supersample: 1,
+            vis_distance: VIS_DISTANCE,
+            geometry_lod: [GEOMETRY_LOD, SSA_LOD_A, SSA_LOD_B],
             zones: Zones::default(),
             zone_sections: HashMap::new(),
             artefacts: Artefacts::default(),

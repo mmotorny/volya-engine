@@ -58,6 +58,16 @@ pub(crate) struct SkyPrograms {
     empty: VertexArray,
 }
 
+/// The clouds' sampler (6.3), anisotropic at the value in force.
+const CLOUDS: SamplerDesc = SamplerDesc {
+    mag: Filter::Linear,
+    min: Filter::Linear,
+    mip: Filter::Linear,
+    wrap: [Wrap::Repeat; 3],
+    anisotropy: 16,
+    top_level: false,
+};
+
 impl SkyPrograms {
     pub(crate) fn new(gl: &Gl) -> Self {
         let pass = |name: &str| {
@@ -82,16 +92,17 @@ impl SkyPrograms {
                 anisotropy: 1,
                 top_level: true,
             }),
-            wrap: gl.sampler(SamplerDesc {
-                mag: Filter::Linear,
-                min: Filter::Linear,
-                mip: Filter::Linear,
-                wrap: [Wrap::Repeat; 3],
-                anisotropy: 16,
-                top_level: false,
-            }),
+            wrap: gl.sampler(CLOUDS),
             empty: gl.vertex_array(&[], None),
         }
+    }
+
+    /// The clouds' sampler at maximum anisotropy `anisotropy`.
+    pub(crate) fn set_anisotropy(&mut self, gl: &Gl, anisotropy: u16) {
+        self.wrap = gl.sampler(SamplerDesc {
+            anisotropy,
+            ..CLOUDS
+        });
     }
 }
 
@@ -167,11 +178,12 @@ impl SkyResources {
         eye: [f32; 3],
         view_projection: &Mat4,
         time: f32,
+        mip_bias: f32,
     ) {
         gl.write_buffer(
             &self.uniforms,
             0,
-            &constants(frame, eye, view_projection, time),
+            &constants(frame, eye, view_projection, time, mip_bias),
         );
     }
 

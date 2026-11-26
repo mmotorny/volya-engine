@@ -212,12 +212,13 @@ pub(crate) fn dome_bytes() -> (Vec<u8>, Vec<u8>, u32) {
 }
 
 /// The sky constants of `frame` ([`SKY_BYTES`]) for a camera at `eye`
-/// with `view_projection`, at `time` seconds.
+/// with `view_projection`, at `time` seconds, with the mip bias in force.
 pub(crate) fn constants(
     frame: &SkyFrame,
     eye: [f32; 3],
     view_projection: &Mat4,
     time: f32,
+    mip_bias: f32,
 ) -> Vec<u8> {
     let (s, c) = frame.rotation.sin_cos();
     let world = |h: f32, v: f32| -> Mat4 {
@@ -237,7 +238,7 @@ pub(crate) fn constants(
     let (directions, color) = frame.clouds.unwrap_or_default();
     push_vec4(&mut out, byte(directions));
     push_vec4(&mut out, byte(color));
-    push_vec4(&mut out, [time, 0.0, 0.0, 0.0]);
+    push_vec4(&mut out, [time, mip_bias, 0.0, 0.0]);
     let (corners, sun) = frame.sun.unwrap_or_default();
     for p in corners {
         push_vec4(&mut out, [p[0], p[1], p[2], 1.0]);

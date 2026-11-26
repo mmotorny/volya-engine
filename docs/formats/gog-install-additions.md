@@ -10,7 +10,9 @@ looks for its path configuration file `fsgame.ltx`.
 workspace (after `inno_header.py` has decompressed the installer's and the interpreter's header streams and
 innoextract has extracted the non-game entries to `gog-install/ext/`); the runs of §8, on which §3's user-folder
 facts, §4's registry view and §7 rest, by `gog-install/scripts/experiments.py` (which uses `run_isi.py` and
-`run_game.py`). The order of §7 was first read from the binaries and is backed by runs B–E.
+`run_game.py`). The order of §7 was first read from the binaries and is backed by runs B–E. §4.3 is checked by
+`gog-script/scripts/checks.py` (the script's encoding, and the interpreter's names) and
+`gog-script/scripts/experiments.py` (the run that could not observe the actions).
 
 Notation: `{app}` is the install folder chosen in the installer, `{userdocs}` the current user's Documents
 folder ("My Documents"; Inno Setup's documented meaning of that constant), `{commonprograms}` and
@@ -142,6 +144,125 @@ contains the names `InstallPath`, `InstallSource` or `BonusPack`. What the game 
 `InstallPatchID`, `InstallUserName` or `InstallCDKEY` is out of scope here (none is needed to reach the title
 menu per `startup.md`).
 
+### 4.3 How the script encodes its actions
+
+So that an importer can read `InstallVers` (and the other values of §4.1) from the script instead of a table.
+
+**File.** `{app}\goggame-1207660573.script` (5,300 bytes in this installer) is one JSON object, UTF-8 without a
+byte-order mark (in this file all bytes are ASCII), indented with spaces, LF line ends, no LF after the closing
+`}`. In every object of this file the members appear in ascending order of their names; nothing indicates that
+the order matters. Backslashes inside strings are written with the JSON escape `\\`; after decoding, a string
+holds single `\`.
+
+**Top level.** Two members:
+
+| Member | JSON type | Value here |
+|---|---|---|
+| `actions` | array of objects | the 10 actions below, in file order |
+| `productId` | string | `"1207660573"` |
+
+**Action.** Each element of `actions` has the members:
+
+| Member | JSON type | Meaning |
+|---|---|---|
+| `install` | object | what to do at install: `action` (string, the kind) and `arguments` (object, the kind's fields) |
+| `languages` | array of strings | here always `["*"]` |
+| `name` | string, optional | a label (present on the first five actions, absent on all five `setRegistry` actions) |
+
+The interpreter's vocabulary (string constants in its code, ISI version 0.1.2.538) also has per-action members
+`uninstall` (the counterpart of `install`, used when uninstalling), `order` and `conditions`; none of them occurs in
+this script. How `order` and `conditions` are written and evaluated was not established. **Disputed in review:**
+that `conditions` is a member of the action is not backed: in the interpreter the name `conditions` stands among
+the argument names of each action kind (e.g. next to `root`, `subkey`, `valueType`, `valueName`, `valueData` for
+`setRegistry`, and as below), so it is believed to be a member of `install.arguments`; where it is placed was not
+established, and a reader deciding whether an action runs should look for it in both places. The condition words the
+interpreter knows are `onlanguagechange`, `onlyonce`, `onversionchange`, `nodesktopshortcutParam`,
+`nostartmenushortcutParam`, `ati`, `amd`, `nvidia`, `!ati`, `!amd`, `!nvidia`. Believed: an action without
+`conditions` always runs (every action of this script has none).
+
+`languages`: the name `languages` occurs nowhere in the interpreter (neither in its executable, nor in its compiled
+code, nor in the JSON library it uses, in ASCII or UTF-16), so this interpreter is believed to ignore the member and
+to run every action whatever the install language. In this script the question does not arise: every action has
+`["*"]`. The script has no architecture or Windows-version field; the only architecture choice the interpreter
+offers is in the registry root (below).
+
+**Action kinds.** The interpreter knows the kinds `execute`, `setregistry`, `setini`, `supportdata`, `savetofile`,
+`installsdb`, `deletedata`, `createshortcut`, `savepath`, `delregistry` and `pass`, and maps the older name
+`saveGame` to `savePath`. Its code holds the kind names in lower case and uses a lower-casing operation, while the
+script spells them `saveToFile`, `execute`, `supportData`, `savePath`, `setRegistry`; believed: the kind is matched
+without regard to case. A reader of this script should therefore compare the kind case-insensitively.
+
+**`setRegistry` arguments.** In this script exactly these five members, all JSON strings:
+
+| Member | Meaning | Spellings |
+|---|---|---|
+| `root` | registry root | the interpreter knows `HKEY_LOCAL_MACHINE`, `HKLM`, `HKLM32`, `HKLM64`, `HKEY_CURRENT_USER`, `HKCU`, `HKEY_CLASSES_ROOT`, `HKCR`, `HKEY_CURRENT_CONFIG`, `HKCC`, `HKEY_USERS`, `HKU`; this script uses only `HKEY_LOCAL_MACHINE` |
+| `subkey` | key path below the root, `\`-separated, no leading `\` | here `SOFTWARE\GSC Game World\STALKER-SHOC` |
+| `valueName` | name of the value | |
+| `valueType` | type of the value | the interpreter knows `string`, `expandstring`, `multistring`, `dword`, `binary` (and `none`); this script uses `string` and `dword` |
+| `valueData` | the data, as text | for `string` the text itself; for `dword` a number in text, here `$1` |
+
+The interpreter also knows the optional `setRegistry` members `conditions`, `deleteSubkeys` and `saveGameData`,
+absent here (their meaning was not established). Believed: `string`, `expandstring`, `multistring`, `dword`,
+`binary` are the Windows registry types REG_SZ, REG_EXPAND_SZ, REG_MULTI_SZ, REG_DWORD and REG_BINARY (its code
+has write operations for exactly these five types and none for a 64-bit number). Believed: `$` in a `dword`'s
+data marks hexadecimal, so `$1` is 1 (§4.1). Believed (§4.1 and its review mark): root `HKEY_LOCAL_MACHINE`, as
+opposed to `HKLM64`, is the 32-bit view on 64-bit Windows.
+
+**Placeholders.** Text in braces is replaced before use. Those occurring in this script: `{app}` (the install
+folder, `/DIR` of §1), `{supportDir}` (the `/supportDir` value of §1, `{app}\__support`), `{userdocs}` and `{sys}`
+(Inno Setup's constants, see Notation). Others the interpreter knows: `{win}`, `{tmp}`, `{syswow64}`, `{sd}`,
+`{pf}`, `{cf}`, `{group}`, `{localappdata}`, `{userappdata}`, `{commonappdata}` (Inno Setup's folder constants),
+and its own `{productID}`, `{rootProductID}`, `{version}`, `{buildID}`, `{gameName}`, `{language}`, `{galaxy}`,
+`{n}` (meanings believed from their names and the §1 command line: the product id, the base product id, the
+version, the build id, the game name, the install language, the GOG Galaxy client's executable read from
+`HKLM\SOFTWARE\GOG.com\GalaxyClient`; `{n}` not established). Paths in the script may use `/` as separator
+(`{app}/fsgame.ltx`); believed accepted by Windows as `\`. Whether placeholders are replaced in `valueData` was not
+observed; `{app}` in `InstallPath` is believed replaced (§4.1). The `InstallVers` data holds no placeholder, so
+its value does not depend on the question.
+
+**Reading `InstallVers`.** Among the elements of `actions`, take the one whose `install.action` is `setRegistry`
+(compared without case) and whose `install.arguments` has `valueName` `InstallVers`, `root` `HKEY_LOCAL_MACHINE`
+and `subkey` `SOFTWARE\GSC Game World\STALKER-SHOC` (key names compared without case, as in Windows); with
+`valueType` `string` its `valueData` is the value the game reads (`docs/behavior/title-menu.md` §3.4). Exactly one
+action of this script matches.
+
+**Worked example (Russian installer).** The five `setRegistry` actions are the last five of the ten (1–5 are
+`saveToFile`, `execute`, `supportData`, `supportData`, `savePath`), none has `name`, each has
+`"languages": ["*"]`. The third, as it appears in the file:
+
+```
+        {
+            "install": {
+                "action": "setRegistry",
+                "arguments": {
+                    "root": "HKEY_LOCAL_MACHINE",
+                    "subkey": "SOFTWARE\\GSC Game World\\STALKER-SHOC",
+                    "valueData": "2.1.0.10",
+                    "valueName": "InstallVers",
+                    "valueType": "string"
+                }
+            },
+            "languages": [
+                "*"
+            ]
+        },
+```
+
+All five (decoded strings; `root` is `HKEY_LOCAL_MACHINE` and `subkey` `SOFTWARE\GSC Game World\STALKER-SHOC` in
+each):
+
+| # | `valueName` | `valueType` | `valueData` |
+|---|---|---|---|
+| 6 | `InstallPath` | `string` | `{app}` |
+| 7 | `InstallSource` | `string` | `GOG` |
+| 8 | `InstallVers` | `string` | `2.1.0.10` |
+| 9 | `BonusPack1` | `dword` | `$1` |
+| 10 | `BonusPack2` | `dword` | `$1` |
+
+Under Wine the interpreter stops after reading the metadata even with an empty action list and no play tasks
+(§8), so none of this was observed in a run.
+
 ### 4.2 Written by the installer itself
 
 Inno Setup registry entries, all `HKEY_LOCAL_MACHINE\SOFTWARE\GOG.com\Games\1207660573`, string values:
@@ -232,7 +353,8 @@ Under Wine (Wine Stable, a dedicated prefix with its audio driver disabled):
   script, the metadata, `__support\userdocs\`, `Settings.exe` and `bin\XR_3DA.exe`, logged reading the metadata,
   created the two Start-menu entries of §5 and `installer_language` (§4.2) in the `Wow6432Node` view, then
   stopped with a stack overflow before running any script action. The script actions (§2–§4.1) are therefore
-  established from the script and the interpreter's data, not from an observed run.
+  established from the script and the interpreter's data, not from an observed run. A run on a script with no actions and metadata with no play tasks (and the
+  installer's `uninstall.dll` in place) stopped the same way after reading the metadata.
 - `XR_3DA.exe`, unmodified, with the game files and the §2 file (`{userdocs}` replaced by the prefix's
   Documents folder), 40–60 s per run, message boxes recorded through Wine's message-box trace:
 
@@ -260,6 +382,9 @@ test prefix has no such key).
 - The interpreter's exact output: line ends and encoding of the written `fsgame.ltx` (§2), overwrite behaviour
   of `user.ltx` (§3), the effect of `savePath`, the DWORD value of `$1` (believed 1), trailing `\` in `{app}` and
   `{userdocs}` (believed none).
+- How the script's `order` and `conditions` members are written and evaluated, the meaning of `deleteSubkeys` and
+  `saveGameData`, whether the action kind and `languages` are handled as believed, and whether placeholders are
+  replaced in `valueData` (§4.3).
 - The `lang_code` value and further `GOG.com` registry values (§4.2); the root of the compatibility-flag entry
   (§5); the name and location of the game's own shortcut (§5); the condition and position of
   `/nodesktopshortcut` (§1).
@@ -279,6 +404,9 @@ test prefix has no such key).
 - Binary analysis: static analysis of `bin\xrCore.dll` (Ghidra) for the order in which `fsgame.ltx` is sought and
   how the game root follows from it, checked by the black-box runs of §8.
 - Execution: the interpreter and the unmodified `XR_3DA.exe` run under Wine as described in §8.
+- For §4.3: the script's bytes and JSON members read; the interpreter's string constants (UTF-16 with a character
+  count) and the names its compiled code imports listed; the JSON library it ships (`uninstall.dll`, extracted with
+  innoextract) searched for member names; the interpreter run under Wine on test copies of the script (§8).
 - No leaked source code, derived engines, third-party engine documentation or recollection was used. Inno Setup's
   public documentation was used only for the meaning of its folder constants and its uninstall registration.
 
@@ -288,3 +416,5 @@ test prefix has no such key).
 - The `Поддержка` play task is limited to the language `ru-RU` in the metadata (the other two tasks to `*`); whether the interpreter skips it for other install languages was not established.
 - Whether the game copes with `fsgame.ltx` carrying the read-only attribute was not checked by a run (the runs used a writable copy), nor that the game never writes it.
 - Whether the script actions run in the order listed, and whether a failing action stops the later ones (e.g. the registry values), was not established.
+- Placeholders of Inno Setup's `{reg:…}` form occur in the interpreter (its `{galaxy}` is defined through two of them); whether the script's text may hold Inno Setup constants beyond those listed in §4.3, and how they are replaced, was not established.
+- What the interpreter does with an action whose kind it does not know, or a `setRegistry` action whose `root` or `valueType` it does not know, was not established.

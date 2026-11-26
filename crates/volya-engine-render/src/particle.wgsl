@@ -8,7 +8,8 @@
 struct Frame {
     view_projection: mat4x4<f32>,
     fog_plane: vec4<f32>,
-    // rgb: the fog unit's colour.
+    // rgb: the fog unit's colour; w: the mip bias in force
+    // (texture-quality-filtering.md 5).
     fog_color: vec4<f32>,
 }
 
@@ -46,7 +47,7 @@ fn vs_particle(v: Vertex) -> Out {
 
 // particle.ps: colour = c.rgb · B.rgb, alpha = c.a · B.a.
 fn particle(in: Out) -> vec4<f32> {
-    let b = textureSample(t_base, s_base, in.uv);
+    let b = textureSampleBias(t_base, s_base, in.uv, frame.fog_color.w);
     return saturate(vec4(in.color.rgb * b.rgb, in.color.a * b.a));
 }
 
@@ -81,7 +82,7 @@ fn fs_plain(in: Out) -> @location(0) vec4<f32> {
 // 0.33).
 @fragment
 fn fs_distort(in: Out) -> @location(0) vec4<f32> {
-    let d = textureSample(t_distort, s_distort, in.uv);
+    let d = textureSampleBias(t_distort, s_distort, in.uv, frame.fog_color.w);
     let c = saturate(in.color);
     return saturate(vec4(d.rgb, d.a * ((c.r + c.g + c.b) * 0.33)));
 }

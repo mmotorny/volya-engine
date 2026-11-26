@@ -135,12 +135,13 @@ pub(crate) fn level_bytes(models: &[DetailGeometry]) -> (Vec<u8>, Vec<u8>, Vec<R
 
 /// The frame constants ([`FRAME_BYTES`]): the view-projection, the sway
 /// constants, the ambient, hemisphere and sun colours, and the alpha
-/// reference × 255 (−1 for none).
+/// reference × 255 (−1 for none) and the mip bias in force.
 pub(crate) fn frame_constants(
     frame: &DetailFrame,
     view_projection: &Mat4,
     light: [[f32; 3]; 3],
     alpha_ref: f32,
+    mip_bias: f32,
 ) -> Vec<u8> {
     let mut constants = Vec::with_capacity(FRAME_BYTES as usize);
     push_mat(&mut constants, view_projection);
@@ -150,7 +151,7 @@ pub(crate) fn frame_constants(
     for [r, g, b] in light {
         push_vec4(&mut constants, [r, g, b, 0.0]);
     }
-    push_vec4(&mut constants, [alpha_ref, 0.0, 0.0, 0.0]);
+    push_vec4(&mut constants, [alpha_ref, mip_bias, 0.0, 0.0]);
     constants
 }
 

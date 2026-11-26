@@ -266,6 +266,12 @@ pub fn textures_to_prepare() -> Option<Vec<String>> {
     RUNNING.with(|r| Some(r.borrow().as_ref()?.app.textures_to_prepare()?.to_vec()))
 }
 
+/// `texture_lod` and its list as a texture loaded now uses them
+/// ([`App::texture_quality`]).
+pub fn texture_quality() -> Option<volya_engine::core::texture_quality::TextureQuality> {
+    RUNNING.with(|r| Some(r.borrow().as_ref()?.app.texture_quality()))
+}
+
 /// The New Game load in progress or that made the level shown
 /// ([`App::load`]).
 pub fn load() -> Option<u64> {

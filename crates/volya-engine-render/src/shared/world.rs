@@ -17,9 +17,26 @@ use crate::{Texture, World};
 /// Row-vector convention (`p · M`), stored row by row.
 pub type Mat4 = [[f32; 4]; 4];
 
-/// Maximum anisotropy, clamp(`r__tf_aniso`, 1, 16) with the default 16
-/// (section 4.4).
-pub(crate) const ANISOTROPY: u16 = 16;
+/// The maximum anisotropy and mip level-of-detail bias in force on the
+/// samplers (texture-quality-filtering.md 5): the bias on every mipmapped
+/// sampler, the anisotropy on the anisotropic ones (static-shading.md 4.4's
+/// and those that follow it).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Filtering {
+    /// 1 … 16.
+    pub anisotropy: u16,
+    pub mip_bias: f32,
+}
+
+impl Default for Filtering {
+    /// The shipped `user.ltx`'s `r__tf_aniso 16`, `r1_tf_mipbias 0`.
+    fn default() -> Self {
+        Self {
+            anisotropy: 16,
+            mip_bias: 0.0,
+        }
+    }
+}
 /// The tree constants' factor: stored values × 0.5 at load, × K = 1.5 per
 /// draw (section 7.3).
 pub(crate) const TREE_FACTOR: f32 = 0.75;
@@ -329,6 +346,10 @@ pub struct WorldFrame {
     pub effects: Option<crate::present::ScreenEffects>,
     /// The detail objects drawn (detail-objects.md 5.4, 6).
     pub details: Option<crate::details::DetailFrame>,
+    /// The samplers' filtering in force.
+    pub filtering: Filtering,
+    /// `r__geometry_lod` (section 10.2; object-detail-level.md 1).
+    pub geometry_lod: f32,
     /// By world draw: those the camera pass keeps (visibility-scope.md 5);
     /// `None` draws every one that may show.
     pub drawn: Option<std::sync::Arc<Vec<bool>>>,
@@ -453,9 +474,15 @@ pub(crate) fn frame_constants(
     push_mat(&mut constants, &frame.view);
     push_vec4(
         &mut constants,
-        vec4(frame.eye, ssa_min(size.0, size.1, frame.fov_y_degrees)),
+        vec4(
+            frame.eye,
+            ssa_min(size.0, size.1, frame.fov_y_degrees, frame.geometry_lod),
+        ),
     );
-    push_vec4(&mut constants, vec4(frame.forward, 0.0));
+    push_vec4(
+        &mut constants,
+        vec4(frame.forward, frame.filtering.mip_bias),
+    );
     push_vec4(&mut constants, vec4(l.ambient, 0.0));
     push_vec4(&mut constants, vec4(l.hemi, 0.0));
     push_vec4(&mut constants, vec4(l.sun_color, 0.0));
@@ -501,10 +528,10 @@ pub fn fog_plane(view_projection: &Mat4, fog_near: f32, fog_far: f32) -> [f32; 4
     ]
 }
 
-/// ssa_min for a `width` × `height` render target and vertical field of
-/// view `fov` degrees (section 10.2, `r__geometry_lod` 1).
-pub fn ssa_min(width: u32, height: u32, fov: f32) -> f32 {
-    let k = 1.0 / ((1.0 + 1e-7) * (90.0 / fov).powi(2) * width as f32 * height as f32);
+/// ssa_min for a `width` × `height` render target, vertical field of view
+/// `fov` degrees and `r__geometry_lod` `geometry_lod` (section 10.2).
+pub fn ssa_min(width: u32, height: u32, fov: f32, geometry_lod: f32) -> f32 {
+    let k = 1.0 / ((geometry_lod + 1e-7) * (90.0 / fov).powi(2) * width as f32 * height as f32);
     12.25 * k
 }
 
@@ -931,6 +958,9 @@ mod tests {
         assert!(f(110.0 + offset).abs() < 1e-4);
         assert!((f(60.0 + offset) - 0.5).abs() < 1e-4);
         let expected = 12.25 / (1024.0 * 768.0);
-        assert!((ssa_min(1024, 768, 90.0) - expected).abs() < 1e-5 * expected);
+        assert!((ssa_min(1024, 768, 90.0, 1.0) - expected).abs() < 1e-5 * expected);
+        // object-detail-level.md 1: a higher detail lowers the threshold.
+        let half = ssa_min(1024, 768, 90.0, 0.5);
+        assert!((half - 2.0 * expected).abs() < 1e-5 * expected);
     }
 }

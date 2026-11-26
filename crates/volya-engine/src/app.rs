@@ -27,6 +27,7 @@ use crate::core::lights::LightSettings;
 use crate::core::pause::{GlobalClock, Pause};
 use crate::core::sound::Fatal;
 use crate::core::sound::system::Listener;
+use crate::core::texture_quality::{SamplerStates, TextureQuality};
 use crate::core::vfs::{self, Vfs};
 use crate::data::{Assets, GameData};
 use crate::draw::Ctx;
@@ -40,6 +41,7 @@ use crate::loading_screen::{
 };
 use crate::menu_screens::{Frame, MenuFrame, MenuScreens, MenuState};
 use crate::render::present::Presentation;
+use crate::render::world::Filtering;
 use crate::save_load::FieldFont;
 use crate::saved_games::SavedGames;
 use crate::scene::{Scene, Sprite, TextureId};
@@ -465,11 +467,33 @@ pub struct App {
     menu_font: Option<(Resolution, FieldFont)>,
     /// The display colour settings and their ramp as last computed.
     ramp: Option<(DisplayColour, Option<[u16; 256]>)>,
+    /// `[reduce_lod_texture_list]` (texture-quality-filtering.md 1.4).
+    texture_list: Arc<[String]>,
+    /// The maximum anisotropy and mip bias in force (sections 5 – 7).
+    samplers: SamplerStates,
 }
 
 /// `r__supersample`, 1 … 4.
 fn supersample(console: &Console) -> u32 {
     (console.number("r__supersample") as u32).clamp(1, 4)
+}
+
+/// `r__geometry_lod`, `r1_ssa_lod_a` and `r1_ssa_lod_b`
+/// (object-detail-level.md 1): the last two reals 16 … 96 and 16 … 64 (RS
+/// 1), their defaults before set; a stored value out of range is clamped
+/// (our choice).
+fn geometry_lod(console: &Console) -> [f32; 3] {
+    use volya_engine_formats::level::{SSA_LOD_A, SSA_LOD_B};
+    let kept = |name, default: f32, max: f32| {
+        (console.status(name))
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .map_or(default, |v| v.clamp(16.0, max))
+    };
+    [
+        console.number("r__geometry_lod"),
+        kept("r1_ssa_lod_a", SSA_LOD_A, 96.0),
+        kept("r1_ssa_lod_b", SSA_LOD_B, 64.0),
+    ]
 }
 
 /// `r1_pps_u` and `r1_pps_v` (frame-presentation.md 3.2): reals −1 … 1, 0
@@ -540,7 +564,12 @@ impl App {
         let console = data.console();
         let video = video_mode(&console);
         let supersample = supersample(&console);
+        let texture_list = TextureQuality::read_list(&data.system);
+        // The device is made once the user configuration has run (7.2).
+        let samplers = SamplerStates::at_creation(&console);
         Ok(Self {
+            texture_list,
+            samplers,
             applied: console.generation(),
             console,
             screens: MenuScreens::default(),
@@ -959,6 +988,8 @@ impl App {
             return;
         }
         self.frames += 1;
+        // The filtering variables executed since (6.1).
+        self.samplers.follow(&self.console);
         if let Some(at) = self.loaded_since.take() {
             self.load_ms = Some(time_ms - at);
             let level = match &self.phase {
@@ -997,6 +1028,9 @@ impl App {
                 .map_or(GLOWS_PER_FRAME, |v| v.clamp(2, 32));
             level.set_light_settings(settings, glows);
             level.set_supersample(self.supersample);
+            level.set_vis_distance(self.console.number("rs_vis_distance"));
+            let [lod, a, b] = geometry_lod(&self.console);
+            level.set_geometry_lod(lod, a, b);
             // detail-objects.md 7; weather-ambient-effects.md 4.3: the wind
             // as the sound rules last updated it (without audio output
             // they do not run, #352).
@@ -1043,6 +1077,8 @@ impl App {
                     // `vid_restart` (options-screens.md section 5.4).
                     self.video = video_mode(&self.console);
                     self.supersample = supersample(&self.console);
+                    // A device reset (texture-quality-filtering.md 7.3).
+                    self.samplers.reset(&self.console);
                     menu.resized(data, self.video);
                 }
                 if out.store_config || menu.quit_requested() {
@@ -1067,6 +1103,9 @@ impl App {
                         difficulty,
                         stages: NewGame::Closing(Box::new(menu)),
                     };
+                    // The device is reset as the menu goes, before the
+                    // level is made (texture-quality-filtering.md 8.1).
+                    self.samplers.reset(&self.console);
                     self.loads += 1;
                 }
             }
@@ -1158,6 +1197,8 @@ impl App {
                 if out.video_restart {
                     self.video = video_mode(&self.console);
                     self.supersample = supersample(&self.console);
+                    // A device reset (texture-quality-filtering.md 7.3).
+                    self.samplers.reset(&self.console);
                     menu.resized(data, self.video);
                 }
                 if out.store_config || menu.quit_requested() {
@@ -1442,6 +1483,13 @@ impl App {
         self.save.take()
     }
 
+    /// `texture_lod` and its list as a texture loaded now uses them
+    /// (texture-quality-filtering.md 1).
+    pub fn texture_quality(&self) -> TextureQuality {
+        let lod = self.console.number("texture_lod").max(0.0) as u32;
+        TextureQuality::new(lod, self.texture_list.clone())
+    }
+
     /// The console's settings.
     pub fn console(&self) -> &Console {
         &self.console
@@ -1469,6 +1517,13 @@ impl App {
                 pps: pps(&self.console),
                 frame_time: self.frame_ms as f32 / 1000.0,
             };
+            let s = self.samplers.in_force();
+            scene.filtering = Filtering {
+                anisotropy: s.anisotropy,
+                mip_bias: s.bias,
+            };
+            scene.texture_quality = self.texture_quality();
+            scene.geometry_lod = self.console.number("r__geometry_lod");
         }
         if let Err(e) = &scene
             && e.kind() != io::ErrorKind::Unsupported
@@ -2192,6 +2247,22 @@ mod tests {
         assert!(app.level_controls().is_some(), "the controls are live");
         assert!(!app.cursor_shown(), "no cursor in the level");
         (tree, app, input, audio)
+    }
+
+    /// r1-settings-scope.md 2.2: `rs_vis_distance` scales the far plane
+    /// from the next frame (start-position.md 7.1; the empty level's
+    /// weather has 100 m).
+    #[test]
+    fn the_view_distance_scales_the_far_plane() {
+        let (tree, mut app, input, mut audio) = in_level();
+        let far = |app: &App| match &app.phase {
+            Some(Phase::Level { level, .. }) => level.far_plane(),
+            _ => panic!("not in a level"),
+        };
+        assert_eq!(far(&app), 100.0);
+        app.console.exec("rs_vis_distance 0.5");
+        app.update(&tree, 32.0, &input, &mut audio);
+        assert_eq!(far(&app), 50.0);
     }
 
     fn menu_open(app: &App) -> bool {

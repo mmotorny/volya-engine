@@ -242,6 +242,8 @@ fn frame(world: World, sky: Option<SkyFrame>) -> WorldFrame {
         presentation: Default::default(),
         effects: None,
         details: None,
+        filtering: Default::default(),
+        geometry_lod: 1.0,
         drawn: None,
     }
 }

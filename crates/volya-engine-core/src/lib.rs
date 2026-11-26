@@ -32,6 +32,7 @@ pub mod simulation;
 pub mod sound;
 pub mod switching;
 pub mod text;
+pub mod texture_quality;
 pub mod torch;
 pub mod ui;
 pub mod vfs;

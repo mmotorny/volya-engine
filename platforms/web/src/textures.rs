@@ -208,6 +208,7 @@ async fn prepare(paths: Vec<String>, load: Option<u64>) -> Result<(), JsValue> {
     let mut bytes = Vec::new();
     let mut scratch = Vec::new();
     let mut turn = now();
+    let quality = crate::engine::texture_quality().unwrap_or_default();
     for path in paths {
         // The game was quit or unmounted meanwhile, or another load
         // started.
@@ -223,6 +224,8 @@ async fn prepare(paths: Vec<String>, load: Option<u64>) -> Result<(), JsValue> {
         let Ok(dds) = Dds::parse(&bytes) else {
             continue;
         };
+        // texture-quality-filtering.md 1: its top levels dropped.
+        let dds = quality.apply(&path, &dds);
         let t = now();
         // Each texture's making and upload a step in the diagnostic log
         // (#443; one per texture, as one per band filled the log).
