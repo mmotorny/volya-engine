@@ -157,6 +157,17 @@ async fn new_game(
             screen.set_camera(eye, angles);
         }
         screen.update(now, &input);
+        // The last second composed frame by frame, as the app composes
+        // every frame: the detail pass updates and selects the detail
+        // objects only when it ran in the previous frame too
+        // (detail-objects.md 5.1), so a single frame at the end would draw
+        // none (#557).
+        if now >= fine && now < end {
+            if let Some((eye, angles)) = at {
+                screen.set_camera(eye, angles);
+            }
+            screen.scene(SIZE, now);
+        }
     }
     if let Some((eye, angles)) = at {
         screen.set_camera(eye, angles);
