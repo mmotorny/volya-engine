@@ -1140,7 +1140,7 @@ fn encode_static(
                     StaticCall::Shared,
                     count,
                 );
-                if static_in_window() {
+                if in_window() {
                     pass.draw_indexed(
                         d.first_index..d.first_index + d.index_count,
                         d.first_vertex,
@@ -1227,11 +1227,7 @@ fn encode_static(
                 StaticCall::Shared
             };
             crate::stats::static_call(program.name(), kind, 1);
-            if if program.is_model() {
-                in_window()
-            } else {
-                static_in_window()
-            } {
+            if in_window() {
                 pass.draw_indexed(range, d.first_vertex, i..i + 1);
             }
             continue;
@@ -1286,11 +1282,11 @@ thread_local! {
     static WINDOW: std::cell::Cell<Option<(u32, u32)>> = const { std::cell::Cell::new(None) };
     /// The world's draw calls counted in the frame being encoded.
     static CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-    /// Experiment (#443): the static world's draws left out on WebGL 2.
+    /// Experiment (#443): the static world's merged draws left out on WebGL 2.
     static SKIP_STATIC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// [`in_window`] for a draw of the static world (not an object's), left
+/// [`in_window`] for a merged draw of the static world, left
 /// out on WebGL 2 by the experiment of #443.
 fn static_in_window() -> bool {
     in_window() && !SKIP_STATIC.get()
@@ -2920,7 +2916,7 @@ impl Renderer {
                         );
                     }
                     crate::stats::draw();
-                    if static_in_window() {
+                    if in_window() {
                         pass.draw_indexed(
                             d.first_index..d.first_index + d.index_count,
                             d.first_vertex as i32,
@@ -2983,7 +2979,7 @@ impl Renderer {
             }
             let instance = i as u32;
             crate::stats::draw();
-            if static_in_window() {
+            if in_window() {
                 pass.draw_indexed(
                     d.first_index..d.first_index + d.index_count,
                     d.first_vertex as i32,
