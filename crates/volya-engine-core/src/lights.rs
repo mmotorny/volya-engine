@@ -7,18 +7,17 @@
 //! (3.1), the lights chosen each frame (4) and each light pass's frustum,
 //! fade and constants (5.2, 5.3, 6.3). Drawing is the renderer's.
 //!
-//! The renderer draws every sector with the full view frustum, the
-//! superset `level.md` 9.2 allows, so a record's sector matters only as
-//! whether it has one: whether the downward ray of `level.md` 9.1 ever hit
-//! a collision triangle or a portal from its position ([`Lights::update_sectors`]).
-//! With every sector visited, rule 1 of section 4 is the full view frustum,
-//! and the occlusion test of rule 2 (`level.hom`) is not made (a superset).
+//! A record's sector is the one the downward ray of `level.md` 9.1 finds
+//! from its position ([`Lights::update_sectors`]); rules 1 and 2 of
+//! section 4 take the camera pass's sectors and frusta and the cached
+//! occlusion test from the caller ([`Lights::choose`]).
 //!
 //! Sources keep their records for as long as they exist and change them
 //! each frame through the setters, which apply the update thresholds of
 //! section 2.2 ([`Lights::create`], [`Lights::destroy`]).
 
 use crate::camera::{Mat4, Vec3};
+use crate::occlusion::Cached;
 
 fn dot(a: Vec3, b: Vec3) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
@@ -90,8 +89,12 @@ pub struct LightRecord {
     /// Bounding sphere centre and radius (DL 2.3).
     pub centre: Vec3,
     pub radius: f32,
-    /// Whether the record has a sector (module documentation).
-    pub in_sector: bool,
+    /// Its sector (DL 2.4), none until the ray of `level.md` 9.1 first
+    /// finds one.
+    pub sector: Option<u16>,
+    /// Its cached occlusion test (occlusion-tests.md 5; *N* when made is
+    /// unestablished: 0, tested when first reached).
+    pub occlusion: Cached,
     /// Its position changed since its sector was last determined.
     sector_due: bool,
 }
@@ -114,7 +117,8 @@ impl Default for LightRecord {
             texture: String::new(),
             centre: [0.0; 3],
             radius: 0.0,
-            in_sector: false,
+            sector: None,
+            occlusion: Cached::default(),
             sector_due: true,
         };
         r.update_sphere();
@@ -560,52 +564,93 @@ impl Lights {
     }
 
     /// Determines the sector of every active record whose position changed
-    /// since (DL 2.4): `found` tells whether the downward ray of `level.md`
-    /// 9.1 from a point hits a triangle or a portal within 500 m. A record
-    /// keeps its sector when the ray finds none.
-    pub fn update_sectors(&mut self, mut found: impl FnMut(Vec3) -> bool) {
+    /// since (DL 2.4): `found` gives the sector the downward ray of
+    /// `level.md` 9.1 finds from a point, if any. A record keeps its sector
+    /// when the ray finds none.
+    pub fn update_sectors(&mut self, mut found: impl FnMut(Vec3) -> Option<u16>) {
         for r in self.records.iter_mut().flatten() {
             if r.active && r.sector_due && !r.excluded {
                 r.sector_due = false;
-                r.in_sector |= found(r.position);
+                if let Some(s) = found(r.position) {
+                    r.sector = Some(s);
+                }
             }
         }
     }
 
-    /// The lights listed this frame (DL 4), spot list first, then the
-    /// point list: active, not excluded, `r1_dlights` on, range at least
-    /// 0.1, with a sector, and a bounding sphere meeting the view frustum
-    /// `view`. Each record once, in record order (the spatial query's
-    /// order is not stated; the passes add, so it does not matter, DL 5.1).
-    pub fn choose(&self, settings: &LightSettings, view: &Frustum) -> Vec<LightId> {
-        if !settings.dlights {
-            return Vec::new();
-        }
-        let listed = |r: &LightRecord| {
-            r.active
-                && !r.excluded
-                && r.range >= 0.1
-                && r.in_sector
-                && view.meets(r.centre, r.radius)
+    /// The lights listed this frame (DL 4; object-visibility.md 3, 5, 6.3),
+    /// spot list first, then the point list. The active records (those
+    /// the spatial index holds) are handled nearest first by their sphere
+    /// centre (equal distances in record order, unestablished): one with
+    /// no sector is skipped; `seen` makes rules 1 and 2 (its sector visited
+    /// with a frustum the sphere meets, then the cached occlusion test of
+    /// the box C ± R); then it is listed when not excluded, `r1_dlights` is
+    /// on and its range is at least 0.1 (rule 4).
+    pub fn choose(
+        &mut self,
+        settings: &LightSettings,
+        eye: Vec3,
+        mut seen: impl FnMut(Seen<'_>) -> bool,
+    ) -> Vec<LightId> {
+        let d2 = |r: &LightRecord| {
+            let d = sub(r.centre, eye);
+            dot(d, d)
         };
-        let listed: Vec<(LightId, LightKind)> = self
-            .iter()
-            .filter(|(_, r)| listed(r))
-            .map(|(id, r)| (id, r.kind))
+        let mut order: Vec<(u32, f32)> = (self.records.iter().enumerate())
+            .filter_map(|(i, r)| r.as_ref().filter(|r| r.active).map(|r| (i as u32, d2(r))))
             .collect();
+        order.sort_by(|a, b| a.1.total_cmp(&b.1));
+        let mut listed = Vec::new();
+        for (i, _) in order {
+            let Some(r) = self.records[i as usize].as_mut() else {
+                continue;
+            };
+            let Some(sector) = r.sector else { continue };
+            let (centre, radius) = (r.centre, r.radius);
+            let seen = seen(Seen {
+                sector,
+                centre,
+                radius,
+                min: centre.map(|v| v - radius),
+                max: centre.map(|v| v + radius),
+                cache: &mut r.occlusion,
+            });
+            if !seen {
+                continue;
+            }
+            if !r.excluded && settings.dlights && r.range >= 0.1 {
+                listed.push((LightId(i), r.kind));
+            }
+        }
         let spots = listed.iter().filter(|(_, k)| *k != LightKind::Point);
         let points = listed.iter().filter(|(_, k)| *k == LightKind::Point);
         spots.chain(points).map(|(id, _)| *id).collect()
     }
 
-    /// The frame's light passes (DL 5): one per listed light seen from
-    /// `eye`, spot lights first; skipped ones left out.
-    pub fn passes(&self, settings: &LightSettings, view: &Frustum, eye: Vec3) -> Vec<LightPass> {
-        self.choose(settings, view)
+    /// The frame's light passes (DL 5) of the lights `choose` lists, seen
+    /// from `eye`, spot lights first; skipped ones left out.
+    pub fn passes(
+        &mut self,
+        settings: &LightSettings,
+        eye: Vec3,
+        seen: impl FnMut(Seen<'_>) -> bool,
+    ) -> Vec<LightPass> {
+        self.choose(settings, eye, seen)
             .into_iter()
             .filter_map(|id| light_pass(self.get(id)?, eye, settings.clip))
             .collect()
     }
+}
+
+/// What rules 1 and 2 of DL 4 test of a record: its sector and sphere, its
+/// box C ± R and its occlusion cache.
+pub struct Seen<'a> {
+    pub sector: u16,
+    pub centre: Vec3,
+    pub radius: f32,
+    pub min: Vec3,
+    pub max: Vec3,
+    pub cache: &'a mut Cached,
 }
 
 /// A record of the level's chunk 6 as DL 3.1 reads it.
@@ -744,15 +789,19 @@ mod tests {
         assert_eq!(b.direction, [0.0, -1.0, 0.0]);
         assert_eq!(b.colour, [1.6, 0.8, 0.4, 1.0]);
         // Excluded records are never listed.
-        lights.update_sectors(|_| true);
-        let all = Frustum([[0.0, 0.0, 0.0, 1.0]; 6]);
-        assert!(lights.choose(&LightSettings::default(), &all).is_empty());
+        lights.update_sectors(|_| Some(0));
+        assert!(chosen(&mut lights, &LightSettings::default()).is_empty());
+    }
+
+    /// The lights `lights` lists with every sector visited and nothing
+    /// occluded.
+    fn chosen(lights: &mut Lights, s: &LightSettings) -> Vec<LightId> {
+        lights.choose(s, [0.0; 3], |_| true)
     }
 
     #[test]
     fn the_frame_lists_spots_then_points() {
         let mut lights = Lights::default();
-        let all = Frustum([[0.0, 0.0, 0.0, 1.0]; 6]);
         let point = lights.create();
         let spot = lights.create();
         lights.set_kind(spot, LightKind::Spot);
@@ -763,21 +812,56 @@ mod tests {
             lights.set_active(id, true);
             lights.set_position(id, [0.0, 0.0, if id == lost { 99.0 } else { 0.0 }]);
         }
-        lights.update_sectors(|p| p[2] < 50.0);
+        lights.update_sectors(|p| (p[2] < 50.0).then_some(0));
         let s = LightSettings::default();
-        assert_eq!(lights.choose(&s, &all), vec![spot, point]);
+        assert_eq!(chosen(&mut lights, &s), vec![spot, point]);
         let off = LightSettings {
             dlights: false,
             ..s
         };
-        assert!(lights.choose(&off, &all).is_empty());
+        assert!(chosen(&mut lights, &off).is_empty());
         // A sector, once found, is kept.
         lights.set_position(point, [0.0, 0.0, 60.0]);
-        lights.update_sectors(|p| p[2] < 50.0);
-        assert_eq!(lights.choose(&s, &all), vec![spot, point]);
+        lights.update_sectors(|p| (p[2] < 50.0).then_some(0));
+        assert_eq!(chosen(&mut lights, &s), vec![spot, point]);
         lights.destroy(spot);
-        assert_eq!(lights.choose(&s, &all), vec![point]);
+        assert_eq!(chosen(&mut lights, &s), vec![point]);
         assert_eq!(lights.create(), spot);
+    }
+
+    #[test]
+    fn lights_are_tested_by_sector_then_occlusion_nearest_first() {
+        let mut lights = Lights::default();
+        let (near, far, unseen) = (lights.create(), lights.create(), lights.create());
+        for (id, z) in [(far, 5.0), (unseen, 3.0), (near, 1.0)] {
+            lights.set_active(id, true);
+            lights.set_position(id, [0.0, 0.0, z]);
+        }
+        // Each in the sector of its z; sector 3 not reached.
+        lights.update_sectors(|p| Some(p[2] as u16));
+        let mut tested = Vec::new();
+        let s = LightSettings::default();
+        let got = lights.choose(&s, [0.0; 3], |t| {
+            if t.sector == 3 {
+                return false;
+            }
+            tested.push((t.min[2], t.max[2]));
+            t.min[2] < -5.0
+        });
+        // Boxes C ± R (R = 8), the nearest first; the far one hidden.
+        assert_eq!(tested, [(-7.0, 9.0), (-3.0, 13.0)]);
+        assert_eq!(got, [near]);
+        // Tested with r1_dlights off too, and then not listed.
+        let off = LightSettings {
+            dlights: false,
+            ..s
+        };
+        let mut n = 0;
+        let got = lights.choose(&off, [0.0; 3], |_| {
+            n += 1;
+            true
+        });
+        assert_eq!((n, got.len()), (3, 0));
     }
 
     #[test]
