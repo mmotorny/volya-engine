@@ -13,7 +13,7 @@
 - Never add URL query parameters (`?…`) without the user's explicit approval.
 - Follow docs/architecture/; update the document a decision belongs to when it changes.
 - Verify how browsers and platforms behave (storage, caching, APIs) before relying on it, and say whether it's measured, documented, or believed. Before inventing a mechanism or a design, check how it's commonly done.
-- No shell scripts: project tasks live in `tools/xtask` (`cargo xtask <task>`).
+- No shell scripts: project tasks live in `tools/xtask` (`cargo xtask <task>`). One exception: `tools/bazel`, Bazelisk's bootstrap wrapper, which only computes the installer's fingerprint and runs Bazel.
 - Run shell pipelines with `set -o pipefail`.
 - Never wait on a process with `pgrep -f` of a pattern that also matches the waiting shell's own command line; wait on a PID or a file. Stop every background loop you start before finishing.
 - Live at head: run `cargo xtask update` when starting a chunk of work; fix what it breaks rather than pinning.
