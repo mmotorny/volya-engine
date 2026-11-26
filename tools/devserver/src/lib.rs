@@ -12,14 +12,16 @@
 //! With [`Server::with_tests`] it also serves the browser test harness under
 //! [`TEST_BASE`] (kept out of `dist/`) and accepts test reports POSTed to
 //! [`RESULTS_PATH`]; with [`Server::with_dumps`] it writes the frames tests
-//! POST under [`DUMP_BASE`] to a local directory.
+//! POST under [`DUMP_BASE`] to a local directory, and with
+//! [`Server::with_references`] serves an earlier run's frames under
+//! [`REFERENCE_BASE`] for comparison.
 
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::TcpListener;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 /// URL prefix of the GitHub Pages project site.
@@ -46,6 +48,11 @@ pub const INSTALLER_BASE: &str = "/volya-engine/__test/installer/";
 /// of `DUMP_BASE` answers 204 when dumps are written, else 404, so pages
 /// encode frames only when they are kept.
 pub const DUMP_BASE: &str = "/volya-engine/__test/dump/";
+/// With [`Server::with_references`], `<REFERENCE_BASE><suite>/<name>.png`
+/// serves `<dir>/<suite>/<name>.png`: a frame an earlier run dumped, which
+/// a suite compares with its own (404 without one). A GET of
+/// `REFERENCE_BASE` answers 204 when references are served, else 404.
+pub const REFERENCE_BASE: &str = "/volya-engine/__test/reference/";
 
 /// What makes a page cross-origin isolated (COOP and COEP), as the service
 /// worker adds them.
@@ -73,7 +80,9 @@ pub struct Server {
     /// `no-store`.
     pages_caching: bool,
     /// Where frames POSTed under [`DUMP_BASE`] go.
-    dumps: Option<PathBuf>,
+    dumps: Mutex<Option<PathBuf>>,
+    /// Frames served under [`REFERENCE_BASE`].
+    references: Mutex<Option<PathBuf>>,
 }
 
 impl Server {
@@ -86,7 +95,8 @@ impl Server {
             next: None,
             use_next: AtomicBool::new(false),
             pages_caching: false,
-            dumps: None,
+            dumps: Mutex::new(None),
+            references: Mutex::new(None),
         })
     }
 
@@ -111,11 +121,43 @@ impl Server {
         Ok(self)
     }
 
+    /// Serves the frames of `dir` (an earlier run's dumps) under
+    /// [`REFERENCE_BASE`].
+    pub fn with_references(self, dir: &Path) -> io::Result<Self> {
+        self.set_references(Some(dir))?;
+        Ok(self)
+    }
+
+    /// [`Server::with_references`] while the server runs (`None`: none).
+    pub fn set_references(&self, dir: Option<&Path>) -> io::Result<()> {
+        let dir = dir.map(Path::canonicalize).transpose()?;
+        *self.references.lock().unwrap_or_else(|e| e.into_inner()) = dir;
+        Ok(())
+    }
+
+    /// [`Server::with_dumps`] while the server runs (`None`: none).
+    pub fn set_dumps(&self, dir: Option<&Path>) -> io::Result<()> {
+        let dir = match dir {
+            Some(dir) => {
+                std::fs::create_dir_all(dir)?;
+                Some(dir.canonicalize()?)
+            }
+            None => None,
+        };
+        *self.dumps.lock().unwrap_or_else(|e| e.into_inner()) = dir;
+        Ok(())
+    }
+
+    /// Serves the next build (see [`Server::with_next`]) instead of the
+    /// root, or the root again.
+    pub fn set_next(&self, on: bool) {
+        self.use_next.store(on, Ordering::SeqCst);
+    }
+
     /// Writes the frames tests POST under [`DUMP_BASE`] into `dir` (created
     /// when missing); never anything else.
-    pub fn with_dumps(mut self, dir: &Path) -> io::Result<Self> {
-        std::fs::create_dir_all(dir)?;
-        self.dumps = Some(dir.canonicalize()?);
+    pub fn with_dumps(self, dir: &Path) -> io::Result<Self> {
+        self.set_dumps(Some(dir))?;
         Ok(self)
     }
 
@@ -128,7 +170,13 @@ impl Server {
 
     /// Accepts connections forever, one thread per connection.
     pub fn run(self, listener: TcpListener) -> io::Result<()> {
-        let server = Arc::new(self);
+        Arc::new(self).run_shared(listener)
+    }
+
+    /// [`Server::run`], with the server shared, so its settings can change
+    /// while it runs.
+    pub fn run_shared(self: Arc<Self>, listener: TcpListener) -> io::Result<()> {
+        let server = self;
         for stream in listener.incoming() {
             let stream = stream?;
             let server = Arc::clone(&server);
@@ -148,7 +196,8 @@ impl Server {
         };
         match (request.method.as_str(), &self.results) {
             ("POST", Some(_)) if request.path.starts_with(DUMP_BASE) => {
-                return match (&self.dumps, dump_path(&request.path[DUMP_BASE.len()..])) {
+                let dumps = self.dumps.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                return match (&dumps, dump_path(&request.path[DUMP_BASE.len()..])) {
                     (Some(dir), Some((suite, name))) => {
                         let dir = dir.join(suite);
                         std::fs::create_dir_all(&dir)?;
@@ -159,8 +208,29 @@ impl Server {
                     (None, _) => write_status(&mut stream, 404, "Not Found"),
                 };
             }
+            ("GET", Some(_)) if request.path == REFERENCE_BASE => {
+                return match *self.references.lock().unwrap_or_else(|e| e.into_inner()) {
+                    Some(_) => write_status(&mut stream, 204, "No Content"),
+                    None => write_status(&mut stream, 404, "Not Found"),
+                };
+            }
+            ("GET", Some(_)) if request.path.starts_with(REFERENCE_BASE) => {
+                let references = self
+                    .references
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
+                let found = references.as_ref().and_then(|dir| {
+                    let (suite, name) = dump_path(&request.path[REFERENCE_BASE.len()..])?;
+                    Some(dir.join(suite).join(name)).filter(|p| p.is_file())
+                });
+                return match found {
+                    Some(path) => serve_file(&mut stream, &path, None, false, true, "no-store"),
+                    None => write_status(&mut stream, 404, "Not Found"),
+                };
+            }
             ("GET", Some(_)) if request.path == DUMP_BASE => {
-                return match self.dumps {
+                return match *self.dumps.lock().unwrap_or_else(|e| e.into_inner()) {
                     Some(_) => write_status(&mut stream, 204, "No Content"),
                     None => write_status(&mut stream, 404, "Not Found"),
                 };
@@ -645,6 +715,33 @@ mod tests {
         ] {
             assert!(post(bad).starts_with("HTTP/1.1 400 "), "{bad}");
         }
+        let (dir3, server) = fixture("references");
+        let server = server
+            .with_tests(&dir3.join("tests"), Arc::new(|_| {}))
+            .unwrap()
+            .with_references(&dumps)
+            .unwrap();
+        let found = exchange(
+            server,
+            &format!("GET {REFERENCE_BASE}render/a-frame_1.png HTTP/1.1\r\n\r\n"),
+        );
+        assert!(
+            found.starts_with("HTTP/1.1 200 ") && found.ends_with("png"),
+            "{found}"
+        );
+        let (dir4, server) = fixture("no-reference");
+        let server = server
+            .with_tests(&dir4.join("tests"), Arc::new(|_| {}))
+            .unwrap()
+            .with_references(&dumps)
+            .unwrap();
+        let missing = exchange(
+            server,
+            &format!("GET {REFERENCE_BASE}render/other.png HTTP/1.1\r\n\r\n"),
+        );
+        assert!(missing.starts_with("HTTP/1.1 404 "), "{missing}");
+        fs::remove_dir_all(dir3).unwrap();
+        fs::remove_dir_all(dir4).unwrap();
         let (dir2, server) = fixture("no-dumps");
         let server = server
             .with_tests(&dir2.join("tests"), Arc::new(|_| {}))

@@ -49,17 +49,22 @@ let dumping = null;
  * `-` and `_`.
  */
 export async function dump(name, { width, height, rgba }) {
-  dumping ??= fetch(`${current.testBase}dump/`).then(
-    (r) => r.status === 204,
-    () => false,
-  );
-  if (!(await dumping)) return;
+  if (!(await keepsDumps())) return;
   const canvas = new OffscreenCanvas(width, height);
   const pixels = new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength);
   canvas.getContext("2d").putImageData(new ImageData(pixels, width, height), 0, 0);
   const png = await canvas.convertToBlob({ type: "image/png" });
   const response = await fetch(`${current.testBase}dump/${current.suite}/${name}.png`, { method: "POST", body: png });
   assert(response.ok, `dump ${name}: HTTP ${response.status}`);
+}
+
+/** Whether the dev server keeps dumped frames (`VOLYA_DUMP_DIR`). */
+export function keepsDumps() {
+  dumping ??= fetch(`${current.testBase}dump/`).then(
+    (r) => r.status === 204,
+    () => false,
+  );
+  return dumping;
 }
 
 function captureErrors() {

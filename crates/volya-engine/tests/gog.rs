@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! The startup sequence and the title menu built from the Russian edition
-//! (BYOA) and rendered headless, checked against docs/behavior/startup.md,
-//! docs/behavior/title-menu.md and docs/formats/text-and-fonts.md section 5.
-//! Skips when `VOLYA_GOG_INSTALLER` is unset. No image of game content is
-//! kept: the checks are on geometry, textures and pixel statistics.
+//! (BYOA), checked against docs/behavior/startup.md,
+//! docs/behavior/title-menu.md and docs/formats/text-and-fonts.md section 5:
+//! the scenes' geometry and textures, and the videos' coded frames. Their
+//! drawing is the render-screens suite's (`selftest::title_menu`). Skips
+//! when `VOLYA_GOG_INSTALLER` is unset.
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -23,8 +24,6 @@ use volya_engine::core::input::{Event, Input, Key};
 use volya_engine::core::vfs::db::DbVfs;
 use volya_engine::core::vfs::{DirEntry, StdVfs, Vfs, VfsFile};
 use volya_engine::data::GameData;
-use volya_engine::present::Presenter;
-use volya_engine::render::{Renderer, wgpu};
 use volya_engine::scene::{Scene, TextureId};
 use volya_engine_formats::ui::Resolution;
 use volya_engine_formats::video::TheoraVideo;
@@ -61,21 +60,6 @@ fn game_root() -> StdVfs {
             .nth(app::SPLASH_EXE.split('/').count())
             .unwrap(),
     )
-}
-
-fn renderer() -> Renderer {
-    pollster::block_on(async {
-        let instance = wgpu::Instance::default();
-        let adapter = instance.request_adapter(&Default::default()).await.unwrap();
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                required_features: volya_engine::render::device_features(&adapter),
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm)
-    })
 }
 
 fn key(input: &mut Input, key: Key) {
@@ -139,8 +123,6 @@ fn startup_and_title_menu_from_game_data() {
 
     let mut app = App::new(data).unwrap();
     let mut input = Input::new();
-    let mut gpu = renderer();
-    let mut presenter = Presenter::new();
 
     step(&mut app, &mut input, 1000.0);
     let AppState::Startup { startup, .. } = app.state() else {
@@ -177,13 +159,6 @@ fn startup_and_title_menu_from_game_data() {
     assert!(
         (v[3] - v[1] - height * 1.328 * 1.40625).abs() < 0.01,
         "{v:?}"
-    );
-    let list = presenter.draw_list(&mut gpu, &recording, &s, app.clock());
-    assert_eq!(list.quads.len(), 2);
-    let pixels = pollster::block_on(gpu.capture(&list, 256, 192, wgpu::Color::BLACK)).unwrap();
-    assert!(
-        pixels.chunks(4).any(|p| p[..3] != [0, 0, 0]),
-        "THQ frame is black"
     );
 
     // Esc skips one item per press; the GSC WP item is current.
@@ -353,42 +328,6 @@ fn startup_and_title_menu_from_game_data() {
     assert!(menu.menu.wheel_angle != 0.0);
     step(&mut app, &mut input, 13_700.0);
 
-    // Rendered: the captions are black glyphs on the slats.
-    let s = app.scene(&recording, XGA).unwrap();
-    let list = presenter.draw_list(&mut gpu, &recording, &s, app.clock());
-    assert_eq!(
-        list.quads.len(),
-        s.sprites.len(),
-        "{:?}",
-        presenter.take_errors()
-    );
-    let pixels = pollster::block_on(gpu.capture(&list, 1024, 768, wgpu::Color::BLACK)).unwrap();
-    let at = |x: usize, y: usize| &pixels[(y * 1024 + x) * 4..][..3];
-    let luma = |p: &[u8]| p.iter().map(|&c| u32::from(c)).sum::<u32>();
-    if let Some(path) = std::env::var_os("VOLYA_DUMP") {
-        let mut ppm = b"P6 1024 768 255\n".to_vec();
-        for p in pixels.chunks(4) {
-            ppm.extend_from_slice(&p[..3]);
-        }
-        std::fs::write(path, ppm).unwrap();
-    }
-    let caption = glyph_box(&s, "caption 5");
-    let (mut dark, mut total) = (0, 0);
-    for y in caption[1] as usize..caption[3] as usize {
-        for x in caption[0] as usize..caption[2] as usize {
-            total += 1;
-            dark += usize::from(luma(at(x, y)) < 60);
-        }
-    }
-    assert!(dark * 10 > total, "{dark} of {total} caption pixels dark");
-    let distinct: BTreeSet<&[u8]> = pixels.chunks(4).collect();
-    assert!(distinct.len() > 1000, "{} colours", distinct.len());
-    eprintln!(
-        "menu: {} quads, {} colours",
-        list.quads.len(),
-        distinct.len()
-    );
-
     // Mouse: hover row 4, click in the glass.
     input.set_screen([1024.0, 768.0]);
     input.handle(Event::PointerMoved {
@@ -421,8 +360,9 @@ fn startup_and_title_menu_from_game_data() {
 
 /// Which coded rows and columns of each startup and title-menu video become
 /// its texture (startup.md 6.6, table), and the GSC data evidence: its coded
-/// rows 360–367 are zero in every frame and no shown texel is; rendered, no
-/// pixel of the GSC item is their green (#35).
+/// rows 360–367 are zero in every frame and no shown texel is (#35). The
+/// textures' sizes and the GSC item drawn without their green are the
+/// render-screens suite's.
 #[test]
 fn video_frames_as_textures_from_game_data() {
     let Some(archives) = gog_archives::archives() else {
@@ -430,12 +370,10 @@ fn video_frames_as_textures_from_game_data() {
     };
     let root = StdVfs::new(archives[0].file.parent().unwrap());
     let tree = DbVfs::open_game(&root, Some("mods")).unwrap();
-    let mut gpu = renderer();
 
-    // The GSC item, rendered: skip THQ and GSC WP, then the item's 1 s delay.
+    // The GSC item: skip THQ and GSC WP, then the item's 1 s delay.
     let mut app = App::new(GameData::load(&tree, None, XGA).unwrap()).unwrap();
     let mut input = Input::new();
-    let mut presenter = Presenter::new();
     step(&mut app, &mut input, 1000.0);
     key(&mut input, Key::Escape);
     key(&mut input, Key::Escape);
@@ -444,7 +382,6 @@ fn video_frames_as_textures_from_game_data() {
         panic!()
     };
     assert_eq!(startup.item, 2);
-    let mut drawn = 0;
     for t in (2150..2400).step_by(20) {
         step(&mut app, &mut input, f64::from(t));
         let s = app.scene(&tree, XGA).unwrap();
@@ -457,29 +394,19 @@ fn video_frames_as_textures_from_game_data() {
             uv.try_into().unwrap(),
             [0.0, 1.0 / 512.0, 800.0 / 1024.0, 359.0 / 512.0]
         ));
-        let list = presenter.draw_list(&mut gpu, &tree, &s, app.clock());
-        assert_eq!(list.quads.len(), 2, "{:?}", presenter.take_errors());
-        let pixels = pollster::block_on(gpu.capture(&list, 1024, 768, wgpu::Color::BLACK)).unwrap();
-        let green = pixels
-            .chunks(4)
-            .filter(|p| p[0] < 8 && p[2] < 8 && (120..150).contains(&p[1]))
-            .count();
-        assert_eq!(green, 0, "GSC at {t} ms: {green} green pixels");
-        drawn += usize::from(pixels.chunks(4).any(|p| p[..3] != [0, 0, 0]));
     }
-    assert!(drawn > 0, "GSC frames are black");
 
     // Video, coded frame, picture, header offset (y from the bottom),
-    // texture, shown rectangle (x, y, w, h).
+    // shown rectangle (x, y, w, h).
     #[rustfmt::skip]
     let table = [
-        ("intro\\thq_logo_hyuv", (720, 496), (720, 486), (0, 10), (1024, 512), [0, 1, 720, 484]),
-        ("intro\\intro_gsc-wp", (640, 288), (640, 288), (0, 0), (1024, 512), [1, 1, 638, 286]),
-        ("intro\\intro_gsc", (800, 368), (800, 360), (0, 0), (1024, 512), [0, 1, 800, 358]),
-        ("ui\\ui_mm_main_back_crop", (880, 400), (876, 400), (0, 0), (1024, 512), [0, 0, 876, 400]),
-        ("ui\\ui_mm_fire", (128, 256), (128, 256), (0, 0), (128, 256), [0, 0, 128, 256]),
+        ("intro\\thq_logo_hyuv", (720, 496), (720, 486), (0, 10), [0, 1, 720, 484]),
+        ("intro\\intro_gsc-wp", (640, 288), (640, 288), (0, 0), [1, 1, 638, 286]),
+        ("intro\\intro_gsc", (800, 368), (800, 360), (0, 0), [0, 1, 800, 358]),
+        ("ui\\ui_mm_main_back_crop", (880, 400), (876, 400), (0, 0), [0, 0, 876, 400]),
+        ("ui\\ui_mm_fire", (128, 256), (128, 256), (0, 0), [0, 0, 128, 256]),
     ];
-    for (name, coded, picture, offset, texture, shown) in table {
+    for (name, coded, picture, offset, shown) in table {
         let path = format!("gamedata\\textures\\{name}.ogm");
         let bytes = volya_engine::core::vfs::read(&tree, &path).unwrap();
         let mut video = TheoraVideo::open(Cursor::new(bytes)).unwrap();
@@ -488,8 +415,6 @@ fn video_frames_as_textures_from_game_data() {
         assert_eq!((i.width, i.height), picture, "{name}");
         let from_bottom = i.frame_height - i.height - i.pic_y;
         assert_eq!((i.pic_x, from_bottom), offset, "{name}");
-        let size = gpu.create_video_texture(i.width, i.height).texture().size();
-        assert_eq!(size, texture, "{name}");
         let gsc = name == "intro\\intro_gsc";
         let mut frames = 0;
         while let Some(frame) = video.next_frame().unwrap() {

@@ -7,6 +7,8 @@
 //! [`frame`] once per animation frame. Without either the engine runs on
 //! without graphics and [`status`] says why.
 
+mod device;
+
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
@@ -18,23 +20,21 @@ use volya_engine::formats::pe::Rgba;
 use volya_engine::formats::ui::Resolution;
 use volya_engine::level::LevelWorld;
 use volya_engine::present::Presenter;
-use volya_engine::render::{DrawList, Quad, Rect, Renderer, VideoTexture, wgpu};
+use volya_engine::render::{Color, DrawList, Quad, Rect, Renderer, VideoTexture};
 use volya_engine_formats::dds::{Dds, Format};
 use volya_engine_formats::video::TheoraVideo;
 use wasm_bindgen::JsValue;
 use web_sys::OffscreenCanvas;
 
 /// What shows where nothing is drawn.
-const CLEAR: wgpu::Color = wgpu::Color::BLACK;
+const CLEAR: Color = Color::BLACK;
 /// Most video frames decoded in one animation frame when playback lags.
 const MAX_CATCH_UP: u64 = 4;
 /// Largest capture side, in pixels.
 const MAX_CAPTURE: u32 = 4096;
 
 struct Gpu {
-    surface: wgpu::Surface<'static>,
-    config: wgpu::SurfaceConfiguration,
-    queue: wgpu::Queue,
+    device: device::Device,
     renderer: Renderer,
     /// What `debug_draw` shows when the game does not run.
     list: DrawList,
@@ -105,22 +105,22 @@ fn watch_context_loss(canvas: &OffscreenCanvas) {
     lost.forget();
 }
 
-/// Makes the canvas's WebGL 2 context before wgpu asks for it, without a
-/// depth or stencil buffer: wgpu draws into textures of its own and blits
-/// the surface's into the default framebuffer, whose depth buffer (a
+/// Makes the canvas's WebGL 2 context, before wgpu asks for it, without a
+/// depth or stencil buffer: the renderer draws into textures of its own and
+/// blits its frame into the default framebuffer, whose depth buffer (a
 /// canvas-size renderbuffer by default, Depth32Float on Metal: 15 MB at
 /// 2868 × 1320) nothing reads (#443). A canvas gives the same context to a
 /// later `getContext` of its kind, ignoring the attributes then asked for
 /// (HTML specification), so wgpu's own options (`antialias: false`) are
 /// repeated here.
-fn make_webgl_context(canvas: &OffscreenCanvas) {
+fn make_webgl_context(canvas: &OffscreenCanvas) -> Option<web_sys::WebGl2RenderingContext> {
     use wasm_bindgen::JsCast;
     let options = js_sys::Object::new();
     for (key, value) in [("antialias", false), ("depth", false), ("stencil", false)] {
         let _ = js_sys::Reflect::set(&options, &key.into(), &value.into());
     }
     let Ok(Some(gl)) = canvas.get_context_with_context_options("webgl2", &options) else {
-        return;
+        return None;
     };
     // The first vertex provoking (wgpu's GL backend leaves WebGL's, the
     // last): otherwise ANGLE's Metal backend rewrites the
@@ -152,6 +152,7 @@ fn make_webgl_context(canvas: &OffscreenCanvas) {
     })
     .is_some();
     PROVOKING_FIRST.set(first);
+    gl.dyn_into().ok()
 }
 
 /// Sets up WebGL 2 on `canvas`; on failure records why and returns
@@ -164,73 +165,17 @@ pub async fn init(canvas: OffscreenCanvas) {
 }
 
 async fn connect(canvas: OffscreenCanvas) -> Result<Gpu, String> {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::GL,
-        ..wgpu::InstanceDescriptor::new_without_display_handle()
-    });
-    let (width, height) = (canvas.width().max(1), canvas.height().max(1));
     watch_context_loss(&canvas);
-    make_webgl_context(&canvas);
-    let surface = instance
-        .create_surface(wgpu::SurfaceTarget::OffscreenCanvas(canvas))
-        .map_err(|e| format!("no WebGL 2 canvas: {e}"))?;
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions {
-            compatible_surface: Some(&surface),
-            ..Default::default()
-        })
-        .await
-        .map_err(|_| "no WebGL 2 adapter".to_owned())?;
-    let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor {
-            required_features: volya_engine::render::device_features(&adapter),
-            // What WebGL 2 has: less than wgpu's defaults.
-            required_limits: adapter.limits(),
-            ..Default::default()
-        })
-        .await
-        .map_err(|e| format!("no WebGL 2 device: {e}"))?;
-    // Report instead of panicking, which would stop the whole engine.
-    device.on_uncaptured_error(Arc::new(move |e| {
-        web_sys::console::error_1(&format!("webgl2: {e}").into());
-        tracing::error!(error = %e, "GPU error");
-    }));
-    // A destroyed device (`debug_lose_device`); a lost context is
-    // `watch_context_loss`'s.
-    device.set_device_lost_callback(move |reason, message| {
-        let message = format!("webgl2: {reason:?}: {message}");
-        web_sys::console::error_1(&message.clone().into());
-        crate::diagnostics::end(1, "device_lost", &message, &[]);
-    });
-    // Colour values pass through: a non-sRGB format, preferred one first.
-    let format = surface
-        .get_capabilities(&adapter)
-        .formats
-        .into_iter()
-        .find(|f| !f.is_srgb())
-        .ok_or("no non-sRGB canvas format")?;
-    let config = wgpu::SurfaceConfiguration {
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        format,
-        color_space: wgpu::SurfaceColorSpace::Auto,
-        width,
-        height,
-        desired_maximum_frame_latency: 2,
-        present_mode: wgpu::PresentMode::Fifo,
-        alpha_mode: wgpu::CompositeAlphaMode::Opaque,
-        view_formats: vec![],
-    };
-    surface.configure(&device, &config);
+    let context = make_webgl_context(&canvas);
+    let (device, renderer, renderer_name) = device::Device::connect(canvas, context).await?;
     Ok(Gpu {
-        surface,
-        config,
-        renderer: Renderer::new(&device, &queue, format),
-        queue,
+        device,
+        renderer,
         list: DrawList::default(),
         video: None,
         presenter: Presenter::new(),
         dirty: true,
-        renderer_name: adapter.get_info().name,
+        renderer_name,
     })
 }
 
@@ -261,8 +206,7 @@ pub fn lose_device() -> Result<(), JsValue> {
     GPU.with(|g| {
         let g = g.borrow();
         let gpu = g.as_ref().ok_or_else(|| error("no GPU"))?;
-        gpu.renderer.device().destroy();
-        Ok(())
+        gpu.device.lose().map_err(error)
     })
 }
 
@@ -273,8 +217,8 @@ pub fn status() -> Status {
             message: None,
             textures: Some(gpu.renderer.texture_path().name()),
             renderer: Some(gpu.renderer_name.clone()),
-            format: Some(format!("{:?}", gpu.config.format)),
-            size: Some([gpu.config.width, gpu.config.height]),
+            format: Some(gpu.device.format_name()),
+            size: Some(gpu.device.size().into()),
         })
     });
     ready.unwrap_or_else(|| {
@@ -325,18 +269,17 @@ const RECENT_FRAMES: usize = 60;
 const WORK_DONE_TIMEOUT_MS: f64 = 30_000.0;
 
 /// Resolves once the browser reports the GPU done with all work submitted
-/// so far (wgpu's fences, checked by polling the device each task turn,
-/// which also frees the staging of the finished submissions, #440), or
-/// after
-/// [`WORK_DONE_TIMEOUT_MS`]; at once without graphics.
+/// so far (fences, checked by polling the device each task turn, which on
+/// wgpu also frees the staging of the finished submissions, #440), or
+/// after [`WORK_DONE_TIMEOUT_MS`]; at once without graphics.
 pub async fn submitted_work_done() -> Result<(), JsValue> {
     use std::sync::atomic::{AtomicBool, Ordering};
     let done = Arc::new(AtomicBool::new(false));
     let set = done.clone();
     let asked = GPU.with(|g| {
         g.borrow().as_ref().map(|gpu| {
-            gpu.queue
-                .on_submitted_work_done(move || set.store(true, Ordering::Release))
+            gpu.device
+                .on_done(move || set.store(true, Ordering::Release))
         })
     });
     if asked.is_none() {
@@ -349,7 +292,7 @@ pub async fn submitted_work_done() -> Result<(), JsValue> {
         crate::opfs::sleep(2).await?;
         GPU.with(|g| {
             if let Some(gpu) = g.borrow().as_ref() {
-                let _ = gpu.renderer.device().poll(wgpu::PollType::Poll);
+                gpu.device.poll();
             }
         });
     }
@@ -364,7 +307,7 @@ pub async fn submitted_work_done() -> Result<(), JsValue> {
 /// there was a view to draw.
 pub fn warm_up() -> Result<bool, JsValue> {
     with_gpu(|gpu| {
-        let max = gpu.renderer.device().limits().max_texture_dimension_2d;
+        let max = gpu.device.max_texture_size();
         let Some(mode) = crate::engine::render_size() else {
             return Ok(false);
         };
@@ -390,28 +333,11 @@ pub fn warm_up() -> Result<bool, JsValue> {
         for e in gpu.presenter.take_errors() {
             web_sys::console::error_1(&format!("drawing: {e}").into());
         }
-        let target = gpu
-            .renderer
-            .device()
-            .create_texture(&wgpu::TextureDescriptor {
-                label: Some("warm-up"),
-                size: wgpu::Extent3d {
-                    width: size.width,
-                    height: size.height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: gpu.config.format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            });
         crate::diagnostics::gpu_step("gpu.warm_up_draw", Some(&gpu.renderer), &[]);
-        tracing::info_span!("render.encode")
-            .in_scope(|| gpu.renderer.render(&target, &list, CLEAR));
-        target.destroy();
+        let (device, renderer) = (&gpu.device, &mut gpu.renderer);
+        tracing::info_span!("render.encode").in_scope(|| {
+            device.render_hidden(renderer, &list, CLEAR, (size.width, size.height));
+        });
         let emitted = gpu.renderer.world_calls_emitted();
         let kinds: Vec<(&str, Value)> = volya_engine::render::world::CALL_KINDS
             .iter()
@@ -446,13 +372,11 @@ fn with_gpu<T>(f: impl FnOnce(&mut Gpu) -> Result<T, JsValue>) -> Result<T, JsVa
 /// per CSS pixel.
 pub fn resize(width: f64, height: f64, dpr: f64) {
     let _ = with_gpu(|gpu| {
-        let max = gpu.renderer.device().limits().max_texture_dimension_2d;
+        let max = gpu.device.max_texture_size();
         let pixels = |css: f64| ((css * dpr).round() as u32).clamp(1, max);
         let (width, height) = (pixels(width), pixels(height));
-        if (width, height) != (gpu.config.width, gpu.config.height) {
-            gpu.config.width = width;
-            gpu.config.height = height;
-            gpu.surface.configure(gpu.renderer.device(), &gpu.config);
+        if (width, height) != gpu.device.size() {
+            gpu.device.resize(width, height);
             gpu.dirty = true;
         }
         Ok(())
@@ -462,9 +386,10 @@ pub fn resize(width: f64, height: f64, dpr: f64) {
 /// The canvas size in pixels, `None` without graphics.
 pub fn resolution() -> Option<Resolution> {
     GPU.with(|g| {
-        g.borrow()
-            .as_ref()
-            .map(|gpu| Resolution::new(gpu.config.width, gpu.config.height))
+        g.borrow().as_ref().map(|gpu| {
+            let (width, height) = gpu.device.size();
+            Resolution::new(width, height)
+        })
     })
 }
 
@@ -542,6 +467,20 @@ thread_local! {
 /// the frames presented meanwhile.
 #[cfg(feature = "test-ops")]
 pub fn gl_calls(on: bool) -> Result<serde_json::Value, JsValue> {
+    let counts = gl_call_counts(on)?;
+    if on {
+        COUNTED_FROM.set(PRESENTED.get());
+        return Ok(serde_json::Value::Null);
+    }
+    let counts: serde_json::Map<String, serde_json::Value> =
+        counts.into_iter().map(|(k, v)| (k, json!(v))).collect();
+    Ok(json!({ "frames": PRESENTED.get() - COUNTED_FROM.get(), "calls": counts }))
+}
+
+/// Starts counting WebGL 2's calls by name (every context's, by wrapping
+/// `WebGL2RenderingContext`'s methods), or stops and returns the counts.
+#[cfg(feature = "test-ops")]
+pub fn gl_call_counts(on: bool) -> Result<Vec<(String, u64)>, JsValue> {
     const BODY: &str = "
         const p = globalThis.WebGL2RenderingContext?.prototype;
         if (!p) return null;
@@ -570,33 +509,34 @@ pub fn gl_calls(on: bool) -> Result<serde_json::Value, JsValue> {
     ";
     let f = js_sys::Function::new_with_args("on", BODY);
     let counts = f.call1(&JsValue::NULL, &JsValue::from_bool(on))?;
-    if on {
-        COUNTED_FROM.set(PRESENTED.get());
-        return Ok(serde_json::Value::Null);
-    }
-    let counts: serde_json::Value = counts
+    let counts: serde_json::Map<String, serde_json::Value> = counts
         .as_string()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
-    Ok(json!({ "frames": PRESENTED.get() - COUNTED_FROM.get(), "calls": counts }))
+    let mut counts: Vec<(String, u64)> = counts
+        .into_iter()
+        .map(|(k, v)| (k, v.as_u64().unwrap_or(0)))
+        .collect();
+    counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    Ok(counts)
 }
 
 /// One animation frame at `time` (milliseconds): advances video and
 /// presents if anything changed.
 pub fn frame(time: f64) {
     let _ = with_gpu(|gpu| {
-        // wgpu's GL backend runs buffer-mapping callbacks (captures) and
-        // frees finished uploads only when polled.
-        let _ = tracing::info_span!("render.poll")
-            .in_scope(|| gpu.renderer.device().poll(wgpu::PollType::Poll));
+        // Callbacks waiting on fences run (wgpu's GL backend's, its
+        // buffer mappings and finished uploads, only when polled).
+        tracing::info_span!("render.poll").in_scope(|| gpu.device.poll());
         // A world drawn ahead of its level (`warm_up`) is held only while
         // the loading waits for it.
         if crate::engine::world_to_prepare().is_none() {
             gpu.presenter.hold_world(None);
         }
-        let canvas = Resolution::new(gpu.config.width, gpu.config.height);
+        let (width, height) = gpu.device.size();
+        let canvas = Resolution::new(width, height);
         // The game draws at its video mode (#49), within the GPU's limit.
-        let max = gpu.renderer.device().limits().max_texture_dimension_2d;
+        let max = gpu.device.max_texture_size();
         let resolution = crate::engine::render_size().map_or(canvas, |r| {
             Resolution::new(r.width.clamp(1, max), r.height.clamp(1, max))
         });
@@ -636,7 +576,7 @@ pub fn frame(time: f64) {
                     // reports the GPU done with it.
                     crate::diagnostics::gpu_step("gpu.level_frame_presented", None, &frame);
                     let n = LEVEL_FRAMES.get();
-                    gpu.queue.on_submitted_work_done(move || {
+                    gpu.device.on_done(move || {
                         let frame = [("frame", Value::Number(f64::from(n)))];
                         crate::diagnostics::gpu_step("gpu.level_frame_done", None, &frame);
                     });
@@ -661,7 +601,7 @@ pub fn frame(time: f64) {
 impl Gpu {
     /// The diagnostic log's GPU times (#355), while it is on: the time
     /// from a frame's submission until the GPU is done with all work
-    /// submitted so far (`gpu.done_ms`; wgpu checks its fences when polled,
+    /// submitted so far (`gpu.done_ms`; the fences are checked when polled,
     /// once a frame, so it is rounded up to frames).
     fn gpu_times(&mut self) {
         if !crate::diagnostics::on() {
@@ -685,34 +625,26 @@ impl Gpu {
             return;
         }
         let submitted = crate::now();
-        self.queue.on_submitted_work_done(move || {
+        self.device.on_done(move || {
             let ms = crate::now() - submitted;
             DONE_MS.with(|d| d.borrow_mut().push(ms));
         });
     }
 
     fn present(&mut self, list: &DrawList) {
-        self.present_at(list, (self.config.width, self.config.height));
+        self.present_at(list, self.device.size());
     }
 
     /// Presents `list` drawn at `size`, scaled to fit the canvas.
     fn present_at(&mut self, list: &DrawList, size: (u32, u32)) {
-        let current =
-            tracing::info_span!("render.acquire").in_scope(|| self.surface.get_current_texture());
-        let texture = match current {
-            wgpu::CurrentSurfaceTexture::Success(t)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                // Stays dirty: drawn on the next frame.
-                self.surface.configure(self.renderer.device(), &self.config);
-                return;
-            }
-            _ => return,
+        let Some(frame) = tracing::info_span!("render.acquire").in_scope(|| self.device.acquire())
+        else {
+            // Stays dirty: drawn on the next frame.
+            return;
         };
         self.renderer.take_frame_stats();
         tracing::info_span!("render.encode").in_scope(|| {
-            self.renderer
-                .render_scaled(&texture.texture, list, CLEAR, size);
+            (self.device).render_scaled(&mut self.renderer, &frame, list, CLEAR, size);
         });
         let stats = self.renderer.take_frame_stats();
         LAST_STATS.set(stats);
@@ -725,7 +657,7 @@ impl Gpu {
             metric("render.buffers", f64::from(t.buffers));
         }
         self.watch_done();
-        tracing::info_span!("render.present").in_scope(|| self.queue.present(texture));
+        tracing::info_span!("render.present").in_scope(|| self.device.present(frame));
         PRESENTED.set(PRESENTED.get() + 1);
         self.dirty = false;
     }
@@ -929,65 +861,19 @@ pub async fn debug_capture(width: u32, height: u32) -> Result<Capture, JsValue> 
     })
 }
 
-/// The render self-test's device: a WebGL 2 context of its own, so its
-/// renderers draw beside the app's without touching its state.
-#[cfg(feature = "test-ops")]
-struct SelftestGpu {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    format: wgpu::TextureFormat,
-    _surface: wgpu::Surface<'static>,
-}
-
 #[cfg(feature = "test-ops")]
 thread_local! {
-    static SELFTEST: RefCell<Option<std::rc::Rc<SelftestGpu>>> = const { RefCell::new(None) };
+    static SELFTEST: RefCell<Option<std::rc::Rc<device::SelftestDevice>>> =
+        const { RefCell::new(None) };
 }
 
+/// The render self-test's device, made at its first use.
 #[cfg(feature = "test-ops")]
-async fn selftest_gpu() -> Result<std::rc::Rc<SelftestGpu>, JsValue> {
+async fn selftest_gpu() -> Result<std::rc::Rc<device::SelftestDevice>, JsValue> {
     if let Some(gpu) = SELFTEST.with_borrow(|g| g.clone()) {
         return Ok(gpu);
     }
-    let canvas = OffscreenCanvas::new(4, 4)?;
-    make_webgl_context(&canvas);
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::GL,
-        ..wgpu::InstanceDescriptor::new_without_display_handle()
-    });
-    let surface = instance
-        .create_surface(wgpu::SurfaceTarget::OffscreenCanvas(canvas))
-        .map_err(error)?;
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions {
-            compatible_surface: Some(&surface),
-            ..Default::default()
-        })
-        .await
-        .map_err(error)?;
-    let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor {
-            required_features: volya_engine::render::device_features(&adapter),
-            required_limits: adapter.limits(),
-            ..Default::default()
-        })
-        .await
-        .map_err(error)?;
-    device.on_uncaptured_error(Arc::new(move |e| {
-        web_sys::console::error_1(&format!("render self-test: {e}").into());
-    }));
-    let format = surface
-        .get_capabilities(&adapter)
-        .formats
-        .into_iter()
-        .find(|f| !f.is_srgb())
-        .ok_or_else(|| error("no non-sRGB format"))?;
-    let gpu = std::rc::Rc::new(SelftestGpu {
-        device,
-        queue,
-        format,
-        _surface: surface,
-    });
+    let gpu = std::rc::Rc::new(device::SelftestDevice::new().await.map_err(error)?);
     SELFTEST.with_borrow_mut(|g| *g = Some(gpu.clone()));
     Ok(gpu)
 }
@@ -996,30 +882,120 @@ async fn selftest_gpu() -> Result<std::rc::Rc<SelftestGpu>, JsValue> {
 /// its own (`{note}`, or `{skip}` with why), or lists the checks.
 #[cfg(feature = "test-ops")]
 pub async fn render_selftest(check: Option<&str>) -> Result<serde_json::Value, JsValue> {
-    use volya_engine::render::selftest::{self, Problem};
-    use wasm_bindgen::JsCast;
-    use wasm_bindgen::closure::Closure;
+    use volya_engine::render::selftest;
     let Some(check) = check else {
         return Ok(json!(selftest::names()));
     };
-    let gpu = selftest_gpu().await?;
-    // wgpu's GL backend runs buffer-mapping callbacks (the captures) only
-    // when polled.
-    let device = gpu.device.clone();
-    let poll = Closure::<dyn FnMut()>::new(move || {
-        let _ = device.poll(wgpu::PollType::Poll);
-    });
-    let scope: web_sys::WorkerGlobalScope = js_sys::global().unchecked_into();
-    let interval = scope
-        .set_interval_with_callback_and_timeout_and_arguments_0(poll.as_ref().unchecked_ref(), 1)?;
-    let make = || Renderer::new(&gpu.device, &gpu.queue, gpu.format);
-    let outcome = selftest::run(check, &make).await;
-    scope.clear_interval_with_handle(interval);
-    drop(poll);
+    let renderers = SelftestRenderers::new().await?;
+    let outcome = selftest::run(check, &|| renderers.make()).await;
+    outcome_json(outcome)
+}
+
+/// The `render_game_selftest` op: runs the render check on game data
+/// `check` (`volya_engine::selftest`) on the imported game opened for it
+/// and renderers of its own: `{note, frames}` (the frames it kept for
+/// inspection, with `frames`, each `{name, width, height, rgba_base64}`),
+/// or `{skip}`; or lists `suite`'s checks.
+#[cfg(feature = "test-ops")]
+pub async fn render_game_selftest(
+    suite: Option<&str>,
+    check: Option<&str>,
+    frames: bool,
+) -> Result<serde_json::Value, JsValue> {
+    use volya_engine::selftest::{self, Context};
+    let Some(check) = check else {
+        return Ok(json!(selftest::names(suite.unwrap_or_default())));
+    };
+    let tree = crate::game::OwnTree::open().await?;
+    let renderers = SelftestRenderers::new().await?;
+    let make = || renderers.make();
+    let count = |on: bool| gl_call_counts(on).unwrap_or_default();
+    let context = Context::new(tree.tree(), &make, frames).with_gl_calls(&count);
+    let outcome = selftest::run(check, &context).await;
+    let kept = context.take_frames();
+    drop(context);
+    drop(tree);
+    let mut result = outcome_json(outcome)?;
+    let kept: Vec<_> = kept
+        .iter()
+        .map(|f| {
+            json!({
+                "name": f.name,
+                "width": f.width,
+                "height": f.height,
+                "rgba_base64": Base64Value(&f.rgba),
+                "compare": f.compare,
+            })
+        })
+        .collect();
+    result["frames"] = json!(kept);
+    Ok(result)
+}
+
+/// `bytes` as a base64 JSON string.
+#[cfg(feature = "test-ops")]
+struct Base64Value<'a>(&'a [u8]);
+
+#[cfg(feature = "test-ops")]
+impl Serialize for Base64Value<'_> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        base64(self.0, s)
+    }
+}
+
+#[cfg(feature = "test-ops")]
+fn outcome_json(
+    outcome: volya_engine::render::selftest::Outcome,
+) -> Result<serde_json::Value, JsValue> {
+    use volya_engine::render::selftest::Problem;
     match outcome {
         Ok(note) => Ok(json!({ "note": note })),
         Err(Problem::Skip(reason)) => Ok(json!({ "skip": reason })),
         Err(Problem::Fail(message)) => Err(error(message)),
+    }
+}
+
+/// Fresh renderers on the self-test's device, polled while this lives
+/// (wgpu's GL backend runs buffer-mapping callbacks, the captures, only
+/// when polled).
+#[cfg(feature = "test-ops")]
+struct SelftestRenderers {
+    gpu: std::rc::Rc<device::SelftestDevice>,
+    interval: i32,
+    _poll: wasm_bindgen::closure::Closure<dyn FnMut()>,
+}
+
+#[cfg(feature = "test-ops")]
+impl SelftestRenderers {
+    async fn new() -> Result<Self, JsValue> {
+        use wasm_bindgen::JsCast;
+        use wasm_bindgen::closure::Closure;
+        let gpu = selftest_gpu().await?;
+        let polled = gpu.clone();
+        let poll = Closure::<dyn FnMut()>::new(move || polled.poll());
+        let scope: web_sys::WorkerGlobalScope = js_sys::global().unchecked_into();
+        let interval = scope.set_interval_with_callback_and_timeout_and_arguments_0(
+            poll.as_ref().unchecked_ref(),
+            1,
+        )?;
+        Ok(Self {
+            gpu,
+            interval,
+            _poll: poll,
+        })
+    }
+
+    fn make(&self) -> Renderer {
+        self.gpu.make()
+    }
+}
+
+#[cfg(feature = "test-ops")]
+impl Drop for SelftestRenderers {
+    fn drop(&mut self) {
+        use wasm_bindgen::JsCast;
+        let scope: web_sys::WorkerGlobalScope = js_sys::global().unchecked_into();
+        scope.clear_interval_with_handle(self.interval);
     }
 }
 

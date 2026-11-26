@@ -12,6 +12,9 @@ pub mod gl;
 pub mod glsl;
 #[cfg(any(test, feature = "selftest"))]
 pub mod selftest;
+// Until the GL renderer draws the world (#476, #477).
+#[cfg_attr(feature = "gl", allow(dead_code))]
+mod shared;
 pub mod stats;
 
 #[cfg(not(feature = "gl"))]
@@ -20,6 +23,8 @@ mod wgpu_backend;
 pub use wgpu_backend::*;
 
 #[cfg(feature = "gl")]
+// Until it draws the whole world frame (#476, #477).
+#[allow(dead_code)]
 mod webgl;
 #[cfg(feature = "gl")]
 pub use webgl::*;
