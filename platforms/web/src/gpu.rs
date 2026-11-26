@@ -245,6 +245,15 @@ pub fn prepare_world(level: &Arc<LevelWorld>, budget: u64) -> Result<bool, JsVal
     })
 }
 
+/// Frees what was prepared for an abandoned load
+/// ([`Presenter::abandon_prepared`]).
+pub fn abandon_prepared() {
+    let _ = with_gpu(|gpu| {
+        gpu.presenter.abandon_prepared(&gpu.renderer);
+        Ok(())
+    });
+}
+
 /// The level's first frames marked in the diagnostic log (#443).
 const LOGGED_LEVEL_FRAMES: u32 = 10;
 
@@ -406,6 +415,8 @@ pub fn world_stats() -> serde_json::Value {
             "gpu_object_texture_bytes": world.map(|w| w.object_texture_bytes()),
             "frame_commands": frame_commands(),
             "gpu_live": live(g.as_ref().map(|gpu| &gpu.renderer)),
+            "prepared_textures": g.as_ref().map(|gpu| gpu.renderer.prepared_count()),
+            "preparing_world": g.as_ref().map(|gpu| gpu.presenter.preparing_world()),
         })
     })
 }

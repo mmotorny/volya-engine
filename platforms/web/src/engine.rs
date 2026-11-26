@@ -266,6 +266,12 @@ pub fn textures_to_prepare() -> Option<Vec<String>> {
     RUNNING.with(|r| Some(r.borrow().as_ref()?.app.textures_to_prepare()?.to_vec()))
 }
 
+/// The New Game load in progress or that made the level shown
+/// ([`App::load`]).
+pub fn load() -> Option<u64> {
+    RUNNING.with(|r| r.borrow().as_ref()?.app.load())
+}
+
 /// Whether a level's loading waits for its textures.
 pub fn preparing_textures() -> bool {
     RUNNING.with(|r| {

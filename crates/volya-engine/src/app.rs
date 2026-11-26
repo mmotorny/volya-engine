@@ -387,6 +387,8 @@ pub struct App {
     clock: u64,
     /// `None` until the first update.
     phase: Option<Phase>,
+    /// New Game loads started, the latest one's number ([`App::load`]).
+    loads: u64,
     /// Why the latest new game failed to load or ended.
     error: Option<String>,
     /// A fatal error met during this update, taken by [`App::fatal`] at
@@ -570,6 +572,7 @@ impl App {
             origin: None,
             clock: 0,
             phase: None,
+            loads: 0,
             error: None,
             failed: None,
             game_type: None,
@@ -599,6 +602,17 @@ impl App {
                 stages: NewGame::Stages(loading),
                 ..
             }) => loading.textures_to_prepare(),
+            _ => None,
+        }
+    }
+
+    /// The number of the New Game load in progress, or of the one that
+    /// made the level shown; `None` without either. What the platform
+    /// prepares for a load belongs to it: once this changes the load was
+    /// abandoned (#262).
+    pub fn load(&self) -> Option<u64> {
+        match &self.phase {
+            Some(Phase::Loading { .. } | Phase::Level { .. }) => Some(self.loads),
             _ => None,
         }
     }
@@ -1053,6 +1067,7 @@ impl App {
                         difficulty,
                         stages: NewGame::Closing(Box::new(menu)),
                     };
+                    self.loads += 1;
                 }
             }
             Phase::Loading { stages, .. } => {

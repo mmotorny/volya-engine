@@ -458,6 +458,11 @@ impl Renderer {
         self.gl.flush();
     }
 
+    /// How many prepared textures are held.
+    pub fn prepared_count(&self) -> usize {
+        self.prepared.borrow().len()
+    }
+
     /// Forgets every prepared texture.
     pub fn clear_prepared(&self) {
         self.prepared.borrow_mut().clear();

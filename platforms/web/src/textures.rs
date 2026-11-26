@@ -92,6 +92,21 @@ const WORLD_TURN_BYTES: u64 = UPLOAD_PIECE as u64;
 thread_local! {
     static RUNNING: RefCell<bool> = const { RefCell::new(false) };
     static STATS: RefCell<Stats> = RefCell::new(Stats::default());
+    /// The load ([`crate::engine::load`]) the textures and geometry held
+    /// were prepared for (#262).
+    static PREPARED_FOR: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+/// Frees what was prepared for a load that is no longer the current one
+/// (quit, or another started), at once rather than at the next load's
+/// world upload (#262; docs/architecture/memory.md rule 6).
+fn release_abandoned() {
+    if let Some(load) = PREPARED_FOR.get()
+        && crate::engine::load() != Some(load)
+    {
+        crate::gpu::abandon_prepared();
+        PREPARED_FOR.set(None);
+    }
 }
 
 pub fn stats() -> Stats {
@@ -136,7 +151,9 @@ pub fn poll() {
     if RUNNING.with(|r| *r.borrow()) {
         return;
     }
+    release_abandoned();
     if let Some(level) = crate::engine::world_to_prepare() {
+        PREPARED_FOR.set(crate::engine::load());
         RUNNING.with(|r| *r.borrow_mut() = true);
         wasm_bindgen_futures::spawn_local(async move {
             let result = prepare_world(level.clone()).await;
@@ -150,26 +167,34 @@ pub fn poll() {
             if crate::engine::world_to_prepare().is_some_and(|w| Arc::ptr_eq(&w, &level)) {
                 crate::engine::world_prepared();
             }
+            release_abandoned();
         });
         return;
     }
     let Some(paths) = crate::engine::textures_to_prepare() else {
         return;
     };
+    let load = crate::engine::load();
+    PREPARED_FOR.set(load);
     RUNNING.with(|r| *r.borrow_mut() = true);
     wasm_bindgen_futures::spawn_local(async move {
-        let result = prepare(paths).await;
+        let result = prepare(paths, load).await;
         RUNNING.with(|r| *r.borrow_mut() = false);
         if let Err(e) = result {
             web_sys::console::error_1(&e);
         }
         // Whatever failed is loaded the ordinary way, and reported, at the
-        // world's upload.
-        crate::engine::textures_prepared();
+        // world's upload; only for the load the textures were prepared for.
+        if crate::engine::load() == load && crate::engine::preparing_textures() {
+            crate::engine::textures_prepared();
+        }
+        release_abandoned();
     });
 }
 
-async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
+/// Prepares the textures at `paths` for load `load`, while it is the
+/// current one and waits for them.
+async fn prepare(paths: Vec<String>, load: Option<u64>) -> Result<(), JsValue> {
     let start = now();
     let mut stats = Stats {
         textures: paths.len() as u32,
@@ -184,8 +209,9 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
     let mut scratch = Vec::new();
     let mut turn = now();
     for path in paths {
-        // The game was quit or unmounted meanwhile.
-        if !crate::engine::preparing_textures() {
+        // The game was quit or unmounted meanwhile, or another load
+        // started.
+        if !crate::engine::preparing_textures() || crate::engine::load() != load {
             break;
         }
         let _span = tracing::info_span!("prepare.texture").entered();

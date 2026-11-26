@@ -22,6 +22,7 @@ import {
   keptSetup,
   keptTeardown,
   key,
+  launchToMenu,
   loadMs,
   mib,
   needsGame,
@@ -244,6 +245,30 @@ export const tests = {
   "the in-game menu's quit returns to the title menu after the New Game again, audio flowing": async () => {
     needsGame();
     await quitToTitle();
+  },
+
+  "a New Game quit while its level is prepared leaves nothing prepared on the GPU": async () => {
+    needsGame();
+    // #262: what was prepared for a load that is abandoned is freed at once.
+    const before = await volya.call("level_stats");
+    await newGame();
+    // Well into the textures (the level has 458), or its geometry.
+    const preparing = (st) => st.prepared_textures >= 100 || st.preparing_world;
+    let during;
+    for (const deadline = performance.now() + loadMs(); performance.now() < deadline; await sleep(20)) {
+      during = await volya.call("level_stats");
+      if (preparing(during) || (await state()).phase === "level") break;
+    }
+    assert(preparing(during), `nothing seen being prepared: ${JSON.stringify(during.textures)}`);
+    await volya.call("quit_game");
+    await until((s) => s.phase === "none", "the game to end");
+    await sleep(300);
+    const after = await volya.call("level_stats");
+    const live = (st) => st.gpu_live?.texture_bytes ?? 0;
+    assert(live(after) <= live(before), `textures held: ${mib(live(after))} after, ${mib(live(before))} in the title menu before`);
+    assertEqual([after.prepared_textures, after.preparing_world], [0, false], "prepared textures and world held");
+    await launchToMenu();
+    return `quit with ${during.prepared_textures} textures prepared${during.preparing_world ? " and the world being uploaded" : ""}; the GPU's textures ${mib(live(before))} in the title menu before, ${mib(live(after))} after`;
   },
 
   "a level sound file missing at a New Game fails the load; the diagnostic log stores why at once": async () => {

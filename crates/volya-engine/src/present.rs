@@ -638,6 +638,18 @@ impl Presenter {
         self.placed = Some(scene.objects.clone());
     }
 
+    /// Whether a level's geometry is held, prepared before it shows.
+    pub fn preparing_world(&self) -> bool {
+        self.prepared.is_some()
+    }
+
+    /// Frees what was prepared for a load that was abandoned (#262): its
+    /// geometry being uploaded and its prepared textures.
+    pub fn abandon_prepared(&mut self, renderer: &Renderer) {
+        self.prepared = None;
+        renderer.clear_prepared();
+    }
+
     /// Uploads about `budget` more bytes of `level`'s geometry before it
     /// shows (a platform spreading the upload over task turns, #184); the
     /// world is then made from it when the level is first drawn. Returns
