@@ -83,7 +83,8 @@ pub fn run(args: &[&str]) -> Result {
         })
         .map_err(|e| format!("dev server: {e}"))?;
     let server = Arc::new(server);
-    let (port, listeners) = e2e::listen()?;
+    let _profile = e2e::KeptProfile::take()?;
+    let (port, listeners) = e2e::listen(true)?;
     for listener in listeners {
         let running = Arc::clone(&server);
         thread::spawn(move || running.run_shared(listener));

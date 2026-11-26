@@ -41,9 +41,10 @@ const SUITES: &[&str] = &[
 /// judged there (docs/testing.md).
 const CHROME_ONLY: &[&str] = &["fidelity"];
 const TARGETS: &[&str] = &["chrome", "iphone"];
-/// Suites run in Chrome with the profile kept under `target/`, so the game
-/// data they read is imported once (they import only what the profile's
-/// storage lacks); the others get a fresh profile, as they test the import.
+/// Suites run in Chrome with the kept profile (see [`kept_profile`]), so the
+/// game data they read is imported once (they import only what the
+/// profile's storage lacks); the others get a fresh profile, as they test
+/// the import.
 const KEPT_PROFILE: &[&str] = &[
     "render",
     "render-screens",
@@ -120,39 +121,18 @@ pub fn run(args: &[&str]) -> Result {
     web(Profile::Test)?;
     let next = next_build()?;
 
-    let (tx, reports) = mpsc::channel();
-    // Cached as GitHub Pages caches, so browser caches are tested too (#446).
-    let server = Server::new(&root().join("dist"))
-        .and_then(|s| s.with_next(&next))
-        .map(Server::with_pages_caching)
-        .and_then(|s| {
-            s.with_tests(
-                &root().join("tests/browser"),
-                Arc::new(move |report| {
-                    let _ = tx.send(report);
-                }),
-            )
-        })
-        .and_then(|s| match std::env::var_os("VOLYA_GOG_INSTALLER") {
-            Some(dir) => s.with_installer(std::path::Path::new(&dir)),
-            None => Ok(s),
-        })
-        .and_then(|s| match std::env::var_os("VOLYA_DUMP_DIR") {
-            Some(dir) => s.with_dumps(std::path::Path::new(&dir)),
-            None => Ok(s),
-        })
-        .and_then(|s| match std::env::var_os("VOLYA_COMPARE_DIR") {
-            Some(dir) => s.with_references(std::path::Path::new(&dir)),
-            None => Ok(s),
-        })
-        .map_err(|e| format!("dev server: {e}"))?;
-    let (port, listeners) = listen()?;
-    let server = Arc::new(server);
-    for listener in listeners {
-        let server = Arc::clone(&server);
-        thread::spawn(move || server.run_shared(listener));
-    }
-
+    let kept = targets.contains(&"chrome") && suites.iter().any(|s| KEPT_PROFILE.contains(s));
+    let _profile = if kept {
+        Some(KeptProfile::take()?)
+    } else {
+        None
+    };
+    let (server, port, reports) = serve(
+        &root().join("dist"),
+        &next,
+        &root().join("tests/browser"),
+        kept,
+    )?;
     let mut failures = Vec::new();
     for &target in &targets {
         for &suite in &suites {
@@ -160,47 +140,10 @@ pub fn run(args: &[&str]) -> Result {
                 continue;
             }
             step(&format!("Browser suite {suite} on {target}"));
-            // The fidelity suite compares with the original's frames
-            // (`cargo xtask original views`), the others with
-            // VOLYA_COMPARE_DIR's.
-            let references = if suite == "fidelity" {
-                original_frames()?
-            } else {
-                std::env::var_os("VOLYA_COMPARE_DIR").map(PathBuf::from)
-            };
-            server
-                .set_references(references.as_deref())
-                .map_err(|e| format!("dev server: {e}"))?;
-            let id = run_id(target, suite);
-            let url = format!("http://localhost:{port}{BASE}__test/run/{id}/{suite}.html");
-            let outcome = match target {
-                "chrome" => chrome(
-                    &url,
-                    &id,
-                    KEPT_PROFILE.contains(&suite),
-                    &reports,
-                    report_timeout(suite),
-                ),
-                "iphone" => iphone(
-                    simulator.as_ref().expect("taken for iphone"),
-                    &url,
-                    &id,
-                    &reports,
-                    report_timeout(suite),
-                ),
-                _ => unreachable!(),
-            };
-            match outcome {
-                Ok(report) => {
-                    println!("{report}");
-                    if !passed(&report) {
-                        failures.push(format!("{suite} on {target}"));
-                    }
-                }
-                Err(error) => {
-                    println!("{error}");
-                    failures.push(format!("{suite} on {target}: {error}"));
-                }
+            if let Err(failure) =
+                run_suite(&server, port, &reports, simulator.as_ref(), target, suite)
+            {
+                failures.push(failure);
             }
         }
     }
@@ -213,6 +156,148 @@ pub fn run(args: &[&str]) -> Result {
     }
 }
 
+/// Runs `suite` on `target` (`cargo xtask suite`): the site and the suites
+/// from VOLYA_SITE, VOLYA_SITE_NEXT and VOLYA_TESTS (Bazel's browser suite
+/// tests, docs/architecture/build.md, Browser suites).
+pub fn suite(target: &str, suite: &str) -> Result {
+    if !TARGETS.contains(&target) || !SUITES.contains(&suite) {
+        return Err(format!(
+            "expected a target of {TARGETS:?} and a suite of {SUITES:?}"
+        ));
+    }
+    let dir = |var: &str| {
+        env::var_os(var)
+            .map(PathBuf::from)
+            .ok_or_else(|| format!("{var} is unset"))
+    };
+    let (site, next, tests) = (
+        dir("VOLYA_SITE")?,
+        dir("VOLYA_SITE_NEXT")?,
+        dir("VOLYA_TESTS")?,
+    );
+    // The suites' own directory, as the server serves nothing reached through
+    // a link out of its mount and runfiles are links to the sources.
+    let tests = fs::canonicalize(tests.join("harness.js"))
+        .map_err(|e| format!("{}: {e}", tests.display()))?
+        .parent()
+        .expect("a file's directory")
+        .to_path_buf();
+    crate::machine::wait_memory()?;
+    let simulator = if target == "iphone" {
+        Some(Simulator::take()?)
+    } else {
+        None
+    };
+    let kept = target == "chrome" && KEPT_PROFILE.contains(&suite);
+    let _profile = if kept {
+        Some(KeptProfile::take()?)
+    } else {
+        None
+    };
+    let (server, port, reports) = serve(&site, &next, &tests, kept)?;
+    step(&format!("Browser suite {suite} on {target}"));
+    run_suite(&server, port, &reports, simulator.as_ref(), target, suite)
+}
+
+/// The dev server for the sites `dist` and `next` and the suites in
+/// `tests`, listening (on the kept profile's port when `kept`), with the
+/// reports pages post.
+fn serve(
+    dist: &Path,
+    next: &Path,
+    tests: &Path,
+    kept: bool,
+) -> Result<(Arc<Server>, u16, Receiver<String>)> {
+    let (tx, reports) = mpsc::channel();
+    // Cached as GitHub Pages caches, so browser caches are tested too (#446).
+    let server = Server::new(dist)
+        .and_then(|s| s.with_next(next))
+        .map(Server::with_pages_caching)
+        .and_then(|s| {
+            s.with_tests(
+                tests,
+                Arc::new(move |report| {
+                    let _ = tx.send(report);
+                }),
+            )
+        })
+        .and_then(|s| match std::env::var_os("VOLYA_GOG_INSTALLER") {
+            Some(dir) => s.with_installer(Path::new(&dir)),
+            None => Ok(s),
+        })
+        .and_then(|s| match std::env::var_os("VOLYA_DUMP_DIR") {
+            Some(dir) => s.with_dumps(Path::new(&dir)),
+            None => Ok(s),
+        })
+        .and_then(|s| match std::env::var_os("VOLYA_COMPARE_DIR") {
+            Some(dir) => s.with_references(Path::new(&dir)),
+            None => Ok(s),
+        })
+        .map_err(|e| format!("dev server: {e}"))?;
+    let (port, listeners) = listen(kept)?;
+    let server = Arc::new(server);
+    for listener in listeners {
+        let server = Arc::clone(&server);
+        thread::spawn(move || server.run_shared(listener));
+    }
+    Ok((server, port, reports))
+}
+
+/// Runs one suite on one target against `server`, printing its report;
+/// the failure, if any.
+fn run_suite(
+    server: &Server,
+    port: u16,
+    reports: &Receiver<String>,
+    simulator: Option<&Simulator>,
+    target: &str,
+    suite: &str,
+) -> std::result::Result<(), String> {
+    // The fidelity suite compares with the original's frames
+    // (`cargo xtask original views`), the others with VOLYA_COMPARE_DIR's.
+    let references = if suite == "fidelity" {
+        original_frames().map_err(|e| format!("{suite} on {target}: {e}"))?
+    } else {
+        std::env::var_os("VOLYA_COMPARE_DIR").map(PathBuf::from)
+    };
+    server
+        .set_references(references.as_deref())
+        .map_err(|e| format!("{suite} on {target}: dev server: {e}"))?;
+    let id = run_id(target, suite);
+    let url = format!("http://localhost:{port}{BASE}__test/run/{id}/{suite}.html");
+    let outcome = match target {
+        "chrome" => chrome(
+            &url,
+            &id,
+            KEPT_PROFILE.contains(&suite),
+            reports,
+            report_timeout(suite),
+        ),
+        "iphone" => iphone(
+            simulator.expect("taken for iphone"),
+            &url,
+            &id,
+            reports,
+            report_timeout(suite),
+        ),
+        _ => unreachable!(),
+    };
+    match outcome {
+        Ok(report) => {
+            println!("{report}");
+            if passed(&report) {
+                Ok(())
+            } else {
+                Err(format!("{suite} on {target}"))
+            }
+        }
+        Err(error) => {
+            println!("{error}");
+            Err(format!("{suite} on {target}: {error}"))
+        }
+    }
+}
+
 /// The original's frames the fidelity suite compares with, where
 /// VOLYA_GOG_INSTALLER names the installer.
 fn original_frames() -> Result<Option<PathBuf>> {
@@ -222,9 +307,40 @@ fn original_frames() -> Result<Option<PathBuf>> {
     crate::original::references(&crate::original::cache()?).map(Some)
 }
 
-/// The kept Chrome profile's directory (see [`KEPT_PROFILE`]).
+/// The kept Chrome profile's directory (see [`KEPT_PROFILE`]), one for the
+/// machine (docs/architecture/build.md, Browser suites): in the cache
+/// directory, outside every checkout.
 fn kept_profile() -> PathBuf {
-    root().join("target/chrome-profile")
+    // Bazel's tests are told the machine's cache directory (their HOME is
+    // their own).
+    env::var_os("VOLYA_CACHE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env::var_os("HOME").expect("HOME")).join("Library/Caches/volya-engine")
+        })
+        .join("chrome-profile")
+}
+
+/// The kept profile, held by this process until dropped (an exclusive lock
+/// on `chrome-profile.lock` beside it): one Chrome uses it at a time.
+pub(crate) struct KeptProfile(#[allow(dead_code)] fs::File);
+
+impl KeptProfile {
+    pub(crate) fn take() -> Result<Self> {
+        let dir = kept_profile();
+        fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let path = dir.with_extension("lock");
+        let file = fs::File::create(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        if file.try_lock().is_err() {
+            println!(
+                "==> Waiting for the kept Chrome profile ({})",
+                path.display()
+            );
+            file.lock()
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        Ok(Self(file))
+    }
 }
 
 /// The server's port and sockets, on both loopback addresses (#503): pages
@@ -232,10 +348,11 @@ fn kept_profile() -> PathBuf {
 /// connection to a port nothing listens on at ::1 can meet itself (TCP
 /// simultaneous open; measured on macOS: one in a few hundred connects to
 /// an unused port in the ephemeral range), so the page reads its own
-/// request back as the response, a network error. On the port the kept
-/// profile last saw when it is free, as storage belongs to an origin, port
-/// included (else any port, remembered for the next run).
-pub(crate) fn listen() -> Result<(u16, Vec<TcpListener>)> {
+/// request back as the response, a network error. With the kept profile
+/// (held by the caller), on the port it last saw when it is free, as storage
+/// belongs to an origin, port included (else any port, remembered for the
+/// next run); without it, any port.
+pub(crate) fn listen(kept: bool) -> Result<(u16, Vec<TcpListener>)> {
     let bind = |port: u16| -> std::io::Result<(u16, Vec<TcpListener>)> {
         let v4 = TcpListener::bind(("127.0.0.1", port))?;
         let port = v4.local_addr()?.port();
@@ -243,10 +360,11 @@ pub(crate) fn listen() -> Result<(u16, Vec<TcpListener>)> {
         Ok((port, vec![v4, v6]))
     };
     let file = kept_profile().join("port");
-    let kept = fs::read_to_string(&file)
+    let last = fs::read_to_string(&file)
         .ok()
-        .and_then(|p| p.trim().parse::<u16>().ok());
-    if let Some(port) = kept
+        .and_then(|p| p.trim().parse::<u16>().ok())
+        .filter(|_| kept);
+    if let Some(port) = last
         && let Ok(bound) = bind(port)
     {
         return Ok(bound);
@@ -256,10 +374,12 @@ pub(crate) fn listen() -> Result<(u16, Vec<TcpListener>)> {
     for _ in 0..10 {
         match bind(0) {
             Ok(bound) => {
-                fs::create_dir_all(kept_profile())
-                    .map_err(|e| format!("{}: {e}", file.display()))?;
-                fs::write(&file, bound.0.to_string())
-                    .map_err(|e| format!("{}: {e}", file.display()))?;
+                if kept {
+                    fs::create_dir_all(kept_profile())
+                        .map_err(|e| format!("{}: {e}", file.display()))?;
+                    fs::write(&file, bound.0.to_string())
+                        .map_err(|e| format!("{}: {e}", file.display()))?;
+                }
                 return Ok(bound);
             }
             Err(e) => error = Some(e),

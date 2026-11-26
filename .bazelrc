@@ -13,6 +13,9 @@ startup --host_jvm_args=-Xmx3g
 # The machine's memory is shared by every agent (AGENTS.md).
 build --local_resources=memory=HOST_RAM*.5
 
+# One browser suite at a time per invocation (tests tagged resources:browser:1).
+build --local_resources=browser=1
+
 test --test_output=errors
 
 # Measurements, as Cargo's --release (the release profile without LTO).

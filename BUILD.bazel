@@ -18,6 +18,7 @@ PACKAGES = [
     "//crates/volya-engine-render",
     "//crates/volya-engine-script",
     "//platforms/web",
+    "//tests/browser",
     "//tests/fidelity",
     "//tools/devserver",
     "//tools/site",

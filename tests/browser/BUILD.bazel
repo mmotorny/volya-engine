@@ -1,0 +1,135 @@
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+
+load("//build:browser.bzl", "browser_suite")
+load("//build:checks.bzl", "volya_checks")
+
+# The browser suites (docs/architecture/build.md, Browser suites; the list
+# is tools/xtask/src/e2e.rs's SUITES): `bazel test
+# //tests/browser:<suite>_<target>`. In `bazel test //...` only smoke,
+# platform, render and import on Chrome; the rest by name or group.
+
+MANUAL = ["manual"]
+
+# Measurements and the iOS Simulator: alone on the machine.
+ALONE = ["manual", "exclusive"]
+
+# Report timeouts (e2e.rs) of 240 s and of 1500 s.
+SLOW = "long"
+
+WHOLE_GAME = "eternal"
+
+[
+    browser_suite(
+        gamedata = gamedata,
+        suite = suite,
+        tags = tags,
+        target = "chrome",
+        timeout = timeout,
+    )
+    for suite, tags, timeout, gamedata in [
+        ("smoke", [], "moderate", True),
+        ("platform", [], "moderate", False),
+        ("render", [], SLOW, True),
+        ("import", [], "moderate", True),
+        ("input", MANUAL, "moderate", False),
+        ("audio", MANUAL, SLOW, True),
+        ("game-startup", MANUAL, WHOLE_GAME, True),
+        ("game-input", MANUAL, WHOLE_GAME, True),
+        ("game-screens", MANUAL, WHOLE_GAME, True),
+        ("render-screens", MANUAL, WHOLE_GAME, True),
+        ("render-level", MANUAL, WHOLE_GAME, True),
+        ("game-level", ALONE, WHOLE_GAME, True),
+        ("game-memory", ALONE, WHOLE_GAME, True),
+        ("draw-calls", ALONE, WHOLE_GAME, True),
+        ("fidelity", ALONE, WHOLE_GAME, True),
+    ]
+]
+
+[
+    browser_suite(
+        gamedata = gamedata,
+        suite = suite,
+        tags = ALONE,
+        target = "iphone",
+        timeout = timeout,
+    )
+    for suite, timeout, gamedata in [
+        ("smoke", "moderate", True),
+        ("platform", "moderate", False),
+        ("render", SLOW, True),
+        ("import", "moderate", True),
+        ("input", "moderate", False),
+        ("audio", SLOW, True),
+        ("game-startup", WHOLE_GAME, True),
+        ("game-input", WHOLE_GAME, True),
+        ("game-screens", WHOLE_GAME, True),
+        ("render-screens", WHOLE_GAME, True),
+        ("render-level", WHOLE_GAME, True),
+        ("game-level", WHOLE_GAME, True),
+        ("game-memory", WHOLE_GAME, True),
+        ("draw-calls", WHOLE_GAME, True),
+    ]
+]
+
+# Groups (manual tests named explicitly): every suite on a target, the
+# game suites on Chrome: `bazel test //tests/browser:chrome`.
+test_suite(
+    name = "chrome",
+    # Manual itself, or `bazel test //...` would run what it names.
+    tags = ["manual"],
+    tests = [
+        ":audio_chrome",
+        ":draw_calls_chrome",
+        ":fidelity_chrome",
+        ":game_input_chrome",
+        ":game_level_chrome",
+        ":game_memory_chrome",
+        ":game_screens_chrome",
+        ":game_startup_chrome",
+        ":import_chrome",
+        ":input_chrome",
+        ":platform_chrome",
+        ":render_chrome",
+        ":render_level_chrome",
+        ":render_screens_chrome",
+        ":smoke_chrome",
+    ],
+)
+
+test_suite(
+    name = "iphone",
+    # Manual itself, or `bazel test //...` would run what it names.
+    tags = ["manual"],
+    tests = [
+        ":audio_iphone",
+        ":draw_calls_iphone",
+        ":game_input_iphone",
+        ":game_level_iphone",
+        ":game_memory_iphone",
+        ":game_screens_iphone",
+        ":game_startup_iphone",
+        ":import_iphone",
+        ":input_iphone",
+        ":platform_iphone",
+        ":render_iphone",
+        ":render_level_iphone",
+        ":render_screens_iphone",
+        ":smoke_iphone",
+    ],
+)
+
+test_suite(
+    name = "game_chrome",
+    # Manual itself, or `bazel test //...` would run what it names.
+    tags = ["manual"],
+    tests = [
+        ":game_input_chrome",
+        ":game_level_chrome",
+        ":game_memory_chrome",
+        ":game_screens_chrome",
+        ":game_startup_chrome",
+    ],
+)
+
+volya_checks(wasm = False)

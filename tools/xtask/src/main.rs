@@ -27,6 +27,10 @@ Tasks:
               Native tests, then browser suites on TARGETs (chrome, iphone;
               default: all). Naming SUITEs runs only those, without the
               native tests. On demand only.
+  suite TARGET SUITE
+              One browser suite on one target, on the site VOLYA_SITE (and
+              VOLYA_SITE_NEXT) with the suites in VOLYA_TESTS: what Bazel's
+              //tests/browser:<suite>_<target> runs.
   sim STEP...  Real touches in the iOS Simulator (tools/simdriver): runs the
               steps, e.g. 'open URL' 'tap-text Play' 'screenshot out.png'.
   simshot [PATH]
@@ -72,6 +76,7 @@ fn main() -> ExitCode {
     let result = match args.as_slice() {
         ["check"] => check(),
         ["e2e", targets @ ..] => e2e::run(targets),
+        ["suite", target, suite] => e2e::suite(target, suite),
         ["wait-memory"] => machine::wait_memory(),
         ["sim", steps @ ..] if !steps.is_empty() => e2e::sim(steps),
         [e2e::REAPER, holder, udid] => e2e::reap(holder, udid),
@@ -110,7 +115,15 @@ fn main() -> ExitCode {
     }
 }
 
+/// The source tree: the workspace under `bazel run`, the runfiles' tree in a
+/// Bazel test, else Cargo's workspace.
 fn root() -> PathBuf {
+    if let Some(dir) = std::env::var_os("BUILD_WORKSPACE_DIRECTORY") {
+        return PathBuf::from(dir);
+    }
+    if std::env::var_os("TEST_SRCDIR").is_some() {
+        return std::env::current_dir().expect("the test's directory");
+    }
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(2)
