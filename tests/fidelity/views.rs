@@ -214,8 +214,14 @@ pub const VIEWS: &[View] = &[
         },
     },
     View {
-        name: "artefact",
-        shows: "esc_af_medusa and its idle effect, from 1.5 m above (#514)",
+        // Not the artefact: by then the original's esc_af_medusa, a jumping
+        // artefact, has left its record position for a place not
+        // established, and it shows no artefact here (measured;
+        // artefact-idle-effects.md 6.4, 8; #556). Ours still draws it at
+        // its record (#572).
+        name: "leaves",
+        shows: "the ground below esc_af_medusa's record position, from 1.5 m above, with the \
+                level's leaves (detail-objects.md 8.3, its worked example's view)",
         place: Place::NewGame {
             camera: Camera::Track {
                 eye: [-244.8057, -11.6224, -34.1349],

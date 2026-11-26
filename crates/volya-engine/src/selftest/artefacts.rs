@@ -108,7 +108,10 @@ pub async fn an_artefacts_effect_is_drawn(cx: &Context<'_>) -> Outcome {
     );
     // How bright the sprites are at this moment follows the shared
     // generator, which the camera pass draws from too (86 – 20,662 pixels
-    // over revisions).
+    // over revisions). No frame of the original can check it: from its
+    // first frame the original pushes this jumping artefact off its record
+    // position, to where is not established (artefact-idle-effects.md 6.4,
+    // 8; #514).
     ensure!(inside > 40, "{inside} pixels differ");
     ensure!(outside * 10 < inside, "{outside} elsewhere");
     Ok(note)
