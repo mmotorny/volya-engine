@@ -45,55 +45,24 @@ import {
 let firstLive;
 
 export const tests = {
-  ...keptSetup({ level: true }),
+  ...keptSetup(),
 
   "the first New Game's level: what the GPU holds, for the repeat games": async () => {
     needsGame();
-    await sleep(500);
+    // As the first New Game's test measures it (game-level): the intro
+    // played a while, skipped, a frame captured.
+    await newGame();
+    await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", loadMs());
+    await until((s) => s.intro?.elapsed_ms > 1500, "the intro to play a while", 10000);
+    key("Escape");
+    await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
+    if (gpu.state === "ready") await volya.call("debug_capture", { width: 256, height: 192 });
     const stats = await volya.call("level_stats");
     firstLive = stats.gpu_live;
     return `wasm heap ${mib(stats.wasm_heap_bytes)}, the audio worker's ${mib(stats.audio_heap_bytes)}; ${await jsMemory(stats)}`;
   },
 
-  "a phone's second game: the first game played 20 s, quit to the title menu, a New Game 5 s later": async () => {
-    needsGame();
-    // The path of a device's log (#487): the game quit to the title menu
-    // (not left), then a New Game.
-    await until((s) => s.phase === "level" && !s.intro, "the level");
-    const start = await volya.call("level_stats");
-    // Walking and turning about, as a player does.
-    const hold = (code, down) => document.body.dispatchEvent(new KeyboardEvent(down ? "keydown" : "keyup", { code, bubbles: true, cancelable: true }));
-    for (let i = 0; i < 10; i++) {
-      hold("KeyW", true);
-      await sleep(1500);
-      hold("KeyW", false);
-      hold("ArrowRight", true);
-      await sleep(500);
-      hold("ArrowRight", false);
-    }
-    const played = await volya.call("level_stats");
-    key("Escape");
-    await until((s) => inGame(s), "the in-game menu");
-    await selectInGame("btn_quit_to_mm");
-    key("Enter");
-    await answerBox("yes");
-    await until((s) => s.phase === "menu", "the title menu");
-    await sleep(5000);
-    const title = await volya.call("level_stats");
-    await noteHeap("the title menu 5 s after quitting");
-    await volya.call("heap_log", { on: true });
-    await heapRecord(true);
-    await newGame();
-    await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", loadMs());
-    const stages = byCaption(await volya.call("heap_log", { on: false }));
-    const record = await heapRecord(false);
-    const loaded = await volya.call("level_stats");
-    await noteHeap("the level after quitting to the title menu");
-    key("Escape");
-    await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
-    const gpu = (st) => `textures ${mib(st.gpu_texture_bytes ?? 0)}, world ${mib(st.gpu_world_bytes ?? 0)}`;
-    return `wasm heap: the level ${mib(start.wasm_heap_bytes)}, after 20 s ${mib(played.wasm_heap_bytes)}, the title menu ${mib(title.wasm_heap_bytes)}, the second game ${mib(loaded.wasm_heap_bytes)}; GPU: the level ${gpu(start)}, the title menu ${gpu(title)}, the second game ${gpu(loaded)}; ${heapMaps.slice(-2).join("; ")}; by caption (MiB, heap/live): ${stages}; ${record}`;
-  },
+
   "the game left from its level and launched again: a New Game there at 2868×1320 is served by the heap the first grew": async () => {
     needsGame();
     // A phone's flow (#451): the game left from its level, launched again,
@@ -139,6 +108,47 @@ export const tests = {
     return `${heapNote}${liveNote}wasm heap ${mib(before.wasm_heap_bytes)} before, ${mib(stats.wasm_heap_bytes)} after; the GPU world in the title menu before: ${held == null ? "none" : mib(held)}; ${heapMaps.slice(-2).join("; ")}; by caption (MiB, heap/live): ${stages}; ${record}`;
   },
 
+  "a phone's second game: the first game played 20 s, quit to the title menu, a New Game 5 s later": async () => {
+    needsGame();
+    // The path of a device's log (#487): the game quit to the title menu
+    // (not left), then a New Game. After the relaunch's check, which holds
+    // what the GPU keeps against the first level's: the quit box drawn
+    // here grows a buffer the renderer keeps (measured: 15 KiB).
+    await until((s) => s.phase === "level" && !s.intro, "the level");
+    const start = await volya.call("level_stats");
+    // Walking and turning about, as a player does.
+    const hold = (code, down) => document.body.dispatchEvent(new KeyboardEvent(down ? "keydown" : "keyup", { code, bubbles: true, cancelable: true }));
+    for (let i = 0; i < 10; i++) {
+      hold("KeyW", true);
+      await sleep(1500);
+      hold("KeyW", false);
+      hold("ArrowRight", true);
+      await sleep(500);
+      hold("ArrowRight", false);
+    }
+    const played = await volya.call("level_stats");
+    key("Escape");
+    await until((s) => inGame(s), "the in-game menu");
+    await selectInGame("btn_quit_to_mm");
+    key("Enter");
+    await answerBox("yes");
+    await until((s) => s.phase === "menu", "the title menu");
+    await sleep(5000);
+    const title = await volya.call("level_stats");
+    await noteHeap("the title menu 5 s after quitting");
+    await volya.call("heap_log", { on: true });
+    await heapRecord(true);
+    await newGame();
+    await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", loadMs());
+    const stages = byCaption(await volya.call("heap_log", { on: false }));
+    const record = await heapRecord(false);
+    const loaded = await volya.call("level_stats");
+    await noteHeap("the level after quitting to the title menu");
+    key("Escape");
+    await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
+    const gpu = (st) => `textures ${mib(st.gpu_texture_bytes ?? 0)}, world ${mib(st.gpu_world_bytes ?? 0)}`;
+    return `wasm heap: the level ${mib(start.wasm_heap_bytes)}, after 20 s ${mib(played.wasm_heap_bytes)}, the title menu ${mib(title.wasm_heap_bytes)}, the second game ${mib(loaded.wasm_heap_bytes)}; GPU: the level ${gpu(start)}, the title menu ${gpu(title)}, the second game ${gpu(loaded)}; ${heapMaps.slice(-2).join("; ")}; by caption (MiB, heap/live): ${stages}; ${record}`;
+  },
   "hidden: the menu opens, the clock, the frame loop and audio stop; shown: the game takes on from there": async () => {
     needsGame();
     let s = await until((s) => s.phase === "level" && !s.menu && !s.intro, "the level's controls");
