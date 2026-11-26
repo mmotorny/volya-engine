@@ -49,7 +49,8 @@ pub enum Place {
 #[derive(Clone, Copy, Debug)]
 pub enum Camera {
     /// The player's own view where the New Game puts it (start-position.md):
-    /// no camera track, so the original draws its HUD over it.
+    /// no camera track. The original draws its HUD over every New Game view,
+    /// a track's too (measured, #549).
     Start,
     /// A camera track's (steering-the-original.md section 4.2): from `eye`
     /// (metres, level space) at `yaw` and `pitch` (radians,
@@ -92,7 +93,7 @@ pub const VIEWS: &[View] = &[
                 yaw: -1.5707964,
                 pitch: -0.6556956,
             },
-            seconds: 60,
+            seconds: 90,
         },
     },
     View {
@@ -104,7 +105,7 @@ pub const VIEWS: &[View] = &[
                 yaw: 0.0,
                 pitch: 1.25,
             },
-            seconds: 90,
+            seconds: 150,
         },
     },
     View {
@@ -116,7 +117,7 @@ pub const VIEWS: &[View] = &[
                 yaw: 1.2,
                 pitch: 0.15,
             },
-            seconds: 120,
+            seconds: 210,
         },
     },
 ];

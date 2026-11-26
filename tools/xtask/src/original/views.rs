@@ -11,6 +11,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::ExitStatus;
 use std::thread;
 use std::time::Duration;
 
@@ -32,15 +33,30 @@ pub use list::{Camera, FOV_DEGREES, HEIGHT, Place, SETTINGS, VIEWS, View, WIDTH}
 /// measured, the menu shows by about 65 s (#519); it waits twice that.
 const TITLE_AT: u64 = 130;
 
-/// Seconds each camera track lasts: one key per second, all equal, so it
-/// holds one view (steering-the-original.md section 4.2, "A track whose
+/// Keys of each camera track: one per second of track time, all equal, so
+/// it holds one view (steering-the-original.md section 4.2, "A track whose
 /// keys are all equal holds one fixed view").
-const TRACK_SECONDS: u32 = 15;
+const TRACK_KEYS: u32 = 15;
 
-/// Seconds between `demo_play` and the capture: the track's camera is set
-/// from its first frame (section 4.2); the wait lets the view's textures,
-/// glows and effects settle (glows fade in, glows.md).
+/// Cycles each track plays: it holds its view for cycles × keys seconds of
+/// track time (section 4.2.2), which runs no faster than real time (section
+/// 4.2), so at least [`PRECACHE`] + [`SETTLE`] seconds after its precache.
+const TRACK_CYCLES: u32 = 4;
+
+/// Seconds a track's precache is given (section 4.2.1: 50 black frames,
+/// about 25 s at the emulator's 2 frames per second, measured 1.4 frames per
+/// second at the slowest): its `demo_play` runs this long and [`SETTLE`]
+/// before the view's moment.
+const PRECACHE: u32 = 40;
+
+/// Seconds between the precache's end (the display no longer black,
+/// section 4.2.2 step 3) and the capture, at the least: the view's
+/// textures, glows and effects settle (glows fade in, glows.md).
 const SETTLE: u32 = 10;
+
+/// Seconds a precache may take before the view is given up: 50 frames at
+/// 0.2 frames per second.
+const PRECACHE_TIMEOUT: u64 = 250;
 
 /// Seconds the level gets to load before its intro must show, and the
 /// intro to end. Measured: the intro starts about 60 s after the container
@@ -54,7 +70,8 @@ const POLL: u64 = 2;
 /// What else decides a frame, in its cache key: this procedure's timing.
 fn procedure() -> String {
     format!(
-        "title at {TITLE_AT} s; track {TRACK_SECONDS} s; settle {SETTLE} s; loading screen, intro waited out, play"
+        "title at {TITLE_AT} s; track {TRACK_KEYS} keys × {TRACK_CYCLES}; precache {PRECACHE} s, \
+         waited out; settle {SETTLE} s; loading screen, intro waited out, play"
     )
 }
 
@@ -216,7 +233,7 @@ fn capture_title(install: &Install, cache: &Path, views: &[&View]) -> Result {
     }
     let ended = run.quit()?;
     run.finish(ended);
-    Ok(())
+    exited(ended)
 }
 
 /// The New Game views, in one run:
@@ -230,15 +247,17 @@ fn capture_title(install: &Install, cache: &Path, views: &[&View]) -> Result {
 ///   is a picture on black, measured) it shows letterboxed, and the first
 ///   frame after it that isn't letterboxed is the start of play;
 /// - the start views ([`Camera::Start`]) captured at their `seconds` after
-///   that, before any track: measured, from the first `demo_play` on the
-///   display and the game's own screenshots are black, also after the
-///   track has ended and with a track the game's `demo_record` wrote (#549);
-/// - each track view's track played from the console (`demo_play <name>`,
-///   section 4.2) at its `seconds` less [`SETTLE`], and the display
-///   captured [`SETTLE`] seconds later, while the track holds the view.
-///   Tracks don't overlap: each ends before the next starts. A black
-///   capture is not kept;
-/// - `quit` (section 7).
+///   that, before any track: a track's precache blacks the display
+///   (section 4.2.1);
+/// - each track view's track played from the console (`demo_play
+///   <name>,<cycles>`, sections 4.2 and 4.2.2) [`PRECACHE`] + [`SETTLE`]
+///   seconds before its `seconds`; once the display is no longer black
+///   (the precache has ended, section 4.2.2 step 3), the display captured
+///   at its `seconds`, and at least [`SETTLE`] seconds after the precache,
+///   while the track holds the view. A later `demo_play` replaces the
+///   track (section 4.2), so each is captured before the next plays. A
+///   black capture is not kept;
+/// - `quit` (section 7) with no precache pending, so exit code 0.
 fn capture_level(install: &Install, cache: &Path, views: &[&View]) -> Result {
     let (mut starts, mut tracks) = (Vec::new(), Vec::new());
     let mut demos = Vec::new();
@@ -256,25 +275,30 @@ fn capture_level(install: &Install, cache: &Path, views: &[&View]) -> Result {
     }
     starts.sort_by_key(|(_, s)| *s);
     tracks.sort_by_key(|(_, s)| *s);
+    // Each track plays `lead` seconds before its view's moment.
+    let lead = PRECACHE + SETTLE;
     for pair in tracks.windows(2) {
         let (a, b) = (pair[0].1, pair[1].1);
-        if b < a + TRACK_SECONDS + 2 {
+        if b < a + lead + 2 {
             return Err(format!(
-                "views {} and {}: their tracks would overlap ({a} s and {b} s)",
+                "views {} and {}: their tracks would overlap ({a} s and {b} s, \
+                 each played {lead} s before)",
                 pair[0].0.name, pair[1].0.name
             ));
         }
     }
     if let Some((view, s)) = tracks.first() {
-        if *s < SETTLE {
-            return Err(format!("{}: at least {SETTLE} s into the game", view.name));
+        if *s < lead {
+            return Err(format!("{}: at least {lead} s into the game", view.name));
         }
         if let Some((start, t)) = starts.last()
-            && *t + SETTLE >= *s
+            && *t >= *s - lead
         {
             return Err(format!(
-                "{}: a start view comes before every track ({t} s, {} at {s} s)",
-                start.name, view.name
+                "{}: a start view comes before every track ({t} s, {} played at {} s)",
+                start.name,
+                view.name,
+                *s - lead
             ));
         }
     }
@@ -295,23 +319,51 @@ fn capture_level(install: &Install, cache: &Path, views: &[&View]) -> Result {
         keep(&run, cache, view, frame)?;
     }
     for (view, seconds) in tracks {
-        wait_until(&mut run, at(seconds - SETTLE))?;
-        run.console(&format!("demo_play {}", view.name))?;
-        // The display while the track settles, kept in the run's captures.
-        for s in (seconds - SETTLE..seconds).step_by(POLL as usize) {
-            wait_until(&mut run, at(s))?;
+        let played = at(seconds - lead);
+        wait_until(&mut run, played)?;
+        run.console(&format!("demo_play {},{TRACK_CYCLES}", view.name))?;
+        let what = format!("{}'s precache over", view.name);
+        let shown = poll(&mut run, PRECACHE_TIMEOUT, &what, |w, h, rgb| {
+            !black(w, h, rgb)
+        })?;
+        let capture = at(seconds).max(shown + Duration::from_secs(SETTLE.into()));
+        // The display while the view settles, kept in the run's captures.
+        while run.elapsed() + Duration::from_secs(POLL) < capture {
+            thread::sleep(Duration::from_secs(POLL));
             if let Some((w, h, rgb)) = run.capture() {
+                let s = run.elapsed().saturating_sub(play).as_secs();
                 let path = run.frames.join(format!("{}-{s:03}s.png", view.name));
                 let _ = fs::write(path, png(w, h, &rgb));
             }
         }
-        wait_until(&mut run, at(seconds))?;
+        wait_until(&mut run, capture)?;
         let frame = run.capture().ok_or("no display")?;
+        println!(
+            "{}: precache {} s, captured {} s after play",
+            view.name,
+            (shown - played).as_secs(),
+            (capture - play).as_secs()
+        );
         keep(&run, cache, view, frame)?;
     }
     let ended = run.quit()?;
     run.finish(ended);
-    Ok(())
+    exited(ended)
+}
+
+/// Whether the game ended with exit code 0 after `quit`; exit code 5 is the
+/// crash at exit of quitting during a precache (steering-the-original.md
+/// section 7), which the captures wait out.
+fn exited(ended: Option<ExitStatus>) -> Result {
+    match ended.map(|s| s.code()) {
+        None | Some(Some(0)) => Ok(()),
+        Some(Some(5)) => Err(
+            "the game crashed at exit (exit code 5: quit during a precache, \
+                              steering-the-original.md section 7)"
+                .into(),
+        ),
+        Some(code) => Err(format!("the game ended with exit code {code:?}")),
+    }
 }
 
 /// Rows of the letterbox's bars, top and bottom: the intro (measured) shows
@@ -334,8 +386,8 @@ fn black(_w: u32, _h: u32, rgb: &[u8]) -> bool {
     rgb.iter().all(|&c| c <= 2)
 }
 
-/// A camera track holding one view for [`TRACK_SECONDS`] (section 4.2):
-/// that many 64-byte keys, each the view matrix of the camera at `eye`
+/// A camera track holding one view (section 4.2): [`TRACK_KEYS`]
+/// 64-byte keys, each the view matrix of the camera at `eye`
 /// with `yaw` and `pitch`, 16 little-endian floats row by row.
 fn track(eye: [f32; 3], yaw: f32, pitch: f32) -> Vec<u8> {
     let key: Vec<u8> = view_matrix(eye, yaw, pitch)
@@ -343,7 +395,7 @@ fn track(eye: [f32; 3], yaw: f32, pitch: f32) -> Vec<u8> {
         .flatten()
         .flat_map(|v| v.to_le_bytes())
         .collect();
-    key.repeat(TRACK_SECONDS as usize)
+    key.repeat(TRACK_KEYS as usize)
 }
 
 /// The view matrix of section 4.2, `[r 0; u 0; d 0; e 1]` inverted, with
@@ -416,7 +468,7 @@ mod tests {
     #[test]
     fn a_track_is_whole_keys() {
         let t = track([1.0, 2.0, 3.0], 0.0, 0.0);
-        assert_eq!(t.len(), 64 * TRACK_SECONDS as usize);
+        assert_eq!(t.len(), 64 * TRACK_KEYS as usize);
         assert_eq!(&t[..64], &t[64..128]);
         // Yaw 0, pitch 0: r = x, u = y, d = z; the last row is −e.
         let f = |i: usize| f32::from_le_bytes(t[i * 4..i * 4 + 4].try_into().unwrap());
