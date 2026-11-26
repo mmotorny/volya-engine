@@ -126,6 +126,27 @@ async function heapRecord(reset) {
   return `the most live ${mib(r.live_bytes)} (by block size ${sizes}; largest ${r.large.slice(0, 40).map(([, k]) => kib(k)).join(" ")})`;
 }
 const view = () => document.getElementById("view");
+// The memory JavaScript holds, per context (#374): Chrome's
+// `performance.measureUserAgentSpecificMemory()`, where the page is
+// cross-origin isolated (documented, MDN); the page's and each worker's
+// bytes by type, MiB, and the wasm heaps beside them.
+async function jsMemory(stats) {
+  if (!performance.measureUserAgentSpecificMemory) return `JS memory not measurable here (crossOriginIsolated ${crossOriginIsolated})`;
+  const start = performance.now();
+  const m = await Promise.race([performance.measureUserAgentSpecificMemory(), sleep(60000).then(() => null)]).catch((e) => String(e));
+  if (!m || typeof m === "string") return `JS memory not measured: ${m ?? "no result in 60 s"}`;
+  const where = (b) => {
+    const a = b.attribution[0];
+    if (!a) return "shared";
+    const name = a.url.split("/").pop() || "page";
+    return `${a.scope} ${name}`;
+  };
+  const parts = m.breakdown
+    .filter((b) => b.bytes >= 2 ** 19)
+    .sort((a, b) => b.bytes - a.bytes)
+    .map((b) => `${where(b)} [${b.types.join("+")}] ${(b.bytes / 2 ** 20).toFixed(1)}`);
+  return `JS memory ${mib(m.bytes)} in all (${parts.join(", ")}; the wasm heaps ${mib(stats.wasm_heap_bytes)} and ${mib(stats.audio_heap_bytes)}), measured in ${((performance.now() - start) / 1000).toFixed(1)} s`;
+}
 
 function installerBase() {
   const path = location.pathname;
@@ -666,7 +687,7 @@ export const tests = {
     }
     const stats = await volya.call("level_stats");
     if (gpu.textures === "etc2") assertEqual(stats.textures.textures > 300, true, `textures prepared: ${JSON.stringify(stats.textures)}`);
-    return `textures ${gpu.textures}; ${note}; ${JSON.stringify(stats)}`;
+    return `textures ${gpu.textures}; ${note}; ${await jsMemory(stats)}; ${JSON.stringify(stats)}`;
   },
 
   "the game left from its level and launched again: a New Game there at 2868×1320 is served by the heap the first grew": async () => {
@@ -701,7 +722,10 @@ export const tests = {
     key("Escape");
     await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
     const heapNote = overBudget(heap(stats), "wasm heaps after a New Game in the game launched again");
-    return `${heapNote}wasm heap ${mib(before.wasm_heap_bytes)} before, ${mib(stats.wasm_heap_bytes)} after; ${heapMaps.slice(-2).join("; ")}; by caption (MiB, heap/live): ${stages}; ${record}`;
+    // What the GPU still holds of the level left (#436): the world stays
+    // until the next one is uploaded while the presenter keeps it.
+    const held = before.gpu_world_bytes;
+    return `${heapNote}wasm heap ${mib(before.wasm_heap_bytes)} before, ${mib(stats.wasm_heap_bytes)} after; the GPU world in the title menu before: ${held == null ? "none" : mib(held)}; ${heapMaps.slice(-2).join("; ")}; by caption (MiB, heap/live): ${stages}; ${record}`;
   },
 
   "the level's placed effect runs on the world clock; its update cost in wasm": async () => {
