@@ -4,7 +4,7 @@
 [workspace]
 resolver = "3"
 # Not tools/simdriver: an Xcode project (XCUITest), driven by `cargo xtask sim`.
-members = ["crates/*", "platforms/*", "tools/devserver", "tools/xtask"]
+members = ["crates/*", "platforms/*", "tools/devserver", "tools/site", "tools/xtask"]
 
 [workspace.package]
 version = "0.1.0"

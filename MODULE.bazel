@@ -22,6 +22,11 @@ rust.toolchain(
         "fastbuild": "0",
         "opt": "s",
     },
+    # wasm32: web-sys bindings still marked unstable (e.g. read-only OPFS
+    # sync handles): compile errors, not silent failures, when they change.
+    extra_rustc_flags_triples = {
+        "wasm32-unknown-unknown": ["--cfg=web_sys_unstable_apis"],
+    },
     versions = ["1.100.0"],
 )
 use_repo(rust, "rust_toolchains")
@@ -43,6 +48,7 @@ crate.from_cargo(
         "//crates/volya-engine-script:Cargo.toml",
         "//platforms/web:Cargo.toml",
         "//tools/devserver:Cargo.toml",
+        "//tools/site:Cargo.toml",
         "//tools/xtask:Cargo.toml",
     ],
     supported_platform_triples = [
@@ -51,26 +57,68 @@ crate.from_cargo(
     ],
 )
 
-# The dev profile's optimisation of decoding and hashing (Cargo.toml).
-crate.annotation(
+# The dev profile's optimisation of decoding and hashing (Cargo.toml), in
+# native builds only: in the app they follow its profile, as the release
+# profile has them (measured: 75 KB more wasm at 3 than at s).
+crate.annotation_select(
     crate = "lewton",
+    repositories = ["crates"],
     rustc_flags = ["-Copt-level=3"],
+    triples = ["aarch64-apple-darwin"],
 )
-crate.annotation(
+crate.annotation_select(
     crate = "md-5",
+    repositories = ["crates"],
     rustc_flags = ["-Copt-level=3"],
+    triples = ["aarch64-apple-darwin"],
 )
-crate.annotation(
+crate.annotation_select(
     crate = "ogg",
+    repositories = ["crates"],
     rustc_flags = ["-Copt-level=3"],
+    triples = ["aarch64-apple-darwin"],
 )
-crate.annotation(
+crate.annotation_select(
     crate = "ogg_nrp",
+    repositories = ["crates"],
     rustc_flags = ["-Copt-level=3"],
+    triples = ["aarch64-apple-darwin"],
 )
-crate.annotation(
+crate.annotation_select(
     crate = "theora_nrp",
+    repositories = ["crates"],
     rustc_flags = ["-Copt-level=3"],
+    triples = ["aarch64-apple-darwin"],
 )
 
 use_repo(crate, "crates")
+
+# Tools built from crates.io: the wasm-bindgen CLI, which must equal the
+# wasm-bindgen crate in Cargo.lock (`update` keeps them equal).
+crate.spec(
+    package = "wasm-bindgen-cli",
+    repositories = ["tools"],
+    version = "=0.2.130",
+)
+crate.annotation(
+    crate = "wasm-bindgen-cli",
+    gen_binaries = ["wasm-bindgen"],
+    repositories = ["tools"],
+)
+crate.from_specs(
+    name = "tools",
+    supported_platform_triples = ["aarch64-apple-darwin"],
+)
+use_repo(crate, "tools")
+
+# The LLVM that builds the script runtime's C for wasm32 (wasi-sdk's clang;
+# docs/architecture/build.md, Build scripts).
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "wasm_llvm",
+    build_file = "//build:wasm_llvm.BUILD.bazel",
+    sha256 = "9c59398106b417f8f14913380fdf0097a8cc0ff4af9eb3ce0065a859e88d49e9",
+    strip_prefix = "wasi-sdk-34.0-arm64-macos",
+    url = "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-arm64-macos.tar.gz",
+)

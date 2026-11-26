@@ -16,4 +16,5 @@ workspace = true
 sha2.workspace = true
 volya-engine-devserver = { path = "../devserver" }
 volya-engine-installer = { path = "../../crates/volya-engine-installer" }
+volya-engine-site = { path = "../site" }
 zlib-rs.workspace = true

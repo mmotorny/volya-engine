@@ -976,6 +976,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "volya-engine-site"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
 name = "volya-engine-web"
 version = "0.1.0"
 dependencies = [
@@ -1064,6 +1071,7 @@ dependencies = [
  "sha2",
  "volya-engine-devserver",
  "volya-engine-installer",
+ "volya-engine-site",
  "zlib-rs",
 ]
 

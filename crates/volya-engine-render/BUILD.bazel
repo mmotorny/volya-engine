@@ -20,6 +20,11 @@ cargo_build_script(
 
 volya_library(
     name = "volya-engine-render",
+    # The render self-test, in the test app (//build:test_ops).
+    crate_features = select({
+        "//build:with_test_ops": ["selftest"],
+        "//conditions:default": [],
+    }),
     deps = [
         ":build_script",
         "//crates/volya-engine-formats",

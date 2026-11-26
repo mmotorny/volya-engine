@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+
+load("//build:rust.bzl", "volya_binary", "volya_library")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["Cargo.toml"])
+
+volya_library(name = "volya-engine-site")
+
+volya_binary(
+    name = "site",
+    srcs = ["src/main.rs"],
+    deps = [":volya-engine-site"],
+)

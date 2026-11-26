@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+
+[package]
+name = "volya-engine-site"
+description = "Volya Engine: the web app's site from its parts."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "site"
+path = "src/main.rs"
+
+[dependencies]
+sha2.workspace = true

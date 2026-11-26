@@ -17,6 +17,7 @@ volya_binary(
     deps = [
         "//crates/volya-engine-installer",
         "//tools/devserver:volya-engine-devserver",
+        "//tools/site:volya-engine-site",
     ],
 )
 

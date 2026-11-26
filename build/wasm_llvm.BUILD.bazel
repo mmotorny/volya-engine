@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+
+# wasi-sdk's LLVM: clang, its libraries and headers, llvm-ar and llvm-ranlib.
+filegroup(
+    name = "tools",
+    srcs = glob(
+        [
+            "bin/clang*",
+            "bin/llvm-ar",
+            "bin/llvm-ranlib",
+            "lib/*.dylib",
+            "lib/clang/**",
+        ],
+        exclude = ["lib/liblldb*"],
+    ),
+    visibility = ["//visibility:public"],
+)
+
+exports_files(
+    ["bin/clang"],
+    visibility = ["//visibility:public"],
+)

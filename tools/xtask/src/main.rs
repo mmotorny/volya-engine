@@ -12,10 +12,11 @@ mod spec_lint;
 mod wine;
 
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::Duration;
+
+use volya_engine_site::{Stamp, copy_dir};
 
 const USAGE: &str = "\
 Usage: cargo xtask <task>
@@ -255,10 +256,6 @@ fn web_into(profile: Profile, src: &Path, dist: &Path) -> Result {
         Profile::Release => (true, false, "release"),
         Profile::Test => (true, true, "release"),
     };
-    if dist.exists() {
-        fs::remove_dir_all(dist).map_err(|e| format!("remove {}: {e}", dist.display()))?;
-    }
-    copy_dir(&src.join("platforms/web/static"), dist).map_err(|e| format!("copy web: {e}"))?;
     step("Web build");
     let target = root().join("target");
     let mut command = cmd(
@@ -274,207 +271,46 @@ fn web_into(profile: Profile, src: &Path, dist: &Path) -> Result {
     }
     run(&mut command)?;
     let wasm = target.join(format!("{WASM_TARGET}/{dir}/volya_engine_web.wasm"));
-    let wasm = wasm.to_string_lossy();
-    run(&mut cmd(
-        &wasm_bindgen.to_string_lossy(),
-        &[
-            "--target",
-            "web",
-            "--no-typescript",
-            "--out-dir",
-            &dist.join("pkg").to_string_lossy(),
-            &wasm,
-        ],
-    ))?;
-    stamp_engine(dist)?;
-    inject_build(dist, "")
+    let (commit, date) = git_stamp("")?;
+    volya_engine_site::build(
+        &src.join("platforms/web/static"),
+        &wasm,
+        &wasm_bindgen,
+        dist,
+        &Stamp {
+            commit: &commit,
+            date: &date,
+        },
+    )
 }
 
 /// `dist-next`: `dist` as the next deploy would be, for the update flow's
-/// test (tests/browser/smoke.js): the engine stamped with another id, a
-/// shell module changed, and
-/// `update.js` and `sw.js` injected anew.
+/// test (tests/browser/smoke.js; volya_engine_site::next_build).
 fn next_build() -> Result<PathBuf> {
-    use sha2::{Digest, Sha256};
     let next = root().join("dist-next");
-    if next.exists() {
-        fs::remove_dir_all(&next).map_err(|e| format!("remove dist-next: {e}"))?;
-    }
-    copy_dir(&root().join("dist"), &next).map_err(|e| format!("copy dist: {e}"))?;
-    let glue = next.join("pkg/volya_engine_web.js");
-    let text = fs::read_to_string(&glue).map_err(|e| format!("{}: {e}", glue.display()))?;
-    let id = text
-        .rsplit_once("export const BUILD_ID = \"")
-        .and_then(|(_, rest)| rest.split_once('"'))
-        .map(|(id, _)| id.to_owned())
-        .ok_or("no BUILD_ID in the glue")?;
-    let other: String = Sha256::digest(format!("{id} next").as_bytes())[..8]
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    fs::write(&glue, text.replace(&id, &other)).map_err(|e| format!("{}: {e}", glue.display()))?;
-    // The id is the wasm's last bytes (stamp_engine).
-    let wasm_path = next.join("pkg/volya_engine_web_bg.wasm");
-    let mut wasm = fs::read(&wasm_path).map_err(|e| format!("{}: {e}", wasm_path.display()))?;
-    if !wasm.ends_with(id.as_bytes()) {
-        return Err("the wasm doesn't end with its id".into());
-    }
-    let at = wasm.len() - id.len();
-    wasm[at..].copy_from_slice(other.as_bytes());
-    fs::write(&wasm_path, wasm).map_err(|e| format!("{}: {e}", wasm_path.display()))?;
-    // A shell module of its own, which tests tell apart by `NEXT_BUILD`.
-    let shell = next.join("game-ui.js");
-    let mut text = fs::read_to_string(&shell).map_err(|e| format!("{}: {e}", shell.display()))?;
-    text.push_str("\nexport const NEXT_BUILD = true;\n");
-    fs::write(&shell, text).map_err(|e| format!("{}: {e}", shell.display()))?;
-    for file in ["update.js", "sw.js"] {
-        fs::copy(
-            root().join("platforms/web/static").join(file),
-            next.join(file),
-        )
-        .map_err(|e| format!("{file}: {e}"))?;
-    }
-    inject_build(&next, "-next")?;
+    let (commit, date) = git_stamp("-next")?;
+    volya_engine_site::next_build(
+        &root().join("dist"),
+        &root().join("platforms/web/static"),
+        &next,
+        &Stamp {
+            commit: &commit,
+            date: &date,
+        },
+    )?;
     Ok(next)
 }
 
-/// Stamps the engine's wasm and its wasm-bindgen glue with one id (a hash of
-/// the wasm), so the engine worker can tell when they come from different
-/// builds (engine-worker.js): a custom section `volya-engine-build` in the
-/// wasm, `export const BUILD_ID` in the glue.
-fn stamp_engine(dist: &Path) -> Result {
-    use sha2::{Digest, Sha256};
-    let wasm_path = dist.join("pkg/volya_engine_web_bg.wasm");
-    let mut wasm = fs::read(&wasm_path).map_err(|e| format!("{}: {e}", wasm_path.display()))?;
-    let id: String = Sha256::digest(&wasm)[..8]
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    let name = b"volya-engine-build";
-    let mut section = leb128(name.len());
-    section.extend_from_slice(name);
-    section.extend_from_slice(id.as_bytes());
-    wasm.push(0);
-    wasm.extend(leb128(section.len()));
-    wasm.extend(section);
-    fs::write(&wasm_path, wasm).map_err(|e| format!("{}: {e}", wasm_path.display()))?;
-    let glue = dist.join("pkg/volya_engine_web.js");
-    let mut text = fs::read_to_string(&glue).map_err(|e| format!("{}: {e}", glue.display()))?;
-    text.push_str(&format!("\nexport const BUILD_ID = \"{id}\";\n"));
-    fs::write(&glue, text).map_err(|e| format!("{}: {e}", glue.display()))
-}
-
-/// `n` as unsigned LEB128.
-fn leb128(mut n: usize) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    loop {
-        let byte = (n & 0x7f) as u8;
-        n >>= 7;
-        if n == 0 {
-            bytes.push(byte);
-            return bytes;
-        }
-        bytes.push(byte | 0x80);
-    }
-}
-
-/// Injects what the page and its service worker need to know about this
-/// build: the commit and its date into `update.js` (`BUILD`, `BUILT`: the
-/// version shown), and the commit plus every file with a hash of its content,
-/// and its size into `sw.js` (`BUILD`, `PRECACHE`, and `CACHE`, named by
-/// them; static/sw.js). `suffix` follows the commit (the next build's).
-fn inject_build(dist: &Path, suffix: &str) -> Result {
-    use sha2::{Digest, Sha256};
+/// The commit (`+` when the working tree is dirty, then `suffix`) and its
+/// date, as a build's stamp.
+fn git_stamp(suffix: &str) -> Result<(String, String)> {
     let commit = output(&mut cmd("git", &["rev-parse", "--short", "HEAD"]))?;
     let dirty = !output(&mut cmd("git", &["status", "--porcelain"]))?
         .trim()
         .is_empty();
     let commit = format!("{}{}{suffix}", commit.trim(), if dirty { "+" } else { "" });
     let date = output(&mut cmd("git", &["show", "-s", "--format=%cI", "HEAD"]))?;
-    replace_once(
-        &dist.join("update.js"),
-        r#"export const BUILD = "dev";"#,
-        &format!(r#"export const BUILD = "{commit}";"#),
-    )?;
-    replace_once(
-        &dist.join("update.js"),
-        r#"export const BUILT = "";"#,
-        &format!(r#"export const BUILT = "{}";"#, date.trim()),
-    )?;
-    let mut files = Vec::new();
-    list_files(dist, dist, &mut files).map_err(|e| format!("list dist: {e}"))?;
-    // The UX audit page (static/ux-audit/) is for the project, not players: not
-    // kept offline.
-    files.retain(|f| f != "sw.js" && !f.starts_with("ux-audit/"));
-    files.sort();
-    let mut entries = Vec::new();
-    for file in &files {
-        let bytes = fs::read(dist.join(file)).map_err(|e| format!("{file}: {e}"))?;
-        let hash: String = Sha256::digest(&bytes)[..8]
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
-        let size = bytes.len();
-        entries.push(format!(r#"["{file}","{hash}",{size}]"#));
-        if file == "index.html" {
-            entries.push(format!(r#"["./","{hash}",{size}]"#));
-        }
-    }
-    // Each build's cache is named by its files, so two builds never share one.
-    let id: String = Sha256::digest(entries.join(",").as_bytes())[..8]
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    replace_once(
-        &dist.join("sw.js"),
-        r#"const CACHE = "volya-engine-build-dev";"#,
-        &format!(r#"const CACHE = "volya-engine-build-{id}";"#),
-    )?;
-    replace_once(
-        &dist.join("sw.js"),
-        r#"const BUILD = "dev";"#,
-        &format!(r#"const BUILD = "{commit}";"#),
-    )?;
-    replace_once(
-        &dist.join("sw.js"),
-        "const PRECACHE = [/* injected by cargo xtask web */];",
-        &format!("const PRECACHE = [{}];", entries.join(",")),
-    )
-}
-
-/// Replaces the one occurrence of `from` in the file at `path`.
-fn replace_once(path: &Path, from: &str, to: &str) -> Result {
-    let text = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    if text.matches(from).count() != 1 {
-        return Err(format!("{}: expected one {from:?}", path.display()));
-    }
-    fs::write(path, text.replacen(from, to, 1)).map_err(|e| format!("{}: {e}", path.display()))
-}
-
-fn list_files(root: &Path, dir: &Path, files: &mut Vec<String>) -> io::Result<()> {
-    for entry in fs::read_dir(dir)? {
-        let path = entry?.path();
-        if path.is_dir() {
-            list_files(root, &path, files)?;
-        } else if let Ok(relative) = path.strip_prefix(root) {
-            files.push(relative.to_string_lossy().replace('\\', "/"));
-        }
-    }
-    Ok(())
-}
-
-fn copy_dir(from: &Path, to: &Path) -> io::Result<()> {
-    fs::create_dir_all(to)?;
-    for entry in fs::read_dir(from)? {
-        let entry = entry?;
-        let target = to.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir(&entry.path(), &target)?;
-        } else {
-            fs::copy(entry.path(), target)?;
-        }
-    }
-    Ok(())
+    Ok((commit, date.trim().to_owned()))
 }
 
 /// Third-party sources kept as released, under their own licences.

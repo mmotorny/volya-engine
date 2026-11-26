@@ -164,6 +164,8 @@ fn wasm_toolchain(build: &mut cc::Build, root: &Path) {
         .compiler(bin.join("clang"))
         .archiver(bin.join("llvm-ar"))
         .ranlib(bin.join("llvm-ranlib"))
+        // No configuration files (an SDK's default sysroot).
+        .flag("--no-default-config")
         .flag("-nostdlibinc")
         .include(root.join("csrc/wasm/include"))
         .flag("-mexception-handling")
@@ -174,9 +176,17 @@ fn wasm_toolchain(build: &mut cc::Build, root: &Path) {
         .flag("-wasm-use-legacy-eh=true");
 }
 
-/// The `bin` directory of Homebrew's LLVM (`brew install llvm`): Apple's
-/// clang has no WebAssembly target.
+/// The `bin` directory of the LLVM for wasm32: the clang `VOLYA_WASM_CLANG`
+/// names (Bazel's pinned LLVM, docs/architecture/build.md), else Homebrew's
+/// (`brew install llvm`): Apple's clang has no WebAssembly target.
 fn llvm_bin() -> PathBuf {
+    println!("cargo:rerun-if-env-changed=VOLYA_WASM_CLANG");
+    if let Some(clang) = env::var_os("VOLYA_WASM_CLANG") {
+        return PathBuf::from(clang)
+            .parent()
+            .expect("VOLYA_WASM_CLANG names a file")
+            .to_path_buf();
+    }
     let has_clang = |prefix: &Path| prefix.join("bin/clang").is_file();
     let known = ["/opt/homebrew/opt/llvm", "/usr/local/opt/llvm"].map(PathBuf::from);
     if let Some(prefix) = known.iter().find(|p| has_clang(p)) {

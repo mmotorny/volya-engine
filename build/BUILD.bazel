@@ -1,9 +1,24 @@
 # SPDX-FileCopyrightText: 2026 Maksym Motorny
 # SPDX-License-Identifier: BSD-3-Clause
 
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+
+package(default_visibility = ["//visibility:public"])
+
 # The release profile (`-c opt`; docs/architecture/build.md, Rust).
 config_setting(
     name = "opt",
     values = {"compilation_mode": "opt"},
-    visibility = ["//visibility:public"],
+)
+
+# The test build's engine ops and render self-test (Cargo's `test-ops`
+# feature), set by the web app's transition (web.bzl).
+bool_flag(
+    name = "test_ops",
+    build_setting_default = False,
+)
+
+config_setting(
+    name = "with_test_ops",
+    flag_values = {":test_ops": "true"},
 )

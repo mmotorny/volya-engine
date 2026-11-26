@@ -1,4 +1,66 @@
 # SPDX-FileCopyrightText: 2026 Maksym Motorny
 # SPDX-License-Identifier: BSD-3-Clause
 
+load("@crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_shared_library")
+load("//build:rust.bzl", "LINTS")
+load("//build:web.bzl", "next_site", "web_site")
+
+package(default_visibility = ["//visibility:public"])
+
 exports_files(["Cargo.toml"])
+
+# The engine for the browser (wasm32 only; the sites below build it).
+rust_shared_library(
+    name = "volya-engine-web",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(),
+    crate_features = select({
+        "//build:with_test_ops": ["test-ops"],
+        "//conditions:default": [],
+    }),
+    crate_name = "volya_engine_web",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    rustc_flags = LINTS,
+    target_compatible_with = ["@platforms//cpu:wasm32"],
+    deps = all_crate_deps(normal = True) + [
+        "//crates/volya-engine",
+        "//crates/volya-engine-formats",
+        "//crates/volya-engine-installer",
+    ],
+)
+
+STATIC = glob(["static/**"])
+
+# Deployed.
+web_site(
+    name = "site",
+    compilation_mode = "opt",
+    static = STATIC,
+    wasm = ":volya-engine-web",
+)
+
+# What browser suites run: optimised, with the test ops.
+web_site(
+    name = "site_test",
+    compilation_mode = "opt",
+    static = STATIC,
+    test_ops = True,
+    wasm = ":volya-engine-web",
+)
+
+# Unoptimised, with the test ops (the dev server).
+web_site(
+    name = "site_dev",
+    compilation_mode = "fastbuild",
+    static = STATIC,
+    test_ops = True,
+    wasm = ":volya-engine-web",
+)
+
+# The update flow's next build (tests/browser/smoke.js).
+next_site(
+    name = "site_next",
+    site = ":site_test",
+    static = STATIC,
+)

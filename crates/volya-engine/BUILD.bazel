@@ -24,6 +24,11 @@ volya_library(
     name = "volya-engine",
     # The fidelity suite's views (src/selftest/fidelity.rs).
     compile_data = ["//tests/fidelity:views.rs"],
+    # The render self-test, in the test app (//build:test_ops).
+    crate_features = select({
+        "//build:with_test_ops": ["render-selftest"],
+        "//conditions:default": [],
+    }),
     dev_deps = ["//crates/volya-engine-installer"],
     rustc_flags = OPT,
     deps = DEPS,
