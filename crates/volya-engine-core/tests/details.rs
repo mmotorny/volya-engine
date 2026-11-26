@@ -17,6 +17,7 @@ use std::time::Instant;
 use md5::{Digest, Md5};
 use volya_engine_core::collision::CollisionWorld;
 use volya_engine_core::details::{Details, Pass};
+use volya_engine_core::particles::random::Generator;
 use volya_engine_core::vfs::db::DbVfs;
 use volya_engine_core::vfs::{EntryKind, StdVfs, Vfs, read};
 use volya_engine_formats::chunks::Chunks;
@@ -280,6 +281,7 @@ fn the_placement_vectors() {
             (0.4, 1_059, -354.4, 993.49),
             (0.6, 633, -232.8, 599.86),
         ];
+        let mut random = Generator::new(1);
         for (rho, count, heights, scales) in cases {
             let start = Instant::now();
             let mut n: u32 = 0;
@@ -288,7 +290,7 @@ fn the_placement_vectors() {
             for cz in -8..8 {
                 for cx in -8..8 {
                     let slot = details.grid().slot(cx, cz);
-                    let placed = details.place_cell([cx, cz], rho, &collision);
+                    let placed = details.place_cell([cx, cz], rho, &collision, &mut random);
                     for (part, list) in placed.iter().enumerate() {
                         for inst in list {
                             n += 1;
@@ -341,6 +343,7 @@ fn the_placement_vectors() {
 #[test]
 fn the_cache_at_the_start_position() {
     with_tree(|vfs| {
+        let mut random = Generator::new(1);
         let (mut details, collision) = first_level(vfs);
         // The New Game's start eye (start-position.md 8), looking along +x.
         let eye = [-246.7263, -23.26326, -134.43387];
@@ -360,9 +363,9 @@ fn the_cache_at_the_start_position() {
             density: 0.2,
         };
         // The first pass after loading draws nothing (TODO(#407)).
-        assert!(details.pass(&pass(1), &collision).instances.is_empty());
+        assert!(details.pass(&pass(1), &collision, &mut random).instances.is_empty());
         let start = Instant::now();
-        let frame = details.pass(&pass(2), &collision);
+        let frame = details.pass(&pass(2), &collision, &mut random);
         let built = start.elapsed();
         assert_eq!(details.centre(), Details::camera_cell(eye));
         assert_eq!(details.pending(), 0);
@@ -371,7 +374,7 @@ fn the_cache_at_the_start_position() {
         const FRAMES: u64 = 100;
         let mut drawn = 0;
         for f in 3..3 + FRAMES {
-            drawn = details.pass(&pass(f), &collision).instances.len();
+            drawn = details.pass(&pass(f), &collision, &mut random).instances.len();
         }
         let selection = start.elapsed() / FRAMES as u32;
         eprintln!(
@@ -384,11 +387,11 @@ fn the_cache_at_the_start_position() {
         // Walking one cell along x: 49 new entries, at most 7 a frame.
         let mut walked = pass(3 + FRAMES);
         walked.eye[0] += 2.0;
-        details.pass(&walked, &collision);
+        details.pass(&walked, &collision, &mut random);
         assert_eq!(details.pending(), 42);
         for f in 4 + FRAMES..10 + FRAMES {
             walked.frame = f;
-            details.pass(&walked, &collision);
+            details.pass(&walked, &collision, &mut random);
         }
         assert_eq!(details.pending(), 0);
     });

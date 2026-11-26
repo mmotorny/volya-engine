@@ -23,6 +23,7 @@ use std::sync::Arc;
 use volya_engine_formats::particles::{Library, PlacedRecord};
 
 use super::{EffectInstance, GroupInstance, Matrix, Mode, Random, STEP_MS, Sphere, Vec3, sub};
+use super::random::Shared;
 use crate::collision::CollisionWorld;
 
 /// What a record made (section 2).
@@ -283,21 +284,22 @@ impl PlacedEffects {
         records: &[PlacedRecord],
         clock: u32,
     ) -> Result<Self, String> {
-        Self::new_in(library, records, clock, None)
+        Self::new_in(library, records, clock, None, Shared::new(1))
     }
 
     /// As [`PlacedEffects::new`], the effects colliding with `world`
-    /// (particle-collision.md).
+    /// (particle-collision.md), drawing from the shared generator `random`.
     pub fn new_in(
         library: Arc<Library>,
         records: &[PlacedRecord],
         clock: u32,
         world: Option<Arc<CollisionWorld>>,
+        random: Shared,
     ) -> Result<Self, String> {
         let mut effects = Self {
             library,
             world,
-            random: Random::default(),
+            random: Random::sharing(random),
             effects: Vec::with_capacity(records.len()),
             queued: Vec::new(),
             clock,
@@ -530,7 +532,7 @@ impl PlacedEffects {
         Self {
             library: self.library.clone(),
             world: self.world.clone(),
-            random: self.random.clone(),
+            random: self.random.detached(),
             effects: (self.effects())
                 .filter(|p| p.origin == origin)
                 .cloned()
