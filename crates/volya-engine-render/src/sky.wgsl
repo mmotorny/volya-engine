@@ -14,7 +14,8 @@ struct Sky {
     // Colour 0 of the clouds ("directions") and colour 1, / 255.
     clouds_directions: vec4<f32>,
     clouds_color: vec4<f32>,
-    // x: T, the global time in seconds.
+    // x: T, the global time in seconds; y: the mip bias in force
+    // (texture-quality-filtering.md 5).
     time: vec4<f32>,
     // The sun sprite's corners (world) and colour / 255.
     sun_corners: array<vec4<f32>, 4>,
@@ -81,8 +82,8 @@ fn vs_clouds(@location(0) p: vec3<f32>) -> CloudsOut {
 
 @fragment
 fn fs_clouds(in: CloudsOut) -> @location(0) vec4<f32> {
-    let s0 = textureSample(c0, s_clouds, in.uv0).rgb;
-    let s1 = textureSample(c1, s_clouds, in.uv1).rgb;
+    let s0 = textureSampleBias(c0, s_clouds, in.uv0, sky.time.y).rgb;
+    let s1 = textureSampleBias(c1, s_clouds, in.uv1, sky.time.y).rgb;
     return vec4(saturate(in.color.rgb * (s0 + s1)), in.color.a);
 }
 

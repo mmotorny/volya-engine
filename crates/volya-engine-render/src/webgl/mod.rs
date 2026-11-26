@@ -806,6 +806,14 @@ impl Renderer {
         frame: &WorldFrame,
         distort: Option<&Framebuffer>,
     ) -> Distortion {
+        // The maximum anisotropy in force (texture-quality-filtering.md
+        // 5); the samplers are cached by description.
+        let anisotropy = frame.filtering.anisotropy.clamp(1, 16);
+        if let Some(p) = &mut self.world_programs {
+            p.set_anisotropy(&self.gl, anisotropy);
+        }
+        self.details.set_anisotropy(&self.gl, anisotropy);
+        self.particles.set_anisotropy(&self.gl, anisotropy);
         let prepared = if frame.particles.is_empty() {
             None
         } else {
@@ -816,6 +824,7 @@ impl Renderer {
                 &frame.view,
                 &frame.projection,
                 (l.fog_color, l.fog_near, l.fog_far),
+                frame.filtering.mip_bias,
             )
         };
         let distorted = prepared

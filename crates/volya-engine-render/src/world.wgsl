@@ -11,7 +11,8 @@ struct Frame {
     view: mat4x4<f32>,
     // xyz: camera position E; w: ssa_min (section 10.2).
     eye: vec4<f32>,
-    // The camera's forward direction (wall marks).
+    // xyz: the camera's forward direction (wall marks); w: the mip bias in
+    // force (texture-quality-filtering.md 5).
     forward: vec4<f32>,
     ambient: vec4<f32>,
     hemi: vec4<f32>,
@@ -241,14 +242,14 @@ fn finish(c: vec3<f32>, a: f32, in: Out) -> vec4<f32> {
 }
 
 fn detail_factor(in: Out) -> vec3<f32> {
-    let dt = textureSample(t_detail, s_aniso, in.detail_uv).rgb;
+    let dt = textureSampleBias(t_detail, s_aniso, in.detail_uv, frame.forward.w).rgb;
     return dt * in.c0.a + in.c1.a;
 }
 
 @fragment
 fn fs_lmap(in: Out) -> @location(0) vec4<f32> {
-    let b = textureSample(t_base, s_aniso, in.uv);
-    let lm = textureSample(t_second, s_linear, in.uv2);
+    let b = textureSampleBias(t_base, s_aniso, in.uv, frame.forward.w);
+    let lm = textureSampleBias(t_second, s_linear, in.uv2, frame.forward.w);
     let hm = textureSample(t_hemi, s_clamp, in.uv2);
     let detail = detail_factor(in);
     let h = (hm.r + hm.g + hm.b) / 3.0;
@@ -276,9 +277,9 @@ fn vs_terrain(v: LightMapped) -> Out {
 
 @fragment
 fn fs_terrain(in: Out) -> @location(0) vec4<f32> {
-    let b = textureSample(t_base, s_aniso, in.uv);
-    let lm = textureSample(t_second, s_linear, in.uv2);
-    let dt = textureSample(t_detail, s_aniso, in.detail_uv).rgb;
+    let b = textureSampleBias(t_base, s_aniso, in.uv, frame.forward.w);
+    let lm = textureSampleBias(t_second, s_linear, in.uv2, frame.forward.w);
+    let dt = textureSampleBias(t_detail, s_aniso, in.detail_uv, frame.forward.w).rgb;
     let light = frame.ambient.rgb + lm.rgb + in.c1.rgb * lm.a + in.c0.rgb * b.a;
     var c = 2.0 * light * b.rgb;
     if in.pass_flags.z > 0.5 {
@@ -311,7 +312,7 @@ fn vs_vert(v: VertexLit) -> Out {
 // vert / vert_dt pixel stage: also trees and wall marks.
 @fragment
 fn fs_vert(in: Out) -> @location(0) vec4<f32> {
-    let b = textureSample(t_base, s_aniso, in.uv);
+    let b = textureSampleBias(t_base, s_aniso, in.uv, frame.forward.w);
     let detail = detail_factor(in);
     var c = 2.0 * b.rgb * in.c0.rgb;
     if in.pass_flags.z > 0.5 {
@@ -391,7 +392,7 @@ fn vs_simple(v: VertexLit) -> Out {
 
 @fragment
 fn fs_simple(in: Out) -> @location(0) vec4<f32> {
-    let b = textureSample(t_base, s_aniso, in.uv);
+    let b = textureSampleBias(t_base, s_aniso, in.uv, frame.forward.w);
     return finish(b.rgb, b.a, in);
 }
 
@@ -409,7 +410,7 @@ fn vs_lplanes(v: VertexLit) -> Out {
 
 @fragment
 fn fs_lplanes(in: Out) -> @location(0) vec4<f32> {
-    let b = textureSample(t_base, s_aniso, in.uv);
+    let b = textureSampleBias(t_base, s_aniso, in.uv, frame.forward.w);
     return finish(b.rgb, b.a * in.c0.a, in);
 }
 
@@ -477,7 +478,7 @@ fn vs_model_env(v: ModelVertex) -> Out {
 
 @fragment
 fn fs_model_env(in: Out) -> @location(0) vec4<f32> {
-    let b = textureSample(t_base, s_aniso, in.uv);
+    let b = textureSampleBias(t_base, s_aniso, in.uv, frame.forward.w);
     let e = textureSample(t_env, s_clamp, in.reflection).rgb;
     let base = mix(e, b.rgb, b.a);
     return finish(2.0 * in.c0.rgb * base, b.a, in);
@@ -617,7 +618,7 @@ fn vs_light_model(v: ModelVertex) -> LightOut {
 // A = 2 · B.a · a₁.a · a₂.a · c.a, clamped, then the alpha test.
 @fragment
 fn fs_light(in: LightOut) -> @location(0) vec4<f32> {
-    let b = textureSample(t_base, s_aniso, in.uv);
+    let b = textureSampleBias(t_base, s_aniso, in.uv, frame.forward.w);
     let a1 = textureSample(t_lmap, s_att, in.t1.xy / in.t1.z);
     let a2 = textureSample(t_att, s_att, in.t2);
     let color = saturate(2.0 * b.rgb * b.a * a1.rgb * a2.rgb * in.c.rgb);

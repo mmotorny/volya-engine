@@ -11,7 +11,8 @@
 //! `unbindall` edit the bindings (section 11.5). Setting `_preset` runs the
 //! preset's script (section 8).
 //!
-//! Volya Engine has only the variables of the options screen. Any other
+//! Volya Engine has only the variables of the options screen, and one that
+//! acts without a control (`r1_tf_mipbias`). Any other
 //! `<name> <value>` line (the user file sets about 200 more, and the presets
 //! set some) is kept as written and saved again, so settings of systems
 //! Volya Engine lacks survive a round trip (our choice; the original knows
@@ -84,7 +85,8 @@ pub const PRESET_FILES: [&str; 5] = ["minimum", "low", "default", "high", "extre
 /// The difficulties of `g_game_difficulty`.
 pub const DIFFICULTIES: &[&str] = &["gd_novice", "gd_stalker", "gd_veteran", "gd_master"];
 
-/// The variables of section 7.2.
+/// The variables of section 7.2, with `r1_tf_mipbias`, which the options
+/// screen has no control for.
 pub const VARIABLES: &[VarDef] = &[
     VarDef {
         name: "renderer",
@@ -110,6 +112,8 @@ pub const VARIABLES: &[VarDef] = &[
     real("r__detail_density", 0.2, 0.6, "0.3"),
     int("texture_lod", 0, 4, "0"),
     int("r__tf_aniso", 1, 16, "4"),
+    // texture-quality-filtering.md 4.
+    real("r1_tf_mipbias", -0.5, 0.5, "0"),
     int("r__supersample", 1, 4, "1"),
     on_off("r2_sun", "on"),
     on_off("r2_sun_details", "off"),
@@ -525,6 +529,10 @@ pub struct Console {
     in_preset: bool,
     /// Counts the commands that took effect.
     generation: u64,
+    /// Per variable, its executions: with an argument, accepted or not,
+    /// and of the bare name, which reads its status
+    /// (texture-quality-filtering.md 6.1).
+    executions: Vec<u64>,
 }
 
 impl PartialEq for Console {
@@ -553,7 +561,17 @@ impl Console {
             console_keys: Vec::new(),
             in_preset: false,
             generation: 0,
+            executions: vec![0; VARIABLES.len()],
         }
+    }
+
+    /// How often variable `name` was executed: with an argument (accepted
+    /// or not) or alone, which reads its status (0 for other names).
+    pub fn executions(&self, name: &str) -> u64 {
+        VARIABLES
+            .iter()
+            .position(|d| d.name == name)
+            .map_or(0, |i| self.executions[i])
     }
 
     /// Changes whenever a command takes effect (cheap change detection).
@@ -656,6 +674,7 @@ impl Console {
             }
             return Exec::Kept;
         };
+        self.executions[i] += 1;
         if rest.is_empty() {
             return Exec::Ignored;
         }
@@ -806,7 +825,8 @@ mod tests {
     fn counts() {
         assert_eq!(ACTIONS.len(), 77);
         assert_eq!(KEYS.len(), 129);
-        assert_eq!(VARIABLES.len(), 31);
+        // Section 7.2's 31 and `r1_tf_mipbias`.
+        assert_eq!(VARIABLES.len(), 32);
     }
 
     #[test]

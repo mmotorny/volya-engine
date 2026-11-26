@@ -17,9 +17,26 @@ use crate::{Texture, World};
 /// Row-vector convention (`p · M`), stored row by row.
 pub type Mat4 = [[f32; 4]; 4];
 
-/// Maximum anisotropy, clamp(`r__tf_aniso`, 1, 16) with the default 16
-/// (section 4.4).
-pub(crate) const ANISOTROPY: u16 = 16;
+/// The maximum anisotropy and mip level-of-detail bias in force on the
+/// samplers (texture-quality-filtering.md 5): the bias on every mipmapped
+/// sampler, the anisotropy on the anisotropic ones (static-shading.md 4.4's
+/// and those that follow it).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Filtering {
+    /// 1 … 16.
+    pub anisotropy: u16,
+    pub mip_bias: f32,
+}
+
+impl Default for Filtering {
+    /// The shipped `user.ltx`'s `r__tf_aniso 16`, `r1_tf_mipbias 0`.
+    fn default() -> Self {
+        Self {
+            anisotropy: 16,
+            mip_bias: 0.0,
+        }
+    }
+}
 /// The tree constants' factor: stored values × 0.5 at load, × K = 1.5 per
 /// draw (section 7.3).
 pub(crate) const TREE_FACTOR: f32 = 0.75;
@@ -329,6 +346,8 @@ pub struct WorldFrame {
     pub effects: Option<crate::present::ScreenEffects>,
     /// The detail objects drawn (detail-objects.md 5.4, 6).
     pub details: Option<crate::details::DetailFrame>,
+    /// The samplers' filtering in force.
+    pub filtering: Filtering,
     /// By world draw: those the camera pass keeps (visibility-scope.md 5);
     /// `None` draws every one that may show.
     pub drawn: Option<std::sync::Arc<Vec<bool>>>,
@@ -455,7 +474,10 @@ pub(crate) fn frame_constants(
         &mut constants,
         vec4(frame.eye, ssa_min(size.0, size.1, frame.fov_y_degrees)),
     );
-    push_vec4(&mut constants, vec4(frame.forward, 0.0));
+    push_vec4(
+        &mut constants,
+        vec4(frame.forward, frame.filtering.mip_bias),
+    );
     push_vec4(&mut constants, vec4(l.ambient, 0.0));
     push_vec4(&mut constants, vec4(l.hemi, 0.0));
     push_vec4(&mut constants, vec4(l.sun_color, 0.0));

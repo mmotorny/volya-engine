@@ -160,7 +160,32 @@ fn vertices(gl: &Gl, bytes: u64) -> Vertices {
     })
 }
 
+/// Section 5.2: anisotropic minification and magnification (at the value
+/// in force, texture-quality-filtering.md 5), linear mip; 5.3: `s_distort`
+/// linear.
+const LINEAR: SamplerDesc = SamplerDesc {
+    mag: Filter::Linear,
+    min: Filter::Linear,
+    mip: Filter::Linear,
+    wrap: [Wrap::Repeat; 3],
+    anisotropy: 1,
+    top_level: false,
+};
+
 impl ParticlePrograms {
+    /// `s_base`'s anisotropic samplers at maximum anisotropy `anisotropy`.
+    pub(crate) fn set_anisotropy(&mut self, gl: &Gl, anisotropy: u16) {
+        self.wrap = gl.sampler(SamplerDesc {
+            anisotropy,
+            ..LINEAR
+        });
+        self.clamp = gl.sampler(SamplerDesc {
+            wrap: [Wrap::Clamp; 3],
+            anisotropy,
+            ..LINEAR
+        });
+    }
+
     pub(crate) fn new(gl: &Gl) -> Self {
         let program = |fs| {
             link(
@@ -184,17 +209,7 @@ impl ParticlePrograms {
         .into_iter()
         .map(|(p, fs)| (p, program(fs)))
         .collect();
-        // Section 5.2: anisotropic minification and magnification, linear
-        // mip (static-shading.md 4.4's anisotropy 16, mip bias 0); 5.3:
-        // `s_distort` linear.
-        let linear = SamplerDesc {
-            mag: Filter::Linear,
-            min: Filter::Linear,
-            mip: Filter::Linear,
-            wrap: [Wrap::Repeat; 3],
-            anisotropy: 1,
-            top_level: false,
-        };
+        let linear = LINEAR;
         let black = gl.texture(TexFormat::Rgba8, 1, 1, 1, false);
         gl.write_texture(&black, 0, 0, 0, 0, 1, 1, &mut [0, 0, 0, 255]);
         Self {
@@ -250,13 +265,18 @@ impl ParticlePrograms {
         view: &Mat4,
         projection: &Mat4,
         fog: ([f32; 3], f32, f32),
+        mip_bias: f32,
     ) -> Option<PreparedFrame> {
         let batches = drawn(batches);
         if batches.is_empty() {
             return None;
         }
         let view_projection = multiply(view, projection);
-        gl.write_buffer(&self.frame, 0, &frame_constants(&view_projection, fog));
+        gl.write_buffer(
+            &self.frame,
+            0,
+            &frame_constants(&view_projection, fog, mip_bias),
+        );
         let mut vertex_bytes = Vec::new();
         let mut draws = Vec::with_capacity(batches.len());
         let distortion_shown = distortion_shown(&batches, &view_projection);

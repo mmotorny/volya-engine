@@ -146,7 +146,8 @@ pub(crate) const fn less_equal(write: bool) -> Option<Depth> {
 
 /// Section 4.4: s_base / s_detail wrap, anisotropic (linear min/mag/mip
 /// with anisotropy); s_lmap wrap, linear; s_hemi clamp, linear, no mip.
-/// Mip bias 0 (`r1_tf_mipbias`).
+/// The maximum anisotropy and the mip bias are those in force
+/// (texture-quality-filtering.md 9; [`WorldPrograms::set_anisotropy`]).
 const LINEAR_WRAPPED: SamplerDesc = SamplerDesc {
     mag: Filter::Linear,
     min: Filter::Linear,
@@ -205,7 +206,7 @@ impl WorldPrograms {
             programs: HashMap::new(),
             samplers: [
                 gl.sampler(SamplerDesc {
-                    anisotropy: ANISOTROPY,
+                    anisotropy: Filtering::default().anisotropy,
                     ..LINEAR_WRAPPED
                 }),
                 gl.sampler(LINEAR_WRAPPED),
@@ -234,6 +235,16 @@ impl WorldPrograms {
             light_slots: LIGHT_SLOTS,
             sky: SkyPrograms::new(gl),
         }
+    }
+
+    /// s_base / s_detail's sampler, and the anisotropic samplers of the
+    /// sky, at the maximum anisotropy in force.
+    pub(crate) fn set_anisotropy(&mut self, gl: &Gl, anisotropy: u16) {
+        self.samplers[0] = gl.sampler(SamplerDesc {
+            anisotropy,
+            ..LINEAR_WRAPPED
+        });
+        self.sky.set_anisotropy(gl, anisotropy);
     }
 
     /// Room for `passes` light passes' constants, grown as needed.
@@ -1394,9 +1405,17 @@ impl Renderer {
         let gl = self.gl.clone();
         let constants = frame_constants(frame, &view_projection, size);
         gl.write_buffer(&inner.frame, 0, &constants);
+        let filtering = frame.filtering;
         let sky = inner.sky.as_ref().zip(frame.sky.as_ref());
         if let Some((resources, sky_frame)) = sky {
-            resources.write(&gl, sky_frame, frame.eye, &view_projection, t);
+            resources.write(
+                &gl,
+                sky_frame,
+                frame.eye,
+                &view_projection,
+                t,
+                filtering.mip_bias,
+            );
         }
 
         // Step 6 order: decreasing squared distance (back to front), the
@@ -1430,8 +1449,13 @@ impl Renderer {
         let lights = self.prepare_lights(frame, &view_projection);
         let details = frame.details.as_ref().filter(|d| {
             let _span = tracing::info_span!("render.details").entered();
-            self.details
-                .prepare(&gl, d, &view_projection, [l.ambient, l.hemi, l.sun_color])
+            self.details.prepare(
+                &gl,
+                d,
+                &view_projection,
+                [l.ambient, l.hemi, l.sun_color],
+                filtering.mip_bias,
+            )
         });
         let programs = self
             .world_programs

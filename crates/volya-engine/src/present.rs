@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use crate::core::camera::Mat4;
 use crate::core::glows::{CORNER_UV, GlowSprite};
+use crate::core::texture_quality::TextureQuality;
 use crate::core::vfs::read_ahead::ReadAhead;
 use crate::core::vfs::{self, Vfs};
 use crate::level::LevelWorld;
@@ -98,14 +99,21 @@ impl Player {
 }
 
 /// The texture of the DDS file at `path` of `tree`: as the platform
-/// prepared it, else read and uploaded ([`Renderer::create_texture`]).
-fn load_texture(renderer: &Renderer, tree: &dyn Vfs, path: &str) -> Result<Texture, String> {
+/// prepared it, else read and uploaded ([`Renderer::create_texture`]) with
+/// `quality`'s top levels dropped (texture-quality-filtering.md 1).
+fn load_texture(
+    renderer: &Renderer,
+    tree: &dyn Vfs,
+    quality: &TextureQuality,
+    path: &str,
+) -> Result<Texture, String> {
     // Prepared while the level loaded (transcoded for this GPU, #113).
     if let Some(texture) = renderer.take_prepared(path) {
         return Ok(texture);
     }
     let bytes = vfs::read(tree, path).map_err(|e| e.to_string())?;
     let dds = Dds::parse(&bytes).map_err(|e| e.to_string())?;
+    let dds = quality.apply(path, &dds);
     renderer.create_texture(&dds).map_err(|e| e.to_string())
 }
 
@@ -204,6 +212,9 @@ pub struct Presenter {
     /// The level whose world is kept through scenes without one
     /// ([`Presenter::hold_world`]).
     held: Option<Arc<LevelWorld>>,
+    /// `texture_lod` and its list as the latest scene had them, for the
+    /// textures loaded now (texture-quality-filtering.md 1.3, 2).
+    quality: TextureQuality,
     errors: Vec<String>,
 }
 
@@ -240,6 +251,7 @@ impl Presenter {
             .map_err(|e| e.to_string())
             .and_then(|bytes| {
                 let dds = Dds::parse(&bytes).map_err(|e| e.to_string())?;
+                let dds = self.quality.apply(path, &dds);
                 renderer.create_texture(&dds).map_err(|e| e.to_string())
             });
         let texture = loaded
@@ -314,6 +326,7 @@ impl Presenter {
         tree: &dyn Vfs,
         scene: &WorldScene,
     ) -> Option<WorldFrame> {
+        let quality = self.quality.clone();
         let current = self
             .world
             .as_ref()
@@ -336,13 +349,13 @@ impl Presenter {
             // nothing is made while the level runs.
             renderer.clear_details();
             if let Some(d) = &scene.world.details {
-                match load_texture(renderer, tree, &d.texture) {
+                match load_texture(renderer, tree, &quality, &d.texture) {
                     Ok(t) => renderer.set_details(&d.models, &t, d.alpha_test, d.capacity),
                     Err(e) => self.errors.push(format!("{}: {e}", d.texture)),
                 }
             }
             if let Some(path) = &scene.world.presentation_noise {
-                match load_texture(renderer, tree, path) {
+                match load_texture(renderer, tree, &quality, path) {
                     Ok(t) => renderer.set_presentation_noise(&t),
                     Err(e) => self.errors.push(format!("{path}: {e}")),
                 }
@@ -398,6 +411,7 @@ impl Presenter {
                 })
                 .collect(),
             presentation: Default::default(),
+            filtering: Default::default(),
             effects: None,
             details: scene.details.as_ref().map(|d| DetailFrame {
                 instances: d.frame.instances.clone(),
@@ -444,8 +458,9 @@ impl Presenter {
     /// textures given to the renderer; one that fails is reported and
     /// leaves its glows, or every light pass, undrawn.
     fn load_lights(&mut self, renderer: &mut Renderer, tree: &dyn Vfs, level: &LevelWorld) {
+        let quality = self.quality.clone();
         let mut load = |path: &String| {
-            load_texture(renderer, tree, path)
+            load_texture(renderer, tree, &quality, path)
                 .map_err(|e| self.errors.push(format!("{path}: {e}")))
                 .ok()
         };
@@ -531,6 +546,7 @@ impl Presenter {
         tree: &dyn Vfs,
         level: &LevelWorld,
     ) -> Vec<Option<ParticleShader<Texture>>> {
+        let quality = self.quality.clone();
         let mut loaded: HashMap<String, Option<Texture>> = HashMap::new();
         level
             .particle_shaders
@@ -541,7 +557,7 @@ impl Presenter {
                         loaded
                             .entry(path.clone())
                             .or_insert_with(|| {
-                                load_texture(renderer, tree, &path)
+                                load_texture(renderer, tree, &quality, &path)
                                     .map_err(|e| self.errors.push(format!("{path}: {e}")))
                                     .ok()
                             })
@@ -701,6 +717,7 @@ impl Presenter {
         tree: &dyn Vfs,
         level: &LevelWorld,
     ) -> Result<World, String> {
+        let quality = self.quality.clone();
         // Prepared while the level loaded, finished here if need be.
         let mut prepared = self
             .prepared
@@ -728,7 +745,7 @@ impl Presenter {
                     textures
                         .entry(path.clone())
                         .or_insert_with(|| {
-                            load_texture(renderer, tree, &path)
+                            load_texture(renderer, tree, &quality, &path)
                                 .map_err(|e| self.errors.push(format!("{path}: {e}")))
                                 .ok()
                         })
@@ -740,7 +757,7 @@ impl Presenter {
             textures
                 .entry(path.clone())
                 .or_insert_with(|| {
-                    load_texture(renderer, tree, path)
+                    load_texture(renderer, tree, &quality, path)
                         .map_err(|e| self.errors.push(format!("{path}: {e}")))
                         .ok()
                 })
@@ -827,6 +844,9 @@ impl Presenter {
             ramp: scene.ramp,
             ..Default::default()
         };
+        if self.quality != scene.texture_quality {
+            self.quality = scene.texture_quality.clone();
+        }
         // The off-screen target, made at the game's size before any level
         // (frame-presentation.md 1.2).
         let screen = (scene.resolution.width, scene.resolution.height);
@@ -837,6 +857,7 @@ impl Presenter {
                 let frame = self.world_frame(renderer, tree, world);
                 list.world = frame.filter(|_| !world.covered).map(|mut f| {
                     f.presentation = scene.presentation;
+                    f.filtering = scene.filtering;
                     // The level hands over the identity: no screen effect
                     // exists yet (frame-presentation.md 2.2 step 3).
                     // TODO(#190): the effects' values (screen-effects).

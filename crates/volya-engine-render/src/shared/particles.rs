@@ -173,14 +173,19 @@ pub(crate) fn drawn(batches: &[ParticleBatch]) -> Vec<&ParticleBatch> {
 }
 
 /// The frame's constants (96 bytes): the view-projection, the fog plane
-/// and the fog colour (`fog`: colour, near, far).
-pub(crate) fn frame_constants(view_projection: &Mat4, fog: ([f32; 3], f32, f32)) -> Vec<u8> {
+/// and the fog colour (`fog`: colour, near, far) with the mip bias in
+/// force.
+pub(crate) fn frame_constants(
+    view_projection: &Mat4,
+    fog: ([f32; 3], f32, f32),
+    mip_bias: f32,
+) -> Vec<u8> {
     let mut constants = Vec::with_capacity(96);
     push_mat(&mut constants, view_projection);
     for v in fog_plane(view_projection, fog.1, fog.2) {
         constants.extend_from_slice(&v.to_le_bytes());
     }
-    for v in [fog.0[0], fog.0[1], fog.0[2], 0.0] {
+    for v in [fog.0[0], fog.0[1], fog.0[2], mip_bias] {
         constants.extend_from_slice(&v.to_le_bytes());
     }
     constants

@@ -66,10 +66,16 @@ impl Renderer {
             reason,
         };
         let path = self.texture_path();
-        let etc2 = etc2_target(path, dds);
+        // WebGL takes block-compressed textures only at sizes that are
+        // multiples of 4; a smaller top level (a file's lower levels kept
+        // by `texture_lod`, texture-quality-filtering.md 1.5) is decoded,
+        // the same texels.
+        let whole_blocks = width.is_multiple_of(4) && height.is_multiple_of(4);
+        let etc2 = etc2_target(path, dds).filter(|_| whole_blocks);
         // (format, bytes per block) of what is uploaded; RGBA8 is decoded.
         let (format, block) = match (dds.format, etc2) {
             (Format::Masked(_), _) => (TexFormat::Rgba8, None),
+            (_, None) if !whole_blocks => (TexFormat::Rgba8, None),
             (_, Some(t)) => (etc2_format(t), Some(t.block_bytes())),
             (f, None) if path == TexturePath::Bc => (
                 match f {
@@ -81,11 +87,6 @@ impl Renderer {
             ),
             (_, None) => (TexFormat::Rgba8, None),
         };
-        if dds.format.block_bytes().is_some()
-            && (!width.is_multiple_of(4) || !height.is_multiple_of(4))
-        {
-            return Err(size_error("block-compressed sizes must be multiples of 4"));
-        }
         if width.max(height) > self.gl.max_texture_size() {
             return Err(size_error("larger than the device supports"));
         }
