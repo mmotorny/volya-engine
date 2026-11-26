@@ -2826,56 +2826,10 @@ impl LevelScreen {
         let projection = camera::projection(
             camera::FOV_Y_DEGREES.to_radians(),
             camera::aspect_factor(width, height),
-            self.near_plane(width, height),
+            self.near,
             self.environment.far_plane,
         );
         (view, projection)
-    }
-
-    /// The near plane for a `width` × `height` target: section 7's, and
-    /// also the close one while the view's frustum up to the 0.2 m near
-    /// plane (its bounding box, conservatively) meets a static collision
-    /// triangle (our addition, #454: the
-    /// body keeps the eye about 0.34 m from walls, and on a screen wider
-    /// than about 16:9 the near plane's corners reach farther, cutting
-    /// the wall away).
-    fn near_plane(&self, width: u32, height: u32) -> f32 {
-        if self.near != camera::NEAR {
-            return self.near;
-        }
-        let v = self.player.view();
-        let (Some(d), Some(up)) = (geometry::normalize(v.direction), geometry::normalize(v.up))
-        else {
-            return self.near;
-        };
-        let Some(u) =
-            geometry::normalize(geometry::sub(up, geometry::scale(d, geometry::dot(up, d))))
-        else {
-            return self.near;
-        };
-        let r = geometry::cross(u, d);
-        // The box around the frustum between the eye and the near plane.
-        let n = camera::NEAR;
-        let t = (camera::FOV_Y_DEGREES.to_radians() / 2.0).tan();
-        let half = [n * t / camera::aspect_factor(width, height), n * t, n / 2.0];
-        let axes = [r, u, d];
-        let centre = geometry::add(v.eye, geometry::scale(d, n / 2.0));
-        let extent: Vec3 =
-            std::array::from_fn(|k| (0..3).map(|j| axes[j][k].abs() * half[j]).sum());
-        let mut found = Vec::new();
-        self.collision.query(
-            geometry::sub(centre, extent),
-            geometry::add(centre, extent),
-            &mut found,
-        );
-        if found
-            .iter()
-            .any(|&t| geometry::box_intersects(centre, axes, half, &self.collision.corners(t)))
-        {
-            camera::NEAR_CLOSE
-        } else {
-            self.near
-        }
     }
 
     /// The frame for `resolution`, its world hidden under an opaque picture
@@ -2993,10 +2947,7 @@ impl LevelScreen {
             yaw: angles.yaw,
             pitch: angles.pitch,
             far_plane: self.environment.far_plane,
-            near_plane: {
-                let (w, h) = self.view_size.get();
-                self.near_plane(w, h)
-            },
+            near_plane: self.near,
             game_time: self.clock.time(),
             time_of_day: tau,
             weather_t: t,
