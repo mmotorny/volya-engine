@@ -17,7 +17,7 @@ use std::io;
 use serde::Serialize;
 
 use crate::core::camera::{Mat4, Vec3};
-use crate::core::collision::{CollisionWorld, geometry};
+use crate::core::collision::CollisionWorld;
 use crate::core::glows::{GlowId, GlowSprite, GlowView, Glows};
 use crate::core::lights::{
     Frustum, LevelLight, LightId, LightKind, LightPass, LightSettings, Lights, light_pass, multiply,
@@ -26,9 +26,6 @@ use crate::core::particles::random::Generator;
 use crate::level_visibility::LevelVisibility;
 use crate::objects::LampLights;
 use volya_engine_formats::lanims::{ColourAnimations, K};
-
-/// The downward ray of `level.md` 9.1, metres.
-const SECTOR_RAY: f32 = 500.0;
 
 /// `r1_glows_per_frame`: 2 … 32, built in 16 (glows.md 5).
 pub const GLOWS_PER_FRAME: u32 = 16;
@@ -53,8 +50,6 @@ pub struct LightsData {
     pub glow_shaders: Vec<GlowShader<String>>,
     /// The glow shader of each lamp of the level's objects, by lamp.
     pub lamp_glows: Vec<Option<u32>>,
-    /// The portals' polygons as triangles (`level.md` 9.1).
-    pub portals: Vec<[Vec3; 3]>,
     pub animations: ColourAnimations,
 }
 
@@ -73,11 +68,6 @@ pub fn level_light(l: &volya_engine_formats::level::Light) -> Option<LevelLight>
         }),
         _ => None,
     }
-}
-
-/// The triangles of a portal polygon (a fan).
-pub fn portal_triangles(vertices: &[Vec3]) -> impl Iterator<Item = [Vec3; 3]> + '_ {
-    (1..vertices.len().saturating_sub(1)).map(|i| [vertices[0], vertices[i], vertices[i + 1]])
 }
 
 fn row(m: &Mat4, r: usize) -> Vec3 {
@@ -341,13 +331,10 @@ pub struct LevelLights {
     /// shader.
     lamp_data: Vec<(LampLights, Option<u32>)>,
     animations: ColourAnimations,
-    portals: Vec<[Vec3; 3]>,
     pub settings: LightSettings,
     pub glows_per_frame: u32,
     passes: Vec<LightPass>,
     sprites: Vec<GlowSprite>,
-    /// The lights a frame lists, kept between frames.
-    listed: Vec<LightId>,
 }
 
 impl LevelLights {
@@ -356,7 +343,6 @@ impl LevelLights {
     pub fn new(data: LightsData, lamps: Vec<LampLights>) -> io::Result<Self> {
         let mut s = Self {
             animations: data.animations,
-            portals: data.portals,
             glows_per_frame: GLOWS_PER_FRAME,
             ..Self::default()
         };
@@ -423,27 +409,70 @@ impl LevelLights {
         }
     }
 
-    /// Whether the downward ray from `p` meets a collision triangle or a
-    /// portal within 500 m (`level.md` 9.1).
-    fn has_sector(collision: &CollisionWorld, portals: &[[Vec3; 3]], p: Vec3) -> bool {
-        let down = [0.0, -1.0, 0.0];
-        collision.ray_hits(p, down, SECTOR_RAY)
-            || portals
-                .iter()
-                .any(|t| geometry::segment_hits_triangle(p, down, SECTOR_RAY, t))
+    /// The start of the frame's lights seen from `eye`: the sun's records
+    /// from the weather's `sun_dir` and `sun_color` (dynamic-lights.md
+    /// 3.1), then the records' sectors.
+    pub fn prepare(
+        &mut self,
+        collision: &CollisionWorld,
+        eye: Vec3,
+        sun: (Vec3, Vec3),
+        visibility: &LevelVisibility,
+    ) {
+        self.lights
+            .update_sun(eye, sun.0, sun.1, self.settings.sun_lumscale);
+        self.lights
+            .update_sectors(|p| visibility.sector_of(collision, p));
     }
 
-    /// The frame's lights and glows seen from `camera` (a frame of `dt`
-    /// seconds; 0 while paused): the sun's records from the weather's
-    /// `sun_dir` and `sun_color` (dynamic-lights.md 3.1), the records'
-    /// sectors, the lights listed by the latest camera pass of
-    /// `visibility` (4; its cached tests' values from `random`), their light
-    /// passes (5), and the glows (glows.md 3 – 6), their occlusion rays
-    /// against `collision`.
+    /// The rest of the frame's lights seen from `camera` (a frame of `dt`
+    /// seconds; 0 while paused), with the records the camera pass listed
+    /// (`listed`, in their order): their light passes (5), made with
+    /// occlusion off (occlusion-tests.md 4), and the glows (glows.md 3 –
+    /// 6), their occlusion rays against `collision`.
     // TODO(#347): the object part of the glows' occlusion ray (glows.md
     // 5.1): the bone shapes' fields (level-objects.md chunk 16: shape type
     // codes, the box, sphere and cylinder layouts) and which objects are
     // enabled are not specified.
+    pub fn finish(
+        &mut self,
+        collision: &CollisionWorld,
+        camera: &LightCamera,
+        dt: f32,
+        visibility: &mut LevelVisibility,
+        listed: &[LightId],
+    ) {
+        let eye = camera.eye;
+        let listed = self.lights.lists(listed);
+        let (lights, clip) = (&self.lights, self.settings.clip);
+        self.passes = visibility.light_passes(|| {
+            (listed.iter())
+                .filter_map(|&id| light_pass(lights.get(id)?, eye, clip))
+                .collect()
+        });
+        let v = &camera.view;
+        let view = GlowView {
+            eye,
+            forward: [v[0][2], v[1][2], v[2][2]],
+            up: [v[0][1], v[1][1], v[2][1]],
+            right: [v[0][0], v[1][0], v[2][0]],
+            frustum: Frustum::of(&multiply(&camera.view, &camera.projection)),
+            far: camera.far,
+            camera_in_sector: visibility.camera_sector().is_some(),
+        };
+        self.sprites = self.glows.frame(
+            &view,
+            dt,
+            self.glows_per_frame,
+            |p| visibility.sector_of(collision, p),
+            |s, c, r| visibility.reached(s, c, r).is_some(),
+            |from, dir, length| static_ray(collision, from, dir, length),
+        );
+    }
+
+    /// The frame's lights with the lights handled alone, nearest first
+    /// (benches): [`LevelLights::prepare`], each record's tests, then
+    /// [`LevelLights::finish`].
     pub fn frame(
         &mut self,
         collision: &CollisionWorld,
@@ -453,55 +482,16 @@ impl LevelLights {
         visibility: &mut LevelVisibility,
         random: &mut Generator,
     ) {
-        let eye = camera.eye;
-        self.lights
-            .update_sun(eye, sun.0, sun.1, self.settings.sun_lumscale);
-        let portals = &self.portals;
-        self.lights
-            .update_sectors(|p| visibility.sector_of(collision, p));
-        let camera_in_sector = visibility.camera_sector().is_some();
-        let frustum = Frustum::of(&multiply(&camera.view, &camera.projection));
-        // The dynamic part of the camera pass runs only with a camera
-        // sector (object-visibility.md 1).
-        let mut listed = std::mem::take(&mut self.listed);
-        if camera_in_sector {
-            self.lights.choose_into(
-                &self.settings,
-                eye,
-                |t| {
-                    visibility.reached(t.sector, t.centre, t.radius).is_some()
-                        && visibility.cached_visible(t.cache, t.min, t.max, random)
-                },
-                &mut listed,
-            );
+        self.prepare(collision, camera.eye, sun, visibility);
+        let listed = if visibility.camera_sector().is_some() {
+            self.lights.choose(&self.settings, camera.eye, |t| {
+                visibility.reached(t.sector, t.centre, t.radius).is_some()
+                    && visibility.cached_visible(t.cache, t.min, t.max, random)
+            })
         } else {
-            listed.clear();
-        }
-        // The light passes, occlusion off (occlusion-tests.md 4).
-        let (lights, clip, passes) = (&self.lights, self.settings.clip, &mut self.passes);
-        visibility.light_passes(|| {
-            passes.clear();
-            passes.extend((listed.iter()).filter_map(|&id| light_pass(lights.get(id)?, eye, clip)));
-        });
-        self.listed = listed;
-        let v = &camera.view;
-        let view = GlowView {
-            eye,
-            forward: [v[0][2], v[1][2], v[2][2]],
-            up: [v[0][1], v[1][1], v[2][1]],
-            right: [v[0][0], v[1][0], v[2][0]],
-            frustum,
-            far: camera.far,
-            camera_in_sector,
+            Vec::new()
         };
-        self.glows.frame_into(
-            &view,
-            dt,
-            self.glows_per_frame,
-            |p| Self::has_sector(collision, portals, p),
-            |from, dir, length| static_ray(collision, from, dir, length),
-            &mut self.sprites,
-        );
+        self.finish(collision, camera, dt, visibility, &listed);
     }
 
     /// The colour animations, the records and the glows, for a source

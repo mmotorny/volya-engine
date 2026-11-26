@@ -186,6 +186,10 @@ pub struct WorldScene {
     /// The detail objects drawn (docs/behavior/detail-objects.md).
     #[serde(skip)]
     pub details: Option<crate::level_details::DetailsScene>,
+    /// What the latest camera pass keeps of the draws; `None` draws all
+    /// that may show.
+    #[serde(skip)]
+    pub seen: Option<Arc<crate::level_visibility::Seen>>,
 }
 
 impl PartialEq for WorldScene {
@@ -204,6 +208,7 @@ impl PartialEq for WorldScene {
             && self.particles == other.particles
             && self.lights == other.lights
             && self.glows == other.glows
+            && self.seen.as_ref().map(Arc::as_ptr) == other.seen.as_ref().map(Arc::as_ptr)
             && self
                 .details
                 .as_ref()

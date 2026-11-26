@@ -1127,6 +1127,7 @@ pub fn debug_draw_particles(case: &str) -> Result<serde_json::Value, JsValue> {
                 presentation: Default::default(),
                 effects: None,
                 details: None,
+                drawn: None,
             }),
             ..Default::default()
         };
@@ -1293,6 +1294,7 @@ pub fn debug_draw_lights(case: &str) -> Result<serde_json::Value, JsValue> {
                 presentation: Default::default(),
                 effects: None,
                 details: None,
+                drawn: None,
             }),
             ..Default::default()
         };

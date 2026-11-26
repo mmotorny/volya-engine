@@ -329,6 +329,9 @@ pub struct WorldFrame {
     pub effects: Option<crate::present::ScreenEffects>,
     /// The detail objects drawn (detail-objects.md 5.4, 6).
     pub details: Option<crate::details::DetailFrame>,
+    /// By world draw: those the camera pass keeps (visibility-scope.md 5);
+    /// `None` draws every one that may show.
+    pub drawn: Option<std::sync::Arc<Vec<bool>>>,
 }
 
 /// One dynamic light's pass (docs/behavior/dynamic-lights.md sections 5,

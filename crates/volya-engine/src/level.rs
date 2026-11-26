@@ -39,9 +39,11 @@ use crate::core::config::Config;
 use crate::core::detector::DetectorSection;
 use crate::core::input::Input;
 use crate::core::level::{DrawItem, Level};
+use crate::core::lights::LightId;
 use crate::core::lights::{LightSettings, Lights};
 use crate::core::movement::{Flags, MovementConfig, Player};
 use crate::core::object_light::{self, SkyVisibility};
+use crate::core::occlusion::object_box;
 use crate::core::occlusion::{OcclusionMesh, View};
 use crate::core::particles::placed::{Origin, PlacedEffect, PlacedEffects, particle_capacity};
 use crate::core::particles::random::Shared;
@@ -60,7 +62,7 @@ use crate::level_details::{self, DetailsScene, DetailsWorld, LevelDetailObjects}
 use crate::level_lights::{self, GlowShader, LevelLights, LightCamera, LightsData};
 use crate::level_sound::ZoneSoundNames;
 use crate::level_sound::{LevelSoundData, SoundInputs};
-use crate::level_visibility::LevelVisibility;
+use crate::level_visibility::{Item, LevelVisibility, Seen, portal_fade};
 use crate::loading_screen::Stage;
 use crate::objects::{self, Characters, LevelObjects, ObjectsReport};
 use crate::particle_drawing::{self, ParticleShader};
@@ -292,9 +294,6 @@ pub struct LevelScreen {
     weather_effect: Option<usize>,
     /// The size of the latest frame drawn, for the effects' view test.
     view_size: std::cell::Cell<(u32, u32)>,
-    /// The effect objects a view draws ([`LevelScreen::drawn`]), kept
-    /// between frames.
-    drawn_effects: std::cell::RefCell<Vec<usize>>,
     /// `r__supersample` in force: the frame's target size, and with it the
     /// size thresholds (static-shading.md 10.2, frame-presentation.md 1.1).
     supersample: u32,
@@ -317,6 +316,8 @@ pub struct LevelScreen {
     random: Shared,
     /// The camera pass (visibility-scope.md).
     visibility: std::cell::RefCell<LevelVisibility>,
+    /// What the latest camera pass keeps of the draws.
+    seen: Arc<Seen>,
     /// `r__detail_density` and the wind strength *W* as the app last gave
     /// them.
     detail_density: f32,
@@ -1423,13 +1424,10 @@ impl NewGameLoad {
             Stage::OpeningStream => {
                 let bytes = vfs::read(tree, &format!("{dir}\\level"))?;
                 let level = Level::parse(&bytes).map_err(|e| file("level", e))?;
-                // Chunks 6 and 7 and the portals, for the lights
-                // (dynamic-lights.md 3.1, glows.md 2.1, level.md 9.1).
+                // Chunks 6 and 7, for the lights (dynamic-lights.md 3.1,
+                // glows.md 2.1).
                 self.lights.level_lights = (level.lights.iter())
                     .filter_map(level_lights::level_light)
-                    .collect();
-                self.lights.portals = (level.portals.iter())
-                    .flat_map(|p| level_lights::portal_triangles(&p.vertices))
                     .collect();
                 self.glow_records = level.glows.clone();
                 self.level = Some(level);
@@ -1525,7 +1523,11 @@ impl NewGameLoad {
                 self.draw_items = draw_items;
                 // The camera pass keeps the sectors, portals and visual
                 // hierarchy in its own form.
-                self.visibility = Some(LevelVisibility::new(level, self.occlusion_mesh.take())?);
+                self.visibility = Some(LevelVisibility::new(
+                    level,
+                    self.occlusion_mesh.take(),
+                    self.draw_items.iter().map(|d| d.visual),
+                )?);
                 // Only the shader table is read after this stage; the
                 // visuals and the rest go now.
                 if let Some(level) = &mut self.level {
@@ -2017,7 +2019,6 @@ impl NewGameLoad {
             instances,
             effects,
             view_size: std::cell::Cell::new((1024, 768)),
-            drawn_effects: Default::default(),
             supersample: 1,
             zones: self.zones,
             zone_sections: self.zone_sections,
@@ -2031,6 +2032,7 @@ impl NewGameLoad {
             details: self.details.map(std::cell::RefCell::new),
             random: self.random,
             visibility: visibility.into(),
+            seen: Arc::default(),
             detail_density: level_details::DENSITY_DEFAULT,
             wind: 0.0,
             frame: 0,
@@ -2062,7 +2064,8 @@ impl LevelScreen {
         load.finish(now)
     }
 
-    /// Places the player with its eye at `eye` (tests and debugging).
+    /// Places the player with its eye at `eye` (tests and debugging), and
+    /// runs the camera pass and the lights from there (no time passes).
     pub fn set_camera(&mut self, eye: Vec3, angles: Angles) {
         let h = self
             .player
@@ -2070,6 +2073,7 @@ impl LevelScreen {
             .eye_height(self.player.body().box_index());
         self.player.place([eye[0], eye[1] - h, eye[2]], angles);
         self.update_view();
+        self.lights_frame(0.0);
     }
 
     /// Leaves the objects out of the frames drawn (tests and comparisons);
@@ -2263,7 +2267,6 @@ impl LevelScreen {
         }
         // The idle lights of zones updated or created this frame.
         self.sync_zone_lights();
-        self.draw_updates();
         // sky.md 7.3, k_t from the game clock.
         let (a, b, t) = self.weather.bracket_indices(self.clock.time_of_day());
         self.sun_fade.frame(
@@ -2723,11 +2726,121 @@ impl LevelScreen {
             far: e.far_plane,
         };
         let sun = (e.sun_dir, e.sun_color);
+        let eye = camera.eye;
+        (self.lights).prepare(&self.collision, eye, sun, self.visibility.get_mut());
         self.camera_pass(w, h, &view, &projection);
+        let listed = self.dynamic_items();
         let (collision, visibility) = (&self.collision, self.visibility.get_mut());
-        (self.random).with(|g| {
-            (self.lights).frame(collision, &camera, sun, dt, visibility, g);
-        });
+        (self.lights).finish(collision, &camera, dt, visibility, &listed);
+    }
+
+    /// The dynamic part of the camera pass (object-visibility.md 1, 3 –
+    /// 6), with a camera sector: the light records, the object instances
+    /// placed and the effect objects with a culling sphere, nearest first by
+    /// their sphere centres (equal distances: lights, objects, effects, each
+    /// in their order; unestablished), each handled once: its sector and
+    /// frusta, then its cached occlusion test (lights: C ± R; objects:
+    /// their model's box under their transform; effect objects: their
+    /// instance's box), an effect object kept then advanced to the clock
+    /// (particle-drawing.md 7.1 step 1). Keeps what the frame draws
+    /// ([`Seen`]): these, the static draws of the pass's visuals and the
+    /// portal fade. Returns the light records listed, in their order.
+    fn dynamic_items(&mut self) -> Vec<LightId> {
+        enum Kind {
+            Light(LightId),
+            Object(usize, Mat4, [f32; 4]),
+            Effect(usize, [f32; 4]),
+        }
+        let eye = self.player.view().eye;
+        let d2 = |c: Vec3| {
+            let d = [c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]];
+            (d[0] * d[0] + d[1] * d[1]) + d[2] * d[2]
+        };
+        let objects = &self.world.objects;
+        let visibility = self.visibility.get_mut();
+        visibility
+            .objects
+            .resize(objects.instances.len(), Item::default());
+        let mut seen = Seen {
+            items: visibility.static_draws(self.world.draw_items.len()),
+            objects: vec![false; objects.instances.len()],
+            ..Seen::default()
+        };
+        let mut listed = Vec::new();
+        if visibility.camera_sector().is_some() {
+            let mut items: Vec<(f32, Kind)> = Vec::new();
+            for (id, c) in self.lights.lights.candidates() {
+                items.push((d2(c), Kind::Light(id)));
+            }
+            for (k, t) in self.placements.iter().enumerate() {
+                let (Some(t), Some(i)) = (t, objects.instances.get(k)) else {
+                    continue;
+                };
+                let h = &objects.models[i.model].header;
+                let c = volya_engine_formats::model::transform_point(t, h.sphere_centre);
+                items.push((
+                    d2(c),
+                    Kind::Object(k, *t, [c[0], c[1], c[2], h.sphere_radius]),
+                ));
+            }
+            if let Some(effects) = &self.effects {
+                for (i, p) in effects.indexed() {
+                    if let Some(s) = p.registered() {
+                        let [x, y, z] = s.centre;
+                        items.push((d2(s.centre), Kind::Effect(i, [x, y, z, s.radius])));
+                    }
+                }
+            }
+            items.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let (collision, random) = (&self.collision, &self.random);
+            let settings = self.lights.settings;
+            for (_, kind) in items {
+                match kind {
+                    Kind::Light(id) => {
+                        let shown = self.lights.lights.handle(id, &settings, |t| {
+                            visibility.reached(t.sector, t.centre, t.radius).is_some()
+                                && random
+                                    .with(|g| visibility.cached_visible(t.cache, t.min, t.max, g))
+                        });
+                        if shown {
+                            listed.push(id);
+                        }
+                    }
+                    Kind::Object(k, t, sphere) => {
+                        let h = &objects.models[objects.instances[k].model].header;
+                        let (lo, hi) = object_box(&t, h.box_min, h.box_max);
+                        let mut item = visibility.objects[k];
+                        seen.objects[k] = random.with(|g| {
+                            visibility.item_seen(&mut item, sphere, lo, hi, collision, g)
+                        });
+                        visibility.objects[k] = item;
+                    }
+                    Kind::Effect(i, sphere) => {
+                        let Some(effects) = &mut self.effects else {
+                            continue;
+                        };
+                        let Some(p) = effects.get(i) else { continue };
+                        let b = p.instance.bounds();
+                        if visibility.effects.len() <= i {
+                            visibility.effects.resize(i + 1, Item::default());
+                        }
+                        let mut item = visibility.effects[i];
+                        let shown = random.with(|g| {
+                            visibility.item_seen(&mut item, sphere, b.min, b.max, collision, g)
+                        });
+                        visibility.effects[i] = item;
+                        // Drawn: advanced, then queued with the frame.
+                        if shown {
+                            effects.draw_update(i);
+                            seen.effects.push(i);
+                        }
+                    }
+                }
+            }
+            seen.fade = portal_fade(visibility, eye, self.environment.ambient);
+        }
+        self.seen = Arc::new(seen);
+        listed
     }
 
     /// The camera pass (visibility-scope.md 1) of the latest frame's view
@@ -2762,44 +2875,6 @@ impl LevelScreen {
         self.effects.as_ref()
     }
 
-    /// The drawing update (level-placed-effects.md 5.3,
-    /// particle-drawing.md 7.1 step 1): every effect whose culling sphere
-    /// meets the view is advanced to the clock before it is drawn, after
-    /// the scheduler's pass of the frame. The view is that of the latest
-    /// frame's size.
-    fn draw_updates(&mut self) {
-        let (w, h) = self.view_size.get();
-        let (view, projection) = self.view_projection(w, h);
-        let Some(effects) = &self.effects else {
-            return;
-        };
-        let mut drawn = self.drawn_effects.take();
-        self.drawn(effects, &view, &projection, &mut drawn);
-        if let Some(effects) = &mut self.effects {
-            for &i in &drawn {
-                effects.draw_update(i);
-            }
-        }
-        self.drawn_effects.replace(drawn);
-    }
-
-    /// The effect objects drawn in a view, into `out`: those visible (7.1)
-    /// of the origins drawn.
-    fn drawn(&self, effects: &PlacedEffects, view: &Mat4, projection: &Mat4, out: &mut Vec<usize>) {
-        let origin = |o: Origin| match o {
-            Origin::Placed => 0,
-            Origin::Zone => 1,
-            Origin::Weather => 2,
-            Origin::Artefact => 3,
-        };
-        particle_drawing::visible_into(effects, view, projection, out);
-        out.retain(|&i| {
-            effects
-                .get(i)
-                .is_some_and(|p| self.effects_drawn[origin(p.origin)])
-        });
-    }
-
     /// Leaves the effects out of the frames drawn, or draws them again
     /// (tests compare frames with and without them).
     pub fn set_effects_drawn(&mut self, drawn: bool) {
@@ -2817,14 +2892,9 @@ impl LevelScreen {
         .map(|o| origins.contains(&o));
     }
 
-    /// The effects queued for a frame of `view` and `projection` at
-    /// `resolution` (particle-drawing.md 7.1, 7.2).
-    fn particle_draws(
-        &self,
-        resolution: Resolution,
-        view: &Mat4,
-        projection: &Mat4,
-    ) -> Vec<particle_drawing::ParticleDraw> {
+    /// The effect objects the latest camera pass kept, queued for a frame
+    /// at `resolution` (particle-drawing.md 7.1, 7.2).
+    fn particle_draws(&self, resolution: Resolution) -> Vec<particle_drawing::ParticleDraw> {
         self.view_size.set((resolution.width, resolution.height));
         let Some(effects) = self.effects.as_ref() else {
             return Vec::new();
@@ -2841,17 +2911,27 @@ impl LevelScreen {
             self.supersample,
         );
         let ssa_min = crate::render::world::ssa_min(w, h, camera::FOV_Y_DEGREES);
-        let mut records = self.drawn_effects.take();
-        self.drawn(effects, view, projection, &mut records);
-        let draws = particle_drawing::queue(
+        let origin = |o: Origin| match o {
+            Origin::Placed => 0,
+            Origin::Zone => 1,
+            Origin::Weather => 2,
+            Origin::Artefact => 3,
+        };
+        // Of the origins drawn (tests).
+        let records: Vec<usize> = (self.seen.effects.iter().copied())
+            .filter(|&i| {
+                effects
+                    .get(i)
+                    .is_some_and(|p| self.effects_drawn[origin(p.origin)])
+            })
+            .collect();
+        particle_drawing::queue(
             effects,
             &records,
             &self.world.particle_shaders,
             &camera,
             ssa_min,
-        );
-        self.drawn_effects.replace(records);
-        draws
+        )
     }
 
     /// What the engine interface reports of the placed effects.
@@ -2974,7 +3054,7 @@ impl LevelScreen {
             let sun = self.world.flares.get(s)?.sun.as_ref()?;
             Some((s, sun))
         });
-        let particles = self.particle_draws(resolution, &view, &projection);
+        let particles = self.particle_draws(resolution);
         let mut scene = Scene::new(resolution);
         scene.world = Some(WorldScene {
             particles,
@@ -2993,6 +3073,7 @@ impl LevelScreen {
             // which clock is unestablished, ogf.md section 10).
             time: clock_ms.saturating_sub(self.shown) as f32 / 1000.0,
             objects: self.placements.clone(),
+            seen: Some(self.seen.clone()),
             sky: Some(sky::sky_frame(
                 &self.environment,
                 a,
@@ -3233,7 +3314,6 @@ impl LevelScreen {
             instances: HashMap::new(),
             effects: None,
             view_size: std::cell::Cell::new((1024, 768)),
-            drawn_effects: Default::default(),
             supersample: 1,
             zones: Zones::default(),
             zone_sections: HashMap::new(),
@@ -3246,6 +3326,7 @@ impl LevelScreen {
             details: None,
             random: Shared::default(),
             visibility: Default::default(),
+            seen: Arc::default(),
             detail_density: level_details::DENSITY_DEFAULT,
             wind: 0.0,
             frame: 0,

@@ -300,6 +300,7 @@ fn draw_static(
     inner: &Inner,
     step: &Step,
     shows: impl Fn(u32) -> bool,
+    hidden: impl Fn(u32) -> bool,
 ) {
     use crate::stats::StaticCall;
     /// A call being gathered: draws whose vertices are their own with
@@ -341,6 +342,42 @@ fn draw_static(
         // is the same every frame: WebKit checks each range a draw call
         // hasn't used before on the GPU (#437).
         if !members.iter().any(|&m| shows(m)) {
+            continue;
+        }
+        // A member that may show but the camera pass left out
+        // (`hidden`): the group's other members are drawn in runs without
+        // it.
+        if inner.exclusive[i as usize] && members.iter().any(|&m| hidden(m)) {
+            let d = &inner.calls[i as usize];
+            if surface != Some(d.surface) {
+                flush(&mut pending);
+                surface = Some(d.surface);
+                inner.bind_surface(gl, programs, d.surface);
+            }
+            let a = inner.arrays_of[i as usize];
+            if array != Some(a) {
+                flush(&mut pending);
+                array = Some(a);
+                crate::stats::buffer();
+                gl.bind_vertex_array(&inner.arrays[a as usize]);
+            }
+            flush(&mut pending);
+            let wide = inner.index_wide[d.index_buffer as usize];
+            for run in members.split(|&m| hidden(m)) {
+                if run.iter().any(|&m| shows(m)) {
+                    let (first, last) = (
+                        &inner.calls[run[0] as usize],
+                        &inner.calls[run[run.len() - 1] as usize],
+                    );
+                    pending = Some(Pending {
+                        range: first.first_index..last.first_index + last.index_count,
+                        surface: d.surface,
+                        draws: run.len() as u32,
+                        wide,
+                    });
+                    flush(&mut pending);
+                }
+            }
             continue;
         }
         let d = &inner.calls[i as usize];
@@ -1411,9 +1448,22 @@ impl Renderer {
         let planes = frustum_planes(&view_projection);
         let ssa = ssa_min(size.0, size.1, frame.fov_y_degrees);
         let spheres = inner.spheres.borrow();
-        let shows = |i: u32| may_show(spheres[i as usize], &planes, frame.eye, ssa);
+        // The draws the camera pass keeps, by kept draw.
+        let kept: Option<Vec<bool>> = frame.drawn.as_ref().map(|drawn| {
+            let mut kept = vec![false; spheres.len()];
+            for (w, k) in inner.kept_of.iter().enumerate() {
+                if let (Some(k), Some(&d)) = (k, drawn.get(w)) {
+                    kept[*k as usize] = d;
+                }
+            }
+            kept
+        });
+        let in_pass = |i: u32| kept.as_ref().is_none_or(|k| k[i as usize]);
+        let may = |i: u32| may_show(spheres[i as usize], &planes, frame.eye, ssa);
+        let shows = |i: u32| in_pass(i) && may(i);
+        let hidden = |i: u32| !in_pass(i) && may(i);
         set_part(Part::WorldEarly);
-        draw_static(&gl, programs, inner, &inner.early, shows);
+        draw_static(&gl, programs, inner, &inner.early, shows, hidden);
         if let Some(prepared) = particles {
             set_part(Part::Particles);
             prepared.draw_queue(&gl, &self.particles, ParticleQueue::Early);
@@ -1481,10 +1531,12 @@ impl Renderer {
             }
         }
         set_part(Part::WorldLate);
-        draw_static(&gl, programs, inner, &inner.late, shows);
+        draw_static(&gl, programs, inner, &inner.late, shows, hidden);
         if let Some(prepared) = particles {
             set_part(Part::Particles);
             prepared.draw_queue(&gl, &self.particles, ParticleQueue::Late);
+            // The portal fade (portal-fade.md 5).
+            prepared.draw_queue(&gl, &self.particles, ParticleQueue::Fade);
         }
         for (_, item) in sorted {
             let (i, d) = match item {

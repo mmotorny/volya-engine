@@ -172,6 +172,7 @@ impl ParticlePrograms {
         };
         let programs = [
             (ParticleProgram::Set, "fs_set"),
+            (ParticleProgram::Portal, "fs_portal"),
             (ParticleProgram::Blended, "fs_blended"),
             (ParticleProgram::Plain, "fs_plain"),
             (ParticleProgram::Distort, "fs_distort"),

@@ -6,9 +6,8 @@
 //! faded each frame (section 3), tested for occlusion (section 5) and
 //! turned into camera-facing sprites (section 6).
 //!
-//! As for the dynamic lights ([`crate::lights`]), every sector counts as
-//! visited with the full view frustum (the superset `level.md` 9.2
-//! allows): a glow's sector matters only as whether it has one.
+//! Gathering takes the camera pass's sectors and frusta from the caller
+//! ([`Glows::frame`]).
 
 use crate::camera::Vec3;
 use crate::collision::geometry::ray_triangle_distance;
@@ -41,8 +40,8 @@ pub struct Glow {
     pub fade: f32,
     /// The latest occlusion test's result.
     pub occluded: bool,
-    /// Whether it has a sector (module documentation).
-    pub in_sector: bool,
+    /// Its sector, none until the ray of `level.md` 9.1 first finds one.
+    pub sector: Option<u16>,
     /// Marked for sector re-detection.
     sector_due: bool,
     /// The frame it was last tested for occlusion in.
@@ -102,10 +101,6 @@ pub struct Glows {
     /// The occlusion counter k (section 5): 0 at load, never reset.
     k: u64,
     frame: u64,
-    /// A frame's candidates and listed glows, kept between frames (no
-    /// allocation in a running frame, docs/architecture/memory.md).
-    candidates: Vec<(f32, usize)>,
-    listed: Vec<usize>,
 }
 
 impl Glows {
@@ -133,7 +128,7 @@ impl Glows {
             on: true,
             fade: 255.0,
             occluded: true,
-            in_sector: false,
+            sector: None,
             sector_due: true,
             tested: None,
             last: None,
@@ -151,7 +146,7 @@ impl Glows {
             on: false,
             fade: 1.0,
             occluded: false,
-            in_sector: false,
+            sector: None,
             sector_due: true,
             tested: None,
             last: None,
@@ -224,62 +219,46 @@ impl Glows {
     /// faded by the frame time `dt` (0 while paused), then up to
     /// `per_frame` (`r1_glows_per_frame`) of the listed ones tested with
     /// `occluded(from, direction, length)` (the triangle of the static
-    /// world the ray hits, if any), then the sprites of the listed glows. `in_sector` tells whether the downward ray of `level.md` 9.1
-    /// from a point finds a sector.
+    /// world the ray hits, if any), then the sprites of the listed glows.
+    /// `sector` gives the sector the downward ray of `level.md` 9.1 finds
+    /// from a point, if any; `reached` whether a sector was visited with a
+    /// frustum a sphere (centre, radius) is not outside (steps 3, 4).
     pub fn frame(
         &mut self,
         view: &GlowView,
         dt: f32,
         per_frame: u32,
-        in_sector: impl FnMut(Vec3) -> bool,
-        occluded: impl FnMut(Vec3, Vec3, f32) -> Option<[Vec3; 3]>,
-    ) -> Vec<GlowSprite> {
-        let mut sprites = Vec::new();
-        self.frame_into(view, dt, per_frame, in_sector, occluded, &mut sprites);
-        sprites
-    }
-
-    /// [`Glows::frame`] into `sprites`, cleared first.
-    pub fn frame_into(
-        &mut self,
-        view: &GlowView,
-        dt: f32,
-        per_frame: u32,
-        mut in_sector: impl FnMut(Vec3) -> bool,
+        mut sector: impl FnMut(Vec3) -> Option<u16>,
+        mut reached: impl FnMut(u16, Vec3, f32) -> bool,
         mut occluded: impl FnMut(Vec3, Vec3, f32) -> Option<[Vec3; 3]>,
-        sprites: &mut Vec<GlowSprite>,
-    ) {
-        sprites.clear();
+    ) -> Vec<GlowSprite> {
         self.frame += 1;
         let e = view.eye;
         let distance2 = |g: &Glow| {
             let v = sub(g.position, e);
             dot(v, v)
         };
-        let mut listed = std::mem::take(&mut self.listed);
-        listed.clear();
+        let mut listed: Vec<usize> = Vec::new();
         if view.camera_in_sector {
             // Step 1: on and not outside the view, nearest first.
-            let mut candidates = std::mem::take(&mut self.candidates);
-            candidates.clear();
-            candidates.extend(
-                (self.glows.iter().enumerate())
-                    .filter_map(|(i, g)| Some((i, g.as_ref()?)))
-                    .filter(|(_, g)| g.on && view.frustum.meets(g.position, g.radius))
-                    .map(|(i, g)| (distance2(g), i)),
-            );
+            let mut candidates: Vec<(f32, usize)> = (self.glows.iter().enumerate())
+                .filter_map(|(i, g)| Some((i, g.as_ref()?)))
+                .filter(|(_, g)| g.on && view.frustum.meets(g.position, g.radius))
+                .map(|(i, g)| (distance2(g), i))
+                .collect();
             candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
             let z2 = view.far * view.far;
-            for &(d2, i) in &candidates {
+            for (d2, i) in candidates {
                 let g = self.glows[i].as_mut().expect("a candidate exists");
                 // Step 2.
                 if g.sector_due {
                     g.sector_due = false;
-                    g.in_sector |= in_sector(g.position);
+                    if let Some(s) = sector(g.position) {
+                        g.sector = Some(s);
+                    }
                 }
-                // Steps 3, 4: every sector is visited with the full view
-                // frustum, which step 1 tested.
-                if !g.in_sector {
+                // Steps 3, 4.
+                if !g.sector.is_some_and(|s| reached(s, g.position, g.radius)) {
                     continue;
                 }
                 if d2 < z2 {
@@ -293,11 +272,9 @@ impl Glows {
                     g.fade = (g.fade - 1024.0 * dt).max(1.0);
                 }
             }
-            self.candidates = candidates;
         }
         if listed.is_empty() {
-            self.listed = listed;
-            return;
+            return Vec::new();
         }
         // Section 5.
         let len = listed.len() as u64;
@@ -320,7 +297,8 @@ impl Glows {
         let dl = dot(view.forward, view.forward).sqrt();
         let forward = view.forward.map(|c| c / dl);
         let z2 = view.far * view.far;
-        for &i in &listed {
+        let mut sprites = Vec::with_capacity(listed.len());
+        for i in listed {
             let g = self.glows[i].as_ref().expect("a listed glow exists");
             if g.fade <= 1.0 {
                 continue;
@@ -355,7 +333,7 @@ impl Glows {
                 b: a.clamp(0.0, 255.0) as u8,
             });
         }
-        self.listed = listed;
+        sprites
     }
 }
 
@@ -454,27 +432,48 @@ mod tests {
         glows.set_position(id, [0.0, 0.0, 10.0]);
         glows.set_on(id, true);
         let clear = |_: Vec3, _: Vec3, _: f32| None;
-        glows.frame(&view(), 0.031, 16, |_| true, clear);
+        glows.frame(&view(), 0.031, 16, |_| Some(0), |_, _, _| true, clear);
         assert!((glows.get(id).unwrap().fade - (1.0 + 4096.0 * 0.031)).abs() < 1e-3);
         // 254 / 4096 = 0.0620 s in all.
-        glows.frame(&view(), 0.032, 16, |_| true, clear);
+        glows.frame(&view(), 0.032, 16, |_| Some(0), |_, _, _| true, clear);
         assert_eq!(glows.get(id).unwrap().fade, 255.0);
         // Occluded from now (seen from elsewhere, so the ray is tested
         // again): falls by 1024 a second, to 1.
         let moved = view_at([0.0, 0.0, 0.01]);
-        glows.frame(&moved, 0.0, 16, |_| true, |_, _, _| Some(TRI));
+        glows.frame(
+            &moved,
+            0.0,
+            16,
+            |_| Some(0),
+            |_, _, _| true,
+            |_, _, _| Some(TRI),
+        );
         assert!(glows.get(id).unwrap().occluded);
-        glows.frame(&moved, 0.124, 16, |_| true, |_, _, _| Some(TRI));
+        glows.frame(
+            &moved,
+            0.124,
+            16,
+            |_| Some(0),
+            |_, _, _| true,
+            |_, _, _| Some(TRI),
+        );
         assert!((glows.get(id).unwrap().fade - (255.0 - 1024.0 * 0.124)).abs() < 1e-3);
         // 254 / 1024 = 0.248 s in all.
-        glows.frame(&moved, 0.125, 16, |_| true, |_, _, _| Some(TRI));
+        glows.frame(
+            &moved,
+            0.125,
+            16,
+            |_| Some(0),
+            |_, _, _| true,
+            |_, _, _| Some(TRI),
+        );
         assert_eq!(glows.get(id).unwrap().fade, 1.0);
         // Beyond the far plane: not listed, fading out.
-        glows.frame(&view(), 0.0, 16, |_| true, clear);
-        glows.frame(&view(), 0.1, 16, |_| true, clear);
+        glows.frame(&view(), 0.0, 16, |_| Some(0), |_, _, _| true, clear);
+        glows.frame(&view(), 0.1, 16, |_| Some(0), |_, _, _| true, clear);
         assert!(glows.get(id).unwrap().fade > 255.0 - 1.0);
         glows.set_position(id, [0.0, 0.0, 150.0]);
-        let sprites = glows.frame(&view(), 0.1, 16, |_| true, clear);
+        let sprites = glows.frame(&view(), 0.1, 16, |_| Some(0), |_, _, _| true, clear);
         assert!(sprites.is_empty());
         assert!((glows.get(id).unwrap().fade - (255.0 - 102.4)).abs() < 1e-3);
     }
@@ -492,7 +491,8 @@ mod tests {
             &view(),
             0.0,
             3,
-            |_| true,
+            |_| Some(0),
+            |_, _, _| true,
             |_, _, l| {
                 tested.push(l);
                 None
@@ -504,7 +504,8 @@ mod tests {
             &view_at([0.0, 0.0, 0.01]),
             0.0,
             3,
-            |_| true,
+            |_| Some(0),
+            |_, _, _| true,
             |_, _, l| {
                 tested.push(l);
                 None
@@ -517,7 +518,8 @@ mod tests {
             &view_at([0.0, 0.0, 0.02]),
             0.0,
             32,
-            |_| true,
+            |_| Some(0),
+            |_, _, _| true,
             |_, _, l| {
                 tested.push(l);
                 None
@@ -540,7 +542,8 @@ mod tests {
                 &view_at(eye),
                 0.0,
                 16,
-                |_| true,
+                |_| Some(0),
+                |_, _, _| true,
                 |_, _, _| {
                     full += 1;
                     hit
@@ -565,12 +568,19 @@ mod tests {
         // Without a sector: never considered.
         assert!(
             glows
-                .frame(&view(), 0.1, 16, |_| false, |_, _, _| None)
+                .frame(&view(), 0.1, 16, |_| None, |_, _, _| true, |_, _, _| None)
                 .is_empty()
         );
         let mut glows = Glows::default();
         glows.add_level([0.0, 0.0, 10.0], 2.0, 4);
-        let s = glows.frame(&view(), 0.0, 16, |_| true, |_, _, _| None);
+        let s = glows.frame(
+            &view(),
+            0.0,
+            16,
+            |_| Some(0),
+            |_, _, _| true,
+            |_, _, _| None,
+        );
         assert_eq!(s.len(), 1);
         assert_eq!(s[0].shader, 4);
         assert_eq!(
@@ -586,7 +596,14 @@ mod tests {
         assert_eq!(s[0].b, (0.99f32 * 255.0) as u8);
         // Within 0.2 m in front of the camera: t = 0, not drawn.
         glows.add_level([0.5, 0.0, 0.1], 0.1, 4);
-        let s = glows.frame(&view(), 0.0, 16, |_| true, |_, _, _| None);
+        let s = glows.frame(
+            &view(),
+            0.0,
+            16,
+            |_| Some(0),
+            |_, _, _| true,
+            |_, _, _| None,
+        );
         assert_eq!(s.len(), 1);
         // A directed glow seen from behind is not drawn.
         let mut glows = Glows::default();
@@ -597,14 +614,28 @@ mod tests {
         for _ in 0..3 {
             assert!(
                 glows
-                    .frame(&view(), 0.1, 16, |_| true, |_, _, _| None)
+                    .frame(
+                        &view(),
+                        0.1,
+                        16,
+                        |_| Some(0),
+                        |_, _, _| true,
+                        |_, _, _| None
+                    )
                     .is_empty()
             );
         }
         glows.set_direction(id2, [0.0, 0.0, -1.0]);
         assert_eq!(
             glows
-                .frame(&view(), 0.1, 16, |_| true, |_, _, _| None)
+                .frame(
+                    &view(),
+                    0.1,
+                    16,
+                    |_| Some(0),
+                    |_, _, _| true,
+                    |_, _, _| None
+                )
                 .len(),
             1
         );
