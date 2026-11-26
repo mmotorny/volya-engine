@@ -263,6 +263,9 @@ Exactly one item is selected. Selecting item *i* starts a **move** of the bar:
 - **Initial selection.** When the menu opens, and whenever the list page changes (section 4.5),
   item 0 is selected. Since the bar starts at y = 0, the opening move is a 22-unit slide upward
   (556 ms) onto item 0.
+  **Measured** (one capture of the unmodified game, 130 s after a start without a level and without
+  any input): item 0 (`btn_new_game`) is drawn selected, the bar at rest over its caption. A menu that
+  shows no item selected after opening is not the original's behaviour.
 
 ### 4.4 Input
 
@@ -360,8 +363,14 @@ The `menu_sound` element of `ui_mm_main.xml` configures the menu's audio:
 
 ## 7. Cursor
 
-- The cursor is visible while the menu is shown. Its image is the animated texture `ui\ui_ani_cursor`
-  rendered with the shader `hud\cursor`.
+- The cursor is **visible** while the menu is shown: opening the menu starts its window as a dialog, and
+  starting any dialog that asks for the cursor (the menu's does) makes the cursor visible [TM-5]. Its
+  image is the animated texture `ui\ui_ani_cursor` rendered with the shader `hud\cursor`.
+- It is drawn after the menu, i.e. over it: the cursor and the menu are both in the engine's per-frame
+  render list, the cursor with priority 2 and the menu with priority 4, and the list is drawn in order
+  of falling priority [TM-7, TM-8].
+- "Visible" does not mean "seen": where the image lands depends on the cursor position (below), and
+  at the menu's first frame after the startup sequence it lands entirely outside the screen.
 - `textures\ui\ui_ani_cursor.seq` is a frame sequence: its first line `19` is the frame rate (a first
   line `cycled` would select back-and-forth playback; it is absent), followed by the 8 frame textures
   `ui\ui_ani_cursor_01` … `_08` (`textures\ui\ui_ani_cursor_0N.dds`, 64 × 64 DXT5: an arrow with a
@@ -373,8 +382,30 @@ The `menu_sound` element of `ui_mm_main.xml` configures the menu's audio:
 - The cursor position is kept in normalised coordinates −1 … +1 on each axis; UI position =
   ((*n*ₓ + 1) · 512, (*n*ᵧ + 1) · 384). Mouse motion of (Δx, Δy) device pixels changes *n* by
   (Δx · *s* / screen width, Δy · *s* / screen height), clamped to −1 … +1, with sensitivity *s* = 1.5
-  by default (whether it is configurable was not established). The initial position was not
-  established.
+  by default (whether it is configurable was not established).
+- **Position when the menu first opens.** The position is (0, 0), the screen centre, when the program
+  starts [TM-7]. It is then changed only by mouse motion (above) and by UI sequences: whenever an
+  **image** item of a sequence (an `<item type="image">` of `config\ui\ui_movies.xml` or of the
+  tutorial file that includes it) starts, the cursor is set to that item's `cursor_pos` attributes
+  `x`, `y` in UI units, as *n* = (*x* · 2/1024 − 1, *y* · 2/768 − 1), each clamped to −1 … +1 [TM-2];
+  an item without `cursor_pos` uses *x* = 1024, *y* = 768, i.e. *n* = (+1, +1) [TM-1]. Video items do not
+  move the cursor [TM-3].
+- The startup sequence `intro_logo` (`docs/behavior/startup.md` §6) ends with its two image items (the
+  ASUS and NVIDIA pictures), and none of its items has `cursor_pos` [TM-4]. So when the title menu opens
+  after it, the cursor is at *n* = (+1, +1): the image's top-left (its tip) is at UI (1024, 768), the
+  bottom-right corner, and the whole 64 × 64 image lies outside the screen. **Until the first mouse
+  motion no cursor is seen**, and the cursor lies in no item row, so no hover selection happens; the
+  first motion up or left brings the tip onto the screen from that corner (motion down or right is
+  clamped at +1 and changes nothing). Skipping with the quit key changes nothing here: each press ends
+  only the current item and starts the next (`docs/behavior/startup.md` §6.5), so both image items
+  start before the menu opens.
+  **Disputed in review:** a motion up alone or left alone does not bring the tip onto the screen: the other
+  coordinate stays at +1 (UI x 1024 or y 768, just past the last pixel column or row), so the image stays
+  outside the screen. The tip comes onto the screen only once the motions so far have moved the cursor
+  both left and up.
+- With `-nointro` no sequence plays (section 2), so the cursor is at the centre, UI (512, 384), and is
+  seen there from the menu's first frame.
+- **Measured**: in the capture of section 4.3 no cursor is drawn anywhere on the screen.
 
 ## 8. Screen resolution and aspect ratio
 
@@ -457,7 +488,7 @@ and extracting its alpha shows the transparent sky region and the bar's transluc
 
 ## Provenance
 
-- Date: 2026-11-23; section 3.4 revised 2026-11-26.
+- Date: 2026-11-23; section 3.4 revised 2026-11-26; sections 4.3 and 7 revised 2026-11-26 (issue 550).
 - Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG build), archives
   `gamedata.db0`…`gamedata.dbd`; `mods\mp_military_2.xdb0` not used.
 - Data examined: the files in section 12 and the related configuration, script, texture, video and
@@ -473,6 +504,16 @@ and extracting its alpha shows the transparent sky region and the bar's transluc
   video frame-to-texture conversion of `XR_3DA.exe` was run in a CPU emulator on the two menu videos (see
   `docs/behavior/startup.md` §6.6). No leaked source code,
   derivative engines or third-party documentation of the engine were used.
-- Not established: vertical caption placement within a row, cursor draw scaling and initial position,
+- Targeted fix (issue 550, 2026-11-26): static analysis with Ghidra of the cursor's creation, drawing and
+  movement, the dialog start, the render-list registration of the cursor and of the menu, and the UI
+  sequence's image and video items (their loading and start); `config\ui\ui_movies.xml` read for
+  `intro_logo`. Checks `[TM-n]` are in `hud4/checks/run.py` of the dirty workspace. The measured
+  statements come from one capture of the unmodified game made by the clean side (headless, Wine 11
+  under box64, 1024 × 768).
+- Not established: vertical caption placement within a row, cursor draw scaling,
   the screen direction of positive rotation, configurability of cursor sensitivity, whether the
   unmodified install loads `mods\`.
+
+## Gaps found in review
+
+- Whether mouse motion during the startup sequence (after its image items have set the cursor to the bottom-right corner) moves the cursor, and so changes where it is when the menu opens, is not established.
