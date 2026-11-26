@@ -2,15 +2,15 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! Test support: the Russian edition's `.db` / `.xdb` archives, extracted
-//! once from the GOG installer named by `VOLYA_GOG_INSTALLER` and cached under
-//! `target/tmp/`. Shared by game-data tests of several crates (`#[path]`).
+//! once from the GOG installer named by `VOLYA_GOG_INSTALLER` into a cache
+//! shared by every checkout (see [`cache_dir`]). Shared by game-data tests of
+//! several crates (`#[path]`).
 
 #![allow(dead_code)] // Each test crate uses a different part.
 
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Write};
-use std::path::PathBuf;
-use std::sync::Mutex;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use volya_engine_installer::{Installer, extract, hex};
@@ -26,7 +26,7 @@ pub fn is_archive(path: &str) -> bool {
     root_db || (path.starts_with("mods/") && name.contains(".xdb"))
 }
 
-/// An archive extracted into the cache.
+/// A game file extracted into the cache.
 pub struct CachedArchive {
     /// Path relative to the game root, `/`-separated.
     pub path: String,
@@ -39,37 +39,32 @@ pub struct CachedArchive {
 /// The game's archives (`gamedata.db*`, `mods/*.xdb*`) in installer order, or
 /// `None` (after saying so) when `VOLYA_GOG_INSTALLER` is unset.
 pub fn archives() -> Option<Vec<CachedArchive>> {
-    static LOCK: Mutex<()> = Mutex::new(());
+    game_files("archives", is_archive)
+}
+
+/// The installer's `ru-RU` game files whose paths pass `select`, extracted
+/// into `<cache_dir>/<name>/` in the game-root layout, in installer order; or
+/// `None` (after saying so) when `VOLYA_GOG_INSTALLER` is unset. A file
+/// already there with the installer's size is reused; a file appears only
+/// once complete (written beside it, then renamed). An exclusive lock on
+/// `<cache_dir>/<name>.lock` serialises extraction across processes.
+pub fn game_files(name: &str, select: impl Fn(&str) -> bool) -> Option<Vec<CachedArchive>> {
     let Some(dir) = std::env::var_os("VOLYA_GOG_INSTALLER") else {
         eprintln!("skipped: VOLYA_GOG_INSTALLER is unset");
         return None;
     };
-    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let cache = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("gog-ru-RU-archives");
+    let (exe, bin) = installer_parts(Path::new(&dir));
+    let cache = cache_dir(&exe, &bin).join(name);
+    fs::create_dir_all(&cache).unwrap();
+    let lock = File::create(cache.with_extension("lock")).unwrap();
+    lock.lock().unwrap();
 
-    let exe = fs::read_dir(&dir)
-        .expect("VOLYA_GOG_INSTALLER")
-        .map(|e| e.unwrap().path())
-        .find(|p| {
-            let name = p.file_name().unwrap().to_string_lossy();
-            name.starts_with("setup_s.t.a.l.k.e.r._shadow_of_chernobyl")
-                && name.contains("(russian)")
-                && name.ends_with(".exe")
-        })
-        .expect("no Russian Shadow of Chernobyl installer .exe");
-    let bin = exe.with_file_name(format!(
-        "{}-1.bin",
-        exe.file_stem().unwrap().to_string_lossy()
-    ));
     let installer = Installer::parse(BufReader::new(File::open(&exe).unwrap())).unwrap();
     let mut bin = BufReader::new(File::open(bin).unwrap());
-    let mut archives = Vec::new();
-    for file in installer
-        .game_files("ru-RU")
-        .filter(|f| is_archive(&f.path))
-    {
+    let mut files = Vec::new();
+    for file in installer.game_files("ru-RU").filter(|f| select(&f.path)) {
         let path = cache.join(&file.path);
-        archives.push(CachedArchive {
+        files.push(CachedArchive {
             path: file.path.clone(),
             file: path.clone(),
             size: file.size,
@@ -87,11 +82,58 @@ pub fn archives() -> Option<Vec<CachedArchive>> {
         drop(out);
         fs::rename(&partial, &path).unwrap();
         eprintln!(
-            "extracted {} ({} bytes) in {:.1?}",
+            "extracted {} ({} bytes) to {} in {:.1?}",
             file.path,
             file.size,
+            cache.display(),
             start.elapsed()
         );
     }
-    Some(archives)
+    Some(files)
+}
+
+/// The Russian Shadow of Chernobyl installer's `.exe` and `-1.bin` in `dir`.
+fn installer_parts(dir: &Path) -> (PathBuf, PathBuf) {
+    let exe = fs::read_dir(dir)
+        .expect("VOLYA_GOG_INSTALLER")
+        .map(|e| e.unwrap().path())
+        .find(|p| {
+            let name = p.file_name().unwrap().to_string_lossy();
+            name.starts_with("setup_s.t.a.l.k.e.r._shadow_of_chernobyl")
+                && name.contains("(russian)")
+                && name.ends_with(".exe")
+        })
+        .expect("no Russian Shadow of Chernobyl installer .exe");
+    let bin = exe.with_file_name(format!(
+        "{}-1.bin",
+        exe.file_stem().unwrap().to_string_lossy()
+    ));
+    (exe, bin)
+}
+
+/// One installer's cache, outside every checkout: in
+/// `~/Library/Caches/volya-engine/` on macOS, `$XDG_CACHE_HOME/volya-engine/`
+/// or `~/.cache/volya-engine/` elsewhere, named from the installer parts'
+/// names and sizes.
+fn cache_dir(exe: &Path, bin: &Path) -> PathBuf {
+    let home = || PathBuf::from(std::env::var_os("HOME").expect("HOME"));
+    let base = if cfg!(target_os = "macos") {
+        home().join("Library/Caches")
+    } else {
+        std::env::var_os("XDG_CACHE_HOME")
+            .filter(|d| !d.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home().join(".cache"))
+    };
+    let size = |p: &Path| {
+        fs::metadata(p)
+            .unwrap_or_else(|e| panic!("{}: {e}", p.display()))
+            .len()
+    };
+    base.join("volya-engine").join(format!(
+        "{}-{}-{}",
+        exe.file_stem().unwrap().to_string_lossy(),
+        size(exe),
+        size(bin)
+    ))
 }

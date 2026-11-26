@@ -14,8 +14,7 @@ mod gog_archives;
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
-use std::fs::File;
-use std::io::{self, BufReader, Cursor};
+use std::io::{self, Cursor};
 use std::time::Instant;
 
 use volya_engine::app::{self, App, AppState};
@@ -29,7 +28,6 @@ use volya_engine::render::{Renderer, wgpu};
 use volya_engine::scene::{Scene, TextureId};
 use volya_engine_formats::ui::Resolution;
 use volya_engine_formats::video::TheoraVideo;
-use volya_engine_installer::{Installer, extract};
 
 const XGA: Resolution = Resolution::new(1024, 768);
 const SVGA: Resolution = Resolution::new(800, 600);
@@ -55,37 +53,14 @@ impl Vfs for Recording<'_> {
 }
 
 /// `bin/XR_3DA.exe` from the installer, in a game-root VFS of its own.
-fn game_root(dir: &std::path::Path) -> StdVfs {
-    let exe = std::fs::read_dir(std::env::var_os("VOLYA_GOG_INSTALLER").unwrap())
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .find(|p| {
-            let n = p.file_name().unwrap().to_string_lossy();
-            n.contains("(russian)") && n.ends_with(".exe")
-        })
-        .unwrap();
-    let bin = exe.with_file_name(format!(
-        "{}-1.bin",
-        exe.file_stem().unwrap().to_string_lossy()
-    ));
-    let installer = Installer::parse(BufReader::new(File::open(&exe).unwrap())).unwrap();
-    let out = dir.join(app::SPLASH_EXE);
-    if !out.exists() {
-        let file = installer
-            .game_files("ru-RU")
-            .find(|f| f.path == app::SPLASH_EXE)
-            .unwrap();
-        std::fs::create_dir_all(out.parent().unwrap()).unwrap();
-        let mut data = Vec::new();
-        extract(
-            file,
-            &mut BufReader::new(File::open(&bin).unwrap()),
-            &mut data,
-        )
-        .unwrap();
-        std::fs::write(&out, data).unwrap();
-    }
-    StdVfs::new(dir)
+fn game_root() -> StdVfs {
+    let exe = gog_archives::game_files("splash", |p| p == app::SPLASH_EXE).unwrap();
+    let file = &exe[0].file;
+    StdVfs::new(
+        file.ancestors()
+            .nth(app::SPLASH_EXE.split('/').count())
+            .unwrap(),
+    )
 }
 
 fn renderer() -> Renderer {
@@ -144,8 +119,7 @@ fn startup_and_title_menu_from_game_data() {
     };
 
     // Splash (startup.md section 3).
-    let exe_root =
-        game_root(&std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("gog-ru-RU-root"));
+    let exe_root = game_root();
     let splash = app::splash(&exe_root).unwrap().unwrap();
     assert_eq!((splash.width, splash.height), (500, 268));
     let s = app::splash_scene(XGA, (500, 268));
