@@ -500,3 +500,17 @@ fn a_test_before_the_frames_drawing_draws_the_grid() {
     assert!(!none.on && none.drawn.is_none());
     assert!(!none.visual_hidden(0, [-1.0, -1.0, 12.0], [1.0, 1.0, 14.0], &v, &mut g));
 }
+
+#[test]
+fn occlusion_is_off_during_the_light_passes() {
+    // OT 4: no cached test hides anything or changes its cache then.
+    let (mut o, mut g) = drawn(&square(), 1, 12345);
+    o.on = true;
+    let v = view(1);
+    let (a, b) = ([-1.0, -1.0, 12.0], [1.0, 1.0, 14.0]);
+    let mut c = Cached::default();
+    let hidden = o.light_passes(|o| !o.cached_visible(&mut c, a, b, &v, &mut g));
+    assert!(!hidden && c == Cached::default());
+    // Back on after them: the box behind the square is hidden.
+    assert!(o.on && !o.cached_visible(&mut c, a, b, &v, &mut g));
+}

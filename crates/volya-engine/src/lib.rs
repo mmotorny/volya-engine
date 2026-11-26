@@ -29,6 +29,7 @@ pub mod level;
 pub mod level_details;
 pub mod level_lights;
 pub mod level_sound;
+pub mod level_visibility;
 pub mod loading_screen;
 pub mod menu_screens;
 pub mod objects;

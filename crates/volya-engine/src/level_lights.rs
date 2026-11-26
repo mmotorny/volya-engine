@@ -20,8 +20,10 @@ use crate::core::camera::{Mat4, Vec3};
 use crate::core::collision::{CollisionWorld, geometry};
 use crate::core::glows::{GlowId, GlowSprite, GlowView, Glows};
 use crate::core::lights::{
-    Frustum, LevelLight, LightId, LightKind, LightPass, LightSettings, Lights, multiply,
+    Frustum, LevelLight, LightId, LightKind, LightPass, LightSettings, Lights, light_pass, multiply,
 };
+use crate::core::particles::random::Generator;
+use crate::level_visibility::LevelVisibility;
 use crate::objects::LampLights;
 use volya_engine_formats::lanims::{ColourAnimations, K};
 
@@ -342,9 +344,6 @@ pub struct LevelLights {
     portals: Vec<[Vec3; 3]>,
     pub settings: LightSettings,
     pub glows_per_frame: u32,
-    /// The camera's sector is known, and where it was determined.
-    camera_in_sector: bool,
-    camera_at: Option<Vec3>,
     passes: Vec<LightPass>,
     sprites: Vec<GlowSprite>,
 }
@@ -435,8 +434,10 @@ impl LevelLights {
     /// The frame's lights and glows seen from `camera` (a frame of `dt`
     /// seconds; 0 while paused): the sun's records from the weather's
     /// `sun_dir` and `sun_color` (dynamic-lights.md 3.1), the records'
-    /// sectors, the light passes (4, 5), and the glows (glows.md 3 – 6),
-    /// their occlusion rays against `collision`.
+    /// sectors, the lights listed by the latest camera pass of
+    /// `visibility` (4; its cached tests' values from `random`), their light
+    /// passes (5), and the glows (glows.md 3 – 6), their occlusion rays
+    /// against `collision`.
     // TODO(#347): the object part of the glows' occlusion ray (glows.md
     // 5.1): the bone shapes' fields (level-objects.md chunk 16: shape type
     // codes, the box, sphere and cylinder layouts) and which objects are
@@ -447,27 +448,34 @@ impl LevelLights {
         camera: &LightCamera,
         sun: (Vec3, Vec3),
         dt: f32,
+        visibility: &mut LevelVisibility,
+        random: &mut Generator,
     ) {
         let eye = camera.eye;
         self.lights
             .update_sun(eye, sun.0, sun.1, self.settings.sun_lumscale);
         let portals = &self.portals;
         self.lights
-            .update_sectors(|p| Self::has_sector(collision, portals, p));
-        // The camera's sector, re-determined when it moved (level.md 9.1).
-        let moved = self
-            .camera_at
-            .is_none_or(|c| (0..3).any(|k| (c[k] - eye[k]).abs() > 1e-7));
-        if moved {
-            self.camera_at = Some(eye);
-            self.camera_in_sector |= Self::has_sector(collision, portals, eye);
-        }
+            .update_sectors(|p| visibility.sector_of(collision, p));
+        let camera_in_sector = visibility.camera_sector().is_some();
         let frustum = Frustum::of(&multiply(&camera.view, &camera.projection));
-        self.passes = if self.camera_in_sector {
-            self.lights.passes(&self.settings, &frustum, eye)
+        // The dynamic part of the camera pass runs only with a camera
+        // sector (object-visibility.md 1).
+        let listed = if camera_in_sector {
+            self.lights.choose(&self.settings, eye, |t| {
+                visibility.reached(t.sector, t.centre, t.radius).is_some()
+                    && visibility.cached_visible(t.cache, t.min, t.max, random)
+            })
         } else {
             Vec::new()
         };
+        // The light passes, occlusion off (occlusion-tests.md 4).
+        let (lights, clip) = (&self.lights, self.settings.clip);
+        self.passes = visibility.light_passes(|| {
+            (listed.iter())
+                .filter_map(|&id| light_pass(lights.get(id)?, eye, clip))
+                .collect()
+        });
         let v = &camera.view;
         let view = GlowView {
             eye,
@@ -476,7 +484,7 @@ impl LevelLights {
             right: [v[0][0], v[1][0], v[2][0]],
             frustum,
             far: camera.far,
-            camera_in_sector: self.camera_in_sector,
+            camera_in_sector,
         };
         self.sprites = self.glows.frame(
             &view,

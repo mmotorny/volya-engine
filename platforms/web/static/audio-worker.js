@@ -9,11 +9,13 @@
 // low, the engine worker after writing commands to the ring of commands),
 // then applies the commands and fills the ring of frames, however long
 // the engine's frames take. Messages from the page:
-//   { type: "connect", sampleRate, target, memory, engine }: a new
-//   output; `engine` is a port to the engine worker, which sends it the
-//   files the commands play as `[number, Uint8Array]`, and to which it
+//   { type: "connect", id, sampleRate, target, memory, engine, running }:
+//   a new output; `engine` is a port to the engine worker, which sends it
+//   the files the commands play as `[number, Uint8Array]`, and to which it
 //   posts its reports (audio_host_report). An earlier output gets nothing
 //   more.
+//   { type: "running", id, on }: whether output `id` is expected to run,
+//   its page shown and its context running (audio_host_running).
 
 import { WAKE, ringViews } from "./audio-ring.js";
 import init, * as wasm from "./pkg/volya_engine_web.js";
@@ -57,17 +59,26 @@ function service(e, current, polled = false) {
   if (report !== undefined) current.engine.postMessage(report);
 }
 
+/** The latest `running` of outputs whose connect is still being handled, by id. */
+const running = new Map();
+
 onmessage = async ({ data }) => {
+  if (data.type === "running") {
+    if (output?.id === data.id) (await ready).audio_host_running(data.on);
+    else running.set(data.id, data.on);
+    return;
+  }
   if (data.type !== "connect") return;
   ready ??= init().then(() => wasm);
   const e = await ready;
   const previous = output;
   previous?.engine.close();
-  const current = { engine: data.engine, control: ringViews(data.memory).control };
+  const current = { id: data.id, engine: data.engine, control: ringViews(data.memory).control };
   output = current;
   // The replaced output's loop ends.
   if (previous) Atomics.notify(previous.control, WAKE);
-  e.audio_host_connect(data.sampleRate, data.target, data.memory);
+  e.audio_host_connect(data.sampleRate, data.target, data.memory, running.get(data.id) ?? data.running);
+  running.clear();
   current.engine.onmessage = ({ data: [number, bytes] }) => {
     if (output !== current) return;
     e.audio_host_file(number, bytes);

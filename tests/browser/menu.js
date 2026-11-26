@@ -252,6 +252,23 @@ function pointer(type, [x, y], init = {}) {
 const centreOfRow = (i) => [782, 419 + 30 * i + 15];
 const row = (i) => client(...centreOfRow(i));
 
+/**
+ * The mouse on item `i`, at rest there. The engine places the pointer by the
+ * video mode it fits on its next frame (a mode just set is not yet), and the
+ * item may be selected already, so the cursor itself is awaited on the item.
+ */
+async function pointAt(i) {
+  await readRender();
+  const [x, y] = centreOfRow(i);
+  for (const deadline = performance.now() + 5000; ; await sleep(30)) {
+    pointer("pointermove", row(i));
+    const { ui } = await volya.call("input_state");
+    if (Math.abs(ui[0] - x) < 2 && Math.abs(ui[1] - y) < 2) break;
+    if (performance.now() > deadline) throw new Error(`the cursor at ${ui}, not on item ${i}`);
+  }
+  await until((s) => s.menu.selected === i && !s.menu.moving, `item ${i} at rest`, 2000);
+}
+
 function needsGame() {
   if (!installer) skip("no installer");
 }
@@ -393,8 +410,7 @@ async function audioFlows(where) {
 
 /** From the title menu's main page: New game, the first difficulty. */
 async function newGame() {
-  pointer("pointermove", row(0));
-  await until((s) => s.menu.selected === 0, "item 0");
+  await pointAt(0);
   key("Enter");
   await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
   key("Enter");
@@ -618,8 +634,7 @@ export const tests = {
 
   "Enter on New game opens the difficulty page; Escape returns": async () => {
     needsGame();
-    pointer("pointermove", row(0));
-    await until((s) => s.menu.selected === 0, "item 0");
+    await pointAt(0);
     key("Enter");
     let s = await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
     assertEqual(s.menu.items.map((i) => i.caption), ["Новичок", "Сталкер", "Ветеран", "Мастер", "Назад"], "captions");
@@ -634,8 +649,7 @@ export const tests = {
 
   "a difficulty starts a new game: the level's start view is drawn": async () => {
     needsGame();
-    pointer("pointermove", row(0));
-    await until((s) => s.menu.selected === 0, "item 0");
+    await pointAt(0);
     key("Enter");
     await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
     await noteHeap("before the New Game");
@@ -768,6 +782,7 @@ export const tests = {
       await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", loadMs());
     } finally {
       await volya.call("debug_video_mode", { width: 1024, height: 768 });
+      await readRender();
     }
     const stages = byCaption(await volya.call("heap_log", { on: false }));
     const record = await heapRecord(false);
@@ -1558,8 +1573,7 @@ export const tests = {
 
   "New Game again after returning: the level loads anew; Escape under the loading image opens the menu once the controls are live": async () => {
     needsGame();
-    pointer("pointermove", row(0));
-    await until((s) => s.menu.selected === 0, "item 0");
+    await pointAt(0);
     key("Enter");
     await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
     await volya.call("heap_log", { on: true });
@@ -1971,8 +1985,7 @@ export const tests = {
 
   "the rebound key walks in the level": async () => {
     needsGame();
-    pointer("pointermove", row(0));
-    await until((s) => s.menu.selected === 0, "item 0");
+    await pointAt(0);
     key("Enter");
     await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
     key("Enter");
