@@ -36,6 +36,7 @@ mod objects;
 mod options;
 mod presentation;
 mod save_load;
+mod statistics;
 mod texture_settings;
 mod textures;
 mod title_menu;
@@ -179,6 +180,7 @@ const SUITES: &[(&str, &[Checks])] = &[
         "render-screens",
         &[
             title_menu::CHECKS,
+            statistics::CHECKS,
             textures::CHECKS,
             save_load::CHECKS,
             inventory_screen::CHECKS,

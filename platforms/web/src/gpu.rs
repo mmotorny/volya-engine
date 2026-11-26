@@ -438,6 +438,11 @@ fn live(l: Option<volya_engine::render::gl::Live>) -> serde_json::Value {
     })
 }
 
+/// The draw calls of the last frame presented.
+pub fn last_draws() -> u32 {
+    LAST_STATS.get().total().draws
+}
+
 /// The last frame's draw calls and state changes, in all and by part.
 fn frame_commands() -> serde_json::Value {
     use volya_engine::render::stats::{Counts, Part};

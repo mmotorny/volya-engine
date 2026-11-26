@@ -57,6 +57,9 @@ const SETTINGS: &[&str] = &[
     "rs_c_contrast",
     "rs_c_brightness",
     "rs_vis_distance",
+    "r1_ssa_lod_a",
+    "r1_ssa_lod_b",
+    "rs_stats",
 ];
 
 /// The [`SETTINGS`] as the console holds them, empty where a name holds no
@@ -499,6 +502,16 @@ pub fn set_full_screen(on: bool, supported: bool) {
     RUNNING.with(|r| {
         if let Some(r) = r.borrow_mut().as_mut() {
             r.app.set_full_screen(on, supported);
+        }
+    });
+}
+
+/// The platform's measurements of the frame just drawn
+/// ([`App::set_frame_times`]).
+pub fn set_frame_times(times: volya_engine::statistics_overlay::FrameTimes) {
+    RUNNING.with(|r| {
+        if let Some(r) = r.borrow_mut().as_mut() {
+            r.app.set_frame_times(times);
         }
     });
 }

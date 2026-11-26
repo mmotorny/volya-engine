@@ -328,7 +328,8 @@ pub fn tree() -> MemVfs {
         &format!("{c}system.ltx"),
         // The inventory screen's item sections (it reads their panel keys).
         format!(
-            "[texture_desc]\nfiles = ui_mainmenu, ui_asus_intro, ui_common, ui_inventory\n{}",
+            "[texture_desc]\nfiles = ui_mainmenu, ui_asus_intro, ui_common, ui_inventory\n\
+             [evaluation]\nline1 = \"\"\nline2 = \"\"\nline3 = \"\"\n{}",
             crate::inventory_screen::tests::ITEMS
         )
         .into(),
