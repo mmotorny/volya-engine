@@ -355,6 +355,9 @@ pub struct LevelScreen {
     visibility: std::cell::RefCell<LevelVisibility>,
     /// What the latest camera pass keeps of the draws.
     seen: Arc<Seen>,
+    /// The projected light texture's slots
+    /// (docs/behavior/object-projected-light.md).
+    projected: crate::projected_light::ProjectedLight,
     /// The dynamic items of a frame's pass and the light records it
     /// listed, kept between frames ([`LevelScreen::dynamic_items`]).
     dynamic: Vec<(f32, u32, DynamicItem)>,
@@ -2146,6 +2149,7 @@ impl NewGameLoad {
             random: self.random,
             visibility: visibility.into(),
             seen: Arc::default(),
+            projected: Default::default(),
             dynamic: Vec::new(),
             listed_lights: Vec::new(),
             detail_density: level_details::DENSITY_DEFAULT,
@@ -2900,6 +2904,9 @@ impl LevelScreen {
         seen.objects.resize(objects.instances.len(), false);
         seen.effects.clear();
         seen.fade.clear();
+        seen.cells.clear();
+        seen.receivers.clear();
+        let mut receivers: Vec<(crate::projected_light::Receiver, u16)> = Vec::new();
         let mut listed = std::mem::take(&mut self.listed_lights);
         listed.clear();
         if visibility.camera_sector().is_some() {
@@ -2957,6 +2964,27 @@ impl LevelScreen {
                             visibility.item_seen(&mut item, sphere, lo, hi, collision, g)
                         });
                         visibility.objects[k] = item;
+                        // A receiver of the frame (object-projected-light.md
+                        // 3.1), in the order the objects are taken.
+                        let centre = [sphere[0], sphere[1], sphere[2]];
+                        if let (true, Some(sector)) = (seen.objects[k], item.sector)
+                            && receivers.len() < crate::projected_light::SLOTS
+                            && crate::projected_light::receives_shadows(
+                                &objects.instances[k].class_id,
+                            )
+                            && crate::projected_light::close_enough(eye, centre, sphere[3])
+                        {
+                            receivers.push((
+                                crate::projected_light::Receiver {
+                                    instance: k,
+                                    centre,
+                                    radius: sphere[3],
+                                    min: lo,
+                                    max: hi,
+                                },
+                                sector,
+                            ));
+                        }
                     }
                     Kind::Effect(i, sphere) => {
                         let Some(effects) = &mut self.effects else {
@@ -2982,7 +3010,60 @@ impl LevelScreen {
             }
             seen.fade = portal_fade(visibility, eye, self.environment.ambient);
             self.dynamic = items;
+            // The slots and the cells drawn (object-projected-light.md 3.2,
+            // 3.3, 4, 5).
+            let taken: Vec<_> = receivers.iter().map(|r| r.0).collect();
+            let mut new = Vec::new();
+            (self.projected).frame(
+                self.frames,
+                self.global_ms,
+                &taken,
+                &mut seen.receivers,
+                &mut new,
+            );
+            let e = &self.environment;
+            let env = crate::projected_light::LightEnvironment {
+                ambient: e.ambient,
+                hemi: [e.hemi_color[0], e.hemi_color[1], e.hemi_color[2]],
+                sun_color: e.sun_color,
+            };
+            for (k, slot) in new {
+                let (r, sector) = receivers[k];
+                let Some(d) = seen.receivers.iter().find(|d| d.slot == slot) else {
+                    continue;
+                };
+                let (c, h) = (d.centre, d.h);
+                let mut draws = Vec::new();
+                visibility.cell_draws(
+                    sector,
+                    [c[0] - h, c[1] - h - 7.0, c[2] - h],
+                    [c[0] + h, c[1], c[2] + h],
+                    &mut draws,
+                );
+                let props = (objects.draws.iter())
+                    .find(|d| d.instance == r.instance)
+                    .map_or([0.0; 4], |d| d.dynamic_props);
+                // L_dynamic_props = (0.5 s, 0.5 s, 0.5 s, 0.5 h).
+                let a = crate::projected_light::approximate_colour(
+                    r.centre,
+                    r.radius,
+                    2.0 * props[3],
+                    2.0 * props[0],
+                    &env,
+                    &self.lights.lights,
+                    &self.collision,
+                );
+                self.projected.set_cell(crate::projected_light::CellDraw {
+                    version: 0,
+                    slot,
+                    centre: c,
+                    h,
+                    clear: crate::projected_light::clear_bytes(a),
+                    draws,
+                });
+            }
         }
+        seen.cells.extend(self.projected.cells().cloned());
         match Arc::get_mut(&mut self.seen) {
             Some(kept) => *kept = seen,
             None => self.seen = Arc::new(seen),
@@ -3477,6 +3558,7 @@ impl LevelScreen {
             random: Shared::default(),
             visibility: Default::default(),
             seen: Arc::default(),
+            projected: Default::default(),
             dynamic: Vec::new(),
             listed_lights: Vec::new(),
             detail_density: level_details::DENSITY_DEFAULT,

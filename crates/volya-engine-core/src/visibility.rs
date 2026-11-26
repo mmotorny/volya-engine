@@ -664,6 +664,37 @@ impl Sectors {
     pub fn visual_count(&self) -> usize {
         self.nodes.len()
     }
+
+    /// The leaf visuals of sector `sector` a projected-light cell draws
+    /// (object-projected-light.md 4.3), into `out` (cleared first): from
+    /// the sector's root alone (no portals), the root taken without a box
+    /// test, a group's or billboard group's children whose box meets the
+    /// box `min` … `max` (closed intervals) processed, every other visual
+    /// listed without testing its own box; billboards are never listed.
+    pub fn cell_visuals(&self, sector: u16, min: Vec3, max: Vec3, out: &mut Vec<u32>) {
+        out.clear();
+        let Some(&root) = self.roots.get(usize::from(sector)) else {
+            return;
+        };
+        let meets = |n: &Node| (0..3).all(|i| n.box_min[i] <= max[i] && n.box_max[i] >= min[i]);
+        let mut stack = vec![root];
+        while let Some(i) = stack.pop() {
+            let Some(n) = self.nodes.get(i as usize) else {
+                continue;
+            };
+            match n.kind {
+                VisualType::Group | VisualType::BillboardGroup => {
+                    stack.extend(
+                        n.children
+                            .iter()
+                            .rev()
+                            .filter(|&&c| self.nodes.get(c as usize).is_some_and(meets)),
+                    );
+                }
+                _ => out.push(i),
+            }
+        }
+    }
 }
 
 /// One traversal in progress.

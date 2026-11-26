@@ -126,6 +126,19 @@ impl Program {
         self.entry_points().0
     }
 
+    /// The entry points of element 4 of the library classes and
+    /// `selflight`, which draw the projected light texture's cells
+    /// (object-projected-light.md 4.4); `None` for the others.
+    pub(crate) fn cell_entry_points(self) -> Option<(&'static str, &'static str)> {
+        match self {
+            Self::LightMapped => Some(("vs_lmap_l", "fs_lmap_l")),
+            Self::VertexLit => Some(("vs_vert_l", "fs_vert_l")),
+            Self::Terrain => Some(("vs_impl_l", "fs_impl_l")),
+            Self::SelfLight => Some(("vs_simple_l", "fs_simple_l")),
+            _ => None,
+        }
+    }
+
     pub(crate) fn entry_points(self) -> (&'static str, &'static str) {
         match self {
             Self::LightMapped => ("vs_lmap", "fs_lmap"),
@@ -135,7 +148,7 @@ impl Program {
             Self::Wallmark => ("vs_wmark", "fs_vert"),
             Self::SelfLight => ("vs_simple", "fs_simple"),
             Self::LightPlanes => ("vs_lplanes", "fs_lplanes"),
-            Self::Model => ("vs_model", "fs_vert"),
+            Self::Model => ("vs_model", "fs_model"),
             Self::ModelEnv => ("vs_model_env", "fs_model_env"),
             Self::ModelSelfLight => ("vs_model_simple", "fs_simple"),
             Self::ModelLightPlanes => ("vs_model_lplanes", "fs_lplanes"),
@@ -299,7 +312,7 @@ pub(crate) const DRAW_TEXELS: u32 = (DRAW_BYTES / 16) as u32;
 pub(crate) const DRAWS_PER_ROW: u32 = 64;
 
 /// Bytes of the frame constants.
-pub(crate) const FRAME_BYTES: u64 = 288;
+pub(crate) const FRAME_BYTES: u64 = 304;
 
 /// The blended environment's values the passes use (section 6).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -348,6 +361,10 @@ pub struct WorldFrame {
     pub details: Option<crate::details::DetailFrame>,
     /// The billboard groups' billboards drawn (static-shading.md 8.4).
     pub billboards: Option<crate::billboards::BillboardFrame>,
+    /// The projected light texture's cells drawn and its receivers
+    /// (object-projected-light.md); `None` draws every object with
+    /// element 1.
+    pub projected: Option<ProjectedFrame>,
     /// The samplers' filtering in force.
     pub filtering: Filtering,
     /// `r__geometry_lod` (section 10.2; object-detail-level.md 1).
@@ -355,6 +372,67 @@ pub struct WorldFrame {
     /// By world draw: those the camera pass keeps (visibility-scope.md 5);
     /// `None` draws every one that may show.
     pub drawn: Option<std::sync::Arc<Vec<bool>>>,
+}
+
+/// A cell of the projected light texture to draw
+/// (object-projected-light.md 4).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProjectedCell {
+    /// Drawn when new to the renderer for its slot (unique to each giving
+    /// out of a slot in a level's run, from 1).
+    pub version: u64,
+    pub slot: u32,
+    /// Its camera ([`cell_view_projection`]).
+    pub view_projection: Mat4,
+    /// The clear colour's bytes R, G, B, A.
+    pub clear: [u8; 4],
+    /// The draws it draws with element 4, by their index among the draws
+    /// the world was made with.
+    pub draws: Vec<u32>,
+}
+
+/// An object draw of a receiver, with its slot's constants (section 6).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ProjectedReceiver {
+    /// Its index among the draws the world was made with.
+    pub draw: u32,
+    pub slot: u32,
+    /// The recorded centre C′ and h = 1.1 R.
+    pub centre: [f32; 3],
+    pub h: f32,
+}
+
+/// The projected light texture's part of a frame.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ProjectedFrame {
+    /// Every slot's cell as last given out.
+    pub cells: Vec<std::sync::Arc<ProjectedCell>>,
+    pub receivers: Vec<ProjectedReceiver>,
+    /// `r1_lmodel_lerp`.
+    pub lerp: f32,
+}
+
+/// Cells per row of the projected light texture, their size and the
+/// texture's (section 2).
+pub const CELLS_PER_ROW: u32 = 10;
+pub const CELL_SIZE: u32 = 51;
+pub const PROJECTOR_SIZE: u32 = 512;
+/// Slots, and so cells drawn and receivers, a frame (section 2).
+pub const RECEIVER_SLOTS: u32 = 100;
+
+/// The camera of a cell for recorded centre `c` and `h` (section 4.1):
+/// eye 200 m above `c` looking down, image x along world +x and y along
+/// +z, the depth window from 0.001 m above `c` to 7 + h below it; clip =
+/// (P, 1) · M with x_n, y_n, z_n of 4.1.
+pub fn cell_view_projection(c: [f32; 3], h: f32) -> Mat4 {
+    let k = 200.0 / h;
+    let q = (207.0 + h) / (207.0 + h - 199.999);
+    [
+        [k, 0.0, 0.0, 0.0],
+        [0.0, 0.0, -q, -1.0],
+        [0.0, k, 0.0, 0.0],
+        [-k * c[0], -k * c[2], q * (c[1] + 0.001), c[1] + 200.0],
+    ]
 }
 
 /// One dynamic light's pass (docs/behavior/dynamic-lights.md sections 5,
@@ -496,6 +574,8 @@ pub(crate) fn frame_constants(
     push_vec4(&mut constants, vec4(l.fog_color, 0.0));
     push_vec4(&mut constants, [0.1 / tau, 0.01 / tau, 0.11 / tau, t / tau]);
     push_vec4(&mut constants, wind);
+    let lerp = frame.projected.as_ref().map_or(0.0, |p| p.lerp);
+    push_vec4(&mut constants, [lerp, 0.0, 0.0, 0.0]);
     constants
 }
 
@@ -869,6 +949,26 @@ pub(crate) fn fill_object_rebased(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cell_camera() {
+        // object-projected-light.md 4.1: at the depth of C′ the image spans
+        // C′ ± h; the depth window from 0.001 m above C′ to 7 + h below.
+        let (c, h) = ([10.0, 2.0, -5.0], 0.5);
+        let m = cell_view_projection(c, h);
+        let clip = |p: [f32; 3]| -> [f32; 3] {
+            let v: [f32; 4] =
+                std::array::from_fn(|j| p[0] * m[0][j] + p[1] * m[1][j] + p[2] * m[2][j] + m[3][j]);
+            [v[0] / v[3], v[1] / v[3], v[2] / v[3]]
+        };
+        let n = clip([c[0] + h, c[1], c[2] - h]);
+        assert!(
+            (n[0] - 1.0).abs() < 1e-5 && (n[1] + 1.0).abs() < 1e-5,
+            "{n:?}"
+        );
+        assert!(clip([c[0], c[1] + 0.001, c[2]])[2].abs() < 1e-4);
+        assert!((clip([c[0], c[1] - 7.0 - h, c[2]])[2] - 1.0).abs() < 1e-4);
+    }
 
     /// The objects' rebased indices filled piece by piece match the whole
     /// buffer made at once, 16- and 32-bit, a piece starting mid-segment,

@@ -166,8 +166,10 @@ pub(crate) mod units {
     /// The light passes' projected pattern and falloff.
     pub const LIGHT_MAP: u32 = 6;
     pub const LIGHT_ATT: u32 = 7;
+    /// The projected light texture (object-projected-light.md).
+    pub const PROJECTOR: u32 = 8;
     /// Every other program's textures, from here in binding order.
-    pub const OTHER: u32 = 8;
+    pub const OTHER: u32 = 9;
 }
 
 /// The uniform buffer binding points, one per program family.

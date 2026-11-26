@@ -193,6 +193,21 @@ impl LevelVisibility {
         }
     }
 
+    /// The static draws a projected-light cell draws for a receiver in
+    /// `sector` with query box `min` … `max` (object-projected-light.md
+    /// 4.3), by draw item, into `out`.
+    pub fn cell_draws(&self, sector: u16, min: Vec3, max: Vec3, out: &mut Vec<u32>) {
+        let mut visuals = Vec::new();
+        self.sectors.cell_visuals(sector, min, max, &mut visuals);
+        out.clear();
+        for v in visuals {
+            let v = v as usize;
+            if v + 1 < self.starts.len() {
+                out.extend(&self.draws[self.starts[v] as usize..self.starts[v + 1] as usize]);
+            }
+        }
+    }
+
     /// The latest pass's thresholds.
     pub fn thresholds(&self) -> Option<&Thresholds> {
         self.thresholds.as_ref()
@@ -319,6 +334,11 @@ pub struct Seen {
     pub fade: Vec<ParticleVertex>,
     /// The billboards of the billboard groups drawn (ogf.md 7).
     pub billboards: BillboardFrame,
+    /// The projected light texture's cells, every slot's as last given
+    /// out, and the receivers with their slots (object-projected-light.md
+    /// 3, 4).
+    pub cells: Vec<std::sync::Arc<crate::projected_light::CellDraw>>,
+    pub receivers: Vec<crate::projected_light::ReceiverSlot>,
 }
 
 /// The portal fade of the latest pass of `visibility` (portal-fade.md 1 –

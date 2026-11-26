@@ -25,6 +25,8 @@ struct Frame {
     // Trees (section 7.3).
     wave: vec4<f32>,
     wind: vec4<f32>,
+    // x: r1_lmodel_lerp (object-projected-light.md 6).
+    projector: vec4<f32>,
 }
 
 struct Draw {
@@ -89,6 +91,9 @@ fn level_record(id: u32, shared_record: u32) -> Draw {
 // s_hemi: clamp, linear, no mip (section 4.4).
 @group(1) @binding(3) var s_linear: sampler;
 @group(1) @binding(4) var s_clamp: sampler;
+// The projected light texture (object-projected-light.md 2), sampled
+// through s_clamp: clamp, linear, no mip (section 6).
+@group(1) @binding(9) var t_projector: texture_2d<f32>;
 @group(2) @binding(0) var t_base: texture_2d<f32>;
 @group(2) @binding(1) var t_detail: texture_2d<f32>;
 @group(2) @binding(2) var s_aniso: sampler;
@@ -112,6 +117,8 @@ struct Out {
     @location(6) @interpolate(flat) pass_flags: vec3<f32>,
     // The environment map's look-up direction (objects).
     @location(7) reflection: vec3<f32>,
+    // The objects' sun term S(n), clamped (receivers).
+    @location(8) sun: vec3<f32>,
 }
 
 struct LightMapped {
@@ -452,15 +459,68 @@ fn model_light(d: Draw, n: vec3<f32>) -> vec3<f32> {
         + props.xyz * sun_term(n));
 }
 
-// model_def_lq; the pixel stage is fs_vert's C = 2 · Q · B.rgb, A = B.a.
+// A receiver's projected coordinate (object-projected-light.md 6): the
+// world position clamped into its slot's box and mapped into its cell, as
+// (u d, v d, d) with d the depth below the cell's eye, divided per pixel;
+// w 1. A draw that is no receiver this frame (params.x 0) gets w 0. The
+// record holds C′ and h in c_bias and the slot + 1 in params.x. In WebGL's
+// pixel centres the coordinate is where 4.1 draws the point (Direct3D 9's
+// lookup of section 6 is half a texel off ours, landing on the same texel).
+fn projected(d: Draw, p: vec3<f32>) -> vec4<f32> {
+    if d.params.x < 0.5 {
+        return vec4(0.0);
+    }
+    let slot = u32(d.params.x - 0.5);
+    let c = d.c_bias.xyz;
+    let h = d.c_bias.w;
+    let lo = vec3(c.x - h + 0.05, c.y - h - 7.0 + 0.05, c.z - h + 0.05);
+    let hi = vec3(c.x + h - 0.05, c.y - 0.05, c.z + h - 0.05);
+    let q = clamp(p, lo, hi);
+    let depth = c.y + 200.0 - q.y;
+    let k = 25.5 * 200.0 / h;
+    let cx = f32(slot % 10u) * 51.0 + 25.5;
+    let cy = f32(slot / 10u) * 51.0 + 25.5 + 51.0 / 1024.0;
+    let u = (cx * depth + k * (q.x - c.x)) / 512.0;
+    let v = (cy * depth - k * (q.z - c.z)) / 512.0;
+    return vec4(u, v, depth, 1.0);
+}
+
+// The fade φ = c + (1 − c) g², g = (|E − C′| + R) / (50 R), R = h / 1.1.
+fn projected_fade(d: Draw) -> f32 {
+    let r = d.c_bias.w / 1.1;
+    let g = (length(frame.eye.xyz - d.c_bias.xyz) + r) / (50.0 * r);
+    let c = frame.projector.x;
+    return c + (1.0 - c) * g * g;
+}
+
+// model_def_lq, or model_def_hq for a receiver (level-objects.md 5.5): Q
+// in c0.rgb, φ in c0.a, the projected coordinate in c1, S(n) in sun.
 @vertex
 fn vs_model(v: ModelVertex) -> Out {
     let d = record(v.draw);
     let m = model_point(d, v);
     var out = start(d, m.p, false);
     out.uv = m.uv;
-    out.c0 = vec4(model_light(d, m.n), 0.0);
+    out.c0 = vec4(model_light(d, m.n), projected_fade(d));
+    out.c1 = projected(d, m.p);
+    out.sun = saturate(sun_term(m.n));
     return out;
+}
+
+// A receiver's light lerp(t.rgb + S(n) · t.a, Q, φ); Q for the others.
+fn receiver_light(in: Out) -> vec3<f32> {
+    if in.c1.w < 0.5 {
+        return in.c0.rgb;
+    }
+    let t = textureSampleLevel(t_projector, s_clamp, in.c1.xy / in.c1.z, 0.0);
+    return mix(t.rgb + in.sun * t.a, in.c0.rgb, in.c0.a);
+}
+
+// C = 2 · light · B.rgb, A = B.a.
+@fragment
+fn fs_model(in: Out) -> @location(0) vec4<f32> {
+    let b = textureSampleBias(t_base, s_aniso, in.uv, frame.forward.w);
+    return finish(2.0 * receiver_light(in) * b.rgb, b.a, in);
 }
 
 // model_env_lq: the view direction reflected about the normal picks the
@@ -471,17 +531,20 @@ fn vs_model_env(v: ModelVertex) -> Out {
     let m = model_point(d, v);
     var out = start(d, m.p, false);
     out.uv = m.uv;
-    out.c0 = vec4(model_light(d, m.n), 0.0);
+    out.c0 = vec4(model_light(d, m.n), projected_fade(d));
+    out.c1 = projected(d, m.p);
+    out.sun = saturate(sun_term(m.n));
     out.reflection = reflect(normalize(m.p - frame.eye.xyz), m.n);
     return out;
 }
 
+// model_env_lq / model_env_hq.
 @fragment
 fn fs_model_env(in: Out) -> @location(0) vec4<f32> {
     let b = textureSampleBias(t_base, s_aniso, in.uv, frame.forward.w);
     let e = textureSample(t_env, s_clamp, in.reflection).rgb;
     let base = mix(e, b.rgb, b.a);
-    return finish(2.0 * in.c0.rgb * base, b.a, in);
+    return finish(2.0 * receiver_light(in) * base, b.a, in);
 }
 
 // model_def_lqs with simple: the base texel, unlit.
@@ -627,4 +690,82 @@ fn fs_light(in: LightOut) -> @location(0) vec4<f32> {
         discard;
     }
     return vec4(color, alpha);
+}
+
+// Element 4 of the library classes and selflight: the static geometry's
+// baked light (rgb) and sun visibility (a) drawn into a cell of the
+// projected light texture (object-projected-light.md 4.4), with the cell's
+// camera as the view-projection; no fog, no sun, no detail, no alpha test.
+
+struct CellOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) uv2: vec2<f32>,
+    @location(2) c: vec4<f32>,
+}
+
+// lmap_l: rgb = L_ambient + Lm.rgb + sat(L_hemi_color) · h, a = Lm.a.
+@vertex
+fn vs_lmap_l(v: LightMapped) -> CellOut {
+    var out: CellOut;
+    out.clip = frame.view_projection * vec4(v.position, 1.0);
+    out.uv = base_uv(v.tc0, v.tangent, v.binormal);
+    out.uv2 = vec2<f32>(v.tc1) / 32768.0;
+    return out;
+}
+
+@fragment
+fn fs_lmap_l(in: CellOut) -> @location(0) vec4<f32> {
+    let lm = textureSampleBias(t_second, s_linear, in.uv2, frame.forward.w);
+    let hm = textureSample(t_hemi, s_clamp, in.uv2);
+    let h = (hm.r + hm.g + hm.b) / 3.0;
+    return saturate(vec4(frame.ambient.rgb + lm.rgb + saturate(frame.hemi.rgb) * h, lm.a));
+}
+
+// vert_l: rgb = sat(color.rgb + L_hemi_color · N.w + L_ambient),
+// a = sat(color.a).
+@vertex
+fn vs_vert_l(v: VertexLit) -> CellOut {
+    var out: CellOut;
+    out.clip = frame.view_projection * vec4(v.position, 1.0);
+    out.uv = base_uv(v.tc0, v.tangent, v.binormal);
+    out.c = saturate(vec4(rgb(v.color) + frame.hemi.rgb * v.normal.w + frame.ambient.rgb,
+        v.color.w));
+    return out;
+}
+
+@fragment
+fn fs_vert_l(in: CellOut) -> @location(0) vec4<f32> {
+    return in.c;
+}
+
+// impl_l: rgb = L_ambient + Lm.rgb + sat(L_hemi_color) · B.a, a = Lm.a,
+// both at the base coordinate.
+@vertex
+fn vs_impl_l(v: LightMapped) -> CellOut {
+    var out: CellOut;
+    out.clip = frame.view_projection * vec4(v.position, 1.0);
+    out.uv = base_uv(v.tc0, v.tangent, v.binormal);
+    return out;
+}
+
+@fragment
+fn fs_impl_l(in: CellOut) -> @location(0) vec4<f32> {
+    let b = textureSampleBias(t_base, s_aniso, in.uv, frame.forward.w);
+    let lm = textureSampleBias(t_second, s_linear, in.uv, frame.forward.w);
+    return saturate(vec4(frame.ambient.rgb + lm.rgb + saturate(frame.hemi.rgb) * b.a, lm.a));
+}
+
+// simple: the base texel.
+@vertex
+fn vs_simple_l(v: VertexLit) -> CellOut {
+    var out: CellOut;
+    out.clip = frame.view_projection * vec4(v.position, 1.0);
+    out.uv = base_uv(v.tc0, v.tangent, v.binormal);
+    return out;
+}
+
+@fragment
+fn fs_simple_l(in: CellOut) -> @location(0) vec4<f32> {
+    return saturate(textureSampleBias(t_base, s_aniso, in.uv, frame.forward.w));
 }

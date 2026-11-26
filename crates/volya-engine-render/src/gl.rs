@@ -1006,6 +1006,23 @@ impl Gl {
         }
     }
 
+    /// Clears the colour of the rectangle `rect` (x, y, width, height in
+    /// framebuffer pixels) of the bound framebuffer to `color`, the colour
+    /// mask opened for it; the scissor test is left off.
+    pub fn clear_rect(&self, rect: [i32; 4], color: [f32; 4]) {
+        let mut raster = self.state.borrow().raster.unwrap_or(RasterState::OPAQUE);
+        raster.color_mask = [true; 4];
+        self.set_raster(&raster);
+        self.count(Call::State);
+        self.gl.enable(C::SCISSOR_TEST);
+        self.count(Call::State);
+        self.gl.scissor(rect[0], rect[1], rect[2], rect[3]);
+        self.count(Call::Clear);
+        self.gl.clear_bufferfv_with_f32_array(C::COLOR, 0, &color);
+        self.count(Call::State);
+        self.gl.disable(C::SCISSOR_TEST);
+    }
+
     /// Draws `count` vertices from `first` of the bound vertex array.
     pub fn draw_arrays(&self, mode: u32, first: u32, count: u32, instances: u32) {
         self.count(Call::Draw);

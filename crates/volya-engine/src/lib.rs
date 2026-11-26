@@ -37,6 +37,7 @@ pub mod on_screen_keyboard;
 pub mod options;
 pub mod particle_drawing;
 pub mod present;
+pub mod projected_light;
 pub mod save_load;
 pub mod saved_games;
 pub mod scene;

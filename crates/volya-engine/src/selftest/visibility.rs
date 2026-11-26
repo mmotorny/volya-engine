@@ -84,9 +84,14 @@ pub async fn the_camera_pass_keeps_the_draws(cx: &Context<'_>) -> Outcome {
         items > 0 && items < seen.items.len() / 4,
         "{items} static draws kept"
     );
+    // Every draw kept, the rest of the pass's frame (the projected
+    // light's receivers and cells, the billboards) as it is.
     let mut all = kept.clone();
     if let Some(w) = all.world.as_mut() {
-        w.seen = None;
+        let mut s = (*seen).clone();
+        s.items.fill(true);
+        s.objects.fill(true);
+        w.seen = Some(Arc::new(s));
     }
     let (on, draws, gl, t) = drawn(cx, &mut r, &mut presenter, &kept).await?;
     let (every, draws_all, gl_all, t_all) = drawn(cx, &mut r, &mut presenter, &all).await?;

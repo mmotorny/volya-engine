@@ -243,6 +243,7 @@ fn frame(world: World, sky: Option<SkyFrame>) -> WorldFrame {
         effects: None,
         details: None,
         billboards: None,
+        projected: None,
         filtering: Default::default(),
         geometry_lod: 1.0,
         drawn: None,

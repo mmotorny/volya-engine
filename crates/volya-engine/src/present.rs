@@ -25,7 +25,8 @@ use crate::render::particles::{
 use crate::render::present::ScreenEffects;
 use crate::render::sky::{SkySection, SkyTextures};
 use crate::render::world::{
-    GeometryUpload, LightPass, LightTextures, ObjectGeometry, Surface, TreeLight, WorldLight,
+    GeometryUpload, LightPass, LightTextures, ObjectGeometry, ProjectedCell, ProjectedFrame,
+    ProjectedReceiver, Surface, TreeLight, WorldLight, cell_view_projection,
 };
 use crate::render::{
     DrawList, Quad, Rect, Renderer, Texture, VideoTexture, World, WorldDraw, WorldFrame,
@@ -36,6 +37,11 @@ use volya_engine_formats::level::GEOMETRY_LOD;
 use volya_engine_formats::pe::Rgba;
 use volya_engine_formats::ui::{UI_HEIGHT, UI_WIDTH};
 use volya_engine_formats::video::TheoraVideo;
+
+/// `r1_lmodel_lerp` of the shipped `user.ltx` and the console's default
+/// (level-objects.md 5.5).
+// TODO(#563): the console variable.
+const LMODEL_LERP: f32 = 0.1;
 
 /// Most video frames decoded per video in one call when playback lags.
 const MAX_DECODE: u32 = 4;
@@ -198,6 +204,10 @@ pub struct Presenter {
     placed: Option<Arc<Vec<Option<Mat4>>>>,
     /// The world's draw index of the first object draw.
     first_object_draw: usize,
+    /// Each static draw item's world draw index (none: not drawn).
+    static_draw_of: Vec<Option<u32>>,
+    /// The projected light cells as last handed to the renderer, by slot.
+    projected_cells: std::cell::RefCell<HashMap<u32, Arc<ProjectedCell>>>,
     /// The latest camera pass's draws and the world draws they keep.
     drawn: Option<(Arc<Seen>, Arc<Vec<bool>>)>,
     /// The level's effect shaders with their textures, by library index
@@ -354,6 +364,7 @@ impl Presenter {
                     Err(e) => self.errors.push(format!("{}: {e}", d.texture)),
                 }
             }
+            self.projected_cells.borrow_mut().clear();
             // The billboards' sets with the world (static-shading.md 8.4).
             renderer.clear_billboards();
             if let Some(b) = &scene.world.billboards {
@@ -431,6 +442,7 @@ impl Presenter {
             filtering: Default::default(),
             geometry_lod: GEOMETRY_LOD,
             effects: None,
+            projected: scene.seen.as_ref().map(|s| self.projected(&scene.world, s)),
             billboards: (scene.seen.as_ref())
                 .map(|s| s.billboards.clone())
                 .filter(|b| !b.draws.is_empty()),
@@ -458,6 +470,57 @@ impl Presenter {
 
     /// The world draws `seen` keeps (in [`world_draws`]' order), made
     /// again only when it changes.
+    /// The projected light texture's part of the frame
+    /// (object-projected-light.md): the cells drawn, with their draws as
+    /// the world's, and every object draw of each receiver.
+    fn projected(&self, level: &LevelWorld, seen: &Seen) -> ProjectedFrame {
+        let mut cached = self.projected_cells.borrow_mut();
+        let cells = (seen.cells.iter())
+            .map(|c| {
+                if let Some(p) = cached.get(&c.slot)
+                    && p.version == c.version
+                {
+                    return p.clone();
+                }
+                let p = Arc::new(ProjectedCell {
+                    version: c.version,
+                    slot: c.slot,
+                    view_projection: cell_view_projection(c.centre, c.h),
+                    clear: c.clear,
+                    draws: (c.draws.iter())
+                        .filter_map(|&d| *self.static_draw_of.get(d as usize)?)
+                        .collect(),
+                });
+                cached.insert(c.slot, p.clone());
+                p
+            })
+            .collect();
+        let mut receivers = Vec::new();
+        if !seen.receivers.is_empty() {
+            let mut slot_of = vec![None; level.objects.instances.len()];
+            for r in &seen.receivers {
+                if let Some(s) = slot_of.get_mut(r.instance) {
+                    *s = Some(r);
+                }
+            }
+            for (j, d) in level.objects.draws.iter().enumerate() {
+                if let Some(Some(r)) = slot_of.get(d.instance) {
+                    receivers.push(ProjectedReceiver {
+                        draw: (self.first_object_draw + j) as u32,
+                        slot: r.slot,
+                        centre: r.centre,
+                        h: r.h,
+                    });
+                }
+            }
+        }
+        ProjectedFrame {
+            cells,
+            receivers,
+            lerp: LMODEL_LERP,
+        }
+    }
+
     fn drawn(&mut self, level: &LevelWorld, seen: &Arc<Seen>) -> Arc<Vec<bool>> {
         if let Some((s, d)) = &self.drawn
             && Arc::ptr_eq(s, seen)
@@ -792,6 +855,15 @@ impl Presenter {
             .collect::<Option<Vec<_>>>()
             .map(|sections| SkyTextures { sections });
         self.first_object_draw = draws.len() - level.objects.draws.len();
+        let mut next = 0;
+        self.static_draw_of = (level.draw_surfaces.iter())
+            .map(|s| {
+                s.map(|_| {
+                    next += 1;
+                    next - 1
+                })
+            })
+            .collect();
         // Prepared textures no surface or effect took are not kept.
         renderer.clear_prepared();
         // The static geometry streams from its file to the GPU, a piece

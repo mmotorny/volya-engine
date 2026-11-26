@@ -110,6 +110,7 @@ fn world_unit(binding: (u32, u32)) -> u32 {
         (2, 1) => units::DETAIL,
         (1, 6) => units::LIGHT_MAP,
         (1, 7) => units::LIGHT_ATT,
+        (1, 9) => units::PROJECTOR,
         _ => units::OTHER,
     }
 }
@@ -177,7 +178,34 @@ pub(crate) struct WorldPrograms {
     light_slots: u64,
     /// The sky's programs (sky.md).
     pub(crate) sky: SkyPrograms,
+    /// The projected light texture (object-projected-light.md 2).
+    projector: Projector,
 }
+
+/// The projected light texture, its depth buffer and its cells' frame
+/// constants (one slot per cell drawn in a frame).
+struct Projector {
+    texture: gl::Texture,
+    framebuffer: gl::Framebuffer,
+    constants: Buffer,
+    /// The world the cells were drawn for and each slot's version drawn.
+    drawn: RefCell<(Option<std::rc::Weak<Inner>>, Vec<u64>)>,
+}
+
+/// Bytes between two cells' constants: past the frame's, a multiple of
+/// WebGL's uniform offset alignment (at most 256 on every implementation:
+/// documented, OpenGL ES 3.0's maximum).
+const CELL_SLOT: u64 = 512;
+
+/// Element 4's states (object-projected-light.md 4.4): no blending, depth
+/// test less-or-equal with writes, the usual back-face culling.
+const CELL_RASTER: RasterState = RasterState {
+    blend: None,
+    depth: less_equal(true),
+    cull: Some(C::BACK),
+    front_face: FrontFace::Cw,
+    color_mask: [true; 4],
+};
 
 impl WorldPrograms {
     pub(crate) fn new(gl: &Gl, unblended_trees: bool) -> Self {
@@ -234,7 +262,36 @@ impl WorldPrograms {
             light_constants: gl.buffer(BufferKind::Uniform, LIGHT_SLOTS * LIGHT_SLOT),
             light_slots: LIGHT_SLOTS,
             sky: SkyPrograms::new(gl),
+            projector: {
+                let size = PROJECTOR_SIZE;
+                let texture = gl.texture(TexFormat::Rgba8, size, size, 1, false);
+                let depth = gl.texture(TexFormat::Depth32Float, size, size, 1, false);
+                Projector {
+                    framebuffer: gl.framebuffer(Some(&texture), Some(&depth)),
+                    texture,
+                    drawn: RefCell::new((None, vec![0; RECEIVER_SLOTS as usize])),
+                    constants: gl.buffer(
+                        BufferKind::Uniform,
+                        crate::shared::world::RECEIVER_SLOTS as u64 * CELL_SLOT,
+                    ),
+                }
+            },
         }
+    }
+
+    /// The program of a cell's draws of surfaces with `program`
+    /// (object-projected-light.md 4.4), none for the classes without
+    /// element 4.
+    fn cell_program(&mut self, gl: &Gl, program: Program) -> Option<gl::Program> {
+        let entry = program.cell_entry_points()?;
+        Some(
+            self.programs
+                .entry(entry)
+                .or_insert_with(|| {
+                    gl.keeping(|| link_with(gl, "world", entry.0, entry.1, world_unit, world_point))
+                })
+                .clone(),
+        )
     }
 
     /// s_base / s_detail's sampler, and the anisotropic samplers of the
@@ -464,6 +521,11 @@ struct Inner {
     surface_programs: Vec<(gl::Program, RasterState)>,
     /// Program of each surface.
     programs: Vec<Program>,
+    /// Each surface's alpha reference as its records hold it (−1: none).
+    alpha_refs: Vec<f32>,
+    /// The receivers' records as last written: by kept draw, its c_bias
+    /// and params texels (object-projected-light.md 6).
+    receivers: RefCell<HashMap<u32, [f32; 8]>>,
     /// Section 10.3 step 1 (priority 0–1, not strict) and step 5 (2–3):
     /// the draws in their fixed order.
     early: Step,
@@ -496,6 +558,21 @@ impl Inner {
         crate::stats::bind_group();
         gl.bind_uniforms(points::WORLD, &self.frame, 0, FRAME_BYTES);
         gl.bind_texture(units::RECORDS, &self.draw_texels, &programs.nearest);
+        gl.bind_texture(
+            units::PROJECTOR,
+            &programs.projector.texture,
+            &programs.samplers[2],
+        );
+    }
+
+    /// Binds surface `s`'s textures, not its program.
+    fn bind_textures(&self, gl: &Gl, programs: &WorldPrograms, s: u32) {
+        let t = &self.surface_textures[s as usize];
+        let [_, lmap, hemi] = &programs.samplers;
+        crate::stats::bind_group();
+        gl.bind_texture(units::SECOND, &t.maps[0], lmap);
+        gl.bind_texture(units::HEMI, &t.maps[1], hemi);
+        self.bind_base(gl, programs, s);
     }
 
     /// Uses surface `s`'s program and states and binds its textures.
@@ -1298,6 +1375,10 @@ impl Renderer {
             surface_textures,
             surface_programs,
             programs: surfaces.iter().map(|s| s.program).collect(),
+            alpha_refs: (surfaces.iter())
+                .map(|s| s.alpha_ref.map_or(-1.0, f32::from))
+                .collect(),
+            receivers: RefCell::new(HashMap::new()),
             early: Step::new(early, &calls, &exclusive),
             late: Step::new(late, &calls, &exclusive),
             calls,
@@ -1457,6 +1538,12 @@ impl Renderer {
                 filtering.mip_bias,
             )
         });
+        // The projected light texture's cells, then its receivers' records
+        // (object-projected-light.md 4, 6), before the frame's geometry.
+        if let Some(p) = &frame.projected {
+            self.draw_cells(frame, p);
+            self.place_receivers(&frame.world, p);
+        }
         let billboards = frame
             .billboards
             .as_ref()
@@ -1609,6 +1696,139 @@ impl Renderer {
             gl.invalidate_depth();
         }
         set_part(Part::Screen);
+    }
+
+    /// Draws the cells of `p` into the projected light texture
+    /// (object-projected-light.md 4): its depth cleared once, then each
+    /// cell cleared to its colour and its draws drawn with element 4 of
+    /// their surfaces, with the cell's camera.
+    fn draw_cells(&mut self, frame: &WorldFrame, p: &ProjectedFrame) {
+        let inner = &frame.world.0;
+        let gl = self.gl.clone();
+        let Some(programs) = self.world_programs.as_mut() else {
+            return;
+        };
+        // The cells new to the texture: given out since last drawn, or
+        // every one for another world.
+        let cells: Vec<&ProjectedCell> = {
+            let mut drawn = programs.projector.drawn.borrow_mut();
+            let same =
+                (drawn.0.as_ref()).is_some_and(|w| std::ptr::eq(w.as_ptr(), Rc::as_ptr(inner)));
+            if !same {
+                drawn.0 = Some(Rc::downgrade(&frame.world.0));
+                drawn.1.fill(0);
+            }
+            (p.cells.iter())
+                .filter(|c| {
+                    let Some(v) = drawn.1.get_mut(c.slot as usize) else {
+                        return false;
+                    };
+                    std::mem::replace(v, c.version) != c.version
+                })
+                .map(|c| &**c)
+                .collect()
+        };
+        if cells.is_empty() {
+            return;
+        }
+        // Each surface program's element 4, linked before drawing.
+        let mut cell_programs: HashMap<Program, Option<gl::Program>> = HashMap::new();
+        for cell in &cells {
+            for &d in &cell.draws {
+                let Some(Some(k)) = inner.kept_of.get(d as usize).copied() else {
+                    continue;
+                };
+                let program = inner.programs[inner.calls[k as usize].surface as usize];
+                cell_programs
+                    .entry(program)
+                    .or_insert_with(|| programs.cell_program(&gl, program));
+            }
+        }
+        let programs = &*programs;
+        let projector = &programs.projector;
+        let size = (PROJECTOR_SIZE, PROJECTOR_SIZE);
+        Renderer::begin_pass(&gl, &projector.framebuffer, size, None, Some(1.0));
+        gl.bind_texture(units::RECORDS, &inner.draw_texels, &programs.nearest);
+        for (n, cell) in cells.iter().enumerate() {
+            let offset = n as u64 * CELL_SLOT;
+            let constants = frame_constants(frame, &cell.view_projection, size);
+            gl.write_buffer(&projector.constants, offset, &constants);
+            crate::stats::bind_group();
+            gl.bind_uniforms(points::WORLD, &projector.constants, offset, FRAME_BYTES);
+            // The cell's pixels: our frames' rows run from the picture's
+            // top, as the cell's camera draws them.
+            let x = (cell.slot % CELLS_PER_ROW * CELL_SIZE) as i32;
+            let y = (cell.slot / CELLS_PER_ROW * CELL_SIZE) as i32;
+            let side = CELL_SIZE as i32;
+            gl.viewport(x, y, side, side);
+            let [r, g, b, a] = cell.clear.map(|c| f32::from(c) / 255.0);
+            gl.clear_rect([x, y, side, side], [r, g, b, a]);
+            gl.set_raster(&CELL_RASTER);
+            let mut surface = None;
+            for &d in &cell.draws {
+                let Some(Some(k)) = inner.kept_of.get(d as usize).copied() else {
+                    continue;
+                };
+                let call = &inner.calls[k as usize];
+                let program = inner.programs[call.surface as usize];
+                let Some(Some(gp)) = cell_programs.get(&program) else {
+                    continue;
+                };
+                crate::stats::pipeline();
+                gl.use_program(gp);
+                if surface != Some(call.surface) {
+                    surface = Some(call.surface);
+                    inner.bind_textures(&gl, programs, call.surface);
+                }
+                crate::stats::buffer();
+                gl.bind_vertex_array(&inner.arrays[inner.arrays_of[k as usize] as usize]);
+                crate::stats::draw();
+                let wide = inner.index_wide[call.index_buffer as usize];
+                gl.draw_elements(C::TRIANGLES, call.first_index, call.index_count, wide, 1);
+            }
+        }
+    }
+
+    /// Writes the receivers' slot constants into their records, and clears
+    /// them from the draws no longer receivers (object-projected-light.md
+    /// 6): c_bias = (C′, h), params = (slot + 1, 0, 0, alpha reference);
+    /// only records that change are written.
+    fn place_receivers(&self, world: &World, p: &ProjectedFrame) {
+        let inner = &world.0;
+        let mut now: HashMap<u32, [f32; 8]> = HashMap::with_capacity(p.receivers.len());
+        let aref = |k: u32| inner.alpha_refs[inner.calls[k as usize].surface as usize];
+        for r in &p.receivers {
+            let Some(Some(k)) = inner.kept_of.get(r.draw as usize).copied() else {
+                continue;
+            };
+            let [x, y, z] = r.centre;
+            now.insert(k, [x, y, z, r.h, (r.slot + 1) as f32, 0.0, 0.0, aref(k)]);
+        }
+        let mut last = inner.receivers.borrow_mut();
+        let write = |k: u32, texel: u32, values: &[f32]| {
+            let mut bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+            self.gl.write_texture(
+                &inner.draw_texels,
+                0,
+                0,
+                k % DRAWS_PER_ROW * DRAW_TEXELS + texel,
+                k / DRAWS_PER_ROW,
+                (values.len() / 4) as u32,
+                1,
+                &mut bytes,
+            );
+        };
+        for (&k, v) in &now {
+            if last.get(&k) != Some(v) {
+                write(k, 6, v);
+            }
+        }
+        for &k in last.keys() {
+            if !now.contains_key(&k) {
+                write(k, 7, &[0.0, 0.0, 0.0, aref(k)]);
+            }
+        }
+        *last = now;
     }
 
     /// The world's programs for the trees' blending, with the light
