@@ -62,14 +62,27 @@ Tests in `//:checks` (a `test_suite`), cached like any test:
 ## Native tests
 
 - Each crate's unit tests are a `rust_test`; each integration test file (`tests/*.rs`) is its own `rust_test`, so one file's change reruns one test.
-- **Game data** is a declared input. A repository rule `@gog_installer` reads `VOLYA_GOG_INSTALLER` (`environ`) and writes `fingerprint.txt`: the installer parts' names and sizes (what the archive cache is keyed on), or nothing when unset; and `defs.bzl` with the path. Game-data tests take the fingerprint as `data` and the path as `env`, so their results are cached per installer and rerun when it changes. They read and fill the shared archive cache (`~/Library/Caches/volya-engine/<installer>-<sizes>/archives/`, already locked for concurrent extraction), so they are `no-sandbox`. The rule is re-evaluated when the variable changes; renaming or replacing the parts under the same variable needs `bazel fetch --force @gog_installer` (Bazel can't watch multi-gigabyte files without hashing them).
+- **Game data** is a declared input, its files held by Bazel (below, Game data); a game-data test takes `@gog_game//:manifest` as `data` and reads the files beside it. Without `VOLYA_GOG_INSTALLER` the manifest is empty and the tests skip, cached as such.
 - Tags: `gamedata` on every test that reads it. Tests that walk the whole game or measure (the `--release` cost and memory tests, `visuals.rs`, `collision_rays.rs`, the counting-allocator binaries) are `manual`, with `-c opt` through a `measure` config (`bazel test --config=measure //crates/volya-engine-core:particles_cost`). The rest of the game-data tests run in `bazel test //...` (skipping, cached, without the data).
+
+## Game data
+
+Bazel holds what was hand-kept in `~/Library/Caches/volya-engine/<installer>-<sizes>/` (decided by the user), as repositories in the repo contents cache, so every worktree shares one copy. A module extension, `gog` (`build/gog.bzl`), reads `VOLYA_GOG_INSTALLER` (`getenv`, so changing it re-evaluates the extension), finds the parts and declares:
+
+- **`@gog_game`**: every `ru-RU` game file in the game-root layout (today's `archives/` and `splash/`), plus `manifest`: each file's path, size and the MD5 the installer records. The repository is marked reproducible and keyed on the `.exe`'s SHA-256 (0.9 MB, it records every file's MD5) and the `.bin`'s name and size; extraction checks each file against its MD5, so a changed `.bin` under the same key fails loudly. Hashing the `.bin` instead was measured at 1.6 s (`openssl`) to 8.4 s (`shasum`) for its 3.7 GB with a warm page cache, and isn't needed. The files are not action inputs (Bazel would hash 5.6 GB for each test's key): tests take the manifest, which holds their MD5s, and open the files beside it read-only, in the sandbox (believed: macOS's sandbox denies writes outside the action, not reads; checked when it lands).
+  - The extractor is `tools/gog-extract`, a binary over `volya-engine-installer`. A repository can't use Bazel's build, so `@gog_extractor` (reproducible, its sources watched) builds it with the Rust toolchain's own `cargo` from the crates in Cargo.lock (with the `inno` patch once #541 lands).
+  - Without the variable: an empty manifest and no files.
+- **`@gog_original`**: the original's install folder (today's `original/`): every game file in the installer's layout, cloned copy-on-write from `@gog_game`, plus what the install adds (docs/formats/gog-install-additions.md: the generated `fsgame.ltx`, `user.ltx` and `traffic.net` in the user folder, `install.reg`, the empty `userdocs` folders), with a manifest. Reproducible, keyed like `@gog_game` plus the additions' generator.
+- **The original's reference frames** (today's `original-frames/`, keyed by `tools/xtask/src/original/views.rs`): capture actions, `manual`, one per run of the original (the title's views, the level's), producing a PNG per view into the disk cache. Their inputs are the view list and settings (`tests/fidelity/views.rs`), the capture procedure (the xtask binary), `@gog_original//:manifest` and `@wine_image//:digest`. The `fidelity` suite takes them as `data`. They are game assets: in the local disk cache only, never committed, published or deployed.
+  - `@wine_image` builds the image from `tools/xtask/wine/Containerfile` when it is missing (watched, so a change rebuilds it) and records its digest; not reproducible, as the image lives in `container`'s store.
+  - Each capture runs `no-sandbox` (Apple's `container` service) in the action's temporary directory: the run's clone of the install, its Wine prefix (box64 and Wine) and its frames are scratch, and only the PNGs are kept. `original` stays a command for looking at the running game.
+- The cache code these replace goes once they work: the extraction, locks and cache directory of `crates/volya-engine-formats/tests/support/gog_archives.rs` (at the switch, as Cargo-run tests use it until then), the install assembly in `original.rs`, and the frame cache and keys in `original/views.rs`.
 
 ## Browser suites
 
 One test target per suite and target: `//tests/browser:<suite>_<target>` (e.g. `smoke_chrome`, `render_iphone`), made by a macro from one list (today's `SUITES`). The runner is a Rust binary (`//tools/xtask:e2e_runner`, today's `e2e.rs`) that serves the site from runfiles and opens the suite's page.
 
-- **Inputs**: `:site_test` and `:site_next`, the suite's `.js` and `.html`, `harness.js` and the helpers it imports, the runner, `@gog_installer//:fingerprint.txt` for suites that read game data, and the browser: `@local_browsers//:chrome_version` (a repository rule reading Chrome's `Info.plist`, watched with `repository_ctx.watch`, so a Chrome update reruns the suites) and `:simulator_runtime` (the newest iOS runtime from `simctl`, re-read at a fetch). Environment that changes outcomes (`VOLYA_DUMP_DIR`, `VOLYA_COMPARE_DIR`, `VOLYA_SIM_MEDIA`) is passed with `--test_env`, part of the key.
+- **Inputs**: `:site_test` and `:site_next`, the suite's `.js` and `.html`, `harness.js` and the helpers it imports, the runner, `@gog_game//:manifest` for suites that read game data (served to the page as the installer is today), and the browser: `@local_browsers//:chrome_version` (a repository rule reading Chrome's `Info.plist`, watched with `repository_ctx.watch`, so a Chrome update reruns the suites) and `:simulator_runtime` (the newest iOS runtime from `simctl`, re-read at a fetch). Environment that changes outcomes (`VOLYA_DUMP_DIR`, `VOLYA_COMPARE_DIR`, `VOLYA_SIM_MEDIA`) is passed with `--test_env`, part of the key.
 - **Tags**:
 
 | Suites | chrome | iphone |
@@ -80,7 +93,7 @@ One test target per suite and target: `//tests/browser:<suite>_<target>` (e.g. `
 
   Every suite is `no-sandbox` (the real Chrome and Simulator, profiles outside the execroot) and `resources:browser:1`, with `--local_resources=browser=1`: one browser suite at a time per Bazel invocation, while other tests run beside it. `exclusive` runs a test alone, for the Simulator and for measurements. Groups: `//tests/browser:chrome`, `:iphone`, `:game_chrome` (`test_suite`s, naming manual tests explicitly). Timeouts are `eternal` for the slow suites (today's `SLOW_SUITES`), `moderate` otherwise.
 - **The kept Chrome profile** moves to `~/Library/Caches/volya-engine/chrome-profile/` under a file lock: one import of the game for every worktree (each imported its own, gigabytes, minutes), one suite using it at a time across processes. Its port stays in the profile.
-- **Parity** builds another revision: `bazel run //tools/xtask -- parity [REV]` checks REV out into a temporary worktree and builds its `:site_test` there with the shared disk cache (mostly cache hits), then runs the `parity` suite on both. **The original** (`original`) and **Wine** stay commands.
+- **Parity** builds another revision: `bazel run //tools/xtask -- parity [REV]` checks REV out into a temporary worktree and builds its `:site_test` there with the shared disk cache (mostly cache hits), then runs the `parity` suite on both. **Wine** (`wine run`, `wine check`) stays a command.
 
 ## The memory gate and the Simulator lock
 
@@ -101,11 +114,12 @@ Cargo no longer builds the workspace: without the fork, `cargo build` gets the u
 Cargo keeps working, and stays what deploys, until the switch. The `inno` patch (#541) lands with the switch: until then Cargo.lock holds the fork, which crate_universe builds as Cargo does. Each step is an issue, landed on main with the checks of its time:
 
 1. Bazel workspace and native build (#540; the `inno` patch #541): `MODULE.bazel`, `.bazelrc` with the shared caches, the toolchain, `@crates`, `BUILD.bazel` for every crate and tool with both build scripts; `bazel build //...` natively.
-2. Native tests (#542): unit and integration tests as targets, profiles as flags, `@gog_installer`, the `gamedata`, `manual` and `measure` tags.
+2. Native tests (#542): unit and integration tests as targets, profiles as flags, the `gamedata`, `manual` and `measure` tags; the game files as `@gog_game`.
 3. The wasm build (#543): the wasm32 platform and transition, the pinned LLVM, `web_sys_unstable_apis`, `//build:test_ops`, `@tools` with wasm-bindgen; `tools/site`; the four site targets.
 4. Static checks as tests (#544): `//:checks`.
 5. Browser suites as test targets (#545): the runner, the macro, `@local_browsers`, the shared kept profile, tags and resources.
 6. Operational commands under `bazel run` (#546): xtask's root and paths, `update` and `gc`, the dev server.
+   Game data (#553 the game files, #554 the install folder, #555 the reference frames), after step 1, 5 and 6 as each needs.
 7. The switch (#547): AGENTS.md ("tasks are Bazel targets"; the iteration rule becomes `bazel test //...` plus named manual targets) and docs/testing.md; `rust-project.json`; the fork's `[patch.crates-io]` and `.cargo/config.toml` removed; xtask's Cargo-driven paths (`check`, `web`, `e2e`) removed. Cold and warm builds measured in a fresh worktree, against the Cargo numbers below.
 8. Deploy from Bazel (#548): the Bazel site compared with Cargo's (byte for byte, or the full suites on both targets where it differs), then `deploy` switched and the live site checked.
 
