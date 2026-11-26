@@ -43,6 +43,19 @@ browser_suite_test = rule(
     },
 )
 
+# Suites that measure (docs/architecture/build.md, Browser suites).
+MEASURING = ["draw-calls", "fidelity", "game-level", "game-memory"]
+
+def suite_group(name, tests):
+    """A test_suite of browser suites, itself manual: `bazel test //...`
+    would otherwise run every test it names, manual ones included.
+
+    Args:
+        name: the group's name.
+        tests: the suites.
+    """
+    native.test_suite(name = name, tags = ["manual"], tests = tests)
+
 def browser_suite(suite, target, tags = [], timeout = "moderate", gamedata = True):
     """`<suite>_<target>`: the browser suite `suite` on `target`.
 
@@ -53,6 +66,10 @@ def browser_suite(suite, target, tags = [], timeout = "moderate", gamedata = Tru
         timeout: Bazel's timeout (the suite's report timeout is its own).
         gamedata: whether the suite reads the installer.
     """
+    # Never in `bazel test //...` by accident: the iOS Simulator and the
+    # measurements run only when named, alone on the machine.
+    if (target == "iphone" or suite in MEASURING) and not ("manual" in tags and "exclusive" in tags):
+        fail("{} on {} must be tagged manual and exclusive".format(suite, target))
     browser = "@local_tools//:chrome_version.txt" if target == "chrome" else "@local_tools//:simulator_runtime.txt"
     browser_suite_test(
         name = "{}_{}".format(suite.replace("-", "_"), target),

@@ -944,6 +944,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "volya-engine-gog-extract"
+version = "0.1.0"
+dependencies = [
+ "volya-engine-installer",
+]
+
+[[package]]
 name = "volya-engine-installer"
 version = "0.1.0"
 dependencies = [

@@ -21,7 +21,11 @@ test --test_output=errors
 # Measurements, as Cargo's --release (the release profile without LTO).
 test:measure --compilation_mode=opt
 
-# A personal file, never committed.
+# The machine's own settings, never committed: the main checkout's
+# user.bazelrc, which its worktrees (.claude/worktrees/<name>) share, then
+# this checkout's. Set the game data there (docs/testing.md, Game data):
+#   common --repo_env=VOLYA_GOG_INSTALLER=<dir>
+try-import %workspace%/../../../user.bazelrc
 try-import %workspace%/user.bazelrc
 
 # Clippy fails on warnings (the workspace lints: clippy::all).

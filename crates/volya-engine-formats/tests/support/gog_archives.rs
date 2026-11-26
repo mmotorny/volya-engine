@@ -49,6 +49,9 @@ pub fn archives() -> Option<Vec<CachedArchive>> {
 /// once complete (written beside it, then renamed). An exclusive lock on
 /// `<cache_dir>/<name>.lock` serialises extraction across processes.
 pub fn game_files(name: &str, select: impl Fn(&str) -> bool) -> Option<Vec<CachedArchive>> {
+    if let Some(manifest) = std::env::var_os("VOLYA_GOG_GAME") {
+        return bazel_game_files(Path::new(&manifest), select);
+    }
     let Some(dir) = std::env::var_os("VOLYA_GOG_INSTALLER") else {
         eprintln!("skipped: VOLYA_GOG_INSTALLER is unset");
         return None;
@@ -89,6 +92,40 @@ pub fn game_files(name: &str, select: impl Fn(&str) -> bool) -> Option<Vec<Cache
             start.elapsed()
         );
     }
+    Some(files)
+}
+
+/// Under Bazel, the game files `@gog_game` holds (docs/architecture/
+/// build.md, Game data): its `manifest.tsv` (path, size, MD5, in installer
+/// order; empty without game data) names them, in `files/` beside it.
+fn bazel_game_files(manifest: &Path, select: impl Fn(&str) -> bool) -> Option<Vec<CachedArchive>> {
+    // The runfiles hold the manifest alone; the files are beside its target.
+    let manifest =
+        fs::canonicalize(manifest).unwrap_or_else(|e| panic!("{}: {e}", manifest.display()));
+    let text = fs::read_to_string(&manifest).unwrap();
+    if text.is_empty() {
+        eprintln!("skipped: no game data (VOLYA_GOG_INSTALLER is unset)");
+        return None;
+    }
+    let dir = manifest.parent().unwrap().join("files");
+    let files = text
+        .lines()
+        .map(|line| {
+            let mut fields = line.split('\t');
+            let (Some(path), Some(size), Some(md5)) = (fields.next(), fields.next(), fields.next())
+            else {
+                panic!("{}: {line:?}", manifest.display());
+            };
+            (path, size.parse().unwrap(), md5)
+        })
+        .filter(|(path, _, _)| select(path))
+        .map(|(path, size, md5)| CachedArchive {
+            path: path.to_owned(),
+            file: dir.join(path),
+            size,
+            md5: md5.to_owned(),
+        })
+        .collect();
     Some(files)
 }
 

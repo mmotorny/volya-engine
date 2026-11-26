@@ -30,7 +30,7 @@ Behavior every backend must share is written once in Rust and run on each backen
 
 ### Game data
 
-Tests that need real game data (BYOA, never committed) read its location from an environment variable and skip, saying so, when it is unset:
+Tests that need real game data (BYOA, never committed) read its location from an environment variable and skip, saying so, when it is unset (under Bazel, set it in `user.bazelrc` as `common --repo_env=VOLYA_GOG_INSTALLER=<dir>`; docs/architecture/build.md, Game data):
 
 | Variable | Points to |
 |---|---|

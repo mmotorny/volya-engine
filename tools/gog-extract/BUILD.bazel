@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+
+load("//build:checks.bzl", "volya_checks")
+load("//build:rust.bzl", "volya_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["Cargo.toml"])
+
+# Built by Bazel for its checks; @gog_extractor builds it with cargo, as a
+# repository can't use Bazel's build (build/gog.bzl).
+volya_binary(
+    name = "gog-extract",
+    srcs = ["src/main.rs"],
+    deps = ["//crates/volya-engine-installer"],
+)
+
+volya_checks(wasm = False)

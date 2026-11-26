@@ -6,7 +6,6 @@ integration test file (docs/architecture/build.md, Rust)."""
 
 load("@crates//:defs.bzl", "aliases", "all_crate_deps")
 load("@gog_installer//:defs.bzl", "GOG_INSTALLER")
-load("@local_tools//:defs.bzl", "HOME")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 # The workspace's [lints.rust] (Cargo.toml).
@@ -86,14 +85,14 @@ def volya_integration_tests(crate, deps = [], rustc_flags = [], compile_data = [
     gamedata = "gamedata" in common_tags
     env = {}
     data = []
-    extra_tags = []
     if gamedata:
-        # The installer (docs/architecture/build.md, Game data) and the
-        # archive cache under the user's HOME (Bazel gives tests their own:
-        # each would extract the game again), written outside the sandbox.
-        env = {"HOME": HOME, "VOLYA_GOG_INSTALLER": GOG_INSTALLER} if GOG_INSTALLER else {}
-        data = ["@gog_installer//:fingerprint.txt"]
-        extra_tags = ["no-sandbox"]
+        # The game files (docs/architecture/build.md, Game data): only the
+        # manifest is an input, the files are read beside its target; and
+        # the installer, which some tests parse.
+        data = ["@gog_game//:manifest.tsv", "@gog_installer//:fingerprint.txt"]
+        env = {"VOLYA_GOG_GAME": "$(rootpath @gog_game//:manifest.tsv)"}
+        if GOG_INSTALLER:
+            env["VOLYA_GOG_INSTALLER"] = GOG_INSTALLER
     for src in native.glob(["tests/*.rs"], allow_empty = True):
         stem = src[len("tests/"):-len(".rs")]
         rust_test(
@@ -107,6 +106,6 @@ def volya_integration_tests(crate, deps = [], rustc_flags = [], compile_data = [
             compile_data = compile_data,
             data = data,
             env = env,
-            tags = common_tags + extra_tags + tags.get(stem, []),
+            tags = common_tags + tags.get(stem, []),
             **kwargs
         )

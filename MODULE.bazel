@@ -48,6 +48,7 @@ crate.from_cargo(
         "//crates/volya-engine-script:Cargo.toml",
         "//platforms/web:Cargo.toml",
         "//tools/devserver:Cargo.toml",
+        "//tools/gog-extract:Cargo.toml",
         "//tools/site:Cargo.toml",
         "//tools/xtask:Cargo.toml",
     ],
@@ -129,6 +130,9 @@ local_tools = use_repo_rule("//build:local_tools.bzl", "local_tools")
 local_tools(name = "local_tools")
 
 # The game data (build/gog.bzl).
-gog_installer = use_repo_rule("//build:gog.bzl", "gog_installer")
+gog = use_extension("//build:gog.bzl", "gog")
+use_repo(gog, "gog_extractor", "gog_game", "gog_installer")
 
-gog_installer(name = "gog_installer")
+# Its extractor is built with the toolchain's cargo.
+rust_host_tools = use_extension("@rules_rust//rust:extensions.bzl", "rust_host_tools")
+use_repo(rust_host_tools, "rust_host_tools")

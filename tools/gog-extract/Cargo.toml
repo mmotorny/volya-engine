@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+
+[package]
+name = "volya-engine-gog-extract"
+description = "Volya Engine: the game files from the GOG installer, for Bazel's @gog_game."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "gog-extract"
+path = "src/main.rs"
+
+[dependencies]
+volya-engine-installer = { path = "../../crates/volya-engine-installer" }

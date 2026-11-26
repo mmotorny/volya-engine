@@ -21,6 +21,7 @@ PACKAGES = [
     "//tests/browser",
     "//tests/fidelity",
     "//tools/devserver",
+    "//tools/gog-extract",
     "//tools/site",
     "//tools/xtask",
 ]
@@ -34,6 +35,8 @@ filegroup(
             ".git/**",
             # Bazel's convenience links to its outputs.
             "bazel-*/**",
+            # The machine's own settings (.bazelrc), never committed.
+            "user.bazelrc",
         ],
     ) + [p + ":all_files" for p in PACKAGES],
     visibility = ["//build:__pkg__"],

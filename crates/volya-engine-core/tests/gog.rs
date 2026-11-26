@@ -54,7 +54,8 @@ fn combines_russian_archives() {
         root.read_dir("")
             .unwrap()
             .iter()
-            .filter(|e| e.kind == EntryKind::File)
+            // The game root may hold its other files too (Bazel's @gog_game).
+            .filter(|e| e.kind == EntryKind::File && gog_archives::is_archive(&e.name))
             .count(),
         14,
         "root archives"

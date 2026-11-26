@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Maksym Motorny
 # SPDX-License-Identifier: BSD-3-Clause
 
-load("//build:browser.bzl", "browser_suite")
+load("//build:browser.bzl", "browser_suite", "suite_group")
 load("//build:checks.bzl", "volya_checks")
 
 # The browser suites (docs/architecture/build.md, Browser suites; the list
@@ -74,10 +74,8 @@ WHOLE_GAME = "eternal"
 
 # Groups (manual tests named explicitly): every suite on a target, the
 # game suites on Chrome: `bazel test //tests/browser:chrome`.
-test_suite(
+suite_group(
     name = "chrome",
-    # Manual itself, or `bazel test //...` would run what it names.
-    tags = ["manual"],
     tests = [
         ":audio_chrome",
         ":draw_calls_chrome",
@@ -97,10 +95,8 @@ test_suite(
     ],
 )
 
-test_suite(
+suite_group(
     name = "iphone",
-    # Manual itself, or `bazel test //...` would run what it names.
-    tags = ["manual"],
     tests = [
         ":audio_iphone",
         ":draw_calls_iphone",
@@ -119,10 +115,8 @@ test_suite(
     ],
 )
 
-test_suite(
+suite_group(
     name = "game_chrome",
-    # Manual itself, or `bazel test //...` would run what it names.
-    tags = ["manual"],
     tests = [
         ":game_input_chrome",
         ":game_level_chrome",
