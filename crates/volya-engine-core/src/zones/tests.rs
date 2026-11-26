@@ -243,7 +243,7 @@ fn the_idle_light_is_on_while_idle_and_steps_at_each_update() {
         camera: r.position,
         colours: &Green,
     };
-    let mut expected = fx.random_mut().uniform;
+    let mut expected = fx.random_mut().uniform.get();
     zones.frame(&frame, &mut fx).unwrap();
     let l = zones.lights().next().unwrap();
     assert_eq!(l.colour, Some(light_colour(0x0099_D538)));

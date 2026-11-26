@@ -46,9 +46,12 @@ Rejected:
 | Source | Who |
 |---|---|
 | The user's own game data | everyone may use evidence from it; dirty roles may study it freely |
-| The shipped binaries: static analysis, debugging, execution | investigator, reviewer |
+| The shipped binaries: static analysis, debugging, instrumented execution | investigator, reviewer |
+| The shipped game run as a black box: launched unmodified, driven by its normal inputs, its frames, sound and files captured from outside | everyone; its outputs are game assets (local only, never committed, published or deployed) |
 | Public documentation of generic algorithms (e.g. standard compression schemes) | everyone |
 | Leaked X-Ray source, OpenXRay and forks, anything derived from them; X-Ray documentation of unclear provenance | nobody |
+
+Black-box runs never look inside the program: no debugger, memory inspection, injected code, API tracing or disassembly; those stay dirty. A clean agent may compare its work with black-box outputs, but behaviour still enters code only through approved specs.
 
 Model memory is not a source. Agents may have absorbed X-Ray-derived code in training; every fact must be established from data or binaries, never from recollection.
 

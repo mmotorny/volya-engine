@@ -267,9 +267,6 @@ pub struct Details {
     /// result.
     last_pass: Option<u64>,
     selected: Option<(u64, std::sync::Arc<DetailFrame>)>,
-    /// The shared generator (variants, refresh delays): not reproducible
-    /// in the original, any uniform source serves.
-    random: Generator,
     scratch: Vec<u32>,
     /// Drawing lists per list and model, reused from frame to frame.
     collect: Vec<Vec<DrawnInstance>>,
@@ -320,7 +317,6 @@ impl Details {
             ],
             last_pass: None,
             selected: None,
-            random: Generator::new(1),
             scratch: Vec::new(),
             collect,
         };
@@ -399,7 +395,13 @@ impl Details {
 
     /// The cache's update (2.2, 3): the centre steps to the camera's cell,
     /// entries are built, and the groups recomputed if the cell changed.
-    pub fn update(&mut self, eye: Vec3, density: f32, collision: &CollisionWorld) {
+    pub fn update(
+        &mut self,
+        eye: Vec3,
+        density: f32,
+        collision: &CollisionWorld,
+        random: &mut Generator,
+    ) {
         let cell = Self::camera_cell(eye);
         let mut changed = false;
         while self.centre != cell {
@@ -434,7 +436,7 @@ impl Details {
         }
         if self.pending.len() == CACHE * CACHE {
             for i in std::mem::take(&mut self.pending) {
-                self.build(usize::from(i), density, collision);
+                self.build(usize::from(i), density, collision, random);
             }
         } else {
             for _ in 0..BUILDS_PER_UPDATE {
@@ -442,7 +444,7 @@ impl Details {
                     break;
                 };
                 let i = self.pending.remove(at);
-                self.build(usize::from(i), density, collision);
+                self.build(usize::from(i), density, collision, random);
             }
         }
         // The groups after this update's builds (review gap).
@@ -487,14 +489,20 @@ impl Details {
     }
 
     /// Builds the entry at physical index `i` (section 4).
-    fn build(&mut self, i: usize, density: f32, collision: &CollisionWorld) {
+    fn build(
+        &mut self,
+        i: usize,
+        density: f32,
+        collision: &CollisionWorld,
+        random: &mut Generator,
+    ) {
         let e = &mut self.entries[i];
         e.pending = false;
         if e.empty {
             return;
         }
         let (cell, slot, bounds) = (e.cell, e.slot, e.bounds);
-        let Some(placed) = self.placement(cell, &slot, bounds, density, collision) else {
+        let Some(placed) = self.placement(cell, &slot, bounds, density, collision, random) else {
             return;
         };
         let e = &mut self.entries[i];
@@ -520,6 +528,7 @@ impl Details {
         bounds: Aabb,
         density: f32,
         collision: &CollisionWorld,
+        random: &mut Generator,
     ) -> Option<[Vec<Instance>; 4]> {
         let centre = bounds.centre();
         let half: Vec3 = std::array::from_fn(|k| (bounds.max[k] - bounds.min[k]) * 0.5);
@@ -541,7 +550,7 @@ impl Details {
             models: &self.models,
             threshold: &self.threshold,
             density,
-            random: &mut self.random,
+            random,
         }))
     }
 
@@ -552,13 +561,14 @@ impl Details {
         cell: [i32; 2],
         density: f32,
         collision: &CollisionWorld,
+        random: &mut Generator,
     ) -> [Vec<Instance>; 4] {
         let slot = self.grid.slot(cell[0], cell[1]);
         if slot.is_empty() {
             return Default::default();
         }
         let bounds = cell_box(cell, &slot);
-        self.placement(cell, &slot, bounds, density, collision)
+        self.placement(cell, &slot, bounds, density, collision, random)
             .unwrap_or_default()
     }
 
@@ -567,7 +577,12 @@ impl Details {
     /// is drawn. A second pass in the same frame draws what the first did.
     // TODO(#407): whether the first frame after loading draws detail
     // objects is unestablished (5.1); here it does not.
-    pub fn pass(&mut self, pass: &Pass, collision: &CollisionWorld) -> std::sync::Arc<DetailFrame> {
+    pub fn pass(
+        &mut self,
+        pass: &Pass,
+        collision: &CollisionWorld,
+        random: &mut Generator,
+    ) -> std::sync::Arc<DetailFrame> {
         if let Some((frame, selected)) = &self.selected
             && *frame == pass.frame
         {
@@ -576,8 +591,8 @@ impl Details {
         let previous = self.last_pass.is_some_and(|f| f + 1 == pass.frame);
         self.last_pass = Some(pass.frame);
         let frame = if previous {
-            self.update(pass.eye, pass.density, collision);
-            std::sync::Arc::new(self.select(pass))
+            self.update(pass.eye, pass.density, collision, random);
+            std::sync::Arc::new(self.select(pass, random))
         } else {
             Default::default()
         };
@@ -586,7 +601,7 @@ impl Details {
     }
 
     /// The selection (5.2 – 5.4).
-    fn select(&mut self, pass: &Pass) -> DetailFrame {
+    fn select(&mut self, pass: &Pass, random: &mut Generator) -> DetailFrame {
         let planes = frustum(&pass.view_projection);
         let mut chosen: Vec<usize> = Vec::new();
         for gm in 0..GROUPS {
@@ -631,7 +646,7 @@ impl Details {
                 if d2 > FAR_SQUARED {
                     continue;
                 }
-                let delay = 15 + u64::from(self.random.next_k() % 15);
+                let delay = 15 + u64::from(random.next_k() % 15);
                 self.refresh(i, d2, pass.ssa_min);
                 self.entries[i].due = pass.frame + delay;
             }

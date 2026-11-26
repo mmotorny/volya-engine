@@ -6,6 +6,9 @@
 //! and the turbulence noise use (P2 2.2; particle-motion-actions.md 4.1),
 //! and the noise tables built from the latter.
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use super::noise::Noise;
 
 /// A generator advancing *s* ← *s* · 214013 + 2531011 (mod 2³²) and giving
@@ -33,15 +36,65 @@ const UNIT: f32 = (1.0 / 32767.0) as f32;
 /// 2π/32767 as an `f32` constant.
 const TURN: f32 = (std::f64::consts::TAU / 32767.0) as f32;
 
+/// The engine's one shared generator (P2 2.1; occlusion-grid.md 4.1,
+/// occlusion-tests.md 5, detail-objects.md 5.2): a handle, its clones
+/// drawing from the same state, so the level's particles, occlusion and
+/// detail objects take their values from it in the order they draw.
+#[derive(Clone, Debug)]
+pub struct Shared(Rc<Cell<Generator>>);
+
+impl Shared {
+    pub fn new(state: u32) -> Self {
+        Self(Rc::new(Cell::new(Generator::new(state))))
+    }
+
+    /// The next *k*.
+    pub fn next_k(&self) -> u32 {
+        self.with(Generator::next_k)
+    }
+
+    /// The generator as it is now.
+    pub fn get(&self) -> Generator {
+        self.0.get()
+    }
+
+    /// Runs `f` with the generator; `f` must not draw through another
+    /// handle.
+    pub fn with<R>(&self, f: impl FnOnce(&mut Generator) -> R) -> R {
+        let mut g = self.0.get();
+        let r = f(&mut g);
+        self.0.set(g);
+        r
+    }
+
+    /// A generator of its own at the same state (copies for tests).
+    pub fn detached(&self) -> Self {
+        Self::new(self.get().state)
+    }
+}
+
+/// At state 1 (our choice: the seed is unestablished, occlusion-tests.md 5).
+impl Default for Shared {
+    fn default() -> Self {
+        Self::new(1)
+    }
+}
+
+impl PartialEq<Generator> for Shared {
+    fn eq(&self, other: &Generator) -> bool {
+        self.get() == *other
+    }
+}
+
 /// The particles' generators.
 ///
 /// Our choice where P2 2.1 leaves it unestablished: both generators start
 /// at state 1 (the C runtime's documented start) when a [`Random`] is
-/// made, and nothing outside the particles draws from them.
+/// made.
 #[derive(Clone, Debug)]
 pub struct Random {
     /// The shared generator of P2 2.1.
-    pub uniform: Generator,
+    pub uniform: Shared,
     /// The C runtime's `rand()` (P2 2.2, P3 4.1).
     pub crt: Generator,
     noise: Option<Box<Noise>>,
@@ -56,10 +109,24 @@ impl Default for Random {
 impl Random {
     /// Generators with the shared one at `state`, the C runtime's at 1.
     pub fn new(state: u32) -> Self {
+        Self::sharing(Shared::new(state))
+    }
+
+    /// Generators drawing the shared values from `uniform`, the C
+    /// runtime's at 1.
+    pub fn sharing(uniform: Shared) -> Self {
         Self {
-            uniform: Generator::new(state),
+            uniform,
             crt: Generator::new(1),
             noise: None,
+        }
+    }
+
+    /// A copy whose shared generator is its own, at the same state.
+    pub fn detached(&self) -> Self {
+        Self {
+            uniform: self.uniform.detached(),
+            ..self.clone()
         }
     }
 
@@ -123,10 +190,22 @@ mod tests {
     }
 
     #[test]
+    fn the_shared_generators_handles_draw_in_turn() {
+        let a = Shared::new(1);
+        let r = Random::sharing(a.clone());
+        assert_eq!(r.uniform.next_k(), 41);
+        assert_eq!(a.with(Generator::next_k), 18467);
+        assert_eq!(r.uniform.next_k(), 6334);
+        let d = r.detached();
+        assert_eq!(d.uniform.next_k(), 26500);
+        assert_eq!(a.next_k(), 26500);
+    }
+
+    #[test]
     fn a_zero_sigma_draws_nothing() {
         let mut r = Random::new(7);
         assert_eq!(r.normal(0.0), 0.0);
-        assert_eq!(r.uniform.state, 7);
+        assert_eq!(r.uniform.get().state, 7);
         assert_eq!(r.crt.state, 1);
     }
 
