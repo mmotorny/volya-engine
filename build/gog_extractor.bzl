@@ -32,9 +32,16 @@ def _gog_extractor_impl(rctx):
     if result.return_code != 0:
         fail("building gog-extract: " + result.stderr)
     rctx.symlink("target/release/gog-extract", "gog-extract")
+
+    # The binary's digest, which the game files' repositories read: an
+    # extractor that changed re-keys them.
+    result = rctx.execute(["shasum", "-a", "256", "target/release/gog-extract"])
+    if result.return_code != 0:
+        fail("hashing gog-extract: " + result.stderr)
+    rctx.file("digest.txt", result.stdout.split(" ")[0] + "\n")
     rctx.file("BUILD.bazel", """\
 exports_files(
-    ["gog-extract"],
+    ["digest.txt", "gog-extract"],
     visibility = ["//visibility:public"],
 )
 """)

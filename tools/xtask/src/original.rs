@@ -18,7 +18,7 @@ use crate::wine::{Container, REG32};
 use crate::{Result, step};
 
 mod views;
-pub use views::references;
+pub use views::capture;
 
 /// The executable and its working folder, relative to the install folder,
 /// and its arguments: the launch task (gog-install-additions.md section 5:
@@ -91,8 +91,8 @@ const NEW_GAME: [&str; 3] = [
 
 /// `cargo xtask original ...`.
 pub fn main(args: &[&str]) -> Result {
-    if let ["views", rest @ ..] = args {
-        return views::main(rest);
+    if let ["capture", place, out] = args {
+        return capture(place, Path::new(out));
     }
     let (new_game, args) = match args {
         ["--new-game", rest @ ..] => (true, rest),
@@ -148,11 +148,10 @@ pub fn main(args: &[&str]) -> Result {
     Ok(())
 }
 
-/// The install folder assembled from the user's installer, and the cache
-/// holding it.
+/// The install folder, and where runs go.
 pub struct Install {
-    /// The installer's cache, shared with the game-data tests.
-    pub cache: PathBuf,
+    /// Where each run's folder goes.
+    runs: PathBuf,
     folder: PathBuf,
 }
 
@@ -160,7 +159,16 @@ impl Install {
     /// The install folder Bazel's `@gog_original` holds
     /// (docs/architecture/build.md, Game data), its manifest named by
     /// `VOLYA_GOG_ORIGINAL` (`bazel run //tools/xtask -- original`).
+    /// Runs go to `<installer cache>/original-runs/`, where the user looks
+    /// at them.
     pub fn assemble() -> Result<Self> {
+        let mut install = Self::assemble_into(PathBuf::new())?;
+        install.runs = cache()?.join("original-runs");
+        Ok(install)
+    }
+
+    /// The install, its runs going to `runs`.
+    pub fn assemble_into(runs: PathBuf) -> Result<Self> {
         let manifest = std::env::var_os("VOLYA_GOG_ORIGINAL").ok_or(
             "the original's install comes from Bazel: bazel run //tools/xtask -- original",
         )?;
@@ -172,13 +180,10 @@ impl Install {
             );
         }
         let folder = manifest.parent().ok_or("no folder")?.join("game");
-        Ok(Self {
-            cache: cache()?,
-            folder,
-        })
+        Ok(Self { runs, folder })
     }
 
-    /// Starts a run (`<cache>/original-runs/<unix time>/`): the install
+    /// Starts a run (`<runs>/<unix time>/`): the install
     /// cloned with what the install adds, `demos` (name, bytes) written as
     /// camera tracks to the saves folder (steering-the-original.md section
     /// 4.2), and the launch task started with [`ARGS`] and `extra` on the
@@ -188,7 +193,7 @@ impl Install {
             .duration_since(UNIX_EPOCH)
             .map_err(|e| e.to_string())?
             .as_secs();
-        let dir = self.cache.join("original-runs").join(stamp.to_string());
+        let dir = self.runs.join(stamp.to_string());
         let game = dir.join("game");
         let documents = dir.join("documents");
         let frames = dir.join("frames");
@@ -430,7 +435,7 @@ fn installer() -> Result<(PathBuf, PathBuf)> {
 
 /// The installer's cache (as the game-data tests name it), without
 /// assembling anything.
-pub fn cache() -> Result<PathBuf> {
+fn cache() -> Result<PathBuf> {
     let (exe, bin) = installer()?;
     cache_dir(&exe, &bin)
 }

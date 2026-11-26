@@ -28,6 +28,26 @@ volya_binary(
     ],
 )
 
+# The capture actions' tool (build/original.bzl): the `original` modules
+# alone, so an edit elsewhere in xtask captures nothing again.
+volya_binary(
+    name = "capture",
+    srcs = [
+        "src/capture.rs",
+        "src/common.rs",
+        "src/machine.rs",
+        "src/original.rs",
+        "src/original/views.rs",
+        "src/wine.rs",
+    ],
+    compile_data = ["//tests/fidelity:views.rs"],
+    crate_root = "src/capture.rs",
+)
+
+# The Wine image's file: the capture actions' input (its hash tags the
+# image, wine.rs).
+exports_files(["wine/Containerfile"])
+
 rust_test(
     name = "xtask-unit",
     crate = ":xtask",

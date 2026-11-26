@@ -209,7 +209,7 @@
   "moduleExtensions": {
     "//build:gog.bzl%gog": {
       "general": {
-        "bzlTransitiveDigest": "14Z0z3ouRnoaAF4Jryg3HVqfrJ5B7T2PO540l4mQQoI=",
+        "bzlTransitiveDigest": "JVCCJAhSiTJZcGqXbZUiulqMXPMj5hp5biz0fdW5aNk=",
         "usagesDigest": "xwdOneln1/KCPMNVJvIYXmcS/6Up7QI2ceWCOEzsIQc=",
         "recordedInputs": [
           "REPO_MAPPING:,gog_installer +gog_installer+gog_installer",

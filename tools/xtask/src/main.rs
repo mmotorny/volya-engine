@@ -4,6 +4,7 @@
 //! Project tasks: `cargo xtask <task>`.
 
 mod bazel;
+mod common;
 mod deploy;
 mod e2e;
 mod machine;
@@ -14,7 +15,7 @@ mod wine;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::ExitCode;
 use std::time::Duration;
 
 use volya_engine_site::{Stamp, copy_dir};
@@ -59,9 +60,9 @@ Tasks:
               Run the original game from VOLYA_GOG_INSTALLER under Wine for
               SECONDS (default 300), capturing its display to PNGs in the
               local cache.
-  original views [--again] [NAME...]
-              Capture the original's frame of each view of the fidelity
-              suite (tests/fidelity/views.rs) not yet cached.
+  original capture title|level OUT
+              The original's frames of the fidelity suite's views there,
+              into OUT/fidelity/ (what //tests/fidelity:frames runs).
   update      Move to the latest stable Rust and dependencies, then check
               (under `bazel run`: also Bazel, its modules, the wasm LLVM,
               and the wasm-bindgen CLI's pin).
@@ -72,15 +73,12 @@ const NATIVE_ONLY: &[&str] = &["volya-engine-devserver", "xtask"];
 
 const WASM_TARGET: &str = "wasm32-unknown-unknown";
 
-type Result<T = ()> = std::result::Result<T, String>;
+pub use common::{Result, cmd, output, root, run, runfile, step};
 
 fn main() -> ExitCode {
     // `bazel run`: paths given are the caller's (commands still run in the
     // workspace, `cmd`).
-    let _ = START_DIR.set(std::env::current_dir().unwrap_or_default());
-    if let Some(dir) = std::env::var_os("BUILD_WORKING_DIRECTORY") {
-        let _ = std::env::set_current_dir(dir);
-    }
+    common::start();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let result = match args.as_slice() {
@@ -125,68 +123,6 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
-}
-
-/// The directory this process started in: under `bazel run`, its runfiles'
-/// tree, which runfiles paths (`$(rootpath)`) are relative to.
-static START_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-
-/// A runfiles path (`$(rootpath)`, as Bazel passes them) as a path.
-fn runfile(path: &Path) -> PathBuf {
-    START_DIR
-        .get()
-        .map_or_else(|| path.to_path_buf(), |d| d.join(path))
-}
-
-/// The source tree: the workspace under `bazel run`, the runfiles' tree in a
-/// Bazel test, else Cargo's workspace.
-fn root() -> PathBuf {
-    if let Some(dir) = std::env::var_os("BUILD_WORKSPACE_DIRECTORY") {
-        return PathBuf::from(dir);
-    }
-    if std::env::var_os("TEST_SRCDIR").is_some() {
-        return std::env::current_dir().expect("the test's directory");
-    }
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .expect("xtask lives at tools/xtask")
-        .to_path_buf()
-}
-
-fn step(name: &str) {
-    println!("\n==> {name}");
-}
-
-fn cmd(program: &str, args: &[&str]) -> Command {
-    let mut command = Command::new(program);
-    command.args(args).current_dir(root());
-    command
-}
-
-fn run(command: &mut Command) -> Result {
-    let status = command
-        .status()
-        .map_err(|e| format!("{:?}: {e}", command.get_program()))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("{command:?} failed with {status}"))
-    }
-}
-
-fn output(command: &mut Command) -> Result<String> {
-    let out = command
-        .output()
-        .map_err(|e| format!("{:?}: {e}", command.get_program()))?;
-    if !out.status.success() {
-        return Err(format!(
-            "{command:?} failed with {}\n{}",
-            out.status,
-            String::from_utf8_lossy(&out.stderr)
-        ));
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// `--exclude` arguments for crates that don't build for wasm.

@@ -15,9 +15,23 @@ use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 
 use crate::{Result, cmd, root, run, step};
 
-/// The image and the file it is built from (`tools/xtask/wine/`).
-const IMAGE: &str = "volya-engine-wine-box64:latest";
+/// The file the image is built from (`tools/xtask/wine/`).
 const CONTAINERFILE: &str = "Containerfile";
+
+/// The image, tagged with a hash of its Containerfile: a changed file names
+/// an image not built yet, which [`Container::spawn`] builds, so a run (and
+/// a Bazel capture, which takes the file as an input) never uses an image
+/// of another file.
+fn image() -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let file = root().join("tools/xtask/wine").join(CONTAINERFILE);
+    let text = fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let hash: String = Sha256::digest(&text)[..6]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    Ok(format!("volya-engine-wine-box64:{hash}"))
+}
 
 /// Registers box64 for x86_64 ELF executables and shared objects
 /// (e_machine 0x3e), Wine's Unix side.
@@ -149,7 +163,8 @@ impl Container {
     ) -> Result<Self> {
         let name = format!("volya-engine-wine-{}", std::process::id());
         let session = Session::open(Some(&name))?;
-        if !quiet(&mut cmd("container", &["image", "inspect", IMAGE])) {
+        let image = image()?;
+        if !quiet(&mut cmd("container", &["image", "inspect", &image])) {
             build_image()?;
         }
         let mount = format!("type=bind,source={},target=/work", dir.display());
@@ -164,7 +179,8 @@ impl Container {
         let script = format!(
             "set -e\nmount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc\n{BINFMT}{SETUP}{tail}"
         );
-        run.args([IMAGE, "sh", "-c", &script, "sh"]).args(args);
+        run.args([image.as_str(), "sh", "-c", &script, "sh"])
+            .args(args);
         let child = run
             .stdin(Stdio::null())
             .stdout(stdout)
@@ -213,13 +229,14 @@ impl Drop for Container {
 }
 
 fn build_image() -> Result {
-    step(&format!("Building {IMAGE}"));
+    let image = image()?;
+    step(&format!("Building {image}"));
     let context = root().join("tools/xtask/wine");
     let context = context.to_str().ok_or("non-UTF-8 path")?;
     let file = format!("{context}/{CONTAINERFILE}");
     run(&mut cmd(
         "container",
-        &["build", "--tag", IMAGE, "--file", &file, context],
+        &["build", "--tag", &image, "--file", &file, context],
     ))
 }
 

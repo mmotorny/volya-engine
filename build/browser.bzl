@@ -20,10 +20,15 @@ def _browser_suite_test_impl(ctx):
         "VOLYA_SITE_NEXT": ctx.file.site_next.short_path,
         "VOLYA_TESTS": ctx.label.package,
     }
+    files = []
+    if ctx.attr.references:
+        # The fidelity suite's: the original's frames.
+        files = ctx.files.references
+        env["VOLYA_FIDELITY_FRAMES"] = ctx.files.references[0].short_path
     if ctx.attr.gamedata and GOG_INSTALLER:
         env["VOLYA_GOG_INSTALLER"] = GOG_INSTALLER
     runfiles = ctx.runfiles(
-        files = [ctx.file.site, ctx.file.site_next] + ctx.files.suite_files + ctx.files.data,
+        files = [ctx.file.site, ctx.file.site_next] + ctx.files.suite_files + ctx.files.data + files,
     ).merge(ctx.attr.runner[DefaultInfo].default_runfiles)
     return [
         DefaultInfo(executable = exe, runfiles = runfiles),
@@ -36,6 +41,7 @@ browser_suite_test = rule(
     attrs = {
         "data": attr.label_list(allow_files = True, doc = "Further inputs: the browser's version, the game data's fingerprint."),
         "gamedata": attr.bool(doc = "Serve the installer to the page."),
+        "references": attr.label(doc = "Frames the page compares with, `fidelity/<view>.png`."),
         "runner": attr.label(executable = True, cfg = "target", mandatory = True),
         "site": attr.label(allow_single_file = True, mandatory = True),
         "site_next": attr.label(allow_single_file = True, mandatory = True),
@@ -56,7 +62,7 @@ def suite_group(name, tests):
     """
     native.test_suite(name = name, tags = ["manual"], tests = tests)
 
-def browser_suite(suite, target, tags = [], timeout = "moderate", gamedata = True):
+def browser_suite(suite, target, tags = [], timeout = "moderate", gamedata = True, references = None):
     """`<suite>_<target>`: the browser suite `suite` on `target`.
 
     Args:
@@ -65,6 +71,7 @@ def browser_suite(suite, target, tags = [], timeout = "moderate", gamedata = Tru
         tags: tags besides the ones every suite has.
         timeout: Bazel's timeout (the suite's report timeout is its own).
         gamedata: whether the suite reads the installer.
+        references: frames the page compares with (the fidelity suite's).
     """
     # Never in `bazel test //...` by accident: the iOS Simulator and the
     # measurements run only when named, alone on the machine.
@@ -76,6 +83,7 @@ def browser_suite(suite, target, tags = [], timeout = "moderate", gamedata = Tru
         args = ["suite", target, suite],
         data = [browser] + (["@gog_installer//:fingerprint.txt"] if gamedata else []),
         gamedata = gamedata,
+        references = references,
         runner = "//tools/xtask",
         site = "//platforms/web:site_test",
         site_next = "//platforms/web:site_next",

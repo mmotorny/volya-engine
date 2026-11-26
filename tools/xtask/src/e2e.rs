@@ -253,8 +253,8 @@ fn run_suite(
     target: &str,
     suite: &str,
 ) -> std::result::Result<(), String> {
-    // The fidelity suite compares with the original's frames
-    // (`cargo xtask original views`), the others with VOLYA_COMPARE_DIR's.
+    // The fidelity suite compares with the original's frames (Bazel's
+    // captures), the others with VOLYA_COMPARE_DIR's.
     let references = if suite == "fidelity" {
         original_frames().map_err(|e| format!("{suite} on {target}: {e}"))?
     } else {
@@ -298,13 +298,10 @@ fn run_suite(
     }
 }
 
-/// The original's frames the fidelity suite compares with, where
-/// VOLYA_GOG_INSTALLER names the installer.
+/// The original's frames the fidelity suite compares with: Bazel's capture
+/// actions' (`//tests/fidelity:frames`, `VOLYA_FIDELITY_FRAMES`).
 fn original_frames() -> Result<Option<PathBuf>> {
-    if std::env::var_os("VOLYA_GOG_INSTALLER").is_none() {
-        return Ok(None);
-    }
-    crate::original::references(&crate::original::cache()?).map(Some)
+    Ok(env::var_os("VOLYA_FIDELITY_FRAMES").map(|dir| crate::runfile(Path::new(&dir))))
 }
 
 /// The kept Chrome profile's directory (see [`KEPT_PROFILE`]), one for the

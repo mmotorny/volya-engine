@@ -1,24 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! `cargo xtask original views [--again] [NAME...]`: the original's frame of
-//! each view of the fidelity suite (`tests/fidelity/views.rs`), steered by
-//! docs/behavior/steering-the-original.md and cached as game assets in
-//! `<installer cache>/original-frames/<view>/<key>.png`, the key a hash of
-//! the view, the settings and this procedure: a frame is captured again only
-//! when its key changes (or with `--again`). The `fidelity` browser suite
-//! compares ours with them ([`references`]).
+//! The original's frame of each view of the fidelity suite
+//! (`tests/fidelity/views.rs`), steered by
+//! docs/behavior/steering-the-original.md: [`capture`], which Bazel's
+//! capture actions run (`//tests/fidelity:frames`, build/original.bzl), so
+//! a frame is captured again only when its inputs change. The `fidelity`
+//! browser suite compares ours with them.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::ExitStatus;
 use std::thread;
 use std::time::Duration;
 
-use sha2::{Digest, Sha256};
-
 use super::{Install, NEW_GAME, Run, png};
-use crate::{Result, step};
+use crate::Result;
 
 #[allow(dead_code)]
 mod list {
@@ -27,7 +24,7 @@ mod list {
         "/../../tests/fidelity/views.rs"
     ));
 }
-pub use list::{Camera, FOV_DEGREES, HEIGHT, Place, SETTINGS, VIEWS, View, WIDTH};
+pub use list::{Camera, HEIGHT, Place, SETTINGS, VIEWS, View, WIDTH};
 
 /// Seconds after the container's start at which the title menu is captured:
 /// measured, the menu shows by about 65 s (#519); it waits twice that.
@@ -67,81 +64,46 @@ const INTRO_TIMEOUT: u64 = 400;
 /// Seconds between looks at the display while waiting.
 const POLL: u64 = 2;
 
-/// What else decides a frame, in its cache key: this procedure's timing.
-fn procedure() -> String {
-    format!(
-        "title at {TITLE_AT} s; track {TRACK_KEYS} keys × {TRACK_CYCLES}; precache {PRECACHE} s, \
-         waited out; settle {SETTLE} s; loading screen, intro waited out, play"
-    )
-}
-
-const USAGE: &str = "Usage: cargo xtask original views [--again] [NAME...]";
-
-/// `cargo xtask original views [--again] [NAME...]`.
-pub fn main(args: &[&str]) -> Result {
-    let (again, names) = match args {
-        ["--again", rest @ ..] => (true, rest),
-        _ => (false, args),
+/// Captures the original's frames of the views at `place` (`title`: the
+/// title menu's; `level`: a New Game's) into `out/fidelity/<view>.png`, one
+/// run of the game in the temporary directory, removed after.
+pub fn capture(place: &str, out: &Path) -> Result {
+    let views: Vec<&View> = VIEWS
+        .iter()
+        .filter(|v| {
+            matches!(
+                (place, v.place),
+                ("title", Place::TitleMenu) | ("level", Place::NewGame { .. })
+            )
+        })
+        .collect();
+    if !["title", "level"].contains(&place) {
+        return Err(format!("no place {place:?}: title or level"));
+    }
+    let dir = out.join("fidelity");
+    fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let runs = std::env::temp_dir().join(format!("volya-capture-{}", std::process::id()));
+    let install = Install::assemble_into(runs.clone())?;
+    let result = if views.is_empty() {
+        Ok(())
+    } else if place == "title" {
+        capture_title(&install, &dir, &views)
+    } else {
+        capture_level(&install, &dir, &views)
     };
-    for name in names {
-        if !VIEWS.iter().any(|v| v.name == *name) {
-            let all: Vec<&str> = VIEWS.iter().map(|v| v.name).collect();
-            return Err(format!(
-                "no view {name:?} (views: {})\n{USAGE}",
-                all.join(", ")
-            ));
-        }
-    }
-    let install = Install::assemble()?;
-    let cache = install.cache.join("original-frames");
-    let chosen = VIEWS
-        .iter()
-        .filter(|v| names.is_empty() || names.contains(&v.name));
-    let (mut title, mut level) = (Vec::new(), Vec::new());
-    for view in chosen {
-        let path = frame_path(&cache, view);
-        if !again && path.exists() {
-            println!("{}: cached, {}", view.name, path.display());
-            continue;
-        }
-        match view.place {
-            Place::TitleMenu => title.push(view),
-            Place::NewGame { .. } => level.push(view),
-        }
-    }
-    if !title.is_empty() {
-        capture_title(&install, &cache, &title)?;
-    }
-    if !level.is_empty() {
-        capture_level(&install, &cache, &level)?;
-    }
-    let served = references(&install.cache)?;
-    step(&format!(
-        "The original's frames, as the fidelity suite reads them: {}",
-        served.join("fidelity").display()
-    ));
-    Ok(())
-}
-
-/// The cache key of `view`: its definition, the settings, the video mode,
-/// the field of view and [`procedure`], hashed.
-fn key(view: &View) -> String {
-    let text = format!(
-        "{view:?}\n{SETTINGS:?}\n{WIDTH}x{HEIGHT}\n{FOV_DEGREES}\n{}",
-        procedure()
+    // The run's clone of the install, its Wine prefix and captures: scratch.
+    let _ = crate::run(
+        std::process::Command::new("chmod")
+            .arg("-R")
+            .arg("u+w")
+            .arg(&runs),
     );
-    Sha256::digest(text.as_bytes())[..8]
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    let _ = fs::remove_dir_all(&runs);
+    result
 }
 
-fn frame_path(cache: &Path, view: &View) -> PathBuf {
-    cache.join(view.name).join(format!("{}.png", key(view)))
-}
-
-/// Keeps `rgb` as `view`'s frame in the cache and in the run's captures.
-fn keep(run: &Run, cache: &Path, view: &View, (w, h, rgb): (u32, u32, Vec<u8>)) -> Result {
+/// Keeps `rgb` as `view`'s frame in `out` and in the run's captures.
+fn keep(run: &Run, out: &Path, view: &View, (w, h, rgb): (u32, u32, Vec<u8>)) -> Result {
     if (w, h) != (WIDTH, HEIGHT) {
         return Err(format!("{}: the display is {w}x{h}", view.name));
     }
@@ -156,13 +118,7 @@ fn keep(run: &Run, cache: &Path, view: &View, (w, h, rgb): (u32, u32, Vec<u8>)) 
         );
         return Ok(());
     }
-    let path = frame_path(cache, view);
-    let dir = path.parent().ok_or("no parent")?;
-    fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    // Earlier keys' frames of the view are stale.
-    for old in fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))? {
-        let _ = fs::remove_file(old.map_err(|e| e.to_string())?.path());
-    }
+    let path = out.join(format!("{}.png", view.name));
     fs::write(&path, &bytes).map_err(|e| format!("{}: {e}", path.display()))?;
     let copy = run.frames.join(format!("{}.png", view.name));
     fs::write(&copy, &bytes).map_err(|e| format!("{}: {e}", copy.display()))?;
@@ -224,12 +180,12 @@ fn poll(
 /// The title menu: the game started without a level shows its logo videos
 /// and then the menu (#519, measured); captured at [`TITLE_AT`], then the
 /// game quits (steering-the-original.md section 7).
-fn capture_title(install: &Install, cache: &Path, views: &[&View]) -> Result {
+fn capture_title(install: &Install, out: &Path, views: &[&View]) -> Result {
     let mut run = install.start(&[], &[], "to the title menu")?;
     wait_until(&mut run, Duration::from_secs(TITLE_AT))?;
     let frame = run.capture().ok_or("no display")?;
     for view in views {
-        keep(&run, cache, view, frame.clone())?;
+        keep(&run, out, view, frame.clone())?;
     }
     let ended = run.quit()?;
     run.finish(ended);
@@ -258,7 +214,7 @@ fn capture_title(install: &Install, cache: &Path, views: &[&View]) -> Result {
 ///   track (section 4.2), so each is captured before the next plays. A
 ///   black capture is not kept;
 /// - `quit` (section 7) with no precache pending, so exit code 0.
-fn capture_level(install: &Install, cache: &Path, views: &[&View]) -> Result {
+fn capture_level(install: &Install, out: &Path, views: &[&View]) -> Result {
     let (mut starts, mut tracks) = (Vec::new(), Vec::new());
     let mut demos = Vec::new();
     for view in views {
@@ -316,7 +272,7 @@ fn capture_level(install: &Install, cache: &Path, views: &[&View]) -> Result {
     for (view, seconds) in starts {
         wait_until(&mut run, at(seconds))?;
         let frame = run.capture().ok_or("no display")?;
-        keep(&run, cache, view, frame)?;
+        keep(&run, out, view, frame)?;
     }
     for (view, seconds) in tracks {
         let played = at(seconds - lead);
@@ -344,7 +300,7 @@ fn capture_level(install: &Install, cache: &Path, views: &[&View]) -> Result {
             (shown - played).as_secs(),
             (capture - play).as_secs()
         );
-        keep(&run, cache, view, frame)?;
+        keep(&run, out, view, frame)?;
     }
     let ended = run.quit()?;
     run.finish(ended);
@@ -420,31 +376,6 @@ fn view_matrix(e: [f32; 3], yaw: f32, pitch: f32) -> [[f32; 4]; 4] {
     ]
 }
 
-/// The folder the fidelity suite reads the original's frames from
-/// (`<installer cache>/original-frames/current/`, the dev server's
-/// references): `fidelity/<view>.png`, a clone of each view's frame of its
-/// current key; views without one have none.
-pub fn references(installer_cache: &Path) -> Result<PathBuf> {
-    let cache = installer_cache.join("original-frames");
-    let served = cache.join("current");
-    let dir = served.join("fidelity");
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    for view in VIEWS {
-        let from = frame_path(&cache, view);
-        if from.exists() {
-            let to = dir.join(format!("{}.png", view.name));
-            crate::run(
-                std::process::Command::new("cp")
-                    .arg("-c")
-                    .arg(&from)
-                    .arg(&to),
-            )?;
-        }
-    }
-    Ok(served)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -488,9 +419,7 @@ mod tests {
     }
 
     #[test]
-    fn keys_differ_by_view() {
-        assert_ne!(key(&VIEWS[0]), key(&VIEWS[1]));
-        assert_eq!(key(&VIEWS[1]).len(), 16);
+    fn view_names_are_unique() {
         let names: std::collections::BTreeSet<&str> = VIEWS.iter().map(|v| v.name).collect();
         assert_eq!(names.len(), VIEWS.len());
     }
