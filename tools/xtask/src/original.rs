@@ -11,13 +11,13 @@ use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use volya_engine_installer::{Installer, extract};
 
-use crate::wine::Container;
+use crate::wine::{Container, Emulator};
 use crate::{Result, step};
 
 /// The edition the game-data tests use.
@@ -83,10 +83,27 @@ const DEFAULT_SECONDS: u64 = 300;
 /// Xvfb keeps its screen in this file (`-fbdir`, an XWD image).
 const FRAMEBUFFER: &str = "/tmp/fb/Xvfb_screen0";
 
-const USAGE: &str = "Usage: cargo xtask original [SECONDS]";
+/// The virtual display and its authority file (`xvfb-run -n`, `-f`).
+const DISPLAY: &str = "99";
+const XAUTHORITY: &str = "/tmp/xauthority";
 
-/// `cargo xtask original [SECONDS]`.
+/// Ends the game with its own `quit` console command, typed with `xdotool`
+/// into the virtual display: the shipped bindings open the console with the
+/// grave key (steering-the-original.md section 2.2).
+const QUIT: &str = "xdotool key grave && sleep 1 && xdotool type quit && xdotool key Return";
+
+/// Seconds the game gets to end after [`QUIT`].
+const QUIT_WAIT: u64 = 60;
+
+const USAGE: &str = "Usage: cargo xtask original [--emulator qemu|box64] [--quit] [SECONDS]";
+
+/// `cargo xtask original [--emulator qemu|box64] [--quit] [SECONDS]`.
 pub fn main(args: &[&str]) -> Result {
+    let (emulator, args) = Emulator::parse(args)?;
+    let (quit, args) = match args {
+        ["--quit", rest @ ..] => (true, rest),
+        _ => (false, args),
+    };
     let seconds = match args {
         [] => DEFAULT_SECONDS,
         [s] => s.parse().map_err(|e| format!("SECONDS: {e}\n{USAGE}"))?,
@@ -122,11 +139,12 @@ pub fn main(args: &[&str]) -> Result {
         "mkdir -p /tmp/fb\n\
          docs=\"$WINEPREFIX/drive_c/users/{WINE_USER}/Documents\"\n\
          rm -rf \"$docs\" && ln -s /work/documents \"$docs\"\n\
-         wine reg import 'Z:\\work\\install.reg'\n\
+         wine '{reg}' import 'Z:\\work\\install.reg'\n\
          wineserver -w\n\
          cd {INSTALL_IN_CONTAINER}/{WORKING_DIR}\n\
-         xvfb-run -a -s '-screen 0 {SCREEN} -fbdir /tmp/fb' wine \"$@\"\n\
-         echo \"exit code $?\""
+         xvfb-run -n {DISPLAY} -f {XAUTHORITY} -s '-screen 0 {SCREEN} -fbdir /tmp/fb' wine \"$@\"\n\
+         echo \"exit code $?\"",
+        reg = emulator.reg()
     );
     let exe = format!("{INSTALL_IN_CONTAINER}/{EXE}");
     let mut program = vec![exe.as_str()];
@@ -136,7 +154,7 @@ pub fn main(args: &[&str]) -> Result {
         ARGS.join(" "),
         frames.display()
     ));
-    let mut container = Container::spawn(&run, &tail, &program, log.into(), err.into())?;
+    let mut container = Container::spawn(emulator, &run, &tail, &program, log.into(), err.into())?;
     let start = Instant::now();
     let mut last: Option<Vec<u8>> = None;
     let mut ended = None;
@@ -168,6 +186,9 @@ pub fn main(args: &[&str]) -> Result {
             println!("final  {}", path.display());
         }
         save_user_files(&container, &run.join("prefix"));
+        if quit {
+            ended = quit_game(&mut container)?;
+        }
     }
     let elapsed = start.elapsed().as_secs();
     drop(container);
@@ -209,8 +230,8 @@ $screenshots$ =   true | false| $app_data_root$| screenshots\\
 
 /// The registry entries of the install, as a file for `reg import`:
 /// - the install script's five values (gog-install-additions.md section
-///   4.1; `$1` believed the DWORD 1); a 32-bit prefix has a single view, so
-///   the 32-bit view the game reads (section 4.1) is the only one;
+///   4.1; `$1` believed the DWORD 1), imported into the 32-bit view the
+///   game reads (section 4.1, [`Emulator::reg`]);
 /// - the installer's own `GOG.com` values (section 4.2), less `lang_code`,
 ///   whose value is not established; `installer_language` is the `/LANG`
 ///   value, the Russian edition's `russian` (sections 1 and 4.2).
@@ -278,6 +299,23 @@ fn add_install(game: &Path, documents: &Path) -> Result {
     }
     steer.extend_from_slice(STEERING.as_bytes());
     write(&user.join(STEER_LTX), &steer)
+}
+
+/// Types [`QUIT`]; the container's exit status once the game has ended, or
+/// `None` if it is still running after [`QUIT_WAIT`] seconds.
+fn quit_game(container: &mut Container) -> Result<Option<ExitStatus>> {
+    step("Quitting the game from its console");
+    let script = format!("export DISPLAY=:{DISPLAY} XAUTHORITY={XAUTHORITY}\n{QUIT}");
+    container.exec(&["sh", "-c", &script])?;
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(QUIT_WAIT) {
+        thread::sleep(Duration::from_secs(1));
+        if let Some(status) = container.try_wait()? {
+            return Ok(Some(status));
+        }
+    }
+    println!("The game was still running {QUIT_WAIT} s after quit");
+    Ok(None)
 }
 
 /// The display as PNG, or `None` while there is none.
