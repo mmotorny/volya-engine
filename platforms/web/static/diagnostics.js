@@ -24,6 +24,8 @@ import { versionText } from "./update.js";
 
 const KEY = "volya-engine.diagnostic-log";
 const END_KEY = "volya-engine.diagnostic-log-end";
+/** Set (sessionStorage) as a page restored from the back-forward cache reloads. */
+const RESTORED_KEY = "volya-engine.diagnostic-log-restored";
 const PERIOD_MS = 1000;
 /** This session's `{pid, cat}` once its log is on (the engine's status). */
 let current = null;
@@ -42,15 +44,48 @@ export function enabled() {
   }
 }
 
+/**
+ * Whether this page load is main.js's reload of a page restored from the
+ * back-forward cache (`restoredReload`); read as the page loads, whether or
+ * not the log is on, so no later load inherits it.
+ */
+const restored = (() => {
+  try {
+    const value = sessionStorage.getItem(RESTORED_KEY) === "1";
+    sessionStorage.removeItem(RESTORED_KEY);
+    return value;
+  } catch {
+    return false;
+  }
+})();
+
 /** What the page tells the engine of the session. */
 export function session() {
+  const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
   return {
     version: versionText(),
     user_agent: navigator.userAgent,
     screen: `${screen.width}×${screen.height}`,
     dpr: devicePixelRatio,
     cores: navigator.hardwareConcurrency ?? 0,
+    // How this page load started: navigate, reload or back_forward
+    // (Navigation Timing Level 2).
+    navigation: performance.getEntriesByType("navigation")[0]?.type ?? "unknown",
+    restored_reload: restored,
+    display_mode: standalone ? "standalone" : "browser",
   };
+}
+
+/**
+ * Notes, for the next page's session, that this page was restored from the
+ * back-forward cache and reloads (its engine worker ended as it was hidden).
+ */
+export function restoredReload() {
+  try {
+    sessionStorage.setItem(RESTORED_KEY, "1");
+  } catch {
+    // Storage refused: the next session shows a reload only.
+  }
 }
 
 function flush() {
