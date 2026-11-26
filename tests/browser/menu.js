@@ -135,7 +135,8 @@ async function heapRecord(reset) {
   const kib = (k) => (k >= 1024 ? `${(k / 1024).toFixed(1)}M` : `${k}K`);
   const size = (b) => (b >= 2 ** 20 ? `${b / 2 ** 20}M` : b >= 1024 ? `${b / 1024}K` : `${b}`);
   const sizes = r.sizes_kib.map(([at, k]) => `≥${size(at)}: ${kib(k)}`).join(", ");
-  return `the most live ${mib(r.live_bytes)} (by block size ${sizes}; largest ${r.large.slice(0, 40).map(([, k]) => kib(k)).join(" ")})`;
+  const growths = (r.growths ?? []).map(([k, at, heap]) => `${kib(k)} at ${at.toFixed(1)} to ${heap.toFixed(0)}`).join(", ");
+  return `the most live ${mib(r.live_bytes)} (by block size ${sizes}; largest ${r.large.slice(0, 40).map(([, k]) => kib(k)).join(" ")}); the heap grown by ${r.growth_count ?? 0} allocations (KiB asked for at MiB, to MiB): ${growths}`;
 }
 const view = () => document.getElementById("view");
 // The memory JavaScript holds, per context (#374): Chrome's
@@ -715,6 +716,46 @@ export const tests = {
     firstLive = stats.gpu_live;
     if (gpu.textures === "etc2") assertEqual(stats.textures.textures > 300, true, `textures prepared: ${JSON.stringify(stats.textures)}`);
     return `textures ${gpu.textures}; ${note}; ${await jsMemory(stats)}; ${JSON.stringify(stats)}`;
+  },
+
+  "a phone's second game: the first game played 20 s, quit to the title menu, a New Game 5 s later": async () => {
+    needsGame();
+    // The path of a device's log (#487): the game quit to the title menu
+    // (not left), then a New Game.
+    await until((s) => s.phase === "level" && !s.intro, "the level");
+    const start = await volya.call("level_stats");
+    // Walking and turning about, as a player does.
+    const hold = (code, down) => document.body.dispatchEvent(new KeyboardEvent(down ? "keydown" : "keyup", { code, bubbles: true, cancelable: true }));
+    for (let i = 0; i < 10; i++) {
+      hold("KeyW", true);
+      await sleep(1500);
+      hold("KeyW", false);
+      hold("ArrowRight", true);
+      await sleep(500);
+      hold("ArrowRight", false);
+    }
+    const played = await volya.call("level_stats");
+    key("Escape");
+    await until((s) => inGame(s), "the in-game menu");
+    await selectInGame("btn_quit_to_mm");
+    key("Enter");
+    await answerBox("yes");
+    await until((s) => s.phase === "menu", "the title menu");
+    await sleep(5000);
+    const title = await volya.call("level_stats");
+    await noteHeap("the title menu 5 s after quitting");
+    await volya.call("heap_log", { on: true });
+    await heapRecord(true);
+    await newGame();
+    await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", loadMs());
+    const stages = byCaption(await volya.call("heap_log", { on: false }));
+    const record = await heapRecord(false);
+    const loaded = await volya.call("level_stats");
+    await noteHeap("the level after quitting to the title menu");
+    key("Escape");
+    await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
+    const gpu = (st) => `textures ${mib(st.gpu_texture_bytes ?? 0)}, world ${mib(st.gpu_world_bytes ?? 0)}`;
+    return `wasm heap: the level ${mib(start.wasm_heap_bytes)}, after 20 s ${mib(played.wasm_heap_bytes)}, the title menu ${mib(title.wasm_heap_bytes)}, the second game ${mib(loaded.wasm_heap_bytes)}; GPU: the level ${gpu(start)}, the title menu ${gpu(title)}, the second game ${gpu(loaded)}; ${heapMaps.slice(-2).join("; ")}; by caption (MiB, heap/live): ${stages}; ${record}`;
   },
 
   "the game left from its level and launched again: a New Game there at 2868×1320 is served by the heap the first grew": async () => {

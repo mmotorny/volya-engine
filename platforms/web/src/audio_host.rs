@@ -75,8 +75,11 @@ struct State {
     /// came, #452), and the time between services (ms).
     missed: f64,
     gap: Series,
-    /// When the last service ran (ms since the epoch).
+    /// When the last service ran (ms since the epoch), while the output
+    /// is expected to run ([`audio_host_running`]): gaps are measured only
+    /// then (#496).
     serviced_at: Option<f64>,
+    running: bool,
     underrun_reported: f64,
     /// Blocks recorded for the engine's capture (`Remote::watch`).
     blocks: Vec<serde_json::Value>,
@@ -88,9 +91,10 @@ thread_local! {
 
 /// A new output on `memory` (`crate::audio_ring`), whose ring of frames
 /// is kept filled to `target` frames (`static/audio-ring.js`): a fresh
-/// mixer from the engine's first commands.
+/// mixer from the engine's first commands. `running`: whether the output
+/// is expected to run ([`audio_host_running`]).
 #[wasm_bindgen]
-pub fn audio_host_connect(sample_rate: f64, target: u32, memory: JsValue) {
+pub fn audio_host_connect(sample_rate: f64, target: u32, memory: JsValue, running: bool) {
     STATE.with(|s| {
         let mut s = s.borrow_mut();
         let ring = Ring::new(&memory);
@@ -101,6 +105,21 @@ pub fn audio_host_connect(sample_rate: f64, target: u32, memory: JsValue) {
         s.blocks.clear();
         s.sample_rate = sample_rate;
         s.target = target.clamp(BLOCK, OUT_FRAMES - BLOCK);
+        s.serviced_at = None;
+        s.running = running;
+    });
+}
+
+/// Whether the output is expected to run: its page shown and its
+/// AudioContext running. A hidden page's workers are throttled or frozen
+/// and a suspended context consumes nothing, so the time between services
+/// counts only while this holds.
+#[wasm_bindgen]
+pub fn audio_host_running(on: bool) {
+    STATE.with(|s| {
+        let mut s = s.borrow_mut();
+        s.running = on;
+        s.serviced_at = None;
     });
 }
 
@@ -163,9 +182,11 @@ pub fn audio_host_service(polled: bool) {
         let Some(ring) = s.ring.as_ref() else {
             return;
         };
-        let now = crate::epoch_now();
-        if let Some(at) = s.serviced_at.replace(now) {
-            s.gap.add(now - at);
+        if s.running {
+            let now = crate::epoch_now();
+            if let Some(at) = s.serviced_at.replace(now) {
+                s.gap.add(now - at);
+            }
         }
         if polled && ring.queued() < s.target / 2 {
             s.missed += 1.0;
