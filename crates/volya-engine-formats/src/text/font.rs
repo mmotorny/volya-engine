@@ -111,7 +111,7 @@ pub struct FontDefinition {
 }
 
 impl FontDefinition {
-    pub fn from_section(section: &Section) -> io::Result<Self> {
+    pub fn from_section(section: Section<'_>) -> io::Result<Self> {
         let get = |k| section.get(k).flatten().map(str::to_owned);
         let texture = get("texture")
             .ok_or_else(|| invalid(format!("[{}]: font without texture", section.name())))?;
@@ -199,7 +199,7 @@ impl GlyphMetrics {
     /// are errors; the spec does not say whether `[Char Widths]` needs all
     /// 256 keys, and missing ones are errors too.
     pub fn parse(config: &Config) -> io::Result<Self> {
-        let number = |s: &Section, key: &str| -> io::Result<f32> {
+        let number = |s: Section<'_>, key: &str| -> io::Result<f32> {
             s.get(key)
                 .flatten()
                 .map(value::float)

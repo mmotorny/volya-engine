@@ -81,7 +81,7 @@ impl WeatherSection {
     /// except the optional `sky_rotation` (absent = 0) and `env_ambient`
     /// (absent = no set, sound-weather-ambient.md 2.4); `bolt_period` and
     /// `bolt_duration` are read only with a collection.
-    pub fn read(section: &Section) -> io::Result<Self> {
+    pub fn read(section: Section<'_>) -> io::Result<Self> {
         let get = |key: &str| section.read(key);
         let floats3 = |key: &str| get(key).map(value::floats::<3>);
         let [altitude, longitude] = value::floats::<2>(get("sun_dir")?).map(f32::to_radians);

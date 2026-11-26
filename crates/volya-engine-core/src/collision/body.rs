@@ -152,7 +152,7 @@ pub struct BodyConfig {
 impl BodyConfig {
     /// From the actor's section (`actor`); a missing key is an error (the
     /// spec does not say what the game does then).
-    pub fn from_section(section: &Section) -> io::Result<Self> {
+    pub fn from_section(section: Section<'_>) -> io::Result<Self> {
         let get = |key: &str| {
             section.get(key).flatten().ok_or_else(|| {
                 io::Error::new(

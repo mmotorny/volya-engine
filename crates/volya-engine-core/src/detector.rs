@@ -78,7 +78,7 @@ fn item<'a>(items: &[&'a str], i: usize) -> Option<&'a str> {
 /// `prefix`, `prefix1`, `prefix2`, … while each exists. An empty list is
 /// the game's assertion failure: an error (what follows one is
 /// unestablished, S21 10; it ends the game here as a fatal error does).
-pub fn sound_list(section: &Section, prefix: &str) -> io::Result<Vec<ListSound>> {
+pub fn sound_list(section: Section<'_>, prefix: &str) -> io::Result<Vec<ListSound>> {
     let mut out = Vec::new();
     let mut key = prefix.to_owned();
     while let Some(v) = section.get(&key) {

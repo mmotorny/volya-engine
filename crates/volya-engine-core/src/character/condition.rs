@@ -66,7 +66,7 @@ pub struct ConditionConfig {
     pub cant_sprint_power: Hysteresis,
 }
 
-fn required<'a>(section: &'a Section, key: &str) -> io::Result<&'a str> {
+fn required<'a>(section: Section<'a>, key: &str) -> io::Result<&'a str> {
     section
         .get(key)
         .flatten()
@@ -184,7 +184,7 @@ impl Eatable {
     /// the section has no `eat_health` (not eatable: our test, since every
     /// eatable has all the keys of section 5 and they have no defaults).
     /// A missing key of an eatable is an error.
-    pub fn read(section: &Section, class_id: &str) -> io::Result<Option<Self>> {
+    pub fn read(section: Section<'_>, class_id: &str) -> io::Result<Option<Self>> {
         if !section.contains("eat_health") {
             return Ok(None);
         }
