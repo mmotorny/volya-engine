@@ -8,9 +8,14 @@ wrapping of text inside UI text elements. It covers everything the title menu (a
 
 Conventions: file paths are paths in the combined game-data tree (archive specification); the copy
 that wins under archive precedence is the one described. "UI units" are the 1024 × 768 virtual UI
-space of the title-menu specification; *W* × *H* is the output resolution in pixels and
-*s*ₓ = *W* / 1024, *s*ᵧ = *H* / 768 are the UI-to-pixel scale factors (title-menu spec, section 8).
-LTX files follow the LTX specification. `floor` rounds toward −∞.
+space of the title-menu specification; *W* × *H* is the output resolution in pixels. UI text is laid
+out in the pixels of a **layout surface** *W*′ × *H*′ (section 4.4): the screen itself
+(*W*′ × *H*′ = *W* × *H*), except while the main menu draws into the renderer's off-screen target.
+*s*ₓ = *W*′ / 1024, *s*ᵧ = *H*′ / 768 are the UI-to-pixel scale factors and *g*ₓ = *W*′ / *W*,
+*g*ᵧ = *H*′ / *H* the glyph scale factors; on the screen *g*ₓ = *g*ᵧ = 1 and *s*ₓ, *s*ᵧ are the
+title-menu spec's factors (section 8). Positions in pixels in sections 3 to 5 are layout-surface pixels
+unless stated; section 4.4 maps them to the screen. Bracketed ids [VC-n] name the checks of the
+2026-11-26 revision (section 7). LTX files follow the LTX specification. `floor` rounds toward −∞.
 
 ## 1. String tables
 
@@ -279,28 +284,31 @@ This is the font-level operation used by every text element: a string, a pen pos
   `%c[…]` are ordinary glyphs). Each byte selects the glyph with that code; the string ends at the
   first zero byte.
 - Glyph widths are in **texture pixels and are not scaled to the screen**: a glyph *w* texels wide
-  occupies *w* screen pixels at every resolution. (The variants of section 2.3 provide the size
-  change between resolutions.)
-- Each glyph advances the pen by *w* · interval.*x*. There is no kerning and no extra spacing; the
-  metric files pack the glyph cells edge to edge, so the advance equals the cell width.
-- The string's width is *S* = interval.*x* · Σ *w* over its bytes.
+  occupies *w* · *g*ₓ layout pixels, which is *w* screen pixels at every resolution (section 4.4).
+  (The variants of section 2.3 provide the size change between resolutions.)
+- Each glyph advances the pen by *w* · interval.*x* · *g*ₓ [VC-13]. There is no kerning and no extra
+  spacing; the metric files pack the glyph cells edge to edge, so the advance equals the cell width.
+- The string's width is *S* = interval.*x* · Σ *w* over its bytes, **without** the glyph scale
+  [VC-14]; it is the width used by alignment (section 3.2) and by text layout (section 4).
 - A string of 512 bytes or more is not drawn at all.
-- (A global glyph scale exists for UI rendered into an off-screen target of a different size than
-  the screen; it is 1 for UI drawn to the screen, which is the case for all menus, and is omitted
-  below.)
+- The glyph scale *g*ₓ, *g*ᵧ is 1 for text drawn straight to the screen; it differs from 1 only for
+  the main menu's text drawn into the off-screen target (section 4.4). Nothing in the engine itself
+  changes it [VC-15].
 
 ### 3.2 Position and alignment
 
 - *x*₀ = floor(*x*) for left alignment, floor(*x*) − floor(*S*) for right alignment, and
-  floor(*x*) − floor(*S* / 2) for centre alignment. The first glyph's left edge is at *x*₀; glyph *k*
-  starts at *x*₀ + interval.*x* · (*w*₀ + … + *w*ₖ₋₁).
-- The top of every glyph is at *y*₀ = floor(*y*) and the bottom at *y*₀ + *f*, where *f* is the font
-  height (the metric file's `height`, or `size` from `fonts.ltx`). There is no baseline: the pen *y* is
-  the top of the glyph cell.
+  floor(*x*) − floor(*S* / 2) · *g*ₓ for centre alignment [VC-13]: the centre offset is scaled by the
+  glyph scale, the right-alignment offset is not. The first glyph's left edge is at *x*₀; glyph *k*
+  starts at *x*₀ + interval.*x* · *g*ₓ · (*w*₀ + … + *w*ₖ₋₁).
+- The top of every glyph is at *y*₀ = floor(*y*) and the bottom at *y*₀ + *f* · *g*ᵧ [VC-13], where *f*
+  is the font height (the metric file's `height`, or `size` from `fonts.ltx`). There is no baseline:
+  the pen *y* is the top of the glyph cell.
 
 ### 3.3 Glyph quad and texture coordinates
 
-Each visible glyph (width not 0) is a screen-aligned rectangle *w* pixels wide and *f* pixels high.
+Each visible glyph (width not 0) is a screen-aligned rectangle *w* · *g*ₓ pixels wide and *f* · *g*ᵧ
+pixels high.
 With the texture size *T*w × *T*h and the glyph cell (*gx*, *gy*, *w*) and metric height *h*:
 
 - u from (*gx* + 0.5) / *T*w to (*gx* + 0.5) / *T*w + *w* / *T*w;
@@ -335,7 +343,9 @@ alpha (times the colour's alpha) as coverage.
 
 ### 3.6 Line height
 
-The height of one text line used by layout is *f* · interval.*y* pixels (for UI fonts: *f*).
+The height of one text line used by layout is *f* · interval.*y* pixels (for UI fonts: *f*) [VC-13]. It
+does **not** include the glyph scale: where *g*ᵧ ≠ 1 it differs from the drawn glyph height
+*f* · *g*ᵧ (section 4.4).
 
 ## 4. Text in UI elements
 
@@ -366,13 +376,13 @@ do not affect each other.
 The whole text is drawn as one string (section 3): colour codes `%c[…]` and `\n` are **not**
 interpreted in this mode; they are drawn literally as their glyphs, like any other text. With the
 element's absolute rectangle (*X*, *Y*, *w*, *h*) in UI units, its text offset (*tx*, *ty*), and the line height in UI units
-*t* = *f* · interval.*y* / *s*ᵧ:
+*t* = *f* · interval.*y* / *s*ᵧ (section 3.6; *s*ᵧ of the layout surface) [VC-12]:
 
 - horizontal anchor *a*ₓ = 0 (left), *w* (right) or *w* / 2 (centre); the font is drawn with the same
   alignment, so the text starts at, ends at, or is centred on the anchor;
-- vertical offset *a*ᵧ = 0 (top), (*h* − *t*) / 2 (centre) or *h* − *t* (bottom);
-- pen position in pixels: *x* = *s*ₓ · (*X* + *tx* + *a*ₓ), *y* = *s*ᵧ · (*Y* + *ty* + *a*ᵧ), then
-  section 3.2.
+- vertical offset *a*ᵧ = 0 (top), (*h* − *t*) / 2 (centre) or *h* − *t* (bottom) [VC-12];
+- pen position in layout pixels: *x* = *s*ₓ · (*X* + *tx* + *a*ₓ), *y* = *s*ᵧ · (*Y* + *ty* + *a*ᵧ),
+  then section 3.2; the screen position follows from section 4.4.
 
 There is no clipping to the element rectangle and no wrapping; a text wider than the element
 overflows it.
@@ -446,12 +456,70 @@ carriage return); whether bytes 0x80–0xFF (e.g. the no-break space 0xA0) count
 The text is re-wrapped whenever it, the font or the element width changes.
 
 **Drawing.** Lines are stacked from the top with a pitch of *t* + *g* UI units, where *t* is the line
-height of section 4.2 and *g* an extra line gap (0 by default). The text block height is
-*n*·(*t* + *g*) − *g* for *n* lines, and `vert_align` positions this block as in simple mode. Each
+height of section 4.2 (the same *t*, from the font height and the layout surface's *s*ᵧ) and *g* an
+extra line gap (0 by default). The text block height is *n*·(*t* + *g*) − *g* for *n* lines, and
+`vert_align` positions this block as in simple mode: offset 0, (*h* − block) / 2 or *h* − block
+[VC-12]. Each
 line is placed at the horizontal anchor *a*ₓ; its segments are drawn one after another, each starting
 where the previous segment's width (in UI units) ends, and each drawn with the element's alignment
 applied to the segment itself (for a single-colour line this aligns the whole line; for multi-colour
 lines that are right or centre aligned each segment is aligned on its own start point).
+
+### 4.4 Layout surface and screen position
+
+**Which surface.** The main menu (the title menu and the screens and message boxes it shows) draws its
+interface as the first step of the renderer's presentation, into the renderer's current target
+(`docs/behavior/frame-presentation.md`, here FP, section 3.1, presentation step 1) [VC-10, VC-11]. That
+target is the off-screen target when the frame is drawn into it (FP 3.1, frame start step 1: the target
+is usable and the screen effects are active, `r__supersample` > 1, or the distortion pass ran in the
+previous frame), and the screen otherwise [VC-11]. So:
+
+- main menu, frame drawn into the off-screen target: *W*′ × *H*′ = *W*ₜ × *H*ₜ, the target size of
+  FP 1.1 (from `r__supersample` *s*: per axis floor(*N* · √*s* + 0.5), clamped to 128 … 2048, made
+  even by subtracting 1);
+- otherwise (main menu drawn to the screen, and all other interface, which draws with the screen's
+  factors [VC-10]): *W*′ × *H*′ = *W* × *H*.
+
+While the main menu draws, the UI scale factors are *s*ₓ = *W*′ / 1024, *s*ᵧ = *H*′ / 768 and the glyph
+scale factors *g*ₓ = *W*′ / *W*, *g*ᵧ = *H*′ / *H*; when it has finished, the screen's factors and a glyph
+scale of 1 are restored [VC-10]. The metric file (font variant, section 2.3) is still chosen by the
+screen height *H*, not by *H*′.
+
+Measured at the title screen [VC-2, VC-3, VC-5]: with `r__supersample` 4 the captions sit where these
+rules place them on the target and then on the screen (below), 5 to 8 pixels lower than on the screen
+rules (4 to 5 with `r__supersample` 2 at 1920 × 1080, target 2048 × 1526); with `r__supersample` 1
+exactly on the screen rules, at every resolution examined (1920 × 1080, 1280 × 1024, 1024 × 768,
+800 × 600).
+
+**Screen position.** The off-screen target is then reduced to the screen by the presentation pass
+(FP 3.2–3.5). A layout position (*x*, *y*) appears at screen position (*x* · *W* / *W*′, *y* · *H* / *H*′);
+where that is not a whole pixel the text is resampled across neighbouring pixels, as the whole frame
+is. Measured: glyph tops of the title-menu captions and of the version caption within 0.75 pixel of
+*y*₀ · *H* / *H*′ (*y*₀ from section 3.2), left edges within 0.75 pixel of *x*₀ · *W* / *W*′ [VC-4, VC-6,
+VC-7].
+
+**What changes on the screen.** With *k*ᵧ = *H* / *H*′ (1 on the screen surface):
+
+- glyph cells keep their size on the screen: *f* · *g*ᵧ · *k*ᵧ = *f* high, *w* wide;
+- the line height used for alignment becomes *f* · interval.*y* · *k*ᵧ screen pixels (*t* · *s*ᵧ · *k*ᵧ),
+  not *f* · interval.*y*. A vertically centred simple-mode text therefore has its glyph tops at
+  *H* / 768 · (*Y* + *ty*) + (*H* / 768 · *h* − *f* · interval.*y* · *k*ᵧ) / 2 screen pixels before rounding,
+  i.e. *f* · interval.*y* · (1 − *k*ᵧ) / 2 lower than on the screen surface; bottom alignment moves it
+  by *f* · interval.*y* · (1 − *k*ᵧ); top alignment is unaffected (apart from rounding, which happens in
+  layout pixels: *y*₀ = floor(*y*) on the surface, i.e. in steps of *k*ᵧ screen pixels);
+- complex mode uses the same *t*: its block height and offsets change in the same way, and its lines are
+  drawn *f* screen pixels high but stacked at a pitch of *f* · interval.*y* · *k*ᵧ + *g* · *H* / 768 screen
+  pixels, so with *k*ᵧ < 1 consecutive lines overlap unless the gap *g* is at least
+  *f* · (1 − *k*ᵧ) · 768 / *H* UI units [VC-12];
+- horizontally, with *k*ₓ = *W* / *W*′: centred text keeps its centre (section 3.2 scales the offset);
+  right-aligned text ends *S* · (1 − *k*ₓ) screen pixels right of its anchor; complex-mode widths
+  (wrapping, segment start positions) are measured without the glyph scale, i.e. as
+  *S* · *k*ₓ screen pixels for text drawn *S* pixels wide, so lines wrap later and the segments of one
+  line overlap when *k*ₓ < 1 [VC-13, VC-14].
+
+The statements about bottom alignment, complex mode and right alignment under *k* ≠ 1 come from the
+reading of the binaries (the same line height, offsets and widths as the measured centred case); the
+title screen has no such text, so they were not observed in frames.
 
 ## 5. Title menu
 
@@ -466,20 +534,49 @@ Fonts and strings used (title-menu spec sections 3.4, 4 and 5):
   g="123" b="116" complex_mode="0"/>` — font `graffiti19`, colour (135, 123, 116, 255), simple mode,
   left aligned, top aligned (no `vert_align`), no offset.
 
-Resulting glyph boxes (pixels; left/right of the whole text, top/bottom of the glyph cells):
+Resulting glyph boxes in **screen** pixels (left/right of the whole text, top/bottom of the glyph
+cells; section 4.4), for `r__supersample` *s* = 1, 2 (the shipped `user.ltx`, FP 1.1) and 4. At the
+title screen a frame goes through the off-screen target exactly when *s* > 1 (no screen effects run
+there; FP 3.1), so *s* = 1 gives the screen surface. **Disputed in review:** the reason is incomplete: FP 4 (b) and (c) send a frame through the target at *s* = 1 too while the main menu asks for the post-process (FP 2.5), through the distortion pass of the previous frame; at *s* = 1 the target has the screen's size whenever neither axis exceeds 2048 (FP 1.1), so the *s* = 1 rows below hold either way, but on a screen wider or taller than 2048 pixels (e.g. 2560 × 1440, target 2048 × 1440) the layout surface at *s* = 1 may be the smaller target. *t* is the line height in UI units (section 4.2). Of the *s* = 2 rows, only 1920 × 1080 was measured; the others are computed from these rules.
+Fractional screen positions are resampled (section 4.4); they are shown to three decimals.
 
-| Resolution | Texture | `Новая игра` (item 0) | `Выйти в Windows` (item 5) | `ver. 1.0006` |
-|---|---|---|---|---|
-| 1024 × 768 | `_1024` | width 85: x 740–825, y 423–445 | width 138: x 713–851, y 573–595 | width 79: x 15–94, y 740–759 |
-| 800 × 600 | `_800` | width 81: x 570–651, y 328–349 | width 129: x 546–675, y 445–466 | width 66: x 11–77, y 578–595 |
-| 1280 × 720 | `_1024` | width 85: x 935–1020, y 395–417 | width 138: x 908–1046, y 536–558 | width 79: x 18–97, y 693–712 |
-| 1280 × 1024 | `_1600` | width 122: x 916–1038, y 562–594 | width 195: x 880–1075, y 762–794 | width 115: x 18–133, y 986–1016 |
+| Resolution | *s* | Surface *W*′ × *H*′ | *t* | `Новая игра` (item 0) | `Выйти в Windows` (item 5) | `ver. 1.0006` |
+|---|---|---|---|---|---|---|
+| 1920 × 1080 | 1 | 1920 × 1080 | 22.756 | x 1405–1527, y 594–626 | x 1369–1564, y 805–837 | x 28–143, y 1040–1070 |
+| 1920 × 1080 | 2 | 2048 × 1526 | 16.105 | x 1405.25–1527.25, y 598.742–630.742 | x 1369.25–1564.25, y 809.646–841.646 | x 28.125–143.125, y 1040.367–1070.367 |
+| 1920 × 1080 | 4 | 2048 × 2048 | 12 | x 1405.25–1527.25, y 601.699–633.699 | x 1369.25–1564.25, y 812.637–844.637 | x 28.125–143.125, y 1040.449–1070.449 |
+| 1280 × 1024 | 1 | 1280 × 1024 | 24 | x 916–1038, y 562–594 | x 880–1075, y 762–794 | x 18–133, y 986–1016 |
+| 1280 × 1024 | 2 | 1810 × 1448 | 16.972 | x 916.326–1038.326, y 567.16–599.16 | x 880.326–1075.326, y 767.293–799.293 | x 18.387–133.387, y 986.519–1016.519 |
+| 1280 × 1024 | 4 | 2048 × 2048 | 12 | x 916.5–1038.5, y 570.5–602.5 | x 880.5–1075.5, y 770.5–802.5 | x 18.75–133.75, y 986.5–1016.5 |
+| 1024 × 768 | 1 | 1024 × 768 | 22 | x 740–825, y 423–445 | x 713–851, y 573–595 | x 15–94, y 740–759 |
+| 1024 × 768 | 2 | 1448 × 1086 | 15.558 | x 739.436–824.436, y 425.724–447.724 | x 712.436–850.436, y 575.646–597.646 | x 14.851–93.851, y 739.713–758.713 |
+| 1024 × 768 | 4 | 2048 × 1536 | 11 | x 740–825, y 428.5–450.5 | x 713–851, y 578.5–600.5 | x 15–94, y 740–759 |
+| 800 × 600 | 1 | 800 × 600 | 26.88 | x 570–651, y 328–349 | x 546–675, y 445–466 | x 11–77, y 578–595 |
+| 800 × 600 | 2 | 1130 × 848 | 19.019 | x 570.265–651.265, y 331.132–352.132 | x 546.265–675.265, y 448.585–469.585 | x 11.327–77.327, y 578.066–595.066 |
+| 800 × 600 | 4 | 1600 × 1200 | 13.44 | x 570.5–651.5, y 333.5–354.5 | x 546.5–675.5, y 451–472 | x 11.5–77.5, y 578–595 |
+| 1280 × 720 | 1 | 1280 × 720 | 23.467 | x 935–1020, y 395–417 | x 908–1046, y 536–558 | x 18–97, y 693–712 |
 
-Derivation for item 0 at 1024 × 768: anchor x = 700 + 164/2 = 782; vertical offset (30 − 22)/2 = 4,
-so pen (782, 423); *S* = 10 + 8 + 8 + 8 + 9 + 10 + 9 + 7 + 8 + 8 = 85 (widths of `Н о в а я`,
-space, `и г р а`); *x*₀ = 782 − floor(42.5) = 740. At 800 × 600 the widths are
-9 + 8 + 8 + 8 + 8 + 9 + 8 + 7 + 8 + 8 = 81. At 800 × 600: pen x = 0.78125 · 782 = 610.9375,
+Textures: `_1600` at 1920 × 1080 and 1280 × 1024 (*f* = 32 for `graffiti22`, 30 for `graffiti19`),
+`_1024` at 1024 × 768 and 1280 × 720 (22, 19), `_800` at 800 × 600 (21, 17). Widths: `Новая игра`
+122 / 85 / 81, `Выйти в Windows` 195 / 138 / 129, `ver. 1.0006` 115 / 79 / 66 (same order) [VC-8].
+
+Derivation for item 0 at 1024 × 768, *s* = 1: anchor x = 700 + 164/2 = 782; vertical offset
+(30 − 22)/2 = 4, so pen (782, 423); *S* = 10 + 8 + 8 + 8 + 9 + 10 + 9 + 7 + 8 + 8 = 85 (widths of
+`Н о в а я`, space, `и г р а`); *x*₀ = 782 − floor(42.5) = 740. At 800 × 600 the widths are
+9 + 8 + 8 + 8 + 8 + 9 + 8 + 7 + 8 + 8 = 81. At 800 × 600, *s* = 1: pen x = 0.78125 · 782 = 610.9375,
 pen y = 0.78125 · (419 + (30 − 21/0.78125)/2) = 328.5625; *x*₀ = 610 − 40 = 570, *y*₀ = 328.
+
+Derivation for item 0 at 1920 × 1080, *s* = 4: the target is 2048 × 2048 (1920 · 2 = 3840 and
+1080 · 2 = 2160, both clamped to 2048); *s*ₓ = 2, *s*ᵧ = 2048 / 768 = 2.6667, *g*ₓ = 2048 / 1920 = 1.0667,
+*g*ᵧ = 2048 / 1080 = 1.8963. *t* = 32 / 2.6667 = 12, vertical offset (30 − 12)/2 = 9, pen
+y = 2.6667 · (419 + 9) = 1141.33, *y*₀ = 1141 layout pixels, i.e. 1141 · 1080 / 2048 = 601.699 on the
+screen (the screen rules give 594). Pen x = 2 · 782 = 1564, *S* = 122, *x*₀ = 1564 − floor(61) · 1.0667 =
+1498.933 layout pixels, i.e. 1498.933 · 1920 / 2048 = 1405.25 on the screen. Items 3 and 4
+(`Опции`, `Титры`): *y*₀ = 1381 and 1461 layout pixels, 728.262 and 770.449 on the screen, measured
+728 and 770 (glyph rows, whole-pixel fit) [VC-2].
+
+Derivation at 1024 × 768, *s* = 4: target 2048 × 1536, *s*ᵧ = 2, *t* = 22 / 2 = 11, vertical offset
+(30 − 11)/2 = 9.5, item 0 pen y = 2 · 428.5 = 857, screen 428.5 (the screen rules give 423).
 
 ## 6. Not established
 
@@ -490,6 +587,15 @@ pen y = 0.78125 · (419 + (30 − 21/0.78125)/2) = 328.5625; *x*₀ = 610 − 40
 - Multi-byte (`[mb_symbol_coords]`) text handling beyond the table layout (unused by this edition).
 - The exact key-name strings substituted for `$$ACTION_…$$`.
 - Whether bytes 0x80–0xFF count as whitespace when choosing a wrap break point (section 4.3).
+- Which states of the main menu, besides being shown, decide whether it draws at the presentation
+  (a further state of the menu suppresses this drawing; what it means was not established), and
+  whether that drawing is the same when the menu is opened over a running level (**believed**: the
+  same, the drawing step does not depend on a level).
+- The exact resampling of the off-screen target to the screen is that of FP 3.4; the agreement measured
+  here (section 4.4) is within 0.75 pixel, and the measured positions lie on average about 0.3 pixel
+  above the unresampled position *y*₀ · *H* / *H*′.
+- Bottom alignment, complex mode and right alignment on the off-screen target (section 4.4) were not
+  observed in frames of the original.
 
 ## 7. Provenance
 
@@ -541,3 +647,25 @@ pen y = 0.78125 · (419 + (30 − 21/0.78125)/2) = 328.5625; *x*₀ = 610 − 40
     `default` selects the element colour; that the commas are searched to the end of the piece,
     past the `]`; how the numbers are read; that fewer than three commas stop the game (was "a
     missing comma is an error"); examples added.
+- **Revision 2026-11-26** (vertical placement, issue 570; same edition). Black-box runs of the unmodified
+  game (headless, through the project's runner of the original) at the title menu: 1920 × 1080 full
+  screen and 1280 × 1024, 1024 × 768, 800 × 600 windowed, each with `r__supersample` 4 and 1, and
+  1920 × 1080 with 2; caption and version-caption positions fitted to the glyph coverage of the font
+  textures in the captured frames. Static analysis (Ghidra 12.2, headless) of the game library's main-menu
+  drawing, UI scale and text-line layout, the engine's font drawing, height and width routines, and the
+  static-lighting renderer's frame start, presentation and target size queries. Checks [VC-1 … VC-15]:
+  `vcentre/checks/check.py` (frames), `vcentre/checks/static.py` (binaries) and
+  `vcentre/checks/worked.py` (section 5 table) in the dirty workspace. Changes against the previously
+  approved text:
+  - conventions, 3.1–3.3, 3.6: the layout surface and the glyph scale; the glyph scale applies to glyph
+    size, advance and the centre-alignment offset, not to the string width, the right-alignment offset
+    or the line height (was: "a global glyph scale … is 1 for all menus").
+  - 4.2, 4.3: *t* uses the layout surface's *s*ᵧ; complex mode and bottom alignment use the same *t*.
+  - 4.4 (new): which surface the main menu lays out on, the mapping to the screen, and its effects;
+    measured cause of the 8–9 pixel lower captions at 1920 × 1080 (`r__supersample` 4).
+  - 5: glyph boxes per `r__supersample` (1, 2, 4) at 1920 × 1080, 1280 × 1024, 1024 × 768, 800 × 600
+    (and 1280 × 720 at 1); the *s* = 1 rows equal the previous table.
+
+## Gaps found in review
+
+- Caption placement at `r__supersample` 1 on a screen wider or taller than 2048 pixels, where the off-screen target is smaller than the screen, and whether title-screen frames at `r__supersample` 1 go through the target, were not examined.
