@@ -84,15 +84,21 @@ export async function gameChecks(suite) {
         const text = atob(frame.rgba_base64);
         const rgba = new Uint8Array(text.length);
         for (let i = 0; i < text.length; i++) rgba[i] = text.charCodeAt(i);
+        // Opaque, as the canvas shows it (its alpha mode is opaque): a 2D
+        // canvas keeps colours premultiplied, so a translucent pixel's
+        // colour would not survive the PNG's round trip (#495).
+        for (let i = 3; i < rgba.length; i += 4) rgba[i] = 255;
         await dump(frame.name, { width: frame.width, height: frame.height, rgba });
-        // The parity suite compares every frame (#478); the others, those
-        // their checks ask for.
+        // The parity suite holds every frame (#478, #495) but those whose
+        // check says they don't repeat; the others, those their checks ask
+        // for.
+        const held = frame.compare ?? suite === "parity";
         if (!compare || (frame.compare == null && suite !== "parity")) continue;
         const before = await reference(suite, frame.name);
         if (!before) continue;
         const differ = differingPixels(frame, rgba, before);
         compared.push(`${frame.name} ${differ}`);
-        if (frame.compare && differ) differing.push(`${frame.name}: ${differ} pixels differ`);
+        if (held && differ) differing.push(`${frame.name}: ${differ} pixels differ`);
       }
       if (differing.length) throw new Error(`against the earlier run's frames: ${differing.join("; ")}`);
       if (result.skip) skip(result.skip);

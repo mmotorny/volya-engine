@@ -714,13 +714,23 @@ pub async fn environment_mapped_models(make: Make<'_>) -> Outcome {
     let ambient = |l: &mut WorldLight| l.ambient = [0.5; 3];
     // At 40 m every view direction is near (0, 0, 1). Reflected about the
     // normal facing the camera it points back along −z: face 5. About the
-    // upward normal it keeps going along +z: face 4.
-    let towards = object_geometry(TOWARDS);
-    let px = object_pixel_at(&mut r, &towards, env.clone(), [0.0; 4], ambient, 40.0).await?;
-    expect_near(px, [200, 200, 0], "reflected towards the camera")?;
-    let up = object_geometry(UP);
-    let px = object_pixel_at(&mut r, &up, env, [0.0; 4], ambient, 40.0).await?;
-    expect_near(px, [200, 160, 0], "reflected past the upward normal")?;
+    // upward normal it keeps going along +z: face 4. About a normal halfway
+    // between the camera and ±x (±y) it points along ±x (±y): faces 0 – 3.
+    // So every face's own texels show (on WebGL 2 too, where a cube can't
+    // be drawn as a flat quad, #492).
+    let normals = [
+        ([255, 127, 0], 0, "+x"),
+        ([0, 127, 0], 1, "−x"),
+        ([127, 255, 0], 2, "+y"),
+        ([127, 0, 0], 3, "−y"),
+        (UP, 4, "past the upward normal"),
+        (TOWARDS, 5, "towards the camera"),
+    ];
+    for (normal, face, what) in normals {
+        let geometry = object_geometry(normal);
+        let px = object_pixel_at(&mut r, &geometry, env.clone(), [0.0; 4], ambient, 40.0).await?;
+        expect_near(px, [200, 40 * face, 0], &format!("reflected {what}"))?;
+    }
     Ok(String::new())
 }
 

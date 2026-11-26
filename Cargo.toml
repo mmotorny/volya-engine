@@ -35,7 +35,6 @@ bytemuck = "1"
 # Metal on Apple platforms; WebGL 2 in the web build (volya-engine-render's
 # `webgl` feature); no native GL, Vulkan or DX12.
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "metal"] }
-pollster = "1"
 # Instrumentation for the diagnostic log (#346): spans and events, recorded
 # by our layer (volya-engine-core::diagnostics) on the registry.
 tracing = { version = "0.1", default-features = false, features = ["std"] }

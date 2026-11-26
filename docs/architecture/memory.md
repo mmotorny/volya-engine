@@ -15,7 +15,7 @@ Where the engine's memory goes, by lifetime and owner; the design it follows (on
 |---|---|---|
 | `crates/volya-engine/tests/loading_memory.rs` | native, counting allocator | Each loading stage's peak above its start, what it keeps, allocations made and blocks kept; the program's data; what outlives the level. |
 | `crates/volya-engine/tests/level_memory.rs` | native, counting allocator | Every shipped level's own files: the collision world's and the detail objects' heap, the `level` file's parse peak, and as stored the geometry, the navigation file and the textures its surfaces name. |
-| `crates/volya-engine/tests/frame_memory.rs` | native, counting allocator | Allocations and bytes a frame of the running level, by part. |
+| `render-level` suite's "a level frame's heap traffic" (`volya_engine::selftest::frame_memory`) | browser, the test build's counting allocator | Allocations and bytes a frame of the running level makes on the wasm heap, by part. |
 | `heap_log` op (test builds) | browser | The wasm heap and the most live under each loading caption. |
 | `heap_map` op (test builds) | browser | Live KiB per MiB of the heap and every live block of 256 KiB or more, by address. |
 | `heap_record` op (test builds) | browser | At the load's most live: live bytes by block size and the largest blocks. |
@@ -68,7 +68,7 @@ In the browser the level's preparation adds the texture read buffer (one file, u
 
 ### Frame
 
-A frame of the running level, native (`frame_memory.rs`, 600 frames after 60): 324 allocations and 452 KB (at most 904 allocations): the update 28.6 and 8.8 KB, the sounds 5.0 and 0.1 KB, the scene 237.8 and 366 KB, the draw list 52.8 and 77 KB. Live memory grew 0.81 MB over the 600 frames. In the browser the heap stays flat while the level runs (87 MiB before and while the intro plays), so the frame's blocks reuse their own holes.
+A frame of the running level, on the wasm heap (the `render-level` suite, 600 frames after 60): 324 allocations and 433 KB (at most 904 allocations): the update 28.5 and 8.4 KB, the sounds 5.0 and 0.1 KB, the scene 237.8 and 356 KB, the draw list 52.8 and 69 KB. Live memory grew 0.81 MB over the 600 frames. In the browser the heap stays flat while the level runs (87 MiB before and while the intro plays), so the frame's blocks reuse their own holes.
 
 ### The GPU
 
