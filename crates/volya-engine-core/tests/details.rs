@@ -363,7 +363,12 @@ fn the_cache_at_the_start_position() {
             density: 0.2,
         };
         // The first pass after loading draws nothing (TODO(#407)).
-        assert!(details.pass(&pass(1), &collision, &mut random).instances.is_empty());
+        assert!(
+            details
+                .pass(&pass(1), &collision, &mut random)
+                .instances
+                .is_empty()
+        );
         let start = Instant::now();
         let frame = details.pass(&pass(2), &collision, &mut random);
         let built = start.elapsed();
@@ -374,7 +379,10 @@ fn the_cache_at_the_start_position() {
         const FRAMES: u64 = 100;
         let mut drawn = 0;
         for f in 3..3 + FRAMES {
-            drawn = details.pass(&pass(f), &collision, &mut random).instances.len();
+            drawn = details
+                .pass(&pass(f), &collision, &mut random)
+                .instances
+                .len();
         }
         let selection = start.elapsed() / FRAMES as u32;
         eprintln!(

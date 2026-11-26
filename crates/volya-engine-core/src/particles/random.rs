@@ -192,7 +192,7 @@ mod tests {
     #[test]
     fn the_shared_generators_handles_draw_in_turn() {
         let a = Shared::new(1);
-        let mut r = Random::sharing(a.clone());
+        let r = Random::sharing(a.clone());
         assert_eq!(r.uniform.next_k(), 41);
         assert_eq!(a.with(Generator::next_k), 18467);
         assert_eq!(r.uniform.next_k(), 6334);

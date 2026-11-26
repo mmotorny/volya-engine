@@ -1862,15 +1862,14 @@ impl NewGameLoad {
                 // The library serves the zones' and the weather's effects too.
                 // The effects collide with the level (particle-collision.md).
                 let world = self.collision.clone();
-                let effects =
-                    PlacedEffects::new_in(
+                let effects = PlacedEffects::new_in(
                     data.effects.clone(),
                     &records,
                     self.now as u32,
                     world,
                     self.random.clone(),
                 )
-                        .map_err(|e| invalid(format!("{dir}\\level.ps_static: {e}")))?;
+                .map_err(|e| invalid(format!("{dir}\\level.ps_static: {e}")))?;
                 self.effects = Some((effects, self.now));
             }
             // detail-objects.md 2.1: the file, the sway values and the

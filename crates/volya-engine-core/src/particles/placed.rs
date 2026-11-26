@@ -22,8 +22,8 @@ use std::sync::Arc;
 
 use volya_engine_formats::particles::{Library, PlacedRecord};
 
-use super::{EffectInstance, GroupInstance, Matrix, Mode, Random, STEP_MS, Sphere, Vec3, sub};
 use super::random::Shared;
+use super::{EffectInstance, GroupInstance, Matrix, Mode, Random, STEP_MS, Sphere, Vec3, sub};
 use crate::collision::CollisionWorld;
 
 /// What a record made (section 2).
