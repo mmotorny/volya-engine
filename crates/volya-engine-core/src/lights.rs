@@ -616,10 +616,18 @@ impl Lights {
     /// The listed records `listed`, in the order listed, as the spot list
     /// then the point list (DL 4).
     pub fn lists(&self, listed: &[LightId]) -> Vec<LightId> {
+        let mut out = Vec::new();
+        self.lists_into(listed, &mut out);
+        out
+    }
+
+    /// [`Lights::lists`] into `out`, cleared first.
+    pub fn lists_into(&self, listed: &[LightId], out: &mut Vec<LightId>) {
         let point = |id: &&LightId| self.get(**id).is_some_and(|r| r.kind == LightKind::Point);
         let spots = listed.iter().filter(|id| !point(id));
         let points = listed.iter().filter(point);
-        spots.chain(points).copied().collect()
+        out.clear();
+        out.extend(spots.chain(points).copied());
     }
 
     /// The lights listed this frame when they alone are handled, nearest

@@ -227,6 +227,14 @@ impl LevelWorld {
     }
 }
 
+/// A dynamic item of the camera pass ([`LevelScreen::dynamic_items`]).
+#[derive(Debug)]
+enum DynamicItem {
+    Light(LightId),
+    Object(usize, Mat4, [f32; 4]),
+    Effect(usize, [f32; 4]),
+}
+
 /// The level shown.
 pub struct LevelScreen {
     world: Arc<LevelWorld>,
@@ -318,6 +326,10 @@ pub struct LevelScreen {
     visibility: std::cell::RefCell<LevelVisibility>,
     /// What the latest camera pass keeps of the draws.
     seen: Arc<Seen>,
+    /// The dynamic items of a frame's pass and the light records it
+    /// listed, kept between frames ([`LevelScreen::dynamic_items`]).
+    dynamic: Vec<(f32, u32, DynamicItem)>,
+    listed_lights: Vec<LightId>,
     /// `r__detail_density` and the wind strength *W* as the app last gave
     /// them.
     detail_density: f32,
@@ -2033,6 +2045,8 @@ impl NewGameLoad {
             random: self.random,
             visibility: visibility.into(),
             seen: Arc::default(),
+            dynamic: Vec::new(),
+            listed_lights: Vec::new(),
             detail_density: level_details::DENSITY_DEFAULT,
             wind: 0.0,
             frame: 0,
@@ -2729,9 +2743,9 @@ impl LevelScreen {
         let eye = camera.eye;
         (self.lights).prepare(&self.collision, eye, sun, self.visibility.get_mut());
         self.camera_pass(w, h, &view, &projection);
-        let listed = self.dynamic_items();
+        self.dynamic_items();
         let (collision, visibility) = (&self.collision, self.visibility.get_mut());
-        (self.lights).finish(collision, &camera, dt, visibility, &listed);
+        (self.lights).finish(collision, &camera, dt, visibility, &self.listed_lights);
     }
 
     /// The dynamic part of the camera pass (object-visibility.md 1, 3 –
@@ -2745,12 +2759,8 @@ impl LevelScreen {
     /// (particle-drawing.md 7.1 step 1). Keeps what the frame draws
     /// ([`Seen`]): these, the static draws of the pass's visuals and the
     /// portal fade. Returns the light records listed, in their order.
-    fn dynamic_items(&mut self) -> Vec<LightId> {
-        enum Kind {
-            Light(LightId),
-            Object(usize, Mat4, [f32; 4]),
-            Effect(usize, [f32; 4]),
-        }
+    fn dynamic_items(&mut self) {
+        use DynamicItem as Kind;
         let eye = self.player.view().eye;
         let d2 = |c: Vec3| {
             let d = [c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]];
@@ -2761,16 +2771,23 @@ impl LevelScreen {
         visibility
             .objects
             .resize(objects.instances.len(), Item::default());
-        let mut seen = Seen {
-            items: visibility.static_draws(self.world.draw_items.len()),
-            objects: vec![false; objects.instances.len()],
-            ..Seen::default()
-        };
-        let mut listed = Vec::new();
+        // The latest frame's lists, refilled where the frame drawn with
+        // them has let them go.
+        let mut seen = Arc::get_mut(&mut self.seen)
+            .map(std::mem::take)
+            .unwrap_or_default();
+        visibility.static_draws_into(self.world.draw_items.len(), &mut seen.items);
+        seen.objects.clear();
+        seen.objects.resize(objects.instances.len(), false);
+        seen.effects.clear();
+        seen.fade.clear();
+        let mut listed = std::mem::take(&mut self.listed_lights);
+        listed.clear();
         if visibility.camera_sector().is_some() {
-            let mut items: Vec<(f32, Kind)> = Vec::new();
+            let mut items = std::mem::take(&mut self.dynamic);
+            items.clear();
             for (id, c) in self.lights.lights.candidates() {
-                items.push((d2(c), Kind::Light(id)));
+                items.push((d2(c), items.len() as u32, Kind::Light(id)));
             }
             for (k, t) in self.placements.iter().enumerate() {
                 let (Some(t), Some(i)) = (t, objects.instances.get(k)) else {
@@ -2780,6 +2797,7 @@ impl LevelScreen {
                 let c = volya_engine_formats::model::transform_point(t, h.sphere_centre);
                 items.push((
                     d2(c),
+                    items.len() as u32,
                     Kind::Object(k, *t, [c[0], c[1], c[2], h.sphere_radius]),
                 ));
             }
@@ -2787,14 +2805,20 @@ impl LevelScreen {
                 for (i, p) in effects.indexed() {
                     if let Some(s) = p.registered() {
                         let [x, y, z] = s.centre;
-                        items.push((d2(s.centre), Kind::Effect(i, [x, y, z, s.radius])));
+                        items.push((
+                            d2(s.centre),
+                            items.len() as u32,
+                            Kind::Effect(i, [x, y, z, s.radius]),
+                        ));
                     }
                 }
             }
-            items.sort_by(|a, b| a.0.total_cmp(&b.0));
+            // Equal distances in push order, as a stable sort keeps them,
+            // without the stable sort's buffer.
+            items.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
             let (collision, random) = (&self.collision, &self.random);
             let settings = self.lights.settings;
-            for (_, kind) in items {
+            for (_, _, kind) in items.drain(..) {
                 match kind {
                     Kind::Light(id) => {
                         let shown = self.lights.lights.handle(id, &settings, |t| {
@@ -2838,9 +2862,13 @@ impl LevelScreen {
                 }
             }
             seen.fade = portal_fade(visibility, eye, self.environment.ambient);
+            self.dynamic = items;
         }
-        self.seen = Arc::new(seen);
-        listed
+        match Arc::get_mut(&mut self.seen) {
+            Some(kept) => *kept = seen,
+            None => self.seen = Arc::new(seen),
+        }
+        self.listed_lights = listed;
     }
 
     /// The camera pass (visibility-scope.md 1) of the latest frame's view
@@ -3327,6 +3355,8 @@ impl LevelScreen {
             random: Shared::default(),
             visibility: Default::default(),
             seen: Arc::default(),
+            dynamic: Vec::new(),
+            listed_lights: Vec::new(),
             detail_density: level_details::DENSITY_DEFAULT,
             wind: 0.0,
             frame: 0,

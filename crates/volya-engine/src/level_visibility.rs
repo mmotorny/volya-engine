@@ -13,7 +13,7 @@ use crate::core::camera::Vec3;
 use crate::core::collision::CollisionWorld;
 use crate::core::occlusion::{Cached, Occlusion, OcclusionMesh, View};
 use crate::core::particles::random::Generator;
-use crate::core::visibility::{CameraFrame, CameraSector, Sectors, triangle_below};
+use crate::core::visibility::{CameraFrame, CameraSector, PassBuffers, Sectors, triangle_below};
 use crate::render::particles::ParticleVertex;
 use volya_engine_formats::level::{Level, Thresholds};
 
@@ -24,6 +24,8 @@ pub struct LevelVisibility {
     occlusion: Occlusion,
     camera: CameraSector,
     frame: CameraFrame,
+    /// The pass's working lists, kept with `frame` between frames.
+    buffers: PassBuffers,
     /// The latest pass's view and thresholds.
     view: Option<View>,
     thresholds: Option<Thresholds>,
@@ -56,6 +58,7 @@ impl Default for LevelVisibility {
             occlusion: Occlusion::new(None, 0),
             camera: CameraSector::default(),
             frame: CameraFrame::default(),
+            buffers: PassBuffers::default(),
             view: None,
             thresholds: None,
             starts: vec![0],
@@ -101,7 +104,15 @@ impl LevelVisibility {
     /// The static draws of the latest pass's visuals, by draw item (of
     /// `count`).
     pub fn static_draws(&self, count: usize) -> Vec<bool> {
-        let mut drawn = vec![false; count];
+        let mut drawn = Vec::new();
+        self.static_draws_into(count, &mut drawn);
+        drawn
+    }
+
+    /// [`LevelVisibility::static_draws`] into `drawn`, its list kept.
+    pub fn static_draws_into(&self, count: usize, drawn: &mut Vec<bool>) {
+        drawn.clear();
+        drawn.resize(count, false);
         for &v in self.frame.visuals.iter().flatten() {
             let v = v as usize;
             if v + 1 < self.starts.len() {
@@ -112,7 +123,6 @@ impl LevelVisibility {
                 }
             }
         }
-        drawn
     }
 
     /// The latest pass's thresholds.
@@ -168,8 +178,13 @@ impl LevelVisibility {
         random: &mut Generator,
     ) {
         let sector = self.camera.update(view.eye, &self.sectors, collision);
-        self.frame =
-            (self.sectors).camera_pass(sector, &view, thresholds, &mut self.occlusion, random);
+        (self.sectors).camera_pass_into(
+            (sector, &view, thresholds),
+            &mut self.occlusion,
+            random,
+            &mut self.frame,
+            &mut self.buffers,
+        );
         self.view = Some(view);
         self.thresholds = Some(*thresholds);
     }

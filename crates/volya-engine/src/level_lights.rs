@@ -335,6 +335,8 @@ pub struct LevelLights {
     pub glows_per_frame: u32,
     passes: Vec<LightPass>,
     sprites: Vec<GlowSprite>,
+    /// The listed records as spot then point lists, kept between frames.
+    ordered: Vec<LightId>,
 }
 
 impl LevelLights {
@@ -443,12 +445,13 @@ impl LevelLights {
         listed: &[LightId],
     ) {
         let eye = camera.eye;
-        let listed = self.lights.lists(listed);
+        self.lights.lists_into(listed, &mut self.ordered);
         let (lights, clip) = (&self.lights, self.settings.clip);
-        self.passes = visibility.light_passes(|| {
-            (listed.iter())
-                .filter_map(|&id| light_pass(lights.get(id)?, eye, clip))
-                .collect()
+        let (ordered, passes) = (&self.ordered, &mut self.passes);
+        visibility.light_passes(|| {
+            passes.clear();
+            passes
+                .extend((ordered.iter()).filter_map(|&id| light_pass(lights.get(id)?, eye, clip)));
         });
         let v = &camera.view;
         let view = GlowView {
@@ -460,13 +463,16 @@ impl LevelLights {
             far: camera.far,
             camera_in_sector: visibility.camera_sector().is_some(),
         };
-        self.sprites = self.glows.frame(
+        self.glows.frame_into(
             &view,
             dt,
             self.glows_per_frame,
-            |p| visibility.sector_of(collision, p),
-            |s, c, r| visibility.reached(s, c, r).is_some(),
-            |from, dir, length| static_ray(collision, from, dir, length),
+            (
+                |p| visibility.sector_of(collision, p),
+                |s, c, r| visibility.reached(s, c, r).is_some(),
+                |from, dir, length| static_ray(collision, from, dir, length),
+            ),
+            &mut self.sprites,
         );
     }
 
