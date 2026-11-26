@@ -44,8 +44,7 @@ struct Spare {
     vertices: Vec<Vec3>,
     packed: Vec<u64>,
     wide: Vec<[u32; 3]>,
-    material_of: Vec<u8>,
-    sector_of: Vec<u16>,
+    attributes: Vec<u16>,
     nodes: Vec<bvh::Node>,
 }
 
@@ -134,15 +133,43 @@ pub fn map_materials(
     Ok(())
 }
 
-/// The material index collision keeps per triangle (one byte: our choice;
-/// the shipped library has 57 materials).
-fn material_byte(mapped: u32) -> io::Result<u8> {
-    u8::try_from(mapped & MATERIAL_MASK).map_err(|_| {
-        invalid(format!(
-            "material index {} beyond the collision world's 255",
-            mapped & MATERIAL_MASK
-        ))
-    })
+/// Each triangle's material index and sector in one `u16` (our choice,
+/// #490): the material in the low bits, as many as the library's indices
+/// need (6 for its 57 materials), the sector in the rest (10 bits then;
+/// the shipped levels have at most 159 sectors).
+#[derive(Clone, Copy, Debug)]
+struct AttributeLayout {
+    material_bits: u32,
+}
+
+impl AttributeLayout {
+    fn new(material_count: usize) -> Self {
+        let largest = material_count.saturating_sub(1) as u32;
+        Self {
+            material_bits: (u32::BITS - largest.leading_zeros()).max(1),
+        }
+    }
+
+    /// The packed value of mapped attribute word `mapped` with `sector`.
+    fn pack(self, mapped: u32, sector: u32) -> io::Result<u16> {
+        let sector_bits = 16u32.saturating_sub(self.material_bits);
+        if sector_bits == 0 || sector >> sector_bits != 0 {
+            return Err(invalid(format!(
+                "sector {sector} beyond the collision world's {sector_bits} bits beside \
+                 {} bits of material",
+                self.material_bits
+            )));
+        }
+        Ok(((mapped & MATERIAL_MASK) | sector << self.material_bits) as u16)
+    }
+
+    fn material(self, packed: u16) -> u32 {
+        u32::from(packed) & ((1 << self.material_bits) - 1)
+    }
+
+    fn sector(self, packed: u16) -> u16 {
+        packed >> self.material_bits
+    }
 }
 
 /// Bits of a packed vertex index: three in a `u64` (#371).
@@ -311,10 +338,10 @@ pub struct CollisionWorld {
     pub bbox_max: Vec3,
     vertices: Vec<Vec3>,
     triangles: Triangles,
-    /// Each triangle's material index (section 3.3).
-    material_of: Vec<u8>,
-    /// Each triangle's sector (bits 16–31 of its attributes).
-    sector_of: Vec<u16>,
+    /// Each triangle's material index (section 3.3) and sector (bits
+    /// 16–31 of its attributes), packed by `layout`.
+    attributes: Vec<u16>,
+    layout: AttributeLayout,
     materials: Vec<GameMaterial>,
     grid: Grid,
     tree: Bvh,
@@ -332,8 +359,7 @@ impl Drop for CollisionWorld {
                 vertices: std::mem::take(&mut self.vertices),
                 packed: std::mem::take(&mut self.triangles.packed),
                 wide: std::mem::take(&mut self.triangles.wide),
-                material_of: std::mem::take(&mut self.material_of),
-                sector_of: std::mem::take(&mut self.sector_of),
+                attributes: std::mem::take(&mut self.attributes),
                 nodes,
             }
         });
@@ -353,11 +379,10 @@ impl CollisionWorld {
         let map = MaterialMap::new(&materials);
         let count = header.triangle_count as usize;
         let mut triangles = Triangles::with_capacity(count, header.vertex_count as usize);
-        let mut material_of = spare(|s| &mut s.material_of, count);
-        let mut sector_of = spare(|s| &mut s.sector_of, count);
+        let layout = AttributeLayout::new(materials.len());
+        let mut attributes = spare(|s| &mut s.attributes, count);
         reader.triangles(|_, t| {
-            material_of.push(material_byte(map.map(t.attributes)?)?);
-            sector_of.push(t.sector() as u16);
+            attributes.push(layout.pack(map.map(t.attributes)?, t.sector())?);
             triangles.push(t.vertices);
             Ok(())
         })?;
@@ -366,8 +391,8 @@ impl CollisionWorld {
             header.bbox_max,
             vertices,
             triangles,
-            material_of,
-            sector_of,
+            attributes,
+            layout,
             materials,
         )
     }
@@ -375,12 +400,12 @@ impl CollisionWorld {
     /// The world of a parsed `cform` (attribute words as stored).
     pub fn new(cform: Cform, materials: Vec<GameMaterial>) -> io::Result<Self> {
         let map = MaterialMap::new(&materials);
-        let material_of = cform
+        let layout = AttributeLayout::new(materials.len());
+        let attributes = cform
             .triangles
             .iter()
-            .map(|t| material_byte(map.map(t.attributes)?))
+            .map(|t| layout.pack(map.map(t.attributes)?, t.sector()))
             .collect::<io::Result<_>>()?;
-        let sector_of = cform.triangles.iter().map(|t| t.sector() as u16).collect();
         let mut triangles = Triangles::with_capacity(cform.triangles.len(), cform.vertices.len());
         for t in &cform.triangles {
             triangles.push(t.vertices);
@@ -390,8 +415,8 @@ impl CollisionWorld {
             cform.bbox_max,
             cform.vertices,
             triangles,
-            material_of,
-            sector_of,
+            attributes,
+            layout,
             materials,
         )
     }
@@ -401,8 +426,8 @@ impl CollisionWorld {
         bbox_max: Vec3,
         vertices: Vec<Vec3>,
         triangles: Triangles,
-        material_of: Vec<u8>,
-        sector_of: Vec<u16>,
+        attributes: Vec<u16>,
+        layout: AttributeLayout,
         materials: Vec<GameMaterial>,
     ) -> io::Result<Self> {
         // Index over the vertices' extent: the stored box equals it in the
@@ -424,8 +449,8 @@ impl CollisionWorld {
             bbox_max,
             vertices,
             triangles,
-            material_of,
-            sector_of,
+            attributes,
+            layout,
             materials,
             grid,
             tree,
@@ -486,12 +511,12 @@ impl CollisionWorld {
 
     /// The material index of triangle `i` (section 3.3).
     pub fn material_index(&self, i: u32) -> u32 {
-        u32::from(self.material_of[i as usize])
+        self.layout.material(self.attributes[i as usize])
     }
 
     /// The material of triangle `i`.
     pub fn material(&self, i: u32) -> &GameMaterial {
-        &self.materials[self.material_of[i as usize] as usize]
+        &self.materials[self.material_index(i) as usize]
     }
 
     /// Whether triangle `i` blocks bodies at all (section 3.2: not
@@ -502,7 +527,7 @@ impl CollisionWorld {
 
     /// Triangle `i`'s sector.
     pub fn sector(&self, i: u32) -> u16 {
-        self.sector_of[i as usize]
+        self.layout.sector(self.attributes[i as usize])
     }
 
     /// Bytes held (vertices, triangles, materials, sectors, index), for
@@ -510,8 +535,7 @@ impl CollisionWorld {
     pub fn memory_bytes(&self) -> usize {
         self.vertices.len() * 12
             + self.triangles.bytes()
-            + self.material_of.len()
-            + self.sector_of.len() * 2
+            + self.attributes.len() * 2
             + self.tree.memory_bytes()
     }
 
@@ -878,6 +902,15 @@ mod tests {
     }
 
     #[test]
+    fn packs_material_and_sector_in_two_bytes() {
+        // 57 materials: 6 bits of material, 10 of sector.
+        let layout = AttributeLayout::new(57);
+        let packed = layout.pack(0xABCD_0000 | 56, 1023).unwrap();
+        assert_eq!((layout.material(packed), layout.sector(packed)), (56, 1023));
+        assert!(layout.pack(56, 1024).is_err());
+    }
+
+    #[test]
     fn reads_a_stream_like_a_parse() {
         let mut b = Builder::default();
         b.floor([-1.0, 1.0], [-1.0, 1.0], 0.0, true);
@@ -901,7 +934,7 @@ mod tests {
         let triangles = |w: &CollisionWorld| [w.triangle(0), w.triangle(1)];
         assert_eq!(triangles(&w), [[0, 1, 2], [0, 2, 3]]);
         assert_eq!((w.material_index(0), w.material(1).id), (1, 1));
-        assert_eq!(w.memory_bytes() - w.tree.memory_bytes(), 4 * 12 + 2 * 11);
+        assert_eq!(w.memory_bytes() - w.tree.memory_bytes(), 4 * 12 + 2 * 10);
         // Read again once dropped: the same arrays, the same world (#357).
         let (packed, nodes) = (w.triangles.packed.as_ptr(), w.tree.nodes().as_ptr());
         drop(w);

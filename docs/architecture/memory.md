@@ -50,7 +50,7 @@ The offline simulation's registry (6.9 MB, 54,378 blocks), the game graph and pa
 
 | Owner | `l01_escape` | The largest level |
 |---|---|---|
-| The collision world (vertices, triangles, materials, tree) | 28.1 MB in 5 blocks (largest 10.5 MiB) | 42.5 MB, `l11_pripyat`; 37.5 `l10_radar`, 32.8 `l07_military` |
+| The collision world (vertices, triangles, each triangle's material and sector in 2 bytes, tree) | 29.4 MB in 4 blocks (largest 10.5 MiB) | 44.5 MB, `l11_pripyat`; 39.4 `l10_radar`, 34.4 `l07_military` |
 | The navigation positions (6 of each vertex's 21 bytes) | 7.1 MB, one block (`level.ai` 12.5 MB) | `l01_escape`'s `level.ai` is the largest |
 | What the `level` file keeps after `st_loading_spatial_db` (the shader table; the static draw list and spheres) | 1.8 MB | |
 | The detail objects (slot grid, compact, and cache) | 5.5 MB | 11.9 MB, `l12_stancia` and `l12_stancia_2` |
@@ -58,7 +58,7 @@ The offline simulation's registry (6.9 MB, 54,378 blocks), the game graph and pa
 | The objects' CPU geometry until uploaded | 4.9 MB | |
 | The level in all at the end of loading | 63.5 MB, 128,169 blocks above the program's data | `l11_pripyat` about 72 MB (believed: `l01_escape`'s with its own collision, details and navigation file) |
 
-Measured natively (`loading_memory.rs`, `level_memory.rs`; requested bytes, the allocator's overhead not in them). After the level is dropped, 28.1 MB and 5 blocks outlive it: the collision world's arrays, kept as spares for the next world (#357).
+Measured natively (`loading_memory.rs`, `level_memory.rs`; requested bytes, the allocator's overhead not in them). After the level is dropped, 29.4 MB and 4 blocks outlive it: the collision world's arrays, kept as spares for the next world (#357).
 
 ### Loading transients
 
