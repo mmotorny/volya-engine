@@ -298,7 +298,7 @@ impl ParticlePipelines {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("particle"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("particle.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../particle.wgsl").into()),
         });
         // Section 5.2: anisotropic minification and magnification, linear
         // mip (static-shading.md 4.4's anisotropy 16, mip bias 0); 5.3:

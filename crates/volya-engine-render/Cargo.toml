@@ -16,6 +16,9 @@ workspace = true
 [features]
 # wgpu's WebGL 2 backend, in the web build.
 webgl = ["wgpu/webgl"]
+# The direct WebGL 2 renderer instead of wgpu's (rendering.md, Design:
+# direct WebGL 2; #475).
+gl = []
 
 [dependencies]
 volya-engine-formats = { path = "../volya-engine-formats" }

@@ -206,7 +206,7 @@ const SAMPLER: wgpu::BindingType = wgpu::BindingType::Sampler(wgpu::SamplerBindi
 
 /// The part of sky.wgsl before the first pass, plus the pass `name`.
 fn module_source(name: &str) -> String {
-    let source = include_str!("sky.wgsl");
+    let source = include_str!("../sky.wgsl");
     let common = &source[..source.find("//-- ").unwrap_or(source.len())];
     let start = source
         .find(&format!("//-- {name}\n"))
