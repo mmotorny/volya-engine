@@ -8,6 +8,10 @@ Priorities, in order. Work items are tracked in GitHub issues and milestones.
 2. Shadow of Chernobyl, Enhanced Edition.
 3. Clear Sky, Call of Pripyat.
 
+## Large systems
+
+Work that needs a large system not yet built (physics, character motions and AI, dialogs and trade) waits until that system is implemented, rather than being stubbed piecemeal; its scope stays recorded in the specs and its issues are blocked by the system's.
+
 ## Game language
 
 1. Russian (GOG Russian installer).
