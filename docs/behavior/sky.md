@@ -404,6 +404,27 @@ drawn over everything and fade with v instead.
 - The far plane does not limit the sky: its depth is forced into [0.99999, 1] (§5.5), and the sun sprite
   lies at 0.75 × the far plane (§7.3).
 
+### 8.1 Worked values: the outdoor fidelity view
+
+Camera of the fidelity view `outdoor`: eye (−180, 5, −120), yaw 1.2, pitch 0.15 (angles as SP §5: view
+direction (0.922, −0.149, 0.358)), vertical field of view 67.5°, 1024 × 768 (checks `od_outdoor.py`
+OD-3, OD-4 in the dirty workspace's `checks/object-light/`):
+
+- No modifier of §9.2 is in range there (the nearest is 69.6 m beyond its radius), so the hourly values
+  apply unmodified. `default_weather_05`, `_06` and `_07` all have `far_plane` 350, `fog_distance` 350 and
+  `fog_density` 0.9: far plane 350 m, fog_near = 0.1 × 350 × 0.85 = 29.75 m, fog_far = 346.5 m, at any
+  time from 05:00 to 07:00.
+- Fog colour: at 05:30 (75, 77, 91) (SS §9.4); at 06:05 — believed to be the game time 210 s after play
+  starts, with `time_factor` 10 and the game not paused — sections 06 and 07 with t = 1/12:
+  (0.3200, 0.3010, 0.3517) → bytes (81, 76, 89).
+- The fog factor depends on the depth along the view direction (SS §9.3), not on the distance:
+  F = 1 − (z − 29.75)/316.75, so depth 100 m keeps 0.778 of the geometry's own colour, 200 m 0.463,
+  300 m 0.147, and from 346.5 m on the geometry is pure fog colour. Between 346.5 m and the far plane
+  (350 m) the world is drawn in fog colour, and beyond the far plane it is clipped against the unfogged
+  sky.
+- Distant trees in that view: `ogf.md` §9 (billboard groups at depths 204 … 348 m, drawn mostly as
+  billboards, with F from 0 to 0.45).
+
 ## 9. `level.env_mod` and the start view
 
 ### 9.1 Format
@@ -509,7 +530,7 @@ Start values: §4 (C_sky bytes (173, 177, 181, 127), clouds bytes (113, 84, 80, 
 
 ## 15. Provenance
 
-Date 2026-11-23. Russian edition (GOG), archives `gamedata.db0` … `gamedata.dbd`, binaries
+Date 2026-11-23; revised 2026-11-26: §8.1 (worked values for the outdoor view). Russian edition (GOG), archives `gamedata.db0` … `gamedata.dbd`, binaries
 `bin\XR_3DA.exe`, `bin\xrRender_R1.dll`. Data examined: `config\weathers\*.ltx`, `config\alife.ltx`, the
 `level.env_mod` files of all 15 levels that have one, the 80 `textures\sky\*cube*.dds` files,
 `textures\sky\sky_oblaka.dds`, the `textures\fx` flare textures, `shaders.xr`, and the game's own shader

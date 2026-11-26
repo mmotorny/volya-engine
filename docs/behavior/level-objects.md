@@ -503,13 +503,17 @@ specification).
 ### 5.3 Element choice
 
 An object's meshes are drawn with element 0 if the object is a **projected-light receiver** in the
-frame, else element 1. An object is a receiver when it has a model, |camera − *C*| + *R* < 50 · *R*
+frame, else element 1. An object is a receiver when it has a model, answers that it receives shadows
+(of the kinds checked, every one except crows; `object-projected-light.md` 3.1), |camera − *C*| + *R* < 50 · *R*
 (*C*, *R* the model's header sphere centre transformed by *X*, and its radius) and fewer than 100
 receivers have been taken in the frame (the order in which objects are tested is **unestablished**).
 
 ### 5.4 Per-object light inputs
 
-Every object with a model keeps two visibility values, updated at most once per frame:
+Every object with a model keeps two visibility values. Their ray tests run in the object's **full
+updates**, which come in turn (`object-projected-light.md` section 5.3: the actor every frame, every other
+visible object once every so many frames), at most once per frame; "per update" below means per full
+update:
 
 - **sky visibility** *h*: from the point **o** = *C* + (0, 0.3 *R*, 0), rays of length 50 m are cast in
   these fixed directions (normalised before use), in this order: (0, 1, 0), (0.52573, 0.85065, 0),
@@ -523,13 +527,13 @@ Every object with a model keeps two visibility values, updated at most once per 
   26 in the listed order. A ray tests against the static collision (believed: `level.cform`); its result
   is "free" when it hits nothing. The target value is the fraction of free results among the tested
   directions (once all 26 have been tested, among the 26 latest results).
-- **sun visibility** *s*: a ray of length 500 m from **o** towards the sun (direction −L_sun_dir,
-  L_sun_dir as static-shading.md section 9), tested against the static collision and other objects
-  (believed: the object itself excluded); target 1 if it hits nothing, else 0; tested again after a
-  random 6 … 12 updates.
+- **sun visibility** *s*: a ray of length 500 m from **o** towards the sun (direction −d_B, the direction
+  of the directional record B of dynamic-lights.md 3.1), tested against the static collision and other
+  objects, the object itself excluded; target 1 if it hits nothing, else 0; tested again after a random
+  6 … 12 updates.
 
-Both values follow their targets once per frame: *v* ← *k* · target + (1 − *k*) · *v*, *k* =
-clamp(frame time in s, 0, 1); initial values *h* = 0.5, *s* = 0.2, except that *h* is set to the target
+Both values follow their targets once per frame in which they are used (`object-projected-light.md`
+5.3): *v* ← *k* · target + (1 − *k*) · *v*, *k* = clamp(frame time in s, 0, 1); initial values *h* = 0.5, *s* = 0.2, except that *h* is set to the target
 directly at the first update. Converged values (a still frame long after spawn): *h* = fraction of free
 directions, *s* = 0 or 1. The values at the first visible frame depend on frame times
 (**unestablished**).
@@ -554,19 +558,21 @@ direction (`calc_reflection` of `common.h`) about **n**; C = 2 · *Q* · base, A
 Element 0 (`model_def_hq`): with *t* the texel of the projected light texture at the object's projected
 coordinate, light = lerp(*t*.rgb + S(**n**) · *t*.a, *Q*, φ), C = 2 · light · B.rgb, A = B.a (env variant:
 base as above). The fade φ = c + (1 − c) · *g*², *g* = (|camera − *C*′| + *R*) / (50 *R*), *C*′ the
-receiver's recorded centre (believed: *C*), c = console value `r1_lmodel_lerp` (range 0 … 0.333;
-0.1 in the shipped `user.ltx` and by default). How the projected light texture (a 512 × 512 render
-target `$user$projector`) is filled is **unestablished**; a renderer without it can draw every object
-with element 1.
+receiver's recorded centre *C* + (0, 0.1 *R*, 0), c = console value `r1_lmodel_lerp` (range 0 … 0.333;
+0.1 in the shipped `user.ltx` and by default). The projected light texture (a 512 × 512 render target
+`$user$projector`), the projected coordinate (the vertex's world position clamped into a box and mapped
+into the receiver's cell) and *C*′ are specified in `docs/behavior/object-projected-light.md`: *t* is the
+baked light (rgb) and sun visibility (a) of the static geometry below the object. Drawing receivers with
+element 1 instead replaces that baked light by *Q*, which indoors (*h* = *s* = 0) is the ambient alone.
 
 Fog, alpha test, blending and drawing order follow static-shading.md sections 9.3 and 10 (objects
 with priority 2 or strict sorting are drawn with the sorted passes).
 
 ### 5.6 Dynamic lights
 
-With `r1_dlights on` (default) the level's point lights and the hanging lamps' lights (section 6) are
-added to models with elements 2 and 3 (static-shading.md section 12 gives the pass equation). Which
-lights are applied to which object is **unestablished**; a first static render may omit them.
+With `r1_dlights on` (default) the hanging lamps' lights (section 6) and the other game-created lights are
+added to models with elements 2 and 3; which lights reach which object, and the passes, are specified in
+`docs/behavior/dynamic-lights.md` (sections 4 – 6; the level's chunk-6 point lights are never drawn).
 
 ## 6. Hanging lamps' lights (structure)
 
@@ -749,15 +755,16 @@ total — and over all 1,581 `.ogf` files of the archives (2,146,420 vertices, 3
   script state at the first switch evaluation (believed as stated in 2.5).
 - The effect of the visual flags byte (3.2).
 - The detail value used for skinned progressive meshes of objects (4.9); the small-object test (5.1).
-- The content of the projected light texture (5.5) and the order in which receivers are chosen (5.3).
-- Light-track values at the first frame (5.4); which dynamic lights affect which objects (5.6).
+- The order in which receivers are chosen (5.3; `object-projected-light.md` 3.1).
+- Light-track values at the first frame (5.4).
 - Meaning of the remaining hanging-lamp light-flag bits; glow drawing details (6).
 - The poses shown in the running game (motions, physics) — out of scope (4.8).
 
 ## 9. Provenance
 
 - Date: 2026-11-24; revised the same day: section 2.4's limits of the switch pass and the matching item
-  of section 8, after offline-simulation.md.
+  of section 8, after offline-simulation.md; revised 2026-11-26: sections 5.4 – 5.6 and 8, after
+  object-projected-light.md (projected light texture, update schedule) and dynamic-lights.md.
 - Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG), archives `gamedata.db0` …
   `gamedata.dbd`; binaries `bin\XR_3DA.exe`, `bin\xrGame.dll`, `bin\xrRender_R1.dll`; default
   `__support\userdocs\user.ltx`.
@@ -781,3 +788,7 @@ total — and over all 1,581 `.ogf` files of the archives (2,146,420 vertices, 3
   from `config\alife.ltx`, the constant of the time limit read from `bin\xrGame.dll`, and static analysis
   of the binary's reading of the `[alife]` keys, the setup of the two limits, the switch pass and the
   scheduled updates (checks LO0-1 … LO0-6).
+
+## Gaps found in review
+
+- Section 5.3 lists only some receiver conditions; `object-projected-light.md` 3.1 adds that an object is taken at most once per frame and only when it lies in a sector (an object outside every sector is not a receiver).

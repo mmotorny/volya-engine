@@ -284,6 +284,22 @@ is not what the original shows at any camera position closer than the cross-fade
   *k* = 0.77375; face 0 normal **N**₀ = (−0.9067, −0.0120, −0.4215). For a camera at the sphere centre +
   (100, 0, 0): *F*₁ = face 7, *F*₂ = face 0, *β* = 135.
 
+Outdoor fidelity view (eye (−180, 5, −120), yaw 1.2, pitch 0.15, vertical field of view 67.5°, 1024 ×
+768, supersampled target 1448 × 1086 so *k* of `static-shading.md` 10.2 = 3.577·10⁻⁷, *T*\_min =
+4.382·10⁻⁶, *T*\_B = 9.157·10⁻⁵, *T*\_A = 1.628·10⁻⁴; far plane 350 m, `sky.md` 8.1; check `od_outdoor.py`
+OD-1, OD-2 in the dirty workspace's `checks/object-light/`):
+
+- 837 billboard groups have their sphere centre in front of the eye and project into the image (± 50
+  pixels); 431 of them reach inside the far plane (centre depth − radius < 350 m).
+- In the image region x 30 … 110, y 200 … 280 (pines behind the houses): 10 billboard groups at centre
+  depths 204 … 334 m reach inside the far plane; by 8.2, 7 draw only their billboard and 3 both billboard
+  and trees. In the region x 250 … 360, y 190 … 310 (poplars on the hill): 34 groups at depths 210 … 348 m;
+  26 billboard only, 7 both, 1 trees only. None is below *T*\_min. Their fog factor at the centre depth
+  (`static-shading.md` 9.3) is 0 … 0.45 (that region at 55 … 100 % fog colour).
+- So, apart from hidden-surface effects (sector reach, `level.hom`), the original draws trees along the
+  horizon of that view as fogged billboards out to the far plane; a renderer that draws no billboard
+  group beyond some distance short of 350 m, or uses a smaller far plane, loses them.
+
 All 30 shipped levels:
 
 - Visual counts by type as in section 1 (133,666 visuals); every header version 4.
@@ -305,7 +321,7 @@ All 30 shipped levels:
 
 ## 11. Provenance
 
-- Date: 2026-11-23.
+- Date: 2026-11-23; revised 2026-11-26: section 9, the outdoor-view facts.
 - Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG), archives `gamedata.db0` …
   `gamedata.dbd`; binaries `bin\XR_3DA.exe` and `bin\xrRender_R1.dll`.
 - Data examined: `level`, `level.geom` and `level.geomx` of all 30 level directories (merged archive view),

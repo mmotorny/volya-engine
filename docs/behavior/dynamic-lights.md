@@ -396,9 +396,12 @@ Checks: `dl_r1.py` DL-R13, DL-R15; `dl_data.py` DL-D5.
 For each object, the renderer tracks the active light records around it (spatial query of lights within
 a box around the object, keeping those whose distance is below their range plus the object's radius),
 including the chunk-6 point records, and adds directional record B weighted by the object's sun
-visibility; from them, with ray tests and smoothing, it keeps a colour whose mean of the three components
-it reports to the game as the object's brightness. This value is not used for drawing. How the lights are
-weighted and smoothed is **unestablished**. Checks: `dl_r1.py` DL-R16.
+visibility; from them, with ray tests and smoothing, it keeps a colour (the **approximate colour**) whose
+mean of the three components it reports to the game as the object's brightness. The colour is also used
+for drawing: it is the clear colour of the object's cell of the projected light texture, which lights the
+object's model (`docs/behavior/object-projected-light.md` sections 4.2, 5). The weighting, the ray tests,
+the smoothing and when the colour is recomputed are specified there (section 5). Checks: `dl_r1.py`
+DL-R16; `checks/object-light/ol_r1.py` OL-12.
 
 ## 10. Verification facts
 
@@ -439,9 +442,10 @@ Sections 2.3, 3.1, 5.2, 5.3 and 6.3 give examples (`dl_numeric.py` DL-N1 … DL-
   point lights are not. Which object a light reaches: section 5.5.
 - `level-objects.md` section 5.4: the sun-visibility ray goes in direction −d_B (section 3.1), not
   −L_sun_dir.
-- `level.md` section 7, chunk-6 lights "serve dynamic lighting of objects": they light nothing; the point
-  records enter only the brightness value (section 9); "how the sun record relates to the environment's
-  sun": section 3.1.
+- `level.md` section 7, chunk-6 lights "serve dynamic lighting of objects": they are never drawn as
+  lights; the point records enter only the approximate colour of objects (section 9), which reaches the
+  picture through the projected light texture; "how the sun record relates to the environment's sun":
+  section 3.1.
 
 ## 12. Unestablished
 
@@ -449,11 +453,11 @@ Sections 2.3, 3.1, 5.2, 5.3 and 6.3 give examples (`dl_numeric.py` DL-N1 … DL-
 - Whether artefact and zone lights ever change type after creation (section 3.2).
 - Whether the actor's torch and the helicopter's light are on at the first level's start (section 3.3).
 - Library definitions with a distortion element of priority 0 or 1 (section 7).
-- The weighting and smoothing of the brightness value (section 9).
 
 ## 13. Provenance
 
-- Date: 2026-11-24.
+- Date: 2026-11-24; revised 2026-11-26: section 9 and the matching items of sections 11 and 12, after
+  object-projected-light.md.
 - Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG), archives `gamedata.db0` …
   `gamedata.dbd`; binaries `bin\xrRender_R1.dll`, `bin\XR_3DA.exe`, `bin\xrGame.dll`; default
   `__support\userdocs\user.ltx`.
