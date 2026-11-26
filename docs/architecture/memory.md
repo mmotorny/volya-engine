@@ -69,22 +69,11 @@ Live memory grew 0.49 MB over the 600 frames.
 
 Headless Chrome, `menu` suite (MiB, the wasm heap and the most live meanwhile, from `heap_log` in test builds):
 
-| Path | Before the New Game | After the first New Game | After the second | Before #440 | Before #432 (first, second) | Before #370 and #371, without the detail objects (#411) |
+| | Before the New Game | After the first New Game | After the second | Before #440 | Before #432 (first, second) | Before #370 and #371, without the detail objects (#411) |
 |---|---|---|---|---|---|---|
-| WebGPU | 34 heap, 16 live | 82 heap, 74 live at most | 93 heap, 82 live at most (before #440) | 90/77 | 59/16 before it; 90/81, 90/81 | 98/87, 98/87 |
-| WebGL 2 (BC textures as stored) | 25 heap, 20 live (a fresh engine) | 87 heap, 79 live at most | 91 heap, 80 live at most | 97/85, 99/86 | 104/93, 104/89 | 106/95, 110/97 |
+| BC textures as stored | 35 heap, 17 live | 87 heap, 79 live at most | 91 heap, 80 live at most | 97/85, 99/86 | 104/93, 104/89 | 106/95, 110/97 |
 
-One run each (the heap varies by a few MiB from run to run). The audio worker's instance adds 3–4 MiB (#354). Where the live bytes sit (the `heap_map` op of test builds, #432; WebGPU): after the launch the heap is 17 MiB with 10 live (the archive tree and the game's data), at the title menu 24 MiB with 16 live, packed from the heap's start (its largest blocks 0.4–1.4 MiB, believed the menu videos' frames and the UI textures). The game itself leaves no split free space before a New Game. What took the heap to 59 MiB before #432 was the `menu` suite's own capture of the title menu: a 1024 × 768 frame sent to the page as a JSON array of numbers, about 35 MiB at the heap's top, freed at once. Captures are now sent as base64 and decoded in the engine worker; the suite's capture still takes the heap from 24 to 34 MiB, all of it free at the top. The WebGL 2 row starts a fresh engine straight into the game. What stands between the heap and its live peak, 10–11 MiB on WebGPU and 12 MiB on WebGL 2, arises during the loading itself. With the level shown WebGL 2 holds about 3 MiB more live than WebGPU (79 against 76), believed wgpu-core's and naga's state, in blocks under 64 KiB, which the browser holds on WebGPU. At the load's peak the two paths hold the same large blocks; what WebGL 2 adds is staging, wgpu-core's copies of what was written, kept in our heap until WebGL reports the writes done (the `heap_record` op of test builds: live bytes by block size and the largest blocks at the load's most live, #440).
-
-### What fragments the heap
-
-A source is substantial when it leaves many small long-lived blocks between large ones, or makes large temporaries where long-lived blocks then settle:
-
-- the offline simulation's registry: 109,329 blocks for 8,641 objects, made after the previous level's blocks were freed and before the collision world's are allocated;
-- the loading temporaries: 2.46 million allocations under `st_client_spawning` alone, interleaved with what the stage keeps;
-- the level's other small long-lived blocks: the `level` file's parts (6,887), the effect library (8,417), the objects (6,929);
-- the collision world's large arrays, which need contiguous space (#371);
-- the frame's temporaries, 285 KB a frame in about 300 blocks, made and freed between the level's.
+One run each (the heap varies by a few MiB from run to run). The audio worker's instance adds 3–4 MiB (#354). Where the live bytes sit (the `heap_map` op of test builds, #432): after the launch the heap is 18 MiB with 11 live (the archive tree and the game's data), at the title menu 25 MiB with 18 live, packed from the heap's start (its largest blocks 0.3–1.4 MiB, believed the menu videos' frames and the UI textures). The game itself leaves no split free space before a New Game. What took the heap to 59 MiB before #432 was the `menu` suite's own capture of the title menu: a 1024 × 768 frame sent to the page as a JSON array of numbers, about 35 MiB at the heap's top, freed at once. Captures are now sent as base64 and decoded in the engine worker; the suite's capture still takes the heap from 25 to 35 MiB, all of it free at the top. What stands between the heap and its live peak, about 8 MiB, arises during the loading itself: staging, wgpu-core's copies of what was written, kept in our heap until WebGL reports the writes done, and wgpu-core's and naga's state in blocks under 64 KiB (believed; the `heap_record` op of test builds: live bytes by block size and the largest blocks at the load's most live, #440).
 
 ## GPU and JavaScript memory
 
