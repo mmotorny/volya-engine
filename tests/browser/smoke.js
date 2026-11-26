@@ -754,6 +754,7 @@ export const tests = {
     else assertEqual(session.game, "not imported", "game");
     if (session.gpu_state === "ready") {
       assert(session.gpu_textures, "no texture path");
+      assert(session.gpu_renderer, "no WebGL 2 renderer");
     }
     assert(find("i", "test marker")[0]?.tid === 2, "no page event");
     // A period's series: the spans' times, the metrics and counts.
