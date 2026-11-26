@@ -46,5 +46,5 @@ Dependencies point one way: `volya-engine-web` → `volya-engine` (and `formats`
 - [input.md](input.md): input forwarding, the touchpad, the level's controls, text entry, full screen.
 - [screens.md](screens.md): fatal errors, settings, the menu during a game, saved games, the inventory screen.
 - [diagnostics.md](diagnostics.md): the diagnostic log.
-- [memory.md](memory.md): memory.
+- [memory.md](memory.md): memory by lifetime and owner, the one-heap design, GPU ownership and release, the migration.
 - Testing: [docs/testing.md](../testing.md).
