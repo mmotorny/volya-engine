@@ -60,6 +60,59 @@ mod counting {
     static RECORD_LARGE: [(AtomicUsize, AtomicUsize); 512] =
         [const { (AtomicUsize::new(0), AtomicUsize::new(0)) }; 512];
 
+    /// The allocations that grew the wasm memory since `reset_record`
+    /// (#487): (bytes asked for, address, the memory's bytes after).
+    static GROWTHS: [(AtomicUsize, AtomicUsize, AtomicUsize); 64] = [const {
+        (
+            AtomicUsize::new(0),
+            AtomicUsize::new(0),
+            AtomicUsize::new(0),
+        )
+    }; 64];
+    static GROWTH_COUNT: AtomicUsize = AtomicUsize::new(0);
+    static GROWTH_TAGS: [AtomicUsize; 64] = [const { AtomicUsize::new(0) }; 64];
+    /// What runs now, for the growths (TEMPORARY, #487).
+    pub static TAG: AtomicUsize = AtomicUsize::new(0);
+
+    fn memory_bytes() -> usize {
+        #[cfg(target_arch = "wasm32")]
+        return core::arch::wasm32::memory_size(0) << 16;
+        #[cfg(not(target_arch = "wasm32"))]
+        0
+    }
+
+    /// Notes an allocation of `size` at `p` if the memory grew from `before`.
+    fn noted(before: usize, size: usize, p: *mut u8) {
+        let after = memory_bytes();
+        if after > before {
+            let n = GROWTH_COUNT.fetch_add(1, Relaxed);
+            if let Some(g) = GROWTHS.get(n) {
+                g.0.store(size, Relaxed);
+                g.1.store(p as usize, Relaxed);
+                g.2.store(after, Relaxed);
+                GROWTH_TAGS[n].store(TAG.load(Relaxed), Relaxed);
+            }
+        }
+    }
+
+    /// The allocations that grew the memory since the reset, in order:
+    /// (KiB asked for, address MiB, the memory's MiB after); and how many.
+    pub fn growths() -> (Vec<(usize, f64, f64)>, usize) {
+        let n = GROWTH_COUNT.load(Relaxed);
+        let mib = |b: usize| b as f64 / (1 << 20) as f64;
+        let list = (GROWTHS.iter().take(n))
+            .zip(&GROWTH_TAGS)
+            .map(|(g, t)| {
+                (
+                    g.0.load(Relaxed) >> 10,
+                    mib(g.1.load(Relaxed)),
+                    mib(g.2.load(Relaxed)) + t.load(Relaxed) as f64 * 1000.0,
+                )
+            })
+            .collect();
+        (list, n)
+    }
+
     struct Counting;
 
     fn grew(by: usize) {
@@ -104,6 +157,7 @@ mod counting {
 
     /// Starts a new record from what is live now.
     pub fn reset_record() {
+        GROWTH_COUNT.store(0, Relaxed);
         RECORD.store(0, Relaxed);
         RECORD_TAKEN.store(0, Relaxed);
         recorded();
@@ -166,8 +220,10 @@ mod counting {
 
     unsafe impl GlobalAlloc for Counting {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            let before = memory_bytes();
             let p = unsafe { System.alloc(layout) };
             if !p.is_null() {
+                noted(before, layout.size(), p);
                 grew(layout.size());
                 allocated(layout.size());
                 mapped(p, layout.size(), true);
@@ -177,8 +233,10 @@ mod counting {
         }
 
         unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            let before = memory_bytes();
             let p = unsafe { System.alloc_zeroed(layout) };
             if !p.is_null() {
+                noted(before, layout.size(), p);
                 grew(layout.size());
                 allocated(layout.size());
                 mapped(p, layout.size(), true);
@@ -194,8 +252,10 @@ mod counting {
         }
 
         unsafe fn realloc(&self, p: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+            let before = memory_bytes();
             let q = unsafe { System.realloc(p, layout, size) };
             if !q.is_null() {
+                noted(before, size, q);
                 mapped(p, layout.size(), false);
                 mapped(q, size, true);
                 if size > layout.size() {
@@ -293,6 +353,12 @@ thread_local! {
 }
 
 /// The wasm heap (linear memory) size, bytes.
+pub(crate) fn heap_tag(t: usize) {
+    #[cfg(feature = "test-ops")]
+    counting::TAG.store(t, std::sync::atomic::Ordering::Relaxed);
+    let _ = t;
+}
+
 pub(crate) fn heap_bytes() -> f64 {
     wasm_bindgen::memory()
         .dyn_into::<js_sys::WebAssembly::Memory>()
@@ -649,7 +715,14 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
                 counting::reset_record();
             }
             let (live, sizes, large) = counting::record();
-            to_json(&serde_json::json!({ "live_bytes": live, "sizes_kib": sizes, "large": large }))
+            let (growths, growth_count) = counting::growths();
+            to_json(&serde_json::json!({
+                "live_bytes": live,
+                "sizes_kib": sizes,
+                "large": large,
+                "growths": growths,
+                "growth_count": growth_count,
+            }))
         }
         "launch" => to_json(&engine::launch().await?),
         "menu_state" => to_json(&engine::state()),
