@@ -27,6 +27,7 @@ pub use crate::render::selftest::{
 mod artefacts;
 mod details;
 mod draw_calls;
+mod frame_memory;
 mod inventory_screen;
 mod lights;
 mod new_game;
@@ -48,6 +49,19 @@ pub struct Context<'a> {
     frames: Option<RefCell<Vec<Frame>>>,
     /// [`Context::gl_calls`].
     gl_calls: Option<&'a dyn Fn(bool) -> Vec<(String, u64)>>,
+    /// [`Context::heap`].
+    heap: Option<&'a dyn Fn() -> HeapCount>,
+}
+
+/// The heap's counts so far, where the platform counts them.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct HeapCount {
+    /// Allocations made (a growing reallocation counts as one).
+    pub allocations: usize,
+    /// Bytes allocated (a growing reallocation counts its new size).
+    pub bytes: usize,
+    /// Bytes live.
+    pub live: usize,
 }
 
 /// A frame a check keeps for inspection (the native `VOLYA_DUMP_*`).
@@ -71,6 +85,7 @@ impl<'a> Context<'a> {
             make,
             frames: keep_frames.then(Default::default),
             gl_calls: None,
+            heap: None,
         }
     }
 
@@ -80,6 +95,18 @@ impl<'a> Context<'a> {
     pub fn with_gl_calls(mut self, count: &'a dyn Fn(bool) -> Vec<(String, u64)>) -> Self {
         self.gl_calls = Some(count);
         self
+    }
+
+    /// Lets [`Context::heap`] read the heap's counts with `count`.
+    pub fn with_heap(mut self, count: &'a dyn Fn() -> HeapCount) -> Self {
+        self.heap = Some(count);
+        self
+    }
+
+    /// Reads the heap's counts (`None` where the platform doesn't count
+    /// them).
+    pub fn heap(&self) -> Option<&'a dyn Fn() -> HeapCount> {
+        self.heap
     }
 
     /// WebGL 2's calls by name while `f` runs (`None` where the platform
@@ -166,6 +193,7 @@ const SUITES: &[(&str, &[Checks])] = &[
             zones::CHECKS,
             artefacts::CHECKS,
             details::CHECKS,
+            frame_memory::CHECKS,
         ],
     ),
     ("draw-calls", &[draw_calls::CHECKS]),

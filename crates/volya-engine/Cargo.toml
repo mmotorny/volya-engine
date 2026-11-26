@@ -33,7 +33,6 @@ tracing.workspace = true
 md-5.workspace = true
 sha2.workspace = true
 serde_json.workspace = true
-pollster.workspace = true
 tracing-subscriber.workspace = true
 volya-engine-formats = { path = "../volya-engine-formats", features = ["etc2-decode"] }
 volya-engine-installer = { path = "../volya-engine-installer" }
