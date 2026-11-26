@@ -4,7 +4,7 @@
 
 ## WebGL 2
 
-The browser renderer draws through wgpu's GL backend on WebGL 2 only (decided by the user, #449): on the user's iPhone it runs the level at 60 fps at 2868 × 1320. Native tests run the same renderer on the Mac's GPU through wgpu's Metal backend.
+The browser renderer draws through wgpu's GL backend on WebGL 2 only (decided by the user, #449): on the user's iPhone it runs the level at 60 fps at 2868 × 1320. Its drawing is tested in headless Chrome only (docs/testing.md).
 
 - The engine worker draws on an `OffscreenCanvas` transferred from the main thread (`gpu.rs` `connect`). The iOS Simulator's WebGL 2 has ETC2 and ASTC, no BC (measured).
 - `status().gpu` reports how BC textures reach the GPU (`bc`, `etc2`, `rgba8`). Without WebGL 2 the engine still starts, without graphics: `status().gpu.state` is `unavailable` with a `message`, and the page shows "This browser can't run the game" with it.
@@ -147,7 +147,7 @@ The WGSL stays the source. A build script translates each program to GLSL ES 3.0
 
 Drawing tests run in headless Chrome only; non-drawing checks stay native cargo tests, each test file split so its loading, simulation and draw-list checks run without a GPU.
 
-- **Render self-test** (#470): the render crate's scenes and their checks (now `tests/render.rs`, `tests/world.rs`) move into a module compiled into test builds and run in the engine worker by a `render_selftest` op, as `script_selftest`; the `render` suite runs it (#471).
+- **Render self-test** (#470): the render crate's scenes and their checks (once `tests/render.rs`, `tests/world.rs`) live in a module compiled into test builds (`selftest`) and run in the engine worker by a `render_selftest` op, as `script_selftest`; the `render` suite runs it (#471).
 - **Suites by render area**, so a change runs only its own, cheapest first: `render` (synthetic scenes and the small `gamedata.dbb`; seconds), `render-screens` (the title menu, save, load, inventory and options screens, #473), `render-level` (a New Game's start view, objects, lights, the torch, zones, artefacts, grass, presentation, particles, #472), `draw-calls` (#474). They drive the game through the engine test interface and read frames back with `debug_capture`.
 - **A kept import**: game-data render suites use a Chrome profile kept under `target/` between runs, so the game is imported once (a suite imports only what the profile's `import.json` lacks); the `import` and `menu` suites keep fresh profiles, as they test the import.
 - **Frame dumps**: a suite posts a capture as PNG (encoded on the page with an `OffscreenCanvas`) to the dev server, which writes it to `<VOLYA_DUMP_DIR>/<suite>/<name>.png` when the variable is set: the `VOLYA_DUMP_*` variables' equivalent, never committed.

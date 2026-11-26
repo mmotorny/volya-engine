@@ -1,27 +1,31 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! The static world's and the sky's passes on synthetic data, without game
-//! data: every pipeline builds (world.wgsl, sky.wgsl validate), and packed
-//! vertex attributes decode as docs/formats/level-geom.md section 8 says,
-//! checked through rendered pixels.
+//! The static world's and the sky's passes on synthetic data: every
+//! pipeline builds, and packed vertex attributes decode as
+//! docs/formats/level-geom.md section 8 says, checked through rendered
+//! pixels; objects, placed draws, details, particles, lights, glows and
+//! the presentation's reduction likewise.
 
-// Needs a native GPU.
-#![cfg(not(target_arch = "wasm32"))]
+use std::sync::Arc;
 
 use volya_engine_formats::dds::Dds;
 use volya_engine_formats::dds::build::{PixelFormat, file};
 use volya_engine_formats::level_geom::{GeomSource, Layout, LevelGeom, VertexBuffer};
-use volya_engine_render::particles::{
+
+use super::{Make, Outcome, Problem, capture, ensure, ensure_eq, pixel};
+use crate::details::{DetailDraw, DetailFrame, DetailGeometry, STILL, SWAY_1};
+use crate::particles::{
     ParticleBatch, ParticleBlend, ParticleCull, ParticlePass, ParticleProgram, ParticleQueue,
     ParticleVertex,
 };
-use volya_engine_render::sky::{SkyFrame, SkySection, SkyTextures};
-use volya_engine_render::world::{
+use crate::present::{Presentation, ScreenEffects};
+use crate::sky::{SkyFrame, SkySection, SkyTextures};
+use crate::world::{
     Blend, LightElement, LightPass, LightProgram, LightTextures, Mat4, ObjectGeometry, Program,
     Surface, TreeLight, WorldLight, model_vertex,
 };
-use volya_engine_render::{DrawList, Renderer, Texture, WorldDraw, WorldFrame, wgpu};
+use crate::{DrawList, Renderer, Texture, World, WorldDraw, WorldFrame};
 
 const SIZE: u32 = 16;
 const IDENTITY: Mat4 = [
@@ -31,27 +35,16 @@ const IDENTITY: Mat4 = [
     [0.0, 0.0, 0.0, 1.0],
 ];
 
-fn renderer() -> Renderer {
-    pollster::block_on(async {
-        let instance = wgpu::Instance::default();
-        let adapter = instance.request_adapter(&Default::default()).await.unwrap();
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                required_features: volya_engine_render::device_features(&adapter),
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        Renderer::new(&device, &queue, wgpu::TextureFormat::Bgra8Unorm)
-    })
+/// A failure of `what`, with the error.
+fn fail(what: &str) -> impl FnOnce(String) -> Problem + '_ {
+    move |e| Problem::Fail(format!("{what}: {e}"))
 }
 
 /// Two draws of one index range from different first vertices: the second's
 /// triangle (green, nearer) covers the first's (red). Without base vertices
 /// the range is uploaded twice, rebased for each.
-#[test]
-fn shared_index_ranges_with_different_bases() {
-    let mut r = renderer();
+pub async fn shared_index_ranges_with_different_bases(make: Make<'_>) -> Outcome {
+    let mut r = make();
     let white = r.create_rgba_texture(1, 1, &[255; 4]);
     // Vertex colour bytes b0 b1 b2 b3: red is (0, 0, 0x7F), green
     // (0, 0x7F, 0) (vert doubles them, level-geom.md 4).
@@ -82,39 +75,69 @@ fn shared_index_ranges_with_different_bases() {
         first_vertex: 3,
         ..red
     };
-    let world = r.create_world(&g, &surfaces, &[red], None).unwrap();
-    assert_near(centre(&mut r, frame(world, None)), [0xFE, 0, 0], "red");
-    let world = r.create_world(&g, &surfaces, &[red, green], None).unwrap();
-    assert_near(
-        centre(&mut r, frame(world, None)),
+    let world = r
+        .create_world(&g, &surfaces, &[red], None)
+        .map_err(fail("world"))?;
+    expect_near(
+        centre(&mut r, frame(world, None)).await?,
+        [0xFE, 0, 0],
+        "red",
+    )?;
+    let world = r
+        .create_world(&g, &surfaces, &[red, green], None)
+        .map_err(fail("world"))?;
+    expect_near(
+        centre(&mut r, frame(world, None)).await?,
         [0, 0xFE, 0],
         "green over red",
-    );
+    )?;
     // In steps (#184): one piece a step, the vertex buffer, the index
     // buffer, then the vertices' draw ids (#387); finished only when all is
     // uploaded, and for the same draws.
     let objects = ObjectGeometry::default();
     let draws = [red, green];
     let layout = g.source().layout().clone();
-    let mut upload = r.begin_geometry(&layout, &objects, &draws).unwrap();
+    let mut upload = r
+        .begin_geometry(&layout, &objects, &draws)
+        .map_err(fail("begin"))?;
     let mut steps = 1;
-    while !upload.step(&r, &mut g.source(), &objects, 1).unwrap() {
+    while !upload
+        .step(&r, &mut g.source(), &objects, 1)
+        .map_err(fail("step"))?
+    {
         steps += 1;
+        ensure!(steps <= 100, "the upload never finishes");
     }
-    assert_eq!(steps, 3, "a piece a step");
-    let other = r.begin_geometry(&layout, &objects, &[red]).unwrap();
-    assert!(r.finish_world(other, &surfaces, &[red], None).is_err());
-    assert!(r.finish_world(upload, &surfaces, &[red], None).is_err());
-    let mut upload = r.begin_geometry(&layout, &objects, &draws).unwrap();
-    assert!(!upload.step(&r, &mut g.source(), &objects, 1).unwrap());
-    assert!(!upload.step(&r, &mut g.source(), &objects, 1).unwrap());
-    assert!(upload.step(&r, &mut g.source(), &objects, 1).unwrap());
-    let world = r.finish_world(upload, &surfaces, &draws, None).unwrap();
-    assert_near(
-        centre(&mut r, frame(world, None)),
+    ensure_eq!(steps, 3, "a piece a step");
+    let other = r
+        .begin_geometry(&layout, &objects, &[red])
+        .map_err(fail("begin"))?;
+    ensure!(
+        r.finish_world(other, &surfaces, &[red], None).is_err(),
+        "an unfinished upload finished"
+    );
+    ensure!(
+        r.finish_world(upload, &surfaces, &[red], None).is_err(),
+        "an upload finished for other draws"
+    );
+    let mut upload = r
+        .begin_geometry(&layout, &objects, &draws)
+        .map_err(fail("begin"))?;
+    for (step, last) in [(1, false), (2, false), (3, true)] {
+        let done = upload
+            .step(&r, &mut g.source(), &objects, 1)
+            .map_err(fail("step"))?;
+        ensure_eq!(done, last, "finished after step {step}");
+    }
+    let world = r
+        .finish_world(upload, &surfaces, &draws, None)
+        .map_err(fail("finish"))?;
+    expect_near(
+        centre(&mut r, frame(world, None)).await?,
         [0, 0xFE, 0],
         "green over red, uploaded in steps",
-    );
+    )?;
+    Ok(String::new())
 }
 
 /// A vertex of 32 bytes: position, normal, tangent, binormal (D3DCOLOR
@@ -130,8 +153,8 @@ fn vertex(p: [f32; 3], tangent_alpha: u8, binormal_alpha: u8, rest: [u8; 8]) -> 
 
 fn i16s(values: &[i16]) -> [u8; 8] {
     let mut out = [0; 8];
-    for (i, v) in values.iter().enumerate() {
-        out[2 * i..2 * i + 2].copy_from_slice(&v.to_le_bytes());
+    for (o, v) in out.as_chunks_mut::<2>().0.iter_mut().zip(values) {
+        *o = v.to_le_bytes();
     }
     out
 }
@@ -190,7 +213,7 @@ fn draw(surface: u32, tree: Option<TreeLight>) -> WorldDraw {
 }
 
 /// Looking along +z from the origin, near 0.1, far 100, square.
-fn frame(world: volya_engine_render::World, sky: Option<SkyFrame>) -> WorldFrame {
+fn frame(world: World, sky: Option<SkyFrame>) -> WorldFrame {
     let (n, z) = (0.1, 100.0);
     let mut projection = IDENTITY;
     projection[2] = [0.0, 0.0, z / (z - n), 1.0];
@@ -222,23 +245,25 @@ fn frame(world: volya_engine_render::World, sky: Option<SkyFrame>) -> WorldFrame
     }
 }
 
-fn centre(renderer: &mut Renderer, frame: WorldFrame) -> [u8; 4] {
-    let list = DrawList {
-        world: Some(frame),
-        ..Default::default()
-    };
-    let pixels =
-        pollster::block_on(renderer.capture(&list, SIZE, SIZE, wgpu::Color::BLACK)).unwrap();
-    let i = ((SIZE / 2 * SIZE + SIZE / 2) * 4) as usize;
-    pixels[i..i + 4].try_into().unwrap()
+/// The centre pixel of `frame` drawn at `SIZE` × `SIZE`.
+async fn centre(renderer: &mut Renderer, frame: WorldFrame) -> Result<[u8; 4], Problem> {
+    let image = pixels(renderer, frame, SIZE).await?;
+    Ok(pixel(&image, SIZE, SIZE / 2, SIZE / 2))
 }
 
-#[track_caller]
-fn assert_near(actual: [u8; 4], expected: [u8; 3], what: &str) {
-    assert!(
+/// Fails unless the first three channels of `actual` are within 2 of
+/// `expected`.
+fn expect_near(actual: [u8; 4], expected: [u8; 3], what: &str) -> Result<(), Problem> {
+    ensure!(
         actual.iter().zip(expected).all(|(a, e)| a.abs_diff(e) <= 2),
         "{what}: {actual:?} != {expected:?}"
     );
+    Ok(())
+}
+
+/// The colour channels of a pixel.
+fn rgb(p: [u8; 4]) -> [u8; 3] {
+    [p[0], p[1], p[2]]
 }
 
 /// 2 × 2 quadrants: red, green (top right), blue, white.
@@ -255,9 +280,8 @@ fn quadrants(renderer: &Renderer) -> Texture {
     renderer.create_rgba_texture(2, 2, &rgba)
 }
 
-#[test]
-fn every_program_builds_and_base_coordinates_decode() {
-    let mut r = renderer();
+pub async fn every_program_builds_and_base_coordinates_decode(make: Make<'_>) -> Outcome {
+    let mut r = make();
     // 1024 × 2 texels: odd columns of row 0 red, even ones black.
     let mut rgba = Vec::new();
     for y in 0..2 {
@@ -289,19 +313,27 @@ fn every_program_builds_and_base_coordinates_decode() {
     .collect();
     let world = r
         .create_world(&g, &surfaces, &[draw(0, None)], None)
-        .unwrap();
-    assert_eq!((world.draw_count(), world.skipped()), (1, 0));
-    assert_near(centre(&mut r, frame(world, None)), [255, 0, 0], "selflight");
+        .map_err(fail("world"))?;
+    ensure_eq!(
+        (world.draw_count(), world.skipped()),
+        (1, 0),
+        "draws, skipped"
+    );
+    expect_near(
+        centre(&mut r, frame(world, None)).await?,
+        [255, 0, 0],
+        "selflight",
+    )?;
     // A draw whose layout does not suit its program is left out.
     let world = r
         .create_world(&g, &surfaces, &[draw(1, None)], None)
-        .unwrap();
-    assert_eq!(world.skipped(), 1);
+        .map_err(fail("world"))?;
+    ensure_eq!(world.skipped(), 1, "skipped");
+    Ok(String::new())
 }
 
-#[test]
-fn vertex_colour_bytes_swap() {
-    let mut r = renderer();
+pub async fn vertex_colour_bytes_swap(make: Make<'_>) -> Outcome {
+    let mut r = make();
     let white = r.create_rgba_texture(1, 1, &[255; 4]);
     // Colour bytes b0 b1 b2 b3 = 0x10 0x20 0x40 0xFF: rgb = (0x40, 0x20,
     // 0x10)/255 (level-geom.md 4); vert gives C = 2 · B · rgb with no
@@ -316,17 +348,17 @@ fn vertex_colour_bytes_swap() {
             &[draw(0, None)],
             None,
         )
-        .unwrap();
-    assert_near(
-        centre(&mut r, frame(world, None)),
+        .map_err(fail("world"))?;
+    expect_near(
+        centre(&mut r, frame(world, None)).await?,
         [0x80, 0x40, 0x20],
         "vert",
-    );
+    )?;
+    Ok(String::new())
 }
 
-#[test]
-fn tree_coordinates_and_constants() {
-    let mut r = renderer();
+pub async fn tree_coordinates_and_constants(make: Make<'_>) -> Outcome {
+    let mut r = make();
     let base = quadrants(&r);
     // Layout A: (u, v) = (s0, s1)/2048 = (0.75, 0.25): green
     // (level-geom.md 8.4); the bias 2/3 × 0.75 = 0.5 makes c0 0.5, so
@@ -343,26 +375,32 @@ fn tree_coordinates_and_constants() {
             &[draw(0, Some(light))],
             None,
         )
-        .unwrap();
-    assert_near(centre(&mut r, frame(world, None)), [0, 255, 0], "tree");
+        .map_err(fail("world"))?;
+    expect_near(
+        centre(&mut r, frame(world, None)).await?,
+        [0, 255, 0],
+        "tree",
+    )?;
+    Ok(String::new())
 }
 
-fn dds_texture(r: &Renderer, cube: bool, bgra: [u8; 4]) -> Texture {
+fn dds_texture(r: &Renderer, cube: bool, bgra: [u8; 4]) -> Result<Texture, Problem> {
     let faces = if cube { 6 } else { 1 };
     let data: Vec<u8> = (0..faces).flat_map(|_| bgra).collect();
     let file = file(1, 1, 0, cube, PixelFormat::BGRA8, &data);
-    r.create_texture(&Dds::parse(&file).unwrap()).unwrap()
+    let dds = Dds::parse(&file).map_err(|e| Problem::Fail(format!("dds: {e}")))?;
+    r.create_texture(&dds)
+        .map_err(|e| Problem::Fail(format!("texture: {e}")))
 }
 
-#[test]
-fn sky_shows_where_the_world_does_not() {
-    let mut r = renderer();
+pub async fn sky_shows_where_the_world_does_not(make: Make<'_>) -> Outcome {
+    let mut r = make();
     // Cube maps of rgb (100, 50, 26) and (200, 100, 52), blended half and
     // half (t byte 127 ≈ 0.5), times 2 × 127/255 (sky.md 5.4).
     // Section 1 blends with section 2; section 0 is not bound. Sections 0
     // and 1 have a white sun texture, section 2 a black one.
-    let white = dds_texture(&r, false, [255; 4]);
-    let black = dds_texture(&r, false, [0, 0, 0, 255]);
+    let white = dds_texture(&r, false, [255; 4])?;
+    let black = dds_texture(&r, false, [0, 0, 0, 255])?;
     let section = |cube, sun: &Texture| SkySection {
         cube,
         clouds: white.clone(),
@@ -370,14 +408,16 @@ fn sky_shows_where_the_world_does_not() {
     };
     let sky = SkyTextures {
         sections: vec![
-            section(dds_texture(&r, true, [0, 0, 0, 255]), &white),
-            section(dds_texture(&r, true, [26, 50, 100, 255]), &white),
-            section(dds_texture(&r, true, [52, 100, 200, 255]), &black),
+            section(dds_texture(&r, true, [0, 0, 0, 255])?, &white),
+            section(dds_texture(&r, true, [26, 50, 100, 255])?, &white),
+            section(dds_texture(&r, true, [52, 100, 200, 255])?, &black),
         ],
     };
     let g = geom(Layout::VertexLit, 0, 0, [0; 8]);
-    let world = r.create_world(&g, &[], &[], Some(&sky)).unwrap();
-    assert_eq!(world.sky_error(), None);
+    let world = r
+        .create_world(&g, &[], &[], Some(&sky))
+        .map_err(fail("world"))?;
+    ensure_eq!(world.sky_error(), None, "sky error");
     let sky_frame = SkyFrame {
         section: 1,
         sun_section: 2,
@@ -397,11 +437,11 @@ fn sky_shows_where_the_world_does_not() {
     };
     let blend = |a: f32, b: f32| (2.0 * 127.0 / 255.0 * (a + (b - a) * 127.0 / 255.0)) as u8;
     let expected = [blend(100.0, 200.0), blend(50.0, 100.0), blend(26.0, 52.0)];
-    assert_near(
-        centre(&mut r, frame(world.clone(), Some(sky_frame))),
+    expect_near(
+        centre(&mut r, frame(world.clone(), Some(sky_frame))).await?,
         expected,
         "sky",
-    );
+    )?;
     // A sprite over the centre (added: source alpha / one, sky.md 7.5):
     // section 2's black sun adds nothing, section 1's white one saturates.
     // Axes X = r = +x, Y = r × F = −y (sky.md 7.4).
@@ -417,25 +457,30 @@ fn sky_shows_where_the_world_does_not() {
         )),
         ..sky_frame
     };
-    assert_near(
-        centre(&mut r, frame(world.clone(), Some(over))),
+    expect_near(
+        centre(&mut r, frame(world.clone(), Some(over))).await?,
         expected,
         "section 2's sun",
-    );
+    )?;
     let white_sun = SkyFrame {
         sun_section: 1,
         ..over
     };
-    assert_near(
-        centre(&mut r, frame(world, Some(white_sun))),
+    expect_near(
+        centre(&mut r, frame(world, Some(white_sun))).await?,
         [255; 3],
         "section 1's sun",
-    );
+    )?;
     // A 1-face texture is not a cube map: no sky, said why.
     let mut flat = sky.clone();
-    flat.sections[0].cube = white.clone();
-    let world = r.create_world(&g, &[], &[], Some(&flat)).unwrap();
-    assert!(world.sky_error().is_some());
+    if let Some(s) = flat.sections.first_mut() {
+        s.cube = white.clone();
+    }
+    let world = r
+        .create_world(&g, &[], &[], Some(&flat))
+        .map_err(fail("world"))?;
+    ensure!(world.sky_error().is_some(), "a flat sky section accepted");
+    Ok(String::new())
 }
 
 /// One object: a screen-covering triangle in model space at z = 0, moved
@@ -478,24 +523,24 @@ fn object_draw_at(surface: u32, props: [f32; 4], z: f32) -> WorldDraw {
 }
 
 /// The centre pixel of `objects` drawn with `surface` under `light`.
-fn object_pixel(
+async fn object_pixel(
     r: &mut Renderer,
     objects: &ObjectGeometry,
     surface: Surface<Texture>,
     props: [f32; 4],
     light: impl FnOnce(&mut WorldLight),
-) -> [u8; 4] {
-    object_pixel_at(r, objects, surface, props, light, 1.0)
+) -> Result<[u8; 4], Problem> {
+    object_pixel_at(r, objects, surface, props, light, 1.0).await
 }
 
-fn object_pixel_at(
+async fn object_pixel_at(
     r: &mut Renderer,
     objects: &ObjectGeometry,
     surface: Surface<Texture>,
     props: [f32; 4],
     light: impl FnOnce(&mut WorldLight),
     z: f32,
-) -> [u8; 4] {
+) -> Result<[u8; 4], Problem> {
     let g = geom(Layout::VertexLit, 0, 0, [0; 8]);
     let world = r
         .create_world_with(
@@ -505,17 +550,24 @@ fn object_pixel_at(
             &[object_draw_at(0, props, z)],
             None,
         )
-        .unwrap();
-    assert_eq!((world.object_draw_count(), world.draw_count()), (1, 0));
-    assert!(world.object_gpu_bytes() >= 48 + 8);
+        .map_err(fail("world"))?;
+    ensure_eq!(
+        (world.object_draw_count(), world.draw_count()),
+        (1, 0),
+        "object draws, draws"
+    );
+    ensure!(
+        world.object_gpu_bytes() >= 48 + 8,
+        "object bytes {}",
+        world.object_gpu_bytes()
+    );
     let mut f = frame(world, None);
     light(&mut f.light);
-    centre(r, f)
+    centre(r, f).await
 }
 
-#[test]
-fn objects_draw_quantized_models() {
-    let mut r = renderer();
+pub async fn objects_draw_quantized_models(make: Make<'_>) -> Outcome {
+    let mut r = make();
     let base = quadrants(&r);
     let up = object_geometry(UP);
     // Q = (n.y · 0.5 + 0.5) · L_dynamic_props.w · hemi + ambient
@@ -526,23 +578,23 @@ fn objects_draw_quantized_models() {
         l.hemi = [0.4; 3];
     };
     let model = surface(Program::Model, Some(base.clone()));
-    let px = object_pixel(&mut r, &up, model.clone(), [0.0, 0.0, 0.0, 0.5], hemi);
-    assert_near(px, [0, 153, 0], "model_def_lq, hemisphere");
+    let px = object_pixel(&mut r, &up, model.clone(), [0.0, 0.0, 0.0, 0.5], hemi).await?;
+    expect_near(px, [0, 153, 0], "model_def_lq, hemisphere")?;
     // The sun term: sunlight straight down on the upward normal, colour
     // 0.4, L_dynamic_props.xyz 0.5: Q = 0.5 · 0.4 = 0.2, C = 0.4 · B.
     let sun = |l: &mut WorldLight| {
         l.sun_color = [0.4; 3];
         l.sun_dir = [0.0, -1.0, 0.0];
     };
-    let px = object_pixel(&mut r, &up, model.clone(), [0.5, 0.5, 0.5, 0.0], sun);
-    assert_near(px, [0, 102, 0], "model_def_lq, sun");
+    let px = object_pixel(&mut r, &up, model.clone(), [0.5, 0.5, 0.5, 0.0], sun).await?;
+    expect_near(px, [0, 102, 0], "model_def_lq, sun")?;
     // Lit from below, the sun adds nothing.
     let below = |l: &mut WorldLight| {
         l.sun_color = [0.4; 3];
         l.sun_dir = [0.0, 1.0, 0.0];
     };
-    let px = object_pixel(&mut r, &up, model, [0.5, 0.5, 0.5, 0.0], below);
-    assert_near(px, [0, 0, 0], "model_def_lq, sun behind");
+    let px = object_pixel(&mut r, &up, model, [0.5, 0.5, 0.5, 0.0], below).await?;
+    expect_near(px, [0, 0, 0], "model_def_lq, sun behind")?;
     // Self-lit: the texel.
     let px = object_pixel(
         &mut r,
@@ -550,8 +602,9 @@ fn objects_draw_quantized_models() {
         surface(Program::ModelSelfLight, Some(base.clone())),
         [0.0; 4],
         |_| {},
-    );
-    assert_near(px, [0, 255, 0], "selflight");
+    )
+    .await?;
+    expect_near(px, [0, 255, 0], "selflight")?;
     // Light planes, added (source alpha / one) onto black: B.rgb faded by
     // |view direction · normal| interpolated from the vertices, whose view
     // directions (−3, −3, 1), (−3, 9, 1), (9, −3, 1) meet the normal
@@ -559,8 +612,8 @@ fn objects_draw_quantized_models() {
     // them 1/2, 1/4, 1/4: 0.166 · 255 = 42.
     let mut planes = surface(Program::ModelLightPlanes, Some(base));
     planes.blend = Blend::Add;
-    let px = object_pixel(&mut r, &object_geometry(TOWARDS), planes, [0.0; 4], |_| {});
-    assert_near(px, [0, 42, 0], "lightplanes");
+    let px = object_pixel(&mut r, &object_geometry(TOWARDS), planes, [0.0; 4], |_| {}).await?;
+    expect_near(px, [0, 42, 0], "lightplanes")?;
 
     // A level surface on an object's draw, and a model surface on a level
     // draw, are left out.
@@ -577,22 +630,23 @@ fn objects_draw_quantized_models() {
             &[object_draw(0, [0.0; 4]), draw(1, None)],
             None,
         )
-        .unwrap();
-    assert_eq!(world.skipped(), 2);
+        .map_err(fail("world"))?;
+    ensure_eq!(world.skipped(), 2, "skipped");
     // An object draw beyond the objects' indices fails.
     let mut far = object_draw(1, [0.0; 4]);
     far.first_index = 3;
-    assert!(
+    ensure!(
         r.create_world_with(&g, &up, &surfaces, &[far], None)
-            .is_err()
+            .is_err(),
+        "an object draw beyond the indices accepted"
     );
+    Ok(String::new())
 }
 
 /// Placing a draw after the world is made: hidden with a radius of 0,
 /// shown again, moved (objects switching online and offline).
-#[test]
-fn placed_draws_hide_show_and_move() {
-    let mut r = renderer();
+pub async fn placed_draws_hide_show_and_move(make: Make<'_>) -> Outcome {
+    let mut r = make();
     let base = quadrants(&r);
     let g = geom(Layout::VertexLit, 0, 0, [0; 8]);
     let surfaces = [
@@ -604,68 +658,70 @@ fn placed_draws_hide_show_and_move() {
     let draws = [draw(1, None), object_draw(0, [0.0; 4])];
     let world = r
         .create_world_with(&g, &object_geometry(UP), &surfaces, &draws, None)
-        .unwrap();
-    assert_eq!(world.skipped(), 1);
+        .map_err(fail("world"))?;
+    ensure_eq!(world.skipped(), 1, "skipped");
     let shown = draws[1];
-    assert_near(
-        centre(&mut r, frame(world.clone(), None)),
+    expect_near(
+        centre(&mut r, frame(world.clone(), None)).await?,
         [0, 255, 0],
         "shown",
-    );
+    )?;
     r.place_draw(&world, 1, &shown.transform, [0.0, 0.0, 1.0, 0.0]);
-    assert_near(
-        centre(&mut r, frame(world.clone(), None)),
+    expect_near(
+        centre(&mut r, frame(world.clone(), None)).await?,
         [0, 0, 0],
         "hidden",
-    );
+    )?;
     r.place_draw(&world, 1, &shown.transform, shown.sphere);
-    assert_near(
-        centre(&mut r, frame(world.clone(), None)),
+    expect_near(
+        centre(&mut r, frame(world.clone(), None)).await?,
         [0, 255, 0],
         "shown again",
-    );
+    )?;
     // Moved behind the eye: not in view.
     let mut behind = shown.transform;
     behind[3] = [0.0, 0.0, -5.0, 1.0];
     r.place_draw(&world, 1, &behind, [0.0, 0.0, -5.0, 10.0]);
-    assert_near(
-        centre(&mut r, frame(world.clone(), None)),
+    expect_near(
+        centre(&mut r, frame(world.clone(), None)).await?,
         [0, 0, 0],
         "moved",
-    );
+    )?;
     // A draw left out, or beyond the list, is ignored.
     r.place_draw(&world, 0, &IDENTITY, [0.0; 4]);
     r.place_draw(&world, 7, &IDENTITY, [0.0; 4]);
+    Ok(String::new())
 }
 
 /// A cube map whose six 4 × 4 faces (+x, −x, +y, −y, +z, −z) each have
 /// one colour (BGRA), so filtering near a face's centre stays on it.
-fn faces_cube(r: &Renderer, faces: [[u8; 4]; 6]) -> Texture {
+fn faces_cube(r: &Renderer, faces: [[u8; 4]; 6]) -> Result<Texture, Problem> {
     let data: Vec<u8> = faces.iter().flat_map(|f| f.repeat(16)).collect();
     let file = file(4, 4, 0, true, PixelFormat::BGRA8, &data);
-    r.create_texture(&Dds::parse(&file).unwrap()).unwrap()
+    let dds = Dds::parse(&file).map_err(|e| Problem::Fail(format!("dds: {e}")))?;
+    r.create_texture(&dds)
+        .map_err(|e| Problem::Fail(format!("texture: {e}")))
 }
 
-#[test]
-fn environment_mapped_models() {
-    let mut r = renderer();
+pub async fn environment_mapped_models(make: Make<'_>) -> Outcome {
+    let mut r = make();
     // A base texel with alpha 0: the environment's texel shows:
     // C = 2 · Q · lerp(E, B, B.a) with Q = 0.5 (ambient).
     let base = r.create_rgba_texture(1, 1, &[255, 255, 255, 0]);
     let mut env = surface(Program::ModelEnv, Some(base));
     let colours: [[u8; 4]; 6] = std::array::from_fn(|i| [0, 40 * i as u8, 200, 255]);
-    env.env = Some(faces_cube(&r, colours));
+    env.env = Some(faces_cube(&r, colours)?);
     let ambient = |l: &mut WorldLight| l.ambient = [0.5; 3];
     // At 40 m every view direction is near (0, 0, 1). Reflected about the
     // normal facing the camera it points back along −z: face 5. About the
     // upward normal it keeps going along +z: face 4.
-    let at = |r: &mut Renderer, normal, env| {
-        object_pixel_at(r, &object_geometry(normal), env, [0.0; 4], ambient, 40.0)
-    };
-    let px = at(&mut r, TOWARDS, env.clone());
-    assert_near(px, [200, 200, 0], "reflected towards the camera");
-    let px = at(&mut r, UP, env);
-    assert_near(px, [200, 160, 0], "reflected past the upward normal");
+    let towards = object_geometry(TOWARDS);
+    let px = object_pixel_at(&mut r, &towards, env.clone(), [0.0; 4], ambient, 40.0).await?;
+    expect_near(px, [200, 200, 0], "reflected towards the camera")?;
+    let up = object_geometry(UP);
+    let px = object_pixel_at(&mut r, &up, env, [0.0; 4], ambient, 40.0).await?;
+    expect_near(px, [200, 160, 0], "reflected past the upward normal")?;
+    Ok(String::new())
 }
 
 /// A quad of particle-drawing.md 4.4 at depth `z` spanning `x0 … x1` and
@@ -714,38 +770,41 @@ fn batch(
 }
 
 /// Pixels of `frame` at `size` × `size`.
-fn pixels(renderer: &mut Renderer, frame: WorldFrame, size: u32) -> Vec<u8> {
+async fn pixels(renderer: &mut Renderer, frame: WorldFrame, size: u32) -> Result<Vec<u8>, Problem> {
     let list = DrawList {
         world: Some(frame),
         ..Default::default()
     };
-    pollster::block_on(renderer.capture(&list, size, size, wgpu::Color::BLACK)).unwrap()
+    let image = capture(renderer, &list, size, size).await?;
+    ensure_eq!(image.len(), (size * size * 4) as usize, "captured bytes");
+    Ok(image)
 }
 
-fn at(pixels: &[u8], size: u32, x: u32, y: u32) -> [u8; 4] {
-    let i = ((y * size + x) * 4) as usize;
-    pixels[i..i + 4].try_into().unwrap()
+/// The colour channels at (`x`, `y`) of `pixels` `size` wide.
+fn at(pixels: &[u8], size: u32, x: u32, y: u32) -> [u8; 3] {
+    rgb(pixel(pixels, size, x, y))
+}
+
+/// A black self-lit triangle at depth 1 behind everything.
+fn black_world(r: &mut Renderer) -> Result<World, Problem> {
+    let black = r.create_rgba_texture(1, 1, &[0, 0, 0, 255]);
+    let g = geom(Layout::VertexLit, 0, 0, [0; 8]);
+    r.create_world(
+        &g,
+        &[surface(Program::SelfLight, Some(black))],
+        &[draw(0, None)],
+        None,
+    )
+    .map_err(fail("world"))
 }
 
 /// detail-objects.md 6: an instance of a still model lit by the ambient
 /// colour (texel × colour × 2), an instance whose texels fail the alpha
 /// test cut away, both faces drawn, a swaying instance's colour within its
 /// pulse's range, and an instance turned and scaled.
-#[test]
-fn detail_objects_are_cut_lit_and_swayed() {
-    use std::sync::Arc;
-    use volya_engine_render::details::{DetailDraw, DetailFrame, DetailGeometry, STILL, SWAY_1};
-    let mut r = renderer();
-    let black = r.create_rgba_texture(1, 1, &[0, 0, 0, 255]);
-    let g = geom(Layout::VertexLit, 0, 0, [0; 8]);
-    let world = r
-        .create_world(
-            &g,
-            &[surface(Program::SelfLight, Some(black))],
-            &[draw(0, None)],
-            None,
-        )
-        .unwrap();
+pub async fn detail_objects_are_cut_lit_and_swayed(make: Make<'_>) -> Outcome {
+    let mut r = make();
+    let world = black_world(&mut r)?;
     // Left texel opaque white, right texel white below the reference.
     let texture = r.create_rgba_texture(2, 1, &[255, 255, 255, 255, 255, 255, 255, 128]);
     // A unit quad standing on y = 0, x −0.5 … 0.5, its texels at u.
@@ -798,54 +857,44 @@ fn detail_objects_are_cut_lit_and_swayed() {
         ],
         vec![one(0, STILL, 0), one(1, STILL, 1), one(2, STILL, 2)],
     ));
-    let p = pixels(&mut r, f.clone(), size);
-    assert_near(at_(&p, 32, 30), [128, 128, 128], "ambient × 2");
-    assert_eq!(at_(&p, 8, 30)[..3], [0, 0, 0], "cut by the alpha test");
-    assert_near(at_(&p, 56, 30), [128, 128, 128], "the other face");
+    let p = pixels(&mut r, f.clone(), size).await?;
+    expect_near(pixel(&p, size, 32, 30), [128, 128, 128], "ambient × 2")?;
+    ensure_eq!(at_(&p, 8, 30), [0, 0, 0], "cut by the alpha test");
+    expect_near(pixel(&p, size, 56, 30), [128, 128, 128], "the other face")?;
     // Turned a quarter about y, the quad is seen edge on: nothing at the
     // centre; scaled by 0.5 it no longer reaches the top.
     f.details = Some(details(
         vec![instance(0.0, 0.4, std::f32::consts::FRAC_PI_2)],
         vec![one(0, STILL, 0)],
     ));
-    let p = pixels(&mut r, f.clone(), size);
-    assert_eq!(at_(&p, 25, 30)[..3], [0, 0, 0], "edge on");
+    let p = pixels(&mut r, f.clone(), size).await?;
+    ensure_eq!(at_(&p, 25, 30), [0, 0, 0], "edge on");
     f.details = Some(details(
         vec![instance(0.0, 0.2, 0.0)],
         vec![one(0, STILL, 0)],
     ));
-    let p = pixels(&mut r, f.clone(), size);
-    assert_eq!(at_(&p, 32, 28)[..3], [0, 0, 0], "half height");
-    assert_near(at_(&p, 32, 36), [128, 128, 128], "half height");
+    let p = pixels(&mut r, f.clone(), size).await?;
+    ensure_eq!(at_(&p, 32, 28), [0, 0, 0], "half height");
+    expect_near(pixel(&p, size, 32, 36), [128, 128, 128], "half height")?;
     // Sway 1 without amplitude: in place, the colour × (0.9 + 0.25
     // max(0, γ) φ).
     f.details = Some(details(
         vec![instance(0.0, 0.4, 0.0)],
         vec![one(0, SWAY_1, 0)],
     ));
-    let p = pixels(&mut r, f, size);
+    let p = pixels(&mut r, f, size).await?;
     let c = at_(&p, 32, 30)[0];
-    assert!((114..=147).contains(&c), "swaying colour {c}");
+    ensure!((114..=147).contains(&c), "swaying colour {c}");
+    Ok(String::new())
 }
 
 /// frame-presentation.md 1.1, 3.1, 3.5: at `r__supersample` 2 the world is
 /// drawn into a target √2 times the screen per axis and reduced by one
 /// bilinear sample per pixel; with the identity in force white stays white.
-#[test]
-fn the_presentation_reduces_a_supersampled_target() {
-    use volya_engine_render::present::{Presentation, ScreenEffects};
-    let mut r = renderer();
+pub async fn the_presentation_reduces_a_supersampled_target(make: Make<'_>) -> Outcome {
+    let mut r = make();
     let white = r.create_rgba_texture(1, 1, &[255; 4]);
-    let black = r.create_rgba_texture(1, 1, &[0, 0, 0, 255]);
-    let g = geom(Layout::VertexLit, 0, 0, [0; 8]);
-    let world = r
-        .create_world(
-            &g,
-            &[surface(Program::SelfLight, Some(black))],
-            &[draw(0, None)],
-            None,
-        )
-        .unwrap();
+    let world = black_world(&mut r)?;
     // A white sprite over the left half, its edge off the pixel grid.
     let left = batch(
         pass(ParticleProgram::Set, ParticleBlend::Off, &white),
@@ -856,50 +905,37 @@ fn the_presentation_reduces_a_supersampled_target() {
     let size = 128;
     let mut f = frame(world.clone(), None);
     f.particles = vec![left.clone()];
-    let straight = pixels(&mut r, f.clone(), size);
+    let straight = pixels(&mut r, f.clone(), size).await?;
     f.presentation = Presentation {
         supersample: 2,
         ..Default::default()
     };
     f.effects = Some(ScreenEffects::identity());
-    let reduced = pixels(&mut r, f, size);
+    let reduced = pixels(&mut r, f, size).await?;
     // 128 · √2 = 181.02: 181, made even.
-    assert_eq!(r.presentation_target(), Some(((180, 180), true)));
-    assert_eq!(at(&reduced, size, 8, 64)[..3], [255, 255, 255]);
-    assert_eq!(at(&reduced, size, 120, 64)[..3], [0, 0, 0]);
+    ensure_eq!(
+        r.presentation_target(),
+        Some(((180, 180), true)),
+        "presentation target"
+    );
+    ensure_eq!(at(&reduced, size, 8, 64), [255, 255, 255], "left");
+    ensure_eq!(at(&reduced, size, 120, 64), [0, 0, 0], "right");
     // The edge's pixel blends texels of both sides, where the screen's
     // own frame has one or the other.
-    let edge = (60..72).map(|x| at(&reduced, size, x, 64)[0]);
-    assert!(
-        edge.clone().any(|v| v > 0 && v < 255),
-        "{:?}",
-        edge.collect::<Vec<_>>()
-    );
-    let edge = (60..72).map(|x| at(&straight, size, x, 64)[0]);
-    assert!(
-        edge.clone().all(|v| v == 0 || v == 255),
-        "{:?}",
-        edge.collect::<Vec<_>>()
-    );
+    let edge: Vec<u8> = (60..72).map(|x| at(&reduced, size, x, 64)[0]).collect();
+    ensure!(edge.iter().any(|&v| v > 0 && v < 255), "{edge:?}");
+    let edge: Vec<u8> = (60..72).map(|x| at(&straight, size, x, 64)[0]).collect();
+    ensure!(edge.iter().all(|&v| v == 0 || v == 255), "{edge:?}");
+    Ok(String::new())
 }
 
 /// particle-drawing.md sections 4.5 – 7: blended effects back to front by
 /// key, the `SET` alpha test, culling, and the distortion target composed
 /// into the frame.
-#[test]
-fn particles_queue_blend_cull_and_distort() {
-    let mut r = renderer();
+pub async fn particles_queue_blend_cull_and_distort(make: Make<'_>) -> Outcome {
+    let mut r = make();
     let white = r.create_rgba_texture(1, 1, &[255; 4]);
-    let black = r.create_rgba_texture(1, 1, &[0, 0, 0, 255]);
-    let g = geom(Layout::VertexLit, 0, 0, [0; 8]);
-    let world = r
-        .create_world(
-            &g,
-            &[surface(Program::SelfLight, Some(black))],
-            &[draw(0, None)],
-            None,
-        )
-        .unwrap();
+    let world = black_world(&mut r)?;
     let blend = |key, argb| {
         batch(
             pass(ParticleProgram::Blended, ParticleBlend::Alpha, &white),
@@ -912,10 +948,10 @@ fn particles_queue_blend_cull_and_distort() {
     // nearer first: drawn back to front, green over red.
     let mut f = frame(world.clone(), None);
     f.particles = vec![blend(1.0, 0x8000_FF00), blend(2.0, 0x80FF_0000)];
-    let p = pixels(&mut r, f, 64);
-    let c = at(&p, 64, 32, 32);
+    let p = pixels(&mut r, f, 64).await?;
+    let c = pixel(&p, 64, 32, 32);
     // Red at half over black, then green at half over that: (64, 128, 0).
-    assert_near(c, [64, 128, 0], "green over red");
+    expect_near(c, [64, 128, 0], "green over red")?;
     // `SET` passes alpha above 200 only (199 and 202 here: 200 itself rounds
     // either way in the unit); culling of clockwise faces drops
     // a facing sprite.
@@ -937,14 +973,19 @@ fn particles_queue_blend_cull_and_distort() {
         ),
         culled,
     ];
-    let p = pixels(&mut r, f, 64);
-    assert_eq!(at(&p, 64, 28, 32)[..3], [0, 0, 0], "alpha 199 is cut");
-    assert_eq!(at(&p, 64, 36, 32)[..3], [255, 255, 255], "alpha 202 passes");
+    let p = pixels(&mut r, f, 64).await?;
+    ensure_eq!(at(&p, 64, 28, 32), [0, 0, 0], "alpha 199 is cut");
+    ensure_eq!(at(&p, 64, 36, 32), [255, 255, 255], "alpha 202 passes");
     let mut f = frame(world.clone(), None);
     let mut kept = blend(1.0, 0xFFFF_FFFF);
     kept.cull = ParticleCull::CounterClockwise;
     f.particles = vec![kept];
-    assert_eq!(at(&pixels(&mut r, f, 64), 64, 32, 32)[..3], [255, 255, 255]);
+    let p = pixels(&mut r, f, 64).await?;
+    ensure_eq!(
+        at(&p, 64, 32, 32),
+        [255, 255, 255],
+        "counter-clockwise culling"
+    );
 
     // Distortion: a white sprite over the left half; a distortion sprite
     // over the screen whose texel's red is 1 offsets every scene look-up
@@ -958,8 +999,8 @@ fn particles_queue_blend_cull_and_distort() {
     );
     let mut f = frame(world.clone(), None);
     f.particles = vec![left.clone()];
-    let plain = pixels(&mut r, f, size);
-    assert_eq!(at(&plain, size, 124, 128)[..3], [255, 255, 255]);
+    let plain = pixels(&mut r, f, size).await?;
+    ensure_eq!(at(&plain, size, 124, 128), [255, 255, 255], "plain");
     let red = r.create_rgba_texture(1, 1, &[255, 127, 0, 255]);
     let mut distort = pass(ParticleProgram::Distort, ParticleBlend::Alpha, &white);
     distort.distort = Some(red);
@@ -977,38 +1018,46 @@ fn particles_queue_blend_cull_and_distort() {
     // first frame's distortion is not shown; the next frame goes through
     // the target and is presented with postprocess_d
     // (frame-presentation.md 3.1, particle-drawing.md 6.3).
-    let first = pixels(&mut r, f.clone(), size);
-    assert_eq!(
-        at(&first, size, 124, 128)[..3],
-        [255, 255, 255],
-        "not shown"
+    let first = pixels(&mut r, f.clone(), size).await?;
+    ensure_eq!(at(&first, size, 124, 128), [255, 255, 255], "not shown");
+    ensure_eq!(
+        r.presentation_target(),
+        Some(((size, size), false)),
+        "presentation target, first frame"
     );
-    assert_eq!(r.presentation_target(), Some(((size, size), false)));
-    let shifted = pixels(&mut r, f, size);
-    assert_eq!(r.presentation_target(), Some(((size, size), true)));
+    let shifted = pixels(&mut r, f, size).await?;
+    ensure_eq!(
+        r.presentation_target(),
+        Some(((size, size), true)),
+        "presentation target, next frame"
+    );
     // About 6 pixels: at 124 the scene is read from 130, right of the edge.
-    assert_eq!(at(&shifted, size, 124, 128)[..3], [0, 0, 0], "shifted");
+    ensure_eq!(at(&shifted, size, 124, 128), [0, 0, 0], "shifted");
     // The renderer's own colour base (127, no hand-over) scales by
     // 254/255 (frame-presentation.md 3.5).
-    assert_eq!(
-        at(&shifted, size, 112, 128)[..3],
-        [254, 254, 254],
-        "still white"
-    );
+    ensure_eq!(at(&shifted, size, 112, 128), [254, 254, 254], "still white");
     // A frame after one with a distortion pass goes through the target;
     // the next goes straight to the screen again.
     let mut f = frame(world.clone(), None);
     f.particles = vec![left.clone()];
-    pixels(&mut r, f.clone(), size);
-    assert_eq!(r.presentation_target(), Some(((size, size), true)));
-    let again = pixels(&mut r, f, size);
-    assert_eq!(r.presentation_target(), Some(((size, size), false)));
-    assert_eq!(at(&again, size, 124, 128)[..3], [255, 255, 255]);
+    pixels(&mut r, f.clone(), size).await?;
+    ensure_eq!(
+        r.presentation_target(),
+        Some(((size, size), true)),
+        "presentation target, the frame after"
+    );
+    let again = pixels(&mut r, f, size).await?;
+    ensure_eq!(
+        r.presentation_target(),
+        Some(((size, size), false)),
+        "presentation target, again"
+    );
+    ensure_eq!(at(&again, size, 124, 128), [255, 255, 255], "again");
 
     // A distortion list whose sprites all lie off the screen is presented
     // as one drawn that changes nothing (a black vertex colour: alpha 0),
     // without its pass (#433).
-    let mut drawn = 0;
+    let mut drawn: i64 = 0;
     let mut presented = Vec::new();
     for x in [-2.0, 3.0] {
         let mut distort = pass(ParticleProgram::Distort, ParticleBlend::Alpha, &white);
@@ -1023,15 +1072,23 @@ fn particles_queue_blend_cull_and_distort() {
                 sprite(x, x + 4.0, -2.0, 2.0, 0.4, 0xFF00_0000),
             ),
         ];
-        pixels(&mut r, f.clone(), size);
+        pixels(&mut r, f.clone(), size).await?;
         r.take_frame_stats();
-        presented.push(pixels(&mut r, f, size));
-        assert_eq!(r.presentation_target(), Some(((size, size), true)));
-        let passes = r.take_frame_stats().passes;
+        presented.push(pixels(&mut r, f, size).await?);
+        ensure_eq!(
+            r.presentation_target(),
+            Some(((size, size), true)),
+            "presentation target, distortion at x {x}"
+        );
+        let passes = i64::from(r.take_frame_stats().passes);
         drawn = if x < 0.0 { passes } else { drawn - passes };
     }
-    assert_eq!(drawn, 1, "the distortion pass left out");
-    assert!(presented[0] == presented[1], "the same picture");
+    ensure_eq!(drawn, 1, "the distortion pass left out");
+    ensure!(
+        presented.first() == presented.get(1),
+        "not the same picture"
+    );
+    Ok(String::new())
 }
 
 /// A light pass whose frustum holds everything (clip (0, 0, ½, 1)).
@@ -1051,9 +1108,8 @@ fn everywhere(spot: bool, position: [f32; 4], colour: [f32; 3]) -> LightPass {
 /// to the image, c the light's colour times n · −l; with white
 /// attenuation textures a₁ = a₂ = 1. The alpha test, a hidden draw and a
 /// frustum missing the draw leave the image as it is.
-#[test]
-fn light_passes_add_to_the_image() {
-    let mut r = renderer();
+pub async fn light_passes_add_to_the_image(make: Make<'_>) -> Outcome {
+    let mut r = make();
     let white = r.create_rgba_texture(1, 1, &[255; 4]);
     let half = r.create_rgba_texture(1, 1, &[255, 255, 255, 128]);
     // A black vertex-lit triangle at depth 1 with normal (0, 1, 0).
@@ -1081,7 +1137,7 @@ fn light_passes_add_to_the_image() {
     ];
     let world = |r: &mut Renderer, surface| {
         r.create_world(&g, &surfaces, &[draw(surface, None)], None)
-            .unwrap()
+            .map_err(fail("world"))
     };
     // A point light far above (lit per vertex): n · −l ≈ 1.
     let light = everywhere(false, [0.0, 1000.0, 1.0, 0.0625], [0.25, 0.125, 0.0]);
@@ -1091,37 +1147,49 @@ fn light_passes_add_to_the_image() {
         f
     };
     // Without the attenuation textures no light pass is drawn.
-    let w = world(&mut r, 0);
-    assert_near(
-        centre(&mut r, lit_frame(w.clone())),
+    let w = world(&mut r, 0)?;
+    expect_near(
+        centre(&mut r, lit_frame(w.clone())).await?,
         [0, 0, 0],
         "no textures",
-    );
+    )?;
     r.set_light_textures(LightTextures {
         att: white.clone(),
         attclip: white.clone(),
         attpoint: white.clone(),
     });
-    assert_near(centre(&mut r, frame(w.clone(), None)), [0, 0, 0], "unlit");
-    assert_near(centre(&mut r, lit_frame(w.clone())), [128, 64, 0], "point");
+    expect_near(
+        centre(&mut r, frame(w.clone(), None)).await?,
+        [0, 0, 0],
+        "unlit",
+    )?;
+    expect_near(
+        centre(&mut r, lit_frame(w.clone())).await?,
+        [128, 64, 0],
+        "point",
+    )?;
     // Two passes add.
     let mut f = lit_frame(w.clone());
     f.lights.push(light);
-    assert_near(centre(&mut r, f), [255, 128, 0], "two passes");
+    expect_near(centre(&mut r, f).await?, [255, 128, 0], "two passes")?;
     // B.a = ½ halves it; alpha 2 · ½ · c.a = 1 passes a reference of 200.
-    let w = world(&mut r, 1);
-    assert_near(centre(&mut r, lit_frame(w)), [64, 32, 0], "half alpha");
-    let w = world(&mut r, 2);
-    assert_near(
-        centre(&mut r, lit_frame(w)),
+    let w = world(&mut r, 1)?;
+    expect_near(
+        centre(&mut r, lit_frame(w)).await?,
+        [64, 32, 0],
+        "half alpha",
+    )?;
+    let w = world(&mut r, 2)?;
+    expect_near(
+        centre(&mut r, lit_frame(w)).await?,
         [64, 32, 0],
         "alpha test passes",
-    );
+    )?;
     // A light below the surface: n · −l < 0 adds nothing.
-    let w = world(&mut r, 0);
+    let w = world(&mut r, 0)?;
     let mut f = frame(w.clone(), None);
     f.lights = vec![everywhere(false, [0.0, -1000.0, 1.0, 0.0625], [1.0; 3])];
-    assert_near(centre(&mut r, f), [0, 0, 0], "lit from behind");
+    expect_near(centre(&mut r, f).await?, [0, 0, 0], "lit from behind")?;
     // A spot pass reads its projected coordinate: here (0, 0) / ½.
     let mut f = frame(w.clone(), None);
     f.lights = vec![everywhere(
@@ -1129,38 +1197,33 @@ fn light_passes_add_to_the_image() {
         [0.0, 1000.0, 1.0, 0.125],
         [0.25, 0.125, 0.0],
     )];
-    assert_near(centre(&mut r, f), [128, 64, 0], "spot");
+    expect_near(centre(&mut r, f).await?, [128, 64, 0], "spot")?;
     // A frustum the draw's sphere misses.
     let mut away = light;
     away.frustum[3] = [0.0, 0.0, -1.0, 1.0];
     let mut f = frame(w.clone(), None);
     f.lights = vec![away];
-    assert_near(centre(&mut r, f), [0, 0, 0], "outside the light's frustum");
+    expect_near(
+        centre(&mut r, f).await?,
+        [0, 0, 0],
+        "outside the light's frustum",
+    )?;
     // A hidden draw (radius 0) is not lit.
     r.place_draw(&w, 0, &IDENTITY, [0.0, 0.0, 1.0, 0.0]);
-    assert_near(centre(&mut r, lit_frame(w)), [0, 0, 0], "hidden");
+    expect_near(centre(&mut r, lit_frame(w)).await?, [0, 0, 0], "hidden")?;
     // Priority 2 elements are never lit.
-    let w = world(&mut r, 3);
-    assert_near(centre(&mut r, lit_frame(w)), [0, 0, 0], "priority 2");
+    let w = world(&mut r, 3)?;
+    expect_near(centre(&mut r, lit_frame(w)).await?, [0, 0, 0], "priority 2")?;
+    Ok(String::new())
 }
 
 /// glows.md 4, 6: glows add texel · b/255 · A after the strict-sorted
 /// passes; `effects\glow` is hidden by nearer geometry, `effects\flare`
 /// is not.
-#[test]
-fn glows_add_after_the_world() {
-    let mut r = renderer();
+pub async fn glows_add_after_the_world(make: Make<'_>) -> Outcome {
+    let mut r = make();
     let white = r.create_rgba_texture(1, 1, &[255; 4]);
-    let black = r.create_rgba_texture(1, 1, &[0, 0, 0, 255]);
-    let g = geom(Layout::VertexLit, 0, 0, [0; 8]);
-    let world = r
-        .create_world(
-            &g,
-            &[surface(Program::SelfLight, Some(black))],
-            &[draw(0, None)],
-            None,
-        )
-        .unwrap();
+    let world = black_world(&mut r)?;
     let glow = |program, z| ParticleBatch {
         pass: ParticlePass {
             program,
@@ -1178,15 +1241,20 @@ fn glows_add_after_the_world() {
     };
     let mut f = frame(world.clone(), None);
     f.particles = vec![glow(ParticleProgram::Glow, 0.5)];
-    assert_near(centre(&mut r, f), [64, 64, 64], "a glow in front");
+    expect_near(centre(&mut r, f).await?, [64, 64, 64], "a glow in front")?;
     let mut f = frame(world.clone(), None);
     f.particles = vec![glow(ParticleProgram::Glow, 2.0)];
-    assert_near(centre(&mut r, f), [0, 0, 0], "a glow behind the triangle");
+    expect_near(
+        centre(&mut r, f).await?,
+        [0, 0, 0],
+        "a glow behind the triangle",
+    )?;
     let mut f = frame(world, None);
     f.particles = vec![glow(ParticleProgram::Flare, 2.0)];
-    assert_near(
-        centre(&mut r, f),
+    expect_near(
+        centre(&mut r, f).await?,
         [64, 64, 64],
         "a flare behind the triangle",
-    );
+    )?;
+    Ok(String::new())
 }
