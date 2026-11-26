@@ -24,7 +24,7 @@ use crate::core::audio::{MUSIC_PLAYBACK, music_files};
 use crate::core::input::{Action, Control, Input, Key, MouseButton, ui_from_normalized};
 use crate::data::GameData;
 use crate::draw::Ctx;
-use crate::scene::Scene;
+use crate::scene::{Lens, Scene};
 use volya_engine_formats::text::font::UiFont;
 use volya_engine_formats::text::layout::TextBox;
 use volya_engine_formats::ui::Resolution;
@@ -612,7 +612,7 @@ impl TitleMenu {
         }
         let (_, bar) = self.bar_rect(data, now);
         ctx.picture(&mut scene, "bar", &m.shniaga, bar, 0.0, 0, false, None)?;
-        // `magnifire` is never drawn.
+        // `magnifire` is not drawn here (section 4.6).
         for (layer, s) in [
             ("left_grating", &m.left_grating),
             ("right_grating", &m.right_grating),
@@ -644,6 +644,18 @@ impl TitleMenu {
         ctx.picture(&mut scene, "static_version", v, top(v), 0.0, 0, false, None)?;
         let text = crate::data::encode(&format!("ver. {}", crate::data::BUILT_IN_VERSION));
         ctx.text(&mut scene, "version", &text, &text_box, font)?;
+
+        // Section 4.6: `magnifire`, hidden in the menu picture, is the
+        // lens, drawn only into the distortion target, where the bar puts
+        // it this frame.
+        let glass = m.magnifire.window.absolute(bar.x, bar.y);
+        scene.lens = ctx
+            .placement(&m.magnifire, glass, 0, false)?
+            .map(|(texture, placement)| Lens {
+                texture,
+                placement,
+                drawn: scene.sprites.len(),
+            });
 
         // Section 7: the cursor's top-left at the cursor, 64 × 64 units from
         // a 64 × 64 frame (one texel per unit, as unstretched pictures).
@@ -808,6 +820,26 @@ mod tests {
             };
             self.menu.scene(&mut ctx).unwrap()
         }
+    }
+
+    #[test]
+    fn the_lens_follows_the_glass() {
+        // Section 4.6 worked examples: item 0, the bar at rest.
+        let mut r = Run::open(1000);
+        r.frame(2000);
+        let scene = r.scene(Resolution::new(1920, 1080), 2000);
+        let lens = scene.lens.expect("lens");
+        assert_eq!(lens.drawn, scene.sprites.len() - 1, "the cursor over it");
+        let q = lens.quad((2048, 2048));
+        assert_eq!(q.min, (1349.5, 1116.5));
+        assert_eq!((q.max.0 - q.min.0, q.max.1 - q.min.1), (464.0, 96.0));
+        assert_eq!((q.uv_min, q.uv_max), ((0.0, 0.0), (1.0, 1.0)));
+        let q = lens.quad((1024, 768));
+        assert_eq!((q.min, q.max), ((674.5, 418.5), (906.5, 454.5)));
+        let q = lens.quad((1448, 1086));
+        assert_eq!(q.min, (953.5, 591.5));
+        assert!((q.max.0 - q.min.0 - 328.06).abs() < 0.01);
+        assert!((q.max.1 - q.min.1 - 50.91).abs() < 0.01);
     }
 
     #[test]

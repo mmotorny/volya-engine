@@ -21,7 +21,7 @@ use crate::core::camera::{Mat4, Vec3};
 use crate::core::weather::Environment;
 use crate::level::LevelWorld;
 use volya_engine_formats::text::layout::GlyphQuad;
-use volya_engine_formats::ui::picture::{Quad, RotatedQuad};
+use volya_engine_formats::ui::picture::{PicturePlacement, Quad, RotatedQuad};
 use volya_engine_formats::ui::{Color, Resolution};
 
 /// A texture a sprite samples.
@@ -248,6 +248,33 @@ pub struct Scene {
     /// `r__geometry_lod` (object-detail-level.md 1).
     #[serde(skip)]
     pub geometry_lod: f32,
+    /// The main menu's glass lens while the menu asks for the post-process
+    /// (title-menu.md 4.6).
+    #[serde(skip)]
+    pub lens: Option<Lens>,
+}
+
+/// The main menu's glass lens (title-menu.md 4.6): the menu, the scene's
+/// first `drawn` sprites, is drawn into the off-screen target and the
+/// `magnifire` picture, an offset map, into its distortion target, and the
+/// frame is presented with `postprocess_d`. The sprites after `drawn` (the
+/// cursor) are drawn over the presented frame.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Lens {
+    pub texture: TextureId,
+    /// The `magnifire` picture in UI units.
+    pub placement: PicturePlacement,
+    pub drawn: usize,
+}
+
+impl Lens {
+    /// The picture's quad in pixels of a distortion target of `size`
+    /// *W*ₜ × *H*ₜ: placed with the target's layout factors
+    /// *s*ₓ = *W*ₜ / 1024, *s*ᵧ = *H*ₜ / 768 (title-menu.md 4.6,
+    /// ui-layout.md 5.3).
+    pub fn quad(&self, size: (u32, u32)) -> Quad {
+        self.placement.quad(Resolution::new(size.0, size.1).scale())
+    }
 }
 
 fn resolution<S: serde::Serializer>(r: &Resolution, s: S) -> Result<S::Ok, S::Error> {
@@ -265,6 +292,7 @@ impl Scene {
             filtering: Default::default(),
             texture_quality: Default::default(),
             geometry_lod: GEOMETRY_LOD,
+            lens: None,
         }
     }
 

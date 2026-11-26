@@ -29,7 +29,7 @@ use crate::render::world::{
     ProjectedReceiver, Surface, TreeLight, WorldLight, cell_view_projection,
 };
 use crate::render::{
-    DrawList, Quad, Rect, Renderer, Texture, VideoTexture, World, WorldDraw, WorldFrame,
+    DrawList, MenuLens, Quad, Rect, Renderer, Texture, VideoTexture, World, WorldDraw, WorldFrame,
 };
 use crate::scene::{Scene, TextureId, WorldScene};
 use volya_engine_formats::dds::Dds;
@@ -102,6 +102,25 @@ impl Player {
         }
         Ok(())
     }
+}
+
+/// The lens's offset map `map` drawn as `q`, in pixels of a distortion
+/// target of `size` with integer centres, as a quad in UI units
+/// (title-menu.md 4.6): white, the texture's coordinates as placed.
+fn lens_quad(q: &volya_engine_formats::ui::picture::Quad, size: (u32, u32), map: &Texture) -> Quad {
+    let (w, h) = (size.0 as f32, size.1 as f32);
+    let ui = |(x, y): (f32, f32)| ((x + 0.5) * UI_WIDTH / w, (y + 0.5) * UI_HEIGHT / h);
+    let (min, max) = (ui(q.min), ui(q.max));
+    let mut quad = Quad::new(Rect::new(min.0, min.1, max.0 - min.0, max.1 - min.1), map);
+    let (tw, th) = map.size();
+    let (tw, th) = (tw as f32, th as f32);
+    quad.source = Rect::new(
+        q.uv_min.0 * tw,
+        q.uv_min.1 * th,
+        (q.uv_max.0 - q.uv_min.0) * tw,
+        (q.uv_max.1 - q.uv_min.1) * th,
+    );
+    quad
 }
 
 /// The texture of the DDS file at `path` of `tree`: as the platform
@@ -960,7 +979,13 @@ impl Presenter {
                 self.glow_shaders.clear();
             }
         }
-        for sprite in &scene.sprites {
+        // The quads of the sprites before the lens's (some may have no
+        // texture).
+        let mut before_lens = 0;
+        for (i, sprite) in scene.sprites.iter().enumerate() {
+            if scene.lens.as_ref().is_some_and(|l| i == l.drawn) {
+                before_lens = list.quads.len();
+            }
             let texture = match &sprite.texture {
                 TextureId::Image { path } => self.image(renderer, tree, path),
                 TextureId::Video {
@@ -994,14 +1019,30 @@ impl Presenter {
                 .map(|cs| cs.map(|c| [c.r, c.g, c.b, c.a]));
             list.quads.push(quad);
         }
+        if let Some(lens) = scene.lens.as_ref().filter(|_| list.world.is_none()) {
+            if lens.drawn >= scene.sprites.len() {
+                before_lens = list.quads.len();
+            }
+            let map = match &lens.texture {
+                TextureId::Image { path } => self.image(renderer, tree, path),
+                _ => None,
+            };
+            if let (Some(map), Some((size, _))) = (map, renderer.presentation_target()) {
+                list.quads
+                    .insert(before_lens, lens_quad(&lens.quad(size), size, &map));
+                list.lens = Some(MenuLens {
+                    drawn: before_lens,
+                    presentation: scene.presentation,
+                });
+            }
+        }
         // Images no longer drawn are released too, e.g. the loading image's
         // textures once the overlay ends (loading-screen.md section 2,
         // step 6).
+        let lens = scene.lens.as_ref().map(|l| &l.texture);
         self.images.retain(|path, _| {
-            scene
-                .sprites
-                .iter()
-                .any(|s| matches!(&s.texture, TextureId::Image { path: p } if p == path))
+            let drawn = |t: &TextureId| matches!(t, TextureId::Image { path: p } if p == path);
+            scene.sprites.iter().any(|s| drawn(&s.texture)) || lens.is_some_and(drawn)
         });
         self.videos.retain(|path, _| {
             scene

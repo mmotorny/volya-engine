@@ -102,9 +102,11 @@ pub async fn startup_and_title_menu_from_game_data(cx: &Context<'_>) -> Outcome 
         .scene(tree, XGA)
         .map_err(|e| format!("menu scene: {e}"))?;
     let list = presenter.draw_list(&mut gpu, tree, &s, app.clock());
+    // Every sprite and the lens's map (title-menu.md 4.6).
+    ensure!(list.lens.is_some(), "no lens");
     ensure_eq!(
         list.quads.len(),
-        s.sprites.len(),
+        s.sprites.len() + 1,
         "{:?}",
         presenter.take_errors()
     );

@@ -53,18 +53,13 @@ impl Ctx<'_> {
         looping: bool,
         color: Option<Color>,
     ) -> io::Result<()> {
-        let Some(texture) = &desc.texture else {
+        let Some((id, mut placement)) = self.placement(desc, absolute, video_start_ms, looping)?
+        else {
             return Ok(());
         };
-        let picture = Picture::resolve(texture, &self.data.descriptions);
-        let resolved =
-            self.assets
-                .texture(self.tree, self.data, &picture.texture, self.clock_ms)?;
-        let mut placement = PicturePlacement::new(desc, absolute, &picture, resolved.size());
         if let Some(color) = color {
             placement.color = color;
         }
-        let id = resolved.id(video_start_ms, looping);
         let sprite = if desc.heading {
             let q = placement.rotated(self.scale(), angle, None, self.resolution.is_wide());
             Sprite::rotated(layer, id, &q)
@@ -73,6 +68,27 @@ impl Ctx<'_> {
         };
         scene.sprites.push(sprite);
         Ok(())
+    }
+
+    /// The texture of static `desc` and its picture placed at `absolute`
+    /// (ui-layout.md 5.3), before mapping to pixels; `None` for a static
+    /// without a texture.
+    pub fn placement(
+        &mut self,
+        desc: &StaticDesc,
+        absolute: Rect,
+        video_start_ms: u64,
+        looping: bool,
+    ) -> io::Result<Option<(TextureId, PicturePlacement)>> {
+        let Some(texture) = &desc.texture else {
+            return Ok(None);
+        };
+        let picture = Picture::resolve(texture, &self.data.descriptions);
+        let resolved =
+            self.assets
+                .texture(self.tree, self.data, &picture.texture, self.clock_ms)?;
+        let placement = PicturePlacement::new(desc, absolute, &picture, resolved.size());
+        Ok(Some((resolved.id(video_start_ms, looping), placement)))
     }
 
     /// Adds the glyphs of `text` (Windows-1251 bytes) in box `text_box` with

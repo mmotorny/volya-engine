@@ -440,6 +440,10 @@ impl MenuScreens {
                     let cursor = scene.sprites.iter().rposition(|s| s.layer == "cursor");
                     let tail = cursor.map(|i| scene.sprites.split_off(i));
                     m.draw(ctx, &mut scene)?;
+                    // The lens stays while a box shows (title-menu.md 4.6).
+                    if let Some(lens) = &mut scene.lens {
+                        lens.drawn = scene.sprites.len();
+                    }
                     scene.sprites.extend(tail.into_iter().flatten());
                 }
                 Ok(scene)

@@ -456,6 +456,7 @@ pub fn tree() -> MemVfs {
     add(&format!("{t}ui/ui_inventory.dds"), dds(1024, 1024));
     add(&format!("{t}ui/ui_icon_equipment.dds"), dds(1024, 2048));
     add(&format!("{t}ui/ui_grid.dds"), dds(128, 64));
+    add(&format!("{t}ui/ui_magnifier.dds"), dds(256, 32));
     add(&format!("{t}ui/ui_static_mm_back_04.dds"), dds(1024, 1024));
     add(
         &format!("{t}ui/ui_noise.seq"),

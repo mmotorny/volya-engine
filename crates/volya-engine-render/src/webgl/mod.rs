@@ -597,18 +597,77 @@ impl Renderer {
     /// Draws `list` into `target` as [`Renderer::render`], without the
     /// ramp.
     fn draw(&mut self, target: &Target, list: &DrawList, clear: Color) {
-        let batches = self.upload_vertices(list);
-        let drawn = match &list.world {
-            Some(frame) => self.present_frame(target, frame, &list.quads, &batches),
-            None => false,
+        let mut batches = self.upload_vertices(list);
+        let drawn = match (&list.world, list.lens) {
+            (Some(frame), _) => self.present_frame(target, frame, &list.quads, &batches),
+            (None, Some(lens)) => self.present_menu(target, lens, &list.quads, &batches, clear),
+            (None, None) => false,
         };
         if !drawn {
+            if let Some(lens) = list.lens.filter(|_| list.world.is_none()) {
+                // No target: the lens's map is not a picture.
+                let n = list.quads.len();
+                batches = [0..lens.drawn, lens.drawn + 1..n]
+                    .into_iter()
+                    .flat_map(|r| clip_batches(&batches, r))
+                    .collect();
+            }
             // Over the world drawn straight into the target, else cleared.
             let clear = list.world.is_none().then(|| clear.rgba());
             Self::begin_pass(&self.gl, &target.framebuffer, target.size(), clear, None);
             self.draw_quads(&list.quads, &batches);
         }
         stats::submit();
+    }
+
+    /// A main-menu frame through the off-screen target with its lens
+    /// (title-menu.md 4.6) into the `screen`. The menu asks for the
+    /// post-process, so the effects count as active
+    /// (frame-presentation.md 2.4): the frame goes through the target
+    /// whenever it is built (3.1 step 1), and the distortion pass runs (step
+    /// 3) with the lens's map alone (particle-drawing.md 6.2). The colour
+    /// values are those in force (2.3). Returns whether it drew (a target
+    /// was built).
+    fn present_menu(
+        &mut self,
+        screen: &Target,
+        lens: MenuLens,
+        quads: &[Quad],
+        batches: &[(usize, Range<u32>)],
+        clear: Color,
+    ) -> bool {
+        let p = lens.presentation;
+        self.post.prepare(&self.gl, screen.size(), p.supersample);
+        let Some(t) = self.post.targets.clone() else {
+            return false;
+        };
+        let menu = clip_batches(batches, 0..lens.drawn);
+        let map = clip_batches(batches, lens.drawn..lens.drawn + 1);
+        let over = clip_batches(batches, lens.drawn + 1..quads.len());
+        // The menu's background is opaque; the clear only keeps the target
+        // defined.
+        Self::begin_pass(&self.gl, &t.scene, t.size, Some(clear.rgba()), None);
+        self.draw_quads(quads, &menu);
+        let neutral = 127.0 / 255.0;
+        Self::begin_pass(&self.gl, &t.distortion, t.size, Some([neutral; 4]), None);
+        self.draw_quads(quads, &map);
+        let gl = self.gl.clone();
+        let (ui, movie) = (&self.ui, &self.movie);
+        let samplers = [&self.sampler, &self.movie_sampler];
+        let vertices = &self.vertices.array;
+        let distortion = Distortion {
+            pass: true,
+            drawn: true,
+        };
+        let drawn = tracing::info_span!("render.post").in_scope(|| {
+            self.post
+                .draw(&gl, &self.empty, screen, &p, distortion, || {
+                    draw_quads(&gl, vertices, [ui, movie], samplers, quads, &over)
+                })
+        });
+        self.post.used = true;
+        self.post.distorted = true;
+        drawn
     }
 
     /// Draws `list` at `size` pixels and shows the result in `destination`
@@ -931,6 +990,20 @@ impl Renderer {
         self.draw_scaled(&target, list, clear, size);
         std::future::ready(Ok(self.gl.read_pixels(&target.framebuffer, width, height)))
     }
+}
+
+/// The parts of `batches` ([`Renderer::upload_vertices`]) that draw the
+/// quads `range`.
+fn clip_batches(batches: &[(usize, Range<u32>)], range: Range<usize>) -> Vec<(usize, Range<u32>)> {
+    let per = VERTICES_PER_QUAD;
+    let (start, end) = (range.start as u32 * per, range.end as u32 * per);
+    batches
+        .iter()
+        .filter_map(|(_, r)| {
+            let (a, b) = (r.start.max(start), r.end.min(end));
+            (a < b).then(|| ((a / per) as usize, a..b))
+        })
+        .collect()
 }
 
 /// Draws `quads` in their `batches` from `vertices` into the bound

@@ -81,6 +81,21 @@ pub struct DrawList {
     /// (docs/behavior/display-gamma.md): entry *i* / 65535 for channel
     /// value *i*, the same for R, G and B; `None` for the identity.
     pub ramp: Option<[u16; 256]>,
+    /// Without a world: the main menu drawn through the off-screen target
+    /// with its lens (docs/behavior/title-menu.md 4.6).
+    pub lens: Option<MenuLens>,
+}
+
+/// A main-menu frame through the off-screen target
+/// (docs/behavior/title-menu.md 4.6, frame-presentation.md 3.1): quads
+/// `..drawn` (the menu) into the target, quad `drawn` (the lens's offset
+/// map, in UI units of the target) into the distortion target, cleared to
+/// 127 / 255 first, then the presentation through `postprocess_d` with
+/// the quads after it (the cursor) over it.
+#[derive(Clone, Copy, Debug)]
+pub struct MenuLens {
+    pub drawn: usize,
+    pub presentation: crate::present::Presentation,
 }
 
 /// Bytes per vertex: position (2 × f32), texture coordinates (2 × f32),

@@ -1714,9 +1714,13 @@ impl App {
                 // stays in the scene, covered, so it stays on the GPU.
                 let mut scene = level.covered_scene(resolution, self.clock);
                 ctx.text_surface = menu_surface;
-                scene
-                    .sprites
-                    .extend(self.screens.scene(menu, &mut ctx)?.sprites);
+                let menu = self.screens.scene(menu, &mut ctx)?;
+                let under = scene.sprites.len();
+                scene.lens = menu.lens.map(|mut lens| {
+                    lens.drawn += under;
+                    lens
+                });
+                scene.sprites.extend(menu.sprites);
                 Ok(scene)
             }
             Some(Phase::Level {
