@@ -771,7 +771,7 @@ export const tests = {
       "a long frame without what ran in it",
     );
     if (volya.audioState() === "running") {
-      for (const key of ["audio.fill_ms min", "audio.underrun_frames", "audio.mix_ms max"]) {
+      for (const key of ["audio.fill_ms min", "audio.underrun_frames", "audio.mix_ms max", "audio.service_gap_ms max"]) {
         assert(series(key) > 0, `no ${key} series`);
       }
     }

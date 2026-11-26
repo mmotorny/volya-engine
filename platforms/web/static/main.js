@@ -70,6 +70,8 @@ const worklets = new WeakSet();
 // Mixes on the output's schedule for the AudioWorklet, from the engine
 // worker's commands (audio-worker.js); made with the first output.
 let audioWorker = null;
+/** Outputs connected so far, naming each to the audio worker. */
+let outputs = 0;
 
 /**
  * Connects an audio context (live or offline) to the engine's mixer: an
@@ -95,7 +97,14 @@ async function connectAudio(context) {
   node.connect(context.destination);
   audioWorker ??= new Worker(new URL("./audio-worker.js", import.meta.url), { type: "module" });
   const link = new MessageChannel();
-  audioWorker.postMessage({ type: "connect", sampleRate, target, memory, engine: link.port1 }, [link.port1]);
+  // The audio worker measures the time between its services only while
+  // the output is expected to run (#496).
+  const id = ++outputs;
+  const running = () => document.visibilityState === "visible" && context.state === "running";
+  const tell = () => audioWorker?.postMessage({ type: "running", id, on: running() });
+  context.addEventListener("statechange", tell);
+  document.addEventListener("visibilitychange", tell);
+  audioWorker.postMessage({ type: "connect", id, sampleRate, target, memory, engine: link.port1, running: running() }, [link.port1]);
   worker.postMessage({ type: "audio", memory, port: link.port2, worklet: node.port, sampleRate }, [link.port2, node.port]);
   return node;
 }
