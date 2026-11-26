@@ -467,14 +467,19 @@ lines that are right or centre aligned each segment is aligned on its own start 
 
 ### 4.4 Layout surface and screen position
 
-**Which surface.** The main menu (the title menu and the screens and message boxes it shows) draws its
-interface as the first step of the renderer's presentation, into the renderer's current target
-(`docs/behavior/frame-presentation.md`, here FP, section 3.1, presentation step 1) [VC-10, VC-11]. That
-target is the off-screen target when the frame is drawn into it (FP 3.1, frame start step 1: the target
-is usable and the screen effects are active, `r__supersample` > 1, or the distortion pass ran in the
-previous frame), and the screen otherwise [VC-11]. So:
+**Which surface.** While it asks for the post-process (FP 2.5: the title menu itself, its New Game list
+and its message boxes, with or without a level) the main menu draws its interface as the first step of
+the renderer's presentation, into the renderer's current target (`docs/behavior/frame-presentation.md`,
+here FP, section 3.1, presentation step 1) [VC-10, VC-11, FP-21]. That target is the off-screen target
+when the frame is drawn into it (FP 3.1, frame start step 1: the target is usable and the screen effects
+are active, `r__supersample` > 1, or the distortion pass ran in the previous frame), and the screen
+otherwise [VC-11]; the menu's request itself makes the effects active, so at the title menu the frame is
+drawn into the off-screen target whenever it is usable, at every `r__supersample` (FP 5.1) [FP-21]. The
+load, save, options and multiplayer screens (and the spawn dialog) clear the request: the menu then draws
+its interface after the frame, straight onto the screen, on the screen surface (FP 2.5, 5.2) [FP-21].
+While a saved-game picture is pending the menu draws nothing (FP 2.5) [FP-22]. So:
 
-- main menu, frame drawn into the off-screen target: *W*′ × *H*′ = *W*ₜ × *H*ₜ, the target size of
+- main menu asking for the post-process, frame drawn into the off-screen target: *W*′ × *H*′ = *W*ₜ × *H*ₜ, the target size of
   FP 1.1 (from `r__supersample` *s*: per axis floor(*N* · √*s* + 0.5), clamped to 128 … 2048, made
   even by subtracting 1);
 - otherwise (main menu drawn to the screen, and all other interface, which draws with the screen's
@@ -536,8 +541,11 @@ Fonts and strings used (title-menu spec sections 3.4, 4 and 5):
 
 Resulting glyph boxes in **screen** pixels (left/right of the whole text, top/bottom of the glyph
 cells; section 4.4), for `r__supersample` *s* = 1, 2 (the shipped `user.ltx`, FP 1.1) and 4. At the
-title screen a frame goes through the off-screen target exactly when *s* > 1 (no screen effects run
-there; FP 3.1), so *s* = 1 gives the screen surface. **Disputed in review:** the reason is incomplete: FP 4 (b) and (c) send a frame through the target at *s* = 1 too while the main menu asks for the post-process (FP 2.5), through the distortion pass of the previous frame; at *s* = 1 the target has the screen's size whenever neither axis exceeds 2048 (FP 1.1), so the *s* = 1 rows below hold either way, but on a screen wider or taller than 2048 pixels (e.g. 2560 × 1440, target 2048 × 1440) the layout surface at *s* = 1 may be the smaller target. *t* is the line height in UI units (section 4.2). Of the *s* = 2 rows, only 1920 × 1080 was measured; the others are computed from these rules.
+title screen every frame goes through the off-screen target, at every *s* (the menu asks for the
+post-process, FP 2.5, 5.1) [FP-21, FP-B1]; with *s* = 1 the target has the screen's size whenever neither
+axis exceeds 2048 (FP 1.1), so the *s* = 1 rows below are the screen surface; on a screen wider or taller
+than 2048 pixels (e.g. 2560 × 1440, target 2048 × 1440) the layout surface at *s* = 1 is the clamped
+target. *t* is the line height in UI units (section 4.2). Of the *s* = 2 rows, only 1920 × 1080 was measured; the others are computed from these rules.
 Fractional screen positions are resampled (section 4.4); they are shown to three decimals.
 
 | Resolution | *s* | Surface *W*′ × *H*′ | *t* | `Новая игра` (item 0) | `Выйти в Windows` (item 5) | `ver. 1.0006` |
@@ -602,10 +610,6 @@ Derivation at 1024 × 768, *s* = 4: target 2048 × 1536, *s*ᵧ = 2, *t* = 22 / 
 - Multi-byte (`[mb_symbol_coords]`) text handling beyond the table layout (unused by this edition).
 - The exact key-name strings substituted for `$$ACTION_…$$`.
 - Whether bytes 0x80–0xFF count as whitespace when choosing a wrap break point (section 4.3).
-- Which states of the main menu, besides being shown, decide whether it draws at the presentation
-  (a further state of the menu suppresses this drawing; what it means was not established), and
-  whether that drawing is the same when the menu is opened over a running level (**believed**: the
-  same, the drawing step does not depend on a level).
 - The exact resampling of the off-screen target to the screen is that of FP 3.4; the agreement measured
   here (section 4.4) is within 0.75 pixel, and the measured positions lie on average about 0.3 pixel
   above the unresampled position *y*₀ · *H* / *H*′.
@@ -686,7 +690,18 @@ Derivation at 1024 × 768, *s* = 4: target 2048 × 1536, *s*ᵧ = 2, *t* = 22 / 
   (`docs/behavior/title-menu.md` 4.6, where the evidence is: static analysis of the game library and the
   static-lighting renderer, the lens texture, and the issue-570 black-box frames). Checks [GL-n]:
   `magn/checks/run.py` in the dirty workspace.
+- **Revision 2026-11-26** (issue 576, with the revision of FP of the same date; same edition). Static
+  analysis of the main menu's per-frame drawing, its presentation hooks, the request flag and its
+  writers, and the saved-game picture request; black-box frames of the title screen at 1024 × 768 with
+  `r__supersample` 1 and 4. Checks [FP-21, FP-22, FP-B1]: `fp576/checks/run.py` in the dirty workspace.
+  Changes against the previously approved text:
+  - 4.4: the main menu draws into the target only while it asks for the post-process (title menu, New Game
+    list, message boxes); the load, save, options and multiplayer screens draw on the screen surface; a
+    pending saved-game picture suppresses the drawing; at the title menu the frame goes through the target
+    at every `r__supersample`;
+  - 5: the reason for the *s* = 1 rows (replaces the review dispute); 6: the item on the menu's states is
+    resolved and removed; the review gap keeps only the unmeasured case.
 
 ## Gaps found in review
 
-- Caption placement at `r__supersample` 1 on a screen wider or taller than 2048 pixels, where the off-screen target is smaller than the screen, was not examined (title-screen frames at `r__supersample` 1 go through the target while the menu asks for the post-process, `docs/behavior/title-menu.md` 4.6).
+- Caption placement at `r__supersample` 1 on a screen wider or taller than 2048 pixels, where the off-screen target is smaller than the screen, was not examined (section 5 gives it from 4.4; not measured).
