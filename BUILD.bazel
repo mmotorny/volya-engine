@@ -4,4 +4,46 @@
 exports_files([
     "Cargo.lock",
     "Cargo.toml",
+    "MODULE.bazel",
 ])
+
+# Every package. A new package adds its `volya_checks()` and a line here.
+PACKAGES = [
+    "//build",
+    "//build/platforms",
+    "//crates/volya-engine",
+    "//crates/volya-engine-core",
+    "//crates/volya-engine-formats",
+    "//crates/volya-engine-installer",
+    "//crates/volya-engine-render",
+    "//crates/volya-engine-script",
+    "//platforms/web",
+    "//tests/fidelity",
+    "//tools/devserver",
+    "//tools/site",
+    "//tools/xtask",
+]
+
+# The source tree, for the checks that read it (//build:spdx, :licenses).
+filegroup(
+    name = "all_files",
+    srcs = glob(
+        ["**"],
+        exclude = [
+            ".git/**",
+            # Bazel's convenience links to its outputs.
+            "bazel-*/**",
+        ],
+    ) + [p + ":all_files" for p in PACKAGES],
+    visibility = ["//build:__pkg__"],
+)
+
+# The static checks: `bazel test //:checks`.
+test_suite(
+    name = "checks",
+    tests = [
+        "//build:licenses",
+        "//build:pins",
+        "//build:spdx",
+    ] + [p + ":checks" for p in PACKAGES],
+)

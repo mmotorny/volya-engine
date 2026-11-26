@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Maksym Motorny
 # SPDX-License-Identifier: BSD-3-Clause
 
+load("//build:checks.bzl", "volya_checks")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+load("@rules_rust//rust:defs.bzl", "rust_test")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -22,3 +24,51 @@ config_setting(
     name = "with_test_ops",
     flag_values = {":test_ops": "true"},
 )
+
+exports_files(["wasm_llvm.BUILD.bazel"])
+
+# Every source file carries SPDX headers.
+rust_test(
+    name = "spdx",
+    srcs = ["spdx_test.rs"],
+    data = ["//:all_files"],
+    tags = ["check"],
+)
+
+# Versions pinned twice agree.
+rust_test(
+    name = "pins",
+    srcs = ["pins_test.rs"],
+    data = [
+        "//:Cargo.lock",
+        "//:MODULE.bazel",
+    ],
+    tags = ["check"],
+)
+
+# Dependencies are permissively licensed (cargo-deny, installed on the
+# machine; it reads the crates' metadata from crates.io).
+rust_test(
+    name = "licenses",
+    srcs = ["licenses_test.rs"],
+    data = [
+        "//:Cargo.lock",
+        "//:Cargo.toml",
+        "//:all_files",
+        "@local_tools//:cargo-deny",
+        "@local_tools//:cargo_deny_version.txt",
+        "@rules_rust//tools/upstream_wrapper:cargo",
+    ],
+    env = {
+        "CARGO": "$(rootpath @rules_rust//tools/upstream_wrapper:cargo)",
+        "CARGO_DENY": "$(rootpath @local_tools//:cargo-deny)",
+        "WORKSPACE_MANIFEST": "$(rootpath //:Cargo.toml)",
+    },
+    tags = [
+        "check",
+        "no-sandbox",
+        "requires-network",
+    ],
+)
+
+volya_checks(wasm = False)

@@ -20,3 +20,6 @@ test:measure --compilation_mode=opt
 
 # A personal file, never committed.
 try-import %workspace%/user.bazelrc
+
+# Clippy fails on warnings (the workspace lints: clippy::all).
+build --@rules_rust//rust/settings:clippy_flags=-Dwarnings
