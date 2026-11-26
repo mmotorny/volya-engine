@@ -10,6 +10,8 @@
 
 pub mod gl;
 pub mod glsl;
+#[cfg(any(test, feature = "selftest"))]
+pub mod selftest;
 pub mod stats;
 
 #[cfg(not(feature = "gl"))]

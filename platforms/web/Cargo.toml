@@ -19,7 +19,7 @@ workspace = true
 [features]
 # Engine ops only tests use (`debug_give_item`): in the dev and test builds,
 # never in the deployed one.
-test-ops = []
+test-ops = ["volya-engine/render-selftest"]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 volya-engine = { path = "../../crates/volya-engine", features = ["webgl"] }

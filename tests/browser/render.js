@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Rendering in the engine worker: startup with WebGL 2, else without
-// graphics; the frame loop on the transferred canvas, and the
-// path from an imported archive through DDS (or Theora) to the screen, read
-// back through the renderer (`debug_capture`), not the DOM.
+// graphics; the frame loop on the transferred canvas; the render
+// self-test's scenes (`render_selftest`); and the path from an imported
+// archive through DDS (or Theora) to the screen, read back through the
+// renderer (`debug_capture`), not the DOM. In Chrome the profile is kept
+// between runs, so the archive is imported once.
 
-import { assert, assertEqual, skip } from "./harness.js";
+import { assert, assertEqual, dump, skip } from "./harness.js";
 
 const ARCHIVE = "gamedata.dbb";
 const UNCOMPRESSED = "gamedata/textures/internal/internal_light_attpoint.dds";
@@ -57,6 +59,18 @@ async function capture(width, height) {
   return rgba;
 }
 
+/** The render self-test's checks, each a test of its own. */
+const selftest = Object.fromEntries(
+  (await volya.call("render_selftest")).map((check) => [
+    `render check: ${check}`,
+    async () => {
+      const result = await volya.call("render_selftest", { check });
+      if (result.skip) skip(result.skip);
+      return result.note;
+    },
+  ]),
+);
+
 export const tests = {
   "app starts with a clear graphics status": async () => {
     gpu = (await volya.status()).gpu;
@@ -91,6 +105,8 @@ export const tests = {
     return await volya.call("gl_selftest");
   },
 
+  ...selftest,
+
   "empty draw list renders black": async () => {
     needsGpu();
     await volya.call("debug_draw", {});
@@ -105,7 +121,6 @@ export const tests = {
     installer = await response.json();
     const exe = installer.find((f) => f.name.endsWith(".exe")).name;
     const bin = installer.find((f) => f.name.endsWith("-1.bin")).name;
-    await volya.call("forget_game");
     await volya.importGame({ exe: source(exe), bin: source(bin), only: [ARCHIVE] });
   },
 
@@ -119,6 +134,7 @@ export const tests = {
     // Full screen at the texture's size: one pixel per texel, alpha-blended
     // over black.
     const rgba = await capture(width, height);
+    await dump("uncompressed", { width, height, rgba });
     let worst = 0;
     texels.forEach((t, i) => {
       const expected = [0, 1, 2].map((c) => (t[c] * t[3]) / 255).concat(255);
@@ -134,6 +150,7 @@ export const tests = {
     const info = await volya.call("debug_draw", { path: BC });
     assertEqual(info.format, "Bc1", "format");
     const rgba = await capture(info.width, info.height);
+    await dump("bc", { width: info.width, height: info.height, rgba });
     const distinct = new Set();
     for (let i = 0; i < rgba.length; i += 4) distinct.add(rgba.slice(i, i + 3).join());
     assert(distinct.size > 4, `${distinct.size} distinct colours`);
@@ -213,8 +230,7 @@ export const tests = {
     await volya.call("debug_draw", {});
   },
 
-  "clears and forgets the game": async () => {
+  "clears the screen": async () => {
     if (gpu.state === "ready") await volya.call("debug_draw", {});
-    if (installer) await volya.call("forget_game");
   },
 };

@@ -945,6 +945,100 @@ pub async fn debug_capture(width: u32, height: u32) -> Result<Capture, JsValue> 
     })
 }
 
+/// The render self-test's device: a WebGL 2 context of its own, so its
+/// renderers draw beside the app's without touching its state.
+#[cfg(feature = "test-ops")]
+struct SelftestGpu {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    format: wgpu::TextureFormat,
+    _surface: wgpu::Surface<'static>,
+}
+
+#[cfg(feature = "test-ops")]
+thread_local! {
+    static SELFTEST: RefCell<Option<std::rc::Rc<SelftestGpu>>> = const { RefCell::new(None) };
+}
+
+#[cfg(feature = "test-ops")]
+async fn selftest_gpu() -> Result<std::rc::Rc<SelftestGpu>, JsValue> {
+    if let Some(gpu) = SELFTEST.with_borrow(|g| g.clone()) {
+        return Ok(gpu);
+    }
+    let canvas = OffscreenCanvas::new(4, 4)?;
+    make_webgl_context(&canvas);
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::GL,
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
+    });
+    let surface = instance
+        .create_surface(wgpu::SurfaceTarget::OffscreenCanvas(canvas))
+        .map_err(error)?;
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            compatible_surface: Some(&surface),
+            ..Default::default()
+        })
+        .await
+        .map_err(error)?;
+    let (device, queue) = adapter
+        .request_device(&wgpu::DeviceDescriptor {
+            required_features: volya_engine::render::device_features(&adapter),
+            required_limits: adapter.limits(),
+            ..Default::default()
+        })
+        .await
+        .map_err(error)?;
+    device.on_uncaptured_error(Arc::new(move |e| {
+        web_sys::console::error_1(&format!("render self-test: {e}").into());
+    }));
+    let format = surface
+        .get_capabilities(&adapter)
+        .formats
+        .into_iter()
+        .find(|f| !f.is_srgb())
+        .ok_or_else(|| error("no non-sRGB format"))?;
+    let gpu = std::rc::Rc::new(SelftestGpu {
+        device,
+        queue,
+        format,
+        _surface: surface,
+    });
+    SELFTEST.with_borrow_mut(|g| *g = Some(gpu.clone()));
+    Ok(gpu)
+}
+
+/// The `render_selftest` op: runs the render check `check` on a renderer of
+/// its own (`{note}`, or `{skip}` with why), or lists the checks.
+#[cfg(feature = "test-ops")]
+pub async fn render_selftest(check: Option<&str>) -> Result<serde_json::Value, JsValue> {
+    use volya_engine::render::selftest::{self, Problem};
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen::closure::Closure;
+    let Some(check) = check else {
+        return Ok(json!(selftest::names()));
+    };
+    let gpu = selftest_gpu().await?;
+    // wgpu's GL backend runs buffer-mapping callbacks (the captures) only
+    // when polled.
+    let device = gpu.device.clone();
+    let poll = Closure::<dyn FnMut()>::new(move || {
+        let _ = device.poll(wgpu::PollType::Poll);
+    });
+    let scope: web_sys::WorkerGlobalScope = js_sys::global().unchecked_into();
+    let interval = scope
+        .set_interval_with_callback_and_timeout_and_arguments_0(poll.as_ref().unchecked_ref(), 1)?;
+    let make = || Renderer::new(&gpu.device, &gpu.queue, gpu.format);
+    let outcome = selftest::run(check, &make).await;
+    scope.clear_interval_with_handle(interval);
+    drop(poll);
+    match outcome {
+        Ok(note) => Ok(json!({ "note": note })),
+        Err(Problem::Skip(reason)) => Ok(json!({ "skip": reason })),
+        Err(Problem::Fail(message)) => Err(error(message)),
+    }
+}
+
 /// The `debug_draw_particles` op (tests): sets the debug draw list to a
 /// world without geometry holding particle batches of `case`, the scenes
 /// of the native `particles_queue_blend_cull_and_distort` render test
