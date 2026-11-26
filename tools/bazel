@@ -1,0 +1,83 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+
+# Bazelisk's wrapper (AGENTS.md: the one shell script): runs Bazel
+# ($BAZEL_REAL) with the GOG installer's identity, so replacing the installer
+# re-keys the game data (docs/architecture/build.md, Game data). The
+# installer is VOLYA_GOG_INSTALLER, from the environment or user.bazelrc
+# (the main checkout's, then this checkout's); without one, no flags.
+
+set -eu
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+dir=${VOLYA_GOG_INSTALLER:-}
+if [ -z "$dir" ]; then
+  prefix='common --repo_env=VOLYA_GOG_INSTALLER='
+  for rc in "$root/../../../user.bazelrc" "$root/user.bazelrc"; do
+    if [ -f "$rc" ]; then
+      line=$(grep "^$prefix" "$rc" | tail -n 1 || true)
+      if [ -n "$line" ]; then
+        dir=${line#"$prefix"}
+      fi
+    fi
+  done
+fi
+
+sha_flag=""
+bin_flag=""
+if [ -n "$dir" ]; then
+  for exe in "$dir"/setup_s.t.a.l.k.e.r._shadow_of_chernobyl*"(russian)"*.exe; do
+    bin="${exe%.exe}-1.bin"
+    if [ -f "$exe" ] && [ -f "$bin" ]; then
+      sha=$(shasum -a 256 "$exe" | cut -d ' ' -f 1)
+      size=$(stat -f %z "$bin")
+      sha_flag="--repo_env=VOLYA_GOG_INSTALLER_EXE_SHA256=$sha"
+      bin_flag="--repo_env=VOLYA_GOG_INSTALLER_BIN=${bin##*/} $size"
+    fi
+    break
+  done
+fi
+
+if [ -z "$sha_flag" ]; then
+  exec "$BAZEL_REAL" "$@"
+fi
+
+# The flags go after the command (startup options come before it), for the
+# commands that take them.
+n=0
+for arg in "$@"; do
+  case "$arg" in
+    -*) n=$((n + 1)) ;;
+    *) break ;;
+  esac
+done
+if [ "$n" -ge "$#" ]; then
+  exec "$BAZEL_REAL" "$@"
+fi
+i=0
+command=""
+for arg in "$@"; do
+  if [ "$i" -eq "$n" ]; then
+    command=$arg
+    break
+  fi
+  i=$((i + 1))
+done
+case "$command" in
+  build | test | run | coverage | query | cquery | aquery | fetch | mod | vendor | info) ;;
+  *) exec "$BAZEL_REAL" "$@" ;;
+esac
+
+# Rebuild the arguments: startup options, the command, the flags, the rest.
+i=0
+for arg in "$@"; do
+  shift
+  if [ "$i" -eq "$n" ]; then
+    set -- "$@" "$arg" "$sha_flag" "$bin_flag"
+  else
+    set -- "$@" "$arg"
+  fi
+  i=$((i + 1))
+done
+exec "$BAZEL_REAL" "$@"

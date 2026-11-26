@@ -5,6 +5,9 @@
 common --disk_cache=~/Library/Caches/volya-engine/bazel/disk-cache
 common --experimental_disk_cache_gc_max_size=50G
 common --repository_cache=~/Library/Caches/volya-engine/bazel/repository-cache
+# Fetched repositories unused for 3 days go (an outdated copy of the game
+# files is 6 GB; Bazel's default keeps them 14 days).
+common --repo_contents_cache_gc_max_age=3d
 
 # A server per worktree: idle ones exit.
 startup --max_idle_secs=900

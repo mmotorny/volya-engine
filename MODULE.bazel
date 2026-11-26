@@ -130,8 +130,12 @@ local_tools = use_repo_rule("//build:local_tools.bzl", "local_tools")
 local_tools(name = "local_tools")
 
 # The game data (build/gog.bzl).
+gog_installer = use_repo_rule("//build:gog.bzl", "gog_installer")
+
+gog_installer(name = "gog_installer")
+
 gog = use_extension("//build:gog.bzl", "gog")
-use_repo(gog, "gog_extractor", "gog_game", "gog_installer")
+use_repo(gog, "gog_extractor", "gog_game", "gog_original")
 
 # Its extractor is built with the toolchain's cargo.
 rust_host_tools = use_extension("@rules_rust//rust:extensions.bzl", "rust_host_tools")

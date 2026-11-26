@@ -8,23 +8,17 @@
 //! Everything it writes is game assets and stays in the local cache.
 
 use std::fs::{self, File};
-use std::io::{BufReader, BufWriter, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-
-use volya_engine_installer::{Installer, extract};
 
 use crate::wine::{Container, REG32};
 use crate::{Result, step};
 
 mod views;
 pub use views::references;
-
-/// The edition the game-data tests use.
-const LANGUAGE: &str = "ru-RU";
 
 /// The executable and its working folder, relative to the install folder,
 /// and its arguments: the launch task (gog-install-additions.md section 5:
@@ -49,15 +43,9 @@ const ARGS: [&str; 5] = [
 const STEER_LTX: &str = "steer.ltx";
 
 /// The Wine user (the container runs as root; measured: the prefix's only
-/// user folder is `users/root`).
+/// user folder is `users/root`; tools/gog-extract names the same in
+/// `fsgame.ltx`).
 const WINE_USER: &str = "root";
-
-/// The current user's Documents folder, `{userdocs}`, as Windows sees it
-/// (gog-install-additions.md section 2: an absolute path without trailing
-/// `\`).
-fn userdocs() -> String {
-    format!("C:\\users\\{WINE_USER}\\Documents")
-}
 
 /// The game's user folder below `{userdocs}`, as the support-data copies
 /// name it (gog-install-additions.md section 3; the same folder as
@@ -169,13 +157,25 @@ pub struct Install {
 }
 
 impl Install {
-    /// The install folder of `VOLYA_GOG_INSTALLER`'s installer, assembled
-    /// if needed ([`assemble`]).
+    /// The install folder Bazel's `@gog_original` holds
+    /// (docs/architecture/build.md, Game data), its manifest named by
+    /// `VOLYA_GOG_ORIGINAL` (`bazel run //tools/xtask -- original`).
     pub fn assemble() -> Result<Self> {
-        let (exe, bin) = installer()?;
-        let cache = cache_dir(&exe, &bin)?;
-        let folder = assemble(&exe, &bin, &cache)?;
-        Ok(Self { cache, folder })
+        let manifest = std::env::var_os("VOLYA_GOG_ORIGINAL").ok_or(
+            "the original's install comes from Bazel: bazel run //tools/xtask -- original",
+        )?;
+        let manifest = fs::canonicalize(crate::runfile(Path::new(&manifest)))
+            .map_err(|e| format!("{}: {e}", Path::new(&manifest).display()))?;
+        if fs::metadata(&manifest).map_err(|e| e.to_string())?.len() == 0 {
+            return Err(
+                "no game data: set VOLYA_GOG_INSTALLER in user.bazelrc (docs/testing.md)".into(),
+            );
+        }
+        let folder = manifest.parent().ok_or("no folder")?.join("game");
+        Ok(Self {
+            cache: cache()?,
+            folder,
+        })
     }
 
     /// Starts a run (`<cache>/original-runs/<unix time>/`): the install
@@ -194,8 +194,9 @@ impl Install {
         let frames = dir.join("frames");
         fs::create_dir_all(&frames).map_err(|e| format!("{}: {e}", frames.display()))?;
         // A copy-on-write clone (APFS), so what the game writes stays in this
-        // run.
+        // run; the folder is Bazel's, read-only.
         crate::run(Command::new("cp").arg("-cR").arg(&self.folder).arg(&game))?;
+        crate::run(Command::new("chmod").arg("-R").arg("u+w").arg(&game))?;
         add_install(&game, &documents)?;
         // The saves folder: `$game_saves$`, `savedgames\` below the user
         // folder (steering-the-original.md section 2.1).
@@ -322,28 +323,6 @@ impl Run {
     }
 }
 
-/// The generated `fsgame.ltx` (gog-install-additions.md section 2): 17
-/// LF-terminated ASCII lines, `{userdocs}` the only placeholder.
-const FSGAME_LTX: &str = "\
-$app_data_root$ = true | false| {userdocs}\\Stalker-SHOC
-$game_data$ =     false| true | $fs_root$      | gamedata\\
-$game_ai$ =       true | false| $game_data$    | ai\\
-$game_spawn$ =    true | false| $game_data$    | spawns\\
-$game_anims$ =    true | true | $game_data$    | anims\\
-$game_levels$ =   true | false| $game_data$    | levels\\
-$game_meshes$ =   true | true | $game_data$    | meshes\\
-$game_dm$ =       true | true | $game_data$    | meshes\\
-$game_shaders$ =  true | true | $game_data$    | shaders\\
-$game_sounds$ =   true | true | $game_data$    | sounds\\
-$game_textures$ = true | true | $game_data$    | textures\\
-$game_scripts$ =  true | false| $game_data$    | scripts\\
-$game_config$ =   true | false| $game_data$    | config\\
-$level$ =         false| false| $game_levels$
-$game_saves$ =    true | false| $app_data_root$| savedgames\\
-$logs$ =          true | false| $app_data_root$| logs\\
-$screenshots$ =   true | false| $app_data_root$| screenshots\\
-";
-
 /// The install script's key (gog-install-additions.md section 4.1); each
 /// run's `wine.log` lists it in both registry views, so where the values
 /// landed is on record (measured: the 32-bit view only, as
@@ -379,9 +358,10 @@ fn registry(app: &str) -> String {
     )
 }
 
-/// Adds to the run's install folder `game` and Documents folder `documents`
-/// what the install creates beyond the game files, and the run's
-/// configuration file. Not created: shortcuts (not needed by the game,
+/// Adds to the run's Documents folder `documents` what the install
+/// creates in the user folder, and the run's configuration file; the install
+/// folder `game` already holds its own additions (`@gog_original`,
+/// tools/gog-extract). Not created: shortcuts (not needed by the game,
 /// gog-install-additions.md section 5), the installer's tools and caches
 /// (section 6), the DirectX redistributable (Wine has Direct3D 9).
 fn add_install(game: &Path, documents: &Path) -> Result {
@@ -389,20 +369,6 @@ fn add_install(game: &Path, documents: &Path) -> Result {
         mkdir_parent(path)?;
         fs::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))
     };
-    // Section 2, then `attrib +r`: Wine shows a file without write
-    // permission as read-only.
-    let fsgame = game.join("fsgame.ltx");
-    write(
-        &fsgame,
-        FSGAME_LTX.replace("{userdocs}", &userdocs()).as_bytes(),
-    )?;
-    fs::set_permissions(&fsgame, fs::Permissions::from_mode(0o444))
-        .map_err(|e| format!("{}: {e}", fsgame.display()))?;
-    // Section 6: empty folders.
-    for dir in ["downloads", "logs", "savedgames"] {
-        let dir = game.join("userdocs").join(dir);
-        fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    }
     // Section 3: the support data copied unchanged into the user folder.
     let user = documents.join(USER_FOLDER);
     let support = game.join("__support/userdocs");
@@ -450,87 +416,9 @@ fn save_user_files(container: &Container, to: &Path) {
     }
 }
 
-/// The install folder, `<cache>/original/`: every game file of the edition
-/// in the installer's layout. Archives are cloned (APFS copy-on-write) from
-/// the game-data tests' shared `<cache>/archives/`, extracted there first if
-/// missing; the rest is extracted directly. Files already there with the
-/// installer's size are kept. Locked against concurrent runs and tests.
-fn assemble(exe: &Path, bin: &Path, cache: &Path) -> Result<PathBuf> {
-    let install = cache.join("original");
-    let archives = cache.join("archives");
-    let installer = Installer::parse(BufReader::new(
-        File::open(exe).map_err(|e| format!("{}: {e}", exe.display()))?,
-    ))
-    .map_err(|e| e.to_string())?;
-    let mut bin = BufReader::new(File::open(bin).map_err(|e| format!("{}: {e}", bin.display()))?);
-    let _lock = lock(&install)?;
-    for file in installer.game_files(LANGUAGE) {
-        let to = install.join(&file.path);
-        if size_is(&to, file.size) {
-            continue;
-        }
-        if is_archive(&file.path) {
-            let _lock = lock(&archives)?;
-            let from = archives.join(&file.path);
-            if !size_is(&from, file.size) {
-                extract_to(file, &mut bin, &archives)?;
-            }
-            mkdir_parent(&to)?;
-            let _ = fs::remove_file(&to);
-            crate::run(Command::new("cp").arg("-c").arg(&from).arg(&to))?;
-        } else {
-            extract_to(file, &mut bin, &install)?;
-        }
-    }
-    Ok(install)
-}
-
-/// Extracts `file` into `root`, renamed into place once complete.
-fn extract_to(
-    file: &volya_engine_installer::GameFile,
-    bin: &mut BufReader<File>,
-    root: &Path,
-) -> Result {
-    let to = root.join(&file.path);
-    println!("extracting {} ({} bytes)", file.path, file.size);
-    mkdir_parent(&to)?;
-    let partial = root.join(format!("{}.partial", file.path));
-    let mut out =
-        BufWriter::new(File::create(&partial).map_err(|e| format!("{}: {e}", partial.display()))?);
-    extract(file, bin, &mut out).map_err(|e| format!("{}: {e}", file.path))?;
-    out.flush().map_err(|e| e.to_string())?;
-    drop(out);
-    fs::rename(&partial, &to).map_err(|e| format!("{}: {e}", to.display()))
-}
-
-fn size_is(path: &Path, size: u64) -> bool {
-    fs::metadata(path).is_ok_and(|m| m.len() == size)
-}
-
 fn mkdir_parent(path: &Path) -> Result {
     let parent = path.parent().ok_or("no parent")?;
     fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))
-}
-
-/// An exclusive lock on `<dir>.lock`, the same the game-data tests take.
-fn lock(dir: &Path) -> Result<File> {
-    fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let path = dir.with_extension("lock");
-    let file = File::create(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    file.lock()
-        .map_err(|e| format!("{}: {e}", path.display()))?;
-    Ok(file)
-}
-
-/// Whether `path` is one of the archives the game-data tests cache (the
-/// rule of `crates/volya-engine-formats/tests/support/gog_archives.rs`).
-fn is_archive(path: &str) -> bool {
-    let name = path.rsplit('/').next().unwrap_or(path);
-    let root_db = !path.contains('/')
-        && name
-            .rsplit_once('.')
-            .is_some_and(|(_, ext)| ext.starts_with("db"));
-    root_db || (path.starts_with("mods/") && name.contains(".xdb"))
 }
 
 /// The Russian installer's `.exe` and `-1.bin` in `VOLYA_GOG_INSTALLER`.
@@ -690,28 +578,9 @@ mod tests {
     }
 
     #[test]
-    fn fsgame_ltx_is_the_specified_file() {
-        let text = FSGAME_LTX.replace("{userdocs}", &userdocs());
-        assert!(text.is_ascii() && !text.contains('\r'));
-        assert_eq!(FSGAME_LTX.len(), 965);
-        assert_eq!(text.lines().count(), 17);
-        assert!(text.starts_with(
-            "$app_data_root$ = true | false| C:\\users\\root\\Documents\\Stalker-SHOC\n"
-        ));
-        assert!(text.ends_with("| screenshots\\\n"));
-    }
-
-    #[test]
     fn registry_holds_the_install_path() {
         let reg = registry(INSTALL_IN_WINDOWS);
         assert!(reg.contains("\"InstallPath\"=\"Z:\\\\work\\\\game\"\r\n"));
         assert!(reg.contains("\"InstallVers\"=\"2.1.0.10\"\r\n"));
-    }
-
-    #[test]
-    fn archives_are_the_tests_archives() {
-        assert!(is_archive("gamedata.db0"));
-        assert!(is_archive("mods/mp_military_2.xdb0"));
-        assert!(!is_archive("bin/XR_3DA.exe"));
     }
 }

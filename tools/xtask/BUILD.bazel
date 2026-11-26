@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Maksym Motorny
 # SPDX-License-Identifier: BSD-3-Clause
 
+load("@gog_installer//:defs.bzl", "GOG_INSTALLER")
 load("//build:checks.bzl", "volya_checks")
 load("//build:rust.bzl", "LINTS", "volya_binary")
 load("@rules_rust//rust:defs.bzl", "rust_test")
@@ -15,8 +16,13 @@ volya_binary(
     crate_root = "src/main.rs",
     # The fidelity suite's views (src/original/views.rs).
     compile_data = ["//tests/fidelity:views.rs"],
+    # `bazel run //tools/xtask -- original`: the install folder.
+    data = ["@gog_original//:manifest.tsv"],
+    env = {
+        "VOLYA_GOG_INSTALLER": GOG_INSTALLER,
+        "VOLYA_GOG_ORIGINAL": "$(rootpath @gog_original//:manifest.tsv)",
+    },
     deps = [
-        "//crates/volya-engine-installer",
         "//tools/devserver:volya-engine-devserver",
         "//tools/site:volya-engine-site",
     ],

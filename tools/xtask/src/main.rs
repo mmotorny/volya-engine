@@ -77,6 +77,7 @@ type Result<T = ()> = std::result::Result<T, String>;
 fn main() -> ExitCode {
     // `bazel run`: paths given are the caller's (commands still run in the
     // workspace, `cmd`).
+    let _ = START_DIR.set(std::env::current_dir().unwrap_or_default());
     if let Some(dir) = std::env::var_os("BUILD_WORKING_DIRECTORY") {
         let _ = std::env::set_current_dir(dir);
     }
@@ -124,6 +125,17 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// The directory this process started in: under `bazel run`, its runfiles'
+/// tree, which runfiles paths (`$(rootpath)`) are relative to.
+static START_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// A runfiles path (`$(rootpath)`, as Bazel passes them) as a path.
+fn runfile(path: &Path) -> PathBuf {
+    START_DIR
+        .get()
+        .map_or_else(|| path.to_path_buf(), |d| d.join(path))
 }
 
 /// The source tree: the workspace under `bazel run`, the runfiles' tree in a

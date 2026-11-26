@@ -1077,7 +1077,6 @@ version = "0.1.0"
 dependencies = [
  "sha2",
  "volya-engine-devserver",
- "volya-engine-installer",
  "volya-engine-site",
  "zlib-rs",
 ]
