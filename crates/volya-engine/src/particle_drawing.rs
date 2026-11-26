@@ -22,7 +22,7 @@ use crate::render::particles::{
 use crate::render::world::{Mat4, multiply};
 use crate::shading::texture_list;
 use std::collections::HashMap;
-use volya_engine_formats::particles::{Effect, effect_flags};
+use volya_engine_formats::particles::effect_flags;
 use volya_engine_formats::shaders_xr::Definition;
 
 /// One pass of an effect's shader; `T` is a texture: a name while
@@ -286,7 +286,7 @@ pub fn queue(
             let Some(Some(shader)) = shaders.get(i) else {
                 continue;
             };
-            let record: &Effect = &library.effects[i];
+            let record = library.effect_at(i);
             if e.particles().is_empty() || record.flags & effect_flags::SPRITE == 0 {
                 continue;
             }

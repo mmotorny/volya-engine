@@ -43,15 +43,16 @@ fn every_sprite_resolves_as_section_5_says() {
         read(&tree, &format!("{shader_dir}\\{module}.s"))
             .is_ok_and(|t| defines_normal_or_special(&String::from_utf8_lossy(&t)))
     };
-    let sprites: Vec<_> = (library.effects.iter())
-        .filter_map(|e| e.sprite.as_ref().map(|s| (e, s)))
+    let sprites: Vec<_> = library
+        .effects()
+        .filter_map(|e| e.sprite.map(|s| (e, s)))
         .collect();
     assert_eq!(sprites.len(), 1070);
     let mut per_shader: BTreeMap<&str, usize> = BTreeMap::new();
     let mut textures = BTreeSet::new();
     let (mut one, mut two) = (0, 0);
     for (e, s) in &sprites {
-        *per_shader.entry(s.shader.as_str()).or_default() += 1;
+        *per_shader.entry(s.shader).or_default() += 1;
         let list = texture_list(&s.texture);
         match list.len() {
             1 => one += 1,
@@ -63,7 +64,7 @@ fn every_sprite_resolves_as_section_5_says() {
             .unwrap_or_else(|why| panic!("{}: {why}", e.name));
         // Section 5.1's table.
         let normal = shader.normal.as_ref();
-        match s.shader.as_str() {
+        match s.shader {
             "particles\\add" => assert_eq!(normal.unwrap().blend, ParticleBlend::Add),
             "particles\\blend" => {
                 let n = normal.unwrap();
@@ -123,10 +124,10 @@ fn every_sprite_resolves_as_section_5_says() {
     assert_eq!(count(&|f| f & 0x1400 == 0x1400), 252);
     assert_eq!(count(&|f| f & 0x2C00 == 0x2C00), 23);
     assert_eq!(count(&|f| f & 0x40000 != 0), 113);
-    let muhi = &library.effects[library.effect("tests\\muhi").unwrap()];
-    let s = muhi.sprite.as_ref().unwrap();
+    let muhi = library.effect_at(library.effect("tests\\muhi").unwrap());
+    let s = muhi.sprite.unwrap();
     assert_eq!(
-        (s.shader.as_str(), texture_list(&s.texture)),
+        (s.shader, texture_list(&s.texture)),
         ("particles\\blend", vec!["pfx\\pfx_leaves_01".to_owned()])
     );
 }

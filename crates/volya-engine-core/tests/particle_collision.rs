@@ -80,8 +80,8 @@ fn the_library_facts_are_p5s() {
     let Some(Data { library, .. }) = data() else {
         return;
     };
-    let fx = &library.effects;
-    let has = |e: &&volya_engine_formats::particles::Effect, b| e.flags & b != 0;
+    let fx: Vec<_> = library.effects().collect();
+    let has = |e: &&volya_engine_formats::particles::EffectRecord, b| e.flags & b != 0;
     let colliding: Vec<_> = fx.iter().filter(|e| has(e, f::COLLIDE)).collect();
     // D1.
     assert_eq!(colliding.len(), 71);
@@ -98,7 +98,7 @@ fn the_library_facts_are_p5s() {
     let mut query: Vec<_> = fx
         .iter()
         .filter(|e| has(e, f::COLLIDE_QUERY))
-        .map(|e| (e.name.as_str(), e.flags))
+        .map(|e| (e.name, e.flags))
         .collect();
     query.sort();
     assert_eq!(
@@ -130,10 +130,7 @@ fn the_library_facts_are_p5s() {
             let c = e.collision;
             // The values as P5 writes them, to two decimals.
             let r = |v: f32| (v * 100.0).round() / 100.0;
-            (
-                e.name.as_str(),
-                [c.tangential, c.resilience, c.cutoff].map(r),
-            )
+            (e.name, [c.tangential, c.resilience, c.cutoff].map(r))
         })
         .collect();
     assert_eq!(
@@ -255,7 +252,7 @@ fn play(
     steps: usize,
     world: Option<&CollisionWorld>,
 ) -> (Vec<Particle>, Duration) {
-    let mut i = EffectInstance::new(e, &library.effects[e]);
+    let mut i = EffectInstance::new(e, library.effect_at(e));
     i.place(&at(p), [0.0; 3], Mode::World);
     i.play();
     let mut playing = Playing::Effect(i);
@@ -278,7 +275,7 @@ fn the_colliding_effects_collide_with_the_first_level() {
     let mut changed = Vec::new();
     let (mut with, mut without) = (Duration::ZERO, Duration::ZERO);
     let mut particles = 0;
-    for (e, effect) in library.effects.iter().enumerate() {
+    for (e, effect) in library.effects().enumerate() {
         if effect.flags & f::COLLIDE == 0 {
             continue;
         }
@@ -293,7 +290,7 @@ fn the_colliding_effects_collide_with_the_first_level() {
             effect.name
         );
         if a != b {
-            changed.push(effect.name.as_str());
+            changed.push(effect.name);
         }
     }
     eprintln!(

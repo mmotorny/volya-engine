@@ -21,7 +21,7 @@ fn close(a: Vec3, b: Vec3, tolerance: f32) -> bool {
 
 #[test]
 fn a_playing_instance_runs_whole_steps_at_most_three_an_update() {
-    let mut e = EffectInstance::new(0, &effect("empty", 1, 0, 0.0, Vec::new()));
+    let mut e = EffectInstance::new(0, effect("empty", 1, 0, 0.0, Vec::new()).record());
     e.play();
     let mut random = Random::default();
     let mut steps = Vec::new();
@@ -36,7 +36,7 @@ fn a_playing_instance_runs_whole_steps_at_most_three_an_update() {
 
 #[test]
 fn muhi_is_placed_as_p2_says() {
-    let mut e = EffectInstance::new(0, &muhi());
+    let mut e = EffectInstance::new(0, muhi().record());
     e.place(&M, [1.0, 2.0, 3.0], Mode::World);
     assert_eq!(e.position, [10.0, 2.0, -3.0]);
     let ActionKind::Source(s) = &e.actions[0].placed else {
@@ -78,7 +78,7 @@ fn the_parent_velocity_follows_the_effects_velocity() {
         panic!()
     };
     s.parent_motion = 0.5;
-    let mut e = EffectInstance::new(0, &record);
+    let mut e = EffectInstance::new(0, record.record());
     e.place(&IDENTITY, [2.0, 4.0, 6.0], Mode::World);
     let ActionKind::Source(s) = &e.actions[0].placed else {
         panic!()
@@ -95,7 +95,7 @@ fn muhis_source_makes_p2s_particle() {
     // P2 9.2 with `tests\muhi`'s flags 0x1401: seven draws for the
     // particle, then the birth notice's eighth for its start frame (P7 3.2).
     let only_source = vec![muhi().actions.remove(0)];
-    let mut e = EffectInstance::new(0, &effect("muhi", 7, 0x1401, 0.0, only_source));
+    let mut e = EffectInstance::new(0, effect("muhi", 7, 0x1401, 0.0, only_source).record());
     let mut random = Random::new(1);
     e.play();
     e.update(33, &mut random);
@@ -129,7 +129,7 @@ fn muhis_motion_records_are_p3s_6_4() {
         action(29, 2, muhi_vortex()),
         action(12, 0, ActionKind::Move),
     ];
-    let mut e = EffectInstance::new(0, &effect("muhi", 7, 0, 0.0, motion));
+    let mut e = EffectInstance::new(0, effect("muhi", 7, 0, 0.0, motion).record());
     let p = |x: Vec3, w: Vec3, age: f32| Particle {
         position: x,
         previous: x,
@@ -179,7 +179,7 @@ fn the_time_limit_stops_in_its_step_and_replays_with_the_full_limit() {
     assert_eq!(time_limit_step(1.0), 31);
     assert_eq!(time_limit_step(0.5), 16);
     let move_only = vec![action(12, 0, ActionKind::Move)];
-    let mut e = EffectInstance::new(0, &effect("t", 1, 0x4000, 0.1, move_only));
+    let mut e = EffectInstance::new(0, effect("t", 1, 0x4000, 0.1, move_only).record());
     e.play();
     let mut random = Random::default();
     for _ in 0..3 {
@@ -196,7 +196,7 @@ fn the_time_limit_stops_in_its_step_and_replays_with_the_full_limit() {
 
 #[test]
 fn an_immediate_stop_drops_every_particle() {
-    let mut e = EffectInstance::new(0, &muhi());
+    let mut e = EffectInstance::new(0, muhi().record());
     let mut random = Random::default();
     e.play();
     e.update(99, &mut random);
@@ -211,7 +211,7 @@ fn an_immediate_stop_drops_every_particle() {
 
 #[test]
 fn a_deferred_stop_lets_particles_live_on_without_births() {
-    let mut e = EffectInstance::new(0, &muhi());
+    let mut e = EffectInstance::new(0, muhi().record());
     let mut random = Random::default();
     e.play();
     e.update(99, &mut random);

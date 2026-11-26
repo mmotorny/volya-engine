@@ -41,7 +41,7 @@ impl Instance {
         if let Some(i) = library.effect(name) {
             Ok(Instance::Effect(EffectInstance::new(
                 i,
-                &library.effects[i],
+                library.effect_at(i),
             )))
         } else if let Some(g) = library.group(name) {
             Ok(Instance::Group(
@@ -128,22 +128,23 @@ pub fn particle_capacity(library: &Library, name: &str) -> Option<usize> {
     let max = |n: &str| {
         library
             .effect(n)
-            .map_or(0, |i| library.effects[i].max_particles as usize)
+            .map_or(0, |i| library.effect_at(i).max_particles as usize)
     };
     if let Some(i) = library.effect(name) {
-        return Some(library.effects[i].max_particles as usize);
+        return Some(library.effect_at(i).max_particles as usize);
     }
     let g = library.group(name)?;
     Some(
-        library.groups[g]
+        library
+            .group_at(g)
             .members
             .iter()
             .map(|member| {
-                let mut n = max(&member.effect);
+                let mut n = max(member.effect);
                 for (bit, child) in [
-                    (m::PER_PARTICLE_CHILD, &member.per_particle_child),
-                    (m::BIRTH_CHILD, &member.birth_child),
-                    (m::DEATH_CHILD, &member.death_child),
+                    (m::PER_PARTICLE_CHILD, member.per_particle_child),
+                    (m::BIRTH_CHILD, member.birth_child),
+                    (m::DEATH_CHILD, member.death_child),
                 ] {
                     if member.flags & bit != 0 {
                         n += max(child);

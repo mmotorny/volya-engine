@@ -41,7 +41,7 @@ pub fn load_string_table(
     aliases: &PathAliases,
     localization: &Localization,
 ) -> io::Result<StringTable> {
-    let mut table = StringTable::default();
+    let mut entries = Vec::new();
     for name in &localization.files {
         let path = aliases.path(GAME_CONFIG, &localization.table_path(name))?;
         let text = vfs::read(vfs, &path).map_err(|e| {
@@ -57,9 +57,9 @@ pub fn load_string_table(
         })
         .map_err(|e| context(&path, e))?;
         let doc = xml::parse(&text).map_err(|e| context(&path, e))?;
-        table.extend(string_table::entries(&doc).map_err(|e| context(&path, e))?);
+        entries.extend(string_table::entries(&doc).map_err(|e| context(&path, e))?);
     }
-    Ok(table)
+    Ok(StringTable::new(entries))
 }
 
 /// The UI fonts created for one output height.

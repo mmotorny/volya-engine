@@ -115,17 +115,17 @@ fn the_library_is_p1s() {
     let lib = &d.library;
     assert!(lib.log.is_empty());
     assert_eq!(d.file.len(), 1_394_071);
-    assert_eq!(lib.effects.len(), 1075);
-    assert_eq!(lib.groups.len(), 252);
-    let actions: usize = lib.effects.iter().map(|e| e.actions.len()).sum();
+    assert_eq!(lib.effect_count(), 1075);
+    assert_eq!(lib.group_count(), 252);
+    let actions: usize = lib.effects().map(|e| e.actions.len()).sum();
     assert_eq!(actions, 6921);
-    let members: usize = lib.groups.iter().map(|g| g.members.len()).sum();
+    let members: usize = lib.groups().map(|g| g.members.len()).sum();
     assert_eq!(members, 1047);
 
     let mut per_type: BTreeMap<&str, usize> = BTreeMap::new();
     let mut per_kind = [0usize; 11];
-    for e in &lib.effects {
-        for a in &e.actions {
+    for e in lib.effects() {
+        for a in e.actions {
             *per_type.entry(type_name(&a.kind)).or_default() += 1;
             for r in regions(&a.kind) {
                 per_kind[r.kind as usize] += 1;
@@ -162,7 +162,7 @@ fn the_library_is_p1s() {
     assert_eq!(per_kind, [2608, 1722, 13, 67, 75, 489, 48, 349, 21, 217, 1]);
 
     // Flag bits (P1 3) and the chunks they gate (P1 2).
-    let bit = |b: u32| lib.effects.iter().filter(|e| e.flags & b != 0).count();
+    let bit = |b: u32| lib.effects().filter(|e| e.flags & b != 0).count();
     let bits = [
         (0x1, 1070),
         (0x400, 423),
@@ -183,26 +183,23 @@ fn the_library_is_p1s() {
     for (b, n) in bits {
         assert_eq!(bit(b), n, "{b:#x}");
     }
-    let union = lib.effects.iter().fold(0, |u, e| u | e.flags);
+    let union = lib.effects().fold(0, |u, e| u | e.flags);
     assert_eq!(union, 0xFFFC01);
-    assert_eq!(
-        lib.effects.iter().filter(|e| e.sprite.is_some()).count(),
-        1070
-    );
+    assert_eq!(lib.effects().filter(|e| e.sprite.is_some()).count(), 1070);
 
     // Sums (P1 8).
-    let max: u64 = lib.effects.iter().map(|e| u64::from(e.max_particles)).sum();
+    let max: u64 = lib.effects().map(|e| u64::from(e.max_particles)).sum();
     assert_eq!(max, 57_143);
-    let limits: f64 = lib.effects.iter().map(|e| f64::from(e.time_limit)).sum();
+    let limits: f64 = lib.effects().map(|e| f64::from(e.time_limit)).sum();
     assert!((limits - 10_366.5).abs() < 0.01, "{limits}");
-    let ages: f64 = (lib.effects.iter().flat_map(|e| &e.actions))
+    let ages: f64 = (lib.effects().flat_map(|e| e.actions))
         .filter_map(|a| match a.kind {
             ActionKind::KillOld { age_limit, .. } => Some(f64::from(age_limit)),
             _ => None,
         })
         .sum();
     assert!((ages - 115_395.31).abs() < 0.01, "{ages}");
-    let group_limits: f64 = lib.groups.iter().map(|g| f64::from(g.time_limit)).sum();
+    let group_limits: f64 = lib.groups().map(|g| f64::from(g.time_limit)).sum();
     assert!((group_limits - 5_088.15).abs() < 0.01, "{group_limits}");
 
     // The chunk-4 payloads in stored order (P1 8).
@@ -221,7 +218,7 @@ fn the_library_is_p1s() {
 
     // Member flag values (P1 6.2).
     let mut values: BTreeMap<u32, usize> = BTreeMap::new();
-    for m in lib.groups.iter().flat_map(|g| &g.members) {
+    for m in lib.groups().flat_map(|g| g.members.iter()) {
         *values.entry(m.flags).or_default() += 1;
     }
     let want: BTreeMap<u32, usize> = [
@@ -248,13 +245,13 @@ fn the_library_is_p1s() {
     assert_eq!(values, want);
 
     // The test vectors of P1 8.
-    let muhi = &lib.effects[lib.effect("tests\\muhi").unwrap()];
+    let muhi = lib.effect_at(lib.effect("tests\\muhi").unwrap());
     assert_eq!(muhi.id, 934);
     assert_eq!(muhi.max_particles, 7);
     assert_eq!(muhi.flags, 0x1401);
-    let sprite = muhi.sprite.as_ref().unwrap();
+    let sprite = muhi.sprite.unwrap();
     assert_eq!(
-        (sprite.shader.as_str(), sprite.texture.as_str()),
+        (sprite.shader, sprite.texture),
         ("particles\\blend", "pfx\\pfx_leaves_01.tga")
     );
     assert_eq!(
@@ -281,11 +278,11 @@ fn the_library_is_p1s() {
     assert_eq!(muhi.actions[0].flags, 0x8000_0002);
     assert_eq!((s.rate, s.alpha), (17.0, 1.0));
     assert_eq!(s.velocity.r[3], 99.999_99);
-    let campfire = &lib.groups[lib.group("explosions\\campfire_05").unwrap()];
+    let campfire = lib.group_at(lib.group("explosions\\campfire_05").unwrap());
     assert_eq!(campfire.id, 92);
     assert_eq!(campfire.members.len(), 7);
-    assert_eq!(campfire.members[2].start_time, 0.5);
-    assert_eq!(campfire.members[1].flags, 0);
+    assert_eq!(campfire.members.get(2).start_time, 0.5);
+    assert_eq!(campfire.members.get(1).flags, 0);
 }
 
 #[test]
@@ -293,7 +290,7 @@ fn effect_facts_are_p2s_p3s_and_p4s() {
     let Some(d) = data() else { return };
     let lib = &d.library;
     // P2 9.1: the time-limited effects' stop steps.
-    let steps: Vec<u64> = (lib.effects.iter())
+    let steps: Vec<u64> = (lib.effects())
         .filter(|e| e.flags & 0x4000 != 0)
         .map(|e| time_limit_step(e.time_limit))
         .collect();
@@ -304,8 +301,8 @@ fn effect_facts_are_p2s_p3s_and_p4s() {
     let mut one_birth = 0;
     let mut fill = 0;
     let mut aged = 0;
-    for e in &lib.effects {
-        for a in &e.actions {
+    for e in lib.effects() {
+        for a in e.actions {
             if let ActionKind::Source(s) = &a.kind {
                 let z = s.rate * 0.033;
                 one_birth += usize::from(z < 1.0);
@@ -332,7 +329,7 @@ fn effect_facts_are_p2s_p3s_and_p4s() {
         ]
     };
     let mut sums: HashMap<&str, (usize, [f64; 6])> = HashMap::new();
-    for a in lib.effects.iter().flat_map(|e| &e.actions) {
+    for a in lib.effects().flat_map(|e| e.actions) {
         let name = type_name(&a.kind);
         if matches!(
             name,
@@ -436,7 +433,7 @@ fn effect_facts_are_p2s_p3s_and_p4s() {
     }
 
     // P4 9.
-    let killers: Vec<_> = (lib.effects.iter())
+    let killers: Vec<_> = (lib.effects())
         .filter(|e| {
             e.actions.iter().any(|a| {
                 matches!(
@@ -448,11 +445,11 @@ fn effect_facts_are_p2s_p3s_and_p4s() {
                 )
             })
         })
-        .map(|e| e.name.as_str())
+        .map(|e| e.name)
         .collect();
     assert_eq!(killers, ["ghoul\\fx-11-anomaly_wild-red-lights"]);
     let mut sinks: BTreeMap<(u32, u32), usize> = BTreeMap::new();
-    for a in lib.effects.iter().flat_map(|e| &e.actions) {
+    for a in lib.effects().flat_map(|e| e.actions) {
         if let ActionKind::Sink {
             kill_inside,
             region,
@@ -562,8 +559,8 @@ fn group_timelines_are_p6s() {
     // Every group that can be made (P6 9.1), on its timeline: those two
     // without the slots that end the game (their bits cleared; the members'
     // starts and the groups' stops do not depend on children).
-    let mut patched = lib.clone();
-    for g in &mut patched.groups {
+    let mut groups: Vec<_> = lib.groups().map(|g| g.to_group()).collect();
+    for g in &mut groups {
         for m in &mut g.members {
             if m.flags & member_flags::PER_PARTICLE_CHILD != 0 && m.per_particle_child.is_empty() {
                 m.flags &= !member_flags::PER_PARTICLE_CHILD;
@@ -573,13 +570,14 @@ fn group_timelines_are_p6s() {
             }
         }
     }
+    let patched = Library::new(lib.effects().map(|e| e.to_effect()).collect(), groups);
     let lib = &patched;
     let mut made = 0;
     let mut used = 0;
     let mut start_sum = 0;
     let mut timed = 0;
     let mut stop_sum = 0;
-    for (i, group) in lib.groups.iter().enumerate() {
+    for (i, group) in lib.groups().enumerate() {
         let Ok(mut g) = GroupInstance::new(lib, i) else {
             continue;
         };
@@ -666,7 +664,7 @@ fn placed_effects_are_p8s() {
     assert_eq!((effects, groups), (6, 16));
     let members: Vec<_> = (per_name.keys())
         .filter_map(|n| lib.group(n))
-        .flat_map(|g| &lib.groups[g].members)
+        .flat_map(|g| lib.group_at(g).members.iter())
         .collect();
     assert_eq!(members.len(), 63);
     assert_eq!(members.iter().filter(|m| m.flags & 4 != 0).count(), 56);

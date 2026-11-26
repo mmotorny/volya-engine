@@ -5,7 +5,9 @@
 //! action list, its live particles, placement (section 5), play and stop
 //! (section 7) and the update in 33 ms steps (section 8).
 
-use volya_engine_formats::particles::{ActionKind, Collision, Effect, action_flags, effect_flags};
+use volya_engine_formats::particles::{
+    ActionKind, Collision, EffectRecord, action_flags, effect_flags,
+};
 
 use super::actions::{Step, run};
 use super::region::place;
@@ -79,7 +81,7 @@ impl EffectInstance {
     /// (P2 8.1): not playing, remaining time *T* when time-limited,
     /// accumulator 0, at (0, 0, 0) with the identity kept and the list as
     /// stored.
-    pub fn new(record: usize, effect: &Effect) -> Self {
+    pub fn new(record: usize, effect: EffectRecord<'_>) -> Self {
         let actions = effect
             .actions
             .iter()

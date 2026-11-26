@@ -81,7 +81,7 @@ fn mb(bytes: usize) -> f64 {
 /// Each stage's peak above its start, MB: the measured peak (native,
 /// `l01_escape`, #79) with a margin, so a regression is noted. Stages not
 /// listed allocate next to nothing.
-const STAGE_BUDGETS: [(Stage, f64); 10] = [
+const STAGE_BUDGETS: [(Stage, f64); 9] = [
     (Stage::CreatingNewGame, 1.5), // 0.7: both files streamed (12.8 before, #403)
     (Stage::ServerConnecting, 19.0), // 17.2: the offline simulation (#370, #403)
     (Stage::OpeningStream, 14.0),  // 12.6: the `level` file and its parse
@@ -90,8 +90,6 @@ const STAGE_BUDGETS: [(Stage, f64); 10] = [
     (Stage::LoadingSpatialDb, 7.0), // 5.4: index pieces and the draw list
     // 9.5: `level.details`' slot grid (8.4) and the cache (#411).
     (Stage::LoadingDetails, 10.5),
-    // 3.3: `particles.xr` and the effect library it keeps (1.9).
-    (Stage::LoadingAiObjects, 4.0),
     // 11.0: the objects' models (9.4) and the zones' effect objects.
     (Stage::ClientSpawning, 12.5),
     (Stage::LoadingTextures, 4.5), // 3.2
@@ -102,6 +100,13 @@ const INDEX_BUDGET: f64 = 2.0;
 /// What the configuration keeps, MB: 1.2 measured (5.6 in about 100,000
 /// blocks before #299).
 const CONFIG_BUDGET: f64 = 1.5;
+/// What the string tables keep, MB: 1.2 measured, in 2 blocks (1.8 in
+/// 15,344 before #484).
+const STRINGS_BUDGET: f64 = 1.5;
+/// What the effect library keeps, MB: 1.4 measured, in 1,095 blocks (1.9
+/// in 8,411 before #484), read at launch (with each level's
+/// `st_loading_ai_objects` before, peaking 3.3).
+const EFFECTS_BUDGET: f64 = 1.8;
 /// Any other stage's peak, MB.
 const OTHER_BUDGET: f64 = 0.5;
 /// The whole load's peak above its start, MB (72.8 measured with the
@@ -214,7 +219,8 @@ fn loading_stage_memory() {
         mb(CURRENT.load(Ordering::Relaxed).saturating_sub(base)),
         BLOCKS.load(Ordering::Relaxed) as isize - game_blocks.1 as isize
     );
-    let (mut system, mut strings) = (Some(data.system), Some(data.strings));
+    let (mut system, mut strings, mut effects) =
+        (Some(data.system), Some(data.strings), Some(data.effects));
     let configuration = freed(
         "the configuration (system.ltx and its includes)",
         &mut || {
@@ -224,7 +230,12 @@ fn loading_stage_memory() {
     if configuration > CONFIG_BUDGET {
         eprintln!("  OVER BUDGET: the configuration keeps over {CONFIG_BUDGET} MB");
     }
-    freed("the string tables", &mut || drop(strings.take()));
+    if freed("the string tables", &mut || drop(strings.take())) > STRINGS_BUDGET {
+        eprintln!("  OVER BUDGET: the string tables keep over {STRINGS_BUDGET} MB");
+    }
+    if freed("the effect library", &mut || drop(effects.take())) > EFFECTS_BUDGET {
+        eprintln!("  OVER BUDGET: the effect library keeps over {EFFECTS_BUDGET} MB");
+    }
     if mb(highest) > LOADING_BUDGET {
         eprintln!(
             "OVER BUDGET: the load peaks at +{:.1} MB, over its {LOADING_BUDGET} MB budget",

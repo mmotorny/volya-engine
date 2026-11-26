@@ -262,7 +262,7 @@ fn every_material_is_hit() {
 #[test]
 fn removals_count_in_the_box_and_a_stop_ends_a_step_later() {
     let world = triangle_world();
-    let mut e = EffectInstance::new(0, &effect("collide", 4, 0x30000, 0.0, Vec::new()));
+    let mut e = EffectInstance::new(0, effect("collide", 4, 0x30000, 0.0, Vec::new()).record());
     e.play();
     let mut p = particle([0.0, 0.5, 0.0], [0.0, -30.0, 0.0]);
     p.size = [0.0; 3];
@@ -281,7 +281,7 @@ fn removals_count_in_the_box_and_a_stop_ends_a_step_later() {
 #[test]
 fn without_bit_0x10000_nothing_collides() {
     let world = triangle_world();
-    let mut e = EffectInstance::new(0, &effect("plain", 4, 0xA0000, 0.0, Vec::new()));
+    let mut e = EffectInstance::new(0, effect("plain", 4, 0xA0000, 0.0, Vec::new()).record());
     e.play();
     let p = particle([0.0, 0.5, 0.0], [0.0, -30.0, 0.0]);
     e.particles_mut().push(p);

@@ -5,7 +5,6 @@
 //! (docs/formats/text-and-fonts.md, section 1).
 
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::io;
 
 use crate::ltx::Config;
@@ -107,26 +106,83 @@ pub type Bindings = dyn Fn(&str) -> Option<(String, Option<String>)>;
 /// The marker of a key-binding substitution (section 1.6).
 const ACTION: &str = "$$ACTION_";
 
-/// The loaded string table.
+/// A key's or a text's bytes in one of [`StringTable`]'s buffers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Span {
+    start: u32,
+    len: u32,
+}
+
+impl Span {
+    fn of(buffer: &mut String, s: &str) -> Self {
+        let start = buffer.len() as u32;
+        buffer.push_str(s);
+        Self {
+            start,
+            len: s.len() as u32,
+        }
+    }
+
+    fn get(self, buffer: &str) -> &str {
+        &buffer[self.start as usize..(self.start + self.len) as usize]
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Entry {
+    key: Span,
+    text: Span,
+    /// The substituted text in `bound`, for an entry containing
+    /// `$$ACTION_…$$` once bindings are applied.
+    bound: Option<Span>,
+}
+
+/// The loaded string table, a region (docs/architecture/memory.md): every
+/// key and text once in one buffer, the entries sorted by key.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StringTable {
-    texts: HashMap<String, String>,
-    /// Unsubstituted texts of entries containing `$$ACTION_…$$`.
-    templates: HashMap<String, String>,
+    text: String,
+    entries: Vec<Entry>,
+    /// The texts of entries containing `$$ACTION_…$$` with their bindings
+    /// substituted, remade by [`Self::apply_bindings`].
+    bound: String,
 }
 
 impl StringTable {
-    /// Inserts entries in load order; a key seen again replaces the earlier
-    /// text (section 1.4).
-    pub fn extend(&mut self, entries: impl IntoIterator<Item = (String, String)>) {
-        for (key, text) in entries {
-            if text.contains(ACTION) {
-                self.templates.insert(key.clone(), text.clone());
-            } else {
-                self.templates.remove(&key);
+    /// The table of `entries` in load order; a key seen again replaces the
+    /// earlier text (section 1.4).
+    pub fn new(entries: impl IntoIterator<Item = (String, String)>) -> Self {
+        let mut entries: Vec<(String, String)> = entries.into_iter().collect();
+        // Stable: of equal keys the last loaded is kept.
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut kept: Vec<&(String, String)> = Vec::with_capacity(entries.len());
+        for e in &entries {
+            match kept.last_mut() {
+                Some(last) if last.0 == e.0 => *last = e,
+                _ => kept.push(e),
             }
-            self.texts.insert(key, text);
         }
+        let size = kept.iter().map(|(k, t)| k.len() + t.len()).sum();
+        let mut text = String::with_capacity(size);
+        let entries = (kept.iter())
+            .map(|(key, t)| Entry {
+                key: Span::of(&mut text, key),
+                text: Span::of(&mut text, t),
+                bound: None,
+            })
+            .collect();
+        Self {
+            text,
+            entries,
+            bound: String::new(),
+        }
+    }
+
+    fn find(&self, key: &str) -> Option<&Entry> {
+        let i = (self.entries)
+            .binary_search_by(|e| e.key.get(&self.text).cmp(key))
+            .ok()?;
+        Some(&self.entries[i])
     }
 
     /// The text of `key` (section 1.4): exact match; a missing key returns
@@ -135,25 +191,30 @@ impl StringTable {
         if key.is_empty() {
             return "";
         }
-        self.texts.get(key).map_or(key, String::as_str)
+        self.find(key).map_or(key, |e| match e.bound {
+            Some(b) => b.get(&self.bound),
+            None => e.text.get(&self.text),
+        })
     }
 
     /// Whether `key` is in the table.
     pub fn contains(&self, key: &str) -> bool {
-        self.texts.contains_key(key)
+        self.find(key).is_some()
     }
 
     pub fn len(&self) -> usize {
-        self.texts.len()
+        self.entries.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.texts.is_empty()
+        self.entries.is_empty()
     }
 
     /// The keys of entries using `$$ACTION_<name>$$`.
     pub fn templated_keys(&self) -> impl Iterator<Item = &str> {
-        self.templates.keys().map(String::as_str)
+        (self.entries.iter())
+            .filter(|e| e.text.get(&self.text).contains(ACTION))
+            .map(|e| e.key.get(&self.text))
     }
 
     /// Redoes the `$$ACTION_<name>$$` substitutions from the unsubstituted
@@ -163,9 +224,13 @@ impl StringTable {
     /// key-binding specification; the spec does not say what an unbound
     /// action shows, so `None` leaves the sequence unsubstituted.
     pub fn apply_bindings(&mut self, bound: &Bindings) {
-        for (key, template) in &self.templates {
-            let text = substitute(template, bound);
-            self.texts.insert(key.clone(), text.into_owned());
+        self.bound.clear();
+        for entry in &mut self.entries {
+            let template = entry.text.get(&self.text);
+            if template.contains(ACTION) {
+                let text = substitute(template, bound);
+                entry.bound = Some(Span::of(&mut self.bound, &text));
+            }
         }
     }
 }
@@ -257,9 +322,11 @@ mod tests {
 
     #[test]
     fn resolves_keys() {
-        let mut t = StringTable::default();
-        t.extend([("a".into(), "1".into()), ("b".into(), "2".into())]);
-        t.extend([("a".into(), "3".into())]);
+        let t = StringTable::new([
+            ("a".into(), "1".into()),
+            ("b".into(), "2".into()),
+            ("a".into(), "3".into()),
+        ]);
         assert_eq!(t.get("a"), "3");
         assert_eq!(t.get("b"), "2");
         assert_eq!(t.get("B"), "B");
@@ -270,8 +337,7 @@ mod tests {
 
     #[test]
     fn substitutes_bindings() {
-        let mut t = StringTable::default();
-        t.extend([
+        let mut t = StringTable::new([
             (
                 "crouch".into(),
                 "Press $$ACTION_Crouch$$ or $$ACTION_jump$$.".into(),

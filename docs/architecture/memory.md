@@ -33,18 +33,18 @@ Where the engine's memory goes, by lifetime and owner; the design it follows (on
 |---|---|---|---|
 | The archive tree (`DbVfs`: a region of every name once and a node table, each directory's children a sorted run) | 1.3 MB | 18 | 7.7 MB in 87,312 blocks as maps of paths before #300; building it peaks 7.0 MB above its start, one archive's table at a time. |
 | The system configuration (`Config`: one text buffer of every name, key and value; tables of sections, entries and each section's run of entry indices) | 1.2 MB | 4 | 5.6 MB in about 100,000 blocks, a heap string per key and value, before #299. |
-| The string tables | 1.8 MB | | |
+| The string tables (`StringTable`: one buffer of every key and text, the entries sorted by key) | 1.2 MB | 2 | 1.8 MB in 15,344 blocks, a map of heap strings, before #484. |
 | The UI's data | 0.2 MB | | |
-| The particles' effect library (`particles.xr`) | 1.9 MB | 8,417 | Read with each level (`st_loading_ai_objects`), the same for every level. |
+| The particles' effect library (`particles.xr`, `Library`: one buffer of every name, a table of every effect's actions and one of every group's members) | 1.4 MB | 1,095 | Read once at launch (`GameData`); with each level under `st_loading_ai_objects` before #484, 1.9 MB in 8,411 blocks. Its blocks are the boxed `source` actions. |
 | The renderer, its pipelines, wgpu-core's and naga's state; the menus' textures and video frames | about 7 MiB | | The title menu's heap is 25 MiB with 16–18 live against 11 after the launch (measured, `heap_map`, two runs); its largest blocks 0.3–1.4 MiB. |
 | The audio worker's wasm instance | 2–4 MiB | | Its own heap (`level_stats`). |
 | JavaScript: the audio worker 3.1, the engine worker 2.0, the page 1.1–1.6, shared 0.9 MiB | 8 MiB | | Measured in headless Chrome after the New Game (two runs). The audio worker keeps the compressed sound files there (`JsFile`), not in a wasm heap. |
 
-The program's data holds about 18,000 of the heap's blocks before a game, 15,344 of them the string tables' (measured: 453 with the archive tree, 18,335 with the game's data).
+The program's data holds about 4,100 of the heap's blocks before a game, 1,095 of them the effect library's (measured: 453 with the archive tree, 4,088 with the game's data).
 
 ### Session: a game, from its New Game to its end
 
-The offline simulation's registry (7.9 MB), the game graph and paths (1.8 MB) and the player character, made under `st_server_connecting`: 17.2 MB with the current level's navigation (below), 109,329 blocks, from 612,581 allocations (measured, native). The script runtime's state joins this lifetime when the game's scripts run (`lua_alloc` is Rust's allocator, docs/architecture/scripts.md).
+The offline simulation's registry (7.9 MB), the game graph and paths (1.8 MB) and the player character, made under `st_server_connecting`: 17.2 MB with the current level's navigation (below), 109,329 blocks, from 562,608 allocations (measured, native). The script runtime's state joins this lifetime when the game's scripts run (`lua_alloc` is Rust's allocator, docs/architecture/scripts.md).
 
 ### Level: from its loading to leaving it
 
@@ -54,15 +54,15 @@ The offline simulation's registry (7.9 MB), the game graph and paths (1.8 MB) an
 | The navigation positions (6 of each vertex's 21 bytes) | 7.1 MB, one block (`level.ai` 12.5 MB) | `l01_escape`'s `level.ai` is the largest |
 | What the `level` file keeps after `st_loading_spatial_db` (the shader table; the static draw list and spheres) | 1.8 MB | |
 | The detail objects (slot grid, compact, and cache) | 5.5 MB | 11.9 MB, `l12_stancia` and `l12_stancia_2` |
-| The objects' models, weather, the level's sounds | 6.4 MB, 7,197 blocks | |
+| The objects' models, weather, the level's sounds | 6.3 MB, 6,800 blocks | |
 | The objects' CPU geometry until uploaded | 4.9 MB | |
-| The level in all at the end of loading | 62.7 MB, 136,976 blocks above the program's data | `l11_pripyat` about 72 MB (believed: `l01_escape`'s with its own collision, details and navigation file) |
+| The level in all at the end of loading | 63.5 MB, 128,169 blocks above the program's data | `l11_pripyat` about 72 MB (believed: `l01_escape`'s with its own collision, details and navigation file) |
 
 Measured natively (`loading_memory.rs`, `level_memory.rs`; requested bytes, the allocator's overhead not in them). After the level is dropped, 28.1 MB and 5 blocks outlive it: the collision world's arrays, kept as spares for the next world (#357).
 
 ### Loading transients
 
-Each stage's peak above what it keeps, measured natively: `st_opening_stream` 4.8 MB (the `level` file read whole, 12.6 MB peak; 12.9 for `l11_pripyat`), `st_loading_spatial_db` 5.4, `st_client_spawning` 4.7, `st_loading_textures` 2.8, `st_loading_cform` 0.2, `st_server_connecting` 0.0 (the spawn file and the graph streamed, #403). The load peaks 66.8 MB above its start against 62.5 kept. By count the transients are the many: `st_client_spawning` makes 2.52 million allocations to keep 7,197 blocks, `st_server_connecting` 612,581 to keep 109,329.
+Each stage's peak above what it keeps, measured natively: `st_opening_stream` 4.8 MB (the `level` file read whole, 12.6 MB peak; 12.9 for `l11_pripyat`), `st_loading_spatial_db` 5.4, `st_client_spawning` 4.7, `st_loading_textures` 2.8, `st_loading_cform` 0.2, `st_server_connecting` 0.0 (the spawn file and the graph streamed, #403). The load peaks 67.6 MB above its start against 63.5 kept. By count the transients are the many: `st_client_spawning` makes 2.52 million allocations to keep 6,800 blocks, `st_server_connecting` 562,608 to keep 109,329.
 
 In the browser the level's preparation adds the texture read buffer (one file, up to 4.5 MB), the band being transcoded (without BC), and wgpu-core's copy of every byte written, kept in the heap until WebGL reports the submission done (read in wgpu-hal's source, docs/architecture/rendering.md): three 2 MiB blocks among the largest at the load's most live (measured, `heap_record`).
 
@@ -94,7 +94,7 @@ The 10 MiB between the title menu and the New Game is the suite's own capture of
 Where the gap comes from:
 
 - **Large blocks meeting split free space.** The heap grows by 26 MiB under the collision stage for 23 MiB more live: its arrays (up to 10.5 MiB each) find no hole that size in the free space the earlier stages left (measured, `heap_log`; #373). It is the only stage that grows the heap by more than it keeps.
-- **Loading transients among long-lived blocks.** `st_client_spawning` (2.52 million allocations, 7,197 kept) and `st_server_connecting` (612,581, 109,329 kept) leave their kept blocks scattered through the space their temporaries used, so the next large block needs new memory above them. At the load's most live, blocks under 64 KiB hold about 14 MiB, blocks of 1 MiB or more 58 MiB (measured, `heap_record`).
+- **Loading transients among long-lived blocks.** `st_client_spawning` (2.52 million allocations, 6,800 kept) and `st_server_connecting` (562,608, 109,329 kept) leave their kept blocks scattered through the space their temporaries used, so the next large block needs new memory above them. At the load's most live, blocks under 64 KiB hold about 14 MiB, blocks of 1 MiB or more 58 MiB (measured, `heap_record`).
 - **The preparation's staging.** wgpu-core's copies of the written textures and geometry (2 MiB pieces), the texture read buffer and the band buffer arrive last, above the level's data: the heap grows from 74 to 87 MiB under `st_loading_textures` and the last caption for 16 MiB more live.
 - **A third New Game grows the heap by 4 MiB more** than the second (both runs): a block the first game's layout doesn't fit (believed; which is unknown).
 
@@ -117,7 +117,7 @@ Nesting: the program holds sessions; a session holds levels; a level holds its l
 
 | Lifetime | Home | Size, `l01_escape` (largest level) |
 |---|---|---|
-| Program | Regions made at launch, before anything else: the archive index (one sorted path buffer with child ranges, #300), the configuration (one text buffer per file, sections, keys and values as ranges, #299), the string tables (one buffer and an index), the effect library (read once at launch rather than with each level: our choice, as `gamemtl.xr` is read with the level). The persistent scratch (below). | about 9 MB (17.2 measured) in a few hundred blocks |
+| Program | Regions made at launch, before anything else: the archive index (one sorted path buffer with child ranges, #300), the configuration (one text buffer per file, sections, keys and values as ranges, #299), the string tables (one buffer and a sorted index, #484), the effect library (one name buffer, tables of actions and members; read once at launch rather than with each level: our choice, as `gamemtl.xr` is read with the level, #484). The persistent scratch (below). | about 9 MB (17.2 measured) in a few hundred blocks |
 | Program, scratch | Kept buffers, made once at launch: the stream buffer (64 KiB), the texture file buffer and the band buffer (sized to the largest texture file and band, 4.5 and 2 MiB), the upload staging of our GL layer if it needs one (2 MiB). | about 9 MiB |
 | Session | The offline simulation's registry with its names and sections as indices into the configuration's region and one string region of its own; the game graph; the character; the script runtime's state. | about 7 MB (10.1 measured: 17.2 with the navigation) |
 | Level | Its owners' large blocks, each kept as a spare after the level (rule 4): the collision world's arrays (#357), the navigation positions, the detail grid and cache. The level's small data (the objects' models, sounds, effects) as regions of the level's owners. | 62.7 MB (about 72, `l11_pripyat`) |
@@ -195,7 +195,7 @@ Ordered; each step is its own issue, measured before and after with the tools ab
 6. **The configuration as one region per file** (#299). Expected: 5.6 → about 2 MB, ~100,000 → a few hundred blocks.
 7. **The string tables and the effect library as program regions**, the library read once at launch instead of with each level. Expected: about 1 MB and 8,000 blocks less, the effect library's 3.3 MB peak out of every level's load.
 8. **The registry's names and sections as indices** into regions (the session's string region, the configuration's sections). Expected: 109,329 blocks to a few thousand; 7.9 MB by an estimated 2–3 MB (believed).
-9. **The objects' models, sounds and effects as regions of their owners** (`st_client_spawning`: 2.52 million allocations, 7,197 kept). Expected: the blocks kept to hundreds; its 4.7 MB transient peak lower; with steps 5–8, heap minus live after the first New Game under 4 MiB.
+9. **The objects' models, sounds and effects as regions of their owners** (`st_client_spawning`: 2.52 million allocations, 6,800 kept). Expected: the blocks kept to hundreds; its 4.7 MB transient peak lower; with steps 5–8, heap minus live after the first New Game under 4 MiB.
 10. **Spares for the level's other large blocks** (the navigation positions, the detail grid and cache), as the collision world's are. Expected: the third New Game no larger than the second (93 against 89 MiB, measured above), a larger level growing the heap once.
 11. **No allocation in a running frame**: the scene's and the draw list's buffers kept and cleared. Expected: 324 allocations and 452 KB a frame to 0; the 0.81 MB growth over 600 frames located and gone. Also CPU time (believed small).
 12. **Sorted `Vec`s for the `BTreeMap`/`BTreeSet`s of `String`s the program or the level holds** (#405), where a step above did not already replace them. Expected: their blocks; measured per container.

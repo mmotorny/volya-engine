@@ -4,7 +4,7 @@
 //! A group instance (particle-groups.md): one member effect per member,
 //! their per-particle and free children, the group time and its limit.
 
-use volya_engine_formats::particles::{Library, Member, member_flags as flags};
+use volya_engine_formats::particles::{Library, member_flags as flags};
 
 use super::effect::Notice;
 use super::{Bounds, EffectInstance, IDENTITY, Matrix, Mode, Random, Sphere, Vec3};
@@ -21,7 +21,8 @@ const PER_STEP: f32 = 1.0 / 0.033;
 /// A member with its effect and children.
 #[derive(Clone, Debug)]
 struct MemberInstance {
-    member: Member,
+    /// The member's index in the library ([`Library::member`]).
+    member: usize,
     effect: EffectInstance,
     per_particle: Vec<EffectInstance>,
     free: Vec<EffectInstance>,
@@ -50,15 +51,13 @@ impl GroupInstance {
     /// for every member, whatever its flags. A member naming no effect of
     /// the library is the game's assertion failure: an error here.
     pub fn new(library: &Library, record: usize) -> Result<Self, String> {
-        let group = &library.groups[record];
-        let members = group
-            .members
-            .iter()
-            .map(|m| {
-                let mut effect = make(library, &m.effect)?;
+        let group = library.group_at(record);
+        let members = (0..group.members.len())
+            .map(|i| {
+                let mut effect = make(library, group.members.get(i).effect)?;
                 effect.notices = Some(Vec::new());
                 Ok(MemberInstance {
-                    member: m.clone(),
+                    member: group.members.index(i),
                     effect,
                     per_particle: Vec::new(),
                     free: Vec::new(),
@@ -183,14 +182,15 @@ impl GroupInstance {
         let dt = (f64::from(e) * f64::from(0.001f32)) as f32;
         let (t, end) = (self.time, self.time + dt);
         for m in &mut self.members {
-            if m.member.flags & flags::USED == 0 {
+            let member = library.member(m.member);
+            if member.flags & flags::USED == 0 {
                 continue;
             }
             if m.effect.is_playing() {
-                if t <= m.member.stop_time && m.member.stop_time <= end {
-                    m.stop(m.member.flags & flags::DEFERRED_STOP == 0);
+                if t <= member.stop_time && member.stop_time <= end {
+                    m.stop(member.flags & flags::DEFERRED_STOP == 0);
                 }
-            } else if !self.stopping && t <= m.member.start_time && m.member.start_time <= end {
+            } else if !self.stopping && t <= member.start_time && member.start_time <= end {
                 m.effect.play();
             }
         }
@@ -227,7 +227,7 @@ impl GroupInstance {
 /// A new effect instance of the effect named `name` (P6 2.1, 6.3).
 fn make(library: &Library, name: &str) -> Result<EffectInstance, String> {
     let i = library.effect(name).ok_or_else(|| NO_EFFECT.to_owned())?;
-    Ok(EffectInstance::new(i, &library.effects[i]))
+    Ok(EffectInstance::new(i, library.effect_at(i)))
 }
 
 /// The placement of a child at a particle (P6 6.3): velocity and matrix.
@@ -294,18 +294,19 @@ impl MemberInstance {
         let Some(notices) = self.effect.notices.as_mut().map(std::mem::take) else {
             return Ok(());
         };
-        let f = self.member.flags;
+        let member = library.member(self.member);
+        let f = member.flags;
         for n in &notices {
             match *n {
                 Notice::Birth { position, .. } => {
                     if f & flags::BIRTH_CHILD != 0 {
-                        let name = self.member.birth_child.clone();
-                        let c = self.child(library, &name, position, position, true)?;
+                        let c =
+                            self.child(library, member.birth_child, position, position, true)?;
                         self.free.push(c);
                     }
                     if f & flags::PER_PARTICLE_CHILD != 0 {
-                        let name = self.member.per_particle_child.clone();
-                        let c = self.child(library, &name, position, position, false)?;
+                        let name = member.per_particle_child;
+                        let c = self.child(library, name, position, position, false)?;
                         self.per_particle.push(c);
                     }
                 }
@@ -320,8 +321,8 @@ impl MemberInstance {
                         self.free.push(c);
                     }
                     if f & flags::DEATH_CHILD != 0 {
-                        let name = self.member.death_child.clone();
-                        let c = self.child(library, &name, position, previous, true)?;
+                        let c =
+                            self.child(library, member.death_child, position, previous, true)?;
                         self.free.push(c);
                     }
                 }
@@ -350,8 +351,9 @@ impl MemberInstance {
         if self.effect.is_playing() {
             playing = true;
             collected.merge(&self.effect.bounds());
-            if self.member.flags & flags::PER_PARTICLE_CHILD != 0
-                && !self.member.per_particle_child.is_empty()
+            let member = library.member(self.member);
+            if member.flags & flags::PER_PARTICLE_CHILD != 0
+                && !member.per_particle_child.is_empty()
             {
                 for (c, p) in self.per_particle.iter_mut().zip(self.effect.particles()) {
                     let (m, v) = at_particle(p.position, p.previous, None);
@@ -364,7 +366,7 @@ impl MemberInstance {
             if c.is_playing() {
                 playing = true;
                 collected.merge(&c.bounds());
-            } else if self.member.flags & flags::REPLAY_CHILD != 0 {
+            } else if library.member(self.member).flags & flags::REPLAY_CHILD != 0 {
                 c.play();
             }
         }

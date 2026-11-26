@@ -137,7 +137,7 @@ fn first_level_zones_and_weather_effects_from_game_data() {
         .find(|p| p.name == "explosions\\campfire_05")
         .unwrap();
     for e in campfire.instance.effects() {
-        let sprite = &level.effects().unwrap().library().effects[e.record()];
+        let sprite = level.effects().unwrap().library().effect_at(e.record());
         if sprite.sprite.is_some() {
             assert!(
                 world.particle_shaders[e.record()].is_some(),

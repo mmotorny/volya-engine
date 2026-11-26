@@ -5,7 +5,7 @@
 //! and 4): one quad per live particle, in list order, built from the
 //! particles' current values and the camera.
 
-use volya_engine_formats::particles::{Effect, effect_flags as f};
+use volya_engine_formats::particles::{EffectRecord, effect_flags as f};
 
 use super::actions::FRAME_UNIT;
 use super::{
@@ -46,7 +46,7 @@ pub struct SpriteVertex {
 const AT_REST: f32 = 1.0e-7;
 
 /// The texture rectangle of a particle (P7 3.1): (*u*₀, *v*₀, *u*₁, *v*₁).
-pub fn frame_rect(effect: &Effect, frame: u16) -> [f32; 4] {
+pub fn frame_rect(effect: EffectRecord<'_>, frame: u16) -> [f32; 4] {
     if effect.flags & f::FRAMES == 0 {
         return [0.0, 0.0, 1.0, 1.0];
     }
@@ -98,7 +98,7 @@ fn unit(a: Vec3) -> Vec3 {
 /// The sprite's up **T** and right **S** (P7 4.3); `local` maps the
 /// fixed, axis and across cases' vectors.
 fn orientation(
-    effect: &Effect,
+    effect: EffectRecord<'_>,
     p: &Particle,
     speed: f32,
     (forward, up, right): (Vec3, Vec3, Vec3),
@@ -140,7 +140,7 @@ fn orientation(
 /// record `effect`) seen by `camera`, in list order (P7 4.4). An effect
 /// without a sprite draws nothing (section 2).
 pub fn quads(
-    effect: &Effect,
+    effect: EffectRecord<'_>,
     instance: &EffectInstance,
     camera: &Camera,
     out: &mut Vec<SpriteVertex>,
@@ -201,10 +201,10 @@ mod tests {
         let mut record = effect("e", 1, flags, 0.0, Vec::new());
         record.velocity_scale = velocity_scale;
         record.alignment = alignment;
-        let mut instance = EffectInstance::new(0, &record);
+        let mut instance = EffectInstance::new(0, record.record());
         instance.particles_mut().push(p);
         let mut out = Vec::new();
-        quads(&record, &instance, &CAMERA, &mut out);
+        quads(record.record(), &instance, &CAMERA, &mut out);
         out
     }
 
@@ -260,9 +260,9 @@ mod tests {
         // Vector 3: frame 765, 2 per row, 0.5 × 0.5.
         let mut record = muhi();
         record.flags = 0x401;
-        assert_eq!(frame_rect(&record, 765), [0.5, 0.5, 1.0, 1.0]);
+        assert_eq!(frame_rect(record.record(), 765), [0.5, 0.5, 1.0, 1.0]);
         record.flags = 0x1;
-        assert_eq!(frame_rect(&record, 765), [0.0, 0.0, 1.0, 1.0]);
+        assert_eq!(frame_rect(record.record(), 765), [0.0, 0.0, 1.0, 1.0]);
     }
 
     #[test]
@@ -290,7 +290,7 @@ mod tests {
         record.alignment = a;
         let p = particle([0.0; 3], [1.0; 3], 0.0, w);
         let speed = dot(w, w).sqrt();
-        orientation(&record, &p, speed, CAMERA.axes(), None)
+        orientation(record.record(), &p, speed, CAMERA.axes(), None)
     }
 
     #[test]
@@ -326,7 +326,7 @@ mod tests {
     #[test]
     fn local_mode_maps_positions_but_not_the_facing_axes() {
         let record = effect("e", 1, 0x1, 0.0, Vec::new());
-        let mut instance = EffectInstance::new(0, &record);
+        let mut instance = EffectInstance::new(0, record.record());
         let mut m = super::super::IDENTITY;
         m[3] = [5.0, 0.0, 0.0, 1.0];
         instance.place(&m, [0.0; 3], super::super::Mode::Local);
@@ -334,7 +334,7 @@ mod tests {
             .particles_mut()
             .push(particle([0.0, 0.0, 10.0], [2.0; 3], 0.0, [0.0; 3]));
         let mut out = Vec::new();
-        quads(&record, &instance, &CAMERA, &mut out);
+        quads(record.record(), &instance, &CAMERA, &mut out);
         assert!(close(out[0].position, [4.0, -1.0, 10.0]), "{:?}", out[0]);
     }
 }

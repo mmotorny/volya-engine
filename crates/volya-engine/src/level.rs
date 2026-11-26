@@ -76,7 +76,7 @@ use volya_engine_formats::level::split_shader_entry;
 use volya_engine_formats::level_geom::{GeomBuffer, GeomFile, GeomLayout, GeomSource};
 use volya_engine_formats::model as model_math;
 use volya_engine_formats::object::{self as record, ObjectRecord};
-use volya_engine_formats::particles::{self as particle_records, Library};
+use volya_engine_formats::particles as particle_records;
 use volya_engine_formats::patrol_path::PatrolPaths;
 use volya_engine_formats::shaders_xr;
 use volya_engine_formats::spawn;
@@ -503,7 +503,7 @@ pub fn effects_report(effects: Option<&PlacedEffects>) -> EffectsReport {
                     .instance
                     .effects()
                     .map(|e| EffectReport {
-                        name: library.effects[e.record()].name.clone(),
+                        name: library.effect_at(e.record()).name.to_owned(),
                         playing: e.is_playing(),
                         stopping: e.is_stopping(),
                         position: e.position(),
@@ -913,7 +913,7 @@ fn particle_shaders(
 ) -> io::Result<(Vec<Option<ParticleShader<String>>>, Vec<(String, String)>)> {
     use volya_engine_formats::particles::member_flags as m;
     let library = effects.library();
-    let mut wanted = vec![false; library.effects.len()];
+    let mut wanted = vec![false; library.effect_count()];
     let mut want = |name: &str| {
         if let Some(i) = library.effect(name) {
             wanted[i] = true;
@@ -924,12 +924,12 @@ fn particle_shaders(
         if library.effect(name).is_some() {
             want(name);
         } else if let Some(g) = library.group(name) {
-            for member in &library.groups[g].members {
-                want(&member.effect);
+            for member in library.group_at(g).members.iter() {
+                want(member.effect);
                 for (bit, child) in [
-                    (m::PER_PARTICLE_CHILD, &member.per_particle_child),
-                    (m::BIRTH_CHILD, &member.birth_child),
-                    (m::DEATH_CHILD, &member.death_child),
+                    (m::PER_PARTICLE_CHILD, member.per_particle_child),
+                    (m::BIRTH_CHILD, member.birth_child),
+                    (m::DEATH_CHILD, member.death_child),
                 ] {
                     if member.flags & bit != 0 {
                         want(child);
@@ -943,13 +943,13 @@ fn particle_shaders(
         vfs::read(tree, &format!("{shader_dir}\\{module}.s"))
             .is_ok_and(|text| shading::defines_normal_or_special(&String::from_utf8_lossy(&text)))
     };
-    let mut shaders = vec![None; library.effects.len()];
+    let mut shaders = vec![None; library.effect_count()];
     let mut not_drawn = Vec::new();
-    for (i, effect) in library.effects.iter().enumerate() {
-        let Some(sprite) = effect.sprite.as_ref().filter(|_| wanted[i]) else {
+    for (i, effect) in library.effects().enumerate() {
+        let Some(sprite) = effect.sprite.filter(|_| wanted[i]) else {
             continue;
         };
-        match particle_drawing::resolve(definitions, &scripted, &sprite.shader, &sprite.texture) {
+        match particle_drawing::resolve(definitions, &scripted, sprite.shader, sprite.texture) {
             Ok(shader) => {
                 let mut paths = HashMap::new();
                 for t in shader.textures() {
@@ -957,7 +957,7 @@ fn particle_shaders(
                 }
                 shaders[i] = Some(shader.map(|t| paths.get(&t).cloned()));
             }
-            Err(why) => not_drawn.push((effect.name.clone(), why)),
+            Err(why) => not_drawn.push((effect.name.to_owned(), why)),
         }
     }
     Ok((shaders, not_drawn))
@@ -1845,8 +1845,7 @@ impl NewGameLoad {
             // `level.ps_static`'s effects, made, placed and started
             // (level-placed-effects.md sections 1 – 4): read after the
             // level's objects in the game, under this caption here (our
-            // placement), with `particles.xr`, read here rather than at
-            // game start (our choice; only this needs it).
+            // placement), with the effect library read at launch.
             Stage::LoadingAiObjects => {
                 let records = match vfs::read(tree, &format!("{dir}\\level.ps_static")) {
                     Ok(bytes) => particle_records::parse_placed(&bytes)
@@ -1855,17 +1854,10 @@ impl NewGameLoad {
                     Err(e) => return Err(e),
                 };
                 // The library serves the zones' and the weather's effects too.
-                let path = data.aliases.path("$game_data$", "particles.xr")?;
-                let library = match vfs::read(tree, &path) {
-                    Ok(bytes) => Library::parse(&bytes)
-                        .map_err(|e| io::Error::new(e.kind(), format!("{path}: {e}")))?,
-                    Err(e) if e.kind() == io::ErrorKind::NotFound => Library::default(),
-                    Err(e) => return Err(e),
-                };
                 // The effects collide with the level (particle-collision.md).
                 let world = self.collision.clone();
                 let effects =
-                    PlacedEffects::new_in(Arc::new(library), &records, self.now as u32, world)
+                    PlacedEffects::new_in(data.effects.clone(), &records, self.now as u32, world)
                         .map_err(|e| invalid(format!("{dir}\\level.ps_static: {e}")))?;
                 self.effects = Some((effects, self.now));
             }

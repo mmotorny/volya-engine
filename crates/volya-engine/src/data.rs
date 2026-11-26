@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::io::{self, Cursor};
+use std::sync::Arc;
 
 use crate::controls::{Bindings, Controls};
 use crate::core::config::{self, Config, PathAliases};
@@ -22,6 +23,7 @@ use crate::startup::Sequence;
 use volya_engine_formats::audio::{VorbisStream, ogg_end_granule};
 use volya_engine_formats::cp1251;
 use volya_engine_formats::dds::Dds;
+use volya_engine_formats::particles::Library;
 use volya_engine_formats::ui::layout::{StaticDesc, TextureRef};
 use volya_engine_formats::ui::movies::{MovieItemKind, MovieSequence};
 use volya_engine_formats::ui::picture::Picture;
@@ -145,6 +147,10 @@ pub struct GameData {
     pub colors: ColorDefs,
     pub localization: Localization,
     pub strings: StringTable,
+    /// The particles' effect library `particles.xr`, the same for every
+    /// level: read once here rather than with each level (our choice;
+    /// docs/architecture/memory.md), empty when the file is absent.
+    pub effects: Arc<Library>,
     pub menu: TitleMenuLayout,
     pub intro: MovieSequence,
     /// Per intro item, how long it lasts in seconds after its delay
@@ -237,6 +243,13 @@ impl GameData {
         let localization = text::load_localization(tree, &aliases)?;
         let strings = text::load_string_table(tree, &aliases, &localization)?;
         let menu = ui::load_title_menu(tree, &aliases, &colors, resolution)?;
+        let path = aliases.path("$game_data$", "particles.xr")?;
+        let effects = Arc::new(match vfs::read(tree, &path) {
+            Ok(bytes) => Library::parse(&bytes)
+                .map_err(|e| io::Error::new(e.kind(), format!("{path}: {e}")))?,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Library::default(),
+            Err(e) => return Err(e),
+        });
 
         // startup.md section 6.1: `intro_logo`, reached from
         // `game_tutorials.xml` through its include of `ui_movies.xml`.
@@ -274,6 +287,7 @@ impl GameData {
             colors,
             localization,
             strings,
+            effects,
             menu,
             intro,
             intro_lengths: Vec::new(),

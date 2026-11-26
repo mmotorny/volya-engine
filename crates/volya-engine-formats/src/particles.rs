@@ -7,7 +7,6 @@
 //! `level.ps_static` (docs/behavior/level-placed-effects.md section 1.2).
 //! What the records do over time is the simulation's (`volya-engine-core`).
 
-use std::collections::HashMap;
 use std::io;
 
 use crate::chunks::Chunks;
@@ -281,7 +280,8 @@ pub struct Sprite {
     pub texture: String,
 }
 
-/// An effect record (P1 section 2).
+/// An effect record (P1 section 2), as read or made: [`Library::new`]
+/// stores it in the library's region.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Effect {
     /// Its sub-chunk id in chunk 3 (stored order).
@@ -301,18 +301,33 @@ pub struct Effect {
 }
 
 impl Effect {
-    /// The effect's length: −1 without flag bit 0x4000, else the time
-    /// limit (P1 section 2; particle-lifecycle.md section 7).
+    /// The effect's length (see [`EffectRecord::length`]).
     pub fn length(&self) -> f32 {
-        if self.flags & effect_flags::TIME_LIMIT != 0 {
-            self.time_limit
-        } else {
-            -1.0
+        self.record().length()
+    }
+
+    /// The record as the library gives it.
+    pub fn record(&self) -> EffectRecord<'_> {
+        EffectRecord {
+            id: self.id,
+            name: &self.name,
+            max_particles: self.max_particles,
+            flags: self.flags,
+            actions: &self.actions,
+            sprite: self.sprite.as_ref().map(|s| SpriteRecord {
+                shader: &s.shader,
+                texture: &s.texture,
+            }),
+            frames: self.frames,
+            time_limit: self.time_limit,
+            collision: self.collision,
+            velocity_scale: self.velocity_scale,
+            alignment: self.alignment,
         }
     }
 }
 
-/// A group member (P1 section 6.1).
+/// A group member (P1 section 6.1), as read or made.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Member {
     pub effect: String,
@@ -326,7 +341,7 @@ pub struct Member {
     pub flags: u32,
 }
 
-/// A group record (P1 section 6).
+/// A group record (P1 section 6), as read or made.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Group {
     /// Its sub-chunk id in chunk 4 (stored order).
@@ -339,16 +354,215 @@ pub struct Group {
     pub time_limit: f32,
 }
 
+/// The sprite of an [`EffectRecord`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpriteRecord<'a> {
+    pub shader: &'a str,
+    pub texture: &'a str,
+}
+
+/// An effect record of the library (P1 section 2).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EffectRecord<'a> {
+    /// Its sub-chunk id in chunk 3 (stored order).
+    pub id: u32,
+    pub name: &'a str,
+    /// Maximum number of live particles.
+    pub max_particles: u32,
+    pub flags: u32,
+    pub actions: &'a [Action],
+    pub sprite: Option<SpriteRecord<'a>>,
+    pub frames: Frames,
+    /// Seconds; 0 when chunk 8 is not read.
+    pub time_limit: f32,
+    pub collision: Collision,
+    pub velocity_scale: [f32; 3],
+    pub alignment: [f32; 3],
+}
+
+impl EffectRecord<'_> {
+    /// The effect's length: −1 without flag bit 0x4000, else the time
+    /// limit (P1 section 2; particle-lifecycle.md section 7).
+    pub fn length(&self) -> f32 {
+        if self.flags & effect_flags::TIME_LIMIT != 0 {
+            self.time_limit
+        } else {
+            -1.0
+        }
+    }
+
+    /// The record as an [`Effect`] to make a library of.
+    pub fn to_effect(&self) -> Effect {
+        Effect {
+            id: self.id,
+            name: self.name.to_owned(),
+            max_particles: self.max_particles,
+            flags: self.flags,
+            actions: self.actions.to_vec(),
+            sprite: self.sprite.map(|s| Sprite {
+                shader: s.shader.to_owned(),
+                texture: s.texture.to_owned(),
+            }),
+            frames: self.frames,
+            time_limit: self.time_limit,
+            collision: self.collision,
+            velocity_scale: self.velocity_scale,
+            alignment: self.alignment,
+        }
+    }
+}
+
+/// A group member of the library (P1 section 6.1).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MemberRecord<'a> {
+    pub effect: &'a str,
+    /// Empty: none.
+    pub per_particle_child: &'a str,
+    pub birth_child: &'a str,
+    pub death_child: &'a str,
+    /// Seconds.
+    pub start_time: f32,
+    pub stop_time: f32,
+    pub flags: u32,
+}
+
+impl MemberRecord<'_> {
+    /// The member as a [`Member`] to make a library of.
+    pub fn to_member(&self) -> Member {
+        Member {
+            effect: self.effect.to_owned(),
+            per_particle_child: self.per_particle_child.to_owned(),
+            birth_child: self.birth_child.to_owned(),
+            death_child: self.death_child.to_owned(),
+            start_time: self.start_time,
+            stop_time: self.stop_time,
+            flags: self.flags,
+        }
+    }
+}
+
+/// A group's members in the library, by their index in the library
+/// ([`Library::member`]).
+#[derive(Clone, Copy, Debug)]
+pub struct Members<'a> {
+    library: &'a Library,
+    first: u32,
+    len: u32,
+}
+
+impl<'a> Members<'a> {
+    pub fn len(&self) -> usize {
+        self.len as usize
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// The library's index of member `i`.
+    pub fn index(&self, i: usize) -> usize {
+        assert!(i < self.len(), "member {i} of {}", self.len);
+        self.first as usize + i
+    }
+
+    /// Member `i`.
+    pub fn get(&self, i: usize) -> MemberRecord<'a> {
+        self.library.member(self.index(i))
+    }
+
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = MemberRecord<'a>> + use<'a> {
+        let (library, first) = (self.library, self.first as usize);
+        (first..first + self.len()).map(move |i| library.member(i))
+    }
+}
+
+/// A group record of the library (P1 section 6).
+#[derive(Clone, Copy, Debug)]
+pub struct GroupRecord<'a> {
+    /// Its sub-chunk id in chunk 4 (stored order).
+    pub id: u32,
+    pub name: &'a str,
+    /// Meaning unestablished; not read by the group's update.
+    pub flags: u32,
+    pub members: Members<'a>,
+    /// Seconds; 0 means none.
+    pub time_limit: f32,
+}
+
+impl GroupRecord<'_> {
+    /// The record as a [`Group`] to make a library of.
+    pub fn to_group(&self) -> Group {
+        Group {
+            id: self.id,
+            name: self.name.to_owned(),
+            flags: self.flags,
+            members: self.members.iter().map(|m| m.to_member()).collect(),
+            time_limit: self.time_limit,
+        }
+    }
+}
+
+/// A name's bytes in [`Library`]'s name buffer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Name {
+    start: u32,
+    len: u32,
+}
+
+#[derive(Clone, Debug)]
+struct StoredEffect {
+    id: u32,
+    name: Name,
+    max_particles: u32,
+    flags: u32,
+    /// The run of the library's actions.
+    actions: (u32, u32),
+    sprite: Option<(Name, Name)>,
+    frames: Frames,
+    time_limit: f32,
+    collision: Collision,
+    velocity_scale: [f32; 3],
+    alignment: [f32; 3],
+}
+
+#[derive(Clone, Copy, Debug)]
+struct StoredMember {
+    effect: Name,
+    per_particle_child: Name,
+    birth_child: Name,
+    death_child: Name,
+    start_time: f32,
+    stop_time: f32,
+    flags: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct StoredGroup {
+    id: u32,
+    name: Name,
+    flags: u32,
+    /// The run of the library's members.
+    members: (u32, u32),
+    time_limit: f32,
+}
+
 /// The library: effects and groups, each ordered by name compared as
-/// unsigned bytes (P1 section 1).
+/// unsigned bytes (P1 section 1). A region (docs/architecture/memory.md):
+/// every name once in one buffer, every effect's actions in one table and
+/// every group's members in another, each record a run of them.
 #[derive(Clone, Debug, Default)]
 pub struct Library {
-    pub effects: Vec<Effect>,
-    pub groups: Vec<Group>,
+    names: String,
+    effects: Vec<StoredEffect>,
+    actions: Vec<Action>,
+    groups: Vec<StoredGroup>,
+    members: Vec<StoredMember>,
+    /// The effects' and the groups' indices in the order of their names as
+    /// strings, for lookup.
+    effect_order: Vec<u32>,
+    group_order: Vec<u32>,
     /// The game's log lines while loading (P1 sections 1, 6).
     pub log: Vec<String>,
-    effect_names: HashMap<String, usize>,
-    group_names: HashMap<String, usize>,
 }
 
 impl Library {
@@ -360,32 +574,36 @@ impl Library {
             .find(VERSION_CHUNK)
             .filter(|c| !c.payload.is_empty())
             .ok_or_else(|| invalid("particles.xr: no version chunk"))?;
-        let mut library = Library::default();
+        let mut log = Vec::new();
         if u16_at(version.payload, 0)? != VERSION {
-            library.log.push(UNSUPPORTED_LIBRARY.into());
-            return Ok(library);
+            log.push(UNSUPPORTED_LIBRARY.into());
+            return Ok(Library {
+                log,
+                ..Library::default()
+            });
         }
-        if let Some(effects) = top.find(EFFECTS_CHUNK) {
-            for c in Chunks::parse(effects.payload)?.list() {
+        let mut effects = Vec::new();
+        if let Some(chunk) = top.find(EFFECTS_CHUNK) {
+            for c in Chunks::parse(chunk.payload)?.list() {
                 match parse_effect(c.id(), c.payload)? {
-                    Some(effect) => library.effects.push(effect),
+                    Some(effect) => effects.push(effect),
                     None => break,
                 }
             }
         }
-        if let Some(groups) = top.find(GROUPS_CHUNK) {
-            for c in Chunks::parse(groups.payload)?.list() {
+        let mut groups = Vec::new();
+        if let Some(chunk) = top.find(GROUPS_CHUNK) {
+            for c in Chunks::parse(chunk.payload)?.list() {
                 match parse_group(c.id(), c.payload)? {
-                    Some(group) => library.groups.push(group),
+                    Some(group) => groups.push(group),
                     None => {
-                        library.log.push(UNSUPPORTED_GROUP.into());
+                        log.push(UNSUPPORTED_GROUP.into());
                         break;
                     }
                 }
             }
         }
-        let log = std::mem::take(&mut library.log);
-        let mut library = Self::new(library.effects, library.groups);
+        let mut library = Self::new(effects, groups);
         library.log = log;
         Ok(library)
     }
@@ -395,29 +613,190 @@ impl Library {
         let key = |name: &str| cp1251::encode(name).unwrap_or_else(|| name.as_bytes().to_vec());
         effects.sort_by_cached_key(|e| key(&e.name));
         groups.sort_by_cached_key(|g| key(&g.name));
-        let effect_names = (effects.iter().enumerate())
-            .map(|(i, e)| (e.name.clone(), i))
-            .collect();
-        let group_names = (groups.iter().enumerate())
-            .map(|(i, g)| (g.name.clone(), i))
-            .collect();
-        Self {
-            effects,
-            groups,
+        let members = groups.iter().map(|g| g.members.len()).sum();
+        let size = effects
+            .iter()
+            .map(|e| {
+                e.name.len()
+                    + e.sprite
+                        .as_ref()
+                        .map_or(0, |s| s.shader.len() + s.texture.len())
+            })
+            .chain(groups.iter().flat_map(|g| {
+                std::iter::once(g.name.len()).chain(g.members.iter().map(|m| {
+                    m.effect.len()
+                        + m.per_particle_child.len()
+                        + m.birth_child.len()
+                        + m.death_child.len()
+                }))
+            }))
+            .sum();
+        let mut library = Library {
+            names: String::with_capacity(size),
+            effects: Vec::with_capacity(effects.len()),
+            actions: Vec::with_capacity(effects.iter().map(|e| e.actions.len()).sum()),
+            groups: Vec::with_capacity(groups.len()),
+            members: Vec::with_capacity(members),
+            effect_order: Vec::new(),
+            group_order: Vec::new(),
             log: Vec::new(),
-            effect_names,
-            group_names,
+        };
+        for e in effects {
+            let first = library.actions.len() as u32;
+            library.actions.extend(e.actions);
+            let stored = StoredEffect {
+                id: e.id,
+                name: library.store(&e.name),
+                max_particles: e.max_particles,
+                flags: e.flags,
+                actions: (first, library.actions.len() as u32),
+                sprite: e
+                    .sprite
+                    .map(|s| (library.store(&s.shader), library.store(&s.texture))),
+                frames: e.frames,
+                time_limit: e.time_limit,
+                collision: e.collision,
+                velocity_scale: e.velocity_scale,
+                alignment: e.alignment,
+            };
+            library.effects.push(stored);
+        }
+        for g in groups {
+            let first = library.members.len() as u32;
+            for m in &g.members {
+                let stored = StoredMember {
+                    effect: library.store(&m.effect),
+                    per_particle_child: library.store(&m.per_particle_child),
+                    birth_child: library.store(&m.birth_child),
+                    death_child: library.store(&m.death_child),
+                    start_time: m.start_time,
+                    stop_time: m.stop_time,
+                    flags: m.flags,
+                };
+                library.members.push(stored);
+            }
+            let stored = StoredGroup {
+                id: g.id,
+                name: library.store(&g.name),
+                flags: g.flags,
+                members: (first, library.members.len() as u32),
+                time_limit: g.time_limit,
+            };
+            library.groups.push(stored);
+        }
+        let mut order: Vec<u32> = (0..library.effects.len() as u32).collect();
+        order.sort_by(|&a, &b| {
+            let name = |i: u32| library.name(library.effects[i as usize].name);
+            name(a).cmp(name(b))
+        });
+        library.effect_order = order;
+        let mut order: Vec<u32> = (0..library.groups.len() as u32).collect();
+        order.sort_by(|&a, &b| {
+            let name = |i: u32| library.name(library.groups[i as usize].name);
+            name(a).cmp(name(b))
+        });
+        library.group_order = order;
+        library
+    }
+
+    fn store(&mut self, name: &str) -> Name {
+        let start = self.names.len() as u32;
+        self.names.push_str(name);
+        Name {
+            start,
+            len: name.len() as u32,
         }
     }
 
-    /// The effect named exactly `name` (byte for byte).
-    pub fn effect(&self, name: &str) -> Option<usize> {
-        self.effect_names.get(name).copied()
+    fn name(&self, n: Name) -> &str {
+        &self.names[n.start as usize..(n.start + n.len) as usize]
     }
 
-    /// The group named exactly `name`.
+    /// Of `order`'s records named `name` by `name_of`, the last.
+    fn find(&self, order: &[u32], name_of: impl Fn(usize) -> Name, name: &str) -> Option<usize> {
+        let at = order.partition_point(|&i| self.name(name_of(i as usize)) <= name);
+        let i = *order.get(at.checked_sub(1)?)? as usize;
+        (self.name(name_of(i)) == name).then_some(i)
+    }
+
+    /// The effect named exactly `name` (byte for byte); of several, the
+    /// last.
+    pub fn effect(&self, name: &str) -> Option<usize> {
+        self.find(&self.effect_order, |i| self.effects[i].name, name)
+    }
+
+    /// The group named exactly `name`; of several, the last.
     pub fn group(&self, name: &str) -> Option<usize> {
-        self.group_names.get(name).copied()
+        self.find(&self.group_order, |i| self.groups[i].name, name)
+    }
+
+    pub fn effect_count(&self) -> usize {
+        self.effects.len()
+    }
+
+    pub fn group_count(&self) -> usize {
+        self.groups.len()
+    }
+
+    /// Effect `i`, in name order.
+    pub fn effect_at(&self, i: usize) -> EffectRecord<'_> {
+        let e = &self.effects[i];
+        EffectRecord {
+            id: e.id,
+            name: self.name(e.name),
+            max_particles: e.max_particles,
+            flags: e.flags,
+            actions: &self.actions[e.actions.0 as usize..e.actions.1 as usize],
+            sprite: e.sprite.map(|(shader, texture)| SpriteRecord {
+                shader: self.name(shader),
+                texture: self.name(texture),
+            }),
+            frames: e.frames,
+            time_limit: e.time_limit,
+            collision: e.collision,
+            velocity_scale: e.velocity_scale,
+            alignment: e.alignment,
+        }
+    }
+
+    /// Group `i`, in name order.
+    pub fn group_at(&self, i: usize) -> GroupRecord<'_> {
+        let g = &self.groups[i];
+        GroupRecord {
+            id: g.id,
+            name: self.name(g.name),
+            flags: g.flags,
+            members: Members {
+                library: self,
+                first: g.members.0,
+                len: g.members.1 - g.members.0,
+            },
+            time_limit: g.time_limit,
+        }
+    }
+
+    /// The member at `i` of every group's members ([`Members::index`]).
+    pub fn member(&self, i: usize) -> MemberRecord<'_> {
+        let m = &self.members[i];
+        MemberRecord {
+            effect: self.name(m.effect),
+            per_particle_child: self.name(m.per_particle_child),
+            birth_child: self.name(m.birth_child),
+            death_child: self.name(m.death_child),
+            start_time: m.start_time,
+            stop_time: m.stop_time,
+            flags: m.flags,
+        }
+    }
+
+    /// The effects in name order.
+    pub fn effects(&self) -> impl ExactSizeIterator<Item = EffectRecord<'_>> {
+        (0..self.effects.len()).map(|i| self.effect_at(i))
+    }
+
+    /// The groups in name order.
+    pub fn groups(&self) -> impl ExactSizeIterator<Item = GroupRecord<'_>> {
+        (0..self.groups.len()).map(|i| self.group_at(i))
     }
 }
 
@@ -988,20 +1367,17 @@ mod tests {
             &[],
         );
         let lib = Library::parse(&file).unwrap();
-        assert_eq!(lib.effects[0].name, "a\\first");
-        assert_eq!(lib.effects[0].id, 1);
-        assert_eq!(lib.effects[0].time_limit, 1.5);
-        assert_eq!(lib.effects[0].length(), 1.5);
+        assert_eq!(lib.effect_at(0).name, "a\\first");
+        assert_eq!(lib.effect_at(0).id, 1);
+        assert_eq!(lib.effect_at(0).time_limit, 1.5);
+        assert_eq!(lib.effect_at(0).length(), 1.5);
         // Chunk 37 absent: the default kept.
-        assert_eq!(lib.effects[0].alignment, [MINUS_HALF_PI, 0.0, 0.0]);
-        assert_eq!(lib.effects[0].frames, Frames::default());
-        assert_eq!(lib.effects[1].length(), -1.0);
+        assert_eq!(lib.effect_at(0).alignment, [MINUS_HALF_PI, 0.0, 0.0]);
+        assert_eq!(lib.effect_at(0).frames, Frames::default());
+        assert_eq!(lib.effect_at(1).length(), -1.0);
+        assert_eq!(lib.effect_at(1).sprite.unwrap().texture, "pfx\\x");
         assert_eq!(
-            lib.effects[1].sprite.as_ref().unwrap().texture,
-            "pfx\\x".to_owned()
-        );
-        assert_eq!(
-            lib.effects[1].collision,
+            lib.effect_at(1).collision,
             Collision {
                 tangential: 1.0,
                 resilience: 0.0,
@@ -1027,7 +1403,7 @@ mod tests {
             &[],
         );
         let lib = Library::parse(&file).unwrap();
-        assert_eq!(lib.effects.len(), 1);
+        assert_eq!(lib.effect_count(), 1);
     }
 
     #[test]
@@ -1035,7 +1411,7 @@ mod tests {
         let mut file = library(&[effect_record("a", 0, &[])], &[]);
         file[8..10].copy_from_slice(&2u16.to_le_bytes());
         let lib = Library::parse(&file).unwrap();
-        assert!(lib.effects.is_empty());
+        assert_eq!(lib.effect_count(), 0);
         assert_eq!(lib.log, [UNSUPPORTED_LIBRARY]);
     }
 
@@ -1051,10 +1427,14 @@ mod tests {
         g.extend(chunk(4, &members));
         g.extend(chunk(5, &f32s(&[4.0])));
         let lib = Library::parse(&library(&[effect_record("a", 0, &[])], &[g])).unwrap();
-        let group = &lib.groups[lib.group("g").unwrap()];
+        let group = lib.group_at(lib.group("g").unwrap());
         assert_eq!(group.time_limit, 4.0);
         assert_eq!(
-            group.members,
+            group
+                .members
+                .iter()
+                .map(|m| m.to_member())
+                .collect::<Vec<_>>(),
             [Member {
                 effect: "a".into(),
                 per_particle_child: "child".into(),

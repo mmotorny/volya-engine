@@ -260,7 +260,7 @@ fn first_level_artefacts_from_game_data() {
     // Its shaders are resolved with the level's.
     let world = level.world().clone();
     for e in p.instance.effects() {
-        let effect = &level.effects().unwrap().library().effects[e.record()];
+        let effect = level.effects().unwrap().library().effect_at(e.record());
         if effect.sprite.is_some() {
             assert!(
                 world.particle_shaders[e.record()].is_some(),
