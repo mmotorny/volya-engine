@@ -35,6 +35,7 @@
 - Build features compatible with the original game. A temporary stub that unblocks dependent work is fine when an issue tracks replacing it. Any permanent deviation from the original, or addition on top of it, goes to the user first. What is fatal in the original is fatal here too (`App::fatal`), never recovered from.
 - Web build must keep functional parity between mobile and desktop browsers; every feature ships with both input paths (touch and keyboard/mouse/gamepad) and is tested on both.
 - Dependencies must be permissively licensed (no copyleft, including LGPL/MPL).
+- Patching third-party code: a permissively licensed project's patch is a file in the repo that Bazel applies (as `third_party/inno/`); a copyleft project's patch lives only on a branch of a fork under the user's account, fetched at a pinned commit, so the repo stays permissive.
 - Never use or derive from leaked X-Ray source or its forks (e.g. OpenXRay).
 - Knowledge of the original game's formats and behavior enters only through docs/clean-room.md; never from memory.
 - Name code after the approved specs' own words, never the original program's internal terms.
