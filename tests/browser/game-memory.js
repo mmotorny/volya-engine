@@ -41,9 +41,11 @@ import {
   until,
 } from "./game.js";
 
-// What the GPU holds (`gpu_live`) in the first New Game's level, once its
-// intro is skipped.
+// What the GPU holds of the first New Game's level (`gpu_level`: not what
+// the renderer keeps across games, which earlier tests may have grown),
+// and what it keeps then, once its intro is skipped.
 let firstLive;
+let firstKept;
 
 export const tests = {
   ...keptSetup(),
@@ -59,7 +61,8 @@ export const tests = {
     await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
     if (gpu.state === "ready") await volya.call("debug_capture", { width: 256, height: 192 });
     const stats = await volya.call("level_stats");
-    firstLive = stats.gpu_live;
+    firstLive = stats.gpu_level;
+    firstKept = stats.gpu_kept;
     return `wasm heap ${mib(stats.wasm_heap_bytes)}, the audio worker's ${mib(stats.audio_heap_bytes)}; ${await jsMemory(stats)}`;
   },
 
@@ -97,24 +100,24 @@ export const tests = {
     key("Escape");
     await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
     // The first level's buffers, textures and vertex arrays are gone: the
-    // GPU holds what it held in the first, at the same video mode.
+    // GPU holds of this level what it held of the first.
     await sleep(500);
-    const live = (await volya.call("level_stats")).gpu_live;
-    if (firstLive) assertEqual(live, firstLive, "what the GPU holds against the first New Game's level");
+    const now = await volya.call("level_stats");
+    const live = now.gpu_level;
+    if (firstLive) assertEqual(live, firstLive, "what the GPU holds of the level against the first New Game's");
     const heapNote = overBudget(heap(stats), "wasm heaps after a New Game in the game launched again");
     // What the GPU still holds of the level left (#436): the world stays
     // until the next one is uploaded while the presenter keeps it.
     const held = before.gpu_world_bytes;
-    const liveNote = live ? `the GPU holds ${live.textures} textures (${mib(live.texture_bytes)}), ${live.buffers} buffers (${mib(live.buffer_bytes)}), ${live.vertex_arrays} vertex arrays, as in the first; ` : "";
+    const kept = (k) => `${k.textures} textures (${mib(k.texture_bytes)}), ${k.buffers} buffers (${mib(k.buffer_bytes)})`;
+    const liveNote = live ? `the GPU holds of the level ${live.textures} textures (${mib(live.texture_bytes)}), ${live.buffers} buffers (${mib(live.buffer_bytes)}), ${live.vertex_arrays} vertex arrays, as in the first; the renderer keeps ${kept(now.gpu_kept)}${firstKept ? `, ${kept(firstKept)} in the first` : ""}; ` : "";
     return `${heapNote}${liveNote}wasm heap ${mib(before.wasm_heap_bytes)} before, ${mib(stats.wasm_heap_bytes)} after; the GPU world in the title menu before: ${held == null ? "none" : mib(held)}; ${heapMaps.slice(-2).join("; ")}; by caption (MiB, heap/live): ${stages}; ${record}`;
   },
 
   "a phone's second game: the first game played 20 s, quit to the title menu, a New Game 5 s later": async () => {
     needsGame();
     // The path of a device's log (#487): the game quit to the title menu
-    // (not left), then a New Game. After the relaunch's check, which holds
-    // what the GPU keeps against the first level's: the quit box drawn
-    // here grows a buffer the renderer keeps (measured: 15 KiB).
+    // (not left), then a New Game.
     await until((s) => s.phase === "level" && !s.intro, "the level");
     const start = await volya.call("level_stats");
     // Walking and turning about, as a player does.

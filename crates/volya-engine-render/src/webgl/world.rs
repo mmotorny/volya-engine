@@ -242,7 +242,8 @@ impl WorldPrograms {
             return;
         }
         self.light_slots = passes.next_power_of_two();
-        self.light_constants = gl.buffer(BufferKind::Uniform, self.light_slots * LIGHT_SLOT);
+        self.light_constants =
+            gl.keeping(|| gl.buffer(BufferKind::Uniform, self.light_slots * LIGHT_SLOT));
     }
 
     /// The program and states of `key`.
@@ -1344,10 +1345,10 @@ impl Renderer {
             .is_some_and(|d| d.size() == (width, height));
         if !fits {
             self.depth = None;
-            self.depth = Some(
+            self.depth = Some(self.gl.keeping(|| {
                 self.gl
-                    .texture(TexFormat::Depth32Float, width, height, 1, false),
-            );
+                    .texture(TexFormat::Depth32Float, width, height, 1, false)
+            }));
         }
         self.depth.clone().expect("depth created")
     }
@@ -1575,7 +1576,10 @@ impl Renderer {
     /// The world's programs for the trees' blending, with the light
     /// textures given so far.
     pub(crate) fn make_world_programs(&mut self) {
-        self.world_programs = Some(WorldPrograms::new(&self.gl, self.unblended_trees));
+        let programs = self
+            .gl
+            .keeping(|| WorldPrograms::new(&self.gl, self.unblended_trees));
+        self.world_programs = Some(programs);
     }
 
     /// The world's draw calls emitted in the last world frame encoded, by

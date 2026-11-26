@@ -277,12 +277,14 @@ struct UiVertices {
 
 impl UiVertices {
     fn new(gl: &Gl, quads: u64) -> Self {
-        let buffer = gl.buffer(
-            BufferKind::Dynamic,
-            quads * VERTICES_PER_QUAD as u64 * VERTEX_BYTES,
-        );
-        let array = gl.vertex_array(&[(&buffer, 0, &UI_LAYOUT)], None);
-        Self { buffer, array }
+        gl.keeping(|| {
+            let buffer = gl.buffer(
+                BufferKind::Dynamic,
+                quads * VERTICES_PER_QUAD as u64 * VERTEX_BYTES,
+            );
+            let array = gl.vertex_array(&[(&buffer, 0, &UI_LAYOUT)], None);
+            Self { buffer, array }
+        })
     }
 }
 
@@ -358,7 +360,8 @@ impl Renderer {
         } else {
             TexturePath::Rgba8
         };
-        let mut renderer = Self {
+        // What the renderer makes for itself is kept across games.
+        let mut renderer = g.keeping(|| Self {
             ui,
             movie,
             sampler: g.sampler(LINEAR_CLAMPED),
@@ -384,8 +387,8 @@ impl Renderer {
             ramp: ramp::RampPass::new(g),
             unblended_trees: false,
             texture_path,
-            gl,
-        };
+            gl: gl.clone(),
+        });
         renderer.make_world_programs();
         renderer
     }
@@ -431,6 +434,13 @@ impl Renderer {
     /// (every renderer on the context, the prepared textures included).
     pub fn gpu_live(&self) -> crate::gl::Live {
         self.gl.live()
+    }
+
+    /// Those of [`Renderer::gpu_live`] the renderer keeps across games
+    /// (its programs' buffers, frame targets, the buffers it grows); the
+    /// rest are the scenes' (a level's world and textures).
+    pub fn gpu_kept(&self) -> crate::gl::Live {
+        self.gl.kept()
     }
 
     /// Bytes of texture data written since the renderer was made (WebGL
@@ -481,9 +491,10 @@ impl Renderer {
 
     /// A colour target of `size`, RGBA8.
     fn make_target(&self, size: (u32, u32)) -> Target {
-        let texture = self
-            .gl
-            .texture(TexFormat::Rgba8, size.0.max(1), size.1.max(1), 1, false);
+        let texture = self.gl.keeping(|| {
+            self.gl
+                .texture(TexFormat::Rgba8, size.0.max(1), size.1.max(1), 1, false)
+        });
         let framebuffer = self.gl.framebuffer(Some(&texture), None);
         Target {
             texture: Texture {

@@ -109,7 +109,7 @@ impl PostProcess {
         }
         let size = target_size(screen.0, screen.1, supersample);
         self.targets = None;
-        let make = |format| gl.texture(format, size.0, size.1, 1, false);
+        let make = |format| gl.keeping(|| gl.texture(format, size.0, size.1, 1, false));
         let (colour, distort, depth) = (
             make(TexFormat::Rgba8),
             make(TexFormat::Rg8),

@@ -173,6 +173,10 @@ pub struct Gl {
     gl: C,
     /// What it made that still lives.
     live: Rc<Cell<Live>>,
+    /// What of that was made while [`Gl::keeping`].
+    kept: Rc<Cell<Live>>,
+    /// Nesting depth of [`Gl::keeping`].
+    keeping: Cell<u32>,
     state: RefCell<State>,
     counts: Cell<Counts>,
     extensions: Extensions,
@@ -213,6 +217,8 @@ impl Gl {
         Self {
             gl,
             live: Rc::default(),
+            kept: Rc::default(),
+            keeping: Cell::new(0),
             state: RefCell::new(State::fresh()),
             counts: Cell::default(),
             extensions,
@@ -231,10 +237,33 @@ impl Gl {
         self.live.get()
     }
 
-    fn add_live(&self, f: impl FnOnce(&mut Live)) {
-        let mut l = self.live.get();
-        f(&mut l);
-        self.live.set(l);
+    /// Those of [`Gl::live`] made inside [`Gl::keeping`].
+    pub fn kept(&self) -> Live {
+        self.kept.get()
+    }
+
+    /// Runs `f`, counting what it makes as kept: the renderer's own
+    /// resources, which outlive a game, apart from a level's.
+    pub fn keeping<R>(&self, f: impl FnOnce() -> R) -> R {
+        self.keeping.set(self.keeping.get() + 1);
+        let r = f();
+        self.keeping.set(self.keeping.get() - 1);
+        r
+    }
+
+    /// Where a resource made now is counted.
+    fn counted(&self) -> Counted {
+        Counted {
+            all: self.live.clone(),
+            kept: (self.keeping.get() > 0).then(|| self.kept.clone()),
+        }
+    }
+
+    /// Counts a resource being made, `f` adding it.
+    fn add_live(&self, f: impl Fn(&mut Live)) -> Counted {
+        let c = self.counted();
+        c.update(f);
+        c
     }
 
     pub fn max_texture_size(&self) -> u32 {
@@ -296,12 +325,12 @@ impl Gl {
             self.count(Call::Buffer);
             self.gl.bind_buffer(C::ELEMENT_ARRAY_BUFFER, Some(&raw));
         }
-        self.add_live(|l| {
+        let live = self.add_live(|l| {
             l.buffers += 1;
             l.buffer_bytes += size;
         });
         Buffer(Rc::new(BufferInner {
-            live: self.live.clone(),
+            live,
             gl: self.gl.clone(),
             raw,
             id: next_id(),
@@ -348,7 +377,7 @@ impl Gl {
             C::TEXTURE_2D
         };
         let t = Texture(Rc::new(TextureInner {
-            live: self.live.clone(),
+            live: self.counted(),
             gl: self.gl.clone(),
             raw,
             id: next_id(),
@@ -358,7 +387,7 @@ impl Gl {
             height,
             levels,
         }));
-        self.add_live(|l| {
+        t.0.live.update(|l| {
             l.textures += 1;
             l.texture_bytes += t.bytes();
         });
@@ -634,9 +663,9 @@ impl Gl {
     ) -> VertexArray {
         self.count(Call::Create);
         let raw = self.gl.create_vertex_array().expect("a WebGL vertex array");
-        self.add_live(|l| l.vertex_arrays += 1);
+        let live = self.add_live(|l| l.vertex_arrays += 1);
         let va = VertexArray(Rc::new(VertexArrayInner {
-            live: self.live.clone(),
+            live,
             gl: self.gl.clone(),
             raw,
             id: next_id(),
@@ -1091,7 +1120,7 @@ impl BufferKind {
 }
 
 struct BufferInner {
-    live: Rc<Cell<Live>>,
+    live: Counted,
     gl: C,
     raw: WebGlBuffer,
     id: u32,
@@ -1102,10 +1131,11 @@ struct BufferInner {
 impl Drop for BufferInner {
     fn drop(&mut self) {
         self.gl.delete_buffer(Some(&self.raw));
-        let mut l = self.live.get();
-        l.buffers -= 1;
-        l.buffer_bytes -= self.size;
-        self.live.set(l);
+        let size = self.size;
+        self.live.update(|l| {
+            l.buffers -= 1;
+            l.buffer_bytes -= size;
+        });
     }
 }
 
@@ -1202,7 +1232,7 @@ impl TexFormat {
 }
 
 struct TextureInner {
-    live: Rc<Cell<Live>>,
+    live: Counted,
     gl: C,
     raw: WebGlTexture,
     id: u32,
@@ -1216,10 +1246,11 @@ struct TextureInner {
 impl Drop for TextureInner {
     fn drop(&mut self) {
         self.gl.delete_texture(Some(&self.raw));
-        let mut l = self.live.get();
-        l.textures -= 1;
-        l.texture_bytes -= texture_bytes(self);
-        self.live.set(l);
+        let bytes = texture_bytes(self);
+        self.live.update(|l| {
+            l.textures -= 1;
+            l.texture_bytes -= bytes;
+        });
     }
 }
 
@@ -1245,6 +1276,23 @@ fn texture_bytes(t: &TextureInner) -> u64 {
         * faces
 }
 
+/// The counts a resource is in: every live one's, and the kept ones' if
+/// made while [`Gl::keeping`].
+struct Counted {
+    all: Rc<Cell<Live>>,
+    kept: Option<Rc<Cell<Live>>>,
+}
+
+impl Counted {
+    fn update(&self, f: impl Fn(&mut Live)) {
+        for c in std::iter::once(&self.all).chain(&self.kept) {
+            let mut l = c.get();
+            f(&mut l);
+            c.set(l);
+        }
+    }
+}
+
 /// The resources a [`Gl`] made that live: their counts and bytes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Live {
@@ -1253,6 +1301,20 @@ pub struct Live {
     pub textures: u64,
     pub texture_bytes: u64,
     pub vertex_arrays: u64,
+}
+
+impl std::ops::Sub for Live {
+    type Output = Live;
+
+    fn sub(self, o: Live) -> Live {
+        Live {
+            buffers: self.buffers - o.buffers,
+            buffer_bytes: self.buffer_bytes - o.buffer_bytes,
+            textures: self.textures - o.textures,
+            texture_bytes: self.texture_bytes - o.texture_bytes,
+            vertex_arrays: self.vertex_arrays - o.vertex_arrays,
+        }
+    }
 }
 
 /// A texture (a handle).
@@ -1441,7 +1503,7 @@ pub struct VertexLayout {
 }
 
 struct VertexArrayInner {
-    live: Rc<Cell<Live>>,
+    live: Counted,
     gl: C,
     raw: WebGlVertexArrayObject,
     id: u32,
@@ -1450,9 +1512,7 @@ struct VertexArrayInner {
 impl Drop for VertexArrayInner {
     fn drop(&mut self) {
         self.gl.delete_vertex_array(Some(&self.raw));
-        let mut l = self.live.get();
-        l.vertex_arrays -= 1;
-        self.live.set(l);
+        self.live.update(|l| l.vertex_arrays -= 1);
     }
 }
 

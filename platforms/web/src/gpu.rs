@@ -414,17 +414,20 @@ pub fn world_stats() -> serde_json::Value {
             "gpu_object_bytes": world.map(|w| w.object_gpu_bytes()),
             "gpu_object_texture_bytes": world.map(|w| w.object_texture_bytes()),
             "frame_commands": frame_commands(),
-            "gpu_live": live(g.as_ref().map(|gpu| &gpu.renderer)),
+            "gpu_live": live(g.as_ref().map(|gpu| gpu.renderer.gpu_live())),
+            // The scenes' own (a level's), apart from what the renderer
+            // keeps across games.
+            "gpu_level": live(g.as_ref().map(|gpu| gpu.renderer.gpu_live() - gpu.renderer.gpu_kept())),
+            "gpu_kept": live(g.as_ref().map(|gpu| gpu.renderer.gpu_kept())),
             "prepared_textures": g.as_ref().map(|gpu| gpu.renderer.prepared_count()),
             "preparing_world": g.as_ref().map(|gpu| gpu.presenter.preparing_world()),
         })
     })
 }
 
-/// What the context holds now.
-fn live(r: Option<&Renderer>) -> serde_json::Value {
-    r.map_or(serde_json::Value::Null, |r| {
-        let l = r.gpu_live();
+/// Resources the context holds.
+fn live(l: Option<volya_engine::render::gl::Live>) -> serde_json::Value {
+    l.map_or(serde_json::Value::Null, |l| {
         json!({
             "buffers": l.buffers,
             "buffer_bytes": l.buffer_bytes,

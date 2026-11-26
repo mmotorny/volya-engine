@@ -153,9 +153,11 @@ impl PreparedFrame {
 /// A vertex buffer of at least `bytes`: the next power of two, at least
 /// 1 KiB.
 fn vertices(gl: &Gl, bytes: u64) -> Vertices {
-    let buffer = gl.buffer(BufferKind::Dynamic, bytes.next_power_of_two().max(1024));
-    let array = gl.vertex_array(&[(&buffer, 0, &LAYOUT)], None);
-    Vertices { buffer, array }
+    gl.keeping(|| {
+        let buffer = gl.buffer(BufferKind::Dynamic, bytes.next_power_of_two().max(1024));
+        let array = gl.vertex_array(&[(&buffer, 0, &LAYOUT)], None);
+        Vertices { buffer, array }
+    })
 }
 
 impl ParticlePrograms {
