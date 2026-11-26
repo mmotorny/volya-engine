@@ -47,5 +47,5 @@ Dependencies point one way: `volya-engine-web` → `volya-engine` (and `formats`
 - [screens.md](screens.md): fatal errors, settings, the menu during a game, saved games, the inventory screen.
 - [diagnostics.md](diagnostics.md): the diagnostic log.
 - [memory.md](memory.md): memory by lifetime and owner, the one-heap design, GPU ownership and release, the migration.
-- [build.md](build.md): Bazel: sharing across worktrees, Rust and crates, build scripts, the web app, checks, tests and their tags, commands, the migration from Cargo.
+- [build.md](build.md): Bazel: sharing across worktrees, Rust and crates, build scripts, the web app, checks, tests and their tags, commands, Cargo and editors, measurements.
 - Testing: [docs/testing.md](../testing.md).

@@ -18,7 +18,7 @@
 //
 // The setting lives in a cache, where sw.js reads it.
 
-/** This build's commit and its time (ISO 8601), set by `cargo xtask web`. */
+/** This build's commit and its time (ISO 8601), set by the site's build (`tools/site`). */
 export const BUILD = "dev";
 export const BUILT = "";
 

@@ -17,7 +17,7 @@ use std::{env, fs};
 
 use volya_engine_devserver::{BASE, Server};
 
-use super::{Profile, Result, cmd, next_build, output, root, run as run_cmd, step, web};
+use super::{Result, cmd, output, root, run as run_cmd, step};
 use crate::machine::SimulatorLock;
 
 const SUITES: &[&str] = &[
@@ -37,9 +37,6 @@ const SUITES: &[&str] = &[
     "game-memory",
     "fidelity",
 ];
-/// Suites only desktop Chrome runs: fidelity against the original is
-/// judged there (docs/testing.md).
-const CHROME_ONLY: &[&str] = &["fidelity"];
 const TARGETS: &[&str] = &["chrome", "iphone"];
 /// Suites run in Chrome with the kept profile (see [`kept_profile`]), so the
 /// game data they read is imported once (they import only what the
@@ -89,74 +86,7 @@ const SIMULATOR_NAME: &str = "Volya Engine iPhone 17 Pro Max";
 const SIMULATOR_TYPE: &str = "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max";
 const IOS_RUNTIME_PREFIX: &str = "com.apple.CoreSimulator.SimRuntime.iOS-";
 
-/// Runs `args` (targets and suite names, in any order): every suite on every
-/// target by default. Naming suites runs only those, without the native
-/// tests (run them with `cargo test`).
-pub fn run(args: &[&str]) -> Result {
-    if let Some(bad) = args
-        .iter()
-        .find(|a| !TARGETS.contains(a) && !SUITES.contains(a))
-    {
-        return Err(format!(
-            "unknown argument {bad}; expected targets {TARGETS:?} or suites {SUITES:?}"
-        ));
-    }
-    let named = |all: &'static [&'static str]| -> Vec<&'static str> {
-        let some: Vec<_> = all.iter().copied().filter(|x| args.contains(x)).collect();
-        if some.is_empty() { all.to_vec() } else { some }
-    };
-    let targets = named(TARGETS);
-    let suites = named(SUITES);
-    crate::machine::wait_memory()?;
-    let simulator = if targets.contains(&"iphone") {
-        Some(Simulator::take()?)
-    } else {
-        None
-    };
-
-    if suites.len() == SUITES.len() {
-        step("Native tests");
-        run_cmd(&mut cmd("cargo", &["test", "--workspace"]))?;
-    }
-    web(Profile::Test)?;
-    let next = next_build()?;
-
-    let kept = targets.contains(&"chrome") && suites.iter().any(|s| KEPT_PROFILE.contains(s));
-    let _profile = if kept {
-        Some(KeptProfile::take()?)
-    } else {
-        None
-    };
-    let (server, port, reports) = serve(
-        &root().join("dist"),
-        &next,
-        &root().join("tests/browser"),
-        kept,
-    )?;
-    let mut failures = Vec::new();
-    for &target in &targets {
-        for &suite in &suites {
-            if target != "chrome" && CHROME_ONLY.contains(&suite) {
-                continue;
-            }
-            step(&format!("Browser suite {suite} on {target}"));
-            if let Err(failure) =
-                run_suite(&server, port, &reports, simulator.as_ref(), target, suite)
-            {
-                failures.push(failure);
-            }
-        }
-    }
-
-    if failures.is_empty() {
-        step("All tests passed");
-        Ok(())
-    } else {
-        Err(format!("failed:\n  {}", failures.join("\n  ")))
-    }
-}
-
-/// Runs `suite` on `target` (`cargo xtask suite`): the site and the suites
+/// Runs `suite` on `target` (`xtask suite`): the site and the suites
 /// from VOLYA_SITE, VOLYA_SITE_NEXT and VOLYA_TESTS (Bazel's browser suite
 /// tests, docs/architecture/build.md, Browser suites).
 pub fn suite(target: &str, suite: &str) -> Result {

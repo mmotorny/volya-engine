@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! Project tasks: `cargo xtask <task>`.
+//! Operational tasks: `bazel run //tools/xtask -- <task>`.
 
 mod bazel;
 mod common;
@@ -14,21 +14,18 @@ mod spec_lint;
 mod wine;
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use volya_engine_site::{Stamp, copy_dir};
-
 const USAGE: &str = "\
-Usage: bazel run //tools/xtask -- <task>   (or cargo xtask <task>)
+Usage: bazel run //tools/xtask -- <task>
+
+Builds and tests are Bazel's (docs/architecture/build.md): `bazel test //...`,
+the static checks `bazel test //:checks`, a browser suite `bazel test
+//tests/browser:<suite>_<target>`, the dev server `bazel run //tools/devserver`.
 
 Tasks:
-  check       Fast static checks (SPDX, licenses, fmt, clippy). Gates every push.
-  e2e [TARGET...] [SUITE...]
-              Native tests, then browser suites on TARGETs (chrome, iphone;
-              default: all). Naming SUITEs runs only those, without the
-              native tests. On demand only.
   suite TARGET SUITE
               One browser suite on one target, on the site VOLYA_SITE (and
               VOLYA_SITE_NEXT) with the suites in VOLYA_TESTS: what Bazel's
@@ -40,13 +37,12 @@ Tasks:
               the system's temporary directory). Prints its path.
   simrec PATH SECONDS
               Records the test simulator's screen for SECONDS (H.264).
-              VOLYA_SIM_MEDIA=DIR records every iphone suite of `e2e` and
+              VOLYA_SIM_MEDIA=DIR (--test_env) records every iphone suite and
               screenshots its end into DIR.
   parity [REV]
               Builds the test app at the git revision REV (default HEAD) and
               from the working tree and compares their frames of the parity
               suite's views in headless Chrome.
-  web [--dev] Build the web app into dist/ (release unless --dev).
   deploy      Check, build and publish to GitHub Pages (gh-pages branch).
   spec-lint   Flag decompiler output, code and mangled names in clean-room spec drafts.
   wait-memory Return once memory pressure is normal (run before heavy work).
@@ -57,21 +53,14 @@ Tasks:
               directory; passes on its exit code.
   wine check  Build and run a Direct3D 9 smoke test there.
   original [--new-game] [--quit] [SECONDS]
-              Run the original game from VOLYA_GOG_INSTALLER under Wine for
-              SECONDS (default 300), capturing its display to PNGs in the
-              local cache.
+              Run the original game under Wine for SECONDS (default 300),
+              capturing its display to PNGs in the local cache.
   original capture title|level OUT
               The original's frames of the fidelity suite's views there,
               into OUT/fidelity/ (what //tests/fidelity:frames runs).
-  update      Move to the latest stable Rust and dependencies, then check
-              (under `bazel run`: also Bazel, its modules, the wasm LLVM,
-              and the wasm-bindgen CLI's pin).
+  update      Move to the latest Rust, crates, Bazel, its modules and the
+              wasm LLVM, then run the checks and the advisories.
   gc          Remove Bazel's output bases of deleted worktrees.";
-
-/// Crates that never build for the web target.
-const NATIVE_ONLY: &[&str] = &["volya-engine-devserver", "xtask"];
-
-const WASM_TARGET: &str = "wasm32-unknown-unknown";
 
 pub use common::{Result, cmd, output, root, run, runfile, step};
 
@@ -82,8 +71,6 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let result = match args.as_slice() {
-        ["check"] => check(),
-        ["e2e", targets @ ..] => e2e::run(targets),
         ["suite", target, suite] => e2e::suite(target, suite),
         ["wait-memory"] => machine::wait_memory(),
         ["sim", steps @ ..] if !steps.is_empty() => e2e::sim(steps),
@@ -95,12 +82,9 @@ fn main() -> ExitCode {
             .map_err(|e| format!("seconds: {e}"))
             .and_then(|s| e2e::record_for(Path::new(path), Duration::from_secs_f64(s))),
         ["parity", against @ ..] => parity::run(against),
-        ["web"] => web(Profile::Release),
-        ["web", "--dev"] => web(Profile::Dev),
         ["deploy"] => deploy::run_deploy(),
         ["spec-lint", paths @ ..] => spec_lint::run(paths),
-        ["update"] if std::env::var_os("BUILD_WORKSPACE_DIRECTORY").is_some() => bazel::update(),
-        ["update"] => update(),
+        ["update"] => bazel::update(),
         ["gc"] => bazel::gc(),
         ["wine", rest @ ..] => match wine::main(rest) {
             Ok(code) => return ExitCode::from(code),
@@ -125,42 +109,6 @@ fn main() -> ExitCode {
     }
 }
 
-/// `--exclude` arguments for crates that don't build for wasm.
-fn exclude_native_only() -> Vec<&'static str> {
-    NATIVE_ONLY.iter().flat_map(|c| ["--exclude", c]).collect()
-}
-
-fn check() -> Result {
-    step("SPDX headers");
-    check_spdx()?;
-    step("Dependency licenses");
-    run(&mut cmd(
-        "cargo",
-        &["deny", "--log-level", "error", "check"],
-    ))?;
-    step("Format");
-    run(&mut cmd("cargo", &["fmt", "--all", "--check"]))?;
-    step("Clippy");
-    let lint = ["--all-targets", "--", "-D", "warnings"];
-    run(cmd("cargo", &["clippy", "--workspace"]).args(lint))?;
-    run(
-        cmd("cargo", &["clippy", "--workspace", "--target", WASM_TARGET])
-            .args(exclude_native_only())
-            .args(lint),
-    )?;
-    step("Static checks passed");
-    Ok(())
-}
-
-/// Keeps the project at head: latest stable Rust, latest compatible crates.
-fn update() -> Result {
-    step("Rust toolchain");
-    run(&mut cmd("rustup", &["update", "stable"]))?;
-    step("Dependencies");
-    run(&mut cmd("cargo", &["update"]))?;
-    check()
-}
-
 /// Version of `package` recorded in Cargo.lock.
 fn locked_version(package: &str) -> Result<String> {
     let lock = fs::read_to_string(root().join("Cargo.lock"))
@@ -176,103 +124,6 @@ fn locked_version_in(lock: &str, package: &str) -> Option<String> {
     Some(version.trim_end_matches('"').to_owned())
 }
 
-/// Path to a `wasm-bindgen` CLI matching the locked `wasm-bindgen` crate (the
-/// two must match exactly), installed into `.cache/tools` on demand.
-fn wasm_bindgen_cli() -> Result<PathBuf> {
-    let version = locked_version("wasm-bindgen")?;
-    let tools = root().join(".cache/tools");
-    let bin = tools.join("bin/wasm-bindgen");
-    let installed = bin.exists()
-        && output(&mut cmd(&bin.to_string_lossy(), &["--version"]))
-            .is_ok_and(|v| v.split_whitespace().nth(1) == Some(version.as_str()));
-    if !installed {
-        step(&format!("Install wasm-bindgen CLI {version}"));
-        run(&mut cmd(
-            "cargo",
-            &[
-                "install",
-                "--locked",
-                "--force",
-                "wasm-bindgen-cli",
-                "--version",
-                &version,
-                "--root",
-                &tools.to_string_lossy(),
-            ],
-        ))?;
-    }
-    Ok(bin)
-}
-
-#[derive(Clone, Copy)]
-enum Profile {
-    /// Unoptimised, with the test ops.
-    Dev,
-    /// Optimised, as deployed.
-    Release,
-    /// Optimised, with the test ops (`cargo xtask e2e`).
-    Test,
-}
-
-fn web(profile: Profile) -> Result {
-    web_into(profile, &root(), &root().join("dist"))
-}
-
-/// Builds the web app of the source tree `src` (the repository's root, or a
-/// checkout of another revision; in this repository's target directory)
-/// into `dist`.
-fn web_into(profile: Profile, src: &Path, dist: &Path) -> Result {
-    let wasm_bindgen = wasm_bindgen_cli()?;
-    let (release, test_ops, dir) = match profile {
-        Profile::Dev => (false, true, "debug"),
-        Profile::Release => (true, false, "release"),
-        Profile::Test => (true, true, "release"),
-    };
-    step("Web build");
-    let target = root().join("target");
-    let mut command = cmd(
-        "cargo",
-        &["build", "-p", "volya-engine-web", "--target", WASM_TARGET],
-    );
-    command.current_dir(src).env("CARGO_TARGET_DIR", &target);
-    if release {
-        command.arg("--release");
-    }
-    if test_ops {
-        command.args(["--features", "test-ops"]);
-    }
-    run(&mut command)?;
-    let wasm = target.join(format!("{WASM_TARGET}/{dir}/volya_engine_web.wasm"));
-    let (commit, date) = git_stamp("")?;
-    volya_engine_site::build(
-        &src.join("platforms/web/static"),
-        &wasm,
-        &wasm_bindgen,
-        dist,
-        &Stamp {
-            commit: &commit,
-            date: &date,
-        },
-    )
-}
-
-/// `dist-next`: `dist` as the next deploy would be, for the update flow's
-/// test (tests/browser/smoke.js; volya_engine_site::next_build).
-fn next_build() -> Result<PathBuf> {
-    let next = root().join("dist-next");
-    let (commit, date) = git_stamp("-next")?;
-    volya_engine_site::next_build(
-        &root().join("dist"),
-        &root().join("platforms/web/static"),
-        &next,
-        &Stamp {
-            commit: &commit,
-            date: &date,
-        },
-    )?;
-    Ok(next)
-}
-
 /// The commit (`+` when the working tree is dirty, then `suffix`) and its
 /// date, as a build's stamp.
 fn git_stamp(suffix: &str) -> Result<(String, String)> {
@@ -283,65 +134,6 @@ fn git_stamp(suffix: &str) -> Result<(String, String)> {
     let commit = format!("{}{}{suffix}", commit.trim(), if dirty { "+" } else { "" });
     let date = output(&mut cmd("git", &["show", "-s", "--format=%cI", "HEAD"]))?;
     Ok((commit, date.trim().to_owned()))
-}
-
-/// Third-party sources kept as released, under their own licences.
-const VENDORED: &str = "/vendor/";
-
-/// Source files that must carry SPDX headers.
-const SPDX_PATTERNS: &[&str] = &[
-    "*.rs",
-    "*.c",
-    "*.h",
-    "*.S",
-    "*.lua",
-    "*.sh",
-    "*.js",
-    "*.mjs",
-    "*.html",
-    "*.css",
-    "*.svg",
-    "*.toml",
-    "*.wgsl",
-    "*.swift",
-    "*.pbxproj",
-    "*.xcscheme",
-    "*Containerfile",
-    "*.bazel",
-    "*.bzl",
-    "*.bazelrc",
-];
-
-fn check_spdx() -> Result {
-    let files = output(
-        cmd(
-            "git",
-            &["ls-files", "--cached", "--others", "--exclude-standard"],
-        )
-        .args(SPDX_PATTERNS),
-    )?;
-    let missing: Vec<&str> = files
-        .lines()
-        .filter(|file| !file.contains(VENDORED))
-        .filter(|file| {
-            fs::read_to_string(root().join(file))
-                .map(|text| !has_spdx_headers(&text))
-                .unwrap_or(false) // Deleted but still tracked.
-        })
-        .collect();
-    if missing.is_empty() {
-        Ok(())
-    } else {
-        Err(format!("missing SPDX headers:\n  {}", missing.join("\n  ")))
-    }
-}
-
-fn has_spdx_headers(text: &str) -> bool {
-    let head: Vec<&str> = text.lines().take(5).collect();
-    head.iter().any(|l| l.contains("SPDX-FileCopyrightText: "))
-        && head
-            .iter()
-            .any(|l| l.contains("SPDX-License-Identifier: BSD-3-Clause"))
 }
 
 #[cfg(test)]
@@ -360,19 +152,5 @@ mod tests {
             Some("0.2.131")
         );
         assert_eq!(locked_version_in(lock, "serde"), None);
-    }
-
-    #[test]
-    fn spdx_headers() {
-        let ok = "// SPDX-FileCopyrightText: 2026 A\n// SPDX-License-Identifier: BSD-3-Clause\n";
-        assert!(has_spdx_headers(ok));
-        assert!(has_spdx_headers(&format!("#!/bin/sh\n{ok}")));
-        assert!(!has_spdx_headers(
-            "// SPDX-License-Identifier: BSD-3-Clause\n"
-        ));
-        assert!(!has_spdx_headers(
-            "// SPDX-FileCopyrightText: 2026 A\n// SPDX-License-Identifier: MIT\n"
-        ));
-        assert!(!has_spdx_headers(&format!("\n\n\n\n\n{ok}")));
     }
 }

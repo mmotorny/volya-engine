@@ -7,7 +7,7 @@
 //   (`diagnostics`: the session as diagnostics.js tells it when the player keeps a
 //   diagnostic log, else null, and in the reply the log's status;
 //   `previousEnd`: how an earlier session's page ended, kept by
-//   diagnostics.js; `build`: the engine's build id, stamped by cargo xtask web)
+//   diagnostics.js; `build`: the engine's build id, stamped by the site's build (tools/site))
 //   { type: "diag", kind, name, … }: the page's events for the diagnostic
 //   log (diagnostics.js), dropped while it is off.
 //   { type: "end", reason, message }: how the page ended (an uncaught
@@ -61,7 +61,7 @@ const message = (error) => String(error?.message ?? error);
 
 /**
  * The engine's compiled wasm, once it is known to be the glue's build
- * (`cargo xtask web` stamps both with one id): mixed, the glue would call
+ * (the site's build (`tools/site`) stamps both with one id): mixed, the glue would call
  * exports that aren't there.
  */
 async function engineModule() {

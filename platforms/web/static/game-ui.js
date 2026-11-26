@@ -241,7 +241,7 @@ function showImport(status, snapshot = null, { kept = false, deleted = false } =
   const notice = element("div", { hidden: true });
   // Declaring the installer's types sends iOS straight to the Files picker
   // (no Photos or camera menu); both files stay selectable (checked in the
-  // simulator with real taps, `cargo xtask sim`).
+  // simulator with real taps, `xtask sim`).
   const input = element("input", { type: "file", multiple: true, accept: ".exe,.bin", hidden: true });
   const choose = element("button", { className: "primary wide", textContent: "Choose installer files" });
   const say = (text) => {

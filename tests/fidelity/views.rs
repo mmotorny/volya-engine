@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // The views the `fidelity` suite compares (#521), shared by both engines:
-// `cargo xtask original views` steers the original to each and caches its
+// Bazel's capture actions (`//tests/fidelity:frames`) steers the original to each and caches its
 // frame, `volya_engine::selftest::fidelity` draws ours. Both include this
 // file with `include!`; a change to a view here (or to the settings) changes
 // its cache key, so the original's frame is captured again.

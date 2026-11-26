@@ -317,7 +317,8 @@ dependencies = [
 [[package]]
 name = "inno"
 version = "0.7.6"
-source = "git+https://github.com/mmotorny/inno?branch=expose-file-conditions#5e08862262b72c94b5264eb77993114e7cfddffb"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e6ae455bd03f7d8291d205c0f9850800fdc841697ec57f37aaeae4404c906de"
 dependencies = [
  "bitflags",
  "codepage",

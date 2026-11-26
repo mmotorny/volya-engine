@@ -10,7 +10,7 @@ Scripts run on the runtime the original embeds (docs/behavior/script-environment
 
 ## Build
 
-- `build.rs` with the `cc` crate: natively the system C compiler; for wasm32 Homebrew's LLVM clang (Apple's has no wasm target), looked up at `/opt/homebrew/opt/llvm`, `/usr/local/opt/llvm`, then `brew --prefix llvm`, else the build fails saying so.
+- `build.rs` with the `cc` crate: natively the system C compiler; for wasm32 the clang of Bazel's pinned LLVM (wasi-sdk's, docs/architecture/build.md; Apple's has no wasm target), which the target names in `VOLYA_WASM_CLANG`.
 - Vendored files compile from a copy in `OUT_DIR`, patched by `build.rs`; each replacement must match exactly once. `csrc/volya_rand.h` is force-included before every vendored file.
 - `llex.c`: the original's C-style comments (docs/behavior/script-loading.md 1), in every chunk: a case for `/` where a token can start; `//` to the next LF; `/* */` without nesting, needing no end and counting no line breaks, a `*` taken with the byte after it.
 - `luaconf.h`: numbers convert to integers with the header's x86 method on every target (add 2^52 + 2^51, take the double's low 32 bits): round to nearest, ties to even, as the spec's x86 build does, with out-of-range values wrapping, where our targets' casts would truncate. String-to-number is our decimal-only `volya_strtod` (`src/libc.rs`) on every target: C99 libraries also read hexadecimal, `inf` and `nan`; Lua 5.1 alpha is written for ANSI C's. The release's other defaults stand (`string.gfind` is `gmatch`, `math.mod` is `fmod`, `table.setn` raises "obsolete"); the spec doesn't establish the original's.

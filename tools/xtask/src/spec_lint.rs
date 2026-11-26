@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! `cargo xtask spec-lint <draft.md>…`: flags content a clean spec may not
+//! `xtask spec-lint <draft.md>…`: flags content a clean spec may not
 //! contain (docs/clean-room.md) before a draft goes to review. It catches
 //! mechanical slips only (decompiler output, code blocks, mangled symbols);
 //! the reviewer still judges everything else.
@@ -59,7 +59,7 @@ const CODE_FENCES: &[&str] = &["c", "cpp", "c++", "asm", "nasm", "x86", "lua"];
 
 pub fn run(paths: &[&str]) -> Result {
     if paths.is_empty() {
-        return Err("usage: cargo xtask spec-lint <draft.md>…".into());
+        return Err("usage: xtask spec-lint <draft.md>…".into());
     }
     let mut findings = 0;
     for path in paths {

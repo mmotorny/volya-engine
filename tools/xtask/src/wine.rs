@@ -63,11 +63,11 @@ wineserver -w
 "#;
 
 const USAGE: &str = "\
-Usage: cargo xtask wine image
-       cargo xtask wine run DIR -- EXE [ARGS...]
-       cargo xtask wine check";
+Usage: xtask wine image
+       xtask wine run DIR -- EXE [ARGS...]
+       xtask wine check";
 
-/// `cargo xtask wine ...`; returns the exit code to pass on.
+/// `xtask wine ...`; returns the exit code to pass on.
 pub fn main(args: &[&str]) -> Result<u8> {
     match args {
         ["image"] => {

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
-/* `cargo xtask wine check`: creates a Direct3D 9 device, clears its back
+/* `xtask wine check`: creates a Direct3D 9 device, clears its back
  * buffer to 0x2080e0 and saves it as d3d9smoke.bmp (32-bit, top-down). */
 #include <windows.h>
 #include <d3d9.h>

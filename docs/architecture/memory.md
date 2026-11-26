@@ -23,7 +23,7 @@ Where the engine's memory goes, by lifetime and owner; the design it follows (on
 | `game-level` and `game-memory` suites' JS memory | Chrome | `performance.measureUserAgentSpecificMemory()` after the New Game (cross-origin isolated pages only, documented, MDN): each context's JavaScript, the wasm memories not among it. |
 | `footprint` of the Simulator's processes | iOS Simulator | Per-process footprints; ETC2 textures there are held as RGBA8, so they don't show the device's (#443). |
 
-`cargo xtask e2e chrome game-level game-memory render-level` reports the browser's numbers; the native tests run with `VOLYA_GOG_INSTALLER` (release build for meaningful counts).
+`bazel test //tests/browser:game_level_chrome //tests/browser:game_memory_chrome //tests/browser:render_level_chrome` reports the browser's numbers; the native tests with game data (`--config=measure` for meaningful counts).
 
 ## Inventory
 
@@ -185,7 +185,7 @@ The specs in docs/ state nothing about how the original manages its memory (text
 
 ## Open steps
 
-Each is its own issue, measured before and after with the tools above (native and `cargo xtask e2e chrome game-level game-memory render-level`), its gain checked against the expectation here, and stopped if it doesn't pay off.
+Each is its own issue, measured before and after with the tools above (native and those three browser suites), its gain checked against the expectation here, and stopped if it doesn't pay off.
 
 - **Every GPU resource reported by owner** (#482): `level_stats` reports each lifetime's resources in the table above (the render targets, the menus' textures, the particles' buffers, the world) by owner. Expected: the render targets measured rather than computed (about 90 MB at 2868 × 1320 with `r__supersample` 2, believed), and #436's 200–300 MB found ours or the browser's.
 - **The kept targets follow the video mode back down** (#518). Expected: `gpu_kept` at 1024 × 768 after a game at 2868 × 1320 back to 11 MiB of textures from 48.

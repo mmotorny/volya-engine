@@ -4,7 +4,7 @@
 //! The `fidelity` suite's views (#521, `tests/fidelity/views.rs`), drawn as
 //! the other render checks draw: each a check named after its view, keeping
 //! its frame under the view's name, which the suite compares with the
-//! original's (`cargo xtask original views`). The game reads its settings
+//! original's (Bazel's capture actions (`//tests/fidelity:frames`)). The game reads its settings
 //! as the app does, from the root folder's `user.ltx` where there is one,
 //! as the original reads the shipped `user.ltx`.
 

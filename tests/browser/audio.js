@@ -243,7 +243,7 @@ export const tests = {
     live = new AudioContext();
     await volya.connectAudio(live);
     // Where it needs a gesture (the iOS Simulator), a real tap resumes it
-    // (`cargo xtask sim`); otherwise the continuity test skips.
+    // (`xtask sim`); otherwise the continuity test skips.
     for (const event of ["pointerdown", "touchend"]) addEventListener(event, () => live.resume());
     await volya.call("launch");
     // The logos, then the title menu's New Game with its first difficulty.

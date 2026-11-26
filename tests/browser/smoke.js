@@ -1051,7 +1051,7 @@ export const tests = {
     }
   },
 
-  // The update flow with a real next build: `cargo xtask e2e` serves
+  // The update flow with a real next build: the browser suites' runner (`xtask suite`) serves
   // dist-next on request (its engine and a shell module, game-ui.js, tell
   // it apart), both with GitHub Pages' cache lifetime (#446, #450). Near the
   // end: Finish update takes over this page's service worker.

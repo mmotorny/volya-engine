@@ -92,6 +92,15 @@ crate.annotation_select(
     triples = ["aarch64-apple-darwin"],
 )
 
+# File install conditions exposed (docs/architecture/game-data.md):
+# our patch to the crates.io release (also @gog_extractor's).
+crate.annotation(
+    crate = "inno",
+    patch_args = ["-p1"],
+    patches = ["//third_party/inno:expose-file-conditions.patch"],
+    repositories = ["crates"],
+)
+
 use_repo(crate, "crates")
 
 # Tools built from crates.io: the wasm-bindgen CLI, which must equal the

@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! `cargo xtask original`: the shipped game run as a black box
+//! `xtask original`: the shipped game run as a black box
 //! (docs/clean-room.md, Sources): its install folder assembled from the
 //! user's GOG installer, its executable started unmodified under
-//! `cargo xtask wine`, and the virtual display captured to PNG from outside.
+//! `xtask wine`, and the virtual display captured to PNG from outside.
 //! Everything it writes is game assets and stays in the local cache.
 
 use std::fs::{self, File};
@@ -77,8 +77,8 @@ const XAUTHORITY: &str = "/tmp/xauthority";
 const QUIT_WAIT: u64 = 60;
 
 const USAGE: &str = "\
-Usage: cargo xtask original [--new-game] [--quit] [SECONDS]
-       cargo xtask original views [--again] [NAME...]";
+Usage: xtask original [--new-game] [--quit] [SECONDS]
+       xtask original capture title|level OUT";
 
 /// A New Game, as the menu's New Game starts it (steering-the-original.md
 /// section 3.2); `-start` takes the rest of the command line, so it comes
@@ -89,7 +89,7 @@ const NEW_GAME: [&str; 3] = [
     "client(localhost)",
 ];
 
-/// `cargo xtask original ...`.
+/// `xtask original ...`.
 pub fn main(args: &[&str]) -> Result {
     if let ["capture", place, out] = args {
         return capture(place, Path::new(out));

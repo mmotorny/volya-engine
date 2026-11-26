@@ -3,7 +3,7 @@
 
 // Real touches in the iOS Simulator, for what in-page synthesized input
 // can't reach: system sheets (file pickers), iOS gestures, the path from
-// the screen to the page. `cargo xtask sim` runs this UI test with a script
+// the screen to the page. `xtask sim` runs this UI test with a script
 // in SIMDRIVER_SCRIPT, one step per line:
 //
 //   open <url>                    open a URL (in Safari)

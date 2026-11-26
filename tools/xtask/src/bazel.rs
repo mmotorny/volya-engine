@@ -81,6 +81,12 @@ pub fn update() -> Result {
     );
     fs::write(&module_path, module).map_err(|e| format!("MODULE.bazel: {e}"))?;
 
+    step("Editors' rust-project.json");
+    run(&mut cmd(
+        "bazel",
+        &["run", "@rules_rust//tools/rust_analyzer:gen_rust_project"],
+    ))?;
+
     step("Checks");
     run(&mut cmd("bazel", &["test", "//:checks"]))?;
     step("Advisories");
@@ -88,6 +94,17 @@ pub fn update() -> Result {
         "cargo-deny",
         &["--log-level", "error", "check", "advisories"],
     ))
+}
+
+/// Builds `target` in the workspace `workspace` (with the shared caches,
+/// mostly hits); the path of its one output.
+pub fn build_output(workspace: &Path, target: &str) -> Result<PathBuf> {
+    run(cmd("bazel", &["build", target]).current_dir(workspace))?;
+    let files = output(cmd("bazel", &["cquery", "--output=files", target]).current_dir(workspace))?;
+    let file = files.lines().last().ok_or(format!("{target}: no output"))?;
+    // Relative to the execroot, which the workspace's `bazel-out` link
+    // reaches.
+    Ok(workspace.join(file.trim()))
 }
 
 /// The version in the stable channel's `[pkg.rust]`.

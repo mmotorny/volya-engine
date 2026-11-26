@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+
+load("//build:checks.bzl", "volya_checks")
+
+# Our patch to inno's crates.io release (MODULE.bazel, build/gog_extractor.bzl).
+exports_files(
+    ["expose-file-conditions.patch"],
+    visibility = ["//visibility:public"],
+)
+
+volya_checks(wasm = False)

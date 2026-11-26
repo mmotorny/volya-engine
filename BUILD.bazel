@@ -20,6 +20,7 @@ PACKAGES = [
     "//platforms/web",
     "//tests/browser",
     "//tests/fidelity",
+    "//third_party/inno",
     "//tools/devserver",
     "//tools/gog-extract",
     "//tools/site",

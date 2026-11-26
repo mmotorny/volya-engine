@@ -227,7 +227,7 @@ fn checks() -> impl Iterator<Item = (&'static str, &'static str, Run)> {
     })
 }
 
-/// The `parity` suite's checks (`cargo xtask parity`): the views two
+/// The `parity` suite's checks (`xtask parity`): the views two
 /// builds draw, compared pixel by pixel: the title menu and a
 /// video, a New Game's start view and an outdoor one, its objects, lights
 /// and glows, a caged lamp's glass and glow, the torch, a campfire's and an artefact's particles, the

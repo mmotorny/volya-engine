@@ -3,13 +3,12 @@
 
 //! Builds the vendored LuaJIT 1.0.3 interpreter (vendor/luajit-1.0.3, left
 //! unmodified; [`PATCHES`] change a copy) with our shims (csrc/): natively
-//! with the system C compiler, for wasm32 with Homebrew LLVM clang against
-//! our minimal C library (csrc/wasm). See docs/architecture/scripts.md.
+//! with the system C compiler, for wasm32 with Bazel's pinned LLVM clang
+//! against our minimal C library (csrc/wasm). See docs/architecture/scripts.md.
 
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 const VENDOR: &str = "vendor/luajit-1.0.3/src";
 
@@ -176,34 +175,15 @@ fn wasm_toolchain(build: &mut cc::Build, root: &Path) {
         .flag("-wasm-use-legacy-eh=true");
 }
 
-/// The `bin` directory of the LLVM for wasm32: the clang `VOLYA_WASM_CLANG`
-/// names (Bazel's pinned LLVM, docs/architecture/build.md), else Homebrew's
-/// (`brew install llvm`): Apple's clang has no WebAssembly target.
+/// The `bin` directory of the LLVM for wasm32: Bazel's pinned one, whose
+/// clang `VOLYA_WASM_CLANG` names (docs/architecture/build.md, Build
+/// scripts): Apple's clang has no WebAssembly target.
 fn llvm_bin() -> PathBuf {
     println!("cargo:rerun-if-env-changed=VOLYA_WASM_CLANG");
-    if let Some(clang) = env::var_os("VOLYA_WASM_CLANG") {
-        return PathBuf::from(clang)
-            .parent()
-            .expect("VOLYA_WASM_CLANG names a file")
-            .to_path_buf();
-    }
-    let has_clang = |prefix: &Path| prefix.join("bin/clang").is_file();
-    let known = ["/opt/homebrew/opt/llvm", "/usr/local/opt/llvm"].map(PathBuf::from);
-    if let Some(prefix) = known.iter().find(|p| has_clang(p)) {
-        return prefix.join("bin");
-    }
-    let brew = Command::new("brew").args(["--prefix", "llvm"]).output();
-    if let Ok(out) = brew
-        && out.status.success()
-    {
-        let prefix = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
-        if has_clang(&prefix) {
-            return prefix.join("bin");
-        }
-    }
-    panic!(
-        "volya-engine-script: building for wasm32 needs Homebrew's LLVM clang \
-         (`brew install llvm`); no clang found at /opt/homebrew/opt/llvm/bin, \
-         /usr/local/opt/llvm/bin or `brew --prefix llvm`/bin"
-    );
+    let clang = env::var_os("VOLYA_WASM_CLANG")
+        .expect("VOLYA_WASM_CLANG names the wasm32 clang (Bazel sets it)");
+    PathBuf::from(clang)
+        .parent()
+        .expect("VOLYA_WASM_CLANG names a file")
+        .to_path_buf()
 }

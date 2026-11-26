@@ -1,8 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! `cargo xtask parity [REV]`: the test app built at a git revision (a
-//! detached worktree under `target/parity/`) and from the working tree, and
+//! `bazel run //tools/xtask -- parity [REV]`: the test app (Bazel's
+//! `//platforms/web:site_test`) built at a git revision (a detached worktree
+//! under `target/parity/`, its own Bazel workspace sharing the caches) and
+//! from the working tree, and
 //! the `parity` suite run on each in headless Chrome, one after the other,
 //! on the same origin and kept profile: the first run keeps its views'
 //! frames, the second compares its own with them pixel by pixel
@@ -17,7 +19,9 @@ use std::time::Duration;
 
 use volya_engine_devserver::{BASE, Server};
 
-use super::{Profile, Result, cmd, root, step, web_into};
+use volya_engine_site::copy_dir;
+
+use super::{Result, cmd, root, step};
 use crate::e2e;
 
 const SUITE: &str = "parity";
@@ -55,9 +59,9 @@ pub fn run(args: &[&str]) -> Result {
             &["worktree", "add", "--force", "--detach", &src_arg, rev],
         ))?;
     }
-    web_into(Profile::Test, &src, &first)?;
+    copy_site(&src, &first)?;
     step("Parity: the working tree's build");
-    web_into(Profile::Test, &root(), &second)?;
+    copy_site(&root(), &second)?;
     let frames_first = dir.join("frames-base");
     let frames_second = dir.join("frames-tree");
     for frames in [&frames_first, &frames_second] {
@@ -118,4 +122,13 @@ pub fn run(args: &[&str]) -> Result {
             frames_second.display()
         ))
     }
+}
+
+/// The test site built in the workspace `workspace`, copied to `to`.
+fn copy_site(workspace: &std::path::Path, to: &std::path::Path) -> Result {
+    let built = crate::bazel::build_output(workspace, "//platforms/web:site_test")?;
+    if to.exists() {
+        fs::remove_dir_all(to).map_err(|e| format!("{}: {e}", to.display()))?;
+    }
+    copy_dir(&built, to).map_err(|e| format!("{}: {e}", built.display()))
 }

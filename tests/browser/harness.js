@@ -14,7 +14,7 @@
 //
 // A report with no `fail` lines and at least one `ok` line passes. The run id
 // comes from the dev server path `__test/run/<id>/<suite>.html`, which lets
-// `cargo xtask e2e` match reports to runs; otherwise it is `manual`.
+// the browser suites' runner (`xtask suite`) match reports to runs; otherwise it is `manual`.
 
 const errors = [];
 

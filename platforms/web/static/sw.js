@@ -5,7 +5,7 @@
 // page always runs one consistent version. The established precache pattern
 // (as in Workbox's injectManifest):
 //
-// - `cargo xtask web` injects the build's files, each with a hash of its
+// - the site's build (`tools/site`) injects the build's files, each with a hash of its
 //   content and its size, into PRECACHE, and a cache name made from them, so
 //   this script changes exactly when the build does, and browsers install it
 //   anew then (they compare the script's bytes when the app opens and on
@@ -46,7 +46,7 @@ const CACHE = "volya-engine-build-dev";
 /** This build's commit (injected). */
 const BUILD = "dev";
 /** `[path, content hash, size]` of every file of the build; `./` is the page. */
-const PRECACHE = [/* injected by cargo xtask web */];
+const PRECACHE = [/* injected by tools/site */];
 /** The header a kept copy carries its content hash in. */
 const HASH = "X-Volya-Engine-Hash";
 /** Settings shared with the page (update.js): `{ auto, consent }`. */

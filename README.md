@@ -30,23 +30,21 @@ Open the [live version](https://mmotorny.github.io/volya-engine/) in a supported
 
 To run locally on macOS:
 
-1. Install [rustup](https://rustup.rs); the stable toolchain and the wasm target install automatically on first build.
-   Install LLVM's clang (`brew install llvm`): the web build compiles the script runtime's C for wasm with it.
-2. Build and serve (the first build also installs the matching `wasm-bindgen` CLI into `.cache/`):
+1. Install [Bazelisk](https://github.com/bazelbuild/bazelisk) (`brew install bazelisk`): it runs the Bazel release `.bazelversion` names, which downloads the Rust toolchain, the crates and the wasm C compiler.
+2. Build and serve:
 
    ```sh
-   cargo xtask web --dev
-   cargo run -p volya-engine-devserver
+   bazel run //tools/devserver
    ```
 
 3. Open http://localhost:8080/volya-engine/ in Chrome.
 
 ## Development
 
-- `cargo xtask check`: fast static checks (needs [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny)).
-- `cargo xtask e2e`: full test suite, including browser tests in headless Chrome and Mobile Safari in the iOS Simulator (needs Google Chrome and Xcode).
-- `cargo xtask deploy`: publish to GitHub Pages.
-- `cargo xtask update`: move to the latest stable Rust and dependencies.
+- `bazel test //...`: the tests and static checks that run by default, cached (needs [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny) and Google Chrome).
+- `bazel test //tests/browser:chrome //tests/browser:iphone`: every browser suite in headless Chrome and Mobile Safari in the iOS Simulator (needs Xcode).
+- `bazel run //tools/xtask -- deploy`: publish to GitHub Pages.
+- `bazel run //tools/xtask -- update`: move to the latest Rust, crates, Bazel and its rules.
 
 See [docs/testing.md](docs/testing.md) and [docs/architecture/](docs/architecture/README.md).
 

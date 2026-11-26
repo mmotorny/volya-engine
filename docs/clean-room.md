@@ -19,7 +19,7 @@ The orchestrating session is clean. Nothing dirty reaches it.
 - **Investigator → reviewer:** files only, `specs/<format>.md` in the dirty workspace.
 - **Reviewer → repository:** an approved spec is copied verbatim to `docs/formats/<format>.md` (formats) or `docs/behavior/<name>.md` (behavior); a rejected one never reaches the clean side in any form.
 - **Scope comes from the dirty side:** an area starts with a scoping spec that splits it into small specs, one format or one behaviour each; each is then investigated in its full scope. Scope is never narrowed to pass review; anything an investigator can't establish is marked unestablished, not cut.
-- **Runnable evidence:** every claim in a draft carries a check (a script in the dirty workspace that reproduces it from the data or binaries). The investigator runs all checks and `cargo xtask spec-lint <draft>` before reporting `SPEC READY`; the reviewer runs the same checks first, then looks for what they miss.
+- **Runnable evidence:** every claim in a draft carries a check (a script in the dirty workspace that reproduces it from the data or binaries). The investigator runs all checks and `bazel run //tools/xtask -- spec-lint <draft>` before reporting `SPEC READY`; the reviewer runs the same checks first, then looks for what they miss.
 - **Review outcome:** only a clean-criteria violation blocks a spec. Otherwise the reviewer approves and copies it, having marked in the copy every wrong or unbacked claim inline (`Disputed in review: …`, with the correct value where established) and listed every gap under "Gaps found in review"; wording is fixed or noted, never blocking. These notes are clean text, held to the same criteria. Implementers treat a disputed statement as unestablished. The orchestrator reads the marks and decides: accept, send back for a targeted fix of named items, or split a gap into its own spec; anything that changes scope or looks critical goes to the user.
 - **Rejection → revision:** a rejected draft (clean-criteria violations only) is revised in place by the investigator, from the reviewer's reasons in the dirty workspace; a fresh investigator takes over once the previous one's context is large. Every review round is done by a fresh reviewer that reviews the whole spec.
 - **Dirty roles never write to GitHub** (issues, comments, commits, pushes) or anywhere else the clean side reads, other than the reviewer's copy of an approved spec. Reading issues is allowed. Issue references are added by the clean side when it commits an approved spec.
@@ -67,19 +67,19 @@ Every dirty agent reads this section with the rest of this file; it is binding a
 **Both roles**
 - Work only in the dirty workspace; never write to the repository (except the reviewer's copy of an approved spec) or to GitHub. Reading issues with `gh` is fine.
 - Never install tools or packages (pip, brew, winetricks, downloads); use what is set up. If something is missing, report `BLOCKED` with what is needed.
-- Run the shipped game only through `cargo xtask wine` / `cargo xtask original` (headless, in the container), never with the Mac's own Wine: nothing may appear on the user's screen.
-- Don't run cargo builds, browser suites or the iOS Simulator (the machine's memory is shared, AGENTS.md); `cargo xtask spec-lint` is the exception.
+- Run the shipped game only through `bazel run //tools/xtask -- wine` / `bazel run //tools/xtask -- original` (headless, in the container), never with the Mac's own Wine: nothing may appear on the user's screen.
+- Don't run builds, browser suites or the iOS Simulator (the machine's memory is shared, AGENTS.md); `bazel run //tools/xtask -- spec-lint` is the exception.
 - Model memory is not a source; every fact comes from the user's game data or the shipped binaries, through a check script in the dirty workspace.
 - Report only the verdict line your role defines, never findings.
 
 **Investigator**
 - Write the draft as `specs/<name>.md` in the dirty workspace, in functional terms only (section "What a clean spec may contain").
-- Every claim carries a check (a script that reproduces it); run all checks and `cargo xtask spec-lint <draft>` before reporting.
+- Every claim carries a check (a script that reproduces it); run all checks and `bazel run //tools/xtask -- spec-lint <draft>` before reporting.
 - Cover the full scope you were given; mark what can't be established as **unestablished** (or **believed**, with why); never narrow scope.
 - A targeted fix of an approved spec: copy it from `docs/` to `specs/` (overwriting older drafts) and change only what the fix covers.
 - Report `SPEC READY <path>` (or several paths) or `BLOCKED`.
 
 **Reviewer**
-- Review the whole draft as if no one had before: run every check it names and `cargo xtask spec-lint` first, then look for what they miss: clean-criteria violations, wrong or unbacked claims, gaps against the given scope.
+- Review the whole draft as if no one had before: run every check it names and `bazel run //tools/xtask -- spec-lint` first, then look for what they miss: clean-criteria violations, wrong or unbacked claims, gaps against the given scope.
 - Only a clean-criteria violation blocks: then change nothing in the repository, write the reasons to `reviews/<name>.md` in the dirty workspace and report `REJECTED: <n> clean`.
 - Otherwise copy the draft to the approved path and, in the copy only: mark every wrong or unbacked claim inline as `**Disputed in review:** <what is wrong; the correct value if established>`; list every gap in a final "Gaps found in review" section (one line each, functional terms); keep earlier review marks that still apply; fix wording silently. Your notes are clean text under the same criteria (run spec-lint on the copy). Report `APPROVED <path>: <n> disputed, <n> gaps`.

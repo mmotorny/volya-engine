@@ -1,14 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! Deploys to GitHub Pages without GitHub Actions: builds a release locally
+//! Deploys to GitHub Pages without GitHub Actions: builds the release site
+//! with Bazel (`//platforms/web:site`), stamps it with the commit
 //! and force-pushes it as a single commit to the `gh-pages` branch. The branch
 //! is a build artifact; its history carries no value. Tests are never
 //! deployed.
 
 use std::fs;
 
-use super::{Profile, Result, check, cmd, copy_dir, output, root, run, step, web};
+use volya_engine_site::{Stamp, copy_dir, restamp};
+
+use super::{Result, cmd, git_stamp, output, root, run, step};
 
 const BRANCH: &str = "gh-pages";
 
@@ -36,15 +39,27 @@ pub fn run_deploy() -> Result {
     let sha = output(&mut cmd("git", &["rev-parse", "--short", "HEAD"]))?;
     let sha = sha.trim();
 
-    check()?;
-    web(Profile::Release)?;
+    step("Checks");
+    run(&mut cmd("bazel", &["test", "//:checks"]))?;
+    step("Release build");
+    let built = crate::bazel::build_output(&root(), "//platforms/web:site")?;
 
     step("Stage site");
     let site = root().join("target/gh-pages");
     if site.exists() {
         fs::remove_dir_all(&site).map_err(|e| format!("remove {}: {e}", site.display()))?;
     }
-    copy_dir(&root().join("dist"), &site).map_err(|e| format!("copy dist: {e}"))?;
+    copy_dir(&built, &site).map_err(|e| format!("copy {}: {e}", built.display()))?;
+    // Bazel's site is stamped for tests; this one carries the commit.
+    let (commit, date) = git_stamp("")?;
+    restamp(
+        &site,
+        &root().join("platforms/web/static"),
+        &Stamp {
+            commit: &commit,
+            date: &date,
+        },
+    )?;
     // Serve files as-is, without Jekyll processing.
     fs::write(site.join(".nojekyll"), "").map_err(|e| format!(".nojekyll: {e}"))?;
 

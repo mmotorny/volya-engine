@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Our frames of the views in tests/fidelity/views.rs against the original's
-// (`cargo xtask original views`, served as this suite's references by
-// `cargo xtask e2e`): per view the pixels that differ, the mean and largest
+// (Bazel's capture actions, //tests/fidelity:frames, served as this
+// suite's references by //tests/browser:fidelity_chrome): per view the pixels that differ, the mean and largest
 // difference, and a heat map. A report with thresholds, not a gate: the
 // original runs on Wine's Direct3D 9, which isn't pixel-exact. Kept frames
 // (VOLYA_DUMP_DIR): `<view>` ours, `<view>-original`, `<view>-heat`.
@@ -39,7 +39,7 @@ function heatMap(width, height, ours, d) {
 
 async function compare(frame) {
   const original = await reference("fidelity", frame.name);
-  if (!original) return "no frame of the original (cargo xtask original views)";
+  if (!original) return "no frame of the original (//tests/fidelity:frames)";
   if (original.width !== frame.width || original.height !== frame.height) {
     return `the original's frame is ${original.width}x${original.height}, ours ${frame.width}x${frame.height}`;
   }

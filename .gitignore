@@ -1,8 +1,6 @@
 /target
-/dist
-/.cache
 .DS_Store
 /.claude/worktrees/
-/dist-next
 /user.bazelrc
 /bazel-*
+/rust-project.json

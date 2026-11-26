@@ -7,7 +7,7 @@ Game data never reaches any server. The user brings the GOG offline installer (t
 - **Eager inflation, the same on every platform.** The importer (`static/import-worker.js`, `platforms/web/src/import.rs`, over `volya-engine-installer`) inflates every game file once into OPFS; the engine then reads plain files through the OPFS VFS with true random access: no on-demand inflation, no decompression cache.
 - `volya-engine-installer::extract` finds each file's parts at their offsets in the `.bin` (docs/formats/gog-installer.md), inflates them with `zlib-rs` as streams through fixed buffers (4 MiB read, 1 MiB written at a time, so the worker's heap doesn't grow with the parts), verifies part and file MD5s, and writes the file.
 - One import worker, file by file. Parts are independent zlib streams, so inflation can be spread across workers (#305).
-- **Inno Setup only for headers.** The `inno` crate parses the `.exe` headers to find each game file's parts; only the installer crate uses it. It needs file install conditions exposed, so the workspace patches it to the `expose-file-conditions` branch of the fork https://github.com/mmotorny/inno (`[patch.crates-io]` in `Cargo.toml`).
+- **Inno Setup only for headers.** The `inno` crate parses the `.exe` headers to find each game file's parts; only the installer crate uses it. It needs file install conditions exposed, so the build applies `third_party/inno/expose-file-conditions.patch` to the crates.io release (docs/architecture/build.md, Rust).
 - Remembering the installer's file handles, so a re-import needs no re-picking: #306.
 
 ## Original formats, no conversion

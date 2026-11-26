@@ -104,6 +104,18 @@ pub fn next_build(dist: &Path, static_dir: &Path, next: &Path, stamp: &Stamp) ->
     inject_build(next, stamp)
 }
 
+/// `dist` (a site stamped for tests, as Bazel builds it) stamped with
+/// `stamp` instead: `update.js` and `sw.js` from `static_dir` injected anew.
+/// The engine's stamp (its wasm's hash) stays.
+pub fn restamp(dist: &Path, static_dir: &Path, stamp: &Stamp) -> Result {
+    for file in ["update.js", "sw.js"] {
+        let to = dist.join(file);
+        let _ = fs::remove_file(&to);
+        fs::copy(static_dir.join(file), &to).map_err(|e| format!("{file}: {e}"))?;
+    }
+    inject_build(dist, stamp)
+}
+
 /// The first 8 bytes of SHA-256, in hex.
 fn short_hash(bytes: &[u8]) -> String {
     Sha256::digest(bytes)[..8]
@@ -195,7 +207,7 @@ pub fn inject_build(dist: &Path, stamp: &Stamp) -> Result {
     )?;
     replace_once(
         &dist.join("sw.js"),
-        "const PRECACHE = [/* injected by cargo xtask web */];",
+        "const PRECACHE = [/* injected by tools/site */];",
         &format!("const PRECACHE = [{}];", entries.join(",")),
     )
 }

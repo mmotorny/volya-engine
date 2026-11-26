@@ -12,7 +12,7 @@
 ## I/O is synchronous on the engine thread
 
 - `Read + Seek` over OPFS sync access handles for parsing, loading screens and in-game loads alike, like the original engine (`platforms/web/src/opfs.rs`). Keep large reads out of the frame loop where practical; whether synchronous I/O hitches frames is #17.
-- Game files are opened read-only, through web-sys's bindings marked unstable (`--cfg=web_sys_unstable_apis` in `.cargo/config.toml`): Chrome lets several copies of the app hold them, so two tabs or a tab and the installed app can both play (documented: Chrome 121); Safari ignores the mode and locks each file to one handle, so a second copy's Play reports its error (measured: `InvalidStateError`).
+- Game files are opened read-only, through web-sys's bindings marked unstable (`--cfg=web_sys_unstable_apis` for wasm32, MODULE.bazel): Chrome lets several copies of the app hold them, so two tabs or a tab and the installed app can both play (documented: Chrome 121); Safari ignores the mode and locks each file to one handle, so a second copy's Play reports its error (measured: `InvalidStateError`).
 - A browser shows a presented frame only once the worker yields (believed), so a loading screen runs one load stage per engine frame: the frame that begins a stage draws its image, the next does that stage's work under it (`volya-engine::loading_screen`, docs/behavior/loading-screen.md).
 
 ## The page
@@ -44,7 +44,7 @@ None on touch screens anywhere in the app, shell included (decided by the user, 
 
 ## Hosting
 
-Served from `https://mmotorny.github.io/volya-engine/`, deployed with `cargo xtask deploy` (a clean, pushed tree; `check`; a local release build force-pushed as one commit to the `gh-pages` branch, #12). Tests are never deployed. No custom domain: it emphasizes the project's free, non-commercial nature.
+Served from `https://mmotorny.github.io/volya-engine/`, deployed with `bazel run //tools/xtask -- deploy` (a clean, pushed tree; `//:checks`; Bazel's release site, `//platforms/web:site`, stamped with the commit and force-pushed as one commit to the `gh-pages` branch, #12). Tests are never deployed. No custom domain: it emphasizes the project's free, non-commercial nature.
 
 - **Base path `/volya-engine/`.** All URLs are relative; the dev server serves under the same path.
 - **Shared origin.** Every `mmotorny.github.io` project site shares one origin, so storage quota, OPFS, IndexedDB, caches and service worker registrations are shared with unrelated sites. Keep everything under a `volya-engine` namespace (the OPFS directory, cache names, localStorage keys `volya-engine.*`), scope the service worker to `/volya-engine/`, and treat stored data as possibly modified by others: validate on load, never trust it blindly.
@@ -63,13 +63,13 @@ The audio rings need `SharedArrayBuffer`, which needs cross-origin isolation (CO
 
 GitHub Pages sets its own short cache lifetimes, so the service worker (`static/sw.js`) owns app versioning, with the established precache pattern (as Workbox's injectManifest, without its Node tooling).
 
-- `cargo xtask web` injects every file but `sw.js` and `ux-audit/` with a hash of its content into `sw.js`, with the build, so the script changes exactly when the build does.
+- The site's build (`tools/site`) injects every file but `sw.js` and `ux-audit/` with a hash of its content into `sw.js`, with the build, so the script changes exactly when the build does.
 - Each build has a cache of its own, named by a hash of that list (#444): one shared cache let an installing version overwrite files the running one still loaded, so a page got the glue of one build and the wasm of another. Install copies files an earlier build's cache holds with the same hash and downloads the rest, each checked against its hash (a stale or half-deployed GitHub Pages response fails the install, retried at the next check). The active build is served from its cache only, offline included; a new version waits until the page asks it to take over, and its activation deletes the other builds' caches.
 - What the service worker serves carries `Cache-Control: no-cache` (#446): with GitHub Pages' `max-age=600` passed on, Safari, after Finish update, gave the engine worker's `import` of the glue the old build's copy without asking the service worker, while `fetch` of the same URL in the same worker got the new one (measured in the iOS Simulator; persisting across reloads until Safari is closed, on the device; believed to be WebKit's memory cache). Chrome didn't (measured).
   An update from a version before #446 can still get the old build's copies in Safari, until they are 10 minutes old or Safari is closed (measured in the iOS Simulator, #450); between later versions it doesn't (measured).
 - Finish update reloads on `controllerchange`, or after 3 seconds without it (the player asked; #450).
-- `cargo xtask e2e` serves the app's files with GitHub Pages' `max-age=600` and, on a test's request, a next build (`dist-next`: the same, its engine stamped with another id and `game-ui.js` changed); the `smoke` suite runs Finish update against it, on its own page (the harness resumes a test across a reload, `resumeAfterReload`) and in a copy of the app, and checks the engine, the version shown and the shell module are the other build's, also after a reload.
-- The engine's wasm and its wasm-bindgen glue carry one build id (a custom section and an export, stamped by `cargo xtask web`); the engine worker refuses to start on a mismatch, naming it.
+- The browser suites' runner serves the app's files with GitHub Pages' `max-age=600` and, on a test's request, a next build (`dist-next`: the same, its engine stamped with another id and `game-ui.js` changed); the `smoke` suite runs Finish update against it, on its own page (the harness resumes a test across a reload, `resumeAfterReload`) and in a copy of the app, and checks the engine, the version shown and the shell module are the other build's, also after a reload.
+- The engine's wasm and its wasm-bindgen glue carry one build id (a custom section and an export, stamped by the site's build, `tools/site`); the engine worker refuses to start on a mismatch, naming it.
 - Updates download automatically by default (`static/update.js`) and never restart the app by themselves: once downloaded, the page offers Finish update (as Chrome does), and closing and reopening the app finishes it too.
 - Players can turn automatic downloads off in Settings (metered connections): then the install refuses without consent, tells the page the update's size, and a tap downloads it. The setting lives in a cache of its own (`volya-engine-settings`), where both can read it.
 - The browser checks `sw.js` itself when the app opens; with automatic downloads the page also calls `registration.update()` on returning to the foreground, at most hourly.
