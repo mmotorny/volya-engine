@@ -89,14 +89,39 @@ function muteSpeakers() {
   };
 }
 
+/** Where a test that reloads the page keeps the run's state (sessionStorage). */
+const RESUME = "volya-engine-test.resume";
+/** The report so far and the test running, for `resumeAfterReload`. */
+let running = null;
+
+/**
+ * For a test that reloads the page: keeps the report so far and `state`,
+ * then runs `reload` (which reloads the page). The reloaded page runs the
+ * same test again with `state` as its argument, then the tests after it.
+ * Never resolves.
+ */
+export function resumeAfterReload(state, reload) {
+  sessionStorage.setItem(RESUME, JSON.stringify({ lines: running.lines, test: running.name, state }));
+  reload();
+  return new Promise(() => {});
+}
+
 /** Runs `suite` against the app. Entry point of every suite page. */
 export async function runPage(suite) {
   captureErrors();
   muteSpeakers();
+  let resume = null;
+  try {
+    resume = JSON.parse(sessionStorage.getItem(RESUME));
+    sessionStorage.removeItem(RESUME);
+  } catch {
+    // Nothing to resume.
+  }
   // Each run tests the build being served: a service worker left by an
   // earlier run would serve its own build's copies (sw.js is cache-first, and
-  // a new build waits until asked). Drop it and its copies, then start over.
-  if (navigator.serviceWorker?.controller) {
+  // a new build waits until asked). Drop it and its copies, then start over;
+  // not when resuming a test that reloaded the page.
+  if (!resume && navigator.serviceWorker?.controller) {
     for (const registration of await navigator.serviceWorker.getRegistrations()) await registration.unregister();
     for (const key of await caches.keys()) if (key.startsWith("volya-engine")) await caches.delete(key);
     location.reload();
@@ -125,7 +150,7 @@ export async function runPage(suite) {
     startupError = error;
   }
 
-  const lines = [`run ${runId}`, `suite ${suite}`];
+  const lines = resume?.lines ?? [`run ${runId}`, `suite ${suite}`];
   const oneLine = (text) => String(text).replace(/\s+/g, " ");
   const record = (name, error, note) =>
     lines.push(
@@ -139,10 +164,16 @@ export async function runPage(suite) {
   } else {
     try {
       const { tests } = await import(`./${suite}.js`);
+      // Resuming, the tests before the one that reloaded already ran.
+      let skipping = Boolean(resume);
       for (const [name, test] of Object.entries(tests)) {
+        if (skipping && name !== resume.test) continue;
+        const resumed = skipping ? resume.state : undefined;
+        skipping = false;
+        running = { lines, name };
         try {
           // A test may return a note (e.g. a measured value) for the report.
-          const note = await test();
+          const note = await test(resumed);
           record(name, null, typeof note === "string" ? note : "");
         } catch (error) {
           if (error instanceof Skip) lines.push(`skip ${name}\t${oneLine(error.message)}`);

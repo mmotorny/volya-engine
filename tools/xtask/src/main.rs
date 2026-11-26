@@ -253,7 +253,8 @@ fn web(profile: Profile) -> Result {
 }
 
 /// `dist-next`: `dist` as the next deploy would be, for the update flow's
-/// test (tests/browser/smoke.js): the engine stamped with another id, and
+/// test (tests/browser/smoke.js): the engine stamped with another id, a
+/// shell module changed, and
 /// `update.js` and `sw.js` injected anew.
 fn next_build() -> Result<PathBuf> {
     use sha2::{Digest, Sha256};
@@ -283,6 +284,11 @@ fn next_build() -> Result<PathBuf> {
     let at = wasm.len() - id.len();
     wasm[at..].copy_from_slice(other.as_bytes());
     fs::write(&wasm_path, wasm).map_err(|e| format!("{}: {e}", wasm_path.display()))?;
+    // A shell module of its own, which tests tell apart by `NEXT_BUILD`.
+    let shell = next.join("game-ui.js");
+    let mut text = fs::read_to_string(&shell).map_err(|e| format!("{}: {e}", shell.display()))?;
+    text.push_str("\nexport const NEXT_BUILD = true;\n");
+    fs::write(&shell, text).map_err(|e| format!("{}: {e}", shell.display()))?;
     for file in ["update.js", "sw.js"] {
         fs::copy(
             root().join("platforms/web/static").join(file),

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-import { assert, assertEqual, skip } from "./harness.js";
+import { assert, assertEqual, resumeAfterReload, skip } from "./harness.js";
 
 // The app's base path (tests are served under it, in __test/).
 const base = location.pathname.slice(0, location.pathname.indexOf("/__test/") + 1);
@@ -99,7 +99,9 @@ export const tests = {
       worker.postMessage = (m) => worker.messages.push(m);
       let saved = { auto };
       const store = { read: async () => saved, write: async (s) => (saved = s) };
-      const updates = startUpdates(Promise.resolve(registration), { container, store });
+      const reloads = { count: 0 };
+      const reload = () => reloads.count++;
+      const updates = startUpdates(Promise.resolve(registration), { container, store, reload, takeOverMs: 50 });
       const waitFor = async () => {
         registration.installing = worker;
         registration.dispatchEvent(new Event("updatefound"));
@@ -108,7 +110,7 @@ export const tests = {
         worker.state = "installed";
         worker.dispatchEvent(new Event("statechange"));
       };
-      return { updates, registration, container, worker, store: () => saved, waitFor };
+      return { updates, registration, container, worker, store: () => saved, waitFor, reloads };
     };
     const tick = () => new Promise((r) => setTimeout(r));
 
@@ -122,6 +124,20 @@ export const tests = {
     assertEqual(a.worker.messages.length, 0, "restarted by itself");
     a.updates.apply();
     assertEqual(JSON.stringify(a.worker.messages), '[{"type":"take-over"}]', "Finish update didn't apply");
+    // It reloads once the new worker takes over, and only once.
+    a.container.dispatchEvent(new Event("controllerchange"));
+    assertEqual(a.reloads.count, 1, "reloads on take-over");
+    await sleep(80);
+    assertEqual(a.reloads.count, 1, "reloaded twice");
+    // Without word of the take-over, it reloads anyway.
+    const c = fake({ auto: true });
+    await tick();
+    await c.waitFor();
+    await c.updates.check();
+    c.updates.apply();
+    assertEqual(c.reloads.count, 0, "reloaded before the take-over could be told");
+    await sleep(80);
+    assertEqual(c.reloads.count, 1, "no reload without word of the take-over");
 
     // Opted out: an offer with its size; downloads only when asked; still waits.
     const b = fake({ auto: false });
@@ -927,39 +943,68 @@ export const tests = {
     }
   },
 
-  // The update flow with a real next build (`cargo xtask e2e` serves
-  // dist-next on request; both with GitHub Pages' cache lifetime), in a copy
-  // of the app: after Finish update, and after a reload, its page and its
-  // engine are the next build's (#446). Near the end: the next build takes
-  // over this page's service worker too.
-  "Finish update runs the next build whole, also after a reload": async () => {
-    const current = volya.engineBuild;
-    assert(current, "no engine build id");
-    const next = (on) => fetch(`${base}__test/next/${on ? "on" : "off"}`, { method: "POST" });
+  // The update flow with a real next build: `cargo xtask e2e` serves
+  // dist-next on request (its engine and a shell module, game-ui.js, tell
+  // it apart), both with GitHub Pages' cache lifetime (#446, #450). Near the
+  // end: Finish update takes over this page's service worker.
+  "Finish update reloads this page into the next build whole, also after a reload": async (resumed) => {
+    /** The build this page runs: its engine's, the version shown, its shell module's. */
+    const running = async () => {
+      await until(() => volya.engineBuild && document.getElementById("status").dataset.state === "ready", "the engine didn't start", 30000);
+      const { NEXT_BUILD } = await import(`${base}game-ui.js`);
+      return { engine: volya.engineBuild, version: document.getElementById("status").textContent, shell: NEXT_BUILD ? "next" : "first" };
+    };
+    const now = await running();
+    if (!resumed) {
+      assertEqual(now.shell, "first", "the shell before the update");
+      assert(!now.version.endsWith("-next"), `the version before the update: ${now.version}`);
+      await fetch(`${base}__test/next/on`, { method: "POST" });
+      await volya.updates.setAuto(true);
+      assertEqual(await volya.updates.checkNow(), "found", "check for updates");
+      await until(() => volya.updates.status === "ready", `the update didn't download (${volya.updates.status})`, 30000);
+      return resumeAfterReload({ before: now.engine, step: "finished" }, () => volya.updates.apply());
+    }
+    const what = resumed.step === "finished" ? "after Finish update" : "after a reload";
+    assert(now.engine !== resumed.before, `${what}: the engine is the first build's`);
+    assert(now.version.endsWith("-next"), `${what}: the version shown is ${now.version}`);
+    assertEqual(now.shell, "next", `${what}: the shell module`);
+    if (resumed.step === "finished") return resumeAfterReload({ ...resumed, step: "reloaded" }, () => location.reload());
+    return `${resumed.before} → ${now.engine}`;
+  },
+
+  // The same in a copy of the app, its page served by the service worker:
+  // back from the next build to the first.
+  "Finish update runs the other build whole in a copy of the app, also after a reload": async () => {
     const frame = Object.assign(document.createElement("iframe"), { width: 400, height: 800 });
     frame.style.cssText = "position: fixed; left: -5000px; top: 0";
     const load = () => new Promise((r) => frame.addEventListener("load", r, { once: true }));
-    /** The copy's engine build and version shown, once its engine runs. */
+    /** The copy's build: engine, version shown and shell module, once its engine runs. */
     const started = async (when) => {
       await until(
         () => {
           const doc = frame.contentDocument;
           const problem = doc?.querySelector("#game h2")?.textContent.includes("couldn't start");
-          if (problem) throw new Error(`${when} (running ${current}): ${doc.getElementById("game").textContent}`);
-          return frame.contentWindow.volya?.engineBuild;
+          if (problem) throw new Error(`${when}: ${doc.getElementById("game").textContent}`);
+          return frame.contentWindow.volya?.engineBuild && doc.getElementById("status").dataset.state === "ready";
         },
         `${when}: the engine didn't start`,
         30000,
       );
-      return { build: frame.contentWindow.volya.engineBuild, version: frame.contentDocument.getElementById("status").textContent };
+      // The copy's own module (its realm's module map).
+      const { NEXT_BUILD } = await new frame.contentWindow.Function("url", "return import(url)")(`${location.origin}${base}game-ui.js`);
+      return {
+        engine: frame.contentWindow.volya.engineBuild,
+        version: frame.contentDocument.getElementById("status").textContent,
+        shell: NEXT_BUILD ? "next" : "first",
+      };
     };
     let loaded = load();
     frame.src = base;
     document.body.append(frame);
     try {
       await loaded;
-      assertEqual((await started("before")).build, current, "the engine before the update");
-      await next(true);
+      const before = await started("before");
+      await fetch(`${base}__test/next/off`, { method: "POST" });
       const updates = frame.contentWindow.volya.updates;
       await updates.setAuto(true);
       assertEqual(await updates.checkNow(), "found", "check for updates");
@@ -968,16 +1013,16 @@ export const tests = {
       updates.apply();
       await loaded;
       const after = await started("after Finish update");
-      assert(after.build !== current, "the engine is still the running build's");
-      assert(after.version.endsWith("-next"), `the page is ${after.version}`);
+      assert(after.engine !== before.engine, "the engine is still the running build's");
+      assert(after.version !== before.version, `the version shown is still ${after.version}`);
+      assert(after.shell !== before.shell, `the shell module is still the ${after.shell} build's`);
       loaded = load();
       frame.contentWindow.location.reload();
       await loaded;
-      const reloaded = await started("after a reload");
-      assertEqual([reloaded.build, reloaded.version], [after.build, after.version], "after a reload");
-      return `${current} → ${after.build}`;
+      assertEqual(await started("after a reload"), after, "after a reload");
+      return `${before.engine} → ${after.engine}`;
     } finally {
-      await next(false);
+      await fetch(`${base}__test/next/off`, { method: "POST" });
       frame.remove();
     }
   },

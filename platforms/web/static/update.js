@@ -65,12 +65,17 @@ export const settingsStore = (scope, cacheStorage = caches) => {
  *   "downloading", or "ready" (waiting to take over);
  * - `auto` and `setAuto(on)`;
  * - `download()`: consent to and download the available update;
- * - `apply()` (finish: take over and reload), `check()`, `onChange(callback)`;
+ * - `apply()` (finish: take over and reload; reloads anyway when the new
+ *   worker doesn't take over within `takeOverMs`: the player asked),
+ *   `check()`, `onChange(callback)`;
  * - `checkNow()`: the player's check, resolving with "found", "none",
  *   "offline" or "failed"; once found, `requested` is set (the player waits
  *   for this update, so its automatic download is shown too).
  */
-export function startUpdates(registration, { container = navigator.serviceWorker, store = null } = {}) {
+export function startUpdates(
+  registration,
+  { container = navigator.serviceWorker, store = null, reload = () => location.reload(), takeOverMs = 3000 } = {},
+) {
   const listeners = new Set();
   let reg = null;
   let settings = { auto: true };
@@ -100,7 +105,13 @@ export function startUpdates(registration, { container = navigator.serviceWorker
     apply() {
       if (!reg?.waiting || applying) return;
       applying = true;
-      container.addEventListener("controllerchange", () => location.reload(), { once: true });
+      let reloaded = false;
+      const once = () => {
+        if (!reloaded) reload();
+        reloaded = true;
+      };
+      container.addEventListener("controllerchange", once, { once: true });
+      setTimeout(once, takeOverMs);
       reg.waiting.postMessage({ type: "take-over" });
     },
     async check() {
