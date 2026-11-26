@@ -13,8 +13,18 @@ volya_library(
     deps = ["//crates/volya-engine-formats"],
 )
 
+# Measurements (docs/testing.md: run with --release), by name:
+# `bazel test --config=measure //crates/volya-engine-core:particles_cost`.
+MEASURE = ["manual"]
+
 volya_integration_tests(
+    common_tags = ["gamedata"],
     crate = ":volya-engine-core",
+    tags = {
+        "collision_rays": MEASURE,
+        "particles_cost": MEASURE,
+        "simulation_cost": MEASURE,
+    },
     compile_data = ["//crates/volya-engine-formats:tests/support/gog_archives.rs"],
     deps = [
         "//crates/volya-engine-formats",

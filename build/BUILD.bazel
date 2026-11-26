@@ -1,2 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Maksym Motorny
 # SPDX-License-Identifier: BSD-3-Clause
+
+# The release profile (`-c opt`; docs/architecture/build.md, Rust).
+config_setting(
+    name = "opt",
+    values = {"compilation_mode": "opt"},
+    visibility = ["//visibility:public"],
+)

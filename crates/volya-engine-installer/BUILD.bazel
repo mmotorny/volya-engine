@@ -9,4 +9,7 @@ exports_files(["Cargo.toml"])
 
 volya_library(name = "volya-engine-installer")
 
-volya_integration_tests(crate = ":volya-engine-installer")
+volya_integration_tests(
+    common_tags = ["gamedata"],
+    crate = ":volya-engine-installer",
+)

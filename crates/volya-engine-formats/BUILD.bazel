@@ -12,8 +12,11 @@ exports_files([
     "tests/support/gog_archives.rs",
 ])
 
-# The dev profile's opt-level 1 (Cargo.toml).
-OPT = ["-Copt-level=1"]
+# The profiles' opt-levels (Cargo.toml): 1 in dev, 3 in release.
+OPT = select({
+    "//build:opt": ["-Copt-level=3"],
+    "//conditions:default": ["-Copt-level=1"],
+})
 
 volya_library(
     name = "volya-engine-formats",
@@ -36,6 +39,7 @@ volya_binary(
 volya_integration_tests(
     crate = ":volya-engine-formats",
     compile_data = ["tests/support/gog_archives.rs"],
+    common_tags = ["gamedata"],
     rustc_flags = OPT,
     deps = ["//crates/volya-engine-installer"],
 )

@@ -16,6 +16,12 @@ rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
 rust.toolchain(
     edition = "2024",
     extra_target_triples = ["wasm32-unknown-unknown"],
+    # The release profile's opt-level (Cargo.toml).
+    opt_level = {
+        "dbg": "0",
+        "fastbuild": "0",
+        "opt": "s",
+    },
     versions = ["1.100.0"],
 )
 use_repo(rust, "rust_toolchains")

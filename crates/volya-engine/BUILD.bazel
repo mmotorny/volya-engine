@@ -8,7 +8,10 @@ package(default_visibility = ["//visibility:public"])
 exports_files(["Cargo.toml"])
 
 # The dev profile's opt-level 1 (Cargo.toml).
-OPT = ["-Copt-level=1"]
+OPT = select({
+    "//build:opt": [],
+    "//conditions:default": ["-Copt-level=1"],
+})
 
 DEPS = [
     "//crates/volya-engine-core",
@@ -26,8 +29,19 @@ volya_library(
     deps = DEPS,
 )
 
+# Measurements and walks over the whole game (docs/testing.md), by name:
+# `bazel test --config=measure //crates/volya-engine:transcode`.
+MEASURE = ["manual"]
+
 volya_integration_tests(
+    common_tags = ["gamedata"],
     crate = ":volya-engine",
+    tags = {
+        "level_memory": MEASURE,
+        "loading_memory": MEASURE,
+        "transcode": MEASURE,
+        "visuals": MEASURE,
+    },
     compile_data = ["//crates/volya-engine-formats:tests/support/gog_archives.rs"],
     rustc_flags = OPT,
     deps = DEPS + ["//crates/volya-engine-installer"],
