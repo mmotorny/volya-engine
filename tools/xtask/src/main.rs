@@ -44,7 +44,7 @@ Tasks:
   spec-lint   Flag decompiler output, code and mangled names in clean-room spec drafts.
   wait-memory Return once memory pressure is normal (run before heavy work).
   wine image  Build the image that runs 32-bit Windows programs headless
-              (Wine under QEMU in Apple's container).
+              (Wine under box64 in Apple's container).
   wine run DIR -- EXE [ARGS...]
               Run EXE with Wine in that image, DIR mounted as its working
               directory; passes on its exit code.

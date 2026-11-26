@@ -17,7 +17,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use volya_engine_installer::{Installer, extract};
 
-use crate::wine::{Container, Emulator};
+use crate::wine::{Container, REG32};
 use crate::{Result, step};
 
 /// The edition the game-data tests use.
@@ -95,11 +95,10 @@ const QUIT: &str = "xdotool key grave && sleep 1 && xdotool type quit && xdotool
 /// Seconds the game gets to end after [`QUIT`].
 const QUIT_WAIT: u64 = 60;
 
-const USAGE: &str = "Usage: cargo xtask original [--emulator qemu|box64] [--quit] [SECONDS]";
+const USAGE: &str = "Usage: cargo xtask original [--quit] [SECONDS]";
 
-/// `cargo xtask original [--emulator qemu|box64] [--quit] [SECONDS]`.
+/// `cargo xtask original [--quit] [SECONDS]`.
 pub fn main(args: &[&str]) -> Result {
-    let (emulator, args) = Emulator::parse(args)?;
     let (quit, args) = match args {
         ["--quit", rest @ ..] => (true, rest),
         _ => (false, args),
@@ -139,7 +138,7 @@ pub fn main(args: &[&str]) -> Result {
         "mkdir -p /tmp/fb\n\
          docs=\"$WINEPREFIX/drive_c/users/{WINE_USER}/Documents\"\n\
          rm -rf \"$docs\" && ln -s /work/documents \"$docs\"\n\
-         wine '{reg}' import 'Z:\\work\\install.reg'\n\
+         wine '{REG32}' import 'Z:\\work\\install.reg'\n\
          wineserver -w\n\
          for view in 32 64; do\n\
          echo \"Install key, $view-bit view:\"\n\
@@ -147,8 +146,7 @@ pub fn main(args: &[&str]) -> Result {
          done\n\
          cd {INSTALL_IN_CONTAINER}/{WORKING_DIR}\n\
          xvfb-run -n {DISPLAY} -f {XAUTHORITY} -s '-screen 0 {SCREEN} -fbdir /tmp/fb' wine \"$@\"\n\
-         echo \"exit code $?\"",
-        reg = emulator.reg()
+         echo \"exit code $?\""
     );
     let exe = format!("{INSTALL_IN_CONTAINER}/{EXE}");
     let mut program = vec![exe.as_str()];
@@ -158,7 +156,7 @@ pub fn main(args: &[&str]) -> Result {
         ARGS.join(" "),
         frames.display()
     ));
-    let mut container = Container::spawn(emulator, &run, &tail, &program, log.into(), err.into())?;
+    let mut container = Container::spawn(&run, &tail, &program, log.into(), err.into())?;
     let start = Instant::now();
     let mut last: Option<Vec<u8>> = None;
     let mut ended = None;
@@ -234,14 +232,14 @@ $screenshots$ =   true | false| $app_data_root$| screenshots\\
 
 /// The install script's key (gog-install-additions.md section 4.1); each
 /// run's `wine.log` lists it in both registry views, so where the values
-/// landed is on record (measured on box64: the 32-bit view only, as
+/// landed is on record (measured: the 32-bit view only, as
 /// `HKLM\SOFTWARE\Wow6432Node\…` to 64-bit programs).
 const INSTALL_KEY: &str = "HKLM\\SOFTWARE\\GSC Game World\\STALKER-SHOC";
 
 /// The registry entries of the install, as a file for `reg import`:
 /// - the install script's five values (gog-install-additions.md section
 ///   4.1; `$1` believed the DWORD 1), imported into the 32-bit view the
-///   game reads (section 4.1, [`Emulator::reg`]);
+///   game reads (section 4.1, [`REG32`]);
 /// - the installer's own `GOG.com` values (section 4.2), less `lang_code`,
 ///   whose value is not established; `installer_language` is the `/LANG`
 ///   value, the Russian edition's `russian` (sections 1 and 4.2).

@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! 32-bit Windows programs, headless, in Apple's `container`: Wine in an
-//! arm64 Debian container, its x86 side under an emulator (Rosetta runs no
-//! 32-bit x86 in Linux VMs, measured): QEMU user mode running 32-bit Wine,
-//! or box64 running 64-bit Wine in WoW64 mode. The container has no display;
+//! arm64 Debian container, its x86 code under box64 (Rosetta runs no 32-bit
+//! x86 in Linux VMs, measured), a 64-bit Wine in WoW64 mode (32-bit Windows
+//! code in a 64-bit process). The container has no display;
 //! Wine draws into Xvfb and its audio driver is set to none.
 
 use std::fs;
@@ -15,65 +15,21 @@ use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 
 use crate::{Result, cmd, root, run, step};
 
-/// What runs Wine's x86 code.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Emulator {
-    /// QEMU user mode running 32-bit Wine (`Containerfile`).
-    Qemu,
-    /// box64 running 64-bit Wine in WoW64 mode (`box64.Containerfile`).
-    Box64,
-}
+/// The image and the file it is built from (`tools/xtask/wine/`).
+const IMAGE: &str = "volya-engine-wine-box64:latest";
+const CONTAINERFILE: &str = "Containerfile";
 
-impl Emulator {
-    /// Takes a leading `--emulator qemu|box64` off `args` (default QEMU).
-    pub fn parse<'a, 'b>(args: &'a [&'b str]) -> Result<(Self, &'a [&'b str])> {
-        match args {
-            ["--emulator", "qemu", rest @ ..] => Ok((Self::Qemu, rest)),
-            ["--emulator", "box64", rest @ ..] => Ok((Self::Box64, rest)),
-            ["--emulator", other, ..] => Err(format!("unknown emulator {other}")),
-            _ => Ok((Self::Qemu, args)),
-        }
-    }
+/// Registers box64 for x86_64 ELF executables and shared objects
+/// (e_machine 0x3e), Wine's Unix side.
+const BINFMT: &str = concat!(
+    r"printf '%s\n' ':box64:M::\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x3e\x00:",
+    r"\xff\xff\xff\xff\xff\xff\xff\x00\x00\x00\x00\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/usr/bin/box64:'",
+    " > /proc/sys/fs/binfmt_misc/register\n"
+);
 
-    fn image(self) -> &'static str {
-        match self {
-            Self::Qemu => "volya-engine-wine:latest",
-            Self::Box64 => "volya-engine-wine-box64:latest",
-        }
-    }
-
-    fn containerfile(self) -> &'static str {
-        match self {
-            Self::Qemu => "Containerfile",
-            Self::Box64 => "box64.Containerfile",
-        }
-    }
-
-    /// Registers the emulator for the ELF binaries it runs.
-    fn binfmt(self) -> &'static str {
-        match self {
-            Self::Qemu => {
-                "cat /usr/lib/binfmt.d/qemu-i386.conf > /proc/sys/fs/binfmt_misc/register\n"
-            }
-            // x86_64 ELF executables and shared objects (e_machine 0x3e).
-            Self::Box64 => concat!(
-                r"printf '%s\n' ':box64:M::\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x3e\x00:",
-                r"\xff\xff\xff\xff\xff\xff\xff\x00\x00\x00\x00\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/usr/bin/box64:'",
-                " > /proc/sys/fs/binfmt_misc/register\n"
-            ),
-        }
-    }
-
-    /// The `reg` that writes the registry view 32-bit programs read: a
-    /// 32-bit prefix has one view; a WoW64 prefix's 32-bit `reg` writes the
-    /// 32-bit view.
-    pub fn reg(self) -> &'static str {
-        match self {
-            Self::Qemu => "reg",
-            Self::Box64 => "C:\\windows\\syswow64\\reg.exe",
-        }
-    }
-}
+/// The 32-bit `reg`: in a WoW64 prefix it writes the registry view 32-bit
+/// programs read.
+pub const REG32: &str = "C:\\windows\\syswow64\\reg.exe";
 
 /// Memory of each run's VM.
 const MEMORY: &str = "4G";
@@ -81,8 +37,8 @@ const MEMORY: &str = "4G";
 /// The hidden task [`Session`] starts: `<REAPER> <container> <stop-service> <stop-builder>`.
 pub const REAPER: &str = "wine-reaper";
 
-/// Run in the container before the program, after the emulator's binfmt
-/// registration ([`Emulator::binfmt`]): creates the Wine prefix with no
+/// Run in the container before the program, after box64's binfmt
+/// registration ([`BINFMT`]): creates the Wine prefix with no
 /// audio driver (an empty `Audio` value: documented in Wine's mmdevapi as
 /// "explicitly chose no driver"),
 /// and waits for the prefix's processes to end, so the program's own start
@@ -93,17 +49,16 @@ wineserver -w
 "#;
 
 const USAGE: &str = "\
-Usage: cargo xtask wine [--emulator qemu|box64] image
-       cargo xtask wine [--emulator qemu|box64] run DIR -- EXE [ARGS...]
-       cargo xtask wine [--emulator qemu|box64] check";
+Usage: cargo xtask wine image
+       cargo xtask wine run DIR -- EXE [ARGS...]
+       cargo xtask wine check";
 
 /// `cargo xtask wine ...`; returns the exit code to pass on.
 pub fn main(args: &[&str]) -> Result<u8> {
-    let (emulator, args) = Emulator::parse(args)?;
     match args {
         ["image"] => {
             let _session = Session::open(None)?;
-            build_image(emulator)?;
+            build_image()?;
             Ok(0)
         }
         ["run", dir, "--", exe, rest @ ..] => {
@@ -111,16 +66,16 @@ pub fn main(args: &[&str]) -> Result<u8> {
             let tail = r#"xvfb-run -a wine "$@""#;
             let mut program = vec![*exe];
             program.extend_from_slice(rest);
-            in_container(emulator, &dir, tail, &program)
+            in_container(&dir, tail, &program)
         }
-        ["check"] => check(emulator),
+        ["check"] => check(),
         _ => Err(USAGE.into()),
     }
 }
 
 /// Builds the D3D9 smoke test with MinGW in the container, runs it and
 /// checks the pixel it saved.
-fn check(emulator: Emulator) -> Result<u8> {
+fn check() -> Result<u8> {
     let dir = root().join("target/wine-check");
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -131,7 +86,7 @@ fn check(emulator: Emulator) -> Result<u8> {
     .map_err(|e| format!("d3d9smoke.c: {e}"))?;
     let tail = "i686-w64-mingw32-gcc -O2 -static -o d3d9smoke.exe d3d9smoke.c -ld3d9\n\
                 xvfb-run -a wine d3d9smoke.exe";
-    let code = in_container(emulator, &dir, tail, &[])?;
+    let code = in_container(&dir, tail, &[])?;
     if code != 0 {
         return Err(format!("the smoke test exited with {code}"));
     }
@@ -162,9 +117,8 @@ fn centre_pixel(bmp: &[u8]) -> Option<u32> {
 
 /// Runs `SETUP` then `tail` (a shell snippet given `args` as `$@`) in a new
 /// container with `dir` at /work; returns the container's exit code.
-fn in_container(emulator: Emulator, dir: &Path, tail: &str, args: &[&str]) -> Result<u8> {
+fn in_container(dir: &Path, tail: &str, args: &[&str]) -> Result<u8> {
     let mut container = Container::spawn(
-        emulator,
         dir,
         tail,
         args,
@@ -193,7 +147,6 @@ impl Container {
     /// shell stays PID 1: `xvfb-run` as PID 1 never sees Xvfb's ready signal
     /// (measured: it hangs).
     pub fn spawn(
-        emulator: Emulator,
         dir: &Path,
         tail: &str,
         args: &[&str],
@@ -202,9 +155,8 @@ impl Container {
     ) -> Result<Self> {
         let name = format!("volya-engine-wine-{}", std::process::id());
         let session = Session::open(Some(&name))?;
-        let image = emulator.image();
-        if !quiet(&mut cmd("container", &["image", "inspect", image])) {
-            build_image(emulator)?;
+        if !quiet(&mut cmd("container", &["image", "inspect", IMAGE])) {
+            build_image()?;
         }
         let mount = format!("type=bind,source={},target=/work", dir.display());
         let mut run = cmd("container", &["run", "--rm", "--progress", "none"]);
@@ -216,10 +168,9 @@ impl Container {
             }
         }
         let script = format!(
-            "set -e\nmount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc\n{}{SETUP}{tail}",
-            emulator.binfmt()
+            "set -e\nmount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc\n{BINFMT}{SETUP}{tail}"
         );
-        run.args([image, "sh", "-c", &script, "sh"]).args(args);
+        run.args([IMAGE, "sh", "-c", &script, "sh"]).args(args);
         let child = run
             .stdin(Stdio::null())
             .stdout(stdout)
@@ -267,15 +218,14 @@ impl Drop for Container {
     }
 }
 
-fn build_image(emulator: Emulator) -> Result {
-    let image = emulator.image();
-    step(&format!("Building {image}"));
+fn build_image() -> Result {
+    step(&format!("Building {IMAGE}"));
     let context = root().join("tools/xtask/wine");
     let context = context.to_str().ok_or("non-UTF-8 path")?;
-    let file = format!("{context}/{}", emulator.containerfile());
+    let file = format!("{context}/{CONTAINERFILE}");
     run(&mut cmd(
         "container",
-        &["build", "--tag", image, "--file", &file, context],
+        &["build", "--tag", IMAGE, "--file", &file, context],
     ))
 }
 
@@ -387,19 +337,6 @@ fn quiet(command: &mut Command) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parses_the_emulator() {
-        assert_eq!(
-            Emulator::parse(&["check"]),
-            Ok((Emulator::Qemu, &["check"][..]))
-        );
-        assert_eq!(
-            Emulator::parse(&["--emulator", "box64", "check"]),
-            Ok((Emulator::Box64, &["check"][..]))
-        );
-        assert!(Emulator::parse(&["--emulator", "x"]).is_err());
-    }
 
     #[test]
     fn reads_the_centre_pixel() {
