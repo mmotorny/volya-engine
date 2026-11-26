@@ -1037,9 +1037,8 @@ fn encode_static(
                 StaticCall::Merged,
                 draws,
             );
-            if emits(Kind::Merged) {
-                pass.draw_indexed(range, 0, 0..1);
-            }
+            emitted(Kind::Merged);
+            pass.draw_indexed(range, 0, 0..1);
         }
     };
     crate::stats::bind_group();
@@ -1115,13 +1114,12 @@ fn encode_static(
             StaticCall::Shared
         };
         crate::stats::static_call(program.name(), kind, 1);
-        if emits(if program.is_model() {
+        emitted(if program.is_model() {
             Kind::Object
         } else {
             Kind::Single
-        }) {
-            pass.draw_indexed(range, d.first_vertex, i..i + 1);
-        }
+        });
+        pass.draw_indexed(range, d.first_vertex, i..i + 1);
     }
     flush(pass, &mut pending);
 }
@@ -1146,10 +1144,6 @@ impl SurfaceGroups {
 }
 
 thread_local! {
-    /// [`Renderer::set_call_window`]: the world's draw calls emitted.
-    static WINDOW: std::cell::Cell<Option<(u32, u32)>> = const { std::cell::Cell::new(None) };
-    /// The world's draw calls counted in the frame being encoded.
-    static CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
     /// The world's draw calls emitted in the frame being encoded, by
     /// [`Kind`] (#443).
     static EMITTED: std::cell::Cell<[u32; 5]> = const { std::cell::Cell::new([0; 5]) };
@@ -1168,24 +1162,11 @@ enum Kind {
 /// The names of [`Kind`]s, in order.
 pub const CALL_KINDS: [&str; 5] = ["merged", "single", "object", "light", "strict"];
 
-/// Whether a draw call of `kind` is emitted ([`in_window`]), counted in
-/// [`EMITTED`].
-fn emits(kind: Kind) -> bool {
-    if !in_window() {
-        return false;
-    }
+/// Counts a draw call of `kind` in [`EMITTED`].
+fn emitted(kind: Kind) {
     let mut e = EMITTED.get();
     e[kind as usize] += 1;
     EMITTED.set(e);
-    true
-}
-
-/// Counts a world draw call; whether it is emitted
-/// ([`Renderer::set_call_window`]).
-fn in_window() -> bool {
-    let n = CALLS.get();
-    CALLS.set(n + 1);
-    WINDOW.get().is_none_or(|(a, b)| (a..b).contains(&n))
 }
 
 /// One step of the static world: its draws in their fixed order, and the
@@ -2528,8 +2509,6 @@ impl Renderer {
         keep_depth: bool,
     ) {
         let inner = &frame.world.0;
-        CALLS.set(0);
-
         EMITTED.set([0; 5]);
         let view_projection = multiply(&frame.view, &frame.projection);
         let l = &frame.light;
@@ -2707,13 +2686,12 @@ impl Renderer {
                         );
                     }
                     crate::stats::draw();
-                    if emits(Kind::Light) {
-                        pass.draw_indexed(
-                            d.first_index..d.first_index + d.index_count,
-                            d.first_vertex as i32,
-                            d.kept..d.kept + 1,
-                        );
-                    }
+                    emitted(Kind::Light);
+                    pass.draw_indexed(
+                        d.first_index..d.first_index + d.index_count,
+                        d.first_vertex as i32,
+                        d.kept..d.kept + 1,
+                    );
                 }
             }
         }
@@ -2757,13 +2735,12 @@ impl Renderer {
             }
             let instance = i as u32;
             crate::stats::draw();
-            if emits(Kind::Strict) {
-                pass.draw_indexed(
-                    d.first_index..d.first_index + d.index_count,
-                    d.first_vertex as i32,
-                    instance..instance + 1,
-                );
-            }
+            emitted(Kind::Strict);
+            pass.draw_indexed(
+                d.first_index..d.first_index + d.index_count,
+                d.first_vertex as i32,
+                instance..instance + 1,
+            );
         }
         // Step 7: the glows (glows.md section 4).
         if let Some((pipelines, prepared)) = particles {
@@ -2782,20 +2759,6 @@ impl Renderer {
             p.light_groups(&self.device, t);
         }
         self.world_pipelines = Some(p);
-    }
-
-    /// Emits only the world's static, light and strict-sorted draw calls
-    /// numbered within `window` in the frames encoded next (all with
-    /// `None`), so a level's first frame can be drawn in pieces while it
-    /// loads (#437); [`Renderer::world_calls`] counts them.
-    pub fn set_call_window(&mut self, window: Option<std::ops::Range<u32>>) {
-        WINDOW.set(window.map(|w| (w.start, w.end)));
-    }
-
-    /// The world's static, light and strict-sorted draw calls of the last
-    /// world frame encoded, emitted or not.
-    pub fn world_calls(&self) -> u32 {
-        CALLS.get()
     }
 
     /// The world's draw calls emitted in the last world frame encoded, by

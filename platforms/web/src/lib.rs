@@ -353,6 +353,7 @@ pub fn frame(time: f64) {
         push(&mut s.sound, sound);
         if let Some(last) = s.last {
             push(&mut s.interval, time - last);
+            textures::frame_interval(time - last);
             volya_engine::core::diagnostics::metric("frame.interval_ms", time - last);
             // Over one and a half frames at 60 Hz.
             volya_engine::core::diagnostics::count("frame.late", u64::from(time - last > 25.0));

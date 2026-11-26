@@ -360,19 +360,17 @@ pub async fn submitted_work_done() -> Result<(), JsValue> {
 /// while its loading waits ([`crate::engine::level_to_prepare_scene`]): the
 /// world is made from what was uploaded, and the browser and the GPU do
 /// their first-draw work (programs, each draw call's first use) under the
-/// loading image (#355, #376). With `window`, only the world's draw calls
-/// numbered within it, so that work is spread over task turns (#437: on an
-/// iPhone the whole view at once kept the GPU process 2.5–2.9 s). The
-/// world's draw calls in the view, `None` without a view to draw.
-pub fn warm_up(window: Option<std::ops::Range<u32>>) -> Result<Option<u32>, JsValue> {
+/// loading image (#355, #376). Whole, in one submission (#448). Whether
+/// there was a view to draw.
+pub fn warm_up() -> Result<bool, JsValue> {
     with_gpu(|gpu| {
         let max = gpu.renderer.device().limits().max_texture_dimension_2d;
         let Some(mode) = crate::engine::render_size() else {
-            return Ok(None);
+            return Ok(false);
         };
         let size = Resolution::new(mode.width.clamp(1, max), mode.height.clamp(1, max));
         let Some(scene) = crate::engine::level_to_prepare_scene(size) else {
-            return Ok(None);
+            return Ok(false);
         };
         // Kept through the loading screen's frames until the level shows.
         let level = scene.world.as_ref().map(|w| w.world.clone());
@@ -410,23 +408,9 @@ pub fn warm_up(window: Option<std::ops::Range<u32>>) -> Result<Option<u32>, JsVa
                     | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             });
-        // Which of the world's calls this piece emits (none: the whole
-        // view at once).
-        let piece = match &window {
-            Some(w) => [
-                ("from", Value::Number(f64::from(w.start))),
-                ("to", Value::Number(f64::from(w.end))),
-            ],
-            None => [
-                ("from", Value::Text("whole".into())),
-                ("to", Value::Text("whole".into())),
-            ],
-        };
-        crate::diagnostics::gpu_step("gpu.warm_up_draw", Some(&gpu.renderer), &piece);
-        gpu.renderer.set_call_window(window);
+        crate::diagnostics::gpu_step("gpu.warm_up_draw", Some(&gpu.renderer), &[]);
         tracing::info_span!("render.encode")
             .in_scope(|| gpu.renderer.render(&target, &list, CLEAR));
-        gpu.renderer.set_call_window(None);
         target.destroy();
         let emitted = gpu.renderer.world_calls_emitted();
         let kinds: Vec<(&str, Value)> = volya_engine::render::world::CALL_KINDS
@@ -436,7 +420,7 @@ pub fn warm_up(window: Option<std::ops::Range<u32>>) -> Result<Option<u32>, JsVa
             .collect();
         crate::diagnostics::gpu_step("gpu.warm_up_submitted", None, &kinds);
         LEVEL_FRAMES.set(0);
-        Ok(Some(gpu.renderer.world_calls()))
+        Ok(true)
     })
 }
 
