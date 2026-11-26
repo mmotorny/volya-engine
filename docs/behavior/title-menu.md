@@ -232,8 +232,10 @@ absent as described.
 
 Item *i* (0-based) is a text row 164 × 30 at (0, 30·*i*) in the item region, i.e. at absolute
 (700, 419 + 30·*i*). The caption is the string-table text of the caption key, horizontally centred in
-the row, drawn in font `graffiti22`, opaque black. (Vertical placement within the row follows the
-generic text rules; not specified here.) Captions have no background of their own; they appear on the
+the row, drawn in font `graffiti22`, opaque black. (Its placement within the row, vertical and
+horizontal, is specified in `docs/formats/text-and-fonts.md`, sections 4.2, 4.4 and 5: the caption is
+vertically centred, and where it lands depends on `r__supersample`, because the menu is laid out on the
+renderer's off-screen target when frames go through it.) Captions have no background of their own; they appear on the
 painted slats of the background picture.
 
 ### 4.3 Selection and the sliding bar
@@ -510,7 +512,11 @@ and extracting its alpha shows the transparent sky region and the bar's transluc
   `intro_logo`. Checks `[TM-n]` are in `hud4/checks/run.py` of the dirty workspace. The measured
   statements come from one capture of the unmodified game made by the clean side (headless, Wine 11
   under box64, 1024 × 768).
-- Not established: vertical caption placement within a row, cursor draw scaling,
+- Targeted fix (issue 570, 2026-11-26): the caption's placement within its row is now specified in the
+  text specification (sections 4.2, 4.4, 5), from black-box runs of the unmodified game at four
+  resolutions with `r__supersample` 1, 2 and 4 and from static analysis; checks `[VC-n]` are in
+  `vcentre/checks/` of the dirty workspace.
+- Not established: cursor draw scaling,
   the screen direction of positive rotation, configurability of cursor sensitivity, whether the
   unmodified install loads `mods\`.
 
