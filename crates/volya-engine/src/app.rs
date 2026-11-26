@@ -483,7 +483,7 @@ pub struct App {
 }
 
 /// `r__supersample`, 1 … 4.
-fn supersample(console: &Console) -> u32 {
+pub fn supersample(console: &Console) -> u32 {
     (console.number("r__supersample") as u32).clamp(1, 4)
 }
 
@@ -511,6 +511,57 @@ fn geometry_lod(console: &Console) -> [f32; 3] {
         kept("r1_ssa_lod_a", SSA_LOD_A, 96.0),
         kept("r1_ssa_lod_b", SSA_LOD_B, 64.0),
     ]
+}
+
+/// What a level takes from the console before each update: the renderer's
+/// light settings (dynamic-lights.md 8, glows.md 5), the target's
+/// supersampling (`supersample`, as the device was last made or reset
+/// with), the view distance, the geometry detail level
+/// (object-detail-level.md 1) and the grass density (detail-objects.md 7),
+/// with `wind` the wind's strength.
+pub fn level_settings(level: &mut LevelScreen, console: &Console, supersample: u32, wind: f32) {
+    let status = |name| console.status(name);
+    let settings = LightSettings::from_statuses(
+        status("r1_dlights").as_deref(),
+        status("r1_dlights_clip").as_deref(),
+        status("r2_sun_lumscale").as_deref(),
+    );
+    let glows = status("r1_glows_per_frame")
+        .and_then(|v| v.trim().parse::<u32>().ok())
+        .map_or(GLOWS_PER_FRAME, |v| v.clamp(2, 32));
+    level.set_light_settings(settings, glows);
+    level.set_supersample(supersample);
+    level.set_vis_distance(console.number("rs_vis_distance"));
+    let [lod, a, b] = geometry_lod(console);
+    level.set_geometry_lod(lod, a, b);
+    level.set_detail_settings(console.number("r__detail_density"), wind);
+}
+
+/// What a frame takes from the console besides the display colour's ramp
+/// (display-gamma.md, [`DisplayColour`]): the presentation of the target
+/// (`supersample`, frame-presentation.md), the samplers' values in force
+/// (texture-quality-filtering.md 5), the texture quality `quality` and the
+/// geometry detail level; `frame_ms` is the frame's time.
+pub fn frame_settings(
+    scene: &mut Scene,
+    console: &Console,
+    supersample: u32,
+    samplers: &SamplerStates,
+    quality: TextureQuality,
+    frame_ms: u64,
+) {
+    scene.presentation = Presentation {
+        supersample,
+        pps: pps(console),
+        frame_time: frame_ms as f32 / 1000.0,
+    };
+    let s = samplers.in_force();
+    scene.filtering = Filtering {
+        anisotropy: s.anisotropy,
+        mip_bias: s.bias,
+    };
+    scene.texture_quality = quality;
+    scene.geometry_lod = console.number("r__geometry_lod");
 }
 
 /// `r1_pps_u` and `r1_pps_v` (frame-presentation.md 3.2): reals −1 … 1, 0
@@ -1035,29 +1086,14 @@ impl App {
         // time, during which the pause is on anyway (focus loss).
         self.global_clock.frame(self.clock, self.pause.is_on());
         if let Some(Phase::Level { level, .. }) = &mut self.phase {
-            // The lamps' clock (hanging-lamps.md 4.3) and the renderer's
-            // light settings (dynamic-lights.md 8, glows.md 5).
+            // The lamps' clock (hanging-lamps.md 4.3).
             level.set_global_clock(self.global_clock.now());
-            let c = &self.console;
-            let status = |name| c.status(name);
-            let settings = LightSettings::from_statuses(
-                status("r1_dlights").as_deref(),
-                status("r1_dlights_clip").as_deref(),
-                status("r2_sun_lumscale").as_deref(),
-            );
-            let glows = status("r1_glows_per_frame")
-                .and_then(|v| v.trim().parse::<u32>().ok())
-                .map_or(GLOWS_PER_FRAME, |v| v.clamp(2, 32));
-            level.set_light_settings(settings, glows);
-            level.set_supersample(self.supersample);
-            level.set_vis_distance(self.console.number("rs_vis_distance"));
-            let [lod, a, b] = geometry_lod(&self.console);
-            level.set_geometry_lod(lod, a, b);
-            // detail-objects.md 7; weather-ambient-effects.md 4.3: the wind
-            // as the sound rules last updated it (without audio output
-            // they do not run, #352).
-            level.set_detail_settings(
-                self.console.number("r__detail_density"),
+            // weather-ambient-effects.md 4.3: the wind as the sound rules
+            // last updated it (without audio output they do not run, #352).
+            level_settings(
+                level,
+                &self.console,
+                self.supersample,
                 self.sound_run.wind.strength,
             );
         }
@@ -1562,19 +1598,15 @@ impl App {
             self.ramp = Some((colour, colour.ramp()));
         }
         if let Ok(scene) = &mut scene {
+            frame_settings(
+                scene,
+                &self.console,
+                self.supersample,
+                &self.samplers,
+                self.texture_quality(),
+                self.frame_ms,
+            );
             scene.ramp = self.ramp.and_then(|(_, r)| r);
-            scene.presentation = Presentation {
-                supersample: self.supersample,
-                pps: pps(&self.console),
-                frame_time: self.frame_ms as f32 / 1000.0,
-            };
-            let s = self.samplers.in_force();
-            scene.filtering = Filtering {
-                anisotropy: s.anisotropy,
-                mip_bias: s.bias,
-            };
-            scene.texture_quality = self.texture_quality();
-            scene.geometry_lod = self.console.number("r__geometry_lod");
         }
         // display-mode.md B.1: over everything of the frame, measured only
         // while on.

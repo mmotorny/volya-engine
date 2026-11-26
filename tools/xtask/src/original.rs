@@ -37,9 +37,10 @@ const ARGS: [&str; 5] = [
 ];
 
 /// The run's configuration file, in the user-data folder
-/// (steering-the-original.md section 2.2): the shipped `user.ltx` followed by
-/// the views' settings (`views::SETTINGS`, section 3.1), whose lines run
-/// after it and so override it.
+/// (steering-the-original.md section 2.2): the shipped `user.ltx` with the
+/// views' settings written into it (`views::user_ltx`, section 3.1). The
+/// game rewrites it when it quits normally (section 2.2; options-screens.md
+/// 12.3).
 const STEER_LTX: &str = "steer.ltx";
 
 /// The Wine user (the container runs as root; measured: the prefix's only
@@ -57,8 +58,13 @@ const USER_FOLDER: &str = "STALKER-SHOC";
 const INSTALL_IN_CONTAINER: &str = "/work/game";
 const INSTALL_IN_WINDOWS: &str = "Z:\\work\\game";
 
-/// The virtual display, the size the game runs at (`views::WIDTH` × `views::HEIGHT`).
-const SCREEN: &str = "1024x768x24";
+/// The virtual display's screen: the size the game runs at,
+/// `views::WIDTH` × `views::HEIGHT`, at 24 bits; Wine offers the game its
+/// size as a display mode (display-mode.md A.6), which the game keeps in
+/// full screen only when it lists it (A.5).
+fn screen() -> String {
+    format!("{}x{}x24", views::WIDTH, views::HEIGHT)
+}
 
 /// Seconds between captures.
 const EVERY: u64 = 5;
@@ -203,6 +209,7 @@ impl Install {
         crate::run(Command::new("cp").arg("-cR").arg(&self.folder).arg(&game))?;
         crate::run(Command::new("chmod").arg("-R").arg("u+w").arg(&game))?;
         add_install(&game, &documents)?;
+        let started = SystemTime::now();
         // The saves folder: `$game_saves$`, `savedgames\` below the user
         // folder (steering-the-original.md section 2.1).
         let saves = documents.join(USER_FOLDER).join("savedgames");
@@ -220,6 +227,7 @@ impl Install {
         let err = log.try_clone().map_err(|e| e.to_string())?;
         // The prefix's Documents folder is the run's `documents/`, so what the
         // game writes there (logs, settings) lands on the Mac.
+        let screen = screen();
         let tail = format!(
             "mkdir -p /tmp/fb\n\
              docs=\"$WINEPREFIX/drive_c/users/{WINE_USER}/Documents\"\n\
@@ -231,7 +239,7 @@ impl Install {
              wine reg query '{INSTALL_KEY}' /reg:$view || true\n\
              done\n\
              cd {INSTALL_IN_CONTAINER}/{WORKING_DIR}\n\
-             xvfb-run -n {DISPLAY} -f {XAUTHORITY} -s '-screen 0 {SCREEN} -fbdir /tmp/fb' wine \"$@\"\n\
+             xvfb-run -n {DISPLAY} -f {XAUTHORITY} -s '-screen 0 {screen} -fbdir /tmp/fb' wine \"$@\"\n\
              echo \"exit code $?\""
         );
         let exe = format!("{INSTALL_IN_CONTAINER}/{EXE}");
@@ -245,6 +253,8 @@ impl Install {
         ));
         let container = Container::spawn(&dir, &tail, &program, log.into(), err.into())?;
         Ok(Run {
+            config: documents.join(USER_FOLDER).join(STEER_LTX),
+            started,
             dir,
             frames,
             log_path,
@@ -260,6 +270,10 @@ pub struct Run {
     pub dir: PathBuf,
     /// Where its captures go.
     pub frames: PathBuf,
+    /// Its configuration file ([`STEER_LTX`]).
+    config: PathBuf,
+    /// When the run was started, after its configuration file was written.
+    started: SystemTime,
     log_path: PathBuf,
     pub container: Container,
     start: Instant,
@@ -308,6 +322,22 @@ impl Run {
         }
         println!("The game was still running {QUIT_WAIT} s after quit");
         Ok(None)
+    }
+
+    /// The configuration file as the game rewrote it when it quit
+    /// (options-screens.md 12.3); an error when it was not rewritten.
+    pub fn rewritten_config(&self) -> Result<Vec<u8>> {
+        let path = &self.config;
+        let modified = fs::metadata(path)
+            .and_then(|m| m.modified())
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        if modified <= self.started {
+            return Err(format!(
+                "the game did not rewrite its configuration file {}",
+                path.display()
+            ));
+        }
+        fs::read(path).map_err(|e| format!("{}: {e}", path.display()))
     }
 
     /// Stops the container and reports how the run ended.
@@ -387,13 +417,7 @@ fn add_install(game: &Path, documents: &Path) -> Result {
         }
     }
     // The run's configuration file (steering-the-original.md section 2.2).
-    if !steer.ends_with(b"\n") {
-        steer.extend_from_slice(b"\r\n");
-    }
-    for line in views::SETTINGS {
-        steer.extend_from_slice(format!("{line}\n").as_bytes());
-    }
-    write(&user.join(STEER_LTX), &steer)
+    write(&user.join(STEER_LTX), &views::user_ltx(&steer))
 }
 
 /// The Wine user's files (where Windows programs keep settings and logs),

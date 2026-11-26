@@ -2816,6 +2816,11 @@ impl LevelScreen {
         self.wind = wind;
     }
 
+    /// The wind strength *W* last given.
+    pub fn wind(&self) -> f32 {
+        self.wind
+    }
+
     /// The detail objects' cache (tests and reports).
     pub fn details(&self) -> Option<std::cell::Ref<'_, LevelDetailObjects>> {
         self.details.as_ref().map(|d| d.borrow())

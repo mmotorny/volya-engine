@@ -59,6 +59,10 @@ pub struct Context<'a> {
     gl_calls: Option<&'a dyn Fn(bool) -> Vec<(String, u64)>>,
     /// [`Context::heap`].
     heap: Option<&'a dyn Fn() -> HeapCount>,
+    /// [`Context::user_config`].
+    user_config: Option<Vec<u8>>,
+    /// Files kept for the suite ([`Context::keep_file`]).
+    files: RefCell<Vec<(String, Vec<u8>)>>,
 }
 
 /// The heap's counts so far, where the platform counts them.
@@ -95,7 +99,31 @@ impl<'a> Context<'a> {
             frames: keep_frames.then(Default::default),
             gl_calls: None,
             heap: None,
+            user_config: None,
+            files: RefCell::default(),
         }
+    }
+
+    /// Gives the checks a user configuration file to start with (the
+    /// fidelity suite's, the one the original ran with).
+    pub fn with_user_config(mut self, user: Vec<u8>) -> Self {
+        self.user_config = Some(user);
+        self
+    }
+
+    /// The user configuration file the suite gave, if any.
+    pub fn user_config(&self) -> Option<&[u8]> {
+        self.user_config.as_deref()
+    }
+
+    /// Keeps `bytes` as file `name` for the suite.
+    pub fn keep_file(&self, name: &str, bytes: Vec<u8>) {
+        self.files.borrow_mut().push((name.into(), bytes));
+    }
+
+    /// The files kept.
+    pub fn take_files(&self) -> Vec<(String, Vec<u8>)> {
+        std::mem::take(&mut *self.files.borrow_mut())
     }
 
     /// Lets [`Context::gl_calls`] count with `count`: `count(true)` starts

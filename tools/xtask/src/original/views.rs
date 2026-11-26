@@ -7,6 +7,12 @@
 //! capture actions run (`//tests/fidelity:frames`, build/original.bzl), so
 //! a frame is captured again only when its inputs change. The `fidelity`
 //! browser suite compares ours with them.
+//!
+//! Besides each view's frame, `<view>.png`, it keeps the configuration file
+//! the run started from, `<view>.user.ltx` (`user_ltx`, which our check
+//! starts from too), and the file as the game rewrote it when it quit,
+//! `<view>.saved.ltx` (options-screens.md 12.3), which the suite compares
+//! with ours before any pixel (#561).
 
 use std::fs;
 use std::path::Path;
@@ -24,7 +30,7 @@ mod list {
         "/../../tests/fidelity/views.rs"
     ));
 }
-pub use list::{Camera, HEIGHT, Place, SETTINGS, VIEWS, View, WIDTH};
+pub use list::{Camera, HEIGHT, Place, VIEWS, View, WIDTH, user_ltx};
 
 /// Seconds after the container's start at which the title menu is captured:
 /// measured, the menu shows by about 65 s (#519); it waits twice that.
@@ -40,11 +46,11 @@ const TRACK_KEYS: u32 = 15;
 /// 4.2), so at least [`PRECACHE`] + [`SETTLE`] seconds after its precache.
 const TRACK_CYCLES: u32 = 4;
 
-/// Seconds a track's precache is given (section 4.2.1: 50 black frames,
-/// about 25 s at the emulator's 2 frames per second, measured 1.4 frames per
-/// second at the slowest): its `demo_play` runs this long and [`SETTLE`]
-/// before the view's moment.
-const PRECACHE: u32 = 40;
+/// Seconds a track's precache is given (section 4.2.1: 50 black frames;
+/// measured at the views' settings, 1920 × 1080 with supersampling 4: 80 to
+/// 95 s): its `demo_play` runs this long and [`SETTLE`] before the view's
+/// moment.
+const PRECACHE: u32 = 110;
 
 /// Seconds between the precache's end (the display no longer black,
 /// section 4.2.2 step 3) and the capture, at the least: the view's
@@ -84,6 +90,14 @@ pub fn capture(place: &str, out: &Path) -> Result {
     fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let runs = std::env::temp_dir().join(format!("volya-capture-{}", std::process::id()));
     let install = Install::assemble_into(runs.clone())?;
+    // The file every view of the run starts from, so each view's.
+    let shipped = install.folder.join("__support/userdocs/user.ltx");
+    let shipped = fs::read(&shipped).map_err(|e| format!("{}: {e}", shipped.display()))?;
+    let config = user_ltx(&shipped);
+    for view in &views {
+        let path = dir.join(format!("{}.user.ltx", view.name));
+        fs::write(&path, &config).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
     let result = if views.is_empty() {
         Ok(())
     } else if place == "title" {
@@ -187,9 +201,7 @@ fn capture_title(install: &Install, out: &Path, views: &[&View]) -> Result {
     for view in views {
         keep(&run, out, view, frame.clone())?;
     }
-    let ended = run.quit()?;
-    run.finish(ended);
-    exited(ended)
+    end(run, out, views)
 }
 
 /// The New Game views, in one run:
@@ -207,9 +219,10 @@ fn capture_title(install: &Install, out: &Path, views: &[&View]) -> Result {
 ///   (section 4.2.1);
 /// - each track view's track played from the console (`demo_play
 ///   <name>,<cycles>`, sections 4.2 and 4.2.2) [`PRECACHE`] + [`SETTLE`]
-///   seconds before its `seconds`; once the display is no longer black
-///   (the precache has ended, section 4.2.2 step 3), the display captured
-///   at its `seconds`, and at least [`SETTLE`] seconds after the precache,
+///   seconds before its `seconds`; once the display has gone black and is
+///   no longer black (the precache has ended, section 4.2.2 step 3), the
+///   display captured at its `seconds`, and at least [`SETTLE`] seconds
+///   after the precache,
 ///   while the track holds the view. A later `demo_play` replaces the
 ///   track (section 4.2), so each is captured before the next plays. A
 ///   black capture is not kept;
@@ -278,6 +291,10 @@ fn capture_level(install: &Install, out: &Path, views: &[&View]) -> Result {
         let played = at(seconds - lead);
         wait_until(&mut run, played)?;
         run.console(&format!("demo_play {},{TRACK_CYCLES}", view.name))?;
+        // The precache blacks the display, which may still show the level
+        // for the first looks (measured).
+        let what = format!("{}'s precache", view.name);
+        poll(&mut run, PRECACHE_TIMEOUT, &what, black)?;
         let what = format!("{}'s precache over", view.name);
         let shown = poll(&mut run, PRECACHE_TIMEOUT, &what, |w, h, rgb| {
             !black(w, h, rgb)
@@ -302,9 +319,23 @@ fn capture_level(install: &Install, out: &Path, views: &[&View]) -> Result {
         );
         keep(&run, out, view, frame)?;
     }
+    end(run, out, views)
+}
+
+/// Quits the game (section 7) and keeps its rewritten configuration file
+/// as each view's `<view>.saved.ltx`; fails when it did not end normally
+/// or did not rewrite the file.
+fn end(mut run: Run, out: &Path, views: &[&View]) -> Result {
     let ended = run.quit()?;
+    let saved = run.rewritten_config();
     run.finish(ended);
-    exited(ended)
+    exited(ended)?;
+    let saved = saved?;
+    for view in views {
+        let path = out.join(format!("{}.saved.ltx", view.name));
+        fs::write(&path, &saved).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    Ok(())
 }
 
 /// Whether the game ended with exit code 0 after `quit`; exit code 5 is the
@@ -322,9 +353,10 @@ fn exited(ended: Option<ExitStatus>) -> Result {
     }
 }
 
-/// Rows of the letterbox's bars, top and bottom: the intro (measured) shows
-/// about 95 black rows above and below its picture.
-const BAR_ROWS: u32 = 80;
+/// Rows of the letterbox's bars, top and bottom: the intro (measured)
+/// shows about 95 black rows above and below its picture at 1024 × 768,
+/// and 5 above and 7 below at 1920 × 1080, the views' size.
+const BAR_ROWS: u32 = 4;
 
 /// Whether the top and bottom [`BAR_ROWS`] rows of the frame are black.
 fn letterboxed(w: u32, h: u32, rgb: &[u8]) -> bool {
@@ -422,5 +454,31 @@ mod tests {
     fn view_names_are_unique() {
         let names: std::collections::BTreeSet<&str> = VIEWS.iter().map(|v| v.name).collect();
         assert_eq!(names.len(), VIEWS.len());
+    }
+
+    /// The settings go into their lines, or new lines at their names'
+    /// places, the bindings counting as `bind`'s.
+    #[test]
+    fn a_views_user_ltx() {
+        let shipped = b"_preset Extreme\r\nai_use_torch_dynamic_lights off\r\nunbindall\r\n\
+                        bind left kLEFT\r\ng_always_run on\r\nr__supersample 2\r\nvid_mode 1024x768\r\n";
+        let text = String::from_utf8(user_ltx(shipped)).unwrap();
+        let lines: Vec<&str> = text.split_terminator("\r\n").collect();
+        assert_eq!(lines[0], "_preset Extreme");
+        assert_eq!(lines[1], "ai_use_torch_dynamic_lights on");
+        assert_eq!(&lines[2..4], ["unbindall", "bind left kLEFT"]);
+        assert_eq!(lines[4], "g_always_run on");
+        assert_eq!(lines[5], "hud_crosshair off", "inserted after `g_…`");
+        assert!(lines.contains(&"r__supersample 4"));
+        assert_eq!(*lines.last().unwrap(), "vid_mode 1920x1080");
+        assert!(text.ends_with("\r\n"));
+        let places: Vec<&str> = lines
+            .iter()
+            .map(|l| match l.split(' ').next().unwrap() {
+                "unbindall" => "bind",
+                n => n,
+            })
+            .collect();
+        assert!(places.is_sorted(), "{places:?}");
     }
 }

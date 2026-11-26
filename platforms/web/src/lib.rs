@@ -675,8 +675,10 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
             to_json(&gpu::render_selftest(args.get("check").and_then(|v| v.as_str())).await?)
         }
         // `{suite}` lists that browser suite's render checks on game data;
-        // `{check, frames}` runs one, with the frames it keeps when
-        // `frames` (`{note, frames}` or `{skip}`).
+        // `{check, frames, user_config}` runs one, with the frames it keeps
+        // when `frames` (`{note, frames, files}` or `{skip}`), starting
+        // from `user_config` (bytes) as the user configuration file where
+        // given.
         #[cfg(feature = "test-ops")]
         "render_game_selftest" => {
             let frames = args
@@ -688,6 +690,11 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
                     args.get("suite").and_then(|v| v.as_str()),
                     args.get("check").and_then(|v| v.as_str()),
                     frames,
+                    args.get("user_config").and_then(|v| v.as_array()).map(|a| {
+                        a.iter()
+                            .filter_map(|b| b.as_u64().map(|b| b as u8))
+                            .collect()
+                    }),
                 )
                 .await?,
             )

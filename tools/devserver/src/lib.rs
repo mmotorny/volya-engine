@@ -46,7 +46,8 @@ pub const INSTALLER_BASE: &str = "/volya-engine/__test/installer/";
 /// Tests POST a frame as PNG to `<DUMP_BASE><suite>/<name>.png`; with
 /// [`Server::with_dumps`] it is written to `<dir>/<suite>/<name>.png`. A GET
 /// of `DUMP_BASE` answers 204 when dumps are written, else 404, so pages
-/// encode frames only when they are kept.
+/// encode frames only when they are kept. A configuration file
+/// (`<name>.ltx`) is posted and served the same way.
 pub const DUMP_BASE: &str = "/volya-engine/__test/dump/";
 /// With [`Server::with_references`], `<REFERENCE_BASE><suite>/<name>.png`
 /// serves `<dir>/<suite>/<name>.png`: a frame an earlier run dumped, which
@@ -367,7 +368,8 @@ enum Route {
     File(PathBuf),
 }
 
-/// `<suite>/<name>.png`, each of ASCII letters, digits, `-`, `_` and `.`
+/// `<suite>/<name>.png` (a frame) or `<suite>/<name>.ltx` (a configuration
+/// file, the fidelity suite's), each of ASCII letters, digits, `-`, `_` and `.`
 /// (not leading), as the suite's directory and the file's name.
 fn dump_path(rest: &str) -> Option<(&str, &str)> {
     let (suite, name) = rest.split_once('/')?;
@@ -377,7 +379,8 @@ fn dump_path(rest: &str) -> Option<(&str, &str)> {
             && s.bytes()
                 .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
     };
-    (plain(suite) && plain(name) && name.ends_with(".png")).then_some((suite, name))
+    let kind = name.ends_with(".png") || name.ends_with(".ltx");
+    (plain(suite) && plain(name) && kind).then_some((suite, name))
 }
 
 struct Request {

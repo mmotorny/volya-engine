@@ -2,14 +2,21 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Our frames of the views in tests/fidelity/views.rs against the original's
-// (Bazel's capture actions, //tests/fidelity:frames, served as this
-// suite's references by //tests/browser:fidelity_chrome): per view the pixels that differ, the mean and largest
+// (`//tests/fidelity:frames`, Bazel's capture actions, served as this suite's
+// references): per view the pixels that differ, the mean and largest
 // difference, and a heat map. A report with thresholds, not a gate: the
 // original runs on Wine's Direct3D 9, which isn't pixel-exact. Kept frames
 // (VOLYA_DUMP_DIR): `<view>` ours, `<view>-original`, `<view>-heat`.
+//
+// The guard (#561): our check starts from the configuration file the
+// original's run started from (`<view>.user.ltx`), and the file our console
+// then writes must equal byte for byte the one the original rewrote when it
+// quit (`<view>.saved.ltx`). Otherwise the run is invalid: the test fails
+// with the first difference and no pixel is compared. Kept files: ours
+// `<view>.saved.ltx`, the original's `<view>-original.saved.ltx`.
 
-import { dump } from "./harness.js";
-import { gameChecks, reference } from "./render-game.js";
+import { dump, dumpFile } from "./harness.js";
+import { gameChecks, reference, referenceFile } from "./render-game.js";
 
 /** A pixel differs when a channel differs by more than this. */
 const TOLERANCE = 16;
@@ -74,4 +81,37 @@ async function compare(frame) {
   );
 }
 
-export const tests = await gameChecks("fidelity", compare);
+/** The view's configuration file to start from, as bytes. */
+async function args(view) {
+  const user = await referenceFile("fidelity", `${view}.user.ltx`);
+  if (!user) throw new Error(`run invalid: no ${view}.user.ltx of the original's run`);
+  return { user_config: Array.from(user) };
+}
+
+/** Line `n` (from 1) of `bytes` for a report. */
+function line(bytes, n) {
+  const lines = new TextDecoder("latin1").decode(bytes).split("\n");
+  return JSON.stringify(lines[n - 1] ?? "(end of file)");
+}
+
+/** Throws unless our rewritten configuration file equals the original's. */
+async function verify(view, files) {
+  const original = await referenceFile("fidelity", `${view}.saved.ltx`);
+  const ours = files[`${view}.saved.ltx`];
+  if (ours) await dumpFile(`${view}.saved.ltx`, ours);
+  if (original) await dumpFile(`${view}-original.saved.ltx`, original);
+  if (!original) throw new Error(`run invalid: no ${view}.saved.ltx of the original's run`);
+  if (!ours) throw new Error("run invalid: our check wrote no configuration file");
+  const length = Math.min(original.length, ours.length);
+  let at = 0;
+  while (at < length && original[at] === ours[at]) at++;
+  if (at === original.length && at === ours.length) return;
+  let n = 1;
+  for (let i = 0; i < at; i++) if (original[i] === 10) n++;
+  throw new Error(
+    `run invalid, no pixel compared: the configuration files differ (original ${original.length} bytes, ` +
+      `ours ${ours.length}), first at byte ${at}, line ${n}: original ${line(original, n)}, ours ${line(ours, n)}`,
+  );
+}
+
+export const tests = await gameChecks("fidelity", compare, { args, verify });

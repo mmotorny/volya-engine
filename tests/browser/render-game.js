@@ -40,6 +40,22 @@ export async function reference(suite, name) {
   return { width: bitmap.width, height: bitmap.height, rgba: data };
 }
 
+/** The bytes of file `name` (with its extension) the suite is served
+ * beside its reference frames, or null. */
+export async function referenceFile(suite, name) {
+  const response = await fetch(`${testBase()}reference/${suite}/${name}`);
+  if (!response.ok) return null;
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+/** The bytes of base64 `text`. */
+function bytesOf(text) {
+  const binary = atob(text);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
 /** Pixels of `rgba` whose colour differs from `before`'s. */
 function differingPixels(frame, rgba, before) {
   if (before.width !== frame.width || before.height !== frame.height) return frame.width * frame.height;
@@ -55,9 +71,12 @@ let imported = false;
 /**
  * The tests of render suite `suite`. With `compare`, every check keeps its
  * frames and each is handed to `compare(frame)` (`{ name, width, height,
- * rgba }`, opaque), whose note joins the test's.
+ * rgba }`, opaque), whose note joins the test's. `args(check)` gives a
+ * check's further arguments; `verify(check, files)` sees the files it kept
+ * (by name, bytes) before any frame is compared, and throws when they make
+ * the run invalid.
  */
-export async function gameChecks(suite, compare = null) {
+export async function gameChecks(suite, compare = null, { args = null, verify = null } = {}) {
   const checks = await volya.call("render_game_selftest", { suite });
   const tests = {
     "imports the game": async () => {
@@ -82,14 +101,17 @@ export async function gameChecks(suite, compare = null) {
       if (!imported) skip("the game isn't imported");
       const comparing = await comparesFrames();
       const frames = Boolean(compare) || comparing || (await keepsDumps());
-      const result = await volya.call("render_game_selftest", { check, frames });
+      const extra = args ? await args(check) : {};
+      const result = await volya.call("render_game_selftest", { ...extra, check, frames });
+      if (verify && !result.skip) {
+        const files = Object.fromEntries((result.files ?? []).map((f) => [f.name, bytesOf(f.base64)]));
+        await verify(check, files);
+      }
       const compared = [];
       const differing = [];
       const notes = [];
       for (const frame of result.frames ?? []) {
-        const text = atob(frame.rgba_base64);
-        const rgba = new Uint8Array(text.length);
-        for (let i = 0; i < text.length; i++) rgba[i] = text.charCodeAt(i);
+        const rgba = bytesOf(frame.rgba_base64);
         // Opaque, as the canvas shows it (its alpha mode is opaque): a 2D
         // canvas keeps colours premultiplied, so a translucent pixel's
         // colour would not survive the PNG's round trip (#495).

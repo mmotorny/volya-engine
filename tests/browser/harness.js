@@ -58,6 +58,14 @@ export async function dump(name, { width, height, rgba }) {
   assert(response.ok, `dump ${name}: HTTP ${response.status}`);
 }
 
+/** Keeps file `name` (with its extension, `.ltx`) of `bytes` beside the
+ * dumped frames, when they are kept. */
+export async function dumpFile(name, bytes) {
+  if (!(await keepsDumps())) return;
+  const response = await fetch(`${current.testBase}dump/${current.suite}/${name}`, { method: "POST", body: bytes });
+  assert(response.ok, `dump ${name}: HTTP ${response.status}`);
+}
+
 /** Whether the dev server keeps dumped frames (`VOLYA_DUMP_DIR`). */
 export function keepsDumps() {
   dumping ??= fetch(`${current.testBase}dump/`).then(

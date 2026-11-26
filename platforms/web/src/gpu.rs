@@ -921,13 +921,16 @@ pub async fn render_selftest(check: Option<&str>) -> Result<serde_json::Value, J
 /// The `render_game_selftest` op: runs the render check on game data
 /// `check` (`volya_engine::selftest`) on the imported game opened for it
 /// and renderers of its own: `{note, frames}` (the frames it kept for
-/// inspection, with `frames`, each `{name, width, height, rgba_base64}`),
-/// or `{skip}`; or lists `suite`'s checks.
+/// inspection, with `frames`, each `{name, width, height, rgba_base64}`,
+/// and the files it kept, each `{name, base64}`), or `{skip}`; or lists
+/// `suite`'s checks. With `user_config` the check starts from it as the
+/// user configuration file.
 #[cfg(feature = "test-ops")]
 pub async fn render_game_selftest(
     suite: Option<&str>,
     check: Option<&str>,
     frames: bool,
+    user_config: Option<Vec<u8>>,
 ) -> Result<serde_json::Value, JsValue> {
     use volya_engine::selftest::{self, Context, HeapCount};
     let Some(check) = check else {
@@ -945,12 +948,16 @@ pub async fn render_game_selftest(
             live,
         }
     };
-    let context = Context::new(tree.tree(), &make, frames)
+    let mut context = Context::new(tree.tree(), &make, frames)
         .with_root(tree.root())
         .with_gl_calls(&count)
         .with_heap(&heap);
+    if let Some(user) = user_config {
+        context = context.with_user_config(user);
+    }
     let outcome = selftest::run(check, &context).await;
     let kept = context.take_frames();
+    let files = context.take_files();
     drop(context);
     drop(tree);
     let mut result = outcome_json(outcome)?;
@@ -967,6 +974,11 @@ pub async fn render_game_selftest(
         })
         .collect();
     result["frames"] = json!(kept);
+    let files: Vec<_> = files
+        .iter()
+        .map(|(name, bytes)| json!({ "name": name, "base64": Base64Value(bytes) }))
+        .collect();
+    result["files"] = json!(files);
     Ok(result)
 }
 
