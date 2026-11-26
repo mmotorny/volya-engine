@@ -11,7 +11,8 @@
 //!
 //! With [`Server::with_tests`] it also serves the browser test harness under
 //! [`TEST_BASE`] (kept out of `dist/`) and accepts test reports POSTed to
-//! [`RESULTS_PATH`].
+//! [`RESULTS_PATH`]; with [`Server::with_dumps`] it writes the frames tests
+//! POST under [`DUMP_BASE`] to a local directory.
 
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
@@ -40,6 +41,12 @@ const PAGES_CACHE_CONTROL: &str = "max-age=600";
 /// `index.json` listing its files.
 pub const INSTALLER_BASE: &str = "/volya-engine/__test/installer/";
 
+/// Tests POST a frame as PNG to `<DUMP_BASE><suite>/<name>.png`; with
+/// [`Server::with_dumps`] it is written to `<dir>/<suite>/<name>.png`. A GET
+/// of `DUMP_BASE` answers 204 when dumps are written, else 404, so pages
+/// encode frames only when they are kept.
+pub const DUMP_BASE: &str = "/volya-engine/__test/dump/";
+
 /// What makes a page cross-origin isolated (COOP and COEP), as the service
 /// worker adds them.
 pub const ISOLATION_HEADERS: &str =
@@ -47,6 +54,8 @@ pub const ISOLATION_HEADERS: &str =
 
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 const MAX_BODY_BYTES: usize = 1024 * 1024;
+/// A dumped frame: a PNG of up to 4096 × 4096.
+const MAX_DUMP_BYTES: usize = 96 * 1024 * 1024;
 
 /// Receives the body of every test report.
 pub type ResultsSink = Arc<dyn Fn(String) + Send + Sync>;
@@ -63,6 +72,8 @@ pub struct Server {
     /// The app's files carry GitHub Pages' cache lifetime rather than
     /// `no-store`.
     pages_caching: bool,
+    /// Where frames POSTed under [`DUMP_BASE`] go.
+    dumps: Option<PathBuf>,
 }
 
 impl Server {
@@ -75,6 +86,7 @@ impl Server {
             next: None,
             use_next: AtomicBool::new(false),
             pages_caching: false,
+            dumps: None,
         })
     }
 
@@ -96,6 +108,14 @@ impl Server {
     pub fn with_tests(mut self, dir: &Path, sink: ResultsSink) -> io::Result<Self> {
         self.mounts.insert(0, (TEST_BASE, dir.canonicalize()?));
         self.results = Some(sink);
+        Ok(self)
+    }
+
+    /// Writes the frames tests POST under [`DUMP_BASE`] into `dir` (created
+    /// when missing); never anything else.
+    pub fn with_dumps(mut self, dir: &Path) -> io::Result<Self> {
+        std::fs::create_dir_all(dir)?;
+        self.dumps = Some(dir.canonicalize()?);
         Ok(self)
     }
 
@@ -127,6 +147,24 @@ impl Server {
             Err(_) => return write_status(&mut stream, 400, "Bad Request"),
         };
         match (request.method.as_str(), &self.results) {
+            ("POST", Some(_)) if request.path.starts_with(DUMP_BASE) => {
+                return match (&self.dumps, dump_path(&request.path[DUMP_BASE.len()..])) {
+                    (Some(dir), Some((suite, name))) => {
+                        let dir = dir.join(suite);
+                        std::fs::create_dir_all(&dir)?;
+                        std::fs::write(dir.join(name), &request.body)?;
+                        write_status(&mut stream, 204, "No Content")
+                    }
+                    (Some(_), None) => write_status(&mut stream, 400, "Bad Request"),
+                    (None, _) => write_status(&mut stream, 404, "Not Found"),
+                };
+            }
+            ("GET", Some(_)) if request.path == DUMP_BASE => {
+                return match self.dumps {
+                    Some(_) => write_status(&mut stream, 204, "No Content"),
+                    None => write_status(&mut stream, 404, "Not Found"),
+                };
+            }
             ("POST", Some(sink)) if request.path == RESULTS_PATH => {
                 sink(String::from_utf8_lossy(&request.body).into_owned());
                 return write_status(&mut stream, 204, "No Content");
@@ -259,6 +297,19 @@ enum Route {
     File(PathBuf),
 }
 
+/// `<suite>/<name>.png`, each of ASCII letters, digits, `-`, `_` and `.`
+/// (not leading), as the suite's directory and the file's name.
+fn dump_path(rest: &str) -> Option<(&str, &str)> {
+    let (suite, name) = rest.split_once('/')?;
+    let plain = |s: &str| {
+        !s.is_empty()
+            && !s.starts_with('.')
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    };
+    (plain(suite) && plain(name) && name.ends_with(".png")).then_some((suite, name))
+}
+
 struct Request {
     method: String,
     path: String,
@@ -381,7 +432,12 @@ fn read_request(stream: &mut impl Read) -> io::Result<Request> {
             range = Some((start, end));
         }
     }
-    if content_length > MAX_BODY_BYTES {
+    let limit = if path.starts_with(DUMP_BASE) {
+        MAX_DUMP_BYTES
+    } else {
+        MAX_BODY_BYTES
+    };
+    if content_length > limit {
         return Err(invalid());
     }
     let mut body = vec![0; content_length];
@@ -548,6 +604,55 @@ mod tests {
         assert!(response.starts_with("HTTP/1.1 204 "), "{response}");
         assert_eq!(rx.recv().unwrap(), body);
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn writes_dumped_frames_only_where_asked() {
+        let (dir, server) = fixture("dumps");
+        let dumps = dir.join("dumps");
+        let server = server
+            .with_tests(&dir.join("tests"), Arc::new(|_| {}))
+            .unwrap()
+            .with_dumps(&dumps)
+            .unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || server.run(listener));
+        let request = |head: &str| {
+            let mut stream = TcpStream::connect(addr).unwrap();
+            stream.write_all(head.as_bytes()).unwrap();
+            let mut response = String::new();
+            stream.read_to_string(&mut response).unwrap();
+            response
+        };
+        let post = |path: &str| {
+            request(&format!(
+                "POST {DUMP_BASE}{path} HTTP/1.1\r\nContent-Length: 3\r\n\r\npng"
+            ))
+        };
+        assert!(request(&format!("GET {DUMP_BASE} HTTP/1.1\r\n\r\n")).starts_with("HTTP/1.1 204 "));
+        assert!(post("render/a-frame_1.png").starts_with("HTTP/1.1 204 "));
+        assert_eq!(
+            fs::read(dumps.join("render/a-frame_1.png")).unwrap(),
+            b"png"
+        );
+        for bad in [
+            "..%2Fx.png",
+            "render/../x.png",
+            "render/.x.png",
+            "render/x.txt",
+            "x.png",
+        ] {
+            assert!(post(bad).starts_with("HTTP/1.1 400 "), "{bad}");
+        }
+        let (dir2, server) = fixture("no-dumps");
+        let server = server
+            .with_tests(&dir2.join("tests"), Arc::new(|_| {}))
+            .unwrap();
+        let response = exchange(server, &format!("GET {DUMP_BASE} HTTP/1.1\r\n\r\n"));
+        assert!(response.starts_with("HTTP/1.1 404 "), "{response}");
+        fs::remove_dir_all(dir).unwrap();
+        fs::remove_dir_all(dir2).unwrap();
     }
 
     #[test]

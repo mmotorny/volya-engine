@@ -37,6 +37,31 @@ export function assertEqual(actual, expected, message = "") {
   if (a !== e) throw new Error(`${message}${message ? ": " : ""}expected ${e}, got ${a}`);
 }
 
+/** The suite running and the URL prefix of the test infrastructure. */
+let current = { suite: "", testBase: "" };
+let dumping = null;
+
+/**
+ * Keeps a frame for inspection: `capture` (`{ width, height, rgba }`, as
+ * `debug_capture` returns it) is encoded as PNG and posted to the dev
+ * server, which writes it to `<VOLYA_DUMP_DIR>/<suite>/<name>.png` when the
+ * variable is set; otherwise nothing is encoded. `name` is letters, digits,
+ * `-` and `_`.
+ */
+export async function dump(name, { width, height, rgba }) {
+  dumping ??= fetch(`${current.testBase}dump/`).then(
+    (r) => r.status === 204,
+    () => false,
+  );
+  if (!(await dumping)) return;
+  const canvas = new OffscreenCanvas(width, height);
+  const pixels = new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength);
+  canvas.getContext("2d").putImageData(new ImageData(pixels, width, height), 0, 0);
+  const png = await canvas.convertToBlob({ type: "image/png" });
+  const response = await fetch(`${current.testBase}dump/${current.suite}/${name}.png`, { method: "POST", body: png });
+  assert(response.ok, `dump ${name}: HTTP ${response.status}`);
+}
+
 function captureErrors() {
   addEventListener("error", (e) => errors.push(`error: ${e.message}`));
   addEventListener("unhandledrejection", (e) => errors.push(`unhandled rejection: ${e.reason}`));
@@ -130,6 +155,7 @@ export async function runPage(suite) {
   const path = location.pathname;
   const base = path.slice(0, path.indexOf("/__test/") + 1);
   const runId = path.match(/\/__test\/run\/([^/]+)\//)?.[1] ?? "manual";
+  current = { suite, testBase: `${base}__test/` };
 
   // The app's DOM, as in index.html, with its viewport.
   const index = new DOMParser().parseFromString(await (await fetch(`${base}index.html`)).text(), "text/html");

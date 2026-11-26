@@ -19,6 +19,8 @@ webgl = ["wgpu/webgl"]
 # The direct WebGL 2 renderer instead of wgpu's (rendering.md, Design:
 # direct WebGL 2; #475).
 gl = []
+# The render self-test (src/selftest), in test builds of the app.
+selftest = []
 
 [dependencies]
 volya-engine-formats = { path = "../volya-engine-formats" }
