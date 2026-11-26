@@ -357,6 +357,63 @@ export const tests = {
     await quitToTitle();
   },
 
+  "Полный экран is the page's full screen: Apply asks for it, leaving it clears the box; disabled where the page can't": async () => {
+    needsGame();
+    const video = async () => {
+      // The cursor off the menu first, so it comes onto Options afresh.
+      pointer("pointermove", client(5, 5));
+      await sleep(300);
+      await openOptions();
+      clickAt(centreOf(button(await options(), "tab 0")));
+      return untilOptions((o) => o.page === "video", "the video tab");
+    };
+    let o = await video();
+    const box = (o) => control(o, "check_fullscreen");
+    // As the page tells the engine (fullscreen.js).
+    if (!(document.documentElement.requestFullscreen && document.fullscreenEnabled !== false)) {
+      assert(!box(o).enabled, "disabled without the page's full screen");
+      key("Escape");
+      await until((s) => s.phase === "menu" && !s.options, "Escape to close the screen");
+      return "disabled: this browser has no full screen for the page";
+    }
+    assert(box(o).enabled, "enabled");
+    assertEqual(box(o).value, "off", "off while the page isn't in full screen");
+    // Headless Chrome can't enter full screen without a real gesture: the
+    // API is stubbed, recording its calls.
+    const calls = [];
+    const request = Element.prototype.requestFullscreen;
+    const exit = document.exitFullscreen;
+    Element.prototype.requestFullscreen = async function () {
+      calls.push(["enter", this === document.documentElement]);
+      Object.defineProperty(document, "fullscreenElement", { value: document.documentElement, configurable: true });
+      document.dispatchEvent(new Event("fullscreenchange"));
+    };
+    document.exitFullscreen = async () => {
+      calls.push(["exit"]);
+      delete document.fullscreenElement;
+      document.dispatchEvent(new Event("fullscreenchange"));
+    };
+    try {
+      clickAt(centreOf(box(o)));
+      await untilOptions((o) => box(o).value === "on", "the box to check");
+      clickAt(centreOf(button(await options(), "btn_accept")));
+      await until((s) => s.phase === "menu" && !s.options, "Apply to close the screen");
+      for (let i = 0; i < 50 && !calls.length; i++) await sleep(20);
+      assertEqual(calls, [["enter", true]], "the page's root asked for full screen");
+      // Left as the browser lets the player (Escape): the box follows.
+      await document.exitFullscreen();
+      o = await video();
+      assertEqual(box(o).value, "off", "off once the page left full screen");
+      key("Escape");
+      await until((s) => s.phase === "menu" && !s.options, "Escape to close the screen");
+    } finally {
+      Element.prototype.requestFullscreen = request;
+      document.exitFullscreen = exit;
+      delete document.fullscreenElement;
+    }
+    return "entered at Apply, cleared on leaving";
+  },
+
   "the settings are read back when the game starts again": async () => {
     needsGame();
     key("KeyQ");

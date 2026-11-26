@@ -39,7 +39,7 @@ Always (`textures::wanted`; #184, #355): the browser's GPU process copies what t
 
 - The page sends the canvas's CSS size and `devicePixelRatio` on start and on change; the worker sizes the canvas and surface in device pixels. The frame loop runs in the worker on `requestAnimationFrame` (a 60 Hz timer where workers lack it); while the game runs its screen is drawn every frame.
 - The game draws at its video mode (`vid_mode`, docs/behavior/options-screens.md section 9), not at the canvas's size: menus and 3D go to an offscreen frame of that size, drawn into the canvas scaled to fit with its aspect kept, black around it (#49). Pointer positions are taken relative to the drawn picture.
-- The resolution list offers the canvas's own size and the common 4:3, 5:4, 16:10 and 16:9 sizes that fit it, at least 800 wide (the canvas's size alone if none is left); browsers expose no display modes. The page counts as windowed, so a stored mode not in the list is used as it is.
+- The resolution list offers the canvas's own size and the common 4:3, 5:4, 16:10 and 16:9 sizes that fit it, at least 800 wide (the canvas's size alone if none is left); browsers expose no display modes. The page counts as windowed, in its full screen too ([input.md](input.md#the-options-screens-full-screen)), so a stored mode not in the list is used as it is.
 
 ## The static world
 

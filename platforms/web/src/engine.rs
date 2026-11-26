@@ -148,6 +148,10 @@ pub async fn launch() -> Result<serde_json::Value, JsValue> {
             app.set_prepare_textures(crate::textures::wanted());
             app.resized(native);
             app.set_saved_games(saves);
+            // The page's full screen as it last said (`rs_fullscreen`).
+            if let Some((on, supported)) = PAGE_FULL_SCREEN.get() {
+                app.set_full_screen(on, supported);
+            }
             Ok(app)
         });
     SPLASH.with(|s| *s.borrow_mut() = None);
@@ -393,6 +397,10 @@ pub fn frame(time: f64) {
 thread_local! {
     /// Whether the page is hidden (#93), for work outside the frame loop.
     static PAGE_HIDDEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether the page is in full screen and can be, as it last said,
+    /// for the games started later.
+    static PAGE_FULL_SCREEN: std::cell::Cell<Option<(bool, bool)>> =
+        const { std::cell::Cell::new(None) };
 }
 
 /// Whether the page is hidden: work outside the frame loop waits meanwhile
@@ -482,6 +490,23 @@ pub fn character_takes_keys() -> bool {
             .as_ref()
             .is_some_and(|r| r.app.character_takes_keys())
     })
+}
+
+/// The page is in the browser's full screen or not, or can't be
+/// ([`App::set_full_screen`]).
+pub fn set_full_screen(on: bool, supported: bool) {
+    PAGE_FULL_SCREEN.set(Some((on, supported)));
+    RUNNING.with(|r| {
+        if let Some(r) = r.borrow_mut().as_mut() {
+            r.app.set_full_screen(on, supported);
+        }
+    });
+}
+
+/// Full screen to enter or leave, once a video restart asked for it
+/// ([`App::take_full_screen_request`]).
+pub fn take_full_screen_request() -> Option<bool> {
+    RUNNING.with(|r| r.borrow_mut().as_mut()?.app.take_full_screen_request())
 }
 
 /// Whether the game shows its mouse cursor ([`App::cursor_shown`]): the

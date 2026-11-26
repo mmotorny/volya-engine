@@ -471,11 +471,25 @@ pub struct App {
     texture_list: Arc<[String]>,
     /// The maximum anisotropy and mip bias in force (sections 5 – 7).
     samplers: SamplerStates,
+    /// Whether the page is in the browser's full screen, as it last said;
+    /// `None` where it can't be ([`App::set_full_screen`]).
+    page_full_screen: Option<bool>,
+    /// Full screen to enter (true) or leave, asked of the page by a video
+    /// restart ([`App::take_full_screen_request`]).
+    full_screen_request: Option<bool>,
 }
 
 /// `r__supersample`, 1 … 4.
 fn supersample(console: &Console) -> u32 {
     (console.number("r__supersample") as u32).clamp(1, 4)
+}
+
+/// At a video restart, the full screen to ask of the page: `rs_fullscreen`
+/// where the page, in full screen `page` (`None`: it can't be), differs
+/// (display-mode.md A.9 step 1).
+fn display_mode_request(console: &Console, page: Option<bool>) -> Option<bool> {
+    let wanted = console.on("rs_fullscreen");
+    page.is_some_and(|on| on != wanted).then_some(wanted)
 }
 
 /// `r__geometry_lod`, `r1_ssa_lod_a` and `r1_ssa_lod_b`
@@ -570,6 +584,8 @@ impl App {
         Ok(Self {
             texture_list,
             samplers,
+            page_full_screen: None,
+            full_screen_request: None,
             applied: console.generation(),
             console,
             screens: MenuScreens::default(),
@@ -1077,6 +1093,8 @@ impl App {
                     // `vid_restart` (options-screens.md section 5.4).
                     self.video = video_mode(&self.console);
                     self.supersample = supersample(&self.console);
+                    self.full_screen_request =
+                        display_mode_request(&self.console, self.page_full_screen);
                     // A device reset (texture-quality-filtering.md 7.3).
                     self.samplers.reset(&self.console);
                     menu.resized(data, self.video);
@@ -1197,6 +1215,8 @@ impl App {
                 if out.video_restart {
                     self.video = video_mode(&self.console);
                     self.supersample = supersample(&self.console);
+                    self.full_screen_request =
+                        display_mode_request(&self.console, self.page_full_screen);
                     // A device reset (texture-quality-filtering.md 7.3).
                     self.samplers.reset(&self.console);
                     menu.resized(data, self.video);
@@ -1481,6 +1501,26 @@ impl App {
     /// when the options screen closes and when the player quits.
     pub fn take_save(&mut self) -> Option<Vec<u8>> {
         self.save.take()
+    }
+
+    /// The page is in the browser's full screen (`on`) or not, or can't be
+    /// (`supported` false). `rs_fullscreen` is the page's full screen
+    /// (a deviation decided by the user, docs/architecture/web-platform.md):
+    /// it follows the page, and a video restart asks the page for it
+    /// ([`App::take_full_screen_request`]). Where the page can't be, the
+    /// options screen's check box is disabled and the value kept.
+    pub fn set_full_screen(&mut self, on: bool, supported: bool) {
+        self.screens.set_full_screen_supported(supported);
+        self.page_full_screen = supported.then_some(on);
+        if supported && self.console.on("rs_fullscreen") != on {
+            let value = if on { "on" } else { "off" };
+            self.console.exec(&format!("rs_fullscreen {value}"));
+        }
+    }
+
+    /// Full screen to enter (true) or leave, once asked by a video restart.
+    pub fn take_full_screen_request(&mut self) -> Option<bool> {
+        self.full_screen_request.take()
     }
 
     /// `texture_lod` and its list as a texture loaded now uses them
@@ -2263,6 +2303,25 @@ mod tests {
         app.console.exec("rs_vis_distance 0.5");
         app.update(&tree, 32.0, &input, &mut audio);
         assert_eq!(far(&app), 50.0);
+    }
+
+    /// `rs_fullscreen` is the page's full screen (our deviation): it
+    /// follows the page, a video restart asks for it where it differs, and
+    /// where the page can't be in full screen it is kept and nothing asked.
+    #[test]
+    fn rs_fullscreen_is_the_pages_full_screen() {
+        let tree = fixture::tree();
+        let mut app = App::new(fixture::data(&tree)).unwrap();
+        app.set_full_screen(false, true);
+        assert!(!app.console.on("rs_fullscreen"));
+        app.console.exec("rs_fullscreen on");
+        let request = |app: &App| display_mode_request(&app.console, app.page_full_screen);
+        assert_eq!(request(&app), Some(true));
+        app.set_full_screen(true, true);
+        assert_eq!(request(&app), None);
+        app.set_full_screen(false, false);
+        assert!(app.console.on("rs_fullscreen"), "kept");
+        assert_eq!(request(&app), None);
     }
 
     fn menu_open(app: &App) -> bool {

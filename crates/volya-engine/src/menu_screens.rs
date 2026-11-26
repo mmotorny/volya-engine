@@ -102,6 +102,9 @@ pub struct MenuScreens {
     /// The time of the last hold step of any scroll bar, 0 at program
     /// start (save-load-screens.md section 3.5).
     last_hold: u64,
+    /// The page can't take the browser's full screen
+    /// ([`OptionsScreen::set_full_screen_supported`]).
+    no_full_screen: bool,
 }
 
 impl MenuScreens {
@@ -116,6 +119,14 @@ impl MenuScreens {
     /// The files deleted since the last call.
     pub fn take_deleted(&mut self) -> Vec<String> {
         std::mem::take(&mut self.deleted)
+    }
+
+    /// Whether the page can take the browser's full screen.
+    pub fn set_full_screen_supported(&mut self, supported: bool) {
+        self.no_full_screen = !supported;
+        if let Some(o) = &mut self.options {
+            o.set_full_screen_supported(supported);
+        }
     }
 
     /// The menu (re)opened: its screens are made afresh when next opened
@@ -359,6 +370,7 @@ impl MenuScreens {
         }
         let screen = self.options.as_mut().expect("made");
         screen.open(data, console, native, now, cursor);
+        screen.set_full_screen_supported(!self.no_full_screen);
         self.sub = Some(Sub::Options);
         Ok(())
     }

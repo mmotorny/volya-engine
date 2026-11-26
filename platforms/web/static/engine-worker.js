@@ -39,6 +39,10 @@
 // height]; the page's text entry follows it (#94, #108).
 // { type: "cursor", shown } whenever the game's mouse cursor shows or hides:
 // the page's touch is a touchpad while it shows (#108).
+// { type: "full_screen", on } when a video restart asks the page to enter
+// or leave the browser's full screen (`rs_fullscreen`); the page answers,
+// as at start and whenever its full screen changes, with
+// { type: "full_screen", on, supported }.
 // Once started, the worker runs a frame loop on requestAnimationFrame where
 // workers have it, otherwise on a 60 Hz timer; it idles while the page is
 // hidden, drawing nothing.
@@ -118,6 +122,8 @@ function syncCapture() {
       nightVision: bits & 256 ? (bits & 512) !== 0 : null,
     });
   }
+  const full = e().full_screen_request();
+  if (full >= 0) postMessage({ type: "full_screen", on: full === 1 });
   const shown = e().cursor_shown();
   if (shown !== cursor) {
     cursor = shown;
@@ -228,6 +234,13 @@ onmessage = async ({ data }) => {
       console.warn(`visibility: ${message(error)}`);
     }
     schedule();
+  } else if (data.type === "full_screen") {
+    await started;
+    try {
+      e().full_screen(data.on, data.supported);
+    } catch (error) {
+      console.warn(`full screen: ${message(error)}`);
+    }
   } else if (data.type === "end") {
     ended(data.reason, data.message, 2);
   } else if (data.type === "diag") {

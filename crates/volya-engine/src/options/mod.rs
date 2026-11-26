@@ -322,6 +322,9 @@ impl OptionsData {
 
 /// The options screen.
 pub struct OptionsScreen {
+    /// The page can't take the browser's full screen: "Полный экран" is
+    /// disabled (our deviation, docs/architecture/web-platform.md).
+    no_full_screen: bool,
     items: Vec<Item>,
     cells: Vec<Cell>,
     views: Vec<View>,
@@ -722,6 +725,7 @@ impl OptionsScreen {
             closed: None,
             clicks: Vec::new(),
             drawn_hover: std::cell::Cell::new(None),
+            no_full_screen: false,
         })
     }
 
@@ -885,6 +889,7 @@ impl OptionsScreen {
             .flatten();
         for it in &mut self.items {
             match it.name.as_str() {
+                "check_fullscreen" => it.enabled = !self.no_full_screen,
                 "check_r2_sun" | "check_r2_sun_details" => it.enabled = renderer == Some(2),
                 "track_light_distance" | "track_particles_distance" => {
                     it.enabled = matches!(renderer, Some(1 | 2))
@@ -892,6 +897,13 @@ impl OptionsScreen {
                 _ => {}
             }
         }
+    }
+
+    /// Whether the page can take the browser's full screen: without it
+    /// the full-screen check box is disabled, its value kept.
+    pub fn set_full_screen_supported(&mut self, supported: bool) {
+        self.no_full_screen = !supported;
+        self.dependent();
     }
 
     /// Whether the screen closed in the latest update, and what it asks.

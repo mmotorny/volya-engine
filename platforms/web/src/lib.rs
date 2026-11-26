@@ -541,6 +541,21 @@ pub fn level_controls() -> u32 {
     })
 }
 
+/// The page is in the browser's full screen (`on`) or not, or can't be
+/// (`supported` false): `rs_fullscreen` follows it, and the options
+/// screen's check box is disabled where it can't be.
+#[wasm_bindgen]
+pub fn full_screen(on: bool, supported: bool) {
+    engine::set_full_screen(on, supported);
+}
+
+/// Full screen asked of the page by a video restart, once: 1 to enter, 0
+/// to leave, −1 for nothing.
+#[wasm_bindgen]
+pub fn full_screen_request() -> i32 {
+    engine::take_full_screen_request().map_or(-1, i32::from)
+}
+
 /// Whether the game shows its mouse cursor: the page's touch is a
 /// touchpad then, elsewhere direct (#108).
 #[wasm_bindgen]

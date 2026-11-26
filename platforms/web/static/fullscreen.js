@@ -48,6 +48,13 @@ export const supported = () =>
   !matchMedia("(pointer: coarse)").matches &&
   !mac();
 
+/** Whether the page can take the browser's full screen: the options
+ * screen's "Полный экран" (`rs_fullscreen`) is the page's full screen, a
+ * deviation decided by the user; where it can't (Safari on iPhone has no
+ * `requestFullscreen` for the page), the check box is disabled. */
+export const fullScreenSupported = () =>
+  Boolean(document.documentElement.requestFullscreen) && document.fullscreenEnabled !== false;
+
 /**
  * The offer. `boundKeys()` resolves to the engine's names of the keys the
  * game binds. `update({ level })` follows the level's controls; `leave()`
@@ -103,21 +110,26 @@ export function createFullscreenOffer(boundKeys, { show = false } = {}) {
     spent = true;
     render();
   });
-  button.addEventListener("click", () => {
-    if (!supported()) return;
-    spent = true;
-    // Both in the click: the lock first (the specification's order), then
-    // full screen, which needs the gesture.
-    navigator.keyboard.lock(codes).catch((error) => console.warn(`keyboard lock: ${error.message}`));
+  // Full screen with the keys locked where the browser can (the lock first,
+  // the specification's order); full screen needs a user gesture, so this
+  // runs in one or soon after it. `failed` is called if it is refused.
+  const enter = (failed = () => {}) => {
+    if (supported()) navigator.keyboard.lock(codes).catch((error) => console.warn(`keyboard lock: ${error.message}`));
     entered = true;
     document.documentElement
       .requestFullscreen({ navigationUI: "hide" })
       .catch((error) => {
         entered = false;
-        navigator.keyboard.unlock?.();
+        navigator.keyboard?.unlock?.();
         console.warn(`full screen: ${error.message}`);
+        failed();
       })
       .finally(() => render());
+  };
+  button.addEventListener("click", () => {
+    if (!supported()) return;
+    spent = true;
+    enter();
   });
   document.addEventListener("fullscreenchange", () => {
     // Left by the player (the long Escape) or the browser: the lock ends
@@ -152,6 +164,23 @@ export function createFullscreenOffer(boundKeys, { show = false } = {}) {
           .catch(() => {});
       }
       render();
+    },
+    /**
+     * The options screen's full screen (`rs_fullscreen`) at a video
+     * restart: entered (`on`) or left. A video restart follows a click or
+     * key on the screen, so the browser's user activation still holds
+     * (documented: transient activation; not with a gamepad, whose presses
+     * give none). `failed` is called if the browser refuses.
+     */
+    setFullScreen(on, failed) {
+      if (on && !fullscreen() && fullScreenSupported()) enter(failed);
+      else if (!on && fullscreen()) {
+        document
+          .exitFullscreen()
+          .catch(() => {})
+          .finally(() => navigator.keyboard?.unlock?.());
+        entered = false;
+      }
     },
     /** The game ended: full screen entered here ends too. */
     leave() {

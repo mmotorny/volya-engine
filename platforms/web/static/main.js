@@ -7,7 +7,7 @@
 import { blockZoom } from "./zoom.js";
 import { startInput } from "./input.js";
 import { createTouchControls } from "./touch-controls.js";
-import { createFullscreenOffer } from "./fullscreen.js";
+import { createFullscreenOffer, fullScreenSupported } from "./fullscreen.js";
 import { createTextEntry } from "./text-entry.js";
 // Early: Chrome offers installing the app once, soon after load.
 import "./install.js";
@@ -49,6 +49,10 @@ let setCapture = () => {};
 let setLevel = () => {};
 let setTextField = () => {};
 let setCursor = () => {};
+let setFullScreen = () => {};
+/** Tells the engine whether the page is in full screen, or can't be. */
+const reportFullScreen = () =>
+  worker?.postMessage({ type: "full_screen", on: Boolean(document.fullscreenElement), supported: fullScreenSupported() });
 /** The running engine's build id (engine-worker.js). */
 let engineBuild = null;
 
@@ -173,6 +177,7 @@ function startEngine() {
       else if (data.type === "controls") setLevel(data);
       else if (data.type === "text_field") setTextField(data);
       else if (data.type === "cursor") setCursor(data.shown);
+      else if (data.type === "full_screen") setFullScreen(data.on);
       else if (data.type === "result") {
         const { resolve, reject } = pending.get(data.id);
         pending.delete(data.id);
@@ -191,6 +196,7 @@ function startEngine() {
   const log = logging ? diagnostics.session() : null;
   const previousEnd = logging ? diagnostics.takeKeptEnd() : null;
   worker.postMessage({ type: "start", canvas, size: size(), diagnostics: log, previousEnd }, [canvas]);
+  reportFullScreen();
   if (document.visibilityState === "hidden") visibilityChanged();
   sizes.observe(view);
   return started;
@@ -223,6 +229,9 @@ const offer = createFullscreenOffer(() => call("bound_keys"));
 document.body.append(offer.element);
 document.body.append(entry.element);
 setTextField = (field) => entry.update(field);
+// The options screen's full screen (`rs_fullscreen`) is the page's.
+setFullScreen = (on) => offer.setFullScreen(on, reportFullScreen);
+document.addEventListener("fullscreenchange", reportFullScreen);
 setCapture = (on) => {
   forward.setCapture(on);
   document.querySelector("main").hidden = on;
