@@ -236,6 +236,12 @@ has 0x4000, the remaining time becomes *T*. A new instance's remaining time and 
 playing. Raising *N* keeps the live particles; lowering it below the count drops the particles beyond the new
 maximum (`bin_manager.py`).
 
+A new instance's bounding box is empty, its minimum +3.4028235 × 10³⁸ and its maximum −3.4028235 × 10³⁸ on each
+axis (the largest finite `f32` and its negative), and its sphere has centre (0, 0, 0) and radius 0
+(`bin_new_box.py`). Giving it its record, playing, stopping and placing it (sections 5, 7) change neither; only an
+update does (8.2, 8.3). So box and sphere keep these values until the first update while not playing, or, while
+playing, until the first step with live particles.
+
 ### 8.2 An update with *e* ms
 
 The owner updates the instance with the elapsed real time *e*, a whole number of milliseconds (`bin_effect.py`):
@@ -259,7 +265,8 @@ In this order (`bin_effect.py`, `bin_manager.py`):
 4. **Collision**: when the flag word has 0x10000 (P5).
 5. **Bounding box**: if particles are live, the box spans the minimum and maximum of their positions on each axis,
    enlarged on every side by the largest size component of any live particle (not less than 0); the sphere is the
-   box's centre and half its diagonal. If none is live, box and sphere are left as they were. The particle count
+   box's centre and half its diagonal. If none is live, box and sphere are left as they were (for an instance that
+   has had no live particle and no update while not playing, the empty box and the sphere of 8.1). The particle count
    used here is the one after step 2; whether particles removed by step 4 are left out is **unestablished**.
 6. **End of a deferred stop**: if the instance is stopping and no particle was counted in 5, playing and stopping
    are cleared and the update ends.
@@ -321,15 +328,16 @@ updated without stopping, is stopped by the time limit in step *k*, the first *k
 
 ## 11. Provenance
 
-- Date: 2026-11-24.
+- Date: 2026-11-24; a new instance's box and sphere (8.1) added 2026-11-26.
 - Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG): `particles.xr` from `gamedata.db4`
   (identical copy in `gamedata.dba`); binaries `bin\xrParticles.dll` (MD5 `22bad4d258e6211c6ea7cc8dc8d7ca55`) and
-  `bin\xrRender_R1.dll` (MD5 `2bf95c8376b735daa6d82b8944894be0`).
+  `bin\xrRender_R1.dll` (MD5 `2bf95c8376b735daa6d82b8944894be0`); for a new instance's box and sphere (8.1),
+  `bin\XR_3DA.exe` (MD5 `ba3ad0127bff6619ed991a7c82d8b946`).
 - Data examined: every effect record of `particles.xr`, decoded with a throwaway parser written from P1's text.
 - Analysis: static analysis (Ghidra 12.2, headless) of the particle library (the random numbers, region
   generation, containment and placement, the placement of action lists and of each action type, particle birth,
   addition and removal, play and stop) and of the first renderer's effect instance (its record, placement, play,
-  stop and update); the region placement was checked by emulating the program's instructions on random input.
+  stop and update) and of the engine executable's routines that set a new instance's box and sphere; the region placement was checked by emulating the program's instructions on random input.
   Behaviour was then reproduced by a throwaway implementation written from this text (`sim.py`). No execution or
   debugging of the game.
 - No leaked source code, derived projects or third-party documentation of the engine were used. The checks in
