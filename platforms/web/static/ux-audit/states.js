@@ -172,7 +172,24 @@ export const SECTIONS = [
         log: { on: true, entries: true, download: "failed" },
       },
       { id: "settings-log-off-kept", name: "Diagnostic log turned off, its log kept", game: imported, screen: "settings", log: { on: false, entries: true } },
-      { id: "settings-no-game", name: "No game imported", game: fresh, screen: "settings" },
+      // Danger zone: the game's settings and saved games (#535).
+      {
+        id: "settings-delete-user-data",
+        name: "Delete settings and saved games pressed: confirming",
+        game: imported,
+        screen: "settings",
+        press: ["Delete settings and saved games"],
+      },
+      {
+        id: "settings-user-data-deleted",
+        name: "Settings and saved games deleted",
+        game: imported,
+        screen: "settings",
+        press: ["Delete settings and saved games", "Delete"],
+      },
+      { id: "settings-no-user-data", name: "No settings or saved games stored", game: imported, screen: "settings", userData: false },
+      { id: "settings-no-game", name: "No game imported, settings or saved games stored", game: fresh, screen: "settings" },
+      { id: "settings-nothing-stored", name: "No game imported, nothing stored", game: fresh, screen: "settings", userData: false },
     ],
   },
   {

@@ -571,6 +571,48 @@ export const tests = {
     return `update() unreachable: ${rejection}; navigator.onLine ${navigator.onLine}`;
   },
 
+  "Delete settings and saved games: asks first, deletes only those, and the next game starts from the defaults": async () => {
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle("volya-engine", { create: true });
+    const put = async (at, name, text) => {
+      const writable = await (await at.getFileHandle(name, { create: true })).createWritable();
+      await writable.write(text);
+      await writable.close();
+    };
+    const names = async () => {
+      const out = [];
+      for await (const name of dir.keys()) out.push(name);
+      return out.sort();
+    };
+    const button = (label) => [...document.querySelectorAll("#game button")].find((b) => b.textContent === label);
+    await put(dir, "user.ltx", "bind forward kT\r\n");
+    await put(await dir.getDirectoryHandle("savedgames", { create: true }), "test.sav", "test");
+    const storage = JSON.stringify(Object.entries(localStorage).sort());
+    const cached = (await caches.keys()).sort().join();
+    const others = (await names()).filter((n) => n !== "user.ltx" && n !== "savedgames");
+    await volya.showSettings();
+    const remove = button("Delete settings and saved games");
+    assert(remove?.closest(".danger-zone"), "no Delete settings and saved games in the danger zone");
+    // Asked first; Escape (the keyboard) cancels.
+    remove.click();
+    const ask = document.querySelector("#game .confirm");
+    assertEqual(ask?.querySelector("strong").textContent, "Delete the game's settings and saved games?", "the question");
+    assertEqual(document.activeElement?.textContent, "Cancel", "focus on Cancel");
+    document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await until(() => !document.querySelector("#game .confirm") && button("Delete settings and saved games"), "Escape didn't cancel");
+    assertEqual(document.activeElement?.textContent, "Delete settings and saved games", "focus back on the button");
+    assert((await names()).includes("user.ltx"), "deleted though cancelled");
+    button("Delete settings and saved games").click();
+    button("Delete").click();
+    await until(() => document.querySelector('#game [role="status"]')?.textContent === "Settings and saved games deleted", "not deleted");
+    assertEqual(await names(), others, "what's left in storage");
+    assertEqual(await volya.call("user_config"), null, "a user configuration is still read");
+    assertEqual(JSON.stringify(Object.entries(localStorage).sort()), storage, "the shell's preferences changed");
+    assertEqual((await caches.keys()).sort().join(), cached, "the offline copy changed");
+    // Nothing left to delete: not offered.
+    await volya.showSettings();
+    assert(!button("Delete settings and saved games"), "offered with nothing stored");
+  },
+
   "the UX audit page renders every state on every device": async () => {
     const { DEVICES, STATES } = await import(`${base}ux-audit/states.js`);
     const failed = [];

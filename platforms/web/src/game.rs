@@ -635,6 +635,51 @@ pub async fn forget_user_config() -> Result<(), JsValue> {
     Ok(())
 }
 
+/// What the player's own data is: the user configuration file and the
+/// saved-games folder, beside the game in the namespace.
+const USER_DATA: [&str; 2] = [USER_CONFIG, SAVED_GAMES];
+
+/// The entries of [`USER_DATA`] that exist.
+async fn user_data_present(
+    namespace: &web_sys::FileSystemDirectoryHandle,
+) -> Result<Vec<String>, JsValue> {
+    Ok(opfs::entries(namespace)
+        .await?
+        .into_iter()
+        .map(|h| h.name())
+        .filter(|name| USER_DATA.contains(&name.as_str()))
+        .collect())
+}
+
+/// Whether the player has settings or saved games stored (Settings offers
+/// to delete them).
+pub async fn has_user_data() -> Result<bool, JsValue> {
+    let namespace = opfs::namespace().await?;
+    Ok(!user_data_present(&namespace).await?.is_empty())
+}
+
+/// Deletes the user configuration file and the saved-games folder (Settings,
+/// while no game runs): the next game starts from the installer's copy. A
+/// write of the configuration still holding its file makes an attempt fail:
+/// retried as [`write_user_config`].
+pub async fn forget_user_data() -> Result<(), JsValue> {
+    close_saved_games();
+    let namespace = opfs::namespace().await?;
+    for name in user_data_present(&namespace).await? {
+        let mut attempt = 0;
+        loop {
+            match opfs::remove(&namespace, &name).await {
+                Err(_) if attempt < CONFIG_ATTEMPTS => {
+                    attempt += 1;
+                    opfs::sleep(CONFIG_RETRY_MS).await?;
+                }
+                result => break result?,
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Deletes the imported game.
 pub async fn forget() -> Result<(), JsValue> {
     unmount();

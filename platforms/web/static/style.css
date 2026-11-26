@@ -860,6 +860,33 @@ button.back {
   color: var(--danger);
 }
 
+.panel.danger-zone .danger-item + .danger-item {
+  margin-top: 1.25rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid rgba(255, 155, 143, 0.25);
+}
+
+/* An action's outcome, focused for screen readers and the keyboard only. */
+.danger-item [role="status"]:focus {
+  outline: none;
+}
+
+/* A confirmation in place of the control that asked for it. */
+.callout.confirm {
+  margin-bottom: 0;
+}
+
+.confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.panel .confirm-actions button.danger.filled {
+  margin-top: 0;
+}
+
 /* Settings' actions sit at their content's width, one below the other. */
 .panel button.panel-action {
   margin-top: 0.75rem;

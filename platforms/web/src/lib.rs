@@ -597,6 +597,10 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
             Ok("null".into())
         }
         "forget_game" => game::forget().await.map(|()| "null".into()),
+        "user_data_status" => {
+            to_json(&serde_json::json!({ "present": game::has_user_data().await? }))
+        }
+        "forget_user_data" => game::forget_user_data().await.map(|()| "null".into()),
         "read_dir" => to_json(&game::read_dir(text("path"))?),
         "cover" => to_json(&game::cover()?),
         "play_sound" => {

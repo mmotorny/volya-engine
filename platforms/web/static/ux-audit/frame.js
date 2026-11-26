@@ -76,6 +76,8 @@ const call = async (op) => {
     case "game_status":
       if (state.game instanceof Error) throw state.game;
       return state.game;
+    case "user_data_status":
+      return { present: state.userData ?? true };
     default:
       return null;
   }
@@ -183,6 +185,11 @@ if (state.level) {
   if (state.log?.download) {
     globalThis.volyaHoldCheckResult = true;
     [...document.querySelectorAll("#game button")].find((b) => b.textContent === "Download diagnostic log").click();
+    await new Promise((resolve) => setTimeout(resolve));
+  }
+  // Buttons pressed in turn, by their text (a confirmation's, say).
+  for (const label of state.press ?? []) {
+    [...document.querySelectorAll("#game button")].find((b) => b.textContent === label).click();
     await new Promise((resolve) => setTimeout(resolve));
   }
   if (state.snapshot) screens.showImport(state.game, state.snapshot);

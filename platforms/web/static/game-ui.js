@@ -13,7 +13,8 @@
 //
 // Home holds Play only; secondary actions (an update offer, Settings) sit at
 // the bottom, away from it. Settings holds updates, the diagnostic
-// log and, in a danger zone, removing the import.
+// log and, in a danger zone, deleting the game's settings and saved games
+// and removing the import.
 
 import { SHARE_ICON, canOffer, chromium, install, installed, platform } from "./install.js";
 import * as diagnostics from "./diagnostics.js";
@@ -637,9 +638,88 @@ async function diagnosticsPanel() {
   );
 }
 
-/** Settings: updates, the diagnostic log and removing the import (danger zone). */
+/**
+ * A confirmation in place of the control that asked for it: `question`,
+ * `detail`, the action (`actionLabel`, filled red) and Cancel (focused;
+ * Escape too). `result` settles true on the action, false on Cancel;
+ * `busy()` disables both while the action runs.
+ */
+function confirmation(question, detail, actionLabel) {
+  const action = element("button", { className: "danger filled", textContent: actionLabel });
+  const cancel = element("button", { textContent: "Cancel" });
+  const box = element(
+    "div",
+    { className: "callout problem confirm" },
+    element("strong", { textContent: question }),
+    element("span", { textContent: detail }),
+    element("div", { className: "confirm-actions" }, action, cancel),
+  );
+  box.setAttribute("role", "alertdialog");
+  const result = new Promise((resolve) => {
+    action.addEventListener("click", () => resolve(true));
+    cancel.addEventListener("click", () => resolve(false));
+    box.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") resolve(false);
+    });
+  });
+  return {
+    element: box,
+    result,
+    focus: () => cancel.focus(),
+    busy() {
+      action.disabled = true;
+      cancel.disabled = true;
+    },
+  };
+}
+
+/**
+ * Danger zone: Delete settings and saved games (#535): the engine's
+ * `user.ltx` and `savedgames/`, after a confirmation; the next game starts
+ * from the installer's defaults. Settings shows only while no game runs.
+ */
+function userDataSection() {
+  const title = "Delete settings and saved games";
+  const button = element("button", { className: "danger filled", textContent: title });
+  const note = element("p", {
+    className: "note",
+    textContent: "Deletes the game's settings and saved games from this app's storage. The next game starts with its default settings.",
+  });
+  const section = element("div", { className: "danger-item" }, element("p", { className: "value", textContent: title }), note, button);
+  button.addEventListener("click", async () => {
+    const ask = confirmation("Delete the game's settings and saved games?", "This can't be undone.", "Delete");
+    button.replaceWith(ask.element);
+    ask.focus();
+    if (!(await ask.result)) {
+      ask.element.replaceWith(button);
+      button.focus();
+      return;
+    }
+    ask.busy();
+    try {
+      await call("forget_user_data");
+      const done = element("p", { className: "value", textContent: "Settings and saved games deleted", tabIndex: -1 });
+      done.setAttribute("role", "status");
+      section.replaceChildren(done);
+      done.focus();
+    } catch (error) {
+      console.warn(`deleting settings and saved games: ${error.message}`);
+      note.textContent = "Couldn't delete the settings and saved games.";
+      note.classList.add("error");
+      ask.element.replaceWith(button);
+      button.focus();
+    }
+  });
+  return section;
+}
+
+/**
+ * Settings: updates, the diagnostic log and, in a danger zone, the
+ * player's settings and saved games and the import.
+ */
 async function showSettings() {
   const status = await call("game_status");
+  const userData = (await call("user_data_status").catch(() => null))?.present;
   const diagnosticsSection = await diagnosticsPanel();
   const back = element("button", { className: "back", textContent: "‹ Back" });
   back.addEventListener("click", () => navigate("back", refresh));
@@ -672,17 +752,24 @@ async function showSettings() {
       check,
     ),
     diagnosticsSection,
-    status.imported
+    status.imported || userData
       ? element(
           "div",
           { className: "panel danger-zone" },
           element("p", { className: "label", textContent: "Danger zone" }),
-          element("p", { className: "value", textContent: "Remove imported game" }),
-          element("p", {
-            className: "note",
-            textContent: `Deletes the game's ${formatBytes(status.bytes)} from this app's storage. You can import it again from the installer.`,
-          }),
-          remove,
+          userData ? userDataSection() : null,
+          status.imported
+            ? element(
+                "div",
+                { className: "danger-item" },
+                element("p", { className: "value", textContent: "Remove imported game" }),
+                element("p", {
+                  className: "note",
+                  textContent: `Deletes the game's ${formatBytes(status.bytes)} from this app's storage. You can import it again from the installer.`,
+                }),
+                remove,
+              )
+            : null,
         )
       : null,
   );
