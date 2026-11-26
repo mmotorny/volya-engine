@@ -6,13 +6,18 @@ when a frame is drawn into it, and the presentation pass that reduces it to the 
 `postprocess` or `postprocess_d`, with the screen-effect parameters (blur, gray, duality, noise, colours),
 `c_brightness`, `r1_pps_u` and `r1_pps_v`. It also names and scopes the game-driven effects that send a frame
 through the target. This is item 4 of the scoping specification `docs/behavior/r1-settings-scope.md`
-(here RS), including both of its review gaps.
+(here RS), including both of its review gaps. Section 5 gives the path and values in force in each state of
+the program: the title menu and its other screens before any level, the loading screen, a running level,
+the menu over a level, and the title menu after a level was unloaded.
 
 Builds on: `docs/behavior/static-shading.md` (SS: scripted definitions 3.4, sampler states, pixel-program
 precision rules, target size 10.2), `docs/behavior/particle-drawing.md` (PD: the distortion pass, section 6),
 `docs/behavior/options-screens.md` (OS: video restart 5.4, back-buffer format 9),
 `docs/behavior/start-position.md` (SP: frame time, 7.2), `docs/behavior/hud-scope.md` (HS: proposed
-specifications 19 `ppe-format`, 20 `screen-effects`, 21 `hud-night-vision`), `docs/formats/db-archive.md`.
+specifications 19 `ppe-format`, 20 `screen-effects`, 21 `hud-night-vision`), `docs/formats/db-archive.md`,
+`docs/behavior/display-gamma.md` (DG: the display gamma ramp), `docs/behavior/loading-screen.md` (LS),
+`docs/behavior/title-menu.md` (TM: the lens, 4.6), `docs/formats/text-and-fonts.md` (TF: the main menu's
+layout surface, 4.4).
 
 Conventions:
 
@@ -21,14 +26,17 @@ Conventions:
 - W × H is the screen (back-buffer) size in pixels (`vid_mode`, OS 9); W_t × H_t the target size.
 - floor, ceil: the usual integer functions on single-precision (32-bit) floating-point values; every
   arithmetic step below is single precision unless stated.
-- A **frame** is one world frame of the renderer; it runs only while a level is loaded: it is driven by
-  the level's per-frame drawing [FP-3]. Without a level nothing here happens.
+- A **frame** is one world frame of the renderer. It is run by exactly two callers: the per-frame drawing
+  of a loaded level, and the per-frame drawing of the main menu while the menu is shown, with or without a
+  level (section 3.6) [FP-3, FP-19]. Frame start (3.1) and presentation (3.1, 3.2–3.5) happen only inside a
+  frame; what is drawn without one (the loading screen) goes straight to the screen (5.3).
 - Pixel (i, j) is column i, row j, from 0 at the top left. Screen positions follow Direct3D 9, where the
   centre of pixel (i, j) is at screen position (i, j) (**documented** Direct3D 9 behaviour, "directly
   mapping texels to pixels"; an implementation whose pixel centres are at (i + 0.5, j + 0.5) shifts
   positions by half a pixel to keep the same sampling).
-- Every claim carries a tag [FP-n]; the checks are one script in the dirty workspace,
-  `fpres/checks/run.py` (helpers in the same folder). All 108 checks pass.
+- Every claim carries a tag [FP-n]; the checks are two scripts in the dirty workspace:
+  `fpres/checks/run.py` (FP-1 … FP-18, helpers in the same folder) and `fp576/checks/run.py` (FP-19 …
+  FP-26 and the black-box check FP-B1, revision of 2026-11-26).
 
 ## 1. The off-screen target
 
@@ -124,11 +132,34 @@ menu while a level is loaded also hands over the identity at once [FP-10, FP-4].
 Only these two engine steps (the hand-over and the identity hand-over) set the renderer's values; nothing
 else in the engine or the game library does, and the renderer never sets them itself [FP-9, FP-11].
 
+Hand-overs belong to a level: in the engine the hand-over is called only by the camera update; the game
+library calls it (after a camera update) only for objects of a level (the player's view, two kinds of
+mounted weapon, the vehicle) and, from its own per-frame update, only while a loaded level exists [FP-23]. Without a level
+nothing hands values over. The identity hand-over is made in exactly three cases [FP-23, FP-20]:
+
+- while the main menu is shown, in place of step 5 (above);
+- when the main menu is opened while a level exists (above);
+- when a level is unloaded: destroying the level hands over the identity, after its drawing is
+  unregistered.
+
 ### 2.3 Values in force
 
 The renderer uses the values last handed over. After the target is (re)built and before the first
 hand-over, the renderer's own defaults apply (left column of 2.1); note color_base 127 there against 128
 for the identity [FP-2, FP-10].
+
+So (section 5 for each state): from the start of the program until the first level hands values over,
+the defaults are in force (no hand-over happens without a level, 2.2; the device is created, and the
+target built, at startup); after a level is unloaded the identity is in force until the next hand-over
+or the next rebuild of the target (device reset, 1.2: a video restart, a lost device, or starting the next
+level, DG 4), which brings back the defaults [FP-2, FP-23]. Measured: at the first title screen the
+picture is darker than the menu texture, matching the defaults' gain 254/255 and not 1 or 256/255 [FP-B1].
+**Disputed in review:** the measurement separates the gains only under an assumption the text does not state:
+that the reference renderer truncates when it converts to 8 bits (then any gain below 1 shows each
+non-zero channel one level lower). With rounding, gain 254/255 changes almost none of the background's
+levels (mostly below 128) and leaves mean signed differences of −0.76 and −1.35 at `r__supersample` 1 and
+4, close to the −0.88 and −1.47 of gain 1; so the black-box result is **believed** support, the values
+in force rest on the static analysis (2.2, FP-23).
 
 ### 2.4 When effects count as active
 
@@ -145,12 +176,27 @@ the renderer's defaults are both inactive [FP-8, FP-10].
 
 ### 2.5 The user interface's request
 
-The user interface asks for the post-process while the main menu is shown and not hidden, and a flag is
-set that opening the main menu sets and one of the main menu's own windows also sets or clears (which
-window, and when, is **unestablished**) [FP-4, FP-10]. While it asks:
-the main menu draws itself into the current target at the start of the presentation (3.1 step 1), and its
-own distortion into the distortion target during the distortion pass (3.1 step 3); the world's
-distortion list is not drawn then (PD 6.2) [FP-4]. What the main menu draws is outside this specification.
+The user interface asks for the post-process while all of these hold [FP-4, FP-10, FP-21]:
+
+- the main menu is shown;
+- no saved-game picture is pending (below);
+- the **request flag** is set. Opening the main menu sets it. Otherwise only the script method
+  `SetVisibleMagnifier` of the title menu's button list writes it, with its argument; the menu's script
+  (`scripts\ui_main_menu.script`, function `Show`) calls it with false when the load, save, options or
+  multiplayer screen (or the spawn dialog) opens, and the screens call `Show(true)` when they close.
+  The menu's message boxes (quit, quit to the title, last save) leave it set (TM 4.6) [FP-21].
+
+**Saved-game picture.** Saving (the autosave and the save command) asks for a picture of the next frame:
+the main menu marks a picture pending and, when a level is shown under it, puts the level's own drawing
+back for that frame; once the frame counter has passed the next frame, the picture is taken, the mark
+cleared and the level's drawing removed again [FP-22]. While the mark is set the main menu runs no frame and draws nothing (3.6).
+
+While the interface asks: the main menu draws its interface into the current target at the start of the
+presentation (3.1 step 1), laid out on the target's size (TF 4.4), and its own distortion into the
+distortion target during the distortion pass (3.1 step 3); the world's distortion list is not drawn then
+(PD 6.2) [FP-4, FP-21, FP-25]. While the menu is shown but does not ask (request flag clear), it draws its
+interface after the frame, straight onto the screen, laid out on the screen's size (3.6) [FP-21]. What the
+main menu draws is outside this specification (TM, TF).
 
 ## 3. Per frame
 
@@ -182,6 +228,8 @@ Drawing after the world frame (the interface over the level) therefore goes stra
 through the target, and is neither supersampled nor affected by the screen effects (**believed**: the
 presentation leaves the screen current and only the frame start and the distortion pass make another
 target current; the interface's order relative to the world frame is outside the renderer) [FP-3, FP-4].
+This includes the main menu's interface when the menu does not ask for the post-process (2.5, 3.6) and the
+loading screen (5.3) [FP-21, FP-24].
 
 ### 3.2 The quad
 
@@ -269,7 +317,8 @@ p_x = 0.5·β + i · W_t / W, p_y = 0.5·β + j · H_t / H [FP-5].
 - **`r__supersample` > 1** (β forced to 1): p_x = 0.5 + i · W_t/W, p_y = 0.5 + j · H_t/H, one bilinear
   sample of the four nearest texels per pixel (no wider filter). With the shipped settings at
   1024 × 768: p = (0.5 + 1.4140625 · i, 0.5 + 1.4140625 · j); pixel (0, 0) is the average of the target's
-  texels (0..1, 0..1); positions beyond the last texel centre (i = 1023: p_x ≈ 1447.07) take the edge texel.
+  texels (0..1, 0..1); positions beyond the last texel centre (i = 1023: p_x = 1447.086) take the edge texel
+  [FP-26].
 
 With both tc equal (no duality), t0 = t1, so with the identity in force (bytes 128, alpha 255, gray and
 noise off, add 0) every presented pixel is min(1, S · 256/255) of the sampled scene colour S; with the
@@ -283,11 +332,34 @@ right/lower neighbours. **Gray** mixes towards the dot product with color_gray; 
 twice the noise texture, tiled roughly every n pixels and jumping to a new random offset noise.fps times a
 second; **color_base** scales (0.5 is neutral), **color_add** adds twice its value [FP-6, FP-7, FP-12].
 
+### 3.6 Who runs a frame
+
+The device keeps a list of per-frame drawings and calls them on each device frame [FP-20]. Two of them run
+a frame [FP-19, FP-20]:
+
+- **A loaded level.** Its drawing is registered when loading ends and unregistered when the level is
+  destroyed. It computes the view, then runs the frame.
+- **The main menu.** Its drawing is registered when the menu is shown and unregistered when it is hidden.
+  Opening the menu while a level exists also unregisters the level's drawing (and, conditionally, its
+  per-frame update); hiding the menu registers them again. So while the menu is shown exactly one frame
+  per device frame is run, by the menu. On each device frame the menu's drawing, unless a saved-game
+  picture is pending (2.5; then it does nothing):
+  1. computes the level's view, when a level exists;
+  2. runs the frame (3.1), with or without a level;
+  3. when the interface does not ask for the post-process (request flag clear, 2.5), draws the menu's
+     interface onto the screen; otherwise the interface was drawn during step 2, at presentation step 1.
+
+The renderer's view computation and frame are run by nothing else: in the engine only the level's drawing
+calls them, in the game library only the main menu's [FP-19]. Without a level, frame start, the choice of
+target, the presentation and its colour step run exactly as in 3.1–3.5; what the world part of such a
+frame draws is outside this specification (the title menu's opaque background covers the screen, TM).
+
 ## 4. What sends a frame through the target (game-driven effects)
 
 With `r__supersample` > 1 (the shipped setting) every frame goes through the target, whatever the effects
 (3.1). With `r__supersample` 1 a frame goes through it only when (a) the combined set of 2.2 is active by
-2.4, (b) the main menu asks (2.5), or (c) the previous frame had a distortion pass (PD 6). Any effect whose
+2.4, (b) the main menu asks (2.5; true on every frame of the title menu itself, 5.1), or (c) the previous
+frame had a distortion pass (PD 6). Any effect whose
 values move the set off the identity beyond the margins of 2.4 does (a); an effect that changes only
 color_gray, noise.grain or noise.fps does not.
 
@@ -315,7 +387,138 @@ specifications `ppe-format` (HS 19), `screen-effects` (HS 20) and `hud-night-vis
 menu's drawing for the main-menu specification. This specification gives what the renderer does with
 the combined values.
 
-## 5. Verification facts
+## 5. States of the program
+
+In every state the display gamma ramp of DG (from `rs_c_gamma`, `rs_c_brightness`, `rs_c_contrast`; set at
+device creation and again in the cases of DG 3) acts on everything presented, whatever path drew it; the
+presentation pass has no gamma step of its own (3.4) [FP-12]. With the shipped settings the ramp is the
+identity (DG 2.1). The states below differ only in the path and in the screen-effect values.
+
+### 5.1 Title menu before any level
+
+The title menu, its New Game list and its message boxes, from startup until the first level is loaded
+[FP-19, FP-21, FP-8, FP-B1]:
+
+- **Frames:** run by the main menu, one per device frame (3.6).
+- **Path:** the request flag is set (2.5), so the interface asks for the post-process and the effects are
+  active (2.4): every frame is drawn into the off-screen target whenever it is usable, at every
+  `r__supersample`, 1 included (3.1). Measured with `r__supersample` 1 and 4 [FP-B1]. **Disputed in review:**
+  at `r__supersample` 1 the frames tell the target path from the direct one only under the truncation
+  assumption of 2.3; the path rests on 2.4, 2.5 and 3.1.
+- **Target size:** 1.1; with `r__supersample` 1 the screen's size unless an axis exceeds 2048 (2560 × 1440
+  gives 2048 × 1440).
+- **Interface:** drawn into the target at presentation step 1, laid out on W_t × H_t (TF 4.4).
+- **Distortion:** when distortion is available (PD 6.1) the distortion pass runs every frame, because the
+  interface asks (3.1 step 3): the distortion target is cleared to 127 / 255, the menu draws its lens into
+  it (TM 4.6), and the frame is presented with `postprocess_d`. Where the cleared value is left both
+  look-ups move by (127/255 − 0.5) · 0.05 = −9.80 × 10⁻⁵ of the target per axis, i.e. −9.80 × 10⁻⁵ · W_t
+  and −9.80 × 10⁻⁵ · H_t texels. Without distortion `postprocess` is used and nothing moves.
+- **Values:** the renderer's defaults (2.3), as no level has handed values over: blur 0, gray 0, duality 0,
+  noise intensity 0, color_base (127, 127, 127), color_gray (85, 85, 85), color_add 0. The quad's colours
+  are C0 = (127, 127, 127, 255), C1 = (85, 85, 85, 255), `c_brightness` = (0, 0, 0, 0) (3.3); gray and
+  noise have no effect (alphas 1); the noise offsets are still drawn from the shared generator (3.2).
+  Every presented pixel is S · 254/255 of the scene colour S sampled from the target (3.5), so white is
+  shown as 254/255.
+- **Placement and filtering:** 3.5, with β = 1 whenever H_t ≠ H (any `r__supersample` > 1 below the clamp,
+  and the clamped cases), else β = blur = 0.
+
+### 5.2 Other title-menu screens
+
+The load, save, options and multiplayer screens (and the spawn dialog), opened from the title menu
+[FP-21]:
+
+- **Frames:** still run by the main menu (3.6).
+- **Path:** the request flag is clear, so the interface does not ask; the values (defaults or identity)
+  are inactive (2.4). With `r__supersample` > 1 every frame goes through the target and is presented as in
+  5.1, with `postprocess` (no distortion pass: the interface does not ask, and the world's distortion list
+  is filled only by a level's drawing, PD 6.2; **believed** empty without a level). With
+  `r__supersample` 1 the frame goes straight to the screen, except the first frame after one with a
+  distortion pass (the frame after the screen opened, when distortion is available), which goes through
+  the target (3.1).
+- **Interface:** drawn after the frame, straight onto the screen, laid out on W × H (TF 4.4): it is not
+  resampled and not scaled by the colour values; only what the world part of the frame left on the screen
+  under it went through the presentation.
+
+Closing the screen sets the request flag again and returns to 5.1.
+
+### 5.3 Loading screen
+
+From the choice of New Game or a saved game until the level is shown (LS 2) [FP-20, FP-24]:
+
+- **Frames:** none while loading: the main menu is hidden when loading starts (LS 2 step 2), unregistering
+  its drawing, and the level's drawing is registered only when loading ends (3.6).
+- **Path:** each loading image is drawn between the device's begin and end of a frame, without changing
+  the render target and without the renderer's frame or presentation [FP-24]; it is drawn at the screen's
+  size (LS 3) onto the target current at that moment, which is the screen (**believed**: the last
+  presentation left the screen current, 3.1 step 4, and nothing in between makes another target
+  current). No screen-effect value applies to it.
+- **Overlay frames:** during the 30 frames after loading (LS 2 step 4) the level runs its frames (5.4) and
+  the loading image is drawn at the end of each device frame, after the presentation, onto the screen;
+  after the 30th the ramp is set again (DG 3.3) [FP-24].
+- **Values:** starting a level resets the device (DG 4), which rebuilds the target and restores the
+  renderer's defaults (1.2) until the level's first hand-over.
+
+### 5.4 Level running
+
+Frames are run by the level (3.6) and the target is used as in 3.1 and section 4. The values are those of
+the last hand-over (2.2): the identity when no effect runs, so every presented pixel is
+min(1, S · 256/255) (3.5); **Disputed in review:** only for frames that go through the target; with
+`r__supersample` 1, no active effect and no distortion pass in the previous frame the frame goes straight
+to the screen (3.1) and is shown unscaled; the defaults only between the device reset of 5.3 and the first hand-over. The
+interface over the level goes straight to the screen (3.1).
+
+### 5.5 Main menu over a level
+
+Opening the menu hands over the identity and moves the frame to the menu, which also computes the level's
+view (2.2, 3.6). With the title menu's request set the path is that of 5.1 and with a screen of 5.2 open
+that of 5.2, with the identity's values in place of the defaults: gain 256/255, clamped. While a saved-game
+picture is pending the level's own drawing runs that frame (2.5).
+
+### 5.6 Title menu after a level was unloaded
+
+Destroying the level hands over the identity (2.2). The title menu and its screens then follow 5.1 and 5.2
+with the identity's values (C0 = (128, 128, 128, 255), gain min(1, S · 256/255)) instead of the defaults,
+until the next rebuild of the target (a video restart, for example from the options screen, a lost device,
+or the next level's start), which restores the defaults (2.3) [FP-23, FP-2].
+
+### 5.7 Worked examples
+
+All sample positions are in target texels as in 3.5 (texel centres at whole numbers), with U = V = 0 and no
+duality [FP-26].
+
+**1920 × 1080, `r__supersample` 4, title menu before any level (5.1).**
+
+- Target: 1920 · 2 + 0.5 → 3840 and 1080 · 2 + 0.5 → 2160, both clamped to 2048: 2048 × 2048. The menu is
+  laid out on 2048 × 2048 (TF 4.4).
+- Every frame goes through the target; H_t ≠ H, so β = 1.
+- Pixel (i, j) samples p_x = 0.5 + 1.0666667 · i, p_y = 0.5 + 1.8962963 · j, one bilinear sample (clamped):
+  pixel (0, 0) averages texels (0..1, 0..1); the last column (p_x = 2047.433) takes texel column 2047;
+  the last row (p_y = 2046.604) mixes rows 2046 and 2047 as 0.396 : 0.604.
+- With distortion available, outside the lens both positions are lower by 9.80 × 10⁻⁵ · 2048 = 0.2008:
+  p_x = 0.2992 + 1.0666667 · i, p_y = 0.2992 + 1.8962963 · j.
+- Colour: S · 254/255; a sampled (200, 100, 50) / 255 is shown as (199.216, 99.608, 49.804) / 255, white as
+  254 / 255. After a level was unloaded (5.6): (200.784, 100.392, 50.196) / 255, and every channel of 254
+  or more as 255.
+- Other title-menu screens (5.2): the world part of the frame is presented the same way; the screen's
+  interface is drawn afterwards at 1920 × 1080, one-to-one.
+
+**1024 × 768, `r__supersample` 2 (the shipped setting).**
+
+- Target: 1024 · 1.4142135 + 0.5 → 1448 (1449 made even), 768 · 1.4142135 + 0.5 → 1086: 1448 × 1086
+  (1.1). The title menu is laid out on 1448 × 1086.
+- β = 1; p_x = 0.5 + 1.4140625 · i, p_y = 0.5 + 1.4140625 · j; the last column and row (1447.086, 1085.086)
+  take the edge texels.
+- With distortion available, outside the lens: p_x = 0.3580 + 1.4140625 · i, p_y = 0.3935 + 1.4140625 · j
+  (offsets 0.1420 and 0.1065 texels).
+- Colour as in the first example: defaults before any level (S · 254/255), identity in a level and after one
+  (min(1, S · 256/255)).
+
+**1024 × 768, `r__supersample` 1, title menu (5.1).** The target is 1024 × 768 and used (the menu asks),
+β = 0: p = (i, j), one texel per pixel, shown at S · 254/255. With distortion available, outside the lens
+p = (i − 0.1004, j − 0.0753): each pixel takes 0.1004 of its left and 0.0753 of its upper neighbour
+(bilinear weights). On the other title-menu screens (5.2) the frame goes straight to the screen.
+
+## 6. Verification facts
 
 - Shipped `user.ltx`: `r__supersample 2`, `r1_pps_u 0.`, `r1_pps_v 0.` [FP-15].
 - Target sizes: table of 1.1 [FP-2].
@@ -325,14 +528,21 @@ the combined values.
   `t_noise = "fx\\fx_noise2"` [FP-12].
 - `fx_noise2.dds`: 174,890 bytes, 256 × 256, 9 levels, 5:6:5 [FP-12].
 - `config\misc\postprocess.ltx`: 39 sections, 8 active `pp_eff_name` lines; 32 `anims\*.ppe` files [FP-14].
+- Title menu before any level, 1024 × 768, `r__supersample` 1 and 4: the presented background is on average
+  darker than `textures\ui\ui_mainmenu.dds` by what the gain 254/255 predicts (mean signed difference
+  +0.09 and −0.49 levels against the model, −0.88 and −1.47 for gain 1 or 256/255) [FP-B1]. **Disputed in
+  review:** these figures assume a truncating conversion to 8 bits in the reference renderer (2.3); with
+  rounding the gain-254/255 model gives −0.76 and −1.35.
+- Worked numbers of 5.7 [FP-26].
 
-## 6. Unestablished
+## 7. Unestablished
 
 - Which camera updates hand the set to the renderer when a camera effect controls the view (2.2).
-- Which main-menu window sets the flag of the interface's request (2.5).
 - Behaviour with noise.grain below 1/256 (3.2).
 - Range and precision of intermediate values in the model-1.x pixel programs (3.4).
-- Nothing was executed: timing statements come from the order of operations in the binaries.
+- Timing statements come from the order of operations in the binaries; the only executions were black-box
+  runs of the title screen (FP-B1).
+- What the world part of a frame draws without a level (3.6).
 
 ## Provenance
 
@@ -349,9 +559,36 @@ the combined values.
   on sample values. No execution or debugging.
 - Approved specifications of the repository read for the parts built on.
 - No leaked source code, derived projects or third-party documentation of the engine were used.
+- **Revision 2026-11-26** (frames without a level, issue 576; same edition and tools). Static analysis of
+  the three binaries: every caller of the renderer's view computation and frame, the device's list of
+  per-frame drawings and who registers in it (level loading and destruction, showing and hiding the main
+  menu), the main menu's per-frame drawing, its presentation hooks and the request flag's writers (the
+  script method and its binding), the saved-game picture request, every caller of the camera hand-over
+  and of the identity hand-over and the owning types of the callers, the loading-screen drawing and the
+  device's frame begin and end. Scripts: `ui_main_menu.script`, `ui_base_dialog.script`,
+  `ui_load_dialog.script`, `ui_mm_opt_main.script`, `ui_mp_main.script`. Black-box: frames of the unmodified
+  game at its first title screen (headless, through the project's runner of the original), 1024 × 768
+  windowed with `r__supersample` 1 and 4, compared with the background texture. The archive comparison
+  inside FP-12 was not rerun (the project's archive tool was not built on this machine); the other checks
+  of `fpres/checks/run.py` were rerun and pass. Changes against the previously approved text:
+  - conventions: a frame is run by a loaded level or by the main menu, with or without a level (was "only
+    while a level is loaded… Without a level nothing here happens");
+  - 2.2: hand-overs need a level; the identity is also handed over when a level is unloaded;
+  - 2.3: values in force before the first level (defaults) and after an unload (identity), measured gain;
+  - 2.5: the request flag's writer (`SetVisibleMagnifier`, from the menu's `Show`) and the screens that clear
+    it (was **unestablished**); the pending saved-game picture; where the interface draws when it does not
+    ask;
+  - 3.1: the main menu's interface without the request, and the loading screen, go straight to the screen;
+  - 3.5: the last sample position at 1024 × 768 is 1447.086 (was ≈ 1447.07);
+  - 3.6 (new): who runs a frame; 4: the title menu always asks;
+  - 5 (new): path, target and values per state, worked examples; former 5 and 6 renumbered 6 and 7.
 
 ## Gaps found in review
 
 - 2.2 step 2: before an effect produces its values, its set starts from all zeros (not from the identity), so a
   value the effect leaves unset contributes minus the identity's value; which values each effect sets belongs to
   `screen-effects` (HS 20).
+- Section 5: the pictures shown without a level outside the main menu's own screens are not covered: the
+  credits sequence the title menu's credits button starts (`credits_seq`, through the game's tutorial
+  sequences) and the logo sequence before the first title screen (`intro_logo`, skipped with `-nointro`);
+  for each, whether the main menu stays shown, the path and the values in force.
