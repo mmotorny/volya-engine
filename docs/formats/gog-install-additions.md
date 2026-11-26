@@ -6,8 +6,9 @@ files, as the installer's own entries, the install script it ships (`goggame-120
 metadata (`goggame-1207660573.info`) define it; which of these the game needs to start; and where the game
 looks for its path configuration file `fsgame.ltx`.
 
-**Checks.** Static claims (§1–§6, the names in §7) are checked by `gog-install/scripts/checks.py` in the dirty
-workspace (after `inno_header.py` has decompressed the installer's and the interpreter's header streams and
+**Checks.** The game's read of `InstallVers` (§4.1, §7) and the box64 run of §8 are checked by
+`titlever/scripts/check.py` and `titlever/scripts/check_run.py`. Static claims (§1–§6, the names in §7) are
+checked by `gog-install/scripts/checks.py` in the dirty workspace (after `inno_header.py` has decompressed the installer's and the interpreter's header streams and
 innoextract has extracted the non-game entries to `gog-install/ext/`); the runs of §8, on which §3's user-folder
 facts, §4's registry view and §7 rest, by `gog-install/scripts/experiments.py` (which uses `run_isi.py` and
 `run_game.py`). The order of §7 was first read from the binaries and is backed by runs B–E. §4.3 is checked by
@@ -122,23 +123,25 @@ Key `HKEY_LOCAL_MACHINE\SOFTWARE\GSC Game World\STALKER-SHOC`, five values:
 | `BonusPack1` | DWORD | script text `$1`; believed the number 1 (`$` as hexadecimal prefix) |
 | `BonusPack2` | DWORD | as `BonusPack1` |
 
-So `InstallVers` **is** written under the key the title menu reads (`docs/behavior/title-menu.md` §3.4: value
-`InstallVers` of `HKEY_LOCAL_MACHINE\Software\GSC Game World\STALKER-SHOC\`; key names are case-insensitive in
-Windows). It is written by the interpreter's script, not by the Inno Setup registry entries, which contain no
-`GSC Game World` key at all. On a GOG install the caption therefore reads `ver. 2.1.0.10`; this follows from
-the data and title-menu.md, it was not observed on a running game.
+So `InstallVers` **is** written under the key the game queries for its version string
+(`docs/behavior/title-menu.md` §3.4: value `InstallVers` of `HKEY_LOCAL_MACHINE\Software\GSC Game World\STALKER-SHOC\`;
+key names are case-insensitive in Windows). It is written by the interpreter's script, not by the Inno Setup
+registry entries, which contain no `GSC Game World` key at all. The game discards the data it reads, so the
+title-menu caption reads `ver. 1.0006` on a GOG install too (title-menu.md §3.4; observed, §8).
 
 Registry view: the interpreter is a 32-bit program, as are all of the game's executables and libraries. On 64-bit
 Windows both therefore use the 32-bit view of `HKEY_LOCAL_MACHINE\SOFTWARE`
-(`HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\…`; Windows' documented registry redirection), so the game sees what
-the script wrote. Observed under Wine: the interpreter's `HKEY_LOCAL_MACHINE\SOFTWARE` writes land in the
+(`HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\…`; Windows' documented registry redirection). The game opens its key
+without a registry-view flag, so it reads that 32-bit view (title-menu.md §3.4); that it sees what the script
+wrote rests on the script's writes landing there. Observed under Wine: the interpreter's `HKEY_LOCAL_MACHINE\SOFTWARE` writes land in the
 `Wow6432Node` view (§8). **Disputed in review:** being a 32-bit program does not by itself settle the view, since
 the interpreter can address both views (it contains the root names `HKLM32` and `HKLM64`); the only observed write
 is `installer_language` (§4.2), not one of the script's values, so that the five values above land in the 32-bit
 view is believed, not established.
 
 Read by the game (names in its libraries, under `Software\GSC Game World\STALKER-SHOC\`): `InstallVers`
-(built-in default `1.0006`) and `InstallPatchID` by the GameSpy library; `InstallUserName` and `InstallCDKEY` by
+(queried, but the data is not used: the version string is always `1.0006`, title-menu.md §3.4) and
+`InstallPatchID` by the GameSpy library; `InstallUserName` and `InstallCDKEY` by
 the game library. GOG writes neither `InstallPatchID`, `InstallUserName` nor `InstallCDKEY`; no game binary
 contains the names `InstallPath`, `InstallSource` or `BonusPack`. What the game does without
 `InstallPatchID`, `InstallUserName` or `InstallCDKEY` is out of scope here (none is needed to reach the title
@@ -341,9 +344,9 @@ backed by a check; the runs show only that the game goes no further while the bo
 
 What a launcher must therefore provide for the original to start: the game files of `gog-installer.md` with
 `bin\` as a subfolder of the install folder and `fsgame.ltx` (§2, `{userdocs}` replaced) in the install folder;
-`user.ltx` in `<Documents>\Stalker-SHOC\` only for the shipped default settings (§3: not required); the
-registry value `InstallVers` only for the title menu's version caption (without the key the game logs that it is
-missing and goes on).
+`user.ltx` in `<Documents>\Stalker-SHOC\` only for the shipped default settings (§3: not required); no
+registry value (without the key the game logs that it is missing and goes on; the title menu's version caption
+does not depend on `InstallVers`, title-menu.md §3.4).
 
 ## 8. Black-box runs (Wine)
 
@@ -376,6 +379,10 @@ right after the log line announcing the start of the graphics device, with and w
 logs also show that without `user.ltx` the game logs "Cannot open script file [user.ltx]" and goes on, and that
 without the registry key it logs that `Software\GSC Game World\STALKER-SHOC\` was not found and goes on (the
 test prefix has no such key).
+- `XR_3DA.exe`, unmodified, under Wine's WoW64 build in the box64 emulator, with the five values of §4.1 imported
+  into the 32-bit view (`InstallVers` = `2.1.0.10`, string; the key absent from the 64-bit view): it reached the
+  title menu, whose caption read `ver. 1.0006` in the frames captured from outside; its log reported the value
+  `InstallUserName` missing, not the key.
 
 ## 9. Not established
 
@@ -390,7 +397,6 @@ test prefix has no such key).
   `/nodesktopshortcut` (§1).
 - Purpose of `traffic.net` and `banned.ltx`; whether `__redist` and `__support` are deleted after install.
 - Whether the game writes `user.ltx` when it has none.
-- The title-menu caption `ver. 2.1.0.10` was derived, not seen.
 
 ## Provenance
 
@@ -403,6 +409,8 @@ test prefix has no such key).
   file and registry names and their PE import tables listed.
 - Binary analysis: static analysis of `bin\xrCore.dll` (Ghidra) for the order in which `fsgame.ltx` is sought and
   how the game root follows from it, checked by the black-box runs of §8.
+- Binary analysis (2026-11-26): static analysis of `bin\xrGameSpy.dll` and `bin\xrGame.dll` (Ghidra) for the
+  game's read of `InstallVers` and the registry view it uses (§4.1, title-menu.md §3.4).
 - Execution: the interpreter and the unmodified `XR_3DA.exe` run under Wine as described in §8.
 - For §4.3: the script's bytes and JSON members read; the interpreter's string constants (UTF-16 with a character
   count) and the names its compiled code imports listed; the JSON library it ships (`uninstall.dll`, extracted with
