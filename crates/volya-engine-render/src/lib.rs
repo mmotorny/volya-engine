@@ -10,6 +10,7 @@
 
 pub mod gl;
 pub mod glsl;
+mod shared;
 pub mod stats;
 
 #[cfg(not(feature = "gl"))]
