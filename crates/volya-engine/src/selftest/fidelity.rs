@@ -152,7 +152,7 @@ async fn new_game(
         now = (now + if now < fine { COARSE_MS } else { FINE_MS }).min(end);
         samplers.follow(&console);
         let wind = screen.wind();
-        app::level_settings(&mut screen, &console, supersample, wind);
+        app::level_settings(&mut screen, &console, (SIZE, supersample), wind);
         if let Some((eye, angles)) = at {
             screen.set_camera(eye, angles);
         }

@@ -324,7 +324,10 @@ pub struct LevelScreen {
     artefact_sections: HashMap<String, ArtefactSection>,
     /// The weather's ambient effect object, while it exists (P11 3).
     weather_effect: Option<usize>,
-    /// The size of the latest frame drawn, for the effects' view test.
+    /// The size of the frames drawn: the video mode before each update
+    /// ([`LevelScreen::set_view_size`]) and each frame's own size. The
+    /// camera pass's view and size thresholds and the effects' view test
+    /// take it.
     view_size: std::cell::Cell<(u32, u32)>,
     /// `r__supersample` in force: the frame's target size, and with it the
     /// size thresholds (static-shading.md 10.2, frame-presentation.md 1.1).
@@ -2836,6 +2839,13 @@ impl LevelScreen {
     /// (r1-settings-scope.md 2.2).
     pub fn set_vis_distance(&mut self, vis_distance: f32) {
         self.vis_distance = vis_distance;
+    }
+
+    /// The size the level's frames are drawn at (the video mode), for the
+    /// next update's camera pass: its view and size thresholds are those of
+    /// the frame it is drawn into (#566).
+    pub fn set_view_size(&self, resolution: Resolution) {
+        self.view_size.set((resolution.width, resolution.height));
     }
 
     /// The far plane in force (tests).

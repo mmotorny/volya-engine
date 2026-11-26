@@ -514,12 +514,17 @@ fn geometry_lod(console: &Console) -> [f32; 3] {
 }
 
 /// What a level takes from the console before each update: the renderer's
-/// light settings (dynamic-lights.md 8, glows.md 5), the target's
-/// supersampling (`supersample`, as the device was last made or reset
-/// with), the view distance, the geometry detail level
-/// (object-detail-level.md 1) and the grass density (detail-objects.md 7),
-/// with `wind` the wind's strength.
-pub fn level_settings(level: &mut LevelScreen, console: &Console, supersample: u32, wind: f32) {
+/// light settings (dynamic-lights.md 8, glows.md 5), the size its frames
+/// are drawn at (`video`, the video mode) and the target's supersampling
+/// (`supersample`, as the device was last made or reset with), the view
+/// distance, the geometry detail level (object-detail-level.md 1) and the
+/// grass density (detail-objects.md 7), with `wind` the wind's strength.
+pub fn level_settings(
+    level: &mut LevelScreen,
+    console: &Console,
+    (video, supersample): (Resolution, u32),
+    wind: f32,
+) {
     let status = |name| console.status(name);
     let settings = LightSettings::from_statuses(
         status("r1_dlights").as_deref(),
@@ -530,6 +535,7 @@ pub fn level_settings(level: &mut LevelScreen, console: &Console, supersample: u
         .and_then(|v| v.trim().parse::<u32>().ok())
         .map_or(GLOWS_PER_FRAME, |v| v.clamp(2, 32));
     level.set_light_settings(settings, glows);
+    level.set_view_size(video);
     level.set_supersample(supersample);
     level.set_vis_distance(console.number("rs_vis_distance"));
     let [lod, a, b] = geometry_lod(console);
@@ -1093,7 +1099,7 @@ impl App {
             level_settings(
                 level,
                 &self.console,
-                self.supersample,
+                (self.video, self.supersample),
                 self.sound_run.wind.strength,
             );
         }
@@ -2366,6 +2372,25 @@ mod tests {
         app.console.exec("rs_vis_distance 0.5");
         app.update(&tree, 32.0, &input, &mut audio);
         assert_eq!(far(&app), 50.0);
+    }
+
+    /// #566: the camera pass before a level's frame is drawn takes the
+    /// frame's size, the video mode, not a size of its own: its size
+    /// thresholds (object-detail-level.md 1) are the 1920 × 1080 frame's
+    /// from the first update after a video restart to it.
+    #[test]
+    fn the_camera_pass_takes_the_video_mode() {
+        let (tree, mut app, input, mut audio) = in_level();
+        app.set_supersample(1);
+        app.set_video_mode(Resolution::new(1920, 1080));
+        app.update(&tree, 32.0, &input, &mut audio);
+        let Some(Phase::Level { level, .. }) = &app.phase else {
+            panic!("not in a level");
+        };
+        let [lod, a, b] = geometry_lod(&app.console);
+        let fov = crate::core::camera::FOV_Y_DEGREES;
+        let expected = volya_engine_formats::level::Thresholds::new(1920, 1080, fov, lod, a, b);
+        assert_eq!(level.visibility().thresholds(), Some(&expected));
     }
 
     /// `rs_fullscreen` is the page's full screen (our deviation): it
