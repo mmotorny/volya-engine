@@ -181,7 +181,10 @@ pub async fn launch() -> Result<serde_json::Value, JsValue> {
 /// docs/behavior/loading-screen.md section 6).
 pub fn stop(reason: &str, message: &str) {
     let running = RUNNING.with(|r| r.borrow_mut().take());
-    if let Some(Running { mut app, voices, .. }) = running {
+    if let Some(Running {
+        mut app, voices, ..
+    }) = running
+    {
         // The sound system outlives the app: the level's sounds leave it.
         crate::audio::with_sounds(|host| app.end_sounds(&mut host.system));
         drop(app);
