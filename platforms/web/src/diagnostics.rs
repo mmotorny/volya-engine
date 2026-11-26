@@ -443,6 +443,12 @@ pub fn gpu_step(
         all.push(("texture_MiB", mib(r.texture_bytes_written())));
         all.push(("geometry_MiB", mib(r.geometry_bytes_written())));
         all.push(("particle_buffer_MiB", mib(r.particle_buffer_size())));
+        #[cfg(feature = "gl")]
+        {
+            let live = r.gpu_live();
+            all.push(("live_texture_MiB", mib(live.texture_bytes)));
+            all.push(("live_buffer_MiB", mib(live.buffer_bytes)));
+        }
     }
     all.push(("heap_MiB", mib(crate::heap_bytes() as u64)));
     let _ = SESSION.try_with(|s| {

@@ -410,8 +410,30 @@ pub fn world_stats() -> serde_json::Value {
             "gpu_object_bytes": world.map(|w| w.object_gpu_bytes()),
             "gpu_object_texture_bytes": world.map(|w| w.object_texture_bytes()),
             "frame_commands": frame_commands(),
+            "gpu_live": live(g.as_ref().map(|gpu| &gpu.renderer)),
         })
     })
+}
+
+/// What the context holds now (the GL renderer's own count; `null` with
+/// wgpu's).
+#[cfg(feature = "gl")]
+fn live(r: Option<&Renderer>) -> serde_json::Value {
+    r.map_or(serde_json::Value::Null, |r| {
+        let l = r.gpu_live();
+        json!({
+            "buffers": l.buffers,
+            "buffer_bytes": l.buffer_bytes,
+            "textures": l.textures,
+            "texture_bytes": l.texture_bytes,
+            "vertex_arrays": l.vertex_arrays,
+        })
+    })
+}
+
+#[cfg(not(feature = "gl"))]
+fn live(_: Option<&Renderer>) -> serde_json::Value {
+    serde_json::Value::Null
 }
 
 /// The last frame's draw calls and state changes, in all and by part.

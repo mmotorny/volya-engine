@@ -430,6 +430,12 @@ impl Renderer {
         self.prepared.borrow_mut().insert(path.to_owned(), texture);
     }
 
+    /// The buffers, textures and vertex arrays its context holds now
+    /// (every renderer on the context, the prepared textures included).
+    pub fn gpu_live(&self) -> crate::gl::Live {
+        self.gl.live()
+    }
+
     /// Bytes of texture data written since the renderer was made (WebGL
     /// copies each write at the call: none is held).
     pub fn texture_bytes_written(&self) -> u64 {

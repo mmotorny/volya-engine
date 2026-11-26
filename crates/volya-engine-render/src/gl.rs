@@ -172,6 +172,8 @@ pub const UNIFORM_POINTS: usize = 24;
 /// The WebGL 2 context with its state cache.
 pub struct Gl {
     gl: C,
+    /// What it made that still lives.
+    live: Rc<Cell<Live>>,
     state: RefCell<State>,
     counts: Cell<Counts>,
     extensions: Extensions,
@@ -211,6 +213,7 @@ impl Gl {
         gl.pixel_storei(C::PACK_ALIGNMENT, 1);
         Self {
             gl,
+            live: Rc::default(),
             state: RefCell::new(State::fresh()),
             counts: Cell::default(),
             extensions,
@@ -222,6 +225,17 @@ impl Gl {
 
     pub fn extensions(&self) -> Extensions {
         self.extensions
+    }
+
+    /// The buffers, textures and vertex arrays made and not yet deleted.
+    pub fn live(&self) -> Live {
+        self.live.get()
+    }
+
+    fn add_live(&self, f: impl FnOnce(&mut Live)) {
+        let mut l = self.live.get();
+        f(&mut l);
+        self.live.set(l);
     }
 
     pub fn max_texture_size(&self) -> u32 {
@@ -283,7 +297,12 @@ impl Gl {
             self.count(Call::Buffer);
             self.gl.bind_buffer(C::ELEMENT_ARRAY_BUFFER, Some(&raw));
         }
+        self.add_live(|l| {
+            l.buffers += 1;
+            l.buffer_bytes += size;
+        });
         Buffer(Rc::new(BufferInner {
+            live: self.live.clone(),
             gl: self.gl.clone(),
             raw,
             id: next_id(),
@@ -330,6 +349,7 @@ impl Gl {
             C::TEXTURE_2D
         };
         let t = Texture(Rc::new(TextureInner {
+            live: self.live.clone(),
             gl: self.gl.clone(),
             raw,
             id: next_id(),
@@ -339,6 +359,10 @@ impl Gl {
             height,
             levels,
         }));
+        self.add_live(|l| {
+            l.textures += 1;
+            l.texture_bytes += t.bytes();
+        });
         self.bind_upload(&t);
         self.count(Call::Create);
         self.gl.tex_storage_2d(
@@ -612,7 +636,9 @@ impl Gl {
     ) -> VertexArray {
         self.count(Call::Create);
         let raw = self.gl.create_vertex_array().expect("a WebGL vertex array");
+        self.add_live(|l| l.vertex_arrays += 1);
         let va = VertexArray(Rc::new(VertexArrayInner {
+            live: self.live.clone(),
             gl: self.gl.clone(),
             raw,
             id: next_id(),
@@ -1069,6 +1095,7 @@ impl BufferKind {
 }
 
 struct BufferInner {
+    live: Rc<Cell<Live>>,
     gl: C,
     raw: WebGlBuffer,
     id: u32,
@@ -1079,6 +1106,10 @@ struct BufferInner {
 impl Drop for BufferInner {
     fn drop(&mut self) {
         self.gl.delete_buffer(Some(&self.raw));
+        let mut l = self.live.get();
+        l.buffers -= 1;
+        l.buffer_bytes -= self.size;
+        self.live.set(l);
     }
 }
 
@@ -1175,6 +1206,7 @@ impl TexFormat {
 }
 
 struct TextureInner {
+    live: Rc<Cell<Live>>,
     gl: C,
     raw: WebGlTexture,
     id: u32,
@@ -1188,7 +1220,43 @@ struct TextureInner {
 impl Drop for TextureInner {
     fn drop(&mut self) {
         self.gl.delete_texture(Some(&self.raw));
+        let mut l = self.live.get();
+        l.textures -= 1;
+        l.texture_bytes -= texture_bytes(self);
+        self.live.set(l);
     }
+}
+
+/// Bytes `t`'s levels (and faces) take.
+fn texture_bytes(t: &TextureInner) -> u64 {
+    let f = t.format;
+    let faces = if t.target == C::TEXTURE_CUBE_MAP {
+        6
+    } else {
+        1
+    };
+    (0..t.levels)
+        .map(|l| {
+            let (w, h) = ((t.width >> l).max(1), (t.height >> l).max(1));
+            let (w, h) = if f.compressed() {
+                (w.div_ceil(4), h.div_ceil(4))
+            } else {
+                (w, h)
+            };
+            u64::from(w) * u64::from(h) * u64::from(f.bytes())
+        })
+        .sum::<u64>()
+        * faces
+}
+
+/// The resources a [`Gl`] made that live: their counts and bytes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Live {
+    pub buffers: u64,
+    pub buffer_bytes: u64,
+    pub textures: u64,
+    pub texture_bytes: u64,
+    pub vertex_arrays: u64,
 }
 
 /// A texture (a handle).
@@ -1219,20 +1287,7 @@ impl Texture {
 
     /// Bytes its levels (and faces) take.
     pub fn bytes(&self) -> u64 {
-        let f = self.0.format;
-        let faces = if self.is_cube() { 6 } else { 1 };
-        (0..self.0.levels)
-            .map(|l| {
-                let (w, h) = ((self.0.width >> l).max(1), (self.0.height >> l).max(1));
-                let (w, h) = if f.compressed() {
-                    (w.div_ceil(4), h.div_ceil(4))
-                } else {
-                    (w, h)
-                };
-                u64::from(w) * u64::from(h) * u64::from(f.bytes())
-            })
-            .sum::<u64>()
-            * faces
+        texture_bytes(&self.0)
     }
 }
 
@@ -1391,6 +1446,7 @@ pub struct VertexLayout {
 }
 
 struct VertexArrayInner {
+    live: Rc<Cell<Live>>,
     gl: C,
     raw: WebGlVertexArrayObject,
     id: u32,
@@ -1399,6 +1455,9 @@ struct VertexArrayInner {
 impl Drop for VertexArrayInner {
     fn drop(&mut self) {
         self.gl.delete_vertex_array(Some(&self.raw));
+        let mut l = self.live.get();
+        l.vertex_arrays -= 1;
+        self.live.set(l);
     }
 }
 
