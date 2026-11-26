@@ -1286,9 +1286,6 @@ thread_local! {
     static WINDOW: std::cell::Cell<Option<(u32, u32)>> = const { std::cell::Cell::new(None) };
     /// The world's draw calls counted in the frame being encoded.
     static CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-    /// Experiment (#443): the light passes and strict-sorted draws left out
-    /// on WebGL 2.
-    static SKIP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The world's draw calls emitted in the frame being encoded, by
     /// [`Kind`] (#443).
     static EMITTED: std::cell::Cell<[u32; 6]> = const { std::cell::Cell::new([0; 6]) };
@@ -1309,9 +1306,9 @@ enum Kind {
 pub const CALL_KINDS: [&str; 6] = ["merged", "instanced", "single", "object", "light", "strict"];
 
 /// Whether a draw call of `kind` is emitted ([`in_window`]), counted in
-/// [`EMITTED`]; the experiment of #443 leaves out light and strict ones.
+/// [`EMITTED`].
 fn emits(kind: Kind) -> bool {
-    if !in_window() || (SKIP.get() && matches!(kind, Kind::Light | Kind::Strict)) {
+    if !in_window() {
         return false;
     }
     let mut e = EMITTED.get();
@@ -2761,7 +2758,7 @@ impl Renderer {
     ) {
         let inner = &frame.world.0;
         CALLS.set(0);
-        SKIP.set(self.compat);
+
         EMITTED.set([0; 6]);
         let view_projection = multiply(&frame.view, &frame.projection);
         let l = &frame.light;

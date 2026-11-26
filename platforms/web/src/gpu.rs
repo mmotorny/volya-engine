@@ -119,11 +119,44 @@ fn watch_context_loss(canvas: &OffscreenCanvas) {
 /// (HTML specification), so wgpu's own options (`antialias: false`) are
 /// repeated here.
 fn make_webgl_context(canvas: &OffscreenCanvas) {
+    use wasm_bindgen::JsCast;
     let options = js_sys::Object::new();
     for (key, value) in [("antialias", false), ("depth", false), ("stencil", false)] {
         let _ = js_sys::Reflect::set(&options, &key.into(), &value.into());
     }
-    let _ = canvas.get_context_with_context_options("webgl2", &options);
+    let Ok(Some(gl)) = canvas.get_context_with_context_options("webgl2", &options) else {
+        return;
+    };
+    // WebGPU's provoking vertex, the first (wgpu's GL backend leaves
+    // WebGL's, the last): otherwise ANGLE's Metal backend rewrites the
+    // indices of every draw whose program has a flat varying, world.wgsl's
+    // among them, into a buffer of each draw's own (`requiresIndexRewrite`,
+    // `getProvokingVertexConversionBuffer`; documented, WebKit's ANGLE), all
+    // held until the submission finishes: the iPhone was killed at 2.5 GB
+    // drawing the whole level at once, and lived without its static draws
+    // (#443). The flat varyings are per draw, so the picture is the same.
+    let call = |target: &JsValue, name: &str, args: &js_sys::Array| {
+        js_sys::Reflect::get(target, &name.into())
+            .ok()
+            .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+            .and_then(|f| f.apply(target, args).ok())
+    };
+    let first = call(
+        &gl,
+        "getExtension",
+        &js_sys::Array::of1(&"WEBGL_provoking_vertex".into()),
+    )
+    .filter(|ext| !ext.is_null() && !ext.is_undefined())
+    .and_then(|ext| {
+        // FIRST_VERTEX_CONVENTION_WEBGL (WEBGL_provoking_vertex).
+        call(
+            &ext,
+            "provokingVertexWEBGL",
+            &js_sys::Array::of1(&0x8E4D.into()),
+        )
+    })
+    .is_some();
+    PROVOKING_FIRST.set(first);
 }
 
 /// Keeps the Graphics setting's stored choice (`""` when none), for the
@@ -361,6 +394,9 @@ thread_local! {
     /// The level's frames drawn since its warm-up, up to
     /// [`LOGGED_LEVEL_FRAMES`] (that many before any warm-up).
     static LEVEL_FRAMES: Cell<u32> = const { Cell::new(LOGGED_LEVEL_FRAMES) };
+    /// Whether WebGL 2 draws with the first vertex provoking
+    /// ([`make_webgl_context`]), for the diagnostic log (#443).
+    static PROVOKING_FIRST: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Frames whose GPU times `level_stats` averages.
@@ -425,6 +461,7 @@ pub fn warm_up(window: Option<std::ops::Range<u32>>) -> Result<Option<u32>, JsVa
         let mode = [
             ("width", Value::Number(f64::from(size.width))),
             ("height", Value::Number(f64::from(size.height))),
+            ("provoking_first", Value::Bool(PROVOKING_FIRST.get())),
         ];
         // The world is made here (its buffers, records and programs).
         crate::diagnostics::gpu_step("gpu.world_make", Some(&gpu.renderer), &mode);
