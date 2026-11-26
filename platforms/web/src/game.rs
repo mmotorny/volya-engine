@@ -60,26 +60,6 @@ pub struct InstallerIdentity {
     pub app_version: Option<String>,
 }
 
-impl Manifest {
-    /// The imported install script
-    /// (`volya_engine_installer::is_install_script`), if any: imports made
-    /// before it was imported have none.
-    fn install_script(&self) -> Option<&str> {
-        self.files
-            .iter()
-            .map(|f| f.path.as_str())
-            .find(|p| volya_engine_installer::is_install_script(p))
-    }
-
-    /// The title menu's version string (`volya_engine::data::version_string`),
-    /// given the imported install script's bytes: the `InstallVers` it
-    /// writes, read anew at each load so no value is kept in the record.
-    pub fn version_string(script: Option<&[u8]>) -> String {
-        let install_vers = script.and_then(volya_engine_installer::install_vers);
-        volya_engine::data::version_string(install_vers.as_deref())
-    }
-}
-
 #[derive(Serialize, Deserialize)]
 pub struct ManifestFile {
     pub path: String,
@@ -91,8 +71,6 @@ struct Game {
     opfs: &'static opfs::OpfsVfs,
     tree: DbVfs<Box<dyn VfsFile + 'static>>,
     manifest: Manifest,
-    /// The title menu's version string ([`Manifest::version_string`]).
-    version: String,
 }
 
 thread_local! {
@@ -276,16 +254,10 @@ async fn open(manifest: Manifest) -> Result<Game, (JsValue, Manifest)> {
             return Err((error(e), manifest));
         }
     };
-    let script = manifest.install_script().and_then(|path| {
-        let mut bytes = Vec::new();
-        vfs.open(path).ok()?.read_to_end(&mut bytes).ok()?;
-        Some(bytes)
-    });
     Ok(Game {
         opfs: vfs,
         tree,
         manifest,
-        version: Manifest::version_string(script.as_deref()),
     })
 }
 
@@ -317,24 +289,6 @@ pub fn play_music(track: &str) -> Result<[u32; 2], JsValue> {
     with_game(|game| crate::audio::play_music(&game.tree, track))
 }
 
-/// The version string the title menu shows for the mounted game.
-pub fn version_string() -> Result<String, JsValue> {
-    with_game(|game| Ok(game.version.clone()))
-}
-
-/// [`Manifest::version_string`] for an import that isn't mounted, its
-/// install script read from OPFS.
-async fn unmounted_version(manifest: &Manifest) -> String {
-    let mut script = None;
-    if let Some(path) = manifest.install_script()
-        && let Ok(namespace) = opfs::namespace().await
-        && let Ok(Some(dir)) = opfs::existing_dir(&namespace, GAME_DIR).await
-    {
-        script = opfs::read_file(&dir, path).await.ok().flatten();
-    }
-    Manifest::version_string(script.as_deref())
-}
-
 /// The imported game as the diagnostic log's session event records it
 /// (docs/architecture/diagnostics.md): `game` (`imported`, `partly
 /// imported`, `not imported`, or `unreadable` with `game_problem`) and, from
@@ -344,26 +298,17 @@ async fn unmounted_version(manifest: &Manifest) -> String {
 pub async fn identity() -> serde_json::Map<String, serde_json::Value> {
     let mounted = GAME.with(|g| {
         let g = g.borrow();
-        let game = g.as_ref()?;
-        let m = &game.manifest;
-        let manifest = Manifest {
+        let m = &g.as_ref()?.manifest;
+        Some(Manifest {
             language: m.language.clone(),
             complete: m.complete,
             installer: m.installer.clone(),
             ..Manifest::default()
-        };
-        Some((manifest, game.version.clone()))
+        })
     });
     let manifest = match mounted {
         Some(m) => Ok(Some(m)),
-        None => match read_manifest().await {
-            Ok(Some(m)) => {
-                let version = unmounted_version(&m).await;
-                Ok(Some((m, version)))
-            }
-            Ok(None) => Ok(None),
-            Err(e) => Err(e),
-        },
+        None => read_manifest().await,
     };
     let mut args = serde_json::Map::new();
     let mut text = |key: &str, value: &str| {
@@ -375,7 +320,7 @@ pub async fn identity() -> serde_json::Map<String, serde_json::Value> {
             text("game_problem", &e.as_string().unwrap_or_default());
         }
         Ok(None) => text("game", "not imported"),
-        Ok(Some((m, version))) => {
+        Ok(Some(m)) => {
             text(
                 "game",
                 if m.complete {
@@ -384,7 +329,10 @@ pub async fn identity() -> serde_json::Map<String, serde_json::Value> {
                     "partly imported"
                 },
             );
-            text("game_version", &format!("ver. {version}"));
+            text(
+                "game_version",
+                &format!("ver. {}", volya_engine::data::BUILT_IN_VERSION),
+            );
             text("game_language", &m.language);
             if let Some(i) = &m.installer {
                 text("installer_exe", &i.exe);

@@ -91,7 +91,7 @@ export const tests = {
       CAPTIONS,
       "captions",
     );
-    assertEqual(s.menu.version, "ver. 2.1.0.10", "version");
+    assertEqual(s.menu.version, "ver. 1.0006", "version");
     assertEqual(s.menu.music.track, "music\\wasteland2", "music");
     assert(s.menu.music.voices?.length === 2, `music voices ${JSON.stringify(s.menu.music)}`);
   },
@@ -113,10 +113,10 @@ export const tests = {
     // docs/formats/text-and-fonts.md section 5.
     assertEqual(bounds(xga, "caption 0"), [740, 423, 825, 445], "caption 0");
     assertEqual(bounds(xga, "caption 5"), [713, 573, 851, 595], "caption 5");
-    assertEqual(bounds(xga, "version"), [15, 740, 102, 759], "version");
+    assertEqual(bounds(xga, "version"), [15, 740, 94, 759], "version");
     const wide = await volya.call("menu_scene", { width: 1280, height: 720 });
     assertEqual(bounds(wide, "caption 0"), [935, 395, 1020, 417], "wide caption 0");
-    assertEqual(bounds(wide, "version"), [18, 693, 105, 712], "wide version");
+    assertEqual(bounds(wide, "version"), [18, 693, 97, 712], "wide version");
   },
 
   "renders the menu": async () => {

@@ -8,7 +8,7 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
 
-use volya_engine_installer::{Installer, extract, install_vers, is_install_script};
+use volya_engine_installer::{Installer, extract};
 
 fn installer() -> Option<(PathBuf, PathBuf)> {
     let Some(dir) = std::env::var_os("VOLYA_GOG_INSTALLER") else {
@@ -66,7 +66,7 @@ fn lists_and_extracts_game_files() {
 
 #[test]
 fn reads_the_installer_identity() {
-    let Some((exe, bin)) = installer() else {
+    let Some((exe, _)) = installer() else {
         return;
     };
     let parsed = Installer::parse(BufReader::new(File::open(exe).unwrap())).unwrap();
@@ -83,15 +83,4 @@ fn reads_the_installer_identity() {
         "{:?}",
         parsed.app_version
     );
-    // docs/formats/gog-install-additions.md 4.3: the install script,
-    // installed for the imported language, writes `InstallVers` under the
-    // title menu's key.
-    let script: Vec<_> = parsed
-        .game_files("ru-RU")
-        .filter(|f| is_install_script(&f.path))
-        .collect();
-    assert_eq!(script.len(), 1);
-    let mut bytes = Vec::new();
-    extract(script[0], &mut File::open(bin).unwrap(), &mut bytes).unwrap();
-    assert_eq!(install_vers(&bytes).as_deref(), Some("2.1.0.10"));
 }
