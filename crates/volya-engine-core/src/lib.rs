@@ -34,5 +34,6 @@ pub mod text;
 pub mod torch;
 pub mod ui;
 pub mod vfs;
+pub mod visibility;
 pub mod weather;
 pub mod zones;
