@@ -71,10 +71,6 @@ pub struct Installer {
     pub app_versioned_name: Option<String>,
 }
 
-/// The registry key the title menu reads `InstallVers` from (title-menu.md
-/// section 3.4), below `HKEY_LOCAL_MACHINE`.
-const VERSION_KEY: &str = "Software\\GSC Game World\\STALKER-SHOC";
-
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
@@ -308,56 +304,6 @@ pub fn extract(
     Ok(())
 }
 
-/// Whether a registry key names [`VERSION_KEY`] (registry keys ignore case
-/// and a trailing backslash).
-fn is_version_key(key: &str) -> bool {
-    key.trim_end_matches('\\').eq_ignore_ascii_case(VERSION_KEY)
-}
-
-/// Whether `path` (a [`GameFile::path`]) is GOG's install script,
-/// `goggame-<product id>.script` in the install folder
-/// (docs/formats/gog-install-additions.md section 4.3). A game file, so it
-/// is imported for a language where the installer installs it for that
-/// language ([`GameFile::is_for`]).
-pub fn is_install_script(path: &str) -> bool {
-    !path.contains('/') && path.starts_with("goggame-") && path.ends_with(".script")
-}
-
-/// The value `InstallVers` GOG's install script writes under
-/// `HKEY_LOCAL_MACHINE\Software\GSC Game World\STALKER-SHOC\`, where the
-/// title menu reads its version string (title-menu.md section 3.4), read
-/// from the script's bytes (docs/formats/gog-install-additions.md section
-/// 4.3); `None` when it writes none or isn't a script.
-///
-/// The actions' `languages` are not consulted: the interpreter ignores
-/// them, running every action whatever the install language. An action
-/// with `conditions` (whose evaluation the spec leaves open) is not taken,
-/// whether they stand on the action or among its arguments.
-pub fn install_vers(script: &[u8]) -> Option<String> {
-    use serde_json::Value;
-    let script: Value = serde_json::from_slice(script).ok()?;
-    let text = |v: &Value, name: &str| v.get(name)?.as_str().map(str::to_owned);
-    let is = |v: &Value, name: &str, want: &str| {
-        text(v, name).is_some_and(|t| t.eq_ignore_ascii_case(want))
-    };
-    script
-        .get("actions")?
-        .as_array()?
-        .iter()
-        .filter(|action| action.get("conditions").is_none())
-        .filter_map(|action| action.get("install"))
-        .filter(|install| is(install, "action", "setRegistry"))
-        .filter_map(|install| install.get("arguments"))
-        .find(|args| {
-            args.get("conditions").is_none()
-                && is(args, "root", "HKEY_LOCAL_MACHINE")
-                && text(args, "subkey").is_some_and(|k| is_version_key(&k))
-                && is(args, "valueName", "InstallVers")
-                && is(args, "valueType", "string")
-        })
-        .and_then(|args| text(args, "valueData"))
-}
-
 /// Hex form of an MD5, as GOG writes it.
 pub fn hex(md5: &[u8; 16]) -> String {
     md5.iter().map(|b| format!("{b:02x}")).collect()
@@ -533,37 +479,6 @@ mod tests {
             installer(&[("a", 1, &[])]).choose_language(&prefs(&["en"])),
             None
         );
-    }
-
-    #[test]
-    fn reads_install_vers_from_the_script() {
-        let script = r#"{"actions": [
-            {"install": {"action": "savePath", "arguments": {}}, "languages": ["*"], "name": "x"},
-            {"install": {"action": "setRegistry", "arguments": {"root": "HKEY_LOCAL_MACHINE",
-                "subkey": "SOFTWARE\\GSC Game World\\STALKER-SHOC", "valueData": "GOG",
-                "valueName": "InstallSource", "valueType": "string"}}, "languages": ["*"]},
-            {"install": {"action": "setRegistry", "arguments": {"root": "HKEY_LOCAL_MACHINE",
-                "subkey": "SOFTWARE\\GSC Game World\\STALKER-SHOC", "valueData": "2.1.0.10",
-                "valueName": "InstallVers", "valueType": "string"}}, "languages": ["*"]}
-        ], "productId": "1207660573"}"#;
-        assert_eq!(install_vers(script.as_bytes()).as_deref(), Some("2.1.0.10"));
-        let elsewhere = script.replace("STALKER-SHOC", "STALKER-CS");
-        assert_eq!(install_vers(elsewhere.as_bytes()), None);
-        let conditional = script.replace(
-            r#""valueData": "2.1"#,
-            r#""conditions": "onlyonce", "valueData": "2.1"#,
-        );
-        assert_eq!(install_vers(conditional.as_bytes()), None);
-        assert_eq!(install_vers(b"not json"), None);
-        assert!(is_install_script("goggame-1207660573.script"));
-        assert!(!is_install_script("bin/goggame-1207660573.dll"));
-    }
-
-    #[test]
-    fn matches_the_version_key() {
-        assert!(is_version_key("Software\\GSC Game World\\STALKER-SHOC\\"));
-        assert!(is_version_key("SOFTWARE\\gsc game world\\stalker-shoc"));
-        assert!(!is_version_key("Software\\GSC Game World\\STALKER-CS"));
     }
 
     #[test]

@@ -642,7 +642,7 @@ impl TitleMenu {
         let v = &m.static_version;
         let (text_box, font): (TextBox, UiFont) = TextBox::of_static(v, top(v));
         ctx.picture(&mut scene, "static_version", v, top(v), 0.0, 0, false, None)?;
-        let text = crate::data::encode(&format!("ver. {}", data.version));
+        let text = crate::data::encode(&format!("ver. {}", crate::data::BUILT_IN_VERSION));
         ctx.text(&mut scene, "version", &text, &text_box, font)?;
 
         // Section 7: the cursor's top-left at the cursor, 64 × 64 units from
@@ -676,7 +676,7 @@ impl TitleMenu {
                 let g = self.glass(data, now);
                 [g.x, g.y, g.width, g.height]
             },
-            version: format!("ver. {}", data.version),
+            version: format!("ver. {}", crate::data::BUILT_IN_VERSION),
             music: MusicState {
                 track: self.track.clone(),
                 voices: self.music,
