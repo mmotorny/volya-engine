@@ -31,6 +31,10 @@ pub fn run(args: &[&str]) -> Result {
         [rev] => rev,
         _ => return Err(format!("unknown arguments {args:?}; expected a revision")),
     };
+    // Resolved in the working tree: inside the parity worktree `HEAD`
+    // would name its own last checkout.
+    let rev = super::output(&mut cmd("git", &["rev-parse", "--verify", rev]))?;
+    let rev = rev.trim();
     crate::machine::wait_memory()?;
     let dir = root().join("target/parity");
     let src = dir.join("src");
