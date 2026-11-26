@@ -3,7 +3,9 @@
 
 //! The game's audio: Ogg Vorbis (public formats), decoded with `lewton`.
 
+use std::cell::RefCell;
 use std::io::{self, Read, Seek, SeekFrom};
+use std::rc::{Rc, Weak};
 
 use lewton::audio::{PreviousWindowRight, get_decoded_sample_count, read_audio_packet_generic};
 use lewton::header::{
@@ -59,6 +61,52 @@ fn end_granule<R: Read + Seek>(reader: &mut R) -> io::Result<Option<u64>> {
     Ok(ogg_end_granule(&tail))
 }
 
+/// A stream's identification and setup headers, parsed. Parsing the setup
+/// header (its codebooks) is most of what opening a stream costs: about
+/// 0.7 ms a file in Chrome's wasm, 0.5 natively (measured, #310).
+struct Headers {
+    /// The two headers' packets, which identify them.
+    packets: (Vec<u8>, Vec<u8>),
+    ident: IdentHeader,
+    setup: SetupHeader,
+}
+
+thread_local! {
+    /// The headers of the streams open on this thread: a stream opened
+    /// with the same headers' bytes shares them rather than parsing them
+    /// again. Weak, so they last only as long as a stream uses them.
+    static OPEN_HEADERS: RefCell<Vec<Weak<Headers>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The headers of the packets `ident` and `setup`: an open stream's, or
+/// parsed.
+fn headers(ident: Vec<u8>, setup: Vec<u8>) -> io::Result<Rc<Headers>> {
+    let shared = OPEN_HEADERS.with(|open| {
+        let mut open = open.borrow_mut();
+        open.retain(|h| h.strong_count() > 0);
+        open.iter()
+            .filter_map(Weak::upgrade)
+            .find(|h| h.packets.0 == ident && h.packets.1 == setup)
+    });
+    if let Some(headers) = shared {
+        return Ok(headers);
+    }
+    let parsed = read_header_ident(&ident).map_err(vorbis)?;
+    let setup_header = read_header_setup(
+        &setup,
+        parsed.audio_channels,
+        (parsed.blocksize_0, parsed.blocksize_1),
+    )
+    .map_err(vorbis)?;
+    let headers = Rc::new(Headers {
+        packets: (ident, setup),
+        ident: parsed,
+        setup: setup_header,
+    });
+    OPEN_HEADERS.with(|open| open.borrow_mut().push(Rc::downgrade(&headers)));
+    Ok(headers)
+}
+
 /// How far ahead [`VorbisStream::skip`] seeks rather than decodes, frames.
 const SEEK_AHEAD: u64 = 1 << 14;
 
@@ -71,8 +119,7 @@ const SEEK_AHEAD: u64 = 1 << 14;
 /// frames too many).
 pub struct VorbisStream<R: Read + Seek> {
     packets: PacketReader<R>,
-    ident: IdentHeader,
-    setup: SetupHeader,
+    headers: Rc<Headers>,
     serial: u32,
     /// The previous block's right half, which the next block overlaps
     /// (Vorbis I section 1.3.2): empty at the start and after a seek.
@@ -94,21 +141,17 @@ impl<R: Read + Seek> VorbisStream<R> {
         let end = end_granule(&mut reader)?;
         let mut packets = PacketReader::new(reader);
         let first = packets.read_packet_expected().map_err(vorbis)?;
-        let ident = read_header_ident(&first.data).map_err(vorbis)?;
         let serial = first.stream_serial();
+        // The identification header, checked before the others are read.
+        read_header_ident(&first.data).map_err(vorbis)?;
         read_header_comment(&next_header(&mut packets, serial)?).map_err(vorbis)?;
-        let setup = read_header_setup(
-            &next_header(&mut packets, serial)?,
-            ident.audio_channels,
-            (ident.blocksize_0, ident.blocksize_1),
-        )
-        .map_err(vorbis)?;
+        let setup = next_header(&mut packets, serial)?;
+        let headers = headers(first.data, setup)?;
         // Audio starts on a page of its own (Vorbis I section A.2).
         packets.delete_unread_packets();
         Ok(Self {
             packets,
-            ident,
-            setup,
+            headers,
             serial,
             previous: PreviousWindowRight::new(),
             granule: None,
@@ -119,11 +162,11 @@ impl<R: Read + Seek> VorbisStream<R> {
     }
 
     pub fn sample_rate(&self) -> u32 {
-        self.ident.audio_sample_rate
+        self.headers.ident.audio_sample_rate
     }
 
     pub fn channels(&self) -> u16 {
-        self.ident.audio_channels.into()
+        self.headers.ident.audio_channels.into()
     }
 
     /// The next audio packet decoded, interleaved; `None` at the end.
@@ -135,9 +178,13 @@ impl<R: Read + Seek> VorbisStream<R> {
                 None => return Ok(None),
             }
         };
-        let mut decoded: InterleavedSamples<i16> =
-            read_audio_packet_generic(&self.ident, &self.setup, &packet.data, &mut self.previous)
-                .map_err(vorbis)?;
+        let mut decoded: InterleavedSamples<i16> = read_audio_packet_generic(
+            &self.headers.ident,
+            &self.headers.setup,
+            &packet.data,
+            &mut self.previous,
+        )
+        .map_err(vorbis)?;
         if let (Some(granule), true) = (self.granule, packet.last_in_stream()) {
             decoded.truncate(packet.absgp_page().saturating_sub(granule) as usize);
         }
@@ -230,7 +277,7 @@ impl<R: Read + Seek> VorbisStream<R> {
 
     /// [`VorbisStream::page_before`]'s search, leaving the file anywhere.
     fn scan_pages(&mut self, goal: u64) -> io::Result<Option<(u64, u64)>> {
-        let (ident, setup, serial) = (&self.ident, &self.setup, self.serial);
+        let (ident, setup, serial) = (&self.headers.ident, &self.headers.setup, self.serial);
         let r = self.packets.get_mut();
         let mut found = None;
         let mut offset = 0;

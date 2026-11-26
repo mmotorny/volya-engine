@@ -158,6 +158,17 @@ impl MixerControl for Remote {
         Some(self.play_unchecked(bytes, skip, playback))
     }
 
+    fn play_checked_file(
+        &mut self,
+        bytes: Vec<u8>,
+        skip: u64,
+        playback: Playback,
+    ) -> Option<VoiceId> {
+        // Parsing the headers again took about 0.7 ms a voice in Chrome's
+        // wasm (#310).
+        Some(self.play_unchecked(bytes, skip, playback))
+    }
+
     fn set_voice(&mut self, id: VoiceId, gain: f32, pan: f32, pitch: f32) {
         if !self.is_playing(id) {
             return;

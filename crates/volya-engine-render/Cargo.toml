@@ -23,7 +23,10 @@ bytemuck.workspace = true
 tracing.workspace = true
 wgpu.workspace = true
 
-[dev-dependencies]
+[build-dependencies]
+# Translates the programs to GLSL ES 3.00 at build time (build.rs).
 naga = { version = "30", features = ["wgsl-in", "glsl-out"] }
+
+[dev-dependencies]
 pollster.workspace = true
 volya-engine-installer = { path = "../volya-engine-installer" }
