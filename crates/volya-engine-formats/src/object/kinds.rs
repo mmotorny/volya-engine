@@ -779,24 +779,24 @@ const RESPAWN: &str = "RE_SPAWN";
 pub enum Object {
     Player(Box<Player>),
     Stalker(Box<Stalker>),
-    Trader(Trader),
+    Trader(Box<Trader>),
     Monster(Box<Monster>),
-    CrowOrPhantom(CrowOrPhantom),
-    Vehicle(Vehicle),
+    CrowOrPhantom(Box<CrowOrPhantom>),
+    Vehicle(Box<Vehicle>),
     Helicopter(Box<Helicopter>),
     Item(PlainItem),
     Torch(Torch),
-    Pda(Pda),
+    Pda(Box<Pda>),
     Document(Document),
     Outfit(Outfit),
     Ammunition(Ammunition),
     Knife(Knife),
     MagazineWeapon(MagazineWeapon),
     WeaponWithGrenadeLauncher(WeaponWithGrenadeLauncher),
-    Shotgun(Shotgun),
+    Shotgun(Box<Shotgun>),
     Zone(Zone),
     Anomaly(AnomalyObject),
-    VisualAnomaly(VisualAnomaly),
+    VisualAnomaly(Box<VisualAnomaly>),
     TorridZone(TorridZone),
     LevelChanger(LevelChanger),
     Restrictor(Restrictor),
@@ -826,11 +826,11 @@ impl Object {
         Ok(match kind {
             Kind::Player => Self::Player(Box::new(Player::read(s, u)?)),
             Kind::Stalker => Self::Stalker(Box::new(Stalker::read(s, u, cx)?)),
-            Kind::Trader => Self::Trader(Trader {
+            Kind::Trader => Self::Trader(Box::new(Trader {
                 object: ObjectBlock::read(s)?,
                 visual: Visual::read(s)?,
                 trader: TraderLike::read(s)?,
-            }),
+            })),
             Kind::Monster => Self::Monster(Box::new(Monster {
                 state: MonsterState::read(s)?,
                 script: if has_character_script(cx, false) {
@@ -840,16 +840,16 @@ impl Object {
                 },
                 update: MonsterLikeUpdate::read(u)?,
             })),
-            Kind::CrowOrPhantom => Self::CrowOrPhantom(CrowOrPhantom {
+            Kind::CrowOrPhantom => Self::CrowOrPhantom(Box::new(CrowOrPhantom {
                 creature: Creature::read(s)?,
                 update: CreatureUpdate::read(u)?,
-            }),
-            Kind::Vehicle => Self::Vehicle(Vehicle {
+            })),
+            Kind::Vehicle => Self::Vehicle(Box::new(Vehicle {
                 object: ObjectBlock::read(s)?,
                 visual: Visual::read(s)?,
                 skeleton: Skeleton::read(s)?,
                 health: s.float()?,
-            }),
+            })),
             Kind::Helicopter => Self::Helicopter(Box::new(Helicopter {
                 object: ObjectBlock::read(s)?,
                 visual: Visual::read(s)?,
@@ -867,13 +867,13 @@ impl Object {
                 update: ItemUpdate::read(u)?,
                 torch_flags: u.u8()?,
             }),
-            Kind::Pda => Self::Pda(Pda {
+            Kind::Pda => Self::Pda(Box::new(Pda {
                 item: Item::read(s)?,
                 original_owner_id: s.u16()?,
                 specific_character: s.string()?,
                 info_portion: s.string()?,
                 update: ItemUpdate::read(u)?,
-            }),
+            })),
             Kind::Document => Self::Document(Document {
                 item: Item::read(s)?,
                 info_portion: s.string()?,
@@ -907,7 +907,7 @@ impl Object {
                     fire_mode: u.u8()?,
                 })
             }
-            Kind::Shotgun => Self::Shotgun(Shotgun {
+            Kind::Shotgun => Self::Shotgun(Box::new(Shotgun {
                 weapon: WeaponState::read(s)?,
                 update: WeaponUpdate::read(u)?,
                 fire_mode: u.u8()?,
@@ -915,19 +915,19 @@ impl Object {
                     let count = u.u8()?;
                     u.take(usize::from(count))?.to_vec()
                 },
-            }),
+            })),
             Kind::Zone => Self::Zone(Zone::read(s)?),
             Kind::Anomaly => Self::Anomaly(AnomalyObject {
                 anomaly: Anomaly::read(s)?,
                 script: artefact_spawn(s, cx)?,
             }),
-            Kind::VisualAnomaly => Self::VisualAnomaly(VisualAnomaly {
+            Kind::VisualAnomaly => Self::VisualAnomaly(Box::new(VisualAnomaly {
                 anomaly: Anomaly::read(s)?,
                 visual: Visual::read(s)?,
                 idle_animation: s.string()?,
                 attack_animation: s.string()?,
                 script: artefact_spawn(s, cx)?,
-            }),
+            })),
             Kind::TorridZone => Self::TorridZone(TorridZone {
                 zone: Zone::read(s)?,
                 motion: s.string()?,
