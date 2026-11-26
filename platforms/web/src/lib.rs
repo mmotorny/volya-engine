@@ -622,7 +622,8 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
             let wear = args.get("wear").and_then(|v| v.as_bool()).unwrap_or(true);
             to_json(&engine::nightvision_outfit(wear)?)
         }
-        // `{name, position: [x, y, z], category, looped, two_d, delay}`.
+        // `{name, position: [x, y, z], category, looped, two_d, delay}`;
+        // `names` for several, each started by the same update.
         #[cfg(feature = "test-ops")]
         "debug_play_sound" => {
             let flag = |key: &str| args.get(key).and_then(|v| v.as_bool()).unwrap_or(false);
@@ -636,8 +637,14 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
                 delay: args.get("delay").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
             };
             let category = category(args.get("category"))?;
+            let names: Vec<&str> = match args.get("names").and_then(|v| v.as_array()) {
+                Some(names) => names.iter().filter_map(|n| n.as_str()).collect(),
+                None => vec![text("name")],
+            };
             game::with_trees(|tree, _| {
-                audio::debug_play_sound(tree, text("name"), category, position, flags)
+                names.iter().try_for_each(|name| {
+                    audio::debug_play_sound(tree, name, category, position, flags)
+                })
             })??;
             Ok("null".into())
         }
