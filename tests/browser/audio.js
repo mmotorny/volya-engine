@@ -14,7 +14,7 @@ const TRACK = "gamedata/sounds/characters_voice/scenario/video/intro_gsc_wp";
 const MUSIC = "characters_voice\\scenario\\video\\intro_gsc_wp";
 const RATE = 48000;
 const SECONDS = 1;
-// What a New Game reads (as the menu suite imports it).
+// What a New Game reads (as the game suites import it).
 const NEW_GAME = [
   "gamedata.db0",
   "gamedata.db4",
@@ -224,7 +224,7 @@ export const tests = {
 
   // The first level's own sounds (docs/behavior/sound-static-sources.md,
   // sound-weather-ambient.md, sound-level-music.md, sound-occlusion.md):
-  // a New Game, as the menu suite starts one, then the sound system's state.
+  // a New Game, as the game suites start one, then the sound system's state.
   "imports what a New Game reads": async () => {
     if (!installer) skip("no installer");
     const exe = installer.find((f) => f.name.endsWith(".exe")).name;
