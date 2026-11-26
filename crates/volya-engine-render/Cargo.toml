@@ -3,7 +3,7 @@
 
 [package]
 name = "volya-engine-render"
-description = "Volya Engine: wgpu renderer."
+description = "Volya Engine: WebGL 2 renderer."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,11 +14,6 @@ publish = false
 workspace = true
 
 [features]
-# wgpu's WebGL 2 backend, in the web build.
-webgl = ["wgpu/webgl"]
-# The direct WebGL 2 renderer instead of wgpu's (rendering.md, Design:
-# direct WebGL 2; #475).
-gl = []
 # The render self-test (src/selftest), in test builds of the app.
 selftest = []
 
@@ -40,7 +35,6 @@ web-sys = { workspace = true, features = [
   "WebGlUniformLocation",
   "WebGlVertexArrayObject",
 ] }
-wgpu.workspace = true
 
 [build-dependencies]
 # Translates the programs to GLSL ES 3.00 at build time (build.rs).

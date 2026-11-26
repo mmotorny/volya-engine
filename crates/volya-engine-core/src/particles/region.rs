@@ -252,7 +252,7 @@ mod tests {
         for x in [[0.16, 0.05, 0.0], [0.0, 0.11, 0.0]] {
             assert!(!within(&cone, x, &mut random), "{x:?}");
         }
-        assert_eq!(random.uniform.state, 1, "no draws");
+        assert_eq!(random.uniform.get().state, 1, "no draws");
     }
 
     #[test]

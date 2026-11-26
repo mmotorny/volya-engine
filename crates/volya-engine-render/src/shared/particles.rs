@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! Particle effects' platform-free part, both renderers'
+//! Particle effects' platform-free part
 //! (docs/behavior/particle-drawing.md sections 4.4 – 7): the batches, their
 //! passes and queues, and the frame's vertices and constants as written.
 

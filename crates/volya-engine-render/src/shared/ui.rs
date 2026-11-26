@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! The 2D layer's platform-free part, both renderers'
+//! The 2D layer's platform-free part
 //! (docs/behavior/title-menu.md): textured rectangles in a 1024 × 768 UI
 //! space, and the draw list a frame is.
 

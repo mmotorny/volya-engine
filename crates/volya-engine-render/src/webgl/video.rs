@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! Video frames as textures (docs/behavior/startup.md 6.6, the pixel-shader
-//! path), as wgpu's renderer makes them: the texture is RGBA8, one level,
+//! path): the texture is RGBA8, one level,
 //! the next power of two in each dimension of the picture; texel (x, y) of
 //! the picture block holds the samples unconverted: red = Y', green = Cb,
 //! blue = Cr, alpha = 255. Each frame's planes upload as they are and a

@@ -1,10 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! What both renderers share while wgpu is replaced (docs/architecture/
-//! rendering.md, Design: direct WebGL 2): the platform-free parts of each
-//! area, which each backend's module of that area re-exports, so the
-//! engine sees one API whichever is built.
+//! The platform-free part of each area, which the WebGL 2 module of that
+//! area re-exports; it keeps native unit tests.
 
 pub mod details;
 pub mod particles;

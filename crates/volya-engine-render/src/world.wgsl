@@ -79,8 +79,7 @@ fn level_record(id: u32, shared_record: u32) -> Draw {
 // A surface's textures in two groups: its light maps and environment map,
 // which many surfaces share, and its base and detail textures, which change
 // from surface to surface; one group of each per distinct set (#429). The
-// latter is last: wgpu binds every group after one that is set again, and
-// its GL backend binds every texture of a group it binds.
+// latter is last, as it changes most often.
 @group(1) @binding(0) var t_second: texture_2d<f32>;
 @group(1) @binding(1) var t_hemi: texture_2d<f32>;
 // The cube environment map of the objects' MODELEbB surfaces.

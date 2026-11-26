@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! Particle effects in the world pass (docs/behavior/particle-drawing.md
-//! sections 4.4 – 7) on WebGL 2, as wgpu's renderer draws them: each
+//! sections 4.4 – 7) on WebGL 2: each
 //! effect one batch of quads with its pass, queued where section 7.4 puts
 //! it, and the distortion pass (section 6.2). The vertices are written anew
 //! each frame into one buffer kept and grown, six a sprite, and drawn

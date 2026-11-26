@@ -1,11 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! Translates every program's WGSL to WebGL 2's GLSL ES 3.00 with naga, as
-//! wgpu's GL backend does (wgpu-hal 30, `gles/device.rs`: the coordinate
-//! space adjusted, the point size written, bounds unchecked, overrides
-//! processed), so the GL renderer runs the GLSL wgpu runs
-//! (docs/architecture/rendering.md, Design: direct WebGL 2). Writes
+//! Translates every program's WGSL to WebGL 2's GLSL ES 3.00 with naga (the
+//! coordinate space adjusted, the point size written, bounds unchecked,
+//! overrides processed; docs/architecture/rendering.md, Shaders). Writes
 //! `shaders.rs` into `OUT_DIR`: each entry point's source with its
 //! combined samplers and uniform blocks by name and resource binding.
 

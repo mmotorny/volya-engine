@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! The programs in WebGL 2's GLSL ES 3.00, translated from their WGSL at
-//! build time (`build.rs`) as wgpu's GL backend translates them
-//! (docs/architecture/rendering.md, Design: direct WebGL 2).
+//! build time (`build.rs`; docs/architecture/rendering.md, Shaders).
 
 // Until the GL renderer links them (#475).
 #![allow(dead_code)]

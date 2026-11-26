@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! A level's static world on WebGL 2, as wgpu's renderer draws it
-//! (docs/behavior/static-shading.md): `level.geom`'s vertex and index
+//! A level's static world on WebGL 2 (docs/behavior/static-shading.md): `level.geom`'s vertex and index
 //! buffers uploaded as stored, the level's index ranges rebased at upload
 //! (WebGL 2 has no base vertex), one vertex array per (vertex layout,
 //! vertex buffer, index buffer), the per-draw records in a texture, and a
@@ -662,14 +661,13 @@ impl GeometryUpload {
                 }
             }
             .map_err(|e| format!("{}: {e}", job.label))?;
-            // Padded to whole words, as wgpu's renderer writes it.
+            // Padded to whole words.
             let end = (at as usize + self.piece.len()).min(job.buffer.size() as usize);
             renderer
                 .gl
                 .write_buffer(&job.buffer, at, &self.piece[..end - at as usize]);
             (renderer.geometry_bytes).set(renderer.geometry_bytes.get() + self.piece.len() as u64);
-            // Each piece handed to the GPU at once, as wgpu's renderer
-            // submits it.
+            // Each piece handed to the GPU at once.
             crate::stats::submit();
             renderer.gl.flush();
             self.at += n as u64;
@@ -764,7 +762,7 @@ impl Renderer {
         let vertex_layouts: Vec<Option<Layout>> =
             layout.vertex_buffers.iter().map(|b| b.layout).collect();
         let gl = &self.gl;
-        // Whole 4-byte words, as wgpu's buffers are.
+        // Whole 4-byte words.
         let new_buffer = |_label: &str, kind: BufferKind, bytes: u64, min_size: u64| {
             gl.buffer(kind, bytes.next_multiple_of(4).max(min_size))
         };

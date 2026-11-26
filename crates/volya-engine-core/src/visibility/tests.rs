@@ -34,8 +34,8 @@ fn node(kind: VisualType, centre: Vec3, children: Vec<u32>) -> Node {
         kind,
         centre,
         radius: 1.0,
-        box_min: [0.0; 3],
-        box_max: [0.0; 3],
+        box_min: centre.map(|v| v - 0.5),
+        box_max: centre.map(|v| v + 0.5),
         coverage: 1.0,
         children,
     }
@@ -321,6 +321,45 @@ fn the_camera_sector_comes_from_the_ray_and_is_kept() {
         s.sector_below([5.0, 0.0, 0.0], Some((1.0 - 2e-5, 7))),
         Some(7)
     );
+}
+
+#[test]
+fn the_sphere_and_box_test() {
+    // One plane, inside where x ≤ 0.
+    let f = Frustum {
+        planes: vec![[-1.0, 0.0, 0.0, 0.0]],
+    };
+    let test = |c: f32, r: f32, a: f32, b: f32| {
+        f.sphere_box(1, [c, 0.0, 0.0], r, [a, -1.0, -1.0], [b, 1.0, 1.0])
+    };
+    // The sphere decides when it is not across the plane (s = r passes).
+    assert_eq!(test(2.0, 1.0, -9.0, 9.0), None);
+    assert_eq!(test(-2.0, 1.0, 9.0, 9.0), Some(0));
+    assert_eq!(test(1.0, 1.0, 9.0, 9.0), Some(0));
+    assert_eq!(test(-1.0, 1.0, 9.0, 9.0), Some(0));
+    // Across it, the box: outside, partly or wholly inside.
+    assert_eq!(test(0.0, 1.0, 0.5, 0.7), None);
+    assert_eq!(test(0.0, 1.0, -0.5, 0.5), Some(1));
+    assert_eq!(test(0.0, 1.0, -0.5, 0.0), Some(0));
+    // Planes not asked for are not tested.
+    assert_eq!(f.sphere_box(0, [5.0; 3], 1.0, [5.0; 3], [5.0; 3]), Some(0));
+}
+
+#[test]
+fn nothing_below_a_node_wholly_inside_is_frustum_tested() {
+    let mut s = row();
+    // Sector 1's mesh moved behind the camera, under its root at x = 5.
+    s.nodes[1] = node(VisualType::Mesh, [-50.0, 0.0, 0.0], vec![]);
+    let eye = [1.0, 0.0, 0.0];
+    let m = view(eye, [1.0, 0.0, 0.0]);
+    let t = thresholds();
+    let r = s.traverse(1, Frustum::view(&m), eye, &m, CAMERA_PASS, &t, |_| false);
+    assert_eq!(s.static_visuals(&r, eye, &t, |_, _, _| false)[0], [1]);
+    // Its root across a side plane: the mesh is tested and dropped.
+    s.nodes[4].radius = 10.0;
+    s.nodes[4].box_min = [-50.0, -50.0, -50.0];
+    let r = s.traverse(1, Frustum::view(&m), eye, &m, CAMERA_PASS, &t, |_| false);
+    assert!(s.static_visuals(&r, eye, &t, |_, _, _| false)[0].is_empty());
 }
 
 #[test]

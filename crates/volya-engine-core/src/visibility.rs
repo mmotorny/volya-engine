@@ -77,6 +77,59 @@ impl Frustum {
         self.planes.iter().all(|p| distance(p, centre) >= -radius)
     }
 
+    /// The sphere-and-box test (occlusion-tests.md 7) of the sphere
+    /// `centre`, `radius` and the box `min` … `max` against the planes in
+    /// `planes` (a bit per plane): none when outside, else the planes that
+    /// remain (none when wholly inside). Exact, no margin.
+    pub fn sphere_box(
+        &self,
+        planes: u32,
+        centre: Vec3,
+        radius: f32,
+        min: Vec3,
+        max: Vec3,
+    ) -> Option<u32> {
+        let mut remain = planes;
+        for (i, p) in self.planes.iter().enumerate() {
+            if planes >> i & 1 == 0 {
+                continue;
+            }
+            // The spec's plane, positive outside: these are negated.
+            let n = [-p[0], -p[1], -p[2]];
+            let s = -distance(p, centre);
+            if s > radius {
+                return None;
+            }
+            if s.abs() < radius {
+                let value = |v: Vec3| n[0] * v[0] + n[1] * v[1] + n[2] * v[2] - p[3];
+                // The corner of smallest (`lowest`) or largest value, by
+                // the normal's sign bits.
+                let corner = |lowest: bool| -> Vec3 {
+                    std::array::from_fn(|k| {
+                        if n[k].is_sign_negative() == lowest {
+                            max[k]
+                        } else {
+                            min[k]
+                        }
+                    })
+                };
+                if value(corner(true)) > 0.0 {
+                    return None;
+                }
+                if value(corner(false)) > 0.0 {
+                    continue;
+                }
+            }
+            remain &= !(1 << i);
+        }
+        Some(remain)
+    }
+
+    /// Every plane, as [`Frustum::sphere_box`] takes them.
+    pub fn all(&self) -> u32 {
+        (1u32 << self.planes.len()) - 1
+    }
+
     /// The convex `polygon` clipped against every plane; fewer than three
     /// vertices left is empty (our choice: such a remainder has no area).
     pub fn clip(&self, polygon: &[Vec3]) -> Vec<Vec3> {
@@ -420,8 +473,9 @@ impl Sectors {
 
     /// The static visuals of the visited sectors (level.md 9.3, ogf.md 8)
     /// seen from `eye`: each root descended once per frustum its sector
-    /// was entered with, culled by bounding sphere and by `hidden` (the
-    /// occlusion test of a visual, given its index and box), and each
+    /// was entered with, culled by the sphere-and-box test (none below a
+    /// node wholly inside) and then by `hidden` (the occlusion test of a
+    /// visual, given its index and box; occlusion-tests.md 6), and each
     /// visual drawn once.
     pub fn static_visuals(
         &self,
@@ -438,12 +492,20 @@ impl Sectors {
             .map(|&s| {
                 let mut out = Vec::new();
                 for f in &traversal.frusta[usize::from(s)] {
-                    stack.push(self.roots[usize::from(s)]);
-                    while let Some(i) = stack.pop() {
+                    stack.push((self.roots[usize::from(s)], f.all()));
+                    while let Some((i, planes)) = stack.pop() {
                         let n = &self.nodes[i as usize];
-                        if !f.meets(n.centre, n.radius) || hidden(i, n.box_min, n.box_max) {
+                        let planes = match planes {
+                            0 => 0,
+                            p => match f.sphere_box(p, n.centre, n.radius, n.box_min, n.box_max) {
+                                Some(p) => p,
+                                None => continue,
+                            },
+                        };
+                        if hidden(i, n.box_min, n.box_max) {
                             continue;
                         }
+                        let children = n.children.iter().rev().map(|&c| (c, planes));
                         let d = sub(n.centre, eye);
                         let sigma = n.radius / (dot(d, d) + 1e-5) * n.coverage;
                         let mut draw = |out: &mut Vec<u32>| {
@@ -452,7 +514,7 @@ impl Sectors {
                             }
                         };
                         match n.kind {
-                            VisualType::Group => stack.extend(n.children.iter().rev()),
+                            VisualType::Group => stack.extend(children),
                             VisualType::BillboardGroup => {
                                 if sigma < thresholds.t_min {
                                     continue;
@@ -461,7 +523,7 @@ impl Sectors {
                                     draw(&mut out);
                                 }
                                 if sigma > thresholds.t_b {
-                                    stack.extend(n.children.iter().rev());
+                                    stack.extend(children);
                                 }
                             }
                             _ => {

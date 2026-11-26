@@ -111,7 +111,7 @@ fn muhis_source_makes_p2s_particle() {
     assert_eq!(p.age, 0.0);
     assert_eq!(p.frame, 510);
     assert_eq!(p.frame_flags, 0);
-    assert_eq!(random.uniform.state, 1_924_036_713);
+    assert_eq!(random.uniform.get().state, 1_924_036_713);
 }
 
 #[test]

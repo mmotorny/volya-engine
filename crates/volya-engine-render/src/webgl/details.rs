@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! Detail objects in the world pass (docs/behavior/detail-objects.md
-//! section 6) on WebGL 2, as wgpu's renderer draws them: the frame's
+//! section 6) on WebGL 2: the frame's
 //! instances of each model drawn instanced, sway 1 of every model, then
 //! sway 2, then still, between the priority 0–1 draws and the sky.
 //! Instances come in a vertex buffer stepped per instance whose attributes

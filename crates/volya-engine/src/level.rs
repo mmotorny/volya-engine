@@ -43,6 +43,7 @@ use crate::core::lights::{LightSettings, Lights};
 use crate::core::movement::{Flags, MovementConfig, Player};
 use crate::core::object_light::{self, SkyVisibility};
 use crate::core::particles::placed::{Origin, PlacedEffect, PlacedEffects, particle_capacity};
+use crate::core::particles::random::Shared;
 use crate::core::simulation::graph::Graph;
 use crate::core::simulation::navigation::Navigation;
 use crate::core::simulation::{AlifeConfig, Changes, Simulation};
@@ -304,6 +305,9 @@ pub struct LevelScreen {
     /// The detail objects (docs/behavior/detail-objects.md), run by the
     /// frames drawn.
     details: Option<std::cell::RefCell<LevelDetailObjects>>,
+    /// The level's one shared generator: the particles', the detail
+    /// objects' and the occlusion's values (occlusion-tests.md 5).
+    random: Shared,
     /// `r__detail_density` and the wind strength *W* as the app last gave
     /// them.
     detail_density: f32,
@@ -1178,6 +1182,8 @@ pub struct NewGameLoad {
     /// The level's particle objects and the engine clock their clock was
     /// last brought to.
     effects: Option<(PlacedEffects, u64)>,
+    /// The level's one shared generator (occlusion-tests.md 5).
+    random: Shared,
     /// The zone objects online at the start and the sections of every zone
     /// of the level's objects.
     zones: Zones,
@@ -1856,9 +1862,14 @@ impl NewGameLoad {
                 // The library serves the zones' and the weather's effects too.
                 // The effects collide with the level (particle-collision.md).
                 let world = self.collision.clone();
-                let effects =
-                    PlacedEffects::new_in(data.effects.clone(), &records, self.now as u32, world)
-                        .map_err(|e| invalid(format!("{dir}\\level.ps_static: {e}")))?;
+                let effects = PlacedEffects::new_in(
+                    data.effects.clone(),
+                    &records,
+                    self.now as u32,
+                    world,
+                    self.random.clone(),
+                )
+                .map_err(|e| invalid(format!("{dir}\\level.ps_static: {e}")))?;
                 self.effects = Some((effects, self.now));
             }
             // detail-objects.md 2.1: the file, the sway values and the
@@ -1991,6 +2002,7 @@ impl NewGameLoad {
             global_ms: 0,
             torches: PlayerTorches::new(torches, &name_for_torches),
             details: self.details.map(std::cell::RefCell::new),
+            random: self.random,
             detail_density: level_details::DENSITY_DEFAULT,
             wind: 0.0,
             frame: 0,
@@ -2858,7 +2870,7 @@ impl LevelScreen {
             ssa_min: crate::render::world::ssa_min(w, h, camera::FOV_Y_DEGREES),
             density: self.detail_density,
         };
-        let frame = d.cache.pass(&pass, &self.collision);
+        let frame = (self.random).with(|g| d.cache.pass(&pass, &self.collision, g));
         let sway = crate::core::details::Sway::blend(&d.normal, &d.fast, self.wind);
         Some(DetailsScene {
             frame,
@@ -3152,6 +3164,7 @@ impl LevelScreen {
             lights: LevelLights::default(),
             torches: PlayerTorches::default(),
             details: None,
+            random: Shared::default(),
             detail_density: level_details::DENSITY_DEFAULT,
             wind: 0.0,
             frame: 0,

@@ -10,10 +10,9 @@
 //! user: a level's transcodings would take as much storage as its BC
 //! textures, on top of the game). Then, while it waits under its last
 //! caption ([`volya_engine::app::App::world_to_prepare`]), its geometry is
-//! uploaded a few pieces per task turn (#184). wgpu's GL backend keeps what
-//! is written in the wasm heap until WebGL reports the work done, which it
-//! does only after the turn ends: the textures' writes are waited for every
-//! [`STAGING_BYTES`] and the geometry's every piece (#440).
+//! uploaded a few pieces per task turn (#184). The textures' writes are
+//! waited for every [`STAGING_BYTES`] and the geometry's every piece, so
+//! the browser's GPU process takes them in a little at a time (#443).
 //!
 //! After each turn the next waits until the browser reports the GPU done
 //! with what was submitted (#355): the browser's GPU process copies the
@@ -82,15 +81,12 @@ pub fn frame_interval(ms: f64) {
 /// screen at 30 Hz.
 const TURN_MS: f64 = 30.0;
 
-/// Bytes of texture data written before the preparation waits for WebGL to report them done, which frees their
-/// staging: with the texture being written, what the wasm heap holds of
-/// them at most (#357, #440; with a 30 ms turn alone, up to 40 MiB of BC
-/// textures in desktop Chrome, measured).
+/// Bytes of texture data written before the preparation waits for WebGL to
+/// report them done (#357, #440).
 const STAGING_BYTES: u64 = 2 << 20;
 
-/// Bytes of the level's geometry uploaded per task turn: what the wasm heap
-/// holds of it at most per turn, one piece, waited for before the next
-/// (#440).
+/// Bytes of the level's geometry uploaded per task turn: one piece, waited
+/// for before the next (#440).
 const WORLD_TURN_BYTES: u64 = UPLOAD_PIECE as u64;
 
 /// The file buffer and the band buffer of the last preparation, kept for
@@ -144,9 +140,8 @@ fn megapixels(dds: &Dds) -> f64 {
         .sum()
 }
 
-/// Whether a level is prepared while it loads: wherever it draws (#355).
-/// Its uploads stay in the wasm heap until WebGL reports them done; where
-/// textures are transcoded, that is done there.
+/// Whether a level is prepared while it loads: wherever it draws (#355);
+/// where textures are transcoded, that is done there.
 pub fn wanted() -> bool {
     crate::gpu::with_renderer(|_| ()).is_some()
 }
@@ -330,9 +325,9 @@ async fn prepare_world(level: Arc<LevelWorld>) -> Result<(), JsValue> {
             .in_scope(|| crate::gpu::prepare_world(&level, WORLD_TURN_BYTES));
         crate::heap_tag(0);
         let done = done?;
-        // Until WebGL reports the pieces written done
-        // and their staging goes (it may not in the task they were written
-        // in, documented by the WebGL 2 specification).
+        // Until WebGL reports the pieces written done (it may not in the
+        // task they were written in, documented by the WebGL 2
+        // specification).
         gpu_done(&mut wait_ms).await?;
         STATS.with(|s| {
             let mut s = s.borrow_mut();

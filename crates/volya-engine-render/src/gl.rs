@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! The GL layer: the only code calling WebGL 2 (docs/architecture/rendering.md,
-//! Design: direct WebGL 2, #469). Safe wrappers over web-sys's
+//! The GL layer). Safe wrappers over web-sys's
 //! `WebGl2RenderingContext` with a state cache: a setter calls WebGL only
 //! when the value differs from what it last set, and every call is counted
 //! by kind ([`Gl::take_counts`]).
@@ -10,8 +10,7 @@
 //! It builds for any target (web-sys does), so the crate's platform-free code
 //! keeps its native tests; nothing calls it natively.
 //!
-//! Conventions follow wgpu's GL backend (wgpu-hal 30, read in its source),
-//! so the picture is the same: samplers always filter between mip levels,
+//! Conventions: samplers always filter between mip levels,
 //! an 8-bit attribute read as a float is normalized, a texture's base and top
 //! levels are set once, the program's positions are flipped in y (the
 //! shaders' `ADJUST_COORDINATE_SPACE`), so front faces are given flipped
@@ -172,6 +171,8 @@ pub const UNIFORM_POINTS: usize = 24;
 /// The WebGL 2 context with its state cache.
 pub struct Gl {
     gl: C,
+    /// What it made that still lives.
+    live: Rc<Cell<Live>>,
     state: RefCell<State>,
     counts: Cell<Counts>,
     extensions: Extensions,
@@ -211,6 +212,7 @@ impl Gl {
         gl.pixel_storei(C::PACK_ALIGNMENT, 1);
         Self {
             gl,
+            live: Rc::default(),
             state: RefCell::new(State::fresh()),
             counts: Cell::default(),
             extensions,
@@ -222,6 +224,17 @@ impl Gl {
 
     pub fn extensions(&self) -> Extensions {
         self.extensions
+    }
+
+    /// The buffers, textures and vertex arrays made and not yet deleted.
+    pub fn live(&self) -> Live {
+        self.live.get()
+    }
+
+    fn add_live(&self, f: impl FnOnce(&mut Live)) {
+        let mut l = self.live.get();
+        f(&mut l);
+        self.live.set(l);
     }
 
     pub fn max_texture_size(&self) -> u32 {
@@ -283,7 +296,12 @@ impl Gl {
             self.count(Call::Buffer);
             self.gl.bind_buffer(C::ELEMENT_ARRAY_BUFFER, Some(&raw));
         }
+        self.add_live(|l| {
+            l.buffers += 1;
+            l.buffer_bytes += size;
+        });
         Buffer(Rc::new(BufferInner {
+            live: self.live.clone(),
             gl: self.gl.clone(),
             raw,
             id: next_id(),
@@ -330,6 +348,7 @@ impl Gl {
             C::TEXTURE_2D
         };
         let t = Texture(Rc::new(TextureInner {
+            live: self.live.clone(),
             gl: self.gl.clone(),
             raw,
             id: next_id(),
@@ -339,6 +358,10 @@ impl Gl {
             height,
             levels,
         }));
+        self.add_live(|l| {
+            l.textures += 1;
+            l.texture_bytes += t.bytes();
+        });
         self.bind_upload(&t);
         self.count(Call::Create);
         self.gl.tex_storage_2d(
@@ -348,8 +371,7 @@ impl Gl {
             width as i32,
             height as i32,
         );
-        // Set once: the levels every view reads (wgpu sets them at every
-        // bind).
+        // Set once: the levels every view reads.
         self.count(Call::Other);
         self.gl.tex_parameteri(target, C::TEXTURE_BASE_LEVEL, 0);
         self.count(Call::Other);
@@ -470,7 +492,7 @@ impl Gl {
             Filter::Nearest => C::NEAREST,
             Filter::Linear => C::LINEAR,
         };
-        // Always filtered between levels, as wgpu's GL backend.
+        // Always filtered between levels.
         let min = match (desc.min, desc.mip) {
             (Filter::Nearest, Filter::Nearest) => C::NEAREST_MIPMAP_NEAREST,
             (Filter::Nearest, Filter::Linear) => C::NEAREST_MIPMAP_LINEAR,
@@ -612,7 +634,9 @@ impl Gl {
     ) -> VertexArray {
         self.count(Call::Create);
         let raw = self.gl.create_vertex_array().expect("a WebGL vertex array");
+        self.add_live(|l| l.vertex_arrays += 1);
         let va = VertexArray(Rc::new(VertexArrayInner {
+            live: self.live.clone(),
             gl: self.gl.clone(),
             raw,
             id: next_id(),
@@ -653,8 +677,7 @@ impl Gl {
                     at,
                 );
             } else {
-                // Always normalized, as wgpu's GL backend (a float format
-                // ignores it).
+                // Always normalized (a float format ignores it).
                 self.gl.vertex_attrib_pointer_with_i32(
                     a.location,
                     count,
@@ -849,8 +872,7 @@ impl Gl {
     }
 
     /// Discards the bound draw framebuffer's depth, which nothing reads
-    /// after (wgpu's `StoreOp::Discard`: wgpu-hal's GL backend invalidates
-    /// it so).
+    /// after.
     pub fn invalidate_depth(&self) {
         let depth = js_sys::Array::of1(&C::DEPTH_ATTACHMENT.into());
         self.count(Call::Other);
@@ -1069,6 +1091,7 @@ impl BufferKind {
 }
 
 struct BufferInner {
+    live: Rc<Cell<Live>>,
     gl: C,
     raw: WebGlBuffer,
     id: u32,
@@ -1079,6 +1102,10 @@ struct BufferInner {
 impl Drop for BufferInner {
     fn drop(&mut self) {
         self.gl.delete_buffer(Some(&self.raw));
+        let mut l = self.live.get();
+        l.buffers -= 1;
+        l.buffer_bytes -= self.size;
+        self.live.set(l);
     }
 }
 
@@ -1175,6 +1202,7 @@ impl TexFormat {
 }
 
 struct TextureInner {
+    live: Rc<Cell<Live>>,
     gl: C,
     raw: WebGlTexture,
     id: u32,
@@ -1188,7 +1216,43 @@ struct TextureInner {
 impl Drop for TextureInner {
     fn drop(&mut self) {
         self.gl.delete_texture(Some(&self.raw));
+        let mut l = self.live.get();
+        l.textures -= 1;
+        l.texture_bytes -= texture_bytes(self);
+        self.live.set(l);
     }
+}
+
+/// Bytes `t`'s levels (and faces) take.
+fn texture_bytes(t: &TextureInner) -> u64 {
+    let f = t.format;
+    let faces = if t.target == C::TEXTURE_CUBE_MAP {
+        6
+    } else {
+        1
+    };
+    (0..t.levels)
+        .map(|l| {
+            let (w, h) = ((t.width >> l).max(1), (t.height >> l).max(1));
+            let (w, h) = if f.compressed() {
+                (w.div_ceil(4), h.div_ceil(4))
+            } else {
+                (w, h)
+            };
+            u64::from(w) * u64::from(h) * u64::from(f.bytes())
+        })
+        .sum::<u64>()
+        * faces
+}
+
+/// The resources a [`Gl`] made that live: their counts and bytes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Live {
+    pub buffers: u64,
+    pub buffer_bytes: u64,
+    pub textures: u64,
+    pub texture_bytes: u64,
+    pub vertex_arrays: u64,
 }
 
 /// A texture (a handle).
@@ -1219,20 +1283,7 @@ impl Texture {
 
     /// Bytes its levels (and faces) take.
     pub fn bytes(&self) -> u64 {
-        let f = self.0.format;
-        let faces = if self.is_cube() { 6 } else { 1 };
-        (0..self.0.levels)
-            .map(|l| {
-                let (w, h) = ((self.0.width >> l).max(1), (self.0.height >> l).max(1));
-                let (w, h) = if f.compressed() {
-                    (w.div_ceil(4), h.div_ceil(4))
-                } else {
-                    (w, h)
-                };
-                u64::from(w) * u64::from(h) * u64::from(f.bytes())
-            })
-            .sum::<u64>()
-            * faces
+        texture_bytes(&self.0)
     }
 }
 
@@ -1269,12 +1320,12 @@ pub struct SamplerDesc {
     pub wrap: [Wrap; 3],
     /// 1 for none.
     pub anisotropy: u16,
-    /// Only the top level is read (wgpu's `lod_max_clamp` 0).
+    /// Only the top level is read (the maximum level of detail 0).
     pub top_level: bool,
 }
 
 impl Default for SamplerDesc {
-    /// wgpu's default: nearest everywhere, clamped.
+    /// Nearest everywhere, clamped.
     fn default() -> Self {
         Self {
             mag: Filter::Nearest,
@@ -1345,7 +1396,7 @@ pub struct Unit {
     pub sampler: Option<(u32, u32)>,
 }
 
-/// Vertex formats the renderer uses, as wgpu's.
+/// Vertex formats the renderer uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VertexFormat {
     Float32x2,
@@ -1358,8 +1409,7 @@ pub enum VertexFormat {
 }
 
 impl VertexFormat {
-    /// (components, type, read as integers), as wgpu's GL backend maps
-    /// them.
+    /// (components, type, read as integers).
     fn describe(self) -> (i32, u32, bool) {
         match self {
             VertexFormat::Float32x2 => (2, C::FLOAT, false),
@@ -1391,6 +1441,7 @@ pub struct VertexLayout {
 }
 
 struct VertexArrayInner {
+    live: Rc<Cell<Live>>,
     gl: C,
     raw: WebGlVertexArrayObject,
     id: u32,
@@ -1399,6 +1450,9 @@ struct VertexArrayInner {
 impl Drop for VertexArrayInner {
     fn drop(&mut self) {
         self.gl.delete_vertex_array(Some(&self.raw));
+        let mut l = self.live.get();
+        l.vertex_arrays -= 1;
+        self.live.set(l);
     }
 }
 
@@ -1443,7 +1497,7 @@ pub struct Blend {
 }
 
 impl Blend {
-    /// Straight alpha: wgpu's `ALPHA_BLENDING`.
+    /// Straight alpha.
     pub const ALPHA: Self = Self {
         color: (C::SRC_ALPHA, C::ONE_MINUS_SRC_ALPHA, C::FUNC_ADD),
         alpha: (C::ONE, C::ONE_MINUS_SRC_ALPHA, C::FUNC_ADD),
@@ -1465,7 +1519,7 @@ pub enum FrontFace {
 }
 
 impl FrontFace {
-    /// Flipped: the programs flip positions in y (wgpu-hal's `conv.rs`).
+    /// Flipped: the programs flip positions in y.
     fn gl(self) -> u32 {
         match self {
             FrontFace::Ccw => C::CW,
@@ -1474,8 +1528,7 @@ impl FrontFace {
     }
 }
 
-/// A draw's fixed-function state: what a wgpu pipeline holds besides its
-/// programs.
+/// A draw's fixed-function state, besides its program.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RasterState {
     pub blend: Option<Blend>,

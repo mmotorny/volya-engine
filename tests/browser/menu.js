@@ -36,8 +36,7 @@ const ONLY = [
 // good. Measured at 98 MiB in headless Chrome after one and after two New
 // Games (#79; 193 and 199 MiB before), and at 107–110 MiB after the first in
 // the iOS Simulator, drawing through WebGL 2 (#184: the level's geometry
-// uploaded a few pieces per task turn, since wgpu's GL backend keeps what
-// is written in the heap until WebGL reports it done); a regression past
+// uploaded a few pieces per task turn); a regression past
 // this is reported as an "OVER BUDGET" note, not failed: budgets are
 // measured and tracked in issues, never a release gate (AGENTS.md). The
 // audio worker's instance (#354) counts too (`audio_heap_bytes`, which
@@ -73,6 +72,9 @@ const mib = (bytes) => `${(bytes / 2 ** 20).toFixed(0)} MiB`;
 const CAPTIONS = ["Новая игра", "Загрузить игру", "Сетевая игра", "Опции", "Титры", "Выйти в Windows"];
 let installer;
 let gpu;
+// What the GPU holds (`gpu_live`) in the first New Game's level, once its
+// intro is skipped.
+let firstLive;
 // The size the game draws at (#49), shown scaled to fit the canvas.
 let render;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -697,6 +699,7 @@ export const tests = {
       note += `, ${colours.size} colours`;
     }
     const stats = await volya.call("level_stats");
+    firstLive = stats.gpu_live;
     if (gpu.textures === "etc2") assertEqual(stats.textures.textures > 300, true, `textures prepared: ${JSON.stringify(stats.textures)}`);
     return `textures ${gpu.textures}; ${note}; ${await jsMemory(stats)}; ${JSON.stringify(stats)}`;
   },
@@ -767,11 +770,17 @@ export const tests = {
     await noteHeap("in that level");
     key("Escape");
     await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
+    // The first level's buffers, textures and vertex arrays are gone: the
+    // GPU holds what it held in the first, at the same video mode.
+    await sleep(500);
+    const live = (await volya.call("level_stats")).gpu_live;
+    if (firstLive) assertEqual(live, firstLive, "what the GPU holds against the first New Game's level");
     const heapNote = overBudget(heap(stats), "wasm heaps after a New Game in the game launched again");
     // What the GPU still holds of the level left (#436): the world stays
     // until the next one is uploaded while the presenter keeps it.
     const held = before.gpu_world_bytes;
-    return `${heapNote}wasm heap ${mib(before.wasm_heap_bytes)} before, ${mib(stats.wasm_heap_bytes)} after; the GPU world in the title menu before: ${held == null ? "none" : mib(held)}; ${heapMaps.slice(-2).join("; ")}; by caption (MiB, heap/live): ${stages}; ${record}`;
+    const liveNote = live ? `the GPU holds ${live.textures} textures (${mib(live.texture_bytes)}), ${live.buffers} buffers (${mib(live.buffer_bytes)}), ${live.vertex_arrays} vertex arrays, as in the first; ` : "";
+    return `${heapNote}${liveNote}wasm heap ${mib(before.wasm_heap_bytes)} before, ${mib(stats.wasm_heap_bytes)} after; the GPU world in the title menu before: ${held == null ? "none" : mib(held)}; ${heapMaps.slice(-2).join("; ")}; by caption (MiB, heap/live): ${stages}; ${record}`;
   },
 
   "the level's placed effect runs on the world clock; its update cost in wasm": async () => {
