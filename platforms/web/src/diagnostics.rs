@@ -502,6 +502,10 @@ pub struct AudioRing {
     pub underrun: f64,
     pub fill: [f64; 4],
     pub mix: [f64; 4],
+    /// Services woken by the audio worker's own timeout with the ring
+    /// under half its target (#452), and the time between services (ms).
+    pub missed: f64,
+    pub gap: [f64; 4],
     pub rate: f64,
 }
 
@@ -518,6 +522,11 @@ pub fn audio_ring(a: &AudioRing) {
         if a.mix[3] > 0.0 {
             let [min, sum, max, count] = a.mix;
             d.metrics("audio.mix_ms", n(count), min, sum, max);
+        }
+        d.count("audio.missed_wakes", n(a.missed));
+        if a.gap[3] > 0.0 {
+            let [min, sum, max, count] = a.gap;
+            d.metrics("audio.service_gap_ms", n(count), min, sum, max);
         }
     });
 }

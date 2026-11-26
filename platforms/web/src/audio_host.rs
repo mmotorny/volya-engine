@@ -70,6 +70,13 @@ struct State {
     /// and the mixing time per block.
     fill: Series,
     mix: Series,
+    /// Since the last report: services woken by the worker's own timeout
+    /// with the ring under half its target (the wake that was due never
+    /// came, #452), and the time between services (ms).
+    missed: f64,
+    gap: Series,
+    /// When the last service ran (ms since the epoch).
+    serviced_at: Option<f64>,
     underrun_reported: f64,
     /// Blocks recorded for the engine's capture (`Remote::watch`).
     blocks: Vec<serde_json::Value>,
@@ -147,14 +154,22 @@ impl std::io::Seek for JsFile {
 }
 
 /// Applies the commands the ring holds and fills the ring of frames to its
-/// target. Run whenever the audio worker wakes.
+/// target. Run whenever the audio worker wakes; `polled`: woken by its own
+/// timeout rather than a wake.
 #[wasm_bindgen]
-pub fn audio_host_service() {
+pub fn audio_host_service(polled: bool) {
     STATE.with(|s| {
         let s = &mut *s.borrow_mut();
         let Some(ring) = s.ring.as_ref() else {
             return;
         };
+        let now = crate::epoch_now();
+        if let Some(at) = s.serviced_at.replace(now) {
+            s.gap.add(now - at);
+        }
+        if polled && ring.queued() < s.target / 2 {
+            s.missed += 1.0;
+        }
         ring.read_commands(&mut s.pending);
         if !s.pending.is_empty() {
             match s.host.apply(&s.pending) {
@@ -247,9 +262,12 @@ pub fn audio_host_report() -> Option<String> {
             s.unreported = 0.0;
             let underrun = s.underrun - s.underrun_reported;
             s.underrun_reported = s.underrun;
-            let [f, m] = [s.fill.take(), s.mix.take()];
-            report["diagnostics"] =
-                serde_json::json!([underrun, f[0], f[1], f[2], f[3], m[0], m[1], m[2], m[3]]);
+            let [f, m, g] = [s.fill.take(), s.mix.take(), s.gap.take()];
+            let missed = std::mem::take(&mut s.missed);
+            report["diagnostics"] = serde_json::json!([
+                underrun, f[0], f[1], f[2], f[3], m[0], m[1], m[2], m[3], missed, g[0], g[1], g[2],
+                g[3]
+            ]);
         }
         Some(report.to_string())
     })

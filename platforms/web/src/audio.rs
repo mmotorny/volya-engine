@@ -192,6 +192,8 @@ pub fn audio_report(report: &str) -> Result<(), JsValue> {
             underrun: v(0),
             fill: [v(1), v(2), v(3), v(4)],
             mix: [v(5), v(6), v(7), v(8)],
+            missed: v(9),
+            gap: [v(10), v(11), v(12), v(13)],
             rate: number("rate"),
         });
     }

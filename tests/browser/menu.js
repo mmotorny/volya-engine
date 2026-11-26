@@ -334,7 +334,27 @@ async function quitToTitle() {
   await selectInGame("btn_quit_to_mm");
   key("Enter");
   await answerBox("yes");
-  return until((s) => s.phase === "menu", "the title menu");
+  const menu = await until((s) => s.phase === "menu", "the title menu");
+  await audioFlows("in the title menu after quitting");
+  return menu;
+}
+
+/**
+ * Where the AudioContext runs: over 1.5 s the audio worker mixes about as
+ * much as plays, and the AudioWorklet plays nothing as silence for want of
+ * it (#452: an iPhone's title menu went silent for 15 s after a quit).
+ */
+async function audioFlows(where) {
+  if (volya.audioState() !== "running") return;
+  const before = await volya.call("level_stats");
+  const started = performance.now();
+  await sleep(1500);
+  const after = await volya.call("level_stats");
+  const seconds = (performance.now() - started) / 1000;
+  const mixed = (after.audio_mixed_frames - before.audio_mixed_frames) / 48000;
+  const silent = after.audio_underrun_frames - before.audio_underrun_frames;
+  assert(mixed > seconds * 0.5, `audio ${where}: ${mixed.toFixed(2)} s mixed in ${seconds.toFixed(2)} s`);
+  assertEqual(silent, 0, `audio ${where}: frames played as silence`);
 }
 
 /** From the title menu's main page: New game, the first difficulty. */
@@ -1877,6 +1897,35 @@ export const tests = {
     await untilOptions((o) => o.cells.find((c) => c.action === "forward" && c.slot === 0).key === "kW", "the defaults");
     key("Escape");
     await until((s) => s.phase === "menu" && !s.options, "Escape to close the screen");
+  },
+
+  "a New Game in the game launched again, drawn at 2868×1320: the heap the earlier games grew serves it": async () => {
+    needsGame();
+    // A phone's flow (#451): the game left and launched again, the video
+    // mode changed in the title menu, then a New Game.
+    await audioFlows("in the title menu of the game launched again");
+    const before = await volya.call("level_stats");
+    await volya.call("debug_video_mode", { width: 2868, height: 1320 });
+    await noteHeap("before the New Game in the game launched again");
+    await volya.call("heap_log", { on: true });
+    await heapRecord(true);
+    try {
+      await newGame();
+      await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", loadMs());
+    } finally {
+      await volya.call("debug_video_mode", { width: 1024, height: 768 });
+    }
+    const stages = byCaption(await volya.call("heap_log", { on: false }));
+    const record = await heapRecord(false);
+    const stats = await volya.call("level_stats");
+    await noteHeap("in that level");
+    const tap = { pointerType: "touch", pointerId: 23, isPrimary: true, button: 0 };
+    pointer("pointerdown", client(512, 384), { ...tap, buttons: 1 });
+    pointer("pointerup", client(512, 384), { ...tap, buttons: 0 });
+    await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
+    await quitToTitle();
+    const heapNote = overBudget(heap(stats), "wasm heaps after a New Game in the game launched again");
+    return `${heapNote}wasm heap ${mib(before.wasm_heap_bytes)} before, ${mib(stats.wasm_heap_bytes)} after; ${heapMaps.slice(-2).join("; ")}; by caption (MiB, heap/live): ${stages}; ${record}`;
   },
 
   "Q quits to the app's own interface": async () => {

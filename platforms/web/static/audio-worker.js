@@ -22,18 +22,37 @@ let ready = null;
 /** The current output: `{ engine, control }`. */
 let output = null;
 
+// How long the worker sleeps at most (ms), well within the ring's target
+// (30 ms): a wake that never arrives can't starve the output. On an iPhone
+// the worker slept up to 15 s with the output starving and the page and
+// the engine running (#452), until a file's message woke it; the wait's
+// own timeout and a timer both end the sleep, so it ends with either.
+const POLL_MS = 10;
+
 /** Services `current` whenever woken, until another output replaces it. */
 async function run(e, current) {
+  let polled = false;
   while (output === current) {
     const seen = Atomics.load(current.control, WAKE);
-    service(e, current);
-    const wait = Atomics.waitAsync(current.control, WAKE, seen);
-    if (wait.async) await wait.value;
+    service(e, current, polled);
+    const wait = Atomics.waitAsync(current.control, WAKE, seen, POLL_MS);
+    if (!wait.async) {
+      polled = false;
+      continue;
+    }
+    polled = await new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(true), POLL_MS + 5);
+      wait.value.then((result) => {
+        clearTimeout(timer);
+        resolve(result === "timed-out");
+      });
+    });
   }
 }
 
-function service(e, current) {
-  e.audio_host_service();
+/** `polled`: woken by a timeout, not a wake. */
+function service(e, current, polled = false) {
+  e.audio_host_service(polled);
   const report = e.audio_host_report();
   if (report !== undefined) current.engine.postMessage(report);
 }
