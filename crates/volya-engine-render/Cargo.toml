@@ -16,14 +16,34 @@ workspace = true
 [features]
 # wgpu's WebGL 2 backend, in the web build.
 webgl = ["wgpu/webgl"]
+# The direct WebGL 2 renderer instead of wgpu's (rendering.md, Design:
+# direct WebGL 2; #475).
+gl = []
 
 [dependencies]
 volya-engine-formats = { path = "../volya-engine-formats" }
 bytemuck.workspace = true
+js-sys.workspace = true
 tracing.workspace = true
+# The GL layer's WebGL 2 (src/gl.rs).
+web-sys = { workspace = true, features = [
+  "WebGl2RenderingContext",
+  "WebGlBuffer",
+  "WebGlFramebuffer",
+  "WebGlProgram",
+  "WebGlSampler",
+  "WebGlShader",
+  "WebGlSync",
+  "WebGlTexture",
+  "WebGlUniformLocation",
+  "WebGlVertexArrayObject",
+] }
 wgpu.workspace = true
 
-[dev-dependencies]
+[build-dependencies]
+# Translates the programs to GLSL ES 3.00 at build time (build.rs).
 naga = { version = "30", features = ["wgsl-in", "glsl-out"] }
+
+[dev-dependencies]
 pollster.workspace = true
 volya-engine-installer = { path = "../volya-engine-installer" }

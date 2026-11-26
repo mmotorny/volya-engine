@@ -584,7 +584,7 @@ impl WorldPipelines {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("world"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("world.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../world.wgsl").into()),
         });
         // Section 4.4: s_base / s_detail wrap, anisotropic (linear
         // min/mag/mip with anisotropy); s_lmap wrap, linear; s_hemi clamp,

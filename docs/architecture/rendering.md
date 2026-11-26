@@ -12,7 +12,7 @@ The browser renderer draws through wgpu's GL backend on WebGL 2 only (decided by
 - WebGL's cost is per call (about 1 µs in the iOS Simulator, 0.07 µs in headless Chrome; measured with `debug_gl_calls`, #429), and wgpu's GL backend makes many per state change (read in its source, wgpu-hal 30 and at head): a group binds every texture in it with four calls (`activeTexture`, `bindTexture`, `texParameteri` for the base and top mip levels) and a sampler, setting a group binds every group after it again (wgpu-core), a vertex buffer specifies each attribute again (four calls each), and a draw sets the first-instance uniform. So a surface's textures are two groups, one per distinct set: its light maps and environment map (group 1, shared by many surfaces), then its base and detail textures (group 2); at the start view the texture calls fell from 16,390 to 7,108 a frame in headless Chrome (measured).
 - The canvas's WebGL 2 context is made before wgpu's surface, without depth or stencil (wgpu draws into its own textures and blits the surface's; a later `getContext` returns the same context): the default framebuffer's depth buffer would take canvas-size memory nothing reads ([memory.md](memory.md#gpu-and-javascript-memory), #443). The first vertex provokes (`WEBGL_provoking_vertex`): with WebGL's last, ANGLE's Metal backend rewrites the indices of every draw whose program has a flat varying into a buffer of its own, all held until the submission finishes (#443).
 - wgpu's GL backend keeps every written byte in the wasm heap until it knows the submission finished (read in wgpu-hal's source), and a WebGL sync object never signals in the frame it was issued (documented, WebGL 2 specification). So uploads go in pieces submitted one by one, and the preparation waits for WebGL to report them done (`onSubmittedWorkDone`, the device polled each task turn), which frees their staging: the level's geometry after each 2 MiB piece, the textures before one would take what is written since the last report past 2 MiB (`Renderer::texture_bytes_written`). Waiting two frames instead, with 4 MiB a turn, held up to four 2 MiB staging buffers at the load's peak and took the load 3.2 s instead of 2.2 in headless Chrome (measured, #440).
-- Native tests translate every program to GLSL ES 3.00 with naga as wgpu's GL backend does (`tests/glsl.rs`); docs/testing.md.
+- The build translates every program to GLSL ES 3.00 with naga as wgpu's GL backend does (`build.rs`, into `glsl::STAGES` with each program's samplers and uniform blocks), so a program WebGL 2 can't run fails the build (#468).
 
 ## Textures
 
@@ -69,6 +69,7 @@ docs/behavior/particle-drawing.md (#322); the simulation: [simulation.md](simula
 The records and their sources: [simulation.md](simulation.md#dynamic-lights).
 
 - The renderer draws every sector with the full view frustum (the superset level.md 9.2 allows).
+- The camera pass's camera sector, sector and portal traversal and per-sector static visuals are CPU work in `volya-engine-core::visibility` (level.md 9, traversal-options.md), apart from the renderer; the camera sector's ray reads each collision triangle's sector, kept by the collision world (2 bytes a triangle). Its occlusion tests (`portal_hidden`, `visual_hidden`) hide nothing until they are specified (#460).
 - A surface carries its light elements (`Surface::light`: program, alpha reference, priority; dynamic-lights.md 6.1); the draws whose elements have priority 0 or 1 are listed once per world, grouped by program and surface.
 - Each light pass (`WorldFrame::lights`) draws again, after the sky and before the priority 2–3 step, those whose bounding sphere meets both the light's frustum and the camera's (a superset of what the camera's pass submitted), with one of five light pipelines (`vs_light_*` and `fs_light` in `world.wgsl`) and the pass's constants at a dynamic offset of one uniform buffer. All are made with the renderer (`Renderer::new`), the constants buffer grown only past 64 passes in a frame. No storage buffer or base vertex is needed beyond the world's own.
 - The positions are `@invariant` in both passes, so the light passes' depth test meets the drawn surfaces.
@@ -91,3 +92,78 @@ The records and their sources: [simulation.md](simulation.md#dynamic-lights).
 
 - Colour values pass through unconverted (non-sRGB targets). UI blending and filtering follow docs/formats/ui-layout.md (#23).
 - Video frames upload as Y'CbCr planes, are packed unconverted into the video texture on the GPU and convert to RGB when drawn, after filtering (docs/behavior/startup.md 6.6): about 0.2 ms a 876×400 frame against 1.2 ms converting on the CPU (measured natively).
+
+## Design: direct WebGL 2 (#467)
+
+User decision (2026-11-25): wgpu is replaced by direct WebGL 2. Its WebGPU-shaped GL backend makes about 23,400 WebGL calls a frame at `l01_escape`'s start (#429, measured): every vertex-buffer change specifies each attribute again, every texture bind sets two texture parameters, every draw sets the first-instance uniform, and bind groups, bundles and pipelines don't fit GL. There is no native GL path (the user: the Mac is not a target): the renderer talks only to WebGL 2, through web-sys's `WebGl2RenderingContext` (no glow, glutin, CGL, desktop GL or ANGLE of our own), and every test that draws runs in headless Chrome, whose WebGL 2 is ANGLE on Metal, as Safari's is.
+
+Goals: the same picture as wgpu on WebGL 2 in Chrome, pixel for pixel but for the trees' blending noise (#435); far fewer GL calls; a frame drawn into a framebuffer it is given (WebXR's `XRWebGLLayer`) as well as the canvas, designed for, not built; a smaller wasm (6,690,381 bytes, 2,281,234 gzipped, with wgpu; release, measured).
+
+### The GL layer (#469)
+
+`volya-engine-render::gl`, the only code calling WebGL, safe Rust over web-sys. It compiles natively too (web-sys builds for any target), so the crate's platform-free code (draw lists, culling, rebasing, transcoding) keeps its native unit tests; nothing calls WebGL natively.
+
+| Type | Holds | Made |
+|---|---|---|
+| `Gl` | The context, its state cache, call counts by kind, the extensions found (`WEBGL_compressed_texture_s3tc`, `_etc`, `EXT_texture_filter_anisotropic`, `EXT_disjoint_timer_query_webgl2`, `WEBGL_provoking_vertex`, `WEBGL_lose_context`) | Once, from the canvas's context made by the platform as today (no depth, stencil or antialias) |
+| `Buffer` | A `WebGLBuffer`, its size and use (vertex, index, uniform); written with `bufferSubData` | Static ones with their data; dynamic ones (UI, particles, details' instances, frame constants) with the renderer, grown only past their size, as now |
+| `Texture` | A `WebGLTexture`, 2D or cube, format, size, levels; base and top level set once at creation | With its data, level by level in bands (`texSubImage2D`, `compressedTexSubImage2D`) |
+| `Sampler` | A `WebGLSampler`: filters, mip filter, wrap, anisotropy | One per distinct description, cached by it, bound to texture units: no per-bind texture parameters |
+| `Program` | A linked program, its uniform blocks bound to fixed binding points and its samplers to fixed texture units at link (one `uniform1i` each, once), the locations of its few plain uniforms | With the renderer, as the pipelines are now |
+| `VertexArray` | A `WebGLVertexArrayObject` with the attribute layout, vertex buffers and index buffer bound | Once per (vertex layout, vertex buffers, index buffer): the level's buffers each with 16-bit indices, no merging (#429's 32-bit merge is not needed) |
+| `Framebuffer` | A `WebGLFramebuffer` with its colour and depth attachments | Once per render target (the frame, the supersampled target and its distortion target, the video's packing), remade when its size changes |
+| `Destination` | Where a finished frame goes: the canvas's default framebuffer, or a given `WebGLFramebuffer` with a viewport (an XR layer's, one per eye) | Each frame, by the platform |
+| `Fence` | A `fenceSync`, polled with `getSyncParameter` | Per submission the platform waits on (`submitted_work_done`, `gpu.done_ms`) |
+
+A pipeline becomes a `Program` with a `RasterState` (blend, depth test and write, cull, front face, colour mask): plain values the cache compares. Bind groups go: each program's textures sit on fixed units, numbered across programs so that what stays (the world's records texture, a surface group's light maps and environment map) stays bound when the program changes.
+
+### State tracking
+
+`Gl` keeps what it last set: program, vertex array, framebuffers (draw and read), viewport, scissor, each unit's texture and sampler, the active unit, each uniform binding point's buffer range, blend enable, factors and equation, depth test, function and mask, cull face, front face, colour mask, clear values, and the first-instance uniform's value per program. A setter calls WebGL only when the value differs; a draw sets what it needs and nothing else. The counts by kind replace `stats`' wgpu-level counts in the diagnostic log; `debug_gl_calls` (wrapping the context's methods on the page side) stays the check.
+
+### How the renderer's parts map onto it
+
+- **UI** (`ui.wgsl`): one dynamic vertex buffer and its vertex array; a batch binds its texture to unit 0 (the UI sampler there once, the movie sampler for Y'CbCr) and draws.
+- **Video**: the Y'CbCr planes are textures written each frame; the packing pass draws into the video texture through its framebuffer.
+- **World**: the level's vertex and index buffers as stored, one vertex array per (layout, vertex buffer, index buffer); the per-draw records texture on its unit for the level's run; the frame constants one uniform buffer written once a frame; light maps and environment (a surface's first group) and base and detail (its second) bound only when they change; merged calls name their draw by the existing per-vertex draw id; a shared draw's record comes from the first-instance uniform, set only when it changes (WebGL 2 has no base instance). Index ranges stay rebased at upload, 16-bit. Objects' models are one more vertex buffer with its vertex array; their placements live in the records texture as now.
+- **Sky and clouds**: their buffers and vertex arrays made with the renderer; the cube maps on their units.
+- **Details**: the models' buffer and the instance buffer; a draw's instance range is the instance attributes' offset, so each draw sets those attributes again (about 21 draws a frame outdoors), the one place attributes change per draw.
+- **Particles and glows**: one dynamic vertex buffer and vertex array, written once a frame; each queue's batches draw ranges of it.
+- **Lights**: the light passes' constants in one uniform buffer, each pass binding its range (`bindBufferRange`).
+- **Presentation and supersample**: the target's colour, distortion and depth textures in two framebuffers (the scene's, and the distortion's with the scene's depth attached), made by `prepare_presentation`; the presentation quad draws into the frame.
+- **Distortion**: the distortion framebuffer, depth-tested against the scene's depth, as now.
+- **Ramp and fit**: passes from the offscreen frame into the frame, as now.
+- **The frame and its destination**: every pass draws into the renderer's own frame texture in the coordinate space wgpu's GL backend uses (positions' y flipped in the vertex programs, so a texture's first row is the picture's top), and the frame is blitted, flipped, into the `Destination` (`blitFramebuffer`, as wgpu presents now). An XR destination later gets the same blit per eye, or the last pass drawn into it directly.
+- **Readback for tests**: `readPixels` from the frame's framebuffer, synchronous (tests only).
+- **GPU timing**: `EXT_disjoint_timer_query_webgl2` where the browser has it; elsewhere none, as with wgpu's GL backend now.
+
+Uploads are copied by WebGL at the call (documented, WebGL 2 specification), so nothing is held in the wasm heap waiting for the GPU: the staging rules only wgpu needed (`texture_bytes_written`'s 2 MiB rule, `flush_uploads`) go; the pieces of the level's upload and the waits for the GPU between them stay, for the GPU process's memory on the phone (#443). Context loss stays the platform's (`webglcontextlost`); `debug_lose_device` uses `WEBGL_lose_context`.
+
+### Shaders (#468)
+
+The WGSL stays the source. A build script translates each program to GLSL ES 3.00 with naga as wgpu's GL backend does (its options read in wgpu-hal 30's source: `ADJUST_COORDINATE_SPACE` and `FORCE_POINT_SIZE`, WebGL 3.00, unchecked bounds, overrides processed), and writes each program's sources with its texture-sampler pairs and uniform blocks by name; the GL layer binds them by name at link. So the GL renderer runs the very GLSL wgpu runs, which the pixel parity rests on, and no naga ships. naga at run time, translating WGSL in the browser, would cost about 1.21 MB of wasm (385 KB gzipped): measured with a release build (`opt-level = "s"`, LTO) of a wasm library that only parses WGSL and writes GLSL ES 3.00. Hand-written GLSL is not taken: it would risk the parity and buy nothing measured; a program can move to it later if it needs what naga doesn't give.
+
+### Tests: drawing in the browser
+
+Drawing tests run in headless Chrome only; non-drawing checks stay native cargo tests, each test file split so its loading, simulation and draw-list checks run without a GPU.
+
+- **Render self-test** (#470): the render crate's scenes and their checks (now `tests/render.rs`, `tests/world.rs`) move into a module compiled into test builds and run in the engine worker by a `render_selftest` op, as `script_selftest`; the `render` suite runs it (#471).
+- **Suites by render area**, so a change runs only its own, cheapest first: `render` (synthetic scenes and the small `gamedata.dbb`; seconds), `render-screens` (the title menu, save, load, inventory and options screens, #473), `render-level` (a New Game's start view, objects, lights, the torch, zones, artefacts, grass, presentation, particles, #472), `draw-calls` (#474). They drive the game through the engine test interface and read frames back with `debug_capture`.
+- **A kept import**: game-data render suites use a Chrome profile kept under `target/` between runs, so the game is imported once (a suite imports only what the profile's `import.json` lacks); the `import` and `menu` suites keep fresh profiles, as they test the import.
+- **Frame dumps**: a suite posts a capture as PNG (encoded on the page with an `OffscreenCanvas`) to the dev server, which writes it to `<VOLYA_DUMP_DIR>/<suite>/<name>.png` when the variable is set: the `VOLYA_DUMP_*` variables' equivalent, never committed.
+- **Reference frames**: a view whose exact pixels matter is compared with a frame the same build drew in the same run, or with the parity test's other renderer; references from game data are never committed.
+
+### The parity test (#478)
+
+`cargo xtask parity` builds the test app twice, with the wgpu renderer and with the GL one (the render crate's backend feature), serves both, and runs the `parity` suite on each in one headless Chrome, one after the other. Each run draws the same named views at 1024 × 768 and posts them: the render self-test's scenes (UI quads, a video frame, the ramp, the scaled fit, particles, lights, glows, distortion) and the game's (the title menu, a New Game's start view, the draw-call views with objects, lights, a campfire's particles, glows, grass and a distortion effect, the presentation at `r__supersample` 1 and 2), each also with the trees drawn unblended (`Renderer::set_unblended_trees`). xtask compares each view pixel by pixel and reports the pixels that differ and by how much; the switch waits until every view is identical, the blended trees' noise aside.
+
+### Migration
+
+The GL renderer is built beside wgpu's in the render crate (`src/webgl/` beside `src/wgpu_backend/`, chosen by the `gl` feature; the GL layer, `glsl` and `stats` shared), behind the same engine-facing API: the engine and the platform use only the crate's own types (`Renderer`, `Texture`, `DrawList`, `World`, …); `gpu.rs` keeps a few backend branches (context, destination, fences) until the switch. Each step lands with the app working (merged into main, `check`, its suite):
+
+1. The shader build script (#468) and the GL layer (#469).
+2. Browser render checks (#470), then the drawing tests moved: the render crate's (#471), the level's (#472), the screens' (#473), draw calls (#474); on the wgpu renderer first, so the moved tests and their views are proven before the renderer changes.
+3. The GL renderer: menus, video, ramp, fit, readback and the destination (#475); the static world and objects (#476); the rest of the world frame (#477).
+4. The parity test (#478), growing with each part.
+5. The switch (#479): GL by default once every view matches; GL calls, `render.submit` and frame times before and after in headless Chrome and the iOS Simulator, and the wasm size; the `menu` suite; deployed.
+6. wgpu and naga leave the runtime (#480), with what only they used.

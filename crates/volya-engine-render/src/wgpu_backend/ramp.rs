@@ -50,7 +50,7 @@ impl RampPass {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("ramp"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("ramp.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../ramp.wgsl").into()),
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("ramp"),

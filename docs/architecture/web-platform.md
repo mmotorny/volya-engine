@@ -1,6 +1,6 @@
 # Web platform
 
-`platforms/web`: the crate `volya-engine-web` (wasm `cdylib`, the only package using `web-sys`) and `static/` (HTML, JS, CSS, icons).
+`platforms/web`: the crate `volya-engine-web` (wasm `cdylib`, the only package using `web-sys` but the render crate's GL layer) and `static/` (HTML, JS, CSS, icons).
 
 ## Threads and workers
 

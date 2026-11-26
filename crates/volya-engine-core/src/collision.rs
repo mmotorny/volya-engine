@@ -45,6 +45,7 @@ struct Spare {
     packed: Vec<u64>,
     wide: Vec<[u32; 3]>,
     material_of: Vec<u8>,
+    sector_of: Vec<u16>,
     nodes: Vec<bvh::Node>,
 }
 
@@ -301,8 +302,9 @@ fn offer(
 }
 
 /// A level's static collision mesh with mapped materials and its index.
-/// Collision keeps each triangle's vertex indices and material index only:
-/// the sector and bits 14 and 15 are not used by it (section 2.2, 3.3).
+/// Collision keeps each triangle's vertex indices and material index, and
+/// its sector for the camera's sector (`level.md` 9.1); bits 14 and 15 are
+/// not used (section 2.2, 3.3).
 #[derive(Clone, Debug)]
 pub struct CollisionWorld {
     pub bbox_min: Vec3,
@@ -311,6 +313,8 @@ pub struct CollisionWorld {
     triangles: Triangles,
     /// Each triangle's material index (section 3.3).
     material_of: Vec<u8>,
+    /// Each triangle's sector (bits 16–31 of its attributes).
+    sector_of: Vec<u16>,
     materials: Vec<GameMaterial>,
     grid: Grid,
     tree: Bvh,
@@ -329,6 +333,7 @@ impl Drop for CollisionWorld {
                 packed: std::mem::take(&mut self.triangles.packed),
                 wide: std::mem::take(&mut self.triangles.wide),
                 material_of: std::mem::take(&mut self.material_of),
+                sector_of: std::mem::take(&mut self.sector_of),
                 nodes,
             }
         });
@@ -349,8 +354,10 @@ impl CollisionWorld {
         let count = header.triangle_count as usize;
         let mut triangles = Triangles::with_capacity(count, header.vertex_count as usize);
         let mut material_of = spare(|s| &mut s.material_of, count);
+        let mut sector_of = spare(|s| &mut s.sector_of, count);
         reader.triangles(|_, t| {
             material_of.push(material_byte(map.map(t.attributes)?)?);
+            sector_of.push(t.sector() as u16);
             triangles.push(t.vertices);
             Ok(())
         })?;
@@ -360,6 +367,7 @@ impl CollisionWorld {
             vertices,
             triangles,
             material_of,
+            sector_of,
             materials,
         )
     }
@@ -372,6 +380,7 @@ impl CollisionWorld {
             .iter()
             .map(|t| material_byte(map.map(t.attributes)?))
             .collect::<io::Result<_>>()?;
+        let sector_of = cform.triangles.iter().map(|t| t.sector() as u16).collect();
         let mut triangles = Triangles::with_capacity(cform.triangles.len(), cform.vertices.len());
         for t in &cform.triangles {
             triangles.push(t.vertices);
@@ -382,6 +391,7 @@ impl CollisionWorld {
             cform.vertices,
             triangles,
             material_of,
+            sector_of,
             materials,
         )
     }
@@ -392,6 +402,7 @@ impl CollisionWorld {
         vertices: Vec<Vec3>,
         triangles: Triangles,
         material_of: Vec<u8>,
+        sector_of: Vec<u16>,
         materials: Vec<GameMaterial>,
     ) -> io::Result<Self> {
         // Index over the vertices' extent: the stored box equals it in the
@@ -414,6 +425,7 @@ impl CollisionWorld {
             vertices,
             triangles,
             material_of,
+            sector_of,
             materials,
             grid,
             tree,
@@ -488,11 +500,18 @@ impl CollisionWorld {
         !self.material(i).has(PASS_THROUGH)
     }
 
-    /// Bytes held (vertices, triangles, materials, index), for reporting.
+    /// Triangle `i`'s sector.
+    pub fn sector(&self, i: u32) -> u16 {
+        self.sector_of[i as usize]
+    }
+
+    /// Bytes held (vertices, triangles, materials, sectors, index), for
+    /// reporting.
     pub fn memory_bytes(&self) -> usize {
         self.vertices.len() * 12
             + self.triangles.bytes()
             + self.material_of.len()
+            + self.sector_of.len() * 2
             + self.tree.memory_bytes()
     }
 
@@ -882,7 +901,7 @@ mod tests {
         let triangles = |w: &CollisionWorld| [w.triangle(0), w.triangle(1)];
         assert_eq!(triangles(&w), [[0, 1, 2], [0, 2, 3]]);
         assert_eq!((w.material_index(0), w.material(1).id), (1, 1));
-        assert_eq!(w.memory_bytes() - w.tree.memory_bytes(), 4 * 12 + 2 * 9);
+        assert_eq!(w.memory_bytes() - w.tree.memory_bytes(), 4 * 12 + 2 * 11);
         // Read again once dropped: the same arrays, the same world (#357).
         let (packed, nodes) = (w.triangles.packed.as_ptr(), w.tree.nodes().as_ptr());
         drop(w);

@@ -52,6 +52,7 @@ web-sys = { workspace = true, features = [
   "OffscreenCanvas",
   "Performance",
   "StorageManager",
+  "WebGl2RenderingContext",
   "WorkerGlobalScope",
   "WorkerNavigator",
 ] }

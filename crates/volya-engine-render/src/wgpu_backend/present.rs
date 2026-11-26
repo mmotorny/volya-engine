@@ -310,7 +310,7 @@ impl PostProcess {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("postprocess"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("postprocess.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../postprocess.wgsl").into()),
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("postprocess"),

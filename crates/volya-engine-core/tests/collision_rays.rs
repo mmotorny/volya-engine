@@ -612,14 +612,15 @@ fn rays_match_the_grid_on_every_level() {
             let grid = Grid::new(&world);
             let [hits, off, differed] = equivalent(&world, &grid, i as u64, count);
             assert!(hits > count / 10, "{name}: {hits} of {count} hit");
-            // Triangles take 8 bytes where the vertex indices fit 21 bits.
+            // Triangles take 8 bytes where the vertex indices fit 21 bits,
+            // with a material byte and two sector bytes each.
             let n = world.triangle_count();
             let per = if world.vertices().len() <= 1 << 21 {
                 8
             } else {
                 12
             };
-            let tree = world.memory_bytes() - world.vertices().len() * 12 - n * (per + 1);
+            let tree = world.memory_bytes() - world.vertices().len() * 12 - n * (per + 3);
             eprintln!(
                 "{name}: {count} rays, {hits} hitting, {off} meeting a triangle off the \
                  segment under the grid, {differed} of those differing; index {:.1} MB, \

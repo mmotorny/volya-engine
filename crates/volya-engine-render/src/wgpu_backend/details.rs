@@ -169,7 +169,7 @@ impl DetailPipelines {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("details"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("details.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../details.wgsl").into()),
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("details"),
