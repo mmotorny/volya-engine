@@ -141,6 +141,10 @@ pub fn main(args: &[&str]) -> Result {
          rm -rf \"$docs\" && ln -s /work/documents \"$docs\"\n\
          wine '{reg}' import 'Z:\\work\\install.reg'\n\
          wineserver -w\n\
+         for view in 32 64; do\n\
+         echo \"Install key, $view-bit view:\"\n\
+         wine reg query '{INSTALL_KEY}' /reg:$view || true\n\
+         done\n\
          cd {INSTALL_IN_CONTAINER}/{WORKING_DIR}\n\
          xvfb-run -n {DISPLAY} -f {XAUTHORITY} -s '-screen 0 {SCREEN} -fbdir /tmp/fb' wine \"$@\"\n\
          echo \"exit code $?\"",
@@ -227,6 +231,12 @@ $game_saves$ =    true | false| $app_data_root$| savedgames\\
 $logs$ =          true | false| $app_data_root$| logs\\
 $screenshots$ =   true | false| $app_data_root$| screenshots\\
 ";
+
+/// The install script's key (gog-install-additions.md section 4.1); each
+/// run's `wine.log` lists it in both registry views, so where the values
+/// landed is on record (measured on box64: the 32-bit view only, as
+/// `HKLM\SOFTWARE\Wow6432Node\…` to 64-bit programs).
+const INSTALL_KEY: &str = "HKLM\\SOFTWARE\\GSC Game World\\STALKER-SHOC";
 
 /// The registry entries of the install, as a file for `reg import`:
 /// - the install script's five values (gog-install-additions.md section
