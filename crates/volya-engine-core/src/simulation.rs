@@ -749,7 +749,8 @@ impl Simulation {
                     }
                 }
                 let o = self.objects.get_mut(&id).expect("visited object");
-                let predicates = o.candidate().predicates_in(&state, online, node)?;
+                let predicates = (o.candidate().predicates_in(&state, online, node))
+                    .map_err(|e| invalid(format!("{}: {e}", o.record.header.name)))?;
                 let now_online = switched(online, predicates, d, &self.config.distances);
                 if !online && now_online {
                     self.switch_online(id, changes);

@@ -78,13 +78,44 @@ pub struct StartState {
     pub hour: u32,
 }
 
-/// What the switch predicates read from a record.
+/// Whose scripted replacement of the predicates a record takes (section
+/// 2.5), by its class id and section.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scripted {
+    /// `AI_STL_S`.
+    Stalker,
+    /// `SM_*`.
+    Monster,
+    /// The electra artefacts (`SCRPTART` of [`ELECTRA_ARTEFACTS`]).
+    Electra,
+    /// `SCRPTCAR`.
+    Car,
+    /// The engine's predicates.
+    None,
+}
+
+impl Scripted {
+    pub fn of(class_id: &str, section: &str) -> Self {
+        if class_id == "AI_STL_S" {
+            Self::Stalker
+        } else if class_id.starts_with("SM_") {
+            Self::Monster
+        } else if class_id == "SCRPTART" && ELECTRA_ARTEFACTS.contains(&section) {
+            Self::Electra
+        } else if class_id == "SCRPTCAR" {
+            Self::Car
+        } else {
+            Self::None
+        }
+    }
+}
+
+/// What the switch predicates read from a record: no copy of its names, so
+/// the registry holds each once.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Candidate {
     pub kind: Kind,
-    pub class_id: String,
-    pub section: String,
-    pub name: String,
+    pub scripted: Scripted,
     pub position: [f32; 3],
     pub has_parent: bool,
     /// The Object block's state flags.
@@ -106,9 +137,7 @@ impl Candidate {
         let o = &record.object;
         Self {
             kind: record.kind(),
-            class_id: record.class_id.as_str().to_owned(),
-            section: record.header.section.clone(),
-            name: record.header.name.clone(),
+            scripted: Scripted::of(record.class_id.as_str(), &record.header.section),
             position: record.header.position,
             has_parent: record.header.parent_id != 0xFFFF,
             state_flags: o.object_block().state_flags,
@@ -128,14 +157,12 @@ impl Candidate {
 
     /// The renderer match `m` of section 2.3 with the first renderer in
     /// use: true except for a hanging lamp whose light flags lack bit 0x04.
-    /// A lamp with neither renderer bit is the game's fatal error.
+    /// A lamp with neither renderer bit is the game's fatal error (the
+    /// owner names the object).
     pub fn renderer_match(&self) -> io::Result<bool> {
         match self.lamp_flags {
             Some(flags) if flags & (LAMP_FIRST_RENDERER | LAMP_SECOND_RENDERER) == 0 => {
-                Err(invalid(format!(
-                    "{}: no renderer type set for hanging-lamp",
-                    self.name
-                )))
+                Err(invalid("no renderer type set for hanging-lamp"))
             }
             Some(flags) => Ok(flags & LAMP_FIRST_RENDERER != 0),
             None => Ok(true),
@@ -145,7 +172,7 @@ impl Candidate {
     /// One of the electra artefacts, with a scripted *on* of their own
     /// (section 2.5).
     pub fn is_electra(&self) -> bool {
-        self.class_id == "SCRPTART" && ELECTRA_ARTEFACTS.contains(&self.section.as_str())
+        self.scripted == Scripted::Electra
     }
 
     /// The engine's "can switch online" (section 2.3).
@@ -191,10 +218,9 @@ impl Candidate {
         let m = self.renderer_match()?;
         let on = self.engine_on(m);
         let off = self.engine_off(m);
-        let class = self.class_id.as_str();
         let job = self.job_online;
         let off_scripted = job.map_or(off, |j| !j);
-        Ok(if class == "AI_STL_S" {
+        Ok(if self.scripted == Scripted::Stalker {
             // The job value if set; else the engine's without a spawner;
             // else the condition (false), which while offline also needs
             // the engine's. A stalker's `dont_spawn_online` field is a
@@ -206,7 +232,7 @@ impl Candidate {
                 None => false,
             };
             (on, off_scripted)
-        } else if class.starts_with("SM_") {
+        } else if self.scripted == Scripted::Monster {
             // As the stalker's, except that an online monster with a
             // spawner whose condition fails keeps the engine's `on` (no
             // record sets `check_distance`).
@@ -227,7 +253,7 @@ impl Candidate {
                 night && d >= ELECTRA_DISTANCE
             };
             (on, off)
-        } else if class == "SCRPTCAR" {
+        } else if self.scripted == Scripted::Car {
             (on && !self.spawner, off)
         } else {
             (on, off)
@@ -300,9 +326,7 @@ mod tests {
     fn candidate(class: &str, flags: u32, position: [f32; 3]) -> Candidate {
         Candidate {
             kind: Kind::from_class_id(class).unwrap(),
-            class_id: class.into(),
-            section: "s".into(),
-            name: "x".into(),
+            scripted: Scripted::of(class, "s"),
             position,
             has_parent: false,
             state_flags: flags,
@@ -418,7 +442,7 @@ mod tests {
         assert!(!online(&job(false)));
         // The electra artefacts: not at 05:30.
         let electra = Candidate {
-            section: "af_electra_flash".into(),
+            scripted: Scripted::of("SCRPTART", "af_electra_flash"),
             ..candidate("SCRPTART", 0x03, [60.0, 0.0, 0.0])
         };
         assert!(!online(&electra));
