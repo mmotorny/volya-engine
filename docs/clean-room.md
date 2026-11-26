@@ -67,6 +67,7 @@ Every dirty agent reads this section with the rest of this file; it is binding a
 **Both roles**
 - Work only in the dirty workspace; never write to the repository (except the reviewer's copy of an approved spec) or to GitHub. Reading issues with `gh` is fine.
 - Never install tools or packages (pip, brew, winetricks, downloads); use what is set up. If something is missing, report `BLOCKED` with what is needed.
+- Run the shipped game only through `cargo xtask wine` / `cargo xtask original` (headless, in the container), never with the Mac's own Wine: nothing may appear on the user's screen.
 - Don't run cargo builds, browser suites or the iOS Simulator (the machine's memory is shared, AGENTS.md); `cargo xtask spec-lint` is the exception.
 - Model memory is not a source; every fact comes from the user's game data or the shipped binaries, through a check script in the dirty workspace.
 - Report only the verdict line your role defines, never findings.
