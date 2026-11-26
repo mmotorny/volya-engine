@@ -69,7 +69,7 @@ pub struct InventoryConfig {
     pub persistent: [bool; SLOT_COUNT],
 }
 
-fn required<'a>(section: &'a Section, key: &str) -> io::Result<&'a str> {
+fn required<'a>(section: Section<'a>, key: &str) -> io::Result<&'a str> {
     section
         .get(key)
         .flatten()

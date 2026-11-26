@@ -61,7 +61,7 @@ impl ActorBody {
     /// Reads `camera_height_factor` and `ph_box0_size` from the actor's
     /// section (`actor`). A missing key is an error (the spec does not say
     /// what the game does then).
-    pub fn from_section(section: &Section) -> io::Result<Self> {
+    pub fn from_section(section: Section<'_>) -> io::Result<Self> {
         let get = |key: &str| {
             section.get(key).flatten().ok_or_else(|| {
                 io::Error::new(

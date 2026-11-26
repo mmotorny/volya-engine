@@ -15,7 +15,6 @@ pub mod value;
 
 use std::collections::BTreeMap;
 use std::io;
-use std::sync::Arc;
 
 use crate::cp1251;
 
@@ -229,94 +228,194 @@ fn normalize_value(raw: &[u8]) -> Vec<u8> {
     value
 }
 
-/// An entry of a section.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Entry {
-    key: String,
-    value: Option<String>,
+/// A string of [`Config::text`]: its start and length in bytes.
+#[derive(Clone, Copy, Debug)]
+struct Span {
+    start: u32,
+    len: u32,
 }
 
-impl Entry {
+impl Span {
+    /// "No value".
+    const NONE: Self = Self {
+        start: u32::MAX,
+        len: 0,
+    };
+}
+
+#[derive(Clone, Copy, Debug)]
+struct EntryRecord {
+    key: Span,
+    /// [`Span::NONE`] for "no value".
+    value: Span,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SectionRecord {
+    name: Span,
+    /// The section's entries: `len` of [`Config::slots`] from `first`.
+    first: u32,
+    len: u32,
+}
+
+/// An entry of a section.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Entry<'a> {
+    key: &'a str,
+    value: Option<&'a str>,
+}
+
+impl<'a> Entry<'a> {
     /// The key, case preserved.
-    pub fn key(&self) -> &str {
-        &self.key
+    pub fn key(self) -> &'a str {
+        self.key
     }
 
     /// The normalized value (section 3), or `None` for "no value".
-    pub fn value(&self) -> Option<&str> {
-        self.value.as_deref()
+    pub fn value(self) -> Option<&'a str> {
+        self.value
     }
 }
 
-/// A named set of entries, ordered by key bytes (section 6). Entries are
-/// shared with the sections that inherit them, so a parent's entries are
-/// stored once however many sections copy them (#357).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Section {
-    name: String,
-    entries: BTreeMap<Arc<[u8]>, Arc<Entry>>,
+/// Compares `stored` (decoded) with `query` (Windows-1251 bytes) by the
+/// bytes `stored` was decoded from.
+fn cmp_bytes(stored: &str, query: &[u8]) -> std::cmp::Ordering {
+    if stored.is_ascii() {
+        return stored.as_bytes().cmp(query);
+    }
+    let bytes = stored
+        .chars()
+        .map(|c| cp1251::encode_char(c).expect("decoded from bytes"));
+    bytes.cmp(query.iter().copied())
 }
 
-impl Section {
+/// A named set of entries, ordered by key bytes (section 6): a view of its
+/// [`Config`].
+#[derive(Clone, Copy)]
+pub struct Section<'a> {
+    config: &'a Config,
+    record: SectionRecord,
+}
+
+impl<'a> Section<'a> {
     /// The lowercased name.
-    pub fn name(&self) -> &str {
-        &self.name
+    pub fn name(self) -> &'a str {
+        self.config.text(self.record.name)
     }
 
     /// The number of distinct keys.
-    pub fn len(&self) -> usize {
-        self.entries.len()
+    pub fn len(self) -> usize {
+        self.record.len as usize
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+    pub fn is_empty(self) -> bool {
+        self.record.len == 0
+    }
+
+    fn slots(self) -> &'a [u32] {
+        let first = self.record.first as usize;
+        &self.config.slots[first..first + self.record.len as usize]
     }
 
     /// The entries in key byte order.
-    pub fn entries(&self) -> impl ExactSizeIterator<Item = &Entry> {
-        self.entries.values().map(|e| &**e)
+    pub fn entries(self) -> impl ExactSizeIterator<Item = Entry<'a>> + Clone {
+        let config = self.config;
+        self.slots().iter().map(move |&i| config.entry(i))
     }
 
     /// The entry with exactly this key (keys are case-sensitive).
-    pub fn entry(&self, key: &str) -> Option<&Entry> {
-        self.entries.get(&*cp1251::encode(key)?).map(|e| &**e)
+    pub fn entry(self, key: &str) -> Option<Entry<'a>> {
+        let key = cp1251::encode(key)?;
+        let slots = self.slots();
+        let i = slots
+            .binary_search_by(|&i| cmp_bytes(self.config.entry(i).key, &key))
+            .ok()?;
+        Some(self.config.entry(slots[i]))
     }
 
-    pub fn contains(&self, key: &str) -> bool {
+    pub fn contains(self, key: &str) -> bool {
         self.entry(key).is_some()
     }
 
     /// The value of `key`: `None` if the key is missing, `Some(None)` if it
     /// has no value.
-    pub fn get(&self, key: &str) -> Option<Option<&str>> {
+    pub fn get(self, key: &str) -> Option<Option<&'a str>> {
         self.entry(key).map(Entry::value)
     }
 
     /// Reads `key` as the original's reader does: a missing key is fatal
     /// (section 11); a key without a value reads as empty.
-    pub fn read(&self, key: &str) -> io::Result<&str> {
+    pub fn read(self, key: &str) -> io::Result<&'a str> {
         match self.get(key) {
             Some(value) => Ok(value.unwrap_or("")),
-            None => Err(invalid(format!("[{}] has no key {key}", self.name))),
+            None => Err(invalid(format!("[{}] has no key {key}", self.name()))),
         }
-    }
-
-    fn insert(&mut self, key: &[u8], value: Option<&[u8]>) {
-        let entry = Entry {
-            key: cp1251::decode(key),
-            value: value.map(cp1251::decode),
-        };
-        self.entries.insert(key.into(), Arc::new(entry));
     }
 }
 
+impl std::fmt::Debug for Section<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Section")
+            .field("name", &self.name())
+            .field("entries", &self.entries().collect::<Vec<_>>())
+            .finish()
+    }
+}
+
+impl PartialEq for Section<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.name() == other.name() && self.entries().eq(other.entries())
+    }
+}
+
+impl Eq for Section<'_> {}
+
 /// A loaded configuration: sections ordered by name bytes (section 6).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+///
+/// A region (docs/architecture/memory.md): every name, key and value in one
+/// text buffer, the sections and entries in tables of ranges into it. An
+/// inherited entry is stored once, however many sections copy it (#357).
+#[derive(Clone, Default)]
 pub struct Config {
-    sections: BTreeMap<Vec<u8>, Section>,
+    /// Every section name, key and value, decoded.
+    text: String,
+    /// In name byte order.
+    sections: Vec<SectionRecord>,
+    /// Each section's entries, a run per section in key byte order: indices
+    /// into `entries`.
+    slots: Vec<u32>,
+    entries: Vec<EntryRecord>,
 }
 
 impl Config {
+    fn text(&self, span: Span) -> &str {
+        &self.text[span.start as usize..(span.start + span.len) as usize]
+    }
+
+    fn entry(&self, index: u32) -> Entry<'_> {
+        let record = self.entries[index as usize];
+        Entry {
+            key: self.text(record.key),
+            value: (record.value.start != Span::NONE.start).then(|| self.text(record.value)),
+        }
+    }
+
+    fn view(&self, record: SectionRecord) -> Section<'_> {
+        Section {
+            config: self,
+            record,
+        }
+    }
+
+    /// The section named by exactly these bytes.
+    fn find(&self, name: &[u8]) -> Option<Section<'_>> {
+        let i = self
+            .sections
+            .binary_search_by(|s| cmp_bytes(self.text(s.name), name))
+            .ok()?;
+        Some(self.view(self.sections[i]))
+    }
+
     /// The number of sections.
     pub fn len(&self) -> usize {
         self.sections.len()
@@ -327,21 +426,20 @@ impl Config {
     }
 
     /// The sections in name byte order.
-    pub fn sections(&self) -> impl ExactSizeIterator<Item = &Section> {
-        self.sections.values()
+    pub fn sections(&self) -> impl ExactSizeIterator<Item = Section<'_>> + Clone {
+        self.sections.iter().map(|&s| self.view(s))
     }
 
     /// The section named `name`, compared case-insensitively (section 6).
-    pub fn section(&self, name: &str) -> Option<&Section> {
-        self.sections
-            .get(&cp1251::encode(name)?.to_ascii_lowercase())
+    pub fn section(&self, name: &str) -> Option<Section<'_>> {
+        self.find(&cp1251::encode(name)?.to_ascii_lowercase())
     }
 
     /// Whether a section named exactly `name` exists. Section 6: the
     /// existence test compares the name as given, without lowercasing, so a
     /// name with uppercase letters is never found (unlike [`Self::section`]).
     pub fn contains(&self, name: &str) -> bool {
-        cp1251::encode(name).is_some_and(|name| self.sections.contains_key(&name))
+        cp1251::encode(name).is_some_and(|name| self.find(&name).is_some())
     }
 
     /// The value of `key` in section `name`: `None` if either is missing,
@@ -360,16 +458,58 @@ impl Config {
     }
 }
 
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.sections()).finish()
+    }
+}
+
+impl PartialEq for Config {
+    fn eq(&self, other: &Self) -> bool {
+        self.sections().eq(other.sections())
+    }
+}
+
+impl Eq for Config {}
+
 /// Builds a [`Config`] from a root file and, through the caller, its includes
 /// (sections 2–5).
 #[derive(Debug, Default)]
 pub struct Builder {
     config: Config,
+    /// Each registered section's index in `config.sections` (in
+    /// registration order until [`Builder::finish`]), by name bytes.
+    names: BTreeMap<Vec<u8>, u32>,
+}
+
+/// A section being read: its name and its entries by key bytes.
+struct Open {
+    name: Span,
+    entries: BTreeMap<Vec<u8>, u32>,
+}
+
+fn index(i: usize) -> u32 {
+    u32::try_from(i).expect("the configuration fits u32 indices")
 }
 
 impl Builder {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Appends `bytes` decoded to the text.
+    fn push_text(&mut self, bytes: &[u8]) -> Span {
+        let text = &mut self.config.text;
+        let start = index(text.len());
+        if bytes.is_ascii() {
+            text.push_str(std::str::from_utf8(bytes).expect("ASCII"));
+        } else {
+            text.extend(bytes.iter().map(|&b| cp1251::decode_byte(b)));
+        }
+        Span {
+            start,
+            len: index(text.len()) - start,
+        }
     }
 
     /// Processes one file's `text` at the current point of the load order.
@@ -383,7 +523,7 @@ impl Builder {
         text: &[u8],
         include: &mut dyn FnMut(&[u8], &mut Builder) -> io::Result<()>,
     ) -> io::Result<()> {
-        let mut open: Option<Section> = None;
+        let mut open: Option<Open> = None;
         for line in lines(text) {
             let NumberedLine { number, line } = line?;
             match line {
@@ -392,28 +532,36 @@ impl Builder {
                     if let Some(section) = open.take() {
                         self.register(section)?;
                     }
-                    let mut section = Section {
-                        name: cp1251::decode(&name),
-                        entries: BTreeMap::new(),
-                    };
+                    let mut entries = BTreeMap::new();
                     for parent in &parents {
-                        let Some(found) = self.config.sections.get(&parent.to_ascii_lowercase())
-                        else {
+                        let Some(&found) = self.names.get(&parent.to_ascii_lowercase()) else {
                             return Err(invalid(format!(
                                 "line {number}: section [{}]: missing parent [{}]",
-                                section.name,
+                                cp1251::decode(&name),
                                 cp1251::decode(parent)
                             )));
                         };
-                        section
-                            .entries
-                            .extend(found.entries.iter().map(|(k, e)| (k.clone(), e.clone())));
+                        let found = self.config.view(self.config.sections[found as usize]);
+                        for &slot in found.slots() {
+                            let key = self.config.entries[slot as usize].key;
+                            let key = cp1251::encode(self.config.text(key)).expect("decoded");
+                            entries.insert(key, slot);
+                        }
                     }
-                    open = Some(section);
+                    let name = self.push_text(&name);
+                    open = Some(Open { name, entries });
                 }
                 Line::Entry { key, value } => {
-                    if let Some(section) = &mut open {
-                        section.insert(&key, value.as_deref());
+                    if open.is_some() {
+                        let record = EntryRecord {
+                            key: self.push_text(&key),
+                            value: value.as_deref().map_or(Span::NONE, |v| self.push_text(v)),
+                        };
+                        let slot = index(self.config.entries.len());
+                        self.config.entries.push(record);
+                        if let Some(section) = &mut open {
+                            section.entries.insert(key, slot);
+                        }
                     }
                 }
             }
@@ -424,17 +572,36 @@ impl Builder {
         Ok(())
     }
 
-    fn register(&mut self, section: Section) -> io::Result<()> {
-        let key = cp1251::encode(&section.name).expect("decoded from bytes");
-        if self.config.sections.contains_key(&key) {
-            return Err(invalid(format!("duplicate section [{}]", section.name)));
+    fn register(&mut self, section: Open) -> io::Result<()> {
+        let name = self.config.text(section.name);
+        let key = cp1251::encode(name).expect("decoded from bytes");
+        if self.names.contains_key(&key) {
+            return Err(invalid(format!("duplicate section [{name}]")));
         }
-        self.config.sections.insert(key, section);
+        let first = index(self.config.slots.len());
+        self.config.slots.extend(section.entries.into_values());
+        let record = SectionRecord {
+            name: section.name,
+            first,
+            len: index(self.config.slots.len()) - first,
+        };
+        self.names.insert(key, index(self.config.sections.len()));
+        self.config.sections.push(record);
         Ok(())
     }
 
     pub fn finish(self) -> Config {
-        self.config
+        let Self { mut config, names } = self;
+        // The sections in name byte order, each table sized to what it holds.
+        let sorted: Vec<SectionRecord> = names
+            .into_values()
+            .map(|i| config.sections[i as usize])
+            .collect();
+        config.sections = sorted;
+        config.text.shrink_to_fit();
+        config.slots.shrink_to_fit();
+        config.entries.shrink_to_fit();
+        config
     }
 }
 
