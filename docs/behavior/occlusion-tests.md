@@ -208,8 +208,9 @@ With *N* = 0 the item is tested the first time it is reached.
 
 These are all uses of the grid by the renderer, besides the three tests offered to the rest of the program
 (2.5) [B10]. For a static visual the frustum test comes first and the occlusion test next; a node hidden by either
-is not descended [B6]. A light whose record is not enabled is skipped before its test; a hidden light is not listed
-(DL 4) [B5].
+is not descended [B6]. A light whose record has no sector is skipped before its test (the check of
+`docs/behavior/object-visibility.md` 5, made again; no light reaches it without one); whether the record is
+enabled is not tested at this point; a hidden light is not listed (DL 4) [B5].
 
 **An object's box** [B6]: with the object's transform rows **i**, **j**, **k** (axes) and **c** (translation) and its
 visual's bounding box (**a**, **b**), each component of the transformed corner **p** = ((**k** *a*_z + **j** *a*_y) +
@@ -304,3 +305,9 @@ OG example 3). Frame 100: tested, visible; 7584 mod 15 = 9, *N* = 119. Frames 10
 - Analysis: static analysis of the shipped binaries (headless decompilation and disassembly, read-only; constants and
   section layout read from the binaries); an interpretation of the shipped test routines' instructions on synthetic
   inputs, compared with a single-precision model of the described behaviour; arithmetic.
+
+## Gaps found in review
+
+- Sections 7 and 10 keep unestablished whether every entry of the spatial index lies within its node's doubled box;
+  `docs/behavior/object-visibility.md` 2.4 establishes it (every entry except those kept at the root), and these
+  sections do not reference it.
