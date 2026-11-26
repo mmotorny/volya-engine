@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+
+load("//build:rust.bzl", "volya_integration_tests", "volya_library")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["Cargo.toml"])
+
+volya_library(
+    name = "volya-engine-core",
+    dev_deps = ["//crates/volya-engine-installer"],
+    deps = ["//crates/volya-engine-formats"],
+)
+
+volya_integration_tests(
+    crate = ":volya-engine-core",
+    compile_data = ["//crates/volya-engine-formats:tests/support/gog_archives.rs"],
+    deps = [
+        "//crates/volya-engine-formats",
+        "//crates/volya-engine-installer",
+    ],
+)

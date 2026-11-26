@@ -1,0 +1,34 @@
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+
+load("//build:rust.bzl", "volya_integration_tests", "volya_library")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["Cargo.toml"])
+
+# The dev profile's opt-level 1 (Cargo.toml).
+OPT = ["-Copt-level=1"]
+
+DEPS = [
+    "//crates/volya-engine-core",
+    "//crates/volya-engine-formats",
+    "//crates/volya-engine-render",
+    "//crates/volya-engine-script",
+]
+
+volya_library(
+    name = "volya-engine",
+    # The fidelity suite's views (src/selftest/fidelity.rs).
+    compile_data = ["//tests/fidelity:views.rs"],
+    dev_deps = ["//crates/volya-engine-installer"],
+    rustc_flags = OPT,
+    deps = DEPS,
+)
+
+volya_integration_tests(
+    crate = ":volya-engine",
+    compile_data = ["//crates/volya-engine-formats:tests/support/gog_archives.rs"],
+    rustc_flags = OPT,
+    deps = DEPS + ["//crates/volya-engine-installer"],
+)

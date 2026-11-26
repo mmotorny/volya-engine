@@ -499,6 +499,9 @@ const SPDX_PATTERNS: &[&str] = &[
     "*.pbxproj",
     "*.xcscheme",
     "*Containerfile",
+    "*.bazel",
+    "*.bzl",
+    "*.bazelrc",
 ];
 
 fn check_spdx() -> Result {

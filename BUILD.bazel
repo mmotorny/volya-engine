@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+
+exports_files([
+    "Cargo.lock",
+    "Cargo.toml",
+])

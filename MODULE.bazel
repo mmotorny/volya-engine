@@ -1,0 +1,70 @@
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""Volya Engine's Bazel module (docs/architecture/build.md)."""
+
+module(name = "volya_engine")
+
+# First, so its C toolchain (Xcode's clang) is the one registered.
+bazel_dep(name = "apple_support", version = "2.12.0")
+bazel_dep(name = "bazel_skylib", version = "1.9.2")
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "rules_cc", version = "0.2.28")
+bazel_dep(name = "rules_rust", version = "0.75.0")
+
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.toolchain(
+    edition = "2024",
+    extra_target_triples = ["wasm32-unknown-unknown"],
+    versions = ["1.100.0"],
+)
+use_repo(rust, "rust_toolchains")
+
+register_toolchains("@rust_toolchains//:all")
+
+# External crates from the workspace's Cargo.toml files and Cargo.lock.
+crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
+crate.from_cargo(
+    name = "crates",
+    cargo_lockfile = "//:Cargo.lock",
+    manifests = [
+        "//:Cargo.toml",
+        "//crates/volya-engine:Cargo.toml",
+        "//crates/volya-engine-core:Cargo.toml",
+        "//crates/volya-engine-formats:Cargo.toml",
+        "//crates/volya-engine-installer:Cargo.toml",
+        "//crates/volya-engine-render:Cargo.toml",
+        "//crates/volya-engine-script:Cargo.toml",
+        "//platforms/web:Cargo.toml",
+        "//tools/devserver:Cargo.toml",
+        "//tools/xtask:Cargo.toml",
+    ],
+    supported_platform_triples = [
+        "aarch64-apple-darwin",
+        "wasm32-unknown-unknown",
+    ],
+)
+
+# The dev profile's optimisation of decoding and hashing (Cargo.toml).
+crate.annotation(
+    crate = "lewton",
+    rustc_flags = ["-Copt-level=3"],
+)
+crate.annotation(
+    crate = "md-5",
+    rustc_flags = ["-Copt-level=3"],
+)
+crate.annotation(
+    crate = "ogg",
+    rustc_flags = ["-Copt-level=3"],
+)
+crate.annotation(
+    crate = "ogg_nrp",
+    rustc_flags = ["-Copt-level=3"],
+)
+crate.annotation(
+    crate = "theora_nrp",
+    rustc_flags = ["-Copt-level=3"],
+)
+
+use_repo(crate, "crates")

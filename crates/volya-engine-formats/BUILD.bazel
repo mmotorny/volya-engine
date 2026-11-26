@@ -1,0 +1,41 @@
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+
+load("//build:rust.bzl", "volya_binary", "volya_integration_tests", "volya_library")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "Cargo.toml",
+    # The game-data tests' archive cache (docs/testing.md, Game data),
+    # shared with other crates' tests through `#[path]`.
+    "tests/support/gog_archives.rs",
+])
+
+# The dev profile's opt-level 1 (Cargo.toml).
+OPT = ["-Copt-level=1"]
+
+volya_library(
+    name = "volya-engine-formats",
+    # The ETC2 decoder written apart from the encoder, for other crates'
+    # tests: in every native build (only tests and tools), never in the app.
+    crate_features = select({
+        "@platforms//cpu:wasm32": [],
+        "//conditions:default": ["etc2-decode"],
+    }),
+    dev_deps = ["//crates/volya-engine-installer"],
+    rustc_flags = OPT,
+)
+
+volya_binary(
+    name = "volya-engine-db",
+    srcs = ["src/bin/db.rs"],
+    deps = [":volya-engine-formats"],
+)
+
+volya_integration_tests(
+    crate = ":volya-engine-formats",
+    compile_data = ["tests/support/gog_archives.rs"],
+    rustc_flags = OPT,
+    deps = ["//crates/volya-engine-installer"],
+)

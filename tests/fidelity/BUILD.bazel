@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+
+# The fidelity suite's views, shared by the engine's self-test and xtask's
+# capture of the original (`include!`).
+exports_files(
+    ["views.rs"],
+    visibility = ["//visibility:public"],
+)

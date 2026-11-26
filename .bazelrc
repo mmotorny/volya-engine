@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+
+# Shared by every worktree (docs/architecture/build.md, Sharing across worktrees).
+common --disk_cache=~/Library/Caches/volya-engine/bazel/disk-cache
+common --experimental_disk_cache_gc_max_size=50G
+common --repository_cache=~/Library/Caches/volya-engine/bazel/repository-cache
+
+# A server per worktree: idle ones exit.
+startup --max_idle_secs=900
+startup --host_jvm_args=-Xmx3g
+
+# The machine's memory is shared by every agent (AGENTS.md).
+build --local_resources=memory=HOST_RAM*.5
+
+test --test_output=errors
+
+# A personal file, never committed.
+try-import %workspace%/user.bazelrc

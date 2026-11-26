@@ -427,7 +427,12 @@ fn another_sample_rate_is_fatal() {
 
 /// [`Sound::load`] over a one-file tree holding `bytes`.
 fn load_bytes(bytes: &[u8]) -> Result<Sound, sound::Fatal> {
-    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("sound-load-bytes");
+    // Bazel's test directory, else Cargo's.
+    let tmp = std::env::var_os("TEST_TMPDIR")
+        .map(std::path::PathBuf::from)
+        .or_else(|| option_env!("CARGO_TARGET_TMPDIR").map(std::path::PathBuf::from))
+        .unwrap_or_else(std::env::temp_dir);
+    let dir = tmp.join("sound-load-bytes");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("x.ogg"), bytes).unwrap();
     let tree = StdVfs::new(&dir);

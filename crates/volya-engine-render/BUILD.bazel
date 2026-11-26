@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+load("//build:rust.bzl", "volya_library")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["Cargo.toml"])
+
+# Translates the programs' WGSL to GLSL ES 3.00 (docs/architecture/build.md,
+# Build scripts).
+cargo_build_script(
+    name = "build_script",
+    srcs = ["build.rs"],
+    data = glob(["src/*.wgsl"]),
+    deps = all_crate_deps(build = True),
+)
+
+volya_library(
+    name = "volya-engine-render",
+    deps = [
+        ":build_script",
+        "//crates/volya-engine-formats",
+    ],
+)

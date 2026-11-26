@@ -3,9 +3,8 @@
 
 [workspace]
 resolver = "3"
-members = ["crates/*", "platforms/*", "tools/*"]
-# An Xcode project (XCUITest), driven by `cargo xtask sim`.
-exclude = ["tools/simdriver"]
+# Not tools/simdriver: an Xcode project (XCUITest), driven by `cargo xtask sim`.
+members = ["crates/*", "platforms/*", "tools/devserver", "tools/xtask"]
 
 [workspace.package]
 version = "0.1.0"

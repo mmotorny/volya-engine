@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+
+load("@rules_rust//rust:defs.bzl", "rust_test")
+load("//build:rust.bzl", "LINTS", "volya_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["Cargo.toml"])
+
+volya_binary(
+    name = "xtask",
+    srcs = glob(["src/**/*.rs"]),
+    crate_root = "src/main.rs",
+    # The fidelity suite's views (src/original/views.rs).
+    compile_data = ["//tests/fidelity:views.rs"],
+    deps = [
+        "//crates/volya-engine-installer",
+        "//tools/devserver:volya-engine-devserver",
+    ],
+)
+
+rust_test(
+    name = "xtask-unit",
+    crate = ":xtask",
+    rustc_flags = LINTS,
+)

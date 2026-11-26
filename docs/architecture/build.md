@@ -18,7 +18,7 @@ Each worktree is its own Bazel workspace, so it has its own output base and serv
 | Downloads (toolchains, crates) | `repository-cache/` | `--repository_cache` |
 | Fetched repositories (the Rust toolchain, crate sources) | `repository-cache/contents/` (Bazel's default under the repository cache) | `--repo_contents_cache`, shared by every workspace instead of extracted into each output base |
 
-- Action keys hold execroot-relative paths, never the worktree's, so a worktree reuses another's outputs; rustc's absolute paths are remapped by rules_rust. Cross-worktree hits are measured when the build lands, not assumed.
+- Action keys hold execroot-relative paths, never the worktree's, so a worktree reuses another's outputs; rustc's absolute paths are remapped by rules_rust. Measured: the native build and tests in a copy of the tree at another path took 16 s, every compile a disk-cache hit, and every test result came from the cache.
 - Test results come from the disk cache too, so an unchanged test passes from cache in any worktree. Tags that would bar the disk cache (`local`, `no-cache`, `no-remote`, `no-remote-cache`) are not used; tests that need the real machine are `no-sandbox` instead, which keeps caching.
 - Servers: `startup --max_idle_secs=900` (a server per worktree holds a JVM, about 1 GB) and `startup --host_jvm_args=-Xmx3g`. Output bases of deleted worktrees are removed by `bazel run //tools/xtask -- gc` (an output base names its workspace; the one whose workspace is gone is expunged).
 
@@ -36,7 +36,7 @@ Each worktree is its own Bazel workspace, so it has its own output base and serv
 Both stay as they are, run by `cargo_build_script`:
 
 - **Shaders**: `crates/volya-engine-render/build.rs` translates the WGSL programs to GLSL ES 3.00 with naga into `OUT_DIR/shaders.rs`; its inputs are the `.wgsl` files (`data`), naga a build dependency from `@crates`. Built for the exec platform, so the native and wasm builds share one shader translation.
-- **The script runtime's C** (`crates/volya-engine-script/build.rs`, `cc`): natively with the Bazel C++ toolchain (`apple_support`'s, Xcode's clang); for wasm32 with Homebrew's LLVM clang, which the build script already finds. Bazel sees it as a declared input: a repository rule `@llvm_wasm` symlinks Homebrew LLVM's `bin/` and records `clang --version`, passed to the build script (`build_script_env` names the tools by their runfiles path), so a new LLVM rebuilds the C. A hermetic LLVM toolchain (`toolchains_llvm`, which downloads LLVM's releases) is the next step if Homebrew's ever breaks a build; it isn't needed to migrate.
+- **The script runtime's C** (`crates/volya-engine-script/build.rs`, `cc`): natively with the Bazel C++ toolchain (`apple_support`'s, Xcode's clang); for wasm32 with a pinned LLVM that Bazel downloads (decided by the user): an `http_archive` with its checksum, whose `clang`, `llvm-ar` and `llvm-ranlib` the build script gets by path (`VOLYA_LLVM_BIN`, set by the target; without it, as under Cargo, Homebrew's). `update` moves it to the latest release.
 
 ## The web app
 
@@ -74,9 +74,9 @@ One test target per suite and target: `//tests/browser:<suite>_<target>` (e.g. `
 
 | Suites | chrome | iphone |
 |---|---|---|
-| smoke, platform, input, render, import, audio | default | `manual`, `exclusive` |
-| game-startup, game-input, game-screens, render-screens (the whole game) | `manual` | `manual`, `exclusive` |
-| game-level, game-memory, draw-calls (they measure), fidelity | `manual`, `exclusive` | `manual`, `exclusive` |
+| smoke, platform, render, import | default | `manual`, `exclusive` |
+| input, audio, game-startup, game-input, game-screens, render-screens, render-level | `manual` | `manual`, `exclusive` |
+| game-level, game-memory, draw-calls (they measure), fidelity (Chrome only) | `manual`, `exclusive` | |
 
   Every suite is `no-sandbox` (the real Chrome and Simulator, profiles outside the execroot) and `resources:browser:1`, with `--local_resources=browser=1`: one browser suite at a time per Bazel invocation, while other tests run beside it. `exclusive` runs a test alone, for the Simulator and for measurements. Groups: `//tests/browser:chrome`, `:iphone`, `:game_chrome` (`test_suite`s, naming manual tests explicitly). Timeouts are `eternal` for the slow suites (today's `SLOW_SUITES`), `moderate` otherwise.
 - **The kept Chrome profile** moves to `~/Library/Caches/volya-engine/chrome-profile/` under a file lock: one import of the game for every worktree (each imported its own, gigabytes, minutes), one suite using it at a time across processes. Its port stays in the profile.
@@ -98,11 +98,11 @@ Cargo no longer builds the workspace: without the fork, `cargo build` gets the u
 
 ## Migration
 
-Cargo keeps working, and stays what deploys, until the switch. Each step is an issue, landed on main with the checks of its time:
+Cargo keeps working, and stays what deploys, until the switch. The `inno` patch (#541) lands with the switch: until then Cargo.lock holds the fork, which crate_universe builds as Cargo does. Each step is an issue, landed on main with the checks of its time:
 
 1. Bazel workspace and native build (#540; the `inno` patch #541): `MODULE.bazel`, `.bazelrc` with the shared caches, the toolchain, `@crates`, `BUILD.bazel` for every crate and tool with both build scripts; `bazel build //...` natively.
 2. Native tests (#542): unit and integration tests as targets, profiles as flags, `@gog_installer`, the `gamedata`, `manual` and `measure` tags.
-3. The wasm build (#543): the wasm32 platform and transition, `@llvm_wasm`, `web_sys_unstable_apis`, `//build:test_ops`, `@tools` with wasm-bindgen; `tools/site`; the four site targets.
+3. The wasm build (#543): the wasm32 platform and transition, the pinned LLVM, `web_sys_unstable_apis`, `//build:test_ops`, `@tools` with wasm-bindgen; `tools/site`; the four site targets.
 4. Static checks as tests (#544): `//:checks`.
 5. Browser suites as test targets (#545): the runner, the macro, `@local_browsers`, the shared kept profile, tags and resources.
 6. Operational commands under `bazel run` (#546): xtask's root and paths, `update` and `gc`, the dev server.
