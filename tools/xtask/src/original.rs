@@ -9,6 +9,7 @@
 
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -22,13 +23,55 @@ use crate::{Result, step};
 /// The edition the game-data tests use.
 const LANGUAGE: &str = "ru-RU";
 
-/// The executable and its working directory, relative to the install folder:
-/// GOG's primary play task (`playTasks` in the installer's
-/// `goggame-*.info`).
+/// The executable and its working folder, relative to the install folder,
+/// and its arguments: the launch task (gog-install-additions.md section 5:
+/// `bin\XR_3DA.exe`, working folder `bin`, no arguments) plus the options
+/// for an unattended start (steering-the-original.md sections 1.2 and 3.1:
+/// no memory-check box, no crash dialog, sound off, the run's configuration
+/// file instead of `user.ltx`).
 const EXE: &str = "bin/XR_3DA.exe";
 const WORKING_DIR: &str = "bin";
+const ARGS: [&str; 5] = [
+    "--skipmemcheck",
+    "-silent_error_mode",
+    "-nosound",
+    "-ltx",
+    STEER_LTX,
+];
 
-/// The virtual display.
+/// The run's configuration file, in the user-data folder
+/// (steering-the-original.md section 2.2): the shipped `user.ltx` followed by
+/// [`STEERING`], whose lines run after it and so override it.
+const STEER_LTX: &str = "steer.ltx";
+
+/// Settings for the run (steering-the-original.md section 3.1): full screen
+/// at the display's size, so the whole display is the game's frame; effects
+/// and music silent.
+const STEERING: &str =
+    "rs_fullscreen on\nvid_mode 1024x768\nsnd_volume_eff 0\nsnd_volume_music 0\n";
+
+/// The Wine user (the container runs as root; measured: the prefix's only
+/// user folder is `users/root`).
+const WINE_USER: &str = "root";
+
+/// The current user's Documents folder, `{userdocs}`, as Windows sees it
+/// (gog-install-additions.md section 2: an absolute path without trailing
+/// `\`).
+fn userdocs() -> String {
+    format!("C:\\users\\{WINE_USER}\\Documents")
+}
+
+/// The game's user folder below `{userdocs}`, as the support-data copies
+/// name it (gog-install-additions.md section 3; the same folder as
+/// `fsgame.ltx`'s `Stalker-SHOC`).
+const USER_FOLDER: &str = "STALKER-SHOC";
+
+/// In the container the run folder is `/work` and the install folder
+/// `/work/game`; Wine's default `Z:` drive maps `/`.
+const INSTALL_IN_CONTAINER: &str = "/work/game";
+const INSTALL_IN_WINDOWS: &str = "Z:\\work\\game";
+
+/// The virtual display, the size the game runs at ([`STEERING`]).
 const SCREEN: &str = "1024x768x24";
 
 /// Seconds between captures.
@@ -61,25 +104,39 @@ pub fn main(args: &[&str]) -> Result {
         .as_secs();
     let run = cache.join("original-runs").join(stamp.to_string());
     let game = run.join("game");
+    let documents = run.join("documents");
     let frames = run.join("frames");
     fs::create_dir_all(&frames).map_err(|e| format!("{}: {e}", frames.display()))?;
     // A copy-on-write clone (APFS), so what the game writes stays in this run.
     crate::run(Command::new("cp").arg("-cR").arg(&install).arg(&game))?;
+    add_install(&game, &documents)?;
+    let reg = run.join("install.reg");
+    fs::write(&reg, registry(INSTALL_IN_WINDOWS)).map_err(|e| format!("{}: {e}", reg.display()))?;
 
     let log_path = run.join("wine.log");
     let log = File::create(&log_path).map_err(|e| format!("{}: {e}", log_path.display()))?;
     let err = log.try_clone().map_err(|e| e.to_string())?;
+    // The prefix's Documents folder is the run's `documents/`, so what the
+    // game writes there (logs, settings) lands on the Mac.
     let tail = format!(
-        "mkdir -p /tmp/fb\ncd {WORKING_DIR}\n\
+        "mkdir -p /tmp/fb\n\
+         docs=\"$WINEPREFIX/drive_c/users/{WINE_USER}/Documents\"\n\
+         rm -rf \"$docs\" && ln -s /work/documents \"$docs\"\n\
+         wine reg import 'Z:\\work\\install.reg'\n\
+         wineserver -w\n\
+         cd {INSTALL_IN_CONTAINER}/{WORKING_DIR}\n\
          xvfb-run -a -s '-screen 0 {SCREEN} -fbdir /tmp/fb' wine \"$@\"\n\
          echo \"exit code $?\""
     );
-    let exe = format!("/work/{EXE}");
+    let exe = format!("{INSTALL_IN_CONTAINER}/{EXE}");
+    let mut program = vec![exe.as_str()];
+    program.extend(ARGS);
     step(&format!(
-        "Running {EXE} for {seconds} s, captures in {}",
+        "Running {EXE} {} for {seconds} s, captures in {}",
+        ARGS.join(" "),
         frames.display()
     ));
-    let mut container = Container::spawn(&game, &tail, &[&exe], log.into(), err.into())?;
+    let mut container = Container::spawn(&run, &tail, &program, log.into(), err.into())?;
     let start = Instant::now();
     let mut last: Option<Vec<u8>> = None;
     let mut ended = None;
@@ -126,6 +183,101 @@ pub fn main(args: &[&str]) -> Result {
         log_path.display()
     );
     Ok(())
+}
+
+/// The generated `fsgame.ltx` (gog-install-additions.md section 2): 17
+/// LF-terminated ASCII lines, `{userdocs}` the only placeholder.
+const FSGAME_LTX: &str = "\
+$app_data_root$ = true | false| {userdocs}\\Stalker-SHOC
+$game_data$ =     false| true | $fs_root$      | gamedata\\
+$game_ai$ =       true | false| $game_data$    | ai\\
+$game_spawn$ =    true | false| $game_data$    | spawns\\
+$game_anims$ =    true | true | $game_data$    | anims\\
+$game_levels$ =   true | false| $game_data$    | levels\\
+$game_meshes$ =   true | true | $game_data$    | meshes\\
+$game_dm$ =       true | true | $game_data$    | meshes\\
+$game_shaders$ =  true | true | $game_data$    | shaders\\
+$game_sounds$ =   true | true | $game_data$    | sounds\\
+$game_textures$ = true | true | $game_data$    | textures\\
+$game_scripts$ =  true | false| $game_data$    | scripts\\
+$game_config$ =   true | false| $game_data$    | config\\
+$level$ =         false| false| $game_levels$
+$game_saves$ =    true | false| $app_data_root$| savedgames\\
+$logs$ =          true | false| $app_data_root$| logs\\
+$screenshots$ =   true | false| $app_data_root$| screenshots\\
+";
+
+/// The registry entries of the install, as a file for `reg import`:
+/// - the install script's five values (gog-install-additions.md section
+///   4.1; `$1` believed the DWORD 1); a 32-bit prefix has a single view, so
+///   the 32-bit view the game reads (section 4.1) is the only one;
+/// - the installer's own `GOG.com` values (section 4.2), less `lang_code`,
+///   whose value is not established; `installer_language` is the `/LANG`
+///   value, the Russian edition's `russian` (sections 1 and 4.2).
+///
+/// The game reads none but `InstallVers` (section 4.1). Not written: the
+/// uninstall registration and the compatibility flag (only believed,
+/// sections 4.2 and 5).
+fn registry(app: &str) -> String {
+    let app = app.replace('\\', "\\\\");
+    format!(
+        "REGEDIT4\r\n\r\n\
+         [HKEY_LOCAL_MACHINE\\SOFTWARE\\GSC Game World\\STALKER-SHOC]\r\n\
+         \"InstallPath\"=\"{app}\"\r\n\
+         \"InstallSource\"=\"GOG\"\r\n\
+         \"InstallVers\"=\"2.1.0.10\"\r\n\
+         \"BonusPack1\"=dword:00000001\r\n\
+         \"BonusPack2\"=dword:00000001\r\n\r\n\
+         [HKEY_LOCAL_MACHINE\\SOFTWARE\\GOG.com\\Games\\1207660573]\r\n\
+         \"buildId\"=\"58117267108351024\"\r\n\
+         \"ver\"=\"2.1.0.10 GOG 0.13\"\r\n\
+         \"osbit\"=\"neutral\"\r\n\
+         \"installer_language\"=\"russian\"\r\n\r\n"
+    )
+}
+
+/// Adds to the run's install folder `game` and Documents folder `documents`
+/// what the install creates beyond the game files, and the run's
+/// configuration file. Not created: shortcuts (not needed by the game,
+/// gog-install-additions.md section 5), the installer's tools and caches
+/// (section 6), the DirectX redistributable (Wine has Direct3D 9).
+fn add_install(game: &Path, documents: &Path) -> Result {
+    let write = |path: &Path, bytes: &[u8]| {
+        mkdir_parent(path)?;
+        fs::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))
+    };
+    // Section 2, then `attrib +r`: Wine shows a file without write
+    // permission as read-only.
+    let fsgame = game.join("fsgame.ltx");
+    write(
+        &fsgame,
+        FSGAME_LTX.replace("{userdocs}", &userdocs()).as_bytes(),
+    )?;
+    fs::set_permissions(&fsgame, fs::Permissions::from_mode(0o444))
+        .map_err(|e| format!("{}: {e}", fsgame.display()))?;
+    // Section 6: empty folders.
+    for dir in ["downloads", "logs", "savedgames"] {
+        let dir = game.join("userdocs").join(dir);
+        fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    // Section 3: the support data copied unchanged into the user folder.
+    let user = documents.join(USER_FOLDER);
+    let support = game.join("__support/userdocs");
+    let mut steer = Vec::new();
+    for name in ["user.ltx", "traffic.net"] {
+        let from = support.join(name);
+        let bytes = fs::read(&from).map_err(|e| format!("{}: {e}", from.display()))?;
+        write(&user.join(name), &bytes)?;
+        if name == "user.ltx" {
+            steer = bytes;
+        }
+    }
+    // The run's configuration file (steering-the-original.md section 2.2).
+    if !steer.ends_with(b"\n") {
+        steer.extend_from_slice(b"\r\n");
+    }
+    steer.extend_from_slice(STEERING.as_bytes());
+    write(&user.join(STEER_LTX), &steer)
 }
 
 /// The display as PNG, or `None` while there is none.
@@ -383,6 +535,25 @@ mod tests {
         let mut raw = [0u8; 4];
         let (raw, _) = zlib_rs::decompress_slice(&mut raw, idat, zlib_rs::InflateConfig::default());
         assert_eq!(raw, [0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn fsgame_ltx_is_the_specified_file() {
+        let text = FSGAME_LTX.replace("{userdocs}", &userdocs());
+        assert!(text.is_ascii() && !text.contains('\r'));
+        assert_eq!(FSGAME_LTX.len(), 965);
+        assert_eq!(text.lines().count(), 17);
+        assert!(text.starts_with(
+            "$app_data_root$ = true | false| C:\\users\\root\\Documents\\Stalker-SHOC\n"
+        ));
+        assert!(text.ends_with("| screenshots\\\n"));
+    }
+
+    #[test]
+    fn registry_holds_the_install_path() {
+        let reg = registry(INSTALL_IN_WINDOWS);
+        assert!(reg.contains("\"InstallPath\"=\"Z:\\\\work\\\\game\"\r\n"));
+        assert!(reg.contains("\"InstallVers\"=\"2.1.0.10\"\r\n"));
     }
 
     #[test]
