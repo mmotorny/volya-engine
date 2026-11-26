@@ -146,7 +146,9 @@ pub async fn start_view(cx: &Context<'_>) -> Outcome {
     screen.set_camera(eye, angles);
     let scene = screen.scene(SIZE, 5000);
     let pixels = draw(&mut gpu, &mut presenter, tree, &scene, 5000).await?;
-    cx.dump("outdoor", SIZE.width, SIZE.height, &pixels);
+    // Its blended trees differ by a few pixels from run to run (#435):
+    // compared, not held.
+    cx.dump_compared("outdoor", SIZE.width, SIZE.height, &pixels, false);
     let distinct: BTreeSet<&[u8]> = pixels.chunks(4).collect();
     ensure!(distinct.len() > 500, "outdoors: {} colours", distinct.len());
     // The sky (docs/behavior/sky.md) covers the top rows: varied, and not

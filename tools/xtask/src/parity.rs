@@ -40,7 +40,9 @@ pub fn run(args: &[&str]) -> Result {
     step(&format!("Parity: the {name} build"));
     web_into(Profile::Test, features, &second)?;
     let frames_first = dir.join("frames-wgpu");
-    let frames_second = dir.join(format!("frames-{name}"));
+    // Apart from the first's even for wgpu, whose second run would
+    // otherwise be compared with its own frames.
+    let frames_second = dir.join(format!("frames-{name}-compared"));
     for frames in [&frames_first, &frames_second] {
         if frames.exists() {
             fs::remove_dir_all(frames).map_err(|e| format!("{}: {e}", frames.display()))?;
