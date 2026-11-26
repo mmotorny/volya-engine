@@ -38,6 +38,7 @@ mod save_load;
 mod textures;
 mod title_menu;
 mod torch;
+mod visibility;
 mod zones;
 
 /// What a check runs with.
@@ -193,6 +194,7 @@ const SUITES: &[(&str, &[Checks])] = &[
             zones::CHECKS,
             artefacts::CHECKS,
             details::CHECKS,
+            visibility::CHECKS,
             frame_memory::CHECKS,
         ],
     ),

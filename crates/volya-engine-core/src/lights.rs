@@ -578,53 +578,71 @@ impl Lights {
         }
     }
 
-    /// The lights listed this frame (DL 4; object-visibility.md 3, 5, 6.3),
-    /// spot list first, then the point list. The active records (those
-    /// the spatial index holds) are handled nearest first by their sphere
-    /// centre (equal distances in record order, unestablished): one with
-    /// no sector is skipped; `seen` makes rules 1 and 2 (its sector visited
-    /// with a frustum the sphere meets, then the cached occlusion test of
-    /// the box C ± R); then it is listed when not excluded, `r1_dlights` is
-    /// on and its range is at least 0.1 (rule 4).
+    /// The records the camera pass's spatial query holds (the active
+    /// ones, object-visibility.md 2.1) with their sphere centres.
+    pub fn candidates(&self) -> impl Iterator<Item = (LightId, Vec3)> + '_ {
+        (self.iter())
+            .filter(|(_, r)| r.active)
+            .map(|(id, r)| (id, r.centre))
+    }
+
+    /// Handles record `id` in the camera pass's loop (object-visibility.md
+    /// 5, 6.3; DL 4): skipped without a sector; `seen` makes rules 1 and 2
+    /// (its sector visited with a frustum the sphere meets, then the cached
+    /// occlusion test of the box C ± R); then whether it is listed: not
+    /// excluded, `r1_dlights` on and a range of at least 0.1 (rule 4).
+    pub fn handle(
+        &mut self,
+        id: LightId,
+        settings: &LightSettings,
+        seen: impl FnOnce(Seen<'_>) -> bool,
+    ) -> bool {
+        let Some(Some(r)) = self.records.get_mut(id.0 as usize) else {
+            return false;
+        };
+        let Some(sector) = r.sector else { return false };
+        let (centre, radius) = (r.centre, r.radius);
+        let seen = seen(Seen {
+            sector,
+            centre,
+            radius,
+            min: centre.map(|v| v - radius),
+            max: centre.map(|v| v + radius),
+            cache: &mut r.occlusion,
+        });
+        seen && !r.excluded && settings.dlights && r.range >= 0.1
+    }
+
+    /// The listed records `listed`, in the order listed, as the spot list
+    /// then the point list (DL 4).
+    pub fn lists(&self, listed: &[LightId]) -> Vec<LightId> {
+        let point = |id: &&LightId| self.get(**id).is_some_and(|r| r.kind == LightKind::Point);
+        let spots = listed.iter().filter(|id| !point(id));
+        let points = listed.iter().filter(point);
+        spots.chain(points).copied().collect()
+    }
+
+    /// The lights listed this frame when they alone are handled, nearest
+    /// first by their sphere centre (equal distances in record order,
+    /// unestablished): [`Lights::handle`] of each, then [`Lights::lists`].
     pub fn choose(
         &mut self,
         settings: &LightSettings,
         eye: Vec3,
         mut seen: impl FnMut(Seen<'_>) -> bool,
     ) -> Vec<LightId> {
-        let d2 = |r: &LightRecord| {
-            let d = sub(r.centre, eye);
-            dot(d, d)
-        };
-        let mut order: Vec<(u32, f32)> = (self.records.iter().enumerate())
-            .filter_map(|(i, r)| r.as_ref().filter(|r| r.active).map(|r| (i as u32, d2(r))))
+        let mut order: Vec<(LightId, f32)> = (self.candidates())
+            .map(|(id, c)| {
+                let d = sub(c, eye);
+                (id, dot(d, d))
+            })
             .collect();
         order.sort_by(|a, b| a.1.total_cmp(&b.1));
-        let mut listed = Vec::new();
-        for (i, _) in order {
-            let Some(r) = self.records[i as usize].as_mut() else {
-                continue;
-            };
-            let Some(sector) = r.sector else { continue };
-            let (centre, radius) = (r.centre, r.radius);
-            let seen = seen(Seen {
-                sector,
-                centre,
-                radius,
-                min: centre.map(|v| v - radius),
-                max: centre.map(|v| v + radius),
-                cache: &mut r.occlusion,
-            });
-            if !seen {
-                continue;
-            }
-            if !r.excluded && settings.dlights && r.range >= 0.1 {
-                listed.push((LightId(i), r.kind));
-            }
-        }
-        let spots = listed.iter().filter(|(_, k)| *k != LightKind::Point);
-        let points = listed.iter().filter(|(_, k)| *k == LightKind::Point);
-        spots.chain(points).map(|(id, _)| *id).collect()
+        let listed: Vec<LightId> = (order.into_iter())
+            .filter(|&(id, _)| self.handle(id, settings, &mut seen))
+            .map(|(id, _)| id)
+            .collect();
+        self.lists(&listed)
     }
 
     /// The frame's light passes (DL 5) of the lights `choose` lists, seen

@@ -32,6 +32,9 @@ pub enum ParticleBlend {
 pub enum ParticleProgram {
     /// `particle`, alpha test A · 255 > 200, fog on (`SET`).
     Set,
+    /// The portal fade's `portal` and `simple_color` (portal-fade.md 4):
+    /// the vertex colour, fog on, no texture.
+    Portal,
     /// `particle`, alpha test A · 255 > 0, no fog.
     Blended,
     /// `particle`, no alpha test, no fog (the scripted shaders).
@@ -64,6 +67,8 @@ pub enum ParticleQueue {
     Early,
     /// With the non-sorted passes of priorities 2 – 3 (step 4).
     Late,
+    /// The portal fade, after them (portal-fade.md 5).
+    Fade,
     /// In the strict-sorted list, back to front (step 5).
     Strict,
     /// In the distortion list, back to front (step 7).
@@ -157,7 +162,11 @@ pub(crate) fn drawn(batches: &[ParticleBatch]) -> Vec<&ParticleBatch> {
     batches
         .iter()
         .filter(|b| {
-            let textured = b.pass.base.is_some() || b.pass.program == ParticleProgram::Distort;
+            let textured = b.pass.base.is_some()
+                || matches!(
+                    b.pass.program,
+                    ParticleProgram::Distort | ParticleProgram::Portal
+                );
             !b.vertices.is_empty() && textured
         })
         .collect()

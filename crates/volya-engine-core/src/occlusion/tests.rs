@@ -514,3 +514,17 @@ fn occlusion_is_off_during_the_light_passes() {
     // Back on after them: the box behind the square is hidden.
     assert!(o.on && !o.cached_visible(&mut c, a, b, &v, &mut g));
 }
+
+#[test]
+fn an_objects_box_encloses_its_turned_box() {
+    // OT 6: a box 0 … (2, 1, 1) turned 90° about y (x → −z) and moved by
+    // (10, 0, 0).
+    let t = [
+        [0.0, 0.0, -1.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0, 0.0],
+        [10.0, 0.0, 0.0, 1.0],
+    ];
+    let (lo, hi) = super::object_box(&t, [0.0; 3], [2.0, 1.0, 1.0]);
+    assert_eq!((lo, hi), ([10.0, 0.0, -2.0], [11.0, 1.0, 0.0]));
+}

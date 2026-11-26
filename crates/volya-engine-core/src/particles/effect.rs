@@ -109,8 +109,11 @@ impl EffectInstance {
             position: [0.0; 3],
             remaining: if timed { effect.time_limit } else { 0.0 },
             accumulator: 0,
-            bounds: Bounds::around([0.0; 3]),
-            sphere: Bounds::around([0.0; 3]).sphere(),
+            // Empty when made (unestablished, P2 1; our choice): a member
+            // playing before any particle lives adds nothing to its group's
+            // box (P6 5.5), and no culling sphere is registered from it.
+            bounds: Bounds::EMPTY,
+            sphere: Bounds::EMPTY.sphere(),
             notices: None,
         }
     }

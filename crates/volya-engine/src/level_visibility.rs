@@ -14,6 +14,7 @@ use crate::core::collision::CollisionWorld;
 use crate::core::occlusion::{Cached, Occlusion, OcclusionMesh, View};
 use crate::core::particles::random::Generator;
 use crate::core::visibility::{CameraFrame, CameraSector, Sectors, triangle_below};
+use crate::render::particles::ParticleVertex;
 use volya_engine_formats::level::{Level, Thresholds};
 
 /// The camera pass's state for a level's run.
@@ -23,8 +24,28 @@ pub struct LevelVisibility {
     occlusion: Occlusion,
     camera: CameraSector,
     frame: CameraFrame,
-    /// The latest pass's view.
+    /// The latest pass's view and thresholds.
     view: Option<View>,
+    thresholds: Option<Thresholds>,
+    /// Each visual's static draws (indices of the level's draw items):
+    /// those of visual `v` are `draws[starts[v] .. starts[v + 1]]`.
+    starts: Vec<u32>,
+    draws: Vec<u32>,
+    /// The dynamic items' state (object-visibility.md 4, occlusion-tests.md
+    /// 5): the level's object instances, and its effect objects by slot.
+    pub objects: Vec<Item>,
+    pub effects: Vec<Item>,
+}
+
+/// A dynamic item's sector and occlusion cache.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Item {
+    /// Its sector, none until the ray first finds one.
+    pub sector: Option<u16>,
+    /// The sphere its sector was last found for: a placement since marks it
+    /// for a refresh (object-visibility.md 2.3, 4).
+    pub at: Option<[f32; 4]>,
+    pub cache: Cached,
 }
 
 impl Default for LevelVisibility {
@@ -36,21 +57,104 @@ impl Default for LevelVisibility {
             camera: CameraSector::default(),
             frame: CameraFrame::default(),
             view: None,
+            thresholds: None,
+            starts: vec![0],
+            draws: Vec::new(),
+            objects: Vec::new(),
+            effects: Vec::new(),
         }
     }
 }
 
 impl LevelVisibility {
-    /// The sectors of `level` and its occlusion mesh, none without
-    /// `level.hom`.
-    pub fn new(level: &Level, mesh: Option<OcclusionMesh>) -> io::Result<Self> {
+    /// The sectors of `level`, its occlusion mesh (none without
+    /// `level.hom`) and the visual of each of its static draws.
+    pub fn new(
+        level: &Level,
+        mesh: Option<OcclusionMesh>,
+        draw_visuals: impl Iterator<Item = u32>,
+    ) -> io::Result<Self> {
         let sectors = Sectors::new(level)?;
         let occlusion = Occlusion::new(mesh, sectors.visual_count());
+        let mut by_visual = vec![Vec::new(); sectors.visual_count()];
+        for (i, v) in draw_visuals.enumerate() {
+            if let Some(d) = by_visual.get_mut(v as usize) {
+                d.push(i as u32);
+            }
+        }
+        let mut starts = Vec::with_capacity(by_visual.len() + 1);
+        starts.push(0);
+        let mut draws = Vec::new();
+        for d in by_visual {
+            draws.extend(d);
+            starts.push(draws.len() as u32);
+        }
         Ok(Self {
             sectors,
             occlusion,
+            starts,
+            draws,
             ..Self::default()
         })
+    }
+
+    /// The static draws of the latest pass's visuals, by draw item (of
+    /// `count`).
+    pub fn static_draws(&self, count: usize) -> Vec<bool> {
+        let mut drawn = vec![false; count];
+        for &v in self.frame.visuals.iter().flatten() {
+            let v = v as usize;
+            if v + 1 < self.starts.len() {
+                for &d in &self.draws[self.starts[v] as usize..self.starts[v + 1] as usize] {
+                    if let Some(x) = drawn.get_mut(d as usize) {
+                        *x = true;
+                    }
+                }
+            }
+        }
+        drawn
+    }
+
+    /// The latest pass's thresholds.
+    pub fn thresholds(&self) -> Option<&Thresholds> {
+        self.thresholds.as_ref()
+    }
+
+    /// The portal's polygon and bounding-sphere centre.
+    pub fn portal(&self, portal: u16) -> Option<(&[Vec3], Vec3)> {
+        let p = self.sectors.portals.get(usize::from(portal))?;
+        Some((&p.polygon, p.centre))
+    }
+
+    /// The sector and frusta test and the cached occlusion test of a
+    /// dynamic item (object-visibility.md 4 – 6.1) with sphere `sphere`
+    /// (centre, radius) and box `min` … `max`: its sector found again from
+    /// the sphere's centre when it moved (kept when none is found), then
+    /// skipped without one, when its sector was not visited or the sphere
+    /// is outside every frustum it was reached with; then the cached box
+    /// test, the values from `random`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn item_seen(
+        &mut self,
+        item: &mut Item,
+        sphere: [f32; 4],
+        min: Vec3,
+        max: Vec3,
+        collision: &CollisionWorld,
+        random: &mut Generator,
+    ) -> bool {
+        let centre = [sphere[0], sphere[1], sphere[2]];
+        if item.at != Some(sphere) {
+            item.at = Some(sphere);
+            if let Some(s) = self.sector_of(collision, centre) {
+                item.sector = Some(s);
+            }
+        }
+        let Some(sector) = item.sector else {
+            return false;
+        };
+        self.reached(sector, centre, sphere[3]).is_some()
+            && self.cached_visible(&mut item.cache, min, max, random)
     }
 
     /// The camera pass of `view` (visibility-scope.md 1): the camera's
@@ -67,6 +171,7 @@ impl LevelVisibility {
         self.frame =
             (self.sectors).camera_pass(sector, &view, thresholds, &mut self.occlusion, random);
         self.view = Some(view);
+        self.thresholds = Some(*thresholds);
     }
 
     /// The camera's sector, none until one is found (visibility-scope.md 6).
@@ -114,4 +219,64 @@ impl LevelVisibility {
     pub fn light_passes<R>(&mut self, f: impl FnOnce() -> R) -> R {
         self.occlusion.light_passes(|_| f())
     }
+}
+
+/// What the latest camera pass keeps of the level's draws
+/// (visibility-scope.md 5, 6): nothing without a camera sector.
+#[derive(Clone, Debug, Default)]
+pub struct Seen {
+    /// By draw item: the static draws of the visuals the pass reached.
+    pub items: Vec<bool>,
+    /// By object instance: those drawn.
+    pub objects: Vec<bool>,
+    /// The effect objects drawn, in the pass's order.
+    pub effects: Vec<usize>,
+    /// The portal fade's triangles, each as a quad of its three corners and
+    /// the last again (docs/behavior/portal-fade.md 2).
+    pub fade: Vec<ParticleVertex>,
+}
+
+/// The portal fade of the latest pass of `visibility` (portal-fade.md 1 –
+/// 3): each entry of the fade list, nearest first from `eye` (equal
+/// distances in list order, unestablished), its polygon's fan in the
+/// weather's `ambient` colour with the alpha of its measure.
+pub fn portal_fade(visibility: &LevelVisibility, eye: Vec3, ambient: Vec3) -> Vec<ParticleVertex> {
+    let Some(t) = visibility.thresholds() else {
+        return Vec::new();
+    };
+    // The binary's conversion: truncation toward zero, +∞ giving 1.
+    let byte = |x: f32| -> u32 {
+        if x == f32::INFINITY {
+            1
+        } else {
+            (x as i64).clamp(0, 255) as u32
+        }
+    };
+    let [r, g, b] = ambient.map(|a| byte(255.0 * a));
+    let mut entries: Vec<(f32, u16, f32)> = (visibility.frame.traversal.fade.iter())
+        .filter_map(|&(p, m)| {
+            let (_, c) = visibility.portal(p)?;
+            let d = [c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]];
+            Some(((d[0] * d[0] + d[1] * d[1]) + d[2] * d[2], p, m))
+        })
+        .collect();
+    entries.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut out = Vec::new();
+    for (_, p, m) in entries {
+        let Some((polygon, _)) = visibility.portal(p) else {
+            continue;
+        };
+        let a = byte((1.0 - (m - t.t_b) / (t.t_a - t.t_b)) * 255.5);
+        let colour = a << 24 | r << 16 | g << 8 | b;
+        let corner = |position: Vec3| ParticleVertex {
+            position,
+            colour,
+            uv: [0.0; 2],
+        };
+        for i in 1..polygon.len().saturating_sub(1) {
+            let (v0, v1, v2) = (polygon[0], polygon[i], polygon[i + 1]);
+            out.extend([corner(v0), corner(v1), corner(v2), corner(v2)]);
+        }
+    }
+    out
 }

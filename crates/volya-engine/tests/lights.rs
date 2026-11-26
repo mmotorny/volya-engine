@@ -328,7 +328,10 @@ fn first_level_lights_from_game_data() {
             .iter()
             .find(|g| near3(g.position, glow, 1e-3))
             .unwrap();
-        assert!(g.in_sector && !g.occluded && g.fade == 255.0, "{g:?}");
+        assert!(
+            g.sector.is_some() && !g.occluded && g.fade == 255.0,
+            "{g:?}"
+        );
         let sprite = (ll.sprites().iter())
             .find(|s| near3(s.corners[0], [glow[0] - 1.0, glow[1] - 1.0, glow[2]], 0.05))
             .expect("glow 0's sprite");
@@ -441,10 +444,26 @@ fn the_glows_static_rays_at_the_start_from_game_data() {
                 .collect();
             glows
         };
+        // Those in a sector the traversal visits (6 and 21, in the bunker);
+        // the others (outdoors) are not considered and keep their fade
+        // (glows.md 3).
         let glows = level_glows(&screen);
+        let visited = |i: usize| {
+            let v = screen.visibility();
+            glows[i]
+                .sector
+                .is_some_and(|s| !v.frame().traversal.frusta[usize::from(s)].is_empty())
+        };
         for i in [2, 3, 6, 13, 14, 21] {
+            let considered = visited(i);
+            assert_eq!(considered, [6, 21].contains(&i), "glow {i}: {:?}", glows[i]);
             assert!(
-                glows[i].in_sector && glows[i].occluded && glows[i].fade < 255.0,
+                glows[i].sector.is_some()
+                    && if considered {
+                        glows[i].occluded && glows[i].fade < 255.0
+                    } else {
+                        glows[i].fade == 255.0
+                    },
                 "glow {i}: {:?}",
                 glows[i]
             );
@@ -459,7 +478,7 @@ fn the_glows_static_rays_at_the_start_from_game_data() {
         let glows = level_glows(&screen);
         for i in [7, 20] {
             assert!(
-                glows[i].in_sector && !glows[i].occluded && glows[i].fade == 255.0,
+                glows[i].sector.is_some() && !glows[i].occluded && glows[i].fade == 255.0,
                 "glow {i}: {:?}",
                 glows[i]
             );

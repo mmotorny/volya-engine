@@ -14,6 +14,7 @@ use crate::core::glows::{CORNER_UV, GlowSprite};
 use crate::core::vfs::read_ahead::ReadAhead;
 use crate::core::vfs::{self, Vfs};
 use crate::level::LevelWorld;
+use crate::level_visibility::Seen;
 use crate::particle_drawing::{ParticleDraw, ParticleShader};
 use crate::render::details::{DetailDraw, DetailFrame};
 use crate::render::particles::{
@@ -108,6 +109,26 @@ fn load_texture(renderer: &Renderer, tree: &dyn Vfs, path: &str) -> Result<Textu
     renderer.create_texture(&dds).map_err(|e| e.to_string())
 }
 
+/// The portal fade's batch (portal-fade.md 2 – 5) of its triangles
+/// `fade`, none without any: `portal` with alpha blending, depth tested,
+/// no depth writes, no culling.
+fn fade_batch(fade: &[crate::render::particles::ParticleVertex]) -> Option<ParticleBatch> {
+    (!fade.is_empty()).then(|| ParticleBatch {
+        pass: RenderPass {
+            program: ParticleProgram::Portal,
+            blend: ParticleBlend::Alpha,
+            depth_write: false,
+            clamp: false,
+            base: None,
+            distort: None,
+        },
+        queue: ParticleQueue::Fade,
+        cull: ParticleCull::None,
+        key: 0.0,
+        vertices: fade.to_vec(),
+    })
+}
+
 /// The world's draws of `level`: its static draws, then its objects'.
 fn world_draws(level: &LevelWorld) -> Vec<WorldDraw> {
     level
@@ -169,6 +190,8 @@ pub struct Presenter {
     placed: Option<Arc<Vec<Option<Mat4>>>>,
     /// The world's draw index of the first object draw.
     first_object_draw: usize,
+    /// The latest camera pass's draws and the world draws they keep.
+    drawn: Option<(Arc<Seen>, Arc<Vec<bool>>)>,
     /// The level's effect shaders with their textures, by library index
     /// (particle-drawing.md 5.1), loaded with the world.
     particle_shaders: Vec<Option<ParticleShader<Texture>>>,
@@ -333,8 +356,10 @@ impl Presenter {
         }
         let world = self.world.as_ref()?.1.clone()?;
         self.place_objects(renderer, &world, scene);
+        let drawn = scene.seen.as_ref().map(|s| self.drawn(&scene.world, s));
         let e = &scene.environment;
         Some(WorldFrame {
+            drawn,
             world,
             view: scene.view,
             projection: scene.projection,
@@ -358,6 +383,7 @@ impl Presenter {
             particles: {
                 let mut batches = self.particle_batches(&scene.particles);
                 batches.extend(self.glow_batches(&scene.glows));
+                batches.extend(scene.seen.as_ref().and_then(|s| fade_batch(&s.fade)));
                 batches
             },
             lights: scene
@@ -393,6 +419,25 @@ impl Presenter {
                 time: d.time,
             }),
         })
+    }
+
+    /// The world draws `seen` keeps (in [`world_draws`]' order), made
+    /// again only when it changes.
+    fn drawn(&mut self, level: &LevelWorld, seen: &Arc<Seen>) -> Arc<Vec<bool>> {
+        if let Some((s, d)) = &self.drawn
+            && Arc::ptr_eq(s, seen)
+        {
+            return d.clone();
+        }
+        let items = (level.draw_items.iter().enumerate())
+            .zip(&level.draw_surfaces)
+            .filter(|(_, surface)| surface.is_some())
+            .map(|((i, _), _)| seen.items.get(i).copied().unwrap_or(false));
+        let objects = (level.objects.draws.iter())
+            .map(|d| seen.objects.get(d.instance).copied().unwrap_or(false));
+        let d = Arc::new(items.chain(objects).collect::<Vec<bool>>());
+        self.drawn = Some((seen.clone(), d.clone()));
+        d
     }
 
     /// The level's glow textures, and the light passes' attenuation

@@ -555,6 +555,30 @@ impl Occlusion {
     }
 }
 
+/// An object's box (OT 6): the smallest axis-aligned box around its
+/// visual's box `min` … `max` under the row-vector `transform` (rows 0 – 2
+/// the axes, row 3 the translation), summed in the spec's order.
+pub fn object_box(transform: &Mat4, min: Vec3, max: Vec3) -> (Vec3, Vec3) {
+    let [i, j, k, c] = transform.map(|r| [r[0], r[1], r[2]]);
+    let p: Vec3 = std::array::from_fn(|n| ((k[n] * min[2] + j[n] * min[1]) + i[n] * min[0]) + c[n]);
+    let (mut lo, mut hi) = (p, p);
+    for (axis, extent) in [
+        (i, max[0] - min[0]),
+        (j, max[1] - min[1]),
+        (k, max[2] - min[2]),
+    ] {
+        for n in 0..3 {
+            let v = axis[n] * extent;
+            if v.is_sign_negative() {
+                lo[n] += v;
+            } else {
+                hi[n] += v;
+            }
+        }
+    }
+    (lo, hi)
+}
+
 /// A coordinate's cell index (OT 2.1 step 1).
 fn cell_index(c: f32) -> i32 {
     floor_i(64.0 * c + 0.5)

@@ -107,3 +107,11 @@ fn fs_flare(in: Out) -> @location(0) vec4<f32> {
     }
     return c;
 }
+
+// The portal fade (portal-fade.md 4): simple_color.ps's vertex colour,
+// then the fog unit (static-shading.md 9.3), alpha unchanged.
+@fragment
+fn fs_portal(in: Out) -> @location(0) vec4<f32> {
+    let color = in.fog * in.color.rgb + (1.0 - in.fog) * frame.fog_color.rgb;
+    return vec4(color, in.color.a);
+}

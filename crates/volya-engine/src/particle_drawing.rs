@@ -7,9 +7,8 @@
 //! with its sprites (7.2, section 4) for the renderer, which draws them in
 //! the frame order of 7.4 and composes the distortion target (section 6).
 //!
-//! Sectors and the occlusion mesh are not tested (unestablished which
-//! sector an effect is in, 7.1; TODO(#329)): a superset of the game's
-//! effects is drawn.
+//! Which effect objects are drawn is the camera pass's (7.1;
+//! object-visibility.md 4 – 6; `LevelScreen`'s dynamic items).
 
 use serde::Serialize;
 

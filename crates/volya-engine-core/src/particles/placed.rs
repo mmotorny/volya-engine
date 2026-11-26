@@ -105,6 +105,14 @@ impl Instance {
         }
     }
 
+    /// The bounding box (P2 8.3 step 5, P6 5.5).
+    pub fn bounds(&self) -> super::Bounds {
+        match self {
+            Instance::Effect(i) => i.bounds(),
+            Instance::Group(g) => g.bounds(),
+        }
+    }
+
     pub fn is_playing(&self) -> bool {
         match self {
             Instance::Effect(i) => i.is_playing(),
