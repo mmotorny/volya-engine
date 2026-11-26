@@ -118,13 +118,7 @@ fn centre_pixel(bmp: &[u8]) -> Option<u32> {
 /// Runs `SETUP` then `tail` (a shell snippet given `args` as `$@`) in a new
 /// container with `dir` at /work; returns the container's exit code.
 fn in_container(dir: &Path, tail: &str, args: &[&str]) -> Result<u8> {
-    let mut container = Container::spawn(
-        dir,
-        tail,
-        args,
-        Stdio::inherit(),
-        Stdio::inherit(),
-    )?;
+    let mut container = Container::spawn(dir, tail, args, Stdio::inherit(), Stdio::inherit())?;
     let status = container.wait()?;
     status
         .code()
