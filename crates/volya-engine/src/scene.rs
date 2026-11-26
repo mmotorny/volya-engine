@@ -13,6 +13,7 @@
 //! *x*₀ … *x*₀ + *w* with half-texel texture coordinates.
 
 use std::sync::Arc;
+use volya_engine_formats::level::GEOMETRY_LOD;
 
 use serde::Serialize;
 
@@ -244,6 +245,9 @@ pub struct Scene {
     /// (texture-quality-filtering.md 1).
     #[serde(skip)]
     pub texture_quality: crate::core::texture_quality::TextureQuality,
+    /// `r__geometry_lod` (object-detail-level.md 1).
+    #[serde(skip)]
+    pub geometry_lod: f32,
 }
 
 fn resolution<S: serde::Serializer>(r: &Resolution, s: S) -> Result<S::Ok, S::Error> {
@@ -260,6 +264,7 @@ impl Scene {
             presentation: Default::default(),
             filtering: Default::default(),
             texture_quality: Default::default(),
+            geometry_lod: GEOMETRY_LOD,
         }
     }
 

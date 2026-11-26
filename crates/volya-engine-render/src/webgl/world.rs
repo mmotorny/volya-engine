@@ -1471,7 +1471,7 @@ impl Renderer {
         // The static draws that may show (the camera's frustum and the size
         // test, conservatively; the shaders still drop the rest).
         let planes = frustum_planes(&view_projection);
-        let ssa = ssa_min(size.0, size.1, frame.fov_y_degrees);
+        let ssa = ssa_min(size.0, size.1, frame.fov_y_degrees, frame.geometry_lod);
         let spheres = inner.spheres.borrow();
         // The draws the camera pass keeps, by kept draw.
         let kept: Option<Vec<bool>> = frame.drawn.as_ref().map(|drawn| {

@@ -291,6 +291,9 @@ pub struct MeshRange {
     pub vertex_count: u32,
     pub first_index: u32,
     pub index_count: u32,
+    /// The mesh's header sphere in model space: centre, radius
+    /// (object-detail-level.md 3).
+    pub sphere: [f32; 4],
 }
 
 /// A model file loaded for drawing: its header and meshes, the vertices
@@ -339,6 +342,10 @@ pub fn add_model(
             vertex_count: m.vertices.len() as u32,
             first_index,
             index_count: indices.len() as u32,
+            sphere: {
+                let (c, r) = (m.header.sphere_centre, m.header.sphere_radius);
+                [c[0], c[1], c[2], r]
+            },
         });
     }
     Ok(LoadedModel {
@@ -653,7 +660,7 @@ pub fn spawn(
 }
 
 /// One object mesh's draw: a range of [`ObjectGeometry`] with a surface,
-/// the object's transform, world sphere and `L_dynamic_props`.
+/// the object's transform, the mesh's sphere and `L_dynamic_props`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ObjectDraw {
     /// Its instance in [`LevelObjects::instances`].
@@ -663,8 +670,22 @@ pub struct ObjectDraw {
     pub first_index: u32,
     pub index_count: u32,
     pub transform: Mat4,
+    /// The mesh's own sphere, its centre placed by the transform and its
+    /// radius as stored: each part's small-part test
+    /// (object-detail-level.md 3).
     pub sphere: [f32; 4],
+    /// The mesh's sphere in model space ([`MeshRange::sphere`]).
+    pub mesh_sphere: [f32; 4],
     pub dynamic_props: [f32; 4],
+}
+
+impl ObjectDraw {
+    /// [`ObjectDraw::sphere`] with the object at `transform`.
+    pub fn sphere_at(&self, transform: &Mat4) -> [f32; 4] {
+        let s = self.mesh_sphere;
+        let c = transform_point(transform, [s[0], s[1], s[2]]);
+        [c[0], c[1], c[2], s[3]]
+    }
 }
 
 /// The objects as the level keeps them.
@@ -716,7 +737,12 @@ impl LevelObjects {
                     first_index: mesh.first_index,
                     index_count: mesh.index_count,
                     transform: instance.transform,
-                    sphere: instance.sphere,
+                    sphere: {
+                        let s = mesh.sphere;
+                        let c = transform_point(&instance.transform, [s[0], s[1], s[2]]);
+                        [c[0], c[1], c[2], s[3]]
+                    },
+                    mesh_sphere: mesh.sphere,
                     dynamic_props: *props,
                 });
             }
@@ -795,6 +821,30 @@ impl LevelObjects {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// object-detail-level.md 3: a part's sphere is its own header
+    /// sphere, the centre placed by the object's transform, the radius as
+    /// stored even under a scale.
+    #[test]
+    fn a_part_is_tested_on_its_own_sphere() {
+        let mut x = [[0.0; 4]; 4];
+        for (i, row) in x.iter_mut().enumerate().take(3) {
+            row[i] = 2.0;
+        }
+        x[3] = [10.0, 20.0, 30.0, 1.0];
+        let draw = ObjectDraw {
+            instance: 0,
+            surface: 0,
+            first_vertex: 0,
+            first_index: 0,
+            index_count: 3,
+            transform: x,
+            sphere: [0.0; 4],
+            mesh_sphere: [1.0, 0.0, -1.0, 0.25],
+            dynamic_props: [0.0; 4],
+        };
+        assert_eq!(draw.sphere_at(&x), [12.0, 20.0, 28.0, 0.25]);
+    }
 
     #[test]
     fn visual_names_lose_extensions() {

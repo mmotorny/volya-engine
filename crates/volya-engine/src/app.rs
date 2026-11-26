@@ -478,6 +478,24 @@ fn supersample(console: &Console) -> u32 {
     (console.number("r__supersample") as u32).clamp(1, 4)
 }
 
+/// `r__geometry_lod`, `r1_ssa_lod_a` and `r1_ssa_lod_b`
+/// (object-detail-level.md 1): the last two reals 16 … 96 and 16 … 64 (RS
+/// 1), their defaults before set; a stored value out of range is clamped
+/// (our choice).
+fn geometry_lod(console: &Console) -> [f32; 3] {
+    use volya_engine_formats::level::{SSA_LOD_A, SSA_LOD_B};
+    let kept = |name, default: f32, max: f32| {
+        (console.status(name))
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .map_or(default, |v| v.clamp(16.0, max))
+    };
+    [
+        console.number("r__geometry_lod"),
+        kept("r1_ssa_lod_a", SSA_LOD_A, 96.0),
+        kept("r1_ssa_lod_b", SSA_LOD_B, 64.0),
+    ]
+}
+
 /// `r1_pps_u` and `r1_pps_v` (frame-presentation.md 3.2): reals −1 … 1, 0
 /// before set; a stored value out of range is clamped (our choice).
 fn pps(console: &Console) -> [f32; 2] {
@@ -1011,6 +1029,8 @@ impl App {
             level.set_light_settings(settings, glows);
             level.set_supersample(self.supersample);
             level.set_vis_distance(self.console.number("rs_vis_distance"));
+            let [lod, a, b] = geometry_lod(&self.console);
+            level.set_geometry_lod(lod, a, b);
             // detail-objects.md 7; weather-ambient-effects.md 4.3: the wind
             // as the sound rules last updated it (without audio output
             // they do not run, #352).
@@ -1503,6 +1523,7 @@ impl App {
                 mip_bias: s.bias,
             };
             scene.texture_quality = self.texture_quality();
+            scene.geometry_lod = self.console.number("r__geometry_lod");
         }
         if let Err(e) = &scene
             && e.kind() != io::ErrorKind::Unsupported

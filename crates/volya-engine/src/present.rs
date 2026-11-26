@@ -32,7 +32,7 @@ use crate::render::{
 };
 use crate::scene::{Scene, TextureId, WorldScene};
 use volya_engine_formats::dds::Dds;
-use volya_engine_formats::model::transform_point;
+use volya_engine_formats::level::GEOMETRY_LOD;
 use volya_engine_formats::pe::Rgba;
 use volya_engine_formats::ui::{UI_HEIGHT, UI_WIDTH};
 use volya_engine_formats::video::TheoraVideo;
@@ -412,6 +412,7 @@ impl Presenter {
                 .collect(),
             presentation: Default::default(),
             filtering: Default::default(),
+            geometry_lod: GEOMETRY_LOD,
             effects: None,
             details: scene.details.as_ref().map(|d| DetailFrame {
                 instances: d.frame.instances.clone(),
@@ -634,19 +635,10 @@ impl Presenter {
             }
             let instance = &objects.instances[k];
             let (transform, sphere) = match now {
-                Some(t) => {
-                    let h = &objects.models[instance.model].header;
-                    let c = transform_point(&t, h.sphere_centre);
-                    (t, [c[0], c[1], c[2], h.sphere_radius])
-                }
+                Some(t) => (t, d.sphere_at(&t)),
                 None => (
                     instance.transform,
-                    [
-                        instance.sphere[0],
-                        instance.sphere[1],
-                        instance.sphere[2],
-                        0.0,
-                    ],
+                    [d.sphere[0], d.sphere[1], d.sphere[2], 0.0],
                 ),
             };
             renderer.place_draw(world, first + j, &transform, sphere);
@@ -858,6 +850,7 @@ impl Presenter {
                 list.world = frame.filter(|_| !world.covered).map(|mut f| {
                     f.presentation = scene.presentation;
                     f.filtering = scene.filtering;
+                    f.geometry_lod = scene.geometry_lod;
                     // The level hands over the identity: no screen effect
                     // exists yet (frame-presentation.md 2.2 step 3).
                     // TODO(#190): the effects' values (screen-effects).
