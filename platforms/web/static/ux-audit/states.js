@@ -17,9 +17,9 @@ export const SECTIONS = [
       { id: "import", name: "First start", game: fresh },
       { id: "import-tab", name: "First start in a browser tab", game: fresh, tab: true, persisted: false },
       { id: "import-deleted", name: "The browser deleted the imported game", game: fresh, tab: true, persisted: false, deleted: true },
-      { id: "import-no-graphics", name: "Neither WebGPU nor WebGL 2 working (before or after import)", game: fresh, gpu: false },
+      { id: "import-no-graphics", name: "WebGL 2 not working (before or after import)", game: fresh, gpu: false },
       { id: "import-not-isolated", name: "Not cross-origin isolated after the one reload (no shared memory for sound)", game: fresh, isolated: false },
-      { id: "import-not-isolated-no-graphics", name: "Not isolated, and no WebGPU or WebGL 2", game: fresh, isolated: false, gpu: false },
+      { id: "import-not-isolated-no-graphics", name: "Not isolated, and no WebGL 2", game: fresh, isolated: false, gpu: false },
       { id: "import-pick", name: "Picked the wrong files", game: fresh, snapshot: { error: "pick" } },
       { id: "import-not-installer", name: "Not the game's installer", game: fresh, snapshot: { error: "Inno Setup headers: unexpected signature" } },
       {
@@ -143,21 +143,7 @@ export const SECTIONS = [
   {
     title: "Settings",
     states: [
-      { id: "settings", name: "Imported game; WebGPU and WebGL 2 supported", game: imported, screen: "settings" },
-      {
-        id: "settings-no-webgpu",
-        name: "WebGPU not supported by this browser",
-        game: imported,
-        screen: "settings",
-        graphics: { available: { webgpu: false, webgl2: true } },
-      },
-      {
-        id: "settings-webgl2",
-        name: "WebGL 2 chosen",
-        game: imported,
-        screen: "settings",
-        graphics: { chosen: "webgl2" },
-      },
+      { id: "settings", name: "Imported game", game: imported, screen: "settings" },
       { id: "settings-checking", name: "Check for updates pressed: checking", game: imported, screen: "settings", check: "checking" },
       { id: "settings-up-to-date", name: "Checked: up to date (for a few seconds)", game: imported, screen: "settings", check: "none" },
       { id: "settings-check-offline", name: "Checked while offline (for a few seconds)", game: imported, screen: "settings", check: "offline" },

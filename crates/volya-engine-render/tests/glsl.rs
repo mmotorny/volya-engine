@@ -2,10 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! Every program translates to WebGL 2's GLSL ES 3.00, as wgpu's GL backend
-//! translates it (#113): the world's in its WebGL form
-//! ([`volya_engine_render::world::world_source`]), whose per-draw data comes
-//! from a texture; its WebGPU form, reading a storage buffer in its vertex
-//! programs, does not translate.
+//! translates it.
 
 use naga::back::glsl;
 use naga::valid::{Capabilities, ValidationFlags, Validator};
@@ -60,19 +57,8 @@ fn programs_translate_to_webgl2() {
         ("ramp", include_str!("../src/ramp.wgsl")),
         ("postprocess", include_str!("../src/postprocess.wgsl")),
         ("details", include_str!("../src/details.wgsl")),
+        ("world", include_str!("../src/world.wgsl")),
     ] {
         assert_eq!(untranslatable(source), Vec::<String>::new(), "{name}");
     }
-    let world = volya_engine_render::world::world_source(true);
-    assert_eq!(
-        untranslatable(&world),
-        Vec::<String>::new(),
-        "world (WebGL)"
-    );
-    // The WebGPU form's vertex programs read a storage buffer.
-    let webgpu = untranslatable(&volya_engine_render::world::world_source(false));
-    assert!(
-        webgpu.iter().any(|e| e.starts_with("vs_")),
-        "world (WebGPU) translated: {webgpu:?}"
-    );
 }

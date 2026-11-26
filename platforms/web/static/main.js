@@ -9,7 +9,6 @@ import { startInput } from "./input.js";
 import { createTouchControls } from "./touch-controls.js";
 import { createFullscreenOffer } from "./fullscreen.js";
 import { createTextEntry } from "./text-entry.js";
-import { choose } from "./graphics.js";
 // Early: Chrome offers installing the app once, soon after load.
 import "./install.js";
 import { startUpdates, versionText } from "./update.js";
@@ -33,20 +32,6 @@ const isolation = await ensureIsolated({ registered: registration });
 if (isolation === "reloading") await new Promise(() => {});
 const isolated = isolation === "isolated";
 
-/**
- * The Graphics choice (graphics.js), stored only when the player made one.
- * localStorage: the page alone reads it, and tells the engine worker.
- * Namespaced: the github.io origin is shared.
- */
-const GRAPHICS = "volya-engine.graphics";
-const storedGraphics = () => {
-  try {
-    return localStorage.getItem(GRAPHICS);
-  } catch {
-    return null;
-  }
-};
-
 let worker;
 const pending = new Map();
 diagnostics.connect((message) => worker.postMessage(message));
@@ -64,9 +49,6 @@ let setCapture = () => {};
 let setLevel = () => {};
 let setTextField = () => {};
 let setCursor = () => {};
-/** What the browser supports and the backend the engine started with (graphics.js). */
-let available = {};
-let backend = null;
 /** The running engine's build id (engine-worker.js). */
 let engineBuild = null;
 
@@ -155,10 +137,8 @@ addEventListener("pagehide", () => {
 });
 addEventListener("pageshow", (event) => event.persisted && location.reload());
 
-// The engine sizes the canvas in device pixels from these. A canvas gives
-// its drawing to one worker for good, and keeps the first kind of context it
-// gives: an engine started anew gets a new one.
-let view = document.getElementById("view");
+// The engine sizes the canvas in device pixels from these.
+const view = document.getElementById("view");
 const size = () => ({ width: view.clientWidth, height: view.clientHeight, dpr: devicePixelRatio });
 const resized = () => worker.postMessage({ type: "resize", ...size() });
 const sizes = new ResizeObserver(resized);
@@ -169,7 +149,7 @@ function startEngine() {
   const started = new Promise((resolve, reject) => {
     worker.onmessage = ({ data }) => {
       if (data.type === "started") {
-        ({ available, backend, build: engineBuild } = data);
+        ({ build: engineBuild } = data);
         diagnostics.setStatus(data.diagnostics);
         resolve();
       } else if (data.type === "error") reject(new Error(data.message));
@@ -194,68 +174,11 @@ function startEngine() {
   const logging = diagnostics.enabled();
   const log = logging ? diagnostics.session() : null;
   const previousEnd = logging ? diagnostics.takeKeptEnd() : null;
-  worker.postMessage({ type: "start", canvas, size: size(), graphics: storedGraphics(), diagnostics: log, previousEnd }, [canvas]);
+  worker.postMessage({ type: "start", canvas, size: size(), diagnostics: log, previousEnd }, [canvas]);
   if (document.visibilityState === "hidden") visibilityChanged();
   sizes.observe(view);
   return started;
 }
-
-/**
- * Starts the engine anew, on a new canvas, so the Graphics choice applies:
- * only outside a game (the app's own interface, where Settings is).
- */
-async function restartEngine() {
-  // The imported files' locks released first, for the next engine.
-  await call("unmount_game").catch(() => {});
-  // Why, in the diagnostic log (#356): handled before the call after it.
-  worker.postMessage({ type: "end", reason: "restart", message: "the engine was restarted for the Graphics setting" });
-  await call("status").catch(() => {});
-  worker.terminate();
-  for (const { reject } of pending.values()) reject(new Error("the engine was restarted"));
-  pending.clear();
-  output?.disconnect();
-  sizes.unobserve(view);
-  const fresh = document.createElement("canvas");
-  fresh.id = "view";
-  view.replaceWith(fresh);
-  view = fresh;
-  await startEngine();
-  if (audio && isolated) output = await connectAudio(audio);
-}
-
-/**
- * The Graphics setting for the interface (game-ui.js): what the browser
- * supports, the stored choice, storing one, and applying it before the game
- * starts.
- */
-/** The Graphics choice being applied (`graphics.apply`), while it is. */
-let applying = null;
-const graphics = {
-  get available() {
-    return available;
-  },
-  get chosen() {
-    return storedGraphics();
-  },
-  choose(choice) {
-    try {
-      localStorage.setItem(GRAPHICS, choice);
-    } catch (error) {
-      console.warn(`graphics setting: ${error.message}`);
-    }
-  },
-  /**
-   * Starts the engine anew where the choice differs from the backend it
-   * runs. One restart at a time: `backend` changes only once the new engine
-   * runs, so a second restart would end the one awaited (#369).
-   */
-  apply() {
-    applying ??= (async () => {
-      if (choose(storedGraphics(), available) !== backend) await restartEngine();
-    })().finally(() => (applying = null));
-    return applying;
-  },
-};
 
 globalThis.volya = {
   call,
@@ -263,7 +186,6 @@ globalThis.volya = {
   connectAudio,
   audioState: () => audio?.state,
   diagnostics,
-  graphics,
   updates,
   get engineBuild() {
     return engineBuild;
@@ -327,7 +249,7 @@ try {
   if (isolated) output = await connectAudio(audio);
   const resume = () => document.visibilityState === "visible" && audio.state !== "running" && audio.resume();
   for (const event of ["pointerdown", "keydown", "touchend"]) addEventListener(event, resume);
-  await import("./game-ui.js").then((ui) => ui.start(call, updates, graphics, { isolated }));
+  await import("./game-ui.js").then((ui) => ui.start(call, updates, { isolated }));
 } catch (error) {
   // The same panel as the interface's other problems, drawn without the engine.
   status.textContent = `Volya Engine · ${versionText()}`;

@@ -174,9 +174,6 @@ pub struct Renderer {
     texture_bytes: std::cell::Cell<u64>,
     /// Bytes of world geometry written so far ([`Renderer::geometry_bytes_written`]).
     geometry_bytes: std::cell::Cell<u64>,
-    /// Whether the world reads per-draw data from a texture and draws
-    /// without base vertices ([`Renderer::compat`]).
-    compat: bool,
     /// The particles' pipelines and buffers (always set; taken while a
     /// frame is encoded).
     particles: Option<particles::ParticlePipelines>,
@@ -301,7 +298,6 @@ impl Renderer {
             prepared: Default::default(),
             texture_bytes: Default::default(),
             geometry_bytes: Default::default(),
-            compat: device.limits().max_storage_buffers_per_shader_stage == 0,
             // Made with the renderer, before any level: what lives across
             // levels is allocated below their data, so a level's freed
             // memory stays one block for the next load (measured: made with
@@ -319,15 +315,6 @@ impl Renderer {
         renderer
     }
 
-    /// Whether the world is drawn the way WebGL 2 allows: per-draw data read
-    /// from a texture rather than a storage buffer (which WebGL's vertex
-    /// programs lack), and indices rebased at upload rather than drawn with
-    /// base vertices (which WebGL lacks). Set for devices without storage
-    /// buffers.
-    pub fn compat(&self) -> bool {
-        self.compat
-    }
-
     /// Grows the particles' vertex buffer to hold `particles`
     /// sprites at once, so that no buffer is made while a level runs (made
     /// with its world).
@@ -340,16 +327,6 @@ impl Renderer {
     /// The particles' vertex buffer's size in bytes.
     pub fn particle_buffer_size(&self) -> u64 {
         self.particles.as_ref().map_or(0, |p| p.buffer_size())
-    }
-
-    /// Draws the world in [`Renderer::compat`] mode even where storage
-    /// buffers exist (tests: the WebGL path on a native GPU). Takes effect
-    /// for worlds created afterwards.
-    pub fn set_compat(&mut self, on: bool) {
-        if on != self.compat {
-            self.compat = on;
-            self.make_world_pipelines();
-        }
     }
 
     /// Keeps `texture`, made from the file at `path`, for
@@ -654,8 +631,7 @@ impl Renderer {
     /// The GPU times of the frames [`Renderer::render_scaled`] drew that
     /// were read back since the last call, milliseconds: the time its passes
     /// kept the GPU busy, the sum of [`Renderer::take_gpu_pass_times`]'. Read back once the GPU
-    /// is done, a few frames late; the browser's WebGPU maps buffers on its
-    /// own, other backends when the device is polled.
+    /// is done, a few frames late, when the device is polled.
     pub fn take_gpu_times(&mut self) -> Vec<f64> {
         self.timer.as_mut().map(|t| t.take()).unwrap_or_default()
     }

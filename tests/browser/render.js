@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Rendering in the engine worker: startup with WebGPU, else WebGL 2 (#113),
-// else without graphics; the frame loop on the transferred canvas, and the
+// Rendering in the engine worker: startup with WebGL 2, else without
+// graphics; the frame loop on the transferred canvas, and the
 // path from an imported archive through DDS (or Theora) to the screen, read
 // back through the renderer (`debug_capture`), not the DOM.
 
@@ -47,7 +47,7 @@ function decodeMasked(bytes) {
   return { width, height, texels };
 }
 
-/** Fails unless graphics are up (WebGPU, or WebGL 2 where there's no WebGPU adapter). */
+/** Fails unless graphics are up. */
 function needsGpu() {
   assertEqual(gpu.state, "ready", `graphics: ${gpu.message}`);
 }
@@ -63,7 +63,7 @@ export const tests = {
     const line = document.getElementById("status").textContent;
     if (gpu.state === "ready") {
       assert(!line.includes("unavailable"), `status line: ${line}`);
-      return `${gpu.backend}, ${gpu.format}, ${gpu.size.join("×")}, textures ${gpu.textures}`;
+      return `${gpu.format}, ${gpu.size.join("×")}, textures ${gpu.textures}`;
     }
     assertEqual(gpu.state, "unavailable", "state");
     assert(gpu.message && line.includes(`graphics unavailable: ${gpu.message}`), `status line: ${line}`);
@@ -158,15 +158,14 @@ export const tests = {
     return `${info.width}×${info.height} at ${info.fps.toFixed(2)} fps`;
   },
 
-  // docs/behavior/particle-drawing.md 4.5 – 7 through this browser's
-  // backend (WebGL 2 in the iOS Simulator: no storage buffers, no base
-  // vertex): the scenes of the native render test.
+  // docs/behavior/particle-drawing.md 4.5 – 7: the scenes of the native
+  // render test.
   "draws particle effects: back to front, the SET alpha test, culling, distortion": async () => {
     needsGpu();
     const draw = async (name, size) => {
-      const info = await volya.call("debug_draw_particles", { case: name });
+      await volya.call("debug_draw_particles", { case: name });
       const rgba = await capture(size, size);
-      return { compat: info.compat, at: (x, y) => Array.from(rgba.slice(4 * (y * size + x), 4 * (y * size + x) + 3)) };
+      return { at: (x, y) => Array.from(rgba.slice(4 * (y * size + x), 4 * (y * size + x) + 3)) };
     };
     const near = (got, want, what) => assert(got.every((v, i) => Math.abs(v - want[i]) <= 3), `${what}: ${got}, expected ${want}`);
     const blend = await draw("blend", 64);
@@ -190,15 +189,14 @@ export const tests = {
     near(shifted.at(112, 64), [254, 254, 254], "still white");
     assertEqual(shifted.at(112, 192), [0, 0, 0], "the right way up");
     await volya.call("debug_draw", {});
-    return `${gpu.backend}${blend.compat ? ", compat path" : ""}`;
   },
 
   "draws dynamic light passes and glows": async () => {
     needsGpu();
     const draw = async (name) => {
-      const info = await volya.call("debug_draw_lights", { case: name });
+      await volya.call("debug_draw_lights", { case: name });
       const rgba = await capture(16, 16);
-      return { compat: info.compat, centre: Array.from(rgba.slice(4 * (8 * 16 + 8), 4 * (8 * 16 + 8) + 3)) };
+      return { centre: Array.from(rgba.slice(4 * (8 * 16 + 8), 4 * (8 * 16 + 8) + 3)) };
     };
     const near = (got, want, what) => assert(got.every((v, i) => Math.abs(v - want[i]) <= 3), `${what}: ${got}, expected ${want}`);
     const none = await draw("none");
@@ -209,7 +207,6 @@ export const tests = {
     near((await draw("glow")).centre, [64, 64, 64], "a glow in front");
     near((await draw("hidden")).centre, [0, 0, 0], "a glow behind the triangle");
     await volya.call("debug_draw", {});
-    return `${gpu.backend}${none.compat ? ", compat path" : ""}`;
   },
 
   "clears and forgets the game": async () => {

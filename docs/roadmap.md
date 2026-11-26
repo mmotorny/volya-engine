@@ -34,4 +34,6 @@ Volya Engine reads and writes the original game's saves. Saving and loading are 
 
 ## Renderers
 
+The browser renderer targets WebGL 2 only (decided by the user): WebGPU is reconsidered if the target platforms come to favor it.
+
 The first, static-lighting renderer is the one built. The dynamic renderers (`renderer_r2a`, `renderer_r2`; scoped in docs/behavior/r2-renderers-scope.md) wait until the game is more or less complete: a playable game comes before more graphics modes. Until then their entries in the options are disabled.

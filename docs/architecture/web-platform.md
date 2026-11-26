@@ -17,8 +17,8 @@
 
 ## The page
 
-- The app opens on its own interface (`static/game-ui.js`): home with Play once a game is imported, else the import screen; "This browser can't run the game", with the reason, instead of both when the page isn't cross-origin isolated or has no WebGPU or WebGL 2.
-- Play applies the Graphics setting ([rendering.md](rendering.md#backends)) and launches the game: the engine owns the screen (input capture on) and the page hides its interface until the player quits ("Yes" in the menu's quit box, or Q), which returns home.
+- The app opens on its own interface (`static/game-ui.js`): home with Play once a game is imported, else the import screen; "This browser can't run the game", with the reason, instead of both when the page isn't cross-origin isolated or has no WebGL 2.
+- Play launches the game, one start at a time (#369): the engine owns the screen (input capture on) and the page hides its interface until the player quits ("Yes" in the menu's quit box, or Q), which returns home.
 - The page ↔ engine input path: [input.md](input.md).
 
 ## A hidden page

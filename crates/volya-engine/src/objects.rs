@@ -308,7 +308,7 @@ pub struct LoadedModel {
 /// full-detail indices to `geometry`. Every mesh is quantized whatever its
 /// render mode: the software mode keeps floats, but needs a bone index
 /// above 78 with 256 vertex shader constants, which no shipped model has
-/// (our choice: the constant count of a WebGPU device has no meaning here).
+/// (our choice: the constant count of a GPU device has no meaning here).
 pub fn add_model(
     path: &str,
     model: &Model,

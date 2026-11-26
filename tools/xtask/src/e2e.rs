@@ -117,7 +117,7 @@ pub fn run(args: &[&str]) -> Result {
                 ),
                 _ => unreachable!(),
             };
-            match outcome.map(|report| known_failures(target, &report)) {
+            match outcome {
                 Ok(report) => {
                     println!("{report}");
                     if !passed(&report) {
@@ -161,41 +161,6 @@ fn wait_report(id: &str, reports: &Receiver<String>, timeout: Duration) -> Resul
             Err(_) => return Err(format!("no report within {timeout:?}")),
         }
     }
-}
-
-/// Tests a target is known not to support, with the reason. Verified: the iOS
-/// Simulator exposes `navigator.gpu` but never returns an adapter, on the main
-/// thread or in workers; WebGPU needs the real device.
-/// The iOS Simulator draws through WebGL 2 (#113); only the checks of
-/// WebGPU itself fail there.
-const KNOWN_FAILURES: &[(&str, &str, &str)] = &[
-    ("iphone", "WebGPU adapter on the main thread", NO_WEBGPU),
-    (
-        "iphone",
-        "WebGPU renders from a worker to an OffscreenCanvas",
-        NO_WEBGPU,
-    ),
-];
-
-const NO_WEBGPU: &str = "iOS Simulator has no WebGPU adapter (the app draws there through WebGL 2); check WebGPU on a real device";
-
-/// Turns `fail` lines of tests in [`KNOWN_FAILURES`] for `target` into
-/// `skip` lines carrying the known reason.
-fn known_failures(target: &str, report: &str) -> String {
-    report
-        .lines()
-        .map(|line| {
-            let known = line.strip_prefix("fail ").and_then(|rest| {
-                let name = rest.split('\t').next()?;
-                KNOWN_FAILURES
-                    .iter()
-                    .find(|(t, n, _)| *t == target && *n == name)
-                    .map(|(_, n, reason)| format!("skip {n}\t{reason}"))
-            });
-            known.unwrap_or_else(|| line.to_owned())
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn passed(report: &str) -> bool {
@@ -512,17 +477,6 @@ fn latest_ios_runtime(list: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn known_failures_become_skips() {
-        let report =
-            "run x\nfail WebGPU adapter on the main thread\tno WebGPU adapter\nfail other\tboom";
-        assert_eq!(
-            known_failures("iphone", report),
-            format!("run x\nskip WebGPU adapter on the main thread\t{NO_WEBGPU}\nfail other\tboom")
-        );
-        assert_eq!(known_failures("chrome", report), report);
-    }
 
     #[test]
     fn report_verdict() {

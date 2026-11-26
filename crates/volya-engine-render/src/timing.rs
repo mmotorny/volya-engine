@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! The GPU time of frames (#355), where the device has timestamp queries
-//! (WebGPU's optional `timestamp-query`): each render pass of a timed frame
+//! (natively; WebGL 2 has none): each render pass of a timed frame
 //! writes timestamps at its beginning and end ([`pass_writes`], at most
 //! [`PASSES`] a frame; the frame's last pass, the one showing the frame in
 //! the target, writes the frame's end), so a frame's GPU time is split by
@@ -24,7 +24,7 @@ pub(crate) const PASSES: u32 = 8;
 /// Timestamps of a slot: the frame's end, then two a pass.
 const QUERIES: u32 = 1 + 2 * PASSES;
 /// Where a slot's timestamps are resolved: resolve offsets must be
-/// multiples of 256 bytes (WebGPU).
+/// multiples of 256 bytes (wgpu).
 const RESOLVE_STRIDE: u64 = 256;
 
 thread_local! {
@@ -177,8 +177,8 @@ impl FrameTimer {
     /// The GPU times of the frames read back since the last call,
     /// milliseconds: the sum of their passes'. A frame whose end is not
     /// after its first pass's beginning (timestamps may be zero or reset,
-    /// documented by WebGPU; natively on Metal some frames' last timestamp
-    /// is zero, measured) is left out.
+    /// documented by wgpu; on Metal some frames' last timestamp is zero,
+    /// measured) is left out.
     pub(crate) fn take(&mut self) -> Vec<f64> {
         let mut times = Vec::new();
         for s in &mut self.slots {

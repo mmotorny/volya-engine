@@ -6,8 +6,7 @@
 //! of every model, then sway 2, then still, between the priority 0–1 draws
 //! and the sky. Instances come in a vertex buffer stepped per instance,
 //! bound at each draw's offset (no first instance), and the models' indices
-//! are rebased at upload (no base vertex), so the WebGL 2 path draws them
-//! alike.
+//! are rebased at upload (no base vertex), as WebGL 2 needs.
 
 use std::sync::Arc;
 

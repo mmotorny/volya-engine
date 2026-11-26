@@ -17,43 +17,17 @@ const ops = {
   },
 
   // Clears the transferred canvas to orange and reads the pixel back from
-  // the canvas texture itself, proving the presentation surface works.
-  async webgpu({ canvas }) {
-    if (!navigator.gpu) throw new Error("navigator.gpu missing in worker");
-    const adapter = await navigator.gpu.requestAdapter();
-    if (!adapter) throw new Error("no WebGPU adapter");
-    const device = await adapter.requestDevice();
-    const context = canvas.getContext("webgpu");
-    if (!context) throw new Error("no webgpu context on OffscreenCanvas");
-    const format = navigator.gpu.getPreferredCanvasFormat();
-    context.configure({
-      device,
-      format,
-      alphaMode: "opaque",
-      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
-    });
-    const texture = context.getCurrentTexture();
-    const encoder = device.createCommandEncoder();
-    const pass = encoder.beginRenderPass({
-      colorAttachments: [{
-        view: texture.createView(),
-        loadOp: "clear",
-        storeOp: "store",
-        clearValue: { r: 1, g: 0.5, b: 0, a: 1 },
-      }],
-    });
-    pass.end();
-    const buffer = device.createBuffer({
-      size: 256,
-      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-    });
-    encoder.copyTextureToBuffer({ texture }, { buffer, bytesPerRow: 256 }, { width: 1, height: 1 });
-    device.queue.submit([encoder.finish()]);
-    await buffer.mapAsync(GPUMapMode.READ);
-    const px = Array.from(new Uint8Array(buffer.getMappedRange(), 0, 4));
-    buffer.unmap();
-    const rgba = format.startsWith("bgra") ? [px[2], px[1], px[0], px[3]] : px;
-    return { format, vendor: adapter.info?.vendor ?? "?", rgba };
+  // its drawing buffer, proving the presentation surface works.
+  async webgl2({ canvas }) {
+    const gl = canvas.getContext("webgl2");
+    if (!gl) throw new Error("no webgl2 context on OffscreenCanvas");
+    gl.clearColor(1, 128 / 255, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    const rgba = new Uint8Array(4);
+    gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+    const info = gl.getExtension("WEBGL_debug_renderer_info");
+    const renderer = gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER);
+    return { renderer, rgba: Array.from(rgba) };
   },
 
   async opfs() {

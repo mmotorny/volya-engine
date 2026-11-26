@@ -711,13 +711,12 @@ fn loading_stage_times() {
     );
 }
 
-/// The level's start view and an outdoor view drawn as on WebGL 2 (#113):
-/// textures transcoded to ETC2 (where the GPU has no BC) or decoded to
-/// RGBA8 (where it has neither), per-draw data from a texture, indices
-/// rebased; each close to the WebGPU path's picture. Reports each path's
-/// texture memory and the transcoding time.
+/// The level's start view and an outdoor view drawn with textures
+/// transcoded to ETC2 (where the GPU has no BC) or decoded to RGBA8 (where
+/// it has neither), each close to the picture with BC as stored. Reports
+/// each path's texture memory and the transcoding time.
 #[test]
-fn webgl_paths_match_from_game_data() {
+fn texture_paths_match_from_game_data() {
     let Some(archives) = gog_archives::archives() else {
         return;
     };
@@ -762,12 +761,12 @@ fn webgl_paths_match_from_game_data() {
             .sum();
         10.0 * (255.0f64.powi(2) / (se / (a.len() / 4 * 3) as f64)).log10()
     };
-    let mut webgpu = renderer();
-    assert_eq!(webgpu.texture_path(), TexturePath::Bc);
-    let (reference, bc_bytes, bc_first) = views(&mut webgpu);
+    let mut bc = renderer();
+    assert_eq!(bc.texture_path(), TexturePath::Bc);
+    let (reference, bc_bytes, bc_first) = views(&mut bc);
     let mib = |b: u64| b as f64 / (1 << 20) as f64;
     eprintln!(
-        "BC, storage buffer: textures {:.1} MiB, first frame {bc_first:.1?}",
+        "BC: textures {:.1} MiB, first frame {bc_first:.1?}",
         mib(bc_bytes)
     );
     for (allowed, path) in [
@@ -779,7 +778,6 @@ fn webgl_paths_match_from_game_data() {
             eprintln!("skipped {path:?}: the GPU lacks it");
             continue;
         }
-        r.set_compat(true);
         let (pictures, bytes, first) = views(&mut r);
         let quality: Vec<f64> = pictures
             .iter()
@@ -787,7 +785,7 @@ fn webgl_paths_match_from_game_data() {
             .map(|(a, b)| psnr(a, b))
             .collect();
         eprintln!(
-            "{path:?}, draws texture, rebased indices: textures {:.1} MiB, first frame (with \
+            "{path:?}: textures {:.1} MiB, first frame (with \
              transcoding) {first:.1?}, PSNR against BC {quality:.1?} dB",
             mib(bytes)
         );
@@ -901,9 +899,9 @@ fn loading_waits_for_prepared_textures() {
 }
 
 /// The first level's placed effect (`tests\muhi`, level-placed-effects.md
-/// 8) drawn (docs/behavior/particle-drawing.md), on the WebGPU path and the
-/// WebGL 2 one: a frame with the effects differs from one without them, and
-/// only around where the effect's particles project. `VOLYA_DUMP_EFFECTS`
+/// 8) drawn (docs/behavior/particle-drawing.md): a frame with the effects
+/// differs from one without them, and only around where the effect's
+/// particles project. `VOLYA_DUMP_EFFECTS`
 /// (and `_OFF`) write the frames locally.
 #[test]
 fn placed_effects_are_drawn_from_game_data() {
@@ -913,88 +911,85 @@ fn placed_effects_are_drawn_from_game_data() {
     let root = StdVfs::new(archives[0].file.parent().unwrap());
     let tree = DbVfs::open_game(&root, Some("mods")).unwrap();
     let data = GameData::read(&tree, None, SIZE).unwrap();
-    for compat in [false, true] {
-        let mut screen = LevelScreen::load(&tree, &data, 0).unwrap();
-        let fx = screen.effects_report();
-        let at = fx.records[0].effects[0].position;
-        // 0.6 m in front of the effect, looking at it along +z.
-        let eye = [at[0], at[1] + 0.1, at[2] - 0.6];
-        let angles = volya_engine::core::camera::Angles {
-            yaw: 0.0,
-            pitch: 0.0,
-            roll: 0.0,
-        };
-        // Two seconds: its 7 leaves born and drifting.
-        for t in 0..120u64 {
-            screen.set_camera(eye, angles);
-            screen.update(16 * (t + 1), &Input::new());
-        }
+    let mut screen = LevelScreen::load(&tree, &data, 0).unwrap();
+    let fx = screen.effects_report();
+    let at = fx.records[0].effects[0].position;
+    // 0.6 m in front of the effect, looking at it along +z.
+    let eye = [at[0], at[1] + 0.1, at[2] - 0.6];
+    let angles = volya_engine::core::camera::Angles {
+        yaw: 0.0,
+        pitch: 0.0,
+        roll: 0.0,
+    };
+    // Two seconds: its 7 leaves born and drifting.
+    for t in 0..120u64 {
         screen.set_camera(eye, angles);
-        // The placed effect alone: the zones' effects are zones.rs's.
-        screen.set_effect_origins_drawn(&[volya_engine::core::particles::placed::Origin::Placed]);
-        let mut r = renderer();
-        r.set_compat(compat);
-        let mut presenter = Presenter::new();
-        let mut capture = |screen: &LevelScreen| {
-            let scene = screen.scene(SIZE, 2000);
-            let list = presenter.draw_list(&mut r, &tree, &scene, 2000);
-            let pixels =
-                pollster::block_on(r.capture(&list, SIZE.width, SIZE.height, wgpu::Color::BLACK))
-                    .unwrap();
-            (pixels, scene)
-        };
-        let (on, scene) = capture(&screen);
-        let draws = &scene.world.as_ref().unwrap().particles;
-        assert_eq!(draws.len(), 1, "{draws:?}");
-        assert_eq!(draws[0].particles, 7);
-        screen.set_effects_drawn(false);
-        let (off, _) = capture(&screen);
-        assert!(presenter.take_errors().is_empty());
-        dump("VOLYA_DUMP_EFFECTS", &on, SIZE.width, SIZE.height);
-        dump("VOLYA_DUMP_EFFECTS_OFF", &off, SIZE.width, SIZE.height);
-        // Where the particles project: each quad's centre on screen.
-        let (view, projection) = screen.view_projection(SIZE.width, SIZE.height);
-        let vp = volya_engine::render::world::multiply(&view, &projection);
-        let centres: Vec<[f32; 2]> = draws[0]
-            .vertices
-            .chunks(4)
-            .filter_map(|q| {
-                let p: Vec<f32> = (0..3)
-                    .map(|i| q.iter().map(|v| v.position[i]).sum::<f32>() / 4.0)
-                    .collect();
-                let clip: Vec<f32> = (0..4)
-                    .map(|c| p[0] * vp[0][c] + p[1] * vp[1][c] + p[2] * vp[2][c] + vp[3][c])
-                    .collect();
-                (clip[3] > 0.01).then(|| {
-                    [
-                        (clip[0] / clip[3] * 0.5 + 0.5) * SIZE.width as f32,
-                        (0.5 - clip[1] / clip[3] * 0.5) * SIZE.height as f32,
-                    ]
-                })
+        screen.update(16 * (t + 1), &Input::new());
+    }
+    screen.set_camera(eye, angles);
+    // The placed effect alone: the zones' effects are zones.rs's.
+    screen.set_effect_origins_drawn(&[volya_engine::core::particles::placed::Origin::Placed]);
+    let mut r = renderer();
+    let mut presenter = Presenter::new();
+    let mut capture = |screen: &LevelScreen| {
+        let scene = screen.scene(SIZE, 2000);
+        let list = presenter.draw_list(&mut r, &tree, &scene, 2000);
+        let pixels =
+            pollster::block_on(r.capture(&list, SIZE.width, SIZE.height, wgpu::Color::BLACK))
+                .unwrap();
+        (pixels, scene)
+    };
+    let (on, scene) = capture(&screen);
+    let draws = &scene.world.as_ref().unwrap().particles;
+    assert_eq!(draws.len(), 1, "{draws:?}");
+    assert_eq!(draws[0].particles, 7);
+    screen.set_effects_drawn(false);
+    let (off, _) = capture(&screen);
+    assert!(presenter.take_errors().is_empty());
+    dump("VOLYA_DUMP_EFFECTS", &on, SIZE.width, SIZE.height);
+    dump("VOLYA_DUMP_EFFECTS_OFF", &off, SIZE.width, SIZE.height);
+    // Where the particles project: each quad's centre on screen.
+    let (view, projection) = screen.view_projection(SIZE.width, SIZE.height);
+    let vp = volya_engine::render::world::multiply(&view, &projection);
+    let centres: Vec<[f32; 2]> = draws[0]
+        .vertices
+        .chunks(4)
+        .filter_map(|q| {
+            let p: Vec<f32> = (0..3)
+                .map(|i| q.iter().map(|v| v.position[i]).sum::<f32>() / 4.0)
+                .collect();
+            let clip: Vec<f32> = (0..4)
+                .map(|c| p[0] * vp[0][c] + p[1] * vp[1][c] + p[2] * vp[2][c] + vp[3][c])
+                .collect();
+            (clip[3] > 0.01).then(|| {
+                [
+                    (clip[0] / clip[3] * 0.5 + 0.5) * SIZE.width as f32,
+                    (0.5 - clip[1] / clip[3] * 0.5) * SIZE.height as f32,
+                ]
             })
-            .collect();
-        let (mut inside, mut outside) = (0, 0);
-        for (i, (a, b)) in on.chunks(4).zip(off.chunks(4)).enumerate() {
-            if a[..3] != b[..3] {
-                let (x, y) = (
-                    (i as u32 % SIZE.width) as f32,
-                    (i as u32 / SIZE.width) as f32,
-                );
-                // Within 30 px of a leaf's centre (a leaf is 1 cm across).
-                if centres.iter().any(|c| (c[0] - x).hypot(c[1] - y) <= 30.0) {
-                    inside += 1;
-                } else {
-                    outside += 1;
-                }
+        })
+        .collect();
+    let (mut inside, mut outside) = (0, 0);
+    for (i, (a, b)) in on.chunks(4).zip(off.chunks(4)).enumerate() {
+        if a[..3] != b[..3] {
+            let (x, y) = (
+                (i as u32 % SIZE.width) as f32,
+                (i as u32 / SIZE.width) as f32,
+            );
+            // Within 30 px of a leaf's centre (a leaf is 1 cm across).
+            if centres.iter().any(|c| (c[0] - x).hypot(c[1] - y) <= 30.0) {
+                inside += 1;
+            } else {
+                outside += 1;
             }
         }
-        eprintln!(
-            "compat {compat}: {inside} pixels differ around the effect's {} leaves on screen, {outside} elsewhere",
-            centres.len()
-        );
-        assert!(inside > 50, "compat {compat}: {inside} pixels differ");
-        assert_eq!(outside, 0, "compat {compat}");
     }
+    eprintln!(
+        "{inside} pixels differ around the effect's {} leaves on screen, {outside} elsewhere",
+        centres.len()
+    );
+    assert!(inside > 50, "{inside} pixels differ");
+    assert_eq!(outside, 0);
 }
 
 /// A game tree that, while `hidden` is set, lacks the file of

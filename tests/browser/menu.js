@@ -6,8 +6,8 @@
 // logo sequence is skipped with synthesized Escape presses, and the menu is
 // driven with synthesized keyboard, mouse and touch input. State comes from
 // the `menu_state` and `menu_scene` ops; pixels from `debug_capture` (the
-// renderer, not the DOM) where graphics exist: WebGPU, or WebGL 2 with the
-// textures transcoded to ETC2 (the iOS Simulator, #113). Without graphics
+// renderer, not the DOM) where graphics exist, with the textures
+// transcoded to ETC2 where the GPU has no BC (the iOS Simulator). Without graphics
 // everything but the pixels still runs.
 
 import { assert, assertEqual, skip } from "./harness.js";
@@ -75,37 +75,6 @@ let installer;
 let gpu;
 // The size the game draws at (#49), shown scaled to fit the canvas.
 let render;
-// The title menu's frames drawn through WebGPU are compared with the same
-// scenes drawn through WebGL 2 (#121, #425), at the installer's video mode
-// and a phone's size. They are drawn where no wasm heap is measured after
-// (the readback grows the heap, which never shrinks).
-const MENU_FRAME_SIZES = [
-  [1024, 768],
-  [2868, 1320],
-];
-// How far WebGL 2's frame may be from WebGPU's: measured identical in
-// headless Chrome on the Mac (both on BC textures as stored, the same UI
-// program and sampler), so only rounding is allowed.
-const MENU_FRAME_MAX_DIFFERENCE = 2;
-const MENU_FRAME_MAX_SHARE = 0.001;
-/**
- * The title menu as it is now at each size, its videos at 2 s from their
- * start whatever the clock, drawn through this backend (the
- * `debug_capture_scene` op).
- */
-async function drawMenuFrames(scenes) {
-  scenes ??= await Promise.all(
-    MENU_FRAME_SIZES.map(async ([width, height]) => {
-      const scene = await volya.call("menu_scene", { width, height });
-      for (const s of scene.sprites) if (s.texture.kind === "video") s.texture.start_ms = 0;
-      return scene;
-    }),
-  );
-  const frames = [];
-  for (const scene of scenes) frames.push({ scene, rgba: (await volya.call("debug_capture_scene", { scene, clock_ms: 2000 })).rgba });
-  return frames;
-}
-
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /**
  * WebGL 2's calls per frame over 2 s (`debug_gl_calls`): the total and the
@@ -677,7 +646,7 @@ export const tests = {
     }
     const stats = await volya.call("level_stats");
     if (gpu.textures === "etc2") assertEqual(stats.textures.textures > 300, true, `textures prepared: ${JSON.stringify(stats.textures)}`);
-    return `${gpu.backend}, textures ${gpu.textures}; ${note}; ${JSON.stringify(stats)}`;
+    return `textures ${gpu.textures}; ${note}; ${JSON.stringify(stats)}`;
   },
 
   "the level's placed effect runs on the world clock; its update cost in wasm": async () => {
@@ -724,7 +693,7 @@ export const tests = {
     await until((s) => s.phase === "level" && !s.intro, "the level");
     // #355: the phone's own size (landscape), the original's default target
     // (1024×768 with r__supersample 2: √2 per axis, made even), common
-    // sizes. The diagnostic log is on, so the GPU is timed.
+    // sizes. The diagnostic log is on, so the GPU's done times are kept.
     const sizes = [[2868, 1320], [1448, 1086], [1280, 720], [1024, 768]];
     const before = await volya.call("level_stats");
     const rows = [];
@@ -735,11 +704,10 @@ export const tests = {
         await sleep(1000 + 60 * 34);
         const s = await volya.call("level_stats");
         const ms = (v) => (v == null ? "–" : v.toFixed(1));
-        const passes = Object.entries(s.gpu_pass_ms ?? {}).map(([name, t]) => `${name} ${ms(t)}`).join(", ");
-        rows.push(`${width}×${height}: interval ${ms(s.frame_interval_ms)}, CPU ${ms(s.frame_cpu_ms)}, GPU ${ms(s.gpu_time_ms)} (${passes}), done ${ms(s.gpu_done_ms)}`);
+        rows.push(`${width}×${height}: interval ${ms(s.frame_interval_ms)}, CPU ${ms(s.frame_cpu_ms)}, done ${ms(s.gpu_done_ms)}`);
         assert(s.gpu_done_ms > 0, `no GPU done time at ${width}×${height}`);
       }
-      if (gpu.backend === "webgl2") rows.push(`1024×768: ${await glCalls()}`);
+      rows.push(`1024×768: ${await glCalls()}`);
       // At 1024×768: r__supersample 1 instead of 2, and the grass left
       // undrawn (#415).
       for (const [what, change] of [["r__supersample 1", { supersample: 1 }], ["no grass", { supersample: 2, details: false }]]) {
@@ -747,7 +715,7 @@ export const tests = {
         await sleep(1000 + 60 * 34);
         const s = await volya.call("level_stats");
         const ms = (v) => (v == null ? "–" : v.toFixed(1));
-        rows.push(`1024×768, ${what}: interval ${ms(s.frame_interval_ms)}, CPU ${ms(s.frame_cpu_ms)}, GPU ${ms(s.gpu_time_ms)}, done ${ms(s.gpu_done_ms)}`);
+        rows.push(`1024×768, ${what}: interval ${ms(s.frame_interval_ms)}, CPU ${ms(s.frame_cpu_ms)}, done ${ms(s.gpu_done_ms)}`);
       }
     } finally {
       await volya.call("debug_render", { supersample: 2, details: true });
@@ -760,7 +728,7 @@ export const tests = {
       .map(([name, p]) => `${name} ${p.draws}`)
       .join(", ");
     const commands = c ? `; ${c.total.draws} draws (${parts}), ${c.total.pipelines} pipelines, ${c.total.bind_groups} bind groups, ${c.total.buffers} buffers set` : "";
-    return `ms per frame: ${rows.join("; ")} (before: GPU ${before.gpu_time_ms?.toFixed(1)}, done ${before.gpu_done_ms?.toFixed(1)})${commands}`;
+    return `ms per frame: ${rows.join("; ")} (before: done ${before.gpu_done_ms?.toFixed(1)})${commands}`;
   },
 
   "transcoding to ETC2 costs: the level's textures and a few large ones": async () => {
@@ -1940,7 +1908,7 @@ export const tests = {
       const next = mine.find((e) => e.ts >= start.ts && (e.name === "settings" || e.name === "engine.end"));
       assertEqual(next?.name, "settings", "the settings at a game's start");
     }
-    for (const key of ["renderer", "vid_mode", "r__supersample", "_preset", "r__detail_density", "r1_dlights", "rs_c_gamma", "rs_vis_distance", "graphics", "backend"]) {
+    for (const key of ["renderer", "vid_mode", "r__supersample", "_preset", "r__detail_density", "r1_dlights", "rs_c_gamma", "rs_vis_distance"]) {
       assert(settings.every((e) => key in e.args), `settings without ${key}`);
     }
     assert(settings.some((e) => e.args.vid_mode === "2868x1320"), "no settings at a changed video mode");
@@ -1952,14 +1920,11 @@ export const tests = {
     for (const key of ["frame max", "engine max", "render max", "frame.interval_ms max", "MiB", "diagnostics.write_ms max"]) {
       assert(series(key) > 10, `${key}: ${series(key)}`);
     }
-    // The GPU's times (#355): by timestamp queries where the device has
-    // them, the submission to the GPU done everywhere; what was drawn at.
+    // The GPU's times (#355): the submission to the GPU done; what was
+    // drawn at.
     const session = mine.find((e) => e.name === "session").args;
-    const timed = session.gpu_timing === "timestamp-query";
     if (session.gpu_state === "ready") {
-      assert(["timestamp-query", "submitted-work-done"].includes(session.gpu_timing), `gpu_timing ${session.gpu_timing}`);
       assert(series("gpu.done_ms max") > 10, `gpu.done_ms: ${series("gpu.done_ms max")}`);
-      if (timed) assert(series("gpu.time_ms max") > 10, `gpu.time_ms: ${series("gpu.time_ms max")}`);
       const mode = mine.find((e) => e.name === "video mode")?.args;
       assert(mode?.width > 0 && mode?.canvas_width > 0, `video mode ${JSON.stringify(mode)}`);
     }
@@ -1977,133 +1942,8 @@ export const tests = {
     // The log's rate while a game runs: this session's bytes over its time.
     const seconds = (mine.at(-1).ts - mine.find((e) => e.ts > 0).ts) / 1e6;
     const bytes = mine.reduce((sum, e) => sum + JSON.stringify(e).length + 2, 0);
-    const gpu = `GPU ${session.gpu_timing}: time ${means("gpu.time_ms")} ms, submitted to done ${means("gpu.done_ms")} ms (means of periods)`;
+    const gpu = `GPU submitted to done ${means("gpu.done_ms")} ms (means of periods)`;
     return `${mine.length} events, ${(bytes / seconds).toFixed(0)} B/s over ${seconds.toFixed(0)} s; ${long.length} long frames (worst ${worst.toFixed(0)} ms); ${gpu}; audio ${audio ? "running" : volya.audioState()}`;
-  },
-
-  "WebGL 2 chosen in Settings: one press of Play starts the engine anew on it and the game, and the level draws": async () => {
-    needsGame();
-    const { graphics } = volya;
-    if (!graphics.available.webgl2) skip("no WebGL 2 here");
-    if (!graphics.available.webgpu) skip("no WebGPU here: the New Games above drew through WebGL 2");
-    // The title menu through WebGPU, for WebGL 2's frames of the same scenes
-    // below.
-    await volya.call("launch");
-    await until((s) => s.phase === "startup" || s.phase === "menu", "the game", 10000);
-    for (let s = await state(); s.phase !== "menu"; s = await state()) {
-      key("Escape");
-      await sleep(100);
-    }
-    assertEqual((await volya.status()).gpu.backend, "webgpu", "graphics");
-    const menuFrames = await drawMenuFrames();
-    await volya.call("quit_game");
-    await until((s) => s.phase === "none", "the game to end");
-    await volya.showSettings();
-    document.querySelector('#game input[name="graphics"][value="webgl2"]').click();
-    // The engine workers started from here on (#369).
-    const Original = globalThis.Worker;
-    let engines = 0;
-    globalThis.Worker = class extends Original {
-      constructor(url, options) {
-        super(url, options);
-        if (String(url).includes("engine-worker.js")) engines++;
-      }
-    };
-    try {
-      await volya.refresh();
-      const play = document.querySelector("#game button.play");
-      play.click();
-      // Pressed again while the engine starts anew: nothing more happens.
-      assert(play.disabled && play.textContent === "Starting…", `Play while starting: ${play.disabled} ${play.textContent}`);
-      play.click();
-      // Calls made while the engine starts anew fail: asked again.
-      for (const deadline = performance.now() + 30000; ; await sleep(100)) {
-        const s = await state().catch(() => null);
-        if (s?.phase === "startup" || s?.phase === "menu") break;
-        assert(performance.now() < deadline, `the game did not start: ${JSON.stringify(s)?.slice(0, 300)}`);
-      }
-      const { gpu: drawn } = await volya.status();
-      assertEqual([drawn.state, drawn.backend], ["ready", "webgl2"], "graphics");
-      assertEqual(engines, 1, "engines started");
-      // Escape skips the logos, then the title menu's New Game.
-      for (let s = await state(); s.phase !== "menu"; s = await state()) {
-        key("Escape");
-        await sleep(100);
-      }
-      await readRender();
-      // A New Game on this engine, then another after the title menu: the
-      // wasm heap through each load and its first frames (#357), against
-      // the budget.
-      const level = drawn.textures === "etc2" ? 120000 : 60000;
-      const records = [];
-      const newGame = async () => {
-        pointer("pointermove", row(0));
-        await until((s) => s.menu?.selected === 0 && !s.menu.moving, "item 0", 5000);
-        key("Enter");
-        await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
-        await volya.call("heap_log", { on: true });
-        await heapRecord(true);
-        key("Enter");
-        const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", level);
-        records.push(await heapRecord(false));
-        assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
-        key("Escape");
-        await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
-        return s;
-      };
-      const s = await newGame();
-      // Frame times over a few seconds of the level.
-      await sleep(3000);
-      const calls = await glCalls();
-      const first = byCaption(await volya.call("heap_log", { on: false }));
-      const { rgba } = await volya.call("debug_capture", { width: 256, height: 192 });
-      const colours = new Set();
-      for (let i = 0; i < rgba.length; i += 4) colours.add((rgba[i] << 16) | (rgba[i + 1] << 8) | rgba[i + 2]);
-      assert(colours.size > 200, `${colours.size} colours`);
-      const stats = await volya.call("level_stats");
-      await quitToTitle();
-      const again = await newGame();
-      await sleep(1000);
-      const second = byCaption(await volya.call("heap_log", { on: false }));
-      const after = await volya.call("level_stats");
-      const heapNote = overBudget(heap(stats), "wasm heaps after the first New Game") + overBudget(heap(after), "wasm heaps after the second New Game");
-      // The title menu's scenes drawn through WebGPU above, drawn again
-      // through WebGL 2: the same picture.
-      await quitToTitle();
-      const menuNote = [];
-      const drawnAgain = await drawMenuFrames(menuFrames.map((f) => f.scene));
-      menuFrames.forEach(({ scene, rgba }, i) => {
-        const [width, height] = scene.resolution;
-        const other = drawnAgain[i].rgba;
-        let differ = 0;
-        let max = 0;
-        const box = [width, height, -1, -1];
-        for (let p = 0; p < width * height; p++) {
-          let d = 0;
-          for (let c = 0; c < 3; c++) d = Math.max(d, Math.abs(rgba[4 * p + c] - other[4 * p + c]));
-          if (d === 0) continue;
-          differ++;
-          max = Math.max(max, d);
-          const [x, y] = [p % width, Math.floor(p / width)];
-          [box[0], box[1], box[2], box[3]] = [Math.min(box[0], x), Math.min(box[1], y), Math.max(box[2], x), Math.max(box[3], y)];
-        }
-        const what = `title menu at ${width}×${height}: ${differ} pixels differ, by up to ${max}${differ ? ` within ${box}` : ""}`;
-        assert(max <= MENU_FRAME_MAX_DIFFERENCE && differ <= MENU_FRAME_MAX_SHARE * width * height, `WebGL 2 against WebGPU, ${what}`);
-        menuNote.push(what);
-      });
-      await volya.call("quit_game");
-      return `${heapNote}${drawn.backend}, textures ${drawn.textures}; ${menuNote.map((n) => `${n}; `).join("")}first caption to first level frame in ${s.load_ms.toFixed(0)} ms, ${again.load_ms.toFixed(0)} ms again; at the start ${calls}; ${colours.size} colours; wasm heap ${mib(stats.wasm_heap_bytes)}, ${mib(after.wasm_heap_bytes)} after the second; by caption (MiB, heap/live): ${first}; the second: ${second}; ${records.join("; the second: ")}; ${JSON.stringify(stats)}`;
-    } finally {
-      globalThis.Worker = Original;
-      localStorage.removeItem("volya-engine.graphics");
-      // Leaves the game for the tests after (a failure above is the one told).
-      if ((await state()).phase !== "none") {
-        if ((await state()).menu) key("Escape");
-        await sleep(100);
-        key("KeyQ");
-        await until((s) => s.phase === "none", "the game to end").catch((e) => console.warn(e.message));
-      }
-    }
   },
 
   "forgets the game": async () => {

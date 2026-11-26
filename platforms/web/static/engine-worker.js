@@ -2,11 +2,9 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // The engine thread (docs/architecture/web-platform.md). Messages from the page:
-//   { type: "start", canvas, size, graphics, diagnostics, previousEnd }
-//     → { type: "started", available, backend, diagnostics, build } | { type: "error", message }
-//   (`graphics`: the stored Graphics choice or null; `available`: what the
-//   browser supports, `backend`: the one chosen, graphics.js; `diagnostics`:
-//   the session as diagnostics.js tells it when the player keeps a
+//   { type: "start", canvas, size, diagnostics, previousEnd }
+//     → { type: "started", diagnostics, build } | { type: "error", message }
+//   (`diagnostics`: the session as diagnostics.js tells it when the player keeps a
 //   diagnostic log, else null, and in the reply the log's status;
 //   `previousEnd`: how an earlier session's page ended, kept by
 //   diagnostics.js; `build`: the engine's build id, stamped by cargo xtask web)
@@ -46,7 +44,6 @@
 // hidden, drawing nothing.
 
 import init, * as wasm from "./pkg/volya_engine_web.js";
-import { choose, supported } from "./graphics.js";
 
 /** The engine's exports, once "start" initialized them. */
 let engine = null;
@@ -182,11 +179,8 @@ let logging = false;
 
 onmessage = async ({ data }) => {
   if (data.type === "start") {
-    let available, backend;
     let diagnostics = null;
     started = (async () => {
-      available = await supported();
-      backend = choose(data.graphics, available);
       await init({ module_or_path: await engineModule() });
       engine = wasm;
       // The player's setting, before anything else runs (#346).
@@ -195,12 +189,12 @@ onmessage = async ({ data }) => {
         diagnostics = JSON.parse(await engine.call("diagnostics_set", JSON.stringify(args)));
         logging = diagnostics.on;
       }
-      await engine.start(data.canvas, backend === "webgl2", data.graphics ?? "");
+      await engine.start(data.canvas);
       engine.resize(data.size.width, data.size.height, data.size.dpr);
     })();
     try {
       await started;
-      postMessage({ type: "started", available, backend, diagnostics, build: wasm.BUILD_ID });
+      postMessage({ type: "started", diagnostics, build: wasm.BUILD_ID });
       schedule();
     } catch (error) {
       postMessage({ type: "error", message: message(error) });

@@ -88,21 +88,21 @@ A source is substantial when it leaves many small long-lived blocks between larg
 
 ## GPU and JavaScript memory
 
-Measured in headless Chrome (`menu` suite, `level_stats`) for the first level: textures 133 MB (the level's and the objects' 24 MB, as stored), the level's geometry 62.7 MB on WebGPU and 50.6 MB on WebGL 2, the objects' geometry 5.0 and 6.3 MB. They live in the browser's GPU process, outside the wasm heap; on WebGL 2 wgpu also keeps staging and recorded commands in the wasm heap (#372). What the page and the workers hold in JavaScript is not measured (#374).
+Measured in headless Chrome (`menu` suite, `level_stats`) for the first level: textures 133 MB (the level's and the objects' 24 MB, as stored), the level's geometry 50.6 MB, the objects' 6.3 MB. They live in the browser's GPU process, outside the wasm heap; wgpu also keeps staging and recorded commands in the wasm heap (#372). What the page and the workers hold in JavaScript is not measured (#374).
 
 What the browser holds for WebGL 2 beyond our resources (#443; WebKit's and ANGLE's source read with `gh api`, the iOS Simulator measured with `tests/browser/webgl-memory.html` and `footprint`):
 
 - In the iOS Simulator a level of `l01_escape` takes SimMetalHost to 1.8 GB (181 MB idle), nearly all textures: ETC2 is held there as RGBA8, 128 MiB of ETC2 RGBA8-EAC with mips taking 515 MB (RGBA8 itself 1.0×; measured). ANGLE maps ETC2 to Metal's ETC2 formats for the Simulator (documented), so the expansion is the Simulator's own (believed). The device uploads BC as stored and keeps it so where Metal has BC (ANGLE exposes the extension only then; documented), so the Simulator's footprint doesn't show the device's.
 - ANGLE keeps no CPU copy of buffers on Apple GPUs (its shadow buffers are for Intel), nor WebKit of buffers or textures (documented).
 - A buffer made without data is zero-filled from a CPU scratch buffer of its size in the GPU process: a 64 MiB buffer took the Simulator's GPU process 128 MB at first, 69 MB later; a buffer written while the GPU uses it is given a whole new copy (`BufferMtl::setSubDataImpl`, documented): written again in 2 MiB pieces after a draw, the 64 MiB buffer held 62 MB more (measured). An 8 MiB buffer written 1 MiB a frame and drawn held no more over 600 frames, nor a 16-bit index buffer drawn from an odd first index (measured).
-- Every ANGLE Metal resource and drawing buffer is attributed to the page's process, as WebGPU's are (documented).
+- Every ANGLE Metal resource and drawing buffer is attributed to the page's process (documented).
 - The context is made without depth or stencil (`gpu::make_webgl_context`): WebKit gives the default framebuffer a canvas-size depth buffer otherwise (Depth32Float on Metal, 15 MB at 2868 × 1320; documented), which wgpu never uses.
 
 ## Design: one heap, its large blocks small or streamed (#399)
 
-User decision (2026-11-25), from the measurements below: the engine keeps one heap. What needs new memory is the level's large blocks, not its small ones, so each large block is made smaller or read as a stream into its final form (#403): the collision world (done, #371), the registry (done, #370), `game.graph` and `all.spawn` (streamed, #403), the navigation data, and anything else large. The one arena is a bump arena for a frame's temporaries (the scene, the draw list), all freed at the frame's end (#402); pools (#404) and replacing the level's `BTreeMap`s (#405) follow only if measurement shows they matter. Heap minus live is measured after the first and second New Game on both paths after each step; arenas are revisited only if it stays large. No other allocator algorithm is tried (#400, not planned).
+User decision (2026-11-25), from the measurements below: the engine keeps one heap. What needs new memory is the level's large blocks, not its small ones, so each large block is made smaller or read as a stream into its final form (#403): the collision world (done, #371), the registry (done, #370), `game.graph` and `all.spawn` (streamed, #403), the navigation data, and anything else large. The one arena is a bump arena for a frame's temporaries (the scene, the draw list), all freed at the frame's end (#402); pools (#404) and replacing the level's `BTreeMap`s (#405) follow only if measurement shows they matter. Heap minus live is measured after the first and second New Game after each step; arenas are revisited only if it stays large. No other allocator algorithm is tried (#400, not planned).
 
-Done when heap minus live after the first and the second New Game is near zero on both paths (#399). Each step is measured natively (`loading_memory.rs`: each stage's peak, kept bytes, allocations and blocks kept; `frame_memory.rs`) and in the browser (`heap_log`).
+Done when heap minus live after the first and the second New Game is near zero (#399). Each step is measured natively (`loading_memory.rs`: each stage's peak, kept bytes, allocations and blocks kept; `frame_memory.rs`) and in the browser (`heap_log`).
 
 For the frame arena, containers that take an allocator exist on stable Rust: `allocator-api2` (MIT/Apache-2.0) is a stable copy of the `Allocator` trait; `hashbrown` implements its maps over it (its `allocator-api2` feature, on by default in 0.17), `bumpalo` has an optional `allocator-api2` feature, and `allocator-api2` has its own `Vec` and `Box` (each documented in the crate's manifest). Std's `BTreeMap` takes no allocator on stable (its parameter is behind the unstable `allocator_api`, documented).
 
@@ -112,11 +112,11 @@ The design first approved (#399) gave the level, loading and the frame each a he
 
 In headless Chrome (`menu` suite, MiB, heap after the New Game; one run each):
 
-| Variant | WebGPU, first | WebGPU, second | WebGL 2, first | WebGL 2, second |
-|---|---|---|---|---|
-| Before (the general heap only) | 98 | 98 | 106 | 110 |
-| Level heap, segments kept for good (256 KiB) | 108 | 111 | 119 | 132 |
-| Level and loading heaps, empty segments given back (256 KiB) | 107 | 111 | 120 | 131 |
-| The same, 64 KiB segments | 113 | 120 | 122 | 130 |
+| Variant | First | Second |
+|---|---|---|
+| Before (the general heap only) | 106 | 110 |
+| Level heap, segments kept for good (256 KiB) | 119 | 132 |
+| Level and loading heaps, empty segments given back (256 KiB) | 120 | 131 |
+| The same, 64 KiB segments | 122 | 130 |
 
 The heap grew in every variant: under `st_loading_cform` by 37 MiB for 39 MiB more live (28 before). Heaps apart from the general one need their segments whole: the general heap's free space before the game (48 MiB of 59, split by what the import and the menus left) serves its own small blocks but not the level heap's segments, so the level's blocks moved from the general heap's holes to new memory at its top; and each heap's free space (the level heap's 11 MiB above live in the browser) is no longer the others'. Separate heaps cost the sharing of free space that one heap has, and here the sharing is worth more than the separation.

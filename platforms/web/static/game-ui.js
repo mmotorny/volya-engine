@@ -12,10 +12,9 @@
 // menu's last item).
 //
 // Home holds Play only; secondary actions (an update offer, Settings) sit at
-// the bottom, away from it. Settings holds graphics, updates, the
-// diagnostic log and, in a danger zone, removing the import.
+// the bottom, away from it. Settings holds updates, the diagnostic
+// log and, in a danger zone, removing the import.
 
-import { BACKENDS, choose } from "./graphics.js";
 import { SHARE_ICON, canOffer, chromium, install, installed, platform } from "./install.js";
 import * as diagnostics from "./diagnostics.js";
 import { BUILD, versionText } from "./update.js";
@@ -23,8 +22,6 @@ import { BUILD, versionText } from "./update.js";
 
 let call;
 let updates = null;
-/** The Graphics setting (main.js): `{ available, chosen, choose(backend), apply() }`. */
-let backends = null;
 const root = () => document.getElementById("game");
 /** Replaces the game section's content, skipping absent (null) parts. */
 const show = (...children) => {
@@ -65,10 +62,9 @@ function element(tag, props = {}, ...children) {
 }
 
 /** Entry point, called by main.js once the engine runs. */
-export async function start(engineCall, updateState = null, graphicsSetting = null, { isolated = true } = {}) {
+export async function start(engineCall, updateState = null, { isolated = true } = {}) {
   call = engineCall;
   updates = updateState;
-  backends = graphicsSetting;
   pageIsolated = isolated;
   globalThis.volya.importGame = importGame;
   globalThis.volya.showSettings = showSettings;
@@ -118,11 +114,11 @@ let pageIsolated = true;
 /** Why the game can't play its sound here: one sentence. */
 const ISOLATION_PROBLEM = "Volya Engine plays the game's sound through shared memory, which this browser doesn't allow this page to use.";
 
-/** Whether the engine can draw (without WebGPU or WebGL 2 the game would run unseen). */
+/** Whether the engine can draw (without WebGL 2 the game would run unseen). */
 const graphics = async () => (await call("status")).gpu.state === "ready";
 
 /** Why the game can't be drawn here: one sentence; the browser's own words go in details. */
-const GRAPHICS_PROBLEM = "Volya Engine draws the game with WebGPU or WebGL 2, and neither is working in this browser.";
+const GRAPHICS_PROBLEM = "Volya Engine draws the game with WebGL 2, which isn't working in this browser.";
 
 /**
  * The screen when this browser can't draw the game, imported or not: said
@@ -413,20 +409,12 @@ async function showHome(status) {
   const problem = element("div", { className: "callout problem", hidden: true });
   const launch = element("button", { className: "primary play", textContent: "Play" });
   launch.addEventListener("click", async () => {
-    // One start at a time: starting anew on the Graphics choice can take
-    // seconds, and a second press would start the engine anew again (#369).
-    // Click serves the pointer, touch and the keyboard alike.
+    // One start at a time (#369). Click serves the pointer, touch and the
+    // keyboard alike.
     launch.disabled = true;
     launch.textContent = "Starting…";
     problem.hidden = true;
     try {
-      // The Graphics choice applies as the game starts: the engine starts
-      // anew where it differs from the backend running.
-      await backends?.apply();
-      if (!(await graphics())) {
-        await refresh();
-        return;
-      }
       await call("launch");
     } catch (error) {
       // Only what's known: the engine's own words.
@@ -571,40 +559,6 @@ function checkButton() {
   return button;
 }
 
-/**
- * The Graphics setting (#121): the backends, recommended first; those the
- * browser can't run are disabled, saying so. The one checked is the one the
- * game starts with: the stored choice where the browser runs it, else the
- * first it runs (the choice stays stored).
- */
-function graphicsPanel() {
-  if (!backends) return null;
-  const { available, chosen } = backends;
-  const used = choose(chosen, available);
-  const label = element("p", { className: "label", id: "graphics-label", textContent: "Graphics" });
-  const group = element("div", { role: "radiogroup" });
-  group.setAttribute("aria-labelledby", label.id);
-  for (const [backend, name] of BACKENDS) {
-    const supported = Boolean(available[backend]);
-    const input = element("input", { type: "radio", name: "graphics", value: backend, checked: backend === used, disabled: !supported });
-    input.addEventListener("change", () => input.checked && backends.choose(backend));
-    group.append(
-      element(
-        "label",
-        { className: "switch" },
-        input,
-        element(
-          "span",
-          {},
-          element("strong", { textContent: backend === BACKENDS[0][0] ? `${name} (Recommended)` : name }),
-          supported ? null : element("small", { textContent: "Not supported by this browser" }),
-        ),
-      ),
-    );
-  }
-  return element("div", { className: "panel" }, label, group);
-}
-
 /** The downloaded log's file name: the app's version and today's date. */
 export function logFileName(now = new Date()) {
   const two = (n) => String(n).padStart(2, "0");
@@ -683,7 +637,7 @@ async function diagnosticsPanel() {
   );
 }
 
-/** Settings: graphics, updates, the diagnostic log and removing the import (danger zone). */
+/** Settings: updates, the diagnostic log and removing the import (danger zone). */
 async function showSettings() {
   const status = await call("game_status");
   const diagnosticsSection = await diagnosticsPanel();
@@ -708,7 +662,6 @@ async function showSettings() {
 
   show(
     element("div", { className: "screen-head" }, back, element("h2", { textContent: "Settings" })),
-    graphicsPanel(),
     element(
       "div",
       { className: "panel" },

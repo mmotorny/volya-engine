@@ -12,9 +12,8 @@
 //! caption ([`volya_engine::app::App::world_to_prepare`]), its geometry is
 //! uploaded a few pieces per task turn (#184). wgpu's GL backend keeps what
 //! is written in the wasm heap until WebGL reports the work done, which it
-//! does only after the turn ends: where WebGL 2 draws, the textures' writes
-//! are waited for every [`STAGING_BYTES`] and the geometry's every piece
-//! (#440).
+//! does only after the turn ends: the textures' writes are waited for every
+//! [`STAGING_BYTES`] and the geometry's every piece (#440).
 //!
 //! After each turn the next waits until the browser reports the GPU done
 //! with what was submitted (#355): the browser's GPU process copies the
@@ -63,18 +62,16 @@ pub struct Stats {
 /// screen at 30 Hz.
 const TURN_MS: f64 = 30.0;
 
-/// Bytes of texture data written while WebGL 2 draws before the
-/// preparation waits for WebGL to report them done, which frees their
+/// Bytes of texture data written before the preparation waits for WebGL to report them done, which frees their
 /// staging: with the texture being written, what the wasm heap holds of
 /// them at most (#357, #440; with a 30 ms turn alone, up to 40 MiB of BC
 /// textures in desktop Chrome, measured).
 const STAGING_BYTES: u64 = 2 << 20;
 
 /// Bytes of the level's geometry uploaded per task turn: what the wasm heap
-/// holds of it at most per turn. Where WebGL 2 draws, one piece, waited
-/// for before the next (#440).
-const WORLD_TURN_BYTES: u64 = 2 * UPLOAD_PIECE as u64;
-const WORLD_TURN_BYTES_COMPAT: u64 = UPLOAD_PIECE as u64;
+/// holds of it at most per turn, one piece, waited for before the next
+/// (#440).
+const WORLD_TURN_BYTES: u64 = UPLOAD_PIECE as u64;
 
 thread_local! {
     static RUNNING: RefCell<bool> = const { RefCell::new(false) };
@@ -100,9 +97,8 @@ fn megapixels(dds: &Dds) -> f64 {
 }
 
 /// Whether a level is prepared while it loads: wherever it draws (#355).
-/// Where WebGL 2 draws, its uploads stay in the wasm heap until WebGL
-/// reports them done; where textures are transcoded, that is done there;
-/// on WebGPU, the GPU process copies them while the loading image shows.
+/// Its uploads stay in the wasm heap until WebGL reports them done; where
+/// textures are transcoded, that is done there.
 pub fn wanted() -> bool {
     crate::gpu::with_renderer(|_| ()).is_some()
 }
@@ -164,10 +160,8 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
         textures: paths.len() as u32,
         ..Default::default()
     };
-    let compat = crate::gpu::with_renderer(|r| r.compat()).unwrap_or(false);
     let written = || crate::gpu::with_renderer(|r| r.texture_bytes_written()).unwrap_or(0);
-    // Where WebGL 2 draws: the bytes written since WebGL last reported the
-    // writes done.
+    // The bytes written since WebGL last reported the writes done.
     let mut staged_from = written();
     // Every file is read into this one, and each band transcoded into the
     // other.
@@ -209,11 +203,10 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
         }
         let mut waited = 0.0;
         loop {
-            // Where WebGL 2 draws, the writes before are waited for when
-            // the next band would take the staging past its bound.
+            // The writes before are waited for when the next band would
+            // take the staging past its bound.
             let staged = written() - staged_from;
-            if compat
-                && staged > 0
+            if staged > 0
                 && upload
                     .next_bytes()
                     .is_some_and(|n| staged + n > STAGING_BYTES)
@@ -223,11 +216,7 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
                 waited += now() - w;
                 staged_from = written();
             }
-            let budget = if compat {
-                STAGING_BYTES.saturating_sub(written() - staged_from)
-            } else {
-                u64::MAX
-            };
+            let budget = STAGING_BYTES.saturating_sub(written() - staged_from);
             let done = crate::gpu::with_renderer(|r| {
                 let done = upload.step(r, &dds, &mut scratch, budget);
                 r.flush_uploads();
@@ -256,9 +245,6 @@ async fn prepare(paths: Vec<String>) -> Result<(), JsValue> {
         // timer and frames; measured in the iOS Simulator).
         if now() - turn >= TURN_MS {
             drop(_span);
-            if !compat {
-                gpu_done(&mut stats.gpu_wait_ms).await?;
-            }
             crate::opfs::sleep(0).await?;
             while crate::engine::page_hidden() {
                 crate::opfs::sleep(100).await?;
@@ -281,15 +267,9 @@ async fn prepare_world(level: Arc<LevelWorld>) -> Result<(), JsValue> {
     let start = now();
     let mut turns = 0;
     let mut wait_ms = 0.0;
-    let compat = crate::gpu::with_renderer(|r| r.compat()).unwrap_or(false);
     // Until done, or the game was quit or unmounted meanwhile.
     while crate::engine::world_to_prepare().is_some_and(|w| Arc::ptr_eq(&w, &level)) {
         turns += 1;
-        let budget = if compat {
-            WORLD_TURN_BYTES_COMPAT
-        } else {
-            WORLD_TURN_BYTES
-        };
         crate::gpu::with_renderer(|r| {
             crate::diagnostics::gpu_step(
                 "gpu.geometry",
@@ -298,8 +278,8 @@ async fn prepare_world(level: Arc<LevelWorld>) -> Result<(), JsValue> {
             )
         });
         let done = tracing::info_span!("prepare.world")
-            .in_scope(|| crate::gpu::prepare_world(&level, budget))?;
-        // Where WebGL 2 draws, until WebGL reports the pieces written done
+            .in_scope(|| crate::gpu::prepare_world(&level, WORLD_TURN_BYTES))?;
+        // Until WebGL reports the pieces written done
         // and their staging goes (it may not in the task they were written
         // in, documented by the WebGL 2 specification).
         gpu_done(&mut wait_ms).await?;

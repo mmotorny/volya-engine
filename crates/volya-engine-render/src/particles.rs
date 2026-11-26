@@ -6,10 +6,7 @@
 //! where section 7.4 puts it, and the distortion pass (section 6.2; the
 //! composition is the presentation's `postprocess_d`, 6.3). The vertices
 //! are written anew each frame into a buffer kept and grown, six a sprite
-//! (its two triangles), and drawn without indices: WebKit's WebGPU checks
-//! each indexed draw of a range it hasn't seen with a draw of its own on
-//! the GPU, and the batches' ranges change every frame (#439). Nothing
-//! reads a storage buffer, so the WebGL 2 path draws them alike.
+//! (its two triangles), and drawn without indices.
 
 use std::collections::HashMap;
 

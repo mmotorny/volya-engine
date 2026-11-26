@@ -337,14 +337,14 @@ pub async fn repeat_session_event() {
     }
 }
 
-/// The session's event: what the page told, the engine's backend and
+/// The session's event: what the page told, the engine's graphics and
 /// texture path, and the imported game (`game::identity`).
 async fn session_event() {
     let game = crate::game::identity().await;
     let gpu = serde_json::to_value(crate::gpu::status()).unwrap_or_default();
     let page = SESSION.with(|s| s.borrow().as_ref().map(|s| s.page.clone()));
     let mut args = args_of(&page.unwrap_or_default());
-    for key in ["state", "backend", "textures", "timing", "message"] {
+    for key in ["state", "textures", "message"] {
         if let Some(v) = gpu.get(key).and_then(|v| v.as_str()) {
             args.push((format!("gpu_{key}"), Value::Text(v.into())));
         }

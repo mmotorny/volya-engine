@@ -69,18 +69,14 @@ fn settings(app: &App) -> Vec<String> {
         .collect()
 }
 
-/// Writes the `settings` event: `values` (of [`SETTINGS`]), the Graphics
-/// setting as stored (`graphics`) and the backend drawing (`backend`).
+/// Writes the `settings` event: `values` (of [`SETTINGS`]).
 fn log_settings(values: &[String]) {
     use volya_engine::core::diagnostics::Value;
-    let (graphics, backend) = crate::gpu::graphics();
-    let mut args: Vec<(String, Value)> = SETTINGS
+    let args: Vec<(String, Value)> = SETTINGS
         .iter()
         .zip(values)
         .map(|(name, v)| ((*name).to_owned(), Value::Text(v.clone())))
         .collect();
-    args.push(("graphics".to_owned(), Value::Text(graphics)));
-    args.push(("backend".to_owned(), Value::Text(backend.to_owned())));
     crate::diagnostics::instant("settings", 1, &args);
 }
 

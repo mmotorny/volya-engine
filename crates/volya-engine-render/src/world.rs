@@ -8,7 +8,8 @@
 //! surface (programs, textures, states).
 //!
 //! The draws that do not depend on the camera's position for their order
-//! are recorded once into render bundles; what depends on the camera per
+//! keep a fixed one, those that may show encoded each frame; what depends
+//! on the camera per
 //! draw (the near/far element of section 5, the size culling of 10.2, the
 //! detail fade) is decided in the vertex programs from per-draw data. Only
 //! the strict-sorted draws are ordered on the CPU each frame (10.3).
@@ -288,65 +289,12 @@ pub struct WorldDraw {
 
 /// Bytes of one draw's record in the draws buffer.
 const DRAW_BYTES: usize = 144;
-/// [`Renderer::compat`]: RGBA32F texels per draw record, and records per
-/// row of the draws texture.
+/// RGBA32F texels per draw record, and records per row of the draws
+/// texture (world.wgsl's `DRAW_TEXELS`, `DRAWS_PER_ROW`): WebGL 2's vertex
+/// programs have no storage buffers.
 const DRAW_TEXELS: u32 = (DRAW_BYTES / 16) as u32;
 const DRAWS_PER_ROW: u32 = 64;
 
-/// The world program's source: as written, or for [`Renderer::compat`] with
-/// the draws read from a texture (`draw_texels`, [`DRAW_TEXELS`] texels per
-/// draw, [`DRAWS_PER_ROW`] draws per row) instead of a storage buffer, which
-/// WebGL 2's vertex programs lack.
-pub fn world_source(compat: bool) -> String {
-    let source = include_str!("world.wgsl");
-    if !compat {
-        return source.to_owned();
-    }
-    // No instance-step records: the draw is the instance.
-    const SHARED_RECORD: &str = "@location(8) record: u32";
-    assert!(
-        source.contains(SHARED_RECORD),
-        "world.wgsl: `record` input changed"
-    );
-    let source = &source.replace(SHARED_RECORD, "@builtin(instance_index) record: u32");
-    const STORAGE: &str = "@group(0) @binding(1) var<storage, read> draws: array<Draw>;";
-    let texture = format!(
-        "@group(0) @binding(1) var draw_texels: texture_2d<f32>;
-
-fn draw_at(i: u32) -> Draw {{
-    let x = i32((i % {DRAWS_PER_ROW}u) * {DRAW_TEXELS}u);
-    let y = i32(i / {DRAWS_PER_ROW}u);
-    let t = array<vec4<f32>, {DRAW_TEXELS}>(
-        textureLoad(draw_texels, vec2(x, y), 0),
-        textureLoad(draw_texels, vec2(x + 1, y), 0),
-        textureLoad(draw_texels, vec2(x + 2, y), 0),
-        textureLoad(draw_texels, vec2(x + 3, y), 0),
-        textureLoad(draw_texels, vec2(x + 4, y), 0),
-        textureLoad(draw_texels, vec2(x + 5, y), 0),
-        textureLoad(draw_texels, vec2(x + 6, y), 0),
-        textureLoad(draw_texels, vec2(x + 7, y), 0),
-        textureLoad(draw_texels, vec2(x + 8, y), 0),
-    );
-    return Draw(mat4x4(t[0], t[1], t[2], t[3]), t[4], t[5], t[6], t[7], t[8]);
-}}"
-    );
-    assert!(
-        source.contains(STORAGE),
-        "world.wgsl: the draws binding changed"
-    );
-    const RECORD: &str = "return draws[i];";
-    assert!(source.contains(RECORD), "world.wgsl: `record` changed");
-    source
-        .replace(STORAGE, &texture)
-        .replace(RECORD, "return draw_at(i);")
-}
-
-/// The per-draw records on the GPU.
-enum DrawData {
-    Buffer(wgpu::Buffer),
-    /// [`Renderer::compat`]: an RGBA32F texture ([`world_source`]).
-    Texture(wgpu::Texture),
-}
 /// Bytes of the frame constants.
 const FRAME_BYTES: u64 = 288;
 
@@ -480,8 +428,6 @@ struct PipelineKey {
 /// Pipelines and layouts shared by every world drawn into one format.
 pub(crate) struct WorldPipelines {
     format: wgpu::TextureFormat,
-    /// [`Renderer::compat`]: no instance-step records.
-    compat: bool,
     /// [`Renderer::set_unblended_trees`].
     pub(crate) unblended_trees: bool,
     frame_layout: wgpu::BindGroupLayout,
@@ -561,14 +507,8 @@ fn vertex_layout(layout: VertexLayout) -> wgpu::VertexBufferLayout<'static> {
 /// The vertex buffers a program reads: its layout's, and for the level's
 /// layouts each vertex's draw (`id` in world.wgsl, [`SHARED`] where draws
 /// share the vertex) from a buffer of its own.
-/// On WebGPU (not `compat`) also, from a third, instance-step buffer, the
-/// record of a draw whose vertices are shared (`record`, [`RECORDS`]).
-fn vertex_buffers(
-    layout: VertexLayout,
-    compat: bool,
-) -> Vec<Option<wgpu::VertexBufferLayout<'static>>> {
+fn vertex_buffers(layout: VertexLayout) -> Vec<Option<wgpu::VertexBufferLayout<'static>>> {
     const ID: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![7 => Uint32];
-    const RECORD: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![8 => Uint32];
     let mut buffers = vec![Some(vertex_layout(layout))];
     if layout != VertexLayout::Model {
         buffers.push(Some(wgpu::VertexBufferLayout {
@@ -576,19 +516,9 @@ fn vertex_buffers(
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &ID,
         }));
-        if !compat {
-            buffers.push(Some(wgpu::VertexBufferLayout {
-                array_stride: 4,
-                step_mode: wgpu::VertexStepMode::Instance,
-                attributes: &RECORD,
-            }));
-        }
     }
     buffers
 }
-
-/// The vertex buffer slot of the records of shared draws.
-const RECORDS: u32 = 2;
 
 /// A level vertex's draw where draws share it (world.wgsl's `SHARED`).
 const SHARED: u32 = u32::MAX;
@@ -598,7 +528,6 @@ impl WorldPipelines {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
-        compat: bool,
     ) -> Self {
         let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("world frame"),
@@ -616,18 +545,10 @@ impl WorldPipelines {
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::VERTEX,
-                    ty: if compat {
-                        wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        }
-                    } else {
-                        wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        }
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
                     },
                     count: None,
                 },
@@ -663,7 +584,7 @@ impl WorldPipelines {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("world"),
-            source: wgpu::ShaderSource::Wgsl(world_source(compat).into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("world.wgsl").into()),
         });
         // Section 4.4: s_base / s_detail wrap, anisotropic (linear
         // min/mag/mip with anisotropy); s_lmap wrap, linear; s_hemi clamp,
@@ -788,7 +709,7 @@ impl WorldPipelines {
                         module: &shader,
                         entry_point: Some(program.entry_point()),
                         compilation_options: Default::default(),
-                        buffers: &vertex_buffers(program.layout(), compat),
+                        buffers: &vertex_buffers(program.layout()),
                     },
                     primitive: wgpu::PrimitiveState {
                         front_face: wgpu::FrontFace::Cw,
@@ -825,7 +746,6 @@ impl WorldPipelines {
             .collect();
         Self {
             format,
-            compat,
             unblended_trees: false,
             frame_layout,
             maps_layout,
@@ -912,7 +832,6 @@ impl WorldPipelines {
     fn pipeline(&mut self, device: &wgpu::Device, key: PipelineKey) -> &wgpu::RenderPipeline {
         let Self {
             format,
-            compat,
             unblended_trees,
             pipeline_layout,
             shader,
@@ -943,7 +862,7 @@ impl WorldPipelines {
                     module: shader,
                     entry_point: Some(vs),
                     compilation_options: Default::default(),
-                    buffers: &vertex_buffers(key.program.layout(), *compat),
+                    buffers: &vertex_buffers(key.program.layout()),
                 },
                 // Triangles that appear counter-clockwise on screen are
                 // culled (section 10.1).
@@ -1096,66 +1015,35 @@ fn encode_static(
     inner: &Inner,
     step: &Step,
     shows: impl Fn(u32) -> bool,
-    shared: &mut Vec<u32>,
 ) {
     use crate::stats::StaticCall;
     /// A call being gathered: draws whose vertices are their own with
-    /// consecutive index ranges, or draws of one mesh whose vertices are
-    /// shared, as instances (their records listed in `shared`).
-    enum Pending {
-        Merged {
-            range: std::ops::Range<u32>,
-            surface: u32,
-            draws: u32,
-        },
-        Instanced {
-            draw: u32,
-            first: u32,
-            count: u32,
-        },
+    /// consecutive index ranges.
+    struct Pending {
+        range: std::ops::Range<u32>,
+        surface: u32,
+        draws: u32,
     }
-    let base = inner.calls.len() as u32;
-    let flush =
-        |pass: &mut wgpu::RenderPass<'_>, pending: &mut Option<Pending>| match pending.take() {
-            Some(Pending::Merged {
-                range,
-                surface,
+    let flush = |pass: &mut wgpu::RenderPass<'_>, pending: &mut Option<Pending>| {
+        if let Some(Pending {
+            range,
+            surface,
+            draws,
+        }) = pending.take()
+        {
+            crate::stats::draw();
+            crate::stats::static_call(
+                inner.programs[surface as usize].name(),
+                StaticCall::Merged,
                 draws,
-            }) => {
-                crate::stats::draw();
-                crate::stats::static_call(
-                    inner.programs[surface as usize].name(),
-                    StaticCall::Merged,
-                    draws,
-                );
-                if emits(Kind::Merged) {
-                    pass.draw_indexed(range, 0, 0..1);
-                }
+            );
+            if emits(Kind::Merged) {
+                pass.draw_indexed(range, 0, 0..1);
             }
-            Some(Pending::Instanced { draw, first, count }) => {
-                let d = &inner.calls[draw as usize];
-                crate::stats::draw();
-                crate::stats::static_call(
-                    inner.programs[d.surface as usize].name(),
-                    StaticCall::Shared,
-                    count,
-                );
-                if emits(Kind::Instanced) {
-                    pass.draw_indexed(
-                        d.first_index..d.first_index + d.index_count,
-                        d.first_vertex,
-                        base + first..base + first + count,
-                    );
-                }
-            }
-            None => {}
-        };
+        }
+    };
     crate::stats::bind_group();
     pass.set_bind_group(0, &inner.frame_group, &[]);
-    if let Some(records) = &inner.records {
-        crate::stats::buffer();
-        pass.set_vertex_buffer(RECORDS, records.slice(..));
-    }
     let mut pipeline = None;
     let mut surface = None;
     let (mut vertex_buffer, mut index_buffer) = (None, None);
@@ -1211,53 +1099,29 @@ fn encode_static(
         if inner.exclusive[i as usize] {
             flush(pass, &mut pending);
             let last = &inner.calls[*members.last().expect("a member") as usize];
-            pending = Some(Pending::Merged {
+            pending = Some(Pending {
                 range: range.start..last.first_index + last.index_count,
                 surface: d.surface,
                 draws: members.len() as u32,
             });
             continue;
         }
-        if program.is_model() || inner.records.is_none() {
-            flush(pass, &mut pending);
-            crate::stats::draw();
-            let kind = if program.is_model() {
-                StaticCall::Object
-            } else {
-                StaticCall::Shared
-            };
-            crate::stats::static_call(program.name(), kind, 1);
-            if emits(if program.is_model() {
-                Kind::Object
-            } else {
-                Kind::Single
-            }) {
-                pass.draw_indexed(range, d.first_vertex, i..i + 1);
-            }
-            continue;
+        // A draw alone, as its own instance (its record).
+        flush(pass, &mut pending);
+        crate::stats::draw();
+        let kind = if program.is_model() {
+            StaticCall::Object
+        } else {
+            StaticCall::Shared
+        };
+        crate::stats::static_call(program.name(), kind, 1);
+        if emits(if program.is_model() {
+            Kind::Object
+        } else {
+            Kind::Single
+        }) {
+            pass.draw_indexed(range, d.first_vertex, i..i + 1);
         }
-        // A level draw whose vertices are shared: an instance of the call
-        // before when that draws the same mesh.
-        match &mut pending {
-            Some(Pending::Instanced { draw, count, .. })
-                if {
-                    let p = &inner.calls[*draw as usize];
-                    (p.first_index, p.index_count, p.first_vertex)
-                        == (d.first_index, d.index_count, d.first_vertex)
-                } =>
-            {
-                *count += 1;
-            }
-            _ => {
-                flush(pass, &mut pending);
-                pending = Some(Pending::Instanced {
-                    draw: i,
-                    first: shared.len() as u32,
-                    count: 1,
-                });
-            }
-        }
-        shared.push(i);
     }
     flush(pass, &mut pending);
 }
@@ -1288,14 +1152,13 @@ thread_local! {
     static CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
     /// The world's draw calls emitted in the frame being encoded, by
     /// [`Kind`] (#443).
-    static EMITTED: std::cell::Cell<[u32; 6]> = const { std::cell::Cell::new([0; 6]) };
+    static EMITTED: std::cell::Cell<[u32; 5]> = const { std::cell::Cell::new([0; 5]) };
 }
 
 /// The kinds of the world's draw calls, for the diagnostic log (#443).
 #[derive(Clone, Copy)]
 enum Kind {
     Merged,
-    Instanced,
     Single,
     Object,
     Light,
@@ -1303,7 +1166,7 @@ enum Kind {
 }
 
 /// The names of [`Kind`]s, in order.
-pub const CALL_KINDS: [&str; 6] = ["merged", "instanced", "single", "object", "light", "strict"];
+pub const CALL_KINDS: [&str; 5] = ["merged", "single", "object", "light", "strict"];
 
 /// Whether a draw call of `kind` is emitted ([`in_window`]), counted in
 /// [`EMITTED`].
@@ -1362,14 +1225,15 @@ impl Step {
 }
 
 struct Inner {
-    /// Kept for as long as the bundles that draw from them.
     vertex_buffers: Vec<wgpu::Buffer>,
     index_buffers: Vec<wgpu::Buffer>,
     /// Each index buffer's format: 16-bit as stored, 32-bit for indices
-    /// rebased past 16 bits ([`Renderer::compat`]).
+    /// rebased past 16 bits.
     index_formats: Vec<wgpu::IndexFormat>,
-    /// Per-draw data, one record per kept draw; placements rewrite it.
-    draw_data: DrawData,
+    /// Per-draw data, one record per kept draw, RGBA32F texels
+    /// ([`DRAW_TEXELS`] a record, [`DRAWS_PER_ROW`] records a row);
+    /// placements rewrite it.
+    draw_texels: wgpu::Texture,
     /// Each draw given to the world: its index among the kept draws.
     kept_of: Vec<Option<u32>>,
     _textures: Vec<Texture>,
@@ -1380,11 +1244,6 @@ struct Inner {
     surface_pipelines: Vec<wgpu::RenderPipeline>,
     /// Program of each surface.
     programs: Vec<Program>,
-    /// WebGPU: the records of draws whose vertices are shared, an
-    /// instance-step buffer (`record` in world.wgsl): each draw's index at
-    /// its own place (single calls draw it as the instance), then a
-    /// frame's instanced calls' draws.
-    records: Option<wgpu::Buffer>,
     /// Section 10.3 step 1 (priority 0–1, not strict) and step 5 (2–3):
     /// the draws in their fixed order.
     early: Step,
@@ -1529,9 +1388,7 @@ fn draw_record(surface: &Surface<Texture>, d: &WorldDraw, out: &mut Vec<u8>) {
 pub const UPLOAD_PIECE: usize = 2 << 20;
 
 /// A buffer holding `contents` (its size rounded up to whole 4-byte words,
-/// zero-padded), written with `Queue::write_buffer`. Unlike a buffer mapped
-/// at creation, this makes no copy of `contents` in the wasm heap on the web
-/// (wgpu's WebGPU backend passes the bytes to the browser as they are).
+/// zero-padded), written with `Queue::write_buffer`.
 pub(crate) fn upload_buffer(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -1580,8 +1437,8 @@ struct SegmentUse {
     span: [u32; 2],
 }
 
-/// [`Renderer::compat`]: where each draw's rebased index range begins, by
-/// (object draw, index buffer, first index, index count, base vertex).
+/// Where each draw's rebased index range begins, by (object draw, index
+/// buffer, first index, index count, base vertex).
 /// A draw's index range: (object draw, index buffer, first index, index
 /// count, base vertex).
 type RangeKey = (bool, u32, u32, u32, u32);
@@ -1759,10 +1616,7 @@ enum Source {
     DrawIds(u32),
     /// The objects' vertices.
     ObjectVertices,
-    /// The objects' indices, as held.
-    ObjectIndices,
-    /// The objects' indices rebased by `segments`
-    /// ([`Renderer::compat`]), 32-bit when `wide`.
+    /// The objects' indices rebased by `segments`, 32-bit when `wide`.
     ObjectRebased { segments: Vec<Segment>, wide: bool },
 }
 
@@ -1788,7 +1642,6 @@ pub struct GeometryUpload {
     next: usize,
     at: u64,
     piece: Vec<u8>,
-    compat: bool,
     segments: Vec<Vec<Segment>>,
     /// Per index buffer and segment, what is learned of it.
     uses: Vec<Vec<SegmentUse>>,
@@ -1865,13 +1718,6 @@ impl GeometryUpload {
                     .get(range)
                     .map(|v| out.copy_from_slice(v))
                     .ok_or_else(|| io::Error::other("the objects' vertices changed")),
-                Source::ObjectIndices => {
-                    for (j, o) in out.iter_mut().enumerate() {
-                        let at = at as usize + j;
-                        *o = objects.indices[at / 2].to_le_bytes()[at % 2];
-                    }
-                    Ok(())
-                }
                 Source::ObjectRebased { segments, wide } => {
                     fill_object_rebased(&objects.indices, segments, *wide, at, out)
                 }
@@ -1879,13 +1725,11 @@ impl GeometryUpload {
             .map_err(|e| format!("{}: {e}", job.label))?;
             renderer.queue.write_buffer(&job.buffer, at, &self.piece);
             (renderer.geometry_bytes).set(renderer.geometry_bytes.get() + self.piece.len() as u64);
-            if self.compat {
-                // Each piece submitted at once, so the staging of finished
-                // ones can go (see the type's description).
-                crate::stats::submit();
-                renderer.queue.submit([]);
-                let _ = renderer.device.poll(wgpu::PollType::Poll);
-            }
+            // Each piece submitted at once, so the staging of finished ones
+            // can go (see the type's description).
+            crate::stats::submit();
+            renderer.queue.submit([]);
+            let _ = renderer.device.poll(wgpu::PollType::Poll);
             self.at += n as u64;
             spent += n as u64;
         }
@@ -1977,7 +1821,6 @@ impl Renderer {
         }
         let vertex_layouts: Vec<Option<Layout>> =
             layout.vertex_buffers.iter().map(|b| b.layout).collect();
-        let compat = self.compat;
         let device = &self.device;
         let new_buffer = |label: &str, usage: wgpu::BufferUsages, bytes: u64, min_size: u64| {
             device.create_buffer(&wgpu::BufferDescriptor {
@@ -1991,22 +1834,12 @@ impl Renderer {
         };
         let mut jobs = Vec::new();
         let mut buffer_bytes = 0;
-        // WebGPU: vertex buffers made room for at least 65,536 vertices
-        // past any base, so no 16-bit index can read past them. WebKit
-        // then draws a new index range at once; otherwise it checks the
-        // range first with a draw of its own on the GPU, a memory barrier
-        // and an indirect draw, until the command buffer completes (its
-        // `RenderPassEncoder::clampIndexBufferToValidValues`; #437: about
-        // 3 s of the warm-up's frame on an iPhone, as culled and merged
-        // draws make new ranges).
-        let room = |stride: u64| if compat { 0 } else { 65_536 * stride };
         let mut vertex_buffers = Vec::with_capacity(layout.vertex_buffers.len() + 1);
         for (i, b) in layout.vertex_buffers.iter().enumerate() {
             let bytes = b.bytes();
-            let min = room(b.stride as u64);
-            buffer_bytes += bytes.max(min);
+            buffer_bytes += bytes;
             let label = "level.geom vertices";
-            let buffer = new_buffer(label, wgpu::BufferUsages::VERTEX, bytes, min);
+            let buffer = new_buffer(label, wgpu::BufferUsages::VERTEX, bytes, 0);
             vertex_buffers.push(buffer.clone());
             jobs.push(Job {
                 buffer,
@@ -2095,10 +1928,9 @@ impl Renderer {
                 continue;
             }
             let bytes = 4 * u64::from(b.vertex_count);
-            let min = room(4).max(4);
-            buffer_bytes += bytes.max(min);
+            buffer_bytes += bytes.max(4);
             let label = "level.geom draw ids";
-            let buffer = new_buffer(label, wgpu::BufferUsages::VERTEX, bytes, min);
+            let buffer = new_buffer(label, wgpu::BufferUsages::VERTEX, bytes, 4);
             id_buffers.push(Some(buffer.clone()));
             jobs.push(Job {
                 buffer,
@@ -2114,9 +1946,7 @@ impl Renderer {
             // Whole 16-byte vertices: a multiple of 4 bytes, as buffers need.
             let bytes = objects.vertices.len() as u64;
             let label = "object vertices";
-            // Room past the last vertex, as the objects draw from bases.
-            let min = bytes + room(MODEL_VERTEX_BYTES as u64);
-            let buffer = new_buffer(label, wgpu::BufferUsages::VERTEX, bytes, min);
+            let buffer = new_buffer(label, wgpu::BufferUsages::VERTEX, bytes, 0);
             vertex_buffers.push(buffer.clone());
             jobs.push(Job {
                 buffer,
@@ -2124,72 +1954,55 @@ impl Renderer {
                 source: Source::ObjectVertices,
                 bytes,
             });
-            object_buffer_bytes += min;
+            object_buffer_bytes += bytes;
+            // Rebased as they are uploaded, as the level's are (a rebased
+            // copy made at once took 2.6 MiB, its 32-bit working copy 4 MiB,
+            // in the wasm heap; #357), 32-bit once they pass 16 bits.
             let label = "object indices";
-            if compat {
-                // Rebased as they are uploaded, as the level's are (a
-                // rebased copy made at once took 2.6 MiB, its 32-bit
-                // working copy 4 MiB, in the wasm heap; #357), 32-bit once
-                // they pass 16 bits.
-                let mut object_segments: Vec<Segment> = Vec::new();
-                let mut widest = 0u32;
-                for d in draws.iter().filter(|d| d.object.is_some()) {
-                    rebased.add(d, || {
-                        let at = object_segments.last().map_or(0, |s| s.at + s.count);
-                        let range =
-                            d.first_index as usize..(d.first_index + d.index_count) as usize;
-                        let top = objects.indices[range].iter().copied().max().unwrap_or(0);
-                        widest = widest.max(u32::from(top) + d.first_vertex);
-                        object_segments.push(Segment {
-                            at,
-                            first: d.first_index,
-                            count: d.index_count,
-                            base: d.first_vertex,
-                            vb: object_vb,
-                        });
-                        at
+            let mut object_segments: Vec<Segment> = Vec::new();
+            let mut widest = 0u32;
+            for d in draws.iter().filter(|d| d.object.is_some()) {
+                rebased.add(d, || {
+                    let at = object_segments.last().map_or(0, |s| s.at + s.count);
+                    let range = d.first_index as usize..(d.first_index + d.index_count) as usize;
+                    let top = objects.indices[range].iter().copied().max().unwrap_or(0);
+                    widest = widest.max(u32::from(top) + d.first_vertex);
+                    object_segments.push(Segment {
+                        at,
+                        first: d.first_index,
+                        count: d.index_count,
+                        base: d.first_vertex,
+                        vb: object_vb,
                     });
-                }
-                let wide = widest > u32::from(u16::MAX);
-                let count = object_segments.last().map_or(0, |s| s.at + s.count);
-                let bytes = (u64::from(count) * if wide { 4 } else { 2 }).max(4);
-                object_buffer_bytes += bytes.next_multiple_of(4);
-                index_formats.push(if wide {
-                    wgpu::IndexFormat::Uint32
-                } else {
-                    wgpu::IndexFormat::Uint16
-                });
-                let buffer = new_buffer(label, wgpu::BufferUsages::INDEX, bytes, 0);
-                index_buffers.push(buffer.clone());
-                jobs.push(Job {
-                    buffer,
-                    label,
-                    source: Source::ObjectRebased {
-                        segments: object_segments,
-                        wide,
-                    },
-                    bytes,
-                });
-            } else {
-                let bytes = 2 * objects.indices.len() as u64;
-                object_buffer_bytes += bytes.next_multiple_of(4).max(4);
-                index_formats.push(wgpu::IndexFormat::Uint16);
-                let buffer = new_buffer(label, wgpu::BufferUsages::INDEX, bytes, 4);
-                index_buffers.push(buffer.clone());
-                jobs.push(Job {
-                    buffer,
-                    label,
-                    source: Source::ObjectIndices,
-                    bytes,
+                    at
                 });
             }
+            let wide = widest > u32::from(u16::MAX);
+            let count = object_segments.last().map_or(0, |s| s.at + s.count);
+            let bytes = (u64::from(count) * if wide { 4 } else { 2 }).max(4);
+            object_buffer_bytes += bytes.next_multiple_of(4);
+            index_formats.push(if wide {
+                wgpu::IndexFormat::Uint32
+            } else {
+                wgpu::IndexFormat::Uint16
+            });
+            let buffer = new_buffer(label, wgpu::BufferUsages::INDEX, bytes, 0);
+            index_buffers.push(buffer.clone());
+            jobs.push(Job {
+                buffer,
+                label,
+                source: Source::ObjectRebased {
+                    segments: object_segments,
+                    wide,
+                },
+                bytes,
+            });
         }
         Ok(GeometryUpload {
             jobs,
             next: 0,
             at: 0,
             piece: Vec::new(),
-            compat,
             segments,
             uses,
             wide,
@@ -2251,7 +2064,6 @@ impl Renderer {
         } = upload;
         let device = self.device.clone();
         let queue = self.queue.clone();
-        let compat = self.compat;
         if self.world_pipelines.is_none() {
             self.make_world_pipelines();
         }
@@ -2281,10 +2093,8 @@ impl Renderer {
             .copied()
             .map(|mut d| {
                 if d.object.is_some() {
-                    if compat {
-                        d.first_index = rebased.first_index(&d);
-                        d.first_vertex = 0;
-                    }
+                    d.first_index = rebased.first_index(&d);
+                    d.first_vertex = 0;
                     d.vertex_buffer = object_vb;
                     d.index_buffer = object_ib;
                 } else if let Some(&(ib, k)) = level_segments.get(&Rebased::key(&d)) {
@@ -2337,52 +2147,35 @@ impl Renderer {
         records.resize(records.len().max(DRAW_BYTES), 0);
         buffer_bytes += records.len() as u64;
         object_buffer_bytes += (object_draws * DRAW_BYTES) as u64;
-        let draw_data = if compat {
-            // Whole rows of the draws texture.
-            let rows = (kept.len().max(1) as u32).div_ceil(DRAWS_PER_ROW);
-            records.resize(rows as usize * DRAWS_PER_ROW as usize * DRAW_BYTES, 0);
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("world draws"),
-                size: wgpu::Extent3d {
-                    width: DRAWS_PER_ROW * DRAW_TEXELS,
-                    height: rows,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba32Float,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-            queue.write_texture(
-                texture.as_image_copy(),
-                &records,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(DRAWS_PER_ROW * DRAW_BYTES as u32),
-                    rows_per_image: None,
-                },
-                texture.size(),
-            );
-            DrawData::Texture(texture)
-        } else {
-            DrawData::Buffer(upload_buffer(
-                &device,
-                &queue,
-                "world draws",
-                wgpu::BufferUsages::STORAGE,
-                &records,
-            ))
-        };
-        let draw_view;
-        let draw_resource = match &draw_data {
-            DrawData::Buffer(b) => b.as_entire_binding(),
-            DrawData::Texture(t) => {
-                draw_view = t.create_view(&Default::default());
-                wgpu::BindingResource::TextureView(&draw_view)
-            }
-        };
+        // Whole rows of the draws texture.
+        let rows = (kept.len().max(1) as u32).div_ceil(DRAWS_PER_ROW);
+        records.resize(rows as usize * DRAWS_PER_ROW as usize * DRAW_BYTES, 0);
+        let draws_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("world draws"),
+            size: wgpu::Extent3d {
+                width: DRAWS_PER_ROW * DRAW_TEXELS,
+                height: rows,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            draws_texture.as_image_copy(),
+            &records,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(DRAWS_PER_ROW * DRAW_BYTES as u32),
+                rows_per_image: None,
+            },
+            draws_texture.size(),
+        );
+        let draw_view = draws_texture.create_view(&Default::default());
+        let draw_resource = wgpu::BindingResource::TextureView(&draw_view);
         let frame = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("world frame"),
             size: FRAME_BYTES,
@@ -2581,27 +2374,11 @@ impl Renderer {
         };
         early.sort_by_key(order_key);
         late.sort_by_key(order_key);
-        if compat {
-            crate::stats::submit();
-            self.queue.submit([]);
-            let _ = device.poll(wgpu::PollType::Poll);
-        }
+        crate::stats::submit();
+        self.queue.submit([]);
+        let _ = device.poll(wgpu::PollType::Poll);
         let order = |v: Vec<usize>| v.into_iter().map(|i| i as u32).collect::<Vec<u32>>();
         let (early, late) = (order(early), order(late));
-        let records = (!compat).then(|| {
-            let identity: Vec<u32> = (0..kept.len() as u32).collect();
-            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("world shared records"),
-                size: (8 * kept.len() as u64).max(4),
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            if !identity.is_empty() {
-                queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&identity));
-            }
-            buffer
-        });
-        buffer_bytes += records.as_ref().map_or(0, wgpu::Buffer::size);
         let calls: Vec<DrawCall> = kept
             .iter()
             .map(|d| DrawCall {
@@ -2631,7 +2408,7 @@ impl Renderer {
             vertex_buffers,
             index_buffers,
             index_formats,
-            draw_data,
+            draw_texels: draws_texture,
             kept_of,
             _textures: textures,
             frame,
@@ -2639,7 +2416,6 @@ impl Renderer {
             surface_groups,
             surface_pipelines,
             programs: surfaces.iter().map(|s| s.program).collect(),
-            records,
             early: Step::new(early, &calls, &exclusive),
             late: Step::new(late, &calls, &exclusive),
             calls,
@@ -2672,34 +2448,29 @@ impl Renderer {
         let mut bytes = Vec::with_capacity(80);
         push_mat(&mut bytes, transform);
         push_vec4(&mut bytes, sphere);
-        match &inner.draw_data {
-            DrawData::Buffer(b) => self
-                .queue
-                .write_buffer(b, k as u64 * DRAW_BYTES as u64, &bytes),
-            DrawData::Texture(t) => self.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: t,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d {
-                        x: k % DRAWS_PER_ROW * DRAW_TEXELS,
-                        y: k / DRAWS_PER_ROW,
-                        z: 0,
-                    },
-                    aspect: wgpu::TextureAspect::All,
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &inner.draw_texels,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: k % DRAWS_PER_ROW * DRAW_TEXELS,
+                    y: k / DRAWS_PER_ROW,
+                    z: 0,
                 },
-                &bytes,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(bytes.len() as u32),
-                    rows_per_image: None,
-                },
-                wgpu::Extent3d {
-                    width: (bytes.len() / 16) as u32,
-                    height: 1,
-                    depth_or_array_layers: 1,
-                },
-            ),
-        }
+                aspect: wgpu::TextureAspect::All,
+            },
+            &bytes,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(bytes.len() as u32),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: (bytes.len() / 16) as u32,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
         inner.spheres.borrow_mut()[k as usize] = sphere;
         for (i, d) in inner.strict.borrow_mut().iter_mut() {
             if *i == k as usize {
@@ -2759,7 +2530,7 @@ impl Renderer {
         let inner = &frame.world.0;
         CALLS.set(0);
 
-        EMITTED.set([0; 6]);
+        EMITTED.set([0; 5]);
         let view_projection = multiply(&frame.view, &frame.projection);
         let l = &frame.light;
         let tau = std::f32::consts::TAU;
@@ -2875,9 +2646,7 @@ impl Renderer {
         let spheres = inner.spheres.borrow();
         let shows = |i: u32| may_show(spheres[i as usize], &planes, frame.eye, ssa);
         set_part(Part::WorldEarly);
-        // The records of the instanced calls' draws, written below.
-        let mut shared = Vec::new();
-        encode_static(&mut pass, inner, &inner.early, shows, &mut shared);
+        encode_static(&mut pass, inner, &inner.early, shows);
         if let Some((pipelines, prepared)) = particles {
             set_part(Part::Particles);
             prepared.draw_queue(pipelines, &mut pass, ParticleQueue::Early);
@@ -2899,10 +2668,6 @@ impl Renderer {
         {
             crate::stats::bind_group();
             pass.set_bind_group(0, &inner.frame_group, &[]);
-            if let Some(records) = &inner.records {
-                crate::stats::buffer();
-                pass.set_vertex_buffer(RECORDS, records.slice(..));
-            }
             for (offset, spot, draws) in &lights {
                 crate::stats::bind_group();
                 pass.set_bind_group(1, &groups[usize::from(*spot)], &[*offset]);
@@ -2953,16 +2718,7 @@ impl Renderer {
             }
         }
         set_part(Part::WorldLate);
-        encode_static(&mut pass, inner, &inner.late, shows, &mut shared);
-        if let Some(records) = inner.records.as_ref().filter(|_| !shared.is_empty()) {
-            // After the identity records (one a draw), before the frame's
-            // submission.
-            self.queue.write_buffer(
-                records,
-                4 * inner.calls.len() as u64,
-                bytemuck::cast_slice(&shared),
-            );
-        }
+        encode_static(&mut pass, inner, &inner.late, shows);
         if let Some((pipelines, prepared)) = particles {
             set_part(Part::Particles);
             prepared.draw_queue(pipelines, &mut pass, ParticleQueue::Late);
@@ -2999,10 +2755,6 @@ impl Renderer {
                 crate::stats::buffer();
                 pass.set_vertex_buffer(1, ids.slice(..));
             }
-            if let Some(records) = &inner.records {
-                crate::stats::buffer();
-                pass.set_vertex_buffer(RECORDS, records.slice(..));
-            }
             let instance = i as u32;
             crate::stats::draw();
             if emits(Kind::Strict) {
@@ -3024,7 +2776,7 @@ impl Renderer {
     /// The world's pipelines for the current mode, with the light
     /// textures given so far.
     pub(crate) fn make_world_pipelines(&mut self) {
-        let mut p = WorldPipelines::new(&self.device, &self.queue, self.format, self.compat);
+        let mut p = WorldPipelines::new(&self.device, &self.queue, self.format);
         p.unblended_trees = self.unblended_trees;
         if let Some(t) = self.light_textures.clone() {
             p.light_groups(&self.device, t);
@@ -3048,7 +2800,7 @@ impl Renderer {
 
     /// The world's draw calls emitted in the last world frame encoded, by
     /// kind ([`CALL_KINDS`]; #443).
-    pub fn world_calls_emitted(&self) -> [u32; 6] {
+    pub fn world_calls_emitted(&self) -> [u32; 5] {
         EMITTED.get()
     }
 

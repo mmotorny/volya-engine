@@ -3,9 +3,8 @@
 
 //! Frame presentation from the Russian edition (BYOA): the verification
 //! facts of docs/behavior/frame-presentation.md section 5, and the first
-//! level's start view drawn through the supersampled target on both
-//! renderer paths, against the same view at `r__supersample` 1, with frame
-//! times. `VOLYA_DUMP_SUPERSAMPLE=<file.ppm>` writes the supersampled frame
+//! level's start view drawn through the supersampled target, against the
+//! same view at `r__supersample` 1, with frame times. `VOLYA_DUMP_SUPERSAMPLE=<file.ppm>` writes the supersampled frame
 //! locally. Skips when `VOLYA_GOG_INSTALLER` is unset.
 
 #![cfg(not(target_arch = "wasm32"))]
@@ -31,8 +30,8 @@ use volya_engine_installer::{Installer, extract};
 
 const SIZE: Resolution = Resolution::new(1024, 768);
 
-fn renderer(compat: bool) -> Renderer {
-    let mut r = pollster::block_on(async {
+fn renderer() -> Renderer {
+    pollster::block_on(async {
         let instance = wgpu::Instance::default();
         let adapter = instance.request_adapter(&Default::default()).await.unwrap();
         let (device, queue) = adapter
@@ -43,9 +42,7 @@ fn renderer(compat: bool) -> Renderer {
             .await
             .unwrap();
         Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm)
-    });
-    r.set_compat(compat);
-    r
+    })
 }
 
 /// The installer's `__support/userdocs/user.ltx`.
@@ -140,63 +137,61 @@ fn presentation_from_game_data() {
         })
     );
 
-    // The start view at r__supersample 2 against 1, on both paths.
-    for compat in [false, true] {
-        let mut screen = LevelScreen::load(&tree, &data, 0).unwrap();
-        assert_eq!(
-            screen.world().presentation_noise.as_deref(),
-            Some(noise.as_str())
+    // The start view at r__supersample 2 against 1.
+    let mut screen = LevelScreen::load(&tree, &data, 0).unwrap();
+    assert_eq!(
+        screen.world().presentation_noise.as_deref(),
+        Some(noise.as_str())
+    );
+    let mut r = renderer();
+    let mut presenter = Presenter::new();
+    let mut frames = Vec::new();
+    for supersample in [1, 2] {
+        screen.set_supersample(supersample);
+        let mut scene = screen.scene(SIZE, 0);
+        scene.presentation = Presentation {
+            supersample,
+            ..Default::default()
+        };
+        let draw = |r: &mut Renderer, presenter: &mut Presenter| {
+            let list = presenter.draw_list(r, &tree, &scene, 0);
+            pollster::block_on(r.capture(&list, SIZE.width, SIZE.height, wgpu::Color::BLACK))
+                .unwrap()
+        };
+        draw(&mut r, &mut presenter);
+        let start = Instant::now();
+        const FRAMES: u32 = 10;
+        let mut pixels = Vec::new();
+        for _ in 0..FRAMES {
+            pixels = draw(&mut r, &mut presenter);
+        }
+        let time = start.elapsed() / FRAMES;
+        let target = r.presentation_target();
+        eprintln!(
+            "r__supersample {supersample}: target {target:?}, {time:.1?} \
+             per frame with readback"
         );
-        let mut r = renderer(compat);
-        let mut presenter = Presenter::new();
-        let mut frames = Vec::new();
-        for supersample in [1, 2] {
-            screen.set_supersample(supersample);
-            let mut scene = screen.scene(SIZE, 0);
-            scene.presentation = Presentation {
-                supersample,
-                ..Default::default()
-            };
-            let draw = |r: &mut Renderer, presenter: &mut Presenter| {
-                let list = presenter.draw_list(r, &tree, &scene, 0);
-                pollster::block_on(r.capture(&list, SIZE.width, SIZE.height, wgpu::Color::BLACK))
-                    .unwrap()
-            };
-            draw(&mut r, &mut presenter);
-            let start = Instant::now();
-            const FRAMES: u32 = 10;
-            let mut pixels = Vec::new();
-            for _ in 0..FRAMES {
-                pixels = draw(&mut r, &mut presenter);
-            }
-            let time = start.elapsed() / FRAMES;
-            let target = r.presentation_target();
-            eprintln!(
-                "compat {compat}, r__supersample {supersample}: target {target:?}, {time:.1?} \
-                 per frame with readback"
-            );
-            // At 1 the frame goes through the target only after a distortion
-            // pass (3.1): the start view has the level's distorting effect.
-            let want = if supersample == 1 {
-                (1024, 768)
-            } else {
-                (1448, 1086)
-            };
-            assert_eq!(target.map(|t| t.0), Some(want));
-            assert!(supersample == 1 || target.is_some_and(|t| t.1));
-            frames.push(pixels);
-        }
-        assert!(presenter.take_errors().is_empty());
-        if !compat && let Some(path) = std::env::var_os("VOLYA_DUMP_SUPERSAMPLE") {
-            let mut ppm = format!("P6 {} {} 255\n", SIZE.width, SIZE.height).into_bytes();
-            for p in frames[1].chunks(4) {
-                ppm.extend_from_slice(&p[..3]);
-            }
-            std::fs::write(path, ppm).unwrap();
-        }
-        // The same picture, resampled: close, not equal.
-        let q = psnr(&frames[0], &frames[1]);
-        eprintln!("compat {compat}: PSNR of r__supersample 2 against 1: {q:.1} dB");
-        assert!(q > 22.0 && frames[0] != frames[1], "{q:.1} dB");
+        // At 1 the frame goes through the target only after a distortion
+        // pass (3.1): the start view has the level's distorting effect.
+        let want = if supersample == 1 {
+            (1024, 768)
+        } else {
+            (1448, 1086)
+        };
+        assert_eq!(target.map(|t| t.0), Some(want));
+        assert!(supersample == 1 || target.is_some_and(|t| t.1));
+        frames.push(pixels);
     }
+    assert!(presenter.take_errors().is_empty());
+    if let Some(path) = std::env::var_os("VOLYA_DUMP_SUPERSAMPLE") {
+        let mut ppm = format!("P6 {} {} 255\n", SIZE.width, SIZE.height).into_bytes();
+        for p in frames[1].chunks(4) {
+            ppm.extend_from_slice(&p[..3]);
+        }
+        std::fs::write(path, ppm).unwrap();
+    }
+    // The same picture, resampled: close, not equal.
+    let q = psnr(&frames[0], &frames[1]);
+    eprintln!("PSNR of r__supersample 2 against 1: {q:.1} dB");
+    assert!(q > 22.0 && frames[0] != frames[1], "{q:.1} dB");
 }

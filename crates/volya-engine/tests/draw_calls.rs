@@ -3,8 +3,8 @@
 
 //! What the first level's frames ask of the GPU (#387), from the Russian
 //! edition (BYOA): a few views of `l01_escape` at the shipped settings
-//! (`r__supersample` 2, `r__detail_density` 0.2) drawn on both renderer
-//! paths, with each frame's draw calls and state changes by part
+//! (`r__supersample` 2, `r__detail_density` 0.2) drawn, with each frame's
+//! draw calls and state changes by part
 //! (`Renderer::take_frame_stats`) and its encoding time.
 //!
 //! `VOLYA_DUMP_DRAWS=<dir>` writes every view's pixels there (raw RGBA,
@@ -43,8 +43,8 @@ const SIZE: Resolution = Resolution::new(1024, 768);
 /// Drawings of each view compared.
 const REPEATS: usize = 32;
 
-fn renderer(compat: bool) -> Renderer {
-    let mut r = pollster::block_on(async {
+fn renderer() -> Renderer {
+    pollster::block_on(async {
         let instance = wgpu::Instance::default();
         let adapter = instance.request_adapter(&Default::default()).await.unwrap();
         let (device, queue) = adapter
@@ -55,15 +55,13 @@ fn renderer(compat: bool) -> Renderer {
             .await
             .unwrap();
         Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm)
-    });
-    r.set_compat(compat);
-    r
+    })
 }
 
-fn report(view: &str, compat: bool, s: &FrameStats, encode: Duration) {
+fn report(view: &str, s: &FrameStats, encode: Duration) {
     let t = s.total();
     eprintln!(
-        "compat {compat}, {view}: {} draws, {} pipelines, {} bind groups, {} buffers, {} passes, \
+        "{view}: {} draws, {} pipelines, {} bind groups, {} buffers, {} passes, \
          {} submits; encoded in {encode:.2?}",
         t.draws, t.pipelines, t.bind_groups, t.buffers, s.passes, s.submits
     );
@@ -110,10 +108,10 @@ fn draw_calls_from_game_data() {
         ..Default::default()
     };
     let mut compared = 0;
-    // Each path with the trees blended, as drawn, and unblended
+    // The trees blended, as drawn, and unblended
     // (`Renderer::set_unblended_trees`), which the Mac's GPU repeats
     // exactly, so comparisons there are exact everywhere.
-    for (compat, unblended) in [(false, false), (false, true), (true, false), (true, true)] {
+    for unblended in [false, true] {
         let mut screen = LevelScreen::load(&tree, &data, 0).unwrap();
         screen.set_detail_settings(0.2, 0.5);
         screen.set_supersample(2);
@@ -152,7 +150,7 @@ fn draw_calls_from_game_data() {
                 )),
             ),
         ];
-        let mut r = renderer(compat);
+        let mut r = renderer();
         r.set_unblended_trees(unblended);
         let mut presenter = Presenter::new();
         let mut now = 0;
@@ -181,7 +179,7 @@ fn draw_calls_from_game_data() {
                 pollster::block_on(frame).unwrap();
             }
             if !unblended {
-                report(name, compat, &stats, encode);
+                report(name, &stats, encode);
                 report_static(&calls);
             }
             // The particles left out of the pixels compared: their
@@ -214,11 +212,7 @@ fn draw_calls_from_game_data() {
                 })
                 .count();
             eprintln!("{name}: {unstable} pixels vary between drawings of the same list");
-            let file = format!(
-                "{name}-{}{}.rgba",
-                if compat { "webgl2" } else { "webgpu" },
-                if unblended { "-unblended" } else { "" }
-            );
+            let file = format!("{name}{}.rgba", if unblended { "-unblended" } else { "" });
             if let Some(dir) = &dump {
                 std::fs::create_dir_all(dir).unwrap();
                 std::fs::write(dir.join(&file), drawings.concat()).unwrap();
@@ -328,112 +322,109 @@ fn gpu_cost_from_game_data() {
     let root = StdVfs::new(archives[0].file.parent().unwrap());
     let tree = DbVfs::open_game(&root, Some("mods")).unwrap();
     let data = GameData::read(&tree, None, PHONE).unwrap();
-    for compat in [false, true] {
-        let mut screen = LevelScreen::load(&tree, &data, 0).unwrap();
-        screen.set_detail_settings(0.2, 0.5);
-        let mut r = renderer(compat);
-        if !r.can_time_gpu() {
-            eprintln!("skipped: no timestamp queries");
-            return;
-        }
-        r.set_gpu_timing(true);
-        let target = r.device().create_texture(&wgpu::TextureDescriptor {
-            label: Some("phone"),
-            size: wgpu::Extent3d {
-                width: PHONE.width,
-                height: PHONE.height,
-                depth_or_array_layers: 1,
+    let mut screen = LevelScreen::load(&tree, &data, 0).unwrap();
+    screen.set_detail_settings(0.2, 0.5);
+    let mut r = renderer();
+    if !r.can_time_gpu() {
+        eprintln!("skipped: no timestamp queries");
+        return;
+    }
+    r.set_gpu_timing(true);
+    let target = r.device().create_texture(&wgpu::TextureDescriptor {
+        label: Some("phone"),
+        size: wgpu::Extent3d {
+            width: PHONE.width,
+            height: PHONE.height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let mut presenter = Presenter::new();
+    let start_eye = screen.state().eye;
+    let start_angles = Angles {
+        yaw: screen.state().yaw,
+        pitch: screen.state().pitch,
+        roll: 0.0,
+    };
+    let (x, z) = (-205.0, -112.0);
+    let (ground, _) = screen
+        .collision()
+        .floor_below(x, z, 100.0, -100.0)
+        .expect("ground");
+    let views = [
+        ("start", start_eye, start_angles),
+        (
+            "outdoors",
+            [x, ground + 1.7, z],
+            Angles {
+                yaw: std::f32::consts::FRAC_PI_2,
+                pitch: 0.25,
+                roll: 0.0,
             },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let mut presenter = Presenter::new();
-        let start_eye = screen.state().eye;
-        let start_angles = Angles {
-            yaw: screen.state().yaw,
-            pitch: screen.state().pitch,
-            roll: 0.0,
-        };
-        let (x, z) = (-205.0, -112.0);
-        let (ground, _) = screen
-            .collision()
-            .floor_below(x, z, 100.0, -100.0)
-            .expect("ground");
-        let views = [
-            ("start", start_eye, start_angles),
-            (
-                "outdoors",
-                [x, ground + 1.7, z],
-                Angles {
-                    yaw: std::f32::consts::FRAC_PI_2,
-                    pitch: 0.25,
-                    roll: 0.0,
-                },
-            ),
-            // Up at the sky: almost nothing of the world on screen, so its
-            // cost there is what doesn't depend on pixels.
-            (
-                "sky",
-                [x, ground + 1.7, z],
-                Angles {
-                    yaw: std::f32::consts::FRAC_PI_2,
-                    pitch: -1.4,
-                    roll: 0.0,
-                },
-            ),
-        ];
-        let mut now = 0;
-        for (name, eye, angles) in views {
-            screen.set_camera(eye, angles);
-            for supersample in [2, 1] {
-                screen.set_supersample(supersample);
-                for _ in 0..3 {
-                    now += 16;
-                    screen.paused(now);
-                }
-                let mut scene = screen.scene(PHONE, 0);
-                scene.presentation = Presentation {
-                    supersample,
-                    ..Default::default()
-                };
-                let mut variants = vec![("whole", scene.clone())];
-                if supersample == 2 {
-                    let mut v = scene.clone();
-                    v.world.as_mut().unwrap().particles.clear();
-                    variants.push(("no particles", v));
-                    let mut v = scene.clone();
-                    v.world.as_mut().unwrap().details = None;
-                    variants.push(("no details", v));
-                    let mut v = scene.clone();
-                    let w = v.world.as_mut().unwrap();
-                    w.lights.clear();
-                    w.glows.clear();
-                    variants.push(("no lights or glows", v));
-                    let mut v = scene.clone();
-                    v.world.as_mut().unwrap().sky = None;
-                    variants.push(("no sky", v));
-                }
-                for (variant, scene) in variants {
-                    // Warm up (pipelines, the target), then measure.
-                    gpu_times(&mut r, &mut presenter, &tree, &scene, &target, 5);
-                    let (frame, passes) =
-                        gpu_times(&mut r, &mut presenter, &tree, &scene, &target, 30);
-                    let busy: f64 = passes.iter().map(|p| p.1).sum();
-                    let passes: Vec<String> =
-                        passes.iter().map(|(n, t)| format!("{n} {t:.3}")).collect();
-                    eprintln!(
-                        "compat {compat}, {name}, r__supersample {supersample}, {variant}: GPU \
-                         {frame:.2} ms a frame, passes {busy:.3} ({}); target {:?}",
-                        passes.join(", "),
-                        r.presentation_target().map(|t| t.0)
-                    );
-                }
+        ),
+        // Up at the sky: almost nothing of the world on screen, so its
+        // cost there is what doesn't depend on pixels.
+        (
+            "sky",
+            [x, ground + 1.7, z],
+            Angles {
+                yaw: std::f32::consts::FRAC_PI_2,
+                pitch: -1.4,
+                roll: 0.0,
+            },
+        ),
+    ];
+    let mut now = 0;
+    for (name, eye, angles) in views {
+        screen.set_camera(eye, angles);
+        for supersample in [2, 1] {
+            screen.set_supersample(supersample);
+            for _ in 0..3 {
+                now += 16;
+                screen.paused(now);
+            }
+            let mut scene = screen.scene(PHONE, 0);
+            scene.presentation = Presentation {
+                supersample,
+                ..Default::default()
+            };
+            let mut variants = vec![("whole", scene.clone())];
+            if supersample == 2 {
+                let mut v = scene.clone();
+                v.world.as_mut().unwrap().particles.clear();
+                variants.push(("no particles", v));
+                let mut v = scene.clone();
+                v.world.as_mut().unwrap().details = None;
+                variants.push(("no details", v));
+                let mut v = scene.clone();
+                let w = v.world.as_mut().unwrap();
+                w.lights.clear();
+                w.glows.clear();
+                variants.push(("no lights or glows", v));
+                let mut v = scene.clone();
+                v.world.as_mut().unwrap().sky = None;
+                variants.push(("no sky", v));
+            }
+            for (variant, scene) in variants {
+                // Warm up (pipelines, the target), then measure.
+                gpu_times(&mut r, &mut presenter, &tree, &scene, &target, 5);
+                let (frame, passes) = gpu_times(&mut r, &mut presenter, &tree, &scene, &target, 30);
+                let busy: f64 = passes.iter().map(|p| p.1).sum();
+                let passes: Vec<String> =
+                    passes.iter().map(|(n, t)| format!("{n} {t:.3}")).collect();
+                eprintln!(
+                    "{name}, r__supersample {supersample}, {variant}: GPU \
+                     {frame:.2} ms a frame, passes {busy:.3} ({}); target {:?}",
+                    passes.join(", "),
+                    r.presentation_target().map(|t| t.0)
+                );
             }
         }
-        assert!(presenter.take_errors().is_empty());
     }
+    assert!(presenter.take_errors().is_empty());
 }

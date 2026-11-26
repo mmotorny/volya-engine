@@ -53,8 +53,8 @@ globalThis.volyaImportedBefore = Boolean(state.deleted);
 Object.defineProperty(navigator.storage, "persisted", { value: async () => state.persisted ?? true });
 Object.defineProperty(navigator.storage, "persist", { value: async () => state.persisted ?? true });
 
-// The engine's own message for a browser with neither WebGPU nor WebGL 2 (platforms/web/src/gpu.rs).
-const gpu = state.gpu === false ? { state: "unavailable", message: "no WebGPU; no WebGL 2 adapter" } : { state: "ready" };
+// The engine's own message for a browser without WebGL 2 (platforms/web/src/gpu.rs).
+const gpu = state.gpu === false ? { state: "unavailable", message: "no WebGL 2 adapter" } : { state: "ready" };
 const call = async (op) => {
   switch (op) {
     case "status":
@@ -132,18 +132,6 @@ const updates = {
   },
 };
 
-// The Graphics setting as the state says: both supported, nothing chosen,
-// unless it says otherwise; a choice made in the frame is kept in it only.
-const graphics = {
-  available: state.gpu === false ? { webgpu: false, webgl2: false } : { webgpu: true, webgl2: true },
-  chosen: null,
-  ...state.graphics,
-  choose(backend) {
-    graphics.chosen = backend;
-  },
-  async apply() {},
-};
-
 const status = document.getElementById("status");
 globalThis.volya = {};
 if (state.level) {
@@ -183,7 +171,7 @@ if (state.level) {
   status.textContent = name;
   status.dataset.text = status.textContent;
   status.dataset.state = "ready";
-  await start(call, updates, graphics, { isolated: state.isolated !== false });
+  await start(call, updates, { isolated: state.isolated !== false });
   if (state.screen === "settings") await globalThis.volya.showSettings();
   // Check for updates pressed, its result held on screen.
   if (state.check) {

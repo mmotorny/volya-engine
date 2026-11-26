@@ -23,7 +23,7 @@ Dependencies point one way: `volya-engine-web` → `volya-engine` (and `formats`
 | Where | Runs |
 |---|---|
 | Page (`static/main.js`) | The app's own interface, input, the AudioContext; forwards input to the engine worker. |
-| Engine worker (`static/engine-worker.js`, the wasm build) | The whole engine on one thread: VFS over OPFS sync handles, loading, simulation, scripts, the sound system, rendering on the transferred `OffscreenCanvas` (WebGPU, else WebGL 2). |
+| Engine worker (`static/engine-worker.js`, the wasm build) | The whole engine on one thread: VFS over OPFS sync handles, loading, simulation, scripts, the sound system, rendering on the transferred `OffscreenCanvas` through WebGL 2. |
 | Audio worker (`static/audio-worker.js`, the same wasm build in its own instance) | Applies the sound system's mixer commands, decodes and mixes. |
 | AudioWorklet (`static/audio-worklet.js`) | Plays the mixed frames. |
 | Import worker (`static/import-worker.js`) | Unpacks the GOG installer into OPFS. |
@@ -39,7 +39,7 @@ Dependencies point one way: `volya-engine-web` → `volya-engine` (and `formats`
 
 - [web-platform.md](web-platform.md): threads and workers, synchronous I/O, the page, the hidden page, browser zoom, hosting, isolation, the service worker and updates, the UX audit page.
 - [game-data.md](game-data.md): bringing the installer, import, original formats, storage.
-- [rendering.md](rendering.md): backends, the WebGL 2 path, textures and ETC2, level preparation, the video mode, the world, objects, colour and video.
+- [rendering.md](rendering.md): WebGL 2, textures and ETC2, level preparation, the video mode, the world, objects, colour and video.
 - [audio.md](audio.md): the workers' split, the shared-memory transport, decoding, positional playback, the level's sounds, footsteps.
 - [simulation.md](simulation.md): the offline simulation, collision and movement, the character, particles, zones, lights, torches.
 - [scripts.md](scripts.md): the LuaJIT runtime, its build and the script loader.

@@ -31,26 +31,20 @@ export const tests = {
     assertEqual(status.state, "ready", "state");
   },
 
-  // Diagnostic: separates "no WebGPU here" from "no WebGPU in workers".
-  "WebGPU adapter on the main thread": async () => {
-    assert(navigator.gpu, "navigator.gpu missing");
-    const adapter = await navigator.gpu.requestAdapter();
-    assert(adapter, "no WebGPU adapter");
-    return adapter.info?.vendor ?? "?";
-  },
-
-  "WebGPU renders from a worker to an OffscreenCanvas": async () => {
+  // The renderer's name says whether WebGL runs on the GPU (ANGLE over
+  // Metal on the Mac) or in software (SwiftShader).
+  "WebGL 2 renders from a worker to an OffscreenCanvas": async () => {
     const el = document.createElement("canvas");
     el.width = el.height = 16;
     document.body.append(el);
     const canvas = el.transferControlToOffscreen();
-    const { format, vendor, rgba } = await inWorker("webgpu", { canvas }, [canvas]);
+    const { renderer, rgba } = await inWorker("webgl2", { canvas }, [canvas]);
     const expected = [255, 128, 0, 255];
     assert(
       rgba.every((v, i) => Math.abs(v - expected[i]) <= 2),
       `pixel ${rgba} != ${expected}`,
     );
-    return `${format}, ${vendor}`;
+    return renderer;
   },
 
   "engine OPFS VFS passes the VFS conformance check": async () => {

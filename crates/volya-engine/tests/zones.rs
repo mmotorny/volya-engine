@@ -6,7 +6,7 @@
 //! effects and sounds (docs/behavior/zone-idle-effects.md section 8,
 //! sound-anomalies.md section 9.1), the galantines switching, the start
 //! weather's ambient effects (weather-ambient-effects.md 2.3, 3), a
-//! campfire's effect drawn on both renderer paths, and the frame cost of
+//! campfire's effect drawn, and the frame cost of
 //! the zones and their effects (meaningful in release builds). Skips when
 //! `VOLYA_GOG_INSTALLER` is unset.
 
@@ -348,9 +348,8 @@ fn zones_frame_cost_from_game_data() {
 }
 
 /// A campfire's effect (`zone_flame_small`, `explosions\campfire_05`)
-/// drawn at its zone's position on the WebGPU path and the WebGL 2 one: a
-/// frame with the zones' effects differs from one without them around the
-/// fire. `VOLYA_DUMP_CAMPFIRE` (and `_OFF`) write the frames locally.
+/// drawn at its zone's position: a frame with the zones' effects differs
+/// from one without them around the fire. `VOLYA_DUMP_CAMPFIRE` (and `_OFF`) write the frames locally.
 #[test]
 fn a_campfire_is_drawn_from_game_data() {
     let Some(root) = root() else {
@@ -358,81 +357,75 @@ fn a_campfire_is_drawn_from_game_data() {
     };
     let tree = DbVfs::open_game(&root, Some("mods")).unwrap();
     let data = GameData::read(&tree, None, SIZE).unwrap();
-    for compat in [false, true] {
-        let mut screen = LevelScreen::load(&tree, &data, 0).unwrap();
-        let fire = (screen.zones_report().zones.into_iter())
-            .find(|z| z.section == "zone_flame_small")
-            .unwrap();
-        let at = fire.position;
-        // 3 m above the fire, 1 m to its −z, looking down at it.
-        let eye = [at[0], at[1] + 3.0, at[2] - 1.0];
-        let angles = Angles {
-            yaw: 0.0,
-            pitch: 1.25,
-            roll: 0.0,
-        };
-        for t in 0..120u64 {
-            screen.set_camera(eye, angles);
-            screen.update(16 * (t + 1), &Input::new());
-        }
+    let mut screen = LevelScreen::load(&tree, &data, 0).unwrap();
+    let fire = (screen.zones_report().zones.into_iter())
+        .find(|z| z.section == "zone_flame_small")
+        .unwrap();
+    let at = fire.position;
+    // 3 m above the fire, 1 m to its −z, looking down at it.
+    let eye = [at[0], at[1] + 3.0, at[2] - 1.0];
+    let angles = Angles {
+        yaw: 0.0,
+        pitch: 1.25,
+        roll: 0.0,
+    };
+    for t in 0..120u64 {
         screen.set_camera(eye, angles);
-        screen.set_effect_origins_drawn(&[Origin::Zone]);
-        let mut r = renderer();
-        r.set_compat(compat);
-        let mut presenter = Presenter::new();
-        let mut capture = |screen: &LevelScreen| {
-            let scene = screen.scene(SIZE, 2000);
-            let list = presenter.draw_list(&mut r, &tree, &scene, 2000);
-            let pixels =
-                pollster::block_on(r.capture(&list, SIZE.width, SIZE.height, wgpu::Color::BLACK))
-                    .unwrap();
-            (pixels, scene)
-        };
-        let (on, scene) = capture(&screen);
-        let draws = &scene.world.as_ref().unwrap().particles;
-        assert!(!draws.is_empty());
-        screen.set_effects_drawn(false);
-        let (off, _) = capture(&screen);
-        assert!(presenter.take_errors().is_empty());
-        assert!(r.particle_buffer_size() >= screen.world().particle_capacity as u64 * 144);
-        dump("VOLYA_DUMP_CAMPFIRE", &on, SIZE.width, SIZE.height);
-        dump("VOLYA_DUMP_CAMPFIRE_OFF", &off, SIZE.width, SIZE.height);
-        // Where the fire projects: within 200 px of its position on screen.
-        let (view, projection) = screen.view_projection(SIZE.width, SIZE.height);
-        let vp = volya_engine::render::world::multiply(&view, &projection);
-        let clip: Vec<f32> = (0..4)
-            .map(|c| at[0] * vp[0][c] + at[1] * vp[1][c] + at[2] * vp[2][c] + vp[3][c])
-            .collect();
-        let centre = [
-            (clip[0] / clip[3] * 0.5 + 0.5) * SIZE.width as f32,
-            (0.5 - clip[1] / clip[3] * 0.5) * SIZE.height as f32,
-        ];
-        let (mut inside, mut outside) = (0, 0);
-        for (i, (a, b)) in on.chunks(4).zip(off.chunks(4)).enumerate() {
-            // The fire's heat haze recomposes the whole frame through its
-            // distortion target (particle-drawing.md 6.3), moving every
-            // pixel by a little: what the sprites draw differs by more.
-            if (0..3).any(|c| a[c].abs_diff(b[c]) > 24) {
-                let (x, y) = (
-                    (i as u32 % SIZE.width) as f32,
-                    (i as u32 / SIZE.width) as f32,
-                );
-                if (centre[0] - x).hypot(centre[1] - y) <= 250.0 {
-                    inside += 1;
-                } else {
-                    outside += 1;
-                }
+        screen.update(16 * (t + 1), &Input::new());
+    }
+    screen.set_camera(eye, angles);
+    screen.set_effect_origins_drawn(&[Origin::Zone]);
+    let mut r = renderer();
+    let mut presenter = Presenter::new();
+    let mut capture = |screen: &LevelScreen| {
+        let scene = screen.scene(SIZE, 2000);
+        let list = presenter.draw_list(&mut r, &tree, &scene, 2000);
+        let pixels =
+            pollster::block_on(r.capture(&list, SIZE.width, SIZE.height, wgpu::Color::BLACK))
+                .unwrap();
+        (pixels, scene)
+    };
+    let (on, scene) = capture(&screen);
+    let draws = &scene.world.as_ref().unwrap().particles;
+    assert!(!draws.is_empty());
+    screen.set_effects_drawn(false);
+    let (off, _) = capture(&screen);
+    assert!(presenter.take_errors().is_empty());
+    assert!(r.particle_buffer_size() >= screen.world().particle_capacity as u64 * 144);
+    dump("VOLYA_DUMP_CAMPFIRE", &on, SIZE.width, SIZE.height);
+    dump("VOLYA_DUMP_CAMPFIRE_OFF", &off, SIZE.width, SIZE.height);
+    // Where the fire projects: within 200 px of its position on screen.
+    let (view, projection) = screen.view_projection(SIZE.width, SIZE.height);
+    let vp = volya_engine::render::world::multiply(&view, &projection);
+    let clip: Vec<f32> = (0..4)
+        .map(|c| at[0] * vp[0][c] + at[1] * vp[1][c] + at[2] * vp[2][c] + vp[3][c])
+        .collect();
+    let centre = [
+        (clip[0] / clip[3] * 0.5 + 0.5) * SIZE.width as f32,
+        (0.5 - clip[1] / clip[3] * 0.5) * SIZE.height as f32,
+    ];
+    let (mut inside, mut outside) = (0, 0);
+    for (i, (a, b)) in on.chunks(4).zip(off.chunks(4)).enumerate() {
+        // The fire's heat haze recomposes the whole frame through its
+        // distortion target (particle-drawing.md 6.3), moving every
+        // pixel by a little: what the sprites draw differs by more.
+        if (0..3).any(|c| a[c].abs_diff(b[c]) > 24) {
+            let (x, y) = (
+                (i as u32 % SIZE.width) as f32,
+                (i as u32 / SIZE.width) as f32,
+            );
+            if (centre[0] - x).hypot(centre[1] - y) <= 250.0 {
+                inside += 1;
+            } else {
+                outside += 1;
             }
         }
-        let particles: usize = draws.iter().map(|d| d.particles).sum();
-        eprintln!(
-            "compat {compat}: {} draws, {particles} sprites; {inside} pixels differ around the fire at {centre:?}, {outside} elsewhere",
-            draws.len()
-        );
-        assert!(inside > 500, "compat {compat}: {inside} pixels differ");
-        assert!(
-            outside * 10 < inside,
-            "compat {compat}: {outside} elsewhere"
-        );
     }
+    let particles: usize = draws.iter().map(|d| d.particles).sum();
+    eprintln!(
+        "{} draws, {particles} sprites; {inside} pixels differ around the fire at {centre:?}, {outside} elsewhere",
+        draws.len()
+    );
+    assert!(inside > 500, "{inside} pixels differ");
+    assert!(outside * 10 < inside, "{outside} elsewhere");
 }

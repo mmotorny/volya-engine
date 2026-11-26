@@ -14,7 +14,7 @@ publish = false
 workspace = true
 
 [features]
-# Draws through WebGL 2 where there is no WebGPU (volya-engine-render).
+# Draws through WebGL 2 (volya-engine-render), in the web build.
 webgl = ["volya-engine-render/webgl"]
 
 [dependencies]

@@ -22,8 +22,6 @@ workspace = true
 test-ops = []
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-# WebGL 2 too: where the browser gives no WebGPU adapter, or the player
-# chose it (#113, #121).
 volya-engine = { path = "../../crates/volya-engine", features = ["webgl"] }
 volya-engine-formats = { path = "../../crates/volya-engine-formats" }
 volya-engine-installer = { path = "../../crates/volya-engine-installer" }

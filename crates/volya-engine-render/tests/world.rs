@@ -31,46 +31,8 @@ const IDENTITY: Mat4 = [
     [0.0, 0.0, 0.0, 1.0],
 ];
 
-thread_local! {
-    /// Whether this test's renderer draws the world as on WebGL 2
-    /// ([`Renderer::compat`]): set by the `_compat` twin of each test.
-    static COMPAT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// Each test twice: as on WebGPU, and as on WebGL 2 (per-draw data from a
-/// texture, indices rebased at upload) on the same native GPU.
-macro_rules! both {
-    ($($name:ident),* $(,)?) => {
-        mod compat {
-            $(
-                #[test]
-                fn $name() {
-                    super::COMPAT.with(|c| c.set(true));
-                    super::$name();
-                }
-            )*
-        }
-    };
-}
-
-both!(
-    every_program_builds_and_base_coordinates_decode,
-    vertex_colour_bytes_swap,
-    tree_coordinates_and_constants,
-    sky_shows_where_the_world_does_not,
-    objects_draw_quantized_models,
-    placed_draws_hide_show_and_move,
-    environment_mapped_models,
-    shared_index_ranges_with_different_bases,
-    particles_queue_blend_cull_and_distort,
-    light_passes_add_to_the_image,
-    glows_add_after_the_world,
-    the_presentation_reduces_a_supersampled_target,
-    detail_objects_are_cut_lit_and_swayed,
-);
-
 fn renderer() -> Renderer {
-    let mut r = pollster::block_on(async {
+    pollster::block_on(async {
         let instance = wgpu::Instance::default();
         let adapter = instance.request_adapter(&Default::default()).await.unwrap();
         let (device, queue) = adapter
@@ -81,9 +43,7 @@ fn renderer() -> Renderer {
             .await
             .unwrap();
         Renderer::new(&device, &queue, wgpu::TextureFormat::Bgra8Unorm)
-    });
-    r.set_compat(COMPAT.with(|c| c.get()));
-    r
+    })
 }
 
 /// Two draws of one index range from different first vertices: the second's

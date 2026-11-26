@@ -67,19 +67,6 @@ function checkTraceFormat(trace) {
   }
 }
 
-/** Counts the engine workers the page starts until `restore()`. */
-function countEngineWorkers() {
-  const Original = globalThis.Worker;
-  const counter = { count: 0, restore: () => (globalThis.Worker = Original) };
-  globalThis.Worker = class extends Original {
-    constructor(url, options) {
-      super(url, options);
-      if (String(url).includes("engine-worker.js")) counter.count++;
-    }
-  };
-  return counter;
-}
-
 export const tests = {
   "engine reports ready": async () => {
     const status = await volya.status();
@@ -447,99 +434,6 @@ export const tests = {
     assertEqual(await b4.serve("d.js"), "d4", "served after activation");
   },
 
-  "Graphics: the stored choice where the browser supports it, else the first option it supports": async () => {
-    const { choose } = await import(`${base}graphics.js`);
-    const both = { webgpu: true, webgl2: true };
-    const noWebgpu = { webgpu: false, webgl2: true };
-    assertEqual(choose(null, both), "webgpu", "default");
-    assertEqual(choose("webgl2", both), "webgl2", "chosen");
-    assertEqual(choose(null, noWebgpu), "webgl2", "default without WebGPU");
-    assertEqual(choose("webgpu", noWebgpu), "webgl2", "chosen, unsupported");
-    assertEqual(choose("webgpu", { webgpu: true, webgl2: false }), "webgpu", "without WebGL 2");
-    assertEqual(choose("webgl2", { webgpu: true, webgl2: false }), "webgpu", "WebGL 2 chosen, unsupported");
-    assertEqual(choose("webgl2", { webgpu: false, webgl2: false }), null, "neither");
-    assertEqual(choose("something else", both), "webgpu", "an unknown choice");
-  },
-
-  "Settings shows Graphics: what the browser can't run disabled, the backend used checked; a choice is stored": async () => {
-    const { graphics } = volya;
-    const { available } = graphics;
-    // What this page finds itself: a WebGPU adapter; WebGL 2 on a canvas.
-    const adapter = await navigator.gpu?.requestAdapter().catch(() => null);
-    assertEqual(available.webgpu, Boolean(adapter), "WebGPU supported");
-    const used = (await volya.status()).gpu.backend ?? null;
-    const before = localStorage.getItem("volya-engine.graphics");
-    // A choice the browser can't run (where there is one) gives way to the
-    // first it can, and stays stored.
-    const unsupported = ["webgpu", "webgl2"].find((b) => !available[b]);
-    if (unsupported) localStorage.setItem("volya-engine.graphics", unsupported);
-    try {
-      await volya.showSettings();
-      const options = [...document.querySelectorAll('#game input[name="graphics"]')];
-      const rows = options.map((o) => o.closest("label").textContent);
-      assertEqual(options.map((o) => o.value).join(" "), "webgpu webgl2", "options");
-      for (const [i, option] of options.entries()) {
-        const supported = Boolean(available[option.value]);
-        assertEqual(option.disabled, !supported, `${option.value} disabled`);
-        assertEqual(rows[i].includes("Not supported by this browser"), !supported, `${option.value}: ${rows[i]}`);
-      }
-      assert(rows[0].startsWith("WebGPU (Recommended)"), rows[0]);
-      assertEqual(options.find((o) => o.checked)?.value ?? null, used, "checked: the backend the engine runs");
-      if (unsupported) assertEqual(localStorage.getItem("volya-engine.graphics"), unsupported, "the stored choice kept");
-      // Picking another option the browser runs stores it.
-      const other = options.find((o) => !o.disabled && !o.checked);
-      if (other) {
-        other.click();
-        assertEqual(localStorage.getItem("volya-engine.graphics"), other.value, "stored");
-      }
-      return rows.join("; ");
-    } finally {
-      if (before === null) localStorage.removeItem("volya-engine.graphics");
-      else localStorage.setItem("volya-engine.graphics", before);
-      await volya.refresh();
-    }
-  },
-
-  "Graphics: WebGL 2 chosen, the engine starts anew drawing through it, also where WebGPU works": async () => {
-    const { graphics } = volya;
-    if (!graphics.available.webgl2) skip("no WebGL 2 here");
-    graphics.choose("webgl2");
-    try {
-      await graphics.apply();
-      const { gpu } = await volya.status();
-      assertEqual([gpu.state, gpu.backend], ["ready", "webgl2"], "graphics");
-      // It draws (the render suite's particle scene): green at half over
-      // red at half over black, read back from the renderer.
-      const info = await volya.call("debug_draw_particles", { case: "blend" });
-      const { rgba } = await volya.call("debug_capture", { width: 64, height: 64 });
-      const at = Array.from(rgba.slice(4 * (32 * 64 + 32), 4 * (32 * 64 + 32) + 3));
-      assert(at.every((v, i) => Math.abs(v - [64, 128, 0][i]) <= 3), `drawn ${at}`);
-      await volya.call("debug_draw", {});
-      return `${gpu.backend}, textures ${gpu.textures}${info.compat ? ", compat path" : ""}`;
-    } finally {
-      localStorage.removeItem("volya-engine.graphics");
-      await graphics.apply();
-    }
-  },
-
-  "Graphics: applied twice at once (Play pressed again while the engine starts anew), the engine starts anew once": async () => {
-    const { graphics } = volya;
-    const current = (await volya.status()).gpu.backend;
-    const target = ["webgpu", "webgl2"].find((b) => graphics.available[b] && b !== current);
-    if (!target) skip(`only ${current} here: nothing to start anew on`);
-    const engines = countEngineWorkers();
-    graphics.choose(target);
-    try {
-      await Promise.all([graphics.apply(), graphics.apply()]);
-      assertEqual(engines.count, 1, "engines started");
-      assertEqual((await volya.status()).gpu.backend, target, "backend");
-    } finally {
-      engines.restore();
-      localStorage.removeItem("volya-engine.graphics");
-      await graphics.apply();
-    }
-  },
-
   "a game the browser deleted is said so, on the import screen": async () => {
     // Without graphics the app says it can't run the game instead (no import screen).
     if ((await volya.status()).gpu.state !== "ready") skip("no graphics here");
@@ -843,8 +737,7 @@ export const tests = {
     if (session.game === "imported") assert(/^ver\. \S+$/.test(session.game_version) && "game_language" in session, "no game version");
     else assertEqual(session.game, "not imported", "game");
     if (session.gpu_state === "ready") {
-      assert(["webgpu", "webgl2"].includes(session.gpu_backend) && session.gpu_textures, "no backend");
-      assert(["timestamp-query", "submitted-work-done"].includes(session.gpu_timing), `gpu_timing ${session.gpu_timing}`);
+      assert(session.gpu_textures, "no texture path");
     }
     assert(find("i", "test marker")[0]?.tid === 2, "no page event");
     // A period's series: the spans' times, the metrics and counts.

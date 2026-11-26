@@ -41,10 +41,28 @@ struct Draw {
 }
 
 @group(0) @binding(0) var<uniform> frame: Frame;
-@group(0) @binding(1) var<storage, read> draws: array<Draw>;
+// The draws' records, DRAW_TEXELS RGBA32F texels each, DRAWS_PER_ROW to a
+// row (world.rs): WebGL 2's vertex programs have no storage buffers.
+@group(0) @binding(1) var draw_texels: texture_2d<f32>;
+
+const DRAW_TEXELS: u32 = 9u;
+const DRAWS_PER_ROW: u32 = 64u;
 
 fn record(i: u32) -> Draw {
-    return draws[i];
+    let x = i32((i % DRAWS_PER_ROW) * DRAW_TEXELS);
+    let y = i32(i / DRAWS_PER_ROW);
+    let t = array<vec4<f32>, DRAW_TEXELS>(
+        textureLoad(draw_texels, vec2(x, y), 0),
+        textureLoad(draw_texels, vec2(x + 1, y), 0),
+        textureLoad(draw_texels, vec2(x + 2, y), 0),
+        textureLoad(draw_texels, vec2(x + 3, y), 0),
+        textureLoad(draw_texels, vec2(x + 4, y), 0),
+        textureLoad(draw_texels, vec2(x + 5, y), 0),
+        textureLoad(draw_texels, vec2(x + 6, y), 0),
+        textureLoad(draw_texels, vec2(x + 7, y), 0),
+        textureLoad(draw_texels, vec2(x + 8, y), 0),
+    );
+    return Draw(mat4x4(t[0], t[1], t[2], t[3]), t[4], t[5], t[6], t[7], t[8]);
 }
 
 // A level vertex's id when draws share it.
@@ -52,8 +70,8 @@ const SHARED: u32 = 0xffffffffu;
 
 // The record of a level vertex's draw. Vertices only one draw uses carry
 // its index (id), so draws merged into one draw call each keep their own
-// record; shared vertices (e.g. a tree's instances) take the instance's
-// record, so consecutive draws of one mesh are one instanced call.
+// record; shared vertices (e.g. a tree's instances) take the instance's,
+// the draw drawn as its own instance.
 fn level_record(id: u32, shared_record: u32) -> Draw {
     return record(select(id, shared_record, id == SHARED));
 }
@@ -97,9 +115,8 @@ struct Out {
 }
 
 struct LightMapped {
-    // The record of a draw whose vertices are shared: from an
-    // instance-step buffer (WebGPU), or the instance (WebGL 2).
-    @location(8) record: u32,
+    // The record of a draw whose vertices are shared: the instance.
+    @builtin(instance_index) record: u32,
     // The draw this vertex belongs to, or SHARED (see `level_record`).
     @location(7) id: u32,
     @location(0) position: vec3<f32>,
@@ -111,9 +128,8 @@ struct LightMapped {
 }
 
 struct VertexLit {
-    // The record of a draw whose vertices are shared: from an
-    // instance-step buffer (WebGPU), or the instance (WebGL 2).
-    @location(8) record: u32,
+    // The record of a draw whose vertices are shared: the instance.
+    @builtin(instance_index) record: u32,
     // The draw this vertex belongs to, or SHARED (see `level_record`).
     @location(7) id: u32,
     @location(0) position: vec3<f32>,
@@ -125,9 +141,8 @@ struct VertexLit {
 }
 
 struct TreeVertex {
-    // The record of a draw whose vertices are shared: from an
-    // instance-step buffer (WebGPU), or the instance (WebGL 2).
-    @location(8) record: u32,
+    // The record of a draw whose vertices are shared: the instance.
+    @builtin(instance_index) record: u32,
     // The draw this vertex belongs to, or SHARED (see `level_record`).
     @location(7) id: u32,
     @location(0) position: vec3<f32>,
