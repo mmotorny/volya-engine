@@ -212,7 +212,7 @@ fn checks() -> impl Iterator<Item = (&'static str, &'static str, Run)> {
 /// The `parity` suite's checks (`cargo xtask parity`): the views two
 /// builds draw, compared pixel by pixel: the title menu and a
 /// video, a New Game's start view and an outdoor one, its objects, lights
-/// and glows, the torch, a campfire's and an artefact's particles, the
+/// and glows, a caged lamp's glass and glow, the torch, a campfire's and an artefact's particles, the
 /// placed distortion effect, the grass, the presentation at
 /// `r__supersample` 1 and 2, and the draw-call views with the trees
 /// blended and unblended.
@@ -224,6 +224,7 @@ const PARITY: &[&str] = &[
     "start view supersampled",
     "start view shows the objects",
     "a lamp lights the level",
+    "a hanging lamp and its glow",
     "the torch lights the level",
     "a campfire is drawn",
     "an artefact's effect is drawn",
