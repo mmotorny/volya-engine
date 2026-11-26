@@ -93,13 +93,50 @@ fn sectors_are_entered_through_portals_with_narrowed_frusta() {
 }
 
 #[test]
+fn a_frustum_through_a_portal() {
+    let m = view([0.0; 3], [1.0, 0.0, 0.0]);
+    let far = Frustum::view(&m).planes[4];
+    // traversal-options.md 5: the edge planes, the portal plane (the side
+    // beyond the portal from the eye inside, whichever side the eye is on
+    // and whatever the vertex order), and the far plane of the matrix.
+    let square = portal(10.0, 0, 1).polygon;
+    for eye in [[0.0, 0.0, 0.0], [20.0, 0.0, 0.0]] {
+        for poly in [square.clone(), square.iter().rev().copied().collect()] {
+            let f = Frustum::through(eye, &poly, &m);
+            assert_eq!(f.planes.len(), 6);
+            assert_eq!(f.planes[5], far);
+            let beyond = [10.0 + (10.0 - eye[0]) * 0.1, 0.0, 0.0];
+            let before = [10.0 - (10.0 - eye[0]) * 0.1, 0.0, 0.0];
+            assert!(f.meets(beyond, 0.0) && !f.meets(before, 0.0), "{eye:?}");
+            assert!(!f.meets([beyond[0], 1.5, 0.0], 0.0));
+        }
+    }
+    // Beyond six vertices the polygon is replaced by its bounding rectangle
+    // in its plane, sides along y: an octagon in x = 10 gives the square.
+    let octagon: Vec<Vec3> = (0..8)
+        .map(|k| {
+            let a = k as f32 * std::f32::consts::TAU / 8.0;
+            [10.0, a.sin(), a.cos()]
+        })
+        .collect();
+    let f = Frustum::through([0.0; 3], &octagon, &m);
+    assert_eq!(f.planes.len(), 6);
+    assert!(f.meets([20.0, 1.99, 1.99], 1e-4));
+    assert!(!f.meets([20.0, 2.1, 0.0], 0.0));
+    // A zero normal becomes (0, 1, 0): the eye on the line of the last
+    // edge.
+    let f = Frustum::through([10.0, -1.0, -2.0], &square, &m);
+    assert_eq!(f.planes[3], [0.0, -1.0, 0.0, -1.0]);
+}
+
+#[test]
 fn small_portals_fade_and_are_skipped() {
     let s = row();
     let t = thresholds();
     let visited = |x: f32, options| {
         let eye = [x, 0.0, 0.0];
-        let f = Frustum::view(&view(eye, [1.0, 0.0, 0.0]));
-        s.traverse(0, f, eye, options, &t, |_| false)
+        let m = view(eye, [1.0, 0.0, 0.0]);
+        s.traverse(0, Frustum::view(&m), eye, &m, options, &t, |_| false)
     };
     // m = 2 / D²: below T_A beyond 127 m, below T_B beyond 170 m, below
     // T_min beyond 776 m.
@@ -127,13 +164,17 @@ fn small_portals_fade_and_are_skipped() {
     assert_eq!(visited(-800.0, none).visited, [0, 1, 2]);
     // The occlusion hook is asked only with its option.
     let eye = [-3.0, 0.0, 0.0];
-    let f = Frustum::view(&view(eye, [1.0, 0.0, 0.0]));
+    let m = view(eye, [1.0, 0.0, 0.0]);
+    let f = Frustum::view(&m);
     assert_eq!(
-        s.traverse(0, f.clone(), eye, CAMERA_PASS, &t, |_| true)
+        s.traverse(0, f.clone(), eye, &m, CAMERA_PASS, &t, |_| true)
             .visited,
         [0]
     );
-    assert_eq!(s.traverse(0, f, eye, none, &t, |_| true).visited.len(), 3);
+    assert_eq!(
+        s.traverse(0, f, eye, &m, none, &t, |_| true).visited.len(),
+        3
+    );
 }
 
 #[test]
@@ -147,24 +188,53 @@ fn portals_into_the_start_sector_are_skipped_unless_touched() {
     });
     s.sector_portals = vec![vec![0, 2], vec![0, 1], vec![1, 2]];
     let eye = [-3.0, 0.0, 0.0];
-    let f = Frustum::view(&view(eye, [1.0, 0.0, 0.0]));
-    let r = s.traverse(0, f.clone(), eye, CAMERA_PASS, &thresholds(), |_| false);
+    let m = view(eye, [1.0, 0.0, 0.0]);
+    let r = s.traverse(
+        0,
+        Frustum::view(&m),
+        eye,
+        &m,
+        CAMERA_PASS,
+        &thresholds(),
+        |_| false,
+    );
     assert_eq!(r.visited, [0, 1, 2]);
     assert_eq!(r.frusta[0].len(), 1);
 
     // A camera just on sector 0's side of portal 0 but in sector 1 (kept
-    // from before) enters sector 0 through it, the portal being touched,
-    // with the frustum it has; untouched, sector 0 would be on the camera's
-    // own side.
+    // from before) enters sector 0 through it, the portal being touched;
+    // untouched, sector 0 would be on the camera's own side. The touched
+    // portal gives a new frustum like any other: the cone from the eye
+    // through the portal beyond its plane, away from sector 0
+    // (traversal-options.md 5).
     let s = row();
     let eye = [-0.001, 0.0, 0.0];
-    let f = Frustum::view(&view(eye, [1.0, 0.0, 0.0]));
-    let r = s.traverse(1, f.clone(), eye, CAMERA_PASS, &thresholds(), |_| false);
+    let m = view(eye, [1.0, 0.0, 0.0]);
+    let r = s.traverse(
+        1,
+        Frustum::view(&m),
+        eye,
+        &m,
+        CAMERA_PASS,
+        &thresholds(),
+        |_| false,
+    );
     assert_eq!(r.visited, [1, 0, 2]);
-    assert_eq!(r.frusta[0], [f]);
+    let f = &r.frusta[0][0];
+    assert!(f.meets([1.0, 0.0, 0.0], 0.0));
+    assert!(!f.meets([-1.0, 0.0, 0.0], 0.0));
+    assert!(!f.meets([1.0, 1.0, 0.0], 0.0));
     let eye = [-0.01, 0.0, 0.0];
-    let f = Frustum::view(&view(eye, [1.0, 0.0, 0.0]));
-    let r = s.traverse(1, f, eye, CAMERA_PASS, &thresholds(), |_| false);
+    let m = view(eye, [1.0, 0.0, 0.0]);
+    let r = s.traverse(
+        1,
+        Frustum::view(&m),
+        eye,
+        &m,
+        CAMERA_PASS,
+        &thresholds(),
+        |_| false,
+    );
     assert_eq!(r.visited, [1, 2]);
 }
 
@@ -251,8 +321,8 @@ fn billboard_groups_draw_by_their_measure() {
     let t = thresholds();
     let seen = |x: f32| {
         let eye = [x, 0.0, 0.0];
-        let f = Frustum::view(&view(eye, [1.0, 0.0, 0.0]));
-        let r = s.traverse(1, f, eye, CAMERA_PASS, &t, |_| false);
+        let m = view(eye, [1.0, 0.0, 0.0]);
+        let r = s.traverse(1, Frustum::view(&m), eye, &m, CAMERA_PASS, &t, |_| false);
         s.static_visuals(&r, eye, &t, |_, _| false)[0].clone()
     };
     // σ = 1 / D²: trees above T_B (D < 120 m), the billboard below T_A

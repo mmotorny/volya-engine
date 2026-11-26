@@ -102,31 +102,67 @@ impl Frustum {
         poly
     }
 
-    /// The frustum narrowed to the clipped `polygon` seen from `eye`: the
-    /// planes through the eye and the polygon's edges (level.md 9.2), with
-    /// `far`, the start frustum's last plane (our choice, #481: the spec names
-    /// only the edge planes; for the view frustum it is the far plane, which
-    /// keeps the narrowed volume within the view's). Edges too short to
-    /// give a plane are left out.
-    fn through(eye: Vec3, polygon: &[Vec3], far: Option<Plane>) -> Self {
-        let n = polygon.len() as f32;
-        let centre: Vec3 = std::array::from_fn(|k| polygon.iter().map(|v| v[k]).sum::<f32>() / n);
-        let mut planes = Vec::with_capacity(polygon.len() + 1);
-        for (i, &a) in polygon.iter().enumerate() {
-            let b = polygon[(i + 1) % polygon.len()];
-            let c = cross(sub(a, eye), sub(b, eye));
+    /// The far plane `z ≤ w` of the row-vector matrix `m`
+    /// (traversal-options.md 5 item 5).
+    fn far(m: &Mat4) -> Plane {
+        Self::view(m).planes[4]
+    }
+
+    /// The frustum through the clipped `polygon` seen from `eye`, with the
+    /// far plane of the traversal's matrix `m` (traversal-options.md 5):
+    /// the polygon, beyond six vertices replaced by its bounding rectangle,
+    /// gives the edge planes through the eye, then the portal plane, then
+    /// the far plane. The spec's planes are inside where negative; here
+    /// they are negated.
+    fn through(eye: Vec3, polygon: &[Vec3], m: &Mat4) -> Self {
+        // Items 2 and 3: a zero normal becomes (0, 1, 0).
+        let unit = |c: Vec3| {
             let len = dot(c, c).sqrt();
-            if len.is_nan() || len <= 1e-12 {
-                continue;
+            if len > 0.0 {
+                c.map(|v| v / len)
+            } else {
+                [0.0, 1.0, 0.0]
             }
-            let mut p = [c[0] / len, c[1] / len, c[2] / len, 0.0];
-            p[3] = -(p[0] * eye[0] + p[1] * eye[1] + p[2] * eye[2]);
-            if distance(&p, centre) < 0.0 {
-                p = p.map(|v| -v);
+        };
+        // The spec's plane through `p` with normal `n`, negated.
+        let plane = |n: Vec3, p: Vec3| [-n[0], -n[1], -n[2], dot(n, p)];
+        let normal = |v: &[Vec3]| unit(cross(sub(v[0], v[1]), sub(v[0], v[2])));
+        let mut poly = polygon.to_vec();
+        // Item 1.
+        if poly.len() > 6 {
+            let n = normal(&poly);
+            let r = if n[1].abs() > 0.99 {
+                [1.0, 0.0, 0.0]
+            } else {
+                [0.0, 1.0, 0.0]
+            };
+            let u = unit(sub(r, n.map(|v| v * dot(r, n))));
+            let w = cross(n, u);
+            let o = poly[0];
+            let (mut a0, mut a1, mut b0, mut b1) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
+            for &v in &poly {
+                let (a, b) = (dot(sub(v, o), u), dot(sub(v, o), w));
+                (a0, a1, b0, b1) = (a0.min(a), a1.max(a), b0.min(b), b1.max(b));
             }
-            planes.push(p);
+            let at = |a: f32, b: f32| std::array::from_fn(|k| o[k] + a * u[k] + b * w[k]);
+            // Counter-clockwise about n, as the polygon was.
+            poly = vec![at(a0, b0), at(a1, b0), at(a1, b1), at(a0, b1)];
         }
-        planes.extend(far);
+        // Item 2.
+        let mut n = normal(&poly);
+        if dot(n, eye) - dot(n, poly[0]) < 0.0 {
+            poly.reverse();
+            n = normal(&poly);
+        }
+        let portal = plane(n, poly[0]);
+        // Items 3 – 5.
+        let mut planes = Vec::with_capacity(poly.len() + 2);
+        for (i, &a) in poly.iter().enumerate() {
+            let b = poly[(i + 1) % poly.len()];
+            planes.push(plane(unit(cross(sub(eye, a), sub(eye, b))), eye));
+        }
+        planes.push(portal);
+        planes.push(Self::far(m));
         Self { planes }
     }
 }
@@ -354,14 +390,17 @@ impl Sectors {
 
     /// Traverses from sector `start` with `frustum`, seen from `eye`, with
     /// `options` and the frame's `thresholds` (level.md 9.2,
-    /// traversal-options.md 1 – 2). The start frustum's last plane is kept
-    /// in every narrowed one (its far plane for [`Frustum::view`]). `hidden` is the occlusion test of a
-    /// clipped portal (rule 6), asked only with the occlusion option.
+    /// traversal-options.md 1 – 2), every portal passed giving its target
+    /// a frustum built with the matrix `m` (traversal-options.md 5).
+    /// `hidden` is the occlusion test of a clipped portal (rule 6), asked
+    /// only with the occlusion option.
+    #[allow(clippy::too_many_arguments)]
     pub fn traverse(
         &self,
         start: u16,
         frustum: Frustum,
         eye: Vec3,
+        m: &Mat4,
         options: Options,
         thresholds: &Thresholds,
         mut hidden: impl FnMut(&[Vec3]) -> bool,
@@ -380,7 +419,7 @@ impl Sectors {
             eye,
             options,
             thresholds,
-            far: frustum.planes.last().copied(),
+            m,
             passed: vec![false; self.portals.len()],
             touched,
             hidden: &mut hidden,
@@ -470,6 +509,7 @@ impl Sectors {
             sector,
             Frustum::view(view_projection),
             eye,
+            view_projection,
             CAMERA_PASS,
             thresholds,
             portal_hidden,
@@ -486,7 +526,7 @@ struct Walk<'a, H> {
     eye: Vec3,
     options: Options,
     thresholds: &'a Thresholds,
-    far: Option<Plane>,
+    m: &'a Mat4,
     passed: Vec<bool>,
     touched: Vec<bool>,
     hidden: &'a mut H,
@@ -554,16 +594,8 @@ impl<H: FnMut(&[Vec3]) -> bool> Walk<'_, H> {
             }
             self.passed[p] = true;
             self.touched[p] = false;
-            // Our choice (#481): through a touched portal the eye lies (almost) in
-            // the portal's plane, where the planes through it and the edges
-            // close to that plane and leave almost nothing; the current
-            // frustum is kept (the spec does not say how such a portal
-            // narrows it).
-            let narrowed = if touched {
-                frustum.clone()
-            } else {
-                Frustum::through(self.eye, &clipped, self.far)
-            };
+            // Touched or not (traversal-options.md 5).
+            let narrowed = Frustum::through(self.eye, &clipped, self.m);
             self.enter(target, narrowed);
         }
     }
