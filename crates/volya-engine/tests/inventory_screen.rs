@@ -7,9 +7,9 @@
 //! item section's icon region, and a New Game's starting inventory drawn in
 //! its places (the outfit's picture, the weight line, money, bars and
 //! protection lines, the outfit's context menu), then a drag of the outfit
-//! to the backpack and bread eaten with a double click.
-//! `VOLYA_DUMP_INVENTORY=<file.ppm>` writes the screen's frame locally.
-//! Skips when `VOLYA_GOG_INSTALLER` is unset.
+//! to the backpack and bread eaten with a double click. Its drawing is the
+//! render-screens suite's (`selftest::inventory_screen`). Skips when
+//! `VOLYA_GOG_INSTALLER` is unset.
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -29,28 +29,11 @@ use volya_engine::draw::Ctx;
 use volya_engine::inventory_screen::layout::{Layout, ListKind};
 use volya_engine::inventory_screen::{Frame, InventoryScreen, InventoryState, Keys};
 use volya_engine::level;
-use volya_engine::present::Presenter;
-use volya_engine::render::{Renderer, wgpu};
 use volya_engine::scene::Scene;
 use volya_engine_formats::ui::Resolution;
 
 const XGA: Resolution = Resolution::new(1024, 768);
 const WIDE: Resolution = Resolution::new(1280, 720);
-
-fn renderer() -> Renderer {
-    pollster::block_on(async {
-        let instance = wgpu::Instance::default();
-        let adapter = instance.request_adapter(&Default::default()).await.unwrap();
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                required_features: volya_engine::render::device_features(&adapter),
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm)
-    })
-}
 
 /// Records the sounds played.
 #[derive(Default)]
@@ -355,10 +338,8 @@ fn inventory_screen_from_game_data() {
     let panel = s.panel.expect("the outfit selected");
     assert_eq!(panel.weight, "3.00 kg");
 
-    // Drawn, without errors.
-    let mut gpu = renderer();
-    let mut presenter = Presenter::new();
-    let mut draw = |screen: &InventoryScreen, character: &CharacterState, var: &str| -> Scene {
+    // The screen's scene.
+    let mut draw = |screen: &InventoryScreen, character: &CharacterState| -> Scene {
         let mut ctx = Ctx {
             tree,
             data: &data,
@@ -368,21 +349,9 @@ fn inventory_screen_from_game_data() {
         };
         let mut scene = Scene::new(XGA);
         screen.draw(&mut ctx, &mut scene, character).unwrap();
-        let list = presenter.draw_list(&mut gpu, tree, &scene, 1000);
-        let errors = presenter.take_errors();
-        assert!(errors.is_empty(), "{errors:?}");
-        if let Some(path) = std::env::var_os(var) {
-            let pixels =
-                pollster::block_on(gpu.capture(&list, 1024, 768, wgpu::Color::BLACK)).unwrap();
-            let mut ppm = b"P6 1024 768 255\n".to_vec();
-            for p in pixels.chunks(4) {
-                ppm.extend_from_slice(&p[..3]);
-            }
-            std::fs::write(path, ppm).unwrap();
-        }
         scene
     };
-    let scene = draw(&screen, &character, "VOLYA_DUMP_INVENTORY");
+    let scene = draw(&screen, &character);
     for layer in [
         "belt_slots",
         "back",
@@ -473,5 +442,5 @@ fn inventory_screen_from_game_data() {
     assert!(character.inventory.item(900).is_none());
     assert!((character.conditions.satiety - (before + 0.2).min(1.0)).abs() < 1e-6);
     assert!(audio.0.last().unwrap().ends_with("interface\\inv_slot.ogg"));
-    draw(&screen, &character, "VOLYA_DUMP_INVENTORY_AFTER");
+    draw(&screen, &character);
 }

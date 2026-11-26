@@ -570,6 +570,24 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         "render_selftest" => {
             to_json(&gpu::render_selftest(args.get("check").and_then(|v| v.as_str())).await?)
         }
+        // `{suite}` lists that browser suite's render checks on game data;
+        // `{check, frames}` runs one, with the frames it keeps when
+        // `frames` (`{note, frames}` or `{skip}`).
+        #[cfg(feature = "test-ops")]
+        "render_game_selftest" => {
+            let frames = args
+                .get("frames")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            to_json(
+                &gpu::render_game_selftest(
+                    args.get("suite").and_then(|v| v.as_str()),
+                    args.get("check").and_then(|v| v.as_str()),
+                    frames,
+                )
+                .await?,
+            )
+        }
         #[cfg(feature = "test-ops")]
         "debug_session_event" => {
             diagnostics::repeat_session_event().await;

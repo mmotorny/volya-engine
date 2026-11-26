@@ -192,6 +192,51 @@ pub async fn ensure_mounted() -> Result<(), JsValue> {
 /// Opens every imported file and the archive tree; gives the manifest back
 /// with the error.
 async fn mount(manifest: Manifest) -> Result<Status, (JsValue, Manifest)> {
+    let game = open(manifest).await?;
+    let status = mounted_status(&game);
+    GAME.with(|g| *g.borrow_mut() = Some(game));
+    Ok(status)
+}
+
+/// The imported game opened for a test of its own (render checks reading
+/// game data, #472): the app's mount is released first, as the files open
+/// once. Closed when dropped; the app mounts the game again when it needs
+/// it.
+#[cfg(feature = "test-ops")]
+pub struct OwnTree(Option<Game>);
+
+#[cfg(feature = "test-ops")]
+impl OwnTree {
+    pub async fn open() -> Result<Self, JsValue> {
+        unmount();
+        let manifest = read_manifest()
+            .await?
+            .filter(|m| m.complete)
+            .ok_or_else(|| error("game not imported"))?;
+        open(manifest)
+            .await
+            .map(|g| Self(Some(g)))
+            .map_err(|(e, _)| e)
+    }
+
+    /// The combined archive tree.
+    pub fn tree(&self) -> &dyn Vfs {
+        &self.0.as_ref().expect("open until dropped").tree
+    }
+}
+
+#[cfg(feature = "test-ops")]
+impl Drop for OwnTree {
+    fn drop(&mut self) {
+        if let Some(game) = self.0.take() {
+            drop(game.tree);
+            game.opfs.close();
+        }
+    }
+}
+
+/// [`mount`]'s opening, without keeping the game.
+async fn open(manifest: Manifest) -> Result<Game, (JsValue, Manifest)> {
     let namespace = match opfs::namespace().await {
         Ok(n) => n,
         Err(e) => return Err((e, manifest)),
@@ -225,14 +270,11 @@ async fn mount(manifest: Manifest) -> Result<Status, (JsValue, Manifest)> {
             return Err((error(e), manifest));
         }
     };
-    let game = Game {
+    Ok(Game {
         opfs: vfs,
         tree,
         manifest,
-    };
-    let status = mounted_status(&game);
-    GAME.with(|g| *g.borrow_mut() = Some(game));
-    Ok(status)
+    })
 }
 
 fn mounted_status(game: &Game) -> Status {

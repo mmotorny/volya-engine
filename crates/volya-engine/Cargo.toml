@@ -18,6 +18,8 @@ workspace = true
 webgl = ["volya-engine-render/webgl"]
 # The render self-test (volya-engine-render's `selftest`), in test builds.
 render-selftest = ["volya-engine-render/selftest"]
+# The direct WebGL 2 renderer instead of wgpu's (volya-engine-render's `gl`).
+gl = ["volya-engine-render/gl"]
 
 [dependencies]
 volya-engine-core = { path = "../volya-engine-core" }

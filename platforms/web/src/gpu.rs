@@ -542,6 +542,20 @@ thread_local! {
 /// the frames presented meanwhile.
 #[cfg(feature = "test-ops")]
 pub fn gl_calls(on: bool) -> Result<serde_json::Value, JsValue> {
+    let counts = gl_call_counts(on)?;
+    if on {
+        COUNTED_FROM.set(PRESENTED.get());
+        return Ok(serde_json::Value::Null);
+    }
+    let counts: serde_json::Map<String, serde_json::Value> =
+        counts.into_iter().map(|(k, v)| (k, json!(v))).collect();
+    Ok(json!({ "frames": PRESENTED.get() - COUNTED_FROM.get(), "calls": counts }))
+}
+
+/// Starts counting WebGL 2's calls by name (every context's, by wrapping
+/// `WebGL2RenderingContext`'s methods), or stops and returns the counts.
+#[cfg(feature = "test-ops")]
+pub fn gl_call_counts(on: bool) -> Result<Vec<(String, u64)>, JsValue> {
     const BODY: &str = "
         const p = globalThis.WebGL2RenderingContext?.prototype;
         if (!p) return null;
@@ -570,15 +584,16 @@ pub fn gl_calls(on: bool) -> Result<serde_json::Value, JsValue> {
     ";
     let f = js_sys::Function::new_with_args("on", BODY);
     let counts = f.call1(&JsValue::NULL, &JsValue::from_bool(on))?;
-    if on {
-        COUNTED_FROM.set(PRESENTED.get());
-        return Ok(serde_json::Value::Null);
-    }
-    let counts: serde_json::Value = counts
+    let counts: serde_json::Map<String, serde_json::Value> = counts
         .as_string()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
-    Ok(json!({ "frames": PRESENTED.get() - COUNTED_FROM.get(), "calls": counts }))
+    let mut counts: Vec<(String, u64)> = counts
+        .into_iter()
+        .map(|(k, v)| (k, v.as_u64().unwrap_or(0)))
+        .collect();
+    counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    Ok(counts)
 }
 
 /// One animation frame at `time` (milliseconds): advances video and
@@ -996,30 +1011,122 @@ async fn selftest_gpu() -> Result<std::rc::Rc<SelftestGpu>, JsValue> {
 /// its own (`{note}`, or `{skip}` with why), or lists the checks.
 #[cfg(feature = "test-ops")]
 pub async fn render_selftest(check: Option<&str>) -> Result<serde_json::Value, JsValue> {
-    use volya_engine::render::selftest::{self, Problem};
-    use wasm_bindgen::JsCast;
-    use wasm_bindgen::closure::Closure;
+    use volya_engine::render::selftest;
     let Some(check) = check else {
         return Ok(json!(selftest::names()));
     };
-    let gpu = selftest_gpu().await?;
-    // wgpu's GL backend runs buffer-mapping callbacks (the captures) only
-    // when polled.
-    let device = gpu.device.clone();
-    let poll = Closure::<dyn FnMut()>::new(move || {
-        let _ = device.poll(wgpu::PollType::Poll);
-    });
-    let scope: web_sys::WorkerGlobalScope = js_sys::global().unchecked_into();
-    let interval = scope
-        .set_interval_with_callback_and_timeout_and_arguments_0(poll.as_ref().unchecked_ref(), 1)?;
-    let make = || Renderer::new(&gpu.device, &gpu.queue, gpu.format);
-    let outcome = selftest::run(check, &make).await;
-    scope.clear_interval_with_handle(interval);
-    drop(poll);
+    let renderers = SelftestRenderers::new().await?;
+    let outcome = selftest::run(check, &|| renderers.make()).await;
+    outcome_json(outcome)
+}
+
+/// The `render_game_selftest` op: runs the render check on game data
+/// `check` (`volya_engine::selftest`) on the imported game opened for it
+/// and renderers of its own: `{note, frames}` (the frames it kept for
+/// inspection, with `frames`, each `{name, width, height, rgba_base64}`),
+/// or `{skip}`; or lists `suite`'s checks.
+#[cfg(feature = "test-ops")]
+pub async fn render_game_selftest(
+    suite: Option<&str>,
+    check: Option<&str>,
+    frames: bool,
+) -> Result<serde_json::Value, JsValue> {
+    use volya_engine::selftest::{self, Context};
+    let Some(check) = check else {
+        return Ok(json!(selftest::names(suite.unwrap_or_default())));
+    };
+    let tree = crate::game::OwnTree::open().await?;
+    let renderers = SelftestRenderers::new().await?;
+    let make = || renderers.make();
+    let count = |on: bool| gl_call_counts(on).unwrap_or_default();
+    let context = Context::new(tree.tree(), &make, frames).with_gl_calls(&count);
+    let outcome = selftest::run(check, &context).await;
+    let kept = context.take_frames();
+    drop(context);
+    drop(tree);
+    let mut result = outcome_json(outcome)?;
+    let kept: Vec<_> = kept
+        .iter()
+        .map(|f| {
+            json!({
+                "name": f.name,
+                "width": f.width,
+                "height": f.height,
+                "rgba_base64": Base64Value(&f.rgba),
+                "compare": f.compare,
+            })
+        })
+        .collect();
+    result["frames"] = json!(kept);
+    Ok(result)
+}
+
+/// `bytes` as a base64 JSON string.
+#[cfg(feature = "test-ops")]
+struct Base64Value<'a>(&'a [u8]);
+
+#[cfg(feature = "test-ops")]
+impl Serialize for Base64Value<'_> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        base64(self.0, s)
+    }
+}
+
+#[cfg(feature = "test-ops")]
+fn outcome_json(
+    outcome: volya_engine::render::selftest::Outcome,
+) -> Result<serde_json::Value, JsValue> {
+    use volya_engine::render::selftest::Problem;
     match outcome {
         Ok(note) => Ok(json!({ "note": note })),
         Err(Problem::Skip(reason)) => Ok(json!({ "skip": reason })),
         Err(Problem::Fail(message)) => Err(error(message)),
+    }
+}
+
+/// Fresh renderers on the self-test's device, polled while this lives.
+#[cfg(feature = "test-ops")]
+struct SelftestRenderers {
+    gpu: std::rc::Rc<SelftestGpu>,
+    interval: i32,
+    _poll: wasm_bindgen::closure::Closure<dyn FnMut()>,
+}
+
+#[cfg(feature = "test-ops")]
+impl SelftestRenderers {
+    async fn new() -> Result<Self, JsValue> {
+        use wasm_bindgen::JsCast;
+        use wasm_bindgen::closure::Closure;
+        let gpu = selftest_gpu().await?;
+        // wgpu's GL backend runs buffer-mapping callbacks (the captures)
+        // only when polled.
+        let device = gpu.device.clone();
+        let poll = Closure::<dyn FnMut()>::new(move || {
+            let _ = device.poll(wgpu::PollType::Poll);
+        });
+        let scope: web_sys::WorkerGlobalScope = js_sys::global().unchecked_into();
+        let interval = scope.set_interval_with_callback_and_timeout_and_arguments_0(
+            poll.as_ref().unchecked_ref(),
+            1,
+        )?;
+        Ok(Self {
+            gpu,
+            interval,
+            _poll: poll,
+        })
+    }
+
+    fn make(&self) -> Renderer {
+        Renderer::new(&self.gpu.device, &self.gpu.queue, self.gpu.format)
+    }
+}
+
+#[cfg(feature = "test-ops")]
+impl Drop for SelftestRenderers {
+    fn drop(&mut self) {
+        use wasm_bindgen::JsCast;
+        let scope: web_sys::WorkerGlobalScope = js_sys::global().unchecked_into();
+        scope.clear_interval_with_handle(self.interval);
     }
 }
 

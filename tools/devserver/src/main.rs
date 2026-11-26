@@ -16,7 +16,8 @@ browser test suites (default: tests/browser, if present) under
 /volya-engine/__test/; open /volya-engine/__test/<suite>.html to run a suite
 and print its report here. --installer serves a GOG installer directory to
 tests (default: $VOLYA_GOG_INSTALLER, if set). Frames suites dump are written
-under $VOLYA_DUMP_DIR, if set.";
+under $VOLYA_DUMP_DIR, if set, and an earlier run's dumps in
+$VOLYA_COMPARE_DIR, if set, are served for suites to compare with.";
 
 fn main() -> ExitCode {
     match run() {
@@ -66,6 +67,12 @@ fn run() -> Result<(), String> {
         Some(dir) => server
             .with_dumps(std::path::Path::new(&dir))
             .map_err(|e| format!("VOLYA_DUMP_DIR: {e}"))?,
+        None => server,
+    };
+    let server = match std::env::var_os("VOLYA_COMPARE_DIR") {
+        Some(dir) => server
+            .with_references(std::path::Path::new(&dir))
+            .map_err(|e| format!("VOLYA_COMPARE_DIR: {e}"))?,
         None => server,
     };
     let listener = TcpListener::bind(("localhost", port))

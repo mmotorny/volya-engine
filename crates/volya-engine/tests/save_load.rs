@@ -5,11 +5,9 @@
 //! Russian edition (BYOA), checked against docs/behavior/title-menu.md
 //! (section 4.1) and docs/behavior/save-load-screens.md (sections 3–6,
 //! 13): the in-game list's captions, the screens' and boxes' layouts,
-//! strings and textures resolve, and the screens draw.
-//! `VOLYA_DUMP_SAVE=<file.ppm>` and `VOLYA_DUMP_LOAD=<file.ppm>` write the
-//! screens' frames locally, `VOLYA_DUMP_KEYBOARD=<file.ppm>` the save screen
-//! with the on-screen keyboard (#94). Skips when `VOLYA_GOG_INSTALLER` is
-//! unset.
+//! strings and textures resolve, and the screens' scenes. Their drawing is
+//! the render-screens suite's (`selftest::save_load`). Skips when
+//! `VOLYA_GOG_INSTALLER` is unset.
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -24,29 +22,12 @@ use volya_engine::core::vfs::db::DbVfs;
 use volya_engine::data::{Assets, GameData};
 use volya_engine::draw::Ctx;
 use volya_engine::menu_screens::{Frame, MenuScreens, MenuState};
-use volya_engine::present::Presenter;
-use volya_engine::render::{Renderer, wgpu};
 use volya_engine::save_load::{SaveInfo, SaveLoadData, display_time};
 use volya_engine::scene::Scene;
 use volya_engine::title_menu::{Opening, TitleMenu};
 use volya_engine_formats::ui::Resolution;
 
 const XGA: Resolution = Resolution::new(1024, 768);
-
-fn renderer() -> Renderer {
-    pollster::block_on(async {
-        let instance = wgpu::Instance::default();
-        let adapter = instance.request_adapter(&Default::default()).await.unwrap();
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                required_features: volya_engine::render::device_features(&adapter),
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm)
-    })
-}
 
 #[test]
 fn in_game_menu_and_save_load_screens_from_game_data() {
@@ -239,10 +220,8 @@ fn in_game_menu_and_save_load_screens_from_game_data() {
         input.end_frame();
         screens.state(menu, &data, now)
     };
-    let mut gpu = renderer();
-    let mut presenter = Presenter::new();
     let mut assets = Assets::default();
-    let mut draw = |menu: &TitleMenu, screens: &MenuScreens, var: &str| -> Scene {
+    let mut draw = |menu: &TitleMenu, screens: &MenuScreens| -> Scene {
         let mut ctx = Ctx {
             tree: &tree,
             data: &data,
@@ -250,20 +229,7 @@ fn in_game_menu_and_save_load_screens_from_game_data() {
             resolution: XGA,
             clock_ms: 1000,
         };
-        let scene = screens.scene(menu, &mut ctx).unwrap();
-        let list = presenter.draw_list(&mut gpu, &tree, &scene, 1000);
-        let errors = presenter.take_errors();
-        assert!(errors.is_empty(), "{errors:?}");
-        if let Some(path) = std::env::var_os(var) {
-            let pixels =
-                pollster::block_on(gpu.capture(&list, 1024, 768, wgpu::Color::BLACK)).unwrap();
-            let mut ppm = b"P6 1024 768 255\n".to_vec();
-            for p in pixels.chunks(4) {
-                ppm.extend_from_slice(&p[..3]);
-            }
-            std::fs::write(path, ppm).unwrap();
-        }
-        scene
+        screens.scene(menu, &mut ctx).unwrap()
     };
     frame(
         &[Key::Down, Key::Down, Key::Down],
@@ -285,7 +251,7 @@ fn in_game_menu_and_save_load_screens_from_game_data() {
             [792.0, 595.0, 157.0, 48.0]
         ]
     );
-    let scene = draw(&menu, &screens, "VOLYA_DUMP_SAVE");
+    let scene = draw(&menu, &screens);
     assert!(scene.first("edit").is_some() && scene.first("caption").is_some());
     // The on-screen keyboard (#94): a gamepad's south on the name field
     // opens it; it draws with the field's font; east closes it, the screen
@@ -325,7 +291,7 @@ fn in_game_menu_and_save_load_screens_from_game_data() {
         s.save_screen.is_some_and(|s| s.keyboard.is_some()),
         "the click is swallowed"
     );
-    let scene = draw(&menu, &screens, "VOLYA_DUMP_KEYBOARD");
+    let scene = draw(&menu, &screens);
     assert_eq!(scene.layer("keyboard key").count(), 50);
     // 46 character keys with labels; Shift, Space, Backspace, Done drawn
     // as symbols.
@@ -345,7 +311,7 @@ fn in_game_menu_and_save_load_screens_from_game_data() {
     assert_eq!(load.screen.list.rect, [490.0, 399.0, 429.0, 180.0]);
     assert_eq!(load.screen.list.visible, 10);
     assert!(load.screen.list.rows.is_empty());
-    let scene = draw(&menu, &screens, "VOLYA_DUMP_LOAD");
+    let scene = draw(&menu, &screens);
     assert!(scene.first("picture").is_some() && scene.first("file_info").is_some());
     let s = frame(&[Key::Escape], &mut menu, &mut screens, &mut input);
     assert!(s.load_screen.is_none());
@@ -362,6 +328,6 @@ fn in_game_menu_and_save_load_screens_from_game_data() {
         data.strings.get(&message.text),
         "Действительно ли вы желаете покинуть игру?"
     );
-    let scene = draw(&menu, &screens, "VOLYA_DUMP_QUIT");
+    let scene = draw(&menu, &screens);
     assert!(scene.first("message").is_some());
 }
