@@ -183,8 +183,9 @@ pub struct Skeleton {
     pub startup_animation: String,
     pub flags: u8,
     pub source_id: u16,
-    /// Present iff `flags` has [`SKELETON_BONE_STATE`].
-    pub bone_state: Option<BoneState>,
+    /// Present iff `flags` has [`SKELETON_BONE_STATE`]; boxed, as no
+    /// record of a New Game has one.
+    pub bone_state: Option<Box<BoneState>>,
 }
 
 /// Saved bone state of a Skeleton block.
@@ -226,13 +227,13 @@ impl Skeleton {
                     })
                 })
                 .collect::<io::Result<_>>()?;
-            Some(BoneState {
+            Some(Box::new(BoneState {
                 bones_mask,
                 root_bone,
                 min,
                 max,
                 bones,
-            })
+            }))
         } else {
             None
         };
@@ -808,7 +809,7 @@ mod tests {
             startup_animation: "idle".into(),
             flags: SKELETON_BONE_STATE,
             source_id: 0xFFFF,
-            bone_state: Some(BoneState {
+            bone_state: Some(Box::new(BoneState {
                 bones_mask: u64::MAX,
                 root_bone: 2,
                 min: [-1.0; 3],
@@ -818,7 +819,7 @@ mod tests {
                     rotation: [Q8(4), Q8(5), Q8(6), Q8(7)],
                     enabled: 1,
                 }],
-            }),
+            })),
         };
         let mut w = Writer::new();
         s.write(&mut w).unwrap();

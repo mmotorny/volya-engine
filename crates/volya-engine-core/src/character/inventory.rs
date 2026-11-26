@@ -624,13 +624,13 @@ impl InventoryItem {
                     info_portion,
                 },
                 Kind::Pda,
-            ) => Object::Pda(Pda {
+            ) => Object::Pda(Box::new(Pda {
                 item: item.clone(),
                 original_owner_id: *original_owner_id,
                 specific_character: specific_character.clone(),
                 info_portion: info_portion.clone(),
                 update,
-            }),
+            })),
             (ItemState::Outfit, Kind::Outfit) => Object::Outfit(Outfit {
                 item: item.clone(),
                 update,
