@@ -79,10 +79,11 @@ pub fn run(args: &[&str]) -> Result {
         })
         .map_err(|e| format!("dev server: {e}"))?;
     let server = Arc::new(server);
-    let listener = e2e::listen()?;
-    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-    let running = Arc::clone(&server);
-    thread::spawn(move || running.run_shared(listener));
+    let (port, listeners) = e2e::listen()?;
+    for listener in listeners {
+        let running = Arc::clone(&server);
+        thread::spawn(move || running.run_shared(listener));
+    }
 
     let suite = |label: &str| -> Result<String> {
         step(&format!("Parity suite on the {label} build"));

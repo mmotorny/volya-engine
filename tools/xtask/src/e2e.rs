@@ -122,9 +122,12 @@ pub fn run(args: &[&str]) -> Result {
             None => Ok(s),
         })
         .map_err(|e| format!("dev server: {e}"))?;
-    let listener = listen()?;
-    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-    thread::spawn(move || server.run(listener));
+    let (port, listeners) = listen()?;
+    let server = Arc::new(server);
+    for listener in listeners {
+        let server = Arc::clone(&server);
+        thread::spawn(move || server.run_shared(listener));
+    }
 
     let mut failures = Vec::new();
     for &target in &targets {
@@ -177,24 +180,45 @@ fn kept_profile() -> PathBuf {
     root().join("target/chrome-profile")
 }
 
-/// The server's socket: on the port the kept profile last saw when it is
-/// free, as storage belongs to an origin, port included (else any port,
-/// remembered for the next run).
-pub(crate) fn listen() -> Result<TcpListener> {
+/// The server's port and sockets, on both loopback addresses (#503): pages
+/// open `localhost`, which Chrome tries at ::1 as well as 127.0.0.1, and a
+/// connection to a port nothing listens on at ::1 can meet itself (TCP
+/// simultaneous open; measured on macOS: one in a few hundred connects to
+/// an unused port in the ephemeral range), so the page reads its own
+/// request back as the response, a network error. On the port the kept
+/// profile last saw when it is free, as storage belongs to an origin, port
+/// included (else any port, remembered for the next run).
+pub(crate) fn listen() -> Result<(u16, Vec<TcpListener>)> {
+    let bind = |port: u16| -> std::io::Result<(u16, Vec<TcpListener>)> {
+        let v4 = TcpListener::bind(("127.0.0.1", port))?;
+        let port = v4.local_addr()?.port();
+        let v6 = TcpListener::bind(("::1", port))?;
+        Ok((port, vec![v4, v6]))
+    };
     let file = kept_profile().join("port");
     let kept = fs::read_to_string(&file)
         .ok()
         .and_then(|p| p.trim().parse::<u16>().ok());
     if let Some(port) = kept
-        && let Ok(listener) = TcpListener::bind(("127.0.0.1", port))
+        && let Ok(bound) = bind(port)
     {
-        return Ok(listener);
+        return Ok(bound);
     }
-    let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| format!("bind: {e}"))?;
-    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-    fs::create_dir_all(kept_profile()).map_err(|e| format!("{}: {e}", file.display()))?;
-    fs::write(&file, port.to_string()).map_err(|e| format!("{}: {e}", file.display()))?;
-    Ok(listener)
+    // A free port at 127.0.0.1 may be taken at ::1: a few tries.
+    let mut error = None;
+    for _ in 0..10 {
+        match bind(0) {
+            Ok(bound) => {
+                fs::create_dir_all(kept_profile())
+                    .map_err(|e| format!("{}: {e}", file.display()))?;
+                fs::write(&file, bound.0.to_string())
+                    .map_err(|e| format!("{}: {e}", file.display()))?;
+                return Ok(bound);
+            }
+            Err(e) => error = Some(e),
+        }
+    }
+    Err(format!("bind: {error:?}"))
 }
 
 pub(crate) fn run_id(target: &str, suite: &str) -> String {
