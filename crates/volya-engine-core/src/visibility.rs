@@ -8,16 +8,17 @@
 //! visuals of each visited sector (level.md 9.3, docs/formats/ogf.md 8).
 //!
 //! Frusta are sets of planes `(a, b, c, d)`, inside where
-//! `a x + b y + c z + d ≥ 0`. The occlusion tests the camera pass makes
-//! (visibility-scope.md 3.3) are not specified yet: [`portal_hidden`] and
-//! [`visual_hidden`] stand for them and hide nothing, so what is kept is a
-//! superset of what the original keeps (visibility-scope.md 8).
+//! `a x + b y + c z + d ≥ 0`. The camera pass's occlusion tests
+//! (docs/behavior/occlusion-tests.md 6) are [`Occlusion::portal_hidden`]
+//! and [`Occlusion::visual_hidden`].
 
 use std::io;
 
 use crate::camera::{Mat4, Vec3};
 use crate::collision::CollisionWorld;
 use crate::collision::geometry::{box_intersects, cross, dot, ray_triangle_distance, sub};
+use crate::occlusion::{Occlusion, View};
+use crate::particles::random::Generator;
 use volya_engine_formats::level::{Level, Thresholds};
 use volya_engine_formats::ogf::{VisualType, coverage_factor};
 
@@ -269,22 +270,6 @@ pub struct CameraFrame {
     pub visuals: Vec<Vec<u32>>,
 }
 
-/// Whether the occlusion grid hides the clipped portal `polygon`
-/// (traversal-options.md 2.3; visibility-scope.md 3.3).
-// TODO(#460): the polygon test is not specified yet (V3, V4); it hides
-// nothing.
-pub fn portal_hidden(_polygon: &[Vec3]) -> bool {
-    false
-}
-
-/// Whether the occlusion grid hides a static visual's box `min` … `max`
-/// (ogf.md 8.1; visibility-scope.md 3.3).
-// TODO(#460): the box test and its caching are not specified yet (V3, V4);
-// it hides nothing.
-pub fn visual_hidden(_min: Vec3, _max: Vec3) -> bool {
-    false
-}
-
 impl Sectors {
     /// The sectors, portals and visual hierarchy of `level`; fails on an
     /// invalid portal (level.md 5) or a reference out of range.
@@ -436,13 +421,14 @@ impl Sectors {
     /// The static visuals of the visited sectors (level.md 9.3, ogf.md 8)
     /// seen from `eye`: each root descended once per frustum its sector
     /// was entered with, culled by bounding sphere and by `hidden` (the
-    /// occlusion test of a visual's box), and each visual drawn once.
+    /// occlusion test of a visual, given its index and box), and each
+    /// visual drawn once.
     pub fn static_visuals(
         &self,
         traversal: &Traversal,
         eye: Vec3,
         thresholds: &Thresholds,
-        mut hidden: impl FnMut(Vec3, Vec3) -> bool,
+        mut hidden: impl FnMut(u32, Vec3, Vec3) -> bool,
     ) -> Vec<Vec<u32>> {
         let mut drawn = vec![false; self.nodes.len()];
         let mut stack = Vec::new();
@@ -455,7 +441,7 @@ impl Sectors {
                     stack.push(self.roots[usize::from(s)]);
                     while let Some(i) = stack.pop() {
                         let n = &self.nodes[i as usize];
-                        if !f.meets(n.centre, n.radius) || hidden(n.box_min, n.box_max) {
+                        if !f.meets(n.centre, n.radius) || hidden(i, n.box_min, n.box_max) {
                             continue;
                         }
                         let d = sub(n.centre, eye);
@@ -491,31 +477,44 @@ impl Sectors {
             .collect()
     }
 
-    /// The camera pass for one frame (visibility-scope.md 1): from the
-    /// camera sector `sector` with the view frustum of `view_projection`
-    /// and eye `eye`, with the camera pass's options. Without a camera
-    /// sector nothing is visited (6).
+    /// The camera pass for one frame (visibility-scope.md 1): the
+    /// occlusion grid drawn (occlusion-grid.md 2), then from the camera
+    /// sector `sector` with the view frustum of the view's matrix and eye,
+    /// with the camera pass's options, portals and static visuals
+    /// occlusion-tested (occlusion-tests.md 6), the tests' random counts
+    /// from the shared generator `random`. Without a camera sector nothing
+    /// is visited (6).
     pub fn camera_pass(
         &self,
         sector: Option<u16>,
-        view_projection: &Mat4,
-        eye: Vec3,
+        view: &View,
         thresholds: &Thresholds,
+        occlusion: &mut Occlusion,
+        random: &mut Generator,
     ) -> CameraFrame {
+        let (m, eye) = (&view.view_projection, view.eye);
+        occlusion.camera_pass(view, random);
         let Some(sector) = sector.filter(|&s| usize::from(s) < self.roots.len()) else {
             return CameraFrame::default();
         };
         let traversal = self.traverse(
             sector,
-            Frustum::view(view_projection),
+            Frustum::view(m),
             eye,
-            view_projection,
+            m,
             CAMERA_PASS,
             thresholds,
-            portal_hidden,
+            |p| occlusion.portal_hidden(p, view, random),
         );
-        let visuals = self.static_visuals(&traversal, eye, thresholds, visual_hidden);
+        let visuals = self.static_visuals(&traversal, eye, thresholds, |i, a, b| {
+            occlusion.visual_hidden(i, a, b, view, random)
+        });
         CameraFrame { traversal, visuals }
+    }
+
+    /// The number of static visuals (the size of [`Occlusion`]'s cache).
+    pub fn visual_count(&self) -> usize {
+        self.nodes.len()
     }
 }
 

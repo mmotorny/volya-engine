@@ -5,6 +5,8 @@ use super::*;
 use crate::camera::{projection, view_matrix};
 use crate::collision::{Cform, test_world};
 use crate::lights::multiply;
+use crate::occlusion::{Occlusion, View};
+use crate::particles::random::Generator;
 use volya_engine_formats::level::{GEOMETRY_LOD, SSA_LOD_A, SSA_LOD_B};
 use volya_engine_formats::level_cform::CformTriangle;
 
@@ -58,6 +60,18 @@ fn row() -> Sectors {
     }
 }
 
+/// The camera pass without occlusion (a level without `level.hom`).
+fn pass(s: &Sectors, sector: Option<u16>, m: &Mat4, eye: Vec3) -> CameraFrame {
+    let view = View {
+        frame: 1,
+        view_projection: *m,
+        eye,
+        menu_shown: false,
+    };
+    let mut o = Occlusion::new(None, s.visual_count());
+    s.camera_pass(sector, &view, &thresholds(), &mut o, &mut Generator::new(1))
+}
+
 fn thresholds() -> Thresholds {
     Thresholds::new(1920, 1080, 67.5, GEOMETRY_LOD, SSA_LOD_A, SSA_LOD_B)
 }
@@ -72,7 +86,7 @@ fn view(eye: Vec3, dir: Vec3) -> Mat4 {
 fn sectors_are_entered_through_portals_with_narrowed_frusta() {
     let s = row();
     let eye = [-8.0, 0.0, 0.0];
-    let frame = s.camera_pass(Some(0), &view(eye, [1.0, 0.0, 0.0]), eye, &thresholds());
+    let frame = pass(&s, Some(0), &view(eye, [1.0, 0.0, 0.0]), eye);
     assert_eq!(frame.traversal.visited, [0, 1, 2]);
     assert_eq!(frame.visuals, [vec![0], vec![1], vec![2]]);
     // Sector 1 is seen through the 2 m portal 8 m away: at x = 5 the
@@ -85,10 +99,10 @@ fn sectors_are_entered_through_portals_with_narrowed_frusta() {
     assert!(frame.traversal.fade.is_empty());
 
     // Facing away no portal is in the frustum.
-    let frame = s.camera_pass(Some(0), &view(eye, [-1.0, 0.0, 0.0]), eye, &thresholds());
+    let frame = pass(&s, Some(0), &view(eye, [-1.0, 0.0, 0.0]), eye);
     assert_eq!(frame.traversal.visited, [0]);
     // Without a camera sector nothing is visited.
-    let frame = s.camera_pass(None, &view(eye, [1.0, 0.0, 0.0]), eye, &thresholds());
+    let frame = pass(&s, None, &view(eye, [1.0, 0.0, 0.0]), eye);
     assert_eq!(frame, CameraFrame::default());
 }
 
@@ -323,7 +337,7 @@ fn billboard_groups_draw_by_their_measure() {
         let eye = [x, 0.0, 0.0];
         let m = view(eye, [1.0, 0.0, 0.0]);
         let r = s.traverse(1, Frustum::view(&m), eye, &m, CAMERA_PASS, &t, |_| false);
-        s.static_visuals(&r, eye, &t, |_, _| false)[0].clone()
+        s.static_visuals(&r, eye, &t, |_, _, _| false)[0].clone()
     };
     // σ = 1 / D²: trees above T_B (D < 120 m), the billboard below T_A
     // (D > 90 m), nothing below T_min (D > 549 m).
@@ -331,4 +345,49 @@ fn billboard_groups_draw_by_their_measure() {
     assert_eq!(seen(-100.0), [6, 7]);
     assert_eq!(seen(-200.0), [6]);
     assert!(seen(-600.0).is_empty());
+}
+
+#[test]
+fn the_occlusion_grid_hides_portals_and_visuals() {
+    use crate::occlusion::OcclusionMesh;
+    use volya_engine_formats::level_hom::HomRecord;
+    let mut s = row();
+    for n in &mut s.nodes {
+        n.box_min = n.centre.map(|v| v - 1.0);
+        n.box_max = n.centre.map(|v| v + 1.0);
+    }
+    // A wall of two triangles across x = 2, 6 m a side.
+    let (a, b, c, d) = (
+        [2.0, -3.0, -3.0],
+        [2.0, 3.0, -3.0],
+        [2.0, 3.0, 3.0],
+        [2.0, -3.0, 3.0],
+    );
+    let wall = [[a, b, c], [a, c, d]].map(|v| HomRecord {
+        vertices: v,
+        two_sided: 1,
+    });
+    let mut o = Occlusion::new(Some(OcclusionMesh::new(&wall)), s.visual_count());
+    let mut g = Generator::new(1);
+    let eye = [-8.0, 0.0, 0.0];
+    let view = View {
+        frame: 1,
+        view_projection: view(eye, [1.0, 0.0, 0.0]),
+        eye,
+        menu_shown: false,
+    };
+    let frame = s.camera_pass(Some(0), &view, &thresholds(), &mut o, &mut g);
+    // Portal 1 and sector 1's mesh lie behind the wall; portal 0 and the
+    // other meshes do not.
+    assert_eq!(frame.traversal.visited, [0, 1]);
+    assert_eq!(frame.visuals, [vec![0], vec![]]);
+    // Sector 1's root hidden, so its mesh is not reached.
+    assert_eq!((o.visual_cache(4).next, o.visual_cache(1).next), (2, 0));
+    // Without the mesh, everything.
+    assert_eq!(
+        pass(&s, Some(0), &view.view_projection, eye)
+            .traversal
+            .visited,
+        [0, 1, 2]
+    );
 }

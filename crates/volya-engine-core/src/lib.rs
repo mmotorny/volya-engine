@@ -25,6 +25,7 @@ pub mod level;
 pub mod lights;
 pub mod movement;
 pub mod object_light;
+pub mod occlusion;
 pub mod particles;
 pub mod pause;
 pub mod simulation;
