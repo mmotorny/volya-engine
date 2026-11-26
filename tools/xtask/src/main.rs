@@ -55,9 +55,9 @@ Tasks:
   original [--new-game] [--quit] [SECONDS]
               Run the original game under Wine for SECONDS (default 300),
               capturing its display to PNGs in the local cache.
-  original capture title|level OUT
-              The original's frames of the fidelity suite's views there,
-              into OUT/fidelity/ (what //tests/fidelity:frames runs).
+  original capture OUT
+              The original's frames of the fidelity suite's views, into
+              OUT/fidelity/ (what //tests/fidelity:frames runs).
   update      Move to the latest Rust, crates, Bazel, its modules and the
               wasm LLVM, then run the checks and the advisories.
   gc          Remove Bazel's output bases of deleted worktrees.";

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 load("//build:checks.bzl", "volya_checks")
-load("//build:original.bzl", "merged_frames", "original_frames")
+load("//build:original.bzl", "original_frames")
 
 # The fidelity suite's views, shared by the engine's self-test and xtask's
 # capture of the original (`include!`).
@@ -12,27 +12,10 @@ exports_files(
 )
 
 # The original's frames of the views (game assets, in the local disk cache
-# only): one run of the original per place, minutes each; built when the
-# fidelity suite runs, or by name.
+# only), what the fidelity suite is served: `fidelity/<view>.png`. One run
+# of the original, minutes; built when the fidelity suite runs, or by name.
 original_frames(
-    name = "frames_title",
-    place = "title",
-    tags = ["manual"],
-)
-
-original_frames(
-    name = "frames_level",
-    place = "level",
-    tags = ["manual"],
-)
-
-# What the fidelity suite is served: `fidelity/<view>.png`.
-merged_frames(
     name = "frames",
-    frames = [
-        ":frames_level",
-        ":frames_title",
-    ],
     tags = ["manual"],
     visibility = ["//tests/browser:__pkg__"],
 )

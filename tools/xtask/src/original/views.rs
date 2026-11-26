@@ -4,9 +4,11 @@
 //! The original's frame of each view of the fidelity suite
 //! (`tests/fidelity/views.rs`), steered by
 //! docs/behavior/steering-the-original.md: [`capture`], which Bazel's
-//! capture actions run (`//tests/fidelity:frames`, build/original.bzl), so
-//! a frame is captured again only when its inputs change. The `fidelity`
-//! browser suite compares ours with them.
+//! capture action runs (`//tests/fidelity:frames`, build/original.bzl), so
+//! the frames are captured again only when their inputs change: one launch
+//! of the game, every movie skipped, the title menu first, then a New
+//! Game started from it. The `fidelity` browser suite compares ours with
+//! them.
 //!
 //! A New Game view's frame is the game's own screenshot taken by the camera
 //! recorder's F12, which leaves the whole HUD out of the frame it saves
@@ -26,7 +28,7 @@ use std::process::ExitStatus;
 use std::thread;
 use std::time::Duration;
 
-use super::{Install, NEW_GAME, Run, png};
+use super::{Install, Run, png};
 use crate::Result;
 
 #[allow(dead_code)]
@@ -38,9 +40,20 @@ mod list {
 }
 pub use list::{Camera, HEIGHT, Place, VIEWS, View, WIDTH, user_ltx};
 
-/// Seconds after the container's start at which the title menu is captured:
-/// measured, the menu shows by about 65 s (#519); it waits twice that.
-const TITLE_AT: u64 = 130;
+/// Seconds between presses of the quit key while the logo sequence may
+/// play, and the looks in a row at the title menu that tell it has opened
+/// (see [`skip_logos`]); then seconds the menu is given before its capture
+/// (its bar's opening slide takes 556 ms, title-menu.md 4.3).
+const SKIP_EVERY: u64 = 2;
+const MENU_LOOKS: u32 = 3;
+const MENU_SETTLE: u64 = 4;
+
+/// Seconds the logo sequence may take, skipped, to the title menu.
+const MENU_TIMEOUT: u64 = 300;
+
+/// Seconds after the intro's quit key that it is pressed again, if the
+/// intro still shows (the key was not read).
+const INTRO_SKIP_RETRY: u64 = 30;
 
 /// Keys of each camera track: one per second of track time, all equal, so
 /// it holds one view (steering-the-original.md section 4.2, "A track whose
@@ -68,10 +81,9 @@ const SETTLE: u32 = 10;
 const PRECACHE_TIMEOUT: u64 = 250;
 
 /// Seconds the level gets to load before its intro must show, and the
-/// intro to end. Measured: the intro starts about 60 s after the container
-/// and ends about 180 s later.
+/// intro, skipped, to end. Measured: the loading takes about 55 s.
 const LOAD_TIMEOUT: u64 = 900;
-const INTRO_TIMEOUT: u64 = 400;
+const INTRO_TIMEOUT: u64 = 120;
 
 /// Seconds between looks at the display while waiting.
 const POLL: u64 = 2;
@@ -82,22 +94,11 @@ const POLL: u64 = 2;
 const RECORDER_START: u64 = 10;
 const SCREENSHOT_TIMEOUT: u64 = 120;
 
-/// Captures the original's frames of the views at `place` (`title`: the
-/// title menu's; `level`: a New Game's) into `out/fidelity/<view>.png`, one
-/// run of the game in the temporary directory, removed after.
-pub fn capture(place: &str, out: &Path) -> Result {
-    let views: Vec<&View> = VIEWS
-        .iter()
-        .filter(|v| {
-            matches!(
-                (place, v.place),
-                ("title", Place::TitleMenu) | ("level", Place::NewGame { .. })
-            )
-        })
-        .collect();
-    if !["title", "level"].contains(&place) {
-        return Err(format!("no place {place:?}: title or level"));
-    }
+/// Captures the original's frames of the views into
+/// `out/fidelity/<view>.png`, one run of the game in the temporary
+/// directory, removed after (kept when the capture fails).
+pub fn capture(out: &Path) -> Result {
+    let views: Vec<&View> = VIEWS.iter().collect();
     let dir = out.join("fidelity");
     fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let runs = std::env::temp_dir().join(format!("volya-capture-{}", std::process::id()));
@@ -110,13 +111,7 @@ pub fn capture(place: &str, out: &Path) -> Result {
         let path = dir.join(format!("{}.user.ltx", view.name));
         fs::write(&path, &config).map_err(|e| format!("{}: {e}", path.display()))?;
     }
-    let result = if views.is_empty() {
-        Ok(())
-    } else if place == "title" {
-        capture_title(&install, &dir, &views)
-    } else {
-        capture_level(&install, &dir, &views)
-    };
+    let result = capture_views(&install, &dir, &views);
     // The run's clone of the install, its Wine prefix and captures: scratch,
     // kept when the capture failed, for a look (game assets: local only).
     if let Err(e) = &result {
@@ -207,29 +202,76 @@ fn poll(
     Err(format!("no {what} within {timeout} s"))
 }
 
-/// The title menu: the game started without a level shows its logo videos
-/// and then the menu (#519, measured); captured at [`TITLE_AT`], then the
-/// game quits (steering-the-original.md section 7).
-fn capture_title(install: &Install, out: &Path, views: &[&View]) -> Result {
-    let mut run = install.start(&[], &[], "to the title menu")?;
-    wait_until(&mut run, Duration::from_secs(TITLE_AT))?;
-    let frame = run.capture().ok_or("no display")?;
-    for view in views {
-        keep(&run, out, view, frame.clone())?;
+/// Skips the logo sequence of a start without a level and returns when
+/// the title menu shows. The quit key (Esc, startup.md section 4) ends the
+/// current item at once, whatever it is (6.5: every item of `intro_logo`
+/// is stoppable), and on the title screen's menu it does nothing
+/// (title-menu.md 4.4); before the sequence the splash takes no input
+/// (steering-the-original.md 3.1). So it is pressed every [`SKIP_EVERY`]
+/// seconds until the menu shows: the display's four corners not black for
+/// [`MENU_LOOKS`] looks in a row, which no item outlasts under the presses
+/// (the items draw on a black background, startup.md 6.1, measured: the
+/// menu's corners are not black).
+fn skip_logos(run: &mut Run) -> Result<Duration> {
+    let until = run.elapsed() + Duration::from_secs(MENU_TIMEOUT);
+    let mut lit = 0;
+    while run.elapsed() < until {
+        thread::sleep(Duration::from_secs(SKIP_EVERY));
+        if let Some(status) = run.container.try_wait()? {
+            return Err(format!("the game ended ({status}) before the title menu"));
+        }
+        // No display yet: nothing to press into.
+        let Some((w, h, rgb)) = run.capture() else {
+            continue;
+        };
+        lit = if corners_lit(w, h, &rgb) { lit + 1 } else { 0 };
+        if lit >= MENU_LOOKS {
+            let at = run.elapsed();
+            println!("{:>5} s  the title menu", at.as_secs());
+            return Ok(at);
+        }
+        // Before the game's window exists the key has nowhere to go and
+        // `xdotool` fails; the next look presses again.
+        let _ = run.xdotool("xdotool key Escape");
     }
-    end(run, out, views)
+    Err(format!("no title menu within {MENU_TIMEOUT} s"))
 }
 
-/// The New Game views, in one run:
+/// Whether each corner's 32 × 32 pixels have a mean channel value above 5.
+fn corners_lit(w: u32, h: u32, rgb: &[u8]) -> bool {
+    let (w, h) = (w as usize, h as usize);
+    if w < 32 || h < 32 {
+        return false;
+    }
+    [(0, 0), (w - 32, 0), (0, h - 32), (w - 32, h - 32)]
+        .iter()
+        .all(|&(x0, y0)| {
+            let sum: u32 = (y0..y0 + 32)
+                .flat_map(|y| rgb[(y * w + x0) * 3..(y * w + x0 + 32) * 3].iter())
+                .map(|&c| u32::from(c))
+                .sum();
+            sum > 5 * 32 * 32 * 3
+        })
+}
+
+/// The views, in one run:
 ///
 /// - each track view's camera track written to the saves folder (section
 ///   4.2);
-/// - a New Game started with `-start` (sections 1.3, 3.2, 3.3);
-/// - the New Game intro waited out (section 3.4: it plays once the level is
-///   loaded; whether it can be skipped is unestablished, so nothing is
-///   pressed): after the loading screen (full frame; the splash before it
-///   is a picture on black, measured) it shows letterboxed, and the first
-///   frame after it that isn't letterboxed is the start of play;
+/// - the game started without a level, its logo sequence skipped
+///   ([`skip_logos`]) and the title menu's views captured from the display
+///   [`MENU_SETTLE`] seconds after the menu shows;
+/// - a New Game started from the menu as its New Game item does: `start
+///   server(all/single/alife/new) client(localhost)`, then `main_menu off`
+///   (section 3.2), typed into the console;
+/// - the New Game intro skipped: it plays once the level is loaded, shown
+///   letterboxed (measured), and is skippable as movie sequences are
+///   (loading-screen.md 7, 11; startup.md 6.5: the quit key ends its one
+///   item), with game time paused while it plays (level-loading.md 2.4
+///   step 3), so skipping it moves no view's moment. The key is pressed
+///   once it shows, again after [`INTRO_SKIP_RETRY`] seconds if it still
+///   does (only then: in a level the key opens the menu); the first frame
+///   that isn't letterboxed is the start of play;
 /// - the start views ([`Camera::Start`]) captured at their `seconds` after
 ///   that ([`without_hud`], as every New Game view), before any track: a
 ///   track's precache blacks the display (section 4.2.1);
@@ -243,11 +285,12 @@ fn capture_title(install: &Install, out: &Path, views: &[&View]) -> Result {
 ///   track (section 4.2), so each is captured before the next plays. A
 ///   black capture is not kept;
 /// - `quit` (section 7) with no precache pending, so exit code 0.
-fn capture_level(install: &Install, out: &Path, views: &[&View]) -> Result {
-    let (mut starts, mut tracks) = (Vec::new(), Vec::new());
+fn capture_views(install: &Install, out: &Path, views: &[&View]) -> Result {
+    let (mut titles, mut starts, mut tracks) = (Vec::new(), Vec::new(), Vec::new());
     let mut demos = Vec::new();
     for view in views {
         let Place::NewGame { camera, seconds } = view.place else {
+            titles.push(*view);
             continue;
         };
         match camera {
@@ -287,16 +330,30 @@ fn capture_level(install: &Install, out: &Path, views: &[&View]) -> Result {
             ));
         }
     }
-    let mut run = install.start(&NEW_GAME, &demos, "into a New Game")?;
-    poll(&mut run, LOAD_TIMEOUT, "the loading screen", |w, h, rgb| {
-        !letterboxed(w, h, rgb)
-    })?;
+    let mut run = install.start(&[], &demos, "to the title menu, then into a New Game")?;
+    let menu = skip_logos(&mut run)?;
+    wait_until(&mut run, menu + Duration::from_secs(MENU_SETTLE))?;
+    let frame = run.capture().ok_or("no display")?;
+    for view in &titles {
+        keep(&run, out, view, frame.clone())?;
+    }
+    run.console_lines(&[
+        "start server(all/single/alife/new) client(localhost)",
+        "main_menu off",
+    ])?;
     poll(&mut run, LOAD_TIMEOUT, "the intro", |w, h, rgb| {
         letterboxed(w, h, rgb) && !black(w, h, rgb)
     })?;
-    let play = poll(&mut run, INTRO_TIMEOUT, "play", |w, h, rgb| {
-        !letterboxed(w, h, rgb)
-    })?;
+    let play = loop {
+        run.xdotool("xdotool key Escape")?;
+        match poll(&mut run, INTRO_SKIP_RETRY, "play", |w, h, rgb| {
+            !letterboxed(w, h, rgb)
+        }) {
+            Ok(at) => break at,
+            Err(_) if run.elapsed() < Duration::from_secs(LOAD_TIMEOUT + INTRO_TIMEOUT) => {}
+            Err(e) => return Err(e),
+        }
+    };
     let at = |s: u32| play + Duration::from_secs(u64::from(s));
     for (view, seconds) in starts {
         wait_until(&mut run, at(seconds))?;
@@ -617,6 +674,20 @@ mod tests {
         rle.extend_from_slice(&[0x01, 0, 0, 255, 0, 0, 255, 0, 0]);
         rle.extend_from_slice(&[0x00, 255, 0, 0, 0, 0x80, 255, 255, 255, 0]);
         assert_eq!(tga_rgb(&rle), Some((2, 2, rgb)));
+    }
+
+    /// The title menu's test: all four corners lit, not just some.
+    #[test]
+    fn lit_corners() {
+        let (w, h) = (64u32, 64u32);
+        let mut rgb = vec![40u8; (w * h * 3) as usize];
+        assert!(corners_lit(w, h, &rgb));
+        for y in 32..64 {
+            for x in 32..64 {
+                rgb[((y * w + x) * 3) as usize..((y * w + x) * 3 + 3) as usize].fill(0);
+            }
+        }
+        assert!(!corners_lit(w, h, &rgb));
     }
 
     #[test]

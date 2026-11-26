@@ -103,10 +103,7 @@ pub const SETTINGS: &[(&str, &str)] = &[
 /// leaves it out of the original's New Game frames by taking them with the
 /// camera recorder's screenshot, which draws its frame with every HUD
 /// switch off (section 5.1), as our views draw no HUD.
-pub const VIEW_SETTINGS: &[(&str, &str)] = &[
-    ("snd_volume_eff", "0."),
-    ("snd_volume_music", "0."),
-];
+pub const VIEW_SETTINGS: &[(&str, &str)] = &[("snd_volume_eff", "0."), ("snd_volume_music", "0.")];
 
 /// A view's user configuration file: the shipped `user.ltx` `shipped`
 /// (options-screens.md 12.4: CR LF, one command per line in ascending byte

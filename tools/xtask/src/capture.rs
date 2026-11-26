@@ -5,10 +5,8 @@
 //! modules alone, so an edit elsewhere in xtask doesn't capture the
 //! original's frames again.
 //!
-//! - `capture title|level OUT`: the frames of the views there, into
-//!   `OUT/fidelity/` (`xtask original capture`).
-//! - `capture merge OUT DIR...`: every file of `DIR/fidelity/` into
-//!   `OUT/fidelity/`, the folder the fidelity suite is served.
+//! - `capture OUT`: the frames of the views, into `OUT/fidelity/`, the
+//!   folder the fidelity suite is served (`xtask original capture`).
 
 #![allow(dead_code)] // The modules' other tasks are xtask's.
 
@@ -17,7 +15,6 @@ mod machine;
 mod original;
 mod wine;
 
-use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -31,9 +28,8 @@ fn main() -> ExitCode {
         [wine::REAPER, container, stop_service, stop_builder] => {
             wine::reap(container, stop_service, stop_builder)
         }
-        ["merge", out, dirs @ ..] => merge(Path::new(out), dirs),
-        [place, out] => original::capture(place, Path::new(out)),
-        _ => Err("usage: capture title|level OUT | capture merge OUT DIR...".into()),
+        [out] => original::capture(Path::new(out)),
+        _ => Err("usage: capture OUT".into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -42,22 +38,4 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
-}
-
-fn merge(out: &Path, dirs: &[&str]) -> Result {
-    let to = out.join("fidelity");
-    fs::create_dir_all(&to).map_err(|e| format!("{}: {e}", to.display()))?;
-    for dir in dirs {
-        let from = Path::new(dir).join("fidelity");
-        for entry in fs::read_dir(&from).map_err(|e| format!("{}: {e}", from.display()))? {
-            let path = entry.map_err(|e| e.to_string())?.path();
-            // Folders (the displays, `fidelity/display/`) are not served.
-            if path.is_dir() {
-                continue;
-            }
-            let name = path.file_name().ok_or("no name")?;
-            fs::copy(&path, to.join(name)).map_err(|e| format!("{}: {e}", path.display()))?;
-        }
-    }
-    Ok(())
 }

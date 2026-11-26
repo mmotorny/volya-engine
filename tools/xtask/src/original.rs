@@ -86,7 +86,7 @@ const QUIT_WAIT: u64 = 60;
 
 const USAGE: &str = "\
 Usage: xtask original [--new-game] [--quit] [SECONDS]
-       xtask original capture title|level OUT";
+       xtask original capture OUT";
 
 /// A New Game, as the menu's New Game starts it (steering-the-original.md
 /// section 3.2); `-start` takes the rest of the command line, so it comes
@@ -99,8 +99,8 @@ const NEW_GAME: [&str; 3] = [
 
 /// `xtask original ...`.
 pub fn main(args: &[&str]) -> Result {
-    if let ["capture", place, out] = args {
-        return capture(place, Path::new(out));
+    if let ["capture", out] = args {
+        return capture(Path::new(out));
     }
     let (new_game, args) = match args {
         ["--new-game", rest @ ..] => (true, rest),
@@ -308,10 +308,22 @@ impl Run {
     /// frame a second or slower, keys typed faster were lost, the Return
     /// among them (measured, a 31-character line).
     pub fn console(&self, command: &str) -> Result {
-        let typed = command.replace('\'', "");
+        self.console_lines(&[command])
+    }
+
+    /// Runs `commands` in the game's console, in order, the console opened
+    /// once (as [`Run::console`]).
+    pub fn console_lines(&self, commands: &[&str]) -> Result {
+        let typed: Vec<String> = commands
+            .iter()
+            .map(|c| {
+                let c = c.replace('\'', "");
+                format!("xdotool type --delay 250 '{c}' && sleep 1 && xdotool key Return")
+            })
+            .collect();
         self.xdotool(&format!(
-            "xdotool key grave && sleep 1 && xdotool type --delay 250 '{typed}' && sleep 1 \
-             && xdotool key Return"
+            "xdotool key grave && sleep 1 && {}",
+            typed.join(" && sleep 2 && ")
         ))
     }
 
