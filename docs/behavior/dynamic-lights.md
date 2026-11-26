@@ -162,8 +162,9 @@ order:
 
 1. It has a sector, that sector was visited by the camera's traversal this frame (`level.md` section 9.2),
    and the bounding sphere intersects one of the frusta the sector was reached with.
-2. Occlusion: its box (C ± R on each axis) passes the occlusion test of `level.hom` (out of scope, as in
-   `level.md`). The test is repeated only when due: after a passed test the next one is due after
+2. Occlusion: its box (C ± R on each axis) passes the occlusion test of `level.hom` (the box test of
+   `docs/behavior/occlusion-tests.md` 2.2, cached as its section 5, visible without a test while occlusion is
+   off, its section 4; `docs/behavior/object-visibility.md` 6.3). The test is repeated only when due: after a passed test the next one is due after
    10 + (a random integer 0 … 14) frames, after a failed test in the next frame; between tests the record
    counts as passed. A renderer without occlusion culling lists a superset.
 3. It was not already listed this frame.
@@ -449,7 +450,6 @@ Sections 2.3, 3.1, 5.2, 5.3 and 6.3 give examples (`dl_numeric.py` DL-N1 … DL-
 - Whether the actor's torch and the helicopter's light are on at the first level's start (section 3.3).
 - Library definitions with a distortion element of priority 0 or 1 (section 7).
 - The weighting and smoothing of the brightness value (section 9).
-- The occlusion test with `level.hom` (section 4 rule 2), as in `level.md`.
 
 ## 13. Provenance
 

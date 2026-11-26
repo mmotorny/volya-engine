@@ -214,8 +214,9 @@ Each frame [DO-7]:
    (no near plane).
 2. Each non-empty group (2.4) whose sphere and box are not outside the frustum is examined; if the group
    is only partly inside, each of its entries is tested again by its own sphere and box.
-3. Occlusion: an entry is then tested against the level's occlusion geometry (`level.hom`, out of scope
-   here as in DL 4) when such a test is due and occlusion testing is enabled: after a passed test the next
+3. Occlusion: an entry is then tested against the level's occlusion geometry (`level.hom`: the box test of
+   `docs/behavior/occlusion-tests.md` 2.2 with the entry's box, cached as its section 5; its section 6) when such
+   a test is due and occlusion testing is enabled: after a passed test the next
    is due after 10 + (shared generator mod 15) frames, after a failed test in the next frame; between tests
    the entry counts as passed; a failed entry is skipped this frame. During the detail pass, "enabled" is
    the state the previous frame left (the occlusion data are drawn later in the frame, 6.1) [DO-7]. A
@@ -392,7 +393,6 @@ Instances per model id at *ρ* = 0.3: 1: 28, 4: 14, 5: 9, 6: 3, 8: 326, 9: 457, 
   reproducible, and any uniform choice is equivalent.
 - Whether the first frame after loading draws detail objects (5.1).
 - The exact colour result of the fixed-function path (6.6).
-- The occlusion test itself (`level.hom`), as in DL 4.
 - Nothing was executed: all timing statements come from the order of operations in the binaries.
 
 ## Provenance

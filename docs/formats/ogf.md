@@ -233,8 +233,10 @@ the sector was reached with. Processing a visual:
 
 A visual whose bounding sphere/box is outside the frustum is not processed further (nothing below it is
 drawn). Frustum culling only removes what is outside the view: a renderer that tests every visual, or only
-the groups, produces the same image. The original also tests visuals against the occlusion mesh
-`level.hom` (out of scope; a renderer without it draws a superset of hidden geometry). Then by type:
+the groups, produces the same image. The original also tests each visual, after its frustum test, against the
+occlusion mesh `level.hom` with the cached box test of its bounding box (`docs/behavior/occlusion-tests.md` 2.2, 5,
+6); a visual found hidden is not processed further. A renderer without it draws a superset of hidden geometry.
+Then by type:
 
 ### 8.2 Groups and billboard groups
 
@@ -298,7 +300,6 @@ All 30 shipped levels:
 
 ## 10. Unestablished
 
-- Exact rules of occlusion culling with `level.hom` (section 8.1).
 - Which clock drives the wind-sway time *t* (section 5).
 - Meaning of the four reserved u32 of the window lists (0 everywhere).
 

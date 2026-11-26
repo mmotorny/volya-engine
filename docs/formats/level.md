@@ -169,7 +169,16 @@ The nearest hit decides:
   of that portal if **n**·**p** + *d* > 0 for the camera position **p**, else in sector B;
 - nothing within 500 units: the camera sector of the previous frame is kept.
 
-The sector is re-determined only when the camera has moved (by more than 1e−7 on any axis).
+The sector is re-determined only when the camera has moved (by more than 1e−7 on any axis). **Disputed in
+review:** the condition is a move by at least 1e−7 on some axis (|Δ| ≥ 1e−7).
+
+There is **no camera sector** after a level is loaded (and after it is unloaded) until a ray finds one; a ray that
+finds nothing leaves it none. When a level is unloaded the remembered camera position is set to the largest
+single-precision value, so the first visibility pass after the next load casts the ray. While there is no camera
+sector the first renderer's visibility pass does nothing of section 9.2 – 9.3 and gathers no dynamic item: no
+sector is traversed, no static visual, object, effect object, glow or light is drawn or listed, and the game's two
+HUD callbacks (which draw the first-person items, `docs/behavior/light-shadows-projection.md` 3.2) are not called;
+the occlusion grid is still drawn (`docs/behavior/visibility-scope.md` 6, `docs/behavior/object-visibility.md` 1).
 
 ### 9.2 Sector traversal through portals
 
@@ -188,8 +197,11 @@ unless one of the following holds (rules applied in this order):
    *m* < *T*\_B (thresholds in section 9.4). Portals with *m* < *T*\_A are additionally drawn as a
    darkening fade (not part of the stored world; out of scope).
 5. The portal polygon, clipped against the current frustum, is empty.
-6. The portal is hidden by the occlusion mesh `level.hom` (out of scope; a renderer without occlusion
-   culling draws a superset).
+6. The portal is hidden by the occlusion mesh `level.hom`: the clipped portal polygon of rule 5 is tested by the
+   polygon test of `docs/behavior/occlusion-tests.md` 2.3 (not cached; visible without a test while occlusion is
+   off, which it is for a level without `level.hom`, `occlusion-tests.md` 4); this rule is applied by the camera's
+   traversal only (`docs/behavior/traversal-options.md` 4). A renderer without occlusion culling draws a
+   superset.
 
 The target sector is then visited with the current frustum narrowed to the clipped portal polygon (the
 planes through the camera and the polygon's edges), and the same rules apply recursively from it. A sector
@@ -208,8 +220,9 @@ types and LOD selection are in `ogf.md` section 8). A visual reached twice in on
 The size thresholds are derived once per frame from the screen and three console settings:
 
 - *S* = (`r__geometry_lod` + 1e−7) × (90 / *fov*)² × *W* × *H*, where *W* × *H* is the render-target
-  size in pixels and *fov* the camera's field-of-view angle in degrees (whether vertical or horizontal is
-  **unestablished**). `r__geometry_lod` defaults to 1.0 (range 0.1 … 1.2).
+  size in pixels and *fov* the **vertical** field-of-view angle in degrees of the camera the frame is drawn with
+  (`docs/behavior/view-projection.md` 1 – 3; during play 67.5, smaller while aiming). `r__geometry_lod` defaults
+  to 1.0 (range 0.1 … 1.2).
 - *T*\_min = 3.5² / *S* = 12.25 / *S*.
 - *T*\_A = (`r1_ssa_lod_a` / 3)² / *S*, *T*\_B = (`r1_ssa_lod_b` / 3)² / *S*; `r1_ssa_lod_a` defaults to 64
   (range 16 … 96), `r1_ssa_lod_b` to 48 (range 16 … 64).
@@ -283,8 +296,6 @@ portals, 709 sectors, 1,682 lights, 1,166 glows.
 ## 11. Unestablished
 
 - Meaning of the header's second u16 and of the lights' leading u32.
-- Whether the field of view in section 9.4 is vertical or horizontal.
-- Occlusion culling with `level.hom` (section 9.2 rule 6, `ogf.md` section 8.1).
 
 ## 12. Provenance
 
@@ -298,3 +309,10 @@ portals, 709 sectors, 1,682 lights, 1,166 glows.
   what the first renderer reads and checks and how it uses each field; statistical checks over the data of
   all levels (index ranges, uniqueness, side-of-plane tests, value ranges); a throwaway parser written only
   from this text and `ogf.md`, run over all 30 levels, reproduces every number in section 10.
+- Section 9 revised 2026-11-25 (field of view, no camera sector, portal occlusion) by further static analysis of
+  `bin\XR_3DA.exe` and `bin\xrRender_R1.dll`.
+
+## Gaps found in review
+
+- Section 9.2 rule 4 still calls the darkening fade of small portals out of scope; it is specified in
+  `docs/behavior/portal-fade.md`, which section 9 does not reference.

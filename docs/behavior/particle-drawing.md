@@ -320,8 +320,9 @@ The game draws effects through effect objects (their owners, P8 – P11 and F1, 
 dynamic objects shown (a device flag that is on by default and that no console command changes), the objects
 whose culling sphere (below) meets the view frustum are considered; an object is drawn only if it lies in a
 sector visited this frame (level.md 9.2) and its sphere lies inside one of the frustums that sector was reached
-with, and it is not hidden by the occlusion mesh `level.hom` (out of scope as in level.md 9.2; an object found
-visible is tested again after 10 – 24 frames, a hidden one every frame) (`bin_object.py` B5). **Disputed in
+with, and it is not hidden by the occlusion mesh `level.hom` (the cached box test of the object's box,
+`docs/behavior/occlusion-tests.md` 5 – 6; an object found visible is tested again after 10 – 24 frames, a hidden
+one in the next frame in which it is reached) (`bin_object.py` B5). **Disputed in
 review:** the sphere need not lie inside the frustum: the test rejects it only when, for some plane of that
 frustum, the centre lies outside the plane by more than the radius; a sphere partly inside passes. Which sector an
 object is in is **unestablished** here; a renderer that ignores sectors and occlusion draws a superset.
@@ -440,7 +441,7 @@ as position; (u, v).
 
 - The texel Direct3D 9 gives for a sampler without a texture (5.3; four `particles\xadd` effects).
 - The coordinates and parameters of the post-process quad (6.3; static-shading.md 10.2).
-- Which sector an effect object is in, and the occlusion test (7.1).
+- Which sector an effect object is in (7.1).
 - The geometry drawn between steps 4 and 5 of 7.4 (believed the portal fades).
 - The distortion target's pixel format beyond being the scene target's.
 
@@ -462,4 +463,6 @@ as position; (u, v).
 - `docs/formats/particles-xr.md` 2.4 says the drawing does not read chunk 37's z; section 4.3 here shows the fixed-at-rest case reads it, and particles-xr.md is not corrected.
 - The view and projection the distortion pass (6.2) draws its sprites with are not stated (believed the scene's).
 - How a frame number is stored when floor(*g* · 255) of 3.3 falls outside 0 … 65535 is not stated; no shipped animated effect reaches that case (frame rate · 0.033 never exceeds its frame count).
+- Sections 7.1 and 9 keep which sector an effect object is in unestablished; `docs/behavior/object-visibility.md` 4
+  states it, and these sections do not reference it.
 - The drawing facts of the weather's ambient effects present at the first level's start (`nature\fog_foggy_00`, `nature\fog_stormy_01`; scoping spec 1.2) are not given in 8.1.
