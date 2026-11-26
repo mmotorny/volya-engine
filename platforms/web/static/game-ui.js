@@ -13,7 +13,8 @@
 //
 // Home holds Play only; secondary actions (an update offer, Settings) sit at
 // the bottom, away from it. Settings holds updates, the diagnostic
-// log and, in a danger zone, removing the import.
+// log and, in a danger zone, deleting the game's settings and saved games
+// and removing the import.
 
 import { SHARE_ICON, canOffer, chromium, install, installed, platform } from "./install.js";
 import * as diagnostics from "./diagnostics.js";
@@ -601,24 +602,64 @@ function downloadButton() {
 
 /**
  * The diagnostic log (#346): off by default; while on, the app records its
- * performance and errors here. The log stays when it is turned off, and can
- * be downloaded while there is one.
+ * performance and errors here, downloadable while there is a log. Turning
+ * it off deletes the log (#536, for privacy), after a confirmation that
+ * leaves the download offered. A log left while off (not deleted, or kept
+ * by earlier versions) is offered with Delete diagnostic log.
  */
 async function diagnosticsPanel() {
   const log = await call("diagnostic_log_status").catch(() => null);
   const on = element("input", { type: "checkbox", checked: diagnostics.enabled() });
   const download = downloadButton();
-  download.hidden = !log?.entries;
+  const remove = element("button", { className: "panel-action danger", textContent: "Delete diagnostic log" });
+  const problem = element("p", { className: "note error", textContent: "Couldn't delete the diagnostic log.", hidden: true });
+  const reflect = (status) => {
+    const left = status?.entries || status?.deleted === false;
+    download.hidden = !status?.entries;
+    remove.hidden = diagnostics.enabled() || !left;
+    problem.hidden = status?.deleted !== false;
+  };
+  reflect(log);
+  /** Asks first; then turns the log off (if on) and deletes it. */
+  const deleteLog = async (question, actionLabel, after) => {
+    const ask = confirmation(question, "Download it first to keep a copy.", actionLabel);
+    on.disabled = true;
+    remove.hidden = true;
+    problem.hidden = true;
+    panel.append(ask.element);
+    ask.focus();
+    const confirmed = await ask.result;
+    if (confirmed) {
+      ask.busy();
+      try {
+        const status = await diagnostics.setEnabled(false, call);
+        on.checked = false;
+        reflect(status);
+      } catch (error) {
+        console.warn(`diagnostic log: ${error.message}`);
+        reflect({ entries: !download.hidden, deleted: false });
+      }
+    } else reflect(await call("diagnostic_log_status").catch(() => null));
+    ask.element.remove();
+    on.disabled = false;
+    (confirmed || !after.isConnected || after.hidden ? on : after).focus();
+  };
+  remove.addEventListener("click", () => deleteLog("Delete the diagnostic log?", "Delete", remove));
   on.addEventListener("change", async () => {
+    if (!on.checked) {
+      // Still on until confirmed.
+      on.checked = true;
+      await deleteLog("Turn off the diagnostic log and delete it?", "Turn off and delete", on);
+      return;
+    }
     on.disabled = true;
     try {
-      const status = await diagnostics.setEnabled(on.checked, call);
-      download.hidden = !status?.entries;
+      reflect(await diagnostics.setEnabled(true, call));
     } finally {
       on.disabled = false;
     }
   });
-  return element(
+  const panel = element(
     "div",
     { className: "panel" },
     element("p", { className: "label", textContent: "Diagnostics" }),
@@ -634,12 +675,94 @@ async function diagnosticsPanel() {
       ),
     ),
     download,
+    remove,
+    problem,
   );
+  return panel;
 }
 
-/** Settings: updates, the diagnostic log and removing the import (danger zone). */
+/**
+ * A confirmation in place of the control that asked for it: `question`,
+ * `detail`, the action (`actionLabel`, filled red) and Cancel (focused;
+ * Escape too). `result` settles true on the action, false on Cancel;
+ * `busy()` disables both while the action runs.
+ */
+function confirmation(question, detail, actionLabel) {
+  const action = element("button", { className: "danger filled", textContent: actionLabel });
+  const cancel = element("button", { textContent: "Cancel" });
+  const box = element(
+    "div",
+    { className: "callout problem confirm" },
+    element("strong", { textContent: question }),
+    element("span", { textContent: detail }),
+    element("div", { className: "confirm-actions" }, action, cancel),
+  );
+  box.setAttribute("role", "alertdialog");
+  const result = new Promise((resolve) => {
+    action.addEventListener("click", () => resolve(true));
+    cancel.addEventListener("click", () => resolve(false));
+    box.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") resolve(false);
+    });
+  });
+  return {
+    element: box,
+    result,
+    focus: () => cancel.focus(),
+    busy() {
+      action.disabled = true;
+      cancel.disabled = true;
+    },
+  };
+}
+
+/**
+ * Danger zone: Delete settings and saved games (#535): the engine's
+ * `user.ltx` and `savedgames/`, after a confirmation; the next game starts
+ * from the installer's defaults. Settings shows only while no game runs.
+ */
+function userDataSection() {
+  const title = "Delete settings and saved games";
+  const button = element("button", { className: "danger filled", textContent: title });
+  const note = element("p", {
+    className: "note",
+    textContent: "Deletes the game's settings and saved games from this app's storage. The next game starts with its default settings.",
+  });
+  const section = element("div", { className: "danger-item" }, element("p", { className: "value", textContent: title }), note, button);
+  button.addEventListener("click", async () => {
+    const ask = confirmation("Delete the game's settings and saved games?", "This can't be undone.", "Delete");
+    button.replaceWith(ask.element);
+    ask.focus();
+    if (!(await ask.result)) {
+      ask.element.replaceWith(button);
+      button.focus();
+      return;
+    }
+    ask.busy();
+    try {
+      await call("forget_user_data");
+      const done = element("p", { className: "value", textContent: "Settings and saved games deleted", tabIndex: -1 });
+      done.setAttribute("role", "status");
+      section.replaceChildren(done);
+      done.focus();
+    } catch (error) {
+      console.warn(`deleting settings and saved games: ${error.message}`);
+      note.textContent = "Couldn't delete the settings and saved games.";
+      note.classList.add("error");
+      ask.element.replaceWith(button);
+      button.focus();
+    }
+  });
+  return section;
+}
+
+/**
+ * Settings: updates, the diagnostic log and, in a danger zone, the
+ * player's settings and saved games and the import.
+ */
 async function showSettings() {
   const status = await call("game_status");
+  const userData = (await call("user_data_status").catch(() => null))?.present;
   const diagnosticsSection = await diagnosticsPanel();
   const back = element("button", { className: "back", textContent: "‹ Back" });
   back.addEventListener("click", () => navigate("back", refresh));
@@ -672,17 +795,24 @@ async function showSettings() {
       check,
     ),
     diagnosticsSection,
-    status.imported
+    status.imported || userData
       ? element(
           "div",
           { className: "panel danger-zone" },
           element("p", { className: "label", textContent: "Danger zone" }),
-          element("p", { className: "value", textContent: "Remove imported game" }),
-          element("p", {
-            className: "note",
-            textContent: `Deletes the game's ${formatBytes(status.bytes)} from this app's storage. You can import it again from the installer.`,
-          }),
-          remove,
+          userData ? userDataSection() : null,
+          status.imported
+            ? element(
+                "div",
+                { className: "danger-item" },
+                element("p", { className: "value", textContent: "Remove imported game" }),
+                element("p", {
+                  className: "note",
+                  textContent: `Deletes the game's ${formatBytes(status.bytes)} from this app's storage. You can import it again from the installer.`,
+                }),
+                remove,
+              )
+            : null,
         )
       : null,
   );

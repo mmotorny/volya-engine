@@ -143,7 +143,6 @@ pub async fn launch() -> Result<serde_json::Value, JsValue> {
             if let Some(user) = user {
                 data.set_user_config(user);
             }
-            data.version = crate::game::version_string()?;
             let mut app = App::new(data).map_err(error)?;
             // The level's textures (transcoded on a GPU without BC) and
             // geometry are uploaded while it loads, a piece at a time

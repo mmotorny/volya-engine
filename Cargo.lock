@@ -949,7 +949,6 @@ version = "0.1.0"
 dependencies = [
  "inno",
  "md-5",
- "serde_json",
  "zlib-rs",
 ]
 

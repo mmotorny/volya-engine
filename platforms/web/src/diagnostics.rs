@@ -9,7 +9,7 @@
 //! handle each, held while on). Where those files can't be opened (another
 //! copy of the app holds them), the log is kept in memory for the session.
 //! While off, recording's callsites are disabled and nothing runs per frame
-//! beyond `tracing`'s check of them; the log is kept.
+//! beyond `tracing`'s check of them. Turning it off deletes the log (#536).
 //!
 //! Every way the engine or a game ends records an `engine.end` event and
 //! stores the period at once ([`end`], and after a frame whose engine
@@ -162,9 +162,10 @@ pub fn on() -> bool {
 /// `display_mode`) and the log's store opens, and
 /// `previous_end` (the `engine.end` an earlier session's page kept as it
 /// closed: `{pid, cat, ts, reason, message}`) is added to the log unless
-/// that session stored its own. Off, the period so far is stored,
-/// recording stops and the store closes; the log is kept. Answers the
-/// log's status after ([`status`]).
+/// that session stored its own. Off, recording stops, the events waiting
+/// are dropped, the store closes and the log is deleted (#536; also a log
+/// left from before while already off). Answers the log's status after
+/// ([`status`]), off with `deleted`: whether no log is left.
 pub async fn set(
     on: bool,
     page: &serde_json::Value,
@@ -172,9 +173,33 @@ pub async fn set(
 ) -> serde_json::Value {
     exclusive(async {
         switch(on, page, previous_end).await;
-        status_now().await
+        let deleted = if on { None } else { Some(delete().await) };
+        let mut status = status_now().await;
+        if let Some(deleted) = deleted {
+            status["deleted"] = deleted.into();
+        }
+        status
     })
     .await
+}
+
+/// Deletes the log's files; whether none are left. Fails while another copy
+/// of the app holds them (its log is on).
+async fn delete() -> bool {
+    let Ok(namespace) = crate::opfs::namespace().await else {
+        return false;
+    };
+    match crate::opfs::existing_dir(&namespace, DIRECTORY).await {
+        Ok(None) => true,
+        Ok(Some(_)) => match crate::opfs::remove(&namespace, DIRECTORY).await {
+            Ok(()) => true,
+            Err(e) => {
+                web_sys::console::warn_2(&"diagnostic log: not deleted".into(), &e);
+                false
+            }
+        },
+        Err(_) => false,
+    }
 }
 
 async fn switch(on: bool, page: &serde_json::Value, previous_end: &serde_json::Value) {
@@ -185,7 +210,10 @@ async fn switch(on: bool, page: &serde_json::Value, previous_end: &serde_json::V
     if !on {
         SESSION.with(|s| {
             if let Some(s) = s.borrow_mut().as_mut() {
-                store(s);
+                // Dropped, not stored: the log is deleted next.
+                s.diagnostics.take_ended();
+                s.diagnostics.summarize();
+                s.diagnostics.take_pending();
                 s.log = None;
                 s.stored = false;
             }
@@ -598,7 +626,7 @@ fn io_error(e: std::io::Error) -> JsValue {
 /// The `diagnostic_log` op: the whole log as a trace (Trace Event Format,
 /// JSON Object Format), `{text, bytes}`, after storing the period so far
 /// (unless `stored_only`, for tests: what is in storage now); while logging
-/// is off, the log kept from before.
+/// is off, a log left from before (not deleted, or kept by earlier versions).
 pub async fn trace(stored_only: bool) -> Result<serde_json::Value, JsValue> {
     exclusive(trace_now(stored_only)).await
 }

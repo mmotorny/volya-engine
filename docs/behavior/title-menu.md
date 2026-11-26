@@ -127,10 +127,23 @@ See section 4.
 ### 3.4 Version caption
 
 `static_version` (15, 740, 100, 30) shows the text `ver. ` followed by the game version string, left
-aligned (`align="l"`), font `graffiti19` (section 5), colour RGB (135, 123, 116), opaque. The version
-string is the value `InstallVers` of the Windows registry key
-`HKEY_LOCAL_MACHINE\Software\GSC Game World\STALKER-SHOC\` (at most 128 bytes) if present, otherwise
-the built-in `1.0006`.
+aligned (`align="l"`), font `graffiti19` (section 5), colour RGB (135, 123, 116), opaque. The text is set
+once, when the title-menu window is built (`ui_main_menu.script`: `"ver. " .. mm:GetGSVer()`), and is
+always `ver. 1.0006`: the game's version string is the built-in `1.0006`, whatever the registry holds.
+
+Each time the version string is produced, the GameSpy library (`bin\xrGameSpy.dll`) opens the Windows
+registry key `HKEY_LOCAL_MACHINE\Software\GSC Game World\STALKER-SHOC\` for reading and queries its value
+`InstallVers` (up to 128 bytes, any value type), but the data read is not used: the key's or value's
+presence, absence, type and content do not change the string. The key is opened without a registry-view
+flag, so on 64-bit Windows the 32-bit program reads the 32-bit (`WOW6432Node`) view (Windows' documented
+registry redirection). Observed under Wine (run of the unmodified game, 2026-11-26): with `InstallVers` =
+`2.1.0.10` (string) in the 32-bit view the caption reads `ver. 1.0006`.
+
+The GameSpy library is loaded with the game's main-menu component; if it cannot be loaded, or lacks the
+version function, the game stops with a fatal error. There is no registry-dependent case to reproduce.
+
+Checks (dirty workspace): `titlever/scripts/check.py` (the binaries and the script line),
+`titlever/scripts/check_run.py` (the recorded run; the caption read from its frames).
 
 ## 4. The item list (`shniaga_wnd`)
 
@@ -444,7 +457,7 @@ and extracting its alpha shows the transparent sky region and the bar's transluc
 
 ## Provenance
 
-- Date: 2026-11-23.
+- Date: 2026-11-23; section 3.4 revised 2026-11-26.
 - Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG build), archives
   `gamedata.db0`…`gamedata.dbd`; `mods\mp_military_2.xdb0` not used.
 - Data examined: the files in section 12 and the related configuration, script, texture, video and
@@ -453,7 +466,10 @@ and extracting its alpha shows the transparent sky region and the bar's transluc
   with ffprobe/ffmpeg (stream parameters, frames, texture alpha); static analysis with Ghidra of the
   shipped 32-bit binaries (`xrGame.dll`, `XR_3DA.exe`, `xrSound.dll`, `xrGameSpy.dll`) to establish
   list selection, input handling, bar motion, music handling, cursor and video-texture behaviour,
-  resolution mapping and the startup flow. The binaries were not executed, except that (2026-11-23) the
+  resolution mapping and the startup flow; for section 3.4 (2026-11-26), how `xrGame.dll` obtains the
+  version string from `xrGameSpy.dll` and how that library reads the registry. The binaries were not
+  executed, except that (2026-11-26) the unmodified game was run under Wine for section 3.4, and
+  (2026-11-23) the
   video frame-to-texture conversion of `XR_3DA.exe` was run in a CPU emulator on the two menu videos (see
   `docs/behavior/startup.md` §6.6). No leaked source code,
   derivative engines or third-party documentation of the engine were used.
