@@ -6,6 +6,7 @@
 mod deploy;
 mod e2e;
 mod machine;
+mod parity;
 mod spec_lint;
 
 use std::fs;
@@ -32,6 +33,10 @@ Tasks:
               Records the test simulator's screen for SECONDS (H.264).
               VOLYA_SIM_MEDIA=DIR records every iphone suite of `e2e` and
               screenshots its end into DIR.
+  parity [wgpu]
+              Builds the test app with the wgpu renderer and the GL one and
+              compares their frames of the parity suite's views in headless
+              Chrome ('wgpu' compares the wgpu build with itself).
   web [--dev] Build the web app into dist/ (release unless --dev).
   deploy      Check, build and publish to GitHub Pages (gh-pages branch).
   spec-lint   Flag decompiler output, code and mangled names in clean-room spec drafts.
@@ -60,6 +65,7 @@ fn main() -> ExitCode {
             .parse::<f64>()
             .map_err(|e| format!("seconds: {e}"))
             .and_then(|s| e2e::record_for(Path::new(path), Duration::from_secs_f64(s))),
+        ["parity", against @ ..] => parity::run(against),
         ["web"] => web(Profile::Release),
         ["web", "--dev"] => web(Profile::Dev),
         ["deploy"] => deploy::run_deploy(),
@@ -213,17 +219,25 @@ enum Profile {
 }
 
 fn web(profile: Profile) -> Result {
+    // The direct WebGL 2 renderer instead of wgpu's (docs/architecture/
+    // rendering.md, Design: direct WebGL 2) with `VOLYA_RENDERER=gl`.
+    let gl = std::env::var("VOLYA_RENDERER").is_ok_and(|r| r == "gl");
+    let features: &[&str] = if gl { &["gl"] } else { &[] };
+    web_into(profile, features, &root().join("dist"))
+}
+
+/// Builds the web app into `dist` with the web crate's `features` added.
+fn web_into(profile: Profile, features: &[&str], dist: &Path) -> Result {
     let wasm_bindgen = wasm_bindgen_cli()?;
     let (release, test_ops, dir) = match profile {
         Profile::Dev => (false, true, "debug"),
         Profile::Release => (true, false, "release"),
         Profile::Test => (true, true, "release"),
     };
-    let dist = root().join("dist");
     if dist.exists() {
-        fs::remove_dir_all(&dist).map_err(|e| format!("remove dist: {e}"))?;
+        fs::remove_dir_all(dist).map_err(|e| format!("remove {}: {e}", dist.display()))?;
     }
-    copy_dir(&root().join("platforms/web/static"), &dist).map_err(|e| format!("copy web: {e}"))?;
+    copy_dir(&root().join("platforms/web/static"), dist).map_err(|e| format!("copy web: {e}"))?;
     step("Web build");
     let mut command = cmd(
         "cargo",
@@ -232,13 +246,10 @@ fn web(profile: Profile) -> Result {
     if release {
         command.arg("--release");
     }
-    // The direct WebGL 2 renderer instead of wgpu's (docs/architecture/
-    // rendering.md, Design: direct WebGL 2) with `VOLYA_RENDERER=gl`.
-    let gl = std::env::var("VOLYA_RENDERER").is_ok_and(|r| r == "gl");
-    let features: Vec<&str> = [test_ops.then_some("test-ops"), gl.then_some("gl")]
-        .into_iter()
-        .flatten()
-        .collect();
+    let mut features = features.to_vec();
+    if test_ops {
+        features.push("test-ops");
+    }
     if !features.is_empty() {
         command.args(["--features", &features.join(",")]);
     }
@@ -251,12 +262,12 @@ fn web(profile: Profile) -> Result {
             "web",
             "--no-typescript",
             "--out-dir",
-            "dist/pkg",
+            &dist.join("pkg").to_string_lossy(),
             &wasm,
         ],
     ))?;
-    stamp_engine(&dist)?;
-    inject_build(&dist, "")
+    stamp_engine(dist)?;
+    inject_build(dist, "")
 }
 
 /// `dist-next`: `dist` as the next deploy would be, for the update flow's

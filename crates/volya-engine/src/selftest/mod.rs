@@ -179,8 +179,33 @@ fn checks() -> impl Iterator<Item = (&'static str, &'static str, Run)> {
     })
 }
 
+/// The `parity` suite's checks (#478, `cargo xtask parity`): the views
+/// both renderers draw, compared pixel by pixel: the title menu and a
+/// video, a New Game's start view and an outdoor one, its objects, lights
+/// and glows, the torch, a campfire's and an artefact's particles, the
+/// placed distortion effect, the grass, the presentation at
+/// `r__supersample` 1 and 2, and the draw-call views with the trees
+/// blended and unblended.
+const PARITY: &[&str] = &[
+    "startup and title menu from game data",
+    "video frames as textures from game data",
+    "new game start view",
+    "placed effects are drawn",
+    "start view supersampled",
+    "start view shows the objects",
+    "a lamp lights the level",
+    "the torch lights the level",
+    "a campfire is drawn",
+    "an artefact's effect is drawn",
+    "grass from game data",
+    "draw calls from game data",
+];
+
 /// The names of `suite`'s checks, in order.
 pub fn names(suite: &str) -> Vec<&'static str> {
+    if suite == "parity" {
+        return PARITY.to_vec();
+    }
     checks()
         .filter(|(s, _, _)| *s == suite)
         .map(|(_, name, _)| name)

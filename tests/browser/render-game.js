@@ -85,7 +85,9 @@ export async function gameChecks(suite) {
         const rgba = new Uint8Array(text.length);
         for (let i = 0; i < text.length; i++) rgba[i] = text.charCodeAt(i);
         await dump(frame.name, { width: frame.width, height: frame.height, rgba });
-        if (!compare || frame.compare == null) continue;
+        // The parity suite compares every frame (#478); the others, those
+        // their checks ask for.
+        if (!compare || (frame.compare == null && suite !== "parity")) continue;
         const before = await reference(suite, frame.name);
         if (!before) continue;
         const differ = differingPixels(frame, rgba, before);
