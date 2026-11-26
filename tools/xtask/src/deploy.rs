@@ -23,6 +23,23 @@ pub fn run_deploy() -> Result {
     {
         return Err("working tree is dirty; commit first".into());
     }
+    // Never build output in the tree (#547; //build:gitignore keeps it
+    // ignored).
+    let tracked = output(&mut cmd(
+        "git",
+        &[
+            "ls-files",
+            "--",
+            "dist",
+            "dist-next",
+            ".cache",
+            "target",
+            ":(glob)bazel-*",
+        ],
+    ))?;
+    if !tracked.trim().is_empty() {
+        return Err(format!("build output is tracked:\n{tracked}"));
+    }
     // Deploy only what main holds, whatever branch HEAD is on (worktree
     // branches have no upstream).
     run(&mut cmd("git", &["fetch", "-q", "origin", "main"]))?;

@@ -35,6 +35,14 @@ rust_test(
     tags = ["check"],
 )
 
+# Build output stays ignored.
+rust_test(
+    name = "gitignore",
+    srcs = ["gitignore_test.rs"],
+    data = ["//:.gitignore"],
+    tags = ["check"],
+)
+
 # Versions pinned twice agree.
 rust_test(
     name = "pins",

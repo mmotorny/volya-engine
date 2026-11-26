@@ -1,4 +1,7 @@
 /target
+/dist
+/dist-next
+/.cache
 .DS_Store
 /.claude/worktrees/
 /user.bazelrc

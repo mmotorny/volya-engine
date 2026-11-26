@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 exports_files([
+    ".gitignore",
     "Cargo.lock",
     "Cargo.toml",
     "MODULE.bazel",
@@ -47,6 +48,7 @@ filegroup(
 test_suite(
     name = "checks",
     tests = [
+        "//build:gitignore",
         "//build:licenses",
         "//build:pins",
         "//build:spdx",
