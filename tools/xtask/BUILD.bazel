@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Maksym Motorny
 # SPDX-License-Identifier: BSD-3-Clause
 
-load("@rules_rust//rust:defs.bzl", "rust_test")
+load("//build:checks.bzl", "volya_checks")
 load("//build:rust.bzl", "LINTS", "volya_binary")
+load("@rules_rust//rust:defs.bzl", "rust_test")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -26,3 +27,5 @@ rust_test(
     crate = ":xtask",
     rustc_flags = LINTS,
 )
+
+volya_checks(wasm = False)

@@ -1,9 +1,13 @@
 # SPDX-FileCopyrightText: 2026 Maksym Motorny
 # SPDX-License-Identifier: BSD-3-Clause
 
+load("//build:checks.bzl", "volya_checks")
+
 # The fidelity suite's views, shared by the engine's self-test and xtask's
 # capture of the original (`include!`).
 exports_files(
     ["views.rs"],
     visibility = ["//visibility:public"],
 )
+
+volya_checks(wasm = False)

@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Maksym Motorny
 # SPDX-License-Identifier: BSD-3-Clause
 
+load("//build:checks.bzl", "volya_checks")
+
 # The web app's target (wasm32-unknown-unknown).
 platform(
     name = "wasm32",
@@ -10,3 +12,5 @@ platform(
     ],
     visibility = ["//visibility:public"],
 )
+
+volya_checks(wasm = False)

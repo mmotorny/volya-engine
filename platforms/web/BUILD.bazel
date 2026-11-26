@@ -1,16 +1,18 @@
 # SPDX-FileCopyrightText: 2026 Maksym Motorny
 # SPDX-License-Identifier: BSD-3-Clause
 
-load("@crates//:defs.bzl", "aliases", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_shared_library")
+load("//build:checks.bzl", "volya_checks")
 load("//build:rust.bzl", "LINTS")
 load("//build:web.bzl", "next_site", "web_site")
+load("@crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_shared_library")
 
 package(default_visibility = ["//visibility:public"])
 
 exports_files(["Cargo.toml"])
 
-# The engine for the browser (wasm32 only; the sites below build it).
+# The engine for the browser (empty natively; the sites below build it for
+# wasm32).
 rust_shared_library(
     name = "volya-engine-web",
     srcs = glob(["src/**/*.rs"]),
@@ -22,7 +24,6 @@ rust_shared_library(
     crate_name = "volya_engine_web",
     proc_macro_deps = all_crate_deps(proc_macro = True),
     rustc_flags = LINTS,
-    target_compatible_with = ["@platforms//cpu:wasm32"],
     deps = all_crate_deps(normal = True) + [
         "//crates/volya-engine",
         "//crates/volya-engine-formats",
@@ -64,3 +65,5 @@ next_site(
     site = ":site_test",
     static = STATIC,
 )
+
+volya_checks()

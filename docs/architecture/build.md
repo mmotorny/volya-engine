@@ -49,14 +49,15 @@ Both stay as they are, run by `cargo_build_script`:
 
 ## Static checks
 
-Tests in `//:checks` (a `test_suite`), cached like any test:
+Tests in `//:checks` (a `test_suite`), cached like any test. Every package's `BUILD.bazel` ends with `volya_checks()` (`build/checks.bzl`), which makes its `fmt`, `clippy`, `clippy_wasm` and `all_files` from the Rust targets it declares, and the root's `PACKAGES` lists every package: a new package adds both.
 
 | Check | Target |
 |---|---|
-| Format | `rustfmt_test` over every Rust target |
-| Clippy, native and wasm | the `rust_clippy` rule (`-D warnings`) per crate and platform, wrapped in `build_test` |
-| SPDX headers | `//:spdx_test`, a Rust test over `//:all_files` (each package's `all_files` filegroup; a package without one fails the check, by a `bazel query` in the test's generator) |
-| Licences | `//:licenses_test`: cargo-deny over Cargo.toml, Cargo.lock and `deny.toml`, `no-sandbox` and `requires-network` (it reads the crates' metadata), cached on those three files |
+| Format | `<package>:fmt`, rules_rust's `rustfmt_test` over the package's Rust targets |
+| Clippy, native and wasm | `<package>:clippy` and `:clippy_wasm`, `rust_clippy_test` (the second on `//build/platforms:wasm32`), failing on warnings (`clippy_flags=-Dwarnings` in `.bazelrc`) |
+| SPDX headers | `//build:spdx`, a Rust test over `//:all_files` (the root's files and every package's) in its runfiles |
+| Pins | `//build:pins`: MODULE.bazel's wasm-bindgen CLI equals Cargo.lock's crate |
+| Licences | `//build:licenses`: cargo-deny's licences, bans and sources over the workspace in its runfiles, with the toolchain's cargo; `no-sandbox` and `requires-network` (it reads the crates' metadata). cargo-deny is installed on the machine (`@local_tools`, its version an input). Advisories are left to `update`: they change with the day, not with an input. |
 | Spec drafts | `bazel run //tools/xtask -- spec-lint <paths>` stays a command: its inputs are drafts outside the repository |
 
 ## Native tests

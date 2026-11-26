@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Maksym Motorny
 # SPDX-License-Identifier: BSD-3-Clause
 
+load("//build:checks.bzl", "volya_checks")
 load("//build:rust.bzl", "volya_integration_tests", "volya_library")
 
 package(default_visibility = ["//visibility:public"])
@@ -31,3 +32,5 @@ volya_integration_tests(
         "//crates/volya-engine-installer",
     ],
 )
+
+volya_checks()
