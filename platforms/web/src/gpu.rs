@@ -105,9 +105,9 @@ fn watch_context_loss(canvas: &OffscreenCanvas) {
     lost.forget();
 }
 
-/// Makes the canvas's WebGL 2 context before wgpu asks for it, without a
-/// depth or stencil buffer: wgpu draws into textures of its own and blits
-/// the surface's into the default framebuffer, whose depth buffer (a
+/// Makes the canvas's WebGL 2 context, before wgpu asks for it, without a
+/// depth or stencil buffer: the renderer draws into textures of its own and
+/// blits its frame into the default framebuffer, whose depth buffer (a
 /// canvas-size renderbuffer by default, Depth32Float on Metal: 15 MB at
 /// 2868 × 1320) nothing reads (#443). A canvas gives the same context to a
 /// later `getContext` of its kind, ignoring the attributes then asked for
@@ -269,10 +269,9 @@ const RECENT_FRAMES: usize = 60;
 const WORK_DONE_TIMEOUT_MS: f64 = 30_000.0;
 
 /// Resolves once the browser reports the GPU done with all work submitted
-/// so far (wgpu's fences, checked by polling the device each task turn,
-/// which also frees the staging of the finished submissions, #440), or
-/// after
-/// [`WORK_DONE_TIMEOUT_MS`]; at once without graphics.
+/// so far (fences, checked by polling the device each task turn, which on
+/// wgpu also frees the staging of the finished submissions, #440), or
+/// after [`WORK_DONE_TIMEOUT_MS`]; at once without graphics.
 pub async fn submitted_work_done() -> Result<(), JsValue> {
     use std::sync::atomic::{AtomicBool, Ordering};
     let done = Arc::new(AtomicBool::new(false));
@@ -511,15 +510,16 @@ pub fn gl_calls(on: bool) -> Result<serde_json::Value, JsValue> {
 /// presents if anything changed.
 pub fn frame(time: f64) {
     let _ = with_gpu(|gpu| {
-        // wgpu's GL backend runs buffer-mapping callbacks (captures) and
-        // frees finished uploads only when polled.
+        // Callbacks waiting on fences run (wgpu's GL backend's, its
+        // buffer mappings and finished uploads, only when polled).
         tracing::info_span!("render.poll").in_scope(|| gpu.device.poll());
         // A world drawn ahead of its level (`warm_up`) is held only while
         // the loading waits for it.
         if crate::engine::world_to_prepare().is_none() {
             gpu.presenter.hold_world(None);
         }
-        let canvas = Resolution::new(gpu.device.size().0, gpu.device.size().1);
+        let (width, height) = gpu.device.size();
+        let canvas = Resolution::new(width, height);
         // The game draws at its video mode (#49), within the GPU's limit.
         let max = gpu.device.max_texture_size();
         let resolution = crate::engine::render_size().map_or(canvas, |r| {
@@ -586,7 +586,7 @@ pub fn frame(time: f64) {
 impl Gpu {
     /// The diagnostic log's GPU times (#355), while it is on: the time
     /// from a frame's submission until the GPU is done with all work
-    /// submitted so far (`gpu.done_ms`; wgpu checks its fences when polled,
+    /// submitted so far (`gpu.done_ms`; the fences are checked when polled,
     /// once a frame, so it is rounded up to frames).
     fn gpu_times(&mut self) {
         if !crate::diagnostics::on() {

@@ -22,6 +22,8 @@ Add a browser suite by creating `tests/browser/<suite>.js` exporting `tests` (na
 
 `VOLYA_DUMP_DIR=<dir>` keeps the frames suites dump, the browser's `VOLYA_DUMP_*`: `dump(name, capture)` (`harness.js`) encodes a `debug_capture` as PNG on the page and posts it to the dev server (`cargo xtask e2e` or `volya-engine-devserver`), which writes it to `<dir>/<suite>/<name>.png` (keep it outside the repository); without the variable nothing is encoded. Suites that draw game data (`KEPT_PROFILE` in `tools/xtask/src/e2e.rs`) run in Chrome with a profile kept in `target/chrome-profile/`, served on the port it last had (storage belongs to an origin), and import only what its storage lacks, so the game is imported once; delete the directory to import afresh. The `import` and `menu` suites keep fresh profiles, as they test the import.
 
+`VOLYA_RENDERER=gl` makes the web builds of `cargo xtask` (`e2e` among them) draw with the direct WebGL 2 renderer (`volya-engine-web`'s `gl` feature; rendering.md, Design: direct WebGL 2) instead of wgpu's.
+
 `VOLYA_SIM_MEDIA=<dir>` makes `cargo xtask e2e` record each iphone suite (H.264) and screenshot its end into that directory (keep it outside the repository); `cargo xtask simshot [path]` takes a screenshot of the test simulator and `cargo xtask simrec <path> <seconds>` records it.
 
 ### Shared conformance checks

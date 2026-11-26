@@ -35,7 +35,6 @@ mod gl_device {
 
     use volya_engine::render::gl::{Fence, Gl};
     use volya_engine::render::{Color, Destination, DrawList, Renderer};
-    use wasm_bindgen::JsCast;
     use web_sys::OffscreenCanvas;
 
     /// What a frame is drawn into: the canvas, at its size then.
@@ -144,7 +143,9 @@ mod gl_device {
 
         /// Loses the context (`debug_lose_device`): `webglcontextlost`
         /// follows.
+        #[cfg(feature = "test-ops")]
         pub(in crate::gpu) fn lose(&self) -> Result<(), String> {
+            use wasm_bindgen::JsCast;
             let ext = self
                 .gl
                 .context()
@@ -390,6 +391,7 @@ mod wgpu_device {
         }
 
         /// Destroys the device (`debug_lose_device`), as a lost one.
+        #[cfg(feature = "test-ops")]
         pub(in crate::gpu) fn lose(&self) -> Result<(), String> {
             self.device.destroy();
             Ok(())

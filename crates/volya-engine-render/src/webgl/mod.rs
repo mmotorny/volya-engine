@@ -609,7 +609,7 @@ impl Renderer {
     }
 
     /// Whether frames can be timed on the GPU: not yet with WebGL 2
-    /// (`EXT_disjoint_timer_query_webgl2`, #482).
+    /// (`EXT_disjoint_timer_query_webgl2`, #493).
     pub fn can_time_gpu(&self) -> bool {
         false
     }
