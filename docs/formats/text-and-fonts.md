@@ -556,6 +556,21 @@ Fractional screen positions are resampled (section 4.4); they are shown to three
 | 800 × 600 | 4 | 1600 × 1200 | 13.44 | x 570.5–651.5, y 333.5–354.5 | x 546.5–675.5, y 451–472 | x 11.5–77.5, y 578–595 |
 | 1280 × 720 | 1 | 1280 × 720 | 23.467 | x 935–1020, y 395–417 | x 908–1046, y 536–558 | x 18–97, y 693–712 |
 
+**The selected caption.** The selected item's caption is laid out and drawn exactly like the others:
+same font `graffiti22`, glyph size, colour and placement; nothing in the text drawing depends on the
+selection. On the screen it is seen through the glass lens of the title-menu specification
+(`docs/behavior/title-menu.md` 4.6), which magnifies the menu picture under the glass about 1.45 times
+across and 1.65 times down near its centre. The positions in the table are those of the drawn text,
+before the lens; for the selected item they are not where it is seen. Examples (item 0 selected, the
+bar at rest; extents where the glyph coverage is at least 0.5, from the model of title-menu 4.6,
+fitted to the frames of the runs above) [GL-11, GL-13 of title-menu 4.6]:
+
+| Resolution | *s* | `Новая игра` seen through the lens | the same without the lens |
+|---|---|---|---|
+| 1920 × 1080 | 4 | x 1364 … 1527, y 605 … 633 (164 × 29) | x 1407 … 1524, y 607 … 627 (118 × 21) |
+| 1024 × 768 | 1 | x 717 … 830, y 424 … 445 (114 × 22) | x 741 … 823, y 427 … 441 (83 × 15) |
+| 1024 × 768 | 2 | x 716 … 829, y 427 … 448 (114 × 22) | x 740 … 822, y 429 … 443 (83 × 15) |
+
 Textures: `_1600` at 1920 × 1080 and 1280 × 1024 (*f* = 32 for `graffiti22`, 30 for `graffiti19`),
 `_1024` at 1024 × 768 and 1280 × 720 (22, 19), `_800` at 800 × 600 (21, 17). Widths: `Новая игра`
 122 / 85 / 81, `Выйти в Windows` 195 / 138 / 129, `ver. 1.0006` 115 / 79 / 66 (same order) [VC-8].
@@ -666,6 +681,12 @@ Derivation at 1024 × 768, *s* = 4: target 2048 × 1536, *s*ᵧ = 2, *t* = 22 / 
   - 5: glyph boxes per `r__supersample` (1, 2, 4) at 1920 × 1080, 1280 × 1024, 1024 × 768, 800 × 600
     (and 1280 × 720 at 1); the *s* = 1 rows equal the previous table.
 
+- **Revision 2026-11-26** (the selected caption, issue 571; same edition). Section 5: the selected
+  caption is drawn like the others and magnified on the screen by the title menu's glass lens
+  (`docs/behavior/title-menu.md` 4.6, where the evidence is: static analysis of the game library and the
+  static-lighting renderer, the lens texture, and the issue-570 black-box frames). Checks [GL-n]:
+  `magn/checks/run.py` in the dirty workspace.
+
 ## Gaps found in review
 
-- Caption placement at `r__supersample` 1 on a screen wider or taller than 2048 pixels, where the off-screen target is smaller than the screen, and whether title-screen frames at `r__supersample` 1 go through the target, were not examined.
+- Caption placement at `r__supersample` 1 on a screen wider or taller than 2048 pixels, where the off-screen target is smaller than the screen, was not examined (title-screen frames at `r__supersample` 1 go through the target while the menu asks for the post-process, `docs/behavior/title-menu.md` 4.6).

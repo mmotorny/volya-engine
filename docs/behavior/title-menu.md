@@ -23,8 +23,10 @@ archive holding it is noted in section 12. Text files are Windows-1251.
   x to the right and y downward. The menu window covers the whole space (0, 0, 1024, 768).
 - **Selection widget.** The menu items are rows of plain black text drawn on metal slats painted into
   the background. The current item is marked by a sliding metal bar with a translucent glass window
-  (flanked by two cog wheels that turn as the bar slides). There is no per-item hover, pressed or
-  disabled visual; all feedback is the bar's position.
+  (flanked by two cog wheels that turn as the bar slides). The glass window is also a **lens**: it
+  magnifies whatever lies under it, so the selected caption appears larger than the others (section
+  4.6). There is no per-item hover, pressed or disabled visual; all feedback is the bar's position and
+  the lens that moves with it.
 - **Audio.** One music track (a stereo pair of mono files) plays while the menu is open. The data
   configures no interface sounds for the menu.
 
@@ -157,8 +159,10 @@ Checks (dirty workspace): `titlever/scripts/check.py` (the binaries and the scri
    texture is an opaque metal frame with a translucent, whitish, cracked glass window occupying about
    bar pixels x 80–311, y 21–55 (alpha about 18–45 %); the caption under the glass shows through it.
    The bar has these children (positions relative to the bar, drawn in this order):
-   - `magnifire` (76, 22, 232 × 36), texture `ui\ui_magnifier`: **invisible**. It is never drawn; it
-     only defines the click area (section 4.4). It coincides with the glass window.
+   - `magnifire` (76, 22, 232 × 36), texture `ui\ui_magnifier`, `stretch="1"`: **hidden** in the menu
+     picture: it is never drawn with the bar. It defines the click area (section 4.4) and the
+     **lens** (section 4.6), whose picture is drawn only into the distortion target. It coincides
+     with the glass window.
    - `left_grating` (0, 4, 55 × 67), texture `ui_menu_grating_l`, no stretching (drawn at the region's
      own 46 × 70 size from the window's top-left).
    - `right_grating` (337, 4, 55 × 67), texture `ui_menu_grating_r`.
@@ -245,7 +249,7 @@ Exactly one item is selected. Selecting item *i* starts a **move** of the bar:
 - **Target.** The bar's y (relative to `shniaga_wnd`) moves to
   *y₁* = (row y of item *i*) − (y of `magnifire` within the bar) + `y_offset` = 30·*i* − 22.
   The glass window then covers absolute y 418 + 30·*i* … 452 + 30·*i*, i.e. the selected caption.
-  Absolute bar position: (599, 397 + 30·*i*).
+  Absolute bar position: (599, 397 + 30·*i*). The lens (section 4.6) moves with the bar.
 - **Duration.** With *d* = |*y₁* − *y₀*| (*y₀* = bar y when the move starts) and *H* = 280 (the height
   of `shniaga_wnd`): *T* = round(1000 · ln(*d* + 1) / ln(*H*)) milliseconds, but at least 100 ms.
   Examples: *d* = 22 → 556 ms, 30 → 609 ms, 60 → 730 ms, 90 → 801 ms, 120 → 851 ms, 150 → 890 ms,
@@ -318,9 +322,120 @@ the item names; the list widget delivers a "button clicked" event carrying the i
 item except `btn_new_game` and `btn_new_back`, which it handles itself.
 
 When a sub-screen (load, save, options, multiplayer) is opened, the title menu window is closed, and
-its click area is disabled (the invisible glass area is moved off-screen to x = 1025). When the
-sub-screen returns, the menu window is reopened and the click area restored; the list, the selection
+its click area is disabled (the hidden glass area is moved off-screen to x = 1025) and the lens is
+switched off (section 4.6). When the sub-screen returns, the menu window is reopened and the click
+area and the lens restored; the list, the selection
 and the bar position are kept (the menu screen is not rebuilt).
+
+### 4.6 The glass lens
+
+The selected caption is not drawn in another font, size or colour: every caption is drawn as in
+section 4.2 (`graffiti22`, opaque black). It looks larger because the glass window is a **lens**: a
+screen-space distortion that magnifies whatever the menu has drawn under the window, the caption
+together with the glass and slats behind it [GL-1 … GL-11].
+
+**Where the lens comes from.** The `magnifire` window (section 4) is a child of the bar and moves with
+it. It is hidden, so it never appears in the menu picture, and it is on the main menu's list of windows
+that are drawn into the **distortion target** instead [GL-1, GL-3]. Its picture `textures\ui\ui_magnifier.dds`
+is not an image but an offset map (below). No other window is on that list: the script function that
+would add one (`SetPPMode`, listed in `scripts\lua_help.script`) is called by no shipped script [GL-8].
+
+**When the lens is active.** The main menu asks for the post-process (`docs/behavior/frame-presentation.md`,
+here FP, section 2.5) while it is shown and its **lens flag** is set [GL-2]. Opening the menu sets the flag
+[GL-7]. The menu's script (`scripts\ui_main_menu.script`, its `Show` function, which calls
+`SetVisibleMagnifier`) clears it when the load, save, options or multiplayer screen opens (and when the
+spawn dialog opens) and sets it again when that screen returns; clearing it also moves the `magnifire`
+window to x = 1025 (off the screen; see section 4.5), setting it puts the window back at its layout x
+[GL-6, GL-8]. Nothing else changes the flag [GL-7]. Message boxes (quit and last-save confirmation)
+leave it set, so the lens stays while they are shown [GL-8]. While the flag is set and distortion is
+available (`docs/behavior/particle-drawing.md`, here PD, section 6.1: pixel shaders 1.4, no `-nodistort`),
+every frame goes through the off-screen target (FP 2.4, 3.1) and the distortion pass runs (FP 3.1 step 3);
+without distortion there is no lens.
+
+**Drawing the offset map.** In the distortion pass (PD 6.2) the distortion target, *W*ₜ × *H*ₜ (the
+off-screen target's size, FP 1.1–1.2), is cleared to (127, 127, 127, 127) / 255; the world's distortion
+list is not drawn; then the `magnifire` picture is drawn into it [GL-4]:
+
+- with the main menu's layout factors of the target, *s*ₓ = *W*ₜ / 1024, *s*ᵧ = *H*ₜ / 768 (as for the
+  menu itself, `docs/formats/text-and-fonts.md` 4.4) [GL-2];
+- as any layout picture (`docs/formats/ui-layout.md` 5.3, 8): `stretch="1"`, so 232 × 36 units at the
+  window's absolute top-left (*X*, *Y*) = (675, 419 + *b* + 22), *b* being the bar's y within
+  `shniaga_wnd` (section 4.3), which is (675, 419 + 30·*i*) for the selected item *i* when the bar is at
+  rest. Quad from (floor(*X*·*s*ₓ) − 0.5, floor(*Y*·*s*ᵧ) − 0.5) to that point plus (232·*s*ₓ, 36·*s*ᵧ)
+  target pixels, texture coordinates (0, 0) to (1, 1) of the whole 256 × 32 texture, shader `hud\default`
+  (bilinear, clamped; white vertex colour) [GL-5, GL-9]. The texture is opaque (alpha 255 everywhere), so
+  inside the quad the target holds the filtered texel, written as 8-bit values like any colour.
+
+The texture (`gamedata.db8`, 256 × 32, uncompressed 32-bit ARGB, one level) has blue = alpha = 255
+everywhere; red and green are the offsets [GL-10]:
+
+- a border 3 texels wide is neutral (127 or 128 in red, 126 or 127 in green);
+- in columns 3 … 252, rows 3 … 28, red falls from left to right and is nearly constant down each column
+  (within 2): 253 at column 3, at least 253 to column 20, then 235 (64), 201 (96), 158 (128), 110 (160),
+  64 (192), 26 (224), 11 (240), 2 (252) (column means over the rows);
+- green falls from top to bottom and is nearly constant along each row (within 5): 150 at row 3, 139 (8),
+  128 (13), 125 (14), 113 (18), 99 (23), 91 (28) (row means over the columns).
+
+An implementation uses the texture itself; these values are only a description.
+
+**Composition.** The frame is presented with `postprocess_d` (FP 3.1 step 5, 3.4; PD 6.3): a screen pixel
+whose scene coordinate is **t** shows the scene, i.e. the menu as drawn into the target, at
+**t** + **o**, with **o** = (*D*.r − 0.5, *D*.g − 0.5) · 0.05 and *D* the distortion target sampled
+bilinearly at **t**. So a pixel near the glass's left edge (red ≈ 1) shows what lies 0.025 · *W* screen pixels
+to its right, one near the right edge (red ≈ 0) what lies 0.025 · *W* to its left, one near the top
+(green ≈ 0.59) what lies about 0.0044 · *H* below, one near the bottom (green ≈ 0.36) what lies
+about 0.0072 · *H* above: the picture under the glass is spread outwards, i.e. magnified, about 1.45 times
+across and 1.65 times down near the centre, and shifted slightly right (red 158 at the centre column).
+Outside the quad the cleared value gives an offset of about −0.0001 (negligible, PD 6.3). The lens
+samples the whole menu picture there: the caption, the glass and grating of the bar, the slats.
+
+**Timing.** The `magnifire` window's position is derived from the bar's each frame, and the distortion
+target is drawn in the same frame as the menu [GL-1, GL-4]. So the lens is always exactly at the glass:
+there is no separate animation, fade or scale change on selection. When the selection changes the lens
+slides with the bar (section 4.3): the old caption returns to its normal look as the
+glass leaves it, the new one is magnified as the glass arrives, and a caption that the glass only
+partly covers is distorted only where it is covered. The lens has the same strength at every position;
+the offsets do not change over time.
+
+**Measured** (black-box frames of the unmodified game at the title menu, item 0 selected, bar at rest,
+at 1920 × 1080, 1280 × 1024, 1024 × 768 and 800 × 600 with `r__supersample` 1 and 4, and 1920 × 1080
+with 2): the selected caption's appearance is reproduced by this model, with the caption laid out as in
+`docs/formats/text-and-fonts.md` sections 4.4 and 5 and the menu frame resampled as in FP 3.5. Fitting
+the frame's darkness under the glass to the model's caption coverage (per-row offsets plus one ink
+factor) explains 35 – 49 % of the variance (the glass and slats behind the caption are not modelled), against at most 19 % with
+the offsets scaled by 0.8, 0.9, 1.1 or 1.2 and under 1 % without the lens; in three of the runs, finer scaling (±2 %, ±4 %)
+and whole-pixel shifts of up to 2 pixels do not fit better by more than 0.01 [GL-11, GL-12].
+
+**Worked examples** (item 0 `Новая игра` selected, bar at rest, *b* = −22; pixel centres at whole
+numbers as in FP; coverage ≥ 0.5 extents of the caption computed with the model) [GL-13]:
+
+- **1920 × 1080, `r__supersample` 4.** Target 2048 × 2048, *s*ₓ = 2, *s*ᵧ = 2.6667. Lens quad on the
+  distortion target: floor(675 · 2) = 1350, floor(419 · 2.6667) = 1117, from (1349.5, 1116.5), 464 × 96 target
+  pixels. Distortion values on target row 1164 (lens centre): (128, 126) at x 1352, (235, 120) at 1466,
+  (158, 121) at 1581, (65, 120) at 1697, (127, 126) at 1810. On screen row 614 the offsets, in screen
+  pixels, are (+47.3, −1.6) at x 1274, (+48.0, −1.6) at 1309, (+40.5, −1.6) at 1374, (+11.3, −1.6) at
+  1483, (−23.7, −1.6) at 1591, (−40.8, −1.6) at 1657, (−46.6, −1.6) at 1691; down screen column 1482
+  the vertical offsets are −0.3 (y 591, outside the active rows), +4.8 (595), +2.0 (604), −1.6 (614),
+  −5.4 (624), −7.7 (633), −0.3 (637). The caption covers x 1364 … 1527, y 605 … 633 (164 × 29 pixels)
+  instead of x 1407 … 1524, y 607 … 627 (118 × 21) without the lens.
+- **1024 × 768, `r__supersample` 1.** Target 1024 × 768 (the frame goes through it because the menu asks
+  for the post-process), *s*ₓ = *s*ᵧ = 1. Lens quad (674.5, 418.5)–(906.5, 454.5). Distortion values on row
+  436: (160, 125) at x 677 (edge texel blended with the border), (253, 122) at 678, (235, 121) at 733,
+  (158, 122) at 790, (65, 121) at 848, (3, 121) at 903. Offsets on row 436: (+25.20, −0.98) at x 679,
+  (+25.60, −0.98) at 698, (+21.79, −0.98) at 732, (+6.12, −0.83) at 790, (−12.55, −0.98) at 848,
+  (−21.58, −0.98) at 883, (−25.00, −0.98) at 902; down column 790: −0.23 (y 420), +3.39 (423), +1.58
+  (429), −0.83 (436), −3.84 (444), −5.50 (450), −0.23 (453). Pixel (790, 436) therefore shows the menu at
+  (796.12, 435.17). The caption covers x 717 … 830, y 424 … 445 (114 × 22) instead of x 741 … 823,
+  y 427 … 441 (83 × 15).
+- **1024 × 768, `r__supersample` 2** (the shipped setting). Target 1448 × 1086, lens quad from
+  (953.5, 591.5), 328.06 × 50.91 target pixels; the offsets in screen pixels are within 0.5 of the
+  `r__supersample` 1 values at the same places (they are fractions of the screen); the caption covers x 716 … 829,
+  y 427 … 448.
+
+**Not established:** whether the cursor, drawn after the menu (section 7), passes through the lens; the
+lens's look while the credits sequence runs over the menu (section 4.5); the in-game menu (section 4.1),
+**believed** the same, since the lens does not depend on a level. With distortion available but the
+target unusable (FP 1.2), the lens would be drawn but not shown (PD 6.3).
 
 ## 5. Fonts and strings
 
@@ -431,6 +546,7 @@ The `menu_sound` element of `ui_mm_main.xml` configures the menu's audio:
 | Sky panorama video | continuous loop, 4.583 s period |
 | Fire video | continuous loop, 3.576 s period |
 | Sliding bar | logarithmic-ease moves on selection (section 4.3) |
+| Lens | fixed to the glass window, moves with the bar; no animation of its own (section 4.6) |
 | Cog wheels | rotate with bar travel only |
 | Cursor | 8-frame loop at 19 fps |
 
@@ -458,7 +574,8 @@ No fades or other transitions were found when the menu opens or closes, when the
 
 - `textures\ui\ui_btn_mm_*.dds`, `ui_mm_window_back_crop.ogm`, `ui_mm_rug02.ogm`,
   `ui_mm_newspaper.ogm`, `ui_vid_back_0N.ogm` are referenced by other screens, not by the title menu.
-- `textures\ui\ui_magnifier.dds` (256 × 32 colour gradient) is loaded for `magnifire` but never shown.
+- `textures\ui\ui_magnifier.dds` (256 × 32) is never shown as a picture: it is the lens's offset map
+  (section 4.6).
 - Older copies of `config\ui\ui_mm_main.xml` (in `gamedata.db0`, `gamedata.dba`) and of
   `scripts\ui_main_menu.script` (in `gamedata.db4`, `gamedata.dba`) are overridden by the
   `gamedata.dbb` copies described here; the older layout lacks `menu_main_last_save`,
@@ -516,6 +633,15 @@ and extracting its alpha shows the transparent sky region and the bar's transluc
   text specification (sections 4.2, 4.4, 5), from black-box runs of the unmodified game at four
   resolutions with `r__supersample` 1, 2 and 4 and from static analysis; checks `[VC-n]` are in
   `vcentre/checks/` of the dirty workspace.
+- Targeted fix (issue 571, 2026-11-26): section 4.6 (the lens) added; sections 1, 4, 4.3, 9 and 11
+  revised for it. Static analysis with Ghidra (headless, instruction listings of `xrGame.dll` and
+  `xrRender_R1.dll`) of the list widget's construction, the main menu's post-process drawing and its
+  list of windows, the window and static drawing, the magnifier's visibility switch, the menu
+  activation, and the renderer's distortion pass; reading of `config\ui\ui_mm_main.xml`, all game
+  scripts, and `textures\ui\ui_magnifier.dds`; the model fitted to the selected caption in black-box
+  frames of the unmodified game (the runs of the issue-570 fix: 1920 × 1080, 1280 × 1024, 1024 × 768,
+  800 × 600 with `r__supersample` 1 and 4, and 1920 × 1080 with 2). Checks `[GL-n]` are in
+  `magn/checks/run.py` of the dirty workspace.
 - Not established: cursor draw scaling,
   the screen direction of positive rotation, configurability of cursor sensitivity, whether the
   unmodified install loads `mods\`.
