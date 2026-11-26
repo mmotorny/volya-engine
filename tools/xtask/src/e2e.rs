@@ -35,7 +35,11 @@ const SUITES: &[&str] = &[
     "game-input",
     "game-screens",
     "game-memory",
+    "fidelity",
 ];
+/// Suites only desktop Chrome runs: fidelity against the original is
+/// judged there (docs/testing.md).
+const CHROME_ONLY: &[&str] = &["fidelity"];
 const TARGETS: &[&str] = &["chrome", "iphone"];
 /// Suites run in Chrome with the profile kept under `target/`, so the game
 /// data they read is imported once (they import only what the profile's
@@ -49,6 +53,7 @@ const KEPT_PROFILE: &[&str] = &[
     "game-input",
     "game-screens",
     "game-memory",
+    "fidelity",
 ];
 const REPORT_TIMEOUT: Duration = Duration::from_secs(60);
 /// Suites importing gigabytes from the installer get longer (the audio
@@ -67,6 +72,7 @@ const SLOW_SUITES: &[(&str, Duration)] = &[
     ("render-screens", Duration::from_secs(1500)),
     ("render-level", Duration::from_secs(1500)),
     ("draw-calls", Duration::from_secs(1500)),
+    ("fidelity", Duration::from_secs(1500)),
     ("audio", Duration::from_secs(240)),
 ];
 
@@ -150,7 +156,21 @@ pub fn run(args: &[&str]) -> Result {
     let mut failures = Vec::new();
     for &target in &targets {
         for &suite in &suites {
+            if target != "chrome" && CHROME_ONLY.contains(&suite) {
+                continue;
+            }
             step(&format!("Browser suite {suite} on {target}"));
+            // The fidelity suite compares with the original's frames
+            // (`cargo xtask original views`), the others with
+            // VOLYA_COMPARE_DIR's.
+            let references = if suite == "fidelity" {
+                original_frames()?
+            } else {
+                std::env::var_os("VOLYA_COMPARE_DIR").map(PathBuf::from)
+            };
+            server
+                .set_references(references.as_deref())
+                .map_err(|e| format!("dev server: {e}"))?;
             let id = run_id(target, suite);
             let url = format!("http://localhost:{port}{BASE}__test/run/{id}/{suite}.html");
             let outcome = match target {
@@ -191,6 +211,15 @@ pub fn run(args: &[&str]) -> Result {
     } else {
         Err(format!("failed:\n  {}", failures.join("\n  ")))
     }
+}
+
+/// The original's frames the fidelity suite compares with, where
+/// VOLYA_GOG_INSTALLER names the installer.
+fn original_frames() -> Result<Option<PathBuf>> {
+    if std::env::var_os("VOLYA_GOG_INSTALLER").is_none() {
+        return Ok(None);
+    }
+    crate::original::references(&crate::original::cache()?).map(Some)
 }
 
 /// The kept Chrome profile's directory (see [`KEPT_PROFILE`]).

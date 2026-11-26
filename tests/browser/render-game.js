@@ -7,7 +7,8 @@
 // suite's render checks (`volya_engine::selftest`, through
 // `render_game_selftest`), each a test, its kept frames dumped
 // (`VOLYA_DUMP_DIR`) and those it asks for compared with an earlier run's
-// (`VOLYA_COMPARE_DIR`).
+// (`VOLYA_COMPARE_DIR`), or handed to the suite's own comparison
+// (`fidelity.js`).
 
 import { dump, keepsDumps, skip } from "./harness.js";
 
@@ -27,7 +28,7 @@ function comparesFrames() {
 }
 
 /** The earlier run's RGBA of frame `name` of `suite`, or null. */
-async function reference(suite, name) {
+export async function reference(suite, name) {
   const response = await fetch(`${testBase()}reference/${suite}/${name}.png`);
   if (!response.ok) return null;
   const options = { colorSpaceConversion: "none", premultiplyAlpha: "none" };
@@ -51,8 +52,12 @@ function differingPixels(frame, rgba, before) {
 
 let imported = false;
 
-/** The tests of render suite `suite`. */
-export async function gameChecks(suite) {
+/**
+ * The tests of render suite `suite`. With `compare`, every check keeps its
+ * frames and each is handed to `compare(frame)` (`{ name, width, height,
+ * rgba }`, opaque), whose note joins the test's.
+ */
+export async function gameChecks(suite, compare = null) {
   const checks = await volya.call("render_game_selftest", { suite });
   const tests = {
     "imports the game": async () => {
@@ -75,11 +80,12 @@ export async function gameChecks(suite) {
   for (const check of checks) {
     tests[check] = async () => {
       if (!imported) skip("the game isn't imported");
-      const compare = await comparesFrames();
-      const frames = compare || (await keepsDumps());
+      const comparing = await comparesFrames();
+      const frames = Boolean(compare) || comparing || (await keepsDumps());
       const result = await volya.call("render_game_selftest", { check, frames });
       const compared = [];
       const differing = [];
+      const notes = [];
       for (const frame of result.frames ?? []) {
         const text = atob(frame.rgba_base64);
         const rgba = new Uint8Array(text.length);
@@ -89,11 +95,15 @@ export async function gameChecks(suite) {
         // colour would not survive the PNG's round trip (#495).
         for (let i = 3; i < rgba.length; i += 4) rgba[i] = 255;
         await dump(frame.name, { width: frame.width, height: frame.height, rgba });
+        if (compare) {
+          notes.push(await compare({ name: frame.name, width: frame.width, height: frame.height, rgba }));
+          continue;
+        }
         // The parity suite holds every frame (#478, #495) but those whose
         // check says they don't repeat; the others, those their checks ask
         // for.
         const held = frame.compare ?? suite === "parity";
-        if (!compare || (frame.compare == null && suite !== "parity")) continue;
+        if (!comparing || (frame.compare == null && suite !== "parity")) continue;
         const before = await reference(suite, frame.name);
         if (!before) continue;
         const differ = differingPixels(frame, rgba, before);
@@ -102,6 +112,7 @@ export async function gameChecks(suite) {
       }
       if (differing.length) throw new Error(`against the earlier run's frames: ${differing.join("; ")}`);
       if (result.skip) skip(result.skip);
+      if (notes.length) return [result.note, ...notes].join("; ");
       if (!compared.length) return result.note;
       return `${result.note}; pixels differing from the earlier run's: ${compared.join(", ")}`;
     };

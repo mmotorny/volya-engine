@@ -946,6 +946,7 @@ pub async fn render_game_selftest(
         }
     };
     let context = Context::new(tree.tree(), &make, frames)
+        .with_root(tree.root())
         .with_gl_calls(&count)
         .with_heap(&heap);
     let outcome = selftest::run(check, &context).await;

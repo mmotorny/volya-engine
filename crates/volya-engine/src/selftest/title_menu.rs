@@ -33,7 +33,7 @@ pub const CHECKS: &[(&str, Run)] = &[
 
 const XGA: Resolution = Resolution::new(1024, 768);
 
-fn key(input: &mut Input, key: Key) {
+pub(super) fn key(input: &mut Input, key: Key) {
     input.handle(Event::Key { key, pressed: true });
     input.handle(Event::Key {
         key,
@@ -41,7 +41,7 @@ fn key(input: &mut Input, key: Key) {
     });
 }
 
-fn step(app: &mut App, input: &mut Input, t: f64) {
+pub(super) fn step(app: &mut App, input: &mut Input, t: f64) {
     // The startup sequence and the menu read nothing in updates.
     let empty = DbVfs::<std::io::Empty>::new();
     app.update(&empty, t, input, &mut Silent);

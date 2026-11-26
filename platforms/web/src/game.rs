@@ -229,6 +229,11 @@ impl OwnTree {
     pub fn tree(&self) -> &dyn Vfs {
         &self.0.as_ref().expect("open until dropped").tree
     }
+
+    /// The game's root folder.
+    pub fn root(&self) -> &dyn Vfs {
+        self.0.as_ref().expect("open until dropped").opfs
+    }
 }
 
 #[cfg(feature = "test-ops")]

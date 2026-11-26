@@ -20,6 +20,9 @@ use volya_engine_installer::{Installer, extract};
 use crate::wine::{Container, REG32};
 use crate::{Result, step};
 
+mod views;
+pub use views::references;
+
 /// The edition the game-data tests use.
 const LANGUAGE: &str = "ru-RU";
 
@@ -41,14 +44,9 @@ const ARGS: [&str; 5] = [
 
 /// The run's configuration file, in the user-data folder
 /// (steering-the-original.md section 2.2): the shipped `user.ltx` followed by
-/// [`STEERING`], whose lines run after it and so override it.
+/// the views' settings (`views::SETTINGS`, section 3.1), whose lines run
+/// after it and so override it.
 const STEER_LTX: &str = "steer.ltx";
-
-/// Settings for the run (steering-the-original.md section 3.1): full screen
-/// at the display's size, so the whole display is the game's frame; effects
-/// and music silent.
-const STEERING: &str =
-    "rs_fullscreen on\nvid_mode 1024x768\nsnd_volume_eff 0\nsnd_volume_music 0\n";
 
 /// The Wine user (the container runs as root; measured: the prefix's only
 /// user folder is `users/root`).
@@ -71,7 +69,7 @@ const USER_FOLDER: &str = "STALKER-SHOC";
 const INSTALL_IN_CONTAINER: &str = "/work/game";
 const INSTALL_IN_WINDOWS: &str = "Z:\\work\\game";
 
-/// The virtual display, the size the game runs at ([`STEERING`]).
+/// The virtual display, the size the game runs at (`views::WIDTH` × `views::HEIGHT`).
 const SCREEN: &str = "1024x768x24";
 
 /// Seconds between captures.
@@ -87,18 +85,31 @@ const FRAMEBUFFER: &str = "/tmp/fb/Xvfb_screen0";
 const DISPLAY: &str = "99";
 const XAUTHORITY: &str = "/tmp/xauthority";
 
-/// Ends the game with its own `quit` console command, typed with `xdotool`
-/// into the virtual display: the shipped bindings open the console with the
-/// grave key (steering-the-original.md section 2.2).
-const QUIT: &str = "xdotool key grave && sleep 1 && xdotool type quit && xdotool key Return";
-
-/// Seconds the game gets to end after [`QUIT`].
+/// Seconds the game gets to end after its `quit` command.
 const QUIT_WAIT: u64 = 60;
 
-const USAGE: &str = "Usage: cargo xtask original [--quit] [SECONDS]";
+const USAGE: &str = "\
+Usage: cargo xtask original [--new-game] [--quit] [SECONDS]
+       cargo xtask original views [--again] [NAME...]";
 
-/// `cargo xtask original [--quit] [SECONDS]`.
+/// A New Game, as the menu's New Game starts it (steering-the-original.md
+/// section 3.2); `-start` takes the rest of the command line, so it comes
+/// last (section 1.3).
+const NEW_GAME: [&str; 3] = [
+    "-start",
+    "server(all/single/alife/new)",
+    "client(localhost)",
+];
+
+/// `cargo xtask original ...`.
 pub fn main(args: &[&str]) -> Result {
+    if let ["views", rest @ ..] = args {
+        return views::main(rest);
+    }
+    let (new_game, args) = match args {
+        ["--new-game", rest @ ..] => (true, rest),
+        _ => (false, args),
+    };
     let (quit, args) = match args {
         ["--quit", rest @ ..] => (true, rest),
         _ => (false, args),
@@ -108,68 +119,21 @@ pub fn main(args: &[&str]) -> Result {
         [s] => s.parse().map_err(|e| format!("SECONDS: {e}\n{USAGE}"))?,
         _ => return Err(USAGE.into()),
     };
-    let dir = std::env::var_os("VOLYA_GOG_INSTALLER")
-        .ok_or("VOLYA_GOG_INSTALLER must name the folder holding the GOG installer")?;
-    let (exe, bin) = installer_parts(Path::new(&dir))?;
-    let cache = cache_dir(&exe, &bin)?;
-    let install = assemble(&exe, &bin, &cache)?;
-
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| e.to_string())?
-        .as_secs();
-    let run = cache.join("original-runs").join(stamp.to_string());
-    let game = run.join("game");
-    let documents = run.join("documents");
-    let frames = run.join("frames");
-    fs::create_dir_all(&frames).map_err(|e| format!("{}: {e}", frames.display()))?;
-    // A copy-on-write clone (APFS), so what the game writes stays in this run.
-    crate::run(Command::new("cp").arg("-cR").arg(&install).arg(&game))?;
-    add_install(&game, &documents)?;
-    let reg = run.join("install.reg");
-    fs::write(&reg, registry(INSTALL_IN_WINDOWS)).map_err(|e| format!("{}: {e}", reg.display()))?;
-
-    let log_path = run.join("wine.log");
-    let log = File::create(&log_path).map_err(|e| format!("{}: {e}", log_path.display()))?;
-    let err = log.try_clone().map_err(|e| e.to_string())?;
-    // The prefix's Documents folder is the run's `documents/`, so what the
-    // game writes there (logs, settings) lands on the Mac.
-    let tail = format!(
-        "mkdir -p /tmp/fb\n\
-         docs=\"$WINEPREFIX/drive_c/users/{WINE_USER}/Documents\"\n\
-         rm -rf \"$docs\" && ln -s /work/documents \"$docs\"\n\
-         wine '{REG32}' import 'Z:\\work\\install.reg'\n\
-         wineserver -w\n\
-         for view in 32 64; do\n\
-         echo \"Install key, $view-bit view:\"\n\
-         wine reg query '{INSTALL_KEY}' /reg:$view || true\n\
-         done\n\
-         cd {INSTALL_IN_CONTAINER}/{WORKING_DIR}\n\
-         xvfb-run -n {DISPLAY} -f {XAUTHORITY} -s '-screen 0 {SCREEN} -fbdir /tmp/fb' wine \"$@\"\n\
-         echo \"exit code $?\""
-    );
-    let exe = format!("{INSTALL_IN_CONTAINER}/{EXE}");
-    let mut program = vec![exe.as_str()];
-    program.extend(ARGS);
-    step(&format!(
-        "Running {EXE} {} for {seconds} s, captures in {}",
-        ARGS.join(" "),
-        frames.display()
-    ));
-    let mut container = Container::spawn(&run, &tail, &program, log.into(), err.into())?;
-    let start = Instant::now();
+    let install = Install::assemble()?;
+    let extra: &[&str] = if new_game { &NEW_GAME } else { &[] };
+    let mut run = install.start(extra, &[], &format!("for {seconds} s"))?;
     let mut last: Option<Vec<u8>> = None;
     let mut ended = None;
-    while start.elapsed() < Duration::from_secs(seconds) {
+    while run.elapsed() < Duration::from_secs(seconds) {
         thread::sleep(Duration::from_secs(EVERY));
-        if let Some(status) = container.try_wait()? {
+        if let Some(status) = run.container.try_wait()? {
             ended = Some(status);
             break;
         }
-        let at = start.elapsed().as_secs();
-        if let Some(png) = capture(&container) {
+        let at = run.elapsed().as_secs();
+        if let Some(png) = run.capture().map(|(w, h, rgb)| png(w, h, &rgb)) {
             let changed = last.as_ref() != Some(&png);
-            let path = frames.join(format!("{at:04}s.png"));
+            let path = run.frames.join(format!("{at:04}s.png"));
             fs::write(&path, &png).map_err(|e| format!("{}: {e}", path.display()))?;
             println!(
                 "{at:>5} s  {}{}",
@@ -182,30 +146,180 @@ pub fn main(args: &[&str]) -> Result {
         }
     }
     if ended.is_none() {
-        if let Some(png) = capture(&container) {
-            let path = frames.join("final.png");
-            fs::write(&path, &png).map_err(|e| format!("{}: {e}", path.display()))?;
+        if let Some((w, h, rgb)) = run.capture() {
+            let path = run.frames.join("final.png");
+            fs::write(&path, png(w, h, &rgb)).map_err(|e| format!("{}: {e}", path.display()))?;
             println!("final  {}", path.display());
         }
-        save_user_files(&container, &run.join("prefix"));
+        save_user_files(&run.container, &run.dir.join("prefix"));
         if quit {
-            ended = quit_game(&mut container)?;
+            ended = run.quit()?;
         }
     }
-    let elapsed = start.elapsed().as_secs();
-    drop(container);
-    match ended {
-        Some(status) => step(&format!(
-            "The game ended after about {elapsed} s ({status})"
-        )),
-        None => step(&format!("Stopped the game after {elapsed} s")),
-    }
-    println!(
-        "Captures: {}\nWine's log: {}",
-        frames.display(),
-        log_path.display()
-    );
+    run.finish(ended);
     Ok(())
+}
+
+/// The install folder assembled from the user's installer, and the cache
+/// holding it.
+pub struct Install {
+    /// The installer's cache, shared with the game-data tests.
+    pub cache: PathBuf,
+    folder: PathBuf,
+}
+
+impl Install {
+    /// The install folder of `VOLYA_GOG_INSTALLER`'s installer, assembled
+    /// if needed ([`assemble`]).
+    pub fn assemble() -> Result<Self> {
+        let (exe, bin) = installer()?;
+        let cache = cache_dir(&exe, &bin)?;
+        let folder = assemble(&exe, &bin, &cache)?;
+        Ok(Self { cache, folder })
+    }
+
+    /// Starts a run (`<cache>/original-runs/<unix time>/`): the install
+    /// cloned with what the install adds, `demos` (name, bytes) written as
+    /// camera tracks to the saves folder (steering-the-original.md section
+    /// 4.2), and the launch task started with [`ARGS`] and `extra` on the
+    /// virtual display. `what` tells how long it runs, for the log.
+    pub fn start(&self, extra: &[&str], demos: &[(&str, Vec<u8>)], what: &str) -> Result<Run> {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_secs();
+        let dir = self.cache.join("original-runs").join(stamp.to_string());
+        let game = dir.join("game");
+        let documents = dir.join("documents");
+        let frames = dir.join("frames");
+        fs::create_dir_all(&frames).map_err(|e| format!("{}: {e}", frames.display()))?;
+        // A copy-on-write clone (APFS), so what the game writes stays in this
+        // run.
+        crate::run(Command::new("cp").arg("-cR").arg(&self.folder).arg(&game))?;
+        add_install(&game, &documents)?;
+        // The saves folder: `$game_saves$`, `savedgames\` below the user
+        // folder (steering-the-original.md section 2.1).
+        let saves = documents.join(USER_FOLDER).join("savedgames");
+        fs::create_dir_all(&saves).map_err(|e| format!("{}: {e}", saves.display()))?;
+        for (name, bytes) in demos {
+            let path = saves.join(format!("{name}.xrdemo"));
+            fs::write(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        let reg = dir.join("install.reg");
+        fs::write(&reg, registry(INSTALL_IN_WINDOWS))
+            .map_err(|e| format!("{}: {e}", reg.display()))?;
+
+        let log_path = dir.join("wine.log");
+        let log = File::create(&log_path).map_err(|e| format!("{}: {e}", log_path.display()))?;
+        let err = log.try_clone().map_err(|e| e.to_string())?;
+        // The prefix's Documents folder is the run's `documents/`, so what the
+        // game writes there (logs, settings) lands on the Mac.
+        let tail = format!(
+            "mkdir -p /tmp/fb\n\
+             docs=\"$WINEPREFIX/drive_c/users/{WINE_USER}/Documents\"\n\
+             rm -rf \"$docs\" && ln -s /work/documents \"$docs\"\n\
+             wine '{REG32}' import 'Z:\\work\\install.reg'\n\
+             wineserver -w\n\
+             for view in 32 64; do\n\
+             echo \"Install key, $view-bit view:\"\n\
+             wine reg query '{INSTALL_KEY}' /reg:$view || true\n\
+             done\n\
+             cd {INSTALL_IN_CONTAINER}/{WORKING_DIR}\n\
+             xvfb-run -n {DISPLAY} -f {XAUTHORITY} -s '-screen 0 {SCREEN} -fbdir /tmp/fb' wine \"$@\"\n\
+             echo \"exit code $?\""
+        );
+        let exe = format!("{INSTALL_IN_CONTAINER}/{EXE}");
+        let mut program = vec![exe.as_str()];
+        program.extend(ARGS);
+        program.extend(extra);
+        step(&format!(
+            "Running {EXE} {} {what}, captures in {}",
+            program[1..].join(" "),
+            frames.display()
+        ));
+        let container = Container::spawn(&dir, &tail, &program, log.into(), err.into())?;
+        Ok(Run {
+            dir,
+            frames,
+            log_path,
+            container,
+            start: Instant::now(),
+        })
+    }
+}
+
+/// A running game.
+pub struct Run {
+    /// The run's folder.
+    pub dir: PathBuf,
+    /// Where its captures go.
+    pub frames: PathBuf,
+    log_path: PathBuf,
+    pub container: Container,
+    start: Instant,
+}
+
+impl Run {
+    /// Time since the container started.
+    pub fn elapsed(&self) -> Duration {
+        self.start.elapsed()
+    }
+
+    /// The display: width, height and RGB, or `None` while there is none.
+    pub fn capture(&self) -> Option<(u32, u32, Vec<u8>)> {
+        let xwd = self.container.exec(&["cat", FRAMEBUFFER]).ok()?;
+        xwd_rgb(&xwd)
+    }
+
+    /// Types `keys` (an `xdotool` command line) into the virtual display.
+    pub fn xdotool(&self, keys: &str) -> Result {
+        let script = format!("export DISPLAY=:{DISPLAY} XAUTHORITY={XAUTHORITY}\n{keys}");
+        self.container.exec(&["sh", "-c", &script]).map(drop)
+    }
+
+    /// Runs `command` in the game's console: the grave key opens it (the
+    /// shipped bindings, steering-the-original.md section 2.2), the line is
+    /// typed and entered (section 2.3).
+    pub fn console(&self, command: &str) -> Result {
+        let typed = command.replace('\'', "");
+        self.xdotool(&format!(
+            "xdotool key grave && sleep 1 && xdotool type '{typed}' && xdotool key Return"
+        ))
+    }
+
+    /// Ends the game with its `quit` console command (steering-the-original.md
+    /// section 7); the container's exit status once the game has ended, or
+    /// `None` if it is still running after [`QUIT_WAIT`] seconds.
+    pub fn quit(&mut self) -> Result<Option<ExitStatus>> {
+        step("Quitting the game from its console");
+        self.console("quit")?;
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(QUIT_WAIT) {
+            thread::sleep(Duration::from_secs(1));
+            if let Some(status) = self.container.try_wait()? {
+                return Ok(Some(status));
+            }
+        }
+        println!("The game was still running {QUIT_WAIT} s after quit");
+        Ok(None)
+    }
+
+    /// Stops the container and reports how the run ended.
+    pub fn finish(self, ended: Option<ExitStatus>) {
+        let elapsed = self.elapsed().as_secs();
+        drop(self.container);
+        match ended {
+            Some(status) => step(&format!(
+                "The game ended after about {elapsed} s ({status})"
+            )),
+            None => step(&format!("Stopped the game after {elapsed} s")),
+        }
+        println!(
+            "Captures: {}\nWine's log: {}",
+            self.frames.display(),
+            self.log_path.display()
+        );
+    }
 }
 
 /// The generated `fsgame.ltx` (gog-install-additions.md section 2): 17
@@ -305,32 +419,10 @@ fn add_install(game: &Path, documents: &Path) -> Result {
     if !steer.ends_with(b"\n") {
         steer.extend_from_slice(b"\r\n");
     }
-    steer.extend_from_slice(STEERING.as_bytes());
-    write(&user.join(STEER_LTX), &steer)
-}
-
-/// Types [`QUIT`]; the container's exit status once the game has ended, or
-/// `None` if it is still running after [`QUIT_WAIT`] seconds.
-fn quit_game(container: &mut Container) -> Result<Option<ExitStatus>> {
-    step("Quitting the game from its console");
-    let script = format!("export DISPLAY=:{DISPLAY} XAUTHORITY={XAUTHORITY}\n{QUIT}");
-    container.exec(&["sh", "-c", &script])?;
-    let start = Instant::now();
-    while start.elapsed() < Duration::from_secs(QUIT_WAIT) {
-        thread::sleep(Duration::from_secs(1));
-        if let Some(status) = container.try_wait()? {
-            return Ok(Some(status));
-        }
+    for line in views::SETTINGS {
+        steer.extend_from_slice(format!("{line}\n").as_bytes());
     }
-    println!("The game was still running {QUIT_WAIT} s after quit");
-    Ok(None)
-}
-
-/// The display as PNG, or `None` while there is none.
-fn capture(container: &Container) -> Option<Vec<u8>> {
-    let xwd = container.exec(&["cat", FRAMEBUFFER]).ok()?;
-    let (width, height, rgb) = xwd_rgb(&xwd)?;
-    Some(png(width, height, &rgb))
+    write(&user.join(STEER_LTX), &steer)
 }
 
 /// The Wine user's files (where Windows programs keep settings and logs),
@@ -439,6 +531,20 @@ fn is_archive(path: &str) -> bool {
             .rsplit_once('.')
             .is_some_and(|(_, ext)| ext.starts_with("db"));
     root_db || (path.starts_with("mods/") && name.contains(".xdb"))
+}
+
+/// The Russian installer's `.exe` and `-1.bin` in `VOLYA_GOG_INSTALLER`.
+fn installer() -> Result<(PathBuf, PathBuf)> {
+    let dir = std::env::var_os("VOLYA_GOG_INSTALLER")
+        .ok_or("VOLYA_GOG_INSTALLER must name the folder holding the GOG installer")?;
+    installer_parts(Path::new(&dir))
+}
+
+/// The installer's cache (as the game-data tests name it), without
+/// assembling anything.
+pub fn cache() -> Result<PathBuf> {
+    let (exe, bin) = installer()?;
+    cache_dir(&exe, &bin)
 }
 
 /// The Russian installer's `.exe` and `-1.bin` in `dir`.

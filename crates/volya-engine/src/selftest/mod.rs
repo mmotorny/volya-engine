@@ -27,6 +27,7 @@ pub use crate::render::selftest::{
 mod artefacts;
 mod details;
 mod draw_calls;
+mod fidelity;
 mod frame_memory;
 mod geometry_lod;
 mod inventory_screen;
@@ -48,6 +49,9 @@ mod zones;
 pub struct Context<'a> {
     /// The game's combined archive tree.
     pub tree: &'a dyn Vfs,
+    /// The game's root folder (the installer's files outside the archives),
+    /// where the platform has it.
+    pub root: Option<&'a dyn Vfs>,
     make: &'a dyn Fn() -> Renderer,
     /// Frames kept for inspection, when asked for.
     frames: Option<RefCell<Vec<Frame>>>,
@@ -86,6 +90,7 @@ impl<'a> Context<'a> {
     pub fn new(tree: &'a dyn Vfs, make: &'a dyn Fn() -> Renderer, keep_frames: bool) -> Self {
         Self {
             tree,
+            root: None,
             make,
             frames: keep_frames.then(Default::default),
             gl_calls: None,
@@ -98,6 +103,12 @@ impl<'a> Context<'a> {
     /// name.
     pub fn with_gl_calls(mut self, count: &'a dyn Fn(bool) -> Vec<(String, u64)>) -> Self {
         self.gl_calls = Some(count);
+        self
+    }
+
+    /// Gives the checks the game's root folder.
+    pub fn with_root(mut self, root: &'a dyn Vfs) -> Self {
+        self.root = Some(root);
         self
     }
 
@@ -205,6 +216,7 @@ const SUITES: &[(&str, &[Checks])] = &[
         ],
     ),
     ("draw-calls", &[draw_calls::CHECKS]),
+    ("fidelity", &[fidelity::CHECKS]),
 ];
 
 fn checks() -> impl Iterator<Item = (&'static str, &'static str, Run)> {

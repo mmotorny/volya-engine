@@ -49,10 +49,13 @@ Tasks:
               Run EXE with Wine in that image, DIR mounted as its working
               directory; passes on its exit code.
   wine check  Build and run a Direct3D 9 smoke test there.
-  original [SECONDS]
+  original [--new-game] [--quit] [SECONDS]
               Run the original game from VOLYA_GOG_INSTALLER under Wine for
               SECONDS (default 300), capturing its display to PNGs in the
               local cache.
+  original views [--again] [NAME...]
+              Capture the original's frame of each view of the fidelity
+              suite (tests/fidelity/views.rs) not yet cached.
   update      Move to the latest stable Rust and dependencies, then check.";
 
 /// Crates that never build for the web target.
