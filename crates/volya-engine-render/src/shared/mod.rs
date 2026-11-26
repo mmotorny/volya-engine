@@ -4,6 +4,7 @@
 //! The platform-free part of each area, which the WebGL 2 module of that
 //! area re-exports; it keeps native unit tests.
 
+pub mod billboards;
 pub mod details;
 pub mod particles;
 pub mod present;

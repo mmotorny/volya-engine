@@ -14,7 +14,7 @@ use naga::back::glsl;
 use naga::valid::{Capabilities, ValidationFlags, Validator};
 
 /// The programs, by module name.
-const MODULES: [&str; 8] = [
+const MODULES: [&str; 9] = [
     "ui",
     "yuv",
     "sky",
@@ -22,6 +22,7 @@ const MODULES: [&str; 8] = [
     "ramp",
     "postprocess",
     "details",
+    "billboards",
     "world",
 ];
 

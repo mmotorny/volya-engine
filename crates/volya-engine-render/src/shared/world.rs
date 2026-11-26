@@ -346,6 +346,8 @@ pub struct WorldFrame {
     pub effects: Option<crate::present::ScreenEffects>,
     /// The detail objects drawn (detail-objects.md 5.4, 6).
     pub details: Option<crate::details::DetailFrame>,
+    /// The billboard groups' billboards drawn (static-shading.md 8.4).
+    pub billboards: Option<crate::billboards::BillboardFrame>,
     /// The samplers' filtering in force.
     pub filtering: Filtering,
     /// `r__geometry_lod` (section 10.2; object-detail-level.md 1).

@@ -8,6 +8,7 @@
 //!
 //! Colour values pass through unchanged (no sRGB conversion).
 
+pub mod billboards;
 pub mod details;
 pub mod particles;
 pub mod present;
@@ -178,6 +179,7 @@ pub(crate) mod points {
     pub const DETAILS: u32 = 4;
     pub const POST: u32 = 5;
     pub const RAMP: u32 = 6;
+    pub const BILLBOARDS: u32 = 7;
 }
 
 /// Links `module`'s entry points `vs` and `fs`, its textures on units from
@@ -330,6 +332,9 @@ pub struct Renderer {
     post: present::PostProcess,
     /// Detail objects' programs and the level's models (detail-objects.md).
     details: details::DetailPrograms,
+    /// The billboard groups' programs and the level's billboards
+    /// (static-shading.md 8.4).
+    billboards: billboards::BillboardPrograms,
     /// The display's gamma ramp (display-gamma.md).
     ramp: ramp::RampPass,
     /// [`Renderer::set_unblended_trees`].
@@ -384,6 +389,7 @@ impl Renderer {
             particles: particles::ParticlePrograms::new(g),
             post: present::PostProcess::new(g),
             details: details::DetailPrograms::new(g),
+            billboards: billboards::BillboardPrograms::new(g),
             ramp: ramp::RampPass::new(g),
             unblended_trees: false,
             texture_path,
@@ -722,6 +728,23 @@ impl Renderer {
     /// Bytes of the detail objects' buffers on the GPU.
     pub fn details_gpu_bytes(&self) -> u64 {
         self.details.gpu_bytes()
+    }
+
+    /// The level's billboard texture sets (docs/behavior/static-shading.md
+    /// 8.4: each an atlas and its `_nm`), with room for `groups`
+    /// billboards a frame: made with the level's world.
+    pub fn set_billboards(&mut self, sets: &[(Texture, Texture)], groups: usize) {
+        self.billboards.set_level(&self.gl, sets, groups);
+    }
+
+    /// Drops the level's billboards.
+    pub fn clear_billboards(&mut self) {
+        self.billboards.clear_level();
+    }
+
+    /// Bytes of the billboards' buffer on the GPU.
+    pub fn billboards_gpu_bytes(&self) -> u64 {
+        self.billboards.gpu_bytes()
     }
 
     /// Builds the off-screen target for a `screen` of the game's size and

@@ -66,6 +66,7 @@ use crate::level_visibility::{Item, LevelVisibility, Seen, portal_fade};
 use crate::loading_screen::Stage;
 use crate::objects::{self, Characters, LevelObjects, ObjectsReport};
 use crate::particle_drawing::{self, ParticleShader};
+use crate::render::billboards::BillboardGroup;
 use crate::render::sky::{SkySection, SkyTextures};
 use crate::render::world::Surface;
 use crate::scene::{Scene, WorldScene};
@@ -83,6 +84,7 @@ use volya_engine_formats::level_geom::{GeomBuffer, GeomFile, GeomLayout, GeomSou
 use volya_engine_formats::level_hom;
 use volya_engine_formats::model as model_math;
 use volya_engine_formats::object::{self as record, ObjectRecord};
+use volya_engine_formats::ogf::VisualType;
 use volya_engine_formats::particles as particle_records;
 use volya_engine_formats::patrol_path::PatrolPaths;
 use volya_engine_formats::shaders_xr;
@@ -153,6 +155,18 @@ pub struct LevelWorld {
     /// The detail models, their texture and shader (detail-objects.md 6);
     /// `None` for a level without `level.details`.
     pub details: Option<DetailsWorld>,
+    /// The billboard groups' texture sets (ogf.md 7, static-shading.md
+    /// 8.4); `None` for a level without billboards drawn.
+    pub billboards: Option<BillboardsWorld>,
+}
+
+/// What the presenter uploads for the billboards.
+#[derive(Clone, Debug)]
+pub struct BillboardsWorld {
+    /// Each set's atlas and its `_nm`, as file paths.
+    pub sets: Vec<[String; 2]>,
+    /// The billboard groups, for the vertices a frame can draw.
+    pub groups: usize,
 }
 
 /// Every texture file of `surfaces` and `sky`, each once.
@@ -174,6 +188,15 @@ fn texture_paths(surfaces: &[Surface<String>], sky: Option<&SkyTextures<String>>
         }
     }
     paths
+}
+
+/// Adds the billboards' textures to `paths`, each once.
+fn billboard_texture_paths(paths: &mut Vec<String>, billboards: Option<&BillboardsWorld>) {
+    for t in billboards.into_iter().flat_map(|b| b.sets.iter().flatten()) {
+        if !paths.contains(t) {
+            paths.push(t.clone());
+        }
+    }
 }
 
 /// Adds the glows' and the light passes' textures to `paths`, each once.
@@ -207,6 +230,7 @@ impl LevelWorld {
         {
             paths.push(d.texture.clone());
         }
+        billboard_texture_paths(&mut paths, self.billboards.as_ref());
         if let Some(t) = &self.presentation_noise
             && !paths.contains(t)
         {
@@ -1007,6 +1031,9 @@ struct Resolved {
     objects_not_drawn: Vec<(String, String)>,
     /// `shaders.xr`'s definitions, by name.
     definitions: HashMap<String, shaders_xr::Definition>,
+    /// The billboards' texture sets (located), and each billboard group's.
+    billboard_sets: Vec<[String; 2]>,
+    billboard_set_of: Vec<Option<u32>>,
 }
 
 /// Every entry of the shader table is created at load, in table order,
@@ -1048,6 +1075,7 @@ fn resolve_surfaces(
     shaders: &[String],
     draw_items: &[DrawItem],
     object_entries: &[String],
+    billboard_shaders: &[u16],
 ) -> io::Result<Resolved> {
     let aliases = &data.aliases;
     let definitions: HashMap<String, shaders_xr::Definition> = shaders_xr::parse(&vfs::read(
@@ -1146,6 +1174,29 @@ fn resolve_surfaces(
             }
         });
     }
+    // The billboard groups' sets (static-shading.md 8.4), by shader entry.
+    let mut billboard_sets: Vec<[String; 2]> = Vec::new();
+    let mut set_of_shader: HashMap<u16, Option<u32>> = HashMap::new();
+    let mut billboard_set_of = Vec::with_capacity(billboard_shaders.len());
+    for &shader in billboard_shaders {
+        if let Some(&s) = set_of_shader.get(&shader) {
+            billboard_set_of.push(s);
+            continue;
+        }
+        let entry = shaders.get(usize::from(shader)).map_or("", String::as_str);
+        let set = match library.billboard_textures(entry) {
+            Ok([a, b]) => {
+                billboard_sets.push([locate(a)?, locate(b)?]);
+                Some(billboard_sets.len() as u32 - 1)
+            }
+            Err(why) => {
+                not_drawn.push((entry.to_owned(), why.to_string()));
+                None
+            }
+        };
+        set_of_shader.insert(shader, set);
+        billboard_set_of.push(set);
+    }
     Ok(Resolved {
         surfaces,
         draw_surfaces,
@@ -1153,6 +1204,8 @@ fn resolve_surfaces(
         object_surfaces,
         objects_not_drawn,
         definitions,
+        billboard_sets,
+        billboard_set_of,
     })
 }
 
@@ -1215,6 +1268,10 @@ pub struct NewGameLoad {
     occlusion_mesh: Option<OcclusionMesh>,
     /// The camera pass, made from the level before its visuals go.
     visibility: Option<LevelVisibility>,
+    /// The shader entry of each billboard group the camera pass keeps.
+    billboard_shaders: Vec<u16>,
+    /// The billboards' texture sets and groups, for the presenter.
+    billboards_world: Option<BillboardsWorld>,
     /// The zone objects online at the start and the sections of every zone
     /// of the level's objects.
     zones: Zones,
@@ -1380,6 +1437,7 @@ impl NewGameLoad {
         {
             paths.push(d.texture.clone());
         }
+        billboard_texture_paths(&mut paths, self.billboards_world.as_ref());
         if let Some(t) = &self.presentation_noise
             && !paths.contains(t)
         {
@@ -1540,10 +1598,30 @@ impl NewGameLoad {
                 self.draw_items = draw_items;
                 // The camera pass keeps the sectors, portals and visual
                 // hierarchy in its own form.
+                // The billboard groups' faces (ogf.md 7), kept for their
+                // quads; their shaders are resolved with the surfaces.
+                let mut billboards = Vec::new();
+                self.billboard_shaders.clear();
+                for (i, v) in level.visuals.iter().enumerate() {
+                    let h = &v.header;
+                    if let (VisualType::BillboardGroup, Some(faces)) = (h.kind, &v.billboards) {
+                        self.billboard_shaders.push(h.shader);
+                        billboards.push((
+                            i as u32,
+                            BillboardGroup {
+                                faces: faces.clone(),
+                                centre: h.sphere_centre,
+                                radius: h.sphere_radius,
+                                coverage: volya_engine_formats::ogf::coverage_factor(h),
+                            },
+                        ));
+                    }
+                }
                 self.visibility = Some(LevelVisibility::new(
                     level,
                     self.occlusion_mesh.take(),
                     self.draw_items.iter().map(|d| d.visual),
+                    billboards,
                 )?);
                 // Only the shader table is read after this stage; the
                 // visuals and the rest go now.
@@ -1705,8 +1783,23 @@ impl NewGameLoad {
                     .flat_map(|m| &m.meshes)
                     .map(|m| format!("{}/{}", m.shader, m.texture))
                     .collect();
-                let resolved =
-                    resolve_surfaces(tree, data, &dir, &level.shaders, &self.draw_items, &entries)?;
+                let resolved = resolve_surfaces(
+                    tree,
+                    data,
+                    &dir,
+                    &level.shaders,
+                    &self.draw_items,
+                    &entries,
+                    &self.billboard_shaders,
+                )?;
+                if let Some(v) = &mut self.visibility {
+                    v.set_billboard_sets(resolved.billboard_set_of.iter().copied());
+                }
+                self.billboards_world =
+                    (!resolved.billboard_sets.is_empty()).then(|| BillboardsWorld {
+                        sets: resolved.billboard_sets.clone(),
+                        groups: self.billboard_shaders.len(),
+                    });
                 let mut object_surfaces = resolved.object_surfaces.into_iter();
                 self.mesh_surfaces = spawned
                     .models
@@ -2010,6 +2103,7 @@ impl NewGameLoad {
                 light_textures: self.light_textures,
                 presentation_noise: self.presentation_noise,
                 details: self.details_world,
+                billboards: self.billboards_world,
             }),
             collision,
             sound_data: self.sound,
@@ -2801,6 +2895,7 @@ impl LevelScreen {
             .map(std::mem::take)
             .unwrap_or_default();
         visibility.static_draws_into(self.world.draw_items.len(), &mut seen.items);
+        visibility.billboards_into(&mut seen.billboards);
         seen.objects.clear();
         seen.objects.resize(objects.instances.len(), false);
         seen.effects.clear();
@@ -3338,6 +3433,7 @@ impl LevelScreen {
                 light_textures: None,
                 presentation_noise: None,
                 details: None,
+                billboards: None,
             }),
             collision: Arc::new(
                 CollisionWorld::new(Default::default(), Vec::new()).expect("collision"),
