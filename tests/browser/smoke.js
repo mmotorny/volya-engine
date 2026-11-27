@@ -722,7 +722,7 @@ export const tests = {
       button("Delete game files").click();
       const ask = doc().querySelector("#game .confirm");
       assertEqual(ask?.querySelector("strong").textContent, "Delete the game files?", "the question");
-      assertEqual(ask.querySelector("span")?.textContent, "The game's saves and settings stay.", "the detail");
+      assertEqual(ask.querySelector("span")?.textContent, "The game's saves, settings, and logs stay.", "the detail");
       assert(ask.closest(".danger-zone"), "not in the danger zone");
       assertEqual(doc().activeElement?.textContent, "Cancel", "focus on Cancel");
       doc().activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));

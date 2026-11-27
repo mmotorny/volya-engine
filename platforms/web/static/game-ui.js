@@ -711,10 +711,11 @@ function userDataSection(logs, deleted) {
 
 /**
  * Danger zone: Delete game files, after a confirmation (#538) that says
- * the game's saves and settings stay, when there are any; then the
- * import screen.
+ * the game's saves, settings, and logs stay, those there are when it's
+ * asked (`kept()`: `{ userData, logs }`; nothing said without saves or
+ * settings, #681); then the import screen.
  */
-function importSection(status, userData) {
+function importSection(status, kept) {
   const title = "Delete game files";
   const button = element("button", { className: "danger filled", textContent: title });
   const note = element("p", {
@@ -722,7 +723,9 @@ function importSection(status, userData) {
     textContent: `Deletes ${formatBytes(status.bytes)} of game files from this app's storage. You can import them again from the installer.`,
   });
   button.addEventListener("click", async () => {
-    const ask = confirmation("Delete the game files?", userData ? "The game's saves and settings stay." : null, "Delete");
+    const { userData, logs } = kept();
+    const detail = userData ? `The game's ${logs ? "saves, settings, and logs" : "saves and settings"} stay.` : null;
+    const ask = confirmation("Delete the game files?", detail, "Delete");
     button.replaceWith(ask.element);
     ask.focus();
     if (!(await ask.result)) {
@@ -754,8 +757,14 @@ function importSection(status, userData) {
  */
 async function showSettings() {
   const status = await call("game_status");
-  const userData = (await call("user_data_status").catch(() => null))?.present;
+  const userDataStored = async () => (await call("user_data_status").catch(() => null))?.present;
+  let userData = await userDataStored();
   const logs = await logsPanel();
+  // What Delete saves, settings, and logs leaves, for Delete game files' confirmation.
+  const deleted = async () => {
+    await logs.refresh();
+    userData = await userDataStored();
+  };
   const back = element("button", { className: "back", textContent: "‹ Back" });
   back.addEventListener("click", () => navigate("back", refresh));
 
@@ -783,8 +792,8 @@ async function showSettings() {
           "div",
           { className: "panel danger-zone" },
           element("p", { className: "label", textContent: "Danger zone" }),
-          userData ? userDataSection(logs.present(), logs.refresh) : null,
-          status.imported ? importSection(status, userData) : null,
+          userData ? userDataSection(logs.present(), deleted) : null,
+          status.imported ? importSection(status, () => ({ userData, logs: logs.present() })) : null,
         )
       : null,
   );

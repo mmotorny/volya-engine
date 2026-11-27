@@ -238,6 +238,15 @@ export const SECTIONS = [
         deleteGameFails: true,
         press: ["Delete game files", "Delete"],
       },
+      {
+        id: "settings-delete-game-no-logs",
+        name: "No logs kept: Delete game files pressed, confirming",
+        game: imported,
+        screen: "settings",
+        gameLog: false,
+        log: { entries: false },
+        press: ["Delete game files"],
+      },
       { id: "settings-no-user-data", name: "No settings or saves stored", game: imported, screen: "settings", userData: false },
       {
         id: "settings-delete-game-no-user-data",

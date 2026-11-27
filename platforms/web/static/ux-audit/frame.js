@@ -47,6 +47,8 @@ if (state.tab && !device.touch) globalThis.volyaInstallOffer = { prompt: async (
 // kept (#646: once the game has run).
 const log = { on: true, entries: true, ...state.log };
 let gameLog = state.gameLog ?? true;
+// Whether saves or settings are stored, until Delete saves, settings, and logs.
+let userData = state.userData ?? true;
 
 // Whether an import finished here before (the localStorage mark in game-ui.js).
 globalThis.volyaImportedBefore = Boolean(state.deleted);
@@ -79,6 +81,7 @@ const call = async (op, args) => {
       return { present: gameLog };
     case "forget_user_data":
       gameLog = false;
+      userData = false;
       return null;
     case "logs":
       // Preparing never settles.
@@ -91,7 +94,7 @@ const call = async (op, args) => {
       if (state.deleteGameFails) throw new Error("the game's files are held by another copy of the app");
       return null;
     case "user_data_status":
-      return { present: state.userData ?? true };
+      return { present: userData };
     default:
       return null;
   }
