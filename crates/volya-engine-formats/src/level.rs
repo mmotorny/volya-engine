@@ -6,9 +6,9 @@
 //! structure of [`crate::ogf`]), portals, sectors, lights and glows; plus the
 //! draw list of a static frame (ogf.md section 8).
 
-use std::io;
+use std::io::{self, BufReader, Read, Seek, SeekFrom};
 
-use crate::chunks::Chunks;
+use crate::chunks::{self, ChunkHeader, Chunks};
 use crate::cp1251;
 use crate::level_geom::{GeomBuffer, GeomLayout, GeomSource, LevelGeom};
 use crate::ogf::{TreeInstance, Visual, VisualType};
@@ -191,18 +191,27 @@ pub struct Level {
 
 impl Level {
     pub fn parse(file: &[u8]) -> io::Result<Self> {
-        let chunks = Chunks::parse(file)?;
-        let content = |id: u32| -> io::Result<Vec<u8>> {
-            Ok(chunks
-                .find(id)
-                .map(|c| c.content())
-                .transpose()?
-                .map(|c| c.into_owned())
-                .unwrap_or_default())
+        Self::read(&mut io::Cursor::new(file))
+    }
+
+    /// Reads the file from `reader` a chunk at a time, never holding it
+    /// whole: the visuals are read and parsed one chunk at a time (a
+    /// compressed chunk of the visuals is read whole, as it must be decoded
+    /// whole).
+    pub fn read(reader: &mut (impl Read + Seek)) -> io::Result<Self> {
+        reader.seek(SeekFrom::Start(0))?;
+        // Chunks are read in stored order: through a buffer, few reads
+        // reach the file.
+        let reader = &mut BufReader::with_capacity(64 << 10, reader);
+        let top = chunks::index(reader)?;
+        // A chunk's content, empty when it is missing.
+        let content = |reader: &mut BufReader<_>, id: u32| -> io::Result<Vec<u8>> {
+            chunks::find_header(&top, id).map_or(Ok(Vec::new()), |h| h.read_content(reader))
         };
-        let header = chunks.require(HEADER_CHUNK, "level")?.content()?;
+        chunks::require_header(&top, HEADER_CHUNK, "level")?;
+        let header = content(reader, HEADER_CHUNK)?;
         let header: [u8; 4] = header
-            .as_ref()
+            .as_slice()
             .try_into()
             .map_err(|_| invalid("level header not 4 bytes"))?;
         let header = (
@@ -212,19 +221,13 @@ impl Level {
         if header.0 != VERSION {
             return Err(invalid(format!("level version {}", header.0)));
         }
-        let shaders = chunks
-            .require(SHADERS_CHUNK, "Level doesn't builded correctly.")?
-            .content()?;
-        let shaders = parse_shaders(&shaders)?;
+        chunks::require_header(&top, SHADERS_CHUNK, "Level doesn't builded correctly.")?;
+        let shaders = parse_shaders(&content(reader, SHADERS_CHUNK)?)?;
 
-        let visuals_chunk = chunks.require(VISUALS_CHUNK, "level")?.content()?;
-        let visuals: Vec<Visual> = Chunks::parse(&visuals_chunk)?
-            .list()
-            .into_iter()
-            .map(|c| {
-                Visual::parse(&c.content()?).map_err(|e| invalid(format!("visual {}: {e}", c.id())))
-            })
-            .collect::<io::Result<_>>()?;
+        let visuals = read_visuals(
+            reader,
+            chunks::require_header(&top, VISUALS_CHUNK, "level")?,
+        )?;
         for (i, v) in visuals.iter().enumerate() {
             if v.children.iter().any(|&c| c as usize >= visuals.len()) {
                 return Err(invalid(format!("visual {i}: child out of range")));
@@ -233,14 +236,14 @@ impl Level {
 
         // Portals and lights are counted by size, so a missing chunk has no
         // records (chunks.md section 3).
-        let portals = parse_portals(&content(PORTALS_CHUNK)?)?;
-        let lights = parse_lights(&content(LIGHTS_CHUNK)?)?;
+        let portals = parse_portals(&content(reader, PORTALS_CHUNK)?)?;
+        let lights = parse_lights(&content(reader, LIGHTS_CHUNK)?)?;
         if !lights.iter().any(|l| l.kind == LIGHT_DIRECTIONAL) {
             return Err(invalid("Where is sun?"));
         }
-        let glows = parse_glows(&content(GLOWS_CHUNK)?)?;
-        let sectors_chunk = chunks.require(SECTORS_CHUNK, "level")?.content()?;
-        let sectors = parse_sectors(&sectors_chunk)?;
+        let glows = parse_glows(&content(reader, GLOWS_CHUNK)?)?;
+        chunks::require_header(&top, SECTORS_CHUNK, "level")?;
+        let sectors = parse_sectors(&content(reader, SECTORS_CHUNK)?)?;
         for (s, sector) in sectors.iter().enumerate() {
             if sector.root as usize >= visuals.len()
                 || sector
@@ -566,6 +569,25 @@ pub struct DetailSpan {
 
 /// Chunk 2: `u32 count`, then `count` zero-terminated strings filling the
 /// chunk.
+/// The visuals of chunk 3 (`chunk`): each visual's sub-chunk read and
+/// parsed in turn, or the whole chunk when it is compressed.
+fn read_visuals(reader: &mut (impl Read + Seek), chunk: &ChunkHeader) -> io::Result<Vec<Visual>> {
+    let visual = |id: u32, data: &[u8]| {
+        Visual::parse(data).map_err(|e| invalid(format!("visual {id}: {e}")))
+    };
+    if chunk.is_compressed() {
+        let content = chunk.read_content(reader)?;
+        return (Chunks::parse(&content)?.list().into_iter())
+            .map(|c| visual(c.id(), &c.content()?))
+            .collect();
+    }
+    let start = chunk.offset;
+    let headers = chunks::index_in(reader, start, start + u64::from(chunk.size))?;
+    (chunks::list_headers(&headers).into_iter())
+        .map(|h| visual(h.id(), &h.read_content(reader)?))
+        .collect()
+}
+
 fn parse_shaders(b: &[u8]) -> io::Result<Vec<String>> {
     let (count, mut rest) = b
         .split_first_chunk::<4>()

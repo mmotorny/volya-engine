@@ -84,7 +84,7 @@ fn mb(bytes: usize) -> f64 {
 const STAGE_BUDGETS: [(Stage, f64); 9] = [
     (Stage::CreatingNewGame, 1.5), // 0.7: both files streamed (12.8 before, #403)
     (Stage::ServerConnecting, 19.0), // 16.2: the offline simulation (#370, #403, #485)
-    (Stage::OpeningStream, 14.0),  // 12.6: the `level` file and its parse
+    (Stage::OpeningStream, 9.5),   // 8.3: the `level` file streamed (12.6 whole, #483)
     (Stage::LoadingCform, 38.0),   // 35.1: the collision world it keeps (#371)
     (Stage::LoadingGeometry, 1.5), // 0.7: the geometry's layout only
     (Stage::LoadingSpatialDb, 7.0), // 5.4: index pieces and the draw list

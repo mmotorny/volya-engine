@@ -110,7 +110,7 @@ fn level_files_memory() {
         .collect();
     levels.sort();
     eprintln!(
-        "level: collision kept, details kept, `level` parse peak (heap MB); geometry, navigation, the surfaces' textures (as stored MB)"
+        "level: collision kept, details kept, `level` read peak (heap MB); geometry, navigation, the surfaces' textures (as stored MB)"
     );
     let mut rows = Vec::new();
     for name in &levels {
@@ -126,7 +126,7 @@ fn level_files_memory() {
             measured(|| level_details::read(&tree, &dir, &data.system).unwrap());
         drop(details);
         let (level, _, parse_peak) =
-            measured(|| Level::parse(&vfs::read(&tree, &file("level")).unwrap()).unwrap());
+            measured(|| Level::read(&mut tree.open(&file("level")).unwrap()).unwrap());
         // The textures the level's own surfaces name (`shader/texture,…`),
         // each once, from the level's folder or the game's textures.
         let mut seen = HashSet::new();

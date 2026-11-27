@@ -14,7 +14,7 @@ Where the engine's memory goes, by lifetime and owner; the design it follows (on
 | Tool | Where | What |
 |---|---|---|
 | `crates/volya-engine/tests/loading_memory.rs` | native, counting allocator | Each loading stage's peak above its start, what it keeps, allocations made and blocks kept; the program's data; what outlives the level. |
-| `crates/volya-engine/tests/level_memory.rs` | native, counting allocator | Every shipped level's own files: the collision world's and the detail objects' heap, the `level` file's parse peak, and as stored the geometry, the navigation file and the textures its surfaces name. |
+| `crates/volya-engine/tests/level_memory.rs` | native, counting allocator | Every shipped level's own files: the collision world's and the detail objects' heap, the `level` file's read peak, and as stored the geometry, the navigation file and the textures its surfaces name. |
 | `render-level` suite's "a level frame's heap traffic" (`volya_engine::selftest::frame_memory`) | browser, the test build's counting allocator | Allocations and bytes a frame of the running level makes on the wasm heap, by part. |
 | `heap_log` op (test builds) | browser | The wasm heap and the most live under each loading caption. |
 | `heap_map` op (test builds) | browser | Live KiB per MiB of the heap and every live block of 256 KiB or more, by address. |
@@ -63,7 +63,7 @@ Measured natively. After the level is dropped, 29.4 MB in 7 blocks outlive it: t
 
 ### Loading transients
 
-Each stage's peak above its start and what it keeps, measured natively (MB): `st_server_connecting` 15.6 and 15.6 (the spawn file and the graph streamed, #403); `st_opening_stream` 12.6 and 7.9 (the `level` file read whole; 12.9 for `l11_pripyat`); `st_loading_cform` 30.3 and 30.1; `st_loading_spatial_db` 6.2, freeing 1.9 (it keeps the progressive visuals' detail windows, 0.7); `st_loading_details` 5.6 and 5.6; `st_client_spawning` 19.7 and 13.9; `st_loading_textures` 2.4 and 0.3. The load peaks 77.5 MB above its start against 71.7 kept. By count the transients are the many: `st_client_spawning` makes 2.52 million allocations to keep 6,744 blocks, `st_server_connecting` 537,041 to keep 83,764.
+Each stage's peak above its start and what it keeps, measured natively (MB): `st_server_connecting` 15.6 and 15.6 (the spawn file and the graph streamed, #403); `st_opening_stream` 8.3 and 7.9 (the `level` file streamed, #483: 12.6 read whole; `l11_pripyat` 8.2, 12.9 whole); `st_loading_cform` 30.3 and 30.1; `st_loading_spatial_db` 6.2, freeing 1.9 (it keeps the progressive visuals' detail windows, 0.7); `st_loading_details` 5.6 and 5.6; `st_client_spawning` 19.7 and 13.9; `st_loading_textures` 2.4 and 0.3. The load peaks 77.5 MB above its start against 71.7 kept. By count the transients are the many: `st_client_spawning` makes 2.52 million allocations to keep 6,744 blocks, `st_server_connecting` 537,041 to keep 83,764.
 
 In the browser the level's preparation adds the texture read buffer (one file, up to 4.5 MB) and the band being transcoded (without BC); WebGL copies what is written at each call (docs/architecture/rendering.md).
 
@@ -126,7 +126,7 @@ Nesting: the program holds sessions; a session holds levels; a level holds its l
 | Program | Regions made at launch, before anything else: the archive index (#300), the configuration (#299), the string tables and the effect library (#484; the library read once at launch rather than with each level: our choice, as `gamemtl.xr` is read with the level). | 5.3 MB in about 4,100 blocks |
 | Session | The offline simulation's registry (a slot table, each record's strings its own); the game graph; the character; the script runtime's state. | 8.7 MB (16 with the navigation) |
 | Level | Its owners' blocks: the collision world's arrays (kept as spares after the level, rule 4), the navigation positions, the detail grid and cache, the objects' models, sounds and effects. | about 54 MB (about 62, `l11_pripyat`; believed) |
-| Loading | Each reader's own stream buffer: 64 KiB for the spawn file and the graph, the geometry's read and the detail grid; 2 MiB pieces for the geometry's upload and the index runs; in the browser one texture file buffer and one band buffer per preparation. Stage temporaries freed by the stage's end. | under 10 MB above what each stage keeps |
+| Loading | Each reader's own stream buffer: 64 KiB for the spawn file and the graph, the `level` file, the geometry's read and the detail grid; 2 MiB pieces for the geometry's upload and the index runs; in the browser one texture file buffer and one band buffer per preparation. Stage temporaries freed by the stage's end. | under 10 MB above what each stage keeps |
 | Frame | Buffers kept by the scene, the update and the sounds, cleared each frame. | held for the level |
 
 There is no program scratch shared by the loaders: each owns its stream buffer for its read. Sizing kept scratch buffers from the measured loading peaks so they never raise the heap's peak is #489.
@@ -189,7 +189,6 @@ The specs in docs/ state nothing about how the original manages its memory (text
 
 Each is its own issue, measured before and after with the tools above (native and those three browser suites), its gain checked against the expectation here, and stopped if it doesn't pay off.
 
-- **Stream the `level` file** into its parts, never holding it whole (#483). Expected: `st_opening_stream`'s peak from 12.6 to about 8 MB native (`l11_pripyat`: 12.9).
 - **The objects' models, sounds and effects as regions of their owners** (#486; `st_client_spawning`: 2.52 million allocations, 6,743 kept). Expected: the blocks kept to hundreds, its 4.6 MB transient lower, heap minus live after the first New Game under 4 MiB.
 - **Kept scratch buffers sized from measured loading peaks** (#489), so they never raise the heap's peak. Expected: the second New Game's 4 MiB growth gone without growing the first's (which a kept texture file buffer did, rule 4).
 - **The frame's remaining allocations** (#516): each particle draw's own vertex list, the details' frame, the draw list, which need the scene and the renderer to share kept buffers. Expected: 39 allocations and 63 KB a frame to 0, and the 0.48 MB growth over 600 frames gone.

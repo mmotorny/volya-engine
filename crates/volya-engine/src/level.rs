@@ -1552,8 +1552,11 @@ impl NewGameLoad {
                 }
             }
             Stage::OpeningStream => {
-                let bytes = vfs::read(tree, &format!("{dir}\\level"))?;
-                let level = Level::parse(&bytes).map_err(|e| file("level", e))?;
+                // Read as a stream, so the file is never held whole.
+                let mut f = tree
+                    .open(&format!("{dir}\\level"))
+                    .map_err(|e| file("level", e))?;
+                let level = Level::read(&mut f).map_err(|e| file("level", e))?;
                 // Chunks 6 and 7, for the lights (dynamic-lights.md 3.1,
                 // glows.md 2.1).
                 self.lights.level_lights = (level.lights.iter())
