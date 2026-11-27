@@ -24,7 +24,8 @@ Conventions:
 **Checks.** Every claim carries a tag [CI-*n*]. The checks are one script in the dirty workspace,
 `cinput/checks/run.py`; it uses read-only static analysis of the shipped engine and bytes read directly
 from it, and the log of one headless run of the shipped game driven with keyboard input from outside
-(`cinput/run/drive.py`). All checks pass.
+(`cinput/run/drive.py`) and of a second such run (`cinput/run/drive608.py`, with a small clipboard
+program `cinput/run/clip608.c`). All checks pass.
 
 ## 1. Key events
 
@@ -35,6 +36,15 @@ from it, and the log of one headless run of the shipped game driven with keyboar
 - Whether a key is down is tracked by the input system for every key, whichever receiver saw the
   press [CI-8]. So a key that was already held when the console opened gives the console hold reports
   (and repeats, section 5) although the console never saw its press.
+- **Alt+F4.** Each frame, after the key events and the hold reports, the input system itself checks
+  whether F4 (62) and either Alt key (56 or 184) are down; if they are, the session ends and the program
+  quits as after `quit` (CS 2.2), except that the console is not closed first [CI-16]. This is the
+  input system's rule, not the console's: it applies whichever receiver has input, so also while the
+  console is open [CI-16]. It fires at most once per program run [CI-16]. Only the state after the
+  frame's events counts, so both keys must still be down then: an F4 press and release within one
+  frame's events does not trigger it [CI-8, CI-16]. The two keys' events also reach the console, where
+  they do nothing (section 3). Measured: with the console open, holding left Alt and then F4 ended the
+  program without `quit` being typed [CI-17].
 - Each key code has one action (sections 2 to 9). A press runs it as a **first press**; a repeat
   (section 5) runs it again as a **repeat**. The two differ only for Esc and key 41 (section 3) and for
   the repeat timing (section 5) [CI-7, CI-10].
@@ -85,9 +95,9 @@ state as it was until a Shift key is next pressed or released in the console.
 | Up (200), Down (208) | history (section 7) |
 | Page Up (201), Page Down (209) | scrolling (section 9) |
 
-- Every other key does nothing (apart from the length cut of section 1): Ctrl, Alt, Caps Lock, the
-  function keys, the whole numeric keypad including its Enter (156), Home, End, Left, Right, Delete
-  and every code above 210 [CI-3]. Measured: `y`, then keypad 1, keypad Enter, F1, Home,
+- Every other key does nothing in the console (apart from the length cut and Alt+F4 of section 1):
+  Ctrl, Alt, Caps Lock, the function keys, the whole numeric keypad including its Enter (156), Home,
+  End, Left, Right, Delete and every code above 210 [CI-3]. Measured: `y`, then keypad 1, keypad Enter, F1, Home,
   Left, Delete, Ctrl, Alt and Caps Lock twice, then `x` and Enter executed the single line `yx` [CI-15].
 - There is no cursor movement, no deletion other than Backspace, no selection and no copying [CI-5,
   CI-11].
@@ -109,7 +119,8 @@ ends [CI-4, CI-11].
 A held key repeats its action. The console keeps an accumulated time, a rate and a "repeat due" mark
 [CI-7]:
 
-- Opening the console sets the accumulated time to 0 and the rate to 1 [CI-7].
+- Opening the console sets the accumulated time to 0 and the rate to 1; it leaves the "repeat due" mark
+  as it is [CI-7].
 - A first press of any key sets the rate to 1; after its action the accumulated time is 0 and no repeat
   is due [CI-7].
 - A release of any key sets the rate to 1 and the accumulated time to 0 [CI-7].
@@ -119,6 +130,15 @@ A held key repeats its action. The console keeps an accumulated time, a rate and
 - When a repeat is due, the next hold report (section 1) runs that key's action as a repeat and the
   repeat is no longer due; the accumulated time is kept [CI-7]. Only one key repeats per due repeat:
   the held key with the lowest code.
+- **Across closing and opening.** Closing does not clear the mark either, and while the console is
+  closed its frame update does not run, so no repeat becomes due [CI-7]. The mark is cleared only by a
+  key action (press or repeat) and by the hold report that uses it [CI-7]. A repeat still due when the
+  console closed therefore stays due, and after the console opens again the first hold report it
+  receives runs that key's action as a repeat at once (the held key with the lowest code at that time),
+  unless a key press reaches the console first (presses come before hold reports, section 1) [CI-7,
+  CI-8]. A console closed by its own keys (Esc, key 41, or Enter executing a line that closes it) has no
+  due repeat left, as the action of the closing key clears the mark after closing [CI-4, CI-7, CI-10];
+  one closed by another trigger of CS 2.2 can have one.
 - **Frame time** is the real time since the console's previous frame, from a millisecond clock, capped
   at 0.06666 s [CI-7]. The clock is real time: the game's pause does not stop it and the time factor
   does not scale it [CI-9].
@@ -139,13 +159,17 @@ Results:
   Measured: a held `q` repeated; with left Shift held, a held `z` typed one `z` and a held `q` repeated
   [CI-15].
 - A key held while the console opens (e.g. a movement key) starts repeating its character into the line
-  0.2 s after opening [CI-7, CI-8].
+  0.2 s after opening, or at once if a repeat was still due (above) [CI-7, CI-8].
 
 ## 6. Clipboard
 
 **Insert** reads the clipboard's plain-text form (the system's 8-bit text format) [CI-11]:
 
-- If the clipboard cannot be opened or holds no text, nothing happens [CI-11].
+- If the clipboard cannot be opened, nothing happens [CI-11].
+- If it opens but holds no text, the line is unchanged and the clipboard is left open: the game does
+  not close it [CI-11]. Measured: after such an Insert the typed line was executed unchanged; under
+  Wine another program could still open the clipboard afterwards [CI-17]. Whether under Windows the
+  clipboard then stays unavailable to other programs, and until when, is **unestablished**.
 - Otherwise the whole line is replaced by the clipboard text, at most its first 1023 bytes [CI-11]; in
   it every non-printable character (tab, CR, LF and the other control characters) becomes a space and
   every other character is converted to lower case [CI-11]; then the cut of section 1 leaves at most
@@ -228,6 +252,8 @@ Results:
 ## 10. Unestablished
 
 - Bytes 0x80 … 0xFF pasted from the clipboard (section 6).
+- Whether, under Windows, an Insert with a clipboard holding no text leaves the clipboard unavailable to
+  other programs, and until when (section 6).
 - In which frame a due repeat is first used relative to the console's own frame update (a delay of at
   most one frame; the order of the engine's per-frame clients was not established).
 - Whether the operating system's keyboard auto-repeat adds key presses to the events the console
@@ -242,23 +268,23 @@ Results:
   user, installed by the project's install assembly (`@gog_original`).
 - Static analysis: Ghidra 12.2, headless and read-only, of `XR_3DA.exe` (the console's key handling,
   repeat timing, history, completion, clipboard, line execution; the input system's key events; the
-  device's timers); data values and import tables read directly from the file.
+  device's timers; the input system's Alt+F4 test and the `quit` command); data values and import tables
+  read directly from the file.
 - Execution: one headless run of the unmodified `XR_3DA.exe` under Wine in the project's container
   (`xtask wine run`) with `--skipmemcheck -silent_error_mode -nosound -nointro -ltx cmd.ltx`, the
   configuration file a copy of the shipped `user.ltx` and `fsgame.ltx` pointing the user-data folder into
   the run folder. Keys were typed into the virtual display from outside with `xdotool` in the main menu;
   the clipboard was set from outside by a small program written for the purpose; the game was ended with
-  `quit`. Evidence: the log file the game wrote.
+  `quit`. A second run (2026-11-26, the same setup) emptied the clipboard and tested from outside whether
+  it could be opened, by another small program, around an Insert, and ended the game by holding left Alt
+  and F4 in the console. Evidence: the log files the game wrote and the drivers' output (the clipboard
+  tests, whether the program ended).
 - No leaked source code, derived projects or third-party documentation of the engine were used.
 
 ## Gaps found in review
 
-- Alt (56 or 184) held together with F4 (62) ends the session and quits the program once, whichever
-  receiver has input, so also while the console is open; this is the input system's rule, not the
-  console's, and no approved specification states it (display-mode section A.2 covers only the window's
-  close request).
-- Insert when the clipboard opens but holds no text: the clipboard is not closed again (it stays open
-  to the game); only the text case closes it.
-- Opening the console does not clear a due repeat (section 5): only a key action or a hold report
-  clears it, so a repeat that was due when the console closed is used by the first hold report after
-  it opens again.
+- A frame in which the keyboard's buffered input cannot be read (input lost or not acquired, and not
+  regained at once) delivers no key events and no hold reports to any receiver, and makes no Alt+F4
+  test (section 1).
+- `display-mode.md` A.2.1 says the game ends only from its own menus or console; the Alt+F4 rule of
+  section 1 also ends it, from any receiver.
