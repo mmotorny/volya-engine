@@ -3069,13 +3069,18 @@ impl LevelScreen {
                             continue;
                         };
                         let Some(p) = effects.get(i) else { continue };
+                        // The object's box (occlusion-tests.md 6) of the
+                        // instance's box (P2 5.1), the object's transform
+                        // the identity (level-placed-effects.md 3).
+                        // TODO(#607): what the empty box (P2 8.1) gives.
                         let b = p.instance.bounds();
+                        let (lo, hi) = object_box(&crate::core::particles::IDENTITY, b.min, b.max);
                         if visibility.effects.len() <= i {
                             visibility.effects.resize(i + 1, Item::default());
                         }
                         let mut item = visibility.effects[i];
                         let shown = random.with(|g| {
-                            visibility.item_seen(&mut item, sphere, b.min, b.max, collision, g)
+                            visibility.item_seen(&mut item, sphere, lo, hi, collision, g)
                         });
                         visibility.effects[i] = item;
                         // Drawn: advanced, then queued with the frame.
