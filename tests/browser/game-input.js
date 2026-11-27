@@ -253,11 +253,15 @@ export const tests = {
     pointer("pointerdown", client(512, 100), { ...t, pointerId: 70, buttons: 1 });
     pointer("pointerup", client(512, 100), { ...t, pointerId: 70, buttons: 0 });
     for (let i = 0; i < 100 && (controls.hidden || controls.dataset.live !== "true"); i++) await sleep(20);
-    const tap = (el, id) => {
+    // A touch's tap: its pointer events, then its touchend (as WebKit
+    // orders them, believed).
+    const release = (el) => el.dispatchEvent(new Event("touchend", { bubbles: true, cancelable: true }));
+    const tap = (el, id, { end = true } = {}) => {
       const r = el.getBoundingClientRect();
       const at = { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
       el.dispatchEvent(new PointerEvent("pointerdown", { ...t, ...at, pointerId: id, buttons: 1 }));
       el.dispatchEvent(new PointerEvent("pointerup", { ...t, ...at, pointerId: id, buttons: 0 }));
+      if (end) release(el);
     };
     const shown = async (el, want, what) => {
       for (let i = 0; i < 100 && el.hidden === want; i++) await sleep(20);
@@ -268,8 +272,12 @@ export const tests = {
     const [menu, own] = [localRect(controls.querySelector(".touch-button.menu"), controls), localRect(button, controls)];
     assert(own.left > menu.right && Math.abs(own.top - menu.top) < 1, `Console right of Menu: ${JSON.stringify([menu, own])}`);
     assertEqual(button.getAttribute("aria-label"), "Console", "its name");
-    tap(button, 71);
-    assertEqual(document.activeElement, entry, "the input focused in the tap");
+    // The input is focused in the tap's touchend, where iOS raises the
+    // keyboard for a focus.
+    tap(button, 71, { end: false });
+    assert(document.activeElement !== entry, "no focus before the touchend");
+    release(button);
+    assertEqual(document.activeElement, entry, "the input focused in the tap's touchend");
     await until((s) => s.console.open, "Console to open the console");
     await shown(strip, true, "the key strip");
     assertEqual([...strip.children].map((k) => k.textContent), ["Esc", "Tab", "↑", "↓", "PgUp", "PgDn", "Paste"], "the strip's keys");

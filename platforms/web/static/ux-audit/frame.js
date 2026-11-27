@@ -212,7 +212,7 @@ if (state.level) {
     const height = device.height > device.width ? 300 : 244;
     document.body.insertAdjacentHTML(
       "beforeend",
-      `<div class="ux-stand-in ux-keyboard" style="height: ${height}px">Device keyboard</div>`,
+      `<div class="ux-stand-in ux-keyboard" style="height: ${height}px">Device keyboard (under its form bar)</div>`,
     );
     consoleTouch.showKeys({ height, down });
     if (paste) {

@@ -13,12 +13,13 @@
 //   would open the console there (the engine says: {type: "console",
 //   menu}). It presses the engine's Console touch button, which opens the
 //   console as that key does, and in the same tap focuses an unseen text
-//   input, so the device's keyboard rises (as text-entry.js does for the
-//   save screen's name field: iOS raises it only for a focus within a
-//   user gesture, and a touch's pointerup is one, documented by HTML's
-//   activation-triggering events; that iOS honours it there is believed,
-//   not measured). If the console doesn't open within FOCUS_WAIT_MS the
-//   keyboard is closed again.
+//   input, so the device's keyboard rises: in the touch's touchend
+//   handler, first thing, before the engine has answered (raiseOnTap; iOS
+//   raises it only for a focus in a tap's own touchend or click handler,
+//   believed: the iOS Simulator raises it for a focus at any time,
+//   measured, so tests can't tell). If the console doesn't open within
+//   FOCUS_WAIT_MS the keyboard is closed again. The console opened another
+//   way (a hardware keyboard's key) raises no keyboard.
 // - What is typed goes to the engine as characters (["typed", s]), which
 //   become the presses of the keys that type them on the console's table;
 //   characters no key types do nothing there. The keyboard's Backspace and
@@ -34,15 +35,15 @@
 //   read (the same activation rule).
 // - Hiding the keyboard leaves the console open; a tap on the console's
 //   area (the top half while a level or the menu is below,
-//   console-window.md 4.1) raises it again. The console closing closes it.
+//   console-window.md 4.1) raises it again, as it does where the focus
+//   didn't raise it. The console closing closes it.
 
 import { KEYS } from "./input.js";
 import { approximateArt, gameArt, paintDisc, paintGlyph, vectorGlyph } from "./touch-art.js";
 
 /** A tap the engine doesn't answer by opening the console within this
- * long, milliseconds, closes the keyboard it raised (our choice, as
- * text-entry.js). */
-const FOCUS_WAIT_MS = 500;
+ * long, milliseconds, closes the keyboard it raised (our choice). */
+const FOCUS_WAIT_MS = 1000;
 /** The Console button's size, CSS pixels (as the level's, style.css). */
 const SIZE = 44;
 
@@ -71,12 +72,39 @@ const STRIP = [
 ];
 
 /**
+ * Runs `raise()` for a tap on `target` where a device's keyboard may rise
+ * for a focus: a touch's touchend (iOS: the tap's own touchend or click,
+ * believed; WebKit dispatches pointerup before it, believed), a mouse's or
+ * pen's pointerup. A cancelled touch raises nothing.
+ */
+export function raiseOnTap(target, raise) {
+  let pressed = null; // the pressing pointer's type
+  target.addEventListener("pointerdown", (event) => {
+    pressed = event.pointerType;
+  });
+  target.addEventListener("pointerup", () => {
+    if (!pressed || pressed === "touch") return;
+    pressed = null;
+    raise();
+  });
+  target.addEventListener("pointercancel", () => {
+    pressed = null;
+  });
+  target.addEventListener("touchend", () => {
+    if (pressed !== "touch") return;
+    pressed = null;
+    raise();
+  });
+}
+
+/**
  * The console's touch interface; `send(message)` posts one input message
  * to the engine, `keys` is input.js's `consoleKeys` (`press(name,
  * pressed)`, `type(text)`, `paste(text)`), and `call(op, args)` runs an
  * engine op (for the game's textures). `update({ open, menu })` follows
  * the engine's console, `setCapture(on)` whether the engine owns the
- * screen; `raise()` runs in the handler of a tap on a Console button.
+ * screen; `raise()` runs where a tap on a Console button may raise the
+ * device's keyboard (raiseOnTap).
  * `touch` says the device has touch without waiting for one (UX audit
  * page).
  */
@@ -150,6 +178,10 @@ export function createConsoleTouch(send, keys, { call = null, touch = false } = 
 
   const raise = () => {
     touched = true;
+    // Focused without a keyboard (one that didn't rise, or was hidden
+    // without a blur): focused anew, so it rises.
+    const v = globalThis.visualViewport;
+    if (document.activeElement === input && !(v && v.height < innerHeight - 1)) input.blur();
     input.focus({ preventScroll: true });
     clearTimeout(wait);
     wait = setTimeout(() => {
@@ -168,7 +200,7 @@ export function createConsoleTouch(send, keys, { call = null, touch = false } = 
   const render = () => {
     const shown = touched && capture;
     button.hidden = !(shown && menu && !open);
-    area.hidden = !(shown && open && !focused);
+    area.hidden = !(shown && open);
     const keyStrip = shown && open && focused;
     if (!keyStrip) releaseAll();
     strip.hidden = !keyStrip;
@@ -192,9 +224,13 @@ export function createConsoleTouch(send, keys, { call = null, touch = false } = 
   // (documented: the Visual Viewport API; measured with iOS 27.2 in the
   // Simulator, iPhone 17 Pro Max, Safari in landscape: the visual viewport
   // shrank from 376 to 132 CSS pixels high, offset 0, the layout viewport
-  // unchanged). Where the strip would cover the console's prompt line, the
-  // bottom of the console's half (console-window.md 4.1, 4.3), the picture
-  // is lifted so the line sits just above the strip and the top log rows
+  // unchanged). Its bottom is above iOS's form accessory bar (˄ ˅ ✓) on
+  // the keyboard (measured, the same run), so the strip sits on that bar
+  // and the lift counts it. A page can't hide the bar: an input, a
+  // textarea and a contenteditable element all show it (measured, the
+  // same run), and no web API to hide it is documented. Where the strip
+  // would cover the console's prompt line, the bottom of the console's half
+  // (console-window.md 4.1, 4.3), the picture is lifted so the line sits just above the strip and the top log rows
   // go off screen (the user's decision on #682). Not on upright phones: the
   // frame is turned there and the console's half is the screen's right.
   const place = () => {
@@ -286,7 +322,9 @@ export function createConsoleTouch(send, keys, { call = null, touch = false } = 
       // Not an active pointer.
     }
   };
-  // The menu's Console button: its tap's release, as the level's.
+  // The menu's Console button: the engine's press on its tap's release, as
+  // the level's; the keyboard where it may rise.
+  raiseOnTap(button, raise);
   own(button, {
     pointerdown: (event) => {
       captured(event);
@@ -297,17 +335,16 @@ export function createConsoleTouch(send, keys, { call = null, touch = false } = 
       button.classList.remove("down");
       send(["tbutton", "console", true]);
       send(["tbutton", "console", false]);
-      raise();
     },
     pointercancel: () => button.classList.remove("down"),
   });
-  own(area, {
-    pointerdown: captured,
-    pointerup: () => open && raise(),
-  });
+  raiseOnTap(area, () => open && raise());
+  own(area, { pointerdown: captured });
   for (const key of strip.children) {
     const name = key.dataset.key;
     const paste = name === "insert";
+    // A tap that took the input's focus after all gives it back.
+    raiseOnTap(key, () => open && document.activeElement !== input && raise());
     own(key, {
       pointerdown: (event) => {
         captured(event);
@@ -322,8 +359,6 @@ export function createConsoleTouch(send, keys, { call = null, touch = false } = 
         // The clipboard is read in this handler (input.js).
         if (paste) tap(name);
         else if (held.delete(key)) keys.press(name, false);
-        // A tap that took the input's focus after all gives it back.
-        if (open && document.activeElement !== input) raise();
       },
       pointercancel: () => {
         key.classList.remove("down");

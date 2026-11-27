@@ -34,6 +34,7 @@
 // input.js. Positions are in the controls' own frame, which is turned with
 // the canvas on upright phones (style.css).
 
+import { raiseOnTap } from "./console-touch.js";
 import { approximateArt, gameArt, paintDisc, paintGlyph, paintPicture, vectorGlyph } from "./touch-art.js";
 
 /** Stick radius, CSS pixels: a full deflection (matches style.css). */
@@ -137,8 +138,8 @@ const onTarget = ([x, y], centre) => Math.hypot(x - centre[0], y - centre[1]) <=
  * torch, nightVision })` follows the engine's state (`torch` and
  * `nightVision` on or off, or null to hide their buttons). `touch` says the device has touch without
  * waiting for one, and `fade: false` keeps the controls from fading when
- * idle (UX audit page). `onConsole()` runs in the handler of a tap on
- * Console (the page raises the device's keyboard there).
+ * idle (UX audit page). `onConsole()` runs where a tap on Console may
+ * raise the device's keyboard (raiseOnTap, console-touch.js).
  */
 export function createTouchControls(send, { call = null, touch = false, fade = true, onConsole = () => {} } = {}) {
   const root = element("div", "touch-controls");
@@ -462,9 +463,9 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
     });
   }
 
-  // Console acts on its tap's release: a device's keyboard rises only for
-  // a focus within a user gesture, which a touch's pointerup is and its
-  // pointerdown is not (documented: HTML's activation-triggering events).
+  // Console presses the engine's button on its tap's release, and raises
+  // the device's keyboard where a tap may (console-touch.js).
+  raiseOnTap(consoleButton, () => onConsole());
   own(consoleButton, {
     pointerdown: (event) => {
       capture(event);
@@ -475,7 +476,6 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
       consoleButton.classList.remove("down");
       send(["tbutton", "console", true]);
       send(["tbutton", "console", false]);
-      onConsole();
     },
     pointercancel: () => consoleButton.classList.remove("down"),
   });

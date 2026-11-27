@@ -145,11 +145,11 @@ export const SECTIONS = [
   // the board shows stand-ins for them.
   {
     title: "Console (touch)",
-    note: "Stand-ins for what the game draws (the console, the main menu) and for the system's keyboard and Paste bubble.",
+    note: "Stand-ins for what the game draws (the console, the main menu) and for the system's keyboard (with its form bar, which a page can't hide) and Paste bubble.",
     states: [
       { id: "console-level", name: "Level: Console beside Menu", level: {}, devices: TOUCH },
       { id: "console-menu", name: "Main menu: Console at the top left", console: { menu: true }, devices: TOUCH },
-      { id: "console-typing", name: "Open over the level, the keyboard up, a line typed (landscape: the picture lifted, the prompt above the strip)", console: { keyboard: true }, devices: TOUCH },
+      { id: "console-typing", name: "Open over the level, the keyboard up, a line typed: one compact row of keys on it (landscape: the picture lifted, the prompt just above the keys)", console: { keyboard: true }, devices: TOUCH },
       { id: "console-key-held", name: "A strip key held", console: { keyboard: true, down: "up" }, devices: TOUCH },
       {
         id: "console-paste",

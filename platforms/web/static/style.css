@@ -613,18 +613,19 @@ html[data-console-lift] :is(canvas#view, #console-touch) {
   user-select: text;
 }
 
-/* The console's key strip, just above the device's keyboard and upright
-   with it: keys in the style of the touch controls, at least 44 px high. */
+/* The console's key strip, right on top of the device's keyboard (and of
+   iOS's form accessory bar, console-touch.js) and upright with it:
+   one compact row of keys in the style of the touch controls, drawn 30 px
+   high, each a target the strip's full 44 px high (Apple's minimum). */
 #console-keys {
   position: fixed;
   left: 0;
   z-index: 2;
   box-sizing: border-box;
   display: flex;
-  gap: 6px;
-  padding: 6px max(8px, env(safe-area-inset-right)) 6px max(8px, env(safe-area-inset-left));
+  gap: 4px;
+  padding: 0 max(8px, env(safe-area-inset-right)) 0 max(8px, env(safe-area-inset-left));
   background: rgba(16, 18, 22, 0.92);
-  border-top: 1px solid rgba(178, 178, 178, 0.25);
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
@@ -636,23 +637,37 @@ html[data-console-lift] :is(canvas#view, #console-touch) {
 }
 
 #console-keys button {
+  position: relative;
   flex: 1 1 0;
   min-width: 0;
-  min-height: 44px;
+  height: 44px;
   margin: 0;
   padding: 0 4px;
-  border: 1.5px solid rgba(178, 178, 178, 0.7);
-  border-radius: 8px;
-  background: rgba(40, 44, 50, 0.95);
+  isolation: isolate;
+  border: none;
+  background: transparent;
   color: rgb(178, 178, 178);
-  font: 600 15px/1 system-ui, -apple-system, sans-serif;
+  font: 600 14px/1 system-ui, -apple-system, sans-serif;
   white-space: nowrap;
 }
 
+#console-keys button::before {
+  content: "";
+  position: absolute;
+  inset: 7px 0;
+  z-index: -1;
+  border: 1.5px solid rgba(178, 178, 178, 0.7);
+  border-radius: 7px;
+  background: rgba(40, 44, 50, 0.95);
+}
+
 #console-keys button.down {
+  color: #fff;
+}
+
+#console-keys button.down::before {
   border-color: #fff;
   background: rgba(36, 178, 162, 0.3);
-  color: #fff;
 }
 
 /* The offer of full screen with Keyboard Lock in the level (fullscreen.js,
