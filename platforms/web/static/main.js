@@ -9,6 +9,7 @@ import { startInput } from "./input.js";
 import { createTouchControls } from "./touch-controls.js";
 import { createFullscreenOffer, fullScreenSupported } from "./fullscreen.js";
 import { createTextEntry } from "./text-entry.js";
+import { createConsoleTouch } from "./console-touch.js";
 // Early: Chrome offers installing the app once, soon after load.
 import "./install.js";
 import { startUpdates, versionText } from "./update.js";
@@ -178,7 +179,7 @@ function startEngine() {
       else if (data.type === "controls") setLevel(data);
       else if (data.type === "text_field") setTextField(data);
       else if (data.type === "cursor") setCursor(data.shown);
-      else if (data.type === "console") setConsole(data.open);
+      else if (data.type === "console") setConsole(data);
       else if (data.type === "full_screen") setFullScreen(data.on);
       else if (data.type === "result") {
         const { resolve, reject } = pending.get(data.id);
@@ -224,9 +225,15 @@ const send = (event) => worker.postMessage({ type: "input", event });
 const entry = createTextEntry(send);
 const forward = startInput(() => view, send, { onClick: () => entry.click() });
 setCursor = (shown) => forward.setCursor(shown);
-setConsole = (open) => forward.setConsole(open);
-const touch = createTouchControls(send, { call });
-document.body.append(touch.element);
+// The console on touch screens: its Console buttons, the device's keyboard
+// and a key strip (#642).
+const consoleTouch = createConsoleTouch(send, forward.consoleKeys, { call });
+setConsole = (state) => {
+  forward.setConsole(state.open);
+  consoleTouch.update(state);
+};
+const touch = createTouchControls(send, { call, onConsole: () => consoleTouch.raise() });
+document.body.append(touch.element, ...consoleTouch.elements);
 // Full screen with Keyboard Lock, offered in the level (#85).
 const offer = createFullscreenOffer(() => call("bound_keys"));
 document.body.append(offer.element);
@@ -237,6 +244,7 @@ setFullScreen = (on) => offer.setFullScreen(on, reportFullScreen);
 document.addEventListener("fullscreenchange", reportFullScreen);
 setCapture = (on) => {
   forward.setCapture(on);
+  consoleTouch.setCapture(on);
   document.querySelector("main").hidden = on;
   if (!on) offer.leave();
 };

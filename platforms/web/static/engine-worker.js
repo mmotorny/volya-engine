@@ -39,6 +39,10 @@
 // height]; the page's text entry follows it (#94, #108).
 // { type: "cursor", shown } whenever the game's mouse cursor shows or hides:
 // the page's touch is a touchpad while it shows (#108).
+// { type: "console", open, menu } whenever the console opens or closes,
+// or whether it would open over the main menu changes: the page reads the
+// clipboard for Insert while it is open (#639) and shows its Console
+// button for touch screens over the menu (#642).
 // { type: "full_screen", on } when a video restart asks the page to enter
 // or leave the browser's full screen (`rs_fullscreen`); the page answers,
 // as at start and whenever its full screen changes, with
@@ -101,6 +105,7 @@ let controls = 0;
 let field = "";
 let cursor = false;
 let consoleOpen = false;
+let consoleMenu = false;
 /** Tells the page when input capture or the level's controls changed (after calls and frames). */
 function syncCapture() {
   const on = e().input_capture();
@@ -131,9 +136,11 @@ function syncCapture() {
     postMessage({ type: "cursor", shown });
   }
   const open = e().console_open();
-  if (open !== consoleOpen) {
+  const menu = e().console_opens_over_menu();
+  if (open !== consoleOpen || menu !== consoleMenu) {
     consoleOpen = open;
-    postMessage({ type: "console", open });
+    consoleMenu = menu;
+    postMessage({ type: "console", open, menu });
   }
   const f = e().text_field();
   const key = f ? Array.from(f).join() : "";

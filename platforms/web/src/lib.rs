@@ -627,6 +627,13 @@ pub fn console_open() -> bool {
     engine::console_open()
 }
 
+/// Whether the console would open over the main menu now: the page's
+/// Console button for touch screens shows over the menu then (#642).
+#[wasm_bindgen]
+pub fn console_opens_over_menu() -> bool {
+    engine::console_opens_over_menu()
+}
+
 /// Whether the game shows its mouse cursor: the page's touch is a
 /// touchpad then, elsewhere direct (#108).
 #[wasm_bindgen]

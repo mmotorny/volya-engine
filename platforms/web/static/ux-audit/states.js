@@ -140,6 +140,26 @@ export const SECTIONS = [
       },
     ],
   },
+  // The console on touch screens (#642): the game draws the console and
+  // the main menu, the system the device's keyboard and its Paste bubble;
+  // the board shows stand-ins for them.
+  {
+    title: "Console (touch)",
+    note: "Stand-ins for what the game draws (the console, the main menu) and for the system's keyboard and Paste bubble.",
+    states: [
+      { id: "console-level", name: "Level: Console beside Menu", level: {}, devices: TOUCH },
+      { id: "console-menu", name: "Main menu: Console at the top left", console: { menu: true }, devices: TOUCH },
+      { id: "console-typing", name: "Open over the level, the keyboard up, a line typed", console: { keyboard: true }, devices: TOUCH },
+      { id: "console-key-held", name: "A strip key held", console: { keyboard: true, down: "up" }, devices: TOUCH },
+      {
+        id: "console-paste",
+        name: "Paste pressed: the system's Paste bubble",
+        console: { keyboard: true, paste: true },
+        devices: TOUCH,
+      },
+      { id: "console-keyboard-hidden", name: "Keyboard hidden: the console only", console: {}, devices: TOUCH },
+    ],
+  },
   {
     title: "Settings",
     states: [

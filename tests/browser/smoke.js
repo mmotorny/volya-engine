@@ -750,9 +750,12 @@ export const tests = {
           // not ready yet.
           const doc = frame.contentDocument;
           // The level's states show the touch controls (or the full screen
-          // offer) instead of a screen.
-          const overlay = state.level?.offer ? "fullscreen-offer" : "touch-controls";
-          const shown = state.level ? doc?.getElementById(overlay)?.hidden === false : doc?.getElementById("game")?.children.length > 0;
+          // offer) instead of a screen, the console's its touch layer.
+          const overlay = state.level?.offer ? "fullscreen-offer" : state.console ? "console-touch" : "touch-controls";
+          const shown =
+            state.level || state.console
+              ? doc?.getElementById(overlay)?.hidden === false
+              : doc?.getElementById("game")?.children.length > 0;
           ok = doc?.documentElement?.dataset.ready === "true" && (shown || state.startError);
         }
         if (!ok) failed.push(`${device.id}/${state.id}`);

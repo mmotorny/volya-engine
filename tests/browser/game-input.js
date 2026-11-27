@@ -203,7 +203,7 @@ export const tests = {
 
   "keyboard: the console key opens the console over the level, keys type into it, Insert pastes the clipboard in order, Escape closes it": async () => {
     needsGame();
-    if (coarse()) skip("desktop keyboard only: the touch way to the console is #642");
+    if (coarse()) skip("desktop keyboard only: the touch screen's way has its own test");
     await until((s) => s.phase === "level" && !s.menu && !s.intro, "the level's controls");
     const touchControls = document.getElementById("touch-controls");
     const live = async (want) => {
@@ -239,6 +239,113 @@ export const tests = {
     assert(!s.menu, "Escape closed the console only");
     await live(true);
     return "opened, typed, pasted, closed";
+  },
+
+  "touch: Console opens the console and focuses the device keyboard's input; typed characters, Backspace, Return, the key strip (held Up, Paste) and the keyboard's paste type; hidden, a tap on the console raises it; Esc closes; over the menu too": async () => {
+    needsGame();
+    await until((s) => s.phase === "level" && !s.menu && !s.intro, "the level's controls");
+    const controls = document.getElementById("touch-controls");
+    const entry = document.getElementById("console-entry");
+    const strip = document.getElementById("console-keys");
+    const layer = document.getElementById("console-touch");
+    // A touch anywhere shows the controls (a touch device).
+    const t = { pointerType: "touch", isPrimary: true, button: 0, bubbles: true, cancelable: true };
+    pointer("pointerdown", client(512, 100), { ...t, pointerId: 70, buttons: 1 });
+    pointer("pointerup", client(512, 100), { ...t, pointerId: 70, buttons: 0 });
+    for (let i = 0; i < 100 && (controls.hidden || controls.dataset.live !== "true"); i++) await sleep(20);
+    const tap = (el, id) => {
+      const r = el.getBoundingClientRect();
+      const at = { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+      el.dispatchEvent(new PointerEvent("pointerdown", { ...t, ...at, pointerId: id, buttons: 1 }));
+      el.dispatchEvent(new PointerEvent("pointerup", { ...t, ...at, pointerId: id, buttons: 0 }));
+    };
+    const shown = async (el, want, what) => {
+      for (let i = 0; i < 100 && el.hidden === want; i++) await sleep(20);
+      assertEqual(!el.hidden, want, what);
+    };
+    // Console, right of Menu in the top row.
+    const button = controls.querySelector(".touch-button.console");
+    const [menu, own] = [localRect(controls.querySelector(".touch-button.menu"), controls), localRect(button, controls)];
+    assert(own.left > menu.right && Math.abs(own.top - menu.top) < 1, `Console right of Menu: ${JSON.stringify([menu, own])}`);
+    assertEqual(button.getAttribute("aria-label"), "Console", "its name");
+    tap(button, 71);
+    assertEqual(document.activeElement, entry, "the input focused in the tap");
+    await until((s) => s.console.open, "Console to open the console");
+    await shown(strip, true, "the key strip");
+    assertEqual([...strip.children].map((k) => k.textContent), ["Esc", "Tab", "↑", "↓", "PgUp", "PgDn", "Paste"], "the strip's keys");
+    // Typed characters as the keys that type them (Cyrillic types nothing).
+    const input = (inputType, data) => {
+      entry.value = data ?? "";
+      entry.dispatchEvent(new InputEvent("input", { inputType, data, bubbles: true }));
+    };
+    input("insertText", "Zz_Q ~1!ж");
+    await until((s) => s.console.line === "zz_q ~1!", "the typed line");
+    assertEqual(entry.value, "", "the input emptied");
+    const press = (key) => entry.dispatchEvent(new KeyboardEvent("keydown", { key, code: "", bubbles: true, cancelable: true }));
+    press("Backspace");
+    input("deleteContentBackward");
+    await until((s) => s.console.line === "zz_q ~", "Backspace twice");
+    press("Enter");
+    let s = await until((s) => s.console.line === "" && s.console.log?.includes("zz_q"), "Return to execute the line");
+    // Up held on the strip: the history's newest entry.
+    const up = strip.querySelector('[data-key="up"]');
+    const r = up.getBoundingClientRect();
+    const at = { clientX: r.left + 5, clientY: r.top + 5 };
+    up.dispatchEvent(new PointerEvent("pointerdown", { ...t, ...at, pointerId: 72, buttons: 1 }));
+    assert(up.classList.contains("down"), "Up shown held");
+    await until((s) => s.console.line === "zz_q ~", "Up to recall the line");
+    up.dispatchEvent(new PointerEvent("pointerup", { ...t, ...at, pointerId: 72, buttons: 0 }));
+    // Paste reads the clipboard in its tap (stubbed: headless Chrome asks
+    // no one) and replaces the line, as Insert; so does the keyboard's own
+    // paste.
+    const clipboard = Object.getOwnPropertyDescriptor(Navigator.prototype, "clipboard");
+    Object.defineProperty(navigator, "clipboard", { value: { readText: async () => "Hud_Weapon" }, configurable: true });
+    try {
+      tap(strip.querySelector('[data-key="insert"]'), 73);
+      await until((s) => s.console.line === "hud_weapon", "Paste");
+    } finally {
+      delete navigator.clipboard;
+      if (clipboard) Object.defineProperty(Navigator.prototype, "clipboard", clipboard);
+    }
+    input("insertFromPaste", "Stat_Memory");
+    await until((s) => s.console.line === "stat_memory", "the keyboard's paste");
+    assertEqual(document.activeElement, entry, "strip taps keep the input focused");
+    // The keyboard hidden: the console stays open, the strip goes, a tap
+    // on the console's area raises the keyboard again.
+    entry.blur();
+    await shown(strip, false, "the strip with the keyboard hidden");
+    const area = layer.querySelector(".console-area");
+    await shown(area, true, "the console's area");
+    assert((await state()).console.open, "the console open with the keyboard hidden");
+    tap(area, 74);
+    assertEqual(document.activeElement, entry, "a tap on the console raises the keyboard");
+    await shown(strip, true, "the strip again");
+    // Esc closes the console and the keyboard; the controls come back.
+    tap(strip.querySelector('[data-key="escape"]'), 75);
+    s = await until((s) => !s.console.open, "Esc to close the console");
+    assert(!s.menu, "Esc closed the console only");
+    for (let i = 0; i < 50 && document.activeElement === entry; i++) await sleep(20);
+    assert(document.activeElement !== entry, "the keyboard closed");
+    await shown(strip, false, "the strip closed");
+    for (let i = 0; i < 100 && controls.dataset.live !== "true"; i++) await sleep(20);
+    // Over the main menu: Console at the top left, opening the console
+    // there; Esc closes it, the menu stays.
+    key("Escape");
+    await until((s) => inGame(s), "the in-game menu");
+    const overMenu = layer.querySelector(".touch-button.console");
+    await shown(overMenu, true, "Console over the menu");
+    const place = localRect(overMenu, layer);
+    assert(place.left < 100 && place.top < 100, `at the top left: ${JSON.stringify(place)}`);
+    tap(overMenu, 76);
+    await until((s) => s.console.open, "Console to open the console over the menu");
+    await shown(overMenu, false, "Console hidden while the console is open");
+    tap(strip.querySelector('[data-key="escape"]'), 77);
+    s = await until((s) => !s.console.open, "Esc to close the console over the menu");
+    assert(inGame(s), "the menu stays");
+    key("Escape");
+    await until((s) => s.phase === "level" && !s.menu, "back in the level");
+    await shown(overMenu, false, "no Console over the level");
+    return "opened, typed, recalled, pasted, closed, over the menu too";
   },
 
   "touch: the controls are drawn from the game's textures": async () => {

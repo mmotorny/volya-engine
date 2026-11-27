@@ -111,9 +111,10 @@ html[data-engine-input] canvas#view {
   }
 }
 
-/* The level's touch controls (touch-controls.js): over the canvas, in the
-   game's landscape frame, clear of the safe areas. */
-#touch-controls {
+/* The level's touch controls (touch-controls.js) and the console's on
+   touch screens (console-touch.js): over the canvas, in the game's
+   landscape frame, clear of the safe areas. */
+:is(#touch-controls, #console-touch) {
   --safe-top: env(safe-area-inset-top);
   --safe-right: env(safe-area-inset-right);
   --safe-bottom: env(safe-area-inset-bottom);
@@ -131,7 +132,7 @@ html[data-engine-input] canvas#view {
 /* Turned with the canvas on upright phones: the controls' top is the
    screen's right, their left the screen's top. */
 @media (orientation: portrait) and (pointer: coarse) {
-  #touch-controls {
+  :is(#touch-controls, #console-touch) {
     inset: auto;
     top: 50%;
     left: 50%;
@@ -152,7 +153,7 @@ html[data-engine-input] canvas#view {
    the minimap's ring, teal glyphs. The colours come from the game when it
    is imported (touch-controls.js sets them): teal, the HUD's posture
    icons'; grey, the crosshair's. These are the approximations'. */
-#touch-controls {
+:is(#touch-controls, #console-touch) {
   --hud-teal: 36, 178, 162;
   --hud-teal-hi: 112, 205, 195;
   --hud-grey: 178, 178, 178;
@@ -178,7 +179,7 @@ html[data-engine-input] canvas#view {
 
 /* The art's canvases, centred in their element at their own CSS size
    (touch-controls.js sizes them). */
-#touch-controls canvas {
+:is(#touch-controls, #console-touch) canvas {
   position: absolute;
   left: 50%;
   top: 50%;
@@ -330,7 +331,7 @@ html[data-engine-input] canvas#view {
 
 /* Buttons: the disc, then the glyph, then the rim (grey; white held; bright
    teal over a faint teal fill when on). */
-#touch-controls button.touch-button {
+:is(#touch-controls, #console-touch) button.touch-button {
   position: absolute;
   box-sizing: border-box;
   min-height: 0;
@@ -346,8 +347,8 @@ html[data-engine-input] canvas#view {
   transform: none;
 }
 
-#touch-controls button.touch-button::before,
-#touch-controls button.touch-button::after {
+:is(#touch-controls, #console-touch) button.touch-button::before,
+:is(#touch-controls, #console-touch) button.touch-button::after {
   content: "";
   position: absolute;
   inset: 0;
@@ -355,41 +356,41 @@ html[data-engine-input] canvas#view {
   pointer-events: none;
 }
 
-#touch-controls button.touch-button::before {
+:is(#touch-controls, #console-touch) button.touch-button::before {
   z-index: 1;
 }
 
-#touch-controls button.touch-button::after {
+:is(#touch-controls, #console-touch) button.touch-button::after {
   z-index: 3;
   border: var(--hud-rim) solid rgba(var(--hud-grey), 0.7);
 }
 
-#touch-controls button.touch-button .touch-glyph {
+:is(#touch-controls, #console-touch) button.touch-button .touch-glyph {
   z-index: 2;
 }
 
-#touch-controls button.touch-button:focus-visible {
+:is(#touch-controls, #console-touch) button.touch-button:focus-visible {
   outline: 2px solid rgb(var(--hud-teal-hi));
   outline-offset: 3px;
 }
 
-#touch-controls button.touch-button.down {
+:is(#touch-controls, #console-touch) button.touch-button.down {
   transform: scale(0.92);
 }
 
-#touch-controls button.touch-button.down::after {
+:is(#touch-controls, #console-touch) button.touch-button.down::after {
   border-color: #fff;
 }
 
-#touch-controls button.touch-button[aria-pressed="true"]::before {
+:is(#touch-controls, #console-touch) button.touch-button[aria-pressed="true"]::before {
   background: rgba(var(--hud-teal), 0.16);
 }
 
-#touch-controls button.touch-button[aria-pressed="true"]::after {
+:is(#touch-controls, #console-touch) button.touch-button[aria-pressed="true"]::after {
   border-color: rgb(var(--hud-teal-hi));
 }
 
-#touch-controls button.touch-button[aria-pressed="true"].down::after {
+:is(#touch-controls, #console-touch) button.touch-button[aria-pressed="true"].down::after {
   border-color: #fff;
 }
 
@@ -437,6 +438,23 @@ button.touch-button.down .touch-edges {
   visibility: visible;
 }
 
+/* Console (#642): right of Menu in the level; over the main menu, where
+   Menu isn't, at Menu's place. */
+#touch-controls button.touch-button.console,
+#console-touch button.touch-button.console {
+  top: calc(var(--safe-top) + var(--edge));
+  width: 44px;
+  height: 44px;
+}
+
+#touch-controls button.touch-button.console {
+  left: calc(var(--safe-left) + var(--edge) + 56px);
+}
+
+#console-touch button.touch-button.console {
+  left: calc(var(--safe-left) + var(--edge));
+}
+
 #touch-controls button.touch-button.menu {
   left: calc(var(--safe-left) + var(--edge));
   top: calc(var(--safe-top) + var(--edge));
@@ -471,7 +489,7 @@ button.touch-button.down .touch-edges {
   right: calc(var(--safe-right) + var(--edge) + 112px);
 }
 
-#touch-controls button.touch-button[hidden] {
+:is(#touch-controls, #console-touch) :is(button.touch-button, .console-area)[hidden] {
   display: none;
 }
 
@@ -546,6 +564,88 @@ button.touch-button.down .touch-edges {
   caret-color: transparent;
   font-size: 16px;
   pointer-events: none;
+}
+
+/* The console's layer takes only the taps of what it shows. */
+#console-touch {
+  pointer-events: none;
+}
+
+#console-touch :is(button, .console-area) {
+  pointer-events: auto;
+}
+
+/* The console's area (console-window.md 4.1: the top half over a level or
+   the menu): a tap raises the device's keyboard again. */
+#console-touch .console-area {
+  position: absolute;
+  inset: 0 0 50% 0;
+}
+
+/* The console's unseen input (console-touch.js), at the frame's top left;
+   16 px text, as the save field's. */
+#console-entry {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+  font-size: 16px;
+  opacity: 0;
+  pointer-events: none;
+  /* WebKit edits no text where selection is off (believed). */
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* The console's key strip, just above the device's keyboard and upright
+   with it: keys in the style of the touch controls, at least 44 px high. */
+#console-keys {
+  position: fixed;
+  left: 0;
+  z-index: 2;
+  box-sizing: border-box;
+  display: flex;
+  gap: 6px;
+  padding: 6px max(8px, env(safe-area-inset-right)) 6px max(8px, env(safe-area-inset-left));
+  background: rgba(16, 18, 22, 0.92);
+  border-top: 1px solid rgba(178, 178, 178, 0.25);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+#console-keys[hidden] {
+  display: none;
+}
+
+#console-keys button {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 44px;
+  margin: 0;
+  padding: 0 4px;
+  border: 1.5px solid rgba(178, 178, 178, 0.7);
+  border-radius: 8px;
+  background: rgba(40, 44, 50, 0.95);
+  color: rgb(178, 178, 178);
+  font: 600 15px/1 system-ui, -apple-system, sans-serif;
+  white-space: nowrap;
+}
+
+#console-keys button.down {
+  border-color: #fff;
+  background: rgba(36, 178, 162, 0.3);
+  color: #fff;
 }
 
 /* The offer of full screen with Keyboard Lock in the level (fullscreen.js,

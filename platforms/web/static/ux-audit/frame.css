@@ -62,14 +62,14 @@ html[data-ux-level] {
   background: linear-gradient(#5b6168, #2f3337);
 }
 
-#touch-controls {
+:is(#touch-controls, #console-touch) {
   --safe-top: var(--inset-top, 0px);
   --safe-right: var(--inset-right, 0px);
   --safe-bottom: var(--inset-bottom, 0px);
   --safe-left: var(--inset-left, 0px);
 }
 
-html[data-ux-turned] #touch-controls {
+html[data-ux-turned] :is(#touch-controls, #console-touch) {
   inset: auto;
   top: 50%;
   left: 50%;
@@ -80,4 +80,67 @@ html[data-ux-turned] #touch-controls {
   --safe-right: var(--inset-bottom, 0px);
   --safe-bottom: var(--inset-left, 0px);
   --safe-left: var(--inset-top, 0px);
+}
+
+/* The console on touch screens (#642): stand-ins for the game's console
+   (console-window.md 4.1, 4.3: the top half, the prompt line
+   rgb(128, 128, 255)) and main menu, and for the system's keyboard and
+   Paste bubble. */
+#console-keys {
+  padding-left: max(8px, var(--inset-left, 0px));
+  padding-right: max(8px, var(--inset-right, 0px));
+}
+
+.ux-console {
+  position: absolute;
+  inset: 0 0 50% 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 0 calc(var(--safe-right) + 8px) 6px calc(var(--safe-left) + 8px);
+  background: rgb(32, 32, 32);
+  color: rgb(200, 200, 200);
+  font: 13px/1.5 ui-monospace, Menlo, monospace;
+}
+
+.ux-console p {
+  margin: 0;
+}
+
+.ux-console .prompt {
+  color: rgb(128, 128, 255);
+}
+
+.ux-stand-in {
+  display: grid;
+  place-items: center;
+  color: rgba(255, 255, 255, 0.55);
+  font: 600 15px system-ui, -apple-system, sans-serif;
+}
+
+.ux-menu {
+  position: absolute;
+  inset: 0;
+}
+
+.ux-keyboard {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  background: #2b2d31;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.ux-paste-bubble {
+  position: fixed;
+  z-index: 3;
+  transform: translate(-50%, -100%);
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: #3a3b3f;
+  color: #fff;
+  font: 15px system-ui, -apple-system, sans-serif;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
 }

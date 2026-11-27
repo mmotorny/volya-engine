@@ -32,13 +32,14 @@
 //! | `["blur"]` | the page lost focus: release everything |
 //! | `["unlock"]` | the page lost its pointer lock (sent after `["blur"]`) |
 //! | `["text", s]` | the characters of `s`, typed through the page's text entry (the device's keyboard, #94) |
+//! | `["typed", s]` | the characters of `s`, typed into the open console through the device's keyboard (#642): each as the presses of the keys that type it, Shift around those that need it (console-input.md section 2) |
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
 
 use js_sys::Array;
 use serde::Serialize;
-use volya_engine::core::console::Clipboard;
+use volya_engine::core::console::{Clipboard, typing_key};
 use volya_engine::core::input::{
     Action, Event, GamepadAxis, GamepadButton, Input, Key, MouseButton, TouchButton, TouchPhase,
 };
@@ -267,6 +268,28 @@ fn clipboard(message: &Array) -> Option<Clipboard> {
     })
 }
 
+/// The key presses and releases that type `s` in the console, in order
+/// (#642): each character's key ([`typing_key`]), within a press and
+/// release of left Shift where it needs one; characters no key types are
+/// dropped.
+fn typed_keys(s: &str) -> Vec<Event> {
+    let key = |key, pressed| Event::Key { key, pressed };
+    let mut events = Vec::new();
+    for (code, shift) in s.chars().filter_map(typing_key) {
+        let Some(k) = Key::ALL.iter().copied().find(|k| k.code() == code) else {
+            continue;
+        };
+        if shift {
+            events.push(key(Key::LeftShift, true));
+        }
+        events.extend([key(k, true), key(k, false)]);
+        if shift {
+            events.push(key(Key::LeftShift, false));
+        }
+    }
+    events
+}
+
 /// `None` for `blur`.
 fn decode(message: &Array) -> Result<Option<Vec<Event>>, JsValue> {
     let bad = || JsValue::from_str(&format!("bad input message {message:?}"));
@@ -349,6 +372,7 @@ fn decode(message: &Array) -> Result<Option<Vec<Event>>, JsValue> {
             let s = text(1)?;
             return Ok(Some(s.chars().map(|ch| Event::Text { ch }).collect()));
         }
+        "typed" => return Ok(Some(typed_keys(&text(1)?))),
         _ => return Err(bad()),
     };
     Ok(Some(vec![event]))

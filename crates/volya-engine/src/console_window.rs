@@ -10,7 +10,7 @@
 use std::io;
 
 use crate::core::console::{self, Console, Typed};
-use crate::core::input::{Control, Event, Input, Key};
+use crate::core::input::{Action, Control, Event, Input, Key, TouchButton};
 use crate::core::vfs::Vfs;
 use crate::data::{Assets, GameData};
 use crate::scene::{Scene, Sprite, TextureId};
@@ -211,16 +211,23 @@ fn press(c: Control) -> Event {
     }
 }
 
-/// Whether this frame has a press of a keyboard key bound to `console`.
+/// Whether this frame has a press of a keyboard key bound to `console`, or
+/// of the touch screen's Console button, which does what such a key does
+/// (our design, #642).
 fn console_key_pressed(console: &Console, input: &Input) -> bool {
     let action = console::action_index("console").expect("console action");
     let keys: Vec<Key> = (console.keys(action).into_iter().flatten())
         .filter_map(Key::from_dik_name)
         .collect();
+    let button = Control::Touch(TouchButton::Console);
     input
         .device_changes()
         .iter()
         .any(|&(c, pressed)| pressed && matches!(c, Control::Key(k) if keys.contains(&k)))
+        || input
+            .actions()
+            .iter()
+            .any(|a| matches!(a, Action::Press { control, .. } if *control == button))
 }
 
 impl ConsoleWindow {

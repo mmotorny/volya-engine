@@ -109,6 +109,25 @@ fn character(code: u16, shift: bool) -> Option<char> {
     }
 }
 
+/// The key that types `c` in the console (section 2's table) and whether
+/// it needs Shift: a device keyboard's characters as key presses (our
+/// design, #642). An upper-case letter is its letter's key without Shift
+/// (letters are always lower case); typographic quotes (a device
+/// keyboard's smart punctuation) are the plain ones. `None` for a
+/// character no key types.
+pub fn typing_key(c: char) -> Option<(u16, bool)> {
+    let c = match c {
+        '\u{2018}' | '\u{2019}' => '\'',
+        '\u{201C}' | '\u{201D}' => '"',
+        c => c.to_ascii_lowercase(),
+    };
+    [false, true].into_iter().find_map(|shift| {
+        (0..=255)
+            .find(|&code| character(code, shift) == Some(c))
+            .map(|code| (code, shift))
+    })
+}
+
 /// Cuts `line` to its first [`LINE_LENGTH`] characters (section 1).
 fn cut(line: &mut String) {
     if let Some((at, _)) = line.char_indices().nth(LINE_LENGTH) {
@@ -435,6 +454,29 @@ mod tests {
             .collect();
         o.shifted(&letters);
         assert_eq!(o.line(), "qwertyuiopasdfghjklzxcvbnm ");
+    }
+
+    #[test]
+    fn typing_keys_type_each_character_they_stand_for() {
+        let mut o = Open::new();
+        for c in "Cfg_load ~1!\"\u{2019}|".chars() {
+            let (code, shift) = typing_key(c).unwrap();
+            if shift {
+                o.shifted(&[code]);
+            } else {
+                o.tap(&[code]);
+            }
+        }
+        assert_eq!(o.line(), "cfg_load ~1!\"'|");
+        assert_eq!(typing_key('q'), Some((Q, false)));
+        assert_eq!(
+            typing_key('~'),
+            Some((GRAVE, true)),
+            "key 41 types only with Shift"
+        );
+        for c in ['ж', '€', '\t', '\u{1F600}'] {
+            assert_eq!(typing_key(c), None, "{c:?}");
+        }
     }
 
     #[test]

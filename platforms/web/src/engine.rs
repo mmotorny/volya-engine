@@ -592,6 +592,16 @@ pub fn console_open() -> bool {
     RUNNING.with(|r| r.borrow().as_ref().is_some_and(|r| r.app.console_open()))
 }
 
+/// Whether the console would open over the main menu now
+/// ([`App::console_opens_over_menu`]).
+pub fn console_opens_over_menu() -> bool {
+    RUNNING.with(|r| {
+        r.borrow()
+            .as_ref()
+            .is_some_and(|r| r.app.console_opens_over_menu())
+    })
+}
+
 /// Whether the game shows its mouse cursor ([`App::cursor_shown`]): the
 /// page's touch is a touchpad then (#108).
 pub fn cursor_shown() -> bool {

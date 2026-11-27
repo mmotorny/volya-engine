@@ -516,10 +516,12 @@ pub enum TouchButton {
     Torch,
     /// The `night_vision` command (#363).
     NightVision,
+    /// Opens the console as a key bound to `console` does (#642).
+    Console,
 }
 
 impl TouchButton {
-    pub const ALL: [TouchButton; 7] = [
+    pub const ALL: [TouchButton; 8] = [
         TouchButton::Jump,
         TouchButton::Crouch,
         TouchButton::CrouchLow,
@@ -527,6 +529,7 @@ impl TouchButton {
         TouchButton::Inventory,
         TouchButton::Torch,
         TouchButton::NightVision,
+        TouchButton::Console,
     ];
 
     pub fn name(self) -> &'static str {
@@ -538,6 +541,7 @@ impl TouchButton {
             TouchButton::Inventory => "inventory",
             TouchButton::Torch => "torch",
             TouchButton::NightVision => "night_vision",
+            TouchButton::Console => "console",
         }
     }
 
@@ -707,6 +711,7 @@ impl Control {
             Control::Touch(TouchButton::Inventory) => "touch_inventory",
             Control::Touch(TouchButton::Torch) => "touch_torch",
             Control::Touch(TouchButton::NightVision) => "touch_night_vision",
+            Control::Touch(TouchButton::Console) => "touch_console",
         }
     }
 }

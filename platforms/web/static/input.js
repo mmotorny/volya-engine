@@ -190,14 +190,17 @@ const AXIS_EPSILON = 0.02;
  * engine reports capture changes, `setLevel(on, keys)`, called when the
  * level's controls go live or stop and when the character takes the
  * keyboard's keys under a screen (the inventory screen, #110), and
- * `setCursor(shown)`, called when the game's cursor shows or hides, and
- * `setConsole(open)`, called when the console opens or closes.
+ * `setCursor(shown)`, called when the game's cursor shows or hides,
+ * `setConsole(open)`, called when the console opens or closes, and
+ * `consoleKeys`, the keys of the console's text entry for touch screens:
+ * `press(name, pressed)`, `type(text)` and `paste(text)`.
  */
 export function startInput(view, send, { onClick = () => {} } = {}) {
   let capture = false;
-  // The page's text entry for the save screen's name field
-  // (text-entry.js): characters typed into it arrive as text.
-  const entry = (event) => event.target?.closest?.("#text-entry");
+  // The page's text entries, for the save screen's name field
+  // (text-entry.js) and the console (console-touch.js): characters typed
+  // into them arrive from them.
+  const entry = (event) => event.target?.closest?.("#text-entry, #console-entry");
   let level = false;
   // The character takes keys: the level's controls are live, or a screen
   // over the running level passes the keys it doesn't use on (#110).
@@ -329,6 +332,11 @@ export function startInput(view, send, { onClick = () => {} } = {}) {
     // (crouch), so keys pressed with it are the game's there; the engine
     // decides which reach the character.
     if (pressed && (event.repeat || event.metaKey || event.altKey || (event.ctrlKey && !keys))) return;
+    press(name, pressed);
+  };
+  // A key's press or release, from the keyboard or the console's key strip
+  // for touch screens (console-touch.js).
+  const press = (name, pressed) => {
     if (pressed && name === "insert" && consoleOpen) {
       paste();
       return;
@@ -344,6 +352,12 @@ export function startInput(view, send, { onClick = () => {} } = {}) {
   const keySend = (message) => {
     if (reads === 0) send(message);
     else queue = queue.then(() => send(message));
+  };
+  // Pasted into the console's text entry (the device keyboard's own
+  // paste): what Insert does with that text.
+  const pasted = (text) => {
+    keySend(["key", "insert", true, ...(text === "" ? ["none"] : ["text", text])]);
+    keySend(["key", "insert", false]);
   };
   const paste = () => {
     reads += 1;
@@ -459,5 +473,12 @@ export function startInput(view, send, { onClick = () => {} } = {}) {
   const setConsole = (open) => {
     consoleOpen = open;
   };
-  return { setCapture, setLevel, setCursor, setConsole };
+  // The console's text entry and key strip for touch screens
+  // (console-touch.js), in order with the keyboard's keys.
+  const consoleKeys = {
+    press: (name, pressed) => capture && press(name, pressed),
+    type: (text) => capture && keySend(["typed", text]),
+    paste: (text) => capture && consoleOpen && pasted(text),
+  };
+  return { setCapture, setLevel, setCursor, setConsole, consoleKeys };
 }

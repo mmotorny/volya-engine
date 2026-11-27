@@ -8,6 +8,7 @@
 import { screens, start } from "../game-ui.js";
 import { createFullscreenOffer } from "../fullscreen.js";
 import { createTouchControls } from "../touch-controls.js";
+import { createConsoleTouch } from "../console-touch.js";
 import { versionText } from "../update.js";
 import { DEVICES, STATES } from "./states.js";
 
@@ -176,6 +177,46 @@ if (state.level) {
     if (lock) touch.showLocked(thumb);
     if (fade) touch.fadeNow();
     if (down) box.querySelector(`.touch-button.${down}`).classList.add("down");
+  }
+} else if (state.console) {
+  // The console on touch screens (#642), over a plain backdrop: over the
+  // main menu its Console button, or the console open (a stand-in for
+  // what the game draws) with the device's keyboard (a stand-in) and the
+  // key strip on it.
+  document.documentElement.dataset.uxLevel = "";
+  if (device.height > device.width) document.documentElement.dataset.uxTurned = "";
+  document.querySelector("main").hidden = true;
+  const { menu, keyboard, down, paste } = state.console;
+  const consoleTouch = createConsoleTouch(() => {}, { press() {}, type() {}, paste() {} }, { touch: true });
+  document.body.append(...consoleTouch.elements);
+  consoleTouch.setCapture(true);
+  consoleTouch.update({ open: !menu, menu: Boolean(menu) });
+  const [root, strip] = consoleTouch.elements;
+  if (menu) {
+    root.insertAdjacentHTML("afterbegin", `<div class="ux-stand-in ux-menu">The game's main menu</div>`);
+  } else {
+    // The console's look (console-window.md 4.1, 4.3): the top half, its
+    // log above the prompt line.
+    root.insertAdjacentHTML(
+      "afterbegin",
+      `<div class="ux-console"><p>~ cfg_load</p><p>! Unknown command:  zz</p><p class="prompt">&gt;&gt;&gt; hud_crosshair_</p></div>`,
+    );
+  }
+  if (keyboard) {
+    // About the height of the iPhone's keyboard (our estimate).
+    const height = device.height > device.width ? 300 : 200;
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      `<div class="ux-stand-in ux-keyboard" style="height: ${height}px">Device keyboard</div>`,
+    );
+    consoleTouch.showKeys({ height, down });
+    if (paste) {
+      const key = strip.querySelector('[data-key="insert"]').getBoundingClientRect();
+      document.body.insertAdjacentHTML(
+        "beforeend",
+        `<div class="ux-paste-bubble" style="left: ${key.left + key.width / 2}px; top: ${key.top - 8}px">Paste</div>`,
+      );
+    }
   }
 } else if (state.startError) {
   status.textContent = `Volya Engine · ${versionText()}`;

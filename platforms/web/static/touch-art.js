@@ -15,11 +15,11 @@
 // - Glyphs: the HUD's posture icons (`ui_hud_soldier_crouch`, `_creep`,
 //   `_sprint`) as silhouettes (their alpha with the one-texel scanline gaps
 //   closed by the engine) and our own Jump arrow (after the proportions of
-//   `ui\ui_map_arrow_02`), Menu bars and Inventory backpack (the UI
-//   textures have no inventory icon) and Torch beam (the torch's one
-//   picture, its icon, is Night vision's), redrawn with scanlines at device
-//   pixels (every third row dimmed), so they can't beat against the
-//   screen's pixels.
+//   `ui\ui_map_arrow_02`), Menu bars, Inventory backpack (the UI textures
+//   have no inventory icon), Console prompt (#642) and Torch beam (the
+//   torch's one picture, its icon, is Night vision's), redrawn with
+//   scanlines at device pixels (every third row dimmed), so they can't
+//   beat against the screen's pixels.
 // - Night vision's glyph: the inventory icon of the torch (`device_torch`,
 //   which has the night vision, torch.md 1.1; `ui\ui_icon_equipment`)
 //   engraved: its brightness as alpha, so its lenses show where a
@@ -394,8 +394,17 @@ const RAYS = [
   [14, 15.4, 21.5, 18.6],
 ];
 
-/** A vector glyph source (our Jump arrow, Menu bars, Inventory backpack or
- * Torch beam) at `size` device pixels. */
+/** Our Console glyph in 24 × 24 (#642): a prompt, `>_`, its chevron
+ * stroked (points) and its underscore a bar. */
+const PROMPT = [
+  [4.5, 6],
+  [10.5, 12],
+  [4.5, 18],
+];
+const UNDERSCORE = [12.5, 16.9, 8, 2.2];
+
+/** A vector glyph source (our Jump arrow, Menu bars, Inventory backpack,
+ * Torch beam or Console prompt) at `size` device pixels. */
 export function vectorGlyph(name, size) {
   const [c, g] = canvas(size, size);
   g.scale(size / 24, size / 24);
@@ -414,6 +423,15 @@ export function vectorGlyph(name, size) {
       g.lineTo(x1, y1);
       g.stroke();
     }
+  } else if (name === "console") {
+    g.strokeStyle = "#fff";
+    g.lineWidth = 2.4;
+    g.lineCap = "round";
+    g.lineJoin = "round";
+    g.beginPath();
+    PROMPT.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
+    g.stroke();
+    g.fillRect(...UNDERSCORE);
   } else if (name === "jump") {
     g.beginPath();
     JUMP.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));

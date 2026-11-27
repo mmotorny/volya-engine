@@ -18,7 +18,9 @@
 //   crouch) at the bottom right act on their press; a drag begun on either
 //   then looks too, and Crouch swiped down is the low crouch. Menu at the
 //   top left does what Escape does; Inventory at the top right opens the
-//   inventory screen (#110), both clear of the thumbs' zones;
+//   inventory screen (#110), both clear of the thumbs' zones; Console,
+//   right of Menu, opens the console as its key does and raises the
+//   device's keyboard for it (#642, console-touch.js);
 // - Torch and Night vision (toggles, shown on) in a row left of Inventory
 //   along the top edge (#363), clear of the thumbs' zones too, give the
 //   `torch` and `night_vision` commands. Each shows only while its command
@@ -38,7 +40,7 @@ import { approximateArt, gameArt, paintDisc, paintGlyph, paintPicture, vectorGly
 const RADIUS = 56;
 /** Sizes in CSS pixels (match style.css): the buttons, the knob, the lock
  * target, and the segmented ring around the stick. */
-const SIZE = { menu: 44, inventory: 44, torch: 44, nightVision: 44, jump: 80, crouch: 64 };
+const SIZE = { menu: 44, console: 44, inventory: 44, torch: 44, nightVision: 44, jump: 80, crouch: 64 };
 const KNOB = 48;
 const TARGET = 44;
 const SEGMENTS = 2 * RADIUS + 6;
@@ -135,9 +137,10 @@ const onTarget = ([x, y], centre) => Math.hypot(x - centre[0], y - centre[1]) <=
  * torch, nightVision })` follows the engine's state (`torch` and
  * `nightVision` on or off, or null to hide their buttons). `touch` says the device has touch without
  * waiting for one, and `fade: false` keeps the controls from fading when
- * idle (UX audit page).
+ * idle (UX audit page). `onConsole()` runs in the handler of a tap on
+ * Console (the page raises the device's keyboard there).
  */
-export function createTouchControls(send, { call = null, touch = false, fade = true } = {}) {
+export function createTouchControls(send, { call = null, touch = false, fade = true, onConsole = () => {} } = {}) {
   const root = element("div", "touch-controls");
   root.id = "touch-controls";
   root.hidden = true;
@@ -171,6 +174,7 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
     return b;
   };
   const menu = button("menu", "Menu");
+  const consoleButton = button("console", "Console");
   const inventory = button("inventory", "Inventory");
   const jump = button("jump", "Jump", ["left", "right"]);
   // Crouch: the upright crouch icon; brighter when on; the creep icon in
@@ -187,7 +191,7 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
   }
   const actions = element("div", "touch-actions");
   actions.append(crouch, jump);
-  root.append(move, look, menu, inventory, torch, nightVision, actions);
+  root.append(move, look, menu, consoleButton, inventory, torch, nightVision, actions);
 
   // Every touch or pen contact on the controls stays with them (a pen
   // can't use pointer lock); a mouse passes through to input.js (pointer
@@ -458,6 +462,24 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
     });
   }
 
+  // Console acts on its tap's release: a device's keyboard rises only for
+  // a focus within a user gesture, which a touch's pointerup is and its
+  // pointerdown is not (documented: HTML's activation-triggering events).
+  own(consoleButton, {
+    pointerdown: (event) => {
+      capture(event);
+      consoleButton.classList.add("down");
+    },
+    pointerup: () => {
+      if (!consoleButton.classList.contains("down")) return;
+      consoleButton.classList.remove("down");
+      send(["tbutton", "console", true]);
+      send(["tbutton", "console", false]);
+      onConsole();
+    },
+    pointercancel: () => consoleButton.classList.remove("down"),
+  });
+
   // The art: approximations until the game's textures arrive (asked for
   // once the level's controls are first live), redrawn at a new
   // devicePixelRatio. For tests: `data-art` says which is drawn.
@@ -466,6 +488,7 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
     const { teal, tealHi, grey, pale } = art;
     for (const [b, size] of [
       [menu, SIZE.menu],
+      [consoleButton, SIZE.console],
       [inventory, SIZE.inventory],
       [torch, SIZE.torch],
       [nightVision, SIZE.nightVision],
@@ -477,6 +500,8 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
     const k = devicePixelRatio || 1;
     const menuGlyph = SIZE.menu * 0.5;
     paintGlyph(menu.querySelector(".touch-glyph"), vectorGlyph("menu", Math.round(menuGlyph * k)), menuGlyph, menuGlyph, grey);
+    const promptGlyph = SIZE.console * 0.56;
+    paintGlyph(consoleButton.querySelector(".touch-glyph"), vectorGlyph("console", Math.round(promptGlyph * k)), promptGlyph, promptGlyph, grey);
     // The game's UI textures have no inventory or backpack icon: our
     // backpack, drawn as the Menu bars are.
     const bagGlyph = SIZE.inventory * 0.56;
@@ -555,6 +580,7 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
       restStick();
       looking.clear();
       for (const release of releases.values()) release();
+      consoleButton.classList.remove("down");
       clearTimeout(idleTimer);
     }
   };

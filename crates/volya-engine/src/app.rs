@@ -2143,6 +2143,19 @@ impl App {
         self.window.is_open()
     }
 
+    /// Whether a key bound to `console` would open the console over the
+    /// main menu now: the menu has input (after the logo sequence, or over
+    /// a level) and the console is closed (console-window.md section 1).
+    /// The touch screen's Console button shows over the menu then (#642);
+    /// in a level it shows with the level's controls.
+    pub fn console_opens_over_menu(&self) -> bool {
+        !self.window.is_open()
+            && matches!(
+                &self.phase,
+                Some(Phase::Menu(_) | Phase::Level { menu: Some(_), .. })
+            )
+    }
+
     /// Whether the inventory screen is open.
     pub fn inventory_open(&self) -> bool {
         matches!(&self.phase, Some(Phase::Level { inventory: Some(i), .. }) if i.is_open())
@@ -3498,6 +3511,49 @@ mod tests {
             &mut FakeAudio::default(),
             in_game,
         )));
+        frame(&mut app, &mut input);
+        assert!(!app.console_open() && menu_open(&app));
+    }
+
+    /// The touch screen's Console button (#642) opens the console as the
+    /// key bound to `console` does, over the level and over the menu, and
+    /// does nothing while it is open; the page shows it over the menu
+    /// while the console is closed.
+    #[test]
+    fn the_touch_console_button_opens_the_console_as_its_key_does() {
+        let (tree, mut app, mut input, mut audio) = in_level();
+        let mut t = 32.0;
+        let mut frame = |app: &mut App, input: &mut Input| {
+            app.update(&tree, t, input, &mut audio);
+            input.end_frame();
+            t += 16.0;
+        };
+        let tap = |input: &mut Input| {
+            for pressed in [true, false] {
+                input.handle(Event::TouchButton {
+                    button: crate::core::input::TouchButton::Console,
+                    pressed,
+                });
+            }
+        };
+        assert!(app.level_controls().is_some() && !app.console_opens_over_menu());
+        tap(&mut input);
+        frame(&mut app, &mut input);
+        assert!(app.console_open() && app.level_controls().is_none());
+        // Open, it types nothing and stays open.
+        tap(&mut input);
+        frame(&mut app, &mut input);
+        assert!(app.console_open() && app.console().line().is_empty());
+        press(&mut input, Key::Escape);
+        frame(&mut app, &mut input);
+        assert!(!app.console_open() && !menu_open(&app));
+        press(&mut input, Key::Escape);
+        frame(&mut app, &mut input);
+        assert!(menu_open(&app) && app.console_opens_over_menu());
+        tap(&mut input);
+        frame(&mut app, &mut input);
+        assert!(app.console_open() && !app.console_opens_over_menu());
+        press(&mut input, Key::Escape);
         frame(&mut app, &mut input);
         assert!(!app.console_open() && menu_open(&app));
     }

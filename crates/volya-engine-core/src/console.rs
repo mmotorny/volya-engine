@@ -38,7 +38,7 @@ pub use commands::{
 pub use diagnostics::{
     MemoryStatistics, Meters, RESOURCE_LABELS, RemainingResources, ResourceCounts, set_meters,
 };
-pub use input::{Clipboard, LINE_LENGTH, Typed};
+pub use input::{Clipboard, LINE_LENGTH, Typed, typing_key};
 pub use log::{FatalReport, Log};
 pub use value::{Value, help_text, parse_mode, real_status};
 
