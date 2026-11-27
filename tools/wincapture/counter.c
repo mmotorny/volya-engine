@@ -41,6 +41,15 @@
 
 static struct frameclock *clock_;
 
+#ifdef COUNTER_KERNEL32
+/* The bisect's variant (counter-kernel32.dll, `volyacapture
+ * --kernel32-client`): the shared memory opened through kernel32, as the
+ * client did before capture-recipe.md's rule 2. Diagnostic only. */
+static struct frameclock *open_clock(void) {
+    HANDLE map = OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, FRAMECLOCK_NAME);
+    return map ? MapViewOfFile(map, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(struct frameclock)) : NULL;
+}
+#else
 /* ntdll's section functions (documented in the Windows driver kit), with
  * types of our own so no header declares them differently. ntdll's import
  * library comes before DynamoRIO's on the link line, which also provides
@@ -112,6 +121,7 @@ static struct frameclock *open_clock(void) {
     }
     return view;
 }
+#endif
 
 /* The game's folder, lower case, ending in a backslash. */
 static char folder[MAX_PATH + 1];

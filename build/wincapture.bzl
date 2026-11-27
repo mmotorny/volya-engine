@@ -23,9 +23,10 @@ def _binary_impl(ctx):
 wincapture_binary = rule(
     implementation = _binary_impl,
     doc = "C sources compiled into a 32-bit Windows DLL (`kind` dll), executable (exe) or " +
-          "DynamoRIO client (client: `sdk` holds DynamoRIO's headers and import library).",
+          "DynamoRIO client (client: `sdk` holds DynamoRIO's headers and import library; " +
+          "client-kernel32 the bisect's variant importing kernel32).",
     attrs = {
-        "kind": attr.string(mandatory = True, values = ["dll", "exe", "client"]),
+        "kind": attr.string(mandatory = True, values = ["dll", "exe", "client", "client-kernel32"]),
         "out": attr.string(mandatory = True),
         "sdk": attr.label_list(allow_files = [".h", ".lib"]),
         "srcs": attr.label_list(allow_files = [".c", ".h"], mandatory = True),

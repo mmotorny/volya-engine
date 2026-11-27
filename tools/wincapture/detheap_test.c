@@ -237,13 +237,14 @@ static void reallocation(void) {
     CHECK(detheap_realloc(&heap, PROCESS_HEAP, DETHEAP_REALLOC_IN_PLACE_ONLY, a, 3) == a);
     CHECK(detheap_size(&heap, PROCESS_HEAP, 0, a) == 3);
     CHECK(detheap_realloc(&heap, PROCESS_HEAP, 0, a, 16) == a);
-    /* Past the class: in place only fails (raising when asked)... */
+    /* Past the class: in place only fails, returning null (only HeapAlloc
+     * raises)... */
     CHECK(detheap_realloc(&heap, PROCESS_HEAP, DETHEAP_REALLOC_IN_PLACE_ONLY, a, 17) == NULL);
-    CHECK(fake.raised == 0);
     CHECK(detheap_realloc(&heap, PROCESS_HEAP,
                           DETHEAP_REALLOC_IN_PLACE_ONLY | DETHEAP_GENERATE_EXCEPTIONS, a,
                           17) == NULL);
-    CHECK(fake.raised == 1);
+    CHECK(fake.raised == 0);
+    CHECK(heap.in_place_failures == 2);
     CHECK(detheap_size(&heap, PROCESS_HEAP, 0, a) == 16);
     /* ...else a new block, the old contents copied, the old freed. */
     for (int i = 0; i < 16; i++) {
@@ -292,7 +293,7 @@ static void reallocation(void) {
 
 static void placeholders(void) {
     start();
-    /* Multiples of 0x10 from 0x10 to 0xfff0, then none. */
+    /* Multiples of 0x10 from 0x10 to 0xfff0, then from 0x10 again. */
     CHECK(detheap_create(&heap) == (void *)0x10);
     CHECK(detheap_create(&heap) == (void *)0x20);
     void *last = NULL;
@@ -300,7 +301,8 @@ static void placeholders(void) {
         last = detheap_create(&heap);
     }
     CHECK(last == (void *)0xfff0);
-    CHECK(detheap_create(&heap) == NULL);
+    CHECK(detheap_create(&heap) == (void *)0x10);
+    CHECK(heap.created == 4096);
     CHECK(detheap_is_placeholder((void *)0x10) && detheap_is_placeholder((void *)0xfff0));
     CHECK(!detheap_is_placeholder(NULL) && !detheap_is_placeholder((void *)0x18));
     CHECK(!detheap_is_placeholder((void *)0x10000) && !detheap_is_placeholder(REAL_HEAP));

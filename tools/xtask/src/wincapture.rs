@@ -103,7 +103,9 @@ pub fn build(clang: &Path, out: &Path, kind: &str, sources: &[&str]) -> Result {
         // replaces the runtime's (counter.c). No system library but ntdll,
         // whose import library comes first: DynamoRIO's also provides one
         // of its section functions (capture-recipe.md, rule 2).
-        "client" => {
+        // KIND `client-kernel32`: the bisect's variant, the shared memory
+        // opened through kernel32 as before rule 2 (counter.c).
+        "client" | "client-kernel32" => {
             let api = sources
                 .iter()
                 .find(|s| s.ends_with("/dr_api.h"))
@@ -113,7 +115,12 @@ pub fn build(clang: &Path, out: &Path, kind: &str, sources: &[&str]) -> Result {
                 .arg("-isystem")
                 .arg(include)
                 .args(["-shared", "-nostdlib", "-lntdll"])
-                .args(sources.iter().filter(|s| s.ends_with(".lib")))
+                .args(sources.iter().filter(|s| s.ends_with(".lib")));
+            if kind == "client-kernel32" {
+                command.args(["-DCOUNTER_KERNEL32", "-lkernel32"])
+            } else {
+                &mut command
+            }
         }
         _ => return Err(format!("{kind}: not dll, exe or client")),
     };

@@ -19,7 +19,7 @@
 
 #define FRAMECLOCK_NAME "Local\\VolyaFrameClock"
 #define FRAMECLOCK_MAGIC 0x6b636f6c63796c76ull /* "vlyclock" */
-#define FRAMECLOCK_VERSION 9
+#define FRAMECLOCK_VERSION 10
 
 /* The counter client's time-stamp counter (counter.c): TSC_BASE +
  * clock_ms × TSC_PER_MS + n × TSC_STEP, n the reads substituted
@@ -49,6 +49,7 @@ struct frameclock {
     uint64_t first_frame;    /* ticks the clock is moved up to at the first frame (0: not) */
     uint64_t prestart_sleeps; /* 1: sleeps before the first frame advance the clock too */
     char log_path[260];      /* the proxy's own log (empty: none) */
+    int64_t heap_off;        /* 1: no deterministic heap (the bisect's --no-heap) */
 
     /* Written by the driver while the game runs. */
     volatile int64_t hold;    /* hold after presenting this frame (0: never) */
@@ -88,7 +89,7 @@ struct frameclock {
 
     /* Written by the proxy: the deterministic heap (detheap.h,
      * capture-recipe.md rule 3). */
-    volatile int64_t heap;        /* 1 its region reserved, -1 the reservation failed */
+    volatile int64_t heap; /* 1 its region reserved, -1 the reservation failed, 0 off */
     volatile int64_t heap_carved; /* bytes carved from the region (every 2 s) */
     uint8_t pixels[FRAMECLOCK_MAX_PIXELS * 4]; /* rows top first, B G R X */
 };

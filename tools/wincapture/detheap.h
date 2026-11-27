@@ -33,7 +33,8 @@
 #define DETHEAP_ZERO_MEMORY 0x8u
 #define DETHEAP_REALLOC_IN_PLACE_ONLY 0x10u
 
-/* Placeholder handles: multiples of 0x10 from 0x10 to 0xfff0. */
+/* Placeholder handles: multiples of 0x10 from 0x10 to 0xfff0, then from
+ * 0x10 again. */
 #define DETHEAP_PLACEHOLDER_FIRST 0x10u
 #define DETHEAP_PLACEHOLDER_LAST 0xfff0u
 /* What HeapCompact answers for a placeholder. */
@@ -65,6 +66,8 @@ struct detheap {
     void *free_[DETHEAP_CLASSES];
     uintptr_t next_placeholder;
     struct detheap_system sys;
+    /* For the log (racy counts, diagnostics only). */
+    long created, failed_allocs, failed_reallocs, in_place_failures, moved;
 };
 
 /* HeapWalk's one entry for a placeholder handle: the region. */

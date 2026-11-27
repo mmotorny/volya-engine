@@ -18,6 +18,8 @@ data; everything it writes is game assets and stays on this machine.
                     DynamoRIO is detached once the first frame is held
 - dynamorio\        DynamoRIO's drrun and runtime, 32-bit (BSD; its
                     License.txt), which starts the game with the client
+- counter-kernel32.dll  the same client opening the frame clock through
+                    kernel32, as before the recipe (--kernel32-client)
 - counterprobe.exe  the self-test's program, ours: reads the counter
 - plan.txt          the views and walks, their frames and settings
 
@@ -40,6 +42,12 @@ game runs full screen at the plan's size; keep the machine untouched while
 it runs (keys go to the game's window, which must stay in front).
 
 check, full and audio all run the game this way
-(docs/behavior/capture-recipe.md).
+(docs/behavior/capture-recipe.md). Each invocation first removes its
+mode's earlier <work>\runs\<mode>-* folders and summary; a failed one
+writes a summary of its failure.
+To narrow down a failure, check, full and audio take --no-heap (the
+proxy leaves the heap functions alone) and --kernel32-client (the game
+starts under counter-kernel32.dll); both are recorded in log.txt and
+events.txt.
 
 Steps: docs/testing.md, The original on Windows.

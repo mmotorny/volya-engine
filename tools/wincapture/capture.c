@@ -143,6 +143,12 @@ static void say(const char *fmt, ...) {
 
 static char failure[2048];
 
+/* The bisect's toggles (docs/testing.md, The original on Windows), off by
+ * default: the recipe (docs/behavior/capture-recipe.md) without its
+ * deterministic heap (--no-heap), or with the client opening the shared
+ * memory through kernel32 as before its rule 2 (--kernel32-client). */
+static int no_heap, kernel32_client;
+
 static int fail(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
@@ -192,6 +198,30 @@ static int write_file(const char *path, const void *data, size_t size) {
     size_t w = fwrite(data, 1, size, f);
     int ok = fclose(f) == 0 && w == size;
     return ok ? 1 : fail("cannot write %s", path);
+}
+
+static void remove_tree(const char *dir);
+
+/* Every earlier invocation's outputs of `mode`: runs\<mode>-summary.txt
+ * and each runs\<mode>-<n>\, so what the runs folder holds of the mode
+ * after an invocation, failed or not, is that invocation's. */
+static void clear_outputs(const char *work, const char *mode) {
+    char path[MAX_PATH], pattern[MAX_PATH];
+    snprintf(path, sizeof path, "%s\\runs\\%s-summary.txt", work, mode);
+    DeleteFileA(path);
+    snprintf(pattern, sizeof pattern, "%s\\runs\\%s-*", work, mode);
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pattern, &fd);
+    if (h == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            snprintf(path, sizeof path, "%s\\runs\\%s", work, fd.cFileName);
+            remove_tree(path);
+        }
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
 }
 
 /* Removes a folder and everything in it. */
@@ -1853,6 +1883,7 @@ static int run_once(const char *exe_dir, const char *game, const char *work, con
     r.clock->first_frame = (uint64_t)plan.first_frame_ms * FRAMECLOCK_TICKS_PER_MS;
     join(r.clock->log_path, sizeof r.clock->log_path, r.dir, "frameclock.log");
     r.clock->hold = 1;
+    r.clock->heap_off = (uint64_t)no_heap;
     r.clock->version = FRAMECLOCK_VERSION;
     r.clock->magic = FRAMECLOCK_MAGIC;
 
@@ -1862,7 +1893,7 @@ static int run_once(const char *exe_dir, const char *game, const char *work, con
      * game's folder, the copy, as its modules' paths name it (long names). */
     char drrun[MAX_PATH], client[MAX_PATH], drlog[MAX_PATH], long_copy[MAX_PATH];
     join(drrun, sizeof drrun, exe_dir, "dynamorio\\bin32\\drrun.exe");
-    join(client, sizeof client, exe_dir, "counter.dll");
+    join(client, sizeof client, exe_dir, kernel32_client ? "counter-kernel32.dll" : "counter.dll");
     if (GetFileAttributesA(drrun) == INVALID_FILE_ATTRIBUTES ||
         GetFileAttributesA(client) == INVALID_FILE_ATTRIBUTES) {
         return fail("no %s or %s: unpack the whole runner", drrun, client);
@@ -1958,7 +1989,7 @@ static int run_once(const char *exe_dir, const char *game, const char *work, con
     }
     /* The deterministic heap's region (capture-recipe.md, rule 3): never
      * at another address, so without it the run fails. */
-    if (ok && load(&r.clock->heap) != 1) {
+    if (ok && !no_heap && load(&r.clock->heap) != 1) {
         ok = fail("the frame clock could not reserve the deterministic heap's region (0x%x bytes "
                   "at 0x%08x) in the game; see frameclock.log",
                   DETHEAP_REGION_SIZE, DETHEAP_REGION_BASE);
@@ -1977,6 +2008,12 @@ static int run_once(const char *exe_dir, const char *game, const char *work, con
                   "drrun's output: %s (volyacapture selftest checks drrun and the client)",
                   ATTACH_TIMEOUT, (long long)load(&r.clock->counter_attached),
                   ended(&r) ? ", the game ended" : "", first);
+    }
+    if (ok && (no_heap || kernel32_client)) {
+        char what[128];
+        snprintf(what, sizeof what, "bisect: the deterministic heap %s, the client %s",
+                 no_heap ? "off" : "on", kernel32_client ? "counter-kernel32.dll" : "counter.dll");
+        event(&r, what);
     }
     if (ok) {
         event(&r, load(&r.clock->counter_at_proxy)
@@ -2376,6 +2413,10 @@ int main(int argc, char **argv) {
             runs = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--audio-device") && i + 1 < argc) {
             snprintf(audio_device, sizeof audio_device, "%s", argv[++i]);
+        } else if (!strcmp(argv[i], "--no-heap")) {
+            no_heap = 1;
+        } else if (!strcmp(argv[i], "--kernel32-client")) {
+            kernel32_client = 1;
         } else {
             mode = "";
         }
@@ -2388,9 +2429,9 @@ int main(int argc, char **argv) {
     if ((strcmp(mode, "check") && strcmp(mode, "full") && strcmp(mode, "selftest") && !audio) ||
         runs < 1) {
         fprintf(stderr, "usage: volyacapture check|full|selftest [--runs N] [--game DIR] "
-                        "[--work DIR]\n"
+                        "[--work DIR] [--no-heap] [--kernel32-client]\n"
                         "       volyacapture audio [--audio-device NAME] [--runs N] [--game DIR] "
-                        "[--work DIR]\n");
+                        "[--work DIR] [--no-heap] [--kernel32-client]\n");
         return 2;
     }
     GetModuleFileNameA(NULL, exe_dir, MAX_PATH);
@@ -2432,6 +2473,9 @@ int main(int argc, char **argv) {
     }
     timeBeginPeriod(1);
     say("volyacapture %s: %d run(s), game %s, work folder %s", mode, runs, game, work);
+    say("The deterministic heap %s; the client %s", no_heap ? "OFF (--no-heap)" : "on",
+        kernel32_client ? "counter-kernel32.dll (--kernel32-client)" : "counter.dll");
+    clear_outputs(work, mode);
     /* The walks' output device: the default as it is, or the one named. */
     struct loopback *lb = NULL;
     if (audio) {
@@ -2448,6 +2492,15 @@ int main(int argc, char **argv) {
     loopback_close(lb);
     if (ok && runs > 1 && !audio) {
         compare(work, mode, runs);
+    } else if (!ok) {
+        /* A summary of this invocation, never an earlier one's. */
+        char path[MAX_PATH];
+        snprintf(path, sizeof path, "%s\\runs\\%s-summary.txt", work, mode);
+        FILE *out = fopen(path, "w");
+        if (out) {
+            fprintf(out, "FAILED: %s\n", failure);
+            fclose(out);
+        }
     }
     printf("%s\n", ok ? "Done." : failure);
     return ok ? 0 : 1;

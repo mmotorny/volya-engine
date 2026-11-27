@@ -36,6 +36,20 @@ wincapture_binary(
     sdk = ["@dynamorio//:client_sdk"],
 )
 
+# The bisect's variant of the client (`volyacapture --kernel32-client`):
+# the shared memory opened through kernel32, as before
+# docs/behavior/capture-recipe.md's rule 2. Diagnostic only.
+wincapture_binary(
+    name = "counter-kernel32",
+    srcs = [
+        "counter.c",
+        "frameclock.h",
+    ],
+    kind = "client-kernel32",
+    out = "counter-kernel32.dll",
+    sdk = ["@dynamorio//:client_sdk"],
+)
+
 # The driver (capture.c) and its audio recording (loopback.c).
 wincapture_binary(
     name = "volyacapture",
@@ -94,6 +108,7 @@ d3d9probes_zip(
     srcs = [
         "README.txt",
         ":counter",
+        ":counter-kernel32",
         ":counterprobe",
         ":plan",
         ":volyacapture",

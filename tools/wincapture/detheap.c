@@ -143,14 +143,15 @@ static void give_back(struct detheap *h, void *p) {
     h->sys.unlock(h->sys.ctx);
 }
 
+/* The next placeholder, from 0x10 to 0xfff0 and round again: a placeholder
+ * holds nothing of its own, so one used before serves as well. */
 void *detheap_create(struct detheap *h) {
     h->sys.lock(h->sys.ctx);
     uintptr_t u = h->next_placeholder;
-    if (u <= DETHEAP_PLACEHOLDER_LAST) {
-        h->next_placeholder += 0x10;
-    }
+    h->next_placeholder = u >= DETHEAP_PLACEHOLDER_LAST ? DETHEAP_PLACEHOLDER_FIRST : u + 0x10;
+    h->created++;
     h->sys.unlock(h->sys.ctx);
-    return u <= DETHEAP_PLACEHOLDER_LAST ? (void *)u : NULL;
+    return (void *)u;
 }
 
 int detheap_destroy(struct detheap *h, void *heap) {
@@ -160,7 +161,11 @@ int detheap_destroy(struct detheap *h, void *heap) {
 void *detheap_alloc(struct detheap *h, void *heap, uint32_t flags, size_t n) {
     (void)heap;
     void *p = take(h, n, (flags & DETHEAP_ZERO_MEMORY) != 0);
-    return p ? p : failed(h, flags);
+    if (!p) {
+        h->failed_allocs++;
+        return failed(h, flags);
+    }
+    return p;
 }
 
 void *detheap_realloc(struct detheap *h, void *heap, uint32_t flags, void *p, size_t n) {
@@ -174,33 +179,35 @@ void *detheap_realloc(struct detheap *h, void *heap, uint32_t flags, void *p, si
             hd->size = (uint32_t)n;
             return p;
         }
+        /* A failure returns null: only HeapAlloc raises (rule 3). */
         if (flags & DETHEAP_REALLOC_IN_PLACE_ONLY) {
-            return failed(h, flags);
+            h->in_place_failures++;
+            return NULL;
         }
         void *q = take(h, n, zero);
         if (!q) {
-            return failed(h, flags);
+            h->failed_reallocs++;
+            return NULL;
         }
         memcpy(q, p, hd->size < n ? hd->size : n);
         give_back(h, p);
         return q;
     }
     /* A block of a system heap: moved into the region, unless in place
-     * only (or no block, or the system knows not its size). */
+     * only (or no block). */
     void *sys_heap = system_heap(h, heap);
     if ((flags & DETHEAP_REALLOC_IN_PLACE_ONLY) || !p) {
         return h->sys.realloc(h->sys.ctx, sys_heap, flags, p, n);
     }
     size_t old = h->sys.size(h->sys.ctx, sys_heap, 0, p);
-    if (old == (size_t)-1) {
-        return h->sys.realloc(h->sys.ctx, sys_heap, flags, p, n);
-    }
     void *q = take(h, n, zero);
     if (!q) {
-        return failed(h, flags);
+        h->failed_reallocs++;
+        return NULL;
     }
     memcpy(q, p, old < n ? old : n);
     h->sys.free(h->sys.ctx, sys_heap, 0, p);
+    h->moved++;
     return q;
 }
 

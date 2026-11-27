@@ -597,14 +597,47 @@ static int hotpatch(const char *name, void *target, void *hook, void **original)
     return 1;
 }
 
+/* The process's address space, for the log: free, reserved and committed
+ * bytes and the largest free range (a 32-bit process's room). */
+static void log_address_space(const char *when) {
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    BYTE *at = si.lpMinimumApplicationAddress;
+    SIZE_T free_ = 0, reserved = 0, committed = 0, largest = 0;
+    MEMORY_BASIC_INFORMATION m;
+    while (at < (BYTE *)si.lpMaximumApplicationAddress && VirtualQuery(at, &m, sizeof m)) {
+        if (m.State == MEM_FREE) {
+            free_ += m.RegionSize;
+            largest = m.RegionSize > largest ? m.RegionSize : largest;
+        } else if (m.State == MEM_RESERVE) {
+            reserved += m.RegionSize;
+        } else {
+            committed += m.RegionSize;
+        }
+        if ((BYTE *)m.BaseAddress + m.RegionSize <= at) {
+            break;
+        }
+        at = (BYTE *)m.BaseAddress + m.RegionSize;
+    }
+    dlog("address space %s: up to %p; free %lu MiB (largest range %lu MiB), reserved %lu MiB, "
+         "committed %lu MiB",
+         when, si.lpMaximumApplicationAddress, (unsigned long)(free_ >> 20),
+         (unsigned long)(largest >> 20), (unsigned long)(reserved >> 20),
+         (unsigned long)(committed >> 20));
+}
+
 static HRESULT WINAPI hook_CreateDevice(IDirect3D9 *d3d, UINT adapter, D3DDEVTYPE type, HWND focus,
                                         DWORD flags, D3DPRESENT_PARAMETERS *params,
                                         IDirect3DDevice9 **device) {
     dlog("CreateDevice: adapter %u, type %d, flags 0x%lx, %ux%u, windowed %d", adapter, type,
          (unsigned long)flags, params ? params->BackBufferWidth : 0,
          params ? params->BackBufferHeight : 0, params ? params->Windowed : -1);
+    log_address_space("before CreateDevice");
     HRESULT hr = real_CreateDevice(d3d, adapter, type, focus, flags, params, device);
     dlog("CreateDevice: 0x%lx", (unsigned long)hr);
+    if (FAILED(hr)) {
+        log_address_space("after the failed CreateDevice");
+    }
     if (SUCCEEDED(hr) && device && *device) {
         the_device = *device;
         dlog("the device %p, its table %p", (void *)*device, (void *)(*device)->lpVtbl);
@@ -1149,6 +1182,11 @@ static BOOL WINAPI fake_HeapWalk(HANDLE heap, LPPROCESS_HEAP_ENTRY entry) {
  * other address: when it cannot be had, the run fails (the driver reads
  * `heap`). */
 static void start_heap(HMODULE kernel32) {
+    if (load(&clock_->heap_off)) {
+        dlog("the deterministic heap: off (volyacapture --no-heap; heap functions not replaced)");
+        store(&clock_->heap, 0);
+        return;
+    }
     real_HeapDestroy = (void *)GetProcAddress(kernel32, "HeapDestroy");
     real_HeapReAlloc = (void *)GetProcAddress(kernel32, "HeapReAlloc");
     real_HeapFree = (void *)GetProcAddress(kernel32, "HeapFree");
@@ -1385,8 +1423,12 @@ static DWORD WINAPI heartbeat(void *unused) {
         }
         store(&clock_->heap_carved, (LONGLONG)heap_.carved);
         if (beat % 5 == 0) {
-            dlog("the deterministic heap: %lu bytes carved, %lu committed",
-                 (unsigned long)heap_.carved, (unsigned long)heap_.committed);
+            dlog("the deterministic heap: %lu bytes carved, %lu committed; heaps created %ld, "
+                 "allocations failed %ld, reallocations failed %ld (in place only %ld), system "
+                 "blocks moved in %ld",
+                 (unsigned long)heap_.carved, (unsigned long)heap_.committed, heap_.created,
+                 heap_.failed_allocs, heap_.failed_reallocs, heap_.in_place_failures,
+                 heap_.moved);
             LONG n = ncallers < 96 ? ncallers : 96;
             for (LONG i = 0; i < n; i++) {
                 char path[MAX_PATH] = "?";
@@ -1444,6 +1486,7 @@ static void start_clock(void) {
     store(&c->attached, 1);
     dlog("attached; main thread %lu; the counter client %s", main_thread,
          load(&c->counter_at_proxy) ? "had started" : "had not started");
+    log_address_space("at the proxy's start");
     /* Starts once the loader lets go: it only writes the log. */
     CreateThread(NULL, 0, heartbeat, NULL, 0, NULL);
 }
