@@ -2687,10 +2687,11 @@ impl LevelScreen {
         self.clock.advance(elapsed);
         let player = self.player.state();
         // A tap's ray from the view the tap saw: the latest frame's.
-        let (world, view) = (&self.collision, self.player.view());
-        let (request, back) = self.controls.request(input, &player, now, |at| {
-            crate::controls::tap_destination(world, &view, at)
-        });
+        let view = crate::controls::LevelView {
+            world: &self.collision,
+            view: self.player.view(),
+        };
+        let (request, back) = self.controls.request(input, &player, now, &view);
         // player-state.md 4.3: the condition's limits for this frame's
         // movement; 4.4: a jump's cost; 4.1, 4.2: the conditions over the
         // game time this frame advanced, with the state the movement left.
@@ -4004,6 +4005,7 @@ impl LevelScreen {
                     let how = match how {
                         crate::controls::TripEnd::Arrived => "arrived",
                         crate::controls::TripEnd::Stuck => "stuck",
+                        crate::controls::TripEnd::Cancelled => "cancelled",
                     };
                     (how, d)
                 }),

@@ -723,6 +723,43 @@ pub const ARRIVAL: f32 = 0.3;
 /// it can't climb, short of a destination on a wall.
 pub const STUCK_MS: u64 = 500;
 pub const PROGRESS: f32 = 0.05;
+/// A tap within this many CSS pixels of the trip's destination marker
+/// cancels the trip (our choice: the page's 26-pixel ring's radius plus
+/// [`TAP_SLOP_PX`]).
+pub const MARKER_HIT_PX: f32 = 13.0 + TAP_SLOP_PX;
+
+/// What a tap meets, from the view it saw: where its ray meets the level
+/// ([`tap_destination`]), and where a point shows in the picture
+/// ([`picture_point`]: the trip's marker).
+pub trait TapView {
+    fn destination(&self, at: [f32; 2]) -> Option<Vec3>;
+    fn picture_point(&self, point: Vec3) -> Option<[f32; 2]>;
+}
+
+/// No level: taps meet nothing.
+impl TapView for () {
+    fn destination(&self, _: [f32; 2]) -> Option<Vec3> {
+        None
+    }
+    fn picture_point(&self, _: Vec3) -> Option<[f32; 2]> {
+        None
+    }
+}
+
+/// A level's collision geometry seen from a view.
+pub struct LevelView<'a> {
+    pub world: &'a CollisionWorld,
+    pub view: View,
+}
+
+impl TapView for LevelView<'_> {
+    fn destination(&self, at: [f32; 2]) -> Option<Vec3> {
+        tap_destination(self.world, &self.view, at)
+    }
+    fn picture_point(&self, point: Vec3) -> Option<[f32; 2]> {
+        picture_point(&self.view, point)
+    }
+}
 
 /// A tap on the picture: where (as [`TouchLook::at`]), when it went down
 /// and was lifted (the page's milliseconds), and the picture's half height
@@ -816,12 +853,15 @@ pub struct Trip {
 /// - a new tap sets a new destination; a double tap's trip sprints, the
 ///   movement layer's rules still deciding (4.3: a crouch or a walk
 ///   cancels it, and a cancelled sprint isn't asked for again that trip);
+/// - a tap on the destination's marker (within [`MARKER_HIT_PX`]) cancels
+///   the trip, unless it is a double tap's second tap (within
+///   [`DOUBLE_TAP_MS`] of the previous tap): that sprints;
 /// - looking doesn't end it: the trip steers by the world, not the view.
 #[derive(Clone, Debug, Default)]
 pub struct TapMove {
     trip: Option<Trip>,
-    /// How the latest trip that arrived or got stuck ended, and its
-    /// distance from its destination then.
+    /// How the latest trip that arrived, got stuck or was cancelled on its
+    /// marker ended, and its distance from its destination then.
     ended: Option<(TripEnd, f32)>,
     last_tap: Option<Tap>,
     /// The sprint request is this trip's (pressed by it, not yet ended).
@@ -834,6 +874,8 @@ pub struct TapMove {
 pub enum TripEnd {
     Arrived,
     Stuck,
+    /// A tap on its marker.
+    Cancelled,
 }
 
 impl TapMove {
@@ -842,19 +884,22 @@ impl TapMove {
         self.trip.as_ref()
     }
 
-    /// How the latest trip to end on its own ended (arrived or stuck), and
-    /// its feet's distance from its destination then.
+    /// How the latest trip to end on its own or on its marker ended
+    /// (arrived, stuck, cancelled), and its feet's distance from its
+    /// destination then.
     pub fn ended(&self) -> Option<(TripEnd, f32)> {
         self.ended
     }
 
     /// One frame at `now`: this frame's taps with their destinations,
-    /// whether something else `ended` the trip, and the player after the
-    /// previous frame. Returns the bearing to run along (forward held,
-    /// [`Request::toward`]) and whether to press `sprint_toggle`.
+    /// where the trip's destination shows in the picture the taps saw
+    /// (`marker`), whether something else `ended` the trip, and the player
+    /// after the previous frame. Returns the bearing to run along (forward
+    /// held, [`Request::toward`]) and whether to press `sprint_toggle`.
     pub fn frame(
         &mut self,
         taps: &[(Tap, Option<Vec3>)],
+        mut marker: Option<[f32; 2]>,
         ended: bool,
         player: &PlayerState,
         now: u64,
@@ -878,8 +923,31 @@ impl TapMove {
                 let px = (tap.at[0] - l.at[0]).hypot(tap.at[1] - l.at[1]) * tap.half_height;
                 tap.down - l.up < DOUBLE_TAP_MS && px <= DOUBLE_TAP_PX
             });
+            // A tap on the marker, past the double tap's time: the trip
+            // ends where it is.
+            let late = self
+                .last_tap
+                .is_none_or(|l| tap.down - l.up >= DOUBLE_TAP_MS);
+            let on_marker = marker.is_some_and(|m| {
+                (tap.at[0] - m[0]).hypot(tap.at[1] - m[1]) * tap.half_height <= MARKER_HIT_PX
+            });
+            if let Some(t) = self.trip
+                && !double
+                && late
+                && on_marker
+            {
+                self.ended = Some((
+                    TripEnd::Cancelled,
+                    length(sub(t.destination, player.position)),
+                ));
+                self.trip = None;
+                self.last_tap = None;
+                marker = None;
+                continue;
+            }
             // A third tap starts afresh.
             self.last_tap = (!double).then_some(tap);
+            marker = None;
             self.trip = destination.map(|destination| Trip {
                 destination,
                 sprint: double,
@@ -1095,13 +1163,14 @@ impl Controls {
     /// is the player after the previous frame (its sprint request for the
     /// sprint lock and tap-to-move, its position for tap-to-move, its
     /// crouch toggle for the touch low crouch); `destination` gives a tap's destination for its place in
-    /// the picture ([`tap_destination`] from the view the tap saw).
+    /// the picture and its trip's marker there, from the view the tap saw
+    /// ([`TapView`]).
     pub fn request(
         &mut self,
         input: &Input,
         player: &PlayerState,
         now: u64,
-        destination: impl Fn([f32; 2]) -> Option<Vec3>,
+        view: &impl TapView,
     ) -> (Request, bool) {
         let only = self.keys_only.clone();
         let keys_only = only.is_some();
@@ -1271,8 +1340,12 @@ impl Controls {
             .look
             .taps()
             .iter()
-            .map(|t| (*t, destination(t.at)))
+            .map(|t| (*t, view.destination(t.at)))
             .collect();
+        let marker = self
+            .tap_move
+            .trip()
+            .and_then(|t| view.picture_point(t.destination));
         if taps.iter().any(|(_, d)| d.is_some()) {
             self.walk[0] = None;
             if !player.crouch_toggled {
@@ -1280,7 +1353,7 @@ impl Controls {
             }
         }
         let ended = keyboard || sticks_move || keys_only || input.looks_released();
-        let (toward, sprint) = self.tap_move.frame(&taps, ended, player, now);
+        let (toward, sprint) = self.tap_move.frame(&taps, marker, ended, player, now);
         r.sprint_toggle ^= sprint;
         if toward.is_some() {
             r.forward = true;
@@ -1328,7 +1401,7 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
 
     /// One frame's request for a standing player; taps meet nothing.
     fn req(c: &mut Controls, i: &Input) -> (Request, bool) {
-        c.request(i, &standing(), 0, |_| None)
+        c.request(i, &standing(), 0, &())
     }
 
     fn key(input: &mut Input, key: Key, pressed: bool) {
@@ -2125,7 +2198,7 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
             crouch_toggled: true,
             ..standing()
         };
-        let (r, _) = c.request(&i, &toggled, 0, |_| None);
+        let (r, _) = c.request(&i, &toggled, 0, &());
         assert!(!r.crouch_toggle && r.accel);
     }
 
@@ -2297,9 +2370,11 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
             for _ in 0..n {
                 self.now += 16;
                 let (world, p) = (&self.world, &self.p);
-                let (r, _) = self.c.request(&self.i, &p.state(), self.now, |at| {
-                    tap_destination(world, &p.view(), at)
-                });
+                let view = LevelView {
+                    world,
+                    view: p.view(),
+                };
+                let (r, _) = self.c.request(&self.i, &p.state(), self.now, &view);
                 self.p.frame(&self.world, self.now, &r);
                 self.i.end_frame();
             }
@@ -2675,11 +2750,12 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
         w.tap_at([0.0, 0.0, 20.0], 0.0);
         let s = w.frames(5);
         assert!(!w.c.tap_move.trip().unwrap().sprint && !s.sprint_requested && s.flags.forward);
-        // Double tapped again, then Crouch: the spec cancels the sprint
-        // (4.3), the trip goes on crouched and doesn't ask again.
+        // Double tapped again (aside, clear of the marker), then Crouch:
+        // the spec cancels the sprint (4.3), the trip goes on crouched and
+        // doesn't ask again.
         w.frames(30);
-        w.tap_at([0.0, 0.0, 40.0], 0.0)
-            .tap_at([0.0, 0.0, 40.0], 100.0);
+        w.tap_at([6.0, 0.0, 40.0], 0.0)
+            .tap_at([6.0, 0.0, 40.0], 100.0);
         assert!(w.frames(5).flags.sprint);
         w.tap(TouchButton::Crouch);
         let s = w.frames(20);
@@ -2694,6 +2770,50 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
         w.tap_at([0.0, 0.0, 6.0], 0.0)
             .tap_at([0.0, 0.0, 6.0], 50.0 + DOUBLE_TAP_MS + 1.0);
         assert!(!w.frames(10).sprint_requested, "too late");
+    }
+
+    #[test]
+    fn a_tap_on_the_marker_cancels_the_trip_but_a_double_tap_there_sprints() {
+        let mut w = Walk::new();
+        w.frames(10);
+        let target = [0.0, 0.0, 8.0];
+        w.tap_at(target, 0.0);
+        w.frames(30);
+        assert!(w.c.tap_move.trip().is_some());
+        // Near the marker (its ring plus the slop), past the double tap's
+        // time: cancelled, the character stops.
+        let at = picture_point(&w.p.view(), target).unwrap();
+        let off = (MARKER_HIT_PX - 2.0) / HALF;
+        w.tap_picture([at[0] + off, at[1]], 0.0);
+        let s = w.frames(1);
+        assert!(w.c.tap_move.trip().is_none(), "{s:?}");
+        assert!(matches!(w.c.tap_move.ended(), Some((TripEnd::Cancelled, d)) if d > ARRIVAL));
+        assert!(!w.frames(60).flags.forward, "stopped");
+        // Under way again, a tap just beyond the marker's reach: a new
+        // destination.
+        w.tap_at(target, 0.0);
+        w.frames(30);
+        let at = picture_point(&w.p.view(), target).unwrap();
+        w.tap_picture([at[0], at[1] + (MARKER_HIT_PX + 4.0) / HALF], 0.0);
+        w.frames(1);
+        assert!(w.c.tap_move.trip().is_some(), "beyond the marker");
+        // A double tap elsewhere, its second tap on the new marker: that
+        // sprints.
+        w.frames(30);
+        let far = [3.0, 0.0, 14.0];
+        w.tap_at(far, 0.0).tap_at(far, 120.0);
+        let s = w.frames(10);
+        assert!(
+            w.c.tap_move.trip().is_some_and(|t| t.sprint) && s.sprint_requested,
+            "{s:?}"
+        );
+        // Then a single tap on the marker, after the window: cancelled, the
+        // sprint with it.
+        let at = picture_point(&w.p.view(), w.c.tap_move.trip().unwrap().destination).unwrap();
+        w.tap_picture(at, 0.0);
+        w.frames(2);
+        assert!(w.c.tap_move.trip().is_none());
+        assert!(!w.frames(60).flags.forward, "stopped");
     }
 
     #[test]

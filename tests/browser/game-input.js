@@ -959,7 +959,7 @@ export const tests = {
     return `${width}×${height}: ${runs.join(", ")}`;
   },
 
-  "touch, experimental: a tap on the floor runs there and stops near it, a double tap sprints, drags look (from Jump too), Crouch and its swipe down, Menu opens the menu (#772)": async () => {
+  "touch, experimental: a tap on the floor runs there and stops near it, a double tap sprints, a tap on the marker cancels, drags look (from Jump too), Crouch and its swipe down, Menu opens the menu (#772)": async () => {
     needsGame();
     assertEqual(volya.touchControls.running, "experimental", "the touch controls' mode");
     const controls = document.getElementById("touch-controls");
@@ -1073,6 +1073,47 @@ export const tests = {
     s = await until((s) => s.level.player.sprint && s.level.player.trip, "the double tap to sprint");
     s = await until((s) => !s.level.player.trip && !s.level.player.moving, "the sprint's trip to end", 6000);
     assert(!s.level.player.sprint_requested, "the sprint ends with its trip");
+    // Turned round onto the way the trips came, a trip again, creeping in
+    // the low crouch (Crouch swiped down) so it lasts; a tap on its marker
+    // past the double tap's time cancels it, and the player stops short of
+    // it; then standing up and turned back.
+    const turnRound = async () => {
+      const from = (await state()).level.yaw;
+      keyDown("ArrowRight");
+      await until((s) => s.level.yaw > from + Math.PI - 0.15, "the right arrow to turn round", 3000);
+      keyUp("ArrowRight");
+      await until((s) => !s.level.player.moving, "standing still");
+    };
+    await turnRound();
+    const crouchButton = controls.querySelector(".touch-button.crouch");
+    const [kx, ky] = centre(crouchButton);
+    touchOn(crouchButton, "pointerdown", ++id, [kx, ky]);
+    touchOn(crouchButton, "pointermove", id, [kx, ky + 30]);
+    touchOn(crouchButton, "pointerup", id, [kx, ky + 30]);
+    await until((s) => s.level.player.posture === 2 && s.level.player.crouch_toggled, "the swipe to crouch low");
+    tapAhead(0.45);
+    s = await until((s) => s.level.player.trip && s.level.player.moving, "a tap to creep there");
+    const cancelled = s.level.player.trip;
+    for (let i = 0; i < 50 && marker.hidden; i++) await sleep(20);
+    await sleep(270);
+    assert(!marker.hidden && (await state()).level.player.trip, "still under way, marked");
+    const m = localRect(marker, controls);
+    const onMarker = [(m.left + m.right) / 2 + 6, (m.top + m.bottom) / 2];
+    touchOn(look, "pointerdown", ++id, onMarker);
+    touchOn(look, "pointerup", id, onMarker);
+    s = await until((s) => !s.level.player.trip && !s.level.player.moving, "the tap on the marker to stop the trip", 3000);
+    const [cancelHow, cancelAt] = s.level.player.trip_end ?? [];
+    assertEqual(cancelHow, "cancelled", "how the trip ended");
+    const short = flat(s.level.player.position, cancelled);
+    assert(short > 0.3, `stopped ${short.toFixed(2)} m short`);
+    for (let i = 0; i < 50 && !marker.hidden; i++) await sleep(20);
+    assert(marker.hidden, "the marker goes with the cancelled trip");
+    // Standing up again (a tap on Crouch while crouched, on its release).
+    touchOn(crouchButton, "pointerdown", ++id, [kx, ky]);
+    touchOn(crouchButton, "pointerup", id, [kx, ky]);
+    await until((s) => !s.level.player.crouch_toggled && s.level.player.posture === 0, "standing up");
+    await turnRound();
+    s = await state();
     // A drag looks and moves nothing.
     const [lx, ly] = centre(look);
     const start = s.level;
@@ -1176,7 +1217,7 @@ export const tests = {
     assert(!controls.hidden, "the touch controls show again");
     await quitToTitle();
     await volya.touchControls.set("standard");
-    return `ran ${ran.toFixed(2)} m to a tap ${away.toFixed(2)} m away: it ended ${atEnd.toFixed(2)} m from it, came to rest ${atRest.toFixed(2)} m from it; turned ${turned.toFixed(2)} rad`;
+    return `ran ${ran.toFixed(2)} m to a tap ${away.toFixed(2)} m away: it ended ${atEnd.toFixed(2)} m from it, came to rest ${atRest.toFixed(2)} m from it; a tap on the marker cancelled a trip ${cancelAt.toFixed(2)} m short, at rest ${short.toFixed(2)} m short; turned ${turned.toFixed(2)} rad`;
   },
 
   "touch, standard (the default): a slow look drag across the look half turns about 180°, quicker drags up to twice as far (the look curve, #747)": async () => {
