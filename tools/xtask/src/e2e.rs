@@ -25,6 +25,7 @@ const SUITES: &[&str] = &[
     "platform",
     "import",
     "audio",
+    "audio-load",
     "render",
     "render-screens",
     "render-level",
@@ -76,6 +77,8 @@ const SLOW_SUITES: &[(&str, Duration)] = &[
     ("draw-calls", Duration::from_secs(1500)),
     ("fidelity", Duration::from_secs(1500)),
     ("audio", Duration::from_secs(240)),
+    // A level session of 12 minutes after the game suites' setup.
+    ("audio-load", Duration::from_secs(2400)),
 ];
 
 fn report_timeout(suite: &str) -> Duration {

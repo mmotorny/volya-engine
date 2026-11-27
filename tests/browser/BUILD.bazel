@@ -39,6 +39,7 @@ REFERENCES = {"platform": "//tests/odeharness:platform_references"}
         ("import", [], "moderate", True),
         ("input", MANUAL, "moderate", False),
         ("audio", MANUAL, SLOW, True),
+        ("audio-load", ALONE, WHOLE_GAME, True),
         ("game-startup", MANUAL, WHOLE_GAME, True),
         ("game-input", MANUAL, WHOLE_GAME, True),
         ("game-screens", MANUAL, WHOLE_GAME, True),
@@ -85,6 +86,7 @@ browser_suite(
         ("import", "moderate", True),
         ("input", "moderate", False),
         ("audio", SLOW, True),
+        ("audio-load", WHOLE_GAME, True),
         ("game-startup", WHOLE_GAME, True),
         ("game-input", WHOLE_GAME, True),
         ("game-screens", WHOLE_GAME, True),
@@ -102,6 +104,7 @@ suite_group(
     name = "chrome",
     tests = [
         ":audio_chrome",
+        ":audio_load_chrome",
         ":d3d9probes_chrome",
         ":draw_calls_chrome",
         ":fidelity_chrome",
@@ -124,6 +127,7 @@ suite_group(
     name = "iphone",
     tests = [
         ":audio_iphone",
+        ":audio_load_iphone",
         ":draw_calls_iphone",
         ":game_input_iphone",
         ":game_level_iphone",
