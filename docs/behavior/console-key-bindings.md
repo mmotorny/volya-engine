@@ -13,7 +13,8 @@ Conventions:
 - "The game library" is `bin\xrGame.dll` of the shipped Russian edition (GOG build); all four commands
   belong to it.
 - Specifications referred to (`docs/behavior/` unless noted): CC `console-commands.md`, CS
-  `console-scope.md`, OS `options-screens.md`, AT `autosave-timing.md`, SLS `save-load-screens.md`.
+  `console-scope.md`, OS `options-screens.md`, AT `autosave-timing.md`, SLS `save-load-screens.md`, IS
+  `inventory-screen.md`.
 - A **line** and the **log** are as in CC (conventions). Log lines are quoted between backticks exactly
   as written, `<…>` standing for a variable part; "prints" means "writes as one log line".
 - **Actions**, their **kinds** (1 any game, 3 single player only, 5 multiplayer only), the **key names**
@@ -23,8 +24,9 @@ Conventions:
   press is not taken by the console or the menu before it (which of them takes it while open is the
   subject of the console-window and menu specifications).
 
-**Checks.** Every claim carries a tag [KB-*n*] (static, `console-keybind/checks/static.py`: read-only
-analysis of the game library and data values read from it) or [KM-*n*] (measured,
+**Checks.** Every claim carries a tag [KB-*n*] (static, `console-keybind/checks/static.py` and, for KB-14 to
+KB-19, `console-keybind/checks/interface.py`: read-only analysis of the game library and of `bin\XR_3DA.exe`,
+and data values read from them) or [KM-*n*] (measured,
 `console-keybind/checks/measured.py`: the logs and files of the headless runs in `console-keybind/run/`),
 both in the dirty workspace; `console-keybind/checks/run.py` runs both. All checks pass.
 
@@ -67,7 +69,9 @@ both in the dirty workspace; `console-keybind/checks/run.py` runs both. All chec
 
 `unbind_console <key name>` removes that key's entry, if it has one; a key without one is left as it is,
 and nothing is printed either way (measured: `unbind_console kf5` removed the `kF5` entry,
-`unbind_console kq` changed nothing) [KB-6, KM-2c]. The key name is looked up as in section 2, step 2; an
+`unbind_console kq` changed nothing) [KB-6, KM-2c]. The whole argument is the key name: it is not split at its spaces, and as
+no key name contains a space, an argument with a space in it is always an unknown key name (so
+`unbind_console kf5 x` looks up `kf5 x`; static, not measured) [KB-18]. The key name is looked up as in section 2, step 2; an
 unknown key name prints the same message and has the same fault as there (measured: `unbind_console
 kNOSUCH` crashed the same way) [KB-4, KB-4b, KM-5b]. The bare name prints `- unbind_console ` [KM-1]. Help text `no arguments`; not saved (CC 8).
 
@@ -100,7 +104,10 @@ kNOSUCH` crashed the same way) [KB-4, KB-4b, KM-5b]. The bare name prints `- unb
 
 A press of a key reaches the level's key handling (only a press: releases and holds never execute a
 console line) [KB-9]. A press of the left, right or middle mouse button reaches it as a press of the key
-`mouse1`, `mouse2` or `mouse3` [KB-12]. The level then handles the press in this order, the first rule
+`mouse1`, `mouse2` or `mouse3` [KB-12]. The game reads the mouse with eight buttons; a press of buttons 4 to
+8 reaches the level's key handling directly as a press of the key `mouse4` … `mouse8` (key codes 340–344, OS
+11.2), so a line bound to one of them is executed by the rules below like that of any other key (static, not
+measured) [KB-19]. The level then handles the press in this order, the first rule
 that applies ending it [KB-10, KB-10b, KB-11, KB-11b, KB-13]:
 
 1. The key's **action** is the first action, in the order of OS 11.1, whose primary or secondary slot holds
@@ -111,9 +118,33 @@ that applies ending it [KB-10, KB-10b, KB-11, KB-11b, KB-13]:
 2. If the action is `pause`, `screenshot`, `quit` or `console`, it is handled as such (AT 5.1; SLS 2;
    OS 13) and the key's console line, if any, is **never** executed [KB-10].
 3. Otherwise nothing more happens when any of these holds: the player-input switch is on (AT 5.1); the
-   in-game interface does not exist; an in-game window or another part of the in-game interface takes
-   the key (AT 5.2, item 3); the pause is on; the game type's own handling takes the action (AT 5.2: the
-   single-player game takes no key) [KB-10, KB-13].
+   in-game interface does not exist; the in-game interface takes the key (below); the pause is on; the
+   game type's own handling takes the action (AT 5.2: the single-player game takes no key) [KB-10, KB-13].
+   The in-game interface is offered the press as follows [KB-14, KB-15, KB-16, KB-17]:
+   - If an in-game window is open, the topmost one is offered the press first; whatever it and the game
+     type's interface (next item) do with it, the in-game interface takes the press while any in-game
+     window is open (AT 5.2, item 3).
+   - The game type's interface is then offered the press. **Disputed in review:** it is offered the press
+     only when the topmost window (if any) did not take it; a press the topmost window takes ends there
+     (taken), without reaching the game type's interface. This changes nothing for console lines, as any
+     open window takes the press either way. In single player it acts only while the game is
+     not paused and a player character exists with health above 0 (IS 1.1), and only on these actions:
+     - `inventory`: when no in-game window is open, the inventory screen opens; when the inventory screen
+       is the topmost window, it closes (IS 1.1, 1.2). Either way the press is taken.
+     - `active_jobs`, `map`, `contacts`: the same with the PDA window instead of the inventory screen; the
+       press is taken.
+     - `scores`: acted on (what it shows is outside this specification), but the press is **not** taken,
+       so it goes on through rules 4 to 6.
+
+     Every other action, and these ones when the conditions do not hold (e.g. with the character dead),
+     is not taken. What the multiplayer game types' interfaces take is **unestablished** (section 8).
+   - No other part of the in-game interface takes a press in the shipped game: the one further part that
+     could, an adjustment mode, is never switched on [KB-15].
+
+   So a press of a key bound to `inventory` that also has a console-line binding opens (or closes) the
+   inventory screen and its line is **not** executed; only when the interface does not act on it (no
+   living player character) does the press reach rule 5, and then the line is executed. A key bound to
+   `scores` both acts as `scores` and executes its line, in that order. (Static, not measured.)
 4. In single player, the actions `quick_save` and `quick_load` act as in AT 5.2 and the console line is
    not executed. In a multiplayer game these actions do not act here, so the press goes on to rule 5
    [KB-10b].
@@ -126,7 +157,8 @@ that applies ending it [KB-10, KB-10b, KB-11, KB-11b, KB-13]:
 
 So a console-line binding acts only in a running game, while the level gets the key: never in the main
 menu, never while the console or the menu is open, never while paused, never while an in-game window is
-open [KB-9, KB-10]. A press it does not act on is not kept for later [KM-6]. Measured: section 7.
+open, and in single player never on a press the interface takes for `inventory`, `active_jobs`, `map` or
+`contacts` [KB-9, KB-10, KB-17]. A press it does not act on is not kept for later [KM-6]. Measured: section 7.
 
 ## 6. `list_actions` and `bind_list`
 
@@ -176,17 +208,21 @@ No executed line was echoed to the log as `~ <line>` [KM-4g].
 - The longest line and key name `bind_console` accepts.
 - Whether the crash on an unknown key name (sections 2 and 3) also happens under Windows (measured under
   Wine only; believed, as the fault is a read through a missing entry, KB-4b).
-- Which parts of the in-game interface, besides an open in-game window, take a key press before the
-  console-line binding (section 5, rule 3; the same open question as AT 5.2, item 3).
-- What the multiplayer game types' own handling takes (section 5, rule 3); no multiplayer game was run.
+- What the multiplayer game types' own handling and their in-game interfaces take (section 5, rule 3);
+  no multiplayer game was run, and their interfaces were not examined.
+- Measurements of section 5, rule 3 (the inventory and PDA actions, `scores`), of mouse buttons 4–8 and of
+  `unbind_console`'s argument: these were established statically only, as no headless run could be made
+  for this revision.
 
 ## Provenance
 
-- Date: 2026-11-26. Game: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG build) owned by the
+- Date: 2026-11-26 (revised the same day: section 5, rule 3; mouse buttons 4–8; `unbind_console`'s
+  argument). Game: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG build) owned by the
   user, installed by the project's install assembly (`@gog_original`).
 - Static analysis: Ghidra 12.2, headless and read-only, of `xrGame.dll` (the four commands, the
-  console-line table, its saving, `unbindall`, the level's key press handling, the mouse-button mapping,
-  the current game kind); data values and strings read directly from the file.
+  console-line table, its saving, `unbindall`, the level's key press handling, the in-game interface's and
+  the single-player interface's key press handling, the mouse-button mapping, the current game kind) and
+  of `XR_3DA.exe` (the mouse input); data values and strings read directly from the files.
 - Execution: headless runs of the unmodified `XR_3DA.exe` under Wine in the project's container
   (`xtask wine run`), with `--skipmemcheck -silent_error_mode -nosound -ltx cmd.ltx`, and for the game
   runs `-start server(all/single/alife/new) client(localhost)` (a New Game). The install's `fsgame.ltx`
@@ -196,8 +232,3 @@ No executed line was echoed to the log as `~ <line>` [KM-4g].
   to the container's virtual display from outside the game (`xdotool`). Evidence: the log file (`flush`),
   the configuration files the game wrote (`cfg_save`), the saved games.
 - No leaked source code, derived projects or third-party documentation of the engine were used.
-
-## Gaps found in review
-
-- Mouse buttons 4–8 (`mouse4` … `mouse8`): only presses of the left, right and middle buttons are mapped to key presses for the level (section 5); whether presses of the other five buttons reach the level, and so whether a line bound to them can ever be executed, is not established.
-- `unbind_console` takes its whole argument as the key name (it is not split at spaces): `unbind_console kf5 x` looks up the name `kf5 x`, which is unknown, with the message and fault of section 2 (static only, not measured).
