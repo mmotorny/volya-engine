@@ -16,6 +16,9 @@
 //   pinch <scale>                 two fingers on Safari's web content
 //   screenshot <path>             PNG of the screen, written on the host
 //   expect-text <label>           fails unless an element has this label
+//   rotate <orientation>          portrait, landscape-left or landscape-right
+//                                 (the device's; tap and drag points stay
+//                                 portrait ones)
 //
 // Elements are searched in Safari, then in any app on screen (system UI).
 
@@ -70,6 +73,13 @@ final class SimDriverUITests: XCTestCase {
             try element(rest).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         case "expect-text":
             _ = try element(rest)
+        case "rotate":
+            let orientations: [String: UIDeviceOrientation] = [
+                "portrait": .portrait,
+                "landscape-left": .landscapeLeft,
+                "landscape-right": .landscapeRight,
+            ]
+            XCUIDevice.shared.orientation = try XCTUnwrap(orientations[rest], "bad orientation: \(rest)")
         case "screenshot":
             let png = XCUIScreen.main.screenshot().pngRepresentation
             try png.write(to: URL(fileURLWithPath: rest))
