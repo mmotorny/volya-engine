@@ -1182,9 +1182,12 @@ static int quit(struct run *r, ULONGLONG config_written) {
         "clock reads %lld)",
         code, (long long)load(&r->clock->frames), (long long)load(&r->clock->extra),
         (long long)load(&r->clock->reads));
-    fprintf(r->events, "end exit=0x%lx frames=%lld extra=%lld reads=%lld\n", code,
-            (long long)load(&r->clock->frames), (long long)load(&r->clock->extra),
-            (long long)load(&r->clock->reads));
+    fprintf(r->events, "end exit=0x%lx frames=%lld\n", code, (long long)load(&r->clock->frames));
+    /* Diagnostics, not compared: the main thread's clock reads differ by a
+     * few between otherwise identical runs (measured on the PC, #762). */
+    fprintf(r->events, "clock extra=%lld reads=%lld other_reads=%lld sleeps=%lld\n",
+            (long long)load(&r->clock->extra), (long long)load(&r->clock->reads),
+            (long long)load(&r->clock->other_reads), (long long)load(&r->clock->sleeps));
     if (code != 0) {
         return fail("the game ended with exit code 0x%lx", code);
     }
@@ -1601,7 +1604,14 @@ static int compare(const char *work, const char *mode, int runs) {
                 break;
             }
             line_no++;
-            if (ga && !strncmp(la, "seconds ", 8)) {
+            if (ga && gb && !strncmp(la, "clock ", 6) && strcmp(la, lb)) {
+                say("run 1 / run %d  diagnostics, not compared: %.*s / %.*s", k,
+                    (int)strcspn(la, "\r\n"), la, (int)strcspn(lb, "\r\n"), lb);
+                if (out) {
+                    fprintf(out, "run 1 / run %d  diagnostics, not compared: %s / %s", k, la, lb);
+                }
+            }
+            if (ga && (!strncmp(la, "seconds ", 8) || !strncmp(la, "clock ", 6))) {
                 continue;
             }
             if (!ga || !gb || strcmp(la, lb)) {
