@@ -10,8 +10,9 @@
 //! lines it prints (console-commands.md's "prints") and every other part's,
 //! for whoever shows them. Of the actions it runs those whose effect is the
 //! console's own: `help`, the key bindings (options-screens.md 11.5),
-//! `bind_console`, `load_last_save <name>`, `flush`, `clear_log` and the
-//! diagnostic commands (docs/behavior/console-diagnostics.md); the others
+//! the console-line bindings and the two listings
+//! (docs/behavior/console-key-bindings.md), `load_last_save <name>`,
+//! `flush`, `clear_log` and the diagnostic commands (docs/behavior/console-diagnostics.md); the others
 //! are its caller's ([`Exec::Action`]). Setting `_preset` runs the preset's
 //! script (options-screens.md section 8). `r2em`'s message switch is the
 //! console's too (console-misc-settings.md section 9).
@@ -334,8 +335,9 @@ pub struct Console {
     values: Vec<Value>,
     /// Per action, the primary and secondary key (indices into [`KEYS`]).
     slots: Vec<[Option<usize>; 2]>,
-    /// `bind_console` lines: the command line and the key's code.
-    console_keys: Vec<(String, u16)>,
+    /// The console-line bindings (console-key-bindings.md section 1): the
+    /// key's code and its line, in ascending order of key code.
+    console_keys: Vec<(u16, String)>,
     /// The name `load_last_save <name>` remembered.
     last_save: Option<String>,
     /// Counts the commands that took effect.
@@ -497,9 +499,15 @@ impl Console {
     /// Why the program ends, once a command made it end: `help` executed
     /// from the user configuration file at startup (console-commands.md
     /// section 5, measured as a crash of the original), or `dump_resources`
-    /// before the graphics device exists (console-diagnostics.md 2.2).
+    /// before the graphics device exists (console-diagnostics.md 2.2), or
+    /// a key name no key has (console-key-bindings.md sections 2 and 3).
     pub fn fatal(&self) -> Option<&str> {
         self.fatal.as_deref()
+    }
+
+    /// [`Self::fatal`], once: the program ends with it.
+    pub fn take_fatal(&mut self) -> Option<String> {
+        self.fatal.take()
     }
 
     /// As the game starts (console-commands.md section 1): of the user
@@ -684,20 +692,55 @@ impl Console {
                 self.slots[a][usize::from(name == "unbind_sec")] = None;
                 Exec::Done
             }
+            // console-key-bindings.md section 2: the last word is the key,
+            // the words before it, each followed by one space, the line.
             "bind_console" => {
-                // The last word is the key (options-screens.md 12.3).
-                let Some((command, key)) = argument.rsplit_once(' ') else {
-                    return Exec::Rejected;
+                let (line, key) = match argument.rsplit_once(' ') {
+                    Some((words, key)) => (format!("{words} "), key),
+                    None => (String::new(), argument),
                 };
-                let Some(k) = key_index(key) else {
-                    return Exec::Rejected;
+                let Some(code) = self.key_code(key) else {
+                    return Exec::Shown;
                 };
-                let code = KEYS[k].1;
-                self.console_keys.retain(|(_, c)| *c != code);
-                let at = self.console_keys.partition_point(|(_, c)| *c < code);
-                self.console_keys
-                    .insert(at, (format!("{command} {}", KEYS[k].0), code));
+                match self.console_keys.binary_search_by_key(&code, |(c, _)| *c) {
+                    Ok(at) => self.console_keys[at].1 = line,
+                    Err(at) => self.console_keys.insert(at, (code, line)),
+                }
                 Exec::Done
+            }
+            // Section 3: the whole argument is the key name (#643: static
+            // only).
+            "unbind_console" => {
+                let Some(code) = self.key_code(argument) else {
+                    return Exec::Shown;
+                };
+                if let Ok(at) = self.console_keys.binary_search_by_key(&code, |(c, _)| *c) {
+                    self.console_keys.remove(at);
+                }
+                Exec::Done
+            }
+            // Section 6.
+            "list_actions" => {
+                self.print("- --- Action list start ---".to_owned());
+                for (action, _) in ACTIONS {
+                    self.print(format!("- {action}"));
+                }
+                self.print("- --- Action list end   ---".to_owned());
+                Exec::Shown
+            }
+            "bind_list" => {
+                self.print("- --- Bind list start ---".to_owned());
+                for (a, (action, _)) in ACTIONS.iter().enumerate() {
+                    // The key-list name is the display name (options-screens.md
+                    // 11.2's fallback: the browser reports no operating-system
+                    // key names).
+                    let [primary, secondary] = self.keys(a).map(|k| k.unwrap_or("NULL"));
+                    self.print(format!(
+                        "[{action}] primary is[{primary}] secondary is[{secondary}]"
+                    ));
+                }
+                self.print("- --- Bind list end   ---".to_owned());
+                Exec::Shown
             }
             // console-log.md 3.5: the line is not in the file it wrote.
             "flush" => {
@@ -742,6 +785,21 @@ impl Console {
             }
             _ => Exec::Action,
         }
+    }
+
+    /// The code of the key named `name` (console-key-bindings.md section
+    /// 2, step 2). An unknown name prints its message, and the original
+    /// then reads through a missing entry and crashes (sections 2 and 3,
+    /// measured): the program ends.
+    fn key_code(&mut self, name: &str) -> Option<u16> {
+        if let Some(k) = key_index(name) {
+            return Some(KEYS[k].1);
+        }
+        self.print(format!(
+            "! cant find corresponding [_keyboard*] for keyname {name}"
+        ));
+        self.fatal = Some(format!("no key named `{name}` to bind a console line to"));
+        None
     }
 
     /// `help`'s listing (section 5). From the user configuration file at
@@ -819,6 +877,28 @@ impl Console {
         self.last_save.as_deref()
     }
 
+    /// The line bound to the key with code `code` (console-key-bindings.md
+    /// section 1), if any.
+    pub fn console_line(&self, code: u16) -> Option<&str> {
+        self.console_keys
+            .binary_search_by_key(&code, |(c, _)| *c)
+            .ok()
+            .map(|at| self.console_keys[at].1.as_str())
+    }
+
+    /// The action of the key with code `code` (console-key-bindings.md
+    /// section 5, rule 1): the first action, in order, whose primary or
+    /// secondary slot holds the key, counting only actions of any game and
+    /// of the single-player game (Volya Engine plays no other); an index
+    /// into [`ACTIONS`].
+    pub fn bound_action(&self, code: u16) -> Option<usize> {
+        let key = KEYS.iter().position(|(_, c)| *c == code)?;
+        self.slots
+            .iter()
+            .zip(ACTIONS)
+            .position(|(slots, (_, kind))| *kind != ActionKind::Multi && slots.contains(&Some(key)))
+    }
+
     /// The primary and secondary key names of action `action` (an index
     /// into [`ACTIONS`]).
     pub fn keys(&self, action: usize) -> [Option<&'static str>; 2] {
@@ -859,9 +939,12 @@ impl Console {
                     slot(&mut text, 0, "bind");
                 }
                 (Saved::Own, "bind_sec") => slot(&mut text, 1, "bind_sec"),
+                // console-key-bindings.md section 4: the stored line ends in
+                // a space (or is empty), and the line in LF alone.
                 (Saved::Own, "bind_console") => {
-                    for (line, _) in &self.console_keys {
-                        text.push_str(&format!("bind_console {line}\n"));
+                    for (code, line) in &self.console_keys {
+                        let key = KEYS.iter().find(|(_, c)| c == code).map_or("", |k| k.0);
+                        text.push_str(&format!("bind_console {line} {key}\n"));
                     }
                 }
                 (Saved::Own, "load_last_save") => {

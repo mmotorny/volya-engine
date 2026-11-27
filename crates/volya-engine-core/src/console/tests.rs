@@ -499,6 +499,124 @@ fn binding_takes_the_key_from_other_actions_except_single_and_multi() {
 }
 
 /// console-misc-settings.md section 9.
+/// The `bind_console` lines `c` saves.
+fn console_lines(c: &Console) -> Vec<String> {
+    String::from_utf8(c.save())
+        .unwrap()
+        .split_inclusive('\n')
+        .filter(|l| l.starts_with("bind_console "))
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn bound_lines_are_saved_by_key_code_with_two_spaces() {
+    // console-key-bindings.md section 4's measured file.
+    let user = b"bind_console bind_list k9\r\nbind_console flush kO\r\nbind_console cfg_save   Kb_Test  KP\r\nbind_console kL\r\nbind_console Screenshot   kF5\r\nbind_console r2_gloss_factor 0.5 MOUSE1\r\nbind_console hud_info off kNUMPAD7\r\n";
+    let c = Console::startup(files(), user);
+    let saved = [
+        "bind_console bind_list  k9\n",
+        "bind_console flush  kO\n",
+        "bind_console cfg_save kb_test  kP\n",
+        "bind_console  kL\n",
+        "bind_console screenshot  kF5\n",
+        "bind_console hud_info off  kNUMPAD7\n",
+        "bind_console r2_gloss_factor 0.5  mouse1\n",
+    ];
+    assert_eq!(console_lines(&c), saved);
+    assert_eq!(c.console_line(24), Some("flush "));
+    assert_eq!(c.console_line(38), Some(""));
+    assert_eq!(c.console_line(16), None);
+    // Read back, the same lines are bound again.
+    let read = Console::startup(files(), &c.save());
+    assert_eq!(console_lines(&read), saved);
+    assert_eq!(read, c);
+}
+
+#[test]
+fn bind_console_replaces_and_unbind_console_removes() {
+    let mut c = Console::startup(files(), b"");
+    assert!(printed(&mut c, "bind_console screenshot kF5").is_empty());
+    c.exec("bind_console flush kF5");
+    assert_eq!(console_lines(&c), ["bind_console flush  kF5\n"]);
+    assert_eq!(printed(&mut c, "bind_console"), ["- bind_console "]);
+    assert_eq!(printed(&mut c, "unbind_console"), ["- unbind_console "]);
+    // A key without a line is left as it is; nothing is printed.
+    assert!(printed(&mut c, "unbind_console kq").is_empty());
+    assert_eq!(console_lines(&c).len(), 1);
+    assert!(printed(&mut c, "unbind_console kf5").is_empty());
+    assert!(console_lines(&c).is_empty());
+    assert_eq!(c.fatal(), None);
+    // The action bindings and the lines are independent.
+    c.exec("bind_console flush kW");
+    c.exec("bind forward kO");
+    c.exec("unbind back");
+    assert_eq!(console_lines(&c), ["bind_console flush  kW\n"]);
+    assert_eq!(c.keys(action_index("forward").unwrap()), [Some("kO"), None]);
+    // unbindall empties the table.
+    c.exec("unbindall");
+    assert!(console_lines(&c).is_empty());
+}
+
+#[test]
+fn an_unknown_key_name_ends_the_program() {
+    for (line, name) in [
+        ("bind_console flush kNOSUCH", "knosuch"),
+        ("unbind_console kNOSUCH", "knosuch"),
+        // The whole argument is the name (#643).
+        ("unbind_console kf5 x", "kf5 x"),
+    ] {
+        let mut c = Console::startup(files(), b"");
+        assert_eq!(
+            printed(&mut c, line),
+            [format!(
+                "! cant find corresponding [_keyboard*] for keyname {name}"
+            )]
+        );
+        assert!(c.fatal().is_some(), "{line}");
+    }
+    // In the configuration file, the next line is never executed.
+    let c = Console::startup(
+        files(),
+        b"bind_console flush kNOSUCH\r\nbind_console flush kO\r\n",
+    );
+    assert!(c.fatal().is_some());
+    assert_eq!(c.console_line(24), None);
+}
+
+#[test]
+fn the_key_action_counts_single_player_and_any_game_actions() {
+    let mut c = Console::startup(files(), b"");
+    let name = |c: &Console, code| c.bound_action(code).map(|a| ACTIONS[a].0);
+    assert_eq!(name(&c, 17), Some("forward"));
+    // kF6: vote (multiplayer) comes first, but only quick_save counts.
+    assert_eq!(name(&c, 64), Some("quick_save"));
+    c.exec("bind skin_menu kO");
+    assert_eq!(name(&c, 24), None);
+    c.exec("bind_sec wpn_fire mouse1");
+    assert_eq!(name(&c, 337), Some("wpn_fire"));
+}
+
+#[test]
+fn list_actions_and_bind_list() {
+    let mut c = Console::startup(files(), b"");
+    let actions = printed(&mut c, "list_actions");
+    assert_eq!(actions.len(), 79);
+    assert_eq!(actions[0], "- --- Action list start ---");
+    assert_eq!(actions[1], "- left");
+    assert_eq!(actions[77], "- quick_load");
+    assert_eq!(actions[78], "- --- Action list end   ---");
+    c.exec("bind_sec forward kUP");
+    c.exec("bind_console flush kL");
+    let binds = printed(&mut c, "bind_list");
+    assert_eq!(binds.len(), 79);
+    assert_eq!(binds[0], "- --- Bind list start ---");
+    assert_eq!(binds[1], "[left] primary is[NULL] secondary is[NULL]");
+    assert_eq!(binds[10], "[forward] primary is[kW] secondary is[kUP]");
+    assert_eq!(binds[78], "- --- Bind list end   ---");
+    assert!(!binds.iter().any(|l| l.contains("kL")), "no console lines");
+}
+
 #[test]
 fn r2em_switches_its_message_and_prints_it_after_a_number() {
     let mut c = Console::new(files());
@@ -559,11 +677,11 @@ fn the_user_file_round_trips_in_byte_order() {
     assert!(at("bind quit kESCAPE\r\n") > unbindall);
     // bind < bind_console < bind_sec; console keys by code (F9 67, F10 68).
     assert_eq!(
-        lines[at("bind_console quit kF9\n") + 1],
-        "bind_console disconnect kF10\n"
+        lines[at("bind_console quit  kF9\n") + 1],
+        "bind_console disconnect  kF10\n"
     );
-    assert!(at("bind_console quit kF9\n") > at("bind quit kESCAPE\r\n"));
-    assert!(at("bind_sec jump kRCONTROL\r\n") > at("bind_console disconnect kF10\n"));
+    assert!(at("bind_console quit  kF9\n") > at("bind quit kESCAPE\r\n"));
+    assert!(at("bind_sec jump kRCONTROL\r\n") > at("bind_console disconnect  kF10\n"));
     assert!(at("g_always_run on\r\n") > at("bind_sec jump kRCONTROL\r\n"));
     for line in [
         "mouse_sens 0.3\r\n",
