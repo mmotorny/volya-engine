@@ -24,10 +24,11 @@ Conventions:
 - Specifications referred to: OS `options-screens.md`, ST `steering-the-original.md`, DM
   `display-mode.md`, CS `console-scope.md` (all `docs/behavior/`).
 
-**Checks.** Every claim carries a tag [CC-*n*]. The checks are one script in the dirty workspace,
-`console-commands/checks/run.py`; it reads the shipped binaries (strings, data values, read-only static
+**Checks.** Every claim carries a tag [CC-*n*]. The checks are scripts in the dirty workspace:
+`console-commands/checks/run.py` reads the shipped binaries (strings, data values, read-only static
 analysis) and the logs and files of four headless runs of the shipped game (`console-commands/run/`), and
-regenerates the table of section 8 from both, comparing it with this document row by row. All checks pass.
+regenerates the table of section 8 from both, comparing it with this document row by row. Tags CC-10 …
+CC-12 are checked by `ccfix/checks/run.py`, from the binaries and the run in `ccfix/run/`. All checks pass.
 
 ## 1. The commands
 
@@ -39,13 +40,25 @@ regenerates the table of section 8 from both, comparing it with this document ro
   `demo_record_4step`, `demo_record_step` — are registered only when the command line contains the text
   `designer` [CC-1]. Measured: without it they are unknown and `help` lists 251 commands; with `-designer`
   it lists all 256 [CC-1].
-- All commands exist before the configuration file is executed at startup (measured: every one answered
-  from it) [CC-2]. **Disputed in review:** without `-r2` the configuration file is executed twice at
-  startup (measured in every run without `-r2`; once with `-r2`): first right after `Initializing
-  Engine...`, before the renderer and the game library are loaded, when none of its lines writes
-  anything to the log (not even for the engine's own commands or for unknown names); then, after the
-  libraries are loaded and `unbindall` has run, a second time, which is the one every command answered
-  from. The statement holds only for that second execution.
+- At startup the configuration file (OS 12.1) is executed twice, unless the command line contains `-r2`
+  (which includes `-r2a`) [CC-10]:
+  1. Right after `Initializing Engine...`, when the engine's commands are registered and before the
+     renderer and the game library are loaded. If the command line contains `-r2a`, the line
+     `renderer renderer_r2a` is executed instead of the file; otherwise, if it contains `-r2`, the line
+     `renderer renderer_r2`. Otherwise the file is executed as by `cfg_load` (CS 5.6: its
+     `Executing config-script "<file>"...` line before and its closing line after), except that only
+     the lines that start with exactly the nine bytes `renderer ` (`renderer` and one space, compared
+     as bytes on the line as read, before any processing of section 2) are executed; every other line is
+     skipped and writes nothing [CC-10]. A line executed then names `renderer`, an engine command, so
+     this execution can only set `renderer`, and with it the renderer library that is loaded next
+     [CC-10]. Measured: `mouse_sens 0.3`, an unknown name, ` renderer renderer_r2` (leading space),
+     `<tab>renderer renderer_r2`, `RENDERER renderer_r2`, `renderer<tab>renderer_r2`, `renderer_r2`
+     and `renderer` wrote nothing and `xrRender_R1.dll` was loaded; `renderer bogus` was rejected
+     (3, two lines) and `renderer ` (trailing space) printed `- renderer renderer_r1` [CC-10].
+  2. After the libraries are loaded and the default bindings are executed (`unbindall`, OS 11.5), the
+     whole file once more, every line through section 2 [CC-10]. All commands exist then (measured:
+     every one answered from it) [CC-2]; this is the execution the rest of this specification means by
+     "the configuration file at startup".
 - No command is registered disabled [CC-1].
 - Commands are kept in ascending **byte order** of their names (`_` 95 before `a` 97; the listing starts
   with `_preset`). This is the order of `help` (5) and of the saved configuration file (6) [CC-1, CC-7].
@@ -67,7 +80,13 @@ For every line [CC-2]:
    disabled command would print `! Command disabled.`; none is disabled (1).
 5. The argument is converted to lower case, except for the three commands that keep case: `cdkey`,
    `mm_net_player_name` and `mm_net_srv_name` (measured: `cfg_save MiXeD_Name` writes
-   `mixed_name.ltx`; `mm_net_srv_name AbC  dEf` stores `AbC dEf`) [CC-2, CC-3].
+   `mixed_name.ltx`; `mm_net_srv_name AbC  dEf` stores `AbC dEf`) [CC-2, CC-3]. Only the bytes `A` … `Z`
+   (0x41 … 0x5A) change, to `a` … `z`; every other byte, the Cyrillic letters of the Windows code page
+   included, stays as it is: the C runtime lowers only those bytes while no locale is set, and none of
+   the programs sets one (a paste into the console aside, section 9) [CC-11]. Measured: `vid_mode
+   ABCZabcz` followed by the 128 bytes 0x80 … 0xFF printed `! Wrong video mode [abczabcz<the same 128
+   bytes>]`, and `cfg_load XYZ<the same bytes>` printed `Executing config-script "xyz<the same
+   bytes>"...`, at startup and in the main menu [CC-11].
 6. A non-empty argument is given to the command. With an empty argument, a command marked "shows" in
    section 8 prints `- <name> <status>` (with an empty status the line ends in the space after the name,
    e.g. `- bind `); a command marked "runs" is run with an empty argument instead (measured: the bare
@@ -105,6 +124,13 @@ on/off. No shipped command has this kind [CC-3].
 - The argument is read as a C `atoi` decimal: an optional sign, then decimal digits up to the first other
   character; no digits read as 0 [CC-3]. The value is accepted when *min* ≤ value ≤ *max* (both inclusive),
   else rejected [CC-3].
+- A number beyond the signed 32-bit range reads as 2147483647, or as −2147483648 when it has a minus
+  sign: the C runtime's `atoi` reads with `strtol` in base 10, which saturates instead of wrapping around
+  [CC-12]. No integer command's range reaches either value, so such an argument is always rejected
+  [CC-12]. Measured: `4294967306`, `-4294967286`, `8589934602`, `2147483648` and `99999999999` rejected
+  for `g_corpsenum` (0 … 100); `4294967295`, `18446744073709551615`, `-4294967297`, `-2147483649` and
+  `2147483647` rejected for `sv_remove_corpse` (−1 … 1); a wrap-around modulo 2^32 would have accepted all
+  but the last two of each [CC-12].
 - Measured with `g_corpsenum` (0 … 100): `101` and `-1` rejected; `100` accepted; `12abc` → 12; `+5` → 5;
   `abc` → 0; `0x10` → 0 [CC-3].
 - Status: the value in decimal. Help text `integer value in range [<min>,<max>]` (decimal) [CC-4].
@@ -241,8 +267,7 @@ its status (e.g. `mouse_sens 0.12346`, `ph_frequency 50.00000`, `r2_aa_break 0.7
 ## 7. Built-in values
 
 The *Built-in* column of section 8 is each variable's status when the configuration file is executed at
-startup (**Disputed in review:** at its second execution, see section 1; without `-r2` an earlier
-execution comes before the renderer and the game library are loaded) (measured: the bare name of every "shows" command, `name` aside, executed from that file) [CC-2,
+startup, at its second execution (section 1) (measured: the bare name of every "shows" command, `name` aside, executed from that file) [CC-2,
 CC-8]. Under the R2 renderer every status is the same, except `renderer` itself, which `-r2` sets before
 the file runs (measured) [CC-8]. Every measured value equals the value stored in the programs after the
 registration code (static) [CC-8]; in particular `mouse_sens` is 0.12 [CC-8]. `vid_mode` shows `1024x768`
@@ -522,6 +547,12 @@ characters kept); *Built-in* (7; `empty` for an empty status, `—` for commands
 - The measured runs ran under Wine; the same behaviour under Windows is **believed** (nothing measured
   depends on the system except the computer name and the display mode).
 - The `~ <line>` echo of typed lines (2, step 2) is static only: the runs typed nothing.
+- The runs used Wine's own C runtime, not the shipped `msvcr80.dll` (measured; Wine does not start the
+  program with the shipped one forced); for the shipped runtime, lower-casing (2, step 5) and integer
+  reading (3.3) are static [CC-11, CC-12].
+- Whether pasting into the console changes lower-casing afterwards: the paste builds a C++ locale named
+  `English` for its own use; whether that leaves the C runtime's locale changed is **unestablished** (no
+  run pasted) [CC-11].
 
 ## Provenance
 
@@ -536,12 +567,11 @@ characters kept); *Built-in* (7; `empty` for an empty status, `—` for commands
   loose copy of the shipped `scripts\ui_main_menu.script` with one added line executed a second
   configuration file (`cfg_load menu_tests`) when the main menu was created. The registry had no install
   key. Evidence: the log file (`flush`) and the configuration files the game wrote.
+- Fix of the review gaps (startup executions, lower-casing, integer range), same date: static analysis as
+  above of `XR_3DA.exe` (startup, the filtered execution), `xrCore.dll` (reading script lines) and the
+  shipped `bin\msvcr80.dll` (imported into its own Ghidra project and analysed: `atoi`, `strtol`,
+  `_strlwr`); the imports of the program modules; the game's scripts as extracted from the archives. One
+  more headless run as above (startup file and main-menu file of its own), with Wine's DLL-load trace;
+  a second run with the shipped `msvcr80.dll` forced did not start the program (not evidence).
 - No leaked source code, derived projects or third-party documentation of the engine were used.
 
-## Gaps found in review
-
-- What the first execution of the configuration file at startup (without `-r2`, before the renderer and
-  the game library are loaded; section 1) does with its lines, and which commands exist at that point.
-- Whether lower-casing an argument (2, step 5) changes non-ASCII letters (Cyrillic text in the Windows
-  code page) or only `A` … `Z`.
-- What an integer argument outside the signed 32-bit range (e.g. `99999999999`) reads as (3.3).
