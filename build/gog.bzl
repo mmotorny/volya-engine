@@ -97,7 +97,12 @@ def _gog_impl(mctx):
     gog_extractor(name = "gog_extractor")
     gog_game(name = "gog_game", exe = exe, fingerprint = fingerprint, format = format)
     gog_original(name = "gog_original", fingerprint = fingerprint, format = format)
-    return mctx.extension_metadata(reproducible = False)
+
+    # Reproducible: a function of the files read above, so MODULE.bazel.lock
+    # records nothing of it (its repositories' attributes hold the
+    # installer's path, a folder of this machine). It runs again in each new
+    # Bazel server, in milliseconds.
+    return mctx.extension_metadata(reproducible = True)
 
 gog = module_extension(
     implementation = _gog_impl,

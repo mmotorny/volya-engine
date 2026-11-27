@@ -45,6 +45,7 @@
 #include <string.h>
 
 #include "frameclock.h"
+#include "redact.h"
 
 /* --- Forwarding --------------------------------------------------------- */
 
@@ -126,11 +127,15 @@ static ULONGLONG ticks(void) {
 
 /* --- The proxy's log ---------------------------------------------------- */
 
+/* This library. */
+static HMODULE self;
+
 static HANDLE log_file = INVALID_HANDLE_VALUE;
 static CRITICAL_SECTION log_lock;
 
 /* A line in the proxy's log (the driver names it), with the real
- * milliseconds since start-up and the thread. */
+ * milliseconds since start-up and the thread; folders of the machine
+ * written as redact.h says. */
 static void dlog(const char *fmt, ...) {
     if (log_file == INVALID_HANDLE_VALUE) {
         return;
@@ -140,9 +145,10 @@ static void dlog(const char *fmt, ...) {
                      GetCurrentThreadId());
     va_list ap;
     va_start(ap, fmt);
-    int m = vsnprintf(line + n, sizeof line - (size_t)n - 2, fmt, ap);
+    vsnprintf(line + n, sizeof line - (size_t)n - 2, fmt, ap);
     va_end(ap);
-    n += m < 0 ? 0 : (m > (int)(sizeof line) - n - 3 ? (int)(sizeof line) - n - 3 : m);
+    redact(line, sizeof line - 2);
+    n = (int)strlen(line);
     line[n++] = '\r';
     line[n++] = '\n';
     DWORD w;
@@ -153,6 +159,20 @@ static void dlog(const char *fmt, ...) {
 
 static void open_log(const char *path) {
     InitializeCriticalSection(&log_lock);
+    /* The work folder: this library is its game\bin\winmm.dll. */
+    static char work[MAX_PATH];
+    DWORD len = GetModuleFileNameA(self, work, sizeof work);
+    for (int up = 0; up < 3 && len && len < sizeof work; up++) {
+        char *sep = strrchr(work, '\\');
+        if (!sep) {
+            break;
+        }
+        *sep = 0;
+        if (up == 2) {
+            redact_add(work, "<work>", 0);
+        }
+    }
+    redact_add_user();
     if (path[0]) {
         log_file = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                                OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -161,7 +181,6 @@ static void open_log(const char *path) {
 
 /* Who reads the clock: each function's calls by calling module, for the
  * log (the heartbeat writes them when they change). */
-static HMODULE self;
 static struct caller {
     const char *fn;
     HMODULE module;

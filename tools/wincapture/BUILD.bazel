@@ -13,6 +13,7 @@ wincapture_binary(
     srcs = [
         "frameclock.c",
         "frameclock.h",
+        "redact.h",
         "winmm_exports.h",
     ],
     kind = "dll",
@@ -25,6 +26,7 @@ wincapture_binary(
     srcs = [
         "capture.c",
         "frameclock.h",
+        "redact.h",
     ],
     kind = "exe",
     out = "volyacapture.exe",

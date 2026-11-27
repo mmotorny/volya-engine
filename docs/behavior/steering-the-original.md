@@ -382,7 +382,7 @@ way to place a view.
   `ssq_…_(<level>).tga` with `-ss_tga`; `<user>` is the Windows user name, the date and time are local,
   `<level>` is the level name, or `mainmenu` when no level exists. Two screenshots in the same second have the
   same name (**believed** the second replaces the first). Example:
-  `screenshots\ss_maksym_11-26-26_01-15-07_(l01_escape).jpg`. The `screenshot` command's argument is not used
+  `screenshots\ss_<user>_11-26-26_01-15-07_(l01_escape).jpg`. The `screenshot` command's argument is not used
   [SS-3].
 - **During a precache** (4.2.1) the saved picture is black (**measured** by the clean side: an F12 screenshot
   in a track's first seconds was a black JPEG; explained by the black clear of every precache frame [PC-3,

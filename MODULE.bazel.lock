@@ -206,39 +206,6 @@
   },
   "selectedYankedVersions": {},
   "moduleExtensions": {
-    "//build:gog.bzl%gog": {
-      "general": {
-        "bzlTransitiveDigest": "8y3/VVZAEpMFkWRIc6ST6iFnBlQwxL6KdLYmTkWCGB4=",
-        "usagesDigest": "xwdOneln1/KCPMNVJvIYXmcS/6Up7QI2ceWCOEzsIQc=",
-        "recordedInputs": [
-          "REPO_MAPPING:,gog_installer +gog_installer+gog_installer",
-          "FILE:@@+gog_installer+gog_installer//fingerprint.txt ecd87b7205cef5c74145c907a0b18e21a019e90c291746fdb7c7345e8b559edf",
-          "FILE:@@+gog_installer+gog_installer//exe.txt e055c43859a52d910511df8faa96b4163894e982617e9b2bb5bf752cf4a3854a",
-          "FILE:@@//tools/gog-extract/src/main.rs 356305eb45fadfc8c0c1af6e909d0c597bb517e5fc0fabd627af60ad02a81520"
-        ],
-        "generatedRepoSpecs": {
-          "gog_extractor": {
-            "repoRuleId": "@@//build:gog_extractor.bzl%gog_extractor",
-            "attributes": {}
-          },
-          "gog_game": {
-            "repoRuleId": "@@//build:gog_game.bzl%gog_game",
-            "attributes": {
-              "exe": "/Users/<user>/Downloads/setup_s.t.a.l.k.e.r._shadow_of_chernobyl_2.1.0.10_gog_0.13_(russian)_(77895).exe",
-              "fingerprint": "setup_s.t.a.l.k.e.r._shadow_of_chernobyl_2.1.0.10_gog_0.13_(russian)_(77895).exe 873816 de2ab4e7778c93a88f380a5518077313de85f10effea88e5fe4f11df79eadc03\nsetup_s.t.a.l.k.e.r._shadow_of_chernobyl_2.1.0.10_gog_0.13_(russian)_(77895)-1.bin 3731654556\n",
-              "format": 1
-            }
-          },
-          "gog_original": {
-            "repoRuleId": "@@//build:gog_game.bzl%gog_original",
-            "attributes": {
-              "fingerprint": "setup_s.t.a.l.k.e.r._shadow_of_chernobyl_2.1.0.10_gog_0.13_(russian)_(77895).exe 873816 de2ab4e7778c93a88f380a5518077313de85f10effea88e5fe4f11df79eadc03\nsetup_s.t.a.l.k.e.r._shadow_of_chernobyl_2.1.0.10_gog_0.13_(russian)_(77895)-1.bin 3731654556\n",
-              "format": 1
-            }
-          }
-        }
-      }
-    },
     "@@pybind11_bazel+//:internal_configure.bzl%internal_configure_extension": {
       "general": {
         "bzlTransitiveDigest": "BsgERqYptkJeeC8wFaLj251IoTZTSy/58WA6kVp0q8I=",

@@ -17,8 +17,9 @@ data; everything it writes is game assets and stays on this machine.
 
 check: the title menu only; full: every view. N runs (default 2), compared.
 DIR of the game: default the install's registry entry. Work folder: default
-%TEMP%\volyacapture (no dash or space). Results: <work>\runs\. The game runs
-full screen at the plan's size; keep the machine untouched while it runs
-(keys go to the game's window, which must stay in front).
+%TEMP%\volya-engine-capture (no space). Results: <work>\runs\. What it
+logs names no folder of this machine (<game folder>, <work>, <home>). The
+game runs full screen at the plan's size; keep the machine untouched while
+it runs (keys go to the game's window, which must stay in front).
 
 Steps: docs/testing.md, The original on Windows.

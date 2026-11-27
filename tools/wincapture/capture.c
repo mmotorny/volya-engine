@@ -20,12 +20,14 @@
  * Its plan, plan.txt beside it, comes from tests/fidelity/views.rs
  * (`xtask wincapture plan`): the views, their frames, the configuration
  * file's settings and the camera tracks. Everything it writes is below
- * the work folder (default %TEMP%\volyacapture): the copy of the install
+ * the work folder (default %TEMP%\volya-engine-capture): the copy of the install
  * (game\), the game's user-data folder (userdata\, made afresh for each
  * run, named by the copy's fsgame.ltx) and each run's outputs
  * (runs\<mode>-<n>\: fidelity\<view>.png and its files, log.txt,
  * events.txt, hashes.txt), and runs\<mode>-summary.txt comparing the
- * runs. The frames are game assets: they stay on this machine. */
+ * runs. The frames are game assets: they stay on this machine. What it
+ * writes and prints names no folder of the machine: the install is
+ * <game folder>, the work folder <work>, the runner's <runner> (redact.h). */
 
 #define WIN32_LEAN_AND_MEAN
 #define _WIN32_WINNT 0x0a00 /* Windows 10: BCryptHash */
@@ -41,6 +43,7 @@
 #include <string.h>
 
 #include "frameclock.h"
+#include "redact.h"
 
 /* --- Constants of the procedure (views.rs's, in frames) ----------------- */
 
@@ -109,6 +112,7 @@ static void say(const char *fmt, ...) {
     va_start(ap, fmt);
     vsnprintf(line, sizeof line, fmt, ap);
     va_end(ap);
+    redact(line, sizeof line);
     double t = (GetTickCount64() - started_ms) / 1000.0;
     printf("%8.1f s  %s\n", t, line);
     fflush(stdout);
@@ -125,6 +129,7 @@ static int fail(const char *fmt, ...) {
     va_start(ap, fmt);
     vsnprintf(failure, sizeof failure, fmt, ap);
     va_end(ap);
+    redact(failure, sizeof failure);
     say("FAILED: %s", failure);
     return 0;
 }
@@ -688,8 +693,11 @@ static void store(volatile int64_t *p, int64_t v) {
 }
 
 static void event(struct run *r, const char *what) {
-    say("frame %6lld  %s", (long long)r->frame, what);
-    fprintf(r->events, "%lld %s\n", (long long)r->frame, what);
+    char line[1024];
+    snprintf(line, sizeof line, "%s", what);
+    redact(line, sizeof line);
+    say("frame %6lld  %s", (long long)r->frame, line);
+    fprintf(r->events, "%lld %s\n", (long long)r->frame, line);
     fflush(r->events);
 }
 
@@ -1045,9 +1053,9 @@ static int64_t lead(const struct view *v) {
 #define AFTER (SCREENSHOT_TIMEOUT + KEY_FRAMES)
 
 /* The newest screenshot TGA of the run that is not in `before` (names
- * joined by '\n'), decoded once whole. */
-static uint8_t *new_screenshot(struct run *r, const char *before, uint32_t *w, uint32_t *h,
-                               char *name, size_t name_size) {
+ * joined by '\n'), decoded once whole. Its name holds the user's name
+ * (steering-the-original.md 5): it is not recorded. */
+static uint8_t *new_screenshot(struct run *r, const char *before, uint32_t *w, uint32_t *h) {
     char pattern[MAX_PATH], path[MAX_PATH];
     WIN32_FIND_DATAA fd;
     join(pattern, sizeof pattern, r->screenshots, "ssq_*.tga");
@@ -1068,9 +1076,6 @@ static uint8_t *new_screenshot(struct run *r, const char *before, uint32_t *w, u
         if (read_file(path, &data, &n)) {
             rgb = tga_rgb(data, n, w, h);
             free(data);
-            if (rgb) {
-                snprintf(name, name_size, "%s", fd.cFileName);
-            }
         }
     } while (!rgb && FindNextFileA(f, &fd));
     FindClose(f);
@@ -1105,7 +1110,7 @@ static void screenshot_names(struct run *r, char *out, size_t n) {
  * frame shown at the F12, HUD included, is kept as display\<view>.png. */
 static int without_hud(struct run *r, const struct view *v, int64_t frame) {
     static char before[65536];
-    char name[MAX_PATH], shot[MAX_PATH];
+    char name[MAX_PATH];
     screenshot_names(r, before, sizeof before);
     if (!console1(r, RECORDER) || !advance(r, frame - F12_TO_FRAME, 1)) {
         return 0;
@@ -1122,7 +1127,7 @@ static int without_hud(struct run *r, const struct view *v, int64_t frame) {
     int64_t end = frame + SCREENSHOT_TIMEOUT;
     uint32_t w, h;
     uint8_t *rgb;
-    while (!(rgb = new_screenshot(r, before, &w, &h, shot, sizeof shot))) {
+    while (!(rgb = new_screenshot(r, before, &w, &h))) {
         if (r->frame >= end) {
             return fail("%s: no screenshot within %d frames of the recorder's F12", v->name,
                         SCREENSHOT_TIMEOUT);
@@ -1132,8 +1137,8 @@ static int without_hud(struct run *r, const struct view *v, int64_t frame) {
         }
     }
     char what[MAX_PATH + 64];
-    snprintf(what, sizeof what, "%s: the recorder's screenshot of frame %lld, %s", v->name,
-             (long long)frame, shot);
+    snprintf(what, sizeof what, "%s: the recorder's screenshot of frame %lld", v->name,
+             (long long)frame);
     event(r, what);
     if (w != plan.width || h != plan.height) {
         free(rgb);
@@ -1440,11 +1445,13 @@ static int run_once(const char *exe_dir, const char *game, const char *work, con
     r.clock->magic = FRAMECLOCK_MAGIC;
 
     /* The launch task (gog-install-additions.md section 5) and the options
-     * of an unattended start (steering-the-original.md 1.2, 3.1). */
-    char command[1024];
+     * of an unattended start (steering-the-original.md 1.2, 3.1). The game
+     * searches its whole command line for its options (1.1): the program's
+     * path is not in it, as when it is started from its folder (1.3). */
+    char command[1024], program[MAX_PATH];
+    join(program, sizeof program, bin, "XR_3DA.exe");
     snprintf(command, sizeof command,
-             "\"%s\\XR_3DA.exe\" --skipmemcheck -silent_error_mode -nosound -ss_tga -ltx steer.ltx",
-             bin);
+             "XR_3DA.exe --skipmemcheck -silent_error_mode -nosound -ss_tga -ltx steer.ltx");
     STARTUPINFOA si = {.cb = sizeof si};
     PROCESS_INFORMATION pi;
     r.job = CreateJobObjectA(NULL, NULL);
@@ -1452,7 +1459,7 @@ static int run_once(const char *exe_dir, const char *game, const char *work, con
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     SetInformationJobObject(r.job, JobObjectExtendedLimitInformation, &limits, sizeof limits);
     say("Starting %s (working folder %s)", command, bin);
-    if (!CreateProcessA(NULL, command, NULL, NULL, FALSE, CREATE_SUSPENDED, NULL, bin, &si, &pi)) {
+    if (!CreateProcessA(program, command, NULL, NULL, FALSE, CREATE_SUSPENDED, NULL, bin, &si, &pi)) {
         return fail("cannot start the game (%lu)", GetLastError());
     }
     AssignProcessToJobObject(r.job, pi.hProcess);
@@ -1682,7 +1689,7 @@ int main(int argc, char **argv) {
         char temp[MAX_PATH];
         DWORD n = GetTempPathA(sizeof temp, temp);
         if (n == 0 || n >= sizeof temp) snprintf(temp, sizeof temp, "C:\\Windows\\Temp\\");
-        snprintf(work, sizeof work, "%svolyacapture", temp);
+        snprintf(work, sizeof work, "%svolya-engine-capture", temp);
     }
     int runs = 2;
     for (int i = 2; i < argc; i++) {
@@ -1702,6 +1709,8 @@ int main(int argc, char **argv) {
     }
     GetModuleFileNameA(NULL, exe_dir, MAX_PATH);
     *strrchr(exe_dir, '\\') = 0;
+    redact_add(exe_dir, "<runner>", 0);
+    redact_add(work, "<work>", 0);
     char plan_path[MAX_PATH];
     join(plan_path, sizeof plan_path, exe_dir, "plan.txt");
     if (!read_plan(plan_path)) {
@@ -1712,11 +1721,13 @@ int main(int argc, char **argv) {
              "World\\STALKER-SHOC, InstallPath) is not there");
         return 1;
     }
-    /* The game finds its options anywhere in its command line, the program's
-     * path included (steering-the-original.md 1.1): no dash and no space in
-     * the work folder, and a short one (the line holds 511 characters). */
-    if (strpbrk(work, "- ") || strlen(work) > 100) {
-        fail("the work folder %s must have no dash or space and at most 100 characters", work);
+    /* Before the user's folders: the install may be below them. */
+    redact_add(game, "<game folder>", 0);
+    redact_add_user();
+    /* No space (its user-data folder's line in fsgame.ltx was not tried
+     * with one); paths below it hold up to MAX_PATH characters. */
+    if (strchr(work, ' ') || strlen(work) > 100) {
+        fail("the work folder %s must have no space and at most 100 characters", work);
         return 1;
     }
     if (game_running()) {
@@ -1724,7 +1735,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     timeBeginPeriod(1);
-    printf("volyacapture %s: %d run(s), game %s, work folder %s\n", mode, runs, game, work);
+    say("volyacapture %s: %d run(s), game %s, work folder %s", mode, runs, game, work);
     int ok = 1;
     for (int i = 1; i <= runs && ok; i++) {
         ok = run_once(exe_dir, game, work, mode, i);

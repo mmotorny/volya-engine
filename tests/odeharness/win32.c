@@ -8,8 +8,9 @@
 ** C run time's rand of the run time the library imports (msvcr80.dll, which
 ** the library loads, found among the process's modules), seeded by its
 ** srand. Writes results\<scenario>.bin and
-** results\info.txt (the processor, the library's size) and prints a line per
-** scenario. Exit status 0, or 1 if the library or an export is missing.
+** results\info.txt (the library's size) and prints a line per scenario;
+** a path in the game's folder is printed as <game folder>\bin\..., and
+** nothing names the machine. Exit status 0, or 1 if the library or an export is missing.
 **
 ** Usage: odeharness.exe "<game folder>\bin" [results folder]
 **        odeharness.exe compare ours results
@@ -38,6 +39,20 @@ static void (__cdecl *crt_srand) (unsigned int);
 ** listed and the one named msvcr80.dll taken (our program links the
 ** Universal C Runtime, so any msvcr80.dll is the library's); of several, the
 ** one in the game's folder. With none, every module is printed. */
+/* `path` as printed: in `bin`, as <game folder>\bin\...; Windows' own
+** modules as they are. */
+static const char *shown (const char *bin, const char *path)
+{
+  static char out[MAX_PATH * 2];
+  size_t n = strlen (bin);
+  while (n && (bin[n - 1] == '\\' || bin[n - 1] == '/')) n--;
+  if (n && !_strnicmp (path, bin, n) && (path[n] == '\\' || path[n] == '/' || !path[n])) {
+    snprintf (out, sizeof out, "<game folder>\\bin%s", path + n);
+    return out;
+  }
+  return path;
+}
+
 static HMODULE find_crt (const char *bin)
 {
   HANDLE snap = CreateToolhelp32Snapshot (TH32CS_SNAPMODULE, 0);
@@ -63,9 +78,9 @@ static HMODULE find_crt (const char *bin)
     fprintf (stderr, "no msvcr80.dll among the process's modules after loading the library:\n");
     m.dwSize = sizeof m;
     for (BOOL ok = Module32First (snap, &m); ok; ok = Module32Next (snap, &m))
-      fprintf (stderr, "  %s  %s\n", m.szModule, m.szExePath);
+      fprintf (stderr, "  %s  %s\n", m.szModule, shown (bin, m.szExePath));
   } else {
-    printf ("library's run time: %s\n", found_path);
+    printf ("library's run time: %s\n", shown (bin, found_path));
   }
   CloseHandle (snap);
   return found;
@@ -106,18 +121,6 @@ static void record (void *ctx, uint32_t tag, const uint32_t *words, uint32_t n)
   fwrite (words, 4, n, f);
 }
 
-static void cpu_name (char *out)
-{
-  unsigned int r[12];
-  for (unsigned int i = 0; i < 3; i++) {
-    __asm__ volatile ("cpuid"
-		      : "=a" (r[i * 4]), "=b" (r[i * 4 + 1]), "=c" (r[i * 4 + 2]), "=d" (r[i * 4 + 3])
-		      : "a" (0x80000002u + i));
-  }
-  memcpy (out, r, 48);
-  out[48] = 0;
-}
-
 int main (int argc, char **argv)
 {
   if (argc == 4 && !strcmp (argv[1], "compare")) {
@@ -135,7 +138,7 @@ int main (int argc, char **argv)
   snprintf (path, sizeof path, "%s\\ode.dll", bin);
   HMODULE ode = LoadLibraryA (path);
   if (!ode) {
-    fprintf (stderr, "cannot load %s: error %lu\n", path, GetLastError ());
+    fprintf (stderr, "cannot load %s: error %lu\n", shown (bin, path), GetLastError ());
     return 1;
   }
   HMODULE crt = find_crt (bin);
@@ -164,13 +167,11 @@ int main (int argc, char **argv)
   snprintf (path, sizeof path, "%s\\info.txt", out);
   FILE *info = fopen (path, "wb");
   if (info) {
-    char cpu[49];
-    cpu_name (cpu);
     WIN32_FILE_ATTRIBUTE_DATA a;
     char dll[MAX_PATH * 2];
     snprintf (dll, sizeof dll, "%s\\ode.dll", bin);
     unsigned long size = GetFileAttributesExA (dll, GetFileExInfoStandard, &a) ? a.nFileSizeLow : 0;
-    fprintf (info, "processor: %s\nlibrary size: %lu\n", cpu, size);
+    fprintf (info, "library size: %lu\n", size);
     fclose (info);
   }
 
