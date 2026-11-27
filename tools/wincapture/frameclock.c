@@ -158,37 +158,79 @@ static void open_log(const char *path) {
     }
 }
 
+/* Who reads the clock: each function's calls by calling module, for the
+ * log (the heartbeat writes them when they change). */
+static HMODULE self;
+static struct caller {
+    const char *fn;
+    HMODULE module;
+    volatile LONG count;
+} callers[96];
+static volatile LONG ncallers;
+
+static void note_caller(const char *fn, void *ret) {
+    HMODULE m = NULL;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       (LPCWSTR)ret, &m);
+    if (m == self) {
+        return;
+    }
+    LONG n = ncallers < 96 ? ncallers : 96;
+    for (LONG i = 0; i < n; i++) {
+        if (callers[i].fn == fn && callers[i].module == m) {
+            InterlockedIncrement(&callers[i].count);
+            return;
+        }
+    }
+    LONG i = InterlockedIncrement(&ncallers) - 1;
+    if (i < 96) {
+        callers[i].module = m;
+        callers[i].count = 1;
+        callers[i].fn = fn;
+    }
+}
+
+#define CALLER(fn) note_caller(fn, __builtin_return_address(0))
+
 static BOOL WINAPI fake_QueryPerformanceCounter(LARGE_INTEGER *v) {
+    CALLER("QueryPerformanceCounter");
     v->QuadPart = (LONGLONG)(COUNTER_BASE + ticks());
     return TRUE;
 }
 
 static BOOL WINAPI fake_QueryPerformanceFrequency(LARGE_INTEGER *v) {
+    CALLER("QueryPerformanceFrequency");
     v->QuadPart = (LONGLONG)COUNTER_FREQUENCY;
     return TRUE;
 }
 
 static ULONGLONG WINAPI fake_GetTickCount64(void) {
+    CALLER("GetTickCount64");
     return TICK_COUNT_BASE_MS + ticks() / FRAMECLOCK_TICKS_PER_MS;
 }
 
 static DWORD WINAPI fake_GetTickCount(void) {
+    CALLER("GetTickCount");
     return (DWORD)fake_GetTickCount64();
 }
 
 static void WINAPI fake_GetSystemTimeAsFileTime(FILETIME *t) {
+    CALLER("GetSystemTimeAsFileTime");
     ULONGLONG v = clock_->epoch + ticks();
     t->dwLowDateTime = (DWORD)v;
     t->dwHighDateTime = (DWORD)(v >> 32);
 }
 
 static void WINAPI fake_GetSystemTime(SYSTEMTIME *t) {
+    CALLER("GetSystemTime");
     FILETIME f;
     fake_GetSystemTimeAsFileTime(&f);
     FileTimeToSystemTime(&f, t);
 }
 
 static void WINAPI fake_GetLocalTime(SYSTEMTIME *t) {
+    CALLER("GetLocalTime");
     SYSTEMTIME utc;
     fake_GetSystemTime(&utc);
     if (!SystemTimeToTzSpecificLocalTime(NULL, &utc, t)) {
@@ -199,6 +241,7 @@ static void WINAPI fake_GetLocalTime(SYSTEMTIME *t) {
 /* winmm's own clocks, exported by the proxy. Without the clock, the
  * system's. */
 __declspec(dllexport) DWORD WINAPI timeGetTime(void) {
+    CALLER("timeGetTime");
     if (!clock_) {
         return real_timeGetTime ? real_timeGetTime() : 0;
     }
@@ -212,6 +255,7 @@ struct mmtime_ms {
 };
 
 __declspec(dllexport) UINT WINAPI timeGetSystemTime(void *mmt, UINT size) {
+    CALLER("timeGetSystemTime");
     if (!clock_) {
         return real_timeGetSystemTime ? real_timeGetSystemTime(mmt, size) : 1;
     }
@@ -238,20 +282,47 @@ static BOOL layout_set;
 
 /* Writes `value` into the interface-table slot `slot` (Direct3D's, read
  * only), keeping the slot's function in `*real` the first time. */
-static void patch_slot(void **slot, void *value, void **real) {
-    DWORD old;
+static void dlog(const char *fmt, ...);
+
+/* The module holding `address`, as a path, for the log. */
+static void module_of(const void *address, char *out, DWORD n) {
+    HMODULE m = NULL;
+    out[0] = 0;
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)address, &m)) {
+        GetModuleFileNameA(m, out, n);
+    }
+}
+
+static void patch_slot_named(const char *name, void **slot, void *value, void **real) {
+    DWORD old = 0;
+    char table[MAX_PATH], function[MAX_PATH];
     if (*slot == value) {
+        dlog("%s: its slot %p holds the hook already", name, (void *)slot);
         return;
     }
     if (!*real) {
         *real = *slot;
     }
-    if (VirtualProtect(slot, sizeof(void *), PAGE_READWRITE, &old)) {
+    module_of(slot, table, MAX_PATH);
+    module_of(*slot, function, MAX_PATH);
+    BOOL ok = VirtualProtect(slot, sizeof(void *), PAGE_READWRITE, &old);
+    DWORD error = ok ? 0 : GetLastError();
+    if (ok) {
         *slot = value;
         VirtualProtect(slot, sizeof(void *), old, &old);
         FlushInstructionCache(GetCurrentProcess(), slot, sizeof(void *));
     }
+    dlog("%s: slot %p (table in %s, function %p in %s, protection 0x%lx): %s", name, (void *)slot,
+         table, *real, function, (unsigned long)old,
+         *slot == value ? "hooked, read back" : (ok ? "NOT HOOKED: wrote but reads back unchanged" : "NOT HOOKED: VirtualProtect failed"));
+    if (!ok) {
+        dlog("%s: VirtualProtect error %lu", name, (unsigned long)error);
+    }
 }
+
+#define patch_slot(slot, value, real) patch_slot_named(#slot, slot, value, real)
 
 /* The back buffer of the frame about to be presented, into the shared
  * memory, as B G R X rows top first. */
@@ -324,6 +395,7 @@ typedef HRESULT(WINAPI *chain_present_fn)(IDirect3DSwapChain9 *, const RECT *, c
 static chain_present_fn real_chain_Present;
 static IDirect3DDevice9 *the_device;
 static DWORD presenting_thread; /* inside a hooked Present: an inner one counts not */
+static volatile LONG n_tcl, n_begin, n_end, n_reset, n_present, n_chain;
 
 /* A frame presented: the back buffer copied first when asked for, then
  * `present`, then the clock advanced and the frame held. */
@@ -393,6 +465,9 @@ static HRESULT chain_present(void *p) {
 
 static HRESULT WINAPI hook_Present(IDirect3DDevice9 *dev, const RECT *src, const RECT *dst,
                                    HWND window, const RGNDATA *dirty) {
+    if (InterlockedIncrement(&n_present) == 1) {
+        dlog("the device's Present: first call");
+    }
     struct present_args a = {dev, NULL, src, dst, window, dirty, 0};
     return frame_presented(dev, device_present, &a);
 }
@@ -400,8 +475,48 @@ static HRESULT WINAPI hook_Present(IDirect3DDevice9 *dev, const RECT *src, const
 static HRESULT WINAPI hook_chain_Present(IDirect3DSwapChain9 *chain, const RECT *src,
                                          const RECT *dst, HWND window, const RGNDATA *dirty,
                                          DWORD flags) {
+    if (InterlockedIncrement(&n_chain) == 1) {
+        dlog("the swap chain's Present: first call");
+    }
     struct present_args a = {NULL, chain, src, dst, window, dirty, flags};
     return frame_presented(the_device, chain_present, &a);
+}
+
+typedef HRESULT(WINAPI *dev0_fn)(IDirect3DDevice9 *);
+typedef HRESULT(WINAPI *reset_fn)(IDirect3DDevice9 *, D3DPRESENT_PARAMETERS *);
+static dev0_fn real_TestCooperativeLevel, real_BeginScene, real_EndScene;
+static reset_fn real_Reset;
+
+static volatile LONG last_tcl = 1;
+
+static HRESULT WINAPI hook_TestCooperativeLevel(IDirect3DDevice9 *dev) {
+    HRESULT hr = real_TestCooperativeLevel(dev);
+    if (InterlockedIncrement(&n_tcl) == 1 || hr != last_tcl) {
+        dlog("TestCooperativeLevel: 0x%lx (call %ld)", (unsigned long)hr, n_tcl);
+        last_tcl = hr;
+    }
+    return hr;
+}
+
+static HRESULT WINAPI hook_BeginScene(IDirect3DDevice9 *dev) {
+    if (InterlockedIncrement(&n_begin) == 1) {
+        dlog("BeginScene: first call");
+    }
+    return real_BeginScene(dev);
+}
+
+static HRESULT WINAPI hook_EndScene(IDirect3DDevice9 *dev) {
+    if (InterlockedIncrement(&n_end) == 1) {
+        dlog("EndScene: first call");
+    }
+    return real_EndScene(dev);
+}
+
+static HRESULT WINAPI hook_Reset(IDirect3DDevice9 *dev, D3DPRESENT_PARAMETERS *params) {
+    HRESULT hr = real_Reset(dev, params);
+    InterlockedIncrement(&n_reset);
+    dlog("Reset: 0x%lx", (unsigned long)hr);
+    return hr;
 }
 
 static HRESULT WINAPI hook_CreateDevice(IDirect3D9 *d3d, UINT adapter, D3DDEVTYPE type, HWND focus,
@@ -414,7 +529,15 @@ static HRESULT WINAPI hook_CreateDevice(IDirect3D9 *d3d, UINT adapter, D3DDEVTYP
     dlog("CreateDevice: 0x%lx", (unsigned long)hr);
     if (SUCCEEDED(hr) && device && *device) {
         the_device = *device;
+        dlog("the device %p, its table %p", (void *)*device, (void *)(*device)->lpVtbl);
         patch_slot((void **)&(*device)->lpVtbl->Present, (void *)hook_Present, (void **)&real_Present);
+        patch_slot((void **)&(*device)->lpVtbl->TestCooperativeLevel,
+                   (void *)hook_TestCooperativeLevel, (void **)&real_TestCooperativeLevel);
+        patch_slot((void **)&(*device)->lpVtbl->BeginScene, (void *)hook_BeginScene,
+                   (void **)&real_BeginScene);
+        patch_slot((void **)&(*device)->lpVtbl->EndScene, (void *)hook_EndScene,
+                   (void **)&real_EndScene);
+        patch_slot((void **)&(*device)->lpVtbl->Reset, (void *)hook_Reset, (void **)&real_Reset);
         IDirect3DSwapChain9 *chain = NULL;
         if (SUCCEEDED(IDirect3DDevice9_GetSwapChain(*device, 0, &chain)) && chain) {
             patch_slot((void **)&chain->lpVtbl->Present, (void *)hook_chain_Present,
@@ -439,7 +562,6 @@ static IDirect3D9 *WINAPI hook_Direct3DCreate9(UINT version) {
 
 /* --- Import tables ------------------------------------------------------ */
 
-static HMODULE self;
 static CRITICAL_SECTION patching;
 static WCHAR windows_dir[MAX_PATH], sxs_dir[MAX_PATH];
 
@@ -679,6 +801,22 @@ static DWORD WINAPI heartbeat(void *unused) {
                  now[4] / (LONGLONG)FRAMECLOCK_TICKS_PER_MS, now[5],
                  load(&clock_->sleep_ticks) / (LONGLONG)FRAMECLOCK_TICKS_PER_MS);
             memcpy(last, now, sizeof now);
+            DWORD front = 0;
+            GetWindowThreadProcessId(GetForegroundWindow(), &front);
+            dlog("calls: Present %ld, swap chain Present %ld, BeginScene %ld, EndScene %ld, "
+                 "TestCooperativeLevel %ld (last 0x%lx), Reset %ld; the foreground window is %s",
+                 n_present, n_chain, n_begin, n_end, n_tcl, (unsigned long)last_tcl, n_reset,
+                 front == GetCurrentProcessId() ? "the game's" : "another process's");
+        }
+        if (beat % 5 == 0) {
+            LONG n = ncallers < 96 ? ncallers : 96;
+            for (LONG i = 0; i < n; i++) {
+                char path[MAX_PATH] = "?";
+                if (callers[i].fn) {
+                    GetModuleFileNameA(callers[i].module, path, MAX_PATH);
+                    dlog("  %s from %s: %ld", callers[i].fn, path, callers[i].count);
+                }
+            }
         }
     }
     return 0;

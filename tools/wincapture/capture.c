@@ -83,6 +83,7 @@
  * the game gets to load the proxy, and to end after `quit`. */
 #define INPUT_SETTLE_MS 30
 #define FRAME_TIMEOUT 300
+#define FIRST_FRAME_TIMEOUT 120
 #define WATCHDOG 60
 #define ATTACH_TIMEOUT 60
 #define QUIT_WAIT 60
@@ -714,7 +715,8 @@ static int advance(struct run *r, int64_t frame, int look) {
     }
     store(&r->clock->capture, look ? frame : 0);
     store(&r->clock->hold, frame);
-    ULONGLONG until = GetTickCount64() + FRAME_TIMEOUT * 1000ull;
+    /* The first frame comes within seconds of the start (measured on the PC). */
+    ULONGLONG until = GetTickCount64() + (r->frame ? FRAME_TIMEOUT : FIRST_FRAME_TIMEOUT) * 1000ull;
     ULONGLONG progressed = GetTickCount64();
     int64_t seen[4] = {0};
     while (load(&r->clock->held) != frame) {
