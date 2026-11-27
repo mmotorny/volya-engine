@@ -15,7 +15,7 @@
 - Verify how browsers and platforms behave (storage, caching, APIs) before relying on it, and say whether it's measured, documented, or believed. Before inventing a mechanism or a design, check how it's commonly done.
 - Bazel builds and tests everything (docs/architecture/build.md): tasks are Bazel targets, operational commands `bazel run //tools/xtask -- <task>`. Cargo doesn't build the workspace; its manifests are crate_universe's input, and editors use `rust-project.json` (`bazel run @rules_rust//tools/rust_analyzer:gen_rust_project`).
 - No shell scripts: project tasks live in `tools/xtask`. One exception: `tools/bazel`, Bazelisk's bootstrap wrapper, which only computes the installer's fingerprint and runs Bazel.
-- Run shell pipelines with `set -o pipefail`.
+- Run shell pipelines with `set -o pipefail`. Keep commands plain, one tool per command: no `mkdir`/`cp`/`&&` chains to stash logs (they need the user's approval); read `bazel-testlogs/` where it is.
 - Never wait on a process with `pgrep -f` of a pattern that also matches the waiting shell's own command line; wait on a PID or a file. Stop every background loop you start before finishing.
 - Live at head: run `bazel run //tools/xtask -- update` when starting a chunk of work; fix what it breaks rather than pinning.
 - Run `bazel test //:checks` (fast static checks) before every push; it must pass.
