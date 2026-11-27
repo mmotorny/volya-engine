@@ -3051,6 +3051,15 @@ impl LevelScreen {
         self.dynamic_items(dt, &frustum);
         let (collision, visibility) = (&self.collision, self.visibility.get_mut());
         (self.lights).finish(collision, &camera, dt, visibility, &self.listed_lights);
+        // The fade's entries from the eye of the frame's last traversal:
+        // the last light pass's, else the camera's (portal-fade.md 2.1).
+        // `dynamic_items` leaves the frame's lists unshared.
+        if visibility.camera_sector().is_some()
+            && let Some(seen) = Arc::get_mut(&mut self.seen)
+        {
+            let eye = self.lights.passes().last().map_or(eye, |p| p.eye);
+            seen.fade = portal_fade(visibility, eye, self.environment.ambient);
+        }
     }
 
     /// The dynamic part of the camera pass (object-visibility.md 1, 3 –
@@ -3062,9 +3071,9 @@ impl LevelScreen {
     /// their model's box under their transform; effect objects: their
     /// instance's box), an effect object kept then advanced to the clock
     /// (particle-drawing.md 7.1 step 1). Keeps what the frame draws
-    /// ([`Seen`]): these, the static draws of the pass's visuals and the
-    /// portal fade. Returns the light records listed, in their order. The
-    /// entry of the frame's turn among those whose sphere is not outside
+    /// ([`Seen`]): these and the static draws of the pass's visuals (the
+    /// portal fade follows the light passes). Keeps the light records
+    /// listed, in their order. The entry of the frame's turn among those whose sphere is not outside
     /// `frustum`, the view frustum (object-visibility.md 2.4, 7), gets a
     /// full update of its approximate colour (object-projected-light.md
     /// 5.3) if it is an object drawn, `dt` the frame time in seconds.
@@ -3257,7 +3266,6 @@ impl LevelScreen {
                     Kind::Glow(_) => {}
                 }
             }
-            seen.fade = portal_fade(visibility, eye, self.environment.ambient);
             self.dynamic = items;
             // The slots and the cells drawn (object-projected-light.md 3.2,
             // 3.3, 4, 5).

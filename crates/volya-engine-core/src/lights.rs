@@ -211,6 +211,8 @@ pub struct LightPass {
     pub xform: Mat4,
     /// M = V · Q_L: the light's frustum is its clip volume.
     pub frustum: Mat4,
+    /// The eye O of V (5.3), its traversal's eye (5.4).
+    pub eye: Vec3,
 }
 
 /// A frustum's six planes (a, b, c, d) with `a x + b y + c z + d ≥ 0`
@@ -288,25 +290,28 @@ pub fn light_pass(record: &LightRecord, eye: Vec3, clip: f32) -> Option<LightPas
     let f = fade(record, eye, clip)?;
     let (p, r) = (record.position, record.range);
     let spot = record.kind != LightKind::Point;
-    let frustum = if spot {
+    let (eye, frustum) = if spot {
         let d = record.direction;
         let up = if d[1].abs() > 0.99 {
             [0.0, 0.0, 1.0]
         } else {
             [0.0, 1.0, 0.0]
         };
-        multiply(
-            &light_view(p, d, up),
-            &light_projection(1.0 / (record.cone / 2.0).tan(), 0.1, r + 1e-7),
+        (
+            p,
+            multiply(
+                &light_view(p, d, up),
+                &light_projection(1.0 / (record.cone / 2.0).tan(), 0.1, r + 1e-7),
+            ),
         )
     } else {
-        multiply(
-            &light_view(
-                [p[0], p[1] + 300.0, p[2]],
-                [0.0, -1.0, 0.0],
-                [0.0, 0.0, 1.0],
+        let o = [p[0], p[1] + 300.0, p[2]];
+        (
+            o,
+            multiply(
+                &light_view(o, [0.0, -1.0, 0.0], [0.0, 0.0, 1.0]),
+                &light_projection(1.0 / 1f32.to_radians().tan(), 300.0 - r, 300.0 + r),
             ),
-            &light_projection(1.0 / 1f32.to_radians().tan(), 300.0 - r, 300.0 + r),
         )
     };
     let t: Mat4 = [
@@ -322,6 +327,7 @@ pub fn light_pass(record: &LightRecord, eye: Vec3, clip: f32) -> Option<LightPas
         colour: [f * c[0], f * c[1], f * c[2], 1.0],
         xform: multiply(&frustum, &t),
         frustum,
+        eye,
     })
 }
 
@@ -919,6 +925,7 @@ mod tests {
         let pass = light_pass(lights.get(id).unwrap(), [0.0; 3], 75.0).unwrap();
         assert!(!pass.spot);
         assert_eq!(pass.position, [0.0, 0.0, 0.0, 0.05]);
+        assert_eq!(pass.eye, [0.0, 300.0, 0.0]);
         let edge = |y: f32| {
             // The x at which a point at height y leaves the frustum.
             let c = apply(&pass.frustum, [1.0, y, 0.0]);
@@ -945,6 +952,7 @@ mod tests {
         let pass = light_pass(lights.get(id).unwrap(), [0.0; 3], 75.0).unwrap();
         assert!(pass.spot);
         assert_eq!(pass.position[3], 0.125);
+        assert_eq!(pass.eye, [0.0; 3]);
         let z = |d: f32| apply(&pass.xform, [0.0, 0.0, d])[2];
         assert!(close(z(4.0), 0.4937, 1e-4));
         assert!(close(z(0.1), 0.0, 1e-6));
