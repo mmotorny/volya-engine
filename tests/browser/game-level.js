@@ -280,6 +280,9 @@ export const tests = {
       await dump(`experimental-${name}`, capture);
       frames.push(`${name} ${width}×${height}`);
     };
+    // The video mode Standard drew at, given back when it is chosen again.
+    await readRender();
+    const own = render;
     await setTouchMode("experimental");
     assert(upright() && !turned(view()), "the canvas upright");
     assertEqual(render, pixels(), "drawn at the canvas's own size");
@@ -319,7 +322,7 @@ export const tests = {
     key("Escape");
     await until((s) => s.phase === "level" && !s.pda, "the PDA closed");
     await setTouchMode("standard");
-    assertEqual(render, pixels(), "Standard: drawn at the canvas's size");
+    assertEqual(render, own, "Standard: its own video mode again");
     if (portrait) {
       assert(!upright() && turned(view()), "Standard: the canvas turned");
       assert(render[0] > render[1], `Standard: drawn landscape: ${render}`);

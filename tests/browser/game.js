@@ -288,14 +288,16 @@ export const upright = () => document.documentElement.dataset.touchMode === "exp
 
 /**
  * Sets the mobile mode (#802). Changed on a touch device while the game
- * runs, the screen follows: in the ergonomic mode the game upright and its video
- * mode the canvas's own size (#806), back in Standard the canvas's size of
- * then; waited for, and read as `render`.
+ * runs, the screen follows: in the ergonomic mode the game upright and its
+ * video mode the canvas's own size (#806), waited for; back in Standard the
+ * video mode it had before. Read as `render`.
  */
 export async function setTouchMode(mode) {
   const changed = volya.touchControls.mode !== mode;
   await volya.touchControls.set(mode);
-  if (changed && volya.touchControls.available() && (await state()).phase !== "none") await followed("the video mode to follow the canvas");
+  if (mode === "experimental" && changed && volya.touchControls.available() && (await state()).phase !== "none") {
+    await followed("the video mode to follow the canvas");
+  }
   await readRender();
 }
 

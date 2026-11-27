@@ -101,31 +101,37 @@ thread_local! {
     /// Whether the game's resolution follows the canvas's size (the
     /// ergonomic mobile mode, #806).
     static FOLLOW_SCREEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// Whether the canvas's size applies once at the next game's start (the
-    /// mode changed while none ran).
-    static SIZE_DUE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The video mode the game had before it began following the canvas,
+    /// given back when it stops (the standard mode keeps its own).
+    static OWN_MODE: std::cell::Cell<Option<Resolution>> = const { std::cell::Cell::new(None) };
 }
 
 /// The game's resolution follows the canvas's own size, `on`, or not (the
-/// page's ergonomic mobile mode, #806): each change of size applied
-/// as a change of `vid_mode` is (display-mode.md A.9). Turned on, or off
-/// again, the canvas's size of now applies at once (or at the next game's
-/// start), so neither mode keeps the other's.
+/// page's ergonomic mobile mode, #806): each change of size applied as a
+/// change of `vid_mode` is (display-mode.md A.9). Turned off, the video
+/// mode it had before is applied again.
 pub fn set_follow_screen(on: bool) {
     if FOLLOW_SCREEN.replace(on) == on {
         return;
     }
     let native = RESOLUTION.with(|r| *r.borrow());
-    RUNNING.with(|r| match r.borrow_mut().as_mut() {
-        Some(running) => follow(&mut running.app, native, true),
-        None => SIZE_DUE.set(true),
+    RUNNING.with(|r| {
+        if let Some(running) = r.borrow_mut().as_mut() {
+            if on {
+                follow(&mut running.app, native);
+            } else if let Some(mode) = OWN_MODE.take() {
+                running.app.set_video_mode(mode);
+            }
+        }
     });
 }
 
-/// `app` at the screen's size `native` when the resolution follows it, or
-/// when `anyway`.
-fn follow(app: &mut App, native: Resolution, anyway: bool) {
-    if (anyway || FOLLOW_SCREEN.get()) && app.video_mode() != native {
+/// `app` at the screen's size `native` while the resolution follows it.
+fn follow(app: &mut App, native: Resolution) {
+    if FOLLOW_SCREEN.get() && app.video_mode() != native {
+        if OWN_MODE.get().is_none() {
+            OWN_MODE.set(Some(app.video_mode()));
+        }
         app.set_video_mode(native);
     }
 }
@@ -199,7 +205,7 @@ pub async fn launch() -> Result<serde_json::Value, JsValue> {
                 .then_some(c)
             })));
             app.resized(native);
-            follow(&mut app, native, SIZE_DUE.take());
+            follow(&mut app, native);
             app.set_saved_games(saves);
             // The page's full screen as it last said (`rs_fullscreen`).
             if let Some((on, supported)) = PAGE_FULL_SCREEN.get() {
@@ -465,7 +471,7 @@ pub fn resized(resolution: Resolution) {
     RUNNING.with(|r| {
         if let Some(running) = r.borrow_mut().as_mut() {
             running.app.resized(resolution);
-            follow(&mut running.app, resolution, false);
+            follow(&mut running.app, resolution);
         }
     });
 }
