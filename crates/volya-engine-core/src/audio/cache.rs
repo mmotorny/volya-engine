@@ -4,9 +4,11 @@
 //! The sound cache (docs/behavior/console-diagnostics.md 2.1.1): the
 //! decoded audio of the sounds played, in lines of [`LINE_BYTES`] of 16-bit
 //! samples, *lines* = ⌊`snd_cache_size` × 2,097,152 / [`LINE_BYTES`]⌋ + 1,
-//! made once with the device. Each sound file has a table of 2 bytes per
-//! line of its decoded length, the cache line holding it or none, kept for
-//! the cache's life. A voice plays its file through the cache
+//! made once with the device. A line's data is allocated when the line is
+//! first used, and kept: free lines are taken in their order, so the cache
+//! chooses as one allocated whole (docs/architecture/memory.md, Deviations,
+//! #792). Each sound file has a table of 2 bytes per line of its decoded
+//! length, the cache line holding it or none, kept for the cache's life. A voice plays its file through the cache
 //! ([`CachedSource`]): a line held is copied out, one not held is decoded
 //! into the line least recently used. The output is the same as decoding
 //! the file straight through.
@@ -63,7 +65,9 @@ struct FileLines {
 /// The sound cache.
 pub struct SoundCache {
     size: u32,
-    data: Vec<i16>,
+    /// The data of the lines used so far, in their order: a free line is
+    /// allocated when first taken.
+    data: Vec<Box<[i16]>>,
     lines: Vec<Line>,
     /// Least and most recently used.
     oldest: u32,
@@ -85,7 +89,7 @@ impl SoundCache {
             .collect();
         Self {
             size,
-            data: vec![0; count * LINE_SAMPLES],
+            data: Vec::with_capacity(count),
             lines,
             oldest: 0,
             newest: count as u32 - 1,
@@ -103,9 +107,16 @@ impl SoundCache {
         self.lines.len()
     }
 
-    /// The bytes it holds: the lines' data and records, the files' tables.
+    /// The lines used so far, their data allocated.
+    pub fn lines_used(&self) -> usize {
+        self.data.len()
+    }
+
+    /// The bytes it holds: the data of the lines used and every line's
+    /// record, the files' tables.
     pub fn bytes(&self) -> usize {
-        self.data.capacity() * 2
+        self.data.len() * LINE_BYTES
+            + self.data.capacity() * size_of::<Box<[i16]>>()
             + self.lines.capacity() * size_of::<Line>()
             + self
                 .files
@@ -169,8 +180,7 @@ impl SoundCache {
         }
         let len = line_len(file.frames, index);
         self.touch(u32::from(line));
-        let start = usize::from(line) * LINE_SAMPLES;
-        Some(&self.data[start..start + len])
+        Some(&self.data[usize::from(line)][..len])
     }
 
     /// Keeps `samples` as line `index` of file `key`, in the line least
@@ -198,8 +208,12 @@ impl SoundCache {
         let line = &mut self.lines[i as usize];
         line.file = key;
         line.index = index as u32;
-        let start = i as usize * LINE_SAMPLES;
-        self.data[start..start + samples.len()].copy_from_slice(samples);
+        // Free lines are the oldest, in their order: the first free one is
+        // the next to allocate.
+        if i as usize == self.data.len() {
+            self.data.push(vec![0; LINE_SAMPLES].into_boxed_slice());
+        }
+        self.data[i as usize][..samples.len()].copy_from_slice(samples);
         self.touch(i);
     }
 }
@@ -457,9 +471,28 @@ mod tests {
         assert_eq!(lines_for(32), 7_609);
         let cache = SoundCache::new(16);
         assert_eq!(cache.line_count(), 3_805);
-        // The data the sound library logs as 32,773 kb, and the records.
-        assert_eq!(cache.data.len() * 2 / 1024, 32_773);
-        assert!(cache.bytes() >= 3_805 * (LINE_BYTES + 16));
+        // The data the sound library logs as 32,773 kb once every line is
+        // used; none of it before, only the lines' records.
+        assert_eq!(cache.line_count() * LINE_BYTES / 1024, 32_773);
+        assert_eq!(cache.lines_used(), 0);
+        assert!(cache.bytes() >= 3_805 * 16 && cache.bytes() < 3_805 * 40);
+    }
+
+    #[test]
+    fn lines_are_allocated_when_first_used_in_their_order() {
+        let mut c = SoundCache::new(1);
+        let count = c.line_count();
+        c.add_file(1, (count as u64 + 3) * LINE_SAMPLES as u64, 44_100);
+        let empty = c.bytes();
+        let line = vec![7; LINE_SAMPLES];
+        for i in 0..count + 3 {
+            c.put(1, i, &line);
+            // Each line taken while free is the next allocated; once all
+            // are, the least recently used is reused.
+            assert_eq!(c.lines_used(), (i + 1).min(count));
+            assert_eq!(c.files[&1].table[i] as usize, i % count);
+        }
+        assert_eq!(c.bytes(), empty + count * LINE_BYTES);
     }
 
     #[test]
