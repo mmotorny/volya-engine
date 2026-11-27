@@ -203,12 +203,17 @@ struct Entry {
     empty: bool,
     pending: bool,
     slot: Slot,
-    /// Per part, in placement order.
-    instances: [Vec<Instance>; 4],
+    /// The parts' instances, part after part, each in placement order.
+    instances: Vec<Instance>,
+    /// Where each part's instances end in `instances`.
+    part_ends: [u16; 4],
     /// The frame after which the next refresh is due.
     due: u64,
-    /// Per part, the lists of the last refresh: sway 1, sway 2, still.
-    lists: [[Vec<DrawnInstance>; 3]; 4],
+    /// The lists of the last refresh, part after part, each part's sway 1,
+    /// sway 2 and still.
+    lists: Vec<DrawnInstance>,
+    /// Where each part's lists end in `lists`, by `3 * part + list`.
+    list_ends: [u16; 12],
     /// The cached occlusion test (occlusion-tests.md 5, 6): *N* 0 when
     /// made.
     occlusion: Cached,
@@ -224,12 +229,39 @@ impl Default for Entry {
             empty: true,
             pending: false,
             slot: Slot::NONE,
-            instances: Default::default(),
+            instances: Vec::new(),
+            part_ends: [0; 4],
             due: 0,
-            lists: Default::default(),
+            lists: Vec::new(),
+            list_ends: [0; 12],
             occlusion: Cached::default(),
         }
     }
+}
+
+impl Entry {
+    /// Part `part`'s range of `instances`.
+    fn part(&self, part: usize) -> std::ops::Range<usize> {
+        let start = if part == 0 {
+            0
+        } else {
+            self.part_ends[part - 1]
+        };
+        usize::from(start)..usize::from(self.part_ends[part])
+    }
+
+    /// The range of `lists` of part `part`'s list `list`.
+    fn list(&self, part: usize, list: usize) -> std::ops::Range<usize> {
+        let k = 3 * part + list;
+        let start = if k == 0 { 0 } else { self.list_ends[k - 1] };
+        usize::from(start)..usize::from(self.list_ends[k])
+    }
+}
+
+/// An index or a range's end in an entry's instances or lists: at most (n + 1)²
+/// instances an entry, n at most 10 at the densities allowed (4.1).
+fn at(i: usize) -> u16 {
+    u16::try_from(i).expect("an entry's instances fit 16 bits")
 }
 
 /// A group of 4 × 4 entries (2.4).
@@ -367,16 +399,12 @@ impl Details {
         e.bounds = cell_box(cell, &slot);
         e.sphere = e.bounds.sphere();
         e.empty = slot.is_empty();
-        for part in &mut e.instances {
-            part.clear();
-        }
+        e.instances.clear();
+        e.part_ends = [0; 4];
         // Nothing is handed out for an entry built after its last refresh
         // (5.3's recommendation).
-        for part in &mut e.lists {
-            for list in part {
-                list.clear();
-            }
-        }
+        e.lists.clear();
+        e.list_ends = [0; 12];
         if !e.pending {
             e.pending = true;
             self.pending.push(i as u16);
@@ -515,13 +543,15 @@ impl Details {
         };
         let e = &mut self.entries[i];
         let mut union = Aabb::EMPTY;
+        e.instances.clear();
         for (part, instances) in placed.into_iter().enumerate() {
             if let Some(model) = self.models.get(usize::from(slot.ids()[part])) {
                 for inst in &instances {
                     union.add(&instance_box(model, inst));
                 }
             }
-            e.instances[part] = instances;
+            e.instances.extend_from_slice(&instances);
+            e.part_ends[part] = at(e.instances.len());
         }
         e.bounds = union;
         e.sphere = union.sphere();
@@ -690,7 +720,7 @@ impl Details {
                 }
                 for list in 0..3 {
                     self.collect[list * models + usize::from(id)]
-                        .extend_from_slice(&e.lists[part][list]);
+                        .extend_from_slice(&e.lists[e.list(part, list)]);
                 }
             }
         }
@@ -721,40 +751,46 @@ impl Details {
         };
         let e = &mut self.entries[i];
         let ids = e.slot.ids();
+        e.lists.clear();
         for part in 0..4 {
-            for list in &mut e.lists[part] {
-                list.clear();
-            }
-            let Some(model) = self.models.get(usize::from(ids[part])) else {
-                continue;
-            };
-            let r2 = model.radius * model.radius;
-            for inst in &e.instances[part] {
-                let scale = inst.scale * fade;
-                let q = scale * scale * r2 / d2;
-                if q < ssa_min {
-                    continue;
-                }
-                let list = if q <= 16.0 * ssa_min {
-                    STILL
-                } else {
-                    match inst.variant {
-                        1 => SWAY_1,
-                        2 => SWAY_2,
-                        _ => STILL,
+            let model = self.models.get(usize::from(ids[part]));
+            // Each list in turn, its instances in placement order.
+            for list in [SWAY_1, SWAY_2, STILL] {
+                if let Some(model) = model {
+                    let r2 = model.radius * model.radius;
+                    for k in e.part(part) {
+                        let inst = &e.instances[k];
+                        let scale = inst.scale * fade;
+                        let q = scale * scale * r2 / d2;
+                        if q < ssa_min {
+                            continue;
+                        }
+                        let drawn = if q <= 16.0 * ssa_min {
+                            STILL
+                        } else {
+                            match inst.variant {
+                                1 => SWAY_1,
+                                2 => SWAY_2,
+                                _ => STILL,
+                            }
+                        };
+                        if drawn != list {
+                            continue;
+                        }
+                        let [x, y, z] = inst.position;
+                        e.lists.push([
+                            x,
+                            y,
+                            z,
+                            scale,
+                            inst.rotation[0],
+                            inst.rotation[1],
+                            inst.sun,
+                            inst.hemi,
+                        ]);
                     }
-                };
-                let [x, y, z] = inst.position;
-                e.lists[part][list].push([
-                    x,
-                    y,
-                    z,
-                    scale,
-                    inst.rotation[0],
-                    inst.rotation[1],
-                    inst.sun,
-                    inst.hemi,
-                ]);
+                }
+                e.list_ends[3 * part + list] = at(e.lists.len());
             }
         }
     }
@@ -763,10 +799,11 @@ impl Details {
     pub fn instances(&self) -> impl Iterator<Item = ([i32; 2], u8, &Instance)> + '_ {
         self.entries.iter().flat_map(|e| {
             let ids = e.slot.ids();
-            e.instances
-                .iter()
-                .enumerate()
-                .flat_map(move |(p, list)| list.iter().map(move |inst| (e.cell, ids[p], inst)))
+            (0..4).flat_map(move |p| {
+                e.instances[e.part(p)]
+                    .iter()
+                    .map(move |inst| (e.cell, ids[p], inst))
+            })
         })
     }
 
@@ -776,15 +813,8 @@ impl Details {
             .entries
             .iter()
             .map(|e| {
-                e.instances
-                    .iter()
-                    .map(|v| v.capacity() * size_of::<Instance>())
-                    .sum::<usize>()
-                    + e.lists
-                        .iter()
-                        .flatten()
-                        .map(|v| v.capacity() * size_of::<DrawnInstance>())
-                        .sum::<usize>()
+                e.instances.capacity() * size_of::<Instance>()
+                    + e.lists.capacity() * size_of::<DrawnInstance>()
             })
             .sum();
         self.grid.memory_bytes()
