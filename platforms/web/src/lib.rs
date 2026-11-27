@@ -734,6 +734,9 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         "status" => to_json(&status()),
         "vfs_selftest" => vfs_selftest().await.map(|()| "null".into()),
         "script_selftest" => script_selftest(),
+        "physics_selftest" => to_json(
+            &volya_engine::core::physics::ode::fall_check().map_err(|e| JsValue::from_str(&e))?,
+        ),
         "game_status" => to_json(&game::status().await?),
         "unmount_game" => {
             game::unmount();

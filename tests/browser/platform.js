@@ -55,6 +55,13 @@ export const tests = {
     assertEqual(await volya.call("script_selftest"), "Lua 5.1 (alpha) + LuaJIT 1.0.3");
   },
 
+  "physics solver steps a falling body as natively in the engine worker": async () => {
+    // physics::ode::fall_check: within 0.1 mm of the closed form at each
+    // step; 10 - 19.62 * 0.01^2 * 100 * 101 / 2 at the last.
+    const y = await volya.call("physics_selftest");
+    assert(Math.abs(y - 0.0919) < 1e-4, `y ${y}`);
+  },
+
   "OPFS sync access handle works in a worker": async () => {
     assertEqual(await inWorker("opfs"), "volya");
   },

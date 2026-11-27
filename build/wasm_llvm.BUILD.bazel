@@ -17,6 +17,15 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+# wasi-sdk's C and C++ headers (wasi-libc's and libc++'s), which ODE's
+# wasm32 build compiles against (crates/volya-engine-core/build.rs); none of
+# its libraries are linked.
+filegroup(
+    name = "sysroot",
+    srcs = glob(["share/wasi-sysroot/include/**"]),
+    visibility = ["//visibility:public"],
+)
+
 exports_files(
     ["bin/clang"],
     visibility = ["//visibility:public"],

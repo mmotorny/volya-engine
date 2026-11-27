@@ -6,6 +6,8 @@
 
 pub mod artefacts;
 pub mod audio;
+#[cfg(target_arch = "wasm32")]
+pub mod c_heap;
 pub mod camera;
 pub mod character;
 pub mod climbing;

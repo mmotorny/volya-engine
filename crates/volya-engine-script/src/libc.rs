@@ -3,8 +3,9 @@
 
 //! The C library functions our C code takes from Rust: Lua's allocator and
 //! its string-to-number conversion on every target, floating-point digits
-//! for our `printf` (csrc/volya_printf.c), and, on wasm32, memory and math
-//! for the rest of our C library (csrc/wasm/libc.c).
+//! for our `printf` (csrc/volya_printf.c). On wasm32 the rest of our C
+//! library (csrc/wasm/libc.c) takes `malloc` and friends from
+//! `volya_engine_core::c_heap`.
 
 use std::alloc::{Layout, alloc, dealloc, handle_alloc_error, realloc};
 use std::ffi::{CStr, c_char, c_int, c_void};
@@ -184,64 +185,4 @@ pub unsafe extern "C" fn volya_format_double(
     // SAFETY: n <= cap.
     unsafe { std::ptr::copy_nonoverlapping(text.as_ptr(), out.cast::<u8>(), n) };
     text.len()
-}
-
-/// Memory for our wasm32 C library.
-#[cfg(target_arch = "wasm32")]
-mod wasm {
-    use super::*;
-
-    /// Each block starts with its size, so `free` can rebuild its layout.
-    const HEADER: usize = 8;
-
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn malloc(size: usize) -> *mut c_void {
-        let Some(total) = size.checked_add(HEADER) else {
-            return std::ptr::null_mut();
-        };
-        // SAFETY: total is nonzero.
-        let p = unsafe { alloc(layout(total)) };
-        if p.is_null() {
-            return p.cast();
-        }
-        // SAFETY: the block holds at least HEADER bytes, aligned.
-        unsafe {
-            p.cast::<usize>().write(total);
-            p.add(HEADER).cast()
-        }
-    }
-
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn free(p: *mut c_void) {
-        if p.is_null() {
-            return;
-        }
-        // SAFETY: p came from malloc or realloc.
-        unsafe {
-            let block = p.cast::<u8>().sub(HEADER);
-            dealloc(block, layout(block.cast::<usize>().read()));
-        }
-    }
-
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn realloc(p: *mut c_void, size: usize) -> *mut c_void {
-        if p.is_null() {
-            // SAFETY: plain allocation.
-            return unsafe { malloc(size) };
-        }
-        let Some(total) = size.checked_add(HEADER) else {
-            return std::ptr::null_mut();
-        };
-        // SAFETY: p came from malloc or realloc.
-        unsafe {
-            let block = p.cast::<u8>().sub(HEADER);
-            let old = block.cast::<usize>().read();
-            let q = super::realloc(block, layout(old), total);
-            if q.is_null() {
-                return q.cast();
-            }
-            q.cast::<usize>().write(total);
-            q.add(HEADER).cast()
-        }
-    }
 }

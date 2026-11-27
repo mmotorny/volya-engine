@@ -3,8 +3,10 @@
 ** SPDX-License-Identifier: BSD-3-Clause
 **
 ** The C library surface the LuaJIT 1.0.3 interpreter uses, for
-** wasm32-unknown-unknown, which has none. Memory, number parsing,
-** floating-point digits and math come from Rust (src/libc.rs); memcpy,
+** wasm32-unknown-unknown, which has none. Number parsing and
+** floating-point digits come from Rust (src/libc.rs), memory from
+** volya-engine-core (src/c_heap.rs), math from Rust's compiler-builtins;
+** memcpy,
 ** memmove, memset, memcmp and strlen from Rust's compiler-builtins. There
 ** are no files (fopen fails), stdin is empty and output is discarded.
 */

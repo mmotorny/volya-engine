@@ -3,15 +3,49 @@
 
 load("//build:checks.bzl", "volya_checks")
 load("//build:rust.bzl", "volya_integration_tests", "volya_library")
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 
 package(default_visibility = ["//visibility:public"])
 
 exports_files(["Cargo.toml"])
 
+# Builds the Open Dynamics Engine's core from its release (build.rs;
+# docs/architecture/build.md, Build scripts): natively with the C++
+# toolchain, for wasm32 with the pinned LLVM and its SDK's headers.
+cargo_build_script(
+    name = "build_script",
+    srcs = ["build.rs"],
+    build_script_env = select({
+        "@platforms//cpu:wasm32": {
+            "VOLYA_ODE_LICENSE": "$(execpath @ode//:LICENSE-BSD.TXT)",
+            "VOLYA_WASM_CLANG": "$(execpath @wasm_llvm//:bin/clang)",
+        },
+        "//conditions:default": {
+            "VOLYA_ODE_LICENSE": "$(execpath @ode//:LICENSE-BSD.TXT)",
+        },
+    }),
+    data = glob(["csrc/**"]) + [
+        "@ode//:LICENSE-BSD.TXT",
+        "@ode//:sources",
+    ] + select({
+        "@platforms//cpu:wasm32": [
+            "@wasm_llvm//:bin/clang",
+            "@wasm_llvm//:sysroot",
+            "@wasm_llvm//:tools",
+        ],
+        "//conditions:default": [],
+    }),
+    deps = all_crate_deps(build = True),
+)
+
 volya_library(
     name = "volya-engine-core",
     dev_deps = ["//crates/volya-engine-installer"],
-    deps = ["//crates/volya-engine-formats"],
+    deps = [
+        ":build_script",
+        "//crates/volya-engine-formats",
+    ],
 )
 
 # Measurements (docs/testing.md: run with --release), by name:

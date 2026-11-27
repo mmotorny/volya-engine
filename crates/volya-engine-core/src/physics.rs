@@ -11,6 +11,7 @@
 //! (5). Contacts and solving go through [`Solver`]; what it steps through
 //! [`Object`] and [`Updater`].
 
+pub mod ode;
 #[cfg(test)]
 mod tests;
 

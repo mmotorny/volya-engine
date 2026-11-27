@@ -917,6 +917,7 @@ dependencies = [
 name = "volya-engine-core"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "crc32fast",
  "md-5",
  "serde_json",

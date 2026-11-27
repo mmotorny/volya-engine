@@ -138,6 +138,17 @@ http_archive(
     url = "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-arm64-macos.tar.gz",
 )
 
+# The physics solver (docs/architecture/simulation.md): the Open Dynamics
+# Engine's 0.16.6 release, its core and OU built by volya-engine-core's
+# build script under their BSD option.
+http_archive(
+    name = "ode",
+    build_file = "//build:ode.BUILD.bazel",
+    sha256 = "c91a28c6ff2650284784a79c726a380d6afec87ecf7a35c32a6be0c5b74513e8",
+    strip_prefix = "ode-0.16.6",
+    url = "https://bitbucket.org/odedevs/ode/downloads/ode-0.16.6.tar.gz",
+)
+
 # The Wine image's sources (build/wine_image.bzl): box64's release with our
 # patch (third_party/box64/), applied by Bazel, and Wine 11.0 with the frame
 # clock, the fork's branch volya-frame-clock at a commit (LGPL: its patch

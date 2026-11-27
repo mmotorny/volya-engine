@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+
+# The Open Dynamics Engine's release: the core's sources and headers and
+# OU's, for volya-engine-core's build script; no OPCODE, GIMPACT, libccd,
+# DrawStuff, demos or tests. Their BSD notices.
+filegroup(
+    name = "sources",
+    srcs = glob([
+        "include/ode/*.h",
+        "ode/src/**/*.c",
+        "ode/src/**/*.cpp",
+        "ode/src/**/*.h",
+        "ou/include/ou/*.h",
+        "ou/src/ou/*.cpp",
+    ]),
+    visibility = ["//visibility:public"],
+)
+
+exports_files(
+    [
+        "LICENSE-BSD.TXT",
+        "ou/LICENSE-BSD.TXT",
+    ],
+    visibility = ["//visibility:public"],
+)
