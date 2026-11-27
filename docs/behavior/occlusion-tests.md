@@ -18,7 +18,7 @@ original's conversions of OG conventions (−0.0 gives floor −1, ceil 1). The 
 `docs/behavior/occlusion-grid.md`, VP-spec `docs/behavior/view-projection.md`, LV `docs/formats/level.md`, OGF
 `docs/formats/ogf.md`, TO `docs/behavior/traversal-options.md`, DL `docs/behavior/dynamic-lights.md`, DO
 `docs/behavior/detail-objects.md`, GL `docs/behavior/glows.md`, LS `docs/behavior/light-shadows-projection.md`, PD
-`docs/behavior/particle-drawing.md`.
+`docs/behavior/particle-drawing.md`, PL `docs/behavior/particle-lifecycle.md`.
 
 **Checks.** Every claim carries a tag. The checks are scripts in `checks/occlusion-tests/` of the dirty workspace
 (`run.py` runs them all): `binary.py` [B…] reads saved read-only static analysis (headless decompilation and
@@ -26,7 +26,10 @@ disassembly) of `bin\xrRender_R1.dll`, `bin\XR_3DA.exe` and `bin\xrGame.dll` and
 `check_emu.py` [E…] runs the shipped test routines, instruction by instruction from their saved disassembly, in a
 small interpreter of the instructions they use, and compares every result with `model.py`, a single-precision model
 written from this specification, on random scenes, shapes and grids (including points at the near limit, shapes off
-screen and stored values at the comparison threshold); `model_checks.py` [M…] checks numeric facts and the worked
+screen and stored values at the comparison threshold); `check_empty_box.py` [E4] runs the shipped object-box code
+of the camera pass and the box test in the same interpreter with single-precision results exact to the bit, NaNs
+included (`emu_nan.py`), on empty boxes and random cameras, transforms and grids, against the rule of section 6;
+`model_checks.py` [M…] checks numeric facts and the worked
 examples of section 9 (`examples.py`, which takes the grid of OG example 1 from OG's own model). All checks pass.
 
 ## 1. The tests' matrix
@@ -118,7 +121,10 @@ Extremes: the first point sets the smallest and largest *u* (and *v*); each late
 smaller, otherwise raises the largest when larger; the depth keeps the smallest [E1, E2]. The model with these orders
 gives the shipped routines' rectangles, thresholds and results in all 1,800 random cases of the checks [E1 – E3].
 The index conversion is floor for every value the shapes produce (|*s*| < 2³¹; beyond that the original's
-conversion does not give floor) [B2].
+conversion does not give floor) [B2]. **Disputed in review:** not for every value: the empty box of section 6 gives
+NaN coordinates and depths, for which the conversions give no floor or ceil: a NaN coordinate (sign bit set) gives
+the index −2 (so the clamped indices 0), and a NaN depth gives −1 for ceil(*d* × 2³⁰), so the threshold 0; an
+infinite coordinate gives the index 1 for +∞ and −1 for −∞.
 
 ### 2.5 The tests offered to the rest of the program
 
@@ -217,7 +223,28 @@ visual's bounding box (**a**, **b**), each component of the transformed corner *
 **i** *a*_x) + **c**; then, starting with min = max = **p**, for the axes in the order **i** × (*b*_x − *a*_x),
 **j** × (*b*_y − *a*_y), **k** × (*b*_z − *a*_z), each component of that product is added to the max when its sign
 bit is clear and to the min when it is set. This is the smallest axis-aligned box around the transformed box. (The
-order of additions here is from the static analysis, not run in the interpreter.)
+order of additions here is from the static analysis; it gives the same box as the shipped code, run in the
+interpreter, for finite boxes and empty ones [E4].)
+
+**An empty box** [E4]. A visual whose box is still empty, each minimum 3.4028235 × 10³⁸ and each maximum its negative
+(an effect instance before its first particles, PL 8.1), gives an object's box with infinite and NaN values. The
+arithmetic above is IEEE 754 single precision: each extent *b* − *a* overflows to −∞; an axis entry times −∞ is −∞
+for a positive entry, +∞ for a negative one, and NaN for a zero entry of either sign; that NaN counts as **sign bit
+set**, so it is added to the min (the original's processor gives a NaN with the sign bit set for an invalid
+operation; documented for its SSE instructions); any sum with a NaN is NaN. For every transform with at least one
+entry of **i**, **j**, **k** zero or positive, the box test (2.2) of this box gives:
+
+- **visible** without a test when one of its 8 corners has *z* < 10⁻⁵ (2.2 step 1; a NaN *z* does not count);
+- otherwise the scan (2.1) reads only cell (0, 0), the top-left one, with threshold *t* = 0: **visible** when that
+  cell's value is greater than 0 (as an empty cell's is), **hidden** when it is 0 or negative.
+
+The rectangle and depth do not depend on the other corners: in every such case the smallest corner (**a**) has an
+infinite or NaN coordinate, so a scanned box's rectangle edges and depth are all NaN, which the original turns into
+the cell indices 0 and the threshold 0 [E4]. The result is cached like any other (section 5): a visible result
+takes a generator value and sets *N* = *F* + 10 + (*k* mod 15), a hidden one sets *N* = *F* + 1. With the identity
+axes and a translation of magnitude below 10³⁰ the object's box is NaN on every axis at the min and
+3.4028235 × 10³⁸ on every axis at the max, so only its largest corner can be below the near limit; with A all zero
+(section 1) that corner has *z* = 0 and the box is visible without a test [E4].
 
 ## 7. Frustum tests: no margin
 
@@ -295,16 +322,18 @@ OG example 3). Frame 100: tested, visible; 7584 mod 15 = 9, *N* = 119. Frames 10
 - The seed of the shared generator, and so the actual random counts in play (section 5).
 - A light's next-test frame when it is made; whether two objects can share one visual's cached values (section 5).
 - Whether every entry of the spatial index lies within its node's doubled box (section 7; spec V6).
+- The box test of an empty box under a transform whose nine axis entries are all negative (section 6).
 
 ## 11. Provenance
 
-- Date: 2026-11-25.
+- Date: 2026-11-25; section 6 "An empty box" added 2026-11-26.
 - Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG); binaries `bin\xrRender_R1.dll`,
   `bin\XR_3DA.exe`, `bin\xrGame.dll`.
 - Data examined: none beyond the binaries (the examples are synthetic).
 - Analysis: static analysis of the shipped binaries (headless decompilation and disassembly, read-only; constants and
-  section layout read from the binaries); an interpretation of the shipped test routines' instructions on synthetic
-  inputs, compared with a single-precision model of the described behaviour; arithmetic.
+  section layout read from the binaries); an interpretation of the shipped test routines' and the object-box code's
+  instructions on synthetic inputs (including empty boxes, with the processor's documented NaN results), compared
+  with a single-precision model of the described behaviour; arithmetic.
 
 ## Gaps found in review
 
