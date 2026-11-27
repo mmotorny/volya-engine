@@ -595,6 +595,17 @@ pub fn give_item(section: &str) -> Result<u16, JsValue> {
     })
 }
 
+/// The `debug_hit` op (tests): a hit on the player character
+/// ([`App::hit_player`]).
+#[cfg(feature = "test-ops")]
+pub fn hit(kind: &str, power: f32, bone: Option<&str>, ap: f32) -> Result<(), JsValue> {
+    RUNNING.with(|r| {
+        let mut r = r.borrow_mut();
+        let running = r.as_mut().ok_or_else(|| error("the game is not running"))?;
+        running.app.hit_player(kind, power, bone, ap).map_err(error)
+    })
+}
+
 /// The `particles_state` op (tests): the level's placed effects and their
 /// particles (docs/behavior/level-placed-effects.md).
 #[cfg(feature = "test-ops")]

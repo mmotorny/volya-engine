@@ -761,6 +761,21 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         }
         #[cfg(feature = "test-ops")]
         "debug_give_item" => to_json(&engine::give_item(text("section"))?),
+        // `{type, power, bone, armour_piercing}`: a hit on the player
+        // character (player-hits.md 2): `type` a hit type's name, `bone` a
+        // bone of its model (none when absent).
+        #[cfg(feature = "test-ops")]
+        "debug_hit" => {
+            let number = |key: &str| args.get(key).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+            let bone = args.get("bone").and_then(|v| v.as_str());
+            engine::hit(
+                text("type"),
+                number("power"),
+                bone,
+                number("armour_piercing"),
+            )
+            .map(|()| "null".into())
+        }
         // `{wear}`: an outfit with night vision put on, or taken away.
         #[cfg(feature = "test-ops")]
         "debug_nightvision_outfit" => {

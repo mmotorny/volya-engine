@@ -1211,6 +1211,10 @@ impl App {
                 (self.video, self.supersample),
                 self.sound_run.wind.strength,
             );
+            // player-hits.md 3: the immunities follow `g_game_difficulty`.
+            if let Some(difficulty) = self.console.status("g_game_difficulty") {
+                level.set_difficulty(&difficulty);
+            }
         }
         let now = self.clock;
         let title = self.opening(false);
@@ -1996,6 +2000,41 @@ impl App {
         );
         character.inventory.take(item);
         Ok(id)
+    }
+
+    /// Test interface: a hit on the player character (player-hits.md 2) of
+    /// the type named `kind` with power `power`, on the player's model's bone
+    /// `bone` (no bone without one), with armour piercing `armour_piercing`.
+    /// Nothing in the game hits the player yet: zones' contact is #350,
+    /// falls and radiation zones PS-2 (#246).
+    pub fn hit_player(
+        &mut self,
+        kind: &str,
+        power: f32,
+        bone: Option<&str>,
+        armour_piercing: f32,
+    ) -> io::Result<()> {
+        use crate::core::character::hits::{Hit, HitType};
+        let Some(Phase::Level { level, .. }) = &mut self.phase else {
+            return Err(io::Error::other("no level"));
+        };
+        let character = level
+            .character()
+            .ok_or_else(|| io::Error::other("no player character"))?;
+        let bone = match bone {
+            Some(name) => Some(
+                character
+                    .bone(name)
+                    .ok_or_else(|| io::Error::other(format!("the model has no bone {name}")))?,
+            ),
+            None => None,
+        };
+        level.hit(Hit {
+            kind: HitType::named(kind)?,
+            power,
+            bone,
+            armour_piercing,
+        })
     }
 
     /// Test interface: `wear` puts on an outfit with night vision (the

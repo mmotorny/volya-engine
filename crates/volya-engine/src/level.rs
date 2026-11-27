@@ -29,8 +29,9 @@ use crate::core::artefacts::{
 };
 use crate::core::camera::{self, Angles, Mat4, Vec3};
 use crate::core::character::condition::Activity;
+use crate::core::character::hits::Hit;
 use crate::core::character::inventory::Place;
-use crate::core::character::{self, CharacterState, SpecificCharacter};
+use crate::core::character::{self, CharacterState, HitMovement, SpecificCharacter};
 use crate::core::climbing::Ladder;
 use crate::core::clock::GameClock;
 use crate::core::collision::{CollisionWorld, geometry};
@@ -420,6 +421,9 @@ pub struct LevelScreen {
     frame: u64,
     /// The player's detectors (docs/behavior/sound-detector.md).
     detectors: PlayerDetectors,
+    /// The difficulty the character's immunities were last read for
+    /// (player-hits.md 3).
+    difficulty: Option<String>,
 }
 
 /// What the engine interface reports.
@@ -658,6 +662,10 @@ pub struct CharacterReport {
     pub limping: bool,
     pub cant_walk: bool,
     pub cant_sprint: bool,
+    /// Each wound's size, in list order, and the total bleeding
+    /// (player-hits.md 5.1, 5.2).
+    pub wounds: Vec<f32>,
+    pub total_bleeding: f32,
     pub money: u32,
     pub specific_character: String,
     pub character_profile: String,
@@ -703,6 +711,8 @@ impl CharacterReport {
             limping: c.limping,
             cant_walk: c.cant_walk,
             cant_sprint: c.cant_sprint,
+            wounds: c.wounds.0.iter().map(|w| w.size()).collect(),
+            total_bleeding: c.total_bleeding(),
             money: p.money,
             specific_character: p.specific_character.clone(),
             character_profile: p.character_profile.clone(),
@@ -1731,9 +1741,16 @@ impl NewGameLoad {
                 // player's model's header, read with its skeleton as the
                 // torches read it.
                 let path = objects::locate_model(tree, data, &dir, visual)?;
-                let (header, _) = volya_engine_formats::model::skeleton(&vfs::read(tree, &path)?)
-                    .map_err(|e| io::Error::new(e.kind(), format!("{path}: {e}")))?;
+                let (header, bones) =
+                    volya_engine_formats::model::skeleton(&vfs::read(tree, &path)?)
+                        .map_err(|e| io::Error::new(e.kind(), format!("{path}: {e}")))?;
                 self.player_sphere = Some((header.sphere_centre, header.sphere_radius));
+                // The player's model is set (player-hits.md 4.3): the damage
+                // table against its bones.
+                let character = earlier(self.character.as_mut(), "player character")?;
+                character
+                    .set_model(bones.into_iter().map(|b| b.name).collect())
+                    .map_err(|e| io::Error::new(e.kind(), format!("{path}: {e}")))?;
                 self.footsteps = Some(PlayerFootsteps::new(
                     data,
                     spawn::ACTOR_SECTION,
@@ -2215,6 +2232,7 @@ impl NewGameLoad {
             wind: 0.0,
             frame: 0,
             detectors: PlayerDetectors::new(detectors),
+            difficulty: None,
         };
         screen.torches_frame(0.0);
         screen.update_view();
@@ -2522,6 +2540,35 @@ impl LevelScreen {
             lights,
             glows,
         );
+    }
+
+    /// A hit on the player character (player-hits.md section 4), at once:
+    /// the movement takes its sprint cancel and slowdown (4.1), the
+    /// character the rest (4.2 – 4.6). An error (also left as the level's
+    /// fatal error) where the worn outfit's bone table names a bone the
+    /// model lacks.
+    pub fn hit(&mut self, hit: Hit) -> io::Result<()> {
+        let c = (self.character.as_mut()).ok_or_else(|| invalid("no player character"))?;
+        let m = HitMovement::of(hit.kind, hit.power);
+        self.player.hit(m.cancels_sprint, m.slowdown);
+        c.hit(&hit).inspect_err(|e| {
+            self.fatal.get_or_insert(e.to_string());
+        })
+    }
+
+    /// `g_game_difficulty` is `name` (player-hits.md 3 items 1, 2): the
+    /// character's immunities are read again when it changes; a missing
+    /// immunity section is fatal.
+    pub fn set_difficulty(&mut self, name: &str) {
+        if self.difficulty.as_deref() == Some(name) {
+            return;
+        }
+        self.difficulty = Some(name.to_owned());
+        if let Some(c) = &mut self.character
+            && let Err(e) = c.set_difficulty(name)
+        {
+            self.fatal.get_or_insert(e.to_string());
+        }
     }
 
     /// The player's torches.
@@ -3688,6 +3735,7 @@ impl LevelScreen {
             wind: 0.0,
             frame: 0,
             detectors: PlayerDetectors::default(),
+            difficulty: None,
             global_ms: 0,
         }
     }
