@@ -6,6 +6,7 @@
 //! docs/formats/.
 
 pub mod audio;
+pub mod bone_physics;
 pub mod chunks;
 pub mod cp1251;
 pub mod cross_table;

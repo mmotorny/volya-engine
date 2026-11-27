@@ -14,6 +14,7 @@
 
 use std::io;
 
+use crate::bone_physics::{self, BonePhysics};
 use crate::chunks::Chunks;
 use crate::level_geom::{ProgressiveMesh, parse_progressive_mesh};
 use crate::packet::{Reader, invalid};
@@ -39,8 +40,6 @@ const VERSION: u8 = 4;
 const HEADER_SIZE: usize = 44;
 const ONE_LINK_SIZE: usize = 60;
 const TWO_LINK_SIZE: usize = 64;
-/// The physics shape of a chunk-16 record (section 4.4).
-const SHAPE_SIZE: usize = 112;
 
 /// Row-vector convention (`[p 1] · M`), rows stored in order.
 pub type Mat4 = [[f32; 4]; 4];
@@ -230,6 +229,8 @@ pub struct Bone {
     /// Chunk 16's bind rotation `(r₀, r₁, r₂)` and position `t`.
     pub bind_rotation: [f32; 3],
     pub bind_position: [f32; 3],
+    /// The rest of chunk 16's record (docs/formats/bone-physics.md).
+    pub physics: BonePhysics,
 }
 
 /// A skeleton model (types 10 and 3, section 4.3).
@@ -268,7 +269,7 @@ impl Model {
         let data = chunks
             .require(BONE_DATA_CHUNK, "skeleton model")?
             .content()?;
-        let bones = parse_bones(&names, &data)?;
+        let mut bones = parse_bones(&names, &data)?;
         for m in &meshes {
             if usize::from(m.largest_bone()) >= bones.len() {
                 return Err(invalid(format!(
@@ -278,6 +279,7 @@ impl Model {
                 )));
             }
         }
+        check_breakable(&mut bones, &meshes);
         Ok(Self {
             header,
             kind,
@@ -298,7 +300,9 @@ impl Model {
 }
 
 /// A model file's header and bones only (chunks 1, 13, 16), its meshes
-/// not read: for what needs a skeleton without drawing it.
+/// not read: for what needs a skeleton without drawing it. Chunk 16 is as
+/// stored: the load-time check of breakable bones, which needs the meshes,
+/// is [`Model::parse`]'s.
 pub fn skeleton(file: &[u8]) -> io::Result<(Header, Vec<Bone>)> {
     let chunks = Chunks::parse(file)?;
     let header = Header::parse(&chunks.require(HEADER_CHUNK, "model")?.content()?)?;
@@ -493,21 +497,8 @@ fn parse_bones(names: &[u8], data: &[u8]) -> io::Result<Vec<Bone>> {
     let mut d = Reader::new(data);
     let mut bones = Vec::with_capacity(named.len());
     for (name, parent_name, f) in &named {
-        let version = d.u32()?;
-        d.string()?; // Game material.
-        d.take(SHAPE_SIZE)?;
-        d.u32()?; // Joint type.
-        d.take(12 * 4)?; // Joint limits.
-        d.take(2 * 4)?; // Spring, damping.
-        d.u32()?; // Joint flags.
-        d.take(2 * 4)?; // Break force, torque.
-        if version != 0 {
-            d.float()?; // Friction.
-        }
-        let bind_rotation = d.float3()?;
-        let bind_position = d.float3()?;
-        d.float()?; // Mass.
-        d.float3()?; // Centre of mass.
+        let (physics, bind_rotation, bind_position) =
+            bone_physics::read_record(&mut d).map_err(|e| invalid(format!("bone {name}: {e}")))?;
         let parent = if parent_name.is_empty() {
             None
         } else {
@@ -526,6 +517,7 @@ fn parse_bones(names: &[u8], data: &[u8]) -> io::Result<Vec<Bone>> {
             box_half_size: [f[12], f[13], f[14]],
             bind_rotation,
             bind_position,
+            physics,
         });
     }
     d.finish("bone data")?;
@@ -534,6 +526,24 @@ fn parse_bones(names: &[u8], data: &[u8]) -> io::Result<Vec<Bone>> {
         return Err(invalid(format!("{roots} root bones")));
     }
     Ok(bones)
+}
+
+/// The load-time check of breakable bones (bone-physics.md 3.4): a child
+/// mesh's bones are those its triangles' vertices name, both of a 2-link
+/// vertex whatever the weight.
+fn check_breakable(bones: &mut [Bone], meshes: &[SkinnedMesh]) {
+    let parents: Vec<_> = bones.iter().map(|b| b.parent).collect();
+    let mut physics: Vec<_> = bones.iter_mut().map(|b| &mut b.physics).collect();
+    let used = meshes.iter().map(|m| {
+        m.indices.iter().flat_map(move |&i| {
+            let v = &m.vertices[usize::from(i)];
+            match m.links {
+                Links::One => vec![usize::from(v.bones[0])],
+                Links::Two => vec![usize::from(v.bones[0]), usize::from(v.bones[1])],
+            }
+        })
+    });
+    bone_physics::check_breakable(&parents, &mut physics, used);
 }
 
 /// The rotation of section 3.4 for angles `a` = (a₀, a₁, a₂), as rows.
@@ -758,7 +768,7 @@ mod tests {
             let version = u32::from(i < 2);
             data.extend(version.to_le_bytes());
             data.extend(string("default"));
-            data.extend([0u8; SHAPE_SIZE]);
+            data.extend([0u8; 112]); // Shape type 0 and its parts.
             data.extend(0u32.to_le_bytes());
             data.extend(floats(&[0.0; 14]));
             data.extend(0u32.to_le_bytes());
@@ -858,6 +868,11 @@ mod tests {
         assert_eq!(m.bones[2].bind_position, [0.0, 0.0, 2.0]);
         assert_eq!(m.bones[0].box_half_size, [0.5; 3]);
         assert_eq!(m.bone("leaf"), Some(2));
+        // Chunk 16: friction only where the version's low bits are not 0.
+        let p = &m.bones[2].physics;
+        assert_eq!((p.version, p.friction, p.mass), (0, None, 10.0));
+        assert_eq!(m.bones[0].physics.friction, Some(1.0));
+        assert_eq!(p.material, "default");
         let pose = m.bind_pose().unwrap();
         let close = |a: [f32; 3], b: [f32; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-6);
         // The root at (0, 1, 0), rotated by R(0, −π/2, 0): its rows are
