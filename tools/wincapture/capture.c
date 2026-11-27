@@ -1088,8 +1088,10 @@ static uint8_t *look_rgb(const struct run *r) {
     return rgb;
 }
 
-/* Keeps `rgb` as `name` (a path below the run's outputs) and its hash. */
-static int keep(struct run *r, const char *name, uint32_t w, uint32_t h, const uint8_t *rgb) {
+/* Keeps `rgb`, the game's frame `frame`, as `name` (a path below the run's
+ * outputs) and its hash. */
+static int keep_frame(struct run *r, int64_t frame, const char *name, uint32_t w, uint32_t h,
+                      const uint8_t *rgb) {
     char path[MAX_PATH], hex[65];
     join(path, sizeof path, r->out, name);
     if (!write_png(path, w, h, rgb)) {
@@ -1098,8 +1100,14 @@ static int keep(struct run *r, const char *name, uint32_t w, uint32_t h, const u
     sha256_hex(rgb, (size_t)w * h * 3, hex);
     fprintf(r->hashes, "%s %ux%u %s\n", hex, w, h, name);
     fflush(r->hashes);
-    say("frame %6lld  kept %s (%ux%u, %.16s)", (long long)r->frame, name, w, h, hex);
+    say("frame %6lld  kept %s, taken at frame %lld (%ux%u, %.16s)", (long long)r->frame, name,
+        (long long)frame, w, h, hex);
     return 1;
+}
+
+/* Keeps `rgb`, the frame the game is held at, as `name`. */
+static int keep(struct run *r, const char *name, uint32_t w, uint32_t h, const uint8_t *rgb) {
+    return keep_frame(r, r->frame, name, w, h, rgb);
 }
 
 static int keep_look(struct run *r, const char *name) {
@@ -1425,10 +1433,10 @@ static int holds(const struct segment *g, WORD key) {
  * and audio\<walk>.frames.txt: each frame of play with the recording's
  * samples at which the game was let run to it and at which it was
  * presented (the same performance counter as the packets'); and the
- * frames where the player starts and ends, audio\<walk>-start.png (the
- * last frame before the keys) and audio\<walk>-end.png (the walk's last),
- * from their back buffers, HUD included, written once the recording
- * stops. */
+ * frames at the walk's boundaries from their back buffers, HUD included,
+ * written once the recording stops: audio\<walk>-start.png (the last frame
+ * before the keys), audio\<walk>-segNN.png (segment NN's last, 01 the
+ * first) and audio\<walk>-end.png (the walk's last). */
 static int walk_audio(struct run *r, int64_t play, const struct walk *w) {
     /* Frame n of play is the game's frame play + n - 1. */
     int64_t first = play + w->start - 1, from = first - w->preroll, total = walk_frames(w);
@@ -1446,10 +1454,19 @@ static int walk_audio(struct run *r, int64_t play, const struct walk *w) {
     int64_t rows = first + total - from;
     int64_t (*times)[3] = calloc((size_t)rows, sizeof *times);
     const struct segment *held = NULL;
-    /* The start's and the end's frames: their game frames, pixels, sizes. */
-    int64_t viewed[2] = {first - 1, first + total - 1};
-    uint8_t *views[2] = {NULL, NULL};
-    uint32_t view_w[2] = {0, 0}, view_h[2] = {0, 0};
+    /* The boundaries' frames: the start, each segment's last, the end; their
+     * game frames, pixels, sizes. */
+    enum { MAX_VIEWS = 64 + 2 };
+    int64_t viewed[MAX_VIEWS];
+    uint8_t *views[MAX_VIEWS] = {NULL};
+    uint32_t view_w[MAX_VIEWS] = {0}, view_h[MAX_VIEWS] = {0};
+    int nviews = 0;
+    viewed[nviews++] = first - 1;
+    for (int64_t i = 0, k = first; i < w->nsegments; i++) {
+        k += w->segments[i].frames;
+        viewed[nviews++] = k - 1;
+    }
+    viewed[nviews++] = first + total - 1;
     int ok = 1;
     for (int64_t g = from; ok && g < first + total; g++) {
         const struct segment *want = segment_at(w, g - first);
@@ -1474,7 +1491,12 @@ static int walk_audio(struct run *r, int64_t play, const struct walk *w) {
             Sleep(INPUT_SETTLE_MS);
         }
         int64_t released = loopback_now();
-        int view = g == viewed[0] ? 0 : g == viewed[1] ? 1 : -1;
+        int view = -1;
+        for (int i = 0; i < nviews; i++) {
+            if (viewed[i] == g) {
+                view = i;
+            }
+        }
         ok = advance(r, g, view >= 0);
         int64_t presented = loopback_now();
         if (ok && view >= 0) {
@@ -1491,11 +1513,17 @@ static int walk_audio(struct run *r, int64_t play, const struct walk *w) {
     }
     loopback_stop(r->loopback);
     loopback_report(r->loopback, say);
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < nviews; i++) {
         char view_name[160];
-        snprintf(view_name, sizeof view_name, "audio\\%s-%s.png", w->name, i ? "end" : "start");
+        if (i == 0) {
+            snprintf(view_name, sizeof view_name, "audio\\%s-start.png", w->name);
+        } else if (i == nviews - 1) {
+            snprintf(view_name, sizeof view_name, "audio\\%s-end.png", w->name);
+        } else {
+            snprintf(view_name, sizeof view_name, "audio\\%s-seg%02d.png", w->name, i);
+        }
         if (ok && views[i]) {
-            ok = keep(r, view_name, view_w[i], view_h[i], views[i]);
+            ok = keep_frame(r, viewed[i], view_name, view_w[i], view_h[i], views[i]);
         }
         free(views[i]);
     }

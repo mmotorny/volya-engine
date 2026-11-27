@@ -10,10 +10,12 @@
 //! each frame's update and sound update the mixer mixes exactly the frame's
 //! samples. Kept: `<walk>.wav` (ours, 16-bit stereo at 44,100 Hz),
 //! `<walk>.frames.txt` (our frames' samples, the capture's table) and
-//! `<walk>.report.txt`; and the frames where the player starts and ends,
-//! as the capture keeps the original's: `<walk>-start` (the last frame
-//! before the keys) and `<walk>-end` (the walk's last), which the suite
-//! compares with the original's as the fidelity suite compares its views. With the original's capture (`<walk>.wav` and
+//! `<walk>.report.txt` (with the player's pose at each frame kept); and
+//! the frames at the walk's boundaries, as the capture keeps the
+//! original's (`Walk::boundaries`): `<walk>-start` (the last frame before
+//! the keys), `<walk>-segNN` (segment NN's last) and `<walk>-end` (the
+//! walk's last), which the suite compares with the original's as the
+//! fidelity suite compares its views. With the original's capture (`<walk>.wav` and
 //! `<walk>.frames.txt`, the suite's references) both recordings' onsets are
 //! found, given their frames, told apart by material against the
 //! fingerprints of every footstep sound of the player's material pairs, and
@@ -195,11 +197,17 @@ async fn walk(cx: &Context<'_>, index: usize) -> Outcome {
     let mut steps: Vec<(i64, String)> = Vec::new();
     let mut path = String::new();
     let mut held: &[WalkKey] = &[];
-    // The frames drawn, the start's and the end's, each composed in the
-    // frame before it too, as the app composes every frame (the detail
-    // pass selects only when it ran in the previous frame, #557).
-    let views = [(first - 1, "start"), (end - 1, "end")];
-    let drawn = |g: i64| views.iter().find(|(f, _)| *f == g).map(|(_, n)| *n);
+    // The frames drawn, the walk's boundaries (the start, each segment's
+    // last, the end), each composed in the frame before it too, as the app
+    // composes every frame (the detail pass selects only when it ran in the
+    // previous frame, #557).
+    let views: Vec<(i64, String)> = walk
+        .boundaries()
+        .into_iter()
+        .map(|(k, n)| (first + k, n))
+        .collect();
+    let drawn = |g: i64| views.iter().find(|(f, _)| *f == g).map(|(_, n)| n.as_str());
+    let mut poses = String::new();
     let mut presenter = Presenter::new();
     let mut gpu = cx.renderer();
     for g in from..end {
@@ -234,6 +242,22 @@ async fn walk(cx: &Context<'_>, index: usize) -> Outcome {
             let errors = presenter.take_errors();
             ensure!(errors.is_empty(), "{errors:?}");
             cx.dump(&format!("{}-{view}", walk.name), WIDTH, HEIGHT, &pixels);
+            let player = run.app.level().ok_or("not in the level")?.player();
+            let (s, v) = (player.state(), player.view());
+            let _ = writeln!(
+                poses,
+                "  {view} (frame {g}): feet ({:.3}, {:.3}, {:.3}), eye ({:.3}, {:.3}, {:.3}), \
+                 yaw {:.4} rad ({:.2}°), pitch {:.4} rad",
+                s.position[0],
+                s.position[1],
+                s.position[2],
+                v.eye[0],
+                v.eye[1],
+                v.eye[2],
+                s.yaw,
+                s.yaw.to_degrees(),
+                s.pitch
+            );
         }
         let level = run.app.level().ok_or("not in the level")?;
         if let Some(f) = level.footsteps() {
@@ -288,7 +312,7 @@ async fn walk(cx: &Context<'_>, index: usize) -> Outcome {
         &library,
     );
     let mut text = report.text;
-    let _ = write!(text, "\nOur walk:\n{path}");
+    let _ = write!(text, "\nOur walk:\n{path}\nOur kept frames:\n{poses}");
     cx.keep_file(&format!("{}.report.txt", walk.name), text.into_bytes());
     if original.is_none() {
         return Err(Problem::Skip(format!(

@@ -7,10 +7,10 @@
 // (`volya_engine::selftest::audio_fidelity`) renders ours offline in step
 // with the walk's frames and, given the original's capture (`<walk>.wav`,
 // `<walk>.frames.txt`), compares their onsets step by step: frame,
-// material, level. Its frames where the player starts and ends
-// (`<walk>-start`, `<walk>-end`) are compared with the capture's as the
-// fidelity suite compares its views (`againstOriginal`): whether both
-// players moved the same way. A report, not a gate. Kept
+// material, level. Its frames at the walk's boundaries (`<walk>-start`,
+// `<walk>-segNN`, `<walk>-end`) are compared with the capture's as the
+// fidelity suite compares its views (`againstOriginal`): where the two
+// players' paths part. A report, not a gate. Kept
 // (VOLYA_DUMP_DIR): ours `<walk>.wav` and `<walk>.frames.txt`,
 // `<walk>.report.txt`, the frames, the original's and their heat maps.
 

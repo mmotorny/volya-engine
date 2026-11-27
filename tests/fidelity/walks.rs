@@ -65,6 +65,21 @@ impl Walk {
         }
         n
     }
+
+    /// The frames both engines keep, at the walk's boundaries: each as the
+    /// walk's frame (0 its first with keys) and its name's suffix. `start`
+    /// the last frame before the keys, `segNN` segment NN's last (01 the
+    /// first), `end` the walk's last.
+    pub fn boundaries(&self) -> Vec<(i64, String)> {
+        let mut views = vec![(-1, "start".to_string())];
+        let mut k = 0i64;
+        for (i, s) in self.segments.iter().enumerate() {
+            k += i64::from(s.frames);
+            views.push((k - 1, format!("seg{:02}", i + 1)));
+        }
+        views.push((i64::from(self.frames()) - 1, "end".to_string()));
+        views
+    }
 }
 
 /// Frames recorded before a walk's first, for what plays without it.

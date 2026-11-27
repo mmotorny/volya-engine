@@ -33,7 +33,7 @@ selftest: drrun and the client with counterprobe.exe in place of the game
 (default 2), compared.
 audio: every walk with sound on, the game's output recorded by WASAPI
 loopback from the default output device as it is (or the one whose name
-contains NAME), and each walk's frames at its start and end kept.
+contains NAME), and each walk's frames at its start, each segment's end and its end kept.
 Nothing changes a volume or a device setting; the
 machine's outputs must be silenced physically. N runs (default 1).
 DIR of the game: default the install's registry entry. Work folder: default
