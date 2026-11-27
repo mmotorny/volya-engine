@@ -155,7 +155,15 @@ export const SECTIONS = [
         check: "failed",
       },
       // The logs (#646, #669): the game's log and the performance log,
-      // always kept (the default states have both).
+      // always kept (the default states have both; before the game has
+      // run, only the performance log, as with no game files below).
+      {
+        id: "settings-log-game-only",
+        name: "Only the game's log kept (the performance log empty, just started anew)",
+        game: imported,
+        screen: "settings",
+        log: { entries: false },
+      },
       {
         id: "settings-log-preparing",
         name: "Download logs pressed: preparing the file",
@@ -170,21 +178,21 @@ export const SECTIONS = [
         screen: "settings",
         log: { download: "failed" },
       },
-      // Danger zone: the game's settings and saves (#535), and the logs
-      // (#669).
+      // Danger zone: the game's saves and settings (#535), and the logs
+      // (#669, #681).
       {
         id: "settings-delete-user-data",
-        name: "Delete settings and saves pressed: confirming",
+        name: "Delete saves, settings, and logs pressed: confirming",
         game: imported,
         screen: "settings",
-        press: ["Delete settings and saves"],
+        press: ["Delete saves, settings, and logs"],
       },
       {
         id: "settings-user-data-deleted",
-        name: "Settings, saves and logs deleted",
+        name: "Saves, settings, and logs deleted",
         game: imported,
         screen: "settings",
-        press: ["Delete settings and saves", "Delete"],
+        press: ["Delete saves, settings, and logs", "Delete"],
       },
       {
         id: "settings-user-data-not-deleted",
@@ -192,7 +200,7 @@ export const SECTIONS = [
         game: imported,
         screen: "settings",
         log: { deleteFails: true },
-        press: ["Delete settings and saves", "Delete"],
+        press: ["Delete saves, settings, and logs", "Delete"],
       },
       // Danger zone: the game files (#538).
       {

@@ -647,7 +647,7 @@ export const tests = {
     return `update() unreachable: ${rejection}; navigator.onLine ${navigator.onLine}`;
   },
 
-  "Delete settings and saves: asks first, deletes only those, and the game then starts from the defaults": async () => {
+  "Delete saves, settings, and logs: asks first, deletes only those, and the game then starts from the defaults": async () => {
     const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle("volya-engine", { create: true });
     const put = async (at, name, text) => {
       const writable = await (await at.getFileHandle(name, { create: true })).createWritable();
@@ -669,25 +669,25 @@ export const tests = {
     await volya.call("diagnostic_log");
     const others = (await names()).filter((n) => !["user.ltx", "savedgames", "logs", "diagnostic-log"].includes(n));
     await volya.showSettings();
-    const remove = button("Delete settings and saves");
-    assert(remove?.closest(".danger-zone"), "no Delete settings and saves in the danger zone");
+    const remove = button("Delete saves, settings, and logs");
+    assert(remove?.closest(".danger-zone"), "no Delete saves, settings, and logs in the danger zone");
     assertEqual(
       remove.closest(".danger-item").querySelector(".note").textContent,
-      "Deletes the game's settings, saves and logs from this app's storage. The game then starts with its default settings.",
+      "Deletes the game's saves, settings, and logs from this app's storage. The game then starts with its default settings.",
       "the note",
     );
     // Asked first; Escape (the keyboard) cancels.
     remove.click();
     const ask = document.querySelector("#game .confirm");
-    assertEqual(ask?.querySelector("strong").textContent, "Delete the game's settings, saves and logs?", "the question");
+    assertEqual(ask?.querySelector("strong").textContent, "Delete the game's saves, settings, and logs?", "the question");
     assertEqual(document.activeElement?.textContent, "Cancel", "focus on Cancel");
     document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    await until(() => !document.querySelector("#game .confirm") && button("Delete settings and saves"), "Escape didn't cancel");
-    assertEqual(document.activeElement?.textContent, "Delete settings and saves", "focus back on the button");
+    await until(() => !document.querySelector("#game .confirm") && button("Delete saves, settings, and logs"), "Escape didn't cancel");
+    assertEqual(document.activeElement?.textContent, "Delete saves, settings, and logs", "focus back on the button");
     assert((await names()).includes("user.ltx"), "deleted though cancelled");
-    button("Delete settings and saves").click();
+    button("Delete saves, settings, and logs").click();
     button("Delete").click();
-    await until(() => document.querySelector('#game [role="status"]')?.textContent === "Settings, saves and logs deleted", "not deleted");
+    await until(() => document.querySelector('#game [role="status"]')?.textContent === "Saves, settings, and logs deleted", "not deleted");
     // The performance log starts anew.
     const status = await volya.call("diagnostic_log_status");
     assert(status.on, "the performance log is off");
@@ -700,10 +700,10 @@ export const tests = {
     assertEqual((await caches.keys()).sort().join(), cached, "the offline copy changed");
     // Nothing left to delete: not offered, nor for the game's log alone.
     await volya.showSettings();
-    assert(!button("Delete settings and saves"), "offered with nothing stored");
+    assert(!button("Delete saves, settings, and logs"), "offered with nothing stored");
     await put(await dir.getDirectoryHandle("logs", { create: true }), "xray_player.log", "line\r\n");
     await volya.showSettings();
-    assert(!button("Delete settings and saves"), "offered for the game's log alone");
+    assert(!button("Delete saves, settings, and logs"), "offered for the game's log alone");
     await dir.removeEntry("logs", { recursive: true });
   },
 
@@ -722,7 +722,7 @@ export const tests = {
       button("Delete game files").click();
       const ask = doc().querySelector("#game .confirm");
       assertEqual(ask?.querySelector("strong").textContent, "Delete the game files?", "the question");
-      assertEqual(ask.querySelector("span")?.textContent, "The game's settings and saves stay.", "the detail");
+      assertEqual(ask.querySelector("span")?.textContent, "The game's saves and settings stay.", "the detail");
       assert(ask.closest(".danger-zone"), "not in the danger zone");
       assertEqual(doc().activeElement?.textContent, "Cancel", "focus on Cancel");
       doc().activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
@@ -887,6 +887,14 @@ export const tests = {
     const controls = [...panel.querySelectorAll("button, input")].filter((c) => !c.hidden).map((c) => c.textContent);
     assertEqual(controls, ["Download logs"], "the Logs panel's controls");
     assert(!panel.hidden, "the Logs panel is hidden");
+    const gameLog = (await volya.call("game_log_status")).present;
+    assertEqual(
+      panel.querySelector(".note")?.textContent,
+      gameLog
+        ? "The game's log and the app's performance log, kept on this device. Download them to report a problem."
+        : "The app's performance log, kept on this device. Download it to report a problem.",
+      "the description",
+    );
     await volya.diagnostics.setEnabled(false, volya.call);
     try {
       const off = await volya.call("debug_diagnostics_bench", { frames: 20000 });
@@ -1069,7 +1077,9 @@ export const tests = {
       assert((await openSettingsLogs()).hidden, "a Logs panel with no logs");
       const text = "line\r\n \r\nя?\r\n";
       await putGameLog(text);
-      assert(!(await openSettingsLogs()).hidden && !logDownload().hidden, "the game's log isn't offered");
+      const panel = await openSettingsLogs();
+      assert(!panel.hidden && !logDownload().hidden, "the game's log isn't offered");
+      assertEqual(panel.querySelector(".note")?.textContent, "The game's log, kept on this device. Download it to report a problem.", "the description");
       const { files, trace } = await downloadLog();
       assertEqual([[...files.keys()].join(), trace], ["xray_player.log", null], "the archive's files");
       assertEqual(new TextDecoder().decode(files.get("xray_player.log")), text, "the game's log, byte for byte");

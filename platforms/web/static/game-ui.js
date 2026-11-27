@@ -13,7 +13,7 @@
 //
 // Home holds Play only; secondary actions (an update offer, Settings) sit at
 // the bottom, away from it. Settings holds updates, the logs and,
-// in a danger zone, deleting the game's settings and saves
+// in a danger zone, deleting the game's saves, settings, and logs
 // and deleting the import.
 
 import { SHARE_ICON, canOffer, chromium, install, installed, platform } from "./install.js";
@@ -602,20 +602,25 @@ function downloadButton() {
 
 /**
  * Logs (#646, #669): the game's log and the performance log (#346), both
- * always kept; Download logs while either exists. `refresh()` reads their
- * state again (after Delete settings and saves); `present()`, whether
- * there are any.
+ * always kept; a line naming those there are (#681) and Download logs
+ * while either exists. `refresh()` reads their state again (after Delete
+ * saves, settings, and logs); `present()`, whether there are any.
  */
 async function logsPanel() {
   const download = downloadButton();
+  const description = element("p", { className: "note" });
   let present = false;
   const read = async () => {
-    const trace = await call("diagnostic_log_status").catch(() => null);
+    const trace = Boolean((await call("diagnostic_log_status").catch(() => null))?.entries);
     const gameLog = (await call("game_log_status").catch(() => null))?.present ?? false;
-    present = gameLog || Boolean(trace?.entries);
+    present = gameLog || trace;
     panel.hidden = !present;
+    description.textContent =
+      gameLog && trace
+        ? "The game's log and the app's performance log, kept on this device. Download them to report a problem."
+        : `${gameLog ? "The game's log" : "The app's performance log"}, kept on this device. Download it to report a problem.`;
   };
-  const panel = element("div", { className: "panel" }, element("p", { className: "label", textContent: "Logs" }), download);
+  const panel = element("div", { className: "panel" }, element("p", { className: "label", textContent: "Logs" }), description, download);
   await read();
   panel.refresh = read;
   panel.present = () => present;
@@ -658,16 +663,16 @@ function confirmation(question, detail, actionLabel) {
 }
 
 /**
- * Danger zone: Delete settings and saves (#535): the engine's `user.ltx`
- * and `savedgames/`, and both logs (#646, #669; the performance log
+ * Danger zone: Delete saves, settings, and logs (#535, #681): the engine's
+ * `savedgames/` and `user.ltx`, and both logs (#646, #669; the performance log
  * starts anew), after a confirmation; the game then starts from the
  * installer's defaults. Settings shows only while no game runs. `logs`
  * says whether there are any; `deleted` runs after.
  */
 function userDataSection(logs, deleted) {
-  const title = "Delete settings and saves";
+  const title = "Delete saves, settings, and logs";
   const button = element("button", { className: "danger filled", textContent: title });
-  const what = logs ? "settings, saves and logs" : "settings and saves";
+  const what = logs ? "saves, settings, and logs" : "saves and settings";
   const note = element("p", {
     className: "note",
     textContent: `Deletes the game's ${what} from this app's storage. The game then starts with its default settings.`,
@@ -706,7 +711,7 @@ function userDataSection(logs, deleted) {
 
 /**
  * Danger zone: Delete game files, after a confirmation (#538) that says
- * the game's settings and saves stay, when there are any; then the
+ * the game's saves and settings stay, when there are any; then the
  * import screen.
  */
 function importSection(status, userData) {
@@ -717,7 +722,7 @@ function importSection(status, userData) {
     textContent: `Deletes ${formatBytes(status.bytes)} of game files from this app's storage. You can import them again from the installer.`,
   });
   button.addEventListener("click", async () => {
-    const ask = confirmation("Delete the game files?", userData ? "The game's settings and saves stay." : null, "Delete");
+    const ask = confirmation("Delete the game files?", userData ? "The game's saves and settings stay." : null, "Delete");
     button.replaceWith(ask.element);
     ask.focus();
     if (!(await ask.result)) {
@@ -745,7 +750,7 @@ function importSection(status, userData) {
 
 /**
  * Settings: updates, the logs and, in a danger zone, the
- * player's settings and saves and the game files.
+ * player's saves, settings, and logs and the game files.
  */
 async function showSettings() {
   const status = await call("game_status");

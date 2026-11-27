@@ -11,7 +11,7 @@
 //   count(name, n)       adds to a count, logged per second
 //   end(reason, message) how the engine ended (`engine.end`, stored at once)
 //
-// It is off only for a moment while Delete settings and saves deletes it
+// It is off only for a moment while Delete saves, settings, and logs deletes it
 // (`restart`) and in tests (`setEnabled`); the UX audit page sets
 // `volyaDiagnostics` per frame.
 //
@@ -174,7 +174,7 @@ export async function setEnabled(value, call) {
 }
 
 /**
- * Deletes the log and starts a new one (Delete settings and saves): the
+ * Deletes the log and starts a new one (Delete saves, settings, and logs): the
  * new log's status, `deleted` false when the old one's files stayed.
  */
 export async function restart(call) {

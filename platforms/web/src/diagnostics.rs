@@ -8,7 +8,7 @@
 //! log kept in OPFS (`volya-engine/diagnostic-log/0` … `7`, one sync access
 //! handle each, held while on). Where those files can't be opened (another
 //! copy of the app holds them), the log is kept in memory for the session.
-//! While off (a moment, as Delete settings and saves deletes it, and in
+//! While off (a moment, as Delete saves, settings, and logs deletes it, and in
 //! tests), recording's callsites are disabled and nothing runs per frame
 //! beyond `tracing`'s check of them. Turning it off deletes the log (#536).
 //!
