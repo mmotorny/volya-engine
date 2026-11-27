@@ -617,8 +617,8 @@ async function logsPanel() {
     panel.hidden = !present;
     description.textContent =
       gameLog && trace
-        ? "The game's log and the app's performance log, kept on this device. Download them to report a problem."
-        : `${gameLog ? "The game's log" : "The app's performance log"}, kept on this device. Download it to report a problem.`;
+        ? "The game's log and Volya Engine's performance log, kept on this device. Download them to report a problem."
+        : `${gameLog ? "The game's log" : "Volya Engine's performance log"}, kept on this device. Download it to report a problem.`;
   };
   const panel = element("div", { className: "panel" }, element("p", { className: "label", textContent: "Logs" }), description, download);
   await read();

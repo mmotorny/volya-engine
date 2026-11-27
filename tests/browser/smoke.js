@@ -891,8 +891,8 @@ export const tests = {
     assertEqual(
       panel.querySelector(".note")?.textContent,
       gameLog
-        ? "The game's log and the app's performance log, kept on this device. Download them to report a problem."
-        : "The app's performance log, kept on this device. Download it to report a problem.",
+        ? "The game's log and Volya Engine's performance log, kept on this device. Download them to report a problem."
+        : "Volya Engine's performance log, kept on this device. Download it to report a problem.",
       "the description",
     );
     await volya.diagnostics.setEnabled(false, volya.call);
