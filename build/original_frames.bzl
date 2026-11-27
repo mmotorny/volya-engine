@@ -8,7 +8,7 @@ at `<suite>/<path>`, watched, so new files rerun the suite. `original_frames`
 is the fidelity suite's frames (`original-frames/fidelity/`: `<view>.png`,
 `<view>.user.ltx`, `<view>.saved.ltx`), `original_audio` the audio-fidelity
 suite's captures (`original-audio/audio-fidelity/`: `<walk>.wav`,
-`<walk>.frames.txt`). Game assets: local only, never committed, published or
+`<walk>.frames.txt`, `<walk>-start.png`, `<walk>-end.png`). Game assets: local only, never committed, published or
 deployed. No folder: no files."""
 
 def _files(dir):

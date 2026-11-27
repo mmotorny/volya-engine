@@ -10,7 +10,10 @@
 //! each frame's update and sound update the mixer mixes exactly the frame's
 //! samples. Kept: `<walk>.wav` (ours, 16-bit stereo at 44,100 Hz),
 //! `<walk>.frames.txt` (our frames' samples, the capture's table) and
-//! `<walk>.report.txt`. With the original's capture (`<walk>.wav` and
+//! `<walk>.report.txt`; and the frames where the player starts and ends,
+//! as the capture keeps the original's: `<walk>-start` (the last frame
+//! before the keys) and `<walk>-end` (the walk's last), which the suite
+//! compares with the original's as the fidelity suite compares its views. With the original's capture (`<walk>.wav` and
 //! `<walk>.frames.txt`, the suite's references) both recordings' onsets are
 //! found, given their frames, told apart by material against the
 //! fingerprints of every footstep sound of the player's material pairs, and
@@ -20,7 +23,7 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 use super::title_menu::key;
-use super::{Context, Outcome, Problem, Run, ensure};
+use super::{Context, Outcome, Problem, Run, capture, ensure};
 use crate::app::{App, AppState};
 use crate::audio::{MixerOut, SoundHost};
 use crate::core::audio::{Mixer, open_vorbis};
@@ -28,6 +31,7 @@ use crate::core::input::{Event, Input, Key};
 use crate::core::vfs::{self, Vfs};
 use crate::data::GameData;
 use crate::onsets::{Found, Frames, Recording, Template, find};
+use crate::present::Presenter;
 use volya_engine_formats::ui::Resolution;
 
 #[allow(dead_code)]
@@ -191,6 +195,13 @@ async fn walk(cx: &Context<'_>, index: usize) -> Outcome {
     let mut steps: Vec<(i64, String)> = Vec::new();
     let mut path = String::new();
     let mut held: &[WalkKey] = &[];
+    // The frames drawn, the start's and the end's, each composed in the
+    // frame before it too, as the app composes every frame (the detail
+    // pass selects only when it ran in the previous frame, #557).
+    let views = [(first - 1, "start"), (end - 1, "end")];
+    let drawn = |g: i64| views.iter().find(|(f, _)| *f == g).map(|(_, n)| *n);
+    let mut presenter = Presenter::new();
+    let mut gpu = cx.renderer();
     for g in from..end {
         let want = keys_at(&walk, g - first);
         for k in held.iter().filter(|k| !want.contains(k)) {
@@ -213,6 +224,17 @@ async fn walk(cx: &Context<'_>, index: usize) -> Outcome {
         }
         held = want;
         ours.extend(run.frame(tree));
+        if drawn(g + 1).is_some() {
+            (run.app.scene(tree, SIZE)).map_err(|e| format!("scene: {e}"))?;
+        }
+        if let Some(view) = drawn(g) {
+            let s = (run.app.scene(tree, SIZE)).map_err(|e| format!("scene: {e}"))?;
+            let list = presenter.draw_list(&mut gpu, tree, &s, run.app.clock());
+            let pixels = capture(&mut gpu, &list, WIDTH, HEIGHT).await?;
+            let errors = presenter.take_errors();
+            ensure!(errors.is_empty(), "{errors:?}");
+            cx.dump(&format!("{}-{view}", walk.name), WIDTH, HEIGHT, &pixels);
+        }
         let level = run.app.level().ok_or("not in the level")?;
         if let Some(f) = level.footsteps() {
             for s in f.sounds() {

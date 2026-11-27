@@ -7,11 +7,15 @@
 // (`volya_engine::selftest::audio_fidelity`) renders ours offline in step
 // with the walk's frames and, given the original's capture (`<walk>.wav`,
 // `<walk>.frames.txt`), compares their onsets step by step: frame,
-// material, level. A report, not a gate. Kept (VOLYA_DUMP_DIR): ours
-// `<walk>.wav` and `<walk>.frames.txt`, `<walk>.report.txt`.
+// material, level. Its frames where the player starts and ends
+// (`<walk>-start`, `<walk>-end`) are compared with the capture's as the
+// fidelity suite compares its views (`againstOriginal`): whether both
+// players moved the same way. A report, not a gate. Kept
+// (VOLYA_DUMP_DIR): ours `<walk>.wav` and `<walk>.frames.txt`,
+// `<walk>.report.txt`, the frames, the original's and their heat maps.
 
 import { dumpFile } from "./harness.js";
-import { gameChecks, referenceFile } from "./render-game.js";
+import { againstOriginal, gameChecks, referenceFile } from "./render-game.js";
 
 /** `bytes` as base64, a piece at a time. */
 function base64(bytes) {
@@ -38,4 +42,7 @@ async function kept(walk, files) {
   for (const [name, bytes] of Object.entries(files)) await dumpFile(name, bytes);
 }
 
-export const tests = await gameChecks("audio-fidelity", null, { args, kept });
+export const tests = await gameChecks("audio-fidelity", (frame) => againstOriginal("audio-fidelity", frame), {
+  args,
+  kept,
+});

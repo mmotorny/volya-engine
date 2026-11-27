@@ -25,7 +25,8 @@
  *   volyacapture audio [--audio-device NAME] [--runs N] [--game DIR] [--work DIR]
  *       every walk of the audio-fidelity suite with sound on, its audio
  *       output recorded by loopback (loopback.c) from the default output
- *       device (or the one NAME names); N runs (default 1).
+ *       device (or the one NAME names), and its frames where the player
+ *       starts and ends kept; N runs (default 1).
  *
  * Its plan, plan.txt beside it, comes from tests/fidelity/views.rs
  * (`xtask wincapture plan`): the views, their frames, the configuration
@@ -1423,7 +1424,11 @@ static int holds(const struct segment *g, WORD key) {
  * the frame before the one that reads them is held. Keeps audio\<walk>.wav
  * and audio\<walk>.frames.txt: each frame of play with the recording's
  * samples at which the game was let run to it and at which it was
- * presented (the same performance counter as the packets'). */
+ * presented (the same performance counter as the packets'); and the
+ * frames where the player starts and ends, audio\<walk>-start.png (the
+ * last frame before the keys) and audio\<walk>-end.png (the walk's last),
+ * from their back buffers, HUD included, written once the recording
+ * stops. */
 static int walk_audio(struct run *r, int64_t play, const struct walk *w) {
     /* Frame n of play is the game's frame play + n - 1. */
     int64_t first = play + w->start - 1, from = first - w->preroll, total = walk_frames(w);
@@ -1441,6 +1446,10 @@ static int walk_audio(struct run *r, int64_t play, const struct walk *w) {
     int64_t rows = first + total - from;
     int64_t (*times)[3] = calloc((size_t)rows, sizeof *times);
     const struct segment *held = NULL;
+    /* The start's and the end's frames: their game frames, pixels, sizes. */
+    int64_t viewed[2] = {first - 1, first + total - 1};
+    uint8_t *views[2] = {NULL, NULL};
+    uint32_t view_w[2] = {0, 0}, view_h[2] = {0, 0};
     int ok = 1;
     for (int64_t g = from; ok && g < first + total; g++) {
         const struct segment *want = segment_at(w, g - first);
@@ -1465,8 +1474,14 @@ static int walk_audio(struct run *r, int64_t play, const struct walk *w) {
             Sleep(INPUT_SETTLE_MS);
         }
         int64_t released = loopback_now();
-        ok = advance(r, g, 0);
+        int view = g == viewed[0] ? 0 : g == viewed[1] ? 1 : -1;
+        ok = advance(r, g, view >= 0);
         int64_t presented = loopback_now();
+        if (ok && view >= 0) {
+            views[view] = look_rgb(r);
+            view_w[view] = r->w;
+            view_h[view] = r->h;
+        }
         times[g - from][0] = g - play + 1;
         times[g - from][1] = released;
         times[g - from][2] = presented;
@@ -1476,6 +1491,14 @@ static int walk_audio(struct run *r, int64_t play, const struct walk *w) {
     }
     loopback_stop(r->loopback);
     loopback_report(r->loopback, say);
+    for (int i = 0; i < 2; i++) {
+        char view_name[160];
+        snprintf(view_name, sizeof view_name, "audio\\%s-%s.png", w->name, i ? "end" : "start");
+        if (ok && views[i]) {
+            ok = keep(r, view_name, view_w[i], view_h[i], views[i]);
+        }
+        free(views[i]);
+    }
     if (!ok) {
         free(times);
         return 0;

@@ -92,11 +92,13 @@ const R: &[WalkKey] = &[WalkKey::TurnRight];
 pub const WALKS: &[Walk] = &[Walk {
     // Planned on our collision world (the tap routes' planner) and checked
     // by our movement to leave the bunker: turned at π rad/s (0.126 rad a
-    // frame), run at the default run (section 4.1).
+    // frame), run at the default run (section 4.1). It starts after the
+    // loud bursts of the original's frames 728–802 and 859–873 of play
+    // (#864), its preroll too.
     name: "bunker-exit",
     shows: "a New Game's player running out of the trader's bunker from the start: back \
             along the room, up the stairs, around the landing and out",
-    start: 750,
+    start: 900,
     segments: &[
         seg(L, 23),
         seg(W, 66),
