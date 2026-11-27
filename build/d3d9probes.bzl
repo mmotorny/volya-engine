@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The Direct3D 9 probes (tests/d3d9probes/, docs/testing.md) as actions:
-built with MinGW in the Wine image and run under Wine there. The container
-actions take the Wine image's Containerfile and box64's source as inputs,
-which tag the image (wine.rs), so a changed image builds and runs them
-again."""
+built with MinGW in the Wine image, run under Wine there, and packed into
+the Windows runner zip. The container actions take the Wine image's
+Containerfile and box64's source as inputs, which tag the image (wine.rs),
+so a changed image builds and runs them again."""
 
 load("@local_tools//:defs.bzl", "HOME")
 
@@ -76,4 +76,26 @@ d3d9probes_wine = rule(
         "exe": attr.label(mandatory = True, allow_single_file = [".exe"]),
         "_tool": _TOOL,
     }),
+)
+
+def _zip_impl(ctx):
+    out = ctx.actions.declare_file(ctx.attr.out)
+    ctx.actions.run(
+        executable = ctx.executable._tool,
+        arguments = ["zip", out.path] + [f.path for f in ctx.files.srcs],
+        inputs = ctx.files.srcs,
+        outputs = [out],
+        mnemonic = "D3d9ProbesZip",
+        progress_message = "Packing the D3D9 probes' runner: %{label}",
+    )
+    return [DefaultInfo(files = depset([out]))]
+
+d3d9probes_zip = rule(
+    implementation = _zip_impl,
+    doc = "The files, by their names, in one zip.",
+    attrs = {
+        "out": attr.string(mandatory = True),
+        "srcs": attr.label_list(allow_files = True, mandatory = True),
+        "_tool": _TOOL,
+    },
 )

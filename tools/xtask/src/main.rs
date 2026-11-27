@@ -5,6 +5,8 @@
 
 mod bazel;
 mod common;
+#[allow(dead_code)] // Its actions are d3d9probes-action's.
+mod d3d9probes;
 mod deploy;
 mod e2e;
 mod machine;
@@ -52,6 +54,9 @@ Tasks:
               Run EXE with Wine in that image, DIR mounted as its working
               directory; passes on its exit code.
   wine check  Build and run a Direct3D 9 smoke test there.
+  d3d9probes release
+              Build the Direct3D 9 probes' Windows runner zip and publish it
+              as a GitHub release tagged by its hash, unless it exists.
   original [--new-game] [--quit] [SECONDS]
               Run the original game under Wine for SECONDS (default 300),
               capturing its display to PNGs in the local cache.
@@ -91,6 +96,8 @@ fn main() -> ExitCode {
             Err(error) => Err(error),
         },
         ["original", rest @ ..] => original::main(rest),
+        ["d3d9probes", "release"] => bazel::build_output(&root(), d3d9probes::RUNNER)
+            .and_then(|zip| d3d9probes::release(&zip)),
         [wine::REAPER, container, stop_service, stop_builder] => {
             wine::reap(container, stop_service, stop_builder)
         }

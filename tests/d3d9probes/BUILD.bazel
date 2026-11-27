@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 load("//build:checks.bzl", "volya_checks")
-load("//build:d3d9probes.bzl", "d3d9probes_exe", "d3d9probes_wine")
+load("//build:d3d9probes.bzl", "d3d9probes_exe", "d3d9probes_wine", "d3d9probes_zip")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -23,6 +23,18 @@ d3d9probes_exe(
 d3d9probes_wine(
     name = "wine",
     exe = ":exe",
+    tags = ["manual"],
+)
+
+# The Windows runner, d3d9probes.exe and README.txt (docs/testing.md;
+# `bazel run //tools/xtask -- d3d9probes release` publishes it).
+d3d9probes_zip(
+    name = "runner",
+    srcs = [
+        "README.txt",
+        ":exe",
+    ],
+    out = "d3d9probes.zip",
     tags = ["manual"],
 )
 
