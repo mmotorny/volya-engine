@@ -409,14 +409,22 @@ void quad(float x0, float y0, float x1, float y1, float u0, float v0, float u1, 
     draw(D3DPT_TRIANGLELIST, 2, v, 6);
 }
 
-/* results/info.txt: the capabilities the probes touch; nothing that names
- * the machine (the adapter, its driver or ids), as it is committed. */
+/* results/info.txt: the adapter and the capabilities the probes touch. */
 static void write_info(void) {
     FILE *f = fopen("results/info.txt", "w");
     if (!f) {
         failed("writing info.txt", 0);
         return;
     }
+    D3DADAPTER_IDENTIFIER9 id;
+    IDirect3D9_GetAdapterIdentifier(d3d, 0, 0, &id);
+    fprintf(f, "adapter: %s\n", id.Description);
+    fprintf(f, "driver: %s %u.%u.%u.%u\n", id.Driver, (unsigned)HIWORD(id.DriverVersion.HighPart),
+            (unsigned)LOWORD(id.DriverVersion.HighPart), (unsigned)HIWORD(id.DriverVersion.LowPart),
+            (unsigned)LOWORD(id.DriverVersion.LowPart));
+    fprintf(f, "vendor: 0x%04lx\ndevice: 0x%04lx\nsubsystem: 0x%08lx\nrevision: 0x%lx\n",
+            (unsigned long)id.VendorId, (unsigned long)id.DeviceId, (unsigned long)id.SubSysId,
+            (unsigned long)id.Revision);
     D3DCAPS9 caps;
     IDirect3DDevice9_GetDeviceCaps(device, &caps);
     fprintf(f, "Caps2: 0x%08lx (FULLSCREENGAMMA %d, CANCALIBRATEGAMMA %d)\n", (unsigned long)caps.Caps2,

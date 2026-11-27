@@ -39,7 +39,7 @@ def _references_impl(ctx):
     names = []
     pairs = []
     for f in ctx.files.hardware:
-        # tests/d3d9probes/hardware/<pc>/results/<path>
+        # tests/d3d9probes/hardware/<gpu>/results/<path>
         rest = f.path.split("/hardware/", 1)[1]
         gpu, _, path = rest.partition("/results/")
         if gpu not in names:
@@ -57,10 +57,10 @@ def _references_impl(ctx):
 
 d3d9probes_references = rule(
     implementation = _references_impl,
-    doc = "What the `d3d9probes` suite compares with: `<name>/d3d9probes/<pc>/` " +
+    doc = "What the `d3d9probes` suite compares with: `<name>/d3d9probes/<gpu>/` " +
           "(a results folder) for each GPU, and `references.json` naming them.",
     attrs = {
-        "hardware": attr.label_list(allow_files = True, doc = "`hardware/<pc>/results/**`."),
+        "hardware": attr.label_list(allow_files = True, doc = "`hardware/<gpu>/results/**`."),
         "_tool": _TOOL,
     },
 )

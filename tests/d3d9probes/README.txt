@@ -12,7 +12,7 @@ opens a small window for its device and closes it when done, in seconds).
 It writes results\ beside itself:
 
   results\<probe>\<case>.png  each case's frame (RGBA)
-  results\info.txt            the capabilities the probes touch
+  results\info.txt            the adapter and its capabilities
   results\scenes.bin          every case's states, textures and vertices
 
 It prints one line per failed Direct3D call and exits with 1 if any failed,

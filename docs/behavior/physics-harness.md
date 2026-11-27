@@ -214,7 +214,7 @@ conversion; **believed** for the angular velocity update. Only scenarios that re
 
 ## 9. Provenance
 
-- Date: 2026-11-27. A Windows PC; S.T.A.L.K.E.R.: Shadow of Chernobyl (GOG), its
+- Date: 2026-11-27. Windows PC with an AMD Ryzen 9 5950X; S.T.A.L.K.E.R.: Shadow of Chernobyl (GOG), its
   `bin\ode.dll` (196,608 bytes) loaded unmodified by the harness, with the run time the library loads.
 - Harness: release `odeharness-bb67eb79aa9a` (zip SHA-256 checked), run as its README and `docs/testing.md`
   say; exit code 0; compared with `odeharness.exe compare ours results`; rerun once with the same results.
