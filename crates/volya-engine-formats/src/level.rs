@@ -343,11 +343,25 @@ impl Level {
     fn draw_item(&self, index: u32, v: &Visual, geom: &GeomLayout) -> io::Result<DrawItem> {
         let what = |m: &str| invalid(format!("visual {index}: {m}"));
         let g = v.geometry.ok_or_else(|| what("no geometry"))?;
+        let mut span = None;
         let (offset, triangles, vertices) = if v.header.kind.is_progressive() {
-            let level0 = v
+            let windows = v
                 .detail_levels(&geom.progressive_meshes)
-                .and_then(|w| w.steps.first())
+                .filter(|w| !w.steps.is_empty())
                 .ok_or_else(|| what("no detail levels"))?;
+            let ends = windows.steps.iter().map(|s| {
+                let start = u64::from(s.index_offset);
+                (start, start + 3 * u64::from(s.triangle_count))
+            });
+            let start = ends.clone().map(|e| e.0).min().unwrap_or(0);
+            let end = ends.map(|e| e.1).max().unwrap_or(0);
+            // Every window lies inside the visual's own range (ogf.md
+            // section 6).
+            if end > u64::from(g.index_count) {
+                return Err(what("detail level outside the visual's range"));
+            }
+            span = Some((start as u32, (end - start) as u32));
+            let level0 = windows.steps[0];
             (
                 level0.index_offset,
                 u32::from(level0.triangle_count),
@@ -386,6 +400,26 @@ impl Level {
         if !vertices_fit {
             return Err(what("vertex range outside its buffer"));
         }
+        let detail = match span {
+            Some((start, count)) => {
+                let end = u64::from(g.first_index) + u64::from(start) + u64::from(count);
+                let fits = geom
+                    .index_counts
+                    .get(g.index_buffer as usize)
+                    .is_some_and(|&n| end <= u64::from(n))
+                    && geom.vertex_buffers[g.vertex_buffer as usize].vertex_count
+                        >= g.first_vertex.saturating_add(g.vertex_count);
+                if !fits {
+                    return Err(what("detail levels outside their buffers"));
+                }
+                Some(DetailSpan {
+                    first_index: g.first_index + start,
+                    index_count: count,
+                    vertex_count: g.vertex_count,
+                })
+            }
+            None => None,
+        };
         Ok(DrawItem {
             visual: index,
             kind: v.header.kind,
@@ -398,6 +432,7 @@ impl Level {
             triangle_count: triangles,
             transform: v.tree.map_or(IDENTITY, |t| t.matrix()),
             tree: v.tree,
+            detail,
         })
     }
 }
@@ -418,9 +453,31 @@ fn first_index_beyond(
             by_buffer[d.index_buffer as usize].push(k);
         }
     }
-    let range = |d: &DrawItem| {
+    // A progressive visual's every window, or the item's range.
+    let range = |d: &DrawItem| match d.detail {
+        Some(s) => {
+            let first = u64::from(s.first_index);
+            (first, first + u64::from(s.index_count))
+        }
+        None => {
+            let first = u64::from(d.first_index);
+            (first, first + 3 * u64::from(d.triangle_count))
+        }
+    };
+    // Each range checked with its vertices: the item's own, and a
+    // progressive visual's every window.
+    let checked = |d: &DrawItem| {
         let first = u64::from(d.first_index);
-        (first, first + 3 * u64::from(d.triangle_count))
+        let own = (
+            first,
+            first + 3 * u64::from(d.triangle_count),
+            d.vertex_count,
+        );
+        let span = d.detail.map(|s| {
+            let first = u64::from(s.first_index);
+            (first, first + u64::from(s.index_count), s.vertex_count)
+        });
+        [Some(own), span]
     };
     let per_piece = (piece_bytes / 2).max(1) as u64;
     let mut first = None::<usize>;
@@ -447,15 +504,15 @@ fn first_index_beyond(
                 if first.is_some_and(|f| f < k) {
                     continue;
                 }
-                let d = &items[k];
-                let (a, b) = range(d);
-                let (a, b) = (a.max(at), b.min(at + n));
-                if a < b
-                    && indices[(a - at) as usize..(b - at) as usize]
-                        .iter()
-                        .any(|i| u32::from(u16::from_le_bytes(*i)) >= d.vertex_count)
-                {
-                    first = Some(k);
+                for (a, b, vertices) in checked(&items[k]).into_iter().flatten() {
+                    let (a, b) = (a.max(at), b.min(at + n));
+                    if a < b
+                        && indices[(a - at) as usize..(b - at) as usize]
+                            .iter()
+                            .any(|i| u32::from(u16::from_le_bytes(*i)) >= vertices)
+                    {
+                        first = Some(k);
+                    }
                 }
             }
             at += n;
@@ -492,6 +549,19 @@ pub struct DrawItem {
     pub transform: [[f32; 4]; 4],
     /// The tree instance (per-instance lighting, ogf.md section 5).
     pub tree: Option<TreeInstance>,
+    /// A progressive visual's indices every detail window draws (ogf.md
+    /// sections 6, 8.3); the item's own range is level 0's.
+    pub detail: Option<DetailSpan>,
+}
+
+/// The indices of `level.geom` every detail window of a progressive visual
+/// draws: `index_count` from `first_index`, each below `vertex_count` (the
+/// visual's vertices) from the item's first vertex.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DetailSpan {
+    pub first_index: u32,
+    pub index_count: u32,
+    pub vertex_count: u32,
 }
 
 /// Chunk 2: `u32 count`, then `count` zero-terminated strings filling the
@@ -829,6 +899,16 @@ mod tests {
             ),
             (0, 1, 3)
         );
+        // Every window's indices: from the first's start to the last's end.
+        let span = |first_index, index_count| DetailSpan {
+            first_index,
+            index_count,
+            vertex_count: 3,
+        };
+        assert_eq!(items[0].detail, Some(span(0, 3)));
+        assert_eq!(items[1].detail, None, "a tree");
+        let items = with_mesh(&progressive(vec![step(0, 0, 0), step(0, 1, 3)])).unwrap();
+        assert_eq!(items[0].detail, Some(span(0, 3)));
         // A window past the visual's own range, or using more vertices.
         assert!(with_mesh(&progressive(vec![step(3, 1, 3)])).is_err());
         assert!(with_mesh(&progressive(vec![step(0, 1, 4)])).is_err());

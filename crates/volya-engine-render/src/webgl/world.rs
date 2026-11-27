@@ -546,11 +546,12 @@ struct Inner {
     strict: RefCell<Vec<(usize, WorldDraw)>>,
     /// The draws light passes may draw again.
     lit: Vec<LitDraw>,
-    /// The kept draws' detail windows: each one's first index and index
-    /// count; and each kept draw's (`[first, count]` of them, count 0:
-    /// none).
-    detail: Vec<[u32; 2]>,
+    /// The draws' detail windows, and each kept draw's (`[first, count]`
+    /// of them, count 0: none) and its window last drawn by the camera's
+    /// passes (0 before any).
+    detail: Vec<DetailWindow>,
     detail_of: Vec<[u32; 2]>,
+    last_window: RefCell<Vec<u32>>,
     /// The bounding sphere each kept draw's record holds now.
     spheres: RefCell<Vec<[f32; 4]>>,
     sky: Option<SkyResources>,
@@ -569,27 +570,40 @@ impl Inner {
     /// thresholds `bounds` ([`detail_bounds`]): its detail window
     /// ([`detail_window`]), or its whole range.
     fn drawn_range(&self, k: u32, eye: [f32; 3], bounds: [f32; 2]) -> std::ops::Range<u32> {
-        let [first, count] = self.detail_of[k as usize];
+        let count = self.detail_of[k as usize][1];
+        let sphere = self.spheres.borrow()[k as usize];
         let window = (count > 0)
-            .then(|| {
-                detail_window(
-                    self.spheres.borrow()[k as usize],
-                    eye,
-                    bounds,
-                    count as usize,
-                )
-            })
+            .then(|| detail_window(sphere, eye, bounds, count as usize))
             .flatten();
-        match window {
-            Some(j) => {
-                let [start, n] = self.detail[(first + j as u32) as usize];
-                start..start + n
-            }
-            None => {
-                let d = &self.calls[k as usize];
-                d.first_index..d.first_index + d.index_count
-            }
+        if let Some(j) = window {
+            self.last_window.borrow_mut()[k as usize] = j as u32;
         }
+        self.window_range(k, window)
+    }
+
+    /// The indices of kept draw `k`'s detail window `window`, or its whole
+    /// range (none, or without windows).
+    fn window_range(&self, k: u32, window: Option<usize>) -> std::ops::Range<u32> {
+        let d = &self.calls[k as usize];
+        let [first, count] = self.detail_of[k as usize];
+        match window.filter(|&j| j < count as usize) {
+            Some(j) => {
+                let w = self.detail[first as usize + j];
+                let start = d.first_index + w.offset;
+                start..start + w.index_count
+            }
+            None => d.first_index..d.first_index + d.index_count,
+        }
+    }
+
+    /// The indices kept draw `k` draws in a cell of the projected light
+    /// texture: the detail window it was last drawn with
+    /// (object-projected-light.md 4.3; window 0 before its first draw, our
+    /// choice: unestablished), or its whole range.
+    fn cell_range(&self, k: u32) -> std::ops::Range<u32> {
+        let has = self.detail_of[k as usize][1] > 0;
+        let last = self.last_window.borrow()[k as usize] as usize;
+        self.window_range(k, has.then_some(last))
     }
 
     /// Binds the frame's constants and the records.
@@ -768,7 +782,7 @@ pub struct GeometryUpload {
     ranges: Vec<(bool, u32, u32, u32, u32)>,
     /// Whether it was begun with objects' vertices.
     objects: bool,
-    /// The objects' detail windows ([`ObjectGeometry::windows`]).
+    /// The draws' detail windows ([`ObjectGeometry::windows`]).
     windows: Vec<DetailWindow>,
 }
 
@@ -915,20 +929,22 @@ impl Renderer {
         }
         let object_vertices = (objects.vertices.len() / MODEL_VERTEX_BYTES) as u64;
         for d in draws {
-            let fits = if d.object.is_some() {
-                let [first, count] = d.windows.map(|w| w as usize);
-                u64::from(d.first_index) + u64::from(d.index_count) <= objects.indices.len() as u64
-                    && u64::from(d.first_vertex) < object_vertices.max(1)
-                    && (objects.windows.get(first..first.saturating_add(count))).is_some_and(|w| {
-                        w.iter().all(|w| {
-                            u64::from(w.offset) + u64::from(w.index_count)
-                                <= u64::from(d.index_count)
-                        })
+            let [first, count] = d.windows.map(|w| w as usize);
+            let windows_fit = (objects.windows.get(first..first.saturating_add(count)))
+                .is_some_and(|w| {
+                    w.iter().all(|w| {
+                        u64::from(w.offset) + u64::from(w.index_count) <= u64::from(d.index_count)
                     })
-            } else {
-                (d.vertex_buffer as usize) < layout.vertex_buffers.len()
-                    && (d.index_buffer as usize) < layout.index_counts.len()
-            };
+                });
+            let fits = windows_fit
+                && if d.object.is_some() {
+                    u64::from(d.first_index) + u64::from(d.index_count)
+                        <= objects.indices.len() as u64
+                        && u64::from(d.first_vertex) < object_vertices.max(1)
+                } else {
+                    (d.vertex_buffer as usize) < layout.vertex_buffers.len()
+                        && (d.index_buffer as usize) < layout.index_counts.len()
+                };
             if !fits {
                 return Err(format!("draw {d:?} names a missing buffer"));
             }
@@ -1208,8 +1224,10 @@ impl Renderer {
         // The level draws whose vertices are their own, which draw calls
         // can merge (their records named by the vertices).
         let mut exclusive = vec![false; draws.len()];
+        // A draw with detail windows draws its window of each frame, so its
+        // call merges with no other.
         for o in owned.iter().flatten().flatten() {
-            exclusive[o.2 as usize] = true;
+            exclusive[o.2 as usize] = draws[o.2 as usize].windows[1] == 0;
         }
         let usable_count = kept_of.iter().flatten().count();
         let skipped = draws.len() - usable_count;
@@ -1395,25 +1413,10 @@ impl Renderer {
                 first_vertex: d.first_vertex as i32,
             })
             .collect();
-        // Each kept draw's detail windows, at their indices' places as
-        // uploaded.
-        let mut detail = Vec::new();
+        // Each kept draw's detail windows.
         let detail_of: Vec<[u32; 2]> = (kept.iter().zip(&kept_of))
-            .map(|(d, k)| {
-                let [first, count] = d.windows;
-                if k.is_none() || count == 0 {
-                    return [0, 0];
-                }
-                let at = detail.len() as u32;
-                detail.extend(
-                    windows[first as usize..(first + count) as usize]
-                        .iter()
-                        .map(|w| [d.first_index + w.offset, w.index_count]),
-                );
-                [at, count]
-            })
+            .map(|(d, k)| if k.is_some() { d.windows } else { [0, 0] })
             .collect();
-        drop(windows);
         let (sky, sky_error) = match sky.map(|t| SkyResources::new(&gl, t)) {
             Some(Ok(sky)) => {
                 for t in sky.textures() {
@@ -1452,7 +1455,8 @@ impl Renderer {
             exclusive,
             strict: RefCell::new(strict),
             lit,
-            detail,
+            last_window: RefCell::new(vec![0; detail_of.len()]),
+            detail: windows,
             detail_of,
             spheres: RefCell::new(kept.iter().map(|d| d.sphere).collect()),
             sky,
@@ -1731,7 +1735,8 @@ impl Renderer {
                     emitted(Kind::Light);
                     gl.set_first_instance(p, d.kept);
                     let wide = inner.index_wide[d.index_buffer as usize];
-                    // The camera's window (object-detail-level.md 4).
+                    // The camera's window (object-detail-level.md 4; for a
+                    // static visual our choice, #621).
                     let range = drawn_range(d.kept);
                     gl.draw_elements(C::TRIANGLES, range.start, range.len() as u32, wide, 1);
                 }
@@ -1874,7 +1879,8 @@ impl Renderer {
                 gl.bind_vertex_array(&inner.arrays[inner.arrays_of[k as usize] as usize]);
                 crate::stats::draw();
                 let wide = inner.index_wide[call.index_buffer as usize];
-                gl.draw_elements(C::TRIANGLES, call.first_index, call.index_count, wide, 1);
+                let range = inner.cell_range(k);
+                gl.draw_elements(C::TRIANGLES, range.start, range.len() as u32, wide, 1);
             }
         }
     }

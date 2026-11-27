@@ -4,9 +4,13 @@
 //! Object detail (docs/behavior/object-detail-level.md 1): the first
 //! level seen from above (the draw-calls suite's overview) at
 //! `r__geometry_lod` 1 and at its lowest, 0.1, which raises every size
-//! threshold tenfold. Frame `geometry-lod-0.1`.
+//! threshold tenfold. Frame `geometry-lod-0.1`. Then the cost of drawing
+//! detail windows new to the renderer (ogf.md 8.3, object-detail-level.md
+//! 4): a sweep of the renderer's `r__geometry_lod` draws other windows at
+//! each step, index ranges WebGL implementations may check on their first
+//! use; the same sweep again draws only ranges drawn before.
 
-use super::{Context, Outcome, Run, capture, ensure};
+use super::{Context, Outcome, Run, capture, ensure, now_ms};
 use crate::core::camera::Angles;
 use crate::data::GameData;
 use crate::level::LevelScreen;
@@ -53,7 +57,24 @@ async fn geometry_lod(cx: &Context<'_>) -> Outcome {
         .filter(|(a, b)| a[..3] != b[..3])
         .count();
     ensure!(differing > 0, "r__geometry_lod 0.1 changes nothing");
+    screen.set_geometry_lod(1.0, SSA_LOD_A, SSA_LOD_B);
+    screen.set_camera(eye, angles);
+    const STEPS: u32 = 24;
+    let mut sweeps = [0.0; 2];
+    for sweep in &mut sweeps {
+        let start = now_ms();
+        for i in 0..STEPS {
+            let mut scene = screen.scene(SIZE, 0);
+            scene.geometry_lod = 0.15 + 1.05 * i as f32 / (STEPS - 1) as f32;
+            let list = presenter.draw_list(&mut r, tree, &scene, 0);
+            capture(&mut r, &list, SIZE.width, SIZE.height).await?;
+        }
+        *sweep = (now_ms() - start) / f64::from(STEPS);
+    }
+    let [first, again] = sweeps;
     Ok(format!(
-        "r__geometry_lod 0.1 changes {differing} pixels of the overview"
+        "r__geometry_lod 0.1 changes {differing} pixels of the overview; a sweep of \
+         r__geometry_lod 0.15 … 1.2 in {STEPS} frames: {first:.1} ms per frame with readback, \
+         {again:.1} ms again"
     ))
 }

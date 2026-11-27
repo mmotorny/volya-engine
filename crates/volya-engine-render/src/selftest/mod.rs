@@ -115,6 +115,11 @@ const CHECKS: &[(&str, Run)] = &[
     ("objects draw their detail window", |m| {
         Box::pin(world::objects_draw_their_detail_window(m))
     }),
+    ("static progressive visuals draw their detail window", |m| {
+        Box::pin(world::static_progressive_visuals_draw_their_detail_window(
+            m,
+        ))
+    }),
     ("placed draws hide, show and move", |m| {
         Box::pin(world::placed_draws_hide_show_and_move(m))
     }),

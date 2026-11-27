@@ -162,21 +162,46 @@ fn fade_batch(fade: &[crate::render::particles::ParticleVertex]) -> Option<Parti
     })
 }
 
-/// The world's draws of `level`: its static draws, then its objects'.
-fn world_draws(level: &LevelWorld) -> Vec<WorldDraw> {
+/// The objects' geometry of `level`, taken (once), with the static
+/// world's detail windows after the objects' own, and the world's draws:
+/// its static draws, then its objects'.
+fn world_geometry(level: &LevelWorld) -> Result<(ObjectGeometry, Vec<WorldDraw>), String> {
+    let mut objects = level
+        .objects
+        .take_geometry()
+        .ok_or("object geometry already uploaded elsewhere")?;
+    let at = objects.windows.len() as u32;
+    objects.windows.extend_from_slice(&level.detail_windows);
+    Ok((objects, world_draws(level, at)))
+}
+
+/// The world's draws of `level`: its static draws, then its objects'. A
+/// progressive visual draws its detail window of each frame (ogf.md 8.3),
+/// its windows `windows_at` on in the geometry's.
+fn world_draws(level: &LevelWorld, windows_at: u32) -> Vec<WorldDraw> {
     level
         .draw_items
         .iter()
         .zip(&level.draw_surfaces)
         .zip(&level.spheres)
-        .filter_map(|((d, surface), sphere)| {
+        .zip(&level.draw_windows)
+        .filter_map(|(((d, surface), sphere), &[first, count])| {
+            let (first_index, index_count, windows) = match d.detail {
+                Some(span) if count > 0 => (
+                    span.first_index,
+                    span.index_count,
+                    [windows_at + first, count],
+                ),
+                _ => (d.first_index, 3 * d.triangle_count, [0, 0]),
+            };
             Some(WorldDraw {
                 surface: (*surface)?,
                 vertex_buffer: d.vertex_buffer,
                 first_vertex: d.first_vertex,
                 index_buffer: d.index_buffer,
-                first_index: d.first_index,
-                index_count: 3 * d.triangle_count,
+                first_index,
+                index_count,
+                windows,
                 transform: d.transform,
                 sphere: *sphere,
                 tree: d.tree.map(|t| TreeLight {
@@ -184,7 +209,6 @@ fn world_draws(level: &LevelWorld) -> Vec<WorldDraw> {
                     bias: t.bias,
                 }),
                 object: None,
-                windows: [0, 0],
             })
         })
         .chain(level.objects.draws.iter().map(|d| WorldDraw {
@@ -784,11 +808,7 @@ impl Presenter {
             .is_some_and(|p| Arc::ptr_eq(&p.level, level))
         {
             self.prepared = None;
-            let objects = level
-                .objects
-                .take_geometry()
-                .ok_or("object geometry already uploaded elsewhere")?;
-            let draws = world_draws(level);
+            let (objects, draws) = world_geometry(level)?;
             let upload = renderer.begin_geometry(&level.geometry().layout, &objects, &draws)?;
             self.prepared = Some(PreparedWorld {
                 level: level.clone(),
@@ -826,15 +846,10 @@ impl Presenter {
             .filter(|p| std::ptr::eq(Arc::as_ptr(&p.level), level));
         let (objects, draws) = match &prepared {
             Some(p) => (None, p.draws.clone()),
-            None => (
-                Some(
-                    level
-                        .objects
-                        .take_geometry()
-                        .ok_or("object geometry already uploaded elsewhere")?,
-                ),
-                world_draws(level),
-            ),
+            None => {
+                let (objects, draws) = world_geometry(level)?;
+                (Some(objects), draws)
+            }
         };
         // Each texture file once; one that fails is left unbound (reported).
         let mut textures: HashMap<String, Option<Texture>> = HashMap::new();

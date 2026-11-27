@@ -101,8 +101,10 @@ pub fn model_vertex(position: [i16; 3], normal: [u8; 3], uv: [i16; 2]) -> [u8; M
 pub struct ObjectGeometry {
     pub vertices: Vec<u8>,
     pub indices: Vec<u16>,
-    /// The skinned progressive meshes' detail windows, each mesh's most
-    /// detailed first ([`WorldDraw::windows`] names a draw's).
+    /// The draws' detail windows, each mesh's or visual's most detailed
+    /// first ([`WorldDraw::windows`] names a draw's): the objects' skinned
+    /// progressive meshes', and the static world's progressive visuals'
+    /// when the caller adds them.
     pub windows: Vec<DetailWindow>,
 }
 
@@ -338,7 +340,7 @@ pub struct WorldDraw {
     pub tree: Option<TreeLight>,
     /// An object's `L_dynamic_props` (level-objects.md 5.4).
     pub object: Option<[f32; 4]>,
-    /// An object draw's detail windows: `[first, count]` of
+    /// A draw's detail windows: `[first, count]` of
     /// [`ObjectGeometry::windows`], each window within the draw's range;
     /// count 0 draws the range whole.
     pub windows: [u32; 2],

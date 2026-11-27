@@ -726,6 +726,72 @@ pub async fn objects_draw_their_detail_window(make: Make<'_>) -> Outcome {
     Ok(String::new())
 }
 
+/// A static progressive visual of two detail windows (ogf.md 8.3), each a
+/// screen-covering triangle of its own vertex colour: window 0 green,
+/// window 1 red, chosen as for objects (see
+/// [`objects_draw_their_detail_window`]); the visual is drawn alone,
+/// its call merged with no other.
+pub async fn static_progressive_visuals_draw_their_detail_window(make: Make<'_>) -> Outcome {
+    let mut r = make();
+    let white = r.create_rgba_texture(1, 1, &[255; 4]);
+    let mut data = Vec::new();
+    for colour in [[0, 0x7F, 0, 0xFF], [0, 0, 0x7F, 0xFF]] {
+        let mut rest = [0u8; 8];
+        rest[..4].copy_from_slice(&colour);
+        for [x, y] in [[-3.0, -3.0], [-3.0, 9.0], [9.0, -3.0]] {
+            data.extend(vertex([x, y, 1.0], 0, 0, rest));
+        }
+    }
+    let g = LevelGeom {
+        header: None,
+        vertex_buffers: vec![VertexBuffer {
+            elements: Layout::VertexLit.elements(),
+            layout: Some(Layout::VertexLit),
+            stride: 32,
+            vertex_count: 6,
+            data,
+        }],
+        index_buffers: vec![vec![0, 1, 2, 3, 4, 5]],
+        progressive_meshes: Vec::new(),
+    };
+    let objects = ObjectGeometry {
+        windows: vec![
+            crate::world::DetailWindow {
+                offset: 0,
+                index_count: 3,
+            },
+            crate::world::DetailWindow {
+                offset: 3,
+                index_count: 3,
+            },
+        ],
+        ..ObjectGeometry::default()
+    };
+    let surfaces = [surface(Program::VertexLit, Some(white))];
+    let visual = WorldDraw {
+        index_count: 6,
+        windows: [0, 2],
+        ..draw(0, None)
+    };
+    let world = r
+        .create_world_from(&mut g.source(), &objects, &surfaces, &[visual], None)
+        .map_err(fail("world"))?;
+    let (green, red) = ([0, 0xFE, 0], [0xFE, 0, 0]);
+    for (radius, lod, want, what) in [
+        (100.0, 1.0, green, "near: window 0"),
+        (1.0, 1.0, red, "far: the coarsest"),
+        (8.0, 1.2, green, "a higher detail: window 0"),
+    ] {
+        r.place_draw(&world, 0, &IDENTITY, [0.0, 0.0, 1.0, radius]);
+        let mut f = frame(world.clone(), None);
+        f.geometry_lod = lod;
+        expect_near(centre(&mut r, f).await?, want, what)?;
+    }
+    let [merged, single, ..] = r.world_calls_emitted();
+    ensure_eq!((merged, single), (0, 1), "merged and single calls");
+    Ok(String::new())
+}
+
 /// Placing a draw after the world is made: hidden with a radius of 0,
 /// shown again, moved (objects switching online and offline).
 pub async fn placed_draws_hide_show_and_move(make: Make<'_>) -> Outcome {

@@ -69,7 +69,7 @@ use crate::objects::{self, Characters, LevelObjects, ObjectsReport};
 use crate::particle_drawing::{self, ParticleShader};
 use crate::render::billboards::BillboardGroup;
 use crate::render::sky::{SkySection, SkyTextures};
-use crate::render::world::Surface;
+use crate::render::world::{DetailWindow, Surface};
 use crate::scene::{Scene, WorldScene};
 use crate::shading::{self, ShaderLibrary};
 use crate::sky::{self, Flares, SkyCamera, SunFade};
@@ -121,6 +121,12 @@ pub struct LevelWorld {
     pub surfaces: Vec<Surface<String>>,
     /// The bounding sphere (centre, radius) of each draw item's visual.
     pub spheres: Vec<[f32; 4]>,
+    /// The progressive visuals' detail windows, from their
+    /// [`DrawItem::detail`] spans' starts (a `level.geom` record shared by
+    /// tree instances once), and each draw item's (`[first, count]` of
+    /// them; count 0: none).
+    pub detail_windows: Vec<DetailWindow>,
+    pub draw_windows: Vec<[u32; 2]>,
     /// The surface of each draw item; `None` where its entry is not drawn.
     pub draw_surfaces: Vec<Option<u32>>,
     /// Shader entries not drawn, with why.
@@ -159,6 +165,43 @@ pub struct LevelWorld {
     /// The billboard groups' texture sets (ogf.md 7, static-shading.md
     /// 8.4); `None` for a level without billboards drawn.
     pub billboards: Option<BillboardsWorld>,
+}
+
+/// The progressive draw items' detail windows (ogf.md section 6), each
+/// from its [`DrawItem::detail`] span's start, a `level.geom` record once
+/// however many visuals share it; and each item's `[first, count]` of them.
+fn detail_windows(
+    level: &Level,
+    geom: &GeomLayout,
+    items: &[DrawItem],
+) -> (Vec<DetailWindow>, Vec<[u32; 2]>) {
+    let mut windows = Vec::new();
+    let mut records: HashMap<u32, [u32; 2]> = HashMap::new();
+    let of = items
+        .iter()
+        .map(|d| {
+            let v = &level.visuals[d.visual as usize];
+            let (Some(_), Some(w)) = (d.detail, v.detail_levels(&geom.progressive_meshes)) else {
+                return [0, 0];
+            };
+            let mut add = || {
+                let first = windows.len() as u32;
+                // The span starts at the first window's start.
+                let start = w.steps.iter().map(|s| s.index_offset).min().unwrap_or(0);
+                windows.extend(w.steps.iter().map(|s| DetailWindow {
+                    offset: s.index_offset - start,
+                    index_count: 3 * u32::from(s.triangle_count),
+                }));
+                [first, w.steps.len() as u32]
+            };
+            match v.window_record {
+                Some(k) => *records.entry(k).or_insert_with(add),
+                None => add(),
+            }
+        })
+        .collect();
+    windows.shrink_to_fit();
+    (windows, of)
 }
 
 /// What the presenter uploads for the billboards.
@@ -1237,6 +1280,8 @@ pub struct NewGameLoad {
     collision: Option<Arc<CollisionWorld>>,
     draw_items: Vec<DrawItem>,
     spheres: Vec<[f32; 4]>,
+    detail_windows: Vec<DetailWindow>,
+    draw_windows: Vec<[u32; 2]>,
     modifiers: Vec<EnvModifier>,
     movement: Option<MovementConfig>,
     controls: Option<Controls>,
@@ -1605,6 +1650,8 @@ impl NewGameLoad {
                         [c[0], c[1], c[2], h.sphere_radius]
                     })
                     .collect();
+                (self.detail_windows, self.draw_windows) =
+                    detail_windows(level, &geom.layout, &draw_items);
                 self.draw_items = draw_items;
                 // The camera pass keeps the sectors, portals and visual
                 // hierarchy in its own form.
@@ -2100,6 +2147,8 @@ impl NewGameLoad {
                 shaders: level.shaders,
                 draw_items: self.draw_items,
                 spheres: self.spheres,
+                detail_windows: self.detail_windows,
+                draw_windows: self.draw_windows,
                 surfaces: self.surfaces,
                 draw_surfaces: self.draw_surfaces,
                 not_drawn: self.not_drawn,
@@ -3561,6 +3610,8 @@ impl LevelScreen {
                 shaders: Vec::new(),
                 draw_items: Vec::new(),
                 spheres: Vec::new(),
+                detail_windows: Vec::new(),
+                draw_windows: Vec::new(),
                 surfaces: Vec::new(),
                 draw_surfaces: Vec::new(),
                 not_drawn: Vec::new(),

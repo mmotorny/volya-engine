@@ -57,13 +57,13 @@ The offline simulation's registry (6.3 MB, 54,735 blocks), the game graph and pa
 | What the `level` file's stages keep (the shader table; the static draw list and spheres) | 3.4 MB | |
 | The detail objects (slot grid, compact, and cache) | 5.6 MB | 11.9 MB, `l12_stancia` and `l12_stancia_2` |
 | The objects' models, weather, the level's sounds, with the objects' CPU geometry until uploaded (12.3 MB in 2 blocks: every detail window's indices, object-detail-level.md 4) | 13.9 MB, 6,744 blocks | |
-| The load in all at its end, the session included | 71.2 MB, 111,981 blocks above the program's data | `l11_pripyat` about 70 MB (believed: `l01_escape`'s with its own collision, details and navigation file) |
+| The load in all at its end, the session included | 71.7 MB, 111,983 blocks above the program's data | `l11_pripyat` about 70 MB (believed: `l01_escape`'s with its own collision, details and navigation file) |
 
 Measured natively. After the level is dropped, 29.4 MB in 7 blocks outlive it: the collision world's arrays, kept as spares for the next world (#357).
 
 ### Loading transients
 
-Each stage's peak above its start and what it keeps, measured natively (MB): `st_server_connecting` 15.6 and 15.6 (the spawn file and the graph streamed, #403); `st_opening_stream` 12.6 and 7.9 (the `level` file read whole; 12.9 for `l11_pripyat`); `st_loading_cform` 30.3 and 30.1; `st_loading_spatial_db` 5.4, freeing 4.5; `st_loading_details` 5.6 and 5.6; `st_client_spawning` 19.7 and 13.9; `st_loading_textures` 2.4 and 0.3. The load peaks 76.7 MB above its start against 71.2 kept. By count the transients are the many: `st_client_spawning` makes 2.52 million allocations to keep 6,744 blocks, `st_server_connecting` 537,041 to keep 83,764.
+Each stage's peak above its start and what it keeps, measured natively (MB): `st_server_connecting` 15.6 and 15.6 (the spawn file and the graph streamed, #403); `st_opening_stream` 12.6 and 7.9 (the `level` file read whole; 12.9 for `l11_pripyat`); `st_loading_cform` 30.3 and 30.1; `st_loading_spatial_db` 6.2, freeing 1.9 (it keeps the progressive visuals' detail windows, 0.7); `st_loading_details` 5.6 and 5.6; `st_client_spawning` 19.7 and 13.9; `st_loading_textures` 2.4 and 0.3. The load peaks 77.5 MB above its start against 71.7 kept. By count the transients are the many: `st_client_spawning` makes 2.52 million allocations to keep 6,744 blocks, `st_server_connecting` 537,041 to keep 83,764.
 
 In the browser the level's preparation adds the texture read buffer (one file, up to 4.5 MB) and the band being transcoded (without BC); WebGL copies what is written at each call (docs/architecture/rendering.md).
 
@@ -78,7 +78,7 @@ On an iPhone the heap grew while a level ran (74.9 → 78 MiB about 110 s into t
 | Owner | `l01_escape` | The largest level |
 |---|---|---|
 | The level's textures, as stored (BC) | 127 MiB (the objects' 22.5 MiB of it; 458 textures) | Its surfaces' alone: 91.2 MB `l07_military`, 83.3 for `l01_escape` |
-| The level's buffers (geometry, the objects', draw records) | 66.0 MiB (the objects' 19.2, every detail window's indices among them) | `level.geom` 109.7 MB `l12_stancia_2` against 57.0 |
+| The level's buffers (geometry, the objects', draw records) | 78.7 MiB (the objects' 19.2; every detail window's indices among them, the static world's 12.7) | `level.geom` 109.7 MB `l12_stancia_2` against 57.0 |
 | The level in all (`gpu_level`) | 462 textures, 143 MiB; 60 buffers, 61 MiB; 48 vertex arrays (before the detail windows' indices) | |
 | The video mode's targets (`targets`): the frame, the offscreen frame, the supersampled target with its distortion and depth, the world's depth | 5 textures: 19 MiB at 1024 × 768, 22 at 1280 × 720, 37 at 1448 × 1086, 52 at 2868 × 1320; 19 again at 1024 × 768 after a game at 2868 × 1320 | |
 | The renderer's own (`renderer`, `particles`, `lights`) | 7 textures, 2 MiB; 9 buffers, 2 MiB (the particles' 2 MiB of it) | |
