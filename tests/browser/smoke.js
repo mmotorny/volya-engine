@@ -651,12 +651,15 @@ export const tests = {
         let ok = false;
         for (let i = 0; i < 100 && !ok; i++) {
           await new Promise((r) => setTimeout(r, 20));
+          // The frame's document exists before its parser has added the
+          // root element (HTML, creating a document; #597): no root yet is
+          // not ready yet.
           const doc = frame.contentDocument;
           // The level's states show the touch controls (or the full screen
           // offer) instead of a screen.
           const overlay = state.level?.offer ? "fullscreen-offer" : "touch-controls";
           const shown = state.level ? doc?.getElementById(overlay)?.hidden === false : doc?.getElementById("game")?.children.length > 0;
-          ok = doc?.documentElement.dataset.ready === "true" && (shown || state.startError);
+          ok = doc?.documentElement?.dataset.ready === "true" && (shown || state.startError);
         }
         if (!ok) failed.push(`${device.id}/${state.id}`);
         // The sprint lock target, where shown, is on the screen and clear
