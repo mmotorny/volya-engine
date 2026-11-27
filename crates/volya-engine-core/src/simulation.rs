@@ -21,6 +21,7 @@ pub mod graph;
 pub mod navigation;
 mod travel;
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::ops::{ControlFlow, Range};
@@ -32,7 +33,7 @@ use navigation::Navigation;
 pub use travel::{Target, Travel};
 use volya_engine_formats::game_graph::TerrainMask;
 use volya_engine_formats::ltx;
-use volya_engine_formats::object::{FLAG_PLAYER, Kind, ObjectRecord};
+use volya_engine_formats::object::{FLAG_PLAYER, Kind, ObjectRecord, Strings};
 use volya_engine_formats::patrol_path::PatrolPaths;
 use volya_engine_formats::spawn;
 
@@ -439,10 +440,12 @@ impl Simulation {
         supplies: &mut dyn FnMut(&ObjectRecord, u16) -> io::Result<u16>,
     ) -> io::Result<()> {
         let mut next = self.next_id;
+        // The records' texts, each distinct one held once (#787).
+        let strings = RefCell::new(Strings::new());
         spawn::for_each_record_in(spawn_file, |r| {
             let section = volya_engine_formats::object::section(r.spawn)?;
             let class = class_of(system, &section)?;
-            let mut record = ObjectRecord::parse(r.spawn, r.update, class, true)?;
+            let mut record = ObjectRecord::parse_sharing(r.spawn, r.update, class, true, &strings)?;
             let actor = is_actor(&record);
             let id = if actor { ACTOR_ID } else { take(&mut next, 1)? };
             record.header.id = id;

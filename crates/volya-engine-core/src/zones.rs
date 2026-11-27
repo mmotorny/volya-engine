@@ -345,7 +345,7 @@ impl ZoneRecord {
             .unwrap_or(false);
         Some(Self {
             id,
-            name: h.name.clone(),
+            name: h.name.to_string(),
             class_id: record.class_id.as_str().to_owned(),
             position: h.position,
             angles: h.angles,

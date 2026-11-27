@@ -951,7 +951,7 @@ pub fn new_game_character(
         .unwrap_or_else(|| SpecificCharacter {
             // Our choice: a profile without a description supplies nothing
             // and fills nothing.
-            id: p.trader.specific_character.clone(),
+            id: p.trader.specific_character.to_string(),
             rank: character::NOT_SET,
             reputation: character::NOT_SET,
             ..SpecificCharacter::default()
@@ -1548,12 +1548,12 @@ fn zone_objects<'a>(
         let Some(record) = ZoneRecord::of(o.id, &o.record) else {
             continue;
         };
-        let name = &o.record.header.section;
+        let name = o.record.header.section.as_str();
         if !sections.contains_key(name) {
             let section = system
                 .section(name)
                 .ok_or_else(|| invalid(format!("no section [{name}]")))?;
-            sections.insert(name.clone(), ZoneSection::read(section, behaviour)?);
+            sections.insert(name.to_string(), ZoneSection::read(section, behaviour)?);
         }
         out.push((o, record));
     }
@@ -1572,12 +1572,12 @@ fn artefact_section<'a>(
     let Some(behaviour) = ArtefactBehaviour::of(record.class_id.as_str()) else {
         return Ok(None);
     };
-    let name = &record.header.section;
+    let name = record.header.section.as_str();
     if !sections.contains_key(name) {
         let section = system
             .section(name)
             .ok_or_else(|| invalid(format!("no section [{name}]")))?;
-        sections.insert(name.clone(), ArtefactSection::read(section, behaviour)?);
+        sections.insert(name.to_string(), ArtefactSection::read(section, behaviour)?);
     }
     Ok(sections.get(name))
 }
@@ -1601,7 +1601,7 @@ fn artefact_record(
     });
     ArtefactRecord {
         id,
-        name: h.name.clone(),
+        name: h.name.to_string(),
         transform: model_math::transform(h.position, h.angles),
         parent: h.parent_id != crate::core::simulation::NO_ID,
         bone,
@@ -1778,7 +1778,7 @@ impl NewGameLoad {
                 self.player_visual = sim
                     .object(character.owner.id)
                     .and_then(|o| o.record.object.visual())
-                    .map(|v| v.model.clone());
+                    .map(|v| v.model.to_string());
                 self.character = Some(character);
                 self.simulation = Some(sim);
                 self.clock = Some(clock);
@@ -2043,9 +2043,9 @@ impl NewGameLoad {
                     zone_objects(&self.level_objects, &data.system, &mut self.zone_sections)?
                 {
                     self.zone_record_sections
-                        .push(o.record.header.section.clone());
+                        .push(o.record.header.section.to_string());
                     if o.online {
-                        let section = self.zone_sections[&o.record.header.section].clone();
+                        let section = self.zone_sections[o.record.header.section.as_str()].clone();
                         self.zones
                             .create(&record, section, effects.clock(), effects)
                             .map_err(invalid)?;
@@ -3231,7 +3231,7 @@ impl LevelScreen {
                     continue;
                 };
                 let (Some(section), Some(record)) = (
-                    self.zone_sections.get(&o.record.header.section),
+                    self.zone_sections.get(o.record.header.section.as_str()),
                     ZoneRecord::of(id, &o.record),
                 ) else {
                     continue;
@@ -3256,7 +3256,8 @@ impl LevelScreen {
                 let Some(o) = sim.object(id).filter(|_| !self.artefacts.contains(id)) else {
                     continue;
                 };
-                let Some(section) = self.artefact_sections.get(&o.record.header.section) else {
+                let Some(section) = self.artefact_sections.get(o.record.header.section.as_str())
+                else {
                     continue;
                 };
                 if ArtefactBehaviour::of(o.record.class_id.as_str()).is_none() {

@@ -6,8 +6,8 @@
 
 use std::io;
 
-use super::Context;
 use super::blocks::*;
+use super::{Context, Text};
 use crate::packet::{Reader, Writer, invalid};
 
 /// Scripted additions of `AI_STL_S` and `SM_*` (section 7.5). Each field is
@@ -26,7 +26,7 @@ pub struct CharacterScript {
 pub struct JobOnline {
     pub mode: u8,
     /// Present iff `mode` is 3.
-    pub condition_list: Option<String>,
+    pub condition_list: Option<Text>,
 }
 
 /// Job-online mode followed by a condition list.
@@ -56,7 +56,7 @@ impl CharacterScript {
         let job_online = if job {
             let mode = r.u8()?;
             let condition_list = if mode == JOB_ONLINE_CONDITION_LIST {
-                Some(r.string()?)
+                Some(r.text()?)
             } else {
                 None
             };
@@ -356,7 +356,7 @@ pub struct Stalker {
     /// `AI_STL_S` only.
     pub script: Option<CharacterScript>,
     pub update: MonsterLikeUpdate,
-    pub start_dialog: String,
+    pub start_dialog: Text,
 }
 
 impl Stalker {
@@ -373,7 +373,7 @@ impl Stalker {
                 None
             },
             update: MonsterLikeUpdate::read(u)?,
-            start_dialog: u.string()?,
+            start_dialog: u.text()?,
         })
     }
 
@@ -452,10 +452,10 @@ pub struct Vehicle {
 pub struct Helicopter {
     pub object: ObjectBlock,
     pub visual: Visual,
-    pub motion: String,
+    pub motion: Text,
     pub skeleton: Skeleton,
-    pub startup_animation: String,
-    pub engine_sound: String,
+    pub startup_animation: Text,
+    pub engine_sound: Text,
 }
 
 /// Item (scopes, medkits, artefacts, …).
@@ -479,8 +479,8 @@ pub struct Torch {
 pub struct Pda {
     pub item: Item,
     pub original_owner_id: u16,
-    pub specific_character: String,
-    pub info_portion: String,
+    pub specific_character: Text,
+    pub info_portion: Text,
     pub update: ItemUpdate,
 }
 
@@ -488,7 +488,7 @@ pub struct Pda {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Document {
     pub item: Item,
-    pub info_portion: String,
+    pub info_portion: Text,
     pub update: ItemUpdate,
 }
 
@@ -557,8 +557,8 @@ pub struct AnomalyObject {
 pub struct VisualAnomaly {
     pub anomaly: Anomaly,
     pub visual: Visual,
-    pub idle_animation: String,
-    pub attack_animation: String,
+    pub idle_animation: Text,
+    pub attack_animation: Text,
     /// `ZS_BFUZZ` in single-player games.
     pub script: Option<ArtefactSpawnScript>,
 }
@@ -567,7 +567,7 @@ pub struct VisualAnomaly {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TorridZone {
     pub zone: Zone,
-    pub motion: String,
+    pub motion: Text,
 }
 
 /// Level changer (`LVL_CHNG`).
@@ -580,8 +580,8 @@ pub struct LevelChanger {
     pub destination_level_node: u32,
     pub destination_position: [f32; 3],
     pub destination_direction: [f32; 3],
-    pub destination_level: String,
-    pub destination_graph_point: String,
+    pub destination_level: Text,
+    pub destination_graph_point: Text,
     pub silent: bool,
 }
 
@@ -698,22 +698,22 @@ pub struct HangingLamp {
     pub skeleton: Skeleton,
     pub colour: u32,
     pub brightness: f32,
-    pub colour_animator: String,
+    pub colour_animator: Text,
     pub range: f32,
     pub light_flags: u16,
-    pub startup_animation: String,
-    pub fixed_bones: String,
+    pub startup_animation: Text,
+    pub fixed_bones: Text,
     pub health: f32,
     pub virtual_size: f32,
     pub ambient_radius: f32,
     pub ambient_power: f32,
-    pub ambient_texture: String,
-    pub light_texture: String,
-    pub light_bone: String,
+    pub ambient_texture: Text,
+    pub light_texture: Text,
+    pub light_bone: Text,
     pub spot_cone_angle: f32,
-    pub glow_texture: String,
+    pub glow_texture: Text,
     pub glow_radius: f32,
-    pub ambient_light_bone: String,
+    pub ambient_light_bone: Text,
 }
 
 /// Physics object (`O_PHYSIC`, `P_DSTRBL`, `O_PHYS_S`).
@@ -724,7 +724,7 @@ pub struct PhysicsObject {
     pub skeleton: Skeleton,
     pub physics_type: u32,
     pub mass: f32,
-    pub fixed_bones: String,
+    pub fixed_bones: Text,
 }
 
 /// Breakable (`O_BRKBL`).
@@ -853,10 +853,10 @@ impl Object {
             Kind::Helicopter => Self::Helicopter(Box::new(Helicopter {
                 object: ObjectBlock::read(s)?,
                 visual: Visual::read(s)?,
-                motion: s.string()?,
+                motion: s.text()?,
                 skeleton: Skeleton::read(s)?,
-                startup_animation: s.string()?,
-                engine_sound: s.string()?,
+                startup_animation: s.text()?,
+                engine_sound: s.text()?,
             })),
             Kind::Item => Self::Item(PlainItem {
                 item: Item::read(s)?,
@@ -870,13 +870,13 @@ impl Object {
             Kind::Pda => Self::Pda(Box::new(Pda {
                 item: Item::read(s)?,
                 original_owner_id: s.u16()?,
-                specific_character: s.string()?,
-                info_portion: s.string()?,
+                specific_character: s.text()?,
+                info_portion: s.text()?,
                 update: ItemUpdate::read(u)?,
             })),
             Kind::Document => Self::Document(Document {
                 item: Item::read(s)?,
-                info_portion: s.string()?,
+                info_portion: s.text()?,
                 update: ItemUpdate::read(u)?,
             }),
             Kind::Outfit => Self::Outfit(Outfit {
@@ -924,13 +924,13 @@ impl Object {
             Kind::VisualAnomaly => Self::VisualAnomaly(Box::new(VisualAnomaly {
                 anomaly: Anomaly::read(s)?,
                 visual: Visual::read(s)?,
-                idle_animation: s.string()?,
-                attack_animation: s.string()?,
+                idle_animation: s.text()?,
+                attack_animation: s.text()?,
                 script: artefact_spawn(s, cx)?,
             })),
             Kind::TorridZone => Self::TorridZone(TorridZone {
                 zone: Zone::read(s)?,
-                motion: s.string()?,
+                motion: s.text()?,
             }),
             Kind::LevelChanger => Self::LevelChanger(LevelChanger {
                 object: ObjectBlock::read(s)?,
@@ -940,8 +940,8 @@ impl Object {
                 destination_level_node: s.u32()?,
                 destination_position: s.float3()?,
                 destination_direction: s.float3()?,
-                destination_level: s.string()?,
-                destination_graph_point: s.string()?,
+                destination_level: s.text()?,
+                destination_graph_point: s.text()?,
                 silent: s.bool8()?,
             }),
             Kind::Restrictor => Self::Restrictor(Restrictor::read(s)?),
@@ -978,22 +978,22 @@ impl Object {
                 skeleton: Skeleton::read(s)?,
                 colour: s.u32()?,
                 brightness: s.float()?,
-                colour_animator: s.string()?,
+                colour_animator: s.text()?,
                 range: s.float()?,
                 light_flags: s.u16()?,
-                startup_animation: s.string()?,
-                fixed_bones: s.string()?,
+                startup_animation: s.text()?,
+                fixed_bones: s.text()?,
                 health: s.float()?,
                 virtual_size: s.float()?,
                 ambient_radius: s.float()?,
                 ambient_power: s.float()?,
-                ambient_texture: s.string()?,
-                light_texture: s.string()?,
-                light_bone: s.string()?,
+                ambient_texture: s.text()?,
+                light_texture: s.text()?,
+                light_bone: s.text()?,
                 spot_cone_angle: s.float()?,
-                glow_texture: s.string()?,
+                glow_texture: s.text()?,
                 glow_radius: s.float()?,
-                ambient_light_bone: s.string()?,
+                ambient_light_bone: s.text()?,
             })),
             Kind::PhysicsObject => Self::PhysicsObject(PhysicsObject {
                 object: ObjectBlock::read(s)?,
@@ -1001,7 +1001,7 @@ impl Object {
                 skeleton: Skeleton::read(s)?,
                 physics_type: s.u32()?,
                 mass: s.float()?,
-                fixed_bones: s.string()?,
+                fixed_bones: s.text()?,
             }),
             Kind::Breakable => Self::Breakable(Breakable {
                 object: ObjectBlock::read(s)?,

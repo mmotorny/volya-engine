@@ -104,9 +104,9 @@ pub fn visual_name(
     if let Object::Trader(t) = &record.object
         && let Some(v) = character_visual(&t.trader)?
     {
-        name = v;
+        name = v.into();
     }
-    Ok((!name.is_empty()).then_some(name))
+    Ok((!name.is_empty()).then_some(name.to_string()))
 }
 
 /// A visual name without its extension, lower-cased (section 3.2).
@@ -192,13 +192,13 @@ impl<'a> Characters<'a> {
             match self
                 .profiles
                 .as_ref()
-                .and_then(|p| p.get(&trader.character_profile))
+                .and_then(|p| p.get(trader.character_profile.as_str()))
             {
                 Some(id) => id.clone(),
                 None => return Ok(None),
             }
         } else {
-            trader.specific_character.clone()
+            trader.specific_character.to_string()
         };
         if self.descriptions.is_none() {
             let files = self
@@ -918,7 +918,7 @@ impl Instance {
             id: object.id,
             index: object.index,
             online: object.online,
-            name: h.name.clone(),
+            name: h.name.to_string(),
             class_id: object.record.class_id.as_str().to_owned(),
             kind: object.record.kind(),
             visual,
@@ -1040,8 +1040,8 @@ pub fn lamp_lights(
         colour: rgb.map(|v| v * lamp.brightness),
         range: lamp.range,
         cone: lamp.spot_cone_angle,
-        texture: lamp.light_texture.clone(),
-        colour_animator: lamp.colour_animator.clone(),
+        texture: lamp.light_texture.to_string(),
+        colour_animator: lamp.colour_animator.to_string(),
         position: row(&main_m, 3),
         direction: row(&main_m, 2),
         right: row(&main_m, 0),
@@ -1058,7 +1058,7 @@ pub fn lamp_lights(
             colour: main.colour.map(|v| v * lamp.ambient_power),
             range: lamp.ambient_radius,
             cone: 0.0,
-            texture: lamp.ambient_texture.clone(),
+            texture: lamp.ambient_texture.to_string(),
             colour_animator: String::new(),
             position: row(&m, 3),
             direction: row(&m, 2),
@@ -1066,7 +1066,7 @@ pub fn lamp_lights(
         }
     });
     let glow = (!lamp.glow_texture.is_empty()).then(|| Glow {
-        texture: lamp.glow_texture.clone(),
+        texture: lamp.glow_texture.to_string(),
         radius: lamp.glow_radius,
         position: main.position,
     });
@@ -1551,16 +1551,16 @@ mod tests {
                 direct_control: 1,
                 level_graph_node: 0,
                 state_flags: 3,
-                custom_data: String::new(),
+                custom_data: String::new().into(),
                 story_id: -1,
                 spawn_story_id: -1,
             },
             visual: Visual {
-                model: String::new(),
+                model: String::new().into(),
                 flags: 0,
             },
             skeleton: Skeleton {
-                startup_animation: String::new(),
+                startup_animation: String::new().into(),
                 flags: 0,
                 source_id: 0xFFFF,
                 bone_state: None,
@@ -1570,19 +1570,19 @@ mod tests {
             colour_animator: "light 40 hz".into(),
             range: 2.0,
             light_flags: 0xB57C,
-            startup_animation: String::new(),
-            fixed_bones: String::new(),
+            startup_animation: String::new().into(),
+            fixed_bones: String::new().into(),
             health: 100.0,
             virtual_size: 0.1,
             ambient_radius: 3.0,
             ambient_power: 0.5,
             ambient_texture: "lights\\x".into(),
-            light_texture: String::new(),
+            light_texture: String::new().into(),
             light_bone: "bone_lamp".into(),
             spot_cone_angle: 2.0,
             glow_texture: "glow\\glow_orange".into(),
             glow_radius: 0.3,
-            ambient_light_bone: String::new(),
+            ambient_light_bone: String::new().into(),
         };
         let x = transform([1.0, 2.0, 3.0], [0.0; 3]);
         let mut bone = transform([0.0, 0.5, 0.0], [0.0; 3]);

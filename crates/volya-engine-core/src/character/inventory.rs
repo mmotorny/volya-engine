@@ -579,12 +579,12 @@ impl InventoryItem {
                 direct_control: 1,
                 level_graph_node: owner.level_graph_node,
                 state_flags: ITEM_STATE_FLAGS,
-                custom_data: String::new(),
+                custom_data: String::new().into(),
                 story_id: -1,
                 spawn_story_id: -1,
             },
             visual: Visual {
-                model: c.model(),
+                model: c.model().into(),
                 flags: 0,
             },
             condition: self.condition,
@@ -636,8 +636,8 @@ impl InventoryItem {
             ) => Object::Pda(Box::new(Pda {
                 item: item.clone(),
                 original_owner_id: *original_owner_id,
-                specific_character: specific_character.clone(),
-                info_portion: info_portion.clone(),
+                specific_character: specific_character.clone().into(),
+                info_portion: info_portion.clone().into(),
                 update,
             })),
             (ItemState::Outfit, Kind::Outfit) => Object::Outfit(Outfit {
@@ -667,8 +667,8 @@ impl InventoryItem {
         };
         Ok(ObjectRecord {
             header: SpawnHeader {
-                section: c.section.clone(),
-                name: format!("{}{:04}", c.section, self.id),
+                section: c.section.clone().into(),
+                name: format!("{}{:04}", c.section, self.id).into(),
                 game_type: 1,
                 after_game_type: 255,
                 position: owner.position,

@@ -289,8 +289,8 @@ fn check_inventory(state: &CharacterState) {
         .iter()
         .map(|r| {
             (
-                r.header.name.clone(),
-                r.object.visual().unwrap().model.clone(),
+                r.header.name.to_string(),
+                r.object.visual().unwrap().model.to_string(),
             )
         })
         .collect();

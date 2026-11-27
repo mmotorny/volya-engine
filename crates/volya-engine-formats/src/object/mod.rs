@@ -12,13 +12,16 @@
 
 pub mod blocks;
 pub mod kinds;
+pub mod text;
 
+use std::cell::RefCell;
 use std::io;
 
 use crate::packet::{Reader, Writer, invalid, length16};
 
 pub use blocks::*;
 pub use kinds::*;
+pub use text::{Strings, Text};
 
 /// Message type of a spawn packet.
 pub const SPAWN_MESSAGE: u16 = 1;
@@ -201,16 +204,20 @@ impl Kind {
 /// A class id with its kind: valid by construction (an id of section 7.4.2).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClassId {
-    id: String,
+    id: Text,
     kind: Kind,
 }
 
 impl ClassId {
     /// Fails as [`Kind::from_class_id`] does.
     pub fn new(id: &str) -> io::Result<Self> {
+        Self::of(id.into())
+    }
+
+    fn of(id: Text) -> io::Result<Self> {
         Ok(Self {
-            id: id.to_owned(),
-            kind: Kind::from_class_id(id)?,
+            kind: Kind::from_class_id(&id)?,
+            id,
         })
     }
 
@@ -236,8 +243,8 @@ pub struct Context<'a> {
 /// The fields of a spawn packet around the object state (section 7.2).
 #[derive(Clone, Debug, PartialEq)]
 pub struct SpawnHeader {
-    pub section: String,
-    pub name: String,
+    pub section: Text,
+    pub name: Text,
     /// Meaning unestablished (0 in all.spawn).
     pub game_type: u8,
     /// The `u8` after the game type; meaning unestablished (254 in all.spawn).
@@ -298,7 +305,19 @@ impl ObjectRecord {
         class_id: &str,
         single_player: bool,
     ) -> io::Result<Self> {
-        Self::read(spawn, update, class_id, single_player, true)
+        Self::read(spawn, update, class_id, single_player, true, None)
+    }
+
+    /// As [`Self::parse`], its texts shared with those `strings` has read
+    /// (a bulk read's: a New Game's records).
+    pub fn parse_sharing(
+        spawn: &[u8],
+        update: &[u8],
+        class_id: &str,
+        single_player: bool,
+        strings: &RefCell<Strings>,
+    ) -> io::Result<Self> {
+        Self::read(spawn, update, class_id, single_player, true, Some(strings))
     }
 
     /// As [`Self::parse`], but bytes after the last field of either packet,
@@ -311,7 +330,7 @@ impl ObjectRecord {
         class_id: &str,
         single_player: bool,
     ) -> io::Result<Self> {
-        Self::read(spawn, update, class_id, single_player, false)
+        Self::read(spawn, update, class_id, single_player, false, None)
     }
 
     fn read(
@@ -320,12 +339,13 @@ impl ObjectRecord {
         class_id: &str,
         single_player: bool,
         exact: bool,
+        strings: Option<&RefCell<Strings>>,
     ) -> io::Result<Self> {
-        let class = ClassId::new(class_id)?;
-        let mut r = Reader::new(spawn);
+        let mut r = Reader::sharing(spawn, strings);
+        let class = ClassId::of(r.share(class_id))?;
         message(&mut r, SPAWN_MESSAGE, "spawn")?;
-        let section = r.string()?;
-        let name = r.string()?;
+        let section = r.text()?;
+        let name = r.text()?;
         let game_type = r.u8()?;
         let after_game_type = r.u8()?;
         let position = r.float3()?;
@@ -354,11 +374,11 @@ impl ObjectRecord {
                 "{name}: cannot read object, which is not successfully saved :("
             )));
         }
-        let mut state = Reader::new(r.take(size - 2)?);
+        let mut state = Reader::sharing(r.take(size - 2)?, strings);
         if exact {
             r.finish(&format!("{name}: spawn packet"))?;
         }
-        let mut u = Reader::new(update);
+        let mut u = Reader::sharing(update, strings);
         message(&mut u, UPDATE_MESSAGE, "update")?;
         let cx = Context {
             class_id,

@@ -90,13 +90,13 @@ impl Profile {
     pub fn from_record(t: &TraderLike) -> Self {
         Self {
             money: t.money,
-            specific_character: t.specific_character.clone(),
+            specific_character: t.specific_character.to_string(),
             trader_flags: t.trader_flags,
-            character_profile: t.character_profile.clone(),
+            character_profile: t.character_profile.to_string(),
             community: t.community,
             rank: t.rank,
             reputation: t.reputation,
-            character_name: t.character_name.clone(),
+            character_name: t.character_name.to_string(),
         }
     }
 
@@ -128,13 +128,13 @@ impl Profile {
 
     pub fn apply(&self, t: &mut TraderLike) {
         t.money = self.money;
-        t.specific_character = self.specific_character.clone();
+        t.specific_character = self.specific_character.clone().into();
         t.trader_flags = self.trader_flags;
-        t.character_profile = self.character_profile.clone();
+        t.character_profile = self.character_profile.clone().into();
         t.community = self.community;
         t.rank = self.rank;
         t.reputation = self.reputation;
-        t.character_name = self.character_name.clone();
+        t.character_name = self.character_name.clone().into();
     }
 }
 

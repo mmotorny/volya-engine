@@ -5,9 +5,11 @@
 //! or alignment (docs/formats/sav.md, conventions). [`Reader`] fails on
 //! overrun; [`Writer`] appends the same encodings.
 
+use std::cell::RefCell;
 use std::io;
 
 use crate::cp1251;
+use crate::object::{Strings, Text};
 
 pub(crate) fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
@@ -17,11 +19,46 @@ pub(crate) fn invalid(message: impl Into<String>) -> io::Error {
 #[derive(Clone, Debug)]
 pub struct Reader<'a> {
     data: &'a [u8],
+    /// Where [`Self::text`] finds the texts read before.
+    strings: Option<&'a RefCell<Strings>>,
 }
 
 impl<'a> Reader<'a> {
     pub fn new(data: &'a [u8]) -> Self {
-        Self { data }
+        Self {
+            data,
+            strings: None,
+        }
+    }
+
+    /// A reader whose texts are shared through `strings`.
+    pub fn sharing(data: &'a [u8], strings: Option<&'a RefCell<Strings>>) -> Self {
+        Self { data, strings }
+    }
+
+    /// `text` as a [`Text`], shared with the texts read before when the
+    /// reader has them.
+    pub fn share(&self, text: &str) -> Text {
+        match self.strings {
+            Some(s) => s.borrow_mut().text(text),
+            None => text.into(),
+        }
+    }
+
+    /// A `stringZ` as a [`Text`] ([`Self::string`], [`Self::share`]).
+    pub fn text(&mut self) -> io::Result<Text> {
+        let end = self
+            .data
+            .iter()
+            .position(|&b| b == 0)
+            .ok_or_else(|| invalid("unterminated string"))?;
+        let bytes = &self.data[..end];
+        self.data = &self.data[end + 1..];
+        Ok(if bytes.is_ascii() {
+            self.share(std::str::from_utf8(bytes).expect("ASCII"))
+        } else {
+            self.share(&cp1251::decode(bytes))
+        })
     }
 
     /// Bytes not read yet.

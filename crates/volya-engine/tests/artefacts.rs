@@ -182,8 +182,8 @@ fn first_level_artefacts_from_game_data() {
         .filter(|o| Behaviour::of(o.record.class_id.as_str()).is_some())
         .map(|o| {
             (
-                o.record.header.name.clone(),
-                o.record.header.section.clone(),
+                o.record.header.name.to_string(),
+                o.record.header.section.to_string(),
             )
         })
         .collect();

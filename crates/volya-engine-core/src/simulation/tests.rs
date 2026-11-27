@@ -136,7 +136,7 @@ fn block(gv: u16, lv: u32, distance: f32, flags: u32) -> ObjectBlock {
         direct_control: 1,
         level_graph_node: lv,
         state_flags: flags,
-        custom_data: String::new(),
+        custom_data: String::new().into(),
         story_id: -1,
         spawn_story_id: -1,
     }
@@ -145,7 +145,7 @@ fn block(gv: u16, lv: u32, distance: f32, flags: u32) -> ObjectBlock {
 fn header(id: u16, section: &str, position: [f32; 3]) -> SpawnHeader {
     SpawnHeader {
         section: section.into(),
-        name: format!("{section}{id}"),
+        name: format!("{section}{id}").into(),
         game_type: 0,
         after_game_type: 0,
         position,
@@ -166,7 +166,7 @@ fn creature(object: ObjectBlock, health: f32) -> Creature {
     Creature {
         object,
         visual: Visual {
-            model: String::new(),
+            model: String::new().into(),
             flags: 0,
         },
         team: 0,
@@ -182,7 +182,7 @@ fn creature(object: ObjectBlock, health: f32) -> Creature {
 
 fn skeleton() -> Skeleton {
     Skeleton {
-        startup_animation: String::new(),
+        startup_animation: String::new().into(),
         flags: 0,
         source_id: NO_ID,
         bone_state: None,
@@ -222,8 +222,8 @@ fn flesh(id: u16, gv: u16, lv: u32, position: [f32; 3]) -> ObjectRecord {
             state: MonsterState {
                 monster: MonsterLike {
                     creature: creature(block(gv, lv, 0.0, 0xFFFF_FFBF), 1.0),
-                    out_restrictions: String::new(),
-                    in_restrictions: String::new(),
+                    out_restrictions: String::new().into(),
+                    in_restrictions: String::new().into(),
                     smart_terrain_id: NO_ID,
                     smart_terrain_task_reached: 0,
                 },
@@ -269,7 +269,7 @@ fn bread(id: u16, parent: u16) -> ObjectRecord {
             item: Item {
                 object: block(0, 0, 0.0, 0x07),
                 visual: Visual {
-                    model: String::new(),
+                    model: String::new().into(),
                     flags: 0,
                 },
                 condition: 1.0,

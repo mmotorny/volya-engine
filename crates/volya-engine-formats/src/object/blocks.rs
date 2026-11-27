@@ -7,6 +7,7 @@
 
 use std::io;
 
+use super::Text;
 use crate::packet::{Reader, Writer, invalid};
 
 /// A `q8(v, lo, hi)` byte, kept as stored so it round-trips.
@@ -65,7 +66,7 @@ pub struct ObjectBlock {
     /// Bit 0x200: can be saved; other bits unestablished.
     pub state_flags: u32,
     /// Per-object LTX text.
-    pub custom_data: String,
+    pub custom_data: Text,
     /// −1 if none.
     pub story_id: i32,
     pub spawn_story_id: i32,
@@ -82,7 +83,7 @@ impl ObjectBlock {
             direct_control: r.u32()?,
             level_graph_node: r.u32()?,
             state_flags: r.u32()?,
-            custom_data: r.string()?,
+            custom_data: r.text()?,
             story_id: r.s32()?,
             spawn_story_id: r.s32()?,
         })
@@ -104,14 +105,14 @@ impl ObjectBlock {
 /// Visual block.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Visual {
-    pub model: String,
+    pub model: Text,
     pub flags: u8,
 }
 
 impl Visual {
     pub fn read(r: &mut Reader) -> io::Result<Self> {
         Ok(Self {
-            model: r.string()?,
+            model: r.text()?,
             flags: r.u8()?,
         })
     }
@@ -180,7 +181,7 @@ pub const SKELETON_NOT_SAVED: u8 = 0x08;
 /// Skeleton block.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Skeleton {
-    pub startup_animation: String,
+    pub startup_animation: Text,
     pub flags: u8,
     pub source_id: u16,
     /// Present iff `flags` has [`SKELETON_BONE_STATE`]; boxed, as no
@@ -209,7 +210,7 @@ pub struct Bone {
 
 impl Skeleton {
     pub fn read(r: &mut Reader) -> io::Result<Self> {
-        let startup_animation = r.string()?;
+        let startup_animation = r.text()?;
         let flags = r.u8()?;
         let source_id = r.u16()?;
         let bone_state = if flags & SKELETON_BONE_STATE != 0 {
@@ -325,8 +326,8 @@ impl Creature {
 pub struct MonsterLike {
     pub creature: Creature,
     /// Comma-separated restrictor names.
-    pub out_restrictions: String,
-    pub in_restrictions: String,
+    pub out_restrictions: Text,
+    pub in_restrictions: Text,
     /// 0xFFFF none.
     pub smart_terrain_id: u16,
     pub smart_terrain_task_reached: u8,
@@ -336,8 +337,8 @@ impl MonsterLike {
     pub fn read(r: &mut Reader) -> io::Result<Self> {
         Ok(Self {
             creature: Creature::read(r)?,
-            out_restrictions: r.string()?,
-            in_restrictions: r.string()?,
+            out_restrictions: r.text()?,
+            in_restrictions: r.text()?,
             smart_terrain_id: r.u16()?,
             smart_terrain_task_reached: r.u8()?,
         })
@@ -357,27 +358,27 @@ impl MonsterLike {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TraderLike {
     pub money: u32,
-    pub specific_character: String,
+    pub specific_character: Text,
     pub trader_flags: u32,
-    pub character_profile: String,
+    pub character_profile: Text,
     /// Index; −1 none.
     pub community: i32,
     pub rank: i32,
     pub reputation: i32,
-    pub character_name: String,
+    pub character_name: Text,
 }
 
 impl TraderLike {
     pub fn read(r: &mut Reader) -> io::Result<Self> {
         Ok(Self {
             money: r.u32()?,
-            specific_character: r.string()?,
+            specific_character: r.text()?,
             trader_flags: r.u32()?,
-            character_profile: r.string()?,
+            character_profile: r.text()?,
             community: r.s32()?,
             rank: r.s32()?,
             reputation: r.s32()?,
-            character_name: r.string()?,
+            character_name: r.text()?,
         })
     }
 
