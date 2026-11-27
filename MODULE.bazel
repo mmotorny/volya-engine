@@ -28,7 +28,7 @@ rust.toolchain(
     extra_rustc_flags_triples = {
         "wasm32-unknown-unknown": ["--cfg=web_sys_unstable_apis"],
     },
-    versions = ["1.100.0"],
+    versions = ["1.100.1"],
 )
 use_repo(rust, "rust_toolchains")
 
