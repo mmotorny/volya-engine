@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+
+load("//build:checks.bzl", "volya_checks")
+load("//build:d3d9probes.bzl", "d3d9probes_exe", "d3d9probes_wine")
+
+package(default_visibility = ["//visibility:public"])
+
+# d3d9probes.exe, built with MinGW in the Wine image: a container, so built
+# by name or by what needs it, not by //....
+d3d9probes_exe(
+    name = "exe",
+    srcs = glob([
+        "*.c",
+        "*.h",
+    ]),
+    out = "d3d9probes.exe",
+    tags = ["manual"],
+)
+
+# The probes under Wine: `wine/results/` and `wine/log.txt`, in the disk
+# cache, run again only when the executable or the image changes.
+d3d9probes_wine(
+    name = "wine",
+    exe = ":exe",
+    tags = ["manual"],
+)
+
+volya_checks(wasm = False)

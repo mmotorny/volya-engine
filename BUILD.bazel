@@ -20,6 +20,7 @@ PACKAGES = [
     "//crates/volya-engine-script",
     "//platforms/web",
     "//tests/browser",
+    "//tests/d3d9probes",
     "//tests/fidelity",
     "//third_party/inno",
     "//tools/devserver",
