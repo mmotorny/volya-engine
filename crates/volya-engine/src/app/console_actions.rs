@@ -172,8 +172,12 @@ impl App {
             // TODO(#659).
             "demo_play" | "demo_record" | "demo_record_take_point" | "demo_record_clear_points" => {
             }
-            // TODO(#632): the web build's choice.
-            "check_for_updates" => {}
+            // Console-misc-settings.md 8: the original's patch service is
+            // not reachable from the web build, so the query is never sent.
+            "check_for_updates" => self
+                .console
+                .log_mut()
+                .message("! Unable to send query for patch!"),
             // TODO(#658).
             name if MULTIPLAYER.contains(&name) => {}
             name => tracing::warn!(name, "console action without a handler"),

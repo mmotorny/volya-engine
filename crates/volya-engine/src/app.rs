@@ -2997,6 +2997,21 @@ mod tests {
         assert!(audio.playing.is_empty(), "the menu music stopped");
     }
 
+    /// Console-misc-settings.md 8: `check_for_updates` prints the
+    /// original's failure to send the query, whatever its argument.
+    #[test]
+    fn check_for_updates_cannot_send_the_query() {
+        let tree = fixture::tree();
+        let mut app = App::new(fixture::data(&tree)).unwrap();
+        app.assets = fixture::assets();
+        let (mut input, mut audio) = (Input::new(), FakeAudio::default());
+        app.update(&tree, 0.0, &mut input, &mut audio);
+        app.exec("check_for_updates");
+        app.exec("check_for_updates 1");
+        app.update(&tree, 10.0, &mut input, &mut audio);
+        assert_eq!(logged(&app, "! Unable to send query for patch!"), 2);
+    }
+
     /// console-key-bindings.md section 5.
     #[test]
     fn a_press_reaching_the_level_executes_its_bound_line() {

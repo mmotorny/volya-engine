@@ -22,8 +22,8 @@
 //! no counterpart in a browser (7); `g_autopickup` and `g_corpsenum` act
 //! only in multiplayer games (2, 3; TODO(#629)); `cl_cod_pickup_mode`
 //! awaits taking items and the HUD (5; TODO(#627)), `cam_slide_inert` the
-//! look cameras (6; TODO(#628)); and `check_for_updates`, an action the
-//! caller does nothing for, the web build's choice (8; TODO(#632)).
+//! look cameras (6; TODO(#628)). `check_for_updates` is its caller's
+//! action: it prints only the original's failure to send the query (8).
 
 mod commands;
 mod diagnostics;
