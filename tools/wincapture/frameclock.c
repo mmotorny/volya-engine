@@ -685,6 +685,10 @@ static void slept(DWORD ms) {
     if (GetCurrentThreadId() != main_thread) {
         return;
     }
+    /* A wait that sleeps between its reads is advanced by its sleeps alone,
+     * not by how often it read (that count follows real time): the spin
+     * counts only reads since the last frame or sleep. */
+    InterlockedExchange(&reads_since_frame, 0);
     LONGLONG n = InterlockedIncrement64((volatile LONGLONG *)&clock_->sleeps);
     if (n <= 5 || n % 1000 == 0) {
         dlog("main-thread Sleep(%lu), number %lld, frame %lld", (unsigned long)ms, n,

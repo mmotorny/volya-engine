@@ -43,9 +43,11 @@ const SPIN: u32 = 1000;
 // the PC stuck before its first frame, #762).
 
 /// Before the first frame, the least a main-thread sleep advances the clock:
-/// the startup waits for time to pass with `Sleep(0)` (measured on the PC,
-/// about 120 a real second), so its waits end at about real time.
-const START_QUANTUM_MS: u32 = 10;
+/// 0, a sleep advancing it by what it asks for alone. The startup's
+/// `Sleep(0)` loop before the first frame waits for the game itself, not for
+/// time, and its count follows real time (1,282 and 1,292 ms of the clock at
+/// 10 ms each, measured on the PC, #762).
+const START_QUANTUM_MS: u32 = 0;
 
 /// The clock at the first frame, whatever the startup took: how long that
 /// was depends on how often it waited, so from the first frame on every

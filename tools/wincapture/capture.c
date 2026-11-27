@@ -1471,9 +1471,12 @@ static int run_once(const char *exe_dir, const char *game, const char *work, con
     if (ok && (ok = advance(&r, 1, 0))) {
         event(&r, load(&r.clock->hooked) ? "the first frame, held"
                                          : "the first frame, held (Present not hooked?)");
-        /* Not an event: it may vary between runs, the clock is set after it. */
-        say("The startup took %lld ms of the clock before the first frame",
-            (long long)(load(&r.clock->start_ticks) / (int64_t)FRAMECLOCK_TICKS_PER_MS));
+        /* An event: the clock's startup is a function of the game's own
+         * calls, so every run reaches frame 1 at the same clock. */
+        char what[96];
+        snprintf(what, sizeof what, "the startup took %lld ticks of the clock",
+                 (long long)load(&r.clock->start_ticks));
+        event(&r, what);
         if ((uint64_t)load(&r.clock->start_ticks) >= r.clock->first_frame) {
             say("WARNING: more than the plan's first_frame_ms: runs may differ from here on");
         }
