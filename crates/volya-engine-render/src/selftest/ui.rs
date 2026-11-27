@@ -408,7 +408,11 @@ pub async fn converts_uncompressed_formats_and_uploads_mips_and_cube_faces(
 /// Reference conversion: the pixel-shader path of docs/behavior/startup.md
 /// 6.6 (BT.601, limited range), on 0…1 values.
 fn yuv_to_rgb(y: u8, cb: u8, cr: u8) -> [u8; 4] {
-    let [y, u, v] = [y, cb, cr].map(|c| f32::from(c) / 255.0);
+    yuv_to_rgb_f([y, cb, cr].map(|c| f32::from(c) / 255.0))
+}
+
+/// [`yuv_to_rgb`] of filtered values; only the result is clamped.
+fn yuv_to_rgb_f([y, u, v]: [f32; 3]) -> [u8; 4] {
     let channel = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
     [
         channel(1.16406 * y + 1.59765 * v - 0.86961),
@@ -472,13 +476,19 @@ impl SyntheticFrame {
 
     /// Texel (x, y): coded luma (x, y), chroma (⌊x / 2⌋, ⌊y / 2⌋).
     fn expected(&self, x: usize, y: usize) -> [u8; 4] {
+        let [l, b, r] = self.texel(x, y);
+        yuv_to_rgb(l, b, r)
+    }
+
+    /// Texel (x, y) unconverted: Y', Cb, Cr.
+    fn texel(&self, x: usize, y: usize) -> [u8; 3] {
         let f = self.frame();
         let at = |p: &Plane, x: usize, y: usize| p.data[y * p.stride + x];
-        yuv_to_rgb(
+        [
             at(&f.coded[0], x, y),
             at(&f.coded[1], x / 2, y / 2),
             at(&f.coded[2], x / 2, y / 2),
-        )
+        ]
     }
 }
 
@@ -504,8 +514,8 @@ pub async fn video_frames_map_to_the_top_left_of_a_power_of_two_texture(make: Ma
                 let expected = if x < w && y < h {
                     synthetic.expected(x, y)
                 } else {
-                    // Never written: Y'CbCr black (our choice).
-                    yuv_to_rgb(16, 128, 128)
+                    // Never written: zero (title-menu-video-edge.md 2.3).
+                    yuv_to_rgb(0, 0, 0)
                 };
                 let actual = pixel(&image, 8, x as u32, y as u32);
                 ensure_near!(actual, expected, 1, "frame {seed} ({x}, {y})");
@@ -517,6 +527,42 @@ pub async fn video_frames_map_to_the_top_left_of_a_power_of_two_texture(make: Ma
             capture(&mut renderer, &list, 8, 4).await? == image,
             "frame {seed} tinted"
         );
+        // Magnified 2×: wrap addressing and linear filtering blend the
+        // never-written texels across the texture's edges, and conversion
+        // follows filtering (title-menu-video-edge.md 2.1, 2.3).
+        let image = capture(&mut renderer, &list, 16, 8).await?;
+        let texel = |x: usize, y: usize| -> [f32; 3] {
+            if x < w && y < h {
+                synthetic.texel(x, y).map(f32::from)
+            } else {
+                [0.0; 3]
+            }
+        };
+        for y in 0..8 {
+            for x in 0..8 {
+                let at = |i: usize, n: usize| {
+                    let t = (i as f32 + 0.5) / 2.0 - 0.5;
+                    let lo = t.floor();
+                    let wrap = |k: f32| (k as isize).rem_euclid(n as isize) as usize;
+                    (wrap(lo), wrap(lo + 1.0), t - lo)
+                };
+                let ((x0, x1, fx), (y0, y1, fy)) = (at(x, 8), at(y, 4));
+                let mut yuv = [0.0; 3];
+                for (tx, ty, k) in [
+                    (x0, y0, (1.0 - fx) * (1.0 - fy)),
+                    (x1, y0, fx * (1.0 - fy)),
+                    (x0, y1, (1.0 - fx) * fy),
+                    (x1, y1, fx * fy),
+                ] {
+                    for (c, v) in yuv.iter_mut().zip(texel(tx, ty)) {
+                        *c += k * v;
+                    }
+                }
+                let expected = yuv_to_rgb_f(yuv.map(|c| c / 255.0));
+                let actual = pixel(&image, 16, x as u32, y as u32);
+                ensure_near!(actual, expected, 2, "frame {seed} magnified ({x}, {y})");
+            }
+        }
     }
     Ok(String::new())
 }

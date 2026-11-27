@@ -9,9 +9,11 @@
 //! pass packs them into the texture (`yuv.wgsl`); drawing converts to RGB
 //! after filtering (`ui.wgsl`, `fs_movie`).
 //!
-//! Texels outside the picture are never written; the spec leaves their
-//! content to the graphics runtime (startup.md 9). Our choice: Y'CbCr black
-//! (16, 128, 128, 255), so filtering at a picture edge blends in black.
+//! Texels outside the picture are never written and hold 0 in every
+//! channel, as measured on the original's Direct3D 9 runtime
+//! (docs/behavior/title-menu-video-edge.md 2.3): filtering at a picture
+//! edge, through wrap addressing, blends Y'CbCr toward zero, which converts
+//! to a green tint.
 
 use volya_engine_formats::video::{Frame, Plane};
 
@@ -59,9 +61,9 @@ impl VideoTexture {
     }
 }
 
-/// The initial content of a video texture: Y'CbCr black (our choice, see
-/// the module documentation).
-const OUTSIDE: [f32; 4] = [16.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 1.0];
+/// The initial content of a video texture: zero in every channel
+/// (title-menu-video-edge.md 2.3).
+const OUTSIDE: [f32; 4] = [0.0; 4];
 
 impl Renderer {
     /// A texture for frames whose picture is `width` × `height` pixels.
