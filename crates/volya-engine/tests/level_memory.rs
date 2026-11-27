@@ -24,6 +24,7 @@ use std::io::{Seek, SeekFrom};
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
 use volya_engine::core::collision::CollisionWorld;
+use volya_engine::core::file_cache;
 use volya_engine::core::memory_manager::MemoryManager;
 use volya_engine::core::vfs::db::DbVfs;
 use volya_engine::core::vfs::{self, EntryKind, StdVfs, Vfs};
@@ -125,8 +126,9 @@ fn level_files_memory() {
         let (details, details_kept, _) =
             measured(|| level_details::read(&tree, &dir, &data.system).unwrap());
         drop(details);
+        // The file in the file cache, outside the heap, read in place.
         let (level, _, parse_peak) =
-            measured(|| Level::read(&mut tree.open(&file("level")).unwrap()).unwrap());
+            measured(|| Level::parse(&file_cache::read(&tree, &file("level")).unwrap()).unwrap());
         // The textures the level's own surfaces name (`shader/texture,…`),
         // each once, from the level's folder or the game's textures.
         let mut seen = HashSet::new();

@@ -38,6 +38,7 @@ use crate::core::collision::{CollisionWorld, geometry};
 use crate::core::config;
 use crate::core::config::Config;
 use crate::core::detector::DetectorSection;
+use crate::core::file_cache::{self, CachedFile};
 use crate::core::input::Input;
 use crate::core::level::{DrawItem, Level};
 use crate::core::lights::LightId;
@@ -83,8 +84,8 @@ use volya_engine_formats::env_mod::{self, EnvModifier};
 use volya_engine_formats::game_graph::GameGraph;
 use volya_engine_formats::gamemtl;
 use volya_engine_formats::lanims::ColourAnimations;
-use volya_engine_formats::level::split_shader_entry;
 use volya_engine_formats::level::{GEOMETRY_LOD, SSA_LOD_A, SSA_LOD_B, Thresholds};
+use volya_engine_formats::level::{LevelFile, split_shader_entry};
 use volya_engine_formats::level_geom::{GeomBuffer, GeomFile, GeomLayout, GeomSource};
 use volya_engine_formats::level_hom;
 use volya_engine_formats::model as model_math;
@@ -349,6 +350,10 @@ fn refilled<T>(list: &mut Arc<Vec<T>>) -> &mut Vec<T> {
 /// The level shown.
 pub struct LevelScreen {
     world: Arc<LevelWorld>,
+    /// The `level` file, held in the file cache while the level runs, as
+    /// the original keeps it open (docs/architecture/memory.md,
+    /// File-backed data); `None` only in the unit tests' empty level.
+    _level_file: Option<CachedFile>,
     /// Shared with the sound system, whose level mesh it is
     /// (sound-occlusion.md section 3).
     collision: Arc<CollisionWorld>,
@@ -1333,7 +1338,13 @@ pub struct NewGameLoad {
     name: Option<String>,
     actor: Option<spawn::ActorStart>,
     dir: String,
-    level: Option<Level>,
+    /// The `level` file, held in the file cache and read in place from
+    /// `st_opening_stream` to the level's end (docs/architecture/memory.md,
+    /// File-backed data); its chunks are parsed under the captions that
+    /// read them.
+    level_file: Option<CachedFile>,
+    /// Its shader table, from `st_loading_shaders`.
+    shaders: Option<Vec<String>>,
     geom: Option<GeomFile>,
     collision: Option<Arc<CollisionWorld>>,
     draw_items: Vec<DrawItem>,
@@ -1377,8 +1388,6 @@ pub struct NewGameLoad {
     effects: Option<(PlacedEffects, u64)>,
     /// The level's one shared generator (occlusion-tests.md 5).
     random: Shared,
-    /// The occlusion mesh, none without `level.hom`.
-    occlusion_mesh: Option<OcclusionMesh>,
     /// The camera pass, made from the level before its visuals go.
     visibility: Option<LevelVisibility>,
     /// The shader entry of each billboard group the camera pass keeps.
@@ -1645,28 +1654,20 @@ impl NewGameLoad {
                         .map_err(|e| file(name, e))?;
                 }
             }
+            // The `level` file is opened and read in place
+            // (console-diagnostics.md 2.4.1): held in the file cache, its
+            // header checked; nothing is made from it here.
             Stage::OpeningStream => {
-                // Read as a stream, so the file is never held whole.
-                let mut f = tree
-                    .open(&format!("{dir}\\level"))
+                let level = file_cache::read(tree, &format!("{dir}\\level"))
                     .map_err(|e| file("level", e))?;
-                let level = Level::read(&mut f).map_err(|e| file("level", e))?;
-                // Chunks 6 and 7, for the lights (dynamic-lights.md 3.1,
-                // glows.md 2.1).
-                self.lights.level_lights = (level.lights.iter())
-                    .filter_map(level_lights::level_light)
-                    .collect();
-                self.glow_records = level.glows.clone();
-                self.level = Some(level);
-                // The occlusion mesh, none without `level.hom` (level-hom.md 3;
-                // read here by us).
-                self.occlusion_mesh = match vfs::read(tree, &format!("{dir}\\level.hom")) {
-                    Ok(bytes) => Some(OcclusionMesh::new(
-                        &level_hom::parse(&bytes).map_err(|e| file("level.hom", e))?,
-                    )),
-                    Err(e) if e.kind() == io::ErrorKind::NotFound => None,
-                    Err(e) => return Err(e),
-                };
+                LevelFile::new(&level).map_err(|e| file("level", e))?;
+                self.level_file = Some(level);
+            }
+            // Chunk 2, the level's shaders (console-diagnostics.md 2.4.1).
+            Stage::LoadingShaders => {
+                let level = earlier(self.level_file.as_ref(), "level")?;
+                let level = LevelFile::new(level).map_err(|e| file("level", e))?;
+                self.shaders = Some(level.shaders().map_err(|e| file("level", e))?);
             }
             // The collision mesh with its materials mapped and indexed
             // (level-cform.md sections 2, 3.3). `gamemtl.xr` is read here,
@@ -1715,8 +1716,38 @@ impl NewGameLoad {
             }
             // The static visuals' draw list and bounding spheres (placed
             // under this caption by us: the spec names the spatial index).
+            // The visuals, portals and sectors (chunks 3, 4 and 8) are read
+            // from the `level` file here and go at the stage's end; the
+            // camera pass keeps them in its own form, with the occlusion
+            // mesh, none without `level.hom` (level-hom.md 3; read here by
+            // us, with the pass that takes it).
             Stage::LoadingSpatialDb => {
-                let level = earlier(self.level.as_ref(), "level")?;
+                let file_bytes = earlier(self.level_file.as_ref(), "level")?;
+                let level_file = LevelFile::new(file_bytes).map_err(|e| file("level", e))?;
+                let shaders = earlier(self.shaders.take(), "shader table")?;
+                let parts = || -> io::Result<Level> {
+                    let visuals = level_file.visuals(shaders.len())?;
+                    let portals = level_file.portals()?;
+                    let sectors = level_file.sectors(visuals.len(), &portals)?;
+                    Ok(Level {
+                        header: level_file.header,
+                        shaders: Vec::new(),
+                        visuals,
+                        portals,
+                        sectors,
+                        lights: Vec::new(),
+                        glows: Vec::new(),
+                    })
+                };
+                let level = &parts().map_err(|e| file("level", e))?;
+                self.shaders = Some(shaders);
+                let occlusion_mesh = match vfs::read(tree, &format!("{dir}\\level.hom")) {
+                    Ok(bytes) => Some(OcclusionMesh::new(
+                        &level_hom::parse(&bytes).map_err(|e| file("level.hom", e))?,
+                    )),
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+                    Err(e) => return Err(e),
+                };
                 let geom = earlier(self.geom.as_ref(), "level.geom")?;
                 // The draws' indices are checked as they are read from the
                 // file, a piece at a time.
@@ -1773,26 +1804,24 @@ impl NewGameLoad {
                 }
                 self.visibility = Some(LevelVisibility::new(
                     level,
-                    self.occlusion_mesh.take(),
+                    occlusion_mesh,
                     self.draw_items.iter().map(|d| d.visual),
                     billboards,
                 )?);
-                // Only the shader table is read after this stage; the
-                // visuals and the rest go now.
-                if let Some(level) = &mut self.level {
-                    *level = Level {
-                        header: level.header,
-                        shaders: std::mem::take(&mut level.shaders),
-                        visuals: Vec::new(),
-                        portals: Vec::new(),
-                        sectors: Vec::new(),
-                        lights: Vec::new(),
-                        glows: Vec::new(),
-                    };
-                }
             }
-            // `level.env_mod` comes after the sectors (optional, sky.md 9.1).
+            // The glows (chunk 7, console-diagnostics.md 2.4.1) and the
+            // lights (chunk 6, read here with them by us), for the light
+            // passes (dynamic-lights.md 3.1, glows.md 2.1); `level.env_mod`
+            // comes after the sectors (optional, sky.md 9.1).
             Stage::LoadingSectorsPortals => {
+                let level = earlier(self.level_file.as_ref(), "level")?;
+                let level = LevelFile::new(level).map_err(|e| file("level", e))?;
+                let shaders = earlier(self.shaders.as_ref(), "shader table")?.len();
+                let lights = level.lights().map_err(|e| file("level", e))?;
+                self.lights.level_lights = (lights.iter())
+                    .filter_map(level_lights::level_light)
+                    .collect();
+                self.glow_records = level.glows(shaders).map_err(|e| file("level", e))?;
                 self.modifiers = match vfs::read(tree, &format!("{dir}\\level.env_mod")) {
                     Ok(file) => env_mod::parse(&file)?,
                     Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
@@ -1941,7 +1970,7 @@ impl NewGameLoad {
             // draws the world, the first under the loading image: our
             // departure from section 5, which reads them under this caption.
             Stage::LoadingTextures => {
-                let level = earlier(self.level.as_ref(), "level")?;
+                let shaders = earlier(self.shaders.as_ref(), "shader table")?;
                 let spawned = earlier(self.spawned.as_ref(), "objects")?;
                 let entries: Vec<String> = spawned
                     .models
@@ -1953,7 +1982,7 @@ impl NewGameLoad {
                     tree,
                     data,
                     &dir,
-                    &level.shaders,
+                    shaders,
                     &self.draw_items,
                     &entries,
                     &self.billboard_shaders,
@@ -2030,7 +2059,7 @@ impl NewGameLoad {
                     })
                 };
                 for g in std::mem::take(&mut self.glow_records) {
-                    let entry = &level.shaders[usize::from(g.shader)];
+                    let entry = &shaders[usize::from(g.shader)];
                     let (shader, list) = split_shader_entry(entry).unwrap_or(("", ""));
                     let flare = match shader {
                         "effects\\glow" => false,
@@ -2180,10 +2209,7 @@ impl NewGameLoad {
             Stage::LoadingDetails => {
                 self.details = level_details::read(tree, &dir, &data.system)?;
             }
-            Stage::PrefetchingObjects
-            | Stage::ServerStarting
-            | Stage::LoadingAlifeSimulator
-            | Stage::LoadingShaders => {}
+            Stage::PrefetchingObjects | Stage::ServerStarting | Stage::LoadingAlifeSimulator => {}
         }
         Ok(())
     }
@@ -2192,7 +2218,8 @@ impl NewGameLoad {
     pub fn finish(mut self, now: u64) -> io::Result<LevelScreen> {
         let name = earlier(self.name, "level")?;
         let actor = earlier(self.actor, "actor")?;
-        let level = earlier(self.level, "level")?;
+        let shaders = earlier(self.shaders, "shader table")?;
+        let level_file = earlier(self.level_file, "level")?;
         let visibility = earlier(self.visibility, "sectors")?;
         let geom = earlier(self.geom, "level.geom")?;
         let collision = earlier(self.collision, "level.cform")?;
@@ -2253,7 +2280,7 @@ impl NewGameLoad {
             world: Arc::new(LevelWorld {
                 name,
                 dir: self.dir,
-                shaders: level.shaders,
+                shaders,
                 draw_items: self.draw_items,
                 spheres: self.spheres,
                 detail_windows: self.detail_windows,
@@ -2274,6 +2301,7 @@ impl NewGameLoad {
                 billboards: self.billboards_world,
             }),
             collision,
+            _level_file: Some(level_file),
             sound_data: self.sound,
             fatal: None,
             footsteps: Some(footsteps),
@@ -3933,6 +3961,7 @@ impl LevelScreen {
                 details: None,
                 billboards: None,
             }),
+            _level_file: None,
             collision: Arc::new(
                 CollisionWorld::new(Default::default(), Vec::new()).expect("collision"),
             ),
