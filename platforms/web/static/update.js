@@ -16,6 +16,12 @@
 // reopening the app finishes it too (browsers activate a waiting worker once
 // no page uses the old one).
 //
+// Finishing an update in one copy of the app (a tab, a window, the installed
+// app) hands every other open copy the new worker too (Service Workers spec,
+// Activate; measured in Chrome, #445), leaving them old page code served by
+// the new build: they reload themselves at once, whatever they show (the
+// user's decision; docs/architecture/web-platform.md).
+//
 // The setting lives in a cache, where sw.js reads it.
 
 /** This build's commit and its time (ISO 8601), set by the site's build (`tools/site`). */
@@ -66,7 +72,8 @@ export const settingsStore = (scope, cacheStorage = caches) => {
  * - `auto` and `setAuto(on)`;
  * - `download()`: consent to and download the available update;
  * - `apply()` (finish: take over and reload; reloads anyway when the new
- *   worker doesn't take over within `takeOverMs`: the player asked),
+ *   worker doesn't take over within `takeOverMs`: the player asked; an
+ *   update another copy finished reloads this page without asking),
  *   `check()`, `onChange(callback)`;
  * - `checkNow()`: the player's check, resolving with "found", "none",
  *   "offline" or "failed"; once found, `requested` is set (the player waits
@@ -168,6 +175,18 @@ export function startUpdates(
     else if (state.status === "ready") state.status = "current";
     for (const callback of listeners) callback(state);
   };
+
+  // A new controller this page didn't ask for (not its own apply()) while it
+  // had one: another copy finished an update. Without one before, it is the
+  // first install taking over.
+  let controlled = Boolean(container?.controller);
+  container?.addEventListener?.("controllerchange", () => {
+    if (controlled && !applying) {
+      applying = true;
+      reload();
+    }
+    controlled = Boolean(container.controller);
+  });
 
   container?.startMessages?.();
   container?.addEventListener?.("message", ({ data }) => {
