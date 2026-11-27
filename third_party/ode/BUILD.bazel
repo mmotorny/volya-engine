@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+
+load("//build:checks.bzl", "volya_checks")
+
+# Our patch to ODE 0.5.0's release: the shipped library's changes
+# (MODULE.bazel; docs/behavior/physics-library.md).
+exports_files(
+    ["shipped-library.patch"],
+    visibility = ["//visibility:public"],
+)
+
+volya_checks(wasm = False)

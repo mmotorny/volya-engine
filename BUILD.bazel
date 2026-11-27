@@ -23,6 +23,7 @@ PACKAGES = [
     "//tests/d3d9probes",
     "//tests/fidelity",
     "//third_party/inno",
+    "//third_party/ode",
     "//tools/devserver",
     "//tools/gog-extract",
     "//tools/site",

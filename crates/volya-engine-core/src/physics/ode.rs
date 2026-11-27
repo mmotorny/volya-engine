@@ -8,9 +8,11 @@
 //!
 //! A [`OdeSolver`] owns an ODE world and its contact group, and is used from
 //! the thread that made it (it is neither `Send` nor `Sync`). The library
-//! keeps global state its steps use (the random seed of the row shuffle; the
-//! shipped library's world parameters, docs/behavior/physics-library.md 3.1),
-//! so a world's parameters and step take [`STEPPING`] together.
+//! keeps global state: the world parameters are library-wide (the shipped
+//! library's, docs/behavior/physics-library.md 3.1; creating a world resets
+//! them) and the row shuffle draws from the C run time's generator, so a
+//! world's creation, and its parameters and step together, take
+//! [`STEPPING`].
 //! Contacts are not generated yet: [`Solver::collide`] adds none (#751).
 
 #![allow(unsafe_code)]
@@ -90,6 +92,8 @@ pub struct OdeSolver {
 
 impl OdeSolver {
     pub fn new() -> Self {
+        // Creating a world resets the library-wide parameters.
+        let _turn = STEPPING.lock().unwrap_or_else(|e| e.into_inner());
         // SAFETY: ODE 0.5.0 needs no initialisation; it fails fatally
         // rather than return null.
         let (world, contacts) = unsafe { (dWorldCreate(), dJointGroupCreate(0)) };
@@ -276,5 +280,290 @@ mod tests {
         assert!(s.position(b).unwrap()[1] < 0.0);
         s.remove(b);
         assert_eq!(s.position(b), None);
+    }
+
+    /// The shipped library's changes (docs/behavior/physics-library.md 3 –
+    /// 6, third_party/ode), through the library's own functions.
+    mod shipped {
+        use super::super::*;
+        use std::ffi::c_void;
+
+        #[repr(C)]
+        struct DxGeom {
+            _private: [u8; 0],
+        }
+
+        #[repr(C)]
+        struct DxJoint {
+            _private: [u8; 0],
+        }
+
+        #[repr(C)]
+        #[derive(Clone, Copy, Default)]
+        struct SurfaceParameters {
+            mode: c_int,
+            mu: Real,
+            mu2: Real,
+            bounce: Real,
+            bounce_vel: Real,
+            soft_erp: Real,
+            soft_cfm: Real,
+            motion1: Real,
+            motion2: Real,
+            slip1: Real,
+            slip2: Real,
+        }
+
+        #[repr(C)]
+        #[derive(Clone, Copy)]
+        struct ContactGeom {
+            pos: [Real; 4],
+            normal: [Real; 4],
+            depth: Real,
+            g1: *mut DxGeom,
+            g2: *mut DxGeom,
+        }
+
+        impl Default for ContactGeom {
+            fn default() -> Self {
+                Self {
+                    pos: [0.0; 4],
+                    normal: [0.0; 4],
+                    depth: 0.0,
+                    g1: std::ptr::null_mut(),
+                    g2: std::ptr::null_mut(),
+                }
+            }
+        }
+
+        #[repr(C)]
+        #[derive(Clone, Copy, Default)]
+        struct Contact {
+            surface: SurfaceParameters,
+            geom: ContactGeom,
+            fdir1: [Real; 4],
+        }
+
+        unsafe extern "C" {
+            fn dWorldGetERP(w: *mut DxWorld) -> Real;
+            fn dWorldGetCFM(w: *mut DxWorld) -> Real;
+            fn dWorldGetQuickStepW(w: *mut DxWorld) -> Real;
+            fn dWorldGetContactSurfaceLayer(w: *mut DxWorld) -> Real;
+            fn dWorldAddBody(w: *mut DxWorld, b: *mut DxBody);
+            fn dWorldRemoveBody(w: *mut DxWorld, b: *mut DxBody);
+            fn dWorldAddJoint(w: *mut DxWorld, j: *mut DxJoint);
+            fn dBodyDisable(b: *mut DxBody);
+            fn dBodyIsEnabled(b: *mut DxBody) -> c_int;
+            fn dBodyGetLinearVel(b: *mut DxBody) -> *const Real;
+            fn dBodySetAutoDisableSteps(b: *mut DxBody, steps: c_int);
+            fn dBodyGetAutoDisableSteps(b: *mut DxBody) -> c_int;
+            fn dJointCreateContact(
+                w: *mut DxWorld,
+                g: *mut DxJointGroup,
+                c: *const Contact,
+            ) -> *mut DxJoint;
+            fn dJointCreateContactSpecial(
+                w: *mut DxWorld,
+                g: *mut DxJointGroup,
+                c: *const Contact,
+            ) -> *mut DxJoint;
+            fn dJointGetType(j: *mut DxJoint) -> c_int;
+            fn dJointAttach(j: *mut DxJoint, b1: *mut DxBody, b2: *mut DxBody);
+            fn dJointDestroy(j: *mut DxJoint);
+            fn dNormalize3(a: *mut Real);
+            fn dNormalize3_slow(a: *mut Real);
+            fn dCreateBox(space: *mut c_void, lx: Real, ly: Real, lz: Real) -> *mut DxGeom;
+            fn dCreateRay(space: *mut c_void, length: Real) -> *mut DxGeom;
+            fn dGeomDestroy(g: *mut DxGeom);
+            fn dGeomSetPosition(g: *mut DxGeom, x: Real, y: Real, z: Real);
+            fn dGeomSetRotation(g: *mut DxGeom, r: *const Real);
+            fn dGeomGetRotation(g: *mut DxGeom) -> *const Real;
+            fn dGeomGetPosition(g: *mut DxGeom) -> *const Real;
+            fn dGeomRaySet(
+                g: *mut DxGeom,
+                px: Real,
+                py: Real,
+                pz: Real,
+                dx: Real,
+                dy: Real,
+                dz: Real,
+            );
+            fn dRFromAxisAndAngle(r: *mut Real, ax: Real, ay: Real, az: Real, angle: Real);
+            fn dCollide(
+                o1: *mut DxGeom,
+                o2: *mut DxGeom,
+                flags: c_int,
+                contact: *mut ContactGeom,
+                skip: c_int,
+            ) -> c_int;
+        }
+
+        /// The library-wide parameters a fresh world leaves (3.1).
+        fn lock() -> std::sync::MutexGuard<'static, ()> {
+            STEPPING.lock().unwrap_or_else(|e| e.into_inner())
+        }
+
+        #[test]
+        fn world_creation_resets_the_library_wide_values() {
+            let _turn = lock();
+            // SAFETY: the library's functions on live objects, under the lock.
+            unsafe {
+                let a = dWorldCreate();
+                dWorldSetERP(a, 0.7);
+                let b = dWorldCreate();
+                assert_eq!(dWorldGetERP(a), 0.2, "creating b resets them");
+                dWorldSetCFM(b, 0.5);
+                assert_eq!(dWorldGetCFM(a), 0.5, "one value for every world");
+                assert_eq!(dWorldGetQuickStepW(a), 1.1);
+                assert_eq!(dWorldGetContactSurfaceLayer(a), 0.001);
+                dWorldDestroy(a);
+                dWorldDestroy(b);
+            }
+        }
+
+        #[test]
+        fn bodies_outside_worlds_and_no_auto_disabling() {
+            let _turn = lock();
+            // SAFETY: as above.
+            unsafe {
+                let w = dWorldCreate();
+                dWorldSetGravity(w, 0.0, -10.0, 0.0);
+                let b = dBodyCreate(std::ptr::null_mut());
+                dBodySetAutoDisableSteps(b, 5);
+                assert_eq!(dBodyGetAutoDisableSteps(b), 0, "no per-body values");
+                dWorldQuickStep(w, 0.01);
+                assert_eq!(*dBodyGetLinearVel(b).add(1), 0.0, "not in the world");
+                dWorldAddBody(w, b);
+                dBodyDisable(b);
+                dWorldQuickStep(w, 0.01);
+                let v = *dBodyGetLinearVel(b).add(1);
+                assert!((v + 0.1).abs() < 1e-6, "stepped though disabled: {v}");
+                assert_eq!(dBodyIsEnabled(b), 1);
+                dWorldRemoveBody(w, b);
+                dWorldQuickStep(w, 0.01);
+                assert_eq!(*dBodyGetLinearVel(b).add(1), v, "not stepped once removed");
+                dBodyDestroy(b);
+                dWorldDestroy(w);
+            }
+        }
+
+        /// A body of `mass` resting on a contact under gravity −10: the
+        /// special contact's normal force stops at 100,000 (5.2, item 5).
+        fn rest_on(special: bool, mass: f32) -> f32 {
+            let _turn = lock();
+            // SAFETY: as above.
+            unsafe {
+                let w = dWorldCreate();
+                dWorldSetGravity(w, 0.0, -10.0, 0.0);
+                // No mixing: an ordinary contact then holds the body.
+                dWorldSetCFM(w, 0.0);
+                let b = dBodyCreate(w);
+                let mut m = DMass::default();
+                dMassSetSphereTotal(&mut m, mass, 0.5);
+                dBodySetMass(b, &m);
+                let mut c = Contact::default();
+                c.geom.normal = [0.0, 1.0, 0.0, 0.0];
+                let make = if special {
+                    dJointCreateContactSpecial
+                } else {
+                    dJointCreateContact
+                };
+                let j = make(std::ptr::null_mut(), std::ptr::null_mut(), &c);
+                assert_eq!(dJointGetType(j), 4);
+                dWorldAddJoint(w, j);
+                dJointAttach(j, b, std::ptr::null_mut());
+                dWorldQuickStep(w, 0.01);
+                let v = *dBodyGetLinearVel(b).add(1);
+                dJointDestroy(j);
+                dWorldDestroy(w);
+                v
+            }
+        }
+
+        #[test]
+        fn special_contact_caps_the_normal_force() {
+            assert!(rest_on(false, 1e6).abs() < 1e-4);
+            let v = rest_on(true, 1e6);
+            // v = h (g + 100,000 / m) = 0.01 (−10 + 0.1).
+            assert!((v + 0.099).abs() < 1e-5, "{v}");
+            assert!(rest_on(true, 1e3).abs() < 1e-4, "below the cap");
+        }
+
+        #[test]
+        fn normalisation() {
+            // SAFETY: plain functions on 3-vectors.
+            unsafe {
+                let mut a = [3.0, 0.0, 4.0, 0.0];
+                dNormalize3(a.as_mut_ptr());
+                assert_eq!(a[..3], [0.6, 0.0, 0.8]);
+                // Below the threshold: the slow path's result exactly.
+                let mut small = [1e-3, -2e-3, 0.5e-3, 0.0];
+                let mut slow = small;
+                dNormalize3(small.as_mut_ptr());
+                dNormalize3_slow(slow.as_mut_ptr());
+                assert_eq!(small, slow);
+                let mut zero = [0.0; 4];
+                dNormalize3(zero.as_mut_ptr());
+                assert_eq!(zero[..3], [1.0, 0.0, 0.0]);
+            }
+        }
+
+        #[test]
+        fn box_edges_crossing_give_more_contacts() {
+            // SAFETY: geometries made, collided and destroyed here.
+            unsafe {
+                let a = dCreateBox(std::ptr::null_mut(), 1.0, 1.0, 1.0);
+                let b = dCreateBox(std::ptr::null_mut(), 1.0, 1.0, 1.0);
+                // An edge-edge case found by a sweep over random poses.
+                let mut r = [0.0; 12];
+                dRFromAxisAndAngle(
+                    r.as_mut_ptr(),
+                    0.381_027,
+                    0.318_387_5,
+                    0.214_326_14,
+                    0.115_076_6,
+                );
+                dGeomSetRotation(a, r.as_ptr());
+                dRFromAxisAndAngle(
+                    r.as_mut_ptr(),
+                    0.096_875_61,
+                    0.127_960_15,
+                    0.103_413_045,
+                    1.061_063_6,
+                );
+                dGeomSetRotation(b, r.as_ptr());
+                dGeomSetPosition(b, 0.213_990_27, 0.628_570_1, 0.631_959_26);
+                let mut c = [ContactGeom::default(); 8];
+                // At most 1 asked for: public 0.5.0's one, and the further
+                // ones regardless.
+                let n = dCollide(a, b, 1, c.as_mut_ptr(), size_of::<ContactGeom>() as c_int);
+                assert_eq!(n, 4);
+                for k in 0..n as usize {
+                    assert!(c[k].depth > 0.0, "{k}: {}", c[k].depth);
+                    assert_eq!(c[k].normal, c[0].normal);
+                }
+                dGeomDestroy(a);
+                dGeomDestroy(b);
+            }
+        }
+
+        #[test]
+        fn ray_set_builds_the_whole_rotation() {
+            // SAFETY: as above.
+            unsafe {
+                let r = dCreateRay(std::ptr::null_mut(), 1.0);
+                dGeomRaySet(r, 1.0, 2.0, 3.0, 0.0, 0.0, 2.0);
+                let p = std::slice::from_raw_parts(dGeomGetPosition(r), 3);
+                assert_eq!(p, [1.0, 2.0, 3.0]);
+                let m = std::slice::from_raw_parts(dGeomGetRotation(r), 12);
+                // Third column the normalised direction; an orthonormal frame.
+                assert_eq!([m[2], m[6], m[10]], [0.0, 0.0, 1.0]);
+                let col = |j: usize| [m[j], m[4 + j], m[8 + j]];
+                let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+                assert!((dot(col(0), col(0)) - 1.0).abs() < 1e-6);
+                assert!(dot(col(0), col(1)).abs() < 1e-6);
+                dGeomDestroy(r);
+            }
+        }
     }
 }

@@ -133,12 +133,15 @@ http_archive(
 )
 
 # The physics solver (docs/architecture/simulation.md): the Open Dynamics
-# Engine's 0.5.0 release, the shipped library's base, its core built by
-# volya-engine-core's build script under its BSD option. Not updated: the
-# release is fixed by the shipped library (docs/behavior/physics-library.md).
+# Engine's 0.5.0 release, the shipped library's base, changed as the shipped
+# library (our patch), its core built by volya-engine-core's build script
+# under its BSD option. Not updated: the release is fixed by the shipped
+# library (docs/behavior/physics-library.md).
 http_archive(
     name = "ode",
     build_file = "//build:ode.BUILD.bazel",
+    patch_args = ["-p1"],
+    patches = ["//third_party/ode:shipped-library.patch"],
     sha256 = "5388c4cd4666f270f18216c90ab6526229c53fdc7e82f93ddb0824e69521df1c",
     strip_prefix = "ode-0.5",
     url = "https://downloads.sourceforge.net/project/opende/ODE/ODE%20version%200.5/ode-0.5.tgz",
