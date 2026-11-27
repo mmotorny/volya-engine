@@ -9,7 +9,9 @@
 //! of 16 KiB plus 22 bytes and never returns them. A larger request is one
 //! `System` block of the request plus 23 bytes. [`in_use_bytes`] counts as
 //! `* phase cmem` and *h* do: every chunk whole and every large block with
-//! its 23 bytes.
+//! its 23 bytes. The game scripts' pool ([`GAME_SCRIPTS`], *g*) is the same
+//! [`Pools`] with chunks of its own, outside that count; its figure is its
+//! bytes in use, its free blocks not among them (console-diagnostics.md 2.1).
 
 // `GlobalAlloc` is unsafe to implement; the pools hand out raw blocks.
 #![allow(unsafe_code)]
@@ -47,16 +49,21 @@ pub fn block_bytes(pool: usize) -> usize {
 /// chunks whole, used or free, and every large block with its 23 bytes
 /// (`System`'s own overhead not in it).
 pub fn in_use_bytes() -> usize {
-    CHUNKS.load(Ordering::Relaxed) * CHUNK_BYTES + LARGE.load(Ordering::Relaxed)
+    HEAP.chunks.load(Ordering::Relaxed) * CHUNK_BYTES + HEAP.large.load(Ordering::Relaxed)
 }
 
-/// The chunks the pools have taken.
+/// The chunks the global allocator's pools have taken.
 pub fn chunks() -> usize {
-    CHUNKS.load(Ordering::Relaxed)
+    HEAP.chunks.load(Ordering::Relaxed)
 }
 
-static CHUNKS: AtomicUsize = AtomicUsize::new(0);
-static LARGE: AtomicUsize = AtomicUsize::new(0);
+/// The global allocator's pools, counted in [`in_use_bytes`].
+static HEAP: Pools = Pools::new();
+
+/// The game scripts' pool (*g*): the script runtime's allocator, outside
+/// [`in_use_bytes`], as the original's game library commits its script
+/// machine's pool apart from its heap (console-diagnostics.md 2.1, 2.1.1).
+pub static GAME_SCRIPTS: Pools = Pools::new();
 
 /// A free block: the next free block of its pool.
 struct Free {
@@ -97,15 +104,45 @@ impl Pool {
     }
 }
 
-static POOL: [Pool; POOLS] = [const { Pool::new() }; POOLS];
+/// The 54 pools and the large blocks over `System` ([module docs](self)),
+/// with chunks of their own: the global allocator's, and each pool kept
+/// apart from the heap's figures ([`GAME_SCRIPTS`]).
+pub struct Pools {
+    pool: [Pool; POOLS],
+    /// The chunks taken.
+    chunks: AtomicUsize,
+    /// The large blocks' bytes, each with its 23.
+    large: AtomicUsize,
+    /// The blocks handed out, bytes (each its pool's block size).
+    used: AtomicUsize,
+}
 
-/// The global allocator ([module docs](self)).
-pub struct MemoryManager;
+impl Pools {
+    /// Pools that hold nothing yet.
+    pub const fn new() -> Self {
+        Self {
+            pool: [const { Pool::new() }; POOLS],
+            chunks: AtomicUsize::new(0),
+            large: AtomicUsize::new(0),
+            used: AtomicUsize::new(0),
+        }
+    }
 
-impl MemoryManager {
+    /// The bytes in use: what was taken from `System` less the free
+    /// blocks, i.e. the blocks handed out and the large blocks with their
+    /// 23 bytes (*g* for [`GAME_SCRIPTS`]).
+    pub fn in_use_bytes(&self) -> usize {
+        self.used.load(Ordering::Relaxed) + self.large.load(Ordering::Relaxed)
+    }
+
+    /// The chunks taken.
+    pub fn chunks(&self) -> usize {
+        self.chunks.load(Ordering::Relaxed)
+    }
+
     /// A block of `pool`, or null when `System` has no chunk to give.
-    fn take(pool: usize) -> *mut u8 {
-        POOL[pool].with(|free| {
+    fn take(&self, pool: usize) -> *mut u8 {
+        let block: *mut u8 = self.pool[pool].with(|free| {
             if free.is_null() {
                 // SAFETY: the layout's size is nonzero.
                 let chunk =
@@ -113,7 +150,7 @@ impl MemoryManager {
                 if chunk.is_null() {
                     return chunk;
                 }
-                CHUNKS.fetch_add(1, Ordering::Relaxed);
+                self.chunks.fetch_add(1, Ordering::Relaxed);
                 let size = block_bytes(pool);
                 for k in (0..CHUNK_BLOCKS_BYTES / size).rev() {
                     // SAFETY: within the chunk, aligned to 16.
@@ -126,17 +163,22 @@ impl MemoryManager {
             // SAFETY: a free block of this pool.
             *free = unsafe { (*block).next };
             block.cast()
-        })
+        });
+        if !block.is_null() {
+            self.used.fetch_add(block_bytes(pool), Ordering::Relaxed);
+        }
+        block
     }
 
     /// Gives `block` back to `pool`.
-    fn give(pool: usize, block: *mut u8) {
-        POOL[pool].with(|free| {
+    fn give(&self, pool: usize, block: *mut u8) {
+        self.pool[pool].with(|free| {
             let block = block.cast::<Free>();
             // SAFETY: a block of this pool, no longer used.
             unsafe { block.write(Free { next: *free }) };
             *free = block;
         });
+        self.used.fetch_sub(block_bytes(pool), Ordering::Relaxed);
     }
 
     /// The `System` layout of a large request.
@@ -144,12 +186,14 @@ impl MemoryManager {
         let size = layout.size().checked_add(LARGE_EXTRA)?;
         Layout::from_size_align(size, layout.align()).ok()
     }
-}
 
-unsafe impl GlobalAlloc for MemoryManager {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+    /// A block for `layout`, or null when `System` has none to give.
+    ///
+    /// # Safety
+    /// As [`GlobalAlloc::alloc`]: `layout`'s size is nonzero.
+    pub unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         if let Some(pool) = pool_of(layout.size(), layout.align()) {
-            return Self::take(pool);
+            return self.take(pool);
         }
         let Some(large) = Self::large(layout) else {
             return std::ptr::null_mut();
@@ -157,14 +201,18 @@ unsafe impl GlobalAlloc for MemoryManager {
         // SAFETY: a nonzero size.
         let p = unsafe { System.alloc(large) };
         if !p.is_null() {
-            LARGE.fetch_add(large.size(), Ordering::Relaxed);
+            self.large.fetch_add(large.size(), Ordering::Relaxed);
         }
         p
     }
 
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+    /// As [`Pools::alloc`], the bytes zeroed.
+    ///
+    /// # Safety
+    /// As [`GlobalAlloc::alloc_zeroed`].
+    pub unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         if let Some(pool) = pool_of(layout.size(), layout.align()) {
-            let p = Self::take(pool);
+            let p = self.take(pool);
             if !p.is_null() {
                 // SAFETY: the block holds at least the request.
                 unsafe { p.write_bytes(0, layout.size()) };
@@ -177,22 +225,31 @@ unsafe impl GlobalAlloc for MemoryManager {
         // SAFETY: a nonzero size.
         let p = unsafe { System.alloc_zeroed(large) };
         if !p.is_null() {
-            LARGE.fetch_add(large.size(), Ordering::Relaxed);
+            self.large.fetch_add(large.size(), Ordering::Relaxed);
         }
         p
     }
 
-    unsafe fn dealloc(&self, p: *mut u8, layout: Layout) {
+    /// Frees `p`.
+    ///
+    /// # Safety
+    /// As [`GlobalAlloc::dealloc`]: `p` was made by these pools with
+    /// `layout`.
+    pub unsafe fn dealloc(&self, p: *mut u8, layout: Layout) {
         if let Some(pool) = pool_of(layout.size(), layout.align()) {
-            return Self::give(pool, p);
+            return self.give(pool, p);
         }
         // SAFETY: made by `alloc` with this layout, so `large` held then.
         let large = unsafe { Self::large(layout).unwrap_unchecked() };
         unsafe { System.dealloc(p, large) };
-        LARGE.fetch_sub(large.size(), Ordering::Relaxed);
+        self.large.fetch_sub(large.size(), Ordering::Relaxed);
     }
 
-    unsafe fn realloc(&self, p: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+    /// `p` resized to `size` bytes; within the same pool it stays in place.
+    ///
+    /// # Safety
+    /// As [`GlobalAlloc::realloc`].
+    pub unsafe fn realloc(&self, p: *mut u8, layout: Layout, size: usize) -> *mut u8 {
         let align = layout.align();
         let (from, to) = (pool_of(layout.size(), align), pool_of(size, align));
         match (from, to) {
@@ -207,8 +264,8 @@ unsafe impl GlobalAlloc for MemoryManager {
                 // SAFETY: `p` was made with `old`; `new` is nonzero.
                 let q = unsafe { System.realloc(p, old, new) };
                 if !q.is_null() {
-                    LARGE.fetch_add(new, Ordering::Relaxed);
-                    LARGE.fetch_sub(old.size(), Ordering::Relaxed);
+                    self.large.fetch_add(new, Ordering::Relaxed);
+                    self.large.fetch_sub(old.size(), Ordering::Relaxed);
                 }
                 q
             }
@@ -227,6 +284,38 @@ unsafe impl GlobalAlloc for MemoryManager {
                 q
             }
         }
+    }
+}
+
+impl Default for Pools {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The global allocator ([module docs](self)).
+pub struct MemoryManager;
+
+// SAFETY: the pools keep GlobalAlloc's contract.
+unsafe impl GlobalAlloc for MemoryManager {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        // SAFETY: the caller's contract is the pools'.
+        unsafe { HEAP.alloc(layout) }
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        // SAFETY: as `alloc`.
+        unsafe { HEAP.alloc_zeroed(layout) }
+    }
+
+    unsafe fn dealloc(&self, p: *mut u8, layout: Layout) {
+        // SAFETY: as `alloc`.
+        unsafe { HEAP.dealloc(p, layout) }
+    }
+
+    unsafe fn realloc(&self, p: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+        // SAFETY: as `alloc`.
+        unsafe { HEAP.realloc(p, layout, size) }
     }
 }
 
@@ -315,6 +404,30 @@ mod tests {
         assert_eq!(pool_of(862, 8), Some(POOLS - 1));
         assert_eq!(size(863), None);
         assert_eq!(pool_of(16, 32), None, "aligned over 16: large");
+    }
+
+    #[test]
+    fn a_pool_of_its_own_counts_its_bytes_in_use_outside_the_heap() {
+        let pools = Pools::new();
+        let (small, big) = (
+            Layout::from_size_align(40, 8).unwrap(),
+            Layout::from_size_align(2000, 8).unwrap(),
+        );
+        // SAFETY: allocations of a nonzero size, freed with their layouts.
+        unsafe {
+            let a = pools.alloc(small);
+            let b = pools.alloc(big);
+            // The pool of 48 bytes; the large block with its 23.
+            assert_eq!(pools.in_use_bytes(), 48 + 2023);
+            assert_eq!(pools.chunks(), 1);
+            let c = pools.realloc(a, small, 100);
+            assert_eq!(pools.in_use_bytes(), 112 + 2023);
+            pools.dealloc(c, Layout::from_size_align(100, 8).unwrap());
+            pools.dealloc(b, big);
+        }
+        // Its chunks are kept, free; its figure is what is in use.
+        assert_eq!(pools.in_use_bytes(), 0);
+        assert_eq!(pools.chunks(), 2);
     }
 
     #[test]

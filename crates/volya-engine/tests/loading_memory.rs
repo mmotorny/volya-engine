@@ -113,6 +113,9 @@ const ORIGINAL_H: u64 = 227_120;
 /// The original's *h* when the load began, K (console-diagnostics.md 2.4.1):
 /// reported beside, not a budget.
 const ORIGINAL_START_H: u64 = 26_115;
+/// The original's game scripts' pool (*g*) at the load's end, K (#667):
+/// reported beside, not a budget.
+const ORIGINAL_G: &str = "25,762-25,784";
 
 /// K, as the original's figures: rounded down.
 fn k(bytes: usize) -> u64 {
@@ -210,12 +213,13 @@ fn loading_stage_memory() {
         }
     }
     eprintln!(
-        "the load: h {} K at its start (the original {ORIGINAL_START_H} K), {} K at its end (the original {ORIGINAL_H} K; {} K asked for), peak +{:.1} MB asked for above its start; {} pool chunks",
+        "the load: h {} K at its start (the original {ORIGINAL_START_H} K), {} K at its end (the original {ORIGINAL_H} K; {} K asked for), peak +{:.1} MB asked for above its start; {} pool chunks; g {} K at its end (the original {ORIGINAL_G} K, reported beside)",
         k(marks[0].1),
         k(end),
         k(asked),
         mb(highest),
-        memory_manager::chunks()
+        memory_manager::chunks(),
+        k(memory_manager::GAME_SCRIPTS.in_use_bytes())
     );
     if k(end) > ORIGINAL_H {
         excesses.push(format!(

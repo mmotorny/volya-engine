@@ -495,6 +495,8 @@ pub struct LoadEnd {
     pub cmem: u64,
     pub crt_heap: u64,
     pub textures: u64,
+    /// The game scripts' pool in use (*g*).
+    pub game_lua: u64,
     /// The file cache: held at the load's end, its budget then (the files
     /// the original has open to the level's end, and any being read), and
     /// the most it held since the load began.
@@ -1739,6 +1741,7 @@ impl App {
                             cmem: memory.cmem,
                             crt_heap: memory.crt_heap,
                             textures: memory.textures,
+                            game_lua: memory.game_lua,
                             file_cache: held.most,
                             file_cache_budget: file_cache::budget(&held, &open),
                             file_cache_most: file_cache::most(),

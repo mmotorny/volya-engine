@@ -7,8 +7,10 @@
 //! library (csrc/wasm/libc.c) takes `malloc` and friends from
 //! `volya_engine_core::c_heap`.
 
-use std::alloc::{Layout, alloc, dealloc, handle_alloc_error, realloc};
+use std::alloc::{Layout, handle_alloc_error};
 use std::ffi::{CStr, c_char, c_int, c_void};
+
+use volya_engine_core::memory_manager::GAME_SCRIPTS;
 
 /// Lua's values need at most a double's or a pointer's alignment.
 const ALIGN: usize = 8;
@@ -17,8 +19,10 @@ fn layout(size: usize) -> Layout {
     Layout::from_size_align(size, ALIGN).unwrap_or_else(|_| handle_alloc_error(Layout::new::<u8>()))
 }
 
-/// Lua's allocator (`lua_Alloc`): Rust's allocator, aborting when memory
-/// runs out, so Lua never raises a memory error (a recoverable budget is #107).
+/// Lua's allocator (`lua_Alloc`): the game scripts' pool, outside the
+/// heap's figures and reported as *g* (docs/architecture/memory.md, The
+/// allocator), aborting when memory runs out, so Lua never raises a memory
+/// error (a recoverable budget is #107).
 pub unsafe extern "C" fn lua_alloc(
     _ud: *mut c_void,
     ptr: *mut c_void,
@@ -29,15 +33,15 @@ pub unsafe extern "C" fn lua_alloc(
     let new = if nsize == 0 {
         if !ptr.is_null() && osize != 0 {
             // SAFETY: Lua passes the block's size as allocated.
-            unsafe { dealloc(ptr, layout(osize)) };
+            unsafe { GAME_SCRIPTS.dealloc(ptr, layout(osize)) };
         }
         return std::ptr::null_mut();
     } else if ptr.is_null() || osize == 0 {
         // SAFETY: nsize is nonzero.
-        unsafe { alloc(layout(nsize)) }
+        unsafe { GAME_SCRIPTS.alloc(layout(nsize)) }
     } else {
         // SAFETY: as above; nsize is nonzero.
-        unsafe { realloc(ptr, layout(osize), nsize) }
+        unsafe { GAME_SCRIPTS.realloc(ptr, layout(osize), nsize) }
     };
     if new.is_null() {
         handle_alloc_error(layout(nsize));

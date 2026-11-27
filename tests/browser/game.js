@@ -68,12 +68,14 @@ export const ORIGINAL = {
   withSound: { loadStartH: 59492, h: 260535, captions: { st_loading_ai_objects: 40 } },
   // Reported beside, not budgets (console-diagnostics.md 2.1's example).
   titleMenuH: 26449,
+  // The game scripts' pool at the load's end, K (#667): reported beside.
+  g: "25762-25784",
 };
 const kib = (bytes) => Math.floor(bytes / 1024);
 /**
  * The latest load's figures against the original's, from the `load_memory`
  * op: each caption's growth of `* phase cmem` (K, ours/the original's), the
- * end-of-load h and t, the file cache against its budget under each caption
+ * end-of-load h and t (g beside), the file cache against its budget under each caption
  * and at the load's end, then every excess as an "EXCESS" note.
  */
 export async function againstOriginal() {
@@ -104,7 +106,7 @@ export async function againstOriginal() {
   const [cacheEnd, cacheBudget] = [kib(load.end.file_cache), kib(load.end.file_cache_budget)];
   if (cacheEnd > cacheBudget) excesses.push(`the file cache holds ${cacheEnd} K at the load's end, its budget ${cacheBudget} K`);
   const excess = excesses.length ? `EXCESS over the original's (to file): ${excesses.join("; ")}; ` : "";
-  return `${excess}${sound ? `with sound (its memory ${kib(now.sound)} K, the cache ${kib(now.sound_cache)} K), h at the load's start ${marks[0]?.[1]}/${ORIGINAL.withSound.loadStartH} K; ` : "without sound; "}kept by caption (K, ours/the original's): ${kept.join(", ")}; at the load's end h ${h}/${originalH} K, t ${t}/${ORIGINAL.t} K; h now ${kib(now.crt_heap)} K; the file cache by caption (K, its most/its budget): ${cache.join(", ")}; at the load's end ${cacheEnd}/${cacheBudget} K, its most since the load began ${kib(load.end.file_cache_most)} K`;
+  return `${excess}${sound ? `with sound (its memory ${kib(now.sound)} K, the cache ${kib(now.sound_cache)} K), h at the load's start ${marks[0]?.[1]}/${ORIGINAL.withSound.loadStartH} K; ` : "without sound; "}kept by caption (K, ours/the original's): ${kept.join(", ")}; at the load's end h ${h}/${originalH} K, t ${t}/${ORIGINAL.t} K, g ${kib(load.end.game_lua)}/${ORIGINAL.g} K; h now ${kib(now.crt_heap)} K, g ${kib(now.game_lua)} K; the file cache by caption (K, its most/its budget): ${cache.join(", ")}; at the load's end ${cacheEnd}/${cacheBudget} K, its most since the load began ${kib(load.end.file_cache_most)} K`;
 }
 /** h now (K), from the `load_memory` op. */
 export const hNow = async () => kib((await volya.call("load_memory")).now.crt_heap);

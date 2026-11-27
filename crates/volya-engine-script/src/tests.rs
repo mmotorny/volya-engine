@@ -24,6 +24,19 @@ fn rust_panics_become_lua_errors() {
 }
 
 #[test]
+fn a_state_allocates_from_the_game_scripts_pool() {
+    use volya_engine_core::memory_manager::GAME_SCRIPTS;
+    let before = GAME_SCRIPTS.in_use_bytes();
+    let mut lua = Lua::new().unwrap();
+    // 8 MB kept by the state; other tests' states, made and closed on
+    // other threads meanwhile, are far smaller.
+    lua.exec("=big", b"big = string.rep('x', 8000000)").unwrap();
+    assert!(GAME_SCRIPTS.in_use_bytes() > before + 7_000_000);
+    drop(lua);
+    assert!(GAME_SCRIPTS.in_use_bytes() < before + 1_000_000);
+}
+
+#[test]
 fn states_are_independent() {
     let mut a = Lua::new().unwrap();
     let mut b = Lua::new().unwrap();
