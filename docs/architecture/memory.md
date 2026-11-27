@@ -23,15 +23,15 @@ Anything above a budget is filed as an issue and investigated. Budgets are still
 
 | Tool | Where | What |
 |---|---|---|
-| `crates/volya-engine/tests/loading_memory.rs` | native, counting allocator | What each caption keeps (its `phase cmem` growth) and the end-of-load *h* against the original's, every excess an `EXCESS` line; each stage's peak above its start, allocations made and blocks kept; the program's data; what outlives the level. |
-| `load_memory` op | browser | The latest load's `phase cmem` as each caption began, by caption id, and its end's `phase cmem`, *h* and *t*; *h* and *t* now. The game suites compare them with the original's (`againstOriginal`, tests/browser/game.js), every excess an `EXCESS` note. |
+| `crates/volya-engine/tests/loading_memory.rs` | native, counting allocator | What each caption keeps (its `phase cmem` growth) and the end-of-load *h* against the original's, and the file cache's most under each caption and at the load's end against its budget, every excess an `EXCESS` line; each stage's peak above its start, allocations made and blocks kept; the program's data; what outlives the level. |
+| `load_memory` op | browser | The latest load's `phase cmem` as each caption began, by caption id, and its end's `phase cmem`, *h* and *t*; *h* and *t* now; the file cache's most under each caption and its budget then (`file_cache`), and at the end what it holds, its budget and its most since the load began. The game suites compare them with the original's and the cache with its budget (`againstOriginal`, tests/browser/game.js), every excess an `EXCESS` note. |
 | `crates/volya-engine/tests/level_memory.rs` | native, counting allocator | Every shipped level's own files: the collision world's and the detail objects' heap, the `level` file's read peak, and as stored the geometry, the navigation file and the textures its surfaces name. |
 | `render-level` suite's "a level frame's heap traffic" (`volya_engine::selftest::frame_memory`) | browser, the test build's counting allocator | Allocations and bytes a frame of the running level makes on the wasm heap, by part. |
 | `heap_log` op (test builds) | browser | The wasm heap and the most live under each loading caption. |
 | `heap_map` op (test builds) | browser | Live KiB per MiB of the heap and every live block of 256 KiB or more, by address. |
 | `heap_record` op (test builds) | browser | At the load's most live: live bytes by block size and the largest blocks; every allocation that grew the wasm memory since the reset, by size and address. |
 | The console's `stat_memory`, `dump_resources` and `* phase cmem` (docs/behavior/console-diagnostics.md; in the game's log) | browser, every build | *h* and `phase cmem` as the original counts them ([The allocator](#the-allocator)); *g* and *r* the game scripts' and the renderer's pools; *c* the wasm memory, the rest of 4 GiB free; *t* by the original's rule ([Textures and the GPU](#textures-and-the-gpu)); the colour targets, the programs (as vertex and as fragment shaders) and the vertex arrays (as vertex declarations). The original's other figures (*p*, *e*) have no counterpart and print 0. The file cache's figure is `level_stats`' ([File-backed data](#file-backed-data)). |
-| `level_stats` op | browser | The wasm heaps (engine, audio worker); the GPU world's buffers and textures; everything the context holds (`gpu_live`), split into the level's (`gpu_level`) and what the renderer keeps across games (`gpu_kept`), and by owner (`gpu_owners`: the level, the renderer's own, the targets, the particles', the lights', the images, the videos). |
+| `level_stats` op | browser | The wasm heaps (engine, audio worker); the GPU world's buffers and textures; everything the context holds (`gpu_live`), split into the level's (`gpu_level`) and what the renderer keeps across games (`gpu_kept`), and by owner (`gpu_owners`: the level, the renderer's own, the targets, the particles', the lights', the images, the videos); the file cache's bytes, its files with theirs and its most since the load began (`file_cache`). |
 | `game-level` and `game-memory` suites' JS memory | Chrome | `performance.measureUserAgentSpecificMemory()` after the New Game (cross-origin isolated pages only, documented, MDN): each context's JavaScript, the wasm memories not among it. |
 | `footprint` of the Simulator's processes | iOS Simulator | Per-process footprints; ETC2 textures there are held as RGBA8, so they don't show the device's (#443). |
 | The original's log under Wine (`xtask original --new-game --quit`, docs/testing.md) | Wine | Its `phase cmem` per caption and its end-of-load `stat_memory`: the budgets ([The original](#the-original)). |
@@ -142,7 +142,7 @@ Measured (#667): its New Game of `l01_escape` run unmodified under Wine three ti
 | 13 | `st_loading_sectors_portals` | 143 | 0 | 0 | |
 | 14 | `st_loading_ai_objects` | 0 | 1 | 1 | The navigation positions (moved from 5; a leaner structure in place of the mapped `level.ai`, rule 5) and `level.gct` counted in the file cache's figure, not *h*. |
 | 15 | `st_client_spawning` | 4,708 | 13,801 | 13,615 | The objects' models come from 1 (one not prefetched is loaded here); their CPU geometry, every detail window's indices among it (12.3 MB), freed once uploaded, as the original keeps it in Direct3D's buffers. |
-| 16 | `st_loading_textures` | 1 | 530 | 502 | The texture file read into the file cache, not the heap. |
+| 16 | `st_loading_textures` | 1 | 530 | 502 | Not the texture files (in the file cache, [File-backed data](#file-backed-data); natively none is read): what it keeps is to be found (#713). |
 | 17 | `st_client_synchronising` | 0 | 356 | −5,987 | |
 | | The load, its first caption to its end | 201,005 | 70,742 | 55,436 | |
 | | *h* at the load's end | 227,120 | 86,693 | 75,535 | |
@@ -190,6 +190,16 @@ The original reads in place, from views of the mapped archives, the files it kee
 - **Budget**: at any moment, the bytes of the files the original has open then (for `l01_escape` in a level 28.6 MB: `level`, `level.ai`, `level.gct`, `level.details`; during the load, the file being read beside them). A leaner structure that replaces a mapped file (rule 5: the detail slot grid, the navigation positions) counts here against that file's share, not in *h*. Files are held whole, which the budget affords by its definition; a file is held by parts only where a measured hard limit doesn't afford it whole, with a smaller budget of the cache's size (a deviation, [Deviations](#deviations)).
 - **Reported**: the file cache's bytes, by file, and its most since the load began, in `level_stats` (`file_cache`) and by the game suites against the budget at each caption and at the load's end. The console's lines stay the original's: the figure is not added to `stat_memory`, and *c* remains the wasm memory.
 - Natively the same cache is used (one path; the native tests count *h* and the cache the same way).
+
+It is `volya_engine_core::file_cache` (#690). A file is read whole into bytes taken from `System` directly (`memory_manager::SystemBytes`), outside the pools and *h*, and held while any reader holds it; a file read again while held is shared. The budget of a caption is computed from the table: the sizes, from the archive's listing, of the files the original has open under it (`NewGameLoad::original_open`), and beside them the largest other file the cache held under it (the file being read: two held at once, or one kept past its reading, exceed it). The texture files go through it: the platform's preparation under `st_loading_textures`, a texture loaded at the level's first draw, the interface's images.
+
+| Under | The cache's most, K | Its budget, K |
+|---|---|---|
+| `st_loading_textures` (the largest texture file) | 5,461 | 33,357 |
+| The loading screen's images (`st_prefetching_objects`, `st_server_connecting`, `st_client_synchronising`) | 1,024; 64; 1,024 | the same |
+| The load's end | 0 | 27,896 |
+
+(Measured: headless Chrome, `game-level` and `game-memory`, every load alike.) Before it the texture files were read into one heap buffer freed at the preparation's end, so no caption's `phase cmem` growth changed: `st_loading_textures` keeps 200–530 K before and after, natively 530 K, where no texture file is read (#713); the most live under the caption fell from 79 to 76 MiB and the wasm memory stayed 96 MiB.
 
 ### Textures and the GPU
 

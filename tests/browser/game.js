@@ -68,7 +68,8 @@ const kib = (bytes) => Math.floor(bytes / 1024);
 /**
  * The latest load's figures against the original's, from the `load_memory`
  * op: each caption's growth of `* phase cmem` (K, ours/the original's), the
- * end-of-load h and t, then every excess as an "EXCESS" note.
+ * end-of-load h and t, the file cache against its budget under each caption
+ * and at the load's end, then every excess as an "EXCESS" note.
  */
 export async function againstOriginal() {
   const { load, now } = await volya.call("load_memory");
@@ -84,8 +85,18 @@ export async function againstOriginal() {
   const [h, t] = [kib(load.end.crt_heap), kib(load.end.textures)];
   if (h > ORIGINAL.h) excesses.push(`h ${h} K at the load's end, the original ${ORIGINAL.h} K`);
   if (t > ORIGINAL.t) excesses.push(`t ${t} K at the load's end, the original ${ORIGINAL.t} K`);
+  // The file cache: the most it held under each caption and at the load's
+  // end against its budget, the bytes of the files the original has open
+  // then (docs/architecture/memory.md, File-backed data).
+  const cache = marks.map(([caption], i) => {
+    const [most, budget] = (load.file_cache[i] ?? [0, 0]).map(kib);
+    if (most > budget) excesses.push(`the file cache holds ${most} K under ${caption}, its budget ${budget} K`);
+    return `${caption} ${most}/${budget}`;
+  });
+  const [cacheEnd, cacheBudget] = [kib(load.end.file_cache), kib(load.end.file_cache_budget)];
+  if (cacheEnd > cacheBudget) excesses.push(`the file cache holds ${cacheEnd} K at the load's end, its budget ${cacheBudget} K`);
   const excess = excesses.length ? `EXCESS over the original's (to file): ${excesses.join("; ")}; ` : "";
-  return `${excess}kept by caption (K, ours/the original's): ${kept.join(", ")}; at the load's end h ${h}/${ORIGINAL.h} K, t ${t}/${ORIGINAL.t} K; h now ${kib(now.crt_heap)} K`;
+  return `${excess}kept by caption (K, ours/the original's): ${kept.join(", ")}; at the load's end h ${h}/${ORIGINAL.h} K, t ${t}/${ORIGINAL.t} K; h now ${kib(now.crt_heap)} K; the file cache by caption (K, its most/its budget): ${cache.join(", ")}; at the load's end ${cacheEnd}/${cacheBudget} K, its most since the load began ${kib(load.end.file_cache_most)} K`;
 }
 /** h now (K), from the `load_memory` op. */
 export const hNow = async () => kib((await volya.call("load_memory")).now.crt_heap);

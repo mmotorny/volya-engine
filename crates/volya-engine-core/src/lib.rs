@@ -18,6 +18,7 @@ pub mod details;
 pub mod detector;
 pub mod diagnostics;
 pub mod display;
+pub mod file_cache;
 pub mod footsteps;
 pub mod glows;
 pub mod input;

@@ -23,6 +23,7 @@ use crate::core::audio::Category;
 use crate::core::console::{Console, FatalReport};
 use crate::core::diagnostics;
 use crate::core::display::DisplayColour;
+use crate::core::file_cache;
 use crate::core::input::{Action, Control, Input, Key};
 use crate::core::lights::LightSettings;
 use crate::core::pause::{GlobalClock, Pause};
@@ -454,10 +455,20 @@ fn menu_font(
 /// bytes: `* phase cmem` as each caption began, by its string-table id, and
 /// the figures at the load's end (`* phase cmem`, *h* and *t*), once it has
 /// ended; compared with the original's (docs/architecture/memory.md).
+/// Beside them the file cache's: under each caption that has ended, the
+/// most it held and its budget then (`file_cache`, in the captions' order).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct LoadMemory {
     pub captions: Vec<(&'static str, u64)>,
+    pub file_cache: Vec<(u64, u64)>,
     pub end: Option<LoadEnd>,
+}
+
+/// The file cache's figure for the window [`file_cache::mark`] ends, in
+/// which the original has `open` open: the most it held and its budget.
+fn file_cache_figure(open: &[(String, u64)]) -> (u64, u64) {
+    let window = file_cache::mark();
+    (window.most, file_cache::budget(&window, open))
 }
 
 /// [`LoadMemory`]'s figures at the load's end, bytes.
@@ -466,6 +477,12 @@ pub struct LoadEnd {
     pub cmem: u64,
     pub crt_heap: u64,
     pub textures: u64,
+    /// The file cache: held at the load's end, its budget then (the files
+    /// the original has open to the level's end, and any being read), and
+    /// the most it held since the load began.
+    pub file_cache: u64,
+    pub file_cache_budget: u64,
+    pub file_cache_most: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -526,6 +543,9 @@ pub struct App {
     load_ms: Option<f64>,
     /// The latest load's memory figures.
     load_memory: LoadMemory,
+    /// The files the original has open under the load's last caption, to
+    /// the level's end: the file cache's budget at the load's end.
+    load_open: Vec<(String, u64)>,
     /// The settings and bindings (docs/behavior/options-screens.md).
     console: Console,
     /// The menu's sub-screens and boxes, and the saved games.
@@ -837,6 +857,7 @@ impl App {
             loaded_since: None,
             load_ms: None,
             load_memory: LoadMemory::default(),
+            load_open: Vec::new(),
         })
     }
 
@@ -1443,8 +1464,10 @@ impl App {
                         let memory = self
                             .console
                             .phase_caption(0, &loading.screen().state().caption);
+                        file_cache::begin_load();
                         self.load_memory = LoadMemory {
                             captions: vec![(loading.stage().caption_id(), memory.cmem)],
+                            file_cache: Vec::new(),
                             end: None,
                         };
                         if self.prepare_textures {
@@ -1464,6 +1487,11 @@ impl App {
                             let memory = self.console.phase_caption(ms, &screen.caption);
                             (self.load_memory.captions)
                                 .push((loading.stage().caption_id(), memory.cmem));
+                            (self.load_memory.file_cache)
+                                .push(file_cache_figure(loading.original_open()));
+                        }
+                        if matches!(step, Ok(Some(_))) {
+                            self.load_open = loading.original_open().to_vec();
                         }
                         step.map(|level| level.map(|l| (l, loading.screen().clone())))
                     }
@@ -1598,10 +1626,19 @@ impl App {
                         let ms = phase_ms(&mut self.phase_started, time_ms);
                         self.phase_started = None;
                         let memory = self.console.load_ended(ms);
+                        let open = std::mem::take(&mut self.load_open);
+                        (self.load_memory.file_cache).push(file_cache_figure(&open));
+                        let held = file_cache::Window {
+                            most: file_cache::bytes(),
+                            files: file_cache::held(),
+                        };
                         self.load_memory.end = Some(LoadEnd {
                             cmem: memory.cmem,
                             crt_heap: memory.crt_heap,
                             textures: memory.textures,
+                            file_cache: held.most,
+                            file_cache_budget: file_cache::budget(&held, &open),
+                            file_cache_most: file_cache::most(),
                         });
                     }
                 }

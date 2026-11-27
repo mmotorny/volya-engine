@@ -203,9 +203,9 @@ async fn prepare(paths: Vec<String>, load: Option<u64>) -> Result<(), JsValue> {
     let written = || crate::gpu::with_renderer(|r| r.texture_bytes_written()).unwrap_or(0);
     // The bytes written since WebGL last reported the writes done.
     let mut staged_from = written();
-    // Every file is read into this one, and each band transcoded into the
-    // other.
-    let mut bytes = Vec::new();
+    // Each band is transcoded into this one; each file is held in the file
+    // cache while it is read (docs/architecture/memory.md, File-backed
+    // data).
     let mut scratch = Vec::new();
     let mut turn = now();
     let quality = crate::engine::texture_quality().unwrap_or_default();
@@ -217,9 +217,9 @@ async fn prepare(paths: Vec<String>, load: Option<u64>) -> Result<(), JsValue> {
         }
         let _span = tracing::info_span!("prepare.texture").entered();
         let t = now();
-        if crate::game::read_into(&path, &mut bytes).is_err() {
+        let Ok(bytes) = crate::game::read_cached(&path) else {
             continue;
-        }
+        };
         stats.read_ms += now() - t;
         let Ok(dds) = Dds::parse(&bytes) else {
             continue;
@@ -274,6 +274,9 @@ async fn prepare(paths: Vec<String>, load: Option<u64>) -> Result<(), JsValue> {
         if let Some(texture) = crate::gpu::with_renderer(|r| upload.finish(r)) {
             crate::gpu::with_renderer(|r| r.add_prepared(&path, texture));
         }
+        // Read: the file goes before the next is read.
+        drop(dds);
+        drop(bytes);
         // Transcoding and uploading go band by band: a transcoded texture's
         // time is the transcoding's.
         let took = now() - t - waited;

@@ -1526,6 +1526,40 @@ fn earlier<T>(value: Option<T>, what: &str) -> io::Result<T> {
 }
 
 impl NewGameLoad {
+    /// The files the original has mapped and open under `stage`, once it
+    /// has run, with their sizes in `tree` (docs/architecture/memory.md,
+    /// File-backed data): `all.spawn` while `st_creating_new_game` reads
+    /// it; the `level` file from `st_opening_stream`, `level.details` from
+    /// `st_loading_details`, `level.ai` and `level.gct` from
+    /// `st_loading_ai_objects`, each to the level's end. The file cache's
+    /// budget under that caption, with the file being read beside them
+    /// ([`crate::core::file_cache::budget`]).
+    pub fn original_open(&self, stage: Stage, tree: &dyn Vfs) -> Vec<(String, u64)> {
+        let at = |s: Stage| Stage::ALL.iter().position(|&a| a == s);
+        let from = |s: Stage| at(stage) >= at(s);
+        let mut paths = Vec::new();
+        if stage == Stage::CreatingNewGame {
+            paths.push(self.spawn_path.clone());
+        }
+        let dir = &self.dir;
+        if !dir.is_empty() {
+            for (name, first) in [
+                ("level", Stage::OpeningStream),
+                ("level.details", Stage::LoadingDetails),
+                ("level.ai", Stage::LoadingAiObjects),
+                ("level.gct", Stage::LoadingAiObjects),
+            ] {
+                if from(first) {
+                    paths.push(format!("{dir}\\{name}"));
+                }
+            }
+        }
+        paths
+            .into_iter()
+            .filter_map(|p| crate::core::file_cache::file_size(tree, &p).map(|size| (p, size)))
+            .collect()
+    }
+
     /// The level directory name, once the new game is created.
     pub fn level_name(&self) -> Option<&str> {
         self.name.as_deref()

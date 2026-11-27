@@ -10,10 +10,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::core::camera::Mat4;
+use crate::core::file_cache;
 use crate::core::glows::{CORNER_UV, GlowSprite};
 use crate::core::texture_quality::TextureQuality;
+use crate::core::vfs::Vfs;
 use crate::core::vfs::read_ahead::ReadAhead;
-use crate::core::vfs::{self, Vfs};
 use crate::level::LevelWorld;
 use crate::level_visibility::Seen;
 use crate::particle_drawing::{ParticleDraw, ParticleShader};
@@ -136,7 +137,9 @@ fn load_texture(
     if let Some(texture) = renderer.take_prepared(path) {
         return Ok(texture);
     }
-    let bytes = vfs::read(tree, path).map_err(|e| e.to_string())?;
+    // Held in the file cache while it is read (docs/architecture/memory.md,
+    // File-backed data).
+    let bytes = file_cache::read(tree, path).map_err(|e| e.to_string())?;
     let dds = Dds::parse(&bytes).map_err(|e| e.to_string())?;
     let dds = quality.apply(path, &dds);
     renderer
@@ -343,7 +346,7 @@ impl Presenter {
         if let Some(t) = self.images.get(path) {
             return t.clone();
         }
-        let loaded = vfs::read(tree, path)
+        let loaded = file_cache::read(tree, path)
             .map_err(|e| e.to_string())
             .and_then(|bytes| {
                 let dds = Dds::parse(&bytes).map_err(|e| e.to_string())?;

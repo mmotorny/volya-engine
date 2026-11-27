@@ -732,9 +732,10 @@ pub fn read(path: &str) -> Result<Vec<u8>, JsValue> {
     with_tree(|tree| volya_engine::core::vfs::read(tree, path))
 }
 
-/// [`read`] into `buffer` ([`volya_engine::core::vfs::read_into`]).
-pub fn read_into(path: &str, buffer: &mut Vec<u8>) -> Result<(), JsValue> {
-    with_tree(|tree| volya_engine::core::vfs::read_into(tree, path, buffer))
+/// The file at `path` in the game tree, held in the file cache
+/// ([`volya_engine::core::file_cache`]) while the result is.
+pub fn read_cached(path: &str) -> Result<volya_engine::core::file_cache::CachedFile, JsValue> {
+    with_tree(|tree| volya_engine::core::file_cache::read(tree, path))
 }
 
 #[derive(Serialize)]

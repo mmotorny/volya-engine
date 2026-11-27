@@ -398,6 +398,9 @@ pub struct Loading {
     /// Whether the platform prepares the level's textures.
     prepare: bool,
     hold: Hold,
+    /// The files the original has open under the caption last run
+    /// ([`NewGameLoad::original_open`]).
+    original_open: Vec<(String, u64)>,
 }
 
 /// Where the loading stands with the platform's texture preparation.
@@ -429,6 +432,7 @@ impl Loading {
             load: NewGameLoad::default(),
             prepare: false,
             hold: Hold::None,
+            original_open: Vec::new(),
         }
     }
 
@@ -481,6 +485,13 @@ impl Loading {
         }
     }
 
+    /// The files the original has open under the caption whose work ran
+    /// last, with their sizes: the file cache's budget then
+    /// ([`NewGameLoad::original_open`]).
+    pub fn original_open(&self) -> &[(String, u64)] {
+        &self.original_open
+    }
+
     pub fn screen(&self) -> &LoadingScreen {
         &self.screen
     }
@@ -516,6 +527,7 @@ impl Loading {
                 let stage = self.stage();
                 self.load.set_clock(now);
                 self.load.run(stage, tree, data)?;
+                self.original_open = self.load.original_open(stage, tree);
                 if stage == Stage::CreatingNewGame
                     && let Some(level) = self.load.level_name()
                 {

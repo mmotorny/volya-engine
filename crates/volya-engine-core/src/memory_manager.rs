@@ -230,9 +230,78 @@ unsafe impl GlobalAlloc for MemoryManager {
     }
 }
 
+/// Bytes taken from `System` directly, outside the pools and not counted
+/// in [`in_use_bytes`]: the file cache's (docs/architecture/memory.md,
+/// File-backed data), which has a figure of its own.
+pub struct SystemBytes {
+    ptr: std::ptr::NonNull<u8>,
+    len: usize,
+}
+
+// SAFETY: it owns its bytes, as a `Box<[u8]>` does.
+unsafe impl Send for SystemBytes {}
+unsafe impl Sync for SystemBytes {}
+
+impl SystemBytes {
+    /// `len` zeroed bytes, or `None` when `System` has none to give.
+    pub fn zeroed(len: usize) -> Option<Self> {
+        if len == 0 {
+            return Some(Self {
+                ptr: std::ptr::NonNull::dangling(),
+                len,
+            });
+        }
+        let layout = Layout::from_size_align(len, 1).ok()?;
+        // SAFETY: a nonzero size.
+        let ptr = std::ptr::NonNull::new(unsafe { System.alloc_zeroed(layout) })?;
+        Some(Self { ptr, len })
+    }
+}
+
+impl std::ops::Deref for SystemBytes {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        // SAFETY: `len` initialised bytes owned by `self`.
+        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
+    }
+}
+
+impl std::ops::DerefMut for SystemBytes {
+    fn deref_mut(&mut self) -> &mut [u8] {
+        // SAFETY: as `deref`, borrowed mutably.
+        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
+    }
+}
+
+impl Drop for SystemBytes {
+    fn drop(&mut self) {
+        if self.len > 0 {
+            // SAFETY: made by `zeroed` with this layout.
+            unsafe {
+                System.dealloc(
+                    self.ptr.as_ptr(),
+                    Layout::from_size_align_unchecked(self.len, 1),
+                );
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_bytes_are_outside_the_count() {
+        let before = in_use_bytes();
+        let mut bytes = SystemBytes::zeroed(100_000).unwrap();
+        bytes[99_999] = 3;
+        assert_eq!(bytes.iter().map(|&b| u32::from(b)).sum::<u32>(), 3);
+        // Other tests' threads may allocate meanwhile, but none 100 K.
+        assert!(in_use_bytes() < before + 100_000);
+        assert!(SystemBytes::zeroed(0).unwrap().is_empty());
+    }
 
     #[test]
     fn requests_go_to_the_pools_of_the_spec() {

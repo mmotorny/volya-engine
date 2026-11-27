@@ -21,6 +21,7 @@ mod textures;
 
 use serde::Serialize;
 use volya_engine::core::audio::{Category, Playback};
+use volya_engine::core::file_cache;
 use volya_engine::core::vfs::conformance;
 use volya_engine::formats::ui::Resolution;
 use wasm_bindgen::prelude::*;
@@ -550,6 +551,17 @@ struct LevelStats {
     /// The audio worker's own (its heap, mixing time, underruns).
     #[serde(flatten)]
     audio: audio::HostStats,
+    /// The file cache (docs/architecture/memory.md, File-backed data).
+    file_cache: FileCacheStats,
+}
+
+/// The file cache's figures, bytes: held now, by file, and the most since
+/// the load began.
+#[derive(Serialize)]
+struct FileCacheStats {
+    bytes: u64,
+    files: Vec<(String, u64)>,
+    most: u64,
 }
 
 fn level_stats() -> LevelStats {
@@ -568,6 +580,11 @@ fn level_stats() -> LevelStats {
             sound_update_ms: average(&s.sound),
             sound_update_max_ms: s.sound.iter().copied().fold(0.0, f64::max),
             audio: audio::host_stats(),
+            file_cache: FileCacheStats {
+                bytes: file_cache::bytes(),
+                files: file_cache::held(),
+                most: file_cache::most(),
+            },
         }
     })
 }

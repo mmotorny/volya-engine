@@ -9,7 +9,9 @@
 //! the memory manager's bytes in use, as the app's global allocator counts
 //! them (its chunks whole); the bytes asked for beside. Beside them, each
 //! stage's peak above its start, the allocations it makes and the blocks it
-//! keeps, and what the program's data keeps. Its own test binary, so no
+//! keeps, and what the program's data keeps; and the file cache's most
+//! under each caption and at the load's end against its budget, the bytes
+//! of the files the original has open then. Its own test binary, so no
 //! other test allocates meanwhile. Skips when `VOLYA_GOG_INSTALLER` is
 //! unset.
 
@@ -24,6 +26,7 @@ mod gog_archives;
 use std::alloc::{GlobalAlloc, Layout};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use volya_engine::core::file_cache;
 use volya_engine::core::memory_manager::{self, MemoryManager};
 use volya_engine::core::vfs::StdVfs;
 use volya_engine::core::vfs::db::DbVfs;
@@ -146,6 +149,10 @@ fn loading_stage_memory() {
     let mut highest = 0;
     // `* phase cmem` as each caption begins.
     let mut marks = Vec::new();
+    // The file cache under each caption: its most and its budget.
+    file_cache::begin_load();
+    let mut cache = Vec::new();
+    let mut open = Vec::new();
     for stage in Stage::ALL {
         let before = CURRENT.load(Ordering::Relaxed);
         marks.push((stage, memory_manager::in_use_bytes(), before));
@@ -155,6 +162,9 @@ fn loading_stage_memory() {
         );
         PEAK.store(before, Ordering::Relaxed);
         load.run(stage, &tree, &data).unwrap();
+        open = load.original_open(stage, &tree);
+        let window = file_cache::mark();
+        cache.push((stage, window.most, file_cache::budget(&window, &open)));
         let peak = PEAK.load(Ordering::Relaxed);
         highest = highest.max(peak - base);
         eprintln!(
@@ -201,6 +211,40 @@ fn loading_stage_memory() {
         excesses.push(format!(
             "h {} K at the load's end, the original {ORIGINAL_H} K",
             k(end)
+        ));
+    }
+    for &(stage, most, budget) in &cache {
+        eprintln!(
+            "{}: the file cache holds at most {} K, its budget {} K",
+            stage.caption_id(),
+            k(most as usize),
+            k(budget as usize)
+        );
+        if most > budget {
+            excesses.push(format!(
+                "the file cache holds {} K under {}, its budget {} K",
+                k(most as usize),
+                stage.caption_id(),
+                k(budget as usize)
+            ));
+        }
+    }
+    let held = file_cache::Window {
+        most: file_cache::bytes(),
+        files: file_cache::held(),
+    };
+    let budget = file_cache::budget(&held, &open);
+    eprintln!(
+        "the file cache at the load's end: {} K, its budget {} K; its most since the load began {} K",
+        k(held.most as usize),
+        k(budget as usize),
+        k(file_cache::most() as usize)
+    );
+    if held.most > budget {
+        excesses.push(format!(
+            "the file cache holds {} K at the load's end, its budget {} K",
+            k(held.most as usize),
+            k(budget as usize)
         ));
     }
     for excess in &excesses {
