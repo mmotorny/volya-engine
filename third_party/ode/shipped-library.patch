@@ -7,8 +7,11 @@ parameters, worlds as lists with bodies and joints made without one, no
 auto-disabling, the whole world stepped as one group, the steppers' non-finite
 guards, the row shuffle and clamping, the capped contact, the fixed joint's
 pose, joint defaults, emptying a group, the normalisation, the box-box
-edge-edge contacts, dGeomRaySet, the exported internals. Applied by Bazel to
-the release (MODULE.bazel); ODE's code is used under its BSD licence option.
+edge-edge contacts, dGeomRaySet, the exported internals; and the arithmetic
+of docs/behavior/physics-harness.md sections 2-5 (the load-time auto-disable
+threshold, dNormalize3_slow, QuickStep's linear update, the quaternion
+derivative, ray-sphere). Applied by Bazel to the release (MODULE.bazel);
+ODE's code is used under its BSD licence option.
 
 diff --git a/include/ode/collision.h b/include/ode/collision.h
 index 250cdea..251effa 100644
@@ -79,7 +82,7 @@ index 2e2a7ee..584589e 100644
  
  
 diff --git a/ode/src/collision_std.cpp b/ode/src/collision_std.cpp
-index 8b709e1..719eb0b 100644
+index 8b709e1..65bf4f0 100644
 --- a/ode/src/collision_std.cpp
 +++ b/ode/src/collision_std.cpp
 @@ -442,16 +442,13 @@ void dGeomRaySet (dGeomID g, dReal px, dReal py, dReal pz,
@@ -211,6 +214,18 @@ index 8b709e1..719eb0b 100644
    }
  
    // okay, we have a face-something intersection (because the separating
+@@ -1540,8 +1626,9 @@ static int ray_sphere_helper (dxRay *ray, dVector3 sphere_pos, dReal radius,
+   q[0] = ray->pos[0] - sphere_pos[0];
+   q[1] = ray->pos[1] - sphere_pos[1];
+   q[2] = ray->pos[2] - sphere_pos[2];
+-  dReal B = dDOT14(q,ray->R+2);
+-  dReal C = dDOT(q,q) - radius*radius;
++  // the shipped library sums both dot products (y + z) + x
++  dReal B = q[1]*ray->R[1*4+2] + q[2]*ray->R[2*4+2] + q[0]*ray->R[0*4+2];
++  dReal C = q[1]*q[1] + q[2]*q[2] + q[0]*q[0] - radius*radius;
+   // note: if C <= 0 then the start of the ray is inside the sphere
+   dReal k = B*B - C;
+   if (k < 0) return 0;
 diff --git a/ode/src/collision_std.h b/ode/src/collision_std.h
 index 4a487e0..b01c2f7 100644
 --- a/ode/src/collision_std.h
@@ -383,10 +398,10 @@ index 7475ac2..f982db9 100644
  
  #endif
 diff --git a/ode/src/ode.cpp b/ode/src/ode.cpp
-index 0b1c839..1ff0b0a 100644
+index 0b1c839..0523fce 100644
 --- a/ode/src/ode.cpp
 +++ b/ode/src/ode.cpp
-@@ -41,6 +41,19 @@
+@@ -41,6 +41,21 @@
  // misc defines
  #define ALLOCA dALLOCA16
  
@@ -397,7 +412,9 @@ index 0b1c839..1ff0b0a 100644
 +  {0,REAL(-1.0),0,0},			// gravity
 +  (dReal)(6.0/11.0),			// ERP
 +  (dReal)(1.0/880000.0),		// CFM
-+  {0,0,0,0},				// auto-disable values
++  // auto-disable values: the linear threshold already the one dWorldCreate
++  // sets (physics-harness.md 2)
++  {REAL(0.001)*REAL(0.001),0,0,0},
 +  0,					// auto-disable flag
 +  {20,REAL(1.1)},			// QuickStep iterations, w
 +  {dInfinity,REAL(0.001)}		// maximum correcting velocity, layer
@@ -406,7 +423,7 @@ index 0b1c839..1ff0b0a 100644
  //****************************************************************************
  // utility
  
-@@ -224,7 +237,6 @@ void dWorldCheck (dxWorld *w)
+@@ -224,7 +239,6 @@ void dWorldCheck (dxWorld *w)
  
  dxBody *dBodyCreate (dxWorld *w)
  {
@@ -414,7 +431,7 @@ index 0b1c839..1ff0b0a 100644
    dxBody *b = new dxBody;
    initObject (b,w);
    b->firstjoint = 0;
-@@ -245,14 +257,10 @@ dxBody *dBodyCreate (dxWorld *w)
+@@ -245,14 +259,10 @@ dxBody *dBodyCreate (dxWorld *w)
    dSetZero (b->facc,4);
    dSetZero (b->tacc,4);
    dSetZero (b->finite_rot_axis,4);
@@ -433,7 +450,7 @@ index 0b1c839..1ff0b0a 100644
    return b;
  }
  
-@@ -282,8 +290,10 @@ void dBodyDestroy (dxBody *b)
+@@ -282,8 +292,10 @@ void dBodyDestroy (dxBody *b)
      removeJointReferencesFromAttachedBodies (n->joint);
      n = next;
    }
@@ -446,7 +463,7 @@ index 0b1c839..1ff0b0a 100644
    delete b;
  }
  
-@@ -741,8 +751,6 @@ void dBodyEnable (dBodyID b)
+@@ -741,8 +753,6 @@ void dBodyEnable (dBodyID b)
  {
    dAASSERT (b);
    b->flags &= ~dxBodyDisabled;
@@ -455,7 +472,7 @@ index 0b1c839..1ff0b0a 100644
  }
  
  
-@@ -777,59 +785,50 @@ int dBodyGetGravityMode (dBodyID b)
+@@ -777,59 +787,50 @@ int dBodyGetGravityMode (dBodyID b)
  
  // body auto-disable functions
  
@@ -522,7 +539,7 @@ index 0b1c839..1ff0b0a 100644
  }
  
  
-@@ -851,10 +850,7 @@ void dBodySetAutoDisableFlag (dBodyID b, int do_auto_disable)
+@@ -851,10 +852,7 @@ void dBodySetAutoDisableFlag (dBodyID b, int do_auto_disable)
  void dBodySetAutoDisableDefaults (dBodyID b)
  {
  	dAASSERT(b);
@@ -534,7 +551,7 @@ index 0b1c839..1ff0b0a 100644
  }
  
  //****************************************************************************
-@@ -862,7 +858,7 @@ void dBodySetAutoDisableDefaults (dBodyID b)
+@@ -862,7 +860,7 @@ void dBodySetAutoDisableDefaults (dBodyID b)
  
  static void dJointInit (dxWorld *w, dxJoint *j)
  {
@@ -543,7 +560,7 @@ index 0b1c839..1ff0b0a 100644
    initObject (j,w);
    j->vtable = 0;
    j->flags = 0;
-@@ -873,15 +869,17 @@ static void dJointInit (dxWorld *w, dxJoint *j)
+@@ -873,15 +871,17 @@ static void dJointInit (dxWorld *w, dxJoint *j)
    j->node[1].body = 0;
    j->node[1].next = 0;
    dSetZero (j->lambda,6);
@@ -564,7 +581,7 @@ index 0b1c839..1ff0b0a 100644
    dxJoint *j;
    if (group) {
      j = (dxJoint*) group->stack.alloc (vtable->size);
-@@ -899,21 +897,18 @@ static dxJoint *createJoint (dWorldID w, dJointGroupID group,
+@@ -899,21 +899,18 @@ static dxJoint *createJoint (dWorldID w, dJointGroupID group,
  
  dxJoint * dJointCreateBall (dWorldID w, dJointGroupID group)
  {
@@ -586,7 +603,7 @@ index 0b1c839..1ff0b0a 100644
    return createJoint (w,group,&__dslider_vtable);
  }
  
-@@ -921,7 +916,7 @@ dxJoint * dJointCreateSlider (dWorldID w, dJointGroupID group)
+@@ -921,7 +918,7 @@ dxJoint * dJointCreateSlider (dWorldID w, dJointGroupID group)
  dxJoint * dJointCreateContact (dWorldID w, dJointGroupID group,
  			       const dContact *c)
  {
@@ -595,7 +612,7 @@ index 0b1c839..1ff0b0a 100644
    dxJointContact *j = (dxJointContact *)
      createJoint (w,group,&__dcontact_vtable);
    j->contact = *c;
-@@ -929,37 +924,45 @@ dxJoint * dJointCreateContact (dWorldID w, dJointGroupID group,
+@@ -929,37 +926,45 @@ dxJoint * dJointCreateContact (dWorldID w, dJointGroupID group,
  }
  
  
@@ -646,7 +663,7 @@ index 0b1c839..1ff0b0a 100644
    return createJoint (w,group,&__damotor_vtable);
  }
  
-@@ -969,8 +972,10 @@ void dJointDestroy (dxJoint *j)
+@@ -969,8 +974,10 @@ void dJointDestroy (dxJoint *j)
    dAASSERT (j);
    if (j->flags & dJOINT_INGROUP) return;
    removeJointReferencesFromAttachedBodies (j);
@@ -659,7 +676,7 @@ index 0b1c839..1ff0b0a 100644
    dFree (j,j->vtable->size);
  }
  
-@@ -1012,8 +1017,6 @@ void dJointGroupEmpty (dJointGroupID group)
+@@ -1012,8 +1019,6 @@ void dJointGroupEmpty (dJointGroupID group)
    for (i=group->num-1; i >= 0; i--) {
      if (jlist[i]->world) {
        removeJointReferencesFromAttachedBodies (jlist[i]);
@@ -668,7 +685,7 @@ index 0b1c839..1ff0b0a 100644
      }
    }
    group->num = 0;
-@@ -1146,27 +1149,27 @@ dxWorld * dWorldCreate()
+@@ -1146,27 +1151,27 @@ dxWorld * dWorldCreate()
    w->firstjoint = 0;
    w->nb = 0;
    w->nj = 0;
@@ -709,7 +726,7 @@ index 0b1c839..1ff0b0a 100644
  
    return w;
  }
-@@ -1205,47 +1208,75 @@ void dWorldDestroy (dxWorld *w)
+@@ -1205,47 +1210,75 @@ void dWorldDestroy (dxWorld *w)
  
  void dWorldSetGravity (dWorldID w, dReal x, dReal y, dReal z)
  {
@@ -801,7 +818,7 @@ index 0b1c839..1ff0b0a 100644
  }
  
  
-@@ -1253,7 +1284,7 @@ void dWorldStep (dWorldID w, dReal stepsize)
+@@ -1253,7 +1286,7 @@ void dWorldStep (dWorldID w, dReal stepsize)
  {
    dUASSERT (w,"bad world argument");
    dUASSERT (stepsize > 0,"stepsize must be > 0");
@@ -810,7 +827,7 @@ index 0b1c839..1ff0b0a 100644
  }
  
  
-@@ -1261,7 +1292,7 @@ void dWorldQuickStep (dWorldID w, dReal stepsize)
+@@ -1261,7 +1294,7 @@ void dWorldQuickStep (dWorldID w, dReal stepsize)
  {
    dUASSERT (w,"bad world argument");
    dUASSERT (stepsize > 0,"stepsize must be > 0");
@@ -819,7 +836,7 @@ index 0b1c839..1ff0b0a 100644
  }
  
  
-@@ -1283,126 +1314,126 @@ void dWorldImpulseToForce (dWorldID w, dReal stepsize,
+@@ -1283,126 +1316,126 @@ void dWorldImpulseToForce (dWorldID w, dReal stepsize,
  dReal dWorldGetAutoDisableLinearThreshold (dWorldID w)
  {
  	dAASSERT(w);
@@ -965,10 +982,10 @@ index 0b1c839..1ff0b0a 100644
  
  //****************************************************************************
 diff --git a/ode/src/odemath.cpp b/ode/src/odemath.cpp
-index 512eb7b..c61d736 100644
+index 512eb7b..d11d0e7 100644
 --- a/ode/src/odemath.cpp
 +++ b/ode/src/odemath.cpp
-@@ -31,8 +31,10 @@
+@@ -31,56 +31,63 @@
  // all the components by 1/a[i]. then we can compute the length of `a' and
  // scale the components by 1/l. this has been verified to work with vectors
  // containing the smallest representable numbers.
@@ -978,12 +995,85 @@ index 512eb7b..c61d736 100644
 -void dNormalize3 (dVector3 a)
 +void dNormalize3_slow (dVector3 a)
  {
-   dReal a0,a1,a2,aa0,aa1,aa2,l;
+-  dReal a0,a1,a2,aa0,aa1,aa2,l;
++  dReal aa0,aa1,aa2;
++  int k;
    dAASSERT (a);
-@@ -84,6 +86,23 @@ void dNormalize3 (dVector3 a)
- }
- 
- 
+-  a0 = a[0];
+-  a1 = a[1];
+-  a2 = a[2];
+-  aa0 = dFabs(a0);
+-  aa1 = dFabs(a1);
+-  aa2 = dFabs(a2);
++  aa0 = dFabs(a[0]);
++  aa1 = dFabs(a[1]);
++  aa2 = dFabs(a[2]);
+   if (aa1 > aa0) {
+-    if (aa2 > aa1) {
+-      goto aa2_largest;
+-    }
+-    else {		// aa1 is largest
+-      a0 /= aa1;
+-      a2 /= aa1;
+-      l = dRecipSqrt (a0*a0 + a2*a2 + 1);
+-      a[0] = a0*l;
+-      a[1] = dCopySign(l,a1);
+-      a[2] = a2*l;
+-    }
++    k = (aa2 > aa1) ? 2 : 1;
++  }
++  else if (aa2 > aa0) {
++    k = 2;
+   }
+   else {
+-    if (aa2 > aa0) {
+-      aa2_largest:	// aa2 is largest
+-      a0 /= aa2;
+-      a1 /= aa2;
+-      l = dRecipSqrt (a0*a0 + a1*a1 + 1);
+-      a[0] = a0*l;
+-      a[1] = a1*l;
+-      a[2] = dCopySign(l,a2);
+-    }
+-    else {		// aa0 is largest
+-      if (aa0 <= 0) {
+-	// dDEBUGMSG ("vector has zero size"); ... this messace is annoying
+-	a[0] = 1;	// if all a's are zero, this is where we'll end up.
+-	a[1] = 0;	// return a default unit length vector.
+-	a[2] = 0;
+-	return;
+-      }
+-      a1 /= aa0;
+-      a2 /= aa0;
+-      l = dRecipSqrt (a1*a1 + a2*a2 + 1);
+-      a[0] = dCopySign(l,a0);
+-      a[1] = a1*l;
+-      a[2] = a2*l;
++    if (aa0 <= 0) {
++      // dDEBUGMSG ("vector has zero size"); ... this messace is annoying
++      a[0] = 1;	// if all a's are zero, this is where we'll end up.
++      a[1] = 0;	// return a default unit length vector.
++      a[2] = 0;
++      return;
+     }
++    k = 0;
++  }
++  // the shipped library (physics-harness.md 3): the other two components
++  // times the reciprocal of the largest magnitude; the largest set to +1 or
++  // -1, its sign; the other two squares summed, then 1; times 1/sqrt of
++  // that, all three.
++  int o1 = (k+1)%3, o2 = (k+2)%3;
++  dReal inv = REAL(1.0) / dFabs(a[k]);
++  a[o1] *= inv;
++  a[o2] *= inv;
++  a[k] = (a[k] < 0) ? REAL(-1.0) : REAL(1.0);
++  dReal s = dRecipSqrt (a[o1]*a[o1] + a[o2]*a[o2] + REAL(1.0));
++  a[0] *= s;
++  a[1] *= s;
++  a[2] *= s;
++}
++
++
 +// the shipped library's normalisation, wherever the library normalises a
 +// 3-vector: by the reciprocal square root of the squared length, unless that
 +// is below 1.1920929e-5 (bit pattern 0x37480000), when dNormalize3_slow.
@@ -996,16 +1086,13 @@ index 512eb7b..c61d736 100644
 +    a[0] *= l;
 +    a[1] *= l;
 +    a[2] *= l;
-+  }
+   }
 +  else dNormalize3_slow (a);
-+}
-+
-+
- /* OLD VERSION */
- /*
- void dNormalize3 (dVector3 a)
+ }
+ 
+ 
 diff --git a/ode/src/quickstep.cpp b/ode/src/quickstep.cpp
-index 4f567dd..1546bf7 100644
+index 4f567dd..7369d42 100644
 --- a/ode/src/quickstep.cpp
 +++ b/ode/src/quickstep.cpp
 @@ -419,10 +419,20 @@ static void SOR_LCP (int m, int nb, dRealMutablePtr J, int *jb, dxBody * const *
@@ -1117,6 +1204,30 @@ index 4f567dd..1546bf7 100644
  		// add stepsize * cforce to the body velocity
  		for (i=0; i<nb; i++) {
  			for (j=0; j<3; j++) body[i]->lvel[j] += stepsize * cforce[i*6+j];
+@@ -750,7 +776,8 @@ void dxQuickStepper (dxWorld *world, dxBody * const *body, int nb,
+ 	IFTIMING (dTimerNow ("compute velocity update");)
+ 	for (i=0; i<nb; i++) {
+ 		dReal body_invMass = body[i]->invMass;
+-		for (j=0; j<3; j++) body[i]->lvel[j] += stepsize * body_invMass * body[i]->facc[j];
++		// the shipped library: invMass times the force first, then times h
++		for (j=0; j<3; j++) body[i]->lvel[j] += stepsize * (body_invMass * body[i]->facc[j]);
+ 		for (j=0; j<3; j++) body[i]->tacc[j] *= stepsize;	
+ 		dMULTIPLYADD0_331 (body[i]->avel,invI + i*12,body[i]->tacc);
+ 	}
+diff --git a/ode/src/rotation.cpp b/ode/src/rotation.cpp
+index 1180e6d..dbbe603 100644
+--- a/ode/src/rotation.cpp
++++ b/ode/src/rotation.cpp
+@@ -299,6 +299,8 @@ void dDQfromW (dReal dq[4], const dVector3 w, const dQuaternion q)
+   dAASSERT (w && q && dq);
+   dq[0] = REAL(0.5)*(- w[0]*q[1] - w[1]*q[2] - w[2]*q[3]);
+   dq[1] = REAL(0.5)*(  w[0]*q[0] + w[1]*q[3] - w[2]*q[2]);
+-  dq[2] = REAL(0.5)*(- w[0]*q[3] + w[1]*q[0] + w[2]*q[1]);
++  // the shipped library sums the third component's terms first and last
++  // first, then the middle one
++  dq[2] = REAL(0.5)*(- w[0]*q[3] + w[2]*q[1] + w[1]*q[0]);
+   dq[3] = REAL(0.5)*(  w[0]*q[2] - w[1]*q[1] + w[2]*q[0]);
+ }
 diff --git a/ode/src/step.cpp b/ode/src/step.cpp
 index b49bfeb..81035cf 100644
 --- a/ode/src/step.cpp

@@ -86,6 +86,16 @@ rust_test(
     deps = [":volya-engine-core"],
 )
 
+# The library's load-time state (physics-harness.md 2), in a process of its
+# own: before any world is made.
+rust_test(
+    name = "ode_load_time",
+    srcs = ["comparison/ode_load_time.rs"],
+    crate_name = "ode_load_time",
+    rustc_flags = LINTS,
+    deps = [":volya-engine-core"],
+)
+
 # Our build's outputs of the scenarios, natively (the release's ours\,
 # //tests/odeharness:ours).
 rust_binary(

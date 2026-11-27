@@ -37,7 +37,19 @@ typedef uintptr_t intP;
 
 #define dSINGLE 1
 
+/* C++ computes in ode/sse.h's dReal: the shipped library's SSE arithmetic
+** with flush-to-zero and denormals-are-zero (docs/behavior/physics-library.md
+** 7). */
+#define dSSE 1
+
 #define dInfinity INFINITY
+
+/* ODE's own single-precision M_PI and M_SQRT1_2 (common.h), as with the
+** shipped library's compiler, whose math.h defines neither by default
+** (Microsoft documents them behind _USE_MATH_DEFINES), not the C library's
+** double ones. */
+#undef M_PI
+#undef M_SQRT1_2
 
 /* The shipped library's floating-point environment and run time
 ** (docs/behavior/physics-library.md 7, 8), from volya-engine-core
@@ -56,4 +68,7 @@ int volya_ode_rand (void);
 #ifdef __cplusplus
 }
 #endif
+
+#include <ode/sse.h>
+
 #endif

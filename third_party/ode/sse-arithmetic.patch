@@ -1,0 +1,171 @@
+SPDX-FileCopyrightText: 2026 Maksym Motorny
+SPDX-License-Identifier: BSD-3-Clause
+
+ODE 0.5.0 (@ode), after shipped-library.patch, computing in our build's
+dReal (csrc/ode/include/ode/sse.h): the shipped library's single-precision
+SSE arithmetic under flush-to-zero and denormals-are-zero
+(docs/behavior/physics-library.md 7, docs/behavior/physics-harness.md 7).
+dReal is that type in C++ (a float in C); the math macros give dReals, so
+no float arithmetic escapes it; a dDISTANCE of dReals; a conditional of a
+dReal and an integer zero, and dReals passed to printf-like functions,
+spelled for a class. Applied by Bazel to the release (MODULE.bazel); ODE's
+code is used under its BSD licence option.
+
+diff --git a/include/ode/common.h b/include/ode/common.h
+index 6edeade..1b3b5d9 100644
+--- a/include/ode/common.h
++++ b/include/ode/common.h
+@@ -94,7 +94,11 @@ extern "C" {
+ 
+ /* floating point data type, vector, matrix and quaternion types */
+ 
+-#if defined(dSINGLE)
++#if defined(dSINGLE) && defined(dSSE) && defined(__cplusplus)
++/* our build: single precision as the shipped library's SSE arithmetic
++ * computes it (ode/sse.h, from config.h) */
++typedef dRealSSE dReal;
++#elif defined(dSINGLE)
+ typedef float dReal;
+ #elif defined(dDOUBLE)
+ typedef double dReal;
+@@ -122,15 +126,15 @@ typedef dReal dQuaternion[4];
+ #if defined(dSINGLE)
+ 
+ #define REAL(x) (x ## f)					/* form a constant */
+-#define dRecip(x) ((float)(1.0f/(x)))				/* reciprocal */
+-#define dSqrt(x) ((float)sqrtf(float(x)))			/* square root */
+-#define dRecipSqrt(x) ((float)(1.0f/sqrtf(float(x))))		/* reciprocal square root */
+-#define dSin(x) ((float)sinf(float(x)))				/* sine */
+-#define dCos(x) ((float)cosf(float(x)))				/* cosine */
+-#define dFabs(x) ((float)fabsf(float(x)))			/* absolute value */
+-#define dAtan2(y,x) ((float)atan2f(float(y),float(x)))		/* arc tangent with 2 args */
+-#define dFMod(a,b) ((float)fmodf(float(a),float(b)))		/* modulo */
+-#define dCopySign(a,b) ((float)copysignf(float(a),float(b)))
++#define dRecip(x) ((dReal)(REAL(1.0)/(x)))			/* reciprocal */
++#define dSqrt(x) ((dReal)sqrtf(float(x)))			/* square root */
++#define dRecipSqrt(x) ((dReal)(REAL(1.0)/dSqrt(x)))		/* reciprocal square root */
++#define dSin(x) ((dReal)sinf(float(x)))				/* sine */
++#define dCos(x) ((dReal)cosf(float(x)))				/* cosine */
++#define dFabs(x) ((dReal)fabsf(float(x)))			/* absolute value */
++#define dAtan2(y,x) ((dReal)atan2f(float(y),float(x)))		/* arc tangent with 2 args */
++#define dFMod(a,b) ((dReal)fmodf(float(a),float(b)))		/* modulo */
++#define dCopySign(a,b) ((dReal)copysignf(float(a),float(b)))
+ 
+ #elif defined(dDOUBLE)
+ 
+diff --git a/include/ode/odemath.h b/include/ode/odemath.h
+index 584589e..4e37574 100644
+--- a/include/ode/odemath.h
++++ b/include/ode/odemath.h
+@@ -120,6 +120,10 @@ PURE_INLINE float dDISTANCE (const float a[3], const float b[3])
+ 	{ return (float) dSqrt( (a[0]-b[0])*(a[0]-b[0]) + (a[1]-b[1])*(a[1]-b[1]) + (a[2]-b[2])*(a[2]-b[2]) ); }
+ PURE_INLINE double dDISTANCE (const double a[3], const double b[3])
+ 	{ return dSqrt( (a[0]-b[0])*(a[0]-b[0]) + (a[1]-b[1])*(a[1]-b[1]) + (a[2]-b[2])*(a[2]-b[2]) ); }
++#ifdef dSSE
++PURE_INLINE dReal dDISTANCE (const dReal a[3], const dReal b[3])
++	{ return dSqrt( (a[0]-b[0])*(a[0]-b[0]) + (a[1]-b[1])*(a[1]-b[1]) + (a[2]-b[2])*(a[2]-b[2]) ); }
++#endif
+ #else
+ #define dDISTANCE(a,b) \
+ 	(dSqrt( ((a)[0]-(b)[0])*((a)[0]-(b)[0]) + ((a)[1]-(b)[1])*((a)[1]-(b)[1]) + ((a)[2]-(b)[2])*((a)[2]-(b)[2]) ))
+diff --git a/ode/src/collision_util.cpp b/ode/src/collision_util.cpp
+index 96a3b78..62a079a 100644
+--- a/ode/src/collision_util.cpp
++++ b/ode/src/collision_util.cpp
+@@ -313,7 +313,7 @@ void dClosestLineBoxPoints (const dVector3 p1, const dVector3 p2,
+   // compute d|d|^2/dt for t=0. if it's >= 0 then p1 is the closest point
+   dReal t=0;
+   dReal dd2dt = 0;
+-  for (i=0; i<3; i++) dd2dt -= (region[i] ? v2[i] : 0) * tanchor[i];
++  for (i=0; i<3; i++) dd2dt -= (region[i] ? v2[i] : dReal(0)) * tanchor[i];
+   if (dd2dt >= 0) goto got_answer;
+ 
+   do {
+@@ -327,7 +327,7 @@ void dClosestLineBoxPoints (const dVector3 p1, const dVector3 p2,
+     // compute d|d|^2/dt for the next t
+     dReal next_dd2dt = 0;
+     for (i=0; i<3; i++) {
+-      next_dd2dt += (region[i] ? v2[i] : 0) * (next_t - tanchor[i]);
++      next_dd2dt += (region[i] ? v2[i] : dReal(0)) * (next_t - tanchor[i]);
+     }
+ 
+     // if the sign of d|d|^2/dt has changed, solution = the crossover point
+diff --git a/ode/src/lcp.cpp b/ode/src/lcp.cpp
+index e1b61f5..4229c28 100644
+--- a/ode/src/lcp.cpp
++++ b/ode/src/lcp.cpp
+@@ -1035,7 +1035,7 @@ void dSolveLCPBasic (int n, dReal *A, dReal *x, dReal *b,
+ 	dReal s = -w[i]/delta_w[i];
+ 
+ 	if (s <= 0) {
+-	  dMessage (d_ERR_LCP, "LCP internal error, s <= 0 (s=%.4e)",s);
++	  dMessage (d_ERR_LCP, "LCP internal error, s <= 0 (s=%.4e)",(double)s);
+ 	  if (i < (n-1)) {
+ 	    dSetZero (x+i,n-i);
+ 	    dSetZero (w+i,n-i);
+@@ -1303,7 +1303,7 @@ void dSolveLCP (int n, dReal *A, dReal *x, dReal *b,
+ 	// we're going to get stuck in an infinite loop. instead, just cross
+ 	// our fingers and exit with the current solution.
+ 	if (s <= 0) {
+-	  dMessage (d_ERR_LCP, "LCP internal error, s <= 0 (s=%.4e)",s);
++	  dMessage (d_ERR_LCP, "LCP internal error, s <= 0 (s=%.4e)",(double)s);
+ 	  if (i < (n-1)) {
+ 	    dSetZero (x+i,n-i);
+ 	    dSetZero (w+i,n-i);
+@@ -1447,7 +1447,7 @@ extern "C" void dTestSolveLCP()
+     dReal diff = dMaxDifference (tmp1,tmp2,n,1);
+     // printf ("\tA*x = b+w, maximum difference = %.6e - %s (1)\n",diff,
+     //	    diff > tol ? "FAILED" : "passed");
+-    if (diff > tol) dDebug (0,"A*x = b+w, maximum difference = %.6e",diff);
++    if (diff > tol) dDebug (0,"A*x = b+w, maximum difference = %.6e",(double)diff);
+     int n1=0,n2=0,n3=0;
+     for (i=0; i<n; i++) {
+       if (x[i]==lo[i] && w[i] >= 0) {
+@@ -1461,7 +1461,7 @@ extern "C" void dTestSolveLCP()
+       }
+       else {
+ 	dDebug (0,"FAILED: i=%d x=%.4e w=%.4e lo=%.4e hi=%.4e",i,
+-		x[i],w[i],lo[i],hi[i]);
++		(double)x[i],(double)w[i],(double)lo[i],(double)hi[i]);
+       }
+     }
+ 
+diff --git a/ode/src/mat.cpp b/ode/src/mat.cpp
+index 6e635dc..1f5943e 100644
+--- a/ode/src/mat.cpp
++++ b/ode/src/mat.cpp
+@@ -210,7 +210,7 @@ void dMatrix::makeRandom (dReal range)
+ void dMatrix::print (char *fmt, FILE *f)
+ {
+   for (int i=0; i<n; i++) {
+-    for (int j=0; j<m; j++) fprintf (f,fmt,data[i*m+j]);
++    for (int j=0; j<m; j++) fprintf (f,fmt,(double)data[i*m+j]);
+     fprintf (f,"\n");
+   }
+ }
+diff --git a/ode/src/misc.cpp b/ode/src/misc.cpp
+index 08453c4..8dea27c 100644
+--- a/ode/src/misc.cpp
++++ b/ode/src/misc.cpp
+@@ -81,7 +81,7 @@ void dPrintMatrix (const dReal *A, int n, int m, char *fmt, FILE *f)
+   int i,j;
+   int skip = dPAD(m);
+   for (i=0; i<n; i++) {
+-    for (j=0; j<m; j++) fprintf (f,fmt,A[i*skip+j]);
++    for (j=0; j<m; j++) fprintf (f,fmt,(double)A[i*skip+j]);
+     fprintf (f,"\n");
+   }
+ }
+diff --git a/ode/src/step.cpp b/ode/src/step.cpp
+index 81035cf..5352403 100644
+--- a/ode/src/step.cpp
++++ b/ode/src/step.cpp
+@@ -471,7 +471,7 @@ void dInternalStepIsland_x1 (dxWorld *world, dxBody * const *body, int nb,
+     dMultiply0 (tmp1,J,vnew,m,n6,1);
+     dReal err = 0;
+     for (i=0; i<m; i++) err += dFabs(tmp1[i]-c[i]);
+-    printf ("%.6e\n",err);
++    printf ("%.6e\n",(double)err);
+   }
+   else {
+     // no constraints

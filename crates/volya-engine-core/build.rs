@@ -41,11 +41,14 @@ const CORE: &[&str] = &[
     "collision_quadtreespace",
 ];
 
-/// The generated matrix routines (the Makefile's `ODE_PREGEN_SRC`), C.
+/// The generated matrix routines (the Makefile's `ODE_PREGEN_SRC`), C,
+/// compiled as C++ so that they compute in our dReal (csrc/ode/include/ode/
+/// sse.h).
 const FAST: &[&str] = &["fastldlt", "fastlsolve", "fastltsolve", "fastdot"];
 
 /// The shipped library's configuration (docs/behavior/physics-library.md 2):
-/// single precision (csrc/ode/include/ode/config.h), assertions compiled
+/// single precision in the shipped library's SSE arithmetic
+/// (csrc/ode/include/ode/config.h, sse.h), assertions compiled
 /// out, no triangle mesh (`dTRIMESH_ENABLED` unset).
 const DEFINES: &[(&str, &str)] = &[("dNODEBUG", "1"), ("NDEBUG", "1")];
 
@@ -75,18 +78,23 @@ fn main() {
         }
     };
 
+    // C++11 for sse.h's dReal (defaulted and constexpr constructors).
+    let cpp = |build: &mut cc::Build| {
+        build
+            .cpp(true)
+            .std("c++11")
+            .flag("-fno-exceptions")
+            .flag("-fno-rtti");
+        if wasm {
+            wasm_toolchain(build, true);
+            build.cpp_link_stdlib(None);
+        }
+    };
+
     let mut build = cc::Build::new();
     common(&mut build);
-    build
-        .cpp(true)
-        .std("c++98")
-        .include(ode.join("ode/src"))
-        .flag("-fno-exceptions")
-        .flag("-fno-rtti");
-    if wasm {
-        wasm_toolchain(&mut build, true);
-        build.cpp_link_stdlib(None);
-    }
+    cpp(&mut build);
+    build.include(ode.join("ode/src"));
     for name in CORE {
         build.file(ode.join(format!("ode/src/{name}.cpp")));
     }
@@ -107,10 +115,8 @@ fn main() {
 
     let mut c = cc::Build::new();
     common(&mut c);
-    c.include(root.join("csrc/ode/fast"));
-    if wasm {
-        wasm_toolchain(&mut c, false);
-    }
+    cpp(&mut c);
+    c.include(root.join("csrc/ode/fast")).flag("-xc++");
     for name in FAST {
         c.file(fast.join(format!("{name}.c")));
     }

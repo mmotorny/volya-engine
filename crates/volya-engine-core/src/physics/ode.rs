@@ -18,6 +18,8 @@
 #![allow(unsafe_code)]
 
 pub mod harness;
+#[cfg(test)]
+mod harness_rules;
 pub mod msvc_rand;
 pub mod x87;
 
@@ -258,6 +260,9 @@ pub fn fall_check() -> Result<f32, String> {
 }
 
 pub const FALL_STEPS: u32 = 100;
+/// [`fall_check`]'s last y, natively and in the engine worker alike (the
+/// platform suite's check holds the worker to it).
+pub const FALL_LAST_Y: f32 = 0.091_897_085;
 /// Metres.
 pub const FALL_TOLERANCE: f64 = 1e-4;
 
@@ -270,6 +275,7 @@ mod tests {
         let y = fall_check().unwrap();
         // 10 − 19.62 · 0.01² · 100 · 101 / 2.
         assert!((y - 0.0919).abs() < 1e-4, "{y}");
+        assert_eq!(y.to_bits(), FALL_LAST_Y.to_bits(), "{y:e}");
     }
 
     #[test]
