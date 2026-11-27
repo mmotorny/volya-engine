@@ -114,7 +114,7 @@ pub async fn launch() -> Result<serde_json::Value, JsValue> {
     let status = serde_json::to_value(crate::game::status().await?).unwrap_or_default();
     let flag = |name: &str| status.get(name).and_then(|v| v.as_bool()).unwrap_or(false);
     if !flag("imported") {
-        return Err(error("game not imported"));
+        return Err(error("game files not imported"));
     }
     // The browser's own error if the files can't be opened here.
     crate::game::ensure_mounted().await?;

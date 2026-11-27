@@ -450,14 +450,14 @@ export const tests = {
     assertEqual(await b4.serve("d.js"), "d4", "served after activation");
   },
 
-  "a game the browser deleted is said so, on the import screen": async () => {
+  "game files the browser deleted are said so, on the import screen": async () => {
     // Without graphics the app says it can't run the game instead (no import screen).
     if ((await volya.status()).gpu.state !== "ready") skip("no graphics here");
     localStorage.setItem("volya-engine.imported", "1");
     try {
       await volya.refresh();
       const notice = document.querySelector("#game .callout.problem strong");
-      assertEqual(notice?.textContent, "The browser deleted the imported game", "notice");
+      assertEqual(notice?.textContent, "The browser deleted the game files", "notice");
     } finally {
       localStorage.removeItem("volya-engine.imported");
       await volya.refresh();
@@ -477,7 +477,7 @@ export const tests = {
     try {
       await volya.refresh();
       const notice = document.querySelector("#game .callout.problem");
-      assertEqual(notice?.querySelector("strong")?.textContent, "The imported game is damaged", "notice");
+      assertEqual(notice?.querySelector("strong")?.textContent, "The game files are damaged", "notice");
       assert(notice.textContent.includes("import.json:"), `engine's words missing: ${notice.textContent}`);
     } finally {
       await dir.removeEntry("import.json");
@@ -571,7 +571,7 @@ export const tests = {
     return `update() unreachable: ${rejection}; navigator.onLine ${navigator.onLine}`;
   },
 
-  "Delete settings and saved games: asks first, deletes only those, and the next game starts from the defaults": async () => {
+  "Delete settings and saves: asks first, deletes only those, and the game then starts from the defaults": async () => {
     const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle("volya-engine", { create: true });
     const put = async (at, name, text) => {
       const writable = await (await at.getFileHandle(name, { create: true })).createWritable();
@@ -590,30 +590,30 @@ export const tests = {
     const cached = (await caches.keys()).sort().join();
     const others = (await names()).filter((n) => n !== "user.ltx" && n !== "savedgames");
     await volya.showSettings();
-    const remove = button("Delete settings and saved games");
-    assert(remove?.closest(".danger-zone"), "no Delete settings and saved games in the danger zone");
+    const remove = button("Delete settings and saves");
+    assert(remove?.closest(".danger-zone"), "no Delete settings and saves in the danger zone");
     // Asked first; Escape (the keyboard) cancels.
     remove.click();
     const ask = document.querySelector("#game .confirm");
-    assertEqual(ask?.querySelector("strong").textContent, "Delete the game's settings and saved games?", "the question");
+    assertEqual(ask?.querySelector("strong").textContent, "Delete the game's settings and saves?", "the question");
     assertEqual(document.activeElement?.textContent, "Cancel", "focus on Cancel");
     document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    await until(() => !document.querySelector("#game .confirm") && button("Delete settings and saved games"), "Escape didn't cancel");
-    assertEqual(document.activeElement?.textContent, "Delete settings and saved games", "focus back on the button");
+    await until(() => !document.querySelector("#game .confirm") && button("Delete settings and saves"), "Escape didn't cancel");
+    assertEqual(document.activeElement?.textContent, "Delete settings and saves", "focus back on the button");
     assert((await names()).includes("user.ltx"), "deleted though cancelled");
-    button("Delete settings and saved games").click();
+    button("Delete settings and saves").click();
     button("Delete").click();
-    await until(() => document.querySelector('#game [role="status"]')?.textContent === "Settings and saved games deleted", "not deleted");
+    await until(() => document.querySelector('#game [role="status"]')?.textContent === "Settings and saves deleted", "not deleted");
     assertEqual(await names(), others, "what's left in storage");
     assertEqual(await volya.call("user_config"), null, "a user configuration is still read");
     assertEqual(JSON.stringify(Object.entries(localStorage).sort()), storage, "the shell's preferences changed");
     assertEqual((await caches.keys()).sort().join(), cached, "the offline copy changed");
     // Nothing left to delete: not offered.
     await volya.showSettings();
-    assert(!button("Delete settings and saved games"), "offered with nothing stored");
+    assert(!button("Delete settings and saves"), "offered with nothing stored");
   },
 
-  "Delete imported game: asks in the page, Escape cancels, a failure is told": async () => {
+  "Delete game files: asks in the page, Escape cancels, a failure is told": async () => {
     // The smoke page has no game imported: the UX audit frame's fake engine has one.
     const frame = Object.assign(document.createElement("iframe"), { width: 1280, height: 800 });
     frame.style.cssText = "position: fixed; left: -5000px; top: 0";
@@ -622,18 +622,18 @@ export const tests = {
     try {
       const doc = () => frame.contentDocument;
       const button = (label) => [...(doc()?.querySelectorAll("#game button") ?? [])].find((b) => b.textContent === label);
-      await until(() => doc()?.documentElement?.dataset.ready === "true" && button("Delete imported game"), "the frame didn't render");
-      const note = button("Delete imported game").closest(".danger-item").querySelector(".note");
-      assertEqual(note.classList.contains("error") && note.textContent, "Couldn't delete the imported game.", "the failure");
-      button("Delete imported game").click();
+      await until(() => doc()?.documentElement?.dataset.ready === "true" && button("Delete game files"), "the frame didn't render");
+      const note = button("Delete game files").closest(".danger-item").querySelector(".note");
+      assertEqual(note.classList.contains("error") && note.textContent, "Couldn't delete the game files.", "the failure");
+      button("Delete game files").click();
       const ask = doc().querySelector("#game .confirm");
-      assertEqual(ask?.querySelector("strong").textContent, "Delete the imported game?", "the question");
-      assertEqual(ask.querySelector("span")?.textContent, "The game's settings and saved games stay.", "the detail");
+      assertEqual(ask?.querySelector("strong").textContent, "Delete the game files?", "the question");
+      assertEqual(ask.querySelector("span")?.textContent, "The game's settings and saves stay.", "the detail");
       assert(ask.closest(".danger-zone"), "not in the danger zone");
       assertEqual(doc().activeElement?.textContent, "Cancel", "focus on Cancel");
       doc().activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-      await until(() => !doc().querySelector("#game .confirm") && button("Delete imported game"), "Escape didn't cancel");
-      assertEqual(doc().activeElement?.textContent, "Delete imported game", "focus back on the button");
+      await until(() => !doc().querySelector("#game .confirm") && button("Delete game files"), "Escape didn't cancel");
+      assertEqual(doc().activeElement?.textContent, "Delete game files", "focus back on the button");
     } finally {
       frame.remove();
     }

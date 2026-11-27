@@ -16,7 +16,7 @@ export const SECTIONS = [
     states: [
       { id: "import", name: "First start", game: fresh },
       { id: "import-tab", name: "First start in a browser tab", game: fresh, tab: true, persisted: false },
-      { id: "import-deleted", name: "The browser deleted the imported game", game: fresh, tab: true, persisted: false, deleted: true },
+      { id: "import-deleted", name: "The browser deleted the game files", game: fresh, tab: true, persisted: false, deleted: true },
       { id: "import-no-graphics", name: "WebGL 2 not working (before or after import)", game: fresh, gpu: false },
       { id: "import-not-isolated", name: "Not cross-origin isolated after the one reload (no shared memory for sound)", game: fresh, isolated: false },
       { id: "import-not-isolated-no-graphics", name: "Not isolated, and no WebGL 2", game: fresh, isolated: false, gpu: false },
@@ -26,7 +26,7 @@ export const SECTIONS = [
         id: "import-storage",
         name: "Not enough storage",
         game: fresh,
-        snapshot: { error: "Not enough storage: the game needs 5.56 GiB, and this browser allows Volya Engine 3.10 GiB more." },
+        snapshot: { error: "Not enough storage: the game files need 5.56 GiB, and this browser allows Volya Engine 3.10 GiB more." },
       },
       {
         id: "import-progress",
@@ -42,7 +42,7 @@ export const SECTIONS = [
       },
       {
         id: "import-record-damaged",
-        name: "Imported game damaged (its record unreadable)",
+        name: "Game files damaged (their record unreadable)",
         game: { ...fresh, problem: "import.json: expected value at line 1 column 1" },
       },
       { id: "import-resume", name: "Interrupted import", game: { ...fresh, written: 1210, bytes: 2.31 * 2 ** 30, total_bytes: GAME } },
@@ -83,7 +83,7 @@ export const SECTIONS = [
   // game data).
   {
     title: "In the level",
-    note: "Touch controls: approximations; the app draws them from the imported game's textures.",
+    note: "Touch controls: approximations; the app draws them from the textures in the game files.",
     states: [
       { id: "level-fullscreen-offer", name: "Full screen offered (desktop Chrome)", level: { offer: true }, devices: ["desktop"] },
       { id: "level-touch", name: "Idle", level: {}, devices: TOUCH },
@@ -143,7 +143,7 @@ export const SECTIONS = [
   {
     title: "Settings",
     states: [
-      { id: "settings", name: "Imported game", game: imported, screen: "settings" },
+      { id: "settings", name: "Game files imported", game: imported, screen: "settings" },
       { id: "settings-checking", name: "Check for updates pressed: checking", game: imported, screen: "settings", check: "checking" },
       { id: "settings-up-to-date", name: "Checked: up to date (for a few seconds)", game: imported, screen: "settings", check: "none" },
       { id: "settings-check-offline", name: "Checked while offline (for a few seconds)", game: imported, screen: "settings", check: "offline" },
@@ -197,48 +197,48 @@ export const SECTIONS = [
         log: { on: false, entries: true },
         press: ["Delete diagnostic log"],
       },
-      // Danger zone: the game's settings and saved games (#535).
+      // Danger zone: the game's settings and saves (#535).
       {
         id: "settings-delete-user-data",
-        name: "Delete settings and saved games pressed: confirming",
+        name: "Delete settings and saves pressed: confirming",
         game: imported,
         screen: "settings",
-        press: ["Delete settings and saved games"],
+        press: ["Delete settings and saves"],
       },
       {
         id: "settings-user-data-deleted",
-        name: "Settings and saved games deleted",
+        name: "Settings and saves deleted",
         game: imported,
         screen: "settings",
-        press: ["Delete settings and saved games", "Delete"],
+        press: ["Delete settings and saves", "Delete"],
       },
-      // Danger zone: the imported game (#538).
+      // Danger zone: the game files (#538).
       {
         id: "settings-delete-game",
-        name: "Delete imported game pressed: confirming",
+        name: "Delete game files pressed: confirming",
         game: imported,
         screen: "settings",
-        press: ["Delete imported game"],
+        press: ["Delete game files"],
       },
       {
         id: "settings-delete-game-failed",
-        name: "Delete pressed, but the game couldn't be deleted",
+        name: "Delete pressed, but the game files couldn't be deleted",
         game: imported,
         screen: "settings",
         deleteGameFails: true,
-        press: ["Delete imported game", "Delete"],
+        press: ["Delete game files", "Delete"],
       },
-      { id: "settings-no-user-data", name: "No settings or saved games stored", game: imported, screen: "settings", userData: false },
+      { id: "settings-no-user-data", name: "No settings or saves stored", game: imported, screen: "settings", userData: false },
       {
         id: "settings-delete-game-no-user-data",
-        name: "No settings or saved games stored: Delete imported game pressed, confirming",
+        name: "No settings or saves stored: Delete game files pressed, confirming",
         game: imported,
         screen: "settings",
         userData: false,
-        press: ["Delete imported game"],
+        press: ["Delete game files"],
       },
-      { id: "settings-no-game", name: "No game imported, settings or saved games stored", game: fresh, screen: "settings" },
-      { id: "settings-nothing-stored", name: "No game imported, nothing stored", game: fresh, screen: "settings", userData: false },
+      { id: "settings-no-game", name: "No game files, settings or saves stored", game: fresh, screen: "settings" },
+      { id: "settings-nothing-stored", name: "No game files, nothing stored", game: fresh, screen: "settings", userData: false },
     ],
   },
   {

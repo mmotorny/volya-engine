@@ -169,7 +169,7 @@ pub async fn ensure_mounted() -> Result<(), JsValue> {
     let manifest = read_manifest()
         .await?
         .filter(|m| m.complete)
-        .ok_or_else(|| error("game not imported"))?;
+        .ok_or_else(|| error("game files not imported"))?;
     mount(manifest).await.map(|_| ()).map_err(|(e, _)| e)
 }
 
@@ -196,7 +196,7 @@ impl OwnTree {
         let manifest = read_manifest()
             .await?
             .filter(|m| m.complete)
-            .ok_or_else(|| error("game not imported"))?;
+            .ok_or_else(|| error("game files not imported"))?;
         open(manifest)
             .await
             .map(|g| Self(Some(g)))
@@ -245,7 +245,7 @@ async fn open(manifest: Manifest) -> Result<Game, (JsValue, Manifest)> {
         if size != Some(file.size) {
             vfs.close();
             let message = format!(
-                "imported game is damaged ({} missing or wrong size); import it again",
+                "game files are damaged ({} missing or wrong size); import them again",
                 file.path
             );
             return Err((error(message), manifest));
@@ -280,7 +280,7 @@ fn mounted_status(game: &Game) -> Status {
 fn with_game<T>(f: impl FnOnce(&Game) -> Result<T, JsValue>) -> Result<T, JsValue> {
     GAME.with(|g| {
         let game = g.borrow();
-        f(game.as_ref().ok_or_else(|| error("game not imported"))?)
+        f(game.as_ref().ok_or_else(|| error("game files not imported"))?)
     })
 }
 

@@ -13,7 +13,7 @@
 //
 // Home holds Play only; secondary actions (an update offer, Settings) sit at
 // the bottom, away from it. Settings holds updates, the diagnostic
-// log and, in a danger zone, deleting the game's settings and saved games
+// log and, in a danger zone, deleting the game's settings and saves
 // and deleting the import.
 
 import { SHARE_ICON, canOffer, chromium, install, installed, platform } from "./install.js";
@@ -184,7 +184,7 @@ export async function importGame({ exe, bin, only }, onProgress = () => {}) {
     if (quota - usage < needed) {
       // The browser's allowance for this app, not the disk's free space
       // (browsers don't tell): say so.
-      throw new Error(`Not enough storage: the game needs ${formatBytes(needed)}, and this browser allows Volya Engine ${formatBytes(quota - usage)} more.`);
+      throw new Error(`Not enough storage: the game files need ${formatBytes(needed)}, and this browser allows Volya Engine ${formatBytes(quota - usage)} more.`);
     }
     const persisted = await navigator.storage.persist();
     await request({ type: "run", bin, only });
@@ -307,14 +307,14 @@ function showImport(status, snapshot = null, { kept = false, deleted = false } =
   // A damaged import (its record unreadable): import again from scratch.
   if (status.problem && !snapshot) {
     warn({
-      title: "The imported game is damaged",
-      text: [`${reported(status.problem)} Choose `, ...installerFiles(), " to import it again."],
+      title: "The game files are damaged",
+      text: [`${reported(status.problem)} Choose `, ...installerFiles(), " to import them again."],
     });
   }
   // The browser deleted an earlier import (it can, to free space): say so
   // where the advice above applies.
   if (deleted && !snapshot && status.written === 0) {
-    warn({ title: "The browser deleted the imported game", text: "Browsers can delete a site's stored data when they need space." });
+    warn({ title: "The browser deleted the game files", text: "Browsers can delete a site's stored data when they need space." });
   }
   // An interrupted import looks like one under way, stopped where it was,
   // with what happened and how to go on.
@@ -362,7 +362,7 @@ function showImport(status, snapshot = null, { kept = false, deleted = false } =
         // Storage needs are only known once the installer is read; the check
         // after choosing says exactly what's needed (iOS's temporary copy of
         // the installer has been made by then).
-        element("li", { textContent: "Choose both files below. The game is copied into this app's storage. Afterwards you can delete the installer files." }),
+        element("li", { textContent: "Choose both files below. The game files are copied into this app's storage. Afterwards you can delete the installer files." }),
       ),
       progress,
       message,
@@ -501,7 +501,7 @@ function installAdvice() {
     element("div", { className: "callout warning" }, element("strong", { textContent: "Install the app first" }), element("span", {}, ...text));
   if (platform() === "ios") {
     return callout(
-      "The browser may delete a game imported in a tab. Install Volya Engine first: tap ",
+      "The browser may delete game files imported in a tab. Install Volya Engine first: tap ",
       shareIcon(),
       ", then ",
       element("strong", { textContent: "Add to Home Screen" }),
@@ -511,8 +511,8 @@ function installAdvice() {
   if (!chromium() && !canOffer()) return null;
   const advice = callout(
     canOffer()
-      ? "The browser may delete a game imported in a tab. Install Volya Engine as an app, or bookmark it, before importing."
-      : "The browser may delete a game imported in a tab. Install Volya Engine as an app (the install icon at the right of the address bar), or bookmark it, before importing.",
+      ? "The browser may delete game files imported in a tab. Install Volya Engine as an app, or bookmark it, before importing."
+      : "The browser may delete game files imported in a tab. Install Volya Engine as an app (the install icon at the right of the address bar), or bookmark it, before importing.",
   );
   if (canOffer()) {
     const button = element("button", { className: "wide", textContent: "Install app" });
@@ -717,20 +717,20 @@ function confirmation(question, detail, actionLabel) {
 }
 
 /**
- * Danger zone: Delete settings and saved games (#535): the engine's
- * `user.ltx` and `savedgames/`, after a confirmation; the next game starts
- * from the installer's defaults. Settings shows only while no game runs.
+ * Danger zone: Delete settings and saves (#535): the engine's `user.ltx`
+ * and `savedgames/`, after a confirmation; the game then starts from the
+ * installer's defaults. Settings shows only while no game runs.
  */
 function userDataSection() {
-  const title = "Delete settings and saved games";
+  const title = "Delete settings and saves";
   const button = element("button", { className: "danger filled", textContent: title });
   const note = element("p", {
     className: "note",
-    textContent: "Deletes the game's settings and saved games from this app's storage. The next game starts with its default settings.",
+    textContent: "Deletes the game's settings and saves from this app's storage. The game then starts with its default settings.",
   });
   const section = element("div", { className: "danger-item" }, element("p", { className: "value", textContent: title }), note, button);
   button.addEventListener("click", async () => {
-    const ask = confirmation("Delete the game's settings and saved games?", "This can't be undone.", "Delete");
+    const ask = confirmation("Delete the game's settings and saves?", "This can't be undone.", "Delete");
     button.replaceWith(ask.element);
     ask.focus();
     if (!(await ask.result)) {
@@ -741,13 +741,13 @@ function userDataSection() {
     ask.busy();
     try {
       await call("forget_user_data");
-      const done = element("p", { className: "value", textContent: "Settings and saved games deleted", tabIndex: -1 });
+      const done = element("p", { className: "value", textContent: "Settings and saves deleted", tabIndex: -1 });
       done.setAttribute("role", "status");
       section.replaceChildren(done);
       done.focus();
     } catch (error) {
-      console.warn(`deleting settings and saved games: ${error.message}`);
-      note.textContent = "Couldn't delete the settings and saved games.";
+      console.warn(`deleting settings and saves: ${error.message}`);
+      note.textContent = "Couldn't delete the settings and saves.";
       note.classList.add("error");
       ask.element.replaceWith(button);
       button.focus();
@@ -757,19 +757,19 @@ function userDataSection() {
 }
 
 /**
- * Danger zone: Delete imported game, after a confirmation (#538) that says
- * the game's settings and saved games stay, when there are any; then the
+ * Danger zone: Delete game files, after a confirmation (#538) that says
+ * the game's settings and saves stay, when there are any; then the
  * import screen.
  */
 function importSection(status, userData) {
-  const title = "Delete imported game";
+  const title = "Delete game files";
   const button = element("button", { className: "danger filled", textContent: title });
   const note = element("p", {
     className: "note",
-    textContent: `Deletes the game's ${formatBytes(status.bytes)} from this app's storage. You can import it again from the installer.`,
+    textContent: `Deletes ${formatBytes(status.bytes)} of game files from this app's storage. You can import them again from the installer.`,
   });
   button.addEventListener("click", async () => {
-    const ask = confirmation("Delete the imported game?", userData ? "The game's settings and saved games stay." : null, "Delete");
+    const ask = confirmation("Delete the game files?", userData ? "The game's settings and saves stay." : null, "Delete");
     button.replaceWith(ask.element);
     ask.focus();
     if (!(await ask.result)) {
@@ -781,8 +781,8 @@ function importSection(status, userData) {
     try {
       await call("forget_game");
     } catch (error) {
-      console.warn(`deleting the imported game: ${error.message}`);
-      note.textContent = "Couldn't delete the imported game.";
+      console.warn(`deleting the game files: ${error.message}`);
+      note.textContent = "Couldn't delete the game files.";
       note.classList.add("error");
       ask.element.replaceWith(button);
       button.focus();
@@ -797,7 +797,7 @@ function importSection(status, userData) {
 
 /**
  * Settings: updates, the diagnostic log and, in a danger zone, the
- * player's settings and saved games and the import.
+ * player's settings and saves and the game files.
  */
 async function showSettings() {
   const status = await call("game_status");

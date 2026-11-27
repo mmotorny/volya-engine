@@ -17,10 +17,10 @@
 
 ## The page
 
-- The app opens on its own interface (`static/game-ui.js`): home with Play once a game is imported, else the import screen; "This browser can't run the game", with the reason, instead of both when the page isn't cross-origin isolated or has no WebGL 2.
+- The app opens on its own interface (`static/game-ui.js`): home with Play once the game files are imported, else the import screen; "This browser can't run the game", with the reason, instead of both when the page isn't cross-origin isolated or has no WebGL 2.
 - Play launches the game, one start at a time (#369): the engine owns the screen (input capture on) and the page hides its interface until the player quits ("Yes" in the menu's quit box, or Q), which returns home.
 - The page ↔ engine input path: [input.md](input.md).
-- Settings (shown only while no game runs) has a danger zone: Delete settings and saved games (#535, shown while either is stored: `user_data_status`) removes the engine's `user.ltx` and `savedgames/` from OPFS (`forget_user_data`), so the next game reads the installer's configuration; Delete imported game deletes the game. Each asks first, in the page, never in a browser dialog (#538). Neither touches the diagnostic log, the shell's preferences (localStorage, the `volya-engine-settings` cache) or the offline copy.
+- Settings (shown only while no game runs) has a danger zone: Delete settings and saves (#535, shown while either is stored: `user_data_status`) removes the engine's `user.ltx` and `savedgames/` from OPFS (`forget_user_data`), so the game then reads the installer's configuration; Delete game files deletes the imported files. The page's words: "the game" is the program, "game files" what is imported from the installer, "saves" saved progress; a play session is never "a game" (#616). Each asks first, in the page, never in a browser dialog (#538). Neither touches the diagnostic log, the shell's preferences (localStorage, the `volya-engine-settings` cache) or the offline copy.
 
 ## A hidden page
 
