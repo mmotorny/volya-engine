@@ -316,11 +316,40 @@ Each step is its own issue, filed after this design is approved, in this order, 
 10. **Prefetching under `st_prefetching_objects`**: the 394 models of `prefetch_visuals_single` and their textures, kept while the game type stays; the objects spawned take them; the objects' CPU geometry freed once uploaded.
 11. **The game scripts' pool**: the script runtime allocates from a pool of its own, outside *h*, reported as *g*.
 12. **The renderer's pool**: the frame's lists from a pool of their own, outside *h*, reported as *r*.
-13. **Leaner structures**: a survey of the owners against the original's figures for opportunities of rule 5's kind, each found filed as its own issue.
+13. **Leaner structures**: a survey of the owners against the original's figures for opportunities of rule 5's kind, each found filed as its own issue ([Leaner structures](#leaner-structures)).
 
 The sound cache, the original's decoded audio, is held in the audio worker and counted in *h* (#749; [Deviations](#deviations)).
 
 The open issues weighed before this design (#486 the objects' models as regions, #489 kept scratch buffers, #679 a frame's last allocations, #405 sorted `Vec`s for `BTreeMap`s) are taken where they match the original or are rule 5's kind; any other is the user's decision.
+
+## Leaner structures
+
+The survey of every owner for rule 5's kind of change (#698), each candidate filed as a deviation proposal for the user's decision (label `deviation proposal`); those for the later pass of compression and packing (#753) are marked so. Measured: `loading_memory.rs` and `level_memory.rs` natively (`--config=measure`), `game-level` and `game-memory` in headless Chrome, one run each; the savings are believed (counts × sizes) unless marked measured, and each issue measures before and after.
+
+| Owner | Now (measured) | Candidate | Saving (believed) | CPU cost | Risk | Issue |
+|---|---|---|---|---|---|---|
+| The camera pass's dynamic items (*r*) | an object's item 96 bytes in wasm32, its `Mat4` a copy of the placement; about 200 KB natively (#774) | the transform read from the placement where tested | about 130 KB of *r* | none | none | #778 |
+| The detail placement's triangles (*r*) | copied as 36-byte corners, about 120 KB (#774) | the triangle indices found, corners read when tested | about 107 KB of *r* | more per refresh: each visit decodes a triangle | none | #779 |
+| The detail cache's entries (`st_loading_details`) | 2,401 entries of 16 `Vec`s each; 679 K in Chrome, 1,134 K natively, against 10 K (#710) | one instance list and one drawn list per entry with the parts' ends | about 326 K in Chrome, 730 K natively | none | none | #780 |
+| The detail cache's drawn lists (*r*) | 32-byte copies of each instance drawn | the instance's index and its drawing scale, 8 bytes | three quarters of the lists | a gather per drawn instance per frame | none | #781 |
+| The static draw list (`st_loading_spatial_db`) | 7,782 items of 220 bytes, each with an identity or tree transform and an inline tree instance; the caption 6,207 K in Chrome against 4,297 K (#728) | the tree instances in a table of their own, the item about 56 bytes | about 1.0–1.2 MB | none | none | #782 |
+| The billboard groups' faces (`st_loading_spatial_db`) | 1,839 blocks of 919 bytes, about 1.7 MB, copied from the `level` file the cache holds to the level's end | read in place from the held file; or one region (about 42 K) | about 1.7 MB of *h*, the file cache unchanged | a group's 32 vertices decoded each frame it is drawn | low | #783 (excludes #789) |
+| The camera pass's hierarchy, portals, sector portal lists; the draw items' spheres (`st_loading_spatial_db`) | a block per node with children, per portal, per sector, about 5,700 with the faces; the spheres repeat the nodes' | tables with ranges (rule 3); the sphere read from the node | 0.1–0.3 MB, about 3,800 blocks | none | none | #784 |
+| The models: prefetched (the game type) and the level's own (`st_client_spawning`) | 2.3 MB in 12,936 blocks, 1.3 MB of it detail windows; a `String` per path, texture, shader and bone, a 4 × 4 bind matrix per bone; the caption 4,888 K in Chrome against 4,708 K (#712) | one name region per owner, meshes and bones as runs, bind matrices 4 × 3 where affine (#486) | 0.3–0.6 MB, about 11,000 blocks, and the level's share of the excess | none | low | #785 |
+| The detail windows (game type; `st_loading_spatial_db`) | 163,056 and 84,509 of 8 bytes | `[u16; 3]`, as the file stores them | about 0.5 MB | negligible | none | #786 |
+| The registry (session) | 6.3 MB in 54,735 blocks: slots of 392 bytes, the records' strings 2.4 MB in 51,204 blocks; the caption 5,251 K against 32,164 K | the records' strings in a session region, the slot table by kind (#485 stopped short of it) | 1–1.5 MB, about 50,000 blocks | none at run time; the save writer and the records' readers change | medium | #787 |
+| The level's objects' CPU geometry (loading) | 3.4 MB in 2 blocks until the world's upload, among the load's most live (#666) | chunks kept as made, as the prefetched models' (#765) | about 3 MB of the load's peak; no caption's figure | none | none | #788 |
+| The `level` file (the file cache) | 3,998 K held to the level's end, unread after `st_loading_sectors_portals` | released after its last reader | 3,998 K of the file cache in the level (measured: its size) | none | none | #789 (excludes #783) |
+| The archive tree (launch) | 1.3 MB kept, building it peaks 7.0 MB above its start (a `BTreeMap` of every path) | sorted records in one vector, names in one buffer | 4–5 MB of the launch's peak, perhaps none of the wasm memory | about the same | none | #790 |
+| The effect library (program) | 1.4 MB in 1,095 blocks, each source action boxed | the sources in a table | 20–40 KB, 1,094 blocks | none | none | #791 |
+| The sound cache (the audio worker) | 32,850 K allocated with the device, all free (measured, `game-level`), as the original's | lines committed on first use, taken in the same order | up to 32,850 K while few sounds have played; none once all are used | a growth now and then | low | #792 |
+| The collision world (`st_loading_cform`) | 29.4 MB in 4 blocks against 72,669 K (`l11_pripyat` 44.5 MB) | vertices and indices coded per tree leaf | up to a third | each query decodes its leaves | none lossless, high quantized | #793, for #753 |
+| `level.geom` on the GPU | 57.0 MB as stored, 32 bytes a vertex | 16-bit positions, derived binormals | 6–12 MiB | vertex shaders decode | high | #794, for #753 |
+| The textures on the GPU | 127 MiB the level's, 86 MiB the prefetched, BC as stored | opaque BC3 re-encoded losslessly to BC1 at upload | half of each such texture | a pass at upload | none if lossless | #795, for #753 |
+| The sound cache's lines | 16-bit samples | coded losslessly | about 40% | decoding at each copy out | none lossless | #796, for #753 |
+| `level.gct` and the detail slot grid (the file cache) | 3.6 MB and 4.4 MB (10.5 MB `l12_stancia`) as stored | distinct slots in a table; narrower cells | up to half | an indirection per read | none | #797, for #753 |
+
+No candidate: the configuration and the string tables (regions in 4 and 2 blocks); the navigation positions (5 of 21 bytes); the static world's detail windows beyond #786 (a `level.geom` record once however many visuals share it); the prefetched models' geometry (16-byte vertices, the file's sliding-window indices, shared by every window); the textures the prefetched set holds that the level doesn't draw and the video mode's targets (as the original's). #405's `BTreeMap`s: none is level-held; the session's `story_ids`, the GL layer's names, the configuration parser's and the web platform's file lists are small or transient, and only the archive tree's (#790) is worth a change. What remains above the original's per caption without a structure behind it is filed already: `st_server_connecting` (#707), `st_loading_ai_objects` (#711), `st_loading_textures` (#713), `st_client_synchronising` (#714; 2,813 K in Chrome this run), *r* at the load's end (#773), the pools' high-water mark and the heap's holes (#715, #373, #666). In the title menu *h* is 53,744 K in Chrome against the original's 26,449 K, the sound cache's 32,850 K among it (#792).
 
 ## GPU and JavaScript memory
 
