@@ -537,8 +537,11 @@ fn loading_stage_times() {
 
 /// The level's objects take their models from the prefetched ones
 /// (console-diagnostics.md 2.4.1) exactly as their files would lay them
-/// out: the same models, meshes and geometry as a load without the
-/// prefetching (a later New Game of the game type given none).
+/// out: the same models and meshes as a load without the prefetching (a
+/// later New Game of the game type given none), each prefetched mesh's
+/// vertices and indices in its kept chunk those of its file, the indices
+/// counted from the chunk's first vertex, and the rest of the geometry the
+/// same.
 #[test]
 fn prefetched_models_lay_out_as_their_files() {
     let Some(archives) = gog_archives::archives() else {
@@ -563,17 +566,69 @@ fn prefetched_models_lay_out_as_their_files() {
     let (prefetched, with, with_geometry) = load(&Stage::ALL);
     let (none, without, without_geometry) = load(&Stage::ALL[1..]);
     let p = prefetched.unwrap();
+    let chunks = p.take_pending();
+    let (count, vertices, indices) = p.geometry();
     eprintln!(
-        "{} models prefetched, {} texture files; the level's {} models, {} of them prefetched",
+        "{} models prefetched, {} texture files, their geometry {count} chunks, {vertices} bytes of vertices and {indices} of indices; the level's {} models, {} of them prefetched",
         p.len(),
         p.textures.len(),
         with.len(),
         with.iter().filter(|(path, _)| p.holds(path)).count()
     );
-    let models = p.len();
-    assert!(models > 0 && none.is_none());
-    assert_eq!(with, without);
-    assert!(with_geometry == without_geometry, "the objects' geometry");
+    assert!(!p.is_empty() && none.is_none());
+    assert_eq!(chunks.len(), count as usize);
+    assert!(chunks.iter().all(|c| c.set == p.set()));
+    assert_eq!(with.len(), without.len());
+    // What the level's own geometry holds, the models not prefetched'.
+    let mut own = volya_engine::render::world::ObjectGeometry {
+        windows: with_geometry.windows.clone(),
+        ..Default::default()
+    };
+    const V: usize = volya_engine::render::world::MODEL_VERTEX_BYTES;
+    let index = |bytes: &[u8], i: usize| u16::from_le_bytes([bytes[2 * i], bytes[2 * i + 1]]);
+    for ((path, meshes), (other, file)) in with.iter().zip(&without) {
+        assert_eq!(path, other);
+        assert_eq!(meshes.len(), file.len(), "{path}");
+        for (m, f) in meshes.iter().zip(file) {
+            let ranges = |m: &volya_engine::objects::MeshRange| {
+                (m.vertex_count, m.index_count, m.windows, m.sphere)
+            };
+            assert_eq!(ranges(m), ranges(f), "{path}");
+            assert_eq!((&m.texture, &m.shader), (&f.texture, &f.shader), "{path}");
+            assert_eq!(m.kept.is_some(), p.holds(path), "{path}");
+            let (fv, fi) = (f.first_vertex as usize, f.first_index as usize);
+            let file_vertices =
+                &without_geometry.vertices[fv * V..(fv + m.vertex_count as usize) * V];
+            let file_indices = &without_geometry.indices[fi..fi + m.index_count as usize];
+            match m.kept {
+                Some(c) => {
+                    let c = &chunks[c as usize];
+                    let (v, i) = (m.first_vertex as usize, m.first_index as usize);
+                    assert_eq!(
+                        &c.vertices[v * V..(v + m.vertex_count as usize) * V],
+                        file_vertices,
+                        "{path}"
+                    );
+                    let kept: Vec<u16> = (0..m.index_count as usize)
+                        .map(|k| index(&c.indices, i + k) - v as u16)
+                        .collect();
+                    assert_eq!(kept, file_indices, "{path}");
+                }
+                None => {
+                    let (v, i) = (m.first_vertex as usize, m.first_index as usize);
+                    assert_eq!(v, own.vertices.len() / V, "{path}");
+                    assert_eq!(i, own.indices.len(), "{path}");
+                    own.vertices.extend_from_slice(file_vertices);
+                    own.indices.extend_from_slice(file_indices);
+                }
+            }
+        }
+    }
+    assert!(own == with_geometry, "the objects' own geometry");
+    assert_eq!(
+        with_geometry.windows, without_geometry.windows,
+        "the detail windows"
+    );
 }
 
 /// With the platform preparing textures (#113), a New Game's loading waits
@@ -616,17 +671,35 @@ fn loading_waits_for_prepared_textures() {
         _ => None,
     };
     let mut frames = 0;
-    // First the prefetched models' textures, under the first caption
-    // (texture-quality-filtering.md 2), kept for the game type.
-    while app.textures_to_prepare().is_none() {
+    // First the prefetched models, under the first caption, their geometry
+    // handed over a chunk at a time as it is made (the platform's renderer
+    // keeps it).
+    while !app.models_to_prefetch() {
         step(&mut app, &mut input, &mut audio);
         frames += 1;
         assert!(frames < 40, "never asked to prefetch: {:?}", app.state());
     }
-    assert_eq!(
-        caption(&app),
-        Some((1, "Кэширование объектов...".to_owned()))
+    let prefetching = Some((1, "Кэширование объектов...".to_owned()));
+    assert_eq!(caption(&app), prefetching);
+    step(&mut app, &mut input, &mut audio);
+    assert!(app.models_to_prefetch(), "held");
+    let mut chunks = Vec::new();
+    loop {
+        let before = chunks.len();
+        let more = app.prefetch_models(&tree, &mut |c| chunks.push((c.index, c.vertices.len())));
+        if !more {
+            break;
+        }
+        assert_eq!(chunks.len(), before + 1, "a chunk a step");
+    }
+    assert!(chunks.len() > 10, "{} chunks", chunks.len());
+    assert!(
+        (chunks.iter()).all(|&(_, v)| v <= volya_engine::objects::CHUNK_VERTICES * 16),
+        "chunks within 16 bits"
     );
+    // Then their textures (texture-quality-filtering.md 2), kept for the
+    // game type.
+    assert_eq!(caption(&app), prefetching);
     assert!(app.prefetching_textures());
     let prefetched = app.textures_to_prepare().unwrap().len();
     assert!(prefetched > 200, "{prefetched} textures prefetched");

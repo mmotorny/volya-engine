@@ -22,7 +22,7 @@ use crate::gl::{
 use crate::sky::{SkyPrograms, SkyResources, SkyTextures};
 use crate::{Renderer, Target, Texture};
 
-use super::{NEAREST, link_with, points, units};
+use super::{KeptChunk, NEAREST, link_with, points, units};
 
 pub use crate::shared::world::*;
 
@@ -789,6 +789,11 @@ pub struct GeometryUpload {
     /// The objects' vertex buffers' first vertices, ascending: vertex
     /// buffer `object_vb + g` is the objects' from vertex `object_bases[g]`.
     object_bases: Vec<u32>,
+    /// The first vertex buffer of the kept geometry's chunks.
+    kept_vb: u32,
+    /// The kept chunks the draws read, by chunk: their vertex and index
+    /// buffers' indices.
+    kept: HashMap<u32, (u32, u32)>,
     /// The draws' index ranges it was begun for.
     ranges: Vec<(bool, u32, u32, u32, u32)>,
     /// Whether it was begun with objects' vertices.
@@ -939,6 +944,20 @@ impl Renderer {
             return Err("object vertices are not whole model vertices".into());
         }
         let object_vertices = (objects.vertices.len() / MODEL_VERTEX_BYTES) as u64;
+        // The kept chunks the draws read, ascending.
+        let mut chunks: Vec<(u32, KeptChunk)> = Vec::new();
+        for c in draws
+            .iter()
+            .filter(|d| d.object.is_some())
+            .filter_map(|d| d.kept)
+        {
+            if let Err(at) = chunks.binary_search_by_key(&c, |k| k.0) {
+                let chunk = self
+                    .kept_chunk(c)
+                    .ok_or_else(|| format!("kept geometry chunk {c} is not kept"))?;
+                chunks.insert(at, (c, chunk));
+            }
+        }
         for d in draws {
             let [first, count] = d.windows.map(|w| w as usize);
             let windows_fit = (objects.windows.get(first..first.saturating_add(count)))
@@ -947,8 +966,14 @@ impl Renderer {
                         u64::from(w.offset) + u64::from(w.index_count) <= u64::from(d.index_count)
                     })
                 });
+            let kept = (d.kept.filter(|_| d.object.is_some()))
+                .and_then(|c| chunks.iter().find(|k| k.0 == c));
             let fits = windows_fit
-                && if d.object.is_some() {
+                && if let Some((_, chunk)) = kept {
+                    u64::from(d.first_index) + u64::from(d.index_count)
+                        <= u64::from(chunk.index_count)
+                        && d.first_vertex < chunk.vertex_count.max(1)
+                } else if d.object.is_some() {
                     u64::from(d.first_index) + u64::from(d.index_count)
                         <= objects.indices.len() as u64
                         && u64::from(d.first_vertex) < object_vertices.max(1)
@@ -1099,7 +1124,10 @@ impl Renderer {
             // from vertex 0.
             let label = "object indices";
             let mut tops: HashMap<RangeKey, u32> = HashMap::new();
-            for d in draws.iter().filter(|d| d.object.is_some()) {
+            for d in draws
+                .iter()
+                .filter(|d| d.object.is_some() && d.kept.is_none())
+            {
                 tops.entry(Rebased::key(d)).or_insert_with(|| {
                     let range = d.first_index as usize..(d.first_index + d.index_count) as usize;
                     let top = objects.indices[range].iter().copied().max().unwrap_or(0);
@@ -1126,7 +1154,10 @@ impl Renderer {
                 vertex_buffers.push(vertex_buffers[object_vb as usize].clone());
             }
             let mut object_segments: Vec<Segment> = Vec::new();
-            for d in draws.iter().filter(|d| d.object.is_some()) {
+            for d in draws
+                .iter()
+                .filter(|d| d.object.is_some() && d.kept.is_none())
+            {
                 rebased.add(d, || {
                     let at = object_segments.last().map_or(0, |s| s.at + s.count);
                     let g = object_base(&bases, d.first_vertex);
@@ -1157,6 +1188,15 @@ impl Renderer {
                 bytes,
             });
         }
+        // Then the kept chunks', read where they are.
+        let kept_vb = vertex_buffers.len() as u32;
+        let mut kept = HashMap::new();
+        for (c, chunk) in chunks {
+            kept.insert(c, (vertex_buffers.len() as u32, index_buffers.len() as u32));
+            vertex_buffers.push(chunk.vertices);
+            index_buffers.push(chunk.indices);
+            index_wide.push(false);
+        }
         Ok(GeometryUpload {
             jobs,
             next: 0,
@@ -1178,6 +1218,8 @@ impl Renderer {
             object_vb,
             object_ib,
             object_bases,
+            kept_vb,
+            kept,
             ranges: draws.iter().map(Rebased::key).collect(),
             objects: !objects.vertices.is_empty(),
             windows: objects.windows.clone(),
@@ -1221,6 +1263,8 @@ impl Renderer {
             object_vb,
             object_ib,
             object_bases,
+            kept_vb,
+            kept: kept_chunks,
             objects,
             windows,
             ..
@@ -1237,7 +1281,7 @@ impl Renderer {
         let usable = |d: &WorldDraw| {
             surfaces.get(d.surface as usize).is_some_and(|s| {
                 if d.object.is_some() {
-                    s.program.layout() == VertexLayout::Model && objects
+                    s.program.layout() == VertexLayout::Model && (objects || d.kept.is_some())
                 } else {
                     vertex_layouts[d.vertex_buffer as usize].map(VertexLayout::Level)
                         == Some(s.program.layout())
@@ -1254,7 +1298,12 @@ impl Renderer {
             .iter()
             .copied()
             .map(|mut d| {
-                if d.object.is_some() {
+                if let Some(&(vb, ib)) = d.kept.and_then(|c| kept_chunks.get(&c)) {
+                    // Its range is the chunk's, from the chunk's first vertex.
+                    d.vertex_buffer = vb;
+                    d.index_buffer = ib;
+                    d.first_vertex = 0;
+                } else if d.object.is_some() {
                     d.first_index = rebased.first_index(&d);
                     d.vertex_buffer = object_vb + object_base(&object_bases, d.first_vertex) as u32;
                     d.first_vertex = 0;
@@ -1400,6 +1449,7 @@ impl Renderer {
                         let vb = &vertex_buffers[d.vertex_buffer as usize];
                         // An object base's first vertex, as an offset.
                         let offset = (d.vertex_buffer.checked_sub(object_vb))
+                            .filter(|_| d.vertex_buffer < kept_vb)
                             .and_then(|g| object_bases.get(g as usize))
                             .map_or(0, |&b| u64::from(b) * MODEL_VERTEX_BYTES as u64);
                         let mut buffers = vec![(vb, offset, vertex_layout(layout))];

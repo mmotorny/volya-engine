@@ -911,6 +911,37 @@ impl App {
         }
     }
 
+    /// Whether the loading waits under `st_prefetching_objects` for the
+    /// platform to make the prefetched models ([`App::prefetch_models`];
+    /// with [`App::set_prepare_textures`]).
+    pub fn models_to_prefetch(&self) -> bool {
+        matches!(
+            &self.phase,
+            Some(Phase::Loading {
+                stages: NewGame::Stages(loading),
+                ..
+            }) if loading.models_to_prefetch()
+        )
+    }
+
+    /// Makes the next prefetched models from `tree`, handing each chunk of
+    /// their geometry to `keep` (the platform's renderer keeps it) as it is
+    /// made; returns whether the loading waits for more
+    /// ([`Loading::prefetch_models`]).
+    pub fn prefetch_models(
+        &mut self,
+        tree: &dyn Vfs,
+        keep: &mut dyn FnMut(crate::objects::GeometryChunk),
+    ) -> bool {
+        match &mut self.phase {
+            Some(Phase::Loading {
+                stages: NewGame::Stages(loading),
+                ..
+            }) => loading.prefetch_models(tree, &self.data, keep),
+            _ => false,
+        }
+    }
+
     /// Whether [`App::textures_to_prepare`] are the prefetched models'
     /// (under `st_prefetching_objects`), kept while the game type stays,
     /// rather than the level's.

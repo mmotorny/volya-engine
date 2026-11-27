@@ -1660,6 +1660,29 @@ impl NewGameLoad {
         self.prefetched = prefetched;
     }
 
+    /// The models made under `st_prefetching_objects`
+    /// ([`objects::Prefetching`]), with their textures' files listed: the
+    /// prefetched models it loads with.
+    pub fn set_prefetched_made(
+        &mut self,
+        tree: &dyn Vfs,
+        data: &GameData,
+        mut prefetched: objects::Prefetched,
+    ) -> io::Result<()> {
+        prefetched.textures = prefetched_textures(tree, data, &prefetched)?;
+        let (chunks, vertices, indices) = prefetched.geometry();
+        tracing::info!(
+            models = prefetched.len(),
+            textures = prefetched.textures.len(),
+            chunks,
+            vertices,
+            indices,
+            "prefetched"
+        );
+        self.prefetched = Some(Arc::new(prefetched));
+        Ok(())
+    }
+
     /// The prefetched models it loads with, once `st_prefetching_objects`
     /// has run or they were given.
     pub fn prefetched(&self) -> Option<&Arc<objects::Prefetched>> {
@@ -2013,7 +2036,7 @@ impl NewGameLoad {
                 self.weather = Some(weather);
                 let level_objects = std::mem::take(&mut self.level_objects);
                 let spawned =
-                    objects::spawn(tree, data, &dir, &level_objects, self.prefetched.as_deref())?;
+                    objects::spawn(tree, data, &dir, &level_objects, self.prefetched.as_ref())?;
                 // The artefacts online at the start are created as the
                 // client creates its objects (artefact-idle-effects.md 3.1),
                 // with their models' bones, on the effects' clock.
@@ -2313,15 +2336,11 @@ impl NewGameLoad {
             // files (console-diagnostics.md 2.4.1), kept while the game
             // type stays; the level's objects take their models from them.
             // No object is pre-created: `prefetch_objects_single` is empty.
+            // Without a platform keeping the geometry as it is made, it
+            // waits with them for a presenter to keep it.
             Stage::PrefetchingObjects => {
-                let mut prefetched = objects::Prefetched::load(tree, data)?;
-                prefetched.textures = prefetched_textures(tree, data, &prefetched)?;
-                tracing::info!(
-                    models = prefetched.len(),
-                    textures = prefetched.textures.len(),
-                    "prefetched"
-                );
-                self.prefetched = Some(Arc::new(prefetched));
+                let prefetched = objects::Prefetched::load_pending(tree, data)?;
+                self.set_prefetched_made(tree, data, prefetched)?;
             }
             // The game is made under `st_creating_new_game`, as the
             // original's; nothing under `st_server_connecting`.

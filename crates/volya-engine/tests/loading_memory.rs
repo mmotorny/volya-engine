@@ -33,6 +33,7 @@ use volya_engine::core::vfs::db::DbVfs;
 use volya_engine::data::GameData;
 use volya_engine::level::NewGameLoad;
 use volya_engine::loading_screen::Stage;
+use volya_engine::objects::Prefetched;
 use volya_engine_formats::ui::Resolution;
 
 struct Counting;
@@ -161,7 +162,14 @@ fn loading_stage_memory() {
             ALLOCS.load(Ordering::Relaxed),
         );
         PEAK.store(before, Ordering::Relaxed);
-        load.run(stage, &tree, &data).unwrap();
+        if stage == Stage::PrefetchingObjects {
+            // As the platform makes them: each chunk of their geometry
+            // kept by its renderer (here dropped) as it is made.
+            let prefetched = Prefetched::load(&tree, &data, &mut drop).unwrap();
+            load.set_prefetched_made(&tree, &data, prefetched).unwrap();
+        } else {
+            load.run(stage, &tree, &data).unwrap();
+        }
         open = load.original_open(stage, &tree);
         let window = file_cache::mark();
         cache.push((stage, window.most, file_cache::budget(&window, &open)));

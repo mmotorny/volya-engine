@@ -420,8 +420,24 @@ pub async fn loading_takes_prepared_textures(cx: &Context<'_>) -> Outcome {
         gpu.create_texture(p, &dds)
             .map_err(|e| format!("{p}: {e:?}"))
     };
-    // First the prefetched models' textures, under the first caption, kept
-    // for the game type (the platform makes them the prefetched owner's).
+    // First the prefetched models, under the first caption, their
+    // geometry kept by the renderer a chunk at a time as it is made.
+    while !game.app.models_to_prefetch() {
+        game.step(tree);
+        frames += 1;
+        ensure!(
+            frames < 40,
+            "never asked to prefetch: {:?}",
+            game.app.state()
+        );
+    }
+    ensure_eq!(caption(&game.app), Some(1), "prefetching");
+    while game.app.prefetch_models(tree, &mut |c| {
+        gpu.keep_geometry(c.set, c.index, &c.vertices, &c.indices)
+    }) {}
+    let (chunks, chunk_bytes) = gpu.kept_geometry();
+    // Then their textures, under the same caption, kept for the game type
+    // (the platform makes them the prefetched owner's).
     while game.app.textures_to_prepare().is_none() {
         game.step(tree);
         frames += 1;
@@ -484,7 +500,8 @@ pub async fn loading_takes_prepared_textures(cx: &Context<'_>) -> Outcome {
         ensure_eq!(caption(&game.app), Some(17), "held");
     }
     let note = format!(
-        "{} textures prefetched ({} of them the level's), {} prepared; world prepared in {turns} turns, {:.1} ms",
+        "{chunks} chunks of geometry kept ({:.1} MiB), {} textures prefetched ({} of them the level's), {} prepared; world prepared in {turns} turns, {:.1} ms",
+        mib(chunk_bytes),
         kept.len(),
         all.len() - paths.len(),
         paths.len(),

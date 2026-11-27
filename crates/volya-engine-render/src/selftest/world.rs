@@ -210,6 +210,7 @@ fn draw(surface: u32, tree: Option<TreeLight>) -> WorldDraw {
         tree,
         object: None,
         windows: [0, 0],
+        kept: None,
     }
 }
 
@@ -681,6 +682,77 @@ pub async fn objects_past_16_bits_keep_16_bit_indices(make: Make<'_>) -> Outcome
     ensure_eq!(world.object_gpu_bytes(), want, "object bytes");
     let px = centre(&mut r, frame(world, None)).await?;
     expect_near(px, [0, 255, 0], "the draw from vertex 70,000")?;
+    Ok(String::new())
+}
+
+/// An object drawn from a chunk of the kept geometry (#765): the green
+/// screen-covering triangle of [`object_geometry`] after three vertices of
+/// its chunk, its indices counted from the chunk's first vertex, beside a
+/// draw from the world's own objects' geometry (a degenerate triangle). The
+/// world's own buffers leave the chunk out; a chunk not kept, or a range
+/// past the chunk, fails; another set's chunks replace the kept ones.
+pub async fn objects_draw_from_kept_geometry(make: Make<'_>) -> Outcome {
+    let mut r = make();
+    let base = quadrants(&r);
+    let green = object_geometry(UP);
+    let mut vertices = vec![0; 3 * crate::world::MODEL_VERTEX_BYTES];
+    vertices.extend_from_slice(&green.vertices);
+    let indices: Vec<u8> = [0u16, 1, 2, 3, 4, 5, 0, 0]
+        .iter()
+        .flat_map(|i| i.to_le_bytes())
+        .collect();
+    r.keep_geometry(7, 1, &vertices, &indices);
+    ensure_eq!(r.kept_geometry_set(), Some(7), "the set kept");
+    ensure_eq!(r.kept_geometry().0, 1, "chunks kept");
+    let own = ObjectGeometry {
+        vertices: vec![0; 3 * crate::world::MODEL_VERTEX_BYTES],
+        indices: vec![0, 1, 2],
+        windows: Vec::new(),
+    };
+    let g = geom(Layout::VertexLit, 0, 0, [0; 8]);
+    let surfaces = [surface(Program::ModelSelfLight, Some(base))];
+    let kept = WorldDraw {
+        first_vertex: 3,
+        first_index: 3,
+        kept: Some(1),
+        ..object_draw(0, [0.0; 4])
+    };
+    let world = r
+        .create_world_with(&g, &own, &surfaces, &[object_draw(0, [0.0; 4]), kept], None)
+        .map_err(fail("world"))?;
+    ensure_eq!(world.object_draw_count(), 2, "object draws");
+    // Its own vertices, a 16-bit range of 3 (8 bytes), two draw records.
+    let want = (own.vertices.len() + 8 + 2 * crate::world::DRAW_BYTES) as u64;
+    ensure_eq!(world.object_gpu_bytes(), want, "object bytes");
+    let px = centre(&mut r, frame(world, None)).await?;
+    expect_near(px, [0, 255, 0], "the draw from the kept chunk")?;
+    for bad in [
+        WorldDraw {
+            kept: Some(0),
+            ..kept
+        },
+        WorldDraw {
+            first_index: 6,
+            ..kept
+        },
+    ] {
+        ensure!(
+            r.create_world_with(&g, &own, &surfaces, &[bad], None)
+                .is_err(),
+            "a draw outside the kept geometry accepted: {bad:?}"
+        );
+    }
+    r.keep_geometry(8, 0, &vertices, &indices);
+    ensure_eq!(
+        (r.kept_geometry_set(), r.kept_geometry().0),
+        (Some(8), 1),
+        "another set replaces the kept"
+    );
+    ensure!(
+        r.create_world_with(&g, &own, &surfaces, &[kept], None)
+            .is_err(),
+        "a chunk of a set no longer kept accepted"
+    );
     Ok(String::new())
 }
 

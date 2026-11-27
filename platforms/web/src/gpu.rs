@@ -1433,6 +1433,7 @@ pub fn debug_draw_lights(case: &str) -> Result<serde_json::Value, JsValue> {
             tree: None,
             object: None,
             windows: [0, 0],
+            kept: None,
         };
         let world = r
             .create_world(&geom, &[surface], &[draw], None)

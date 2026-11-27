@@ -14,12 +14,14 @@
 //! the switch pass, the models (taken from the game type's prefetched ones,
 //! [`Prefetched`], where they hold the file), their surfaces, the light
 //! inputs. Each model file is read once and shared by every object showing
-//! it; its vertices go into one buffer for all models, which the presenter
-//! uploads with the static world and then drops.
+//! it; the vertices of the models not prefetched go into one buffer for all
+//! of them, which the presenter uploads with the static world and then
+//! drops; the prefetched ones are drawn from the geometry the renderer
+//! keeps.
 
 use std::collections::HashMap;
 use std::io;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 
@@ -300,6 +302,10 @@ pub struct MeshRange {
     /// The mesh's header sphere in model space: centre, radius
     /// (object-detail-level.md 3).
     pub sphere: [f32; 4],
+    /// The chunk of the kept geometry holding it, a prefetched model's
+    /// ([`Prefetched`]): its first vertex and index are then the chunk's,
+    /// its indices counted from the chunk's first vertex.
+    pub kept: Option<u32>,
 }
 
 /// A model file loaded for drawing: its header and meshes, the vertices
@@ -363,6 +369,7 @@ pub fn add_model(
                 let (c, r) = (m.header.sphere_centre, m.header.sphere_radius);
                 [c[0], c[1], c[2], r]
             },
+            kept: None,
         });
     }
     Ok(LoadedModel {
@@ -386,66 +393,236 @@ pub const PREFETCH_VISUALS: &str = "prefetch_visuals_single";
 /// The models loaded under `st_prefetching_objects` and kept while the game
 /// type stays (console-diagnostics.md 2.4.1; docs/architecture/memory.md,
 /// Lifetimes): each listed visual's file read once, parsed and laid out as
-/// [`add_model`] lays it out, each model's vertices, indices and detail
-/// windows in blocks of its own (so the set grows by one model at a time,
-/// with no growing block's spare). A level's objects take their models from
-/// here ([`spawn`]); their surfaces' texture files are listed beside, for
-/// the platform to load with them.
+/// [`add_model`] lays it out, its meshes' vertices and indices then placed
+/// in chunks of the kept geometry, which the renderer keeps
+/// (`Renderer::keep_geometry`), and its detail windows in a block of its
+/// own. A level's objects take their models from here ([`spawn`]) and draw
+/// them from the kept chunks; their surfaces' texture files are listed
+/// beside, for the platform to load with them.
 #[derive(Debug, Default)]
 pub struct Prefetched {
+    /// Which set of kept geometry its chunks are ([`GeometryChunk::set`]).
+    set: u64,
     /// By located path, lower-cased: the model's index.
     by_path: HashMap<String, usize>,
     models: Vec<PrefetchedModel>,
     /// The texture files of the models' surfaces, each once.
     pub textures: Vec<String>,
+    /// Its chunks, and the bytes of their vertices and indices.
+    chunks: u32,
+    vertices: u64,
+    indices: u64,
+    /// The chunks made without a platform to keep them, until a presenter
+    /// keeps them ([`Prefetched::take_pending`]).
+    pending: Mutex<Vec<GeometryChunk>>,
 }
 
-/// A prefetched model, as [`add_model`] made it into a geometry of its own.
+/// A prefetched model: its meshes' ranges in the kept geometry's chunks,
+/// their detail windows in a block of their own.
 #[derive(Debug)]
 struct PrefetchedModel {
     model: LoadedModel,
-    vertices: Box<[u8]>,
-    indices: Box<[u16]>,
     windows: Box<[DetailWindow]>,
 }
 
-impl Prefetched {
-    /// Loads the models of the system configuration's section
-    /// [`PREFETCH_VISUALS`], in its key order, each file once (names
-    /// locating the same file share it). A name that locates no file, or a
-    /// file that does not parse, fails it, as an object's model fails the
-    /// level's load. Each file is held in the file cache while it is read
-    /// (docs/architecture/memory.md, File-backed data).
-    pub fn load(tree: &dyn Vfs, data: &GameData) -> io::Result<Self> {
-        let mut p = Self::default();
-        let Some(section) = data.system.section(PREFETCH_VISUALS) else {
-            return Ok(p);
-        };
-        // One model's layout at a time, then copied into blocks its size.
-        let mut scratch = ObjectGeometry::default();
-        for entry in section.entries() {
-            let path = locate_model(tree, data, "", entry.key())?;
+/// Most model vertices a chunk of the kept geometry holds: its 16-bit
+/// indices count from its first vertex (WebGL 2 has no base vertex).
+pub const CHUNK_VERTICES: usize = 1 << 16;
+
+/// A chunk of the prefetched models' geometry, for the renderer to keep:
+/// whole meshes' model vertices, and their indices, 16-bit little-endian,
+/// each counted from the chunk's first vertex (padded to whole words).
+#[derive(Debug, Default)]
+pub struct GeometryChunk {
+    /// The [`Prefetched`] whose chunk it is ([`Prefetched::set`]).
+    pub set: u64,
+    pub index: u32,
+    pub vertices: Vec<u8>,
+    pub indices: Vec<u8>,
+}
+
+impl GeometryChunk {
+    fn vertex_count(&self) -> usize {
+        self.vertices.len() / crate::render::world::MODEL_VERTEX_BYTES
+    }
+}
+
+/// The making of a [`Prefetched`] a step at a time ([`Prefetching::step`]),
+/// so a platform keeps each chunk as it is made and the CPU holds no more
+/// than one.
+#[derive(Debug)]
+pub struct Prefetching {
+    /// The visual names to load, in the section's key order.
+    names: Vec<String>,
+    next: usize,
+    made: Prefetched,
+    /// The chunk being filled.
+    open: GeometryChunk,
+    /// One model's layout at a time.
+    scratch: ObjectGeometry,
+}
+
+/// The sets of kept geometry made so far.
+static SETS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+impl Prefetching {
+    /// Begins loading the models of the system configuration's section
+    /// [`PREFETCH_VISUALS`].
+    pub fn new(data: &GameData) -> Self {
+        let set = SETS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        let names = (data.system.section(PREFETCH_VISUALS).into_iter())
+            .flat_map(|s| s.entries().map(|e| e.key().to_owned()))
+            .collect();
+        Self {
+            names,
+            next: 0,
+            made: Prefetched {
+                set,
+                ..Default::default()
+            },
+            open: GeometryChunk {
+                set,
+                ..Default::default()
+            },
+            scratch: ObjectGeometry::default(),
+        }
+    }
+
+    /// Loads the next models, in the section's key order, each file once
+    /// (names locating the same file share it), until a chunk is full and
+    /// handed to `keep`, or every model is loaded and the last chunk
+    /// handed; returns whether every model is. A name that locates no file,
+    /// or a file that does not parse, fails it, as an object's model fails
+    /// the level's load. Each file is held in the file cache while it is
+    /// read (docs/architecture/memory.md, File-backed data).
+    pub fn step(
+        &mut self,
+        tree: &dyn Vfs,
+        data: &GameData,
+        keep: &mut dyn FnMut(GeometryChunk),
+    ) -> io::Result<bool> {
+        let bytes = crate::render::world::MODEL_VERTEX_BYTES;
+        let mut kept = false;
+        while !kept && let Some(name) = self.names.get(self.next) {
+            self.next += 1;
+            let path = locate_model(tree, data, "", name)?;
             let key = path.to_lowercase();
-            if p.by_path.contains_key(&key) {
+            if self.made.by_path.contains_key(&key) {
                 continue;
             }
-            let model = {
-                let bytes = crate::core::file_cache::read(tree, &path)?;
-                let parsed = Model::parse(&bytes).map_err(|e| invalid(format!("{path}: {e}")))?;
-                scratch.vertices.clear();
-                scratch.indices.clear();
-                scratch.windows.clear();
-                add_model(&path, &parsed, &mut scratch)?
+            let mut model = {
+                let file = crate::core::file_cache::read(tree, &path)?;
+                let parsed = Model::parse(&file).map_err(|e| invalid(format!("{path}: {e}")))?;
+                self.scratch.vertices.clear();
+                self.scratch.indices.clear();
+                self.scratch.windows.clear();
+                add_model(&path, &parsed, &mut self.scratch)?
             };
-            p.models.push(PrefetchedModel {
+            for mesh in &mut model.meshes {
+                let count = mesh.vertex_count as usize;
+                if self.open.vertex_count() + count > CHUNK_VERTICES
+                    && !self.open.vertices.is_empty()
+                {
+                    self.close(keep);
+                    kept = true;
+                }
+                let base = self.open.vertex_count();
+                let first = mesh.first_vertex as usize * bytes;
+                let vertices = &self.scratch.vertices[first..first + count * bytes];
+                self.open.vertices.extend_from_slice(vertices);
+                let first_index = self.open.indices.len() / 2;
+                let from = mesh.first_index as usize;
+                let indices = &self.scratch.indices[from..from + mesh.index_count as usize];
+                for &i in indices {
+                    let i = u16::try_from(usize::from(i) + base)
+                        .map_err(|_| invalid(format!("{path}: an index past 16 bits")))?;
+                    self.open.indices.extend_from_slice(&i.to_le_bytes());
+                }
+                mesh.kept = Some(self.open.index);
+                mesh.first_vertex = base as u32;
+                mesh.first_index = first_index as u32;
+            }
+            self.made.models.push(PrefetchedModel {
                 model,
-                vertices: scratch.vertices.as_slice().into(),
-                indices: scratch.indices.as_slice().into(),
-                windows: scratch.windows.as_slice().into(),
+                windows: self.scratch.windows.as_slice().into(),
             });
-            p.by_path.insert(key, p.models.len() - 1);
+            (self.made.by_path).insert(key, self.made.models.len() - 1);
         }
+        if self.next < self.names.len() {
+            return Ok(false);
+        }
+        if !self.open.vertices.is_empty() {
+            self.close(keep);
+        }
+        self.scratch = ObjectGeometry::default();
+        Ok(true)
+    }
+
+    /// Hands the chunk being filled to `keep` and begins the next.
+    fn close(&mut self, keep: &mut dyn FnMut(GeometryChunk)) {
+        let next = GeometryChunk {
+            set: self.made.set,
+            index: self.open.index + 1,
+            ..Default::default()
+        };
+        let mut chunk = std::mem::replace(&mut self.open, next);
+        // Whole words.
+        if !chunk.indices.len().is_multiple_of(4) {
+            chunk.indices.extend_from_slice(&[0, 0]);
+        }
+        let m = &mut self.made;
+        m.chunks += 1;
+        m.vertices += chunk.vertices.len() as u64;
+        m.indices += chunk.indices.len() as u64;
+        keep(chunk);
+    }
+
+    /// The models loaded, once [`Prefetching::step`] has loaded every one.
+    pub fn finish(self) -> Prefetched {
+        self.made
+    }
+}
+
+impl Prefetched {
+    /// Loads every model of [`PREFETCH_VISUALS`] at once
+    /// ([`Prefetching::step`]), handing its chunks to `keep`.
+    pub fn load(
+        tree: &dyn Vfs,
+        data: &GameData,
+        keep: &mut dyn FnMut(GeometryChunk),
+    ) -> io::Result<Self> {
+        let mut p = Prefetching::new(data);
+        while !p.step(tree, data, keep)? {}
+        Ok(p.finish())
+    }
+
+    /// [`Prefetched::load`] keeping its chunks with it until a presenter
+    /// keeps them ([`Prefetched::take_pending`]): without a platform that
+    /// keeps them as they are made.
+    pub fn load_pending(tree: &dyn Vfs, data: &GameData) -> io::Result<Self> {
+        let mut pending = Vec::new();
+        let p = Self::load(tree, data, &mut |mut c| {
+            c.vertices.shrink_to_fit();
+            c.indices.shrink_to_fit();
+            pending.push(c);
+        })?;
+        *p.pending.lock().unwrap_or_else(|e| e.into_inner()) = pending;
         Ok(p)
+    }
+
+    /// Which set of kept geometry its chunks are.
+    pub fn set(&self) -> u64 {
+        self.set
+    }
+
+    /// Its chunks, and the bytes of their vertices and of their indices.
+    pub fn geometry(&self) -> (u32, u64, u64) {
+        (self.chunks, self.vertices, self.indices)
+    }
+
+    /// The chunks not yet kept, once: whoever takes them keeps them.
+    pub fn take_pending(&self) -> Vec<GeometryChunk> {
+        std::mem::take(&mut *self.pending.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
     /// How many models it holds.
@@ -462,26 +639,20 @@ impl Prefetched {
         self.by_path.contains_key(&path.to_lowercase())
     }
 
-    /// Every model, as loaded (its ranges in its own geometry).
+    /// Every model, as loaded (its ranges in the kept chunks).
     pub fn models(&self) -> impl Iterator<Item = &LoadedModel> {
         self.models.iter().map(|m| &m.model)
     }
 
-    /// The model of the file at `path`, if prefetched, appended to
-    /// `geometry` as [`add_model`] appends the file's.
+    /// The model of the file at `path`, if prefetched, its meshes drawn
+    /// from the kept chunks, its detail windows appended to `geometry`'s.
     pub fn append(&self, path: &str, geometry: &mut ObjectGeometry) -> Option<LoadedModel> {
         let m = &self.models[*self.by_path.get(&path.to_lowercase())?];
-        let vertex = (geometry.vertices.len() / crate::render::world::MODEL_VERTEX_BYTES) as u32;
-        let index = geometry.indices.len() as u32;
         let window = geometry.windows.len() as u32;
-        geometry.vertices.extend_from_slice(&m.vertices);
-        geometry.indices.extend_from_slice(&m.indices);
         geometry.windows.extend_from_slice(&m.windows);
         let mut model = m.model.clone();
         model.path = path.to_owned();
         for mesh in &mut model.meshes {
-            mesh.first_vertex += vertex;
-            mesh.first_index += index;
             mesh.windows[0] += window;
         }
         Some(model)
@@ -697,6 +868,8 @@ pub struct Spawned {
     pub instances: Vec<Instance>,
     pub lamps: Vec<LampLights>,
     pub geometry: ObjectGeometry,
+    /// The prefetched models the models taken from them are drawn from.
+    pub prefetched: Option<Arc<Prefetched>>,
 }
 
 /// Loads the visuals of `objects` (sections 3, 4): each model file once,
@@ -706,7 +879,7 @@ pub fn spawn(
     data: &GameData,
     dir: &str,
     objects: &[LevelObject],
-    prefetched: Option<&Prefetched>,
+    prefetched: Option<&Arc<Prefetched>>,
 ) -> io::Result<Spawned> {
     let mut characters = Characters::new(tree, data);
     // Models by file path, and by visual name (located once each).
@@ -732,9 +905,12 @@ pub fn spawn(
                 let index = match by_path.get(&key) {
                     Some(&i) => i,
                     None => {
-                        let prefetched = prefetched.and_then(|p| p.append(&path, &mut s.geometry));
-                        let model = match prefetched {
-                            Some(model) => model,
+                        let taken = prefetched.and_then(|p| p.append(&path, &mut s.geometry));
+                        let model = match taken {
+                            Some(model) => {
+                                s.prefetched = prefetched.cloned();
+                                model
+                            }
                             None => {
                                 let bytes = vfs::read(tree, &path)?;
                                 let parsed = Model::parse(&bytes)
@@ -795,8 +971,9 @@ pub fn spawn(
     Ok(s)
 }
 
-/// One object mesh's draw: a range of [`ObjectGeometry`] with a surface,
-/// the object's transform, the mesh's sphere and `L_dynamic_props`.
+/// One object mesh's draw: a range of [`ObjectGeometry`] or of a kept
+/// chunk with a surface, the object's transform, the mesh's sphere and
+/// `L_dynamic_props`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ObjectDraw {
     /// Its instance in [`LevelObjects::instances`].
@@ -807,6 +984,8 @@ pub struct ObjectDraw {
     pub index_count: u32,
     /// [`MeshRange::windows`].
     pub windows: [u32; 2],
+    /// [`MeshRange::kept`].
+    pub kept: Option<u32>,
     pub transform: Mat4,
     /// The mesh's own sphere, its centre placed by the transform and its
     /// radius as stored: each part's small-part test
@@ -840,6 +1019,9 @@ pub struct LevelObjects {
     /// Shader pairs not drawn, with why.
     pub not_drawn: Vec<(String, String)>,
     geometry: Mutex<Option<ObjectGeometry>>,
+    /// The prefetched models whose kept geometry the draws with
+    /// [`ObjectDraw::kept`] read.
+    pub prefetched: Option<Arc<Prefetched>>,
 }
 
 impl LevelObjects {
@@ -875,6 +1057,7 @@ impl LevelObjects {
                     first_index: mesh.first_index,
                     index_count: mesh.index_count,
                     windows: mesh.windows,
+                    kept: mesh.kept,
                     transform: instance.transform,
                     sphere: {
                         let s = mesh.sphere;
@@ -895,6 +1078,7 @@ impl LevelObjects {
             lamps: spawned.lamps,
             not_drawn,
             geometry: Mutex::new(Some(spawned.geometry)),
+            prefetched: spawned.prefetched,
         }
     }
 }
@@ -978,6 +1162,7 @@ mod tests {
             first_index: 0,
             index_count: 3,
             windows: [0, 0],
+            kept: None,
             transform: x,
             sphere: [0.0; 4],
             mesh_sphere: [1.0, 0.0, -1.0, 0.25],

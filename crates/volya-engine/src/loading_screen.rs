@@ -35,7 +35,7 @@ use crate::core::vfs::Vfs;
 use crate::data::{self, Assets, GameData};
 use crate::draw::Ctx;
 use crate::level::{LevelScreen, LevelWorld, NewGameLoad};
-use crate::objects::Prefetched;
+use crate::objects::{GeometryChunk, Prefetched, Prefetching};
 use crate::scene::{Scene, Sprite, TextureId};
 use volya_engine_formats::text::font::UiFont;
 use volya_engine_formats::ui::layout::HAlign;
@@ -409,6 +409,11 @@ pub struct Loading {
 enum Hold {
     #[default]
     None,
+    /// The prefetched models being made, while the platform keeps their
+    /// geometry a chunk at a time ([`Loading::prefetch_models`]).
+    Prefetching(Box<Prefetching>),
+    /// Their making failed: the next step fails with it.
+    Failed(io::Error),
     /// The level's texture files (under `st_prefetching_objects` the
     /// prefetched models'), while the platform prepares them.
     Preparing(Vec<String>),
@@ -461,6 +466,54 @@ impl Loading {
     /// The game type's prefetched models, once made or given.
     pub fn prefetched(&self) -> Option<&Arc<Prefetched>> {
         self.load.prefetched()
+    }
+
+    /// Whether the loading waits under `st_prefetching_objects` for the
+    /// platform to make the prefetched models ([`Loading::prefetch_models`]).
+    pub fn models_to_prefetch(&self) -> bool {
+        matches!(self.hold, Hold::Prefetching(_))
+    }
+
+    /// Makes the next prefetched models, handing each chunk of their
+    /// geometry to `keep` as it is made ([`Prefetching::step`]); once all
+    /// are made the loading goes on to their textures. Returns whether it
+    /// waits for more; a failure fails the next step.
+    pub fn prefetch_models(
+        &mut self,
+        tree: &dyn Vfs,
+        data: &GameData,
+        keep: &mut dyn FnMut(GeometryChunk),
+    ) -> bool {
+        let Hold::Prefetching(prefetching) = &mut self.hold else {
+            return false;
+        };
+        let made = match prefetching.step(tree, data, keep) {
+            Ok(false) => return true,
+            Ok(true) => {
+                let Hold::Prefetching(p) = std::mem::take(&mut self.hold) else {
+                    unreachable!("prefetching")
+                };
+                self.load.set_prefetched_made(tree, data, p.finish())
+            }
+            Err(e) => Err(e),
+        };
+        self.hold = match made {
+            Ok(()) => {
+                self.original_open = self.load.original_open(Stage::PrefetchingObjects, tree);
+                self.prefetched_textures()
+            }
+            Err(e) => Hold::Failed(e),
+        };
+        false
+    }
+
+    /// The hold for the prefetched models' textures, loaded with them
+    /// (texture-quality-filtering.md 2).
+    fn prefetched_textures(&self) -> Hold {
+        match self.load.prefetched() {
+            Some(p) if !p.textures.is_empty() => Hold::Preparing(p.textures.clone()),
+            _ => Hold::Prepared,
+        }
     }
 
     /// Whether the textures to prepare are the prefetched models', kept
@@ -533,6 +586,11 @@ impl Loading {
         now: u64,
     ) -> io::Result<Option<LevelScreen>> {
         match std::mem::take(&mut self.hold) {
+            Hold::Prefetching(p) => {
+                self.hold = Hold::Prefetching(p);
+                return Ok(None);
+            }
+            Hold::Failed(e) => return Err(e),
             Hold::Preparing(paths) => {
                 self.hold = Hold::Preparing(paths);
                 return Ok(None);
@@ -546,6 +604,12 @@ impl Loading {
                 return Ok(Some(*level));
             }
             Hold::Prepared => {}
+            // The platform makes the prefetched models, keeping their
+            // geometry as it is made.
+            Hold::None if self.stage() == Stage::PrefetchingObjects && self.prepare => {
+                self.hold = Hold::Prefetching(Box::new(Prefetching::new(data)));
+                return Ok(None);
+            }
             Hold::None => {
                 let stage = self.stage();
                 self.load.set_clock(now);
@@ -560,16 +624,6 @@ impl Loading {
                 }
                 if stage == Stage::LoadingTextures && self.prepare {
                     self.hold = Hold::Preparing(self.load.texture_paths());
-                    return Ok(None);
-                }
-                // The prefetched models' textures are loaded with them
-                // (texture-quality-filtering.md 2).
-                if stage == Stage::PrefetchingObjects
-                    && self.prepare
-                    && let Some(p) = self.load.prefetched()
-                    && !p.textures.is_empty()
-                {
-                    self.hold = Hold::Preparing(p.textures.clone());
                     return Ok(None);
                 }
             }

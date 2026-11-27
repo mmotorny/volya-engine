@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! A level prepared while it loads (#113, #355): while a New Game's loading
-//! waits under `st_prefetching_objects` for the prefetched models' textures
+//! waits under `st_prefetching_objects` for the prefetched models, their
+//! geometry is kept by the renderer a chunk at a time as they are made
+//! ([`volya_engine::app::App::prefetch_models`]); then for their textures
 //! (kept by the renderer while the game type stays,
 //! [`volya_engine::app::App::prefetching_textures`]) and under
 //! `st_loading_textures` for the level's
@@ -155,6 +157,18 @@ pub fn poll() {
         return;
     }
     release_abandoned();
+    if crate::engine::models_to_prefetch() {
+        let load = crate::engine::load();
+        RUNNING.with(|r| *r.borrow_mut() = true);
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = prefetch_models(load).await;
+            RUNNING.with(|r| *r.borrow_mut() = false);
+            if let Err(e) = result {
+                web_sys::console::error_1(&e);
+            }
+        });
+        return;
+    }
     if let Some(level) = crate::engine::world_to_prepare() {
         PREPARED_FOR.set(crate::engine::load());
         RUNNING.with(|r| *r.borrow_mut() = true);
@@ -326,6 +340,30 @@ async fn prepare(paths: Vec<String>, load: Option<u64>) -> Result<(), JsValue> {
     gpu_done(&mut stats.gpu_wait_ms).await?;
     stats.total_ms = now() - start;
     STATS.with(|s| *s.borrow_mut() = stats);
+    Ok(())
+}
+
+/// Makes the prefetched models for load `load` while it is the current one
+/// and waits for them, a chunk of their geometry per task turn, each kept
+/// by the renderer and waited for before the next is made, so the CPU
+/// holds no more than one (#765) and the browser's GPU process takes them
+/// in a little at a time (#443).
+async fn prefetch_models(load: Option<u64>) -> Result<(), JsValue> {
+    let mut wait_ms = 0.0;
+    while crate::engine::models_to_prefetch() && crate::engine::load() == load {
+        let more =
+            tracing::info_span!("prepare.models").in_scope(crate::engine::prefetch_models)?;
+        gpu_done(&mut wait_ms).await?;
+        if !more {
+            break;
+        }
+        // A task turn; none while the page is hidden (#93).
+        crate::opfs::sleep(0).await?;
+        while crate::engine::page_hidden() {
+            crate::opfs::sleep(100).await?;
+        }
+    }
+    STATS.with(|s| s.borrow_mut().gpu_wait_ms += wait_ms);
     Ok(())
 }
 

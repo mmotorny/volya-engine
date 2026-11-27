@@ -205,8 +205,21 @@ impl Spares {
 
 /// The objects' geometry of `level`, taken (once), with the static
 /// world's detail windows after the objects' own, and the world's draws:
-/// its static draws, then its objects'.
-fn world_geometry(level: &LevelWorld) -> Result<(ObjectGeometry, Vec<WorldDraw>), String> {
+/// its static draws, then its objects'. The prefetched models' geometry its
+/// objects draw is to be kept by `renderer`: what no platform kept yet is
+/// kept now.
+fn world_geometry(
+    renderer: &Renderer,
+    level: &LevelWorld,
+) -> Result<(ObjectGeometry, Vec<WorldDraw>), String> {
+    if let Some(p) = &level.objects.prefetched {
+        for c in p.take_pending() {
+            renderer.keep_geometry(c.set, c.index, &c.vertices, &c.indices);
+        }
+        if renderer.kept_geometry_set() != Some(p.set()) {
+            return Err("the prefetched models' geometry is not kept".into());
+        }
+    }
     let mut objects = level
         .objects
         .take_geometry()
@@ -250,6 +263,7 @@ fn world_draws(level: &LevelWorld, windows_at: u32) -> Vec<WorldDraw> {
                     bias: t.bias,
                 }),
                 object: None,
+                kept: None,
             })
         })
         .chain(level.objects.draws.iter().map(|d| WorldDraw {
@@ -270,6 +284,7 @@ fn world_draws(level: &LevelWorld, windows_at: u32) -> Vec<WorldDraw> {
             tree: None,
             object: Some(d.dynamic_props),
             windows: d.windows,
+            kept: d.kept,
         }))
         .collect()
 }
@@ -909,7 +924,7 @@ impl Presenter {
             .is_some_and(|p| Arc::ptr_eq(&p.level, level))
         {
             self.prepared = None;
-            let (objects, draws) = world_geometry(level)?;
+            let (objects, draws) = world_geometry(renderer, level)?;
             let upload = renderer.begin_geometry(&level.geometry().layout, &objects, &draws)?;
             self.prepared = Some(PreparedWorld {
                 level: level.clone(),
@@ -948,7 +963,7 @@ impl Presenter {
         let (objects, draws) = match &prepared {
             Some(p) => (None, p.draws.clone()),
             None => {
-                let (objects, draws) = world_geometry(level)?;
+                let (objects, draws) = world_geometry(renderer, level)?;
                 (Some(objects), draws)
             }
         };

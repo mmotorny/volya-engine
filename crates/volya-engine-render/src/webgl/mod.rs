@@ -341,6 +341,9 @@ pub struct Renderer {
     /// Textures kept while the game type stays, by source path
     /// ([`Renderer::keep_texture`]): the prefetched models'.
     kept: RefCell<HashMap<String, Texture>>,
+    /// Geometry kept while the game type stays ([`Renderer::keep_geometry`]):
+    /// the prefetched models'.
+    kept_geometry: RefCell<KeptGeometry>,
     /// Bytes of texture data written so far.
     texture_bytes: Cell<u64>,
     /// Bytes of world geometry written so far.
@@ -361,6 +364,22 @@ pub struct Renderer {
     unblended_trees: bool,
     /// [`Renderer::set_texture_path`].
     texture_path: TexturePath,
+}
+
+/// The geometry a renderer keeps across worlds ([`Renderer::keep_geometry`]).
+#[derive(Default)]
+struct KeptGeometry {
+    set: Option<u64>,
+    chunks: Vec<Option<KeptChunk>>,
+}
+
+/// A chunk of kept geometry: its model vertices and their 16-bit indices.
+#[derive(Clone)]
+pub(crate) struct KeptChunk {
+    pub(crate) vertices: Buffer,
+    pub(crate) indices: Buffer,
+    pub(crate) vertex_count: u32,
+    pub(crate) index_count: u32,
 }
 
 impl Renderer {
@@ -403,6 +422,7 @@ impl Renderer {
             offscreen: None,
             prepared: Default::default(),
             kept: Default::default(),
+            kept_geometry: Default::default(),
             texture_bytes: Default::default(),
             geometry_bytes: Default::default(),
             // Made with the renderer, before any level: what lives across
@@ -471,6 +491,65 @@ impl Renderer {
     /// How many textures are kept.
     pub fn kept_count(&self) -> usize {
         self.kept.borrow().len()
+    }
+
+    /// Keeps chunk `chunk` of geometry set `set` while the renderer lives,
+    /// as the `prefetched` owner's, for worlds whose object draws name it
+    /// ([`WorldDraw::kept`]): `vertices` model vertices
+    /// ([`world::MODEL_VERTEX_BYTES`] each), `indices` 16-bit (little
+    /// endian), each counted from the chunk's first vertex. Another set's
+    /// chunks go first: one set is kept at a time.
+    pub fn keep_geometry(&self, set: u64, chunk: u32, vertices: &[u8], indices: &[u8]) {
+        let mut kept = self.kept_geometry.borrow_mut();
+        if kept.set != Some(set) {
+            *kept = KeptGeometry {
+                set: Some(set),
+                chunks: Vec::new(),
+            };
+        }
+        let gl = &self.gl;
+        let chunk_buffers = gl.owning(Owner::Prefetched, || KeptChunk {
+            vertices: gl.buffer_with(BufferKind::Vertex, vertices),
+            indices: gl.buffer_with(BufferKind::Index, indices),
+            vertex_count: (vertices.len() / world::MODEL_VERTEX_BYTES) as u32,
+            index_count: (indices.len() / 2) as u32,
+        });
+        let bytes = (vertices.len() + indices.len()) as u64;
+        self.geometry_bytes.set(self.geometry_bytes.get() + bytes);
+        // Handed to the GPU at once, as a world's pieces are.
+        crate::stats::submit();
+        gl.flush();
+        let at = chunk as usize;
+        if kept.chunks.len() <= at {
+            kept.chunks.resize(at + 1, None);
+        }
+        kept.chunks[at] = Some(chunk_buffers);
+    }
+
+    /// The geometry set kept ([`Renderer::keep_geometry`]), if any.
+    pub fn kept_geometry_set(&self) -> Option<u64> {
+        self.kept_geometry.borrow().set
+    }
+
+    /// How many chunks of geometry are kept, and their bytes.
+    pub fn kept_geometry(&self) -> (usize, u64) {
+        let kept = self.kept_geometry.borrow();
+        let chunks = kept.chunks.iter().flatten();
+        let bytes = chunks
+            .clone()
+            .map(|c| c.vertices.size() + c.indices.size())
+            .sum();
+        (chunks.count(), bytes)
+    }
+
+    /// Kept chunk `chunk`, if any.
+    pub(crate) fn kept_chunk(&self, chunk: u32) -> Option<KeptChunk> {
+        self.kept_geometry
+            .borrow()
+            .chunks
+            .get(chunk as usize)
+            .cloned()
+            .flatten()
     }
 
     /// The buffers, textures and vertex arrays its context holds now
