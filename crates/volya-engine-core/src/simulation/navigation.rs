@@ -3,10 +3,15 @@
 
 //! The current level's navigation data (docs/behavior/offline-simulation.md
 //! sections 2, 3, 6.1): its `level.ai` positions and its cross table, with
-//! the checks of 1.8, and the level vertex at a position (5.2).
+//! the checks of 1.8, and the level vertex at a position (5.2). Both are
+//! held in the file cache, standing for the files the original maps
+//! (docs/architecture/memory.md, File-backed data): the positions, a
+//! leaner structure, under `level.ai`'s path; `level.gct` whole, read in
+//! place.
 
 use std::io::{self, BufReader};
 
+use crate::file_cache;
 use crate::vfs::Vfs;
 use volya_engine_formats::cross_table::CrossTable;
 use volya_engine_formats::game_graph::GameGraph;
@@ -17,7 +22,7 @@ fn invalid(message: impl Into<String>) -> io::Error {
 }
 
 /// A level's navigation data.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Navigation {
     pub level_id: u8,
     pub ai: LevelAi,
@@ -57,10 +62,12 @@ impl Navigation {
                 ai.len()
             )));
         }
-        let sorted = ai.packed.windows(2).all(|w| w[0] <= w[1]);
+        let sorted = (ai.packed_all())
+            .zip(ai.packed_all().skip(1))
+            .all(|(a, b)| a <= b);
         let order = (!sorted).then(|| {
             let mut order: Vec<u32> = (0..ai.len() as u32).collect();
-            order.sort_by_key(|&k| ai.packed[k as usize]);
+            order.sort_by_key(|&k| ai.packed(k));
             order
         });
         Ok(Self {
@@ -71,19 +78,20 @@ impl Navigation {
         })
     }
 
-    /// Reads level `level_id`'s `level.ai` and `level.gct` (as streams)
-    /// from its directory `dir` in `tree`, with [`Navigation::new`]'s
-    /// checks. A missing cross table is the game's "Can't open cross
-    /// table!".
+    /// Reads level `level_id`'s `level.ai` (as a stream, its positions
+    /// held in the file cache under its path) and `level.gct` (held in the
+    /// file cache, read in place) from its directory `dir` in `tree`, with
+    /// [`Navigation::new`]'s checks. A missing cross table is the game's
+    /// "Can't open cross table!".
     pub fn read(tree: &dyn Vfs, dir: &str, graph: &GameGraph, level_id: u8) -> io::Result<Self> {
         let file =
             |name: &str, e: io::Error| io::Error::new(e.kind(), format!("{dir}\\{name}: {e}"));
-        let f = tree
-            .open(&format!("{dir}\\level.ai"))
+        let path = format!("{dir}\\level.ai");
+        let f = tree.open(&path).map_err(|e| file("level.ai", e))?;
+        let ai = LevelAi::read_in(BufReader::new(f), |len| file_cache::hold(&path, len))
             .map_err(|e| file("level.ai", e))?;
-        let ai = LevelAi::read(BufReader::new(f)).map_err(|e| file("level.ai", e))?;
-        let cross = match tree.open(&format!("{dir}\\level.gct")) {
-            Ok(f) => CrossTable::read(BufReader::new(f)).map_err(|e| file("level.gct", e))?,
+        let cross = match file_cache::read(tree, &format!("{dir}\\level.gct")) {
+            Ok(f) => CrossTable::in_place(f).map_err(|e| file("level.gct", e))?,
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 return Err(invalid("Can't open cross table!"));
             }
@@ -101,21 +109,21 @@ impl Navigation {
     fn stacked(&self, p: u32) -> impl Iterator<Item = u32> + '_ {
         let n = self.ai.len();
         let key = |i: usize| match &self.order {
-            Some(o) => self.ai.packed[o[i] as usize],
-            None => self.ai.packed[i],
+            Some(o) => self.ai.packed(o[i]),
+            None => self.ai.packed(i as u32),
         };
         // The first index whose key is not below p.
         let (mut lo, mut hi) = (0, n);
         while lo < hi {
             let mid = (lo + hi) / 2;
-            if key(mid) < p {
+            if key(mid) < Some(p) {
                 lo = mid + 1;
             } else {
                 hi = mid;
             }
         }
         (lo..n)
-            .take_while(move |&i| key(i) == p)
+            .take_while(move |&i| key(i) == Some(p))
             .map(move |i| match &self.order {
                 Some(o) => o[i],
                 None => i as u32,

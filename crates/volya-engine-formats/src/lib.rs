@@ -43,6 +43,13 @@ pub mod video;
 pub mod xml;
 pub mod zip;
 
+/// Bytes a parser keeps and reads in place: on the heap, or where its
+/// caller holds them (the engine's file cache, docs/architecture/memory.md,
+/// File-backed data).
+pub trait Bytes: std::ops::Deref<Target = [u8]> + Send + Sync {}
+
+impl<T: std::ops::Deref<Target = [u8]> + Send + Sync> Bytes for T {}
+
 #[cfg(test)]
 fn md5_hex(data: &[u8]) -> String {
     use md5::{Digest, Md5};

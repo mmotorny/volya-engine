@@ -474,10 +474,9 @@ fn cross_tables_and_level_ai_of_every_level() {
             let (lo, hi) = (vertices[0] as u16, *vertices.last().unwrap() as u16);
             assert_eq!(cross.game_vertex_count as usize, vertices.len(), "{name}");
             let mut named = vec![false; vertices.len()];
-            for (k, &gv) in cross.game_vertices.iter().enumerate() {
+            for (k, (gv, d)) in cross.cells().enumerate() {
                 assert!((lo..=hi).contains(&gv), "{name}: cell {k}");
                 named[usize::from(gv - lo)] = true;
-                let d = cross.distances[k];
                 assert!(
                     near(f64::from(d / 0.7), f64::from((d / 0.7).round()), 1e-3),
                     "{name}: {d}"
@@ -514,7 +513,7 @@ fn cross_tables_and_level_ai_of_every_level() {
             // Section 3: columns and rows within the grid, both maxima reached.
             let s = ai.header.column_count();
             let (mut max_col, mut max_row) = (0, 0);
-            for &p in &ai.packed {
+            for p in ai.packed_all() {
                 assert!(p / row < s && p % row < row, "{name}");
                 max_col = max_col.max(p / row);
                 max_row = max_row.max(p % row);
@@ -523,7 +522,7 @@ fn cross_tables_and_level_ai_of_every_level() {
             if name == "l01_escape" {
                 assert_eq!(crc32fast::hash(&gct), 0x9c99_40ab);
                 assert_eq!(crc32fast::hash(&ai_file), 0xdb52_f6d7);
-                let sum: f64 = cross.distances.iter().map(|&d| f64::from(d)).sum();
+                let sum: f64 = cross.cells().map(|(_, d)| f64::from(d)).sum();
                 assert!(near(sum, 14_024_781.2, 1.0), "{sum}");
                 let h = &ai.header;
                 assert_eq!(h.box_min, [-283.5, -37.482147, -480.9]);
@@ -531,11 +530,8 @@ fn cross_tables_and_level_ai_of_every_level() {
                     (0..3).all(|i| (h.box_max[i] - [411.59998, 29.764366, 706.3][i]).abs() < 1e-4)
                 );
                 assert_eq!((h.height_range, s), (67.247513, 994));
-                assert_eq!(cross.game_vertices.iter().filter(|&&v| v == 0).count(), 256);
-                assert_eq!(
-                    cross.game_vertices.iter().filter(|&&v| v == 2).count(),
-                    1_564
-                );
+                assert_eq!(cross.cells().filter(|&(v, _)| v == 0).count(), 256);
+                assert_eq!(cross.cells().filter(|&(v, _)| v == 2).count(), 1_564);
                 // The navigation data loads with its checks.
                 let nav = Navigation::read(vfs, "gamedata\\levels\\l01_escape", &g, 1).unwrap();
                 assert_eq!(nav.ai.len(), n);

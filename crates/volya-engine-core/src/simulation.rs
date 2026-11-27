@@ -332,7 +332,7 @@ impl std::ops::Index<&u16> for Registry {
 }
 
 /// The current level (6.1).
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct CurrentLevel {
     id: u8,
     navigation: Option<Navigation>,

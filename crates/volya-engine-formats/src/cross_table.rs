@@ -4,10 +4,15 @@
 //! A level's cross table `levels\<level>\level.gct`
 //! (docs/behavior/offline-simulation.md section 2): for each level vertex
 //! of the level's `level.ai`, the nearest game vertex and its distance. A
-//! chunk sequence of two chunks.
+//! chunk sequence of two chunks, read in place: the cells stay in the file's
+//! bytes, which the reader's caller holds (the engine's file cache,
+//! docs/architecture/memory.md, File-backed data).
 
-use std::io::{self, Read, Seek, SeekFrom};
+use std::fmt;
+use std::io;
+use std::ops::Range;
 
+use crate::Bytes;
 use crate::chunks;
 use crate::packet::Reader;
 
@@ -23,7 +28,6 @@ fn invalid(message: impl Into<String>) -> io::Error {
 }
 
 /// The cross table, one cell per level vertex.
-#[derive(Clone, Debug, PartialEq)]
 pub struct CrossTable {
     /// The level's number of game vertices.
     pub game_vertex_count: u32,
@@ -31,37 +35,79 @@ pub struct CrossTable {
     pub level_identifier: [u8; 16],
     /// Must equal the game graph's identifier (1.8).
     pub game_identifier: [u8; 16],
-    /// Per level vertex: the nearest game vertex.
-    pub game_vertices: Vec<u16>,
-    /// Per level vertex: its distance to that game vertex, metres.
-    pub distances: Vec<f32>,
+    /// The file, or the cells alone.
+    bytes: Box<dyn Bytes>,
+    /// Where in `bytes` the cells are, each 6 bytes, little-endian: the
+    /// nearest game vertex (`u16`), its distance in metres (`f32`).
+    cells: Range<usize>,
+}
+
+impl fmt::Debug for CrossTable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CrossTable")
+            .field("game_vertex_count", &self.game_vertex_count)
+            .field("level_identifier", &self.level_identifier)
+            .field("game_identifier", &self.game_identifier)
+            .field("cells", &self.len())
+            .finish()
+    }
+}
+
+impl PartialEq for CrossTable {
+    fn eq(&self, other: &Self) -> bool {
+        self.game_vertex_count == other.game_vertex_count
+            && self.level_identifier == other.level_identifier
+            && self.game_identifier == other.game_identifier
+            && self.cell_bytes() == other.cell_bytes()
+    }
 }
 
 impl CrossTable {
-    /// Parses the file in memory ([`CrossTable::read`]).
-    pub fn parse(file: &[u8]) -> io::Result<Self> {
-        Self::read(io::Cursor::new(file))
+    /// A table of `cells`, each (game vertex, distance), on the heap.
+    pub fn new(
+        game_vertex_count: u32,
+        level_identifier: [u8; 16],
+        game_identifier: [u8; 16],
+        cells: &[(u16, f32)],
+    ) -> Self {
+        let mut bytes = Vec::with_capacity(cells.len() * CELL_SIZE);
+        for (v, d) in cells {
+            bytes.extend(v.to_le_bytes());
+            bytes.extend(d.to_le_bytes());
+        }
+        Self {
+            game_vertex_count,
+            level_identifier,
+            game_identifier,
+            cells: 0..bytes.len(),
+            bytes: Box::new(bytes),
+        }
     }
 
-    /// Reads the file as a stream, one chunk header at a time, the cells in
-    /// batches, without holding the file. The first chunk of each id counts
-    /// (chunks.md 3). A missing chunk 0 or 1, a chunk 0 of another size, or
-    /// cells that are not *N* × 6 bytes are the game's "Cross table is
-    /// corrupted!"; a version other than 8 its "Cross table version
-    /// mismatch!". A compressed chunk is an error (our choice: the shipped
-    /// tables are stored).
-    pub fn read(mut file: impl Read + Seek) -> io::Result<Self> {
+    /// Parses a copy of the file ([`CrossTable::in_place`]).
+    pub fn parse(file: &[u8]) -> io::Result<Self> {
+        Self::in_place(file.to_vec())
+    }
+
+    /// Reads the file `file` in place, keeping it. The first chunk of each
+    /// id counts (chunks.md 3). A missing chunk 0 or 1, a chunk 0 of
+    /// another size, or cells that are not *N* × 6 bytes are the game's
+    /// "Cross table is corrupted!"; a version other than 8 its "Cross table
+    /// version mismatch!". A compressed chunk is an error (our choice: the
+    /// shipped tables are stored).
+    pub fn in_place(file: impl Bytes + 'static) -> io::Result<Self> {
         let corrupted = || invalid("Cross table is corrupted!");
-        let length = file.seek(SeekFrom::End(0))?;
-        let mut at = file.seek(SeekFrom::Start(0))?;
-        let mut header: Option<[u8; HEADER_SIZE]> = None;
-        let mut cells: Option<(Vec<u16>, Vec<f32>)> = None;
+        let length = file.len();
+        let mut at = 0;
+        let mut header: Option<Range<usize>> = None;
+        let mut cells: Option<Range<usize>> = None;
         while at < length {
-            let mut head = [0u8; chunks::HEADER_SIZE];
-            file.read_exact(&mut head)?;
+            let head = file
+                .get(at..at + chunks::HEADER_SIZE)
+                .ok_or_else(corrupted)?;
             let id_word = u32::from_le_bytes(head[..4].try_into().unwrap());
-            let size = u64::from(u32::from_le_bytes(head[4..].try_into().unwrap()));
-            let payload = at + chunks::HEADER_SIZE as u64;
+            let size = u32::from_le_bytes(head[4..].try_into().unwrap()) as usize;
+            let payload = at + chunks::HEADER_SIZE;
             if size > length - payload {
                 return Err(corrupted());
             }
@@ -75,40 +121,21 @@ impl CrossTable {
                 return Err(invalid("cross table: compressed chunk"));
             }
             if wanted && id == HEADER_CHUNK {
-                if size != HEADER_SIZE as u64 {
+                if size != HEADER_SIZE {
                     return Err(corrupted());
                 }
-                let mut h = [0u8; HEADER_SIZE];
-                file.read_exact(&mut h)?;
-                header = Some(h);
+                header = Some(payload..payload + size);
             } else if wanted {
-                if size % CELL_SIZE as u64 != 0 {
+                if !size.is_multiple_of(CELL_SIZE) {
                     return Err(corrupted());
                 }
-                // Bounded by the stream's length, checked above.
-                let n = (size / CELL_SIZE as u64) as usize;
-                let mut vertices = Vec::with_capacity(n);
-                let mut distances = Vec::with_capacity(n);
-                let mut buffer = vec![0u8; CELL_SIZE * 4096];
-                let mut left = n;
-                while left > 0 {
-                    let batch = left.min(4096);
-                    let bytes = &mut buffer[..CELL_SIZE * batch];
-                    file.read_exact(bytes)?;
-                    for c in bytes.as_chunks::<CELL_SIZE>().0 {
-                        vertices.push(u16::from_le_bytes([c[0], c[1]]));
-                        distances.push(f32::from_le_bytes([c[2], c[3], c[4], c[5]]));
-                    }
-                    left -= batch;
-                }
-                cells = Some((vertices, distances));
+                cells = Some(payload..payload + size);
             }
             at = payload + size;
-            file.seek(SeekFrom::Start(at))?;
         }
         let header = header.ok_or_else(corrupted)?;
-        let (game_vertices, distances) = cells.ok_or_else(corrupted)?;
-        let mut h = Reader::new(&header);
+        let cells = cells.ok_or_else(corrupted)?;
+        let mut h = Reader::new(&file[header]);
         if h.u32()? != VERSION {
             return Err(invalid("Cross table version mismatch!"));
         }
@@ -116,32 +143,47 @@ impl CrossTable {
         let game_vertex_count = h.u32()?;
         let level_identifier = h.take(16)?.try_into().unwrap();
         let game_identifier = h.take(16)?.try_into().unwrap();
-        if game_vertices.len() != n {
+        if cells.len() / CELL_SIZE != n {
             return Err(corrupted());
         }
         Ok(Self {
             game_vertex_count,
             level_identifier,
             game_identifier,
-            game_vertices,
-            distances,
+            bytes: Box::new(file),
+            cells,
         })
+    }
+
+    fn cell_bytes(&self) -> &[[u8; CELL_SIZE]] {
+        self.bytes[self.cells.clone()].as_chunks::<CELL_SIZE>().0
     }
 
     /// The level vertex count *N*.
     pub fn len(&self) -> usize {
-        self.game_vertices.len()
+        self.cells.len() / CELL_SIZE
     }
 
     pub fn is_empty(&self) -> bool {
-        self.game_vertices.is_empty()
+        self.cells.is_empty()
     }
 
     /// The cell of level vertex `k`: (game vertex, distance).
     pub fn cell(&self, k: u32) -> Option<(u16, f32)> {
-        let k = k as usize;
-        Some((*self.game_vertices.get(k)?, self.distances[k]))
+        self.cell_bytes().get(k as usize).map(decode)
     }
+
+    /// Every cell, in level vertex order.
+    pub fn cells(&self) -> impl Iterator<Item = (u16, f32)> + '_ {
+        self.cell_bytes().iter().map(decode)
+    }
+}
+
+fn decode(c: &[u8; CELL_SIZE]) -> (u16, f32) {
+    (
+        u16::from_le_bytes([c[0], c[1]]),
+        f32::from_le_bytes([c[2], c[3], c[4], c[5]]),
+    )
 }
 
 #[cfg(test)]
@@ -178,6 +220,11 @@ pub(crate) mod tests {
         assert_eq!(t.cell(1), Some((4, 1.4)));
         assert_eq!(t.cell(2), None);
         assert_eq!((t.level_identifier, t.game_identifier), ([1; 16], [2; 16]));
+        assert_eq!(t.cells().collect::<Vec<_>>(), [(3, 0.0), (4, 1.4)]);
+        assert_eq!(
+            t,
+            CrossTable::new(1, [1; 16], [2; 16], &[(3, 0.0), (4, 1.4)])
+        );
         assert!(CrossTable::parse(&file[..52]).is_err());
         // A count other than the cells', a chunk beyond the file.
         let mut wrong = file.clone();

@@ -987,7 +987,8 @@ pub fn new_game_player(
     )?;
     let dir = data.aliases.path("$game_levels$", &new.level)?;
     let clock = GameClock::new_game(&*alife(tree, data)?)?;
-    let (_, character) = new_game_simulation(tree, data, &new.spawn_path, new.graph, &dir, &clock)?;
+    let (mut sim, mut character) = new_game_simulation(tree, data, &new.spawn_path, new.graph)?;
+    first_switch_pass(tree, data, &mut sim, &mut character, &dir, &clock)?;
     Ok((player, character))
 }
 
@@ -1006,19 +1007,14 @@ fn alife<'a>(tree: &dyn Vfs, data: &'a GameData) -> io::Result<Cow<'a, Config>> 
 /// A New Game's offline simulation (offline-simulation.md) and player
 /// character: every record of the spawn file at `spawn_path` created and
 /// registered (8.1), read a chunk at a time, the player character
-/// supplying the player (player-state.md sections 2, 3), the current
-/// level's navigation data
-/// read from its directory `dir` (6.1), and the first switch pass at
-/// `clock`'s time (6.2, level-objects.md 2.4: all objects evaluated once
-/// while the loading image shows), which brings the player online: it then
-/// receives its bolt (player-state.md 3.2) with the next id.
+/// supplying the player (player-state.md sections 2, 3). The current
+/// level's navigation data and the first switch pass come later
+/// ([`first_switch_pass`]).
 fn new_game_simulation(
     tree: &dyn Vfs,
     data: &GameData,
     spawn_path: &str,
     graph: GameGraph,
-    dir: &str,
-    clock: &GameClock,
 ) -> io::Result<(Simulation, CharacterState)> {
     let alife = alife(tree, data)?;
     let mut spawn_file = open_spawn(tree, spawn_path)?;
@@ -1036,7 +1032,24 @@ fn new_game_simulation(
         Ok(n)
     })?;
     drop(spawn_file);
-    let mut character = earlier(character, "player character")?;
+    let character = earlier(character, "player character")?;
+    Ok((sim, character))
+}
+
+/// The current level's navigation data read from its directory `dir`
+/// (6.1; held in the file cache, docs/architecture/memory.md), and the
+/// first switch pass at `clock`'s time (6.2, level-objects.md 2.4: all
+/// objects evaluated once while the loading image shows), which brings the
+/// player online: it then receives its bolt (player-state.md 3.2) with the
+/// next id.
+fn first_switch_pass(
+    tree: &dyn Vfs,
+    data: &GameData,
+    sim: &mut Simulation,
+    character: &mut CharacterState,
+    dir: &str,
+    clock: &GameClock,
+) -> io::Result<()> {
     let level = sim
         .current_level()
         .ok_or_else(|| invalid("spawn file: no actor"))?;
@@ -1047,7 +1060,7 @@ fn new_game_simulation(
         hour(clock),
     )?;
     character.receive_bolt(&data.system, sim.take_id()?)?;
-    Ok((sim, character))
+    Ok(())
 }
 
 /// The file of texture `name`: `$level$<name>.dds`, then
@@ -1627,22 +1640,18 @@ impl NewGameLoad {
             // The New Game's clock (sav.md section 5); the offline
             // simulation's New Game (offline-simulation.md 8.1), the player
             // character supplying the player (player-state.md sections 2,
-            // 3), the current level's navigation data (6.1); and its first
-            // switch pass (6.2, level-objects.md 2.4: all objects
-            // evaluated once while the loading image shows), placed under
-            // this caption by us (the server has created the game).
+            // 3), placed under this caption by us (the server has created
+            // the game).
             Stage::ServerConnecting => {
                 let clock = GameClock::new_game(&*alife(tree, data)?)?;
                 let graph = earlier(self.graph.take(), "game graph")?;
                 let spawn_path = std::mem::take(&mut self.spawn_path);
-                let (sim, character) =
-                    new_game_simulation(tree, data, &spawn_path, graph, &dir, &clock)?;
+                let (sim, character) = new_game_simulation(tree, data, &spawn_path, graph)?;
                 self.player_visual = sim
                     .object(character.owner.id)
                     .and_then(|o| o.record.object.visual())
                     .map(|v| v.model.clone());
                 self.character = Some(character);
-                self.level_objects = objects::level_objects(&sim);
                 self.simulation = Some(sim);
                 self.clock = Some(clock);
             }
@@ -1695,15 +1704,8 @@ impl NewGameLoad {
                 let f = tree
                     .open(&format!("{dir}\\level.cform"))
                     .map_err(|e| file("level.cform", e))?;
-                let mut collision =
+                let collision =
                     CollisionWorld::read(f, materials).map_err(|e| file("level.cform", e))?;
-                // docs/behavior/climbing.md 1.1 – 1.3: every ladder of the
-                // level is present from the first frame, its box in the
-                // collision world.
-                let ladders = (self.level_objects.iter())
-                    .filter_map(|o| Ladder::from_record(&o.record))
-                    .collect();
-                collision.set_ladders(ladders)?;
                 self.collision = Some(Arc::new(collision));
             }
             Stage::LoadingGeometry => {
@@ -2180,11 +2182,29 @@ impl NewGameLoad {
                 let d_b = crate::core::lights::sun_b_direction(sun);
                 self.dynamic_props = objects::light_inputs(collision, &spawned.instances, d_b);
             }
-            // `level.ps_static`'s effects, made, placed and started
-            // (level-placed-effects.md sections 1 – 4): read after the
-            // level's objects in the game, under this caption here (our
-            // placement), with the effect library read at launch.
+            // `level.ai` and `level.gct`, then the level's objects
+            // (loading-screen.md 5): the current level's navigation data
+            // and the offline simulation's first switch pass
+            // ([`first_switch_pass`]); every ladder of the level in the
+            // collision world, present from the first frame
+            // (docs/behavior/climbing.md 1.1 – 1.3). Then `level.ps_static`'s
+            // effects, made, placed and started (level-placed-effects.md
+            // sections 1 – 4): read after the level's objects in the game,
+            // under this caption here (our placement), with the effect
+            // library read at launch.
             Stage::LoadingAiObjects => {
+                let sim = earlier(self.simulation.as_mut(), "simulation")?;
+                let character = earlier(self.character.as_mut(), "player character")?;
+                let clock = earlier(self.clock.as_ref(), "game clock")?;
+                first_switch_pass(tree, data, sim, character, &dir, clock)?;
+                self.level_objects = objects::level_objects(sim);
+                let collision = earlier(self.collision.as_mut(), "level.cform")?;
+                let collision = Arc::get_mut(collision)
+                    .ok_or_else(|| invalid("the collision world is shared before its ladders"))?;
+                let ladders = (self.level_objects.iter())
+                    .filter_map(|o| Ladder::from_record(&o.record))
+                    .collect();
+                collision.set_ladders(ladders)?;
                 let records = match vfs::read(tree, &format!("{dir}\\level.ps_static")) {
                     Ok(bytes) => particle_records::parse_placed(&bytes)
                         .map_err(|e| file("level.ps_static", e))?,

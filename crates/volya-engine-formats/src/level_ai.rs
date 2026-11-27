@@ -3,10 +3,17 @@
 
 //! A level's `levels\<level>\level.ai`, only the header and each level
 //! vertex's position (docs/behavior/offline-simulation.md section 3). Not
-//! chunked; read as a stream, keeping 6 of each vertex's 21 bytes.
+//! chunked; read as a stream, keeping 5 of each vertex's 21 bytes (its
+//! packed column and row and its height, as stored) in one block of bytes
+//! the reader's caller provides ([`LevelAi::read_in`]): the engine's file
+//! cache counts it against the file (docs/architecture/memory.md,
+//! File-backed data).
 
+use std::fmt;
 use std::io::{self, Read, Seek, SeekFrom};
+use std::ops::DerefMut;
 
+use crate::Bytes;
 use crate::packet::Reader;
 
 /// The only version read.
@@ -15,6 +22,9 @@ const HEADER_SIZE: usize = 56;
 const VERTEX_SIZE: usize = 21;
 /// Offset of the packed column and row in a vertex.
 const VERTEX_PACKED: usize = 16;
+/// Bytes kept of a vertex: the packed column and row (`u24`), the height
+/// (`u16`), as stored.
+pub const KEPT: usize = 5;
 /// The largest packed column and row (section 5.2).
 pub const PACKED_LIMIT: u32 = 0x7F_FFFF;
 
@@ -48,19 +58,56 @@ impl LevelAiHeader {
 }
 
 /// The level vertices' positions.
-#[derive(Clone, Debug, PartialEq)]
 pub struct LevelAi {
     pub header: LevelAiHeader,
-    /// Per level vertex: the packed column and row *p* (`u24`).
-    pub packed: Vec<u32>,
-    /// Per level vertex: the height *q*.
-    pub heights: Vec<u16>,
+    /// Per level vertex, [`KEPT`] bytes, little-endian: the packed column
+    /// and row *p* (`u24`), the height *q* (`u16`).
+    vertices: Box<dyn Bytes>,
+}
+
+impl fmt::Debug for LevelAi {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LevelAi")
+            .field("header", &self.header)
+            .field("vertices", &self.len())
+            .finish()
+    }
+}
+
+impl PartialEq for LevelAi {
+    fn eq(&self, other: &Self) -> bool {
+        self.header == other.header && self.vertices[..] == other.vertices[..]
+    }
 }
 
 impl LevelAi {
+    /// The level vertices `vertices`, each (packed column and row, height),
+    /// kept on the heap.
+    pub fn new(header: LevelAiHeader, vertices: &[(u32, u16)]) -> Self {
+        let mut bytes = Vec::with_capacity(vertices.len() * KEPT);
+        for &(p, q) in vertices {
+            bytes.extend(&p.to_le_bytes()[..3]);
+            bytes.extend(q.to_le_bytes());
+        }
+        Self {
+            header,
+            vertices: Box::new(bytes),
+        }
+    }
+
+    /// Reads `file` to its end, the positions kept on the heap
+    /// ([`Self::read_in`]).
+    pub fn read(file: impl Read + Seek) -> io::Result<Self> {
+        Self::read_in(file, |len| Ok(vec![0; len]))
+    }
+
     /// Reads `file` to its end, which must come right after the last
-    /// vertex. A version other than 8 is an error.
-    pub fn read(mut file: impl Read + Seek) -> io::Result<Self> {
+    /// vertex, keeping the positions in the zeroed bytes `alloc` gives for
+    /// their size. A version other than 8 is an error.
+    pub fn read_in<B: DerefMut<Target = [u8]> + Send + Sync + 'static>(
+        mut file: impl Read + Seek,
+        alloc: impl FnOnce(usize) -> io::Result<B>,
+    ) -> io::Result<Self> {
         let length = file.seek(SeekFrom::End(0))?;
         file.seek(SeekFrom::Start(0))?;
         let mut head = [0u8; HEADER_SIZE];
@@ -88,43 +135,62 @@ impl LevelAi {
             )));
         }
         let n = header.vertex_count as usize;
-        let mut packed = Vec::with_capacity(n);
-        let mut heights = Vec::with_capacity(n);
+        let mut kept = alloc(n * KEPT)?;
+        if kept.len() != n * KEPT {
+            return Err(invalid("level.ai: no room for the positions"));
+        }
         // A batch of whole vertices at a time.
         let mut buffer = vec![0u8; VERTEX_SIZE * 4096];
+        let mut out = kept.as_chunks_mut::<KEPT>().0.iter_mut();
         let mut left = n;
         while left > 0 {
             let batch = left.min(4096);
             let bytes = &mut buffer[..VERTEX_SIZE * batch];
             file.read_exact(bytes)?;
-            for v in bytes.as_chunks::<VERTEX_SIZE>().0 {
-                let p = &v[VERTEX_PACKED..];
-                packed.push(u32::from_le_bytes([p[0], p[1], p[2], 0]));
-                heights.push(u16::from_le_bytes([p[3], p[4]]));
+            for (v, to) in bytes.as_chunks::<VERTEX_SIZE>().0.iter().zip(&mut out) {
+                to.copy_from_slice(&v[VERTEX_PACKED..]);
             }
             left -= batch;
         }
         Ok(Self {
             header,
-            packed,
-            heights,
+            vertices: Box::new(kept),
         })
     }
 
     pub fn len(&self) -> usize {
-        self.packed.len()
+        self.vertices.len() / KEPT
     }
 
     pub fn is_empty(&self) -> bool {
-        self.packed.is_empty()
+        self.vertices.is_empty()
+    }
+
+    fn vertex(&self, k: u32) -> Option<&[u8; KEPT]> {
+        self.vertices.as_chunks::<KEPT>().0.get(k as usize)
+    }
+
+    /// The packed column and row *p* of level vertex `k`.
+    pub fn packed(&self, k: u32) -> Option<u32> {
+        self.vertex(k)
+            .map(|v| u32::from_le_bytes([v[0], v[1], v[2], 0]))
+    }
+
+    /// Every level vertex's packed column and row, in order.
+    pub fn packed_all(&self) -> impl Iterator<Item = u32> + '_ {
+        let chunks = self.vertices.as_chunks::<KEPT>().0;
+        chunks
+            .iter()
+            .map(|v| u32::from_le_bytes([v[0], v[1], v[2], 0]))
     }
 
     /// The position of level vertex `k` (section 3):
     /// x = x0 + c · floor(p / r), z = z0 + c · (p mod r),
     /// y = y0 + q / 65535 · h.
     pub fn position(&self, k: u32) -> Option<[f32; 3]> {
-        let p = *self.packed.get(k as usize)?;
-        let q = self.heights[k as usize];
+        let v = self.vertex(k)?;
+        let p = u32::from_le_bytes([v[0], v[1], v[2], 0]);
+        let q = u16::from_le_bytes([v[3], v[4]]);
         let h = &self.header;
         let r = h.row_length().max(1);
         Some([
@@ -201,9 +267,13 @@ pub(crate) mod tests {
         let ai = LevelAi::read(io::Cursor::new(&file[..])).unwrap();
         assert_eq!(ai.header.row_length(), 6);
         assert_eq!(ai.header.column_count(), 11);
+        assert_eq!(ai.packed(1), Some(2 * 6 + 3));
+        assert_eq!(ai.packed_all().collect::<Vec<_>>(), [0, 2 * 6 + 3]);
+        assert_eq!(ai, LevelAi::new(ai.header, &[(0, 0), (2 * 6 + 3, 65535)]));
         let p = ai.position(1).unwrap();
         assert!((p[0] - 1.4).abs() < 1e-6 && (p[1] - 10.0).abs() < 1e-6);
         assert!((p[2] - 2.1).abs() < 1e-6);
+        assert_eq!(ai.position(2), None);
         assert!(ai.in_cell(1, [1.7, 0.0, 2.3]));
         assert!(!ai.in_cell(1, [1.8, 0.0, 2.1]));
         assert_eq!(ai.packed_at([1.5, 0.0, 2.0]), Some(2 * 6 + 3));

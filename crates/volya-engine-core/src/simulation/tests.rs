@@ -115,25 +115,17 @@ fn navigation(g: &GameGraph) -> Navigation {
         box_max: [7.0, 10.0, 7.0],
         identifier: LEVEL_ID,
     };
-    let ai = LevelAi {
-        header,
-        packed: (0..121).collect(),
-        heights: vec![0; 121],
-    };
-    let mut cross = CrossTable {
-        game_vertex_count: 4,
-        level_identifier: LEVEL_ID,
-        game_identifier: GRAPH_ID,
-        game_vertices: Vec::new(),
-        distances: Vec::new(),
-    };
-    for k in 0..121u32 {
-        let (c, r) = (k / 11, k % 11);
-        let (vx, dx) = if c <= 5 { (0, c) } else { (1, 10 - c) };
-        let (vz, dz) = if r <= 5 { (0, r) } else { (1, 10 - r) };
-        cross.game_vertices.push((vx + 2 * vz) as u16);
-        cross.distances.push(dx.max(dz) as f32 * 0.7);
-    }
+    let vertices: Vec<(u32, u16)> = (0..121).map(|p| (p, 0)).collect();
+    let ai = LevelAi::new(header, &vertices);
+    let cells: Vec<(u16, f32)> = (0..121u32)
+        .map(|k| {
+            let (c, r) = (k / 11, k % 11);
+            let (vx, dx) = if c <= 5 { (0, c) } else { (1, 10 - c) };
+            let (vz, dz) = if r <= 5 { (0, r) } else { (1, 10 - r) };
+            ((vx + 2 * vz) as u16, dx.max(dz) as f32 * 0.7)
+        })
+        .collect();
+    let cross = CrossTable::new(4, LEVEL_ID, GRAPH_ID, &cells);
     Navigation::new(g, 1, ai, cross).unwrap()
 }
 

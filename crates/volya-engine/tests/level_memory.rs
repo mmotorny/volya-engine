@@ -5,8 +5,9 @@
 //! largest level's memory is known beside `l01_escape`'s
 //! (docs/architecture/memory.md): the heap the collision world and the
 //! detail objects keep (counted as requested), the `level` file's parse
-//! peak, and as stored the geometry the GPU takes, the navigation file and
-//! the textures the level's own surfaces name. Reported, never judged. Its
+//! peak, what the file cache holds for the detail objects and the
+//! navigation against the files they stand for, and as stored the geometry
+//! the GPU takes and the textures the level's own surfaces name. Reported, never judged. Its
 //! own test binary, so no other test allocates meanwhile. Skips when
 //! `VOLYA_GOG_INSTALLER` is unset.
 
@@ -30,8 +31,10 @@ use volya_engine::core::vfs::db::DbVfs;
 use volya_engine::core::vfs::{self, EntryKind, StdVfs, Vfs};
 use volya_engine::data::GameData;
 use volya_engine::level_details;
+use volya_engine_formats::cross_table::CrossTable;
 use volya_engine_formats::gamemtl;
 use volya_engine_formats::level::Level;
+use volya_engine_formats::level_ai::LevelAi;
 use volya_engine_formats::ui::Resolution;
 
 struct Counting;
@@ -112,7 +115,7 @@ fn level_files_memory() {
         .collect();
     levels.sort();
     eprintln!(
-        "level: collision kept, details kept, `level` read peak (heap MB); the detail slot grid in the file cache of `level.details` (MB); geometry, navigation, the surfaces' textures (as stored MB)"
+        "level: collision kept, details kept, `level` read peak (heap MB); the detail slot grid in the file cache of `level.details`, the navigation positions and `level.gct` of `level.ai` and `level.gct` (MB, the bytes beside on the heap); geometry, the surfaces' textures (as stored MB)"
     );
     let mut rows = Vec::new();
     for name in &levels {
@@ -158,16 +161,41 @@ fn level_files_memory() {
         }
         drop(level);
         let geometry = size(&tree, &file("level.geom"));
-        let navigation = size(&tree, &file("level.ai"));
+        // The navigation as a level holds it: the positions held under
+        // `level.ai`'s path, `level.gct` whole, read in place; on the heap
+        // only their handles, and an order of the level vertices where the
+        // file doesn't store them sorted.
+        let (ai_path, gct_path) = (file("level.ai"), file("level.gct"));
+        let navigation_files = size(&tree, &ai_path) + size(&tree, &gct_path);
+        let (navigation, navigation_kept, _) = measured(|| {
+            (tree.exists(&ai_path) && tree.exists(&gct_path)).then(|| {
+                let ai = LevelAi::read_in(tree.open(&ai_path).unwrap(), |len| {
+                    file_cache::hold(&ai_path, len)
+                })
+                .unwrap();
+                let cross =
+                    CrossTable::in_place(file_cache::read(&tree, &gct_path).unwrap()).unwrap();
+                let sorted = (ai.packed_all())
+                    .zip(ai.packed_all().skip(1))
+                    .all(|(a, b)| a <= b);
+                (ai, cross, sorted)
+            })
+        });
+        let navigation_held = file_cache::bytes();
+        let unsorted = navigation.as_ref().is_some_and(|n| !n.2);
+        drop(navigation);
         eprintln!(
-            "{name}: {:.1}, {:.1}, {:.1}; {:.1} of {:.1}; {:.1}, {:.1}, {:.1}",
+            "{name}: {:.1}, {:.1}, {:.1}; {:.1} of {:.1}, {:.1} of {:.1} ({} bytes on the heap{}); {:.1}, {:.1}",
             mb(collision_kept),
             mb(details_kept),
             mb(parse_peak),
             mb(grid),
             mb(details_file),
+            mb(navigation_held),
+            mb(navigation_files),
+            navigation_kept,
+            if unsorted { ", vertices unsorted" } else { "" },
             mb(geometry),
-            mb(navigation),
             mb(textures)
         );
         rows.push((
