@@ -42,7 +42,10 @@ async function kept(walk, files) {
   for (const [name, bytes] of Object.entries(files)) await dumpFile(name, bytes);
 }
 
-export const tests = await gameChecks("audio-fidelity", (frame) => againstOriginal("audio-fidelity", frame), {
-  args,
-  kept,
-});
+/** A boundary's frame against the original's, the note naming it. */
+async function compare(frame) {
+  const boundary = frame.name.slice(frame.name.lastIndexOf("-") + 1);
+  return `${boundary} ${await againstOriginal("audio-fidelity", frame)}`;
+}
+
+export const tests = await gameChecks("audio-fidelity", compare, { args, kept });
