@@ -109,12 +109,33 @@ pub struct ObjectGeometry {
 }
 
 /// A detail window of a progressive mesh (ogf.md section 6;
-/// object-detail-level.md 4): `index_count` indices from `offset` past its
-/// draw's first index.
+/// object-detail-level.md 4): [`Self::index_count`] indices from
+/// [`Self::offset`] past its draw's first index. Kept in 6 bytes: the
+/// offset's halves and the triangle count, a `u16` as the file stores it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DetailWindow {
-    pub offset: u32,
-    pub index_count: u32,
+    offset: [u16; 2],
+    triangles: u16,
+}
+
+impl DetailWindow {
+    /// The window of `triangles` triangles from index `offset`.
+    pub fn new(offset: u32, triangles: u16) -> Self {
+        Self {
+            offset: [offset as u16, (offset >> 16) as u16],
+            triangles,
+        }
+    }
+
+    /// Its first index past its draw's first index.
+    pub fn offset(&self) -> u32 {
+        u32::from(self.offset[0]) | u32::from(self.offset[1]) << 16
+    }
+
+    /// Its indices: 3 a triangle.
+    pub fn index_count(&self) -> u32 {
+        3 * u32::from(self.triangles)
+    }
 }
 
 /// The window drawn of `count` detail windows for a draw with bounding

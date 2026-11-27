@@ -500,12 +500,11 @@ pub fn add_model(
         geometry.indices.extend_from_slice(indices);
         let first_window = geometry.windows.len() as u32;
         if let Some(w) = &m.windows {
-            geometry
-                .windows
-                .extend(w.steps.iter().map(|s| DetailWindow {
-                    offset: s.index_offset - span.start as u32,
-                    index_count: 3 * u32::from(s.triangle_count),
-                }));
+            geometry.windows.extend(
+                w.steps.iter().map(|s| {
+                    DetailWindow::new(s.index_offset - span.start as u32, s.triangle_count)
+                }),
+            );
         }
         let windows = [first_window, geometry.windows.len() as u32 - first_window];
         meshes.push(MeshRange {

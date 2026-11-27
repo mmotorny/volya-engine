@@ -777,14 +777,8 @@ pub async fn objects_draw_their_detail_window(make: Make<'_>) -> Outcome {
         vertices,
         indices: vec![0, 1, 2, 3, 4, 5],
         windows: vec![
-            crate::world::DetailWindow {
-                offset: 0,
-                index_count: 3,
-            },
-            crate::world::DetailWindow {
-                offset: 3,
-                index_count: 3,
-            },
+            crate::world::DetailWindow::new(0, 1),
+            crate::world::DetailWindow::new(3, 1),
         ],
     };
     let g = geom(Layout::VertexLit, 0, 0, [0; 8]);
@@ -862,14 +856,8 @@ pub async fn static_progressive_visuals_draw_their_detail_window(make: Make<'_>)
     };
     let objects = ObjectGeometry {
         windows: vec![
-            crate::world::DetailWindow {
-                offset: 0,
-                index_count: 3,
-            },
-            crate::world::DetailWindow {
-                offset: 3,
-                index_count: 3,
-            },
+            crate::world::DetailWindow::new(0, 1),
+            crate::world::DetailWindow::new(3, 1),
         ],
         ..ObjectGeometry::default()
     };

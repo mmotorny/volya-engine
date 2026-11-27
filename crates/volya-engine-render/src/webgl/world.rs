@@ -589,8 +589,8 @@ impl Inner {
         match window.filter(|&j| j < count as usize) {
             Some(j) => {
                 let w = self.detail[first as usize + j];
-                let start = d.first_index + w.offset;
-                start..start + w.index_count
+                let start = d.first_index + w.offset();
+                start..start + w.index_count()
             }
             None => d.first_index..d.first_index + d.index_count,
         }
@@ -965,7 +965,8 @@ impl Renderer {
             let windows_fit = (objects.windows.get(first..first.saturating_add(count)))
                 .is_some_and(|w| {
                     w.iter().all(|w| {
-                        u64::from(w.offset) + u64::from(w.index_count) <= u64::from(d.index_count)
+                        u64::from(w.offset()) + u64::from(w.index_count())
+                            <= u64::from(d.index_count)
                     })
                 });
             let kept = (d.kept.filter(|_| d.object.is_some()))

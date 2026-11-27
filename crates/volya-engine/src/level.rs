@@ -197,10 +197,10 @@ fn detail_windows(
                 let first = windows.len() as u32;
                 // The span starts at the first window's start.
                 let start = w.steps.iter().map(|s| s.index_offset).min().unwrap_or(0);
-                windows.extend(w.steps.iter().map(|s| DetailWindow {
-                    offset: s.index_offset - start,
-                    index_count: 3 * u32::from(s.triangle_count),
-                }));
+                windows.extend(
+                    (w.steps.iter())
+                        .map(|s| DetailWindow::new(s.index_offset - start, s.triangle_count)),
+                );
                 [first, w.steps.len() as u32]
             };
             match v.window_record {
