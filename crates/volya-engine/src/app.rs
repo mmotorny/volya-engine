@@ -19,7 +19,7 @@ use serde::Serialize;
 
 use crate::audio::AudioOut;
 use crate::core::audio::Category;
-use crate::core::console::Console;
+use crate::core::console::{Console, FatalReport};
 use crate::core::diagnostics;
 use crate::core::display::DisplayColour;
 use crate::core::input::{Action, Control, Input, Key};
@@ -881,11 +881,19 @@ impl App {
             return;
         }
         diagnostics::end("fatal", &error);
-        // The report is written to the log, then the log file
-        // (console-log.md 3.3). TODO(#611): the report's own text; a
-        // browser has no stack trace of the game to add (#620).
+        // The report, a fatal message's, is written to the log, then the
+        // log file (console-log.md 3.3, 3.8); a browser has no stack trace
+        // of the game to add (#620). The end through the unhandled
+        // exception (3.10) adds no stack trace or system error after a
+        // report, and writes the file once more.
         let log = self.console.log_mut();
-        log.message(&error);
+        let argument = [error.as_str()];
+        log.fatal(&FatalReport::message(
+            &argument,
+            "App::fatal",
+            file!(),
+            line!() as i32,
+        ));
         log.save();
         self.error = Some(error);
         let now = self.clock;
@@ -3163,9 +3171,14 @@ mod tests {
         app.failed = Some(error.clone());
         app.update(&tree, 32.0, &mut input, &mut audio);
         assert!(matches!(app.state(), AppState::Menu { .. }));
-        // The report, then the log file (console-log.md 3.3).
-        assert_eq!(app.console().log().last().unwrap(), "x: fatal");
-        assert!(app.take_log_file().unwrap().ends_with(b"x: fatal\r\n"));
+        // The report, then the log file (console-log.md 3.3, 3.8).
+        let log = app.console().log();
+        assert_eq!(log[log.len() - 3], "[error]Arguments     : x: fatal");
+        assert!(
+            app.take_log_file()
+                .unwrap()
+                .ends_with(b"[error]Arguments     : x: fatal\r\n \r\n\r\n")
+        );
         let opened = audio.started.len();
         assert!(opened > 0, "the menu's music started");
         for t in [48.0, 64.0] {

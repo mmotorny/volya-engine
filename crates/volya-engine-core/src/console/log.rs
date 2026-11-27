@@ -4,8 +4,9 @@
 //! The log (docs/behavior/console-log.md): the one list of text lines every
 //! part of the program writes to and the console shows, how a written text
 //! becomes lines (section 1), and the log file's contents and when they are
-//! written (section 3). Storing the file is the platform's
-//! ([`Log::take_file`]).
+//! written (section 3), the fatal-error report (3.8) and a write that
+//! cannot open the file (3.9). Storing the file is the platform's
+//! ([`Log::take_file`], [`Log::cannot_write`]).
 
 use volya_engine_formats::cp1251;
 
@@ -128,6 +129,74 @@ impl Log {
     pub fn take_file(&mut self) -> Option<Vec<u8>> {
         self.file.take()
     }
+
+    /// A fatal error (3.3): its report is written to the log, then the
+    /// file.
+    pub fn fatal(&mut self, report: &FatalReport) {
+        self.message(&report.text());
+        self.save();
+    }
+
+    /// A write of the file that could not open it (3.9): nothing was
+    /// written to it, and the log says so. `path` is the file's full path in
+    /// lower case, `error` the reason.
+    pub fn cannot_write(&mut self, path: &str, error: &str) {
+        self.message(&format!("!Can't write file: '{path}'. Error: '{error}'."));
+    }
+}
+
+/// A fatal error's report (3.8).
+#[derive(Clone, Debug)]
+pub struct FatalReport<'a> {
+    pub expression: &'a str,
+    /// The place in the program that reported it.
+    pub function: &'a str,
+    pub file: &'a str,
+    pub line: i32,
+    pub description: &'a str,
+    /// None, one or two.
+    pub arguments: &'a [&'a str],
+}
+
+impl<'a> FatalReport<'a> {
+    /// A fatal message (3.8), its one argument.
+    pub fn message(message: &'a [&'a str; 1], function: &'a str, file: &'a str, line: i32) -> Self {
+        Self {
+            expression: "fatal error",
+            function,
+            file,
+            line,
+            description: "<no expression>",
+            arguments: message,
+        }
+    }
+
+    /// The report's text: a line feed, `FATAL ERROR`, two line feeds, its
+    /// rows each ended by a line feed, one more line feed.
+    pub fn text(&self) -> String {
+        let row = |label: &str, value: &str| format!("[error]{label:<14}: {value}\n");
+        let mut text = String::from("\nFATAL ERROR\n\n");
+        text += &row("Expression", self.expression);
+        text += &row("Function", self.function);
+        text += &row("File", self.file);
+        text += &row("Line", &self.line.to_string());
+        if self.arguments.is_empty() && self.description.contains('\n') {
+            text += &format!("\n{}\n", self.description);
+        } else {
+            text += &row("Description", self.description);
+            match self.arguments {
+                [] => {}
+                [argument] => text += &row("Arguments", argument),
+                arguments => {
+                    for (i, argument) in arguments.iter().enumerate() {
+                        text += &row(&format!("Argument {i}"), argument);
+                    }
+                }
+            }
+        }
+        text.push('\n');
+        text
+    }
 }
 
 /// C's `%f`.
@@ -212,5 +281,69 @@ mod tests {
         log.clear();
         log.save();
         assert_eq!(log.take_file(), Some(Vec::new()));
+    }
+
+    #[test]
+    fn a_fatal_message_report() {
+        // 3.8's measured report.
+        let mut log = Log::default();
+        log.set_up_file();
+        let argument = ["Duplicate section 'dup' found."];
+        log.fatal(&FatalReport::message(&argument, "f", "x.rs", 7));
+        assert_eq!(
+            log.lines,
+            [
+                " ",
+                "FATAL ERROR",
+                " ",
+                "[error]Expression    : fatal error",
+                "[error]Function      : f",
+                "[error]File          : x.rs",
+                "[error]Line          : 7",
+                "[error]Description   : <no expression>",
+                "[error]Arguments     : Duplicate section 'dup' found.",
+                " ",
+                "",
+            ]
+        );
+        let file = log.take_file().unwrap();
+        assert!(file.ends_with(b"found.\r\n \r\n\r\n"));
+    }
+
+    #[test]
+    fn the_description_rows() {
+        let report = |description, arguments| {
+            FatalReport {
+                expression: "e",
+                function: "f",
+                file: "x",
+                line: -1,
+                description,
+                arguments,
+            }
+            .text()
+        };
+        let head = "\nFATAL ERROR\n\n[error]Expression    : e\n[error]Function      : f\n\
+                    [error]File          : x\n[error]Line          : -1\n";
+        assert_eq!(report("a\nb", &[]), format!("{head}\na\nb\n\n"));
+        assert_eq!(
+            report("d", &[]),
+            format!("{head}[error]Description   : d\n\n")
+        );
+        assert_eq!(
+            report("a\nb", &["1", "2"]),
+            format!(
+                "{head}[error]Description   : a\nb\n[error]Argument 0    : 1\n\
+                 [error]Argument 1    : 2\n\n"
+            )
+        );
+    }
+
+    #[test]
+    fn a_write_that_cannot_open_the_file() {
+        assert_eq!(
+            written(|l| l.cannot_write("z:\\logs\\xray_root.log", "Permission denied")),
+            ["!Can't write file: 'z:\\logs\\xray_root.log'. Error: 'Permission denied'."]
+        );
     }
 }

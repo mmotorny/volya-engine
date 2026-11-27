@@ -36,7 +36,7 @@ pub use commands::{
 };
 pub use diagnostics::{MemoryStatistics, RESOURCE_LABELS, ResourceCounts};
 pub use input::{Clipboard, LINE_LENGTH, Typed};
-pub use log::Log;
+pub use log::{FatalReport, Log};
 pub use value::{Value, help_text, parse_mode, real_status};
 
 use volya_engine_formats::cp1251;
