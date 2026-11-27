@@ -145,7 +145,7 @@ Measured (#667): its New Game of `l01_escape` run unmodified under Wine three ti
 | 17 | `st_client_synchronising` | 0 | 0 | |
 | | The load, its first caption to its end | 201,005 | 70,396 | |
 | | *h* at the load's end | 227,120 | 75,602 | |
-| | *t* at the load's end | 260,798 | 148,764 (the renderer's texture bytes, headless Chrome) | Counted by the original's rule; the prefetched models' textures added (the original's 865 base textures against 631 without prefetching, 2.4.1). |
+| | *t* at the load's end | 260,798 | 146,706 (by the original's rule, headless Chrome; the original's without prefetching 179,025) | Counted by the original's rule (#689); the prefetched models' textures added (the original's 865 base textures against 631 without prefetching, 2.4.1). |
 
 Where ours keeps less than the original (8, 11) it stays (rule 5): the budget is a ceiling. Beside them at the load's end the original writes the committed address space 849,680–849,744 K (the whole 32-bit process, its program, libraries and driver; ours, the wasm memory, 101,760 K today), the process heap 400,268–400,269 K and the game scripts' pool 25,762–25,784 K (measured, #667).
 

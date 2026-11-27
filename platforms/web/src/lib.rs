@@ -397,8 +397,8 @@ pub(crate) fn heap_bytes() -> f64 {
 /// here (docs/architecture/memory.md, Measuring): the address space is the
 /// wasm memory's (32-bit, 4 GiB: its pages committed, the rest free, none
 /// reserved), the heaps and the memory manager are the one wasm heap (its
-/// live bytes), the textures those the renderer holds that no framebuffer
-/// draws into. No part has a counterpart of the process heap, the scripts'
+/// live bytes), the textures the sizes the renderer records for the files
+/// it holds by name (`gl::Texture::record_size`). No part has a counterpart of the process heap, the scripts'
 /// and the renderer's own pools, or the shared strings and blocks: 0.
 fn memory_statistics() -> volya_engine::core::console::MemoryStatistics {
     let committed = heap_bytes() as u64;
@@ -408,7 +408,7 @@ fn memory_statistics() -> volya_engine::core::console::MemoryStatistics {
         free: (1u64 << 32).saturating_sub(committed),
         reserved: 0,
         committed,
-        textures: gpu.texture_bytes - gpu.target_bytes,
+        textures: gpu.recorded_bytes,
         crt_heap: live,
         cmem: live,
         ..Default::default()

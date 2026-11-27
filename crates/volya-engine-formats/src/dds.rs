@@ -343,6 +343,10 @@ pub struct Dds<'a> {
     pub faces: u32,
     /// The texel data, faces in order, each with its mip chain.
     data: &'a [u8],
+    /// The whole file's length in bytes.
+    file_len: usize,
+    /// The file's top levels left out ([`Dds::without_top_levels`]).
+    dropped: u32,
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -431,6 +435,8 @@ impl<'a> Dds<'a> {
             cube,
             faces,
             data: &bytes[DATA_OFFSET..],
+            file_len: bytes.len(),
+            dropped: 0,
         };
         let needed = dds.face_bytes() * faces as usize;
         if dds.data.len() < needed {
@@ -481,8 +487,20 @@ impl<'a> Dds<'a> {
             height,
             mip_levels: self.mip_levels - levels,
             data: &self.data[start..],
+            dropped: self.dropped + levels,
             ..self.clone()
         }
+    }
+
+    /// The length in bytes of the file it was parsed from.
+    pub fn file_len(&self) -> usize {
+        self.file_len
+    }
+
+    /// How many of the file's top levels it leaves out
+    /// ([`Dds::without_top_levels`]).
+    pub fn dropped_levels(&self) -> u32 {
+        self.dropped
     }
 
     /// Total texel data in bytes (all faces and levels).
@@ -699,6 +717,8 @@ mod tests {
         assert_eq!(low.level(0, 0), dds.level(0, 2));
         assert_eq!(low.level(0, 1), dds.level(0, 3));
         assert_eq!(low.data_len(), 16);
+        assert_eq!((low.file_len(), low.dropped_levels()), (bytes.len(), 2));
+        assert_eq!(low.without_top_levels(1).dropped_levels(), 3);
         // At least one level stays; a one-level file is as stored.
         let last = dds.without_top_levels(9);
         assert_eq!((last.width, last.height, last.mip_levels), (1, 1, 1));
@@ -707,11 +727,13 @@ mod tests {
         let one = Dds::parse(&one).unwrap();
         assert_eq!(one.without_top_levels(2).mip_levels, 1);
         assert_eq!(one.without_top_levels(2).width, 8);
+        assert_eq!(one.without_top_levels(2).dropped_levels(), 0);
         // Cube maps keep every level.
         let cube = file(4, 4, 3, true, PixelFormat::BGRA8, &[0; 6 * 84]);
         let cube = Dds::parse(&cube).unwrap();
         let kept = cube.without_top_levels(1);
         assert_eq!((kept.width, kept.mip_levels, kept.faces), (4, 3, 6));
+        assert_eq!(kept.dropped_levels(), 0);
     }
 
     #[test]

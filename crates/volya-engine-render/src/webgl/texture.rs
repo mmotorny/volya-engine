@@ -99,6 +99,7 @@ impl Renderer {
             .gl
             .texture(format, width, height, dds.mip_levels.max(1), cube);
         texture.set_name(name);
+        texture.record_size(recorded_size(dds));
         Ok(TextureUpload {
             texture,
             faces: dds.faces,
@@ -109,6 +110,16 @@ impl Renderer {
             row: 0,
         })
     }
+}
+
+/// The size the textures' memory counts for a texture loaded as `dds`
+/// (docs/behavior/console-diagnostics.md 2.1, *t*): the byte length of its
+/// file, reduced to a quarter for each top level the texture quality drops
+/// from it (texture-quality-filtering.md 1.5), whatever is uploaded. A
+/// one-level file, whose figure the spec leaves open, counts its file's
+/// length (docs/architecture/memory.md).
+pub fn recorded_size(dds: &Dds) -> u64 {
+    dds.file_len() as u64 >> (2 * dds.dropped_levels())
 }
 
 /// A texture on its way to the GPU ([`Renderer::begin_texture`]), written

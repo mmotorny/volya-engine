@@ -432,6 +432,7 @@ impl Gl {
             levels,
             drawn_into: Cell::new(None),
             name: RefCell::new(None),
+            recorded: Cell::new(0),
         }));
         t.0.live.named(t.0.id, Named::Texture(Rc::downgrade(&t.0)));
         t.0.live.update(|l| {
@@ -1328,6 +1329,8 @@ struct TextureInner {
     drawn_into: Cell<Option<bool>>,
     /// [`Texture::set_name`].
     name: RefCell<Option<String>>,
+    /// [`Texture::record_size`].
+    recorded: Cell<u64>,
 }
 
 impl Drop for TextureInner {
@@ -1336,9 +1339,11 @@ impl Drop for TextureInner {
         self.live.forget(self.id);
         let bytes = texture_bytes(self);
         let drawn_into = self.drawn_into.get();
+        let recorded = self.recorded.get();
         self.live.update(|l| {
             l.textures -= 1;
             l.texture_bytes -= bytes;
+            l.recorded_bytes -= recorded;
             match drawn_into {
                 Some(true) => l.targets -= 1,
                 Some(false) => l.depths -= 1,
@@ -1491,6 +1496,8 @@ pub struct Live {
     pub targets: u64,
     pub depths: u64,
     pub target_bytes: u64,
+    /// The textures' sizes as recorded ([`Texture::record_size`]).
+    pub recorded_bytes: u64,
     pub vertex_arrays: u64,
     pub programs: u64,
 }
@@ -1507,6 +1514,7 @@ impl std::ops::Add for Live {
             targets: self.targets + o.targets,
             depths: self.depths + o.depths,
             target_bytes: self.target_bytes + o.target_bytes,
+            recorded_bytes: self.recorded_bytes + o.recorded_bytes,
             vertex_arrays: self.vertex_arrays + o.vertex_arrays,
             programs: self.programs + o.programs,
         }
@@ -1531,6 +1539,7 @@ impl std::ops::Sub for Live {
             targets: self.targets - o.targets,
             depths: self.depths - o.depths,
             target_bytes: self.target_bytes - o.target_bytes,
+            recorded_bytes: self.recorded_bytes - o.recorded_bytes,
             vertex_arrays: self.vertex_arrays - o.vertex_arrays,
             programs: self.programs - o.programs,
         }
@@ -1545,6 +1554,15 @@ impl Texture {
     /// Names it (the file it was made from) for [`Gl::remaining`].
     pub fn set_name(&self, name: &str) {
         *self.0.name.borrow_mut() = Some(name.to_owned());
+    }
+
+    /// Records `bytes` as its size, the figure the textures' memory sums
+    /// (`Live::recorded_bytes`; docs/behavior/console-diagnostics.md 2.1).
+    pub fn record_size(&self, bytes: u64) {
+        let old = self.0.recorded.replace(bytes);
+        self.0
+            .live
+            .update(|l| l.recorded_bytes = l.recorded_bytes - old + bytes);
     }
 
     pub fn size(&self) -> (u32, u32) {
