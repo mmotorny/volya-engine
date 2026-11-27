@@ -49,6 +49,7 @@ let setCapture = () => {};
 let setLevel = () => {};
 let setTextField = () => {};
 let setCursor = () => {};
+let setConsole = () => {};
 let setFullScreen = () => {};
 /** Tells the engine whether the page is in full screen, or can't be. */
 const reportFullScreen = () =>
@@ -177,6 +178,7 @@ function startEngine() {
       else if (data.type === "controls") setLevel(data);
       else if (data.type === "text_field") setTextField(data);
       else if (data.type === "cursor") setCursor(data.shown);
+      else if (data.type === "console") setConsole(data.open);
       else if (data.type === "full_screen") setFullScreen(data.on);
       else if (data.type === "result") {
         const { resolve, reject } = pending.get(data.id);
@@ -222,6 +224,7 @@ const send = (event) => worker.postMessage({ type: "input", event });
 const entry = createTextEntry(send);
 const forward = startInput(() => view, send, { onClick: () => entry.click() });
 setCursor = (shown) => forward.setCursor(shown);
+setConsole = (open) => forward.setConsole(open);
 const touch = createTouchControls(send, { call });
 document.body.append(touch.element);
 // Full screen with Keyboard Lock, offered in the level (#85).

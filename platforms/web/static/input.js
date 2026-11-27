@@ -188,7 +188,8 @@ const AXIS_EPSILON = 0.02;
  * engine reports capture changes, `setLevel(on, keys)`, called when the
  * level's controls go live or stop and when the character takes the
  * keyboard's keys under a screen (the inventory screen, #110), and
- * `setCursor(shown)`, called when the game's cursor shows or hides.
+ * `setCursor(shown)`, called when the game's cursor shows or hides, and
+ * `setConsole(open)`, called when the console opens or closes.
  */
 export function startInput(view, send, { onClick = () => {} } = {}) {
   let capture = false;
@@ -206,6 +207,8 @@ export function startInput(view, send, { onClick = () => {} } = {}) {
   // The touchpad while the game shows its cursor; which way each touch
   // down goes ("pad" or "direct").
   let cursor = false;
+  // The console is open: Insert reads the clipboard.
+  let consoleOpen = false;
   const pad = createTouchpad();
   const routes = new Map();
   let longPress = null;
@@ -321,7 +324,35 @@ export function startInput(view, send, { onClick = () => {} } = {}) {
     // (crouch), so keys pressed with it are the game's there; the engine
     // decides which reach the character.
     if (pressed && (event.repeat || event.metaKey || event.altKey || (event.ctrlKey && !keys))) return;
-    send(["key", name, pressed]);
+    if (pressed && name === "insert" && consoleOpen) {
+      paste();
+      return;
+    }
+    keySend(["key", name, pressed]);
+  };
+  // Insert in the open console reads the clipboard (#639): the async
+  // clipboard API is the window's, not the worker's (documented, MDN), and
+  // Chrome asks permission on its first use (documented). The press goes
+  // with what was read, and keys after it wait for it, keeping their order.
+  let reads = 0;
+  let queue = Promise.resolve();
+  const keySend = (message) => {
+    if (reads === 0) send(message);
+    else queue = queue.then(() => send(message));
+  };
+  const paste = () => {
+    reads += 1;
+    // Read within the key's handler; no clipboard API is a failed read.
+    const read = new Promise((resolve) => resolve(navigator.clipboard.readText())).then(
+      (text) => (text === "" ? ["none"] : ["text", text]),
+      () => ["unavailable"],
+    );
+    queue = queue
+      .then(() => read)
+      .then((clipboard) => {
+        reads -= 1;
+        send(["key", "insert", true, ...clipboard]);
+      });
   };
   addEventListener("keydown", key);
   addEventListener("keyup", key);
@@ -420,5 +451,8 @@ export function startInput(view, send, { onClick = () => {} } = {}) {
       requestAnimationFrame(poll);
     }
   };
-  return { setCapture, setLevel, setCursor };
+  const setConsole = (open) => {
+    consoleOpen = open;
+  };
+  return { setCapture, setLevel, setCursor, setConsole };
 }

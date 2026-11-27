@@ -522,6 +522,11 @@ pub fn take_full_screen_request() -> Option<bool> {
     RUNNING.with(|r| r.borrow_mut().as_mut()?.app.take_full_screen_request())
 }
 
+/// Whether the console is open ([`App::console_open`]).
+pub fn console_open() -> bool {
+    RUNNING.with(|r| r.borrow().as_ref().is_some_and(|r| r.app.console_open()))
+}
+
 /// Whether the game shows its mouse cursor ([`App::cursor_shown`]): the
 /// page's touch is a touchpad then (#108).
 pub fn cursor_shown() -> bool {
@@ -568,7 +573,17 @@ pub fn state() -> serde_json::Value {
         return json!({ "phase": "loading" });
     }
     RUNNING.with(|r| match r.borrow().as_ref() {
-        Some(running) => serde_json::to_value(running.app.state()).unwrap_or_default(),
+        Some(running) => {
+            let mut state = serde_json::to_value(running.app.state()).unwrap_or_default();
+            // The console window and its input line (console-window.md).
+            let console = running.app.console();
+            state["console"] = json!({
+                "open": running.app.console_open(),
+                "line": console.line(),
+                "log": console.log().last(),
+            });
+            state
+        }
         None => json!({ "phase": "none" }),
     })
 }

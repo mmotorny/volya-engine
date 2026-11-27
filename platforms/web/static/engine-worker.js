@@ -100,6 +100,7 @@ let capture = false;
 let controls = 0;
 let field = "";
 let cursor = false;
+let consoleOpen = false;
 /** Tells the page when input capture or the level's controls changed (after calls and frames). */
 function syncCapture() {
   const on = e().input_capture();
@@ -128,6 +129,11 @@ function syncCapture() {
   if (shown !== cursor) {
     cursor = shown;
     postMessage({ type: "cursor", shown });
+  }
+  const open = e().console_open();
+  if (open !== consoleOpen) {
+    consoleOpen = open;
+    postMessage({ type: "console", open });
   }
   const f = e().text_field();
   const key = f ? Array.from(f).join() : "";

@@ -19,6 +19,7 @@
 //! | `["cursor_button", "left"\|"right", pressed, time, double]` | a touchpad gesture pressing or releasing a mouse button at the cursor (#108); `double` for a double click's second press |
 //! | `["touch_drop"]` | the touches down when the cursor appeared are dropped: their left button released where the cursor is (#108) |
 //! | `["key", name, pressed]` | key ([`Key::name`]), no auto-repeat |
+//! | `["key", "insert", true, read, text]` | an Insert press while the console is open, with the clipboard the page read for it (#639): `read` is `"text"` (and `text` its text), `"none"` (no text) or `"unavailable"` |
 //! | `["pad", name, pressed]` | gamepad button ([`GamepadButton::name`]) |
 //! | `["axis", name, value]` | gamepad axis ([`GamepadAxis::name`]) |
 //! | `["stick", x, y]` | the on-screen move stick's reach in stick radii (+y down): at most 1 long within its rim, up to 3 per axis past it; `0, 0` when touched and when let go |
@@ -37,6 +38,7 @@ use std::collections::VecDeque;
 
 use js_sys::Array;
 use serde::Serialize;
+use volya_engine::core::console::Clipboard;
 use volya_engine::core::input::{
     Action, Event, GamepadAxis, GamepadButton, Input, Key, MouseButton, TouchButton, TouchPhase,
 };
@@ -156,9 +158,13 @@ pub fn end_frame() {
 /// Handles one input message from the page; ignored unless capturing.
 pub fn handle(message: &Array) -> Result<(), JsValue> {
     let event = decode(message)?;
+    let clipboard = clipboard(message);
     STATE.with(|s| {
         let mut s = s.borrow_mut();
         if s.capture {
+            if let Some(clipboard) = clipboard {
+                s.input.clipboard_read(clipboard);
+            }
             match event {
                 Some(events) => {
                     let events: Vec<Event> =
@@ -247,6 +253,18 @@ fn with_recent(s: &mut State, f: impl FnOnce(&mut Input)) {
         }
         s.recent.push_back((before + i as u64 + 1, action));
     }
+}
+
+/// The clipboard a key message carries, if any.
+fn clipboard(message: &Array) -> Option<Clipboard> {
+    if message.get(0).as_string()? != "key" {
+        return None;
+    }
+    Some(match message.get(3).as_string()?.as_str() {
+        "text" => Clipboard::Text(message.get(4).as_string().unwrap_or_default()),
+        "none" => Clipboard::NoText,
+        _ => Clipboard::Unavailable,
+    })
 }
 
 /// `None` for `blur`.

@@ -564,6 +564,13 @@ pub fn full_screen_request() -> i32 {
     engine::take_full_screen_request().map_or(-1, i32::from)
 }
 
+/// Whether the console is open: the page reads the clipboard for an
+/// Insert press then (#639).
+#[wasm_bindgen]
+pub fn console_open() -> bool {
+    engine::console_open()
+}
+
 /// Whether the game shows its mouse cursor: the page's touch is a
 /// touchpad then, elsewhere direct (#108).
 #[wasm_bindgen]

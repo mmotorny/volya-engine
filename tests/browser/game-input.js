@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Playing a level from the kept import, with every input path: the desktop's
-// full screen offer and Keyboard Lock, the keyboard (walk, jump, torch), the
-// touch controls and zoom guard, the inventory screen (pointer lock, mouse,
-// touch, touchpad), the touch stick, look, sprint lock, Jump, Crouch and
-// Menu, and a gamepad.
+// full screen offer and Keyboard Lock, the keyboard (walk, jump, torch, the
+// console and its clipboard), the touch controls and zoom guard, the
+// inventory screen (pointer lock, mouse, touch, touchpad), the touch stick,
+// look, sprint lock, Jump, Crouch and Menu, and a gamepad.
 
 import { assert, assertEqual, skip } from "./harness.js";
 import {
@@ -199,6 +199,46 @@ export const tests = {
     key("KeyL");
     await until((s) => !s.level.torch.on && s.level.lights.active === active, "L to switch it off");
     return `ran ${moved.toFixed(2)} m, jumped ${height.toFixed(2)} m`;
+  },
+
+  "keyboard: the console key opens the console over the level, keys type into it, Insert pastes the clipboard in order, Escape closes it": async () => {
+    needsGame();
+    if (coarse()) skip("desktop keyboard only: the touch way to the console is #642");
+    await until((s) => s.phase === "level" && !s.menu && !s.intro, "the level's controls");
+    const touchControls = document.getElementById("touch-controls");
+    const live = async (want) => {
+      for (let i = 0; i < 100 && (touchControls.dataset.live === "true") !== want; i++) await sleep(20);
+      assertEqual(touchControls.dataset.live === "true", want, `the level's controls live: ${want}`);
+    };
+    key("Backquote");
+    await until((s) => s.console.open, "the console key to open the console");
+    await live(false);
+    // The clipboard API is stubbed (headless Chrome asks no one): text,
+    // then a refused read.
+    const clipboard = Object.getOwnPropertyDescriptor(Navigator.prototype, "clipboard");
+    let read = async () => "Cfg_Load\tA";
+    Object.defineProperty(navigator, "clipboard", { value: { readText: () => read() }, configurable: true });
+    try {
+      key("KeyQ");
+      // Insert, then a key at once: it waits for the read.
+      key("Insert");
+      key("KeyW");
+      await until((s) => s.console.line === "cfg_load aw", "the pasted text, then w");
+      read = async () => {
+        throw new DOMException("refused", "NotAllowedError");
+      };
+      key("Insert");
+      key("KeyX");
+      await until((s) => s.console.line === "cfg_load awx", "a refused read to leave the line");
+    } finally {
+      delete navigator.clipboard;
+      if (clipboard) Object.defineProperty(Navigator.prototype, "clipboard", clipboard);
+    }
+    key("Escape");
+    const s = await until((s) => !s.console.open, "Escape to close the console");
+    assert(!s.menu, "Escape closed the console only");
+    await live(true);
+    return "opened, typed, pasted, closed";
   },
 
   "touch: the controls are drawn from the game's textures": async () => {
