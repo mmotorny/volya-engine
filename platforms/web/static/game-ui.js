@@ -12,8 +12,8 @@
 // menu's last item).
 //
 // Home holds Play only; secondary actions (an update offer, Settings) sit at
-// the bottom, away from it. Settings holds updates, the diagnostic
-// log and, in a danger zone, deleting the game's settings and saves
+// the bottom, away from it. Settings holds updates, the logs and,
+// in a danger zone, deleting the game's settings and saves
 // and deleting the import.
 
 import { SHARE_ICON, canOffer, chromium, install, installed, platform } from "./install.js";
@@ -560,37 +560,37 @@ function checkButton() {
   return button;
 }
 
-/** The downloaded log's file name: the app's version and today's date. */
+/** The downloaded logs' file name: the app's version and today's date. */
 export function logFileName(now = new Date()) {
   const two = (n) => String(n).padStart(2, "0");
   const date = `${now.getFullYear()}-${two(now.getMonth() + 1)}-${two(now.getDate())}`;
   const version = versionText().replace(" · ", "-").replace(/[^0-9A-Za-z+-]+/g, "-");
-  return `volya-engine-log-${date}-version-${version || BUILD}.json`;
+  return `volya-engine-logs-${date}-version-${version || BUILD}.zip`;
 }
 
 /**
- * Download diagnostic log: the engine assembles the log (a trace, JSON)
- * and the page saves it as one file. A failure shows in the button's place
- * for a moment.
+ * Download logs (#646): the engine puts the game's log and the performance
+ * log, each when there is one, in one .zip, which the page saves. A
+ * failure shows in the button's place for a moment.
  */
 function downloadButton() {
-  const label = "Download diagnostic log";
+  const label = "Download logs";
   const button = element("button", { className: "panel-action", textContent: label });
   button.setAttribute("aria-live", "polite");
   button.addEventListener("click", async () => {
     button.disabled = true;
     button.textContent = "Preparing…";
     try {
-      const { text } = await call("diagnostic_log");
-      const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+      const { zip } = await call("logs");
+      const url = URL.createObjectURL(new Blob([zip], { type: "application/zip" }));
       const link = element("a", { href: url, download: logFileName() });
       link.click();
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
       button.disabled = false;
       button.textContent = label;
     } catch (error) {
-      console.warn(`diagnostic log: ${error.message}`);
-      button.textContent = "Couldn't read the log";
+      console.warn(`logs: ${error.message}`);
+      button.textContent = "Couldn't read the logs";
       if (globalThis.volyaHoldCheckResult) return;
       await new Promise((resolve) => setTimeout(resolve, CHECK_RESULT_MS));
       button.disabled = false;
@@ -601,60 +601,94 @@ function downloadButton() {
 }
 
 /**
- * The diagnostic log (#346): off by default; while on, the app records its
- * performance and errors here, downloadable while there is a log. Turning
- * it off deletes the log (#536, for privacy), after a confirmation that
- * leaves the download offered. A log left while off (not deleted, or kept
- * by earlier versions) is offered with Delete diagnostic log.
+ * Logs (#646): the game's log, always kept as the original keeps it, and
+ * the performance log (#346), off by default; Download logs while either
+ * exists, Delete logs deletes both. Turning the performance log off
+ * deletes it (#536, for privacy), after a confirmation that leaves the
+ * download offered; deleting the logs while it is on starts it anew.
+ * `refresh()` reads their state again (after Delete settings and saves).
  */
-async function diagnosticsPanel() {
-  const log = await call("diagnostic_log_status").catch(() => null);
+async function logsPanel() {
   const on = element("input", { type: "checkbox", checked: diagnostics.enabled() });
   const download = downloadButton();
-  const remove = element("button", { className: "panel-action danger", textContent: "Delete diagnostic log" });
-  const problem = element("p", { className: "note error", textContent: "Couldn't delete the diagnostic log.", hidden: true });
-  const reflect = (status) => {
-    const left = status?.entries || status?.deleted === false;
-    download.hidden = !status?.entries;
-    remove.hidden = diagnostics.enabled() || !left;
-    problem.hidden = status?.deleted !== false;
+  const remove = element("button", { className: "panel-action danger", textContent: "Delete logs" });
+  const problem = element("p", { className: "note error", hidden: true });
+  let gameLog = false;
+  let trace = null;
+  /** Shows what there is: `failed`, the text of a deletion that failed. */
+  const reflect = (failed = null) => {
+    download.hidden = !(gameLog || trace?.entries);
+    remove.hidden = download.hidden && trace?.deleted !== false;
+    problem.hidden = !failed;
+    problem.textContent = failed ?? "";
   };
-  reflect(log);
-  /** Asks first; then turns the log off (if on) and deletes it. */
-  const deleteLog = async (question, actionLabel, after) => {
-    const ask = confirmation(question, "Download it first to keep a copy.", actionLabel);
+  const read = async () => {
+    trace = await call("diagnostic_log_status").catch(() => null);
+    gameLog = (await call("game_log_status").catch(() => null))?.present ?? false;
+  };
+  await read();
+  reflect(trace?.deleted === false ? "Couldn't delete the performance log." : null);
+  /** Asks first; then runs `action`, which answers what failed, if anything. */
+  const confirmThen = async (question, detail, actionLabel, after, action) => {
+    const ask = confirmation(question, detail, actionLabel);
     on.disabled = true;
     remove.hidden = true;
     problem.hidden = true;
     panel.append(ask.element);
     ask.focus();
     const confirmed = await ask.result;
+    let failed = null;
     if (confirmed) {
       ask.busy();
-      try {
-        const status = await diagnostics.setEnabled(false, call);
-        on.checked = false;
-        reflect(status);
-      } catch (error) {
-        console.warn(`diagnostic log: ${error.message}`);
-        reflect({ entries: !download.hidden, deleted: false });
-      }
-    } else reflect(await call("diagnostic_log_status").catch(() => null));
+      failed = await action();
+    } else await read();
+    reflect(failed);
     ask.element.remove();
     on.disabled = false;
     (confirmed || !after.isConnected || after.hidden ? on : after).focus();
   };
-  remove.addEventListener("click", () => deleteLog("Delete the diagnostic log?", "Delete", remove));
+  /** Turns the performance log off, deleting it: what failed, if anything. */
+  const turnOff = async () => {
+    try {
+      trace = await diagnostics.setEnabled(false, call);
+    } catch (error) {
+      console.warn(`performance log: ${error.message}`);
+      trace = { ...trace, deleted: false };
+    }
+    on.checked = diagnostics.enabled();
+    return trace?.deleted === false ? "Couldn't delete the performance log." : null;
+  };
+  remove.addEventListener("click", () =>
+    confirmThen("Delete the logs?", "Download them first to keep a copy.", "Delete", remove, async () => {
+      let ok = true;
+      try {
+        await call("forget_logs");
+      } catch (error) {
+        console.warn(`game's log: ${error.message}`);
+        ok = false;
+      }
+      const recording = diagnostics.enabled();
+      if (recording || trace?.entries || trace?.deleted === false) {
+        ok = (await turnOff()) === null && ok;
+        // Kept on: a new log starts.
+        if (recording && ok) trace = await diagnostics.setEnabled(true, call).catch(() => trace);
+        on.checked = diagnostics.enabled();
+      }
+      gameLog = (await call("game_log_status").catch(() => null))?.present ?? false;
+      return ok ? null : "Couldn't delete the logs.";
+    }),
+  );
   on.addEventListener("change", async () => {
     if (!on.checked) {
       // Still on until confirmed.
       on.checked = true;
-      await deleteLog("Turn off the diagnostic log and delete it?", "Turn off and delete", on);
+      await confirmThen("Turn off the performance log and delete it?", "Download the logs first to keep a copy.", "Turn off and delete", on, turnOff);
       return;
     }
     on.disabled = true;
     try {
-      reflect(await diagnostics.setEnabled(true, call));
+      trace = await diagnostics.setEnabled(true, call);
+      reflect();
     } finally {
       on.disabled = false;
     }
@@ -662,7 +696,7 @@ async function diagnosticsPanel() {
   const panel = element(
     "div",
     { className: "panel" },
-    element("p", { className: "label", textContent: "Diagnostics" }),
+    element("p", { className: "label", textContent: "Logs" }),
     element(
       "label",
       { className: "switch" },
@@ -670,7 +704,7 @@ async function diagnosticsPanel() {
       element(
         "span",
         {},
-        element("strong", { textContent: "Keep a diagnostic log" }),
+        element("strong", { textContent: "Keep a performance log" }),
         element("small", { textContent: "Records the app's performance and errors on this device, up to 2 MB, for reporting problems." }),
       ),
     ),
@@ -678,6 +712,11 @@ async function diagnosticsPanel() {
     remove,
     problem,
   );
+  panel.refresh = async () => {
+    await read();
+    reflect();
+  };
+  panel.gameLog = () => gameLog;
   return panel;
 }
 
@@ -718,15 +757,17 @@ function confirmation(question, detail, actionLabel) {
 
 /**
  * Danger zone: Delete settings and saves (#535): the engine's `user.ltx`
- * and `savedgames/`, after a confirmation; the game then starts from the
- * installer's defaults. Settings shows only while no game runs.
+ * and `savedgames/`, and the game's log (`logs/`, #646), after a
+ * confirmation; the game then starts from the installer's defaults.
+ * Settings shows only while no game runs. `deleted` runs after.
  */
-function userDataSection() {
+function userDataSection(gameLog, deleted) {
   const title = "Delete settings and saves";
   const button = element("button", { className: "danger filled", textContent: title });
+  const what = gameLog ? "settings, saves and log" : "settings and saves";
   const note = element("p", {
     className: "note",
-    textContent: "Deletes the game's settings and saves from this app's storage. The game then starts with its default settings.",
+    textContent: `Deletes the game's ${what} from this app's storage. The game then starts with its default settings.`,
   });
   const section = element("div", { className: "danger-item" }, element("p", { className: "value", textContent: title }), note, button);
   button.addEventListener("click", async () => {
@@ -741,6 +782,7 @@ function userDataSection() {
     ask.busy();
     try {
       await call("forget_user_data");
+      await deleted();
       const done = element("p", { className: "value", textContent: "Settings and saves deleted", tabIndex: -1 });
       done.setAttribute("role", "status");
       section.replaceChildren(done);
@@ -796,13 +838,13 @@ function importSection(status, userData) {
 }
 
 /**
- * Settings: updates, the diagnostic log and, in a danger zone, the
+ * Settings: updates, the logs and, in a danger zone, the
  * player's settings and saves and the game files.
  */
 async function showSettings() {
   const status = await call("game_status");
   const userData = (await call("user_data_status").catch(() => null))?.present;
-  const diagnosticsSection = await diagnosticsPanel();
+  const logs = await logsPanel();
   const back = element("button", { className: "back", textContent: "‹ Back" });
   back.addEventListener("click", () => navigate("back", refresh));
 
@@ -824,13 +866,13 @@ async function showSettings() {
         : null,
       check,
     ),
-    diagnosticsSection,
+    logs,
     status.imported || userData
       ? element(
           "div",
           { className: "panel danger-zone" },
           element("p", { className: "label", textContent: "Danger zone" }),
-          userData ? userDataSection() : null,
+          userData ? userDataSection(logs.gameLog(), logs.refresh) : null,
           status.imported ? importSection(status, userData) : null,
         )
       : null,

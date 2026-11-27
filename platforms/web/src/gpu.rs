@@ -991,10 +991,8 @@ pub async fn render_game_selftest(
 }
 
 /// `bytes` as a base64 JSON string.
-#[cfg(feature = "test-ops")]
-struct Base64Value<'a>(&'a [u8]);
+pub(crate) struct Base64Value<'a>(pub(crate) &'a [u8]);
 
-#[cfg(feature = "test-ops")]
 impl Serialize for Base64Value<'_> {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         base64(self.0, s)

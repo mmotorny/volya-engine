@@ -19,18 +19,66 @@ async function until(ok, what, ms = 5000) {
   }
 }
 
-/** The diagnostic log's Download button in Settings. */
-const logDownload = () => [...document.querySelectorAll("#game .panel-action")].find((b) => /diagnostic log|Preparing|log$/.test(b.textContent));
+/** The logs' Download button in Settings. */
+const logDownload = () => [...document.querySelectorAll("#game .panel-action")].find((b) => /^Download logs$|Preparing|logs$/.test(b.textContent));
 
-/** Opens Settings; its diagnostic log check box. */
+/** Opens Settings; its performance log check box. */
 async function openSettingsLog() {
   await volya.showSettings();
-  const label = [...document.querySelectorAll("#game .switch")].find((l) => l.textContent.includes("diagnostic log"));
-  assert(label, "no diagnostic log setting");
+  const label = [...document.querySelectorAll("#game .switch")].find((l) => l.textContent.includes("performance log"));
+  assert(label, "no performance log setting");
   return label.querySelector("input");
 }
 
-/** Presses Download diagnostic log; the saved file's name and its trace. */
+/**
+ * The files of a ZIP archive whose files are stored (APPNOTE.TXT): name to
+ * bytes, read through its central directory, each checked against its
+ * local header.
+ */
+function unzip(bytes) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const end = bytes.length - 22;
+  assertEqual(view.getUint32(end, true), 0x06054b50, "the archive's end record");
+  const files = new Map();
+  let at = view.getUint32(end + 16, true);
+  for (let i = 0; i < view.getUint16(end + 10, true); i++) {
+    assertEqual(view.getUint32(at, true), 0x02014b50, "a central directory entry");
+    assertEqual(view.getUint16(at + 10, true), 0, "stored");
+    const size = view.getUint32(at + 20, true);
+    const nameLength = view.getUint16(at + 28, true);
+    const name = new TextDecoder().decode(bytes.subarray(at + 46, at + 46 + nameLength));
+    const local = view.getUint32(at + 42, true);
+    assertEqual(view.getUint32(local, true), 0x04034b50, "a local header");
+    const data = local + 30 + view.getUint16(local + 26, true) + view.getUint16(local + 28, true);
+    files.set(name, bytes.subarray(data, data + size));
+    at += 46 + nameLength + view.getUint16(at + 30, true) + view.getUint16(at + 32, true);
+  }
+  return files;
+}
+
+/** The game's log file stored now, or null. */
+async function storedGameLog() {
+  try {
+    const dir = await (await (await navigator.storage.getDirectory()).getDirectoryHandle("volya-engine")).getDirectoryHandle("logs");
+    return new Uint8Array(await (await (await dir.getFileHandle("xray_player.log")).getFile()).arrayBuffer());
+  } catch {
+    return null;
+  }
+}
+
+/** Stores `text` as the game's log file. */
+async function putGameLog(text) {
+  const root = await (await navigator.storage.getDirectory()).getDirectoryHandle("volya-engine", { create: true });
+  const dir = await root.getDirectoryHandle("logs", { create: true });
+  const writable = await (await dir.getFileHandle("xray_player.log", { create: true })).createWritable();
+  await writable.write(text);
+  await writable.close();
+}
+
+/**
+ * Presses Download logs; the saved file's name, the files in it, and the
+ * performance log's trace (if it holds one).
+ */
 async function downloadLog() {
   const click = HTMLAnchorElement.prototype.click;
   let link = null;
@@ -43,10 +91,12 @@ async function downloadLog() {
   } finally {
     HTMLAnchorElement.prototype.click = click;
   }
-  const text = await (await fetch(link.href)).text();
-  const trace = JSON.parse(text);
-  checkTraceFormat(trace);
-  return { name: link.download, trace };
+  const files = unzip(new Uint8Array(await (await fetch(link.href)).arrayBuffer()));
+  assert([...files.keys()].every((n) => n === "xray_player.log" || n === "performance-log.json"), `files ${[...files.keys()]}`);
+  const json = files.get("performance-log.json");
+  const trace = json ? JSON.parse(new TextDecoder().decode(json)) : null;
+  if (trace) checkTraceFormat(trace);
+  return { name: link.download, files, trace };
 }
 
 /**
@@ -600,12 +650,18 @@ export const tests = {
     const button = (label) => [...document.querySelectorAll("#game button")].find((b) => b.textContent === label);
     await put(dir, "user.ltx", "bind forward kT\r\n");
     await put(await dir.getDirectoryHandle("savedgames", { create: true }), "test.sav", "test");
+    await put(await dir.getDirectoryHandle("logs", { create: true }), "xray_player.log", "line\r\n");
     const storage = JSON.stringify(Object.entries(localStorage).sort());
     const cached = (await caches.keys()).sort().join();
-    const others = (await names()).filter((n) => n !== "user.ltx" && n !== "savedgames");
+    const others = (await names()).filter((n) => !["user.ltx", "savedgames", "logs"].includes(n));
     await volya.showSettings();
     const remove = button("Delete settings and saves");
     assert(remove?.closest(".danger-zone"), "no Delete settings and saves in the danger zone");
+    assertEqual(
+      remove.closest(".danger-item").querySelector(".note").textContent,
+      "Deletes the game's settings, saves and log from this app's storage. The game then starts with its default settings.",
+      "the note",
+    );
     // Asked first; Escape (the keyboard) cancels.
     remove.click();
     const ask = document.querySelector("#game .confirm");
@@ -622,9 +678,13 @@ export const tests = {
     assertEqual(await volya.call("user_config"), null, "a user configuration is still read");
     assertEqual(JSON.stringify(Object.entries(localStorage).sort()), storage, "the shell's preferences changed");
     assertEqual((await caches.keys()).sort().join(), cached, "the offline copy changed");
-    // Nothing left to delete: not offered.
+    // Nothing left to delete: not offered, nor for the game's log alone.
     await volya.showSettings();
     assert(!button("Delete settings and saves"), "offered with nothing stored");
+    await put(await dir.getDirectoryHandle("logs", { create: true }), "xray_player.log", "line\r\n");
+    await volya.showSettings();
+    assert(!button("Delete settings and saves"), "offered for the game's log alone");
+    await dir.removeEntry("logs", { recursive: true });
   },
 
   "Delete game files: asks in the page, Escape cancels, a failure is told": async () => {
@@ -807,7 +867,7 @@ export const tests = {
     const toggle = await openSettingsLog();
     assert(!toggle.checked, "the check box is ticked by default");
     const label = toggle.closest("label").querySelector("strong").textContent;
-    assertEqual(label, "Keep a diagnostic log", "label");
+    assertEqual(label, "Keep a performance log", "label");
     const off = await volya.call("debug_diagnostics_bench", { frames: 20000 });
     assert(!off.on, "on");
     // The size of the kept log doesn't change while off.
@@ -817,10 +877,10 @@ export const tests = {
     return `recording a frame's spans while off: ${off.us_per_frame.toFixed(3)} µs`;
   },
 
-  "diagnostic log: on, it records; the download is one trace file with its sections": async () => {
+  "diagnostic log: on, it records; Download logs saves a .zip with its trace and the game's log": async () => {
     const toggle = await openSettingsLog();
     toggle.click();
-    await until(() => !logDownload()?.hidden, "no Download diagnostic log once on");
+    await until(() => !logDownload()?.hidden, "no Download logs once on");
     assert(volya.diagnostics.enabled(), "the setting isn't on");
     assertEqual(localStorage.getItem("volya-engine.diagnostic-log"), "on", "setting not kept");
     const on = await volya.call("debug_diagnostics_bench", { frames: 20000 });
@@ -832,8 +892,9 @@ export const tests = {
     volya.diagnostics.metric("test.page_ms", 2);
     volya.diagnostics.metric("test.page_ms", 4);
     await sleep(1300);
-    const { name, trace } = await downloadLog();
-    assert(/^volya-engine-log-\d{4}-\d\d-\d\d-version-[0-9A-Za-z+-]+\.json$/.test(name), `file name ${name}`);
+    const { name, files, trace } = await downloadLog();
+    assert(/^volya-engine-logs-\d{4}-\d\d-\d\d-version-[0-9A-Za-z+-]+\.zip$/.test(name), `file name ${name}`);
+    assertEqual(files.has("xray_player.log"), (await volya.call("game_log_status")).present, "the game's log in the archive");
     const events = trace.traceEvents;
     const pid = events.findLast((e) => e.name === "session").pid;
     const mine = events.filter((e) => e.pid === pid);
@@ -939,7 +1000,7 @@ export const tests = {
     // Asked first; Escape (the keyboard) cancels and it stays on.
     toggle.click();
     let ask = document.querySelector("#game .confirm");
-    assertEqual(ask?.querySelector("strong").textContent, "Turn off the diagnostic log and delete it?", "the question");
+    assertEqual(ask?.querySelector("strong").textContent, "Turn off the performance log and delete it?", "the question");
     assert(toggle.checked && volya.diagnostics.enabled(), "off before confirming");
     assertEqual(document.activeElement?.textContent, "Cancel", "focus on Cancel");
     document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
@@ -957,7 +1018,8 @@ export const tests = {
     assert(!toggle.checked && !volya.diagnostics.enabled(), "still on");
     assertEqual(localStorage.getItem("volya-engine.diagnostic-log"), null, "setting not cleared");
     assertEqual(localStorage.getItem(END_KEY), null, "the kept end is left");
-    assert(logDownload().hidden && !button("Delete diagnostic log"), "a log is still offered");
+    const gameLog = (await volya.call("game_log_status")).present;
+    assert(logDownload().hidden !== gameLog && Boolean(button("Delete logs")) === gameLog, "the performance log is still offered");
     const status = await volya.call("diagnostic_log_status");
     assertEqual([status.on, status.entries, status.bytes], [false, false, 0], "the log's status");
     const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle("volya-engine");
@@ -966,7 +1028,7 @@ export const tests = {
     assert(!names.includes("diagnostic-log"), "its files are left");
     // Settings again: nothing offered.
     toggle = await openSettingsLog();
-    assert(!toggle.checked && logDownload().hidden, "a deleted log offered");
+    assert(!toggle.checked && logDownload().hidden !== gameLog, "a deleted log offered");
   },
 
   "diagnostic log: it survives a reload, in a new session; a log left while off is offered and deleted": async () => {
@@ -1021,15 +1083,39 @@ export const tests = {
     await until(async () => (await volya.call("diagnostic_log_status")).entries, "the copy's log isn't left", 20000);
     const toggle = await openSettingsLog();
     assert(!toggle.checked, "on");
-    const remove = [...document.querySelectorAll("#game button")].find((b) => b.textContent === "Delete diagnostic log");
+    const remove = [...document.querySelectorAll("#game button")].find((b) => b.textContent === "Delete logs");
     assert(remove && !remove.hidden && !logDownload().hidden, "the left log isn't offered");
     remove.click();
-    assertEqual(document.querySelector("#game .confirm strong")?.textContent, "Delete the diagnostic log?", "the question");
+    assertEqual(document.querySelector("#game .confirm strong")?.textContent, "Delete the logs?", "the question");
     [...document.querySelectorAll("#game .confirm button")].find((b) => b.textContent === "Delete").click();
     await until(() => !document.querySelector("#game .confirm"), "never deleted");
     assert(remove.hidden && logDownload().hidden, "still offered");
     const status = await volya.call("diagnostic_log_status");
     assertEqual([status.on, status.entries], [false, false], "the log's status");
+    assertEqual(await storedGameLog(), null, "the game's log is left");
+  },
+
+  "the game's log alone: offered in a .zip with the performance log off, and deleted": async () => {
+    await volya.diagnostics.setEnabled(false, volya.call);
+    const text = "line\r\n \r\nя?\r\n";
+    await putGameLog(text);
+    const toggle = await openSettingsLog();
+    assert(!toggle.checked, "the performance log is on");
+    const button = (label) => [...document.querySelectorAll("#game button")].find((b) => b.textContent === label && !b.hidden);
+    assert(!logDownload().hidden && button("Delete logs"), "the game's log isn't offered");
+    const { files, trace } = await downloadLog();
+    assertEqual([[...files.keys()].join(), trace], ["xray_player.log", null], "the archive's files");
+    assertEqual(new TextDecoder().decode(files.get("xray_player.log")), text, "the game's log, byte for byte");
+    // Asked first; then deleted.
+    button("Delete logs").click();
+    assertEqual(document.querySelector("#game .confirm strong")?.textContent, "Delete the logs?", "the question");
+    assertEqual(document.activeElement?.textContent, "Cancel", "focus on Cancel");
+    [...document.querySelectorAll("#game .confirm button")].find((b) => b.textContent === "Delete").click();
+    await until(() => !document.querySelector("#game .confirm"), "never deleted");
+    assert(logDownload().hidden && !button("Delete logs"), "still offered");
+    assertEqual(await storedGameLog(), null, "the file is left");
+    assert(!(await volya.call("game_log_status")).present, "still reported");
+    assert(!toggle.checked, "the performance log turned on");
   },
 
   "diagnostic log: a lost GPU device and each reload end the session with engine.end, stored": async () => {

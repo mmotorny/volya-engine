@@ -588,6 +588,49 @@ pub fn text_field() -> Option<Vec<f32>> {
         .map(|([x, y, w, h], focused, over)| vec![x, y, w, h, flag(focused), flag(over)])
 }
 
+/// The `logs` op: one ZIP archive (stored, not compressed) of the game's
+/// log file (`xray_player.log`) and the diagnostic log's trace
+/// (`performance-log.json`), each when there is one, as `{zip_base64}`
+/// (the worker hands the page bytes, `zip`). Fails when there is neither.
+async fn logs() -> Result<serde_json::Value, JsValue> {
+    use volya_engine::formats::zip;
+    let game_log = game::read_log_file().await?;
+    let trace = match diagnostics::status().await["entries"].as_bool() {
+        Some(true) => diagnostics::trace(false).await?["text"]
+            .as_str()
+            .map(str::to_owned),
+        _ => None,
+    };
+    let mut entries = Vec::new();
+    if let Some(bytes) = &game_log {
+        entries.push(zip::Entry {
+            name: game::LOG_FILE,
+            bytes,
+        });
+    }
+    if let Some(text) = &trace {
+        entries.push(zip::Entry {
+            name: "performance-log.json",
+            bytes: text.as_bytes(),
+        });
+    }
+    if entries.is_empty() {
+        return Err(JsValue::from_str("no logs here"));
+    }
+    // The browser's local time.
+    let now = js_sys::Date::new_0();
+    let modified = zip::Modified {
+        year: now.get_full_year() as u16,
+        month: (now.get_month() + 1) as u8,
+        day: now.get_date() as u8,
+        hour: now.get_hours() as u8,
+        minute: now.get_minutes() as u8,
+        second: now.get_seconds() as u8,
+    };
+    let bytes = zip::store(&entries, modified);
+    Ok(serde_json::json!({ "zip_base64": gpu::Base64Value(&bytes) }))
+}
+
 /// Engine interface for the page, tests and debugging: runs `op` with JSON
 /// `args` and returns its JSON result.
 #[wasm_bindgen]
@@ -656,6 +699,11 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
             to_json(&diagnostics::trace(stored_only.unwrap_or(false)).await?)
         }
         "diagnostic_log_status" => to_json(&diagnostics::status().await),
+        "game_log_status" => {
+            to_json(&serde_json::json!({ "present": game::has_log_file().await? }))
+        }
+        "logs" => to_json(&logs().await?),
+        "forget_logs" => game::forget_logs().await.map(|()| "null".into()),
         // `{on, session, previous_end}`: the player's setting, what the
         // page tells of the session and how an earlier session's page
         // ended (diagnostics.js).

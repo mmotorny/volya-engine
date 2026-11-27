@@ -310,6 +310,27 @@ export const tests = {
     assertEqual([end?.args.reason, end?.args.message], ["quit", "left the game"], "the end in the diagnostic log");
   },
 
+  "quitting stores the game's log file, logs/xray_player.log, every line ended by CR LF": async () => {
+    needsGame();
+    const read = async () => {
+      try {
+        const dir = await (await (await navigator.storage.getDirectory()).getDirectoryHandle("volya-engine")).getDirectoryHandle("logs");
+        return new Uint8Array(await (await (await dir.getFileHandle("xray_player.log")).getFile()).arrayBuffer());
+      } catch {
+        return null;
+      }
+    };
+    let bytes = await read();
+    for (const end = performance.now() + 5000; !(bytes?.length > 0); bytes = await read()) {
+      assert(performance.now() < end, "no log file stored at the quit");
+      await sleep(30);
+    }
+    assertEqual([bytes.at(-2), bytes.at(-1)], [13, 10], "the last line's end");
+    for (let i = 0; i < bytes.length; i++) if (bytes[i] === 10) assertEqual(bytes[i - 1], 13, `a bare line feed at ${i}`);
+    assert((await volya.call("game_log_status")).present, "not reported as stored");
+    return `${bytes.length} bytes`;
+  },
+
   "the diagnostic log holds the games, their levels and their frames, after the game ended": async () => {
     needsGame();
     const { text } = await volya.call("diagnostic_log");

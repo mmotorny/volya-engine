@@ -40,6 +40,7 @@ pub mod text;
 pub mod ui;
 pub mod video;
 pub mod xml;
+pub mod zip;
 
 #[cfg(test)]
 fn md5_hex(data: &[u8]) -> String {

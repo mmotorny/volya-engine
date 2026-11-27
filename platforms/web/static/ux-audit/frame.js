@@ -42,9 +42,11 @@ globalThis.volyaChromium = !device.touch;
 globalThis.volyaInstalled = state.tab ? false : true;
 if (state.tab && !device.touch) globalThis.volyaInstallOffer = { prompt: async () => {}, userChoice: Promise.resolve({ outcome: "dismissed" }) };
 
-// The diagnostic log's setting and whether there is a log (#346).
+// The performance log's setting and whether there is one (#346), and
+// whether the game's log is kept (#646: once the game has run).
 const log = { on: false, entries: false, ...state.log };
 globalThis.volyaDiagnostics = log.on;
+let gameLog = state.gameLog ?? true;
 
 // Whether an import finished here before (the localStorage mark in game-ui.js).
 globalThis.volyaImportedBefore = Boolean(state.deleted);
@@ -72,10 +74,19 @@ const call = async (op, args) => {
       // Off deletes the log, unless the state says it can't.
       if (args?.on) return log;
       return { on: false, entries: log.deleteFails ? log.entries : false, deleted: !log.deleteFails };
-    case "diagnostic_log":
+    case "game_log_status":
+      return { present: gameLog };
+    case "forget_logs":
+      if (state.forgetLogsFails) throw new Error("the game's log is held by another copy of the app");
+      gameLog = false;
+      return null;
+    case "forget_user_data":
+      gameLog = false;
+      return null;
+    case "logs":
       // Preparing never settles.
       if (log.download === "preparing") return new Promise(() => {});
-      throw new Error("the diagnostic log is held by another copy of the app");
+      throw new Error("the logs are held by another copy of the app");
     case "game_status":
       if (state.game instanceof Error) throw state.game;
       return state.game;
@@ -187,10 +198,10 @@ if (state.level) {
     [...document.querySelectorAll("#game button")].find((b) => b.textContent === "Check for updates").click();
     await new Promise((resolve) => setTimeout(resolve));
   }
-  // Download diagnostic log pressed, its outcome held on screen.
+  // Download logs pressed, its outcome held on screen.
   if (state.log?.download) {
     globalThis.volyaHoldCheckResult = true;
-    [...document.querySelectorAll("#game button")].find((b) => b.textContent === "Download diagnostic log").click();
+    [...document.querySelectorAll("#game button")].find((b) => b.textContent === "Download logs").click();
     await new Promise((resolve) => setTimeout(resolve));
   }
   // Buttons pressed in turn, by their text (a confirmation's, say), or a

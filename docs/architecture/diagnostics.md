@@ -1,6 +1,6 @@
 # Diagnostic log
 
-For problems seen only on a player's device (#346). It is Volya Engine's own and separate from the original's log (docs/behavior/console-log.md, [screens.md](screens.md#settings)): no console log line enters it, and it writes none to the console log. Settings has "Keep a diagnostic log" (off by default; localStorage `volya-engine.diagnostic-log`) and "Download diagnostic log", shown while a log exists. Turning it off deletes the log (decided by the user, for privacy, #536): first it asks, in place of the switch, with the download still offered; then the engine drops the events waiting, closes the store and removes `diagnostic-log/`, and the page removes the kept end (`volya-engine.diagnostic-log-end`). A log left while off (another copy of the app held its files, or an earlier version kept it) is offered with the download and "Delete diagnostic log", which asks the same way; "Couldn't delete the diagnostic log" shows when its files stay (`diagnostics_set` answers `deleted`). Technical only: level and file names and error messages are kept whole, as they aren't personal data and the check box is the consent (decided by the user, #356); no per-voice events.
+For problems seen only on a player's device (#346). It is Volya Engine's own and separate from the original's log (docs/behavior/console-log.md, [screens.md](screens.md#settings)): no console log line enters it, and it writes none to the console log. Settings' Logs panel (decided by the user, #646) has "Keep a performance log", this log's switch (off by default; localStorage `volya-engine.diagnostic-log`), "Download logs", shown while it or the game's log file ([screens.md](screens.md#settings)) exists, and "Delete logs", which deletes both after asking (with the switch on, a new log starts). The download is one ZIP archive, `volya-engine-logs-<date>-version-<version>.zip`, its files stored (written by hand, `volya-engine-formats::zip`; the `logs` op): `xray_player.log`, the game's log byte for byte, and `performance-log.json`, this log's trace, each when there is one. Turning the switch off deletes this log (decided by the user, for privacy, #536): first it asks, in place of the switch, with the download still offered; then the engine drops the events waiting, closes the store and removes `diagnostic-log/`, and the page removes the kept end (`volya-engine.diagnostic-log-end`). A log left while off (another copy of the app held its files, or an earlier version kept it) is offered with the download and "Delete logs"; "Couldn't delete the performance log" (turning off) or "Couldn't delete the logs" shows when files stay (`diagnostics_set` answers `deleted`). Technical only: level and file names and error messages are kept whole, as they aren't personal data and the check box is the consent (decided by the user, #356); no per-voice events.
 
 ## Against the game's log
 
@@ -27,14 +27,14 @@ A line the game's log gains joins this review: what it records leaves the diagno
 
 ## Format
 
-Chrome's Trace Event Format, JSON Object Format (`{"traceEvents": [...], "displayTimeUnit": "ms", "otherData": {...}}`, built by `Log::trace`), so Perfetto and `chrome://tracing` open it. File `volya-engine-log-<date>-version-<version>.json`.
+Chrome's Trace Event Format, JSON Object Format (`{"traceEvents": [...], "displayTimeUnit": "ms", "otherData": {...}}`, built by `Log::trace`), so Perfetto and `chrome://tracing` open it. In the download, `performance-log.json`.
 
 - A session is a process: `pid` its start in Unix seconds, `process_name` "Volya Engine <version>". Threads: the engine worker 1, the page 2, the audio worklet 3.
 - Every event carries the version's commit in `cat` (`volya,v:<commit>`). `ts` is microseconds since the Unix epoch (`performance.timeOrigin + now()`), so sessions line up.
 - A root span is written whole, as a complete event (`X`) with the spans inside it, only when it lasts at least 50 ms (`frame`) or 10 ms (anything else).
 - Per period, every span's mean, maximum and count are series of one counter event (`time ms`), and metrics' min, mean and max and counts' sums series of another (`metrics`): one event's overhead instead of one per series.
 - Errors and state changes are instants (`i`), at most 20 per name per period; the excess is reported as one `events over the limit` instant.
-- Checked: Perfetto's trace processor loads a `Log::trace` (`VOLYA_DUMP_TRACE` in the core tests), and the `smoke` suite checks a downloaded file against the format's documented fields.
+- Checked: Perfetto's trace processor loads a `Log::trace` (`VOLYA_DUMP_TRACE` in the core tests), and the `smoke` suite checks a downloaded archive (its entries read back through its central directory) and its trace against the format's documented fields.
 
 ## Recording
 
