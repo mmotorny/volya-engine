@@ -33,18 +33,62 @@ export const ONLY = [
   "bin/XR_3DA.exe",
   "__support/userdocs/user.ltx",
 ];
-// The wasm heap never shrinks: its size after a New Game is the page's for
-// good. Measured at 98 MiB in headless Chrome after one and after two New
-// Games (#79; 193 and 199 MiB before), and at 107–110 MiB after the first in
-// the iOS Simulator, drawing through WebGL 2 (#184: the level's geometry
-// uploaded a few pieces per task turn); a regression past
-// this is reported as an "OVER BUDGET" note, not failed: budgets are
-// measured and tracked in issues, never a release gate (AGENTS.md). The
-// audio worker's instance (#354) counts too (`audio_heap_bytes`, which
-// `heap` adds).
-export const WASM_HEAP_CAP = 110 * 2 ** 20;
-/** Both wasm instances' heaps in `level_stats`: the engine's and the audio worker's. */
-export const heap = (stats) => stats.wasm_heap_bytes + stats.audio_heap_bytes;
+// The original's memory figures, K (docs/architecture/memory.md, The
+// original: its New Game of l01_escape under Wine, #667): what each caption
+// keeps (its `* phase cmem` growth: the next caption's figure less its own,
+// the load's end for the last) and the end-of-load h and t. They are
+// budgets with no headroom: every figure of ours above one is an excess to
+// file as an issue, reported, never failed (AGENTS.md).
+export const ORIGINAL = {
+  captions: {
+    st_prefetching_objects: 85047,
+    st_server_starting: 205,
+    st_loading_alife_simulator: 0,
+    st_creating_new_game: 32164,
+    st_server_connecting: 0,
+    st_client_connecting_to: 8,
+    st_opening_stream: 0,
+    st_loading_cform: 72669,
+    st_loading_shaders: 1400,
+    st_loading_geometry: 353,
+    st_loading_spatial_db: 4297,
+    st_loading_details: 10,
+    st_loading_sectors_portals: 143,
+    st_loading_ai_objects: 0,
+    st_client_spawning: 4708,
+    st_loading_textures: 1,
+    st_client_synchronising: 0,
+  },
+  h: 227120,
+  t: 260798,
+  // Reported beside, not budgets (console-diagnostics.md 2.1's example).
+  titleMenuH: 26449,
+};
+const kib = (bytes) => Math.floor(bytes / 1024);
+/**
+ * The latest load's figures against the original's, from the `load_memory`
+ * op: each caption's growth of `* phase cmem` (K, ours/the original's), the
+ * end-of-load h and t, then every excess as an "EXCESS" note.
+ */
+export async function againstOriginal() {
+  const { load, now } = await volya.call("load_memory");
+  assert(load?.end, "the load has not ended");
+  const marks = load.captions.map(([caption, cmem]) => [caption, kib(cmem)]);
+  const excesses = [];
+  const kept = marks.map(([caption, cmem], i) => {
+    const grown = (marks[i + 1]?.[1] ?? kib(load.end.cmem)) - cmem;
+    const original = ORIGINAL.captions[caption];
+    if (grown > original) excesses.push(`${caption} keeps ${grown} K, the original ${original} K`);
+    return `${caption} ${grown}/${original}`;
+  });
+  const [h, t] = [kib(load.end.crt_heap), kib(load.end.textures)];
+  if (h > ORIGINAL.h) excesses.push(`h ${h} K at the load's end, the original ${ORIGINAL.h} K`);
+  if (t > ORIGINAL.t) excesses.push(`t ${t} K at the load's end, the original ${ORIGINAL.t} K`);
+  const excess = excesses.length ? `EXCESS over the original's (to file): ${excesses.join("; ")}; ` : "";
+  return `${excess}kept by caption (K, ours/the original's): ${kept.join(", ")}; at the load's end h ${h}/${ORIGINAL.h} K, t ${t}/${ORIGINAL.t} K; h now ${kib(now.crt_heap)} K`;
+}
+/** h now (K), from the `load_memory` op. */
+export const hNow = async () => kib((await volya.call("load_memory")).now.crt_heap);
 // The wasm heap at the end of the last frame under each caption, MiB, from
 // a `heap_log`; in test builds with the most it held live meanwhile
 // (`heap/live`), so fragmentation shows as the difference (#357).
@@ -62,7 +106,6 @@ export const byCaption = (log) => {
   }
   return stages.map((s) => `${s.name} ${s.heap}${s.live === undefined ? "" : `/${s.live}`}`).join(", ");
 };
-export const overBudget = (bytes, what) => (bytes > WASM_HEAP_CAP ? `OVER BUDGET: ${what} ${mib(bytes)} > ${mib(WASM_HEAP_CAP)}; ` : "");
 // Touch devices: no full screen offer, touch controls from the start.
 export const coarse = () => matchMedia("(pointer: coarse)").matches;
 // How long a level may take to load: transcoding its textures (WebGL 2

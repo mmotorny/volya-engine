@@ -871,6 +871,15 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         }
         "launch" => to_json(&engine::launch().await?),
         "menu_state" => to_json(&engine::state()),
+        // The latest load's `* phase cmem` by caption and its end's
+        // figures, and *h* and *t* now (docs/architecture/memory.md).
+        "load_memory" => {
+            let now = memory_statistics();
+            to_json(&serde_json::json!({
+                "load": engine::load_memory(),
+                "now": { "crt_heap": now.crt_heap, "textures": now.textures },
+            }))
+        }
         "bound_keys" => to_json(&engine::bound_keys()),
         #[cfg(feature = "test-ops")]
         "debug_lose_device" => gpu::lose_device().map(|()| "null".into()),

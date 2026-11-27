@@ -641,6 +641,15 @@ pub fn bound_keys() -> Vec<&'static str> {
     })
 }
 
+/// The `load_memory` op: the latest load's memory figures
+/// ([`volya_engine::app::LoadMemory`]), or null while no game runs.
+pub fn load_memory() -> serde_json::Value {
+    RUNNING.with(|r| match r.borrow().as_ref() {
+        Some(running) => serde_json::to_value(running.app.load_memory()).unwrap_or_default(),
+        None => serde_json::Value::Null,
+    })
+}
+
 /// The `menu_state` op: the app's state, or `{"phase": "none"}` (or
 /// `"loading"` during the splash).
 pub fn state() -> serde_json::Value {

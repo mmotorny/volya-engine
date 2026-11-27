@@ -16,7 +16,6 @@ import {
   client,
   enterLevel,
   gpu,
-  heap,
   heapMaps,
   heapRecord,
   inGame,
@@ -30,7 +29,7 @@ import {
   needsGame,
   newGame,
   noteHeap,
-  overBudget,
+  againstOriginal,
   pointAt,
   pointer,
   quitToTitle,
@@ -106,6 +105,7 @@ export const tests = {
     const stages = byCaption(await volya.call("heap_log", { on: false }));
     const record = await heapRecord(false);
     const stats = await volya.call("level_stats");
+    const original = await againstOriginal();
     await noteHeap("in that level");
     key("Escape");
     await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
@@ -115,13 +115,12 @@ export const tests = {
     const now = await volya.call("level_stats");
     const live = now.gpu_level;
     if (firstLive) assertEqual(live, firstLive, "what the GPU holds of the level against the first New Game's");
-    const heapNote = overBudget(heap(stats), "wasm heaps after a New Game in the game launched again");
     // What the GPU still holds of the level left (#436): the world stays
     // until the next one is uploaded while the presenter keeps it.
     const held = before.gpu_world_bytes;
     const kept = (k) => `${k.textures} textures (${mib(k.texture_bytes)}), ${k.buffers} buffers (${mib(k.buffer_bytes)})`;
     const liveNote = live ? `the GPU holds of the level ${live.textures} textures (${mib(live.texture_bytes)}), ${live.buffers} buffers (${mib(live.buffer_bytes)}), ${live.vertex_arrays} vertex arrays, as in the first; the renderer keeps ${kept(now.gpu_kept)}${firstKept ? `, ${kept(firstKept)} in the first` : ""}; GPU by owner: the title menu after the first level (${owners(before)}), this level at 1024×768 (${owners(now)}); ` : "";
-    return `${heapNote}${liveNote}wasm heap ${mib(before.wasm_heap_bytes)} before, ${mib(stats.wasm_heap_bytes)} after; the GPU world in the title menu before: ${held == null ? "none" : mib(held)}; ${heapMaps.slice(-2).join("; ")}; by caption (MiB, heap/live): ${stages}; ${record}`;
+    return `${original}; ${liveNote}wasm heap ${mib(before.wasm_heap_bytes)} before, ${mib(stats.wasm_heap_bytes)} after; the GPU world in the title menu before: ${held == null ? "none" : mib(held)}; ${heapMaps.slice(-2).join("; ")}; by caption (MiB, heap/live): ${stages}; ${record}`;
   },
   "the in-game menu opened twice over the level: what its videos take each time (#517)": async () => {
     needsGame();
@@ -256,6 +255,7 @@ export const tests = {
     assert(asked.menu_asked && !asked.menu, `the menu asked for, not open: ${JSON.stringify(seen)}`);
     const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level again", loadMs());
     const stages = byCaption(await volya.call("heap_log", { on: false }));
+    const original = await againstOriginal();
     assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
     // The intro again; a tap skips it (our design for touch). The controls
     // go live then, and the menu opens at once.
@@ -278,8 +278,7 @@ export const tests = {
     }
     // A second load reuses the heap the first one grew.
     const stats = await volya.call("level_stats");
-    const heapNote = overBudget(heap(stats), "wasm heaps after the second New Game");
-    return `${heapNote}loaded again in ${s.load_ms.toFixed(0)} ms; wasm heap ${mib(stats.wasm_heap_bytes)}, the audio worker's ${mib(stats.audio_heap_bytes)}; by caption (MiB, heap/live): ${stages}`;
+    return `${original}; loaded again in ${s.load_ms.toFixed(0)} ms; wasm heap ${mib(stats.wasm_heap_bytes)}, the audio worker's ${mib(stats.audio_heap_bytes)}; by caption (MiB, heap/live): ${stages}`;
   },
 
   "the in-game menu's quit returns to the title menu after the New Game again, audio flowing": async () => {

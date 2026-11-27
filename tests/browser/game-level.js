@@ -9,10 +9,10 @@
 
 import { assert, assertEqual, skip } from "./harness.js";
 import {
+  ORIGINAL,
   byCaption,
   glCalls,
   gpu,
-  heap,
   heapMaps,
   heapRecord,
   jsMemory,
@@ -23,7 +23,8 @@ import {
   mib,
   needsGame,
   noteHeap,
-  overBudget,
+  againstOriginal,
+  hNow,
   pointAt,
   sleep,
   until,
@@ -38,6 +39,7 @@ export const tests = {
     key("Enter");
     await until((s) => s.menu.list === "menu_new_game", "the difficulty page");
     await noteHeap("before the New Game");
+    const menuH = await hNow();
     await volya.call("heap_log", { on: true });
     await heapRecord(true);
     key("Enter");
@@ -88,8 +90,8 @@ export const tests = {
     key("Escape");
     const shown = await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
     assertEqual(shown.phase, "level", "still in the level");
-    const heapNote = overBudget(heap(playing), "wasm heaps during the intro");
-    let note = `${heapNote}${heapMaps.join("; ")}; wasm heap by caption (MiB, heap/live): ${stages}; ${record}; "${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; intro skipped, wasm heap ${mib(before.wasm_heap_bytes)} before it, ${mib(playing.wasm_heap_bytes)} while it played, the audio worker's ${mib(playing.audio_heap_bytes)}; at the start ${lights.passes} light passes, ${lights.sprites} glows drawn`;
+    const original = await againstOriginal();
+    let note = `${original}; h in the title menu before ${menuH} K, the original's ${ORIGINAL.titleMenuH} K; ${heapMaps.join("; ")}; wasm heap by caption (MiB, heap/live): ${stages}; ${record}; "${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; intro skipped, wasm heap ${mib(before.wasm_heap_bytes)} before it, ${mib(playing.wasm_heap_bytes)} while it played, the audio worker's ${mib(playing.audio_heap_bytes)}; at the start ${lights.passes} light passes, ${lights.sprites} glows drawn`;
     if (gpu.state === "ready") {
       const { rgba } = await volya.call("debug_capture", { width: 256, height: 192 });
       const colours = new Set();

@@ -450,6 +450,24 @@ fn menu_font(
 }
 
 /// See [`App::level_controls`].
+/// The memory figures of the latest load (console-diagnostics.md 2.4),
+/// bytes: `* phase cmem` as each caption began, by its string-table id, and
+/// the figures at the load's end (`* phase cmem`, *h* and *t*), once it has
+/// ended; compared with the original's (docs/architecture/memory.md).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct LoadMemory {
+    pub captions: Vec<(&'static str, u64)>,
+    pub end: Option<LoadEnd>,
+}
+
+/// [`LoadMemory`]'s figures at the load's end, bytes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct LoadEnd {
+    pub cmem: u64,
+    pub crt_heap: u64,
+    pub textures: u64,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LevelControls {
     pub crouch: bool,
@@ -506,6 +524,8 @@ pub struct App {
     /// the level was made: every stage (one frame each at least) and the
     /// first frame drawn (which uploads the world).
     load_ms: Option<f64>,
+    /// The latest load's memory figures.
+    load_memory: LoadMemory,
     /// The settings and bindings (docs/behavior/options-screens.md).
     console: Console,
     /// The menu's sub-screens and boxes, and the saved games.
@@ -816,6 +836,7 @@ impl App {
             phase_started: None,
             loaded_since: None,
             load_ms: None,
+            load_memory: LoadMemory::default(),
         })
     }
 
@@ -1419,8 +1440,13 @@ impl App {
                         let mut loading = Loading::start(data, changed);
                         // The first caption begins as the load does.
                         self.phase_started = Some(time_ms);
-                        self.console
+                        let memory = self
+                            .console
                             .phase_caption(0, &loading.screen().state().caption);
+                        self.load_memory = LoadMemory {
+                            captions: vec![(loading.stage().caption_id(), memory.cmem)],
+                            end: None,
+                        };
                         if self.prepare_textures {
                             loading.prepare_textures();
                         }
@@ -1435,7 +1461,9 @@ impl App {
                             // The phase timer restarts whenever the global
                             // timer runs; here it always does (#619).
                             let ms = phase_ms(&mut self.phase_started, time_ms);
-                            self.console.phase_caption(ms, &screen.caption);
+                            let memory = self.console.phase_caption(ms, &screen.caption);
+                            (self.load_memory.captions)
+                                .push((loading.stage().caption_id(), memory.cmem));
                         }
                         step.map(|level| level.map(|l| (l, loading.screen().clone())))
                     }
@@ -1569,7 +1597,12 @@ impl App {
                         // (console-diagnostics.md 2.4).
                         let ms = phase_ms(&mut self.phase_started, time_ms);
                         self.phase_started = None;
-                        self.console.load_ended(ms);
+                        let memory = self.console.load_ended(ms);
+                        self.load_memory.end = Some(LoadEnd {
+                            cmem: memory.cmem,
+                            crt_heap: memory.crt_heap,
+                            textures: memory.textures,
+                        });
                     }
                 }
                 let left = overlay.as_ref().map(|o| o.frames_left);
@@ -1903,6 +1936,11 @@ impl App {
     /// runs at the next update.
     pub fn exec(&mut self, line: &str) {
         self.console.exec(line);
+    }
+
+    /// The latest load's memory figures.
+    pub fn load_memory(&self) -> &LoadMemory {
+        &self.load_memory
     }
 
     /// The console's settings.
@@ -2624,6 +2662,12 @@ mod tests {
                 "* phase cmem: 0 K",
                 "Сервер: Старт..."
             ]
+        );
+        // Each caption's figure kept by its id, for the suites' comparison
+        // with the original's (docs/architecture/memory.md).
+        assert_eq!(
+            app.load_memory().captions,
+            [("st_prefetching_objects", 0), ("st_server_starting", 0)]
         );
         app.update(&tree, 60.0, &mut input, &mut audio);
         app.update(&tree, 70.0, &mut input, &mut audio);

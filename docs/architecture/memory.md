@@ -23,7 +23,8 @@ Anything above a budget is filed as an issue and investigated. Budgets are still
 
 | Tool | Where | What |
 |---|---|---|
-| `crates/volya-engine/tests/loading_memory.rs` | native, counting allocator | Each loading stage's peak above its start, what it keeps, allocations made and blocks kept; the program's data; what outlives the level. |
+| `crates/volya-engine/tests/loading_memory.rs` | native, counting allocator | What each caption keeps (its `phase cmem` growth) and the end-of-load *h* against the original's, every excess an `EXCESS` line; each stage's peak above its start, allocations made and blocks kept; the program's data; what outlives the level. |
+| `load_memory` op | browser | The latest load's `phase cmem` as each caption began, by caption id, and its end's `phase cmem`, *h* and *t*; *h* and *t* now. The game suites compare them with the original's (`againstOriginal`, tests/browser/game.js), every excess an `EXCESS` note. |
 | `crates/volya-engine/tests/level_memory.rs` | native, counting allocator | Every shipped level's own files: the collision world's and the detail objects' heap, the `level` file's read peak, and as stored the geometry, the navigation file and the textures its surfaces name. |
 | `render-level` suite's "a level frame's heap traffic" (`volya_engine::selftest::frame_memory`) | browser, the test build's counting allocator | Allocations and bytes a frame of the running level makes on the wasm heap, by part. |
 | `heap_log` op (test builds) | browser | The wasm heap and the most live under each loading caption. |
@@ -122,30 +123,30 @@ The program's data leaves no split free space before a game (`heap_map`, #432).
 
 ## The original
 
-Measured (#667): its New Game of `l01_escape` run unmodified under Wine three times, on the Wine image before #590's (that one loads no graphics driver, #671), its log only; every `phase cmem` was the same in all three, `stat_memory`'s within 0.1%. A caption's figure is what its stage keeps, not its peak (the log gives none). Two amounts of about 527 K move between captions from run to run in the spec's runs (console-diagnostics.md 2.4.1), so a difference of that size at one caption is not a finding. Ours today: `loading_memory.rs`, native, requested bytes (#667); the browser's per caption come with the migration's first step.
+Measured (#667): its New Game of `l01_escape` run unmodified under Wine three times, on the Wine image before #590's (that one loads no graphics driver, #671), its log only; every `phase cmem` was the same in all three, `stat_memory`'s within 0.1%. A caption's figure is what its stage keeps, not its peak (the log gives none). Two amounts of about 527 K move between captions from run to run in the spec's runs (console-diagnostics.md 2.4.1), so a difference of that size at one caption is not a finding. Ours: `loading_memory.rs` natively, and in headless Chrome the `load_memory` op in `game-level`'s first New Game; the bytes asked for (#686). In the browser 1 and 17 free more than they keep: under 17 the objects' CPU geometry, freed once uploaded before the loading screen finishes; under 1 the title menu's data (believed).
 
-| *n* | Caption | The original keeps, K | Ours keeps, K | What must change |
-|---|---|---|---|---|
-| 1 | `st_prefetching_objects` | 85,047 | 0 | Load the 394 models of `prefetch_visuals_single` (`config\prefetch\prefetch_single.ltx`) and their textures here, kept while the game type stays (a later New Game of the type skips the stage, loading-screen.md 5); the objects spawned later take them from there. Its *m* (28,221 K of motions and skinned models shared) follows from sharing them. |
-| 2 | `st_server_starting` | 205 | 0 | |
-| 3 | `st_loading_alife_simulator` | 0 | 0 | |
-| 4 | `st_creating_new_game` | 32,164 | 222 | The offline simulation's registry, the game graph and the character are made here, from `all.spawn` held whole and read in place ([File-backed data](#file-backed-data)). |
-| 5 | `st_server_connecting` | 0 | 15,198 | Nothing made here (moved to 4); the navigation positions move to 14. |
-| 6 | `st_client_connecting_to` | 8 | 0 | |
-| 7 | `st_opening_stream` | 0 | 7,705 | The `level` file held whole and read in place (counted in *c*); what is made from its chunks is made under the caption whose stage reads them (the shader table under 9, the static draw list and spheres under 10 and 11). |
-| 8 | `st_loading_cform` | 72,669 | 29,409 | |
-| 9 | `st_loading_shaders` | 1,400 | 0 | The shader table (from 7). |
-| 10 | `st_loading_geometry` | 353 | 366 | |
-| 11 | `st_loading_spatial_db` | 4,297 | −1,819 | |
-| 12 | `st_loading_details` | 10 | 5,423 | The compact slot grid (a leaner structure in place of the mapped `level.details`, rule 5) counted in the file cache's figure, not *h*. The cache's 0.2 MB stays (where the original holds its cache is unestablished). |
-| 13 | `st_loading_sectors_portals` | 143 | 0 | |
-| 14 | `st_loading_ai_objects` | 0 | 3 | The navigation positions (moved from 5; a leaner structure in place of the mapped `level.ai`, rule 5) and `level.gct` counted in the file cache's figure, not *h*. |
-| 15 | `st_client_spawning` | 4,708 | 13,551 | The objects' models come from 1 (one not prefetched is loaded here); their CPU geometry, every detail window's indices among it (12.3 MB), freed once uploaded, as the original keeps it in Direct3D's buffers. |
-| 16 | `st_loading_textures` | 1 | 338 | The texture file read into the file cache, not the heap. |
-| 17 | `st_client_synchronising` | 0 | 0 | |
-| | The load, its first caption to its end | 201,005 | 70,396 | |
-| | *h* at the load's end | 227,120 | 75,602 | |
-| | *t* at the load's end | 260,798 | 146,706 (by the original's rule, headless Chrome; the original's without prefetching 179,025) | Counted by the original's rule (#689); the prefetched models' textures added (the original's 865 base textures against 631 without prefetching, 2.4.1). |
+| *n* | Caption | The original keeps, K | Ours, native, K | Ours, headless Chrome, K | What must change |
+|---|---|---|---|---|---|
+| 1 | `st_prefetching_objects` | 85,047 | 0 | −5,932 | Load the 394 models of `prefetch_visuals_single` (`config\prefetch\prefetch_single.ltx`) and their textures here, kept while the game type stays (a later New Game of the type skips the stage, loading-screen.md 5); the objects spawned later take them from there. Its *m* (28,221 K of motions and skinned models shared) follows from sharing them. |
+| 2 | `st_server_starting` | 205 | 0 | 1 | |
+| 3 | `st_loading_alife_simulator` | 0 | 0 | 0 | |
+| 4 | `st_creating_new_game` | 32,164 | 222 | 222 | The offline simulation's registry, the game graph and the character are made here, from `all.spawn` held whole and read in place ([File-backed data](#file-backed-data)). |
+| 5 | `st_server_connecting` | 0 | 15,198 | 13,199 | Nothing made here (moved to 4); the navigation positions move to 14. |
+| 6 | `st_client_connecting_to` | 8 | 0 | 2 | |
+| 7 | `st_opening_stream` | 0 | 7,705 | 7,057 | The `level` file held whole and read in place (counted in *c*); what is made from its chunks is made under the caption whose stage reads them (the shader table under 9, the static draw list and spheres under 10 and 11). |
+| 8 | `st_loading_cform` | 72,669 | 29,409 | 29,205 | |
+| 9 | `st_loading_shaders` | 1,400 | 1 | 3 | The shader table (from 7). |
+| 10 | `st_loading_geometry` | 353 | 365 | 365 | |
+| 11 | `st_loading_spatial_db` | 4,297 | −1,819 | −1,393 | |
+| 12 | `st_loading_details` | 10 | 5,423 | 4,971 | The compact slot grid (a leaner structure in place of the mapped `level.details`, rule 5) counted in the file cache's figure, not *h*. The cache's 0.2 MB stays (where the original holds its cache is unestablished). |
+| 13 | `st_loading_sectors_portals` | 143 | 1 | 1 | |
+| 14 | `st_loading_ai_objects` | 0 | 3 | 3 | The navigation positions (moved from 5; a leaner structure in place of the mapped `level.ai`, rule 5) and `level.gct` counted in the file cache's figure, not *h*. |
+| 15 | `st_client_spawning` | 4,708 | 13,551 | 13,449 | The objects' models come from 1 (one not prefetched is loaded here); their CPU geometry, every detail window's indices among it (12.3 MB), freed once uploaded, as the original keeps it in Direct3D's buffers. |
+| 16 | `st_loading_textures` | 1 | 338 | 382 | The texture file read into the file cache, not the heap. |
+| 17 | `st_client_synchronising` | 0 | 358 | −5,456 | |
+| | The load, its first caption to its end | 201,005 | 70,755 | 56,079 | |
+| | *h* at the load's end | 227,120 | 75,961 | 67,598 | |
+| | *t* at the load's end | 260,798 | — | 146,706 (by the original's rule, headless Chrome; the original's without prefetching 179,025) | Counted by the original's rule (#689); the prefetched models' textures added (the original's 865 base textures against 631 without prefetching, 2.4.1). |
 
 Where ours keeps less than the original (8, 11) it stays (rule 5): the budget is a ceiling. Beside them at the load's end the original writes the committed address space 849,680–849,744 K (the whole 32-bit process, its program, libraries and driver; ours, the wasm memory, 101,760 K today), the process heap 400,268–400,269 K and the game scripts' pool 25,762–25,784 K (measured, #667).
 
@@ -275,7 +276,7 @@ Data written each frame is never written into a buffer the GPU may still be read
 
 ## The iPhone
 
-The real limit is the process's: 2,528 MB on the reference iPhone (measured, Jetsam, #443), the wasm heaps, JavaScript, WebKit and the GPU's resources together. The death it recorded was ANGLE's index rewriting, with the wasm heap at about 104 MiB (fixed, #443), not the heap. The 110 MiB wasm heap figure (`WASM_HEAP_CAP`, tests/browser/game.js) was a guard from a measured heap, not a limit, and is replaced by the original's figures ([Budgets](#budgets)).
+The real limit is the process's: 2,528 MB on the reference iPhone (measured, Jetsam, #443), the wasm heaps, JavaScript, WebKit and the GPU's resources together. The death it recorded was ANGLE's index rewriting, with the wasm heap at about 104 MiB (fixed, #443), not the heap. The game suites judge the heap by the original's figures ([Budgets](#budgets)), not by a cap of their own.
 
 Expected after a New Game of `l01_escape` under this design (believed, from the figures above): the wasm memory about 280–300 MiB (*h* 222 MiB, the file cache's about 28 MiB with a file being read, *g* about 25 MiB as the original's, and dlmalloc's holes); the GPU about 370 MiB (textures by *t*'s files, BC as stored, about 255 MiB with the prefetched ones; the level's buffers 79 MiB; the targets 52 MiB at 2868 × 1320) and the drawing buffers up to 45 MB; JavaScript and WebKit about 120 MB (the Simulator's WebContent held 199–222 MB in a level with a heap of about 90 MiB, #443). About 0.9 GB in all: a margin of about 1.6 GB to the limit, measured on the deployed app once the migration lands (the real device's footprint is the user's report; the Simulator's doesn't show it, #443).
 

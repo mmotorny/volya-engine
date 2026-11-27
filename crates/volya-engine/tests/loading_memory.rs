@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! Heap use of each New Game loading stage on the Russian edition (BYOA):
-//! the peak above the stage's start and what the stage keeps, with the
-//! allocations it makes and the blocks it keeps; each peak is reported
-//! against a budget (an "OVER BUDGET" note, never a failure: budgets are
-//! reported, not gates). The loading peak is the wasm heap's high-water mark,
-//! which never shrinks. Its own test binary, so no other test allocates
-//! meanwhile. Skips when `VOLYA_GOG_INSTALLER` is unset.
+//! what each caption keeps (its `* phase cmem` growth) against the
+//! original's and the end-of-load *h* against the original's, with no
+//! headroom: every figure above one is an "EXCESS" note to file as an issue,
+//! never a failure (docs/architecture/memory.md, Budgets). Beside them, each
+//! stage's peak above its start, the allocations it makes and the blocks it
+//! keeps, and what the program's data keeps. Its own test binary, so no
+//! other test allocates meanwhile. Skips when `VOLYA_GOG_INSTALLER` is
+//! unset.
 
 #![cfg(not(target_arch = "wasm32"))]
 // A counting allocator needs `unsafe impl GlobalAlloc`; it only forwards to
@@ -78,42 +80,37 @@ fn mb(bytes: usize) -> f64 {
     bytes as f64 / 1e6
 }
 
-/// Each stage's peak above its start, MB: the measured peak (native,
-/// `l01_escape`, #79) with a margin, so a regression is noted. Stages not
-/// listed allocate next to nothing.
-const STAGE_BUDGETS: [(Stage, f64); 9] = [
-    (Stage::CreatingNewGame, 1.5), // 0.7: both files streamed (12.8 before, #403)
-    (Stage::ServerConnecting, 19.0), // 16.2: the offline simulation (#370, #403, #485)
-    (Stage::OpeningStream, 9.5),   // 8.3: the `level` file streamed (12.6 whole, #483)
-    (Stage::LoadingCform, 38.0),   // 35.1: the collision world it keeps (#371)
-    (Stage::LoadingGeometry, 1.5), // 0.7: the geometry's layout only
-    (Stage::LoadingSpatialDb, 7.0), // 5.4: index pieces and the draw list
-    // 9.5: `level.details`' slot grid (8.4) and the cache (#411).
-    (Stage::LoadingDetails, 10.5),
-    // 11.0: the objects' models (9.4) and the zones' effect objects;
-    // 19.7 with every detail window's indices (#528, over: #653).
-    (Stage::ClientSpawning, 12.5),
-    (Stage::LoadingTextures, 4.5), // 3.2
+/// What the original keeps under each caption, K (docs/architecture/
+/// memory.md, The original: its New Game of `l01_escape`, #667).
+const ORIGINAL_KEPT: [(Stage, u64); 17] = [
+    (Stage::PrefetchingObjects, 85_047),
+    (Stage::ServerStarting, 205),
+    (Stage::LoadingAlifeSimulator, 0),
+    (Stage::CreatingNewGame, 32_164),
+    (Stage::ServerConnecting, 0),
+    (Stage::ClientConnectingTo, 8),
+    (Stage::OpeningStream, 0),
+    (Stage::LoadingCform, 72_669),
+    (Stage::LoadingShaders, 1_400),
+    (Stage::LoadingGeometry, 353),
+    (Stage::LoadingSpatialDb, 4_297),
+    (Stage::LoadingDetails, 10),
+    (Stage::LoadingSectorsPortals, 143),
+    (Stage::LoadingAiObjects, 0),
+    (Stage::ClientSpawning, 4_708),
+    (Stage::LoadingTextures, 1),
+    (Stage::ClientSynchronising, 0),
 ];
-/// What the archive index keeps, MB: 1.3 measured, in 18 blocks (7.7 in
-/// 87,312 before #300).
-const INDEX_BUDGET: f64 = 2.0;
-/// What the configuration keeps, MB: 1.2 measured (5.6 in about 100,000
-/// blocks before #299).
-const CONFIG_BUDGET: f64 = 1.5;
-/// What the string tables keep, MB: 1.2 measured, in 2 blocks (1.8 in
-/// 15,344 before #484).
-const STRINGS_BUDGET: f64 = 1.5;
-/// What the effect library keeps, MB: 1.4 measured, in 1,095 blocks (1.9
-/// in 8,411 before #484), read at launch (with each level's
-/// `st_loading_ai_objects` before, peaking 3.3).
-const EFFECTS_BUDGET: f64 = 1.8;
-/// Any other stage's peak, MB.
-const OTHER_BUDGET: f64 = 0.5;
-/// The whole load's peak above its start, MB (72.8 measured with the
-/// detail objects' grid, #411; 63.3 without it, 82.3 before #370 and #371,
-/// 188.3 before #79).
-const LOADING_BUDGET: f64 = 79.0;
+/// The original's *h* at the load's end, K.
+const ORIGINAL_H: u64 = 227_120;
+/// The original's *h* when the load began, K (console-diagnostics.md 2.4.1):
+/// reported beside, not a budget.
+const ORIGINAL_START_H: u64 = 26_115;
+
+/// K, as the original's figures: rounded down.
+fn k(bytes: usize) -> u64 {
+    bytes as u64 / 1024
+}
 
 #[test]
 fn loading_stage_memory() {
@@ -134,9 +131,6 @@ fn loading_stage_memory() {
         BLOCKS.load(Ordering::Relaxed) - blocks,
         mb(PEAK.load(Ordering::Relaxed) - before)
     );
-    if mb(start - before) > INDEX_BUDGET {
-        eprintln!("  OVER BUDGET: the archive index keeps over {INDEX_BUDGET} MB");
-    }
     let mut game_blocks = (BLOCKS.load(Ordering::Relaxed), 0);
     let data = GameData::read(&tree, None, Resolution::new(1024, 768)).unwrap();
     eprintln!(
@@ -147,54 +141,66 @@ fn loading_stage_memory() {
     let mut load = NewGameLoad::default();
     let base = CURRENT.load(Ordering::Relaxed);
     let mut highest = 0;
+    // `* phase cmem` as each caption begins.
+    let mut marks = Vec::new();
     for stage in Stage::ALL {
         let before = CURRENT.load(Ordering::Relaxed);
+        marks.push((stage, before));
         let (blocks, allocs) = (
             BLOCKS.load(Ordering::Relaxed),
             ALLOCS.load(Ordering::Relaxed),
         );
         PEAK.store(before, Ordering::Relaxed);
         load.run(stage, &tree, &data).unwrap();
-        let (peak, after) = (
-            PEAK.load(Ordering::Relaxed),
-            CURRENT.load(Ordering::Relaxed),
-        );
+        let peak = PEAK.load(Ordering::Relaxed);
         highest = highest.max(peak - base);
         eprintln!(
-            "{stage:?}: {} K live at its start (as `* phase cmem` counts), peak +{:.1} MB above it, keeps {:+.1} MB (loading total {:.1} MB); {} allocations, keeps {:+} blocks",
-            before / 1024,
+            "{stage:?}: {} K at its start (`* phase cmem`), peak +{:.1} MB above it; {} allocations, keeps {:+} blocks",
+            k(before),
             mb(peak - before),
-            mb(after) - mb(before),
-            mb(after - base),
             ALLOCS.load(Ordering::Relaxed) - allocs,
             BLOCKS.load(Ordering::Relaxed) as isize - blocks as isize,
         );
-        let budget = STAGE_BUDGETS
-            .iter()
-            .find(|(s, _)| *s == stage)
-            .map_or(OTHER_BUDGET, |&(_, b)| b);
-        if mb(peak - before) > budget {
-            eprintln!("  OVER BUDGET: {stage:?} peaks over its {budget} MB budget");
-        }
-        // The offline simulation keeps 16.2 MB with the game graph
-        // (measured).
-        if stage == Stage::ServerConnecting && mb(after) - mb(before) >= 19.0 {
-            eprintln!("  OVER BUDGET: {stage:?} keeps 19 MB or more");
+    }
+    // The level made ends the load (natively: no frames, no overlay).
+    let screen = load.finish(0).unwrap();
+    let end = CURRENT.load(Ordering::Relaxed);
+    let mut excesses = Vec::new();
+    for (i, &(stage, cmem)) in marks.iter().enumerate() {
+        let next = marks.get(i + 1).map_or(end, |m| m.1);
+        let kept = k(next) as i64 - k(cmem) as i64;
+        let original = ORIGINAL_KEPT.iter().find(|o| o.0 == stage).unwrap().1;
+        eprintln!(
+            "{}: keeps {kept} K, the original {original} K",
+            stage.caption_id()
+        );
+        if kept > original as i64 {
+            excesses.push(format!(
+                "{} keeps {kept} K, the original {original} K",
+                stage.caption_id()
+            ));
         }
     }
-    eprintln!("loading peak: {:.1} MB above the start", mb(highest));
+    eprintln!(
+        "the load: {} K at its start (the original {ORIGINAL_START_H} K), h {} K at its end (the original {ORIGINAL_H} K), peak +{:.1} MB above its start",
+        k(base),
+        k(end),
+        mb(highest)
+    );
+    if k(end) > ORIGINAL_H {
+        excesses.push(format!(
+            "h {} K at the load's end, the original {ORIGINAL_H} K",
+            k(end)
+        ));
+    }
+    for excess in &excesses {
+        eprintln!("EXCESS over the original's (to file): {excess}");
+    }
     eprintln!(
         "blocks live: {} before the game's data, {} with it, {} at the load's end",
         game_blocks.0,
         game_blocks.1,
         BLOCKS.load(Ordering::Relaxed)
-    );
-    let before = CURRENT.load(Ordering::Relaxed);
-    let screen = load.finish(0).unwrap();
-    eprintln!(
-        "the level made: {:+.1} MB, the level keeps {:.1} MB",
-        mb(CURRENT.load(Ordering::Relaxed)) - mb(before),
-        mb(CURRENT.load(Ordering::Relaxed) - base)
     );
     // What the steady level holds besides: the objects' geometry goes
     // once uploaded; the configuration and the string tables stay.
@@ -223,25 +229,12 @@ fn loading_stage_memory() {
     );
     let (mut system, mut strings, mut effects) =
         (Some(data.system), Some(data.strings), Some(data.effects));
-    let configuration = freed(
+    freed(
         "the configuration (system.ltx and its includes)",
         &mut || {
             drop(system.take());
         },
     );
-    if configuration > CONFIG_BUDGET {
-        eprintln!("  OVER BUDGET: the configuration keeps over {CONFIG_BUDGET} MB");
-    }
-    if freed("the string tables", &mut || drop(strings.take())) > STRINGS_BUDGET {
-        eprintln!("  OVER BUDGET: the string tables keep over {STRINGS_BUDGET} MB");
-    }
-    if freed("the effect library", &mut || drop(effects.take())) > EFFECTS_BUDGET {
-        eprintln!("  OVER BUDGET: the effect library keeps over {EFFECTS_BUDGET} MB");
-    }
-    if mb(highest) > LOADING_BUDGET {
-        eprintln!(
-            "OVER BUDGET: the load peaks at +{:.1} MB, over its {LOADING_BUDGET} MB budget",
-            mb(highest)
-        );
-    }
+    freed("the string tables", &mut || drop(strings.take()));
+    freed("the effect library", &mut || drop(effects.take()));
 }

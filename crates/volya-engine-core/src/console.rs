@@ -521,20 +521,23 @@ impl Console {
     /// A stage caption of a load begins (console-diagnostics.md 2.4):
     /// `ms` since the previous one began (or, for the first, since the
     /// load began), the memory in use, then the caption's displayed text.
-    pub fn phase_caption(&mut self, ms: u64, caption: &str) {
+    /// Returns the figures it printed from.
+    pub fn phase_caption(&mut self, ms: u64, caption: &str) -> MemoryStatistics {
         let memory = self.memory();
         diagnostics::phase(&mut self.log, ms, &memory);
         self.log.message(caption);
+        memory
     }
 
     /// The loading screen finishes (console-diagnostics.md 2.4): `ms` since
     /// the last caption began, the memory in use, then `stat_memory`, run
     /// without the `~ <line>` echo. TODO(#637): through the console's input
-    /// line, emptying it.
-    pub fn load_ended(&mut self, ms: u64) {
+    /// line, emptying it. Returns the figures of the phase pair.
+    pub fn load_ended(&mut self, ms: u64) -> MemoryStatistics {
         let memory = self.memory();
         diagnostics::phase(&mut self.log, ms, &memory);
         self.exec("stat_memory");
+        memory
     }
 
     /// The graphics device was destroyed at exit (console-diagnostics.md
