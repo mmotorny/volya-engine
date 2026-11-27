@@ -847,11 +847,11 @@ function deeper(name, back) {
   back.focus();
 }
 
-/** The site's third-party notices (tools/site), beside this module. */
+/** The site's licences: Volya Engine's, then the third-party notices (tools/site), beside this module. */
 const NOTICES = new URL("third-party-licenses.txt", import.meta.url).href;
 
 /**
- * The footer's Licences (#757, #859): a link to the notices, but a plain
+ * The footer's Licences (#757, #859): a link to the licences, but a plain
  * click or tap opens them in the app (#854), as an installed app has no tab
  * bar to come back by; Back returns to the screen it was opened from.
  * Shown once this module can open them (main.js loads it once the engine
@@ -874,7 +874,7 @@ function footerLicences() {
 }
 footerLicences();
 
-/** The notices' text; rejects if they can't be read. */
+/** The licences' text; rejects if it can't be read. */
 async function readNotices() {
   const response = await fetch(NOTICES);
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -882,7 +882,8 @@ async function readNotices() {
 }
 
 /**
- * Licences (#854): the third-party notices, as `load` reads them, in a
+ * Licences (#854, #860): Volya Engine's licence, then the third-party
+ * notices, as `load` reads them, in a
  * monospace block to scroll and select; Loading… until then, or a failure
  * with Try again. Back shows `from`, the screen it was opened from.
  */

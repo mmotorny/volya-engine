@@ -592,8 +592,8 @@ export const tests = {
     );
     assertEqual(document.activeElement?.textContent, "‹ Back", "focus starts on Back (keyboard)");
     // Licences (#757) is in the footer beside the source (#859), not here:
-    // the site's third-party notices, on a screen of the app's own (#854),
-    // not a new tab; Back returns to the screen it was opened from.
+    // Volya Engine's licence, then the third-party notices (#860), on a
+    // screen of the app's own (#854), not a new tab; Back returns to the screen it was opened from.
     assert(![...document.querySelectorAll("#game a")].some((a) => a.textContent === "Licences"), "Licences still in Settings");
     const licences = document.querySelector("footer .links a.licences");
     assert(licences && !licences.closest("[hidden]"), "no Licences link in the footer");
@@ -608,7 +608,8 @@ export const tests = {
     assertEqual(location.href, here, "Licences left the page");
     assertEqual(heading(), "Licences", "the Licences screen's heading");
     const text = document.querySelector("#game .notices pre")?.textContent;
-    assert(text?.startsWith("Third-party software in this app") && text === notices, "the notices not shown whole");
+    assert(text?.startsWith("Volya Engine, under BSD-3-Clause:\n\nBSD 3-Clause License\n") && text === notices, "the licences not shown whole");
+    assert(text.indexOf("\nThird-party software in this app") > text.indexOf("THIS SOFTWARE IS PROVIDED"), "the third-party notices not after Volya Engine's licence");
     assertEqual(document.activeElement?.textContent, "‹ Back", "focus on Licences' Back (keyboard)");
     document.activeElement.click();
     for (let i = 0; i < 50 && heading() !== "Settings"; i++) await new Promise((r) => setTimeout(r, 20));

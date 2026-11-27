@@ -318,13 +318,13 @@ export const SECTIONS = [
     ],
   },
   {
-    // The footer's Licences (#859), on every screen: the site's third-party
-    // notices, in the app (#854).
+    // The footer's Licences (#859), on every screen: Volya Engine's licence,
+    // then the third-party notices, in the app (#854, #860).
     title: "Licences",
     states: [
-      { id: "licences", name: "The notices (their first lines here; the screen scrolls through all)", game: imported, screen: "licences" },
-      { id: "licences-loading", name: "Loading the notices", game: imported, screen: "licences", notices: "loading" },
-      { id: "licences-failed", name: "The notices couldn't be read", game: imported, screen: "licences", notices: "failed" },
+      { id: "licences", name: "Volya Engine's licence, then the third-party notices (their first lines here; the screen scrolls through all)", game: imported, screen: "licences" },
+      { id: "licences-loading", name: "Loading the licences", game: imported, screen: "licences", notices: "loading" },
+      { id: "licences-failed", name: "The licences couldn't be read", game: imported, screen: "licences", notices: "failed" },
     ],
   },
   {

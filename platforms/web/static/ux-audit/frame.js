@@ -269,7 +269,7 @@ if (state.level) {
   status.dataset.state = "ready";
   await start(call, updates, { isolated: state.isolated !== false });
   if (state.screen === "settings") await globalThis.volya.showSettings();
-  // Licences: the site's own notices, their first lines (the board shows
+  // Licences: the site's own licences, their first lines (the board shows
   // each state whole); loading never settles; failed as when unreadable.
   if (state.screen === "licences") {
     const read = async () => {

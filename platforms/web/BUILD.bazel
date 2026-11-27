@@ -35,13 +35,14 @@ rust_shared_library(
 
 STATIC = glob(["static/**"])
 
-# The site's third-party-licenses.txt: the notices of everything the
-# release wasm links (build/notices.bzl); fails, and with it the static
+# The site's third-party-licenses.txt: Volya Engine's LICENSE, then the
+# notices of everything the release wasm links (build/notices.bzl); fails, and with it the static
 # checks, on anything undeclared or not on deny.toml's allow-list, or a
 # served file that isn't ours.
 third_party_notices(
     name = "third_party_notices",
     deny = "//:deny.toml",
+    license = "//:LICENSE",
     rust_std = "//third_party/rust:std",
     static = STATIC,
     wasm = ":volya-engine-web",

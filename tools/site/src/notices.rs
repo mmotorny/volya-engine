@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! The site's third-party notices (`third-party-licenses.txt`) from the
-//! manifest `build/notices.bzl` writes of what the wasm links and the page
-//! serves (docs/architecture/build.md, Third-party notices). Like
+//! The site's licences (`third-party-licenses.txt`): Volya Engine's own
+//! LICENSE, then the third-party notices from the manifest
+//! `build/notices.bzl` writes of what the wasm links and the page serves
+//! (docs/architecture/build.md, Third-party notices). Like
 //! cargo-about, a crate's licence is its manifest's SPDX expression and its
 //! notice the licence files in its root that the chosen licences' texts are
 //! in; an alternative is chosen in deny.toml's allow-list order. Fails on
@@ -33,6 +34,22 @@ const SEPARATOR: &str = "\n\n* * *\n\n";
 
 /// The rule between components.
 const RULE: &str = "----------------------------------------------------------------------";
+
+/// The rule between Volya Engine's licence and the third-party notices.
+const PART_RULE: &str = "======================================================================";
+
+/// Volya Engine's own licence, `license` its LICENSE's text, as the file
+/// begins: its heading, the licence it holds, and the text whole.
+fn own_license(license: &str) -> std::result::Result<String, String> {
+    let ids = classify(license);
+    let [id] = ids.iter().collect::<Vec<_>>()[..] else {
+        return Err(format!("LICENSE: not one licence's text ({ids:?})"));
+    };
+    Ok(format!(
+        "Volya Engine, under {id}:\n\n{}\n",
+        license.trim_end()
+    ))
+}
 
 /// A licence expression (SPDX).
 #[derive(Debug, PartialEq)]
@@ -478,6 +495,12 @@ pub fn notices(manifest: &Path, out: &Path) -> Result {
     let deny_path = field("deny").first().map(|r| r[1]).ok_or("no deny.toml")?;
     let deny = fs::read_to_string(deny_path).map_err(|e| format!("{deny_path}: {e}"))?;
     let allow = allow_list(&deny)?;
+    let license_path = field("license").first().map(|r| r[1]).ok_or("no LICENSE")?;
+    let license = fs::read_to_string(license_path).map_err(|e| format!("{license_path}: {e}"))?;
+    let own = own_license(&license);
+    if let Err(e) = &own {
+        problems.push(e.clone());
+    }
 
     let mut components = Vec::new();
     for r in field("component") {
@@ -595,8 +618,10 @@ pub fn notices(manifest: &Path, out: &Path) -> Result {
     components.sort_by(|a, b| a.name.cmp(&b.name));
     crates.sort_by_key(|a| a.name.to_lowercase());
     crates.dedup_by(|a, b| a.name == b.name);
-    let mut out_text =
-        String::from("Third-party software in this app, under the licences below.\n");
+    let own = own.unwrap_or_default();
+    let mut out_text = format!(
+        "{own}\n{PART_RULE}\n\nThird-party software in this app, under the licences below.\n"
+    );
     let mut write = |names: &[&Entry]| {
         let mut licenses: Vec<&str> = names
             .iter()
@@ -701,6 +726,16 @@ mod tests {
         let bsd = "Redistribution and use in source and binary forms ... Neither the name of";
         assert_eq!(classify(bsd), ["BSD-3-Clause"].into());
         assert!(classify("GNU LESSER GENERAL PUBLIC LICENSE").is_empty());
+    }
+
+    #[test]
+    fn heads_its_own_license() {
+        let bsd = "Redistribution and use in source and binary forms ... Neither the name\n\n";
+        assert_eq!(
+            own_license(bsd).unwrap(),
+            "Volya Engine, under BSD-3-Clause:\n\nRedistribution and use in source and binary forms ... Neither the name\n"
+        );
+        assert!(own_license("no licence").is_err());
     }
 
     #[test]

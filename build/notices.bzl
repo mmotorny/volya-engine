@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Maksym Motorny
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The site's third-party notices from the dependency graph
+"""The site's licences: Volya Engine's LICENSE, then the third-party
+notices from the dependency graph
 (docs/architecture/build.md, Third-party notices): every crate linked into
 the wasm, the Rust standard library it links, and every component a build
 script compiles in, each with its declared licence and notice files; served
@@ -235,6 +236,8 @@ def _third_party_notices_impl(ctx):
     extra += ctx.files.static
     lines.append(_line("deny", ctx.file.deny.path))
     extra.append(ctx.file.deny)
+    lines.append(_line("license", ctx.file.license.path))
+    extra.append(ctx.file.license)
 
     manifest = ctx.actions.declare_file(ctx.label.name + ".manifest")
     ctx.actions.write(manifest, "\n".join(lines) + "\n")
@@ -254,6 +257,7 @@ third_party_notices = rule(
     doc = "The notices of everything linked into the release wasm; fails on anything undeclared or not allowed.",
     attrs = {
         "deny": attr.label(allow_single_file = True, mandatory = True, doc = "deny.toml: its licence allow-list."),
+        "license": attr.label(allow_single_file = True, mandatory = True, doc = "Volya Engine's own LICENSE, first in the file."),
         "rust_std": attr.label(providers = [ThirdPartyInfo], mandatory = True, doc = "The standard library's in-tree notices."),
         "static": attr.label_list(allow_files = True, doc = "The files the page serves besides the engine."),
         "wasm": attr.label(cfg = _release_wasm_transition, aspects = [_linked_aspect], mandatory = True),
