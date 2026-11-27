@@ -18,6 +18,7 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use crate::audio::AudioOut;
+use crate::console_window::ConsoleWindow;
 use crate::core::audio::Category;
 use crate::core::console::{Console, FatalReport};
 use crate::core::diagnostics;
@@ -389,6 +390,29 @@ fn menu_frame(
     )
 }
 
+/// The keys and buttons bound to the actions whose held keys the level
+/// receives again as presses when the console closes (console-window.md
+/// 3.4; `llookout` and `rlookout` are not acted on here).
+fn resumed_controls(controls: &crate::controls::Controls) -> Vec<Control> {
+    use crate::controls::MoveAction as A;
+    [
+        A::Left,
+        A::Right,
+        A::Up,
+        A::Down,
+        A::Crouch,
+        A::Accel,
+        A::Forward,
+        A::Back,
+        A::LStrafe,
+        A::RStrafe,
+        A::WpnFire,
+    ]
+    .into_iter()
+    .flat_map(|a| controls.bindings.controls(a))
+    .collect()
+}
+
 /// The keys the inventory screen reads, from the effective bindings
 /// (inventory-screen.md 6.1).
 fn inventory_keys(data: &GameData, controls: &crate::controls::Controls) -> inventory_screen::Keys {
@@ -539,6 +563,10 @@ pub struct App {
     full_screen_request: Option<bool>,
     /// The statistics overlay of `rs_stats` (display-mode.md part B).
     stats: StatisticsOverlay,
+    /// The console window (docs/behavior/console-window.md).
+    window: ConsoleWindow,
+    /// The main menu was active after the previous update.
+    menu_was_active: bool,
 }
 
 /// The layout surface of the main menu while it asks for the
@@ -721,6 +749,8 @@ impl App {
             page_full_screen: None,
             full_screen_request: None,
             stats,
+            window: ConsoleWindow::default(),
+            menu_was_active: false,
             applied: console.generation(),
             console,
             screens: MenuScreens::default(),
@@ -888,6 +918,7 @@ impl App {
             return;
         }
         self.update_phase(tree, time_ms, input, audio);
+        self.follow_menu();
         self.alt_f4(input);
         // A line the console executed ended the program (an unknown key
         // name, console-key-bindings.md section 2).
@@ -910,6 +941,24 @@ impl App {
         if let Some(error) = failed {
             self.fatal(tree, error, input, audio);
         }
+    }
+
+    /// The console as the main menu opens and closes (console-window.md
+    /// sections 1, 2): the menu remembers it and closes it, and opens it
+    /// again as it closes; a level starting closes it.
+    fn follow_menu(&mut self) {
+        let active = matches!(
+            self.phase,
+            Some(Phase::Menu(_)) | Some(Phase::Level { menu: Some(_), .. })
+        );
+        if matches!(self.phase, Some(Phase::Loading { .. })) {
+            self.window.level_started();
+        } else if active && !self.menu_was_active {
+            self.window.menu_opened();
+        } else if !active && self.menu_was_active {
+            self.window.menu_closed(&mut self.console);
+        }
+        self.menu_was_active = active;
     }
 
     /// The input system's own rule, whichever part has input
@@ -1237,6 +1286,8 @@ impl App {
                 }
             }
             Phase::Menu(menu) => {
+                let below = (self.window).receiver_frame(&mut self.console, input, now, true, &[]);
+                let input: &Input = below.as_ref().unwrap_or(input);
                 let out = menu_frame(
                     &mut self.screens,
                     menu,
@@ -1380,6 +1431,8 @@ impl App {
                 // The menu pauses the game for its whole duration, its
                 // screens and boxes included (save-load-screens.md section 2).
                 level.paused(now);
+                let below = (self.window).receiver_frame(&mut self.console, input, now, true, &[]);
+                let input: &Input = below.as_ref().unwrap_or(input);
                 let out = menu_frame(
                     &mut self.screens,
                     menu,
@@ -1490,6 +1543,24 @@ impl App {
                     }
                     return;
                 }
+                // The console opens over the level whose controls are live
+                // (our choice: not under the loading image), the inventory
+                // screen included (console-window.md section 1).
+                let resume = resumed_controls(level.controls());
+                let mut below = (self.window).receiver_frame(
+                    &mut self.console,
+                    input,
+                    now,
+                    overlay.is_none(),
+                    &resume,
+                );
+                if self.window.is_open() || below.is_some() {
+                    self.console_touched = true;
+                }
+                let input: &mut Input = match below.as_mut() {
+                    Some(below) => below,
+                    None => input,
+                };
                 if let Some(screen) = inventory.as_deref_mut().filter(|s| s.is_open()) {
                     // inventory-screen.md 1.3: the game runs on; keys the
                     // screen does not use reach the character.
@@ -1746,7 +1817,7 @@ impl App {
         TextureQuality::new(lod, self.texture_list.clone())
     }
 
-    /// Executes a console command (tests: Volya Engine has no console).
+    /// Executes a console command, as a program's line (tests).
     pub fn exec(&mut self, line: &str) {
         self.console.exec(line);
     }
@@ -1781,6 +1852,22 @@ impl App {
                 self.frame_ms,
             );
             scene.ramp = self.ramp.and_then(|(_, r)| r);
+        }
+        // console-window.md 4.7: after everything else, before the
+        // statistics; at half height over a level or the main menu (4.1).
+        if let Ok(scene) = &mut scene {
+            let half = matches!(self.phase, Some(Phase::Level { .. }) | Some(Phase::Menu(_)));
+            let drawn = (self.window).draw(
+                tree,
+                &self.data,
+                &mut self.assets,
+                &self.console,
+                scene,
+                half,
+            );
+            if let Err(e) = drawn {
+                self.failed.get_or_insert(e.to_string());
+            }
         }
         // display-mode.md B.1: over everything of the frame, measured only
         // while on.
@@ -1909,7 +1996,10 @@ impl App {
                 menu: None,
                 inventory,
                 ..
-            }) if intro.player.is_none() && !inventory.as_ref().is_some_and(|i| i.is_open()) => {
+            }) if intro.player.is_none()
+                && !inventory.as_ref().is_some_and(|i| i.is_open())
+                && !self.window.is_open() =>
+            {
                 let p = level.player().state();
                 let (torch, night_vision) = level.torch_buttons();
                 Some(LevelControls {
@@ -1959,7 +2049,15 @@ impl App {
     /// keys pressed with Control then (it crouches).
     pub fn character_takes_keys(&self) -> bool {
         self.level_controls().is_some()
-            || matches!(&self.phase, Some(Phase::Level { inventory: Some(i), menu: None, .. }) if i.is_open())
+            || !self.window.is_open()
+                && matches!(&self.phase, Some(Phase::Level { inventory: Some(i), menu: None, .. }) if i.is_open())
+    }
+
+    /// Whether the console is open (docs/behavior/console-window.md): it
+    /// takes every key, and the platform reads the clipboard for an Insert
+    /// press ([`Input::clipboard_read`]).
+    pub fn console_open(&self) -> bool {
+        self.window.is_open()
     }
 
     /// Whether the inventory screen is open.
@@ -3016,6 +3114,134 @@ mod tests {
             Some((6, "backpack"))
         );
         assert!(app.give_item("no_such_section").is_err());
+    }
+
+    fn hold(input: &mut Input, key: Key, pressed: bool) {
+        input.handle(Event::Key { key, pressed });
+    }
+
+    /// console-window.md sections 1 – 4 over a level: the console key
+    /// opens it, the level loses its held keys and the mouse, keys type,
+    /// Esc closes it without opening the menu, held movement resumes and
+    /// a held Shift is released (3.4).
+    #[test]
+    fn the_console_opens_over_the_level_takes_the_keys_and_closes() {
+        let (tree, mut app, mut input, mut audio) = in_level_with_inventory();
+        // The console's bindings are the level's once applied.
+        app.exec("bind console kGRAVE");
+        app.exec("bind forward kW");
+        let mut t = 32.0;
+        let mut frame = |app: &mut App, input: &mut Input| {
+            app.update(&tree, t, input, &mut audio);
+            input.end_frame();
+            t += 16.0;
+        };
+        let forward = |app: &App| app.level().unwrap().player().state().flags.forward;
+        hold(&mut input, Key::W, true);
+        frame(&mut app, &mut input);
+        frame(&mut app, &mut input);
+        assert!(forward(&app));
+        press(&mut input, Key::Grave);
+        frame(&mut app, &mut input);
+        assert!(app.console_open() && app.level_controls().is_none());
+        assert!(!app.character_takes_keys());
+        frame(&mut app, &mut input);
+        assert!(!forward(&app), "the level lost the held W");
+        // Keys type; Shift held is the console's from its press.
+        hold(&mut input, Key::LeftShift, true);
+        press(&mut input, Key::Digit1);
+        frame(&mut app, &mut input);
+        press(&mut input, Key::Q);
+        frame(&mut app, &mut input);
+        assert_eq!(app.console().line(), "!q");
+        let scene = app.scene(&tree, Resolution::new(1024, 768)).unwrap();
+        let area = scene.first(crate::console_window::LAYER).unwrap();
+        assert_eq!(area.bounds(), [-0.5, -0.5, 1023.5, 383.5], "half height");
+        assert!(scene.layer(crate::console_window::LAYER).count() > 3);
+        // The quit key (Esc) closes the console and opens no menu; W still
+        // held moves again; Shift is off for the next opening.
+        press(&mut input, Key::Escape);
+        frame(&mut app, &mut input);
+        assert!(!app.console_open() && !menu_open(&app));
+        assert!(forward(&app), "the held W resumes");
+        assert!(app.level_controls().is_some());
+        let scene = app.scene(&tree, Resolution::new(1024, 768)).unwrap();
+        assert!(scene.first(crate::console_window::LAYER).is_none());
+        // Opened again: the line is emptied, and Shift (still held from
+        // before) types nothing shifted until a repeat comes due.
+        press(&mut input, Key::Grave);
+        frame(&mut app, &mut input);
+        assert_eq!(app.console().line(), "");
+        press(&mut input, Key::Digit1);
+        frame(&mut app, &mut input);
+        assert_eq!(app.console().line(), "1");
+        // Key 41 without Shift closes it too.
+        hold(&mut input, Key::LeftShift, false);
+        press(&mut input, Key::Grave);
+        frame(&mut app, &mut input);
+        assert!(!app.console_open());
+    }
+
+    /// console-window.md sections 1, 2: the console over the main menu,
+    /// the menu's keys and mouse lost to it; the menu remembers it as it
+    /// opens over the level and opens it again as it closes.
+    #[test]
+    fn the_console_over_the_menu_and_the_menu_remembering_it() {
+        let (tree, mut app, mut input, mut audio) = in_level();
+        app.exec("bind console kGRAVE");
+        let mut t = 32.0;
+        let mut frame = |app: &mut App, input: &mut Input| {
+            app.update(&tree, t, input, &mut audio);
+            input.end_frame();
+            t += 16.0;
+        };
+        press(&mut input, Key::Escape);
+        frame(&mut app, &mut input);
+        assert!(menu_open(&app));
+        let cursor = input.cursor();
+        press(&mut input, Key::Grave);
+        frame(&mut app, &mut input);
+        assert!(app.console_open());
+        // The mouse is lost: the cursor stays; Esc closes the console, not
+        // the menu.
+        input.handle(Event::PointerMotion {
+            delta: [50.0, 50.0],
+        });
+        frame(&mut app, &mut input);
+        assert_eq!(input.cursor(), cursor);
+        press(&mut input, Key::Escape);
+        frame(&mut app, &mut input);
+        assert!(!app.console_open() && menu_open(&app));
+        // Open over the menu, then the menu closes: it opens again over the
+        // level. Typed `main_menu off` is an action (#647), so the menu
+        // closes here as the console reopens through the menu's own close.
+        press(&mut input, Key::Grave);
+        frame(&mut app, &mut input);
+        let Some(Phase::Level { menu, .. }) = &mut app.phase else {
+            panic!()
+        };
+        *menu = None;
+        frame(&mut app, &mut input);
+        assert!(app.console_open(), "the menu's close opened it again");
+        press(&mut input, Key::Escape);
+        frame(&mut app, &mut input);
+        assert!(!app.console_open() && !menu_open(&app));
+        // The menu opening closes it, remembered.
+        press(&mut input, Key::Grave);
+        frame(&mut app, &mut input);
+        let in_game = app.opening(true);
+        let Some(Phase::Level { menu, .. }) = &mut app.phase else {
+            panic!()
+        };
+        *menu = Some(Box::new(TitleMenu::open(
+            &app.data,
+            0,
+            &input,
+            &mut FakeAudio::default(),
+            in_game,
+        )));
+        frame(&mut app, &mut input);
+        assert!(!app.console_open() && menu_open(&app));
     }
 
     #[test]

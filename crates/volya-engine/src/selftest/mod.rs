@@ -25,6 +25,7 @@ pub use crate::render::selftest::{
 };
 
 mod artefacts;
+mod console;
 mod details;
 mod draw_calls;
 mod fidelity;
@@ -220,6 +221,7 @@ const SUITES: &[(&str, &[Checks])] = &[
         &[
             title_menu::CHECKS,
             statistics::CHECKS,
+            console::CHECKS,
             textures::CHECKS,
             save_load::CHECKS,
             inventory_screen::CHECKS,

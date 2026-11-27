@@ -48,6 +48,8 @@
 //! drives the cursor as above). Gamepad buttons without a key (shoulders,
 //! stick click, west) are held as [`Control::Pad`].
 
+use crate::console::Clipboard;
+
 /// Virtual UI space (§1): 1024 × 768 units, origin top-left, y downward.
 pub const UI_WIDTH: f32 = 1024.0;
 pub const UI_HEIGHT: f32 = 768.0;
@@ -736,6 +738,9 @@ pub struct Input {
     pointer_unlocked: bool,
     /// Characters typed through text entry this frame ([`Event::Text`]).
     text: Vec<char>,
+    /// What the clipboard held at this frame's Insert presses, in order
+    /// ([`Input::clipboard_read`]).
+    clipboard: std::collections::VecDeque<Clipboard>,
 }
 
 impl Default for Input {
@@ -766,6 +771,7 @@ impl Default for Input {
             sticks_released: [false; 2],
             pointer_unlocked: false,
             text: Vec::new(),
+            clipboard: Default::default(),
         }
     }
 }
@@ -986,6 +992,7 @@ impl Input {
         self.actions.clear();
         self.pointer_unlocked = false;
         self.text.clear();
+        self.clipboard.clear();
         self.touch_starts = 0;
         self.pointer_delta = [0.0; 2];
         self.drag_delta = [0.0; 2];
@@ -1036,6 +1043,19 @@ impl Input {
     /// ([`Event::Text`]), in order.
     pub fn text(&self) -> &[char] {
         &self.text
+    }
+
+    /// The platform read the clipboard for an Insert press it reports next
+    /// (docs/behavior/console-input.md section 6): the console takes it at
+    /// that press ([`Input::take_clipboard`]). Kept for this frame only.
+    pub fn clipboard_read(&mut self, clipboard: Clipboard) {
+        self.clipboard.push_back(clipboard);
+    }
+
+    /// The clipboard as read for this frame's next Insert press;
+    /// [`Clipboard::Unavailable`] where the platform read none.
+    pub fn take_clipboard(&mut self) -> Clipboard {
+        self.clipboard.pop_front().unwrap_or(Clipboard::Unavailable)
     }
 
     pub fn handle(&mut self, event: Event) {
