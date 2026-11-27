@@ -591,11 +591,13 @@ export const tests = {
       "no Check for updates button",
     );
     assertEqual(document.activeElement?.textContent, "‹ Back", "focus starts on Back (keyboard)");
-    // Licences (#757), last: the site's third-party notices, on a screen of
-    // the app's own (#854), not a new tab; Back returns to Settings.
-    const licences = [...document.querySelectorAll("#game .bottom a")].find((a) => a.textContent === "Licences");
-    assert(licences, "no Licences link at the bottom of Settings");
-    assert(licences === [...document.querySelectorAll("#game a, #game button")].at(-1), "Licences not last");
+    // Licences (#757) is in the footer beside the source (#859), not here:
+    // the site's third-party notices, on a screen of the app's own (#854),
+    // not a new tab; Back returns to the screen it was opened from.
+    assert(![...document.querySelectorAll("#game a")].some((a) => a.textContent === "Licences"), "Licences still in Settings");
+    const licences = document.querySelector("footer .links a.licences");
+    assert(licences && !licences.closest("[hidden]"), "no Licences link in the footer");
+    assertEqual(licences.closest(".links"), document.querySelector("footer .source").closest(".links"), "Licences not on the source's line");
     assertEqual(new URL(licences.href).pathname, `${base}third-party-licenses.txt`, "Licences' target");
     assert(!licences.target, "Licences opens another tab");
     const notices = await (await fetch(licences.href)).text();
@@ -615,6 +617,13 @@ export const tests = {
     document.querySelector(".brand").click();
     for (let i = 0; i < 50 && document.querySelector(".screen-head"); i++) await new Promise((r) => setTimeout(r, 20));
     assert(!document.querySelector(".screen-head"), "the logo did not lead Home");
+    // From the first screen, Licences' Back returns to it.
+    licences.click();
+    for (let i = 0; i < 100 && heading() !== "Licences"; i++) await new Promise((r) => setTimeout(r, 20));
+    assertEqual(heading(), "Licences", "Licences from the first screen");
+    document.activeElement.click();
+    for (let i = 0; i < 50 && document.querySelector(".screen-head"); i++) await new Promise((r) => setTimeout(r, 20));
+    assert(!document.querySelector(".screen-head"), "Back did not return to the first screen");
     [...document.querySelectorAll("#game .bottom button")].find((b) => b.textContent === "Settings").click();
     for (let i = 0; i < 50 && !document.querySelector(".screen-head"); i++) await new Promise((r) => setTimeout(r, 20));
     document.activeElement.click();

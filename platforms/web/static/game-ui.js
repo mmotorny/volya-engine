@@ -24,9 +24,12 @@ import { BUILD, versionText } from "./update.js";
 
 let call;
 let updates = null;
+/** The problem shown, if any: Licences' Back shows it again. */
+let shownProblem = null;
 const root = () => document.getElementById("game");
 /** Replaces the game section's content, skipping absent (null) parts. */
 const show = (...children) => {
+  shownProblem = null;
   delete document.documentElement.dataset.screen;
   const brand = document.querySelector(".brand");
   brand?.removeAttribute("tabindex");
@@ -405,6 +408,7 @@ export function showProblem(error) {
       element("p", { textContent: reported(error.message) }),
     ),
   );
+  shownProblem = error;
 }
 
 async function showHome(status) {
@@ -782,8 +786,7 @@ function touchPanel() {
 
 /**
  * Settings: updates, the touch controls, the logs and, in a danger zone,
- * the player's saves, settings, and logs and the game files; at the bottom,
- * Licences (#757), a deeper screen of its own (#854).
+ * the player's saves, settings, and logs and the game files.
  */
 async function showSettings() {
   const status = await call("game_status");
@@ -827,7 +830,6 @@ async function showSettings() {
           status.imported ? importSection(status, () => ({ userData, logs: logs.present() })) : null,
         )
       : null,
-    bottom(licencesLink()),
   );
   deeper("settings", back);
 }
@@ -849,18 +851,28 @@ function deeper(name, back) {
 const NOTICES = new URL("third-party-licenses.txt", import.meta.url).href;
 
 /**
- * Settings' Licences: a link to the notices, but a plain click or tap opens
- * them in the app (#854); an installed app has no tab bar to come back by.
+ * The footer's Licences (#757, #859): a link to the notices, but a plain
+ * click or tap opens them in the app (#854), as an installed app has no tab
+ * bar to come back by; Back returns to the screen it was opened from.
+ * Shown once this module can open them (main.js loads it once the engine
+ * runs, or to say it couldn't start).
  */
-function licencesLink() {
-  const a = element("a", { href: NOTICES, textContent: "Licences" });
+function footerLicences() {
+  const a = document.querySelector("footer a.licences");
+  if (!a) return;
+  a.href = NOTICES;
   a.addEventListener("click", (event) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
-    navigate("forward", () => showLicences());
+    const screen = document.documentElement.dataset.screen;
+    if (screen === "licences") return;
+    const shown = shownProblem;
+    const back = screen === "settings" ? showSettings : shown ? () => showProblem(shown) : refresh;
+    navigate("forward", () => showLicences(readNotices, back));
   });
-  return a;
+  a.closest(".licences-part").hidden = false;
 }
+footerLicences();
 
 /** The notices' text; rejects if they can't be read. */
 async function readNotices() {
@@ -872,11 +884,12 @@ async function readNotices() {
 /**
  * Licences (#854): the third-party notices, as `load` reads them, in a
  * monospace block to scroll and select; Loading… until then, or a failure
- * with Try again. Back leads to Settings.
+ * with Try again. Back shows `from`, the screen it was opened from.
  */
-function showLicences(load = readNotices) {
+function showLicences(load = readNotices, from = refresh) {
+  root().hidden = false;
   const back = element("button", { className: "back", textContent: "‹ Back" });
-  back.addEventListener("click", () => navigate("back", showSettings));
+  back.addEventListener("click", () => navigate("back", from));
   const body = element("div", { className: "panel notices" });
   const read = async () => {
     const loading = element("p", { className: "note", textContent: "Loading…" });

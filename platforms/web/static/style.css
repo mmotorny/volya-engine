@@ -926,7 +926,7 @@ html[data-nav="back"]::view-transition-new(root) {
   }
 }
 
-/* Footer: the version line, a drawing's title-block note, and the source. */
+/* Footer: the version line, a drawing's title-block note, and the links. */
 footer {
   margin-top: auto;
   padding-top: 1rem;
@@ -936,30 +936,51 @@ footer {
   gap: 0.5rem;
 }
 
-footer .source {
+/* The links' line: the source and Licences, a dot between them. */
+footer .links {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.8125rem;
+  color: var(--ink-3);
+}
+
+footer .licences-part {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+footer .licences-part[hidden] {
+  display: none;
+}
+
+footer .links a {
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
   min-height: 32px;
   padding: 0 0.75rem;
   border-radius: 999px;
-  font-size: 0.8125rem;
   color: var(--ink-2);
   text-decoration: none;
   transition: color 0.15s, background-color 0.15s;
 }
 
-footer .source svg {
+footer .links svg {
   width: 16px;
   height: 16px;
 }
 
-footer .source:hover {
+footer .links a:hover {
   color: var(--ink);
   background: rgba(159, 203, 250, 0.1);
 }
 
-footer .source:focus-visible {
+footer .links a:focus-visible {
   outline: 2px solid var(--line);
   outline-offset: 2px;
 }
@@ -991,27 +1012,6 @@ footer .source:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-}
-
-/* A link there (Settings' Licences): quiet, centred, a full touch target. */
-#game .bottom a {
-  align-self: center;
-  display: inline-flex;
-  align-items: center;
-  min-height: 44px;
-  padding: 0 0.75rem;
-  font-size: 0.8125rem;
-  color: var(--ink-2);
-  text-underline-offset: 0.15em;
-}
-
-#game .bottom a:hover {
-  color: var(--ink);
-}
-
-#game .bottom a:focus-visible {
-  outline: 2px solid var(--line);
-  outline-offset: 2px;
 }
 
 .screen-head {

@@ -212,8 +212,7 @@ export const SECTIONS = [
   {
     title: "Settings",
     states: [
-      // Licences at the bottom (#757) opens the Licences screen (#854).
-      { id: "settings", name: "Game files imported; Licences at the bottom", game: imported, screen: "settings" },
+      { id: "settings", name: "Game files imported", game: imported, screen: "settings" },
       {
         id: "settings-touch-experimental",
         name: "Ergonomic mobile mode chosen",
@@ -319,7 +318,8 @@ export const SECTIONS = [
     ],
   },
   {
-    // Settings' Licences (#854): the site's third-party notices, in the app.
+    // The footer's Licences (#859), on every screen: the site's third-party
+    // notices, in the app (#854).
     title: "Licences",
     states: [
       { id: "licences", name: "The notices (their first lines here; the screen scrolls through all)", game: imported, screen: "licences" },
