@@ -80,7 +80,7 @@ impl EffectInstance {
     /// A new instance given `effect`, its record at `record` in the library
     /// (P2 8.1): not playing, remaining time *T* when time-limited,
     /// accumulator 0, at (0, 0, 0) with the identity kept and the list as
-    /// stored.
+    /// stored, the box empty and the sphere at the origin with radius 0.
     pub fn new(record: usize, effect: EffectRecord<'_>) -> Self {
         let actions = effect
             .actions
@@ -109,11 +109,11 @@ impl EffectInstance {
             position: [0.0; 3],
             remaining: if timed { effect.time_limit } else { 0.0 },
             accumulator: 0,
-            // Empty when made (unestablished, P2 1; our choice): a member
-            // playing before any particle lives adds nothing to its group's
-            // box (P6 5.5), and no culling sphere is registered from it.
+            // P2 8.1: the empty box, and the sphere at (0, 0, 0) with
+            // radius 0, until the first update while not playing or the
+            // first step with live particles.
             bounds: Bounds::EMPTY,
-            sphere: Bounds::EMPTY.sphere(),
+            sphere: Sphere::default(),
             notices: None,
         }
     }

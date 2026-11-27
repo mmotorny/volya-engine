@@ -34,6 +34,31 @@ fn a_playing_instance_runs_whole_steps_at_most_three_an_update() {
     assert_eq!(steps, [0, 0, 1, 0, 3, 0, 1]);
 }
 
+/// P2 8.1: a new instance's box is empty and its sphere at the origin
+/// with radius 0; record, play, stop and placement leave them, and so do
+/// steps without live particles.
+#[test]
+fn a_new_instance_has_the_empty_box_and_the_origin_sphere() {
+    let origin = Sphere {
+        centre: [0.0; 3],
+        radius: 0.0,
+    };
+    let mut e = EffectInstance::new(0, effect("empty", 1, 0, 0.0, Vec::new()).record());
+    let unchanged = |e: &EffectInstance| e.bounds() == Bounds::EMPTY && e.sphere() == origin;
+    assert!(unchanged(&e));
+    e.place(&M, [1.0, 2.0, 3.0], Mode::World);
+    e.play();
+    assert!(unchanged(&e));
+    let mut random = Random::default();
+    e.update(99, &mut random);
+    assert!(unchanged(&e));
+    e.stop_deferred();
+    e.stop_immediate();
+    assert!(unchanged(&e));
+    e.update(33, &mut random);
+    assert_eq!(e.bounds(), Bounds::around(e.position()));
+}
+
 #[test]
 fn muhi_is_placed_as_p2_says() {
     let mut e = EffectInstance::new(0, muhi().record());
