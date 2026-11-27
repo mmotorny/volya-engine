@@ -16,7 +16,7 @@
 
 #define FRAMECLOCK_NAME "Local\\VolyaFrameClock"
 #define FRAMECLOCK_MAGIC 0x6b636f6c63796c76ull /* "vlyclock" */
-#define FRAMECLOCK_VERSION 1
+#define FRAMECLOCK_VERSION 2
 
 /* Ticks of the clock: 100 ns, the unit of the system time. Every clock the
  * game reads is derived from one count of them (frameclock.c). */
@@ -32,6 +32,8 @@ struct frameclock {
     uint64_t step;  /* ticks a presented frame advances the clock */
     uint64_t spin;  /* main-thread clock reads with no frame that add 1 ms (0: never) */
     uint64_t epoch; /* the system time at tick 0, in ticks since 1601 (FILETIME) */
+    uint64_t sleep_advances; /* 1: a main-thread Sleep(n) adds n ms to the clock */
+    char log_path[260];      /* the proxy's own log (empty: none) */
 
     /* Written by the driver while the game runs. */
     volatile int64_t hold;    /* hold after presenting this frame (0: never) */
@@ -44,6 +46,9 @@ struct frameclock {
     volatile int64_t held;      /* the frame the game is held after (0: running) */
     volatile int64_t extra;     /* ticks added by reads with no frame (spin) */
     volatile int64_t reads;     /* clock reads by the main thread, all told */
+    volatile int64_t other_reads; /* clock reads by the other threads */
+    volatile int64_t sleeps;    /* Sleep calls by the main thread */
+    volatile int64_t sleep_ticks; /* ticks they added (sleep_advances) */
     volatile int64_t captured;  /* the frame whose back buffer `pixels` holds */
     volatile int64_t capture_error; /* the failing HRESULT of the last copy, else 0 */
     volatile int64_t width;     /* the copied frame's size */

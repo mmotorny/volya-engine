@@ -82,7 +82,8 @@
  * (the input reaches the game's queue), seconds a frame may take, seconds
  * the game gets to load the proxy, and to end after `quit`. */
 #define INPUT_SETTLE_MS 30
-#define FRAME_TIMEOUT 900
+#define FRAME_TIMEOUT 300
+#define WATCHDOG 60
 #define ATTACH_TIMEOUT 60
 #define QUIT_WAIT 60
 
@@ -419,7 +420,7 @@ struct view {
 };
 
 static struct {
-    int64_t frame_ms, spin, epoch;
+    int64_t frame_ms, spin, epoch, sleep_advances;
     uint32_t width, height;
     struct buf ltx; /* the views' configuration file, CR LF lines */
     struct view views[32];
@@ -451,6 +452,8 @@ static int read_plan(const char *path) {
             plan.frame_ms = atoll(strtok(NULL, " "));
         } else if (!strcmp(word, "spin")) {
             plan.spin = atoll(strtok(NULL, " "));
+        } else if (!strcmp(word, "sleep_advances")) {
+            plan.sleep_advances = atoll(strtok(NULL, " "));
         } else if (!strcmp(word, "epoch")) {
             plan.epoch = atoll(strtok(NULL, " "));
         } else if (!strcmp(word, "size")) {
@@ -682,6 +685,22 @@ static void event(struct run *r, const char *what) {
     fflush(r->events);
 }
 
+/* The frame clock's figures, for a failure's message. */
+static const char *clock_state(struct run *r) {
+    static char s[512];
+    snprintf(s, sizeof s,
+             "attached %lld, hooked %lld, frames %lld, held %lld, hold %lld, main reads %lld, "
+             "other reads %lld, extra %lld ms, sleeps %lld (%lld ms); see frameclock.log",
+             (long long)load(&r->clock->attached), (long long)load(&r->clock->hooked),
+             (long long)load(&r->clock->frames), (long long)load(&r->clock->held),
+             (long long)load(&r->clock->hold), (long long)load(&r->clock->reads),
+             (long long)load(&r->clock->other_reads),
+             (long long)(load(&r->clock->extra) / (int64_t)FRAMECLOCK_TICKS_PER_MS),
+             (long long)load(&r->clock->sleeps),
+             (long long)(load(&r->clock->sleep_ticks) / (int64_t)FRAMECLOCK_TICKS_PER_MS));
+    return s;
+}
+
 /* Lets the game run until it has presented `frame` and holds it after it;
  * with `look`, the frame's back buffer is copied into r->pixels. */
 static int advance(struct run *r, int64_t frame, int look) {
@@ -692,15 +711,27 @@ static int advance(struct run *r, int64_t frame, int look) {
     store(&r->clock->capture, look ? frame : 0);
     store(&r->clock->hold, frame);
     ULONGLONG until = GetTickCount64() + FRAME_TIMEOUT * 1000ull;
+    ULONGLONG progressed = GetTickCount64();
+    int64_t seen[4] = {0};
     while (load(&r->clock->held) != frame) {
         if (ended(r)) {
             DWORD code = 0;
             GetExitCodeProcess(r->process, &code);
             return fail("the game ended (exit code 0x%lx) before frame %lld", code, (long long)frame);
         }
-        if (GetTickCount64() > until) {
-            return fail("no frame %lld within %d s (the game presented %lld)", (long long)frame,
-                        FRAME_TIMEOUT, (long long)load(&r->clock->frames));
+        /* Progress: a frame, or a clock read or sleep by the main thread
+         * (other threads read the clock while the main one is stuck too).
+         * None for WATCHDOG seconds and the game is stuck. */
+        int64_t now[4] = {load(&r->clock->frames), load(&r->clock->reads),
+                          load(&r->clock->sleeps), load(&r->clock->extra)};
+        if (memcmp(now, seen, sizeof now)) {
+            memcpy(seen, now, sizeof now);
+            progressed = GetTickCount64();
+        }
+        if (GetTickCount64() > until || GetTickCount64() - progressed > WATCHDOG * 1000ull) {
+            return fail("stuck waiting for frame %lld (%s): %s", (long long)frame,
+                        GetTickCount64() > until ? "frame timeout" : "no progress for the watchdog",
+                        clock_state(r));
         }
         Sleep(1);
     }
@@ -1387,6 +1418,8 @@ static int run_once(const char *exe_dir, const char *game, const char *work, con
     r.clock->spin = (uint64_t)plan.spin;
     /* Seconds since 1970 to ticks since 1601. */
     r.clock->epoch = ((uint64_t)plan.epoch + 11644473600ull) * 10000000ull;
+    r.clock->sleep_advances = (uint64_t)plan.sleep_advances;
+    join(r.clock->log_path, sizeof r.clock->log_path, r.dir, "frameclock.log");
     r.clock->hold = 1;
     r.clock->version = FRAMECLOCK_VERSION;
     r.clock->magic = FRAMECLOCK_MAGIC;
@@ -1420,8 +1453,9 @@ static int run_once(const char *exe_dir, const char *game, const char *work, con
         Sleep(5);
     }
     if (!load(&r.clock->attached)) {
-        ok = fail("the frame clock did not start in the game: its winmm.dll was not loaded from %s",
-                  bin);
+        ok = fail("the frame clock did not start in the game within %d s%s: its winmm.dll was "
+                  "not loaded from %s",
+                  ATTACH_TIMEOUT, ended(&r) ? " (the game ended)" : "", bin);
     }
     if (ok && (ok = advance(&r, 1, 0))) {
         event(&r, load(&r.clock->hooked) ? "the first frame, held"

@@ -39,6 +39,8 @@
 #include <windows.h>
 #include <psapi.h>
 #include <d3d9.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "frameclock.h"
@@ -114,8 +116,46 @@ static ULONGLONG ticks(void) {
             InterlockedExchange(&reads_since_frame, 0);
             InterlockedAdd64((volatile LONGLONG *)&clock_->extra, (LONGLONG)FRAMECLOCK_TICKS_PER_MS);
         }
+    } else {
+        InterlockedIncrement64((volatile LONGLONG *)&clock_->other_reads);
     }
-    return (ULONGLONG)load(&clock_->frames) * clock_->step + (ULONGLONG)load(&clock_->extra);
+    return (ULONGLONG)load(&clock_->frames) * clock_->step + (ULONGLONG)load(&clock_->extra) +
+           (ULONGLONG)load(&clock_->sleep_ticks);
+}
+
+/* --- The proxy's log ---------------------------------------------------- */
+
+static HANDLE log_file = INVALID_HANDLE_VALUE;
+static CRITICAL_SECTION log_lock;
+
+/* A line in the proxy's log (the driver names it), with the real
+ * milliseconds since start-up and the thread. */
+static void dlog(const char *fmt, ...) {
+    if (log_file == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    char line[512];
+    int n = snprintf(line, sizeof line, "%10lu ms  thread %5lu  ", GetTickCount(),
+                     GetCurrentThreadId());
+    va_list ap;
+    va_start(ap, fmt);
+    int m = vsnprintf(line + n, sizeof line - (size_t)n - 2, fmt, ap);
+    va_end(ap);
+    n += m < 0 ? 0 : (m > (int)(sizeof line) - n - 3 ? (int)(sizeof line) - n - 3 : m);
+    line[n++] = '\r';
+    line[n++] = '\n';
+    DWORD w;
+    EnterCriticalSection(&log_lock);
+    WriteFile(log_file, line, (DWORD)n, &w, NULL);
+    LeaveCriticalSection(&log_lock);
+}
+
+static void open_log(const char *path) {
+    InitializeCriticalSection(&log_lock);
+    if (path[0]) {
+        log_file = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                               OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    }
 }
 
 static BOOL WINAPI fake_QueryPerformanceCounter(LARGE_INTEGER *v) {
@@ -279,20 +319,35 @@ static void use_us_layout(void) {
     }
 }
 
-static HRESULT WINAPI hook_Present(IDirect3DDevice9 *dev, const RECT *src, const RECT *dst,
-                                   HWND window, const RGNDATA *dirty) {
+typedef HRESULT(WINAPI *chain_present_fn)(IDirect3DSwapChain9 *, const RECT *, const RECT *, HWND,
+                                          const RGNDATA *, DWORD);
+static chain_present_fn real_chain_Present;
+static IDirect3DDevice9 *the_device;
+static DWORD presenting_thread; /* inside a hooked Present: an inner one counts not */
+
+/* A frame presented: the back buffer copied first when asked for, then
+ * `present`, then the clock advanced and the frame held. */
+static HRESULT frame_presented(IDirect3DDevice9 *dev, HRESULT (*present)(void *), void *args) {
+    if (presenting_thread == GetCurrentThreadId()) {
+        return present(args);
+    }
     LONGLONG frame = load(&clock_->frames) + 1;
     if (!layout_set) {
         layout_set = TRUE;
         use_us_layout();
     }
-    if (load(&clock_->capture) == frame) {
+    if (dev && load(&clock_->capture) == frame) {
         copy_back_buffer(dev, frame);
     }
-    HRESULT hr = real_Present(dev, src, dst, window, dirty);
+    presenting_thread = GetCurrentThreadId();
+    HRESULT hr = present(args);
+    presenting_thread = 0;
     /* The clock advances: reads from here on are of the next frame. */
     store(&clock_->frames, frame);
     InterlockedExchange(&reads_since_frame, 0);
+    if (frame <= 3 || frame % 500 == 0) {
+        dlog("frame %lld presented (0x%lx)", frame, (unsigned long)hr);
+    }
     LONGLONG hold = load(&clock_->hold);
     if (hold && frame >= hold) {
         store(&clock_->held, frame);
@@ -304,19 +359,64 @@ static HRESULT WINAPI hook_Present(IDirect3DDevice9 *dev, const RECT *src, const
     return hr;
 }
 
+struct present_args {
+    IDirect3DDevice9 *dev;
+    IDirect3DSwapChain9 *chain;
+    const RECT *src, *dst;
+    HWND window;
+    const RGNDATA *dirty;
+    DWORD flags;
+};
+
+static HRESULT device_present(void *p) {
+    struct present_args *a = p;
+    return real_Present(a->dev, a->src, a->dst, a->window, a->dirty);
+}
+
+static HRESULT chain_present(void *p) {
+    struct present_args *a = p;
+    return real_chain_Present(a->chain, a->src, a->dst, a->window, a->dirty, a->flags);
+}
+
+static HRESULT WINAPI hook_Present(IDirect3DDevice9 *dev, const RECT *src, const RECT *dst,
+                                   HWND window, const RGNDATA *dirty) {
+    struct present_args a = {dev, NULL, src, dst, window, dirty, 0};
+    return frame_presented(dev, device_present, &a);
+}
+
+static HRESULT WINAPI hook_chain_Present(IDirect3DSwapChain9 *chain, const RECT *src,
+                                         const RECT *dst, HWND window, const RGNDATA *dirty,
+                                         DWORD flags) {
+    struct present_args a = {NULL, chain, src, dst, window, dirty, flags};
+    return frame_presented(the_device, chain_present, &a);
+}
+
 static HRESULT WINAPI hook_CreateDevice(IDirect3D9 *d3d, UINT adapter, D3DDEVTYPE type, HWND focus,
                                         DWORD flags, D3DPRESENT_PARAMETERS *params,
                                         IDirect3DDevice9 **device) {
+    dlog("CreateDevice: adapter %u, type %d, flags 0x%lx, %ux%u, windowed %d", adapter, type,
+         (unsigned long)flags, params ? params->BackBufferWidth : 0,
+         params ? params->BackBufferHeight : 0, params ? params->Windowed : -1);
     HRESULT hr = real_CreateDevice(d3d, adapter, type, focus, flags, params, device);
+    dlog("CreateDevice: 0x%lx", (unsigned long)hr);
     if (SUCCEEDED(hr) && device && *device) {
+        the_device = *device;
         patch_slot((void **)&(*device)->lpVtbl->Present, (void *)hook_Present, (void **)&real_Present);
+        IDirect3DSwapChain9 *chain = NULL;
+        if (SUCCEEDED(IDirect3DDevice9_GetSwapChain(*device, 0, &chain)) && chain) {
+            patch_slot((void **)&chain->lpVtbl->Present, (void *)hook_chain_Present,
+                       (void **)&real_chain_Present);
+            IDirect3DSwapChain9_Release(chain);
+        }
         store(&clock_->hooked, 1);
+        dlog("Present hooked (the device's and its swap chain's)");
     }
     return hr;
 }
 
 static IDirect3D9 *WINAPI hook_Direct3DCreate9(UINT version) {
     IDirect3D9 *d3d = real_Direct3DCreate9(version);
+    dlog("Direct3DCreate9(%u): %p", version, (void *)d3d);
     if (d3d) {
         patch_slot((void **)&d3d->lpVtbl->CreateDevice, (void *)hook_CreateDevice,
                    (void **)&real_CreateDevice);
@@ -339,27 +439,62 @@ static FARPROC(WINAPI *real_GetProcAddress)(HMODULE, LPCSTR);
 static void patch_all(void);
 
 static HMODULE WINAPI hook_LoadLibraryA(LPCSTR name) {
+    dlog("LoadLibraryA %s", name ? name : "(null)");
     HMODULE m = real_LoadLibraryA(name);
     patch_all();
     return m;
 }
 
 static HMODULE WINAPI hook_LoadLibraryW(LPCWSTR name) {
+    dlog("LoadLibraryW %ls", name ? name : L"(null)");
     HMODULE m = real_LoadLibraryW(name);
     patch_all();
     return m;
 }
 
 static HMODULE WINAPI hook_LoadLibraryExA(LPCSTR name, HANDLE file, DWORD flags) {
+    dlog("LoadLibraryExA %s 0x%lx", name ? name : "(null)", (unsigned long)flags);
     HMODULE m = real_LoadLibraryExA(name, file, flags);
     patch_all();
     return m;
 }
 
 static HMODULE WINAPI hook_LoadLibraryExW(LPCWSTR name, HANDLE file, DWORD flags) {
+    dlog("LoadLibraryExW %ls 0x%lx", name ? name : L"(null)", (unsigned long)flags);
     HMODULE m = real_LoadLibraryExW(name, file, flags);
     patch_all();
     return m;
+}
+
+static void(WINAPI *real_Sleep)(DWORD);
+static DWORD(WINAPI *real_SleepEx)(DWORD, BOOL);
+
+/* A main-thread sleep of `ms`: counted, and with sleep_advances it adds its
+ * time to the clock, so a wait that sleeps until time has passed ends (as
+ * a busy wait does through spin). */
+static void slept(DWORD ms) {
+    if (GetCurrentThreadId() != main_thread) {
+        return;
+    }
+    LONGLONG n = InterlockedIncrement64((volatile LONGLONG *)&clock_->sleeps);
+    if (n <= 5 || n % 1000 == 0) {
+        dlog("main-thread Sleep(%lu), number %lld, frame %lld", (unsigned long)ms, n,
+             load(&clock_->frames));
+    }
+    if (clock_->sleep_advances && ms != INFINITE) {
+        InterlockedAdd64((volatile LONGLONG *)&clock_->sleep_ticks,
+                         (LONGLONG)ms * (LONGLONG)FRAMECLOCK_TICKS_PER_MS);
+    }
+}
+
+static void WINAPI fake_Sleep(DWORD ms) {
+    slept(ms);
+    real_Sleep(ms);
+}
+
+static DWORD WINAPI fake_SleepEx(DWORD ms, BOOL alertable) {
+    slept(ms);
+    return real_SleepEx(ms, alertable);
 }
 
 static FARPROC WINAPI hook_GetProcAddress(HMODULE module, LPCSTR name);
@@ -383,6 +518,8 @@ static struct hook {
     {"LoadLibraryExA", 0, (void *)hook_LoadLibraryExA},
     {"LoadLibraryExW", 0, (void *)hook_LoadLibraryExW},
     {"GetProcAddress", 0, (void *)hook_GetProcAddress},
+    {"Sleep", 0, (void *)fake_Sleep},
+    {"SleepEx", 0, (void *)fake_SleepEx},
 };
 #define HOOKS (sizeof(hooks) / sizeof(hooks[0]))
 
@@ -410,11 +547,16 @@ static FARPROC WINAPI hook_GetProcAddress(HMODULE module, LPCSTR name) {
         return p;
     }
     if (strcmp(name, "Direct3DCreate9") == 0) {
+        dlog("GetProcAddress Direct3DCreate9: hooked");
         real_Direct3DCreate9 = (create9_fn)p;
         return (FARPROC)(void *)hook_Direct3DCreate9;
     }
+    if (!strncmp(name, "Direct3D", 8)) {
+        dlog("GetProcAddress %s: not hooked", name);
+    }
     struct hook *h = hook_named(name);
     if (h && h->real == (void *)p) {
+        dlog("GetProcAddress %s: the frame clock's", name);
         return (FARPROC)h->fake;
     }
     return p;
@@ -446,6 +588,7 @@ static void patch_imports(HMODULE m) {
     if (!dir.VirtualAddress || !dir.Size) {
         return;
     }
+    int patched = 0;
     for (IMAGE_IMPORT_DESCRIPTOR *d = (IMAGE_IMPORT_DESCRIPTOR *)(base + dir.VirtualAddress); d->Name;
          d++) {
         if (_stricmp((const char *)(base + d->Name), "kernel32.dll") != 0) {
@@ -469,8 +612,16 @@ static void patch_imports(HMODULE m) {
             if (VirtualProtect(&iat[i], sizeof(iat[i]), PAGE_READWRITE, &old)) {
                 iat[i].u1.Function = (DWORD_PTR)h->fake;
                 VirtualProtect(&iat[i], sizeof(iat[i]), old, &old);
+                patched++;
+            } else {
+                dlog("cannot patch %s in a module", h->name);
             }
         }
+    }
+    if (patched) {
+        char path[MAX_PATH];
+        GetModuleFileNameA(m, path, MAX_PATH);
+        dlog("patched %d imports of %s", patched, path);
     }
 }
 
@@ -491,6 +642,28 @@ static void patch_all(void) {
 
 /* --- Start -------------------------------------------------------------- */
 
+/* Every 2 real seconds, the clock's figures when they changed (and every
+ * 20 s regardless), so the log tells where a run stands. */
+static DWORD WINAPI heartbeat(void *unused) {
+    (void)unused;
+    LONGLONG last[6] = {-1, -1, -1, -1, -1, -1};
+    for (int beat = 0;; beat++) {
+        Sleep(2000);
+        LONGLONG now[6] = {load(&clock_->frames), load(&clock_->held), load(&clock_->reads),
+                           load(&clock_->other_reads), load(&clock_->extra),
+                           load(&clock_->sleeps)};
+        if (memcmp(now, last, sizeof now) || beat % 10 == 0) {
+            dlog("frames %lld, held %lld, hold %lld, hooked %lld, main reads %lld, other reads "
+                 "%lld, extra %lld ms, sleeps %lld (%lld ms)",
+                 now[0], now[1], load(&clock_->hold), load(&clock_->hooked), now[2], now[3],
+                 now[4] / (LONGLONG)FRAMECLOCK_TICKS_PER_MS, now[5],
+                 load(&clock_->sleep_ticks) / (LONGLONG)FRAMECLOCK_TICKS_PER_MS);
+            memcpy(last, now, sizeof now);
+        }
+    }
+    return 0;
+}
+
 static void start_clock(void) {
     HANDLE map = OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, FRAMECLOCK_NAME);
     if (!map) {
@@ -500,10 +673,16 @@ static void start_clock(void) {
     if (!c || c->magic != FRAMECLOCK_MAGIC || c->version != FRAMECLOCK_VERSION) {
         return;
     }
+    open_log(c->log_path);
+    dlog("the frame clock starts: step %llu ticks, spin %llu, sleep_advances %llu",
+         (unsigned long long)c->step, (unsigned long long)c->spin,
+         (unsigned long long)c->sleep_advances);
     HMODULE kernel32 = GetModuleHandleA("kernel32.dll");
     for (size_t i = 0; i < HOOKS; i++) {
         hooks[i].real = (void *)GetProcAddress(kernel32, hooks[i].name);
     }
+    real_Sleep = (void *)GetProcAddress(kernel32, "Sleep");
+    real_SleepEx = (void *)GetProcAddress(kernel32, "SleepEx");
     real_LoadLibraryA = (void *)GetProcAddress(kernel32, "LoadLibraryA");
     real_LoadLibraryW = (void *)GetProcAddress(kernel32, "LoadLibraryW");
     real_LoadLibraryExA = (void *)GetProcAddress(kernel32, "LoadLibraryExA");
@@ -520,6 +699,9 @@ static void start_clock(void) {
     clock_ = c;
     patch_all();
     store(&c->attached, 1);
+    dlog("attached; main thread %lu", main_thread);
+    /* Starts once the loader lets go: it only writes the log. */
+    CreateThread(NULL, 0, heartbeat, NULL, 0, NULL);
 }
 
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
