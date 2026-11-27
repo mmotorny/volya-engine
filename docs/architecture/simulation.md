@@ -24,6 +24,7 @@ The level (`volya-engine::level::LevelScreen`) owns what runs while a game is pl
 ## Physics
 
 - `volya-engine-core::physics::World` (docs/behavior/physics-world.md) holds what doesn't depend on the solver: the parameters fixed at creation, the frame's steps from an accumulator of the display frame time, `ph_frequency` and `ph_iterations`, the step's order, the per-step actions, the rest pass, the floor and freezing. Contacts and solving are behind `physics::Solver`; what the world steps behind `physics::Object` and `physics::Updater`.
+- The solver is the public Open Dynamics Engine (decided by the user, 2026-11-27; the game ships an ODE build, physics-scope.md 1): its latest release, 0.16.6, core only (no OPCODE, GIMPACT, libccd, demos), under its BSD option, compiled to wasm by Bazel; precision, the gyroscopic term and a patch in `third_party/` for the older row shuffle and for the game's additions follow the spec of the shipped build. Bit-exact parity is not expected (floating-point order changed since 0.12, x87 against wasm). Its BSD notice and OU's ship in the app's licence notices; ODE's names are not used to promote the app. Considered: our own solver, Rapier.
 
 ## The player character
 
