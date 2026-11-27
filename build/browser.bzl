@@ -23,7 +23,8 @@ def _browser_suite_test_impl(ctx):
     files = []
     if ctx.files.references:
         # The fidelity suite's original frames, the d3d9probes suite's
-        # results: a directory holding `<suite>/`, or files below
+        # results, the platform suite's native physics outputs: a
+        # directory holding `<suite>/`, or files below
         # `<suite>/`, served from the folder that holds it.
         files = ctx.files.references
         first = files[0]
@@ -78,7 +79,7 @@ def browser_suite(suite, target, tags = [], timeout = "moderate", gamedata = Tru
         tags: tags besides the ones every suite has.
         timeout: Bazel's timeout (the suite's report timeout is its own).
         gamedata: whether the suite reads the installer.
-        references: what the page compares with (the fidelity and d3d9probes suites').
+        references: what the page compares with (the fidelity, d3d9probes and platform suites').
     """
     # Never in `bazel test //...` by accident: the iOS Simulator and the
     # measurements run only when named, alone on the machine.

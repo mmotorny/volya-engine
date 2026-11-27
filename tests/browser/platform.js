@@ -25,6 +25,13 @@ function inWorker(op, extra = {}, transfer = []) {
   });
 }
 
+/** Standard base64 of `bytes`. */
+function base64Of(bytes) {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
+
 export const tests = {
   "wasm runs in a module worker": async () => {
     const status = await inWorker("wasm");
@@ -53,6 +60,27 @@ export const tests = {
 
   "script runtime passes its self-test in the engine worker": async () => {
     assertEqual(await volya.call("script_selftest"), "Lua 5.1 (alpha) + LuaJIT 1.0.3");
+  },
+
+  // Before any other world is made: the first scenario reads the values the
+  // library loads with.
+  "physics comparison's scenarios compute in the engine worker as natively": async () => {
+    // Each scenario of tests/odeharness against the native arm64 build's
+    // output (//tests/odeharness:platform_references), bit for bit.
+    const names = await volya.call("physics_scenarios");
+    const base = `${location.pathname.slice(0, location.pathname.indexOf("/__test/"))}/__test/reference/platform/odeharness/`;
+    const differences = [];
+    let words = 0;
+    for (const [index, name] of names.entries()) {
+      const response = await fetch(`${base}${name}.bin`);
+      if (!response.ok) throw new Error(`${name}: no native output (//tests/odeharness:platform_references)`);
+      const native = new Uint8Array(await response.arrayBuffer());
+      const result = await volya.call("physics_scenario", { index, native_base64: base64Of(native) });
+      words += result.words;
+      if (result.difference) differences.push(`${name}: ${result.difference}`);
+    }
+    if (differences.length) throw new Error(differences.join("\n"));
+    return `${names.length} scenarios, ${words} words identical`;
   },
 
   "physics solver steps a falling body as natively in the engine worker": async () => {

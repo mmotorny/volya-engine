@@ -3,7 +3,8 @@
 ** SPDX-License-Identifier: BSD-3-Clause
 **
 ** The scenarios (scenarios.c) against our build, linked into
-** volya-engine-core natively (its build.rs): the library's functions
+** volya-engine-core (its build.rs), natively and for wasm32, the
+** comparison (compare.c) natively only: the library's functions
 ** directly, the run time's rand ours (physics::ode::msvc_rand), the x87
 ** instructions our emulation (physics::ode::x87) and sqrtf. The environment
 ** is not set: our build computes as the shipped library's does in it.
@@ -62,6 +63,7 @@ const char *volya_ode_harness_name (int i)
   return volya_ode_scenario_name (i);
 }
 
+#ifndef __wasm__
 /* compare.c's comparison, its lines written to the file `report' */
 int volya_ode_harness_compare (const char *ours, const char *shipped, const char *report)
 {
@@ -71,3 +73,4 @@ int volya_ode_harness_compare (const char *ours, const char *shipped, const char
   fclose (f);
   return n;
 }
+#endif

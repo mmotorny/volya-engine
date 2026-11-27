@@ -498,6 +498,10 @@ static void s_rays (void)
     dReal g[15];
     memcpy (g, H->dGeomGetPosition (ray), 12);
     memcpy (g + 3, H->dGeomGetRotation (ray), 48);
+    /* the rotation's fourth column, which ODE's dGeomRaySet leaves as the
+    ** stack held it (dRFromZAxis fills three columns of a local), recorded
+    ** as zero */
+    g[6] = g[10] = g[14] = 0;
     rec_floats (T_GEOM, g, 15);
     int t = i % 3;
     dReal R[12];

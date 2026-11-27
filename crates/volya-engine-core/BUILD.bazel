@@ -20,6 +20,7 @@ cargo_build_script(
     build_script_env = select({
         "@platforms//cpu:wasm32": {
             "VOLYA_ODE_FAST": "$(execpath @ode_fast//:ode/src/fastdot.c)",
+            "VOLYA_ODE_HARNESS": "$(execpath //tests/odeharness:harness.h)",
             "VOLYA_ODE_LICENSE": "$(execpath @ode//:LICENSE-BSD.TXT)",
             "VOLYA_WASM_CLANG": "$(execpath @wasm_llvm//:bin/clang)",
         },
@@ -36,16 +37,15 @@ cargo_build_script(
         "@ode_fast//:ode/src/fastldlt.c",
         "@ode_fast//:ode/src/fastlsolve.c",
         "@ode_fast//:ode/src/fastltsolve.c",
+        "//tests/odeharness:harness.h",
+        "//tests/odeharness:scenarios",
     ] + select({
         "@platforms//cpu:wasm32": [
             "@wasm_llvm//:bin/clang",
             "@wasm_llvm//:sysroot",
             "@wasm_llvm//:tools",
         ],
-        "//conditions:default": [
-            "//tests/odeharness:harness.h",
-            "//tests/odeharness:scenarios",
-        ],
+        "//conditions:default": [],
     }),
     deps = all_crate_deps(build = True),
 )

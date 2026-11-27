@@ -116,21 +116,25 @@ fn main() {
     }
     c.compile("volya_ode_fast");
 
-    if !wasm {
-        // The comparison's scenarios against our build (tests/odeharness,
-        // physics::ode::harness), natively.
-        let harness = dir_of("VOLYA_ODE_HARNESS", "tests/odeharness/harness.h");
-        let mut h = cc::Build::new();
-        h.std("c99")
-            .opt_level(2)
-            .warnings(true)
-            .flag("-ffp-contract=off")
-            .flag("-fno-fast-math")
-            .file(harness.join("scenarios.c"))
-            .file(harness.join("native.c"))
-            .file(harness.join("compare.c"));
-        h.compile("volya_ode_harness");
+    // The comparison's scenarios against our build (tests/odeharness,
+    // physics::ode::harness), natively and for wasm32 (the engine worker's
+    // check, docs/testing.md); its comparison (compare.c) natively. Linked
+    // only into what calls them.
+    let harness = dir_of("VOLYA_ODE_HARNESS", "tests/odeharness/harness.h");
+    let mut h = cc::Build::new();
+    h.std("c99")
+        .opt_level(2)
+        .warnings(true)
+        .flag("-ffp-contract=off")
+        .flag("-fno-fast-math")
+        .file(harness.join("scenarios.c"))
+        .file(harness.join("native.c"));
+    if wasm {
+        wasm_toolchain(&mut h, false);
+    } else {
+        h.file(harness.join("compare.c"));
     }
+    h.compile("volya_ode_harness");
 
     if wasm {
         let mut libc = cc::Build::new();

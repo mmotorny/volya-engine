@@ -19,9 +19,14 @@ SLOW = "long"
 
 WHOLE_GAME = "eternal"
 
+# The platform suite holds the engine worker's physics comparison outputs to
+# the native build's (docs/testing.md).
+REFERENCES = {"platform": "//tests/odeharness:platform_references"}
+
 [
     browser_suite(
         gamedata = gamedata,
+        references = REFERENCES.get(suite),
         suite = suite,
         tags = tags,
         target = "chrome",
@@ -67,6 +72,7 @@ browser_suite(
 [
     browser_suite(
         gamedata = gamedata,
+        references = REFERENCES.get(suite),
         suite = suite,
         tags = ALONE,
         target = "iphone",

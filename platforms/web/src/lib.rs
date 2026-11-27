@@ -749,6 +749,17 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         "physics_selftest" => to_json(
             &volya_engine::core::physics::ode::fall_check().map_err(|e| JsValue::from_str(&e))?,
         ),
+        // The physics comparison's scenarios (docs/testing.md): `{}` lists
+        // them; `{index, native_base64}` runs that one and holds its output
+        // to the native build's (`{words, difference}`, null when
+        // identical).
+        #[cfg(feature = "test-ops")]
+        "physics_scenarios" => to_json(&volya_engine::core::physics::ode::harness::scenarios()),
+        #[cfg(feature = "test-ops")]
+        "physics_scenario" => to_json(&physics_scenario(
+            args.get("index").and_then(|v| v.as_u64()).unwrap_or(u64::MAX),
+            text("native_base64"),
+        )?),
         "game_status" => to_json(&game::status().await?),
         "unmount_game" => {
             game::unmount();
@@ -1189,6 +1200,28 @@ fn d3d9probes_replay(scenes: &str) -> Result<serde_json::Value, JsValue> {
             })
             .collect(),
     ))
+}
+
+/// The physics comparison's scenario `index` run here against the native
+/// build's output, `native` (base64 of its little-endian words).
+#[cfg(feature = "test-ops")]
+fn physics_scenario(index: u64, native: &str) -> Result<serde_json::Value, JsValue> {
+    use volya_engine::core::physics::ode::harness;
+    let count = harness::scenarios().len();
+    let index = usize::try_from(index)
+        .ok()
+        .filter(|&i| i < count)
+        .ok_or_else(|| JsValue::from_str(&format!("index: not below {count}")))?;
+    let native: Vec<u32> = from_base64(native)
+        .filter(|b| b.len().is_multiple_of(4))
+        .ok_or_else(|| JsValue::from_str("native: not base64 of words"))?
+        .chunks_exact(4)
+        .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
+        .collect();
+    let ours = harness::run(index);
+    Ok(serde_json::json!({
+        "words": ours.len(),        "difference": harness::difference(&native, &ours),
+    }))
 }
 
 /// The bytes of standard base64 `text` (padded), or `None`.

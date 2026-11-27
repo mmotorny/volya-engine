@@ -69,7 +69,7 @@ def _ours_impl(ctx):
     out = ctx.actions.declare_directory(ctx.attr.out)
     ctx.actions.run(
         executable = ctx.executable.tool,
-        arguments = [out.path],
+        arguments = [out.path + ("/" + ctx.attr.within if ctx.attr.within else "")],
         outputs = [out],
         mnemonic = "OdeHarnessOurs",
         progress_message = "Running the physics comparison's scenarios against our build: %{label}",
@@ -79,9 +79,10 @@ def _ours_impl(ctx):
 odeharness_ours = rule(
     implementation = _ours_impl,
     doc = "A folder of our build's outputs of the physics comparison's scenarios " +
-          "(`tool`, run natively on the host).",
+          "(`tool`, run natively on the host), in its folder `within` if given.",
     attrs = {
         "out": attr.string(mandatory = True),
+        "within": attr.string(doc = "The folder below `out` the outputs go in."),
         "tool": attr.label(mandatory = True, executable = True, cfg = "exec"),
     },
 )

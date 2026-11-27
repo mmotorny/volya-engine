@@ -35,12 +35,22 @@ d3d9probes_exe(
     out = "odeharness.exe",
 )
 
-# Our build's outputs (the Mac's native arm64 build; wasm32's is #775),
-# which the PC compares the shipped library's with.
+# Our build's outputs (the Mac's native arm64 build), which the PC compares
+# the shipped library's with.
 odeharness_ours(
     name = "ours",
     out = "ours",
     tool = "//crates/volya-engine-core:ode_harness_ours",
+)
+
+# The same, as the platform browser suite's references
+# (`platform/odeharness/<scenario>.bin`): the engine worker's wasm32 outputs
+# are held to them.
+odeharness_ours(
+    name = "platform_references",
+    out = "platform_references",
+    tool = "//crates/volya-engine-core:ode_harness_ours",
+    within = "platform/odeharness",
 )
 
 # The Windows runner (`bazel run //tools/xtask -- odeharness release`
