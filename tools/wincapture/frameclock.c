@@ -38,6 +38,7 @@
 #define PSAPI_VERSION 2
 #include <windows.h>
 #include <psapi.h>
+#include <tlhelp32.h>
 #include <d3d9.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -681,6 +682,21 @@ static DWORD(WINAPI *real_SleepEx)(DWORD, BOOL);
 /* A main-thread sleep of `ms`: counted, and with sleep_advances it adds its
  * time to the clock, so a wait that sleeps until time has passed ends (as
  * a busy wait does through spin). */
+/* The process's threads (a snapshot of the system's), for the log. */
+static int threads_in_process(void) {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    THREADENTRY32 te = {.dwSize = sizeof te};
+    int n = 0;
+    if (snap == INVALID_HANDLE_VALUE) {
+        return -1;
+    }
+    for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) {
+        n += te.th32OwnerProcessID == GetCurrentProcessId();
+    }
+    CloseHandle(snap);
+    return n;
+}
+
 static void slept(DWORD ms) {
     if (GetCurrentThreadId() != main_thread) {
         return;
@@ -690,9 +706,16 @@ static void slept(DWORD ms) {
      * counts only reads since the last frame or sleep. */
     InterlockedExchange(&reads_since_frame, 0);
     LONGLONG n = InterlockedIncrement64((volatile LONGLONG *)&clock_->sleeps);
-    if (n <= 5 || n % 1000 == 0) {
-        dlog("main-thread Sleep(%lu), number %lld, frame %lld", (unsigned long)ms, n,
-             load(&clock_->frames));
+    int before_first = load(&clock_->frames) == 0;
+    if (n <= 5 || n % 1000 == 0 || (before_first && ms)) {
+        dlog("main-thread Sleep(%lu), number %lld, frame %lld, %d threads in the process",
+             (unsigned long)ms, n, load(&clock_->frames), threads_in_process());
+    }
+    if (before_first && !clock_->prestart_sleeps) {
+        /* Before the first frame, sleeps advance nothing: the startup's
+         * waits on its other threads sleep a number of times that follows
+         * real time (282 and 283 Sleep(5), measured on the PC, #762). */
+        return;
     }
     if (clock_->sleep_advances && ms != INFINITE) {
         /* Before the first frame a sleep advances at least the quantum: the

@@ -421,7 +421,8 @@ struct view {
 };
 
 static struct {
-    int64_t frame_ms, spin, epoch, sleep_advances, start_quantum_ms, first_frame_ms;
+    int64_t frame_ms, spin, epoch, sleep_advances, start_quantum_ms, first_frame_ms,
+        prestart_sleeps;
     uint32_t width, height;
     struct buf ltx; /* the views' configuration file, CR LF lines */
     struct view views[32];
@@ -455,6 +456,8 @@ static int read_plan(const char *path) {
             plan.spin = atoll(strtok(NULL, " "));
         } else if (!strcmp(word, "sleep_advances")) {
             plan.sleep_advances = atoll(strtok(NULL, " "));
+        } else if (!strcmp(word, "prestart_sleeps")) {
+            plan.prestart_sleeps = atoll(strtok(NULL, " "));
         } else if (!strcmp(word, "start_quantum_ms")) {
             plan.start_quantum_ms = atoll(strtok(NULL, " "));
         } else if (!strcmp(word, "first_frame_ms")) {
@@ -1429,6 +1432,7 @@ static int run_once(const char *exe_dir, const char *game, const char *work, con
     r.clock->epoch = ((uint64_t)plan.epoch + 11644473600ull) * 10000000ull;
     r.clock->sleep_advances = (uint64_t)plan.sleep_advances;
     r.clock->start_quantum = (uint64_t)plan.start_quantum_ms;
+    r.clock->prestart_sleeps = (uint64_t)plan.prestart_sleeps;
     r.clock->first_frame = (uint64_t)plan.first_frame_ms * FRAMECLOCK_TICKS_PER_MS;
     join(r.clock->log_path, sizeof r.clock->log_path, r.dir, "frameclock.log");
     r.clock->hold = 1;
