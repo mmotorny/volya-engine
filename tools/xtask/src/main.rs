@@ -10,10 +10,8 @@ mod d3d9probes;
 mod deploy;
 mod e2e;
 mod machine;
-mod original;
 mod parity;
 mod spec_lint;
-mod wine;
 
 use std::fs;
 use std::path::Path;
@@ -48,21 +46,9 @@ Tasks:
   deploy      Check, build and publish to GitHub Pages (gh-pages branch).
   spec-lint   Flag decompiler output, code and mangled names in clean-room spec drafts.
   wait-memory Return once memory pressure is normal (run before heavy work).
-  wine image  Build the image that runs 32-bit Windows programs headless
-              (Wine under box64 in Apple's container).
-  wine run DIR -- EXE [ARGS...]
-              Run EXE with Wine in that image, DIR mounted as its working
-              directory; passes on its exit code.
-  wine check  Build and run a Direct3D 9 smoke test there.
   d3d9probes release
               Build the Direct3D 9 probes' Windows runner zip and publish it
               as a GitHub release tagged by its hash, unless it exists.
-  original [--new-game] [--quit] [SECONDS]
-              Run the original game under Wine for SECONDS (default 300),
-              capturing its display to PNGs in the local cache.
-  original capture OUT
-              The original's frames of the fidelity suite's views, into
-              OUT/fidelity/ (what //tests/fidelity:frames runs).
   update      Move to the latest Rust, crates, Bazel, its modules and the
               wasm LLVM, then run the checks and the advisories.
   gc          Remove Bazel's output bases of deleted worktrees.";
@@ -91,16 +77,8 @@ fn main() -> ExitCode {
         ["spec-lint", paths @ ..] => spec_lint::run(paths),
         ["update"] => bazel::update(),
         ["gc"] => bazel::gc(),
-        ["wine", rest @ ..] => match wine::main(rest) {
-            Ok(code) => return ExitCode::from(code),
-            Err(error) => Err(error),
-        },
-        ["original", rest @ ..] => original::main(rest),
         ["d3d9probes", "release"] => bazel::build_output(&root(), d3d9probes::RUNNER)
             .and_then(|zip| d3d9probes::release(&zip)),
-        [wine::REAPER, container, stop_service, stop_builder] => {
-            wine::reap(container, stop_service, stop_builder)
-        }
         ["-h" | "--help"] | [] => {
             println!("{USAGE}");
             Ok(())

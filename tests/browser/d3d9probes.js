@@ -4,7 +4,7 @@
 // The Direct3D 9 probes' scenes (tests/d3d9probes/) replayed through our GL
 // layer (`d3d9probes_replay`: volya-engine-render's d3d9probes.rs) against
 // each reference's frames (`//tests/d3d9probes:references`, served as this
-// suite's references: Wine's results, then each GPU's committed under
+// suite's references: each GPU's results committed under
 // tests/d3d9probes/hardware/), each reference's own `scenes.bin` replayed:
 // per probe and case the pixels differing in any channel (RGBA) and the
 // largest difference. A report, not a gate: a test fails only when a case

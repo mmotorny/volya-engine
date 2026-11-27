@@ -746,8 +746,8 @@ mod tests {
             found.starts_with("HTTP/1.1 200 ") && found.ends_with("png"),
             "{found}"
         );
-        fs::create_dir_all(dumps.join("d3d9probes/wine")).unwrap();
-        fs::write(dumps.join("d3d9probes/wine/scenes.bin"), b"VD9P").unwrap();
+        fs::create_dir_all(dumps.join("d3d9probes/rtx-4090")).unwrap();
+        fs::write(dumps.join("d3d9probes/rtx-4090/scenes.bin"), b"VD9P").unwrap();
         let get = |path: &str| {
             let (dir, server) = fixture("nested-reference");
             let server = server
@@ -762,14 +762,14 @@ mod tests {
             fs::remove_dir_all(dir).unwrap();
             response
         };
-        let nested = get("d3d9probes/wine/scenes.bin");
+        let nested = get("d3d9probes/rtx-4090/scenes.bin");
         assert!(
             nested.starts_with("HTTP/1.1 200 ") && nested.ends_with("VD9P"),
             "{nested}"
         );
         for bad in [
             "d3d9probes/../render/a-frame_1.png",
-            "d3d9probes/wine/.x.bin",
+            "d3d9probes/rtx-4090/.x.bin",
             "scenes.bin",
         ] {
             assert!(get(bad).starts_with("HTTP/1.1 404 "), "{bad}");

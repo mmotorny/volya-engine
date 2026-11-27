@@ -2,22 +2,18 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! The Direct3D 9 probes' actions (build/d3d9probes.bzl): xtask's
-//! `d3d9probes` and `wine` modules alone.
+//! `d3d9probes` module alone.
 //!
-//! - `build OUT SRC...`: `d3d9probes.exe` compiled with MinGW in the Wine
-//!   image, into `OUT`.
-//! - `run EXE OUT`: the probes run under Wine, `OUT/results/` and
-//!   `OUT/log.txt`.
+//! - `build CLANG OUT SRC...`: `d3d9probes.exe` compiled with llvm-mingw's
+//!   `CLANG`, into `OUT`.
 //! - `zip OUT FILE...`: the files in a zip, the Windows runner.
 //! - `references OUT NAMES DEST=SRC...`: the comparison suite's
-//!   references, Wine's results and real hardware's.
+//!   references, real hardware's results.
 
 #![allow(dead_code)] // The modules' other tasks are xtask's.
 
 mod common;
 mod d3d9probes;
-mod machine;
-mod wine;
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -29,19 +25,15 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let result = match args.as_slice() {
-        [wine::REAPER, container, stop_service, stop_builder] => {
-            wine::reap(container, stop_service, stop_builder)
+        ["build", clang, out, sources @ ..] if !sources.is_empty() => {
+            d3d9probes::build(Path::new(clang), Path::new(out), sources)
         }
-        ["build", out, sources @ ..] if !sources.is_empty() => {
-            d3d9probes::build(Path::new(out), sources)
-        }
-        ["run", exe, out] => d3d9probes::run_probes(Path::new(exe), Path::new(out)),
         ["zip", out, files @ ..] if !files.is_empty() => d3d9probes::zip(Path::new(out), files),
         ["references", out, names, pairs @ ..] => {
             d3d9probes::references(Path::new(out), names, pairs)
         }
         _ => Err(
-            "usage: d3d9probes-action build OUT SRC... | run EXE OUT | zip OUT FILE... \
+            "usage: d3d9probes-action build CLANG OUT SRC... | zip OUT FILE... \
                   | references OUT NAMES DEST=SRC..."
                 .into(),
         ),

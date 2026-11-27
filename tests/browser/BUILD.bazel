@@ -54,8 +54,8 @@ browser_suite(
     timeout = WHOLE_GAME,
 )
 
-# Our replay of the Direct3D 9 probes' scenes against their results under
-# Wine and on real hardware (Chrome only, docs/testing.md).
+# Our replay of the Direct3D 9 probes' scenes against their results on real
+# hardware (Chrome only, docs/testing.md).
 browser_suite(
     gamedata = False,
     references = "//tests/d3d9probes:references",

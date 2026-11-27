@@ -28,7 +28,6 @@ const SUFFIXES: &[&str] = &[
     ".swift",
     ".pbxproj",
     ".xcscheme",
-    "Containerfile",
     ".bazel",
     ".bzl",
     ".bazelrc",

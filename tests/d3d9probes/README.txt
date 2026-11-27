@@ -4,7 +4,8 @@ SPDX-License-Identifier: BSD-3-Clause
 Direct3D 9 probes (volya-engine, tests/d3d9probes/)
 
 Small Direct3D 9 programs drawing synthetic scenes, each isolating one
-rendering rule at its edges. No game data.
+rendering rule at its edges. No game data. Needs Windows 10 or later (the
+Universal C Runtime).
 
 Run d3d9probes.exe from this folder, on the desktop of a logged-in user (it
 opens a small window for its device and closes it when done, in seconds).

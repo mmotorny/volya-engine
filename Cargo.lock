@@ -1080,7 +1080,6 @@ dependencies = [
  "sha2",
  "volya-engine-devserver",
  "volya-engine-site",
- "zlib-rs",
 ]
 
 [[package]]

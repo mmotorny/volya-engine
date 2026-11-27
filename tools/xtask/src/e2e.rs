@@ -197,8 +197,8 @@ fn run_suite(
     target: &str,
     suite: &str,
 ) -> std::result::Result<(), String> {
-    // The fidelity suite compares with the original's frames (Bazel's
-    // captures), the d3d9probes suite with the probes' results, the others
+    // The fidelity suite compares with the original's frames (the local
+    // cache's), the d3d9probes suite with the probes' results, the others
     // with VOLYA_COMPARE_DIR's.
     let references = if REFERENCE_SUITES.contains(&suite) {
         bazel_references()

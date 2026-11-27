@@ -5,8 +5,6 @@ load("@gog_installer//:defs.bzl", "GOG_INSTALLER")
 load("//build:checks.bzl", "volya_checks")
 load("//build:rust.bzl", "LINTS", "volya_binary")
 load("@rules_rust//rust:defs.bzl", "rust_test")
-load("//build:wine_image.bzl", "box64_part", "wine_part")
-load("@rules_cc//cc:cc_static_library.bzl", "cc_static_library")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -16,13 +14,8 @@ volya_binary(
     name = "xtask",
     srcs = glob(["src/**/*.rs"]),
     crate_root = "src/main.rs",
-    # The fidelity suite's views (src/original/views.rs).
-    compile_data = ["//tests/fidelity:views.rs"],
-    # `bazel run //tools/xtask -- original`: the install folder.
-    data = ["@gog_original//:manifest.tsv"],
     env = {
         "VOLYA_GOG_INSTALLER": GOG_INSTALLER,
-        "VOLYA_GOG_ORIGINAL": "$(rootpath @gog_original//:manifest.tsv)",
     },
     deps = [
         "//tools/devserver:volya-engine-devserver",
@@ -30,75 +23,16 @@ volya_binary(
     ],
 )
 
-# The capture actions' tool (build/original.bzl): the `original` modules
-# alone, so an edit elsewhere in xtask captures nothing again.
-volya_binary(
-    name = "capture",
-    srcs = [
-        "src/capture.rs",
-        "src/common.rs",
-        "src/machine.rs",
-        "src/original.rs",
-        "src/original/views.rs",
-        "src/wine.rs",
-    ],
-    compile_data = ["//tests/fidelity:views.rs"],
-    crate_root = "src/capture.rs",
-)
-
 # The Direct3D 9 probes' actions' tool (build/d3d9probes.bzl): their
-# modules alone, so an edit elsewhere in xtask builds and runs nothing again.
+# modules alone, so an edit elsewhere in xtask builds nothing again.
 volya_binary(
     name = "d3d9probes-action",
     srcs = [
         "src/common.rs",
         "src/d3d9probes.rs",
         "src/d3d9probes_action.rs",
-        "src/machine.rs",
-        "src/wine.rs",
     ],
     crate_root = "src/d3d9probes_action.rs",
-)
-
-# The Wine image's file: the capture and probe actions' input (its hash,
-# with its parts', tags the image, wine.rs).
-exports_files(["wine/Containerfile"])
-
-# The Wine image's parts' tool (build/wine_image.bzl): its build steps,
-# so only a change to them builds the parts again.
-volya_binary(
-    name = "image-part",
-    srcs = [
-        "src/common.rs",
-        "src/image_part.rs",
-        "src/machine.rs",
-    ],
-    crate_root = "src/image_part.rs",
-)
-
-# The parts, `manual`: built when an image needs them (wine.rs), not by
-# `//...`.
-wine_part(
-    name = "wine-part",
-    srcs = ["@wine_src//file"],
-    sysroot = "@sysroot_amd64//:files",
-    tags = ["manual"],
-)
-
-box64_part(
-    name = "box64-part",
-    srcs = ["@box64_src//:files"],
-    sysroot = "@sysroot_arm64//:files",
-    tags = ["manual"],
-)
-
-# FreeType for this machine, the one library Wine's build tools link
-# (`sfnt2fon` makes its bitmap fonts), with its own dependencies in one
-# archive.
-cc_static_library(
-    name = "host-freetype",
-    deps = ["@freetype"],
-    tags = ["manual"],
 )
 
 rust_test(

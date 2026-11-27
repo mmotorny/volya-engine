@@ -21,10 +21,16 @@ def _browser_suite_test_impl(ctx):
         "VOLYA_TESTS": ctx.label.package,
     }
     files = []
-    if ctx.attr.references:
-        # The fidelity suite's original frames, the d3d9probes suite's results.
+    if ctx.files.references:
+        # The fidelity suite's original frames, the d3d9probes suite's
+        # results: a directory holding `<suite>/`, or files below
+        # `<suite>/`, served from the folder that holds it.
         files = ctx.files.references
-        env["VOLYA_REFERENCES"] = ctx.files.references[0].short_path
+        first = files[0]
+        root = first.short_path
+        if not first.is_directory:
+            root = root[:root.rfind("/{}/".format(ctx.attr.suite))]
+        env["VOLYA_REFERENCES"] = root
     if ctx.attr.gamedata and GOG_INSTALLER:
         env["VOLYA_GOG_INSTALLER"] = GOG_INSTALLER
     runfiles = ctx.runfiles(
@@ -41,10 +47,11 @@ browser_suite_test = rule(
     attrs = {
         "data": attr.label_list(allow_files = True, doc = "Further inputs: the browser's version, the game data's fingerprint."),
         "gamedata": attr.bool(doc = "Serve the installer to the page."),
-        "references": attr.label(doc = "What the page compares with, served as `<suite>/...`: a directory."),
+        "references": attr.label(doc = "What the page compares with, served as `<suite>/...`: a directory, or files below `<suite>/`."),
         "runner": attr.label(executable = True, cfg = "target", mandatory = True),
         "site": attr.label(allow_single_file = True, mandatory = True),
         "site_next": attr.label(allow_single_file = True, mandatory = True),
+        "suite": attr.string(mandatory = True),
         "suite_files": attr.label_list(allow_files = True, mandatory = True),
     },
 )
@@ -87,6 +94,7 @@ def browser_suite(suite, target, tags = [], timeout = "moderate", gamedata = Tru
         runner = "//tools/xtask",
         site = "//platforms/web:site_test",
         site_next = "//platforms/web:site_next",
+        suite = suite,
         suite_files = native.glob(["*.js", "*.html"]),
         # The real browser and Simulator, profiles outside the execroot; one
         # browser suite at a time per invocation (--local_resources).

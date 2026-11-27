@@ -8,13 +8,7 @@ module(name = "volya_engine")
 # First, so its C toolchain (Xcode's clang) is the one registered.
 bazel_dep(name = "apple_support", version = "2.12.0")
 bazel_dep(name = "bazel_skylib", version = "1.9.2")
-bazel_dep(name = "bison", version = "3.8.2.bcr.13")
-bazel_dep(name = "flex", version = "2.6.4.bcr.10")
-bazel_dep(name = "freetype", version = "2.14.1.bcr.1")
-bazel_dep(name = "make", version = "4.4.1.bcr.3")
 bazel_dep(name = "platforms", version = "1.1.0")
-bazel_dep(name = "rules_cc", version = "0.2.28")
-bazel_dep(name = "rules_python", version = "2.5.1")
 bazel_dep(name = "rules_rust", version = "0.75.0")
 
 rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
@@ -149,38 +143,9 @@ http_archive(
     url = "https://bitbucket.org/odedevs/ode/downloads/ode-0.16.6.tar.gz",
 )
 
-# The Wine image's sources (build/wine_image.bzl): box64's release with our
-# patch (third_party/box64/), applied by Bazel, and Wine 11.0 with the frame
-# clock, the fork's branch volya-frame-clock at a commit (LGPL: its patch
-# stays in the fork).
-http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
-
-http_archive(
-    name = "box64_src",
-    build_file_content = """filegroup(
-    name = "files",
-    srcs = glob(["**"]),
-    visibility = ["//visibility:public"],
-)
-""",
-    patch_args = ["-p1"],
-    patches = ["//third_party/box64:frame-clock.patch"],
-    sha256 = "99c6de4f509e46ab1de15df740d0e0ea338a7790efa3f67510dfbb975cc24029",
-    strip_prefix = "box64-0.4.4",
-    url = "https://github.com/ptitSeb/box64/archive/refs/tags/v0.4.4.tar.gz",
-)
-
-http_file(
-    name = "wine_src",
-    downloaded_file_path = "wine.tar.gz",
-    sha256 = "6f3748345444c814ad06cd1ef8d2979d4d090d55c8dc6569edbdab7ae1ed0bdf",
-    url = "https://github.com/mmotorny/wine/archive/e9503e0cf341ccfae449e68b2108159e8c6c3a73.tar.gz",
-)
-
-# What builds them on this machine, natively (build/wine_image.bzl): LLVM
-# with the MinGW targets (llvm-mingw: clang, lld and LLVM's tools, for
-# Wine's PE side, and with Chromium's Debian sysroots its Unix side and box64),
-# CMake for box64; bison, flex and make are modules above.
+# The Windows cross LLVM that builds the Direct3D 9 probes' executable
+# (build/d3d9probes.bzl): llvm-mingw's macOS release, clang, lld and the
+# MinGW targets' headers and libraries.
 http_archive(
     name = "llvm_mingw",
     build_file_content = """filegroup(
@@ -189,63 +154,11 @@ http_archive(
     visibility = ["//visibility:public"],
 )
 
-exports_files(["bin/clang"], visibility = ["//visibility:public"])
+exports_files(["bin/i686-w64-mingw32-clang"], visibility = ["//visibility:public"])
 """,
     sha256 = "98d340bbb8d46b09ad6886ffba88bd9d5415e131c316de48e6bd7647377446aa",
     strip_prefix = "llvm-mingw-20261117-ucrt-macos-universal",
     url = "https://github.com/mstorsjo/llvm-mingw/releases/download/20261117/llvm-mingw-20261117-ucrt-macos-universal.tar.xz",
-)
-
-http_archive(
-    name = "cmake",
-    build_file_content = """filegroup(
-    name = "files",
-    srcs = glob(["CMake.app/Contents/bin/**", "CMake.app/Contents/share/**"]),
-    visibility = ["//visibility:public"],
-)
-
-exports_files(["CMake.app/Contents/bin/cmake"], visibility = ["//visibility:public"])
-""",
-    sha256 = "e1fb288543e4eb2a410e385ecebc64323bda51f0205782f2b094ccd5d572ca2d",
-    strip_prefix = "cmake-4.5.1-macos-universal",
-    url = "https://github.com/Kitware/CMake/releases/download/v4.5.1/cmake-4.5.1-macos-universal.tar.gz",
-)
-
-# The Python box64's build runs (its generators).
-python = use_extension("@rules_python//python/extensions:python.bzl", "python")
-python.toolchain(python_version = "3.13")
-use_repo(python, python_3_13 = "python_3_13_aarch64-apple-darwin")
-
-# The Debian sysroots the cross clang links against: Chromium's (Debian 11,
-# bullseye), x86_64 for Wine, arm64 for box64. Each is named by its SHA-256,
-# as Chromium's build/linux/sysroot_scripts/sysroots.json gives it; `xtask
-# update` moves both to that file's.
-SYSROOT_BUILD = """filegroup(
-    name = "files",
-    # Headers, libraries, the dynamic loader and the compiler runtime; the
-    # loader is in lib/ for arm64, lib64/ for amd64.
-    srcs = glob(
-        ["lib/*-linux-gnu/**", "lib/ld-*", "lib64/**", "usr/include/**", "usr/lib/*-linux-gnu/**", "usr/lib/gcc/**"],
-        allow_empty = True,
-    ),
-    visibility = ["//visibility:public"],
-)
-"""
-
-http_archive(
-    name = "sysroot_amd64",
-    build_file_content = SYSROOT_BUILD,
-    sha256 = "f851add76bdae472fb6c94b4f920bc4a132d85ac607951391297f636af7e934e",
-    type = "tar.xz",
-    url = "https://commondatastorage.googleapis.com/chrome-linux-sysroot/f851add76bdae472fb6c94b4f920bc4a132d85ac607951391297f636af7e934e",
-)
-
-http_archive(
-    name = "sysroot_arm64",
-    build_file_content = SYSROOT_BUILD,
-    sha256 = "278c36fe3a785d7f89fbe3f46956899a3bd49fe665f68dc667d6f626a951fcd6",
-    type = "tar.xz",
-    url = "https://commondatastorage.googleapis.com/chrome-linux-sysroot/278c36fe3a785d7f89fbe3f46956899a3bd49fe665f68dc667d6f626a951fcd6",
 )
 
 # Tools installed on the machine, with their versions (build/local_tools.bzl).
@@ -257,6 +170,12 @@ local_tools(name = "local_tools")
 gog_installer = use_repo_rule("//build:gog.bzl", "gog_installer")
 
 gog_installer(name = "gog_installer")
+
+# The original's reference frames, from the local cache
+# (build/original_frames.bzl).
+original_frames = use_repo_rule("//build:original_frames.bzl", "original_frames")
+
+original_frames(name = "original_frames")
 
 gog = use_extension("//build:gog.bzl", "gog")
 use_repo(gog, "gog_extractor", "gog_game", "gog_original")

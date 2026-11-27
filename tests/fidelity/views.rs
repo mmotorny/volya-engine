@@ -1,11 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-// The views the `fidelity` suite compares (#521), shared by both engines:
-// `//tools/xtask:capture` steers the original to each and keeps its frame,
-// `volya_engine::selftest::fidelity` draws ours. Both include this file with
-// `include!`; a change to a view here (or to the settings) changes the
-// capture's inputs, so the original's frame is captured again.
+// The views the `fidelity` suite compares (#521):
+// `volya_engine::selftest::fidelity` draws ours (`include!`), and the
+// original's frames of them (`//tests/fidelity:frames`) are captured with
+// the same views and settings; a change here needs new frames.
 //
 // Each view has its own user configuration file, `<view>.user.ltx` ([`user_ltx`]):
 // the shipped `user.ltx` with [`SETTINGS`] and [`VIEW_SETTINGS`]

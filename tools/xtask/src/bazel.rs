@@ -13,9 +13,8 @@ use sha2::{Digest, Sha256};
 use super::{Result, cmd, locked_version, output, root, run, step};
 
 /// Moves everything to its latest release: Rust, the crates, Bazel, its
-/// modules, the wasm LLVM, the Wine image's toolchains (llvm-mingw, CMake,
-/// Chromium's Debian sysroots) and the wasm-bindgen CLI's pin; then the checks
-/// and the advisories.
+/// modules, the wasm LLVM, the Windows cross LLVM (llvm-mingw) and the
+/// wasm-bindgen CLI's pin; then the checks and the advisories.
 pub fn update() -> Result {
     let module_path = root().join("MODULE.bazel");
     let read = |p: &Path| fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()));
@@ -44,12 +43,8 @@ pub fn update() -> Result {
 
     step("wasm LLVM (wasi-sdk)");
     module = update_wasm_llvm(&module)?;
-    step("The Wine image's cross LLVM (llvm-mingw)");
+    step("The Windows cross LLVM (llvm-mingw)");
     module = update_llvm_mingw(&module)?;
-    step("The Wine image's CMake");
-    module = update_cmake(&module)?;
-    step("The Wine image's Debian sysroots (Chromium's)");
-    module = update_sysroots(&module)?;
     fs::write(&module_path, &module).map_err(|e| format!("MODULE.bazel: {e}"))?;
 
     step("Bazel");
@@ -243,85 +238,6 @@ fn update_llvm_mingw(module: &str) -> Result<String> {
     Ok(format!("{head}{block}"))
 }
 
-/// Points `@cmake` at CMake's latest release for macOS, with its checksum.
-fn update_cmake(module: &str) -> Result<String> {
-    let tag = output(&mut cmd(
-        "gh",
-        &[
-            "api",
-            "repos/Kitware/CMake/releases/latest",
-            "--jq",
-            ".tag_name",
-        ],
-    ))?;
-    let tag = tag.trim();
-    let version = tag.strip_prefix('v').ok_or(format!("tag {tag}"))?;
-    let name = format!("cmake-{version}-macos-universal");
-    let url = format!("https://github.com/Kitware/CMake/releases/download/{tag}/{name}.tar.gz");
-    if module.contains(&url) {
-        println!("{name} (unchanged)");
-        return Ok(module.to_owned());
-    }
-    let file = std::env::temp_dir().join(format!("{name}.tar.gz"));
-    run(&mut cmd(
-        "curl",
-        &["-sfL", "-o", &file.to_string_lossy(), &url],
-    ))?;
-    let sha = sha256_file(&file)?;
-    let _ = fs::remove_file(&file);
-    let start = module
-        .find("name = \"cmake\"")
-        .ok_or("MODULE.bazel: no cmake")?;
-    let (head, block) = module.split_at(start);
-    let block = replace_quoted_after(block, "sha256 = ", &sha)?;
-    let block = replace_quoted_after(&block, "strip_prefix = ", &name)?;
-    let block = replace_quoted_after(&block, "url = ", &url)?;
-    println!("{name}");
-    Ok(format!("{head}{block}"))
-}
-
-/// Where Chromium lists its sysroots: each one's SHA-256 and the bucket
-/// that holds it under that name (Chromium's GitHub mirror, so the file
-/// comes as text).
-const CHROMIUM_SYSROOTS: &str = "https://raw.githubusercontent.com/chromium/chromium/main/build/linux/sysroot_scripts/sysroots.json";
-
-/// Points `@sysroot_amd64` and `@sysroot_arm64` at Chromium's current
-/// bullseye sysroots, as its `sysroots.json` names them.
-fn update_sysroots(module: &str) -> Result<String> {
-    let json = output(&mut cmd("curl", &["-sfL", CHROMIUM_SYSROOTS]))?;
-    let mut module = module.to_owned();
-    for arch in ["amd64", "arm64"] {
-        let (url, sha) = chromium_sysroot(&json, &format!("bullseye_{arch}"))
-            .ok_or(format!("sysroots.json: no bullseye_{arch}"))?;
-        let start = module
-            .find(&format!("name = \"sysroot_{arch}\""))
-            .ok_or(format!("MODULE.bazel: no sysroot_{arch}"))?;
-        let (head, block) = module.split_at(start);
-        let block = replace_quoted_after(block, "sha256 = ", &sha)?;
-        let block = replace_quoted_after(&block, "url = ", &url)?;
-        module = format!("{head}{block}");
-        println!("bullseye_{arch} {sha}");
-    }
-    Ok(module)
-}
-
-/// A sysroot's URL (its bucket and SHA-256, as Chromium's
-/// `install-sysroot.py` forms it) and SHA-256, from `sysroots.json`.
-fn chromium_sysroot(json: &str, name: &str) -> Option<(String, String)> {
-    let entry = json.split(&format!("\"{name}\"")).nth(1)?;
-    let entry = &entry[..entry.find('}')?];
-    let field = |key: &str| {
-        let value = entry.split(&format!("\"{key}\"")).nth(1)?;
-        Some(value.split('"').nth(1)?.to_owned())
-    };
-    let sha = field("Sha256Sum")?;
-    let bucket = field("URL")?;
-    if sha.len() != 64 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return None;
-    }
-    Some((format!("{}/{sha}", bucket.trim_end_matches('/')), sha))
-}
-
 fn sha256_file(path: &Path) -> Result<String> {
     let mut file = fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut hasher = Sha256::new();
@@ -409,32 +325,6 @@ mod tests {
         assert!(module.contains("\"platforms\", version = \"1.0.0\""));
         let module = replace_quoted_after(&module, "versions = [", "1.100.0").unwrap();
         assert!(module.contains("versions = [\"1.100.0\"]"));
-    }
-
-    #[test]
-    fn reads_chromium_sysroots() {
-        let sha = "278c36fe3a785d7f89fbe3f46956899a3bd49fe665f68dc667d6f626a951fcd6";
-        let json = format!(
-            r#"{{
-    "bullseye_amd64": {{
-        "Sha256Sum": "f851add76bdae472fb6c94b4f920bc4a132d85ac607951391297f636af7e934e",
-        "SysrootDir": "debian_bullseye_amd64-sysroot",
-        "URL": "https://commondatastorage.googleapis.com/chrome-linux-sysroot"
-    }},
-    "bullseye_arm64": {{
-        "Sha256Sum": "{sha}",
-        "URL": "https://commondatastorage.googleapis.com/chrome-linux-sysroot"
-    }}
-}}"#
-        );
-        assert_eq!(
-            chromium_sysroot(&json, "bullseye_arm64"),
-            Some((
-                format!("https://commondatastorage.googleapis.com/chrome-linux-sysroot/{sha}"),
-                sha.to_owned()
-            ))
-        );
-        assert_eq!(chromium_sysroot(&json, "bullseye_i386"), None);
     }
 
     #[test]

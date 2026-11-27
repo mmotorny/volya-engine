@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Our frames of the views in tests/fidelity/views.rs against the original's
-// (`//tests/fidelity:frames`, Bazel's capture actions, served as this suite's
+// (`//tests/fidelity:frames`, from the local cache, served as this suite's
 // references): per view the pixels that differ, the mean and largest
 // difference, and a heat map. A report with thresholds, not a gate: the
-// original runs on Wine's Direct3D 9, which isn't pixel-exact. Kept frames
+// original's frames are its Direct3D 9 driver's, which ours need not match
+// pixel for pixel (docs/testing.md). Kept frames
 // (VOLYA_DUMP_DIR): `<view>` ours, `<view>-original`, `<view>-heat`.
 //
 // The guard (#561): our check starts from the configuration file the

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! What xtask's tasks and the capture tool (`capture.rs`) share: the source
+//! What xtask's tasks and the probes' action tool share: the source
 //! tree, runfiles, and running commands.
 
 use std::path::{Path, PathBuf};

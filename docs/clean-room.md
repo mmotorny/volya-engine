@@ -58,7 +58,7 @@ Model memory is not a source. Agents may have absorbed X-Ray-derived code in tra
 ## Tooling
 
 - Static analysis: [Ghidra](https://ghidra-sre.org/) (Apache-2.0), headless mode for scripted analysis.
-- Execution and debugging of the 32-bit Windows binaries: Wine or a Windows VM, set up when behavior questions need it.
+- Execution of the 32-bit Windows binaries: the user's Windows PC, on its real Direct3D 9 driver; never the Mac.
 
 ## Standing briefs for dirty roles
 
@@ -66,8 +66,8 @@ Every dirty agent reads this section with the rest of this file; it is binding a
 
 **Both roles**
 - Work only in the dirty workspace; never write to the repository (except the reviewer's copy of an approved spec) or to GitHub. Reading issues with `gh` is fine.
-- Never install tools or packages (pip, brew, winetricks, downloads); use what is set up. If something is missing, report `BLOCKED` with what is needed.
-- Run the shipped game only through `bazel run //tools/xtask -- wine` / `bazel run //tools/xtask -- original` (headless, in the container), never with the Mac's own Wine: nothing may appear on the user's screen.
+- Never install tools or packages (pip, brew, downloads); use what is set up. If something is missing, report `BLOCKED` with what is needed.
+- Run the shipped game only on the user's Windows PC, through the tooling set up for it; never on the Mac.
 - Don't run builds, browser suites or the iOS Simulator (the machine's memory is shared, AGENTS.md); `bazel run //tools/xtask -- spec-lint` is the exception.
 - Model memory is not a source; every fact comes from the user's game data or the shipped binaries, through a check script in the dirty workspace.
 - Report only the verdict line your role defines, never findings.
