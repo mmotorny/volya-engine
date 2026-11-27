@@ -59,7 +59,7 @@ All measured natively but the last three (`level_stats`, JS memory). The program
 
 ### Session: a game, from its New Game to its end
 
-The offline simulation's registry (6.3 MB, 54,735 blocks), the game graph and paths (1.8 MB) and the player character, made under `st_server_connecting`: 7.7 MB, 79,388 blocks, from 532,980 allocations (measured, native). Of the registry, the slot table of 8,646 objects of 392 bytes is about 3.4 MB in one block (the rare large kinds, among them the crows, the visual anomalies and the trader, and every skeleton's saved bone state, which no New Game record has, are boxed, #498); the records' own strings and lists (every kind's names, section, custom data, restrictions, character fields) 2.4 MB in 51,204 blocks, the section and the name alone 17,282 of them; travel 0.2 MB in 2,698. The switch predicates' inputs hold no copy of a record's names (#485). The script runtime's state joins this lifetime when the game's scripts run (`lua_alloc` is Rust's allocator, docs/architecture/scripts.md).
+The offline simulation's registry (6.3 MB, 54,735 blocks), the game graph and paths (1.8 MB) and the player character, made under `st_creating_new_game` from `all.spawn` held in the file cache (#694): 7.9 MB, 79,462 blocks, from 533,510 allocations (measured, native). Of the registry, the slot table of 8,646 objects of 392 bytes is about 3.4 MB in one block (the rare large kinds, among them the crows, the visual anomalies and the trader, and every skeleton's saved bone state, which no New Game record has, are boxed, #498); the records' own strings and lists (every kind's names, section, custom data, restrictions, character fields) 2.4 MB in 51,204 blocks, the section and the name alone 17,282 of them; travel 0.2 MB in 2,698. The switch predicates' inputs hold no copy of a record's names (#485). The script runtime's state joins this lifetime when the game's scripts run (`lua_alloc` is Rust's allocator, docs/architecture/scripts.md).
 
 ### Level: from its loading to leaving it
 
@@ -76,7 +76,7 @@ Measured natively. After the level is dropped, nothing of it outlives it: 0.0 MB
 
 ### Loading transients
 
-Each stage's peak above its start and what it keeps, measured natively (MB): `st_server_connecting` 11.4 and 7.7 (the spawn file and the graph streamed, #403; with the navigation, before #693, 15.6 and 15.6); `st_opening_stream` 0.0 and 0.0 (the `level` file in the file cache, #691; streamed and parsed there it kept 7.9, #483); `st_loading_cform` 30.3 and 30.1; `st_loading_spatial_db` 14.1 and 5.9 (the visuals, portals and sectors parsed from the file and freed in it); `st_loading_details` 1.2 and 1.2 (the slot grid in the file cache, 4.4, #692; on the heap it kept 5.6); `st_client_spawning` 19.7 and 13.9; `st_loading_textures` 2.4 and 0.3. The load peaks 66.1 MB above its start against 59.6 kept. By count the transients are the many: `st_client_spawning` makes 2.79 million allocations to keep 7,025 blocks, `st_server_connecting` 532,980 to keep 79,388.
+Each stage's peak above its start and what it keeps, measured natively (MB): `st_creating_new_game` 11.6 and 7.9 (the spawn file in the file cache, the graph streamed, #694; under `st_server_connecting` with the spawn file streamed, 11.4 and 7.7; with the navigation, before #693, 15.6 and 15.6); `st_opening_stream` 0.0 and 0.0 (the `level` file in the file cache, #691; streamed and parsed there it kept 7.9, #483); `st_loading_cform` 30.3 and 30.1; `st_loading_spatial_db` 14.1 and 5.9 (the visuals, portals and sectors parsed from the file and freed in it); `st_loading_details` 1.2 and 1.2 (the slot grid in the file cache, 4.4, #692; on the heap it kept 5.6); `st_client_spawning` 19.7 and 13.9; `st_loading_textures` 2.4 and 0.3. The load peaks 66.1 MB above its start against 59.6 kept. By count the transients are the many: `st_client_spawning` makes 2.79 million allocations to keep 7,025 blocks, `st_creating_new_game` 533,510 to keep 79,462.
 
 In the browser the level's preparation adds the texture read buffer (one file, up to 4.5 MB) and the band being transcoded (without BC); WebGL copies what is written at each call (docs/architecture/rendering.md).
 
@@ -115,7 +115,7 @@ After quitting, 12 MiB stay live: the program's data and the menus' (40 MiB with
 Where the gap comes from:
 
 - **Large blocks meeting split free space.** The heap grows by 26 MiB under the collision stage for 24 MiB more live: its arrays (up to 10.5 MiB each) find no hole that size in the free space the earlier stages left (measured, `heap_log`, `heap_record`'s growths; #373). It is the only stage that grows the heap by about what it keeps.
-- **Loading transients among long-lived blocks.** `st_client_spawning` (2.52 million allocations, 6,743 kept) and `st_server_connecting` (537,041, 83,764 kept) leave their kept blocks scattered through the space their temporaries used, so the next large block needs new memory above them. At the load's most live, blocks under 64 KiB hold about 7 MiB, blocks of 1 MiB or more 53 MiB (measured, `heap_record`).
+- **Loading transients among long-lived blocks.** `st_client_spawning` (2.52 million allocations, 6,743 kept) and `st_creating_new_game` (533,510, 79,462 kept) leave their kept blocks scattered through the space their temporaries used, so the next large block needs new memory above them. At the load's most live, blocks under 64 KiB hold about 7 MiB, blocks of 1 MiB or more 53 MiB (measured, `heap_record`).
 - **The preparation's buffers.** The texture read buffer and the band buffer arrive last, above the level's data.
 - **A later New Game grows the heap by 4–6 MiB once** (in the relaunched game's or the second), the next none: an allocation of the texture stage finds no hole that size in the first game's layout (measured, `heap_record`'s growths).
 
@@ -130,8 +130,8 @@ Measured (#667): its New Game of `l01_escape` run unmodified under Wine three ti
 | 1 | `st_prefetching_objects` | 85,047 | 0 | −5,889 | Load the 394 models of `prefetch_visuals_single` (`config\prefetch\prefetch_single.ltx`) and their textures here, kept while the game type stays (a later New Game of the type skips the stage, loading-screen.md 5); the objects spawned later take them from there. Its *m* (28,221 K of motions and skinned models shared) follows from sharing them. |
 | 2 | `st_server_starting` | 205 | 0 | 0 | |
 | 3 | `st_loading_alife_simulator` | 0 | 0 | 0 | |
-| 4 | `st_creating_new_game` | 32,164 | 221 | 220 | The offline simulation's registry, the game graph and the character are made here, from `all.spawn` held whole and read in place ([File-backed data](#file-backed-data)). |
-| 5 | `st_server_connecting` | 0 | 6,595 | 4,790 | Nothing made here (moved to 4, #694; #707). The navigation, the first switch pass and the level's objects moved to 14 (#693). |
+| 4 | `st_creating_new_game` | 32,164 | 6,816 | 5,011 | The offline simulation's registry, the game graph and the character, made here from `all.spawn` held whole in the file cache and read in place ([File-backed data](#file-backed-data)), moved from 5 (#694). |
+| 5 | `st_server_connecting` | 0 | 0 | 2 | Nothing made here: the game moved to 4 (#694), the navigation, the first switch pass and the level's objects to 14 (#693). In Chrome's first New Game 2 K stay, 0 in the later ones (#707). |
 | 6 | `st_client_connecting_to` | 8 | 0 | 18 | |
 | 7 | `st_opening_stream` | 0 | 0 | 0 | The `level` file held whole in the file cache and read in place (#691); what is made from its chunks is made under the caption whose stage reads them (the shader table under 9; the visuals, portals and sectors read and freed under 11; the glows and lights under 13). |
 | 8 | `st_loading_cform` | 72,669 | 29,579 | 29,330 | |
@@ -148,7 +148,7 @@ Measured (#667): its New Game of `l01_escape` run unmodified under Wine three ti
 | | *h* at the load's end | 227,120 | 75,442 | 64,302 | |
 | | *t* at the load's end | 260,798 | — | 146,706 (by the original's rule, headless Chrome; the original's without prefetching 179,025) | Counted by the original's rule (#689); the prefetched models' textures added (the original's 865 base textures against 631 without prefetching, 2.4.1). |
 
-Where ours keeps less than the original (8) it stays (rule 5): the budget is a ceiling. With the memory manager (#687) the wasm memory after a New Game is 95–96 MiB against 89 before it (`game-level`), 101–102 against 93 after the relaunched game's (`game-memory`); with the `level` file in the file cache (#691) 99 and 105 MiB; with the navigation (#693) 98 and 105 MiB: the pools' chunks keep their high-water mark (measured, headless Chrome; 1,001 chunks natively at the load's end, 16 MB). Beside them at the load's end the original writes the committed address space 849,680–849,744 K (the whole 32-bit process, its program, libraries and driver; ours, the wasm memory, 101,760 K today), the process heap 400,268–400,269 K and the game scripts' pool 25,762–25,784 K (measured, #667).
+Where ours keeps less than the original (4, 8) it stays (rule 5): the budget is a ceiling. With the memory manager (#687) the wasm memory after a New Game is 95–96 MiB against 89 before it (`game-level`), 101–102 against 93 after the relaunched game's (`game-memory`); with the `level` file in the file cache (#691) 99 and 105 MiB; with the navigation (#693) 98 and 105 MiB; with the new game made under `st_creating_new_game` (#694) 98 and 103 MiB: the pools' chunks keep their high-water mark (measured, headless Chrome; 1,001 chunks natively at the load's end, 16 MB). Beside them at the load's end the original writes the committed address space 849,680–849,744 K (the whole 32-bit process, its program, libraries and driver; ours, the wasm memory, 101,760 K today), the process heap 400,268–400,269 K and the game scripts' pool 25,762–25,784 K (measured, #667).
 
 ## Design
 
@@ -195,6 +195,7 @@ It is `volya_engine_core::file_cache` (#690). A file is read whole into bytes ta
 
 | Under | The cache's most, K | Its budget, K |
 |---|---|---|
+| `st_creating_new_game` (`all.spawn`, released at the stage's end) | 4,369 | 4,369 |
 | `st_opening_stream` to `st_loading_spatial_db` (the `level` file) | 3,998 | 3,998 |
 | `st_loading_details`, `st_loading_sectors_portals` (the `level` file, the detail slot grid: 4,284 against `level.details`' 8,196) | 8,282 | 12,194 |
 | `st_loading_ai_objects`, `st_client_spawning` (those, the navigation positions: 2,907 against `level.ai`'s 12,212, and `level.gct`, 3,489) | 14,679 | 27,896 |
@@ -216,7 +217,7 @@ Nesting: the program holds game types; a game type holds sessions; a session hol
 |---|---|---|
 | Program | Regions made at launch, before anything else: the archive index (#300), the configuration (#299), the string tables and the effect library (#484; the library read once at launch rather than with each level: our choice, as `gamemtl.xr` is read with the level). | 5.3 MB in about 4,100 blocks |
 | Game type | The prefetched models and their GPU resources, made under `st_prefetching_objects` and kept until the game type changes. | the original's 85,047 K |
-| Session | The offline simulation's registry (a slot table, each record's strings its own); the game graph; the character; the script runtime's state. | 8.7 MB |
+| Session | The offline simulation's registry (a slot table, each record's strings its own); the game graph; the character; the script runtime's state. Made under `st_creating_new_game`. | 8.7 MB |
 | Level | Its files in the file cache ([File-backed data](#file-backed-data)); its owners' blocks: the collision world's arrays, the detail cache, the objects' sounds and effects and the models not prefetched; its frames' lists in the renderer's pool. All freed when it ends (rule 8). | about 54 MB (about 62, `l11_pripyat`; believed), and the file cache's 28.6 MB |
 | Loading | Each reader's own stream buffer: 64 KiB for the graph and the geometry's read; 2 MiB pieces for the geometry's upload and the index runs; in the browser one band buffer per preparation. A file being read is in the file cache. Stage temporaries freed by the stage's end. | under 10 MB above what each stage keeps |
 | Frame | Buffers kept by the level (its scene's lists among them), the sounds and the presenter (the draw list's), from the renderer's pool, cleared each frame. | held for the level |

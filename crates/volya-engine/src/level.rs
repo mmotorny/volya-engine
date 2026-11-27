@@ -833,18 +833,20 @@ pub fn new_game_level(tree: &dyn Vfs, data: &GameData) -> io::Result<(String, sp
 }
 
 /// What creating a New Game reads: the level, the actor's start, the game
-/// graph, and the spawn file's path, which the offline simulation reads
-/// again.
+/// graph, and the spawn file, held in the file cache and read in place
+/// (docs/architecture/memory.md, File-backed data) until the offline
+/// simulation is made from it.
 struct NewGame {
     level: String,
     actor: spawn::ActorStart,
     spawn_path: String,
+    spawn: CachedFile,
     graph: GameGraph,
 }
 
-/// The spawn file at `path`, read as a stream (never held whole, #403).
-fn open_spawn<'a>(tree: &'a dyn Vfs, path: &str) -> io::Result<Box<dyn vfs::VfsFile + 'a>> {
-    tree.open(path)
+/// The spawn file at `path`, held whole in the file cache.
+fn read_spawn(tree: &dyn Vfs, path: &str) -> io::Result<CachedFile> {
+    file_cache::read(tree, path)
         .map_err(|e| io::Error::new(e.kind(), format!("Can't find spawn file: {path}")))
 }
 
@@ -852,13 +854,15 @@ fn read_new_game(tree: &dyn Vfs, data: &GameData) -> io::Result<NewGame> {
     let spawn_path = data
         .aliases
         .path("$game_spawn$", &format!("{SPAWN_NAME}.spawn"))?;
-    let actor = spawn::actor_start_in(&mut open_spawn(tree, &spawn_path)?)?;
+    let spawn = read_spawn(tree, &spawn_path)?;
+    let actor = spawn::actor_start_in(&mut io::Cursor::new(&*spawn))?;
     let graph = GameGraph::read(&mut tree.open(&data.aliases.path("$game_data$", "game.graph")?)?)?;
     let level = graph.vertex_level(actor.game_graph_vertex)?.name.clone();
     Ok(NewGame {
         level,
         actor,
         spawn_path,
+        spawn,
         graph,
     })
 }
@@ -980,14 +984,10 @@ pub fn new_game_player(
     data: &GameData,
 ) -> io::Result<(ObjectRecord, CharacterState)> {
     let new = read_new_game(tree, data)?;
-    let player = player_record_in(
-        &mut open_spawn(tree, &new.spawn_path)?,
-        new.actor.index,
-        &data.system,
-    )?;
+    let player = player_record(&new.spawn, new.actor.index, &data.system)?;
     let dir = data.aliases.path("$game_levels$", &new.level)?;
     let clock = GameClock::new_game(&*alife(tree, data)?)?;
-    let (mut sim, mut character) = new_game_simulation(tree, data, &new.spawn_path, new.graph)?;
+    let (mut sim, mut character) = new_game_simulation(tree, data, &new.spawn, new.graph)?;
     first_switch_pass(tree, data, &mut sim, &mut character, &dir, &clock)?;
     Ok((player, character))
 }
@@ -1005,19 +1005,19 @@ fn alife<'a>(tree: &dyn Vfs, data: &'a GameData) -> io::Result<Cow<'a, Config>> 
 }
 
 /// A New Game's offline simulation (offline-simulation.md) and player
-/// character: every record of the spawn file at `spawn_path` created and
-/// registered (8.1), read a chunk at a time, the player character
+/// character: every record of `spawn_file` created and registered (8.1),
+/// read in place, the player character
 /// supplying the player (player-state.md sections 2, 3). The current
 /// level's navigation data and the first switch pass come later
 /// ([`first_switch_pass`]).
 fn new_game_simulation(
     tree: &dyn Vfs,
     data: &GameData,
-    spawn_path: &str,
+    spawn_file: &[u8],
     graph: GameGraph,
 ) -> io::Result<(Simulation, CharacterState)> {
     let alife = alife(tree, data)?;
-    let mut spawn_file = open_spawn(tree, spawn_path)?;
+    let mut spawn_file = io::Cursor::new(spawn_file);
     let paths = PatrolPaths::read(&mut spawn_file)?;
     let mut sim = Simulation::new(
         Graph::new(graph),
@@ -1031,7 +1031,6 @@ fn new_game_simulation(
         character = Some(c);
         Ok(n)
     })?;
-    drop(spawn_file);
     let character = earlier(character, "player character")?;
     Ok((sim, character))
 }
@@ -1375,10 +1374,8 @@ pub struct NewGameLoad {
     not_drawn: Vec<(String, String)>,
     sky: Option<SkyTextures<String>>,
     flares: Vec<Flares>,
-    /// The spawn file and game graph, from creating the game to the
-    /// switch pass.
+    /// The spawn file's path, which `st_creating_new_game` reads.
     spawn_path: String,
-    graph: Option<GameGraph>,
     simulation: Option<Simulation>,
     /// The objects whose visuals the level loads.
     level_objects: Vec<objects::LevelObject>,
@@ -1628,25 +1625,20 @@ impl NewGameLoad {
         let file =
             |name: &str, e: io::Error| io::Error::new(e.kind(), format!("{dir}\\{name}: {e}"));
         match stage {
-            // The level and its start (level-loading.md section 2.2).
+            // The level and its start (level-loading.md section 2.2); the
+            // New Game's clock (sav.md section 5); the offline simulation's
+            // New Game (offline-simulation.md 8.1), the player character
+            // supplying the player (player-state.md sections 2, 3). Made
+            // from the spawn file held in the file cache, which goes at the
+            // stage's end (docs/architecture/memory.md, The original).
             Stage::CreatingNewGame => {
                 let new = read_new_game(tree, data)?;
                 self.dir = data.aliases.path("$game_levels$", &new.level)?;
+                let clock = GameClock::new_game(&*alife(tree, data)?)?;
+                let (sim, character) = new_game_simulation(tree, data, &new.spawn, new.graph)?;
                 self.name = Some(new.level);
                 self.actor = Some(new.actor);
                 self.spawn_path = new.spawn_path;
-                self.graph = Some(new.graph);
-            }
-            // The New Game's clock (sav.md section 5); the offline
-            // simulation's New Game (offline-simulation.md 8.1), the player
-            // character supplying the player (player-state.md sections 2,
-            // 3), placed under this caption by us (the server has created
-            // the game).
-            Stage::ServerConnecting => {
-                let clock = GameClock::new_game(&*alife(tree, data)?)?;
-                let graph = earlier(self.graph.take(), "game graph")?;
-                let spawn_path = std::mem::take(&mut self.spawn_path);
-                let (sim, character) = new_game_simulation(tree, data, &spawn_path, graph)?;
                 self.player_visual = sim
                     .object(character.owner.id)
                     .and_then(|o| o.record.object.visual())
@@ -2229,7 +2221,12 @@ impl NewGameLoad {
             Stage::LoadingDetails => {
                 self.details = level_details::read(tree, &dir, &data.system)?;
             }
-            Stage::PrefetchingObjects | Stage::ServerStarting | Stage::LoadingAlifeSimulator => {}
+            // The game is made under `st_creating_new_game`, as the
+            // original's; nothing under `st_server_connecting`.
+            Stage::PrefetchingObjects
+            | Stage::ServerStarting
+            | Stage::LoadingAlifeSimulator
+            | Stage::ServerConnecting => {}
         }
         Ok(())
     }
