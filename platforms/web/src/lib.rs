@@ -762,7 +762,6 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
             to_json(&serde_json::json!({ "present": game::has_log_file().await? }))
         }
         "logs" => to_json(&logs().await?),
-        "forget_logs" => game::forget_logs().await.map(|()| "null".into()),
         // `{on, session, previous_end}`: the player's setting, what the
         // page tells of the session and how an earlier session's page
         // ended (diagnostics.js).

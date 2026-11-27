@@ -192,8 +192,8 @@ function startEngine() {
     };
   });
   const canvas = view.transferControlToOffscreen();
-  // The diagnostic log, when the player keeps one (#346), and how an
-  // earlier session's page ended (#356).
+  // The diagnostic log, always on (#346, #669), and how an earlier
+  // session's page ended (#356).
   const logging = diagnostics.enabled();
   const log = logging ? diagnostics.session() : null;
   const previousEnd = logging ? diagnostics.takeKeptEnd() : null;

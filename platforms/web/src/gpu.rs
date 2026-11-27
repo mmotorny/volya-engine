@@ -72,8 +72,8 @@ thread_local! {
     /// Milliseconds from a frame's submission until the browser reported
     /// the GPU done with it, for frames reported since the last frame.
     static DONE_MS: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
-    /// The latest frames' submitted-to-done times while the diagnostic log
-    /// is on, milliseconds, for `level_stats`.
+    /// The latest samples' submitted-to-done times while the diagnostic
+    /// log is on, milliseconds, for `level_stats`.
     static RECENT: RefCell<std::collections::VecDeque<f64>> = Default::default();
     /// The size the game last drew at and the canvas's, for the diagnostic
     /// log.
@@ -264,10 +264,17 @@ thread_local! {
     /// Whether WebGL 2 draws with the first vertex provoking
     /// ([`make_webgl_context`]), for the diagnostic log (#443).
     static PROVOKING_FIRST: Cell<bool> = const { Cell::new(false) };
+    /// When a frame's submitted-to-done time was last sampled
+    /// (`crate::now()`, ms).
+    static DONE_SAMPLED: Cell<f64> = const { Cell::new(f64::NEG_INFINITY) };
 }
 
-/// Frames whose GPU times `level_stats` averages.
-const RECENT_FRAMES: usize = 60;
+/// The latest samples whose GPU times `level_stats` averages.
+const RECENT_SAMPLES: usize = 2;
+
+/// How often a frame's submitted-to-done time is sampled, ms (#669: the
+/// fence is a synchronous message to WebKit's GPU process).
+const DONE_SAMPLE_MS: f64 = 1000.0;
 
 /// The longest [`submitted_work_done`] waits, milliseconds.
 const WORK_DONE_TIMEOUT_MS: f64 = 30_000.0;
@@ -672,8 +679,8 @@ pub fn frame(time: f64) {
 impl Gpu {
     /// The diagnostic log's GPU times (#355), while it is on: the time
     /// from a frame's submission until the GPU is done with all work
-    /// submitted so far (`gpu.done_ms`; the fences are checked when polled,
-    /// once a frame, so it is rounded up to frames).
+    /// submitted so far (`gpu.done_ms`, a frame a second; the fences are
+    /// checked when polled, once a frame, so it is rounded up to frames).
     fn gpu_times(&mut self) {
         if !crate::diagnostics::on() {
             return;
@@ -681,7 +688,7 @@ impl Gpu {
         for ms in DONE_MS.with(|d| std::mem::take(&mut *d.borrow_mut())) {
             volya_engine::core::diagnostics::metric("gpu.done_ms", ms);
             RECENT.with_borrow_mut(|q| {
-                if q.len() == RECENT_FRAMES {
+                if q.len() == RECENT_SAMPLES {
                     q.pop_front();
                 }
                 q.push_back(ms);
@@ -690,12 +697,13 @@ impl Gpu {
     }
 
     /// Asks to be told when the GPU is done with the work submitted so far
-    /// (`gpu.done_ms`), while the diagnostic log is on.
+    /// (`gpu.done_ms`), while the diagnostic log is on, a frame a second.
     fn watch_done(&self) {
-        if !crate::diagnostics::on() {
+        let submitted = crate::now();
+        if !crate::diagnostics::on() || submitted - DONE_SAMPLED.get() < DONE_SAMPLE_MS {
             return;
         }
-        let submitted = crate::now();
+        DONE_SAMPLED.set(submitted);
         self.device.on_done_later(move || {
             let ms = crate::now() - submitted;
             DONE_MS.with(|d| d.borrow_mut().push(ms));

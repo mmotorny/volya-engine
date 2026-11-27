@@ -2,9 +2,8 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // The page's side of the diagnostic log (#346;
-// docs/architecture/diagnostics.md). The log lives in the engine worker;
-// the page sends its own events there, only while the player's setting is on (off by
-// default), so nothing is done for it otherwise:
+// docs/architecture/diagnostics.md). The log lives in the engine worker,
+// always on (#669); the page sends its own events there while it is on:
 //
 //   event(name, args)    an instant event (args: a flat object)
 //   metric(name, value)  a value; its minimum, mean and maximum per second
@@ -12,8 +11,9 @@
 //   count(name, n)       adds to a count, logged per second
 //   end(reason, message) how the engine ended (`engine.end`, stored at once)
 //
-// The setting is kept in localStorage (namespaced: the github.io origin is
-// shared); the UX audit page sets `volyaDiagnostics` per frame.
+// It is off only for a moment while Delete settings and saves deletes it
+// (`restart`) and in tests (`setEnabled`); the UX audit page sets
+// `volyaDiagnostics` per frame.
 //
 // As the page is hidden or closed, its engine worker may be ended before it
 // stores its own `engine.end`: the page keeps one in localStorage too
@@ -22,7 +22,8 @@
 
 import { versionText } from "./update.js";
 
-const KEY = "volya-engine.diagnostic-log";
+/** Where the player's setting was kept before the log was always on (#669). */
+const OLD_KEY = "volya-engine.diagnostic-log";
 const END_KEY = "volya-engine.diagnostic-log-end";
 /** Set (sessionStorage) as a page restored from the back-forward cache reloads. */
 const RESTORED_KEY = "volya-engine.diagnostic-log-restored";
@@ -34,14 +35,19 @@ let post = null;
 let timer = null;
 const metrics = new Map();
 
-/** Whether the player keeps a diagnostic log. */
+/** Whether the log is on in this page (`setEnabled`). */
+let on = true;
+
+try {
+  localStorage.removeItem(OLD_KEY);
+} catch {
+  // Storage refused: nothing to forget.
+}
+
+/** Whether the diagnostic log is on. */
 export function enabled() {
   if (globalThis.volyaDiagnostics !== undefined) return globalThis.volyaDiagnostics;
-  try {
-    return localStorage.getItem(KEY) === "on";
-  } catch {
-    return false;
-  }
+  return on;
 }
 
 /**
@@ -152,23 +158,29 @@ export function connect(postMessage) {
 }
 
 /**
- * Stores the setting; `call` tells the engine (the `diagnostics_set` op),
- * whose answer is the log's status. Off, the engine deletes the log and
- * the kept end goes too (#536).
+ * Turns the log on or off for this page (tests; the next page load has it
+ * on); `call` tells the engine (the `diagnostics_set` op), whose answer is
+ * the log's status. Off, the engine deletes the log and the kept end goes
+ * too.
  */
-export async function setEnabled(on, call) {
-  try {
-    if (on) localStorage.setItem(KEY, "on");
-    else localStorage.removeItem(KEY);
-  } catch {
-    // Storage refused: the setting lasts this session.
-  }
-  if (globalThis.volyaDiagnostics !== undefined) globalThis.volyaDiagnostics = on;
-  if (!on) forgetEnd();
-  const status = await call("diagnostics_set", { on, session: session(), previous_end: on ? takeKeptEnd() : null });
+export async function setEnabled(value, call) {
+  on = value;
+  if (globalThis.volyaDiagnostics !== undefined) globalThis.volyaDiagnostics = value;
+  if (!value) forgetEnd();
+  const status = await call("diagnostics_set", { on: value, session: session(), previous_end: value ? takeKeptEnd() : null });
   setStatus(status);
   follow();
   return status;
+}
+
+/**
+ * Deletes the log and starts a new one (Delete settings and saves): the
+ * new log's status, `deleted` false when the old one's files stayed.
+ */
+export async function restart(call) {
+  const off = await setEnabled(false, call);
+  const status = await setEnabled(true, call);
+  return { ...status, deleted: off.deleted !== false };
 }
 
 export function event(name, args = {}) {

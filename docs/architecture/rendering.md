@@ -128,7 +128,7 @@ There is no native GL path (the user: the Mac is not a target): the renderer tal
 | `VertexArray` | A `WebGLVertexArrayObject` with the attribute layout, vertex buffers and index buffer bound | Once per (vertex layout, vertex buffers, index buffer): the level's buffers each with 16-bit indices, no merging (#429's 32-bit merge is not needed) |
 | `Framebuffer` | A `WebGLFramebuffer` with its colour and depth attachments | Once per render target (the frame, the supersampled target and its distortion target, the video's packing), remade when its size changes |
 | `Destination` | Where a finished frame goes: the canvas's default framebuffer, or a given `WebGLFramebuffer` with a viewport (an XR layer's, one per eye) | Each frame, by the platform |
-| `Fence` | A `fenceSync`, polled with `getSyncParameter` | Per submission the platform waits on (`submitted_work_done`, `gpu.done_ms`) |
+| `Fence` | A `fenceSync`, polled with `getSyncParameter` | Per submission the platform waits on (`submitted_work_done`, `gpu.done_ms` once a second) |
 
 A pipeline becomes a `Program` with a `RasterState` (blend, depth test and write, cull, front face, colour mask): plain values the cache compares. Bind groups go: each program's textures sit on fixed units, numbered across programs so that what stays (the world's records texture, a surface group's light maps and environment map) stays bound when the program changes.
 

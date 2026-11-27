@@ -514,9 +514,9 @@ export function keptSetup({ level = false, tap = false } = {}) {
       await volya.call("forget_user_config");
       return importGameData(false);
     },
-    "the diagnostic log is turned on for the games that follow": async () => {
+    "the diagnostic log is on for the games that follow": async () => {
       needsGame();
-      const status = await volya.diagnostics.setEnabled(true, volya.call);
+      const status = await volya.call("diagnostic_log_status");
       assert(status.on, "not on");
     },
     "launches into the title menu": async () => {
@@ -533,16 +533,15 @@ export function keptSetup({ level = false, tap = false } = {}) {
   return tests;
 }
 
-/** The end of a suite on the kept import: the game ended, the log off, the user settings forgotten. */
+/** The end of a suite on the kept import: the game ended, the user settings forgotten. */
 export function keptTeardown() {
   return {
-    "leaves the kept profile as it found it: the game ended, the diagnostic log off, the user settings forgotten": async () => {
+    "leaves the kept profile as it found it: the game ended, the user settings forgotten": async () => {
       if (!installer) return;
       if ((await state()).phase !== "none") {
         await volya.call("quit_game");
         await until((s) => s.phase === "none", "the game to end");
       }
-      await volya.diagnostics.setEnabled(false, volya.call);
       await volya.call("forget_user_config");
     },
   };

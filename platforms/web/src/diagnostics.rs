@@ -2,13 +2,14 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! The diagnostic log on the web (#346; `volya_engine::core::diagnostics`,
-//! docs/architecture/diagnostics.md). Off by default; the player turns
-//! it on in Settings. While on, the session's recorder is the global
+//! docs/architecture/diagnostics.md). The page turns it on as the engine
+//! starts (always, #669). While on, the session's recorder is the global
 //! `tracing` subscriber and its events are appended once per period to the
 //! log kept in OPFS (`volya-engine/diagnostic-log/0` … `7`, one sync access
 //! handle each, held while on). Where those files can't be opened (another
 //! copy of the app holds them), the log is kept in memory for the session.
-//! While off, recording's callsites are disabled and nothing runs per frame
+//! While off (a moment, as Delete settings and saves deletes it, and in
+//! tests), recording's callsites are disabled and nothing runs per frame
 //! beyond `tracing`'s check of them. Turning it off deletes the log (#536).
 //!
 //! Every way the engine or a game ends records an `engine.end` event and
@@ -119,7 +120,7 @@ struct Session {
 thread_local! {
     /// Made when logging is first turned on in this run.
     static SESSION: RefCell<Option<Session>> = const { RefCell::new(None) };
-    /// The player's setting: logging is off by default.
+    /// Whether logging is on: off until the page turns it on.
     static ON: Cell<bool> = const { Cell::new(false) };
     /// Whether graphics are set up (the session event can be made).
     static STARTED: Cell<bool> = const { Cell::new(false) };
@@ -160,8 +161,8 @@ pub fn on() -> bool {
     ON.with(Cell::get)
 }
 
-/// The `diagnostics_set` op: turns logging on or off (the player's
-/// setting). On, the session's recorder starts (the first time in this run:
+/// The `diagnostics_set` op: turns logging on or off (on as the engine
+/// starts; off and on again to delete it, and in tests). On, the session's recorder starts (the first time in this run:
 /// `page` is what the page tells of it, a JSON object: `version`,
 /// `user_agent`, `screen`, `dpr`, `cores`, `navigation`, `restored_reload`,
 /// `display_mode`) and the log's store opens, and
@@ -227,7 +228,8 @@ async fn switch(on: bool, page: &serde_json::Value, previous_end: &serde_json::V
         return;
     }
     diagnostics::set_recording(true);
-    if SESSION.with(|s| s.borrow().is_none()) {
+    let first = SESSION.with(|s| s.borrow().is_none());
+    if first {
         begin(page);
     } else {
         tracing::info!("diagnostic log on");
@@ -240,15 +242,25 @@ async fn switch(on: bool, page: &serde_json::Value, previous_end: &serde_json::V
     // but the browser lets go of the worker's files a little later (#633).
     let closed = end.as_ref().is_some_and(|e| e.reason == "page_closed");
     let (mut log, stored) = open_log(closed).await;
-    if let Some(end) = end {
-        let prefix = SESSION.with(|s| {
+    let prefix = SESSION
+        .with(|s| {
             s.borrow()
                 .as_ref()
                 .map(|s| s.diagnostics.session_metadata())
-        });
-        if let Err(e) = log.add_recorded_end(&end, &prefix.unwrap_or_default()) {
-            tracing::error!(error = %e, "diagnostic log write failed");
-        }
+        })
+        .unwrap_or_default();
+    // On again after it was deleted: the new log starts with the session's
+    // metadata, which its first events carried only into the old one.
+    if !first
+        && log.bytes() == 0
+        && let Err(e) = log.append(&prefix, "")
+    {
+        tracing::error!(error = %e, "diagnostic log write failed");
+    }
+    if let Some(end) = end
+        && let Err(e) = log.add_recorded_end(&end, &prefix)
+    {
+        tracing::error!(error = %e, "diagnostic log write failed");
     }
     SESSION.with(|s| {
         if let Some(s) = s.borrow_mut().as_mut()

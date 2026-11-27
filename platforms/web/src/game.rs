@@ -651,7 +651,7 @@ pub async fn has_log_file() -> Result<bool, JsValue> {
 
 /// Deletes the game's log folder (retried while a write holds the file);
 /// an absent one is fine.
-pub async fn forget_logs() -> Result<(), JsValue> {
+async fn forget_logs() -> Result<(), JsValue> {
     let namespace = opfs::namespace().await?;
     let mut attempt = 0;
     while opfs::existing_dir(&namespace, LOGS).await?.is_some() {
@@ -691,8 +691,8 @@ pub async fn has_user_data() -> Result<bool, JsValue> {
 
 /// Deletes the user configuration file, the saved-games folder and the
 /// game's log folder (Settings, while no game runs; the log alone isn't
-/// player's data to offer this for, #646): the next game starts from the
-/// installer's copy. A
+/// player's data to offer this for, #646; the page deletes the diagnostic
+/// log too, #669): the next game starts from the installer's copy. A
 /// write of the configuration still holding its file makes an attempt fail:
 /// retried as [`write_user_config`].
 pub async fn forget_user_data() -> Result<(), JsValue> {

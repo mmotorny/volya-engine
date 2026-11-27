@@ -42,10 +42,9 @@ globalThis.volyaChromium = !device.touch;
 globalThis.volyaInstalled = state.tab ? false : true;
 if (state.tab && !device.touch) globalThis.volyaInstallOffer = { prompt: async () => {}, userChoice: Promise.resolve({ outcome: "dismissed" }) };
 
-// The performance log's setting and whether there is one (#346), and
-// whether the game's log is kept (#646: once the game has run).
-const log = { on: false, entries: false, ...state.log };
-globalThis.volyaDiagnostics = log.on;
+// The performance log, always on (#669), and whether the game's log is
+// kept (#646: once the game has run).
+const log = { on: true, entries: true, ...state.log };
 let gameLog = state.gameLog ?? true;
 
 // Whether an import finished here before (the localStorage mark in game-ui.js).
@@ -71,15 +70,12 @@ const call = async (op, args) => {
     case "diagnostic_log_status":
       return log;
     case "diagnostics_set":
-      // Off deletes the log, unless the state says it can't.
+      // Off deletes the log, unless the state says it can't; on, a new one
+      // starts.
       if (args?.on) return log;
-      return { on: false, entries: log.deleteFails ? log.entries : false, deleted: !log.deleteFails };
+      return { on: false, entries: Boolean(log.deleteFails), deleted: !log.deleteFails };
     case "game_log_status":
       return { present: gameLog };
-    case "forget_logs":
-      if (state.forgetLogsFails) throw new Error("the game's log is held by another copy of the app");
-      gameLog = false;
-      return null;
     case "forget_user_data":
       gameLog = false;
       return null;

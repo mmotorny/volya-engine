@@ -154,69 +154,24 @@ export const SECTIONS = [
         screen: "settings",
         check: "failed",
       },
-      // The logs (#646): the game's log, kept once the game has run, and
-      // the performance log (#346), off by default.
-      { id: "settings-no-logs", name: "The game never run: no logs (Delete settings and saves names none)", game: imported, screen: "settings", gameLog: false },
-      { id: "settings-log-on-empty", name: "Performance log on, nothing recorded yet, no game's log", game: imported, screen: "settings", gameLog: false, log: { on: true, entries: false } },
-      { id: "settings-log-on", name: "Performance log on, logs to download", game: imported, screen: "settings", log: { on: true, entries: true } },
+      // The logs (#646, #669): the game's log and the performance log,
+      // always kept (the default states have both).
       {
         id: "settings-log-preparing",
         name: "Download logs pressed: preparing the file",
         game: imported,
         screen: "settings",
-        log: { on: true, entries: true, download: "preparing" },
+        log: { download: "preparing" },
       },
       {
         id: "settings-log-failed",
         name: "Download failed: the logs couldn't be read (for a few seconds)",
         game: imported,
         screen: "settings",
-        log: { on: true, entries: true, download: "failed" },
+        log: { download: "failed" },
       },
-      // Turning it off deletes the performance log (#536), asked first.
-      {
-        id: "settings-log-off-confirm",
-        name: "Performance log switched off: confirming the deletion",
-        game: imported,
-        screen: "settings",
-        log: { on: true, entries: true },
-        press: ["Keep a performance log"],
-      },
-      {
-        id: "settings-log-not-deleted",
-        name: "Turned off, but the performance log couldn't be deleted",
-        game: imported,
-        screen: "settings",
-        log: { on: true, entries: true, deleteFails: true },
-        press: ["Keep a performance log", "Turn off and delete"],
-      },
-      { id: "settings-game-log", name: "Performance log off, the game's log kept", game: imported, screen: "settings" },
-      { id: "settings-log-left", name: "Performance log off, one left from before", game: imported, screen: "settings", log: { on: false, entries: true } },
-      {
-        id: "settings-logs-confirm",
-        name: "Delete logs pressed: confirming",
-        game: imported,
-        screen: "settings",
-        log: { on: false, entries: true },
-        press: ["Delete logs"],
-      },
-      {
-        id: "settings-logs-deleted",
-        name: "Logs deleted: nothing to download",
-        game: imported,
-        screen: "settings",
-        log: { on: false, entries: true },
-        press: ["Delete logs", "Delete"],
-      },
-      {
-        id: "settings-logs-not-deleted",
-        name: "Delete pressed, but the logs couldn't be deleted",
-        game: imported,
-        screen: "settings",
-        forgetLogsFails: true,
-        press: ["Delete logs", "Delete"],
-      },
-      // Danger zone: the game's settings and saves (#535).
+      // Danger zone: the game's settings and saves (#535), and the logs
+      // (#669).
       {
         id: "settings-delete-user-data",
         name: "Delete settings and saves pressed: confirming",
@@ -226,9 +181,17 @@ export const SECTIONS = [
       },
       {
         id: "settings-user-data-deleted",
-        name: "Settings and saves deleted",
+        name: "Settings, saves and logs deleted",
         game: imported,
         screen: "settings",
+        press: ["Delete settings and saves", "Delete"],
+      },
+      {
+        id: "settings-user-data-not-deleted",
+        name: "Delete pressed, but the performance log couldn't be deleted",
+        game: imported,
+        screen: "settings",
+        log: { deleteFails: true },
         press: ["Delete settings and saves", "Delete"],
       },
       // Danger zone: the game files (#538).
