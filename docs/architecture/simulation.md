@@ -21,6 +21,10 @@ The level (`volya-engine::level::LevelScreen`) owns what runs while a game is pl
 - Ladders (`volya-engine-core::climbing`, docs/behavior/climbing.md) are the level's `climable_object` records, taken as the collision world is read (after the switch pass, before the world is shared): each one's box lives in the collision world beside the triangles, and the player's shapes collide with its faces as twelve triangles under the same contact rules (only while in front of it, section 1.3). The movement layer runs the climbing states at each fixed step before the forces and sets the climbing flag after the frame's physics; every input path drives it through the ordinary move, look and jump actions, with no control of its own.
 - The player's body is our own small solver, not a physics library: the body never rotates, so it is a point mass with contact constraints using the spec's parameters (error reduction, constraint-force mixing, friction, bounce), solved by projected Gauss–Seidel. Each fixed step has two halves (`collision::body`), so the movement computes its forces from the step's contacts: `PlayerBody::begin_step` (the contacts), then `PlayerBody::finish_step` (the forces, the solve, the move).
 
+## Physics
+
+- `volya-engine-core::physics::World` (docs/behavior/physics-world.md) holds what doesn't depend on the solver: the parameters fixed at creation, the frame's steps from an accumulator of the display frame time, `ph_frequency` and `ph_iterations`, the step's order, the per-step actions, the rest pass, the floor and freezing. Contacts and solving are behind `physics::Solver`; what the world steps behind `physics::Object` and `physics::Updater`.
+
 ## The player character
 
 - The character's state (`volya-engine-core::character`, docs/behavior/player-state.md: conditions, profile, inventory) is created with the level on New Game and kept by it.
