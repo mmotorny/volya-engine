@@ -28,10 +28,18 @@
 //!   button; lifting releases it. Screens that react to keys only (the logo
 //!   sequence, skipped with the quit key) treat a tap as that key
 //!   ([`Input::touch_starts`]).
-//! - **Gamepad** ([`GamepadButton`], [`GamepadAxis`]): south (A / cross) is
-//!   Enter, east (B / circle) is Escape, the d-pad is the arrow keys, and the
-//!   left stick acts as the arrow keys once pushed past [`STICK_PRESS`]
-//!   (released below [`STICK_RELEASE`]). The stick does not move the cursor.
+//! - **Gamepad as a mouse** wherever the game shows its cursor (the user's
+//!   design, #835; [`Input::set_pad_cursor`]), as console ports of mouse
+//!   screens do: the left stick moves the cursor through an analog curve
+//!   ([`pad_cursor_speed`]) with friction over clickable elements, south
+//!   (A / cross) is the left button, held for drags, west (X / square)
+//!   the right one, east (B / circle) Escape, the d-pad nudges the cursor
+//!   and the right stick and the shoulders are the wheel
+//!   ([`Input::pad_cursor_frame`]).
+//! - **Gamepad** elsewhere ([`GamepadButton`], [`GamepadAxis`]): south is
+//!   Enter, east is Escape, the d-pad is the arrow keys, and the left stick
+//!   acts as the arrow keys once pushed past [`STICK_PRESS`] (released
+//!   below [`STICK_RELEASE`]).
 //! - **Absolute pointers** (a mouse over the page without pointer lock, and
 //!   [`Event::Touch`]): the cursor is placed under the pointer, inverting the screen
 //!   mapping, so the drawn cursor and the system pointer agree. The
@@ -122,6 +130,117 @@ pub fn touchpad_gain(speed: f32) -> f32 {
         return 1.0;
     }
     1.0 + t.clamp(0.0, 1.0) * (TOUCHPAD_MAX_GAIN - 1.0)
+}
+
+/// The gamepad cursor's radial dead zone, as a fraction of full deflection:
+/// XInput's `XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE`, 7849 of 32767
+/// (documented, Microsoft's "Getting Started With XInput").
+pub const PAD_CURSOR_DEAD_ZONE: f32 = 0.24;
+/// The gamepad cursor's speed at full deflection, UI units per second:
+/// about a screen's width a second (our choice).
+pub const PAD_CURSOR_MAX_SPEED: f32 = 1000.0;
+/// The curve's exponent past the dead zone: 2, slow and precise near the
+/// centre (40 units/s at a fifth of the way out), fast at full tilt (our
+/// choice; XInput's guide suggests a non-linear transform such as a cube
+/// for precision at low deflection).
+pub const PAD_CURSOR_EXPONENT: f32 = 2.0;
+/// The gamepad cursor's speed over a clickable element, as a fraction of
+/// its speed elsewhere: friction (our value; Roblox's and the Xbox
+/// browser's virtual cursors slow over interactable elements, documented
+/// without a number).
+pub const PAD_CURSOR_FRICTION: f32 = 0.4;
+/// What a d-pad press moves the cursor, UI units; held, it repeats after
+/// [`PAD_REPEAT_DELAY`] every [`PAD_REPEAT_INTERVAL`] (our values).
+pub const PAD_NUDGE: f32 = 4.0;
+/// Seconds before a held d-pad direction or shoulder repeats, and between
+/// repeats (our values, near a keyboard's typematic defaults).
+pub const PAD_REPEAT_DELAY: f32 = 0.4;
+pub const PAD_REPEAT_INTERVAL: f32 = 0.05;
+/// Seconds between a held shoulder's wheel steps after the delay.
+pub const PAD_WHEEL_INTERVAL: f32 = 0.1;
+/// The right stick's dead zone as the wheel: XInput's
+/// `XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE`, 8689 of 32767 (documented).
+pub const PAD_WHEEL_DEAD_ZONE: f32 = 0.265;
+/// Wheel steps a second at the right stick's full deflection, rising
+/// linearly from none past the dead zone (our value).
+pub const PAD_WHEEL_MAX_RATE: f32 = 12.0;
+
+/// The fraction of the way from the dead zone's edge to full deflection
+/// for a stick deflected `d` (0 … 1): the scaled radial dead zone.
+fn past_dead_zone(d: f32, dead: f32) -> f32 {
+    if d.is_nan() {
+        return 0.0;
+    }
+    ((d - dead) / (1.0 - dead)).clamp(0.0, 1.0)
+}
+
+/// The gamepad cursor's speed in UI units per second for a left stick
+/// deflected `d` (its length, 0 … 1; our design): none within
+/// [`PAD_CURSOR_DEAD_ZONE`], then [`PAD_CURSOR_MAX_SPEED`] times the
+/// fraction of the way out to the power [`PAD_CURSOR_EXPONENT`].
+pub fn pad_cursor_speed(d: f32) -> f32 {
+    PAD_CURSOR_MAX_SPEED * past_dead_zone(d, PAD_CURSOR_DEAD_ZONE).powf(PAD_CURSOR_EXPONENT)
+}
+
+/// The gamepad cursor's motion this frame in UI units: the left stick at
+/// `stick` (+y down) for `dt` seconds, slowed by [`PAD_CURSOR_FRICTION`]
+/// when `over` a clickable element.
+pub fn pad_cursor_motion(stick: [f32; 2], dt: f32, over: bool) -> [f32; 2] {
+    let [x, y] = stick.map(|v| if v.is_finite() { v } else { 0.0 });
+    let d = x.hypot(y);
+    if d <= 0.0 || dt.is_nan() || dt <= 0.0 {
+        return [0.0; 2];
+    }
+    let friction = if over { PAD_CURSOR_FRICTION } else { 1.0 };
+    let step = pad_cursor_speed(d.min(1.0)) * friction * dt;
+    [x / d * step, y / d * step]
+}
+
+/// Wheel steps a second for a right stick deflected `d` vertically (+
+/// down, toward the content's end): negative for wheel up.
+pub fn pad_wheel_rate(d: f32) -> f32 {
+    PAD_WHEEL_MAX_RATE * d.signum() * past_dead_zone(d.abs(), PAD_WHEEL_DEAD_ZONE)
+}
+
+/// Whether UI point `p` lies in any of `targets` (x, y, width, height).
+fn over_target([px, py]: [f32; 2], targets: &[[f32; 4]]) -> bool {
+    targets
+        .iter()
+        .any(|&[x, y, w, h]| px >= x && px <= x + w && py >= y && py <= y + h)
+}
+
+/// A held gamepad button's auto-repeat: how many times it acts this frame.
+#[derive(Clone, Copy, Debug, Default)]
+struct Repeat {
+    /// Seconds held, when held.
+    held: Option<f32>,
+}
+
+impl Repeat {
+    /// Presses this frame of `dt` seconds: one at the press, then one each
+    /// `interval` from [`PAD_REPEAT_DELAY`] on while held.
+    fn frame(&mut self, pressed: bool, held: bool, dt: f32, interval: f32) -> u32 {
+        let mut n = 0;
+        if pressed {
+            self.held = Some(0.0);
+            n += 1;
+        } else if held && let Some(t) = &mut self.held {
+            let before = *t;
+            *t += dt;
+            let count = |t: f32| {
+                if t < PAD_REPEAT_DELAY {
+                    0
+                } else {
+                    1 + ((t - PAD_REPEAT_DELAY) / interval) as u32
+                }
+            };
+            n += count(*t) - count(before);
+        }
+        if !held && !pressed {
+            self.held = None;
+        }
+        n.min(64)
+    }
 }
 
 fn clamp_unit(v: f32) -> f32 {
@@ -455,6 +574,19 @@ impl GamepadButton {
     /// The control holding this button.
     pub fn control(self) -> Control {
         self.key().map_or(Control::Pad(self), Control::Key)
+    }
+
+    /// The control holding this button while it drives the game's cursor
+    /// ([`Input::set_pad_cursor`]; our design, #835): south the left mouse
+    /// button, west the right one, east Escape as ever; the rest as
+    /// themselves (the d-pad nudges the cursor).
+    pub fn cursor_control(self) -> Control {
+        match self {
+            GamepadButton::South => Control::Mouse(MouseButton::Left),
+            GamepadButton::West => Control::Mouse(MouseButton::Right),
+            GamepadButton::East => Control::Key(Key::Escape),
+            b => Control::Pad(b),
+        }
     }
 }
 
@@ -854,6 +986,19 @@ pub struct Input {
     sticks_released: [bool; 2],
     /// The pointer lock was lost this frame.
     pointer_unlocked: bool,
+    /// The gamepad drives the game's cursor ([`Input::set_pad_cursor`]).
+    pad_cursor: bool,
+    /// The platform time of the latest [`Input::pad_cursor_frame`], ms: a
+    /// gamepad's presses are timed by it for double clicks.
+    pad_clock: Option<f64>,
+    /// The d-pad's nudges (up, down, left, right) and the shoulders'
+    /// wheel steps (left, right) repeating while held.
+    nudges: [Repeat; 4],
+    shoulders: [Repeat; 2],
+    /// The right stick's push as the wheel (−1 up, +1 down, 0 none) and
+    /// its fraction of a step not yet made.
+    wheel_push: i32,
+    wheel_due: f32,
     /// Characters typed through text entry this frame ([`Event::Text`]).
     text: Vec<char>,
     /// What the clipboard held at this frame's Insert presses, in order
@@ -891,6 +1036,12 @@ impl Default for Input {
             motion: [0.0; 2],
             sticks_released: [false; 2],
             pointer_unlocked: false,
+            pad_cursor: false,
+            pad_clock: None,
+            nudges: Default::default(),
+            shoulders: Default::default(),
+            wheel_push: 0,
+            wheel_due: 0.0,
             text: Vec::new(),
             clipboard: Default::default(),
         }
@@ -1289,7 +1440,21 @@ impl Input {
                     }
                     self.pad_changes.push((button, pressed));
                 }
-                self.set(Source::Pad, button.control(), pressed, false)
+                if pressed {
+                    match (self.pad_cursor, button.cursor_control()) {
+                        (true, Control::Mouse(b)) => {
+                            let time = self.pad_clock.unwrap_or(0.0);
+                            self.mouse_button(Source::Pad, b, true, time)
+                        }
+                        (true, c) => self.set(Source::Pad, c, true, false),
+                        (false, _) => self.set(Source::Pad, button.control(), true, false),
+                    }
+                } else {
+                    // Whichever it was pressed as: the mode may have
+                    // changed while it was held.
+                    self.set(Source::Pad, button.control(), false, false);
+                    self.set(Source::Pad, button.cursor_control(), false, false);
+                }
             }
             Event::TouchStick { value } => {
                 self.touch_stick = value.map(|v| {
@@ -1330,13 +1495,125 @@ impl Input {
                 let [negative, positive] = keys.map(Control::Key);
                 for (control, deflection) in [(negative, -value), (positive, value)] {
                     let held = self.held.contains(&(Source::Stick, control));
-                    if !held && deflection >= STICK_PRESS {
+                    if !held && deflection >= STICK_PRESS && !self.pad_cursor {
                         self.set(Source::Stick, control, true, false);
                     } else if held && deflection < STICK_RELEASE {
                         self.set(Source::Stick, control, false, false);
                     }
                 }
             }
+        }
+    }
+
+    /// Whether the gamepad drives the game's cursor (our design, #835).
+    pub fn pad_cursor(&self) -> bool {
+        self.pad_cursor
+    }
+
+    /// Makes the gamepad drive the game's cursor (`on`) wherever the game
+    /// shows it, as a mouse does: [`GamepadButton::cursor_control`], the
+    /// left stick moving the cursor and the d-pad nudging it, the right
+    /// stick and the shoulders the wheel ([`Input::pad_cursor_frame`]).
+    /// Off, the buttons are [`GamepadButton::control`] and the left stick
+    /// the arrow keys. Buttons held across a change are released as they
+    /// were pressed.
+    pub fn set_pad_cursor(&mut self, on: bool) {
+        if on != self.pad_cursor {
+            self.pad_cursor = on;
+            self.nudges = Default::default();
+            self.shoulders = Default::default();
+            self.wheel_push = 0;
+            self.wheel_due = 0.0;
+            if on {
+                for key in [Key::Left, Key::Right, Key::Up, Key::Down] {
+                    self.set(Source::Stick, Control::Key(key), false, false);
+                }
+            }
+        }
+    }
+
+    /// The gamepad cursor's frame at platform time `time_ms`, before the
+    /// screens read the frame (our design, #835): the left stick moves the
+    /// cursor by [`pad_cursor_motion`], slowed over any of `targets` (the
+    /// clickable elements, UI rectangles x, y, width, height); each d-pad
+    /// press nudges it [`PAD_NUDGE`] units, repeating while held; the
+    /// shoulders are the wheel (left up, right down), repeating while
+    /// held, and the right stick too (pushed up, wheel up) when
+    /// `right_stick_scrolls`. Its motion is the cursor's as a mouse's is,
+    /// and shows the cursor where touches hid it ([`Input::cursor_drawn`]).
+    /// Nothing while the gamepad doesn't drive the cursor.
+    pub fn pad_cursor_frame(
+        &mut self,
+        time_ms: f64,
+        targets: &[[f32; 4]],
+        right_stick_scrolls: bool,
+    ) {
+        let dt = match self.pad_clock {
+            Some(last) if time_ms > last => ((time_ms - last) / 1000.0).min(0.1) as f32,
+            _ => 0.0,
+        };
+        self.pad_clock = Some(time_ms);
+        if !self.pad_cursor {
+            return;
+        }
+        let [mut x, mut y] = self.cursor_ui();
+        let stick = [self.axis(GamepadAxis::LeftX), self.axis(GamepadAxis::LeftY)];
+        let [dx, dy] = pad_cursor_motion(stick, dt, over_target([x, y], targets));
+        x += dx;
+        y += dy;
+        let pressed = |s: &Self, b| s.pad_changes.contains(&(b, true));
+        let dirs = [
+            (GamepadButton::DpadUp, [0.0, -1.0]),
+            (GamepadButton::DpadDown, [0.0, 1.0]),
+            (GamepadButton::DpadLeft, [-1.0, 0.0]),
+            (GamepadButton::DpadRight, [1.0, 0.0]),
+        ];
+        for (i, (b, [ux, uy])) in dirs.into_iter().enumerate() {
+            let (p, h) = (pressed(self, b), self.pad_held(b));
+            let n = self.nudges[i].frame(p, h, dt, PAD_REPEAT_INTERVAL) as f32;
+            x += ux * PAD_NUDGE * n;
+            y += uy * PAD_NUDGE * n;
+        }
+        let to = [
+            clamp_unit(x * 2.0 / UI_WIDTH - 1.0),
+            clamp_unit(y * 2.0 / UI_HEIGHT - 1.0),
+        ];
+        if to != self.cursor {
+            self.mouse_since_touch = true;
+            self.set_cursor(to);
+        }
+        let mut steps = 0i32;
+        for (i, (b, sign)) in [
+            (GamepadButton::LeftShoulder, -1),
+            (GamepadButton::RightShoulder, 1),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (p, h) = (pressed(self, b), self.pad_held(b));
+            steps += sign * self.shoulders[i].frame(p, h, dt, PAD_WHEEL_INTERVAL) as i32;
+        }
+        let rate = if right_stick_scrolls {
+            pad_wheel_rate(self.axis(GamepadAxis::RightY))
+        } else {
+            0.0
+        };
+        let sign = rate.signum() as i32;
+        if rate == 0.0 {
+            self.wheel_push = 0;
+        } else if sign != self.wheel_push {
+            // A new push (or one turned back) steps at once.
+            self.wheel_push = sign;
+            self.wheel_due = 0.0;
+            steps += sign;
+        } else {
+            self.wheel_due += rate.abs() * dt;
+            let whole = self.wheel_due.floor();
+            self.wheel_due -= whole;
+            steps += sign * whole as i32;
+        }
+        for _ in 0..steps.unsigned_abs().min(64) {
+            self.push(Action::Wheel { up: steps < 0 });
         }
     }
 
@@ -1529,6 +1806,198 @@ mod tests {
             assert!(g >= last && (1.0..=TOUCHPAD_MAX_GAIN).contains(&g));
             last = g;
         }
+    }
+
+    #[test]
+    fn the_pad_cursor_curve_has_a_dead_zone_and_is_slow_near_the_centre() {
+        assert_eq!(pad_cursor_speed(0.0), 0.0);
+        assert_eq!(pad_cursor_speed(PAD_CURSOR_DEAD_ZONE), 0.0);
+        assert_eq!(pad_cursor_speed(1.0), PAD_CURSOR_MAX_SPEED);
+        assert_eq!(pad_cursor_speed(2.0), PAD_CURSOR_MAX_SPEED);
+        assert_eq!(pad_cursor_speed(f32::NAN), 0.0);
+        // A fifth of the way out: a twenty-fifth of the speed.
+        let fifth = PAD_CURSOR_DEAD_ZONE + 0.2 * (1.0 - PAD_CURSOR_DEAD_ZONE);
+        assert!((pad_cursor_speed(fifth) - 40.0).abs() < 0.01);
+        let mut last = 0.0;
+        for i in 0..=100 {
+            let v = pad_cursor_speed(i as f32 / 100.0);
+            assert!(v >= last);
+            last = v;
+        }
+        // Radial: the direction kept, the length by the curve; friction
+        // slows it over a target.
+        let [x, y] = pad_cursor_motion([0.6, 0.8], 0.5, false);
+        assert!((x - 300.0).abs() < 0.01 && (y - 400.0).abs() < 0.01);
+        let [x, y] = pad_cursor_motion([0.6, 0.8], 0.5, true);
+        assert!((x - 300.0 * PAD_CURSOR_FRICTION).abs() < 0.01);
+        assert!((y - 400.0 * PAD_CURSOR_FRICTION).abs() < 0.01);
+        assert_eq!(pad_cursor_motion([0.1, 0.1], 0.5, false), [0.0, 0.0]);
+        assert_eq!(pad_cursor_motion([f32::NAN, 0.0], 0.5, false), [0.0, 0.0]);
+        assert_eq!(pad_cursor_motion([1.0, 0.0], 0.0, false), [0.0, 0.0]);
+        assert_eq!(pad_wheel_rate(0.2), 0.0);
+        assert_eq!(pad_wheel_rate(-1.0), -PAD_WHEEL_MAX_RATE);
+    }
+
+    fn pad(input: &mut Input, button: GamepadButton, pressed: bool) {
+        input.handle(Event::GamepadButton { button, pressed });
+    }
+
+    fn axis(input: &mut Input, axis: GamepadAxis, value: f32) {
+        input.handle(Event::GamepadAxis { axis, value });
+    }
+
+    #[test]
+    fn the_pad_cursor_moves_like_a_mouse_slowed_over_targets() {
+        let mut input = Input::new();
+        input.set_screen(SCREEN);
+        input.set_pad_cursor(true);
+        input.pad_cursor_frame(0.0, &[], true);
+        assert_eq!(input.cursor_ui(), [512.0, 384.0]);
+        // Full tilt right for 100 ms: 100 units.
+        axis(&mut input, GamepadAxis::LeftX, 1.0);
+        input.pad_cursor_frame(100.0, &[], true);
+        assert!((input.cursor_ui()[0] - 612.0).abs() < 0.01);
+        assert!(matches!(input.actions(), [Action::Cursor { .. }]));
+        input.end_frame();
+        // Over a target: 40.
+        let target = [600.0, 300.0, 200.0, 200.0];
+        input.pad_cursor_frame(200.0, &[target], true);
+        assert!((input.cursor_ui()[0] - 652.0).abs() < 0.01);
+        input.end_frame();
+        // A stalled frame counts 100 ms at most; the screen clamps.
+        input.pad_cursor_frame(5000.0, &[], true);
+        assert!((input.cursor_ui()[0] - 752.0).abs() < 0.01);
+        for t in 0..20 {
+            input.pad_cursor_frame(5100.0 + 100.0 * t as f64, &[], true);
+        }
+        assert_eq!(input.cursor_ui()[0], UI_WIDTH);
+        // The stick presses no arrow key here.
+        assert!(!input.is_held(Control::Key(Key::Right)));
+        axis(&mut input, GamepadAxis::LeftX, 0.0);
+        input.end_frame();
+        // Off: nothing moves; the stick is the arrows again.
+        input.set_pad_cursor(false);
+        axis(&mut input, GamepadAxis::LeftX, -1.0);
+        input.pad_cursor_frame(8000.0, &[], true);
+        assert_eq!(input.cursor_ui()[0], UI_WIDTH);
+        assert!(input.is_held(Control::Key(Key::Left)));
+        // Back on: the stick's arrow is let go.
+        input.set_pad_cursor(true);
+        assert!(!input.is_held(Control::Key(Key::Left)));
+    }
+
+    #[test]
+    fn the_pad_cursor_shows_the_cursor_touches_hid() {
+        let mut input = Input::new();
+        input.handle(Event::TouchDirect { on: true });
+        assert!(!input.cursor_drawn());
+        input.set_pad_cursor(true);
+        input.pad_cursor_frame(0.0, &[], true);
+        axis(&mut input, GamepadAxis::LeftY, 1.0);
+        input.pad_cursor_frame(50.0, &[], true);
+        assert!(input.cursor_drawn());
+    }
+
+    #[test]
+    fn pad_buttons_are_mouse_buttons_with_the_cursor_and_keys_without() {
+        let mut input = Input::new();
+        input.set_pad_cursor(true);
+        input.pad_cursor_frame(1000.0, &[], true);
+        pad(&mut input, GamepadButton::South, true);
+        assert!(input.is_held(Control::Mouse(MouseButton::Left)));
+        assert!(!input.device_held(Control::Mouse(MouseButton::Left)));
+        pad(&mut input, GamepadButton::South, false);
+        // A second press within 250 ms is a double click.
+        input.pad_cursor_frame(1100.0, &[], true);
+        pad(&mut input, GamepadButton::South, true);
+        assert_eq!(
+            input.actions(),
+            [
+                press(Control::Mouse(MouseButton::Left)),
+                Action::Release {
+                    control: Control::Mouse(MouseButton::Left)
+                },
+                Action::Press {
+                    control: Control::Mouse(MouseButton::Left),
+                    double: true
+                },
+            ]
+        );
+        pad(&mut input, GamepadButton::South, false);
+        input.end_frame();
+        pad(&mut input, GamepadButton::West, true);
+        pad(&mut input, GamepadButton::East, true);
+        pad(&mut input, GamepadButton::DpadUp, true);
+        assert!(input.is_held(Control::Mouse(MouseButton::Right)));
+        assert!(input.is_held(Control::Key(Key::Escape)));
+        assert!(!input.is_held(Control::Key(Key::Up)));
+        // Held across the change, released as pressed.
+        input.set_pad_cursor(false);
+        pad(&mut input, GamepadButton::West, false);
+        pad(&mut input, GamepadButton::East, false);
+        assert!(!input.is_held(Control::Mouse(MouseButton::Right)));
+        assert!(!input.is_held(Control::Key(Key::Escape)));
+        pad(&mut input, GamepadButton::South, true);
+        assert!(input.is_held(Control::Key(Key::Enter)));
+        input.set_pad_cursor(true);
+        pad(&mut input, GamepadButton::South, false);
+        assert!(!input.is_held(Control::Key(Key::Enter)));
+    }
+
+    #[test]
+    fn the_d_pad_nudges_and_the_shoulders_and_right_stick_scroll() {
+        let mut input = Input::new();
+        input.set_pad_cursor(true);
+        input.pad_cursor_frame(0.0, &[], true);
+        pad(&mut input, GamepadButton::DpadRight, true);
+        input.pad_cursor_frame(10.0, &[], true);
+        assert_eq!(input.cursor_ui(), [512.0 + PAD_NUDGE, 384.0]);
+        input.end_frame();
+        // Held: repeats from 400 ms, every 50 ms (three by 520 ms).
+        let mut t = 10.0;
+        while t < 10.0 + 520.0 {
+            t += 10.0;
+            input.pad_cursor_frame(t, &[], true);
+            input.end_frame();
+        }
+        let x = input.cursor_ui()[0];
+        assert!((x - (512.0 + 4.0 * PAD_NUDGE)).abs() < 0.01, "{x}");
+        pad(&mut input, GamepadButton::DpadRight, false);
+        input.end_frame();
+        let wheels = |input: &Input| {
+            (input.actions().iter())
+                .filter_map(|a| match a {
+                    Action::Wheel { up } => Some(*up),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        pad(&mut input, GamepadButton::RightShoulder, true);
+        input.pad_cursor_frame(t + 10.0, &[], true);
+        assert_eq!(wheels(&input), [false]);
+        pad(&mut input, GamepadButton::RightShoulder, false);
+        input.end_frame();
+        pad(&mut input, GamepadButton::LeftShoulder, true);
+        input.pad_cursor_frame(t + 20.0, &[], true);
+        assert_eq!(wheels(&input), [true]);
+        pad(&mut input, GamepadButton::LeftShoulder, false);
+        input.end_frame();
+        // The right stick: a step at once, then at its rate (12 a second
+        // at full tilt).
+        axis(&mut input, GamepadAxis::RightY, -1.0);
+        input.pad_cursor_frame(t + 30.0, &[], true);
+        assert_eq!(wheels(&input), [true]);
+        input.end_frame();
+        let mut n = 0;
+        for i in 1..=100 {
+            input.pad_cursor_frame(t + 30.0 + 10.0 * i as f64, &[], true);
+            n += wheels(&input).len();
+            input.end_frame();
+        }
+        assert_eq!(n, 12);
+        // Not where the screen takes the right stick itself.
+        input.pad_cursor_frame(t + 2000.0, &[], false);
+        assert!(wheels(&input).is_empty());
     }
 
     #[test]

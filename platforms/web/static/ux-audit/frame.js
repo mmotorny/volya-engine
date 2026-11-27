@@ -211,7 +211,7 @@ if (state.level) {
   const screen = document.getElementById("screen");
   screen.insertAdjacentHTML(
     "beforeend",
-    `<div class="ux-game"><div class="ux-stand-in ux-menu">The game's screen (no cursor drawn)</div></div>`,
+    `<div class="ux-game"><div class="ux-stand-in ux-menu">The game's screen (${state.screenZoom.cursor ? "its cursor drawn" : "no cursor drawn"})</div></div>`,
   );
   const { scale, at } = state.screenZoom;
   const [w, h] = [screen.clientWidth, screen.clientHeight];

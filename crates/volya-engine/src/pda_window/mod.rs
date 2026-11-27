@@ -18,9 +18,10 @@
 //! ([`crate::controls`]): touch reaches the open window through the
 //! touchpad of #108 (a tap clicks a tab), and the touch PDA button acts as
 //! the key bound to `active_jobs`; a gamepad's d-pad left does too in the
-//! level, and in the window the d-pad moves the cursor to the nearest tab
-//! button, the left stick moves it freely, south (A / cross) is the left
-//! button and east (B / circle) the key bound to `quit`.
+//! level, and in the window the gamepad is a mouse (#835,
+//! [`crate::core::input::Input::set_pad_cursor`]): its left stick moves
+//! the cursor, south (A / cross) is the left button; east (B / circle) is
+//! the key bound to `quit`.
 //!
 //! **What waits for other systems**: the information portions are
 //! collected ([`PdaWindow::take_portions`]) until the character can
@@ -246,6 +247,23 @@ impl PdaWindow {
         self.map.as_ref()
     }
 
+    /// The gamepad cursor's targets ([`crate::core::input::Input::pad_cursor_frame`]):
+    /// the tab buttons and the map's tool buttons while it shows.
+    pub fn cursor_targets(&self) -> Vec<Rect> {
+        let mut targets: Vec<Rect> = self.layout.buttons.iter().map(|b| b.rect).collect();
+        if self.map_shown()
+            && let Some(map) = &self.map
+        {
+            targets.extend(map.tool_rects());
+        }
+        targets
+    }
+
+    /// Whether the map tab shows: it takes the gamepad's right stick.
+    pub fn map_shown(&self) -> bool {
+        self.open && self.active == Some(MAP_TAB) && self.map.is_some()
+    }
+
     /// The map tab's window while it shows.
     fn shown_map(&mut self) -> Option<&mut MapWindow> {
         if self.open && self.active == Some(MAP_TAB) {
@@ -398,7 +416,7 @@ impl PdaWindow {
             out.closed = true;
             return out;
         }
-        for e in dialog::events(f.data, f.input, self.cursor, dt) {
+        for e in dialog::events(f.data, f.input) {
             // 6: while paused the window takes no input; the key bound to
             // `quit` still closes it (5 item 2).
             if f.paused && !matches!(e, Ev::Quit { pressed: true }) {
@@ -471,7 +489,7 @@ impl PdaWindow {
         // pda-map.md 5.7); a press on a tab button is the tab bar's.
         let on_tab = matches!(e, Ev::Press { .. }) && self.button_at(cursor).is_some();
         if !on_tab
-            && !matches!(e, Ev::Quit { .. } | Ev::Navigate(_))
+            && !matches!(e, Ev::Quit { .. })
             && let Some(map) = self.shown_map()
             && map.event(e, cursor, dialog::left_held(input), global_ms)
         {
@@ -494,15 +512,6 @@ impl PdaWindow {
                 return true;
             }
             Ev::Move(p) => self.cursor = p,
-            Ev::Navigate(d) => {
-                let mut targets: Vec<Rect> = self.layout.buttons.iter().map(|b| b.rect).collect();
-                if let Some(map) = self.shown_map() {
-                    targets.extend(map.tool_rects());
-                }
-                if let Some(p) = dialog::navigate(self.cursor, d, &targets) {
-                    self.cursor = p;
-                }
-            }
             // 3.3, pda-controls.md 5: a left press on a tab button selects
             // it at once; a press counted as a double click does not.
             Ev::Press { double: false } => {

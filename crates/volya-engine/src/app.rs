@@ -1074,6 +1074,10 @@ impl App {
         if self.hidden {
             return;
         }
+        // The gamepad drives the game's cursor where it shows (#835), before
+        // the screens read the frame.
+        let targets = self.cursor_targets();
+        input.pad_cursor_frame(time_ms, &targets, !self.pda_map_shown());
         self.cursor_hidden = !input.cursor_drawn();
         self.update_phase(tree, time_ms, input, audio);
         self.follow_menu();
@@ -1100,6 +1104,32 @@ impl App {
         if let Some(error) = failed {
             self.fatal(tree, error, input, audio);
         }
+        input.set_pad_cursor(self.cursor_shown() && !self.screens.typing());
+    }
+
+    /// The clickable elements of the screen showing the game's cursor, UI
+    /// rectangles (x, y, width, height): the gamepad cursor slows over them
+    /// (#835).
+    fn cursor_targets(&self) -> Vec<[f32; 4]> {
+        match &self.phase {
+            Some(Phase::Menu(menu)) => self.screens.cursor_targets(menu, &self.data),
+            Some(Phase::Level {
+                menu: Some(menu), ..
+            }) => self.screens.cursor_targets(menu, &self.data),
+            Some(Phase::Level {
+                inventory: Some(i), ..
+            }) if i.is_open() => crate::dialog::cursor_targets(&i.cursor_targets()),
+            Some(Phase::Level { pda: Some(p), .. }) if p.is_open() => {
+                crate::dialog::cursor_targets(&p.cursor_targets())
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Whether the PDA's map tab shows under nothing else: it takes the
+    /// gamepad's right stick (pda-map.md, our design).
+    fn pda_map_shown(&self) -> bool {
+        matches!(&self.phase, Some(Phase::Level { pda: Some(p), menu: None, .. }) if p.map_shown())
     }
 
     /// The console as the main menu opens and closes (console-window.md

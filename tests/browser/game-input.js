@@ -1639,7 +1639,7 @@ export const tests = {
     return `moved ${moved.toFixed(2)} m, turned ${turned.toFixed(2)} rad, sprint-locked ${sprinted.toFixed(2)} m`;
   },
 
-  "a gamepad: the left stick runs, the d-pad up switches the torch, the d-pad left opens the PDA, right moves to the next caption, A switches to it and B closes it; on the map the shoulders zoom": async () => {
+  "a gamepad: the left stick runs, the d-pad up switches the torch; where the game shows its cursor the gamepad is a mouse: the stick moves the cursor to a PDA caption and A presses it, the shoulders zoom the map as the wheel, A held drags an inventory item, A presses a menu item; B closes and opens the menu": async () => {
     needsGame();
     // A New Game's level after the touch test's quit to the title menu.
     if ((await state()).phase === "menu") await enterLevel();
@@ -1649,6 +1649,37 @@ export const tests = {
     const pad = { index: 0, mapping: "standard", axes: [0, -1, 0, 0], buttons: Array.from({ length: 17 }, () => ({ pressed: false, value: 0 })) };
     const getGamepads = navigator.getGamepads;
     navigator.getGamepads = () => [pad];
+    const hold = (i, pressed) => (pad.buttons[i] = { pressed, value: pressed ? 1 : 0 });
+    const tap = async (i) => {
+      hold(i, true);
+      await sleep(100);
+      hold(i, false);
+      await sleep(100);
+    };
+    // The virtual cursor (#835): the left stick steers the game's cursor,
+    // read back by `cursor`, to UI point `to`, easing off near it.
+    const stickTo = async (cursor, to, what) => {
+      for (let i = 0; i < 400; i++) {
+        const [x, y] = cursor(await state());
+        const [dx, dy] = [to[0] - x, to[1] - y];
+        const d = Math.hypot(dx, dy);
+        if (d < 6) {
+          pad.axes[0] = pad.axes[1] = 0;
+          await sleep(100);
+          return;
+        }
+        const tilt = d > 100 ? 0.75 : d > 30 ? 0.5 : 0.4;
+        pad.axes[0] = (dx / d) * tilt;
+        pad.axes[1] = (dy / d) * tilt;
+        await sleep(30);
+      }
+      pad.axes[0] = pad.axes[1] = 0;
+      throw new Error(`the stick to bring the cursor to ${what}: at ${cursor(await state())}`);
+    };
+    const centre4 = ([x, y, w, h], within) => {
+      const [lx, ly, lw, lh] = within ?? [x, y, w, h];
+      return [Math.min(x + w / 2, lx + lw / 2), Math.min(y + h / 2, ly + lh / 2)];
+    };
     try {
       await until((s) => s.level.player.moving && s.level.player.running, "the left stick to run");
       await sleep(250);
@@ -1659,45 +1690,81 @@ export const tests = {
       assert(moved > 0.1, `the gamepad moved ${moved.toFixed(2)} m`);
       // The d-pad up switches the torch on and off (our design).
       for (const on of [true, false]) {
-        pad.buttons[12] = { pressed: true, value: 1 };
+        hold(12, true);
         await until((s) => s.level.torch.on === on, `the d-pad up to switch the torch ${on ? "on" : "off"}`);
-        pad.buttons[12] = { pressed: false, value: 0 };
+        hold(12, false);
         await sleep(100);
       }
-      // The PDA (our design): d-pad left opens it as P does; in it the
-      // d-pad moves the cursor between captions, south presses, east
-      // closes it as Escape does.
-      const tap = async (i) => {
-        pad.buttons[i] = { pressed: true, value: 1 };
-        await sleep(100);
-        pad.buttons[i] = { pressed: false, value: 0 };
-        await sleep(100);
-      };
-      // It opens with the cursor where the pointer last was: the centre.
+      // The PDA (our design): d-pad left opens it as P does; in it the left
+      // stick moves the cursor, south presses, east closes it as Escape
+      // does.
       pointer("pointermove", client(512, 384));
       await tap(14);
       let s = await until((s) => s.pda, "the d-pad left to open the PDA");
       assertEqual(s.pda.tab, 0, "the tasks tab");
-      // Right from the centre: the next caption right of it, then the last.
-      await tap(15);
-      await tap(15);
+      await stickTo((s) => s.pda.cursor, centreOf(s.pda.tabs[6]), "the last caption");
       await tap(0);
-      s = await until((s) => s.pda?.tab === 6, "the d-pad right twice and A to switch to the last tab");
+      s = await until((s) => s.pda?.tab === 6, "A to switch to the last tab");
+      // The d-pad nudges the cursor.
+      const before = s.pda.cursor;
+      await tap(15);
+      s = await until((s) => s.pda.cursor[0] > before[0], "the d-pad right to nudge the cursor");
+      assert(s.pda.cursor[0] - before[0] < 10, `a small step: ${before} to ${s.pda.cursor}`);
       await tap(1);
       s = await until((s) => s.phase === "level" && !s.pda, "B to close it");
       assert(!s.menu, "B opened the menu");
-      // The map (our design, #743): the right shoulder zooms in at the
-      // cursor, the left out.
+      // The map (our design, #743): over it the right shoulder zooms in at
+      // the cursor, the left out, as the wheel.
       key("KeyM");
       s = await until((s) => s.pda?.map?.shown && !s.pda.map.moving, "M to open the map", 15000);
-      const zoom = s.pda.map.zoom;
+      const [mx, my, mw, mh] = s.pda.map.main;
+      await stickTo((s) => s.pda.cursor, [mx + mw / 2, my + mh / 2], "the map");
+      const zoom = (await state()).pda.map.zoom;
       await tap(4);
       s = await until((s) => s.pda.map.zoom < zoom - 1e-3, "the left shoulder to zoom out");
       await tap(5);
       s = await until((s) => Math.abs(s.pda.map.zoom - zoom) < 1e-3, "the right shoulder to zoom in");
       await tap(1);
       s = await until((s) => s.phase === "level" && !s.pda, "B to close the map");
+      // The inventory: north opens it; A held over the worn outfit drags it
+      // to the backpack, and back.
+      await tap(3);
+      s = await until((s) => s.inventory, "Y to open the inventory");
+      const place = (s) => s.level.character.items.find((i) => i.section === "novice_outfit")?.place;
+      assertEqual(place(s), "slot", "the outfit worn");
+      const outfitList = s.inventory.lists.find((l) => l.list === "outfit");
+      await stickTo((s) => s.inventory.cursor, centre4(outfitList.cells[0].rect, outfitList.rect), "the outfit");
+      hold(0, true);
+      await sleep(100);
+      await tap(13);
+      await until((s) => s.inventory?.dragging != null, "A held and a nudge to drag the outfit");
+      await stickTo((s) => s.inventory.cursor, [100, 600], "the backpack");
+      hold(0, false);
+      s = await until((s) => place(s) === "backpack", "the outfit dropped in the backpack");
+      const bagCell = s.inventory.lists.find((l) => l.list === "bag").cells.find((c) => c.section === "novice_outfit");
+      await stickTo((s) => s.inventory.cursor, centre4(bagCell.rect), "the outfit in the backpack");
+      hold(0, true);
+      await sleep(100);
+      await tap(13);
+      await until((s) => s.inventory?.dragging != null, "the drag back");
+      await stickTo((s) => s.inventory.cursor, centre4(outfitList.rect), "the outfit list");
+      hold(0, false);
+      await until((s) => place(s) === "slot", "the outfit worn again");
+      await tap(1);
+      s = await until((s) => s.phase === "level" && !s.inventory, "B to close the inventory");
+      assert(!s.menu, "B opened the menu");
+      // B in the level opens the menu; the stick moves the cursor to the
+      // return item and A presses it.
+      await tap(1);
+      s = await until((s) => inGame(s) && !inGame(s).moving, "B to open the menu");
+      const back = inGame(s).items.findIndex((i) => i.name === "btn_ret");
+      assert(back >= 0, `the return item: ${inGame(s).items.map((i) => i.name)}`);
+      await stickTo((s) => inGame(s).cursor, centreOfRow(back), "the return item");
+      await until((s) => inGame(s)?.selected === back && !inGame(s).moving, "the return item at rest under the glass", 3000);
+      await tap(0);
+      await until((s) => s.phase === "level" && !s.menu, "A to return to the game");
     } finally {
+      pad.axes = [0, 0, 0, 0];
       navigator.getGamepads = getGamepads;
     }
   },

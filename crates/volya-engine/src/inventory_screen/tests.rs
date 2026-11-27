@@ -11,7 +11,7 @@ use crate::core::character::condition::{ConditionConfig, Conditions, Hysteresis}
 use crate::core::character::inventory::{InventoryConfig, ItemConfig, Owner};
 use crate::core::character::{NO_COMMUNITY, NOT_SET, Profile};
 use crate::core::config::Config;
-use crate::core::input::{Event, GamepadButton};
+use crate::core::input::{Event, GamepadAxis, GamepadButton};
 use crate::fixture::{self, FakeAudio, MemVfs};
 use volya_engine_formats::ltx;
 
@@ -174,6 +174,12 @@ impl Run {
 
     fn frame(&mut self) -> InventoryState {
         self.now += 16;
+        // The gamepad drives the cursor here, as the app has it (#835);
+        // frames are 1.6 s apart for its clock (clamped to 100 ms).
+        let targets = crate::dialog::cursor_targets(&self.screen.cursor_targets());
+        self.input.set_pad_cursor(true);
+        self.input
+            .pad_cursor_frame(self.now as f64 * 100.0, &targets, true);
         let out = self
             .screen
             .update(Frame {
@@ -253,6 +259,38 @@ impl Run {
         for pressed in [true, false] {
             self.input.handle(Event::Key { key, pressed });
         }
+        self.frame()
+    }
+
+    /// Steers the cursor to `to` with the gamepad's left stick, then lets
+    /// it go.
+    fn stick_to(&mut self, to: [f32; 2]) -> InventoryState {
+        let axis = |input: &mut Input, axis, value| {
+            input.handle(Event::GamepadAxis { axis, value });
+        };
+        for _ in 0..200 {
+            let [x, y] = self.input.cursor_ui();
+            let (dx, dy) = (to[0] - x, to[1] - y);
+            let d = dx.hypot(dy);
+            if d < 2.0 {
+                break;
+            }
+            // The deflection that moves it there in a 100 ms frame, by the
+            // curve's inverse; slower over targets.
+            let m = (d / 0.1 / crate::core::input::PAD_CURSOR_MAX_SPEED).sqrt();
+            let dead = crate::core::input::PAD_CURSOR_DEAD_ZONE;
+            let deflection = (dead + m * (1.0 - dead)).min(1.0);
+            axis(&mut self.input, GamepadAxis::LeftX, dx / d * deflection);
+            axis(&mut self.input, GamepadAxis::LeftY, dy / d * deflection);
+            self.frame();
+        }
+        axis(&mut self.input, GamepadAxis::LeftX, 0.0);
+        axis(&mut self.input, GamepadAxis::LeftY, 0.0);
+        self.frame()
+    }
+
+    fn pad_hold(&mut self, button: GamepadButton, pressed: bool) -> InventoryState {
+        self.input.handle(Event::GamepadButton { button, pressed });
         self.frame()
     }
 
@@ -632,33 +670,37 @@ fn death_closes_it_and_items_entering_rebuild() {
 }
 
 #[test]
-fn a_gamepad_navigates_selects_and_opens_the_menu() {
-    let mut r = Run::open(&[("wpn_pm", 1, 3), ("bread", 2, 3)]);
+fn a_gamepad_is_a_mouse_that_selects_drags_and_opens_the_menu() {
+    let mut r = Run::open(&[("af_medusa", 1, 3), ("bread", 2, 3)]);
     let s = r.frame();
-    // The d-pad goes to the nearest target that way: from the screen's
-    // centre left, the bag's cell items.
-    let s = {
-        let _ = s;
-        r.pad(GamepadButton::DpadLeft)
-    };
-    let id = s
-        .lists
-        .iter()
-        .flat_map(|l| &l.cells)
-        .find(|c| {
-            let [x, y, w, h] = c.rect;
-            s.cursor[0] >= x && s.cursor[0] <= x + w && s.cursor[1] >= y && s.cursor[1] <= y + h
-        })
-        .map(|c| c.items[0]);
-    assert!(id.is_some(), "on a cell item: {:?}", s.cursor);
-    // South selects (the left button), west opens the menu (the right).
+    // The left stick steers the cursor onto a cell item; south (the left
+    // button) selects it, west (the right) opens the menu.
+    r.stick_to(centre(&s, 2));
     let s = r.pad(GamepadButton::South);
-    assert_eq!(s.selected, id);
+    assert_eq!(s.selected, Some(2));
     let s = r.pad(GamepadButton::West);
     assert!(s.menu.is_some());
-    // The d-pad moves within the menu's rows; east closes the screen.
+    // The d-pad nudges the cursor; a left press away closes the menu.
+    let before = r.input.cursor_ui();
+    r.pad(GamepadButton::DpadDown);
+    assert_eq!(
+        r.input.cursor_ui()[1],
+        before[1] + crate::core::input::PAD_NUDGE
+    );
+    r.stick_to([512.0, 700.0]);
+    let s = r.pad(GamepadButton::South);
+    assert!(s.menu.is_none());
+    // South held drags the artefact to the belt (case 5): a nudge starts
+    // the drag over it.
+    r.stick_to(centre(&s, 1));
+    r.pad_hold(GamepadButton::South, true);
     let s = r.pad(GamepadButton::DpadDown);
-    assert!(s.menu.is_some());
+    assert!(s.dragging.is_some());
+    let s = r.stick_to([645.0 + 2.0 * 60.0 + 25.0, 160.0]);
+    assert!(s.dragging.is_some());
+    r.pad_hold(GamepadButton::South, false);
+    assert_eq!(r.place(1), Place::Belt);
+    // East closes the screen.
     r.pad(GamepadButton::East);
     assert!(r.closed);
     // North, the inventory button, closes it too.

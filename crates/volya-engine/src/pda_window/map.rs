@@ -16,16 +16,16 @@
 //! **Touch and gamepad** are our design (proposed on #743): touch through
 //! the touchpad of #108 (a tap presses a tool, a double-tap-and-hold drags
 //! the map, two fingers zoom: pinched apart or swiped up zoom in, as the
-//! wheel); a gamepad's left stick moves the cursor and south (A / cross)
-//! is the left button, as everywhere in the window, the d-pad reaches the
-//! tool buttons, the right stick moves the map ([`PAN_SPEED`]) and the
-//! shoulders zoom at the cursor (right in, left out, as the wheel).
+//! wheel); a gamepad is a mouse, as everywhere in the window (#835): its
+//! left stick moves the cursor, south (A / cross) is the left button and
+//! the shoulders are the wheel (right in, left out); here the right stick
+//! moves the map ([`PAN_SPEED`]) instead of scrolling.
 
 use std::io;
 
 use serde::Serialize;
 
-use crate::core::input::{GamepadAxis, GamepadButton, Input, Key};
+use crate::core::input::{GamepadAxis, Input, Key};
 use crate::core::ui::load_ui_file;
 use crate::core::vfs::Vfs;
 use crate::data::GameData;
@@ -556,7 +556,8 @@ impl MapWindow {
         self.grab = None;
     }
 
-    /// The tool buttons' rectangles, for the d-pad and the button hints.
+    /// The tool buttons' rectangles, for the gamepad cursor and the button
+    /// hints.
     pub fn tool_rects(&self) -> Vec<Rect> {
         self.layout.tools.iter().map(|t| t.rect).collect()
     }
@@ -1134,7 +1135,7 @@ impl MapWindow {
         }
         self.frame_buttons();
         // 5.6: each held arrow key moves the picture a unit, the way of
-        // the arrow; the keyboard's alone (the d-pad moves the cursor).
+        // the arrow; the keyboard's alone (the d-pad nudges the cursor).
         let mut moved = false;
         for (key, dx, dy) in [
             (Key::Up, 0.0, 1.0),
@@ -1147,7 +1148,7 @@ impl MapWindow {
                 moved = true;
             }
         }
-        // Our design: the right stick moves the map, the shoulders zoom.
+        // Our design: the right stick moves the map.
         let stick = [
             f.input.axis(GamepadAxis::RightX),
             f.input.axis(GamepadAxis::RightY),
@@ -1158,13 +1159,6 @@ impl MapWindow {
         }
         if moved {
             self.hint = None;
-        }
-        for &(b, pressed) in f.input.pad_changes() {
-            match b {
-                GamepadButton::RightShoulder if pressed => self.zoom_at(ZOOM_UP, now),
-                GamepadButton::LeftShoulder if pressed => self.zoom_at(ZOOM_DOWN, now),
-                _ => {}
-            }
         }
         // options-screens.md 4.8: a held arrow repeats.
         let held = dialog::left_held(f.input);
@@ -1384,6 +1378,10 @@ impl MapWindow {
     pub fn state(&self) -> MapState {
         MapState {
             shown: self.shown,
+            main: {
+                let m = self.layout.main;
+                [m.x, m.y, m.width, m.height]
+            },
             zoom: self.zoom,
             scale: self.scale(),
             min_zoom: self.min_zoom,
@@ -1466,6 +1464,8 @@ pub struct MapHintState {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct MapState {
     pub shown: bool,
+    /// The map window, absolute (x, y, width, height).
+    pub main: [f32; 4],
     /// The wanted zoom *Z*.
     pub zoom: f32,
     /// The current scale *s*.

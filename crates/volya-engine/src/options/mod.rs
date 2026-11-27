@@ -17,10 +17,10 @@
 //! - touch is a touchpad for the cursor (#108): a tap clicks at the cursor,
 //!   a double-tap-and-hold drags a slider or a scroll bar, two fingers
 //!   scroll a list;
-//! - a gamepad's d-pad moves the cursor to the nearest control in that
-//!   direction (scrolling a list to show it), the left stick moves it
-//!   freely ([`STICK_SPEED`]), south (A / cross) is the left button and
-//!   east (B / circle) is Escape.
+//! - a gamepad is a mouse (#835, [`Input::set_pad_cursor`]): its left stick
+//!   moves the cursor, south (A / cross) is the left button, held for
+//!   drags, the right stick and the shoulders the wheel; east (B / circle)
+//!   is Escape.
 //!
 //! Key rebinding (section 11.4) waits for the next key or mouse button; a
 //! gamepad's south button or a tap with the cursor on the waiting cell is a
@@ -35,7 +35,7 @@ use std::io;
 use serde::Serialize;
 
 use crate::core::console::{self, ACTIONS, Console, KEYS, Kind as VarKind};
-use crate::core::input::{Action, Control, GamepadAxis, GamepadButton, Input, Key, MouseButton};
+use crate::core::input::{Action, Control, GamepadButton, Input, Key, MouseButton};
 use crate::core::ui::load_ui_file;
 use crate::core::vfs::Vfs;
 use crate::data::GameData;
@@ -84,10 +84,6 @@ const ROW_HEIGHT: f32 = 18.0;
 const CHECK_BOX: (f32, f32) = (32.0, 23.0);
 /// The advanced page's rows (section 6.2).
 const ADV_ROW: f32 = 30.0;
-/// Cursor speed of a gamepad's left stick at full deflection, units per
-/// second (our choice), and its dead zone.
-pub const STICK_SPEED: f32 = 600.0;
-const STICK_DEAD_ZONE: f32 = 0.2;
 /// Period of a waiting key cell's blink, ms: the colour animation
 /// `ui_map_area_anim`'s timing is not established (section 17), so this is
 /// our choice.
@@ -361,7 +357,6 @@ pub struct OptionsScreen {
     last_repeat: u64,
     left_was_held: bool,
     opened: u64,
-    last_update: Option<u64>,
     closed: Option<Closed>,
     /// Clicks of buttons without an effect here, for tests.
     clicks: Vec<String>,
@@ -721,7 +716,6 @@ impl OptionsScreen {
             last_repeat: 0,
             left_was_held: false,
             opened: 0,
-            last_update: None,
             closed: None,
             clicks: Vec::new(),
             drawn_hover: std::cell::Cell::new(None),
@@ -757,7 +751,6 @@ impl OptionsScreen {
                 l.open = false;
             }
         }
-        self.last_update = Some(now);
         for g in REFRESH {
             self.refresh_group(data, console, native, g);
         }
@@ -922,8 +915,6 @@ impl OptionsScreen {
         now: u64,
         input: &Input,
     ) {
-        let dt = now.saturating_sub(self.last_update.unwrap_or(now)).min(100) as f32 / 1000.0;
-        self.last_update = Some(now);
         // The menu takes the console key and F12 first (section 13).
         let console_keys: Vec<Key> = console
             .keys(console::action_index("console").expect("console action"))
@@ -959,27 +950,9 @@ impl OptionsScreen {
             }
         }
         for &(b, pressed) in input.pad_changes() {
-            match (b, pressed) {
-                (GamepadButton::South, true) => events.push(Ev::Press(MouseButton::Left)),
-                (GamepadButton::South, false) => events.push(Ev::Release(MouseButton::Left)),
-                (GamepadButton::East, true) => events.push(Ev::PadEscape),
-                (GamepadButton::DpadUp, true) => events.push(Ev::Navigate(0.0, -1.0)),
-                (GamepadButton::DpadDown, true) => events.push(Ev::Navigate(0.0, 1.0)),
-                (GamepadButton::DpadLeft, true) => events.push(Ev::Navigate(-1.0, 0.0)),
-                (GamepadButton::DpadRight, true) => events.push(Ev::Navigate(1.0, 0.0)),
-                _ => {}
+            if (b, pressed) == (GamepadButton::East, true) {
+                events.push(Ev::PadEscape);
             }
-        }
-        let stick = [
-            input.axis(GamepadAxis::LeftX),
-            input.axis(GamepadAxis::LeftY),
-        ];
-        if stick[0].hypot(stick[1]) >= STICK_DEAD_ZONE {
-            let [x, y] = self.cursor;
-            events.push(Ev::Move([
-                (x + stick[0] * STICK_SPEED * dt).clamp(0.0, 1023.0),
-                (y + stick[1] * STICK_SPEED * dt).clamp(0.0, 767.0),
-            ]));
         }
         for e in events {
             if self.closed.is_some() {
@@ -988,8 +961,7 @@ impl OptionsScreen {
             self.event(data, console, native, now, e);
         }
         // Section 4.8: the held left button repeats a held arrow.
-        let held = input.is_held(Control::Mouse(MouseButton::Left))
-            || input.pad_held(GamepadButton::South);
+        let held = input.is_held(Control::Mouse(MouseButton::Left));
         if held && self.left_was_held && self.closed.is_none() {
             self.held(now);
         }
@@ -1006,11 +978,6 @@ impl OptionsScreen {
     ) {
         match e {
             Ev::Move(p) => self.moved(console, p),
-            Ev::Navigate(dx, dy) => {
-                if let Some(p) = self.navigate(dx, dy) {
-                    self.moved(console, p);
-                }
-            }
             Ev::Press(b) => self.pressed(console, now, b),
             Ev::Release(MouseButton::Left) => self.released(data, console, native),
             Ev::Release(_) => {}
@@ -1584,54 +1551,13 @@ impl OptionsScreen {
         })
     }
 
-    /// Where the d-pad moves the cursor (our design): to the centre of the
-    /// nearest target in direction (`dx`, `dy`), scrolling a view to show
-    /// it.
-    fn navigate(&mut self, dx: f32, dy: f32) -> Option<[f32; 2]> {
-        let targets = self.targets();
-        let [cx, cy] = self.cursor;
-        let best = targets
-            .iter()
-            .filter_map(|&(t, r)| {
-                let (x, y) = (r.x + r.width / 2.0, r.y + r.height / 2.0);
-                let along = (x - cx) * dx + (y - cy) * dy;
-                let across = ((x - cx) * dy - (y - cy) * dx).abs();
-                (along > 2.0).then_some((along + 3.0 * across, t, r))
-            })
-            .min_by(|a, b| a.0.total_cmp(&b.0))?;
-        let (_, target, mut r) = best;
-        if let Target::Item(i) = target
-            && let Some(v) = self.items[i].view
-        {
-            let view = self.views[v].rect;
-            let bar = &mut self.views[v].bar;
-            if r.y < view.y {
-                bar.set(bar.pos - (view.y - r.y).ceil() as i32);
-            } else if r.y + r.height > view.y + view.height {
-                bar.set(bar.pos + (r.y + r.height - view.y - view.height).ceil() as i32);
-            }
-            r = self.shown_rect(i);
-        }
-        if let Target::Entry(l, k) = target
-            && let Some(lr) = self.list_rect(l)
-            && let Kind::List(s) = &mut self.items[l].kind
-        {
-            if r.y < lr.y {
-                s.bar.set(s.bar.pos - (lr.y - r.y).ceil() as i32);
-            } else if r.y + r.height > lr.y + lr.height {
-                s.bar
-                    .set(s.bar.pos + (r.y + r.height - lr.y - lr.height).ceil() as i32);
-            }
-            r.y = lr.y + k as f32 * ROW_HEIGHT - s.bar.pos as f32;
-        }
-        Some([r.x + r.width / 2.0, r.y + r.height / 2.0])
-    }
-
-    /// What the d-pad can reach: the message box's button; an open list's
-    /// entries; else the current page's live controls and the dialog's.
-    fn targets(&self) -> Vec<(Target, Rect)> {
+    /// The gamepad cursor's targets ([`Input::pad_cursor_frame`]): the
+    /// message box's button; an open list's entries shown; else the
+    /// current page's live controls and the dialog's, as shown in their
+    /// views (a slider by its thumb).
+    pub fn cursor_targets(&self) -> Vec<Rect> {
         if self.message {
-            return vec![(Target::Ok, self.message_ok())];
+            return vec![self.message_ok()];
         }
         if let Some(l) = self.open_list {
             let Some(r) = self.list_rect(l) else {
@@ -1643,21 +1569,24 @@ impl OptionsScreen {
             let w = r.width - self.scroll.width - 5.0;
             return (0..s.dd.entries.len())
                 .filter(|&k| s.dd.enabled(k))
-                .map(|k| {
+                .filter_map(|k| {
                     let y = r.y + k as f32 * ROW_HEIGHT - s.bar.pos as f32;
-                    (Target::Entry(l, k), Rect::new(r.x, y, w, ROW_HEIGHT))
+                    clip(Rect::new(r.x, y, w, ROW_HEIGHT), r)
                 })
                 .collect();
         }
         (0..self.items.len())
             .filter(|&i| self.live(i))
-            .map(|i| {
+            .filter_map(|i| {
                 let mut r = self.shown_rect(i);
                 if let Kind::Track { model, value, .. } = &self.items[i].kind {
                     // The thumb.
                     r = Rect::new(r.x + model.thumb_x(*value), r.y, THUMB, r.height);
                 }
-                (Target::Item(i), r)
+                match self.items[i].view {
+                    Some(v) => clip(r, self.views[v].rect),
+                    None => Some(r),
+                }
             })
             .collect()
     }
@@ -2238,12 +2167,13 @@ impl OptionsScreen {
     }
 }
 
-/// A d-pad target.
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Target {
-    Item(usize),
-    Entry(usize, usize),
-    Ok,
+/// `r`'s part inside `within`, if any.
+fn clip(r: Rect, within: Rect) -> Option<Rect> {
+    let x0 = r.x.max(within.x);
+    let y0 = r.y.max(within.y);
+    let x1 = (r.x + r.width).min(within.x + within.width);
+    let y1 = (r.y + r.height).min(within.y + within.height);
+    (x1 > x0 && y1 > y0).then(|| Rect::new(x0, y0, x1 - x0, y1 - y0))
 }
 
 /// One input event, in the screen's vocabulary.
@@ -2254,8 +2184,6 @@ enum Ev {
     Release(MouseButton),
     Wheel(bool),
     Key(Key),
-    /// The d-pad (our design).
-    Navigate(f32, f32),
     /// A gamepad's east button (our design).
     PadEscape,
 }

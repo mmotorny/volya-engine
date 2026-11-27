@@ -203,6 +203,9 @@ fn in_game_menu_and_save_load_screens_from_game_data() {
             }
         }
         now += 16;
+        // The gamepad drives the cursor, as the app has it (#835).
+        let targets = screens.cursor_targets(menu, &data);
+        input.pad_cursor_frame(now as f64, &targets, true);
         screens.update(
             menu,
             Frame {
@@ -218,6 +221,7 @@ fn in_game_menu_and_save_load_screens_from_game_data() {
             },
         );
         input.end_frame();
+        input.set_pad_cursor(!screens.typing());
         screens.state(menu, &data, now)
     };
     let mut assets = Assets::default();

@@ -933,10 +933,9 @@ struct Screen {
     message: Option<(MessageBox, BoxFor)>,
     opened: u64,
     cursor: [f32; 2],
-    last_update: Option<u64>,
     left_was_held: bool,
     stubbed: Vec<Stubbed>,
-    /// The save screen's name field, a d-pad target (our design, #94).
+    /// The save screen's name field, a gamepad cursor's target.
     field: Option<Rect>,
     /// A fatal error met, until the menu takes it.
     fatal: Option<String>,
@@ -953,7 +952,6 @@ impl Screen {
             message: None,
             opened: 0,
             cursor: [512.0, 384.0],
-            last_update: None,
             left_was_held: false,
             stubbed: Vec::new(),
             field: None,
@@ -964,7 +962,6 @@ impl Screen {
     fn open(&mut self, now: u64, cursor: [f32; 2]) {
         self.opened = now;
         self.cursor = cursor;
-        self.last_update = Some(now);
         self.left_was_held = false;
     }
 
@@ -1095,25 +1092,15 @@ impl Screen {
         crate::draw::cursor(ctx, s, self.cursor)
     }
 
-    /// This frame's events; the cursor moves with them.
-    /// This frame's events, the gamepad's only when `pad`.
-    fn events(&mut self, data: &GameData, now: u64, input: &Input, pad: bool) -> Vec<Ev> {
-        let dt = now.saturating_sub(self.last_update.unwrap_or(now)).min(100) as f32 / 1000.0;
-        self.last_update = Some(now);
-        dialog::events_from(data, input, self.cursor, dt, pad)
+    /// This frame's events, the gamepad's east button only when `pad`.
+    fn events(&mut self, data: &GameData, input: &Input, pad: bool) -> Vec<Ev> {
+        dialog::events_from(data, input, pad)
     }
 
-    /// Moves the cursor for `e`; a d-pad press goes to the nearest target.
-    fn follow(&mut self, e: &mut Ev) {
-        match *e {
-            Ev::Move(p) => self.cursor = p,
-            Ev::Navigate(d) => {
-                if let Some(p) = dialog::navigate(self.cursor, d, &self.targets()) {
-                    self.cursor = p;
-                    *e = Ev::Move(p);
-                }
-            }
-            _ => {}
+    /// Moves the cursor for `e`.
+    fn follow(&mut self, e: &Ev) {
+        if let Ev::Move(p) = *e {
+            self.cursor = p;
         }
     }
 
@@ -1209,6 +1196,16 @@ impl SaveScreen {
         Some((self.field_rect(), self.field.focused))
     }
 
+    /// Whether the on-screen keyboard shows: it takes the gamepad (#94).
+    pub fn typing(&self) -> bool {
+        self.keyboard.is_some()
+    }
+
+    /// The gamepad cursor's targets ([`Input::pad_cursor_frame`]).
+    pub fn cursor_targets(&self) -> Vec<Rect> {
+        self.screen.targets()
+    }
+
     /// The name field's font (its `text` child's).
     pub fn field_font(&self) -> UiFont {
         self.screen
@@ -1247,7 +1244,7 @@ impl SaveScreen {
                 self.field.keyboard(p, font);
             }
         }
-        for mut e in self.screen.events(data, now, input, pad) {
+        for e in self.screen.events(data, input, pad) {
             if out.closed {
                 break;
             }
@@ -1256,7 +1253,7 @@ impl SaveScreen {
             if typing && !matches!(e, Ev::Key { .. } | Ev::Text(_) | Ev::Quit { .. }) {
                 continue;
             }
-            self.screen.follow(&mut e);
+            self.screen.follow(&e);
             let c = self.screen.cursor;
             if let Some((m, purpose)) = &mut self.screen.message {
                 if let Some(answer) = m.event(e, c) {
@@ -1567,6 +1564,11 @@ pub struct LoadScreen {
 }
 
 impl LoadScreen {
+    /// The gamepad cursor's targets ([`Input::pad_cursor_frame`]).
+    pub fn cursor_targets(&self) -> Vec<Rect> {
+        self.screen.targets()
+    }
+
     pub fn new(sl: &SaveLoadData, saves: &SavedGames, in_game: bool) -> Self {
         Self {
             screen: Screen::new(&sl.load, sl, saves.rows(false)),
@@ -1603,11 +1605,11 @@ impl LoadScreen {
         last_hold: &mut u64,
     ) -> Outcome {
         let mut out = Outcome::default();
-        for mut e in self.screen.events(data, now, input, true) {
+        for e in self.screen.events(data, input, true) {
             if out.closed {
                 break;
             }
-            self.screen.follow(&mut e);
+            self.screen.follow(&e);
             let c = self.screen.cursor;
             if let Some((m, purpose)) = &mut self.screen.message {
                 if let Some(answer) = m.event(e, c) {
@@ -1942,7 +1944,7 @@ mod tests {
         let mut cursor = input.cursor_ui();
         let mut events = Vec::new();
         let mut frame = |input: &mut Input, l: &mut SaveList| {
-            for e in crate::dialog::events(&data, input, cursor, 0.016) {
+            for e in crate::dialog::events(&data, input) {
                 if let Ev::Move(at) = e {
                     cursor = at;
                 }

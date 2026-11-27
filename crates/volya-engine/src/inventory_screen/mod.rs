@@ -13,12 +13,11 @@
 //! it through the touchpad of #108 wherever the cursor shows: swipes move
 //! the cursor, a tap clicks, a long press is a right click (the context
 //! menu), double-tap-and-hold drags; nothing here reads touches directly.
-//! Gamepads follow the options screen's mapping (our design,
-//! [`crate::options`]): the d-pad moves the cursor to the nearest cell item
-//! or button, the left stick moves it freely, south (A / cross) is the left
-//! button, east (B / circle) the key bound to `quit`; west (X / square) is
-//! the right button and north (Y / triangle) the inventory key, which
-//! opens the screen in the level (our design).
+//! A gamepad is a mouse here (#835, [`Input::set_pad_cursor`]): its left
+//! stick moves the cursor, south (A / cross) is the left button, held for
+//! drags, west (X / square) the right one; east (B / circle) is the key
+//! bound to `quit` and north (Y / triangle) the inventory key, which opens
+//! the screen in the level (our design).
 //!
 //! **What waits for other systems** (#111): dropped items are released from
 //! the inventory and handed to the caller, which keeps them until the world
@@ -40,13 +39,12 @@ use crate::core::audio::Playback;
 use crate::core::character::CharacterState;
 use crate::core::character::inventory::{Inventory, InventoryItem, Place, SlotMove};
 use crate::core::input::{
-    Action, Control, GamepadAxis, GamepadButton, Input, Key, MouseButton, ui_from_normalized,
+    Action, Control, GamepadButton, Input, Key, MouseButton, ui_from_normalized,
 };
 use crate::core::vfs::Vfs;
 use crate::data::{GameData, encode};
 use crate::dialog::{self, PushButton, Pushed};
 use crate::draw::{Ctx, picture_desc};
-use crate::options::STICK_SPEED;
 use crate::save_load::FieldFont;
 use crate::scene::{Scene, Sprite};
 use layout::{
@@ -68,9 +66,6 @@ const LINE_HEIGHT: f32 = 15.0;
 const EPSILON: f32 = 0.000_01;
 /// The image static's width factor on wide screens (4.6).
 const WIDE_IMAGE: f32 = 0.753_012_06;
-/// Dead zone of the left stick moving the cursor (as on the options
-/// screen).
-const STICK_DEAD_ZONE: f32 = 0.2;
 /// The grid texture's left half (3.2): its pixel rectangle.
 const GRID_RECT: Rect = Rect::new(0.0, 0.0, 64.0, 64.0);
 
@@ -152,8 +147,6 @@ enum In {
     PadQuit,
     /// A gamepad's north button: as the key bound to `inventory`.
     PadInventory,
-    /// A gamepad's d-pad: to the nearest target this way.
-    Navigate([f32; 2]),
 }
 
 /// A bar's drawn value (4.7).
@@ -537,13 +530,7 @@ impl InventoryScreen {
             self.menu = None;
             self.rebuild(a.data, a.character)?;
         }
-        for mut e in self.events(input, dt) {
-            if let In::Navigate(d) = e {
-                match dialog::navigate(self.cursor, d, &self.targets()) {
-                    Some(p) => e = In::Move(p),
-                    None => continue,
-                }
-            }
+        for e in self.events(input) {
             if self.event(e, &mut a)? {
                 self.close(a.data, a.audio);
                 a.out.closed = true;
@@ -556,7 +543,7 @@ impl InventoryScreen {
     }
 
     /// This frame's events (5.2, 6; the gamepad's mapping is our design).
-    fn events(&self, input: &Input, dt: f32) -> Vec<In> {
+    fn events(&self, input: &Input) -> Vec<In> {
         let mut out = Vec::new();
         for a in input.actions() {
             match *a {
@@ -583,44 +570,19 @@ impl InventoryScreen {
             }
         }
         for &(b, pressed) in input.pad_changes() {
-            let nav = |d| pressed.then_some(In::Navigate(d));
             out.extend(match b {
-                GamepadButton::South if pressed => Some(In::Press {
-                    right: false,
-                    double: false,
-                }),
-                GamepadButton::South => Some(In::Release { right: false }),
-                GamepadButton::West if pressed => Some(In::Press {
-                    right: true,
-                    double: false,
-                }),
-                GamepadButton::West => Some(In::Release { right: true }),
                 GamepadButton::East => pressed.then_some(In::PadQuit),
                 GamepadButton::North => pressed.then_some(In::PadInventory),
-                GamepadButton::DpadUp => nav([0.0, -1.0]),
-                GamepadButton::DpadDown => nav([0.0, 1.0]),
-                GamepadButton::DpadLeft => nav([-1.0, 0.0]),
-                GamepadButton::DpadRight => nav([1.0, 0.0]),
                 _ => None,
             });
-        }
-        let stick = [
-            input.axis(GamepadAxis::LeftX),
-            input.axis(GamepadAxis::LeftY),
-        ];
-        if stick[0].hypot(stick[1]) >= STICK_DEAD_ZONE {
-            let [x, y] = self.cursor;
-            out.push(In::Move([
-                (x + stick[0] * STICK_SPEED * dt).clamp(0.0, 1023.0),
-                (y + stick[1] * STICK_SPEED * dt).clamp(0.0, 767.0),
-            ]));
         }
         out
     }
 
-    /// The d-pad's targets: the menu's rows while it is open, else every
-    /// cell item shown and the exit button.
-    fn targets(&self) -> Vec<Rect> {
+    /// The gamepad cursor's targets ([`Input::pad_cursor_frame`]): the
+    /// menu's rows while it is open, else every cell item shown and the
+    /// exit button.
+    pub fn cursor_targets(&self) -> Vec<Rect> {
         if let Some(m) = &self.menu {
             return (0..m.entries.len())
                 .map(|i| m.row_rect(i, self.layout.menu.top_indent))
@@ -693,7 +655,6 @@ impl InventoryScreen {
                     self.list_mut(k).scroll_by(if up { -1 } else { 1 });
                 }
             }
-            In::Navigate(_) => {}
         }
         Ok(false)
     }

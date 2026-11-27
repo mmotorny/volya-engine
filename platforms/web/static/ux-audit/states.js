@@ -166,13 +166,20 @@ export const SECTIONS = [
   },
   // The ergonomic mode on the screens with the game's cursor (menus, the
   // inventory, the PDA, boxes; #807): a touch clicks where it lands, no
-  // cursor drawn; a pinch magnifies the whole picture, two fingers drag
-  // it. The game draws the screen; the board shows a stand-in.
+  // cursor drawn until a mouse or a gamepad moves it (#835); a pinch
+  // magnifies the whole picture, two fingers drag it. The game draws the
+  // screen; the board shows a stand-in.
   {
     title: "Screens with the game's cursor: ergonomic mode",
-    note: "A stand-in for the screen the game draws. No cursor; a touch clicks where it lands.",
+    note: "A stand-in for the screen the game draws. No cursor until a mouse or a gamepad moves it; a touch clicks where it lands.",
     states: [
       { id: "zoom-none", name: "As drawn: no cursor", screenZoom: { scale: 1, at: [0, 0] }, devices: TOUCH },
+      {
+        id: "zoom-gamepad",
+        name: "A gamepad's stick moved the cursor: drawn until the next touch",
+        screenZoom: { scale: 1, at: [0, 0], cursor: true },
+        devices: TOUCH,
+      },
       { id: "zoom-pinched", name: "Pinched apart: the whole picture magnified twice, about the fingers", screenZoom: { scale: 2, at: [0.5, 0.5] }, devices: TOUCH },
       {
         id: "zoom-panned",

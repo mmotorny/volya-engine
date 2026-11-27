@@ -412,7 +412,7 @@ fn the_label_names_the_level_under_the_cursor() {
 }
 
 #[test]
-fn a_gamepad_pans_with_the_right_stick_and_zooms_with_the_shoulders() {
+fn a_gamepad_pans_with_the_right_stick_and_zooms_with_the_shoulders_as_the_wheel() {
     let mut r = Run::with_map();
     r.window.switch_to(MAP_TAB);
     r.frame(0);
@@ -434,15 +434,28 @@ fn a_gamepad_pans_with_the_right_stick_and_zooms_with_the_shoulders() {
     });
     r.frame(0);
     assert!(close(r.map().zoom, 4.0, 1e-4), "{}", r.map().zoom);
-    // The d-pad reaches the tool buttons.
-    r.move_to(r.tool(ACTOR_BUTTON));
-    r.frame(0);
+    // The right stick scrolls no wheel here: it pans.
+    r.input.handle(Event::GamepadButton {
+        button: GamepadButton::LeftShoulder,
+        pressed: false,
+    });
+    r.input.handle(Event::GamepadAxis {
+        axis: GamepadAxis::RightY,
+        value: -1.0,
+    });
+    r.frames(10);
+    assert!(close(r.map().zoom, 4.0, 1e-4), "{}", r.map().zoom);
+    // The d-pad nudges the cursor.
+    let [x, y] = r.window.state().cursor;
     r.input.handle(Event::GamepadButton {
         button: GamepadButton::DpadRight,
         pressed: true,
     });
     r.frame(0);
-    assert_eq!(r.window.state().cursor, r.tool(ZOOM_IN));
+    assert_eq!(
+        r.window.state().cursor,
+        [x + crate::core::input::PAD_NUDGE, y]
+    );
 }
 
 #[test]

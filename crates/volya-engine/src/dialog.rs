@@ -6,31 +6,25 @@
 //! input events, the push button, and the message box.
 //!
 //! **Input.** These screens are mouse screens (section 3.1). Touch reaches
-//! them as a touchpad for the cursor (#108, [`crate::core::input`]), gamepads
-//! through the options screen's mapping (our design, [`crate::options`]): a
-//! gamepad's d-pad moves the cursor to the nearest target that
-//! way, its left stick moves it freely, south (A / cross) is the left
-//! button and east (B / circle) is the key bound to `quit`.
+//! them as a touchpad for the cursor (#108, [`crate::core::input`]), a
+//! gamepad as a mouse (#835, [`Input::set_pad_cursor`]): its left stick
+//! moves the cursor, south (A / cross) is the left button; east (B /
+//! circle) is the key bound to `quit`.
 
 use std::io;
 
 use serde::Serialize;
 
 use crate::core::input::{
-    Action, Control, GamepadAxis, GamepadButton, Input, Key, MouseButton, ui_from_normalized,
+    Action, Control, GamepadButton, Input, Key, MouseButton, ui_from_normalized,
 };
 use crate::data::GameData;
 use crate::draw::Ctx;
-use crate::options::STICK_SPEED;
 use crate::scene::Scene;
 use volya_engine_formats::text::layout::TextBox;
 use volya_engine_formats::ui::layout::{HAlign, Rect, StaticDesc, VAlign, require};
 use volya_engine_formats::ui::{Color, ColorDefs};
 use volya_engine_formats::xml::Document;
-
-/// Dead zone of the left stick moving the cursor (as on the options
-/// screen).
-const STICK_DEAD_ZONE: f32 = 0.2;
 
 /// One input event of a frame, in the screens' vocabulary.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -56,29 +50,20 @@ pub enum Ev {
     Quit {
         pressed: bool,
     },
-    /// A gamepad's d-pad: move the cursor to the nearest target this way.
-    Navigate([f32; 2]),
     /// A character typed through the platform's text entry (the device's
     /// own keyboard on touch screens; our design, #94).
     Text(char),
 }
 
-/// This frame's events, the cursor starting at `cursor`, `dt` seconds after
-/// the previous frame (the left stick's cursor speed). The console key and
-/// F12 are not the screens' (section 3.1); nothing here uses them.
-pub fn events(data: &GameData, input: &Input, cursor: [f32; 2], dt: f32) -> Vec<Ev> {
-    events_from(data, input, cursor, dt, true)
+/// This frame's events. The console key and F12 are not the screens'
+/// (section 3.1); nothing here uses them.
+pub fn events(data: &GameData, input: &Input) -> Vec<Ev> {
+    events_from(data, input, true)
 }
 
-/// [`events`], without the gamepad's unless `pad` (the save screen's
-/// on-screen keyboard takes them while open).
-pub fn events_from(
-    data: &GameData,
-    input: &Input,
-    cursor: [f32; 2],
-    dt: f32,
-    pad: bool,
-) -> Vec<Ev> {
+/// [`events`], without the gamepad's east button unless `pad` (the save
+/// screen's on-screen keyboard takes it while open).
+pub fn events_from(data: &GameData, input: &Input, pad: bool) -> Vec<Ev> {
     let mut out = Vec::new();
     for a in input.actions() {
         match *a {
@@ -103,56 +88,27 @@ pub fn events_from(
         }
     }
     out.extend(input.text().iter().map(|&c| Ev::Text(c)));
-    if !pad {
-        return out;
-    }
-    for &(b, pressed) in input.pad_changes() {
-        let nav = |d| if pressed { Some(Ev::Navigate(d)) } else { None };
-        let e = match b {
-            GamepadButton::South if pressed => Some(Ev::Press { double: false }),
-            GamepadButton::South => Some(Ev::Release),
-            GamepadButton::East => Some(Ev::Quit { pressed }),
-            GamepadButton::DpadUp => nav([0.0, -1.0]),
-            GamepadButton::DpadDown => nav([0.0, 1.0]),
-            GamepadButton::DpadLeft => nav([-1.0, 0.0]),
-            GamepadButton::DpadRight => nav([1.0, 0.0]),
-            _ => None,
-        };
-        out.extend(e);
-    }
-    let stick = [
-        input.axis(GamepadAxis::LeftX),
-        input.axis(GamepadAxis::LeftY),
-    ];
-    if stick[0].hypot(stick[1]) >= STICK_DEAD_ZONE {
-        let [x, y] = cursor;
-        out.push(Ev::Move([
-            (x + stick[0] * STICK_SPEED * dt).clamp(0.0, 1023.0),
-            (y + stick[1] * STICK_SPEED * dt).clamp(0.0, 767.0),
-        ]));
+    if pad {
+        for &(b, pressed) in input.pad_changes() {
+            if b == GamepadButton::East {
+                out.push(Ev::Quit { pressed });
+            }
+        }
     }
     out
 }
 
 /// Whether the left button is held (mouse, touch or a gamepad's south).
 pub fn left_held(input: &Input) -> bool {
-    input.is_held(Control::Mouse(MouseButton::Left)) || input.pad_held(GamepadButton::South)
+    input.is_held(Control::Mouse(MouseButton::Left))
 }
 
-/// The centre of the target nearest the cursor in direction `d` (the
-/// options screen's d-pad rule), `None` when there is none that way.
-pub fn navigate(cursor: [f32; 2], d: [f32; 2], targets: &[Rect]) -> Option<[f32; 2]> {
-    let [cx, cy] = cursor;
-    targets
+/// Rectangles as the gamepad cursor's targets ([`Input::pad_cursor_frame`]).
+pub fn cursor_targets(rects: &[Rect]) -> Vec<[f32; 4]> {
+    rects
         .iter()
-        .filter_map(|r| {
-            let (x, y) = (r.x + r.width / 2.0, r.y + r.height / 2.0);
-            let along = (x - cx) * d[0] + (y - cy) * d[1];
-            let across = ((x - cx) * d[1] - (y - cy) * d[0]).abs();
-            (along > 2.0).then_some((along + 3.0 * across, [x, y]))
-        })
-        .min_by(|a, b| a.0.total_cmp(&b.0))
-        .map(|(_, p)| p)
+        .map(|r| [r.x, r.y, r.width, r.height])
+        .collect()
 }
 
 /// Whether `r` holds `p`, edges included (section 3.2).
@@ -441,7 +397,7 @@ impl MessageBox {
         None
     }
 
-    /// The d-pad's targets: the buttons.
+    /// The gamepad cursor's targets: the buttons.
     pub fn targets(&self) -> Vec<Rect> {
         (0..self.buttons.len())
             .map(|i| self.desc.button_rect(i))
@@ -558,23 +514,5 @@ mod tests {
         assert_eq!(b.event(Ev::Release), Pushed::Activated);
         // Edges are inside.
         assert!(contains(R, [30.0, 20.0]));
-    }
-
-    #[test]
-    fn navigation_picks_the_nearest_target_that_way() {
-        let targets = [
-            Rect::new(0.0, 0.0, 10.0, 10.0),
-            Rect::new(100.0, 0.0, 10.0, 10.0),
-            Rect::new(100.0, 100.0, 10.0, 10.0),
-        ];
-        assert_eq!(
-            navigate([5.0, 5.0], [1.0, 0.0], &targets),
-            Some([105.0, 5.0])
-        );
-        assert_eq!(
-            navigate([105.0, 5.0], [0.0, 1.0], &targets),
-            Some([105.0, 105.0])
-        );
-        assert_eq!(navigate([5.0, 5.0], [-1.0, 0.0], &targets), None);
     }
 }

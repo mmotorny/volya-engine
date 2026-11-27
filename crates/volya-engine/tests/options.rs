@@ -18,7 +18,7 @@ use std::fs::File;
 use std::io::BufReader;
 
 use volya_engine::core::console::{Console, action_index};
-use volya_engine::core::input::{Event, GamepadButton, Input, Key, MouseButton};
+use volya_engine::core::input::{Event, GamepadAxis, GamepadButton, Input, Key, MouseButton};
 use volya_engine::core::ui;
 use volya_engine::core::vfs::StdVfs;
 use volya_engine::core::vfs::db::DbVfs;
@@ -70,6 +70,12 @@ struct Run<'a> {
 impl Run<'_> {
     fn frame(&mut self) {
         self.now += 16;
+        // The gamepad drives the cursor, as the app has it (#835).
+        let targets: Vec<[f32; 4]> = (self.screen.cursor_targets().iter())
+            .map(|r| [r.x, r.y, r.width, r.height])
+            .collect();
+        self.input.set_pad_cursor(true);
+        (self.input).pad_cursor_frame(self.now as f64, &targets, true);
         self.screen
             .update(self.data, &mut self.console, XGA, self.now, &self.input);
         self.input.end_frame();
@@ -113,6 +119,30 @@ impl Run<'_> {
 
 fn centre(r: [f32; 4]) -> [f32; 2] {
     [r[0] + r[2] / 2.0, r[1] + r[3] / 2.0]
+}
+
+/// Steers the cursor to `to` with the gamepad's left stick at half tilt
+/// (#835), then lets it go.
+fn stick_to(run: &mut Run, to: [f32; 2]) {
+    for _ in 0..600 {
+        let [x, y] = run.state().cursor;
+        let (dx, dy) = (to[0] - x, to[1] - y);
+        let d = dx.hypot(dy);
+        if d < 3.0 {
+            break;
+        }
+        for (axis, v) in [(GamepadAxis::LeftX, dx / d), (GamepadAxis::LeftY, dy / d)] {
+            run.input.handle(Event::GamepadAxis {
+                axis,
+                value: v * 0.5,
+            });
+        }
+        run.frame();
+    }
+    for axis in [GamepadAxis::LeftX, GamepadAxis::LeftY] {
+        run.input.handle(Event::GamepadAxis { axis, value: 0.0 });
+    }
+    run.frame();
 }
 
 #[test]
@@ -417,8 +447,8 @@ fn options_screen_from_game_data() {
     assert!(run.screen.take_closed().unwrap().video_restart);
 
     // Touch and gamepad (our design): the touchpad (#108) moves the cursor
-    // and a tap clicks at it; the d-pad moves the cursor to the nearest
-    // control, south clicks, east is Escape.
+    // and a tap clicks at it; the gamepad's left stick moves it (#835),
+    // south clicks, east is Escape.
     run.screen
         .open(run.data, &mut run.console, XGA, run.now, [512.0, 384.0]);
     let tap = |run: &mut Run, at: [f32; 2]| {
@@ -451,12 +481,14 @@ fn options_screen_from_game_data() {
         }
     };
     tap(&mut run, tab1);
-    pad(&mut run, GamepadButton::DpadDown);
+    // The left stick moves the cursor (#835), slower over the controls.
     let eax = run.control("check_eax").rect;
+    let to = [eax[0] + 10.0, eax[1] + eax[3] / 2.0];
+    stick_to(&mut run, to);
     let c = run.state().cursor;
     assert!(
         c[0] >= eax[0] && c[0] < eax[0] + eax[2] && c[1] >= eax[1] && c[1] < eax[1] + eax[3],
-        "the d-pad reached the check box: {c:?}"
+        "the stick reached the check box: {c:?}"
     );
     pad(&mut run, GamepadButton::South);
     assert_eq!(run.control("check_eax").value, "on");
@@ -517,12 +549,12 @@ fn options_screen_from_game_data() {
     run.click(entry(2.0));
     tap(&mut run, entry(1.0));
     assert_eq!(run.state().open_list.as_deref(), Some("list_renderer"));
-    // The d-pad reaches only the enabled entry: from it, nothing below.
-    pad(&mut run, GamepadButton::DpadUp);
-    let before = run.state().cursor;
-    assert!((before[1] - entry(0.0)[1]).abs() < 1.0, "{before:?}");
-    pad(&mut run, GamepadButton::DpadDown);
-    assert_eq!(run.state().cursor, before);
+    // The gamepad's south on a disabled entry chooses nothing; on the
+    // enabled one it does.
+    stick_to(&mut run, entry(1.0));
+    pad(&mut run, GamepadButton::South);
+    assert_eq!(run.state().open_list.as_deref(), Some("list_renderer"));
+    stick_to(&mut run, entry(0.0));
     pad(&mut run, GamepadButton::South);
     assert_eq!(run.state().open_list, None);
     assert_eq!(run.console.status("renderer").unwrap(), "renderer_r1");

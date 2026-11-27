@@ -311,6 +311,12 @@ impl TitleMenu {
             .position(|r| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height)
     }
 
+    /// The gamepad cursor's targets ([`Input::pad_cursor_frame`]): the
+    /// list's caption rows.
+    pub fn cursor_targets(&self, data: &GameData) -> Vec<Rect> {
+        data.menu.caption_rows(self.list(data))
+    }
+
     fn set_list(&mut self, data: &GameData, list: &'static str, now: u64) {
         self.list = list;
         self.items = Self::items(data, list, self.opening);

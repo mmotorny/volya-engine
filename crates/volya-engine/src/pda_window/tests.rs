@@ -6,7 +6,7 @@
 //! and its portions, the marks, the clock and the gamepad (our design).
 
 use super::*;
-use crate::core::input::{Event, GamepadButton, MouseButton};
+use crate::core::input::{Event, GamepadAxis, GamepadButton, MouseButton};
 use crate::fixture::{self, MemVfs};
 use volya_engine_formats::ui::ColorDefs;
 use volya_engine_formats::xml;
@@ -131,6 +131,11 @@ impl Run {
         if !self.paused {
             self.global_ms += 16;
         }
+        // The gamepad drives the cursor, as the app has it (#835).
+        let targets = crate::dialog::cursor_targets(&self.window.cursor_targets());
+        self.input.set_pad_cursor(true);
+        let scrolls = !self.window.map_shown();
+        (self.input).pad_cursor_frame(self.now as f64, &targets, scrolls);
         let out = self.window.update(Frame {
             data: &data,
             keys: &keys(),
@@ -270,20 +275,34 @@ fn a_press_on_a_caption_switches_tabs() {
     assert_eq!(r.window.active_tab(), Some(4));
 }
 
-/// The gamepad (our design): the d-pad goes to the next caption, south
-/// presses.
+/// The gamepad (#835): the left stick moves the cursor, south presses.
 #[test]
-fn the_gamepad_moves_between_captions_and_presses() {
+fn the_gamepad_moves_the_cursor_to_a_caption_and_presses() {
     let mut r = Run::new();
     r.window.switch_to(0);
     r.window.open(centre(&window(), 0));
-    for button in [GamepadButton::DpadRight, GamepadButton::DpadRight] {
-        for pressed in [true, false] {
-            r.input.handle(Event::GamepadButton { button, pressed });
+    let to = centre(&r.window, 2);
+    for _ in 0..600 {
+        let [x, y] = r.input.cursor_ui();
+        let (dx, dy) = (to[0] - x, to[1] - y);
+        let d = dx.hypot(dy);
+        if d < 3.0 {
+            break;
+        }
+        for (axis, v) in [(GamepadAxis::LeftX, dx / d), (GamepadAxis::LeftY, dy / d)] {
+            r.input.handle(Event::GamepadAxis {
+                axis,
+                value: v * 0.5,
+            });
         }
         r.frame(0);
     }
-    assert_eq!(r.window.state().cursor, centre(&r.window, 2));
+    for axis in [GamepadAxis::LeftX, GamepadAxis::LeftY] {
+        r.input.handle(Event::GamepadAxis { axis, value: 0.0 });
+    }
+    r.frame(0);
+    let at = r.window.state().cursor;
+    assert!((at[0] - to[0]).hypot(at[1] - to[1]) < 3.0, "{at:?}");
     r.input.handle(Event::GamepadButton {
         button: GamepadButton::South,
         pressed: true,

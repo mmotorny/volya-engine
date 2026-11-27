@@ -99,8 +99,6 @@ pub struct MenuScreens {
     saves: SavedGames,
     /// Files deleted from the saved-games folder, for the platform.
     deleted: Vec<String>,
-    /// The previous frame's time (the left stick's cursor speed).
-    last_now: Option<u64>,
     /// The time of the last hold step of any scroll bar, 0 at program
     /// start (save-load-screens.md section 3.5).
     last_hold: u64,
@@ -152,6 +150,27 @@ impl MenuScreens {
             Some(Sub::Save) => self.save.as_ref()?.text_field(),
             _ => None,
         }
+    }
+
+    /// The gamepad cursor's targets ([`Input::pad_cursor_frame`]): the
+    /// clickable elements of what shows, `menu`'s rows under no box.
+    pub fn cursor_targets(&self, menu: &TitleMenu, data: &GameData) -> Vec<[f32; 4]> {
+        let rects = match self.sub {
+            Some(Sub::Options) => self.options.as_ref().map(OptionsScreen::cursor_targets),
+            Some(Sub::Save) => self.save.as_ref().map(SaveScreen::cursor_targets),
+            Some(Sub::Load) => self.load.as_ref().map(LoadScreen::cursor_targets),
+            None => Some(match &self.message {
+                Some((m, _)) => m.targets(),
+                None => menu.cursor_targets(data),
+            }),
+        };
+        dialog::cursor_targets(&rects.unwrap_or_default())
+    }
+
+    /// Whether the save screen's on-screen keyboard takes the gamepad
+    /// (#94).
+    pub fn typing(&self) -> bool {
+        self.sub == Some(Sub::Save) && self.save.as_ref().is_some_and(SaveScreen::typing)
     }
 
     /// The save screen's name-field font, while it shows.
@@ -253,18 +272,11 @@ impl MenuScreens {
             }
             None => {}
         }
-        let dt = now.saturating_sub(self.last_now.unwrap_or(now)).min(100) as f32 / 1000.0;
-        self.last_now = Some(now);
         if let Some((m, purpose)) = &mut self.message {
             // The box takes the input; the menu behind it animates.
             let mut cursor = menu.cursor();
             let mut answer = None;
-            for mut e in dialog::events(data, input, cursor, dt) {
-                if let Ev::Navigate(d) = e
-                    && let Some(p) = dialog::navigate(cursor, d, &m.targets())
-                {
-                    e = Ev::Move(p);
-                }
+            for e in dialog::events(data, input) {
                 if let Ev::Move(p) = e {
                     cursor = p;
                 }
@@ -500,7 +512,7 @@ pub struct MenuState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::input::{Event, GamepadButton, Key, MouseButton};
+    use crate::core::input::{Event, GamepadAxis, GamepadButton, Key, MouseButton};
     use crate::fixture::{self, FakeAudio};
     use crate::save_load::Stubbed;
     use crate::saved_games::{LocalTime, SavedFile};
@@ -543,6 +555,10 @@ mod tests {
 
         fn frame(&mut self) -> MenuFrame {
             self.now += 16;
+            // The gamepad drives the cursor, as the app has it (#835).
+            let targets = self.screens.cursor_targets(&self.menu, &self.data);
+            self.input.set_pad_cursor(true);
+            (self.input).pad_cursor_frame(self.now as f64 * 100.0, &targets, true);
             let out = self.screens.update(
                 &mut self.menu,
                 Frame {
@@ -592,6 +608,28 @@ mod tests {
                 });
             }
             self.frame()
+        }
+
+        /// Steers the cursor to `to` with the gamepad's left stick, at a
+        /// third of full tilt, then lets it go.
+        fn stick_to(&mut self, to: [f32; 2]) {
+            for _ in 0..400 {
+                let [x, y] = self.input.cursor_ui();
+                let (dx, dy) = (to[0] - x, to[1] - y);
+                let d = dx.hypot(dy);
+                if d < 3.0 {
+                    break;
+                }
+                for (axis, v) in [(GamepadAxis::LeftX, dx / d), (GamepadAxis::LeftY, dy / d)] {
+                    let value = v * 0.5;
+                    self.input.handle(Event::GamepadAxis { axis, value });
+                }
+                self.frame();
+            }
+            for axis in [GamepadAxis::LeftX, GamepadAxis::LeftY] {
+                self.input.handle(Event::GamepadAxis { axis, value: 0.0 });
+            }
+            self.frame();
         }
 
         fn pad(&mut self, button: GamepadButton) {
@@ -665,9 +703,9 @@ mod tests {
         let message = r.state().message.expect("the box");
         assert_eq!(message.name, "message_box_quit_windows");
         assert!(!r.menu.quit_requested());
-        // A gamepad reaches the buttons: the d-pad moves the cursor to the
-        // nearest one that way, south clicks it.
-        r.pad(GamepadButton::DpadDown);
+        // A gamepad reaches the buttons: its left stick moves the cursor,
+        // south clicks.
+        r.stick_to(centre(message.buttons[0].rect));
         r.pad(GamepadButton::South);
         assert!(r.menu.quit_requested(), "{:?}", r.state().message);
     }
