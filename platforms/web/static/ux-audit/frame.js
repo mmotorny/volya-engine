@@ -159,7 +159,7 @@ if (state.level) {
   document.documentElement.dataset.uxLevel = "";
   if (device.height > device.width) document.documentElement.dataset.uxTurned = "";
   document.querySelector("main").hidden = true;
-  const { stick, lock, fade, down, thumbY, offer, ...toggles } = state.level;
+  const { trip, fade, down, offer, ...toggles } = state.level;
   if (offer) {
     // As on desktop Chrome (fullscreen.js).
     const fullscreen = createFullscreenOffer(async () => [], { show: true });
@@ -172,12 +172,9 @@ if (state.level) {
     // attached and off, no outfit with night vision.
     touch.update({ level: true, torch: false, nightVision: null, ...toggles });
     const box = touch.element;
-    const landscape = [Math.max(box.clientWidth, box.clientHeight), Math.min(box.clientWidth, box.clientHeight)];
-    // A thumb a little above the stick's resting place, or where the state
-    // says (high on the screen).
-    const thumb = [140, thumbY ?? landscape[1] - 150];
-    if (stick) touch.showStick(thumb, stick);
-    if (lock) touch.showLocked(thumb);
+    // A trip's destination where the state says, in the picture (from its
+    // centre, in half its height).
+    if (trip) touch.trip(trip);
     if (fade) touch.fadeNow();
     if (down) box.querySelector(`.touch-button.${down}`).classList.add("down");
   }

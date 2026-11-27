@@ -22,11 +22,7 @@
 //! | `["key", "insert", true, read, text]` | an Insert press while the console is open, with the clipboard the page read for it (#639): `read` is `"text"` (and `text` its text), `"none"` (no text) or `"unavailable"` |
 //! | `["pad", name, pressed]` | gamepad button ([`GamepadButton::name`]) |
 //! | `["axis", name, value]` | gamepad axis ([`GamepadAxis::name`]) |
-//! | `["stick", x, y]` | the on-screen move stick's reach in stick radii (+y down): at most 1 long within its rim, up to 3 per axis past it; `0, 0` when touched and when let go |
-//! | `["stick_cancel"]` | the stick's touch cancelled: released without acting where it was |
-//! | `["stick_lock", x, y]` | the centre of the stick's sprint lock target for this touch, relative to the stick's, in stick radii (sent before the touch's first `stick`) |
-//! | `["look", dx, dy, speed]` | a look drag on the on-screen controls, and its smoothed speed in CSS pixels per second |
-
+//! | `["look", x, y, "down"\|"drag"\|"move"\|"up"\|"cancel", time, id, half]` | a finger on the on-screen controls' look area (`down`: a tap or a drag, the engine tells them apart) or dragged from Jump or Crouch (`drag`), where it is in the picture (from its centre, in half its height, +y down), and half the picture's height in CSS pixels |
 //! | `["tbutton", name, pressed]` | an on-screen button ([`TouchButton::name`]) |
 //! | `["wheel", steps]` | mouse-wheel steps, negative up |
 //! | `["blur"]` | the page lost focus: release everything |
@@ -353,13 +349,11 @@ fn decode(message: &Array) -> Result<Option<Vec<Event>>, JsValue> {
             axis: GamepadAxis::from_name(&text(1)?).ok_or_else(bad)?,
             value: num(2)? as f32,
         },
-        "stick" => Event::TouchStick { value: at()? },
-        "stick_cancel" => Event::TouchStickCancel,
-        "stick_lock" => Event::TouchLockTarget { centre: at()? },
         "look" => Event::TouchLook(TouchLook {
             finger: num(5)? as u32,
             phase: match text(3)?.as_str() {
                 "down" => LookPhase::Down,
+                "drag" => LookPhase::Drag,
                 "move" => LookPhase::Move,
                 "up" => LookPhase::Up,
                 "cancel" => LookPhase::Cancel,
@@ -367,6 +361,7 @@ fn decode(message: &Array) -> Result<Option<Vec<Event>>, JsValue> {
             },
             at: at()?,
             time: num(4)?,
+            half_height: num(6)? as f32,
         }),
         "tbutton" => Event::TouchButton {
             button: TouchButton::from_name(&text(1)?).ok_or_else(bad)?,

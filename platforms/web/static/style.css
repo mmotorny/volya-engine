@@ -160,21 +160,43 @@ html[data-engine-input] canvas#view {
   --hud-rim: 1.5px;
 }
 
-.touch-move,
+/* The whole picture moves and looks (#772): a tap moves there, a drag
+   looks. */
 .touch-look {
   position: absolute;
-  top: 0;
-  bottom: 0;
+  inset: 0;
 }
 
-.touch-move {
+/* A trip's destination (#772): a plain ring with a dot, centred on the
+   place touch-controls.js moves it to. */
+.touch-destination {
+  position: absolute;
   left: 0;
-  right: 50%;
+  top: 0;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: 2px solid rgb(var(--hud-teal-hi));
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
 }
 
-.touch-look {
+.touch-destination::after {
+  content: "";
+  position: absolute;
   left: 50%;
-  right: 0;
+  top: 50%;
+  width: 4px;
+  height: 4px;
+  margin: -2px 0 0 -2px;
+  border-radius: 50%;
+  background: rgb(var(--hud-teal-hi));
+}
+
+.touch-destination[hidden] {
+  display: none;
 }
 
 /* The art's canvases, centred in their element at their own CSS size
@@ -185,148 +207,6 @@ html[data-engine-input] canvas#view {
   top: 50%;
   transform: translate(-50%, -50%);
   pointer-events: none;
-}
-
-/* The move stick: a gunmetal disc resting at the bottom left; held, centred
-   under the thumb. Its radius (56 px) is the full deflection; beyond it the
-   sprint chevrons and the sprint lock target, placed by touch-controls.js
-   (2.1 radii up, controls.rs LOCK_REACH, or closer or turned where that
-   won't fit). Past the rim and locked the segmented ring shows. */
-.touch-stick {
-  position: absolute;
-  left: calc(var(--safe-left) + var(--edge) + 64px);
-  top: calc(100% - var(--safe-bottom) - var(--edge) - 64px);
-  width: 112px;
-  height: 112px;
-  margin: -56px 0 0 -56px;
-  border-radius: 50%;
-  pointer-events: none;
-  transition: opacity 0.6s;
-}
-
-.touch-rim {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  border: var(--hud-rim) solid rgba(var(--hud-grey), 0.7);
-}
-
-.touch-stick.held .touch-rim {
-  border-color: rgb(var(--hud-teal-hi));
-}
-
-.touch-stick:is(.past, .locked) .touch-rim {
-  border-color: transparent;
-}
-
-.touch-stick.held > .touch-disc {
-  opacity: 0.75;
-}
-
-.touch-segments {
-  visibility: hidden;
-  opacity: 0.8;
-}
-
-.touch-stick:is(.past, .locked) .touch-segments {
-  visibility: visible;
-}
-
-.touch-knob {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  box-sizing: border-box;
-  width: 48px;
-  height: 48px;
-  margin: -24px 0 0 -24px;
-}
-
-.touch-knob::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  border: var(--hud-rim) solid rgba(var(--hud-grey), 0.85);
-}
-
-.touch-stick.held .touch-knob::after {
-  border-color: rgb(var(--hud-teal-hi));
-}
-
-/* Past the rim the knob goes translucent: the chevrons and the target it
-   moves over stay readable; on the target and locked only its rim shows. */
-.touch-stick.past .touch-knob .touch-disc {
-  opacity: 0.35;
-}
-
-.touch-stick:is(.on-target, .locked) .touch-knob::after {
-  border-color: #fff;
-}
-
-.touch-stick:is(.on-target, .locked) .touch-knob .touch-disc {
-  visibility: hidden;
-}
-
-/* Sprint ahead and the lock target: shown while the stick is held, bright
-   past the rim, filled teal with the knob on it and once locked. */
-.touch-sprint-hint,
-.touch-lock {
-  position: absolute;
-  left: 0;
-  top: 0;
-  visibility: hidden;
-  opacity: 0.6;
-  pointer-events: none;
-}
-
-.touch-sprint-hint {
-  width: 22px;
-  height: 22px;
-  fill: none;
-  stroke: rgb(var(--hud-grey));
-  stroke-width: 1.5;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.touch-lock {
-  box-sizing: border-box;
-  width: 44px;
-  height: 44px;
-  padding: 3px;
-  border-radius: 50%;
-  background: rgba(10, 12, 16, 0.3) content-box;
-}
-
-.touch-figure.lit {
-  visibility: hidden;
-}
-
-.touch-stick:is(.held, .locked) :is(.touch-sprint-hint, .touch-lock) {
-  visibility: visible;
-}
-
-.touch-stick:is(.past, .locked) .touch-sprint-hint {
-  opacity: 1;
-  stroke: rgb(var(--hud-teal-hi));
-}
-
-.touch-stick:is(.past, .locked) .touch-lock {
-  opacity: 1;
-  transform: scale(1.15);
-}
-
-.touch-stick:is(.on-target, .locked) .touch-lock {
-  background-color: rgba(var(--hud-teal), 0.45);
-}
-
-.touch-stick:is(.on-target, .locked) .touch-figure {
-  visibility: hidden;
-}
-
-.touch-stick:is(.on-target, .locked) .touch-figure.lit {
-  visibility: visible;
 }
 
 /* Buttons: the disc, then the glyph, then the rim (grey; white held; bright
@@ -494,8 +374,7 @@ button.touch-button.down .touch-edges {
 }
 
 /* Torch, then Night vision, in a row left of PDA along the top edge
-   (#363): above the look area and clear of both thumbs' zones, away from
-   Menu's side, where the move stick's lock target reaches up. Fixed places:
+   (#363): clear of both thumbs' zones, away from Menu's side. Fixed places:
    Night vision showing or not moves nothing. */
 #touch-controls button.touch-button:is(.torch, .night-vision) {
   top: calc(var(--safe-top) + var(--edge));
@@ -543,9 +422,8 @@ button.touch-button.down .touch-edges {
   height: 64px;
 }
 
-/* Idle a while (touch-controls.js): everything but a held stick fades. */
-.touch-controls.idle button.touch-button,
-.touch-controls.idle .touch-stick:not(.held, .locked) {
+/* Idle a while (touch-controls.js): the buttons fade. */
+.touch-controls.idle button.touch-button {
   opacity: 0.6;
 }
 

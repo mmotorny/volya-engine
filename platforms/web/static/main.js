@@ -48,6 +48,7 @@ let nextId = 0;
 // level's controls.
 let setCapture = () => {};
 let setLevel = () => {};
+let setTrip = () => {};
 let setTextField = () => {};
 let setCursor = () => {};
 let setConsole = () => {};
@@ -177,6 +178,7 @@ function startEngine() {
       } else if (data.type === "error") reject(new Error(data.message));
       else if (data.type === "capture") setCapture(data.on);
       else if (data.type === "controls") setLevel(data);
+      else if (data.type === "trip") setTrip(data.at);
       else if (data.type === "text_field") setTextField(data);
       else if (data.type === "cursor") setCursor(data.shown);
       else if (data.type === "console") setConsole(data);
@@ -248,6 +250,7 @@ setCapture = (on) => {
   document.querySelector("main").hidden = on;
   if (!on) offer.leave();
 };
+setTrip = (at) => touch.trip(at);
 setLevel = (controls) => {
   forward.setLevel(controls.level, controls.keys);
   touch.update(controls);

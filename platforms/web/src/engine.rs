@@ -590,6 +590,12 @@ pub fn level_controls() -> Option<app::LevelControls> {
     RUNNING.with(|r| r.borrow().as_ref()?.app.level_controls())
 }
 
+/// Where a tap-to-move trip's destination shows in the picture
+/// ([`App::trip_marker`]).
+pub fn trip_marker() -> Option<[f32; 2]> {
+    RUNNING.with(|r| r.borrow().as_ref()?.app.trip_marker())
+}
+
 /// Whether the character takes keyboard keys ([`App::character_takes_keys`]).
 pub fn character_takes_keys() -> bool {
     RUNNING.with(|r| {

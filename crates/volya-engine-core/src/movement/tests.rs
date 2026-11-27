@@ -110,6 +110,7 @@ const FORWARD: Request = Request {
     mouse: [0.0; 2],
     turn: [0.0; 2],
     look: [0.0; 2],
+    toward: None,
 };
 
 #[test]
@@ -449,6 +450,41 @@ fn a_low_ceiling_keeps_the_crouch() {
     run(&mut p, &world, now, &Request::default(), 1.0);
     assert_eq!(p.state().posture, 1, "no room to stand");
     assert!(p.state().flags.crouch);
+}
+
+/// Tap-to-move's bearing (our design): forward runs along it, not along
+/// the view, from the first frame, and sprints as forward does; the view
+/// keeps its yaw, and the heading stays the bearing once it stops.
+#[test]
+fn forward_toward_a_bearing_runs_along_it_whatever_the_view() {
+    let world = floor();
+    let (mut p, now) = player(&world);
+    let bearing = std::f32::consts::FRAC_PI_2; // +x
+    let toward = Request {
+        toward: Some(bearing),
+        sprint_toggle: true,
+        ..FORWARD
+    };
+    p.frame(&world, now + 16, &toward);
+    let v = p.state().velocity;
+    assert!(
+        v[0] > 0.0 && v[2].abs() < 1e-4 * v[0],
+        "the first frame: {v:?}"
+    );
+    let held = Request {
+        sprint_toggle: false,
+        ..toward
+    };
+    run(&mut p, &world, now + 16, &held, 0.5);
+    let s = p.state();
+    assert!(s.flags.sprint && s.flags.forward, "{:?}", s.flags);
+    assert!(
+        s.position[0] > 1.0 && s.position[2].abs() < 1e-3,
+        "{:?}",
+        s.position
+    );
+    assert_eq!(p.angles().yaw, 0.0, "the view didn't turn");
+    assert_eq!(p.heading(), bearing);
 }
 
 #[test]

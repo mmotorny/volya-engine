@@ -12,8 +12,8 @@
 //   at TEXEL CSS pixels per texel) over a dark backing for legibility over
 //   bright scenes. Their thin rims are drawn by style.css at the weight of
 //   the minimap's ring (`ui\ui_round_map_area`).
-// - Glyphs: the HUD's posture icons (`ui_hud_soldier_crouch`, `_creep`,
-//   `_sprint`) as silhouettes (their alpha with the one-texel scanline gaps
+// - Glyphs: the HUD's posture icons (`ui_hud_soldier_crouch`, `_creep`)
+//   as silhouettes (their alpha with the one-texel scanline gaps
 //   closed by the engine) and our own Jump arrow (after the proportions of
 //   `ui\ui_map_arrow_02`), Menu bars, Inventory backpack (the UI textures
 //   have no inventory icon), Console prompt (#642) and Torch beam (the
@@ -26,8 +26,6 @@
 //   which has the night vision, torch.md 1.1; `ui\ui_icon_equipment`)
 //   engraved: its brightness as alpha, so its lenses show where a
 //   silhouette would be one blot.
-// - The stick's segmented ring (`ui_hud_grenadetarget_d`) and the lock
-//   target's ring (the map spot of `ui\ui_common`).
 // - Colours: teal, the crouch icon's mean texel colour; grey, the
 //   crosshair's (`[hud_cursor] cross_color`).
 //
@@ -45,15 +43,11 @@ const REQUESTS = [
   ["frame", { path: "ui\\ui_hud_frame_back" }],
   ["crouch", { id: "ui_hud_soldier_crouch", silhouette: true }],
   ["creep", { id: "ui_hud_soldier_creep", silhouette: true }],
-  ["sprint", { id: "ui_hud_soldier_sprint", silhouette: true }],
-  ["segments", { id: "ui_hud_grenadetarget_d" }],
-  // The map spot ring has no texture description of its own.
-  ["spot", { path: "ui\\ui_common", region: [728, 577, 50, 50] }],
   ["torchIcon", { item: "device_torch", engraving: true }],
   ["pda", { id: "ui_hud_icon_PDA", silhouette: true }],
 ];
 /** Glyph sources whose transparent margins are trimmed. */
-const TRIMMED = new Set(["crouch", "creep", "sprint", "torchIcon", "pda"]);
+const TRIMMED = new Set(["crouch", "creep", "torchIcon", "pda"]);
 
 /** The approximations' palette, close to the game's (our choice). */
 const APPROXIMATE_TEAL = [36, 178, 162];
@@ -182,15 +176,6 @@ const FIGURES = {
     [12, [28, 56], [20, 70]],
     [9, [20, 70], [6, 72]],
   ],
-  // Running to the right.
-  sprint: [
-    [38, 9, 7],
-    [13, [37, 17], [32, 40]],
-    [7, [36, 21], [46, 30], [50, 22]],
-    [7, [35, 21], [26, 31]],
-    [11, [32, 40], [44, 52], [40, 70]],
-    [11, [32, 40], [24, 56], [12, 64]],
-  ],
 };
 
 /** An approximate figure, drawn at `scale` × its frame. */
@@ -214,23 +199,6 @@ function figureCanvas([[hx, hy, hr], ...limbs], scale = 4) {
   const [out, o] = canvas(w, h);
   o.putImageData(image, -x, -y);
   return out;
-}
-
-/** A ring of `count` segments with `gap` radians between them, in a
- * `size`-pixel square: outer radius `size / 2`, `width` thick. */
-function segmentCanvas(size, count, gap, width, color, offset = 0) {
-  const [c, g] = canvas(size, size);
-  g.strokeStyle = color;
-  g.lineWidth = width;
-  const r = size / 2 - width / 2;
-  const step = (2 * Math.PI) / count;
-  for (let i = 0; i < count; i++) {
-    const a = offset + i * step + gap / 2;
-    g.beginPath();
-    g.arc(size / 2, size / 2, r, a, a + step - gap);
-    g.stroke();
-  }
-  return c;
 }
 
 /** An approximate torch icon (our drawing of the headset, in its 100 × 50
@@ -299,11 +267,6 @@ export function approximateArt() {
     frame,
     crouch: figureCanvas(FIGURES.crouch),
     creep: figureCanvas(FIGURES.creep),
-    sprint: figureCanvas(FIGURES.sprint),
-    // Twelve segments (the grenade target's look), four arcs (the map
-    // spot's), gaps at the quarters.
-    segments: segmentCanvas(184, 12, 0.16, 26, "rgba(200, 200, 200, 0.5)", -Math.PI / 2 - Math.PI / 12),
-    spot: segmentCanvas(100, 4, 0.34, 16, "rgb(167, 255, 255)", 0),
     torchIcon: torchIconCanvas(),
     pda: pdaIconCanvas(),
     ...palette(APPROXIMATE_TEAL, APPROXIMATE_GREY),
@@ -351,14 +314,6 @@ export function paintGlyph(c, source, width, height, color) {
   recolour(g, c, color);
   scanlines(g, c);
   return k;
-}
-
-/** `picture` (a canvas) filling a `size` CSS-pixel square, in `color` when
- * given. */
-export function paintPicture(c, picture, size, color) {
-  const [g] = fit(c, size, size);
-  g.drawImage(picture, 0, 0, c.width, c.height);
-  if (color) recolour(g, c, color);
 }
 
 function recolour(g, c, color) {

@@ -27,12 +27,15 @@
 //   engine stops while hidden (our design, #93).
 // To the page, besides replies: { type: "capture", on } whenever the engine
 // starts or stops owning the screen; the page forwards input only while on.
-// { type: "controls", level, crouch, sprint, low, lock, keys, torch,
-// nightVision } whenever the level's controls go live or stop (level) or
-// their toggles change (crouch toggle engaged, sprint requested, the
-// toggled crouch low, the sprint lock holding; the torch and night vision
-// on, or null while their touch buttons are hidden): the page's touch
-// controls and pointer lock follow it.
+// { type: "controls", level, crouch, sprint, low, keys, torch,
+// nightVision, pda } whenever the level's controls go live or stop (level)
+// or their toggles change (crouch toggle engaged, sprint requested, the
+// toggled crouch low; the torch and night vision on, or null while their
+// touch buttons are hidden): the page's touch controls and pointer lock
+// follow it.
+// { type: "trip", at } whenever a tap-to-move trip's destination moves in
+// the picture (from its centre, in half its height, +y down), or goes
+// (null): the touch controls mark it (#772).
 // { type: "text_field", rect, focused, over } whenever the save screen's
 // name field shows, moves, gains or loses focus, the cursor comes over it or
 // leaves it, or the field goes (rect null): canvas CSS pixels [x, y, width,
@@ -106,6 +109,7 @@ let field = "";
 let cursor = false;
 let consoleOpen = false;
 let consoleMenu = false;
+let trip = "";
 /** Tells the page when input capture or the level's controls changed (after calls and frames). */
 function syncCapture() {
   const on = e().input_capture();
@@ -122,12 +126,17 @@ function syncCapture() {
       crouch: (bits & 2) !== 0,
       sprint: (bits & 4) !== 0,
       low: (bits & 8) !== 0,
-      lock: (bits & 16) !== 0,
       keys: (bits & 32) !== 0,
       torch: bits & 64 ? (bits & 128) !== 0 : null,
       nightVision: bits & 256 ? (bits & 512) !== 0 : null,
       pda: (bits & 1024) !== 0,
     });
+  }
+  const at = e().trip_marker();
+  const place = at ? Array.from(at, (v) => v.toFixed(4)).join() : "";
+  if (place !== trip) {
+    trip = place;
+    postMessage({ type: "trip", at: at ? Array.from(at) : null });
   }
   const full = e().full_screen_request();
   if (full >= 0) postMessage({ type: "full_screen", on: full === 1 });

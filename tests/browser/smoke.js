@@ -759,15 +759,13 @@ export const tests = {
           ok = doc?.documentElement?.dataset.ready === "true" && (shown || state.startError);
         }
         if (!ok) failed.push(`${device.id}/${state.id}`);
-        // The sprint lock target, where shown, is on the screen and clear
-        // of its safe area's top edge (a thumb landing high lowers it).
-        const target = state.level && frame.contentDocument?.querySelector(".touch-lock");
-        if (target && frame.contentWindow.getComputedStyle(target).visibility === "visible") {
-          const r = target.getBoundingClientRect();
-          const inset = device.insets;
-          const inside =
-            r.left >= inset.left && r.top >= inset.top && r.right <= device.width - inset.right && r.bottom <= device.height - inset.bottom;
-          if (!inside) failed.push(`${device.id}/${state.id}: lock target at ${JSON.stringify(r)}`);
+        // A trip's destination marker, where the state has one, shows on
+        // the screen.
+        const marker = state.level?.trip && frame.contentDocument?.querySelector(".touch-destination");
+        if (state.level?.trip) {
+          const r = marker?.getBoundingClientRect();
+          const inside = marker && !marker.hidden && r.left >= 0 && r.top >= 0 && r.right <= device.width && r.bottom <= device.height;
+          if (!inside) failed.push(`${device.id}/${state.id}: destination marker at ${JSON.stringify(r)}`);
         }
         frame.remove();
       }

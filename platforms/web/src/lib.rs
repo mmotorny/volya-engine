@@ -614,8 +614,7 @@ pub fn input_capture() -> bool {
 
 /// The level's controls for the page: bit 1 while they are live,
 /// plus 2 while the crouch toggle is engaged, 4 while a sprint is
-/// requested, 8 while the toggled crouch is the low crouch and 16 while the
-/// sprint lock holds the touch stick; 32 while the character takes keys
+/// requested and 8 while the toggled crouch is the low crouch; 32 while the character takes keys
 /// (the level's controls live, or the inventory screen over them, #110);
 /// 64 while the touch Torch button shows and 128 while the torch is on, 256
 /// while the Night vision button shows and 512 while night vision is
@@ -633,7 +632,6 @@ pub fn level_controls() -> u32 {
         1 | u32::from(c.crouch) << 1
             | u32::from(c.sprint) << 2
             | u32::from(c.low_crouch) << 3
-            | u32::from(c.sprint_lock) << 4
             | button(c.torch, 6)
             | button(c.night_vision, 8)
     })
@@ -673,6 +671,14 @@ pub fn console_opens_over_menu() -> bool {
 #[wasm_bindgen]
 pub fn cursor_shown() -> bool {
     engine::cursor_shown()
+}
+
+/// Where the destination of a tap-to-move trip under way shows in the
+/// picture, for the touch controls' marker: `[x, y]` from its centre in half
+/// its height, +y down; none without a trip or with it behind the eye.
+#[wasm_bindgen]
+pub fn trip_marker() -> Option<Vec<f32>> {
+    engine::trip_marker().map(Vec::from)
 }
 
 /// The save screen's name field while it shows, for the page's text entry

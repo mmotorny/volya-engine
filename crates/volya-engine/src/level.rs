@@ -821,8 +821,11 @@ pub struct PlayerReport {
     /// The toggles the touch controls show.
     pub crouch_toggled: bool,
     pub sprint_requested: bool,
-    /// The touch stick's sprint lock holds it forward.
-    pub sprint_locked: bool,
+    /// The destination of the tap-to-move trip under way.
+    pub trip: Option<Vec3>,
+    /// How the latest trip to end on its own ended (`arrived`, `stuck`)
+    /// and its distance from its destination then, metres.
+    pub trip_end: Option<(&'static str, f32)>,
 }
 
 /// The level of a new game and where its actor starts: the actor's object
@@ -2641,7 +2644,11 @@ impl LevelScreen {
         self.clock.set_paused(false);
         self.clock.advance(elapsed);
         let player = self.player.state();
-        let (request, back) = self.controls.request(input, &player, now);
+        // A tap's ray from the view the tap saw: the latest frame's.
+        let (world, view) = (&self.collision, self.player.view());
+        let (request, back) = self.controls.request(input, &player, now, |at| {
+            crate::controls::tap_destination(world, &view, at)
+        });
         // player-state.md 4.3: the condition's limits for this frame's
         // movement; 4.4: a jump's cost; 4.1, 4.2: the conditions over the
         // game time this frame advanced, with the state the movement left.
@@ -3948,7 +3955,14 @@ impl LevelScreen {
                 climbing,
                 crouch_toggled: p.crouch_toggled,
                 sprint_requested: p.sprint_requested,
-                sprint_locked: self.controls.sprint_lock.locked(),
+                trip: self.controls.tap_move.trip().map(|t| t.destination),
+                trip_end: self.controls.tap_move.ended().map(|(how, d)| {
+                    let how = match how {
+                        crate::controls::TripEnd::Arrived => "arrived",
+                        crate::controls::TripEnd::Stuck => "stuck",
+                    };
+                    (how, d)
+                }),
             },
             character: self.character.as_ref().map(CharacterReport::of),
             objects: self.objects_report(),
@@ -3990,6 +4004,14 @@ impl LevelScreen {
     /// The player's controls.
     pub fn controls(&self) -> &Controls {
         &self.controls
+    }
+
+    /// Where the tap-to-move trip's destination shows in the picture (as
+    /// [`crate::core::input::TouchLook::at`]) while one is under way and
+    /// in front of the eye: the touch controls' marker.
+    pub fn trip_marker(&self) -> Option<[f32; 2]> {
+        let trip = self.controls.tap_move.trip()?;
+        crate::controls::picture_point(&self.player.view(), trip.destination)
     }
 
     /// The player's controls, to change (a screen over the level keeping

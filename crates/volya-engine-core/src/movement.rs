@@ -300,6 +300,10 @@ pub struct Request {
     /// (our design, not the spec's: `mouse_sens` and `mouse_invert` don't
     /// apply), within the same limits.
     pub look: [f32; 2],
+    /// The yaw the direction keys are turned by in place of the camera's
+    /// (5.3): tap-to-move's bearing to its destination (our design, not the
+    /// spec's), so the body runs there whichever way the view turns.
+    pub toward: Option<f32>,
 }
 
 /// The movement state (section 3).
@@ -471,7 +475,9 @@ pub struct PlayerState {
     pub posture: usize,
     pub sprint_requested: bool,
     pub crouch_toggled: bool,
-    /// The camera's pitch (+ down) and its limits (`lim_pitch`, 8.1).
+    /// The camera's yaw (+ toward +x from +z) and pitch (+ down) and the
+    /// pitch's limits (`lim_pitch`, 8.1).
+    pub yaw: f32,
     pub pitch: f32,
     pub pitch_limits: [f32; 2],
 }
@@ -599,6 +605,7 @@ impl Player {
             posture: self.body.box_index(),
             sprint_requested: self.sprint_request,
             crouch_toggled: self.crouch_toggle,
+            yaw: self.angles.yaw,
             pitch: self.angles.pitch,
             pitch_limits: self.config.lim_pitch,
         }
@@ -825,6 +832,13 @@ impl Player {
         } else {
             *request
         };
+        // Tap-to-move (our design): moving, the heading is the trip's
+        // bearing.
+        if let Some(toward) = request.toward
+            && (request.forward || request.back || request.left || request.right)
+        {
+            self.heading = toward;
+        }
         // 5.1: the local direction.
         let flag = |b: bool| f32::from(u8::from(b));
         let z = flag(request.forward) - flag(request.back);
@@ -919,7 +933,7 @@ impl Player {
         }
         // 5.3: the heading for the next frame.
         if self.state.any_direction() {
-            self.heading = self.angles.yaw;
+            self.heading = request.toward.unwrap_or(self.angles.yaw);
         } else {
             let off = self.angles.yaw - self.heading;
             if off.abs() > HEADING_SLACK {

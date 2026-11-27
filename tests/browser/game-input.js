@@ -5,8 +5,8 @@
 // full screen offer and Keyboard Lock, the keyboard (walk, jump, torch, the
 // console and its clipboard), the touch controls and zoom guard, the
 // inventory screen (pointer lock, mouse, touch, touchpad), the PDA window
-// (its keys, mouse, the touch PDA button, touchpad), the touch stick,
-// look, sprint lock, Jump, Crouch and Menu, and a gamepad.
+// (its keys, mouse, the touch PDA button, touchpad), touch's
+// tap-to-move, look, Jump, Crouch and Menu, and a gamepad.
 
 import { assert, assertEqual, skip } from "./harness.js";
 import {
@@ -390,7 +390,7 @@ export const tests = {
     assert(g > r + 60 && b > r + 60, `the crouch icon is teal: ${icon.mean}`);
     assert(missing.error, "an unknown id answers an error");
     assert(answer.cross_color?.length === 4, `the crosshair's colour: ${answer.cross_color}`);
-    const sources = ["frame", "crouch", "creep", "sprint", "segments", "spot"].reduce((n, k) => n + art[k].width * art[k].height * 4, 0);
+    const sources = ["frame", "crouch", "creep", "torchIcon", "pda"].reduce((n, k) => n + art[k].width * art[k].height * 4, 0);
     return `decoded in ${art.ms.toFixed(1)} ms (engine), ${art.totalMs.toFixed(1)} ms with the page's part; sources ${(sources / 1024).toFixed(0)} KiB, canvases ${(bytes / 1024).toFixed(0)} KiB at ${devicePixelRatio}x`;
   },
 
@@ -794,7 +794,10 @@ export const tests = {
     assert(!controls.hidden, "the touch controls show");
     const look = controls.querySelector(".touch-look");
     const r = localRect(look, controls);
-    const [lx, ly] = [(r.left + r.right) / 2, (r.top + r.bottom) / 2];
+    // Drags from the right half's centre, as long as on #754's look area
+    // there (the whole picture looks since #772).
+    const span = (r.right - r.left) / 2;
+    const [lx, ly] = [r.left + 1.5 * span, (r.top + r.bottom) / 2];
     // The picture in the game's own (landscape) layout: the phone's long
     // side across, upright (turned) or not.
     const [width, height] = [controls.clientWidth, controls.clientHeight];
@@ -847,7 +850,7 @@ export const tests = {
       return { yaw: Math.atan2(d[0], d[2]) - Math.atan2(w[0], w[2]), pitch: p - pitch };
     };
     const deg = (rad) => (rad * 180) / Math.PI;
-    // A drag from the look area's centre by `by` px at `speed` px/s, its
+    // A drag from the right half's centre by `by` px at `speed` px/s, its
     // moves placed by the clock (about every 8 ms); held still `hold` ms
     // before the lift. The turn while held (settled), the turn in all, and
     // the finger's speed at the end.
@@ -878,9 +881,9 @@ export const tests = {
     // Slow drags held still before the lift: the scene stays under the
     // finger (within 1%, or 0.2°), and the lift flings nothing.
     for (const [what, by] of [
-      ["right", [(r.right - r.left) * 0.4, 0]],
+      ["right", [span * 0.4, 0]],
       ["down", [0, height * 0.3]],
-      ["diagonal", [-(r.right - r.left) * 0.6, -height * 0.25]],
+      ["diagonal", [-span * 0.6, -height * 0.25]],
     ]) {
       const run = await drag(by, 250, 150);
       const want = grab([lx, ly], [lx + by[0], ly + by[1]], run.before.pitch);
@@ -897,7 +900,7 @@ export const tests = {
     // the finger's angular speed at the lift (rad/ms, at most 4π/1000):
     // within 15%, the release velocity being fitted to clock-placed moves.
     // Then flicked back and touched 100 ms into the coast: it stops there.
-    const half = r.right - r.left;
+    const half = span;
     const flicked = async (length, seconds) => {
       const run = await drag([-length, 0], length / seconds, 0);
       const end = [lx - length, ly];
@@ -930,6 +933,8 @@ export const tests = {
       await sleep(100);
       touchOn("pointerdown", [lx, ly]);
       const stopped = await settled();
+      // Held past a tap's time, so the lift is no tap (#772).
+      await sleep(550);
       touchOn("pointerup", [lx, ly]);
       const back = Math.abs(stopped.yaw - before.yaw);
       assert(back <= Math.abs(dragged) + 0.4 * Math.abs(projected), `the touch to stop the coast: ${deg(back).toFixed(1)}° back; ${runs.join(", ")}`);
@@ -949,7 +954,7 @@ export const tests = {
     return `${width}×${height}: ${runs.join(", ")}`;
   },
 
-  "touch: the stick walks and its sprint lock sprints, drags look (from Jump too), Crouch and its swipe down, Menu opens the menu": async () => {
+  "touch: a tap on the floor runs there and stops near it, a double tap sprints, drags look (from Jump too), Crouch and its swipe down, Menu opens the menu (#772)": async () => {
     needsGame();
     const controls = document.getElementById("touch-controls");
     assert(controls, "no touch controls");
@@ -981,25 +986,90 @@ export const tests = {
         }),
       );
     };
-    const start = (await state()).level;
-    // The stick pulled fully down runs back the way the inventory test's
-    // walk came (clear for its whole run), held until the player has gone
-    // half a metre from where this test started, however long the frames
-    // take; a second finger then drags right to look.
-    const move = controls.querySelector(".touch-move");
     const look = controls.querySelector(".touch-look");
-    const [mx, my] = centre(move);
-    const from = (s) => Math.hypot(s.level.player.position[0] - start.player.position[0], s.level.player.position[2] - start.player.position[2]);
-    touchOn(move, "pointerdown", 31, [mx, my]);
-    touchOn(move, "pointermove", 31, [mx, my + 80]);
-    let s = await until((s) => s.level.player.moving && s.level.player.running, "the stick to run");
-    s = await until((s) => from(s) > 0.5, "the stick to run half a metre", 4000);
-    touchOn(move, "pointerup", 31, [mx, my + 80]);
-    s = await until((s) => !s.level.player.moving, "the player to stop");
-    const p = s.level.player;
-    const moved = from(s);
-    assert(moved > 0.5, `moved ${moved.toFixed(2)} m: ${JSON.stringify(p)}`);
+    const marker = controls.querySelector(".touch-destination");
+    const [width, height] = [controls.clientWidth, controls.clientHeight];
+    // A tap at `y` (half-heights below the picture's centre), straight
+    // ahead.
+    let id = 60;
+    const tapAhead = (y) => {
+      const at = [width / 2, height / 2 + (y * height) / 2];
+      touchOn(look, "pointerdown", ++id, at);
+      touchOn(look, "pointerup", id, at);
+    };
+    const keyDown = (code) => document.body.dispatchEvent(new KeyboardEvent("keydown", { code, bubbles: true, cancelable: true }));
+    const keyUp = (code) => document.body.dispatchEvent(new KeyboardEvent("keyup", { code, bubbles: true, cancelable: true }));
+    // Look down a little, so the floor a metre and a half ahead shows; then
+    // find a flat way: the way the inventory test's walk came first (behind,
+    // where something 2.3 m on stops the keyboard's walk too),
+    // then the sides, turned to with the arrow keys. A tap there whose
+    // destination is not level with the feet is let go by a key (the
+    // keyboard takes over a trip).
+    let s = await state();
+    const pitch = s.level.pitch;
+    keyDown("ArrowDown");
+    await until((s) => s.level.pitch > pitch + 0.3, "the down arrow to look down", 3000);
+    keyUp("ArrowDown");
+    const flat = (a, b) => Math.hypot(a[0] - b[0], a[2] - b[2]);
+    let before = null;
+    let destination = null;
+    let away = 0;
+    const tried = [];
+    for (const turn of [Math.PI, Math.PI / 2, Math.PI]) {
+      const facing = (await state()).level.yaw;
+      keyDown("ArrowRight");
+      await until((s) => s.level.yaw > facing + turn - 0.15, "the right arrow to turn", 3000);
+      keyUp("ArrowRight");
+      s = await until((s) => !s.level.player.moving, "standing still");
+      before = s.level;
+      tapAhead(0.8);
+      s = await until((s) => s.level.player.trip, "the tap to set a destination");
+      destination = s.level.player.trip;
+      away = flat(destination, before.player.position);
+      const rise = destination[1] - before.player.position[1];
+      tried.push(`${away.toFixed(2)} m away, ${rise.toFixed(2)} m up`);
+      if (away > 0.8 && away < 3 && Math.abs(rise) < 0.3) break;
+      keyDown("KeyS");
+      await until((s) => !s.level.player.trip, "a key to end the trip");
+      keyUp("KeyS");
+      destination = null;
+    }
+    assert(destination, `no flat floor ahead: ${tried.join("; ")}`);
+    // A tap: run to at a run (no sprint) with its marker shown; the view
+    // doesn't turn; it stops within 0.3 m.
+    s = await until((s) => s.level.player.moving && s.level.player.running, "the tap to run");
+    assert(!s.level.player.sprint_requested, "a single tap runs");
+    for (let i = 0; i < 50 && marker.hidden; i++) await sleep(20);
+    assert(!marker.hidden, "the destination marked");
+    // The closest the polls saw it (they come a frame or more apart, at a
+    // run's 4 m/s or so) and where it came to rest.
+    let closest = Infinity;
+    s = await until((s) => {
+      closest = Math.min(closest, flat(s.level.player.position, destination));
+      return !s.level.player.trip && !s.level.player.moving;
+    }, "the trip to end and the player to stop", 6000);
+    const atRest = flat(s.level.player.position, destination);
+    const [how, atEnd] = s.level.player.trip_end ?? [];
+    assert(how === "arrived", `the trip ended ${how} ${atEnd?.toFixed(2)} m from its destination ${JSON.stringify(destination)} (the closest seen ${closest.toFixed(2)} m), from ${JSON.stringify(before.player.position)} to ${JSON.stringify(s.level.player.position)}, pitch ${before.pitch}`);
+    assert(atRest <= 0.8, `came to rest ${atRest.toFixed(2)} m from the destination`);
+    assert(Math.abs(s.level.yaw - before.yaw) < 1e-4, "the view didn't turn");
+    for (let i = 0; i < 50 && !marker.hidden; i++) await sleep(20);
+    assert(marker.hidden, "the marker goes with the trip");
+    const ran = flat(s.level.player.position, before.player.position);
+    // Turned round, a double tap back the way it came: the trip sprints.
+    const back = s.level.yaw;
+    keyDown("ArrowRight");
+    await until((s) => s.level.yaw > back + Math.PI - 0.15, "the right arrow to turn round", 3000);
+    keyUp("ArrowRight");
+    await until((s) => !s.level.player.moving, "standing still again");
+    tapAhead(0.8);
+    tapAhead(0.8);
+    s = await until((s) => s.level.player.sprint && s.level.player.trip, "the double tap to sprint");
+    s = await until((s) => !s.level.player.trip && !s.level.player.moving, "the sprint's trip to end", 6000);
+    assert(!s.level.player.sprint_requested, "the sprint ends with its trip");
+    // A drag looks and moves nothing.
     const [lx, ly] = centre(look);
+    const start = s.level;
     touchOn(look, "pointerdown", 32, [lx, ly]);
     touchOn(look, "pointermove", 32, [lx - 100, ly - 20]);
     // Held still, then lifted: no coast. The scene follows the finger left
@@ -1008,64 +1078,9 @@ export const tests = {
     await sleep(120);
     touchOn(look, "pointerup", 32, [lx - 100, ly - 20]);
     assert(s.level.pitch > start.pitch, "the drag looks down");
-    const turned = s.level.yaw - start.yaw;
-    // The sprint lock: the stick pushed forward past its rim (1.5 radii)
-    // sprints; let go on the lock target (2.1 radii up) it keeps sprinting
-    // with nobody on it; a touch on the stick ends it.
-    const ring = controls.querySelector(".touch-stick");
-    touchOn(move, "pointerdown", 36, [mx, my]);
-    touchOn(move, "pointermove", 36, [mx, my - 84]);
-    await until((s) => s.level.player.sprint_requested, "past the rim to request the sprint");
-    assert(ring.classList.contains("past"), "the lock target shown past the rim");
-    touchOn(move, "pointermove", 36, [mx, my - 118]);
-    touchOn(move, "pointerup", 36, [mx, my - 118]);
-    s = await until((s) => s.level.player.sprint_locked && s.level.player.sprint, "the lock to sprint hands-free");
-    const sprintAt = s.level.player.position;
-    await sleep(150);
     s = await state();
-    assert(s.level.player.sprint_locked, `the lock held: ${JSON.stringify(s.level.player)}`);
-    for (let i = 0; i < 50 && !ring.classList.contains("locked"); i++) await sleep(20);
-    assert(ring.classList.contains("locked"), "the stick shown locked");
-    touchOn(move, "pointerdown", 37, [mx, my]);
-    touchOn(move, "pointerup", 37, [mx, my]);
-    s = await until((s) => !s.level.player.sprint_locked && !s.level.player.sprint_requested, "a touch to end the lock");
-    s = await until((s) => !s.level.player.moving, "the player to stop after the lock");
-    const sprinted = Math.hypot(s.level.player.position[0] - sprintAt[0], s.level.player.position[2] - sprintAt[2]);
-    for (let i = 0; i < 50 && ring.classList.contains("locked"); i++) await sleep(20);
-    assert(!ring.classList.contains("locked"), "the stick shown unlocked");
-    // Thumbs landing high: the target is drawn closer (1.95 radii, its
-    // drop area just below the safe area's top edge), or at the very top
-    // turned aside; either way on the screen, and the engine locks where
-    // it is drawn.
-    const top = localRect(controls.querySelector(".touch-button.menu"), controls).top;
-    const lockTarget = controls.querySelector(".touch-lock");
-    let id = 50;
-    for (const [y, what] of [
-      [top + 142, "closer"],
-      [top + 4, "aside"],
-    ]) {
-      touchOn(move, "pointerdown", ++id, [mx, y]);
-      const r = localRect(lockTarget, controls);
-      assert(r.top >= top - 1 && r.left >= 0, `the ${what} lock target on the screen: ${JSON.stringify(r)}`);
-      const [tx, ty] = [(r.left + r.right) / 2, (r.top + r.bottom) / 2];
-      const d = Math.hypot(tx - mx, ty - y);
-      touchOn(move, "pointermove", id, [mx + ((tx - mx) / d) * 84, y + ((ty - y) / d) * 84]);
-      await until((s) => s.level.player.sprint_requested, `past the rim toward the ${what} target`);
-      touchOn(move, "pointermove", id, [tx, ty]);
-      touchOn(move, "pointerup", id, [tx, ty]);
-      await until((s) => s.level.player.sprint_locked && s.level.player.sprint, `the ${what} target to lock`);
-      touchOn(move, "pointerdown", ++id, [mx, my]);
-      touchOn(move, "pointerup", id, [mx, my]);
-      await until((s) => !s.level.player.sprint_locked && !s.level.player.moving, "a touch to end the lock and stop");
-    }
-    // A cancelled touch on the target neither locks nor keeps sprinting.
-    touchOn(move, "pointerdown", ++id, [mx, my]);
-    touchOn(move, "pointermove", id, [mx, my - 84]);
-    await until((s) => s.level.player.sprint_requested, "past the rim to request the sprint again");
-    touchOn(move, "pointermove", id, [mx, my - 118]);
-    touchOn(move, "pointercancel", id, [mx, my - 118]);
-    s = await until((s) => !s.level.player.sprint_requested && !s.level.player.moving, "the cancel to end the sprint");
-    assert(!s.level.player.sprint_locked && !ring.classList.contains("locked"), "a cancelled touch locked");
+    assert(!s.level.player.trip && !s.level.player.moving, `a drag moved: ${JSON.stringify(s.level.player)}`);
+    const turned = s.level.yaw - start.yaw;
 
     // A drag begun on Jump jumps and turns too.
     const jump = controls.querySelector(".touch-button.jump");
@@ -1154,7 +1169,7 @@ export const tests = {
     for (let i = 0; i < 50 && controls.hidden; i++) await sleep(20);
     assert(!controls.hidden, "the touch controls show again");
     await quitToTitle();
-    return `moved ${moved.toFixed(2)} m, turned ${turned.toFixed(2)} rad, sprint-locked ${sprinted.toFixed(2)} m`;
+    return `ran ${ran.toFixed(2)} m to a tap ${away.toFixed(2)} m away: it ended ${atEnd.toFixed(2)} m from it, came to rest ${atRest.toFixed(2)} m from it; turned ${turned.toFixed(2)} rad`;
   },
 
   "a gamepad: the left stick runs, the d-pad up switches the torch, the d-pad left opens the PDA, right moves to the next caption, A switches to it and B closes it; on the map the shoulders zoom": async () => {
