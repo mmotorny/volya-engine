@@ -36,6 +36,7 @@ pub mod loading_screen;
 pub mod menu_screens;
 pub mod objects;
 pub mod on_screen_keyboard;
+pub mod onsets;
 pub mod options;
 pub mod particle_drawing;
 pub mod pda_window;

@@ -1070,13 +1070,14 @@ pub async fn render_selftest(check: Option<&str>) -> Result<serde_json::Value, J
 /// inspection, with `frames`, each `{name, width, height, rgba_base64}`,
 /// and the files it kept, each `{name, base64}`), or `{skip}`; or lists
 /// `suite`'s checks. With `user_config` the check starts from it as the
-/// user configuration file.
+/// user configuration file; `references` are the suite's files it reads.
 #[cfg(feature = "test-ops")]
 pub async fn render_game_selftest(
     suite: Option<&str>,
     check: Option<&str>,
     frames: bool,
     user_config: Option<Vec<u8>>,
+    references: Vec<(String, Vec<u8>)>,
 ) -> Result<serde_json::Value, JsValue> {
     use volya_engine::selftest::{self, Context, HeapCount};
     let Some(check) = check else {
@@ -1101,6 +1102,7 @@ pub async fn render_game_selftest(
     if let Some(user) = user_config {
         context = context.with_user_config(user);
     }
+    context = context.with_references(references);
     let outcome = selftest::run(check, &context).await;
     let kept = context.take_frames();
     let files = context.take_files();

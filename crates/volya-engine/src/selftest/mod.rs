@@ -25,6 +25,7 @@ pub use crate::render::selftest::{
 };
 
 mod artefacts;
+mod audio_fidelity;
 mod console;
 mod details;
 mod draw_calls;
@@ -65,6 +66,8 @@ pub struct Context<'a> {
     user_config: Option<Vec<u8>>,
     /// Files kept for the suite ([`Context::keep_file`]).
     files: RefCell<Vec<(String, Vec<u8>)>>,
+    /// [`Context::reference`].
+    references: Vec<(String, Vec<u8>)>,
 }
 
 /// The heap's counts so far, where the platform counts them.
@@ -103,7 +106,22 @@ impl<'a> Context<'a> {
             heap: None,
             user_config: None,
             files: RefCell::default(),
+            references: Vec::new(),
         }
+    }
+
+    /// Gives the checks the suite's references, files by name (the
+    /// audio-fidelity suite's capture of the original).
+    pub fn with_references(mut self, references: Vec<(String, Vec<u8>)>) -> Self {
+        self.references = references;
+        self
+    }
+
+    /// The suite's reference file `name`, if it gave one.
+    pub fn reference(&self, name: &str) -> Option<&[u8]> {
+        (self.references.iter())
+            .find(|(n, _)| n == name)
+            .map(|(_, b)| b.as_slice())
     }
 
     /// Gives the checks a user configuration file to start with (the
@@ -249,6 +267,7 @@ const SUITES: &[(&str, &[Checks])] = &[
     ),
     ("draw-calls", &[draw_calls::CHECKS]),
     ("fidelity", &[fidelity::CHECKS]),
+    ("audio-fidelity", &[audio_fidelity::CHECKS]),
 ];
 
 fn checks() -> impl Iterator<Item = (&'static str, &'static str, Run)> {

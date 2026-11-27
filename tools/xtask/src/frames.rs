@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! `xtask frames-receive`: the original's frames of a Windows capture
+//! `xtask frames-receive`: the original's outputs of a Windows run
 //! (docs/testing.md, The original on Windows) received from the PC over the
-//! local network, into the fidelity suite's references,
-//! `~/Library/Caches/volya-engine/original-frames/fidelity/` (game assets:
-//! they go nowhere else).
+//! local network into one folder of `~/Library/Caches/volya-engine/`
+//! ([`Dest`]): the fidelity suite's frames, the audio-fidelity suite's
+//! captured audio, or the physics harness's results (game assets and
+//! black-box outputs: they go nowhere else).
 //!
 //! A one-shot HTTP receiver on the Mac's LAN address and a port the system
 //! picks, both printed with a random token: every request carries the token
@@ -31,14 +32,51 @@ const TIMEOUT: Duration = Duration::from_secs(3600);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// The largest file accepted (a 1920 × 1080 frame stored uncompressed is
-/// about 6 MB).
+/// about 6 MB; a walk's audio, 16-bit stereo at 48 kHz, about 12 MB a
+/// minute).
 const MAX_FILE: usize = 64 << 20;
 
-/// `xtask frames-receive [ADDRESS]`: on ADDRESS, one of the Mac's own, or
-/// else the one routing to the local network.
-pub fn receive(address: Option<&str>) -> Result {
+/// Where a transfer lands, below `~/Library/Caches/volya-engine/`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Dest {
+    /// `fidelity` (the default): the fidelity suite's references
+    /// (`//tests/fidelity:frames`).
+    Fidelity,
+    /// `audio`: the audio-fidelity suite's (`//tests/fidelity:audio`).
+    Audio,
+    /// `ode-harness`: the physics harness's results.
+    OdeHarness,
+}
+
+impl Dest {
+    /// The `--into` value's destination; `None` for any other value.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "fidelity" => Some(Self::Fidelity),
+            "audio" => Some(Self::Audio),
+            "ode-harness" => Some(Self::OdeHarness),
+            _ => None,
+        }
+    }
+
+    /// The folder below the cache.
+    pub fn folder(self) -> &'static str {
+        match self {
+            Self::Fidelity => "original-frames/fidelity",
+            Self::Audio => "original-audio/audio-fidelity",
+            Self::OdeHarness => "ode-harness",
+        }
+    }
+}
+
+/// `xtask frames-receive [--into DEST] [ADDRESS]`: into `into`'s folder,
+/// on ADDRESS, one of the Mac's own, or else the one routing to the local
+/// network.
+pub fn receive(into: Dest, address: Option<&str>) -> Result {
     let home = std::env::var_os("HOME").ok_or("HOME is unset")?;
-    let dest = PathBuf::from(home).join("Library/Caches/volya-engine/original-frames/fidelity");
+    let dest = PathBuf::from(home)
+        .join("Library/Caches/volya-engine")
+        .join(into.folder());
     fs::create_dir_all(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
     let address = match address {
         Some(a) => a.parse().map_err(|e| format!("{a}: {e}"))?,
@@ -50,7 +88,7 @@ pub fn receive(address: Option<&str>) -> Result {
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let token = token()?;
     step(&format!(
-        "Receiving a capture's fidelity files into {}",
+        "Receiving a capture's files into {}",
         dest.display()
     ));
     println!("address {address}\nport {port}\ntoken {token}");
@@ -271,6 +309,20 @@ fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn destinations() {
+        assert_eq!(Dest::parse("fidelity"), Some(Dest::Fidelity));
+        assert_eq!(
+            Dest::parse("audio").map(Dest::folder),
+            Some("original-audio/audio-fidelity")
+        );
+        assert_eq!(
+            Dest::parse("ode-harness").map(Dest::folder),
+            Some("ode-harness")
+        );
+        assert_eq!(Dest::parse("frames"), None);
+    }
 
     #[test]
     fn paths_stay_below_the_folder() {

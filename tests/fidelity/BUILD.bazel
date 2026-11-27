@@ -3,9 +3,13 @@
 
 load("//build:checks.bzl", "volya_checks")
 
-# The fidelity suite's views, the engine's self-test's (`include!`).
+# The fidelity suite's views and the audio-fidelity suite's walks, the
+# engine's self-test's and the Windows capture's plan's (`include!`).
 exports_files(
-    ["views.rs"],
+    [
+        "views.rs",
+        "walks.rs",
+    ],
     visibility = ["//visibility:public"],
 )
 
@@ -15,6 +19,15 @@ exports_files(
 alias(
     name = "frames",
     actual = "@original_frames//:frames",
+    visibility = ["//tests/browser:__pkg__"],
+)
+
+# The original's audio of the walks (game assets, in the local cache only,
+# build/original_frames.bzl), what the audio-fidelity suite is served:
+# `audio-fidelity/<walk>.wav` and `<walk>.frames.txt`.
+alias(
+    name = "audio",
+    actual = "@original_audio//:files",
     visibility = ["//tests/browser:__pkg__"],
 )
 

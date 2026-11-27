@@ -13,8 +13,11 @@ exports_files(["Cargo.toml"])
 volya_binary(
     name = "xtask",
     srcs = glob(["src/**/*.rs"]),
-    # The fidelity suite's views (src/wincapture.rs).
-    compile_data = ["//tests/fidelity:views.rs"],
+    # The fidelity suites' views and walks (src/wincapture.rs).
+    compile_data = [
+        "//tests/fidelity:views.rs",
+        "//tests/fidelity:walks.rs",
+    ],
     crate_root = "src/main.rs",
     env = {
         "VOLYA_GOG_INSTALLER": GOG_INSTALLER,
@@ -47,8 +50,11 @@ volya_binary(
         "src/wincapture.rs",
         "src/wincapture_action.rs",
     ],
-    # The fidelity suite's views (src/wincapture.rs).
-    compile_data = ["//tests/fidelity:views.rs"],
+    # The fidelity suites' views and walks (src/wincapture.rs).
+    compile_data = [
+        "//tests/fidelity:views.rs",
+        "//tests/fidelity:walks.rs",
+    ],
     crate_root = "src/wincapture_action.rs",
 )
 

@@ -185,6 +185,11 @@ impl PlayerFootsteps {
         &self.pairs
     }
 
+    /// The index of the player's own material.
+    pub fn own(&self) -> u32 {
+        self.own
+    }
+
     pub fn cycles(&self) -> &Cycles {
         &self.cycles
     }

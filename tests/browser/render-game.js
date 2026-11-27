@@ -76,9 +76,10 @@ let imported = false;
  * (by name, bytes) before any frame is compared and gives `{ note,
  * failure }`: a note that joins the test's, and a failure (or null) that
  * fails it once its frames are compared; it throws when they make the run
- * invalid, before any frame.
+ * invalid, before any frame. `kept(check, files)` sees them always, a
+ * skipped check's too.
  */
-export async function gameChecks(suite, compare = null, { args = null, verify = null } = {}) {
+export async function gameChecks(suite, compare = null, { args = null, verify = null, kept = null } = {}) {
   const checks = await volya.call("render_game_selftest", { suite });
   const tests = {
     "imports the game": async () => {
@@ -106,10 +107,9 @@ export async function gameChecks(suite, compare = null, { args = null, verify = 
       const extra = args ? await args(check) : {};
       const result = await volya.call("render_game_selftest", { ...extra, check, frames });
       let verdict = { note: "", failure: null };
-      if (verify && !result.skip) {
-        const files = Object.fromEntries((result.files ?? []).map((f) => [f.name, bytesOf(f.base64)]));
-        verdict = await verify(check, files);
-      }
+      const files = Object.fromEntries((result.files ?? []).map((f) => [f.name, bytesOf(f.base64)]));
+      if (kept) await kept(check, files);
+      if (verify && !result.skip) verdict = await verify(check, files);
       const compared = [];
       const differing = [];
       const notes = verdict.note ? [verdict.note] : [];

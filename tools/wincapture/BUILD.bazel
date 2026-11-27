@@ -33,12 +33,14 @@ wincapture_binary(
     sdk = ["@dynamorio//:client_sdk"],
 )
 
-# The driver (capture.c).
+# The driver (capture.c) and its audio recording (loopback.c).
 wincapture_binary(
     name = "volyacapture",
     srcs = [
         "capture.c",
         "frameclock.h",
+        "loopback.c",
+        "loopback.h",
         "redact.h",
     ],
     kind = "exe",

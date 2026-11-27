@@ -241,11 +241,21 @@ gog_installer = use_repo_rule("//build:gog.bzl", "gog_installer")
 
 gog_installer(name = "gog_installer")
 
-# The original's reference frames, from the local cache
+# The original's reference frames and captured audio, from the local cache
 # (build/original_frames.bzl).
-original_frames = use_repo_rule("//build:original_frames.bzl", "original_frames")
+original_files = use_repo_rule("//build:original_frames.bzl", "original_files")
 
-original_frames(name = "original_frames")
+original_files(
+    name = "original_frames",
+    folder = "original-frames",
+    suite = "fidelity",
+)
+
+original_files(
+    name = "original_audio",
+    folder = "original-audio",
+    suite = "audio-fidelity",
+)
 
 gog = use_extension("//build:gog.bzl", "gog")
 use_repo(gog, "gog_extractor", "gog_game", "gog_original")

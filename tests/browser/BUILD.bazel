@@ -60,6 +60,16 @@ browser_suite(
     timeout = WHOLE_GAME,
 )
 
+# Our audio of the walks against the original's captured audio (Chrome
+# only, docs/testing.md).
+browser_suite(
+    references = "//tests/fidelity:audio",
+    suite = "audio-fidelity",
+    tags = MANUAL,
+    target = "chrome",
+    timeout = WHOLE_GAME,
+)
+
 # Our replay of the Direct3D 9 probes' scenes against their results on real
 # hardware (Chrome only, docs/testing.md).
 browser_suite(
@@ -105,6 +115,7 @@ suite_group(
     tests = [
         ":audio_chrome",
         ":audio_load_chrome",
+        ":audio_fidelity_chrome",
         ":d3d9probes_chrome",
         ":draw_calls_chrome",
         ":fidelity_chrome",

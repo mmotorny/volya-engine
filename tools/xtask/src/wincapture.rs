@@ -21,8 +21,12 @@ mod list {
         env!("CARGO_MANIFEST_DIR"),
         "/../../tests/fidelity/views.rs"
     ));
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fidelity/walks.rs"
+    ));
 }
-use list::{Camera, FRAME_MS, HEIGHT, Place, VIEWS, WIDTH};
+use list::{Camera, FRAME_MS, HEIGHT, PREROLL, Place, VIEWS, WALKS, WIDTH};
 
 /// The runner zip's Bazel target and the release tags' prefix.
 pub const RUNNER: &str = "//tools/wincapture:runner";
@@ -94,7 +98,7 @@ pub fn build(clang: &Path, out: &Path, kind: &str, sources: &[&str]) -> Result {
     match kind {
         // Exports undecorated, as winmm's.
         "dll" => command.args(["-shared", "-Wl,--kill-at", "-luser32"]),
-        "exe" => command.args(["-lbcrypt", "-lwinmm", "-luser32"]),
+        "exe" => command.args(["-lbcrypt", "-lwinmm", "-luser32", "-lole32"]),
         // No C runtime: DynamoRIO loads a client privately and its own API
         // replaces the runtime's (counter.c).
         "client" => {
@@ -119,7 +123,10 @@ pub fn build(clang: &Path, out: &Path, kind: &str, sources: &[&str]) -> Result {
 /// settings (`user_ltx`'s, applied by the driver to the PC's own shipped
 /// `user.ltx`, a game file) and the views with their frames and camera
 /// tracks (the keys' floats as hex words, so the driver writes the bytes
-/// `track` would).
+/// `track` would); then the walks' configuration file (`audio_ltx` of no
+/// lines) and the walks (tests/fidelity/walks.rs): `walk NAME START TAIL
+/// PREROLL SEGMENT...`, each segment `KEYS:FRAMES`, the keys' scan codes in
+/// hex joined by `+` (`e0__` an extended key).
 pub fn plan() -> String {
     let mut p = String::new();
     let _ = writeln!(
@@ -158,6 +165,31 @@ pub fn plan() -> String {
                 }
             },
         }
+    }
+    for line in String::from_utf8_lossy(&list::audio_ltx(&[])).lines() {
+        let _ = writeln!(p, "audio_ltx {line}");
+    }
+    for walk in WALKS {
+        let segments: Vec<String> = walk
+            .segments
+            .iter()
+            .map(|s| {
+                let keys: Vec<String> = s
+                    .keys
+                    .iter()
+                    .map(|k| format!("{:x}", k.scan_code()))
+                    .collect();
+                format!("{}:{}", keys.join("+"), s.frames)
+            })
+            .collect();
+        let _ = writeln!(
+            p,
+            "walk {} {} {} {PREROLL} {}",
+            walk.name,
+            walk.start,
+            walk.tail,
+            segments.join(" ")
+        );
     }
     p
 }
@@ -243,6 +275,8 @@ mod tests {
             let line = format!("\nview {} ", view.name);
             assert!(p.contains(&line), "{line}");
         }
+        assert!(p.contains("\naudio_ltx snd_volume_eff 1.\n"));
+        assert!(p.contains("\nwalk bunker-exit 750 50 25 e04b:23 11:66 e04d:12 "));
         // A track: 16 words after its frame and key count; the last is 1.0.
         let track = p.lines().find(|l| l.contains(" track ")).unwrap();
         let words: Vec<&str> = track.split(' ').collect();

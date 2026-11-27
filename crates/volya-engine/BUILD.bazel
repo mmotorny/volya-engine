@@ -23,8 +23,12 @@ DEPS = [
 
 volya_library(
     name = "volya-engine",
-    # The fidelity suite's views (src/selftest/fidelity.rs).
-    compile_data = ["//tests/fidelity:views.rs"],
+    # The fidelity suites' views and walks (src/selftest/fidelity.rs,
+    # src/selftest/audio_fidelity.rs).
+    compile_data = [
+        "//tests/fidelity:views.rs",
+        "//tests/fidelity:walks.rs",
+    ],
     # The render self-test, in the test app (//build:test_ops).
     crate_features = select({
         "//build:with_test_ops": ["render-selftest"],

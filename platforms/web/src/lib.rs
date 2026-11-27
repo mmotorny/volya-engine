@@ -758,7 +758,9 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         "physics_scenarios" => to_json(&volya_engine::core::physics::ode::harness::scenarios()),
         #[cfg(feature = "test-ops")]
         "physics_scenario" => to_json(&physics_scenario(
-            args.get("index").and_then(|v| v.as_u64()).unwrap_or(u64::MAX),
+            args.get("index")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(u64::MAX),
             text("native_base64"),
         )?),
         "game_status" => to_json(&game::status().await?),
@@ -854,10 +856,11 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
             to_json(&gpu::render_selftest(args.get("check").and_then(|v| v.as_str())).await?)
         }
         // `{suite}` lists that browser suite's render checks on game data;
-        // `{check, frames, user_config}` runs one, with the frames it keeps
-        // when `frames` (`{note, frames, files}` or `{skip}`), starting
-        // from `user_config` (bytes) as the user configuration file where
-        // given.
+        // `{check, frames, user_config, references}` runs one, with the
+        // frames it keeps when `frames` (`{note, frames, files}` or
+        // `{skip}`), starting from `user_config` (bytes) as the user
+        // configuration file where given, reading `references` (file names
+        // to base64 bytes) as the suite's files.
         #[cfg(feature = "test-ops")]
         "render_game_selftest" => {
             let frames = args
@@ -874,6 +877,16 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
                             .filter_map(|b| b.as_u64().map(|b| b as u8))
                             .collect()
                     }),
+                    args.get("references")
+                        .and_then(|v| v.as_object())
+                        .map(|m| {
+                            m.iter()
+                                .filter_map(|(name, v)| {
+                                    Some((name.clone(), from_base64(v.as_str()?)?))
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
                 )
                 .await?,
             )

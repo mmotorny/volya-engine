@@ -56,10 +56,13 @@ Tasks:
               The same for the physics library comparison (tests/odeharness).
   wincapture release
               The same for the original's capture on Windows (tools/wincapture).
-  frames-receive [ADDRESS]
-              Receive a Windows capture's fidelity files from the PC over the
-              local network into the fidelity suite's references; prints the
-              address, port and token the PC sends them with.
+  frames-receive [--into fidelity|audio|ode-harness] [ADDRESS]
+              Receive a Windows run's files from the PC over the local
+              network into ~/Library/Caches/volya-engine/: the fidelity
+              suite's frames (the default), the audio-fidelity suite's audio
+              (original-audio/), or the physics harness's results
+              (ode-harness/); prints the address, port and token the PC sends
+              them with.
   wincapture plan
               Print that capture's plan (from tests/fidelity/views.rs).
   update      Move to the latest Rust, crates, Bazel, its modules and the
@@ -92,8 +95,7 @@ fn main() -> ExitCode {
         ["gc"] => bazel::gc(),
         ["wincapture", "release"] => bazel::build_output(&root(), wincapture::RUNNER)
             .and_then(|zip| wincapture::release(&zip)),
-        ["frames-receive"] => frames::receive(None),
-        ["frames-receive", address] => frames::receive(Some(address)),
+        ["frames-receive", rest @ ..] => frames_receive(rest),
         ["wincapture", "plan"] => {
             print!("{}", wincapture::plan());
             Ok(())
@@ -114,6 +116,23 @@ fn main() -> ExitCode {
             eprintln!("\nxtask: {error}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// `frames-receive [--into DEST] [ADDRESS]`.
+fn frames_receive(args: &[&str]) -> Result {
+    let (into, rest) = match args {
+        ["--into", dest, rest @ ..] => (
+            frames::Dest::parse(dest)
+                .ok_or_else(|| format!("--into {dest}: expected fidelity, audio or ode-harness"))?,
+            rest,
+        ),
+        rest => (frames::Dest::Fidelity, rest),
+    };
+    match rest {
+        [] => frames::receive(into, None),
+        [address] => frames::receive(into, Some(address)),
+        _ => Err(format!("frames-receive: unknown arguments {rest:?}")),
     }
 }
 

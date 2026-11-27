@@ -388,12 +388,16 @@ fn plain_name(s: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
 }
 
-/// `<suite>/<name>.png` (a frame) or `<suite>/<name>.ltx` (a configuration
-/// file, the fidelity suite's), each of [`plain_name`]'s characters, as the
-/// suite's directory and the file's name.
+/// `<suite>/<name>.png` (a frame), `<suite>/<name>.ltx` (a configuration
+/// file, the fidelity suite's), or `<suite>/<name>.wav` or `.txt` (a
+/// recording and its tables, the audio-fidelity suite's), each of
+/// [`plain_name`]'s characters, as the suite's directory and the file's
+/// name.
 fn dump_path(rest: &str) -> Option<(&str, &str)> {
     let (suite, name) = rest.split_once('/')?;
-    let kind = name.ends_with(".png") || name.ends_with(".ltx");
+    let kind = [".png", ".ltx", ".wav", ".txt"]
+        .iter()
+        .any(|e| name.ends_with(e));
     (plain_name(suite) && plain_name(name) && kind).then_some((suite, name))
 }
 
@@ -727,7 +731,7 @@ mod tests {
             "..%2Fx.png",
             "render/../x.png",
             "render/.x.png",
-            "render/x.txt",
+            "render/x.json",
             "x.png",
         ] {
             assert!(post(bad).starts_with("HTTP/1.1 400 "), "{bad}");

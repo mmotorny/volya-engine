@@ -20,6 +20,12 @@
  *   volyacapture selftest [--work DIR]
  *       drrun and the counter client on this machine, with counterprobe.exe
  *       of ours in place of the game: natively, then under drrun.
+ *   volyacapture audio --audio-device NAME [--runs N] [--game DIR] [--work DIR]
+ *       every walk of the audio-fidelity suite with sound on, its audio
+ *       output recorded by loopback (loopback.c) from the output device
+ *       NAME, made the default for the run; N runs (default 1).
+ *   volyacapture audio-devices
+ *       lists the audio output devices.
  *
  * Its plan, plan.txt beside it, comes from tests/fidelity/views.rs
  * (`xtask wincapture plan`): the views, their frames, the configuration
@@ -47,6 +53,7 @@
 #include <string.h>
 
 #include "frameclock.h"
+#include "loopback.h"
 #include "redact.h"
 
 /* --- Constants of the procedure (views.rs's, in frames) ----------------- */
@@ -95,6 +102,12 @@
 #define FRONT_CHECK_MS 100
 #define ATTACH_TIMEOUT 60
 #define QUIT_WAIT 60
+
+/* Real milliseconds each frame of a walk takes at least (its recording's
+ * frames), so a sound the game starts in a frame's update reaches the
+ * output before the next frame is let run (shared-mode output latency is
+ * tens of ms: believed) and each onset falls in its own frame's time. */
+#define PACE_MS 200
 
 /* Rows of the intro's letterbox looked at, top and bottom. */
 #define BAR_ROWS 4
@@ -430,13 +443,31 @@ struct view {
     size_t track_size;
 };
 
+/* A walk (tests/fidelity/walks.rs): keys held for frames, one segment
+ * after the other, from frame `start` of play. */
+struct segment {
+    WORD keys[4];
+    int nkeys;
+    int64_t frames;
+};
+
+struct walk {
+    char name[64];
+    int64_t start, tail, preroll;
+    struct segment segments[64];
+    int nsegments;
+};
+
 static struct {
     int64_t frame_ms, spin, epoch, sleep_advances, start_quantum_ms, first_frame_ms,
         prestart_sleeps;
     uint32_t width, height;
-    struct buf ltx; /* the views' configuration file, CR LF lines */
+    struct buf ltx;       /* the views' configuration file, CR LF lines */
+    struct buf audio_ltx; /* the walks' */
     struct view views[32];
     int nviews;
+    struct walk walks[8];
+    int nwalks;
 } plan;
 
 static int hex_word(const char *s, uint32_t *v) {
@@ -484,6 +515,43 @@ static int read_plan(const char *path) {
                 put(&plan.ltx, rest, strlen(rest));
             }
             put(&plan.ltx, "\r\n", 2);
+        } else if (!strcmp(word, "audio_ltx")) {
+            char *rest = strtok(NULL, "");
+            if (rest) {
+                put(&plan.audio_ltx, rest, strlen(rest));
+            }
+            put(&plan.audio_ltx, "\r\n", 2);
+        } else if (!strcmp(word, "walk") && plan.nwalks < 8) {
+            /* walk NAME START TAIL PREROLL KEYS:FRAMES... */
+            struct walk *w = &plan.walks[plan.nwalks++];
+            char *name = strtok(NULL, " "), *start = strtok(NULL, " "), *tail = strtok(NULL, " "),
+                 *preroll = strtok(NULL, " ");
+            if (!name || !start || !tail || !preroll) {
+                break;
+            }
+            snprintf(w->name, sizeof w->name, "%s", name);
+            w->start = atoll(start);
+            w->tail = atoll(tail);
+            w->preroll = atoll(preroll);
+            char *seg;
+            while ((seg = strtok(NULL, " ")) && w->nsegments < 64) {
+                struct segment *g = &w->segments[w->nsegments++];
+                char *colon = strchr(seg, ':');
+                if (!colon) {
+                    fclose(f);
+                    return fail("plan: %s: segment %s has no frames", name, seg);
+                }
+                *colon = 0;
+                g->frames = atoll(colon + 1);
+                for (char *k = seg; *k && g->nkeys < 4;) {
+                    char *end;
+                    g->keys[g->nkeys++] = (WORD)strtoul(k, &end, 16);
+                    k = *end == '+' ? end + 1 : end;
+                    if (end == k && *k) {
+                        break;
+                    }
+                }
+            }
         } else if (!strcmp(word, "view") && plan.nviews < 32) {
             struct view *v = &plan.views[plan.nviews++];
             char *name = strtok(NULL, " "), *place = strtok(NULL, " "), *frame = strtok(NULL, " ");
@@ -685,6 +753,8 @@ struct run {
     FILE *events;
     FILE *hashes;
     ULONGLONG front_checked; /* when keep_in_front last looked (real ms) */
+    int audio;               /* the walks' run, its audio recorded by `loopback` */
+    struct loopback *loopback;
 };
 
 static int ended(struct run *r) {
@@ -843,8 +913,10 @@ static int send_key(struct run *r, WORD scan, int up) {
     }
     INPUT in = {0};
     in.type = INPUT_KEYBOARD;
-    in.ki.wScan = scan;
-    in.ki.dwFlags = KEYEVENTF_SCANCODE | (up ? KEYEVENTF_KEYUP : 0);
+    /* 0xe0__: an extended key (the arrows). */
+    in.ki.wScan = scan & 0xff;
+    in.ki.dwFlags = KEYEVENTF_SCANCODE | (up ? KEYEVENTF_KEYUP : 0) |
+                    ((scan >> 8) == 0xe0 ? KEYEVENTF_EXTENDEDKEY : 0);
     if (SendInput(1, &in, sizeof in) != 1) {
         return fail("SendInput failed (%lu)", GetLastError());
     }
@@ -1264,9 +1336,14 @@ static int quit(struct run *r, ULONGLONG config_written) {
     if (m.QuadPart <= config_written) {
         return fail("the game did not rewrite its configuration file");
     }
-    for (int i = 0; i < plan.nviews; i++) {
+    int n = r->audio ? plan.nwalks : plan.nviews;
+    for (int i = 0; i < n; i++) {
         char name[128];
-        snprintf(name, sizeof name, "fidelity\\%s.saved.ltx", plan.views[i].name);
+        if (r->audio) {
+            snprintf(name, sizeof name, "audio\\%s.saved.ltx", plan.walks[i].name);
+        } else {
+            snprintf(name, sizeof name, "fidelity\\%s.saved.ltx", plan.views[i].name);
+        }
         join(dest, sizeof dest, r->out, name);
         if (!CopyFileA(path, dest, FALSE)) {
             return fail("cannot copy %s", path);
@@ -1275,10 +1352,181 @@ static int quit(struct run *r, ULONGLONG config_written) {
     return 1;
 }
 
+/* --- The walks ------------------------------------------------------------- */
+
+/* The keys walk `w` holds at its frame `k` (0 its first), none past its
+ * segments. */
+static const struct segment *segment_at(const struct walk *w, int64_t k) {
+    for (int i = 0; i < w->nsegments && k >= 0; i++) {
+        if (k < w->segments[i].frames) {
+            return &w->segments[i];
+        }
+        k -= w->segments[i].frames;
+    }
+    return NULL;
+}
+
+static int64_t walk_frames(const struct walk *w) {
+    int64_t n = w->tail;
+    for (int i = 0; i < w->nsegments; i++) {
+        n += w->segments[i].frames;
+    }
+    return n;
+}
+
+static int holds(const struct segment *g, WORD key) {
+    for (int i = 0; g && i < g->nkeys; i++) {
+        if (g->keys[i] == key) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Walk `w` from the New Game's frame of play `play` (its frame 1): the
+ * audio recorded from `preroll` frames before its first, every frame let
+ * run at least PACE_MS of real time; its keys pressed and released while
+ * the frame before the one that reads them is held. Keeps audio\<walk>.wav
+ * and audio\<walk>.frames.txt: each frame of play with the recording's
+ * samples at which the game was let run to it and at which it was
+ * presented (the same performance counter as the packets'). */
+static int walk_audio(struct run *r, int64_t play, const struct walk *w) {
+    /* Frame n of play is the game's frame play + n - 1. */
+    int64_t first = play + w->start - 1, from = first - w->preroll, total = walk_frames(w);
+    if (from - 1 <= r->frame) {
+        return fail("%s: its recording starts at frame %lld, the game is at %lld", w->name,
+                    (long long)from, (long long)r->frame);
+    }
+    if (!advance(r, from - 1, 0) || !loopback_start(r->loopback)) {
+        return 0;
+    }
+    char what[160];
+    snprintf(what, sizeof what, "%s: recording, its keys from frame %lld of play", w->name,
+             (long long)w->start);
+    event(r, what);
+    int64_t rows = first + total - from;
+    int64_t (*times)[3] = calloc((size_t)rows, sizeof *times);
+    const struct segment *held = NULL;
+    int ok = 1;
+    for (int64_t g = from; ok && g < first + total; g++) {
+        const struct segment *want = segment_at(w, g - first);
+        int changed = 0;
+        for (int i = 0; ok && held && i < held->nkeys; i++) {
+            if (!holds(want, held->keys[i])) {
+                ok = send_key(r, held->keys[i], 1);
+                changed = 1;
+            }
+        }
+        for (int i = 0; ok && want && i < want->nkeys; i++) {
+            if (!holds(held, want->keys[i])) {
+                ok = send_key(r, want->keys[i], 0);
+                changed = 1;
+            }
+        }
+        held = want;
+        if (!ok) {
+            break;
+        }
+        if (changed) {
+            Sleep(INPUT_SETTLE_MS);
+        }
+        int64_t released = loopback_now();
+        ok = advance(r, g, 0);
+        int64_t presented = loopback_now();
+        times[g - from][0] = g - play + 1;
+        times[g - from][1] = released;
+        times[g - from][2] = presented;
+        while (ok && loopback_now() < released + (int64_t)PACE_MS * 10000) {
+            Sleep(1);
+        }
+    }
+    loopback_stop(r->loopback);
+    loopback_report(r->loopback, say);
+    if (!ok) {
+        free(times);
+        return 0;
+    }
+    char path[MAX_PATH], name[160];
+    snprintf(name, sizeof name, "audio\\%s.wav", w->name);
+    join(path, sizeof path, r->out, name);
+    if (!loopback_write(r->loopback, path)) {
+        free(times);
+        return fail("cannot write %s", path);
+    }
+    snprintf(name, sizeof name, "audio\\%s.frames.txt", w->name);
+    join(path, sizeof path, r->out, name);
+    FILE *f = fopen(path, "w");
+    if (!f) {
+        free(times);
+        return fail("cannot write %s", path);
+    }
+    fprintf(f,
+            "volya-audio-frames 1\nwalk %s\nrate %u\nchannels %u\nframe_ms %lld\npace_ms %d\n"
+            "start %lld\npreroll %lld\nframes %lld\n"
+            "# frame of play, the sample it was let run at, the sample it was presented at\n",
+            w->name, loopback_rate(r->loopback), loopback_channels(r->loopback),
+            (long long)plan.frame_ms, PACE_MS, (long long)w->start, (long long)w->preroll,
+            (long long)total);
+    for (int64_t i = 0; i < rows; i++) {
+        fprintf(f, "%lld %lld %lld\n", (long long)times[i][0],
+                (long long)loopback_sample_at(r->loopback, times[i][1]),
+                (long long)loopback_sample_at(r->loopback, times[i][2]));
+    }
+    free(times);
+    if (fclose(f) != 0) {
+        return fail("cannot write %s", path);
+    }
+    snprintf(what, sizeof what, "%s: recorded %lld frames", w->name, (long long)rows);
+    event(r, what);
+    return 1;
+}
+
+/* A New Game started from the title menu's console and its intro skipped:
+ * the first frame of play (0 on failure). */
+static int64_t start_play(struct run *r) {
+    const char *start[] = {"start server(all/single/alife/new) client(localhost)", "main_menu off"};
+    if (!console(r, start, 2) || !until(r, LOAD_EVERY, LOAD_TIMEOUT, "the intro", intro_shows)) {
+        return 0;
+    }
+    for (int k = 0; k < INTRO_SKIPS; k++) {
+        if (!press(r, SC_ESCAPE, 0)) {
+            return 0;
+        }
+        if (until(r, 1, INTRO_SKIP_RETRY, "play", not_letterboxed)) {
+            return r->frame;
+        } else if (ended(r)) {
+            return 0;
+        }
+    }
+    fail("the intro was not skipped");
+    return 0;
+}
+
+/* The walks in one run: a New Game from the title menu, each walk at its
+ * frames of play. */
+static int steer_audio(struct run *r, ULONGLONG config_written) {
+    if (!skip_logos(r)) {
+        return 0;
+    }
+    int64_t play = start_play(r);
+    if (!play) {
+        return 0;
+    }
+    for (int i = 0; i < plan.nwalks; i++) {
+        if (!walk_audio(r, play, &plan.walks[i])) {
+            return 0;
+        }
+    }
+    return quit(r, config_written);
+}
+
 /* The views in one run, every step at a fixed frame (counted from the title
  * menu's first frame, then from the first frame of play); `full` 0 only the
  * title menu's. */
 static int steer(struct run *r, int full, ULONGLONG config_written) {
+    if (r->audio) {
+        return steer_audio(r, config_written);
+    }
     int64_t menu = skip_logos(r);
     if (!menu) {
         return 0;
@@ -1328,23 +1576,9 @@ static int steer(struct run *r, int full, ULONGLONG config_written) {
         }
         free_from = plays[i]->frame + AFTER;
     }
-    const char *start[] = {"start server(all/single/alife/new) client(localhost)", "main_menu off"};
-    if (!console(r, start, 2) || !until(r, LOAD_EVERY, LOAD_TIMEOUT, "the intro", intro_shows)) {
-        return 0;
-    }
-    int64_t play = 0;
-    for (int k = 0; k < INTRO_SKIPS && !play; k++) {
-        if (!press(r, SC_ESCAPE, 0)) {
-            return 0;
-        }
-        if (until(r, 1, INTRO_SKIP_RETRY, "play", not_letterboxed)) {
-            play = r->frame;
-        } else if (ended(r)) {
-            return 0;
-        }
-    }
+    int64_t play = start_play(r);
     if (!play) {
-        return fail("the intro was not skipped");
+        return 0;
     }
     /* Frame n of play is the game's frame play + n − 1. */
     for (int i = 0; i < n; i++) {
@@ -1407,16 +1641,25 @@ static int write_userdata(struct run *r, ULONGLONG *written) {
     if (!make_dirs(path)) {
         return fail("cannot make %s", path);
     }
-    struct buf steer = plan.ltx;
+    struct buf steer = r->audio ? plan.audio_ltx : plan.ltx;
     char hex[65];
     sha256_hex(steer.p, steer.n, hex);
-    say("The views' configuration file: %zu bytes, SHA-256 %s", steer.n, hex);
+    say("The %s configuration file: %zu bytes, SHA-256 %s", r->audio ? "walks'" : "views'",
+        steer.n, hex);
     fprintf(r->hashes, "%s %zu steer.ltx\n", hex, steer.n);
     join(path, sizeof path, r->userdata, "steer.ltx");
     if (!write_file(path, steer.p, steer.n)) {
         return 0;
     }
-    for (int i = 0; i < plan.nviews; i++) {
+    for (int i = 0; r->audio && i < plan.nwalks; i++) {
+        char name[128];
+        snprintf(name, sizeof name, "audio\\%s.user.ltx", plan.walks[i].name);
+        join(path, sizeof path, r->out, name);
+        if (!write_file(path, steer.p, steer.n)) {
+            return 0;
+        }
+    }
+    for (int i = 0; !r->audio && i < plan.nviews; i++) {
         char name[128];
         snprintf(name, sizeof name, "fidelity\\%s.user.ltx", plan.views[i].name);
         join(path, sizeof path, r->out, name);
@@ -1549,13 +1792,15 @@ static int detach(struct run *r, const char *exe_dir, const char *work) {
 /* One run of the game: `mode` "check" or "full", its outputs in
  * work\runs\<mode>-<n>\. */
 static int run_once(const char *exe_dir, const char *game, const char *work, const char *mode,
-                    int index) {
+                    int index, struct loopback *loopback) {
     struct run r = {0};
+    r.audio = loopback != NULL;
+    r.loopback = loopback;
     char copy[MAX_PATH], bin[MAX_PATH], path[MAX_PATH], from[MAX_PATH];
     snprintf(r.dir, sizeof r.dir, "%s\\runs\\%s-%d", work, mode, index);
     remove_tree(r.dir);
     snprintf(r.out, sizeof r.out, "%s", r.dir);
-    join(path, sizeof path, r.dir, "fidelity\\display");
+    join(path, sizeof path, r.dir, r.audio ? "audio" : "fidelity\\display");
     if (!make_dirs(path)) {
         return fail("cannot make %s", path);
     }
@@ -1649,8 +1894,11 @@ static int run_once(const char *exe_dir, const char *game, const char *work, con
      * starts it in its own working folder. DynamoRIO shows no message
      * boxes and writes its errors to drrun's output; drrun warns not of
      * the parts of DynamoRIO the runner leaves out (64-bit, debug). */
+    /* The walks with sound (their configuration file's volumes), the
+     * views without. */
     const char *game_command =
-        "XR_3DA.exe --skipmemcheck -silent_error_mode -nosound -ss_tga -ltx steer.ltx";
+        r.audio ? "XR_3DA.exe --skipmemcheck -silent_error_mode -ss_tga -ltx steer.ltx"
+                : "XR_3DA.exe --skipmemcheck -silent_error_mode -nosound -ss_tga -ltx steer.ltx";
     char command[2048];
     snprintf(command, sizeof command,
              "\"%s\" -quiet -msgbox_mask 0 -stderr_mask 12 -c \"%s\" \"%s\" -- %s", drrun, client,
@@ -1739,6 +1987,9 @@ static int run_once(const char *exe_dir, const char *game, const char *work, con
         ok = detach(&r, exe_dir, work);
     }
     ok = ok && steer(&r, !strcmp(mode, "full"), written);
+    if (r.audio) {
+        loopback_stop(r.loopback);
+    }
     double seconds = (GetTickCount64() - started_ms) / 1000.0;
     if (!ok) {
         store(&r.clock->hold, 0);
@@ -2103,7 +2354,8 @@ int main(int argc, char **argv) {
         if (n == 0 || n >= sizeof temp) snprintf(temp, sizeof temp, "C:\\Windows\\Temp\\");
         snprintf(work, sizeof work, "%svolya-engine-capture", temp);
     }
-    int runs = 2;
+    int runs = -1;
+    char audio_device[256] = "";
     for (int i = 2; i < argc; i++) {
         if (!strcmp(argv[i], "--game") && i + 1 < argc) {
             snprintf(game, sizeof game, "%s", argv[++i]);
@@ -2111,14 +2363,27 @@ int main(int argc, char **argv) {
             snprintf(work, sizeof work, "%s", argv[++i]);
         } else if (!strcmp(argv[i], "--runs") && i + 1 < argc) {
             runs = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--audio-device") && i + 1 < argc) {
+            snprintf(audio_device, sizeof audio_device, "%s", argv[++i]);
         } else {
             mode = "";
         }
     }
-    if ((strcmp(mode, "check") && strcmp(mode, "full") && strcmp(mode, "selftest")) ||
-        runs < 1) {
+    int audio = !strcmp(mode, "audio");
+    if (runs < 0) {
+        /* The walks' audio is not compared run with run: one by default. */
+        runs = audio ? 1 : 2;
+    }
+    if (!strcmp(mode, "audio-devices")) {
+        return loopback_list(say) ? 0 : 1;
+    }
+    if ((strcmp(mode, "check") && strcmp(mode, "full") && strcmp(mode, "selftest") && !audio) ||
+        runs < 1 || (audio && !audio_device[0])) {
         fprintf(stderr, "usage: volyacapture check|full|selftest [--runs N] [--game DIR] "
-                        "[--work DIR]\n");
+                        "[--work DIR]\n"
+                        "       volyacapture audio --audio-device NAME [--runs N] [--game DIR] "
+                        "[--work DIR]\n"
+                        "       volyacapture audio-devices\n");
         return 2;
     }
     GetModuleFileNameA(NULL, exe_dir, MAX_PATH);
@@ -2135,6 +2400,10 @@ int main(int argc, char **argv) {
         int ok = selftest(exe_dir, work);
         printf("%s\n", ok ? "Done." : failure[0] ? failure : "selftest failed");
         return ok ? 0 : 1;
+    }
+    if (audio && !plan.nwalks) {
+        fail("the plan has no walk");
+        return 1;
     }
     if (!game[0] && !default_game(game, sizeof game)) {
         fail("no --game DIR, and the install's registry key (HKLM\\SOFTWARE\\GSC Game "
@@ -2156,11 +2425,26 @@ int main(int argc, char **argv) {
     }
     timeBeginPeriod(1);
     say("volyacapture %s: %d run(s), game %s, work folder %s", mode, runs, game, work);
+    /* The walks' output device, made the default while they run; one an
+     * earlier run left so is put back first. */
+    char marker[MAX_PATH];
+    join(marker, sizeof marker, work, "audio-default-before.bin");
+    struct loopback *lb = NULL;
+    if (audio) {
+        make_dirs(work);
+        loopback_restore_left(marker, say);
+        lb = loopback_open(audio_device, marker, say);
+        if (!lb) {
+            fail("no audio output to record (--audio-device %s)", audio_device);
+            return 1;
+        }
+    }
     int ok = 1;
     for (int i = 1; i <= runs && ok; i++) {
-        ok = run_once(exe_dir, game, work, mode, i);
+        ok = run_once(exe_dir, game, work, mode, i, lb);
     }
-    if (ok && runs > 1) {
+    loopback_close(lb);
+    if (ok && runs > 1 && !audio) {
         compare(work, mode, runs);
     }
     printf("%s\n", ok ? "Done." : failure);

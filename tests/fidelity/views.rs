@@ -111,6 +111,12 @@ pub const VIEW_SETTINGS: &[(&str, &str)] = &[("snd_volume_eff", "0."), ("snd_vol
 /// and [`VIEW_SETTINGS`] written into its line, or, where the file has
 /// none, into a new line at its name's place.
 pub fn user_ltx(shipped: &[u8]) -> Vec<u8> {
+    ltx_with(shipped, VIEW_SETTINGS)
+}
+
+/// The shipped `user.ltx` `shipped` with [`SETTINGS`] and then `extra`
+/// written into it, as [`user_ltx`] writes [`VIEW_SETTINGS`].
+pub fn ltx_with(shipped: &[u8], extra: &[(&str, &str)]) -> Vec<u8> {
     let mut lines: Vec<Vec<u8>> = shipped
         .split(|&b| b == b'\n')
         .map(|l| l.strip_suffix(b"\r").unwrap_or(l).to_vec())
@@ -122,7 +128,7 @@ pub fn user_ltx(shipped: &[u8]) -> Vec<u8> {
         n if n == b"unbindall" => b"bind".to_vec(),
         n => n,
     };
-    for (name, value) in SETTINGS.iter().chain(VIEW_SETTINGS) {
+    for (name, value) in SETTINGS.iter().chain(extra) {
         let line = format!("{name} {value}").into_bytes();
         match lines.iter().position(|l| name_of(l) == name.as_bytes()) {
             Some(at) => lines[at] = line,

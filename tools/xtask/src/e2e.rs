@@ -37,11 +37,12 @@ const SUITES: &[&str] = &[
     "game-screens",
     "game-memory",
     "fidelity",
+    "audio-fidelity",
     "d3d9probes",
 ];
 /// Suites served references Bazel made (`VOLYA_REFERENCES`) rather than
 /// VOLYA_COMPARE_DIR's.
-const REFERENCE_SUITES: &[&str] = &["platform", "fidelity", "d3d9probes"];
+const REFERENCE_SUITES: &[&str] = &["platform", "fidelity", "audio-fidelity", "d3d9probes"];
 const TARGETS: &[&str] = &["chrome", "iphone"];
 /// Suites run in Chrome with the kept profile (see [`kept_profile`]), so the
 /// game data they read is imported once (they import only what the
@@ -57,6 +58,7 @@ const KEPT_PROFILE: &[&str] = &[
     "game-screens",
     "game-memory",
     "fidelity",
+    "audio-fidelity",
 ];
 const REPORT_TIMEOUT: Duration = Duration::from_secs(60);
 /// Suites importing gigabytes from the installer get longer (the audio
@@ -76,6 +78,7 @@ const SLOW_SUITES: &[(&str, Duration)] = &[
     ("render-level", Duration::from_secs(1500)),
     ("draw-calls", Duration::from_secs(1500)),
     ("fidelity", Duration::from_secs(1500)),
+    ("audio-fidelity", Duration::from_secs(1500)),
     ("audio", Duration::from_secs(240)),
     // A level session of 12 minutes after the game suites' setup.
     ("audio-load", Duration::from_secs(2400)),
@@ -248,7 +251,8 @@ fn run_suite(
 }
 
 /// What a suite of [`REFERENCE_SUITES`] compares with, Bazel's
-/// (`VOLYA_REFERENCES`): the original's frames (`//tests/fidelity:frames`),
+/// (`VOLYA_REFERENCES`): the original's frames (`//tests/fidelity:frames`)
+/// or captured audio (`//tests/fidelity:audio`),
 /// the Direct3D 9 probes' results (`//tests/d3d9probes:references`) or the
 /// physics comparison's native outputs
 /// (`//tests/odeharness:platform_references`).
