@@ -108,12 +108,13 @@ On the Windows PC, by the Claude Code session there, in PowerShell from the logg
    `$run = "$env:TEMP\$tag"; Remove-Item -Recurse -Force $run -ErrorAction Ignore; gh release download $tag --repo mmotorny/volya-engine --pattern wincapture.zip --dir $run; Expand-Archive "$run\wincapture.zip" -DestinationPath $run`
 2. The check: two runs to the title menu, compared (the first also copies the install, about 6 GB):
    `Set-Location $run; cmd /c ".\volyacapture.exe check > check.txt 2>&1"; $LASTEXITCODE`
-   0 and `All runs identical` at its end: the clock holds and steps the game and the title menu is reproducible. Otherwise report `check.txt` and stop. `--game DIR` names the install if its registry entry is missing; `--work DIR` another work folder (no dash or space).
+   0 and `All runs identical` at its end: the clock holds and steps the game and the title menu is reproducible. Otherwise skip step 3 and bring back what there is (step 4), with the end of `check.txt` in the report. `--game DIR` names the install if its registry entry is missing; `--work DIR` another work folder (no dash or space). With Windows' Controlled Folder Access on, the game ends without a log when it starts a New Game unless its `XR_3DA.exe` is allowed (measured on the PC, the install's; the copy's is `<work>\game\bin\XR_3DA.exe`).
 3. The full capture, two runs compared:
    `cmd /c ".\volyacapture.exe full > full.txt 2>&1"; $LASTEXITCODE`
 4. The results, without game assets (no `.png`, `.ltx` or game log), on a new branch from `main`, `<gpu>` the adapter in lower case with dashes (e.g. `rtx-4090`):
    `git fetch origin; git switch -c wincapture-results-<gpu> origin/main`
-   `$dest = "tools\wincapture\results\<gpu>"; New-Item -ItemType Directory -Force $dest; Copy-Item "$run\check.txt", "$run\full.txt" $dest; Copy-Item C:\volyacapture\runs\*-summary.txt $dest; foreach ($r in Get-ChildItem C:\volyacapture\runs -Directory) { $d = New-Item -ItemType Directory -Force "$dest\$($r.Name)"; Copy-Item "$($r.FullName)\log.txt", "$($r.FullName)\events.txt", "$($r.FullName)\hashes.txt" $d }; Set-Content -NoNewline "$dest\release.txt" $tag`
+   `$dest = "tools\wincapture\results\<gpu>"; New-Item -ItemType Directory -Force $dest | Out-Null; Copy-Item "$run\*.txt" $dest -Exclude README.txt,plan.txt; Copy-Item C:\volyacapture\runs\*-summary.txt $dest -ErrorAction Ignore; foreach ($r in Get-ChildItem C:\volyacapture\runs -Directory) { $d = New-Item -ItemType Directory -Force "$dest\$($r.Name)"; Copy-Item "$($r.FullName)\log.txt","$($r.FullName)\events.txt","$($r.FullName)\hashes.txt" $d -ErrorAction Ignore }; Set-Content -NoNewline "$dest\release.txt" $tag`
+   `"$([Environment]::OSVersion.VersionString)`n$(reg query 'HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\KnownDLLs' | Out-String)" | Set-Content "$dest\machine.txt"` (Windows' version, and its known DLLs, of which winmm must not be one)
    `git add $dest; git commit -m "Windows capture on <adapter>: results of $tag" -m "Part of #762"; git push -u origin HEAD`
 5. Report the branch, the exit codes and the summaries. The frames stay in `C:\volyacapture\runs\full-1\fidelity\` on the PC.
 
