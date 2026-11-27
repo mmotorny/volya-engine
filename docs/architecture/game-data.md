@@ -14,7 +14,7 @@ Game data never reaches any server. The user brings the GOG offline installer (t
 
 - The engine reads the game files as the importer extracted them: textures upload as stored (BC when the GPU has `texture-compression-bc`; transcoded at run time where it hasn't, [rendering.md](rendering.md#textures)), audio and video are decoded from the original Vorbis and Theora, models and levels are parsed from their original formats. No install-time transcoding or cooking; reconsider only when measurements demand it.
 - **Detect from the data, never by edition.** No edition-specific code paths and no tables of known editions: formats are decoded by what the data says (headers, chunk types, flags, paths), and content differences (languages, patches, mods) are resolved by what files exist. Edition identity (the MD5s in `import.json`, and the installer's file names, `AppName` and `AppVersion` it records) serves diagnostics only. The title menu's version string is the built-in `1.0006` whatever the registry holds (title-menu.md 3.4), so neither the installer's registry entries nor GOG's install script are read for it.
-- The engine's own files live beside the game in the OPFS namespace, never in the game's files: `user.ltx` ([screens.md](screens.md#settings)), `savedgames/` ([screens.md](screens.md#saved-games)), the diagnostic log ([diagnostics.md](diagnostics.md#storage)).
+- The engine's own files live beside the game in the OPFS namespace, never in the game's files: `user.ltx` ([screens.md](screens.md#settings)), `savedgames/` ([screens.md](screens.md#saved-games)), the game's log file `logs/xray_player.log` ([screens.md](screens.md#settings)), the diagnostic log ([diagnostics.md](diagnostics.md#storage)).
 
 ## Storage
 

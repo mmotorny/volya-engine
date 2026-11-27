@@ -1827,10 +1827,16 @@ impl App {
 
     /// The log file's contents (console-log.md 3.2), once written: as the
     /// console is set up, by `flush` and `clear_log`, when the player quits
-    /// and at a fatal error (3.3). TODO(#620): the platform doesn't store
-    /// them yet.
+    /// and at a fatal error (3.3), for the platform to store.
     pub fn take_log_file(&mut self) -> Option<Vec<u8>> {
         self.console.log_mut().take_file()
+    }
+
+    /// A write of the log file at `path` (its full path in lower case)
+    /// could not open it, for `error` (console-log.md 3.9): the log says
+    /// so, and the game goes on.
+    pub fn log_file_not_written(&mut self, path: &str, error: &str) {
+        self.console.log_mut().cannot_write(path, error);
     }
 
     /// The page is in the browser's full screen (`on`) or not, or can't be

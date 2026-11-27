@@ -6,7 +6,8 @@
 //!
 //! Layout under the `volya-engine` namespace: `game/` holds the extracted
 //! files, `import.json` the [`Manifest`] written by the importer, `user.ltx`
-//! the user configuration file and `savedgames/` the saved games.
+//! the user configuration file, `savedgames/` the saved games and `logs/`
+//! the game's log file.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -280,7 +281,9 @@ fn mounted_status(game: &Game) -> Status {
 fn with_game<T>(f: impl FnOnce(&Game) -> Result<T, JsValue>) -> Result<T, JsValue> {
     GAME.with(|g| {
         let game = g.borrow();
-        f(game.as_ref().ok_or_else(|| error("game files not imported"))?)
+        f(game
+            .as_ref()
+            .ok_or_else(|| error("game files not imported"))?)
     })
 }
 
@@ -588,6 +591,81 @@ pub async fn forget_user_config() -> Result<(), JsValue> {
     Ok(())
 }
 
+/// The game's log folder (`$logs$`, `$app_data_root$\logs\`,
+/// docs/behavior/console-log.md 3.1), beside `user.ltx`.
+pub const LOGS: &str = "logs";
+/// The game's log file in [`LOGS`]: `xray_<user>.log`, with a fixed user
+/// name, as a browser has no Windows account (decided by the user, #646).
+pub const LOG_FILE: &str = "xray_player.log";
+/// The log file's full path in lower case, as a write that cannot open it
+/// names it in the log (console-log.md 3.9): the namespace is
+/// `$app_data_root$`.
+pub const LOG_FILE_PATH: &str = "volya-engine\\logs\\xray_player.log";
+
+/// Writes the game's log file (console-log.md 3.2), creating `logs/` when
+/// missing (3.9's gap). Its own sync access handle, opened and closed
+/// here, apart from the diagnostic log's. A read of it at the same moment
+/// makes an attempt fail: retried as [`write_user_config`].
+pub async fn write_log_file(bytes: &[u8]) -> Result<(), JsValue> {
+    let namespace = opfs::namespace().await?;
+    let path = format!("{LOGS}/{LOG_FILE}");
+    let mut attempt = 0;
+    loop {
+        match opfs::write_file(&namespace, &path, bytes).await {
+            Err(_) if attempt < CONFIG_ATTEMPTS => {
+                attempt += 1;
+                opfs::sleep(CONFIG_RETRY_MS).await?;
+            }
+            result => return result,
+        }
+    }
+}
+
+/// The stored game's log file, `None` when there is none (retried while a
+/// write holds it).
+pub async fn read_log_file() -> Result<Option<Vec<u8>>, JsValue> {
+    let namespace = opfs::namespace().await?;
+    let Some(dir) = opfs::existing_dir(&namespace, LOGS).await? else {
+        return Ok(None);
+    };
+    let mut attempt = 0;
+    loop {
+        match opfs::read_file(&dir, LOG_FILE).await {
+            Err(_) if attempt < CONFIG_ATTEMPTS => {
+                attempt += 1;
+                opfs::sleep(CONFIG_RETRY_MS).await?;
+            }
+            result => return result,
+        }
+    }
+}
+
+/// Whether the game's log file is stored.
+pub async fn has_log_file() -> Result<bool, JsValue> {
+    let namespace = opfs::namespace().await?;
+    let Some(dir) = opfs::existing_dir(&namespace, LOGS).await? else {
+        return Ok(false);
+    };
+    Ok(JsFuture::from(dir.get_file_handle(LOG_FILE)).await.is_ok())
+}
+
+/// Deletes the game's log folder (retried while a write holds the file);
+/// an absent one is fine.
+pub async fn forget_logs() -> Result<(), JsValue> {
+    let namespace = opfs::namespace().await?;
+    let mut attempt = 0;
+    while opfs::existing_dir(&namespace, LOGS).await?.is_some() {
+        match opfs::remove(&namespace, LOGS).await {
+            Err(_) if attempt < CONFIG_ATTEMPTS => {
+                attempt += 1;
+                opfs::sleep(CONFIG_RETRY_MS).await?;
+            }
+            result => return result,
+        }
+    }
+    Ok(())
+}
+
 /// What the player's own data is: the user configuration file and the
 /// saved-games folder, beside the game in the namespace.
 const USER_DATA: [&str; 2] = [USER_CONFIG, SAVED_GAMES];
@@ -611,8 +689,10 @@ pub async fn has_user_data() -> Result<bool, JsValue> {
     Ok(!user_data_present(&namespace).await?.is_empty())
 }
 
-/// Deletes the user configuration file and the saved-games folder (Settings,
-/// while no game runs): the next game starts from the installer's copy. A
+/// Deletes the user configuration file, the saved-games folder and the
+/// game's log folder (Settings, while no game runs; the log alone isn't
+/// player's data to offer this for, #646): the next game starts from the
+/// installer's copy. A
 /// write of the configuration still holding its file makes an attempt fail:
 /// retried as [`write_user_config`].
 pub async fn forget_user_data() -> Result<(), JsValue> {
@@ -630,7 +710,7 @@ pub async fn forget_user_data() -> Result<(), JsValue> {
             }
         }
     }
-    Ok(())
+    forget_logs().await
 }
 
 /// Deletes the imported game.

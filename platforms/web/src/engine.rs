@@ -90,7 +90,12 @@ thread_local! {
     static SPLASH: RefCell<Option<(u32, u32)>> = const { RefCell::new(None) };
     /// The user configuration file waiting to be written, and whether a
     /// write is under way.
-    static USER_CONFIG: RefCell<(Option<Vec<u8>>, bool)> = const { RefCell::new((None, false)) };
+    static USER_CONFIG: Queue = const { RefCell::new((None, false)) };
+    /// The game's log file the same way.
+    static LOG_FILE: Queue = const { RefCell::new((None, false)) };
+    /// Why writes of the game's log file failed, for the log to say
+    /// (console-log.md 3.9) at the next frame.
+    static LOG_FILE_FAILED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     /// The output size in pixels, as the canvas was last sized.
     static RESOLUTION: RefCell<Resolution> = const { RefCell::new(Resolution::new(1024, 768)) };
 }
@@ -198,6 +203,9 @@ pub fn stop(reason: &str, message: &str) {
     {
         // The sound system outlives the app: the level's sounds leave it.
         crate::audio::with_sounds(|host| app.end_sounds(&mut host.system));
+        if let Some(bytes) = app.take_log_file() {
+            store_log_file(bytes);
+        }
         drop(app);
         crate::audio::with_mixer_opt(|mixer| {
             if let Some(mixer) = mixer {
@@ -215,11 +223,20 @@ pub fn stop(reason: &str, message: &str) {
     }
 }
 
-/// Stores the user configuration file. Writes go one at a time; a file
-/// asked for while one is written replaces any still waiting, so the latest
-/// content is written last and an older write never lands after a newer one.
-fn store_user_config(bytes: Vec<u8>) {
-    let start = USER_CONFIG.with(|q| {
+/// A file's writes, one at a time: the content waiting to be written, and
+/// whether a write is under way.
+type Queue = RefCell<(Option<Vec<u8>>, bool)>;
+
+/// Stores `bytes` through `queue` with `write`. Writes go one at a time; a
+/// file asked for while one is written replaces any still waiting, so the
+/// latest content is written last and an older write never lands after a
+/// newer one.
+fn store_latest(
+    queue: &'static std::thread::LocalKey<Queue>,
+    bytes: Vec<u8>,
+    write: fn(Vec<u8>) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()>>>,
+) {
+    let start = queue.with(|q| {
         let mut q = q.borrow_mut();
         q.0 = Some(bytes);
         !std::mem::replace(&mut q.1, true)
@@ -227,13 +244,43 @@ fn store_user_config(bytes: Vec<u8>) {
     if !start {
         return;
     }
-    wasm_bindgen_futures::spawn_local(async {
-        while let Some(bytes) = USER_CONFIG.with(|q| q.borrow_mut().0.take()) {
+    wasm_bindgen_futures::spawn_local(async move {
+        while let Some(bytes) = queue.with(|q| q.borrow_mut().0.take()) {
+            write(bytes).await;
+        }
+        queue.with(|q| q.borrow_mut().1 = false);
+    });
+}
+
+/// Stores the user configuration file.
+fn store_user_config(bytes: Vec<u8>) {
+    store_latest(&USER_CONFIG, bytes, |bytes| {
+        Box::pin(async move {
             if let Err(e) = crate::game::write_user_config(bytes).await {
                 web_sys::console::error_1(&e);
             }
-        }
-        USER_CONFIG.with(|q| q.borrow_mut().1 = false);
+        })
+    });
+}
+
+/// Stores the game's log file (console-log.md 3.3). A write that fails
+/// leaves its line in the log while the game runs (3.9).
+/// TODO(#650): a write that fails once the file is open is fatal (3.9).
+fn store_log_file(bytes: Vec<u8>) {
+    store_latest(&LOG_FILE, bytes, |bytes| {
+        Box::pin(async move {
+            if let Err(e) = crate::game::write_log_file(&bytes).await {
+                web_sys::console::error_1(&e);
+                let text = js_sys::Reflect::get(&e, &"message".into())
+                    .ok()
+                    .and_then(|m| m.as_string())
+                    .or_else(|| e.as_string())
+                    .unwrap_or_default();
+                if active() {
+                    LOG_FILE_FAILED.with(|f| f.borrow_mut().push(text));
+                }
+            }
+        })
     });
 }
 
@@ -371,6 +418,12 @@ pub fn frame(time: f64) {
         });
         if let Some(bytes) = app.take_save() {
             store_user_config(bytes);
+        }
+        for error in LOG_FILE_FAILED.with(|f| std::mem::take(&mut *f.borrow_mut())) {
+            app.log_file_not_written(crate::game::LOG_FILE_PATH, &error);
+        }
+        if let Some(bytes) = app.take_log_file() {
+            store_log_file(bytes);
         }
         for path in app.take_deleted_saves() {
             wasm_bindgen_futures::spawn_local(async move {
