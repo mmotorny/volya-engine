@@ -11,6 +11,9 @@
 ** scenario. Exit status 0, or 1 if the library or an export is missing.
 **
 ** Usage: odeharness.exe "<game folder>\bin" [results folder]
+**        odeharness.exe compare ours results
+** The second form compares our build's outputs (the release's ours\) with
+** a run's (compare.c) and prints a line per scenario; exit status 0.
 */
 
 #include "harness.h"
@@ -76,8 +79,13 @@ static void cpu_name (char *out)
 
 int main (int argc, char **argv)
 {
+  if (argc == 4 && !strcmp (argv[1], "compare")) {
+    volya_ode_compare (argv[2], argv[3], stdout);
+    return 0;
+  }
   if (argc < 2) {
-    fprintf (stderr, "usage: odeharness.exe \"<game folder>\\bin\" [results folder]\n");
+    fprintf (stderr, "usage: odeharness.exe \"<game folder>\\bin\" [results folder]\n"
+	     "       odeharness.exe compare <ours folder> <results folder>\n");
     return 1;
   }
   const char *bin = argv[1], *out = argc > 2 ? argv[2] : "results";

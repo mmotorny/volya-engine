@@ -61,3 +61,13 @@ const char *volya_ode_harness_name (int i)
 {
   return volya_ode_scenario_name (i);
 }
+
+/* compare.c's comparison, its lines written to the file `report' */
+int volya_ode_harness_compare (const char *ours, const char *shipped, const char *report)
+{
+  FILE *f = fopen (report, "w");
+  if (!f) return -1;
+  int n = volya_ode_compare (ours, shipped, f);
+  fclose (f);
+  return n;
+}

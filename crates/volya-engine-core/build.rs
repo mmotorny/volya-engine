@@ -127,7 +127,8 @@ fn main() {
             .flag("-ffp-contract=off")
             .flag("-fno-fast-math")
             .file(harness.join("scenarios.c"))
-            .file(harness.join("native.c"));
+            .file(harness.join("native.c"))
+            .file(harness.join("compare.c"));
         h.compile("volya_ode_harness");
     }
 

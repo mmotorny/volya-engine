@@ -3,16 +3,22 @@
 
 //! The physics library comparison's scenarios (tests/odeharness,
 //! docs/testing.md) against our build, natively: their names, their output
-//! (records of 32-bit words: tag, count, words) and a comparison of two
-//! outputs.
+//! (records of 32-bit words: tag, count, words), written as the release's
+//! `ours\` (`ode_harness_ours`), and the comparison odeharness.exe makes.
 
-use std::ffi::{CStr, c_char, c_int, c_void};
+use std::ffi::{CStr, CString, c_char, c_int, c_void};
+use std::path::Path;
 
 type Record = extern "C" fn(*mut c_void, u32, *const u32, u32);
 
 unsafe extern "C" {
     fn volya_ode_harness(i: c_int, record: Record, ctx: *mut c_void) -> c_int;
     fn volya_ode_harness_name(i: c_int) -> *const c_char;
+    fn volya_ode_harness_compare(
+        ours: *const c_char,
+        shipped: *const c_char,
+        report: *const c_char,
+    ) -> c_int;
 }
 
 extern "C" fn append(ctx: *mut c_void, tag: u32, words: *const u32, n: u32) {
@@ -53,76 +59,29 @@ pub fn run(i: usize) -> Vec<u32> {
     out
 }
 
-/// Where two outputs first differ, and how many words differ, counting any
-/// two NaNs as equal (the shipped library's NaNs are the x87's and SSE's
-/// default NaN, ours the platform's).
-#[derive(Debug, PartialEq, Eq)]
-pub struct Difference {
-    /// The record (its index and tag) and the word in it.
-    pub record: usize,
-    pub tag: u32,
-    pub word: usize,
-    pub ours: u32,
-    pub theirs: u32,
-    /// Words that differ, of all words compared.
-    pub differing: usize,
-    pub compared: usize,
-}
-
-fn is_nan(w: u32) -> bool {
-    w & 0x7F80_0000 == 0x7F80_0000 && w & 0x007F_FFFF != 0
-}
-
-/// None when the outputs are the same (NaNs aside); Err when their records
-/// don't line up.
-pub fn compare(ours: &[u32], theirs: &[u32]) -> Result<Option<Difference>, String> {
-    let (mut i, mut record) = (0, 0);
-    let mut first = None;
-    let (mut differing, mut compared) = (0, 0);
-    while i < ours.len() && i < theirs.len() {
-        let (tag, n) = (ours[i], ours.get(i + 1).copied().unwrap_or(0) as usize);
-        if theirs[i] != tag || theirs.get(i + 1).copied() != Some(n as u32) {
-            return Err(format!(
-                "record {record}: ours is tag {tag} of {n} words, theirs tag {} of {:?}",
-                theirs[i],
-                theirs.get(i + 1)
-            ));
-        }
-        for w in 0..n {
-            let (a, b) = (ours[i + 2 + w], theirs[i + 2 + w]);
-            compared += 1;
-            if a != b && !(is_nan(a) && is_nan(b)) {
-                differing += 1;
-                first.get_or_insert((record, tag, w, a, b));
-            }
-        }
-        i += 2 + n;
-        record += 1;
+/// Writes every scenario's output from our build into `dir` as
+/// `<scenario>.bin`, as odeharness.exe writes the shipped library's (32-bit
+/// little-endian words). Meaningful in a fresh process only ([`run`]).
+pub fn write_all(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    for (i, name) in scenarios().iter().enumerate() {
+        let bytes: Vec<u8> = run(i).iter().flat_map(|w| w.to_le_bytes()).collect();
+        std::fs::write(dir.join(format!("{name}.bin")), bytes)?;
     }
-    if ours.len() != theirs.len() {
-        return Err(format!(
-            "lengths differ: ours {} words, theirs {}",
-            ours.len(),
-            theirs.len()
-        ));
-    }
-    Ok(first.map(|(record, tag, word, ours, theirs)| Difference {
-        record,
-        tag,
-        word,
-        ours,
-        theirs,
-        differing,
-        compared,
-    }))
+    Ok(())
 }
 
-/// Words of a scenario's file as written on Windows (little-endian).
-pub fn words(bytes: &[u8]) -> Vec<u32> {
-    bytes
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|c| u32::from_le_bytes(*c))
-        .collect()
+/// The comparison odeharness.exe makes (tests/odeharness/compare.c) of the
+/// outputs in `ours` and `shipped`: its lines, and how many scenarios are
+/// not identical.
+pub fn compare(ours: &Path, shipped: &Path, report: &Path) -> std::io::Result<(usize, String)> {
+    let c =
+        |p: &Path| CString::new(p.to_string_lossy().into_owned()).map_err(std::io::Error::other);
+    let (a, b, r) = (c(ours)?, c(shipped)?, c(report)?);
+    // SAFETY: three NUL-terminated paths; the driver writes `report`.
+    let n = unsafe { volya_ode_harness_compare(a.as_ptr(), b.as_ptr(), r.as_ptr()) };
+    let text = std::fs::read_to_string(report)?;
+    usize::try_from(n)
+        .map(|n| (n, text))
+        .map_err(|_| std::io::Error::other("cannot write the report"))
 }

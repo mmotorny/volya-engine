@@ -56,11 +56,9 @@ Tasks:
               The same for the physics library comparison (tests/odeharness).
   wincapture release
               The same for the original's capture on Windows (tools/wincapture).
-  frames-receive [--into NAME] [ADDRESS]
+  frames-receive [ADDRESS]
               Receive a Windows capture's fidelity files from the PC over the
-              local network into the fidelity suite's references (or, with
-              --into ode-harness, the physics comparison's results into
-              ~/Library/Caches/volya-engine/ode-harness/); prints the
+              local network into the fidelity suite's references; prints the
               address, port and token the PC sends them with.
   wincapture plan
               Print that capture's plan (from tests/fidelity/views.rs).
@@ -94,10 +92,8 @@ fn main() -> ExitCode {
         ["gc"] => bazel::gc(),
         ["wincapture", "release"] => bazel::build_output(&root(), wincapture::RUNNER)
             .and_then(|zip| wincapture::release(&zip)),
-        ["frames-receive"] => frames::receive(None, None),
-        ["frames-receive", "--into", into] => frames::receive(Some(into), None),
-        ["frames-receive", "--into", into, address] => frames::receive(Some(into), Some(address)),
-        ["frames-receive", address] => frames::receive(None, Some(address)),
+        ["frames-receive"] => frames::receive(None),
+        ["frames-receive", address] => frames::receive(Some(address)),
         ["wincapture", "plan"] => {
             print!("{}", wincapture::plan());
             Ok(())

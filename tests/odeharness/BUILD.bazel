@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 load("//build:checks.bzl", "volya_checks")
-load("//build:d3d9probes.bzl", "d3d9probes_exe", "d3d9probes_zip")
+load("//build:d3d9probes.bzl", "d3d9probes_exe", "d3d9probes_zip", "odeharness_ours")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -12,6 +12,7 @@ package(default_visibility = ["//visibility:public"])
 filegroup(
     name = "scenarios",
     srcs = [
+        "compare.c",
         "harness.h",
         "native.c",
         "scenarios.c",
@@ -25,6 +26,7 @@ exports_files(["harness.h"])
 d3d9probes_exe(
     name = "exe",
     srcs = [
+        "compare.c",
         "harness.h",
         "scenarios.c",
         "win32.c",
@@ -33,13 +35,22 @@ d3d9probes_exe(
     out = "odeharness.exe",
 )
 
+# Our build's outputs (the Mac's native arm64 build; wasm32's is #775),
+# which the PC compares the shipped library's with.
+odeharness_ours(
+    name = "ours",
+    out = "ours",
+    tool = "//crates/volya-engine-core:ode_harness_ours",
+)
+
 # The Windows runner (`bazel run //tools/xtask -- odeharness release`
-# publishes it).
+# publishes it): odeharness.exe, README.txt and ours\.
 d3d9probes_zip(
     name = "runner",
     srcs = [
         "README.txt",
         ":exe",
+        ":ours",
     ],
     out = "odeharness.zip",
 )

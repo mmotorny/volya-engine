@@ -3,7 +3,7 @@
 
 load("//build:checks.bzl", "volya_checks")
 load("//build:rust.bzl", "LINTS", "volya_integration_tests", "volya_library")
-load("@rules_rust//rust:defs.bzl", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
 load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 
@@ -78,13 +78,21 @@ volya_integration_tests(
     ],
 )
 
-# The physics library comparison against our build (docs/testing.md), in a
-# process of its own; `--test_env=VOLYA_ODE_SHIPPED=<results folder>`
-# compares it with the shipped library's results.
+# The physics library comparison on our side (docs/testing.md), in a
+# process of its own: the scenarios repeat; compare.c's comparison works.
 rust_test(
     name = "ode_harness",
     srcs = ["comparison/ode_harness.rs"],
     crate_name = "ode_harness",
+    rustc_flags = LINTS,
+    deps = [":volya-engine-core"],
+)
+
+# Our build's outputs of the scenarios, natively (the release's ours\,
+# //tests/odeharness:ours).
+rust_binary(
+    name = "ode_harness_ours",
+    srcs = ["comparison/ours.rs"],
     rustc_flags = LINTS,
     deps = [":volya-engine-core"],
 )

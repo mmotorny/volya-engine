@@ -111,7 +111,8 @@ fn copy_all(from: &Path, to: &Path) -> Result {
 }
 
 /// `zip OUT FILE...`: the files, by their names, in a zip (stored, no
-/// timestamps), so the same files give the same zip.
+/// timestamps), so the same files give the same zip; a folder's files go in
+/// under its name, in name order.
 pub fn zip(out: &Path, files: &[&str]) -> Result {
     let mut entries = Vec::new();
     for file in files {
@@ -120,8 +121,24 @@ pub fn zip(out: &Path, files: &[&str]) -> Result {
             .file_name()
             .and_then(|n| n.to_str())
             .ok_or("no file name")?;
-        let bytes = fs::read(path).map_err(|e| format!("{file}: {e}"))?;
-        entries.push((name.to_string(), bytes));
+        if path.is_dir() {
+            let mut inner: Vec<_> = fs::read_dir(path)
+                .map_err(|e| format!("{file}: {e}"))?
+                .map(|e| e.map(|e| e.path()).map_err(|e| e.to_string()))
+                .collect::<std::result::Result<_, _>>()?;
+            inner.sort();
+            for f in inner {
+                let leaf = f
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .ok_or("no file name")?;
+                let bytes = fs::read(&f).map_err(|e| format!("{}: {e}", f.display()))?;
+                entries.push((format!("{name}/{leaf}"), bytes));
+            }
+        } else {
+            let bytes = fs::read(path).map_err(|e| format!("{file}: {e}"))?;
+            entries.push((name.to_string(), bytes));
+        }
     }
     fs::write(out, zip_bytes(&entries)).map_err(|e| format!("{}: {e}", out.display()))
 }

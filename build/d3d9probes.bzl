@@ -65,6 +65,27 @@ d3d9probes_references = rule(
     },
 )
 
+def _ours_impl(ctx):
+    out = ctx.actions.declare_directory(ctx.attr.out)
+    ctx.actions.run(
+        executable = ctx.executable.tool,
+        arguments = [out.path],
+        outputs = [out],
+        mnemonic = "OdeHarnessOurs",
+        progress_message = "Running the physics comparison's scenarios against our build: %{label}",
+    )
+    return [DefaultInfo(files = depset([out]))]
+
+odeharness_ours = rule(
+    implementation = _ours_impl,
+    doc = "A folder of our build's outputs of the physics comparison's scenarios " +
+          "(`tool`, run natively on the host).",
+    attrs = {
+        "out": attr.string(mandatory = True),
+        "tool": attr.label(mandatory = True, executable = True, cfg = "exec"),
+    },
+)
+
 def _zip_impl(ctx):
     out = ctx.actions.declare_file(ctx.attr.out)
     ctx.actions.run(
@@ -79,7 +100,7 @@ def _zip_impl(ctx):
 
 d3d9probes_zip = rule(
     implementation = _zip_impl,
-    doc = "The files, by their names, in one zip.",
+    doc = "The files, by their names, in one zip; a folder's files under its name.",
     attrs = {
         "out": attr.string(mandatory = True),
         "srcs": attr.label_list(allow_files = True, mandatory = True),

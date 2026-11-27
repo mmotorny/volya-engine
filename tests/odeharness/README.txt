@@ -12,3 +12,11 @@ Run, in a folder of your choice:
 It writes results\<scenario>.bin and results\info.txt and prints a line per
 scenario. It exits with 0, or with 1 and a message if the library or one of
 its functions is missing.
+
+Then compare them with our build's outputs (ours\, from our build on the
+Mac):
+
+  odeharness.exe compare ours results
+
+It prints, per scenario, identical, or how many words differ and the first.
+The results are the shipped library's: keep them on this PC.

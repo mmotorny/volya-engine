@@ -16,6 +16,7 @@
 #define VOLYA_ODE_HARNESS_H
 
 #include <stdint.h>
+#include <stdio.h>
 
 typedef float dReal;
 typedef struct dxWorld *dWorldID;
@@ -197,5 +198,9 @@ typedef struct OdeHarness {
 int volya_ode_scenario_count (void);
 const char *volya_ode_scenario_name (int i);
 void volya_ode_scenario_run (const OdeHarness *h, int i);
+
+/* compare.c: the scenarios' outputs in the folders `ours' and `shipped'
+** compared, a line per scenario to `out'; the count not identical */
+int volya_ode_compare (const char *ours, const char *shipped, FILE *out);
 
 #endif
