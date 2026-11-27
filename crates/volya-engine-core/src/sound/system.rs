@@ -355,9 +355,10 @@ impl SoundSystem {
         Self {
             files: Sounds::new(),
             slots: Vec::new(),
-            // Room for a level's looped sounds (the first level's zones play
-            // 111) made with the system, not grown amid a level's heap.
-            emitters: Vec::with_capacity(EMITTERS),
+            // Made with the first sound ([`Self::create`]): without a device
+            // no sound is created and the system holds no sound memory
+            // (console-diagnostics.md 2.1.1).
+            emitters: Vec::new(),
             next_emitter: 0,
             voices: vec![FREE; voices.clamp(MIN_VOICES, MAX_VOICES)],
             now: 0,
@@ -474,6 +475,11 @@ impl SoundSystem {
         category: Category,
     ) -> Result<SoundId, Fatal> {
         let sound = self.files.get(tree, aliases, name)?;
+        // Room for a level's looped sounds (the first level's zones play
+        // 111), made once, not grown amid a level's heap.
+        if self.emitters.capacity() == 0 {
+            self.emitters.reserve_exact(EMITTERS);
+        }
         let slot = SoundSlot {
             sound,
             category,

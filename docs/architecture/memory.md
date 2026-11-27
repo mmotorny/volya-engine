@@ -255,7 +255,7 @@ Matching the original is what is approved; each deviation is the user's decision
 | The file cache: what the original maps is copied into memory, whole or by parts. | Approved (wasm can't map a file): extra memory with its own budget, reported ([File-backed data](#file-backed-data)). |
 | Leaner structures with the same observable behaviour (rule 5). | Approved as a kind: within the original's budget for the same data, behaviour checked against the specs. |
 | *p* (the process heap) prints 0. | Approved: we have nothing equivalent (no CPU copy of GPU resources, no system libraries' heap). |
-| The sounds: the audio worker's heap and the compressed sound files in JavaScript, outside *h*. | Pending: where the original holds its sound data is to be measured from a run with sound on and its volumes muted (the spec's runs used `-nosound`, console-diagnostics.md 2.1.1); matched once known. |
+| The sounds: the audio worker's heap and the compressed sound files in JavaScript, outside *h*; no sound cache. | Pending the user's decision (#749). The original holds a cache of decoded audio sized from `snd_cache_size` (32,773 K and its 74 K line table at 16, made with the device at startup) and per sound file a 52-byte record and 2 bytes per cache line, all in *h* (console-diagnostics.md 2.1.1). Ours: no cache; the engine's sound system keeps 0.6 MB natively for `l01_escape`'s 308 files and 6,476 sounds (created on the level's first frame with audio output); the audio worker's wasm memory 3 MiB and its JavaScript 3.0 MiB (headless Chrome, `game-level`, `game-memory`). |
 
 ### Level change and the second New Game
 
@@ -310,7 +310,7 @@ Each step is its own issue, filed after this design is approved, in this order, 
 12. **The renderer's pool**: the frame's lists from a pool of their own, outside *h*, reported as *r*.
 13. **Leaner structures**: a survey of the owners against the original's figures for opportunities of rule 5's kind, each found filed as its own issue.
 
-Pending, not a step: where the original holds its sound data (a run with sound on and volumes muted).
+Pending, not a step: the sound cache, where the original holds its decoded audio (console-diagnostics.md 2.1.1; [Deviations](#deviations)).
 
 The open issues weighed before this design (#486 the objects' models as regions, #489 kept scratch buffers, #679 a frame's last allocations, #405 sorted `Vec`s for `BTreeMap`s) are taken where they match the original or are rule 5's kind; any other is the user's decision.
 

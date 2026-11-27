@@ -34,7 +34,7 @@
 
 `volya-engine-core::sound`, docs/formats/sound-ogg-params.md.
 
-- A name's first request resolves its file (`$level$` first, then `$game_sounds$`), checks it and keeps only its parameters. Not mono, not 44,100 Hz, missing, empty or invalid, or a max distance or max AI distance below 0.1: `Fatal`.
+- A name's first request resolves its file (`$level$` first, then `$game_sounds$`), checks it and keeps only its parameters, reading only its headers and its last page (its length), as the original keeps no file data (console-diagnostics.md 2.1.1; reading whole files peaked 4.9 MB above the level's sounds, now 0.9, measured natively for `l01_escape`, #749). Not mono, not 44,100 Hz, missing, empty or invalid, or a max distance or max AI distance below 0.1: `Fatal`.
 - Each play reads the compressed file again and decodes it block by block: no PCM is held.
 - `sound_params` (`volya-engine-formats`) reads the record; one shorter than its version's size is treated as an unknown version (defaults and a warning; our choice).
 
@@ -42,7 +42,7 @@
 
 `volya-engine-core::sound::system`, docs/behavior/sound-positional.md.
 
-- The spec's sounds, emitters, per-frame update, voices and device parameters, against a `Device` trait shaped like its OpenAL interface.
+- The spec's sounds, emitters, per-frame update, voices and device parameters, against a `Device` trait shaped like its OpenAL interface. Its emitters' room is made with its first sound, so without audio output (no sound is created) it holds nothing beyond its fields (no device, no sound memory: console-diagnostics.md 2.1.1).
 - `volya-engine::audio::SoundHost` owns it with its clock: real time since the first update, without the page's hidden time (#93). `MixerDevice` plays each voice as a mixer voice in `Category::Scaled` (its gain already holds the category volume): gain is the source gain times OpenAL's inverse distance clamped factor; pan is the direction's component along the listener's right vector (how a direction is rendered is unestablished; our choice). The listener's gain is the mixer's master gain.
 - On the web the host lives in the engine worker (`platforms/web/src/audio.rs`) and updates every worker frame, game running or not. The app sets the voice count once from `snd_targets` (4 to 32, default 16), makes the level's camera the listener, pauses while the menu is open over a level, and stops every sound when the level is left.
 - Test builds have the `debug_play_sound` and `sound_state` ops.

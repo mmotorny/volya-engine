@@ -11,14 +11,14 @@
 //! PCM is held.
 
 use std::collections::HashMap;
-use std::io::{self, Cursor};
+use std::io::{self, BufReader, Cursor, Read, Seek};
 use std::rc::Rc;
 
-use volya_engine_formats::audio::{VorbisStream, ogg_end_granule};
+use volya_engine_formats::audio::VorbisStream;
 use volya_engine_formats::sound_params::{self, SoundParams};
 
 use crate::config::{LEVEL, PathAliases};
-use crate::vfs::{self, Vfs};
+use crate::vfs::{self, Vfs, VfsFile};
 
 pub mod ambient;
 pub mod music;
@@ -110,11 +110,16 @@ impl Sound {
 
     /// Reads the file at `path` for the sound `name`: checks the stream and
     /// reads its parameters (sections 3 – 5). A missing or unknown record
-    /// gives the defaults and a warning.
+    /// gives the defaults and a warning. Only the stream's headers and its
+    /// last page are read, and nothing of the file is kept
+    /// (console-diagnostics.md 2.1.1: loading a sound file reads its header
+    /// and comment and keeps no file data).
     pub fn load(tree: &dyn Vfs, name: &str, path: &str) -> Result<(Self, Option<String>), Fatal> {
-        let bytes = read(tree, path)?;
-        check_stream(path, &bytes)?;
-        let comment = sound_params::first_user_comment(Cursor::new(&bytes))
+        let mut file = open(tree, path)?;
+        let samples = check_stream(path, &mut file)?;
+        let comment = file
+            .rewind()
+            .and_then(|()| sound_params::first_user_comment(&mut file))
             .map_err(|e| Fatal(format!("{path}: not a valid Ogg Vorbis stream ({e})")))?;
         let (params, problem) = sound_params::params(comment.as_deref());
         let warning = problem.map(|p| format!("{path}: {p}; using defaults"));
@@ -134,7 +139,7 @@ impl Sound {
             name: name.to_owned(),
             path: path.to_owned(),
             params,
-            samples: ogg_end_granule(&bytes).unwrap_or(0),
+            samples,
         };
         Ok((sound, warning))
     }
@@ -153,20 +158,24 @@ impl Sound {
     }
 }
 
-/// The file at `path`; missing, unreadable or empty is fatal (section 2,
-/// rule 4).
-fn read(tree: &dyn Vfs, path: &str) -> Result<Vec<u8>, Fatal> {
-    match vfs::read(tree, path) {
-        Ok(bytes) if !bytes.is_empty() => Ok(bytes),
+/// The file at `path`, open and buffered; missing, unreadable or empty is
+/// fatal (section 2, rule 4).
+fn open<'a>(tree: &'a dyn Vfs, path: &str) -> Result<BufReader<Box<dyn VfsFile + 'a>>, Fatal> {
+    match tree.open(path) {
+        Ok(file) if file.size() > 0 => Ok(BufReader::with_capacity(READ_BUFFER, file)),
         Ok(_) => Err(Fatal(format!("{path}: sound file is empty"))),
         Err(e) => Err(Fatal(format!("{path}: cannot open sound file ({e})"))),
     }
 }
 
-/// Fatal unless `bytes` is an Ogg Vorbis stream of [`CHANNELS`] channel at
-/// [`SAMPLE_RATE`] (sections 1, 5 and Gaps found in review).
-fn check_stream(path: &str, bytes: &[u8]) -> Result<(), Fatal> {
-    let stream = VorbisStream::open(Cursor::new(bytes))
+/// The buffer a sound file's headers are read through.
+const READ_BUFFER: usize = 16 << 10;
+
+/// Fatal unless `file` is an Ogg Vorbis stream of [`CHANNELS`] channel at
+/// [`SAMPLE_RATE`] (sections 1, 5 and Gaps found in review); its number of
+/// samples, the granule of its last page (0 when it has none).
+fn check_stream(path: &str, file: &mut (impl Read + Seek)) -> Result<u64, Fatal> {
+    let stream = VorbisStream::open(file)
         .map_err(|e| Fatal(format!("{path}: not a valid Ogg Vorbis stream ({e})")))?;
     let (channels, rate) = (stream.channels(), stream.sample_rate());
     if channels != CHANNELS || rate != SAMPLE_RATE {
@@ -175,7 +184,7 @@ fn check_stream(path: &str, bytes: &[u8]) -> Result<(), Fatal> {
              {SAMPLE_RATE} Hz"
         )));
     }
-    Ok(())
+    Ok(stream.end_granule().unwrap_or(0))
 }
 
 /// The loaded sounds, by resolved name: a name's first request loads its

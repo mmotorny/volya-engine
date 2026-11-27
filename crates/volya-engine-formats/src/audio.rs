@@ -169,6 +169,12 @@ impl<R: Read + Seek> VorbisStream<R> {
         self.headers.ident.audio_channels.into()
     }
 
+    /// The granule of the stream's last page ([`ogg_end_granule`] of its
+    /// last bytes): its length in frames; `None` when it has none.
+    pub fn end_granule(&self) -> Option<u64> {
+        self.end
+    }
+
     /// The next audio packet decoded, interleaved; `None` at the end.
     fn decode_packet(&mut self) -> io::Result<Option<Vec<i16>>> {
         let packet = loop {
