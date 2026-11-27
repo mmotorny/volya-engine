@@ -20,6 +20,17 @@ index c33c384fbb..91ba17c956 100644
      uint64_t freq = ReadTSCFrequency(NULL);
      if(freq<((BOX64ENV(rdtsc_1ghz))?1000000000LL:1000000)) {
          box64_rdtsc = 1;
+@@ -183,8 +187,9 @@ void computeRDTSC()
+         hardware = 0;
+         freq = ReadTSCFrequency(NULL);
+     }
+     uint64_t efreq = freq;
+-    while(efreq<2000000000 && box64_rdtsc_shift<31) {    // minimum 2GHz, but not too much shift
++    // the frame clock's counter is read as it is, at 1 GHz
++    while(!FrameClockOn() && efreq<2000000000 && box64_rdtsc_shift<31) {    // minimum 2GHz, but not too much shift
+         ++box64_rdtsc_shift;
+         efreq = freq<<box64_rdtsc_shift;
+     }
 diff --git a/src/include/freq.h b/src/include/freq.h
 index fe94bef9f8..eb16a239a6 100644
 --- a/src/include/freq.h

@@ -130,22 +130,51 @@ pub fn main(args: &[&str]) -> Result<u8> {
     }
 }
 
-/// Builds the D3D9 smoke test with MinGW in the container, runs it and
-/// checks the pixel it saved.
+/// The frame clock's step in [`check`]'s clock test: 40 ms in 100 ns ticks.
+const CHECK_STEP: i64 = 400_000;
+
+/// The frame clock test's epoch, seconds since 1970, and the frame it holds
+/// after for a second.
+const CHECK_EPOCH: i64 = 1_767_225_600;
+const CHECK_HOLD: u8 = 2;
+
+/// Builds the smoke tests with MinGW in the container and runs them: the
+/// D3D9 one, checking the pixel it saved, then the clock one on the frame
+/// clock (docs/testing.md), held after frame [`CHECK_HOLD`] for a second,
+/// checking every time it read.
 fn check() -> Result<u8> {
     let dir = root().join("target/wine-check");
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    fs::copy(
-        root().join("tools/xtask/wine/d3d9smoke.c"),
-        dir.join("d3d9smoke.c"),
-    )
-    .map_err(|e| format!("d3d9smoke.c: {e}"))?;
-    let tail = "i686-w64-mingw32-gcc -O2 -static -o d3d9smoke.exe d3d9smoke.c -ld3d9\n\
-                xvfb-run -a wine d3d9smoke.exe";
-    let code = in_container(&dir, tail, &[])?;
+    for file in ["d3d9smoke.c", "clocksmoke.c"] {
+        fs::copy(root().join("tools/xtask/wine").join(file), dir.join(file))
+            .map_err(|e| format!("{file}: {e}"))?;
+    }
+    let tail = format!(
+        "i686-w64-mingw32-gcc -O2 -static -o d3d9smoke.exe d3d9smoke.c -ld3d9\n\
+         i686-w64-mingw32-gcc -O2 -static -o clocksmoke.exe clocksmoke.c -ld3d9 -lwinmm\n\
+         xvfb-run -a wine d3d9smoke.exe\n\
+         wine reg add 'HKCU\\Software\\Wine\\Direct3D' /v csmt /t REG_DWORD /d 0 /f >/dev/null 2>&1\n\
+         wineserver -w\n\
+         clock=/tmp/frame-clock\n\
+         head -c 24 /dev/zero > $clock\n\
+         printf '\\{CHECK_HOLD:03o}' | dd of=$clock bs=1 seek=8 conv=notrunc status=none\n\
+         WINE_FRAME_CLOCK=$clock WINE_FRAME_STEP={CHECK_STEP} WINE_FRAME_EPOCH={CHECK_EPOCH} \
+         xvfb-run -a wine clocksmoke.exe &\n\
+         held=\n\
+         for i in $(seq 600); do\n\
+         held=$(od -An -t d8 -j 16 -N 8 $clock | tr -d ' ')\n\
+         [ \"$held\" = {CHECK_HOLD} ] && break\n\
+         sleep 0.1\n\
+         done\n\
+         echo \"$held\" > held.txt\n\
+         sleep 1\n\
+         head -c 8 /dev/zero | dd of=$clock bs=1 seek=8 conv=notrunc status=none\n\
+         wait $!"
+    );
+    let code = in_container(&dir, &tail, &[])?;
     if code != 0 {
-        return Err(format!("the smoke test exited with {code}"));
+        return Err(format!("the smoke tests exited with {code}"));
     }
     let bmp = dir.join("d3d9smoke.bmp");
     let bytes = fs::read(&bmp).map_err(|e| format!("{}: {e}", bmp.display()))?;
@@ -153,8 +182,58 @@ fn check() -> Result<u8> {
     if pixel != 0x2080e0 {
         return Err(format!("centre pixel 0x{pixel:06x}, expected 0x2080e0"));
     }
-    step("Wine check passed: D3D9 cleared to 0x2080e0");
+    step("D3D9 cleared to 0x2080e0");
+    let held = fs::read_to_string(dir.join("held.txt")).map_err(|e| format!("held.txt: {e}"))?;
+    if held.trim() != CHECK_HOLD.to_string() {
+        return Err(format!(
+            "the frame clock held after frame {:?}, expected {CHECK_HOLD}",
+            held.trim()
+        ));
+    }
+    let times = fs::read_to_string(dir.join("clocksmoke.txt"))
+        .map_err(|e| format!("clocksmoke.txt: {e}"))?;
+    check_times(&times)?;
+    step("Wine check passed: D3D9 cleared, the frame clock steps and holds");
     Ok(0)
+}
+
+/// Checks the clock test's times (`clocksmoke.c`): each frame's two reads
+/// equal (the clock stands still over a real sleep and the hold), and each
+/// time advanced by the step a frame from the first read's frame count.
+fn check_times(text: &str) -> Result {
+    let rows: Vec<Vec<i64>> = text
+        .lines()
+        .map(|l| l.split_whitespace().map(|v| v.parse::<i64>()).collect())
+        .collect::<std::result::Result<_, _>>()
+        .map_err(|e| format!("clocksmoke.txt: {e}"))?;
+    if rows.len() != 10 || rows.iter().any(|r| r.len() != 7) {
+        return Err(format!("clocksmoke.txt: unexpected contents:\n{text}"));
+    }
+    // Frames presented before the test's first (a window's, a device's).
+    let first = rows[0][1] / CHECK_STEP;
+    let epoch = (CHECK_EPOCH + 11_644_473_600) * 10_000_000;
+    for (i, row) in rows.iter().enumerate() {
+        let ticks = (first + row[0]) * CHECK_STEP;
+        // GetTickCount and timeGetTime are 32-bit milliseconds.
+        let ms = (ticks / 10_000) & 0xffff_ffff;
+        let want = [
+            row[0],
+            ticks,
+            10_000_000,
+            ms,
+            ms,
+            epoch + ticks,
+            ticks * 100,
+        ];
+        if row[..] != want[..] {
+            return Err(format!(
+                "clocksmoke.txt line {}: {row:?}, expected {want:?} \
+                 (frame qpc qpf tick time filetime tsc)",
+                i + 1
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// The centre pixel (0xRRGGBB) of a 32-bit BMP.
