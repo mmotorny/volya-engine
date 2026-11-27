@@ -35,6 +35,7 @@ use crate::core::vfs::Vfs;
 use crate::data::{self, Assets, GameData};
 use crate::draw::Ctx;
 use crate::level::{LevelScreen, LevelWorld, NewGameLoad};
+use crate::objects::Prefetched;
 use crate::scene::{Scene, Sprite, TextureId};
 use volya_engine_formats::text::font::UiFont;
 use volya_engine_formats::ui::layout::HAlign;
@@ -408,7 +409,8 @@ pub struct Loading {
 enum Hold {
     #[default]
     None,
-    /// The level's texture files, while the platform prepares them.
+    /// The level's texture files (under `st_prefetching_objects` the
+    /// prefetched models'), while the platform prepares them.
     Preparing(Vec<String>),
     /// Prepared: the next step goes on to the next caption.
     Prepared,
@@ -420,16 +422,26 @@ enum Hold {
 }
 
 impl Loading {
-    /// Begins the first caption.
-    pub fn start(data: &GameData, game_type_changed: bool) -> Self {
+    /// Begins the first caption. Without a change of game type the game
+    /// type's `prefetched` models serve the load (section 5: prefetching
+    /// is skipped); with one they are made again.
+    pub fn start(
+        data: &GameData,
+        game_type_changed: bool,
+        prefetched: Option<Arc<Prefetched>>,
+    ) -> Self {
         let stages = stages(game_type_changed);
         let mut screen = LoadingScreen::default();
         screen.begin(data, stages[0]);
+        let mut load = NewGameLoad::default();
+        if !game_type_changed {
+            load.set_prefetched(prefetched);
+        }
         Self {
             stages,
             current: 0,
             screen,
-            load: NewGameLoad::default(),
+            load,
             prepare: false,
             hold: Hold::None,
             original_open: Vec::new(),
@@ -444,6 +456,17 @@ impl Loading {
     /// [`Loading::world_to_prepare`] a piece at a time (#184).
     pub fn prepare_textures(&mut self) {
         self.prepare = true;
+    }
+
+    /// The game type's prefetched models, once made or given.
+    pub fn prefetched(&self) -> Option<&Arc<Prefetched>> {
+        self.load.prefetched()
+    }
+
+    /// Whether the textures to prepare are the prefetched models', kept
+    /// while the game type stays, not the level's.
+    pub fn prefetching_textures(&self) -> bool {
+        matches!(self.hold, Hold::Preparing(_)) && self.stage() == Stage::PrefetchingObjects
     }
 
     /// The level's texture files, while the platform is to prepare them.
@@ -537,6 +560,16 @@ impl Loading {
                 }
                 if stage == Stage::LoadingTextures && self.prepare {
                     self.hold = Hold::Preparing(self.load.texture_paths());
+                    return Ok(None);
+                }
+                // The prefetched models' textures are loaded with them
+                // (texture-quality-filtering.md 2).
+                if stage == Stage::PrefetchingObjects
+                    && self.prepare
+                    && let Some(p) = self.load.prefetched()
+                    && !p.textures.is_empty()
+                {
+                    self.hold = Hold::Preparing(p.textures.clone());
                     return Ok(None);
                 }
             }
@@ -710,7 +743,7 @@ mod tests {
         let tree = fixture::tree();
         let data = fixture::data(&tree);
         let mut assets = fixture::assets();
-        let mut loading = Loading::start(&data, true);
+        let mut loading = Loading::start(&data, true, None);
         let scene = |l: &Loading, assets: &mut Assets| {
             l.screen()
                 .scene(&tree, &data, assets, Resolution::new(1024, 768))

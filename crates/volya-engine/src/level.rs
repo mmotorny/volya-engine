@@ -1065,9 +1065,10 @@ fn first_switch_pass(
 /// The file of texture `name`: `$level$<name>.dds`, then
 /// `$game_textures$<name>.dds` (the saved-games folder has no place on this
 /// platform); neither is "Can't find texture" (static-shading.md 4.2).
+/// Without a level (`dir` empty: the prefetching) only the latter.
 fn locate_texture(tree: &dyn Vfs, data: &GameData, dir: &str, name: &str) -> io::Result<String> {
     let level = format!("{dir}\\{name}.dds");
-    if tree.exists(&level) {
+    if !dir.is_empty() && tree.exists(&level) {
         return Ok(level);
     }
     let path = data
@@ -1191,6 +1192,88 @@ fn create_table(
     Ok(())
 }
 
+/// What the shader library is made of: `shaders.xr`'s definitions by
+/// name, `textures.ltx`'s associations, and the scripted shaders' folder.
+#[allow(clippy::type_complexity)]
+fn shader_files(
+    tree: &dyn Vfs,
+    data: &GameData,
+) -> io::Result<(
+    HashMap<String, shaders_xr::Definition>,
+    HashMap<String, shading::Association>,
+    String,
+)> {
+    let aliases = &data.aliases;
+    let definitions = shaders_xr::parse(&vfs::read(
+        tree,
+        &aliases.path("$game_data$", "shaders.xr")?,
+    )?)?
+    .into_iter()
+    .map(|d| (d.name.clone(), d))
+    .collect();
+    let textures_ltx = config::load(tree, &aliases.path("$game_textures$", "textures.ltx")?)?;
+    let associations = shading::associations(&textures_ltx);
+    Ok((
+        definitions,
+        associations,
+        aliases.path("$game_shaders$", "r1")?,
+    ))
+}
+
+/// Whether `shader_dir\<module>.s` exists and defines a normal or special
+/// pass.
+fn scripted(tree: &dyn Vfs, shader_dir: &str, module: &str) -> bool {
+    vfs::read(tree, &format!("{shader_dir}\\{module}.s"))
+        .is_ok_and(|text| shading::defines_normal_or_special(&String::from_utf8_lossy(&text)))
+}
+
+/// The texture files of the surfaces of `prefetched`'s models, each once:
+/// each mesh's pair resolved as a level's object entries are
+/// (level-objects.md 5.2), its textures located without a level. Loaded
+/// with the models, before any level (texture-quality-filtering.md 2: the
+/// prefetching loads the textures created so far). An entry not drawn, or
+/// one that fails, adds none (our choice): the level that uses it resolves
+/// it again, and fails there as it does without prefetching.
+fn prefetched_textures(
+    tree: &dyn Vfs,
+    data: &GameData,
+    prefetched: &objects::Prefetched,
+) -> io::Result<Vec<String>> {
+    if prefetched.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (definitions, associations, shader_dir) = shader_files(tree, data)?;
+    let scripted = |module: &str| scripted(tree, &shader_dir, module);
+    let library = ShaderLibrary {
+        definitions: &definitions,
+        scripted: &scripted,
+        associations: &associations,
+    };
+    let mut entries = std::collections::HashSet::new();
+    let mut names = std::collections::HashSet::new();
+    let mut paths = Vec::new();
+    for mesh in prefetched.models().flat_map(|m| &m.meshes) {
+        let entry = format!("{}/{}", mesh.shader, mesh.texture);
+        if !entries.insert(entry.clone()) {
+            continue;
+        }
+        let Ok(surface) = library.resolve(&entry) else {
+            continue;
+        };
+        if !surface.program.is_model() {
+            continue;
+        }
+        for name in surface.textures.into_iter().flatten().chain(surface.env) {
+            if names.insert(name.clone())
+                && let Ok(path) = locate_texture(tree, data, "", &name)
+            {
+                paths.push(path);
+            }
+        }
+    }
+    Ok(paths)
+}
+
 /// The surfaces of the shader entries `draw_items` use and of the objects'
 /// entries `object_entries` (level-objects.md 5.2: a model mesh's pair
 /// resolves like an entry of the shader table; only the model programs
@@ -1205,21 +1288,8 @@ fn resolve_surfaces(
     object_entries: &[String],
     billboard_shaders: &[u16],
 ) -> io::Result<Resolved> {
-    let aliases = &data.aliases;
-    let definitions: HashMap<String, shaders_xr::Definition> = shaders_xr::parse(&vfs::read(
-        tree,
-        &aliases.path("$game_data$", "shaders.xr")?,
-    )?)?
-    .into_iter()
-    .map(|d| (d.name.clone(), d))
-    .collect();
-    let shader_dir = aliases.path("$game_shaders$", "r1")?;
-    let scripted = |module: &str| {
-        vfs::read(tree, &format!("{shader_dir}\\{module}.s"))
-            .is_ok_and(|text| shading::defines_normal_or_special(&String::from_utf8_lossy(&text)))
-    };
-    let textures_ltx = config::load(tree, &aliases.path("$game_textures$", "textures.ltx")?)?;
-    let associations = shading::associations(&textures_ltx);
+    let (definitions, associations, shader_dir) = shader_files(tree, data)?;
+    let scripted = |module: &str| scripted(tree, &shader_dir, module);
     let library = ShaderLibrary {
         definitions: &definitions,
         scripted: &scripted,
@@ -1376,6 +1446,10 @@ pub struct NewGameLoad {
     flares: Vec<Flares>,
     /// The spawn file's path, which `st_creating_new_game` reads.
     spawn_path: String,
+    /// The game type's prefetched models, made under
+    /// `st_prefetching_objects` or given by the game type
+    /// ([`NewGameLoad::set_prefetched`]).
+    prefetched: Option<Arc<objects::Prefetched>>,
     simulation: Option<Simulation>,
     /// The objects whose visuals the level loads.
     level_objects: Vec<objects::LevelObject>,
@@ -1577,6 +1651,19 @@ impl NewGameLoad {
             .into_iter()
             .filter_map(|p| crate::core::file_cache::file_size(tree, &p).map(|size| (p, size)))
             .collect()
+    }
+
+    /// The game type's prefetched models, for a load that skips
+    /// `st_prefetching_objects` (loading-screen.md 5: the game type is
+    /// unchanged).
+    pub fn set_prefetched(&mut self, prefetched: Option<Arc<objects::Prefetched>>) {
+        self.prefetched = prefetched;
+    }
+
+    /// The prefetched models it loads with, once `st_prefetching_objects`
+    /// has run or they were given.
+    pub fn prefetched(&self) -> Option<&Arc<objects::Prefetched>> {
+        self.prefetched.as_ref()
     }
 
     /// The level directory name, once the new game is created.
@@ -1925,7 +2012,8 @@ impl NewGameLoad {
                 self.sound = Some(sound);
                 self.weather = Some(weather);
                 let level_objects = std::mem::take(&mut self.level_objects);
-                let spawned = objects::spawn(tree, data, &dir, &level_objects)?;
+                let spawned =
+                    objects::spawn(tree, data, &dir, &level_objects, self.prefetched.as_deref())?;
                 // The artefacts online at the start are created as the
                 // client creates its objects (artefact-idle-effects.md 3.1),
                 // with their models' bones, on the effects' clock.
@@ -2221,12 +2309,23 @@ impl NewGameLoad {
             Stage::LoadingDetails => {
                 self.details = level_details::read(tree, &dir, &data.system)?;
             }
+            // The models of `prefetch_visuals_single` and their textures'
+            // files (console-diagnostics.md 2.4.1), kept while the game
+            // type stays; the level's objects take their models from them.
+            // No object is pre-created: `prefetch_objects_single` is empty.
+            Stage::PrefetchingObjects => {
+                let mut prefetched = objects::Prefetched::load(tree, data)?;
+                prefetched.textures = prefetched_textures(tree, data, &prefetched)?;
+                tracing::info!(
+                    models = prefetched.len(),
+                    textures = prefetched.textures.len(),
+                    "prefetched"
+                );
+                self.prefetched = Some(Arc::new(prefetched));
+            }
             // The game is made under `st_creating_new_game`, as the
             // original's; nothing under `st_server_connecting`.
-            Stage::PrefetchingObjects
-            | Stage::ServerStarting
-            | Stage::LoadingAlifeSimulator
-            | Stage::ServerConnecting => {}
+            Stage::ServerStarting | Stage::LoadingAlifeSimulator | Stage::ServerConnecting => {}
         }
         Ok(())
     }

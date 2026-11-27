@@ -338,6 +338,9 @@ pub struct Renderer {
     /// Textures made ahead of their first use, by source path
     /// ([`Renderer::add_prepared`]).
     prepared: RefCell<HashMap<String, Texture>>,
+    /// Textures kept while the game type stays, by source path
+    /// ([`Renderer::keep_texture`]): the prefetched models'.
+    kept: RefCell<HashMap<String, Texture>>,
     /// Bytes of texture data written so far.
     texture_bytes: Cell<u64>,
     /// Bytes of world geometry written so far.
@@ -399,6 +402,7 @@ impl Renderer {
             frame: None,
             offscreen: None,
             prepared: Default::default(),
+            kept: Default::default(),
             texture_bytes: Default::default(),
             geometry_bytes: Default::default(),
             // Made with the renderer, before any level: what lives across
@@ -451,6 +455,22 @@ impl Renderer {
     /// [`Renderer::take_prepared`].
     pub fn add_prepared(&self, path: &str, texture: Texture) {
         self.prepared.borrow_mut().insert(path.to_owned(), texture);
+    }
+
+    /// Keeps `texture`, made from the file at `path`, for every level
+    /// that draws it while the renderer lives ([`Renderer::kept_texture`]).
+    pub fn keep_texture(&self, path: &str, texture: Texture) {
+        self.kept.borrow_mut().insert(path.to_owned(), texture);
+    }
+
+    /// The texture kept for `path`, if any (it stays kept).
+    pub fn kept_texture(&self, path: &str) -> Option<Texture> {
+        self.kept.borrow().get(path).cloned()
+    }
+
+    /// How many textures are kept.
+    pub fn kept_count(&self) -> usize {
+        self.kept.borrow().len()
     }
 
     /// The buffers, textures and vertex arrays its context holds now

@@ -125,7 +125,8 @@ fn lens_quad(q: &volya_engine_formats::ui::picture::Quad, size: (u32, u32), map:
 }
 
 /// The texture of the DDS file at `path` of `tree`: as the platform
-/// prepared it, else read and uploaded ([`Renderer::create_texture`]) with
+/// prefetched or prepared it, else read and uploaded
+/// ([`Renderer::create_texture`]) with
 /// `quality`'s top levels dropped (texture-quality-filtering.md 1).
 fn load_texture(
     renderer: &Renderer,
@@ -133,6 +134,10 @@ fn load_texture(
     quality: &TextureQuality,
     path: &str,
 ) -> Result<Texture, String> {
+    // Prefetched with the game type's models, kept while it stays.
+    if let Some(texture) = renderer.kept_texture(path) {
+        return Ok(texture);
+    }
     // Prepared while the level loaded (transcoded for this GPU, #113).
     if let Some(texture) = renderer.take_prepared(path) {
         return Ok(texture);

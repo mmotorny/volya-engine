@@ -11,10 +11,11 @@
 //! hanging lamps' lights as structure (section 6).
 //!
 //! Loading runs in the level's loading stages ([`crate::level::NewGameLoad`]):
-//! the switch pass, the models, their surfaces, the light inputs. Each
-//! model file is read once and shared by every object showing it; its
-//! vertices go into one buffer for all models, which the presenter uploads
-//! with the static world and then drops.
+//! the switch pass, the models (taken from the game type's prefetched ones,
+//! [`Prefetched`], where they hold the file), their surfaces, the light
+//! inputs. Each model file is read once and shared by every object showing
+//! it; its vertices go into one buffer for all models, which the presenter
+//! uploads with the static world and then drops.
 
 use std::collections::HashMap;
 use std::io;
@@ -258,7 +259,9 @@ impl<'a> Characters<'a> {
 
 /// The file of visual name `name` (section 3.1): `name` as given, then
 /// `$level$` + n′, then `$game_meshes$` + n′, n′ = `name` with `.ogf`
-/// appended if it has no `.`. Not found is the game's fatal error.
+/// appended if it has no `.`. Not found is the game's fatal error. Without
+/// a level (`dir` empty: the prefetching, before any level is known) the
+/// `$level$` candidate is left out.
 pub fn locate_model(tree: &dyn Vfs, data: &GameData, dir: &str, name: &str) -> io::Result<String> {
     let full = if name.contains('.') {
         name.to_owned()
@@ -266,11 +269,11 @@ pub fn locate_model(tree: &dyn Vfs, data: &GameData, dir: &str, name: &str) -> i
         format!("{name}.ogf")
     };
     let candidates = [
-        Ok(name.to_owned()),
-        Ok(format!("{dir}\\{full}")),
-        data.aliases.path("$game_meshes$", &full),
+        Some(Ok(name.to_owned())),
+        (!dir.is_empty()).then(|| Ok(format!("{dir}\\{full}"))),
+        Some(data.aliases.path("$game_meshes$", &full)),
     ];
-    for c in candidates {
+    for c in candidates.into_iter().flatten() {
         let c = c?;
         if tree.exists(&c) {
             return Ok(c);
@@ -373,6 +376,116 @@ pub fn add_model(
             .map(|(b, m)| (b.name.clone(), m))
             .collect(),
     })
+}
+
+/// The section listing the models prefetched for the single-player game
+/// type (console-diagnostics.md 2.4.1: `prefetch_visuals_single`, its keys
+/// the visual names).
+pub const PREFETCH_VISUALS: &str = "prefetch_visuals_single";
+
+/// The models loaded under `st_prefetching_objects` and kept while the game
+/// type stays (console-diagnostics.md 2.4.1; docs/architecture/memory.md,
+/// Lifetimes): each listed visual's file read once, parsed and laid out as
+/// [`add_model`] lays it out, each model's vertices, indices and detail
+/// windows in blocks of its own (so the set grows by one model at a time,
+/// with no growing block's spare). A level's objects take their models from
+/// here ([`spawn`]); their surfaces' texture files are listed beside, for
+/// the platform to load with them.
+#[derive(Debug, Default)]
+pub struct Prefetched {
+    /// By located path, lower-cased: the model's index.
+    by_path: HashMap<String, usize>,
+    models: Vec<PrefetchedModel>,
+    /// The texture files of the models' surfaces, each once.
+    pub textures: Vec<String>,
+}
+
+/// A prefetched model, as [`add_model`] made it into a geometry of its own.
+#[derive(Debug)]
+struct PrefetchedModel {
+    model: LoadedModel,
+    vertices: Box<[u8]>,
+    indices: Box<[u16]>,
+    windows: Box<[DetailWindow]>,
+}
+
+impl Prefetched {
+    /// Loads the models of the system configuration's section
+    /// [`PREFETCH_VISUALS`], in its key order, each file once (names
+    /// locating the same file share it). A name that locates no file, or a
+    /// file that does not parse, fails it, as an object's model fails the
+    /// level's load. Each file is held in the file cache while it is read
+    /// (docs/architecture/memory.md, File-backed data).
+    pub fn load(tree: &dyn Vfs, data: &GameData) -> io::Result<Self> {
+        let mut p = Self::default();
+        let Some(section) = data.system.section(PREFETCH_VISUALS) else {
+            return Ok(p);
+        };
+        // One model's layout at a time, then copied into blocks its size.
+        let mut scratch = ObjectGeometry::default();
+        for entry in section.entries() {
+            let path = locate_model(tree, data, "", entry.key())?;
+            let key = path.to_lowercase();
+            if p.by_path.contains_key(&key) {
+                continue;
+            }
+            let model = {
+                let bytes = crate::core::file_cache::read(tree, &path)?;
+                let parsed = Model::parse(&bytes).map_err(|e| invalid(format!("{path}: {e}")))?;
+                scratch.vertices.clear();
+                scratch.indices.clear();
+                scratch.windows.clear();
+                add_model(&path, &parsed, &mut scratch)?
+            };
+            p.models.push(PrefetchedModel {
+                model,
+                vertices: scratch.vertices.as_slice().into(),
+                indices: scratch.indices.as_slice().into(),
+                windows: scratch.windows.as_slice().into(),
+            });
+            p.by_path.insert(key, p.models.len() - 1);
+        }
+        Ok(p)
+    }
+
+    /// How many models it holds.
+    pub fn len(&self) -> usize {
+        self.models.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.models.is_empty()
+    }
+
+    /// Whether it holds the model of the file at `path`.
+    pub fn holds(&self, path: &str) -> bool {
+        self.by_path.contains_key(&path.to_lowercase())
+    }
+
+    /// Every model, as loaded (its ranges in its own geometry).
+    pub fn models(&self) -> impl Iterator<Item = &LoadedModel> {
+        self.models.iter().map(|m| &m.model)
+    }
+
+    /// The model of the file at `path`, if prefetched, appended to
+    /// `geometry` as [`add_model`] appends the file's.
+    pub fn append(&self, path: &str, geometry: &mut ObjectGeometry) -> Option<LoadedModel> {
+        let m = &self.models[*self.by_path.get(&path.to_lowercase())?];
+        let vertex = (geometry.vertices.len() / crate::render::world::MODEL_VERTEX_BYTES) as u32;
+        let index = geometry.indices.len() as u32;
+        let window = geometry.windows.len() as u32;
+        geometry.vertices.extend_from_slice(&m.vertices);
+        geometry.indices.extend_from_slice(&m.indices);
+        geometry.windows.extend_from_slice(&m.windows);
+        let mut model = m.model.clone();
+        model.path = path.to_owned();
+        for mesh in &mut model.meshes {
+            mesh.first_vertex += vertex;
+            mesh.first_index += index;
+            mesh.windows[0] += window;
+        }
+        Some(model)
+    }
 }
 
 /// An object drawn with a model.
@@ -586,12 +699,14 @@ pub struct Spawned {
     pub geometry: ObjectGeometry,
 }
 
-/// Loads the visuals of `objects` (sections 3, 4): each model file once.
+/// Loads the visuals of `objects` (sections 3, 4): each model file once,
+/// taken from `prefetched` where it holds the file.
 pub fn spawn(
     tree: &dyn Vfs,
     data: &GameData,
     dir: &str,
     objects: &[LevelObject],
+    prefetched: Option<&Prefetched>,
 ) -> io::Result<Spawned> {
     let mut characters = Characters::new(tree, data);
     // Models by file path, and by visual name (located once each).
@@ -617,10 +732,17 @@ pub fn spawn(
                 let index = match by_path.get(&key) {
                     Some(&i) => i,
                     None => {
-                        let bytes = vfs::read(tree, &path)?;
-                        let parsed =
-                            Model::parse(&bytes).map_err(|e| invalid(format!("{path}: {e}")))?;
-                        s.models.push(add_model(&path, &parsed, &mut s.geometry)?);
+                        let prefetched = prefetched.and_then(|p| p.append(&path, &mut s.geometry));
+                        let model = match prefetched {
+                            Some(model) => model,
+                            None => {
+                                let bytes = vfs::read(tree, &path)?;
+                                let parsed = Model::parse(&bytes)
+                                    .map_err(|e| invalid(format!("{path}: {e}")))?;
+                                add_model(&path, &parsed, &mut s.geometry)?
+                            }
+                        };
+                        s.models.push(model);
                         by_path.insert(key, s.models.len() - 1);
                         s.models.len() - 1
                     }

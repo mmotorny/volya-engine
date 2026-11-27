@@ -341,6 +341,16 @@ pub fn load() -> Option<u64> {
     RUNNING.with(|r| r.borrow().as_ref()?.app.load())
 }
 
+/// Whether the textures to prepare are the prefetched models', kept while
+/// the game type stays ([`App::prefetching_textures`]).
+pub fn prefetching_textures() -> bool {
+    RUNNING.with(|r| {
+        r.borrow()
+            .as_ref()
+            .is_some_and(|r| r.app.prefetching_textures())
+    })
+}
+
 /// Whether a level's loading waits for its textures.
 pub fn preparing_textures() -> bool {
     RUNNING.with(|r| {

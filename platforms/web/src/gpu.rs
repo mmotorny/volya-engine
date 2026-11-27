@@ -481,6 +481,8 @@ pub fn world_stats() -> serde_json::Value {
                     .collect::<serde_json::Map<_, _>>()
             }),
             "prepared_textures": g.as_ref().map(|gpu| gpu.renderer.as_ref().map_or(0, |r| r.prepared_count())),
+            // The prefetched models' textures kept for the game type.
+            "kept_textures": g.as_ref().map(|gpu| gpu.renderer.as_ref().map_or(0, |r| r.kept_count())),
             "preparing_world": g.as_ref().map(|gpu| gpu.presenter.preparing_world()),
         })
     })

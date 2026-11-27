@@ -535,6 +535,47 @@ fn loading_stage_times() {
     );
 }
 
+/// The level's objects take their models from the prefetched ones
+/// (console-diagnostics.md 2.4.1) exactly as their files would lay them
+/// out: the same models, meshes and geometry as a load without the
+/// prefetching (a later New Game of the game type given none).
+#[test]
+fn prefetched_models_lay_out_as_their_files() {
+    let Some(archives) = gog_archives::archives() else {
+        return;
+    };
+    let root = StdVfs::new(archives[0].file.parent().unwrap());
+    let tree = DbVfs::open_game(&root, Some("mods")).unwrap();
+    let data = GameData::read(&tree, None, SIZE).unwrap();
+    let load = |stages: &[Stage]| {
+        let mut load = level::NewGameLoad::default();
+        for &stage in stages {
+            load.run(stage, &tree, &data).unwrap();
+        }
+        let prefetched = load.prefetched().cloned();
+        let screen = load.finish(0).unwrap();
+        let objects = &screen.world().objects;
+        let models: Vec<_> = (objects.models.iter())
+            .map(|m| (m.path.clone(), m.meshes.clone()))
+            .collect();
+        (prefetched, models, objects.take_geometry().unwrap())
+    };
+    let (prefetched, with, with_geometry) = load(&Stage::ALL);
+    let (none, without, without_geometry) = load(&Stage::ALL[1..]);
+    let p = prefetched.unwrap();
+    eprintln!(
+        "{} models prefetched, {} texture files; the level's {} models, {} of them prefetched",
+        p.len(),
+        p.textures.len(),
+        with.len(),
+        with.iter().filter(|(path, _)| p.holds(path)).count()
+    );
+    let models = p.len();
+    assert!(models > 0 && none.is_none());
+    assert_eq!(with, without);
+    assert!(with_geometry == without_geometry, "the objects' geometry");
+}
+
 /// With the platform preparing textures (#113), a New Game's loading waits
 /// under `st_loading_textures`, its caption showing, until they are
 /// prepared. The world taking them is the render-level suite's
@@ -575,11 +616,30 @@ fn loading_waits_for_prepared_textures() {
         _ => None,
     };
     let mut frames = 0;
+    // First the prefetched models' textures, under the first caption
+    // (texture-quality-filtering.md 2), kept for the game type.
+    while app.textures_to_prepare().is_none() {
+        step(&mut app, &mut input, &mut audio);
+        frames += 1;
+        assert!(frames < 40, "never asked to prefetch: {:?}", app.state());
+    }
+    assert_eq!(
+        caption(&app),
+        Some((1, "Кэширование объектов...".to_owned()))
+    );
+    assert!(app.prefetching_textures());
+    let prefetched = app.textures_to_prepare().unwrap().len();
+    assert!(prefetched > 200, "{prefetched} textures prefetched");
+    step(&mut app, &mut input, &mut audio);
+    assert_eq!(caption(&app).map(|c| c.0), Some(1), "held");
+    app.textures_prepared();
+    step(&mut app, &mut input, &mut audio);
     while app.textures_to_prepare().is_none() {
         step(&mut app, &mut input, &mut audio);
         frames += 1;
         assert!(frames < 40, "never asked to prepare: {:?}", app.state());
     }
+    assert!(!app.prefetching_textures());
     let waiting = caption(&app);
     assert_eq!(waiting, Some((16, "Загрузка текстур...".to_owned())));
     for _ in 0..3 {
