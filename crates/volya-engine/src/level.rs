@@ -350,10 +350,6 @@ fn refilled<T>(list: &mut Arc<Vec<T>>) -> &mut Vec<T> {
 /// The level shown.
 pub struct LevelScreen {
     world: Arc<LevelWorld>,
-    /// The `level` file, held in the file cache while the level runs, as
-    /// the original keeps it open (docs/architecture/memory.md,
-    /// File-backed data); `None` only in the unit tests' empty level.
-    _level_file: Option<CachedFile>,
     /// Shared with the sound system, whose level mesh it is
     /// (sound-occlusion.md section 3).
     collision: Arc<CollisionWorld>,
@@ -1424,9 +1420,9 @@ pub struct NewGameLoad {
     actor: Option<spawn::ActorStart>,
     dir: String,
     /// The `level` file, held in the file cache and read in place from
-    /// `st_opening_stream` to the level's end (docs/architecture/memory.md,
-    /// File-backed data); its chunks are parsed under the captions that
-    /// read them.
+    /// `st_opening_stream` to its last reader, `st_loading_sectors_portals`
+    /// (docs/architecture/memory.md, File-backed data); its chunks are
+    /// parsed under the captions that read them.
     level_file: Option<CachedFile>,
     /// Its shader table, from `st_loading_shaders`.
     shaders: Option<Vec<String>>,
@@ -1934,6 +1930,9 @@ impl NewGameLoad {
                     Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
                     Err(e) => return Err(e),
                 };
+                // The file's last reader: released here, not at the level's
+                // end (rule 5, #789).
+                self.level_file = None;
             }
             // The actor, the start weather (level-loading.md 2.6) and the
             // objects' models (level-objects.md sections 3, 4), placed under
@@ -2357,7 +2356,6 @@ impl NewGameLoad {
         let name = earlier(self.name, "level")?;
         let actor = earlier(self.actor, "actor")?;
         let shaders = earlier(self.shaders, "shader table")?;
-        let level_file = earlier(self.level_file, "level")?;
         let visibility = earlier(self.visibility, "sectors")?;
         let geom = earlier(self.geom, "level.geom")?;
         let collision = earlier(self.collision, "level.cform")?;
@@ -2439,7 +2437,6 @@ impl NewGameLoad {
                 billboards: self.billboards_world,
             }),
             collision,
-            _level_file: Some(level_file),
             sound_data: self.sound,
             fatal: None,
             footsteps: Some(footsteps),
@@ -4129,7 +4126,6 @@ impl LevelScreen {
                 details: None,
                 billboards: None,
             }),
-            _level_file: None,
             collision: Arc::new(
                 CollisionWorld::new(Default::default(), Vec::new()).expect("collision"),
             ),
