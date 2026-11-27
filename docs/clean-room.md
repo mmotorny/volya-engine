@@ -51,7 +51,7 @@ Rejected:
 | Public documentation of generic algorithms (e.g. standard compression schemes) | everyone |
 | Leaked X-Ray source, OpenXRay and forks, anything derived from them; X-Ray documentation of unclear provenance | nobody |
 
-Black-box runs never look inside the program: no debugger, memory inspection, injected code, API tracing or disassembly; those stay dirty. A clean agent may compare its work with black-box outputs, but behaviour still enters code only through approved specs.
+Black-box runs never look inside the program: no debugger, memory inspection, API tracing or disassembly; those stay dirty. Controlling its environment without observing it is black-box: the capture tooling's frame clock (a proxy DLL stepping the timer reads it is given) observes nothing of the program. Specs come from static analysis; black-box outputs verify (decided by the user, 2026-11-27): a clean agent may view and compare the original's screenshots with ours, and a difference is established with our own probes or becomes a question for the dirty side, never diagnosed by looking inside the original. Behaviour enters code only through approved specs.
 
 Model memory is not a source. Agents may have absorbed X-Ray-derived code in training; every fact must be established from data or binaries, never from recollection.
 
@@ -67,7 +67,7 @@ Every dirty agent reads this section with the rest of this file; it is binding a
 **Both roles**
 - Work only in the dirty workspace; never write to the repository (except the reviewer's copy of an approved spec) or to GitHub. Reading issues with `gh` is fine.
 - Never install tools or packages (pip, brew, downloads); use what is set up. If something is missing, report `BLOCKED` with what is needed.
-- Run the shipped game only on the user's Windows PC, through the tooling set up for it; never on the Mac.
+- Work statically: don't run the shipped game (decided by the user, 2026-11-27); a fact that only a run could establish is recorded as unestablished.
 - Don't run builds, browser suites or the iOS Simulator (the machine's memory is shared, AGENTS.md); `bazel run //tools/xtask -- spec-lint` is the exception.
 - Model memory is not a source; every fact comes from the user's game data or the shipped binaries, through a check script in the dirty workspace.
 - Report only the verdict line your role defines, never findings.
