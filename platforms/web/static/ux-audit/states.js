@@ -189,7 +189,7 @@ export const SECTIONS = [
       { id: "settings", name: "Game files imported", game: imported, screen: "settings" },
       {
         id: "settings-touch-experimental",
-        name: "Experimental touch controls chosen",
+        name: "Ergonomic mobile mode chosen",
         game: imported,
         screen: "settings",
         touchMode: "experimental",

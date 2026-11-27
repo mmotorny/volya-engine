@@ -753,8 +753,8 @@ function importSection(status, kept) {
 }
 
 /**
- * Touch controls (#802), on touch devices: standard (the default) or
- * experimental, `volya.touchControls` (main.js) keeping the choice; the
+ * The mobile mode (#802), on touch devices: standard (the default) or
+ * ergonomic (experimental), `volya.touchControls` (main.js) keeping the choice; the
  * level's controls take it when a level starts.
  */
 function touchPanel() {
@@ -774,10 +774,10 @@ function touchPanel() {
     "div",
     { role: "radiogroup" },
     choice("standard", "Standard"),
-    choice("experimental", "Experimental", "Tap where to go; drag anywhere to look, and flick to keep turning."),
+    choice("experimental", "Ergonomic (experimental)", "Hold the phone naturally and say what you want: tap where to go, drag anywhere to look, flick to keep turning."),
   );
-  group.setAttribute("aria-label", "Touch controls");
-  return element("div", { className: "panel" }, element("p", { className: "label", textContent: "Touch controls" }), group);
+  group.setAttribute("aria-label", "Mobile mode");
+  return element("div", { className: "panel" }, element("p", { className: "label", textContent: "Mobile mode" }), group);
 }
 
 /**

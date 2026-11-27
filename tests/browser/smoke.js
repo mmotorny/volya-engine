@@ -721,10 +721,10 @@ export const tests = {
       await controls.set("standard");
       await volya.showSettings();
       const group = radio("standard")?.closest('[role="radiogroup"]');
-      assertEqual(group?.getAttribute("aria-label"), "Touch controls", "the group");
+      assertEqual(group?.getAttribute("aria-label"), "Mobile mode", "the group");
       assertEqual(
         [...group.querySelectorAll("label")].map((l) => l.textContent),
-        ["Standard", "ExperimentalTap where to go; drag anywhere to look, and flick to keep turning."],
+        ["Standard", "Ergonomic (experimental)Hold the phone naturally and say what you want: tap where to go, drag anywhere to look, flick to keep turning."],
         "the choices",
       );
       assert(radio("standard").checked && !radio("experimental").checked, "standard by default");
