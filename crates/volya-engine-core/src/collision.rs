@@ -134,77 +134,225 @@ impl AttributeLayout {
     }
 }
 
-/// Bits of a packed vertex index: three in a `u64` (#371).
-const INDEX_BITS: u32 = 21;
-const INDEX_MASK: u64 = (1 << INDEX_BITS) - 1;
+/// Triangles to a block of vertex indices (our choice, measured, #793).
+const TRIANGLE_BLOCK: usize = 16;
+/// Vertices to a block of positions (our choice, measured, #793).
+const VERTEX_BLOCK: usize = 32;
+/// Bytes after a block stream's last, so that a field is read with one
+/// 8-byte load.
+const PADDING: usize = 8;
 
-/// Each triangle's vertex indices: three in a `u64` of 21 bits each where
-/// every index fits (8 bytes a triangle, not 12; our choice, #371), else
-/// as stored.
+/// The bits a value up to `span` takes.
+fn width(span: u32) -> u32 {
+    u32::BITS - span.leading_zeros()
+}
+
+/// The `width`-bit field (at most 32 bits) at bit `at` of `bytes`.
+#[inline]
+fn field(bytes: &[u8], at: usize, width: u32) -> u32 {
+    let b = at / 8;
+    let word = u64::from_le_bytes(bytes[b..b + 8].try_into().expect("8 bytes"));
+    ((word >> (at % 8)) & ((1u64 << width) - 1)) as u32
+}
+
+/// Writes `v` as the field at bit `at` of `bytes`, whose
+/// bits there are clear.
+fn put(bytes: &mut [u8], at: usize, v: u32) {
+    let b = at / 8;
+    let word = u64::from_le_bytes(bytes[b..b + 8].try_into().expect("8 bytes"));
+    bytes[b..b + 8].copy_from_slice(&(word | u64::from(v) << (at % 8)).to_le_bytes());
+}
+
+/// Each triangle's vertex indices, coded losslessly (our choice, #793): in
+/// blocks of [`TRIANGLE_BLOCK`] consecutive triangles, each index as its
+/// difference from the block's least, in as many bits as the block's
+/// largest difference takes (4.3 MB for `l01_escape`'s 1,375,470
+/// triangles, against 11.0 MB at 8 bytes a triangle). A block of `w`-bit
+/// fields takes `6 w` bytes, so its start gives its width.
 #[derive(Clone, Debug, Default)]
 struct Triangles {
-    packed: Vec<u64>,
-    wide: Vec<[u32; 3]>,
-    /// Whether `wide` holds them.
-    is_wide: bool,
+    /// Each block's least index and first byte in `bytes`, and after the
+    /// last the end of its bytes.
+    blocks: Vec<[u32; 2]>,
+    bytes: Vec<u8>,
+    len: usize,
+    /// The block being filled.
+    pending: Vec<[u32; 3]>,
 }
 
 impl Triangles {
-    /// Empty, with room for `n` triangles over `vertex_count` vertices.
-    fn with_capacity(n: usize, vertex_count: usize) -> Self {
-        if vertex_count <= 1 << INDEX_BITS {
-            Self {
-                packed: Vec::with_capacity(n),
-                wide: Vec::new(),
-                is_wide: false,
-            }
-        } else {
-            Self {
-                packed: Vec::new(),
-                wide: Vec::with_capacity(n),
-                is_wide: true,
-            }
+    /// Empty, for about `n` triangles.
+    fn with_capacity(n: usize) -> Self {
+        let blocks = n.div_ceil(TRIANGLE_BLOCK);
+        Self {
+            blocks: Vec::with_capacity(blocks + 1),
+            bytes: Vec::new(),
+            len: 0,
+            pending: Vec::with_capacity(TRIANGLE_BLOCK),
         }
     }
 
-    /// Appends a triangle whose indices are below the vertex count given
-    /// to [`Self::with_capacity`].
+    /// Appends a triangle; [`Self::finish`] codes the last block.
     fn push(&mut self, t: [u32; 3]) {
-        if self.is_wide {
-            self.wide.push(t);
-        } else {
-            self.packed.push(pack(t));
+        self.pending.push(t);
+        self.len += 1;
+        if self.pending.len() == TRIANGLE_BLOCK {
+            self.code_pending();
         }
+    }
+
+    fn code_pending(&mut self) {
+        let base = self.pending.iter().flatten().copied().min().unwrap_or(0);
+        let top = self.pending.iter().flatten().copied().max().unwrap_or(0);
+        let w = width(top - base);
+        let start = self.bytes.len();
+        // The block whole, a short last one too: 48 fields of w bits.
+        self.bytes.resize(start + 6 * w as usize + PADDING, 0);
+        for (j, &i) in self.pending.iter().flatten().enumerate() {
+            put(&mut self.bytes, start * 8 + j * w as usize, i - base);
+        }
+        self.bytes.truncate(start + 6 * w as usize);
+        self.blocks.push([base, start as u32]);
+        self.pending.clear();
+    }
+
+    /// Codes the last block and gives back unused room.
+    fn finish(mut self) -> Self {
+        if !self.pending.is_empty() {
+            self.code_pending();
+        }
+        self.blocks.push([0, self.bytes.len() as u32]);
+        self.bytes.resize(self.bytes.len() + PADDING, 0);
+        self.bytes.shrink_to_fit();
+        self.blocks.shrink_to_fit();
+        self.pending = Vec::new();
+        self
     }
 
     fn len(&self) -> usize {
-        if self.is_wide {
-            self.wide.len()
-        } else {
-            self.packed.len()
-        }
+        self.len
     }
 
+    #[inline]
     fn get(&self, i: usize) -> [u32; 3] {
-        if !self.is_wide {
-            let p = self.packed[i];
-            [
-                (p & INDEX_MASK) as u32,
-                (p >> INDEX_BITS & INDEX_MASK) as u32,
-                (p >> (2 * INDEX_BITS) & INDEX_MASK) as u32,
-            ]
-        } else {
-            self.wide[i]
-        }
+        let (k, j) = (i / TRIANGLE_BLOCK, i % TRIANGLE_BLOCK);
+        let [base, start] = self.blocks[k];
+        let w = (self.blocks[k + 1][1] - start) / 6;
+        let at = start as usize * 8 + j * 3 * w as usize;
+        let w8 = w as usize;
+        [
+            base + field(&self.bytes, at, w),
+            base + field(&self.bytes, at + w8, w),
+            base + field(&self.bytes, at + 2 * w8, w),
+        ]
     }
 
     fn bytes(&self) -> usize {
-        self.packed.len() * 8 + self.wide.len() * 12
+        self.bytes.len() + self.blocks.len() * 8
     }
 }
 
-fn pack(t: [u32; 3]) -> u64 {
-    u64::from(t[0]) | u64::from(t[1]) << INDEX_BITS | u64::from(t[2]) << (2 * INDEX_BITS)
+/// A coordinate's bits as an unsigned value in the floats' order (every
+/// bit kept: −0 below +0, NaNs at the ends).
+fn ordered(v: f32) -> u32 {
+    let b = v.to_bits();
+    if b & 0x8000_0000 != 0 {
+        !b
+    } else {
+        b | 0x8000_0000
+    }
+}
+
+/// The coordinate of [`ordered`]'s value `k`.
+#[inline]
+fn coordinate(k: u32) -> f32 {
+    f32::from_bits(if k & 0x8000_0000 != 0 {
+        k & 0x7FFF_FFFF
+    } else {
+        !k
+    })
+}
+
+/// A block of [`VERTEX_BLOCK`] positions: each coordinate's least
+/// [`ordered`] value, where its vertices' bits start, and each
+/// coordinate's width; a vertex's fields are x, y, z in turn.
+#[derive(Clone, Copy, Debug)]
+struct VertexBlock {
+    base: [u32; 3],
+    start: u32,
+    width: [u8; 3],
+}
+
+/// The vertex positions, coded losslessly (our choice, #793): in blocks of
+/// [`VERTEX_BLOCK`] consecutive vertices, each coordinate's bits as their
+/// difference in [`ordered`] values from the block's least, in as many
+/// bits as the block's largest takes (5.7 MB for `l01_escape`'s 698,013
+/// vertices, against 8.4 MB at 12 bytes a vertex). A block of fields
+/// `w` bits a vertex in all takes `4 w` bytes.
+#[derive(Clone, Debug, Default)]
+struct Vertices {
+    blocks: Vec<VertexBlock>,
+    bytes: Vec<u8>,
+    len: usize,
+}
+
+impl Vertices {
+    fn new(vertices: &[Vec3]) -> Self {
+        let blocks: Vec<([u32; 3], [u8; 3])> = vertices
+            .chunks(VERTEX_BLOCK)
+            .map(|c| {
+                let lo = std::array::from_fn(|k| c.iter().map(|v| ordered(v[k])).min().unwrap());
+                let hi: [u32; 3] =
+                    std::array::from_fn(|k| c.iter().map(|v| ordered(v[k])).max().unwrap());
+                (lo, std::array::from_fn(|k| width(hi[k] - lo[k]) as u8))
+            })
+            .collect();
+        let size = |w: [u8; 3]| 4 * w.iter().map(|&w| usize::from(w)).sum::<usize>();
+        let total = blocks.iter().map(|&(_, w)| size(w)).sum::<usize>();
+        let mut out = Self {
+            blocks: Vec::with_capacity(blocks.len()),
+            bytes: vec![0; total + PADDING],
+            len: vertices.len(),
+        };
+        let mut start = 0;
+        for (c, (base, w)) in vertices.chunks(VERTEX_BLOCK).zip(blocks) {
+            let mut at = start * 8;
+            for v in c {
+                for k in 0..3 {
+                    put(&mut out.bytes, at, ordered(v[k]) - base[k]);
+                    at += usize::from(w[k]);
+                }
+            }
+            out.blocks.push(VertexBlock {
+                base,
+                start: start as u32,
+                width: w,
+            });
+            start += size(w);
+        }
+        out
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    #[inline]
+    fn get(&self, i: usize) -> Vec3 {
+        let b = &self.blocks[i / VERTEX_BLOCK];
+        let w = b.width.map(u32::from);
+        let at = b.start as usize * 8 + (i % VERTEX_BLOCK) * (w[0] + w[1] + w[2]) as usize;
+        let (a, c) = (at + w[0] as usize, at + (w[0] + w[1]) as usize);
+        [
+            coordinate(b.base[0] + field(&self.bytes, at, w[0])),
+            coordinate(b.base[1] + field(&self.bytes, a, w[1])),
+            coordinate(b.base[2] + field(&self.bytes, c, w[2])),
+        ]
+    }
+
+    fn bytes(&self) -> usize {
+        self.bytes.len() + self.blocks.len() * std::mem::size_of::<VertexBlock>()
+    }
 }
 
 /// A uniform grid over x and z: the order in which a ray's cells are
@@ -297,7 +445,7 @@ fn offer(
 pub struct CollisionWorld {
     pub bbox_min: Vec3,
     pub bbox_max: Vec3,
-    vertices: Vec<Vec3>,
+    vertices: Vertices,
     triangles: Triangles,
     /// Each triangle's material index (section 3.3) and sector (bits
     /// 16–31 of its attributes), packed by `layout`.
@@ -323,7 +471,7 @@ impl CollisionWorld {
         let vertices = reader.vertices()?;
         let map = MaterialMap::new(&materials);
         let count = header.triangle_count as usize;
-        let mut triangles = Triangles::with_capacity(count, header.vertex_count as usize);
+        let mut triangles = Triangles::with_capacity(count);
         let layout = AttributeLayout::new(materials.len());
         let mut attributes = Vec::with_capacity(count);
         reader.triangles(|_, t| {
@@ -351,7 +499,7 @@ impl CollisionWorld {
             .iter()
             .map(|t| layout.pack(map.map(t.attributes)?, t.sector()))
             .collect::<io::Result<_>>()?;
-        let mut triangles = Triangles::with_capacity(cform.triangles.len(), cform.vertices.len());
+        let mut triangles = Triangles::with_capacity(cform.triangles.len());
         for t in &cform.triangles {
             triangles.push(t.vertices);
         }
@@ -385,13 +533,14 @@ impl CollisionWorld {
                 max[k] = max[k].max(v[k]);
             }
         }
+        let triangles = triangles.finish();
         let corners = |i: usize| triangles.get(i).map(|v| vertices[v as usize]);
         let tree = Bvh::build(min, max, triangles.len(), corners)?;
         let grid = Grid::new(min, max);
         Ok(Self {
             bbox_min,
             bbox_max,
-            vertices,
+            vertices: Vertices::new(&vertices),
             triangles,
             attributes,
             layout,
@@ -429,8 +578,13 @@ impl CollisionWorld {
         self.ladder_material
     }
 
-    pub fn vertices(&self) -> &[Vec3] {
-        &self.vertices
+    pub fn vertex_count(&self) -> usize {
+        self.vertices.len()
+    }
+
+    /// Vertex `i`'s position, as stored.
+    pub fn vertex(&self, i: u32) -> Vec3 {
+        self.vertices.get(i as usize)
     }
 
     pub fn triangle_count(&self) -> usize {
@@ -450,7 +604,7 @@ impl CollisionWorld {
     pub fn corners(&self, i: u32) -> [Vec3; 3] {
         self.triangles
             .get(i as usize)
-            .map(|v| self.vertices[v as usize])
+            .map(|v| self.vertices.get(v as usize))
     }
 
     /// The material index of triangle `i` (section 3.3).
@@ -477,10 +631,15 @@ impl CollisionWorld {
     /// Bytes held (vertices, triangles, materials, sectors, index), for
     /// reporting.
     pub fn memory_bytes(&self) -> usize {
-        self.vertices.len() * 12
+        self.vertices.bytes()
             + self.triangles.bytes()
             + self.attributes.len() * 2
             + self.tree.memory_bytes()
+    }
+
+    /// Bytes the spatial index holds, for reporting.
+    pub fn index_bytes(&self) -> usize {
+        self.tree.memory_bytes()
     }
 
     /// Appends to `out` the triangles whose bounding box overlaps the box
@@ -878,10 +1037,70 @@ mod tests {
         let triangles = |w: &CollisionWorld| [w.triangle(0), w.triangle(1)];
         assert_eq!(triangles(&w), [[0, 1, 2], [0, 2, 3]]);
         assert_eq!((w.material_index(0), w.material(1).id), (1, 1));
-        assert_eq!(w.memory_bytes() - w.tree.memory_bytes(), 4 * 12 + 2 * 10);
+        assert_eq!((0..4).map(|i| w.vertex(i)).collect::<Vec<_>>(), b.vertices);
         let mut out = Vec::new();
         w.query([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0], &mut out);
         assert_eq!(out, [0, 1]);
+    }
+
+    #[test]
+    fn codes_vertices_and_indices_without_loss() {
+        // Every kind of coordinate (signed zeros, NaNs with payloads,
+        // infinities, subnormals, both signs in a block) and indices
+        // spanning 0 … 2³² − 1, over block ends and a short last block.
+        let special = [
+            0.0f32,
+            -0.0,
+            f32::from_bits(0x7FC0_1234),
+            f32::from_bits(0xFFA0_0001),
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::MIN_POSITIVE / 4.0,
+            -f32::MAX,
+            f32::MAX,
+            123.456,
+            -987.25,
+        ];
+        let mut seed = 7u64;
+        let mut next = move || {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            (seed >> 32) as u32
+        };
+        let vertices: Vec<Vec3> = (0..1000)
+            .map(|i| {
+                std::array::from_fn(|k| match (i / 100 + k) % 3 {
+                    0 => special[next() as usize % special.len()],
+                    1 => f32::from_bits(next()),
+                    _ => 100.0 + (next() % 1000) as f32 * 1e-3,
+                })
+            })
+            .collect();
+        let coded = Vertices::new(&vertices);
+        assert_eq!(coded.len(), vertices.len());
+        for (i, v) in vertices.iter().enumerate() {
+            assert_eq!(
+                coded.get(i).map(f32::to_bits),
+                v.map(f32::to_bits),
+                "vertex {i}"
+            );
+        }
+        let triangles: Vec<[u32; 3]> = (0..1001u32)
+            .map(|i| match i / 200 {
+                0 => [i, i + 1, i + 2],
+                1 => [0, u32::MAX, i],
+                2 => [7, 7, 7],
+                _ => [next(), next() % 64, next() >> 20],
+            })
+            .collect();
+        let mut coded = Triangles::with_capacity(triangles.len());
+        for &t in &triangles {
+            coded.push(t);
+        }
+        let coded = coded.finish();
+        assert_eq!(coded.len(), triangles.len());
+        for (i, &t) in triangles.iter().enumerate() {
+            assert_eq!(coded.get(i), t, "triangle {i}");
+        }
     }
 
     #[test]

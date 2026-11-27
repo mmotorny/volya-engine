@@ -69,7 +69,7 @@ The offline simulation's registry (6.3 MB, 54,735 blocks), the game graph and pa
 
 | Owner | `l01_escape` | The largest level |
 |---|---|---|
-| The collision world (vertices, triangles, each triangle's material and sector in 2 bytes (#490), tree) | 29.4 MB in 4 blocks (largest 10.5 MiB) | 44.5 MB, `l11_pripyat`; 39.4 `l10_radar`, 34.4 `l07_military` |
+| The collision world (vertices and triangles coded losslessly (#793), each triangle's material and sector in 2 bytes (#490), tree) | 20.1 MB in 6 blocks (29.4 before #793) | 30.9 MB, `l11_pripyat` (44.5 before #793); 25.9 `l10_radar`, 23.2 `l07_military` |
 | The navigation, made under `st_loading_ai_objects` | in the file cache: the positions (5 of each vertex's 21 bytes, as stored) 3.0 MB against `level.ai`'s 12.5, `level.gct` whole 3.6 MB, read in place (#693) | `l01_escape`'s files are the largest (16.1 MB; 6.6 held) |
 | What is made from the `level` file (the shader table; the static draw list 1.7, its spheres, the progressive visuals' detail windows 0.7; the camera pass with the billboard groups' faces) | 5.9 MB; the file itself in the file cache, 4.1 MB | |
 | The detail objects (the cache, the models) | 1.2 MB; the compact slot grid in the file cache, 4.4 MB | the grid 10.5 MB, `l12_stancia` and `l12_stancia_2` (as stored: the file's grid) |
@@ -343,7 +343,7 @@ The survey of every owner for rule 5's kind of change (#698), each candidate fil
 | The archive tree (launch) | 1.3 MB kept, building it peaks 7.0 MB above its start (a `BTreeMap` of every path) | sorted records in one vector, names in one buffer | 4–5 MB of the launch's peak, perhaps none of the wasm memory | about the same | none | #790 |
 | The effect library (program) | 1.4 MB in 1,095 blocks, each source action boxed | the sources in a table | 20–40 KB, 1,094 blocks | none | none | #791 |
 | The sound cache (the audio worker) | 32,850 K allocated with the device, all free (measured, `game-level`), as the original's | lines committed on first use, taken in the same order | up to 32,850 K while few sounds have played; none once all are used | a growth now and then | low | #792 |
-| The collision world (`st_loading_cform`) | 29.4 MB in 4 blocks against 72,669 K (`l11_pripyat` 44.5 MB) | vertices and indices coded per tree leaf | up to a third | each query decodes its leaves | none lossless, high quantized | #793, for #753 |
+| The collision world (`st_loading_cform`) | 29.4 MB in 4 blocks against 72,669 K (`l11_pripyat` 44.5 MB) | vertices and indices coded per block of consecutive ones, losslessly | measured: 20.1 MB natively (`l11_pripyat` 30.9), the caption 29,298 → 20,212 K in Chrome | a body step 15 → 19.5 µs natively, a 5–100 m ray 9.9 → 13.6 µs in wasm | none (every query bit for bit) | #793, done |
 | `level.geom` on the GPU | 57.0 MB as stored, 32 bytes a vertex | 16-bit positions, derived binormals | 6–12 MiB | vertex shaders decode | high | #794, for #753 |
 | The textures on the GPU | 127 MiB the level's, 86 MiB the prefetched, BC as stored | opaque BC3 re-encoded losslessly to BC1 at upload | half of each such texture | a pass at upload | none if lossless | #795, for #753 |
 | The sound cache's lines | 16-bit samples | coded losslessly | about 40% | decoding at each copy out | none lossless | #796, for #753 |

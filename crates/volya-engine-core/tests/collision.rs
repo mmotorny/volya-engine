@@ -17,7 +17,9 @@ use std::time::Instant;
 use volya_engine_core::collision::body::{
     BodyConfig, PlayerBody, StepInput, WALKABLE_NORMAL_Y, drive_direction,
 };
-use volya_engine_core::collision::geometry::{cross, dot, front_normal, length, sub};
+use volya_engine_core::collision::geometry::{
+    cross, dot, front_normal, length, ray_triangle_distance, sub,
+};
 use volya_engine_core::collision::{Cform, CollisionWorld, map_materials};
 use volya_engine_core::config;
 use volya_engine_core::vfs::db::DbVfs;
@@ -478,8 +480,20 @@ fn every_level_mesh() {
             if shipped(name) {
                 sizes.push((cform.triangles.len(), cform.vertices.len(), name.clone()));
             }
-            // Every id exists and is not dynamic: the mapping succeeds.
-            CollisionWorld::new(cform, lib.clone()).unwrap();
+            // Every id exists and is not dynamic: the mapping succeeds. The
+            // world's coded storage (#793) gives back every index and
+            // coordinate bit for bit.
+            let vertices = cform.vertices.clone();
+            let triangles: Vec<[u32; 3]> = cform.triangles.iter().map(|t| t.vertices).collect();
+            let world = CollisionWorld::new(cform, lib.clone()).unwrap();
+            assert_eq!(world.vertex_count(), vertices.len(), "{name}");
+            for (i, v) in vertices.iter().enumerate() {
+                let got = world.vertex(i as u32).map(f32::to_bits);
+                assert_eq!(got, v.map(f32::to_bits), "{name}: vertex {i}");
+            }
+            for (i, &t) in triangles.iter().enumerate() {
+                assert_eq!(world.triangle(i as u32), t, "{name}: triangle {i}");
+            }
         }
         assert_eq!(
             ids.into_iter().collect::<Vec<_>>(),
@@ -491,5 +505,87 @@ fn every_level_mesh() {
         sizes.sort();
         assert_eq!(sizes[0], (41_467, 21_564, "testers_mp_pool".into()));
         assert_eq!(sizes[29], (2_043_680, 1_091_297, "l11_pripyat".into()));
+    });
+}
+
+/// FNV-1a over 64 bits.
+struct Digest(u64);
+
+impl Digest {
+    fn u32(&mut self, v: u32) {
+        for x in v.to_le_bytes() {
+            self.0 = (self.0 ^ u64::from(x)).wrapping_mul(0x100_0000_01B3);
+        }
+    }
+
+    fn hit(&mut self, h: Option<(f32, u32)>) {
+        match h {
+            Some((d, t)) => {
+                self.u32(d.to_bits());
+                self.u32(t);
+            }
+            None => self.u32(u32::MAX),
+        }
+    }
+}
+
+#[test]
+fn queries_give_the_same_answers() {
+    // Box queries, nearest and any-hit rays and floors at random places on
+    // two levels, digested: the answers bit for bit, pinned so that a change
+    // of the world's storage (#793) is seen to change none of them.
+    with_tree(|vfs| {
+        let lib = materials(vfs);
+        let mut digests = Vec::new();
+        for name in ["l01_escape", "l11_pripyat"] {
+            let f = vfs
+                .open(&format!("gamedata/levels/{name}/level.cform"))
+                .unwrap();
+            let world = CollisionWorld::read(f, lib.clone()).unwrap();
+            let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+            let mut next = move || {
+                seed = seed
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                (seed >> 40) as f32 / (1u64 << 24) as f32
+            };
+            let (lo, hi) = (world.bbox_min, world.bbox_max);
+            let n = world.triangle_count() as u32;
+            let mut digest = Digest(0xCBF2_9CE4_8422_2325);
+            let mut found = Vec::new();
+            for _ in 0..20_000 {
+                // Near a random triangle's first corner, where the world is.
+                let t = ((next() * n as f32) as u32).min(n - 1);
+                let c = world.corners(t)[0];
+                let p: [f32; 3] = std::array::from_fn(|k| c[k] + (next() - 0.5) * 4.0);
+                let e: [f32; 3] = std::array::from_fn(|_| next() * 2.0);
+                found.clear();
+                world.query(p, std::array::from_fn(|k| p[k] + e[k]), &mut found);
+                digest.u32(found.len() as u32);
+                found.iter().for_each(|&t| digest.u32(t));
+                let d = [next() - 0.5, next() - 0.5, next() - 0.5];
+                let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-3);
+                let dir = d.map(|v| v / l);
+                let length = next() * 50.0;
+                digest.hit(world.ray_nearest(p, dir, length, |i| {
+                    ray_triangle_distance(p, dir, &world.corners(i)).filter(|&t| t <= length)
+                }));
+                digest.u32(u32::from(world.ray_hits(p, dir, length)));
+                digest.hit(world.floor_below(p[0], p[2], p[1] + 2.0, p[1] - 20.0));
+            }
+            for _ in 0..2_000 {
+                // Anywhere in the level's box, long rays down and across.
+                let p: [f32; 3] = std::array::from_fn(|k| lo[k] + next() * (hi[k] - lo[k]));
+                let d = [next() - 0.5, -0.5, next() - 0.5];
+                let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                let dir = d.map(|v| v / l);
+                digest.hit(world.ray_nearest(p, dir, 500.0, |i| {
+                    ray_triangle_distance(p, dir, &world.corners(i)).filter(|&t| t <= 500.0)
+                }));
+            }
+            eprintln!("{name}: queries digest {:016x}", digest.0);
+            digests.push(digest.0);
+        }
+        assert_eq!(digests, [0xb883_38a3_320b_695d, 0x83f6_fd96_e056_f89a]);
     });
 }

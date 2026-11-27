@@ -41,7 +41,7 @@ struct Grid {
 impl Grid {
     fn new(world: &CollisionWorld) -> Self {
         let (mut min, mut max) = (world.bbox_min, world.bbox_max);
-        for v in world.vertices() {
+        for v in (0..world.vertex_count() as u32).map(|i| world.vertex(i)) {
             for k in 0..3 {
                 min[k] = min[k].min(v[k]);
                 max[k] = max[k].max(v[k]);
@@ -612,15 +612,7 @@ fn rays_match_the_grid_on_every_level() {
             let grid = Grid::new(&world);
             let [hits, off, differed] = equivalent(&world, &grid, i as u64, count);
             assert!(hits > count / 10, "{name}: {hits} of {count} hit");
-            // Triangles take 8 bytes where the vertex indices fit 21 bits,
-            // with a material byte and two sector bytes each.
-            let n = world.triangle_count();
-            let per = if world.vertices().len() <= 1 << 21 {
-                8
-            } else {
-                12
-            };
-            let tree = world.memory_bytes() - world.vertices().len() * 12 - n * (per + 3);
+            let tree = world.index_bytes();
             eprintln!(
                 "{name}: {count} rays, {hits} hitting, {off} meeting a triangle off the \
                  segment under the grid, {differed} of those differing; index {:.1} MB, \
