@@ -17,6 +17,8 @@
 
 #![allow(unsafe_code)]
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod harness;
 pub mod msvc_rand;
 pub mod x87;
 

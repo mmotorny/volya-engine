@@ -26,6 +26,25 @@ const FLAGS: &[&str] = &[
 pub const RUNNER: &str = "//tests/d3d9probes:runner";
 const TAG_PREFIX: &str = "d3d9probes-";
 
+/// The physics library comparison's flags (`tests/odeharness/`): as the
+/// probes', with single-precision SSE arithmetic (so the scenarios' own
+/// float operations round as on the Mac) and a large stack (the library's
+/// steppers allocate on it).
+const ODEHARNESS_FLAGS: &[&str] = &[
+    "-O2",
+    "-static",
+    "-Wall",
+    "-Wextra",
+    "-msse2",
+    "-mfpmath=sse",
+    "-ffp-contract=off",
+    "-Wl,--no-insert-timestamp",
+    "-Wl,--stack,16777216",
+];
+
+/// The comparison's runner zip.
+pub const ODEHARNESS: &str = "//tests/odeharness:runner";
+
 fn copy(from: &Path, to: &Path) -> Result {
     fs::copy(from, to)
         .map(drop)
@@ -42,6 +61,18 @@ pub fn build(clang: &Path, out: &Path, sources: &[&str]) -> Result {
         .arg(out)
         .args(sources.iter().filter(|s| s.ends_with(".c")))
         .arg("-ld3d9");
+    run(&mut command)
+}
+
+/// `build-odeharness CLANG OUT SRC...`: the physics library comparison's C
+/// sources compiled into `OUT`.
+pub fn build_odeharness(clang: &Path, out: &Path, sources: &[&str]) -> Result {
+    let mut command = Command::new(clang);
+    command
+        .args(ODEHARNESS_FLAGS)
+        .arg("-o")
+        .arg(out)
+        .args(sources.iter().filter(|s| s.ends_with(".c")));
     run(&mut command)
 }
 
@@ -184,6 +215,15 @@ pub fn release(zip: &Path) -> Result {
          `{RUNNER}`). Steps: docs/testing.md, Direct3D 9 probes on real hardware."
     );
     publish(zip, TAG_PREFIX, "d3d9probes.zip", &notes)
+}
+
+/// `xtask odeharness release`: publishes the comparison's runner zip
+/// (built by [`ODEHARNESS`]) as [`publish`] does.
+pub fn release_odeharness(zip: &Path) -> Result {
+    let notes = "The physics library comparison's Windows runner (tests/odeharness/, \
+                 built by `//tests/odeharness:runner`). Steps: docs/testing.md, The \
+                 physics library against the shipped one.";
+    publish(zip, "odeharness-", "odeharness.zip", notes)
 }
 
 /// Publishes the zip `zip` as the asset `asset` of a prerelease tagged by

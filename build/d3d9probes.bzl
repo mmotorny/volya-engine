@@ -12,18 +12,20 @@ def _exe_impl(ctx):
     out = ctx.actions.declare_file(ctx.attr.out)
     ctx.actions.run(
         executable = ctx.executable._tool,
-        arguments = ["build", ctx.file._clang.path, out.path] + [f.path for f in ctx.files.srcs],
+        arguments = [ctx.attr.action, ctx.file._clang.path, out.path] + [f.path for f in ctx.files.srcs],
         inputs = ctx.files.srcs + ctx.files._llvm_mingw,
         outputs = [out],
         mnemonic = "D3d9ProbesBuild",
-        progress_message = "Building the D3D9 probes with llvm-mingw: %{label}",
+        progress_message = "Building a Windows runner with llvm-mingw: %{label}",
     )
     return [DefaultInfo(files = depset([out]))]
 
 d3d9probes_exe = rule(
     implementation = _exe_impl,
-    doc = "The probes compiled into one 32-bit Windows executable.",
+    doc = "The probes (or, with `action = \"build-odeharness\"`, the physics " +
+          "library comparison) compiled into one 32-bit Windows executable.",
     attrs = {
+        "action": attr.string(default = "build", values = ["build", "build-odeharness"]),
         "out": attr.string(mandatory = True),
         "srcs": attr.label_list(allow_files = [".c", ".h"], mandatory = True),
         "_clang": attr.label(default = "@llvm_mingw//:bin/i686-w64-mingw32-clang", allow_single_file = True, cfg = "exec"),

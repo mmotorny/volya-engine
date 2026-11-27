@@ -22,6 +22,7 @@ PACKAGES = [
     "//tests/browser",
     "//tests/d3d9probes",
     "//tests/fidelity",
+    "//tests/odeharness",
     "//third_party/inno",
     "//third_party/ode",
     "//tools/devserver",

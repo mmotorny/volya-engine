@@ -14,6 +14,10 @@
 //! kept only when its path is in the manifest and its bytes match its hash.
 //! It ends when every file of the manifest has arrived, or after a timeout,
 //! and reports what arrived.
+//!
+//! `--into NAME` receives into another of a fixed set of cache folders
+//! ([`DESTINATIONS`]) instead, for other black-box runs' outputs, which are
+//! local-only too (docs/clean-room.md).
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -34,11 +38,35 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 /// about 6 MB).
 const MAX_FILE: usize = 64 << 20;
 
-/// `xtask frames-receive [ADDRESS]`: on ADDRESS, one of the Mac's own, or
-/// else the one routing to the local network.
-pub fn receive(address: Option<&str>) -> Result {
+/// The folders a receiver may write into, under
+/// `~/Library/Caches/volya-engine/`, by their `--into` names; the first is
+/// the default.
+pub const DESTINATIONS: &[(&str, &str)] = &[
+    ("fidelity", "original-frames/fidelity"),
+    // The shipped physics library's results (docs/testing.md, The physics
+    // library against the shipped one).
+    ("ode-harness", "ode-harness"),
+];
+
+/// `xtask frames-receive [--into NAME] [ADDRESS]`: on ADDRESS, one of the
+/// Mac's own, or else the one routing to the local network, into the folder
+/// NAME names ([`DESTINATIONS`]).
+pub fn receive(into: Option<&str>, address: Option<&str>) -> Result {
     let home = std::env::var_os("HOME").ok_or("HOME is unset")?;
-    let dest = PathBuf::from(home).join("Library/Caches/volya-engine/original-frames/fidelity");
+    let sub = match into {
+        None => DESTINATIONS[0].1,
+        Some(name) => DESTINATIONS
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, d)| *d)
+            .ok_or_else(|| {
+                let names: Vec<&str> = DESTINATIONS.iter().map(|(n, _)| *n).collect();
+                format!("--into {name}: not one of {names:?}")
+            })?,
+    };
+    let dest = PathBuf::from(home)
+        .join("Library/Caches/volya-engine")
+        .join(sub);
     fs::create_dir_all(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
     let address = match address {
         Some(a) => a.parse().map_err(|e| format!("{a}: {e}"))?,
@@ -49,10 +77,7 @@ pub fn receive(address: Option<&str>) -> Result {
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let token = token()?;
-    step(&format!(
-        "Receiving a capture's fidelity files into {}",
-        dest.display()
-    ));
+    step(&format!("Receiving files into {}", dest.display()));
     println!("address {address}\nport {port}\ntoken {token}");
     let mut manifest: Option<BTreeMap<String, String>> = None;
     let mut arrived: BTreeMap<String, usize> = BTreeMap::new();

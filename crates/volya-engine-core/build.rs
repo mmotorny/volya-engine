@@ -116,6 +116,21 @@ fn main() {
     }
     c.compile("volya_ode_fast");
 
+    if !wasm {
+        // The comparison's scenarios against our build (tests/odeharness,
+        // physics::ode::harness), natively.
+        let harness = dir_of("VOLYA_ODE_HARNESS", "tests/odeharness/harness.h");
+        let mut h = cc::Build::new();
+        h.std("c99")
+            .opt_level(2)
+            .warnings(true)
+            .flag("-ffp-contract=off")
+            .flag("-fno-fast-math")
+            .file(harness.join("scenarios.c"))
+            .file(harness.join("native.c"));
+        h.compile("volya_ode_harness");
+    }
+
     if wasm {
         let mut libc = cc::Build::new();
         libc.opt_level(2)

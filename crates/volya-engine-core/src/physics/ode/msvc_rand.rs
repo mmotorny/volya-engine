@@ -39,6 +39,14 @@ pub extern "C" fn volya_ode_rand() -> c_int {
     rand()
 }
 
+/// The run time's `srand`, for the comparison's driver
+/// (tests/odeharness/native.c).
+#[allow(unsafe_code)]
+#[unsafe(no_mangle)]
+pub extern "C" fn volya_ode_srand(seed: u32) {
+    set_state(seed);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

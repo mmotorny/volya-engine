@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 load("//build:checks.bzl", "volya_checks")
-load("//build:rust.bzl", "volya_integration_tests", "volya_library")
+load("//build:rust.bzl", "LINTS", "volya_integration_tests", "volya_library")
+load("@rules_rust//rust:defs.bzl", "rust_test")
 load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 
@@ -24,6 +25,7 @@ cargo_build_script(
         },
         "//conditions:default": {
             "VOLYA_ODE_FAST": "$(execpath @ode_fast//:ode/src/fastdot.c)",
+            "VOLYA_ODE_HARNESS": "$(execpath //tests/odeharness:harness.h)",
             "VOLYA_ODE_LICENSE": "$(execpath @ode//:LICENSE-BSD.TXT)",
         },
     }),
@@ -40,7 +42,10 @@ cargo_build_script(
             "@wasm_llvm//:sysroot",
             "@wasm_llvm//:tools",
         ],
-        "//conditions:default": [],
+        "//conditions:default": [
+            "//tests/odeharness:harness.h",
+            "//tests/odeharness:scenarios",
+        ],
     }),
     deps = all_crate_deps(build = True),
 )
@@ -71,6 +76,17 @@ volya_integration_tests(
         "//crates/volya-engine-formats",
         "//crates/volya-engine-installer",
     ],
+)
+
+# The physics library comparison against our build (docs/testing.md), in a
+# process of its own; `--test_env=VOLYA_ODE_SHIPPED=<results folder>`
+# compares it with the shipped library's results.
+rust_test(
+    name = "ode_harness",
+    srcs = ["comparison/ode_harness.rs"],
+    crate_name = "ode_harness",
+    rustc_flags = LINTS,
+    deps = [":volya-engine-core"],
 )
 
 volya_checks()

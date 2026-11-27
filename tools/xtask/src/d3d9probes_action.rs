@@ -6,7 +6,8 @@
 //!
 //! - `build CLANG OUT SRC...`: `d3d9probes.exe` compiled with llvm-mingw's
 //!   `CLANG`, into `OUT`.
-//! - `zip OUT FILE...`: the files in a zip, the Windows runner.
+//! - `build-odeharness CLANG OUT SRC...`: `odeharness.exe`, likewise.
+//! - `zip OUT FILE...`: the files in a zip, a Windows runner.
 //! - `references OUT NAMES DEST=SRC...`: the comparison suite's
 //!   references, real hardware's results.
 
@@ -28,15 +29,17 @@ fn main() -> ExitCode {
         ["build", clang, out, sources @ ..] if !sources.is_empty() => {
             d3d9probes::build(Path::new(clang), Path::new(out), sources)
         }
+        ["build-odeharness", clang, out, sources @ ..] if !sources.is_empty() => {
+            d3d9probes::build_odeharness(Path::new(clang), Path::new(out), sources)
+        }
         ["zip", out, files @ ..] if !files.is_empty() => d3d9probes::zip(Path::new(out), files),
         ["references", out, names, pairs @ ..] => {
             d3d9probes::references(Path::new(out), names, pairs)
         }
-        _ => Err(
-            "usage: d3d9probes-action build CLANG OUT SRC... | zip OUT FILE... \
+        _ => Err("usage: d3d9probes-action build CLANG OUT SRC... \
+                  | build-odeharness CLANG OUT SRC... | zip OUT FILE... \
                   | references OUT NAMES DEST=SRC..."
-                .into(),
-        ),
+            .into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

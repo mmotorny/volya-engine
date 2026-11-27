@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+
+load("//build:checks.bzl", "volya_checks")
+load("//build:d3d9probes.bzl", "d3d9probes_exe", "d3d9probes_zip")
+
+package(default_visibility = ["//visibility:public"])
+
+# The physics library comparison (docs/testing.md): the scenarios and their
+# native driver, which volya-engine-core's build script links against our
+# build.
+filegroup(
+    name = "scenarios",
+    srcs = [
+        "harness.h",
+        "native.c",
+        "scenarios.c",
+    ],
+)
+
+exports_files(["harness.h"])
+
+# odeharness.exe, built with llvm-mingw: the scenarios against the game's
+# bin\ode.dll.
+d3d9probes_exe(
+    name = "exe",
+    srcs = [
+        "harness.h",
+        "scenarios.c",
+        "win32.c",
+    ],
+    action = "build-odeharness",
+    out = "odeharness.exe",
+)
+
+# The Windows runner (`bazel run //tools/xtask -- odeharness release`
+# publishes it).
+d3d9probes_zip(
+    name = "runner",
+    srcs = [
+        "README.txt",
+        ":exe",
+    ],
+    out = "odeharness.zip",
+)
+
+volya_checks(wasm = False)
