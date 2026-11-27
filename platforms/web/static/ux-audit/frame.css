@@ -123,6 +123,26 @@ html[data-ux-turned] :is(#touch-controls, #console-touch) {
   inset: 0;
 }
 
+/* A stand-in for the game's picture, laid out as the canvas (style.css),
+   with a grid that shows its magnification. */
+.ux-game {
+  position: fixed;
+  inset: 0;
+  background:
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.08) 0 1px, transparent 1px 40px),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.08) 0 1px, transparent 1px 40px),
+    linear-gradient(#3a2f22, #14110c);
+}
+
+html[data-ux-turned] .ux-game {
+  inset: auto;
+  top: 50%;
+  left: 50%;
+  width: 100vh;
+  height: 100vw;
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+
 .ux-keyboard {
   position: fixed;
   left: 0;

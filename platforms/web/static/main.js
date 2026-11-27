@@ -226,9 +226,10 @@ globalThis.volya = {
 // page's own interface hides meanwhile.
 const send = (event) => worker.postMessage({ type: "input", event });
 // The device's keyboard for the save screen's name field on touch screens
-// (#94), raised in the touchpad's click on it (#108).
+// (#94), raised in the touchpad's click on it (#108) or a direct click's
+// lift there (#807).
 const entry = createTextEntry(send);
-const forward = startInput(() => view, send, { onClick: () => entry.click() });
+const forward = startInput(() => view, send, { onClick: (at) => entry.click(at), screen: document.getElementById("screen") });
 setCursor = (shown) => forward.setCursor(shown);
 // The console on touch screens: its Console buttons, the device's keyboard
 // and a key strip (#642).
@@ -246,6 +247,7 @@ let touchMode = "standard";
 (async () => {
   const stored = await appSettings?.read().catch(() => ({}));
   if (TOUCH_MODES.includes(stored?.touch)) touchMode = stored.touch;
+  forward.setTouchMode(touchMode);
 })();
 const touchControls = {
   get mode() {
@@ -256,6 +258,7 @@ const touchControls = {
   async set(mode) {
     if (!TOUCH_MODES.includes(mode)) throw new Error(`unknown touch controls: ${mode}`);
     touchMode = mode;
+    forward.setTouchMode(mode);
     if (levelLive) touch.setMode(mode);
     if (appSettings) await saveSettings(appSettings, { touch: mode });
   },

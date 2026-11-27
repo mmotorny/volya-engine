@@ -14,10 +14,13 @@
 //
 // Whenever the game shows its mouse cursor, touch is a touchpad for it
 // (touchpad.js, #108): swipes move the cursor, taps click at it, and a
-// touch never clicks where it lands. Elsewhere touches go as contacts.
-// Each touchpad touch stays one until lifted; direct touches still down
-// when the cursor appears are dropped (their button released, the cursor
-// left where it is).
+// touch never clicks where it lands. In the ergonomic mode
+// (the app's setting, #802) a touch there is a direct click where it lands
+// instead, and a pinch magnifies the screen's picture (direct-touch.js,
+// #807). Elsewhere touches go as contacts. Each touchpad or direct-click
+// touch stays one until lifted; direct touches still down when the cursor
+// appears are dropped (their button released, the cursor left where it
+// is).
 //
 // The page's text entry is focused in the handler of the touchpad's click
 // (`onClick`): that the device's keyboard rises for a focus in a pointerup
@@ -28,6 +31,7 @@
 // the input just focused.
 
 import { createTouchpad } from "./touchpad.js";
+import { createDirectTouch, zoomTransform } from "./direct-touch.js";
 
 // KeyboardEvent.code → engine key name (layout-independent positions): the
 // W3C UI Events code values (a public standard) paired with the game's key
@@ -184,18 +188,22 @@ const AXIS_EPSILON = 0.02;
 /**
  * Starts listening; `view()` is the canvas (replaced when the engine starts
  * anew, main.js), `send(event)` posts one message to the engine worker.
- * `onClick()` runs in the event handler of a touchpad gesture pressing the
- * left button (the page may focus its text entry there: a device's keyboard
- * rises only in a user gesture). Returns `setCapture(on)`, called when the
+ * `onClick(at)` runs in the event handler of a touchpad gesture pressing the
+ * left button, or of a direct click's lift (at `at`, canvas CSS pixels; the
+ * page may focus its text entry there: a device's keyboard rises only in a
+ * user gesture). `screen` is the element holding the canvas, which a
+ * pinch magnifies (direct-touch.js). Returns `setCapture(on)`, called when the
  * engine reports capture changes, `setLevel(on, keys)`, called when the
  * level's controls go live or stop and when the character takes the
  * keyboard's keys under a screen (the inventory screen, #110), and
  * `setCursor(shown)`, called when the game's cursor shows or hides,
- * `setConsole(open)`, called when the console opens or closes, and
- * `consoleKeys`, the keys of the console's text entry for touch screens:
- * `press(name, pressed)`, `type(text)` and `paste(text)`.
+ * `setConsole(open)`, called when the console opens or closes,
+ * `setTouchMode(mode)`, the touch controls' mode ("standard" or
+ * "experimental"), and `consoleKeys`, the keys of the console's text entry
+ * for touch screens: `press(name, pressed)`, `type(text)` and
+ * `paste(text)`.
  */
-export function startInput(view, send, { onClick = () => {} } = {}) {
+export function startInput(view, send, { onClick = () => {}, screen = null } = {}) {
   let capture = false;
   // The page's text entries, for the save screen's name field
   // (text-entry.js) and the console (console-touch.js): characters typed
@@ -209,9 +217,16 @@ export function startInput(view, send, { onClick = () => {} } = {}) {
   // no release is swallowed then, so nothing is released and no unlock is
   // told (#110: held keys walk on under the inventory screen).
   let leaving = false;
-  // The touchpad while the game shows its cursor; which way each touch
-  // down goes ("pad" or "direct").
+  // The touchpad while the game shows its cursor, or direct clicks with the
+  // the ergonomic mode; which way each touch down goes ("pad",
+  // "click" or "direct").
   let cursor = false;
+  let touchMode = "standard";
+  // A touch device: a touch screen, or once a touch is seen.
+  let touchSeen = false;
+  const touchDevice = () => touchSeen || navigator.maxTouchPoints > 0 || matchMedia("(any-pointer: coarse)").matches;
+  // The engine draws no cursor while touches click where they land.
+  const direct = () => touchMode === "experimental" && touchDevice();
   // The console is open: Insert reads the clipboard.
   let consoleOpen = false;
   const pad = createTouchpad();
@@ -225,6 +240,41 @@ export function startInput(view, send, { onClick = () => {} } = {}) {
       longPress = setTimeout(() => padSend(pad.tick(performance.now())), Math.max(0, due - performance.now()));
     }
   };
+  // Direct clicks and the screen's zoom (direct-touch.js, #807), in page
+  // coordinates over the screen element.
+  const screenSize = () => (screen ? [screen.clientWidth, screen.clientHeight] : [innerWidth, innerHeight]);
+  const clicks = createDirectTouch(screenSize);
+  let pressTimer = null;
+  const clickSend = (messages, lifted = false) => {
+    for (const [type, ...rest] of messages) {
+      if (type === "zoom") {
+        if (screen) screen.style.transform = zoomTransform(rest[0]);
+        continue;
+      }
+      const [id, x, y, time] = rest;
+      const at = toCanvas(x, y);
+      const phase = { press: "start", drag: "move", release: "end" }[type];
+      send(["touch", ...at, phase, time, id, true]);
+      if (type === "release" && lifted) onClick(at);
+    }
+    clearTimeout(pressTimer);
+    const due = clicks.deadline();
+    if (due !== null) {
+      pressTimer = setTimeout(() => clickSend(clicks.tick(performance.now())), Math.max(0, due - performance.now()));
+    }
+  };
+  const click = (event) => {
+    const [x, y, time, id] = [event.clientX, event.clientY, event.timeStamp, event.pointerId];
+    const out = {
+      pointerdown: () => clicks.down(id, x, y, time),
+      pointermove: () => clicks.move(id, x, y, time),
+      pointerup: () => clicks.up(id, x, y, time),
+      pointercancel: () => clicks.cancel(id, time),
+    }[event.type]();
+    clickSend(out, event.type === "pointerup");
+  };
+  /** Forgets direct clicks (a press released) and the zoom. */
+  const resetClicks = () => clickSend([...clicks.reset(performance.now()), ...clicks.unzoom()]);
   const touchpad = (event) => {
     const [x, y] = at(event);
     const time = event.timeStamp;
@@ -243,26 +293,39 @@ export function startInput(view, send, { onClick = () => {} } = {}) {
   const root = document.documentElement;
   const locked = () => document.pointerLockElement === root;
 
-  const at = (event) => {
+  const at = (event) => toCanvas(event.clientX, event.clientY);
+  // Page position → the canvas's own CSS pixels, through whatever scales
+  // its box on the screen (the screen's zoom, direct-touch.js).
+  const toCanvas = (x, y) => {
     const canvas = view();
     const rect = canvas.getBoundingClientRect();
+    const [w, h] = [canvas.clientWidth, canvas.clientHeight];
     // Turned 90° clockwise on upright phones (style.css): the on-screen box
     // is then portrait while the canvas's own size is landscape.
-    if (rect.width < rect.height !== canvas.clientWidth < canvas.clientHeight) {
-      return [event.clientY - rect.top, rect.right - event.clientX];
-    }
-    return [event.clientX - rect.left, event.clientY - rect.top];
+    const turned = rect.width < rect.height !== w < h;
+    const [across, down] = turned ? [rect.height, rect.width] : [rect.width, rect.height];
+    const [sx, sy] = [across > 0 ? w / across : 1, down > 0 ? h / down : 1];
+    if (turned) return [(y - rect.top) * sx, (rect.right - x) * sy];
+    return [(x - rect.left) * sx, (y - rect.top) * sy];
   };
 
   const pointer = (event) => {
     if (!capture) return;
     if (event.pointerType === "touch") {
       event.preventDefault();
-      if (event.type === "pointerdown") routes.set(event.pointerId, cursor ? "pad" : "direct");
+      if (event.type === "pointerdown" && !touchSeen) {
+        touchSeen = true;
+        send(["touch_direct", direct()]);
+      }
+      if (event.type === "pointerdown") routes.set(event.pointerId, cursor ? (touchMode === "experimental" ? "click" : "pad") : "direct");
       const route = routes.get(event.pointerId);
       if (event.type === "pointerup" || event.type === "pointercancel") routes.delete(event.pointerId);
       if (route === "pad") {
         touchpad(event);
+        return;
+      }
+      if (route === "click") {
+        click(event);
         return;
       }
       if (route !== "direct") return;
@@ -387,6 +450,7 @@ export function startInput(view, send, { onClick = () => {} } = {}) {
   // sent again by the next poll.
   const releaseAll = () => {
     padSend(pad.reset(performance.now()));
+    clickSend(clicks.reset(performance.now()));
     send(["blur"]);
     for (const last of pads.values()) last.axes = {};
   };
@@ -439,12 +503,16 @@ export function startInput(view, send, { onClick = () => {} } = {}) {
     requestAnimationFrame(poll);
   };
 
-  // Touchpad touches down when the cursor hides are forgotten (a drag
-  // released); direct touches down when it shows are dropped.
+  // Touchpad and direct-click touches down when the cursor hides are
+  // forgotten (a drag or press released), and the screen's zoom ends;
+  // direct touches down when it shows are dropped.
   const setCursor = (shown) => {
     if (shown === cursor) return;
     cursor = shown;
-    if (!shown) padSend(pad.reset(performance.now()));
+    if (!shown) {
+      padSend(pad.reset(performance.now()));
+      resetClicks();
+    }
     const direct = [...routes].filter(([, route]) => route === "direct");
     if (shown && direct.length > 0) {
       for (const [id] of direct) routes.set(id, "dropped");
@@ -465,7 +533,9 @@ export function startInput(view, send, { onClick = () => {} } = {}) {
     if (on === capture) return;
     capture = on;
     padSend(pad.reset(performance.now()));
+    resetClicks();
     routes.clear();
+    if (on) send(["touch_direct", direct()]);
     // The engine takes touch gestures (no scrolling or zooming).
     document.documentElement.toggleAttribute("data-engine-input", on);
     pads.clear();
@@ -477,6 +547,16 @@ export function startInput(view, send, { onClick = () => {} } = {}) {
   const setConsole = (open) => {
     consoleOpen = open;
   };
+  // The touch controls' mode: touches down keep their way until lifted;
+  // leaving the ergonomic mode ends the zoom.
+  const setTouchMode = (mode) => {
+    if (mode === touchMode) return;
+    touchMode = mode;
+    if (!direct()) clickSend(clicks.unzoom());
+    if (capture) send(["touch_direct", direct()]);
+  };
+  // A new screen size: the picture back to its own (our choice).
+  addEventListener("resize", () => clickSend(clicks.unzoom()));
   // The console's text entry and key strip for touch screens
   // (console-touch.js), in order with the keyboard's keys.
   const consoleKeys = {
@@ -484,5 +564,5 @@ export function startInput(view, send, { onClick = () => {} } = {}) {
     type: (text) => capture && keySend(["typed", text]),
     paste: (text) => capture && consoleOpen && pasted(text),
   };
-  return { setCapture, setLevel, setCursor, setConsole, consoleKeys };
+  return { setCapture, setLevel, setCursor, setConsole, setTouchMode, consoleKeys };
 }

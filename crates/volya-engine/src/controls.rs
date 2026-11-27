@@ -507,13 +507,59 @@ pub fn grab_turn(
     [yaw, p - pitch]
 }
 
+/// The narrowest vertical field of view a pinch zooms in to, degrees (our
+/// choice, #807: the picture magnified about 3.4 times).
+pub const PINCH_FOV_MIN: f32 = 20.0;
+/// The widest a pinch zooms out to, degrees: the game's own field of view
+/// on foot (view-projection.md 3.1), so a pinch never shows more than the
+/// original does.
+pub const PINCH_FOV_MAX: f32 = crate::core::camera::FOV_Y_DEGREES;
+
+/// The tangent of half the vertical field of view `fov` (degrees).
+pub fn tan_half(fov: f32) -> f32 {
+    (fov.to_radians() / 2.0).tan()
+}
+
+/// A two-finger pinch's change of the view (our design, #807): from the
+/// fingers at `from` to `to` (as [`TouchLook::at`]) at pitch `pitch`
+/// within `limits`, for a view whose half vertical field of view has the
+/// tangent `tan_half_now`: that tangent after it, scaled by the fingers'
+/// old distance over their new one and kept within [`PINCH_FOV_MIN`] …
+/// [`PINCH_FOV_MAX`] (fingers apart zoom in), and the turn `[yaw, pitch]`
+/// that keeps the scene's direction under their midpoint under it
+/// ([`grab_turn`]). Zooming alone scales the picture about its centre, so
+/// the fingers keep the scene under them exactly when they pinch about
+/// the centre, and nearly elsewhere.
+pub fn pinch_turn(
+    from: [[f32; 2]; 2],
+    to: [[f32; 2]; 2],
+    pitch: f32,
+    limits: [f32; 2],
+    tan_half_now: f32,
+) -> (f32, [f32; 2]) {
+    let gap = |p: [[f32; 2]; 2]| (p[0][0] - p[1][0]).hypot(p[0][1] - p[1][1]);
+    let mid = |p: [[f32; 2]; 2]| [(p[0][0] + p[1][0]) / 2.0, (p[0][1] + p[1][1]) / 2.0];
+    let (before, after) = (gap(from), gap(to));
+    let mut t = tan_half_now;
+    if before > 1e-6 && after > 1e-6 {
+        t = (tan_half_now * before / after).clamp(tan_half(PINCH_FOV_MIN), tan_half(PINCH_FOV_MAX));
+    }
+    // The midpoint's scene direction after the zoom alone, then grabbed.
+    let m = mid(from).map(|c| c * tan_half_now / t);
+    (t, grab_turn(m, mid(to), pitch, limits, t))
+}
+
 /// One look finger: where it is, the turn it made, and its recent moves'
 /// times and turns for its velocity; where and when it went down, and
 /// whether it has left the tap's slop (looking).
 #[derive(Clone, Debug)]
 struct LookFinger {
     id: u32,
+    /// Where it grabs the scene from: where it went down while within the
+    /// slop.
     at: [f32; 2],
+    /// Where it is.
+    seen: [f32; 2],
     turned: [f32; 2],
     samples: Vec<(f64, [f32; 2])>,
     down: f64,
@@ -565,7 +611,11 @@ impl LookFinger {
 /// ([`grab_turn`]); let go moving, the view keeps turning at the finger's
 /// velocity, slowing by [`LOOK_DECELERATION`] a millisecond over the
 /// frames' real time, until a finger looks again. A finger lifted within
-/// the slop inside [`TAP_MS`] is a tap ([`TouchLookDrag::taps`]).
+/// the slop inside [`TAP_MS`] is a tap ([`TouchLookDrag::taps`]). Two
+/// fingers down pinch ([`pinch_turn`]): the field of view follows their
+/// distance ([`TouchLookDrag::fov`]) and the view their midpoint; neither
+/// is a tap, a third finger does nothing, and one lifted leaves the other
+/// dragging from where it is.
 #[derive(Clone, Debug, Default)]
 pub struct TouchLookDrag {
     fingers: Vec<LookFinger>,
@@ -573,6 +623,8 @@ pub struct TouchLookDrag {
     momentum: [f32; 2],
     last: Option<u64>,
     taps: Vec<Tap>,
+    /// The field of view the pinches made, degrees; none before one.
+    fov: Option<f32>,
 }
 
 impl TouchLookDrag {
@@ -592,15 +644,23 @@ impl TouchLookDrag {
         &self.taps
     }
 
+    /// The vertical field of view the pinches made, degrees, for the view
+    /// from this frame on; `None` before any.
+    pub fn fov(&self) -> Option<f32> {
+        self.fov
+    }
+
     /// One frame at `now` (milliseconds) with this frame's look events at
-    /// the camera's `pitch` within `limits`: the turn `[yaw, pitch]` to
-    /// make. `released` ends every finger and the momentum.
+    /// the camera's `pitch` within `limits` and its vertical field of view
+    /// `fov` (degrees): the turn `[yaw, pitch]` to make. `released` ends
+    /// every finger and the momentum.
     pub fn frame(
         &mut self,
         looks: &[TouchLook],
         released: bool,
         mut pitch: f32,
         limits: [f32; 2],
+        fov: f32,
         now: u64,
     ) -> [f32; 2] {
         let dt = self.last.map_or(0, |l| now.saturating_sub(l));
@@ -609,7 +669,7 @@ impl TouchLookDrag {
         if dt > LOOK_GAP_MS || released {
             self.momentum = [0.0; 2];
         }
-        let tan_half = (crate::core::camera::FOV_Y_DEGREES.to_radians() / 2.0).tan();
+        let mut tan_half = tan_half(fov);
         let mut turn = [0.0f32; 2];
         if self.fingers.is_empty() && self.momentum != [0.0; 2] {
             // The frame's share of v·r^t: v (1 − r^dt) / −ln r.
@@ -641,15 +701,44 @@ impl TouchLookDrag {
                     self.fingers.push(LookFinger {
                         id: look.finger,
                         at: look.at,
+                        seen: look.at,
                         turned: [0.0; 2],
                         samples: vec![(look.time, [0.0; 2])],
                         down: look.time,
                         dragging: look.phase == LookPhase::Drag,
                     });
+                    // A second finger: the two pinch; neither is a tap.
+                    if self.fingers.len() >= 2 {
+                        for f in &mut self.fingers {
+                            f.dragging = true;
+                        }
+                    }
+                }
+                LookPhase::Move | LookPhase::Up if self.fingers.len() >= 2 => {
+                    let Some(i) = found else { continue };
+                    let from = [self.fingers[0].seen, self.fingers[1].seen];
+                    self.fingers[i].seen = look.at;
+                    if i < 2 && look.at != from[i] {
+                        let to = [self.fingers[0].seen, self.fingers[1].seen];
+                        let (t, d) = pinch_turn(from, to, pitch, limits, tan_half);
+                        if t != tan_half {
+                            tan_half = t;
+                            self.fov = Some((2.0 * t.atan()).to_degrees());
+                        }
+                        pitch += d[1];
+                        turn[0] += d[0];
+                        turn[1] += d[1];
+                    }
+                    if look.phase == LookPhase::Up {
+                        self.fingers.remove(i);
+                        self.momentum = [0.0; 2];
+                        self.regrip(look.time);
+                    }
                 }
                 LookPhase::Move | LookPhase::Up => {
                     let Some(i) = found else { continue };
                     let f = &mut self.fingers[i];
+                    f.seen = look.at;
                     // Within the slop the finger stays where it went
                     // down; past it, it grabs the scene from there.
                     let moved = (look.at[0] - f.at[0]).hypot(look.at[1] - f.at[1]);
@@ -697,6 +786,7 @@ impl TouchLookDrag {
                         self.fingers.remove(i);
                     }
                     self.momentum = [0.0; 2];
+                    self.regrip(look.time);
                 }
             }
         }
@@ -705,6 +795,15 @@ impl TouchLookDrag {
             self.momentum = [0.0; 2];
         }
         turn
+    }
+
+    /// The one finger a pinch left drags on from where it is at `time`.
+    fn regrip(&mut self, time: f64) {
+        if let [f] = self.fingers.as_mut_slice() {
+            f.at = f.seen;
+            f.turned = [0.0; 2];
+            f.samples = vec![(time, [0.0; 2])];
+        }
     }
 }
 
@@ -794,11 +893,6 @@ fn view_axes(view: &View) -> (Vec3, Vec3) {
     (cross(u, d), u)
 }
 
-/// The tangent of half the game's vertical field of view.
-fn tan_half_fov() -> f32 {
-    (crate::core::camera::FOV_Y_DEGREES.to_radians() / 2.0).tan()
-}
-
 /// Where in the picture (as [`TouchLook::at`]) `point` shows from `view`,
 /// `None` nearer than the near plane or behind.
 pub fn picture_point(view: &View, point: Vec3) -> Option<[f32; 2]> {
@@ -808,7 +902,7 @@ pub fn picture_point(view: &View, point: Vec3) -> Option<[f32; 2]> {
     if z < crate::core::camera::NEAR {
         return None;
     }
-    let t = tan_half_fov();
+    let t = tan_half(view.fov_y_degrees);
     Some([dot(rel, r) / z / t, -dot(rel, u) / z / t])
 }
 
@@ -818,7 +912,7 @@ pub fn picture_point(view: &View, point: Vec3) -> Option<[f32; 2]> {
 /// (pass-through ones, invisible walls among them, let it through).
 pub fn tap_destination(world: &CollisionWorld, view: &View, at: [f32; 2]) -> Option<Vec3> {
     let (r, u) = view_axes(view);
-    let t = tan_half_fov();
+    let t = tan_half(view.fov_y_degrees);
     let dir = normalize(add(
         add(scale(r, at[0] * t), scale(u, -at[1] * t)),
         view.direction,
@@ -1318,6 +1412,7 @@ impl Controls {
             ],
             look: [0.0; 2],
             toward: None,
+            fov: None,
         };
         // The touch stick: its reach within the rim, or full forward while
         // the sprint lock holds it.
@@ -1408,17 +1503,26 @@ impl Controls {
         // The experimental touch look: under a screen nothing looks and the
         // momentum ends.
         r.look = if keys_only {
-            self.look
-                .frame(&[], true, player.pitch, player.pitch_limits, now)
+            self.look.frame(
+                &[],
+                true,
+                player.pitch,
+                player.pitch_limits,
+                player.fov,
+                now,
+            )
         } else {
             self.look.frame(
                 input.touch_looks(),
                 input.looks_released(),
                 player.pitch,
                 player.pitch_limits,
+                player.fov,
                 now,
             )
         };
+        // A pinch's field of view, through the player's (as aiming's).
+        r.fov = self.look.fov();
         // Tap-to-move: forward toward the trip's destination, running
         // (touch's latch, unless the low crouch holds it walking). A key or
         // a stick moving, a screen or a blur ends the trip.
@@ -1491,6 +1595,7 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
             yaw: 0.0,
             pitch: 0.0,
             pitch_limits: [-1.5, 1.5],
+            fov: crate::core::camera::FOV_Y_DEGREES,
         }
     }
 
@@ -2014,15 +2119,12 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
     }
 
     const LIMITS: [f32; 2] = [-1.5, 1.5];
-
-    fn tan_half() -> f32 {
-        (crate::core::camera::FOV_Y_DEGREES.to_radians() / 2.0).tan()
-    }
+    const FOV: f32 = crate::core::camera::FOV_Y_DEGREES;
 
     /// The world direction (yaw-0 frame turned by `yaw`) under a finger at
     /// `at` with the camera at `yaw`, `pitch`.
     fn under(at: [f32; 2], yaw: f32, pitch: f32) -> [f32; 3] {
-        let t = tan_half();
+        let t = tan_half(FOV);
         let c = [at[0] * t, -at[1] * t, 1.0f32];
         let l = (c[0] * c[0] + c[1] * c[1] + 1.0).sqrt();
         let c = c.map(|v| v / l);
@@ -2050,7 +2152,7 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
         ];
         for (i, at) in path.into_iter().enumerate() {
             events.push(look(1, LookPhase::Move, at, 10.0 * (i + 1) as f64));
-            let t = d.frame(&events, false, pitch, LIMITS, 16 * i as u64);
+            let t = d.frame(&events, false, pitch, LIMITS, FOV, 16 * i as u64);
             events.clear();
             yaw += t[0];
             pitch += t[1];
@@ -2064,15 +2166,15 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
         }
         // Dragged right the scene goes right: the view turns left; dragged
         // down it looks up.
-        let right = grab_turn([0.0, 0.0], [0.2, 0.0], 0.0, LIMITS, tan_half());
+        let right = grab_turn([0.0, 0.0], [0.2, 0.0], 0.0, LIMITS, tan_half(FOV));
         assert!(right[0] < 0.0 && right[1].abs() < 1e-6);
-        let down = grab_turn([0.0, 0.0], [0.0, 0.2], 0.0, LIMITS, tan_half());
+        let down = grab_turn([0.0, 0.0], [0.0, 0.2], 0.0, LIMITS, tan_half(FOV));
         assert!(down[1] < 0.0 && down[0].abs() < 1e-6);
         // Near the middle a pixel turns tan_half / half a picture's height.
-        let tiny = grab_turn([0.0, 0.0], [0.001, 0.0], 0.0, LIMITS, tan_half());
-        assert!((tiny[0] + 0.001 * tan_half()).abs() < 1e-6);
+        let tiny = grab_turn([0.0, 0.0], [0.001, 0.0], 0.0, LIMITS, tan_half(FOV));
+        assert!((tiny[0] + 0.001 * tan_half(FOV)).abs() < 1e-6);
         // At the pitch limit the pitch stops, the yaw still follows.
-        let held = grab_turn([0.0, 0.0], [0.3, 0.9], -1.4, LIMITS, tan_half());
+        let held = grab_turn([0.0, 0.0], [0.3, 0.9], -1.4, LIMITS, tan_half(FOV));
         assert!((held[1] - (-0.1)).abs() < 1e-6 && held[0] < 0.0, "{held:?}");
     }
 
@@ -2086,7 +2188,7 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
             events.push(look(1, LookPhase::Move, [x, 0.0], 8.0 * f64::from(i)));
             if i % 2 == 0 {
                 *now += 16;
-                turned += d.frame(&events, false, 0.0, LIMITS, *now)[0];
+                turned += d.frame(&events, false, 0.0, LIMITS, FOV, *now)[0];
                 events.clear();
             }
         }
@@ -2097,7 +2199,7 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
             81.0,
         ));
         *now += frame;
-        turned + d.frame(&events, false, 0.0, LIMITS, *now)[0]
+        turned + d.frame(&events, false, 0.0, LIMITS, FOV, *now)[0]
     }
 
     /// Frames of `frame` ms (uneven when 0) for `ms` ms; the yaw turned.
@@ -2112,7 +2214,7 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
                 frame
             };
             *now = (*now + step).min(end);
-            turned += d.frame(&[], false, 0.0, LIMITS, *now)[0];
+            turned += d.frame(&[], false, 0.0, LIMITS, FOV, *now)[0];
             i += 1;
         }
         turned
@@ -2130,7 +2232,7 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
             // The release velocity: the finger's angular speed where it
             // was let go (moving right, so turning left).
             let x = 0.0;
-            let expected = -speed * tan_half() / (1.0 + x * x * tan_half() * tan_half());
+            let expected = -speed * tan_half(FOV) / (1.0 + x * x * tan_half(FOV) * tan_half(FOV));
             assert!(
                 (v - expected).abs() < 0.03 * expected.abs(),
                 "{v} {expected}"
@@ -2169,6 +2271,7 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
             false,
             0.0,
             LIMITS,
+            FOV,
             now,
         );
         assert!(t[0] != 0.0, "this frame's share still turns");
@@ -2181,7 +2284,7 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
             look(2, LookPhase::Up, [0.7, 0.0], 1010.0),
         ];
         now += 16;
-        d.frame(&hold, false, 0.0, LIMITS, now);
+        d.frame(&hold, false, 0.0, LIMITS, FOV, now);
         assert_eq!(d.momentum(), [0.0; 2]);
         // Cancelled, released, or after a long gap: none either.
         for end in 0..3 {
@@ -2194,14 +2297,14 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
                 let mut events = vec![look(1, LookPhase::Down, [0.0, 0.0], 0.0)];
                 events.push(look(1, LookPhase::Move, [0.1, 0.0], 8.0));
                 events.push(look(1, LookPhase::Cancel, [0.1, 0.0], 9.0));
-                d2.frame(&events, false, 0.0, LIMITS, 16);
+                d2.frame(&events, false, 0.0, LIMITS, FOV, 16);
                 assert_eq!(d2.momentum(), [0.0; 2]);
             } else if end == 1 {
-                d.frame(&[], true, 0.0, LIMITS, now + 16);
+                d.frame(&[], true, 0.0, LIMITS, FOV, now + 16);
                 assert_eq!(d.momentum(), [0.0; 2]);
             } else {
                 assert_eq!(
-                    d.frame(&[], false, 0.0, LIMITS, now + LOOK_GAP_MS + 1),
+                    d.frame(&[], false, 0.0, LIMITS, FOV, now + LOOK_GAP_MS + 1),
                     [0.0; 2]
                 );
                 assert_eq!(d.momentum(), [0.0; 2], "{v:?}");
@@ -2225,13 +2328,13 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
         }
         events.push(look(1, LookPhase::Up, [0.3, -0.3], 81.0));
         let mut pitch = 1.3;
-        let t = d.frame(&events, false, pitch, LIMITS, 16);
+        let t = d.frame(&events, false, pitch, LIMITS, FOV, 16);
         pitch += t[1];
         assert!(d.momentum()[1] > 0.0 && d.momentum()[0] < 0.0);
         let mut now = 16;
         for _ in 0..200 {
             now += 16;
-            pitch += d.frame(&[], false, pitch, LIMITS, now)[1];
+            pitch += d.frame(&[], false, pitch, LIMITS, FOV, now)[1];
             assert!(pitch <= LIMITS[1] + 1e-6);
         }
         assert_eq!(pitch, LIMITS[1]);
@@ -2249,7 +2352,7 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
         let (r, _) = req(&mut c, &i);
         assert_eq!(r.mouse, [0.0; 2]);
         assert!(
-            (r.look[1] + (0.1 * tan_half()).atan()).abs() < 1e-6,
+            (r.look[1] + (0.1 * tan_half(FOV)).atan()).abs() < 1e-6,
             "{:?}",
             r.look
         );
@@ -2591,7 +2694,199 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
 
     /// One frame of look events at `now`, from a level view: the turn.
     fn looks(d: &mut TouchLookDrag, events: &[TouchLook], now: u64) -> [f32; 2] {
-        d.frame(events, false, 0.0, LIMITS, now)
+        d.frame(events, false, 0.0, LIMITS, FOV, now)
+    }
+
+    /// The world direction under `at` with the camera at `yaw`, `pitch`
+    /// and a half vertical field of view of tangent `t`.
+    fn under_at(at: [f32; 2], yaw: f32, pitch: f32, t: f32) -> [f32; 3] {
+        under(at.map(|c| c * t / tan_half(FOV)), yaw, pitch)
+    }
+
+    fn close(a: [f32; 3], b: [f32; 3], within: f32) -> bool {
+        (0..3).all(|k| (a[k] - b[k]).abs() < within)
+    }
+
+    #[test]
+    fn a_pinch_zooms_with_the_scene_under_the_fingers() {
+        // Apart about the middle: the picture scales about its centre, the
+        // view doesn't turn, and each finger keeps its scene direction.
+        let mut d = TouchLookDrag::default();
+        let (a, b) = ([-0.2, 0.1], [0.2, -0.1]);
+        let grabbed = [under(a, 0.0, 0.0), under(b, 0.0, 0.0)];
+        looks(
+            &mut d,
+            &[
+                look(1, LookPhase::Down, a, 0.0),
+                look(2, LookPhase::Down, b, 5.0),
+            ],
+            16,
+        );
+        assert_eq!(d.fov(), None, "nothing moved yet");
+        let (a2, b2) = ([-0.3, 0.15], [0.3, -0.15]);
+        let t = d.frame(
+            &[
+                look(1, LookPhase::Move, a2, 20.0),
+                look(2, LookPhase::Move, b2, 21.0),
+            ],
+            false,
+            0.0,
+            LIMITS,
+            FOV,
+            32,
+        );
+        let fov = d.fov().expect("zoomed");
+        assert!(
+            (tan_half(fov) - tan_half(FOV) * 2.0 / 3.0).abs() < 1e-5,
+            "{fov}"
+        );
+        assert!(t[0].abs() < 1e-5 && t[1].abs() < 1e-5, "{t:?}");
+        for (at, g) in [(a2, grabbed[0]), (b2, grabbed[1])] {
+            let now = under_at(at, t[0], t[1], tan_half(fov));
+            assert!(close(now, g, 1e-4), "{at:?}: {now:?} {g:?}");
+        }
+        assert!(d.taps().is_empty());
+
+        // Off the middle, moving as it pinches: the midpoint's scene stays
+        // under the midpoint, the fingers' near theirs.
+        let mut d = TouchLookDrag::default();
+        let (yaw, pitch) = (0.4f32, 0.3f32);
+        let (a, b) = ([0.5, 0.4], [0.9, 0.2]);
+        let mid = |p: [f32; 2], q: [f32; 2]| [(p[0] + q[0]) / 2.0, (p[1] + q[1]) / 2.0];
+        let held = under(mid(a, b), yaw, pitch);
+        let fingers = [under(a, yaw, pitch), under(b, yaw, pitch)];
+        d.frame(
+            &[
+                look(1, LookPhase::Down, a, 0.0),
+                look(2, LookPhase::Down, b, 1.0),
+            ],
+            false,
+            pitch,
+            LIMITS,
+            FOV,
+            16,
+        );
+        let (a2, b2) = ([0.2, 0.5], [0.8, 0.1]);
+        let t = d.frame(
+            &[
+                look(1, LookPhase::Move, a2, 20.0),
+                look(2, LookPhase::Move, b2, 20.0),
+            ],
+            false,
+            pitch,
+            LIMITS,
+            FOV,
+            32,
+        );
+        let tz = tan_half(d.fov().unwrap());
+        let (yaw, pitch) = (yaw + t[0], pitch + t[1]);
+        assert!(close(under_at(mid(a2, b2), yaw, pitch, tz), held, 1e-4));
+        for (at, g) in [(a2, fingers[0]), (b2, fingers[1])] {
+            assert!(close(under_at(at, yaw, pitch, tz), g, 0.03), "{at:?}");
+        }
+    }
+
+    #[test]
+    fn a_pinch_stays_within_its_bounds_and_leaves_a_drag() {
+        let mut d = TouchLookDrag::default();
+        looks(
+            &mut d,
+            &[
+                look(1, LookPhase::Down, [-0.1, 0.0], 0.0),
+                look(2, LookPhase::Down, [0.1, 0.0], 0.0),
+            ],
+            16,
+        );
+        // Far apart: no narrower than PINCH_FOV_MIN.
+        looks(&mut d, &[look(2, LookPhase::Move, [1.9, 0.0], 10.0)], 32);
+        assert!((d.fov().unwrap() - PINCH_FOV_MIN).abs() < 1e-3);
+        // Together: no wider than the game's own.
+        let mut fov = d.fov().unwrap();
+        let mut now = 32;
+        for x in [1.0, 0.5, 0.2, 0.0] {
+            now += 16;
+            let t = d.frame(
+                &[look(2, LookPhase::Move, [x, 0.0], now as f64)],
+                false,
+                0.0,
+                LIMITS,
+                fov,
+                now,
+            );
+            assert!(t[0].is_finite());
+            fov = d.fov().unwrap();
+        }
+        assert!((fov - PINCH_FOV_MAX).abs() < 1e-3, "{fov}");
+        // A third finger does nothing.
+        now += 16;
+        let t = d.frame(
+            &[
+                look(3, LookPhase::Down, [0.5, 0.5], now as f64),
+                look(3, LookPhase::Move, [0.9, 0.9], now as f64 + 1.0),
+            ],
+            false,
+            0.0,
+            LIMITS,
+            fov,
+            now,
+        );
+        assert_eq!(t, [0.0; 2]);
+        // One lifted: the other drags on from where it is, at the zoomed
+        // field of view, and its lift is no tap.
+        let mut d = TouchLookDrag::default();
+        looks(
+            &mut d,
+            &[
+                look(1, LookPhase::Down, [-0.1, 0.0], 0.0),
+                look(2, LookPhase::Down, [0.1, 0.0], 0.0),
+                look(2, LookPhase::Move, [0.3, 0.0], 10.0),
+                look(2, LookPhase::Up, [0.3, 0.0], 20.0),
+            ],
+            16,
+        );
+        let fov = d.fov().unwrap();
+        assert!(fov < FOV);
+        let t = d.frame(
+            &[look(1, LookPhase::Move, [-0.5, 0.0], 30.0)],
+            false,
+            0.0,
+            LIMITS,
+            fov,
+            32,
+        );
+        let want = grab_turn([-0.1, 0.0], [-0.5, 0.0], 0.0, LIMITS, tan_half(fov));
+        assert!((t[0] - want[0]).abs() < 1e-6, "{t:?} {want:?}");
+        d.frame(
+            &[look(1, LookPhase::Up, [-0.5, 0.0], 400.0)],
+            false,
+            0.0,
+            LIMITS,
+            fov,
+            48,
+        );
+        assert!(d.taps().is_empty());
+    }
+
+    #[test]
+    fn a_pinch_reaches_the_request_and_a_new_level_starts_unzoomed() {
+        let mut c = controls();
+        let mut i = Input::new();
+        let event = |finger, phase, at| {
+            Event::TouchLook(TouchLook {
+                finger,
+                phase,
+                at,
+                time: 0.0,
+                half_height: HALF,
+            })
+        };
+        i.handle(event(1, LookPhase::Down, [-0.1, 0.0]));
+        i.handle(event(2, LookPhase::Down, [0.1, 0.0]));
+        i.handle(event(2, LookPhase::Move, [0.2, 0.0]));
+        let (r, _) = req(&mut c, &i);
+        let fov = r.fov.expect("a pinch's field of view");
+        assert!((tan_half(fov) - tan_half(FOV) * 2.0 / 3.0).abs() < 1e-5);
+        assert_eq!(req(&mut controls(), &Input::new()).0.fov, None);
     }
 
     #[test]
@@ -2646,7 +2941,7 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
             ],
             64,
         );
-        let want = grab_turn([0.0, 0.0], to, 0.0, LIMITS, tan_half());
+        let want = grab_turn([0.0, 0.0], to, 0.0, LIMITS, tan_half(FOV));
         assert!(
             (t[0] - want[0]).abs() < 1e-6 && t[0] < 0.0,
             "{t:?} {want:?}"
@@ -2691,6 +2986,7 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
             eye: [0.0, 1.5, 0.0],
             direction,
             up,
+            fov_y_degrees: FOV,
         }
     }
 

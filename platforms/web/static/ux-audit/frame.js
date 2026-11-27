@@ -9,6 +9,7 @@ import { screens, start } from "../game-ui.js";
 import { createFullscreenOffer } from "../fullscreen.js";
 import { createTouchControls } from "../touch-controls.js";
 import { createConsoleTouch } from "../console-touch.js";
+import { zoomTransform } from "../direct-touch.js";
 import { versionText } from "../update.js";
 import { DEVICES, STATES } from "./states.js";
 
@@ -198,6 +199,23 @@ if (state.level) {
     if (fade) touch.fadeNow();
     if (down) box.querySelector(`.touch-button.${down}`).classList.add("down");
   }
+} else if (state.screenZoom) {
+  // A screen with the game's cursor in the ergonomic mode (#807): a
+  // stand-in for the game's picture, turned as the canvas is on upright
+  // phones, magnified in the screen's layer (direct-touch.js) by `scale`
+  // with the picture's point `at` (fractions of the screen) at the same
+  // place.
+  document.documentElement.dataset.uxLevel = "";
+  if (device.height > device.width) document.documentElement.dataset.uxTurned = "";
+  document.querySelector("main").hidden = true;
+  const screen = document.getElementById("screen");
+  screen.insertAdjacentHTML(
+    "beforeend",
+    `<div class="ux-game"><div class="ux-stand-in ux-menu">The game's screen (no cursor drawn)</div></div>`,
+  );
+  const { scale, at } = state.screenZoom;
+  const [w, h] = [screen.clientWidth, screen.clientHeight];
+  screen.style.transform = zoomTransform({ scale, x: (1 - scale) * w * at[0], y: (1 - scale) * h * at[1] });
 } else if (state.console) {
   // The console on touch screens (#642), over a plain backdrop: over the
   // main menu its Console button, or the console open (a stand-in for

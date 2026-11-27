@@ -64,6 +64,18 @@ async function touchpad() {
   return import(`${path.slice(0, path.indexOf("/__test/") + 1)}touchpad.js`);
 }
 
+/** The app's direct touch recognizer (direct-touch.js, #807), unit-tested here. */
+async function directTouch() {
+  const path = location.pathname;
+  return import(`${path.slice(0, path.indexOf("/__test/") + 1)}direct-touch.js`);
+}
+
+/** Direct touch's messages: the button's, or the zoom's rounded. */
+const clicks = (messages) =>
+  messages.map(([type, ...rest]) =>
+    type === "zoom" ? `zoom ${rest[0].scale.toFixed(3)} ${rest[0].x.toFixed(1)},${rest[0].y.toFixed(1)}` : `${type} ${rest[1]},${rest[2]} @${rest[3]}`,
+  );
+
 /** The messages' kinds and values, speeds left out. */
 const plain = (messages) =>
   messages.map((m) => (m[0] === "cursor_motion" ? `motion ${m[1]},${m[2]}` : m[0] === "wheel" ? `wheel ${m[1]}` : `${m[1]} ${m[2] ? "down" : "up"} @${m[3]}`));
@@ -311,6 +323,105 @@ export const tests = {
     assertEqual(pad.move(2, 200 + PINCH_STEP / 2, 270, 50), [], "no scroll");
     pad.up(1, 100 + PINCH_STEP, 300, 60);
     assertEqual(pad.up(2, 200, 300, 70), [], "no tap");
+  },
+
+  "direct touch (experimental, #807): a tap presses and releases where it lands; held still it presses after the delay; moved past the slop it presses where it began and drags": async () => {
+    const { createDirectTouch, PRESS_DELAY_MS } = await directTouch();
+    const { TAP_SLOP } = await touchpad();
+    const d = createDirectTouch(() => [800, 400]);
+    assertEqual(d.down(1, 100, 100, 0), [], "nothing at once: a second finger may follow");
+    assertEqual(d.deadline(), PRESS_DELAY_MS, "the press's deadline");
+    assertEqual(clicks(d.up(1, 102, 101, 60)), ["press 100,100 @0", "release 102,101 @60"], "a tap");
+    // Held: pressed at the deadline, then each move drags.
+    d.down(2, 300, 200, 1000);
+    assertEqual(d.tick(1000 + PRESS_DELAY_MS - 1), [], "not yet");
+    assertEqual(clicks(d.tick(1000 + PRESS_DELAY_MS)), ["press 300,200 @1000"], "held still");
+    assertEqual(d.deadline(), null, "pressed");
+    assertEqual(clicks(d.move(2, 303, 200, 1150)), ["drag 303,200 @1150"], "a drag within the slop too");
+    assertEqual(clicks(d.up(2, 303, 200, 1200)), ["release 303,200 @1200"], "lifted");
+    // Moved past the slop before the delay: pressed where it began.
+    d.down(3, 0, 0, 2000);
+    assertEqual(d.move(3, TAP_SLOP, 0, 2010), [], "within the slop");
+    assertEqual(clicks(d.move(3, TAP_SLOP + 5, 0, 2020)), ["press 0,0 @2000", `drag ${TAP_SLOP + 5},0 @2020`], "past it");
+    // A second finger after the press does nothing; the press holds.
+    assertEqual(d.down(4, 500, 300, 2030), [], "a second finger");
+    assertEqual(d.move(4, 600, 300, 2040), [], "it moves nothing");
+    assertEqual(d.up(4, 600, 300, 2050), [], "nor lifts anything");
+    assertEqual(clicks(d.cancel(3, 2060)), [`release ${TAP_SLOP + 5},0 @2060`], "cancelled: released");
+    // A reset releases a press too.
+    d.down(5, 10, 10, 3000);
+    d.tick(3000 + PRESS_DELAY_MS);
+    assertEqual(clicks(d.reset(3200)), ["release 10,10 @3200"], "reset");
+    assertEqual(d.up(5, 10, 10, 3300), [], "forgotten");
+  },
+
+  "direct touch: two fingers pinch the picture about their midpoint, 1 to MAX_ZOOM times, covering the screen, and drag it while magnified; they click nothing": async () => {
+    const { createDirectTouch, MAX_ZOOM, zoomed, zoomTransform } = await directTouch();
+    const d = createDirectTouch(() => [800, 400]);
+    d.down(1, 300, 200, 0);
+    d.down(2, 500, 200, 30);
+    assertEqual(d.deadline(), null, "no press to wait for");
+    // Apart twice as far about (400, 200): that point stays.
+    assertEqual(clicks(d.move(1, 200, 200, 40)), ["zoom 1.500 -250.0,-100.0"], "half apart");
+    assertEqual(clicks(d.move(2, 600, 200, 50)), ["zoom 2.000 -400.0,-200.0"], "twice as far");
+    assertEqual(zoomed(d.zoom, [400, 200]), [400, 200], "the midpoint's point under it");
+    assertEqual(zoomTransform(d.zoom), "translate(-400px, -200px) scale(2)", "the transform");
+    // Both dragged right by 100: the picture follows them.
+    d.move(1, 300, 200, 60);
+    assertEqual(clicks(d.move(2, 700, 200, 70)), ["zoom 2.000 -300.0,-200.0"], "dragged");
+    // Dragged far: the picture always covers the screen.
+    const covers = () => {
+      const { scale, x, y } = d.zoom;
+      assert(x <= 0 && y <= 0 && x >= 800 * (1 - scale) - 1e-9 && y >= 400 * (1 - scale) - 1e-9, JSON.stringify(d.zoom));
+    };
+    for (let k = 1; k <= 5; k++) {
+      d.move(1, 300 + 100 * k, 200, 70 + k);
+      covers();
+      d.move(2, 700 + 100 * k, 200, 70 + k);
+      covers();
+    }
+    assertEqual(d.zoom.x, 0, "at the left edge");
+    // Far apart: no more than MAX_ZOOM.
+    d.move(1, -2000, 200, 100);
+    assertEqual(d.zoom.scale, MAX_ZOOM, "at most");
+    covers();
+    // Together: back to the picture's own size, no less.
+    d.move(1, 1190, 200, 110);
+    assertEqual(d.zoom, { scale: 1, x: 0, y: 0 }, "at least its own size");
+    assertEqual(d.up(1, 1190, 200, 120), [], "no click");
+    assertEqual(d.move(2, 0, 0, 130), [], "the other finger does nothing");
+    assertEqual(d.up(2, 0, 0, 140), [], "nor its lift");
+    // Unzoomed on request; once.
+    d.down(3, 300, 200, 200);
+    d.down(4, 500, 200, 210);
+    d.move(4, 700, 200, 220);
+    assert(d.zoom.scale > 1, "zoomed");
+    assertEqual(clicks(d.unzoom()), ["zoom 1.000 0.0,0.0"], "unzoomed");
+    assertEqual(d.unzoom(), [], "already");
+  },
+
+  "touch positions are the canvas's own while the screen's picture is magnified": async () => {
+    await sleep(300);
+    const screen = document.getElementById("screen");
+    const { clientWidth: w, clientHeight: h } = view();
+    // Magnified twice about the canvas's centre on the screen.
+    const box = view().getBoundingClientRect();
+    const [cx, cy] = [box.left + box.width / 2, box.top + box.height / 2];
+    // The canvas's point a quarter in from its top left, unmagnified.
+    const [qx, qy] = client(w / 4, h / 4);
+    screen.style.transform = `translate(${-cx}px, ${-cy}px) scale(2)`;
+    try {
+      // It now shows at the screen's point twice as far from the
+      // transform's origin.
+      const shown = [2 * qx - cx, 2 * qy - cy];
+      const touch = { pointerType: "touch", button: 0, buttons: 1, pointerId: 7 };
+      const at = { clientX: shown[0], clientY: shown[1], isPrimary: true, bubbles: true, cancelable: true };
+      document.body.dispatchEvent(new PointerEvent("pointerdown", { ...at, ...touch }));
+      document.body.dispatchEvent(new PointerEvent("pointerup", { ...at, ...touch, buttons: 0 }));
+      assertNear((await state()).cursor, [-0.5, -0.5], "the canvas's quarter point");
+    } finally {
+      screen.style.transform = "";
+    }
   },
 
   "touch moves the cursor there and presses": async () => {

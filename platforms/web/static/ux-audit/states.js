@@ -147,10 +147,11 @@ export const SECTIONS = [
       },
     ],
   },
-  // The experimental touch controls (#802, Settings): the whole picture
-  // moves (a tap) and looks (a drag); no stick.
+  // The ergonomic mobile mode (#802, Settings): the whole picture moves
+  // (a tap) and looks (a drag), a pinch zooms the view (the game draws
+  // it); no stick.
   {
-    title: "In the level: experimental touch controls",
+    title: "In the level: ergonomic mode",
     note: "Chosen in Settings. Touch controls: approximations; the app draws them from the textures in the game files.",
     states: [
       { id: "level-experimental", name: "Idle: no stick", level: { mode: "experimental" }, devices: TOUCH },
@@ -161,6 +162,24 @@ export const SECTIONS = [
         devices: TOUCH,
       },
       { id: "level-experimental-jump", name: "Jump held", level: { mode: "experimental", down: "jump" }, devices: TOUCH },
+    ],
+  },
+  // The ergonomic mode on the screens with the game's cursor (menus, the
+  // inventory, the PDA, boxes; #807): a touch clicks where it lands, no
+  // cursor drawn; a pinch magnifies the whole picture, two fingers drag
+  // it. The game draws the screen; the board shows a stand-in.
+  {
+    title: "Screens with the game's cursor: ergonomic mode",
+    note: "A stand-in for the screen the game draws. No cursor; a touch clicks where it lands.",
+    states: [
+      { id: "zoom-none", name: "As drawn: no cursor", screenZoom: { scale: 1, at: [0, 0] }, devices: TOUCH },
+      { id: "zoom-pinched", name: "Pinched apart: the whole picture magnified twice, about the fingers", screenZoom: { scale: 2, at: [0.5, 0.5] }, devices: TOUCH },
+      {
+        id: "zoom-panned",
+        name: "Magnified 4 times (the most) and dragged to the bottom right corner",
+        screenZoom: { scale: 4, at: [1, 1] },
+        devices: TOUCH,
+      },
     ],
   },
   // The console on touch screens (#642): the game draws the console and

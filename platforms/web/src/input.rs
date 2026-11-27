@@ -14,10 +14,11 @@
 //! | `["move", x, y]` | mouse moved |
 //! | `["motion", dx, dy]` | relative mouse motion (pointer lock) |
 //! | `["button", x, y, name, pressed, time]` | mouse button ([`MouseButton::name`]) |
-//! | `["touch", x, y, "start"\|"move"\|"end", time, id, primary]` | a touch contact (`id`, `primary` optional: a primary contact without id), while the game shows no cursor |
+//! | `["touch", x, y, "start"\|"move"\|"end", time, id, primary]` | a touch contact (`id`, `primary` optional: a primary contact without id), while the game shows no cursor or touches click where they land |
 //! | `["cursor_motion", dx, dy, speed]` | a touchpad swipe's motion while the game shows its cursor (#108), and its smoothed speed in CSS pixels per second |
 //! | `["cursor_button", "left"\|"right", pressed, time, double]` | a touchpad gesture pressing or releasing a mouse button at the cursor (#108); `double` for a double click's second press |
 //! | `["touch_drop"]` | the touches down when the cursor appeared are dropped: their left button released where the cursor is (#108) |
+//! | `["touch_direct", on]` | touches click where they land while the game shows its cursor (`on`: the ergonomic mode, #807): the cursor isn't drawn until a mouse moves it |
 //! | `["key", name, pressed]` | key ([`Key::name`]), no auto-repeat |
 //! | `["key", "insert", true, read, text]` | an Insert press while the console is open, with the clipboard the page read for it (#639): `read` is `"text"` (and `text` its text), `"none"` (no text) or `"unavailable"` |
 //! | `["pad", name, pressed]` | gamepad button ([`GamepadButton::name`]) |
@@ -341,6 +342,7 @@ fn decode(message: &Array) -> Result<Option<Vec<Event>>, JsValue> {
             time: num(3)?,
         },
         "touch_drop" => Event::TouchDropped,
+        "touch_direct" => Event::TouchDirect { on: flag(1)? },
         "key" => Event::Key {
             key: Key::from_name(&text(1)?).ok_or_else(bad)?,
             pressed: flag(2)?,
@@ -402,6 +404,8 @@ pub struct Snapshot {
     cursor: [f32; 2],
     /// UI units (1024 × 768).
     ui: [f32; 2],
+    /// Whether the game's cursor is drawn ([`Input::cursor_drawn`]).
+    cursor_drawn: bool,
     held: Vec<&'static str>,
     /// Actions since start.
     count: u64,
@@ -432,6 +436,7 @@ pub fn state() -> Snapshot {
             sensitivity: input.sensitivity(),
             cursor: input.cursor(),
             ui: input.cursor_ui(),
+            cursor_drawn: input.cursor_drawn(),
             held: input.held().into_iter().map(|c| c.name()).collect(),
             count: input.action_count(),
             recent: s

@@ -77,6 +77,16 @@ html[data-engine-input] {
   -webkit-touch-callout: none;
 }
 
+/* What holds the game's picture: magnified by a pinch on the screens
+   with the game's cursor in the ergonomic mode
+   (direct-touch.js, #807), from its top left. */
+#screen {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  transform-origin: 0 0;
+}
+
 canvas#view {
   position: fixed;
   inset: 0;

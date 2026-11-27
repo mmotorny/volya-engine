@@ -1206,18 +1206,139 @@ export const tests = {
     await sleep(100);
     const held = (await volya.call("input_state")).held;
     assert(!held.some((h) => h.startsWith("touch_")), `held after hiding: ${held}`);
-    // The touchpad (#108): "Возврат к игре" under the cursor, selected and
-    // under the glass once the bar rests; a tap activates it; the controls
-    // show again.
-    await swipeTo(centreOfRow(0));
-    await until((s) => inGame(s)?.selected === 0 && !inGame(s).moving, "item 0 at rest", 3000);
-    await tapAt([200, 200]);
+    // In the ergonomic mode a touch clicks where it lands (#807): a tap on
+    // "Возврат к игре" selects it, and once the bar rests one there
+    // activates it; the controls show again.
+    const item = client(...centreOfRow(0));
+    for (let i = 0; i < 10 && inGame(await state()); i++) {
+      await sleep(300);
+      const finger = { pointerType: "touch", pointerId: nextTouch(), isPrimary: true, button: 0 };
+      pointer("pointerdown", item, { ...finger, buttons: 1 });
+      pointer("pointerup", item, { ...finger, buttons: 0 });
+      await until((s) => !inGame(s) || (inGame(s).selected === 0 && !inGame(s).moving), "item 0 at rest", 3000);
+    }
     await until((s) => s.phase === "level" && !s.menu, "back in the game");
     for (let i = 0; i < 50 && controls.hidden; i++) await sleep(20);
     assert(!controls.hidden, "the touch controls show again");
     await quitToTitle();
-    await volya.touchControls.set("standard");
     return `ran ${ran.toFixed(2)} m to a tap ${away.toFixed(2)} m away: it ended ${atEnd.toFixed(2)} m from it, came to rest ${atRest.toFixed(2)} m from it; a tap on the marker cancelled a trip ${cancelAt.toFixed(2)} m short, at rest ${short.toFixed(2)} m short; turned ${turned.toFixed(2)} rad`;
+  },
+
+  "touch, ergonomic mode (#807): a pinch in the level zooms the view about the picture's centre within 20° to 67.5°; on the in-game menu no cursor is drawn, a pinch magnifies the screen, and a tap clicks where it lands through the zoom": async () => {
+    needsGame();
+    await volya.touchControls.set("experimental");
+    if ((await state()).phase === "menu") await enterLevel();
+    await until((s) => s.phase === "level" && !s.menu && !s.intro, "the level's controls");
+    assertEqual(volya.touchControls.running, "experimental", "the mode");
+    const controls = document.getElementById("touch-controls");
+    const tap = { pointerType: "touch", pointerId: nextTouch(), isPrimary: true, button: 0 };
+    pointer("pointerdown", client(512, 100), { ...tap, buttons: 1 });
+    pointer("pointerup", client(512, 100), { ...tap, buttons: 0 });
+    for (let i = 0; i < 50 && controls.hidden; i++) await sleep(20);
+    assert(!controls.hidden, "the touch controls show");
+    const look = controls.querySelector(".touch-look");
+    const [width, height] = [controls.clientWidth, controls.clientHeight];
+    const fingers = [nextTouch(), nextTouch()];
+    const on = (type, i, at) => {
+      const [x, y] = toClient(controls, at);
+      look.dispatchEvent(
+        new PointerEvent(type, {
+          clientX: x,
+          clientY: y,
+          pointerId: fingers[i],
+          pointerType: "touch",
+          isPrimary: i === 0,
+          button: type === "pointermove" ? -1 : 0,
+          buttons: type === "pointerup" ? 0 : 1,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    };
+    // Two fingers about the picture's centre, `gap` CSS pixels apart.
+    const pair = (type, gap) => [0, 1].forEach((i) => on(type, i, [width / 2 + (i ? 1 : -1) * (gap / 2), height / 2]));
+    const spread = async (from, to) => {
+      for (let n = 1; n <= 10; n++) {
+        await sleep(25);
+        pair("pointermove", from + ((to - from) * n) / 10);
+      }
+    };
+    await sleep(500);
+    const before = (await state()).level;
+    assertEqual(before.fov, 67.5, "the game's field of view at first");
+    pair("pointerdown", 100);
+    await spread(100, 200);
+    await until((s) => s.level.fov < 60, "pinched apart to zoom in");
+    await sleep(200);
+    let s = await state();
+    // Twice as far apart: the tangent of half the field of view halved.
+    const want = (2 * Math.atan(Math.tan((67.5 * Math.PI) / 360) / 2) * 180) / Math.PI;
+    const zoomedIn = s.level.fov;
+    assert(Math.abs(zoomedIn - want) < 0.5, `the field of view ${zoomedIn}, not ${want.toFixed(2)}`);
+    const turn = Math.abs(s.level.yaw - before.yaw) + Math.abs(s.level.pitch - before.pitch);
+    assert(turn < 0.01, `a pinch about the centre doesn't turn: ${turn}`);
+    // Far apart: no narrower than 20°; together: no wider than 67.5°.
+    await spread(200, 1000);
+    s = await until((s) => s.level.fov < 20.01, "far apart");
+    assert(s.level.fov >= 20 - 1e-3, `at least 20°: ${s.level.fov}`);
+    await spread(1000, 20);
+    s = await until((s) => s.level.fov > 67.49, "together");
+    assert(s.level.fov <= 67.5 + 1e-3, `no wider than the game's: ${s.level.fov}`);
+    pair("pointerup", 20);
+
+    // The in-game menu (it shows the game's cursor): no cursor drawn.
+    key("Escape");
+    await until((s) => inGame(s) && !inGame(s).moving, "the in-game menu");
+    for (let i = 0; i < 50 && !controls.hidden; i++) await sleep(20);
+    await sleep(100);
+    assertEqual((await volya.call("input_state")).cursor_drawn, false, "no cursor drawn");
+    // Two fingers pinched apart about "Возврат к игре" magnify the screen
+    // twice, the item staying under them.
+    const screen = document.getElementById("screen");
+    const item = client(...centreOfRow(0));
+    const ids = [nextTouch(), nextTouch()];
+    const at = (i, gap) => [item[0] + (i ? 1 : -1) * (gap / 2), item[1]];
+    const t = (i) => ({ pointerType: "touch", pointerId: ids[i], isPrimary: i === 0 });
+    [0, 1].forEach((i) => pointer("pointerdown", at(i, 60), { ...t(i), button: 0, buttons: 1 }));
+    for (let n = 1; n <= 10; n++) {
+      await sleep(25);
+      [0, 1].forEach((i) => pointer("pointermove", at(i, 60 + 6 * n), { ...t(i), buttons: 1 }));
+    }
+    [0, 1].forEach((i) => pointer("pointerup", at(i, 120), { ...t(i), button: 0, buttons: 0 }));
+    const match = screen.style.transform.match(/translate\((-?[\d.e-]+)px, (-?[\d.e-]+)px\) scale\(([\d.]+)\)/);
+    assert(match, `magnified: "${screen.style.transform}"`);
+    const [x, y, scale] = match.slice(1).map(Number);
+    assert(Math.abs(scale - 2) < 1e-6, `twice: ${scale}`);
+    const shown = [x + scale * item[0], y + scale * item[1]];
+    assert(Math.hypot(shown[0] - item[0], shown[1] - item[1]) < 1, `the item under the fingers: ${shown} ${item}`);
+    await sleep(100);
+    assert(inGame(await state()), "a pinch clicks nothing");
+    // A tap on the item where it shows magnified: the cursor goes there
+    // (selecting it), and a tap on it returns to the game.
+    await sleep(300);
+    const tapOn = () => {
+      const finger = { pointerType: "touch", pointerId: nextTouch(), isPrimary: true, button: 0 };
+      pointer("pointerdown", shown, { ...finger, buttons: 1 });
+      pointer("pointerup", shown, { ...finger, buttons: 0 });
+    };
+    tapOn();
+    const { ui } = await volya.call("input_state");
+    const [ix, iy] = centreOfRow(0);
+    assert(Math.abs(ui[0] - ix) < 3 && Math.abs(ui[1] - iy) < 3, `the cursor at the tap: ${ui}, not ${[ix, iy]}`);
+    for (let i = 0; i < 10; i++) {
+      s = await until((s) => !inGame(s) || (inGame(s).selected === 0 && !inGame(s).moving), "item 0 at rest", 3000);
+      if (!inGame(s)) break;
+      await sleep(300);
+      tapOn();
+      await sleep(200);
+    }
+    await until((s) => s.phase === "level" && !s.menu, "a tap returns to the game");
+    for (let i = 0; i < 50 && screen.style.transform !== ""; i++) await sleep(20);
+    assertEqual(screen.style.transform, "", "the zoom ends with the cursor");
+    // The standard tests start from a New Game of their own, as before.
+    await quitToTitle();
+    await volya.touchControls.set("standard");
+    return `pinched twice as far apart about the centre: ${zoomedIn.toFixed(2)}° (want ${want.toFixed(2)}°), turned ${turn.toFixed(4)} rad`;
   },
 
   "touch, standard (the default): a slow look drag across the look half turns about 180°, quicker drags up to twice as far (the look curve, #747)": async () => {

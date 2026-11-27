@@ -487,6 +487,8 @@ pub struct LevelState {
     pub eye: Vec3,
     pub yaw: f32,
     pub pitch: f32,
+    /// The view's vertical field of view, degrees (view-projection.md 3.1).
+    pub fov: f32,
     pub far_plane: f32,
     pub near_plane: f32,
     /// The game time, game milliseconds (sav.md section 12).
@@ -3694,7 +3696,8 @@ impl LevelScreen {
     fn camera_pass(&mut self, w: u32, h: u32, view: &Mat4, projection: &Mat4) {
         let (tw, th) = crate::render::present::target_size(w, h, self.supersample);
         let [lod, a, b] = self.geometry_lod;
-        let thresholds = Thresholds::new(tw, th, camera::FOV_Y_DEGREES, lod, a, b);
+        let fov = self.player.view().fov_y_degrees;
+        let thresholds = Thresholds::new(tw, th, fov, lod, a, b);
         let view = View {
             frame: self.frame as u32,
             view_projection: crate::render::world::multiply(view, projection),
@@ -3755,8 +3758,7 @@ impl LevelScreen {
             resolution.height,
             self.supersample,
         );
-        let ssa_min =
-            crate::render::world::ssa_min(w, h, camera::FOV_Y_DEGREES, self.geometry_lod[0]);
+        let ssa_min = crate::render::world::ssa_min(w, h, v.fov_y_degrees, self.geometry_lod[0]);
         let origin = |o: Origin| match o {
             Origin::Placed => 0,
             Origin::Zone => 1,
@@ -3822,12 +3824,13 @@ impl LevelScreen {
 
     /// View and projection for a `width` × `height` target
     /// (start-position.md sections 5–7, the smoothing of 7.2 replaced by its
-    /// targets, which it allows), from the player's eye.
+    /// targets, which it allows), from the player's eye at the player's
+    /// field of view (view-projection.md 3.1).
     pub fn view_projection(&self, width: u32, height: u32) -> (Mat4, Mat4) {
         let v = self.player.view();
         let view = camera::view_matrix(v.eye, v.direction, v.up);
         let projection = camera::projection(
-            camera::FOV_Y_DEGREES.to_radians(),
+            v.fov_y_degrees.to_radians(),
             camera::aspect_factor(width, height),
             self.near,
             self.environment.far_plane,
@@ -3868,7 +3871,7 @@ impl LevelScreen {
             ssa_min: crate::render::world::ssa_min(
                 w,
                 h,
-                camera::FOV_Y_DEGREES,
+                self.player.view().fov_y_degrees,
                 self.geometry_lod[0],
             ),
             density: self.detail_density,
@@ -3936,7 +3939,7 @@ impl LevelScreen {
             world: self.world.clone(),
             eye: v.eye,
             forward: d,
-            fov_y_degrees: camera::FOV_Y_DEGREES,
+            fov_y_degrees: v.fov_y_degrees,
             view,
             projection,
             environment: self.environment.clone(),
@@ -3981,6 +3984,7 @@ impl LevelScreen {
             eye: self.player.view().eye,
             yaw: angles.yaw,
             pitch: angles.pitch,
+            fov: self.player.view().fov_y_degrees,
             far_plane: self.environment.far_plane,
             near_plane: self.near,
             game_time: self.clock.time(),

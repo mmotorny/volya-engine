@@ -18,6 +18,11 @@
 //!   [`touchpad_gain`] and then the sensitivity rule of §7), button presses
 //!   at the cursor ([`Event::TouchpadButton`]) and wheel steps. A touch
 //!   never clicks where it lands there.
+//! - **Touch as direct clicks** there instead in the ergonomic mobile mode
+//!   (the user's design, #807): touches arrive as
+//!   [`Event::Touch`] (below), and while the platform says so
+//!   ([`Event::TouchDirect`]) the game's cursor isn't drawn
+//!   ([`Input::cursor_drawn`]) until a mouse moves it.
 //! - **Touch** elsewhere (a primary touch pointer, [`Event::Touch`]): the
 //!   contact point moves the cursor there, then presses the left mouse
 //!   button; lifting releases it. Screens that react to keys only (the logo
@@ -628,6 +633,12 @@ pub enum Event {
     /// left button they hold is released where the cursor is, their
     /// contacts end.
     TouchDropped,
+    /// Touches click where they land while the game shows its cursor
+    /// (`on`; the ergonomic mode, #807): the cursor isn't
+    /// drawn until a mouse moves it.
+    TouchDirect {
+        on: bool,
+    },
     /// A primary touch contact began, moved or ended at `at`.
     Touch {
         at: [f32; 2],
@@ -832,6 +843,10 @@ pub struct Input {
     touch_looks: Vec<TouchLook>,
     /// [`Input::release_all`] ran this frame.
     looks_released: bool,
+    /// Touches click where they land ([`Event::TouchDirect`]), and whether
+    /// a mouse has moved the cursor since the latest touch.
+    touch_direct: bool,
+    mouse_since_touch: bool,
     /// Relative mouse motion this frame ([`Event::PointerMotion`]).
     motion: [f32; 2],
     /// Whether the gamepad's left stick and the touch stick read zero only
@@ -871,6 +886,8 @@ impl Default for Input {
             touch_look_moves: Vec::new(),
             touch_looks: Vec::new(),
             looks_released: false,
+            touch_direct: false,
+            mouse_since_touch: false,
             motion: [0.0; 2],
             sticks_released: [false; 2],
             pointer_unlocked: false,
@@ -895,6 +912,13 @@ impl Input {
 
     pub fn screen(&self) -> [f32; 2] {
         self.screen
+    }
+
+    /// Whether the game's cursor is drawn: not while touches click where
+    /// they land ([`Event::TouchDirect`]), unless a mouse has moved it since
+    /// the latest touch.
+    pub fn cursor_drawn(&self) -> bool {
+        !self.touch_direct || self.mouse_since_touch
     }
 
     pub fn set_sensitivity(&mut self, s: f32) {
@@ -1177,10 +1201,12 @@ impl Input {
             Event::PointerUnlocked => self.pointer_unlocked = true,
             Event::Text { ch } => self.text.push(ch),
             Event::PointerMoved { at } => {
+                self.mouse_since_touch = true;
                 self.pointer_to(at);
                 self.move_to(at)
             }
             Event::PointerMotion { delta } => {
+                self.mouse_since_touch = true;
                 self.motion[0] += delta[0];
                 self.motion[1] += delta[1];
                 self.add_motion(delta);
@@ -1194,6 +1220,7 @@ impl Input {
                 time,
             } => {
                 if let Some(at) = at {
+                    self.mouse_since_touch = true;
                     self.pointer_to(at);
                     self.move_to(at);
                 }
@@ -1231,7 +1258,12 @@ impl Input {
                     c.ended = true;
                 }
             }
+            Event::TouchDirect { on } => {
+                self.touch_direct = on;
+                self.mouse_since_touch = false;
+            }
             Event::Touch { at, phase, time } => {
+                self.mouse_since_touch = false;
                 self.move_to(at);
                 match phase {
                     TouchPhase::Start => {
@@ -1650,6 +1682,32 @@ mod tests {
             input.end_frame();
         }
         assert_eq!(doubles, [false, true, false, false, true, false]);
+    }
+
+    #[test]
+    fn direct_touch_hides_the_cursor_until_a_mouse_moves_it() {
+        let mut input = Input::new();
+        assert!(input.cursor_drawn());
+        input.handle(Event::TouchDirect { on: true });
+        assert!(!input.cursor_drawn(), "before any touch too");
+        input.handle(Event::PointerMoved { at: [10.0, 10.0] });
+        assert!(input.cursor_drawn(), "a mouse shows it");
+        input.handle(Event::Touch {
+            at: [20.0, 20.0],
+            phase: TouchPhase::Start,
+            time: 0.0,
+        });
+        assert!(!input.cursor_drawn(), "a touch hides it again");
+        assert!(input.is_held(Control::Mouse(MouseButton::Left)));
+        input.handle(Event::PointerMotion { delta: [1.0, 0.0] });
+        assert!(input.cursor_drawn());
+        input.handle(Event::TouchDirect { on: false });
+        input.handle(Event::Touch {
+            at: [20.0, 20.0],
+            phase: TouchPhase::End,
+            time: 10.0,
+        });
+        assert!(input.cursor_drawn(), "the touchpad's cursor shows");
     }
 
     #[test]

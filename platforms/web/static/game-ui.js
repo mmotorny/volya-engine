@@ -774,7 +774,7 @@ function touchPanel() {
     "div",
     { role: "radiogroup" },
     choice("standard", "Standard"),
-    choice("experimental", "Ergonomic (experimental)", "Hold the phone naturally and say what you want: tap where to go, drag anywhere to look, flick to keep turning."),
+    choice("experimental", "Ergonomic (experimental)", "Hold the phone naturally and say what you want: tap where to go, drag anywhere to look, flick to keep turning, pinch to zoom."),
   );
   group.setAttribute("aria-label", "Mobile mode");
   return element("div", { className: "panel" }, element("p", { className: "label", textContent: "Mobile mode" }), group);

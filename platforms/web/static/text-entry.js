@@ -36,8 +36,9 @@ const EDITING = { Backspace: "backspace", Delete: "delete", Enter: "enter", Arro
  * The text entry; `send(message)` posts one input message to the engine.
  * `update({ rect, focused, over })` follows the engine's field: canvas CSS
  * pixels, or `rect: null` when it doesn't show; `over` while the cursor is
- * over it. `click()` runs in the handler of a gesture clicking at the
- * cursor.
+ * over it. `click(at)` runs in the handler of a gesture clicking: a
+ * touchpad's at the cursor, a direct click's at `at` (canvas CSS pixels,
+ * the ergonomic mode, #807).
  */
 export function createTextEntry(send) {
   // Laid out as the canvas is (turned on upright phones, style.css), so the
@@ -107,8 +108,11 @@ export function createTextEntry(send) {
   return {
     element: root,
     update,
-    click() {
-      if (!field.rect || !field.over) return;
+    click(at = null) {
+      if (!field.rect) return;
+      const [x, y, width, height] = field.rect;
+      const over = at ? at[0] >= x && at[0] < x + width && at[1] >= y && at[1] < y + height : field.over;
+      if (!over) return;
       // A touchpad click is a touch device's.
       touched = true;
       update(field);

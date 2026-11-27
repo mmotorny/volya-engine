@@ -641,6 +641,9 @@ pub struct App {
     menu_font: Option<(Resolution, FieldFont)>,
     /// The display colour settings and their ramp as last computed.
     ramp: Option<(DisplayColour, Option<[u16; 256]>)>,
+    /// The game's cursor isn't drawn: touches click where they land
+    /// ([`Input::cursor_drawn`], #807), as of the latest update.
+    cursor_hidden: bool,
     /// `[reduce_lod_texture_list]` (texture-quality-filtering.md 1.4).
     texture_list: Arc<[String]>,
     /// The maximum anisotropy and mip bias in force (sections 5 – 7).
@@ -876,6 +879,7 @@ impl App {
             shown: false,
             menu_font: None,
             ramp: None,
+            cursor_hidden: false,
             data,
             assets: Assets::default(),
             origin: None,
@@ -1070,6 +1074,7 @@ impl App {
         if self.hidden {
             return;
         }
+        self.cursor_hidden = !input.cursor_drawn();
         self.update_phase(tree, time_ms, input, audio);
         self.follow_menu();
         self.alt_f4(input);
@@ -2169,6 +2174,12 @@ impl App {
     // not a missing file) is fatal too; no spec covers it.
     pub fn scene(&mut self, tree: &dyn Vfs, resolution: Resolution) -> io::Result<Scene> {
         let mut scene = self.compose_scene(tree, resolution);
+        // Touches clicking where they land: no cursor (#807).
+        if self.cursor_hidden
+            && let Ok(scene) = &mut scene
+        {
+            scene.sprites.retain(|s| s.layer != "cursor");
+        }
         // display-gamma.md: the ramp of the display colour settings acts
         // on everything presented.
         let colour = DisplayColour::of(&self.console);
@@ -2755,6 +2766,19 @@ mod tests {
         assert!(scene.first("background").is_some());
         // The menu draws its cursor: touch is a touchpad (#108).
         assert!(app.cursor_shown() && scene.first("cursor").is_some());
+        // Touches clicking where they land (#807): the cursor isn't drawn;
+        // a mouse moving shows it again.
+        input.handle(Event::TouchDirect { on: true });
+        app.update(&tree, 5310.0, &mut input, &mut audio);
+        input.end_frame();
+        let scene = app.scene(&tree, Resolution::new(1024, 768)).unwrap();
+        assert!(app.cursor_shown() && scene.first("cursor").is_none());
+        assert!(scene.first("background").is_some());
+        input.handle(Event::PointerMoved { at: [5.0, 5.0] });
+        app.update(&tree, 5320.0, &mut input, &mut audio);
+        input.end_frame();
+        let scene = app.scene(&tree, Resolution::new(1024, 768)).unwrap();
+        assert!(scene.first("cursor").is_some());
         app.take_log_file();
         press(&mut input, Key::Q);
         app.update(&tree, 5400.0, &mut input, &mut audio);

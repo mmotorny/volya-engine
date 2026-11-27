@@ -304,6 +304,10 @@ pub struct Request {
     /// (5.3): tap-to-move's bearing to its destination (our design, not the
     /// spec's), so the body runs there whichever way the view turns.
     pub toward: Option<f32>,
+    /// The camera's vertical field of view from this frame on, degrees
+    /// (view-projection.md 3.1's player's fov, which aiming sets): the
+    /// ergonomic mode's pinch (our design, #807). `None` keeps it.
+    pub fov: Option<f32>,
 }
 
 /// The movement state (section 3).
@@ -362,6 +366,9 @@ pub struct View {
     pub eye: Vec3,
     pub direction: Vec3,
     pub up: Vec3,
+    /// The vertical field of view, degrees: the player's fov
+    /// (view-projection.md 3.1).
+    pub fov_y_degrees: f32,
 }
 
 /// A movement update's damage fraction `f` (environment-hits.md 3.1),
@@ -441,6 +448,9 @@ pub struct Player {
     /// The previous frame's eye and direction, for camera inertia.
     inert: Option<(Vec3, Vec3)>,
     view: View,
+    /// The player's vertical field of view, degrees (view-projection.md
+    /// 3.1): 67.5 on foot, a [`Request::fov`]'s once given.
+    fov: f32,
     /// The ladder and climbing state (climbing.md 2.2).
     climber: Climber,
     /// The yaw limits taken on a ladder (climbing.md 3.6).
@@ -480,6 +490,8 @@ pub struct PlayerState {
     pub yaw: f32,
     pub pitch: f32,
     pub pitch_limits: [f32; 2],
+    /// The vertical field of view, degrees (view-projection.md 3.1).
+    pub fov: f32,
 }
 
 fn unit_or_tiny(v: Vec3) -> Vec3 {
@@ -538,7 +550,9 @@ impl Player {
                 eye: [0.0; 3],
                 direction: [0.0, 0.0, 1.0],
                 up: [0.0, 1.0, 0.0],
+                fov_y_degrees: camera::FOV_Y_DEGREES,
             },
+            fov: camera::FOV_Y_DEGREES,
             climber: Climber::default(),
             yaw_limits: None,
             clock: now as u32,
@@ -608,6 +622,7 @@ impl Player {
             yaw: self.angles.yaw,
             pitch: self.angles.pitch,
             pitch_limits: self.config.lim_pitch,
+            fov: self.fov,
         }
     }
 
@@ -683,6 +698,12 @@ impl Player {
         // (after the steps, on the speed they leave: our choice), the camera
         // (7, 9).
         self.clock = self.next_clock.take().unwrap_or(now as u32);
+        if let Some(fov) = request
+            .fov
+            .filter(|f| f.is_finite() && *f > 0.0 && *f < 180.0)
+        {
+            self.fov = fov;
+        }
         self.look(request, dt_f);
         let (a, take_off) = self.movement_update(world, now, request, dt_m);
         self.damage = self.damage_fraction(world, dt_f);
@@ -761,10 +782,16 @@ impl Player {
         self.angles.pitch = self.angles.pitch.clamp(lo, hi);
     }
 
-    /// Radians of yaw per mouse count (8.1), not aiming and with no active
-    /// item (`c = 1`).
+    /// Radians of yaw per mouse count (8.1) at the player's field of view
+    /// (`F_view`), with no active item (`c = 1`).
     pub fn mouse_scale(&self) -> f32 {
-        self.settings.mouse_sens * MOUSE_SCALE * (camera::FOV_Y_DEGREES / MOUSE_FOV_DEGREES)
+        self.settings.mouse_sens * MOUSE_SCALE * (self.fov / MOUSE_FOV_DEGREES)
+    }
+
+    /// The player's vertical field of view, degrees (view-projection.md
+    /// 3.1).
+    pub fn fov(&self) -> f32 {
+        self.fov
     }
 
     /// Sections 3–5: the state from the request, and the desired
@@ -1381,6 +1408,7 @@ impl Player {
             eye,
             direction: d,
             up: u,
+            fov_y_degrees: self.fov,
         }
     }
 }

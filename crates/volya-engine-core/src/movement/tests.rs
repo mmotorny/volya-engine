@@ -111,6 +111,7 @@ const FORWARD: Request = Request {
     turn: [0.0; 2],
     look: [0.0; 2],
     toward: None,
+    fov: None,
 };
 
 #[test]
@@ -540,6 +541,42 @@ fn sprint_needs_forward_running() {
         0.05,
     );
     assert!(!p.state().flags.sprint && !p.state().sprint_requested);
+}
+
+/// The player's field of view (view-projection.md 3.1): 67.5 at first, a
+/// request's from its frame on, kept after; the view shows it and the
+/// mouse turns by F_view / 67.5 (8.1).
+#[test]
+fn the_field_of_view_follows_requests() {
+    let world = floor();
+    let (mut p, mut now) = player(&world);
+    assert_eq!(p.fov(), 67.5);
+    assert_eq!(p.view().fov_y_degrees, 67.5);
+    now += 16;
+    let v = p.frame(
+        &world,
+        now,
+        &Request {
+            fov: Some(33.75),
+            ..Request::default()
+        },
+    );
+    assert_eq!(v.fov_y_degrees, 33.75);
+    assert_eq!(p.state().fov, 33.75);
+    assert!((p.mouse_scale() - 0.0012).abs() < 1e-7);
+    now += 16;
+    let v = p.frame(&world, now, &Request::default());
+    assert_eq!(v.fov_y_degrees, 33.75, "kept");
+    now += 16;
+    let v = p.frame(
+        &world,
+        now,
+        &Request {
+            fov: Some(f32::NAN),
+            ..Request::default()
+        },
+    );
+    assert_eq!(v.fov_y_degrees, 33.75, "a nonsense value is ignored");
 }
 
 #[test]
