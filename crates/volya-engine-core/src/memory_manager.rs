@@ -429,6 +429,32 @@ impl SystemBytes {
         let ptr = std::ptr::NonNull::new(unsafe { System.alloc_zeroed(layout) })?;
         Some(Self { ptr, len })
     }
+
+    /// Keeps the first `len` bytes and gives the rest back to `System`
+    /// (all kept where it can't shrink the block).
+    pub fn truncate(&mut self, len: usize) {
+        if len >= self.len {
+            return;
+        }
+        if len == 0 {
+            *self = Self {
+                ptr: std::ptr::NonNull::dangling(),
+                len,
+            };
+            return;
+        }
+        // SAFETY: made by `zeroed` with this layout; a nonzero new size.
+        let ptr = unsafe {
+            System.realloc(
+                self.ptr.as_ptr(),
+                Layout::from_size_align_unchecked(self.len, 1),
+                len,
+            )
+        };
+        if let Some(ptr) = std::ptr::NonNull::new(ptr) {
+            (self.ptr, self.len) = (ptr, len);
+        }
+    }
 }
 
 impl std::ops::Deref for SystemBytes {

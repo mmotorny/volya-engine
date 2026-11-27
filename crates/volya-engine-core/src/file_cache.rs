@@ -74,6 +74,20 @@ impl std::ops::DerefMut for HeldBytes {
     }
 }
 
+impl volya_engine_formats::level_details::GridBytes for HeldBytes {
+    /// Keeps the first `len` bytes, counted from now on at their size.
+    fn truncate(&mut self, len: usize) {
+        let was = self.bytes.len() as u64;
+        self.bytes.truncate(len);
+        let now = self.bytes.len() as u64;
+        let mut state = state();
+        state.bytes -= was - now;
+        if let Some(s) = state.standing.iter_mut().find(|s| s.0 == self.id) {
+            s.2 = now;
+        }
+    }
+}
+
 impl Drop for HeldBytes {
     fn drop(&mut self) {
         let mut state = state();
