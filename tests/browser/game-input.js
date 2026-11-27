@@ -748,7 +748,7 @@ export const tests = {
     return `outfit ${outfit}`;
   },
 
-  "touch: a look swipe across the screen's width turns finely when slow and far when quick (the look curve, #731)": async () => {
+  "touch: a slow look drag across the look half turns about 180°, quicker drags up to twice as far (the look curve, #747)": async () => {
     needsGame();
     const controls = document.getElementById("touch-controls");
     assert(controls, "no touch controls");
@@ -814,6 +814,7 @@ export const tests = {
       ["slow", width, 250],
       ["steady", width, 1000],
       ["quick", width, width / 0.2],
+      ["half slow", half, 250],
       ["half quick", half, half / 0.15],
     ]) {
       // Right, then back left alike, so the next tests find the view as it was.
@@ -823,12 +824,16 @@ export const tests = {
     const report = `${width} px wide, look half ${Math.round(half)}: ${Object.entries(runs)
       .map(([what, r]) => `${what} (${Math.round(r.speed)} px/s) ${r.turned.toFixed(0)}°`)
       .join(", ")}`;
-    // At the default mouse_sens 0.12 (0.1375° a count): slow stays one count
-    // a pixel; a quick flick across the look half turns 90–180°.
+    // At the default mouse_sens 0.12 (0.1375° a count): slow turns the base
+    // 3.25 counts a pixel, so a slow drag across the look half about 180°; a
+    // quick flick across it at least as far; nothing past the 6.5 cap.
+    const degree = 0.1375;
     const perPixel = runs.slow.turned / width;
-    assert(Math.abs(perPixel - 0.1375) < 0.005, `slow: ${perPixel.toFixed(4)}° a pixel; ${report}`);
-    const flick = runs["half quick"].turned;
-    assert(flick >= 90 && flick <= 180, `the half flick: ${report}`);
+    assert(Math.abs(perPixel - 3.25 * degree) < 0.01, `slow: ${perPixel.toFixed(4)}° a pixel; ${report}`);
+    const halfSlow = runs["half slow"].turned;
+    assert(halfSlow >= 150 && halfSlow <= 200, `the slow half drag: ${report}`);
+    assert(runs["half quick"].turned >= halfSlow, `the half flick: ${report}`);
+    assert(runs.quick.turned <= 6.5 * degree * width + 1, `the quick swipe within the cap: ${report}`);
     return report;
   },
 
