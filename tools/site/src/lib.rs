@@ -13,6 +13,8 @@ use std::process::Command;
 
 use sha2::{Digest, Sha256};
 
+pub mod notices;
+
 pub type Result<T = ()> = std::result::Result<T, String>;
 
 /// Where a build came from: shown as the version (`update.js`) and naming
@@ -32,11 +34,16 @@ pub const TEST_STAMP: Stamp<'static> = Stamp {
     date: "2026-01-01T00:00:00Z",
 };
 
+/// The third-party notices' name in a site ([`notices`]).
+pub const NOTICES: &str = "third-party-licenses.txt";
+
 /// Builds a site into `out` (created afresh): the static files of
-/// `static_dir`, `wasm` through the `wasm_bindgen` CLI into `pkg/`, the
-/// engine stamped, and `stamp` injected.
+/// `static_dir`, the third-party notices `notices` as [`NOTICES`], `wasm`
+/// through the `wasm_bindgen` CLI into `pkg/`, the engine stamped, and
+/// `stamp` injected.
 pub fn build(
     static_dir: &Path,
+    notices: &Path,
     wasm: &Path,
     wasm_bindgen: &Path,
     out: &Path,
@@ -46,6 +53,10 @@ pub fn build(
         fs::remove_dir_all(out).map_err(|e| format!("remove {}: {e}", out.display()))?;
     }
     copy_dir(static_dir, out).map_err(|e| format!("copy {}: {e}", static_dir.display()))?;
+    if out.join(NOTICES).exists() {
+        return Err(format!("{}: {NOTICES} is generated", static_dir.display()));
+    }
+    fs::copy(notices, out.join(NOTICES)).map_err(|e| format!("{}: {e}", notices.display()))?;
     let status = Command::new(wasm_bindgen)
         .args([
             "--target",

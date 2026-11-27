@@ -1,13 +1,18 @@
 # SPDX-FileCopyrightText: 2026 Maksym Motorny
 # SPDX-License-Identifier: BSD-3-Clause
 
+load("@@//build:notices.bzl", "third_party")
+
 # The Open Dynamics Engine's 0.5.0 release: the core's sources and headers,
 # for volya-engine-core's build script; not the triangle mesh's sources
 # (among them the Magic Software file) or OPCODE, DrawStuff, tests or
-# contributions (the core includes the mesh's ODE headers only). Its BSD
-# notice.
-filegroup(
+# contributions (the core includes the mesh's ODE headers only), with its
+# licence and notice (build/notices.bzl).
+third_party(
     name = "sources",
+    component = "Open Dynamics Engine 0.5.0",
+    license = "LGPL-2.1-or-later OR BSD-3-Clause",
+    notices = ["LICENSE-BSD.TXT"],
     srcs = glob(
         [
             "include/ode/*.h",

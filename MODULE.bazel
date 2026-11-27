@@ -92,8 +92,11 @@ crate.annotation_select(
 )
 
 # File install conditions exposed (docs/architecture/game-data.md):
-# our patch to the crates.io release (also @gog_extractor's).
+# our patch to the crates.io release (also @gog_extractor's). The release
+# ships no licence text: its repository's, for the site's notices
+# (build/notices.bzl).
 crate.annotation(
+    compile_data = ["@@//third_party/inno:LICENSE-MIT.md"],
     crate = "inno",
     patch_args = ["-p1"],
     patches = ["//third_party/inno:expose-file-conditions.patch"],
@@ -154,7 +157,18 @@ http_archive(
 # there.
 http_archive(
     name = "ode_fast",
-    build_file_content = """exports_files(
+    build_file_content = """load("@@//build:notices.bzl", "third_party")
+
+third_party(
+    name = "fast",
+    component = "The generated matrix routines (fastdot, fastldlt, fastlsolve, fastltsolve) of the Open Dynamics Engine 0.14 release",
+    license = "LGPL-2.1-or-later OR BSD-3-Clause",
+    notices = ["LICENSE-BSD.TXT"],
+    srcs = glob(["ode/src/fast*.c"]),
+    visibility = ["//visibility:public"],
+)
+
+exports_files(
     glob(["ode/src/fast*.c"]) + ["LICENSE-BSD.TXT"],
     visibility = ["//visibility:public"],
 )""",

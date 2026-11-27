@@ -3,7 +3,8 @@
 
 """The web app's site (docs/architecture/build.md, The web app): the wasm
 built for wasm32 in the profile and features asked for, through wasm-bindgen,
-stamped, with the static files."""
+stamped, with the static files and the third-party notices
+(build/notices.bzl)."""
 
 _TEST_OPS = str(Label("//build:test_ops"))
 _LTO = str(Label("@rules_rust//rust/settings:lto"))
@@ -39,11 +40,12 @@ def _web_site_impl(ctx):
         arguments = [
             "build",
             static_root,
+            ctx.file.notices.path,
             wasm[0].path,
             ctx.executable._wasm_bindgen.path,
             out.path,
         ],
-        inputs = ctx.files.static + wasm,
+        inputs = ctx.files.static + wasm + [ctx.file.notices],
         tools = [ctx.executable._wasm_bindgen],
         outputs = [out],
         mnemonic = "WebSite",
@@ -58,6 +60,11 @@ web_site = rule(
         "compilation_mode": attr.string(
             doc = "`opt` (release) or `fastbuild` (dev).",
             values = ["fastbuild", "opt"],
+            mandatory = True,
+        ),
+        "notices": attr.label(
+            doc = "The third-party notices (a third_party_notices target).",
+            allow_single_file = True,
             mandatory = True,
         ),
         "static": attr.label_list(allow_files = True, mandatory = True),

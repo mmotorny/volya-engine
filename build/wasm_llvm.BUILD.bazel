@@ -1,8 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Maksym Motorny
 # SPDX-License-Identifier: BSD-3-Clause
 
-# wasi-sdk's LLVM: clang, its libraries and headers, llvm-ar and llvm-ranlib.
-filegroup(
+load("@@//build:notices.bzl", "build_tool", "third_party")
+
+# wasi-sdk's LLVM: clang, its libraries and headers, llvm-ar and llvm-ranlib;
+# build tools, nothing of theirs compiled in (build/notices.bzl).
+build_tool(
     name = "tools",
     srcs = glob(
         [
@@ -19,14 +22,19 @@ filegroup(
 
 # wasi-sdk's C and C++ headers (wasi-libc's and libc++'s), which ODE's
 # wasm32 build compiles against (crates/volya-engine-core/build.rs); none of
-# its libraries are linked.
-filegroup(
+# its libraries are linked. Under the LLVM exception a binary built from
+# them needs no notice, and the archive ships none (wasi-libc's
+# musl-derived headers: #833).
+third_party(
     name = "sysroot",
     srcs = glob(["share/wasi-sysroot/include/**"]),
+    component = "wasi-sdk's C and C++ headers",
+    license = "Apache-2.0 WITH LLVM-exception",
     visibility = ["//visibility:public"],
 )
 
-exports_files(
-    ["bin/clang"],
+build_tool(
+    name = "clang",
+    srcs = ["bin/clang"],
     visibility = ["//visibility:public"],
 )

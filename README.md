@@ -50,7 +50,7 @@ See [docs/testing.md](docs/testing.md) and [docs/architecture/](docs/architectur
 
 ## License
 
-BSD-3-Clause. The vendored LuaJIT 1.0.3 (`crates/volya-engine-script/vendor/luajit-1.0.3`) and the files derived from it are MIT-licensed; see their notices. The Open Dynamics Engine 0.5.0, with four generated matrix routines of its 0.14 release, fetched and built from those releases, is used under its BSD licence option (`platforms/web/static/third-party-licenses.txt`).
+BSD-3-Clause. The vendored LuaJIT 1.0.3 (`crates/volya-engine-script/vendor/luajit-1.0.3`) and the files derived from it are MIT-licensed; see their notices. The Open Dynamics Engine 0.5.0, with four generated matrix routines of its 0.14 release, fetched and built from those releases, is used under its BSD licence option. The app serves every bundled component's notice as `third-party-licenses.txt`, generated from what it links.
 
 ## Trademarks
 

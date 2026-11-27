@@ -3,10 +3,11 @@
 
 //! The site rule's tool (build/web.bzl):
 //!
-//! - `site build STATIC_DIR WASM WASM_BINDGEN OUT`
+//! - `site build STATIC_DIR NOTICES WASM WASM_BINDGEN OUT`
 //! - `site next DIST STATIC_DIR OUT`
+//! - `site notices MANIFEST OUT` (build/notices.bzl)
 //!
-//! Both stamped with [`volya_engine_site::TEST_STAMP`]; `deploy` stamps its
+//! Sites are stamped with [`volya_engine_site::TEST_STAMP`]; `deploy` stamps its
 //! copy with the commit.
 
 use std::path::Path;
@@ -18,8 +19,9 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let result = match args.as_slice() {
-        ["build", static_dir, wasm, wasm_bindgen, out] => build(
+        ["build", static_dir, notices, wasm, wasm_bindgen, out] => build(
             Path::new(static_dir),
+            Path::new(notices),
             Path::new(wasm),
             Path::new(wasm_bindgen),
             Path::new(out),
@@ -34,6 +36,9 @@ fn main() -> ExitCode {
                 date: TEST_STAMP.date,
             },
         ),
+        ["notices", manifest, out] => {
+            volya_engine_site::notices::notices(Path::new(manifest), Path::new(out))
+        }
         _ => Err(format!("unknown arguments: {}", args.join(" "))),
     };
     match result {

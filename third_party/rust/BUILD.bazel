@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+
+load("//build:checks.bzl", "volya_checks")
+load("//build:notices.bzl", "third_party")
+
+# The Rust standard library the wasm links (build/notices.bzl): the Rust
+# project's notices for its in-tree files, as rust-lang/rust ships them
+# (LICENSE-MIT; LICENSES/Unicode-3.0.txt for core's Unicode tables), and
+# the in-tree files its REUSE.toml gives a holder of their own that wasm32
+# builds; the parts with licence files of their own and the vendored crates
+# come from rust-src (tools/site/src/notices.rs).
+third_party(
+    name = "std",
+    component = "The Rust standard library",
+    license = "(MIT OR Apache-2.0) AND MIT AND Apache-2.0 WITH LLVM-exception AND Unicode-3.0",
+    notices = [
+        "LICENSE-MIT",
+        "CROSSBEAM-NOTICE",
+        "Unicode-3.0.txt",
+    ],
+    visibility = ["//platforms/web:__pkg__"],
+)
+
+volya_checks(wasm = False)

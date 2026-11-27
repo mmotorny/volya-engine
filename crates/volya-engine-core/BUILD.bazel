@@ -22,7 +22,7 @@ cargo_build_script(
             "VOLYA_ODE_FAST": "$(execpath @ode_fast//:ode/src/fastdot.c)",
             "VOLYA_ODE_HARNESS": "$(execpath //tests/odeharness:harness.h)",
             "VOLYA_ODE_LICENSE": "$(execpath @ode//:LICENSE-BSD.TXT)",
-            "VOLYA_WASM_CLANG": "$(execpath @wasm_llvm//:bin/clang)",
+            "VOLYA_WASM_CLANG": "$(execpath @wasm_llvm//:clang)",
         },
         "//conditions:default": {
             "VOLYA_ODE_FAST": "$(execpath @ode_fast//:ode/src/fastdot.c)",
@@ -33,15 +33,13 @@ cargo_build_script(
     data = glob(["csrc/**"]) + [
         "@ode//:LICENSE-BSD.TXT",
         "@ode//:sources",
+        "@ode_fast//:fast",
         "@ode_fast//:ode/src/fastdot.c",
-        "@ode_fast//:ode/src/fastldlt.c",
-        "@ode_fast//:ode/src/fastlsolve.c",
-        "@ode_fast//:ode/src/fastltsolve.c",
         "//tests/odeharness:harness.h",
         "//tests/odeharness:scenarios",
     ] + select({
         "@platforms//cpu:wasm32": [
-            "@wasm_llvm//:bin/clang",
+            "@wasm_llvm//:clang",
             "@wasm_llvm//:sysroot",
             "@wasm_llvm//:tools",
         ],

@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 load("//build:checks.bzl", "volya_checks")
+load("//build:notices.bzl", "third_party_notices")
 load("//build:rust.bzl", "LINTS")
 load("//build:web.bzl", "next_site", "web_site")
 load("@crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@rules_rust//rust:defs.bzl", "rust_shared_library")
 
 package(default_visibility = ["//visibility:public"])
@@ -33,10 +35,29 @@ rust_shared_library(
 
 STATIC = glob(["static/**"])
 
+# The site's third-party-licenses.txt: the notices of everything the
+# release wasm links (build/notices.bzl); fails, and with it the static
+# checks, on anything undeclared or not on deny.toml's allow-list, or a
+# served file that isn't ours.
+third_party_notices(
+    name = "third_party_notices",
+    deny = "//:deny.toml",
+    rust_std = "//third_party/rust:std",
+    static = STATIC,
+    wasm = ":volya-engine-web",
+)
+
+build_test(
+    name = "notices",
+    tags = ["check"],
+    targets = [":third_party_notices"],
+)
+
 # Deployed.
 web_site(
     name = "site",
     compilation_mode = "opt",
+    notices = ":third_party_notices",
     static = STATIC,
     wasm = ":volya-engine-web",
 )
@@ -45,6 +66,7 @@ web_site(
 web_site(
     name = "site_test",
     compilation_mode = "opt",
+    notices = ":third_party_notices",
     static = STATIC,
     test_ops = True,
     wasm = ":volya-engine-web",
@@ -54,6 +76,7 @@ web_site(
 web_site(
     name = "site_dev",
     compilation_mode = "fastbuild",
+    notices = ":third_party_notices",
     static = STATIC,
     test_ops = True,
     wasm = ":volya-engine-web",

@@ -5,10 +5,26 @@ load("//build:checks.bzl", "volya_checks")
 load("//build:rust.bzl", "volya_integration_tests", "volya_library")
 load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+load("//build:notices.bzl", "third_party")
 
 package(default_visibility = ["//visibility:public"])
 
 exports_files(["Cargo.toml"])
+
+# LuaJIT 1.0.3, vendored as released, with its notices (build/notices.bzl):
+# Lua's (COPYRIGHT), LuaJIT's (luajit.h) and Coco's (lcoco.c), which our
+# files derived from it (csrc) carry too.
+third_party(
+    name = "luajit",
+    srcs = glob(["vendor/**"]),
+    component = "LuaJIT 1.0.3",
+    header_notices = [
+        "vendor/luajit-1.0.3/src/luajit.h",
+        "vendor/luajit-1.0.3/src/lcoco.c",
+    ],
+    license = "MIT",
+    notices = ["vendor/luajit-1.0.3/COPYRIGHT"],
+)
 
 # Builds the vendored LuaJIT and our C (docs/architecture/build.md, Build
 # scripts): natively with the C++ toolchain, for wasm32 with the pinned LLVM.
@@ -17,16 +33,13 @@ cargo_build_script(
     srcs = ["build.rs"],
     build_script_env = select({
         "@platforms//cpu:wasm32": {
-            "VOLYA_WASM_CLANG": "$(execpath @wasm_llvm//:bin/clang)",
+            "VOLYA_WASM_CLANG": "$(execpath @wasm_llvm//:clang)",
         },
         "//conditions:default": {},
     }),
-    data = glob([
-        "csrc/**",
-        "vendor/**",
-    ]) + select({
+    data = glob(["csrc/**"]) + [":luajit"] + select({
         "@platforms//cpu:wasm32": [
-            "@wasm_llvm//:bin/clang",
+            "@wasm_llvm//:clang",
             "@wasm_llvm//:tools",
         ],
         "//conditions:default": [],

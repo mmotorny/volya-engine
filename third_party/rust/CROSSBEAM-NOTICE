@@ -1,0 +1,2 @@
+std::sync::mpmc (library/std/src/sync/mpmc), derived from crossbeam-channel:
+Copyright (c) 2019 The Crossbeam Project Developers, under MIT OR Apache-2.0.
