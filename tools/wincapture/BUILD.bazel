@@ -4,6 +4,7 @@
 load("//build:checks.bzl", "volya_checks")
 load("//build:d3d9probes.bzl", "d3d9probes_zip")
 load("//build:wincapture.bzl", "wincapture_binary", "wincapture_plan")
+load("@rules_cc//cc:defs.bzl", "cc_test")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -11,6 +12,8 @@ package(default_visibility = ["//visibility:public"])
 wincapture_binary(
     name = "winmm",
     srcs = [
+        "detheap.c",
+        "detheap.h",
         "frameclock.c",
         "frameclock.h",
         "redact.h",
@@ -38,6 +41,7 @@ wincapture_binary(
     name = "volyacapture",
     srcs = [
         "capture.c",
+        "detheap.h",
         "frameclock.h",
         "loopback.c",
         "loopback.h",
@@ -56,6 +60,23 @@ wincapture_binary(
     ],
     kind = "exe",
     out = "counterprobe.exe",
+)
+
+# The deterministic heap (detheap.c), natively on this machine: its size
+# classes, LIFO reuse, reallocation and placeholder handles.
+cc_test(
+    name = "detheap_test",
+    size = "small",
+    srcs = [
+        "detheap.c",
+        "detheap.h",
+        "detheap_test.c",
+    ],
+    copts = [
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+    ],
 )
 
 # The views, their frames and settings (tests/fidelity/views.rs).

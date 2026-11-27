@@ -25,8 +25,13 @@
  * of the program but the total of reads substituted (in the shared
  * memory); it knows nothing of where or why the program reads the counter.
  *
- * No C runtime: only DynamoRIO's API and kernel32 (DynamoRIO loads the
- * client and its imports privately). */
+ * No C runtime, and no system library but ntdll: only DynamoRIO's API and
+ * ntdll's section functions, so DynamoRIO loads no private copy of the
+ * system libraries for it (docs/behavior/capture-recipe.md, rule 2; with a
+ * client importing kernel32, runs under DynamoRIO ended with 0x502 and the
+ * detach with 0xc0000005, measured on the PC). The build checks that its
+ * import table names only ntdll and DynamoRIO (tools/xtask's
+ * wincapture.rs). */
 
 #define WINDOWS
 #define X86_32
@@ -35,6 +40,78 @@
 #include "frameclock.h"
 
 static struct frameclock *clock_;
+
+/* ntdll's section functions (documented in the Windows driver kit), with
+ * types of our own so no header declares them differently. ntdll's import
+ * library comes before DynamoRIO's on the link line, which also provides
+ * NtMapViewOfSection. */
+struct nt_name {
+    USHORT length, maximum_length; /* bytes, without the terminator */
+    WCHAR *buffer;
+};
+struct nt_object_attributes {
+    ULONG length;
+    HANDLE root;
+    struct nt_name *name;
+    ULONG attributes;
+    void *security_descriptor, *security_quality_of_service;
+};
+#define NT_OBJ_CASE_INSENSITIVE 0x40
+#define NT_SECTION_MAP_WRITE 0x2
+#define NT_SECTION_MAP_READ 0x4
+#define NT_VIEW_UNMAP 2
+#define NT_PROCESS_SESSION_INFORMATION 24
+__declspec(dllimport) LONG NTAPI NtQueryInformationProcess(HANDLE, ULONG, void *, ULONG, ULONG *);
+__declspec(dllimport) LONG NTAPI NtOpenSection(HANDLE *, ACCESS_MASK,
+                                               struct nt_object_attributes *);
+__declspec(dllimport) LONG NTAPI NtMapViewOfSection(HANDLE, HANDLE, void **, ULONG_PTR, SIZE_T,
+                                                    LARGE_INTEGER *, SIZE_T *, ULONG, ULONG,
+                                                    ULONG);
+
+static void append(WCHAR *to, size_t *n, const char *s) {
+    while (*s) {
+        to[(*n)++] = (WCHAR)*s++;
+    }
+}
+
+/* The frame clock's shared memory (the driver's Local\VolyaFrameClock):
+ * the section in this process's session's named objects, a view of the
+ * structure's size mapped read-write; null when it cannot be opened. */
+static struct frameclock *open_clock(void) {
+    ULONG session = 0;
+    if (NtQueryInformationProcess((HANDLE)-1, NT_PROCESS_SESSION_INFORMATION, &session,
+                                  sizeof session, NULL) < 0) {
+        return NULL;
+    }
+    WCHAR path[64];
+    size_t n = 0;
+    if (session) {
+        char digits[12];
+        int d = 0;
+        for (ULONG s = session; s; s /= 10) {
+            digits[d++] = (char)('0' + s % 10);
+        }
+        append(path, &n, "\\Sessions\\");
+        while (d) {
+            path[n++] = (WCHAR)digits[--d];
+        }
+    }
+    append(path, &n, "\\BaseNamedObjects\\VolyaFrameClock");
+    struct nt_name name = {(USHORT)(n * sizeof(WCHAR)), (USHORT)(n * sizeof(WCHAR)), path};
+    struct nt_object_attributes attributes = {sizeof attributes, NULL, &name,
+                                              NT_OBJ_CASE_INSENSITIVE, NULL, NULL};
+    HANDLE section;
+    if (NtOpenSection(&section, NT_SECTION_MAP_READ | NT_SECTION_MAP_WRITE, &attributes) < 0) {
+        return NULL;
+    }
+    void *view = NULL;
+    SIZE_T size = sizeof(struct frameclock);
+    if (NtMapViewOfSection(section, (HANDLE)-1, &view, 0, 0, NULL, &size, NT_VIEW_UNMAP, 0,
+                           PAGE_READWRITE) < 0) {
+        return NULL;
+    }
+    return view;
+}
 
 /* The game's folder, lower case, ending in a backslash. */
 static char folder[MAX_PATH + 1];
@@ -155,9 +232,7 @@ static void exiting(void) {
  * the start and the total at the end on DynamoRIO's error output). */
 DR_EXPORT void dr_client_main(client_id_t id, int argc, const char *argv[]) {
     (void)id;
-    HANDLE map = OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, FRAMECLOCK_NAME);
-    clock_ = map ? MapViewOfFile(map, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(struct frameclock))
-                 : NULL;
+    clock_ = open_clock();
     if (!clock_) {
         fail(0, "cannot open the frame clock's shared memory (start the game with volyacapture)");
     }

@@ -4,8 +4,10 @@
 /* volyacapture.exe: the original's frames of the fidelity suite's views on
  * Windows (docs/testing.md, The original on Windows). It runs the shipped
  * game unmodified, from a copy of its install, on the frame clock of the
- * proxy winmm.dll beside it (frameclock.c), under DynamoRIO's drrun with
- * the counter client (counter.c, dynamorio\ beside it), and steers it by its normal
+ * proxy winmm.dll beside it (frameclock.c, with its deterministic heap,
+ * detheap.c), under DynamoRIO's drrun with the counter client (counter.c,
+ * dynamorio\ beside it) until its first frame is held, in every mode that
+ * runs the game (docs/behavior/capture-recipe.md), and steers it by its normal
  * inputs (docs/behavior/steering-the-original.md): its command line, its
  * configuration file, camera tracks in its saves folder, and keys sent with
  * SendInput while a frame is held, so the game reads each at the same frame
@@ -50,6 +52,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "detheap.h"
 #include "frameclock.h"
 #include "loopback.h"
 #include "redact.h"
@@ -1318,6 +1321,9 @@ static int quit(struct run *r, ULONGLONG config_written) {
             (long long)load(&r->clock->sync_timeouts), (long long)load(&r->clock->idle_sleeps));
     say("The counter client substituted %lld time-stamp-counter reads",
         (long long)load(&r->clock->counter_reads));
+    /* Diagnostics, not compared: written every 2 s of real time. */
+    say("The deterministic heap: %lld MiB of the region's %u carved",
+        (long long)(load(&r->clock->heap_carved) >> 20), DETHEAP_REGION_SIZE >> 20);
     fprintf(r->events, "clock counter reads substituted %lld\n",
             (long long)load(&r->clock->counter_reads));
     if (code != 0) {
@@ -1949,6 +1955,13 @@ static int run_once(const char *exe_dir, const char *game, const char *work, con
         ok = fail("the frame clock did not start in the game within %d s%s: its winmm.dll was "
                   "not loaded from %s",
                   ATTACH_TIMEOUT, ended(&r) ? " (the game ended)" : "", bin);
+    }
+    /* The deterministic heap's region (capture-recipe.md, rule 3): never
+     * at another address, so without it the run fails. */
+    if (ok && load(&r.clock->heap) != 1) {
+        ok = fail("the frame clock could not reserve the deterministic heap's region (0x%x bytes "
+                  "at 0x%08x) in the game; see frameclock.log",
+                  DETHEAP_REGION_SIZE, DETHEAP_REGION_BASE);
     }
     /* The client's start, and whether it came before the proxy's, so
      * before the game's libraries' initialisation (an event: the same in

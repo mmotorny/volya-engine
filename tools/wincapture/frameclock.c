@@ -33,7 +33,9 @@
  *
  * The same import replacement (EnterCriticalSection, LeaveCriticalSection,
  * CreateThread, Sleep) runs each frame's secondary pass whole while the main
- * thread waits in the frame's Sleep(0) (section "The secondary pass").
+ * thread waits in the frame's Sleep(0) (section "The secondary pass"), and
+ * serves the heap functions from one region at a fixed address (section
+ * "The deterministic heap", detheap.h).
  *
  * Generic Win32 technique (import-table and interface-table patching); it
  * reads nothing of the game but its import tables and the arguments of the
@@ -49,6 +51,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "detheap.h"
 #include "frameclock.h"
 #include "redact.h"
 
@@ -1026,39 +1029,210 @@ static DWORD WINAPI fake_SleepEx(DWORD ms, BOOL alertable) {
     return real_SleepEx(ms, alertable);
 }
 
+/* --- The deterministic heap --------------------------------------------- */
+
+/* docs/behavior/capture-recipe.md, rule 3: kernel32's nine heap functions
+ * replaced in the same modules as the clocks, every request served from
+ * one region reserved at 0x20000000 when the proxy starts (detheap.c), so
+ * every run lays the game's blocks out alike. The region's lock is a
+ * critical section taken through this library's own imports, the system's
+ * functions (this library's imports are never replaced). */
+
+static struct detheap heap_;
+static CRITICAL_SECTION heap_lock;
+static int heap_on; /* the region is reserved: the heap functions replaced */
+
+static BOOL(WINAPI *real_HeapDestroy)(HANDLE);
+static LPVOID(WINAPI *real_HeapReAlloc)(HANDLE, DWORD, LPVOID, SIZE_T);
+static BOOL(WINAPI *real_HeapFree)(HANDLE, DWORD, LPVOID);
+static SIZE_T(WINAPI *real_HeapSize)(HANDLE, DWORD, LPCVOID);
+static BOOL(WINAPI *real_HeapValidate)(HANDLE, DWORD, LPCVOID);
+static BOOL(WINAPI *real_HeapWalk)(HANDLE, LPPROCESS_HEAP_ENTRY);
+static SIZE_T(WINAPI *real_HeapCompact)(HANDLE, DWORD);
+
+static int sys_commit(void *ctx, void *at, size_t n) {
+    (void)ctx;
+    return VirtualAlloc(at, n, MEM_COMMIT, PAGE_READWRITE) != NULL;
+}
+static void sys_lock(void *ctx) {
+    (void)ctx;
+    EnterCriticalSection(&heap_lock);
+}
+static void sys_unlock(void *ctx) {
+    (void)ctx;
+    LeaveCriticalSection(&heap_lock);
+}
+static void sys_no_memory(void *ctx) {
+    (void)ctx;
+    RaiseException(STATUS_NO_MEMORY, 0, 0, NULL);
+}
+static int sys_free(void *ctx, void *heap, uint32_t flags, void *p) {
+    (void)ctx;
+    return real_HeapFree(heap, flags, p);
+}
+static size_t sys_size(void *ctx, void *heap, uint32_t flags, const void *p) {
+    (void)ctx;
+    return real_HeapSize(heap, flags, p);
+}
+static void *sys_realloc(void *ctx, void *heap, uint32_t flags, void *p, size_t n) {
+    (void)ctx;
+    return real_HeapReAlloc(heap, flags, p, n);
+}
+static int sys_destroy(void *ctx, void *heap) {
+    (void)ctx;
+    return real_HeapDestroy(heap);
+}
+static int sys_validate(void *ctx, void *heap, uint32_t flags, const void *p) {
+    (void)ctx;
+    return real_HeapValidate(heap, flags, p);
+}
+static size_t sys_compact(void *ctx, void *heap, uint32_t flags) {
+    (void)ctx;
+    return real_HeapCompact(heap, flags);
+}
+
+static HANDLE WINAPI fake_HeapCreate(DWORD options, SIZE_T initial, SIZE_T maximum) {
+    (void)options;
+    (void)initial;
+    (void)maximum;
+    HANDLE h = detheap_create(&heap_);
+    if (!h) {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+    }
+    return h;
+}
+static BOOL WINAPI fake_HeapDestroy(HANDLE heap) {
+    return detheap_destroy(&heap_, heap);
+}
+static LPVOID WINAPI fake_HeapAlloc(HANDLE heap, DWORD flags, SIZE_T n) {
+    return detheap_alloc(&heap_, heap, flags, n);
+}
+static LPVOID WINAPI fake_HeapReAlloc(HANDLE heap, DWORD flags, LPVOID p, SIZE_T n) {
+    return detheap_realloc(&heap_, heap, flags, p, n);
+}
+static BOOL WINAPI fake_HeapFree(HANDLE heap, DWORD flags, LPVOID p) {
+    return detheap_free(&heap_, heap, flags, p);
+}
+static SIZE_T WINAPI fake_HeapSize(HANDLE heap, DWORD flags, LPCVOID p) {
+    return detheap_size(&heap_, heap, flags, p);
+}
+static BOOL WINAPI fake_HeapValidate(HANDLE heap, DWORD flags, LPCVOID p) {
+    return detheap_validate(&heap_, heap, flags, p);
+}
+static SIZE_T WINAPI fake_HeapCompact(HANDLE heap, DWORD flags) {
+    return detheap_compact(&heap_, heap, flags);
+}
+/* A placeholder's walk: one region entry at the region's start, its full
+ * size as its size and committed size, then no more items. */
+static BOOL WINAPI fake_HeapWalk(HANDLE heap, LPPROCESS_HEAP_ENTRY entry) {
+    struct detheap_walk w;
+    int r = detheap_walk(&heap_, heap, entry ? entry->lpData : NULL, &w);
+    if (r < 0) {
+        return real_HeapWalk(heap, entry);
+    }
+    if (r == 0 || !entry) {
+        SetLastError(r == 0 ? ERROR_NO_MORE_ITEMS : ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    memset(entry, 0, sizeof *entry);
+    entry->lpData = w.data;
+    entry->cbData = (DWORD)w.size;
+    entry->wFlags = PROCESS_HEAP_REGION;
+    entry->Region.dwCommittedSize = (DWORD)w.committed;
+    entry->Region.dwUnCommittedSize = 0;
+    entry->Region.lpFirstBlock = w.data;
+    entry->Region.lpLastBlock = (BYTE *)w.data + w.size;
+    return TRUE;
+}
+
+/* The region, reserved at its fixed address when the proxy starts; no
+ * other address: when it cannot be had, the run fails (the driver reads
+ * `heap`). */
+static void start_heap(HMODULE kernel32) {
+    real_HeapDestroy = (void *)GetProcAddress(kernel32, "HeapDestroy");
+    real_HeapReAlloc = (void *)GetProcAddress(kernel32, "HeapReAlloc");
+    real_HeapFree = (void *)GetProcAddress(kernel32, "HeapFree");
+    real_HeapSize = (void *)GetProcAddress(kernel32, "HeapSize");
+    real_HeapValidate = (void *)GetProcAddress(kernel32, "HeapValidate");
+    real_HeapWalk = (void *)GetProcAddress(kernel32, "HeapWalk");
+    real_HeapCompact = (void *)GetProcAddress(kernel32, "HeapCompact");
+    void *at = (void *)(uintptr_t)DETHEAP_REGION_BASE;
+    void *region = VirtualAlloc(at, DETHEAP_REGION_SIZE, MEM_RESERVE, PAGE_READWRITE);
+    if (region != at) {
+        if (region) {
+            VirtualFree(region, 0, MEM_RELEASE);
+        }
+        dlog("the deterministic heap: cannot reserve 0x%x bytes at 0x%08x (%lu)",
+             DETHEAP_REGION_SIZE, DETHEAP_REGION_BASE, GetLastError());
+        store(&clock_->heap, -1);
+        return;
+    }
+    InitializeCriticalSection(&heap_lock);
+    struct detheap_system sys = {
+        .ctx = NULL,
+        .process_heap = GetProcessHeap(),
+        .commit = sys_commit,
+        .lock = sys_lock,
+        .unlock = sys_unlock,
+        .no_memory = sys_no_memory,
+        .free = sys_free,
+        .size = sys_size,
+        .realloc = sys_realloc,
+        .destroy = sys_destroy,
+        .validate = sys_validate,
+        .compact = sys_compact,
+    };
+    detheap_init(&heap_, region, DETHEAP_REGION_SIZE, &sys);
+    heap_on = 1;
+    store(&clock_->heap, 1);
+    dlog("the deterministic heap: 0x%x bytes reserved at 0x%08x", DETHEAP_REGION_SIZE,
+         DETHEAP_REGION_BASE);
+}
+
 static FARPROC WINAPI hook_GetProcAddress(HMODULE module, LPCSTR name);
 
-/* The kernel32 functions replaced: name, the system's, the replacement. */
+/* The kernel32 functions replaced: name, the system's, the replacement,
+ * and whether it is a heap function (replaced only with the region). */
 static struct hook {
     const char *name;
     void *real;
     void *fake;
+    int heap;
 } hooks[] = {
-    {"QueryPerformanceCounter", 0, (void *)fake_QueryPerformanceCounter},
-    {"QueryPerformanceFrequency", 0, (void *)fake_QueryPerformanceFrequency},
-    {"GetTickCount", 0, (void *)fake_GetTickCount},
-    {"GetTickCount64", 0, (void *)fake_GetTickCount64},
-    {"GetSystemTimeAsFileTime", 0, (void *)fake_GetSystemTimeAsFileTime},
-    {"GetSystemTimePreciseAsFileTime", 0, (void *)fake_GetSystemTimeAsFileTime},
-    {"GetSystemTime", 0, (void *)fake_GetSystemTime},
-    {"GetLocalTime", 0, (void *)fake_GetLocalTime},
-    {"LoadLibraryA", 0, (void *)hook_LoadLibraryA},
-    {"LoadLibraryW", 0, (void *)hook_LoadLibraryW},
-    {"LoadLibraryExA", 0, (void *)hook_LoadLibraryExA},
-    {"LoadLibraryExW", 0, (void *)hook_LoadLibraryExW},
-    {"GetProcAddress", 0, (void *)hook_GetProcAddress},
-    {"Sleep", 0, (void *)fake_Sleep},
-    {"SleepEx", 0, (void *)fake_SleepEx},
-    {"EnterCriticalSection", 0, (void *)hook_EnterCriticalSection},
-    {"LeaveCriticalSection", 0, (void *)hook_LeaveCriticalSection},
-    {"CreateThread", 0, (void *)hook_CreateThread},
+    {"QueryPerformanceCounter", 0, (void *)fake_QueryPerformanceCounter, 0},
+    {"QueryPerformanceFrequency", 0, (void *)fake_QueryPerformanceFrequency, 0},
+    {"GetTickCount", 0, (void *)fake_GetTickCount, 0},
+    {"GetTickCount64", 0, (void *)fake_GetTickCount64, 0},
+    {"GetSystemTimeAsFileTime", 0, (void *)fake_GetSystemTimeAsFileTime, 0},
+    {"GetSystemTimePreciseAsFileTime", 0, (void *)fake_GetSystemTimeAsFileTime, 0},
+    {"GetSystemTime", 0, (void *)fake_GetSystemTime, 0},
+    {"GetLocalTime", 0, (void *)fake_GetLocalTime, 0},
+    {"LoadLibraryA", 0, (void *)hook_LoadLibraryA, 0},
+    {"LoadLibraryW", 0, (void *)hook_LoadLibraryW, 0},
+    {"LoadLibraryExA", 0, (void *)hook_LoadLibraryExA, 0},
+    {"LoadLibraryExW", 0, (void *)hook_LoadLibraryExW, 0},
+    {"GetProcAddress", 0, (void *)hook_GetProcAddress, 0},
+    {"Sleep", 0, (void *)fake_Sleep, 0},
+    {"SleepEx", 0, (void *)fake_SleepEx, 0},
+    {"EnterCriticalSection", 0, (void *)hook_EnterCriticalSection, 0},
+    {"LeaveCriticalSection", 0, (void *)hook_LeaveCriticalSection, 0},
+    {"CreateThread", 0, (void *)hook_CreateThread, 0},
+    {"HeapCreate", 0, (void *)fake_HeapCreate, 1},
+    {"HeapDestroy", 0, (void *)fake_HeapDestroy, 1},
+    {"HeapAlloc", 0, (void *)fake_HeapAlloc, 1},
+    {"HeapReAlloc", 0, (void *)fake_HeapReAlloc, 1},
+    {"HeapFree", 0, (void *)fake_HeapFree, 1},
+    {"HeapSize", 0, (void *)fake_HeapSize, 1},
+    {"HeapValidate", 0, (void *)fake_HeapValidate, 1},
+    {"HeapWalk", 0, (void *)fake_HeapWalk, 1},
+    {"HeapCompact", 0, (void *)fake_HeapCompact, 1},
 };
 #define HOOKS (sizeof(hooks) / sizeof(hooks[0]))
 
 static struct hook *hook_named(const char *name) {
     for (size_t i = 0; i < HOOKS; i++) {
         if (strcmp(hooks[i].name, name) == 0) {
-            return &hooks[i];
+            return hooks[i].heap && !heap_on ? NULL : &hooks[i];
         }
     }
     return NULL;
@@ -1066,7 +1240,7 @@ static struct hook *hook_named(const char *name) {
 
 static struct hook *hook_at(void *address) {
     for (size_t i = 0; i < HOOKS; i++) {
-        if (hooks[i].real && hooks[i].real == address) {
+        if (hooks[i].real && hooks[i].real == address && (heap_on || !hooks[i].heap)) {
             return &hooks[i];
         }
     }
@@ -1209,7 +1383,10 @@ static DWORD WINAPI heartbeat(void *unused) {
                  n_present, n_chain, n_begin, n_end, n_tcl, (unsigned long)last_tcl, n_reset,
                  front == GetCurrentProcessId() ? "the game's" : "another process's");
         }
+        store(&clock_->heap_carved, (LONGLONG)heap_.carved);
         if (beat % 5 == 0) {
+            dlog("the deterministic heap: %lu bytes carved, %lu committed",
+                 (unsigned long)heap_.carved, (unsigned long)heap_.committed);
             LONG n = ncallers < 96 ? ncallers : 96;
             for (LONG i = 0; i < n; i++) {
                 char path[MAX_PATH] = "?";
@@ -1256,9 +1433,10 @@ static void start_clock(void) {
         memcpy(sxs_dir + n, L"\\WinSxS", 8 * sizeof(WCHAR));
     }
     InitializeCriticalSection(&patching);
+    clock_ = c;
+    start_heap(kernel32);
     /* DllMain of a library the program imports runs on its main thread. */
     main_thread = GetCurrentThreadId();
-    clock_ = c;
     patch_all();
     /* Whether the counter client (counter.c) had started before the
      * game's libraries' initialisation, which this runs in. */

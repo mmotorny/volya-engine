@@ -100,7 +100,9 @@ pub fn build(clang: &Path, out: &Path, kind: &str, sources: &[&str]) -> Result {
         "dll" => command.args(["-shared", "-Wl,--kill-at", "-luser32"]),
         "exe" => command.args(["-lbcrypt", "-lwinmm", "-luser32", "-lole32"]),
         // No C runtime: DynamoRIO loads a client privately and its own API
-        // replaces the runtime's (counter.c).
+        // replaces the runtime's (counter.c). No system library but ntdll,
+        // whose import library comes first: DynamoRIO's also provides one
+        // of its section functions (capture-recipe.md, rule 2).
         "client" => {
             let api = sources
                 .iter()
@@ -110,13 +112,136 @@ pub fn build(clang: &Path, out: &Path, kind: &str, sources: &[&str]) -> Result {
             command
                 .arg("-isystem")
                 .arg(include)
-                .args(["-shared", "-nostdlib"])
+                .args(["-shared", "-nostdlib", "-lntdll"])
                 .args(sources.iter().filter(|s| s.ends_with(".lib")))
-                .arg("-lkernel32")
         }
         _ => return Err(format!("{kind}: not dll, exe or client")),
     };
-    run(&mut command)
+    run(&mut command)?;
+    if kind == "client" {
+        let file = fs::read(out).map_err(|e| format!("{}: {e}", out.display()))?;
+        check_client_imports(&pe_imports(&file)?).map_err(|e| format!("{}: {e}", out.display()))?;
+    }
+    Ok(())
+}
+
+/// The functions the counter client must take from ntdll (counter.c).
+const CLIENT_NTDLL: &[&str] = &[
+    "NtMapViewOfSection",
+    "NtOpenSection",
+    "NtQueryInformationProcess",
+];
+
+/// The counter client's import table names only ntdll and DynamoRIO, and
+/// ntdll's section functions come from ntdll (capture-recipe.md, rule 2).
+fn check_client_imports(imports: &[(String, Vec<String>)]) -> Result {
+    for (dll, _) in imports {
+        let dll = dll.to_ascii_lowercase();
+        if dll != "ntdll.dll" && dll != "dynamorio.dll" {
+            return Err(format!(
+                "the client imports {dll}: only ntdll and DynamoRIO allowed"
+            ));
+        }
+    }
+    for name in CLIENT_NTDLL {
+        let from: Vec<&str> = imports
+            .iter()
+            .filter(|(_, names)| names.iter().any(|n| n == name))
+            .map(|(dll, _)| dll.as_str())
+            .collect();
+        if !from.iter().all(|d| d.eq_ignore_ascii_case("ntdll.dll")) || from.is_empty() {
+            return Err(format!(
+                "{name} imported from {from:?}, not ntdll.dll alone"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// A 32-bit PE file's imports: each library's name with its functions'
+/// (`#n` for one imported by ordinal), in the import table's order.
+fn pe_imports(file: &[u8]) -> Result<Vec<(String, Vec<String>)>> {
+    let u16_at = |at: usize| -> Result<u16> {
+        file.get(at..at + 2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+            .ok_or_else(|| format!("PE: offset {at:#x} past the end"))
+    };
+    let u32_at = |at: usize| -> Result<u32> {
+        file.get(at..at + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .ok_or_else(|| format!("PE: offset {at:#x} past the end"))
+    };
+    if u16_at(0)? != 0x5a4d {
+        return Err("PE: no MZ header".into());
+    }
+    let nt = u32_at(0x3c)? as usize;
+    if u32_at(nt)? != 0x4550 {
+        return Err("PE: no PE signature".into());
+    }
+    let sections = u16_at(nt + 6)? as usize;
+    let optional = nt + 24;
+    let optional_size = u16_at(nt + 20)? as usize;
+    if u16_at(optional)? != 0x10b {
+        return Err("PE: not PE32".into());
+    }
+    // The import directory: data directory 1, after PE32's 96 bytes.
+    let import_rva = u32_at(optional + 96 + 8)?;
+    let table = optional + optional_size;
+    let offset = |rva: u32| -> Result<usize> {
+        for i in 0..sections {
+            let s = table + i * 40;
+            let (size, va, raw) = (
+                u32_at(s + 8)?.max(u32_at(s + 16)?),
+                u32_at(s + 12)?,
+                u32_at(s + 20)?,
+            );
+            if rva >= va && rva < va + size {
+                return Ok((rva - va + raw) as usize);
+            }
+        }
+        Err(format!("PE: RVA {rva:#x} in no section"))
+    };
+    let string = |rva: u32| -> Result<String> {
+        let at = offset(rva)?;
+        let rest = file.get(at..).ok_or("PE: a name past the end")?;
+        let end = rest
+            .iter()
+            .position(|&b| b == 0)
+            .ok_or("PE: an unterminated name")?;
+        Ok(String::from_utf8_lossy(&rest[..end]).into_owned())
+    };
+    let mut imports = Vec::new();
+    if import_rva == 0 {
+        return Ok(imports);
+    }
+    let mut descriptor = offset(import_rva)?;
+    loop {
+        let (names_rva, name_rva, iat_rva) = (
+            u32_at(descriptor)?,
+            u32_at(descriptor + 12)?,
+            u32_at(descriptor + 16)?,
+        );
+        if name_rva == 0 {
+            break;
+        }
+        let mut functions = Vec::new();
+        let mut thunk = offset(if names_rva != 0 { names_rva } else { iat_rva })?;
+        loop {
+            let entry = u32_at(thunk)?;
+            if entry == 0 {
+                break;
+            }
+            functions.push(if entry & 0x8000_0000 != 0 {
+                format!("#{}", entry & 0xffff)
+            } else {
+                string(entry + 2)?
+            });
+            thunk += 4;
+        }
+        imports.push((string(name_rva)?, functions));
+        descriptor += 20;
+    }
+    Ok(imports)
 }
 
 /// The driver's plan: its clock, the views' size, the configuration file's
@@ -257,6 +382,97 @@ mod tests {
         let near = |a: [f32; 3], b: [f32; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-5);
         assert!(near(column(2), [0.984797, -0.0043165, 0.173655]));
         assert!(near(column(1), [0.0042509, 0.999991, 0.00074959]));
+    }
+
+    /// A minimal PE32 file: one section at RVA 0x1000 (file offset 0x200)
+    /// holding the import table of `imports`.
+    fn pe(imports: &[(&str, &[&str])]) -> Vec<u8> {
+        let mut file = vec![0u8; 0x200];
+        file[0..2].copy_from_slice(b"MZ");
+        file[0x3c..0x40].copy_from_slice(&0x40u32.to_le_bytes());
+        file[0x40..0x44].copy_from_slice(b"PE\0\0");
+        let (nt, optional) = (0x40, 0x58);
+        file[nt + 6..nt + 8].copy_from_slice(&1u16.to_le_bytes());
+        file[nt + 20..nt + 22].copy_from_slice(&224u16.to_le_bytes());
+        file[optional..optional + 2].copy_from_slice(&0x10bu16.to_le_bytes());
+        let section = optional + 224;
+        // The section's contents: descriptors, then thunks and names.
+        let mut body = vec![0u8; (imports.len() + 1) * 20];
+        let rva = |body: &Vec<u8>| 0x1000 + body.len() as u32;
+        for (i, (dll, names)) in imports.iter().enumerate() {
+            let mut name_rvas = Vec::new();
+            for name in *names {
+                name_rvas.push(rva(&body));
+                body.extend_from_slice(&[0, 0]);
+                body.extend_from_slice(name.as_bytes());
+                body.push(0);
+            }
+            let thunks = rva(&body);
+            for r in name_rvas {
+                body.extend_from_slice(&r.to_le_bytes());
+            }
+            body.extend_from_slice(&0u32.to_le_bytes());
+            let dll_rva = rva(&body);
+            body.extend_from_slice(dll.as_bytes());
+            body.push(0);
+            let d = i * 20;
+            body[d..d + 4].copy_from_slice(&thunks.to_le_bytes());
+            body[d + 12..d + 16].copy_from_slice(&dll_rva.to_le_bytes());
+            body[d + 16..d + 20].copy_from_slice(&thunks.to_le_bytes());
+        }
+        file[optional + 104..optional + 108].copy_from_slice(&0x1000u32.to_le_bytes());
+        let size = body.len() as u32;
+        file[section + 8..section + 12].copy_from_slice(&size.to_le_bytes());
+        file[section + 12..section + 16].copy_from_slice(&0x1000u32.to_le_bytes());
+        file[section + 16..section + 20].copy_from_slice(&size.to_le_bytes());
+        file[section + 20..section + 24].copy_from_slice(&0x200u32.to_le_bytes());
+        file.extend_from_slice(&body);
+        file
+    }
+
+    const SECTION_FUNCTIONS: &[&str] = &[
+        "NtQueryInformationProcess",
+        "NtOpenSection",
+        "NtMapViewOfSection",
+    ];
+
+    #[test]
+    fn the_import_table_is_read() {
+        let file = pe(&[
+            ("ntdll.dll", SECTION_FUNCTIONS),
+            ("dynamorio.dll", &["dr_fprintf"]),
+        ]);
+        let imports = pe_imports(&file).unwrap();
+        assert_eq!(imports.len(), 2);
+        assert_eq!(imports[0].0, "ntdll.dll");
+        assert_eq!(imports[0].1, SECTION_FUNCTIONS);
+        assert_eq!(
+            imports[1],
+            ("dynamorio.dll".into(), vec!["dr_fprintf".into()])
+        );
+    }
+
+    #[test]
+    fn the_client_imports_only_ntdll_and_dynamorio() {
+        let ok = pe(&[
+            ("ntdll.dll", SECTION_FUNCTIONS),
+            ("dynamorio.dll", &["dr_fprintf"]),
+        ]);
+        assert!(check_client_imports(&pe_imports(&ok).unwrap()).is_ok());
+        // kernel32 at all.
+        let kernel32 = pe(&[
+            ("ntdll.dll", SECTION_FUNCTIONS),
+            ("dynamorio.dll", &["dr_fprintf"]),
+            ("KERNEL32.dll", &["MapViewOfFile"]),
+        ]);
+        assert!(check_client_imports(&pe_imports(&kernel32).unwrap()).is_err());
+        // A section function from DynamoRIO's import library (the link
+        // order reversed).
+        let order = pe(&[
+            ("ntdll.dll", &["NtQueryInformationProcess", "NtOpenSection"]),
+            ("dynamorio.dll", &["NtMapViewOfSection", "dr_fprintf"]),
+        ]);
+        assert!(check_client_imports(&pe_imports(&order).unwrap()).is_err());
     }
 
     #[test]

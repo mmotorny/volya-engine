@@ -10,9 +10,12 @@ suite's walks. Needs Windows 10 or later. Contains no game
 data; everything it writes is game assets and stays on this machine.
 
 - volyacapture.exe  the driver
-- winmm.dll         the frame clock, copied into the copy's bin\ for a run
+- winmm.dll         the frame clock and a deterministic heap (a region
+                    reserved at 0x20000000; a run fails without it), copied
+                    into the copy's bin\ for a run
 - counter.dll       the time-stamp counter on the frame clock, a DynamoRIO
-                    client the game runs under
+                    client the game starts under, importing only ntdll;
+                    DynamoRIO is detached once the first frame is held
 - dynamorio\        DynamoRIO's drrun and runtime, 32-bit (BSD; its
                     License.txt), which starts the game with the client
 - counterprobe.exe  the self-test's program, ours: reads the counter
@@ -35,5 +38,8 @@ DIR of the game: default the install's registry entry. Work folder: default
 logs names no folder of this machine (<game folder>, <work>, <home>). The
 game runs full screen at the plan's size; keep the machine untouched while
 it runs (keys go to the game's window, which must stay in front).
+
+check, full and audio all run the game this way
+(docs/behavior/capture-recipe.md).
 
 Steps: docs/testing.md, The original on Windows.
