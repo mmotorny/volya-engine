@@ -298,6 +298,21 @@ export const tests = {
     assertEqual(pad.move(4, 0, 100 + SCROLL_STEP * 2, 130), [["wheel", -1]], "scroll after a move");
   },
 
+  "touchpad: two fingers pinched apart are wheel down, together wheel up": async () => {
+    const { createTouchpad, PINCH_STEP } = await touchpad();
+    const pad = createTouchpad();
+    pad.down(1, 100, 300, 0);
+    pad.down(2, 200, 300, 10);
+    // Apart by a step, half from each finger: wheel down.
+    assertEqual(pad.move(1, 100 - PINCH_STEP / 2, 300, 20), [], "half a step");
+    assertEqual(pad.move(2, 200 + PINCH_STEP / 2, 300, 30), [["wheel", 1]], "a step apart");
+    assertEqual(pad.move(1, 100 + PINCH_STEP, 300, 40), [["wheel", -1]], "together");
+    // Still a pinch after a vertical move: no scroll.
+    assertEqual(pad.move(2, 200 + PINCH_STEP / 2, 270, 50), [], "no scroll");
+    pad.up(1, 100 + PINCH_STEP, 300, 60);
+    assertEqual(pad.up(2, 200, 300, 70), [], "no tap");
+  },
+
   "touch moves the cursor there and presses": async () => {
     await sleep(300);
     const { clientWidth: w, clientHeight: h } = view();

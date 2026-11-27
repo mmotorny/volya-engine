@@ -342,7 +342,10 @@ pub fn tree() -> MemVfs {
         )
         .into(),
     );
-    add(&format!("{c}game.ltx"), b"[levels]\nx = 1\n".into());
+    add(
+        &format!("{c}game.ltx"),
+        format!("[levels]\nx = 1\n{}", crate::pda_window::map_tests::GAME).into(),
+    );
     add(
         &format!("{c}default_controls.ltx"),
         b"bind quit kESCAPE\r\n".into(),
@@ -385,10 +388,7 @@ pub fn tree() -> MemVfs {
     );
     add(
         &format!("{c}ui/scroll_bar.xml"),
-        br#"<window><default height="16"><up_arrow><texture_e>ui_scroll_btn_up</texture_e></up_arrow>
-<down_arrow><texture_e>ui_scroll_btn_down</texture_e></down_arrow><back_v><texture>ui_scroll_back</texture></back_v>
-<box_v><texture>ui_scroll_box</texture></box_v></default></window>"#
-            .into(),
+        crate::pda_window::map_tests::SCROLL.into(),
     );
     add(
         &format!("{c}ui/ui_common.xml"),
@@ -450,12 +450,16 @@ pub fn tree() -> MemVfs {
     );
     add(
         &format!("{c}ui/hint_item.xml"),
-        br#"<window><button_hint x="0" y="0" width="200" height="30">
-        <frame_line x="0" y="0" width="200" height="30"><texture>ui_icons_PDA_string_tooltips</texture></frame_line>
-        <description x="10" y="2" width="192" height="20" light_anim="ui_btn_hint" la_cyclic="0" la_texture="0" la_text="1" la_alpha="1">
-        <text font="letterica18" r="255" g="255" b="255"/></description>
-        </button_hint></window>"#
-            .into(),
+        crate::pda_window::map_tests::HINTS.into(),
+    );
+    // The PDA's map (pda-map.md 1.1, 1.3).
+    add(
+        &format!("{c}ui/pda_map.xml"),
+        crate::pda_window::map_tests::PDA_MAP.into(),
+    );
+    add(
+        &format!("{c}ui/map_spots.xml"),
+        crate::pda_window::map_tests::MAP_SPOTS.into(),
     );
     add(
         &format!("{c}ui/game_tutorials.xml"),
@@ -499,6 +503,8 @@ pub fn tree() -> MemVfs {
     add(&format!("{t}ui/ui_icon_equipment.dds"), dds(1024, 2048));
     add(&format!("{t}ui/ui_grid.dds"), dds(128, 64));
     add(&format!("{t}ui/ui_pda.dds"), dds(1024, 1024));
+    add(&format!("{t}ui/ui_global_map.dds"), dds(1024, 2048));
+    add(&format!("{t}map/map_escape.dds"), dds(512, 1024));
     add(&format!("{t}ui/ui_old_textures.dds"), dds(1024, 1024));
     add(&format!("{t}ui/ui_magnifier.dds"), dds(256, 32));
     add(&format!("{t}ui/ui_static_mm_back_04.dds"), dds(1024, 1024));

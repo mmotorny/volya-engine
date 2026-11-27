@@ -78,30 +78,32 @@ fn hint_desc() -> HintDesc {
     HintDesc::read(&doc, &ColorDefs::default(), &animations).unwrap()
 }
 
-fn window() -> PdaWindow {
+pub(crate) fn window() -> PdaWindow {
     PdaWindow::new(layout(), hint_desc(), &|k| k.to_owned(), &width)
 }
 
 /// The keys of the game's default bindings (pda-window.md 4.1).
-fn keys() -> Keys {
+pub(crate) fn keys() -> Keys {
     Keys {
         actions: [vec![Key::P], vec![Key::M], vec![Key::H]],
         quit: vec![Key::Escape],
     }
 }
 
-struct Run {
-    tree: MemVfs,
-    window: PdaWindow,
-    input: Input,
-    now: u64,
-    global_ms: u64,
-    paused: bool,
-    alive: bool,
+pub(crate) struct Run {
+    pub(crate) tree: MemVfs,
+    pub(crate) window: PdaWindow,
+    pub(crate) input: Input,
+    pub(crate) now: u64,
+    pub(crate) global_ms: u64,
+    pub(crate) paused: bool,
+    pub(crate) alive: bool,
+    /// The player's level, position and yaw.
+    pub(crate) player: Option<(String, [f32; 2], f32)>,
 }
 
 impl Run {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             tree: fixture::tree(),
             window: window(),
@@ -110,6 +112,7 @@ impl Run {
             global_ms: 0,
             paused: false,
             alive: true,
+            player: None,
         }
     }
 
@@ -122,7 +125,7 @@ impl Run {
         r
     }
 
-    fn frame(&mut self, game_time: u64) -> Outcome {
+    pub(crate) fn frame(&mut self, game_time: u64) -> Outcome {
         let data = fixture::data(&self.tree);
         self.now += 16;
         if !self.paused {
@@ -137,6 +140,14 @@ impl Run {
             input: &self.input,
             paused: self.paused,
             alive: self.alive,
+            player: self
+                .player
+                .as_ref()
+                .map(|(level, position, yaw)| map::MapPlayer {
+                    level,
+                    position: *position,
+                    yaw: *yaw,
+                }),
         });
         self.input.end_frame();
         out

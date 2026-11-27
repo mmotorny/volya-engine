@@ -1780,7 +1780,14 @@ impl App {
                     // pda-window.md 6: the game runs on; keys the window
                     // does not use reach the character.
                     let keys = pda_keys(data, level.controls());
-                    level.controls_mut().keys_only = Some(keys.used());
+                    level.controls_mut().keys_only = Some(pda.kept(&keys));
+                    let p = level.player();
+                    let [x, _, z] = p.state().position;
+                    let player = pda_window::map::MapPlayer {
+                        level: &level.world().name,
+                        position: [x, z],
+                        yaw: p.angles().yaw,
+                    };
                     pda.update(pda_window::Frame {
                         data,
                         keys: &keys,
@@ -1790,7 +1797,12 @@ impl App {
                         input,
                         paused: self.pause.is_on(),
                         alive: level.character().is_some_and(|c| c.conditions.alive()),
+                        player: Some(player),
                     });
+                    for line in pda.take_log() {
+                        self.console.log_mut().message(&line);
+                    }
+                    level.controls_mut().keys_only = Some(pda.kept(&keys));
                     // TODO(#738): the character receives them.
                     pda.take_portions();
                     level.update(now, input);
@@ -1861,7 +1873,7 @@ impl App {
                     // then open.
                     pda.act(tab, input.cursor_ui());
                     let keys = pda_keys(data, level.controls());
-                    level.controls_mut().keys_only = Some(keys.used());
+                    level.controls_mut().keys_only = Some(pda.kept(&keys));
                     // TODO(#738): the character receives them.
                     pda.take_portions();
                 }

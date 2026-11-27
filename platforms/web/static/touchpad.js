@@ -17,7 +17,10 @@
 //   and holds until lifted: double-tap and hold, then move, drags (sliders,
 //   scroll bars, list thumbs);
 // - two fingers swiped up or down scroll, one wheel step per SCROLL_STEP of
-//   their travel, content following the fingers;
+//   their travel, content following the fingers; pinched, one wheel step
+//   per PINCH_STEP of the change of their distance, apart as wheel down
+//   (the PDA map's zoom in, #743): whichever the fingers first do past
+//   TAP_SLOP, they go on doing while both stay down;
 // - a long press (LONG_PRESS_MS within TAP_SLOP) is a right click, when the
 //   time is reached or at the lift, whichever comes first.
 //
@@ -38,6 +41,9 @@ export const LONG_PRESS_MS = 500;
 export const DOUBLE_TAP_MS = 250;
 /** Two fingers' travel per wheel step, CSS pixels (our choice). */
 export const SCROLL_STEP = 40;
+/** The change of two fingers' distance per wheel step, CSS pixels (our
+ * choice). */
+export const PINCH_STEP = 40;
 /** A swipe's speed is smoothed over about this long, milliseconds (as the
  * level's look drags, touch-controls.js). */
 export const SPEED_SMOOTH_MS = 75;
@@ -64,6 +70,15 @@ export function createTouchpad() {
   // When the last tap lifted, for the second touch.
   let tapped = null;
   let scroll = 0;
+  // Two fingers: null until they scroll or pinch, then which; their
+  // distance as last seen and its change not yet sent.
+  let gesture = null;
+  let spread = 0;
+  let pinch = 0;
+  const distance = () => {
+    const [a, b] = [...fingers.values()];
+    return Math.hypot(a.at[0] - b.at[0], a.at[1] - b.at[1]);
+  };
 
   const button = (name, pressed, time, double = false) => ["cursor_button", name, pressed, time, double];
   const click = (name, time, double = false) => [button(name, true, time, double), button(name, false, time)];
@@ -107,6 +122,9 @@ export function createTouchpad() {
       if (fingers.size === 2 && ["pending", "second", "moving", "spent"].includes(mode)) {
         mode = "scroll";
         scroll = 0;
+        gesture = null;
+        spread = distance();
+        pinch = 0;
       }
       return [];
     },
@@ -121,6 +139,23 @@ export function createTouchpad() {
         // The fingers' mean travel; up is toward the content's end (wheel
         // down), as content follows the fingers.
         scroll += dy / fingers.size;
+        if (fingers.size === 2) {
+          const d = distance();
+          pinch += d - spread;
+          spread = d;
+        }
+        if (gesture === null) {
+          if (Math.max(Math.abs(scroll), Math.abs(pinch)) <= TAP_SLOP) return [];
+          // A pinch changes the distance more than twice the mean travel
+          // (one finger moving straight away from a still one is a scroll).
+          gesture = Math.abs(pinch) > 2 * Math.abs(scroll) ? "pinch" : "scroll";
+        }
+        if (gesture === "pinch") {
+          const steps = Math.trunc(pinch / PINCH_STEP);
+          if (steps === 0) return [];
+          pinch -= steps * PINCH_STEP;
+          return [["wheel", steps]];
+        }
         const steps = Math.trunc(scroll / SCROLL_STEP);
         if (steps === 0) return [];
         scroll -= steps * SCROLL_STEP;

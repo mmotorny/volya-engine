@@ -37,6 +37,7 @@ import {
   touchId,
   turned,
   until,
+  view,
 } from "./game.js";
 
 export const tests = {
@@ -680,6 +681,40 @@ export const tests = {
     return "";
   },
 
+  "the PDA map: M opens it, flying to the player's marks; the wheel forward zooms out; on touch two fingers pinched apart zoom in": async () => {
+    needsGame();
+    const controls = document.getElementById("touch-controls");
+    key("KeyM");
+    let s = await until((s) => s.pda?.tab === 1 && s.pda.map?.shown, "M to open the map");
+    // docs/behavior/pda-map.md 3: the first showing flies to the player.
+    s = await until((s) => s.pda?.map && !s.pda.map.moving, "the flight to the player", 15000);
+    const map = s.pda.map;
+    assert(Math.abs(map.scale - 6) < 1e-3, `at the largest zoom: ${map.scale}`);
+    assertEqual(map.marks.length, 2, "the player's two marks");
+    // The mouse: the wheel forward (up) zooms out by 2/3 (5.5).
+    for (let i = 0; i < 100 && controls.dataset.live !== "false"; i++) await sleep(20);
+    await sleep(300);
+    pointer("pointermove", client(480, 334));
+    await sleep(100);
+    view().dispatchEvent(new WheelEvent("wheel", { deltaY: -1, deltaMode: 1, bubbles: true, cancelable: true }));
+    s = await until((s) => Math.abs(s.pda.map.zoom - 4) < 1e-3, "the wheel forward to zoom out");
+    // Touch (our design, #743): two fingers pinched apart are wheel down.
+    const ids = [nextTouch(), nextTouch()];
+    const t = (i) => ({ pointerType: "touch", pointerId: ids[i], isPrimary: i === 0 });
+    const at = (i, f) => client(480 + (i ? 1 : -1) * (40 + 80 * f), 334);
+    [0, 1].forEach((i) => pointer("pointerdown", at(i, 0), { ...t(i), button: 0, buttons: 1 }));
+    for (let n = 1; n <= 10; n++) {
+      await sleep(25);
+      [0, 1].forEach((i) => pointer("pointermove", at(i, n / 10), { ...t(i), buttons: 1 }));
+    }
+    [0, 1].forEach((i) => pointer("pointerup", at(i, 1), { ...t(i), button: 0, buttons: 0 }));
+    s = await until((s) => s.pda.map.zoom > 5.9, "two fingers pinched apart to zoom in");
+    key("Escape");
+    s = await until((s) => s.phase === "level" && !s.pda, "Escape to close it");
+    for (let i = 0; i < 100 && controls.dataset.live !== "true"; i++) await sleep(20);
+    return "";
+  },
+
   "touch: Torch and Night vision give the torch's commands as L and N do; Night vision shows only with an outfit that has it": async () => {
     needsGame();
     const controls = document.getElementById("touch-controls");
@@ -1040,7 +1075,7 @@ export const tests = {
     return `moved ${moved.toFixed(2)} m, turned ${turned.toFixed(2)} rad, sprint-locked ${sprinted.toFixed(2)} m`;
   },
 
-  "a gamepad: the left stick runs, the d-pad up switches the torch, the d-pad left opens the PDA, right moves to the next caption, A switches to it and B closes it": async () => {
+  "a gamepad: the left stick runs, the d-pad up switches the torch, the d-pad left opens the PDA, right moves to the next caption, A switches to it and B closes it; on the map the shoulders zoom": async () => {
     needsGame();
     // A New Game's level after the touch test's quit to the title menu.
     if ((await state()).phase === "menu") await enterLevel();
@@ -1087,6 +1122,17 @@ export const tests = {
       await tap(1);
       s = await until((s) => s.phase === "level" && !s.pda, "B to close it");
       assert(!s.menu, "B opened the menu");
+      // The map (our design, #743): the right shoulder zooms in at the
+      // cursor, the left out.
+      key("KeyM");
+      s = await until((s) => s.pda?.map?.shown && !s.pda.map.moving, "M to open the map", 15000);
+      const zoom = s.pda.map.zoom;
+      await tap(4);
+      s = await until((s) => s.pda.map.zoom < zoom - 1e-3, "the left shoulder to zoom out");
+      await tap(5);
+      s = await until((s) => Math.abs(s.pda.map.zoom - zoom) < 1e-3, "the right shoulder to zoom in");
+      await tap(1);
+      s = await until((s) => s.phase === "level" && !s.pda, "B to close the map");
     } finally {
       navigator.getGamepads = getGamepads;
     }

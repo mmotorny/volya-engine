@@ -8,7 +8,7 @@
 //! (4, 5), its input while open (6), the information portions it gives
 //! (8), and the buttons' hint window (docs/behavior/pda-controls.md 6,
 //! [`hint`]). The tabs' contents are their own specs' (pda-scope.md PD-4 …
-//! PD-17).
+//! PD-17): the map tab's is [`map`]'s.
 //!
 //! **Input.** A mouse window drawing the game's cursor, as the inventory
 //! screen: keys it does not take reach the character. The keys bound to
@@ -29,6 +29,9 @@
 
 pub mod hint;
 pub mod layout;
+pub mod map;
+#[cfg(test)]
+pub(crate) mod map_tests;
 #[cfg(test)]
 pub(crate) mod tests;
 
@@ -44,6 +47,7 @@ use crate::draw::{Ctx, picture_desc};
 use crate::scene::Scene;
 use hint::{Hint, HintDesc};
 use layout::{Layout, Placed, SEPARATOR, SEPARATOR_COLOR, TABS};
+use map::{MapFrame, MapPlayer, MapState, MapWindow};
 use volya_engine_core::text::Fonts;
 use volya_engine_formats::text::font::UiFont;
 use volya_engine_formats::text::layout::TextBox;
@@ -116,6 +120,8 @@ pub struct Frame<'a> {
     pub paused: bool,
     /// The character's health is above 0 (5 item 3).
     pub alive: bool,
+    /// The player, for the map (pda-map.md 5.2, 6.7).
+    pub player: Option<MapPlayer<'a>>,
 }
 
 /// What a frame did.
@@ -128,12 +134,13 @@ pub struct Outcome {
 /// The PDA window of a level.
 pub struct PdaWindow {
     hint_desc: HintDesc,
-    /// Each tab button's hint text and its width in units, if it has one.
+    /// Each button's hint text and its width in units, if it has one: the
+    /// tab buttons, then the map's tool buttons.
     hints: Vec<Option<(String, f32)>>,
     /// The hint window, while a button holds it.
     hint: Option<Hint>,
-    /// When the cursor entered each caption, global clock milliseconds.
-    entered: [Option<u64>; TABS],
+    /// When the cursor entered each button, global clock milliseconds.
+    entered: Vec<Option<u64>>,
     layout: Layout,
     open: bool,
     /// The tab shown, none until the first switch (3.3).
@@ -145,11 +152,13 @@ pub struct PdaWindow {
     /// The clock's text (2.3), empty before the first update.
     clock: String,
     cursor: [f32; 2],
-    /// The cursor over each tab's caption (3.3).
-    over: [bool; TABS],
+    /// The cursor over each button (3.3), as [`PdaWindow::hints`].
+    over: Vec<bool>,
     last_update: Option<u64>,
     /// The information portions given and not yet taken (8).
     portions: Vec<&'static str>,
+    /// The map tab's window (pda-map.md).
+    map: Option<MapWindow>,
 }
 
 impl PdaWindow {
@@ -165,12 +174,9 @@ impl PdaWindow {
         let width = |font, text: &[u8]| fonts.get(font).width(text) / sx;
         let layout = Layout::load(tree, data, resolution, &width)?;
         let hint = HintDesc::load(tree, data, resolution)?;
-        Ok(Self::new(
-            layout,
-            hint,
-            &|k| data.strings.get(k).to_owned(),
-            &width,
-        ))
+        let map = MapWindow::load(tree, data, resolution, fonts)?;
+        let text = |k: &str| data.strings.get(k).to_owned();
+        Ok(Self::new(layout, hint, &text, &width).with_map(map, &text, &width))
     }
 
     /// The window of `layout` with the hint window `hint_desc`, the hints'
@@ -198,7 +204,7 @@ impl PdaWindow {
             hint_desc,
             hints,
             hint: None,
-            entered: [None; TABS],
+            entered: vec![None; TABS],
             layout,
             open: false,
             active: None,
@@ -206,10 +212,65 @@ impl PdaWindow {
             new_content: [false; TABS],
             clock: String::new(),
             cursor: [512.0, 384.0],
-            over: [false; TABS],
+            over: vec![false; TABS],
             last_update: None,
             portions: Vec::new(),
+            map: None,
         }
+    }
+
+    /// The window with the map tab's window `map`, its tool buttons' hints
+    /// as the tab buttons' (pda-controls.md 6).
+    pub fn with_map(
+        mut self,
+        map: MapWindow,
+        text: &dyn Fn(&str) -> String,
+        width: &dyn Fn(UiFont, &[u8]) -> f32,
+    ) -> Self {
+        let font = (self.hint_desc.description.text.as_ref())
+            .and_then(|t| t.font)
+            .unwrap_or(UiFont::DEFAULT);
+        for t in &map.layout().tools {
+            let hint = t.hint.as_deref().map(text).filter(|t| !t.is_empty());
+            self.hints
+                .push(hint.map(|t| (t.clone(), width(font, &encode(&t)))));
+        }
+        let n = self.hints.len();
+        self.entered.resize(n, None);
+        self.over.resize(n, false);
+        self.map = Some(map);
+        self
+    }
+
+    pub fn map(&self) -> Option<&MapWindow> {
+        self.map.as_ref()
+    }
+
+    /// The map tab's window while it shows.
+    fn shown_map(&mut self) -> Option<&mut MapWindow> {
+        if self.open && self.active == Some(MAP_TAB) {
+            self.map.as_mut()
+        } else {
+            None
+        }
+    }
+
+    /// The keys kept from the character's controls (6): the window's, and
+    /// the map's keypad zoom while it shows (pda-map.md 5.7).
+    pub fn kept(&self, keys: &Keys) -> Vec<Control> {
+        let mut kept = keys.used();
+        if self.active == Some(MAP_TAB) && self.map.is_some() {
+            kept.extend([Key::NumpadAdd, Key::NumpadSubtract].map(Control::Key));
+        }
+        kept
+    }
+
+    /// The log lines written since the last call (pda-map.md 5.2).
+    pub fn take_log(&mut self) -> Vec<String> {
+        self.map
+            .as_mut()
+            .map(MapWindow::take_log)
+            .unwrap_or_default()
     }
 
     pub fn layout(&self) -> &Layout {
@@ -250,6 +311,14 @@ impl PdaWindow {
         if self.active == Some(tab) {
             return;
         }
+        // pda-map.md 3: the map window is shown and hidden with its tab.
+        if let Some(map) = &mut self.map {
+            if self.active == Some(MAP_TAB) {
+                map.hide();
+            } else if tab == MAP_TAB {
+                map.show();
+            }
+        }
         self.active = Some(tab);
         self.selected = tab;
         self.new_content[tab] = false;
@@ -265,8 +334,8 @@ impl PdaWindow {
         self.open = true;
         self.cursor = cursor;
         self.last_update = None;
-        self.over = [false; TABS];
-        self.entered = [None; TABS];
+        self.over.fill(false);
+        self.entered.fill(None);
         self.hint = None;
         self.portions.push(OPENED);
     }
@@ -335,10 +404,23 @@ impl PdaWindow {
             if f.paused && !matches!(e, Ev::Quit { pressed: true }) {
                 continue;
             }
-            if self.event(e, f.keys) {
+            if self.event(e, f.keys, f.input, f.global_ms) {
                 out.closed = true;
                 return out;
             }
+        }
+        let (player, cursor) = (f.player, self.cursor);
+        if !f.paused
+            && let Some(map) = self.shown_map()
+        {
+            map.update(MapFrame {
+                data: f.data,
+                input: f.input,
+                player,
+                cursor,
+                global_ms: f.global_ms,
+                dt,
+            });
         }
         let over = self.over_flags(self.cursor);
         for (i, &now_over) in over.iter().enumerate() {
@@ -365,7 +447,7 @@ impl PdaWindow {
             h.update(&self.hint_desc, now);
             return;
         }
-        let ready = (0..TABS).find(|&i| {
+        let ready = (0..self.hints.len()).find(|&i| {
             self.over[i]
                 && self.hints[i].is_some()
                 && self.entered[i].is_some_and(|t| global_ms.saturating_sub(t) > hint::DELAY_MS)
@@ -379,7 +461,25 @@ impl PdaWindow {
     }
 
     /// One event; returns whether the window closed.
-    fn event(&mut self, e: Ev, keys: &Keys) -> bool {
+    fn event(&mut self, e: Ev, keys: &Keys, input: &Input, global_ms: u64) -> bool {
+        let cursor = match e {
+            Ev::Move(p) => p,
+            _ => self.cursor,
+        };
+        // pda-window.md 6: the active tab is offered the events first (the
+        // map takes of the keys only the keypad's plus and minus,
+        // pda-map.md 5.7); a press on a tab button is the tab bar's.
+        let on_tab = matches!(e, Ev::Press { .. }) && self.button_at(cursor).is_some();
+        if !on_tab
+            && !matches!(e, Ev::Quit { .. } | Ev::Navigate(_))
+            && let Some(map) = self.shown_map()
+            && map.event(e, cursor, dialog::left_held(input), global_ms)
+        {
+            if let Ev::Move(p) = e {
+                self.cursor = p;
+            }
+            return false;
+        }
         match e {
             // 4.1: an action's key switches to its tab, then closes the
             // window; 5 item 2: `quit` closes it (a gamepad's east too).
@@ -395,7 +495,10 @@ impl PdaWindow {
             }
             Ev::Move(p) => self.cursor = p,
             Ev::Navigate(d) => {
-                let targets: Vec<Rect> = self.layout.buttons.iter().map(|b| b.rect).collect();
+                let mut targets: Vec<Rect> = self.layout.buttons.iter().map(|b| b.rect).collect();
+                if let Some(map) = self.shown_map() {
+                    targets.extend(map.tool_rects());
+                }
                 if let Some(p) = dialog::navigate(self.cursor, d, &targets) {
                     self.cursor = p;
                 }
@@ -419,8 +522,18 @@ impl PdaWindow {
         (self.layout.buttons.iter()).position(|b| dialog::contains(b.rect, p))
     }
 
-    fn over_flags(&self, p: [f32; 2]) -> [bool; TABS] {
-        std::array::from_fn(|i| dialog::contains(self.layout.buttons[i].rect, p))
+    /// The cursor over each button: the map's tools only while it shows.
+    fn over_flags(&self, p: [f32; 2]) -> Vec<bool> {
+        let tools = match &self.map {
+            Some(m) if self.active == Some(MAP_TAB) => m.tool_rects(),
+            _ => Vec::new(),
+        };
+        (0..self.hints.len())
+            .map(|i| match i.checked_sub(TABS) {
+                None => dialog::contains(self.layout.buttons[i].rect, p),
+                Some(t) => tools.get(t).is_some_and(|&r| dialog::contains(r, p)),
+            })
+            .collect()
     }
 
     /// Tab `i`'s caption look (3.3): selected `t`, under the cursor `h`,
@@ -490,7 +603,12 @@ impl PdaWindow {
                 sep.font,
             )?;
         }
-        // TODO(#723): the active tab's window (each tab's own spec).
+        // The active tab's window (each tab's own spec): the map's.
+        if self.active == Some(MAP_TAB)
+            && let Some(map) = &self.map
+        {
+            map.draw(ctx, s)?;
+        }
         for (i, b) in l.buttons.iter().enumerate() {
             let mark = if self.new_content[i] {
                 &l.updated_mark
@@ -539,6 +657,7 @@ impl PdaWindow {
                     new_content: self.new_content[i],
                 })
                 .collect(),
+            map: self.map.as_ref().map(MapWindow::state),
             hint: self.hint.as_ref().map(|h| HintState {
                 tab: h.owner,
                 text: h.text.clone(),
@@ -620,13 +739,14 @@ pub struct PdaState {
     pub clock: String,
     pub cursor: [f32; 2],
     pub tabs: Vec<TabState>,
+    pub map: Option<MapState>,
     pub hint: Option<HintState>,
 }
 
 /// The hint window as tests see it.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct HintState {
-    /// The tab whose button holds it.
+    /// The button holding it: a tab, or [`TABS`] + a map tool.
     pub tab: usize,
     pub text: String,
     pub rect: [f32; 4],
