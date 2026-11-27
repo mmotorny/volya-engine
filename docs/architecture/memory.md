@@ -42,7 +42,7 @@ Native figures: `loading_memory.rs` and `level_memory.rs`, release, requested by
 | The audio worker's wasm instance | 2 MiB | |
 | JavaScript: the audio worker 2.9, the page 1.4–1.8 (and its canvas 0.9), the engine worker 1.6, shared 0.7 MiB | 8 MiB | |
 
-All measured natively but the last three (`level_stats`, JS memory). The program's data holds 4,087 of the heap's blocks before a game (452 with the archive tree alone). The compressed sound files are in JavaScript, not a wasm heap: the engine worker reads each into a JavaScript array a piece at a time (256 KiB) and the audio worker keeps it (#491). Before the first New Game the engine's heap is 16 MiB with 11 live (measured, `game-level`).
+All measured natively but the last three (`level_stats`, JS memory). The program's data holds 4,087 of the heap's blocks before a game (452 with the archive tree alone). The compressed sound files are in JavaScript, not a wasm heap: the engine worker reads each into a JavaScript array a piece at a time (256 KiB) and the audio worker keeps it (#491). Before the first New Game the engine's heap is 16–17 MiB with 11 live (measured, `game-level`).
 
 ### Session: a game, from its New Game to its end
 
@@ -69,7 +69,7 @@ In the browser the level's preparation adds the texture read buffer (one file, u
 
 ### Frame
 
-A frame of the running level, on the wasm heap (the `render-level` suite, 600 frames after 60): 39 allocations and 63 KB (at most 161): the update 20.2 and 11.8 KB, the sounds 0.0, the scene 10.0 and 26.5 KB, the draw list 9.1 and 24.8 KB; live memory grew 0.48 MB over the 600 frames. The passes' lists (the camera pass's dynamic items among them), the lights', glows' and simulation's, the effects drawn and the particle sprites' scratch are kept and cleared (#488). In the browser the heap stays flat while the level runs (74 MiB before the intro, while it plays and after 20 s of walking), so the frame's blocks reuse their own holes.
+A frame of the running level, on the wasm heap (the `render-level` suite, 600 frames after 60): 39 allocations and 63 KB (at most 161): the update 20.2 and 11.8 KB, the sounds 0.0, the scene 10.0 and 26.5 KB, the draw list 9.1 and 24.8 KB; live memory grew 0.48 MB over the 600 frames. The passes' lists (the camera pass's dynamic items among them), the lights', glows' and simulation's, the effects drawn and the particle sprites' scratch are kept and cleared (#488). In the browser the heap stays flat while the level runs (88–89 MiB before the intro, while it plays and after 20 s of walking), so the frame's blocks reuse their own holes.
 
 On an iPhone the heap grew while a level ran (74.9 → 78 MiB about 110 s into the first game, 82 → 86.6 about 180 s into the second; its diagnostic log): at the level's first music track (`music\amb01`, whose files no longer pass through the heap, #491; in the iOS Simulator the most live went 62.2 → 69.8 MiB at its start before and after that change) and under the in-game menu, which holds 5.7 MB more while it shows (measured there; believed its videos' read-ahead windows and decoders, made again at each opening, #517).
 
@@ -89,11 +89,13 @@ Measured in headless Chrome (`level_stats`' `gpu_owners`, `game-level`, `game-me
 
 ## Heap minus live
 
-Headless Chrome, `game-level` and `game-memory`, one run (MiB, heap/most live):
+Headless Chrome, `game-level` and `game-memory`, three runs each (MiB, heap/most live; the range over the runs):
 
 | | Before the first New Game | First New Game | Title menu after quitting | A New Game after relaunching the game, at 2868 × 1320 | Second New Game after quitting to the title menu | Third |
 |---|---|---|---|---|---|---|
-| Heap / live | 16/11 | 74/68 | 74/40 | 74/69 | 78/69 | 78/69 |
+| Heap / live | 16–17/11 | 88–89/81 | 88–89/40 | 88–95/81 | 92–95/81 | 92–95/81 |
+
+The level, once loaded, holds 67 MiB live. The load's most live comes at its end, under `st_loading_textures` and `st_client_synchronising` (58 → 81 MiB): the objects' CPU geometry with every detail window's indices is among it until the world uploads (the 8.0 MiB index list and the 4.0 MiB vertex list, #528, #653). The heap's last two growths come in that stage (9.6 MiB asked for at 73.6 MiB, then 4.0 MiB) (the 9.6 MiB block's owner: #666).
 
 After quitting, 40 MiB stay live: 25 MiB of them are the collision world's spare arrays (three blocks of 8.0, 10.5 and 7.0 MiB), the rest the program's data and the menus'.
 
@@ -102,7 +104,7 @@ Where the gap comes from:
 - **Large blocks meeting split free space.** The heap grows by 26 MiB under the collision stage for 24 MiB more live: its arrays (up to 10.5 MiB each) find no hole that size in the free space the earlier stages left (measured, `heap_log`, `heap_record`'s growths; #373). It is the only stage that grows the heap by about what it keeps.
 - **Loading transients among long-lived blocks.** `st_client_spawning` (2.52 million allocations, 6,743 kept) and `st_server_connecting` (537,041, 83,764 kept) leave their kept blocks scattered through the space their temporaries used, so the next large block needs new memory above them. At the load's most live, blocks under 64 KiB hold about 7 MiB, blocks of 1 MiB or more 53 MiB (measured, `heap_record`).
 - **The preparation's buffers.** The texture read buffer and the band buffer arrive last, above the level's data.
-- **A second New Game grows the heap by 4 MiB once**, the third none: one allocation of the texture stage, 4.0 MiB, finds no hole that size in the first game's layout (measured, `heap_record`'s growths).
+- **A later New Game grows the heap by 4–6 MiB once** (in the relaunched game's or the second), the next none: an allocation of the texture stage finds no hole that size in the first game's layout (measured, `heap_record`'s growths).
 
 The program's data leaves no split free space before a game (`heap_map`, #432).
 
