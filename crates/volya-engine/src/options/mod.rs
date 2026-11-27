@@ -799,7 +799,9 @@ impl OptionsScreen {
             }
             Kind::List(l) => {
                 let names: Vec<String> = match Console::def(&var).map(|d| d.kind) {
-                    Some(VarKind::List(names)) => names.iter().map(|&n| n.to_owned()).collect(),
+                    Some(VarKind::List(names)) => {
+                        names.iter().map(|&(n, _)| n.to_owned()).collect()
+                    }
                     Some(VarKind::Mode) => widgets::resolution_list(native),
                     _ => Vec::new(),
                 };
@@ -2138,14 +2140,10 @@ impl OptionsScreen {
         ] {
             textures.extend(d.texture.iter().map(|t| t.name.clone()));
         }
-        for v in console::VARIABLES {
-            if let VarKind::List(names) = v.kind
-                && v.name != "_preset"
-            {
-                strings.extend(names.iter().map(|&n| n.to_owned()));
-            }
+        // The lists of the options screen's drop-downs.
+        for names in [console::RENDERERS, console::PRESETS, console::DIFFICULTIES] {
+            strings.extend(names.iter().map(|&(n, _)| n.to_owned()));
         }
-        strings.extend(console::PRESETS.iter().map(|&n| n.to_owned()));
         textures.sort();
         textures.dedup();
         strings.sort();

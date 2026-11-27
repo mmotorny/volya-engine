@@ -33,7 +33,6 @@ use crate::data::{Assets, GameData};
 use crate::draw::Ctx;
 use crate::inventory_screen::{self, InventoryScreen, InventoryState};
 use crate::level::{LevelScreen, LevelState, LevelWorld};
-use crate::level_lights::GLOWS_PER_FRAME;
 use crate::level_sound::{LevelSounds, SoundRun};
 use crate::loading_screen::{
     GAME_TYPE, Loading, LoadingScreen, LoadingScreenState, OVERLAY_FRAMES, SERVER_NEW_GAME,
@@ -514,21 +513,9 @@ fn display_mode_request(console: &Console, page: Option<bool>) -> Option<bool> {
 }
 
 /// `r__geometry_lod`, `r1_ssa_lod_a` and `r1_ssa_lod_b`
-/// (object-detail-level.md 1): the last two reals 16 … 96 and 16 … 64 (RS
-/// 1), their defaults before set; a stored value out of range is clamped
-/// (our choice).
+/// (object-detail-level.md 1).
 fn geometry_lod(console: &Console) -> [f32; 3] {
-    use volya_engine_formats::level::{SSA_LOD_A, SSA_LOD_B};
-    let kept = |name, default: f32, max: f32| {
-        (console.status(name))
-            .and_then(|v| v.trim().parse::<f32>().ok())
-            .map_or(default, |v| v.clamp(16.0, max))
-    };
-    [
-        console.number("r__geometry_lod"),
-        kept("r1_ssa_lod_a", SSA_LOD_A, 96.0),
-        kept("r1_ssa_lod_b", SSA_LOD_B, 64.0),
-    ]
+    ["r__geometry_lod", "r1_ssa_lod_a", "r1_ssa_lod_b"].map(|name| console.number(name))
 }
 
 /// What a level takes from the console before each update: the renderer's
@@ -549,9 +536,7 @@ pub fn level_settings(
         status("r1_dlights_clip").as_deref(),
         status("r2_sun_lumscale").as_deref(),
     );
-    let glows = status("r1_glows_per_frame")
-        .and_then(|v| v.trim().parse::<u32>().ok())
-        .map_or(GLOWS_PER_FRAME, |v| v.clamp(2, 32));
+    let glows = console.number("r1_glows_per_frame") as u32;
     level.set_light_settings(settings, glows);
     level.set_view_size(video);
     level.set_supersample(supersample);
@@ -590,24 +575,14 @@ pub fn frame_settings(
     scene.lmodel_lerp = lmodel_lerp(console);
 }
 
-/// `r1_lmodel_lerp` (object-projected-light.md 6): a real 0 … 0.333, 0.1
-/// before set; a stored value out of range is clamped (our choice).
+/// `r1_lmodel_lerp` (object-projected-light.md 6).
 fn lmodel_lerp(console: &Console) -> f32 {
-    (console.status("r1_lmodel_lerp"))
-        .and_then(|v| v.trim().parse::<f32>().ok())
-        .filter(|v| v.is_finite())
-        .map_or(crate::present::LMODEL_LERP, |v| v.clamp(0.0, 0.333))
+    console.number("r1_lmodel_lerp")
 }
 
-/// `r1_pps_u` and `r1_pps_v` (frame-presentation.md 3.2): reals −1 … 1, 0
-/// before set; a stored value out of range is clamped (our choice).
+/// `r1_pps_u` and `r1_pps_v` (frame-presentation.md 3.2).
 fn pps(console: &Console) -> [f32; 2] {
-    ["r1_pps_u", "r1_pps_v"].map(|name| {
-        (console.status(name))
-            .and_then(|v| v.trim().parse::<f32>().ok())
-            .filter(|v| v.is_finite())
-            .map_or(0.0, |v| v.clamp(-1.0, 1.0))
-    })
+    ["r1_pps_u", "r1_pps_v"].map(|name| console.number(name))
 }
 
 /// The resolution of `vid_mode`.
@@ -665,6 +640,10 @@ impl App {
     pub fn new(data: GameData) -> io::Result<Self> {
         TitleMenu::check(&data)?;
         let console = data.console();
+        // The original ends at startup (console-commands.md section 5).
+        if let Some(why) = console.fatal() {
+            return Err(io::Error::other(why.to_owned()));
+        }
         let video = video_mode(&console);
         let supersample = supersample(&console);
         let texture_list = TextureQuality::read_list(&data.system);
@@ -817,10 +796,10 @@ impl App {
 
     /// How the menu opens now (title-menu.md section 4.1).
     fn opening(&self, in_game: bool) -> Opening {
-        let last = self.console.status("load_last_save");
+        let last = self.console.last_save();
         Opening {
             in_game,
-            last_save: self.screens.saves().last_save_valid(last.as_deref()),
+            last_save: self.screens.saves().last_save_valid(last),
         }
     }
 
@@ -2449,17 +2428,17 @@ mod tests {
         assert_eq!(level.visibility().thresholds(), Some(&expected));
     }
 
-    /// `r1_lmodel_lerp`: 0.1 before set, the stored value, clamped to
-    /// 0 … 0.333.
+    /// `r1_lmodel_lerp`: 0.1 built in, the stored value; one out of
+    /// 0 … 0.333 is rejected.
     #[test]
-    fn r1_lmodel_lerp_is_read_and_clamped() {
+    fn r1_lmodel_lerp_is_read() {
         let tree = fixture::tree();
         let mut app = App::new(fixture::data(&tree)).unwrap();
         assert_eq!(lmodel_lerp(&app.console), 0.1);
         app.console.exec("r1_lmodel_lerp 0.25");
         assert_eq!(lmodel_lerp(&app.console), 0.25);
         app.console.exec("r1_lmodel_lerp 1");
-        assert_eq!(lmodel_lerp(&app.console), 0.333);
+        assert_eq!(lmodel_lerp(&app.console), 0.25);
     }
 
     /// `rs_fullscreen` is the page's full screen (our deviation): it
