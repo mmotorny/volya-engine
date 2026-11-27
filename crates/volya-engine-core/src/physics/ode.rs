@@ -17,6 +17,9 @@
 
 #![allow(unsafe_code)]
 
+pub mod msvc_rand;
+pub mod x87;
+
 use std::ffi::c_int;
 use std::sync::Mutex;
 

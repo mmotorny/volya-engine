@@ -39,6 +39,20 @@ typedef uintptr_t intP;
 
 #define dInfinity INFINITY
 
+/* The shipped library's floating-point environment and run time
+** (docs/behavior/physics-library.md 7, 8), from volya-engine-core
+** (src/physics/ode/x87.rs, msvc_rand.rs): its sines, cosines and arc tangents
+** as the x87 instructions give them, and the C run time's per-thread rand.
+** Square roots are sqrtf's: the same as fsqrt at 24-bit precision. */
+float volya_x87_sinf (float x);
+float volya_x87_cosf (float x);
+float volya_x87_atan2f (float y, float x);
+int volya_ode_rand (void);
+#define sinf volya_x87_sinf
+#define cosf volya_x87_cosf
+#define atan2f volya_x87_atan2f
+#define rand volya_ode_rand
+
 #ifdef __cplusplus
 }
 #endif
