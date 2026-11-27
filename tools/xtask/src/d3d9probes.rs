@@ -165,24 +165,33 @@ fn crc32(bytes: &[u8]) -> u32 {
     !crc
 }
 
-/// The release tag of a runner zip: the prefix and the start of its SHA-256,
-/// so the same runner is published once.
-fn tag(zip: &[u8]) -> String {
+/// The release tag of a runner zip: `prefix` and the start of its
+/// SHA-256, so the same runner is published once.
+fn tag(prefix: &str, zip: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let hash: String = Sha256::digest(zip)[..6]
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
-    format!("{TAG_PREFIX}{hash}")
+    format!("{prefix}{hash}")
 }
 
 /// `xtask d3d9probes release`: publishes the runner zip `zip` (built by
-/// [`RUNNER`]) as the asset `d3d9probes.zip` of a prerelease tagged by its
-/// hash ([`tag`]), at the default branch's head, unless that release
-/// exists; prints the tag and the zip's URL.
+/// [`RUNNER`]) as [`publish`] does.
 pub fn release(zip: &Path) -> Result {
+    let notes = format!(
+        "The Direct3D 9 probes' Windows runner (tests/d3d9probes/, built by \
+         `{RUNNER}`). Steps: docs/testing.md, Direct3D 9 probes on real hardware."
+    );
+    publish(zip, TAG_PREFIX, "d3d9probes.zip", &notes)
+}
+
+/// Publishes the zip `zip` as the asset `asset` of a prerelease tagged by
+/// `prefix` and its hash ([`tag`]), at the default branch's head, unless
+/// that release exists; prints the tag and the asset's URL.
+pub fn publish(zip: &Path, prefix: &str, asset: &str, notes: &str) -> Result {
     let bytes = fs::read(zip).map_err(|e| format!("{}: {e}", zip.display()))?;
-    let tag = tag(&bytes);
+    let tag = tag(prefix, &bytes);
     let repo = output(&mut cmd(
         "gh",
         &[
@@ -204,29 +213,25 @@ pub fn release(zip: &Path) -> Result {
         step(&format!("Release {tag} exists"));
     } else {
         step(&format!("Publishing release {tag}"));
-        let asset = format!("{}#d3d9probes.zip", zip.display());
-        let notes = format!(
-            "The Direct3D 9 probes' Windows runner (tests/d3d9probes/, built by \
-             `{RUNNER}`). Steps: docs/testing.md, Direct3D 9 probes on real hardware."
-        );
+        let file = format!("{}#{asset}", zip.display());
         run(&mut cmd(
             "gh",
             &[
                 "release",
                 "create",
                 &tag,
-                &asset,
+                &file,
                 "--repo",
                 repo,
                 "--prerelease",
                 "--title",
                 &tag,
                 "--notes",
-                &notes,
+                notes,
             ],
         ))?;
     }
-    println!("{tag}\nhttps://github.com/{repo}/releases/download/{tag}/d3d9probes.zip");
+    println!("{tag}\nhttps://github.com/{repo}/releases/download/{tag}/{asset}");
     Ok(())
 }
 
