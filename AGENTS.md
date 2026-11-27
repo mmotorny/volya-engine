@@ -7,6 +7,7 @@
 - Every instruction here must earn its tokens: cut prose that doesn't change agent behavior.
 - No status disclaimers in docs ("currently", "early days", "coming next"); they go stale. Track status in issues.
 - AGENTS.md is not README.md: project descriptions go in README.md; only agent instructions go here.
+- Nothing personal or machine-specific goes into commits, docs, branch or tag names, release notes or reports: no user names, home or install paths, LAN addresses, hardware models, driver or OS versions; use placeholders (`<user>`, `<game folder>`) and neutral ids. Commit messages carry no session links.
 - Every source file starts with SPDX headers: `SPDX-FileCopyrightText: 2026 Maksym Motorny` (current year for new files) and `SPDX-License-Identifier: BSD-3-Clause`, in the file's comment syntax.
 - Naming: product crate `volya-engine`, role sub-crates `volya-engine-<role>` in `crates/`, platform packages `platforms/<platform>` with crate `volya-engine-<platform>`, tools `tools/<tool>` with crate `volya-engine-<tool>` (except `xtask`) (see docs/architecture/README.md). Create a crate only when its code exists.
 - Never open pull requests, issues or comments on other people's repositories; forks under the user's account are fine.
