@@ -9,7 +9,9 @@
 ** bin\ode.dll, crates/volya-engine-core's build against ours.
 **
 ** Output: per scenario, records of little-endian 32-bit words: the record's
-** tag, its word count n, then n words (floats as their bits).
+** tag, its word count n, then n words (floats as their bits). The tag's low
+** byte is its kind (VOLYA_ODE_TAGS); the x87 scenario puts the instruction
+** in the second byte.
 */
 
 #ifndef VOLYA_ODE_HARNESS_H
@@ -17,6 +19,19 @@
 
 #include <stdint.h>
 #include <stdio.h>
+
+/* The record kinds, X(value, name): the world's parameters (12 words), an
+** x87 instruction's operands and result, a vector, a body (position,
+** quaternion, rotation, linear and angular velocity: 25), a joint's feedback
+** (16), joint angles and positions, contacts, a count, a geometry, a flag;
+** a dMass (17), a contact joint's input (its surface's mode and 10
+** parameters, position, normal, depth, fdir1, then the index of each of its
+** two bodies, ~0 for the world: 23), a rotation (12, or 16: with
+** dRFromAxisAndAngle's axis and angle, or a body's quaternion, first). */
+#define VOLYA_ODE_TAGS(X) \
+  X(1, params) X(2, x87) X(3, vector) X(4, body) X(5, feedback) X(6, joint) \
+  X(7, contacts) X(8, count) X(9, geometry) X(10, flag) X(11, mass) \
+  X(12, contact) X(13, rotation)
 
 typedef float dReal;
 typedef struct dxWorld *dWorldID;

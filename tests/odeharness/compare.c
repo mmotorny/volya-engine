@@ -9,7 +9,7 @@
 ** words); any two NaNs count as equal (the shipped library's NaNs are the
 ** x87's and SSE's default NaN, ours the platform's). Then the shipped
 ** library's runs with and without denormals-are-zero against each other
-** (#769). Plain C, also built natively for its test.
+** (#769): every <name>-nodaz scenario against <name>. Plain C, also built natively for its test.
 */
 
 #include "harness.h"
@@ -18,13 +18,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-static const char *TAGS[] = {"?", "params", "x87", "vector", "body", "feedback",
-			     "joint", "contacts", "count", "geometry", "flag"};
+#define TAG_NAME(value, name) [value] = #name,
+static const char *TAGS[] = {[0] = "?", VOLYA_ODE_TAGS (TAG_NAME)};
 
 static const char *tag_name (uint32_t tag)
 {
   uint32_t t = tag & 0xFF;
-  return t < sizeof TAGS / sizeof TAGS[0] ? TAGS[t] : "?";
+  return t < sizeof TAGS / sizeof TAGS[0] && TAGS[t] ? TAGS[t] : "?";
 }
 
 /* the file's words (little-endian; both machines are), or NULL */
@@ -121,14 +121,18 @@ int volya_ode_compare (const char *ours, const char *shipped, FILE *out)
     free (a);
     free (b);
   }
-  static const char *pairs[][2] = {{"joints", "joints-nodaz"}, {"contacts", "contacts-nodaz"}};
-  for (int p = 0; p < 2; p++) {
+  /* every <name>-nodaz scenario against <name>, both the shipped library's */
+  for (int i = 0; i < volya_ode_scenario_count (); i++) {
+    const char *nodaz = volya_ode_scenario_name (i);
+    size_t len = strlen (nodaz);
+    if (len <= 6 || strcmp (nodaz + len - 6, "-nodaz")) continue;
+    char name[128];
+    snprintf (name, sizeof name, "%.*s", (int) (len - 6), nodaz);
     size_t na = 0, nb = 0;
-    uint32_t *a = load (shipped, pairs[p][0], &na), *b = load (shipped, pairs[p][1], &nb);
+    uint32_t *a = load (shipped, name, &na), *b = load (shipped, nodaz, &nb);
     if (a && b) {
-      char label[128];
-      snprintf (label, sizeof label, "shipped %s against %s (denormals-are-zero)", pairs[p][0],
-		pairs[p][1]);
+      char label[300];
+      snprintf (label, sizeof label, "shipped %s against %s (denormals-are-zero)", name, nodaz);
       compare_words (out, label, "with", a, na, "without", b, nb);
     }
     free (a);

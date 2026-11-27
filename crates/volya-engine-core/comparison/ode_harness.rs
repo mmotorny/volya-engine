@@ -34,7 +34,7 @@ fn scenarios_repeat_and_the_comparison_finds_a_changed_word() {
     assert_eq!(n, 0, "{report}");
     assert_eq!(
         report.lines().filter(|l| l.contains(": identical")).count(),
-        names.len() + 2
+        names.len() + names.iter().filter(|n| n.ends_with("-nodaz")).count()
     );
 
     // One word of the free bodies' 10th record changed (its tag and count

@@ -26,7 +26,7 @@ static const OdeHarness *H;
 
 enum {
   T_PARAMS = 1, T_X87, T_VEC, T_BODY, T_FEEDBACK, T_JOINT, T_CONTACTS,
-  T_COUNT, T_GEOM, T_FLAG
+  T_COUNT, T_GEOM, T_FLAG, T_MASS, T_CONTACT, T_ROT
 };
 
 static uint32_t bits (float f)
@@ -566,6 +566,267 @@ static void s_worlds (void)
   H->dWorldDestroy (c);
 }
 
+/* ---- the open questions of physics-harness.md ---- */
+
+static void rec_mass (const dMass *m)
+{
+  rec_floats (T_MASS, &m->mass, 17);
+}
+
+/* a body alone in a world of its own, without gravity, its mass and state
+** recorded, stepped once (the exact stepper when exact), recorded again */
+static void step_alone (const dMass *m, const dReal *R, const dReal *lvel, const dReal *avel,
+			const dReal *torque, int exact)
+{
+  dWorldID w = game_world ();
+  dBodyID b = H->dBodyCreate (w);
+  H->dBodySetMass (b, m);
+  H->dBodySetGravityMode (b, 0);
+  H->dBodySetPosition (b, 1, 2, 3);
+  H->dBodySetRotation (b, R);
+  H->dBodySetLinearVel (b, lvel[0], lvel[1], lvel[2]);
+  H->dBodySetAngularVel (b, avel[0], avel[1], avel[2]);
+  rec_mass (m);
+  rec_body (b);
+  rec_floats (T_VEC, torque, 3);
+  H->dBodyAddTorque (b, torque[0], torque[1], torque[2]);
+  if (exact) H->dWorldStep (w, STEP);
+  else H->dWorldQuickStep (w, STEP);
+  rec_body (b);
+  H->dWorldDestroy (w);
+}
+
+static const dReal IDENTITY[12] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+
+/* the angular update separated (4.3): a sphere's mass (a scalar inertia) or
+** a box's, at the identity or a rotation, with torque or none, zero angular
+** velocity (no gyroscopic term) or along one axis or all three; one step of
+** each stepper from each state */
+static void s_angular (void)
+{
+  for (int i = 0; i < 1600; i++) {
+    int kind = i % 8, exact = (i / 8) & 1;
+    dMass m;
+    if (kind < 3) H->dMassSetSphereTotal (&m, uni (1, 200), uni (0.1f, 1));
+    else H->dMassSetBoxTotal (&m, uni (1, 200), uni (0.1f, 2), uni (0.1f, 2), uni (0.1f, 2));
+    dReal R[12];
+    memcpy (R, IDENTITY, sizeof R);
+    if (kind == 1 || kind == 4 || kind >= 6) rand_rotation (R);
+    dReal lvel[3] = {0, 0, 0}, avel[3] = {0, 0, 0}, torque[3] = {0, 0, 0};
+    int axis = (int) (next () % 3);
+    /* kinds at a rotation: 1, 4, 6, 7; the others at the identity */
+    switch (kind) {
+    case 0: /* a sphere: torque, no angular velocity */
+    case 1:
+      for (int k = 0; k < 3; k++) torque[k] = uni (-1, 1);
+      break;
+    case 2: /* a sphere: angular velocity, no torque */
+      for (int k = 0; k < 3; k++) avel[k] = uni (-5, 5);
+      break;
+    case 3: /* a box: torque about one axis, no angular velocity */
+    case 4:
+      torque[axis] = uni (-1, 1);
+      break;
+    case 5: /* a box: angular velocity about one axis, no torque */
+    case 6:
+      avel[axis] = uni (-5, 5);
+      break;
+    default: /* a box: angular velocity about all three, no torque */
+      for (int k = 0; k < 3; k++) avel[k] = uni (-5, 5);
+      break;
+    }
+    step_alone (&m, R, lvel, avel, torque, exact);
+  }
+}
+
+/* dRFromAxisAndAngle's rotation (5.3), its inputs first; then the rotation
+** read back from a geometry after dGeomSetRotation, and from a body after
+** dBodySetRotation with its quaternion */
+static void s_rotation (void)
+{
+  static const float special[][4] = {
+    {1, 0, 0, 1}, {0, 1, 0, 1}, {0, 0, 1, 1}, {2, 0, 0, 1}, {1, 1, 1, 0},
+    {1, 1, 0, 3.1415927f}, {0, 0, 1, -3.1415927f}, {1, 2, 3, 0.001f}, {0.5f, 0, 0, 1.5707964f},
+    {1, 1, 1, 1}
+  };
+  int nspecial = (int) (sizeof special / sizeof special[0]);
+  dGeomID box = H->dCreateBox (0, 1, 1, 1);
+  dWorldID w = game_world ();
+  dBodyID b = H->dBodyCreate (w);
+  for (int i = 0; i < 3000; i++) {
+    float a[4];
+    if (i < nspecial) memcpy (a, special[i], sizeof a);
+    else {
+      /* as rand_rotation's */
+      a[0] = uni (-1, 1);
+      a[1] = uni (-1, 1);
+      a[2] = uni (-1, 1) + 0.01f;
+      a[3] = uni (-3.1f, 3.1f);
+    }
+    dReal R[12];
+    memset (R, 0, sizeof R);
+    H->dRFromAxisAndAngle (R, a[0], a[1], a[2], a[3]);
+    dReal v[16];
+    memcpy (v, a, sizeof a);
+    memcpy (v + 4, R, sizeof R);
+    rec_floats (T_ROT, v, 16);
+    H->dGeomSetRotation (box, R);
+    rec_floats (T_ROT, H->dGeomGetRotation (box), 12);
+    H->dBodySetRotation (b, R);
+    memcpy (v, H->dBodyGetQuaternion (b), 4 * 4);
+    memcpy (v + 4, H->dBodyGetRotation (b), 12 * 4);
+    rec_floats (T_ROT, v, 16);
+  }
+  H->dGeomDestroy (box);
+  H->dWorldDestroy (w);
+}
+
+static const float NORMALS[][3] = {
+  {0, 1, 0}, {0.6f, 0.8f, 0}, {0, 0.6f, 0.8f}, {0.48f, 0.6f, 0.64f}, {-0.36f, 0.48f, 0.8f}
+};
+
+/* one exact-stepper step (6) with its inputs recorded: two bodies, their
+** masses and states, and contact joints with every input of each */
+static void s_exact_step (void)
+{
+  for (int t = 0; t < 300; t++) {
+    dWorldID w = game_world ();
+    dJointGroupID group = H->dJointGroupCreate (0);
+    dBodyID b[2];
+    for (int i = 0; i < 2; i++) {
+      b[i] = H->dBodyCreate (w);
+      dMass m;
+      H->dMassSetBoxTotal (&m, uni (5, 100), uni (0.2f, 1), uni (0.2f, 1), uni (0.2f, 1));
+      H->dBodySetMass (b[i], &m);
+      H->dBodySetPosition (b[i], uni (-0.1f, 0.1f), 0.5f + (float) i, uni (-0.1f, 0.1f));
+      dReal R[12];
+      rand_rotation (R);
+      H->dBodySetRotation (b[i], R);
+      H->dBodySetLinearVel (b[i], uni (-1, 1), uni (-1, 1), uni (-1, 1));
+      H->dBodySetAngularVel (b[i], uni (-2, 2), uni (-2, 2), uni (-2, 2));
+      rec_mass (&m);
+      rec_body (b[i]);
+    }
+    /* body 0 on the ground, body 1 on body 0 and, from the third trial
+    ** of four, on the ground too */
+    int n0 = 1 + t % 4, n01 = 1 + (t / 4) % 2, n1 = (t % 4) >= 2;
+    int n = n0 + n01 + n1;
+    /* zeroed: a joint to the world leaves its second body's half alone */
+    static dJointFeedback fb[8];
+    memset (fb, 0, sizeof fb);
+    dJointID made[8];
+    for (int i = 0; i < n; i++) {
+      dContact c;
+      memset (&c, 0, sizeof c);
+      int kind = (t + i) % 4;
+      c.surface.mode = dContactApprox1 | dContactSoftERP | dContactSoftCFM;
+      c.surface.mu = kind == 3 ? 0.3f : 1.0f;
+      c.surface.soft_erp = 0.5f;
+      c.surface.soft_cfm = 1e-5f;
+      if (kind == 1) {
+	c.surface.mode |= dContactBounce;
+	c.surface.bounce = 0.4f;
+	c.surface.bounce_vel = 0.1f;
+      }
+      if (kind == 2) {
+	c.surface.mode |= dContactMu2;
+	c.surface.mu2 = 0.5f;
+      }
+      dBodyID ba, bb;
+      const float *normal;
+      float y;
+      if (i < n0) {
+	ba = b[0], bb = NONE, normal = NORMALS[0], y = 0;
+      } else if (i < n0 + n01) {
+	ba = b[1], bb = b[0], normal = NORMALS[next () % 5], y = 1;
+      } else {
+	ba = b[1], bb = NONE, normal = NORMALS[0], y = 0.3f;
+      }
+      c.geom.pos[0] = uni (-0.3f, 0.3f);
+      c.geom.pos[1] = y + uni (-0.05f, 0.05f);
+      c.geom.pos[2] = uni (-0.3f, 0.3f);
+      memcpy (c.geom.normal, normal, 3 * 4);
+      c.geom.depth = uni (0, 0.05f);
+      uint32_t in[23];
+      in[0] = (uint32_t) c.surface.mode;
+      memcpy (in + 1, &c.surface.mu, 10 * 4);
+      memcpy (in + 11, c.geom.pos, 3 * 4);
+      memcpy (in + 14, c.geom.normal, 3 * 4);
+      memcpy (in + 17, &c.geom.depth, 4);
+      memcpy (in + 18, c.fdir1, 3 * 4);
+      in[21] = ba == b[0] ? 0 : 1;
+      in[22] = bb == b[0] ? 0 : 0xFFFFFFFFu;
+      rec (T_CONTACT, in, 23);
+      made[i] = (i & 1) ? H->dJointCreateContactSpecial (w, group, &c)
+			: H->dJointCreateContact (w, group, &c);
+      H->dJointAttach (made[i], ba, bb);
+      H->dJointSetFeedback (made[i], &fb[i]);
+    }
+    H->dWorldStep (w, STEP);
+    for (int i = 0; i < 2; i++) rec_body (b[i]);
+    for (int i = 0; i < n; i++) rec_floats (T_FEEDBACK, (const dReal *) &fb[i], 16);
+    /* as pile_step: emptying the group leaves its joints in the world */
+    for (int i = 0; i < n; i++) {
+      H->dJointAttach (made[i], NONE, NONE);
+      H->dWorldRemoveJoint (w, made[i]);
+    }
+    H->dJointGroupDestroy (group);
+    H->dWorldDestroy (w);
+  }
+}
+
+/* a body with tiny quaternion components (7), no joint, stepped once:
+** rotations about y (cos, sin as written) with tiny entries off it, some of
+** them denormal; run with and without denormals-are-zero */
+static void s_denormal (void)
+{
+  static const float base[][2] = {{1, 0}, {0.9238795f, 0.38268343f}, {0.6f, 0.8f},
+				  {0.70710677f, 0.70710677f}};
+  for (int i = 0; i < 800; i++) {
+    float c = base[i % 4][0], s = base[i % 4][1];
+    uint32_t t[2], u[2];
+    for (int k = 0; k < 2; k++) {
+      int e = -40 - (int) (next () % 100);	/* down to below the normal range */
+      if (next () % 4 == 0) t[k] = 0;
+      else if (e >= -126) t[k] = bits (spread (e, e));
+      else t[k] = (next () & 1u) << 31 | (((next () & 0x7FFFFFu) | 0x800000u) >> (-126 - e));
+      u[k] = t[k] ^ 0x80000000u;	/* negated, as bits */
+    }
+    /* entries written, not computed: x about t[0], z about t[1] */
+    uint32_t r[12] = {bits (c), u[1], bits (s), 0, t[1], bits (1), u[0], 0,
+		      bits (s) ^ 0x80000000u, t[0], bits (c), 0};
+    dReal R[12];
+    memcpy (R, r, sizeof R);
+    dMass m;
+    H->dMassSetBoxTotal (&m, uni (1, 200), uni (0.1f, 2), uni (0.1f, 2), uni (0.1f, 2));
+    dReal lvel[3] = {uni (-1, 1), uni (-1, 1), uni (-1, 1)};
+    dReal avel[3] = {0, 0, 0}, torque[3] = {0, 0, 0};
+    if ((i / 4) % 3 == 1) avel[1] = uni (-2, 2);
+    if ((i / 4) % 3 == 2) for (int k = 0; k < 3; k++) avel[k] = uni (-2, 2);
+    step_alone (&m, R, lvel, avel, torque, (i / 12) & 1);
+  }
+}
+
+/* dNormalize3_slow with two or three largest magnitudes equal (3) */
+static void s_normalise_ties (void)
+{
+  for (int i = 0; i < 2000; i++) {
+    int e = (int) (next () % 40) - 30;
+    float m = from_bits (bits (spread (e, e)) & 0x7FFFFFFF);
+    int pattern = i % 4;	/* the one not largest: 0, 1, 2; or none */
+    dReal v[4];
+    for (int k = 0; k < 3; k++) {
+      float x = k == pattern ? (next () % 8 == 0 ? 0 : from_bits (bits (spread (e - 8, e - 1)) & 0x7FFFFFFF)) : m;
+      v[k] = (next () & 1) ? -x : x;
+    }
+    v[3] = 0;
+    dReal in[3] = {v[0], v[1], v[2]};
+    H->dNormalize3_slow (v);
+    rec_floats (T_VEC, in, 3);
+    rec_floats (T_VEC, v, 3);
+  }
+}
+
 typedef struct Scenario {
   const char *name;
   void (*run) (void);
@@ -588,6 +849,13 @@ static const Scenario SCENARIOS[] = {
   /* the same inputs as joints and contacts */
   {"joints-nodaz", s_joints, 1, 5},
   {"contacts-nodaz", s_contacts, 1, 6},
+  /* the open questions of docs/behavior/physics-harness.md */
+  {"angular", s_angular, 0, 12},
+  {"rotation", s_rotation, 0, 13},
+  {"exact-step", s_exact_step, 0, 14},
+  {"normalise-ties", s_normalise_ties, 0, 15},
+  {"denormal", s_denormal, 0, 16},
+  {"denormal-nodaz", s_denormal, 1, 16},
 };
 
 int volya_ode_scenario_count (void)
