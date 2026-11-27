@@ -3,10 +3,10 @@
 
 """The Wine image's parts (docs/architecture/build.md, Game data): Wine and
 box64, each built on this machine by one action (`//tools/xtask:image-part`)
-with cross toolchains whose compilers run natively (llvm-mingw's LLVM, the
-Debian sysroots), into a tarball of what they install, keyed on their
-sources, the toolchains and the tool (which holds the build steps), so the
-disk cache keeps them across worktrees and restarts. The image
+with cross toolchains whose compilers run natively (llvm-mingw's LLVM,
+Chromium's Debian sysroots), into a tarball of what they install, keyed on
+their sources, the toolchains and the tool (which holds the build steps), so
+the disk cache keeps them across worktrees and restarts. The image
 (`tools/xtask/wine/Containerfile`) only adds them."""
 
 load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
@@ -25,20 +25,19 @@ def _resources(_os, _inputs):
 def _part(ctx, part, tools, env):
     out = ctx.actions.declare_file(ctx.label.name + ".tar.gz")
     llvm = ctx.file._llvm_clang
-    sysroot = ctx.file.sysroot
+    sysroot = _ends_with(ctx.files.sysroot, "/usr/include/stdio.h")
     env = dict(env)
     env.update({
         "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
         "VOLYA_CLANG": llvm.path,
         "VOLYA_MAKE": ctx.executable._make.path,
-        # The sysroot's root is the directory `unpacked/` beside this file.
-        "VOLYA_SYSROOT": sysroot.path,
+        "VOLYA_SYSROOT": sysroot.path[:-len("/usr/include/stdio.h")],
     })
     ctx.actions.run(
         executable = ctx.executable._tool,
         arguments = [part, out.path] + [f.path for f in ctx.files.srcs],
         inputs = depset(
-            ctx.files.srcs + ctx.files._llvm + ctx.files.sysroot_files + [sysroot],
+            ctx.files.srcs + ctx.files._llvm + ctx.files.sysroot,
             transitive = [depset(tools)],
         ),
         tools = [ctx.attr._make[DefaultInfo].files_to_run],
@@ -52,8 +51,7 @@ def _part(ctx, part, tools, env):
 
 _COMMON = {
     "srcs": attr.label_list(allow_files = True, mandatory = True),
-    "sysroot": attr.label(allow_single_file = True, mandatory = True, doc = "The sysroot's `sysroot` file."),
-    "sysroot_files": attr.label(mandatory = True, doc = "The sysroot's files."),
+    "sysroot": attr.label(mandatory = True, doc = "The sysroot's files (`@sysroot_<arch>//:files`)."),
     "_llvm": attr.label(default = "@llvm_mingw//:files"),
     "_llvm_clang": attr.label(default = "@llvm_mingw//:bin/clang", allow_single_file = True),
     "_make": attr.label(default = "@make//:make", executable = True, cfg = "exec"),

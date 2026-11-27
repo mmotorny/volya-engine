@@ -81,16 +81,14 @@ volya_binary(
 wine_part(
     name = "wine-part",
     srcs = ["@wine_src//file"],
-    sysroot = "@sysroot_amd64//:sysroot",
-    sysroot_files = "@sysroot_amd64//:files",
+    sysroot = "@sysroot_amd64//:files",
     tags = ["manual"],
 )
 
 box64_part(
     name = "box64-part",
     srcs = ["@box64_src//:files"],
-    sysroot = "@sysroot_arm64//:sysroot",
-    sysroot_files = "@sysroot_arm64//:files",
+    sysroot = "@sysroot_arm64//:files",
     tags = ["manual"],
 )
 

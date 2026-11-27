@@ -10,8 +10,8 @@
 //!
 //! The toolchains come from the action's environment, as paths into its
 //! inputs: `VOLYA_CLANG` (llvm-mingw's clang, beside lld and LLVM's tools),
-//! `VOLYA_SYSROOT` (a Debian sysroot's marker; the tree is `unpacked/`
-//! beside it), `VOLYA_MAKE`, and per part the rest.
+//! `VOLYA_SYSROOT` (the root of one of Chromium's Debian sysroots),
+//! `VOLYA_MAKE`, and per part the rest.
 //!
 //! - Wine (LGPL): the fork's archive, `wine.tar.gz`, cross-built as Wine's
 //!   own documentation says (`--host`, `--with-wine-tools`): first its
@@ -143,9 +143,7 @@ fn toolchain() -> Result<(PathBuf, PathBuf)> {
         .parent()
         .ok_or("clang has no directory")?
         .to_path_buf();
-    let marker = tool("VOLYA_SYSROOT")?;
-    let sysroot = marker.with_file_name("unpacked");
-    Ok((bin, sysroot))
+    Ok((bin, tool("VOLYA_SYSROOT")?))
 }
 
 /// A directory of links for `PATH`: `name` to `target`.
@@ -158,7 +156,8 @@ fn links(dir: &Path, links: &[(String, PathBuf)]) -> Result {
 }
 
 /// Configure's options shared by both of Wine's builds: what the image
-/// has no use for (sound, printing, scanners, networking services) is off.
+/// has no use for (sound, printing, scanners, networking services, TLS) is
+/// off.
 const WINE_WITHOUT: &[&str] = &[
     "--disable-tests",
     "--without-alsa",
@@ -166,6 +165,7 @@ const WINE_WITHOUT: &[&str] = &[
     "--without-cups",
     "--without-dbus",
     "--without-ffmpeg",
+    "--without-gnutls",
     "--without-gphoto",
     "--without-gssapi",
     "--without-gstreamer",
@@ -244,7 +244,6 @@ fn wine(build: &mut Build, inputs: &[&str], stage: &Path) -> Result {
                 "--with-mingw=llvm-mingw",
                 "--without-x",
                 "--without-fontconfig",
-                "--without-gnutls",
                 "--without-opencl",
                 "--without-vulkan",
                 "--without-opengl",
@@ -348,8 +347,11 @@ fn box64(build: &Build, inputs: &[&str], stage: &Path) -> Result {
             self::tool("VOLYA_PYTHON")?.display()
         ))
         // The tree's paths in its debug information, as the old builds'.
+        // GNU's extensions everywhere, as its sources define them (empty):
+        // `wrappeddbus.c` defines `_GNU_SOURCE` after `stdio.h`, which
+        // glibc 2.31 declares `vasprintf` in only with it.
         .arg(format!(
-            "-DCMAKE_C_FLAGS=-ffile-prefix-map={}=/src",
+            "-DCMAKE_C_FLAGS=-D_GNU_SOURCE= -ffile-prefix-map={}=/src",
             src.display()
         ));
     build.run(&build.dir, &mut cmake)?;

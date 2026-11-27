@@ -4,7 +4,6 @@
 //! Tasks of the Bazel build (docs/architecture/build.md): keeping it at head
 //! (`update`) and removing what deleted worktrees left (`gc`).
 
-use std::collections::HashMap;
 use std::fs;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
@@ -15,7 +14,7 @@ use super::{Result, cmd, locked_version, output, root, run, step};
 
 /// Moves everything to its latest release: Rust, the crates, Bazel, its
 /// modules, the wasm LLVM, the Wine image's toolchains (llvm-mingw, CMake,
-/// the Debian sysroots) and the wasm-bindgen CLI's pin; then the checks
+/// Chromium's Debian sysroots) and the wasm-bindgen CLI's pin; then the checks
 /// and the advisories.
 pub fn update() -> Result {
     let module_path = root().join("MODULE.bazel");
@@ -49,8 +48,8 @@ pub fn update() -> Result {
     module = update_llvm_mingw(&module)?;
     step("The Wine image's CMake");
     module = update_cmake(&module)?;
-    step("The Wine image's Debian sysroots");
-    update_sysroots()?;
+    step("The Wine image's Debian sysroots (Chromium's)");
+    module = update_sysroots(&module)?;
     fs::write(&module_path, &module).map_err(|e| format!("MODULE.bazel: {e}"))?;
 
     step("Bazel");
@@ -281,78 +280,46 @@ fn update_cmake(module: &str) -> Result<String> {
     Ok(format!("{head}{block}"))
 }
 
-/// A Debian suite's packages for an architecture: each one's file in the
-/// archive and SHA-256.
-type DebianIndex = HashMap<String, (String, String)>;
+/// Where Chromium lists its sysroots: each one's SHA-256 and the bucket
+/// that holds it under that name (Chromium's GitHub mirror, so the file
+/// comes as text).
+const CHROMIUM_SYSROOTS: &str = "https://raw.githubusercontent.com/chromium/chromium/main/build/linux/sysroot_scripts/sysroots.json";
 
-/// Moves `build/debian_sysroots.lock`'s packages (build/debian_sysroot.bzl)
-/// to their suite's current files and checksums, and its snapshot time to
-/// now.
-fn update_sysroots() -> Result {
-    let path = root().join("build/debian_sysroots.lock");
-    let lock = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let suite = lock
-        .lines()
-        .find_map(|l| l.strip_prefix("suite "))
-        .ok_or("debian_sysroots.lock: no suite")?
-        .trim()
-        .to_owned();
-    let now = output(&mut cmd("date", &["-u", "+%Y%m%dT%H%M%SZ"]))?;
-    let mut indexes: HashMap<String, DebianIndex> = HashMap::new();
-    let mut updated = String::new();
-    for line in lock.lines() {
-        let fields: Vec<&str> = line.split_whitespace().collect();
-        let line = match fields.as_slice() {
-            ["snapshot", _] => format!("snapshot {}", now.trim()),
-            [arch, package, _, _] if !arch.starts_with('#') => {
-                if !indexes.contains_key(*arch) {
-                    indexes.insert(arch.to_string(), debian_index(&suite, arch)?);
-                }
-                let (file, sha) = indexes[*arch]
-                    .get(*package)
-                    .ok_or(format!("{suite} {arch}: no package {package}"))?;
-                format!("{arch} {package} {file} {sha}")
-            }
-            _ => line.to_owned(),
-        };
-        updated.push_str(&line);
-        updated.push('\n');
+/// Points `@sysroot_amd64` and `@sysroot_arm64` at Chromium's current
+/// bullseye sysroots, as its `sysroots.json` names them.
+fn update_sysroots(module: &str) -> Result<String> {
+    let json = output(&mut cmd("curl", &["-sfL", CHROMIUM_SYSROOTS]))?;
+    let mut module = module.to_owned();
+    for arch in ["amd64", "arm64"] {
+        let (url, sha) = chromium_sysroot(&json, &format!("bullseye_{arch}"))
+            .ok_or(format!("sysroots.json: no bullseye_{arch}"))?;
+        let start = module
+            .find(&format!("name = \"sysroot_{arch}\""))
+            .ok_or(format!("MODULE.bazel: no sysroot_{arch}"))?;
+        let (head, block) = module.split_at(start);
+        let block = replace_quoted_after(block, "sha256 = ", &sha)?;
+        let block = replace_quoted_after(&block, "url = ", &url)?;
+        module = format!("{head}{block}");
+        println!("bullseye_{arch} {sha}");
     }
-    let count = updated.lines().filter(|l| l.contains(" pool/")).count();
-    fs::write(&path, updated).map_err(|e| format!("{}: {e}", path.display()))?;
-    println!("{suite}: {count} packages");
-    Ok(())
+    Ok(module)
 }
 
-/// `suite`'s main packages for `arch`, from the archive's index.
-fn debian_index(suite: &str, arch: &str) -> Result<DebianIndex> {
-    let file = std::env::temp_dir().join(format!("volya-debian-{suite}-{arch}.gz"));
-    let url = format!("https://deb.debian.org/debian/dists/{suite}/main/binary-{arch}/Packages.gz");
-    run(&mut cmd(
-        "curl",
-        &["-sfL", "-o", &file.to_string_lossy(), &url],
-    ))?;
-    let index = output(&mut cmd("gzip", &["-dc", &file.to_string_lossy()]));
-    let _ = fs::remove_file(&file);
-    Ok(parse_debian_index(&index?))
-}
-
-fn parse_debian_index(index: &str) -> DebianIndex {
-    index
-        .split("\n\n")
-        .filter_map(|stanza| {
-            let field = |name: &str| {
-                stanza
-                    .lines()
-                    .find_map(|l| l.strip_prefix(name))
-                    .map(|v| v.trim().to_owned())
-            };
-            Some((
-                field("Package: ")?,
-                (field("Filename: ")?, field("SHA256: ")?),
-            ))
-        })
-        .collect()
+/// A sysroot's URL (its bucket and SHA-256, as Chromium's
+/// `install-sysroot.py` forms it) and SHA-256, from `sysroots.json`.
+fn chromium_sysroot(json: &str, name: &str) -> Option<(String, String)> {
+    let entry = json.split(&format!("\"{name}\"")).nth(1)?;
+    let entry = &entry[..entry.find('}')?];
+    let field = |key: &str| {
+        let value = entry.split(&format!("\"{key}\"")).nth(1)?;
+        Some(value.split('"').nth(1)?.to_owned())
+    };
+    let sha = field("Sha256Sum")?;
+    let bucket = field("URL")?;
+    if sha.len() != 64 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some((format!("{}/{sha}", bucket.trim_end_matches('/')), sha))
 }
 
 fn sha256_file(path: &Path) -> Result<String> {
@@ -445,17 +412,29 @@ mod tests {
     }
 
     #[test]
-    fn reads_a_debian_index() {
-        let index = "Package: libc6\nVersion: 2.41-12\nFilename: pool/main/g/glibc/libc6_2.41-12_amd64.deb\nSHA256: ab12\n\nPackage: zlib1g\nFilename: pool/main/z/zlib/zlib1g_1.3_amd64.deb\nSHA256: cd34\n";
-        let packages = parse_debian_index(index);
-        assert_eq!(packages.len(), 2);
-        assert_eq!(
-            packages["libc6"],
-            (
-                "pool/main/g/glibc/libc6_2.41-12_amd64.deb".to_owned(),
-                "ab12".to_owned()
-            )
+    fn reads_chromium_sysroots() {
+        let sha = "278c36fe3a785d7f89fbe3f46956899a3bd49fe665f68dc667d6f626a951fcd6";
+        let json = format!(
+            r#"{{
+    "bullseye_amd64": {{
+        "Sha256Sum": "f851add76bdae472fb6c94b4f920bc4a132d85ac607951391297f636af7e934e",
+        "SysrootDir": "debian_bullseye_amd64-sysroot",
+        "URL": "https://commondatastorage.googleapis.com/chrome-linux-sysroot"
+    }},
+    "bullseye_arm64": {{
+        "Sha256Sum": "{sha}",
+        "URL": "https://commondatastorage.googleapis.com/chrome-linux-sysroot"
+    }}
+}}"#
         );
+        assert_eq!(
+            chromium_sysroot(&json, "bullseye_arm64"),
+            Some((
+                format!("https://commondatastorage.googleapis.com/chrome-linux-sysroot/{sha}"),
+                sha.to_owned()
+            ))
+        );
+        assert_eq!(chromium_sysroot(&json, "bullseye_i386"), None);
     }
 
     #[test]

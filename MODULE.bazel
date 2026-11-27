@@ -168,7 +168,7 @@ http_file(
 
 # What builds them on this machine, natively (build/wine_image.bzl): LLVM
 # with the MinGW targets (llvm-mingw: clang, lld and LLVM's tools, for
-# Wine's PE side, and with Debian's sysroots its Unix side and box64),
+# Wine's PE side, and with Chromium's Debian sysroots its Unix side and box64),
 # CMake for box64; bison, flex and make are modules above.
 http_archive(
     name = "llvm_mingw",
@@ -205,18 +205,36 @@ python = use_extension("@rules_python//python/extensions:python.bzl", "python")
 python.toolchain(python_version = "3.13")
 use_repo(python, python_3_13 = "python_3_13_aarch64-apple-darwin")
 
-# The Debian sysroots the cross clang links against (build/debian_sysroot.bzl,
-# build/debian_sysroots.lock): x86_64 for Wine, arm64 for box64.
-debian_sysroot = use_repo_rule("//build:debian_sysroot.bzl", "debian_sysroot")
+# The Debian sysroots the cross clang links against: Chromium's (Debian 11,
+# bullseye), x86_64 for Wine, arm64 for box64. Each is named by its SHA-256,
+# as Chromium's build/linux/sysroot_scripts/sysroots.json gives it; `xtask
+# update` moves both to that file's.
+SYSROOT_BUILD = """filegroup(
+    name = "files",
+    # Headers, libraries, the dynamic loader and the compiler runtime; the
+    # loader is in lib/ for arm64, lib64/ for amd64.
+    srcs = glob(
+        ["lib/*-linux-gnu/**", "lib/ld-*", "lib64/**", "usr/include/**", "usr/lib/*-linux-gnu/**", "usr/lib/gcc/**"],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+"""
 
-debian_sysroot(
+http_archive(
     name = "sysroot_amd64",
-    arch = "amd64",
+    build_file_content = SYSROOT_BUILD,
+    sha256 = "f851add76bdae472fb6c94b4f920bc4a132d85ac607951391297f636af7e934e",
+    type = "tar.xz",
+    url = "https://commondatastorage.googleapis.com/chrome-linux-sysroot/f851add76bdae472fb6c94b4f920bc4a132d85ac607951391297f636af7e934e",
 )
 
-debian_sysroot(
+http_archive(
     name = "sysroot_arm64",
-    arch = "arm64",
+    build_file_content = SYSROOT_BUILD,
+    sha256 = "278c36fe3a785d7f89fbe3f46956899a3bd49fe665f68dc667d6f626a951fcd6",
+    type = "tar.xz",
+    url = "https://commondatastorage.googleapis.com/chrome-linux-sysroot/278c36fe3a785d7f89fbe3f46956899a3bd49fe665f68dc667d6f626a951fcd6",
 )
 
 # Tools installed on the machine, with their versions (build/local_tools.bzl).
