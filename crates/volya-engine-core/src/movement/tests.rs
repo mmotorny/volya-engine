@@ -109,6 +109,7 @@ const FORWARD: Request = Request {
     fire: false,
     mouse: [0.0; 2],
     turn: [0.0; 2],
+    look: [0.0; 2],
 };
 
 #[test]

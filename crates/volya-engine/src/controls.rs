@@ -17,7 +17,7 @@
 //! |---|---|---|
 //! | move | left stick | the move stick (left half) |
 //! | walk instead of run | the stick pushed less than [`RUN_DEFLECTION`], kept after it is released | the same |
-//! | look | right stick, at `rot_speed` at full deflection (8.2) | a drag on the right half, or one begun on Jump or Crouch, as mouse counts (8.1) through [`look_gain`] |
+//! | look | right stick, at `rot_speed` at full deflection (8.2) | a drag on the right half, or one begun on Jump or Crouch, as direct manipulation with momentum ([`TouchLookDrag`]) |
 //! | jump | south (A / cross) | Jump |
 //! | crouch | west (X / square), as `crouch_toggle` | Crouch, as `crouch_toggle` |
 //! | sprint | left stick pressed, as `sprint_toggle` | the stick pushed forward past its rim, kept by the sprint lock ([`SprintLock`]) |
@@ -62,7 +62,8 @@
 use std::collections::HashMap;
 
 use crate::core::input::{
-    Action, Control, GamepadAxis, GamepadButton, Input, Key, MouseButton, TouchButton,
+    Action, Control, GamepadAxis, GamepadButton, Input, Key, LookPhase, MouseButton, TouchButton,
+    TouchLook,
 };
 use crate::core::movement::{PlayerState, Request, Settings};
 use volya_engine_formats::cp1251;
@@ -400,35 +401,230 @@ impl SprintLock {
     }
 }
 
-/// The mouse counts a touch look drag turns per CSS pixel up to
-/// [`LOOK_PRECISE_SPEED`] (the user's choice, #747: a slow drag across the
-/// look half, about 400 px, turns about 180° at the default `mouse_sens`).
-pub const LOOK_BASE_GAIN: f32 = 3.25;
-/// Up to this speed of a touch look drag (CSS pixels per second) it turns
-/// [`LOOK_BASE_GAIN`] counts a pixel (our choice: slow aiming).
-pub const LOOK_PRECISE_SPEED: f32 = 300.0;
-/// From this speed on a drag turns [`LOOK_MAX_GAIN`] counts a pixel (our
-/// choice: a quick flick across the look half, about 2,500 px/s, passes it).
-pub const LOOK_FAST_SPEED: f32 = 2000.0;
-/// The counts a fast drag turns per CSS pixel (the user's choice, #747:
-/// the original's 1,000-DPI mouse at the default `mouse_sens`, about
-/// 137.5° per inch of thumb travel at about 153 CSS px an inch).
-pub const LOOK_MAX_GAIN: f32 = 6.5;
+/// The touch look's momentum keeps this much of its speed every
+/// millisecond: UIScrollView's normal deceleration rate (believed: 0.998
+/// is read from UIKit at run time; Apple documents no value).
+pub const LOOK_DECELERATION: f64 = 0.998;
+/// A lift's velocity is fitted to the finger's moves of its last this
+/// many milliseconds (Chromium's and Android's velocity trackers' horizon).
+pub const LOOK_VELOCITY_WINDOW_MS: f64 = 100.0;
+/// A pause this long between moves starts the fit afresh (Chromium's and
+/// Android's trackers: the pointer is taken to have stopped).
+pub const LOOK_STOPPED_MOVE_MS: f64 = 40.0;
+/// A lift this long after the last move flings nothing (Chromium's
+/// tracker: the pointer stopped before it lifted).
+pub const LOOK_STOPPED_UP_MS: f64 = 80.0;
+/// The fastest a flick turns as it is let go, radians per millisecond
+/// (our choice, as Android caps a fling: 720° a second, which then turns
+/// about 360° more).
+pub const LOOK_MAX_SPEED: f32 = 4.0 * std::f32::consts::PI / 1000.0;
+/// Momentum ends once all it would still turn is below this, radians
+/// (our choice: 0.05°).
+pub const LOOK_REST: f32 = 0.000_872_664_6;
+/// A frame further than this (milliseconds) from the previous one the
+/// controls saw ends the momentum: the level's controls weren't running
+/// (our choice).
+pub const LOOK_GAP_MS: u64 = 250;
 
-/// The touch look's acceleration (our design, as mobile shooters do): a
-/// drag at `speed` CSS pixels per second gives this many mouse counts per
-/// pixel: [`LOOK_BASE_GAIN`] up to [`LOOK_PRECISE_SPEED`], rising linearly to
-/// [`LOOK_MAX_GAIN`] at [`LOOK_FAST_SPEED`], level beyond. The counts then
-/// turn by `mouse_sens` and `mouse_invert` as any mouse's do (8.1). The
-/// speed is the page's, smoothed over its drag's own event times
-/// ([`Input::touch_look_moves`]), so how the events fall into frames
-/// doesn't change the gain.
-pub fn look_gain(speed: f32) -> f32 {
-    let t = (speed - LOOK_PRECISE_SPEED) / (LOOK_FAST_SPEED - LOOK_PRECISE_SPEED);
-    if t.is_nan() {
-        return LOOK_BASE_GAIN;
+/// The turn `[yaw, pitch]` (radians, right and down) that keeps the
+/// scene's direction under a finger at `from` under it at `to`, at pitch
+/// `pitch` limited to `limits`, for a view whose half vertical field of
+/// view has the tangent `tan_half` (positions as [`TouchLook::at`]). Pitch
+/// is solved first, from the direction's elevation, then yaw from its
+/// azimuth; where the limits stop the pitch, the yaw still follows.
+pub fn grab_turn(
+    from: [f32; 2],
+    to: [f32; 2],
+    pitch: f32,
+    limits: [f32; 2],
+    tan_half: f32,
+) -> [f32; 2] {
+    let camera = |a: [f32; 2]| {
+        let v = [a[0] * tan_half, -a[1] * tan_half, 1.0];
+        let l = (v[0] * v[0] + v[1] * v[1] + 1.0).sqrt();
+        v.map(|c| c / l)
+    };
+    // From the camera at `p` (positive looks down) to a yaw-0 world.
+    let world = |c: [f32; 3], p: f32| {
+        let (s, k) = p.sin_cos();
+        [c[0], c[1] * k - c[2] * s, c[1] * s + c[2] * k]
+    };
+    let d = world(camera(from), pitch);
+    let c = camera(to);
+    let rho = c[1].hypot(c[2]);
+    let alpha = c[1].atan2(c[2]);
+    let p = (alpha - (d[1] / rho).clamp(-1.0, 1.0).asin()).clamp(limits[0], limits[1]);
+    let w = world(c, p);
+    let mut yaw = d[0].atan2(d[2]) - w[0].atan2(w[2]);
+    if yaw > std::f32::consts::PI {
+        yaw -= std::f32::consts::TAU;
+    } else if yaw < -std::f32::consts::PI {
+        yaw += std::f32::consts::TAU;
     }
-    LOOK_BASE_GAIN + t.clamp(0.0, 1.0) * (LOOK_MAX_GAIN - LOOK_BASE_GAIN)
+    [yaw, p - pitch]
+}
+
+/// One look finger: where it is, the turn it made, and its recent moves'
+/// times and turns for its velocity.
+#[derive(Clone, Debug)]
+struct LookFinger {
+    id: u32,
+    at: [f32; 2],
+    turned: [f32; 2],
+    samples: Vec<(f64, [f32; 2])>,
+}
+
+impl LookFinger {
+    /// Its velocity at a lift at `time` (radians a millisecond): the
+    /// least-squares slope of its turn over the window, none if it had
+    /// stopped.
+    fn velocity(&self, time: f64) -> [f32; 2] {
+        let Some(&(last, _)) = self.samples.last() else {
+            return [0.0; 2];
+        };
+        if time - last > LOOK_STOPPED_UP_MS {
+            return [0.0; 2];
+        }
+        let recent: Vec<_> = self
+            .samples
+            .iter()
+            .filter(|(t, _)| last - t <= LOOK_VELOCITY_WINDOW_MS)
+            .collect();
+        let n = recent.len() as f64;
+        let mean_t = recent.iter().map(|(t, _)| t).sum::<f64>() / n;
+        let var: f64 = recent.iter().map(|(t, _)| (t - mean_t).powi(2)).sum();
+        if recent.len() < 2 || var <= 0.0 {
+            return [0.0; 2];
+        }
+        let v = [0, 1].map(|i| {
+            let mean = recent.iter().map(|(_, a)| f64::from(a[i])).sum::<f64>() / n;
+            let cov: f64 = recent
+                .iter()
+                .map(|(t, a)| (t - mean_t) * (f64::from(a[i]) - mean))
+                .sum();
+            (cov / var) as f32
+        });
+        let speed = v[0].hypot(v[1]);
+        if speed > LOOK_MAX_SPEED {
+            v.map(|c| c * LOOK_MAX_SPEED / speed)
+        } else {
+            v
+        }
+    }
+}
+
+/// Touch look as direct manipulation (our design, after iOS's scroll
+/// views and Maps): while a finger is down the scene's direction under it
+/// stays under it ([`grab_turn`]); let go moving, the view keeps turning
+/// at the finger's velocity, slowing by [`LOOK_DECELERATION`] a
+/// millisecond over the frames' real time, until a finger looks again.
+#[derive(Clone, Debug, Default)]
+pub struct TouchLookDrag {
+    fingers: Vec<LookFinger>,
+    /// The momentum's turn, radians a millisecond.
+    momentum: [f32; 2],
+    last: Option<u64>,
+}
+
+impl TouchLookDrag {
+    /// The momentum's turn now, radians a millisecond.
+    pub fn momentum(&self) -> [f32; 2] {
+        self.momentum
+    }
+
+    /// One frame at `now` (milliseconds) with this frame's look events at
+    /// the camera's `pitch` within `limits`: the turn `[yaw, pitch]` to
+    /// make. `released` ends every finger and the momentum.
+    pub fn frame(
+        &mut self,
+        looks: &[TouchLook],
+        released: bool,
+        mut pitch: f32,
+        limits: [f32; 2],
+        now: u64,
+    ) -> [f32; 2] {
+        let dt = self.last.map_or(0, |l| now.saturating_sub(l));
+        self.last = Some(now);
+        if dt > LOOK_GAP_MS || released {
+            self.momentum = [0.0; 2];
+        }
+        let tan_half = (crate::core::camera::FOV_Y_DEGREES.to_radians() / 2.0).tan();
+        let mut turn = [0.0f32; 2];
+        if self.fingers.is_empty() && self.momentum != [0.0; 2] {
+            // The frame's share of v·r^t: v (1 − r^dt) / −ln r.
+            let r = LOOK_DECELERATION;
+            let keep = r.powf(dt as f64);
+            let travel = ((1.0 - keep) / -r.ln()) as f32;
+            let mut d = self.momentum.map(|v| v * travel);
+            self.momentum = self.momentum.map(|v| v * keep as f32);
+            let to = (pitch + d[1]).clamp(limits[0], limits[1]);
+            if to != pitch + d[1] {
+                d[1] = to - pitch;
+                self.momentum[1] = 0.0;
+            }
+            turn = d;
+            pitch = to;
+            let rest = self.momentum[0].hypot(self.momentum[1]) / -(r.ln() as f32);
+            if rest < LOOK_REST {
+                self.momentum = [0.0; 2];
+            }
+        }
+        for look in looks {
+            let found = self.fingers.iter().position(|f| f.id == look.finger);
+            match look.phase {
+                LookPhase::Down => {
+                    self.momentum = [0.0; 2];
+                    if let Some(i) = found {
+                        self.fingers.remove(i);
+                    }
+                    self.fingers.push(LookFinger {
+                        id: look.finger,
+                        at: look.at,
+                        turned: [0.0; 2],
+                        samples: vec![(look.time, [0.0; 2])],
+                    });
+                }
+                LookPhase::Move | LookPhase::Up => {
+                    let Some(i) = found else { continue };
+                    let f = &mut self.fingers[i];
+                    if look.at != f.at {
+                        let d = grab_turn(f.at, look.at, pitch, limits, tan_half);
+                        f.at = look.at;
+                        pitch += d[1];
+                        for k in 0..2 {
+                            turn[k] += d[k];
+                            f.turned[k] += d[k];
+                        }
+                        if f.samples
+                            .last()
+                            .is_some_and(|&(t, _)| look.time - t > LOOK_STOPPED_MOVE_MS)
+                        {
+                            f.samples.clear();
+                        }
+                        f.samples.push((look.time, f.turned));
+                        let window = look.time - LOOK_VELOCITY_WINDOW_MS;
+                        f.samples.retain(|&(t, _)| t >= window);
+                    }
+                    if look.phase == LookPhase::Up {
+                        let v = f.velocity(look.time);
+                        self.fingers.remove(i);
+                        self.momentum = if self.fingers.is_empty() { v } else { [0.0; 2] };
+                    }
+                }
+                LookPhase::Cancel => {
+                    if let Some(i) = found {
+                        self.fingers.remove(i);
+                    }
+                    self.momentum = [0.0; 2];
+                }
+            }
+        }
+        if released {
+            self.fingers.clear();
+            self.momentum = [0.0; 2];
+        }
+        turn
+    }
 }
 
 /// The player's controls.
@@ -442,6 +638,7 @@ pub struct Controls {
     /// Each stick's peak deflection in the current push, 0 when released.
     peak: [f32; 2],
     pub sprint_lock: SprintLock,
+    pub look: TouchLookDrag,
     /// While a screen over the level takes the mouse (the inventory
     /// screen): only keyboard keys reach the character, not these (the keys
     /// the screen uses); mouse, wheel, gamepad and touch do not
@@ -458,6 +655,7 @@ impl Controls {
             walk: [None; 2],
             peak: [0.0; 2],
             sprint_lock: SprintLock::default(),
+            look: TouchLookDrag::default(),
             keys_only: None,
         }
     }
@@ -589,7 +787,7 @@ impl Controls {
     /// whatever has the keyboard, save-load-screens.md section 2). `player`
     /// is the player after the previous frame (its sprint request for the
     /// sprint lock, its crouch toggle for the touch low crouch).
-    pub fn request(&mut self, input: &Input, player: &PlayerState) -> (Request, bool) {
+    pub fn request(&mut self, input: &Input, player: &PlayerState, now: u64) -> (Request, bool) {
         let only = self.keys_only.clone();
         let keys_only = only.is_some();
         let reaches = |c: Control| match &only {
@@ -648,6 +846,7 @@ impl Controls {
                 f32::from(u8::from(held(MoveAction::Down)))
                     - f32::from(u8::from(held(MoveAction::Up))),
             ],
+            look: [0.0; 2],
         };
         // The touch stick: its reach within the rim, or full forward while
         // the sprint lock holds it.
@@ -726,16 +925,19 @@ impl Controls {
         let dead = |v: f32| if v.abs() < DEAD_ZONE { 0.0 } else { v };
         r.turn[0] = (r.turn[0] + dead(axis(GamepadAxis::RightX))).clamp(-1.0, 1.0);
         r.turn[1] = (r.turn[1] + dead(axis(GamepadAxis::RightY))).clamp(-1.0, 1.0);
-        let looks: &[([f32; 2], f32)] = if keys_only {
-            &[]
+        // Touch look: under a screen nothing looks and the momentum ends.
+        r.look = if keys_only {
+            self.look
+                .frame(&[], true, player.pitch, player.pitch_limits, now)
         } else {
-            input.touch_look_moves()
+            self.look.frame(
+                input.touch_looks(),
+                input.looks_released(),
+                player.pitch,
+                player.pitch_limits,
+                now,
+            )
         };
-        for &(delta, speed) in looks {
-            let gain = look_gain(speed);
-            r.mouse[0] += delta[0] * gain;
-            r.mouse[1] += delta[1] * gain;
-        }
         let back = pad(GamepadButton::East, true) || touch(TouchButton::Menu, true);
         (r, back)
     }
@@ -767,12 +969,14 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
             posture: 0,
             sprint_requested: false,
             crouch_toggled: false,
+            pitch: 0.0,
+            pitch_limits: [-1.5, 1.5],
         }
     }
 
     /// One frame's request for a standing player.
     fn req(c: &mut Controls, i: &Input) -> (Request, bool) {
-        c.request(i, &standing())
+        c.request(i, &standing(), 0)
     }
 
     fn key(input: &mut Input, key: Key, pressed: bool) {
@@ -979,11 +1183,6 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
         let mut c = controls();
         let mut i = Input::new();
         i.handle(Event::TouchStick { value: [0.0, -0.9] });
-        // A slow drag (190 px/s): the base gain, 3.25 counts per pixel.
-        i.handle(Event::TouchLook {
-            delta: [3.0, 1.0],
-            speed: 190.0,
-        });
         for button in [TouchButton::Jump, TouchButton::Crouch] {
             i.handle(Event::TouchButton {
                 button,
@@ -994,7 +1193,6 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
         assert!(r.forward && !r.accel && r.jump_pressed && r.crouch_toggle);
         assert!(!r.sprint_toggle, "a full push within the rim runs");
         assert!(!r.crouch, "the touch crouch is the toggle");
-        assert_eq!(r.mouse, [9.75, 3.25]);
         assert!(!back);
         i.end_frame();
         i.handle(Event::TouchButton {
@@ -1018,61 +1216,261 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
         assert!(r.accel && !r.forward);
     }
 
-    #[test]
-    fn the_look_curve_is_the_base_gain_when_slow_and_twice_it_when_fast() {
-        assert_eq!(look_gain(0.0), LOOK_BASE_GAIN);
-        assert_eq!(look_gain(LOOK_PRECISE_SPEED), LOOK_BASE_GAIN);
-        assert!((look_gain(1150.0) - 4.875).abs() < 1e-6);
-        assert_eq!(look_gain(LOOK_FAST_SPEED), LOOK_MAX_GAIN);
-        assert_eq!(look_gain(10_000.0), LOOK_MAX_GAIN);
-        assert_eq!(look_gain(f32::NAN), LOOK_BASE_GAIN);
-        let mut last = 0.0;
-        for speed in (0..3000).step_by(50) {
-            let g = look_gain(speed as f32);
-            assert!(
-                g >= last && (LOOK_BASE_GAIN..=LOOK_MAX_GAIN).contains(&g),
-                "{speed}: {g}"
-            );
-            last = g;
+    fn look(finger: u32, phase: LookPhase, at: [f32; 2], time: f64) -> TouchLook {
+        TouchLook {
+            finger,
+            phase,
+            at,
+            time,
         }
-        // Through the controls: a 40-pixel flick at 3600 px/s turns 6.5
-        // counts a pixel, the same pixels slowly 3.25 each. The counts
-        // are mouse counts: the movement layer scales them by `mouse_sens`
-        // and `mouse_invert` (8.1).
-        let mut c = controls();
-        let mut i = Input::new();
-        i.handle(Event::TouchLook {
-            delta: [0.0, 40.0],
-            speed: 3600.0,
-        });
-        assert_eq!(req(&mut c, &i).0.mouse, [0.0, 260.0]);
-        i.end_frame();
-        i.handle(Event::TouchLook {
-            delta: [0.0, 40.0],
-            speed: 40.0,
-        });
-        assert_eq!(req(&mut c, &i).0.mouse, [0.0, 130.0]);
+    }
+
+    const LIMITS: [f32; 2] = [-1.5, 1.5];
+
+    fn tan_half() -> f32 {
+        (crate::core::camera::FOV_Y_DEGREES.to_radians() / 2.0).tan()
+    }
+
+    /// The world direction (yaw-0 frame turned by `yaw`) under a finger at
+    /// `at` with the camera at `yaw`, `pitch`.
+    fn under(at: [f32; 2], yaw: f32, pitch: f32) -> [f32; 3] {
+        let t = tan_half();
+        let c = [at[0] * t, -at[1] * t, 1.0f32];
+        let l = (c[0] * c[0] + c[1] * c[1] + 1.0).sqrt();
+        let c = c.map(|v| v / l);
+        let (s, k) = pitch.sin_cos();
+        let w = [c[0], c[1] * k - c[2] * s, c[1] * s + c[2] * k];
+        let (s, k) = yaw.sin_cos();
+        [w[0] * k + w[2] * s, w[1], -w[0] * s + w[2] * k]
     }
 
     #[test]
-    fn uneven_event_batching_at_a_steady_drag_gives_a_steady_gain() {
-        // A drag at a steady 1150 px/s, its events (10 px each) falling
-        // into frames unevenly, as 120 Hz events into 60 Hz frames with
-        // jitter do: every frame turns 4.875 counts per pixel.
+    fn the_scene_under_the_finger_stays_under_it() {
+        // A finger wandering over the picture, in uneven steps and frames:
+        // the direction first under it is under it at every step.
+        let mut d = TouchLookDrag::default();
+        let (mut yaw, mut pitch) = (0.3f32, 0.2f32);
+        let start = [0.4, 0.3];
+        let grabbed = under(start, yaw, pitch);
+        let mut events = vec![look(1, LookPhase::Down, start, 0.0)];
+        let path = [
+            [0.1, 0.2],
+            [-0.5, -0.1],
+            [-0.9, 0.6],
+            [0.7, -0.7],
+            [0.0, 0.0],
+        ];
+        for (i, at) in path.into_iter().enumerate() {
+            events.push(look(1, LookPhase::Move, at, 10.0 * (i + 1) as f64));
+            let t = d.frame(&events, false, pitch, LIMITS, 16 * i as u64);
+            events.clear();
+            yaw += t[0];
+            pitch += t[1];
+            let now = under(at, yaw, pitch);
+            for k in 0..3 {
+                assert!(
+                    (now[k] - grabbed[k]).abs() < 1e-4,
+                    "{at:?}: {now:?} {grabbed:?}"
+                );
+            }
+        }
+        // Dragged right the scene goes right: the view turns left; dragged
+        // down it looks up.
+        let right = grab_turn([0.0, 0.0], [0.2, 0.0], 0.0, LIMITS, tan_half());
+        assert!(right[0] < 0.0 && right[1].abs() < 1e-6);
+        let down = grab_turn([0.0, 0.0], [0.0, 0.2], 0.0, LIMITS, tan_half());
+        assert!(down[1] < 0.0 && down[0].abs() < 1e-6);
+        // Near the middle a pixel turns tan_half / half a picture's height.
+        let tiny = grab_turn([0.0, 0.0], [0.001, 0.0], 0.0, LIMITS, tan_half());
+        assert!((tiny[0] + 0.001 * tan_half()).abs() < 1e-6);
+        // At the pitch limit the pitch stops, the yaw still follows.
+        let held = grab_turn([0.0, 0.0], [0.3, 0.9], -1.4, LIMITS, tan_half());
+        assert!((held[1] - (-0.1)).abs() < 1e-6 && held[0] < 0.0, "{held:?}");
+    }
+
+    /// A flick: a finger at `speed` (half-heights a millisecond) across
+    /// the middle, moving every 8 ms for 80 ms then lifted; the drag's turn.
+    fn flick(d: &mut TouchLookDrag, speed: f32, now: &mut u64, frame: u64) -> f32 {
+        let mut turned = 0.0;
+        let mut events = vec![look(1, LookPhase::Down, [-0.32 * speed * 10.0, 0.0], 0.0)];
+        for i in 1..=10 {
+            let x = -0.32 * speed * 10.0 + speed * 8.0 * i as f32;
+            events.push(look(1, LookPhase::Move, [x, 0.0], 8.0 * f64::from(i)));
+            if i % 2 == 0 {
+                *now += 16;
+                turned += d.frame(&events, false, 0.0, LIMITS, *now)[0];
+                events.clear();
+            }
+        }
+        events.push(look(
+            1,
+            LookPhase::Up,
+            [-0.32 * speed * 10.0 + speed * 80.0, 0.0],
+            81.0,
+        ));
+        *now += frame;
+        turned + d.frame(&events, false, 0.0, LIMITS, *now)[0]
+    }
+
+    /// Frames of `frame` ms (uneven when 0) for `ms` ms; the yaw turned.
+    fn coast(d: &mut TouchLookDrag, now: &mut u64, frame: u64, ms: u64) -> f32 {
+        let mut turned = 0.0;
+        let end = *now + ms;
+        let mut i = 0;
+        while *now < end {
+            let step = if frame == 0 {
+                [5, 17, 33, 8, 41][i % 5]
+            } else {
+                frame
+            };
+            *now = (*now + step).min(end);
+            turned += d.frame(&[], false, 0.0, LIMITS, *now)[0];
+            i += 1;
+        }
+        turned
+    }
+
+    #[test]
+    fn a_flick_coasts_slowing_as_a_scroll_view_does_at_any_frame_rate() {
+        let speed = 0.004; // half-heights a millisecond, across the middle
+        let mut results = Vec::new();
+        for frame in [8, 16, 33, 0] {
+            let mut d = TouchLookDrag::default();
+            let mut now = 0;
+            flick(&mut d, speed, &mut now, 16);
+            let v = d.momentum()[0];
+            // The release velocity: the finger's angular speed where it
+            // was let go (moving right, so turning left).
+            let x = 0.0;
+            let expected = -speed * tan_half() / (1.0 + x * x * tan_half() * tan_half());
+            assert!(
+                (v - expected).abs() < 0.03 * expected.abs(),
+                "{v} {expected}"
+            );
+            // After 500 ms: r^500 of it left, and v (1 − r^500) / −ln r
+            // turned; in all, v / −ln r (the projection, v r / (1 − r) in
+            // the WWDC 2018 form, within 0.1%).
+            let half = coast(&mut d, &mut now, frame, 500);
+            let ln = -(LOOK_DECELERATION.ln() as f32);
+            let keep = LOOK_DECELERATION.powi(500) as f32;
+            assert!((d.momentum()[0] - v * keep).abs() < 1e-6, "{frame}");
+            assert!(
+                (half - v * (1.0 - keep) / ln).abs() < 1e-4,
+                "{frame}: {half}"
+            );
+            let total = half + coast(&mut d, &mut now, frame, 10_000);
+            assert!((total - v / ln).abs() < LOOK_REST * 2.0, "{frame}: {total}");
+            assert_eq!(d.momentum(), [0.0; 2], "it comes to rest");
+            results.push(total);
+        }
+        for t in &results {
+            assert!((t - results[0]).abs() < 1e-4, "{results:?}");
+        }
+    }
+
+    #[test]
+    fn a_touch_stops_the_momentum_and_a_stopped_finger_flings_nothing() {
+        let mut d = TouchLookDrag::default();
+        let mut now = 0;
+        flick(&mut d, 0.004, &mut now, 16);
+        coast(&mut d, &mut now, 16, 100);
+        assert!(d.momentum()[0] != 0.0);
+        now += 16;
+        let t = d.frame(
+            &[look(2, LookPhase::Down, [0.5, 0.0], 900.0)],
+            false,
+            0.0,
+            LIMITS,
+            now,
+        );
+        assert!(t[0] != 0.0, "this frame's share still turns");
+        assert_eq!(d.momentum(), [0.0; 2]);
+        assert_eq!(coast(&mut d, &mut now, 16, 200), 0.0, "held still: no turn");
+        // Lifted after a pause: no fling.
+        let hold = [
+            look(2, LookPhase::Move, [0.6, 0.0], 910.0),
+            look(2, LookPhase::Move, [0.7, 0.0], 920.0),
+            look(2, LookPhase::Up, [0.7, 0.0], 1010.0),
+        ];
+        now += 16;
+        d.frame(&hold, false, 0.0, LIMITS, now);
+        assert_eq!(d.momentum(), [0.0; 2]);
+        // Cancelled, released, or after a long gap: none either.
+        for end in 0..3 {
+            let mut d = TouchLookDrag::default();
+            let mut now = 0;
+            flick(&mut d, 0.004, &mut now, 16);
+            let v = d.momentum();
+            if end == 0 {
+                let mut d2 = TouchLookDrag::default();
+                let mut events = vec![look(1, LookPhase::Down, [0.0, 0.0], 0.0)];
+                events.push(look(1, LookPhase::Move, [0.1, 0.0], 8.0));
+                events.push(look(1, LookPhase::Cancel, [0.1, 0.0], 9.0));
+                d2.frame(&events, false, 0.0, LIMITS, 16);
+                assert_eq!(d2.momentum(), [0.0; 2]);
+            } else if end == 1 {
+                d.frame(&[], true, 0.0, LIMITS, now + 16);
+                assert_eq!(d.momentum(), [0.0; 2]);
+            } else {
+                assert_eq!(
+                    d.frame(&[], false, 0.0, LIMITS, now + LOOK_GAP_MS + 1),
+                    [0.0; 2]
+                );
+                assert_eq!(d.momentum(), [0.0; 2], "{v:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_momentum_pitch_stops_at_the_limit() {
+        let mut d = TouchLookDrag::default();
+        // Flicked up from just below the lower limit's reach: the view
+        // looks down, stops at the limit, keeps its yaw.
+        let mut events = vec![look(1, LookPhase::Down, [0.0, 0.0], 0.0)];
+        for i in 1..=10 {
+            events.push(look(
+                1,
+                LookPhase::Move,
+                [0.03 * i as f32, -0.03 * i as f32],
+                8.0 * f64::from(i),
+            ));
+        }
+        events.push(look(1, LookPhase::Up, [0.3, -0.3], 81.0));
+        let mut pitch = 1.3;
+        let t = d.frame(&events, false, pitch, LIMITS, 16);
+        pitch += t[1];
+        assert!(d.momentum()[1] > 0.0 && d.momentum()[0] < 0.0);
+        let mut now = 16;
+        for _ in 0..200 {
+            now += 16;
+            pitch += d.frame(&[], false, pitch, LIMITS, now)[1];
+            assert!(pitch <= LIMITS[1] + 1e-6);
+        }
+        assert_eq!(pitch, LIMITS[1]);
+        assert_eq!(d.momentum()[1], 0.0);
+    }
+
+    #[test]
+    fn touch_look_through_the_controls_is_turned_as_it_is() {
+        // Through the controls the turn is radians for the movement layer
+        // as they are: no `mouse_sens`, no mouse counts.
         let mut c = controls();
         let mut i = Input::new();
-        for batch in [1, 3, 0, 2, 1, 4, 2, 0, 1] {
-            for _ in 0..batch {
-                i.handle(Event::TouchLook {
-                    delta: [10.0, 0.0],
-                    speed: 1150.0,
-                });
-            }
-            let turned = req(&mut c, &i).0.mouse[0];
-            let pixels = 10.0 * batch as f32;
-            assert!((turned - 4.875 * pixels).abs() < 1e-3, "{batch}: {turned}");
-            i.end_frame();
-        }
+        i.handle(Event::TouchLook(look(4, LookPhase::Down, [0.0, 0.0], 0.0)));
+        i.handle(Event::TouchLook(look(4, LookPhase::Move, [0.0, 0.1], 10.0)));
+        let (r, _) = req(&mut c, &i);
+        assert_eq!(r.mouse, [0.0; 2]);
+        assert!(
+            (r.look[1] + (0.1 * tan_half()).atan()).abs() < 1e-6,
+            "{:?}",
+            r.look
+        );
+        // Under a screen: nothing, and the momentum ends.
+        i.end_frame();
+        i.handle(Event::TouchLook(look(4, LookPhase::Move, [0.0, 0.2], 20.0)));
+        c.keys_only = Some(Vec::new());
+        assert_eq!(req(&mut c, &i).0.look, [0.0; 2]);
+        assert_eq!(c.look.momentum(), [0.0; 2]);
     }
 
     /// The default lock target.
@@ -1214,7 +1612,7 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
             crouch_toggled: true,
             ..standing()
         };
-        let (r, _) = c.request(&i, &toggled);
+        let (r, _) = c.request(&i, &toggled, 0);
         assert!(!r.crouch_toggle && r.accel);
     }
 
@@ -1355,8 +1753,7 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
         fn frames(&mut self, n: usize) -> PlayerState {
             for _ in 0..n {
                 self.now += 16;
-                let (r, _) = self.c.request(&self.i, &self.p.state());
-
+                let (r, _) = self.c.request(&self.i, &self.p.state(), self.now);
                 self.p.frame(&self.world, self.now, &r);
                 self.i.end_frame();
             }
@@ -1405,10 +1802,18 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
                     value: 0.0,
                 });
             } else {
-                w.event(Event::TouchLook {
-                    delta: [0.0, 300.0],
-                    speed: 100.0,
-                });
+                // A finger dragged up: the scene with it, so the view
+                // looks down.
+                for (phase, y, time) in
+                    [(LookPhase::Down, 0.5, 0.0), (LookPhase::Move, -0.5, 500.0)]
+                {
+                    w.event(Event::TouchLook(TouchLook {
+                        finger: 1,
+                        phase,
+                        at: [0.0, y],
+                        time,
+                    }));
+                }
             }
             let high = w.frames(1).position[1];
             let s = w.frames(20);

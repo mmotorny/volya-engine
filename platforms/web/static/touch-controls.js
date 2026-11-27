@@ -13,7 +13,8 @@
 //   shows above it (closer, or turned aside, where a thumb lands too high
 //   for it): let go there, the sprint locks hands-free until the stick is
 //   touched again (the engine decides, SprintLock);
-// - the right half looks: drags send their motion;
+// - the right half looks: a drag sends where the finger is, and the engine
+//   keeps the scene under it and lets a flick coast on (TouchLookDrag);
 // - Jump and Crouch (a toggle, shown on, with its own icon in the low
 //   crouch) at the bottom right act on their press; a drag begun on either
 //   then looks too, and Crouch swiped down is the low crouch. Menu at the
@@ -68,10 +69,6 @@ const DRAG = 12;
 const SWIPE_CONE = Math.cos((35 * Math.PI) / 180);
 /** The controls fade after this long untouched, milliseconds (our choice). */
 const IDLE_MS = 4000;
-/** A look drag's speed is smoothed over about this long, milliseconds (our
- * choice: steady under 120 Hz events and frame jitter, quick to follow a
- * flick). */
-const LOOK_SMOOTH_MS = 75;
 
 const SVG = "http://www.w3.org/2000/svg";
 
@@ -368,37 +365,42 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
     },
   });
 
-  // Looking: each finger's motion, on the look area or dragged from a
-  // button, with its speed smoothed over its own event times (the engine's
-  // look curve; our choice: an exponential average over LOOK_SMOOTH_MS).
-  const looking = new Map(); // pointerId → { at, time, speed, pending }
-  const startLook = (event, at) =>
-    looking.set(event.pointerId, { at, time: event.timeStamp, speed: 0, pending: 0 });
-  const lookTo = (event) => {
-    const drag = looking.get(event.pointerId);
-    if (!drag) return;
-    const at = local(root, event);
-    const [dx, dy] = [at[0] - drag.at[0], at[1] - drag.at[1]];
-    drag.at = at;
-    drag.pending += Math.hypot(dx, dy);
-    const dt = event.timeStamp - drag.time;
-    if (dt > 0) {
-      const weight = 1 - Math.exp(-dt / LOOK_SMOOTH_MS);
-      drag.speed += weight * ((drag.pending / dt) * 1000 - drag.speed);
-      drag.pending = 0;
-      drag.time = event.timeStamp;
-    }
-    send(["look", dx, dy, drag.speed]);
+  // Looking: each finger on the look area or dragged from a button, where
+  // it is in the picture (from its centre, in half its height) at its
+  // event's time; the engine keeps the scene under it and flings on
+  // release.
+  const looking = new Set(); // pointerIds
+  const sendLook = (event, phase, at = local(root, event)) => {
+    const half = root.clientHeight / 2;
+    const x = (at[0] - root.clientWidth / 2) / half;
+    const y = (at[1] - half) / half;
+    send(["look", x, y, phase, event.timeStamp, event.pointerId]);
   };
-  const endLook = (event) => looking.delete(event.pointerId);
+  const startLook = (event, at) => {
+    looking.add(event.pointerId);
+    sendLook(event, "down", at);
+  };
+  const lookTo = (event) => {
+    if (looking.has(event.pointerId)) sendLook(event, "move");
+  };
+  /** A finger stops looking: lifted (it may fling) or `cancelled`. */
+  const endLook = (event, cancelled) => {
+    if (!looking.delete(event.pointerId)) return;
+    sendLook(event, cancelled ? "cancel" : "up");
+  };
+  /** Every finger stops looking without acting (the controls hiding). */
+  const cancelLooks = () => {
+    for (const id of looking) send(["look", 0, 0, "cancel", performance.now(), id]);
+    looking.clear();
+  };
   own(look, {
     pointerdown: (event) => {
       capture(event);
       startLook(event, local(root, event));
     },
     pointermove: lookTo,
-    pointerup: endLook,
-    pointercancel: endLook,
+    pointerup: (event) => endLook(event, false),
+    pointercancel: (event) => endLook(event, true),
   });
 
   // Buttons: held from down to up. A touch on Jump or Crouch that moves
@@ -426,7 +428,9 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
       send(["tbutton", b.dataset.button, false]);
     };
     releases.set(b, () => {
-      for (const id of held.keys()) looking.delete(id);
+      for (const id of held.keys()) {
+        if (looking.delete(id)) send(["look", 0, 0, "cancel", performance.now(), id]);
+      }
       held.clear();
       lift();
     });
@@ -435,7 +439,7 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
       if (!touch) return;
       if (touch.waiting && !cancelled) press();
       held.delete(event.pointerId);
-      looking.delete(event.pointerId);
+      endLook(event, cancelled);
       if (held.size === 0) lift();
     };
     own(b, {
@@ -593,7 +597,7 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
       if (stick) endStick(true);
       letGo = null;
       restStick();
-      looking.clear();
+      cancelLooks();
       for (const [b, release] of releases) if (b !== pda || !shown) release();
       consoleButton.classList.remove("down");
       clearTimeout(idleTimer);

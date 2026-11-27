@@ -98,7 +98,7 @@ pub fn apply_motion([nx, ny]: [f32; 2], [dx, dy]: [f32; 2], [w, h]: [f32; 2], s:
 
 /// Below this speed of a touchpad swipe (screen units per second) the
 /// cursor follows the finger one to one before the sensitivity rule (§7).
-/// Our design (#108), after the level's look curve.
+/// Our design (#108).
 pub const TOUCHPAD_PRECISE_SPEED: f32 = 200.0;
 /// From this speed on a swipe moves the cursor [`TOUCHPAD_MAX_GAIN`] times
 /// as far.
@@ -499,6 +499,33 @@ impl GamepadAxis {
     }
 }
 
+/// A look finger's part of its touch ([`Event::TouchLook`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LookPhase {
+    /// The finger began looking: put down on the look area, or a drag from
+    /// Jump or Crouch past its threshold.
+    Down,
+    Move,
+    /// Lifted where it is: it may fling.
+    Up,
+    /// Ended without acting (by the system or the controls hiding).
+    Cancel,
+}
+
+/// One look finger's event ([`Event::TouchLook`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TouchLook {
+    pub finger: u32,
+    pub phase: LookPhase,
+    /// Where the finger is, relative to the picture's centre in units of
+    /// half its height, +y down: the tangent of its direction's angle off
+    /// the view axis is this times the tangent of half the vertical field
+    /// of view.
+    pub at: [f32; 2],
+    /// The page's event time, milliseconds.
+    pub time: f64,
+}
+
 /// The buttons of the page's on-screen touch controls in a level (our
 /// design; the original has no touch support).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -635,12 +662,8 @@ pub enum Event {
     TouchLockTarget {
         centre: [f32; 2],
     },
-    /// A look drag on the on-screen controls, in screen units, at `speed`
-    /// screen units per second (the page's smoothed speed of that drag).
-    TouchLook {
-        delta: [f32; 2],
-        speed: f32,
-    },
+    /// A look finger on the on-screen controls.
+    TouchLook(TouchLook),
     TouchButton {
         button: TouchButton,
         pressed: bool,
@@ -788,10 +811,10 @@ pub struct Input {
     /// The touch stick's values this frame, in order.
     touch_stick_values: Vec<Option<[f32; 2]>>,
     touch_lock_target: Option<[f32; 2]>,
-    /// Look drags this frame with their speeds.
-    touch_look_moves: Vec<([f32; 2], f32)>,
-    /// Look drags this frame.
-    touch_look: [f32; 2],
+    /// The look fingers' events this frame.
+    touch_looks: Vec<TouchLook>,
+    /// [`Input::release_all`] ran this frame.
+    looks_released: bool,
     /// Relative mouse motion this frame ([`Event::PointerMotion`]).
     motion: [f32; 2],
     /// Whether the gamepad's left stick and the touch stick read zero only
@@ -828,8 +851,8 @@ impl Default for Input {
             touch_stick: [0.0; 2],
             touch_stick_values: Vec::new(),
             touch_lock_target: None,
-            touch_look_moves: Vec::new(),
-            touch_look: [0.0; 2],
+            touch_looks: Vec::new(),
+            looks_released: false,
             motion: [0.0; 2],
             sticks_released: [false; 2],
             pointer_unlocked: false,
@@ -977,9 +1000,16 @@ impl Input {
         self.touch_lock_target
     }
 
-    /// This frame's look drags, each with its speed ([`Event::TouchLook`]).
-    pub fn touch_look_moves(&self) -> &[([f32; 2], f32)] {
-        &self.touch_look_moves
+    /// This frame's look finger events, in order ([`Event::TouchLook`]).
+    pub fn touch_looks(&self) -> &[TouchLook] {
+        &self.touch_looks
+    }
+
+    /// Whether everything was released this frame
+    /// ([`Input::release_all`]): every look finger has ended, flinging
+    /// nothing.
+    pub fn looks_released(&self) -> bool {
+        self.looks_released
     }
 
     /// Every value the touch stick sent this frame, in order: a touch, a
@@ -987,11 +1017,6 @@ impl Input {
     /// frame; `None` is a cancelled touch ([`Event::TouchStickCancel`]).
     pub fn touch_stick_values(&self) -> &[Option<[f32; 2]>] {
         &self.touch_stick_values
-    }
-
-    /// Drags on the on-screen look area this frame.
-    pub fn touch_look(&self) -> [f32; 2] {
-        self.touch_look
     }
 
     /// Mouse motion this frame, in screen units (absolute moves and relative
@@ -1061,9 +1086,9 @@ impl Input {
         self.drag_delta = [0.0; 2];
         self.device_changes.clear();
         self.pad_changes.clear();
-        self.touch_look = [0.0; 2];
         self.touch_stick_values.clear();
-        self.touch_look_moves.clear();
+        self.touch_looks.clear();
+        self.looks_released = false;
         self.motion = [0.0; 2];
         self.contacts.retain(|c| !c.ended);
         for c in &mut self.contacts {
@@ -1087,6 +1112,7 @@ impl Input {
         }
         self.touch_stick = [0.0; 2];
         self.sticks_released = [true; 2];
+        self.looks_released = true;
     }
 
     /// Whether the gamepad's left stick and the touch stick read zero only
@@ -1225,11 +1251,7 @@ impl Input {
                 self.sticks_released[1] = false;
             }
             Event::TouchLockTarget { centre } => self.touch_lock_target = Some(centre),
-            Event::TouchLook { delta, speed } => {
-                self.touch_look[0] += delta[0];
-                self.touch_look[1] += delta[1];
-                self.touch_look_moves.push((delta, speed));
-            }
+            Event::TouchLook(look) => self.touch_looks.push(look),
             Event::TouchButton { button, pressed } => {
                 self.set(Source::Touch, Control::Touch(button), pressed, false)
             }
@@ -1953,17 +1975,17 @@ mod tests {
         assert!(input.is_held(Control::Touch(TouchButton::Jump)));
         input.handle(Event::TouchStick { value: [0.5, -2.0] });
         input.handle(Event::TouchStick { value: [0.5, -9.0] });
-        input.handle(Event::TouchLook {
-            delta: [3.0, 1.0],
-            speed: 100.0,
-        });
-        input.handle(Event::TouchLook {
-            delta: [1.0, 1.0],
-            speed: 200.0,
-        });
+        let look = |phase, x: f32| TouchLook {
+            finger: 3,
+            phase,
+            at: [x, 0.5],
+            time: f64::from(x),
+        };
+        input.handle(Event::TouchLook(look(LookPhase::Down, 1.0)));
+        input.handle(Event::TouchLook(look(LookPhase::Move, 2.0)));
         assert_eq!(
-            input.touch_look_moves(),
-            [([3.0, 1.0], 100.0), ([1.0, 1.0], 200.0)]
+            input.touch_looks(),
+            [look(LookPhase::Down, 1.0), look(LookPhase::Move, 2.0)]
         );
         input.handle(Event::TouchStickCancel);
         assert_eq!(input.touch_stick(), [0.0, 0.0]);
@@ -1978,14 +2000,13 @@ mod tests {
                 Some([0.5, -STICK_REACH])
             ]
         );
-        assert_eq!(input.touch_look(), [4.0, 2.0]);
         input.end_frame();
         assert!(input.device_changes().is_empty() && input.pad_changes().is_empty());
-        assert_eq!(input.touch_look(), [0.0, 0.0]);
         assert_eq!(input.touch_stick(), [0.5, -STICK_REACH]);
-        assert!(input.touch_stick_values().is_empty() && input.touch_look_moves().is_empty());
+        assert!(input.touch_stick_values().is_empty() && input.touch_looks().is_empty());
 
         input.release_all();
+        assert!(input.looks_released());
         assert_eq!(input.touch_stick(), [0.0, 0.0]);
         assert!(!input.pad_held(GamepadButton::South));
         assert_eq!(input.device_changes(), [(space, false)]);

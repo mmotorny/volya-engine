@@ -41,7 +41,8 @@ use js_sys::Array;
 use serde::Serialize;
 use volya_engine::core::console::{Clipboard, typing_key};
 use volya_engine::core::input::{
-    Action, Event, GamepadAxis, GamepadButton, Input, Key, MouseButton, TouchButton, TouchPhase,
+    Action, Event, GamepadAxis, GamepadButton, Input, Key, LookPhase, MouseButton, TouchButton,
+    TouchLook, TouchPhase,
 };
 use volya_engine::formats::ui::Resolution;
 use wasm_bindgen::JsValue;
@@ -355,10 +356,18 @@ fn decode(message: &Array) -> Result<Option<Vec<Event>>, JsValue> {
         "stick" => Event::TouchStick { value: at()? },
         "stick_cancel" => Event::TouchStickCancel,
         "stick_lock" => Event::TouchLockTarget { centre: at()? },
-        "look" => Event::TouchLook {
-            delta: at()?,
-            speed: num(3).unwrap_or(0.0) as f32,
-        },
+        "look" => Event::TouchLook(TouchLook {
+            finger: num(5)? as u32,
+            phase: match text(3)?.as_str() {
+                "down" => LookPhase::Down,
+                "move" => LookPhase::Move,
+                "up" => LookPhase::Up,
+                "cancel" => LookPhase::Cancel,
+                _ => return Err(bad()),
+            },
+            at: at()?,
+            time: num(4)?,
+        }),
         "tbutton" => Event::TouchButton {
             button: TouchButton::from_name(&text(1)?).ok_or_else(bad)?,
             pressed: flag(2)?,

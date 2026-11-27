@@ -2523,7 +2523,7 @@ impl LevelScreen {
         self.clock.set_paused(false);
         self.clock.advance(elapsed);
         let player = self.player.state();
-        let (request, back) = self.controls.request(input, &player);
+        let (request, back) = self.controls.request(input, &player, now);
         // player-state.md 4.3: the condition's limits for this frame's
         // movement; 4.4: a jump's cost; 4.1, 4.2: the conditions over the
         // game time this frame advanced, with the state the movement left.

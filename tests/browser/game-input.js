@@ -783,7 +783,7 @@ export const tests = {
     return `outfit ${outfit}`;
   },
 
-  "touch: a slow look drag across the look half turns about 180°, quicker drags up to twice as far (the look curve, #747)": async () => {
+  "touch: a look drag keeps the scene under the finger, a flick coasts on as a scroll view does (#754)": async () => {
     needsGame();
     const controls = document.getElementById("touch-controls");
     assert(controls, "no touch controls");
@@ -795,9 +795,9 @@ export const tests = {
     const look = controls.querySelector(".touch-look");
     const r = localRect(look, controls);
     const [lx, ly] = [(r.left + r.right) / 2, (r.top + r.bottom) / 2];
-    // The screen's width in the game's own (landscape) layout: the phone's
-    // long side, upright (turned) or not.
-    const width = controls.clientWidth;
+    // The picture in the game's own (landscape) layout: the phone's long
+    // side across, upright (turned) or not.
+    const [width, height] = [controls.clientWidth, controls.clientHeight];
     const touchOn = (type, at) => {
       const [x, y] = toClient(controls, at);
       look.dispatchEvent(
@@ -814,62 +814,139 @@ export const tests = {
         }),
       );
     };
+    const angles = async () => {
+      const { yaw, pitch } = (await state()).level;
+      return { yaw, pitch };
+    };
     const settled = async () => {
-      let last = (await state()).level.yaw;
-      for (let i = 0; i < 100; i++) {
+      let last = await angles();
+      for (let i = 0; i < 200; i++) {
         await sleep(50);
-        const yaw = (await state()).level.yaw;
-        if (yaw === last) return yaw;
-        last = yaw;
+        const now = await angles();
+        if (now.yaw === last.yaw && now.pitch === last.pitch) return now;
+        last = now;
       }
       assert(false, "the view to stop turning");
     };
-    // One swipe of `length` px at `speed` CSS px/s, its moves placed by the
-    // clock (about every 8 ms) so jitter changes their count, not the speed;
-    // the degrees it turned and the speed it took.
-    const sweep = async (length, speed, dir) => {
+    // The turn that keeps the scene's direction under a finger moved from
+    // `from` to `to` (controls px) at `pitch`: the engine's grab_turn, its
+    // 67.5° field of view over the picture's height.
+    const tanHalf = Math.tan(((67.5 / 2) * Math.PI) / 180);
+    const norm = ([x, y]) => [(x - width / 2) / (height / 2), (y - height / 2) / (height / 2)];
+    const grab = (from, to, pitch) => {
+      const camera = ([x, y]) => {
+        const v = [x * tanHalf, -y * tanHalf, 1];
+        const l = Math.hypot(...v);
+        return v.map((c) => c / l);
+      };
+      const world = (c, p) => [c[0], c[1] * Math.cos(p) - c[2] * Math.sin(p), c[1] * Math.sin(p) + c[2] * Math.cos(p)];
+      const d = world(camera(norm(from)), pitch);
+      const c = camera(norm(to));
+      const p = Math.atan2(c[1], c[2]) - Math.asin(d[1] / Math.hypot(c[1], c[2]));
+      const w = world(c, p);
+      return { yaw: Math.atan2(d[0], d[2]) - Math.atan2(w[0], w[2]), pitch: p - pitch };
+    };
+    const deg = (rad) => (rad * 180) / Math.PI;
+    // A drag from the look area's centre by `by` px at `speed` px/s, its
+    // moves placed by the clock (about every 8 ms); held still `hold` ms
+    // before the lift. The turn while held (settled), the turn in all, and
+    // the finger's speed at the end.
+    const drag = async (by, speed, hold) => {
       const before = await settled();
+      const length = Math.hypot(...by);
       touchOn("pointerdown", [lx, ly]);
       const t0 = performance.now();
-      let x = 0;
-      while (x < length) {
+      let f = 0;
+      while (f < 1) {
         await sleep(8);
-        x = Math.min(length, ((performance.now() - t0) / 1000) * speed);
-        touchOn("pointermove", [lx + dir * x, ly]);
+        f = Math.min(1, ((performance.now() - t0) / 1000) * (speed / length));
+        touchOn("pointermove", [lx + by[0] * f, ly + by[1] * f]);
       }
       const took = (performance.now() - t0) / 1000;
-      touchOn("pointerup", [lx + dir * length, ly]);
-      const turned = Math.abs((await settled()) - before) * (180 / Math.PI);
-      return { turned, speed: length / took };
+      let held = null;
+      if (hold) {
+        await sleep(hold);
+        held = await settled();
+      }
+      touchOn("pointerup", [lx + by[0], ly + by[1]]);
+      const after = await settled();
+      const minus = (a) => ({ yaw: a.yaw - before.yaw, pitch: a.pitch - before.pitch });
+      return { before, held: held && minus(held), after: minus(after), speed: length / took };
     };
-    // The look area: the right half.
-    const half = r.right - r.left;
-    const runs = {};
-    for (const [what, length, speed] of [
-      ["slow", width, 250],
-      ["steady", width, 1000],
-      ["quick", width, width / 0.2],
-      ["half slow", half, 250],
-      ["half quick", half, half / 0.15],
+    const start = await settled();
+    const runs = [];
+    // Slow drags held still before the lift: the scene stays under the
+    // finger (within 1%, or 0.2°), and the lift flings nothing.
+    for (const [what, by] of [
+      ["right", [(r.right - r.left) * 0.4, 0]],
+      ["down", [0, height * 0.3]],
+      ["diagonal", [-(r.right - r.left) * 0.6, -height * 0.25]],
     ]) {
-      // Right, then back left alike, so the next tests find the view as it was.
-      runs[what] = await sweep(length, speed, 1);
-      await sweep(length, speed, -1);
+      const run = await drag(by, 250, 150);
+      const want = grab([lx, ly], [lx + by[0], ly + by[1]], run.before.pitch);
+      for (const k of ["yaw", "pitch"]) {
+        const [got, exp] = [deg(run.held[k]), deg(want[k])];
+        assert(Math.abs(got - exp) <= Math.max(0.2, 0.01 * Math.abs(exp)), `slow ${what} ${k}: ${got.toFixed(2)}° for ${exp.toFixed(2)}°`);
+        assert(Math.abs(run.after[k] - run.held[k]) < 1e-4, `slow ${what}: the lift turned ${deg(run.after[k] - run.held[k])}°`);
+      }
+      runs.push(`slow ${what} ${deg(run.held.yaw).toFixed(1)}°/${deg(run.held.pitch).toFixed(1)}°`);
+      // Back the same way, so the next tests find the view as it was.
+      await drag([-by[0], -by[1]], 250, 150);
     }
-    const report = `${width} px wide, look half ${Math.round(half)}: ${Object.entries(runs)
-      .map(([what, r]) => `${what} (${Math.round(r.speed)} px/s) ${r.turned.toFixed(0)}°`)
-      .join(", ")}`;
-    // At the default mouse_sens 0.12 (0.1375° a count): slow turns the base
-    // 3.25 counts a pixel, so a slow drag across the look half about 180°; a
-    // quick flick across it at least as far; nothing past the 6.5 cap.
-    const degree = 0.1375;
-    const perPixel = runs.slow.turned / width;
-    assert(Math.abs(perPixel - 3.25 * degree) < 0.01, `slow: ${perPixel.toFixed(4)}° a pixel; ${report}`);
-    const halfSlow = runs["half slow"].turned;
-    assert(halfSlow >= 150 && halfSlow <= 200, `the slow half drag: ${report}`);
-    assert(runs["half quick"].turned >= halfSlow, `the half flick: ${report}`);
-    assert(runs.quick.turned <= 6.5 * degree * width + 1, `the quick swipe within the cap: ${report}`);
-    return report;
+    // Flicks lifted moving: the drag's turn, then v / −ln 0.998 more, v
+    // the finger's angular speed at the lift (rad/ms, at most 4π/1000):
+    // within 15%, the release velocity being fitted to clock-placed moves.
+    // Then flicked back and touched 100 ms into the coast: it stops there.
+    const half = r.right - r.left;
+    const flicked = async (length, seconds) => {
+      const run = await drag([-length, 0], length / seconds, 0);
+      const end = [lx - length, ly];
+      const dragged = grab([lx, ly], end, run.before.pitch).yaw;
+      const rate = grab([end[0] + 1, ly], end, run.before.pitch).yaw; // rad a px
+      const v = Math.min((rate * run.speed) / 1000, (4 * Math.PI) / 1000);
+      return { run, dragged, projected: v / -Math.log(0.998) };
+    };
+    for (const [what, seconds] of [
+      ["steady", 0.4],
+      ["quick", 0.15],
+    ]) {
+      const length = half * 0.8;
+      const { run, dragged, projected } = await flicked(length, seconds);
+      const [got, want] = [run.after.yaw, dragged + projected];
+      runs.push(
+        `${what} flick of ${Math.round(length)} px (${Math.round(run.speed)} px/s) ${deg(got).toFixed(0)}° (drag ${deg(dragged).toFixed(0)}° + coast ${deg(projected).toFixed(0)}°)`,
+      );
+      assert(Math.abs(got - want) <= 0.15 * Math.abs(want), `${what}: ${deg(got).toFixed(1)}° for ${deg(want).toFixed(1)}°; ${runs.join(", ")}`);
+      // Back: the same flick to the right, touched 100 ms after the lift.
+      const before = await settled();
+      touchOn("pointerdown", [lx - length, ly]);
+      const t0 = performance.now();
+      for (let f = 0; f < 1; ) {
+        await sleep(8);
+        f = Math.min(1, (performance.now() - t0) / 1000 / seconds);
+        touchOn("pointermove", [lx - length + length * f, ly]);
+      }
+      touchOn("pointerup", [lx, ly]);
+      await sleep(100);
+      touchOn("pointerdown", [lx, ly]);
+      const stopped = await settled();
+      touchOn("pointerup", [lx, ly]);
+      const back = Math.abs(stopped.yaw - before.yaw);
+      assert(back <= Math.abs(dragged) + 0.4 * Math.abs(projected), `the touch to stop the coast: ${deg(back).toFixed(1)}° back; ${runs.join(", ")}`);
+    }
+    // The view as it was for the next tests: slow drags held still, the
+    // turn each needs at the middle (tan(33.75°) / half the height a px).
+    const perPixel = tanHalf / (height / 2);
+    for (let i = 0; i < 12; i++) {
+      const now = await settled();
+      const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+      const [dy, dp] = [wrap(start.yaw - now.yaw), start.pitch - now.pitch];
+      if (Math.abs(dy) < 0.002 && Math.abs(dp) < 0.002) break;
+      const most = half * 0.4;
+      const clamp = (v) => Math.max(-most, Math.min(most, v));
+      await drag([clamp(-dy / perPixel), clamp(-dp / perPixel)], 400, 120);
+    }
+    return `${width}×${height}: ${runs.join(", ")}`;
   },
 
   "touch: the stick walks and its sprint lock sprints, drags look (from Jump too), Crouch and its swipe down, Menu opens the menu": async () => {
@@ -924,11 +1001,12 @@ export const tests = {
     assert(moved > 0.5, `moved ${moved.toFixed(2)} m: ${JSON.stringify(p)}`);
     const [lx, ly] = centre(look);
     touchOn(look, "pointerdown", 32, [lx, ly]);
-    touchOn(look, "pointermove", 32, [lx + 100, ly + 20]);
-    touchOn(look, "pointerup", 32, [lx + 100, ly + 20]);
-    // 100 px at mouse_sens 0.12: 0.24 rad right or more (the look curve),
-    // a little down.
+    touchOn(look, "pointermove", 32, [lx - 100, ly - 20]);
+    // Held still, then lifted: no coast. The scene follows the finger left
+    // and up: the view turns right and looks down.
     s = await until((s) => s.level.yaw > start.yaw + 0.2, "the drag to turn right");
+    await sleep(120);
+    touchOn(look, "pointerup", 32, [lx - 100, ly - 20]);
     assert(s.level.pitch > start.pitch, "the drag looks down");
     const turned = s.level.yaw - start.yaw;
     // The sprint lock: the stick pushed forward past its rim (1.5 radii)
@@ -1000,16 +1078,20 @@ export const tests = {
     let jumped = false;
     for (let attempt = 0, id = 380; attempt < 3 && !jumped; attempt++, id++) {
       touchOn(jump, "pointerdown", id, [jx, jy]);
-      touchOn(jump, "pointermove", id, [jx - 20, jy]);
-      touchOn(jump, "pointermove", id, [jx - 100, jy]);
+      touchOn(jump, "pointermove", id, [jx + 20, jy]);
+      touchOn(jump, "pointermove", id, [jx + 200, jy]);
       jumped = await until((s) => s.level.player.airborne, "Jump to jump", 1500).then(
         () => true,
         () => false,
       );
-      touchOn(jump, "pointerup", id, [jx - 100, jy]);
+      await sleep(120);
+      touchOn(jump, "pointerup", id, [jx + 200, jy]);
     }
     assert(jumped, "Jump to jump");
-    s = await until((s) => s.level.yaw < yaw - 0.15, "the drag from Jump to turn left");
+    // The scene dragged right: the view turns left.
+    s = await until((s) => s.level.yaw < yaw - 0.15, "the drag from Jump to turn left").catch(async (e) => {
+      throw new Error(`${e.message.slice(0, 60)}: turned ${((await state()).level.yaw - yaw).toFixed(3)} rad`);
+    });
     s = await until((s) => !s.level.player.airborne, "the jump to land", 3000);
     // Crouch toggles: the engine reports it back to the button.
     const crouch = controls.querySelector(".touch-button.crouch");

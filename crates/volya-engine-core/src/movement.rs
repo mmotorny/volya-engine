@@ -296,6 +296,10 @@ pub struct Request {
     /// Keyboard look, −1 … +1 of `rot_speed`: x turns right, y looks down
     /// (8.2). Analog sources may use the range between.
     pub turn: [f32; 2],
+    /// A turn in radians, x right and y down, taken as it is: touch look's
+    /// (our design, not the spec's: `mouse_sens` and `mouse_invert` don't
+    /// apply), within the same limits.
+    pub look: [f32; 2],
 }
 
 /// The movement state (section 3).
@@ -467,6 +471,9 @@ pub struct PlayerState {
     pub posture: usize,
     pub sprint_requested: bool,
     pub crouch_toggled: bool,
+    /// The camera's pitch (+ down) and its limits (`lim_pitch`, 8.1).
+    pub pitch: f32,
+    pub pitch_limits: [f32; 2],
 }
 
 fn unit_or_tiny(v: Vec3) -> Vec3 {
@@ -592,6 +599,8 @@ impl Player {
             posture: self.body.box_index(),
             sprint_requested: self.sprint_request,
             crouch_toggled: self.crouch_toggle,
+            pitch: self.angles.pitch,
+            pitch_limits: self.config.lim_pitch,
         }
     }
 
@@ -730,7 +739,7 @@ impl Player {
             1.0
         };
         let rot = self.config.rot_speed;
-        let turn = request.mouse[0] * s + request.turn[0] * rot[0] * dt_f;
+        let turn = request.mouse[0] * s + request.turn[0] * rot[0] * dt_f + request.look[0];
         self.angles.yaw += turn;
         // climbing.md 3.6: a change of yaw is then clamped into the limits.
         if let Some([lo, hi]) = self.yaw_limits
@@ -738,8 +747,9 @@ impl Player {
         {
             self.angles.yaw = self.angles.yaw.clamp(lo, hi);
         }
-        self.angles.pitch +=
-            request.mouse[1] * s * MOUSE_PITCH_FACTOR * invert + request.turn[1] * rot[1] * dt_f;
+        self.angles.pitch += request.mouse[1] * s * MOUSE_PITCH_FACTOR * invert
+            + request.turn[1] * rot[1] * dt_f
+            + request.look[1];
         let [lo, hi] = self.config.lim_pitch;
         self.angles.pitch = self.angles.pitch.clamp(lo, hi);
     }
