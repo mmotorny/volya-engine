@@ -3,8 +3,8 @@
 
 load("//build:checks.bzl", "volya_checks")
 
-# Our patch to box64's release (MODULE.bazel's @box64: the Wine image's
-# build context, tools/xtask/wine/Containerfile).
+# Our patch to box64's release (MODULE.bazel's @box64_src), applied where
+# the Wine image's box64 part is built (//tools/xtask:box64-part).
 exports_files(
     ["frame-clock.patch"],
     visibility = ["//visibility:public"],

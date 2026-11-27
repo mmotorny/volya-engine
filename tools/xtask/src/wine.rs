@@ -18,19 +18,21 @@ use crate::{Result, cmd, root, run, step};
 /// The file the image is built from (`tools/xtask/wine/`).
 const CONTAINERFILE: &str = "Containerfile";
 
-/// The image, tagged with a hash of its Containerfile and its build
-/// context (box64's patched source, [`box64_source`]): a changed file names
-/// an image not built yet, which [`Container::spawn`] builds, so a run (and
-/// a Bazel capture, which takes both as inputs) never uses an image of
-/// other files.
+/// The image, tagged with a hash of its Containerfile and its parts
+/// ([`parts`]): a changed file names an image not built yet, which
+/// [`Container::spawn`] builds, so a run (and a Bazel action, which takes
+/// them as inputs) never uses an image of other files.
 fn image() -> Result<String> {
     use sha2::{Digest, Sha256};
     let file = root().join("tools/xtask/wine").join(CONTAINERFILE);
     let text = fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?;
     let mut hash = Sha256::new();
     hash.update(&text);
-    let source = box64_source()?;
-    hash_tree(&mut hash, &source, &source)?;
+    for (_, path) in parts()? {
+        let bytes = fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        hash.update((bytes.len() as u64).to_le_bytes());
+        hash.update(&bytes);
+    }
     let hash: String = hash.finalize()[..6]
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -38,42 +40,43 @@ fn image() -> Result<String> {
     Ok(format!("volya-engine-wine-box64:{hash}"))
 }
 
-/// box64's release with our patch (Bazel's `@box64`, third_party/box64/),
-/// named by `VOLYA_BOX64` (one of its files): the image's build context.
-fn box64_source() -> Result<PathBuf> {
-    let file = std::env::var_os("VOLYA_BOX64")
-        .ok_or("box64's source comes from Bazel: bazel run //tools/xtask -- wine")?;
-    let file = fs::canonicalize(crate::runfile(Path::new(&file)))
-        .map_err(|e| format!("{}: {e}", Path::new(&file).display()))?;
-    Ok(file.parent().ok_or("no folder")?.to_path_buf())
-}
-
-/// Adds `dir`'s files (paths relative to `base`, contents, link targets) to
-/// `hash`, in name order.
-fn hash_tree(hash: &mut sha2::Sha256, base: &Path, dir: &Path) -> Result {
-    use sha2::Digest;
-    let mut entries: Vec<_> = fs::read_dir(dir)
-        .and_then(|d| d.map(|e| e.map(|e| e.path())).collect())
-        .map_err(|e| format!("{}: {e}", dir.display()))?;
-    entries.sort();
-    for path in entries {
-        let meta = fs::symlink_metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let name = path.strip_prefix(base).map_err(|e| e.to_string())?;
-        hash.update(name.as_os_str().as_encoded_bytes());
-        hash.update([0]);
-        if meta.is_dir() {
-            hash_tree(hash, base, &path)?;
-        } else if meta.is_symlink() {
-            let target = fs::read_link(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-            hash.update(target.as_os_str().as_encoded_bytes());
-        } else {
-            let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-            hash.update((bytes.len() as u64).to_le_bytes());
-            hash.update(&bytes);
-        }
-        hash.update([0]);
+/// The image's parts (build/wine_image.bzl), by the names the Containerfile
+/// adds them as: Wine's and box64's builds, tarballs of what they install.
+/// A Bazel action is given them (`VOLYA_WINE_PART`, `VOLYA_BOX64_PART`);
+/// under `bazel run` they are built (from the disk cache, unless their
+/// inputs changed: Wine's build takes about an hour).
+fn parts() -> Result<&'static [(&'static str, PathBuf); 2]> {
+    static PARTS: std::sync::OnceLock<[(&str, PathBuf); 2]> = std::sync::OnceLock::new();
+    if let Some(parts) = PARTS.get() {
+        return Ok(parts);
     }
-    Ok(())
+    let names = [
+        ("wine.tar.gz", "VOLYA_WINE_PART"),
+        ("box64.tar.gz", "VOLYA_BOX64_PART"),
+    ];
+    let given: Option<Vec<PathBuf>> = names
+        .iter()
+        .map(|(_, var)| std::env::var_os(var).map(|p| crate::runfile(Path::new(&p))))
+        .collect();
+    let paths = match given {
+        Some(paths) => paths,
+        None => {
+            let targets = ["//tools/xtask:wine-part", "//tools/xtask:box64-part"];
+            step("Building the Wine image's parts (from the disk cache unless changed)");
+            run(cmd("bazel", &["build"]).args(targets).current_dir(root()))?;
+            // One query a target: a query's files come in no set order.
+            let file = |target: &str| {
+                let files = crate::output(
+                    cmd("bazel", &["cquery", "--output=files", target]).current_dir(root()),
+                )?;
+                let file = files.lines().last().ok_or(format!("{target}: no output"))?;
+                Ok::<_, String>(root().join(file.trim()))
+            };
+            targets.iter().map(|t| file(t)).collect::<Result<_>>()?
+        }
+    };
+    let [wine, box64] = <[PathBuf; 2]>::try_from(paths).map_err(|_| "two parts expected")?;
+    Ok(PARTS.get_or_init(|| [(names[0].0, wine), (names[1].0, box64)]))
 }
 
 /// Registers box64 for x86_64 ELF executables and shared objects
@@ -350,26 +353,28 @@ impl Drop for Container {
     }
 }
 
-/// The image builder's size (CPUs, GiB; `container build` starts or restarts
-/// it at the size it is given, measured): Wine's build is long (C under
-/// Rosetta) and its jobs use about half a gigabyte each.
-const BUILDER_CPUS: u32 = 8;
-const BUILDER_GIB: u64 = 8;
-
 fn build_image() -> Result {
     let image = image()?;
     step(&format!("Building {image}"));
-    let (cpus, memory) = (BUILDER_CPUS.to_string(), format!("{BUILDER_GIB}G"));
+    // The build context: the Containerfile's parts, by name.
+    let context = std::env::temp_dir().join(format!("volya-wine-image-{}", std::process::id()));
+    fs::create_dir_all(&context).map_err(|e| format!("{}: {e}", context.display()))?;
+    let copied = parts()?.iter().try_for_each(|(name, path)| {
+        fs::copy(path, context.join(name))
+            .map(drop)
+            .map_err(|e| format!("{}: {e}", path.display()))
+    });
     let file = root().join("tools/xtask/wine").join(CONTAINERFILE);
-    let file = file.to_str().ok_or("non-UTF-8 path")?;
-    let context = box64_source()?;
-    let context = context.to_str().ok_or("non-UTF-8 path")?;
-    run(&mut cmd(
-        "container",
-        &[
-            "build", "--cpus", &cpus, "--memory", &memory, "--tag", &image, "--file", file, context,
-        ],
-    ))
+    let built = copied.and_then(|()| {
+        let file = file.to_str().ok_or("non-UTF-8 path")?;
+        let context = context.to_str().ok_or("non-UTF-8 path")?;
+        run(&mut cmd(
+            "container",
+            &["build", "--tag", &image, "--file", file, context],
+        ))
+    });
+    let _ = fs::remove_dir_all(&context);
+    built
 }
 
 /// The `container` service for one task: started if it wasn't running (after

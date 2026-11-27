@@ -5,6 +5,7 @@ load("@gog_installer//:defs.bzl", "GOG_INSTALLER")
 load("//build:checks.bzl", "volya_checks")
 load("//build:rust.bzl", "LINTS", "volya_binary")
 load("@rules_rust//rust:defs.bzl", "rust_test")
+load("//build:wine_image.bzl", "image_part")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -16,14 +17,9 @@ volya_binary(
     crate_root = "src/main.rs",
     # The fidelity suite's views (src/original/views.rs).
     compile_data = ["//tests/fidelity:views.rs"],
-    # `bazel run //tools/xtask -- original`: the install folder; `wine`:
-    # box64's patched source, the image's build context (wine.rs).
-    data = [
-        "@box64//:CMakeLists.txt",
-        "@gog_original//:manifest.tsv",
-    ],
+    # `bazel run //tools/xtask -- original`: the install folder.
+    data = ["@gog_original//:manifest.tsv"],
     env = {
-        "VOLYA_BOX64": "$(rootpath @box64//:CMakeLists.txt)",
         "VOLYA_GOG_INSTALLER": GOG_INSTALLER,
         "VOLYA_GOG_ORIGINAL": "$(rootpath @gog_original//:manifest.tsv)",
     },
@@ -63,9 +59,40 @@ volya_binary(
     crate_root = "src/d3d9probes_action.rs",
 )
 
-# The Wine image's file: the capture and probe actions' input (its hash, with box64's
-# source, tags the image, wine.rs).
+# The Wine image's file: the capture and probe actions' input (its hash,
+# with its parts', tags the image, wine.rs).
 exports_files(["wine/Containerfile"])
+
+# The Wine image's parts' tool (build/wine_image.bzl): its build scripts,
+# so only a change to them builds the parts again.
+volya_binary(
+    name = "image-part",
+    srcs = [
+        "src/common.rs",
+        "src/image_part.rs",
+        "src/machine.rs",
+    ],
+    crate_root = "src/image_part.rs",
+)
+
+# The parts, `manual`: built when an image needs them (wine.rs), not by
+# `//...`; Wine's build takes about an hour.
+image_part(
+    name = "wine-part",
+    srcs = ["@wine_src//file"],
+    part = "wine",
+    tags = ["manual"],
+)
+
+image_part(
+    name = "box64-part",
+    srcs = [
+        "//third_party/box64:frame-clock.patch",
+        "@box64_src//file",
+    ],
+    part = "box64",
+    tags = ["manual"],
+)
 
 rust_test(
     name = "xtask-unit",
