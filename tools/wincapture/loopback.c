@@ -9,15 +9,12 @@
  * counter at their first frame in 100 ns units (documented:
  * IAudioCaptureClient::GetBuffer). The documentation says nothing of
  * whether the endpoint's or a session's volume or mute applies before the
- * loopback tap, so the recording never relies on muting anything: the game
- * plays to a render endpoint that reaches no speaker, which the driver
- * makes the default for the run (the game plays to the default: believed,
- * it is given no device), and the endpoint the default was before is put
- * back afterwards. Making an endpoint the default goes through
- * IPolicyConfig, an interface Windows does not document (believed, as
- * audio-switching tools use it: its SetDefaultEndpoint, for each role).
- * Nothing changes any volume; the endpoint's own volume and mute are only
- * read, for the log. */
+ * loopback tap, so nothing is muted: the PC's outputs are silenced
+ * physically (the user's setup), and the recording is of the default
+ * output device as it is, which the game plays to (believed: it is given
+ * no device), or of the one named. Nothing changes any volume or device
+ * setting; the endpoint's own volume and mute are only read, for the log.
+ * No device's name is logged (a detail of the machine). */
 
 #define WIN32_LEAN_AND_MEAN
 #define COBJMACROS
@@ -35,26 +32,6 @@
 
 #include "loopback.h"
 
-/* IPolicyConfig (undocumented, see above): its methods before
- * SetDefaultEndpoint are not called. */
-DEFINE_GUID(CLSID_VolyaPolicyConfig, 0x870af99c, 0x171d, 0x4f9e, 0xaf, 0x0d, 0xe6, 0x3d, 0xf4, 0x0c,
-            0x2b, 0xc9);
-DEFINE_GUID(IID_VolyaPolicyConfig, 0xf8679f50, 0x850a, 0x41cf, 0x9c, 0x72, 0x43, 0x0f, 0x29, 0x02,
-            0x90, 0xc8);
-
-typedef struct policy_config policy_config;
-typedef struct {
-    HRESULT(STDMETHODCALLTYPE *QueryInterface)(policy_config *, REFIID, void **);
-    ULONG(STDMETHODCALLTYPE *AddRef)(policy_config *);
-    ULONG(STDMETHODCALLTYPE *Release)(policy_config *);
-    void *unused[10];
-    HRESULT(STDMETHODCALLTYPE *SetDefaultEndpoint)(policy_config *, LPCWSTR, ERole);
-    void *SetEndpointVisibility;
-} policy_config_vtbl;
-struct policy_config {
-    const policy_config_vtbl *lpVtbl;
-};
-
 /* The recording grows in steps of this many frames. */
 #define GROW (1u << 20)
 /* A packet later than the samples so far by more than this many ms
@@ -68,8 +45,6 @@ struct loopback {
     WAVEFORMATEX *format;
     int is_float;
     uint32_t bits, channels, rate, block;
-    WCHAR before[512]; /* the default before, "" when none */
-    char marker[MAX_PATH];
     loopback_say say;
 
     HANDLE thread;
@@ -93,12 +68,6 @@ int64_t loopback_now(void) {
     return s * 10000000 + r * 10000000 / freq.QuadPart;
 }
 
-static void utf8(const WCHAR *w, char *out, int n) {
-    if (!WideCharToMultiByte(CP_UTF8, 0, w, -1, out, n, NULL, NULL)) {
-        snprintf(out, (size_t)n, "?");
-    }
-}
-
 static IMMDeviceEnumerator *enumerator(void) {
     IMMDeviceEnumerator *e = NULL;
     CoInitializeEx(NULL, COINIT_MULTITHREADED);
@@ -109,28 +78,22 @@ static IMMDeviceEnumerator *enumerator(void) {
     return e;
 }
 
-/* The endpoint's name and form factor (EndpointFormFactor). */
-static void describe(IMMDevice *d, char *name, int n, unsigned *form) {
+/* The endpoint's form factor (EndpointFormFactor). */
+static unsigned describe(IMMDevice *d) {
     IPropertyStore *props = NULL;
-    snprintf(name, (size_t)n, "?");
-    *form = ~0u;
+    unsigned form = ~0u;
     if (FAILED(IMMDevice_OpenPropertyStore(d, STGM_READ, &props))) {
-        return;
+        return form;
     }
     PROPVARIANT v;
     PropVariantInit(&v);
-    if (SUCCEEDED(IPropertyStore_GetValue(props, &PKEY_Device_FriendlyName, &v)) &&
-        v.vt == VT_LPWSTR) {
-        utf8(v.pwszVal, name, n);
-    }
-    PropVariantClear(&v);
-    PropVariantInit(&v);
     if (SUCCEEDED(IPropertyStore_GetValue(props, &PKEY_AudioEndpoint_FormFactor, &v)) &&
         v.vt == VT_UI4) {
-        *form = v.ulVal;
+        form = v.ulVal;
     }
     PropVariantClear(&v);
     IPropertyStore_Release(props);
+    return form;
 }
 
 static const char *form_name(unsigned f) {
@@ -140,93 +103,12 @@ static const char *form_name(unsigned f) {
     return f < sizeof names / sizeof *names ? names[f] : "not given";
 }
 
-static void default_id(IMMDeviceEnumerator *e, WCHAR *out, size_t n) {
-    IMMDevice *d = NULL;
-    LPWSTR id = NULL;
-    out[0] = 0;
-    if (SUCCEEDED(IMMDeviceEnumerator_GetDefaultAudioEndpoint(e, eRender, eConsole, &d)) &&
-        SUCCEEDED(IMMDevice_GetId(d, &id))) {
-        wcsncpy(out, id, n - 1);
-        out[n - 1] = 0;
-    }
-    if (id) {
-        CoTaskMemFree(id);
-    }
-    if (d) {
-        IMMDevice_Release(d);
-    }
-}
-
-int loopback_list(loopback_say say) {
-    IMMDeviceEnumerator *e = enumerator();
+/* The active render endpoint whose name contains `name`, if exactly one
+ * does. */
+static IMMDevice *named(IMMDeviceEnumerator *e, const char *name, loopback_say say) {
     IMMDeviceCollection *all = NULL;
     UINT count = 0;
-    if (!e || FAILED(IMMDeviceEnumerator_EnumAudioEndpoints(e, eRender, DEVICE_STATE_ACTIVE, &all)) ||
-        FAILED(IMMDeviceCollection_GetCount(all, &count))) {
-        say("cannot list the audio output devices");
-        return 0;
-    }
-    WCHAR def[512];
-    default_id(e, def, 512);
-    say("%u active audio output devices (render endpoints):", count);
-    for (UINT i = 0; i < count; i++) {
-        IMMDevice *d = NULL;
-        LPWSTR id = NULL;
-        if (FAILED(IMMDeviceCollection_Item(all, i, &d))) {
-            continue;
-        }
-        IMMDevice_GetId(d, &id);
-        char name[256];
-        unsigned form;
-        describe(d, name, sizeof name, &form);
-        say("  \"%s\": %s%s", name, form_name(form),
-            id && !wcscmp(id, def) ? " (the default)" : "");
-        if (id) {
-            CoTaskMemFree(id);
-        }
-        IMMDevice_Release(d);
-    }
-    IMMDeviceCollection_Release(all);
-    IMMDeviceEnumerator_Release(e);
-    return 1;
-}
-
-static int set_default(const WCHAR *id) {
-    policy_config *pc = NULL;
-    if (FAILED(CoCreateInstance(&CLSID_VolyaPolicyConfig, NULL, CLSCTX_ALL, &IID_VolyaPolicyConfig,
-                                (void **)&pc))) {
-        return 0;
-    }
-    int ok = 1;
-    for (int role = eConsole; role <= eCommunications; role++) {
-        ok &= SUCCEEDED(pc->lpVtbl->SetDefaultEndpoint(pc, id, (ERole)role));
-    }
-    pc->lpVtbl->Release(pc);
-    return ok;
-}
-
-void loopback_restore_left(const char *marker, loopback_say say) {
-    FILE *f = fopen(marker, "rb");
-    if (!f) {
-        return;
-    }
-    WCHAR id[512] = {0};
-    size_t n = fread(id, sizeof(WCHAR), 511, f);
-    fclose(f);
-    id[n] = 0;
-    if (id[0] && enumerator() && set_default(id)) {
-        say("The default audio output an earlier run switched from is put back");
-        DeleteFileA(marker);
-    } else {
-        say("WARNING: the default audio output an earlier run switched from was not put back");
-    }
-}
-
-struct loopback *loopback_open(const char *name, const char *marker, loopback_say say) {
-    IMMDeviceEnumerator *e = enumerator();
-    IMMDeviceCollection *all = NULL;
-    UINT count = 0;
-    if (!e || FAILED(IMMDeviceEnumerator_EnumAudioEndpoints(e, eRender, DEVICE_STATE_ACTIVE, &all)) ||
+    if (FAILED(IMMDeviceEnumerator_EnumAudioEndpoints(e, eRender, DEVICE_STATE_ACTIVE, &all)) ||
         FAILED(IMMDeviceCollection_GetCount(all, &count))) {
         say("cannot list the audio output devices");
         return NULL;
@@ -267,51 +149,39 @@ struct loopback *loopback_open(const char *name, const char *marker, loopback_sa
     }
     IMMDeviceCollection_Release(all);
     if (matches != 1) {
-        say("%d audio output devices have \"%s\" in their name; one must", matches, name);
-        loopback_list(say);
+        say("%d of the %u audio output devices have the name given in theirs; one must", matches,
+            count);
         if (found) {
             IMMDevice_Release(found);
         }
         return NULL;
     }
+    return found;
+}
+
+struct loopback *loopback_open(const char *name, loopback_say say) {
+    IMMDeviceEnumerator *e = enumerator();
+    if (!e) {
+        say("cannot reach the audio devices");
+        return NULL;
+    }
+    IMMDevice *found = NULL;
+    if (name && name[0]) {
+        found = named(e, name, say);
+    } else if (FAILED(IMMDeviceEnumerator_GetDefaultAudioEndpoint(e, eRender, eConsole, &found))) {
+        found = NULL;
+        say("no default audio output device");
+    }
+    IMMDeviceEnumerator_Release(e);
+    if (!found) {
+        return NULL;
+    }
     struct loopback *lb = calloc(1, sizeof *lb);
     lb->device = found;
     lb->say = say;
-    snprintf(lb->marker, sizeof lb->marker, "%s", marker);
-    char dname[256];
-    unsigned form;
-    describe(found, dname, sizeof dname, &form);
-    say("The game's audio output: \"%s\" (%s)", dname, form_name(form));
-
-    /* Made the default, the one before kept (and written down, in case the
-     * driver does not get to put it back). */
-    LPWSTR id = NULL;
-    IMMDevice_GetId(found, &id);
-    default_id(e, lb->before, 512);
-    IMMDeviceEnumerator_Release(e);
-    if (!id) {
-        say("the device has no id");
-        loopback_close(lb);
-        return NULL;
-    }
-    if (wcscmp(id, lb->before)) {
-        FILE *f = fopen(marker, "wb");
-        if (f) {
-            fwrite(lb->before, sizeof(WCHAR), wcslen(lb->before), f);
-            fclose(f);
-        }
-        if (!set_default(id)) {
-            CoTaskMemFree(id);
-            say("cannot make \"%s\" the default audio output", dname);
-            loopback_close(lb);
-            return NULL;
-        }
-        say("It is the default audio output for the run (the one before is put back after it)");
-    } else {
-        lb->before[0] = 0;
-        say("It is the default audio output already");
-    }
-    CoTaskMemFree(id);
+    unsigned form = describe(found);
+    say("The game's audio output: %s (%s)", name && name[0] ? "the device named" : "the default device",
+        form_name(form));
 
     IAudioEndpointVolume *vol = NULL;
     if (SUCCEEDED(IMMDevice_Activate(found, &IID_IAudioEndpointVolume, CLSCTX_ALL, NULL,
@@ -531,14 +401,6 @@ void loopback_close(struct loopback *lb) {
         return;
     }
     loopback_stop(lb);
-    if (lb->before[0]) {
-        if (set_default(lb->before)) {
-            DeleteFileA(lb->marker);
-            lb->say("The default audio output is put back");
-        } else {
-            lb->say("WARNING: the default audio output was not put back");
-        }
-    }
     if (lb->capture) {
         IAudioCaptureClient_Release(lb->capture);
     }

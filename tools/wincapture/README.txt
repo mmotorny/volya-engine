@@ -21,18 +21,15 @@ data; everything it writes is game assets and stays on this machine.
   volyacapture selftest [--work DIR]
   volyacapture check [--runs N] [--game DIR] [--work DIR]
   volyacapture full  [--runs N] [--game DIR] [--work DIR]
-  volyacapture audio --audio-device NAME [--runs N] [--game DIR] [--work DIR]
-  volyacapture audio-devices
+  volyacapture audio [--audio-device NAME] [--runs N] [--game DIR] [--work DIR]
 
 selftest: drrun and the client with counterprobe.exe in place of the game
 (no game needed); check: the title menu only; full: every view. N runs
 (default 2), compared.
 audio: every walk with sound on, the game's output recorded by WASAPI
-loopback from the output device whose name contains NAME, which is made
-the default output for the run and the previous default put back after;
-it must be a device no speaker plays (a virtual one, or an output with
-nothing connected). No volume is changed. N runs (default 1).
-audio-devices: lists the output devices.
+loopback from the default output device as it is (or the one whose name
+contains NAME). Nothing changes a volume or a device setting; the
+machine's outputs must be silenced physically. N runs (default 1).
 DIR of the game: default the install's registry entry. Work folder: default
 %TEMP%\volya-engine-capture (no space). Results: <work>\runs\. What it
 logs names no folder of this machine (<game folder>, <work>, <home>). The

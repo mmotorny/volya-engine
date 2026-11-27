@@ -20,12 +20,10 @@
  *   volyacapture selftest [--work DIR]
  *       drrun and the counter client on this machine, with counterprobe.exe
  *       of ours in place of the game: natively, then under drrun.
- *   volyacapture audio --audio-device NAME [--runs N] [--game DIR] [--work DIR]
+ *   volyacapture audio [--audio-device NAME] [--runs N] [--game DIR] [--work DIR]
  *       every walk of the audio-fidelity suite with sound on, its audio
- *       output recorded by loopback (loopback.c) from the output device
- *       NAME, made the default for the run; N runs (default 1).
- *   volyacapture audio-devices
- *       lists the audio output devices.
+ *       output recorded by loopback (loopback.c) from the default output
+ *       device (or the one NAME names); N runs (default 1).
  *
  * Its plan, plan.txt beside it, comes from tests/fidelity/views.rs
  * (`xtask wincapture plan`): the views, their frames, the configuration
@@ -2374,16 +2372,12 @@ int main(int argc, char **argv) {
         /* The walks' audio is not compared run with run: one by default. */
         runs = audio ? 1 : 2;
     }
-    if (!strcmp(mode, "audio-devices")) {
-        return loopback_list(say) ? 0 : 1;
-    }
     if ((strcmp(mode, "check") && strcmp(mode, "full") && strcmp(mode, "selftest") && !audio) ||
-        runs < 1 || (audio && !audio_device[0])) {
+        runs < 1) {
         fprintf(stderr, "usage: volyacapture check|full|selftest [--runs N] [--game DIR] "
                         "[--work DIR]\n"
-                        "       volyacapture audio --audio-device NAME [--runs N] [--game DIR] "
-                        "[--work DIR]\n"
-                        "       volyacapture audio-devices\n");
+                        "       volyacapture audio [--audio-device NAME] [--runs N] [--game DIR] "
+                        "[--work DIR]\n");
         return 2;
     }
     GetModuleFileNameA(NULL, exe_dir, MAX_PATH);
@@ -2425,17 +2419,12 @@ int main(int argc, char **argv) {
     }
     timeBeginPeriod(1);
     say("volyacapture %s: %d run(s), game %s, work folder %s", mode, runs, game, work);
-    /* The walks' output device, made the default while they run; one an
-     * earlier run left so is put back first. */
-    char marker[MAX_PATH];
-    join(marker, sizeof marker, work, "audio-default-before.bin");
+    /* The walks' output device: the default as it is, or the one named. */
     struct loopback *lb = NULL;
     if (audio) {
-        make_dirs(work);
-        loopback_restore_left(marker, say);
-        lb = loopback_open(audio_device, marker, say);
+        lb = loopback_open(audio_device, say);
         if (!lb) {
-            fail("no audio output to record (--audio-device %s)", audio_device);
+            fail("no audio output to record");
             return 1;
         }
     }
