@@ -82,13 +82,7 @@ export const tests = {
     // the video mode changed in the title menu, then a New Game.
     await volya.call("quit_game");
     await until((s) => s.phase === "none", "the game to end");
-    await volya.call("launch");
-    await until((s) => s.phase === "startup", "the logo sequence", 2000);
-    for (let item = 1; item <= 5; item++) {
-      key("Escape");
-      await until((s) => s.phase === "menu" || s.startup?.item === item, `item ${item}`);
-    }
-    await until((s) => s.phase === "menu", "the menu");
+    const logos = await launchToMenu();
     await audioFlows("in the title menu of the game launched again");
     const before = await volya.call("level_stats");
     await volya.call("debug_video_mode", { width: 2868, height: 1320 });
@@ -120,7 +114,7 @@ export const tests = {
     const held = before.gpu_world_bytes;
     const kept = (k) => `${k.textures} textures (${mib(k.texture_bytes)}), ${k.buffers} buffers (${mib(k.buffer_bytes)})`;
     const liveNote = live ? `the GPU holds of the level ${live.textures} textures (${mib(live.texture_bytes)}), ${live.buffers} buffers (${mib(live.buffer_bytes)}), ${live.vertex_arrays} vertex arrays, as in the first; the renderer keeps ${kept(now.gpu_kept)}${firstKept ? `, ${kept(firstKept)} in the first` : ""}; GPU by owner: the title menu after the first level (${owners(before)}), this level at 1024×768 (${owners(now)}); ` : "";
-    return `${original}; ${liveNote}wasm heap ${mib(before.wasm_heap_bytes)} before, ${mib(stats.wasm_heap_bytes)} after; the GPU world in the title menu before: ${held == null ? "none" : mib(held)}; ${heapMaps.slice(-2).join("; ")}; by caption (MiB, heap/live): ${stages}; ${record}`;
+    return `the logo sequence ${logos.toFixed(0)} ms after the launch; ${original}; ${liveNote}wasm heap ${mib(before.wasm_heap_bytes)} before, ${mib(stats.wasm_heap_bytes)} after; the GPU world in the title menu before: ${held == null ? "none" : mib(held)}; ${heapMaps.slice(-2).join("; ")}; by caption (MiB, heap/live): ${stages}; ${record}`;
   },
   "the in-game menu opened twice over the level: what its videos take each time (#517)": async () => {
     needsGame();

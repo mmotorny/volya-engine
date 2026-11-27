@@ -10,6 +10,7 @@
 import { assert, assertEqual } from "./harness.js";
 import {
   CAPTIONS,
+  LOGOS_MS,
   bounds,
   centreOfRow,
   client,
@@ -54,7 +55,7 @@ export const tests = {
     const launched = await volya.call("launch");
     assertEqual(launched.splash, true, "splash picture found");
     // The sequence starts on the frame after loading.
-    const s = await until((s) => s.phase === "startup", "the logo sequence", 2000);
+    const s = await until((s) => s.phase === "startup", "the logo sequence", LOGOS_MS);
     assertEqual([s.startup.item, s.startup.items], [0, 5], "sequence");
     assertEqual((await volya.call("input_state")).capture, true, "capture");
     assertEqual(document.querySelector("main").hidden, true, "page interface hidden");

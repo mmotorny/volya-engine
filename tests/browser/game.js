@@ -545,16 +545,27 @@ export async function importGameData(fresh) {
   return `${(result.status.bytes / 2 ** 30).toFixed(2)} GiB in ${((performance.now() - started) / 1000).toFixed(1)} s`;
 }
 
-/** Launches the game and skips its logos with Escape: the title menu. */
+// How long after `launch` returns its first frame may take to start the
+// logo sequence: one frame, but a machine shared with other suites has
+// delayed it past 2 s (#809).
+export const LOGOS_MS = 30000;
+
+/**
+ * Launches the game and skips its logos with Escape: the title menu. Returns
+ * how long after `launch` returned the logo sequence started, in ms.
+ */
 export async function launchToMenu() {
   await volya.call("launch");
-  await until((s) => s.phase === "startup", "the logo sequence", 2000);
+  const launched = performance.now();
+  await until((s) => s.phase === "startup", "the logo sequence", LOGOS_MS);
+  const started = performance.now() - launched;
   for (let item = 1; item <= 5; item++) {
     key("Escape");
     await until((s) => s.phase === "menu" || s.startup?.item === item, `item ${item}`);
   }
   await until((s) => s.phase === "menu", "the menu");
   await readRender();
+  return started;
 }
 
 /**

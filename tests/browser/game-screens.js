@@ -22,6 +22,7 @@ import {
   keptSetup,
   keptTeardown,
   key,
+  launchToMenu,
   loadMs,
   needsGame,
   nextTouch,
@@ -418,13 +419,7 @@ export const tests = {
     needsGame();
     key("KeyQ");
     await until((s) => s.phase === "none", "the game to end");
-    await volya.call("launch");
-    await until((s) => s.phase === "startup", "the logo sequence", 2000);
-    for (let item = 1; item <= 5; item++) {
-      key("Escape");
-      await until((s) => s.phase === "menu" || s.startup?.item === item, `item ${item}`);
-    }
-    await until((s) => s.phase === "menu", "the menu");
+    await launchToMenu();
     await openOptions();
     clickAt(centreOf(button(await options(), "tab 3")));
     const o = await untilOptions((o) => o.page === "controls", "the controls tab");
