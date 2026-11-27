@@ -442,6 +442,7 @@ pub fn sound_state() -> serde_json::Value {
             "now": s.now(),
             "voices": s.voice_count(),
             "pause_level": s.pause_level(),
+            "effects_factor": s.effects_factor(),
             "emitters": s.emitters().iter().map(|e| serde_json::json!({
                 "name": e.name,
                 "phase": format!("{:?}", e.phase).to_lowercase(),

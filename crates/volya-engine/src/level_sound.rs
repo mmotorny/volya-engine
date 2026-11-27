@@ -28,6 +28,7 @@ use crate::core::sound::Fatal;
 use crate::core::sound::ambient::{self, AmbientParticles, AmbientSet, AmbientState, SetData};
 use crate::core::sound::music::{self, LevelMusic, TrackParams};
 use crate::core::sound::occlusion::{self, SoundOcclusionMesh};
+use crate::core::sound::player_body::{BodySoundNames, BodySounds, ShockEffector};
 use crate::core::sound::rain_thunder::{
     self, BoltCommon, Collection, Rain, ThunderState, ThunderWeather,
 };
@@ -87,6 +88,9 @@ pub struct LevelSoundData {
     /// The sounds of each zone object (S15 2.1), by zone, created with the
     /// level's.
     pub zones: Vec<ZoneSoundNames>,
+    /// The player's body sounds and shock effects (S17 2, 5.1), read with
+    /// the player's configuration.
+    pub body: Option<(BodySoundNames, ShockEffector)>,
 }
 
 /// A zone's sound names, by the index of S15 2.1's keys.
@@ -153,6 +157,7 @@ impl LevelSoundData {
             torches: Vec::new(),
             detectors: Vec::new(),
             zones: Vec::new(),
+            body: None,
         })
     }
 
@@ -184,6 +189,8 @@ pub struct LevelSounds {
     dir: String,
     /// Each zone's sounds (S15 2.1), by zone.
     pub zones: Vec<[Option<SoundId>; 8]>,
+    /// The player's body sounds (S17).
+    pub body: Option<BodySounds>,
 }
 
 /// Creates a zone's sounds in the effects category (S15 2.1): each key a
@@ -265,6 +272,12 @@ impl LevelSounds {
         let zones = (data.zones.iter())
             .map(|names| zone_sounds(system, tree, aliases, names))
             .collect::<Result<_, _>>()?;
+        let body = match &data.body {
+            Some((names, effector)) => {
+                Some(BodySounds::create(system, tree, aliases, names, effector)?)
+            }
+            None => None,
+        };
         let occlusion = system.occlusion_mut();
         occlusion.scale = data.occlusion_scale;
         if let Some(mesh) = &data.occlusion_mesh {
@@ -284,6 +297,7 @@ impl LevelSounds {
             detectors,
             dir: data.dir.clone(),
             zones,
+            body,
         })
     }
 
@@ -420,6 +434,9 @@ impl LevelSounds {
         }
         for &id in self.zones.iter().flatten().flatten() {
             system.discard(id);
+        }
+        if let Some(body) = self.body.take() {
+            body.discard(system);
         }
         system.occlusion_mut().level = None;
     }

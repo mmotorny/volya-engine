@@ -23,6 +23,7 @@ use crate::vfs::{self, Vfs};
 pub mod ambient;
 pub mod music;
 pub mod occlusion;
+pub mod player_body;
 pub mod rain_thunder;
 pub mod random;
 pub mod reverb;

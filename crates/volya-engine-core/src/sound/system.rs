@@ -436,6 +436,12 @@ impl SoundSystem {
         self.effects_factor = factor.clamp(0.0, 1.0);
     }
 
+    /// Sets *F* as the shock effect does (5.4; sound-player-body.md 5),
+    /// unclamped.
+    pub fn set_shock_factor(&mut self, factor: f32) {
+        self.effects_factor = factor;
+    }
+
     pub fn effects_factor(&self) -> f32 {
         self.effects_factor
     }
