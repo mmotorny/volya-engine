@@ -468,6 +468,8 @@ pub struct Player {
     /// The slowdown `s` of the latest hit (player-hits.md 4.1 item 2): 0
     /// when the character comes online, not saved.
     slowdown: f32,
+    /// The physics steps the latest frame ran (6.1).
+    steps: u32,
 }
 
 /// One movement update's step of the slowdown `s` over `dt_m`
@@ -528,6 +530,7 @@ impl Player {
             state: Flags::default(),
             sprint_request: false,
             slowdown: 0.0,
+            steps: 0,
             jump_request: false,
             crouch_toggle: false,
             jump_released: true,
@@ -595,6 +598,15 @@ impl Player {
 
     pub fn body(&self) -> &PlayerBody {
         &self.body
+    }
+
+    pub fn body_mut(&mut self) -> &mut PlayerBody {
+        &mut self.body
+    }
+
+    /// The physics steps the latest frame ran (6.1).
+    pub fn steps(&self) -> u32 {
+        self.steps
     }
 
     /// The ladder (an index into the world's) and the climbing state
@@ -1079,6 +1091,7 @@ impl Player {
             steps += 1;
             self.step(world);
         }
+        self.steps = steps;
         // Whole steps only; what did not fit carries over (at most a step's
         // worth beyond MAX_STEPS, which `dt_f ≤ 0.1` never leaves).
         self.accumulator = self.accumulator.min(STEP * MAX_STEPS as f32);

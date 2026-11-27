@@ -682,8 +682,9 @@ fn way_out(world: &CollisionWorld, start: Vec3, goal: impl Fn(Vec3) -> bool) -> 
     path
 }
 
-/// #837: leaving the start bunker. From the start the player stands, then
-/// runs (W held, steered by the mouse) along the way out to the first
+/// #837: leaving the start bunker. From just past the trader's locked door
+/// (#874) the player stands, then runs (W held, steered by the mouse)
+/// along the way out to the first
 /// earth outside: the time from the key to the first step and to its
 /// voice starting (S11 3.2, 3.3: the first step is due 173 ms into the
 /// cycle), and per step the pair's ground material against the triangles
@@ -710,6 +711,27 @@ fn footsteps_leaving_the_bunker() {
     let start = level.player().state().position;
     let world = level.shared_collision();
     let mut path = way_out(&world, start, |_| true);
+    // The trader's door is locked at the start (trader-door.md, #874): the
+    // way out starts past its leaf, 1 m beyond it, the player placed there.
+    let leaf = level.player().body().bodies()[0].centre;
+    let flat = |p: Vec3| (p[0] - leaf[0]).hypot(p[2] - leaf[2]);
+    let at_door = path
+        .iter()
+        .position(|&p| flat(p) < 0.5)
+        .expect("the door on the way");
+    let past = at_door + (path[at_door..].iter().position(|&p| flat(p) > 1.0).unwrap());
+    path.drain(..past);
+    let p = level.player();
+    let h = p.config.eye_height(p.body().box_index());
+    let (feet, next) = (path[0], path[1]);
+    level.set_camera(
+        [feet[0], feet[1] + h, feet[2]],
+        volya_engine::core::camera::Angles {
+            yaw: (next[0] - feet[0]).atan2(next[2] - feet[2]),
+            pitch: 0.0,
+            roll: 0.0,
+        },
+    );
     let exit = *path.last().unwrap();
     let outside = way_out(&world, exit, |p| {
         under(&world, p).0.is_some_and(|m| matches!(m, 7 | 10))

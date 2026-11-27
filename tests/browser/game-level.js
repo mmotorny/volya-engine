@@ -6,7 +6,8 @@
 // collision world's rays, the zones' idle effects, frame and GPU times at a
 // few video modes (`level_stats`), transcoding costs where textures are
 // transcoded; on touch devices the ergonomic mode's upright
-// game at the screen's own size (#806), its frames kept.
+// game at the screen's own size (#806), its frames kept; the trader's
+// locked door stopping the player, its hint shown.
 
 import { assert, assertEqual, dump, skip } from "./harness.js";
 import {
@@ -41,6 +42,7 @@ import {
   rNow,
   pointAt,
   sleep,
+  state,
   until,
 } from "./game.js";
 
@@ -328,6 +330,48 @@ export const tests = {
       assert(render[0] > render[1], `Standard: drawn landscape: ${render}`);
     }
     return frames.join(", ");
+  },
+
+  "the trader's door: turned to it from the start, running forward stops at it and the HUD shows the door-locked hint": async () => {
+    needsGame();
+    let s = await until((s) => s.phase === "level" && !s.intro && !s.menu, "the level's controls");
+    // docs/behavior/trader-door.md: the locked door, 1.7 m from the start,
+    // is behind the start view: turned half round with the right arrow (π
+    // rad/s), the run meets it within a metre and a half.
+    const door = s.level.doors.find((d) => d.name === "trader_door");
+    assertEqual([door?.section, door?.locked, door?.tip], ["ph_door@locked", true, "tip_door_locked"], "the door's scheme");
+    const down = (code) => document.body.dispatchEvent(new KeyboardEvent("keydown", { code, bubbles: true, cancelable: true }));
+    const up = (code) => document.body.dispatchEvent(new KeyboardEvent("keyup", { code, bubbles: true, cancelable: true }));
+    const yaw = s.level.yaw;
+    down("ArrowRight");
+    await until((s) => s.level.yaw > yaw + Math.PI - 0.08, "the right arrow to turn round", 3000);
+    up("ArrowRight");
+    const start = (await until((s) => !s.level.player.moving, "the turn to end")).level.player.position;
+    const flat = (a, b) => Math.hypot(a[0] - b[0], a[2] - b[2]);
+    down("KeyW");
+    let p;
+    try {
+      await until((s) => s.level.player.moving, "W to run");
+      // Run until a second's run moves the player less than 5 cm.
+      let last = start;
+      for (let i = 0; i < 8; i++) {
+        await sleep(1000);
+        p = (await state()).level.player.position;
+        if (flat(p, last) < 0.05) break;
+        last = p;
+      }
+      s = await state();
+    } finally {
+      up("KeyW");
+    }
+    const ran = flat(p, start);
+    assert(ran > 0.5 && ran < 1.5, `stopped ${ran.toFixed(2)} m from where the run started (the door's face is about 1.1 m away)`);
+    assertEqual(s.level.player.hint, "tip_door_locked", "the player's hint");
+    // 5.2: the HUD's hint static draws it.
+    const frame = await volya.call("menu_scene", { width: 1024, height: 768 });
+    const glyphs = frame.sprites.filter((g) => g.layer === "hud quick info");
+    assert(glyphs.length >= 10, `${glyphs.length} glyphs of the hint`);
+    return `stopped ${ran.toFixed(2)} m on, the hint drawn in ${glyphs.length} glyphs`;
   },
 
   ...keptTeardown(),

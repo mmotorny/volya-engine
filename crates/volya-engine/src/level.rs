@@ -65,6 +65,7 @@ use crate::data::GameData;
 use crate::detector::{DetectorReport, DetectorSound, PlayerDetectors};
 use crate::footsteps::{self, MaterialPairs, PlayerFootsteps};
 use crate::level_details::{self, DetailsScene, DetailsWorld, LevelDetailObjects};
+use crate::level_doors::{DoorReport, LevelDoors};
 use crate::level_lights::{self, GlowShader, LevelLights, LightCamera, LightsData};
 use crate::level_sound::ZoneSoundNames;
 use crate::level_sound::{LevelSoundData, SoundInputs};
@@ -477,6 +478,9 @@ pub struct LevelScreen {
     /// The difficulty the character's immunities were last read for
     /// (player-hits.md 3).
     difficulty: Option<String>,
+    /// The doors under the door scheme and the player's hint
+    /// (docs/behavior/trader-door.md).
+    doors: LevelDoors,
 }
 
 /// What the engine interface reports.
@@ -512,6 +516,8 @@ pub struct LevelState {
     pub torch: Option<TorchReport>,
     /// The player's detectors (sound-detector.md).
     pub detectors: Vec<DetectorReport>,
+    /// The doors under the door scheme (trader-door.md).
+    pub doors: Vec<DoorReport>,
 }
 
 /// The level's placed effects as the engine interface reports them.
@@ -830,6 +836,9 @@ pub struct PlayerReport {
     /// How the latest trip to end on its own ended (`arrived`, `stuck`)
     /// and its distance from its destination then, metres.
     pub trip_end: Option<(&'static str, f32)>,
+    /// The player's hint id, from the object under the crosshair
+    /// (trader-door.md 5.1).
+    pub hint: Option<String>,
 }
 
 /// The level of a new game and where its actor starts: the actor's object
@@ -1531,6 +1540,9 @@ pub struct NewGameLoad {
     detectors: Option<Vec<DetectorSection>>,
     /// The length of each hit type's sound list (sound-player-body.md 2).
     hit_sound_lists: [usize; TYPE_COUNT],
+    /// The doors under the door scheme (trader-door.md), found with the
+    /// objects.
+    doors: Option<LevelDoors>,
 }
 
 /// The zone objects of `level_objects` (zone-idle-effects.md 1.1: the
@@ -2104,6 +2116,16 @@ impl NewGameLoad {
                     }
                 }
                 self.spawned = Some(spawned);
+                // The doors as the client creates its objects (our choice:
+                // the shells are built with them, trader-door.md 2.4).
+                let materials = earlier(self.collision.as_ref(), "level.cform")?.materials();
+                self.doors = Some(LevelDoors::load(
+                    tree,
+                    data,
+                    &dir,
+                    &level_objects,
+                    materials,
+                )?);
                 // The lamps' colour animations (docs/formats/lanims-xr.md),
                 // read here with the lamps (our choice: when the game reads
                 // the file is unestablished); without the file, none.
@@ -2417,6 +2439,7 @@ impl NewGameLoad {
         let player_sphere = earlier(self.player_sphere, "player's model")?;
         let torches = earlier(self.torches, "torches")?;
         let detectors = earlier(self.detectors, "detectors")?;
+        let doors = earlier(self.doors, "objects")?;
         if self.dynamic_props.len() != spawned.instances.len() {
             return Err(invalid("loading stages out of order: no light inputs"));
         }
@@ -2447,13 +2470,15 @@ impl NewGameLoad {
         });
         // start-position.md sections 4 and 5: standing at the stored
         // position, the camera at the spawn's angles.
-        let player = Player::new(
+        let mut player = Player::new(
             movement,
             controls.settings,
             actor.position,
             Angles::from_spawn(actor.angles),
             now,
         );
+        // trader-door.md 3: the closed doors' leaves stop the player.
+        player.body_mut().set_bodies(doors.boxes());
         let eye = player.view().eye;
         let (a, b, t) = weather.bracket(clock.time_of_day());
         let environment = Environment::blend(a, b, t, &self.modifiers, eye, VIS_DISTANCE);
@@ -2536,6 +2561,7 @@ impl NewGameLoad {
             hit_sound_lists: self.hit_sound_lists,
             body_events: Vec::new(),
             difficulty: None,
+            doors,
         };
         screen.torches_frame(0.0);
         screen.update_view();
@@ -2694,9 +2720,13 @@ impl LevelScreen {
             view: self.player.view(),
         };
         let body = crate::core::navigation::Body::of(&self.player.config);
-        let (request, back) =
-            self.controls
-                .request(input, &player, now, &view, Some((&self.collision, &body)));
+        let (request, back) = self.controls.request(
+            input,
+            &player,
+            now,
+            &view,
+            Some((&self.collision, &body, self.player.body().bodies())),
+        );
         // player-state.md 4.3: the condition's limits for this frame's
         // movement; 4.4: a jump's cost; 4.1, 4.2: the conditions over the
         // game time this frame advanced, with the state the movement left.
@@ -2706,7 +2736,15 @@ impl LevelScreen {
         // The climbing states' clock is the footsteps' step clock
         // (climbing.md, conventions): the global clock.
         self.player.set_step_clock(self.global_ms as u32);
+        // trader-door.md 2.1, 2.2: the doors' update, the first starting
+        // their scheme, then their per-step calls in this frame's physics
+        // steps (the order within the frame is our choice); 5.1: the
+        // player's update picks the object under the crosshair.
+        self.doors.update();
         self.player.frame(&self.collision, now, &request);
+        self.doors.physics_steps(self.player.steps());
+        let view = self.player.view();
+        self.doors.pick(view.eye, view.direction, now);
         self.fall_hit();
         if let Some(c) = &mut self.character {
             if self.player.jump_started() {
@@ -3025,6 +3063,12 @@ impl LevelScreen {
     }
 
     /// The player's detectors.
+    /// The doors under the door scheme and the player's hint
+    /// (trader-door.md).
+    pub fn doors(&self) -> &LevelDoors {
+        &self.doors
+    }
+
     pub fn detectors(&self) -> &PlayerDetectors {
         &self.detectors
     }
@@ -4016,12 +4060,14 @@ impl LevelScreen {
                     };
                     (how, d)
                 }),
+                hint: self.doors.hint().map(|(id, _)| id.to_owned()),
             },
             character: self.character.as_ref().map(CharacterReport::of),
             objects: self.objects_report(),
             lights: self.lights.report(),
             torch: self.torches.report(&self.lights.lights, &self.lights.glows),
             detectors: self.detectors.report(&self.zones),
+            doors: self.doors.report(),
         }
     }
 
@@ -4238,6 +4284,7 @@ impl LevelScreen {
             hit_sound_lists: [0; TYPE_COUNT],
             body_events: Vec::new(),
             difficulty: None,
+            doors: LevelDoors::default(),
         }
     }
 }

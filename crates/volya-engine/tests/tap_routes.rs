@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! Tap-to-move's routes on `l01_escape` (BYOA; our design,
-//! docs/architecture/simulation.md, Navigation): targets around the start
-//! whose straight line is blocked are planned and then followed by the
+//! docs/architecture/simulation.md, Navigation): targets around the start,
+//! from just past the trader's locked door, whose straight line is blocked are planned and then followed by the
 //! player's own movement on the level's collision world, and one of the
 //! nearby ladders is climbed; the searches' cost is reported. Skips when
 //! `VOLYA_GOG_INSTALLER` is unset.
@@ -20,7 +20,7 @@ use volya_engine::core::collision::geometry::{Vec3, length, sub};
 use volya_engine::core::input::Input;
 use volya_engine::core::movement::{Player, Request};
 use volya_engine::core::navigation::follow::{Follow, Follower};
-use volya_engine::core::navigation::{Body, Kind, Route, plan};
+use volya_engine::core::navigation::{Body, Kind, Route, plan_among};
 use volya_engine::core::vfs::StdVfs;
 use volya_engine::core::vfs::db::DbVfs;
 use volya_engine::data::GameData;
@@ -74,6 +74,24 @@ fn routes_on_the_start_level() {
     let tree = DbVfs::open_game(&root, Some("mods")).unwrap();
     let data = GameData::read(&tree, None, SIZE).unwrap();
     let mut level = LevelScreen::load(&tree, &data, 0).unwrap();
+    // The trader's door is locked at the start (trader-door.md, #874): the
+    // routes start 1 m past its leaf, on the side away from the start.
+    let leaf = level.player().body().bodies()[0];
+    let start = level.player().state().position;
+    let k = (0..3)
+        .min_by(|&a, &b| leaf.half_size[a].total_cmp(&leaf.half_size[b]))
+        .unwrap();
+    let n = leaf.axes[k];
+    let side = n[0] * (start[0] - leaf.centre[0]) + n[2] * (start[2] - leaf.centre[2]);
+    let out = -side.signum();
+    let (x, z) = (leaf.centre[0] + out * n[0], leaf.centre[2] + out * n[2]);
+    let (y, _) = (level.collision())
+        .floor_below(x, z, start[1] + 1.0, start[1] - 2.0)
+        .expect("a floor past the door");
+    let p = level.player();
+    let h = p.config.eye_height(p.body().box_index());
+    let angles = p.angles();
+    level.set_camera([x, y + h, z], angles);
     let input = Input::new();
     let mut now = 0;
     for _ in 0..30 {
@@ -84,6 +102,8 @@ fn routes_on_the_start_level() {
     let world = level.collision();
     let player = level.player().clone();
     let body = Body::of(&player.config);
+    // The door is in the way.
+    let walls = player.body().bodies();
     let from = player.state().position;
     eprintln!("start {from:?}");
 
@@ -106,7 +126,7 @@ fn routes_on_the_start_level() {
             let dir = d.map(|v| v / length(d));
             let blocked = world.ray_hits(eye, dir, length(d));
             let t = Instant::now();
-            let route = plan(world, &body, from, target);
+            let route = plan_among(world, &body, walls, from, target);
             let ms = t.elapsed().as_secs_f64() * 1e3;
             times.push(ms);
             eprintln!(
@@ -180,7 +200,7 @@ fn routes_on_the_start_level() {
         };
         let target = [beyond[0], y, beyond[1]];
         let t = Instant::now();
-        let Some(route) = plan(world, &body, from, target) else {
+        let Some(route) = plan_among(world, &body, walls, from, target) else {
             continue;
         };
         let ms = t.elapsed().as_secs_f64() * 1e3;

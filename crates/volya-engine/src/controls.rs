@@ -68,6 +68,7 @@
 use std::collections::HashMap;
 
 use crate::core::collision::CollisionWorld;
+use crate::core::collision::body::BodyBox;
 use crate::core::collision::geometry::{
     Vec3, add, cross, dot, length, normalize, ray_triangle_distance, scale, sub,
 };
@@ -954,14 +955,15 @@ impl Way {
     /// A search from the feet at `from` to `to` in `nav`'s world, or
     /// straight without one.
     fn plan(nav: Option<Nav<'_>>, from: Vec3, to: Vec3) -> Self {
-        nav.and_then(|(world, body)| Planning::new(world, body, from, to))
+        nav.and_then(|(world, body, walls)| Planning::among(world, body, walls, from, to))
             .map_or(Way::Straight, |p| Way::Planning(Box::new(p)))
     }
 }
 
-/// The level's collision world and the player's body a trip's route is
-/// planned in ([`crate::core::navigation`]).
-pub type Nav<'a> = (&'a CollisionWorld, &'a Body);
+/// The level's collision world, the player's body and the movable bodies'
+/// boxes in its way a trip's route is planned in
+/// ([`crate::core::navigation`]).
+pub type Nav<'a> = (&'a CollisionWorld, &'a Body, &'a [BodyBox]);
 
 /// A trip under way to a tapped destination.
 #[derive(Clone, Debug, PartialEq)]
@@ -1118,7 +1120,7 @@ impl TapMove {
             }
             // The search under way, by a frame's part.
             if let Way::Planning(p) = &mut t.way {
-                let found = nav.and_then(|(world, _)| p.run(world, PLAN_BUDGET));
+                let found = nav.and_then(|(world, _, _)| p.run(world, PLAN_BUDGET));
                 match found {
                     Some(Some(route)) => t.way = Way::Route(Follower::new(route, now)),
                     Some(None) => t.way = Way::Straight,
@@ -2577,9 +2579,13 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
                     view: p.view(),
                 };
                 let body = crate::core::navigation::Body::of(&p.config);
-                let (r, _) =
-                    self.c
-                        .request(&self.i, &p.state(), self.now, &view, Some((world, &body)));
+                let (r, _) = self.c.request(
+                    &self.i,
+                    &p.state(),
+                    self.now,
+                    &view,
+                    Some((world, &body, &[])),
+                );
                 self.p.frame(&self.world, self.now, &r);
                 self.i.end_frame();
             }

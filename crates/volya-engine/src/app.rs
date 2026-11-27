@@ -42,6 +42,7 @@ use crate::loading_screen::{
 };
 use crate::menu_screens::{Frame, MenuFrame, MenuScreens, MenuState};
 use crate::pda_window::{self, PdaState, PdaWindow};
+use crate::quick_info::QuickInfo;
 use crate::render::present::Presentation;
 use crate::render::world::Filtering;
 use crate::save_load::FieldFont;
@@ -664,6 +665,9 @@ pub struct App {
     window: ConsoleWindow,
     /// The main menu was active after the previous update.
     menu_was_active: bool,
+    /// The HUD's hint static (trader-door.md 5.2), read when first shown
+    /// and again for another layout.
+    quick_info: Option<QuickInfo>,
 }
 
 /// The layout surface of the main menu while it asks for the
@@ -862,6 +866,7 @@ impl App {
             stats,
             window: ConsoleWindow::default(),
             menu_was_active: false,
+            quick_info: None,
             applied: console.generation(),
             console,
             screens: MenuScreens::default(),
@@ -2365,8 +2370,24 @@ impl App {
                 pda,
                 ..
             }) => {
-                let mut scene =
-                    compose(level.scene(resolution), intro, overlay.as_ref(), &mut ctx)?;
+                let mut scene = level.scene(resolution);
+                // trader-door.md 5.2, 5.3: the HUD's hint while the player
+                // has one, under the intro and the loading image. Not
+                // while the inventory or the PDA shows (our choice: whether
+                // the HUD hides it then is unestablished, 6; #740).
+                let windows = inventory.as_ref().is_some_and(|i| i.is_open())
+                    || pda.as_ref().is_some_and(|p| p.is_open());
+                if let Some((id, start)) = level.doors().hint().filter(|_| !windows) {
+                    if !self.quick_info.as_ref().is_some_and(|q| q.fits(resolution)) {
+                        let animations = level.level_lights().animations();
+                        self.quick_info = Some(QuickInfo::load(&ctx, resolution, animations)?);
+                    }
+                    let text = ctx.data.text(id);
+                    if let Some(q) = &self.quick_info {
+                        q.draw(&mut ctx, &mut scene, &text, start)?;
+                    }
+                }
+                let mut scene = compose(scene, intro, overlay.as_ref(), &mut ctx)?;
                 // inventory-screen.md 3.1: over the rendered level.
                 if let (Some(screen), Some(character)) = (inventory, level.character()) {
                     screen.draw(&mut ctx, &mut scene, character)?;

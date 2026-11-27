@@ -12,7 +12,7 @@
 //! floor's **room** is the tallest of the player's three postures whose
 //! box (standing, crouch, low crouch, from [`MovementConfig`]'s boxes)
 //! fits over it, from [`CLEAR_BASE`] above the floor, [`CLEAR_HALF`] to
-//! each side; the ladders' boxes count as walls. Neighbouring floors join
+//! each side; the ladders' and the movable bodies' boxes count as walls. Neighbouring floors join
 //! by edges of the kinds of [`Kind`], costed by the time the movement
 //! takes at that posture's speed: a step within [`Body::step`], a drop to
 //! within [`Body::drop`], a jump up to a ledge within [`Body::jump_up`], a
@@ -25,7 +25,7 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 
 use crate::collision::CollisionWorld;
-use crate::collision::body::WALKABLE_NORMAL_Y;
+use crate::collision::body::{BodyBox, WALKABLE_NORMAL_Y};
 use crate::collision::geometry::{Vec3, box_intersects, closest_point, front_normal, sub};
 use crate::movement::{GRAVITY, MovementConfig};
 
@@ -270,6 +270,9 @@ struct Link {
 #[derive(Clone)]
 struct Grid {
     body: Body,
+    /// The triangles of the movable bodies' boxes in the player's way
+    /// (docs/behavior/trader-door.md 3), walls like the ladders' boxes.
+    walls: Vec<[Vec3; 3]>,
     /// The vertical span columns are probed over.
     y: [f32; 2],
     columns: HashMap<(i32, i32), Vec<Floor>>,
@@ -290,9 +293,10 @@ fn horizontal_distance(a: Vec3, b: Vec3) -> f32 {
 }
 
 impl Grid {
-    fn new(body: Body, y: [f32; 2]) -> Self {
+    fn new(body: Body, y: [f32; 2], walls: Vec<[Vec3; 3]>) -> Self {
         Self {
             body,
+            walls,
             y,
             columns: HashMap::new(),
             scratch: Vec::new(),
@@ -351,7 +355,7 @@ impl Grid {
             .into_iter()
             .map(|y| Floor {
                 y,
-                room: room(w, &found, self.body.heights, x, y, z),
+                room: room(w, &found, &self.walls, self.body.heights, x, y, z),
             })
             .collect();
         self.scratch = found;
@@ -370,7 +374,8 @@ impl Grid {
         let clear = !found
             .iter()
             .any(|&t| w.is_solid(t) && box_meets(x, z, span, &w.corners(t)))
-            && !ladder_faces(w, lo, hi).any(|t| box_meets(x, z, span, t));
+            && !ladder_faces(w, lo, hi).any(|t| box_meets(x, z, span, t))
+            && !self.walls.iter().any(|t| box_meets(x, z, span, t));
         self.scratch = found;
         clear
     }
@@ -385,8 +390,16 @@ fn ladder_faces(w: &CollisionWorld, lo: Vec3, hi: Vec3) -> impl Iterator<Item = 
 }
 
 /// The tallest posture whose box fits over the floor at (`x`, `y`, `z`),
-/// among the solid triangles `found` and the ladders' boxes.
-fn room(w: &CollisionWorld, found: &[u32], heights: [f32; 3], x: f32, y: f32, z: f32) -> u8 {
+/// among the solid triangles `found`, the ladders' boxes and `walls`.
+fn room(
+    w: &CollisionWorld,
+    found: &[u32],
+    walls: &[[Vec3; 3]],
+    heights: [f32; 3],
+    x: f32,
+    y: f32,
+    z: f32,
+) -> u8 {
     let base = y + CLEAR_BASE;
     let top = y + heights[0] + HEAD_MARGIN;
     let lo = [x - CLEAR_HALF, base, z - CLEAR_HALF];
@@ -412,7 +425,7 @@ fn room(w: &CollisionWorld, found: &[u32], heights: [f32; 3], x: f32, y: f32, z:
             return BLOCKED;
         }
     }
-    for t in ladder_faces(w, lo, hi) {
+    for t in ladder_faces(w, lo, hi).chain(walls) {
         if test(t) {
             return BLOCKED;
         }
@@ -754,6 +767,17 @@ impl Planning {
     /// reachable floor nearest `target`; `None` with no floor under or
     /// beside the feet.
     pub fn new(world: &CollisionWorld, body: &Body, from: Vec3, target: Vec3) -> Option<Self> {
+        Self::among(world, body, &[], from, target)
+    }
+
+    /// [`Planning::new`] with the movable bodies' boxes `walls` in the way.
+    pub fn among(
+        world: &CollisionWorld,
+        body: &Body,
+        walls: &[BodyBox],
+        from: Vec3,
+        target: Vec3,
+    ) -> Option<Self> {
         let y = [
             from[1].min(target[1]) - WINDOW_HEIGHT,
             from[1].max(target[1]) + WINDOW_HEIGHT,
@@ -777,7 +801,11 @@ impl Planning {
             target
         };
         let mut s = Search {
-            grid: Grid::new(*body, y),
+            grid: Grid::new(
+                *body,
+                y,
+                walls.iter().flat_map(BodyBox::triangles).collect(),
+            ),
             target: seen,
             nodes: Vec::new(),
             index: HashMap::new(),
@@ -943,7 +971,18 @@ impl Planning {
 /// `target` in `world` for `body`, searched at once; `None` when no floor
 /// is under the feet or nothing nearer the target is reachable.
 pub fn plan(world: &CollisionWorld, body: &Body, from: Vec3, target: Vec3) -> Option<Route> {
-    Planning::new(world, body, from, target)?
+    plan_among(world, body, &[], from, target)
+}
+
+/// [`plan`] with the movable bodies' boxes `walls` in the way.
+pub fn plan_among(
+    world: &CollisionWorld,
+    body: &Body,
+    walls: &[BodyBox],
+    from: Vec3,
+    target: Vec3,
+) -> Option<Route> {
+    Planning::among(world, body, walls, from, target)?
         .run(world, usize::MAX)
         .flatten()
 }

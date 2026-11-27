@@ -83,6 +83,17 @@ pub const PLAYER_MATERIAL: usize = 0;
 /// A contact with ladder `i`'s triangle `k` records triangle
 /// `LADDER_TRIANGLES + 12·i + k` (our numbering, apart from the level's).
 pub const LADDER_TRIANGLES: u32 = 0x8000_0000;
+/// A contact with movable body box `i`'s triangle `k` records triangle
+/// `BODY_TRIANGLES + 12·i + k` (our numbering, below the ladders').
+pub const BODY_TRIANGLES: u32 = 0x4000_0000;
+/// The outer sphere's radius and its centre's height above the body
+/// centre, in `r` (section 5.1).
+pub const OUTER_RADIUS: f32 = 2.0;
+pub const OUTER_HEIGHT: f32 = 2.5;
+/// The constant of the normal-direction softening (5.4): 0.5 for the
+/// level, 5 for a movable body (docs/behavior/trader-door.md 3.3).
+pub const LEVEL_SOFTENING: f32 = 0.5;
+pub const BODY_SOFTENING: f32 = 5.0;
 /// The world's error-reduction parameter `E` and constraint-force mixing
 /// `C` at the step `h` (section 4.2): `K·h / (K·h + D₀)` and
 /// `1 / (K·h + D₀)`.
@@ -129,6 +140,102 @@ impl Shapes {
     /// Height of the top of the head sphere above the body centre.
     pub fn top(&self) -> f32 {
         self.h + self.small_radius()
+    }
+}
+
+/// A box of a movable body the player's body meets
+/// (docs/behavior/trader-door.md 3.1), in world space. It stays where it
+/// is given: the body's own motion is its owner's.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BodyBox {
+    pub centre: Vec3,
+    /// Unit axes.
+    pub axes: [Vec3; 3],
+    pub half_size: Vec3,
+    /// Its game material's index (section 3.3).
+    pub material: u32,
+}
+
+impl BodyBox {
+    /// The corner on side `s` (each ±1) of each axis.
+    pub fn corner(&self, s: [f32; 3]) -> Vec3 {
+        (0..3).fold(self.centre, |p, k| {
+            add(p, scale(self.axes[k], s[k] * self.half_size[k]))
+        })
+    }
+
+    /// Its six faces as twelve triangles, each facing out (section 2.3's
+    /// winding).
+    pub fn triangles(&self) -> [[Vec3; 3]; 12] {
+        let mut out = [[[0.0; 3]; 3]; 12];
+        for k in 0..3 {
+            let (i, j) = ((k + 1) % 3, (k + 2) % 3);
+            for (f, side) in [-1.0f32, 1.0].into_iter().enumerate() {
+                let at = |a: f32, b: f32| {
+                    let mut s = [0.0; 3];
+                    (s[k], s[i], s[j]) = (side, a, b);
+                    self.corner(s)
+                };
+                let mut q = [at(-1.0, -1.0), at(1.0, -1.0), at(1.0, 1.0), at(-1.0, 1.0)];
+                let outward = scale(self.axes[k], side);
+                if geometry::front_normal(&[q[0], q[1], q[2]])
+                    .is_some_and(|n| dot(n, outward) < 0.0)
+                {
+                    q.reverse();
+                }
+                let n = 4 * k + 2 * f;
+                out[n] = [q[0], q[1], q[2]];
+                out[n + 1] = [q[0], q[2], q[3]];
+            }
+        }
+        out
+    }
+
+    /// Its world-space bounding box.
+    pub fn bounds(&self) -> (Vec3, Vec3) {
+        let reach: Vec3 = std::array::from_fn(|c| {
+            (0..3)
+                .map(|k| (self.axes[k][c] * self.half_size[k]).abs())
+                .sum()
+        });
+        (sub(self.centre, reach), add(self.centre, reach))
+    }
+
+    /// The distance from `p` to the box, 0 inside it.
+    pub fn distance(&self, p: Vec3) -> f32 {
+        let d = sub(p, self.centre);
+        (0..3)
+            .map(|k| (dot(d, self.axes[k]).abs() - self.half_size[k]).max(0.0))
+            .map(|e| e * e)
+            .sum::<f32>()
+            .sqrt()
+    }
+
+    /// The distance along the unit direction `dir` from `origin` at which
+    /// the ray enters the box, if it meets it (0 from inside).
+    pub fn ray(&self, origin: Vec3, dir: Vec3) -> Option<f32> {
+        let d = sub(origin, self.centre);
+        let (mut near, mut far) = (0.0f32, f32::INFINITY);
+        for k in 0..3 {
+            let (o, v, h) = (
+                dot(d, self.axes[k]),
+                dot(dir, self.axes[k]),
+                self.half_size[k],
+            );
+            if v.abs() < 1e-12 {
+                if o.abs() > h {
+                    return None;
+                }
+                continue;
+            }
+            let (a, b) = ((-h - o) / v, (h - o) / v);
+            near = near.max(a.min(b));
+            far = far.min(a.max(b));
+            if near > far {
+                return None;
+            }
+        }
+        Some(near)
     }
 }
 
@@ -263,6 +370,8 @@ pub struct PlayerBody {
     /// The player is climbing (docs/behavior/climbing.md 3.1, 3.4): not
     /// airborne, and its contacts while moving take the world's softness.
     climbing: bool,
+    /// The movable bodies' boxes it meets (docs/behavior/trader-door.md 3).
+    bodies: Vec<BodyBox>,
     contacts: Vec<Contact>,
     step: StepContacts,
     scratch: Vec<u32>,
@@ -300,6 +409,7 @@ impl PlayerBody {
             ground_material: None,
             refused: None,
             climbing: false,
+            bodies: Vec::new(),
             contacts: Vec::new(),
             step: StepContacts::default(),
             scratch: Vec::new(),
@@ -361,6 +471,16 @@ impl PlayerBody {
     /// damage rate are for the health system.
     pub fn ground_material(&self) -> Option<u32> {
         self.ground_material
+    }
+
+    /// Sets the movable bodies' boxes the body meets from the next step
+    /// (docs/behavior/trader-door.md 3).
+    pub fn set_bodies(&mut self, bodies: Vec<BodyBox>) {
+        self.bodies = bodies;
+    }
+
+    pub fn bodies(&self) -> &[BodyBox] {
+        &self.bodies
     }
 
     /// The contacts of the current step, after the player's rules.
@@ -714,10 +834,34 @@ impl PlayerBody {
         let (mut solid, mut passing) = (None, None);
         let mut head_seen = false;
         let (world_erp, world_cfm) = world_erp_cfm();
+        // trader-door.md 3.1, 3.2: a movable body's box is collided while
+        // its bounds overlap the body's; the outer sphere's overlap with it
+        // only sets the step's "blocked" flag, before the other contacts
+        // (our choice of order: the spec gives none).
+        let outer = (
+            add(c, [0.0, OUTER_HEIGHT * shapes.r, 0.0]),
+            OUTER_RADIUS * shapes.r,
+        );
+        if self.bodies.iter().any(|b| b.distance(outer.0) < outer.1) {
+            rules.blocked = true;
+        }
+        let body_triangles = (self.bodies.iter().enumerate())
+            .filter(|(_, b)| {
+                let (lo, hi) = b.bounds();
+                (0..3).all(|k| lo[k] <= max[k] && hi[k] >= min[k])
+            })
+            .flat_map(|(i, b)| {
+                let base = BODY_TRIANGLES + 12 * i as u32;
+                (b.triangles().into_iter().enumerate()).map(move |(k, t)| (base + k as u32, t))
+            });
         for shape in [Shape::Head, Shape::Bottom, Shape::Torso] {
             let level = found.iter().map(|&t| (t, world.corners(t)));
-            for (t, corners) in level.chain(ladder_triangles.clone()) {
+            let all = level
+                .chain(ladder_triangles.clone())
+                .chain(body_triangles.clone());
+            for (t, corners) in all {
                 let ladder = t >= LADDER_TRIANGLES;
+                let movable = !ladder && t >= BODY_TRIANGLES;
                 let raw = match shape {
                     Shape::Head => geometry::sphere(add(c, head), small, add(p, head), &corners),
                     Shape::Bottom => geometry::sphere(c, shapes.r, p, &corners),
@@ -740,6 +884,8 @@ impl PlayerBody {
                 let generated_normal = normal;
                 let material = if ladder {
                     world.ladder_material()
+                } else if movable {
+                    self.bodies[((t - BODY_TRIANGLES) / 12) as usize].material
                 } else {
                     world.material_index(t)
                 };
@@ -751,7 +897,10 @@ impl PlayerBody {
                     // TODO(#391): whether a ladder's contacts give the impact
                     // speed or set the ground material is unestablished
                     // (climbing.md 3.7, 4); here they do neither.
-                    if ladder {
+                    // trader-door.md 3.3: a movable body's contacts record
+                    // an impact for collision damage instead (PH-12, not
+                    // implemented here).
+                    if ladder || movable {
                         return;
                     }
                     let v = self.velocity;
@@ -807,17 +956,27 @@ impl PlayerBody {
                 if self.climbing && rules.moving {
                     (erp, cfm) = (world_erp, 2.0 * world_cfm);
                 }
-                let soften = |erp: &mut f32, cfm: &mut f32, q: f32| {
-                    let f = 1.0 / ((1.0 - *erp) * q + *erp * 0.5);
+                let soften = |erp: &mut f32, cfm: &mut f32, q: f32, k: f32| {
+                    let f = 1.0 / ((1.0 - *erp) * q + *erp * k);
                     *cfm *= f;
-                    *erp *= f * 0.5;
+                    *erp *= f * k;
                 };
                 if shape == Shape::Head {
-                    soften(&mut erp, &mut cfm, 20.1);
+                    soften(&mut erp, &mut cfm, 20.1, LEVEL_SOFTENING);
                 }
-                soften(&mut erp, &mut cfm, 20.1 + 19.1 * normal[1]);
-                // 5.4: traction and friction.
-                let value = if shape == Shape::Head || rules.blocked {
+                // trader-door.md 3.3: a movable body's contacts take 5 where
+                // the level's take 0.5. The sign of the library's normal for
+                // such a pair is unestablished (3.2); it is taken as for the
+                // level (our choice: a door's sides, with horizontal
+                // normals, do not depend on it).
+                let k = if movable {
+                    BODY_SOFTENING
+                } else {
+                    LEVEL_SOFTENING
+                };
+                soften(&mut erp, &mut cfm, 20.1 + 19.1 * normal[1], k);
+                // 5.4: traction and friction; a movable body's value is 1.
+                let value = if shape == Shape::Head || rules.blocked || movable {
                     1.0
                 } else {
                     mu
@@ -1330,5 +1489,92 @@ mod tests {
             plane_direction([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
             Some([1.0, 0.0, 0.0])
         );
+    }
+
+    /// A door leaf's box standing across x = `x` (its near face there),
+    /// turned `angle` about y, of material index 4.
+    fn leaf(x: f32, angle: f32) -> BodyBox {
+        let (s, c) = angle.sin_cos();
+        BodyBox {
+            centre: [x + 0.125, 1.322, 0.0],
+            axes: [[c, 0.0, -s], [0.0, 1.0, 0.0], [s, 0.0, c]],
+            half_size: [0.125, 1.322, 0.69],
+            material: 4,
+        }
+    }
+
+    #[test]
+    fn a_body_box_faces_out_and_is_met_by_rays() {
+        let b = leaf(1.0, 0.3);
+        for t in b.triangles() {
+            let n = geometry::front_normal(&t).unwrap();
+            let mid = scale(add(add(t[0], t[1]), t[2]), 1.0 / 3.0);
+            assert!(dot(n, sub(mid, b.centre)) > 0.0, "{t:?}");
+        }
+        let b = leaf(1.0, 0.0);
+        assert_eq!(b.bounds(), ([1.0, 0.0, -0.69], [1.25, 2.644, 0.69]));
+        assert_eq!(b.ray([0.0, 1.0, 0.0], [1.0, 0.0, 0.0]), Some(1.0));
+        assert_eq!(b.ray([0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]), None);
+        assert_eq!(b.ray([0.0, 1.0, 2.0], [1.0, 0.0, 0.0]), None);
+        assert_eq!(b.ray([1.1, 1.0, 0.0], [1.0, 0.0, 0.0]), Some(0.0));
+        assert!((b.distance([0.5, 1.0, 0.0]) - 0.5).abs() < 1e-6);
+        assert_eq!(b.distance([1.1, 1.0, 0.0]), 0.0);
+    }
+
+    /// trader-door.md 3.3: the contact with a movable body's side, all
+    /// factors 1: error reduction 0.12987 and constraint-force mixing
+    /// 1.082e-7, traction 1; the outer sphere's overlap sets "blocked".
+    #[test]
+    fn a_movable_body_contact_is_stiffer_than_the_level() {
+        let mut b = Builder::default();
+        b.floor([-5.0, 5.0], [-5.0, 5.0], 0.0, true);
+        let world = b.world();
+        let mut body = PlayerBody::new(config(), [0.0, 0.0, 0.0]);
+        body.set_bodies(vec![leaf(0.34, 0.0)]);
+        let c = body.begin_step(
+            &world,
+            &StepInput {
+                acceleration: [1.0, 0.0, 0.0],
+                jump_requested: false,
+            },
+        );
+        assert!(c.blocked && c.traction == 1.0, "{c:?}");
+        let side: Vec<&Contact> = (body.contacts().iter())
+            .filter(|c| c.triangle >= BODY_TRIANGLES && c.normal[1] == 0.0)
+            .collect();
+        assert!(!side.is_empty(), "{:?}", body.contacts());
+        for c in side {
+            assert_eq!(
+                (c.material, c.friction, c.normal),
+                (4, 0.0, [-1.0, 0.0, 0.0])
+            );
+            assert!((c.erp - 0.129_87).abs() < 1e-5, "{}", c.erp);
+            assert!((c.cfm - 1.082e-7).abs() < 1e-10, "{}", c.cfm);
+        }
+        // Far from it, nothing.
+        body.set_position([-3.0, 0.0, 0.0]);
+        let c = body.begin_step(&world, &StepInput::default());
+        assert!(!c.blocked);
+        assert!(body.contacts().iter().all(|c| c.triangle < BODY_TRIANGLES));
+    }
+
+    #[test]
+    fn a_movable_body_box_stops_the_walk() {
+        let mut b = Builder::default();
+        b.floor([-10.0, 10.0], [-10.0, 10.0], 0.0, true);
+        let world = b.world();
+        let mut body = PlayerBody::new(config(), [0.0, 0.0, 0.0]);
+        body.set_bodies(vec![leaf(1.0, 0.0)]);
+        let r = walk(&mut body, &world, [1.0, 0.0, 0.0], 200);
+        assert!(
+            r.position[0] < 1.0 - 0.3 && r.position[0] > 0.5,
+            "{:?}",
+            r.position
+        );
+        assert!(r.position[1].abs() < 0.02, "{:?}", r.position);
+        // Without it, through.
+        body.set_bodies(Vec::new());
+        let r = walk(&mut body, &world, [1.0, 0.0, 0.0], 100);
+        assert!(r.position[0] > 2.0, "{:?}", r.position);
     }
 }

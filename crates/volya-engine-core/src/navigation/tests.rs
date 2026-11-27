@@ -171,6 +171,27 @@ fn goes_around_a_wall() {
     assert!(r.cost < 12.0 / 3.57, "{}", r.cost);
 }
 
+/// A movable body's box (a locked door's leaf, trader-door.md) is a wall.
+#[test]
+fn goes_around_a_movable_body() {
+    let world = open_floor().world();
+    let leaf = BodyBox {
+        centre: [0.0, 1.5, 2.15],
+        axes: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        half_size: [4.0, 1.5, 0.15],
+        material: 0,
+    };
+    let (from, to) = ([0.0; 3], [0.0, 0.0, 5.0]);
+    let straight = plan(&world, &body(), from, to).unwrap();
+    assert!(
+        straight.waypoints.iter().all(|w| w.at[0].abs() < 1.0),
+        "{straight:?}"
+    );
+    let r = plan_among(&world, &body(), &[leaf], from, to).unwrap();
+    assert!(r.complete, "{r:?}");
+    assert!(r.waypoints.iter().any(|w| w.at[0].abs() > 4.0), "{r:?}");
+}
+
 #[test]
 fn jumps_up_onto_a_box_across_the_way() {
     let mut b = corridor();

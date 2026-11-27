@@ -123,11 +123,12 @@ const TRADER_ROOM: [Segment; 30] = {
 pub const WALKS: &[Walk] = &[
     Walk {
         // Planned on our collision world (the tap routes' planner) and checked
-        // by our movement to leave the bunker: turned at π rad/s (0.126 rad
-        // a frame), run at the default run (section 4.1). It starts after
-        // the loud bursts of the original's frames 728–802 and 859–873 of
-        // play (#864), its preroll too. The original's player is stopped
-        // at the trader's locked door in segment 2 (#866).
+        // by our movement to leave the bunker, before the trader's door was
+        // ours: turned at π rad/s (0.126 rad a frame), run at the default
+        // run (section 4.1). It starts after the loud bursts of the
+        // original's frames 728–802 and 859–873 of play (#864), its preroll
+        // too. Both players are stopped at the trader's locked door in
+        // segment 2 (#866, #874).
         name: "bunker-exit",
         shows: "a New Game's player running out of the trader's bunker from the start: back \
                 along the room, up the stairs, around the landing and out",
