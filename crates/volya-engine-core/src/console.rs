@@ -315,12 +315,22 @@ pub enum Exec {
     /// diagnostic command its lines.
     Shown,
     /// An action whose effect is the console's caller's (its own
-    /// specification, docs/behavior/console-scope.md section 6).
+    /// specification, docs/behavior/console-scope.md section 6): the
+    /// caller runs it from [`Console::take_actions`].
     Action,
     /// No such command: `! Unknown command:  <name>` was printed.
     Unknown,
     /// An empty line, or `name` without a game (console-commands.md 4.3).
     Ignored,
+}
+
+/// An action the console left to its caller ([`Exec::Action`]): the
+/// command's name and its argument as the command got it (section 2: one
+/// space-separated text, lower-cased unless the command keeps case).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActionLine {
+    pub name: &'static str,
+    pub argument: String,
 }
 
 /// `load_last_save <name>` keeps at most this many characters
@@ -359,6 +369,8 @@ pub struct Console {
     /// `r2em`'s message switch: starts off, not saved
     /// (console-misc-settings.md section 9).
     material_message: bool,
+    /// The actions executed since the caller last took them, in order.
+    actions: Vec<ActionLine>,
 }
 
 impl PartialEq for Console {
@@ -433,6 +445,7 @@ impl Console {
             starting: false,
             fatal: None,
             material_message: false,
+            actions: Vec::new(),
         };
         // Set up before the engine and the console (console-log.md 3.3).
         console.log.set_up_file();
@@ -503,6 +516,12 @@ impl Console {
     /// a key name no key has (console-key-bindings.md sections 2 and 3).
     pub fn fatal(&self) -> Option<&str> {
         self.fatal.as_deref()
+    }
+
+    /// The actions executed since the last call ([`Exec::Action`]), in
+    /// the order they were executed, for the caller to run.
+    pub fn take_actions(&mut self) -> Vec<ActionLine> {
+        std::mem::take(&mut self.actions)
     }
 
     /// [`Self::fatal`], once: the program ends with it.
@@ -612,7 +631,16 @@ impl Console {
     fn command(&mut self, i: usize, argument: &str) -> Exec {
         let def = COMMANDS[i];
         let parsed = match def.kind {
-            Kind::Action(_) => return self.action(def.name, argument),
+            Kind::Action(_) => {
+                let result = self.action(def.name, argument);
+                if result == Exec::Action {
+                    self.actions.push(ActionLine {
+                        name: def.name,
+                        argument: argument.to_owned(),
+                    });
+                }
+                return result;
+            }
             // Only acts while a game with a player exists; Volya Engine's
             // console has none (4.3).
             Kind::Name => return Exec::Ignored,
@@ -782,6 +810,14 @@ impl Console {
             "load_last_save" if !argument.is_empty() => {
                 self.last_save = Some(argument.chars().take(LAST_SAVE_LENGTH).collect());
                 Exec::Done
+            }
+            // Without a name remembered it only says so
+            // (steering-the-original.md 3.2.1).
+            "load_last_save" if self.last_save.is_none() => {
+                self.print(
+                    "! cannot load last saved game since it hasn't been specified".to_owned(),
+                );
+                Exec::Shown
             }
             _ => Exec::Action,
         }

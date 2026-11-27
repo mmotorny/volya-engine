@@ -103,6 +103,38 @@ fn the_bare_name_shows_or_runs() {
 }
 
 #[test]
+fn actions_wait_for_the_caller_in_order() {
+    let mut c = Console::new(files());
+    assert_eq!(c.exec("start SERVER(all/single)  client(x)"), Exec::Action);
+    assert_eq!(c.exec("quit"), Exec::Action);
+    c.exec("g_corpsenum 5");
+    let line = |name, argument: &str| ActionLine {
+        name,
+        argument: argument.to_owned(),
+    };
+    assert_eq!(
+        c.take_actions(),
+        [
+            line("start", "server(all/single) client(x)"),
+            line("quit", "")
+        ]
+    );
+    assert!(c.take_actions().is_empty());
+}
+
+#[test]
+fn load_last_save_without_a_name_says_so() {
+    let mut c = Console::new(files());
+    assert_eq!(
+        printed(&mut c, "load_last_save"),
+        ["! cannot load last saved game since it hasn't been specified"]
+    );
+    assert!(c.take_actions().is_empty());
+    c.exec("load_last_save mysave");
+    assert_eq!(c.exec("load_last_save"), Exec::Action);
+}
+
+#[test]
 fn flush_and_clear_log_write_the_log_file() {
     // console-log.md 3.3: created empty as the console is set up.
     let mut c = Console::new(files());
