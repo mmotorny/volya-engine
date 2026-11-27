@@ -9,7 +9,6 @@
 //! case-insensitively (ASCII), so lookups and listed names are lowercase.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
 use std::io::{self, Cursor, Read, Seek, SeekFrom};
 
 use volya_engine_formats::db::{Archive, Entry, Scrambling};
@@ -135,7 +134,7 @@ impl<'a> DbVfs<Box<dyn VfsFile + 'a>> {
         let mut vfs = Self::new();
         // Each archive's table is read and added in turn; the tree is built
         // once from them all.
-        let mut tree = BTreeMap::new();
+        let mut paths = Paths::default();
         let mut readers = Vec::new();
         for archive in game_archives(game, mods_dir)? {
             let file = game.open(&archive.path)?;
@@ -144,78 +143,177 @@ impl<'a> DbVfs<Box<dyn VfsFile + 'a>> {
             let opened = Archive::open(file, Scrambling::for_path(&archive.path))
                 .map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", archive.path)))?;
             let index = index(readers.len());
-            readers.push(add_archive(&mut tree, index, &archive.mount, opened)?);
+            readers.push(paths.add_archive(index, &archive.mount, opened)?);
         }
         vfs.archives = readers.into_iter().map(RefCell::new).collect();
-        vfs.build(tree);
+        vfs.build(paths);
         Ok(vfs)
     }
 }
 
-/// A node while the tree is built: whether it is a directory, and its file
-/// (a [`Node`] of which only the file's fields count).
-#[derive(Default)]
-struct Pending {
-    dir: bool,
-    file: Option<Node>,
+/// A file's place in its archive: the file fields of a [`Node`].
+#[derive(Clone, Copy)]
+struct File {
+    /// [`NO_FILE`] for none.
+    archive: u32,
+    offset: u32,
+    original_size: u32,
+    stored_size: u32,
 }
 
-/// Marks `path` and its ancestors (not the root) directories.
-fn add_dir(tree: &mut BTreeMap<String, Pending>, path: &str) {
-    let mut end = 0;
-    for part in path.split('/') {
-        end += part.len();
-        if end > 0 {
-            match tree.get_mut(&path[..end]) {
-                Some(pending) => pending.dir = true,
-                None => {
-                    let dir = Pending {
-                        dir: true,
-                        file: None,
-                    };
-                    tree.insert(path[..end].to_owned(), dir);
+impl File {
+    const NONE: Self = Self {
+        archive: NO_FILE,
+        offset: 0,
+        original_size: 0,
+        stored_size: 0,
+    };
+
+    fn of(node: &Node) -> Self {
+        Self {
+            archive: node.archive,
+            offset: node.offset,
+            original_size: node.original_size,
+            stored_size: node.stored_size,
+        }
+    }
+}
+
+/// A path while the tree is built: whether it is a directory, and its file.
+#[derive(Clone, Copy)]
+struct Record {
+    /// The path's range in [`Paths::text`].
+    start: u32,
+    len: u32,
+    /// The order it was added in: of a path's records the last one's file
+    /// wins.
+    seq: u32,
+    dir: bool,
+    file: File,
+}
+
+/// Every path of the tree while it is built (rule 3 of
+/// docs/architecture/memory.md): the paths one after another in one buffer,
+/// a record of each in one table; a path may have several records until
+/// [`Paths::sorted`] merges them.
+#[derive(Default)]
+struct Paths {
+    text: String,
+    records: Vec<Record>,
+    /// The range in the text of the directory marked last, whose ancestors
+    /// are all marked too.
+    marked: (usize, usize),
+}
+
+fn push(records: &mut Vec<Record>, start: usize, len: usize, dir: bool, file: File) {
+    let seq = index(records.len());
+    records.push(Record {
+        start: index(start),
+        len: index(len),
+        seq,
+        dir,
+        file,
+    });
+}
+
+impl Paths {
+    fn push(&mut self, start: usize, len: usize, dir: bool, file: File) {
+        push(&mut self.records, start, len, dir, file);
+    }
+
+    /// Adds `path` to the text, returning its start.
+    fn push_text(&mut self, path: &str) -> usize {
+        let start = self.text.len();
+        self.text.push_str(path);
+        start
+    }
+
+    /// Marks the path at `start..start + len` of the text and its ancestors
+    /// (not the root) directories: those it shares with the directory marked
+    /// last are marked already.
+    fn add_dir(&mut self, start: usize, len: usize) {
+        let text = self.text.as_bytes();
+        let path = &text[start..start + len];
+        let last = &text[self.marked.0..self.marked.0 + self.marked.1];
+        let shared = path.iter().zip(last).take_while(|(a, b)| a == b).count();
+        let mut end = 0;
+        while end < len {
+            let part = path[end..].iter().position(|&b| b == b'/');
+            end += part.unwrap_or(len - end);
+            let marked = end <= shared && (end == last.len() || last.get(end) == Some(&b'/'));
+            if end > 0 && !marked {
+                push(&mut self.records, start, end, true, File::NONE);
+            }
+            end += 1;
+        }
+        self.marked = (start, len);
+    }
+
+    /// Adds `archive`'s entries, mounted at `mount`, as archive `index`;
+    /// returns its reader.
+    fn add_archive<R: Read + Seek>(
+        &mut self,
+        index: u32,
+        mount: &str,
+        archive: Archive<R>,
+    ) -> io::Result<R> {
+        let mount = key(mount)?;
+        let (reader, entries) = archive.into_parts();
+        let bytes: usize = entries.iter().map(|e| mount.len() + 1 + e.path.len()).sum();
+        self.text.reserve_exact(mount.len() + bytes);
+        let start = self.push_text(&mount);
+        self.add_dir(start, mount.len());
+        for entry in entries {
+            let path = key(&format!("{mount}/{}", entry.path))?;
+            if path.is_empty() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("entry {:?} names the mount directory", entry.path),
+                ));
+            }
+            let start = self.push_text(&path);
+            if entry.is_dir() {
+                self.add_dir(start, path.len());
+                continue;
+            }
+            if let Some((parent, _)) = path.rsplit_once('/') {
+                self.add_dir(start, parent.len());
+            }
+            let file = File {
+                archive: index,
+                offset: entry.offset,
+                original_size: entry.original_size,
+                stored_size: entry.stored_size,
+            };
+            self.push(start, path.len(), false, file);
+        }
+        Ok(reader)
+    }
+
+    /// The records sorted by path, each path once: a directory if any of its
+    /// records is, its file the last record's with one.
+    fn sorted(mut self) -> Self {
+        let Self { text, records, .. } = &mut self;
+        let path = |r: &Record| &text.as_bytes()[r.start as usize..(r.start + r.len) as usize];
+        records.sort_unstable_by(|a, b| path(a).cmp(path(b)).then(a.seq.cmp(&b.seq)));
+        let mut kept = 0;
+        for i in 0..records.len() {
+            let record = records[i];
+            if kept > 0 && path(&records[kept - 1]) == path(&record) {
+                let merged = &mut records[kept - 1];
+                merged.dir |= record.dir;
+                if record.file.archive != NO_FILE {
+                    merged.file = record.file;
                 }
+            } else {
+                records[kept] = record;
+                kept += 1;
             }
         }
-        end += 1;
+        records.truncate(kept);
+        records.shrink_to_fit();
+        self
     }
-}
-
-/// Adds `archive`'s entries to `tree`, mounted at `mount`, as archive
-/// `index`; returns its reader.
-fn add_archive<R: Read + Seek>(
-    tree: &mut BTreeMap<String, Pending>,
-    index: u32,
-    mount: &str,
-    archive: Archive<R>,
-) -> io::Result<R> {
-    let mount = key(mount)?;
-    let (reader, entries) = archive.into_parts();
-    add_dir(tree, &mount);
-    for entry in entries {
-        let path = key(&format!("{mount}/{}", entry.path))?;
-        if path.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("entry {:?} names the mount directory", entry.path),
-            ));
-        }
-        if entry.is_dir() {
-            add_dir(tree, &path);
-            continue;
-        }
-        if let Some((parent, _)) = path.rsplit_once('/') {
-            add_dir(tree, parent);
-        }
-        tree.entry(path).or_default().file = Some(Node {
-            archive: index,
-            offset: entry.offset,
-            original_size: entry.original_size,
-            stored_size: entry.stored_size,
-            ..Node::ROOT
-        });
-    }
-    Ok(reader)
 }
 
 fn index(i: usize) -> u32 {
@@ -236,33 +334,40 @@ impl<R: Read + Seek> DbVfs<R> {
     /// when an entry's path is rejected.
     pub fn mount(&mut self, mount: &str, archive: Archive<R>) -> io::Result<()> {
         // Every path of the tree as it is, then the archive's.
-        let mut tree = BTreeMap::new();
+        let mut paths = Paths::default();
         for (path, node) in self.paths().into_iter().zip(&self.nodes).skip(1) {
-            let pending = Pending {
-                dir: node.is_dir(),
-                file: node.is_file().then_some(*node),
+            let start = paths.push_text(&path);
+            let file = if node.is_file() {
+                File::of(node)
+            } else {
+                File::NONE
             };
-            tree.insert(path, pending);
+            paths.push(start, path.len(), node.is_dir(), file);
         }
-        let reader = add_archive(&mut tree, index(self.archives.len()), mount, archive)?;
+        let reader = paths.add_archive(index(self.archives.len()), mount, archive)?;
         self.archives.push(RefCell::new(reader));
-        self.build(tree);
+        self.build(paths);
         Ok(())
     }
 
-    /// Lays out `tree` (every path but the root's) as the tree, breadth
+    /// Lays out `paths` (every path but the root's) as the tree, breadth
     /// first: each directory's children in a run.
-    fn build(&mut self, tree: BTreeMap<String, Pending>) {
-        let sorted: Vec<(String, Pending)> = tree.into_iter().collect();
+    fn build(&mut self, paths: Paths) {
+        let Paths {
+            text,
+            records: sorted,
+            ..
+        } = paths.sorted();
+        let path = |r: &Record| &text[r.start as usize..(r.start + r.len) as usize];
         // Node ids: 0 the root, 1 + i the path `sorted[i]`.
         let count = sorted.len() + 1;
         let parents: Vec<u32> = sorted
             .iter()
-            .map(|(path, _)| match path.rsplit_once('/') {
+            .map(|record| match path(record).rsplit_once('/') {
                 None => 0,
                 Some((up, _)) => {
                     let i = sorted
-                        .binary_search_by(|(p, _)| p.as_str().cmp(up))
+                        .binary_search_by(|p| path(p).cmp(up))
                         .expect("ancestors added");
                     index(i + 1)
                 }
@@ -299,8 +404,8 @@ impl<R: Read + Seek> DbVfs<R> {
             if id == 0 {
                 return "";
             }
-            let path = &sorted[id as usize - 1].0;
-            path.rsplit_once('/').map_or(path.as_str(), |(_, n)| n)
+            let path = path(&sorted[id as usize - 1]);
+            path.rsplit_once('/').map_or(path, |(_, n)| n)
         };
         let mut names = String::with_capacity(order.iter().map(|&id| name_of(id).len()).sum());
         let mut nodes = Vec::with_capacity(count);
@@ -315,16 +420,15 @@ impl<R: Read + Seek> DbVfs<R> {
                 ..Node::ROOT
             };
             if id != 0 {
-                let pending = &sorted[id as usize - 1].1;
-                if !pending.dir && children == 0 {
+                let record = &sorted[id as usize - 1];
+                if !record.dir && children == 0 {
                     node.children = NOT_DIR;
                 }
-                if let Some(file) = &pending.file {
-                    node.archive = file.archive;
-                    node.offset = file.offset;
-                    node.original_size = file.original_size;
-                    node.stored_size = file.stored_size;
-                }
+                let file = record.file;
+                node.archive = file.archive;
+                node.offset = file.offset;
+                node.original_size = file.original_size;
+                node.stored_size = file.stored_size;
             }
             nodes.push(node);
             names.push_str(name);
@@ -626,6 +730,32 @@ mod tests {
         assert_eq!(vfs.read_dir("a").unwrap()[0].name, "x");
         assert!(vfs.read_dir("e").unwrap().is_empty());
         assert!(vfs.open("e").is_err() && vfs.read_dir("a-b").is_err());
+    }
+
+    #[test]
+    fn directories_sharing_a_prefix_are_each_listed() {
+        let mut vfs = DbVfs::new();
+        let files: [(&str, &[u8]); 5] = [
+            ("x\\b\\1", b"1"),
+            ("x\\bc\\2", b"2"),
+            ("x\\b\\3", b"3"),
+            ("x\\b-c\\d\\4", b"4"),
+            ("y\\5", b"5"),
+        ];
+        vfs.mount("m", archive(&["x\\bc\\e\\"], &files)).unwrap();
+        let names = |path| -> Vec<_> {
+            let entries = vfs.read_dir(path).unwrap().into_iter();
+            entries.map(|e| (e.name, e.kind)).collect()
+        };
+        let dir = |n: &str| (n.to_owned(), EntryKind::Dir);
+        let file = |n: &str| (n.to_owned(), EntryKind::File);
+        assert_eq!(names(""), [dir("m")]);
+        assert_eq!(names("m"), [dir("x"), dir("y")]);
+        assert_eq!(names("m/x"), [dir("b"), dir("b-c"), dir("bc")]);
+        assert_eq!(names("m/x/b"), [file("1"), file("3")]);
+        assert_eq!(names("m/x/bc"), [file("2"), dir("e")]);
+        assert_eq!(names("m/x/b-c/d"), [file("4")]);
+        assert_eq!(super::super::read(&vfs, "m/x/b-c/d/4").unwrap(), b"4");
     }
 
     #[test]
