@@ -459,6 +459,18 @@ fn cross_tables_and_level_ai_of_every_level() {
             let cross = CrossTable::parse(&gct).unwrap();
             let ai = LevelAi::read(std::io::Cursor::new(&ai_file[..])).unwrap();
             assert_eq!((cross.len(), ai.len()), (n, n), "{name}");
+            // The leaner table reads every cell's bits as stored: the cells
+            // are the file's last n × 6 bytes (#797).
+            let stored = gct[gct.len() - n * 6..].as_chunks::<6>().0.iter().map(|c| {
+                (
+                    u16::from_le_bytes([c[0], c[1]]),
+                    u32::from_le_bytes([c[2], c[3], c[4], c[5]]),
+                )
+            });
+            assert!(
+                (cross.cells().map(|(v, d)| (v, d.to_bits()))).eq(stored),
+                "{name}"
+            );
             assert_eq!(ai.header.row_length(), row, "{name}");
             assert_eq!(ai.header.cell_size, 0.7, "{name}");
             let id = LEVELS.iter().find(|l| l.0 == name).unwrap().1;

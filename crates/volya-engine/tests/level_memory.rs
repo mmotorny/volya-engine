@@ -162,7 +162,7 @@ fn level_files_memory() {
         drop(level);
         let geometry = size(&tree, &file("level.geom"));
         // The navigation as a level holds it: the positions held under
-        // `level.ai`'s path, `level.gct` whole, read in place; on the heap
+        // `level.ai`'s path, the cross table's cells under `level.gct`'s; on the heap
         // only their handles, and an order of the level vertices where the
         // file doesn't store them sorted.
         let (ai_path, gct_path) = (file("level.ai"), file("level.gct"));
@@ -173,8 +173,10 @@ fn level_files_memory() {
                     file_cache::hold(&ai_path, len)
                 })
                 .unwrap();
-                let cross =
-                    CrossTable::in_place(file_cache::read(&tree, &gct_path).unwrap()).unwrap();
+                let cross = CrossTable::read_in(tree.open(&gct_path).unwrap(), |len| {
+                    file_cache::hold(&gct_path, len)
+                })
+                .unwrap();
                 let sorted = (ai.packed_all())
                     .zip(ai.packed_all().skip(1))
                     .all(|(a, b)| a <= b);

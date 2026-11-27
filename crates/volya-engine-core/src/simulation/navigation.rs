@@ -5,9 +5,9 @@
 //! sections 2, 3, 6.1): its `level.ai` positions and its cross table, with
 //! the checks of 1.8, and the level vertex at a position (5.2). Both are
 //! held in the file cache, standing for the files the original maps
-//! (docs/architecture/memory.md, File-backed data): the positions, a
-//! leaner structure, under `level.ai`'s path; `level.gct` whole, read in
-//! place.
+//! (docs/architecture/memory.md, File-backed data), each a leaner
+//! structure under its file's path: the positions under `level.ai`'s, the
+//! cross table's distinct cells and their indices under `level.gct`'s.
 
 use std::io::{self, BufReader};
 
@@ -78,9 +78,9 @@ impl Navigation {
         })
     }
 
-    /// Reads level `level_id`'s `level.ai` (as a stream, its positions
-    /// held in the file cache under its path) and `level.gct` (held in the
-    /// file cache, read in place) from its directory `dir` in `tree`, with
+    /// Reads level `level_id`'s `level.ai` and `level.gct` (each as a
+    /// stream, what is kept of it held in the file cache under its path)
+    /// from its directory `dir` in `tree`, with
     /// [`Navigation::new`]'s checks. A missing cross table is the game's
     /// "Can't open cross table!".
     pub fn read(tree: &dyn Vfs, dir: &str, graph: &GameGraph, level_id: u8) -> io::Result<Self> {
@@ -90,8 +90,10 @@ impl Navigation {
         let f = tree.open(&path).map_err(|e| file("level.ai", e))?;
         let ai = LevelAi::read_in(BufReader::new(f), |len| file_cache::hold(&path, len))
             .map_err(|e| file("level.ai", e))?;
-        let cross = match file_cache::read(tree, &format!("{dir}\\level.gct")) {
-            Ok(f) => CrossTable::in_place(f).map_err(|e| file("level.gct", e))?,
+        let path = format!("{dir}\\level.gct");
+        let cross = match tree.open(&path) {
+            Ok(f) => CrossTable::read_in(BufReader::new(f), |len| file_cache::hold(&path, len))
+                .map_err(|e| file("level.gct", e))?,
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 return Err(invalid("Can't open cross table!"));
             }
