@@ -1,28 +1,30 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! The solver behind [`Solver`]: the Open Dynamics Engine 0.16.6, its core
-//! built in single precision by build.rs (docs/architecture/simulation.md),
-//! through the few of its functions the world uses.
+//! The solver behind [`Solver`]: the Open Dynamics Engine 0.5.0, the shipped
+//! library's base, its core built in single precision by build.rs
+//! (docs/architecture/simulation.md), through the few of its functions the
+//! world uses.
 //!
 //! A [`OdeSolver`] owns an ODE world and its contact group, and is used from
-//! the thread that made it (it is neither `Send` nor `Sync`). Steps of all
-//! worlds share the library's one built-in threading instance (its stepper
-//! asserts that it isn't entered twice), so they take [`STEPPING`] in turn.
+//! the thread that made it (it is neither `Send` nor `Sync`). The library
+//! keeps global state its steps use (the random seed of the row shuffle; the
+//! shipped library's world parameters, docs/behavior/physics-library.md 3.1),
+//! so a world's parameters and step take [`STEPPING`] together.
 //! Contacts are not generated yet: [`Solver::collide`] adds none (#751).
 
 #![allow(unsafe_code)]
 
-use std::ffi::{c_int, c_uint};
-use std::sync::{Mutex, Once};
+use std::ffi::c_int;
+use std::sync::Mutex;
 
-/// Held by each world's step (above).
+/// Held by each world's parameters and step (above).
 static STEPPING: Mutex<()> = Mutex::new(());
 
 use super::{Active, Params, Solver};
 use crate::collision::geometry::Vec3;
 
-/// ODE's `dReal`: single precision (`dIDESINGLE`, build.rs).
+/// ODE's `dReal`: single precision (`dSINGLE`, csrc/ode/include/ode/config.h).
 pub type Real = f32;
 
 #[repr(C)]
@@ -50,13 +52,7 @@ struct DMass {
     i: [Real; 12],
 }
 
-/// `dAllocateMaskAll`.
-const ALLOCATE_MASK_ALL: c_uint = !0;
-
 unsafe extern "C" {
-    fn dInitODE2(flags: c_uint) -> c_int;
-    fn dAllocateODEDataForThread(flags: c_uint) -> c_int;
-
     fn dWorldCreate() -> *mut DxWorld;
     fn dWorldDestroy(w: *mut DxWorld);
     fn dWorldSetGravity(w: *mut DxWorld, x: Real, y: Real, z: Real);
@@ -66,7 +62,7 @@ unsafe extern "C" {
     fn dWorldSetQuickStepW(w: *mut DxWorld, over_relaxation: Real);
     fn dWorldSetContactSurfaceLayer(w: *mut DxWorld, depth: Real);
     fn dWorldSetContactMaxCorrectingVel(w: *mut DxWorld, vel: Real);
-    fn dWorldQuickStep(w: *mut DxWorld, stepsize: Real) -> c_int;
+    fn dWorldQuickStep(w: *mut DxWorld, stepsize: Real);
 
     fn dJointGroupCreate(max_size: c_int) -> *mut DxJointGroup;
     fn dJointGroupDestroy(g: *mut DxJointGroup);
@@ -79,17 +75,6 @@ unsafe extern "C" {
     fn dBodySetMass(b: *mut DxBody, mass: *const DMass);
     fn dBodySetGravityMode(b: *mut DxBody, mode: c_int);
     fn dMassSetSphereTotal(m: *mut DMass, total: Real, radius: Real);
-}
-
-/// Initialises the library once per program; ODE keeps no per-thread data
-/// in this build (OU's basic features only), so one allocation serves.
-fn init() {
-    static INIT: Once = Once::new();
-    INIT.call_once(|| {
-        // SAFETY: called once, before any other ODE function.
-        let ok = unsafe { dInitODE2(0) != 0 && dAllocateODEDataForThread(ALLOCATE_MASK_ALL) != 0 };
-        assert!(ok, "ODE failed to initialise");
-    });
 }
 
 /// A body of an [`OdeSolver`]'s world.
@@ -105,9 +90,8 @@ pub struct OdeSolver {
 
 impl OdeSolver {
     pub fn new() -> Self {
-        init();
-        // SAFETY: the library is initialised; ODE fails fatally rather than
-        // return null.
+        // SAFETY: ODE 0.5.0 needs no initialisation; it fails fatally
+        // rather than return null.
         let (world, contacts) = unsafe { (dWorldCreate(), dJointGroupCreate(0)) };
         Self {
             world,
@@ -178,13 +162,10 @@ impl OdeSolver {
 
     /// One step of the iterative solver (2.4) with `params`.
     fn step(&mut self, params: &Params) {
-        self.apply(params);
         let _turn = STEPPING.lock().unwrap_or_else(|e| e.into_inner());
+        self.apply(params);
         // SAFETY: the world is live.
-        let ok = unsafe { dWorldQuickStep(self.world, params.step) };
-        // It fails only when it can't allocate its working memory, which
-        // our allocator never reports (it aborts).
-        debug_assert_ne!(ok, 0);
+        unsafe { dWorldQuickStep(self.world, params.step) };
     }
 }
 

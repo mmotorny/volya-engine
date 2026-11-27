@@ -546,7 +546,7 @@
           "FILE:@@//Cargo.lock 23e81388040401ef39dca0d48251db1015d3a0a654c74d580838b40e58b6f843",
           "FILE:@@//Cargo.toml a3d291a49659d4cd61849a78da16e1c667c8c4ae23abc095e26a7cce13e83f80",
           "FILE:@@//crates/volya-engine/Cargo.toml 7efa7fd81f5fb9f066a37158f82c9036f054047e32d9658ac4f17ed901ad264a",
-          "FILE:@@//crates/volya-engine-core/Cargo.toml f04e9a3a2e00bb0831e897386aff2063835acdb1887260bb0e0376369bbb6c4e",
+          "FILE:@@//crates/volya-engine-core/Cargo.toml 86957db709cd3559d6f341f1113a962f989a7f455ce603a4ec0aebd0eacfe92b",
           "FILE:@@//crates/volya-engine-formats/Cargo.toml 0f40818b1701aa9a212dad0197bcc8d8d511109030514af9731de53cf980298d",
           "FILE:@@//crates/volya-engine-installer/Cargo.toml 70b1200a3cbdf80eef13109a62cf24d9e0dc1e04cf2946a5d0ea32831222747e",
           "FILE:@@//crates/volya-engine-render/Cargo.toml c440bd695a7a8adbe6ba1d72283d1e8a2115e853fa37eb65d7001b7e677b7d5e",

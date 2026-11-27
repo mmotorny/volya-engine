@@ -18,16 +18,22 @@ cargo_build_script(
     srcs = ["build.rs"],
     build_script_env = select({
         "@platforms//cpu:wasm32": {
+            "VOLYA_ODE_FAST": "$(execpath @ode_fast//:ode/src/fastdot.c)",
             "VOLYA_ODE_LICENSE": "$(execpath @ode//:LICENSE-BSD.TXT)",
             "VOLYA_WASM_CLANG": "$(execpath @wasm_llvm//:bin/clang)",
         },
         "//conditions:default": {
+            "VOLYA_ODE_FAST": "$(execpath @ode_fast//:ode/src/fastdot.c)",
             "VOLYA_ODE_LICENSE": "$(execpath @ode//:LICENSE-BSD.TXT)",
         },
     }),
     data = glob(["csrc/**"]) + [
         "@ode//:LICENSE-BSD.TXT",
         "@ode//:sources",
+        "@ode_fast//:ode/src/fastdot.c",
+        "@ode_fast//:ode/src/fastldlt.c",
+        "@ode_fast//:ode/src/fastlsolve.c",
+        "@ode_fast//:ode/src/fastltsolve.c",
     ] + select({
         "@platforms//cpu:wasm32": [
             "@wasm_llvm//:bin/clang",

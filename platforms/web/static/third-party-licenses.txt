@@ -2,13 +2,13 @@ Third-party software in this app, under the licences below.
 
 ----------------------------------------------------------------------
 
-Open Dynamics Engine 0.16.6, used under its BSD licence option:
+Open Dynamics Engine 0.5.0, used under its BSD licence option:
 
 This is the BSD-style license for the Open Dynamics Engine
 ----------------------------------------------------------
 
 Open Dynamics Engine
-Copyright (c) 2001-2007, Russell L. Smith.
+Copyright (c) 2001-2004, Russell L. Smith.
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -40,14 +40,15 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ----------------------------------------------------------------------
 
-ODER's Utilities Library (OU), from the Open Dynamics Engine 0.16.6
-release, used under its BSD licence option:
+The generated matrix routines (fastdot, fastldlt, fastlsolve,
+fastltsolve) of the Open Dynamics Engine 0.14 release, used under its BSD
+licence option:
 
-This is the BSD-style license for the ODER's Utilities Library
---------------------------------------------------------------
+This is the BSD-style license for the Open Dynamics Engine
+----------------------------------------------------------
 
-ODER's Utilities Library
-Copyright (c) 2008, Oleh Derevenko.
+Open Dynamics Engine
+Copyright (c) 2001-2007, Russell L. Smith.
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -61,8 +62,8 @@ Redistributions in binary form must reproduce the above copyright notice,
 this list of conditions and the following disclaimer in the documentation
 and/or other materials provided with the distribution.
 
-Neither the names of ODER's Utilities' copyright owner nor the names of
-its contributors may be used to endorse or promote products derived from
+Neither the names of ODE's copyright owner nor the names of its
+contributors may be used to endorse or promote products derived from
 this software without specific prior written permission.
 
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS

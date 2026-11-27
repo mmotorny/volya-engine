@@ -18,8 +18,8 @@ volya-engine-formats = { path = "../volya-engine-formats" }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
-# Builds the Open Dynamics Engine's core and OU from their release, under
-# their BSD option (build.rs).
+# Builds the Open Dynamics Engine's core from its 0.5.0 release, under its
+# BSD option (build.rs).
 [build-dependencies]
 cc.workspace = true
 

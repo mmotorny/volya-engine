@@ -133,14 +133,31 @@ http_archive(
 )
 
 # The physics solver (docs/architecture/simulation.md): the Open Dynamics
-# Engine's 0.16.6 release, its core and OU built by volya-engine-core's
-# build script under their BSD option.
+# Engine's 0.5.0 release, the shipped library's base, its core built by
+# volya-engine-core's build script under its BSD option. Not updated: the
+# release is fixed by the shipped library (docs/behavior/physics-library.md).
 http_archive(
     name = "ode",
     build_file = "//build:ode.BUILD.bazel",
-    sha256 = "c91a28c6ff2650284784a79c726a380d6afec87ecf7a35c32a6be0c5b74513e8",
-    strip_prefix = "ode-0.16.6",
-    url = "https://bitbucket.org/odedevs/ode/downloads/ode-0.16.6.tar.gz",
+    sha256 = "5388c4cd4666f270f18216c90ab6526229c53fdc7e82f93ddb0824e69521df1c",
+    strip_prefix = "ode-0.5",
+    url = "https://downloads.sourceforge.net/project/opende/ODE/ODE%20version%200.5/ode-0.5.tgz",
+)
+
+# 0.5.0's generated matrix routines (fastdot, fastldlt, fastlsolve,
+# fastltsolve) carry no licence header; ODE 0.14's (the same as 0.13's, the
+# first with the header) are the same code under ODE's dual licence header,
+# only their includes and an added wrapper differing, so they are taken from
+# there.
+http_archive(
+    name = "ode_fast",
+    build_file_content = """exports_files(
+    glob(["ode/src/fast*.c"]) + ["LICENSE-BSD.TXT"],
+    visibility = ["//visibility:public"],
+)""",
+    sha256 = "a6e22c3713e656d4c8114415089f4aaa685e24fab3a8ad7f3ee54692e5e8d318",
+    strip_prefix = "ode-0.14",
+    url = "https://bitbucket.org/odedevs/ode/downloads/ode-0.14.tar.gz",
 )
 
 # The Windows cross LLVM that builds the Direct3D 9 probes' executable
