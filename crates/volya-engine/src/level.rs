@@ -58,7 +58,7 @@ use crate::core::sound::player_body::{
     BodyEvent, BodySoundNames, BodyState, DEATHS, ShockEffector,
 };
 use crate::core::vfs::{self, Vfs};
-use crate::core::visibility::Frustum;
+use crate::core::visibility::{Frustum, Sectors};
 use crate::core::weather::{Environment, Weather, texture_name as weather_texture_name};
 use crate::core::zones::{Behaviour, SoundEvent, Target, ZoneRecord, ZoneSection, Zones};
 use crate::data::GameData;
@@ -126,8 +126,10 @@ pub struct LevelWorld {
     /// The surfaces of the shader entries the draw items use, textures as
     /// file paths (static-shading.md sections 4.2, 7, 8).
     pub surfaces: Vec<Surface<String>>,
-    /// The bounding sphere (centre, radius) of each draw item's visual.
-    pub spheres: Vec<[f32; 4]>,
+    /// The sectors, portals and static visual hierarchy, shared with the
+    /// camera pass: each draw item's bounding sphere is its visual's
+    /// ([`Sectors::sphere`]).
+    pub sectors: Arc<Sectors>,
     /// The progressive visuals' detail windows, from their
     /// [`DrawItem::detail`] spans' starts (a `level.geom` record shared by
     /// tree instances once), and each draw item's (`[first, count]` of
@@ -1442,7 +1444,6 @@ pub struct NewGameLoad {
     collision: Option<Arc<CollisionWorld>>,
     draw_items: Vec<DrawItem>,
     tree_instances: Vec<TreeInstance>,
-    spheres: Vec<[f32; 4]>,
     detail_windows: Vec<DetailWindow>,
     draw_windows: Vec<[u32; 2]>,
     modifiers: Vec<EnvModifier>,
@@ -1841,7 +1842,7 @@ impl NewGameLoad {
                 // buffers themselves as it uploads them.
                 self.geom = Some(GeomFile::read(&mut f).map_err(|e| file("level.geom", e))?);
             }
-            // The static visuals' draw list and bounding spheres (placed
+            // The static visuals' draw list (placed
             // under this caption by us: the spec names the spatial index).
             // The visuals, portals and sectors (chunks 3, 4 and 8) are read
             // from the `level` file here and go at the stage's end; the
@@ -1898,14 +1899,6 @@ impl NewGameLoad {
                     )
                 })?;
                 let draw_items = draw_list.items;
-                self.spheres = draw_items
-                    .iter()
-                    .map(|d| {
-                        let h = &level.visuals[d.visual as usize].header;
-                        let c = h.sphere_centre;
-                        [c[0], c[1], c[2], h.sphere_radius]
-                    })
-                    .collect();
                 (self.detail_windows, self.draw_windows) =
                     detail_windows(level, &geom.layout, &draw_items);
                 self.draw_items = draw_items;
@@ -2468,7 +2461,7 @@ impl NewGameLoad {
                 shaders,
                 draw_items: self.draw_items,
                 tree_instances: self.tree_instances,
-                spheres: self.spheres,
+                sectors: visibility.sectors().clone(),
                 detail_windows: self.detail_windows,
                 draw_windows: self.draw_windows,
                 surfaces: self.surfaces,
@@ -4152,7 +4145,7 @@ impl LevelScreen {
                 shaders: Vec::new(),
                 draw_items: Vec::new(),
                 tree_instances: Vec::new(),
-                spheres: Vec::new(),
+                sectors: Arc::default(),
                 detail_windows: Vec::new(),
                 draw_windows: Vec::new(),
                 surfaces: Vec::new(),

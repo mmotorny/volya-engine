@@ -247,9 +247,8 @@ fn world_draws(level: &LevelWorld, windows_at: u32) -> Vec<WorldDraw> {
         .draw_items
         .iter()
         .zip(&level.draw_surfaces)
-        .zip(&level.spheres)
         .zip(&level.draw_windows)
-        .filter_map(|(((d, surface), sphere), &[first, count])| {
+        .filter_map(|((d, surface), &[first, count])| {
             let tree = d.tree.map(|t| &level.tree_instances[t as usize]);
             let (first_index, index_count, windows) = match d.detail {
                 Some(span) if count > 0 => (
@@ -268,7 +267,7 @@ fn world_draws(level: &LevelWorld, windows_at: u32) -> Vec<WorldDraw> {
                 index_count,
                 windows,
                 transform: tree.map_or(IDENTITY, |t| t.matrix()),
-                sphere: *sphere,
+                sphere: level.sectors.sphere(d.visual),
                 tree: tree.map(|t| TreeLight {
                     scale: t.scale,
                     bias: t.bias,

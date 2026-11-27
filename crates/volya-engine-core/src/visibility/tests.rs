@@ -10,42 +10,99 @@ use crate::particles::random::Generator;
 use volya_engine_formats::level::{GEOMETRY_LOD, SSA_LOD_A, SSA_LOD_B};
 use volya_engine_formats::level_cform::CformTriangle;
 
+/// Sectors as lists of their own, laid out in [`Sectors`]' tables by
+/// [`Lists::build`].
+#[derive(Clone)]
+struct Lists {
+    /// Each portal with its polygon.
+    portals: Vec<(Portal, Vec<Vec3>)>,
+    sector_portals: Vec<Vec<u16>>,
+    roots: Vec<u32>,
+    /// Each node with its children.
+    nodes: Vec<(Node, Vec<u32>)>,
+}
+
+impl Lists {
+    fn build(&self) -> Sectors {
+        fn table<T: Copy, O: Clone>(
+            owners: &[(O, Vec<T>)],
+            mut range: impl FnMut(&mut O, [u32; 2]),
+        ) -> (Vec<O>, Vec<T>) {
+            let mut all = Vec::new();
+            let owners = owners
+                .iter()
+                .map(|(o, items)| {
+                    let mut o = o.clone();
+                    range(&mut o, [all.len() as u32, (all.len() + items.len()) as u32]);
+                    all.extend_from_slice(items);
+                    o
+                })
+                .collect();
+            (owners, all)
+        }
+        let (portals, vertices) = table(&self.portals, |p, r| p.polygon = r);
+        let (nodes, children) = table(&self.nodes, |n, r| n.children = r);
+        let lists: Vec<((), Vec<u16>)> = self
+            .sector_portals
+            .iter()
+            .map(|l| ((), l.clone()))
+            .collect();
+        let mut sector_ranges = Vec::new();
+        let (_, portal_lists) = table(&lists, |_, r| sector_ranges.push(r));
+        Sectors {
+            portals,
+            vertices,
+            sector_ranges,
+            portal_lists,
+            roots: self.roots.clone(),
+            nodes,
+            children,
+        }
+    }
+}
+
 /// A square portal of half-size 1 in the plane x = `x`, sector A on the
 /// side x < `x`.
-fn portal(x: f32, a: u16, b: u16) -> Portal {
-    Portal {
-        sector_a: a,
-        sector_b: b,
-        polygon: vec![
+fn portal(x: f32, a: u16, b: u16) -> (Portal, Vec<Vec3>) {
+    (
+        Portal {
+            sector_a: a,
+            sector_b: b,
+            polygon: [0, 0],
+            normal: [-1.0, 0.0, 0.0],
+            d: x,
+            centre: [x, 0.0, 0.0],
+            radius: 2f32.sqrt(),
+        },
+        vec![
             [x, -1.0, -1.0],
             [x, 1.0, -1.0],
             [x, 1.0, 1.0],
             [x, -1.0, 1.0],
         ],
-        normal: [-1.0, 0.0, 0.0],
-        d: x,
-        centre: [x, 0.0, 0.0],
-        radius: 2f32.sqrt(),
-    }
+    )
 }
 
-fn node(kind: VisualType, centre: Vec3, children: Vec<u32>) -> Node {
-    Node {
-        kind,
-        centre,
-        radius: 1.0,
-        box_min: centre.map(|v| v - 0.5),
-        box_max: centre.map(|v| v + 0.5),
-        coverage: 1.0,
+fn node(kind: VisualType, centre: Vec3, children: Vec<u32>) -> (Node, Vec<u32>) {
+    (
+        Node {
+            kind,
+            centre,
+            radius: 1.0,
+            box_min: centre.map(|v| v - 0.5),
+            box_max: centre.map(|v| v + 0.5),
+            coverage: 1.0,
+            children: [0, 0],
+        },
         children,
-    }
+    )
 }
 
 /// Three sectors in a row along x: 0 (x < 0), 1 (0 … 10), 2 (x > 10),
 /// joined by portals 0 (x = 0) and 1 (x = 10); a mesh at x = −5, 5 and
 /// 15 in each, under the roots 3, 4, 5.
-fn row() -> Sectors {
-    Sectors {
+fn row_lists() -> Lists {
+    Lists {
         portals: vec![portal(0.0, 0, 1), portal(10.0, 1, 2)],
         sector_portals: vec![vec![0], vec![0, 1], vec![1]],
         roots: vec![3, 4, 5],
@@ -58,6 +115,11 @@ fn row() -> Sectors {
             node(VisualType::Group, [15.0, 0.0, 0.0], vec![2]),
         ],
     }
+}
+
+/// [`row_lists`]' sectors.
+fn row() -> Sectors {
+    row_lists().build()
 }
 
 /// The camera pass without occlusion (a level without `level.hom`).
@@ -113,7 +175,7 @@ fn a_frustum_through_a_portal() {
     // traversal-options.md 5: the edge planes, the portal plane (the side
     // beyond the portal from the eye inside, whichever side the eye is on
     // and whatever the vertex order), and the far plane of the matrix.
-    let square = portal(10.0, 0, 1).polygon;
+    let square = portal(10.0, 0, 1).1;
     for eye in [[0.0, 0.0, 0.0], [20.0, 0.0, 0.0]] {
         for poly in [square.clone(), square.iter().rev().copied().collect()] {
             let f = Frustum::through(eye, &poly, &m);
@@ -193,13 +255,10 @@ fn small_portals_fade_and_are_skipped() {
 #[test]
 fn portals_into_the_start_sector_are_skipped_unless_touched() {
     // A ring: 0 → 1 → 2 → 0, the last portal back into the start sector.
-    let mut s = row();
-    s.portals.push(Portal {
-        sector_a: 2,
-        sector_b: 0,
-        ..portal(20.0, 2, 0)
-    });
-    s.sector_portals = vec![vec![0, 2], vec![0, 1], vec![1, 2]];
+    let mut l = row_lists();
+    l.portals.push(portal(20.0, 2, 0));
+    l.sector_portals = vec![vec![0, 2], vec![0, 1], vec![1, 2]];
+    let s = l.build();
     let eye = [-3.0, 0.0, 0.0];
     let m = view(eye, [1.0, 0.0, 0.0]);
     let r = s.traverse(
@@ -291,21 +350,25 @@ fn the_camera_sector_comes_from_the_ray_and_is_kept() {
     assert_eq!(camera.update([50.0, 0.0, 0.0], &s, &world), Some(0));
 
     // A horizontal portal 1 m above sector 1's floor is nearer: its side.
-    let mut s = row();
-    s.portals[0] = Portal {
-        sector_a: 2,
-        sector_b: 1,
-        polygon: vec![
+    let mut l = row_lists();
+    l.portals[0] = (
+        Portal {
+            sector_a: 2,
+            sector_b: 1,
+            polygon: [0, 0],
+            normal: [0.0, 1.0, 0.0],
+            d: 1.0,
+            centre: [5.0, -1.0, 0.0],
+            radius: 6.0,
+        },
+        vec![
             [2.0, -1.0, -5.0],
             [2.0, -1.0, 5.0],
             [8.0, -1.0, 5.0],
             [8.0, -1.0, -5.0],
         ],
-        normal: [0.0, 1.0, 0.0],
-        d: 1.0,
-        centre: [5.0, -1.0, 0.0],
-        radius: 6.0,
-    };
+    );
+    let s = l.build();
     assert_eq!(
         s.sector_below([5.0, 0.0, 0.0], triangle_below(&world, [5.0, 0.0, 0.0])),
         Some(2)
@@ -346,7 +409,7 @@ fn the_sphere_and_box_test() {
 fn nothing_below_a_node_wholly_inside_is_frustum_tested() {
     let mut s = row();
     // Sector 1's mesh moved behind the camera, under its root at x = 5.
-    s.nodes[1] = node(VisualType::Mesh, [-50.0, 0.0, 0.0], vec![]);
+    s.nodes[1] = node(VisualType::Mesh, [-50.0, 0.0, 0.0], vec![]).0;
     let eye = [1.0, 0.0, 0.0];
     let m = view(eye, [1.0, 0.0, 0.0]);
     let t = thresholds();
@@ -361,13 +424,14 @@ fn nothing_below_a_node_wholly_inside_is_frustum_tested() {
 
 #[test]
 fn billboard_groups_draw_by_their_measure() {
-    let mut s = row();
+    let mut l = row_lists();
     // Sector 1's root holds a billboard group (6) with the tree 7.
-    s.nodes
+    l.nodes
         .push(node(VisualType::BillboardGroup, [5.0, 0.0, 0.0], vec![7]));
-    s.nodes
+    l.nodes
         .push(node(VisualType::Tree, [5.0, 0.0, 0.0], vec![]));
-    s.nodes[4].children = vec![6];
+    l.nodes[4].1 = vec![6];
+    let s = l.build();
     let t = thresholds();
     let seen = |x: f32| {
         let eye = [x, 0.0, 0.0];

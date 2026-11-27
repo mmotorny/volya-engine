@@ -265,7 +265,9 @@ impl Frustum {
 pub struct Portal {
     pub sector_a: u16,
     pub sector_b: u16,
-    pub polygon: Vec<Vec3>,
+    /// Its polygon, `[start, end)` of [`Sectors`]' vertices
+    /// ([`Sectors::polygon`]).
+    polygon: [u32; 2],
     /// Plane normal and offset: sector A lies where `n·p + d > 0`.
     pub normal: Vec3,
     pub d: f32,
@@ -286,12 +288,11 @@ impl Portal {
     fn side(&self, p: Vec3) -> f32 {
         dot(self.normal, p) + self.d
     }
+}
 
-    /// The triangles of the polygon (a fan).
-    fn triangles(&self) -> impl Iterator<Item = [Vec3; 3]> + '_ {
-        let v = &self.polygon;
-        (1..v.len().saturating_sub(1)).map(move |i| [v[0], v[i], v[i + 1]])
-    }
+/// The triangles of the polygon `v` (a fan).
+fn triangles(v: &[Vec3]) -> impl Iterator<Item = [Vec3; 3]> + '_ {
+    (1..v.len().saturating_sub(1)).map(move |i| [v[0], v[i], v[i + 1]])
 }
 
 /// What the traversal and the visuals' descent need of one static visual.
@@ -304,19 +305,27 @@ struct Node {
     box_max: Vec3,
     /// Billboard groups' coverage factor (ogf.md 7), else 1.
     coverage: f32,
-    children: Vec<u32>,
+    /// Its children, `[start, end)` of [`Sectors`]' children.
+    children: [u32; 2],
 }
 
 /// A level's sectors, portals and static visual hierarchy, as the camera
-/// pass reads them.
+/// pass reads them: the portals' polygons, the sectors' portal lists and
+/// the visuals' children each one table, an owner's part of it a range.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Sectors {
     pub portals: Vec<Portal>,
-    /// Each sector's portal list.
-    pub sector_portals: Vec<Vec<u16>>,
+    /// The portals' polygons ([`Portal::polygon`]).
+    vertices: Vec<Vec3>,
+    /// Each sector's portal list, `[start, end)` of `portal_lists`
+    /// ([`Sectors::sector_portals`]).
+    sector_ranges: Vec<[u32; 2]>,
+    portal_lists: Vec<u16>,
     /// Each sector's root visual.
     pub roots: Vec<u32>,
     nodes: Vec<Node>,
+    /// The visuals' children ([`Node::children`]).
+    children: Vec<u32>,
 }
 
 /// Which of the traversal's options are on (traversal-options.md 1); the
@@ -382,6 +391,8 @@ impl Sectors {
     pub fn new(level: &Level) -> io::Result<Self> {
         let invalid = |m: &str| io::Error::new(io::ErrorKind::InvalidData, m.to_string());
         let sectors = level.sectors.len();
+        let range = |start: usize, len: usize| [start as u32, (start + len) as u32];
+        let mut vertices = Vec::with_capacity(level.portals.iter().map(|p| p.vertices.len()).sum());
         let portals = level
             .portals
             .iter()
@@ -391,10 +402,12 @@ impl Sectors {
                 }
                 let (normal, d) = p.plane()?;
                 let (centre, radius) = p.sphere();
+                let polygon = range(vertices.len(), p.vertices.len());
+                vertices.extend_from_slice(&p.vertices);
                 Ok(Portal {
                     sector_a: p.sector_a,
                     sector_b: p.sector_b,
-                    polygon: p.vertices.clone(),
+                    polygon,
                     normal,
                     d,
                     centre,
@@ -403,6 +416,7 @@ impl Sectors {
             })
             .collect::<io::Result<Vec<_>>>()?;
         let visuals = level.visuals.len();
+        let mut children = Vec::with_capacity(level.visuals.iter().map(|v| v.children.len()).sum());
         for s in &level.sectors {
             if s.portals.iter().any(|&p| usize::from(p) >= portals.len()) {
                 return Err(invalid("sector's portal out of range"));
@@ -419,6 +433,8 @@ impl Sectors {
                 if v.children.iter().any(|&c| c as usize >= visuals) {
                     return Err(invalid("visual's child out of range"));
                 }
+                let own = range(children.len(), v.children.len());
+                children.extend_from_slice(&v.children);
                 Ok(Node {
                     kind: h.kind,
                     centre: h.sphere_centre,
@@ -430,16 +446,59 @@ impl Sectors {
                     } else {
                         1.0
                     },
-                    children: v.children.clone(),
+                    children: own,
                 })
             })
             .collect::<io::Result<Vec<_>>>()?;
+        let mut portal_lists =
+            Vec::with_capacity(level.sectors.iter().map(|s| s.portals.len()).sum());
+        let sector_ranges = level
+            .sectors
+            .iter()
+            .map(|s| {
+                let own = range(portal_lists.len(), s.portals.len());
+                portal_lists.extend_from_slice(&s.portals);
+                own
+            })
+            .collect();
         Ok(Self {
             portals,
-            sector_portals: level.sectors.iter().map(|s| s.portals.clone()).collect(),
+            vertices,
+            sector_ranges,
+            portal_lists,
             roots: level.sectors.iter().map(|s| s.root).collect(),
             nodes,
+            children,
         })
+    }
+
+    /// The polygon of `portal`, one of these sectors' portals.
+    pub fn polygon(&self, portal: &Portal) -> &[Vec3] {
+        let [a, b] = portal.polygon;
+        &self.vertices[a as usize..b as usize]
+    }
+
+    /// The number of sectors.
+    pub fn sector_count(&self) -> usize {
+        self.sector_ranges.len()
+    }
+
+    /// Sector `sector`'s portal list.
+    pub fn sector_portals(&self, sector: usize) -> &[u16] {
+        let [a, b] = self.sector_ranges[sector];
+        &self.portal_lists[a as usize..b as usize]
+    }
+
+    /// The bounding sphere (centre, radius) of static visual `visual`.
+    pub fn sphere(&self, visual: u32) -> [f32; 4] {
+        let n = &self.nodes[visual as usize];
+        [n.centre[0], n.centre[1], n.centre[2], n.radius]
+    }
+
+    /// The children of `node`.
+    fn children(&self, node: &Node) -> &[u32] {
+        let [a, b] = node.children;
+        &self.children[a as usize..b as usize]
     }
 
     /// The nearest portal the downward ray from `origin` meets within
@@ -448,8 +507,7 @@ impl Sectors {
         let down = [0.0, -1.0, 0.0];
         let mut best: Option<(f32, u16)> = None;
         for p in &self.portals {
-            let hit = p
-                .triangles()
+            let hit = triangles(self.polygon(p))
                 .filter_map(|t| ray_triangle_distance(origin, down, &t))
                 .filter(|t| (0.0..=SECTOR_RAY).contains(t))
                 .min_by(f32::total_cmp);
@@ -526,14 +584,13 @@ impl Sectors {
         let axes = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
         buffers.touched.clear();
         buffers.touched.extend(self.portals.iter().map(|p| {
-            p.triangles()
-                .any(|t| box_intersects(eye, axes, [TOUCH; 3], &t))
+            triangles(self.polygon(p)).any(|t| box_intersects(eye, axes, [TOUCH; 3], &t))
         }));
         buffers.passed.clear();
         buffers.passed.resize(self.portals.len(), false);
         out.visited.clear();
         out.fade.clear();
-        out.frusta.resize_with(self.sector_portals.len(), Vec::new);
+        out.frusta.resize_with(self.sector_count(), Vec::new);
         for f in &mut out.frusta {
             f.clear();
         }
@@ -613,7 +670,7 @@ impl Sectors {
                     if hidden(i, n.box_min, n.box_max) {
                         continue;
                     }
-                    let children = n.children.iter().rev().map(|&c| (c, planes));
+                    let children = self.children(n).iter().rev().map(|&c| (c, planes));
                     let d = sub(n.centre, eye);
                     let sigma = n.radius / (dot(d, d) + 1e-5) * n.coverage;
                     let mut draw = |out: &mut Vec<u32>| {
@@ -729,7 +786,7 @@ impl Sectors {
             match n.kind {
                 VisualType::Group | VisualType::BillboardGroup => {
                     stack.extend(
-                        n.children
+                        self.children(n)
                             .iter()
                             .rev()
                             .filter(|&&c| self.nodes.get(c as usize).is_some_and(meets)),
@@ -768,7 +825,7 @@ impl<H: FnMut(&[Vec3]) -> bool> Walk<'_, H> {
             self.out.visited.push(sector);
         }
         self.out.frusta[s].push(frustum);
-        for &p in &self.sectors.sector_portals[s] {
+        for &p in self.sectors.sector_portals(s) {
             let portal = &self.sectors.portals[usize::from(p)];
             let p = usize::from(p);
             // Rule 1.
@@ -808,7 +865,11 @@ impl<H: FnMut(&[Vec3]) -> bool> Walk<'_, H> {
                 }
             }
             // Rule 5.
-            frustum.clip(&portal.polygon, self.clipped, self.clip_scratch);
+            frustum.clip(
+                self.sectors.polygon(portal),
+                self.clipped,
+                self.clip_scratch,
+            );
             if self.clipped.is_empty() {
                 continue;
             }

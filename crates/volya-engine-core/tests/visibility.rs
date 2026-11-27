@@ -183,9 +183,10 @@ fn the_first_levels_sectors_and_portals() {
         let l = load(vfs, &lib, "l01_escape");
         // level.md 10.
         let s = &l.sectors;
-        assert_eq!((s.portals.len(), s.sector_portals.len()), (69, 24));
-        assert_eq!(s.sector_portals.iter().map(Vec::len).sum::<usize>(), 138);
-        assert_eq!(s.sector_portals[0], [25, 57]);
+        assert_eq!((s.portals.len(), s.sector_count()), (69, 24));
+        let lists = (0..s.sector_count()).map(|k| s.sector_portals(k).len());
+        assert_eq!(lists.sum::<usize>(), 138);
+        assert_eq!(s.sector_portals(0), [25, 57]);
         let p = &s.portals[0];
         assert_eq!((p.sector_a, p.sector_b), (16, 23));
         assert!(
@@ -403,7 +404,7 @@ fn one_sector_levels_and_sectors_without_portals() {
             // level-hom.md 1: l10u_bunker has no occlusion mesh.
             assert_eq!(l.mesh.is_none(), name == "l10u_bunker", "{name}");
             let alone: Vec<u16> = (0..l.sectors.roots.len() as u16)
-                .filter(|&s| l.sectors.sector_portals[usize::from(s)].is_empty())
+                .filter(|&s| l.sectors.sector_portals(usize::from(s)).is_empty())
                 .collect();
             assert_eq!(alone.len(), count, "{name}");
             for s in alone {

@@ -8,6 +8,7 @@
 //! (docs/behavior/object-visibility.md 4 – 6).
 
 use std::io;
+use std::sync::Arc;
 
 use crate::core::camera::Vec3;
 use crate::core::collision::CollisionWorld;
@@ -21,7 +22,8 @@ use volya_engine_formats::level::{Level, Thresholds};
 /// The camera pass's state for a level's run.
 #[derive(Debug)]
 pub struct LevelVisibility {
-    sectors: Sectors,
+    /// Shared with the level's world ([`crate::level::LevelWorld::sectors`]).
+    sectors: Arc<Sectors>,
     occlusion: Occlusion,
     camera: CameraSector,
     frame: CameraFrame,
@@ -59,7 +61,7 @@ impl Default for LevelVisibility {
     /// A level without sectors: nothing is ever visited.
     fn default() -> Self {
         Self {
-            sectors: Sectors::default(),
+            sectors: Arc::default(),
             occlusion: Occlusion::new(None, 0),
             camera: CameraSector::default(),
             frame: CameraFrame::default(),
@@ -111,7 +113,7 @@ impl LevelVisibility {
             })
             .collect();
         Ok(Self {
-            sectors,
+            sectors: Arc::new(sectors),
             occlusion,
             starts,
             draws,
@@ -213,10 +215,15 @@ impl LevelVisibility {
         self.thresholds.as_ref()
     }
 
+    /// The sectors, portals and static visual hierarchy.
+    pub fn sectors(&self) -> &Arc<Sectors> {
+        &self.sectors
+    }
+
     /// The portal's polygon and bounding-sphere centre.
     pub fn portal(&self, portal: u16) -> Option<(&[Vec3], Vec3)> {
         let p = self.sectors.portals.get(usize::from(portal))?;
-        Some((&p.polygon, p.centre))
+        Some((self.sectors.polygon(p), p.centre))
     }
 
     /// The sector and frusta test and the cached occlusion test of a
