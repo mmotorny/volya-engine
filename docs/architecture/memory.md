@@ -10,7 +10,7 @@ Our memory figures are the original's, counted the same way, so they compare dir
 - the end-of-load *h* (the C runtime heap's in-use bytes, equal to its last `phase cmem`) and *t* (the textures);
 - the file cache's, our own figure for what the original maps ([File-backed data](#file-backed-data)).
 
-Anything above a budget is filed as an issue and investigated. Budgets are still measured and reported, never release gates (AGENTS.md). Matching the original is what is approved; every deviation is the user's decision, case by case, recorded in [Deviations](#deviations). A figure the spec leaves unestablished is not a budget until it is established.
+Anything above a budget is filed as an issue and investigated. Budgets are still measured and reported, never release gates (AGENTS.md). Matching the original is what is approved; every deviation is the user's decision, case by case, recorded in [Deviations](#deviations). One kind is approved in advance (the user, 2026-11-27): memory the original holds only to save CPU or disk time that 2026 hardware doesn't need may be removed once measurements show no cost a player can see (frame time, hitches, audio underruns); the caption then reports what it really holds, 0 if nothing, and the deviation is recorded. A figure the spec leaves unestablished is not a budget until it is established.
 
 ## Limits
 
