@@ -519,6 +519,57 @@ static HRESULT WINAPI hook_Reset(IDirect3DDevice9 *dev, D3DPRESENT_PARAMETERS *p
     return hr;
 }
 
+/* Hooks a function of Windows' own d3d9.dll at its code, so every caller
+ * goes through `hook`, whichever interface table it reached it by: the
+ * hot-patch form Microsoft's x86 system code is built for, a two-byte
+ * `mov edi, edi` at the entry and five bytes of padding before it. The
+ * padding becomes `jmp hook`, the entry `jmp short` to it; the original
+ * goes on at entry + 2 (`*original`). A jump at the entry (a thunk) is
+ * followed first. Returns 0, logging the bytes, when the code has not
+ * that form. */
+static int hotpatch(const char *name, void *target, void *hook, void **original) {
+    BYTE *f = target;
+    char where[MAX_PATH];
+    for (int i = 0; i < 4; i++) {
+        if (f[0] == 0xe9) {
+            f = f + 5 + *(int32_t *)(f + 1);
+        } else if (f[0] == 0xff && f[1] == 0x25) {
+            f = **(BYTE ***)(f + 2);
+        } else {
+            break;
+        }
+    }
+    module_of(f, where, MAX_PATH);
+    if (f[0] == 0xeb && f[1] == 0xf9 && f[-5] == 0xe9 &&
+        f - 5 + 5 + *(int32_t *)(f - 4) == (BYTE *)hook) {
+        dlog("%s: %p in %s is hooked already", name, (void *)f, where);
+        return 1;
+    }
+    int pad = 1;
+    for (int i = 1; i <= 5; i++) {
+        pad &= f[-i] == 0x90 || f[-i] == 0xcc;
+    }
+    if (!(f[0] == 0x8b && f[1] == 0xff) || !pad) {
+        dlog("%s: %p in %s is not hot-patchable: %02x %02x %02x %02x %02x | %02x %02x %02x %02x",
+             name, (void *)f, where, f[-5], f[-4], f[-3], f[-2], f[-1], f[0], f[1], f[2], f[3]);
+        return 0;
+    }
+    DWORD old;
+    if (!VirtualProtect(f - 5, 7, PAGE_EXECUTE_READWRITE, &old)) {
+        dlog("%s: VirtualProtect error %lu", name, (unsigned long)GetLastError());
+        return 0;
+    }
+    *original = f + 2;
+    f[-5] = 0xe9;
+    *(int32_t *)(f - 4) = (int32_t)((BYTE *)hook - f);
+    /* The entry last, in one write, so a thread entering sees either form. */
+    __atomic_store_n((volatile uint16_t *)f, (uint16_t)0xf9eb, __ATOMIC_SEQ_CST);
+    VirtualProtect(f - 5, 7, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), f - 5, 7);
+    dlog("%s: %p in %s hot-patched", name, (void *)f, where);
+    return 1;
+}
+
 static HRESULT WINAPI hook_CreateDevice(IDirect3D9 *d3d, UINT adapter, D3DDEVTYPE type, HWND focus,
                                         DWORD flags, D3DPRESENT_PARAMETERS *params,
                                         IDirect3DDevice9 **device) {
@@ -530,20 +581,43 @@ static HRESULT WINAPI hook_CreateDevice(IDirect3D9 *d3d, UINT adapter, D3DDEVTYP
     if (SUCCEEDED(hr) && device && *device) {
         the_device = *device;
         dlog("the device %p, its table %p", (void *)*device, (void *)(*device)->lpVtbl);
-        patch_slot((void **)&(*device)->lpVtbl->Present, (void *)hook_Present, (void **)&real_Present);
-        patch_slot((void **)&(*device)->lpVtbl->TestCooperativeLevel,
-                   (void *)hook_TestCooperativeLevel, (void **)&real_TestCooperativeLevel);
-        patch_slot((void **)&(*device)->lpVtbl->BeginScene, (void *)hook_BeginScene,
-                   (void **)&real_BeginScene);
-        patch_slot((void **)&(*device)->lpVtbl->EndScene, (void *)hook_EndScene,
-                   (void **)&real_EndScene);
-        patch_slot((void **)&(*device)->lpVtbl->Reset, (void *)hook_Reset, (void **)&real_Reset);
+        /* Present, BeginScene, EndScene and the swap chain's Present at
+         * their code in d3d9.dll, for every device (a device's table may
+         * be its own, on the heap: measured on the PC, #762); the rest
+         * only logged, in this device's table. */
+        static int coded;
         IDirect3DSwapChain9 *chain = NULL;
+        void *chain_present = NULL;
         if (SUCCEEDED(IDirect3DDevice9_GetSwapChain(*device, 0, &chain)) && chain) {
-            patch_slot((void **)&chain->lpVtbl->Present, (void *)hook_chain_Present,
-                       (void **)&real_chain_Present);
+            chain_present = (void *)chain->lpVtbl->Present;
             IDirect3DSwapChain9_Release(chain);
         }
+        if (!coded) {
+            coded = 1;
+            if (!hotpatch("Present", (void *)(*device)->lpVtbl->Present, (void *)hook_Present,
+                          (void **)&real_Present)) {
+                patch_slot((void **)&(*device)->lpVtbl->Present, (void *)hook_Present,
+                           (void **)&real_Present);
+            }
+            if (!hotpatch("BeginScene", (void *)(*device)->lpVtbl->BeginScene,
+                          (void *)hook_BeginScene, (void **)&real_BeginScene)) {
+                patch_slot((void **)&(*device)->lpVtbl->BeginScene, (void *)hook_BeginScene,
+                           (void **)&real_BeginScene);
+            }
+            if (!hotpatch("EndScene", (void *)(*device)->lpVtbl->EndScene, (void *)hook_EndScene,
+                          (void **)&real_EndScene)) {
+                patch_slot((void **)&(*device)->lpVtbl->EndScene, (void *)hook_EndScene,
+                           (void **)&real_EndScene);
+            }
+            if (chain_present && !hotpatch("the swap chain's Present", chain_present,
+                                           (void *)hook_chain_Present,
+                                           (void **)&real_chain_Present)) {
+                dlog("the swap chain's Present is not hooked");
+            }
+        }
+        patch_slot((void **)&(*device)->lpVtbl->TestCooperativeLevel,
+                   (void *)hook_TestCooperativeLevel, (void **)&real_TestCooperativeLevel);
+        patch_slot((void **)&(*device)->lpVtbl->Reset, (void *)hook_Reset, (void **)&real_Reset);
         store(&clock_->hooked, 1);
         dlog("Present hooked (the device's and its swap chain's)");
     }
@@ -693,7 +767,11 @@ static FARPROC WINAPI hook_GetProcAddress(HMODULE module, LPCSTR name) {
         real_Direct3DCreate9 = (create9_fn)p;
         return (FARPROC)(void *)hook_Direct3DCreate9;
     }
-    if (!strncmp(name, "Direct3D", 8)) {
+    if (strcmp(name, "Direct3DCreate9Ex") == 0) {
+        dlog("GetProcAddress Direct3DCreate9Ex: not hooked (its devices still go through the "
+             "hot-patched code)");
+    }
+    if (!strncmp(name, "Direct3D", 8) && strcmp(name, "Direct3DShaderValidatorCreate9")) {
         dlog("GetProcAddress %s: not hooked", name);
     }
     struct hook *h = hook_named(name);
