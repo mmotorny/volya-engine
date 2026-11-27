@@ -11,9 +11,11 @@ import { assert, assertEqual, skip } from "./harness.js";
 import {
   ORIGINAL,
   byCaption,
+  captionMs,
   glCalls,
   gpu,
   heapMaps,
+  levelFrames,
   heapRecord,
   jsMemory,
   keptSetup,
@@ -63,7 +65,8 @@ export const tests = {
     // Transcoding the level's textures (WebGL 2 without BC, #113) takes
     // longer, on every load.
     const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", loadMs());
-    const stages = byCaption(await volya.call("heap_log", { on: false }));
+    const log = await volya.call("heap_log", { on: false });
+    const stages = byCaption(log);
     const record = await heapRecord(false);
     assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
     // The level's objects (docs/behavior/level-objects.md section 7.1).
@@ -92,7 +95,7 @@ export const tests = {
     const shown = await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
     assertEqual(shown.phase, "level", "still in the level");
     const original = await againstOriginal();
-    let note = `${original}; h in the title menu before ${menuH} K, the original's ${ORIGINAL.titleMenuH} K; ${heapMaps.join("; ")}; wasm heap by caption (MiB, heap/live): ${stages}; ${record}; "${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; intro skipped, wasm heap ${mib(before.wasm_heap_bytes)} before it, ${mib(playing.wasm_heap_bytes)} while it played, the audio worker's ${mib(playing.audio_heap_bytes)}; at the start ${lights.passes} light passes, ${lights.sprites} glows drawn`;
+    let note = `${original}; h in the title menu before ${menuH} K, the original's ${ORIGINAL.titleMenuH} K; ${heapMaps.join("; ")}; wasm heap by caption (MiB, heap/live): ${stages}; ${record}; "${loading.loading.caption}" seen; first caption to first level frame in ${s.load_ms.toFixed(0)} ms; time by caption (ms): ${captionMs(log)}; ${levelFrames(log)}; intro skipped, wasm heap ${mib(before.wasm_heap_bytes)} before it, ${mib(playing.wasm_heap_bytes)} while it played, the audio worker's ${mib(playing.audio_heap_bytes)}; at the start ${lights.passes} light passes, ${lights.sprites} glows drawn`;
     if (gpu.state === "ready") {
       const { rgba } = await volya.call("debug_capture", { width: 256, height: 192 });
       const colours = new Set();

@@ -376,8 +376,8 @@ struct FrameStats {
 
 thread_local! {
     static FRAME_STATS: std::cell::RefCell<FrameStats> = Default::default();
-    /// While on (tests: the `heap_log` op), each frame's loading caption
-    /// and wasm heap size at its end.
+    /// While on (tests: the `heap_log` op), each frame's loading caption,
+    /// wasm heap size at its end, time and CPU time.
     static HEAP_LOG: std::cell::RefCell<Option<Vec<serde_json::Value>>> = Default::default();
     /// The least time a frame takes (tests: the `debug_frame_cost` op), ms:
     /// a slower device's frames, the worker busy for that long.
@@ -483,6 +483,10 @@ pub fn frame(time: f64) {
             "phase": state.get("phase"),
             "caption": state.get("loading").and_then(|l| l.get("caption")),
             "wasm_heap_bytes": heap_bytes(),
+            // When the frame ran and its CPU time, ms: each caption's time
+            // and the level's first frames (#813).
+            "time_ms": time,
+            "cpu_ms": cpu,
         });
         #[cfg(feature = "test-ops")]
         let entry = {

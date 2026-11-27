@@ -134,6 +134,30 @@ export const byCaption = (log) => {
   }
   return stages.map((s) => `${s.name} ${s.heap}${s.live === undefined ? "" : `/${s.live}`}`).join(", ");
 };
+// Each caption's time in a `heap_log` (ms), and the level's frames in it:
+// their count and the worst CPU time and interval, its first-sight
+// hitches (#813). An entry is logged at its frame's end, with the frame's
+// start time: a frame runs the stage of the caption the frame before it
+// ended with, until the next frame starts.
+export const captionMs = (log) => {
+  const stages = [];
+  for (let i = 1; i + 1 < log.length; i++) {
+    const name = log[i - 1].caption ?? log[i - 1].phase;
+    if (stages.at(-1)?.name !== name) stages.push({ name, ms: 0 });
+    stages.at(-1).ms += log[i + 1].time_ms - log[i].time_ms;
+  }
+  return stages.map((s) => `${s.name} ${Math.round(s.ms)}`).join(", ");
+};
+export const levelFrames = (log) => {
+  const level = log.filter((e) => e.phase === "level");
+  let cpu = 0;
+  let interval = 0;
+  for (let i = 1; i < level.length; i++) {
+    cpu = Math.max(cpu, level[i].cpu_ms);
+    interval = Math.max(interval, level[i].time_ms - level[i - 1].time_ms);
+  }
+  return `${level.length} level frames, the worst CPU ${cpu.toFixed(1)} ms, interval ${interval.toFixed(1)} ms`;
+};
 // Touch devices: no full screen offer, touch controls from the start.
 export const coarse = () => matchMedia("(pointer: coarse)").matches;
 // How long a level may take to load: transcoding its textures (WebGL 2

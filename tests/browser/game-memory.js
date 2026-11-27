@@ -13,6 +13,7 @@ import {
   answerBox,
   audioFlows,
   byCaption,
+  captionMs,
   client,
   enterLevel,
   gpu,
@@ -24,6 +25,7 @@ import {
   keptTeardown,
   key,
   launchToMenu,
+  levelFrames,
   loadMs,
   mib,
   needsGame,
@@ -248,7 +250,8 @@ export const tests = {
     const seen = { menu_asked: asked.menu_asked, overlay: asked.overlay_frames, intro: Boolean(asked.intro) };
     assert(asked.menu_asked && !asked.menu, `the menu asked for, not open: ${JSON.stringify(seen)}`);
     const s = await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level again", loadMs());
-    const stages = byCaption(await volya.call("heap_log", { on: false }));
+    const log = await volya.call("heap_log", { on: false });
+    const stages = byCaption(log);
     const original = await againstOriginal();
     assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
     // The intro again; a tap skips it (our design for touch). The controls
@@ -272,7 +275,7 @@ export const tests = {
     }
     // A second load reuses the heap the first one grew.
     const stats = await volya.call("level_stats");
-    return `${original}; loaded again in ${s.load_ms.toFixed(0)} ms; wasm heap ${mib(stats.wasm_heap_bytes)}, the audio worker's ${mib(stats.audio_heap_bytes)}; by caption (MiB, heap/live): ${stages}`;
+    return `${original}; loaded again in ${s.load_ms.toFixed(0)} ms; time by caption (ms): ${captionMs(log)}; ${levelFrames(log)}; wasm heap ${mib(stats.wasm_heap_bytes)}, the audio worker's ${mib(stats.audio_heap_bytes)}; by caption (MiB, heap/live): ${stages}`;
   },
 
   "the in-game menu's quit returns to the title menu after the New Game again, audio flowing": async () => {
