@@ -228,7 +228,10 @@ impl Install {
         let log = File::create(&log_path).map_err(|e| format!("{}: {e}", log_path.display()))?;
         let err = log.try_clone().map_err(|e| e.to_string())?;
         // The prefix's Documents folder is the run's `documents/`, so what the
-        // game writes there (logs, settings) lands on the Mac.
+        // game writes there (logs, settings) lands on the Mac. The game starts
+        // once the queries' Wine server has ended: in it the desktop was made
+        // without a display, and a game joining it gets no graphics driver
+        // (measured, #671: "The graphics driver is missing", a black display).
         let screen = screen();
         let tail = format!(
             "mkdir -p /tmp/fb\n\
@@ -240,6 +243,7 @@ impl Install {
              echo \"Install key, $view-bit view:\"\n\
              wine reg query '{INSTALL_KEY}' /reg:$view || true\n\
              done\n\
+             wineserver -w\n\
              cd {INSTALL_IN_CONTAINER}/{WORKING_DIR}\n\
              xvfb-run -n {DISPLAY} -f {XAUTHORITY} -s '-screen 0 {screen} -fbdir /tmp/fb' wine \"$@\"\n\
              echo \"exit code $?\""
