@@ -27,6 +27,7 @@ use std::alloc::{GlobalAlloc, Layout};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use volya_engine::core::file_cache;
+use volya_engine::core::input::Input;
 use volya_engine::core::memory_manager::{self, MemoryManager};
 use volya_engine::core::vfs::StdVfs;
 use volya_engine::core::vfs::db::DbVfs;
@@ -116,6 +117,12 @@ const ORIGINAL_START_H: u64 = 26_115;
 /// The original's game scripts' pool (*g*) at the load's end, K (#667):
 /// reported beside, not a budget.
 const ORIGINAL_G: &str = "25,762-25,784";
+/// The original's renderer's pool (*r*), K (console-diagnostics.md 2.1): 0
+/// at the load's end, 313-377 K 15 s into the level; reported beside.
+const ORIGINAL_R_DRAWN: &str = "313-377";
+/// The level's frames run after the load (its updates and scenes; natively
+/// no draw list), 16 ms apart, for the renderer's pool they fill.
+const FRAMES: u64 = 600;
 
 /// K, as the original's figures: rounded down.
 fn k(bytes: usize) -> u64 {
@@ -190,7 +197,7 @@ fn loading_stage_memory() {
     // The level made ends the load (natively: no frames, no overlay); the
     // prefetched models stay the game type's, as the app keeps them.
     let mut prefetched = load.prefetched().cloned();
-    let screen = load.finish(0).unwrap();
+    let mut screen = load.finish(0).unwrap();
     let (end, asked) = (
         memory_manager::in_use_bytes(),
         CURRENT.load(Ordering::Relaxed),
@@ -213,13 +220,14 @@ fn loading_stage_memory() {
         }
     }
     eprintln!(
-        "the load: h {} K at its start (the original {ORIGINAL_START_H} K), {} K at its end (the original {ORIGINAL_H} K; {} K asked for), peak +{:.1} MB asked for above its start; {} pool chunks; g {} K at its end (the original {ORIGINAL_G} K, reported beside)",
+        "the load: h {} K at its start (the original {ORIGINAL_START_H} K), {} K at its end (the original {ORIGINAL_H} K; {} K asked for), peak +{:.1} MB asked for above its start; {} pool chunks; g {} K at its end (the original {ORIGINAL_G} K, reported beside); r {} K at its end (the original 0 K, reported beside)",
         k(marks[0].1),
         k(end),
         k(asked),
         mb(highest),
         memory_manager::chunks(),
-        k(memory_manager::GAME_SCRIPTS.in_use_bytes())
+        k(memory_manager::GAME_SCRIPTS.in_use_bytes()),
+        k(memory_manager::RENDER.in_use_bytes())
     );
     if k(end) > ORIGINAL_H {
         excesses.push(format!(
@@ -269,6 +277,18 @@ fn loading_stage_memory() {
         game_blocks.0,
         game_blocks.1,
         BLOCKS.load(Ordering::Relaxed)
+    );
+    // The level's frames: their passes' and scenes' lists fill the
+    // renderer's pool, not the heap.
+    let h_before = memory_manager::in_use_bytes();
+    for t in 1..=FRAMES {
+        screen.update(16 * t, &Input::new());
+        drop(screen.scene(Resolution::new(1024, 768), 16 * t));
+    }
+    eprintln!(
+        "{FRAMES} frames after the load (updates and scenes): r {} K (the original {ORIGINAL_R_DRAWN} K once frames are drawn, reported beside), h {:+} K",
+        k(memory_manager::RENDER.in_use_bytes()),
+        k(memory_manager::in_use_bytes()) as i64 - k(h_before) as i64
     );
     // What the steady level holds besides: the objects' geometry goes
     // once uploaded; the configuration and the string tables stay.

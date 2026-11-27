@@ -453,60 +453,63 @@ impl Presenter {
             .as_ref()
             .is_some_and(|(level, _)| Arc::ptr_eq(level, &scene.world));
         if !current {
-            // The previous world's buffers go before the next's arrive,
-            // with its effects' textures.
-            self.world = None;
-            self.placed = None;
-            self.particle_shaders.clear();
-            self.glow_shaders.clear();
-            renderer.clear_level_textures();
-            // The effects' textures first: the world's upload drops the
-            // prepared textures it leaves.
-            self.particle_shaders = self.load_particle_shaders(renderer, tree, &scene.world);
-            // Buffers for every particle the level's effects can hold, made
-            // now rather than while the level runs.
-            renderer.reserve_particles(scene.world.particle_capacity);
-            self.load_lights(renderer, tree, &scene.world);
-            // The detail models with the world (detail-objects.md 6), so
-            // nothing is made while the level runs.
-            renderer.clear_details();
-            if let Some(d) = &scene.world.details {
-                match load_texture(renderer, tree, &quality, &d.texture) {
-                    Ok(t) => renderer.set_details(&d.models, &t, d.alpha_test, d.capacity),
-                    Err(e) => self.errors.push(format!("{}: {e}", d.texture)),
+            // What the world keeps is the heap's, not the frame's lists'.
+            crate::core::memory_manager::outside_frame_lists(|| {
+                // The previous world's buffers go before the next's arrive,
+                // with its effects' textures.
+                self.world = None;
+                self.placed = None;
+                self.particle_shaders.clear();
+                self.glow_shaders.clear();
+                renderer.clear_level_textures();
+                // The effects' textures first: the world's upload drops the
+                // prepared textures it leaves.
+                self.particle_shaders = self.load_particle_shaders(renderer, tree, &scene.world);
+                // Buffers for every particle the level's effects can hold, made
+                // now rather than while the level runs.
+                renderer.reserve_particles(scene.world.particle_capacity);
+                self.load_lights(renderer, tree, &scene.world);
+                // The detail models with the world (detail-objects.md 6), so
+                // nothing is made while the level runs.
+                renderer.clear_details();
+                if let Some(d) = &scene.world.details {
+                    match load_texture(renderer, tree, &quality, &d.texture) {
+                        Ok(t) => renderer.set_details(&d.models, &t, d.alpha_test, d.capacity),
+                        Err(e) => self.errors.push(format!("{}: {e}", d.texture)),
+                    }
                 }
-            }
-            self.projected_cells.borrow_mut().clear();
-            // The billboards' sets with the world (static-shading.md 8.4).
-            renderer.clear_billboards();
-            if let Some(b) = &scene.world.billboards {
-                let sets: Result<Vec<_>, _> = (b.sets.iter())
-                    .map(|[a, h]| {
-                        let t = |p: &String| {
-                            load_texture(renderer, tree, &quality, p)
-                                .map_err(|e| format!("{p}: {e}"))
-                        };
-                        Ok::<_, String>((t(a)?, t(h)?))
-                    })
-                    .collect();
-                match sets {
-                    Ok(sets) => renderer.set_billboards(&sets, b.groups),
-                    Err(e) => self.errors.push(e),
+                self.projected_cells.borrow_mut().clear();
+                // The billboards' sets with the world (static-shading.md 8.4).
+                renderer.clear_billboards();
+                if let Some(b) = &scene.world.billboards {
+                    let sets: Result<Vec<_>, _> = (b.sets.iter())
+                        .map(|[a, h]| {
+                            let t = |p: &String| {
+                                load_texture(renderer, tree, &quality, p)
+                                    .map_err(|e| format!("{p}: {e}"))
+                            };
+                            Ok::<_, String>((t(a)?, t(h)?))
+                        })
+                        .collect();
+                    match sets {
+                        Ok(sets) => renderer.set_billboards(&sets, b.groups),
+                        Err(e) => self.errors.push(e),
+                    }
                 }
-            }
-            if let Some(path) = &scene.world.presentation_noise {
-                match load_texture(renderer, tree, &quality, path) {
-                    Ok(t) => renderer.set_presentation_noise(&t),
-                    Err(e) => self.errors.push(format!("{path}: {e}")),
+                if let Some(path) = &scene.world.presentation_noise {
+                    match load_texture(renderer, tree, &quality, path) {
+                        Ok(t) => renderer.set_presentation_noise(&t),
+                        Err(e) => self.errors.push(format!("{path}: {e}")),
+                    }
                 }
-            }
-            let world = tracing::info_span!("render.upload_world")
-                .in_scope(|| self.upload_world(renderer, tree, &scene.world));
-            let world = world
-                .map_err(|e| self.errors.push(format!("{}: {e}", scene.world.dir)))
-                .ok();
-            self.world = Some((scene.world.clone(), world));
-            self.drawn = None;
+                let world = tracing::info_span!("render.upload_world")
+                    .in_scope(|| self.upload_world(renderer, tree, &scene.world));
+                let world = world
+                    .map_err(|e| self.errors.push(format!("{}: {e}", scene.world.dir)))
+                    .ok();
+                self.world = Some((scene.world.clone(), world));
+                self.drawn = None;
+            });
         }
         let world = self.world.as_ref()?.1.clone()?;
         self.place_objects(renderer, &world, scene);
@@ -1095,8 +1098,12 @@ impl Presenter {
         renderer.prepare_presentation(screen, &scene.presentation);
         match &scene.world {
             Some(world) => {
-                // Uploaded (or kept) even when covered, so it is ready.
-                let frame = self.world_frame(renderer, tree, world);
+                // Uploaded (or kept) even when covered, so it is ready; the
+                // frame's lists in the renderer's pool
+                // (docs/architecture/memory.md, The allocator).
+                let frame = crate::core::memory_manager::frame_lists(|| {
+                    self.world_frame(renderer, tree, world)
+                });
                 list.world = frame.filter(|_| !world.covered).map(|mut f| {
                     f.presentation = scene.presentation;
                     f.filtering = scene.filtering;

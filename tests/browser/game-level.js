@@ -25,6 +25,7 @@ import {
   noteHeap,
   againstOriginal,
   hNow,
+  rNow,
   pointAt,
   sleep,
   until,
@@ -186,7 +187,7 @@ export const tests = {
       .map(([name, p]) => `${name} ${p.draws}`)
       .join(", ");
     const commands = c ? `; ${c.total.draws} draws (${parts}), ${c.total.pipelines} pipelines, ${c.total.bind_groups} bind groups, ${c.total.buffers} buffers set` : "";
-    return `ms per frame: ${rows.join("; ")} (before: done ${before.gpu_done_ms?.toFixed(1)})${commands}`;
+    return `ms per frame: ${rows.join("; ")} (before: done ${before.gpu_done_ms?.toFixed(1)})${commands}; ${await rNow()}`;
   },
 
   "the diagnostic log's cost per frame: off and on in turn, its GPU fence and its writes": async () => {

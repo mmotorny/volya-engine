@@ -3348,6 +3348,12 @@ impl LevelScreen {
     /// of `dt` seconds (0 while paused), the detail pass ahead of the
     /// camera pass when `details` (a frame whose world is drawn).
     fn lights_frame(&mut self, dt: f32, details: bool) {
+        // The frame's passes build their lists in the renderer's pool
+        // (docs/architecture/memory.md, The allocator).
+        crate::core::memory_manager::frame_lists(|| self.frame_passes(dt, details));
+    }
+
+    fn frame_passes(&mut self, dt: f32, details: bool) {
         let (w, h) = self.view_size.get();
         let (view, projection) = self.view_projection(w, h);
         let e = &self.environment;
@@ -3841,6 +3847,11 @@ impl LevelScreen {
     }
 
     fn compose(&self, resolution: Resolution, clock_ms: u64, covered: bool) -> Scene {
+        // The scene's lists are the renderer's pool's, as the passes'.
+        crate::core::memory_manager::frame_lists(|| self.composed(resolution, clock_ms, covered))
+    }
+
+    fn composed(&self, resolution: Resolution, clock_ms: u64, covered: bool) -> Scene {
         let (view, projection) = self.view_projection(resolution.width, resolution.height);
         let details = if covered {
             None

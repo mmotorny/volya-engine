@@ -12,12 +12,17 @@
 //! its 23 bytes. The game scripts' pool ([`GAME_SCRIPTS`], *g*) is the same
 //! [`Pools`] with chunks of its own, outside that count; its figure is its
 //! bytes in use, its free blocks not among them (console-diagnostics.md 2.1).
+//! So is the renderer's ([`RENDER`], *r*): the global allocator's blocks
+//! made while a level's frame builds its lists ([`frame_lists`]). Each block
+//! keeps the pools it came from in its byte after the request (a pool's
+//! block holds at least the request and one byte, a large block 23 more),
+//! so it goes back to them wherever it is freed.
 
 // `GlobalAlloc` is unsafe to implement; the pools hand out raw blocks.
 #![allow(unsafe_code)]
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::UnsafeCell;
+use std::cell::{Cell, UnsafeCell};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// The pools' count; block sizes 16, 32, … 864 bytes.
@@ -64,6 +69,79 @@ static HEAP: Pools = Pools::new();
 /// [`in_use_bytes`], as the original's game library commits its script
 /// machine's pool apart from its heap (console-diagnostics.md 2.1, 2.1.1).
 pub static GAME_SCRIPTS: Pools = Pools::new();
+
+/// The renderer's pool (*r*): the lists a level's frame builds (its
+/// passes, its scene and its draw list, [`frame_lists`]), outside
+/// [`in_use_bytes`], as the original's renderer commits its own pool apart
+/// from its heap (console-diagnostics.md 2.1, 2.1.1).
+pub static RENDER: Pools = Pools::new();
+
+/// The byte after a block's request: which pools it came from.
+const FROM_HEAP: u8 = 0;
+const FROM_RENDER: u8 = 1;
+
+thread_local! {
+    /// Whether this thread is building a frame's lists ([`frame_lists`]).
+    static FRAME_LISTS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Runs `f` with the global allocator's new blocks taken from [`RENDER`]:
+/// the lists a level's frame builds and refills (docs/architecture/memory.md,
+/// The allocator). A block keeps its pools when it grows or is freed later.
+pub fn frame_lists<R>(f: impl FnOnce() -> R) -> R {
+    scoped(true, f)
+}
+
+/// Runs `f` with the global allocator's new blocks taken from the heap again,
+/// inside [`frame_lists`]: what a frame loads to keep (the GPU's copies of a
+/// level shown first, the images drawn), not its lists.
+pub fn outside_frame_lists<R>(f: impl FnOnce() -> R) -> R {
+    scoped(false, f)
+}
+
+fn scoped<R>(frame: bool, f: impl FnOnce() -> R) -> R {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            FRAME_LISTS.with(|c| c.set(self.0));
+        }
+    }
+    let _restore = Restore(FRAME_LISTS.with(|c| c.replace(frame)));
+    f()
+}
+
+/// The pools new blocks come from now, and their tag.
+fn current() -> (&'static Pools, u8) {
+    if FRAME_LISTS.with(Cell::get) {
+        (&RENDER, FROM_RENDER)
+    } else {
+        (&HEAP, FROM_HEAP)
+    }
+}
+
+/// The pools of a block whose request was `size` bytes.
+///
+/// # Safety
+/// `p` was made by [`MemoryManager`] with a request of `size` bytes.
+unsafe fn owner(p: *mut u8, size: usize) -> &'static Pools {
+    // SAFETY: the block holds its tag after the request.
+    match unsafe { p.add(size).read() } {
+        FROM_RENDER => &RENDER,
+        _ => &HEAP,
+    }
+}
+
+/// Writes `tag` after the request of `size` bytes, if `p` is a block.
+///
+/// # Safety
+/// `p` is null or a block of these pools for a request of `size` bytes.
+unsafe fn tagged(p: *mut u8, size: usize, tag: u8) -> *mut u8 {
+    if !p.is_null() {
+        // SAFETY: every block holds a byte after its request.
+        unsafe { p.add(size).write(tag) };
+    }
+    p
+}
 
 /// A free block: the next free block of its pool.
 struct Free {
@@ -296,26 +374,32 @@ impl Default for Pools {
 /// The global allocator ([module docs](self)).
 pub struct MemoryManager;
 
-// SAFETY: the pools keep GlobalAlloc's contract.
+// SAFETY: the pools keep GlobalAlloc's contract; each block's tag names
+// the pools it came from.
 unsafe impl GlobalAlloc for MemoryManager {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        // SAFETY: the caller's contract is the pools'.
-        unsafe { HEAP.alloc(layout) }
+        let (pools, tag) = current();
+        // SAFETY: the caller's contract is the pools'; the block is its.
+        unsafe { tagged(pools.alloc(layout), layout.size(), tag) }
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        let (pools, tag) = current();
         // SAFETY: as `alloc`.
-        unsafe { HEAP.alloc_zeroed(layout) }
+        unsafe { tagged(pools.alloc_zeroed(layout), layout.size(), tag) }
     }
 
     unsafe fn dealloc(&self, p: *mut u8, layout: Layout) {
-        // SAFETY: as `alloc`.
-        unsafe { HEAP.dealloc(p, layout) }
+        // SAFETY: made by `alloc` with this layout.
+        unsafe { owner(p, layout.size()).dealloc(p, layout) }
     }
 
     unsafe fn realloc(&self, p: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-        // SAFETY: as `alloc`.
-        unsafe { HEAP.realloc(p, layout, size) }
+        // SAFETY: as `dealloc`; the block keeps its pools.
+        unsafe {
+            let tag = p.add(layout.size()).read();
+            tagged(owner(p, layout.size()).realloc(p, layout, size), size, tag)
+        }
     }
 }
 
@@ -428,6 +512,31 @@ mod tests {
         // Its chunks are kept, free; its figure is what is in use.
         assert_eq!(pools.in_use_bytes(), 0);
         assert_eq!(pools.chunks(), 2);
+    }
+
+    #[test]
+    fn a_frames_blocks_are_the_renderers_wherever_freed() {
+        let m = MemoryManager;
+        let (small, big) = (
+            Layout::from_size_align(100, 8).unwrap(),
+            Layout::from_size_align(3000, 8).unwrap(),
+        );
+        // Other tests' threads use the heap, not this thread's frame.
+        let before = RENDER.in_use_bytes();
+        // SAFETY: allocations of a nonzero size, freed with their layouts.
+        unsafe {
+            let (a, b) = frame_lists(|| (m.alloc(small), m.alloc(big)));
+            let kept = outside_frame_lists(|| m.alloc(small));
+            frame_lists(|| m.dealloc(kept, small));
+            // The pool of 112 bytes; the large block with its 23.
+            assert_eq!(RENDER.in_use_bytes(), before + 112 + 3023);
+            // Grown and freed outside the frame: still the renderer's.
+            let a = m.realloc(a, small, 2000);
+            assert_eq!(RENDER.in_use_bytes(), before + 2023 + 3023);
+            m.dealloc(a, Layout::from_size_align(2000, 8).unwrap());
+            m.dealloc(b, big);
+        }
+        assert_eq!(RENDER.in_use_bytes(), before);
     }
 
     #[test]

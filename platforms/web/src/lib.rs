@@ -404,10 +404,10 @@ pub(crate) fn heap_bytes() -> f64 {
 /// reserved), the heaps and the memory manager are the memory manager's
 /// bytes in use (its chunks whole, its large blocks with their 23 bytes),
 /// the textures the sizes the renderer records for the files it holds by
-/// name (`gl::Texture::record_size`), the game scripts' pool its bytes in
-/// use (`memory_manager::GAME_SCRIPTS`). No part has a counterpart of the
-/// process heap, the engine's scripts' and the renderer's own pools, or the
-/// shared strings and blocks: 0.
+/// name (`gl::Texture::record_size`), the game scripts' and the renderer's
+/// pools their bytes in use (`memory_manager::GAME_SCRIPTS`, `RENDER`). No
+/// part has a counterpart of the process heap, the engine's scripts' pool,
+/// or the shared strings and blocks: 0.
 /// The audio worker's instance is the sound library's (the original's runs
 /// in its process): its wasm memory adds to the address space committed and
 /// its memory manager's bytes in use, the sound cache among them, to the
@@ -425,6 +425,7 @@ fn memory_statistics() -> volya_engine::core::console::MemoryStatistics {
         textures: gpu.recorded_bytes,
         crt_heap: in_use,
         game_lua: volya_engine::core::memory_manager::GAME_SCRIPTS.in_use_bytes() as u64,
+        render: volya_engine::core::memory_manager::RENDER.in_use_bytes() as u64,
         cmem: in_use,
         ..Default::default()
     }
@@ -917,7 +918,8 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
                 "now": {
                     "crt_heap": now.crt_heap,
                     "game_lua": now.game_lua,
-                    "sound":audio::host_stats().audio_in_use_bytes,
+                    "render": now.render,
+                    "sound": audio::host_stats().audio_in_use_bytes,
                     "sound_cache": audio::host_stats().audio_cache_bytes,
                     "textures": now.textures,
                     "live_bytes": counting::live(),

@@ -5,7 +5,8 @@
 //! the allocations and bytes each frame of `l01_escape` makes on the wasm
 //! heap (the level's update, its sounds, its scene and the draw list),
 //! with the camera turning at the start position, and what the level holds
-//! after them. Reported, not held to a budget (docs/architecture/memory.md).
+//! after them, and the renderer's pool (*r*) the frames' lists take.
+//! Reported, not held to a budget (docs/architecture/memory.md).
 //! Needs the platform's heap counts ([`Context::heap`]); the frames run
 //! without yielding, so nothing else allocates meanwhile.
 
@@ -120,10 +121,12 @@ pub async fn level_frame_heap_traffic(cx: &Context<'_>) -> Outcome {
         .collect();
     Ok(format!(
         "per frame ({FRAMES} frames after {WARMUP}): {:.0} allocations and {:.1} KB \
-         (most allocations in a frame: {worst}): {}; live during the frames {:+.2} MB",
+         (most allocations in a frame: {worst}): {}; live during the frames {:+.2} MB; \
+         the renderer's pool (r) {} K after them",
         per(allocs),
         per(bytes) / 1e3,
         parts.join(", "),
-        (heap().live as f64 - live_after_warmup as f64) / 1e6
+        (heap().live as f64 - live_after_warmup as f64) / 1e6,
+        crate::core::memory_manager::RENDER.in_use_bytes() / 1024
     ))
 }
