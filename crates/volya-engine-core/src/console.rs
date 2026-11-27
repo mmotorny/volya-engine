@@ -6,20 +6,23 @@
 //! `help`, and the user configuration file that stores the values and the
 //! key bindings (docs/behavior/options-screens.md sections 11 and 12).
 //!
-//! The console keeps its log lines (console-commands.md's "prints") for
-//! whoever shows them. Of the actions it runs those whose effect is the
+//! The console holds the log (docs/behavior/console-log.md, [`Log`]): the
+//! lines it prints (console-commands.md's "prints") and every other part's,
+//! for whoever shows them. Of the actions it runs those whose effect is the
 //! console's own: `help`, the key bindings (options-screens.md 11.5),
-//! `bind_console` and `load_last_save <name>`; the others are its
-//! caller's ([`Exec::Action`]). Setting `_preset` runs the preset's script
+//! `bind_console`, `load_last_save <name>`, `flush` and `clear_log`; the
+//! others are its caller's ([`Exec::Action`]). Setting `_preset` runs the preset's script
 //! (options-screens.md section 8).
 
 mod commands;
+mod log;
 mod value;
 
 pub use commands::{
     Bare, COMMANDS, CommandDef, DIFFICULTIES, GAME_MODES, Kind, PRESET_FILES, PRESETS, RENDERERS,
     Saved,
 };
+pub use log::Log;
 pub use value::{Value, help_text, parse_mode, real_status};
 
 use volya_engine_formats::cp1251;
@@ -288,7 +291,7 @@ pub struct ConsoleFiles {
 /// What [`Console::exec`] did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Exec {
-    /// A value or a binding was stored.
+    /// A value or a binding was stored, or `flush` or `clear_log` ran.
     Done,
     /// A value was rejected or an action's argument named nothing: nothing
     /// changed.
@@ -325,8 +328,7 @@ pub struct Console {
     /// Per command, its executions: with an argument, accepted or not, and
     /// of the bare name (texture-quality-filtering.md 6.1).
     executions: Vec<u64>,
-    /// The lines printed, oldest first.
-    log: Vec<String>,
+    log: Log,
     /// The user configuration file runs at startup.
     starting: bool,
     /// Why the program ends (console-commands.md section 5), once it must.
@@ -377,7 +379,7 @@ impl Console {
                 kind => Value::parse(kind, d.initial).expect("built-in value"),
             })
             .collect();
-        Self {
+        let mut console = Self {
             files,
             values,
             slots: vec![[None; 2]; ACTIONS.len()],
@@ -385,10 +387,13 @@ impl Console {
             last_save: None,
             generation: 0,
             executions: vec![0; COMMANDS.len()],
-            log: Vec::new(),
+            log: Log::default(),
             starting: false,
             fatal: None,
-        }
+        };
+        // Set up before the engine and the console (console-log.md 3.3).
+        console.log.set_up_file();
+        console
     }
 
     /// How often command `name` was executed: with an argument (accepted
@@ -402,9 +407,15 @@ impl Console {
         self.generation
     }
 
-    /// The lines the commands printed, oldest first.
+    /// The log's lines, oldest first.
     pub fn log(&self) -> &[String] {
-        &self.log
+        self.log.lines()
+    }
+
+    /// The log, for the other parts' lines and the log file's other
+    /// occasions (console-log.md 3.3).
+    pub fn log_mut(&mut self) -> &mut Log {
+        &mut self.log
     }
 
     /// Why the program ends, once a command made it end: `help` executed
@@ -466,8 +477,9 @@ impl Console {
         result
     }
 
+    /// A formatted message (console-log.md 1.3).
     fn print(&mut self, line: String) {
-        self.log.push(line);
+        self.log.message(&line);
     }
 
     /// Section 2.
@@ -477,7 +489,7 @@ impl Console {
             return Exec::Ignored;
         }
         if typed {
-            self.print(format!("~ {line}"));
+            self.log.word("~", Some(&line));
         }
         let (name, argument) = match line.split_once(' ') {
             Some((n, a)) => (n, a.strip_suffix(' ').unwrap_or(a)),
@@ -485,7 +497,7 @@ impl Console {
         };
         let Some(i) = registered(name) else {
             // The message ends in a space and the name follows one more.
-            self.print(format!("! Unknown command:  {name}"));
+            self.log.word("! Unknown command: ", Some(name));
             return Exec::Unknown;
         };
         let def = COMMANDS[i];
@@ -591,6 +603,19 @@ impl Console {
                 let at = self.console_keys.partition_point(|(_, c)| *c < code);
                 self.console_keys
                     .insert(at, (format!("{command} {}", KEYS[k].0), code));
+                Exec::Done
+            }
+            // console-log.md 3.5: the line is not in the file it wrote.
+            "flush" => {
+                self.log.save();
+                self.print("* Log file has been saved successfully!".to_owned());
+                Exec::Done
+            }
+            // 3.6: the file it writes is empty.
+            "clear_log" => {
+                self.log.clear();
+                self.log.save();
+                self.print("* Log file has been cleaned successfully!".to_owned());
                 Exec::Done
             }
             // With a name it only remembers it (steering-the-original.md

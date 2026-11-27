@@ -851,6 +851,12 @@ impl App {
             return;
         }
         diagnostics::end("fatal", &error);
+        // The report is written to the log, then the log file
+        // (console-log.md 3.3). TODO(#611): the report's own text; a
+        // browser has no stack trace of the game to add (#620).
+        let log = self.console.log_mut();
+        log.message(&error);
+        log.save();
         self.error = Some(error);
         let now = self.clock;
         let title = self.opening(false);
@@ -1159,6 +1165,10 @@ impl App {
                     self.samplers.reset(&self.console);
                     menu.resized(data, self.video);
                 }
+                if menu.quit_requested() {
+                    // The program's normal end (console-log.md 3.3).
+                    self.console.log_mut().save();
+                }
                 if out.store_config || menu.quit_requested() {
                     // Stored when the options screen closes, not only at exit
                     // (our choice: a browser tab is usually closed without
@@ -1280,6 +1290,9 @@ impl App {
                     // A device reset (texture-quality-filtering.md 7.3).
                     self.samplers.reset(&self.console);
                     menu.resized(data, self.video);
+                }
+                if menu.quit_requested() {
+                    self.console.log_mut().save();
                 }
                 if out.store_config || menu.quit_requested() {
                     self.save = Some(self.console.save());
@@ -1565,6 +1578,14 @@ impl App {
     /// when the options screen closes and when the player quits.
     pub fn take_save(&mut self) -> Option<Vec<u8>> {
         self.save.take()
+    }
+
+    /// The log file's contents (console-log.md 3.2), once written: as the
+    /// console is set up, by `flush` and `clear_log`, when the player quits
+    /// and at a fatal error (3.3). TODO(#620): the platform doesn't store
+    /// them yet.
+    pub fn take_log_file(&mut self) -> Option<Vec<u8>> {
+        self.console.log_mut().take_file()
     }
 
     /// The page is in the browser's full screen (`on`) or not, or can't be
@@ -2054,10 +2075,13 @@ mod tests {
         assert!(scene.first("background").is_some());
         // The menu draws its cursor: touch is a touchpad (#108).
         assert!(app.cursor_shown() && scene.first("cursor").is_some());
+        app.take_log_file();
         press(&mut input, Key::Q);
         app.update(&tree, 5400.0, &mut input, &mut audio);
         assert!(app.quit_requested());
         assert!(audio.playing.is_empty());
+        // The log file is written at the end (console-log.md 3.3).
+        assert!(app.take_log_file().is_some());
     }
 
     #[test]
@@ -3021,9 +3045,13 @@ mod tests {
     fn the_menu_saying_why_is_not_opened_again_for_the_same_error() {
         let (tree, mut app, mut input, mut audio) = in_level();
         let error = "x: fatal".to_owned();
+        app.take_log_file();
         app.failed = Some(error.clone());
         app.update(&tree, 32.0, &mut input, &mut audio);
         assert!(matches!(app.state(), AppState::Menu { .. }));
+        // The report, then the log file (console-log.md 3.3).
+        assert_eq!(app.console().log().last().unwrap(), "x: fatal");
+        assert!(app.take_log_file().unwrap().ends_with(b"x: fatal\r\n"));
         let opened = audio.started.len();
         assert!(opened > 0, "the menu's music started");
         for t in [48.0, 64.0] {

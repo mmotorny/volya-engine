@@ -96,10 +96,32 @@ fn the_bare_name_shows_or_runs() {
     assert_eq!(printed(&mut c, "bind"), ["- bind "]);
     assert_eq!(printed(&mut c, "g_corpsenum"), ["- g_corpsenum 10"]);
     assert_eq!(printed(&mut c, "name"), ["- name "], "no game: empty");
-    assert_eq!(c.exec("flush"), Exec::Action);
+    assert_eq!(c.exec("disconnect"), Exec::Action);
     assert_eq!(c.exec("cfg_load"), Exec::Shown);
     assert_eq!(c.exec("cfg_load other"), Exec::Action);
     assert_eq!(c.executions("g_corpsenum"), 1);
+}
+
+#[test]
+fn flush_and_clear_log_write_the_log_file() {
+    // console-log.md 3.3: created empty as the console is set up.
+    let mut c = Console::new(files());
+    assert_eq!(c.log_mut().take_file(), Some(Vec::new()));
+    // 3.5: `flush`'s own line is not in the file it writes.
+    c.enter("bogus");
+    assert_eq!(c.exec("flush"), Exec::Done);
+    assert_eq!(
+        c.log_mut().take_file().unwrap(),
+        b"~ bogus\r\n! Unknown command:  bogus\r\n"
+    );
+    assert_eq!(
+        c.log().last().unwrap(),
+        "* Log file has been saved successfully!"
+    );
+    // 3.6: the log and so the history are emptied, the file with them.
+    assert_eq!(c.exec("clear_log"), Exec::Done);
+    assert_eq!(c.log_mut().take_file(), Some(Vec::new()));
+    assert_eq!(c.log(), ["* Log file has been cleaned successfully!"]);
 }
 
 #[test]
