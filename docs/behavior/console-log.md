@@ -2,7 +2,9 @@
 
 How the original's log works: which programs write to it, how a written text becomes log lines, how the
 lines are kept, what of them the console shows, and the log file (its name and folder, its line ends,
-every occasion on which it is written, the `-nolog` switch, and the commands `flush` and `clear_log`).
+every occasion on which it is written, what a write does when the file cannot be opened, the text of the
+fatal-error report and how the program ends after it, the `-nolog` switch, and the commands `flush` and
+`clear_log`).
 The console's look (rows, colours, scrolling) belongs to the console window and input specifications;
 what each command prints belongs to `console-commands.md` and the specifications named there. What could
 not be established is marked **unestablished**; a statement inferred without a direct check is marked
@@ -21,7 +23,7 @@ Conventions:
 **Checks.** Every claim carries a tag [CL-*n*]. The checks are one script in the dirty workspace,
 `console-log/checks/run.py` (helpers in the same folder); it reads the shipped binaries (import and
 export tables, data values, read-only static analysis) and the files of headless runs of the shipped game
-(`console-log/run/out/`). All checks pass.
+(`console-log/run/out/` and `console-log/fix611/run/out/`). All checks pass.
 
 ## 1. Log lines
 
@@ -125,12 +127,12 @@ lines and `! Unknown command: <name>`.
 
 | Occasion | What happens | |
 |---|---|---|
-| Startup, at the end of the file system's setup (before the engine and the configuration file) | unless `-nolog` (3.4), the file is created empty, replacing any earlier file; if it cannot be created, a message box `Can't create log file.` titled `Error` is shown and the program aborts. Measured: a file from before became empty during startup and stayed empty for the whole run until it was next written [CL-10] | CL-10 |
+| Startup, at the end of the file system's setup (before the engine and the configuration file) | unless `-nolog` (3.4), the file is created empty, replacing any earlier file; when it cannot be opened, the program goes on as for any write (3.9). A message box `Can't create log file.` titled `Error` is shown and the program aborts only when no memory can be had for writing the file (**believed** never in practice) [CL-10, CL-23]. Measured: a file from before became empty during startup and stayed empty for the whole run until it was next written [CL-10] | CL-10, CL-23 |
 | `flush` | written (3.5) | CL-14 |
 | `clear_log` | written after the log is emptied (3.6) | CL-15 |
 | Normal end of the program (e.g. `quit`, ST 7) | written when the core library shuts down, the last step of the program's end after the session and the engine have ended, so the file ends with the last line of the shutdown. Measured: after `quit` the file held the shutdown lines up to the last one (`DeviceREF: 1`) [CL-16] | CL-16 |
-| A fatal error (the error report the program shows) | the report is written to the log, then the file; then, unless the command line contains `-no_call_stack_assert` or a debugger is attached, `stack trace:` and the stack trace are written to the log and the file is written again [CL-17] | CL-17 |
-| An unhandled exception (a crash) | the stack trace (headed `stack trace:`, unless `-no_call_stack_assert`) and the last operating-system error, if any, are written to the log, then the file. Measured: a crash at startup left a file ending in `stack trace:` and an empty line [CL-17]. **Disputed in review:** the last operating-system error is written only together with the stack trace (not with `-no_call_stack_assert`), as an empty line followed by `[error][<code, right-aligned in 8 places>]    : <the system's message>`; when a fatal error has already been reported in the run, neither the stack trace nor the error is written, and the file is still written | CL-17 |
+| A fatal error (the error report the program shows) | the report (3.8) is written to the log, then the file; then, unless the command line contains `-no_call_stack_assert` or a debugger is attached, `stack trace:` and the stack trace are written to the log and the file is written again [CL-17, CL-20]. The program then ends through the unhandled-exception occasion, which writes the file once more (3.10) [CL-22] | CL-17, CL-20, CL-22 |
+| An unhandled exception (a crash) | the last operating-system error code is taken first. Then, unless a fatal error has already been reported in the run (3.8) or the command line contains `-no_call_stack_assert`: `stack trace:` and the stack trace are written to the log, and after them, when the error code is not 0, a formatted message of a line feed followed by `[error][<code>]    : <message>` (`<code>` in signed decimal, right-aligned with spaces in 8 places; four spaces before the colon; `<message>` the operating system's message for the code in the user's default language), so a single-space line and then the error's line(s) (1.2). With a fatal error reported or `-no_call_stack_assert`, neither the stack trace nor the error is written. Whether a debugger is attached plays no part. In every case the file is then written [CL-17, CL-24]. Measured: a crash at startup left a file ending in `stack trace:` and an empty line [CL-17]; after a fatal error, the file was written once more with no second `stack trace:` (3.10) [CL-22] | CL-17, CL-22, CL-24 |
 | A fatal message box ending the program | the file is written before the box is shown [CL-17] | CL-17 |
 | The graphics device cannot be created | the two lines `Failed to initialize graphics hardware.` and `Please try to restart the game.` are written to the log, then the file; the same text is shown in a message box titled `Error!` and the process ends [CL-17] | CL-17 |
 
@@ -139,6 +141,7 @@ lines and `! Unknown command: <name>`.
   over 40 s of running after startup; a run stopped from outside after `flush` kept the file as `flush`
   wrote it [CL-10, CL-14]. (**Believed** complete: these are all the places that write the file in the
   shipped programs, found by static analysis.)
+- A write that cannot open the file writes nothing to it and adds a line to the log (3.9) [CL-23].
 - Before the file has been set up at startup, writing does nothing: two file-system errors at startup
   (the file-system file cannot be opened; it contains duplicated lines) try to write the file and write
   nothing [CL-11].
@@ -176,7 +179,97 @@ The log file's name is given to the crash reporter [CL-18]. Measured: after a cr
 byte-identical copy of the log file, named `<log name without .log>_<mm>-<dd>-<yy>_<hh>-<mm>-<ss>.mdmp.log`,
 lay in the same folder beside a minidump of the same stem with extension `.mdmp` [CL-18]. Which program
 makes the copy, and whether it is made on every crash, is **unestablished** (**believed** the crash
-reporter, which is handed the file).
+reporter, which is handed the file). **Disputed in review:** the core library makes it, at the
+unhandled-exception occasion (3.3), right after writing the log file: when the system's dump library and
+its minidump function can be loaded, it writes the whole log, exactly as a write of the log file (3.2,
+3.9; not under `-nolog`), to `<application>_<user>_<timestamp>.mdmp.log` in the `$logs$` folder, then
+creates the minidump `<application>_<user>_<timestamp>.mdmp` beside it; when the library or the function
+cannot be loaded, neither file is made. It is a second write of the log, not a copy, so it holds the same
+lines as the log file just written; this step writes nothing to the log.
+
+### 3.8 The fatal-error report
+
+The report a fatal error writes to the log (3.3) is one formatted message (1.3), so only its first 1023
+characters are kept [CL-20, CL-4]. Its text is a line feed, `FATAL ERROR`, two line feeds, then these rows,
+each ended by a line feed, then one more line feed [CL-20]:
+
+    [error]Expression    : <expression>
+    [error]Function      : <function>
+    [error]File          : <file>
+    [error]Line          : <line>
+    <description rows>
+
+Every label is padded with spaces to 14 characters and followed by `: ` [CL-20]. `<line>` is in signed
+decimal [CL-20]. The description rows are [CL-20]:
+
+- when the description contains a line feed and there is no argument: a line feed, then the description
+  as it is (no label, no `[error]`), ended by a line feed;
+- otherwise `[error]Description   : <description>`, followed, with one argument, by
+  `[error]Arguments     : <argument>`, or, with two, by `[error]Argument 0    : <first>` and
+  `[error]Argument 1    : <second>`.
+
+So, by 1.2, the log gains a single-space line, `FATAL ERROR`, a single-space line, the rows, a
+single-space line and an empty line [CL-20]. Measured, for a configuration file with a duplicated section
+`dup` [CL-20]:
+
+    FATAL ERROR
+
+    [error]Expression    : fatal error
+    [error]Function      : <function>
+    [error]File          : <file>
+    [error]Line          : <line>
+    [error]Description   : <no expression>
+    [error]Arguments     : Duplicate section 'dup' found.
+
+(preceded by a single-space line and followed by a single-space line and an empty line; the blank line
+after `FATAL ERROR` is a single-space line).
+
+What fills the rows depends on the kind of fatal error [CL-21]:
+
+| Kind | Expression | Description | Arguments |
+|---|---|---|---|
+| a failed check without a message | `assertion failed` | the text of the checked condition | none |
+| a failed check with a message | the text of the checked condition | the message | none, one or two further texts |
+| a failed call returning an error code | the code's description, from a table of DirectX and COM error descriptions built into the core library, or else the operating system's message for the code | the text of the call | none or one further text |
+| a fatal message | `fatal error` | `<no expression>` | one: the formatted message |
+
+`<function>`, `<file>` and `<line>` name the place in the original program that reported the error; they
+carry nothing needed for compatibility [CL-20]. A second form of the report (without the `[error]`
+prefixes and the `FATAL ERROR` heading, its rows ended by CR LF) is handed to the crash reporter as its
+message and is not written to the log [CL-20].
+
+### 3.9 A write that cannot open the file
+
+Every write of the file, the startup creation included, opens it anew, by its full path in lower case
+[CL-23]. When it cannot be opened, nothing is written to it and the line
+`!Can't write file: '<path>'. Error: '<text>'.` is written to the log, `<path>` being that lower-case
+path and `<text>` the C runtime's message for the error; the program goes on [CL-23]. What becomes of an
+earlier file at that path is **unestablished** (**believed** unchanged: it could not be opened). Measured:
+with a folder in the log file's place, the program went on past startup, and every write (startup, the
+fatal report, the stack trace, the crash occasion) added
+`!Can't write file: 'z:\work\data\logs\xray_root.log'. Error: 'Permission denied'.` to the log [CL-23,
+CL-22]. A write that fails once the file is open is a fatal error (3.8: a failed check with the message
+`Can't write mem block to file. Disk maybe full.` and the C runtime's message for the error as its
+argument) [CL-23]; what follows from it during a write of the file is **unestablished**.
+
+### 3.10 How the program ends after a fatal error
+
+After the report and the stack trace (3.3, 3.8), the program [CL-22]:
+
+1. runs two handlers installed for this, first the game library's, then the engine's: the game
+   library's, while a level exists, appends that level's buffered data to a file of its own and calls a
+   handler the level holds; the engine's changes whether input is held exclusively; neither writes to the log itself (what the level's handler does is
+   **unestablished**);
+2. hands the second form of the report to the crash reporter (3.8);
+3. raises an exception it does not handle, so it goes on through the unhandled-exception occasion (3.3):
+   as a fatal error has been reported, no stack trace and no system error are written, and the file is
+   written once more, with the same lines as the write before it plus any line added since (such as
+   the line of a failed write, 3.9).
+
+Measured: after a fatal report the crash copy of 3.7 lay beside the file, byte-identical, and the file
+held a single `stack trace:` line, the last but one [CL-22]. How the process then ends is
+**unestablished**; measured under Wine, it had not ended on its own 20 s after the file was written
+[CL-22].
 
 ## 4. Relation to approved specifications
 
@@ -192,8 +285,12 @@ reporter, which is handed the file).
   shipped programs).
 - What the console draws for a line of a single marked character (e.g. `!` alone), whose first two
   characters it skips (CS 3).
-- Which program makes the crash copy of 3.7 and when.
+- Which program makes the crash copy of 3.7 and when. **Disputed in review:** established; see 3.7.
 - Where the file goes when the file system defines no `$logs$` entry (3.1, believed).
+- What becomes of an earlier file that a write cannot open, and what follows a write that fails once the
+  file is open (3.9).
+- What the handler a level holds does at a fatal error, and how the process ends after the
+  unhandled-exception occasion (3.10).
 
 ## Provenance
 
@@ -201,7 +298,7 @@ reporter, which is handed the file).
   user; the shipped binaries in `bin\`; the file-system file generated by the GOG installer, with
   `$app_data_root$` pointed at the run's own folder.
 - Binary analysis: read-only static analysis with Ghidra (headless) and disassembly of `xrCore.dll` (the
-  log, its writing forms, the log file's setup, saving and shutdown, the fatal-error and crash paths),
+  log, its writing forms, the log file's setup, saving and shutdown, the fatal-error and crash paths, the file writer),
   `XR_3DA.exe` (core initialisation and shutdown, the console's drawing and history, the graphics device
   failure, the benchmark path) and `xrGame.dll` (`flush`, `clear_log`, the forwarding receiver); import
   and export tables of every shipped library.
@@ -210,11 +307,11 @@ reporter, which is handed the file).
   console lines were run from the startup configuration file and from a configuration script run when the
   main menu is created. Before each run the log file was seeded with a marker line and its size sampled
   every second during the run. Runs: `clear_log` then `quit`; `flush` then stopped from outside;
-  `-nolog` with `flush` and `quit`; and the log files of a run that crashed at startup (made for
-  `console-commands.md`). Evidence of the runs is game output and stays local.
+  `-nolog` with `flush` and `quit`; the log files of a run that crashed at startup (made for
+  `console-commands.md`); a fatal error at startup caused by a game configuration file (in the run's own
+  copy of the game folder) with a duplicated section, once with the log file writable and once with a
+  folder in its place. Evidence of the runs is game output and stays local.
 
 ## Gaps found in review
 
-- The text of the fatal-error report written to the log (its lines and labels) is not given; it is written as one formatted message, so it is cut to its first 1023 characters (1.3).
-- After a fatal error has been reported, the program ends through the unhandled-exception occasion, which writes the file once more without adding a stack trace or system error.
-- A write of the file other than the startup creation that cannot open the file writes nothing and reports nothing.
+- Every write of the log file (the startup creation, every later write and the crash copy of 3.7) first creates each missing folder of the file's full path, outermost first, then opens the file; so a missing `$logs$` folder is created by the first write.
