@@ -1398,6 +1398,10 @@ impl Controls {
             jump_released: changed(MoveAction::Jump, false)
                 || pad(GamepadButton::South, false)
                 || touch(TouchButton::Jump, false),
+            jump_held: held(MoveAction::Jump)
+                || (!keys_only
+                    && (input.pad_held(GamepadButton::South)
+                        || input.is_held(Control::Touch(TouchButton::Jump)))),
             fire: changed(MoveAction::WpnFire, true),
             mouse: if keys_only {
                 [0.0; 2]

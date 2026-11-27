@@ -1577,24 +1577,42 @@ export const tests = {
     const [jx, jy] = centre(jump);
     // A jump needs the player standing on the ground, not landing: wait for
     // that, then press; a press the movement layer didn't take (a frame
-    // still landing) is let go and tried again.
+    // still landing, a take-off refused on a steep contact where the
+    // sprints left the player) is let go and tried again, the release and
+    // the new press often in one frame on a loaded machine (#852).
     await until((s) => !s.level.player.airborne && !s.level.player.landing && !s.level.player.moving, "a state to jump from", 3000);
     const yaw = (await state()).level.yaw;
     let jumped = false;
+    const seen = [];
     for (let attempt = 0, id = 380; attempt < 3 && !jumped; attempt++, id++) {
       touchOn(jump, "pointerdown", id, [jx, jy]);
       touchOn(jump, "pointermove", id, [jx - 20, jy]);
       touchOn(jump, "pointermove", id, [jx - 100, jy]);
-      jumped = await until((s) => s.level.player.airborne, "Jump to jump", 1500).then(
+      // What the attempt saw: the jump flag (a take-off refused still
+      // sets it), the button held, the latest actions.
+      const look = { jump: false };
+      jumped = await until(
+        (s) => {
+          look.jump ||= s.level.player.jump;
+          return s.level.player.airborne;
+        },
+        "Jump to jump",
+        1500,
+      ).then(
         () => true,
         () => false,
       );
+      const i = await volya.call("input_state");
+      look.held = i.held.includes("touch_jump");
+      look.recent = i.recent.slice(-4).map((a) => `${a.action} ${a.control ?? ""}`);
+      seen.push(look);
       touchOn(jump, "pointerup", id, [jx - 100, jy]);
     }
     if (!jumped) {
       const { held } = await volya.call("input_state");
-      const p = (await state()).level.player;
-      assert(false, `Jump to jump: held ${held}; ${JSON.stringify({ airborne: p.airborne, landing: p.landing, moving: p.moving, crouch: p.crouch, posture: p.posture, position: p.position })}; jump at ${[jx, jy]}, controls ${controls.clientWidth}×${controls.clientHeight}, ${JSON.stringify(controls.querySelector(".touch-button.jump").getBoundingClientRect())}`);
+      const s = await state();
+      const p = s.level.player;
+      assert(false, `Jump to jump: held ${held}; ${JSON.stringify({ airborne: p.airborne, landing: p.landing, moving: p.moving, crouch: p.crouch, posture: p.posture, jump: p.jump, falling: p.falling, climbing: p.climbing, velocity: p.velocity, position: p.position, menu: Boolean(s.menu), seen })}; jump at ${[jx, jy]}, controls ${controls.clientWidth}×${controls.clientHeight}, ${JSON.stringify(controls.querySelector(".touch-button.jump").getBoundingClientRect())}`);
     }
     s = await until((s) => s.level.yaw < yaw - 0.15, "the drag from Jump to turn left");
     s = await until((s) => !s.level.player.airborne, "the jump to land", 3000);

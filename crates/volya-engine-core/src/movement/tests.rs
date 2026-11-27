@@ -106,6 +106,7 @@ const FORWARD: Request = Request {
     sprint_toggle: false,
     jump_pressed: false,
     jump_released: false,
+    jump_held: false,
     fire: false,
     mouse: [0.0; 2],
     turn: [0.0; 2],
@@ -361,6 +362,40 @@ fn jumps_to_the_spec_height_and_lands() {
     // The request stays while the key is held: it jumps once it expires.
     run(&mut p, &world, now, &Request::default(), 0.35);
     assert!(p.state().flags.jump, "jumps after the cooldown");
+}
+
+/// #852: a release and a new press in one frame (a long frame) jump as
+/// they would in two; a press and its release in one frame don't, and
+/// leave nothing held.
+#[test]
+fn a_release_and_a_new_press_in_one_frame_jump() {
+    let world = floor();
+    // Pressed and let go within one frame: no jump, nothing held.
+    let (mut p, now) = player(&world);
+    let tap = Request {
+        jump_pressed: true,
+        jump_released: true,
+        ..Request::default()
+    };
+    run(&mut p, &world, now, &tap, 0.3);
+    assert!(
+        !p.state().airborne && !p.state().flags.jump,
+        "a press let go in its frame"
+    );
+    assert!(!p.jump_request && p.jump_released);
+    // Held since a take-off refused (6.6: the flag set anyway, 4.4), then
+    // let go and pressed again in one frame: the new press jumps.
+    let (mut p, now) = player(&world);
+    p.jump_request = true;
+    p.jump_released = false;
+    let now = run(&mut p, &world, now, &Request::default(), 0.5);
+    assert!(!p.state().airborne && !p.state().flags.jump);
+    let again = Request {
+        jump_held: true,
+        ..tap
+    };
+    run(&mut p, &world, now, &again, 0.1);
+    assert!(p.state().airborne, "the new press jumps");
 }
 
 #[test]

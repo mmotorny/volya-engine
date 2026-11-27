@@ -289,6 +289,10 @@ pub struct Request {
     pub sprint_toggle: bool,
     pub jump_pressed: bool,
     pub jump_released: bool,
+    /// `jump` held at the frame's end: with a press and a release in one
+    /// frame, whether the release came first (a new press after it, which
+    /// then counts) or last.
+    pub jump_held: bool,
     /// `wpn_fire` pressed: cancels a requested sprint (4.3).
     pub fire: bool,
     /// Relative mouse motion this frame, in counts (8.1).
@@ -816,11 +820,14 @@ impl Player {
         if request.crouch_released {
             self.crouch_toggle = false;
         }
-        if request.jump_pressed {
+        // A press and a release in one frame are taken in the order they
+        // came (#852): released then pressed again, the new press counts.
+        let again = request.jump_pressed && request.jump_released && request.jump_held;
+        if request.jump_pressed && !again {
             self.jump_request = true;
         }
         if request.jump_released {
-            self.jump_request = false;
+            self.jump_request = again;
             self.jump_released = true;
         }
         let crouch = request.crouch || self.crouch_toggle;

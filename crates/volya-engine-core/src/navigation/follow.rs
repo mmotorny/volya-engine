@@ -139,6 +139,7 @@ impl Follower {
         self.posture = steer.posture;
         r.jump_released |= self.jump_down;
         r.jump_pressed |= steer.jump;
+        r.jump_held |= steer.jump;
         self.jump_down = steer.jump;
         if let Some(look) = steer.look
             && r.look == [0.0; 2]
