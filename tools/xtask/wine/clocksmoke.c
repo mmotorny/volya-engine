@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
-/* `xtask wine check`, on the frame clock (docs/testing.md): presents
+/* `xtask wine check`, on the frame clock (docs/testing.md): waits for
+ * 100 ms of the performance counter, busy, which only the clock's reads
+ * advance (WINE_FRAME_SPIN); then presents
  * frames with Direct3D 9 and writes, before the first and after each, the
  * times a program reads, twice with a real 30 ms sleep between, to
  * clocksmoke.txt: a line per read of "frame qpc qpf tick time filetime tsc"
@@ -57,6 +59,11 @@ int main(void) {
     IDirect3DDevice9 *dev;
     HRESULT hr = IDirect3D9_CreateDevice(d3d, 0, D3DDEVTYPE_HAL, wnd, D3DCREATE_HARDWARE_VERTEXPROCESSING, &pp, &dev);
     if (FAILED(hr)) return fail("CreateDevice", hr);
+
+    LARGE_INTEGER start, now;
+    QueryPerformanceCounter(&start);
+    do QueryPerformanceCounter(&now);
+    while (now.QuadPart - start.QuadPart < 1000000);
 
     FILE *out = fopen("clocksmoke.txt", "w");
     if (!out) return fail("fopen", 0);

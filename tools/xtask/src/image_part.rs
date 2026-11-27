@@ -60,7 +60,7 @@ mkdir /src && tar -xzf /in/wine.tar.gz -C /src --strip-components=1 && cd /src
   --without-krb5 --without-gssapi --without-capi --without-usb --without-udev \
   --without-dbus --without-wayland --without-ffmpeg --without-sdl --without-unwind
 make -j"$(nproc)"
-make install DESTDIR=/stage
+make -j"$(nproc)" install DESTDIR=/stage
 } >>$log 2>&1 || { tail -40 $log; exit 1; }
 tar -czf /out/part.tar.gz -C /stage .
 "#,

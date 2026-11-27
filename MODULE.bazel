@@ -149,8 +149,8 @@ http_file(
 http_file(
     name = "wine_src",
     downloaded_file_path = "wine.tar.gz",
-    sha256 = "276176c1393e770eb190ca2574a538249609981c640b4894b47a5daf7bcada10",
-    url = "https://github.com/mmotorny/wine/archive/e0ac004b09da8e6943eff2f7df1b2c3e85add7f9.tar.gz",
+    sha256 = "6f3748345444c814ad06cd1ef8d2979d4d090d55c8dc6569edbdab7ae1ed0bdf",
+    url = "https://github.com/mmotorny/wine/archive/e9503e0cf341ccfae449e68b2108159e8c6c3a73.tar.gz",
 )
 
 # Tools installed on the machine, with their versions (build/local_tools.bzl).

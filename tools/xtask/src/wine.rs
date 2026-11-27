@@ -141,10 +141,17 @@ const CHECK_STEP: i64 = 400_000;
 const CHECK_EPOCH: i64 = 1_767_225_600;
 const CHECK_HOLD: u8 = 2;
 
+/// The clock reads between frames that advance it by 1 ms in the clock
+/// test (`WINE_FRAME_SPIN`), and the wait it spins through before its first
+/// frame, in 100 ns ticks (`clocksmoke.c`).
+const CHECK_SPIN: u32 = 1000;
+const CHECK_SPUN: i64 = 1_000_000;
+
 /// Builds the smoke tests with MinGW in the container and runs them: the
 /// D3D9 one, checking the pixel it saved, then the clock one on the frame
 /// clock (docs/testing.md), held after frame [`CHECK_HOLD`] for a second,
-/// checking every time it read.
+/// after a busy wait the clock's reads advance ([`CHECK_SPIN`]), checking
+/// every time it read.
 fn check() -> Result<u8> {
     let dir = root().join("target/wine-check");
     let _ = fs::remove_dir_all(&dir);
@@ -160,10 +167,10 @@ fn check() -> Result<u8> {
          wine reg add 'HKCU\\Software\\Wine\\Direct3D' /v csmt /t REG_DWORD /d 0 /f >/dev/null 2>&1\n\
          wineserver -w\n\
          clock=/tmp/frame-clock\n\
-         head -c 24 /dev/zero > $clock\n\
+         head -c 32 /dev/zero > $clock\n\
          printf '\\{CHECK_HOLD:03o}' | dd of=$clock bs=1 seek=8 conv=notrunc status=none\n\
          WINE_FRAME_CLOCK=$clock WINE_FRAME_STEP={CHECK_STEP} WINE_FRAME_EPOCH={CHECK_EPOCH} \
-         xvfb-run -a wine clocksmoke.exe &\n\
+         WINE_FRAME_SPIN={CHECK_SPIN} xvfb-run -a wine clocksmoke.exe &\n\
          held=\n\
          for i in $(seq 600); do\n\
          held=$(od -An -t d8 -j 16 -N 8 $clock | tr -d ' ')\n\
@@ -196,13 +203,14 @@ fn check() -> Result<u8> {
     let times = fs::read_to_string(dir.join("clocksmoke.txt"))
         .map_err(|e| format!("clocksmoke.txt: {e}"))?;
     check_times(&times)?;
-    step("Wine check passed: D3D9 cleared, the frame clock steps and holds");
+    step("Wine check passed: D3D9 cleared, the frame clock steps, holds and ends a busy wait");
     Ok(0)
 }
 
 /// Checks the clock test's times (`clocksmoke.c`): each frame's two reads
-/// equal (the clock stands still over a real sleep and the hold), and each
-/// time advanced by the step a frame from the first read's frame count.
+/// equal (the clock stands still over a real sleep and the hold), the busy
+/// wait before them ended by its reads, and each time advanced by the step
+/// a frame from the first read's.
 fn check_times(text: &str) -> Result {
     let rows: Vec<Vec<i64>> = text
         .lines()
@@ -212,11 +220,17 @@ fn check_times(text: &str) -> Result {
     if rows.len() != 10 || rows.iter().any(|r| r.len() != 7) {
         return Err(format!("clocksmoke.txt: unexpected contents:\n{text}"));
     }
-    // Frames presented before the test's first (a window's, a device's).
-    let first = rows[0][1] / CHECK_STEP;
+    // The ticks at the first read: the busy wait's, after any frames
+    // presented before the test's first (a window's, a device's).
+    let first = rows[0][1];
+    if first < CHECK_SPUN {
+        return Err(format!(
+            "clocksmoke.txt: the first read at {first} ticks, before the busy wait's end"
+        ));
+    }
     let epoch = (CHECK_EPOCH + 11_644_473_600) * 10_000_000;
     for (i, row) in rows.iter().enumerate() {
-        let ticks = (first + row[0]) * CHECK_STEP;
+        let ticks = first + row[0] * CHECK_STEP;
         // GetTickCount and timeGetTime are 32-bit milliseconds.
         let ms = (ticks / 10_000) & 0xffff_ffff;
         let want = [
