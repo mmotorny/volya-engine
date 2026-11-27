@@ -8,8 +8,9 @@
 //!
 //! Items that open screens or boxes (new game, load, save, options, the
 //! quit boxes, last save, return to game) ask the app ([`Request`]), which
-//! shows them. Multiplayer and credits are not implemented: activating them
-//! only records what the spec says they do
+//! shows them. Multiplayer is disabled (docs/roadmap.md): it can be
+//! selected but not activated. Credits are not implemented: activating it
+//! only records what the spec says it does
 //! ([`TitleMenuState::activations`]); nothing visible happens. Quitting the
 //! game (Q, or "Yes" in the quit box) here means leaving the engine's screen
 //! for the app's own interface.
@@ -104,6 +105,10 @@ impl Opening {
         }
     }
 }
+
+/// Items that are selected as any other but refuse activation by every
+/// input path: multiplayer comes after everything else (docs/roadmap.md).
+const DISABLED: &[&str] = &["btn_multiplayer"];
 
 /// What an activated item or key asks the app to do (section 4.5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -315,6 +320,9 @@ impl TitleMenu {
 
     fn activate(&mut self, data: &GameData, now: u64) {
         let item = self.list(data).buttons[self.selected].name.clone();
+        if DISABLED.contains(&item.as_str()) {
+            return;
+        }
         let effect = match item.as_str() {
             "btn_new_game" => {
                 self.set_list(data, NEW_GAME_LIST, now);
@@ -343,7 +351,6 @@ impl TitleMenu {
                 self.request = Some(Request::LastSave);
                 "loads the last save"
             }
-            "btn_multiplayer" => "opens the multiplayer screen (not implemented)",
             "btn_options" => {
                 self.request = Some(Request::Options);
                 "opens the options screen"
@@ -1072,6 +1079,27 @@ mod tests {
         r.point(100.0, 100.0, 4000);
         r.click(4000);
         assert_eq!(r.state(4000).activations.len(), 1);
+    }
+
+    #[test]
+    fn multiplayer_is_selected_but_not_activated() {
+        let mut r = Run::open(0);
+        r.frame(1000);
+        // The keyboard (and the gamepad, which drives the same keys).
+        r.key(Key::Down, 1000);
+        r.key(Key::Down, 1000);
+        r.key(Key::Enter, 2000);
+        r.key(Key::NumpadEnter, 2000);
+        let s = r.state(2000);
+        assert_eq!(s.items[s.selected].name, "btn_multiplayer");
+        assert!(s.activations.is_empty());
+        // The mouse (and touch, which clicks at the cursor) on the glass.
+        r.point(782.0, 419.0 + 60.0 + 15.0, 3000);
+        r.frame(3500);
+        r.click(3500);
+        let s = r.state(3500);
+        assert_eq!(s.items[s.selected].name, "btn_multiplayer");
+        assert!(s.activations.is_empty());
     }
 
     #[test]
