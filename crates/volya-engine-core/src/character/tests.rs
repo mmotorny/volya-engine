@@ -13,16 +13,34 @@ use volya_engine_formats::object::{
 use super::inventory::Place;
 use super::*;
 
-const SYSTEM: &str = "\
+const SYSTEM: &str = concat!(
+    "\
     [actor]\nclass = O_ACTOR\ncondition_sect = actor_condition\nmoney = 40\n\
+    immunities_sect = actor_immunities_gd_master\ndamage = actor_damage\n\
+    [actor_immunities_gd_master]\nburn_immunity = 1.0\nstrike_immunity = 1.0\n\
+    shock_immunity = 1.0\nwound_immunity = 1.0\nradiation_immunity = 1.0\n\
+    telepatic_immunity = 1.0\nchemical_burn_immunity = 1.0\nexplosion_immunity = 1.0\n\
+    fire_wound_immunity = 1.0\n\
+    [actor_immunities_gd_novice]\nburn_immunity = 0.5\nstrike_immunity = 0.5\n\
+    shock_immunity = 0.5\nwound_immunity = 0.5\nradiation_immunity = 0.5\n\
+    telepatic_immunity = 0.5\nchemical_burn_immunity = 0.5\nexplosion_immunity = 0.1\n\
+    fire_wound_immunity = 0.5\n\
+    [actor_immunities_gd_stalker]\nburn_immunity = 0.65\nstrike_immunity = 0.65\n\
+    shock_immunity = 0.65\nwound_immunity = 0.65\nradiation_immunity = 0.65\n\
+    telepatic_immunity = 0.65\nchemical_burn_immunity = 0.65\nexplosion_immunity = 0.3\n\
+    fire_wound_immunity = 0.65\n\
+    [actor_damage]\ndefault = 1.0, -1, 1.0\nbip01_spine = 1.0, 0, 1.5\n\
+    bip01_head = 0.2, 0, 1.5\nbip01_r_hand = 1.0, 2, 0.0\njaw_1 = 0.0, 0, 0.0\n\
     [inventory]\nmax_weight = 50\nmax_belt = 5\n\
     [detector_simple]\nclass = D_SIMDET\nslot = 8\ndefault_to_ruck = false\ninv_weight = 0\n\
     visual = equipments\\item_datchik1.ogf\n\
     [device_torch]\nclass = TORCH_S\nslot = 9\ninv_weight = 0\nvisual = equipments\\light_night\n\
     [novice_outfit]\nclass = E_STLK\nslot = 6\ninv_weight = 3.0\n\
     visual = equipments\\novice_suit.ogf\nadditional_inventory_weight = 0\n\
-    additional_inventory_weight2 = 0\n\
-    [wpn_binoc]\nclass = WP_BINOC\nslot = 4\ninv_weight = 1.0\nammo_mag_size = 0\n\
+    additional_inventory_weight2 = 0\n",
+    crate::character::hits::test_outfit_keys!(),
+    crate::character::hits::test_outfit_sections!(),
+    "[wpn_binoc]\nclass = WP_BINOC\nslot = 4\ninv_weight = 1.0\nammo_mag_size = 0\n\
     scope_status = 1\nsilencer_status = 0\ngrenade_launcher_status = 0\n\
     visual = weapons\\binoculars\\wpn_binoculars.ogf\n\
     [device_pda]\nclass = D_PDA\nslot = 7\ninv_weight = 0.3\nvisual = equipments\\item_pda\n\
@@ -30,13 +48,14 @@ const SYSTEM: &str = "\
     [medkit]\nclass = II_MEDKI\nvisual = v\ninv_weight = 0.1\neat_health = 0.6\neat_power = 0.0\n\
     eat_satiety = 0\neat_radiation = -0.1\nwounds_heal_perc = 0.3\neat_portions_num = 1\n\
     eat_max_power = 0.1\n\
-    [heavy]\nclass = II_MEDKI\nvisual = v\ninv_weight = 60\n";
+    [heavy]\nclass = II_MEDKI\nvisual = v\ninv_weight = 60\n"
+);
 
 /// The player's custom data (2.1), CR LF line ends.
 const CUSTOM_DATA: &str = "[dont_spawn_character_supplies]\r\n\r\n[spawn]\r\nwpn_binoc\r\n\
     detector_simple\r\nnovice_outfit\r\ndevice_torch\r\n";
 
-fn system() -> Config {
+pub(crate) fn system() -> Config {
     let text = format!("{SYSTEM}{}", super::condition::tests::ACTOR_CONDITION);
     ltx::parse(text.as_bytes()).unwrap()
 }
@@ -149,7 +168,7 @@ fn actor() -> SpecificCharacter {
     }
 }
 
-fn new_game(record: &ObjectRecord, system: &Config) -> CharacterState {
+pub(crate) fn new_game(record: &ObjectRecord, system: &Config) -> CharacterState {
     let communities = communities("actor, 0, actor_dolg, 1, actor_freedom, 2");
     CharacterState::new_game(&NewGame {
         record,

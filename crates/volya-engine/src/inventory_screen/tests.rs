@@ -31,8 +31,11 @@ pub(crate) const ITEMS: &str = "\
     [bread]\nclass = II_FOOD\ninv_name = bread\ncost = 10\nvisual = v\nslot = 4\ninv_weight = 0.3\ninv_grid_x = 0\ninv_grid_y = 2\n\
     inv_grid_width = 1\ninv_grid_height = 1\neat_health = 0.05\neat_power = 0\n\
     eat_satiety = 0.2\neat_radiation = 0\nwounds_heal_perc = 0\neat_portions_num = -1\n\
-    [novice_outfit]\nclass = E_STLK\ninv_name = novice_outfit\ncost = 10\nfull_icon_name = npc_icon_without_outfit\nburn_protection = 0\nshock_protection = 0\nstrike_protection = 0\nwound_protection = 0\nradiation_protection = 0\ntelepatic_protection = 0\nchemical_burn_protection = 0\nexplosion_protection = 0\nfire_wound_protection = 0\nvisual = v\nadditional_inventory_weight = 0\nadditional_inventory_weight2 = 0\nslot = 6\ninv_weight = 3\ninv_grid_x = 0\n\
+    [novice_outfit]\nclass = E_STLK\ninv_name = novice_outfit\ncost = 10\nfull_icon_name = npc_icon_without_outfit\nburn_protection = 0\nshock_protection = 0\nstrike_protection = 0\nwound_protection = 0\nradiation_protection = 0\ntelepatic_protection = 0\nchemical_burn_protection = 0\nexplosion_protection = 0\nfire_wound_protection = 0\nimmunities_sect = outfit_immunities\nvisual = v\nadditional_inventory_weight = 0\nadditional_inventory_weight2 = 0\nslot = 6\ninv_weight = 3\ninv_grid_x = 0\n\
     inv_grid_y = 18\ninv_grid_width = 2\ninv_grid_height = 2\n\
+    [outfit_immunities]\nburn_immunity = 0\nstrike_immunity = 0\nshock_immunity = 0\n\
+    wound_immunity = 0\nradiation_immunity = 0\ntelepatic_immunity = 0\n\
+    chemical_burn_immunity = 0\nexplosion_immunity = 0\nfire_wound_immunity = 0\n\
     [af_medusa]\nclass = ARTEFACT\ninv_name = af_medusa\ncost = 10\nvisual = v\nbelt = true\ninv_weight = 0.5\ninv_grid_x = 1\n\
     inv_grid_y = 1\ninv_grid_width = 1\ninv_grid_height = 1\n\
     [quest_doc]\nclass = II_DOC\ninv_name = quest_doc\ncost = 10\nvisual = v\nquest_item = true\ninv_weight = 0.1\ninv_grid_x = 1\n\
@@ -70,6 +73,8 @@ fn condition_config() -> ConditionConfig {
         alcohol_v: 0.0,
         bleeding_v: 0.0,
         health_restore_v: 0.0,
+        min_wound_size: 0.0,
+        wound_incarnation_v: 0.0,
         max_walk_weight: 60.0,
         limping_health: h,
         limping_power: h,

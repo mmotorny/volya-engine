@@ -4,14 +4,13 @@
 //! The player character's conditions (docs/behavior/player-state.md,
 //! cited by section): their configuration (1), values at a New Game (2.3),
 //! the update over game time (4.1, 4.2), the thresholds that limit movement
-//! (4.3), the jump's cost (4.4) and using eatable items (5).
-//!
-//! Wounds, bleeding amounts and the hits that cause them are out of scope
-//! (section 9): the character never bleeds here, so the terms of wounds are
-//! always 0.
+//! (4.3), the jump's cost (4.4) and using eatable items (5); with the
+//! wounds, their bleeding and healing of docs/behavior/player-hits.md
+//! (cited as `hits`) section 5.
 
 use std::io;
 
+use super::hits::Wounds;
 use crate::config::{Config, Section, value};
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -59,6 +58,9 @@ pub struct ConditionConfig {
     pub alcohol_v: f32,
     pub bleeding_v: f32,
     pub health_restore_v: f32,
+    /// `min_wound_size` and `wound_incarnation_v` (hits 1, 5.3).
+    pub min_wound_size: f32,
+    pub wound_incarnation_v: f32,
     pub max_walk_weight: f32,
     pub limping_health: Hysteresis,
     pub limping_power: Hysteresis,
@@ -121,6 +123,8 @@ impl ConditionConfig {
                 .get("health_restore_v")
                 .flatten()
                 .map_or(0.0, value::float),
+            min_wound_size: f("min_wound_size")?,
+            wound_incarnation_v: f("wound_incarnation_v")?,
             max_walk_weight: f("max_walk_weight")?,
             limping_health: pair("limping_health")?,
             limping_power: pair("limping_power")?,
@@ -219,11 +223,12 @@ pub struct Conditions {
     pub limping: bool,
     pub cant_walk: bool,
     pub cant_sprint: bool,
-    /// Whether the character can be harmed (4.2; set at creation, what
-    /// clears it is out of scope).
+    /// Whether the character can be harmed (4.2; set at creation, and in a
+    /// single-player game nothing changes it, hits 6).
     pub can_be_harmed: bool,
-    /// The character was bleeding at the previous update (4.2 item 9);
-    /// never without wounds.
+    /// The wounds (hits 5.1).
+    pub wounds: Wounds,
+    /// The character was bleeding at the previous update (4.2 item 9).
     bleeding: bool,
     /// Changes accumulated until the next update applies them (4.2 item 13,
     /// section 5).
@@ -252,6 +257,7 @@ impl Conditions {
             cant_walk: false,
             cant_sprint: false,
             can_be_harmed: true,
+            wounds: Wounds::default(),
             bleeding: false,
             health_change: 0.0,
             power_change: 0.0,
@@ -261,9 +267,35 @@ impl Conditions {
         }
     }
 
-    /// The total bleeding of the wounds (4.2 item 9): there are none here.
-    fn total_bleeding(&self) -> f32 {
-        0.0
+    /// The total bleeding of the wounds (4.2 item 9, hits 5.2).
+    pub fn total_bleeding(&self) -> f32 {
+        self.wounds.total_bleeding()
+    }
+
+    /// Whether the previous update found the character bleeding (4.2 item
+    /// 9).
+    pub fn bleeding(&self) -> bool {
+        self.bleeding
+    }
+
+    /// A hit's changes (hits 4.5), applied at the next update (4.7): health
+    /// only while the character can be harmed.
+    pub fn add_hit_changes(&mut self, health: f32, power: f32, radiation: f32, psy_health: f32) {
+        if self.can_be_harmed {
+            self.health_change += health;
+        }
+        self.power_change += power;
+        self.radiation_change += radiation;
+        self.psy_health_change += psy_health;
+    }
+
+    /// The first update after coming online (4.1, `dt` 0): the health, power
+    /// and radiation changes pending before it are discarded, the psy
+    /// health's kept (hits 4.7, as corrected in review).
+    pub fn discard_pending(&mut self) {
+        self.health_change = 0.0;
+        self.power_change = 0.0;
+        self.radiation_change = 0.0;
     }
 
     /// Alive: health above 0 (4.1).
@@ -274,6 +306,12 @@ impl Conditions {
     /// One update of `dt` game seconds (4.2) with the movement's `activity`
     /// and the carried `load`, in a single-player game (every item runs).
     pub fn update(&mut self, c: &ConditionConfig, dt: f32, activity: Activity, load: &Load) {
+        self.update_items(c, dt, activity, load);
+        // Hits 5.3: wounds healed to size 0 are removed right after it.
+        self.wounds.remove_healed();
+    }
+
+    fn update_items(&mut self, c: &ConditionConfig, dt: f32, activity: Activity, load: &Load) {
         let l = load.power_loss;
         // 1. Power from movement.
         if !activity.moving {
@@ -321,13 +359,15 @@ impl Conditions {
         if self.health <= 0.0 {
             return;
         }
-        // 9. Bleeding: no wounds (out of scope), so only the restore rate.
+        // 9. Bleeding (hits 5.2), then the wounds heal with time (5.3).
         let bleeding = self.total_bleeding() * c.bleeding_v * dt;
         if self.can_be_harmed {
             self.health_change -= bleeding;
         }
         self.health_change += c.health_restore_v * dt;
-        self.bleeding = bleeding >= 1e-7;
+        self.bleeding = bleeding.abs() >= 1e-7;
+        self.wounds
+            .heal(c.wound_incarnation_v * dt, c.min_wound_size);
         // 10. Radiation.
         if self.radiation > 0.0 {
             self.radiation_change -= c.radiation_v * dt;
@@ -385,8 +425,10 @@ impl Conditions {
 
     /// Uses an eatable item (section 5 items 1–7): health, power and
     /// radiation change at the next update; satiety, max power and a
-    /// drink's alcohol at once. Wounds (item 5) are out of scope.
-    pub fn eat(&mut self, e: &Eatable) {
+    /// drink's alcohol at once; the wounds heal by `wounds_heal_perc` at
+    /// once (hits 5.4), and those healed are removed at the next update.
+    pub fn eat(&mut self, c: &ConditionConfig, e: &Eatable) {
+        self.wounds.heal(e.wounds_heal_perc, c.min_wound_size);
         if e.eat_health >= 0.0 || self.can_be_harmed {
             self.health_change += e.eat_health;
         }
@@ -413,7 +455,8 @@ pub(crate) mod tests {
         satiety_v = 0.000015\nsatiety_power_v = 0.000055\nsatiety_health_v = 0.0001\n\
         radiation_v = 0.0001\nradiation_health_v = 0.004\npsy_health_v = 0.001\n\
         morale_v = 0.0001\nalcohol_v = -0.0003\nbleeding_v = 0.0005\n\
-        wound_incarnation_v = 0.003\nmax_walk_weight = 60\n\
+        wound_incarnation_v = 0.003\nmin_wound_size = 0.0256\nmax_walk_weight = 60\n\
+        health_hit_part = 1.0\npower_hit_part = 0.1\n\
         limping_health_begin = 0.1\nlimping_health_end = 0.2\n\
         limping_power_begin = 0.1\nlimping_power_end = 0.2\n\
         cant_walk_power_begin = 0.01\ncant_walk_power_end = 0.10\n\
@@ -735,7 +778,7 @@ pub(crate) mod tests {
         // Section 7: one update with dt = 0 after it.
         let c = config();
         let mut s = Conditions::new_game(1.0);
-        s.eat(&medkit());
+        s.eat(&c, &medkit());
         s.update(&c, 0.0, STAND, &load());
         assert_eq!(
             (s.health, s.radiation, s.max_power, s.satiety),
@@ -745,7 +788,7 @@ pub(crate) mod tests {
         let mut s = Conditions::new_game(0.2);
         s.radiation = 0.5;
         s.max_power = 0.5;
-        s.eat(&medkit());
+        s.eat(&c, &medkit());
         assert_eq!((s.health, s.radiation), (0.2, 0.5));
         near(s.max_power, 0.6, 1e-6);
         s.update(&c, 0.0, STAND, &load());
@@ -758,20 +801,26 @@ pub(crate) mod tests {
         // Section 7: alcohol 0.1 at once, 0.1 − 0.0003 × dt after an update.
         let c = config();
         let mut s = Conditions::new_game(1.0);
-        s.eat(&eatable(
-            "eat_health = 0.01\neat_power = 0\neat_satiety = 0.01\neat_radiation = -0.3\n\
+        s.eat(
+            &c,
+            &eatable(
+                "eat_health = 0.01\neat_power = 0\neat_satiety = 0.01\neat_radiation = -0.3\n\
              wounds_heal_perc = 0\neat_portions_num = -1\neat_alcohol = 0.1\n",
-            "II_BOTTL",
-        ));
+                "II_BOTTL",
+            ),
+        );
         near(s.alcohol, 0.1, 1e-7);
         s.update(&c, 50.0, STAND, &load());
         near(s.alcohol, 0.1 - 0.0003 * 50.0, 1e-6);
         // A drink's alcohol is clamped only at the next update.
         s.alcohol = 0.95;
-        s.eat(&Eatable {
-            eat_alcohol: Some(0.1),
-            ..Eatable::default()
-        });
+        s.eat(
+            &c,
+            &Eatable {
+                eat_alcohol: Some(0.1),
+                ..Eatable::default()
+            },
+        );
         near(s.alcohol, 1.05, 1e-6);
         s.update(&c, 0.0, STAND, &load());
         assert_eq!(s.alcohol, 1.0);

@@ -8,22 +8,25 @@
 //! movement (section 4, [`condition`]), eating (section 5), and where a
 //! save holds each value (section 6): the player's record, the items'
 //! records and the client-data blocks, which [`CharacterState`] fills for
-//! a save writer.
+//! a save writer. Hits on it, the wounds they open and their healing are
+//! docs/behavior/player-hits.md's ([`hits`], [`CharacterState::hit`]).
 //!
-//! Combat, wounds, death, artefacts, sleeping, trading, dialogs and scripts
-//! are out of scope (section 9). The game here is always single-player.
+//! Death, artefacts, sleeping, trading, dialogs and scripts are out of
+//! scope (section 9). The game here is always single-player.
 
 pub mod condition;
+pub mod hits;
 pub mod inventory;
 
 use std::io;
 
-use volya_engine_formats::object::{Object, ObjectRecord, TraderLike};
+use volya_engine_formats::object::{Object, ObjectRecord, Q8, TraderLike};
 use volya_engine_formats::packet::Writer;
 
 use crate::config::Config;
 use crate::movement::Limits;
 use condition::{Activity, ConditionConfig, Conditions, Load};
+use hits::{Hit, HitConfig, HitType};
 use inventory::{
     BOLT_SECTION, IdPool, Inventory, InventoryConfig, InventoryItem, ItemConfig, Owner,
     PDA_SECTION, Rand15, Supplies, SupplyEntry,
@@ -164,9 +167,40 @@ pub struct CharacterState {
     pub conditions: Conditions,
     pub condition_config: ConditionConfig,
     pub inventory: Inventory,
+    /// What hits read (player-hits.md 1, 3, 4.3).
+    pub hits: HitConfig,
+    /// The bone names of the player's model, by bone number (player-hits.md
+    /// 4.3); empty until the model is set.
+    pub bones: Vec<String>,
+    /// The 15-bit generator hits draw from (player-hits.md 4.6): any
+    /// uniform generator serves; ours starts at 1, not saved (our choice).
+    pub random: Rand15,
     /// The game time of the latest update, game ms; `None` until the first
     /// update after coming online, whose `dt` is 0 (4.1).
     last_update: Option<u64>,
+}
+
+/// What a hit asks of the movement (player-hits.md 4.1).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HitMovement {
+    /// The sprint request is cleared, if the state sprints (4.1 item 1).
+    pub cancels_sprint: bool,
+    /// The slowdown `s` (4.1 item 2).
+    pub slowdown: f32,
+}
+
+impl HitMovement {
+    /// A hit of type `t` as it arrives with power `p` (4.1).
+    pub fn of(t: HitType, p: f32) -> Self {
+        Self {
+            cancels_sprint: t != HitType::RADIATION && t != HitType::TELEPATIC,
+            slowdown: if t == HitType::STRIKE || t == HitType::WOUND {
+                p.clamp(0.0, 1.0)
+            } else {
+                0.0
+            },
+        }
+    }
 }
 
 impl CharacterState {
@@ -185,6 +219,9 @@ impl CharacterState {
             conditions,
             condition_config,
             inventory,
+            hits: HitConfig::default(),
+            bones: Vec::new(),
+            random: Rand15(1),
             last_update: None,
         }
     }
@@ -208,6 +245,7 @@ impl CharacterState {
             .flatten()
             .ok_or_else(|| invalid(format!("[{section}] has no condition_sect")))?;
         let condition_config = ConditionConfig::read(n.system, condition_sect.trim())?;
+        let hits = HitConfig::read(n.system, section, condition_sect.trim())?;
         let mut profile = Profile::from_record(&player.trader);
         profile.resolve(n.character, n.communities, n.character_name);
         let block = &player.creature.object;
@@ -267,8 +305,96 @@ impl CharacterState {
             conditions: Conditions::new_game(player.creature.health),
             condition_config,
             inventory,
+            hits,
+            bones: Vec::new(),
+            random: Rand15(1),
             last_update: None,
         })
+    }
+
+    /// The player's model is set, with these bone names by number: the
+    /// damage table is resolved against it (player-hits.md 4.3), an error
+    /// as there.
+    pub fn set_model(&mut self, bones: Vec<String>) -> io::Result<()> {
+        self.hits.damage.set_model(&bones)?;
+        self.bones = bones;
+        Ok(())
+    }
+
+    /// The number of the model's bone `name`.
+    pub fn bone(&self, name: &str) -> Option<u16> {
+        let name = name.to_lowercase();
+        self.bones.iter().position(|b| *b == name).map(|i| i as u16)
+    }
+
+    /// `g_game_difficulty` is `name` (player-hits.md 3): the immunities of
+    /// `actor_immunities_<name>`, an error when that section is missing or
+    /// lacks a key.
+    pub fn set_difficulty(&mut self, name: &str) -> io::Result<()> {
+        self.hits.set_difficulty(name)
+    }
+
+    /// A hit on the player character in a single-player game
+    /// (player-hits.md 4.2 – 4.6; what it asks of the movement, 4.1, is
+    /// [`HitMovement::of`]): the conditions change at the next update
+    /// (4.7), the worn outfit's condition and the wounds at once. An error
+    /// where the outfit's bone table names a bone the model lacks (4.4).
+    pub fn hit(&mut self, hit: &Hit) -> io::Result<()> {
+        // 4.2 item 1: the belt's factor.
+        // TODO(#247): how artefacts on the belt give `B_t` is not specified;
+        // it is 1, as with an empty belt.
+        let p1 = hit.power;
+        // Item 2: the disabling flag is never set (no console command sets
+        // it). Item 3: `wound_2` is `wound` from here on.
+        let t = hit.kind.as_applied();
+        let scales = self.hits.damage.scales(hit.bone);
+        // 4.4: the worn outfit.
+        let mut p2 = p1;
+        if let Some(id) = self.inventory.worn_outfit().map(|o| o.id) {
+            let bones = &self.bones;
+            let outfit = (self.inventory.items.iter_mut())
+                .find(|i| i.id == id)
+                .expect("the worn outfit is an item");
+            let protection = (outfit.config.protection.as_ref())
+                .ok_or_else(|| invalid(format!("{}: not an outfit", outfit.config.section)))?;
+            let armour = protection.bones.entry(bones, hit.bone)?;
+            let c = outfit.condition;
+            p2 = protection.power(t, p1, armour, c, hit.armour_piercing);
+            outfit.condition = protection.condition_after(t, p1, c);
+        }
+        // 4.5: the changes by type.
+        let h = &self.hits;
+        let x = h.immunities[t.index()] * p2;
+        let (big_h, q) = (h.health_hit_part, h.power_hit_part);
+        let (health, power, wound) = match t {
+            HitType::BURN => (-scales.hit * big_h * x, -q * x, None),
+            HitType::SHOCK => (-big_h * x, -q * x, None),
+            HitType::STRIKE | HitType::EXPLOSION | HitType::PHYSIC_STRIKE => {
+                (-big_h * x, -q * x, Some(scales.wound * x))
+            }
+            HitType::WOUND | HitType::FIRE_WOUND => {
+                (-scales.hit * big_h * x, -q * x, Some(scales.wound * x))
+            }
+            HitType::CHEMICAL_BURN => (0.0, 0.0, Some(scales.wound * x)),
+            _ => (0.0, 0.0, None),
+        };
+        let radiation = if t == HitType::RADIATION { p2 } else { 0.0 };
+        let psy = if t == HitType::TELEPATIC {
+            let i5 = h.immunities[HitType::TELEPATIC.index()];
+            -i5 * i5 * p2
+        } else {
+            0.0
+        };
+        // 4.6: the wound, with the health before this hit's changes.
+        if let Some(z) = wound
+            && self.conditions.health > 0.0
+        {
+            let r = self.random.rand15();
+            self.conditions.wounds.grow(hit.bone, t, z, r);
+        }
+        self.conditions
+            .add_hit_changes(health, power, radiation, psy);
+        Ok(())
     }
 
     /// The bolt the online player receives (3.2), after its supplies, with
@@ -336,6 +462,9 @@ impl CharacterState {
         let dt = self
             .last_update
             .map_or(0.0, |last| now.saturating_sub(last) as f32 * 0.001);
+        if self.last_update.is_none() {
+            self.conditions.discard_pending();
+        }
         self.last_update = Some(now);
         if !self.conditions.alive() {
             return;
@@ -358,7 +487,7 @@ impl CharacterState {
             .config
             .eatable
             .ok_or_else(|| invalid(format!("{} is not eatable", item.config.section)))?;
-        self.conditions.eat(&eatable);
+        self.conditions.eat(&self.condition_config, &eatable);
         let left = match item.portions.unwrap_or(0) {
             p if p >= 1 => p - 1,
             _ => 0,
@@ -418,7 +547,10 @@ impl CharacterState {
     }
 
     /// The client data's condition block (section 6): alive, then power,
-    /// radiation, morale and psy health, and no wounds.
+    /// radiation, morale and psy health, and the wounds (player-hits.md
+    /// 5.5): their count's low 8 bits, then each wound's bone (its number's
+    /// low 8 bits, 255 for no bone) and its 11 amounts as `q8(amount, 0,
+    /// 10)`.
     pub fn condition_block(&self, w: &mut Writer) {
         let c = &self.conditions;
         w.bool8(c.alive());
@@ -426,7 +558,14 @@ impl CharacterState {
             for v in [c.power, c.radiation, c.morale, c.psy_health] {
                 w.float(v);
             }
-            w.u8(0);
+            let wounds = &c.wounds.0;
+            w.u8(wounds.len() as u8);
+            for wound in wounds {
+                w.u8(wound.bone.map_or(255, |b| b as u8));
+                for &a in &wound.amounts {
+                    w.u8(Q8::quantise(a, 0.0, hits::MAX_AMOUNT).0);
+                }
+            }
         }
     }
 

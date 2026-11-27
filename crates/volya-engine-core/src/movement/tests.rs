@@ -991,3 +991,51 @@ fn climbing_scales_the_acceleration() {
     p.frame(&world, now + 48, &back);
     assert!((p.speed_limit - 2.142).abs() < 1e-3, "{}", p.speed_limit);
 }
+
+#[test]
+fn a_hit_slows_the_player_down() {
+    // player-hits.md 8 (M15): a strike of power 0.5, `dt_m` 0.01 s, the
+    // slowdown in single precision.
+    let mut s = 0.5f32;
+    assert_eq!(slowdown_step(&mut s, 0.01), 0.51);
+    for _ in 2..50 {
+        slowdown_step(&mut s, 0.01);
+    }
+    assert!(
+        slowdown_step(&mut s, 0.01) != 1.0,
+        "the 50th leaves a residue"
+    );
+    assert_eq!(slowdown_step(&mut s, 0.01), 1.0);
+    assert_eq!(s, 0.0);
+    // In the movement: slowed from a standstill, the player gains speed
+    // more slowly, and then at the same rate again.
+    let world = floor();
+    let (mut free, now) = player(&world);
+    let (mut slowed, _) = player(&world);
+    slowed.hit(false, 0.5);
+    assert_eq!(slowed.slowdown(), 0.5);
+    run(&mut free, &world, now, &FORWARD, 0.1);
+    run(&mut slowed, &world, now, &FORWARD, 0.1);
+    assert!(horizontal_speed(&slowed) < horizontal_speed(&free));
+    assert!(slowed.slowdown() < 0.5);
+}
+
+#[test]
+fn a_hit_cancels_the_sprint() {
+    // player-hits.md 4.1 item 1: the request cleared, sprinting ends.
+    let world = floor();
+    let (mut p, now) = player(&world);
+    let sprint = Request {
+        sprint_toggle: true,
+        ..FORWARD
+    };
+    let now = run(&mut p, &world, now, &sprint, 0.2);
+    assert!(p.state().flags.sprint);
+    // A radiation or telepathic hit leaves it.
+    p.hit(false, 0.0);
+    let now = run(&mut p, &world, now, &FORWARD, 0.05);
+    assert!(p.state().flags.sprint);
+    p.hit(true, 0.0);
+    run(&mut p, &world, now, &FORWARD, 0.05);
+    assert!(!p.state().flags.sprint && !p.state().sprint_requested);
+}

@@ -20,6 +20,7 @@ use volya_engine_formats::object::{
 };
 
 use super::condition::{DRINK_CLASS, Eatable};
+use super::hits::OutfitProtection;
 use crate::config::{Config, Section, value};
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -150,6 +151,9 @@ pub struct ItemConfig {
     /// An outfit's `nightvision_sect`, the section of its night-vision
     /// effect; `None` when absent or for other items (torch.md 15.1).
     pub nightvision_sect: Option<String>,
+    /// An outfit's protection against hits (player-hits.md 4.4), read for
+    /// an outfit (a missing key is fatal); `None` for other items.
+    pub protection: Option<OutfitProtection>,
 }
 
 impl ItemConfig {
@@ -222,6 +226,11 @@ impl ItemConfig {
             quest_item: get("quest_item").is_some_and(value::bool),
             nightvision_sect: (get("nightvision_sect").filter(|_| outfit))
                 .map(|v| value::unquote(v).to_owned()),
+            protection: if outfit {
+                Some(OutfitProtection::read(system, s)?)
+            } else {
+                None
+            },
             class_id,
         })
     }
@@ -961,15 +970,19 @@ pub fn fits_in_row(sizes: &[(u32, u32)], cells: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::character::hits::{test_outfit_keys, test_outfit_sections};
 
-    const ITEMS: &str = "\
+    const ITEMS: &str = concat!(
+        "\
         [detector_simple]\nclass = D_SIMDET\nslot = 8\ndefault_to_ruck = false\ninv_weight = 0\n\
         visual = equipments\\item_datchik1.ogf\n\
         [device_torch]\nclass = TORCH_S\nslot = 9\ninv_weight = 0\nvisual = equipments\\light_night\n\
         [novice_outfit]\nclass = E_STLK\nslot = 6\ninv_weight = 3.0\n\
         visual = equipments\\novice_suit.ogf\nadditional_inventory_weight = 0\n\
-        additional_inventory_weight2 = 0\n\
-        [wpn_binoc]\nclass = WP_BINOC\nslot = 4\ninv_weight = 1.0\nammo_mag_size = 0\n\
+        additional_inventory_weight2 = 0\n",
+        test_outfit_keys!(),
+        test_outfit_sections!(),
+        "[wpn_binoc]\nclass = WP_BINOC\nslot = 4\ninv_weight = 1.0\nammo_mag_size = 0\n\
         scope_status = 1\nsilencer_status = 0\ngrenade_launcher_status = 0\n\
         visual = weapons\\binoculars\\wpn_binoculars.ogf\n\
         [wpn_pm]\nclass = WP_PM\nvisual = v\nslot = 1\ninv_weight = 1.0\nammo_mag_size = 8\n\
@@ -980,7 +993,8 @@ mod tests {
         eat_satiety = 0.2\neat_radiation = 0\nwounds_heal_perc = 0\neat_portions_num = -1\n\
         [af_medusa]\nclass = ARTEFACT\nvisual = v\nbelt = true\ndefault_to_ruck = false\ninv_weight = 0.5\n\
         [medkit]\nclass = II_MEDKI\nvisual = v\ninv_weight = 0.1\n\
-        [inventory]\nmax_weight = 50\nmax_belt = 5\n";
+        [inventory]\nmax_weight = 50\nmax_belt = 5\n"
+    );
 
     fn system() -> Config {
         ltx::parse(ITEMS.as_bytes()).unwrap()
@@ -1237,7 +1251,8 @@ mod tests {
     }
 
     /// Sections with the screen's keys (inventory-screen.md 4.2, 5.4).
-    const SCREEN_ITEMS: &str = "\
+    const SCREEN_ITEMS: &str = concat!(
+        "\
         [inventory]\nmax_weight = 50\nmax_belt = 5\nslot_persistent_1 = true\n\
         slot_persistent_2 = false\nslot_persistent_3 = false\nslot_persistent_4 = true\n\
         slot_persistent_5 = true\nslot_persistent_7 = false\n\
@@ -1248,8 +1263,10 @@ mod tests {
         [grenade_f1]\nclass = G_F1\nvisual = v\nslot = 3\ninv_weight = 0.6\ninv_grid_x = 0\ninv_grid_y = 1\n\
         inv_grid_width = 1\ninv_grid_height = 1\n\
         [novice_outfit]\nclass = E_STLK\nvisual = v\nadditional_inventory_weight = 0\nadditional_inventory_weight2 = 0\nslot = 6\ninv_weight = 3\ninv_grid_x = 0\n\
-        inv_grid_y = 18\ninv_grid_width = 2\ninv_grid_height = 2\n\
-        [af_medusa]\nclass = ARTEFACT\nvisual = v\nbelt = true\ninv_weight = 0.5\ninv_grid_x = 1\n\
+        inv_grid_y = 18\ninv_grid_width = 2\ninv_grid_height = 2\n",
+        test_outfit_keys!(),
+        test_outfit_sections!(),
+        "[af_medusa]\nclass = ARTEFACT\nvisual = v\nbelt = true\ninv_weight = 0.5\ninv_grid_x = 1\n\
         inv_grid_y = 1\ninv_grid_width = 1\ninv_grid_height = 1\n\
         [af_wide]\nclass = ARTEFACT\nvisual = v\nbelt = true\ninv_weight = 0.5\ninv_grid_x = 1\n\
         inv_grid_y = 1\ninv_grid_width = 2\ninv_grid_height = 1\n\
@@ -1257,7 +1274,8 @@ mod tests {
         inv_grid_y = 1\ninv_grid_width = 1\ninv_grid_height = 2\n\
         [quest]\nclass = II_DOC\nvisual = v\nquest_item = true\ninv_weight = 0.1\ninv_grid_x = 1\n\
         inv_grid_y = 1\ninv_grid_width = 1\ninv_grid_height = 1\n\
-        [no_grid]\nclass = II_DOC\nvisual = v\ninv_weight = 0.1\ninv_grid_x = 1\n";
+        [no_grid]\nclass = II_DOC\nvisual = v\ninv_weight = 0.1\ninv_grid_x = 1\n"
+    );
 
     fn screen_inventory() -> (Config, Inventory) {
         let system = ltx::parse(SCREEN_ITEMS.as_bytes()).unwrap();

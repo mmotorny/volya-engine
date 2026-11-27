@@ -424,6 +424,17 @@ pub struct Player {
     next_clock: Option<u32>,
     /// The previous step was moving, `|a_k| > 0.1` (climbing.md 3.1).
     was_moving: bool,
+    /// The slowdown `s` of the latest hit (player-hits.md 4.1 item 2): 0
+    /// when the character comes online, not saved.
+    slowdown: f32,
+}
+
+/// One movement update's step of the slowdown `s` over `dt_m`
+/// (player-hits.md 4.1 item 2): `s` less `dt_m`, at least 0, and the factor
+/// `1 − s` on the desired acceleration.
+pub fn slowdown_step(s: &mut f32, dt_m: f32) -> f32 {
+    *s = (*s - dt_m).max(0.0);
+    1.0 - *s
 }
 
 /// What the engine interface reports about the player.
@@ -468,6 +479,7 @@ impl Player {
             heading: angles.yaw,
             state: Flags::default(),
             sprint_request: false,
+            slowdown: 0.0,
             jump_request: false,
             crouch_toggle: false,
             jump_released: true,
@@ -599,6 +611,22 @@ impl Player {
         }
     }
 
+    /// A hit (player-hits.md 4.1): if the state sprints and `cancel_sprint`
+    /// (the hit's type allows it), the sprint request is cleared, so the
+    /// sprint ends and must be toggled on again; the slowdown becomes
+    /// `slowdown`.
+    pub fn hit(&mut self, cancel_sprint: bool, slowdown: f32) {
+        if cancel_sprint && self.state.sprint {
+            self.sprint_request = false;
+        }
+        self.slowdown = slowdown;
+    }
+
+    /// The slowdown `s` (player-hits.md 4.1 item 2).
+    pub fn slowdown(&self) -> f32 {
+        self.slowdown
+    }
+
     /// One rendered frame at engine clock `now` (ms) with `request`.
     pub fn frame(&mut self, world: &CollisionWorld, now: u64, request: &Request) -> View {
         // 3.2: the two frame times.
@@ -618,6 +646,7 @@ impl Player {
         self.clock = self.next_clock.take().unwrap_or(now as u32);
         self.look(request, dt_f);
         let (a, take_off) = self.movement_update(world, now, request, dt_m);
+        let a = scale(a, slowdown_step(&mut self.slowdown, dt_m));
         self.jump_started = take_off;
         self.hand_over(a);
         if take_off {
