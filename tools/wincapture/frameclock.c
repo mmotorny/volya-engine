@@ -31,8 +31,13 @@
  * past the driver's `hold`, and before presenting the frame the driver asks
  * for it copies its back buffer into the shared memory.
  *
+ * The same import replacement (EnterCriticalSection, LeaveCriticalSection,
+ * CreateThread, Sleep) runs each frame's secondary pass whole while the main
+ * thread waits in the frame's Sleep(0) (section "The secondary pass").
+ *
  * Generic Win32 technique (import-table and interface-table patching); it
- * reads nothing of the game but its import tables (docs/clean-room.md). */
+ * reads nothing of the game but its import tables and the arguments of the
+ * calls it replaces (docs/clean-room.md). */
 
 #define WIN32_LEAN_AND_MEAN
 #define PSAPI_VERSION 2
@@ -749,8 +754,271 @@ static void slept(DWORD ms) {
     }
 }
 
+/* --- The secondary pass ------------------------------------------------- */
+
+/* Rule 2 of docs/behavior/original-determinism.md section 7, as corrected in
+ * review: each frame's secondary pass runs whole on the secondary thread
+ * while the main thread waits in its frame's Sleep(0). Two waits:
+ *
+ * - the main thread's entry to B proceeds only once the secondary thread has
+ *   entered and left B since the main thread last left it, or has ended;
+ * - the frame's Sleep(0) (the main thread holding B, not A) returns only
+ *   once the secondary thread has entered A since the main thread last left
+ *   it and is waiting on B, or has ended.
+ *
+ * The thread and the sections are found from the calls alone: the thread is
+ * one created through a replaced CreateThread import; A and B are the two
+ * sections the main thread last left and entered (in that order: enter B,
+ * leave A) when it calls Sleep(0), the same pair at IDENTIFY frames, both
+ * entered by that thread too. A wait longer than SYNC_WATCHDOG_MS is logged
+ * and released, so a wrong guess costs time, not a deadlock. */
+
+#define SYNC_WATCHDOG_MS 5000
+#define IDENTIFY 3
+#define MAX_CREATED 16
+
+static void(WINAPI *real_EnterCriticalSection)(CRITICAL_SECTION *);
+static void(WINAPI *real_LeaveCriticalSection)(CRITICAL_SECTION *);
+static HANDLE(WINAPI *real_CreateThread)(SECURITY_ATTRIBUTES *, SIZE_T, LPTHREAD_START_ROUTINE,
+                                         void *, DWORD, DWORD *);
+
+/* Threads created through a replaced import. */
+static struct created {
+    volatile LONG id;
+    HANDLE handle;
+    volatile LONG saw_a, saw_b; /* entered the tentative A, B */
+} created[MAX_CREATED];
+static volatile LONG ncreated;
+
+/* The main thread's last two operations on a section (before
+ * identification), written by the main thread only. */
+enum { OP_NONE, OP_ENTER, OP_LEAVE };
+static struct op {
+    CRITICAL_SECTION *cs;
+    int kind;
+} main_last, main_prev;
+static CRITICAL_SECTION *volatile tent_a, *volatile tent_b;
+static int tent_matches;
+
+/* Identified: A, B and the secondary thread (sync_a set last). */
+static CRITICAL_SECTION *volatile sync_a, *volatile sync_b;
+static volatile LONG sync_thread;
+static HANDLE sync_handle;
+static int main_a_depth, main_b_depth; /* the main thread's holds of A, B */
+/* Generations: the main thread's releases of A and B; the release of A the
+ * secondary thread last acquired A after; the one it is waiting on B after
+ * (-1: not waiting); the release of B it last left B after. */
+static volatile LONG main_left_a, main_left_b, s_acquired_a = -2, s_waiting_b = -1, s_left_b;
+
+static LONG get(volatile LONG *p) {
+    return InterlockedCompareExchange(p, 0, 0);
+}
+
+static struct created *created_by_id(DWORD id) {
+    LONG n = get(&ncreated);
+    for (LONG i = 0; i < n && i < MAX_CREATED; i++) {
+        if ((DWORD)get(&created[i].id) == id) {
+            return &created[i];
+        }
+    }
+    return NULL;
+}
+
+static HANDLE WINAPI hook_CreateThread(SECURITY_ATTRIBUTES *sa, SIZE_T stack,
+                                       LPTHREAD_START_ROUTINE start, void *param, DWORD flags,
+                                       DWORD *id) {
+    DWORD tid = 0;
+    /* Suspended until it is known, so none of its calls is missed. */
+    HANDLE h = real_CreateThread(sa, stack, start, param, flags | CREATE_SUSPENDED, &tid);
+    if (h) {
+        LONG i = InterlockedIncrement(&ncreated) - 1;
+        if (i < MAX_CREATED) {
+            DuplicateHandle(GetCurrentProcess(), h, GetCurrentProcess(), &created[i].handle,
+                            SYNCHRONIZE, FALSE, 0);
+            InterlockedExchange(&created[i].id, (LONG)tid);
+        }
+        if (!(flags & CREATE_SUSPENDED)) {
+            ResumeThread(h);
+        }
+        dlog("a thread created through an import (%ld so far)", i + 1);
+    }
+    if (id) {
+        *id = tid;
+    }
+    return h;
+}
+
+static int secondary_ended(void) {
+    return WaitForSingleObject(sync_handle, 0) == WAIT_OBJECT_0;
+}
+
+/* Waits until `ready()`, or the secondary thread has ended, or the
+ * watchdog; counts it in `*waited` when it had to wait. */
+static void wait_for(int (*ready)(void), volatile int64_t *waited, const char *what) {
+    if (ready() || secondary_ended()) {
+        return;
+    }
+    InterlockedIncrement64((volatile LONGLONG *)waited);
+    ULONGLONG start = GetTickCount64();
+    for (int i = 0; !ready() && !secondary_ended(); i++) {
+        if (GetTickCount64() - start > SYNC_WATCHDOG_MS) {
+            LONGLONG n = InterlockedIncrement64((volatile LONGLONG *)&clock_->sync_timeouts);
+            dlog("%s: no secondary thread within %d ms at frame %lld, released (timeout %lld)",
+                 what, SYNC_WATCHDOG_MS, load(&clock_->frames), n);
+            return;
+        }
+        /* The main thread is bound to one processor; the secondary is not,
+         * but a sleep of 1 ms lets it run there too. */
+        real_Sleep(i < 200 ? 0 : 1);
+    }
+}
+
+static int b_ready(void) {
+    return get(&s_left_b) == get(&main_left_b);
+}
+
+static int pass_done(void) {
+    return get(&s_waiting_b) == get(&main_left_a);
+}
+
+/* The main thread's Sleep(0) with A and B identified: the frame's when it
+ * holds B and not A. */
+static void frame_sleep(void) {
+    if (!sync_a || main_b_depth <= 0 || main_a_depth > 0 || get(&main_left_a) < 1) {
+        return;
+    }
+    InterlockedIncrement64((volatile LONGLONG *)&clock_->frame_sleeps);
+    wait_for(pass_done, &clock_->frame_sleeps_waited, "the frame's Sleep(0)");
+}
+
+/* Before identification: the main thread's Sleep(0) after entering one
+ * section and leaving another proposes them as B and A. */
+static void identify(void) {
+    if (sync_a || main_last.kind != OP_LEAVE || main_prev.kind != OP_ENTER ||
+        main_last.cs == main_prev.cs || load(&clock_->frames) < 1) {
+        return;
+    }
+    if (main_last.cs != tent_a || main_prev.cs != tent_b) {
+        tent_a = main_last.cs;
+        tent_b = main_prev.cs;
+        tent_matches = 0;
+        for (LONG i = 0; i < MAX_CREATED; i++) {
+            InterlockedExchange(&created[i].saw_a, 0);
+            InterlockedExchange(&created[i].saw_b, 0);
+        }
+    }
+    if (++tent_matches < IDENTIFY) {
+        return;
+    }
+    LONG n = get(&ncreated);
+    for (LONG i = 0; i < n && i < MAX_CREATED; i++) {
+        if (get(&created[i].saw_a) && get(&created[i].saw_b) && created[i].handle) {
+            /* The main thread holds B and not A, and has left A once. */
+            main_a_depth = 0;
+            main_b_depth = 1;
+            InterlockedExchange(&main_left_a, 0);
+            InterlockedExchange(&main_left_b, 0);
+            InterlockedExchange(&s_left_b, 0);
+            sync_handle = created[i].handle;
+            InterlockedExchange(&sync_thread, get(&created[i].id));
+            sync_b = tent_b;
+            InterlockedExchangePointer((void *volatile *)&sync_a, tent_a);
+            store(&clock_->sync_identified, load(&clock_->frames));
+            dlog("the secondary thread (created %ld of %ld) and its two critical sections "
+                 "identified at frame %lld",
+                 i + 1, n, load(&clock_->frames));
+            return;
+        }
+    }
+}
+
+static void WINAPI hook_EnterCriticalSection(CRITICAL_SECTION *cs) {
+    DWORD me = GetCurrentThreadId();
+    CRITICAL_SECTION *a = sync_a;
+    if (a) {
+        if (cs != a && cs != sync_b) {
+            real_EnterCriticalSection(cs);
+        } else if (me == main_thread) {
+            if (cs == sync_b && main_b_depth == 0) {
+                InterlockedIncrement64((volatile LONGLONG *)&clock_->b_entries);
+                wait_for(b_ready, &clock_->b_entries_waited, "the main thread's entry to B");
+            }
+            real_EnterCriticalSection(cs);
+            if (cs == a) {
+                main_a_depth++;
+            } else {
+                main_b_depth++;
+            }
+        } else if (me == (DWORD)get(&sync_thread)) {
+            if (cs == sync_b) {
+                InterlockedExchange(&s_waiting_b, get(&s_acquired_a));
+                real_EnterCriticalSection(cs);
+                InterlockedExchange(&s_waiting_b, -1);
+            } else {
+                real_EnterCriticalSection(cs);
+                /* A is the main thread's but after a release. */
+                InterlockedExchange(&s_acquired_a, get(&main_left_a));
+            }
+        } else {
+            real_EnterCriticalSection(cs);
+        }
+        return;
+    }
+    real_EnterCriticalSection(cs);
+    if (me == main_thread) {
+        main_prev = main_last;
+        main_last = (struct op){cs, OP_ENTER};
+    } else if (tent_a) {
+        struct created *c = created_by_id(me);
+        if (c && cs == tent_a) {
+            InterlockedExchange(&c->saw_a, 1);
+        } else if (c && cs == tent_b) {
+            InterlockedExchange(&c->saw_b, 1);
+        }
+    }
+}
+
+static void WINAPI hook_LeaveCriticalSection(CRITICAL_SECTION *cs) {
+    DWORD me = GetCurrentThreadId();
+    CRITICAL_SECTION *a = sync_a;
+    if (a) {
+        if (cs == a || cs == sync_b) {
+            if (me == main_thread) {
+                /* The generation moves before the release, so whoever takes
+                 * the section next sees it. */
+                if (cs == a && --main_a_depth <= 0) {
+                    main_a_depth = 0;
+                    InterlockedIncrement(&main_left_a);
+                } else if (cs == sync_b && --main_b_depth <= 0) {
+                    main_b_depth = 0;
+                    InterlockedIncrement(&main_left_b);
+                }
+            } else if (cs == sync_b && me == (DWORD)get(&sync_thread)) {
+                InterlockedExchange(&s_left_b, get(&main_left_b));
+            }
+        }
+        real_LeaveCriticalSection(cs);
+        return;
+    }
+    if (me == main_thread) {
+        main_prev = main_last;
+        main_last = (struct op){cs, OP_LEAVE};
+    }
+    real_LeaveCriticalSection(cs);
+}
+
 static void WINAPI fake_Sleep(DWORD ms) {
     slept(ms);
+    if (GetCurrentThreadId() == main_thread) {
+        if (ms == 0) {
+            identify();
+            frame_sleep();
+        } else if (load(&clock_->frames) >= 1) {
+            /* Rule 3: with the window active, none (the loop's Sleep(1) and
+             * Sleep(100) are taken while it is not). */
+            InterlockedIncrement64((volatile LONGLONG *)&clock_->idle_sleeps);
+        }
+    }
     real_Sleep(ms);
 }
 
@@ -782,6 +1050,9 @@ static struct hook {
     {"GetProcAddress", 0, (void *)hook_GetProcAddress},
     {"Sleep", 0, (void *)fake_Sleep},
     {"SleepEx", 0, (void *)fake_SleepEx},
+    {"EnterCriticalSection", 0, (void *)hook_EnterCriticalSection},
+    {"LeaveCriticalSection", 0, (void *)hook_LeaveCriticalSection},
+    {"CreateThread", 0, (void *)hook_CreateThread},
 };
 #define HOOKS (sizeof(hooks) / sizeof(hooks[0]))
 
@@ -927,6 +1198,13 @@ static DWORD WINAPI heartbeat(void *unused) {
             memcpy(last, now, sizeof now);
             DWORD front = 0;
             GetWindowThreadProcessId(GetForegroundWindow(), &front);
+            dlog("the secondary pass: identified at frame %lld; the main thread's entries to B "
+                 "%lld (%lld waited), frame sleeps %lld (%lld waited), timeouts %lld; main-thread "
+                 "sleeps of 1 ms or more after the first frame %lld",
+                 load(&clock_->sync_identified), load(&clock_->b_entries),
+                 load(&clock_->b_entries_waited), load(&clock_->frame_sleeps),
+                 load(&clock_->frame_sleeps_waited), load(&clock_->sync_timeouts),
+                 load(&clock_->idle_sleeps));
             dlog("calls: Present %ld, swap chain Present %ld, BeginScene %ld, EndScene %ld, "
                  "TestCooperativeLevel %ld (last 0x%lx), Reset %ld; the foreground window is %s",
                  n_present, n_chain, n_begin, n_end, n_tcl, (unsigned long)last_tcl, n_reset,
@@ -965,6 +1243,9 @@ static void start_clock(void) {
     }
     real_Sleep = (void *)GetProcAddress(kernel32, "Sleep");
     real_SleepEx = (void *)GetProcAddress(kernel32, "SleepEx");
+    real_EnterCriticalSection = (void *)GetProcAddress(kernel32, "EnterCriticalSection");
+    real_LeaveCriticalSection = (void *)GetProcAddress(kernel32, "LeaveCriticalSection");
+    real_CreateThread = (void *)GetProcAddress(kernel32, "CreateThread");
     real_LoadLibraryA = (void *)GetProcAddress(kernel32, "LoadLibraryA");
     real_LoadLibraryW = (void *)GetProcAddress(kernel32, "LoadLibraryW");
     real_LoadLibraryExA = (void *)GetProcAddress(kernel32, "LoadLibraryExA");

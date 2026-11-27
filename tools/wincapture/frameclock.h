@@ -16,7 +16,7 @@
 
 #define FRAMECLOCK_NAME "Local\\VolyaFrameClock"
 #define FRAMECLOCK_MAGIC 0x6b636f6c63796c76ull /* "vlyclock" */
-#define FRAMECLOCK_VERSION 4
+#define FRAMECLOCK_VERSION 5
 
 /* Ticks of the clock: 100 ns, the unit of the system time. Every clock the
  * game reads is derived from one count of them (frameclock.c). */
@@ -58,6 +58,14 @@ struct frameclock {
     volatile int64_t width;     /* the copied frame's size */
     volatile int64_t height;
     volatile int64_t format;    /* its D3DFORMAT */
+    /* The secondary pass (frameclock.c, original-determinism.md 7, rule 2). */
+    volatile int64_t sync_identified; /* the frame its thread and sections were found at (0: not) */
+    volatile int64_t b_entries;       /* the main thread's entries to B, gated */
+    volatile int64_t b_entries_waited; /* those that waited */
+    volatile int64_t frame_sleeps;    /* the frame's Sleep(0), gated */
+    volatile int64_t frame_sleeps_waited; /* those that waited */
+    volatile int64_t sync_timeouts;   /* waits released by the watchdog */
+    volatile int64_t idle_sleeps;     /* main-thread Sleep(1 ms or more) after the first frame */
     uint8_t pixels[FRAMECLOCK_MAX_PIXELS * 4]; /* rows top first, B G R X */
 };
 

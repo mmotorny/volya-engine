@@ -88,6 +88,7 @@
 #define FRAME_TIMEOUT 300
 #define FIRST_FRAME_TIMEOUT 120
 #define WATCHDOG 60
+#define FRONT_CHECK_MS 100
 #define ATTACH_TIMEOUT 60
 #define QUIT_WAIT 60
 
@@ -678,6 +679,7 @@ struct run {
     uint8_t *pixels; /* the last look, B G R X */
     FILE *events;
     FILE *hashes;
+    ULONGLONG front_checked; /* when keep_in_front last looked (real ms) */
 };
 
 static int ended(struct run *r) {
@@ -717,6 +719,8 @@ static const char *clock_state(struct run *r) {
     return s;
 }
 
+static void keep_in_front(struct run *r);
+
 /* Lets the game run until it has presented `frame` and holds it after it;
  * with `look`, the frame's back buffer is copied into r->pixels. */
 static int advance(struct run *r, int64_t frame, int look) {
@@ -725,6 +729,7 @@ static int advance(struct run *r, int64_t frame, int look) {
                     (long long)r->frame);
     }
     store(&r->clock->capture, look ? frame : 0);
+    keep_in_front(r);
     store(&r->clock->hold, frame);
     /* The first frame comes within seconds of the start (measured on the PC). */
     ULONGLONG until = GetTickCount64() + (r->frame ? FRAME_TIMEOUT : FIRST_FRAME_TIMEOUT) * 1000ull;
@@ -744,6 +749,9 @@ static int advance(struct run *r, int64_t frame, int look) {
         if (memcmp(now, seen, sizeof now)) {
             memcpy(seen, now, sizeof now);
             progressed = GetTickCount64();
+        }
+        if (GetTickCount64() - r->front_checked >= FRONT_CHECK_MS) {
+            keep_in_front(r);
         }
         if (GetTickCount64() > until || GetTickCount64() - progressed > WATCHDOG * 1000ull) {
             return fail("stuck waiting for frame %lld (%s): %s", (long long)frame,
@@ -793,6 +801,35 @@ static int game_in_front(struct run *r) {
         GetWindowThreadProcessId(GetForegroundWindow(), &p);
     }
     return p == r->pid ? 1 : fail("the game's window is not in the foreground: no key is sent");
+}
+
+/* Rule 3 of original-determinism.md section 7: the game's window stays
+ * active for the whole run, so its loop never takes the branches of an
+ * inactive window. Once it has a window, the driver brings it back to the
+ * front whenever another took it; each time from the first frame on is an
+ * event (runs that lost it differ). */
+static void keep_in_front(struct run *r) {
+    r->front_checked = GetTickCount64();
+    DWORD p = 0;
+    GetWindowThreadProcessId(GetForegroundWindow(), &p);
+    if (p == r->pid) {
+        return;
+    }
+    found_window = NULL;
+    EnumWindows(window_of, (LPARAM)r->pid);
+    if (!found_window) {
+        return;
+    }
+    SetForegroundWindow(found_window);
+    Sleep(200);
+    GetWindowThreadProcessId(GetForegroundWindow(), &p);
+    /* Before the first frame the game's window may not have come to the
+     * front by itself yet. */
+    if (r->frame < 1) {
+        return;
+    }
+    event(r, p == r->pid ? "another window had the foreground: the game's brought back"
+                         : "another window has the foreground: the game's not brought back");
 }
 
 static int send_key(struct run *r, WORD scan, int up) {
@@ -1196,6 +1233,14 @@ static int quit(struct run *r, ULONGLONG config_written) {
     fprintf(r->events, "clock extra=%lld reads=%lld other_reads=%lld sleeps=%lld\n",
             (long long)load(&r->clock->extra), (long long)load(&r->clock->reads),
             (long long)load(&r->clock->other_reads), (long long)load(&r->clock->sleeps));
+    fprintf(r->events,
+            "clock secondary pass: identified at frame %lld, entries to B %lld (%lld waited), "
+            "frame sleeps %lld (%lld waited), timeouts %lld; sleeps of 1 ms or more after the "
+            "first frame %lld\n",
+            (long long)load(&r->clock->sync_identified), (long long)load(&r->clock->b_entries),
+            (long long)load(&r->clock->b_entries_waited), (long long)load(&r->clock->frame_sleeps),
+            (long long)load(&r->clock->frame_sleeps_waited),
+            (long long)load(&r->clock->sync_timeouts), (long long)load(&r->clock->idle_sleeps));
     if (code != 0) {
         return fail("the game ended with exit code 0x%lx", code);
     }
