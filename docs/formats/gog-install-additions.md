@@ -13,7 +13,8 @@ innoextract has extracted the non-game entries to `gog-install/ext/`); the runs 
 facts, §4's registry view and §7 rest, by `gog-install/scripts/experiments.py` (which uses `run_isi.py` and
 `run_game.py`). The order of §7 was first read from the binaries and is backed by runs B–E. §4.3 is checked by
 `gog-script/scripts/checks.py` (the script's encoding, and the interpreter's names) and
-`gog-script/scripts/experiments.py` (the run that could not observe the actions).
+`gog-script/scripts/experiments.py` (the run that could not observe the actions); its **Conditions** paragraph by
+`gog-cond/scripts/checks.py` (which reads the interpreter's compiled code with `gog-cond/scripts/ifps.py`).
 
 Notation: `{app}` is the install folder chosen in the installer, `{userdocs}` the current user's Documents
 folder ("My Documents"; Inno Setup's documented meaning of that constant), `{commonprograms}` and
@@ -173,15 +174,9 @@ holds single `\`.
 | `name` | string, optional | a label (present on the first five actions, absent on all five `setRegistry` actions) |
 
 The interpreter's vocabulary (string constants in its code, ISI version 0.1.2.538) also has per-action members
-`uninstall` (the counterpart of `install`, used when uninstalling), `order` and `conditions`; none of them occurs in
-this script. How `order` and `conditions` are written and evaluated was not established. **Disputed in review:**
-that `conditions` is a member of the action is not backed: in the interpreter the name `conditions` stands among
-the argument names of each action kind (e.g. next to `root`, `subkey`, `valueType`, `valueName`, `valueData` for
-`setRegistry`, and as below), so it is believed to be a member of `install.arguments`; where it is placed was not
-established, and a reader deciding whether an action runs should look for it in both places. The condition words the
-interpreter knows are `onlanguagechange`, `onlyonce`, `onversionchange`, `nodesktopshortcutParam`,
-`nostartmenushortcutParam`, `ati`, `amd`, `nvidia`, `!ati`, `!amd`, `!nvidia`. Believed: an action without
-`conditions` always runs (every action of this script has none).
+`uninstall` (the counterpart of `install`, used when uninstalling) and `order`; neither occurs in this script. How
+`order` is written and evaluated was not established. `conditions` is not a member of the action but of
+`install.arguments` (**Conditions** below).
 
 `languages`: the name `languages` occurs nowhere in the interpreter (neither in its executable, nor in its compiled
 code, nor in the JSON library it uses, in ASCII or UTF-16), so this interpreter is believed to ignore the member and
@@ -205,12 +200,75 @@ without regard to case. A reader of this script should therefore compare the kin
 | `valueType` | type of the value | the interpreter knows `string`, `expandstring`, `multistring`, `dword`, `binary` (and `none`); this script uses `string` and `dword` |
 | `valueData` | the data, as text | for `string` the text itself; for `dword` a number in text, here `$1` |
 
-The interpreter also knows the optional `setRegistry` members `conditions`, `deleteSubkeys` and `saveGameData`,
-absent here (their meaning was not established). Believed: `string`, `expandstring`, `multistring`, `dword`,
+The interpreter also knows the optional `setRegistry` members `conditions` (**Conditions** below), `deleteSubkeys`
+and `saveGameData`, absent here (the meaning of the last two was not established). Believed: `string`, `expandstring`, `multistring`, `dword`,
 `binary` are the Windows registry types REG_SZ, REG_EXPAND_SZ, REG_MULTI_SZ, REG_DWORD and REG_BINARY (its code
 has write operations for exactly these five types and none for a 64-bit number). Believed: `$` in a `dword`'s
 data marks hexadecimal, so `$1` is 1 (§4.1). Believed (§4.1 and its review mark): root `HKEY_LOCAL_MACHINE`, as
 opposed to `HKLM64`, is the 32-bit view on 64-bit Windows.
+
+**Conditions.** An action may carry conditions that decide whether it runs. Established from the interpreter's
+compiled code (ISI version 0.1.2.538); no script with conditions was run (§8).
+
+- **Where.** The optional member `conditions` of `install.arguments`, a JSON array. It is read for the kinds
+  `execute`, `setregistry`, `setini`, `supportdata`, `savetofile`, `installsdb`, `deletedata`, `createshortcut` and
+  `delregistry` (kind names as the interpreter holds them, see **Action kinds**); for `savepath` and `pass` it is not
+  read, so conditions never stop those. A `conditions` member anywhere else
+  (e.g. beside `install` in the action) is not read. Member names are matched exactly (with case) and the first
+  member of that name counts. A `conditions` member that is not an array (e.g. a single string) counts as absent.
+- **How.** The action runs only if every condition holds; no `conditions`, or an empty array, means it runs. Elements
+  that are not JSON strings are ignored. Each string is lower-cased and then compared with the words below; a string
+  that is none of them is ignored (it holds). The elements are tested in array order, and the first that does not
+  hold ends the test: later elements are not tested (this matters for `onlyonce`, which writes when tested).
+- **The words.** `<productId>` is the `/productId` value of §1 (here `1207660573`), `<key>` is
+  `HKEY_LOCAL_MACHINE\SOFTWARE\GOG.com\Games\<productId>` (the key of §4.2). The stored values are read once per
+  action, before its elements are tested; comparisons of text ignore case (both sides are lower-cased).
+
+  | Word | Holds when |
+  |---|---|
+  | `onlanguagechange` | the metadata's language (member `language` of `{app}\goggame-<productId>.info`, here `Russian`) differs from the string value `language` of `<key>` |
+  | `onversionchange` | the `/versionName` value of §1 (here `2.1.0.10 GOG 0.13`) differs from the string value `ver` of `<key>` |
+  | `onlyonce` | the integer under key `DoOnce<productId>[<identity>]` of section `[setup]` in `{app}\goglog.ini` is not 1 (absent: 0). When it holds, 1 is written to that key at once, whether or not a later element then stops the action |
+  | `ati`, `amd` (the same test) | the display adapters' descriptions, lower-cased, contain `ati` or `amd` |
+  | `nvidia` | the display adapters' descriptions, lower-cased, contain `nvidia` |
+  | `!ati`, `!amd`, `!nvidia` | the test of the word without `!` is false |
+  | `nodesktopshortcutParam`, `nostartmenushortcutParam` | always: the interpreter's own spellings contain a capital `P`, so a lower-cased element never equals them and is ignored (believed: the comparison is exact, as text equality in the interpreter's language is) |
+
+  Believed (Inno Setup's documented registry and INI functions): a missing registry value reads as empty, so
+  `onlanguagechange` and `onversionchange` hold when their value is absent. The registry view of the two reads is
+  that of the interpreter's other `HKEY_LOCAL_MACHINE` accesses (§4.1, believed the 32-bit view). How the
+  interpreter encodes `goglog.ini` on disk was not established.
+
+  Display adapters: the descriptions are the string value `Device Description` of each key named by the values
+  `\Device\Video0` … `\Device\Video<n-1>` of `HKEY_LOCAL_MACHINE\HARDWARE\DEVICEMAP\VIDEO` (n its DWORD
+  `MaxObjectNumber`; each named path is read below `HKEY_LOCAL_MACHINE` with its prefix `\Registry\Machine\`
+  removed), taken together as one text. Without `MaxObjectNumber` there are no descriptions, and `ati`, `amd`,
+  `nvidia` do not hold. The test is a plain substring test: any description containing the three letters `ati`
+  anywhere counts.
+- **`<identity>`** (for `onlyonce`) is computed from the action's own arguments as written in the script, before
+  placeholders are replaced: it starts as the empty string, and for each member of the list below that is present
+  in `install.arguments` as a JSON string, in the list's order, it becomes the MD5 of the text formed by the identity
+  so far followed by the member's text. Believed (Inno Setup's documented MD5 function for Unicode strings, which the
+  interpreter uses): the MD5 is taken over the text's UTF-16LE bytes and written as 32 lower-case hexadecimal digits.
+  Absent members and members that are not strings are skipped.
+
+  | Kind | Members, in order |
+  |---|---|
+  | `execute` | `executable`, `argument`, `workingDir` |
+  | `setini` | `filename`, `section`, `keyType`, `keyName`, `keyValue` |
+  | `setregistry` | `root`, `subkey`, `valueType`, `valueName`, `valueData` |
+  | `supportdata` | `type`, `source`, `target` |
+  | `savetofile` | `filename`, `text` |
+  | `installsdb` | `sdbFile`, `GUID` |
+  | `deletedata` | `type`, `target` |
+  | `createshortcut` | `type`, `name`, `targetFile`, `arguments`, `workingdir`, `icon`, `compatibilityFlags`, `easyTarget` |
+  | `delregistry` | `root`, `subkey`, `valueName` |
+- **On a first install** (no earlier GOG install of the product on the machine): no string `language` is named by
+  the installer's header or by the interpreter other than in these reads and the metadata lookup, so no value
+  `language` exists under `<key>` and `onlanguagechange` holds (believed: nothing else writes it); `onlyonce` holds
+  (no `goglog.ini` key yet); the installer itself writes `ver` under `<key>` with the same text as its `/versionName`
+  (§4.2) before it starts the interpreter (§1), so `onversionchange` does not hold (believed: the order of §1); the
+  adapter words depend on the machine's display adapters.
 
 **Placeholders.** Text in braces is replaced before use. Those occurring in this script: `{app}` (the install
 folder, `/DIR` of §1), `{supportDir}` (the `/supportDir` value of §1, `{app}\__support`), `{userdocs}` and `{sys}`
@@ -227,8 +285,9 @@ its value does not depend on the question.
 **Reading `InstallVers`.** Among the elements of `actions`, take the one whose `install.action` is `setRegistry`
 (compared without case) and whose `install.arguments` has `valueName` `InstallVers`, `root` `HKEY_LOCAL_MACHINE`
 and `subkey` `SOFTWARE\GSC Game World\STALKER-SHOC` (key names compared without case, as in Windows); with
-`valueType` `string` its `valueData` is the value the game reads (`docs/behavior/title-menu.md` §3.4). Exactly one
-action of this script matches.
+`valueType` `string` its `valueData` is the value the game reads (`docs/behavior/title-menu.md` §3.4), provided the
+action runs: if its `install.arguments` has `conditions`, only when they hold (**Conditions** above). Exactly one
+action of this script matches; it has no `conditions`.
 
 **Worked example (Russian installer).** The five `setRegistry` actions are the last five of the ten (1–5 are
 `saveToFile`, `execute`, `supportData`, `supportData`, `savePath`), none has `name`, each has
@@ -389,7 +448,7 @@ test prefix has no such key).
 - The interpreter's exact output: line ends and encoding of the written `fsgame.ltx` (§2), overwrite behaviour
   of `user.ltx` (§3), the effect of `savePath`, the DWORD value of `$1` (believed 1), trailing `\` in `{app}` and
   `{userdocs}` (believed none).
-- How the script's `order` and `conditions` members are written and evaluated, the meaning of `deleteSubkeys` and
+- How the script's `order` member is written and evaluated, the meaning of `deleteSubkeys` and
   `saveGameData`, whether the action kind and `languages` are handled as believed, and whether placeholders are
   replaced in `valueData` (§4.3).
 - The `lang_code` value and further `GOG.com` registry values (§4.2); the root of the compatibility-flag entry
@@ -412,11 +471,15 @@ test prefix has no such key).
 - Binary analysis (2026-11-26): static analysis of `bin\xrGameSpy.dll` and `bin\xrGame.dll` (Ghidra) for the
   game's read of `InstallVers` and the registry view it uses (§4.1, title-menu.md §3.4).
 - Execution: the interpreter and the unmodified `XR_3DA.exe` run under Wine as described in §8.
+- For §4.3, **Conditions** (2026-11-26): the interpreter's compiled Pascal Script code read with a script of our own
+  (its types, procedures and instructions listed) for where `conditions` is read, how its elements are tested, the
+  values they compare with and the identity `onlyonce` uses; static analysis only.
 - For §4.3: the script's bytes and JSON members read; the interpreter's string constants (UTF-16 with a character
   count) and the names its compiled code imports listed; the JSON library it ships (`uninstall.dll`, extracted with
   innoextract) searched for member names; the interpreter run under Wine on test copies of the script (§8).
 - No leaked source code, derived engines, third-party engine documentation or recollection was used. Inno Setup's
-  public documentation was used only for the meaning of its folder constants and its uninstall registration.
+  public documentation was used only for the meaning of its folder constants, its uninstall registration, and its
+  registry, INI and MD5 functions (the beliefs so marked in §4.3).
 
 ## Gaps found in review
 
@@ -426,3 +489,5 @@ test prefix has no such key).
 - Whether the script actions run in the order listed, and whether a failing action stops the later ones (e.g. the registry values), was not established.
 - Placeholders of Inno Setup's `{reg:…}` form occur in the interpreter (its `{galaxy}` is defined through two of them); whether the script's text may hold Inno Setup constants beyond those listed in §4.3, and how they are replaced, was not established.
 - What the interpreter does with an action whose kind it does not know, or a `setRegistry` action whose `root` or `valueType` it does not know, was not established.
+- When the metadata file is missing or invalid, or has no string member `language`, what `onlanguagechange` compares with was not stated (believed: empty text, so it then holds only when a stored `language` value exists).
+- Whether `conditions` in an action's `uninstall.arguments` decide whether it runs when uninstalling was not established.
