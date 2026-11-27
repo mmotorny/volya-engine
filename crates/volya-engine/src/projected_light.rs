@@ -9,7 +9,7 @@
 
 use crate::core::camera::Vec3;
 use crate::core::collision::CollisionWorld;
-use crate::core::lights::Lights;
+use crate::core::lights::{LightId, Lights};
 use crate::core::particles::random::Generator;
 
 /// Slots, and so cells and receivers a frame (section 2).
@@ -83,6 +83,8 @@ pub struct ProjectedLight {
     /// Each slot's cell as last given out, and the last version.
     cells: Vec<Option<std::sync::Arc<CellDraw>>>,
     version: u64,
+    /// The objects' approximate colours (section 5).
+    pub estimates: Estimates,
 }
 
 impl Default for ProjectedLight {
@@ -93,6 +95,7 @@ impl Default for ProjectedLight {
             random: Generator::new(0),
             cells: vec![None; SLOTS],
             version: 0,
+            estimates: Estimates::default(),
         }
     }
 }
@@ -211,63 +214,198 @@ pub struct LightEnvironment {
     pub sun_color: Vec3,
 }
 
-/// The approximate colour **A** of an object with header sphere
-/// (`centre`, `radius`), sky and sun visibility `h`, `s` (5.2), with the
-/// light records of `lights` and the collision world `collision`.
-///
-/// Taken converged at once (#565), as the objects' visibility values are
-/// (docs/architecture/rendering.md, Objects; our choice): each tracked
-/// light's smoothed visibility σ is 1 when the ray from the light to **o**
-/// hits nothing (*e* settles at 1) and below the threshold otherwise (*e*
-/// settles at −0.5), the ray aimed at **o** itself rather than at a random
-/// point within *R*/2 of it.
-pub fn approximate_colour(
-    centre: Vec3,
-    radius: f32,
-    h: f32,
-    s: f32,
-    env: &LightEnvironment,
-    lights: &Lights,
-    collision: &CollisionWorld,
-) -> Vec3 {
-    let o = [centre[0], centre[1] + 0.3 * radius, centre[2]];
-    let mut a: Vec3 =
-        std::array::from_fn(|i| env.ambient[i] + h * env.hemi[i] + s * env.sun_color[i]);
-    let mean = |c: Vec3| (c[0] + c[1] + c[2]) / 3.0;
-    let mut add = |c: Vec3, l: Vec3, r: f32, w: f32| {
-        let d: Vec3 = std::array::from_fn(|i| l[i] - o[i]);
-        let dist = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-        let f = (1.0 - dist / (r + 1e-5)).clamp(0.0, 1.0);
-        for i in 0..3 {
-            a[i] += w * c[i] * f;
-        }
-    };
-    for (_, l) in lights.iter() {
-        if !l.active {
-            continue;
-        }
-        // The spatial query: the light's bounding sphere meets o ± R.
-        let meets = (0..3).all(|i| {
-            l.centre[i] + l.radius >= o[i] - radius && l.centre[i] - l.radius <= o[i] + radius
-        });
-        let d: Vec3 = std::array::from_fn(|i| o[i] - l.position[i]);
-        let dist = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-        if !meets || dist >= l.range + radius {
-            continue;
-        }
-        let c = [l.colour[0], l.colour[1], l.colour[2]];
-        let free = dist <= 0.0 || !collision.ray_hits(l.position, d.map(|x| x / dist), dist);
-        if free && mean(c) > 1e-5 {
-            add(c, l.position, l.range, 0.5);
+/// A tracked light (5.1): its visibility energy *e* and smoothed
+/// visibility σ.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Tracked {
+    id: LightId,
+    e: f32,
+    sigma: f32,
+}
+
+/// An object's light estimate (5.1): its tracked lights and its
+/// approximate colour **A**, (0, 0, 0) before its first full update.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ObjectLight {
+    tracked: Vec<Tracked>,
+    colour: Vec3,
+    /// The frame of its last full update.
+    updated: Option<u64>,
+}
+
+/// What a full update reads (5.2).
+pub struct UpdateInputs<'a> {
+    pub frame: u64,
+    /// The frame time in seconds (0 while paused).
+    pub dt: f32,
+    pub env: &'a LightEnvironment,
+    pub lights: &'a Lights,
+    pub collision: &'a CollisionWorld,
+}
+
+/// A random unit vector: uniform within the unit ball by rejection, then
+/// normalised (the distribution is not stated; our choice).
+fn unit_vector(random: &mut Generator) -> Vec3 {
+    loop {
+        let mut c = || random.next_k() as f32 / 16383.5 - 1.0;
+        let v = [c(), c(), c()];
+        let l2 = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+        if l2 > 1e-6 && l2 <= 1.0 {
+            let l = l2.sqrt();
+            return v.map(|x| x / l);
         }
     }
-    if let Some(b) = lights.sun().and_then(|(_, b)| lights.get(b)) {
-        let c = [b.colour[0], b.colour[1], b.colour[2]];
-        if mean(c) * s > 1e-5 {
-            add(c, b.position, b.range, s / 2.0);
+}
+
+fn distance(p: Vec3, q: Vec3) -> f32 {
+    let d: Vec3 = std::array::from_fn(|i| p[i] - q[i]);
+    (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
+}
+
+impl ObjectLight {
+    /// The approximate colour as of the last full update (4.2, 5.3).
+    pub fn colour(&self) -> Vec3 {
+        self.colour
+    }
+
+    /// A full update (5.2) of an object with header sphere (`centre`,
+    /// `radius`) and sky and sun visibility `h`, `s` (steps 1 and 2: the
+    /// objects' visibility values, taken converged; rendering.md),
+    /// tracking lights when `track_lights` (option 1: the object casts or
+    /// receives shadows), the rays' points from `random`. At most once a
+    /// frame (5.3).
+    pub fn full_update(
+        &mut self,
+        (centre, radius): (Vec3, f32),
+        (h, s): (f32, f32),
+        track_lights: bool,
+        inputs: &UpdateInputs<'_>,
+        random: &mut Generator,
+    ) {
+        if self.updated == Some(inputs.frame) {
+            return;
+        }
+        self.updated = Some(inputs.frame);
+        let o = [centre[0], centre[1] + 0.3 * radius, centre[2]];
+        let env = inputs.env;
+        let mut a: Vec3 =
+            std::array::from_fn(|i| env.ambient[i] + h * env.hemi[i] + s * env.sun_color[i]);
+        if !track_lights {
+            self.tracked.clear();
+            self.colour = a;
+            return;
+        }
+        let lights = inputs.lights;
+        // The lights found again stay tracked, new ones from e = σ = 0;
+        // those not found are dropped.
+        let mut tracked = Vec::with_capacity(self.tracked.len());
+        for (id, l) in lights.iter() {
+            if !l.active {
+                continue;
+            }
+            // The spatial query: the light's bounding sphere meets o ± R.
+            let meets = (0..3).all(|i| {
+                l.centre[i] + l.radius >= o[i] - radius && l.centre[i] - l.radius <= o[i] + radius
+            });
+            if !meets || distance(o, l.position) >= l.range + radius {
+                continue;
+            }
+            let kept = self.tracked.iter().find(|t| t.id == id).copied();
+            tracked.push(kept.unwrap_or(Tracked {
+                id,
+                e: 0.0,
+                sigma: 0.0,
+            }));
+        }
+        self.tracked = tracked;
+        let mut add = |c: Vec3, l: Vec3, r: f32, w: f32| {
+            let f = (1.0 - distance(l, o) / (r + 1e-5)).clamp(0.0, 1.0);
+            for i in 0..3 {
+                a[i] += w * c[i] * f;
+            }
+        };
+        let mean = |c: Vec3| (c[0] + c[1] + c[2]) / 3.0;
+        for t in &mut self.tracked {
+            let Some(l) = lights.get(t.id) else { continue };
+            // Towards o + R/2 · j, of that length.
+            let j = unit_vector(random);
+            let to: Vec3 = std::array::from_fn(|i| o[i] + 0.5 * radius * j[i] - l.position[i]);
+            let length = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
+            let free = length <= 0.0
+                || !(inputs.collision).ray_hits(l.position, to.map(|x| x / length), length);
+            let step = if free { 4.0 } else { -2.0 };
+            t.e = (t.e + step * inputs.dt).clamp(-0.5, 1.0);
+            t.sigma = 0.9 * t.sigma + 0.1 * t.e;
+            let c = [l.colour[0], l.colour[1], l.colour[2]];
+            if mean(c) * t.sigma > 1e-5 {
+                add(c, l.position, l.range, t.sigma / 2.0);
+            }
+        }
+        if let Some(b) = lights.sun().and_then(|(_, b)| lights.get(b)) {
+            let c = [b.colour[0], b.colour[1], b.colour[2]];
+            if mean(c) * s > 1e-5 {
+                add(c, b.position, b.range, s / 2.0);
+            }
+        }
+        self.colour = a;
+    }
+}
+
+/// The objects' light estimates and the turn of their full updates (5.3).
+#[derive(Debug)]
+pub struct Estimates {
+    /// By object instance.
+    objects: Vec<ObjectLight>,
+    /// The counter the turn is taken from, 0 at a level's start
+    /// (object-visibility.md 7).
+    counter: u64,
+    /// The rays' random points: a generator of our own (which of the
+    /// game's generators is not stated; our choice).
+    random: Generator,
+}
+
+impl Default for Estimates {
+    fn default() -> Self {
+        Self {
+            objects: Vec::new(),
+            counter: 0,
+            random: Generator::new(1),
         }
     }
-    a
+}
+
+impl Estimates {
+    /// The frame's turn among the `results` entries of the view frustum's
+    /// query (object-visibility.md 7): the counter increased, then the
+    /// position whose object gets a full update; none without results.
+    pub fn turn(&mut self, results: usize) -> Option<usize> {
+        self.counter += 1;
+        (results > 0).then(|| (self.counter % results as u64) as usize)
+    }
+
+    /// The approximate colour of object `instance` as of its last full
+    /// update, (0, 0, 0) before any (5.1).
+    pub fn colour(&self, instance: usize) -> Vec3 {
+        self.objects
+            .get(instance)
+            .map_or([0.0; 3], ObjectLight::colour)
+    }
+
+    /// A full update of object `instance` ([`ObjectLight::full_update`]).
+    pub fn full_update(
+        &mut self,
+        instance: usize,
+        sphere: (Vec3, f32),
+        visibility: (f32, f32),
+        track_lights: bool,
+        inputs: &UpdateInputs<'_>,
+    ) {
+        if self.objects.len() <= instance {
+            self.objects.resize(instance + 1, ObjectLight::default());
+        }
+        let o = &mut self.objects[instance];
+        o.full_update(sphere, visibility, track_lights, inputs, &mut self.random);
+    }
 }
 
 /// The clear bytes of approximate colour `a` (4.2).
@@ -330,6 +468,54 @@ mod tests {
         p.frame(1, 0, &rs, &mut drawn, &mut new);
         assert_eq!(new.len(), SLOTS);
         assert_eq!(drawn.len(), SLOTS);
+    }
+
+    /// 5.2, 5.3: a light tracked from e = σ = 0, smoothed by frame time
+    /// over full updates, at most one a frame; A unchanged between them.
+    #[test]
+    fn full_updates_smooth_the_tracked_lights() {
+        let mut lights = Lights::default();
+        let id = lights.create();
+        lights.set_position(id, [0.0, 3.3, 0.0]);
+        lights.set_range(id, 10.0);
+        lights.set_rgb(id, [1.0, 1.0, 1.0]);
+        lights.set_active(id, true);
+        let collision = CollisionWorld::new(Default::default(), Vec::new()).unwrap();
+        let env = LightEnvironment {
+            ambient: [0.1; 3],
+            hemi: [0.0; 3],
+            sun_color: [0.0; 3],
+        };
+        let inputs = |frame| UpdateInputs {
+            frame,
+            dt: 0.1,
+            env: &env,
+            lights: &lights,
+            collision: &collision,
+        };
+        let mut e = Estimates::default();
+        assert_eq!(e.colour(3), [0.0; 3], "before any full update");
+        // o = (0, 0.3, 0), 3 m from the light: f = 0.7.
+        let sphere = ([0.0; 3], 1.0);
+        e.full_update(3, sphere, (0.0, 0.0), true, &inputs(1));
+        // e = 0.4, σ = 0.04, w = 0.02.
+        let a = e.colour(3)[0];
+        assert!((a - (0.1 + 0.02 * 0.7)).abs() < 1e-5, "{a}");
+        e.full_update(3, sphere, (0.0, 0.0), true, &inputs(1));
+        assert_eq!(e.colour(3)[0], a, "once a frame");
+        e.full_update(3, sphere, (0.0, 0.0), true, &inputs(2));
+        // e = 0.8, σ = 0.116.
+        let a = e.colour(3)[0];
+        assert!((a - (0.1 + 0.058 * 0.7)).abs() < 1e-5, "{a}");
+        // Without option 1: no lights.
+        e.full_update(3, sphere, (0.0, 0.0), false, &inputs(3));
+        assert_eq!(e.colour(3), [0.1; 3]);
+        // The turn: the counter from 1, mod the results.
+        let mut e = Estimates::default();
+        assert_eq!(e.turn(3), Some(1));
+        assert_eq!(e.turn(3), Some(2));
+        assert_eq!(e.turn(0), None);
+        assert_eq!(e.turn(3), Some(1));
     }
 
     #[test]

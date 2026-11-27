@@ -53,6 +53,7 @@ use crate::core::simulation::{AlifeConfig, Changes, Simulation};
 use crate::core::sound::Fatal;
 use crate::core::sound::ambient::AmbientParticles;
 use crate::core::vfs::{self, Vfs};
+use crate::core::visibility::Frustum;
 use crate::core::weather::{Environment, Weather, texture_name as weather_texture_name};
 use crate::core::zones::{Behaviour, SoundEvent, ZoneRecord, ZoneSection, Zones};
 use crate::data::GameData;
@@ -257,6 +258,9 @@ enum DynamicItem {
     Light(LightId),
     Object(usize, Mat4, [f32; 4]),
     Effect(usize, [f32; 4]),
+    /// A glow: only counted for the turn of full updates
+    /// (object-projected-light.md 5.3); glows are handled with the lights.
+    Glow([f32; 4]),
 }
 
 /// The level shown.
@@ -2880,7 +2884,8 @@ impl LevelScreen {
         let eye = camera.eye;
         (self.lights).prepare(&self.collision, eye, sun, self.visibility.get_mut());
         self.camera_pass(w, h, &view, &projection);
-        self.dynamic_items();
+        let frustum = Frustum::view(&crate::render::world::multiply(&view, &projection));
+        self.dynamic_items(dt, &frustum);
         let (collision, visibility) = (&self.collision, self.visibility.get_mut());
         (self.lights).finish(collision, &camera, dt, visibility, &self.listed_lights);
     }
@@ -2895,8 +2900,12 @@ impl LevelScreen {
     /// instance's box), an effect object kept then advanced to the clock
     /// (particle-drawing.md 7.1 step 1). Keeps what the frame draws
     /// ([`Seen`]): these, the static draws of the pass's visuals and the
-    /// portal fade. Returns the light records listed, in their order.
-    fn dynamic_items(&mut self) {
+    /// portal fade. Returns the light records listed, in their order. The
+    /// entry of the frame's turn among those whose sphere is not outside
+    /// `frustum`, the view frustum (object-visibility.md 2.4, 7), gets a
+    /// full update of its approximate colour (object-projected-light.md
+    /// 5.3) if it is an object drawn, `dt` the frame time in seconds.
+    fn dynamic_items(&mut self, dt: f32, frustum: &Frustum) {
         use DynamicItem as Kind;
         let eye = self.player.view().eye;
         let d2 = |c: Vec3| {
@@ -2954,12 +2963,44 @@ impl LevelScreen {
                     }
                 }
             }
+            for g in self.lights.glows.iter() {
+                let [x, y, z] = g.position;
+                items.push((
+                    d2(g.position),
+                    items.len() as u32,
+                    Kind::Glow([x, y, z, g.radius]),
+                ));
+            }
             // Equal distances in push order, as a stable sort keeps them,
             // without the stable sort's buffer.
             items.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+            // The query's results, and the position in `items` of the
+            // turn's.
+            let records = &self.lights.lights;
+            let in_view = |kind: &Kind| match *kind {
+                Kind::Light(id) => records
+                    .get(id)
+                    .is_some_and(|r| frustum.meets(r.centre, r.radius)),
+                Kind::Object(_, _, s) | Kind::Effect(_, s) | Kind::Glow(s) => {
+                    frustum.meets([s[0], s[1], s[2]], s[3])
+                }
+            };
+            let results = items.iter().filter(|i| in_view(&i.2)).count();
+            let turn = (self.projected.estimates.turn(results)).and_then(|n| {
+                (items.iter().enumerate())
+                    .filter(|(_, i)| in_view(&i.2))
+                    .nth(n)
+                    .map(|(j, _)| j)
+            });
+            let e = &self.environment;
+            let env = crate::projected_light::LightEnvironment {
+                ambient: e.ambient,
+                hemi: [e.hemi_color[0], e.hemi_color[1], e.hemi_color[2]],
+                sun_color: e.sun_color,
+            };
             let (collision, random) = (&self.collision, &self.random);
             let settings = self.lights.settings;
-            for (_, _, kind) in items.drain(..) {
+            for (j, (_, _, kind)) in items.drain(..).enumerate() {
                 match kind {
                     Kind::Light(id) => {
                         let shown = self.lights.lights.handle(id, &settings, |t| {
@@ -2979,9 +3020,31 @@ impl LevelScreen {
                             visibility.item_seen(&mut item, sphere, lo, hi, collision, g)
                         });
                         visibility.objects[k] = item;
+                        let centre = [sphere[0], sphere[1], sphere[2]];
+                        if seen.objects[k] && turn == Some(j) {
+                            // L_dynamic_props = (0.5 s, 0.5 s, 0.5 s, 0.5 h).
+                            let props = (objects.draws.iter())
+                                .find(|d| d.instance == k)
+                                .map_or([0.0; 4], |d| d.dynamic_props);
+                            let inputs = crate::projected_light::UpdateInputs {
+                                frame: self.frames,
+                                dt,
+                                env: &env,
+                                lights: &self.lights.lights,
+                                collision,
+                            };
+                            self.projected.estimates.full_update(
+                                k,
+                                (centre, sphere[3]),
+                                (2.0 * props[3], 2.0 * props[0]),
+                                crate::projected_light::receives_shadows(
+                                    &objects.instances[k].class_id,
+                                ),
+                                &inputs,
+                            );
+                        }
                         // A receiver of the frame (object-projected-light.md
                         // 3.1), in the order the objects are taken.
-                        let centre = [sphere[0], sphere[1], sphere[2]];
                         if let (true, Some(sector)) = (seen.objects[k], item.sector)
                             && receivers.len() < crate::projected_light::SLOTS
                             && crate::projected_light::receives_shadows(
@@ -3021,6 +3084,7 @@ impl LevelScreen {
                             seen.effects.push(i);
                         }
                     }
+                    Kind::Glow(_) => {}
                 }
             }
             seen.fade = portal_fade(visibility, eye, self.environment.ambient);
@@ -3036,12 +3100,6 @@ impl LevelScreen {
                 &mut seen.receivers,
                 &mut new,
             );
-            let e = &self.environment;
-            let env = crate::projected_light::LightEnvironment {
-                ambient: e.ambient,
-                hemi: [e.hemi_color[0], e.hemi_color[1], e.hemi_color[2]],
-                sun_color: e.sun_color,
-            };
             for (k, slot) in new {
                 let (r, sector) = receivers[k];
                 let Some(d) = seen.receivers.iter().find(|d| d.slot == slot) else {
@@ -3055,19 +3113,8 @@ impl LevelScreen {
                     [c[0] + h, c[1], c[2] + h],
                     &mut draws,
                 );
-                let props = (objects.draws.iter())
-                    .find(|d| d.instance == r.instance)
-                    .map_or([0.0; 4], |d| d.dynamic_props);
-                // L_dynamic_props = (0.5 s, 0.5 s, 0.5 s, 0.5 h).
-                let a = crate::projected_light::approximate_colour(
-                    r.centre,
-                    r.radius,
-                    2.0 * props[3],
-                    2.0 * props[0],
-                    &env,
-                    &self.lights.lights,
-                    &self.collision,
-                );
+                // As of the receiver's last full update (4.2).
+                let a = self.projected.estimates.colour(r.instance);
                 self.projected.set_cell(crate::projected_light::CellDraw {
                     version: 0,
                     slot,
