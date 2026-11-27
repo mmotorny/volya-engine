@@ -42,6 +42,16 @@ const SPIN: u32 = 1000;
 // the clock, so a wait that sleeps between its reads ends too (a run on
 // the PC stuck before its first frame, #762).
 
+/// Before the first frame, the least a main-thread sleep advances the clock:
+/// the startup waits for time to pass with `Sleep(0)` (measured on the PC,
+/// about 120 a real second), so its waits end at about real time.
+const START_QUANTUM_MS: u32 = 10;
+
+/// The clock at the first frame, whatever the startup took: how long that
+/// was depends on how often it waited, so from the first frame on every
+/// run reads the same times (the driver warns when the startup took longer).
+const FIRST_FRAME_MS: u32 = 120_000;
+
 /// The system time at the clock's tick 0, seconds since 1970 (2026-01-01
 /// 00:00 UTC), so every run reads the same dates.
 const EPOCH: u64 = 1_767_225_600;
@@ -97,7 +107,9 @@ pub fn plan() -> String {
         p,
         "volya-capture-plan 1\n\
          # From tests/fidelity/views.rs (xtask wincapture). Frames of {FRAME_MS} ms.\n\
-         frame_ms {FRAME_MS}\nspin {SPIN}\nsleep_advances 1\nepoch {EPOCH}\nsize {WIDTH} {HEIGHT}"
+         frame_ms {FRAME_MS}\nspin {SPIN}\nsleep_advances 1\n\
+         start_quantum_ms {START_QUANTUM_MS}\nfirst_frame_ms {FIRST_FRAME_MS}\n\
+         epoch {EPOCH}\nsize {WIDTH} {HEIGHT}"
     );
     for line in String::from_utf8_lossy(&capture_ltx()).lines() {
         let _ = writeln!(p, "ltx {line}");

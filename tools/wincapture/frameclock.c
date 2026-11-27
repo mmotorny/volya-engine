@@ -342,6 +342,19 @@ static HRESULT frame_presented(IDirect3DDevice9 *dev, HRESULT (*present)(void *)
     presenting_thread = GetCurrentThreadId();
     HRESULT hr = present(args);
     presenting_thread = 0;
+    if (frame == 1) {
+        /* How long the startup took in the clock depends on how often it
+         * waited, which may depend on other threads; from the first frame
+         * on, every run reads the same times. */
+        LONGLONG before = load(&clock_->extra) + load(&clock_->sleep_ticks);
+        store(&clock_->start_ticks, before);
+        if (clock_->first_frame && (ULONGLONG)before < clock_->first_frame) {
+            InterlockedAdd64((volatile LONGLONG *)&clock_->sleep_ticks,
+                             (LONGLONG)clock_->first_frame - before);
+        }
+        dlog("the first frame: the clock was at %lld ms, moved to %llu ms", before / 10000,
+             (unsigned long long)(clock_->first_frame / 10000));
+    }
     /* The clock advances: reads from here on are of the next frame. */
     store(&clock_->frames, frame);
     InterlockedExchange(&reads_since_frame, 0);
@@ -482,8 +495,15 @@ static void slept(DWORD ms) {
              load(&clock_->frames));
     }
     if (clock_->sleep_advances && ms != INFINITE) {
+        /* Before the first frame a sleep advances at least the quantum: the
+         * startup waits with Sleep(0) for time to pass (measured on the PC,
+         * #762); the clock is set to a fixed time at the first frame. */
+        ULONGLONG add = ms;
+        if (load(&clock_->frames) == 0 && add < clock_->start_quantum) {
+            add = clock_->start_quantum;
+        }
         InterlockedAdd64((volatile LONGLONG *)&clock_->sleep_ticks,
-                         (LONGLONG)ms * (LONGLONG)FRAMECLOCK_TICKS_PER_MS);
+                         (LONGLONG)add * (LONGLONG)FRAMECLOCK_TICKS_PER_MS);
     }
 }
 
