@@ -938,13 +938,15 @@ impl OptionsScreen {
                 Action::Cursor { to } => {
                     events.push(Ev::Move(crate::core::input::ui_from_normalized(to)))
                 }
+                // Only these three are the interface's mouse events
+                // (conventions).
                 Action::Press {
                     control: Control::Mouse(b),
                     ..
-                } => events.push(Ev::Press(b)),
+                } if b.is_interface() => events.push(Ev::Press(b)),
                 Action::Release {
                     control: Control::Mouse(b),
-                } => events.push(Ev::Release(b)),
+                } if b.is_interface() => events.push(Ev::Release(b)),
                 Action::Wheel { up } => events.push(Ev::Wheel(up)),
                 _ => {}
             }
@@ -1114,12 +1116,7 @@ impl OptionsScreen {
         // A waiting cell takes a mouse button pressed over it (11.4).
         if let Some((w, _)) = self.waiting {
             if at == Some(w) {
-                let name = match b {
-                    MouseButton::Left => "mouse1",
-                    MouseButton::Right => "mouse2",
-                    MouseButton::Middle => "mouse3",
-                };
-                self.assign(w, console::key_index(name).expect("mouse key"));
+                self.assign(w, console::key_index(b.key_name()).expect("mouse key"));
                 return;
             }
             self.waiting = None;

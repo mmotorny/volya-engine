@@ -152,10 +152,12 @@ export const KEYS = {
 // Keys whose browser action (developer tools) is left alone.
 const BROWSER_KEYS = new Set(["F12"]);
 
-// Mouse `button` → engine button name.
-const BUTTONS = ["left", "middle", "right"];
+// Mouse `button` → engine button name. UI Events numbers the back and
+// forward buttons 3 and 4 (documented), the game's fourth and fifth
+// (`mouse4`, `mouse5`); browsers report no further buttons.
+const BUTTONS = ["left", "middle", "right", "mouse4", "mouse5"];
 // Mouse `button` → its bit in `buttons`.
-const BUTTON_BITS = [1, 4, 2];
+const BUTTON_BITS = [1, 4, 2, 8, 16];
 
 // Standard Gamepad mapping (W3C) indices → engine names.
 const PAD_BUTTONS = {
@@ -287,6 +289,9 @@ export function startInput(view, send, { onClick = () => {} } = {}) {
     addEventListener(type, pointer, { passive: false });
   }
   addEventListener("contextmenu", (event) => capture && event.preventDefault());
+  // The back and forward buttons navigate on their mouseup, which Chrome
+  // lets the page cancel (believed, not measured).
+  addEventListener("mouseup", (event) => capture && event.button >= 3 && event.preventDefault());
   addEventListener("touchend", (event) => capture && cursor && event.cancelable && event.preventDefault(), {
     passive: false,
   });

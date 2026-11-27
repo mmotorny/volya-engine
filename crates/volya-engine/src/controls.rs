@@ -141,12 +141,9 @@ impl MoveAction {
 /// section 11.2, case-insensitive), `None` for keys this engine does not
 /// receive.
 pub fn control_named(name: &str) -> Option<Control> {
-    match name.to_ascii_lowercase().as_str() {
-        "mouse1" => Some(Control::Mouse(MouseButton::Left)),
-        "mouse2" => Some(Control::Mouse(MouseButton::Right)),
-        "mouse3" => Some(Control::Mouse(MouseButton::Middle)),
-        _ => Key::from_dik_name(name).map(Control::Key),
-    }
+    MouseButton::from_key_name(name)
+        .map(Control::Mouse)
+        .or_else(|| Key::from_dik_name(name).map(Control::Key))
 }
 
 /// The effective bindings: each action's primary (`bind`) and secondary

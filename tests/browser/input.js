@@ -157,6 +157,18 @@ export const tests = {
     ]);
   },
 
+  "the back and forward buttons press mouse4 and mouse5": async () => {
+    const before = await state();
+    pointer("pointerdown", 0, 0, { button: 3, buttons: 8 });
+    pointer("pointermove", 0, 0, { button: 4, buttons: 24 });
+    const held = (await state()).held;
+    pointer("pointermove", 0, 0, { button: 4, buttons: 8 });
+    pointer("pointerup", 0, 0, { button: 3, buttons: 0 });
+    const { actions } = await since(before);
+    assertEqual(held, ["mouse4", "mouse5"], "held");
+    assertEqual(summary(actions), ["press mouse4", "press mouse5", "release mouse5", "release mouse4"]);
+  },
+
   "touchpad: a tap clicks at once; small jitter stays a tap; a long touch or a move is no tap": async () => {
     const { createTouchpad, TAP_SLOP, LONG_PRESS_MS } = await touchpad();
     const pad = createTouchpad();

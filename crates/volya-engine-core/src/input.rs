@@ -161,7 +161,7 @@ macro_rules! keys {
 // pairing here is backed by those two documents (documented, not measured
 // on hardware). Keys of the list with no `code` value are not reported:
 // kCIRCUMFLEX, kAT, kCOLON, kUNDERLINE, kKANJI, kSTOP, kAX, kUNLABELED
-// (NEC PC-98 and Japanese keyboards) and mouse4–mouse8.
+// (NEC PC-98 and Japanese keyboards); mouse1–mouse8 are mouse buttons.
 keys! {
     Escape "escape" "kESCAPE",
     Digit1 "1" "k1",
@@ -308,17 +308,68 @@ pub enum MouseButton {
     Left,
     Right,
     Middle,
+    /// The five further buttons the game reads, which reach only the
+    /// level's key handling, as the keys `mouse4` … `mouse8`
+    /// (console-key-bindings.md section 5), never the interface's mouse
+    /// events (options-screens.md conventions).
+    Mouse4,
+    Mouse5,
+    Mouse6,
+    Mouse7,
+    Mouse8,
 }
 
 impl MouseButton {
-    pub const ALL: [MouseButton; 3] = [MouseButton::Left, MouseButton::Right, MouseButton::Middle];
+    pub const ALL: [MouseButton; 8] = [
+        MouseButton::Left,
+        MouseButton::Right,
+        MouseButton::Middle,
+        MouseButton::Mouse4,
+        MouseButton::Mouse5,
+        MouseButton::Mouse6,
+        MouseButton::Mouse7,
+        MouseButton::Mouse8,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
             MouseButton::Left => "left",
             MouseButton::Right => "right",
             MouseButton::Middle => "middle",
+            MouseButton::Mouse4 => "mouse4",
+            MouseButton::Mouse5 => "mouse5",
+            MouseButton::Mouse6 => "mouse6",
+            MouseButton::Mouse7 => "mouse7",
+            MouseButton::Mouse8 => "mouse8",
         }
+    }
+
+    /// The button's key name (options-screens.md section 11.2): `mouse1`
+    /// left, `mouse2` right, `mouse3` middle, then `mouse4` … `mouse8`.
+    pub fn key_name(self) -> &'static str {
+        match self {
+            MouseButton::Left => "mouse1",
+            MouseButton::Right => "mouse2",
+            MouseButton::Middle => "mouse3",
+            other => other.name(),
+        }
+    }
+
+    /// The button named `name` among the key names `mouse1` … `mouse8`,
+    /// case-insensitively (section 11.2).
+    pub fn from_key_name(name: &str) -> Option<MouseButton> {
+        MouseButton::ALL
+            .into_iter()
+            .find(|b| b.key_name().eq_ignore_ascii_case(name))
+    }
+
+    /// The left, right and middle buttons: the ones the interface gets
+    /// mouse events of (options-screens.md conventions).
+    pub fn is_interface(self) -> bool {
+        matches!(
+            self,
+            MouseButton::Left | MouseButton::Right | MouseButton::Middle
+        )
     }
 
     pub fn from_name(name: &str) -> Option<MouseButton> {
@@ -647,6 +698,7 @@ impl Control {
             Control::Mouse(MouseButton::Left) => "mouse_left",
             Control::Mouse(MouseButton::Right) => "mouse_right",
             Control::Mouse(MouseButton::Middle) => "mouse_middle",
+            Control::Mouse(b) => b.name(),
             Control::Pad(b) => b.name(),
             Control::Touch(TouchButton::Jump) => "touch_jump",
             Control::Touch(TouchButton::Crouch) => "touch_crouch",
@@ -703,7 +755,7 @@ pub struct Input {
     held: Vec<(Source, Control)>,
     actions: Vec<Action>,
     /// Time of the last single (non-double) press per mouse button.
-    last_press: [Option<f64>; 3],
+    last_press: [Option<f64>; MouseButton::ALL.len()],
     /// Actions since start, including earlier frames.
     count: u64,
     /// Touch contacts begun this frame.
@@ -751,7 +803,7 @@ impl Default for Input {
             cursor: [0.0, 0.0],
             held: Vec::new(),
             actions: Vec::new(),
-            last_press: [None; 3],
+            last_press: [None; MouseButton::ALL.len()],
             count: 0,
             touch_starts: 0,
             pointer_at: None,
@@ -1772,7 +1824,16 @@ mod tests {
         assert_eq!(Key::from_dik_name("klcontrol"), Some(Key::LeftControl));
         for button in MouseButton::ALL {
             assert_eq!(MouseButton::from_name(button.name()), Some(button));
+            assert_eq!(MouseButton::from_key_name(button.key_name()), Some(button));
         }
+        assert_eq!(
+            MouseButton::from_key_name("MOUSE2"),
+            Some(MouseButton::Right)
+        );
+        assert_eq!(
+            MouseButton::from_key_name("mouse8"),
+            Some(MouseButton::Mouse8)
+        );
         for button in GamepadButton::ALL {
             assert_eq!(GamepadButton::from_name(button.name()), Some(button));
         }

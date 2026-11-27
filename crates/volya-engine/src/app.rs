@@ -305,15 +305,23 @@ const BEFORE_CONSOLE_LINES: [&str; 6] = [
     "quick_load",
 ];
 
+/// The actions the single-player interface takes a press of, with no
+/// in-game window open, while a living player character exists
+/// (console-key-bindings.md section 5, rule 3): `inventory` opens the
+/// inventory screen, the others the PDA window (TODO(#285): no PDA yet,
+/// so their presses are taken and do nothing).
+const INTERFACE_TAKES: [&str; 4] = ["inventory", "active_jobs", "map", "contacts"];
+
 /// The keyboard's and mouse's presses reaching the level this frame
-/// (console-key-bindings.md section 5), the caller having checked rule 3:
-/// each press of a key with a console-line binding, unless the key's
-/// action is handled before it, executes its line and is used up, so the
-/// player character does not get it. The left, right and middle mouse
-/// buttons press `mouse1`, `mouse2` and `mouse3`. Returns whether a line
-/// was executed.
-fn run_bound_lines(console: &mut Console, input: &mut Input) -> bool {
-    use crate::core::input::MouseButton;
+/// (console-key-bindings.md section 5), the caller having checked rule 3
+/// but for the interface's actions, which take a press while `alive` (a
+/// living player character exists): each press of a key with a
+/// console-line binding, unless the key's action is handled before it or
+/// taken, executes its line and is used up, so the player character does
+/// not get it. Mouse buttons press the keys `mouse1` … `mouse8`. Returns
+/// whether a line was executed.
+fn run_bound_lines(console: &mut Console, input: &mut Input, alive: bool) -> bool {
+    use crate::core::console::{ACTIONS, KEYS, key_index};
     let presses: Vec<Control> = input
         .device_changes()
         .iter()
@@ -323,15 +331,13 @@ fn run_bound_lines(console: &mut Console, input: &mut Input) -> bool {
     for control in presses {
         let code = match control {
             Control::Key(k) => k.code(),
-            Control::Mouse(MouseButton::Left) => 337,
-            Control::Mouse(MouseButton::Right) => 338,
-            Control::Mouse(MouseButton::Middle) => 339,
+            Control::Mouse(b) => KEYS[key_index(b.key_name()).expect("mouse key")].1,
             Control::Pad(_) | Control::Touch(_) => continue,
         };
-        let action = console
-            .bound_action(code)
-            .map(|a| crate::core::console::ACTIONS[a].0);
-        if action.is_some_and(|a| BEFORE_CONSOLE_LINES.contains(&a)) {
+        let action = console.bound_action(code).map(|a| ACTIONS[a].0);
+        if action.is_some_and(|a| {
+            BEFORE_CONSOLE_LINES.contains(&a) || (alive && INTERFACE_TAKES.contains(&a))
+        }) {
             continue;
         }
         let Some(line) = console.console_line(code).map(str::to_owned) else {
@@ -1660,10 +1666,9 @@ impl App {
                 // player's controls live, the pause off and no window open
                 // (console-key-bindings.md section 5, rule 3; under the
                 // loading image the game is not running yet, our reading).
-                // TODO(#648): the inventory key's press runs its line before
-                // the inventory screen can open.
                 if overlay.is_none() && !self.pause.is_on() {
-                    self.console_touched |= run_bound_lines(&mut self.console, input);
+                    let alive = level.character().is_some_and(|c| c.conditions.alive());
+                    self.console_touched |= run_bound_lines(&mut self.console, input, alive);
                 }
                 level.update(now, input);
                 // Pointer lock lost while the controls are live opens the menu
@@ -3031,6 +3036,69 @@ mod tests {
         app.update(&tree, 80.0, &mut input, &mut audio);
         input.end_frame();
         assert_eq!(logged(&app, start), 2);
+    }
+
+    /// console-key-bindings.md section 5: mouse buttons 4 to 8 press the
+    /// keys `mouse4` … `mouse8`.
+    #[test]
+    fn mouse_buttons_four_to_eight_execute_their_lines() {
+        use crate::core::input::MouseButton;
+        let (tree, mut app, mut input, mut audio) = in_level_with_inventory();
+        let start = "- --- Action list start ---";
+        let further = &MouseButton::ALL[3..];
+        for b in further {
+            app.exec(&format!("bind_console list_actions {}", b.key_name()));
+        }
+        for (i, &button) in further.iter().enumerate() {
+            for pressed in [true, false] {
+                input.handle(Event::PointerButton {
+                    at: None,
+                    button,
+                    pressed,
+                    time: 40.0 + i as f64,
+                });
+            }
+            app.update(&tree, 48.0 + 16.0 * i as f64, &mut input, &mut audio);
+            input.end_frame();
+            assert_eq!(logged(&app, start), i + 1, "{button:?}");
+        }
+    }
+
+    /// console-key-bindings.md section 5, rule 3: the interface takes a
+    /// press of the inventory key while the character lives, so its line
+    /// is not executed; dead, the line is.
+    #[test]
+    fn the_inventory_key_opens_the_screen_instead_of_executing_its_line() {
+        let (tree, mut app, mut input, mut audio) = in_level_with_inventory();
+        let start = "- --- Action list start ---";
+        app.exec("bind inventory kI");
+        app.exec("bind_console list_actions kI");
+        app.exec("bind map kM");
+        app.exec("bind_console list_actions kM");
+        press(&mut input, Key::M);
+        app.update(&tree, 32.0, &mut input, &mut audio);
+        input.end_frame();
+        assert_eq!(logged(&app, start), 0);
+        press(&mut input, Key::I);
+        app.update(&tree, 48.0, &mut input, &mut audio);
+        input.end_frame();
+        assert!(app.inventory_open());
+        assert_eq!(logged(&app, start), 0);
+        // The press closing it goes to the open window.
+        press(&mut input, Key::I);
+        app.update(&tree, 64.0, &mut input, &mut audio);
+        input.end_frame();
+        assert!(!app.inventory_open());
+        assert_eq!(logged(&app, start), 0);
+        let Some(Phase::Level { level, .. }) = &mut app.phase else {
+            panic!()
+        };
+        level.character_mut().unwrap().conditions.health = 0.0;
+        press(&mut input, Key::I);
+        app.update(&tree, 80.0, &mut input, &mut audio);
+        input.end_frame();
+        assert!(!app.inventory_open());
+        assert_eq!(logged(&app, start), 1);
     }
 
     #[test]
