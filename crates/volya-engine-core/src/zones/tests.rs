@@ -10,6 +10,7 @@ use crate::particles::fixture::muhi;
 use crate::particles::placed::period;
 
 fn section(text: &str, name: &str, behaviour: Behaviour) -> io::Result<ZoneSection> {
+    let text = format!("{text}{TEST_HIT_KEYS}");
     let config = volya_engine_formats::ltx::parse(text.as_bytes()).unwrap();
     ZoneSection::read(config.section(name).unwrap(), behaviour)
 }
@@ -35,6 +36,7 @@ fn record(e: u32, d: u32, s: u32) -> ZoneRecord {
         disabled_time: d,
         start_time_shift: s,
         always_fast: false,
+        maximum_power: 15.0,
     }
 }
 
@@ -62,6 +64,7 @@ fn run(zone: &ZoneRecord, ms: u32, step: u32, camera: Vec3) -> (Vec<u32>, Zones,
             elapsed: step,
             camera,
             colours: &NoColourAnimations,
+            player: None,
         };
         zones.frame(&frame, &mut fx).unwrap();
         for e in zones.sound_events() {
@@ -242,6 +245,7 @@ fn the_idle_light_is_on_while_idle_and_steps_at_each_update() {
         elapsed: 16,
         camera: r.position,
         colours: &Green,
+        player: None,
     };
     let mut expected = fx.random_mut().uniform.get();
     zones.frame(&frame, &mut fx).unwrap();
@@ -257,6 +261,7 @@ fn the_idle_light_is_on_while_idle_and_steps_at_each_update() {
             elapsed: 16,
             camera: r.position,
             colours: &Green,
+            player: None,
         };
         zones.frame(&frame, &mut fx).unwrap();
     }
@@ -359,6 +364,7 @@ fn the_idle_light_is_a_dynamic_light_record() {
             elapsed: 16,
             camera: [10.0, 2.0, -5.0],
             colours: &Green,
+            player: None,
         };
         zones.frame(&frame, &mut fx).unwrap();
         zones.sync_lights(&mut lights);
@@ -369,4 +375,191 @@ fn the_idle_light_is_a_dynamic_light_record() {
     // Disabled at 1 s: the same record, inactive.
     assert!(!lights.get(id).unwrap().active);
     assert_eq!(lights.len(), 1);
+}
+
+/// The section `text` as `behaviour` reads it, without the test hit keys.
+fn exact(text: &str, behaviour: Behaviour) -> ZoneSection {
+    let config = volya_engine_formats::ltx::parse(text.as_bytes()).unwrap();
+    let name = config.sections().next().unwrap().name().to_owned();
+    ZoneSection::read(config.section(&name).unwrap(), behaviour).unwrap()
+}
+
+/// Runs zone `record` of `section` for `ms` in 10 ms frames with the
+/// player standing at `at` (alive, radius 1.3399 m, at rest; the camera
+/// at its feet): the clocks and effects on the player, and the zones.
+fn with_player(
+    record: &ZoneRecord,
+    section: ZoneSection,
+    at: Vec3,
+    ms: u32,
+) -> (Vec<(u32, PlayerEffect)>, Zones) {
+    let mut fx = effects();
+    let mut zones = Zones::default();
+    zones.create(record, section, 0, &mut fx).unwrap();
+    let player = Target {
+        position: at,
+        radius: 1.3399,
+        alive: true,
+        speed: 0.0,
+    };
+    let mut out = Vec::new();
+    let mut clock = 0;
+    while clock < ms {
+        clock += 10;
+        fx.frame(10, at);
+        let frame = Frame {
+            clock,
+            elapsed: 10,
+            camera: at,
+            colours: &NoColourAnimations,
+            player: Some(player),
+        };
+        zones.frame(&frame, &mut fx).unwrap();
+        out.extend(zones.take_player_effects().into_iter().map(|e| (clock, e)));
+    }
+    (out, zones)
+}
+
+const FLAME: &str = "[zone_flame_small]\nidle_light = off\nawaking_time = 0\n\
+     blowout_time = 1000\naccamulate_time = 0\nvisible_by_detector = on\n\
+     hit_type = burn\nattenuation = 1\neffective_radius = 1.3\nhit_impulse_scale = 0\n\
+     ignore_nonalive = on\nignore_small = off\nignore_artefacts = off\n\
+     disable_time = -1\ndisable_time_small = -1\n";
+
+fn flame(at: Vec3) -> (Vec<(u32, PlayerEffect)>, Zones) {
+    let mut r = record(0, 0, 0);
+    r.shapes = vec![Shape::Sphere {
+        centre: [0.0; 3],
+        radius: 0.642,
+    }];
+    with_player(&r, exact(FLAME, Behaviour::Mbald), at, 3_100)
+}
+
+#[test]
+fn a_fire_burns_the_player_inside_once_per_blowout() {
+    // env 6.1 (M2, M7): P = 15 within 1.3399 m of the centre; with 10 ms
+    // frames the hits come 20, 1030, 2040 ms after it starts awaking, here
+    // at the first scheduled update (10 ms).
+    let (hits, zones) = flame([10.0, 2.3, -5.0]);
+    let clocks: Vec<u32> = hits.iter().map(|(c, _)| *c).collect();
+    assert_eq!(clocks, [30, 1040, 2050, 3060]);
+    for (_, e) in &hits {
+        assert_eq!(e.zone, 7);
+        assert!(e.draws_direction);
+        let h = e.hit.unwrap();
+        assert_eq!((h.kind, h.power, h.bone), (HitType::BURN, 15.0, Some(0)));
+    }
+    assert!(zones.zones()[0].counts());
+}
+
+#[test]
+fn outside_its_shapes_a_zone_stays_idle() {
+    // env 4.1: the player's feet 0.65 m from the centre, outside.
+    let (hits, zones) = flame([10.65, 2.0, -5.0]);
+    assert!(hits.is_empty());
+    assert_eq!(zones.zones()[0].state, State::Idle);
+    assert!(zones.zones()[0].player.is_none());
+}
+
+#[test]
+fn relative_power_falls_to_zero_at_the_reach() {
+    // env 4.3 (M1, M2): R = 0.642 × 1.3 = 0.8346; with a = 0.1 from 1 to
+    // 0.9, then 0.
+    let reach = 0.642 * 1.3;
+    assert_eq!(relative_power(1.0, 0.0, reach), 1.0);
+    assert!((relative_power(1.0, reach / 2.0, reach) * 15.0 - 11.25).abs() < 1e-5);
+    assert_eq!(relative_power(1.0, reach * 1.001, reach), 0.0);
+    assert!((relative_power(0.1, 1.0, 1.0) - 0.9).abs() < 1e-6);
+    assert_eq!(relative_power(0.1, 1.001, 1.0), 0.0);
+}
+
+const RADIATION: &str = "[zone_radioactive_killing]\nidle_light = off\n\
+     awaking_time = 100\nblowout_time = 100\naccamulate_time = 100\n\
+     visible_by_detector = off\nattenuation = 0.1\neffective_radius = 1.0\nperiod = 1\n\
+     hit_type = telepatic\nignore_nonalive = off\nignore_small = off\n\
+     ignore_artefacts = off\ndisable_time = -1\ndisable_time_small = -1\n";
+
+#[test]
+fn a_radiation_zone_hits_with_radiation_once_per_blowout() {
+    // env 6.3 (M3): M 0.05 gives 0.05 at the centre, of type radiation
+    // whatever `hit_type` says, no bone; a blowout every 200 ms.
+    let mut r = record(0, 0, 0);
+    r.class_id = "Z_RADIO".into();
+    r.maximum_power = 0.05;
+    let (hits, _) = with_player(&r, exact(RADIATION, Behaviour::Radio), r.position, 1_000);
+    assert!(hits.len() >= 4, "{hits:?}");
+    for w in hits.windows(2) {
+        assert_eq!(w[1].0 - w[0].0, 200);
+    }
+    let h = hits[0].1.hit.unwrap();
+    assert_eq!((h.kind, h.power, h.bone), (HitType::RADIATION, 0.05, None));
+    assert!(!hits[0].1.draws_direction);
+    // 0.045 at the reach, r = 3.
+    let at = [r.position[0] + 2.999, r.position[1], r.position[2]];
+    let (hits, _) = with_player(&r, exact(RADIATION, Behaviour::Radio), at, 1_000);
+    assert!((hits[0].1.hit.unwrap().power - 0.045).abs() < 1e-4);
+}
+
+const MINCER: &str = "[zone_mincer]\nidle_light = off\nawaking_time = 50\n\
+     blowout_time = 10000\naccamulate_time = 4000\nvisible_by_detector = on\n\
+     body_tearing_sound = x\ntele_height = 10\nhit_type = strike\nattenuation = 1\n\
+     hit_impulse_scale = 0.1\nblowout_explosion_time = 5999\nignore_nonalive = off\n\
+     ignore_small = off\nignore_artefacts = off\ndisable_time = -1\n\
+     disable_time_small = -1\nthrow_in_atten = 1.5\nthrow_in_impulse_alive = 1000\n\
+     blowout_radius_percent = 0.3\nactor_blowout_radius_percent = 0.3\n";
+
+#[test]
+fn a_mincer_hits_the_player_only_in_its_core_at_the_explosion() {
+    // env 6.4 (M5): M 50, core 0.3 × r: 48 at the core's edge.
+    let mut r = record(0, 0, 0);
+    r.maximum_power = 50.0;
+    let section = exact(MINCER, Behaviour::Mincer);
+    let edge = [r.position[0] + 0.9, r.position[1], r.position[2]];
+    let (hits, _) = with_player(&r, section.clone(), edge, 7_000);
+    assert_eq!(hits.len(), 1);
+    let (clock, e) = hits[0];
+    assert!((6_000..6_100).contains(&clock), "{clock}");
+    let h = e.hit.unwrap();
+    assert_eq!((h.kind, h.bone), (HitType::STRIKE, Some(0)));
+    assert!((h.power - 48.0).abs() < 1e-3, "{}", h.power);
+    // Outside the core: pulled, never hit.
+    let out = [r.position[0] + 1.0, r.position[1], r.position[2]];
+    let (hits, zones) = with_player(&r, section, out, 7_000);
+    assert!(hits.is_empty());
+    assert_eq!(zones.zones()[0].state, State::Blowout);
+}
+
+#[test]
+fn zone_hit_types_ignore_case_and_refuse_physic_strike() {
+    // env 1.2.
+    assert_eq!(
+        zone_hit_type("Chemical_Burn").unwrap(),
+        HitType::CHEMICAL_BURN
+    );
+    assert_eq!(zone_hit_type("wound_2").unwrap(), HitType::WOUND_2);
+    assert!(zone_hit_type("physic_strike").is_err());
+    assert!(zone_hit_type("nope").is_err());
+}
+
+#[test]
+fn a_box_shape_holds_points_within_its_faces() {
+    // env 4.1: faces at ± ½ of each axis, 0.001 m of tolerance; the
+    // zone at (10, 2, −5).
+    let mut r = record(0, 0, 0);
+    r.shapes = vec![Shape::Box([
+        [2.0, 0.0, 0.0],
+        [0.0, 4.0, 0.0],
+        [0.0, 0.0, 6.0],
+        [0.0; 3],
+    ])];
+    let mut fx = effects();
+    let mut zones = Zones::default();
+    zones
+        .create(&r, exact(FLAME, Behaviour::Mbald), 0, &mut fx)
+        .unwrap();
+    let z = &zones.zones()[0];
+    assert!(z.contains_point([11.0005, 2.0, -5.0]));
+    assert!(!z.contains_point([11.002, 2.0, -5.0]));
+    assert!(z.contains_point([10.0, 3.9, -7.9]));
+    assert!(!z.contains_point([10.0, 4.1, -5.0]));
 }

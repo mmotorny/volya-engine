@@ -5,7 +5,9 @@
 //! data (BYOA): the zones online at a New Game's start with their idle
 //! effects and sounds (docs/behavior/zone-idle-effects.md section 8,
 //! sound-anomalies.md section 9.1), the galantines switching, the start
-//! weather's ambient effects (weather-ambient-effects.md 2.3, 3), and the
+//! weather's ambient effects (weather-ambient-effects.md 2.3, 3), the
+//! hits of a fire, a radiation zone and a fall on the player
+//! (environment-hits.md 3, 6), and the
 //! frame cost of the zones and their effects (meaningful in release
 //! builds). A campfire's effect drawn is the render-level suite's
 //! (`selftest::zones`). Skips when `VOLYA_GOG_INSTALLER` is unset.
@@ -22,8 +24,8 @@ use volya_engine::core::camera::Angles;
 use volya_engine::core::input::Input;
 use volya_engine::core::pause::GlobalClock;
 use volya_engine::core::sound::system::{Listener, NoDevice, SoundSystem};
-use volya_engine::core::vfs::StdVfs;
 use volya_engine::core::vfs::db::DbVfs;
+use volya_engine::core::vfs::{StdVfs, Vfs};
 use volya_engine::core::zones::{Frame, NoColourAnimations};
 use volya_engine::data::GameData;
 use volya_engine::level::LevelScreen;
@@ -278,6 +280,84 @@ fn first_level_zones_and_weather_effects_from_game_data() {
     );
 }
 
+/// The first level loaded with the player's feet placed at `feet`, then
+/// run for `ms` in 16 ms frames; the level is returned.
+fn placed(
+    tree: &dyn Vfs,
+    data: &GameData,
+    feet: impl Fn(&LevelScreen) -> [f32; 3],
+    ms: u64,
+) -> LevelScreen {
+    let mut level = LevelScreen::load(tree, data, 0).unwrap();
+    let s = level.player().state();
+    let h = level.player().view().eye[1] - s.position[1];
+    let p = feet(&level);
+    level.set_camera([p[0], p[1] + h, p[2]], Angles::default());
+    let mut now = 0;
+    while now < ms {
+        now += 16;
+        level.update(now, &Input::new());
+    }
+    level
+}
+
+/// The position of the first zone of section `section`, and its maximum
+/// power.
+fn zone_at(level: &LevelScreen, section: &str) -> ([f32; 3], f32) {
+    let z = (level.zones().zones().iter())
+        .find(|z| z.section.name == section && z.maximum_power > 0.0)
+        .unwrap();
+    (z.position(), z.maximum_power)
+}
+
+#[test]
+fn environment_hits_from_game_data() {
+    let Some(root) = root() else {
+        return;
+    };
+    let tree = DbVfs::open_game(&root, Some("mods")).unwrap();
+    let data = GameData::read(&tree, None, SIZE).unwrap();
+    // environment-hits.md 9: the first level's fires have M 15; the New
+    // Game state stands at none.
+    let level = placed(&tree, &data, |l| l.player().state().position, 1_000);
+    let c = level.character().unwrap();
+    let (health, radiation) = (c.conditions.health, c.conditions.radiation);
+    assert!(level.zones().zones().iter().all(|z| z.player.is_none()));
+    // 6.1: in a fire, burnt to death within a blowout (P = 15).
+    let level = placed(&tree, &data, |l| zone_at(l, "zone_flame_small").0, 500);
+    assert_eq!(zone_at(&level, "zone_flame_small").1, 15.0);
+    assert!(!level.character().unwrap().conditions.alive());
+    // 6.3: in a killing radiation zone (M 0.05), radiation grows.
+    let level = placed(
+        &tree,
+        &data,
+        |l| zone_at(l, "zone_radioactive_killing").0,
+        2_000,
+    );
+    let c = level.character().unwrap();
+    assert!(
+        c.conditions.radiation > radiation,
+        "{}",
+        c.conditions.radiation
+    );
+    // 3.2: a fall from 40 m above the start hits with `strike`.
+    let level = placed(
+        &tree,
+        &data,
+        |l| {
+            let p = l.player().state().position;
+            [p[0], p[1] + 40.0, p[2]]
+        },
+        4_000,
+    );
+    let c = level.character().unwrap();
+    assert!(
+        c.conditions.health < health - 0.1,
+        "{}",
+        c.conditions.health
+    );
+}
+
 /// The zones' and their effects' frame cost with the camera at the start:
 /// the zones' updates and the effect objects' scheduler pass, 600 frames.
 #[test]
@@ -301,6 +381,7 @@ fn zones_frame_cost_from_game_data() {
             elapsed: 16,
             camera: eye,
             colours: &NoColourAnimations,
+            player: None,
         };
         zones.frame(&f, &mut effects).unwrap();
         let e = t.elapsed();

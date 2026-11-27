@@ -178,8 +178,9 @@ fn the_range_test_is_against_r_plus_rho() {
 fn zone_section(visible: bool) -> ZoneSection {
     let text = format!(
         "[z]\nidle_light = off\nawaking_time = 0\nblowout_time = 0\naccamulate_time = 0\n\
-         visible_by_detector = {}\n",
-        if visible { "on" } else { "off" }
+         visible_by_detector = {}\n{}",
+        if visible { "on" } else { "off" },
+        crate::zones::TEST_HIT_KEYS
     );
     ZoneSection::read(config(&text).section("z").unwrap(), Behaviour::Mbald).unwrap()
 }
@@ -204,6 +205,7 @@ fn zones(list: &[(&str, [f32; 3], f32, bool)]) -> Zones {
             disabled_time: 0,
             start_time_shift: 0,
             always_fast: false,
+            maximum_power: 0.0,
         };
         zones
             .create(&record, zone_section(visible), 0, &mut fx)

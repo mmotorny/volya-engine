@@ -356,6 +356,19 @@ pub struct View {
     pub up: Vec3,
 }
 
+/// A movement update's damage fraction `f` (environment-hits.md 3.1),
+/// made when `|f| ≥` [`LEAST_DAMAGE`]: the fall hit's power, and whether
+/// the last ground material touched is deadly (its type `radiation`,
+/// otherwise `strike`; 3.2).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FallDamage {
+    pub fraction: f32,
+    pub deadly: bool,
+}
+
+/// The least `|f|` that makes a fall hit (environment-hits.md 3.2).
+pub const LEAST_DAMAGE: f32 = 1e-7;
+
 /// The player in a level.
 #[derive(Clone, Debug)]
 pub struct Player {
@@ -411,6 +424,12 @@ pub struct Player {
     bob_fade: f32,
     /// The landing effect's time and strength (9.2).
     landing_effect: Option<(f32, f32)>,
+    /// The contact speed kept for the next movement update: the largest
+    /// impact speed of the steps since (environment-hits.md 3.1).
+    contact_speed: f32,
+    /// The latest movement update's damage fraction (environment-hits.md
+    /// 3.1).
+    damage: Option<FallDamage>,
     /// The previous frame's eye and direction, for camera inertia.
     inert: Option<(Vec3, Vec3)>,
     view: View,
@@ -499,6 +518,8 @@ impl Player {
             bob_time: 0.0,
             bob_fade: 0.0,
             landing_effect: None,
+            contact_speed: 0.0,
+            damage: None,
             inert: None,
             view: View {
                 eye: [0.0; 3],
@@ -520,6 +541,7 @@ impl Player {
     pub fn place(&mut self, position: Vec3, angles: Angles) {
         self.body.set_position(position);
         self.body.set_velocity([0.0; 3]);
+        self.contact_speed = 0.0;
         self.angles = angles;
         self.heading = angles.yaw;
         self.eye_feet = position[1];
@@ -578,6 +600,7 @@ impl Player {
         self.last_ms = now;
         self.frame_time = 0.0;
         self.jump_started = false;
+        self.damage = None;
     }
 
     /// Whether flags `f` run (4.1) without the ability part; leaning and
@@ -646,6 +669,7 @@ impl Player {
         self.clock = self.next_clock.take().unwrap_or(now as u32);
         self.look(request, dt_f);
         let (a, take_off) = self.movement_update(world, now, request, dt_m);
+        self.damage = self.damage_fraction(world, dt_f);
         let a = scale(a, slowdown_step(&mut self.slowdown, dt_m));
         self.jump_started = take_off;
         self.hand_over(a);
@@ -661,6 +685,40 @@ impl Player {
         }
         self.view = self.compute_view(dt_f);
         self.view
+    }
+
+    /// The movement update's damage fraction (environment-hits.md 3.1):
+    /// the contact speed, read and cleared, above `ph_crash_speed_min`,
+    /// plus `dt_f` × the damage rate of a deadly last ground material.
+    /// The contact speed is the largest impact speed (level-cform.md 4.4)
+    /// of the physics steps since the previous update (our reading of "read
+    /// once per update and cleared").
+    fn damage_fraction(&mut self, world: &CollisionWorld, dt_f: f32) -> Option<FallDamage> {
+        let v = std::mem::take(&mut self.contact_speed);
+        let (min, max) = (self.config.crash_speed_min, self.config.crash_speed_max);
+        let mut f = if v > min {
+            (v - min) / (max - min)
+        } else {
+            0.0
+        };
+        let deadly = self
+            .body
+            .ground_material()
+            .and_then(|m| world.materials().get(m as usize))
+            .filter(|m| m.has(DEADLY));
+        if let Some(m) = deadly {
+            f += dt_f * m.damage_rate;
+        }
+        (f.abs() >= LEAST_DAMAGE).then_some(FallDamage {
+            fraction: f,
+            deadly: deadly.is_some(),
+        })
+    }
+
+    /// The latest frame's damage fraction (environment-hits.md 3.1), for
+    /// the fall hit (3.2).
+    pub fn damage(&self) -> Option<FallDamage> {
+        self.damage
     }
 
     /// Section 8: mouse and keyboard look, pitch limited.
@@ -1016,6 +1074,7 @@ impl Player {
         if c.ground.is_some() {
             self.last_ground = c.ground;
         }
+        self.contact_speed = self.contact_speed.max(c.impact_speed);
         // climbing.md 2.4: the ladders the physics world finds near the
         // player. TODO(#392): when it does is believed, not traced: here
         // the ladder's sphere (its radius about C) meeting the player's

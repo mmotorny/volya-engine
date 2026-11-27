@@ -59,7 +59,7 @@ use crate::core::sound::player_body::{
 use crate::core::vfs::{self, Vfs};
 use crate::core::visibility::Frustum;
 use crate::core::weather::{Environment, Weather, texture_name as weather_texture_name};
-use crate::core::zones::{Behaviour, SoundEvent, ZoneRecord, ZoneSection, Zones};
+use crate::core::zones::{Behaviour, SoundEvent, Target, ZoneRecord, ZoneSection, Zones};
 use crate::data::GameData;
 use crate::detector::{DetectorReport, DetectorSound, PlayerDetectors};
 use crate::footsteps::{self, MaterialPairs, PlayerFootsteps};
@@ -2455,6 +2455,7 @@ impl LevelScreen {
         // (climbing.md, conventions): the global clock.
         self.player.set_step_clock(self.global_ms as u32);
         self.player.frame(&self.collision, now, &request);
+        self.fall_hit();
         if let Some(c) = &mut self.character {
             if self.player.jump_started() {
                 c.jump();
@@ -2513,11 +2514,21 @@ impl LevelScreen {
         if let Some(effects) = &mut self.effects {
             let eye = self.player.view().eye;
             effects.frame(elapsed, eye);
+            let s = self.player.state();
+            let player = self.character.as_ref().map(|c| Target {
+                position: s.position,
+                // TODO(#684, env 4.2, 10): the radius of the item in the
+                // active slot is unestablished; only the model's counts.
+                radius: self.player_sphere.1,
+                alive: c.conditions.alive(),
+                speed: geometry::length(s.velocity),
+            });
             let frame = crate::core::zones::Frame {
                 clock: effects.clock(),
                 elapsed: elapsed as u32,
                 camera: eye,
                 colours: self.lights.animations(),
+                player,
             };
             if let Err(e) = self.zones.frame(&frame, effects) {
                 self.fatal.get_or_insert(e);
@@ -2539,6 +2550,7 @@ impl LevelScreen {
             self.detectors
                 .frame(effects.clock(), elapsed as u32, feet, eye, &self.zones);
         }
+        self.zone_hits();
         // The idle lights of zones updated or created this frame.
         self.sync_zone_lights();
         // sky.md 7.3, k_t from the game clock.
@@ -2648,6 +2660,57 @@ impl LevelScreen {
         c.hit(&hit).inspect_err(|e| {
             self.fatal.get_or_insert(e.to_string());
         })
+    }
+
+    /// The fall hit of the frame's movement update (environment-hits.md
+    /// 3.2): while the player is alive, its damage fraction as the power,
+    /// type `radiation` on deadly ground and `strike` otherwise. The hit
+    /// event's round trip is unestablished (`env` 2, 10): it arrives at
+    /// once. TODO(#702): its bone, direction and cause from the physics
+    /// contact; it has no bone.
+    fn fall_hit(&mut self) {
+        let Some(d) = self.player.damage() else {
+            return;
+        };
+        if !self
+            .character
+            .as_ref()
+            .is_some_and(|c| c.conditions.alive())
+        {
+            return;
+        }
+        let kind = if d.deadly {
+            HitType::RADIATION
+        } else {
+            HitType::STRIKE
+        };
+        let _ = self.hit(Hit {
+            kind,
+            power: d.fraction,
+            bone: None,
+            armour_piercing: 0.0,
+        });
+    }
+
+    /// The zones' effects on the player this frame (environment-hits.md
+    /// 6), in order: a bald or burning fuzz zone's three direction draws
+    /// from the shared generator (6.1 item 1), then its hit, at once (the
+    /// round trip, `env` 2, is unestablished). TODO(#701): the hits'
+    /// directions and impulses act through the physics.
+    fn zone_hits(&mut self) {
+        for e in self.zones.take_player_effects() {
+            let Some(c) = &mut self.character else {
+                return;
+            };
+            if e.draws_direction {
+                for _ in 0..3 {
+                    c.random.rand15();
+                }
+            }
+            if let Some(hit) = e.hit {
+                let _ = self.hit(hit);
+            }
+        }
     }
 
     /// `g_game_difficulty` is `name` (player-hits.md 3 items 1, 2): the

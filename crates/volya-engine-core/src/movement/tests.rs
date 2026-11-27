@@ -1039,3 +1039,36 @@ fn a_hit_cancels_the_sprint() {
     run(&mut p, &world, now, &FORWARD, 0.05);
     assert!(!p.state().flags.sprint && !p.state().sprint_requested);
 }
+
+/// The damage fractions of the frames of a fall from `height` m onto the
+/// floor, in frames of 16 ms for 4 s.
+fn fall_damage(height: f32) -> Vec<FallDamage> {
+    let world = floor();
+    let mut p = Player::new(
+        config(),
+        settings(),
+        [0.0, height, 0.0],
+        Angles::default(),
+        0,
+    );
+    let mut out = Vec::new();
+    let mut now = 0;
+    for _ in 0..250 {
+        now += 16;
+        p.frame(&world, now, &Request::default());
+        out.extend(p.damage());
+    }
+    out
+}
+
+#[test]
+fn a_hard_landing_makes_one_damage_fraction() {
+    // environment-hits.md 3.1 (M4): a fall from rest reaches 14 m/s after
+    // 4.995 m and 30 m/s after 22.94 m (less the drag): from 3 m nothing,
+    // from 40 m one fraction above 1, of the update after the impact.
+    assert!(fall_damage(3.0).is_empty());
+    let d = fall_damage(40.0);
+    assert_eq!(d.len(), 1, "{d:?}");
+    assert!(!d[0].deadly);
+    assert!(d[0].fraction > 1.0 && d[0].fraction < 1.7, "{d:?}");
+}
