@@ -442,16 +442,30 @@ export const tests = {
     down("ArrowRight");
     await until((s) => turnedBy(s) > 2.9, "the right arrow to turn round", 3000);
     up("ArrowRight");
+    // The page asks for unadjusted movement (input.md, The level's
+    // controls); each request's options are recorded.
+    const root = document.documentElement;
+    const requests = [];
+    const real = root.requestPointerLock;
+    if (real) {
+      root.requestPointerLock = function (options) {
+        requests.push(options);
+        return real.call(this, options);
+      };
+    }
     // Headless Chrome grants no pointer lock: then it is stubbed (the
     // lock element, its request and exit, each exit's change event), so the
-    // page's exit path runs.
-    const root = document.documentElement;
+    // page's exit path runs. The stub rejects unadjusted movement as
+    // unsupported, so the fallback to a plain lock is what locks.
     let stubbed = null;
     const stub = () => {
       stubbed = null;
+      requests.length = 0;
       const change = () => document.dispatchEvent(new Event("pointerlockchange"));
       Object.defineProperty(document, "pointerLockElement", { get: () => stubbed, configurable: true });
-      root.requestPointerLock = () => {
+      root.requestPointerLock = (options) => {
+        requests.push(options);
+        if (options?.unadjustedMovement) return Promise.reject(new DOMException("unsupported", "NotSupportedError"));
         stubbed = root;
         change();
         return Promise.resolve();
@@ -472,6 +486,10 @@ export const tests = {
     if (!granted) {
       stub();
       clickAt([512, 600]);
+      for (let i = 0; i < 25 && !document.pointerLockElement; i++) await sleep(20);
+      assertEqual(JSON.stringify(requests), '[{"unadjustedMovement":true},null]',"an unadjusted request, then a plain one");
+    } else if (real) {
+      assert(requests[0]?.unadjustedMovement === true, `the lock asked for unadjusted movement: ${JSON.stringify(requests)}`);
     }
     assert(document.pointerLockElement === root, "the pointer locked");
     down("KeyW");
@@ -481,6 +499,7 @@ export const tests = {
     await live(false);
     assert(!document.pointerLockElement, "the pointer released");
     if (!granted) unstub();
+    else delete root.requestPointerLock;
     await sleep(300);
     s = await state();
     assert(s.inventory && s.level.player.moving, `W walks on under the screen: ${JSON.stringify(s.level.player)}`);

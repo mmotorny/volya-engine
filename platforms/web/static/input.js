@@ -274,9 +274,13 @@ export function startInput(view, send, { onClick = () => {} } = {}) {
     // Mouse and pen. A button pressed or released while another is held
     // arrives as pointermove with `button` set.
     if (event.type === "pointercancel") return;
-    // Mouse look needs pointer lock, which browsers grant on a click.
+    // Mouse look needs pointer lock, which browsers grant on a click. It
+    // asks for unaccelerated movement, as the original reads raw counts
+    // (docs/architecture/input.md); where that is unsupported, a plain lock.
     if (level && event.type === "pointerdown" && event.pointerType === "mouse" && !locked()) {
-      root.requestPointerLock?.()?.catch?.(() => {});
+      root.requestPointerLock?.({ unadjustedMovement: true })?.catch?.((error) => {
+        if (error?.name === "NotSupportedError") root.requestPointerLock()?.catch?.(() => {});
+      });
     }
     if (event.button >= 0 && BUTTONS[event.button]) {
       const pressed = event.type === "pointermove" ? (event.buttons & BUTTON_BITS[event.button]) !== 0 : event.type === "pointerdown";
