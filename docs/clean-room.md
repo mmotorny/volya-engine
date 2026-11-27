@@ -69,7 +69,7 @@ Every dirty agent reads this section with the rest of this file; it is binding a
 **Both roles**
 - Work only in the dirty workspace; never write to the repository (except the reviewer's copy of an approved spec) or to GitHub. Reading issues with `gh` is fine.
 - Never install tools or packages (pip, brew, downloads); use what is set up. If something is missing, report `BLOCKED` with what is needed.
-- Work statically: don't run the shipped game (decided by the user, 2026-11-27); a fact that only a run could establish is recorded as unestablished. The exception is a run the user asks for case by case (as for making captures deterministic under instrumentation, 2026-11-27): it happens on the Windows PC, in the dirty workspace there, and only a reviewed recipe of environment control (options, timings, values supplied; never the program's internals) reaches the clean side.
+- Work statically: don't run the shipped game (decided by the user, 2026-11-27); a fact that only a run could establish is recorded as unestablished.
 - Don't run builds, browser suites or the iOS Simulator (the machine's memory is shared, AGENTS.md); `bazel run //tools/xtask -- spec-lint` is the exception, and so is, on the Windows PC, running a shipped library's black-box harness and its compare mode.
 - Model memory is not a source; every fact comes from the user's game data or the shipped binaries, through a check script in the dirty workspace.
 - Report only the verdict line your role defines, never findings.
