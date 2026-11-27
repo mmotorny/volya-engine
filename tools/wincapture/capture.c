@@ -1512,6 +1512,40 @@ static void drrun_output(struct run *r, const char *raw, char *first, size_t n) 
     free(data);
 }
 
+static long run_printing(const char *program, char *command, const char *dir,
+                         const char *output, int seconds);
+
+/* DynamoRIO detached from the game once its first frame is held
+ * (drconfig -detach, DynamoRIO's documented detach), so the rest of the
+ * run is native: the start-up's counter reads, the seed's among them,
+ * were the client's; later ones read the processor's counter (a 32-bit
+ * process under DynamoRIO through a level load ended with an error, on
+ * the PC). An event once the client saw the detach end. */
+static int detach(struct run *r, const char *exe_dir, const char *work) {
+    char drconfig[MAX_PATH], output[MAX_PATH], command[512];
+    join(drconfig, sizeof drconfig, exe_dir, "dynamorio\\bin32\\drconfig.exe");
+    join(output, sizeof output, work, "drconfig-output.txt");
+    snprintf(command, sizeof command, "\"%s\" -detach %lu", drconfig, (unsigned long)r->pid);
+    say("Detaching DynamoRIO from the game (%lld counter reads substituted so far):",
+        (long long)load(&r->clock->counter_reads));
+    long code = run_printing(drconfig, command, exe_dir, output, 120);
+    /* drconfig waits for the detach to end; the client's end mark comes
+     * from DynamoRIO's exit event, which a detach runs too (believed). */
+    ULONGLONG until_ms = GetTickCount64() + 10000;
+    while (load(&r->clock->counter_detached) != 2 && !ended(r) && GetTickCount64() < until_ms) {
+        Sleep(5);
+    }
+    say("The client's detach state %lld (2: ended)", (long long)load(&r->clock->counter_detached));
+    if (load(&r->clock->counter_detached) == 0 || (load(&r->clock->counter_detached) == 1 && code)) {
+        return fail("DynamoRIO did not detach from the game (drconfig's exit code %ld, the "
+                    "client's detach state %lld%s)",
+                    code, (long long)load(&r->clock->counter_detached),
+                    ended(r) ? ", the game ended" : "");
+    }
+    event(r, "DynamoRIO detached from the game");
+    return 1;
+}
+
 /* One run of the game: `mode` "check" or "full", its outputs in
  * work\runs\<mode>-<n>\. */
 static int run_once(const char *exe_dir, const char *game, const char *work, const char *mode,
@@ -1702,6 +1736,7 @@ static int run_once(const char *exe_dir, const char *game, const char *work, con
         if ((uint64_t)load(&r.clock->start_ticks) >= r.clock->first_frame) {
             say("WARNING: more than the plan's first_frame_ms: runs may differ from here on");
         }
+        ok = detach(&r, exe_dir, work);
     }
     ok = ok && steer(&r, !strcmp(mode, "full"), written);
     double seconds = (GetTickCount64() - started_ms) / 1000.0;

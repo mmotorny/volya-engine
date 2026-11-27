@@ -214,6 +214,7 @@ filegroup(
     name = "runtime",
     srcs = [
         "License.txt",
+        "bin32/drconfig.exe",
         "bin32/drconfiglib.dll",
         "bin32/drinjectlib.dll",
         "bin32/drrun.exe",

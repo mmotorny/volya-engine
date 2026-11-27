@@ -16,7 +16,9 @@
  * returns a larger value than the one before, and two runs that read it at
  * the same points of the frame clock read the same values
  * (docs/behavior/original-determinism.md section 7, rule 1). `rdtscp`'s
- * processor number (ecx) reads 0.
+ * processor number (ecx) reads 0. The driver detaches DynamoRIO once the
+ * first frame is held; from then on the program reads the processor's
+ * counter.
  *
  * Generic environment control (docs/clean-room.md): it transforms an
  * instruction wherever it occurs in the game's folder and records nothing
@@ -125,9 +127,28 @@ static void fail(int code, const char *why) {
     dr_abort_with_code(3);
 }
 
+static int verbose;
+
 static void say_total(void) {
     dr_fprintf(STDERR, "volya counter client: %lld reads substituted\n",
                (long long)__atomic_load_n(&clock_->counter_reads, __ATOMIC_SEQ_CST));
+}
+
+/* A detach (the driver asks for one after the first frame): 1 when it
+ * starts, 2 at its end (DynamoRIO's exit event, which a detach also
+ * runs); the program then runs natively, its counter reads the
+ * processor's. */
+static void detaching(void) {
+    __atomic_store_n(&clock_->counter_detached, 1, __ATOMIC_SEQ_CST);
+}
+
+static void exiting(void) {
+    int64_t one = 1;
+    __atomic_compare_exchange_n(&clock_->counter_detached, &one, 2, false, __ATOMIC_SEQ_CST,
+                                __ATOMIC_SEQ_CST);
+    if (verbose) {
+        say_total();
+    }
 }
 
 /* Options: the game's folder, then `verbose` for the self-test (a line at
@@ -143,7 +164,7 @@ DR_EXPORT void dr_client_main(client_id_t id, int argc, const char *argv[]) {
     if (clock_->magic != FRAMECLOCK_MAGIC || clock_->version != FRAMECLOCK_VERSION) {
         fail(-2, "the frame clock's shared memory is of another version");
     }
-    int verbose = argc == 3 && argv[2][0] == 'v';
+    verbose = argc == 3 && argv[2][0] == 'v';
     if (argc != 2 && !verbose) {
         fail(-1, "usage: counter.dll <game folder> [verbose]");
     }
@@ -161,9 +182,10 @@ DR_EXPORT void dr_client_main(client_id_t id, int argc, const char *argv[]) {
     folder_len = n;
 
     dr_register_bb_event(block);
+    dr_register_pre_detach_event(detaching);
+    dr_register_exit_event(exiting);
     if (verbose) {
         dr_fprintf(STDERR, "volya counter client: started, %d options\n", argc - 1);
-        dr_register_exit_event(say_total);
     }
     __atomic_store_n(&clock_->counter_attached, 1, __ATOMIC_SEQ_CST);
 }
