@@ -17,7 +17,7 @@ data; everything it writes is game assets and stays on this machine.
 
 check: the title menu only; full: every view. N runs (default 2), compared.
 DIR of the game: default the install's registry entry. Work folder: default
-C:\volyacapture (no dash or space). Results: <work>\runs\. The game runs
+%TEMP%\volyacapture (no dash or space). Results: <work>\runs\. The game runs
 full screen at the plan's size; keep the machine untouched while it runs
 (keys go to the game's window, which must stay in front).
 

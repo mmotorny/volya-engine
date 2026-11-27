@@ -20,7 +20,7 @@
  * Its plan, plan.txt beside it, comes from tests/fidelity/views.rs
  * (`xtask wincapture plan`): the views, their frames, the configuration
  * file's settings and the camera tracks. Everything it writes is below
- * the work folder (default C:\volyacapture): the copy of the install
+ * the work folder (default %TEMP%\volyacapture): the copy of the install
  * (game\), the game's user-data folder (userdata\, made afresh for each
  * run, named by the copy's fsgame.ltx) and each run's outputs
  * (runs\<mode>-<n>\: fidelity\<view>.png and its files, log.txt,
@@ -1675,7 +1675,15 @@ static int default_game(char *out, size_t n) {
 int main(int argc, char **argv) {
     started_ms = GetTickCount64();
     const char *mode = argc > 1 ? argv[1] : "";
-    char game[MAX_PATH] = "", work[MAX_PATH] = "C:\\volyacapture", exe_dir[MAX_PATH];
+    char game[MAX_PATH] = "", work[MAX_PATH] = "", exe_dir[MAX_PATH];
+    {
+        /* The default work folder: the user's temp folder, which this
+           session may clean up (a top-level C:\ folder it may not). */
+        char temp[MAX_PATH];
+        DWORD n = GetTempPathA(sizeof temp, temp);
+        if (n == 0 || n >= sizeof temp) snprintf(temp, sizeof temp, "C:\\Windows\\Temp\\");
+        snprintf(work, sizeof work, "%svolyacapture", temp);
+    }
     int runs = 2;
     for (int i = 2; i < argc; i++) {
         if (!strcmp(argv[i], "--game") && i + 1 < argc) {
