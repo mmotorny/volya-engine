@@ -1556,3 +1556,15 @@ const SECTION_8: &[(&str, Option<&str>, &str)] = &[
     ("vid_mode", Some("1024x768"), "change screen resolution WxH"),
     ("vid_restart", Some(""), "no arguments"),
 ];
+
+#[test]
+fn untyped_generation_counts_only_lines_not_typed() {
+    let mut c = Console::new(files());
+    let (all, untyped) = (c.generation(), c.untyped_generation());
+    c.enter("r__tf_aniso 4");
+    assert_eq!(c.generation(), all + 1);
+    assert_eq!(c.untyped_generation(), untyped);
+    c.exec("r__tf_aniso 8");
+    assert_eq!(c.generation(), all + 2);
+    assert_eq!(c.untyped_generation(), untyped + 1);
+}

@@ -715,11 +715,14 @@ fn a_missing_level_sound_file_is_fatal() {
         data.intro_lengths = vec![0.0; data.intro.items.len()];
         data
     };
-    // The error, and the diagnostic log's end (#356) with its reason.
+    // The error, and the diagnostic log's end (#356) with its reason and
+    // the message, but a fatal error's: the game's log has its report
+    // (#646).
     let fatal = |(e, end): (Option<String>, Vec<(String, String)>), reason: &str| {
         let e = e.expect("fatal");
         assert!(e.contains("rain.ogg"), "{e}");
-        assert_eq!(end, [(reason.to_owned(), e)]);
+        let message = if reason == "fatal" { String::new() } else { e };
+        assert_eq!(end, [(reason.to_owned(), message)]);
     };
     tree.hidden.set(true);
     for sounds in [None, Some(SoundSystem::new(32))] {

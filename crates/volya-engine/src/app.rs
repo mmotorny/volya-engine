@@ -993,10 +993,12 @@ impl App {
         if matches!(self.phase, Some(Phase::Menu(_))) && self.error.as_ref() == Some(&error) {
             return;
         }
-        diagnostics::end("fatal", &error);
+        // The game's log carries the report: the trace only says how the
+        // game ended (docs/architecture/diagnostics.md).
+        diagnostics::end("fatal", "");
         // The report, a fatal message's, is written to the log, then the
         // log file (console-log.md 3.3, 3.8); a browser has no stack trace
-        // of the game to add (#620). The end through the unhandled
+        // of the game to add (#646). The end through the unhandled
         // exception (3.10) adds no stack trace or system error after a
         // report, and writes the file once more.
         let log = self.console.log_mut();

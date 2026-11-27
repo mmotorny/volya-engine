@@ -352,6 +352,8 @@ pub struct Console {
     last_save: Option<String>,
     /// Counts the commands that took effect.
     generation: u64,
+    /// Counts those of them not typed in the console.
+    untyped_generation: u64,
     /// Per command, its executions: with an argument, accepted or not, and
     /// of the bare name (texture-quality-filtering.md 6.1).
     executions: Vec<u64>,
@@ -437,6 +439,7 @@ impl Console {
             console_keys: Vec::new(),
             last_save: None,
             generation: 0,
+            untyped_generation: 0,
             executions: vec![0; COMMANDS.len()],
             log: Log::default(),
             memory: MemoryStatistics::default(),
@@ -461,6 +464,13 @@ impl Console {
     /// Changes whenever a command takes effect (cheap change detection).
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// Changes whenever a command not typed in the console takes effect
+    /// (the options screen's, a configuration file's, a bound key's): a
+    /// typed one is in the log as `~ <line>` (console-log.md 1.3).
+    pub fn untyped_generation(&self) -> u64 {
+        self.untyped_generation
     }
 
     /// The log's lines, oldest first.
@@ -584,6 +594,9 @@ impl Console {
         self.input.executed();
         if result == Exec::Done {
             self.generation += 1;
+            if !typed {
+                self.untyped_generation += 1;
+            }
         }
         result
     }

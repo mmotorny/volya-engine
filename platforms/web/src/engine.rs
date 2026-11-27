@@ -29,9 +29,9 @@ struct Running {
     app: App,
     /// Voices the app started, for the mixer adapter.
     voices: Vec<VoiceId>,
-    /// The console's generation the `settings` event last looked at, and
-    /// the values it recorded.
-    settings: (u64, Vec<String>),
+    /// The console's generations (all, untyped) the `settings` event last
+    /// looked at, and the values then.
+    settings: (u64, u64, Vec<String>),
 }
 
 /// The console's settings the diagnostic log's `settings` event records:
@@ -174,7 +174,11 @@ pub async fn launch() -> Result<serde_json::Value, JsValue> {
     crate::input::set_render(Some(app.video_mode()));
     RUNNING.with(|r| {
         *r.borrow_mut() = Some(Running {
-            settings: (app.console().generation(), values),
+            settings: (
+                app.console().generation(),
+                app.console().untyped_generation(),
+                values,
+            ),
             app,
             voices: Vec::new(),
         })
@@ -375,14 +379,17 @@ pub fn frame(time: f64) {
                 }
             });
         }
-        // A command took effect: the settings again where they changed.
-        let generation = app.console().generation();
+        // A command took effect: the settings again where they changed,
+        // unless only typed commands changed them, which the game's log
+        // records (`~ <line>`, docs/architecture/diagnostics.md).
+        let console = app.console();
+        let (generation, untyped) = (console.generation(), console.untyped_generation());
         if logged.0 != generation {
             let values = settings(app);
-            if values != logged.1 {
+            if values != logged.2 && logged.1 != untyped {
                 log_settings(&values);
             }
-            *logged = (generation, values);
+            *logged = (generation, untyped, values);
         }
         crate::input::set_render(Some(app.video_mode()));
         // The game was unmounted under the app.
