@@ -9,8 +9,9 @@
 //!
 //! Where our renderer has a choice, the replay makes it: the alpha test as
 //! our programs' `a · 255` against the reference, the LOD bias through
-//! `textureSampleBias`, fog as the blend with a factor interpolated from the
-//! vertices, the gamma ramp through [`RampPass`]. Direct3D 9's pixel
+//! `textureSampleBias`, vertex fog as the blend with a factor interpolated
+//! from the vertices, the gamma ramp through [`RampPass`]; table fog, which
+//! our programs never meet, per pixel as Direct3D 9's. Direct3D 9's pixel
 //! centres are at integer coordinates, so positions are moved half a pixel
 //! (our UI and world programs make no such move). A state the replay doesn't
 //! model at a value other than the one it assumes fails the case rather than

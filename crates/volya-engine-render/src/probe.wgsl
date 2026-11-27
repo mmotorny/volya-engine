@@ -16,8 +16,8 @@ struct Probe {
     // arguments (D3DTA).
     color_op: vec4<f32>,
     alpha_op: vec4<f32>,
-    // x: fog off (0), from the specular alpha (1), linear in z (2); y: its
-    // start, z: its end.
+    // x: fog off (0), from the specular alpha (1), linear in the pixel's z
+    // (2); y: its start, z: its end.
     fog: vec4<f32>,
     // rgb: the fog colour.
     fog_color: vec4<f32>,
@@ -61,13 +61,11 @@ fn vs(
     out.diffuse = color(diffuse);
     out.specular = color(specular);
     out.uv = uv;
-    // The factor at the vertex, interpolated, as our programs' fog.
+    // Vertex fog: the factor at the vertex, interpolated, as our programs'
+    // fog. Table fog is per pixel (fs).
     out.fog = 1.0;
     if probe.fog.x == 1.0 {
         out.fog = out.specular.a;
-    } else if probe.fog.x == 2.0 {
-        let f = probe.fog;
-        out.fog = clamp((f.z - position.z) / (f.z - f.y), 0.0, 1.0);
     }
     return out;
 }
@@ -122,8 +120,16 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
     }
     // The pixel result clamped, then fog, as world.wgsl's finish.
     var rgb = saturate(c);
+    var fog = in.fog;
+    if probe.fog.x == 2.0 {
+        // FOGTABLEMODE LINEAR: Direct3D 9's table fog, per pixel on the
+        // pixel's z (the window depth); our programs never meet it
+        // (static-shading.md 9.3: table fog is never enabled).
+        let f = probe.fog;
+        fog = clamp((f.z - in.clip.z) / (f.z - f.y), 0.0, 1.0);
+    }
     if probe.fog.x != 0.0 {
-        rgb = in.fog * rgb + (1.0 - in.fog) * probe.fog_color.rgb;
+        rgb = fog * rgb + (1.0 - fog) * probe.fog_color.rgb;
     }
     return vec4(rgb, saturate(a));
 }
