@@ -1525,17 +1525,19 @@ static int compare(const char *work, const char *mode, int runs) {
             if (sscanf(line, "%64s %31s %255s", hash, size, name) != 3) {
                 continue;
             }
-            uint8_t *other;
-            size_t n;
             char result[512];
             int same = 0;
-            if (read_file(b, &other, &n)) {
-                other = realloc(other, n + 1);
-                other[n] = 0;
-                char want[400];
-                snprintf(want, sizeof want, "%s %s %s\n", hash, size, name);
-                same = strstr((char *)other, want) != NULL;
-                free(other);
+            /* The same line in run k's hashes, both read as text (CR LF on
+             * Windows: a binary read of one never matched, #762). */
+            FILE *fb = fopen(b, "r");
+            char other_line[512];
+            while (fb && !same && fgets(other_line, sizeof other_line, fb)) {
+                char h2[65], s2[32], n2[256];
+                same = sscanf(other_line, "%64s %31s %255s", h2, s2, n2) == 3 &&
+                       !strcmp(h2, hash) && !strcmp(s2, size) && !strcmp(n2, name);
+            }
+            if (fb) {
+                fclose(fb);
             }
             if (same) {
                 snprintf(result, sizeof result, "run 1 = run %d  %s: byte-identical", k, name);
