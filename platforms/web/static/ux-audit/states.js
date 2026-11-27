@@ -149,7 +149,7 @@ export const SECTIONS = [
     states: [
       { id: "console-level", name: "Level: Console beside Menu", level: {}, devices: TOUCH },
       { id: "console-menu", name: "Main menu: Console at the top left", console: { menu: true }, devices: TOUCH },
-      { id: "console-typing", name: "Open over the level, the keyboard up, a line typed", console: { keyboard: true }, devices: TOUCH },
+      { id: "console-typing", name: "Open over the level, the keyboard up, a line typed (landscape: the picture lifted, the prompt above the strip)", console: { keyboard: true }, devices: TOUCH },
       { id: "console-key-held", name: "A strip key held", console: { keyboard: true, down: "up" }, devices: TOUCH },
       {
         id: "console-paste",

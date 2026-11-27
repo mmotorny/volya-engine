@@ -566,6 +566,13 @@ button.touch-button.down .touch-edges {
   pointer-events: none;
 }
 
+/* The game's picture lifted while the console's key strip would cover its
+   prompt line (console-touch.js, #682); never on upright phones, where
+   both are turned instead. */
+html[data-console-lift] :is(canvas#view, #console-touch) {
+  transform: translateY(calc(-1 * var(--console-lift)));
+}
+
 /* The console's layer takes only the taps of what it shows. */
 #console-touch {
   pointer-events: none;

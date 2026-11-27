@@ -206,8 +206,10 @@ if (state.level) {
     );
   }
   if (keyboard) {
-    // About the height of the iPhone's keyboard (our estimate).
-    const height = device.height > device.width ? 300 : 200;
+    // The iPhone's keyboard: in landscape 244 px of Safari's page (measured,
+    // iOS 27.2 Simulator, iPhone 17 Pro Max; console-touch.js), upright
+    // about 300 (our estimate). In landscape the picture lifts (#682).
+    const height = device.height > device.width ? 300 : 244;
     document.body.insertAdjacentHTML(
       "beforeend",
       `<div class="ux-stand-in ux-keyboard" style="height: ${height}px">Device keyboard</div>`,

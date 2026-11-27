@@ -24,6 +24,9 @@
 //   characters no key types do nothing there. The keyboard's Backspace and
 //   Return are Backspace and Enter; its own paste is what Insert does with
 //   the pasted text.
+// - While the keyboard is up, the game's picture is lifted as far as the
+//   strip would cover the console's prompt line (on landscape phones; the
+//   top log rows go off screen; #682).
 // - A key strip above the device's keyboard for the keys it lacks: Esc,
 //   Tab, Up, Down, Page Up, Page Down and Paste (Insert). Each is held
 //   from its press to its release, so the console's own key repeat
@@ -170,23 +173,49 @@ export function createConsoleTouch(send, keys, { call = null, touch = false } = 
     if (!keyStrip) releaseAll();
     strip.hidden = !keyStrip;
     if (keyStrip) place();
+    else lift(0);
+  };
+  // The game's picture (the canvas, and this layer with it) lifted by
+  // `px` CSS pixels (#682, style.css); input.js maps touches through the
+  // canvas's box, so they follow it.
+  const lift = (px) => {
+    const html = document.documentElement;
+    if (px > 0) {
+      html.style.setProperty("--console-lift", `${px}px`);
+      html.dataset.consoleLift = "";
+    } else {
+      html.style.removeProperty("--console-lift");
+      delete html.dataset.consoleLift;
+    }
   };
   // At the visual viewport's bottom, which the device's keyboard raises
-  // (documented: the Visual Viewport API; that iOS shrinks it for the
-  // keyboard is believed, not measured).
+  // (documented: the Visual Viewport API; measured with iOS 27.2 in the
+  // Simulator, iPhone 17 Pro Max, Safari in landscape: the visual viewport
+  // shrank from 376 to 132 CSS pixels high, offset 0, the layout viewport
+  // unchanged). Where the strip would cover the console's prompt line, the
+  // bottom of the console's half (console-window.md 4.1, 4.3), the picture
+  // is lifted so the line sits just above the strip and the top log rows
+  // go off screen (the user's decision on #682). Not on upright phones: the
+  // frame is turned there and the console's half is the screen's right.
   const place = () => {
     if (strip.hidden) return;
+    let top;
     if (keyboardHeight !== null) {
       Object.assign(strip.style, { top: "auto", bottom: `${keyboardHeight}px`, width: "100%" });
-      return;
+      top = innerHeight - keyboardHeight - strip.offsetHeight;
+    } else {
+      const v = globalThis.visualViewport;
+      const bottom = v ? v.offsetTop + v.height : innerHeight;
+      top = bottom - strip.offsetHeight;
+      Object.assign(strip.style, {
+        top: `${top}px`,
+        left: `${v ? v.offsetLeft : 0}px`,
+        width: `${v ? v.width : innerWidth}px`,
+      });
     }
-    const v = globalThis.visualViewport;
-    const bottom = v ? v.offsetTop + v.height : innerHeight;
-    Object.assign(strip.style, {
-      top: `${bottom - strip.offsetHeight}px`,
-      left: `${v ? v.offsetLeft : 0}px`,
-      width: `${v ? v.width : innerWidth}px`,
-    });
+    // Turned, the layer's box on screen is its layout box's width high.
+    const turned = Math.abs(root.getBoundingClientRect().width - root.offsetWidth) > 1;
+    lift(turned ? 0 : Math.max(0, Math.ceil(root.offsetHeight / 2 - top)));
   };
   globalThis.visualViewport?.addEventListener("resize", place);
   globalThis.visualViewport?.addEventListener("scroll", place);
