@@ -6,8 +6,9 @@
 # a 64-bit process), so box64 runs it all; box64 wraps the arm64 X11, Mesa
 # and font libraries installed here. Wine's x86_64 ELF parts start through
 # binfmt_misc, registered at run time. Both carry the frame clock
-# (docs/testing.md) and come built, as the build context's tarballs of what
-# they install (build/wine_image.bzl, tools/xtask/src/image_part.rs).
+# (docs/testing.md) and come built on the Mac, as the build context's
+# tarballs of what they install (build/wine_image.bzl,
+# tools/xtask/src/image_part.rs).
 FROM debian:trixie-slim
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \

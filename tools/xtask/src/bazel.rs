@@ -4,6 +4,7 @@
 //! Tasks of the Bazel build (docs/architecture/build.md): keeping it at head
 //! (`update`) and removing what deleted worktrees left (`gc`).
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
@@ -13,7 +14,8 @@ use sha2::{Digest, Sha256};
 use super::{Result, cmd, locked_version, output, root, run, step};
 
 /// Moves everything to its latest release: Rust, the crates, Bazel, its
-/// modules, the wasm LLVM and the wasm-bindgen CLI's pin; then the checks
+/// modules, the wasm LLVM, the Wine image's toolchains (llvm-mingw, CMake,
+/// the Debian sysroots) and the wasm-bindgen CLI's pin; then the checks
 /// and the advisories.
 pub fn update() -> Result {
     let module_path = root().join("MODULE.bazel");
@@ -43,6 +45,12 @@ pub fn update() -> Result {
 
     step("wasm LLVM (wasi-sdk)");
     module = update_wasm_llvm(&module)?;
+    step("The Wine image's cross LLVM (llvm-mingw)");
+    module = update_llvm_mingw(&module)?;
+    step("The Wine image's CMake");
+    module = update_cmake(&module)?;
+    step("The Wine image's Debian sysroots");
+    update_sysroots()?;
     fs::write(&module_path, &module).map_err(|e| format!("MODULE.bazel: {e}"))?;
 
     step("Bazel");
@@ -198,6 +206,155 @@ fn update_wasm_llvm(module: &str) -> Result<String> {
     Ok(module)
 }
 
+/// Points `@llvm_mingw` at llvm-mingw's latest release for macOS, with its
+/// checksum.
+fn update_llvm_mingw(module: &str) -> Result<String> {
+    let tag = output(&mut cmd(
+        "gh",
+        &[
+            "api",
+            "repos/mstorsjo/llvm-mingw/releases/latest",
+            "--jq",
+            ".tag_name",
+        ],
+    ))?;
+    let tag = tag.trim();
+    let name = format!("llvm-mingw-{tag}-ucrt-macos-universal");
+    let url =
+        format!("https://github.com/mstorsjo/llvm-mingw/releases/download/{tag}/{name}.tar.xz");
+    if module.contains(&url) {
+        println!("{name} (unchanged)");
+        return Ok(module.to_owned());
+    }
+    let file = std::env::temp_dir().join(format!("{name}.tar.xz"));
+    run(&mut cmd(
+        "curl",
+        &["-sfL", "-o", &file.to_string_lossy(), &url],
+    ))?;
+    let sha = sha256_file(&file)?;
+    let _ = fs::remove_file(&file);
+    let start = module
+        .find("name = \"llvm_mingw\"")
+        .ok_or("MODULE.bazel: no llvm_mingw")?;
+    let (head, block) = module.split_at(start);
+    let block = replace_quoted_after(block, "sha256 = ", &sha)?;
+    let block = replace_quoted_after(&block, "strip_prefix = ", &name)?;
+    let block = replace_quoted_after(&block, "url = ", &url)?;
+    println!("{name}");
+    Ok(format!("{head}{block}"))
+}
+
+/// Points `@cmake` at CMake's latest release for macOS, with its checksum.
+fn update_cmake(module: &str) -> Result<String> {
+    let tag = output(&mut cmd(
+        "gh",
+        &[
+            "api",
+            "repos/Kitware/CMake/releases/latest",
+            "--jq",
+            ".tag_name",
+        ],
+    ))?;
+    let tag = tag.trim();
+    let version = tag.strip_prefix('v').ok_or(format!("tag {tag}"))?;
+    let name = format!("cmake-{version}-macos-universal");
+    let url = format!("https://github.com/Kitware/CMake/releases/download/{tag}/{name}.tar.gz");
+    if module.contains(&url) {
+        println!("{name} (unchanged)");
+        return Ok(module.to_owned());
+    }
+    let file = std::env::temp_dir().join(format!("{name}.tar.gz"));
+    run(&mut cmd(
+        "curl",
+        &["-sfL", "-o", &file.to_string_lossy(), &url],
+    ))?;
+    let sha = sha256_file(&file)?;
+    let _ = fs::remove_file(&file);
+    let start = module
+        .find("name = \"cmake\"")
+        .ok_or("MODULE.bazel: no cmake")?;
+    let (head, block) = module.split_at(start);
+    let block = replace_quoted_after(block, "sha256 = ", &sha)?;
+    let block = replace_quoted_after(&block, "strip_prefix = ", &name)?;
+    let block = replace_quoted_after(&block, "url = ", &url)?;
+    println!("{name}");
+    Ok(format!("{head}{block}"))
+}
+
+/// A Debian suite's packages for an architecture: each one's file in the
+/// archive and SHA-256.
+type DebianIndex = HashMap<String, (String, String)>;
+
+/// Moves `build/debian_sysroots.lock`'s packages (build/debian_sysroot.bzl)
+/// to their suite's current files and checksums, and its snapshot time to
+/// now.
+fn update_sysroots() -> Result {
+    let path = root().join("build/debian_sysroots.lock");
+    let lock = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let suite = lock
+        .lines()
+        .find_map(|l| l.strip_prefix("suite "))
+        .ok_or("debian_sysroots.lock: no suite")?
+        .trim()
+        .to_owned();
+    let now = output(&mut cmd("date", &["-u", "+%Y%m%dT%H%M%SZ"]))?;
+    let mut indexes: HashMap<String, DebianIndex> = HashMap::new();
+    let mut updated = String::new();
+    for line in lock.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let line = match fields.as_slice() {
+            ["snapshot", _] => format!("snapshot {}", now.trim()),
+            [arch, package, _, _] if !arch.starts_with('#') => {
+                if !indexes.contains_key(*arch) {
+                    indexes.insert(arch.to_string(), debian_index(&suite, arch)?);
+                }
+                let (file, sha) = indexes[*arch]
+                    .get(*package)
+                    .ok_or(format!("{suite} {arch}: no package {package}"))?;
+                format!("{arch} {package} {file} {sha}")
+            }
+            _ => line.to_owned(),
+        };
+        updated.push_str(&line);
+        updated.push('\n');
+    }
+    let count = updated.lines().filter(|l| l.contains(" pool/")).count();
+    fs::write(&path, updated).map_err(|e| format!("{}: {e}", path.display()))?;
+    println!("{suite}: {count} packages");
+    Ok(())
+}
+
+/// `suite`'s main packages for `arch`, from the archive's index.
+fn debian_index(suite: &str, arch: &str) -> Result<DebianIndex> {
+    let file = std::env::temp_dir().join(format!("volya-debian-{suite}-{arch}.gz"));
+    let url = format!("https://deb.debian.org/debian/dists/{suite}/main/binary-{arch}/Packages.gz");
+    run(&mut cmd(
+        "curl",
+        &["-sfL", "-o", &file.to_string_lossy(), &url],
+    ))?;
+    let index = output(&mut cmd("gzip", &["-dc", &file.to_string_lossy()]));
+    let _ = fs::remove_file(&file);
+    Ok(parse_debian_index(&index?))
+}
+
+fn parse_debian_index(index: &str) -> DebianIndex {
+    index
+        .split("\n\n")
+        .filter_map(|stanza| {
+            let field = |name: &str| {
+                stanza
+                    .lines()
+                    .find_map(|l| l.strip_prefix(name))
+                    .map(|v| v.trim().to_owned())
+            };
+            Some((
+                field("Package: ")?,
+                (field("Filename: ")?, field("SHA256: ")?),
+            ))
+        })
+        .collect()
+}
+
 fn sha256_file(path: &Path) -> Result<String> {
     let mut file = fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut hasher = Sha256::new();
@@ -285,6 +442,20 @@ mod tests {
         assert!(module.contains("\"platforms\", version = \"1.0.0\""));
         let module = replace_quoted_after(&module, "versions = [", "1.100.0").unwrap();
         assert!(module.contains("versions = [\"1.100.0\"]"));
+    }
+
+    #[test]
+    fn reads_a_debian_index() {
+        let index = "Package: libc6\nVersion: 2.41-12\nFilename: pool/main/g/glibc/libc6_2.41-12_amd64.deb\nSHA256: ab12\n\nPackage: zlib1g\nFilename: pool/main/z/zlib/zlib1g_1.3_amd64.deb\nSHA256: cd34\n";
+        let packages = parse_debian_index(index);
+        assert_eq!(packages.len(), 2);
+        assert_eq!(
+            packages["libc6"],
+            (
+                "pool/main/g/glibc/libc6_2.41-12_amd64.deb".to_owned(),
+                "ab12".to_owned()
+            )
+        );
     }
 
     #[test]

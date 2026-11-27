@@ -5,7 +5,8 @@ load("@gog_installer//:defs.bzl", "GOG_INSTALLER")
 load("//build:checks.bzl", "volya_checks")
 load("//build:rust.bzl", "LINTS", "volya_binary")
 load("@rules_rust//rust:defs.bzl", "rust_test")
-load("//build:wine_image.bzl", "image_part")
+load("//build:wine_image.bzl", "box64_part", "wine_part")
+load("@rules_cc//cc:cc_static_library.bzl", "cc_static_library")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -63,7 +64,7 @@ volya_binary(
 # with its parts', tags the image, wine.rs).
 exports_files(["wine/Containerfile"])
 
-# The Wine image's parts' tool (build/wine_image.bzl): its build scripts,
+# The Wine image's parts' tool (build/wine_image.bzl): its build steps,
 # so only a change to them builds the parts again.
 volya_binary(
     name = "image-part",
@@ -76,21 +77,29 @@ volya_binary(
 )
 
 # The parts, `manual`: built when an image needs them (wine.rs), not by
-# `//...`; Wine's build takes about an hour.
-image_part(
+# `//...`.
+wine_part(
     name = "wine-part",
     srcs = ["@wine_src//file"],
-    part = "wine",
+    sysroot = "@sysroot_amd64//:sysroot",
+    sysroot_files = "@sysroot_amd64//:files",
     tags = ["manual"],
 )
 
-image_part(
+box64_part(
     name = "box64-part",
-    srcs = [
-        "//third_party/box64:frame-clock.patch",
-        "@box64_src//file",
-    ],
-    part = "box64",
+    srcs = ["@box64_src//:files"],
+    sysroot = "@sysroot_arm64//:sysroot",
+    sysroot_files = "@sysroot_arm64//:files",
+    tags = ["manual"],
+)
+
+# FreeType for this machine, the one library Wine's build tools link
+# (`sfnt2fon` makes its bitmap fonts), with its own dependencies in one
+# archive.
+cc_static_library(
+    name = "host-freetype",
+    deps = ["@freetype"],
     tags = ["manual"],
 )
 

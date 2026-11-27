@@ -2,41 +2,114 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The Wine image's parts (docs/architecture/build.md, Game data): Wine and
-box64 each built as an action, in a container (`//tools/xtask:image-part`),
-into a tarball of what they install, keyed on their sources and the tool
-(which holds the build scripts), so the disk cache keeps them across
-worktrees and restarts. The image (`tools/xtask/wine/Containerfile`) only
-adds them."""
+box64, each built on this machine by one action (`//tools/xtask:image-part`)
+with cross toolchains whose compilers run natively (llvm-mingw's LLVM, the
+Debian sysroots), into a tarball of what they install, keyed on their
+sources, the toolchains and the tool (which holds the build steps), so the
+disk cache keeps them across worktrees and restarts. The image
+(`tools/xtask/wine/Containerfile`) only adds them."""
 
-load("@local_tools//:defs.bzl", "HOME")
+load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
 
-def _image_part_impl(ctx):
+def _ends_with(files, suffix):
+    found = [f for f in files if f.path.endswith(suffix)]
+    if len(found) != 1:
+        fail("expected one file ending in {}, found {}".format(suffix, len(found)))
+    return found[0]
+
+def _resources(_os, _inputs):
+    # Its build runs a job per core (the tool's `make -j`), so Bazel runs
+    # nothing beside it. Memory: about 8 GB measured for Wine.
+    return {"cpu": 16, "memory": 8192}
+
+def _part(ctx, part, tools, env):
     out = ctx.actions.declare_file(ctx.label.name + ".tar.gz")
+    llvm = ctx.file._llvm_clang
+    sysroot = ctx.file.sysroot
+    env = dict(env)
+    env.update({
+        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+        "VOLYA_CLANG": llvm.path,
+        "VOLYA_MAKE": ctx.executable._make.path,
+        # The sysroot's root is the directory `unpacked/` beside this file.
+        "VOLYA_SYSROOT": sysroot.path,
+    })
     ctx.actions.run(
         executable = ctx.executable._tool,
-        arguments = [ctx.attr.part, out.path] + [f.path for f in ctx.files.srcs],
-        inputs = ctx.files.srcs,
+        arguments = [part, out.path] + [f.path for f in ctx.files.srcs],
+        inputs = depset(
+            ctx.files.srcs + ctx.files._llvm + ctx.files.sysroot_files + [sysroot],
+            transitive = [depset(tools)],
+        ),
+        tools = [ctx.attr._make[DefaultInfo].files_to_run],
         outputs = [out],
-        env = {
-            # As from the user's shell: Apple's `container`.
-            "HOME": HOME,
-            "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-        },
-        # Apple's container service and a VM: the machine itself.
-        execution_requirements = {"no-sandbox": "1"},
+        env = env,
         mnemonic = "WineImagePart",
-        progress_message = "Building %{label} in a container (Wine: about an hour)",
+        progress_message = "Building %{label} with the cross toolchains (Wine: minutes)",
+        resource_set = _resources,
     )
     return [DefaultInfo(files = depset([out]))]
 
-image_part = rule(
-    implementation = _image_part_impl,
-    doc = "A part of the Wine image, `<name>.tar.gz`, built by `image-part <part>`.",
-    attrs = {
-        "part": attr.string(mandatory = True, values = ["wine", "box64"]),
-        "srcs": attr.label_list(allow_files = True, mandatory = True),
-        "_tool": attr.label(default = "//tools/xtask:image-part", executable = True, cfg = "exec"),
-    },
+_COMMON = {
+    "srcs": attr.label_list(allow_files = True, mandatory = True),
+    "sysroot": attr.label(allow_single_file = True, mandatory = True, doc = "The sysroot's `sysroot` file."),
+    "sysroot_files": attr.label(mandatory = True, doc = "The sysroot's files."),
+    "_llvm": attr.label(default = "@llvm_mingw//:files"),
+    "_llvm_clang": attr.label(default = "@llvm_mingw//:bin/clang", allow_single_file = True),
+    "_make": attr.label(default = "@make//:make", executable = True, cfg = "exec"),
+    "_tool": attr.label(default = "//tools/xtask:image-part", executable = True, cfg = "exec"),
+}
+
+def _wine_part_impl(ctx):
+    bison_data = _ends_with(ctx.files._bison_data, "/data/m4sugar/m4sugar.m4")
+    headers = ctx.attr._freetype[CcInfo].compilation_context.headers.to_list()
+    freetype_header = _ends_with(headers, "/include/ft2build.h")
+    env = {
+        "BISON_PKGDATADIR": bison_data.dirname.rsplit("/", 1)[0],
+        "M4": ctx.executable._m4.path,
+        "VOLYA_BISON": ctx.executable._bison.path,
+        "VOLYA_FLEX": ctx.executable._flex.path,
+        "VOLYA_HOST_FREETYPE": ctx.file._host_freetype.path,
+        "VOLYA_HOST_FREETYPE_INCLUDE": freetype_header.dirname,
+    }
+    tools = ctx.files._bison_data + headers + [
+        ctx.file._host_freetype,
+        ctx.executable._bison,
+        ctx.executable._flex,
+        ctx.executable._m4,
+    ]
+    return _part(ctx, "wine", tools, env)
+
+wine_part = rule(
+    implementation = _wine_part_impl,
+    doc = "Wine's part of the image, `<name>.tar.gz`, built by `image-part wine`.",
+    attrs = dict(_COMMON, **{
+        "_bison": attr.label(default = "@bison//:bison", executable = True, cfg = "exec"),
+        "_bison_data": attr.label(default = "@bison//:bison_pkgdata", cfg = "exec"),
+        "_flex": attr.label(default = "@flex//:flex", executable = True, cfg = "exec"),
+        "_freetype": attr.label(default = "@freetype//:freetype", providers = [CcInfo], cfg = "exec"),
+        "_host_freetype": attr.label(default = "//tools/xtask:host-freetype", allow_single_file = True, cfg = "exec"),
+        "_m4": attr.label(default = "@bison//:m4", executable = True, cfg = "exec"),
+    }),
+)
+
+def _box64_part_impl(ctx):
+    python = _ends_with(ctx.files._python, "/bin/python3")
+    cmake = ctx.file._cmake
+    env = {
+        "VOLYA_CMAKE": cmake.path,
+        "VOLYA_PYTHON": python.path,
+    }
+    return _part(ctx, "box64", ctx.files._python + ctx.files._cmake_files + [cmake], env)
+
+box64_part = rule(
+    implementation = _box64_part_impl,
+    doc = "box64's part of the image, `<name>.tar.gz`, built by `image-part box64`.",
+    attrs = dict(_COMMON, **{
+        "_cmake": attr.label(default = "@cmake//:CMake.app/Contents/bin/cmake", allow_single_file = True),
+        "_cmake_files": attr.label(default = "@cmake//:files"),
+        "_python": attr.label(default = "@python_3_13//:files"),
+    }),
 )
 
 # What a container action of the image takes (the capture's, the D3D9
