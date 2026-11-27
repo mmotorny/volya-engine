@@ -22,7 +22,7 @@ use crate::core::audio::Category;
 use crate::core::console::Console;
 use crate::core::diagnostics;
 use crate::core::display::DisplayColour;
-use crate::core::input::{Action, Control, Input};
+use crate::core::input::{Action, Control, Input, Key};
 use crate::core::lights::LightSettings;
 use crate::core::pause::{GlobalClock, Pause};
 use crate::core::sound::Fatal;
@@ -453,6 +453,8 @@ pub struct App {
     frame_ms: u64,
     /// The console may have changed this frame.
     console_touched: bool,
+    /// Alt+F4 ended the game (console-input.md section 1).
+    alt_f4: bool,
     /// Updates so far.
     frames: u64,
     /// The update in which a lost pointer lock opened the menu.
@@ -686,6 +688,7 @@ impl App {
             pause_item: None,
             frame_ms: 0,
             console_touched: false,
+            alt_f4: false,
             frames: 0,
             unlock_opened: None,
             prepare_textures: false,
@@ -834,6 +837,7 @@ impl App {
             return;
         }
         self.update_phase(tree, time_ms, input, audio);
+        self.alt_f4(input);
         // A fatal error the level met, or a placed effect's group
         // (particle-groups.md 2.3): the game ends with it.
         if let Some(Phase::Level { level, .. }) = &mut self.phase {
@@ -850,6 +854,20 @@ impl App {
         if let Some(error) = failed {
             self.fatal(tree, error, input, audio);
         }
+    }
+
+    /// The input system's own rule, whichever part has input
+    /// (console-input.md section 1): with F4 and either Alt key down after
+    /// the frame's events, the program quits as after `quit` (a normal
+    /// exit: the log file and the configuration file are written), once.
+    fn alt_f4(&mut self, input: &Input) {
+        let down = |k| input.device_held(Control::Key(k));
+        if self.alt_f4 || !down(Key::F4) || !(down(Key::LeftAlt) || down(Key::RightAlt)) {
+            return;
+        }
+        self.alt_f4 = true;
+        self.console.log_mut().save();
+        self.save = Some(self.console.save());
     }
 
     /// A fatal error during play (as sound-ogg-params.md section 5 makes a
@@ -1969,6 +1987,9 @@ impl App {
     }
 
     pub fn quit_requested(&self) -> bool {
+        if self.alt_f4 {
+            return true;
+        }
         match &self.phase {
             Some(Phase::Menu(m)) => m.quit_requested(),
             Some(Phase::Level { menu: Some(m), .. }) => m.quit_requested(),
@@ -2053,7 +2074,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::input::{Event, Key, TouchPhase};
+    use crate::core::input::{Event, TouchPhase};
     use crate::fixture::{self, FakeAudio};
 
     fn press(input: &mut Input, key: Key) {
@@ -2062,6 +2083,36 @@ mod tests {
             key,
             pressed: false,
         });
+    }
+
+    #[test]
+    fn alt_f4_quits_whatever_has_input() {
+        let tree = fixture::tree();
+        let mut app = App::new(fixture::data(&tree)).unwrap();
+        app.assets = fixture::assets();
+        let (mut input, mut audio) = (Input::new(), FakeAudio::default());
+        app.update(&tree, 5000.0, &mut input, &mut audio);
+        // A press and release within one frame does not count.
+        input.handle(Event::Key {
+            key: Key::LeftAlt,
+            pressed: true,
+        });
+        press(&mut input, Key::F4);
+        app.update(&tree, 5100.0, &mut input, &mut audio);
+        input.end_frame();
+        assert!(!app.quit_requested());
+        app.take_log_file();
+        // Both down after the frame's events: a normal exit, during the
+        // logos too.
+        input.handle(Event::Key {
+            key: Key::F4,
+            pressed: true,
+        });
+        app.update(&tree, 5200.0, &mut input, &mut audio);
+        assert!(app.quit_requested());
+        assert!(matches!(app.state(), AppState::Startup { .. }));
+        assert!(app.take_log_file().is_some());
+        assert!(app.take_save().is_some());
     }
 
     #[test]
