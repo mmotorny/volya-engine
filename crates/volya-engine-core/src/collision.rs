@@ -31,44 +31,6 @@ use self::bvh::{Bvh, Segment};
 use self::geometry::Vec3;
 use crate::climbing::{LADDER_MATERIAL, Ladder};
 
-/// The large arrays of the collision world dropped last, kept for the
-/// next one (#357). In the wasm heap, which never shrinks, a level's
-/// largest blocks (11 MB of triangles, 8.4 MB of vertices for
-/// `l01_escape`) are freed when it is left, and the next load's earlier
-/// stages (the offline simulation's many small allocations) split that
-/// space before its collision world is read, so the world needed new
-/// memory: up to 13 MiB more for a second New Game (measured in headless
-/// Chrome). Kept, they are reused whole when large enough.
-#[derive(Default)]
-struct Spare {
-    vertices: Vec<Vec3>,
-    packed: Vec<u64>,
-    wide: Vec<[u32; 3]>,
-    attributes: Vec<u16>,
-    nodes: Vec<bvh::Node>,
-}
-
-thread_local! {
-    static SPARE: RefCell<Spare> = RefCell::default();
-}
-
-/// `spare` emptied with room for `n` elements: reused when it has the room,
-/// else freed before a new one is made.
-fn reuse<T>(spare: &mut Vec<T>, n: usize) -> Vec<T> {
-    let mut v = std::mem::take(spare);
-    v.clear();
-    if v.capacity() < n {
-        v = Vec::new();
-        v.reserve_exact(n);
-    }
-    v
-}
-
-/// Takes the spare array `pick` with room for `n` elements.
-fn spare<T>(pick: impl FnOnce(&mut Spare) -> &mut Vec<T>, n: usize) -> Vec<T> {
-    SPARE.with(|s| reuse(pick(&mut s.borrow_mut()), n))
-}
-
 /// Grid cell edge, metres (our choice: about three player widths).
 pub const CELL_SIZE: f32 = 2.0;
 /// Most cells a grid may have; larger levels get larger cells (our choice).
@@ -188,19 +150,18 @@ struct Triangles {
 }
 
 impl Triangles {
-    /// Empty, with room for `n` triangles over `vertex_count` vertices,
-    /// in the spare arrays when they have the room.
+    /// Empty, with room for `n` triangles over `vertex_count` vertices.
     fn with_capacity(n: usize, vertex_count: usize) -> Self {
         if vertex_count <= 1 << INDEX_BITS {
             Self {
-                packed: spare(|s| &mut s.packed, n),
+                packed: Vec::with_capacity(n),
                 wide: Vec::new(),
                 is_wide: false,
             }
         } else {
             Self {
                 packed: Vec::new(),
-                wide: spare(|s| &mut s.wide, n),
+                wide: Vec::with_capacity(n),
                 is_wide: true,
             }
         }
@@ -351,21 +312,6 @@ pub struct CollisionWorld {
     ladder_material: u32,
 }
 
-impl Drop for CollisionWorld {
-    fn drop(&mut self) {
-        let nodes = std::mem::take(&mut self.tree).into_nodes();
-        SPARE.with(|s| {
-            *s.borrow_mut() = Spare {
-                vertices: std::mem::take(&mut self.vertices),
-                packed: std::mem::take(&mut self.triangles.packed),
-                wide: std::mem::take(&mut self.triangles.wide),
-                attributes: std::mem::take(&mut self.attributes),
-                nodes,
-            }
-        });
-    }
-}
-
 impl CollisionWorld {
     /// Reads `level.cform` from `reader` with the material library
     /// `materials` (`gamemtl.xr` in file order), mapping each triangle as
@@ -374,13 +320,12 @@ impl CollisionWorld {
     pub fn read(reader: impl Read + Seek, materials: Vec<GameMaterial>) -> io::Result<Self> {
         let mut reader = CformReader::new(reader)?;
         let header = *reader.header();
-        let mut vertices = spare(|s| &mut s.vertices, header.vertex_count as usize);
-        reader.vertices_into(&mut vertices)?;
+        let vertices = reader.vertices()?;
         let map = MaterialMap::new(&materials);
         let count = header.triangle_count as usize;
         let mut triangles = Triangles::with_capacity(count, header.vertex_count as usize);
         let layout = AttributeLayout::new(materials.len());
-        let mut attributes = spare(|s| &mut s.attributes, count);
+        let mut attributes = Vec::with_capacity(count);
         reader.triangles(|_, t| {
             attributes.push(layout.pack(map.map(t.attributes)?, t.sector())?);
             triangles.push(t.vertices);
@@ -440,9 +385,8 @@ impl CollisionWorld {
                 max[k] = max[k].max(v[k]);
             }
         }
-        let nodes = SPARE.with(|s| std::mem::take(&mut s.borrow_mut().nodes));
         let corners = |i: usize| triangles.get(i).map(|v| vertices[v as usize]);
-        let tree = Bvh::build(min, max, triangles.len(), corners, nodes)?;
+        let tree = Bvh::build(min, max, triangles.len(), corners)?;
         let grid = Grid::new(min, max);
         Ok(Self {
             bbox_min,
@@ -935,17 +879,8 @@ mod tests {
         assert_eq!(triangles(&w), [[0, 1, 2], [0, 2, 3]]);
         assert_eq!((w.material_index(0), w.material(1).id), (1, 1));
         assert_eq!(w.memory_bytes() - w.tree.memory_bytes(), 4 * 12 + 2 * 10);
-        // Read again once dropped: the same arrays, the same world (#357).
-        let (packed, nodes) = (w.triangles.packed.as_ptr(), w.tree.nodes().as_ptr());
-        drop(w);
-        let again = CollisionWorld::read(std::io::Cursor::new(&bytes), materials()).unwrap();
-        assert_eq!(triangles(&again), [[0, 1, 2], [0, 2, 3]]);
-        assert_eq!(
-            (again.triangles.packed.as_ptr(), again.tree.nodes().as_ptr()),
-            (packed, nodes)
-        );
         let mut out = Vec::new();
-        again.query([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0], &mut out);
+        w.query([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0], &mut out);
         assert_eq!(out, [0, 1]);
     }
 

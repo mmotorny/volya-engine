@@ -71,7 +71,7 @@ The offline simulation's registry (6.3 MB, 54,735 blocks), the game graph and pa
 | The objects' models, weather, the level's sounds, with the objects' CPU geometry until uploaded (12.3 MB in 2 blocks: every detail window's indices, object-detail-level.md 4) | 13.9 MB, 6,744 blocks | |
 | The load in all at its end, the session included | 71.7 MB, 111,983 blocks above the program's data | `l11_pripyat` about 70 MB (believed: `l01_escape`'s with its own collision, details and navigation file) |
 
-Measured natively. After the level is dropped, 29.4 MB in 7 blocks outlive it: the collision world's arrays, kept as spares for the next world (#357).
+Measured natively. After the level is dropped, nothing of it outlives it: 0.0 MB and 3 blocks above the load's start (29.4 MB in 7 blocks while the collision world's arrays were kept as spares for the next world, before #688).
 
 ### Loading transients
 
@@ -105,11 +105,11 @@ Headless Chrome, `game-level` and `game-memory`, three runs each (MiB, heap/most
 
 | | Before the first New Game | First New Game | Title menu after quitting | A New Game after relaunching the game, at 2868 × 1320 | Second New Game after quitting to the title menu | Third |
 |---|---|---|---|---|---|---|
-| Heap / live | 16–17/11 | 88–89/81 | 88–89/40 | 88–95/81 | 92–95/81 | 92–95/81 |
+| Heap / live | 16–17/11 | 88–89/81 | 88–89/12 | 88–95/81 | 92–95/81 | 92–95/81 |
 
 The level, once loaded, holds 67 MiB live. The load's most live comes at its end, under `st_loading_textures` and `st_client_synchronising` (58 → 81 MiB): the objects' CPU geometry with every detail window's indices is among it until the world uploads (the 8.0 MiB index list and the 4.0 MiB vertex list, #528, #653). The heap's last two growths come in that stage (9.6 MiB asked for at 73.6 MiB, then 4.0 MiB) (the 9.6 MiB block's owner: #666).
 
-After quitting, 40 MiB stay live: 25 MiB of them are the collision world's spare arrays (three blocks of 8.0, 10.5 and 7.0 MiB), the rest the program's data and the menus'.
+After quitting, 12 MiB stay live: the program's data and the menus' (40 MiB with the collision world's spare arrays, before #688). The second New Game's collision world fits the space the first's left (the heap stays at 89 MiB through `st_loading_cform`; `game-memory`, two runs); its heap grows once, under `st_loading_textures`, by 5.3 MiB (89 → 94 MiB; 4.0 MiB, 89 → 93, with the spares kept), and the third New Game's not at all.
 
 Where the gap comes from:
 
@@ -252,7 +252,7 @@ A level change goes through a save and a load in the original (docs/behavior/off
 2. A game's end also ends the session (the registry and graph go; the next session's blocks fit their holes, as they are sized from the same files).
 3. The next load starts.
 
-So the heap after any sequence of levels is what the program, the game type, the session and the largest level met need, with the holes their layouts leave (a second game's layout added 4 MiB once, measured above with the spares kept); the GPU holds one level at a time.
+So the heap after any sequence of levels is what the program, the game type, the session and the largest level met need, with the holes their layouts leave (a second game's layout added 5 MiB once, measured above); the GPU holds one level at a time.
 
 ### GPU memory: what is owned and released when
 

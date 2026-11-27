@@ -116,7 +116,6 @@ fn level_files_memory() {
     for name in &levels {
         let dir = data.aliases.path("$game_levels$", name).unwrap();
         let file = |f: &str| format!("{dir}\\{f}");
-        // Its arrays reuse the last world's (#357), so it reports its own size.
         let collision =
             CollisionWorld::read(tree.open(&file("level.cform")).unwrap(), materials.clone())
                 .unwrap();

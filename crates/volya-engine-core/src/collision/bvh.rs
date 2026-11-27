@@ -149,14 +149,12 @@ pub struct Bvh {
 
 impl Bvh {
     /// The tree over `count` triangles (at most [`MAX_TRIANGLES`]), triangle
-    /// `i` with the corners `corners(i)`, all within `min`…`max`, built in
-    /// `nodes` (emptied; its room reused).
+    /// `i` with the corners `corners(i)`, all within `min`…`max`.
     pub fn build(
         min: Vec3,
         max: Vec3,
         count: usize,
         corners: impl Fn(usize) -> [Vec3; 3],
-        mut nodes: Vec<Node>,
     ) -> io::Result<Self> {
         if count > MAX_TRIANGLES {
             return Err(io::Error::new(
@@ -170,7 +168,7 @@ impl Bvh {
             nodes: Vec::new(),
         };
         let leaves = runs((0..count).map(&corners), |_, _, _| {});
-        nodes = super::reuse(&mut nodes, (2 * leaves).saturating_sub(1));
+        let mut nodes = Vec::with_capacity((2 * leaves).saturating_sub(1));
         if leaves == 0 {
             tree.nodes = nodes;
             return Ok(tree);
@@ -193,16 +191,6 @@ impl Bvh {
         debug_assert_eq!(at, nodes.len());
         tree.nodes = nodes;
         Ok(tree)
-    }
-
-    /// Hands back the nodes' array for reuse.
-    pub fn into_nodes(self) -> Vec<Node> {
-        self.nodes
-    }
-
-    #[cfg(test)]
-    pub(super) fn nodes(&self) -> &[Node] {
-        &self.nodes
     }
 
     pub fn memory_bytes(&self) -> usize {
@@ -365,7 +353,7 @@ mod tests {
             let o = [(j % 10) as f32, (j / 100) as f32, ((j / 10) % 10) as f32];
             [o, [o[0] + 0.5, o[1], o[2]], [o[0], o[1] + 0.5, o[2] + 0.5]]
         };
-        let tree = Bvh::build([0.0; 3], [10.0; 3], 1000, corners, Vec::new()).unwrap();
+        let tree = Bvh::build([0.0; 3], [10.0; 3], 1000, corners).unwrap();
         let mut seen = vec![0; 1000];
         let contains = |n: &Node, b: (Vec3, Vec3)| {
             let (lo, hi) = tree.bounds(n);
