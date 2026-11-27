@@ -1251,8 +1251,13 @@ fn prefetched_textures(
     let mut entries = std::collections::HashSet::new();
     let mut names = std::collections::HashSet::new();
     let mut paths = Vec::new();
+    let model_names = prefetched.names();
     for mesh in prefetched.models().flat_map(|m| &m.meshes) {
-        let entry = format!("{}/{}", mesh.shader, mesh.texture);
+        let entry = format!(
+            "{}/{}",
+            model_names.get(mesh.shader),
+            model_names.get(mesh.texture)
+        );
         if !entries.insert(entry.clone()) {
             continue;
         }
@@ -1572,9 +1577,10 @@ fn artefact_record(
     model: Option<&objects::LoadedModel>,
 ) -> ArtefactRecord {
     let h = &record.header;
-    let bone = model
-        .and_then(|m| m.bones.first())
-        .map_or([0.0; 3], |(_, b)| [b[3][0], b[3][1], b[3][2]]);
+    let bone = model.filter(|m| m.bone_count() > 0).map_or([0.0; 3], |m| {
+        let b = m.bind(0);
+        [b[3][0], b[3][1], b[3][2]]
+    });
     let sphere = model.map_or(([0.0; 3], 0.0), |m| {
         (m.header.sphere_centre, m.header.sphere_radius)
     });
@@ -2083,7 +2089,10 @@ impl NewGameLoad {
                     .models
                     .iter()
                     .flat_map(|m| &m.meshes)
-                    .map(|m| format!("{}/{}", m.shader, m.texture))
+                    .map(|m| {
+                        let names = &spawned.names;
+                        format!("{}/{}", names.get(m.shader), names.get(m.texture))
+                    })
                     .collect();
                 let resolved = resolve_surfaces(
                     tree,

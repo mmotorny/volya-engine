@@ -558,8 +558,20 @@ fn prefetched_models_lay_out_as_their_files() {
         let prefetched = load.prefetched().cloned();
         let screen = load.finish(0).unwrap();
         let objects = &screen.world().objects;
+        let names = &objects.names;
         let models: Vec<_> = (objects.models.iter())
-            .map(|m| (m.path.clone(), m.meshes.clone()))
+            .map(|m| {
+                let meshes: Vec<_> = (m.meshes.iter())
+                    .map(|k| {
+                        (
+                            *k,
+                            names.get(k.texture).to_owned(),
+                            names.get(k.shader).to_owned(),
+                        )
+                    })
+                    .collect();
+                (names.get(m.path).to_owned(), meshes)
+            })
             .collect();
         (prefetched, models, objects.take_geometry().unwrap())
     };
@@ -589,12 +601,12 @@ fn prefetched_models_lay_out_as_their_files() {
     for ((path, meshes), (other, file)) in with.iter().zip(&without) {
         assert_eq!(path, other);
         assert_eq!(meshes.len(), file.len(), "{path}");
-        for (m, f) in meshes.iter().zip(file) {
+        for ((m, texture, shader), (f, file_texture, file_shader)) in meshes.iter().zip(file) {
             let ranges = |m: &volya_engine::objects::MeshRange| {
                 (m.vertex_count, m.index_count, m.windows, m.sphere)
             };
             assert_eq!(ranges(m), ranges(f), "{path}");
-            assert_eq!((&m.texture, &m.shader), (&f.texture, &f.shader), "{path}");
+            assert_eq!((texture, shader), (file_texture, file_shader), "{path}");
             assert_eq!(m.kept.is_some(), p.holds(path), "{path}");
             let (fv, fi) = (f.first_vertex as usize, f.first_index as usize);
             let file_vertices =

@@ -284,12 +284,74 @@ pub fn locate_model(tree: &dyn Vfs, data: &GameData, dir: &str, name: &str) -> i
     Err(invalid(format!("Can't find model file '{name}'.")))
 }
 
+/// A name in its owner's [`Names`]: a byte range of its buffer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Name {
+    at: u32,
+    len: u32,
+}
+
+/// An owner's names, each once, in one buffer (docs/architecture/memory.md,
+/// rule 3): its models' paths, their meshes' textures and shaders and their
+/// bones' names, which the models refer to by [`Name`].
+#[derive(Debug, Default)]
+pub struct Names {
+    text: String,
+    /// While names are added: each name by its text's hash, and those
+    /// whose hash an earlier name has.
+    by_hash: HashMap<u64, Name>,
+    collided: Vec<Name>,
+}
+
+impl Names {
+    /// `name`'s text.
+    pub fn get(&self, name: Name) -> &str {
+        &self.text[name.at as usize..(name.at + name.len) as usize]
+    }
+
+    /// The name of `text`, added unless an earlier one has it.
+    pub fn add(&mut self, text: &str) -> Name {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        text.hash(&mut hasher);
+        let hash = hasher.finish();
+        let first = self.by_hash.get(&hash).copied();
+        if let Some(n) = first {
+            if self.get(n) == text {
+                return n;
+            }
+            if let Some(&n) = self.collided.iter().find(|&&n| self.get(n) == text) {
+                return n;
+            }
+        }
+        let name = Name {
+            at: self.text.len() as u32,
+            len: text.len() as u32,
+        };
+        self.text.push_str(text);
+        if first.is_some() {
+            self.collided.push(name);
+        } else {
+            self.by_hash.insert(hash, name);
+        }
+        name
+    }
+
+    /// Ends the adding: the lookup goes, the buffer is shrunk to its names.
+    fn seal(&mut self) {
+        self.by_hash = HashMap::new();
+        self.collided = Vec::new();
+        self.text.shrink_to_fit();
+    }
+}
+
 /// A child mesh of a loaded model: its shader pair and its range in the
 /// objects' geometry.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MeshRange {
-    pub texture: String,
-    pub shader: String,
+    /// In its owner's [`Names`].
+    pub texture: Name,
+    pub shader: Name,
     /// First vertex in [`ObjectGeometry`], and the indices every detail
     /// window draws from `first_index` (object-detail-level.md 4).
     pub first_vertex: u32,
@@ -308,15 +370,102 @@ pub struct MeshRange {
     pub kept: Option<u32>,
 }
 
+/// A bone of a loaded model: its name and its bind matrix's first three
+/// columns, the fourth (0, 0, 0, 1).
+#[derive(Clone, Copy, Debug)]
+struct Bone {
+    name: Name,
+    bind: [[f32; 3]; 4],
+}
+
 /// A model file loaded for drawing: its header and meshes, the vertices
-/// already in the objects' geometry.
+/// already in the objects' geometry; its names in its owner's [`Names`].
 #[derive(Clone, Debug)]
 pub struct LoadedModel {
-    pub path: String,
+    pub path: Name,
     pub header: model::Header,
-    pub meshes: Vec<MeshRange>,
-    /// Bone names and their bind matrices, for the lamps' lights.
-    pub bones: Vec<(String, Mat4)>,
+    pub meshes: Box<[MeshRange]>,
+    /// Bone names and their bind matrices, for the lamps' lights and the
+    /// artefacts.
+    bones: Box<[Bone]>,
+    /// Every bone's bind matrix whole when one's fourth column is not
+    /// exactly (0, 0, 0, 1); empty otherwise.
+    binds: Box<[Mat4]>,
+}
+
+impl LoadedModel {
+    /// The model with `bones`, each a name and its bind matrix.
+    pub fn new(
+        path: Name,
+        header: model::Header,
+        meshes: Box<[MeshRange]>,
+        bones: &[(Name, Mat4)],
+    ) -> Self {
+        let affine = |m: &Mat4| {
+            (0..3).all(|r| m[r][3].to_bits() == 0.0f32.to_bits())
+                && m[3][3].to_bits() == 1.0f32.to_bits()
+        };
+        let binds = if bones.iter().all(|(_, m)| affine(m)) {
+            Box::default()
+        } else {
+            bones.iter().map(|(_, m)| *m).collect()
+        };
+        Self {
+            path,
+            header,
+            meshes,
+            bones: (bones.iter())
+                .map(|&(name, m)| Bone {
+                    name,
+                    bind: m.map(|r| [r[0], r[1], r[2]]),
+                })
+                .collect(),
+            binds,
+        }
+    }
+
+    /// How many bones it has.
+    pub fn bone_count(&self) -> usize {
+        self.bones.len()
+    }
+
+    /// Bone `i`'s name.
+    pub fn bone_name(&self, i: usize) -> Name {
+        self.bones[i].name
+    }
+
+    /// Bone `i`'s bind matrix.
+    pub fn bind(&self, i: usize) -> Mat4 {
+        match self.binds.get(i) {
+            Some(m) => *m,
+            None => {
+                let b = &self.bones[i].bind;
+                std::array::from_fn(|r| [b[r][0], b[r][1], b[r][2], if r == 3 { 1.0 } else { 0.0 }])
+            }
+        }
+    }
+
+    /// The bind matrix of its bone named `name` (`names` its owner's), if
+    /// it has one.
+    pub fn bone(&self, names: &Names, name: &str) -> Option<Mat4> {
+        let i = self.bones.iter().position(|b| names.get(b.name) == name)?;
+        Some(self.bind(i))
+    }
+
+    /// Its copy for another owner as the file at `path`, its names added
+    /// to that owner's `to` from its own `from`.
+    fn renamed(&self, path: &str, from: &Names, to: &mut Names) -> Self {
+        let mut model = self.clone();
+        model.path = to.add(path);
+        for mesh in &mut model.meshes {
+            mesh.texture = to.add(from.get(mesh.texture));
+            mesh.shader = to.add(from.get(mesh.shader));
+        }
+        for bone in &mut model.bones {
+            bone.name = to.add(from.get(bone.name));
+        }
+        model
+    }
 }
 
 /// Appends `model`'s vertices, quantized (section 4.7), and its meshes'
@@ -324,10 +473,12 @@ pub struct LoadedModel {
 /// render mode: the software mode keeps floats, but needs a bone index
 /// above 78 with 256 vertex shader constants, which no shipped model has
 /// (our choice: the constant count of a GPU device has no meaning here).
+/// Its names are added to `names`, its owner's.
 pub fn add_model(
     path: &str,
     model: &Model,
     geometry: &mut ObjectGeometry,
+    names: &mut Names,
 ) -> io::Result<LoadedModel> {
     let pose = model.bind_pose()?;
     let mut meshes = Vec::with_capacity(model.meshes.len());
@@ -358,8 +509,8 @@ pub fn add_model(
         }
         let windows = [first_window, geometry.windows.len() as u32 - first_window];
         meshes.push(MeshRange {
-            texture: m.texture.clone(),
-            shader: m.shader.clone(),
+            texture: names.add(&m.texture),
+            shader: names.add(&m.shader),
             first_vertex,
             vertex_count: m.vertices.len() as u32,
             first_index,
@@ -372,17 +523,15 @@ pub fn add_model(
             kept: None,
         });
     }
-    Ok(LoadedModel {
-        path: path.to_owned(),
-        header: model.header,
-        meshes,
-        bones: model
-            .bones
-            .iter()
-            .zip(pose)
-            .map(|(b, m)| (b.name.clone(), m))
-            .collect(),
-    })
+    let bones: Vec<(Name, Mat4)> = (model.bones.iter().zip(pose))
+        .map(|(b, m)| (names.add(&b.name), m))
+        .collect();
+    Ok(LoadedModel::new(
+        names.add(path),
+        model.header,
+        meshes.into(),
+        &bones,
+    ))
 }
 
 /// The section listing the models prefetched for the single-player game
@@ -403,8 +552,11 @@ pub const PREFETCH_VISUALS: &str = "prefetch_visuals_single";
 pub struct Prefetched {
     /// Which set of kept geometry its chunks are ([`GeometryChunk::set`]).
     set: u64,
-    /// By located path, lower-cased: the model's index.
-    by_path: HashMap<String, usize>,
+    /// Its models' names.
+    names: Names,
+    /// Each model's located path, lower-cased, and its index, in the
+    /// paths' order.
+    by_path: Box<[(Name, u32)]>,
     models: Vec<PrefetchedModel>,
     /// The texture files of the models' surfaces, each once.
     pub textures: Vec<String>,
@@ -453,9 +605,11 @@ impl GeometryChunk {
 #[derive(Debug)]
 pub struct Prefetching {
     /// The visual names to load, in the section's key order.
-    names: Vec<String>,
+    visuals: Vec<String>,
     next: usize,
     made: Prefetched,
+    /// By located path, lower-cased: the model's index.
+    by_path: HashMap<String, usize>,
     /// The chunk being filled.
     open: GeometryChunk,
     /// One model's layout at a time.
@@ -470,12 +624,13 @@ impl Prefetching {
     /// [`PREFETCH_VISUALS`].
     pub fn new(data: &GameData) -> Self {
         let set = SETS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        let names = (data.system.section(PREFETCH_VISUALS).into_iter())
+        let visuals = (data.system.section(PREFETCH_VISUALS).into_iter())
             .flat_map(|s| s.entries().map(|e| e.key().to_owned()))
             .collect();
         Self {
-            names,
+            visuals,
             next: 0,
+            by_path: HashMap::new(),
             made: Prefetched {
                 set,
                 ..Default::default()
@@ -503,11 +658,11 @@ impl Prefetching {
     ) -> io::Result<bool> {
         let bytes = crate::render::world::MODEL_VERTEX_BYTES;
         let mut kept = false;
-        while !kept && let Some(name) = self.names.get(self.next) {
+        while !kept && let Some(name) = self.visuals.get(self.next) {
             self.next += 1;
             let path = locate_model(tree, data, "", name)?;
             let key = path.to_lowercase();
-            if self.made.by_path.contains_key(&key) {
+            if self.by_path.contains_key(&key) {
                 continue;
             }
             let mut model = {
@@ -516,7 +671,7 @@ impl Prefetching {
                 self.scratch.vertices.clear();
                 self.scratch.indices.clear();
                 self.scratch.windows.clear();
-                add_model(&path, &parsed, &mut self.scratch)?
+                add_model(&path, &parsed, &mut self.scratch, &mut self.made.names)?
             };
             for mesh in &mut model.meshes {
                 let count = mesh.vertex_count as usize;
@@ -546,9 +701,9 @@ impl Prefetching {
                 model,
                 windows: self.scratch.windows.as_slice().into(),
             });
-            (self.made.by_path).insert(key, self.made.models.len() - 1);
+            self.by_path.insert(key, self.made.models.len() - 1);
         }
-        if self.next < self.names.len() {
+        if self.next < self.visuals.len() {
             return Ok(false);
         }
         if !self.open.vertices.is_empty() {
@@ -579,7 +734,16 @@ impl Prefetching {
 
     /// The models loaded, once [`Prefetching::step`] has loaded every one.
     pub fn finish(self) -> Prefetched {
-        self.made
+        let mut made = self.made;
+        let mut by_path: Vec<(String, u32)> = (self.by_path.into_iter())
+            .map(|(path, i)| (path, i as u32))
+            .collect();
+        by_path.sort_unstable();
+        made.by_path = (by_path.iter())
+            .map(|(path, i)| (made.names.add(path), *i))
+            .collect();
+        made.names.seal();
+        made
     }
 }
 
@@ -634,24 +798,44 @@ impl Prefetched {
         self.models.is_empty()
     }
 
-    /// Whether it holds the model of the file at `path`.
-    pub fn holds(&self, path: &str) -> bool {
-        self.by_path.contains_key(&path.to_lowercase())
+    /// The index of the model of the file at `path`, if it holds it.
+    fn index(&self, path: &str) -> Option<usize> {
+        let key = path.to_lowercase();
+        let at = (self.by_path)
+            .binary_search_by(|&(n, _)| self.names.get(n).cmp(&key))
+            .ok()?;
+        Some(self.by_path[at].1 as usize)
     }
 
-    /// Every model, as loaded (its ranges in the kept chunks).
+    /// Whether it holds the model of the file at `path`.
+    pub fn holds(&self, path: &str) -> bool {
+        self.index(path).is_some()
+    }
+
+    /// Every model, as loaded (its ranges in the kept chunks), its names
+    /// in [`Prefetched::names`].
     pub fn models(&self) -> impl Iterator<Item = &LoadedModel> {
         self.models.iter().map(|m| &m.model)
     }
 
+    /// Its models' names.
+    pub fn names(&self) -> &Names {
+        &self.names
+    }
+
     /// The model of the file at `path`, if prefetched, its meshes drawn
-    /// from the kept chunks, its detail windows appended to `geometry`'s.
-    pub fn append(&self, path: &str, geometry: &mut ObjectGeometry) -> Option<LoadedModel> {
-        let m = &self.models[*self.by_path.get(&path.to_lowercase())?];
+    /// from the kept chunks, its detail windows appended to `geometry`'s
+    /// and its names added to `names`, its new owner's.
+    pub fn append(
+        &self,
+        path: &str,
+        geometry: &mut ObjectGeometry,
+        names: &mut Names,
+    ) -> Option<LoadedModel> {
+        let m = &self.models[self.index(path)?];
         let window = geometry.windows.len() as u32;
         geometry.windows.extend_from_slice(&m.windows);
-        let mut model = m.model.clone();
-        model.path = path.to_owned();
+        let mut model = m.model.renamed(path, &self.names, names);
         for mesh in &mut model.meshes {
             mesh.windows[0] += window;
         }
@@ -780,18 +964,20 @@ fn row(m: &Mat4, r: usize) -> [f32; 3] {
 }
 
 /// The lights of `lamp` placed at transform `x` with its model's bones
-/// (`None` without a visual): each light's matrix is its bone's bind
-/// matrix · X, or X when the bone is not one of the visual's.
+/// (`None` without a visual; its names in `names`): each light's matrix is
+/// its bone's bind matrix · X, or X when the bone is not one of the
+/// visual's.
 pub fn lamp_lights(
     object: (&str, u16, bool),
     lamp: &HangingLamp,
     x: &Mat4,
     model: Option<&LoadedModel>,
+    names: &Names,
 ) -> LampLights {
     let flags = lamp.light_flags;
     let place = |bone: &str| -> Mat4 {
-        match model.and_then(|m| m.bones.iter().find(|(n, _)| n == bone)) {
-            Some((_, b)) => model::multiply(b, x),
+        match model.and_then(|m| m.bone(names, bone)) {
+            Some(b) => model::multiply(&b, x),
             None => *x,
         }
     };
@@ -868,6 +1054,8 @@ pub struct Spawned {
     pub instances: Vec<Instance>,
     pub lamps: Vec<LampLights>,
     pub geometry: ObjectGeometry,
+    /// The models' names.
+    pub names: Names,
     /// The prefetched models the models taken from them are drawn from.
     pub prefetched: Option<Arc<Prefetched>>,
 }
@@ -905,7 +1093,8 @@ pub fn spawn(
                 let index = match by_path.get(&key) {
                     Some(&i) => i,
                     None => {
-                        let taken = prefetched.and_then(|p| p.append(&path, &mut s.geometry));
+                        let taken =
+                            prefetched.and_then(|p| p.append(&path, &mut s.geometry, &mut s.names));
                         let model = match taken {
                             Some(model) => {
                                 s.prefetched = prefetched.cloned();
@@ -915,7 +1104,7 @@ pub fn spawn(
                                 let bytes = vfs::read(tree, &path)?;
                                 let parsed = Model::parse(&bytes)
                                     .map_err(|e| invalid(format!("{path}: {e}")))?;
-                                add_model(&path, &parsed, &mut s.geometry)?
+                                add_model(&path, &parsed, &mut s.geometry, &mut s.names)?
                             }
                         };
                         s.models.push(model);
@@ -949,13 +1138,13 @@ pub fn spawn(
                 && let Some(m) = model
             {
                 for bone in lamp.fixed_bones.split(',').filter(|b| !b.is_empty()) {
-                    if !m.bones.iter().any(|(n, _)| n == bone) {
+                    if m.bone(&s.names, bone).is_none() {
                         return Err(invalid(format!("{}: wrong fixed bone", h.name)));
                     }
                 }
             }
-            s.lamps
-                .push(lamp_lights((&h.name, o.id, o.online), lamp, &x, model));
+            let lights = lamp_lights((&h.name, o.id, o.online), lamp, &x, model, &s.names);
+            s.lamps.push(lights);
         }
     }
     let mut by_class: Vec<(String, usize)> = classes
@@ -968,6 +1157,7 @@ pub fn spawn(
     // `l01_escape`, measured) goes, shrunk in place (#357).
     s.geometry.vertices.shrink_to_fit();
     s.geometry.indices.shrink_to_fit();
+    s.names.seal();
     Ok(s)
 }
 
@@ -1014,6 +1204,8 @@ pub struct LevelObjects {
     /// Every object whose visual is loaded, online or not.
     pub instances: Vec<Instance>,
     pub models: Vec<LoadedModel>,
+    /// The models' names.
+    pub names: Names,
     pub draws: Vec<ObjectDraw>,
     pub lamps: Vec<LampLights>,
     /// Shader pairs not drawn, with why.
@@ -1074,6 +1266,7 @@ impl LevelObjects {
             online_by_class: spawned.online_by_class,
             instances: spawned.instances,
             models: spawned.models,
+            names: spawned.names,
             draws,
             lamps: spawned.lamps,
             not_drawn,
@@ -1171,6 +1364,51 @@ mod tests {
         assert_eq!(draw.sphere_at(&x), [12.0, 20.0, 28.0, 0.25]);
     }
 
+    /// Each name is kept once.
+    #[test]
+    fn names_are_kept_once() {
+        let mut names = Names::default();
+        let a = names.add("models\\model");
+        let b = names.add("act\\act_barman");
+        assert_eq!(names.add("models\\model"), a);
+        assert_ne!(a, b);
+        assert_eq!(
+            (names.get(a), names.get(b)),
+            ("models\\model", "act\\act_barman")
+        );
+        names.seal();
+        assert_eq!(names.get(b), "act\\act_barman");
+    }
+
+    /// A bind matrix whose fourth column is not exactly (0, 0, 0, 1) keeps
+    /// every one of its model's matrices whole.
+    #[test]
+    fn bind_matrices_stay_exact() {
+        let mut names = Names::default();
+        let header = model::Header {
+            kind: 10,
+            shader: 0,
+            box_min: [0.0; 3],
+            box_max: [0.0; 3],
+            sphere_centre: [0.0; 3],
+            sphere_radius: 1.0,
+        };
+        let a = transform([1.0, 2.0, 3.0], [0.5, 0.25, 0.0]);
+        let mut b = a;
+        b[0][3] = -0.0;
+        let (na, nb) = (names.add("a"), names.add("b"));
+        let affine = LoadedModel::new(na, header, Box::default(), &[(na, a)]);
+        assert!(affine.binds.is_empty());
+        assert_eq!(affine.bind(0), a);
+        let whole = LoadedModel::new(na, header, Box::default(), &[(na, a), (nb, b)]);
+        assert_eq!(whole.binds.len(), 2);
+        assert_eq!(
+            whole.bone(&names, "b").map(|m| m[0][3].to_bits()),
+            Some((-0.0f32).to_bits())
+        );
+        assert_eq!(whole.bone(&names, "a"), Some(a));
+    }
+
     #[test]
     fn visual_names_lose_extensions() {
         assert_eq!(
@@ -1226,9 +1464,10 @@ mod tests {
         let x = transform([1.0, 2.0, 3.0], [0.0; 3]);
         let mut bone = transform([0.0, 0.5, 0.0], [0.0; 3]);
         bone[2] = [0.0, -1.0, 0.0, 0.0];
-        let model = LoadedModel {
-            path: String::new(),
-            header: model::Header {
+        let mut names = Names::default();
+        let model = LoadedModel::new(
+            names.add(""),
+            model::Header {
                 kind: 10,
                 shader: 0,
                 box_min: [0.0; 3],
@@ -1236,10 +1475,11 @@ mod tests {
                 sphere_centre: [0.0; 3],
                 sphere_radius: 1.0,
             },
-            meshes: Vec::new(),
-            bones: vec![("bone_lamp".into(), bone)],
-        };
-        let l = lamp_lights(("tv", 7, true), &lamp, &x, Some(&model));
+            Box::default(),
+            &[(names.add("bone_lamp"), bone)],
+        );
+        assert_eq!(model.bind(0), bone, "kept exactly");
+        let l = lamp_lights(("tv", 7, true), &lamp, &x, Some(&model), &names);
         assert_eq!(
             (l.main.kind, l.main.shadows, l.on),
             (LightKind::Spot, false, true)
@@ -1265,17 +1505,17 @@ mod tests {
             ambient_light_bone: "bone_lamp".into(),
             ..lamp.clone()
         };
-        let l = lamp_lights(("tv", 7, true), &at_bone, &x, Some(&model));
+        let l = lamp_lights(("tv", 7, true), &at_bone, &x, Some(&model), &names);
         assert_eq!(l.ambient.unwrap().position, [1.0, 2.5, 3.0]);
         // Without the bone, at X.
-        let l = lamp_lights(("tv", 7, true), &lamp, &x, None);
+        let l = lamp_lights(("tv", 7, true), &lamp, &x, None, &names);
         assert_eq!(l.main.position, [1.0, 2.0, 3.0]);
         let off = HangingLamp {
             health: 0.0,
             light_flags: 0xB55D,
             ..lamp
         };
-        let l = lamp_lights(("lamp", 8, false), &off, &x, None);
+        let l = lamp_lights(("lamp", 8, false), &off, &x, None, &names);
         assert!(!l.on && l.physics_shell && l.ambient.is_none());
     }
 }

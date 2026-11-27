@@ -147,9 +147,9 @@ fn level_objects_from_game_data() {
                 .unwrap_or_else(|| panic!("{name} not drawn"))
         };
         let model_of = |i: &Instance| {
-            let path = &objects.models[i.model].path;
+            let path = objects.names.get(objects.models[i.model].path);
             (
-                path.clone(),
+                path.to_owned(),
                 Model::parse(&read(tree, path).unwrap()).unwrap(),
             )
         };
