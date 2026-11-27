@@ -21,10 +21,11 @@ Conventions:
 - "In a level" means after a New Game has finished loading; "in the main menu" means the title menu
   with no level loaded (`title-menu.md`).
 
-**Checks.** Every claim carries a tag [DG-*n*]. The checks are two scripts in the dirty workspace,
-`diag/checks/run.py` (DG-1 – DG-21) and `diag/mem/checks.py` (DG-22 – DG-37); they use read-only static
-analysis of the shipped binaries, the archives' file tables, the extracted configuration and the logs of
-nine headless runs of the shipped game (`diag/run/`). All checks pass.
+**Checks.** Every claim carries a tag [DG-*n*]. The checks are three scripts in the dirty workspace,
+`diag/checks/run.py` (DG-1 – DG-21), `diag/mem/checks.py` (DG-22 – DG-37) and `consnd/checks/sound.py`
+(DG-38 – DG-48); they use read-only static analysis of the shipped binaries, the archives' file tables,
+the extracted configuration and the logs of headless runs of the shipped game (`diag/run/`,
+`consnd/run/`). All checks pass.
 
 ## 1. The commands
 
@@ -121,8 +122,53 @@ block with its 23 bytes [DG-23, DG-24].
 default heap; under Wine it holds Direct3D's copies of the textures (measured above) [DG-24, DG-30].
 What else it holds is **unestablished**.
 
-**Sound.** The runs were made with `-nosound`; which figure counts sound data and sound buffers is
-**unestablished**.
+**Sound.** Measured with sound on (seven New Games, both volumes `snd_volume_eff` and `snd_volume_music`
+set to 0, no `-nosound`; Provenance) and from the binaries [DG-38 – DG-48]:
+
+- **Where the sound library's memory comes from.** The sound library (`xrSound.dll`) imports no heap,
+  virtual-memory or file-mapping function of the system: it allocates only through the core's memory
+  manager and through the shared C runtime's `malloc`, `calloc` and `realloc` (its built-in Ogg Vorbis
+  decoder uses the latter). So everything it holds itself is in the C runtime's heap and counts in *h*
+  and `* phase cmem` [DG-38].
+- **No device, no sound memory.** With `-nosound` the sound device is never created; when it is
+  requested but cannot be created (the log says `OpenAL: Can't create sound device.`, measured when the
+  system has no audio device), the result is the same. Without a device, creating a sound does nothing:
+  no sound file is loaded, no cache or channel exists [DG-39, DG-44]. Measured: a New Game with sound on
+  but no audio device gave the same *h* as with `-nosound` (load start 26,111 against 26,115 K, end
+  227,113 against 227,118 K), and *p* 1,072 K higher (**believed**: the system's audio libraries looking for a
+  device) [DG-44].
+- **The sound cache** holds the decoded audio of all sounds. It is made when the device is created (at
+  startup, after the startup `stat_memory` of 2.4) as two blocks of the memory manager: *lines* × *bpl*
+  bytes of data and 20 bytes per line, where *bpl* is 50 ms of the device's output format (16-bit stereo
+  at 44,100 Hz: 8,820 bytes) and *lines* = ⌊`snd_cache_size` × 2,097,152 / *bpl*⌋ + 1. The sound library logs
+  `* sound : cache: <size K> kb, <lines> lines, <bpl> bpl` (measured: `snd_cache_size 16` gives
+  `32773 kb, 3805 lines, 8820 bpl`; 32 gives `65538 kb, 7609 lines, 8820 bpl`). Measured: 32 instead of 16
+  raised *h* at the start of the load by 32,840 K, the 3,804 more lines of 8,820 + 20 bytes [DG-40].
+  Its size does not depend on the level or the sounds played.
+- **A sound file** (every distinct one, including music and ambient sounds: the library has one kind of
+  sound and one way of playing it, no separate stream) is recorded by a 52-byte record kept until
+  shutdown and a table of 2 bytes per cache line of its decoded length. Loading it opens the file,
+  reads its stream header and comment, and closes it: no file data is kept [DG-41].
+- **Channels** (`snd_targets`, 4 … 32): each a record of 800 bytes made when the device is created,
+  with one source and three buffers of the device. A channel that plays a sound opens its file, read in
+  place like every archive file (counted in *c*, 2.1.1), and decodes it with the decoder (in *h*), through
+  the cache; each buffer it hands to the device holds 400 ms of 16-bit mono at 44,100 Hz (35,280
+  bytes), filled from one shared buffer of the memory manager [DG-42]. Measured: 4, 16 and 24 channels
+  gave the same *h* at the start and the end of the load [DG-46].
+- **The sound device.** The library plays through the shipped OpenAL library (`OpenAL32.dll`, which
+  allocates from the same C runtime: *h*) and its implementation `wrap_oal.dll` (measured: the device
+  `Generic Software` was chosen and created) [DG-43]. That implementation links no shared C runtime library (it carries its own) and
+  imports no way of reaching the process heap: it allocates only from heaps it creates itself and from
+  virtual memory, so its memory (the buffers the channels hand to it, **believed**: OpenAL copies a
+  buffer's data when it is filled) counts in no figure but *c* [DG-43]. Below it is the system's sound
+  output. Measured under Wine at the end of the load, against `-nosound`: *h* +33,417 K, *p*
+  +1,703 – 1,718 K, *c* +37,432 – 37,496 K, so 2,297 – 2,376 K of the committed growth is in neither heap
+  (**believed**: the implementation's own heaps and the sound threads) [DG-45]. Of the *p* growth, 1,072 K
+  appear without any device (above); the runs' silent test device keeps its own buffers in *p* too
+  (Provenance). Where the system's sound output keeps its buffers on Windows is **unestablished**.
+- **Playing.** In the first 15 s in the level *h* grew by 16,309 – 16,378 K with sound against 14,595 K
+  without (four runs) [DG-45]: **believed**: the decoders of the playing channels and the records of the
+  sounds the level starts; how it divides is **unestablished**.
 
 ### 2.2 `dump_resources`
 
@@ -272,6 +318,26 @@ load (measured for `l01_escape`), and they stay held after it (**believed**: the
 that appear later). In a run with `texture_lod 2` every caption kept the same as with `texture_lod 0`
 but for the 527 K of caption 13 [DG-32].
 
+**With sound on.** The table above was measured with `-nosound`. Six New Games with sound on (a working,
+silent device; both volumes 0; `snd_cache_size 16` unless stated; Provenance) gave [DG-45, DG-46]:
+
+- When the load began the heap held 59,492 K instead of 26,115 K (in all five runs with
+  `snd_cache_size 16`): 33,377 K more, of which 32,773 K are the sound cache and 74 K its line table
+  (2.1.1); the other 530 K are the rest of what sound keeps from startup (**believed**: its channels, the
+  OpenAL library's own memory and the sounds made before the load; how it divides is **unestablished**). With `snd_cache_size 32`: 92,332 K.
+- `st_loading_ai_objects` kept 40 K instead of 0 in every run (566 K in one, with one of the moving
+  amounts of 2.4.1); what these 40 K are is **unestablished**.
+- `st_client_spawning` kept 4,709 K as without sound in three runs, 5,236 K (one of the moving amounts)
+  in two, and 8,429 K once (3,720 K more; why is **unestablished**).
+- Every other caption kept the same as without sound, but for the moving amounts of about 527 K, which
+  fall under the prefetching, new-game, sectors, AI-objects and client-spawning captions from run to run
+  (in five of the six runs one of them fell under `st_creating_new_game`, 32,692 K; none under
+  `st_server_starting`, 205 K).
+- At the end of the load *h* was 260,535 K in four of the five runs with `snd_cache_size 16` (263,728 K in
+  the fifth, the 3,720 K above; **Disputed in review:** the fifth run ended 3,193 K above the other four, not 3,720 K; the other 527 K of its `st_client_spawning` figure is a moving amount, missing from its `st_loading_sectors_portals` caption) against 227,118 K: the load with sound keeps 201,043 K, 40 K more than
+  without, and the 33,417 K difference is the startup part above plus those 40 K. *t*, *e* and the other
+  captions' work are the same; sound adds nothing to the textures.
+
 ### 2.5 At shutdown
 
 When the graphics device is destroyed at exit, after `Destroying Direct3D...`, the thirteen lines of
@@ -288,7 +354,12 @@ were 0, so no such lines appeared, and the next line was `refCount:pBaseZB 1` [D
 - What the renderer's own pool holds (2.1, believed: lists built while drawing).
 - Where Direct3D keeps its system-memory copies on Windows, and what else the process heap holds (2.1.1;
   under Wine the textures' copies are measured in it).
-- Which figure counts sound data and sound buffers (2.1.1; all runs used `-nosound`).
+- Where the system's sound output keeps its buffers on Windows, and what the 2,297 – 2,376 K of committed
+  memory in neither heap are, with sound on (2.1.1; measured only under Wine).
+- What the 530 K the sound device keeps at startup beyond the cache are, what the 40 K kept under
+  `st_loading_ai_objects` with sound are, and what the 3,720 K once kept under `st_client_spawning` were
+  (2.4.1).
+- How the growth of *h* while sounds play divides among decoders and sound records (2.1.1).
 - What the script library's private heap holds (2.1.1, believed: compiled script code).
 - How the growth of creating the new game divides among its objects and registries, and what the
   growth of the shaders, geometry, spatial-index, sectors and client-spawning captions is beyond the
@@ -331,6 +402,21 @@ were 0, so no such lines appeared, and the next line was `refCount:pBaseZB 1` [D
   game library's and the engine's script pools, the renderers' texture loading and buffer creation, the
   core library's memory manager and file reading, and the import tables of the shipped modules.
 - Approved specifications of the repository read for context (CC, CS, `steering-the-original.md`).
+- Sound (2.1.1, 2.4.1): static analysis with Ghidra 12.2 (headless, read-only) of `xrSound.dll` (the sound
+  manager's creation, device creation, the sound cache, sound files, channels and the built-in decoder) and
+  the import tables of `xrSound.dll`, `OpenAL32.dll` and `wrap_oal.dll`. Seven New Games under R1 as above
+  but with sound on (no `-nosound`) and the configuration's `snd_volume_eff` and `snd_volume_music` set to
+  0, each running `stat_memory` 15 s into the level and quitting (nothing was audible: the container has no
+  path to any speaker). The container's Wine has no audio driver, so for six of them the prefix was given a
+  silent test device: a native 32-bit `mmdevapi.dll` written for these runs (dirty workspace
+  `consnd/run/nullmmdev/`, built in the container with its MinGW), offering one render endpoint that
+  accepts the formats asked for and consumes the written frames in real time without playing them; Wine's
+  own DirectSound and wave output ran unchanged on it, and the game's OpenAL device `Generic Software`
+  was created on it. Its stream buffers are in the process heap (*p*): one per open stream, of the length the stream asks
+  for (at least 30 ms).
+  Those six: three with the defaults (`snd_cache_size 16`, `snd_targets 24`), one with
+  `snd_cache_size 32`, one with `snd_targets 4` and one with `snd_targets 48` (out of range, rejected, so
+  the default 16). The seventh had no device at all.
 - No leaked source code, derived projects or third-party documentation of the engine were used.
 
 
@@ -341,3 +427,4 @@ were 0, so no such lines appeared, and the next line was `refCount:pBaseZB 1` [D
 - Where the shared strings and shared memory blocks that *s* and *m* describe are themselves stored, and so which figure counts them.
 - Which heap the Direct3D helper library's own C runtime allocates from, and so whether *p* or no figure but *c* counts those allocations.
 - Whether the per-caption figures of 2.4.1 differ under R2 (all the New Game runs used R1).
+- How the sound device's output rate (`snd_freq`, 22,050 or 44,100 Hz) changes the cache's bytes per line and line count and the channels' buffer size with sound on (all runs used 44,100 Hz).
