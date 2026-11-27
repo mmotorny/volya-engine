@@ -333,7 +333,7 @@ impl Level {
     /// billboard groups descended to their trees and their billboards not
     /// drawn, meshes and trees whole, progressive visuals at level 0. A
     /// visual reached twice is drawn once (level.md section 9.3).
-    pub fn static_draw_items(&self, geom: &LevelGeom) -> io::Result<Vec<DrawItem>> {
+    pub fn static_draw_items(&self, geom: &LevelGeom) -> io::Result<DrawList> {
         self.static_draw_items_from(&mut geom.source())
     }
 
@@ -341,7 +341,7 @@ impl Level {
     /// index buffers' ranges the draws use are read, in pieces of at most
     /// [`INDEX_PIECE`] bytes. The first visual in drawing order that fails
     /// is reported, as when the indices are all in memory.
-    pub fn static_draw_items_from(&self, geom: &mut dyn GeomSource) -> io::Result<Vec<DrawItem>> {
+    pub fn static_draw_items_from(&self, geom: &mut dyn GeomSource) -> io::Result<DrawList> {
         self.static_draw_items_in_pieces(geom, INDEX_PIECE)
     }
 
@@ -351,10 +351,21 @@ impl Level {
         &self,
         geom: &mut dyn GeomSource,
         piece: usize,
-    ) -> io::Result<Vec<DrawItem>> {
+    ) -> io::Result<DrawList> {
         let mut visited = vec![false; self.visuals.len()];
         let mut stack: Vec<u32> = self.sectors.iter().rev().map(|s| s.root).collect();
-        let mut items = Vec::new();
+        // Sized for every visual drawn, as each reachable is: the lists are
+        // kept for the level, made without growing.
+        let drawn = || {
+            (self.visuals.iter()).filter(|v| {
+                !matches!(
+                    v.header.kind,
+                    VisualType::Group | VisualType::BillboardGroup
+                )
+            })
+        };
+        let mut items = Vec::with_capacity(drawn().count());
+        let mut trees = Vec::with_capacity(drawn().filter(|v| v.tree.is_some()).count());
         let mut failed = None;
         while let Some(i) = stack.pop() {
             if std::mem::replace(&mut visited[i as usize], true) {
@@ -366,7 +377,13 @@ impl Level {
                     stack.extend(v.children.iter().rev());
                 }
                 _ => match self.draw_item(i, v, geom.layout()) {
-                    Ok(item) => items.push(item),
+                    Ok(mut item) => {
+                        if let Some(t) = v.tree {
+                            item.tree = Some(trees.len() as u32);
+                            trees.push(t);
+                        }
+                        items.push(item);
+                    }
                     Err(e) => {
                         failed = Some(e);
                         break;
@@ -384,7 +401,12 @@ impl Level {
         }
         match failed {
             Some(e) => Err(e),
-            None => Ok(items),
+            None => {
+                // No room past the draws where some visual was unreachable.
+                items.shrink_to_fit();
+                trees.shrink_to_fit();
+                Ok(DrawList { items, trees })
+            }
         }
     }
 
@@ -480,8 +502,7 @@ impl Level {
             index_buffer: g.index_buffer,
             first_index,
             triangle_count: triangles,
-            transform: v.tree.map_or(IDENTITY, |t| t.matrix()),
-            tree: v.tree,
+            tree: None,
             detail,
         })
     }
@@ -571,12 +592,35 @@ fn first_index_beyond(
     Ok(first)
 }
 
-const IDENTITY: [[f32; 4]; 4] = [
+/// The identity transform: a mesh's, in world coordinates.
+pub const IDENTITY: [[f32; 4]; 4] = [
     [1.0, 0.0, 0.0, 0.0],
     [0.0, 1.0, 0.0, 0.0],
     [0.0, 0.0, 1.0, 0.0],
     [0.0, 0.0, 0.0, 1.0],
 ];
+
+/// A static frame's draw list ([`Level::static_draw_items`]): its draws in
+/// drawing order and the tree instances its trees draw.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DrawList {
+    pub items: Vec<DrawItem>,
+    /// The tree instances, in their items' order ([`DrawItem::tree`]).
+    pub trees: Vec<TreeInstance>,
+}
+
+impl DrawList {
+    /// `item`'s tree instance, none for a mesh.
+    pub fn tree(&self, item: &DrawItem) -> Option<&TreeInstance> {
+        item.tree.map(|t| &self.trees[t as usize])
+    }
+
+    /// `item`'s world transform, row-vector convention: identity for meshes
+    /// (world coordinates), the tree instance's transform for trees.
+    pub fn transform(&self, item: &DrawItem) -> [[f32; 4]; 4] {
+        self.tree(item).map_or(IDENTITY, TreeInstance::matrix)
+    }
+}
 
 /// One draw of a static frame: `triangle_count` triangles from index
 /// buffer `index_buffer` starting at `first_index`, each index relative to
@@ -594,11 +638,9 @@ pub struct DrawItem {
     pub index_buffer: u32,
     pub first_index: u32,
     pub triangle_count: u32,
-    /// World transform, row-vector convention: identity for meshes (world
-    /// coordinates), the tree instance's transform for trees.
-    pub transform: [[f32; 4]; 4],
-    /// The tree instance (per-instance lighting, ogf.md section 5).
-    pub tree: Option<TreeInstance>,
+    /// The tree instance (its transform and per-instance lighting, ogf.md
+    /// section 5), by its index in [`DrawList::trees`]; none for a mesh.
+    pub tree: Option<u32>,
     /// A progressive visual's indices every detail window draws (ogf.md
     /// sections 6, 8.3); the item's own range is level 0's.
     pub detail: Option<DetailSpan>,
@@ -907,11 +949,14 @@ mod tests {
             .is_err()
         );
 
-        let items = level.static_draw_items(&geom()).unwrap();
+        let list = level.static_draw_items(&geom()).unwrap();
+        let items = &list.items;
         let visuals: Vec<u32> = items.iter().map(|i| i.visual).collect();
         assert_eq!(visuals, [0, 3], "mesh once, tree, no billboard");
-        assert_eq!(items[0].transform, IDENTITY);
-        assert_eq!(items[1].transform[3][0], 5.0);
+        assert_eq!((items[0].tree, items[1].tree), (None, Some(0)));
+        assert_eq!(list.trees, [level.visuals[3].tree.unwrap()]);
+        assert_eq!(list.transform(&items[0]), IDENTITY);
+        assert_eq!(list.transform(&items[1])[3][0], 5.0);
         assert_eq!(items[0].triangle_count, 1);
     }
 
@@ -928,7 +973,7 @@ mod tests {
         let with_mesh = |f: &dyn Fn(&mut Visual)| {
             let mut level = base.clone();
             f(&mut level.visuals[0]);
-            level.static_draw_items(&geom)
+            level.static_draw_items(&geom).map(|l| l.items)
         };
         let progressive = |steps: Vec<Step>| {
             move |v: &mut Visual| {
@@ -1031,7 +1076,7 @@ mod tests {
         };
         let good = [0, 1, 2, 2, 1, 0, 1, 2, 0];
         let whole = run(&good, INDEX_PIECE).unwrap();
-        assert_eq!(whole.len(), 2);
+        assert_eq!(whole.items.len(), 2);
         for piece in [2, 4, 6, 8, 10, 16] {
             assert_eq!(run(&good, piece), Ok(whole.clone()), "{piece}-byte pieces");
             // Tree 3's bad index comes in an earlier piece than mesh 0's,

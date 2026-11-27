@@ -35,7 +35,7 @@ use crate::render::{
 };
 use crate::scene::{Scene, TextureId, WorldScene};
 use volya_engine_formats::dds::Dds;
-use volya_engine_formats::level::GEOMETRY_LOD;
+use volya_engine_formats::level::{GEOMETRY_LOD, IDENTITY};
 use volya_engine_formats::pe::Rgba;
 use volya_engine_formats::ui::{UI_HEIGHT, UI_WIDTH};
 use volya_engine_formats::video::TheoraVideo;
@@ -250,6 +250,7 @@ fn world_draws(level: &LevelWorld, windows_at: u32) -> Vec<WorldDraw> {
         .zip(&level.spheres)
         .zip(&level.draw_windows)
         .filter_map(|(((d, surface), sphere), &[first, count])| {
+            let tree = d.tree.map(|t| &level.tree_instances[t as usize]);
             let (first_index, index_count, windows) = match d.detail {
                 Some(span) if count > 0 => (
                     span.first_index,
@@ -266,9 +267,9 @@ fn world_draws(level: &LevelWorld, windows_at: u32) -> Vec<WorldDraw> {
                 first_index,
                 index_count,
                 windows,
-                transform: d.transform,
+                transform: tree.map_or(IDENTITY, |t| t.matrix()),
                 sphere: *sphere,
-                tree: d.tree.map(|t| TreeLight {
+                tree: tree.map(|t| TreeLight {
                     scale: t.scale,
                     bias: t.bias,
                 }),

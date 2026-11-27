@@ -1081,7 +1081,7 @@ fn static_draw_list_from_game_data() {
         let start = Instant::now();
         for &(name, .., triangles, _) in LEVELS {
             let world = StaticWorld::load(vfs, &dir(name)).unwrap();
-            let items = &world.draw_items;
+            let items = &world.draws.items;
             let drawable = world
                 .level
                 .visuals

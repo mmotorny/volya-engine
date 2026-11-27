@@ -7,7 +7,7 @@
 
 use std::io;
 
-pub use volya_engine_formats::level::{DrawItem, Level};
+pub use volya_engine_formats::level::{DrawItem, DrawList, Level};
 pub use volya_engine_formats::level_geom::LevelGeom;
 
 use crate::vfs::{self, Vfs};
@@ -18,8 +18,8 @@ pub struct StaticWorld {
     pub level: Level,
     pub geom: LevelGeom,
     /// Every visual drawn, once, with its geometry range, shader entry and
-    /// world transform.
-    pub draw_items: Vec<DrawItem>,
+    /// tree instance.
+    pub draws: DrawList,
 }
 
 impl StaticWorld {
@@ -32,13 +32,9 @@ impl StaticWorld {
             .map_err(|e| context("level", e))?;
         let mut file = vfs.open(&format!("{dir}/level.geom"))?;
         let geom = LevelGeom::read(&mut file).map_err(|e| context("level.geom", e))?;
-        let draw_items = level
+        let draws = level
             .static_draw_items(&geom)
             .map_err(|e| context("level", e))?;
-        Ok(Self {
-            level,
-            geom,
-            draw_items,
-        })
+        Ok(Self { level, geom, draws })
     }
 }

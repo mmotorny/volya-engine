@@ -90,7 +90,7 @@ use volya_engine_formats::level_geom::{GeomBuffer, GeomFile, GeomLayout, GeomSou
 use volya_engine_formats::level_hom;
 use volya_engine_formats::model as model_math;
 use volya_engine_formats::object::{self as record, ObjectRecord};
-use volya_engine_formats::ogf::VisualType;
+use volya_engine_formats::ogf::{TreeInstance, VisualType};
 use volya_engine_formats::particles as particle_records;
 use volya_engine_formats::patrol_path::PatrolPaths;
 use volya_engine_formats::shaders_xr;
@@ -121,6 +121,8 @@ pub struct LevelWorld {
     pub dir: String,
     pub shaders: Vec<String>,
     pub draw_items: Vec<DrawItem>,
+    /// The tree instances the draw items name ([`DrawItem::tree`]).
+    pub tree_instances: Vec<TreeInstance>,
     /// The surfaces of the shader entries the draw items use, textures as
     /// file paths (static-shading.md sections 4.2, 7, 8).
     pub surfaces: Vec<Surface<String>>,
@@ -1439,6 +1441,7 @@ pub struct NewGameLoad {
     geom: Option<GeomFile>,
     collision: Option<Arc<CollisionWorld>>,
     draw_items: Vec<DrawItem>,
+    tree_instances: Vec<TreeInstance>,
     spheres: Vec<[f32; 4]>,
     detail_windows: Vec<DetailWindow>,
     draw_windows: Vec<[u32; 2]>,
@@ -1882,7 +1885,7 @@ impl NewGameLoad {
                     source: geom.reader(&mut f),
                     failed: false,
                 };
-                let draw_items = level.static_draw_items_from(&mut indices).map_err(|e| {
+                let draw_list = level.static_draw_items_from(&mut indices).map_err(|e| {
                     // A read that failed is the file's; anything else the
                     // level's visuals.
                     file(
@@ -1894,6 +1897,7 @@ impl NewGameLoad {
                         e,
                     )
                 })?;
+                let draw_items = draw_list.items;
                 self.spheres = draw_items
                     .iter()
                     .map(|d| {
@@ -1905,6 +1909,7 @@ impl NewGameLoad {
                 (self.detail_windows, self.draw_windows) =
                     detail_windows(level, &geom.layout, &draw_items);
                 self.draw_items = draw_items;
+                self.tree_instances = draw_list.trees;
                 // The camera pass keeps the sectors, portals and visual
                 // hierarchy in its own form.
                 // The billboard groups' faces (ogf.md 7), kept for their
@@ -2462,6 +2467,7 @@ impl NewGameLoad {
                 dir: self.dir,
                 shaders,
                 draw_items: self.draw_items,
+                tree_instances: self.tree_instances,
                 spheres: self.spheres,
                 detail_windows: self.detail_windows,
                 draw_windows: self.draw_windows,
@@ -4145,6 +4151,7 @@ impl LevelScreen {
                 dir: String::new(),
                 shaders: Vec::new(),
                 draw_items: Vec::new(),
+                tree_instances: Vec::new(),
                 spheres: Vec::new(),
                 detail_windows: Vec::new(),
                 draw_windows: Vec::new(),
