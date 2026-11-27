@@ -12,6 +12,10 @@ Priorities, in order. Work items are tracked in GitHub issues and milestones.
 
 Work that needs a large system not yet built (physics, character motions and AI, dialogs and trade) waits until that system is implemented, rather than being stubbed piecemeal; its scope stays recorded in the specs and its issues are blocked by the system's.
 
+## Multiplayer
+
+Multiplayer comes after everything else in this roadmap (decided by the user). Until then the title menu's multiplayer item is disabled, and multiplayer-only settings are only stored.
+
 ## Game language
 
 1. Russian (GOG Russian installer).
