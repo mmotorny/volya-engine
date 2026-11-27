@@ -421,8 +421,7 @@ struct view {
 static struct {
     int64_t frame_ms, spin, epoch;
     uint32_t width, height;
-    char settings[64][2][64];
-    int nsettings;
+    struct buf ltx; /* the views' configuration file, CR LF lines */
     struct view views[32];
     int nviews;
 } plan;
@@ -457,11 +456,13 @@ static int read_plan(const char *path) {
         } else if (!strcmp(word, "size")) {
             plan.width = (uint32_t)atoi(strtok(NULL, " "));
             plan.height = (uint32_t)atoi(strtok(NULL, " "));
-        } else if (!strcmp(word, "setting") && plan.nsettings < 64) {
-            char *name = strtok(NULL, " "), *value = strtok(NULL, "");
-            snprintf(plan.settings[plan.nsettings][0], 64, "%s", name ? name : "");
-            snprintf(plan.settings[plan.nsettings][1], 64, "%s", value ? value : "");
-            plan.nsettings++;
+        } else if (!strcmp(word, "ltx")) {
+            /* A line of the configuration file, as it is. */
+            char *rest = strtok(NULL, "");
+            if (rest) {
+                put(&plan.ltx, rest, strlen(rest));
+            }
+            put(&plan.ltx, "\r\n", 2);
         } else if (!strcmp(word, "view") && plan.nviews < 32) {
             struct view *v = &plan.views[plan.nviews++];
             char *name = strtok(NULL, " "), *place = strtok(NULL, " "), *frame = strtok(NULL, " ");
@@ -496,102 +497,8 @@ static int read_plan(const char *path) {
         }
     }
     fclose(f);
-    if (!ok || !plan.frame_ms || !plan.width || !plan.nviews) {
+    if (!ok || !plan.frame_ms || !plan.width || !plan.nviews || !plan.ltx.n) {
         return fail("plan: %s is not a capture plan of version 1", path);
-    }
-    return 1;
-}
-
-/* --- The configuration file --------------------------------------------- */
-
-/* The name of a configuration line: up to its first space. */
-static size_t name_len(const char *line) {
-    return strcspn(line, " ");
-}
-
-/* A line's place among the sorted lines: its name, `bind` for
- * `unbindall`. */
-static void place_of(const char *line, const char **p, size_t *n) {
-    *n = name_len(line);
-    *p = line;
-    if (*n == 9 && !memcmp(line, "unbindall", 9)) {
-        *p = "bind";
-        *n = 4;
-    }
-}
-
-/* Whether the bytes a[0..an) sort after b[0..bn). */
-static int bytes_after(const char *a, size_t an, const char *b, size_t bn) {
-    int c = memcmp(a, b, an < bn ? an : bn);
-    return c > 0 || (c == 0 && an > bn);
-}
-
-/* The views' configuration file (tests/fidelity/views.rs, `user_ltx`): the
- * shipped user.ltx's lines, CR and empty lines dropped, with each of the
- * plan's settings written into its line, or, where there is none, into a
- * new line before the first line whose place sorts after its name; every
- * line ends in CR LF. */
-static int user_ltx(const uint8_t *shipped, size_t size, struct buf *out) {
-    char *lines[1024];
-    int n = 0;
-    size_t at = 0;
-    while (at < size) {
-        size_t end = at;
-        while (end < size && shipped[end] != '\n') {
-            end++;
-        }
-        size_t len = end - at;
-        if (len && shipped[at + len - 1] == '\r') {
-            len--;
-        }
-        if (len) {
-            if (n == 1024) {
-                return fail("user.ltx has more than 1024 lines");
-            }
-            lines[n] = malloc(len + 1);
-            memcpy(lines[n], shipped + at, len);
-            lines[n][len] = 0;
-            n++;
-        }
-        at = end + 1;
-    }
-    for (int s = 0; s < plan.nsettings; s++) {
-        const char *name = plan.settings[s][0];
-        size_t nl = strlen(name);
-        char *line = malloc(nl + strlen(plan.settings[s][1]) + 2);
-        sprintf(line, "%s %s", name, plan.settings[s][1]);
-        int found = -1;
-        for (int i = 0; i < n && found < 0; i++) {
-            if (name_len(lines[i]) == nl && !memcmp(lines[i], name, nl)) {
-                found = i;
-            }
-        }
-        if (found >= 0) {
-            free(lines[found]);
-            lines[found] = line;
-            continue;
-        }
-        if (n == 1024) {
-            return fail("user.ltx has more than 1024 lines");
-        }
-        int where = n;
-        for (int i = 0; i < n; i++) {
-            const char *p;
-            size_t pn;
-            place_of(lines[i], &p, &pn);
-            if (bytes_after(p, pn, name, nl)) {
-                where = i;
-                break;
-            }
-        }
-        memmove(lines + where + 1, lines + where, (size_t)(n - where) * sizeof(char *));
-        lines[where] = line;
-        n++;
-    }
-    for (int i = 0; i < n; i++) {
-        put(out, lines[i], strlen(lines[i]));
-        put(out, "\r\n", 2);
-        free(lines[i]);
     }
     return 1;
 }
@@ -680,6 +587,14 @@ static int copy_install(const char *game, const char *copy) {
     if (!copy_tree(game, copy)) {
         return 0;
     }
+    struct tally c = {0};
+    scan(copy, &c);
+    if (c.files != t.files || c.bytes != t.bytes) {
+        return fail("the copy holds %llu files, %llu bytes; the install %llu files, %llu bytes",
+                    (unsigned long long)c.files, (unsigned long long)c.bytes,
+                    (unsigned long long)t.files, (unsigned long long)t.bytes);
+    }
+    say("Copied: %llu files, %llu bytes", (unsigned long long)c.files, (unsigned long long)c.bytes);
     return write_file(marker, want, strlen(want));
 }
 
@@ -1380,36 +1295,17 @@ static int game_running(void) {
     return found;
 }
 
-/* The run's user-data folder made afresh: the install's support data
- * (gog-install-additions.md section 3), the views' configuration file and
- * the camera tracks in its saves folder; when it was written, for quit(). */
-static int write_userdata(struct run *r, const char *game, ULONGLONG *written) {
-    char path[MAX_PATH], from[MAX_PATH];
+/* The run's user-data folder made afresh: the views' configuration file
+ * (the plan's, nothing of the install's or the user's) and the camera
+ * tracks in its saves folder; when it was written, for quit(). */
+static int write_userdata(struct run *r, ULONGLONG *written) {
+    char path[MAX_PATH];
     remove_tree(r->userdata);
     join(path, sizeof path, r->userdata, "savedgames");
     if (!make_dirs(path)) {
         return fail("cannot make %s", path);
     }
-    uint8_t *shipped = NULL;
-    size_t n = 0;
-    const char *support[] = {"user.ltx", "traffic.net"};
-    for (int i = 0; i < 2; i++) {
-        snprintf(from, sizeof from, "%s\\__support\\userdocs\\%s", game, support[i]);
-        join(path, sizeof path, r->userdata, support[i]);
-        if (!CopyFileA(from, path, FALSE)) {
-            return fail("cannot copy %s", from);
-        }
-        SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
-    }
-    snprintf(from, sizeof from, "%s\\__support\\userdocs\\user.ltx", game);
-    if (!read_file(from, &shipped, &n)) {
-        return fail("cannot read %s", from);
-    }
-    struct buf steer = {0};
-    if (!user_ltx(shipped, n, &steer)) {
-        return 0;
-    }
-    free(shipped);
+    struct buf steer = plan.ltx;
     char hex[65];
     sha256_hex(steer.p, steer.n, hex);
     say("The views' configuration file: %zu bytes, SHA-256 %s", steer.n, hex);
@@ -1433,7 +1329,6 @@ static int write_userdata(struct run *r, const char *game, ULONGLONG *written) {
             }
         }
     }
-    free(steer.p);
     FILETIME now;
     GetSystemTimeAsFileTime(&now);
     *written = (ULONGLONG)now.dwHighDateTime << 32 | now.dwLowDateTime;
@@ -1467,7 +1362,7 @@ static int run_once(const char *exe_dir, const char *game, const char *work, con
     join(bin, sizeof bin, copy, "bin");
     ULONGLONG written;
     if (!copy_install(game, copy) || !write_fsgame(game, copy, r.userdata) ||
-        !write_userdata(&r, game, &written)) {
+        !write_userdata(&r, &written)) {
         return 0;
     }
     join(from, sizeof from, exe_dir, "winmm.dll");

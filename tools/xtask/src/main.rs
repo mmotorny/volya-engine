@@ -55,9 +55,6 @@ Tasks:
               The same for the original's capture on Windows (tools/wincapture).
   wincapture plan
               Print that capture's plan (from tests/fidelity/views.rs).
-  wincapture user-ltx-sha256 USER_LTX
-              The SHA-256 of the views' configuration file made from the
-              shipped user.ltx at USER_LTX, as the capture's log prints its own.
   update      Move to the latest Rust, crates, Bazel, its modules and the
               wasm LLVM, then run the checks and the advisories.
   gc          Remove Bazel's output bases of deleted worktrees.";
@@ -91,9 +88,6 @@ fn main() -> ExitCode {
         ["wincapture", "plan"] => {
             print!("{}", wincapture::plan());
             Ok(())
-        }
-        ["wincapture", "user-ltx-sha256", shipped] => {
-            wincapture::user_ltx_sha256(Path::new(shipped)).map(|h| println!("{h}"))
         }
         ["d3d9probes", "release"] => bazel::build_output(&root(), d3d9probes::RUNNER)
             .and_then(|zip| d3d9probes::release(&zip)),

@@ -22,7 +22,7 @@ mod list {
         "/../../tests/fidelity/views.rs"
     ));
 }
-use list::{Camera, HEIGHT, Place, SETTINGS, VIEW_SETTINGS, VIEWS, WIDTH};
+use list::{Camera, HEIGHT, Place, VIEWS, WIDTH};
 
 /// The runner zip's Bazel target and the release tags' prefix.
 pub const RUNNER: &str = "//tools/wincapture:runner";
@@ -95,8 +95,8 @@ pub fn plan() -> String {
          # From tests/fidelity/views.rs (xtask wincapture). Frames of {FRAME_MS} ms.\n\
          frame_ms {FRAME_MS}\nspin {SPIN}\nepoch {EPOCH}\nsize {WIDTH} {HEIGHT}"
     );
-    for (name, value) in SETTINGS.iter().chain(VIEW_SETTINGS) {
-        let _ = writeln!(p, "setting {name} {value}");
+    for line in String::from_utf8_lossy(&capture_ltx()).lines() {
+        let _ = writeln!(p, "ltx {line}");
     }
     for view in VIEWS {
         match view.place {
@@ -168,15 +168,16 @@ pub fn release(zip: &Path) -> Result {
     crate::d3d9probes::publish(zip, TAG_PREFIX, "wincapture.zip", &notes)
 }
 
-/// The SHA-256 of the views' configuration file made from the shipped
-/// `user.ltx` at `shipped`, which the driver logs for the one it makes.
-pub fn user_ltx_sha256(shipped: &Path) -> Result<String> {
-    use sha2::{Digest, Sha256};
-    let bytes = fs::read(shipped).map_err(|e| format!("{}: {e}", shipped.display()))?;
-    Ok(Sha256::digest(list::user_ltx(&bytes))
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect())
+/// The views' configuration file the capture starts the game with: the
+/// views' settings alone (`user_ltx` of no lines: one line each, in
+/// ascending order of their names, CR LF), nothing of the PC's install or
+/// user folder. The settings it lacks keep the game's built-in values; the
+/// key bindings are `config\default_controls.ltx`'s, which `unbindall`
+/// executes before the file (options-screens.md 11.5, 12.2), with
+/// `console` on `kGRAVE` and `quit` on `kESCAPE` (console-scope.md,
+/// startup.md section 4), the keys the capture presses.
+pub fn capture_ltx() -> Vec<u8> {
+    list::user_ltx(&[])
 }
 
 #[cfg(test)]
@@ -198,7 +199,11 @@ mod tests {
         let p = plan();
         assert!(p.starts_with("volya-capture-plan 1\n"));
         assert!(p.contains("\nsize 1920 1080\n"));
-        assert!(p.contains("\nsetting vid_mode 1920x1080\n"));
+        assert!(p.contains("\nltx vid_mode 1920x1080\n"));
+        assert!(p.contains("\nltx snd_volume_eff 0.\n"));
+        // Every setting, nothing else.
+        let ltx = p.lines().filter(|l| l.starts_with("ltx ")).count();
+        assert_eq!(ltx, list::SETTINGS.len() + list::VIEW_SETTINGS.len());
         assert!(p.contains("\nview title-menu title-menu 100\n"));
         assert!(p.contains("\nview bunker-start start 750\n"));
         for view in VIEWS {
