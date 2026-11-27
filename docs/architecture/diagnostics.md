@@ -57,6 +57,7 @@ WebGL 2 has no timestamp queries (headless Chrome's neither): the renderer times
 ## Storage
 
 - OPFS `volya-engine/diagnostic-log/0` … `7`, segments of 256 KiB with one sync access handle each (readwrite: one copy of the app gets them; another keeps its log in memory).
+- A reload's page can find them still held: the closed page ends its worker in `pagehide`, but Chrome lets go of the worker's handles a little later (measured, #633, headless Chrome under load: `NoModificationAllowedError` 89 ms after a reload; let go of 29–355 ms after the new worker first tried, in 18 of 54 reloads). A copy given a `page_closed` end the page before kept retries every 25 ms for up to 5 s while they're held, recording the wait; otherwise (a live copy holds them) it keeps its log in memory at once.
 - Turning the log on or off, reading it and its status run one at a time, so a read can't hold the handles while they open (#428): the log is reported on only once its store is open.
 - Each event is one self-contained JSON line; a period's events are appended in one write and flushed (each period, and at once after an end).
 - When the newest segment is full the oldest is emptied and becomes the newest, so the oldest events go first. Each segment begins with a header holding its sequence number (the order across reloads) and the session's metadata events. On opening, a segment whose header doesn't read (the origin is shared) is emptied and a line cut by an interrupted write is dropped. The download joins the lines into one trace.

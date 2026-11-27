@@ -29,6 +29,11 @@ const DIRECTORY: &str = "diagnostic-log";
 const PERIOD_MS: f64 = 1000.0;
 /// The period otherwise (the app's own screens), ms.
 const IDLE_PERIOD_MS: f64 = 10_000.0;
+/// How long a copy of the app waits for the one closed before it (a
+/// reload) to let go of the log's files, and the pause between attempts,
+/// ms (#633).
+const CLOSED_WAIT_MS: f64 = 5000.0;
+const CLOSED_RETRY_MS: i32 = 25;
 
 enum Store {
     Opfs(Vec<FileSystemSyncAccessHandle>),
@@ -230,8 +235,12 @@ async fn switch(on: bool, page: &serde_json::Value, previous_end: &serde_json::V
     if STARTED.with(Cell::get) {
         session_event().await;
     }
-    let (mut log, stored) = open_log().await;
-    if let Some(end) = recorded_end(previous_end) {
+    let end = recorded_end(previous_end);
+    // A page closed before this one (a reload) ends its worker as it goes,
+    // but the browser lets go of the worker's files a little later (#633).
+    let closed = end.as_ref().is_some_and(|e| e.reason == "page_closed");
+    let (mut log, stored) = open_log(closed).await;
+    if let Some(end) = end {
         let prefix = SESSION.with(|s| {
             s.borrow()
                 .as_ref()
@@ -331,10 +340,43 @@ async fn existing() -> Option<Store> {
     open_store().await.ok()
 }
 
+/// Whether `e` is the browser's refusal of a file another access handle
+/// holds.
+fn held(e: &JsValue) -> bool {
+    js_sys::Reflect::get(e, &"name".into())
+        .ok()
+        .and_then(|n| n.as_string())
+        .is_some_and(|n| n == "NoModificationAllowedError")
+}
+
+/// The log's segments; while another access handle holds them and
+/// `closed` (the copy of the app that held them was closed), retried until
+/// they're let go of, for at most [`CLOSED_WAIT_MS`].
+async fn open_store_after(closed: bool) -> Result<Store, JsValue> {
+    let start = crate::now();
+    let mut waited = false;
+    loop {
+        match open_store().await {
+            Err(e) if closed && held(&e) && crate::now() - start < CLOSED_WAIT_MS => {
+                waited = true;
+                crate::opfs::sleep(CLOSED_RETRY_MS).await?;
+            }
+            result => {
+                if waited && result.is_ok() {
+                    let waited_ms = crate::now() - start;
+                    tracing::info!(waited_ms, "diagnostic log's files waited for");
+                }
+                return result;
+            }
+        }
+    }
+}
+
 /// The log, from OPFS where its files can be opened, else in memory; and
-/// whether it is in OPFS.
-async fn open_log() -> (Log<Store>, bool) {
-    let problem = match open_store().await {
+/// whether it is in OPFS. `closed`: the copy of the app before this one
+/// was closed, so the files it held are waited for.
+async fn open_log(closed: bool) -> (Log<Store>, bool) {
+    let problem = match open_store_after(closed).await {
         Ok(store) => match Log::open(store) {
             Ok(log) => return (log, true),
             Err(e) => e.to_string(),
