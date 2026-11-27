@@ -36,7 +36,11 @@ const SUITES: &[&str] = &[
     "game-screens",
     "game-memory",
     "fidelity",
+    "d3d9probes",
 ];
+/// Suites served references Bazel made (`VOLYA_REFERENCES`) rather than
+/// VOLYA_COMPARE_DIR's.
+const REFERENCE_SUITES: &[&str] = &["fidelity", "d3d9probes"];
 const TARGETS: &[&str] = &["chrome", "iphone"];
 /// Suites run in Chrome with the kept profile (see [`kept_profile`]), so the
 /// game data they read is imported once (they import only what the
@@ -194,9 +198,10 @@ fn run_suite(
     suite: &str,
 ) -> std::result::Result<(), String> {
     // The fidelity suite compares with the original's frames (Bazel's
-    // captures), the others with VOLYA_COMPARE_DIR's.
-    let references = if suite == "fidelity" {
-        original_frames().map_err(|e| format!("{suite} on {target}: {e}"))?
+    // captures), the d3d9probes suite with the probes' results, the others
+    // with VOLYA_COMPARE_DIR's.
+    let references = if REFERENCE_SUITES.contains(&suite) {
+        bazel_references()
     } else {
         std::env::var_os("VOLYA_COMPARE_DIR").map(PathBuf::from)
     };
@@ -238,10 +243,11 @@ fn run_suite(
     }
 }
 
-/// The original's frames the fidelity suite compares with: Bazel's capture
-/// actions' (`//tests/fidelity:frames`, `VOLYA_FIDELITY_FRAMES`).
-fn original_frames() -> Result<Option<PathBuf>> {
-    Ok(env::var_os("VOLYA_FIDELITY_FRAMES").map(|dir| crate::runfile(Path::new(&dir))))
+/// What a suite of [`REFERENCE_SUITES`] compares with, Bazel's
+/// (`VOLYA_REFERENCES`): the original's frames (`//tests/fidelity:frames`)
+/// or the Direct3D 9 probes' results (`//tests/d3d9probes:references`).
+fn bazel_references() -> Option<PathBuf> {
+    env::var_os("VOLYA_REFERENCES").map(|dir| crate::runfile(Path::new(&dir)))
 }
 
 /// The kept Chrome profile's directory (see [`KEPT_PROFILE`]), one for the

@@ -145,6 +145,21 @@ pub(crate) struct Target {
 }
 
 impl Target {
+    /// A colour target of `size`, RGBA8, counted as the video mode's.
+    pub(crate) fn new(gl: &Gl, size: (u32, u32)) -> Self {
+        let texture = gl.owning(Owner::Targets, || {
+            gl.texture(TexFormat::Rgba8, size.0.max(1), size.1.max(1), 1, false)
+        });
+        let framebuffer = gl.framebuffer(Some(&texture), None);
+        Target {
+            texture: Texture {
+                texture,
+                ycbcr: false,
+            },
+            framebuffer,
+        }
+    }
+
     pub(crate) fn size(&self) -> (u32, u32) {
         self.texture.size()
     }
@@ -509,18 +524,7 @@ impl Renderer {
 
     /// A colour target of `size`, RGBA8.
     fn make_target(&self, size: (u32, u32)) -> Target {
-        let texture = self.gl.owning(Owner::Targets, || {
-            self.gl
-                .texture(TexFormat::Rgba8, size.0.max(1), size.1.max(1), 1, false)
-        });
-        let framebuffer = self.gl.framebuffer(Some(&texture), None);
-        Target {
-            texture: Texture {
-                texture,
-                ycbcr: false,
-            },
-            framebuffer,
-        }
+        Target::new(&self.gl, size)
     }
 
     /// The frame shown in a destination of `size`.

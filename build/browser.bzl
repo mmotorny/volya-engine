@@ -22,9 +22,9 @@ def _browser_suite_test_impl(ctx):
     }
     files = []
     if ctx.attr.references:
-        # The fidelity suite's: the original's frames.
+        # The fidelity suite's original frames, the d3d9probes suite's results.
         files = ctx.files.references
-        env["VOLYA_FIDELITY_FRAMES"] = ctx.files.references[0].short_path
+        env["VOLYA_REFERENCES"] = ctx.files.references[0].short_path
     if ctx.attr.gamedata and GOG_INSTALLER:
         env["VOLYA_GOG_INSTALLER"] = GOG_INSTALLER
     runfiles = ctx.runfiles(
@@ -41,7 +41,7 @@ browser_suite_test = rule(
     attrs = {
         "data": attr.label_list(allow_files = True, doc = "Further inputs: the browser's version, the game data's fingerprint."),
         "gamedata": attr.bool(doc = "Serve the installer to the page."),
-        "references": attr.label(doc = "Frames the page compares with, `fidelity/<view>.png`."),
+        "references": attr.label(doc = "What the page compares with, served as `<suite>/...`: a directory."),
         "runner": attr.label(executable = True, cfg = "target", mandatory = True),
         "site": attr.label(allow_single_file = True, mandatory = True),
         "site_next": attr.label(allow_single_file = True, mandatory = True),
@@ -71,7 +71,7 @@ def browser_suite(suite, target, tags = [], timeout = "moderate", gamedata = Tru
         tags: tags besides the ones every suite has.
         timeout: Bazel's timeout (the suite's report timeout is its own).
         gamedata: whether the suite reads the installer.
-        references: frames the page compares with (the fidelity suite's).
+        references: what the page compares with (the fidelity and d3d9probes suites').
     """
     # Never in `bazel test //...` by accident: the iOS Simulator and the
     # measurements run only when named, alone on the machine.

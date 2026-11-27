@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 load("//build:checks.bzl", "volya_checks")
-load("//build:d3d9probes.bzl", "d3d9probes_exe", "d3d9probes_wine", "d3d9probes_zip")
+load("//build:d3d9probes.bzl", "d3d9probes_exe", "d3d9probes_references", "d3d9probes_wine", "d3d9probes_zip")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -24,6 +24,18 @@ d3d9probes_wine(
     name = "wine",
     exe = ":exe",
     tags = ["manual"],
+)
+
+# What the `d3d9probes` browser suite compares our replay with: Wine's
+# results and each GPU's committed under hardware/ (docs/testing.md).
+d3d9probes_references(
+    name = "references",
+    hardware = glob(
+        ["hardware/*/results/**"],
+        allow_empty = True,
+    ),
+    tags = ["manual"],
+    wine = ":wine",
 )
 
 # The Windows runner, d3d9probes.exe and README.txt (docs/testing.md;

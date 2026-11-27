@@ -7,6 +7,8 @@
 //! only code calling it, `glsl` holds the programs' GLSL ES 3.00,
 //! translated from WGSL at build time.
 
+#[cfg(any(test, feature = "selftest"))]
+pub mod d3d9probes;
 pub mod gl;
 pub mod glsl;
 #[cfg(any(test, feature = "selftest"))]

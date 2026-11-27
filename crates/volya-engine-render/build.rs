@@ -14,7 +14,7 @@ use naga::back::glsl;
 use naga::valid::{Capabilities, ValidationFlags, Validator};
 
 /// The programs, by module name.
-const MODULES: [&str; 9] = [
+const MODULES: [&str; 10] = [
     "ui",
     "yuv",
     "sky",
@@ -24,6 +24,7 @@ const MODULES: [&str; 9] = [
     "details",
     "billboards",
     "world",
+    "probe",
 ];
 
 fn binding(module: &naga::Module, var: naga::Handle<naga::GlobalVariable>) -> (u32, u32) {

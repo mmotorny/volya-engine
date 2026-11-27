@@ -78,6 +78,39 @@ d3d9probes_wine = rule(
     }),
 )
 
+def _references_impl(ctx):
+    out = ctx.actions.declare_directory(ctx.label.name)
+    wine = ctx.file.wine
+    names = ["wine"]
+    pairs = ["wine={}/results".format(wine.path)]
+    for f in ctx.files.hardware:
+        # tests/d3d9probes/hardware/<gpu>/results/<path>
+        rest = f.path.split("/hardware/", 1)[1]
+        gpu, _, path = rest.partition("/results/")
+        if gpu not in names:
+            names.append(gpu)
+        pairs.append("{}/{}={}".format(gpu, path, f.path))
+    ctx.actions.run(
+        executable = ctx.executable._tool,
+        arguments = ["references", out.path, ",".join(names)] + pairs,
+        inputs = [wine] + ctx.files.hardware,
+        outputs = [out],
+        mnemonic = "D3d9ProbesReferences",
+        progress_message = "Gathering the D3D9 probes' references: %{label}",
+    )
+    return [DefaultInfo(files = depset([out]), runfiles = ctx.runfiles([out]))]
+
+d3d9probes_references = rule(
+    implementation = _references_impl,
+    doc = "What the `d3d9probes` suite compares with: `<name>/d3d9probes/<reference>/` " +
+          "(a results folder) for Wine and each GPU, and `references.json` naming them.",
+    attrs = {
+        "hardware": attr.label_list(allow_files = True, doc = "`hardware/<gpu>/results/**`."),
+        "wine": attr.label(mandatory = True, allow_single_file = True),
+        "_tool": _TOOL,
+    },
+)
+
 def _zip_impl(ctx):
     out = ctx.actions.declare_file(ctx.attr.out)
     ctx.actions.run(

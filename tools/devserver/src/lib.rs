@@ -51,7 +51,8 @@ pub const INSTALLER_BASE: &str = "/volya-engine/__test/installer/";
 pub const DUMP_BASE: &str = "/volya-engine/__test/dump/";
 /// With [`Server::with_references`], `<REFERENCE_BASE><suite>/<name>.png`
 /// serves `<dir>/<suite>/<name>.png`: a frame an earlier run dumped, which
-/// a suite compares with its own (404 without one). A GET of
+/// a suite compares with its own (404 without one); deeper paths and the
+/// kinds [`reference_path`] takes are served likewise. A GET of
 /// `REFERENCE_BASE` answers 204 when references are served, else 404.
 pub const REFERENCE_BASE: &str = "/volya-engine/__test/reference/";
 
@@ -222,8 +223,8 @@ impl Server {
                     .unwrap_or_else(|e| e.into_inner())
                     .clone();
                 let found = references.as_ref().and_then(|dir| {
-                    let (suite, name) = dump_path(&request.path[REFERENCE_BASE.len()..])?;
-                    Some(dir.join(suite).join(name)).filter(|p| p.is_file())
+                    let path = reference_path(&request.path[REFERENCE_BASE.len()..])?;
+                    Some(dir.join(path)).filter(|p| p.is_file())
                 });
                 return match found {
                     Some(path) => serve_file(&mut stream, &path, None, false, true, "no-store"),
@@ -368,19 +369,32 @@ enum Route {
     File(PathBuf),
 }
 
+/// A reference's path below the references' directory: `<suite>/` and one
+/// or more names, each a [`plain_name`], the last a frame, a configuration
+/// file, or the Direct3D 9 probes' `.bin` log and `.json` index.
+fn reference_path(rest: &str) -> Option<&str> {
+    let names: Vec<&str> = rest.split('/').collect();
+    let kind = [".png", ".ltx", ".bin", ".json"]
+        .iter()
+        .any(|k| rest.ends_with(k));
+    (names.len() >= 2 && names.iter().all(|n| plain_name(n)) && kind).then_some(rest)
+}
+
+/// ASCII letters, digits, `-`, `_` and `.` (not leading).
+fn plain_name(s: &str) -> bool {
+    !s.is_empty()
+        && !s.starts_with('.')
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+}
+
 /// `<suite>/<name>.png` (a frame) or `<suite>/<name>.ltx` (a configuration
-/// file, the fidelity suite's), each of ASCII letters, digits, `-`, `_` and `.`
-/// (not leading), as the suite's directory and the file's name.
+/// file, the fidelity suite's), each of [`plain_name`]'s characters, as the
+/// suite's directory and the file's name.
 fn dump_path(rest: &str) -> Option<(&str, &str)> {
     let (suite, name) = rest.split_once('/')?;
-    let plain = |s: &str| {
-        !s.is_empty()
-            && !s.starts_with('.')
-            && s.bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
-    };
     let kind = name.ends_with(".png") || name.ends_with(".ltx");
-    (plain(suite) && plain(name) && kind).then_some((suite, name))
+    (plain_name(suite) && plain_name(name) && kind).then_some((suite, name))
 }
 
 struct Request {
@@ -732,6 +746,34 @@ mod tests {
             found.starts_with("HTTP/1.1 200 ") && found.ends_with("png"),
             "{found}"
         );
+        fs::create_dir_all(dumps.join("d3d9probes/wine")).unwrap();
+        fs::write(dumps.join("d3d9probes/wine/scenes.bin"), b"VD9P").unwrap();
+        let get = |path: &str| {
+            let (dir, server) = fixture("nested-reference");
+            let server = server
+                .with_tests(&dir.join("tests"), Arc::new(|_| {}))
+                .unwrap()
+                .with_references(&dumps)
+                .unwrap();
+            let response = exchange(
+                server,
+                &format!("GET {REFERENCE_BASE}{path} HTTP/1.1\r\n\r\n"),
+            );
+            fs::remove_dir_all(dir).unwrap();
+            response
+        };
+        let nested = get("d3d9probes/wine/scenes.bin");
+        assert!(
+            nested.starts_with("HTTP/1.1 200 ") && nested.ends_with("VD9P"),
+            "{nested}"
+        );
+        for bad in [
+            "d3d9probes/../render/a-frame_1.png",
+            "d3d9probes/wine/.x.bin",
+            "scenes.bin",
+        ] {
+            assert!(get(bad).starts_with("HTTP/1.1 404 "), "{bad}");
+        }
         let (dir4, server) = fixture("no-reference");
         let server = server
             .with_tests(&dir4.join("tests"), Arc::new(|_| {}))

@@ -9,6 +9,8 @@
 //! - `run EXE OUT`: the probes run under Wine, `OUT/results/` and
 //!   `OUT/log.txt`.
 //! - `zip OUT FILE...`: the files in a zip, the Windows runner.
+//! - `references OUT NAMES DEST=SRC...`: the comparison suite's
+//!   references, Wine's results and real hardware's.
 
 #![allow(dead_code)] // The modules' other tasks are xtask's.
 
@@ -35,9 +37,14 @@ fn main() -> ExitCode {
         }
         ["run", exe, out] => d3d9probes::run_probes(Path::new(exe), Path::new(out)),
         ["zip", out, files @ ..] if !files.is_empty() => d3d9probes::zip(Path::new(out), files),
-        _ => {
-            Err("usage: d3d9probes-action build OUT SRC... | run EXE OUT | zip OUT FILE...".into())
+        ["references", out, names, pairs @ ..] => {
+            d3d9probes::references(Path::new(out), names, pairs)
         }
+        _ => Err(
+            "usage: d3d9probes-action build OUT SRC... | run EXE OUT | zip OUT FILE... \
+                  | references OUT NAMES DEST=SRC..."
+                .into(),
+        ),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

@@ -87,6 +87,40 @@ pub fn run_probes(exe: &Path, out: &Path) -> Result {
     result
 }
 
+/// `references OUT NAMES DEST=SRC...`: the comparison suite's references
+/// (`//tests/d3d9probes:references`, served to `d3d9probes.js`): each SRC
+/// (a file, or a folder copied whole) at `OUT/d3d9probes/DEST`, and
+/// `OUT/d3d9probes/references.json` listing NAMES (comma-separated), the
+/// references in the order the suite compares with them.
+pub fn references(out: &Path, names: &str, pairs: &[&str]) -> Result {
+    let root = out.join("d3d9probes");
+    for pair in pairs {
+        let (dest, src) = pair
+            .split_once('=')
+            .ok_or_else(|| format!("{pair}: not DEST=SRC"))?;
+        copy_all(Path::new(src), &root.join(dest))?;
+    }
+    let list: Vec<String> = names.split(',').map(|n| format!("{n:?}")).collect();
+    let index = root.join("references.json");
+    fs::write(&index, format!("[{}]\n", list.join(", ")))
+        .map_err(|e| format!("{}: {e}", index.display()))
+}
+
+/// `from` at `to`: a file copied, a folder with everything in it.
+fn copy_all(from: &Path, to: &Path) -> Result {
+    let made = |dir: &Path| fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()));
+    if !from.is_dir() {
+        made(to.parent().ok_or("no folder")?)?;
+        return copy(from, to);
+    }
+    made(to)?;
+    for entry in fs::read_dir(from).map_err(|e| format!("{}: {e}", from.display()))? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        copy_all(&entry.path(), &to.join(entry.file_name()))?;
+    }
+    Ok(())
+}
+
 /// `zip OUT FILE...`: the files, by their names, in a zip (stored, no
 /// timestamps), so the same files give the same zip.
 pub fn zip(out: &Path, files: &[&str]) -> Result {

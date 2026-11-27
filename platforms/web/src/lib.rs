@@ -778,6 +778,11 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         }
         #[cfg(feature = "test-ops")]
         "gl_selftest" => to_json(&gl_selftest()?),
+        // `{scenes_base64}`: the Direct3D 9 probes' `scenes.bin` replayed,
+        // each case `{probe, case, width, height}` with `rgba_base64` or
+        // `error`.
+        #[cfg(feature = "test-ops")]
+        "d3d9probes_replay" => to_json(&d3d9probes_replay(text("scenes_base64"))?),
         // `{check}`: runs that render check (`{note}` or `{skip}`); `{}`
         // lists them.
         #[cfg(feature = "test-ops")]
@@ -1080,6 +1085,70 @@ fn gl_selftest() -> Result<String, JsValue> {
         .ok_or_else(|| JsValue::from_str("no WebGL 2"))?
         .dyn_into::<web_sys::WebGl2RenderingContext>()?;
     volya_engine::render::gl::selftest(context).map_err(|e| JsValue::from_str(&e))
+}
+
+/// Replays the Direct3D 9 probes' scenes (base64 `scenes`) on a WebGL 2
+/// context of their own (#588).
+#[cfg(feature = "test-ops")]
+fn d3d9probes_replay(scenes: &str) -> Result<serde_json::Value, JsValue> {
+    use wasm_bindgen::JsCast;
+    let bytes = from_base64(scenes).ok_or_else(|| JsValue::from_str("scenes: not base64"))?;
+    let canvas = web_sys::OffscreenCanvas::new(1, 1)?;
+    let context = canvas
+        .get_context("webgl2")?
+        .ok_or_else(|| JsValue::from_str("no WebGL 2"))?
+        .dyn_into::<web_sys::WebGl2RenderingContext>()?;
+    let gl = volya_engine::render::gl::Gl::new(context);
+    let frames =
+        volya_engine::render::d3d9probes::replay(&gl, &bytes).map_err(|e| JsValue::from_str(&e))?;
+    Ok(serde_json::Value::Array(
+        frames
+            .iter()
+            .map(|f| {
+                let mut v = serde_json::json!({
+                    "probe": f.probe,
+                    "case": f.case,
+                    "width": f.width,
+                    "height": f.height,
+                });
+                match &f.rgba {
+                    Ok(rgba) => v["rgba_base64"] = serde_json::json!(gpu::Base64Value(rgba)),
+                    Err(e) => v["error"] = serde_json::json!(e),
+                }
+                v
+            })
+            .collect(),
+    ))
+}
+
+/// The bytes of standard base64 `text` (padded), or `None`.
+#[cfg(feature = "test-ops")]
+fn from_base64(text: &str) -> Option<Vec<u8>> {
+    let digit = |c: u8| -> Option<u32> {
+        Some(u32::from(match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        }))
+    };
+    let text = text.as_bytes();
+    if !text.len().is_multiple_of(4) {
+        return None;
+    }
+    let mut out = Vec::with_capacity(text.len() / 4 * 3);
+    for quad in text.chunks(4) {
+        let pad = quad.iter().rev().take_while(|&&c| c == b'=').count().min(2);
+        let mut n = 0;
+        for &c in &quad[..4 - pad] {
+            n = n << 6 | digit(c)?;
+        }
+        n <<= 6 * pad;
+        out.extend_from_slice(&n.to_be_bytes()[1..4 - pad]);
+    }
+    Some(out)
 }
 
 fn script_selftest() -> Result<String, JsValue> {
