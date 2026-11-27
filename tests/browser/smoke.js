@@ -682,6 +682,9 @@ export const tests = {
     const frame = Object.assign(document.createElement("iframe"), { width: 1600, height: 900 });
     frame.style.cssText = "position: fixed; left: -5000px; top: 0";
     frame.src = `${base}ux-audit/`;
+    // The board's defaults, whatever an earlier run left.
+    const VIEW = "volya-engine.ux-audit.view";
+    localStorage.removeItem(VIEW);
     document.body.append(frame);
     try {
       const { STATES } = await import(`${base}ux-audit/states.js`);
@@ -701,14 +704,20 @@ export const tests = {
       zoom.value = 55;
       zoom.dispatchEvent(new Event("change"));
       box.click();
+      // The view seen saved before the reload, and the reloaded board read,
+      // known by its document (#537): a load listener added after reload()
+      // may hear the old document's own load, still due while its frames
+      // load. A failure says what was saved.
+      const view = () => JSON.parse(localStorage.getItem(VIEW) ?? "null");
+      await until(() => view()?.zoom === "55" && !view().shown.includes("desktop"), `the view wasn't saved: ${localStorage.getItem(VIEW)}`);
       frame.contentWindow.location.reload();
-      await new Promise((r) => frame.addEventListener("load", r, { once: true }));
-      for (let i = 0; i < 100 && !frame.contentDocument.querySelector(".state"); i++) await new Promise((r) => setTimeout(r, 20));
+      await until(() => frame.contentDocument !== doc && frame.contentDocument?.querySelector(".state"), "the board didn't reload", 10000);
       const again = frame.contentDocument;
-      assertEqual(again.querySelector(".zoom input").value, "55", "zoom after reload");
-      assert(!again.querySelector(".devices input").checked, "device tick after reload");
-      localStorage.removeItem("volya-engine.ux-audit.view");
+      const seen = `the view saved: ${localStorage.getItem(VIEW)}`;
+      assertEqual(again.querySelector(".zoom input").value, "55", `zoom after reload (${seen})`);
+      assert(!again.querySelector(".devices input").checked, `device tick after reload (${seen})`);
     } finally {
+      localStorage.removeItem(VIEW);
       frame.remove();
     }
   },
