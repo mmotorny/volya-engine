@@ -14,12 +14,16 @@ data; everything it writes is game assets and stays on this machine.
                     client the game runs under
 - dynamorio\        DynamoRIO's drrun and runtime, 32-bit (BSD; its
                     License.txt), which starts the game with the client
+- counterprobe.exe  the self-test's program, ours: reads the counter
 - plan.txt          the views, their frames and settings
 
+  volyacapture selftest [--work DIR]
   volyacapture check [--runs N] [--game DIR] [--work DIR]
   volyacapture full  [--runs N] [--game DIR] [--work DIR]
 
-check: the title menu only; full: every view. N runs (default 2), compared.
+selftest: drrun and the client with counterprobe.exe in place of the game
+(no game needed); check: the title menu only; full: every view. N runs
+(default 2), compared.
 DIR of the game: default the install's registry entry. Work folder: default
 %TEMP%\volya-engine-capture (no space). Results: <work>\runs\. What it
 logs names no folder of this machine (<game folder>, <work>, <home>). The

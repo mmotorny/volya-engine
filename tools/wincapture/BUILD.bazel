@@ -45,6 +45,17 @@ wincapture_binary(
     out = "volyacapture.exe",
 )
 
+# The self-test's program (counterprobe.c).
+wincapture_binary(
+    name = "counterprobe",
+    srcs = [
+        "counterprobe.c",
+        "frameclock.h",
+    ],
+    kind = "exe",
+    out = "counterprobe.exe",
+)
+
 # The views, their frames and settings (tests/fidelity/views.rs).
 wincapture_plan(
     name = "plan",
@@ -60,6 +71,7 @@ d3d9probes_zip(
     srcs = [
         "README.txt",
         ":counter",
+        ":counterprobe",
         ":plan",
         ":volyacapture",
         ":winmm",

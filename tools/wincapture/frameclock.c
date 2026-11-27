@@ -1260,8 +1260,12 @@ static void start_clock(void) {
     main_thread = GetCurrentThreadId();
     clock_ = c;
     patch_all();
+    /* Whether the counter client (counter.c) had started before the
+     * game's libraries' initialisation, which this runs in. */
+    store(&c->counter_at_proxy, load(&c->counter_attached));
     store(&c->attached, 1);
-    dlog("attached; main thread %lu", main_thread);
+    dlog("attached; main thread %lu; the counter client %s", main_thread,
+         load(&c->counter_at_proxy) ? "had started" : "had not started");
     /* Starts once the loader lets go: it only writes the log. */
     CreateThread(NULL, 0, heartbeat, NULL, 0, NULL);
 }

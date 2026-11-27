@@ -17,6 +17,9 @@
  *       captured, quit from its console; N runs (default 2) compared.
  *   volyacapture full [--runs N] [--game DIR] [--work DIR]
  *       every view: the title menu, then a New Game started from it.
+ *   volyacapture selftest [--work DIR]
+ *       drrun and the counter client on this machine, with counterprobe.exe
+ *       of ours in place of the game: natively, then under drrun.
  *
  * Its plan, plan.txt beside it, comes from tests/fidelity/views.rs
  * (`xtask wincapture plan`): the views, their frames, the configuration
@@ -1667,12 +1670,25 @@ static int run_once(const char *exe_dir, const char *game, const char *work, con
                   "not loaded from %s",
                   ATTACH_TIMEOUT, ended(&r) ? " (the game ended)" : "", bin);
     }
-    /* The client starts before the game's first instruction, so before
-     * the proxy. */
-    if (ok && !load(&r.clock->counter_attached)) {
+    /* The client's start, and whether it came before the proxy's, so
+     * before the game's libraries' initialisation (an event: the same in
+     * every run). */
+    while (ok && load(&r.clock->counter_attached) == 0 && !ended(&r) &&
+           GetTickCount64() < until_ms) {
+        Sleep(5);
+    }
+    if (ok && load(&r.clock->counter_attached) != 1) {
         char first[256];
         drrun_output(&r, drlog, first, sizeof first);
-        ok = fail("the counter client did not start in the game; drrun's output: %s", first);
+        ok = fail("the counter client did not start in the game within %d s (its state %lld%s); "
+                  "drrun's output: %s (volyacapture selftest checks drrun and the client)",
+                  ATTACH_TIMEOUT, (long long)load(&r.clock->counter_attached),
+                  ended(&r) ? ", the game ended" : "", first);
+    }
+    if (ok) {
+        event(&r, load(&r.clock->counter_at_proxy)
+                      ? "the counter client started before the game's libraries"
+                      : "the counter client started after the game's libraries");
     }
     if (ok && (ok = advance(&r, 1, 0))) {
         event(&r, load(&r.clock->hooked) ? "the first frame, held"
@@ -1723,6 +1739,161 @@ static int run_once(const char *exe_dir, const char *game, const char *work, con
     DeleteFileA(path);
     fclose(log_file);
     log_file = NULL;
+    return ok;
+}
+
+/* --- The self-test ------------------------------------------------------- */
+
+/* Runs `command` (`program` its executable) in the folder `dir`, its
+ * output into `output`, for at most `seconds`; then prints that output,
+ * each line as redact.h says. Its exit code, or -1 if it did not start or
+ * end. */
+static long run_printing(const char *program, char *command, const char *dir,
+                         const char *output, int seconds) {
+    SECURITY_ATTRIBUTES inherit = {.nLength = sizeof inherit, .bInheritHandle = TRUE};
+    HANDLE out = CreateFileA(output, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit,
+                             CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (out == INVALID_HANDLE_VALUE) {
+        say("cannot make %s", output);
+        return -1;
+    }
+    STARTUPINFOA si = {.cb = sizeof si,
+                       .dwFlags = STARTF_USESTDHANDLES,
+                       .hStdInput = GetStdHandle(STD_INPUT_HANDLE),
+                       .hStdOutput = out,
+                       .hStdError = out};
+    PROCESS_INFORMATION pi;
+    HANDLE job = CreateJobObjectA(NULL, NULL);
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {0};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof limits);
+    long code = -1;
+    if (!CreateProcessA(program, command, NULL, NULL, TRUE, CREATE_SUSPENDED, NULL, dir, &si,
+                        &pi)) {
+        say("cannot start it (%lu)", GetLastError());
+    } else {
+        AssignProcessToJobObject(job, pi.hProcess);
+        ResumeThread(pi.hThread);
+        CloseHandle(pi.hThread);
+        if (WaitForSingleObject(pi.hProcess, (DWORD)seconds * 1000) == WAIT_OBJECT_0) {
+            DWORD c = 0;
+            GetExitCodeProcess(pi.hProcess, &c);
+            code = (long)c;
+        } else {
+            say("still running after %d s: ended", seconds);
+        }
+        CloseHandle(pi.hProcess);
+    }
+    CloseHandle(job);
+    CloseHandle(out);
+    uint8_t *data = NULL;
+    size_t size = 0;
+    int lines = 0;
+    if (read_file(output, &data, &size)) {
+        char line[1024];
+        size_t len = 0;
+        for (size_t i = 0; i <= size; i++) {
+            char ch = i < size ? (char)data[i] : '\n';
+            if (ch == '\r') {
+                continue;
+            }
+            if (ch != '\n') {
+                if (len < sizeof line - 1) {
+                    line[len++] = ch;
+                }
+                continue;
+            }
+            line[len] = 0;
+            if (len) {
+                say("  | %s", line);
+                lines++;
+            }
+            len = 0;
+        }
+        free(data);
+    }
+    say("exit code %ld (0x%lx), %d lines of output", code, (unsigned long)code, lines);
+    return code;
+}
+
+/* `volyacapture selftest`: drrun and the counter client on this machine,
+ * with a program of ours (counterprobe.exe) in place of the game, the
+ * frame clock's shared memory made as for a run: the probe natively (the
+ * processor's counter), then under drrun with the client as the game is
+ * started, without -quiet and with drrun's and DynamoRIO's diagnostics,
+ * the client verbose. */
+static int selftest(const char *exe_dir, const char *work) {
+    char probe[MAX_PATH], drrun[MAX_PATH], client[MAX_PATH], long_dir[MAX_PATH];
+    char path[MAX_PATH], output[MAX_PATH], command[2048];
+    join(probe, sizeof probe, exe_dir, "counterprobe.exe");
+    join(drrun, sizeof drrun, exe_dir, "dynamorio\\bin32\\drrun.exe");
+    join(client, sizeof client, exe_dir, "counter.dll");
+    if (!make_dirs(work)) {
+        return fail("cannot make %s", work);
+    }
+    DWORD n = GetLongPathNameA(exe_dir, long_dir, sizeof long_dir);
+    if (n == 0 || n >= sizeof long_dir) {
+        return fail("cannot read the long name of %s (%lu)", exe_dir, GetLastError());
+    }
+    redact_add(long_dir, "<runner>", 0);
+    join(path, sizeof path, work, "dynamorio-config");
+    if (!make_dirs(path) || !SetEnvironmentVariableA("DYNAMORIO_CONFIGDIR", path)) {
+        return fail("cannot make %s", path);
+    }
+    say("DynamoRIO's configuration folder: %s", path);
+    SYSTEM_INFO native;
+    GetNativeSystemInfo(&native);
+    BOOL wow64 = FALSE;
+    IsWow64Process(GetCurrentProcess(), &wow64);
+    say("Windows %s, this runner %s",
+        native.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64 ? "x64" : "not x64",
+        wow64 ? "32-bit under WOW64" : "native");
+
+    SetLastError(0);
+    HANDLE map = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0,
+                                    (DWORD)sizeof(struct frameclock), FRAMECLOCK_NAME);
+    if (!map || GetLastError() == ERROR_ALREADY_EXISTS) {
+        return fail("cannot make the frame clock's shared memory (a game still running?)");
+    }
+    struct frameclock *c = MapViewOfFile(map, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(struct frameclock));
+    if (!c) {
+        return fail("cannot map the frame clock's shared memory");
+    }
+    c->step = (uint64_t)plan.frame_ms * FRAMECLOCK_TICKS_PER_MS;
+    c->version = FRAMECLOCK_VERSION;
+    c->magic = FRAMECLOCK_MAGIC;
+
+    say("1. counterprobe.exe natively:");
+    join(output, sizeof output, work, "selftest-native.txt");
+    snprintf(command, sizeof command, "counterprobe.exe");
+    long native_code = run_printing(probe, command, exe_dir, output, 30);
+
+    say("2. drrun's own check of DynamoRIO (drrun -verbose -version):");
+    join(output, sizeof output, work, "selftest-version.txt");
+    snprintf(command, sizeof command, "\"%s\" -verbose -version", drrun);
+    run_printing(drrun, command, exe_dir, output, 30);
+
+    say("3. counterprobe.exe under drrun with the counter client:");
+    store(&c->counter_attached, 0);
+    store(&c->counter_reads, 0);
+    join(output, sizeof output, work, "selftest-drrun.txt");
+    snprintf(command, sizeof command,
+             "\"%s\" -verbose -msgbox_mask 0 -stderr_mask 15 -c \"%s\" \"%s\" verbose -- "
+             "counterprobe.exe",
+             drrun, client, long_dir);
+    say("  %s", command);
+    long code = run_printing(drrun, command, exe_dir, output, 120);
+    say("the counter client's state %lld, reads substituted %lld",
+        (long long)load(&c->counter_attached), (long long)load(&c->counter_reads));
+    UnmapViewOfFile(c);
+    CloseHandle(map);
+    int ok = native_code == 2 && code == 0;
+    say("selftest %s: natively %s, under drrun %s", ok ? "passed" : "FAILED",
+        native_code == 2 ? "the processor's counter" : "unexpected",
+        code == 0   ? "the client's counter"
+        : code == 2 ? "not the client's counter"
+        : code == 3 ? "no shared memory"
+                    : "the probe did not run to its end");
     return ok;
 }
 
@@ -1909,8 +2080,10 @@ int main(int argc, char **argv) {
             mode = "";
         }
     }
-    if ((strcmp(mode, "check") && strcmp(mode, "full")) || runs < 1) {
-        fprintf(stderr, "usage: volyacapture check|full [--runs N] [--game DIR] [--work DIR]\n");
+    if ((strcmp(mode, "check") && strcmp(mode, "full") && strcmp(mode, "selftest")) ||
+        runs < 1) {
+        fprintf(stderr, "usage: volyacapture check|full|selftest [--runs N] [--game DIR] "
+                        "[--work DIR]\n");
         return 2;
     }
     GetModuleFileNameA(NULL, exe_dir, MAX_PATH);
@@ -1921,6 +2094,12 @@ int main(int argc, char **argv) {
     join(plan_path, sizeof plan_path, exe_dir, "plan.txt");
     if (!read_plan(plan_path)) {
         return 1;
+    }
+    if (!strcmp(mode, "selftest")) {
+        redact_add_user();
+        int ok = selftest(exe_dir, work);
+        printf("%s\n", ok ? "Done." : failure[0] ? failure : "selftest failed");
+        return ok ? 0 : 1;
     }
     if (!game[0] && !default_game(game, sizeof game)) {
         fail("no --game DIR, and the install's registry key (HKLM\\SOFTWARE\\GSC Game "

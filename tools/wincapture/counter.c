@@ -7,7 +7,7 @@
  * client's one option) is replaced, the same way at every place, by a call
  * that returns a virtual counter:
  *
- *     COUNTER_BASE + clock_ms × COUNTER_PER_MS + n × COUNTER_STEP
+ *     TSC_BASE + clock_ms × TSC_PER_MS + n × TSC_STEP
  *
  * where clock_ms is the frame clock's milliseconds (frameclock.h, read from
  * the driver's shared memory) and n the counter reads substituted before
@@ -31,13 +31,6 @@
 #include "dr_api.h"
 
 #include "frameclock.h"
-
-/* An hour's worth of the counter at the clock's start, as the proxy's
- * performance counter starts an hour after start-up (frameclock.c). */
-#define COUNTER_PER_MS 3000000ull
-#define COUNTER_BASE (3600000ull * COUNTER_PER_MS)
-/* Back-to-back reads 30 apart: 10 ns at 3 GHz. */
-#define COUNTER_STEP 30ull
 
 static struct frameclock *clock_;
 
@@ -80,7 +73,7 @@ static void substitute(uint rdtscp) {
     dr_get_mcontext(dc, &mc);
     uint64_t n = (uint64_t)__atomic_fetch_add(&clock_->counter_reads, 1, __ATOMIC_SEQ_CST);
     uint64_t ms = frameclock_ticks(clock_) / FRAMECLOCK_TICKS_PER_MS;
-    uint64_t v = COUNTER_BASE + ms * COUNTER_PER_MS + n * COUNTER_STEP;
+    uint64_t v = TSC_BASE + ms * TSC_PER_MS + n * TSC_STEP;
     mc.xax = (reg_t)(uint32_t)v;
     mc.xdx = (reg_t)(uint32_t)(v >> 32);
     if (rdtscp) {
@@ -122,17 +115,37 @@ static dr_emit_flags_t block(void *dc, void *tag, instrlist_t *bb, bool for_trac
     return DR_EMIT_DEFAULT;
 }
 
-/* A failure the driver sees: the client not attached (its message on
- * drrun's error output, which the driver keeps). */
-static void fail(const char *why) {
+/* A failure the driver sees: counter_attached `code` (negative) when the
+ * shared memory opened, and the message on DynamoRIO's error output. */
+static void fail(int code, const char *why) {
     dr_fprintf(STDERR, "volya counter client: %s\n", why);
+    if (clock_) {
+        __atomic_store_n(&clock_->counter_attached, code, __ATOMIC_SEQ_CST);
+    }
     dr_abort_with_code(3);
 }
 
+static void say_total(void) {
+    dr_fprintf(STDERR, "volya counter client: %lld reads substituted\n",
+               (long long)__atomic_load_n(&clock_->counter_reads, __ATOMIC_SEQ_CST));
+}
+
+/* Options: the game's folder, then `verbose` for the self-test (a line at
+ * the start and the total at the end on DynamoRIO's error output). */
 DR_EXPORT void dr_client_main(client_id_t id, int argc, const char *argv[]) {
     (void)id;
-    if (argc != 2) {
-        fail("usage: counter.dll <game folder>");
+    HANDLE map = OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, FRAMECLOCK_NAME);
+    clock_ = map ? MapViewOfFile(map, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(struct frameclock))
+                 : NULL;
+    if (!clock_) {
+        fail(0, "cannot open the frame clock's shared memory (start the game with volyacapture)");
+    }
+    if (clock_->magic != FRAMECLOCK_MAGIC || clock_->version != FRAMECLOCK_VERSION) {
+        fail(-2, "the frame clock's shared memory is of another version");
+    }
+    int verbose = argc == 3 && argv[2][0] == 'v';
+    if (argc != 2 && !verbose) {
+        fail(-1, "usage: counter.dll <game folder> [verbose]");
     }
     size_t n = 0;
     for (const char *s = argv[1]; *s && n < MAX_PATH - 1; s++) {
@@ -140,20 +153,18 @@ DR_EXPORT void dr_client_main(client_id_t id, int argc, const char *argv[]) {
         folder[n++] = c == '/' ? '\\' : c;
     }
     if (n == 0 || n >= MAX_PATH - 1) {
-        fail("the game folder is empty or too long");
+        fail(-1, "the game folder is empty or too long");
     }
     if (folder[n - 1] != '\\') {
         folder[n++] = '\\';
     }
     folder_len = n;
 
-    HANDLE map = OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, FRAMECLOCK_NAME);
-    clock_ = map ? MapViewOfFile(map, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(struct frameclock))
-                 : NULL;
-    if (!clock_ || clock_->magic != FRAMECLOCK_MAGIC || clock_->version != FRAMECLOCK_VERSION) {
-        fail("no frame clock of this version (start the game with volyacapture)");
-    }
     dr_register_bb_event(block);
+    if (verbose) {
+        dr_fprintf(STDERR, "volya counter client: started, %d options\n", argc - 1);
+        dr_register_exit_event(say_total);
+    }
     __atomic_store_n(&clock_->counter_attached, 1, __ATOMIC_SEQ_CST);
 }
 

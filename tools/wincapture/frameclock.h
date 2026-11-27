@@ -19,7 +19,16 @@
 
 #define FRAMECLOCK_NAME "Local\\VolyaFrameClock"
 #define FRAMECLOCK_MAGIC 0x6b636f6c63796c76ull /* "vlyclock" */
-#define FRAMECLOCK_VERSION 6
+#define FRAMECLOCK_VERSION 7
+
+/* The counter client's time-stamp counter (counter.c): TSC_BASE +
+ * clock_ms × TSC_PER_MS + n × TSC_STEP, n the reads substituted
+ * before. 3 GHz of the clock, an hour's worth at its start (as the proxy's
+ * performance counter starts an hour after start-up), back-to-back reads
+ * 10 ns apart. */
+#define TSC_PER_MS 3000000ull
+#define TSC_BASE (3600000ull * TSC_PER_MS)
+#define TSC_STEP 30ull
 
 /* Ticks of the clock: 100 ns, the unit of the system time. Every clock the
  * game reads is derived from one count of them (frameclock.c). */
@@ -74,6 +83,7 @@ struct frameclock {
      * rule 1). */
     volatile int64_t counter_attached; /* 1 once the client runs in the game */
     volatile int64_t counter_reads;    /* time-stamp-counter reads substituted, all told */
+    volatile int64_t counter_at_proxy; /* by the proxy: counter_attached when it attached */
     uint8_t pixels[FRAMECLOCK_MAX_PIXELS * 4]; /* rows top first, B G R X */
 };
 
