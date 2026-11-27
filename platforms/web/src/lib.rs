@@ -640,6 +640,14 @@ pub fn level_controls() -> u32 {
     })
 }
 
+/// The game's resolution follows the canvas's size (`on`: the page's
+/// ergonomic mobile mode, #806) or not; [`resize`] first gives the
+/// size of now.
+#[wasm_bindgen]
+pub fn follow_screen(on: bool) {
+    engine::set_follow_screen(on);
+}
+
 /// The page is in the browser's full screen (`on`) or not, or can't be
 /// (`supported` false): `rs_fullscreen` follows it, and the options
 /// screen's check box is disabled where it can't be.

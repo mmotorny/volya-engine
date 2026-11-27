@@ -2086,8 +2086,6 @@ impl App {
         self.video
     }
 
-    /// Sets `vid_mode` to `mode` and applies it, as a video restart would
-    /// (tests and measurements: the frame's cost at a given size).
     /// Sets `r__supersample` to `value` and applies it, as a video restart
     /// would (tests).
     pub fn set_supersample(&mut self, value: u32) {
@@ -2095,12 +2093,24 @@ impl App {
         self.supersample = supersample(&self.console);
     }
 
+    /// Sets `vid_mode` to `mode` and applies it as the options screen's
+    /// `vid_restart` does (options-screens.md 5.4, display-mode.md A.9):
+    /// for the resolution that follows the screen (#806), and tests and
+    /// measurements (the frame's cost at a given size).
     pub fn set_video_mode(&mut self, mode: Resolution) {
         self.console
             .exec(&format!("vid_mode {}x{}", mode.width, mode.height));
         self.video = video_mode(&self.console);
-        if let Some(Phase::Menu(menu)) = &mut self.phase {
-            menu.resized(&self.data, self.video);
+        self.supersample = supersample(&self.console);
+        self.full_screen_request = display_mode_request(&self.console, self.page_full_screen);
+        // A device reset (texture-quality-filtering.md 7.3).
+        self.samplers.reset(&self.console);
+        match &mut self.phase {
+            Some(Phase::Menu(menu)) => menu.resized(&self.data, self.video),
+            Some(Phase::Level {
+                menu: Some(menu), ..
+            }) => menu.resized(&self.data, self.video),
+            _ => {}
         }
     }
 

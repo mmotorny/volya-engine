@@ -249,11 +249,21 @@ const touch = createTouchControls(send, { call, onConsole: () => consoleTouch.ra
 // cursor, #856).
 const appSettings = globalThis.caches ? settingsStore(new URL("./", import.meta.url).href) : null;
 let touchMode = "standard";
+// The ergonomic mode on a touch device (#806): the game upright on upright
+// phones (style.css turns it otherwise), at the canvas's own size, which
+// the game's resolution follows.
+const applyTouchMode = () => {
+  const upright = touchMode === "experimental" && touchControls.available();
+  if (upright) document.documentElement.dataset.touchMode = "experimental";
+  else delete document.documentElement.dataset.touchMode;
+  worker.postMessage({ type: "follow_screen", on: upright, ...size() });
+};
 (async () => {
   const stored = await appSettings?.read().catch(() => ({}));
   if (TOUCH_MODES.includes(stored?.touch)) touchMode = stored.touch;
   forward.setTouchMode(touchMode);
   touch.setMode(touchMode);
+  applyTouchMode();
 })();
 const touchControls = {
   get mode() {
@@ -265,6 +275,7 @@ const touchControls = {
     if (!TOUCH_MODES.includes(mode)) throw new Error(`unknown touch controls: ${mode}`);
     touchMode = mode;
     forward.setTouchMode(mode);
+    applyTouchMode();
     touch.setMode(mode);
     if (appSettings) await saveSettings(appSettings, { touch: mode });
   },

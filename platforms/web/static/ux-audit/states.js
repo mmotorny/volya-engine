@@ -160,10 +160,11 @@ export const SECTIONS = [
   },
   // The ergonomic mobile mode (#802, Settings): the whole picture moves
   // (a tap) and looks (a drag), a pinch zooms the view (the game draws
-  // it); no stick.
+  // it); no stick; upright on an upright phone, the game at the screen's
+  // own size (#806).
   {
     title: "In the level: ergonomic mode",
-    note: "Chosen in Settings. Touch controls: approximations; the app draws them from the textures in the game files.",
+    note: "Chosen in Settings. On an upright phone the game is upright too, drawn at the screen's own size. Touch controls: approximations; the app draws them from the textures in the game files.",
     states: [
       { id: "level-experimental", name: "Idle: no stick", level: { mode: "experimental" }, devices: TOUCH },
       {
@@ -173,6 +174,21 @@ export const SECTIONS = [
         devices: TOUCH,
       },
       { id: "level-experimental-jump", name: "Jump held", level: { mode: "experimental", down: "jump" }, devices: TOUCH },
+      { id: "level-experimental-crouched", name: "Crouched", level: { mode: "experimental", crouch: true }, devices: TOUCH },
+      { id: "level-experimental-torch", name: "Torch on", level: { mode: "experimental", torch: true }, devices: TOUCH },
+      {
+        id: "level-experimental-night-vision",
+        name: "Wearing an outfit with night vision: Night vision shown",
+        level: { mode: "experimental", nightVision: false },
+        devices: TOUCH,
+      },
+      { id: "console-experimental-menu", name: "Main menu: Console at the top left", console: { mode: "experimental", menu: true }, devices: TOUCH },
+      {
+        id: "console-experimental-typing",
+        name: "Console open over the level, the keyboard up, a line typed",
+        console: { mode: "experimental", keyboard: true },
+        devices: TOUCH,
+      },
       {
         id: "level-touch-pda-open",
         name: "PDA open (the game draws it): PDA alone, closing it; elsewhere direct clicks",

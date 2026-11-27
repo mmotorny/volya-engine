@@ -283,6 +283,34 @@ export async function readRender() {
   render = (await volya.status()).render;
 }
 
+/** Whether the page lays the game out upright on this device (the ergonomic mode on a touch device, #806). */
+export const upright = () => document.documentElement.dataset.touchMode === "experimental";
+
+/**
+ * Sets the mobile mode (#802). Changed on a touch device while the game
+ * runs, the screen follows: in the ergonomic mode the game upright and its video
+ * mode the canvas's own size (#806), back in Standard the canvas's size of
+ * then; waited for, and read as `render`.
+ */
+export async function setTouchMode(mode) {
+  const changed = volya.touchControls.mode !== mode;
+  await volya.touchControls.set(mode);
+  if (changed && volya.touchControls.available() && (await state()).phase !== "none") await followed("the video mode to follow the canvas");
+  await readRender();
+}
+
+/** Waits until the game draws at the canvas's own size (`want` pixels, where given), which it then is. */
+export async function followed(what, want = null) {
+  const deadline = performance.now() + 5000;
+  let s;
+  while (performance.now() < deadline) {
+    s = await volya.status();
+    if (s.render && s.gpu.size && s.render.join() === s.gpu.size.join() && (!want || s.render.join() === want.join())) return s.render;
+    await sleep(30);
+  }
+  throw new Error(`timed out waiting for ${what}: drawn at ${s?.render}, the canvas ${s?.gpu.size}`);
+}
+
 /**
  * Page position of UI point (x, y): 1024 × 768 stretched to the drawn
  * picture, which fits the canvas with its aspect kept (#49).
@@ -414,7 +442,10 @@ export async function swipe(starts, [tx, ty], { lift = true, ids } = {}) {
   const t = (id) => ({ pointerType: "touch", pointerId: id, isPrimary: id === ids[0], button: -1 });
   const at = (i, f) => client(starts[i][0] + tx * f, starts[i][1] + ty * f);
   starts.forEach((_, i) => pointer("pointerdown", at(i, 0), { ...t(ids[i]), button: 0, buttons: 1 }));
-  const steps = Math.max(1, Math.ceil((Math.hypot(tx, ty) * cssPerUi()) / SLOW_STEP));
+  // Slow along both axes: an upright picture stretches the UI unevenly (#806).
+  const [a, b, c] = [client(0, 0), client(100, 0), client(0, 100)];
+  const [perX, perY] = [Math.hypot(b[0] - a[0], b[1] - a[1]) / 100, Math.hypot(c[0] - a[0], c[1] - a[1]) / 100];
+  const steps = Math.max(1, Math.ceil(Math.hypot(tx * perX, ty * perY) / SLOW_STEP));
   for (let n = 1; n <= steps; n++) {
     await sleep(25);
     starts.forEach((_, i) => pointer("pointermove", at(i, n / steps), { ...t(ids[i]), buttons: 1 }));

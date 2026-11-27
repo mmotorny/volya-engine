@@ -754,7 +754,7 @@ export const tests = {
       assertEqual(group?.getAttribute("aria-label"), "Mobile mode", "the group");
       assertEqual(
         [...group.querySelectorAll("label")].map((l) => l.textContent),
-        ["Standard", "Ergonomic (experimental)Hold the phone naturally and say what you want: tap where to go, drag anywhere to look, flick to keep turning, pinch to zoom."],
+        ["Standard", "Ergonomic (experimental)Hold the phone naturally and say what you want: tap where to go, drag anywhere to look, flick to keep turning, pinch to zoom. Held upright, the game is upright too."],
         "the choices",
       );
       assert(radio("standard").checked && !radio("experimental").checked, "standard by default");

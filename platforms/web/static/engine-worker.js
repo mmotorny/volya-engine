@@ -232,6 +232,11 @@ onmessage = async ({ data }) => {
   } else if (data.type === "resize") {
     await started;
     e().resize(data.width, data.height, data.dpr);
+  } else if (data.type === "follow_screen") {
+    // The canvas's size as the mode lays it out, then the mode (#806).
+    await started;
+    e().resize(data.width, data.height, data.dpr);
+    e().follow_screen(data.on);
   } else if (data.type === "audio") {
     e().audio_init(data.sampleRate, data.memory);
     // One output: a replaced one gets nothing more.

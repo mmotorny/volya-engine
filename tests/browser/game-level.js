@@ -5,14 +5,25 @@
 // the start view, its objects, lights and intro, the placed effect, the
 // collision world's rays, the zones' idle effects, frame and GPU times at a
 // few video modes (`level_stats`), transcoding costs where textures are
-// transcoded.
+// transcoded; on touch devices the ergonomic mode's upright
+// game at the screen's own size (#806), its frames kept.
 
-import { assert, assertEqual, skip } from "./harness.js";
+import { assert, assertEqual, dump, skip } from "./harness.js";
 import {
   ORIGINAL,
   byCaption,
   captionMs,
+  coarse,
+  enterLevel,
+  followed,
   glCalls,
+  quitToTitle,
+  readRender,
+  render,
+  setTouchMode,
+  turned,
+  upright,
+  view,
   gpu,
   heapMaps,
   levelFrames,
@@ -252,6 +263,68 @@ export const tests = {
     assert(level.textures > 300, `${level.textures} textures`);
     const per = each.per.map((p) => `${p.path.split("\\").pop()} ${p.size.join("×")} ${p.format} ${p.ms.toFixed(0)} ms (${p.ms_per_mpx.toFixed(0)} ms/Mpx)`);
     return `level: ${level.textures} textures, ${level.mpx.toFixed(1)} Mpx in ${(level.ms / 1000).toFixed(1)} s (${level.ms_per_mpx.toFixed(0)} ms/Mpx), wasm heap ${mib(level.heap_before)} → at most ${mib(level.heap_max)}; ${per.join("; ")}`;
+  },
+
+  "touch, ergonomic mode (#806): the game upright at the screen's own size, which a rotation changes; the title menu, a New Game's level, its inventory and PDA drawn at it; Standard turns it again": async () => {
+    needsGame();
+    if (!coarse()) skip("touch devices only: the setting applies there");
+    await until((s) => s.phase === "level" && !s.intro && !s.menu, "the level");
+    const portrait = innerHeight > innerWidth;
+    const pixels = () => [view().clientWidth, view().clientHeight].map((css) => Math.round(css * devicePixelRatio));
+    const frames = [];
+    // A frame at the size drawn, kept for inspection (VOLYA_DUMP_DIR).
+    const frame = async (name) => {
+      const [width, height] = render;
+      const capture = await volya.call("debug_capture", { width, height });
+      for (let i = 3; i < capture.rgba.length; i += 4) capture.rgba[i] = 255;
+      await dump(`experimental-${name}`, capture);
+      frames.push(`${name} ${width}×${height}`);
+    };
+    await setTouchMode("experimental");
+    assert(upright() && !turned(view()), "the canvas upright");
+    assertEqual(render, pixels(), "drawn at the canvas's own size");
+    if (portrait) assert(render[1] > render[0], `drawn upright: ${render}`);
+    // The level begun in Standard, its inventory and PDA laid out then.
+    await frame("level-switched");
+    // A rotation, as the canvas's size changing: followed each way.
+    const style = view().style.cssText;
+    Object.assign(view().style, { inset: "0 auto auto 0", width: `${innerHeight}px`, height: `${innerWidth}px` });
+    const turnedTo = await followed("the video mode to follow the rotated canvas", pixels());
+    await readRender();
+    assertEqual(turnedTo, pixels(), "the rotated size");
+    assert((turnedTo[0] > turnedTo[1]) === portrait, `drawn across: ${turnedTo}`);
+    await frame("level-rotated");
+    view().style.cssText = style;
+    const back = await followed("the video mode to follow the canvas back", pixels());
+    await readRender();
+    assertEqual(back, pixels(), "back at the canvas's size");
+    // A New Game in the ergonomic mode: its interface laid out at the upright size.
+    await quitToTitle();
+    await readRender();
+    await sleep(500);
+    await frame("title-menu");
+    await enterLevel();
+    await sleep(1000);
+    await frame("level");
+    key("KeyI");
+    await until((s) => s.inventory, "the inventory screen");
+    await sleep(500);
+    await frame("inventory");
+    key("Escape");
+    await until((s) => s.phase === "level" && !s.inventory, "the inventory closed");
+    key("KeyP");
+    await until((s) => s.pda, "the PDA");
+    await sleep(500);
+    await frame("pda");
+    key("Escape");
+    await until((s) => s.phase === "level" && !s.pda, "the PDA closed");
+    await setTouchMode("standard");
+    assertEqual(render, pixels(), "Standard: drawn at the canvas's size");
+    if (portrait) {
+      assert(!upright() && turned(view()), "Standard: the canvas turned");
+      assert(render[0] > render[1], `Standard: drawn landscape: ${render}`);
+    }
+    return frames.join(", ");
   },
 
   ...keptTeardown(),

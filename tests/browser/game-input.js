@@ -30,6 +30,7 @@ import {
   pointer,
   quitToTitle,
   render,
+  setTouchMode,
   sleep,
   state,
   stickTo,
@@ -39,6 +40,7 @@ import {
   toClient,
   turned,
   until,
+  upright,
   view,
 } from "./game.js";
 
@@ -791,8 +793,9 @@ export const tests = {
 
   "touch, experimental (#802): a look drag keeps the scene under the finger, a flick coasts on as a scroll view does (#754)": async () => {
     needsGame();
-    // The setting applies at once in the running level.
-    await volya.touchControls.set("experimental");
+    // The setting applies at once in the running level: on a touch device
+    // the game upright, at the canvas's own size (#806).
+    await setTouchMode("experimental");
     assertEqual(volya.touchControls.running, "experimental", "the touch controls' mode");
     const controls = document.getElementById("touch-controls");
     assert(controls, "no touch controls");
@@ -801,14 +804,18 @@ export const tests = {
     pointer("pointerup", client(512, 100), { ...tap, buttons: 0 });
     for (let i = 0; i < 50 && controls.hidden; i++) await sleep(20);
     assert(!controls.hidden, "the touch controls show");
+    if (coarse()) {
+      assert(upright() && !turned(view()) && !turned(controls), "the game and its controls upright");
+      if (innerHeight > innerWidth) assert(render[1] > render[0], `drawn upright: ${render}`);
+    }
     const look = controls.querySelector(".touch-look");
     const r = localRect(look, controls);
     // Drags from the right half's centre, as long as on #754's look area
     // there (the whole picture looks since #772).
     const span = (r.right - r.left) / 2;
     const [lx, ly] = [r.left + 1.5 * span, (r.top + r.bottom) / 2];
-    // The picture in the game's own (landscape) layout: the phone's long
-    // side across, upright (turned) or not.
+    // The picture in the controls' own layout, the game's (upright on an
+    // upright phone).
     const [width, height] = [controls.clientWidth, controls.clientHeight];
     const touchOn = (type, at) => {
       const [x, y] = toClient(controls, at);
@@ -1119,15 +1126,18 @@ export const tests = {
     await turnRound();
     s = await state();
     // A drag looks and moves nothing.
+    // About a quarter of the picture's height left (100 px on a phone held
+    // across), so it turns as far upright (#806).
     const [lx, ly] = centre(look);
+    const [dx, dy] = [height * 0.23, height * 0.045];
     const start = s.level;
     touchOn(look, "pointerdown", 32, [lx, ly]);
-    touchOn(look, "pointermove", 32, [lx - 100, ly - 20]);
+    touchOn(look, "pointermove", 32, [lx - dx, ly - dy]);
     // Held still, then lifted: no coast. The scene follows the finger left
     // and up: the view turns right and looks down.
     s = await until((s) => s.level.yaw > start.yaw + 0.2, "the drag to turn right");
     await sleep(120);
-    touchOn(look, "pointerup", 32, [lx - 100, ly - 20]);
+    touchOn(look, "pointerup", 32, [lx - dx, ly - dy]);
     assert(s.level.pitch > start.pitch, "the drag looks down");
     s = await state();
     assert(!s.level.player.trip && !s.level.player.moving, `a drag moved: ${JSON.stringify(s.level.player)}`);
@@ -1145,13 +1155,13 @@ export const tests = {
     for (let attempt = 0, id = 380; attempt < 3 && !jumped; attempt++, id++) {
       touchOn(jump, "pointerdown", id, [jx, jy]);
       touchOn(jump, "pointermove", id, [jx + 20, jy]);
-      touchOn(jump, "pointermove", id, [jx + 200, jy]);
+      touchOn(jump, "pointermove", id, [jx + height * 0.45, jy]);
       jumped = await until((s) => s.level.player.airborne, "Jump to jump", 1500).then(
         () => true,
         () => false,
       );
       await sleep(120);
-      touchOn(jump, "pointerup", id, [jx + 200, jy]);
+      touchOn(jump, "pointerup", id, [jx + height * 0.45, jy]);
     }
     assert(jumped, "Jump to jump");
     // The scene dragged right: the view turns left.
@@ -1341,7 +1351,7 @@ export const tests = {
     assertEqual(screen.style.transform, "", "the zoom ends with the cursor");
     // The standard tests start from a New Game of their own, as before.
     await quitToTitle();
-    await volya.touchControls.set("standard");
+    await setTouchMode("standard");
     return `pinched twice as far apart about the centre: ${zoomedIn.toFixed(2)}° (want ${want.toFixed(2)}°), turned ${turn.toFixed(4)} rad`;
   },
 
@@ -1349,12 +1359,17 @@ export const tests = {
     needsGame();
     // A New Game's level after the experimental tests' quit to the title
     // menu, in the default controls.
-    await volya.touchControls.set("standard");
+    await setTouchMode("standard");
     if ((await state()).phase === "menu") await enterLevel();
     await until((s) => s.phase === "level" && !s.menu && !s.intro, "the level's controls");
     assertEqual(volya.touchControls.running, "standard", "the touch controls' mode");
     const controls = document.getElementById("touch-controls");
     assert(controls, "no touch controls");
+    // On an upright phone the game turned again, drawn landscape (#806).
+    if (coarse() && innerHeight > innerWidth) {
+      assert(!upright() && turned(view()), "the game turned");
+      assert(render[0] > render[1], `drawn landscape: ${render}`);
+    }
     const tap = { pointerType: "touch", pointerId: 30, isPrimary: true, button: 0 };
     pointer("pointerdown", client(512, 100), { ...tap, buttons: 1 });
     pointer("pointerup", client(512, 100), { ...tap, buttons: 0 });
@@ -1576,7 +1591,11 @@ export const tests = {
       );
       touchOn(jump, "pointerup", id, [jx - 100, jy]);
     }
-    assert(jumped, "Jump to jump");
+    if (!jumped) {
+      const { held } = await volya.call("input_state");
+      const p = (await state()).level.player;
+      assert(false, `Jump to jump: held ${held}; ${JSON.stringify({ airborne: p.airborne, landing: p.landing, moving: p.moving, crouch: p.crouch, posture: p.posture, position: p.position })}; jump at ${[jx, jy]}, controls ${controls.clientWidth}×${controls.clientHeight}, ${JSON.stringify(controls.querySelector(".touch-button.jump").getBoundingClientRect())}`);
+    }
     s = await until((s) => s.level.yaw < yaw - 0.15, "the drag from Jump to turn left");
     s = await until((s) => !s.level.player.airborne, "the jump to land", 3000);
     // Crouch toggles: the engine reports it back to the button.

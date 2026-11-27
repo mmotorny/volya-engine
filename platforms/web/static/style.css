@@ -104,12 +104,13 @@ html[data-engine-input] canvas#view {
   visibility: visible;
 }
 
-/* The game is always drawn in landscape: on an upright phone (iOS lets web
-   apps neither lock nor request an orientation) the canvas is laid out
+/* The game is drawn in landscape: on an upright phone (iOS lets web apps
+   neither lock nor request an orientation) the canvas is laid out
    landscape and turned 90° clockwise, so the engine sees a landscape size.
-   input.js turns positions back. */
+   input.js turns positions back. Not in the ergonomic mobile mode
+   (main.js, #806): upright, at the screen's own aspect. */
 @media (orientation: portrait) and (pointer: coarse) {
-  canvas#view {
+  html:not([data-touch-mode="experimental"]) canvas#view {
     inset: auto;
     top: 50%;
     left: 50%;
@@ -139,10 +140,10 @@ html[data-engine-input] canvas#view {
   -webkit-touch-callout: none;
 }
 
-/* Turned with the canvas on upright phones: the controls' top is the
-   screen's right, their left the screen's top. */
+/* Turned with the canvas on upright phones (unless in the ergonomic mode): the
+   controls' top is the screen's right, their left the screen's top. */
 @media (orientation: portrait) and (pointer: coarse) {
-  :is(#touch-controls, #console-touch) {
+  html:not([data-touch-mode="experimental"]) :is(#touch-controls, #console-touch) {
     inset: auto;
     top: 50%;
     left: 50%;
@@ -652,7 +653,7 @@ button.touch-button.down .touch-edges {
 }
 
 @media (orientation: portrait) and (pointer: coarse) {
-  #text-entry {
+  html:not([data-touch-mode="experimental"]) #text-entry {
     inset: auto;
     top: 50%;
     left: 50%;
@@ -679,8 +680,8 @@ button.touch-button.down .touch-edges {
 }
 
 /* The game's picture lifted while the console's key strip would cover its
-   prompt line (console-touch.js, #682); never on upright phones, where
-   both are turned instead. */
+   prompt line (console-touch.js, #682); never where both are turned
+   instead (upright phones in the standard mode). */
 html[data-console-lift] :is(canvas#view, #console-touch) {
   transform: translateY(calc(-1 * var(--console-lift)));
 }

@@ -170,7 +170,8 @@ if (state.level) {
   // In the level: the page's own interface hides; over a plain backdrop the
   // full screen offer shows (desktop) or the touch controls do.
   document.documentElement.dataset.uxLevel = "";
-  if (device.height > device.width) document.documentElement.dataset.uxTurned = "";
+  // Turned on an upright phone, unless in the ergonomic mode (#806).
+  if (device.height > device.width && state.level.mode !== "experimental") document.documentElement.dataset.uxTurned = "";
   document.querySelector("main").hidden = true;
   const { mode, stick, lock, thumbY, trip, fade, down, offer, ...toggles } = state.level;
   if (offer) {
@@ -249,7 +250,7 @@ if (state.level) {
   // what the game draws) with the device's keyboard (a stand-in) and the
   // key strip on it.
   document.documentElement.dataset.uxLevel = "";
-  if (device.height > device.width) document.documentElement.dataset.uxTurned = "";
+  if (device.height > device.width && state.console.mode !== "experimental") document.documentElement.dataset.uxTurned = "";
   document.querySelector("main").hidden = true;
   const { menu, keyboard, down, paste } = state.console;
   const consoleTouch = createConsoleTouch(() => {}, { press() {}, type() {}, paste() {} }, { touch: true });

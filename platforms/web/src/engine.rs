@@ -98,6 +98,36 @@ thread_local! {
     static LOG_FILE_FAILED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     /// The output size in pixels, as the canvas was last sized.
     static RESOLUTION: RefCell<Resolution> = const { RefCell::new(Resolution::new(1024, 768)) };
+    /// Whether the game's resolution follows the canvas's size (the
+    /// ergonomic mobile mode, #806).
+    static FOLLOW_SCREEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether the canvas's size applies once at the next game's start (the
+    /// mode changed while none ran).
+    static SIZE_DUE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The game's resolution follows the canvas's own size, `on`, or not (the
+/// page's ergonomic mobile mode, #806): each change of size applied
+/// as a change of `vid_mode` is (display-mode.md A.9). Turned on, or off
+/// again, the canvas's size of now applies at once (or at the next game's
+/// start), so neither mode keeps the other's.
+pub fn set_follow_screen(on: bool) {
+    if FOLLOW_SCREEN.replace(on) == on {
+        return;
+    }
+    let native = RESOLUTION.with(|r| *r.borrow());
+    RUNNING.with(|r| match r.borrow_mut().as_mut() {
+        Some(running) => follow(&mut running.app, native, true),
+        None => SIZE_DUE.set(true),
+    });
+}
+
+/// `app` at the screen's size `native` when the resolution follows it, or
+/// when `anyway`.
+fn follow(app: &mut App, native: Resolution, anyway: bool) {
+    if (anyway || FOLLOW_SCREEN.get()) && app.video_mode() != native {
+        app.set_video_mode(native);
+    }
 }
 
 fn error(e: impl std::fmt::Display) -> JsValue {
@@ -169,6 +199,7 @@ pub async fn launch() -> Result<serde_json::Value, JsValue> {
                 .then_some(c)
             })));
             app.resized(native);
+            follow(&mut app, native, SIZE_DUE.take());
             app.set_saved_games(saves);
             // The page's full screen as it last said (`rs_fullscreen`).
             if let Some((on, supported)) = PAGE_FULL_SCREEN.get() {
@@ -434,6 +465,7 @@ pub fn resized(resolution: Resolution) {
     RUNNING.with(|r| {
         if let Some(running) = r.borrow_mut().as_mut() {
             running.app.resized(resolution);
+            follow(&mut running.app, resolution, false);
         }
     });
 }
