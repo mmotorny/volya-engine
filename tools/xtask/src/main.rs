@@ -9,6 +9,7 @@ mod common;
 mod d3d9probes;
 mod deploy;
 mod e2e;
+mod frames;
 mod machine;
 mod parity;
 mod spec_lint;
@@ -53,6 +54,10 @@ Tasks:
               as a GitHub release tagged by its hash, unless it exists.
   wincapture release
               The same for the original's capture on Windows (tools/wincapture).
+  frames-receive [ADDRESS]
+              Receive a Windows capture's fidelity files from the PC over the
+              local network into the fidelity suite's references; prints the
+              address, port and token the PC sends them with.
   wincapture plan
               Print that capture's plan (from tests/fidelity/views.rs).
   update      Move to the latest Rust, crates, Bazel, its modules and the
@@ -85,6 +90,8 @@ fn main() -> ExitCode {
         ["gc"] => bazel::gc(),
         ["wincapture", "release"] => bazel::build_output(&root(), wincapture::RUNNER)
             .and_then(|zip| wincapture::release(&zip)),
+        ["frames-receive"] => frames::receive(None),
+        ["frames-receive", address] => frames::receive(Some(address)),
         ["wincapture", "plan"] => {
             print!("{}", wincapture::plan());
             Ok(())
