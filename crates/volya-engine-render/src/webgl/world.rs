@@ -1659,7 +1659,7 @@ impl Renderer {
     ) {
         let inner = &frame.world.0;
         EMITTED.set([0; 5]);
-        let view_projection = multiply(&frame.view, &frame.projection);
+        let view_projection = multiply(&frame.view, &d3d9_pixel_centres(&frame.projection, size));
         let l = &frame.light;
         let t = frame.time;
         let gl = self.gl.clone();

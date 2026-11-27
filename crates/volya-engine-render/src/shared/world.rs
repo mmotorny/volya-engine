@@ -666,6 +666,19 @@ pub fn multiply(a: &Mat4, b: &Mat4) -> Mat4 {
     std::array::from_fn(|r| std::array::from_fn(|c| (0..4).map(|k| a[r][k] * b[k][c]).sum()))
 }
 
+/// `projection` followed by Direct3D 9's pixel centres in a target of
+/// `size` (frame-presentation.md, conventions): Direct3D 9 puts pixel
+/// (i, j)'s centre at viewport position (i, j), WebGL at (i + 0.5,
+/// j + 0.5), so clip positions move half a pixel right and down
+/// (x + w / W, y − w / H; clip y points up) to sample as Direct3D 9 does.
+pub fn d3d9_pixel_centres(projection: &Mat4, size: (u32, u32)) -> Mat4 {
+    let mut shift: Mat4 =
+        std::array::from_fn(|r| std::array::from_fn(|c| f32::from(u8::from(r == c))));
+    shift[3][0] = 1.0 / size.0 as f32;
+    shift[3][1] = -1.0 / size.1 as f32;
+    multiply(projection, &shift)
+}
+
 /// fog_plane from the view-projection matrix (section 9.3): with
 /// q = third column + fourth column and ℓ = |q.xyz|,
 /// (−q.xyz / (ℓ (far − near)), 1 − (q.w/ℓ − near)/(far − near)).
@@ -1091,6 +1104,19 @@ mod tests {
             }
             assert_eq!(pieces, whole, "wide {wide}");
         }
+    }
+
+    #[test]
+    fn d3d9_pixel_centres_move_half_a_pixel_right_and_down() {
+        let p: Mat4 = std::array::from_fn(|r| std::array::from_fn(|c| f32::from(u8::from(r == c))));
+        let m = d3d9_pixel_centres(&p, (2048, 1024));
+        // (0, 0, 0, 2) lands at clip (2 / 2048, −2 / 1024, 0, 2): ndc
+        // (+1/W, −1/H), half a pixel right and down.
+        let v = [0.0, 0.0, 0.0, 2.0f32];
+        let out: Vec<f32> = (0..4)
+            .map(|c| (0..4).map(|k| v[k] * m[k][c]).sum())
+            .collect();
+        assert_eq!(out, [2.0 / 2048.0, -2.0 / 1024.0, 0.0, 2.0]);
     }
 
     #[test]

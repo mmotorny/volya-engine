@@ -1053,7 +1053,7 @@ impl Renderer {
                 &self.gl,
                 &frame.particles,
                 &frame.view,
-                &frame.projection,
+                &world::d3d9_pixel_centres(&frame.projection, size),
                 (l.fog_color, l.fog_near, l.fog_far),
                 frame.filtering.mip_bias,
             )

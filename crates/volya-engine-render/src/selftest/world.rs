@@ -1153,7 +1153,7 @@ pub async fn the_presentation_reduces_a_supersampled_target(make: Make<'_>) -> O
         pass(ParticleProgram::Set, ParticleBlend::Off, &white),
         ParticleQueue::Early,
         1.0,
-        sprite(-2.0, 0.013, -2.0, 2.0, 0.5, 0xFFFF_FFFF),
+        sprite(-2.0, 0.005, -2.0, 2.0, 0.5, 0xFFFF_FFFF),
     );
     let size = 128;
     let mut f = frame(world.clone(), None);
