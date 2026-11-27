@@ -6,11 +6,29 @@
 //! graphics resources, `dump_open_files`' list and the phase lines of a
 //! load.
 
+use std::sync::OnceLock;
+
 use super::Log;
 
+/// Where the figures and counts come from: the program's parts, measured
+/// as a line is printed. A figure a part has no counterpart of is 0.
+#[derive(Clone, Copy, Debug)]
+pub struct Meters {
+    pub memory: fn() -> MemoryStatistics,
+    pub resources: fn() -> ResourceCounts,
+}
+
+static METERS: OnceLock<Meters> = OnceLock::new();
+
+/// The program's meters, set once, before the console starts (its first
+/// `stat_memory` is at startup, section 2.4). Without them every figure
+/// is 0. False when they were set already.
+pub fn set_meters(meters: Meters) -> bool {
+    METERS.set(meters).is_ok()
+}
+
 /// The figures `stat_memory` prints (section 2.1), in bytes, as the
-/// program's parts report them ([`super::Console::set_memory_statistics`]).
-/// TODO(#636): nothing reports them yet, so every figure is 0.
+/// program's parts measure them ([`Meters`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MemoryStatistics {
     /// The address space's free regions (*a*).
@@ -46,6 +64,11 @@ fn k(bytes: u64) -> u64 {
 }
 
 impl MemoryStatistics {
+    /// As the [`Meters`] measure them now.
+    pub(super) fn measured() -> Self {
+        METERS.get().map(|m| (m.memory)()).unwrap_or_default()
+    }
+
     /// `stat_memory`'s four lines (2.1). The memory it releases first has
     /// no counterpart here: nothing holds unused memory to give back.
     pub(super) fn print(&self, log: &mut Log) {
@@ -91,13 +114,17 @@ pub const RESOURCE_LABELS: [&str; 13] = [
 ];
 
 /// The resource manager's counts, by [`RESOURCE_LABELS`] (section 2.2), as
-/// the renderer reports them ([`super::Console::set_resource_counts`]).
-/// TODO(#636): nothing reports them yet, so every count is 0.
+/// the renderer measures them ([`Meters`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ResourceCounts(pub [u64; 13]);
 
 impl ResourceCounts {
-    /// The thirteen lines (2.2; at shutdown, 2.5). TODO(#636): at shutdown
+    /// As the [`Meters`] measure them now.
+    pub(super) fn measured() -> Self {
+        METERS.get().map(|m| (m.resources)()).unwrap_or_default()
+    }
+
+    /// The thirteen lines (2.2; at shutdown, 2.5). TODO(#668): at shutdown
     /// a remaining resource of the first five kinds is listed after its
     /// kind's line; none is reported, so none is listed.
     pub(super) fn print(&self, log: &mut Log) {

@@ -5,7 +5,8 @@
 // holds when the game left from its level is launched again and a New Game
 // runs at another video mode, the page hidden and shown, quitting to the
 // title menu, a New Game again, a New Game failing for a missing file,
-// quitting to the app, and the diagnostic log holding all of it.
+// quitting to the app, the game's log's memory figures, and the diagnostic
+// log holding all of it.
 
 import { assert, assertEqual } from "./harness.js";
 import {
@@ -13,6 +14,7 @@ import {
   audioFlows,
   byCaption,
   client,
+  enterLevel,
   gpu,
   heap,
   heapMaps,
@@ -329,6 +331,44 @@ export const tests = {
     for (let i = 0; i < bytes.length; i++) if (bytes[i] === 10) assertEqual(bytes[i - 1], 13, `a bare line feed at ${i}`);
     assert((await volya.call("game_log_status")).present, "not reported as stored");
     return `${bytes.length} bytes`;
+  },
+
+  "the game's log reports the memory in use and the renderer's resources (stat_memory, phase cmem, dump_resources)": async () => {
+    needsGame();
+    const dir = await (await (await navigator.storage.getDirectory()).getDirectoryHandle("volya-engine")).getDirectoryHandle("logs");
+    const read = () => dir.getFileHandle("xray_player.log").then((f) => f.getFile()).then((f) => f.text()).catch(() => "");
+    const before = await read();
+    // A game with a New Game's load, quit from the title menu: its log.
+    await launchToMenu();
+    await enterLevel();
+    await quitToTitle();
+    key("KeyQ");
+    await until((s) => s.phase === "none", "the game to end");
+    for (const end = performance.now() + 5000; ; await sleep(30)) {
+      const text = await read();
+      if (text !== before && text.includes("* RM_Dump: v_shaders")) break;
+      assert(performance.now() < end, "no log file stored at the quit");
+    }
+    // The figures' lines are ASCII; the captions' CP1251 is not read here.
+    const lines = new TextDecoder("latin1").decode(await (await (await dir.getFileHandle("xray_player.log")).getFile()).arrayBuffer()).split("\r\n");
+    const figure = (line, name) => Number(line.match(new RegExp(`${name}\\[(-?\\d+) K\\]`))?.[1]);
+    // The last load that finished: its end's phase pair, then
+    // `stat_memory` (console-diagnostics.md 2.4); its phases from its
+    // first `* phase time: 0 ms`.
+    const end = lines.findLastIndex((l, i) => l.startsWith("* [win32]: ") && lines[i - 1]?.startsWith("* phase cmem: "));
+    assert(end > 0, "no load finished in the stored log");
+    const start = lines.slice(0, end).findLastIndex((l) => l === "* phase time: 0 ms");
+    const cmem = lines.slice(start, end).filter((l) => l.startsWith("* phase cmem: ")).map((l) => Number(l.slice(14, -2)));
+    assert(cmem.length >= 2 && cmem.every((k) => k > 0), `phase cmem: ${cmem}`);
+    const [win32, d3d, xray] = lines.slice(end, end + 3);
+    assert(figure(win32, "committed") > 0 && figure(win32, "free") > 0, win32);
+    assert(figure(d3d, "textures") > 0, d3d);
+    assert(figure(xray, "crt heap") > 0, xray);
+    // The quit's resource counts (console-diagnostics.md 2.5).
+    const dump = lines.slice(lines.findLastIndex((l) => l.startsWith("* RM_Dump: textures  : "))).slice(0, 13);
+    const count = (label) => Number(dump.find((l) => l.startsWith(`* RM_Dump: ${label}: `))?.split(": ").at(-1));
+    assert(count("textures  ") > 0 && count("vs        ") > 0 && count("dcl       ") > 0, dump.join("; "));
+    return `phase cmem (K) ${cmem.join(", ")}; ${win32}; ${d3d}; ${xray}; at the quit ${dump.map((l) => l.slice(11).replace(/ +:/, ":")).join(", ")}`;
   },
 
   "the diagnostic log holds the games, their levels and their frames, after the game ended": async () => {

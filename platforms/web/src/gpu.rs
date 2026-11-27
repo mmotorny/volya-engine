@@ -414,17 +414,17 @@ pub fn world_stats() -> serde_json::Value {
             "gpu_object_bytes": world.map(|w| w.object_gpu_bytes()),
             "gpu_object_texture_bytes": world.map(|w| w.object_texture_bytes()),
             "frame_commands": frame_commands(),
-            "gpu_live": live(g.as_ref().map(|gpu| gpu.renderer.gpu_live())),
+            "gpu_live": live_json(g.as_ref().map(|gpu| gpu.renderer.gpu_live())),
             // The scenes' own (a level's), apart from what the renderer
             // keeps across games.
-            "gpu_level": live(g.as_ref().map(|gpu| gpu.renderer.gpu_live() - gpu.renderer.gpu_kept())),
-            "gpu_kept": live(g.as_ref().map(|gpu| gpu.renderer.gpu_kept())),
+            "gpu_level": live_json(g.as_ref().map(|gpu| gpu.renderer.gpu_live() - gpu.renderer.gpu_kept())),
+            "gpu_kept": live_json(g.as_ref().map(|gpu| gpu.renderer.gpu_kept())),
             // Everything the context holds, by owner (docs/architecture/
             // memory.md, GPU memory).
             "gpu_owners": g.as_ref().map(|gpu| {
                 volya_engine::render::gl::OWNERS
                     .iter()
-                    .map(|&o| (o.name().to_owned(), live(Some(gpu.renderer.gpu_live_of(o)))))
+                    .map(|&o| (o.name().to_owned(), live_json(Some(gpu.renderer.gpu_live_of(o)))))
                     .collect::<serde_json::Map<_, _>>()
             }),
             "prepared_textures": g.as_ref().map(|gpu| gpu.renderer.prepared_count()),
@@ -433,8 +433,44 @@ pub fn world_stats() -> serde_json::Value {
     })
 }
 
+thread_local! {
+    /// What [`live`] last saw.
+    static LIVE_SEEN: Cell<volya_engine::render::gl::Live> = Cell::default();
+}
+
+/// The resources the context holds now; while the renderer is busy, as last
+/// seen.
+pub fn live() -> volya_engine::render::gl::Live {
+    GPU.with(|g| match g.try_borrow() {
+        Ok(g) => {
+            let l = g.as_ref().map(|gpu| gpu.renderer.gpu_live()).unwrap_or_default();
+            LIVE_SEEN.set(l);
+            l
+        }
+        Err(_) => LIVE_SEEN.get(),
+    })
+}
+
+/// What `dump_resources` prints (docs/behavior/console-diagnostics.md 2.2),
+/// by their counterparts in the renderer: the textures no framebuffer
+/// draws into, those drawn into as a colour (render targets; none is a
+/// cube map), each program's vertex and fragment shader, the vertex arrays
+/// for the vertex declarations. WebGL has no render-state blocks, and the
+/// renderer no texture, matrix or constant lists, passes, shader elements
+/// or shaders of the original's kind: 0.
+pub fn resource_counts() -> volya_engine::core::console::ResourceCounts {
+    let l = live();
+    let mut counts = [0; 13];
+    counts[0] = l.textures - l.targets - l.depths;
+    counts[1] = l.targets;
+    counts[3] = l.programs;
+    counts[4] = l.programs;
+    counts[5] = l.vertex_arrays;
+    volya_engine::core::console::ResourceCounts(counts)
+}
+
 /// Resources the context holds.
-fn live(l: Option<volya_engine::render::gl::Live>) -> serde_json::Value {
+fn live_json(l: Option<volya_engine::render::gl::Live>) -> serde_json::Value {
     l.map_or(serde_json::Value::Null, |l| {
         json!({
             "buffers": l.buffers,

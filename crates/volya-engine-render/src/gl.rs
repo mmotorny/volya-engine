@@ -393,6 +393,7 @@ impl Gl {
             width,
             height,
             levels,
+            drawn_into: Cell::new(None),
         }));
         t.0.live.update(|l| {
             l.textures += 1;
@@ -653,6 +654,7 @@ impl Gl {
         self.count(Call::Create);
         let first_instance = self.gl.get_uniform_location(&raw, "naga_vs_first_instance");
         Ok(Program(Rc::new(ProgramInner {
+            live: self.add_live(|l| l.programs += 1),
             gl: self.gl.clone(),
             raw,
             id,
@@ -755,6 +757,18 @@ impl Gl {
         self.bind_draw_framebuffer(Some(&fb));
         for (attachment, t) in [(C::COLOR_ATTACHMENT0, color), (C::DEPTH_ATTACHMENT, depth)] {
             if let Some(t) = t {
+                let colour = attachment == C::COLOR_ATTACHMENT0;
+                if t.0.drawn_into.replace(Some(colour)).is_none() {
+                    let bytes = t.bytes();
+                    t.0.live.update(|l| {
+                        if colour {
+                            l.targets += 1;
+                        } else {
+                            l.depths += 1;
+                        }
+                        l.target_bytes += bytes;
+                    });
+                }
                 self.count(Call::Create);
                 self.gl.framebuffer_texture_2d(
                     C::DRAW_FRAMEBUFFER,
@@ -1265,15 +1279,24 @@ struct TextureInner {
     width: u32,
     height: u32,
     levels: u32,
+    /// Once a framebuffer draws into it: as its colour (true) or depth.
+    drawn_into: Cell<Option<bool>>,
 }
 
 impl Drop for TextureInner {
     fn drop(&mut self) {
         self.gl.delete_texture(Some(&self.raw));
         let bytes = texture_bytes(self);
+        let drawn_into = self.drawn_into.get();
         self.live.update(|l| {
             l.textures -= 1;
             l.texture_bytes -= bytes;
+            match drawn_into {
+                Some(true) => l.targets -= 1,
+                Some(false) => l.depths -= 1,
+                None => return,
+            }
+            l.target_bytes -= bytes;
         });
     }
 }
@@ -1378,7 +1401,13 @@ pub struct Live {
     pub buffer_bytes: u64,
     pub textures: u64,
     pub texture_bytes: u64,
+    /// Of the textures, those a framebuffer draws into: as its colour
+    /// (`targets`) or its depth (`depths`), and their bytes.
+    pub targets: u64,
+    pub depths: u64,
+    pub target_bytes: u64,
     pub vertex_arrays: u64,
+    pub programs: u64,
 }
 
 impl std::ops::Add for Live {
@@ -1390,7 +1419,11 @@ impl std::ops::Add for Live {
             buffer_bytes: self.buffer_bytes + o.buffer_bytes,
             textures: self.textures + o.textures,
             texture_bytes: self.texture_bytes + o.texture_bytes,
+            targets: self.targets + o.targets,
+            depths: self.depths + o.depths,
+            target_bytes: self.target_bytes + o.target_bytes,
             vertex_arrays: self.vertex_arrays + o.vertex_arrays,
+            programs: self.programs + o.programs,
         }
     }
 }
@@ -1410,7 +1443,11 @@ impl std::ops::Sub for Live {
             buffer_bytes: self.buffer_bytes - o.buffer_bytes,
             textures: self.textures - o.textures,
             texture_bytes: self.texture_bytes - o.texture_bytes,
+            targets: self.targets - o.targets,
+            depths: self.depths - o.depths,
+            target_bytes: self.target_bytes - o.target_bytes,
             vertex_arrays: self.vertex_arrays - o.vertex_arrays,
+            programs: self.programs - o.programs,
         }
     }
 }
@@ -1515,6 +1552,7 @@ impl Drop for SamplerInner {
 pub struct Sampler(Rc<SamplerInner>);
 
 struct ProgramInner {
+    live: Counted,
     gl: C,
     raw: WebGlProgram,
     id: u32,
@@ -1526,6 +1564,7 @@ struct ProgramInner {
 impl Drop for ProgramInner {
     fn drop(&mut self) {
         self.gl.delete_program(Some(&self.raw));
+        self.live.update(|l| l.programs -= 1);
     }
 }
 

@@ -35,7 +35,7 @@ pub use commands::{
     Bare, COMMANDS, CommandDef, DIFFICULTIES, GAME_MODES, Kind, PRESET_FILES, PRESETS, RENDERERS,
     Saved,
 };
-pub use diagnostics::{MemoryStatistics, RESOURCE_LABELS, ResourceCounts};
+pub use diagnostics::{MemoryStatistics, Meters, RESOURCE_LABELS, ResourceCounts, set_meters};
 pub use input::{Clipboard, LINE_LENGTH, Typed};
 pub use log::{FatalReport, Log};
 pub use value::{Value, help_text, parse_mode, real_status};
@@ -358,10 +358,10 @@ pub struct Console {
     /// of the bare name (texture-quality-filtering.md 6.1).
     executions: Vec<u64>,
     log: Log,
-    /// The figures `stat_memory` prints, as last reported.
-    memory: MemoryStatistics,
-    /// The counts `dump_resources` prints, as last reported.
-    resources: ResourceCounts,
+    /// Fixed figures for `stat_memory`, in place of the [`Meters`]'.
+    memory: Option<MemoryStatistics>,
+    /// Fixed counts for `dump_resources`, in place of the [`Meters`]'.
+    resources: Option<ResourceCounts>,
     /// The input line and its keys' state (docs/behavior/console-input.md).
     input: input::InputLine,
     /// The user configuration file runs at startup.
@@ -442,8 +442,8 @@ impl Console {
             untyped_generation: 0,
             executions: vec![0; COMMANDS.len()],
             log: Log::default(),
-            memory: MemoryStatistics::default(),
-            resources: ResourceCounts::default(),
+            memory: None,
+            resources: None,
             input: Default::default(),
             starting: false,
             fatal: None,
@@ -484,23 +484,34 @@ impl Console {
         &mut self.log
     }
 
-    /// The figures `stat_memory` prints from now on
-    /// (console-diagnostics.md 2.1).
+    /// Fixed figures `stat_memory` and the phase lines print from now on
+    /// (console-diagnostics.md 2.1), in place of the [`Meters`]' (tests).
     pub fn set_memory_statistics(&mut self, memory: MemoryStatistics) {
-        self.memory = memory;
+        self.memory = Some(memory);
     }
 
-    /// The counts `dump_resources` and the shutdown print from now on
-    /// (console-diagnostics.md 2.2).
+    /// Fixed counts `dump_resources` and the shutdown print from now on
+    /// (console-diagnostics.md 2.2), in place of the [`Meters`]' (tests).
     pub fn set_resource_counts(&mut self, resources: ResourceCounts) {
-        self.resources = resources;
+        self.resources = Some(resources);
+    }
+
+    /// The memory figures as of now.
+    fn memory(&self) -> MemoryStatistics {
+        self.memory.unwrap_or_else(MemoryStatistics::measured)
+    }
+
+    /// The resource counts as of now.
+    fn resources(&self) -> ResourceCounts {
+        self.resources.unwrap_or_else(ResourceCounts::measured)
     }
 
     /// A stage caption of a load begins (console-diagnostics.md 2.4):
     /// `ms` since the previous one began (or, for the first, since the
     /// load began), the memory in use, then the caption's displayed text.
     pub fn phase_caption(&mut self, ms: u64, caption: &str) {
-        diagnostics::phase(&mut self.log, ms, &self.memory);
+        let memory = self.memory();
+        diagnostics::phase(&mut self.log, ms, &memory);
         self.log.message(caption);
     }
 
@@ -509,14 +520,15 @@ impl Console {
     /// without the `~ <line>` echo. TODO(#637): through the console's input
     /// line, emptying it.
     pub fn load_ended(&mut self, ms: u64) {
-        diagnostics::phase(&mut self.log, ms, &self.memory);
+        let memory = self.memory();
+        diagnostics::phase(&mut self.log, ms, &memory);
         self.exec("stat_memory");
     }
 
     /// The graphics device is destroyed at exit (console-diagnostics.md
     /// 2.5): the resource manager's thirteen count lines.
     pub fn device_destroyed(&mut self) {
-        self.resources.print(&mut self.log);
+        self.resources().print(&mut self.log);
     }
 
     /// Why the program ends, once a command made it end: `help` executed
@@ -798,7 +810,7 @@ impl Console {
             }
             // console-diagnostics.md 2.1: the argument is ignored.
             "stat_memory" => {
-                self.memory.print(&mut self.log);
+                self.memory().print(&mut self.log);
                 Exec::Shown
             }
             // 2.2: the configuration file runs at startup before the
@@ -811,7 +823,7 @@ impl Console {
                 Exec::Shown
             }
             "dump_resources" => {
-                self.resources.print(&mut self.log);
+                self.resources().print(&mut self.log);
                 Exec::Shown
             }
             "dump_open_files" => {

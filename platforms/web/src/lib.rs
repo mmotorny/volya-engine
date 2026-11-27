@@ -26,18 +26,89 @@ use volya_engine::formats::ui::Resolution;
 use wasm_bindgen::prelude::*;
 use web_sys::{OffscreenCanvas, WorkerGlobalScope};
 
-/// Test builds count the wasm heap's live bytes and their high-water mark
-/// (the `heap_log` op), to tell what a stage holds from what fragmentation
-/// adds to the heap (#357), as `loading_memory.rs` does natively; and where
+/// Every build counts the wasm heap's live bytes (the bytes asked for, as
+/// `loading_memory.rs` counts them natively): the console's memory in use
+/// (`* phase cmem`, docs/behavior/console-diagnostics.md 2.4). Test builds
+/// also count their high-water mark (the `heap_log` op), to tell what a
+/// stage holds from what fragmentation adds to the heap (#357); and where
 /// the live bytes sit (the `heap_map` op, #432): per MiB of the heap, and
 /// each live block of 256 KiB or more.
-#[cfg(feature = "test-ops")]
 #[allow(unsafe_code)] // `GlobalAlloc` is unsafe to implement; this forwards.
 mod counting {
     use std::alloc::{GlobalAlloc, Layout, System};
     use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
     static LIVE: AtomicUsize = AtomicUsize::new(0);
+
+    pub fn live() -> usize {
+        LIVE.load(Relaxed)
+    }
+
+    struct Counting;
+
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            #[cfg(feature = "test-ops")]
+            let before = crate::tested::memory_bytes();
+            let p = unsafe { System.alloc(layout) };
+            if !p.is_null() {
+                LIVE.fetch_add(layout.size(), Relaxed);
+                #[cfg(feature = "test-ops")]
+                crate::tested::added(before, layout.size(), p);
+            }
+            p
+        }
+
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            #[cfg(feature = "test-ops")]
+            let before = crate::tested::memory_bytes();
+            let p = unsafe { System.alloc_zeroed(layout) };
+            if !p.is_null() {
+                LIVE.fetch_add(layout.size(), Relaxed);
+                #[cfg(feature = "test-ops")]
+                crate::tested::added(before, layout.size(), p);
+            }
+            p
+        }
+
+        unsafe fn dealloc(&self, p: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(p, layout) };
+            LIVE.fetch_sub(layout.size(), Relaxed);
+            #[cfg(feature = "test-ops")]
+            crate::tested::mapped(p, layout.size(), false);
+        }
+
+        unsafe fn realloc(&self, p: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+            #[cfg(feature = "test-ops")]
+            let before = crate::tested::memory_bytes();
+            let q = unsafe { System.realloc(p, layout, size) };
+            if !q.is_null() {
+                if size > layout.size() {
+                    LIVE.fetch_add(size - layout.size(), Relaxed);
+                } else {
+                    LIVE.fetch_sub(layout.size() - size, Relaxed);
+                }
+                #[cfg(feature = "test-ops")]
+                crate::tested::moved(before, p, layout.size(), q, size);
+            }
+            q
+        }
+    }
+
+    #[global_allocator]
+    static ALLOCATOR: Counting = Counting;
+
+    #[cfg(feature = "test-ops")]
+    pub use crate::tested::*;
+}
+
+/// The test builds' counts beside the live bytes ([`counting`]).
+#[cfg(feature = "test-ops")]
+mod tested {
+    use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+
+    use crate::counting::live;
+
     static PEAK: AtomicUsize = AtomicUsize::new(0);
     /// Allocations made (a growing reallocation counts as one) and their
     /// bytes (its new size), for a frame's heap traffic (#494).
@@ -71,7 +142,7 @@ mod counting {
     }; 64];
     static GROWTH_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-    fn memory_bytes() -> usize {
+    pub(crate) fn memory_bytes() -> usize {
         #[cfg(target_arch = "wasm32")]
         return core::arch::wasm32::memory_size(0) << 16;
         #[cfg(not(target_arch = "wasm32"))]
@@ -108,11 +179,31 @@ mod counting {
         (list, n)
     }
 
-    struct Counting;
+    /// After the live bytes grew.
+    fn grew() {
+        PEAK.fetch_max(live(), Relaxed);
+    }
 
-    fn grew(by: usize) {
-        let live = LIVE.fetch_add(by, Relaxed) + by;
-        PEAK.fetch_max(live, Relaxed);
+    /// After a block of `size` was allocated at `p`, the memory's bytes
+    /// `before` it.
+    pub(crate) fn added(before: usize, size: usize, p: *mut u8) {
+        noted(before, size, p);
+        grew();
+        allocated(size);
+        mapped(p, size, true);
+        recorded();
+    }
+
+    /// After the block of `old` bytes at `p` became `size` bytes at `q`.
+    pub(crate) fn moved(before: usize, p: *mut u8, old: usize, q: *mut u8, size: usize) {
+        noted(before, size, q);
+        mapped(p, old, false);
+        mapped(q, size, true);
+        if size > old {
+            grew();
+            allocated(size);
+            recorded();
+        }
     }
 
     /// A block of `size` bytes allocated, or grown to it.
@@ -126,13 +217,13 @@ mod counting {
         (
             ALLOCATIONS.load(Relaxed),
             BYTES.load(Relaxed),
-            LIVE.load(Relaxed),
+            live(),
         )
     }
 
     /// After a block was added: a new record's sizes and large blocks.
     fn recorded() {
-        let live = LIVE.load(Relaxed);
+        let live = live();
         if live <= RECORD.load(Relaxed) {
             return;
         }
@@ -177,7 +268,7 @@ mod counting {
     }
 
     /// Adds (or with `add` false removes) `size` bytes at `p` to the map.
-    fn mapped(p: *mut u8, size: usize, add: bool) {
+    pub(crate) fn mapped(p: *mut u8, size: usize, add: bool) {
         let class = &BY_SIZE[(usize::BITS - 1 - size.max(1).leading_zeros()) as usize];
         if add {
             class.fetch_add(size, Relaxed);
@@ -213,69 +304,10 @@ mod counting {
         }
     }
 
-    unsafe impl GlobalAlloc for Counting {
-        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-            let before = memory_bytes();
-            let p = unsafe { System.alloc(layout) };
-            if !p.is_null() {
-                noted(before, layout.size(), p);
-                grew(layout.size());
-                allocated(layout.size());
-                mapped(p, layout.size(), true);
-                recorded();
-            }
-            p
-        }
-
-        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-            let before = memory_bytes();
-            let p = unsafe { System.alloc_zeroed(layout) };
-            if !p.is_null() {
-                noted(before, layout.size(), p);
-                grew(layout.size());
-                allocated(layout.size());
-                mapped(p, layout.size(), true);
-                recorded();
-            }
-            p
-        }
-
-        unsafe fn dealloc(&self, p: *mut u8, layout: Layout) {
-            unsafe { System.dealloc(p, layout) };
-            LIVE.fetch_sub(layout.size(), Relaxed);
-            mapped(p, layout.size(), false);
-        }
-
-        unsafe fn realloc(&self, p: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-            let before = memory_bytes();
-            let q = unsafe { System.realloc(p, layout, size) };
-            if !q.is_null() {
-                noted(before, size, q);
-                mapped(p, layout.size(), false);
-                mapped(q, size, true);
-                if size > layout.size() {
-                    grew(size - layout.size());
-                    allocated(size);
-                    recorded();
-                } else {
-                    LIVE.fetch_sub(layout.size() - size, Relaxed);
-                }
-            }
-            q
-        }
-    }
-
-    #[global_allocator]
-    static ALLOCATOR: Counting = Counting;
-
     /// Live bytes, and the most live since the last call.
     pub fn take() -> (usize, usize) {
-        let live = LIVE.load(Relaxed);
+        let live = live();
         (live, PEAK.swap(live, Relaxed))
-    }
-
-    pub fn live() -> usize {
-        LIVE.load(Relaxed)
     }
 
     /// Live KiB in each MiB of the first `mibs` MiB, and the live blocks of
@@ -300,6 +332,10 @@ mod counting {
 /// unavailable.
 #[wasm_bindgen]
 pub async fn start(canvas: OffscreenCanvas) {
+    volya_engine::core::console::set_meters(volya_engine::core::console::Meters {
+        memory: memory_statistics,
+        resources: gpu::resource_counts,
+    });
     gpu::init(canvas).await;
     diagnostics::started().await;
 }
@@ -357,6 +393,29 @@ pub(crate) fn heap_bytes() -> f64 {
                 .byte_length() as f64
         })
         .unwrap_or(0.0)
+}
+
+/// What `stat_memory` and the phase lines print
+/// (docs/behavior/console-diagnostics.md 2.1, 2.4), by their counterparts
+/// here (docs/architecture/memory.md, Measuring): the address space is the
+/// wasm memory's (32-bit, 4 GiB: its pages committed, the rest free, none
+/// reserved), the heaps and the memory manager are the one wasm heap (its
+/// live bytes), the textures those the renderer holds that no framebuffer
+/// draws into. No part has a counterpart of the process heap, the scripts'
+/// and the renderer's own pools, or the shared strings and blocks: 0.
+fn memory_statistics() -> volya_engine::core::console::MemoryStatistics {
+    let committed = heap_bytes() as u64;
+    let live = counting::live() as u64;
+    let gpu = gpu::live();
+    volya_engine::core::console::MemoryStatistics {
+        free: (1u64 << 32).saturating_sub(committed),
+        reserved: 0,
+        committed,
+        textures: gpu.texture_bytes - gpu.target_bytes,
+        crt_heap: live,
+        cmem: live,
+        ..Default::default()
+    }
 }
 
 /// `performance.now()` of the worker, milliseconds.

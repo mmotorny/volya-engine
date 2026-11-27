@@ -19,6 +19,7 @@ Where the engine's memory goes, by lifetime and owner; the design it follows (on
 | `heap_log` op (test builds) | browser | The wasm heap and the most live under each loading caption. |
 | `heap_map` op (test builds) | browser | Live KiB per MiB of the heap and every live block of 256 KiB or more, by address. |
 | `heap_record` op (test builds) | browser | At the load's most live: live bytes by block size and the largest blocks; every allocation that grew the wasm memory since the reset, by size and address. |
+| The console's `stat_memory`, `dump_resources` and `* phase cmem` (docs/behavior/console-diagnostics.md; in the game's log) | browser, every build | The wasm heap's live bytes (requested, as `loading_memory.rs` counts them; its stage lines give the same figure natively) as the memory manager's and the C runtime heap's; the wasm memory as the address space's committed part, the rest of 4 GiB free; the renderer's textures no framebuffer draws into, their bytes, the colour targets, the programs (as vertex and as fragment shaders) and the vertex arrays (as vertex declarations). The original's other figures have no counterpart and print 0. |
 | `level_stats` op | browser | The wasm heaps (engine, audio worker); the GPU world's buffers and textures; everything the context holds (`gpu_live`), split into the level's (`gpu_level`) and what the renderer keeps across games (`gpu_kept`), and by owner (`gpu_owners`: the level, the renderer's own, the targets, the particles', the lights', the images, the videos). |
 | `game-level` and `game-memory` suites' JS memory | Chrome | `performance.measureUserAgentSpecificMemory()` after the New Game (cross-origin isolated pages only, documented, MDN): each context's JavaScript, the wasm memories not among it. |
 | `footprint` of the Simulator's processes | iOS Simulator | Per-process footprints; ETC2 textures there are held as RGBA8, so they don't show the device's (#443). |
@@ -135,7 +136,7 @@ There is no program scratch shared by the loaders: each owns its stream buffer f
 
 ### Allocators and containers
 
-- The allocator is `std`'s `System` on every target; the test builds' counting wrapper only counts.
+- The allocator is `std`'s `System` on every target, under a wrapper that only counts: in every build the live bytes (the console's `* phase cmem`), in test builds also the ops' figures.
 - Containers are `std`'s: `Vec` for regions and tables, `HashMap` (std's is hashbrown) where a map is needed. No container takes a custom allocator, so `allocator-api2`, `bumpalo` and the unstable `allocator_api` are not used.
 - Strings that many records repeat (section names, file paths, model names) are stored once in a region and referred to by index or range (`u32`), not as `String`s per record. The registry's records keep their own strings: moving their sections and names to indices would cut a third of their blocks and about 0.3 MB, not worth changing the object records and the save writer (#485).
 

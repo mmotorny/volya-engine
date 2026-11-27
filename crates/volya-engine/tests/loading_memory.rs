@@ -161,7 +161,8 @@ fn loading_stage_memory() {
         );
         highest = highest.max(peak - base);
         eprintln!(
-            "{stage:?}: peak +{:.1} MB above its start, keeps {:+.1} MB (loading total {:.1} MB); {} allocations, keeps {:+} blocks",
+            "{stage:?}: {} K live at its start (as `* phase cmem` counts), peak +{:.1} MB above it, keeps {:+.1} MB (loading total {:.1} MB); {} allocations, keeps {:+} blocks",
+            before / 1024,
             mb(peak - before),
             mb(after) - mb(before),
             mb(after - base),
