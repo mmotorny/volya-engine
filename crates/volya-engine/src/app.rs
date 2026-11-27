@@ -1084,6 +1084,12 @@ impl App {
         let paused = self.pause.is_on();
         self.sound_run
             .frame_time(self.frame_ms as f32 / 1000.0, paused);
+        // The player's body sound events of this frame (S17 3, 6), taken
+        // with or without audio output.
+        let body_events = match &mut self.phase {
+            Some(Phase::Level { level, .. }) => level.take_body_events(),
+            _ => Vec::new(),
+        };
         let Some(sounds) = audio.sounds() else {
             return Ok(());
         };
@@ -1198,6 +1204,23 @@ impl App {
                     {
                         fatal = Some(e);
                     }
+                }
+                // The player's body sounds (S17) on the global clock: the
+                // hits' and death's sounds as they came; the per-update
+                // sounds and the shock's per-frame update while the pause
+                // is off; the shock's camera effects every frame.
+                if let Some(body) = (self.level_sounds.as_mut()).and_then(|l| l.body.as_mut()) {
+                    let now = self.global_clock.now();
+                    let seconds = now as f32 / 1000.0;
+                    for event in body_events {
+                        body.event(sounds, event, seconds);
+                    }
+                    if !paused {
+                        let state = level.body_state();
+                        body.update(sounds, state);
+                        body.frame_at(sounds, now, state.alive);
+                    }
+                    body.camera_effects(seconds, self.sound_run.thunder.frame_time);
                 }
                 (true, menu.is_some())
             }

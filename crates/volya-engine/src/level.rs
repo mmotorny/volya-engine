@@ -29,7 +29,7 @@ use crate::core::artefacts::{
 };
 use crate::core::camera::{self, Angles, Mat4, Vec3};
 use crate::core::character::condition::Activity;
-use crate::core::character::hits::Hit;
+use crate::core::character::hits::{Hit, HitType, TYPE_COUNT};
 use crate::core::character::inventory::Place;
 use crate::core::character::{self, CharacterState, HitMovement, SpecificCharacter};
 use crate::core::climbing::Ladder;
@@ -53,6 +53,9 @@ use crate::core::simulation::navigation::Navigation;
 use crate::core::simulation::{AlifeConfig, Changes, Simulation};
 use crate::core::sound::Fatal;
 use crate::core::sound::ambient::AmbientParticles;
+use crate::core::sound::player_body::{
+    BodyEvent, BodySoundNames, BodyState, DEATHS, ShockEffector,
+};
 use crate::core::vfs::{self, Vfs};
 use crate::core::visibility::Frustum;
 use crate::core::weather::{Environment, Weather, texture_name as weather_texture_name};
@@ -421,6 +424,11 @@ pub struct LevelScreen {
     frame: u64,
     /// The player's detectors (docs/behavior/sound-detector.md).
     detectors: PlayerDetectors,
+    /// The length of each hit type's sound list (sound-player-body.md 2).
+    hit_sound_lists: [usize; TYPE_COUNT],
+    /// The body sounds' events since the sound side last took them
+    /// (sound-player-body.md 3, 6).
+    body_events: Vec<BodyEvent>,
     /// The difficulty the character's immunities were last read for
     /// (player-hits.md 3).
     difficulty: Option<String>,
@@ -1367,6 +1375,8 @@ pub struct NewGameLoad {
     torches: Option<PlayerTorchData>,
     /// The player's detectors' sections (sound-detector.md 2.1).
     detectors: Option<Vec<DetectorSection>>,
+    /// The length of each hit type's sound list (sound-player-body.md 2).
+    hit_sound_lists: [usize; TYPE_COUNT],
 }
 
 /// The zone objects of `level_objects` (zone-idle-effects.md 1.1: the
@@ -1751,6 +1761,11 @@ impl NewGameLoad {
                 character
                     .set_model(bones.into_iter().map(|b| b.name).collect())
                     .map_err(|e| io::Error::new(e.kind(), format!("{path}: {e}")))?;
+                // The player's body sounds (sound-player-body.md 2), read with
+                // the player's configuration; created with the level's.
+                let names = BodySoundNames::read(&data.system, spawn::ACTOR_SECTION)?;
+                self.hit_sound_lists = std::array::from_fn(|t| names.hits[t].len());
+                sound.body = Some((names, ShockEffector::read(&data.system)));
                 self.footsteps = Some(PlayerFootsteps::new(
                     data,
                     spawn::ACTOR_SECTION,
@@ -2232,6 +2247,8 @@ impl NewGameLoad {
             wind: 0.0,
             frame: 0,
             detectors: PlayerDetectors::new(detectors),
+            hit_sound_lists: self.hit_sound_lists,
+            body_events: Vec::new(),
             difficulty: None,
         };
         screen.torches_frame(0.0);
@@ -2389,6 +2406,7 @@ impl LevelScreen {
             if self.player.jump_started() {
                 c.jump();
             }
+            let was_alive = c.conditions.alive();
             let f = self.player.state().flags;
             c.update(
                 self.clock.time(),
@@ -2398,6 +2416,13 @@ impl LevelScreen {
                     sprints: f.sprint,
                 },
             );
+            // The player dies (sound-player-body.md 6: believed once, as
+            // health reaches 0); death itself is out of scope (#248).
+            if was_alive && !c.conditions.alive() {
+                let pick = usize::from(c.random.rand15()) % DEATHS;
+                let feet = self.player.state().position;
+                self.body_events.push(BodyEvent::Death { pick, feet });
+            }
         }
         self.back |= back;
         self.simulate();
@@ -2542,13 +2567,29 @@ impl LevelScreen {
         );
     }
 
-    /// A hit on the player character (player-hits.md section 4), at once:
-    /// the movement takes its sprint cancel and slowdown (4.1), the
-    /// character the rest (4.2 – 4.6). An error (also left as the level's
-    /// fatal error) where the worn outfit's bone table names a bone the
-    /// model lacks.
+    /// A hit on the player character (player-hits.md section 4,
+    /// sound-player-body.md section 3), at once: its sound is picked
+    /// (S17 3 items 1 – 3) and left for the sound side, the movement takes
+    /// its sprint cancel and slowdown (PS-1 4.1), and the character the
+    /// rest (4.2 – 4.6). An error (also left as the level's fatal error)
+    /// where the worn outfit's bone table names a bone the model lacks.
     pub fn hit(&mut self, hit: Hit) -> io::Result<()> {
         let c = (self.character.as_mut()).ok_or_else(|| invalid("no player character"))?;
+        let alive = c.conditions.alive();
+        let n = self.hit_sound_lists[hit.kind.index()];
+        if n > 0 && hit.kind != HitType::TELEPATIC {
+            let pick = usize::from(c.random.rand15()) % n;
+            let s = self.player.state();
+            let h = self.player.config.eye_height(s.posture);
+            let eye = [s.position[0], s.position[1] + h, s.position[2]];
+            self.body_events.push(BodyEvent::Hit {
+                kind: hit.kind,
+                power: hit.power,
+                pick: Some(pick),
+                alive,
+                eye,
+            });
+        }
         let m = HitMovement::of(hit.kind, hit.power);
         self.player.hit(m.cancels_sprint, m.slowdown);
         c.hit(&hit).inspect_err(|e| {
@@ -2569,6 +2610,29 @@ impl LevelScreen {
         {
             self.fatal.get_or_insert(e.to_string());
         }
+    }
+
+    /// The body sounds' events of the hits and death since last taken.
+    pub fn take_body_events(&mut self) -> Vec<BodyEvent> {
+        std::mem::take(&mut self.body_events)
+    }
+
+    /// What the body sounds' per-update rules read (sound-player-body.md
+    /// 4): the limping state, whether the player is alive and the total
+    /// bleeding.
+    pub fn body_state(&self) -> BodyState {
+        self.character.as_ref().map_or(
+            BodyState {
+                limping: false,
+                alive: true,
+                bleeding: 0.0,
+            },
+            |c| BodyState {
+                limping: c.conditions.limping,
+                alive: c.conditions.alive(),
+                bleeding: c.conditions.total_bleeding(),
+            },
+        )
     }
 
     /// The player's torches.
@@ -3735,8 +3799,10 @@ impl LevelScreen {
             wind: 0.0,
             frame: 0,
             detectors: PlayerDetectors::default(),
-            difficulty: None,
             global_ms: 0,
+            hit_sound_lists: [0; TYPE_COUNT],
+            body_events: Vec::new(),
+            difficulty: None,
         }
     }
 }
