@@ -269,6 +269,20 @@ if (state.level) {
   status.dataset.state = "ready";
   await start(call, updates, { isolated: state.isolated !== false });
   if (state.screen === "settings") await globalThis.volya.showSettings();
+  // Licences: the site's own notices, their first lines (the board shows
+  // each state whole); loading never settles; failed as when unreadable.
+  if (state.screen === "licences") {
+    const read = async () => {
+      if (state.notices === "failed") throw new Error("HTTP 404");
+      const response = await fetch("../third-party-licenses.txt");
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return (await response.text()).split("\n").slice(0, 60).join("\n");
+    };
+    const notices = state.notices === "loading" ? new Promise(() => {}) : read();
+    screens.showLicences(() => notices);
+    if (state.notices !== "loading") await notices.catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve));
+  }
   // Check for updates pressed, its result held on screen.
   if (state.check) {
     globalThis.volyaHoldCheckResult = true;

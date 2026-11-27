@@ -591,14 +591,26 @@ export const tests = {
       "no Check for updates button",
     );
     assertEqual(document.activeElement?.textContent, "‹ Back", "focus starts on Back (keyboard)");
-    // Licences (#757), last: the site's third-party notices, in a new tab.
+    // Licences (#757), last: the site's third-party notices, on a screen of
+    // the app's own (#854), not a new tab; Back returns to Settings.
     const licences = [...document.querySelectorAll("#game .bottom a")].find((a) => a.textContent === "Licences");
     assert(licences, "no Licences link at the bottom of Settings");
     assert(licences === [...document.querySelectorAll("#game a, #game button")].at(-1), "Licences not last");
     assertEqual(new URL(licences.href).pathname, `${base}third-party-licenses.txt`, "Licences' target");
-    assertEqual(licences.target, "_blank", "Licences not in a new tab");
-    const notices = await fetch(licences.href);
-    assert(notices.ok && (await notices.text()).length > 0, `the notices: ${notices.status}`);
+    assert(!licences.target, "Licences opens another tab");
+    const notices = await (await fetch(licences.href)).text();
+    const here = location.href;
+    licences.click();
+    const heading = () => document.querySelector(".screen-head h2")?.textContent;
+    for (let i = 0; i < 100 && !document.querySelector("#game .notices pre"); i++) await new Promise((r) => setTimeout(r, 20));
+    assertEqual(location.href, here, "Licences left the page");
+    assertEqual(heading(), "Licences", "the Licences screen's heading");
+    const text = document.querySelector("#game .notices pre")?.textContent;
+    assert(text?.startsWith("Third-party software in this app") && text === notices, "the notices not shown whole");
+    assertEqual(document.activeElement?.textContent, "‹ Back", "focus on Licences' Back (keyboard)");
+    document.activeElement.click();
+    for (let i = 0; i < 50 && heading() !== "Settings"; i++) await new Promise((r) => setTimeout(r, 20));
+    assertEqual(heading(), "Settings", "Back did not return to Settings");
     // The logo leads Home too.
     document.querySelector(".brand").click();
     for (let i = 0; i < 50 && document.querySelector(".screen-head"); i++) await new Promise((r) => setTimeout(r, 20));

@@ -212,9 +212,8 @@ export const SECTIONS = [
   {
     title: "Settings",
     states: [
-      // Licences at the bottom (#757) opens the site's third-party notices
-      // in a new tab.
-      { id: "settings", name: "Game files imported; Licences at the bottom opens the third-party notices", game: imported, screen: "settings" },
+      // Licences at the bottom (#757) opens the Licences screen (#854).
+      { id: "settings", name: "Game files imported; Licences at the bottom", game: imported, screen: "settings" },
       {
         id: "settings-touch-experimental",
         name: "Ergonomic mobile mode chosen",
@@ -317,6 +316,15 @@ export const SECTIONS = [
       },
       { id: "settings-no-game", name: "No game files, settings or saves stored", game: fresh, screen: "settings", gameLog: false },
       { id: "settings-nothing-stored", name: "No game files, nothing stored", game: fresh, screen: "settings", userData: false, gameLog: false },
+    ],
+  },
+  {
+    // Settings' Licences (#854): the site's third-party notices, in the app.
+    title: "Licences",
+    states: [
+      { id: "licences", name: "The notices (their first lines here; the screen scrolls through all)", game: imported, screen: "licences" },
+      { id: "licences-loading", name: "Loading the notices", game: imported, screen: "licences", notices: "loading" },
+      { id: "licences-failed", name: "The notices couldn't be read", game: imported, screen: "licences", notices: "failed" },
     ],
   },
   {

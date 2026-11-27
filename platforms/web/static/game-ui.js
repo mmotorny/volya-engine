@@ -783,7 +783,7 @@ function touchPanel() {
 /**
  * Settings: updates, the touch controls, the logs and, in a danger zone,
  * the player's saves, settings, and logs and the game files; at the bottom,
- * Licences (#757): the site's third-party notices, beside this module.
+ * Licences (#757), a deeper screen of its own (#854).
  */
 async function showSettings() {
   const status = await call("game_status");
@@ -827,10 +827,17 @@ async function showSettings() {
           status.imported ? importSection(status, () => ({ userData, logs: logs.present() })) : null,
         )
       : null,
-    bottom(link(new URL("third-party-licenses.txt", import.meta.url).href, "Licences")),
+    bottom(licencesLink()),
   );
-  // Settings is a deeper screen: no logo (it's Home's), Back at the top.
-  document.documentElement.dataset.screen = "settings";
+  deeper("settings", back);
+}
+
+/**
+ * Marks the screen just shown as a deeper one (`name`): no logo (it's
+ * Home's), the compact lockup on top leads Home, Back at the top, focused.
+ */
+function deeper(name, back) {
+  document.documentElement.dataset.screen = name;
   const brand = document.querySelector(".brand");
   brand?.setAttribute("tabindex", "0");
   brand?.setAttribute("role", "link");
@@ -838,5 +845,59 @@ async function showSettings() {
   back.focus();
 }
 
+/** The site's third-party notices (tools/site), beside this module. */
+const NOTICES = new URL("third-party-licenses.txt", import.meta.url).href;
+
+/**
+ * Settings' Licences: a link to the notices, but a plain click or tap opens
+ * them in the app (#854); an installed app has no tab bar to come back by.
+ */
+function licencesLink() {
+  const a = element("a", { href: NOTICES, textContent: "Licences" });
+  a.addEventListener("click", (event) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    navigate("forward", () => showLicences());
+  });
+  return a;
+}
+
+/** The notices' text; rejects if they can't be read. */
+async function readNotices() {
+  const response = await fetch(NOTICES);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.text();
+}
+
+/**
+ * Licences (#854): the third-party notices, as `load` reads them, in a
+ * monospace block to scroll and select; Loading… until then, or a failure
+ * with Try again. Back leads to Settings.
+ */
+function showLicences(load = readNotices) {
+  const back = element("button", { className: "back", textContent: "‹ Back" });
+  back.addEventListener("click", () => navigate("back", showSettings));
+  const body = element("div", { className: "panel notices" });
+  const read = async () => {
+    const loading = element("p", { className: "note", textContent: "Loading…" });
+    loading.setAttribute("role", "status");
+    body.replaceChildren(loading);
+    try {
+      body.replaceChildren(element("pre", { textContent: await load() }));
+    } catch (error) {
+      console.warn(`reading the licences: ${error.message}`);
+      const failed = element("p", { className: "note error", textContent: "Couldn't load the licences." });
+      failed.setAttribute("role", "alert");
+      const retry = element("button", { textContent: "Try again" });
+      retry.addEventListener("click", read);
+      body.replaceChildren(failed, retry);
+    }
+  };
+  show(element("div", { className: "screen-head" }, back, element("h2", { textContent: "Licences" })), body);
+  deeper("licences", back);
+  // The screen shows at once, loading; the text replaces that in place.
+  read();
+}
+
 /** Every screen, for the UX audit page (static/ux-audit/), which shows each state. */
-export const screens = { showImport, showHome, showSettings, showProblem };
+export const screens = { showImport, showHome, showSettings, showLicences, showProblem };

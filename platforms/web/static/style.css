@@ -852,25 +852,25 @@ main {
   height: 18px;
 }
 
-/* Deeper screens (Settings): the logo is Home's; the compact lockup on top
-   is the way Home (game-ui.js), on every device. */
-html[data-screen="settings"] .brand {
+/* Deeper screens (Settings, Licences): the logo is Home's; the compact
+   lockup on top is the way Home (game-ui.js), on every device. */
+html[data-screen] .brand {
   justify-content: flex-start;
   margin-bottom: 0.25rem;
   border-radius: 8px;
   cursor: pointer;
 }
 
-html[data-screen="settings"] .brand:focus-visible {
+html[data-screen] .brand:focus-visible {
   outline: 2px solid var(--line);
   outline-offset: 4px;
 }
 
-html[data-screen="settings"] .brand .logo {
+html[data-screen] .brand .logo {
   display: none;
 }
 
-html[data-screen="settings"] .brand .lockup {
+html[data-screen] .brand .lockup {
   display: flex;
 }
 
@@ -1028,6 +1028,26 @@ footer .source:focus-visible {
 
 button.back {
   padding: 0 0.9rem;
+}
+
+/* Licences' text: the notices as written, wrapped to the column (no
+   sideways scrolling on a phone), selectable, scrolled with the page. */
+.panel.notices pre {
+  margin: 0;
+  font: 0.75rem/1.55 var(--mono);
+  color: var(--ink-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.panel.notices .note {
+  margin-top: 0 !important;
+}
+
+.panel.notices button {
+  margin-top: 0.75rem;
 }
 
 .panel .value {
@@ -1406,8 +1426,8 @@ code {
     max-height: 70vh;
   }
 
-  /* Deeper screens (Settings): one column under the lockup. */
-  html[data-screen="settings"] main {
+  /* Deeper screens (Settings, Licences): one column under the lockup. */
+  html[data-screen] main {
     max-width: 34rem;
     display: flex;
     /* Full width, however little content: the lockup and the panels share
@@ -1415,12 +1435,12 @@ code {
     align-items: stretch;
   }
 
-  html[data-screen="settings"] .brand {
+  html[data-screen] .brand {
     position: static;
     align-self: flex-start;
   }
 
-  html[data-screen="settings"] #game {
+  html[data-screen] #game {
     align-self: stretch;
   }
 
