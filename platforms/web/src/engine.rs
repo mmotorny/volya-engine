@@ -341,6 +341,45 @@ pub fn load() -> Option<u64> {
     RUNNING.with(|r| r.borrow().as_ref()?.app.load())
 }
 
+/// Whether the loading waits for the prefetched models to be made
+/// ([`App::models_to_prefetch`]).
+pub fn models_to_prefetch() -> bool {
+    RUNNING.with(|r| {
+        r.borrow()
+            .as_ref()
+            .is_some_and(|r| r.app.models_to_prefetch())
+    })
+}
+
+/// Makes the next prefetched models, each chunk of their geometry kept by
+/// the renderer as it is made ([`App::prefetch_models`]); whether the
+/// loading waits for more.
+pub fn prefetch_models() -> Result<bool, JsValue> {
+    RUNNING.with(|r| {
+        let mut r = r.borrow_mut();
+        let Some(running) = r.as_mut() else {
+            return Ok(false);
+        };
+        crate::game::with_trees(|tree, _| {
+            running.app.prefetch_models(tree, &mut |c| {
+                crate::gpu::with_renderer(|r| {
+                    r.keep_geometry(c.set, c.index, &c.vertices, &c.indices)
+                });
+            })
+        })
+    })
+}
+
+/// Whether the textures to prepare are the prefetched models', kept while
+/// the game type stays ([`App::prefetching_textures`]).
+pub fn prefetching_textures() -> bool {
+    RUNNING.with(|r| {
+        r.borrow()
+            .as_ref()
+            .is_some_and(|r| r.app.prefetching_textures())
+    })
+}
+
 /// Whether a level's loading waits for its textures.
 pub fn preparing_textures() -> bool {
     RUNNING.with(|r| {

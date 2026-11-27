@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! A level prepared while it loads (#113, #355): while a New Game's loading
-//! waits under `st_loading_textures`
+//! waits under `st_prefetching_objects` for the prefetched models, their
+//! geometry is kept by the renderer a chunk at a time as they are made
+//! ([`volya_engine::app::App::prefetch_models`]); then for their textures
+//! (kept by the renderer while the game type stays,
+//! [`volya_engine::app::App::prefetching_textures`]) and under
+//! `st_loading_textures` for the level's
 //! ([`volya_engine::app::App::textures_to_prepare`]), each texture is
 //! uploaded (on a GPU without BC transcoded to ETC2 first), a frame's worth
 //! per task turn so frames run in between (the loading screen keeps
@@ -152,6 +157,18 @@ pub fn poll() {
         return;
     }
     release_abandoned();
+    if crate::engine::models_to_prefetch() {
+        let load = crate::engine::load();
+        RUNNING.with(|r| *r.borrow_mut() = true);
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = prefetch_models(load).await;
+            RUNNING.with(|r| *r.borrow_mut() = false);
+            if let Err(e) = result {
+                web_sys::console::error_1(&e);
+            }
+        });
+        return;
+    }
     if let Some(level) = crate::engine::world_to_prepare() {
         PREPARED_FOR.set(crate::engine::load());
         RUNNING.with(|r| *r.borrow_mut() = true);
@@ -209,11 +226,24 @@ async fn prepare(paths: Vec<String>, load: Option<u64>) -> Result<(), JsValue> {
     let mut scratch = Vec::new();
     let mut turn = now();
     let quality = crate::engine::texture_quality().unwrap_or_default();
+    // The prefetched models' textures are kept while the game type stays
+    // (the renderer's, as the prefetched owner's); the level's are handed
+    // to its world.
+    let keep = crate::engine::prefetching_textures();
+    let owner = if keep {
+        volya_engine::render::gl::Owner::Prefetched
+    } else {
+        volya_engine::render::gl::Owner::Level
+    };
     for path in paths {
         // The game was quit or unmounted meanwhile, or another load
         // started.
         if !crate::engine::preparing_textures() || crate::engine::load() != load {
             break;
+        }
+        // Kept from the prefetching: the level draws that one.
+        if crate::gpu::with_renderer(|r| r.kept_texture(&path).is_some()) == Some(true) {
+            continue;
         }
         let _span = tracing::info_span!("prepare.texture").entered();
         let t = now();
@@ -237,7 +267,8 @@ async fn prepare(paths: Vec<String>, load: Option<u64>) -> Result<(), JsValue> {
             ("height", height),
         ];
         crate::gpu::with_renderer(|r| crate::diagnostics::gpu_step("gpu.texture", Some(r), &step));
-        let Some(Ok(mut upload)) = crate::gpu::with_renderer(|r| r.begin_texture(&path, &dds))
+        let Some(Ok(mut upload)) =
+            crate::gpu::with_renderer(|r| r.owning(owner, || r.begin_texture(&path, &dds)))
         else {
             continue;
         };
@@ -272,7 +303,13 @@ async fn prepare(paths: Vec<String>, load: Option<u64>) -> Result<(), JsValue> {
             }
         }
         if let Some(texture) = crate::gpu::with_renderer(|r| upload.finish(r)) {
-            crate::gpu::with_renderer(|r| r.add_prepared(&path, texture));
+            crate::gpu::with_renderer(|r| {
+                if keep {
+                    r.keep_texture(&path, texture);
+                } else {
+                    r.add_prepared(&path, texture);
+                }
+            });
         }
         // Read: the file goes before the next is read.
         drop(dds);
@@ -303,6 +340,30 @@ async fn prepare(paths: Vec<String>, load: Option<u64>) -> Result<(), JsValue> {
     gpu_done(&mut stats.gpu_wait_ms).await?;
     stats.total_ms = now() - start;
     STATS.with(|s| *s.borrow_mut() = stats);
+    Ok(())
+}
+
+/// Makes the prefetched models for load `load` while it is the current one
+/// and waits for them, a chunk of their geometry per task turn, each kept
+/// by the renderer and waited for before the next is made, so the CPU
+/// holds no more than one (#765) and the browser's GPU process takes them
+/// in a little at a time (#443).
+async fn prefetch_models(load: Option<u64>) -> Result<(), JsValue> {
+    let mut wait_ms = 0.0;
+    while crate::engine::models_to_prefetch() && crate::engine::load() == load {
+        let more =
+            tracing::info_span!("prepare.models").in_scope(crate::engine::prefetch_models)?;
+        gpu_done(&mut wait_ms).await?;
+        if !more {
+            break;
+        }
+        // A task turn; none while the page is hidden (#93).
+        crate::opfs::sleep(0).await?;
+        while crate::engine::page_hidden() {
+            crate::opfs::sleep(100).await?;
+        }
+    }
+    STATS.with(|s| s.borrow_mut().gpu_wait_ms += wait_ms);
     Ok(())
 }
 

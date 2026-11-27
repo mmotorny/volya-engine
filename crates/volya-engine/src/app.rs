@@ -546,6 +546,10 @@ pub struct App {
     /// The game type of the latest game started in this run
     /// (loading-screen.md section 5).
     game_type: Option<&'static str>,
+    /// The game type's prefetched models, made under its first New Game's
+    /// `st_prefetching_objects` and kept while the game type stays
+    /// (docs/architecture/memory.md, Lifetimes).
+    prefetched: Option<Arc<crate::objects::Prefetched>>,
     /// Platform time of the update that began the first caption, while
     /// loading.
     load_started: Option<f64>,
@@ -873,6 +877,7 @@ impl App {
             error: None,
             failed: None,
             game_type: None,
+            prefetched: None,
             load_started: None,
             phase_started: None,
             loaded_since: None,
@@ -904,6 +909,50 @@ impl App {
             }) => loading.textures_to_prepare(),
             _ => None,
         }
+    }
+
+    /// Whether the loading waits under `st_prefetching_objects` for the
+    /// platform to make the prefetched models ([`App::prefetch_models`];
+    /// with [`App::set_prepare_textures`]).
+    pub fn models_to_prefetch(&self) -> bool {
+        matches!(
+            &self.phase,
+            Some(Phase::Loading {
+                stages: NewGame::Stages(loading),
+                ..
+            }) if loading.models_to_prefetch()
+        )
+    }
+
+    /// Makes the next prefetched models from `tree`, handing each chunk of
+    /// their geometry to `keep` (the platform's renderer keeps it) as it is
+    /// made; returns whether the loading waits for more
+    /// ([`Loading::prefetch_models`]).
+    pub fn prefetch_models(
+        &mut self,
+        tree: &dyn Vfs,
+        keep: &mut dyn FnMut(crate::objects::GeometryChunk),
+    ) -> bool {
+        match &mut self.phase {
+            Some(Phase::Loading {
+                stages: NewGame::Stages(loading),
+                ..
+            }) => loading.prefetch_models(tree, &self.data, keep),
+            _ => false,
+        }
+    }
+
+    /// Whether [`App::textures_to_prepare`] are the prefetched models'
+    /// (under `st_prefetching_objects`), kept while the game type stays,
+    /// rather than the level's.
+    pub fn prefetching_textures(&self) -> bool {
+        matches!(
+            &self.phase,
+            Some(Phase::Loading {
+                stages: NewGame::Stages(loading),
+                ..
+            }) if loading.prefetching_textures()
+        )
     }
 
     /// The number of the New Game load in progress, or of the one that
@@ -1493,7 +1542,12 @@ impl App {
                         let changed = self.game_type != Some(GAME_TYPE);
                         self.game_type = Some(GAME_TYPE);
                         self.load_started = Some(time_ms);
-                        let mut loading = Loading::start(data, changed);
+                        // A new game type's models replace the old's: those
+                        // go before the new are made.
+                        if changed {
+                            self.prefetched = None;
+                        }
+                        let mut loading = Loading::start(data, changed, self.prefetched.clone());
                         // The first caption begins as the load does.
                         self.phase_started = Some(time_ms);
                         let memory = self
@@ -1514,6 +1568,11 @@ impl App {
                     NewGame::Stages(loading) => {
                         let captions = loading.screen().state().captions;
                         let step = loading.step(tree, data, now);
+                        // Kept for the game type once made, whatever
+                        // becomes of this load.
+                        if self.prefetched.is_none() {
+                            self.prefetched = loading.prefetched().cloned();
+                        }
                         let screen = loading.screen().state();
                         if screen.captions != captions {
                             // The phase timer restarts whenever the global

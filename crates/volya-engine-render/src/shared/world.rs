@@ -323,8 +323,8 @@ pub struct TreeLight {
 /// One draw of the static world: `index_count` indices of index buffer
 /// `index_buffer` from `first_index`, each relative to `first_vertex` of
 /// vertex buffer `vertex_buffer`, with surface `surface`. An object's draw
-/// (`object` set) reads [`ObjectGeometry`] instead, and its buffer indices
-/// are ignored.
+/// (`object` set) reads [`ObjectGeometry`] instead, or with `kept` set the
+/// renderer's kept geometry, and its buffer indices are ignored.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WorldDraw {
     pub surface: u32,
@@ -344,6 +344,10 @@ pub struct WorldDraw {
     /// [`ObjectGeometry::windows`], each window within the draw's range;
     /// count 0 draws the range whole.
     pub windows: [u32; 2],
+    /// An object's draw from the chunk of the kept geometry
+    /// (`Renderer::keep_geometry`): its range is the chunk's, its indices
+    /// counted from the chunk's first vertex.
+    pub kept: Option<u32>,
 }
 
 /// Bytes of one draw's record in the draws buffer.

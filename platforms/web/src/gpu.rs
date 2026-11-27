@@ -481,6 +481,8 @@ pub fn world_stats() -> serde_json::Value {
                     .collect::<serde_json::Map<_, _>>()
             }),
             "prepared_textures": g.as_ref().map(|gpu| gpu.renderer.as_ref().map_or(0, |r| r.prepared_count())),
+            // The prefetched models' textures kept for the game type.
+            "kept_textures": g.as_ref().map(|gpu| gpu.renderer.as_ref().map_or(0, |r| r.kept_count())),
             "preparing_world": g.as_ref().map(|gpu| gpu.presenter.preparing_world()),
         })
     })
@@ -1431,6 +1433,7 @@ pub fn debug_draw_lights(case: &str) -> Result<serde_json::Value, JsValue> {
             tree: None,
             object: None,
             windows: [0, 0],
+            kept: None,
         };
         let world = r
             .create_world(&geom, &[surface], &[draw], None)

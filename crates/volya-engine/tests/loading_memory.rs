@@ -33,6 +33,7 @@ use volya_engine::core::vfs::db::DbVfs;
 use volya_engine::data::GameData;
 use volya_engine::level::NewGameLoad;
 use volya_engine::loading_screen::Stage;
+use volya_engine::objects::Prefetched;
 use volya_engine_formats::ui::Resolution;
 
 struct Counting;
@@ -161,7 +162,14 @@ fn loading_stage_memory() {
             ALLOCS.load(Ordering::Relaxed),
         );
         PEAK.store(before, Ordering::Relaxed);
-        load.run(stage, &tree, &data).unwrap();
+        if stage == Stage::PrefetchingObjects {
+            // As the platform makes them: each chunk of their geometry
+            // kept by its renderer (here dropped) as it is made.
+            let prefetched = Prefetched::load(&tree, &data, &mut drop).unwrap();
+            load.set_prefetched_made(&tree, &data, prefetched).unwrap();
+        } else {
+            load.run(stage, &tree, &data).unwrap();
+        }
         open = load.original_open(stage, &tree);
         let window = file_cache::mark();
         cache.push((stage, window.most, file_cache::budget(&window, &open)));
@@ -176,7 +184,9 @@ fn loading_stage_memory() {
             BLOCKS.load(Ordering::Relaxed) as isize - blocks as isize,
         );
     }
-    // The level made ends the load (natively: no frames, no overlay).
+    // The level made ends the load (natively: no frames, no overlay); the
+    // prefetched models stay the game type's, as the app keeps them.
+    let mut prefetched = load.prefetched().cloned();
     let screen = load.finish(0).unwrap();
     let (end, asked) = (
         memory_manager::in_use_bytes(),
@@ -275,12 +285,20 @@ fn loading_stage_memory() {
         drop(screen.world().objects.take_geometry());
     });
     drop(screen);
-    // What outlives the level: kept for the next one.
-    eprintln!(
-        "after the level: {:.1} MB and {:+} blocks above the load's start",
-        mb(CURRENT.load(Ordering::Relaxed).saturating_sub(base)),
-        BLOCKS.load(Ordering::Relaxed) as isize - game_blocks.1 as isize
-    );
+    // What outlives the level: the game type's prefetched models, kept for
+    // the next New Game.
+    let outlives = || {
+        format!(
+            "{:.1} MB and {:+} blocks above the load's start",
+            mb(CURRENT.load(Ordering::Relaxed).saturating_sub(base)),
+            BLOCKS.load(Ordering::Relaxed) as isize - game_blocks.1 as isize
+        )
+    };
+    eprintln!("after the level: {}", outlives());
+    freed("the prefetched models (the game type's)", &mut || {
+        drop(prefetched.take());
+    });
+    eprintln!("after the game type: {}", outlives());
     let (mut system, mut strings, mut effects) =
         (Some(data.system), Some(data.strings), Some(data.effects));
     freed(

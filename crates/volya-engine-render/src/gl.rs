@@ -1397,10 +1397,13 @@ pub enum Owner {
     Images,
     /// Video textures and their planes.
     Video,
+    /// The prefetched models' textures, kept while the game type stays
+    /// (docs/architecture/memory.md, Lifetimes).
+    Prefetched,
 }
 
 /// Every owner, in [`Owner`]'s order.
-pub const OWNERS: [Owner; 7] = [
+pub const OWNERS: [Owner; 8] = [
     Owner::Level,
     Owner::Renderer,
     Owner::Targets,
@@ -1408,6 +1411,7 @@ pub const OWNERS: [Owner; 7] = [
     Owner::Lights,
     Owner::Images,
     Owner::Video,
+    Owner::Prefetched,
 ];
 
 impl Owner {
@@ -1420,6 +1424,7 @@ impl Owner {
             Owner::Lights => "lights",
             Owner::Images => "images",
             Owner::Video => "video",
+            Owner::Prefetched => "prefetched",
         }
     }
 

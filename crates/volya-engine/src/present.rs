@@ -125,7 +125,8 @@ fn lens_quad(q: &volya_engine_formats::ui::picture::Quad, size: (u32, u32), map:
 }
 
 /// The texture of the DDS file at `path` of `tree`: as the platform
-/// prepared it, else read and uploaded ([`Renderer::create_texture`]) with
+/// prefetched or prepared it, else read and uploaded
+/// ([`Renderer::create_texture`]) with
 /// `quality`'s top levels dropped (texture-quality-filtering.md 1).
 fn load_texture(
     renderer: &Renderer,
@@ -133,6 +134,10 @@ fn load_texture(
     quality: &TextureQuality,
     path: &str,
 ) -> Result<Texture, String> {
+    // Prefetched with the game type's models, kept while it stays.
+    if let Some(texture) = renderer.kept_texture(path) {
+        return Ok(texture);
+    }
     // Prepared while the level loaded (transcoded for this GPU, #113).
     if let Some(texture) = renderer.take_prepared(path) {
         return Ok(texture);
@@ -200,8 +205,21 @@ impl Spares {
 
 /// The objects' geometry of `level`, taken (once), with the static
 /// world's detail windows after the objects' own, and the world's draws:
-/// its static draws, then its objects'.
-fn world_geometry(level: &LevelWorld) -> Result<(ObjectGeometry, Vec<WorldDraw>), String> {
+/// its static draws, then its objects'. The prefetched models' geometry its
+/// objects draw is to be kept by `renderer`: what no platform kept yet is
+/// kept now.
+fn world_geometry(
+    renderer: &Renderer,
+    level: &LevelWorld,
+) -> Result<(ObjectGeometry, Vec<WorldDraw>), String> {
+    if let Some(p) = &level.objects.prefetched {
+        for c in p.take_pending() {
+            renderer.keep_geometry(c.set, c.index, &c.vertices, &c.indices);
+        }
+        if renderer.kept_geometry_set() != Some(p.set()) {
+            return Err("the prefetched models' geometry is not kept".into());
+        }
+    }
     let mut objects = level
         .objects
         .take_geometry()
@@ -245,6 +263,7 @@ fn world_draws(level: &LevelWorld, windows_at: u32) -> Vec<WorldDraw> {
                     bias: t.bias,
                 }),
                 object: None,
+                kept: None,
             })
         })
         .chain(level.objects.draws.iter().map(|d| WorldDraw {
@@ -265,6 +284,7 @@ fn world_draws(level: &LevelWorld, windows_at: u32) -> Vec<WorldDraw> {
             tree: None,
             object: Some(d.dynamic_props),
             windows: d.windows,
+            kept: d.kept,
         }))
         .collect()
 }
@@ -904,7 +924,7 @@ impl Presenter {
             .is_some_and(|p| Arc::ptr_eq(&p.level, level))
         {
             self.prepared = None;
-            let (objects, draws) = world_geometry(level)?;
+            let (objects, draws) = world_geometry(renderer, level)?;
             let upload = renderer.begin_geometry(&level.geometry().layout, &objects, &draws)?;
             self.prepared = Some(PreparedWorld {
                 level: level.clone(),
@@ -943,7 +963,7 @@ impl Presenter {
         let (objects, draws) = match &prepared {
             Some(p) => (None, p.draws.clone()),
             None => {
-                let (objects, draws) = world_geometry(level)?;
+                let (objects, draws) = world_geometry(renderer, level)?;
                 (Some(objects), draws)
             }
         };

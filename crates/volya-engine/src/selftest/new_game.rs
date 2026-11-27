@@ -5,7 +5,7 @@
 //! needs none): the start view (docs/behavior/start-position.md) with the
 //! frame times, an outdoor view with the sky (docs/behavior/sky.md), the
 //! loading screen's and the intro's frames (docs/behavior/loading-screen.md),
-//! the texture paths against each other, the loading taking prepared
+//! the texture paths against each other, the loading taking prefetched and prepared
 //! textures (#113, #184), and the level's placed effect drawn
 //! (docs/behavior/particle-drawing.md). Frames `level`, `outdoor`,
 //! `loading`, `intro`, `effects` and `effects-off`.
@@ -22,6 +22,7 @@ use crate::core::vfs::{self, Vfs};
 use crate::data::GameData;
 use crate::level::LevelScreen;
 use crate::present::Presenter;
+use crate::render::gl::Owner;
 use crate::render::{Renderer, TexturePath};
 use crate::scene::Scene;
 use volya_engine_formats::dds::Dds;
@@ -412,6 +413,49 @@ pub async fn loading_takes_prepared_textures(cx: &Context<'_>) -> Outcome {
         _ => None,
     };
     let mut frames = 0;
+    let mut gpu = cx.renderer();
+    let texture = |gpu: &Renderer, p: &str| {
+        let bytes = vfs::read(tree, p).map_err(|e| format!("{p}: {e}"))?;
+        let dds = Dds::parse(&bytes).map_err(|e| format!("{p}: {e:?}"))?;
+        gpu.create_texture(p, &dds)
+            .map_err(|e| format!("{p}: {e:?}"))
+    };
+    // First the prefetched models, under the first caption, their
+    // geometry kept by the renderer a chunk at a time as it is made.
+    while !game.app.models_to_prefetch() {
+        game.step(tree);
+        frames += 1;
+        ensure!(
+            frames < 40,
+            "never asked to prefetch: {:?}",
+            game.app.state()
+        );
+    }
+    ensure_eq!(caption(&game.app), Some(1), "prefetching");
+    while game.app.prefetch_models(tree, &mut |c| {
+        gpu.keep_geometry(c.set, c.index, &c.vertices, &c.indices)
+    }) {}
+    let (chunks, chunk_bytes) = gpu.kept_geometry();
+    // Then their textures, under the same caption, kept for the game type
+    // (the platform makes them the prefetched owner's).
+    while game.app.textures_to_prepare().is_none() {
+        game.step(tree);
+        frames += 1;
+        ensure!(
+            frames < 40,
+            "never asked to prefetch: {:?}",
+            game.app.state()
+        );
+    }
+    ensure_eq!(caption(&game.app), Some(1), "prefetching");
+    ensure!(game.app.prefetching_textures(), "the prefetched textures");
+    let kept = game.app.textures_to_prepare().ok_or("paths")?.to_vec();
+    for p in &kept {
+        let t = gpu.owning(Owner::Prefetched, || texture(&gpu, p))?;
+        gpu.keep_texture(p, t);
+    }
+    game.app.textures_prepared();
+    game.step(tree);
     while game.app.textures_to_prepare().is_none() {
         game.step(tree);
         frames += 1;
@@ -426,15 +470,15 @@ pub async fn loading_takes_prepared_textures(cx: &Context<'_>) -> Outcome {
         game.step(tree);
         ensure_eq!(caption(&game.app), Some(16), "held");
     }
-    let paths = game.app.textures_to_prepare().ok_or("paths")?.to_vec();
-    let mut gpu = cx.renderer();
+    // The level's, but for those kept.
+    let all = game.app.textures_to_prepare().ok_or("paths")?.to_vec();
+    let paths: Vec<String> = (all.iter())
+        .filter(|p| gpu.kept_texture(p).is_none())
+        .cloned()
+        .collect();
     for p in &paths {
-        let bytes = vfs::read(tree, p).map_err(|e| format!("{p}: {e}"))?;
-        let dds = Dds::parse(&bytes).map_err(|e| format!("{p}: {e:?}"))?;
-        let texture = gpu
-            .create_texture(p, &dds)
-            .map_err(|e| format!("{p}: {e:?}"))?;
-        gpu.add_prepared(p, texture);
+        let t = texture(&gpu, p)?;
+        gpu.add_prepared(p, t);
     }
     game.app.textures_prepared();
     game.step(tree);
@@ -456,7 +500,10 @@ pub async fn loading_takes_prepared_textures(cx: &Context<'_>) -> Outcome {
         ensure_eq!(caption(&game.app), Some(17), "held");
     }
     let note = format!(
-        "{} textures prepared; world prepared in {turns} turns, {:.1} ms",
+        "{chunks} chunks of geometry kept ({:.1} MiB), {} textures prefetched ({} of them the level's), {} prepared; world prepared in {turns} turns, {:.1} ms",
+        mib(chunk_bytes),
+        kept.len(),
+        all.len() - paths.len(),
         paths.len(),
         now_ms() - start
     );
@@ -475,6 +522,7 @@ pub async fn loading_takes_prepared_textures(cx: &Context<'_>) -> Outcome {
         paths.iter().all(|p| gpu.take_prepared(p).is_none()),
         "taken or dropped"
     );
+    ensure_eq!(gpu.kept_count(), kept.len(), "the prefetched textures kept");
     ensure!(presenter.world().is_some());
     Ok(note)
 }
