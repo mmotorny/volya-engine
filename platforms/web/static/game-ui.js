@@ -12,7 +12,8 @@
 // menu's last item).
 //
 // Home holds Play only; secondary actions (an update offer, Settings) sit at
-// the bottom, away from it. Settings holds updates, the logs and,
+// the bottom, away from it. Settings holds updates, the touch controls
+// (on touch devices, #802), the logs and,
 // in a danger zone, deleting the game's saves, settings, and logs
 // and deleting the import.
 
@@ -752,8 +753,36 @@ function importSection(status, kept) {
 }
 
 /**
- * Settings: updates, the logs and, in a danger zone, the
- * player's saves, settings, and logs and the game files.
+ * Touch controls (#802), on touch devices: standard (the default) or
+ * experimental, `volya.touchControls` (main.js) keeping the choice; the
+ * level's controls take it when a level starts.
+ */
+function touchPanel() {
+  const controls = globalThis.volya?.touchControls;
+  if (!controls?.available()) return null;
+  const choice = (mode, title, detail) => {
+    const input = element("input", { type: "radio", name: "touch-controls", value: mode, checked: controls.mode === mode });
+    input.addEventListener("change", () => input.checked && controls.set(mode));
+    return element(
+      "label",
+      { className: "switch" },
+      input,
+      element("span", {}, element("strong", { textContent: title }), detail ? element("small", { textContent: detail }) : null),
+    );
+  };
+  const group = element(
+    "div",
+    { role: "radiogroup" },
+    choice("standard", "Standard"),
+    choice("experimental", "Experimental", "Tap where to go; drag anywhere to look, and flick to keep turning."),
+  );
+  group.setAttribute("aria-label", "Touch controls");
+  return element("div", { className: "panel" }, element("p", { className: "label", textContent: "Touch controls" }), group);
+}
+
+/**
+ * Settings: updates, the touch controls, the logs and, in a danger zone,
+ * the player's saves, settings, and logs and the game files.
  */
 async function showSettings() {
   const status = await call("game_status");
@@ -786,6 +815,7 @@ async function showSettings() {
         : null,
       check,
     ),
+    touchPanel(),
     logs,
     status.imported || userData
       ? element(

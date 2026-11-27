@@ -707,6 +707,42 @@ export const tests = {
     await dir.removeEntry("logs", { recursive: true });
   },
 
+  "Settings: the touch controls are offered on touch devices, standard by default; the choice is stored with the app's settings (#802)": async () => {
+    const controls = volya.touchControls;
+    const available = controls.available;
+    const { settingsStore } = await import(`${base}update.js`);
+    const store = settingsStore(new URL(base, location.href).href);
+    const radio = (mode) => document.querySelector(`#game input[name="touch-controls"][value="${mode}"]`);
+    try {
+      controls.available = () => false;
+      await volya.showSettings();
+      assert(!radio("standard"), "offered without touch");
+      controls.available = () => true;
+      await controls.set("standard");
+      await volya.showSettings();
+      const group = radio("standard")?.closest('[role="radiogroup"]');
+      assertEqual(group?.getAttribute("aria-label"), "Touch controls", "the group");
+      assertEqual(
+        [...group.querySelectorAll("label")].map((l) => l.textContent),
+        ["Standard", "ExperimentalTap where to go; drag anywhere to look, and flick to keep turning."],
+        "the choices",
+      );
+      assert(radio("standard").checked && !radio("experimental").checked, "standard by default");
+      const auto = (await store.read()).auto;
+      radio("experimental").click();
+      await until(async () => (await store.read()).touch === "experimental", "the choice stored");
+      assertEqual(controls.mode, "experimental", "the mode");
+      assertEqual((await store.read()).auto, auto, "the update setting kept");
+      await volya.showSettings();
+      assert(radio("experimental").checked, "shown chosen");
+      radio("standard").click();
+      await until(async () => (await store.read()).touch === "standard", "standard stored again");
+    } finally {
+      controls.available = available;
+      await controls.set("standard");
+    }
+  },
+
   "Delete game files: asks in the page, Escape cancels, a failure is told": async () => {
     // The smoke page has no game imported: the UX audit frame's fake engine has one.
     const frame = Object.assign(document.createElement("iframe"), { width: 1280, height: 800 });
@@ -759,6 +795,16 @@ export const tests = {
           ok = doc?.documentElement?.dataset.ready === "true" && (shown || state.startError);
         }
         if (!ok) failed.push(`${device.id}/${state.id}`);
+        // The sprint lock target, where shown, is on the screen and clear
+        // of its safe area's top edge (a thumb landing high lowers it).
+        const target = state.level && frame.contentDocument?.querySelector(".touch-lock");
+        if (target && frame.contentWindow.getComputedStyle(target).visibility === "visible") {
+          const r = target.getBoundingClientRect();
+          const inset = device.insets;
+          const inside =
+            r.left >= inset.left && r.top >= inset.top && r.right <= device.width - inset.right && r.bottom <= device.height - inset.bottom;
+          if (!inside) failed.push(`${device.id}/${state.id}: lock target at ${JSON.stringify(r)}`);
+        }
         // A trip's destination marker, where the state has one, shows on
         // the screen.
         const marker = state.level?.trip && frame.contentDocument?.querySelector(".touch-destination");

@@ -582,6 +582,8 @@ export function keptSetup({ level = false, tap = false } = {}) {
   const tests = {
     "imports what the game reads, where the kept profile lacks it": async () => {
       await readGpu();
+      // The default touch controls, whatever an earlier run left (#802).
+      await volya.touchControls?.set("standard");
       await volya.call("forget_user_config");
       return importGameData(false);
     },

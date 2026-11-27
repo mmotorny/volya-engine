@@ -27,12 +27,12 @@
 //   engine stops while hidden (our design, #93).
 // To the page, besides replies: { type: "capture", on } whenever the engine
 // starts or stops owning the screen; the page forwards input only while on.
-// { type: "controls", level, crouch, sprint, low, keys, torch,
+// { type: "controls", level, crouch, sprint, low, lock, keys, torch,
 // nightVision, pda } whenever the level's controls go live or stop (level)
 // or their toggles change (crouch toggle engaged, sprint requested, the
-// toggled crouch low; the torch and night vision on, or null while their
-// touch buttons are hidden): the page's touch controls and pointer lock
-// follow it.
+// toggled crouch low, the sprint lock holding; the torch and night vision
+// on, or null while their touch buttons are hidden): the page's touch
+// controls and pointer lock follow it.
 // { type: "trip", at } whenever a tap-to-move trip's destination moves in
 // the picture (from its centre, in half its height, +y down), or goes
 // (null): the touch controls mark it (#772).
@@ -126,6 +126,7 @@ function syncCapture() {
       crouch: (bits & 2) !== 0,
       sprint: (bits & 4) !== 0,
       low: (bits & 8) !== 0,
+      lock: (bits & 16) !== 0,
       keys: (bits & 32) !== 0,
       torch: bits & 64 ? (bits & 128) !== 0 : null,
       nightVision: bits & 256 ? (bits & 512) !== 0 : null,

@@ -22,7 +22,8 @@
 // the new build: they reload themselves at once, whatever they show (the
 // user's decision; docs/architecture/web-platform.md).
 //
-// The setting lives in a cache, where sw.js reads it.
+// The setting lives in a cache, where sw.js reads it, with the app's other
+// settings (the touch controls', #802).
 
 /** This build's commit and its time (ISO 8601), set by the site's build (`tools/site`). */
 export const BUILD = "dev";
@@ -45,6 +46,15 @@ const CACHE = "volya-engine-settings";
 const LEGACY = "volya-engine-app";
 const SETTINGS = "__settings.json";
 const MIN_INTERVAL_MS = 60 * 60 * 1000;
+
+/**
+ * Stores `patch` over the settings in `store` now, keeping the others
+ * (each part of the app writes only its own).
+ */
+export async function saveSettings(store, patch) {
+  const stored = await store.read().catch(() => ({}));
+  await store.write({ ...stored, ...patch });
+}
 
 /** The settings shared with sw.js, kept in a cache of their own. */
 export const settingsStore = (scope, cacheStorage = caches) => {
@@ -97,14 +107,14 @@ export function startUpdates(
     },
     async setAuto(on) {
       settings = { ...settings, auto: on };
-      await store?.write(settings);
+      if (store) await saveSettings(store, { auto: on });
       changed();
       if (on && state.status === "available") await state.check();
     },
     async download() {
       if (state.status !== "available") return;
       settings = { ...settings, consent: state.build };
-      await store?.write(settings);
+      if (store) await saveSettings(store, { consent: state.build });
       state.status = "downloading";
       changed();
       await state.check();

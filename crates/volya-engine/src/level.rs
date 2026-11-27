@@ -821,6 +821,8 @@ pub struct PlayerReport {
     /// The toggles the touch controls show.
     pub crouch_toggled: bool,
     pub sprint_requested: bool,
+    /// The touch stick's sprint lock holds it forward.
+    pub sprint_locked: bool,
     /// The destination of the tap-to-move trip under way.
     pub trip: Option<Vec3>,
     /// How the latest trip to end on its own ended (`arrived`, `stuck`)
@@ -3995,6 +3997,7 @@ impl LevelScreen {
                 climbing,
                 crouch_toggled: p.crouch_toggled,
                 sprint_requested: p.sprint_requested,
+                sprint_locked: self.controls.sprint_lock.locked(),
                 trip: self.controls.tap_move.trip().map(|t| t.destination),
                 trip_end: self.controls.tap_move.ended().map(|(how, d)| {
                     let how = match how {

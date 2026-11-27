@@ -13,19 +13,24 @@
 //! **Gamepad and touch are our design** (the original has neither, section
 //! 2.1), mapped onto the same actions and kept conservative:
 //!
-//! | Action | Gamepad | Touch (the page's on-screen controls) |
-//! |---|---|---|
-//! | move | left stick | a tap in the level: forward toward where it meets the level ([`TapMove`]) |
-//! | walk instead of run | the stick pushed less than [`RUN_DEFLECTION`], kept after it is released | a trip in the low crouch walks; otherwise it runs |
-//! | look | right stick, at `rot_speed` at full deflection (8.2) | a drag anywhere in the level, or one begun on Jump or Crouch, as direct manipulation with momentum ([`TouchLookDrag`]) |
-//! | jump | south (A / cross) | Jump |
-//! | crouch | west (X / square), as `crouch_toggle` | Crouch, as `crouch_toggle` |
-//! | sprint | left stick pressed, as `sprint_toggle` | a double tap: that trip sprints |
-//! | open the menu | east (B / circle), as the key bound to `quit` | Menu |
-//! | open the inventory screen | north (Y / triangle) | Inventory, at the top right |
-//! | `torch` (docs/behavior/torch.md 8) | d-pad up | Torch, at the top right beside Inventory (#363) |
-//! | `night_vision` (15.3) | d-pad down | Night vision, beside Torch, shown while it can act (#363) |
-//! | open and close the PDA as `active_jobs` (docs/behavior/pda-window.md 4.1) | d-pad left; in the window, east (B / circle) closes it as the key bound to `quit` | PDA, at the top right beside Inventory, shown over the open window too (#730) |
+//! | Action | Gamepad | Touch, standard (the default) | Touch, experimental |
+//! |---|---|---|---|
+//! | move | left stick | the move stick (left half) | a tap in the level: forward toward where it meets the level ([`TapMove`]) |
+//! | walk instead of run | the stick pushed less than [`RUN_DEFLECTION`], kept after it is released | the same | a trip in the low crouch walks; otherwise it runs |
+//! | look | right stick, at `rot_speed` at full deflection (8.2) | a drag on the right half, or one begun on Jump or Crouch, as mouse counts (8.1) through [`look_gain`] | a drag anywhere in the level, or one begun on Jump or Crouch, as direct manipulation with momentum ([`TouchLookDrag`]) |
+//! | jump | south (A / cross) | Jump | Jump |
+//! | crouch | west (X / square), as `crouch_toggle` | Crouch, as `crouch_toggle` | the same |
+//! | sprint | left stick pressed, as `sprint_toggle` | the stick pushed forward past its rim, kept by the sprint lock ([`SprintLock`]) | a double tap: that trip sprints |
+//! | open the menu | east (B / circle), as the key bound to `quit` | Menu | Menu |
+//! | open the inventory screen | north (Y / triangle) | Inventory, at the top right | the same |
+//! | `torch` (docs/behavior/torch.md 8) | d-pad up | Torch, at the top right beside Inventory (#363) | the same |
+//! | `night_vision` (15.3) | d-pad down | Night vision, beside Torch, shown while it can act (#363) | the same |
+//! | open and close the PDA as `active_jobs` (docs/behavior/pda-window.md 4.1) | d-pad left; in the window, east (B / circle) closes it as the key bound to `quit` | PDA, at the top right beside Inventory, shown over the open window too (#730) | the same |
+//!
+//! The page offers both touch controls, standard by default, by the app's
+//! setting (#802); each sends its own events ([`Input::touch_stick`] and
+//! [`Input::touch_look_moves`]; [`Input::touch_looks`]), and these controls
+//! act on whichever arrive.
 //!
 //! Climbing ladders (docs/behavior/climbing.md) has no control of its own
 //! on any path: forward climbs up, back or looking down past 20° climbs
@@ -39,16 +44,26 @@
 //! the keyboard's keys reach the character, but those the screen uses
 //! ([`Controls::keys_only`]).
 //!
-//! The gamepad's stick gives the spec's digital directions: eight sectors
-//! of 45° ([`stick_directions`]). Crouch is a toggle on the gamepad and on
-//! touch, since holding it while moving and looking would need a third
-//! thumb. The walk or run choice is latched (our design), so the low
-//! crouch (a crouch while walking, 4.2) can be entered and held without a
-//! thumb on anything: the stick's by a push whose peak deflection stays
-//! below [`RUN_DEFLECTION`] (walking) or reaches it (running), kept once
-//! released; touch's by Crouch swiped down (walking) and a trip begun
+//! Sticks give the spec's digital directions: eight sectors of 45°
+//! ([`stick_directions`]). Crouch is a toggle on the gamepad and on touch,
+//! since holding it while moving and looking would need a third thumb. The
+//! walk or run choice is latched (our design), so the low crouch (a crouch
+//! while walking, 4.2) can be entered and held without a thumb on
+//! anything: a stick's by a push whose peak deflection stays below
+//! [`RUN_DEFLECTION`] (walking) or reaches it (running), kept once
+//! released; tap-to-move's by Crouch swiped down (walking) and a trip begun
 //! standing (running). Nothing latches until set, and any keyboard movement
 //! key clears both latches, so the keyboard's `accel` works as bound.
+//!
+//! The standard touch controls sprint as mobile shooters do (our design):
+//! the stick pushed forward past its rim requests the sprint, and let go on
+//! the lock target above it keeps running forward and sprinting hands-free
+//! ([`SprintLock`]). The movement layer's rules still decide: whenever they
+//! cancel the request (4.3: stopping, crouching, walking, firing), the lock
+//! ends. Unlike the keys and the gamepad, whose `sprint_toggle` works in any
+//! direction (the spec then sprints only forward), the touch stick requests
+//! the sprint only when pushed within 45° of forward ([`SPRINT_CONE`]), or
+//! of its lock target where a thumb landing high moved the target aside.
 
 use std::collections::HashMap;
 
@@ -223,6 +238,208 @@ pub fn stick_directions([x, y]: [f32; 2]) -> Option<([bool; 4], bool)> {
     }
     let t = SECTOR * len;
     Some(([-y > t, y > t, -x > t, x > t], len >= RUN_DEFLECTION))
+}
+
+/// The touch stick is past its rim at this reach (stick radii), pushed
+/// toward the lock target (our choice: clearly beyond the full deflection,
+/// so a full push alone runs).
+pub const SPRINT_RIM: f32 = 1.3;
+/// Back below this reach, it is within the rim again (our choice: a little
+/// hysteresis, so a thumb resting on the rim doesn't flicker).
+pub const SPRINT_RIM_EXIT: f32 = 1.15;
+/// Past the rim counts within 45° of the lock target's direction (our
+/// choice): the cosine of that angle.
+pub const SPRINT_CONE: f32 = std::f32::consts::FRAC_1_SQRT_2;
+/// How far straight ahead of the stick's centre the sprint lock target is
+/// centred, in stick radii (our choice: above the rim, within a thumb's
+/// reach).
+pub const LOCK_REACH: f32 = 2.1;
+/// The lock target's radius, in stick radii (our choice: 31 CSS pixels at
+/// the page's 56-pixel stick radius, a 62-pixel target).
+pub const LOCK_RADIUS: f32 = 0.55;
+/// The closest the lock target comes: all of it past the rim.
+pub const LOCK_MIN_REACH: f32 = SPRINT_RIM + LOCK_RADIUS;
+
+/// The lock target's centre relative to the stick's (stick radii, +y
+/// down) for the page's `centre` ([`Input::touch_lock_target`]): straight
+/// ahead at [`LOCK_REACH`] by default. Where that wouldn't fit on the
+/// screen (a thumb landing high), the page draws it closer, down to
+/// [`LOCK_MIN_REACH`], or turned toward the side (our choice); its
+/// distance is kept within those, and nonsense gives the default.
+pub fn lock_target(centre: Option<[f32; 2]>) -> [f32; 2] {
+    let default = [0.0, -LOCK_REACH];
+    let Some([x, y]) = centre else {
+        return default;
+    };
+    let len = x.hypot(y);
+    if !len.is_finite() || len < 1e-3 {
+        return default;
+    }
+    let scale = len.clamp(LOCK_MIN_REACH, LOCK_REACH) / len;
+    [x * scale, y * scale]
+}
+
+/// The sprint lock of the touch stick (our design, after mobile shooters):
+///
+/// - pushed past the rim ([`SPRINT_RIM`]) toward the lock target (within
+///   [`SPRINT_CONE`] of its direction: straight ahead unless the target
+///   had to move aside), the stick requests the sprint;
+/// - back within the rim ([`SPRINT_RIM_EXIT`]) or turned aside while held,
+///   it ends the sprint it requested;
+/// - let go on the lock target ([`lock_target`], [`LOCK_RADIUS`]) while
+///   sprinting, it locks: the stick reads full forward with nobody on it;
+/// - let go elsewhere, or its touch cancelled, it ends the sprint it
+///   requested;
+/// - a touch on the stick, or everything released (focus lost), ends the
+///   lock and its sprint;
+/// - whenever the movement layer cancels the sprint request, the lock ends
+///   and a held push past the rim requests nothing more until it returns
+///   within the rim (the spec asks for a fresh request, 4.3).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SprintLock {
+    phase: LockPhase,
+    /// The stick's latest value, across frames.
+    last: [f32; 2],
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum LockPhase {
+    #[default]
+    Free,
+    /// Held past the rim; `sprinting` until the movement layer cancels the
+    /// request this push made.
+    Past {
+        sprinting: bool,
+    },
+    Locked,
+}
+
+impl SprintLock {
+    /// Whether the lock holds the stick forward.
+    pub fn locked(&self) -> bool {
+        self.phase == LockPhase::Locked
+    }
+
+    /// Whether the stick is held past the rim.
+    pub fn past(&self) -> bool {
+        matches!(self.phase, LockPhase::Past { .. })
+    }
+
+    /// Lets the stick go from the lock at once, leaving the sprint request
+    /// to the movement layer (a crouch about to cancel it).
+    pub fn unlock(&mut self) {
+        if self.locked() {
+            self.phase = LockPhase::Free;
+        }
+    }
+
+    /// One frame: the stick's `values` this frame in order
+    /// ([`Input::touch_stick_values`]; `None` a cancelled touch), whether
+    /// everything was `released` since ([`Input::sticks_released`]),
+    /// whether the sprint is `requested` after the previous frame, and the
+    /// lock target's `centre` ([`lock_target`]). Returns whether to press
+    /// `sprint_toggle`.
+    pub fn frame(
+        &mut self,
+        values: &[Option<[f32; 2]>],
+        released: bool,
+        requested: bool,
+        centre: [f32; 2],
+    ) -> bool {
+        // The movement layer cancelled the request (made by the previous
+        // frame at the latest).
+        if !requested {
+            match self.phase {
+                LockPhase::Past { sprinting: true } => {
+                    self.phase = LockPhase::Past { sprinting: false }
+                }
+                LockPhase::Locked => self.phase = LockPhase::Free,
+                _ => {}
+            }
+        }
+        let reach = centre[0].hypot(centre[1]);
+        let toward = [centre[0] / reach, centre[1] / reach];
+        let mut ended = false;
+        let mut end = |phase: &mut LockPhase| {
+            if matches!(
+                *phase,
+                LockPhase::Past { sprinting: true } | LockPhase::Locked
+            ) {
+                ended = true;
+            }
+            *phase = LockPhase::Free;
+        };
+        for &value in values {
+            let Some(v) = value else {
+                // Cancelled: no lock, whatever the last value was.
+                self.last = [0.0; 2];
+                end(&mut self.phase);
+                continue;
+            };
+            let len = v[0].hypot(v[1]);
+            let ahead = v[0] * toward[0] + v[1] * toward[1] >= SPRINT_CONE * len;
+            let let_go = v == [0.0; 2] && self.last != [0.0; 2];
+            match self.phase {
+                // Touched again.
+                LockPhase::Locked => end(&mut self.phase),
+                LockPhase::Past { sprinting } if let_go => {
+                    let d = [self.last[0] - centre[0], self.last[1] - centre[1]];
+                    if sprinting && d[0].hypot(d[1]) <= LOCK_RADIUS {
+                        self.phase = LockPhase::Locked;
+                    } else {
+                        end(&mut self.phase);
+                    }
+                }
+                LockPhase::Past { .. } if len < SPRINT_RIM_EXIT || !ahead => end(&mut self.phase),
+                _ => {}
+            }
+            if self.phase == LockPhase::Free && len >= SPRINT_RIM && ahead {
+                self.phase = LockPhase::Past { sprinting: true };
+            }
+            self.last = v;
+        }
+        if released {
+            self.last = [0.0; 2];
+            end(&mut self.phase);
+        }
+        let want = match self.phase {
+            LockPhase::Past { sprinting: true } | LockPhase::Locked => Some(true),
+            _ if ended => Some(false),
+            _ => None,
+        };
+        want.is_some_and(|w| w != requested)
+    }
+}
+
+/// The mouse counts a touch look drag turns per CSS pixel up to
+/// [`LOOK_PRECISE_SPEED`] (the user's choice, #747: a slow drag across the
+/// look half, about 400 px, turns about 180° at the default `mouse_sens`).
+pub const LOOK_BASE_GAIN: f32 = 3.25;
+/// Up to this speed of a touch look drag (CSS pixels per second) it turns
+/// [`LOOK_BASE_GAIN`] counts a pixel (our choice: slow aiming).
+pub const LOOK_PRECISE_SPEED: f32 = 300.0;
+/// From this speed on a drag turns [`LOOK_MAX_GAIN`] counts a pixel (our
+/// choice: a quick flick across the look half, about 2,500 px/s, passes it).
+pub const LOOK_FAST_SPEED: f32 = 2000.0;
+/// The counts a fast drag turns per CSS pixel (the user's choice, #747:
+/// the original's 1,000-DPI mouse at the default `mouse_sens`, about
+/// 137.5° per inch of thumb travel at about 153 CSS px an inch).
+pub const LOOK_MAX_GAIN: f32 = 6.5;
+
+/// The touch look's acceleration (our design, as mobile shooters do): a
+/// drag at `speed` CSS pixels per second gives this many mouse counts per
+/// pixel: [`LOOK_BASE_GAIN`] up to [`LOOK_PRECISE_SPEED`], rising linearly to
+/// [`LOOK_MAX_GAIN`] at [`LOOK_FAST_SPEED`], level beyond. The counts then
+/// turn by `mouse_sens` and `mouse_invert` as any mouse's do (8.1). The
+/// speed is the page's, smoothed over its drag's own event times
+/// ([`Input::touch_look_moves`]), so how the events fall into frames
+/// doesn't change the gain.
+pub fn look_gain(speed: f32) -> f32 {
+    let t = (speed - LOOK_PRECISE_SPEED) / (LOOK_FAST_SPEED - LOOK_PRECISE_SPEED);
+    if t.is_nan() {
+        return LOOK_BASE_GAIN;
+    }
+    LOOK_BASE_GAIN + t.clamp(0.0, 1.0) * (LOOK_MAX_GAIN - LOOK_BASE_GAIN)
 }
 
 /// The touch look's momentum keeps this much of its speed every
@@ -720,12 +937,12 @@ pub struct Controls {
     pub bindings: Bindings,
     pub settings: Settings,
     /// The latched walk (`true`) or run choice of the gamepad's left stick
-    /// and of touch (tap-to-move's trips, the low crouch), `None` until
-    /// set (see the module docs).
+    /// and of touch (the touch stick; tap-to-move's trips, the low
+    /// crouch), `None` until set (see the module docs).
     pub walk: [Option<bool>; 2],
-    /// The gamepad stick's peak deflection in the current push, 0 when
-    /// released.
-    peak: f32,
+    /// Each stick's peak deflection in the current push, 0 when released.
+    peak: [f32; 2],
+    pub sprint_lock: SprintLock,
     pub look: TouchLookDrag,
     pub tap_move: TapMove,
     /// While a screen over the level takes the mouse (the inventory
@@ -742,7 +959,8 @@ impl Controls {
             bindings,
             settings,
             walk: [None; 2],
-            peak: 0.0,
+            peak: [0.0; 2],
+            sprint_lock: SprintLock::default(),
             look: TouchLookDrag::default(),
             tap_move: TapMove::default(),
             keys_only: None,
@@ -874,9 +1092,9 @@ impl Controls {
     /// the menu with a gamepad's east button or the touch Menu button (the
     /// keyboard's key bound to `quit` is the app's: it opens the menu
     /// whatever has the keyboard, save-load-screens.md section 2). `player`
-    /// is the player after the previous frame (its sprint request and
-    /// position for tap-to-move, its crouch toggle for the touch low
-    /// crouch); `destination` gives a tap's destination for its place in
+    /// is the player after the previous frame (its sprint request for the
+    /// sprint lock and tap-to-move, its position for tap-to-move, its
+    /// crouch toggle for the touch low crouch); `destination` gives a tap's destination for its place in
     /// the picture ([`tap_destination`] from the view the tap saw).
     pub fn request(
         &mut self,
@@ -946,42 +1164,94 @@ impl Controls {
             look: [0.0; 2],
             toward: None,
         };
+        // The touch stick: its reach within the rim, or full forward while
+        // the sprint lock holds it.
+        // Under a screen the touch stick is gone (the page hides it): as
+        // everything released, its lock ends.
+        r.sprint_toggle ^= if keys_only {
+            self.sprint_lock
+                .frame(&[], true, player.sprint_requested, lock_target(None))
+        } else {
+            self.sprint_lock.frame(
+                input.touch_stick_values(),
+                input.sticks_released()[1],
+                player.sprint_requested,
+                lock_target(input.touch_lock_target()),
+            )
+        };
         // Crouch swiped down (our design): the low crouch, the crouch
-        // toggle engaged with touch's latch walking (4.2).
+        // toggle engaged with touch's latch walking (4.2), as a light push
+        // of the touch stick let go would leave it. A lock holding the stick
+        // forward lets go now, or its full push would latch running again
+        // in this frame (the crouch cancels its sprint, 4.3).
         if touch(TouchButton::CrouchLow, true) {
             if !(player.crouch_toggled ^ r.crouch_toggle) {
                 r.crouch_toggle ^= true;
             }
+            self.sprint_lock.unlock();
             self.walk[1] = Some(true);
+            self.peak[1] = 0.0;
         }
+        let [x, y] = if keys_only {
+            [0.0; 2]
+        } else {
+            input.touch_stick()
+        };
+        let reach = x.hypot(y).max(1.0);
+        let touch_stick = if self.sprint_lock.locked() {
+            [0.0, -1.0]
+        } else {
+            [x / reach, y / reach]
+        };
         let axis = |a| if keys_only { 0.0 } else { input.axis(a) };
+        let pads = [
+            [axis(GamepadAxis::LeftX), axis(GamepadAxis::LeftY)],
+            touch_stick,
+        ];
         let keyboard = r.forward || r.back || r.left || r.right;
         if keyboard {
             // Keyboard movement: the latches give way.
             self.walk = [None; 2];
         }
-        // The gamepad's stick: directions, and walking below the run
-        // deflection (`accel` inverts `g_always_run`, 4.1).
-        let stick = [axis(GamepadAxis::LeftX), axis(GamepadAxis::LeftY)];
-        let mut pad_moves = false;
-        if keys_only || input.stick_released() {
-            // Released by a blur or lost pointer lock, not let go: the
-            // latch and the push's peak stay for the value sent again.
-        } else if let Some(([f, b, l, rt], _)) = stick_directions(stick) {
-            r.forward |= f;
-            r.back |= b;
-            r.left |= l;
-            r.right |= rt;
-            pad_moves = true;
-            self.peak = self.peak.max(stick[0].hypot(stick[1]));
-            self.walk[0] = Some(self.peak < RUN_DEFLECTION);
-        } else {
-            self.peak = 0.0;
+        // The sticks: directions, and walking below the run deflection
+        // (`accel` inverts `g_always_run`, 4.1). Released by a blur or lost
+        // pointer lock, not let go (the gamepad's under a screen too), a
+        // stick's latch and its push's peak stay for the value sent again.
+        let released = input.sticks_released();
+        let released = [keys_only || released[0], !keys_only && released[1]];
+        let mut sticks_move = false;
+        for (i, stick) in pads.into_iter().enumerate() {
+            if released[i] {
+                continue;
+            }
+            if let Some(([f, b, l, rt], _)) = stick_directions(stick) {
+                r.forward |= f;
+                r.back |= b;
+                r.left |= l;
+                r.right |= rt;
+                sticks_move = true;
+                self.peak[i] = self.peak[i].max(stick[0].hypot(stick[1]));
+                self.walk[i] = Some(self.peak[i] < RUN_DEFLECTION);
+            } else {
+                self.peak[i] = 0.0;
+            }
         }
         let dead = |v: f32| if v.abs() < DEAD_ZONE { 0.0 } else { v };
         r.turn[0] = (r.turn[0] + dead(axis(GamepadAxis::RightX))).clamp(-1.0, 1.0);
         r.turn[1] = (r.turn[1] + dead(axis(GamepadAxis::RightY))).clamp(-1.0, 1.0);
-        // Touch look: under a screen nothing looks and the momentum ends.
+        // The standard touch look: mouse counts through the look curve.
+        let moves: &[([f32; 2], f32)] = if keys_only {
+            &[]
+        } else {
+            input.touch_look_moves()
+        };
+        for &(delta, speed) in moves {
+            let gain = look_gain(speed);
+            r.mouse[0] += delta[0] * gain;
+            r.mouse[1] += delta[1] * gain;
+        }
+        // The experimental touch look: under a screen nothing looks and the
+        // momentum ends.
         r.look = if keys_only {
             self.look
                 .frame(&[], true, player.pitch, player.pitch_limits, now)
@@ -996,7 +1266,7 @@ impl Controls {
         };
         // Tap-to-move: forward toward the trip's destination, running
         // (touch's latch, unless the low crouch holds it walking). A key or
-        // the gamepad moving, a screen or a blur ends the trip.
+        // a stick moving, a screen or a blur ends the trip.
         let taps: Vec<_> = self
             .look
             .taps()
@@ -1009,7 +1279,7 @@ impl Controls {
                 self.walk[1] = Some(false);
             }
         }
-        let ended = keyboard || pad_moves || keys_only || input.looks_released();
+        let ended = keyboard || sticks_move || keys_only || input.looks_released();
         let (toward, sprint) = self.tap_move.frame(&taps, ended, player, now);
         r.sprint_toggle ^= sprint;
         if toward.is_some() {
@@ -1285,6 +1555,281 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
         });
         let (r, back) = req(&mut c, &i);
         assert!(r.jump_released && back);
+    }
+
+    #[test]
+    fn the_standard_touch_controls() {
+        let mut c = controls();
+        let mut i = Input::new();
+        i.handle(Event::TouchStick { value: [0.0, -0.9] });
+        // A slow drag (190 px/s): the base gain, 3.25 counts per pixel.
+        i.handle(Event::TouchLookDelta {
+            delta: [3.0, 1.0],
+            speed: 190.0,
+        });
+        for button in [TouchButton::Jump, TouchButton::Crouch] {
+            i.handle(Event::TouchButton {
+                button,
+                pressed: true,
+            });
+        }
+        let (r, back) = req(&mut c, &i);
+        assert!(r.forward && !r.accel && r.jump_pressed && r.crouch_toggle);
+        assert!(!r.sprint_toggle, "a full push within the rim runs");
+        assert!(!r.crouch, "the touch crouch is the toggle");
+        assert_eq!(r.mouse, [9.75, 3.25]);
+        assert!(!back);
+        i.end_frame();
+        i.handle(Event::TouchButton {
+            button: TouchButton::Jump,
+            pressed: false,
+        });
+        i.handle(Event::TouchButton {
+            button: TouchButton::Menu,
+            pressed: true,
+        });
+        let (r, back) = req(&mut c, &i);
+        assert!(r.jump_released && back && r.forward);
+        // Released, then a light push and let go: the touch stick keeps
+        // walking too.
+        i.handle(Event::TouchStick { value: [0.0, 0.0] });
+        req(&mut c, &i);
+        i.handle(Event::TouchStick { value: [0.0, -0.3] });
+        assert!(req(&mut c, &i).0.accel);
+        i.handle(Event::TouchStick { value: [0.0, 0.0] });
+        let (r, _) = req(&mut c, &i);
+        assert!(r.accel && !r.forward);
+    }
+
+    #[test]
+    fn the_look_curve_is_the_base_gain_when_slow_and_twice_it_when_fast() {
+        assert_eq!(look_gain(0.0), LOOK_BASE_GAIN);
+        assert_eq!(look_gain(LOOK_PRECISE_SPEED), LOOK_BASE_GAIN);
+        assert!((look_gain(1150.0) - 4.875).abs() < 1e-6);
+        assert_eq!(look_gain(LOOK_FAST_SPEED), LOOK_MAX_GAIN);
+        assert_eq!(look_gain(10_000.0), LOOK_MAX_GAIN);
+        assert_eq!(look_gain(f32::NAN), LOOK_BASE_GAIN);
+        let mut last = 0.0;
+        for speed in (0..3000).step_by(50) {
+            let g = look_gain(speed as f32);
+            assert!(
+                g >= last && (LOOK_BASE_GAIN..=LOOK_MAX_GAIN).contains(&g),
+                "{speed}: {g}"
+            );
+            last = g;
+        }
+        // Through the controls: a 40-pixel flick at 3600 px/s turns 6.5
+        // counts a pixel, the same pixels slowly 3.25 each. The counts
+        // are mouse counts: the movement layer scales them by `mouse_sens`
+        // and `mouse_invert` (8.1).
+        let mut c = controls();
+        let mut i = Input::new();
+        i.handle(Event::TouchLookDelta {
+            delta: [0.0, 40.0],
+            speed: 3600.0,
+        });
+        assert_eq!(req(&mut c, &i).0.mouse, [0.0, 260.0]);
+        i.end_frame();
+        i.handle(Event::TouchLookDelta {
+            delta: [0.0, 40.0],
+            speed: 40.0,
+        });
+        assert_eq!(req(&mut c, &i).0.mouse, [0.0, 130.0]);
+    }
+
+    #[test]
+    fn uneven_event_batching_at_a_steady_drag_gives_a_steady_gain() {
+        // A drag at a steady 1150 px/s, its events (10 px each) falling
+        // into frames unevenly, as 120 Hz events into 60 Hz frames with
+        // jitter do: every frame turns 4.875 counts per pixel.
+        let mut c = controls();
+        let mut i = Input::new();
+        for batch in [1, 3, 0, 2, 1, 4, 2, 0, 1] {
+            for _ in 0..batch {
+                i.handle(Event::TouchLookDelta {
+                    delta: [10.0, 0.0],
+                    speed: 1150.0,
+                });
+            }
+            let turned = req(&mut c, &i).0.mouse[0];
+            let pixels = 10.0 * batch as f32;
+            assert!((turned - 4.875 * pixels).abs() < 1e-3, "{batch}: {turned}");
+            i.end_frame();
+        }
+    }
+
+    /// The default lock target.
+    const AHEAD: [f32; 2] = [0.0, -LOCK_REACH];
+
+    /// One frame of the lock with the stick's `values` and the default
+    /// target.
+    fn lock(l: &mut SprintLock, values: &[[f32; 2]], requested: bool) -> bool {
+        l.frame(&some(values), false, requested, AHEAD)
+    }
+
+    fn some(values: &[[f32; 2]]) -> Vec<Option<[f32; 2]>> {
+        values.iter().copied().map(Some).collect()
+    }
+
+    #[test]
+    fn past_the_rim_sprints_and_the_lock_target_keeps_it() {
+        let mut l = SprintLock::default();
+        // A full push within the rim, and past it aside: nothing.
+        assert!(!lock(&mut l, &[[0.0, -1.0]], false));
+        assert!(!lock(&mut l, &[[1.6, -0.2]], false) && !l.past());
+        // Forward past the rim: sprint requested, once.
+        assert!(lock(&mut l, &[[0.2, -1.4]], false) && l.past());
+        assert!(
+            !lock(&mut l, &[[0.0, -1.2]], true),
+            "hysteresis: still past"
+        );
+        // Back within the rim: the sprint ends.
+        assert!(lock(&mut l, &[[0.0, -1.1]], true) && !l.past());
+        // Past again, then let go on the target within one frame: locked.
+        assert!(lock(&mut l, &[[0.0, -1.5]], false));
+        assert!(!lock(&mut l, &[[0.1, -2.0], [0.0, 0.0]], true));
+        assert!(l.locked());
+        assert!(!lock(&mut l, &[], true) && l.locked(), "hands-free");
+        // A touch on the stick ends it and its sprint.
+        assert!(lock(&mut l, &[[0.0, 0.0]], true) && !l.locked());
+        // Let go past the rim but off the target: the sprint ends.
+        assert!(lock(&mut l, &[[0.0, -1.5]], false));
+        assert!(lock(&mut l, &[[0.0, 0.0]], true) && !l.past() && !l.locked());
+        // Everything released (focus lost) while locked: the lock ends.
+        lock(&mut l, &[[0.0, -2.1]], false);
+        lock(&mut l, &[[0.0, 0.0]], true);
+        assert!(l.locked());
+        assert!(l.frame(&[], true, true, AHEAD) && !l.locked());
+        // A cancelled touch on the target: no lock, the sprint ends.
+        assert!(lock(&mut l, &[[0.0, -1.5]], false));
+        let on_target = [Some([0.0, -2.1]), None];
+        assert!(l.frame(&on_target, false, true, AHEAD) && !l.locked());
+    }
+
+    #[test]
+    fn the_lock_target_moved_to_fit_the_screen_is_where_it_locks() {
+        // The page's target, its distance kept from all past the rim to
+        // the default; nonsense gives the default.
+        assert_eq!(lock_target(None), AHEAD);
+        assert_eq!(lock_target(Some([f32::NAN, 0.0])), AHEAD);
+        assert_eq!(lock_target(Some([0.0, 0.0])), AHEAD);
+        assert_eq!(lock_target(Some([0.0, -9.0])), AHEAD);
+        assert_eq!(lock_target(Some([0.0, -0.5])), [0.0, -LOCK_MIN_REACH]);
+        assert_eq!(lock_target(Some([0.0, -1.9])), [0.0, -1.9]);
+        // A thumb landing high: the target closer. A let-go there locks;
+        // at the default target's place it doesn't.
+        let mut l = SprintLock::default();
+        let low = [0.0, -LOCK_MIN_REACH];
+        assert!(l.frame(&some(&[[0.0, -1.5]]), false, false, low));
+        assert!(!l.frame(&some(&[low, [0.0, 0.0]]), false, true, low));
+        assert!(l.locked());
+        l.frame(&some(&[[0.0, 0.0]]), false, true, low);
+        l.frame(&some(&[[0.0, -1.5]]), false, false, low);
+        l.frame(&some(&[[0.0, -2.6], [0.0, 0.0]]), false, true, low);
+        assert!(!l.locked());
+        // A thumb at the very top: the target beside it, to the right.
+        // Past the rim counts toward it, and a let-go on it locks; a push
+        // straight ahead no longer reaches past the rim.
+        let side = [LOCK_MIN_REACH, 0.0];
+        let mut l = SprintLock::default();
+        assert!(!l.frame(&some(&[[0.0, -1.6]]), false, false, side) && !l.past());
+        l.frame(&some(&[[0.0, 0.0]]), false, false, side);
+        assert!(l.frame(&some(&[[1.5, -0.1]]), false, false, side) && l.past());
+        assert!(!l.frame(&some(&[side, [0.0, 0.0]]), false, true, side));
+        assert!(l.locked());
+        // Through the controls: the page's message moves the target, and
+        // the lock still sprints forward.
+        let mut w = Walk::new();
+        w.event(Event::TouchLockTarget { centre: side });
+        w.stick([0.0, 0.0]).stick([1.5, 0.0]).frames(2);
+        w.stick(side).stick([0.0, 0.0]);
+        let s = w.frames(10);
+        assert!(w.c.sprint_lock.locked() && s.flags.sprint && s.flags.forward);
+    }
+
+    #[test]
+    fn the_movement_layer_cancelling_the_sprint_ends_the_lock() {
+        let mut l = SprintLock::default();
+        assert!(lock(&mut l, &[[0.0, -1.5]], false));
+        // Cancelled (e.g. a crouch) while held past the rim: no fresh
+        // request until the stick returns within the rim and goes past
+        // again, and a let-go on the target doesn't lock.
+        assert!(!lock(&mut l, &[[0.0, -1.6]], false) && l.past());
+        assert!(!lock(&mut l, &[[0.0, -2.1], [0.0, 0.0]], false) && !l.locked());
+        assert!(
+            lock(&mut l, &[[0.0, -0.5], [0.0, -1.5]], false),
+            "past again"
+        );
+        // Locked, then cancelled: the lock lets the stick go.
+        assert!(!lock(&mut l, &[[0.0, -2.1], [0.0, 0.0]], true) && l.locked());
+        assert!(!lock(&mut l, &[], false) && !l.locked());
+    }
+
+    #[test]
+    fn crouch_swiped_down_while_the_lock_holds_is_the_low_crouch() {
+        // Locked, then Crouch swiped down in the lock's last held frame:
+        // the lock lets go at once, so the latch stays walking.
+        let mut w = Walk::new();
+        w.stick([0.0, 0.0]).stick([0.0, -1.5]).frames(2);
+        w.stick([0.0, -2.1]).stick([0.0, 0.0]);
+        assert!(w.frames(10).flags.sprint && w.c.sprint_lock.locked());
+        w.tap(TouchButton::CrouchLow);
+        let s = w.frames(30);
+        assert!(!w.c.sprint_lock.locked() && !s.sprint_requested);
+        assert!(s.posture == 2 && s.crouch_toggled, "{s:?}");
+    }
+
+    #[test]
+    fn the_sprint_lock_sprints_hands_free_until_the_movement_layer_ends_it() {
+        let mut w = Walk::new();
+        w.stick([0.0, 0.0]).stick([0.0, -1.0]);
+        assert!(!w.frames(10).flags.sprint, "a full push runs");
+        w.stick([0.0, -1.5]);
+        let s = w.frames(10);
+        assert!(s.flags.sprint && s.sprint_requested, "past the rim");
+        // Let go on the lock target: still sprinting forward, nobody on
+        // the stick.
+        w.stick([0.0, -2.1]).stick([0.0, 0.0]);
+        let s = w.frames(60);
+        assert!(w.c.sprint_lock.locked() && s.flags.sprint && s.flags.forward);
+        // A touch on the stick: it stops.
+        w.stick([0.0, 0.0]);
+        let s = w.frames(1);
+        assert!(!w.c.sprint_lock.locked() && !s.sprint_requested);
+        w.stick([0.0, 0.0]);
+        assert!(!w.frames(60).flags.forward);
+        // Locked again, then Crouch: the spec cancels the sprint (4.3) and
+        // the lock lets go.
+        w.stick([0.0, -2.1]).stick([0.0, 0.0]);
+        assert!(w.frames(10).flags.sprint && w.c.sprint_lock.locked());
+        w.tap(TouchButton::Crouch);
+        let s = w.frames(2);
+        assert!(!s.sprint_requested && !w.c.sprint_lock.locked());
+        assert!(!w.frames(60).flags.forward, "stopped");
+    }
+
+    #[test]
+    fn a_latched_walk_holds_the_low_crouch_without_the_stick() {
+        let mut w = Walk::new();
+        // A light push on the touch stick, let go; then Crouch.
+        w.stick([0.0, -0.3]).frames(1);
+        w.stick([0.0, 0.0]).frames(1);
+        w.tap(TouchButton::Crouch);
+        assert_eq!(w.frames(30).posture, 2, "the low crouch, held");
+        // A full push runs: the crouch rises to box 1.
+        w.stick([0.0, -1.0]);
+        assert_eq!(w.frames(1).posture, 1);
+        // Let go, then Crouch swiped down: the low crouch again, still
+        // toggled.
+        w.stick([0.0, 0.0]).frames(1);
+        w.tap(TouchButton::CrouchLow);
+        let s = w.frames(30);
+        assert!(s.posture == 2 && s.crouch_toggled);
+        // Standing, swiped down: straight to the low crouch.
+        w.tap(TouchButton::Crouch);
+        assert_eq!(w.frames(30).posture, 0);
+        w.tap(TouchButton::CrouchLow);
+        assert_eq!(w.frames(30).posture, 2);
     }
 
     /// The picture's half height in CSS pixels in the tests.
@@ -1717,6 +2262,10 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
             self
         }
 
+        fn stick(&mut self, value: [f32; 2]) -> &mut Self {
+            self.event(Event::TouchStick { value })
+        }
+
         /// A tap where `point` shows, lifted 50 ms after going down at the
         /// frame clock (plus `later` ms).
         fn tap_at(&mut self, point: [f32; 3], later: f64) -> &mut Self {
@@ -1758,14 +2307,22 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
         }
     }
 
-    /// Climbing a ladder (docs/behavior/climbing.md) by a tap beyond it,
-    /// look drag and Jump, and by the gamepad's sticks and south button:
+    /// Climbing a ladder (docs/behavior/climbing.md) by the touch stick,
+    /// look drag and Jump (standard), by a tap beyond it, look drag and
+    /// Jump (experimental), and by the gamepad's sticks and south button:
     /// the same actions as the keys and the mouse.
     #[test]
     fn ladders_are_climbed_by_touch_and_gamepad() {
         use crate::core::camera::Angles;
         use crate::core::climbing::{ClimbState, Ladder};
-        for pad in [false, true] {
+        #[derive(Debug, PartialEq)]
+        enum Path {
+            Stick,
+            Tap,
+            Pad,
+        }
+        for path in [Path::Stick, Path::Tap, Path::Pad] {
+            let pad = path == Path::Pad;
             let mut w = Walk::new();
             // A platform the ladder leads up to, behind it.
             let [a, b, c, d] = [
@@ -1784,43 +2341,59 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
             w.p.place([0.0, 0.0, 0.6], facing);
             w.frames(10);
             // Forward climbs (2.5).
-            if pad {
-                w.event(Event::GamepadAxis {
-                    axis: GamepadAxis::LeftY,
-                    value: -1.0,
-                });
-            } else {
+            match path {
+                Path::Pad => {
+                    w.event(Event::GamepadAxis {
+                        axis: GamepadAxis::LeftY,
+                        value: -1.0,
+                    });
+                }
+                Path::Stick => {
+                    w.stick([0.0, -1.0]);
+                }
                 // A tap on the platform: the trip climbs toward it.
-                w.tap_at([0.0, 4.0, -1.0], 0.0);
+                Path::Tap => {
+                    w.tap_at([0.0, 4.0, -1.0], 0.0);
+                }
             }
             let s = w.frames(40);
-            assert!(s.flags.climbing && s.position[1] > 0.5, "{pad}: {s:?}");
+            assert!(s.flags.climbing && s.position[1] > 0.5, "{path:?}: {s:?}");
             assert_eq!(w.p.climber().state(), ClimbState::ClimbingUp);
             // Looking down past 20° while still pushing climbs down.
-            if pad {
-                w.event(Event::GamepadAxis {
-                    axis: GamepadAxis::RightY,
-                    value: 1.0,
-                });
-                w.frames(12);
-                w.event(Event::GamepadAxis {
-                    axis: GamepadAxis::RightY,
-                    value: 0.0,
-                });
-            } else {
+            match path {
+                Path::Pad => {
+                    w.event(Event::GamepadAxis {
+                        axis: GamepadAxis::RightY,
+                        value: 1.0,
+                    });
+                    w.frames(12);
+                    w.event(Event::GamepadAxis {
+                        axis: GamepadAxis::RightY,
+                        value: 0.0,
+                    });
+                }
+                // A drag down: mouse counts, looking down.
+                Path::Stick => {
+                    w.event(Event::TouchLookDelta {
+                        delta: [0.0, 300.0],
+                        speed: 100.0,
+                    });
+                }
                 // A finger dragged up: the scene with it, so the view
                 // looks down.
-                for (phase, y, time) in
-                    [(LookPhase::Down, 0.5, 0.0), (LookPhase::Move, -0.5, 500.0)]
-                {
-                    w.event(Event::TouchLook(look(1, phase, [0.0, y], time)));
+                Path::Tap => {
+                    for (phase, y, time) in
+                        [(LookPhase::Down, 0.5, 0.0), (LookPhase::Move, -0.5, 500.0)]
+                    {
+                        w.event(Event::TouchLook(look(1, phase, [0.0, y], time)));
+                    }
                 }
             }
             let high = w.frames(1).position[1];
             let s = w.frames(20);
-            assert!(w.p.angles().pitch > 0.35, "{pad}: {:?}", w.p.angles());
-            assert_eq!(w.p.climber().state(), ClimbState::ClimbingDown, "{pad}");
-            assert!(s.position[1] < high, "{pad}: {s:?}");
+            assert!(w.p.angles().pitch > 0.35, "{path:?}: {:?}", w.p.angles());
+            assert_eq!(w.p.climber().state(), ClimbState::ClimbingDown, "{path:?}");
+            assert!(s.position[1] < high, "{path:?}: {s:?}");
             // Jump lets go (3.5).
             for pressed in [true, false] {
                 w.event(if pad {
@@ -1837,8 +2410,8 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
                 w.frames(1);
             }
             let s = w.p.state();
-            assert!(s.airborne && !s.flags.climbing, "{pad}: {s:?}");
-            assert_eq!(w.p.climber().state(), ClimbState::Leaving, "{pad}");
+            assert!(s.airborne && !s.flags.climbing, "{path:?}: {s:?}");
+            assert_eq!(w.p.climber().state(), ClimbState::Leaving, "{path:?}");
         }
     }
 

@@ -6,13 +6,13 @@
 
 import { blockZoom } from "./zoom.js";
 import { startInput } from "./input.js";
-import { createTouchControls } from "./touch-controls.js";
+import { TOUCH_MODES, createTouchControls } from "./touch-controls.js";
 import { createFullscreenOffer, fullScreenSupported } from "./fullscreen.js";
 import { createTextEntry } from "./text-entry.js";
 import { createConsoleTouch } from "./console-touch.js";
 // Early: Chrome offers installing the app once, soon after load.
 import "./install.js";
-import { startUpdates, versionText } from "./update.js";
+import { saveSettings, settingsStore, startUpdates, versionText } from "./update.js";
 import * as diagnostics from "./diagnostics.js";
 import { ensureIsolated } from "./isolation.js";
 import { createRing, ringTarget } from "./audio-ring.js";
@@ -209,6 +209,9 @@ function startEngine() {
 
 globalThis.volya = {
   call,
+  get touchControls() {
+    return touchControls;
+  },
   status: () => call("status"),
   connectAudio,
   audioState: () => audio?.state,
@@ -235,6 +238,33 @@ setConsole = (state) => {
   consoleTouch.update(state);
 };
 const touch = createTouchControls(send, { call, onConsole: () => consoleTouch.raise() });
+// The touch controls' mode (#802): standard unless the app's settings
+// (update.js) say otherwise; Settings changes it (game-ui.js), and the
+// level's controls take it each time they go live, or at once while live.
+const appSettings = globalThis.caches ? settingsStore(new URL("./", import.meta.url).href) : null;
+let touchMode = "standard";
+(async () => {
+  const stored = await appSettings?.read().catch(() => ({}));
+  if (TOUCH_MODES.includes(stored?.touch)) touchMode = stored.touch;
+})();
+const touchControls = {
+  get mode() {
+    return touchMode;
+  },
+  /** Whether this device has touch, where the setting applies. */
+  available: () => navigator.maxTouchPoints > 0 || matchMedia("(any-pointer: coarse)").matches,
+  async set(mode) {
+    if (!TOUCH_MODES.includes(mode)) throw new Error(`unknown touch controls: ${mode}`);
+    touchMode = mode;
+    if (levelLive) touch.setMode(mode);
+    if (appSettings) await saveSettings(appSettings, { touch: mode });
+  },
+  /** The mode the level's controls run now. */
+  get running() {
+    return touch.element.dataset.mode;
+  },
+};
+let levelLive = false;
 document.body.append(touch.element, ...consoleTouch.elements);
 // Full screen with Keyboard Lock, offered in the level (#85).
 const offer = createFullscreenOffer(() => call("bound_keys"));
@@ -252,6 +282,8 @@ setCapture = (on) => {
 };
 setTrip = (at) => touch.trip(at);
 setLevel = (controls) => {
+  if (controls.level && !levelLive) touch.setMode(touchMode);
+  levelLive = Boolean(controls.level);
   forward.setLevel(controls.level, controls.keys);
   touch.update(controls);
   offer.update(controls);

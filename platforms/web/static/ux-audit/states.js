@@ -88,7 +88,7 @@ export const SECTIONS = [
       { id: "level-fullscreen-offer", name: "Full screen offered (desktop Chrome)", level: { offer: true }, devices: ["desktop"] },
       { id: "level-touch", name: "Idle", level: {}, devices: TOUCH },
       { id: "level-touch-faded", name: "Idle a while: faded", level: { fade: true }, devices: TOUCH },
-      { id: "level-touch-trip", name: "Tapped the floor ahead: running there, its destination marked", level: { trip: [0.35, 0.45] }, devices: TOUCH },
+      { id: "level-touch-moving", name: "Moving with the stick", level: { stick: [0.45, -0.85] }, devices: TOUCH },
       { id: "level-touch-jump", name: "Jump held", level: { down: "jump" }, devices: TOUCH },
       { id: "level-touch-inventory", name: "Inventory held", level: { down: "inventory" }, devices: TOUCH },
       { id: "level-touch-pda", name: "PDA held", level: { down: "pda" }, devices: TOUCH },
@@ -98,6 +98,31 @@ export const SECTIONS = [
         level: { level: false, pda: true },
         devices: TOUCH,
       },
+      {
+        id: "level-touch-past-rim",
+        name: "Past the rim: sprinting, the lock target shown",
+        level: { stick: [0.1, -1.5], sprint: true },
+        devices: TOUCH,
+      },
+      {
+        id: "level-touch-on-target",
+        name: "On the lock target",
+        level: { stick: "target", sprint: true },
+        devices: TOUCH,
+      },
+      {
+        id: "level-touch-past-rim-high",
+        name: "Past the rim with the thumb high: the lock target closer",
+        level: { stick: "target", sprint: true, thumbY: 150 },
+        devices: TOUCH,
+      },
+      {
+        id: "level-touch-past-rim-top",
+        name: "Past the rim with the thumb at the very top: the lock target beside it",
+        level: { stick: "target", sprint: true, thumbY: 20 },
+        devices: TOUCH,
+      },
+      { id: "level-touch-locked", name: "Sprint locked", level: { lock: true, sprint: true }, devices: TOUCH },
       { id: "level-touch-crouched", name: "Crouched", level: { crouch: true }, devices: TOUCH },
       { id: "level-touch-crouch-held", name: "Crouched, Crouch held", level: { down: "crouch", crouch: true }, devices: TOUCH },
       {
@@ -120,6 +145,22 @@ export const SECTIONS = [
         level: { torch: null },
         devices: TOUCH,
       },
+    ],
+  },
+  // The experimental touch controls (#802, Settings): the whole picture
+  // moves (a tap) and looks (a drag); no stick.
+  {
+    title: "In the level: experimental touch controls",
+    note: "Chosen in Settings. Touch controls: approximations; the app draws them from the textures in the game files.",
+    states: [
+      { id: "level-experimental", name: "Idle: no stick", level: { mode: "experimental" }, devices: TOUCH },
+      {
+        id: "level-experimental-trip",
+        name: "Tapped the floor ahead: running there, its destination marked",
+        level: { mode: "experimental", trip: [0.35, 0.45] },
+        devices: TOUCH,
+      },
+      { id: "level-experimental-jump", name: "Jump held", level: { mode: "experimental", down: "jump" }, devices: TOUCH },
     ],
   },
   // The console on touch screens (#642): the game draws the console and
@@ -146,6 +187,14 @@ export const SECTIONS = [
     title: "Settings",
     states: [
       { id: "settings", name: "Game files imported", game: imported, screen: "settings" },
+      {
+        id: "settings-touch-experimental",
+        name: "Experimental touch controls chosen",
+        game: imported,
+        screen: "settings",
+        touchMode: "experimental",
+        devices: TOUCH,
+      },
       { id: "settings-checking", name: "Check for updates pressed: checking", game: imported, screen: "settings", check: "checking" },
       { id: "settings-up-to-date", name: "Checked: up to date (for a few seconds)", game: imported, screen: "settings", check: "none" },
       { id: "settings-check-offline", name: "Checked while offline (for a few seconds)", game: imported, screen: "settings", check: "offline" },

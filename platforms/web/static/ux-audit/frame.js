@@ -152,14 +152,26 @@ const updates = {
 };
 
 const status = document.getElementById("status");
-globalThis.volya = {};
+// The touch controls' setting (#802), on touch devices.
+let touchMode = state.touchMode ?? "standard";
+globalThis.volya = {
+  touchControls: {
+    get mode() {
+      return touchMode;
+    },
+    available: () => device.touch,
+    async set(mode) {
+      touchMode = mode;
+    },
+  },
+};
 if (state.level) {
   // In the level: the page's own interface hides; over a plain backdrop the
   // full screen offer shows (desktop) or the touch controls do.
   document.documentElement.dataset.uxLevel = "";
   if (device.height > device.width) document.documentElement.dataset.uxTurned = "";
   document.querySelector("main").hidden = true;
-  const { trip, fade, down, offer, ...toggles } = state.level;
+  const { mode, stick, lock, thumbY, trip, fade, down, offer, ...toggles } = state.level;
   if (offer) {
     // As on desktop Chrome (fullscreen.js).
     const fullscreen = createFullscreenOffer(async () => [], { show: true });
@@ -168,10 +180,18 @@ if (state.level) {
   } else {
     const touch = createTouchControls(() => {}, { touch: true, fade: false });
     document.body.append(touch.element);
+    // Standard unless the state says experimental (#802).
+    touch.setMode(mode ?? "standard");
     // As at a New Game's start unless the state says otherwise: the torch
     // attached and off, no outfit with night vision.
     touch.update({ level: true, torch: false, nightVision: null, ...toggles });
     const box = touch.element;
+    const landscape = [Math.max(box.clientWidth, box.clientHeight), Math.min(box.clientWidth, box.clientHeight)];
+    // A thumb a little above the stick's resting place, or where the state
+    // says (high on the screen).
+    const thumb = [140, thumbY ?? landscape[1] - 150];
+    if (stick) touch.showStick(thumb, stick);
+    if (lock) touch.showLocked(thumb);
     // A trip's destination where the state says, in the picture (from its
     // centre, in half its height).
     if (trip) touch.trip(trip);
