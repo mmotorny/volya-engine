@@ -8,8 +8,8 @@
 //! `postprocess_d`.
 
 use crate::gl::{
-    self, Buffer, BufferKind, Consts as C, Framebuffer, Gl, RasterState, SamplerDesc, TexFormat,
-    VertexArray, Wrap,
+    self, Buffer, BufferKind, Consts as C, Framebuffer, Gl, Owner, RasterState, SamplerDesc,
+    TexFormat, VertexArray, Wrap,
 };
 use crate::{Distortion, Renderer, Target, Texture};
 
@@ -119,7 +119,11 @@ impl PostProcess {
         }
         let size = target_size(screen.0, screen.1, supersample);
         self.targets = None;
-        let make = |format| gl.keeping(|| gl.texture(format, size.0, size.1, 1, false));
+        let make = |format| {
+            gl.owning(Owner::Targets, || {
+                gl.texture(format, size.0, size.1, 1, false)
+            })
+        };
         let (colour, distort, depth) = (
             make(TexFormat::Rgba8),
             make(TexFormat::Rg8),

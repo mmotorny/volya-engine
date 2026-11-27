@@ -18,6 +18,7 @@ use crate::level::LevelWorld;
 use crate::level_visibility::Seen;
 use crate::particle_drawing::{ParticleDraw, ParticleShader};
 use crate::render::details::{DetailDraw, DetailFrame};
+use crate::render::gl::Owner;
 use crate::render::particles::{
     ParticleBatch, ParticleBlend, ParticleCull, ParticlePass as RenderPass, ParticleProgram,
     ParticleQueue, ParticleVertex,
@@ -264,7 +265,9 @@ impl Presenter {
 
     /// Sets the splash picture.
     pub fn set_splash(&mut self, renderer: &Renderer, image: &Rgba) {
-        self.splash = Some(renderer.create_rgba_texture(image.width, image.height, &image.pixels));
+        self.splash = Some(renderer.owning(Owner::Images, || {
+            renderer.create_rgba_texture(image.width, image.height, &image.pixels)
+        }));
     }
 
     /// Errors met since the last call (each texture or video fails once and
@@ -282,7 +285,9 @@ impl Presenter {
             .and_then(|bytes| {
                 let dds = Dds::parse(&bytes).map_err(|e| e.to_string())?;
                 let dds = self.quality.apply(path, &dds);
-                renderer.create_texture(&dds).map_err(|e| e.to_string())
+                renderer
+                    .owning(Owner::Images, || renderer.create_texture(&dds))
+                    .map_err(|e| e.to_string())
             });
         let texture = loaded
             .map_err(|e| self.errors.push(format!("{path}: {e}")))
@@ -1000,7 +1005,11 @@ impl Presenter {
                 TextureId::Splash => self.splash.clone(),
                 TextureId::White => Some(
                     self.white
-                        .get_or_insert_with(|| renderer.create_rgba_texture(1, 1, &[255; 4]))
+                        .get_or_insert_with(|| {
+                            renderer.owning(Owner::Images, || {
+                                renderer.create_rgba_texture(1, 1, &[255; 4])
+                            })
+                        })
                         .clone(),
                 ),
             };

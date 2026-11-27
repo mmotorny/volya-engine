@@ -47,6 +47,13 @@ import {
 let firstLive;
 let firstKept;
 
+// What the GPU holds by owner (`gpu_owners`), those holding anything.
+const owners = (st) =>
+  Object.entries(st.gpu_owners ?? {})
+    .filter(([, l]) => l.textures || l.buffers)
+    .map(([o, l]) => `${o} ${l.textures} textures ${mib(l.texture_bytes)}, ${l.buffers} buffers ${mib(l.buffer_bytes)}`)
+    .join("; ") || "nothing";
+
 export const tests = {
   ...keptSetup(),
 
@@ -54,6 +61,7 @@ export const tests = {
     needsGame();
     // As the first New Game's test measures it (game-level): the intro
     // played a while, skipped, a frame captured.
+    const menu = await volya.call("level_stats");
     await newGame();
     await until((s) => s.phase === "level" && s.overlay_frames === 0, "the level", loadMs());
     await until((s) => s.intro?.elapsed_ms > 1500, "the intro to play a while", 10000);
@@ -63,7 +71,7 @@ export const tests = {
     const stats = await volya.call("level_stats");
     firstLive = stats.gpu_level;
     firstKept = stats.gpu_kept;
-    return `wasm heap ${mib(stats.wasm_heap_bytes)}, the audio worker's ${mib(stats.audio_heap_bytes)}; ${await jsMemory(stats)}`;
+    return `wasm heap ${mib(stats.wasm_heap_bytes)}, the audio worker's ${mib(stats.audio_heap_bytes)}; ${await jsMemory(stats)}; GPU by owner: the title menu before (${owners(menu)}), the level (${owners(stats)})`;
   },
 
 
@@ -110,7 +118,7 @@ export const tests = {
     // until the next one is uploaded while the presenter keeps it.
     const held = before.gpu_world_bytes;
     const kept = (k) => `${k.textures} textures (${mib(k.texture_bytes)}), ${k.buffers} buffers (${mib(k.buffer_bytes)})`;
-    const liveNote = live ? `the GPU holds of the level ${live.textures} textures (${mib(live.texture_bytes)}), ${live.buffers} buffers (${mib(live.buffer_bytes)}), ${live.vertex_arrays} vertex arrays, as in the first; the renderer keeps ${kept(now.gpu_kept)}${firstKept ? `, ${kept(firstKept)} in the first` : ""}; ` : "";
+    const liveNote = live ? `the GPU holds of the level ${live.textures} textures (${mib(live.texture_bytes)}), ${live.buffers} buffers (${mib(live.buffer_bytes)}), ${live.vertex_arrays} vertex arrays, as in the first; the renderer keeps ${kept(now.gpu_kept)}${firstKept ? `, ${kept(firstKept)} in the first` : ""}; GPU by owner: the title menu after the first level (${owners(before)}), this level at 1024×768 (${owners(now)}); ` : "";
     return `${heapNote}${liveNote}wasm heap ${mib(before.wasm_heap_bytes)} before, ${mib(stats.wasm_heap_bytes)} after; the GPU world in the title menu before: ${held == null ? "none" : mib(held)}; ${heapMaps.slice(-2).join("; ")}; by caption (MiB, heap/live): ${stages}; ${record}`;
   },
 
@@ -151,7 +159,7 @@ export const tests = {
     key("Escape");
     await until((s) => s.phase === "level" && !s.intro, "the intro skipped");
     const gpu = (st) => `textures ${mib(st.gpu_texture_bytes ?? 0)}, world ${mib(st.gpu_world_bytes ?? 0)}`;
-    return `wasm heap: the level ${mib(start.wasm_heap_bytes)}, after 20 s ${mib(played.wasm_heap_bytes)}, the title menu ${mib(title.wasm_heap_bytes)}, the second game ${mib(loaded.wasm_heap_bytes)}; GPU: the level ${gpu(start)}, the title menu ${gpu(title)}, the second game ${gpu(loaded)}; ${heapMaps.slice(-2).join("; ")}; by caption (MiB, heap/live): ${stages}; ${record}`;
+    return `wasm heap: the level ${mib(start.wasm_heap_bytes)}, after 20 s ${mib(played.wasm_heap_bytes)}, the title menu ${mib(title.wasm_heap_bytes)}, the second game ${mib(loaded.wasm_heap_bytes)}; GPU: the level ${gpu(start)}, the title menu ${gpu(title)}, the second game ${gpu(loaded)}; GPU by owner in the title menu after quitting: ${owners(title)}; ${heapMaps.slice(-2).join("; ")}; by caption (MiB, heap/live): ${stages}; ${record}`;
   },
   "hidden: the menu opens, the clock, the frame loop and audio stop; shown: the game takes on from there": async () => {
     needsGame();

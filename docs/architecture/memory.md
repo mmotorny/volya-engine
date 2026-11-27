@@ -19,7 +19,7 @@ Where the engine's memory goes, by lifetime and owner; the design it follows (on
 | `heap_log` op (test builds) | browser | The wasm heap and the most live under each loading caption. |
 | `heap_map` op (test builds) | browser | Live KiB per MiB of the heap and every live block of 256 KiB or more, by address. |
 | `heap_record` op (test builds) | browser | At the load's most live: live bytes by block size and the largest blocks; every allocation that grew the wasm memory since the reset, by size and address. |
-| `level_stats` op | browser | The wasm heaps (engine, audio worker); the GPU world's buffers and textures; everything the context holds (`gpu_live`), split into the level's (`gpu_level`) and what the renderer keeps across games (`gpu_kept`). |
+| `level_stats` op | browser | The wasm heaps (engine, audio worker); the GPU world's buffers and textures; everything the context holds (`gpu_live`), split into the level's (`gpu_level`) and what the renderer keeps across games (`gpu_kept`), and by owner (`gpu_owners`: the level, the renderer's own, the targets, the particles', the lights', the images, the videos). |
 | `game-level` and `game-memory` suites' JS memory | Chrome | `performance.measureUserAgentSpecificMemory()` after the New Game (cross-origin isolated pages only, documented, MDN): each context's JavaScript, the wasm memories not among it. |
 | `footprint` of the Simulator's processes | iOS Simulator | Per-process footprints; ETC2 textures there are held as RGBA8, so they don't show the device's (#443). |
 
@@ -79,11 +79,13 @@ On an iPhone the heap grew while a level ran (74.9 → 78 MiB about 110 s into t
 |---|---|---|
 | The level's textures, as stored (BC) | 127 MiB (the objects' 22.5 MiB of it; 458 textures) | Its surfaces' alone: 91.2 MB `l07_military`, 83.3 for `l01_escape` |
 | The level's buffers (geometry, the objects', draw records) | 66.0 MiB (the objects' 19.2, every detail window's indices among them) | `level.geom` 109.7 MB `l12_stancia_2` against 57.0 |
-| The level in all (`gpu_level`) | 461 textures, 133 MiB; 59 buffers, 60 MiB; 47 vertex arrays | |
-| Kept by the renderer (`gpu_kept`): its frame targets, the supersampled target and its depth, the world's depth, the UI's, particles' and lights' buffers | 11 textures, 11 MiB; 7 buffers, 2 MiB, at 1024 × 768; 48 MiB of textures after a game at 2868 × 1320 back at 1024 × 768 (#518) | |
+| The level in all (`gpu_level`) | 462 textures, 143 MiB; 60 buffers, 61 MiB; 48 vertex arrays (before the detail windows' indices) | |
+| The video mode's targets (`targets`): the frame, the offscreen frame, the supersampled target with its distortion and depth, the world's depth | 5 textures: 19 MiB at 1024 × 768, 22 at 1280 × 720, 37 at 1448 × 1086, 52 at 2868 × 1320; 19 again at 1024 × 768 after a game at 2868 × 1320 | |
+| The renderer's own (`renderer`, `particles`, `lights`) | 6 textures, 2 MiB; 9 buffers, 2 MiB (the particles' 2 MiB of it) | |
+| The menus' images and the videos (`images`, `video`), while drawn | in the title menu 6 textures, 2 MiB, and 8 textures, 3 MiB; in the level 1 texture, 1 MiB | |
 | The canvas's drawing buffers | up to 3 at canvas size, 15 MB each at 2868 × 1320 (documented, #443) | |
 
-Measured in headless Chrome (`level_stats`, `game-memory` and `render-level`) and natively (`level_memory.rs`, as stored). On the device BC is held as stored where Metal has BC (documented, #443). In the iOS Simulator a level of `l01_escape` takes its Metal host to 1.8 GB, nearly all textures held as RGBA8 there (measured, #443); ETC2 too is expanded there (measured), so the Simulator's footprint does not show the device's. What else WebKit and ANGLE hold: [GPU and JavaScript memory](#gpu-and-javascript-memory).
+Measured in headless Chrome (`level_stats`' `gpu_owners`, `game-level`, `game-memory` and `render-level`; the targets 30 MiB at 1024 × 768 in the iOS Simulator, the rest as in Chrome) and natively (`level_memory.rs`, as stored). On the device BC is held as stored where Metal has BC (documented, #443). In the iOS Simulator a level of `l01_escape` takes its Metal host to 1.8 GB, nearly all textures held as RGBA8 there (measured, #443); ETC2 too is expanded there (measured), so the Simulator's footprint does not show the device's. What else WebKit and ANGLE hold: [GPU and JavaScript memory](#gpu-and-javascript-memory).
 
 ## Heap minus live
 
@@ -164,16 +166,16 @@ So the heap after any sequence of levels is what the program, the session, the l
 
 ### GPU memory: what is owned and released when
 
-The renderer's own WebGL 2 layer (docs/architecture/rendering.md) creates and deletes its buffers, textures and vertex arrays, and no staging copy lives in the heap. It counts every resource it makes, and apart those made for the renderer itself (`Gl::keeping`): `level_stats` reports them as `gpu_kept`, the rest as `gpu_level` (#512).
+The renderer's own WebGL 2 layer (docs/architecture/rendering.md) creates and deletes its buffers, textures and vertex arrays, and no staging copy lives in the heap. It counts every resource it makes by its owner (`gl::Owner`, given with `Gl::owning`; a resource made outside it is the level's): `level_stats` reports each owner's (`gpu_owners`), the level's as `gpu_level` and the rest as `gpu_kept` (#512, #482).
 
 | Lifetime | Resources | Released |
 |---|---|---|
-| Program (the renderer's, `gpu_kept`) | The programs; the UI's vertex buffer; the particles' and the light passes' buffers, grown to the largest need; the menus' textures, by path, while drawn; video textures while their video plays. | A menu texture when no sprite draws it (`Presenter`'s images); a video's when it ends; the rest with the program. |
-| Video mode (the renderer's, `gpu_kept`) | The video mode's frame and the offscreen frame, the supersampled target with its distortion and depth textures, the world's depth. | Each when the size it is needed at changes, before the new one is made. After a game at 2868 × 1320 back at 1024 × 768 they hold 48 MiB against 11 before (#518). |
-| Level (`gpu_level`) | The world's geometry and draw records, its surfaces' and objects' textures, the detail models, the light and glow textures. | When the level ends (a quit, a game's end, a level change), before the next load's preparation starts. |
+| Program (the owners `renderer`, `particles`, `lights`, `images`, `video`; `gpu_kept`) | The programs; the UI's vertex buffer; the particles' and the light passes' buffers, grown to the largest need; the menus' textures, by path, while drawn; video textures while their video plays. | A menu texture when no sprite draws it (`Presenter`'s images); a video's when it ends; the rest with the program. |
+| Video mode (`targets`; `gpu_kept`) | The video mode's frame and the offscreen frame, the supersampled target with its distortion and depth textures, the world's depth. | Each when the size it is needed at changes, before the new one is made. |
+| Level (`level`; `gpu_level`) | The world's geometry and draw records, its surfaces' and objects' textures, the detail models, the light and glow textures. | When the level ends (a quit, a game's end, a level change), before the next load's preparation starts. |
 | Loading | Textures and geometry prepared for the load in progress. | Given to the level when it is made; freed when the load is abandoned. |
 
-A level's world, its effect and glow shaders and its detail models go with the first frame drawn without a world (`Presenter::draw_list`): the title menu after a level holds no GPU world (measured, `level_stats` in `game-memory`), and a New Game after relaunching the game holds of its level what the first did. What the iOS Simulator's Metal host keeps after a level, 200–300 MB above the title menu before one (#436), is therefore not the world; no tool attributes it to our resources or the browser's (#482).
+A level's world, its effect and glow shaders and its detail models go with the first frame drawn without a world (`Presenter::draw_list`): the title menu after a level holds no GPU world (measured, `level_stats` in `game-memory`), and a New Game after relaunching the game holds of its level what the first did. By owner, the title menu after a level holds what it held before one plus 4 textures of 1 MiB counted as the level's (believed: the light passes' attenuation textures and the presentation noise, which the renderer keeps, #602), in headless Chrome and in the iOS Simulator alike (measured, `gpu_owners` in `game-memory`). What the Simulator's Metal host keeps after a level, 200–300 MB above the title menu before one (#436), is therefore the browser's (WebKit, ANGLE or the Simulator's Metal), not ours.
 
 What the platform prepares while a level loads belongs to that load (`App::load`, a number per New Game load, kept by the level it made): the texture task stops and reports nothing once its load is no longer the current one, and the prepared textures and geometry of a load quit or replaced are freed on the next frame (`platforms/web/src/textures.rs`, #262). `game-memory` quits a New Game about 100 textures into its preparation: the GPU holds 28 MiB of textures in the title menu after it against 30 before it (headless Chrome).
 
@@ -187,8 +189,6 @@ The specs in docs/ state nothing about how the original manages its memory (text
 
 Each is its own issue, measured before and after with the tools above (native and those three browser suites), its gain checked against the expectation here, and stopped if it doesn't pay off.
 
-- **Every GPU resource reported by owner** (#482): `level_stats` reports each lifetime's resources in the table above (the render targets, the menus' textures, the particles' buffers, the world) by owner. Expected: the render targets measured rather than computed (about 90 MB at 2868 × 1320 with `r__supersample` 2, believed), and #436's 200–300 MB found ours or the browser's.
-- **The kept targets follow the video mode back down** (#518). Expected: `gpu_kept` at 1024 × 768 after a game at 2868 × 1320 back to 11 MiB of textures from 48.
 - **Stream the `level` file** into its parts, never holding it whole (#483). Expected: `st_opening_stream`'s peak from 12.6 to about 8 MB native (`l11_pripyat`: 12.9).
 - **The objects' models, sounds and effects as regions of their owners** (#486; `st_client_spawning`: 2.52 million allocations, 6,743 kept). Expected: the blocks kept to hundreds, its 4.6 MB transient lower, heap minus live after the first New Game under 4 MiB.
 - **Kept scratch buffers sized from measured loading peaks** (#489), so they never raise the heap's peak. Expected: the second New Game's 4 MiB growth gone without growing the first's (which a kept texture file buffer did, rule 4).

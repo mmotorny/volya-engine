@@ -171,12 +171,10 @@ pub const UNIFORM_POINTS: usize = 24;
 /// The WebGL 2 context with its state cache.
 pub struct Gl {
     gl: C,
-    /// What it made that still lives.
-    live: Rc<Cell<Live>>,
-    /// What of that was made while [`Gl::keeping`].
-    kept: Rc<Cell<Live>>,
-    /// Nesting depth of [`Gl::keeping`].
-    keeping: Cell<u32>,
+    /// What it made that still lives, by [`Owner`].
+    live: Rc<Owned>,
+    /// Who a resource made now is for ([`Gl::owning`]).
+    owner: Cell<Owner>,
     state: RefCell<State>,
     counts: Cell<Counts>,
     extensions: Extensions,
@@ -217,8 +215,7 @@ impl Gl {
         Self {
             gl,
             live: Rc::default(),
-            kept: Rc::default(),
-            keeping: Cell::new(0),
+            owner: Cell::new(Owner::Level),
             state: RefCell::new(State::fresh()),
             counts: Cell::default(),
             extensions,
@@ -234,28 +231,38 @@ impl Gl {
 
     /// The buffers, textures and vertex arrays made and not yet deleted.
     pub fn live(&self) -> Live {
-        self.live.get()
+        OWNERS.iter().map(|&o| self.live_of(o)).sum()
     }
 
-    /// Those of [`Gl::live`] made inside [`Gl::keeping`].
+    /// Those of [`Gl::live`] made for `owner`.
+    pub fn live_of(&self, owner: Owner) -> Live {
+        self.live[owner as usize].get()
+    }
+
+    /// Those of [`Gl::live`] the renderer keeps across games: every
+    /// owner's but the level's.
     pub fn kept(&self) -> Live {
-        self.kept.get()
+        OWNERS
+            .iter()
+            .filter(|o| o.kept())
+            .map(|&o| self.live_of(o))
+            .sum()
     }
 
-    /// Runs `f`, counting what it makes as kept: the renderer's own
-    /// resources, which outlive a game, apart from a level's.
-    pub fn keeping<R>(&self, f: impl FnOnce() -> R) -> R {
-        self.keeping.set(self.keeping.get() + 1);
+    /// Runs `f`, counting what it makes as `owner`'s (outside it, as the
+    /// level's).
+    pub fn owning<R>(&self, owner: Owner, f: impl FnOnce() -> R) -> R {
+        let outer = self.owner.replace(owner);
         let r = f();
-        self.keeping.set(self.keeping.get() - 1);
+        self.owner.set(outer);
         r
     }
 
     /// Where a resource made now is counted.
     fn counted(&self) -> Counted {
         Counted {
-            all: self.live.clone(),
-            kept: (self.keeping.get() > 0).then(|| self.kept.clone()),
+            live: self.live.clone(),
+            owner: self.owner.get(),
         }
     }
 
@@ -1293,20 +1300,74 @@ fn texture_bytes(t: &TextureInner) -> u64 {
         * faces
 }
 
-/// The counts a resource is in: every live one's, and the kept ones' if
-/// made while [`Gl::keeping`].
+/// Who a resource is made for, by lifetime (docs/architecture/memory.md,
+/// GPU memory).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Owner {
+    /// A level's: its world, textures, detail models and light textures;
+    /// what is made outside [`Gl::owning`].
+    Level,
+    /// The renderer's own, made once: its programs' buffers and small
+    /// textures, the projector's target.
+    Renderer,
+    /// The video mode's: the frames, the supersampled target with its
+    /// distortion and depth, the world's depth.
+    Targets,
+    /// The particles' vertex buffer, grown to the largest need.
+    Particles,
+    /// The light passes' constants, grown to the largest need.
+    Lights,
+    /// The menus' textures and the splash.
+    Images,
+    /// Video textures and their planes.
+    Video,
+}
+
+/// Every owner, in [`Owner`]'s order.
+pub const OWNERS: [Owner; 7] = [
+    Owner::Level,
+    Owner::Renderer,
+    Owner::Targets,
+    Owner::Particles,
+    Owner::Lights,
+    Owner::Images,
+    Owner::Video,
+];
+
+impl Owner {
+    pub fn name(self) -> &'static str {
+        match self {
+            Owner::Level => "level",
+            Owner::Renderer => "renderer",
+            Owner::Targets => "targets",
+            Owner::Particles => "particles",
+            Owner::Lights => "lights",
+            Owner::Images => "images",
+            Owner::Video => "video",
+        }
+    }
+
+    /// Kept across games, apart from a level's.
+    pub fn kept(self) -> bool {
+        self != Owner::Level
+    }
+}
+
+/// Live resources by [`Owner`].
+type Owned = [Cell<Live>; OWNERS.len()];
+
+/// The count a resource is in: its owner's.
 struct Counted {
-    all: Rc<Cell<Live>>,
-    kept: Option<Rc<Cell<Live>>>,
+    live: Rc<Owned>,
+    owner: Owner,
 }
 
 impl Counted {
     fn update(&self, f: impl Fn(&mut Live)) {
-        for c in std::iter::once(&self.all).chain(&self.kept) {
-            let mut l = c.get();
-            f(&mut l);
-            c.set(l);
-        }
+        let c = &self.live[self.owner as usize];
+        let mut l = c.get();
+        f(&mut l);
+        c.set(l);
     }
 }
 
@@ -1318,6 +1379,26 @@ pub struct Live {
     pub textures: u64,
     pub texture_bytes: u64,
     pub vertex_arrays: u64,
+}
+
+impl std::ops::Add for Live {
+    type Output = Live;
+
+    fn add(self, o: Live) -> Live {
+        Live {
+            buffers: self.buffers + o.buffers,
+            buffer_bytes: self.buffer_bytes + o.buffer_bytes,
+            textures: self.textures + o.textures,
+            texture_bytes: self.texture_bytes + o.texture_bytes,
+            vertex_arrays: self.vertex_arrays + o.vertex_arrays,
+        }
+    }
+}
+
+impl std::iter::Sum for Live {
+    fn sum<I: Iterator<Item = Live>>(iter: I) -> Live {
+        iter.fold(Live::default(), |a, b| a + b)
+    }
 }
 
 impl std::ops::Sub for Live {

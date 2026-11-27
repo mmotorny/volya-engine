@@ -27,8 +27,8 @@ use std::rc::Rc;
 use web_sys::WebGlFramebuffer;
 
 use crate::gl::{
-    self, Attribute, Blend, Buffer, BufferKind, Consts as C, Filter, Framebuffer, Gl, RasterState,
-    SamplerDesc, TexFormat, VertexArray, VertexFormat, VertexLayout, Wrap,
+    self, Attribute, Blend, Buffer, BufferKind, Consts as C, Filter, Framebuffer, Gl, Owner,
+    RasterState, SamplerDesc, TexFormat, VertexArray, VertexFormat, VertexLayout, Wrap,
 };
 use crate::glsl;
 use crate::stats;
@@ -281,7 +281,7 @@ struct UiVertices {
 
 impl UiVertices {
     fn new(gl: &Gl, quads: u64) -> Self {
-        gl.keeping(|| {
+        gl.owning(Owner::Renderer, || {
             let buffer = gl.buffer(
                 BufferKind::Dynamic,
                 quads * VERTICES_PER_QUAD as u64 * VERTEX_BYTES,
@@ -368,7 +368,7 @@ impl Renderer {
             TexturePath::Rgba8
         };
         // What the renderer makes for itself is kept across games.
-        let mut renderer = g.keeping(|| Self {
+        let mut renderer = g.owning(Owner::Renderer, || Self {
             ui,
             movie,
             sampler: g.sampler(LINEAR_CLAMPED),
@@ -445,10 +445,20 @@ impl Renderer {
     }
 
     /// Those of [`Renderer::gpu_live`] the renderer keeps across games
-    /// (its programs' buffers, frame targets, the buffers it grows); the
-    /// rest are the scenes' (a level's world and textures).
+    /// (every [`Owner`]'s but the level's).
     pub fn gpu_kept(&self) -> crate::gl::Live {
         self.gl.kept()
+    }
+
+    /// Those of [`Renderer::gpu_live`] made for `owner`.
+    pub fn gpu_live_of(&self, owner: Owner) -> crate::gl::Live {
+        self.gl.live_of(owner)
+    }
+
+    /// Runs `f`, counting the textures it makes as `owner`'s (else they
+    /// are the level's): the presenter's menu images, for one.
+    pub fn owning<R>(&self, owner: Owner, f: impl FnOnce() -> R) -> R {
+        self.gl.owning(owner, f)
     }
 
     /// Bytes of texture data written since the renderer was made (WebGL
@@ -499,7 +509,7 @@ impl Renderer {
 
     /// A colour target of `size`, RGBA8.
     fn make_target(&self, size: (u32, u32)) -> Target {
-        let texture = self.gl.keeping(|| {
+        let texture = self.gl.owning(Owner::Targets, || {
             self.gl
                 .texture(TexFormat::Rgba8, size.0.max(1), size.1.max(1), 1, false)
         });

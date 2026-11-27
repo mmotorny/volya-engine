@@ -157,7 +157,10 @@ export const tests = {
         await sleep(1000 + 60 * 34);
         const s = await volya.call("level_stats");
         const ms = (v) => (v == null ? "–" : v.toFixed(1));
-        rows.push(`${width}×${height}: interval ${ms(s.frame_interval_ms)}, CPU ${ms(s.frame_cpu_ms)}, done ${ms(s.gpu_done_ms)}`);
+        // The video mode's targets (`gpu_owners`).
+        const t = s.gpu_owners?.targets;
+        const targets = t ? `, targets ${t.textures} textures ${mib(t.texture_bytes)}` : "";
+        rows.push(`${width}×${height}: interval ${ms(s.frame_interval_ms)}, CPU ${ms(s.frame_cpu_ms)}, done ${ms(s.gpu_done_ms)}${targets}`);
         assert(s.gpu_done_ms > 0, `no GPU done time at ${width}×${height}`);
       }
       rows.push(`1024×768: ${await glCalls()}`);

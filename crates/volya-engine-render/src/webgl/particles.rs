@@ -12,8 +12,8 @@ use std::collections::HashMap;
 
 use crate::Renderer;
 use crate::gl::{
-    self, Buffer, BufferKind, Consts as C, Depth, Filter, Framebuffer, FrontFace, Gl, RasterState,
-    SamplerDesc, TexFormat, VertexArray, VertexFormat, Wrap,
+    self, Buffer, BufferKind, Consts as C, Depth, Filter, Framebuffer, FrontFace, Gl, Owner,
+    RasterState, SamplerDesc, TexFormat, VertexArray, VertexFormat, Wrap,
 };
 use crate::world::{ALPHA_BLENDING, Mat4, attribute, blend, multiply};
 
@@ -153,7 +153,7 @@ impl PreparedFrame {
 /// A vertex buffer of at least `bytes`: the next power of two, at least
 /// 1 KiB.
 fn vertices(gl: &Gl, bytes: u64) -> Vertices {
-    gl.keeping(|| {
+    gl.owning(Owner::Particles, || {
         let buffer = gl.buffer(BufferKind::Dynamic, bytes.next_power_of_two().max(1024));
         let array = gl.vertex_array(&[(&buffer, 0, &LAYOUT)], None);
         Vertices { buffer, array }

@@ -15,7 +15,7 @@
 
 use volya_engine_formats::video::{Frame, Plane};
 
-use crate::gl::{self, Consts as C, Framebuffer, Gl, RasterState, TexFormat};
+use crate::gl::{self, Consts as C, Framebuffer, Gl, Owner, RasterState, TexFormat};
 use crate::{Rect, Renderer, Texture};
 
 use super::{NEAREST, link, units};
@@ -66,13 +66,15 @@ const OUTSIDE: [f32; 4] = [16.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 1.0];
 impl Renderer {
     /// A texture for frames whose picture is `width` × `height` pixels.
     pub fn create_video_texture(&self, width: u32, height: u32) -> VideoTexture {
-        let texture = self.gl.texture(
-            TexFormat::Rgba8,
-            width.next_power_of_two(),
-            height.next_power_of_two(),
-            1,
-            false,
-        );
+        let texture = self.gl.owning(Owner::Video, || {
+            self.gl.texture(
+                TexFormat::Rgba8,
+                width.next_power_of_two(),
+                height.next_power_of_two(),
+                1,
+                false,
+            )
+        });
         let framebuffer = self.gl.framebuffer(Some(&texture), None);
         let size = texture.size();
         Self::begin_pass(&self.gl, &framebuffer, size, Some(OUTSIDE), None);
@@ -112,8 +114,10 @@ impl Renderer {
         });
         if stale {
             video.planes = Some(frame_planes.each_ref().map(|p| {
-                self.gl
-                    .texture(TexFormat::R8, p.width as u32, p.height as u32, 1, false)
+                self.gl.owning(Owner::Video, || {
+                    self.gl
+                        .texture(TexFormat::R8, p.width as u32, p.height as u32, 1, false)
+                })
             }));
         }
         let planes = video.planes.as_ref().expect("planes allocated");

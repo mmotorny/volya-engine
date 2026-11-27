@@ -17,7 +17,7 @@ use volya_engine_formats::level_geom::{GeomBuffer, GeomLayout, GeomSource, Layou
 
 use crate::gl::{
     self, Attribute, Blend as GlBlend, Buffer, BufferKind, Consts as C, Depth, Filter, FrontFace,
-    Gl, RasterState, SamplerDesc, TexFormat, VertexArray, VertexFormat, Wrap,
+    Gl, Owner, RasterState, SamplerDesc, TexFormat, VertexArray, VertexFormat, Wrap,
 };
 use crate::sky::{SkyPrograms, SkyResources, SkyTextures};
 use crate::{Renderer, Target, Texture};
@@ -259,7 +259,9 @@ impl WorldPrograms {
                 anisotropy: 1,
                 top_level: true,
             }),
-            light_constants: gl.buffer(BufferKind::Uniform, LIGHT_SLOTS * LIGHT_SLOT),
+            light_constants: gl.owning(Owner::Lights, || {
+                gl.buffer(BufferKind::Uniform, LIGHT_SLOTS * LIGHT_SLOT)
+            }),
             light_slots: LIGHT_SLOTS,
             sky: SkyPrograms::new(gl),
             projector: {
@@ -288,7 +290,9 @@ impl WorldPrograms {
             self.programs
                 .entry(entry)
                 .or_insert_with(|| {
-                    gl.keeping(|| link_with(gl, "world", entry.0, entry.1, world_unit, world_point))
+                    gl.owning(Owner::Renderer, || {
+                        link_with(gl, "world", entry.0, entry.1, world_unit, world_point)
+                    })
                 })
                 .clone(),
         )
@@ -310,8 +314,9 @@ impl WorldPrograms {
             return;
         }
         self.light_slots = passes.next_power_of_two();
-        self.light_constants =
-            gl.keeping(|| gl.buffer(BufferKind::Uniform, self.light_slots * LIGHT_SLOT));
+        self.light_constants = gl.owning(Owner::Lights, || {
+            gl.buffer(BufferKind::Uniform, self.light_slots * LIGHT_SLOT)
+        });
     }
 
     /// The program and states of `key`.
@@ -1501,7 +1506,7 @@ impl Renderer {
             .is_some_and(|d| d.size() == (width, height));
         if !fits {
             self.depth = None;
-            self.depth = Some(self.gl.keeping(|| {
+            self.depth = Some(self.gl.owning(Owner::Targets, || {
                 self.gl
                     .texture(TexFormat::Depth32Float, width, height, 1, false)
             }));
@@ -1919,9 +1924,9 @@ impl Renderer {
     /// The world's programs for the trees' blending, with the light
     /// textures given so far.
     pub(crate) fn make_world_programs(&mut self) {
-        let programs = self
-            .gl
-            .keeping(|| WorldPrograms::new(&self.gl, self.unblended_trees));
+        let programs = self.gl.owning(Owner::Renderer, || {
+            WorldPrograms::new(&self.gl, self.unblended_trees)
+        });
         self.world_programs = Some(programs);
     }
 

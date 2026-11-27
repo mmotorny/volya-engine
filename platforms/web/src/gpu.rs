@@ -419,6 +419,14 @@ pub fn world_stats() -> serde_json::Value {
             // keeps across games.
             "gpu_level": live(g.as_ref().map(|gpu| gpu.renderer.gpu_live() - gpu.renderer.gpu_kept())),
             "gpu_kept": live(g.as_ref().map(|gpu| gpu.renderer.gpu_kept())),
+            // Everything the context holds, by owner (docs/architecture/
+            // memory.md, GPU memory).
+            "gpu_owners": g.as_ref().map(|gpu| {
+                volya_engine::render::gl::OWNERS
+                    .iter()
+                    .map(|&o| (o.name().to_owned(), live(Some(gpu.renderer.gpu_live_of(o)))))
+                    .collect::<serde_json::Map<_, _>>()
+            }),
             "prepared_textures": g.as_ref().map(|gpu| gpu.renderer.prepared_count()),
             "preparing_world": g.as_ref().map(|gpu| gpu.presenter.preparing_world()),
         })
