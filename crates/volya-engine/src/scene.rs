@@ -248,6 +248,9 @@ pub struct Scene {
     /// `r__geometry_lod` (object-detail-level.md 1).
     #[serde(skip)]
     pub geometry_lod: f32,
+    /// `r1_lmodel_lerp` (object-projected-light.md 6).
+    #[serde(skip)]
+    pub lmodel_lerp: f32,
     /// The main menu's glass lens while the menu asks for the post-process
     /// (title-menu.md 4.6).
     #[serde(skip)]
@@ -292,6 +295,7 @@ impl Scene {
             filtering: Default::default(),
             texture_quality: Default::default(),
             geometry_lod: GEOMETRY_LOD,
+            lmodel_lerp: crate::present::LMODEL_LERP,
             lens: None,
         }
     }

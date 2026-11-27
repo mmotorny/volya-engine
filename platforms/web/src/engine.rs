@@ -59,6 +59,7 @@ const SETTINGS: &[&str] = &[
     "rs_vis_distance",
     "r1_ssa_lod_a",
     "r1_ssa_lod_b",
+    "r1_lmodel_lerp",
     "rs_stats",
 ];
 

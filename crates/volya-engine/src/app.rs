@@ -587,6 +587,16 @@ pub fn frame_settings(
     };
     scene.texture_quality = quality;
     scene.geometry_lod = console.number("r__geometry_lod");
+    scene.lmodel_lerp = lmodel_lerp(console);
+}
+
+/// `r1_lmodel_lerp` (object-projected-light.md 6): a real 0 … 0.333, 0.1
+/// before set; a stored value out of range is clamped (our choice).
+fn lmodel_lerp(console: &Console) -> f32 {
+    (console.status("r1_lmodel_lerp"))
+        .and_then(|v| v.trim().parse::<f32>().ok())
+        .filter(|v| v.is_finite())
+        .map_or(crate::present::LMODEL_LERP, |v| v.clamp(0.0, 0.333))
 }
 
 /// `r1_pps_u` and `r1_pps_v` (frame-presentation.md 3.2): reals −1 … 1, 0
@@ -2437,6 +2447,19 @@ mod tests {
         let fov = crate::core::camera::FOV_Y_DEGREES;
         let expected = volya_engine_formats::level::Thresholds::new(1920, 1080, fov, lod, a, b);
         assert_eq!(level.visibility().thresholds(), Some(&expected));
+    }
+
+    /// `r1_lmodel_lerp`: 0.1 before set, the stored value, clamped to
+    /// 0 … 0.333.
+    #[test]
+    fn r1_lmodel_lerp_is_read_and_clamped() {
+        let tree = fixture::tree();
+        let mut app = App::new(fixture::data(&tree)).unwrap();
+        assert_eq!(lmodel_lerp(&app.console), 0.1);
+        app.console.exec("r1_lmodel_lerp 0.25");
+        assert_eq!(lmodel_lerp(&app.console), 0.25);
+        app.console.exec("r1_lmodel_lerp 1");
+        assert_eq!(lmodel_lerp(&app.console), 0.333);
     }
 
     /// `rs_fullscreen` is the page's full screen (our deviation): it

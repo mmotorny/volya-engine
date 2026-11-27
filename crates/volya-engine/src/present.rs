@@ -38,10 +38,9 @@ use volya_engine_formats::pe::Rgba;
 use volya_engine_formats::ui::{UI_HEIGHT, UI_WIDTH};
 use volya_engine_formats::video::TheoraVideo;
 
-/// `r1_lmodel_lerp` of the shipped `user.ltx` and the console's default
-/// (level-objects.md 5.5).
-// TODO(#563): the console variable.
-const LMODEL_LERP: f32 = 0.1;
+/// `r1_lmodel_lerp` before set: the shipped `user.ltx`'s and the console's
+/// default (level-objects.md 5.5).
+pub const LMODEL_LERP: f32 = 0.1;
 
 /// Most video frames decoded per video in one call when playback lags.
 const MAX_DECODE: u32 = 4;
@@ -962,6 +961,9 @@ impl Presenter {
                     f.presentation = scene.presentation;
                     f.filtering = scene.filtering;
                     f.geometry_lod = scene.geometry_lod;
+                    if let Some(p) = &mut f.projected {
+                        p.lerp = scene.lmodel_lerp;
+                    }
                     // The level hands over the identity: no screen effect
                     // exists yet (frame-presentation.md 2.2 step 3).
                     // TODO(#190): the effects' values (screen-effects).
