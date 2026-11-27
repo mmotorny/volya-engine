@@ -2254,7 +2254,7 @@ impl NewGameLoad {
         screen.torches_frame(0.0);
         screen.update_view();
         screen.sync_zone_lights();
-        screen.lights_frame(0.0);
+        screen.lights_frame(0.0, false);
         // TODO(#365, sound-weather-ambient.md 4.3, disputed): whether a frame
         // draws the level, updating the player's sky visibility, before the
         // rule's first read is unestablished; we take that it does (the
@@ -2286,7 +2286,7 @@ impl LevelScreen {
             .eye_height(self.player.body().box_index());
         self.player.place([eye[0], eye[1] - h, eye[2]], angles);
         self.update_view();
-        self.lights_frame(0.0);
+        self.lights_frame(0.0, false);
     }
 
     /// Leaves the objects out of the frames drawn (tests and comparisons);
@@ -2343,6 +2343,17 @@ impl LevelScreen {
     /// not change either (our choice: the specs do not say what k_t is
     /// while game time is paused).
     pub fn paused(&mut self, now: u64) {
+        self.paused_frame(now, true);
+    }
+
+    /// A paused frame at `now` whose world is covered (the menu over it,
+    /// [`LevelScreen::covered_scene`]): as [`LevelScreen::paused`], without
+    /// the detail pass (detail-objects.md 5.1).
+    pub fn covered_paused(&mut self, now: u64) {
+        self.paused_frame(now, false);
+    }
+
+    fn paused_frame(&mut self, now: u64, details: bool) {
         self.frame += 1;
         let elapsed = now.saturating_sub(self.last);
         self.shown += elapsed;
@@ -2351,7 +2362,7 @@ impl LevelScreen {
         self.clock.advance(elapsed);
         self.player.paused(now);
         // The frame still draws its lights and glows; no time passes.
-        self.lights_frame(0.0);
+        self.lights_frame(0.0, details);
     }
 
     /// The level waits until `now` before it first shows (the platform
@@ -2497,7 +2508,7 @@ impl LevelScreen {
             self.clock.time_factor(),
         );
         self.update_view();
-        self.lights_frame(elapsed as f32 / 1000.0);
+        self.lights_frame(elapsed as f32 / 1000.0, true);
     }
 
     /// The player's transform (sound-weather-ambient.md 4.3): at its feet,
@@ -3032,8 +3043,9 @@ impl LevelScreen {
     }
 
     /// The frame's lights and glows from the latest frame's view, a frame
-    /// of `dt` seconds (0 while paused).
-    fn lights_frame(&mut self, dt: f32) {
+    /// of `dt` seconds (0 while paused), the detail pass ahead of the
+    /// camera pass when `details` (a frame whose world is drawn).
+    fn lights_frame(&mut self, dt: f32, details: bool) {
         let (w, h) = self.view_size.get();
         let (view, projection) = self.view_projection(w, h);
         let e = &self.environment;
@@ -3046,6 +3058,11 @@ impl LevelScreen {
         let sun = (e.sun_dir, e.sun_color);
         let eye = camera.eye;
         (self.lights).prepare(&self.collision, eye, sun, self.visibility.get_mut());
+        if details {
+            // The detail pass comes before the camera pass (detail-objects.md
+            // 5.2); the frame's scene hands out its selection.
+            self.details_pass((w, h), &view, &projection);
+        }
         self.camera_pass(w, h, &view, &projection);
         let frustum = Frustum::view(&crate::render::world::multiply(&view, &projection));
         self.dynamic_items(dt, &frustum);
@@ -3464,24 +3481,23 @@ impl LevelScreen {
     }
 
     /// The detail objects' pass of this frame (detail-objects.md 5.1): the
-    /// cache's update and selection for the frame's view.
+    /// cache's update and selection for the frame's view at `w` × `h`, run
+    /// once a frame (later calls hand out its selection).
     fn details_pass(
         &self,
-        resolution: Resolution,
+        (w, h): (u32, u32),
         view: &Mat4,
         projection: &Mat4,
     ) -> Option<DetailsScene> {
         let details = self.details.as_ref()?;
         let mut d = details.borrow_mut();
-        let (w, h) = crate::render::present::target_size(
-            resolution.width,
-            resolution.height,
-            self.supersample,
-        );
+        let (w, h) = crate::render::present::target_size(w, h, self.supersample);
+        let view_projection = crate::render::world::multiply(view, projection);
+        let eye = self.player.view().eye;
         let pass = crate::core::details::Pass {
             frame: self.frame,
-            eye: self.player.view().eye,
-            view_projection: crate::render::world::multiply(view, projection),
+            eye,
+            view_projection,
             ssa_min: crate::render::world::ssa_min(
                 w,
                 h,
@@ -3490,12 +3506,21 @@ impl LevelScreen {
             ),
             density: self.detail_density,
         };
-        // The entries' occlusion tests in the latest camera pass's view
-        // (detail-objects.md 5.2 step 3).
+        // The entries' occlusion tests (detail-objects.md 5.2 step 3) at
+        // this frame's view: made before the frame's camera pass, they
+        // project with the previous drawing's matrix and the first scan
+        // draws the grid early (occlusion-tests.md 2.1 step 3); occlusion
+        // is on as the previous frame left it (4).
+        let at = View {
+            frame: self.frame as u32,
+            view_projection,
+            eye,
+            menu_shown: false,
+        };
         let mut visibility = self.visibility.borrow_mut();
         let frame = (self.random).with(|g| {
             (d.cache).pass(&pass, &self.collision, g, |c, a, b, g| {
-                visibility.cached_visible(c, a, b, g)
+                visibility.cached_visible_at(&at, c, a, b, g)
             })
         });
         let sway = crate::core::details::Sway::blend(&d.normal, &d.fast, self.wind);
@@ -3513,7 +3538,9 @@ impl LevelScreen {
         let details = if covered {
             None
         } else {
-            self.details_pass(resolution, &view, &projection)
+            // The pass ran in the frame's update; a frame without one (the
+            // menu closed in it, a camera placed) runs it here.
+            self.details_pass((resolution.width, resolution.height), &view, &projection)
         };
         let v = self.player.view();
         let d = v.direction;

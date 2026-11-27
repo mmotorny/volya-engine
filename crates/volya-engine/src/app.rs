@@ -1486,8 +1486,9 @@ impl App {
                 ..
             } => {
                 // The menu pauses the game for its whole duration, its
-                // screens and boxes included (save-load-screens.md section 2).
-                level.paused(now);
+                // screens and boxes included (save-load-screens.md section 2),
+                // and covers the world.
+                level.covered_paused(now);
                 let below = (self.window).receiver_frame(&mut self.console, input, now, true, &[]);
                 let input: &Input = below.as_ref().unwrap_or(input);
                 let out = menu_frame(

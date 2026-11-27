@@ -312,6 +312,21 @@ impl LevelVisibility {
         (self.occlusion).cached_visible(cache, min, max, &view, random)
     }
 
+    /// The cached occlusion test (occlusion-tests.md 5) of the box `min` …
+    /// `max` with the item's cache, made at `view`: before the frame's
+    /// camera pass it projects with the tests' matrix of the previous
+    /// drawing and its scan draws the grid early (2.1 step 3).
+    pub fn cached_visible_at(
+        &mut self,
+        view: &View,
+        cache: &mut Cached,
+        min: Vec3,
+        max: Vec3,
+        random: &mut Generator,
+    ) -> bool {
+        (self.occlusion).cached_visible(cache, min, max, view, random)
+    }
+
     /// Runs `f`, the light passes (occlusion-tests.md 4), with occlusion
     /// off.
     pub fn light_passes<R>(&mut self, f: impl FnOnce() -> R) -> R {

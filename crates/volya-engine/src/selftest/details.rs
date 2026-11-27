@@ -83,10 +83,11 @@ pub async fn grass_from_game_data(cx: &Context<'_>) -> Outcome {
     let mut pass_times = Vec::new();
     let mut frames = Vec::new();
     for f in 0..20 {
-        screen.paused(16 * (f + 1));
+        // The pass runs in the frame's update, before its camera pass.
         let start = now_ms();
-        let mut scene = screen.scene(SIZE, 0);
+        screen.paused(16 * (f + 1));
         pass_times.push(now_ms() - start);
+        let mut scene = screen.scene(SIZE, 0);
         scene.presentation = presentation;
         frames.push(scene);
     }
@@ -120,7 +121,7 @@ pub async fn grass_from_game_data(cx: &Context<'_>) -> Outcome {
     let cache = screen.details().ok_or("no detail cache")?;
     let note = format!(
         "{} instances in the cache ({:.1} MB held), {instances} drawn in \
-         {draws} draws; the first pass (whole cache) {:.1} ms, later passes {:.2} ms on average; \
+         {draws} draws; the first update with the pass (whole cache) {:.1} ms, later ones {:.2} ms on average; \
          frame with readback {with:.1} ms, without {without_t:.1} ms; details' GPU buffers \
          {:.1} MiB; {:.1} % of the pixels changed",
         cache.cache.instances().count(),
