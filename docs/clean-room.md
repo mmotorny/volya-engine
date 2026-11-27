@@ -15,7 +15,7 @@ The orchestrating session is clean. Nothing dirty reaches it.
 
 ## Handoff
 
-- **Dirty workspace:** `~/Sources/mmotorny/volya-dirty/`, outside the repository, never committed. Only dirty roles read or write it.
+- **Dirty workspace:** `~/Sources/mmotorny/volya-dirty/` on the Mac and `$env:TEMP\volya-dirty\` on the Windows PC, outside the repository, never committed. Only dirty roles read or write it.
 - **Investigator → reviewer:** files only, `specs/<format>.md` in the dirty workspace.
 - **Reviewer → repository:** an approved spec is copied verbatim to `docs/formats/<format>.md` (formats) or `docs/behavior/<name>.md` (behavior); a rejected one never reaches the clean side in any form.
 - **Scope comes from the dirty side:** an area starts with a scoping spec that splits it into small specs, one format or one behaviour each; each is then investigated in its full scope. Scope is never narrowed to pass review; anything an investigator can't establish is marked unestablished, not cut.
