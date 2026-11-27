@@ -78,7 +78,7 @@ On the Windows PC, in PowerShell, with `git` and `gh` signed in to an account th
    `$run = "$env:TEMP\$tag"; Remove-Item -Recurse -Force $run -ErrorAction Ignore; gh release download $tag --repo mmotorny/volya-engine --pattern d3d9probes.zip --dir $run; Expand-Archive "$run\d3d9probes.zip" -DestinationPath $run`
    (without `gh`: `Invoke-WebRequest https://github.com/mmotorny/volya-engine/releases/download/$tag/d3d9probes.zip -OutFile "$run\d3d9probes.zip"` into the created folder.)
 3. Run it, keeping its output as bytes (`cmd`, not PowerShell's redirection, which writes UTF-16):
-   `Set-Location $run; cmd /c "d3d9probes.exe > log.txt 2>&1"; $LASTEXITCODE`
+   `Set-Location $run; cmd /c ".\d3d9probes.exe > log.txt 2>&1"; $LASTEXITCODE`
    It takes seconds. 0: every Direct3D call succeeded; 1: some failed, named in `log.txt`; bring the results back either way. `results\info.txt` names the adapter.
 4. Commit the results to a new branch from `main`, in a clone of the repository (`git clone https://github.com/mmotorny/volya-engine.git` if there is none), under `tests/d3d9probes/hardware/<gpu>/` laid out as the Wine target's output, `<gpu>` the adapter in lower case with dashes (e.g. `rtx-4090`):
    `git fetch origin; git switch -c d3d9probes-hardware-<gpu> origin/main`
