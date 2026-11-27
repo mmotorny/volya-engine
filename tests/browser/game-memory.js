@@ -3,10 +3,10 @@
 
 // Memory and repeat games from the kept import: the heap and what the GPU
 // holds when the game left from its level is launched again and a New Game
-// runs at another video mode, the page hidden and shown, quitting to the
-// title menu, a New Game again, a New Game failing for a missing file,
-// quitting to the app, the game's log's memory figures, and the diagnostic
-// log holding all of it.
+// runs at another video mode, the in-game menu opened twice, the page
+// hidden and shown, quitting to the title menu, a New Game again, a New
+// Game failing for a missing file, quitting to the app, the game's log's
+// memory figures, and the diagnostic log holding all of it.
 
 import { assert, assertEqual } from "./harness.js";
 import {
@@ -122,6 +122,33 @@ export const tests = {
     const kept = (k) => `${k.textures} textures (${mib(k.texture_bytes)}), ${k.buffers} buffers (${mib(k.buffer_bytes)})`;
     const liveNote = live ? `the GPU holds of the level ${live.textures} textures (${mib(live.texture_bytes)}), ${live.buffers} buffers (${mib(live.buffer_bytes)}), ${live.vertex_arrays} vertex arrays, as in the first; the renderer keeps ${kept(now.gpu_kept)}${firstKept ? `, ${kept(firstKept)} in the first` : ""}; GPU by owner: the title menu after the first level (${owners(before)}), this level at 1024×768 (${owners(now)}); ` : "";
     return `${heapNote}${liveNote}wasm heap ${mib(before.wasm_heap_bytes)} before, ${mib(stats.wasm_heap_bytes)} after; the GPU world in the title menu before: ${held == null ? "none" : mib(held)}; ${heapMaps.slice(-2).join("; ")}; by caption (MiB, heap/live): ${stages}; ${record}`;
+  },
+  "the in-game menu opened twice over the level: what its videos take each time (#517)": async () => {
+    needsGame();
+    await until((s) => s.phase === "level" && !s.menu && !s.intro, "the level's controls");
+    const mb = (b) => `${(b / 1e6).toFixed(1)} MB`;
+    const live = async () => (await volya.call("heap_map")).live_bytes;
+    const openings = [];
+    for (let i = 0; i < 2; i++) {
+      const before = await live();
+      const heapBefore = (await volya.call("level_stats")).wasm_heap_bytes;
+      await heapRecord(true);
+      key("Escape");
+      await until((s) => inGame(s), "the in-game menu");
+      // The videos play a while.
+      await sleep(1500);
+      const open = await live();
+      const most = (await volya.call("heap_record", { reset: false })).live_bytes;
+      key("Escape");
+      await until((s) => s.phase === "level" && !s.menu, "back in the game");
+      await sleep(200);
+      const after = await live();
+      const heapAfter = (await volya.call("level_stats")).wasm_heap_bytes;
+      openings.push(
+        `opening ${i + 1}: live +${mb(open - before)} while open (+${mb(most - before)} at most), ${mb(after - before)} after closing; the heap ${mib(heapBefore)} → ${mib(heapAfter)}`,
+      );
+    }
+    return openings.join("; ");
   },
 
   "a phone's second game: the first game played 20 s, quit to the title menu, a New Game 5 s later": async () => {
