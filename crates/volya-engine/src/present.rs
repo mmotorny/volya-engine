@@ -373,6 +373,7 @@ impl Presenter {
             self.placed = None;
             self.particle_shaders.clear();
             self.glow_shaders.clear();
+            renderer.clear_level_textures();
             // The effects' textures first: the world's upload drops the
             // prepared textures it leaves.
             self.particle_shaders = self.load_particle_shaders(renderer, tree, &scene.world);
@@ -983,6 +984,7 @@ impl Presenter {
                 if self.world.take().is_some() {
                     renderer.clear_details();
                     renderer.clear_billboards();
+                    renderer.clear_level_textures();
                 }
                 self.particle_shaders.clear();
                 self.glow_shaders.clear();

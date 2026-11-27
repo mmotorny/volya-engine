@@ -840,6 +840,13 @@ impl Renderer {
         self.post.set_noise(texture);
     }
 
+    /// Drops the level's presentation noise and the light passes'
+    /// attenuation textures, which are the level's (memory.md rule 6).
+    pub fn clear_level_textures(&mut self) {
+        self.post.clear_noise();
+        self.light_textures = None;
+    }
+
     /// One world frame into the `screen` (frame-presentation.md 3.1): the
     /// world into the off-screen target and the presentation quad onto the
     /// screen with `quads` over it in the same pass, or the world straight

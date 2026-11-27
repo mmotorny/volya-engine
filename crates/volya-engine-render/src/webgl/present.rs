@@ -39,8 +39,10 @@ pub(crate) struct PostProcess {
     constants: Buffer,
     scene_sampler: gl::Sampler,
     noise_sampler: gl::Sampler,
-    /// `fx\fx_noise2` once given; white until then.
+    /// The level's `fx\fx_noise2` while given; `white` otherwise.
     noise: gl::Texture,
+    /// One white texel, the noise without a level's.
+    white: gl::Texture,
     /// One texel of the distortion target's clear value (127 / 255).
     cleared: gl::Texture,
     pub(crate) targets: Option<Targets>,
@@ -65,8 +67,8 @@ impl PostProcess {
     pub(crate) fn new(gl: &Gl) -> Self {
         let bindings = [(0, 1), (0, 3), (0, 5)];
         let program = |fs| link(gl, "postprocess", "vs_quad", fs, &bindings, points::POST);
-        let noise = gl.texture(TexFormat::Rgba8, 1, 1, 1, false);
-        gl.write_texture(&noise, 0, 0, 0, 0, 1, 1, &mut [255; 4]);
+        let white = gl.texture(TexFormat::Rgba8, 1, 1, 1, false);
+        gl.write_texture(&white, 0, 0, 0, 0, 1, 1, &mut [255; 4]);
         let cleared = gl.texture(TexFormat::Rg8, 1, 1, 1, false);
         gl.write_texture(&cleared, 0, 0, 0, 0, 1, 1, &mut [127; 2]);
         Self {
@@ -81,7 +83,8 @@ impl PostProcess {
                 top_level: true,
                 ..LINEAR_CLAMPED
             }),
-            noise,
+            noise: white.clone(),
+            white,
             cleared,
             targets: None,
             effects: ScreenEffects::DEFAULTS,
@@ -97,6 +100,11 @@ impl PostProcess {
     /// The noise texture: its top level only is sampled (3.4).
     pub(crate) fn set_noise(&mut self, texture: &Texture) {
         self.noise = texture.texture.clone();
+    }
+
+    /// Drops the level's noise texture, back to white.
+    pub(crate) fn clear_noise(&mut self) {
+        self.noise = self.white.clone();
     }
 
     /// Builds the target for a `screen` and `supersample` when either
