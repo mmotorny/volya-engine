@@ -10,7 +10,7 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::process::CommandExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 
 use crate::{Result, cmd, root, run, step};
@@ -18,19 +18,62 @@ use crate::{Result, cmd, root, run, step};
 /// The file the image is built from (`tools/xtask/wine/`).
 const CONTAINERFILE: &str = "Containerfile";
 
-/// The image, tagged with a hash of its Containerfile: a changed file names
+/// The image, tagged with a hash of its Containerfile and its build
+/// context (box64's patched source, [`box64_source`]): a changed file names
 /// an image not built yet, which [`Container::spawn`] builds, so a run (and
-/// a Bazel capture, which takes the file as an input) never uses an image
-/// of another file.
+/// a Bazel capture, which takes both as inputs) never uses an image of
+/// other files.
 fn image() -> Result<String> {
     use sha2::{Digest, Sha256};
     let file = root().join("tools/xtask/wine").join(CONTAINERFILE);
     let text = fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?;
-    let hash: String = Sha256::digest(&text)[..6]
+    let mut hash = Sha256::new();
+    hash.update(&text);
+    let source = box64_source()?;
+    hash_tree(&mut hash, &source, &source)?;
+    let hash: String = hash.finalize()[..6]
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
     Ok(format!("volya-engine-wine-box64:{hash}"))
+}
+
+/// box64's release with our patch (Bazel's `@box64`, third_party/box64/),
+/// named by `VOLYA_BOX64` (one of its files): the image's build context.
+fn box64_source() -> Result<PathBuf> {
+    let file = std::env::var_os("VOLYA_BOX64")
+        .ok_or("box64's source comes from Bazel: bazel run //tools/xtask -- wine")?;
+    let file = fs::canonicalize(crate::runfile(Path::new(&file)))
+        .map_err(|e| format!("{}: {e}", Path::new(&file).display()))?;
+    Ok(file.parent().ok_or("no folder")?.to_path_buf())
+}
+
+/// Adds `dir`'s files (paths relative to `base`, contents, link targets) to
+/// `hash`, in name order.
+fn hash_tree(hash: &mut sha2::Sha256, base: &Path, dir: &Path) -> Result {
+    use sha2::Digest;
+    let mut entries: Vec<_> = fs::read_dir(dir)
+        .and_then(|d| d.map(|e| e.map(|e| e.path())).collect())
+        .map_err(|e| format!("{}: {e}", dir.display()))?;
+    entries.sort();
+    for path in entries {
+        let meta = fs::symlink_metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let name = path.strip_prefix(base).map_err(|e| e.to_string())?;
+        hash.update(name.as_os_str().as_encoded_bytes());
+        hash.update([0]);
+        if meta.is_dir() {
+            hash_tree(hash, base, &path)?;
+        } else if meta.is_symlink() {
+            let target = fs::read_link(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            hash.update(target.as_os_str().as_encoded_bytes());
+        } else {
+            let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            hash.update((bytes.len() as u64).to_le_bytes());
+            hash.update(&bytes);
+        }
+        hash.update([0]);
+    }
+    Ok(())
 }
 
 /// Registers box64 for x86_64 ELF executables and shared objects
@@ -228,15 +271,25 @@ impl Drop for Container {
     }
 }
 
+/// The image builder's size (CPUs, GiB; `container build` starts or restarts
+/// it at the size it is given, measured): Wine's build is long (C under
+/// Rosetta) and its jobs use about half a gigabyte each.
+const BUILDER_CPUS: u32 = 8;
+const BUILDER_GIB: u64 = 8;
+
 fn build_image() -> Result {
     let image = image()?;
     step(&format!("Building {image}"));
-    let context = root().join("tools/xtask/wine");
+    let (cpus, memory) = (BUILDER_CPUS.to_string(), format!("{BUILDER_GIB}G"));
+    let file = root().join("tools/xtask/wine").join(CONTAINERFILE);
+    let file = file.to_str().ok_or("non-UTF-8 path")?;
+    let context = box64_source()?;
     let context = context.to_str().ok_or("non-UTF-8 path")?;
-    let file = format!("{context}/{CONTAINERFILE}");
     run(&mut cmd(
         "container",
-        &["build", "--tag", &image, "--file", &file, context],
+        &[
+            "build", "--cpus", &cpus, "--memory", &memory, "--tag", &image, "--file", file, context,
+        ],
     ))
 }
 

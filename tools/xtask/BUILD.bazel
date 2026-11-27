@@ -16,9 +16,14 @@ volya_binary(
     crate_root = "src/main.rs",
     # The fidelity suite's views (src/original/views.rs).
     compile_data = ["//tests/fidelity:views.rs"],
-    # `bazel run //tools/xtask -- original`: the install folder.
-    data = ["@gog_original//:manifest.tsv"],
+    # `bazel run //tools/xtask -- original`: the install folder; `wine`:
+    # box64's patched source, the image's build context (wine.rs).
+    data = [
+        "@box64//:CMakeLists.txt",
+        "@gog_original//:manifest.tsv",
+    ],
     env = {
+        "VOLYA_BOX64": "$(rootpath @box64//:CMakeLists.txt)",
         "VOLYA_GOG_INSTALLER": GOG_INSTALLER,
         "VOLYA_GOG_ORIGINAL": "$(rootpath @gog_original//:manifest.tsv)",
     },
@@ -44,8 +49,8 @@ volya_binary(
     crate_root = "src/capture.rs",
 )
 
-# The Wine image's file: the capture actions' input (its hash tags the
-# image, wine.rs).
+# The Wine image's file: the capture actions' input (its hash, with box64's
+# source, tags the image, wine.rs).
 exports_files(["wine/Containerfile"])
 
 rust_test(

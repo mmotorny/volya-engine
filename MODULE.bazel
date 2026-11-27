@@ -133,6 +133,18 @@ http_archive(
     url = "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-arm64-macos.tar.gz",
 )
 
+# box64 for the Wine image (tools/xtask/wine/Containerfile, its build
+# context): its release with our frame-clock patch.
+http_archive(
+    name = "box64",
+    build_file_content = 'exports_files(["CMakeLists.txt"])',
+    patch_args = ["-p1"],
+    patches = ["//third_party/box64:frame-clock.patch"],
+    sha256 = "99c6de4f509e46ab1de15df740d0e0ea338a7790efa3f67510dfbb975cc24029",
+    strip_prefix = "box64-0.4.4",
+    url = "https://github.com/ptitSeb/box64/archive/refs/tags/v0.4.4.tar.gz",
+)
+
 # Tools installed on the machine, with their versions (build/local_tools.bzl).
 local_tools = use_repo_rule("//build:local_tools.bzl", "local_tools")
 

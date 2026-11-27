@@ -1,0 +1,99 @@
+SPDX-FileCopyrightText: 2026 Maksym Motorny
+SPDX-License-Identifier: MIT
+
+box64 v0.4.4: the emulated program reads its time-stamp counter from the
+frame clock of our patched Wine (tools/xtask/wine/Containerfile,
+docs/testing.md).
+
+diff --git a/src/core.c b/src/core.c
+index c33c384fbb..91ba17c956 100644
+--- a/src/core.c
++++ b/src/core.c
+@@ -176,6 +176,10 @@ void computeRDTSC()
+     box64_rdtsc = 1;
+     printf_log(LOG_INFO, "Will use time-based emulation for RDTSC, even if hardware counters are available\n");
+     #endif
++    if(FrameClockOn()) {
++        box64_rdtsc = 1;    // the frame clock's counter (ReadTSC)
++        hardware = 0;
++    }
+     uint64_t freq = ReadTSCFrequency(NULL);
+     if(freq<((BOX64ENV(rdtsc_1ghz))?1000000000LL:1000000)) {
+         box64_rdtsc = 1;
+diff --git a/src/include/freq.h b/src/include/freq.h
+index fe94bef9f8..eb16a239a6 100644
+--- a/src/include/freq.h
++++ b/src/include/freq.h
+@@ -6,6 +6,7 @@
+ typedef struct x64emu_s x64emu_t;
+ 
+ uint64_t ReadTSC(x64emu_t* emu);
++int FrameClockOn(void);
+ uint64_t ReadTSCFrequency(x64emu_t* emu);
+ 
+ #endif // __FREQ_H_
+\ No newline at end of file
+diff --git a/src/os/freq_linux.c b/src/os/freq_linux.c
+index 8470955986..42da543998 100644
+--- a/src/os/freq_linux.c
++++ b/src/os/freq_linux.c
+@@ -6,9 +6,48 @@
+ #include <time.h>
+ #include <math.h>
+ 
++#include <fcntl.h>
++#include <pthread.h>
++#include <sys/mman.h>
++#include <sys/stat.h>
++
+ #include "freq.h"
+ #include "debug.h"
+ 
++// The frame clock of a patched Wine (its include/wine/frame_clock.h): with
++// WINE_FRAME_CLOCK naming the file of its frame count and WINE_FRAME_STEP
++// the 100 ns ticks of a frame, the emulated program's time-stamp counter
++// stands still between frames and advances by the step each frame, as the
++// software counter's nanoseconds (box64's own timing stays real).
++static volatile int64_t* frame_clock;
++static int64_t frame_step;
++
++static void openFrameClock(void)
++{
++    const char* path = getenv("WINE_FRAME_CLOCK");
++    const char* step = getenv("WINE_FRAME_STEP");
++    if (!path || !*path || !step || atoll(step) <= 0) return;
++    int fd = open(path, O_RDWR | O_CREAT, 0666);
++    if (fd == -1) return;
++    struct stat st;
++    if (!fstat(fd, &st) && st.st_size < 24 && ftruncate(fd, 24) == -1) {
++        close(fd);
++        return;
++    }
++    void* map = mmap(NULL, 24, PROT_READ, MAP_SHARED, fd, 0);
++    close(fd);
++    if (map == MAP_FAILED) return;
++    frame_step = atoll(step);
++    frame_clock = map;
++}
++
++int FrameClockOn(void)
++{
++    static pthread_once_t once = PTHREAD_ONCE_INIT;
++    pthread_once(&once, openFrameClock);
++    return frame_clock != NULL;
++}
++
+ #if defined(RV64)
+ static size_t readBinarySizeFromFile(const char* fname)
+ {
+@@ -127,7 +166,9 @@ static inline uint64_t readFreq()
+ 
+ uint64_t ReadTSC(x64emu_t* emu)
+ {
+-    (void)emu;
++    // The emulated program's reads (with an emulator), not box64's own.
++    if (emu && FrameClockOn())
++        return (uint64_t)__atomic_load_n(&frame_clock[0], __ATOMIC_SEQ_CST) * frame_step * 100;
+ 
+     // Hardware counter, per architecture
+ #if defined(ARM64) || defined(RV64) || defined(LA64)

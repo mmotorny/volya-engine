@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+
+load("//build:checks.bzl", "volya_checks")
+
+# Our patch to box64's release (MODULE.bazel's @box64: the Wine image's
+# build context, tools/xtask/wine/Containerfile).
+exports_files(
+    ["frame-clock.patch"],
+    visibility = ["//visibility:public"],
+)
+
+volya_checks(wasm = False)
