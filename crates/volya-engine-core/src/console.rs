@@ -13,7 +13,16 @@
 //! `bind_console`, `load_last_save <name>`, `flush`, `clear_log` and the
 //! diagnostic commands (docs/behavior/console-diagnostics.md); the others
 //! are its caller's ([`Exec::Action`]). Setting `_preset` runs the preset's
-//! script (options-screens.md section 8).
+//! script (options-screens.md section 8). `r2em`'s message switch is the
+//! console's too (console-misc-settings.md section 9).
+//!
+//! Of the settings of console-misc-settings.md, the others are stored
+//! only: `g_eventdelay` has no observable effect (4), `snd_acceleration`
+//! no counterpart in a browser (7); `g_autopickup` and `g_corpsenum` act
+//! only in multiplayer games (2, 3; TODO(#629)); `cl_cod_pickup_mode`
+//! awaits taking items and the HUD (5; TODO(#627)), `cam_slide_inert` the
+//! look cameras (6; TODO(#628)); and `check_for_updates`, an action the
+//! caller does nothing for, the web build's choice (8; TODO(#632)).
 
 mod commands;
 mod diagnostics;
@@ -345,6 +354,9 @@ pub struct Console {
     starting: bool,
     /// Why the program ends (console-commands.md section 5), once it must.
     fatal: Option<String>,
+    /// `r2em`'s message switch: starts off, not saved
+    /// (console-misc-settings.md section 9).
+    material_message: bool,
 }
 
 impl PartialEq for Console {
@@ -381,6 +393,19 @@ fn normalize(line: &str) -> String {
     out
 }
 
+/// `r2em`'s message for `value` (console-misc-settings.md section 9).
+fn material_message(value: f32) -> String {
+    const NAMES: [&str; 4] = ["oren", "blin", "phong", "metal"];
+    let i = value as i32;
+    let lerp = value - i as f32;
+    format!(
+        "* material set to [{}]-[{}], with lerp of [{:.6}]",
+        NAMES[i.rem_euclid(4) as usize],
+        NAMES[(i + 1).rem_euclid(4) as usize],
+        f64::from(lerp)
+    )
+}
+
 impl Console {
     /// Every command at its built-in value and no bindings.
     pub fn new(files: ConsoleFiles) -> Self {
@@ -405,6 +430,7 @@ impl Console {
             input: Default::default(),
             starting: false,
             fatal: None,
+            material_message: false,
         };
         // Set up before the engine and the console (console-log.md 3.3).
         console.log.set_up_file();
@@ -582,6 +608,10 @@ impl Console {
             // Only acts while a game with a player exists; Volya Engine's
             // console has none (4.3).
             Kind::Name => return Exec::Ignored,
+            _ if def.name == "r2em" && matches!(argument, "on" | "off") => {
+                self.material_message = argument == "on";
+                return Exec::Done;
+            }
             kind => Value::parse(kind, argument),
         };
         let result = match parsed {
@@ -602,6 +632,12 @@ impl Console {
                 Exec::Rejected
             }
         };
+        // After a stored value (console-misc-settings.md 9; whether a
+        // rejected one prints too is disputed, #623).
+        if def.name == "r2em" && result == Exec::Done && self.material_message {
+            let line = material_message(self.values[i].number());
+            self.print(line);
+        }
         if def.name == "_preset" {
             // The current value's script runs whether or not the new name
             // was accepted (options-screens.md section 8).

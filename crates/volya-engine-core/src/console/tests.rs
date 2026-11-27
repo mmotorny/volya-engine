@@ -498,6 +498,41 @@ fn binding_takes_the_key_from_other_actions_except_single_and_multi() {
     assert_eq!(k(&c, "jump"), [Some("kSPACE"), None]);
 }
 
+/// console-misc-settings.md section 9.
+#[test]
+fn r2em_switches_its_message_and_prints_it_after_a_number() {
+    let mut c = Console::new(files());
+    assert!(printed(&mut c, "r2em 2.5").is_empty());
+    assert_eq!(c.exec("r2em ON"), Exec::Done);
+    assert_eq!(status(&c, "r2em"), "2.5");
+    assert_eq!(
+        printed(&mut c, "r2em 2.5"),
+        ["* material set to [phong]-[metal], with lerp of [0.500000]"]
+    );
+    assert_eq!(
+        printed(&mut c, "r2em 4"),
+        ["* material set to [oren]-[blin], with lerp of [0.000000]"]
+    );
+    assert_eq!(
+        printed(&mut c, "r2em 0.25"),
+        ["* material set to [oren]-[blin], with lerp of [0.250000]"]
+    );
+    assert_eq!(
+        printed(&mut c, "r2em 5"),
+        [
+            "~ Invalid syntax in call to 'r2em'",
+            "~ Valid arguments: float value in range [0.000,4.000]"
+        ]
+    );
+    assert_eq!(c.exec("r2em off"), Exec::Done);
+    assert!(printed(&mut c, "r2em 1").is_empty());
+    assert_eq!(status(&c, "r2em"), "1.");
+    // The switch is not saved: only the value is.
+    c.exec("r2em on");
+    let saved = String::from_utf8_lossy(&c.save()).into_owned();
+    assert!(saved.contains("r2em 1.\r\n") && !saved.contains("r2em on"));
+}
+
 #[test]
 fn the_user_file_round_trips_in_byte_order() {
     let user = b"_preset Extreme\r\nai_use_torch_dynamic_lights on\r\nunbindall\r\nbind left kLEFT\r\nbind quit kESCAPE\r\nbind_console disconnect kF10\nbind_console quit kF9\nbind_sec jump kRCONTROL\r\ng_always_run on\r\nmouse_sens 0.3\r\nph_iterations 18\r\nr2_slight_fade 0.3333\r\nvid_mode 1280x1024\r\nload_last_save all\r\ncdkey secret\r\nsv_no_auth_check 1\r\nnot_a_command 1\r\n";
