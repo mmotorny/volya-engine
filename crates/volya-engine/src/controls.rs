@@ -76,6 +76,8 @@ use crate::core::input::{
     TouchLook,
 };
 use crate::core::movement::{PlayerState, Request, Settings, View};
+use crate::core::navigation::follow::{Follow, Follower};
+use crate::core::navigation::{Body, Planning};
 use volya_engine_formats::cp1251;
 
 /// The actions of section 2.2 this engine acts on, the inventory screen's
@@ -579,6 +581,12 @@ impl TouchLookDrag {
         self.momentum
     }
 
+    /// A finger is down on the picture, or its momentum still turns it:
+    /// the camera is the user's.
+    pub fn dragging(&self) -> bool {
+        !self.fingers.is_empty() || self.momentum != [0.0; 2]
+    }
+
     /// The latest frame's taps, in order.
     pub fn taps(&self) -> &[Tap] {
         &self.taps
@@ -828,8 +836,41 @@ pub fn tap_destination(world: &CollisionWorld, view: &View, at: [f32; 2]) -> Opt
         .map(|(d, _)| add(eye, scale(dir, d)))
 }
 
+/// A trip's route is planned again at most this many times, when stuck
+/// or pushed off it (our choice); stuck after that, the trip ends.
+pub const REPLANS: u8 = 3;
+/// A route's search expands at most this many floors a frame (our
+/// choice, measured in docs/architecture/input.md): most searches end on
+/// their tap's frame, a long one spreads over frames.
+pub const PLAN_BUDGET: usize = 600;
+
+/// How a trip gets to its destination.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Way {
+    /// Its route is being searched for; the character waits.
+    Planning(Box<Planning>),
+    /// Along its route.
+    Route(Follower),
+    /// In a straight line: no floor under the feet, or nothing nearer the
+    /// destination to go to.
+    Straight,
+}
+
+impl Way {
+    /// A search from the feet at `from` to `to` in `nav`'s world, or
+    /// straight without one.
+    fn plan(nav: Option<Nav<'_>>, from: Vec3, to: Vec3) -> Self {
+        nav.and_then(|(world, body)| Planning::new(world, body, from, to))
+            .map_or(Way::Straight, |p| Way::Planning(Box::new(p)))
+    }
+}
+
+/// The level's collision world and the player's body a trip's route is
+/// planned in ([`crate::core::navigation`]).
+pub type Nav<'a> = (&'a CollisionWorld, &'a Body);
+
 /// A trip under way to a tapped destination.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Trip {
     pub destination: Vec3,
     /// A double tap's: sprinting, until the movement layer cancels it.
@@ -838,16 +879,23 @@ pub struct Trip {
     /// [`PROGRESS`] closer.
     closest: f32,
     progress_at: u64,
+    pub way: Way,
+    replans: u8,
 }
 
 /// Tap-to-move (our design, an experiment in place of a move stick): a
 /// tap in the level sets a destination where its ray meets the level
-/// ([`tap_destination`]), and the character runs there in a straight line
-/// as if forward were held toward it, through the movement layer's own
-/// physics, collisions and footsteps ([`Request::toward`]):
+/// ([`tap_destination`]), and the character runs there along a planned
+/// route ([`crate::core::navigation`]) as if forward were held toward each
+/// waypoint, crouching, jumping and climbing where the route says, through
+/// the movement layer's own physics, collisions and footsteps
+/// ([`Request::toward`]); with no route (no floor under the feet) it runs
+/// in a straight line:
 ///
-/// - it ends on arrival within [`ARRIVAL`], when stuck (no [`PROGRESS`]
-///   for [`STUCK_MS`]), on a tap that meets nothing, when a key or the
+/// - it ends at the route's end or on arrival within [`ARRIVAL`]; stuck or
+///   pushed off its route it plans again, up to [`REPLANS`] times, and
+///   stuck after that (or with no route, no [`PROGRESS`] for
+///   [`STUCK_MS`]) it ends; it also ends on a tap that meets nothing, when a key or the
 ///   gamepad moves, when a screen covers the level, on a blur and on a
 ///   frame over [`LOOK_GAP_MS`] from the previous one;
 /// - a new tap sets a new destination; a double tap's trip sprints, the
@@ -893,9 +941,13 @@ impl TapMove {
 
     /// One frame at `now`: this frame's taps with their destinations,
     /// where the trip's destination shows in the picture the taps saw
-    /// (`marker`), whether something else `ended` the trip, and the player
-    /// after the previous frame. Returns the bearing to run along (forward
-    /// held, [`Request::toward`]) and whether to press `sprint_toggle`.
+    /// (`marker`), whether something else `ended` the trip, the player
+    /// after the previous frame, and `nav`, the world routes are planned
+    /// in. Sets `r`'s movement for the trip (forward held along
+    /// [`Request::toward`], and the route's crouch, jump and look, with
+    /// `always_run` as the settings have it) and returns whether to press
+    /// `sprint_toggle`.
+    #[allow(clippy::too_many_arguments)]
     pub fn frame(
         &mut self,
         taps: &[(Tap, Option<Vec3>)],
@@ -903,10 +955,16 @@ impl TapMove {
         ended: bool,
         player: &PlayerState,
         now: u64,
-    ) -> (Option<f32>, bool) {
+        nav: Option<Nav<'_>>,
+        always_run: bool,
+        r: &mut Request,
+    ) -> bool {
         let gap = self
             .last
             .is_some_and(|l| now.saturating_sub(l) > LOOK_GAP_MS);
+        let dt = self
+            .last
+            .map_or(0.0, |l| now.saturating_sub(l) as f32 / 1000.0);
         self.last = Some(now);
         if ended || gap {
             self.trip = None;
@@ -931,15 +989,13 @@ impl TapMove {
             let on_marker = marker.is_some_and(|m| {
                 (tap.at[0] - m[0]).hypot(tap.at[1] - m[1]) * tap.half_height <= MARKER_HIT_PX
             });
-            if let Some(t) = self.trip
+            if let Some(t) = &self.trip
                 && !double
                 && late
                 && on_marker
             {
-                self.ended = Some((
-                    TripEnd::Cancelled,
-                    length(sub(t.destination, player.position)),
-                ));
+                let distance = length(sub(t.destination, player.position));
+                self.ended = Some((TripEnd::Cancelled, distance));
                 self.trip = None;
                 self.last_tap = None;
                 marker = None;
@@ -953,6 +1009,8 @@ impl TapMove {
                 sprint: double,
                 closest: f32::INFINITY,
                 progress_at: now,
+                way: Way::plan(nav, player.position, destination),
+                replans: 0,
             });
         }
         let mut toward = None;
@@ -964,14 +1022,33 @@ impl TapMove {
                 t.closest = distance;
                 t.progress_at = now;
             }
-            if distance <= ARRIVAL || stuck && t.progress_at != now {
-                let how = if distance <= ARRIVAL {
-                    TripEnd::Arrived
-                } else {
-                    TripEnd::Stuck
-                };
-                self.ended = Some((how, distance));
-                self.trip = None;
+            // The search under way, by a frame's part.
+            if let Way::Planning(p) = &mut t.way {
+                let found = nav.and_then(|(world, _)| p.run(world, PLAN_BUDGET));
+                match found {
+                    Some(Some(route)) => t.way = Way::Route(Follower::new(route, now)),
+                    Some(None) => t.way = Way::Straight,
+                    None if nav.is_none() => t.way = Way::Straight,
+                    None => t.progress_at = now,
+                }
+            }
+            let mut end = None;
+            if distance <= ARRIVAL {
+                end = Some(TripEnd::Arrived);
+            } else if let Way::Planning(_) = t.way {
+            } else if let Way::Route(f) = &mut t.way {
+                match f.frame(player, now) {
+                    Follow::Steer(steer) => f.apply(&steer, player, always_run, dt, r),
+                    Follow::Done => end = Some(TripEnd::Arrived),
+                    Follow::Stuck | Follow::Off if t.replans < REPLANS => {
+                        t.replans += 1;
+                        t.way = Way::plan(nav, player.position, t.destination);
+                        t.progress_at = now;
+                    }
+                    Follow::Stuck | Follow::Off => end = Some(TripEnd::Stuck),
+                }
+            } else if stuck && t.progress_at != now {
+                end = Some(TripEnd::Stuck);
             } else {
                 // Right above or below: on along the view.
                 let bearing = if off[0].hypot(off[2]) < 1e-3 {
@@ -984,9 +1061,17 @@ impl TapMove {
                 turn -= std::f32::consts::TAU * (turn / std::f32::consts::TAU).round();
                 toward = Some(player.yaw + turn);
             }
+            if let Some(how) = end {
+                self.ended = Some((how, distance));
+                self.trip = None;
+            }
         }
-        let want = self.trip.is_some_and(|t| t.sprint);
-        let press = if want && !self.owns_sprint && !player.sprint_requested {
+        if toward.is_some() {
+            r.forward = true;
+            r.toward = toward;
+        }
+        let want = self.trip.as_ref().is_some_and(|t| t.sprint);
+        if want && !self.owns_sprint && !player.sprint_requested {
             self.owns_sprint = true;
             true
         } else if !want && self.owns_sprint {
@@ -994,8 +1079,7 @@ impl TapMove {
             player.sprint_requested
         } else {
             false
-        };
-        (toward, press)
+        }
     }
 }
 
@@ -1162,15 +1246,17 @@ impl Controls {
     /// whatever has the keyboard, save-load-screens.md section 2). `player`
     /// is the player after the previous frame (its sprint request for the
     /// sprint lock and tap-to-move, its position for tap-to-move, its
-    /// crouch toggle for the touch low crouch); `destination` gives a tap's destination for its place in
-    /// the picture and its trip's marker there, from the view the tap saw
-    /// ([`TapView`]).
+    /// crouch toggle for the touch low crouch); `view` gives a tap's
+    /// destination for its place in the picture and its trip's marker
+    /// there, from the view the tap saw ([`TapView`]), and `nav` the world
+    /// a trip's route is planned in.
     pub fn request(
         &mut self,
         input: &Input,
         player: &PlayerState,
         now: u64,
         view: &impl TapView,
+        nav: Option<Nav<'_>>,
     ) -> (Request, bool) {
         let only = self.keys_only.clone();
         let keys_only = only.is_some();
@@ -1353,14 +1439,23 @@ impl Controls {
             }
         }
         let ended = keyboard || sticks_move || keys_only || input.looks_released();
-        let (toward, sprint) = self.tap_move.frame(&taps, marker, ended, player, now);
-        r.sprint_toggle ^= sprint;
-        if toward.is_some() {
-            r.forward = true;
-            r.toward = toward;
+        let always_run = self.settings.always_run;
+        // A finger on the picture keeps the camera the user's.
+        let looked = r.look;
+        let sprint = self
+            .tap_move
+            .frame(&taps, marker, ended, player, now, nav, always_run, &mut r);
+        if self.look.dragging() {
+            r.look = looked;
         }
-        for walk in self.walk.into_iter().flatten() {
-            r.accel |= self.settings.always_run == walk;
+        r.sprint_toggle ^= sprint;
+        // A route's crouch sets its walk or run itself.
+        let crouched = (self.tap_move.trip())
+            .is_some_and(|t| matches!(&t.way, Way::Route(f) if f.posture() > 0));
+        if !crouched {
+            for walk in self.walk.into_iter().flatten() {
+                r.accel |= self.settings.always_run == walk;
+            }
         }
         let back = pad(GamepadButton::East, true) || touch(TouchButton::Menu, true);
         (r, back)
@@ -1401,7 +1496,7 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
 
     /// One frame's request for a standing player; taps meet nothing.
     fn req(c: &mut Controls, i: &Input) -> (Request, bool) {
-        c.request(i, &standing(), 0, &())
+        c.request(i, &standing(), 0, &(), None)
     }
 
     fn key(input: &mut Input, key: Key, pressed: bool) {
@@ -2198,7 +2293,7 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
             crouch_toggled: true,
             ..standing()
         };
-        let (r, _) = c.request(&i, &toggled, 0, &());
+        let (r, _) = c.request(&i, &toggled, 0, &(), None);
         assert!(!r.crouch_toggle && r.accel);
     }
 
@@ -2374,7 +2469,10 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
                     world,
                     view: p.view(),
                 };
-                let (r, _) = self.c.request(&self.i, &p.state(), self.now, &view);
+                let body = crate::core::navigation::Body::of(&p.config);
+                let (r, _) =
+                    self.c
+                        .request(&self.i, &p.state(), self.now, &view, Some((world, &body)));
                 self.p.frame(&self.world, self.now, &r);
                 self.i.end_frame();
             }
@@ -2456,9 +2554,10 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
                 }
                 // A finger dragged up: the scene with it, so the view
                 // looks down.
+                // (Past the trip's own upward look on the ladder.)
                 Path::Tap => {
                     for (phase, y, time) in
-                        [(LookPhase::Down, 0.5, 0.0), (LookPhase::Move, -0.5, 500.0)]
+                        [(LookPhase::Down, 0.5, 0.0), (LookPhase::Move, -0.8, 500.0)]
                     {
                         w.event(Event::TouchLook(look(1, phase, [0.0, y], time)));
                     }
@@ -2680,7 +2779,7 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
         let second = [-3.0, 0.0, 3.0];
         w.tap_at(second, 0.0);
         w.frames(2);
-        let trip = *w.c.tap_move.trip().unwrap();
+        let trip = w.c.tap_move.trip().unwrap().clone();
         assert_eq!(trip.destination[0].round(), -3.0);
         assert!(!trip.sprint);
         for _ in 0..300 {
@@ -2717,10 +2816,30 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
         // Facing the player (-z).
         w.world = world_with(&[([a, c, b], 0), ([a, d, c], 0)]);
         w.frames(10);
-        // Up the wall, out of reach: the trip runs into the wall and stops
-        // half a second after its last progress.
+        // Up the wall: the route ends at its foot, on this side.
         w.tap_at([0.0, 1.0, 2.0], 0.0).frames(1);
-        assert!(w.c.tap_move.trip().is_some());
+        assert!(
+            w.c.tap_move
+                .trip()
+                .is_some_and(|t| matches!(t.way, Way::Route(_)))
+        );
+        let mut frames = 1;
+        while w.c.tap_move.trip().is_some() && frames < 300 {
+            w.frames(1);
+            frames += 1;
+        }
+        let z = w.p.state().position[2];
+        assert!(
+            frames < 120 && z > 1.2 && z < 2.0,
+            "{frames} frames, at {z}"
+        );
+        assert!(matches!(w.c.tap_move.ended(), Some((TripEnd::Arrived, d)) if d > ARRIVAL));
+        // Up the wall right ahead, nothing nearer to go to: no route, the
+        // trip runs straight into the wall and stops half a second after
+        // its last progress.
+        w.frames(60);
+        w.tap_at([0.0, 1.0, 2.0], 0.0).frames(1);
+        assert!(w.c.tap_move.trip().is_some_and(|t| t.way == Way::Straight));
         let mut frames = 1;
         while w.c.tap_move.trip().is_some() && frames < 300 {
             w.frames(1);
@@ -2733,6 +2852,39 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
         );
         assert!(matches!(w.c.tap_move.ended(), Some((TripEnd::Stuck, d)) if d > ARRIVAL));
         assert!(!w.frames(60).flags.forward);
+    }
+
+    #[test]
+    fn a_trip_goes_around_a_wall_in_the_way() {
+        let mut w = Walk::new();
+        // A low wall 4 m wide across the way, too high to jump, facing the
+        // player (−z), and the view over it.
+        let [a, b, c, d] = [
+            [-2.0, 0.0, 2.0],
+            [2.0, 0.0, 2.0],
+            [2.0, 1.0, 2.0],
+            [-2.0, 1.0, 2.0],
+        ];
+        w.world = world_with(&[([a, c, b], 0), ([a, d, c], 0)]);
+        w.frames(10);
+        let target = [0.0, 0.0, 8.0];
+        w.tap_at(target, 0.0);
+        w.frames(1);
+        let trip = w.c.tap_move.trip().unwrap();
+        let Way::Route(f) = &trip.way else {
+            panic!("{:?}", trip.way);
+        };
+        assert!(f.route().waypoints.len() > 2, "{:?}", f.route());
+        let mut widest: f32 = 0.0;
+        for _ in 0..400 {
+            if w.c.tap_move.trip().is_none() {
+                break;
+            }
+            widest = widest.max(w.frames(1).position[0].abs());
+        }
+        assert!(widest > 2.0, "round an end of the wall: {widest}");
+        assert!(matches!(w.c.tap_move.ended(), Some((TripEnd::Arrived, _))));
+        assert!(w.from(target) <= ARRIVAL, "{}", w.from(target));
     }
 
     #[test]

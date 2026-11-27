@@ -2691,7 +2691,10 @@ impl LevelScreen {
             world: &self.collision,
             view: self.player.view(),
         };
-        let (request, back) = self.controls.request(input, &player, now, &view);
+        let body = crate::core::navigation::Body::of(&self.player.config);
+        let (request, back) =
+            self.controls
+                .request(input, &player, now, &view, Some((&self.collision, &body)));
         // player-state.md 4.3: the condition's limits for this frame's
         // movement; 4.4: a jump's cost; 4.1, 4.2: the conditions over the
         // game time this frame advanced, with the state the movement left.

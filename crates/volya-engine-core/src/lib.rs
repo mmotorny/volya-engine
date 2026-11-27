@@ -28,6 +28,7 @@ pub mod level;
 pub mod lights;
 pub mod memory_manager;
 pub mod movement;
+pub mod navigation;
 pub mod object_light;
 pub mod occlusion;
 pub mod particles;
