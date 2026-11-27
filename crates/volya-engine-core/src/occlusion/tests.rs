@@ -528,3 +528,124 @@ fn an_objects_box_encloses_its_turned_box() {
     let (lo, hi) = super::object_box(&t, [0.0; 3], [2.0, 1.0, 1.0]);
     assert_eq!((lo, hi), ([10.0, 0.0, -2.0], [11.0, 1.0, 0.0]));
 }
+
+/// A visual's box while still empty (OT 6, "An empty box").
+const EMPTY_MIN: Vec3 = [f32::MAX; 3];
+const EMPTY_MAX: Vec3 = [-f32::MAX; 3];
+
+const IDENTITY: Mat4 = [
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0],
+];
+
+/// The box of the previous test, turned 90° about y and moved by (10, 0, 0).
+const TURNED: Mat4 = [
+    [0.0, 0.0, -1.0, 0.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [1.0, 0.0, 0.0, 0.0],
+    [10.0, 0.0, 0.0, 1.0],
+];
+
+#[test]
+fn the_conversions_of_nan_and_infinite_values() {
+    // OT 2.4.
+    assert_eq!(cell_index(f32::NAN), -2);
+    assert_eq!(cell_index(-f32::NAN), -2);
+    assert_eq!(
+        (cell_index(f32::INFINITY), cell_index(f32::NEG_INFINITY)),
+        (1, -1)
+    );
+    assert_eq!(threshold(f32::NAN), 0);
+}
+
+#[test]
+fn an_empty_box_under_the_identity() {
+    // OT 6: NaN on every axis at the min, the largest float at the max, for
+    // a translation below 10³⁰.
+    let mut moved = IDENTITY;
+    moved[3] = [1.0e29, -5.0, 3.0, 1.0];
+    for t in [IDENTITY, moved] {
+        let (lo, hi) = super::object_box(&t, EMPTY_MIN, EMPTY_MAX);
+        assert!(lo.iter().all(|v| v.is_nan()), "{lo:?}");
+        assert_eq!(hi, [f32::MAX; 3]);
+    }
+}
+
+#[test]
+fn an_empty_box_under_a_turn_with_a_negative_entry() {
+    // OT 6: a negative entry times −∞ is +∞ (to the max); a zero entry of
+    // either sign gives NaN, which goes to the min.
+    let mut t = TURNED;
+    t[0][1] = -0.0;
+    let (lo, hi) = super::object_box(&t, EMPTY_MIN, EMPTY_MAX);
+    assert!(lo.iter().all(|v| v.is_nan()), "{lo:?}");
+    assert_eq!(hi, [f32::MAX, f32::MAX, f32::INFINITY]);
+}
+
+#[test]
+fn an_empty_box_under_all_negative_axes() {
+    // OT 6's arithmetic: every product +∞, added to the max; the min is the
+    // transformed corner. (Its box test is unestablished, OT 10.)
+    let axes = |e: f32| {
+        [
+            [e, e, e, 0.0],
+            [e, e, e, 0.0],
+            [e, e, e, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
+    };
+    let (lo, hi) = super::object_box(&axes(-0.25), EMPTY_MIN, EMPTY_MAX);
+    let q = -0.25 * f32::MAX;
+    let p = ((q + q) + q) + 0.0;
+    assert!(p.is_finite());
+    assert_eq!((lo, hi), ([p; 3], [f32::INFINITY; 3]));
+    // Entries of −1: the corner overflows to −∞, and the max is −∞ + ∞.
+    let (lo, hi) = super::object_box(&axes(-1.0), EMPTY_MIN, EMPTY_MAX);
+    assert_eq!(lo, [f32::NEG_INFINITY; 3]);
+    assert!(hi.iter().all(|v| v.is_nan()), "{hi:?}");
+}
+
+#[test]
+fn an_empty_box_before_the_tests_matrix_is_visible() {
+    // OT 6: with A all zero the largest corner has z = 0.
+    let mut o = Occlusion::new(Some(OcclusionMesh::new(&square())), 0);
+    o.on = true;
+    let v = View {
+        menu_shown: true,
+        ..view(0)
+    };
+    let mut g = Generator::new(1);
+    let (lo, hi) = super::object_box(&IDENTITY, EMPTY_MIN, EMPTY_MAX);
+    assert!(o.box_visible(lo, hi, &v, &mut g));
+}
+
+#[test]
+fn an_empty_box_reads_only_the_top_left_cell_at_threshold_0() {
+    // OT 6: no corner below the near limit, so the scan of cell (0, 0) with
+    // t = 0, whatever the other cells hold.
+    let (mut o, v) = tested();
+    let mut g = Generator::new(12345);
+    for t in [IDENTITY, TURNED] {
+        let (lo, hi) = super::object_box(&t, EMPTY_MIN, EMPTY_MAX);
+        for (value, others, seen) in [
+            (EMPTY, -5, true),
+            (1, -5, true),
+            (0, EMPTY, false),
+            (-5, EMPTY, false),
+        ] {
+            o.grid.fill(others);
+            o.grid[0] = value;
+            assert_eq!(o.box_visible(lo, hi, &v, &mut g), seen, "{value}");
+        }
+        // Cached like any other: a hidden one is tested again next frame.
+        let mut c = Cached::default();
+        let at = |frame| View { frame, ..v };
+        assert!(!o.cached_visible(&mut c, lo, hi, &at(50), &mut g));
+        assert_eq!(c.next, 51);
+        o.grid[0] = EMPTY;
+        assert!(o.cached_visible(&mut c, lo, hi, &at(51), &mut g));
+        assert!((61..=75).contains(&c.next), "{}", c.next);
+    }
+}

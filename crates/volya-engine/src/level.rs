@@ -3123,8 +3123,10 @@ impl LevelScreen {
                         let Some(p) = effects.get(i) else { continue };
                         // The object's box (occlusion-tests.md 6) of the
                         // instance's box (P2 5.1), the object's transform
-                        // the identity (level-placed-effects.md 3).
-                        // TODO(#607): what the empty box (P2 8.1) gives.
+                        // the identity (level-placed-effects.md 3). An
+                        // empty box (particle-lifecycle.md 8.1) gives NaN
+                        // and infinite values, tested as occlusion-tests.md
+                        // 6 "An empty box" says.
                         let b = p.instance.bounds();
                         let (lo, hi) = object_box(&crate::core::particles::IDENTITY, b.min, b.max);
                         if visibility.effects.len() <= i {

@@ -561,7 +561,9 @@ impl Occlusion {
 
 /// An object's box (OT 6): the smallest axis-aligned box around its
 /// visual's box `min` … `max` under the row-vector `transform` (rows 0 – 2
-/// the axes, row 3 the translation), summed in the spec's order.
+/// the axes, row 3 the translation), summed in the spec's order; a NaN
+/// product (a zero axis entry times an empty box's infinite extent) counts
+/// as sign bit set and goes to the minimum.
 pub fn object_box(transform: &Mat4, min: Vec3, max: Vec3) -> (Vec3, Vec3) {
     let [i, j, k, c] = transform.map(|r| [r[0], r[1], r[2]]);
     let p: Vec3 = std::array::from_fn(|n| ((k[n] * min[2] + j[n] * min[1]) + i[n] * min[0]) + c[n]);
@@ -573,7 +575,7 @@ pub fn object_box(transform: &Mat4, min: Vec3, max: Vec3) -> (Vec3, Vec3) {
     ] {
         for n in 0..3 {
             let v = axis[n] * extent;
-            if v.is_sign_negative() {
+            if v.is_nan() || v.is_sign_negative() {
                 lo[n] += v;
             } else {
                 hi[n] += v;
@@ -583,14 +585,22 @@ pub fn object_box(transform: &Mat4, min: Vec3, max: Vec3) -> (Vec3, Vec3) {
     (lo, hi)
 }
 
-/// A coordinate's cell index (OT 2.1 step 1).
+/// A coordinate's cell index (OT 2.1 step 1): −2 for a NaN coordinate,
+/// 1 for +∞ and −1 for −∞ (OT 2.4).
 fn cell_index(c: f32) -> i32 {
-    floor_i(64.0 * c + 0.5)
+    match c {
+        _ if c.is_nan() => -2,
+        f32::INFINITY => 1,
+        f32::NEG_INFINITY => -1,
+        _ => floor_i(64.0 * c + 0.5),
+    }
 }
 
-/// The scan's threshold for depth `d` (OT 2.1 step 2).
+/// The scan's threshold for depth `d` (OT 2.1 step 2): 0 for a NaN depth,
+/// whose ceil(d × 2³⁰) is −1 (OT 2.4).
 fn threshold(d: f32) -> i32 {
-    ceil_i(d * SCALE).saturating_add(1)
+    let c = if d.is_nan() { -1 } else { ceil_i(d * SCALE) };
+    c.saturating_add(1)
 }
 
 /// The tests' matrix A of `vp` (OT 1).
