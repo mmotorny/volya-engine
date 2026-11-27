@@ -31,7 +31,13 @@ mod list {
         "/../../tests/fidelity/views.rs"
     ));
 }
-use list::{Camera, FOV_DEGREES, HEIGHT, Place, VIEWS, WIDTH};
+use list::{
+    Camera, FOV_DEGREES, FRAME_MS, HEIGHT, Place, SKIP_EVERY, TITLE_MENU_FRAME, VIEWS, WIDTH,
+};
+
+/// Frames the startup sequence may take before the title menu (the
+/// capture's `MENU_TIMEOUT`).
+const MENU_TIMEOUT: u32 = 5000;
 
 /// One check per view, in the list's order.
 pub const CHECKS: &[(&str, Run)] = &[
@@ -66,7 +72,7 @@ async fn view(cx: &Context<'_>, index: usize) -> Outcome {
             data.set_user_config(user);
             title_menu(cx, data, view.name).await
         }
-        Place::NewGame { camera, seconds } => {
+        Place::NewGame { camera, .. } => {
             let at = match camera {
                 Camera::Start => None,
                 Camera::Track { eye, yaw, pitch } => {
@@ -76,41 +82,55 @@ async fn view(cx: &Context<'_>, index: usize) -> Outcome {
             };
             let mut data = GameData::read(cx.tree, cx.root, SIZE).map_err(game_data)?;
             data.set_user_config(user);
-            new_game(cx, &data, view.name, at, seconds).await
+            new_game(cx, &data, view.name, at, view.place.since_first_ms()).await
         }
     }
 }
 
-/// The title menu once its startup sequence has ended, no item moved to
-/// (as `title_menu`'s check reaches it, Esc through the items).
+/// The title menu as the original's capture reaches it, in its frames of
+/// [`FRAME_MS`]: the quit key every [`SKIP_EVERY`] frames while the startup
+/// sequence plays, then the menu's frame [`TITLE_MENU_FRAME`] counted from
+/// its first, so the videos and the bar are at the capture's moment.
 async fn title_menu(cx: &Context<'_>, data: GameData, name: &str) -> Outcome {
     let tree = cx.tree;
     let mut app = App::new(data).map_err(|e| format!("app: {e}"))?;
     let mut input = Input::new();
-    step(&mut app, &mut input, 1000.0);
-    step(&mut app, &mut input, 3500.0);
-    key(&mut input, Key::Escape);
-    step(&mut app, &mut input, 3600.0);
-    key(&mut input, Key::Enter);
-    step(&mut app, &mut input, 3700.0);
-    key(&mut input, Key::Escape);
-    key(&mut input, Key::Escape);
-    step(&mut app, &mut input, 4000.0);
-    step(&mut app, &mut input, 6000.0);
-    key(&mut input, Key::Escape);
-    for t in [7000.0, 12_000.0, 12_600.0, 13_000.0, 13_300.0, 13_700.0] {
-        step(&mut app, &mut input, t);
+    let in_menu = |app: &App| matches!(app.state(), AppState::Menu { .. });
+    let frame_ms = f64::from(FRAME_MS);
+    let mut frame = 0;
+    while !in_menu(&app) {
+        ensure!(frame < MENU_TIMEOUT, "no title menu within {frame} frames");
+        if frame % SKIP_EVERY == 0 {
+            key(&mut input, Key::Escape);
+        }
+        frame += 1;
+        step(&mut app, &mut input, f64::from(frame) * frame_ms);
     }
-    ensure!(
-        matches!(app.state(), AppState::Menu { .. }),
-        "not in the menu"
-    );
-    let s = app
-        .scene(tree, SIZE)
-        .map_err(|e| format!("menu scene: {e}"))?;
+    // Every menu frame drawn, as the app draws them: the videos decode a
+    // few frames per draw toward the frame due (`Presenter`), so a single
+    // draw at the end would show their first frames.
     let mut presenter = Presenter::new();
     let mut gpu = cx.renderer();
-    let list = presenter.draw_list(&mut gpu, tree, &s, app.clock());
+    let first = app.clock();
+    let mut f = frame;
+    let list = loop {
+        let s = app
+            .scene(tree, SIZE)
+            .map_err(|e| format!("menu scene: {e}"))?;
+        let list = presenter.draw_list(&mut gpu, tree, &s, app.clock());
+        if f + 1 == frame + TITLE_MENU_FRAME {
+            break list;
+        }
+        f += 1;
+        step(&mut app, &mut input, f64::from(f) * frame_ms);
+        ensure!(in_menu(&app), "not in the menu");
+    };
+    let age = app.clock() - first;
+    ensure!(
+        age == Place::TitleMenu.since_first_ms(),
+        "the menu is {age} ms old, the capture's {} ms",
+        Place::TitleMenu.since_first_ms()
+    );
     let pixels = capture(&mut gpu, &list, WIDTH, HEIGHT).await?;
     let errors = presenter.take_errors();
     ensure!(errors.is_empty(), "{errors:?}");
@@ -119,8 +139,8 @@ async fn title_menu(cx: &Context<'_>, data: GameData, name: &str) -> Outcome {
     Ok(format!("{} quads at {} ms", list.quads.len(), app.clock()))
 }
 
-/// A New Game's level after `seconds` of updates, seen by the player where
-/// the game put it (`at` `None`), or from an eye and angles the camera is
+/// A New Game's level after `end` ms of updates (the view's frame of play,
+/// frame 1 at 0), seen by the player where the game put it (`at` `None`), or from an eye and angles the camera is
 /// placed at before each update (the player would fall from a view in the
 /// air); with the settings of `data`'s user configuration file as the app
 /// applies them: the device made with them, reset as the level starts
@@ -131,7 +151,7 @@ async fn new_game(
     data: &GameData,
     name: &str,
     at: Option<([f32; 3], Angles)>,
-    seconds: u32,
+    end: u64,
 ) -> Outcome {
     ensure!(
         (camera::FOV_Y_DEGREES - FOV_DEGREES).abs() < 1e-4,
@@ -145,7 +165,6 @@ async fn new_game(
     samplers.reset(&console);
     let mut screen = LevelScreen::load(tree, data, 0).map_err(|e| format!("level: {e}"))?;
     let input = Input::new();
-    let end = u64::from(seconds) * 1000;
     let fine = end.saturating_sub(1000);
     let mut now = 0;
     while now < end {
@@ -195,7 +214,7 @@ async fn new_game(
     ensure!(screen.take_fatal().is_none(), "fatal");
     cx.dump(name, WIDTH, HEIGHT, &pixels);
     cx.keep_file(&format!("{name}.saved.ltx"), console.save());
-    Ok(format!("at {seconds} s"))
+    Ok(format!("at {end} ms"))
 }
 
 #[cfg(test)]

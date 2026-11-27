@@ -144,18 +144,53 @@ pub fn user_ltx(shipped: &[u8]) -> Vec<u8> {
         .collect()
 }
 
+/// Milliseconds each frame advances the clock up to a view's moment, in
+/// both engines: the original's capture holds its clock and steps it by
+/// this at every frame (docs/testing.md, The original on Windows), and our
+/// check steps the app by the same frames.
+pub const FRAME_MS: u32 = 40;
+
+/// The title menu's view: its frame counted from the menu's first (frame
+/// 1), the container capture's 4 s after it opened.
+pub const TITLE_MENU_FRAME: u32 = 4000 / FRAME_MS;
+
+/// Frames between presses of the quit key while the startup sequence plays
+/// before the title menu (the capture's, `skip_logos`).
+pub const SKIP_EVERY: u32 = 25;
+
 /// Where a view is.
 #[derive(Clone, Copy, Debug)]
 pub enum Place {
-    /// The title menu, once its startup sequence has ended.
+    /// The title menu, once its startup sequence has ended (the quit key
+    /// every [`SKIP_EVERY`] frames while it plays), at its frame
+    /// [`TITLE_MENU_FRAME`].
     TitleMenu,
     /// A New Game's level (`l01_escape`, start-position.md) seen by
-    /// `camera`, `seconds` after play started (the original: after its New
-    /// Game intro; ours: of the level's updates). The time of day and the
+    /// `camera` at its frame of play `seconds` at [`FRAME_MS`] (frame 1 the
+    /// original's first after its New Game intro, ours the level's first
+    /// update; [`Place::since_first_ms`] of updates later). The time of day and the
     /// weather are the New Game's (05:30 on its first day, game time at ×10,
     /// steering-the-original.md section 4.4; the level's own weather cycle,
     /// section 4.5): neither can be set in the original.
     NewGame { camera: Camera, seconds: u32 },
+}
+
+impl Place {
+    /// The view's frame, counted from frame 1: the title menu's first, or a
+    /// New Game's first frame of play (its `seconds` at [`FRAME_MS`]).
+    pub const fn frame(self) -> u32 {
+        match self {
+            Place::TitleMenu => TITLE_MENU_FRAME,
+            Place::NewGame { seconds, .. } => seconds * 1000 / FRAME_MS,
+        }
+    }
+
+    /// Milliseconds from frame 1 to the view's frame, the moment both
+    /// engines compose: for the title menu its age, from which its videos
+    /// play and its bar moves (title-menu.md 3.2, 4.3).
+    pub const fn since_first_ms(self) -> u64 {
+        (self.frame() as u64 - 1) * FRAME_MS as u64
+    }
 }
 
 /// Where a New Game's view is seen from.

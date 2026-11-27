@@ -22,16 +22,15 @@ mod list {
         "/../../tests/fidelity/views.rs"
     ));
 }
-use list::{Camera, HEIGHT, Place, VIEWS, WIDTH};
+use list::{Camera, FRAME_MS, HEIGHT, Place, VIEWS, WIDTH};
 
 /// The runner zip's Bazel target and the release tags' prefix.
 pub const RUNNER: &str = "//tools/wincapture:runner";
 const TAG_PREFIX: &str = "wincapture-";
 
-/// Milliseconds a frame advances the original's clock (as the Wine frame
-/// clock's runs, #575): a whole number, so the millisecond and 100 ns
-/// clocks advance alike.
-pub const FRAME_MS: u32 = 40;
+// The views' `FRAME_MS`, what a frame advances the original's clock (as the
+// Wine frame clock's runs, #575): a whole number of milliseconds, so the
+// millisecond and 100 ns clocks advance alike.
 
 /// Main-thread clock reads with no frame presented that add 1 ms, so a
 /// wait for time to pass ends (measured under Wine: the original's startup
@@ -62,10 +61,6 @@ const FIRST_FRAME_MS: u32 = 120_000;
 /// The system time at the clock's tick 0, seconds since 1970 (2026-01-01
 /// 00:00 UTC), so every run reads the same dates.
 const EPOCH: u64 = 1_767_225_600;
-
-/// The title menu's view: its frame counted from the menu's first, the
-/// container capture's 4 s after it opened.
-const TITLE_MENU_FRAME: u32 = 4000 / FRAME_MS;
 
 /// Keys of each camera track: one per second of track time, all equal, so
 /// it holds one view (steering-the-original.md section 4.2).
@@ -122,31 +117,29 @@ pub fn plan() -> String {
         let _ = writeln!(p, "ltx {line}");
     }
     for view in VIEWS {
+        let frame = view.place.frame();
         match view.place {
             Place::TitleMenu => {
-                let _ = writeln!(p, "view {} title-menu {TITLE_MENU_FRAME}", view.name);
+                let _ = writeln!(p, "view {} title-menu {frame}", view.name);
             }
-            Place::NewGame { camera, seconds } => {
-                let frame = seconds * 1000 / FRAME_MS;
-                match camera {
-                    Camera::Start => {
-                        let _ = writeln!(p, "view {} start {frame}", view.name);
-                    }
-                    Camera::Track { eye, yaw, pitch } => {
-                        let words: Vec<String> = view_matrix(eye, yaw, pitch)
-                            .iter()
-                            .flatten()
-                            .map(|v| format!("{:08x}", v.to_bits()))
-                            .collect();
-                        let _ = writeln!(
-                            p,
-                            "view {} track {frame} {TRACK_KEYS} {}",
-                            view.name,
-                            words.join(" ")
-                        );
-                    }
+            Place::NewGame { camera, .. } => match camera {
+                Camera::Start => {
+                    let _ = writeln!(p, "view {} start {frame}", view.name);
                 }
-            }
+                Camera::Track { eye, yaw, pitch } => {
+                    let words: Vec<String> = view_matrix(eye, yaw, pitch)
+                        .iter()
+                        .flatten()
+                        .map(|v| format!("{:08x}", v.to_bits()))
+                        .collect();
+                    let _ = writeln!(
+                        p,
+                        "view {} track {frame} {TRACK_KEYS} {}",
+                        view.name,
+                        words.join(" ")
+                    );
+                }
+            },
         }
     }
     p
