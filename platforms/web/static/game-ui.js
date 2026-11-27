@@ -683,7 +683,7 @@ async function diagnosticsPanel() {
 
 /**
  * A confirmation in place of the control that asked for it: `question`,
- * `detail`, the action (`actionLabel`, filled red) and Cancel (focused;
+ * `detail` (if any), the action (`actionLabel`, filled red) and Cancel (focused;
  * Escape too). `result` settles true on the action, false on Cancel;
  * `busy()` disables both while the action runs.
  */
@@ -694,7 +694,7 @@ function confirmation(question, detail, actionLabel) {
     "div",
     { className: "callout problem confirm" },
     element("strong", { textContent: question }),
-    element("span", { textContent: detail }),
+    detail ? element("span", { textContent: detail }) : null,
     element("div", { className: "confirm-actions" }, action, cancel),
   );
   box.setAttribute("role", "alertdialog");
@@ -757,6 +757,45 @@ function userDataSection() {
 }
 
 /**
+ * Danger zone: Remove imported game, after a confirmation (#538) that says
+ * the game's settings and saved games stay, when there are any; then the
+ * import screen.
+ */
+function importSection(status, userData) {
+  const title = "Remove imported game";
+  const button = element("button", { className: "danger filled", textContent: title });
+  const note = element("p", {
+    className: "note",
+    textContent: `Deletes the game's ${formatBytes(status.bytes)} from this app's storage. You can import it again from the installer.`,
+  });
+  button.addEventListener("click", async () => {
+    const ask = confirmation("Remove the imported game?", userData ? "The game's settings and saved games stay." : null, "Remove");
+    button.replaceWith(ask.element);
+    ask.focus();
+    if (!(await ask.result)) {
+      ask.element.replaceWith(button);
+      button.focus();
+      return;
+    }
+    ask.busy();
+    try {
+      await call("forget_game");
+    } catch (error) {
+      console.warn(`removing the imported game: ${error.message}`);
+      note.textContent = "Couldn't remove the imported game.";
+      note.classList.add("error");
+      ask.element.replaceWith(button);
+      button.focus();
+      return;
+    }
+    markImported(false);
+    coverImage = null;
+    await refresh();
+  });
+  return element("div", { className: "danger-item" }, element("p", { className: "value", textContent: title }), note, button);
+}
+
+/**
  * Settings: updates, the diagnostic log and, in a danger zone, the
  * player's settings and saved games and the import.
  */
@@ -773,15 +812,6 @@ async function showSettings() {
   const auto = element("input", { type: "checkbox", checked: updates?.auto ?? true });
   auto.addEventListener("change", () => updates?.setAuto(auto.checked));
   const check = checkButton();
-
-  const remove = element("button", { className: "danger filled", textContent: "Remove imported game" });
-  remove.addEventListener("click", async () => {
-    if (!confirm("Remove the imported game from this app's storage? You can import it again from the installer.")) return;
-    await call("forget_game");
-    markImported(false);
-    coverImage = null;
-    await refresh();
-  });
 
   show(
     element("div", { className: "screen-head" }, back, element("h2", { textContent: "Settings" })),
@@ -801,18 +831,7 @@ async function showSettings() {
           { className: "panel danger-zone" },
           element("p", { className: "label", textContent: "Danger zone" }),
           userData ? userDataSection() : null,
-          status.imported
-            ? element(
-                "div",
-                { className: "danger-item" },
-                element("p", { className: "value", textContent: "Remove imported game" }),
-                element("p", {
-                  className: "note",
-                  textContent: `Deletes the game's ${formatBytes(status.bytes)} from this app's storage. You can import it again from the installer.`,
-                }),
-                remove,
-              )
-            : null,
+          status.imported ? importSection(status, userData) : null,
         )
       : null,
   );

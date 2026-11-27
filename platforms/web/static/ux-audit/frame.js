@@ -79,6 +79,9 @@ const call = async (op, args) => {
     case "game_status":
       if (state.game instanceof Error) throw state.game;
       return state.game;
+    case "forget_game":
+      if (state.removeFails) throw new Error("the game's files are held by another copy of the app");
+      return null;
     case "user_data_status":
       return { present: state.userData ?? true };
     default:
