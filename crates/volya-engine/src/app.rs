@@ -291,6 +291,57 @@ fn quit_key_pressed(data: &GameData, input: &Input) -> bool {
         .any(|&(c, pressed)| pressed && matches!(c, Control::Key(k) if data.quit_keys.contains(&k)))
 }
 
+/// The actions handled before a key's console line, which they never
+/// execute (console-key-bindings.md section 5, rules 2 and 4).
+const BEFORE_CONSOLE_LINES: [&str; 6] = [
+    "pause",
+    "screenshot",
+    "quit",
+    "console",
+    "quick_save",
+    "quick_load",
+];
+
+/// The keyboard's and mouse's presses reaching the level this frame
+/// (console-key-bindings.md section 5), the caller having checked rule 3:
+/// each press of a key with a console-line binding, unless the key's
+/// action is handled before it, executes its line and is used up, so the
+/// player character does not get it. The left, right and middle mouse
+/// buttons press `mouse1`, `mouse2` and `mouse3`. Returns whether a line
+/// was executed.
+fn run_bound_lines(console: &mut Console, input: &mut Input) -> bool {
+    use crate::core::input::MouseButton;
+    let presses: Vec<Control> = input
+        .device_changes()
+        .iter()
+        .filter_map(|&(c, pressed)| pressed.then_some(c))
+        .collect();
+    let mut ran = false;
+    for control in presses {
+        let code = match control {
+            Control::Key(k) => k.code(),
+            Control::Mouse(MouseButton::Left) => 337,
+            Control::Mouse(MouseButton::Right) => 338,
+            Control::Mouse(MouseButton::Middle) => 339,
+            Control::Pad(_) | Control::Touch(_) => continue,
+        };
+        let action = console
+            .bound_action(code)
+            .map(|a| crate::core::console::ACTIONS[a].0);
+        if action.is_some_and(|a| BEFORE_CONSOLE_LINES.contains(&a)) {
+            continue;
+        }
+        let Some(line) = console.console_line(code).map(str::to_owned) else {
+            continue;
+        };
+        // As a line the programs execute: not echoed (CC 2).
+        console.exec(&line);
+        input.use_up_press(control);
+        ran = true;
+    }
+    ran
+}
+
 /// One frame of `menu` and its screens.
 #[allow(clippy::too_many_arguments)]
 fn menu_frame(
@@ -838,6 +889,11 @@ impl App {
         }
         self.update_phase(tree, time_ms, input, audio);
         self.alt_f4(input);
+        // A line the console executed ended the program (an unknown key
+        // name, console-key-bindings.md section 2).
+        if let Some(why) = self.console.take_fatal() {
+            self.failed.get_or_insert(why);
+        }
         // A fatal error the level met, or a placed effect's group
         // (particle-groups.md 2.3): the game ends with it.
         if let Some(Phase::Level { level, .. }) = &mut self.phase {
@@ -1481,6 +1537,15 @@ impl App {
                     }
                     self.after_update(audio);
                     return;
+                }
+                // The level takes key presses while it runs with the
+                // player's controls live, the pause off and no window open
+                // (console-key-bindings.md section 5, rule 3; under the
+                // loading image the game is not running yet, our reading).
+                // TODO(#648): the inventory key's press runs its line before
+                // the inventory screen can open.
+                if overlay.is_none() && !self.pause.is_on() {
+                    self.console_touched |= run_bound_lines(&mut self.console, input);
                 }
                 level.update(now, input);
                 // Pointer lock lost while the controls are live opens the menu
@@ -2636,6 +2701,87 @@ mod tests {
         });
         app.update(&tree, 16.0, &mut input, &mut audio);
         (tree, app, input, audio)
+    }
+
+    /// How many log lines are `line`.
+    fn logged(app: &App, line: &str) -> usize {
+        app.console().log().iter().filter(|l| *l == line).count()
+    }
+
+    /// console-key-bindings.md section 5.
+    #[test]
+    fn a_press_reaching_the_level_executes_its_bound_line() {
+        let (tree, mut app, mut input, mut audio) = in_level_with_inventory();
+        let start = "- --- Action list start ---";
+        app.exec("bind_console list_actions kK");
+        app.exec("bind_console list_actions mouse1");
+        app.exec("bind wpn_fire mouse1");
+        // An executed line applies the console's bindings to the level.
+        app.exec("bind inventory kI");
+        press(&mut input, Key::K);
+        app.update(&tree, 32.0, &mut input, &mut audio);
+        input.end_frame();
+        assert_eq!(logged(&app, start), 1);
+        assert!(!app.console().log().iter().any(|l| l.starts_with("~ ")));
+        // The mouse's left button presses mouse1; the press is used up,
+        // its release kept.
+        let left = Control::Mouse(crate::core::input::MouseButton::Left);
+        for pressed in [true, false] {
+            input.handle(Event::PointerButton {
+                at: None,
+                button: crate::core::input::MouseButton::Left,
+                pressed,
+                time: 40.0,
+            });
+        }
+        app.update(&tree, 48.0, &mut input, &mut audio);
+        assert_eq!(logged(&app, start), 2);
+        assert_eq!(input.device_changes(), [(left, false)]);
+        input.end_frame();
+        // Not while a window is open.
+        press(&mut input, Key::I);
+        app.update(&tree, 64.0, &mut input, &mut audio);
+        input.end_frame();
+        assert!(app.inventory_open());
+        press(&mut input, Key::K);
+        app.update(&tree, 80.0, &mut input, &mut audio);
+        input.end_frame();
+        assert_eq!(logged(&app, start), 2);
+    }
+
+    #[test]
+    fn the_quit_key_opens_the_menu_and_never_executes_its_line() {
+        let (tree, mut app, mut input, mut audio) = in_level_with_inventory();
+        app.exec("bind quit kESCAPE");
+        app.exec("bind_console list_actions kESCAPE");
+        press(&mut input, Key::Escape);
+        app.update(&tree, 32.0, &mut input, &mut audio);
+        input.end_frame();
+        assert!(matches!(app.state(), AppState::Level { menu: Some(_), .. }));
+        assert_eq!(logged(&app, "- --- Action list start ---"), 0);
+        // Nor with the menu open.
+        app.exec("bind_console list_actions kK");
+        press(&mut input, Key::K);
+        app.update(&tree, 48.0, &mut input, &mut audio);
+        assert_eq!(logged(&app, "- --- Action list start ---"), 0);
+    }
+
+    #[test]
+    fn an_unknown_key_name_ends_the_game() {
+        let (tree, mut app, mut input, mut audio) = in_level_with_inventory();
+        app.exec("bind_console flush kNOSUCH");
+        app.update(&tree, 32.0, &mut input, &mut audio);
+        let AppState::Menu { menu, .. } = app.state() else {
+            panic!("{:?}", app.state())
+        };
+        assert!(menu.error.unwrap().contains("knosuch"));
+        assert_eq!(
+            logged(
+                &app,
+                "! cant find corresponding [_keyboard*] for keyname knosuch"
+            ),
+            1
+        );
     }
 
     #[test]

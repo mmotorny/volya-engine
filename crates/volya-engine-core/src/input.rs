@@ -839,6 +839,27 @@ impl Input {
         &self.device_changes
     }
 
+    /// Uses up the keyboard's or mouse's first press of `control` this
+    /// frame: whoever reads the frame after sees no such press, while the
+    /// control stays held and its release stays (a press a bound console
+    /// line took, docs/behavior/console-key-bindings.md section 5, rule 5).
+    pub fn use_up_press(&mut self, control: Control) {
+        if let Some(at) = self
+            .device_changes
+            .iter()
+            .position(|&c| c == (control, true))
+        {
+            self.device_changes.remove(at);
+        }
+        if let Some(at) = self
+            .actions
+            .iter()
+            .position(|a| matches!(a, Action::Press { control: c, .. } if *c == control))
+        {
+            self.actions.remove(at);
+        }
+    }
+
     /// The keyboard's key presses (`true`) and releases this frame by key
     /// code, in order: the key events of docs/behavior/console-input.md
     /// section 1.
@@ -1669,6 +1690,29 @@ mod tests {
         assert!(input.pointer_unlocked());
         input.end_frame();
         assert!(!input.pointer_unlocked());
+    }
+
+    #[test]
+    fn a_used_up_press_stays_held_and_keeps_its_release() {
+        let mut input = Input::new();
+        let w = Control::Key(Key::W);
+        for pressed in [true, false, true] {
+            input.handle(Event::Key {
+                key: Key::W,
+                pressed,
+            });
+        }
+        input.use_up_press(w);
+        assert_eq!(input.device_changes(), [(w, false), (w, true)]);
+        assert_eq!(
+            input
+                .actions()
+                .iter()
+                .filter(|a| matches!(a, Action::Press { .. }))
+                .count(),
+            1
+        );
+        assert!(input.is_held(w));
     }
 
     #[test]
