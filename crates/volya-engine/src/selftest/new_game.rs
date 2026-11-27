@@ -526,8 +526,9 @@ pub async fn placed_effects_are_drawn(cx: &Context<'_>) -> Outcome {
     // Where the particles project: each quad's centre on screen.
     let (view, projection) = screen.view_projection(SIZE.width, SIZE.height);
     let vp = crate::render::world::multiply(&view, &projection);
-    let centres: Vec<[f32; 2]> = draws[0]
-        .vertices
+    let range = draws[0].vertices.start as usize..draws[0].vertices.end as usize;
+    let vertices = &scene.world.as_ref().ok_or("world")?.particle_vertices[range];
+    let centres: Vec<[f32; 2]> = vertices
         .chunks(4)
         .filter_map(|q| {
             let p: Vec<f32> = (0..3)

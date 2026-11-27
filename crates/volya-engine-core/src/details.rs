@@ -601,23 +601,37 @@ impl Details {
         }
         let previous = self.last_pass.is_some_and(|f| f + 1 == pass.frame);
         self.last_pass = Some(pass.frame);
-        let frame = if previous {
-            self.update(pass.eye, pass.density, collision, random);
-            std::sync::Arc::new(self.select(pass, random, &mut visible))
-        } else {
-            Default::default()
+        // The latest frame's lists, refilled in place once the frame drawn
+        // with them has let them go (docs/architecture/memory.md rule 5).
+        let mut frame = match self.selected.take() {
+            Some((_, f)) if std::sync::Arc::strong_count(&f) == 1 => f,
+            _ => Default::default(),
         };
+        let out = std::sync::Arc::get_mut(&mut frame).expect("held once");
+        if std::sync::Arc::get_mut(&mut out.instances).is_none() {
+            out.instances = Default::default();
+        }
+        let instances = std::sync::Arc::get_mut(&mut out.instances).expect("held once");
+        instances.clear();
+        out.draws.clear();
+        if previous {
+            self.update(pass.eye, pass.density, collision, random);
+            self.select(pass, random, &mut visible, instances, &mut out.draws);
+        }
         self.selected = Some((pass.frame, frame.clone()));
         frame
     }
 
-    /// The selection (5.2 – 5.4).
+    /// The selection (5.2 – 5.4), into the frame's empty `instances` and
+    /// `draws`.
     fn select(
         &mut self,
         pass: &Pass,
         random: &mut Generator,
         visible: &mut impl FnMut(&mut Cached, Vec3, Vec3, &mut Generator) -> bool,
-    ) -> DetailFrame {
+        instances: &mut Vec<DrawnInstance>,
+        draws: &mut Vec<DetailDraw>,
+    ) {
         let planes = frustum(&pass.view_projection);
         let mut chosen = std::mem::take(&mut self.chosen);
         chosen.clear();
@@ -681,8 +695,6 @@ impl Details {
             }
         }
         self.chosen = chosen;
-        let mut draws = Vec::new();
-        let mut instances = Vec::new();
         for list in [SWAY_1, SWAY_2, STILL] {
             for model in 0..models {
                 let drawn = &self.collect[list * models + model];
@@ -697,10 +709,6 @@ impl Details {
                 });
                 instances.extend_from_slice(drawn);
             }
-        }
-        DetailFrame {
-            instances: std::sync::Arc::new(instances),
-            draws,
         }
     }
 

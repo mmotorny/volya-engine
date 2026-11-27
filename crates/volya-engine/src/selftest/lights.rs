@@ -166,7 +166,7 @@ pub async fn a_hanging_lamp_and_its_glow(cx: &Context<'_>) -> Outcome {
     let (pixels, scene, _, _) = frame(&mut r, &mut presenter, tree, &screen).await?;
     let mut bare = scene.clone();
     if let Some(w) = bare.world.as_mut() {
-        w.glows.clear();
+        w.glows = Default::default();
     }
     let list = presenter.draw_list(&mut r, tree, &bare, 16);
     let without = capture(&mut r, &list, SIZE.width, SIZE.height).await?;

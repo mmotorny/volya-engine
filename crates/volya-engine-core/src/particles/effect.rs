@@ -180,7 +180,7 @@ impl EffectInstance {
             } else {
                 &moved
             };
-            a.placed = place_action(&a.stored, m, w);
+            place_action(&a.stored, m, w, &mut a.placed);
         }
     }
 
@@ -335,11 +335,15 @@ pub fn time_limit_step(t: f32) -> u64 {
 }
 
 /// An action's fields placed by `m` and the effect's velocity `w`
-/// (P2 5.2).
-fn place_action(stored: &ActionKind, m: &Matrix, w: Vec3) -> ActionKind {
-    let mut a = stored.clone();
+/// (P2 5.2), into `a` (a source's box reused: placing allocates nothing,
+/// #516).
+fn place_action(stored: &ActionKind, m: &Matrix, w: Vec3, a: &mut ActionKind) {
+    match (&mut *a, stored) {
+        (ActionKind::Source(a), ActionKind::Source(s)) => a.clone_from(s),
+        (a, s) => *a = s.clone(),
+    }
     let turned = without_translation(m);
-    match &mut a {
+    match a {
         ActionKind::Bounce { surface, .. } => *surface = place(surface, m),
         ActionKind::Jet {
             centre,
@@ -370,7 +374,6 @@ fn place_action(stored: &ActionKind, m: &Matrix, w: Vec3) -> ActionKind {
         }
         _ => {}
     }
-    a
 }
 
 #[cfg(test)]

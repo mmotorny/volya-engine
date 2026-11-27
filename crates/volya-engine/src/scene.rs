@@ -175,15 +175,21 @@ pub struct WorldScene {
     /// Hidden under an opaque picture: kept on the GPU but not drawn.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub covered: bool,
-    /// The particle effects drawn (docs/behavior/particle-drawing.md).
-    pub particles: Vec<crate::particle_drawing::ParticleDraw>,
+    /// The particle effects drawn (docs/behavior/particle-drawing.md),
+    /// and their sprites' vertices. The level's lists, kept and refilled
+    /// each frame (docs/architecture/memory.md rule 5), as are the lights'
+    /// and the glows'.
+    #[serde(serialize_with = "shared_list")]
+    pub particles: Arc<Vec<crate::particle_drawing::ParticleDraw>>,
+    #[serde(skip)]
+    pub particle_vertices: Arc<Vec<crate::render::particles::ParticleVertex>>,
     /// The dynamic light passes (docs/behavior/dynamic-lights.md 5).
     #[serde(skip)]
-    pub lights: Vec<crate::core::lights::LightPass>,
+    pub lights: Arc<Vec<crate::core::lights::LightPass>>,
     /// The glows' sprites (docs/behavior/glows.md 6), by
     /// [`crate::level::LevelWorld::glow_shaders`].
     #[serde(skip)]
-    pub glows: Vec<crate::core::glows::GlowSprite>,
+    pub glows: Arc<Vec<crate::core::glows::GlowSprite>>,
     /// The detail objects drawn (docs/behavior/detail-objects.md).
     #[serde(skip)]
     pub details: Option<crate::level_details::DetailsScene>,
@@ -207,17 +213,14 @@ impl PartialEq for WorldScene {
             && self.sky == other.sky
             && self.covered == other.covered
             && self.particles == other.particles
+            && self.particle_vertices == other.particle_vertices
             && self.lights == other.lights
             && self.glows == other.glows
-            && self.seen.as_ref().map(Arc::as_ptr) == other.seen.as_ref().map(Arc::as_ptr)
-            && self
-                .details
-                .as_ref()
-                .map(|d| std::sync::Arc::as_ptr(&d.frame))
-                == other
-                    .details
-                    .as_ref()
-                    .map(|d| std::sync::Arc::as_ptr(&d.frame))
+            // The lists are refilled in place: the same lists are those of
+            // the same pass.
+            && self.seen.as_ref().map(|s| (Arc::as_ptr(s), s.pass))
+                == other.seen.as_ref().map(|s| (Arc::as_ptr(s), s.pass))
+            && self.details.as_ref().map(|d| &*d.frame) == other.details.as_ref().map(|d| &*d.frame)
     }
 }
 
@@ -282,6 +285,13 @@ impl Lens {
 
 fn resolution<S: serde::Serializer>(r: &Resolution, s: S) -> Result<S::Ok, S::Error> {
     s.collect_seq([r.width, r.height])
+}
+
+fn shared_list<S: serde::Serializer, T: Serialize>(
+    list: &Arc<Vec<T>>,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    s.collect_seq(list.iter())
 }
 
 impl Scene {

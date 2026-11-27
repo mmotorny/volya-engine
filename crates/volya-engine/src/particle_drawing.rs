@@ -198,7 +198,8 @@ fn cull(flags: u32) -> ParticleCull {
 }
 
 /// One effect's sprites with one pass of its shader, as the scene holds
-/// them; the presenter gives the pass its textures.
+/// them (their vertices a range of the frame's one list); the presenter
+/// gives the pass its textures.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ParticleDraw {
     /// The effect's index in the library.
@@ -211,8 +212,9 @@ pub struct ParticleDraw {
     pub cull: ParticleCull,
     pub key: f32,
     pub particles: usize,
+    /// Its vertices in the frame's list.
     #[serde(skip)]
-    pub vertices: Vec<ParticleVertex>,
+    pub vertices: std::ops::Range<u32>,
 }
 
 /// The view frustum's planes from `view_projection` (row-vector clip =
@@ -279,15 +281,19 @@ thread_local! {
 /// sprites built for `camera` (7.1 step 2, 7.2): each effect the record
 /// holds whose shader has a pass, with its key |**E** − **C**′|² + 10⁻⁵
 /// and its screen measure above `ssa_min` (*T*\_min of level.md 9.4).
+/// Into `out`, the sprites' vertices into `vertices` (both cleared first;
+/// an effect's passes share its range).
 pub fn queue(
     effects: &PlacedEffects,
     records: &[usize],
     shaders: &[Option<ParticleShader<String>>],
     camera: &Camera,
     ssa_min: f32,
-) -> Vec<ParticleDraw> {
+    (out, vertices): (&mut Vec<ParticleDraw>, &mut Vec<ParticleVertex>),
+) {
     let library = effects.library();
-    let mut out = Vec::new();
+    out.clear();
+    vertices.clear();
     // The level's effect objects keep the identity transform (P8 3).
     let t: Matrix = IDENTITY;
     for &r in records {
@@ -310,20 +316,17 @@ pub fn queue(
             if s.radius / key <= ssa_min {
                 continue;
             }
-            // The sprites built once into a scratch of their size, then
-            // copied into each draw's own list, sized exactly.
+            // The sprites built once, into the frame's list.
             let mut scratch = SCRATCH.take();
             scratch.clear();
             sprite::quads(record, e, camera, &mut scratch);
-            let vertices = || -> Vec<ParticleVertex> {
-                let mut v = Vec::with_capacity(scratch.len());
-                v.extend(scratch.iter().map(|v| ParticleVertex {
-                    position: v.position,
-                    colour: v.colour,
-                    uv: v.uv,
-                }));
-                v
-            };
+            let first = vertices.len() as u32;
+            vertices.extend(scratch.iter().map(|v| ParticleVertex {
+                position: v.position,
+                colour: v.colour,
+                uv: v.uv,
+            }));
+            let range = first..vertices.len() as u32;
             let draw = |distortion: bool, queue: ParticleQueue| ParticleDraw {
                 effect: i,
                 distortion,
@@ -331,7 +334,7 @@ pub fn queue(
                 cull: cull(record.flags),
                 key,
                 particles: e.particles().len(),
-                vertices: vertices(),
+                vertices: range.clone(),
             };
             if shader.distortion.is_some() {
                 out.push(draw(true, ParticleQueue::Distortion));
@@ -342,7 +345,6 @@ pub fn queue(
             SCRATCH.set(scratch);
         }
     }
-    out
 }
 
 #[cfg(test)]

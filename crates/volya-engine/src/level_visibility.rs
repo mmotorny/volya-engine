@@ -338,6 +338,8 @@ impl LevelVisibility {
 /// (visibility-scope.md 5, 6): nothing without a camera sector.
 #[derive(Clone, Debug, Default)]
 pub struct Seen {
+    /// Which pass filled the lists: changes with each pass.
+    pub pass: u64,
     /// By draw item: the static draws of the visuals the pass reached.
     pub items: Vec<bool>,
     /// By object instance: those drawn.
@@ -360,9 +362,18 @@ pub struct Seen {
 /// 3): each entry of the fade list, nearest first from `eye` (equal
 /// distances in list order, unestablished), its polygon's fan in the
 /// weather's `ambient` colour with the alpha of its measure.
-pub fn portal_fade(visibility: &LevelVisibility, eye: Vec3, ambient: Vec3) -> Vec<ParticleVertex> {
+/// Into `out` (cleared first), with `entries` the list's working copy.
+pub fn portal_fade_into(
+    visibility: &LevelVisibility,
+    eye: Vec3,
+    ambient: Vec3,
+    out: &mut Vec<ParticleVertex>,
+    entries: &mut Vec<(f32, u32, u16, f32)>,
+) {
+    out.clear();
+    entries.clear();
     let Some(t) = visibility.thresholds() else {
-        return Vec::new();
+        return;
     };
     // The binary's conversion: truncation toward zero, +∞ giving 1.
     let byte = |x: f32| -> u32 {
@@ -373,16 +384,17 @@ pub fn portal_fade(visibility: &LevelVisibility, eye: Vec3, ambient: Vec3) -> Ve
         }
     };
     let [r, g, b] = ambient.map(|a| byte(255.0 * a));
-    let mut entries: Vec<(f32, u16, f32)> = (visibility.frame.traversal.fade.iter())
-        .filter_map(|&(p, m)| {
+    entries.extend(
+        (visibility.frame.traversal.fade.iter().enumerate()).filter_map(|(i, &(p, m))| {
             let (_, c) = visibility.portal(p)?;
             let d = [c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]];
-            Some(((d[0] * d[0] + d[1] * d[1]) + d[2] * d[2], p, m))
-        })
-        .collect();
-    entries.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let mut out = Vec::new();
-    for (_, p, m) in entries {
+            Some(((d[0] * d[0] + d[1] * d[1]) + d[2] * d[2], i as u32, p, m))
+        }),
+    );
+    // Equal distances in list order, as a stable sort keeps them, without
+    // the stable sort's buffer.
+    entries.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    for &(_, _, p, m) in entries.iter() {
         let Some((polygon, _)) = visibility.portal(p) else {
             continue;
         };
@@ -398,5 +410,4 @@ pub fn portal_fade(visibility: &LevelVisibility, eye: Vec3, ambient: Vec3) -> Ve
             out.extend([corner(v0), corner(v1), corner(v2), corner(v2)]);
         }
     }
-    out
 }

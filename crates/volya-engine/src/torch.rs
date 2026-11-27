@@ -232,6 +232,8 @@ pub struct PlayerTorches {
     level: String,
     torches: Vec<PlayerTorch>,
     sounds: Vec<TorchSound>,
+    /// [`PlayerTorches::sync`]'s sections attached, kept between frames.
+    attached_sections: Vec<usize>,
 }
 
 /// The effect section of the outfit in slot 6 (15.1).
@@ -288,7 +290,6 @@ impl PlayerTorches {
     // TODO(#362): a torch that leaves the inventory is not placed in the
     // world (dropped items are not, #111), so it goes with its lights.
     pub fn sync(&mut self, character: &mut CharacterState, lights: &mut Lights, glows: &mut Glows) {
-        let outfit = outfit_effect(character).map(str::to_owned);
         let inv = &character.inventory;
         let mut k = 0;
         while k < self.torches.len() {
@@ -302,7 +303,7 @@ impl PlayerTorches {
             t.torch.leave(
                 PLAYER,
                 PLAYER_SETTING,
-                outfit.as_deref(),
+                outfit_effect(character),
                 disabled,
                 lights,
                 glows,
@@ -350,7 +351,8 @@ impl PlayerTorches {
                 attached: false,
             });
         }
-        let mut attached_sections: Vec<usize> = Vec::new();
+        let attached_sections = &mut self.attached_sections;
+        attached_sections.clear();
         for t in &mut self.torches {
             let Some(item) = inv.items.iter().find(|i| i.id == t.id) else {
                 continue;

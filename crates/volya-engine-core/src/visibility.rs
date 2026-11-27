@@ -41,13 +41,46 @@ fn distance(p: &Plane, v: Vec3) -> f32 {
     p[0] * v[0] + p[1] * v[1] + p[2] * v[2] + p[3]
 }
 
-/// A convex volume bounded by planes.
-#[derive(Clone, Debug, PartialEq)]
+/// The most planes a frustum has: through a portal, six edge planes (a
+/// polygon beyond six vertices is replaced by its rectangle), the portal
+/// plane and the far plane (traversal-options.md 5).
+pub const MAX_PLANES: usize = 8;
+
+/// A convex volume bounded by planes, held inline so that making one
+/// allocates nothing (docs/architecture/memory.md rule 5).
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Frustum {
-    pub planes: Vec<Plane>,
+    planes: [Plane; MAX_PLANES],
+    len: u8,
 }
 
 impl Frustum {
+    /// The frustum bounded by `planes`.
+    ///
+    /// # Panics
+    ///
+    /// With more than [`MAX_PLANES`] planes.
+    pub fn new(planes: &[Plane]) -> Self {
+        let mut f = Self {
+            planes: [[0.0; 4]; MAX_PLANES],
+            len: 0,
+        };
+        for &p in planes {
+            f.push(p);
+        }
+        f
+    }
+
+    fn push(&mut self, p: Plane) {
+        self.planes[usize::from(self.len)] = p;
+        self.len += 1;
+    }
+
+    /// Its planes, in order.
+    pub fn planes(&self) -> &[Plane] {
+        &self.planes[..usize::from(self.len)]
+    }
+
     /// The camera pass's view frustum from the view-projection `m`
     /// (row-vector clip = (p, 1) · M, −w ≤ x, y ≤ w, z ≤ w): the left,
     /// right, bottom, top and far planes and no near plane
@@ -60,21 +93,19 @@ impl Frustum {
             p.map(|v| v / l)
         };
         let add = |a: Plane, b: Plane, s: f32| std::array::from_fn(|i| a[i] + s * b[i]);
-        Self {
-            planes: vec![
-                plane(add(w, x, 1.0)),
-                plane(add(w, x, -1.0)),
-                plane(add(w, y, 1.0)),
-                plane(add(w, y, -1.0)),
-                plane(add(w, z, -1.0)),
-            ],
-        }
+        Self::new(&[
+            plane(add(w, x, 1.0)),
+            plane(add(w, x, -1.0)),
+            plane(add(w, y, 1.0)),
+            plane(add(w, y, -1.0)),
+            plane(add(w, z, -1.0)),
+        ])
     }
 
     /// Whether the sphere is not outside: for no plane does its centre lie
     /// outside by more than its radius.
     pub fn meets(&self, centre: Vec3, radius: f32) -> bool {
-        self.planes.iter().all(|p| distance(p, centre) >= -radius)
+        self.planes().iter().all(|p| distance(p, centre) >= -radius)
     }
 
     /// The sphere-and-box test (occlusion-tests.md 7) of the sphere
@@ -90,7 +121,7 @@ impl Frustum {
         max: Vec3,
     ) -> Option<u32> {
         let mut remain = planes;
-        for (i, p) in self.planes.iter().enumerate() {
+        for (i, p) in self.planes().iter().enumerate() {
             if planes >> i & 1 == 0 {
                 continue;
             }
@@ -127,33 +158,35 @@ impl Frustum {
 
     /// Every plane, as [`Frustum::sphere_box`] takes them.
     pub fn all(&self) -> u32 {
-        (1u32 << self.planes.len()) - 1
+        (1u32 << self.len) - 1
     }
 
-    /// The convex `polygon` clipped against every plane; fewer than three
-    /// vertices left is empty (our choice: such a remainder has no area).
-    pub fn clip(&self, polygon: &[Vec3]) -> Vec<Vec3> {
-        let mut poly = polygon.to_vec();
-        let mut next = Vec::with_capacity(poly.len() + 4);
-        for p in &self.planes {
-            next.clear();
-            for (i, &a) in poly.iter().enumerate() {
-                let b = poly[(i + 1) % poly.len()];
+    /// The convex `polygon` clipped against every plane, into `out`
+    /// (`scratch` its working list; both kept by the caller); fewer than
+    /// three vertices left is empty (our choice: such a remainder has no
+    /// area).
+    pub fn clip(&self, polygon: &[Vec3], out: &mut Vec<Vec3>, scratch: &mut Vec<Vec3>) {
+        out.clear();
+        out.extend_from_slice(polygon);
+        for p in self.planes() {
+            scratch.clear();
+            for (i, &a) in out.iter().enumerate() {
+                let b = out[(i + 1) % out.len()];
                 let (da, db) = (distance(p, a), distance(p, b));
                 if da >= 0.0 {
-                    next.push(a);
+                    scratch.push(a);
                 }
                 if (da >= 0.0) != (db >= 0.0) {
                     let t = da / (da - db);
-                    next.push(std::array::from_fn(|k| a[k] + (b[k] - a[k]) * t));
+                    scratch.push(std::array::from_fn(|k| a[k] + (b[k] - a[k]) * t));
                 }
             }
-            std::mem::swap(&mut poly, &mut next);
-            if poly.len() < 3 {
-                return Vec::new();
+            std::mem::swap(out, scratch);
+            if out.len() < 3 {
+                out.clear();
+                return;
             }
         }
-        poly
     }
 
     /// The far plane `z ≤ w` of the row-vector matrix `m`
@@ -181,10 +214,14 @@ impl Frustum {
         // The spec's plane through `p` with normal `n`, negated.
         let plane = |n: Vec3, p: Vec3| [-n[0], -n[1], -n[2], dot(n, p)];
         let normal = |v: &[Vec3]| unit(cross(sub(v[0], v[1]), sub(v[0], v[2])));
-        let mut poly = polygon.to_vec();
+        // The polygon as at most six vertices, inline.
+        let mut held = [[0.0; 3]; 6];
+        let mut len = polygon.len().min(6);
+        held[..len].copy_from_slice(&polygon[..len]);
         // Item 1.
-        if poly.len() > 6 {
-            let n = normal(&poly);
+        if polygon.len() > 6 {
+            let poly = polygon;
+            let n = normal(poly);
             let r = if n[1].abs() > 0.99 {
                 [1.0, 0.0, 0.0]
             } else {
@@ -194,30 +231,32 @@ impl Frustum {
             let w = cross(n, u);
             let o = poly[0];
             let (mut a0, mut a1, mut b0, mut b1) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
-            for &v in &poly {
+            for &v in poly {
                 let (a, b) = (dot(sub(v, o), u), dot(sub(v, o), w));
                 (a0, a1, b0, b1) = (a0.min(a), a1.max(a), b0.min(b), b1.max(b));
             }
             let at = |a: f32, b: f32| std::array::from_fn(|k| o[k] + a * u[k] + b * w[k]);
             // Counter-clockwise about n, as the polygon was.
-            poly = vec![at(a0, b0), at(a1, b0), at(a1, b1), at(a0, b1)];
+            len = 4;
+            held[..4].copy_from_slice(&[at(a0, b0), at(a1, b0), at(a1, b1), at(a0, b1)]);
         }
+        let poly = &mut held[..len];
         // Item 2.
-        let mut n = normal(&poly);
+        let mut n = normal(poly);
         if dot(n, eye) - dot(n, poly[0]) < 0.0 {
             poly.reverse();
-            n = normal(&poly);
+            n = normal(poly);
         }
         let portal = plane(n, poly[0]);
         // Items 3 – 5.
-        let mut planes = Vec::with_capacity(poly.len() + 2);
+        let mut planes = Self::new(&[]);
         for (i, &a) in poly.iter().enumerate() {
             let b = poly[(i + 1) % poly.len()];
             planes.push(plane(unit(cross(sub(eye, a), sub(eye, b))), eye));
         }
         planes.push(portal);
         planes.push(Self::far(m));
-        Self { planes }
+        planes
     }
 }
 
@@ -332,6 +371,9 @@ pub struct PassBuffers {
     touched: Vec<bool>,
     drawn: Vec<bool>,
     stack: Vec<(u32, u32)>,
+    /// A portal's polygon as clipped, and the clip's working list.
+    clipped: Vec<Vec3>,
+    clip_scratch: Vec<Vec3>,
 }
 
 impl Sectors {
@@ -504,6 +546,8 @@ impl Sectors {
             m,
             passed: &mut buffers.passed,
             touched: &mut buffers.touched,
+            clipped: &mut buffers.clipped,
+            clip_scratch: &mut buffers.clip_scratch,
             hidden,
             out,
         };
@@ -707,6 +751,8 @@ struct Walk<'a, H> {
     m: &'a Mat4,
     passed: &'a mut Vec<bool>,
     touched: &'a mut Vec<bool>,
+    clipped: &'a mut Vec<Vec3>,
+    clip_scratch: &'a mut Vec<Vec3>,
     hidden: &'a mut H,
     out: &'a mut Traversal,
 }
@@ -721,7 +767,7 @@ impl<H: FnMut(&[Vec3]) -> bool> Walk<'_, H> {
         if self.out.frusta[s].is_empty() {
             self.out.visited.push(sector);
         }
-        self.out.frusta[s].push(frustum.clone());
+        self.out.frusta[s].push(frustum);
         for &p in &self.sectors.sector_portals[s] {
             let portal = &self.sectors.portals[usize::from(p)];
             let p = usize::from(p);
@@ -762,18 +808,19 @@ impl<H: FnMut(&[Vec3]) -> bool> Walk<'_, H> {
                 }
             }
             // Rule 5.
-            let clipped = frustum.clip(&portal.polygon);
-            if clipped.is_empty() {
+            frustum.clip(&portal.polygon, self.clipped, self.clip_scratch);
+            if self.clipped.is_empty() {
                 continue;
             }
             // Rule 6 (traversal-options.md 2.3).
-            if self.options.occlusion && (self.hidden)(&clipped) {
+            if self.options.occlusion && (self.hidden)(self.clipped) {
                 continue;
             }
             self.passed[p] = true;
             self.touched[p] = false;
-            // Touched or not (traversal-options.md 5).
-            let narrowed = Frustum::through(self.eye, &clipped, self.m);
+            // Touched or not (traversal-options.md 5); the clipped polygon
+            // is done with before the target is entered.
+            let narrowed = Frustum::through(self.eye, self.clipped, self.m);
             self.enter(target, narrowed);
         }
     }

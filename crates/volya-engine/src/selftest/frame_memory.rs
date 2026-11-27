@@ -103,7 +103,8 @@ pub async fn level_frame_heap_traffic(cx: &Context<'_>) -> Outcome {
         let scene = level.scene(SIZE, ms);
         part(2, &mut at);
         let list = presenter.draw_list(&mut renderer, tree, &scene, ms);
-        drop((list, scene));
+        drop(scene);
+        presenter.recycle(list);
         part(3, &mut at);
         if measured {
             worst = worst.max(at.allocations - start.allocations);

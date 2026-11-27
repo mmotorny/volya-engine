@@ -189,7 +189,7 @@ pub async fn draw_calls_from_game_data(cx: &Context<'_>) -> Outcome {
             let mut scene = screen.scene(SIZE, 0);
             scene.presentation = presentation;
             if let Some(w) = scene.world.as_mut() {
-                w.particles.clear();
+                w.particles = Default::default();
             }
             // Drawn a few times: the same list doesn't always give the same
             // pixels (measured on the Mac's GPU: a few hundred, on the trees
@@ -328,7 +328,7 @@ pub async fn gpu_cost_from_game_data(cx: &Context<'_>) -> Outcome {
             if supersample == 2 {
                 let mut v = scene.clone();
                 if let Some(w) = v.world.as_mut() {
-                    w.particles.clear();
+                    w.particles = Default::default();
                 }
                 variants.push(("no particles", v));
                 let mut v = scene.clone();
@@ -338,8 +338,8 @@ pub async fn gpu_cost_from_game_data(cx: &Context<'_>) -> Outcome {
                 variants.push(("no details", v));
                 let mut v = scene.clone();
                 if let Some(w) = v.world.as_mut() {
-                    w.lights.clear();
-                    w.glows.clear();
+                    w.lights = Default::default();
+                    w.glows = Default::default();
                 }
                 variants.push(("no lights or glows", v));
                 let mut v = scene.clone();

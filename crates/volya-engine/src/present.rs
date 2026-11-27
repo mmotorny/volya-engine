@@ -146,8 +146,11 @@ fn load_texture(
 
 /// The portal fade's batch (portal-fade.md 2 – 5) of its triangles
 /// `fade`, none without any: `portal` with alpha blending, depth tested,
-/// no depth writes, no culling.
-fn fade_batch(fade: &[crate::render::particles::ParticleVertex]) -> Option<ParticleBatch> {
+/// no depth writes, no culling; its vertices into the list `vertices` gives.
+fn fade_batch(
+    fade: &[crate::render::particles::ParticleVertex],
+    vertices: impl FnOnce() -> Vec<ParticleVertex>,
+) -> Option<ParticleBatch> {
     (!fade.is_empty()).then(|| ParticleBatch {
         pass: RenderPass {
             program: ParticleProgram::Portal,
@@ -160,8 +163,36 @@ fn fade_batch(fade: &[crate::render::particles::ParticleVertex]) -> Option<Parti
         queue: ParticleQueue::Fade,
         cull: ParticleCull::None,
         key: 0.0,
-        vertices: fade.to_vec(),
+        vertices: {
+            let mut vertices = vertices();
+            vertices.extend_from_slice(fade);
+            vertices
+        },
     })
+}
+
+/// The lists of a drawn frame given back ([`Presenter::recycle`]), emptied,
+/// for the next frame's draw list (docs/architecture/memory.md rule 5).
+#[derive(Default)]
+struct Spares {
+    quads: Vec<Quad>,
+    batches: Vec<ParticleBatch>,
+    /// The batches' vertex lists.
+    vertices: Vec<Vec<ParticleVertex>>,
+    lights: Vec<LightPass>,
+    detail_draws: Vec<DetailDraw>,
+    cells: Vec<Arc<ProjectedCell>>,
+    receivers: Vec<ProjectedReceiver>,
+    /// By object instance: its receiver's index (the projected lights).
+    slot_of: Vec<Option<u32>>,
+    /// The glows by shader, then in order: (shader, sprite).
+    glows: Vec<(u32, u32)>,
+}
+
+impl Spares {
+    fn vertices(&mut self) -> Vec<ParticleVertex> {
+        self.vertices.pop().unwrap_or_default()
+    }
 }
 
 /// The objects' geometry of `level`, taken (once), with the static
@@ -235,6 +266,9 @@ fn world_draws(level: &LevelWorld, windows_at: u32) -> Vec<WorldDraw> {
         .collect()
 }
 
+/// A camera pass's lists by their address and pass ([`Seen::pass`]).
+type PassKey = (usize, u64);
+
 /// GPU resources of the scenes drawn.
 #[derive(Default)]
 pub struct Presenter {
@@ -255,8 +289,10 @@ pub struct Presenter {
     static_draw_of: Vec<Option<u32>>,
     /// The projected light cells as last handed to the renderer, by slot.
     projected_cells: std::cell::RefCell<HashMap<u32, Arc<ProjectedCell>>>,
-    /// The latest camera pass's draws and the world draws they keep.
-    drawn: Option<(Arc<Seen>, Arc<Vec<bool>>)>,
+    /// The latest camera pass's lists (their address and pass) and the
+    /// world draws they keep. The lists are not held, so the level refills
+    /// them in place (docs/architecture/memory.md rule 5).
+    drawn: Option<(PassKey, Arc<Vec<bool>>)>,
     /// The level's effect shaders with their textures, by library index
     /// (particle-drawing.md 5.1), loaded with the world.
     particle_shaders: Vec<Option<ParticleShader<Texture>>>,
@@ -273,6 +309,7 @@ pub struct Presenter {
     /// textures loaded now (texture-quality-filtering.md 1.3, 2).
     quality: TextureQuality,
     errors: Vec<String>,
+    spares: Spares,
 }
 
 /// A level's geometry on its way to the GPU before the level shows (#184).
@@ -446,6 +483,7 @@ impl Presenter {
                 .map_err(|e| self.errors.push(format!("{}: {e}", scene.world.dir)))
                 .ok();
             self.world = Some((scene.world.clone(), world));
+            self.drawn = None;
         }
         let world = self.world.as_ref()?.1.clone()?;
         self.place_objects(renderer, &world, scene);
@@ -474,40 +512,41 @@ impl Presenter {
             // the sky box encloses the eye; sky.md 14) and without a sky.
             clear: e.fog_rgb(),
             particles: {
-                let mut batches = self.particle_batches(&scene.particles);
-                batches.extend(self.glow_batches(&scene.glows));
-                batches.extend(scene.seen.as_ref().and_then(|s| fade_batch(&s.fade)));
+                let mut batches = std::mem::take(&mut self.spares.batches);
+                self.particle_batches(scene, &mut batches);
+                self.glow_batches(&scene.glows, &mut batches);
+                let fade = scene.seen.as_ref().map_or(&[][..], |s| &s.fade[..]);
+                batches.extend(fade_batch(fade, || self.spares.vertices()));
                 batches
             },
-            lights: scene
-                .lights
-                .iter()
-                .map(|l| LightPass {
+            lights: {
+                let mut lights = std::mem::take(&mut self.spares.lights);
+                lights.extend(scene.lights.iter().map(|l| LightPass {
                     spot: l.spot,
                     position: l.position,
                     colour: l.colour,
                     xform: l.xform,
                     frustum: l.frustum,
-                })
-                .collect(),
+                }));
+                lights
+            },
             presentation: Default::default(),
             filtering: Default::default(),
             geometry_lod: GEOMETRY_LOD,
             effects: None,
             projected: scene.seen.as_ref().map(|s| self.projected(&scene.world, s)),
-            billboards: (scene.seen.as_ref())
-                .map(|s| s.billboards.clone())
-                .filter(|b| !b.draws.is_empty()),
             details: scene.details.as_ref().map(|d| DetailFrame {
                 instances: d.frame.instances.clone(),
-                draws: (d.frame.draws.iter())
-                    .map(|d| DetailDraw {
+                draws: {
+                    let mut draws = std::mem::take(&mut self.spares.detail_draws);
+                    draws.extend(d.frame.draws.iter().map(|d| DetailDraw {
                         model: d.model,
                         list: d.list,
                         first: d.first,
                         count: d.count,
-                    })
-                    .collect(),
+                    }));
+                    draws
+                },
                 sway: [
                     d.sway.amp1,
                     d.sway.amp2,
@@ -517,6 +556,9 @@ impl Presenter {
                 ],
                 time: d.time,
             }),
+            billboards: (scene.seen.as_ref())
+                .map(|s| s.billboards.clone())
+                .filter(|b| !b.draws.is_empty()),
         })
     }
 
@@ -525,38 +567,40 @@ impl Presenter {
     /// The projected light texture's part of the frame
     /// (object-projected-light.md): the cells drawn, with their draws as
     /// the world's, and every object draw of each receiver.
-    fn projected(&self, level: &LevelWorld, seen: &Seen) -> ProjectedFrame {
+    fn projected(&mut self, level: &LevelWorld, seen: &Seen) -> ProjectedFrame {
         let mut cached = self.projected_cells.borrow_mut();
-        let cells = (seen.cells.iter())
-            .map(|c| {
-                if let Some(p) = cached.get(&c.slot)
-                    && p.version == c.version
-                {
-                    return p.clone();
-                }
-                let p = Arc::new(ProjectedCell {
-                    version: c.version,
-                    slot: c.slot,
-                    view_projection: cell_view_projection(c.centre, c.h),
-                    clear: c.clear,
-                    draws: (c.draws.iter())
-                        .filter_map(|&d| *self.static_draw_of.get(d as usize)?)
-                        .collect(),
-                });
-                cached.insert(c.slot, p.clone());
-                p
-            })
-            .collect();
-        let mut receivers = Vec::new();
+        let mut cells = std::mem::take(&mut self.spares.cells);
+        cells.extend((seen.cells.iter()).map(|c| {
+            if let Some(p) = cached.get(&c.slot)
+                && p.version == c.version
+            {
+                return p.clone();
+            }
+            let p = Arc::new(ProjectedCell {
+                version: c.version,
+                slot: c.slot,
+                view_projection: cell_view_projection(c.centre, c.h),
+                clear: c.clear,
+                draws: (c.draws.iter())
+                    .filter_map(|&d| *self.static_draw_of.get(d as usize)?)
+                    .collect(),
+            });
+            cached.insert(c.slot, p.clone());
+            p
+        }));
+        let mut receivers = std::mem::take(&mut self.spares.receivers);
         if !seen.receivers.is_empty() {
-            let mut slot_of = vec![None; level.objects.instances.len()];
-            for r in &seen.receivers {
+            let slot_of = &mut self.spares.slot_of;
+            slot_of.clear();
+            slot_of.resize(level.objects.instances.len(), None);
+            for (k, r) in seen.receivers.iter().enumerate() {
                 if let Some(s) = slot_of.get_mut(r.instance) {
-                    *s = Some(r);
+                    *s = Some(k as u32);
                 }
             }
             for (j, d) in level.objects.draws.iter().enumerate() {
-                if let Some(Some(r)) = slot_of.get(d.instance) {
+                if let Some(&Some(k)) = slot_of.get(d.instance) {
+                    let r = &seen.receivers[k as usize];
                     receivers.push(ProjectedReceiver {
                         draw: (self.first_object_draw + j) as u32,
                         slot: r.slot,
@@ -574,8 +618,9 @@ impl Presenter {
     }
 
     fn drawn(&mut self, level: &LevelWorld, seen: &Arc<Seen>) -> Arc<Vec<bool>> {
-        if let Some((s, d)) = &self.drawn
-            && Arc::ptr_eq(s, seen)
+        let key = (Arc::as_ptr(seen) as usize, seen.pass);
+        if let Some((k, d)) = &self.drawn
+            && *k == key
         {
             return d.clone();
         }
@@ -585,8 +630,16 @@ impl Presenter {
             .map(|((i, _), _)| seen.items.get(i).copied().unwrap_or(false));
         let objects = (level.objects.draws.iter())
             .map(|d| seen.objects.get(d.instance).copied().unwrap_or(false));
-        let d = Arc::new(items.chain(objects).collect::<Vec<bool>>());
-        self.drawn = Some((seen.clone(), d.clone()));
+        // The list refilled in place once the frame drawn with it let it
+        // go.
+        let mut d = match self.drawn.take() {
+            Some((_, d)) if Arc::strong_count(&d) == 1 => d,
+            _ => Arc::default(),
+        };
+        let list = Arc::get_mut(&mut d).expect("held once");
+        list.clear();
+        list.extend(items.chain(objects));
+        self.drawn = Some((key, d.clone()));
         d
     }
 
@@ -620,44 +673,45 @@ impl Presenter {
 
     /// The renderer's batches of the scene's glows: one per shader, in
     /// shader order (glows.md 6; the blending makes the order irrelevant).
-    fn glow_batches(&self, sprites: &[GlowSprite]) -> Vec<ParticleBatch> {
-        let mut batches: Vec<(u32, ParticleBatch)> = Vec::new();
-        for g in sprites {
-            let Some(Some((texture, flare))) = self.glow_shaders.get(g.shader as usize) else {
+    fn glow_batches(&mut self, sprites: &[GlowSprite], out: &mut Vec<ParticleBatch>) {
+        // By shader, each shader's sprites in their order.
+        let mut order = std::mem::take(&mut self.spares.glows);
+        order.clear();
+        order.extend((sprites.iter().enumerate()).map(|(i, g)| (g.shader, i as u32)));
+        order.sort_unstable();
+        let mut current = None;
+        for &(shader, i) in &order {
+            let g = &sprites[i as usize];
+            let Some(Some((texture, flare))) = self.glow_shaders.get(shader as usize) else {
                 continue;
             };
-            let i = match batches.iter().position(|(s, _)| *s == g.shader) {
-                Some(i) => i,
-                None => {
-                    batches.push((
-                        g.shader,
-                        ParticleBatch {
-                            pass: RenderPass {
-                                program: if *flare {
-                                    ParticleProgram::Flare
-                                } else {
-                                    ParticleProgram::Glow
-                                },
-                                blend: ParticleBlend::AlphaAdd,
-                                depth_write: false,
-                                clamp: true,
-                                base: Some(texture.clone()),
-                                distort: None,
-                            },
-                            queue: ParticleQueue::Glow,
-                            // The default culling: triangles appearing
-                            // counter-clockwise are removed (glows.md 6).
-                            cull: ParticleCull::CounterClockwise,
-                            key: 0.0,
-                            vertices: Vec::new(),
+            if current != Some(shader) {
+                current = Some(shader);
+                let vertices = self.spares.vertices();
+                out.push(ParticleBatch {
+                    pass: RenderPass {
+                        program: if *flare {
+                            ParticleProgram::Flare
+                        } else {
+                            ParticleProgram::Glow
                         },
-                    ));
-                    batches.len() - 1
-                }
-            };
+                        blend: ParticleBlend::AlphaAdd,
+                        depth_write: false,
+                        clamp: true,
+                        base: Some(texture.clone()),
+                        distort: None,
+                    },
+                    queue: ParticleQueue::Glow,
+                    // The default culling: triangles appearing
+                    // counter-clockwise are removed (glows.md 6).
+                    cull: ParticleCull::CounterClockwise,
+                    key: 0.0,
+                    vertices,
+                });
+            }
             let colour = u32::from(g.b) * 0x0101_0101;
-            batches[i]
-                .1
+            out.last_mut()
+                .expect("a batch for the shader")
                 .vertices
                 .extend(
                     g.corners
@@ -670,8 +724,7 @@ impl Presenter {
                         }),
                 );
         }
-        batches.sort_by_key(|(s, _)| *s);
-        batches.into_iter().map(|(_, b)| b).collect()
+        self.spares.glows = order;
     }
 
     /// Every effect shader's textures, each file read once; one that fails
@@ -705,32 +758,70 @@ impl Presenter {
     }
 
     /// The renderer's batches of the scene's queued effects.
-    fn particle_batches(&self, draws: &[ParticleDraw]) -> Vec<ParticleBatch> {
-        draws
-            .iter()
-            .filter_map(|d| {
-                let shader = self.particle_shaders.get(d.effect)?.as_ref()?;
-                let pass = if d.distortion {
-                    shader.distortion.as_ref()?
-                } else {
-                    shader.normal.as_ref()?
-                };
-                Some(ParticleBatch {
-                    pass: RenderPass {
-                        program: pass.program,
-                        blend: pass.blend,
-                        depth_write: pass.depth_write,
-                        clamp: pass.clamp,
-                        base: pass.base.clone(),
-                        distort: pass.distort.clone(),
-                    },
-                    queue: d.queue,
-                    cull: d.cull,
-                    key: d.key,
-                    vertices: d.vertices.clone(),
-                })
-            })
-            .collect()
+    fn particle_batches(&mut self, scene: &WorldScene, out: &mut Vec<ParticleBatch>) {
+        let draws: &[ParticleDraw] = &scene.particles;
+        for d in draws {
+            let pass = (self.particle_shaders.get(d.effect))
+                .and_then(Option::as_ref)
+                .and_then(|shader| {
+                    if d.distortion {
+                        shader.distortion.as_ref()
+                    } else {
+                        shader.normal.as_ref()
+                    }
+                });
+            let Some(pass) = pass else { continue };
+            let mut vertices = self.spares.vertices.pop().unwrap_or_default();
+            let range = d.vertices.start as usize..d.vertices.end as usize;
+            vertices.extend_from_slice(&scene.particle_vertices[range]);
+            out.push(ParticleBatch {
+                pass: RenderPass {
+                    program: pass.program,
+                    blend: pass.blend,
+                    depth_write: pass.depth_write,
+                    clamp: pass.clamp,
+                    base: pass.base.clone(),
+                    distort: pass.distort.clone(),
+                },
+                queue: d.queue,
+                cull: d.cull,
+                key: d.key,
+                vertices,
+            });
+        }
+    }
+
+    /// Takes back a drawn frame's draw list, its lists kept for the next
+    /// frame's (docs/architecture/memory.md rule 5).
+    pub fn recycle(&mut self, list: DrawList) {
+        let DrawList {
+            world, mut quads, ..
+        } = list;
+        quads.clear();
+        let s = &mut self.spares;
+        s.quads = quads;
+        let Some(w) = world else { return };
+        let mut batches = w.particles;
+        for b in batches.drain(..) {
+            let mut v = b.vertices;
+            v.clear();
+            s.vertices.push(v);
+        }
+        s.batches = batches;
+        let mut lights = w.lights;
+        lights.clear();
+        s.lights = lights;
+        if let Some(d) = w.details {
+            let mut draws = d.draws;
+            draws.clear();
+            s.detail_draws = draws;
+        }
+        if let Some(p) = w.projected {
+            let (mut cells, mut receivers) = (p.cells, p.receivers);
+            cells.clear();
+            receivers.clear();
+            (s.cells, s.receivers) = (cells, receivers);
+        }
     }
 
     /// Moves, hides or shows the objects' draws whose instances' placements
@@ -969,6 +1060,7 @@ impl Presenter {
         let to_ui = |[x, y]: [f32; 2]| [(x + 0.5) * UI_WIDTH / w, (y + 0.5) * UI_HEIGHT / h];
         let mut list = DrawList {
             ramp: scene.ramp,
+            quads: std::mem::take(&mut self.spares.quads),
             ..Default::default()
         };
         if self.quality != scene.texture_quality {

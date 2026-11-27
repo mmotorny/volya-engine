@@ -67,7 +67,7 @@ use crate::level_details::{self, DetailsScene, DetailsWorld, LevelDetailObjects}
 use crate::level_lights::{self, GlowShader, LevelLights, LightCamera, LightsData};
 use crate::level_sound::ZoneSoundNames;
 use crate::level_sound::{LevelSoundData, SoundInputs};
-use crate::level_visibility::{Item, LevelVisibility, Seen, portal_fade};
+use crate::level_visibility::{Item, LevelVisibility, Seen, portal_fade_into};
 use crate::loading_screen::Stage;
 use crate::objects::{self, Characters, LevelObjects, ObjectsReport};
 use crate::particle_drawing::{self, ParticleShader};
@@ -310,6 +310,42 @@ enum DynamicItem {
     Glow([f32; 4]),
 }
 
+/// The camera pass's working lists beside [`Seen`]
+/// ([`LevelScreen::dynamic_items`]), kept between frames.
+#[derive(Debug, Default)]
+struct PassLists {
+    /// The frame's projected-light receivers with their sectors, and the
+    /// receivers alone.
+    receivers: Vec<(crate::projected_light::Receiver, u16)>,
+    taken: Vec<crate::projected_light::Receiver>,
+    /// The receivers given a slot this frame.
+    new: Vec<(usize, u32)>,
+    /// The portal fade's entries.
+    fade: Vec<(f32, u32, u16, f32)>,
+}
+
+/// The lists a frame's scene shares ([`WorldScene`]), kept between frames:
+/// each refilled in place once the frame drawn with it lets it go.
+#[derive(Debug, Default)]
+struct SceneLists {
+    particles: Arc<Vec<particle_drawing::ParticleDraw>>,
+    particle_vertices: Arc<Vec<crate::render::particles::ParticleVertex>>,
+    lights: Arc<Vec<crate::core::lights::LightPass>>,
+    glows: Arc<Vec<crate::core::glows::GlowSprite>>,
+    /// The effect objects drawn of the origins drawn.
+    records: Vec<usize>,
+}
+
+/// `list` emptied for refilling: in place where nothing else holds it.
+fn refilled<T>(list: &mut Arc<Vec<T>>) -> &mut Vec<T> {
+    if Arc::get_mut(list).is_none() {
+        *list = Arc::default();
+    }
+    let list = Arc::get_mut(list).expect("held once");
+    list.clear();
+    list
+}
+
 /// The level shown.
 pub struct LevelScreen {
     world: Arc<LevelWorld>,
@@ -416,6 +452,10 @@ pub struct LevelScreen {
     /// listed, kept between frames ([`LevelScreen::dynamic_items`]).
     dynamic: Vec<(f32, u32, DynamicItem)>,
     listed_lights: Vec<LightId>,
+    /// The pass's other working lists, kept between frames.
+    pass_lists: PassLists,
+    /// The scene's lists, kept between frames ([`LevelScreen::scene`]).
+    scene_lists: std::cell::RefCell<SceneLists>,
     /// `r__detail_density` and the wind strength *W* as the app last gave
     /// them.
     detail_density: f32,
@@ -2243,6 +2283,8 @@ impl NewGameLoad {
             projected: Default::default(),
             dynamic: Vec::new(),
             listed_lights: Vec::new(),
+            pass_lists: PassLists::default(),
+            scene_lists: Default::default(),
             detail_density: level_details::DENSITY_DEFAULT,
             wind: 0.0,
             frame: 0,
@@ -3075,7 +3117,8 @@ impl LevelScreen {
             && let Some(seen) = Arc::get_mut(&mut self.seen)
         {
             let eye = self.lights.passes().last().map_or(eye, |p| p.eye);
-            seen.fade = portal_fade(visibility, eye, self.environment.ambient);
+            let (ambient, entries) = (self.environment.ambient, &mut self.pass_lists.fade);
+            portal_fade_into(visibility, eye, ambient, &mut seen.fade, entries);
         }
     }
 
@@ -3106,11 +3149,19 @@ impl LevelScreen {
         visibility
             .objects
             .resize(objects.instances.len(), Item::default());
-        // The latest frame's lists, refilled where the frame drawn with
-        // them has let them go.
-        let mut seen = Arc::get_mut(&mut self.seen)
-            .map(std::mem::take)
-            .unwrap_or_default();
+        // The latest frame's lists, refilled in place where the frame drawn
+        // with them has let them go.
+        if Arc::get_mut(&mut self.seen).is_none() {
+            self.seen = Arc::default();
+        }
+        let seen = Arc::get_mut(&mut self.seen).expect("the pass's lists held once");
+        seen.pass = seen.pass.wrapping_add(1);
+        let PassLists {
+            receivers,
+            taken,
+            new,
+            ..
+        } = &mut self.pass_lists;
         visibility.static_draws_into(self.world.draw_items.len(), &mut seen.items);
         visibility.billboards_into(&mut seen.billboards);
         seen.objects.clear();
@@ -3119,7 +3170,7 @@ impl LevelScreen {
         seen.fade.clear();
         seen.cells.clear();
         seen.receivers.clear();
-        let mut receivers: Vec<(crate::projected_light::Receiver, u16)> = Vec::new();
+        receivers.clear();
         let mut listed = std::mem::take(&mut self.listed_lights);
         listed.clear();
         if visibility.camera_sector().is_some() {
@@ -3286,16 +3337,10 @@ impl LevelScreen {
             self.dynamic = items;
             // The slots and the cells drawn (object-projected-light.md 3.2,
             // 3.3, 4, 5).
-            let taken: Vec<_> = receivers.iter().map(|r| r.0).collect();
-            let mut new = Vec::new();
-            (self.projected).frame(
-                self.frames,
-                self.global_ms,
-                &taken,
-                &mut seen.receivers,
-                &mut new,
-            );
-            for (k, slot) in new {
+            taken.clear();
+            taken.extend(receivers.iter().map(|r| r.0));
+            (self.projected).frame(self.frames, self.global_ms, taken, &mut seen.receivers, new);
+            for &(k, slot) in new.iter() {
                 let (r, sector) = receivers[k];
                 let Some(d) = seen.receivers.iter().find(|d| d.slot == slot) else {
                     continue;
@@ -3321,10 +3366,6 @@ impl LevelScreen {
             }
         }
         seen.cells.extend(self.projected.cells().cloned());
-        match Arc::get_mut(&mut self.seen) {
-            Some(kept) => *kept = seen,
-            None => self.seen = Arc::new(seen),
-        }
         self.listed_lights = listed;
     }
 
@@ -3372,11 +3413,16 @@ impl LevelScreen {
     }
 
     /// The effect objects the latest camera pass kept, queued for a frame
-    /// at `resolution` (particle-drawing.md 7.1, 7.2).
-    fn particle_draws(&self, resolution: Resolution) -> Vec<particle_drawing::ParticleDraw> {
+    /// at `resolution` (particle-drawing.md 7.1, 7.2), into the scene's
+    /// lists.
+    fn particle_draws(&self, resolution: Resolution, lists: &mut SceneLists) {
         self.view_size.set((resolution.width, resolution.height));
+        let (out, vertices) = (
+            refilled(&mut lists.particles),
+            refilled(&mut lists.particle_vertices),
+        );
         let Some(effects) = self.effects.as_ref() else {
-            return Vec::new();
+            return;
         };
         let v = self.player.view();
         let camera = crate::core::particles::sprite::Camera {
@@ -3398,20 +3444,21 @@ impl LevelScreen {
             Origin::Artefact => 3,
         };
         // Of the origins drawn (tests).
-        let records: Vec<usize> = (self.seen.effects.iter().copied())
-            .filter(|&i| {
-                effects
-                    .get(i)
-                    .is_some_and(|p| self.effects_drawn[origin(p.origin)])
-            })
-            .collect();
+        let records = &mut lists.records;
+        records.clear();
+        records.extend((self.seen.effects.iter().copied()).filter(|&i| {
+            effects
+                .get(i)
+                .is_some_and(|p| self.effects_drawn[origin(p.origin)])
+        }));
         particle_drawing::queue(
             effects,
-            &records,
+            records,
             &self.world.particle_shaders,
             &camera,
             ssa_min,
-        )
+            (out, vertices),
+        );
     }
 
     /// What the engine interface reports of the placed effects.
@@ -3549,12 +3596,16 @@ impl LevelScreen {
             let sun = self.world.flares.get(s)?.sun.as_ref()?;
             Some((s, sun))
         });
-        let particles = self.particle_draws(resolution);
+        let mut lists = self.scene_lists.borrow_mut();
+        self.particle_draws(resolution, &mut lists);
+        refilled(&mut lists.lights).extend_from_slice(self.lights.passes());
+        refilled(&mut lists.glows).extend_from_slice(self.lights.sprites());
         let mut scene = Scene::new(resolution);
         scene.world = Some(WorldScene {
-            particles,
-            lights: self.lights.passes().to_vec(),
-            glows: self.lights.sprites().to_vec(),
+            particles: lists.particles.clone(),
+            particle_vertices: lists.particle_vertices.clone(),
+            lights: lists.lights.clone(),
+            glows: lists.glows.clone(),
             covered,
             details,
             world: self.world.clone(),
@@ -3830,6 +3881,8 @@ impl LevelScreen {
             projected: Default::default(),
             dynamic: Vec::new(),
             listed_lights: Vec::new(),
+            pass_lists: PassLists::default(),
+            scene_lists: Default::default(),
             detail_density: level_details::DENSITY_DEFAULT,
             wind: 0.0,
             frame: 0,

@@ -320,7 +320,7 @@ impl Occlusion {
         candidates.clear();
         for (i, t) in mesh.triangles.iter().enumerate() {
             let v = t.vertices.map(|k| mesh.vertices[k as usize]);
-            let outside = frustum.planes.iter().any(|p| {
+            let outside = frustum.planes().iter().any(|p| {
                 v.iter()
                     .all(|v| p[0] * v[0] + p[1] * v[1] + p[2] * v[2] + p[3] < 0.0)
             });

@@ -719,6 +719,8 @@ pub fn frame(time: f64) {
                     crate::diagnostics::gpu_step("gpu.level_frame", gpu.renderer.as_ref(), &frame);
                 }
                 gpu.present_at(&list, (resolution.width, resolution.height));
+                // Its lists serve the next frame's.
+                gpu.presenter.recycle(list);
                 if logged {
                     // Submitted and presented; then once the browser
                     // reports the GPU done with it.

@@ -109,7 +109,7 @@ fn sectors_are_entered_through_portals_with_narrowed_frusta() {
 #[test]
 fn a_frustum_through_a_portal() {
     let m = view([0.0; 3], [1.0, 0.0, 0.0]);
-    let far = Frustum::view(&m).planes[4];
+    let far = Frustum::view(&m).planes()[4];
     // traversal-options.md 5: the edge planes, the portal plane (the side
     // beyond the portal from the eye inside, whichever side the eye is on
     // and whatever the vertex order), and the far plane of the matrix.
@@ -117,8 +117,8 @@ fn a_frustum_through_a_portal() {
     for eye in [[0.0, 0.0, 0.0], [20.0, 0.0, 0.0]] {
         for poly in [square.clone(), square.iter().rev().copied().collect()] {
             let f = Frustum::through(eye, &poly, &m);
-            assert_eq!(f.planes.len(), 6);
-            assert_eq!(f.planes[5], far);
+            assert_eq!(f.planes().len(), 6);
+            assert_eq!(f.planes()[5], far);
             let beyond = [10.0 + (10.0 - eye[0]) * 0.1, 0.0, 0.0];
             let before = [10.0 - (10.0 - eye[0]) * 0.1, 0.0, 0.0];
             assert!(f.meets(beyond, 0.0) && !f.meets(before, 0.0), "{eye:?}");
@@ -134,13 +134,13 @@ fn a_frustum_through_a_portal() {
         })
         .collect();
     let f = Frustum::through([0.0; 3], &octagon, &m);
-    assert_eq!(f.planes.len(), 6);
+    assert_eq!(f.planes().len(), 6);
     assert!(f.meets([20.0, 1.99, 1.99], 1e-4));
     assert!(!f.meets([20.0, 2.1, 0.0], 0.0));
     // A zero normal becomes (0, 1, 0): the eye on the line of the last
     // edge.
     let f = Frustum::through([10.0, -1.0, -2.0], &square, &m);
-    assert_eq!(f.planes[3], [0.0, -1.0, 0.0, -1.0]);
+    assert_eq!(f.planes()[3], [0.0, -1.0, 0.0, -1.0]);
 }
 
 #[test]
@@ -181,8 +181,7 @@ fn small_portals_fade_and_are_skipped() {
     let m = view(eye, [1.0, 0.0, 0.0]);
     let f = Frustum::view(&m);
     assert_eq!(
-        s.traverse(0, f.clone(), eye, &m, CAMERA_PASS, &t, |_| true)
-            .visited,
+        s.traverse(0, f, eye, &m, CAMERA_PASS, &t, |_| true).visited,
         [0]
     );
     assert_eq!(
@@ -326,9 +325,7 @@ fn the_camera_sector_comes_from_the_ray_and_is_kept() {
 #[test]
 fn the_sphere_and_box_test() {
     // One plane, inside where x ≤ 0.
-    let f = Frustum {
-        planes: vec![[-1.0, 0.0, 0.0, 0.0]],
-    };
+    let f = Frustum::new(&[[-1.0, 0.0, 0.0, 0.0]]);
     let test = |c: f32, r: f32, a: f32, b: f32| {
         f.sphere_box(1, [c, 0.0, 0.0], r, [a, -1.0, -1.0], [b, 1.0, 1.0])
     };
