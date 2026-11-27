@@ -160,6 +160,8 @@ The WGSL is the source. A build script translates each program to GLSL ES 3.00 w
 
 ### Tests: drawing in the browser
 
+**Fidelity is judged screenshot first** (decided by the user, 2026-11-27): frames of the original captured on the Windows PC (real Direct3D 9 driver; docs/testing.md) are compared with ours frame by frame. A difference is localised to a hypothesis (fog, filtering, mip selection, blending, …) and established with targeted Direct3D 9 probes run on the PC and replayed by us; the fix follows the hardware result. Probe differences that no frame difference leads to are not pursued.
+
 Drawing tests run in headless Chrome only; non-drawing checks stay native tests, each test file split so its loading, simulation and draw-list checks run without a GPU.
 
 - **Render self-test** (#470): the render crate's scenes and their checks live in a module compiled into test builds (`selftest`) and run in the engine worker by a `render_selftest` op, as `script_selftest`; the `render` suite runs it (#471).
