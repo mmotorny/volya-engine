@@ -78,7 +78,7 @@ On the Windows PC, in PowerShell, with `git` and `gh` signed in to an account th
    It takes seconds. 0: every Direct3D call succeeded; 1: some failed, named in `log.txt`; bring the results back either way. `results\info.txt` names the adapter.
 4. Commit the results to a new branch from `main`, in a clone of the repository (`git clone https://github.com/mmotorny/volya-engine.git` if there is none), under `tests/d3d9probes/hardware/<gpu>/` as the runner wrote them (`results\` and `log.txt`), `<gpu>` the adapter in lower case with dashes (e.g. `rtx-4090`):
    `git fetch origin; git switch -c d3d9probes-hardware-<gpu> origin/main`
-   `$dest = "tests\d3d9probes\hardware\<gpu>"; New-Item -ItemType Directory -Force $dest; Copy-Item -Recurse "$run\results" $dest; Copy-Item "$run\log.txt" $dest; Set-Content -NoNewline "$dest\release.txt" $tag`
+   `$dest = "tests\d3d9probes\hardware\<gpu>"; New-Item -ItemType Directory -Force $dest; Copy-Item -Recurse "$run\results" $dest; Copy-Item "$run\log.txt" $dest; Set-Content -LiteralPath "$dest\release.txt" -Value $tag -NoNewline`
    `git add $dest; git commit -m "D3D9 probes on <adapter>: results of $tag" -m "Part of #578"` (`tests/d3d9probes/.gitattributes` keeps the files' bytes as written, CRLF included)
    `git push -u origin HEAD`
 5. Report the branch name and the exit code. A session on the Mac lands the branch; `hardware/<gpu>/` is then one of the suite's references.
