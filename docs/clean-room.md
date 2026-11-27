@@ -48,7 +48,7 @@ Rejected:
 | The user's own game data | everyone may use evidence from it; dirty roles may study it freely |
 | The shipped binaries: static analysis, debugging, instrumented execution | investigator, reviewer |
 | The shipped game run as a black box: launched unmodified, driven by its normal inputs, its frames, sound and files captured from outside | everyone; its outputs are game assets (local only, never committed, published or deployed) |
-| A shipped library run as a black box: loaded unmodified by a harness of our own and driven only through its public, documented API (e.g. ODE's) with synthetic inputs, observing only what that API returns (decided by the user, 2026-11-27) | everyone; its outputs are local only, like the game's |
+| A shipped library run as a black box: loaded unmodified by a harness of our own and driven only through its public, documented API (e.g. ODE's) with synthetic inputs, observing only what that API returns (decided by the user, 2026-11-27) | its outputs are dirty-only and never leave the Windows PC (decided by the user, 2026-11-27): the PC's orchestrating session spawns a dirty investigator there, which runs the harness, compares and explains the results against our build's, and writes a report; a fresh dirty reviewer there checks it for leaked expression; only the approved report reaches the clean side, and the PC's orchestrator never reads the results itself |
 | Public documentation of generic algorithms (e.g. standard compression schemes) | everyone |
 | Leaked X-Ray source, OpenXRay and forks, anything derived from them; X-Ray documentation of unclear provenance | nobody |
 
@@ -69,7 +69,7 @@ Every dirty agent reads this section with the rest of this file; it is binding a
 - Work only in the dirty workspace; never write to the repository (except the reviewer's copy of an approved spec) or to GitHub. Reading issues with `gh` is fine.
 - Never install tools or packages (pip, brew, downloads); use what is set up. If something is missing, report `BLOCKED` with what is needed.
 - Work statically: don't run the shipped game (decided by the user, 2026-11-27); a fact that only a run could establish is recorded as unestablished.
-- Don't run builds, browser suites or the iOS Simulator (the machine's memory is shared, AGENTS.md); `bazel run //tools/xtask -- spec-lint` is the exception.
+- Don't run builds, browser suites or the iOS Simulator (the machine's memory is shared, AGENTS.md); `bazel run //tools/xtask -- spec-lint` is the exception, and so is, on the Windows PC, running a shipped library's black-box harness and its compare mode.
 - Model memory is not a source; every fact comes from the user's game data or the shipped binaries, through a check script in the dirty workspace.
 - Report only the verdict line your role defines, never findings.
 
