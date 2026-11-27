@@ -123,32 +123,32 @@ The program's data leaves no split free space before a game (`heap_map`, #432).
 
 ## The original
 
-Measured (#667): its New Game of `l01_escape` run unmodified under Wine three times, on the Wine image before #590's (that one loads no graphics driver, #671), its log only; every `phase cmem` was the same in all three, `stat_memory`'s within 0.1%. A caption's figure is what its stage keeps, not its peak (the log gives none). Two amounts of about 527 K move between captions from run to run in the spec's runs (console-diagnostics.md 2.4.1), so a difference of that size at one caption is not a finding. Ours: `loading_memory.rs` natively, and in headless Chrome the `load_memory` op in `game-level`'s first New Game; the bytes asked for (#686). In the browser 1 and 17 free more than they keep: under 17 the objects' CPU geometry, freed once uploaded before the loading screen finishes; under 1 the title menu's data (believed).
+Measured (#667): its New Game of `l01_escape` run unmodified under Wine three times, on the Wine image before #590's (that one loads no graphics driver, #671), its log only; every `phase cmem` was the same in all three, `stat_memory`'s within 0.1%. A caption's figure is what its stage keeps, not its peak (the log gives none). Two amounts of about 527 K move between captions from run to run in the spec's runs (console-diagnostics.md 2.4.1), so a difference of that size at one caption is not a finding. Ours: `loading_memory.rs` natively, and in headless Chrome the `load_memory` op in `game-level`'s first New Game; *h* as the memory manager counts it, its pools' chunks whole (#687). In the browser 1 and 17 free more than they keep: under 17 the objects' CPU geometry, freed once uploaded before the loading screen finishes; under 1 the title menu's data (believed).
 
 | *n* | Caption | The original keeps, K | Ours, native, K | Ours, headless Chrome, K | What must change |
 |---|---|---|---|---|---|
-| 1 | `st_prefetching_objects` | 85,047 | 0 | −5,932 | Load the 394 models of `prefetch_visuals_single` (`config\prefetch\prefetch_single.ltx`) and their textures here, kept while the game type stays (a later New Game of the type skips the stage, loading-screen.md 5); the objects spawned later take them from there. Its *m* (28,221 K of motions and skinned models shared) follows from sharing them. |
-| 2 | `st_server_starting` | 205 | 0 | 1 | |
+| 1 | `st_prefetching_objects` | 85,047 | 0 | −5,888 | Load the 394 models of `prefetch_visuals_single` (`config\prefetch\prefetch_single.ltx`) and their textures here, kept while the game type stays (a later New Game of the type skips the stage, loading-screen.md 5); the objects spawned later take them from there. Its *m* (28,221 K of motions and skinned models shared) follows from sharing them. |
+| 2 | `st_server_starting` | 205 | 0 | 0 | |
 | 3 | `st_loading_alife_simulator` | 0 | 0 | 0 | |
-| 4 | `st_creating_new_game` | 32,164 | 222 | 222 | The offline simulation's registry, the game graph and the character are made here, from `all.spawn` held whole and read in place ([File-backed data](#file-backed-data)). |
-| 5 | `st_server_connecting` | 0 | 15,198 | 13,199 | Nothing made here (moved to 4); the navigation positions move to 14. |
-| 6 | `st_client_connecting_to` | 8 | 0 | 2 | |
-| 7 | `st_opening_stream` | 0 | 7,705 | 7,057 | The `level` file held whole and read in place (counted in *c*); what is made from its chunks is made under the caption whose stage reads them (the shader table under 9, the static draw list and spheres under 10 and 11). |
-| 8 | `st_loading_cform` | 72,669 | 29,409 | 29,205 | |
-| 9 | `st_loading_shaders` | 1,400 | 1 | 3 | The shader table (from 7). |
-| 10 | `st_loading_geometry` | 353 | 365 | 365 | |
-| 11 | `st_loading_spatial_db` | 4,297 | −1,819 | −1,393 | |
-| 12 | `st_loading_details` | 10 | 5,423 | 4,971 | The compact slot grid (a leaner structure in place of the mapped `level.details`, rule 5) counted in the file cache's figure, not *h*. The cache's 0.2 MB stays (where the original holds its cache is unestablished). |
-| 13 | `st_loading_sectors_portals` | 143 | 1 | 1 | |
-| 14 | `st_loading_ai_objects` | 0 | 3 | 3 | The navigation positions (moved from 5; a leaner structure in place of the mapped `level.ai`, rule 5) and `level.gct` counted in the file cache's figure, not *h*. |
-| 15 | `st_client_spawning` | 4,708 | 13,551 | 13,449 | The objects' models come from 1 (one not prefetched is loaded here); their CPU geometry, every detail window's indices among it (12.3 MB), freed once uploaded, as the original keeps it in Direct3D's buffers. |
-| 16 | `st_loading_textures` | 1 | 338 | 382 | The texture file read into the file cache, not the heap. |
-| 17 | `st_client_synchronising` | 0 | 358 | −5,456 | |
-| | The load, its first caption to its end | 201,005 | 70,755 | 56,079 | |
-| | *h* at the load's end | 227,120 | 75,961 | 67,598 | |
+| 4 | `st_creating_new_game` | 32,164 | 221 | 220 | The offline simulation's registry, the game graph and the character are made here, from `all.spawn` held whole and read in place ([File-backed data](#file-backed-data)). |
+| 5 | `st_server_connecting` | 0 | 14,057 | 12,136 | Nothing made here (moved to 4); the navigation positions move to 14. |
+| 6 | `st_client_connecting_to` | 8 | 0 | 18 | |
+| 7 | `st_opening_stream` | 0 | 7,597 | 6,981 | The `level` file held whole and read in place (counted in *c*); what is made from its chunks is made under the caption whose stage reads them (the shader table under 9, the static draw list and spheres under 10 and 11). |
+| 8 | `st_loading_cform` | 72,669 | 29,670 | 29,339 | |
+| 9 | `st_loading_shaders` | 1,400 | 0 | 2 | The shader table (from 7). |
+| 10 | `st_loading_geometry` | 353 | 348 | 347 | |
+| 11 | `st_loading_spatial_db` | 4,297 | −1,256 | −813 | |
+| 12 | `st_loading_details` | 10 | 5,417 | 4,963 | The compact slot grid (a leaner structure in place of the mapped `level.details`, rule 5) counted in the file cache's figure, not *h*. The cache's 0.2 MB stays (where the original holds its cache is unestablished). |
+| 13 | `st_loading_sectors_portals` | 143 | 0 | 0 | |
+| 14 | `st_loading_ai_objects` | 0 | 1 | 1 | The navigation positions (moved from 5; a leaner structure in place of the mapped `level.ai`, rule 5) and `level.gct` counted in the file cache's figure, not *h*. |
+| 15 | `st_client_spawning` | 4,708 | 13,801 | 13,615 | The objects' models come from 1 (one not prefetched is loaded here); their CPU geometry, every detail window's indices among it (12.3 MB), freed once uploaded, as the original keeps it in Direct3D's buffers. |
+| 16 | `st_loading_textures` | 1 | 530 | 502 | The texture file read into the file cache, not the heap. |
+| 17 | `st_client_synchronising` | 0 | 356 | −5,987 | |
+| | The load, its first caption to its end | 201,005 | 70,742 | 55,436 | |
+| | *h* at the load's end | 227,120 | 86,693 | 75,535 | |
 | | *t* at the load's end | 260,798 | — | 146,706 (by the original's rule, headless Chrome; the original's without prefetching 179,025) | Counted by the original's rule (#689); the prefetched models' textures added (the original's 865 base textures against 631 without prefetching, 2.4.1). |
 
-Where ours keeps less than the original (8, 11) it stays (rule 5): the budget is a ceiling. Beside them at the load's end the original writes the committed address space 849,680–849,744 K (the whole 32-bit process, its program, libraries and driver; ours, the wasm memory, 101,760 K today), the process heap 400,268–400,269 K and the game scripts' pool 25,762–25,784 K (measured, #667).
+Where ours keeps less than the original (8, 11) it stays (rule 5): the budget is a ceiling. With the memory manager (#687) the wasm memory after a New Game is 95–96 MiB against 89 before it (`game-level`), 101–102 against 93 after the relaunched game's (`game-memory`): the pools' chunks keep their high-water mark (measured, headless Chrome; 1,001 chunks natively at the load's end, 16 MB). Beside them at the load's end the original writes the committed address space 849,680–849,744 K (the whole 32-bit process, its program, libraries and driver; ours, the wasm memory, 101,760 K today), the process heap 400,268–400,269 K and the game scripts' pool 25,762–25,784 K (measured, #667).
 
 ## Design
 
@@ -173,7 +173,7 @@ The global allocator, natively and in wasm, follows the original's memory manage
 - Two pools sit outside *h*, as the original's are committed apart from its heap (console-diagnostics.md 2.1, 2.1.1): the game scripts' (the script runtime's allocator, *g*) and the renderer's (the lists a frame's scene, passes and draw list grow and refill, *r*: the original's is 0 at the load's end and a few hundred K once frames are drawn). Each takes its memory from `System` in segments of its own and reports its bytes in use. *e* prints 0: no shader scripts run.
 - The pools are locked (native tests run threads; the engine's worker is single-threaded, so the lock is never contended there).
 
-What stays: the one heap, the regions and their owners (rule 3), the counting wrapper's place. What goes: the collision world's spares (#357). What changes: small blocks no longer reach dlmalloc one by one, so the stages' hundreds of thousands of small temporaries (`st_client_spawning`'s 2.52 million allocations) fill pool chunks rather than splitting dlmalloc's free space between large blocks (believed: fewer holes the large blocks can't use, as [Heap minus live](#heap-minus-live) describes); a pool's high-water mark is kept for the page's life and counted in *h*, as in the original.
+It is `volya_engine_core::memory_manager`, the global allocator of the web build and of `loading_memory.rs` and `level_memory.rs` (#687). What stays: the one heap, the regions and their owners (rule 3), the counting wrapper's place. What goes: the collision world's spares (#357). What changes: small blocks no longer reach dlmalloc one by one, so the stages' hundreds of thousands of small temporaries (`st_client_spawning`'s 2.52 million allocations) fill pool chunks rather than splitting dlmalloc's free space between large blocks (believed: fewer holes the large blocks can't use, as [Heap minus live](#heap-minus-live) describes); a pool's high-water mark is kept for the page's life and counted in *h*, as in the original.
 
 ### File-backed data
 

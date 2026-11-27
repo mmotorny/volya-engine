@@ -12,18 +12,19 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 // A counting allocator needs `unsafe impl GlobalAlloc`; it only forwards to
-// the system allocator.
+// the memory manager, the app's global allocator.
 #![allow(unsafe_code)]
 
 #[path = "../../volya-engine-formats/tests/support/gog_archives.rs"]
 mod gog_archives;
 
-use std::alloc::{GlobalAlloc, Layout, System};
+use std::alloc::{GlobalAlloc, Layout};
 use std::collections::HashSet;
 use std::io::{Seek, SeekFrom};
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
 use volya_engine::core::collision::CollisionWorld;
+use volya_engine::core::memory_manager::MemoryManager;
 use volya_engine::core::vfs::db::DbVfs;
 use volya_engine::core::vfs::{self, EntryKind, StdVfs, Vfs};
 use volya_engine::data::GameData;
@@ -39,7 +40,7 @@ static PEAK: AtomicUsize = AtomicUsize::new(0);
 
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let p = unsafe { System.alloc(layout) };
+        let p = unsafe { MemoryManager.alloc(layout) };
         if !p.is_null() {
             let now = CURRENT.fetch_add(layout.size(), Relaxed) + layout.size();
             PEAK.fetch_max(now, Relaxed);
@@ -48,12 +49,12 @@ unsafe impl GlobalAlloc for Counting {
     }
 
     unsafe fn dealloc(&self, p: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(p, layout) };
+        unsafe { MemoryManager.dealloc(p, layout) };
         CURRENT.fetch_sub(layout.size(), Relaxed);
     }
 
     unsafe fn realloc(&self, p: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-        let q = unsafe { System.realloc(p, layout, size) };
+        let q = unsafe { MemoryManager.realloc(p, layout, size) };
         if !q.is_null() {
             if size > layout.size() {
                 let now = CURRENT.fetch_add(size - layout.size(), Relaxed) + (size - layout.size());

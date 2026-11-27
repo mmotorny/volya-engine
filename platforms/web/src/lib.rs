@@ -26,17 +26,21 @@ use volya_engine::formats::ui::Resolution;
 use wasm_bindgen::prelude::*;
 use web_sys::{OffscreenCanvas, WorkerGlobalScope};
 
-/// Every build counts the wasm heap's live bytes (the bytes asked for, as
-/// `loading_memory.rs` counts them natively): the console's memory in use
-/// (`* phase cmem`, docs/behavior/console-diagnostics.md 2.4). Test builds
-/// also count their high-water mark (the `heap_log` op), to tell what a
+/// The global allocator is the memory manager
+/// (`volya_engine::core::memory_manager`), whose bytes in use are the
+/// console's `* phase cmem` and *h* (docs/behavior/console-diagnostics.md
+/// 2.1.1, 2.4). Every build also counts the live bytes asked for, as
+/// `loading_memory.rs` counts them natively (the `load_memory` op). Test builds also count their
+/// high-water mark (the `heap_log` op), to tell what a
 /// stage holds from what fragmentation adds to the heap (#357); and where
 /// the live bytes sit (the `heap_map` op, #432): per MiB of the heap, and
 /// each live block of 256 KiB or more.
 #[allow(unsafe_code)] // `GlobalAlloc` is unsafe to implement; this forwards.
 mod counting {
-    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::alloc::{GlobalAlloc, Layout};
+
     use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+    use volya_engine::core::memory_manager::MemoryManager;
 
     static LIVE: AtomicUsize = AtomicUsize::new(0);
 
@@ -50,7 +54,7 @@ mod counting {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
             #[cfg(feature = "test-ops")]
             let before = crate::tested::memory_bytes();
-            let p = unsafe { System.alloc(layout) };
+            let p = unsafe { MemoryManager.alloc(layout) };
             if !p.is_null() {
                 LIVE.fetch_add(layout.size(), Relaxed);
                 #[cfg(feature = "test-ops")]
@@ -62,7 +66,7 @@ mod counting {
         unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
             #[cfg(feature = "test-ops")]
             let before = crate::tested::memory_bytes();
-            let p = unsafe { System.alloc_zeroed(layout) };
+            let p = unsafe { MemoryManager.alloc_zeroed(layout) };
             if !p.is_null() {
                 LIVE.fetch_add(layout.size(), Relaxed);
                 #[cfg(feature = "test-ops")]
@@ -72,7 +76,7 @@ mod counting {
         }
 
         unsafe fn dealloc(&self, p: *mut u8, layout: Layout) {
-            unsafe { System.dealloc(p, layout) };
+            unsafe { MemoryManager.dealloc(p, layout) };
             LIVE.fetch_sub(layout.size(), Relaxed);
             #[cfg(feature = "test-ops")]
             crate::tested::mapped(p, layout.size(), false);
@@ -81,7 +85,7 @@ mod counting {
         unsafe fn realloc(&self, p: *mut u8, layout: Layout, size: usize) -> *mut u8 {
             #[cfg(feature = "test-ops")]
             let before = crate::tested::memory_bytes();
-            let q = unsafe { System.realloc(p, layout, size) };
+            let q = unsafe { MemoryManager.realloc(p, layout, size) };
             if !q.is_null() {
                 if size > layout.size() {
                     LIVE.fetch_add(size - layout.size(), Relaxed);
@@ -396,21 +400,22 @@ pub(crate) fn heap_bytes() -> f64 {
 /// (docs/behavior/console-diagnostics.md 2.1, 2.4), by their counterparts
 /// here (docs/architecture/memory.md, Measuring): the address space is the
 /// wasm memory's (32-bit, 4 GiB: its pages committed, the rest free, none
-/// reserved), the heaps and the memory manager are the one wasm heap (its
-/// live bytes), the textures the sizes the renderer records for the files
-/// it holds by name (`gl::Texture::record_size`). No part has a counterpart of the process heap, the scripts'
+/// reserved), the heaps and the memory manager are the memory manager's
+/// bytes in use (its chunks whole, its large blocks with their 23 bytes),
+/// the textures the sizes the renderer records for the files it holds by
+/// name (`gl::Texture::record_size`). No part has a counterpart of the process heap, the scripts'
 /// and the renderer's own pools, or the shared strings and blocks: 0.
 fn memory_statistics() -> volya_engine::core::console::MemoryStatistics {
     let committed = heap_bytes() as u64;
-    let live = counting::live() as u64;
+    let in_use = volya_engine::core::memory_manager::in_use_bytes() as u64;
     let gpu = gpu::live();
     volya_engine::core::console::MemoryStatistics {
         free: (1u64 << 32).saturating_sub(committed),
         reserved: 0,
         committed,
         textures: gpu.recorded_bytes,
-        crt_heap: live,
-        cmem: live,
+        crt_heap: in_use,
+        cmem: in_use,
         ..Default::default()
     }
 }
@@ -872,12 +877,17 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
         "launch" => to_json(&engine::launch().await?),
         "menu_state" => to_json(&engine::state()),
         // The latest load's `* phase cmem` by caption and its end's
-        // figures, and *h* and *t* now (docs/architecture/memory.md).
+        // figures; *h*, *t* and the live bytes asked for now
+        // (docs/architecture/memory.md).
         "load_memory" => {
             let now = memory_statistics();
             to_json(&serde_json::json!({
                 "load": engine::load_memory(),
-                "now": { "crt_heap": now.crt_heap, "textures": now.textures },
+                "now": {
+                    "crt_heap": now.crt_heap,
+                    "textures": now.textures,
+                    "live_bytes": counting::live(),
+                },
             }))
         }
         "bound_keys" => to_json(&engine::bound_keys()),

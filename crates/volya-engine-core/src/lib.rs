@@ -23,6 +23,7 @@ pub mod glows;
 pub mod input;
 pub mod level;
 pub mod lights;
+pub mod memory_manager;
 pub mod movement;
 pub mod object_light;
 pub mod occlusion;

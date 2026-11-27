@@ -5,7 +5,9 @@
 //! what each caption keeps (its `* phase cmem` growth) against the
 //! original's and the end-of-load *h* against the original's, with no
 //! headroom: every figure above one is an "EXCESS" note to file as an issue,
-//! never a failure (docs/architecture/memory.md, Budgets). Beside them, each
+//! never a failure (docs/architecture/memory.md, Budgets). The figures are
+//! the memory manager's bytes in use, as the app's global allocator counts
+//! them (its chunks whole); the bytes asked for beside. Beside them, each
 //! stage's peak above its start, the allocations it makes and the blocks it
 //! keeps, and what the program's data keeps. Its own test binary, so no
 //! other test allocates meanwhile. Skips when `VOLYA_GOG_INSTALLER` is
@@ -13,15 +15,16 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 // A counting allocator needs `unsafe impl GlobalAlloc`; it only forwards to
-// the system allocator.
+// the memory manager, the app's global allocator.
 #![allow(unsafe_code)]
 
 #[path = "../../volya-engine-formats/tests/support/gog_archives.rs"]
 mod gog_archives;
 
-use std::alloc::{GlobalAlloc, Layout, System};
+use std::alloc::{GlobalAlloc, Layout};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use volya_engine::core::memory_manager::{self, MemoryManager};
 use volya_engine::core::vfs::StdVfs;
 use volya_engine::core::vfs::db::DbVfs;
 use volya_engine::data::GameData;
@@ -41,7 +44,7 @@ static ALLOCS: AtomicUsize = AtomicUsize::new(0);
 
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let p = unsafe { System.alloc(layout) };
+        let p = unsafe { MemoryManager.alloc(layout) };
         if !p.is_null() {
             let now = CURRENT.fetch_add(layout.size(), Ordering::Relaxed) + layout.size();
             PEAK.fetch_max(now, Ordering::Relaxed);
@@ -52,13 +55,13 @@ unsafe impl GlobalAlloc for Counting {
     }
 
     unsafe fn dealloc(&self, p: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(p, layout) };
+        unsafe { MemoryManager.dealloc(p, layout) };
         CURRENT.fetch_sub(layout.size(), Ordering::Relaxed);
         BLOCKS.fetch_sub(1, Ordering::Relaxed);
     }
 
     unsafe fn realloc(&self, p: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-        let q = unsafe { System.realloc(p, layout, size) };
+        let q = unsafe { MemoryManager.realloc(p, layout, size) };
         if !q.is_null() {
             if size > layout.size() {
                 ALLOCS.fetch_add(1, Ordering::Relaxed);
@@ -145,7 +148,7 @@ fn loading_stage_memory() {
     let mut marks = Vec::new();
     for stage in Stage::ALL {
         let before = CURRENT.load(Ordering::Relaxed);
-        marks.push((stage, before));
+        marks.push((stage, memory_manager::in_use_bytes(), before));
         let (blocks, allocs) = (
             BLOCKS.load(Ordering::Relaxed),
             ALLOCS.load(Ordering::Relaxed),
@@ -155,7 +158,8 @@ fn loading_stage_memory() {
         let peak = PEAK.load(Ordering::Relaxed);
         highest = highest.max(peak - base);
         eprintln!(
-            "{stage:?}: {} K at its start (`* phase cmem`), peak +{:.1} MB above it; {} allocations, keeps {:+} blocks",
+            "{stage:?}: {} K at its start (`* phase cmem`; {} K asked for), peak +{:.1} MB asked for above it; {} allocations, keeps {:+} blocks",
+            k(marks.last().unwrap().1),
             k(before),
             mb(peak - before),
             ALLOCS.load(Ordering::Relaxed) - allocs,
@@ -164,15 +168,19 @@ fn loading_stage_memory() {
     }
     // The level made ends the load (natively: no frames, no overlay).
     let screen = load.finish(0).unwrap();
-    let end = CURRENT.load(Ordering::Relaxed);
+    let (end, asked) = (
+        memory_manager::in_use_bytes(),
+        CURRENT.load(Ordering::Relaxed),
+    );
     let mut excesses = Vec::new();
-    for (i, &(stage, cmem)) in marks.iter().enumerate() {
-        let next = marks.get(i + 1).map_or(end, |m| m.1);
+    for (i, &(stage, cmem, live)) in marks.iter().enumerate() {
+        let (next, next_live) = marks.get(i + 1).map_or((end, asked), |m| (m.1, m.2));
         let kept = k(next) as i64 - k(cmem) as i64;
         let original = ORIGINAL_KEPT.iter().find(|o| o.0 == stage).unwrap().1;
         eprintln!(
-            "{}: keeps {kept} K, the original {original} K",
-            stage.caption_id()
+            "{}: keeps {kept} K ({} K asked for), the original {original} K",
+            stage.caption_id(),
+            k(next_live) as i64 - k(live) as i64
         );
         if kept > original as i64 {
             excesses.push(format!(
@@ -182,10 +190,12 @@ fn loading_stage_memory() {
         }
     }
     eprintln!(
-        "the load: {} K at its start (the original {ORIGINAL_START_H} K), h {} K at its end (the original {ORIGINAL_H} K), peak +{:.1} MB above its start",
-        k(base),
+        "the load: h {} K at its start (the original {ORIGINAL_START_H} K), {} K at its end (the original {ORIGINAL_H} K; {} K asked for), peak +{:.1} MB asked for above its start; {} pool chunks",
+        k(marks[0].1),
         k(end),
-        mb(highest)
+        k(asked),
+        mb(highest),
+        memory_manager::chunks()
     );
     if k(end) > ORIGINAL_H {
         excesses.push(format!(
