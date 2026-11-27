@@ -15,6 +15,7 @@ use volya_engine_formats::shaders_xr::{Definition, Value};
 
 use crate::core::config::Config;
 use crate::core::details::{self, DetailFrame, Details, Sway};
+use crate::core::file_cache;
 use crate::core::vfs::Vfs;
 use crate::render::details::DetailGeometry;
 use crate::shading;
@@ -35,13 +36,16 @@ pub struct LevelDetailObjects {
 }
 
 /// `level.details` of the level in `dir` with the sway values of
-/// `[details]` (2.1); `None` when the level has no such file.
+/// `[details]` (2.1); `None` when the level has no such file. The file is
+/// streamed; its compact slot grid, which stands for the mapped file (a
+/// leaner structure, docs/architecture/memory.md rule 5), is held in the
+/// file cache under its path.
 pub fn read(tree: &dyn Vfs, dir: &str, system: &Config) -> io::Result<Option<LevelDetailObjects>> {
     let path = format!("{dir}\\level.details");
     if !tree.exists(&path) {
         return Ok(None);
     }
-    let grid = LevelDetails::read(&mut tree.open(&path)?)
+    let grid = LevelDetails::read_in(&mut tree.open(&path)?, |len| file_cache::hold(&path, len))
         .map_err(|e| io::Error::new(e.kind(), format!("{path}: {e}")))?;
     let (normal, fast) = Sway::read(system)?;
     Ok(Some(LevelDetailObjects {

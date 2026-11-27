@@ -112,7 +112,7 @@ fn level_files_memory() {
         .collect();
     levels.sort();
     eprintln!(
-        "level: collision kept, details kept, `level` read peak (heap MB); geometry, navigation, the surfaces' textures (as stored MB)"
+        "level: collision kept, details kept, `level` read peak (heap MB); the detail slot grid in the file cache of `level.details` (MB); geometry, navigation, the surfaces' textures (as stored MB)"
     );
     let mut rows = Vec::new();
     for name in &levels {
@@ -125,7 +125,10 @@ fn level_files_memory() {
         drop(collision);
         let (details, details_kept, _) =
             measured(|| level_details::read(&tree, &dir, &data.system).unwrap());
+        // Its slot grid in the file cache, against the file it stands for.
+        let grid = file_cache::bytes();
         drop(details);
+        let details_file = size(&tree, &file("level.details"));
         // The file in the file cache, outside the heap, read in place.
         let (level, _, parse_peak) =
             measured(|| Level::parse(&file_cache::read(&tree, &file("level")).unwrap()).unwrap());
@@ -157,10 +160,12 @@ fn level_files_memory() {
         let geometry = size(&tree, &file("level.geom"));
         let navigation = size(&tree, &file("level.ai"));
         eprintln!(
-            "{name}: {:.1}, {:.1}, {:.1}; {:.1}, {:.1}, {:.1}",
+            "{name}: {:.1}, {:.1}, {:.1}; {:.1} of {:.1}; {:.1}, {:.1}, {:.1}",
             mb(collision_kept),
             mb(details_kept),
             mb(parse_peak),
+            mb(grid),
+            mb(details_file),
             mb(geometry),
             mb(navigation),
             mb(textures)

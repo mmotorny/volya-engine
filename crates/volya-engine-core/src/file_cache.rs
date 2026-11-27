@@ -7,7 +7,8 @@
 //! from `System` directly ([`SystemBytes`]), so they are not in *h*
 //! (`* phase cmem`): the cache has a figure and a budget of its own. A file
 //! read again while held is shared, not read twice; it goes when its last
-//! [`CachedFile`] does.
+//! [`CachedFile`] does. A leaner structure that stands for a mapped file
+//! (rule 5) is held here too, counted under the file's path ([`hold`]).
 //!
 //! The figures: the bytes held now and by file ([`held`]), the most since
 //! the load began ([`begin_load`], [`most`]), and per window between two
@@ -52,6 +53,35 @@ impl Drop for Held {
     }
 }
 
+/// Bytes held in the cache in place of the mapped file they are counted
+/// under, owned by one reader and written by it ([`hold`]).
+pub struct HeldBytes {
+    id: u64,
+    bytes: SystemBytes,
+}
+
+impl Deref for HeldBytes {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+impl std::ops::DerefMut for HeldBytes {
+    fn deref_mut(&mut self) -> &mut [u8] {
+        &mut self.bytes
+    }
+}
+
+impl Drop for HeldBytes {
+    fn drop(&mut self) {
+        let mut state = state();
+        state.standing.retain(|(id, _, _)| *id != self.id);
+        state.bytes -= self.bytes.len() as u64;
+    }
+}
+
 /// The cache's figures over a window (a loading caption), bytes.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Window {
@@ -64,6 +94,10 @@ pub struct Window {
 #[derive(Default)]
 struct State {
     held: Vec<(String, Weak<Held>)>,
+    /// The [`HeldBytes`] held: their ids, the paths they are counted
+    /// under, their sizes.
+    standing: Vec<(u64, String, u64)>,
+    next_id: u64,
     bytes: u64,
     most: u64,
     window: Window,
@@ -71,6 +105,8 @@ struct State {
 
 static STATE: Mutex<State> = Mutex::new(State {
     held: Vec::new(),
+    standing: Vec::new(),
+    next_id: 0,
     bytes: 0,
     most: 0,
     window: Window {
@@ -88,6 +124,13 @@ impl State {
         if !self.window.files.iter().any(|(p, _)| p == path) {
             self.window.files.push((path.to_owned(), size));
         }
+    }
+
+    fn add(&mut self, path: &str, size: u64) {
+        self.bytes += size;
+        self.most = self.most.max(self.bytes);
+        self.window.most = self.window.most.max(self.bytes);
+        self.seen(path, size);
     }
 }
 
@@ -116,11 +159,22 @@ pub fn read(tree: &dyn Vfs, path: &str) -> io::Result<CachedFile> {
     });
     let mut state = state();
     state.held.push((path.to_owned(), Arc::downgrade(&held)));
-    state.bytes += size as u64;
-    state.most = state.most.max(state.bytes);
-    state.window.most = state.window.most.max(state.bytes);
-    state.seen(path, size as u64);
+    state.add(path, size as u64);
     Ok(CachedFile(held))
+}
+
+/// `len` zeroed bytes held in the cache and counted under `path`: a leaner
+/// structure that stands for the file the original maps there (rule 5),
+/// within that file's share of the budget. Never shared.
+pub fn hold(path: &str, len: usize) -> io::Result<HeldBytes> {
+    let bytes = SystemBytes::zeroed(len)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::OutOfMemory, "no memory for the file"))?;
+    let mut state = state();
+    let id = state.next_id;
+    state.next_id += 1;
+    state.standing.push((id, path.to_owned(), len as u64));
+    state.add(path, len as u64);
+    Ok(HeldBytes { id, bytes })
 }
 
 /// The bytes held now.
@@ -128,16 +182,24 @@ pub fn bytes() -> u64 {
     state().bytes
 }
 
-/// The files held now, with their sizes.
+/// The files held now, with their sizes: those read, then what stands for
+/// one ([`hold`]).
 pub fn held() -> Vec<(String, u64)> {
     // Taken out of the lock first: the last of one dropped would take it.
-    let held: Vec<Arc<Held>> = state()
-        .held
-        .iter()
-        .filter_map(|(_, h)| h.upgrade())
-        .collect();
+    let (held, standing): (Vec<Arc<Held>>, Vec<(String, u64)>) = {
+        let state = state();
+        (
+            state.held.iter().filter_map(|(_, h)| h.upgrade()).collect(),
+            state
+                .standing
+                .iter()
+                .map(|(_, path, size)| (path.clone(), *size))
+                .collect(),
+        )
+    };
     held.iter()
         .map(|h| (h.path.clone(), h.bytes.len() as u64))
+        .chain(standing)
         .collect()
 }
 
@@ -262,6 +324,12 @@ mod tests {
         assert_eq!(bytes(), 0);
         let small = read(&Files, "small").unwrap();
         drop(small);
+        // Bytes standing for the small file, counted under its path.
+        let mut standing = hold("small", 50).unwrap();
+        standing[49] = 1;
+        assert_eq!((bytes(), held()), (50, vec![("small".to_owned(), 50)]));
+        drop(standing);
+        assert_eq!(bytes(), 0);
         assert!(read(&Files, "missing").is_err());
         let second = mark();
         // The window began with the big file held.

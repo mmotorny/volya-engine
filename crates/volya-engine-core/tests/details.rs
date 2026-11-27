@@ -70,10 +70,18 @@ fn every_level_details_file() {
             assert_eq!(ids, [1, 2, 0], "{name}");
             let d = LevelDetails::parse(&bytes).unwrap();
             let h = d.header;
-            assert_eq!(
-                chunks.find(2).unwrap().payload.len(),
-                16 * (h.size_x * h.size_z) as usize
+            let stored = chunks.find(2).unwrap().payload;
+            assert_eq!(stored.len(), 16 * (h.size_x * h.size_z) as usize);
+            // The compact grid gives back every record as stored, in no
+            // more bytes than the stored grid.
+            assert!(
+                d.records()
+                    .flat_map(|s| s.0)
+                    .flat_map(u32::to_le_bytes)
+                    .eq(stored.iter().copied()),
+                "{name}"
             );
+            assert!(d.grid_bytes() <= stored.len(), "{name}");
             *counts.entry(h.model_count).or_insert(0) += 1;
             // Section 3.1's shipped values.
             for m in &d.models {

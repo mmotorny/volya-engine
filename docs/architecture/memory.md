@@ -68,7 +68,7 @@ The offline simulation's registry (6.3 MB, 54,735 blocks), the game graph and pa
 | The collision world (vertices, triangles, each triangle's material and sector in 2 bytes (#490), tree) | 29.4 MB in 4 blocks (largest 10.5 MiB) | 44.5 MB, `l11_pripyat`; 39.4 `l10_radar`, 34.4 `l07_military` |
 | The navigation positions (6 of each vertex's 21 bytes) | 7.1 MB, one block (`level.ai` 12.5 MB) | `l01_escape`'s `level.ai` is the largest |
 | What is made from the `level` file (the shader table; the static draw list 1.7, its spheres, the progressive visuals' detail windows 0.7; the camera pass with the billboard groups' faces) | 5.9 MB; the file itself in the file cache, 4.1 MB | |
-| The detail objects (slot grid, compact, and cache) | 5.6 MB | 11.9 MB, `l12_stancia` and `l12_stancia_2` |
+| The detail objects (the cache, the models) | 1.2 MB; the compact slot grid in the file cache, 4.4 MB | the grid 10.5 MB, `l12_stancia` and `l12_stancia_2` (as stored: the file's grid) |
 | The objects' models, weather, the level's sounds, with the objects' CPU geometry until uploaded (12.3 MB in 2 blocks: every detail window's indices, object-detail-level.md 4) | 13.9 MB, 6,744 blocks | |
 | The load in all at its end, the session included | 71.7 MB, 111,983 blocks above the program's data | `l11_pripyat` about 70 MB (believed: `l01_escape`'s with its own collision, details and navigation file) |
 
@@ -76,7 +76,7 @@ Measured natively. After the level is dropped, nothing of it outlives it: 0.0 MB
 
 ### Loading transients
 
-Each stage's peak above its start and what it keeps, measured natively (MB): `st_server_connecting` 15.6 and 15.6 (the spawn file and the graph streamed, #403); `st_opening_stream` 0.0 and 0.0 (the `level` file in the file cache, #691; streamed and parsed there it kept 7.9, #483); `st_loading_cform` 30.3 and 30.1; `st_loading_spatial_db` 14.1 and 5.9 (the visuals, portals and sectors parsed from the file and freed in it); `st_loading_details` 5.6 and 5.6; `st_client_spawning` 19.7 and 13.9; `st_loading_textures` 2.4 and 0.3. The load peaks 77.5 MB above its start against 71.7 kept. By count the transients are the many: `st_client_spawning` makes 2.52 million allocations to keep 6,744 blocks, `st_server_connecting` 537,041 to keep 83,764.
+Each stage's peak above its start and what it keeps, measured natively (MB): `st_server_connecting` 15.6 and 15.6 (the spawn file and the graph streamed, #403); `st_opening_stream` 0.0 and 0.0 (the `level` file in the file cache, #691; streamed and parsed there it kept 7.9, #483); `st_loading_cform` 30.3 and 30.1; `st_loading_spatial_db` 14.1 and 5.9 (the visuals, portals and sectors parsed from the file and freed in it); `st_loading_details` 1.2 and 1.2 (the slot grid in the file cache, 4.4, #692; on the heap it kept 5.6); `st_client_spawning` 19.7 and 13.9; `st_loading_textures` 2.4 and 0.3. The load peaks 73.2 MB above its start against 67.2 kept. By count the transients are the many: `st_client_spawning` makes 2.52 million allocations to keep 6,744 blocks, `st_server_connecting` 537,041 to keep 83,764.
 
 In the browser the level's preparation adds the texture read buffer (one file, up to 4.5 MB) and the band being transcoded (without BC); WebGL copies what is written at each call (docs/architecture/rendering.md).
 
@@ -138,14 +138,14 @@ Measured (#667): its New Game of `l01_escape` run unmodified under Wine three ti
 | 9 | `st_loading_shaders` | 1,400 | 12 | 8 | |
 | 10 | `st_loading_geometry` | 353 | 348 | 347 | |
 | 11 | `st_loading_spatial_db` | 4,297 | 6,343 | 6,142 | What it keeps is to be found (#728): the static draw list 1.7 MB, the detail windows 0.7, the camera pass about 3.4. |
-| 12 | `st_loading_details` | 10 | 5,417 | 4,963 | The compact slot grid (a leaner structure in place of the mapped `level.details`, rule 5) counted in the file cache's figure, not *h*. The cache's 0.2 MB stays (where the original holds its cache is unestablished). |
-| 13 | `st_loading_sectors_portals` | 143 | 2 | 3 | |
-| 14 | `st_loading_ai_objects` | 0 | 1 | 1 | The navigation positions (moved from 5; a leaner structure in place of the mapped `level.ai`, rule 5) and `level.gct` counted in the file cache's figure, not *h*. |
+| 12 | `st_loading_details` | 10 | 1,133 | 680 | The compact slot grid (a leaner structure in place of the mapped `level.details`, rule 5) is counted in the file cache's figure, not *h* (4,284 K, #692). What stays is the detail cache's 2,401 entries, about 470 bytes each natively (where the original holds its cache is unestablished, #710). |
+| 13 | `st_loading_sectors_portals` | 143 | 2 | 2 | |
+| 14 | `st_loading_ai_objects` | 0 | 2 | 2 | The navigation positions (moved from 5; a leaner structure in place of the mapped `level.ai`, rule 5) and `level.gct` counted in the file cache's figure, not *h*. |
 | 15 | `st_client_spawning` | 4,708 | 13,817 | 13,631 | The objects' models come from 1 (one not prefetched is loaded here); their CPU geometry, every detail window's indices among it (12.3 MB), freed once uploaded, as the original keeps it in Direct3D's buffers. |
-| 16 | `st_loading_textures` | 1 | 530 | 530 | Not the texture files (in the file cache, [File-backed data](#file-backed-data); natively none is read): what it keeps is to be found (#713). |
+| 16 | `st_loading_textures` | 1 | 530 | 529 | Not the texture files (in the file cache, [File-backed data](#file-backed-data); natively none is read): what it keeps is to be found (#713). |
 | 17 | `st_client_synchronising` | 0 | 356 | −5,999 | |
-| | The load, its first caption to its end | 201,005 | 70,742 | 55,452 | |
-| | *h* at the load's end | 227,120 | 86,693 | 75,551 | |
+| | The load, its first caption to its end | 201,005 | 66,459 | 51,168 | |
+| | *h* at the load's end | 227,120 | 82,410 | 71,267 | |
 | | *t* at the load's end | 260,798 | — | 146,706 (by the original's rule, headless Chrome; the original's without prefetching 179,025) | Counted by the original's rule (#689); the prefetched models' textures added (the original's 865 base textures against 631 without prefetching, 2.4.1). |
 
 Where ours keeps less than the original (8) it stays (rule 5): the budget is a ceiling. With the memory manager (#687) the wasm memory after a New Game is 95–96 MiB against 89 before it (`game-level`), 101–102 against 93 after the relaunched game's (`game-memory`); with the `level` file in the file cache (#691) 99 and 105 MiB: the pools' chunks keep their high-water mark (measured, headless Chrome; 1,001 chunks natively at the load's end, 16 MB). Beside them at the load's end the original writes the committed address space 849,680–849,744 K (the whole 32-bit process, its program, libraries and driver; ours, the wasm memory, 101,760 K today), the process heap 400,268–400,269 K and the game scripts' pool 25,762–25,784 K (measured, #667).
@@ -196,12 +196,12 @@ It is `volya_engine_core::file_cache` (#690). A file is read whole into bytes ta
 | Under | The cache's most, K | Its budget, K |
 |---|---|---|
 | `st_opening_stream` to `st_loading_spatial_db` (the `level` file) | 3,998 | 3,998 |
-| `st_loading_details` to `st_client_spawning` (the `level` file) | 3,998 | 12,194; 27,896 from `st_loading_ai_objects` |
-| `st_loading_textures` (the `level` file and the largest texture file) | 9,460 | 33,357 |
-| The loading screen's images (`st_prefetching_objects`, `st_server_connecting`; `st_client_synchronising` beside the `level` file) | 1,024; 64; 5,022 | 1,024; 64; 28,920 |
-| The load's end (the `level` file) | 3,998 | 27,896 |
+| `st_loading_details` to `st_client_spawning` (the `level` file, the detail slot grid: 4,284 against `level.details`' 8,196) | 8,282 | 12,194; 27,896 from `st_loading_ai_objects` |
+| `st_loading_textures` (those and the largest texture file) | 13,743 | 33,357 |
+| The loading screen's images (`st_prefetching_objects`, `st_server_connecting`; `st_client_synchronising` beside the `level` file and the slot grid) | 1,024; 64; 9,306 | 1,024; 64; 28,920 |
+| The load's end (the `level` file, the slot grid) | 8,282 | 27,896 |
 
-(Measured: headless Chrome, `game-level` and `game-memory`, every load alike.) Before it the texture files were read into one heap buffer freed at the preparation's end, so no caption's `phase cmem` growth changed: `st_loading_textures` keeps 200–530 K before and after, natively 530 K, where no texture file is read (#713); the most live under the caption fell from 79 to 76 MiB and the wasm memory stayed 96 MiB.
+(Measured: headless Chrome, `game-level` and `game-memory`, every load alike.) Before it the texture files were read into one heap buffer freed at the preparation's end, so no caption's `phase cmem` growth changed: `st_loading_textures` keeps 200–530 K before and after, natively 530 K, where no texture file is read (#713); the most live under the caption fell from 79 to 76 MiB and the wasm memory stayed 96 MiB. The detail slot grid stands for `level.details` (rule 5): the file is streamed and its compact grid made in one block the cache holds under the file's path (`file_cache::hold`), never more than the file's grid (every level's, `level_memory.rs`: 10.5 MB `l12_stancia`, its records as stored); *h* at the load's end fell 4,284 K and the wasm memory stayed 99 and 105 MiB (#692).
 
 ### Textures and the GPU
 

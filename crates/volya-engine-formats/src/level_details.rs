@@ -5,9 +5,13 @@
 //! detail models and the grid of 2 × 2 m slots saying which grow where.
 //! The slot grid is kept compact: its few most common records once, the
 //! others as stored (16 bytes each), and two bits a slot saying which,
-//! decoded on lookup (#411).
+//! decoded on lookup (#411). It is one block of bytes the reader's caller
+//! provides ([`LevelDetails::read_in`]): the engine's file cache counts it
+//! against the file (docs/architecture/memory.md, File-backed data).
 
+use std::fmt;
 use std::io::{self, Cursor, Read, Seek, SeekFrom};
+use std::ops::DerefMut;
 
 use crate::chunks::{self, ChunkHeader, Chunks};
 use crate::cp1251;
@@ -151,22 +155,37 @@ impl Slot {
     }
 }
 
+/// The bytes the compact slot grid is kept in.
+pub trait GridBytes: DerefMut<Target = [u8]> + Send + Sync {}
+
+impl<T: DerefMut<Target = [u8]> + Send + Sync> GridBytes for T {}
+
 /// A parsed `level.details`.
-#[derive(Clone, Debug, PartialEq)]
 pub struct LevelDetails {
     pub header: Header,
     pub models: Vec<DetailModel>,
-    /// Chunk 2's records other than the `common` ones, as stored, row by
-    /// row.
-    slots: Vec<u8>,
     /// Up to three records many slots hold, each kept once (on
     /// `l01_escape` two records are half the grid's 523,452 slots).
     common: Vec<[u8; SLOT_SIZE]>,
-    /// Two bits a slot, row by row (32 a word): 0 where its record is in
-    /// `slots`, else 1 + its index in `common`.
-    codes: Vec<u64>,
-    /// Per word of `codes`, the records of `slots` before it.
-    before: Vec<u32>,
+    /// The words of the codes; 0 where the block holds every record as
+    /// stored and no codes (where they would save less than they cost).
+    words: usize,
+    /// In one block, little-endian: the codes, two bits a slot, row by row
+    /// (32 a 64-bit word): 0 where its record is among the stored ones,
+    /// else 1 + its index in `common`; per word of the codes, the stored
+    /// records before it (32 bits); chunk 2's records other than the
+    /// `common` ones, as stored, row by row.
+    grid: Box<dyn GridBytes>,
+}
+
+impl fmt::Debug for LevelDetails {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LevelDetails")
+            .field("header", &self.header)
+            .field("models", &self.models)
+            .field("grid_bytes", &self.grid.len())
+            .finish_non_exhaustive()
+    }
 }
 
 /// Bytes of the slot grid read at a time.
@@ -325,12 +344,22 @@ fn require(headers: &[ChunkHeader], id: u32) -> io::Result<&ChunkHeader> {
 }
 
 impl LevelDetails {
-    /// Reads the file from a stream, holding at most its slot grid and its
-    /// models at once. A missing chunk is unestablished (a review gap), an
-    /// error here; so is a slot grid shorter than size_x × size_z records
-    /// (section 2.1: a malformed file). A longer one's extra bytes are
-    /// never read.
+    /// Reads the file from a stream, the compact slot grid kept on the
+    /// heap ([`Self::read_in`]).
     pub fn read(reader: &mut (impl Read + Seek)) -> io::Result<Self> {
+        Self::read_in(reader, |len| Ok(vec![0; len]))
+    }
+
+    /// Reads the file from a stream, holding at most its slot grid and its
+    /// models at once, the compact slot grid kept in the zeroed bytes
+    /// `alloc` gives for its size. A missing chunk is unestablished (a
+    /// review gap), an error here; so is a slot grid shorter than size_x ×
+    /// size_z records (section 2.1: a malformed file). A longer one's extra
+    /// bytes are never read.
+    pub fn read_in<B: GridBytes + 'static>(
+        reader: &mut (impl Read + Seek),
+        alloc: impl FnOnce(usize) -> io::Result<B>,
+    ) -> io::Result<Self> {
         let headers = chunks::index(reader)?;
         let header = Header::parse(&require(&headers, 0)?.read_content(reader)?)?;
         let models = models(
@@ -348,21 +377,20 @@ impl LevelDetails {
         let mut details = Self {
             header,
             models,
-            slots: Vec::new(),
             common: Vec::new(),
-            codes: Vec::new(),
-            before: Vec::new(),
+            words: 0,
+            grid: Box::new(Vec::new()),
         };
         if grid.is_compressed() {
             let records = grid.read_content(reader)?;
-            details.compact(|f| {
+            details.compact(alloc, |f| {
                 f(&records[..need]);
                 Ok(())
             })?;
         } else {
             // Read three times, a piece at a time (#411).
             let mut piece = vec![0; GRID_PIECE.min(need.max(1))];
-            details.compact(|f| {
+            details.compact(alloc, |f| {
                 reader.seek(SeekFrom::Start(grid.offset))?;
                 let mut left = need;
                 while left > 0 {
@@ -381,8 +409,9 @@ impl LevelDetails {
     /// to its callback in order, in whole records, and is called three
     /// times: to find the frequent records (Misra and Gries' counters, in
     /// constant memory), to count them, and to keep the rest.
-    fn compact(
+    fn compact<B: GridBytes + 'static>(
         &mut self,
+        alloc: impl FnOnce(usize) -> io::Result<B>,
         mut grid: impl FnMut(&mut dyn FnMut(&[u8])) -> io::Result<()>,
     ) -> io::Result<()> {
         const KINDS: usize = 3;
@@ -413,34 +442,58 @@ impl LevelDetails {
         })?;
         // Worth a code where it saves more than the codes cost.
         counts.retain(|c| c.1 * SLOT_SIZE * 4 >= count / 8);
-        let kept = count - counts.iter().map(|c| c.1).sum::<usize>();
+        let mut kept = count - counts.iter().map(|c| c.1).sum::<usize>();
         self.common = counts.into_iter().map(|c| c.0).collect();
-        self.slots = Vec::with_capacity(kept * SLOT_SIZE);
-        self.codes = vec![0; count.div_ceil(32)];
-        self.before = Vec::with_capacity(self.codes.len());
-        let (slots, codes, before, common) = (
-            &mut self.slots,
-            &mut self.codes,
-            &mut self.before,
-            &self.common,
-        );
-        let mut i = 0usize;
+        let mut words = count.div_ceil(32);
+        // Where the codes save less than they cost, every record as stored
+        // and no codes: never more than the stored grid.
+        if words * 12 + kept * SLOT_SIZE >= count * SLOT_SIZE {
+            self.common.clear();
+            (words, kept) = (0, count);
+        }
+        let mut bytes = alloc(words * 12 + kept * SLOT_SIZE)?;
+        let (codes, rest) = bytes.split_at_mut(words * 8);
+        let (before, slots) = rest.split_at_mut(words * 4);
+        let common = &self.common;
+        let (mut i, mut stored, mut changed) = (0usize, 0usize, false);
         grid(&mut |records| {
             for r in records.as_chunks::<SLOT_SIZE>().0 {
-                if i.is_multiple_of(32) {
-                    before.push((slots.len() / SLOT_SIZE) as u32);
+                let word = i / 32;
+                if words > 0 && word >= words {
+                    changed = true;
+                    break;
+                }
+                if words > 0 && i.is_multiple_of(32) {
+                    before[4 * word..4 * word + 4].copy_from_slice(&(stored as u32).to_le_bytes());
                 }
                 match common.iter().position(|c| c == r) {
-                    Some(k) => codes[i / 32] |= (k as u64 + 1) << (2 * (i % 32)),
-                    None => slots.extend_from_slice(r),
+                    Some(k) => {
+                        let code = &mut codes[8 * word..8 * word + 8];
+                        let bits = u64::from_le_bytes(<[u8; 8]>::try_from(&*code).unwrap())
+                            | (k as u64 + 1) << (2 * (i % 32));
+                        code.copy_from_slice(&bits.to_le_bytes());
+                    }
+                    None if stored < kept => {
+                        slots[stored * SLOT_SIZE..(stored + 1) * SLOT_SIZE].copy_from_slice(r);
+                        stored += 1;
+                    }
+                    None => changed = true,
                 }
                 i += 1;
             }
         })?;
-        if slots.len() != kept * SLOT_SIZE {
+        if changed || stored != kept || i != count {
             return Err(invalid("level.details: the slot grid changed while read"));
         }
+        self.words = words;
+        self.grid = Box::new(bytes);
         Ok(())
+    }
+
+    /// Word `word` of the codes.
+    fn code_word(&self, word: usize) -> u64 {
+        let at = 8 * word;
+        u64::from_le_bytes(self.grid[at..at + 8].try_into().unwrap())
     }
 
     /// The file from its bytes.
@@ -451,7 +504,11 @@ impl LevelDetails {
     /// Record (`ix`, `iz`) of the grid (section 4).
     pub fn record(&self, ix: u32, iz: u32) -> Slot {
         let i = iz as usize * self.header.size_x as usize + ix as usize;
-        let (word, at) = (self.codes[i / 32], 2 * (i % 32));
+        if self.words == 0 {
+            let at = i * SLOT_SIZE;
+            return slot(self.grid[at..at + SLOT_SIZE].try_into().unwrap());
+        }
+        let (word, at) = (self.code_word(i / 32), 2 * (i % 32));
         let code = (word >> at) & 3;
         if code != 0 {
             return slot(&self.common[code as usize - 1]);
@@ -459,12 +516,10 @@ impl LevelDetails {
         // The slots before this one in its word whose code is 0.
         const LOW: u64 = 0x5555_5555_5555_5555;
         let zero = !(word | (word >> 1)) & LOW & ((1u64 << at) - 1);
-        let rank = self.before[i / 32] as usize + zero.count_ones() as usize;
-        slot(
-            self.slots[rank * SLOT_SIZE..(rank + 1) * SLOT_SIZE]
-                .try_into()
-                .unwrap(),
-        )
+        let before = 8 * self.words + 4 * (i / 32);
+        let before = u32::from_le_bytes(self.grid[before..before + 4].try_into().unwrap());
+        let at = 12 * self.words + (before as usize + zero.count_ones() as usize) * SLOT_SIZE;
+        slot(self.grid[at..at + SLOT_SIZE].try_into().unwrap())
     }
 
     /// The slot of world cell (`cx`, `cz`), covering x 2cx … 2cx + 2 and
@@ -485,12 +540,16 @@ impl LevelDetails {
         (0..h.size_z).flat_map(move |iz| (0..h.size_x).map(move |ix| self.record(ix, iz)))
     }
 
-    /// Heap bytes held.
+    /// Bytes of the compact slot grid's block.
+    pub fn grid_bytes(&self) -> usize {
+        self.grid.len()
+    }
+
+    /// Bytes held: the compact slot grid's block, the common records and
+    /// the models.
     pub fn memory_bytes(&self) -> usize {
-        self.slots.capacity()
+        self.grid.len()
             + self.common.capacity() * SLOT_SIZE
-            + self.codes.capacity() * 8
-            + self.before.capacity() * 4
             + self
                 .models
                 .iter()
@@ -630,6 +689,30 @@ mod tests {
         assert!(d.records().map(|s| s.0).eq(records.iter().copied()));
         assert_eq!(d.record(129, 69).0, records[(69 * sx + 129) as usize]);
         assert!(d.memory_bytes() < slots.len() / 2);
+    }
+
+    /// Records with no common ones are kept as stored, never in more
+    /// bytes than the stored grid.
+    #[test]
+    fn a_grid_without_common_records_is_kept_as_stored() {
+        let (sx, sz) = (40u32, 3u32);
+        let records: Vec<[u32; 4]> = (0..sx * sz).map(|i| [i, 1, 2, 3]).collect();
+        let slots: Vec<u8> = records
+            .iter()
+            .flatten()
+            .flat_map(|w| w.to_le_bytes())
+            .collect();
+        let mut file = chunk(1, &[]);
+        file.extend(chunk(2, &slots));
+        file.extend(chunk(0, &header(3, 0, [0, 0], [sx, sz])));
+        let mut asked = 0;
+        let d = LevelDetails::read_in(&mut Cursor::new(&file), |len| {
+            asked = len;
+            Ok(vec![0; len])
+        })
+        .unwrap();
+        assert_eq!((asked, d.grid_bytes()), (slots.len(), slots.len()));
+        assert!(d.records().map(|s| s.0).eq(records.iter().copied()));
     }
 
     #[test]
