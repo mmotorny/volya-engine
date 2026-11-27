@@ -2,8 +2,8 @@
 
 What the original's three diagnostic console commands write to the log: `stat_memory` (memory
 statistics), `dump_resources` (counts of the graphics resources) and `dump_open_files` (the list of files
-opened for reading), when the programs run `stat_memory` themselves, and the related lines written at
-shutdown. How a line reaches a command, the bare-name rule and the help text are those of
+opened for reading), when the programs run `stat_memory` themselves, the phase lines written during
+a load and the related lines written at shutdown. How a line reaches a command, the bare-name rule and the help text are those of
 `console-commands.md` (CC); the log and the console's display of it are those of `console-scope.md`
 section 7 (CS) and of the console-log specification. `rs_stats` is not part of this specification
 (`r1-settings-scope.md` 2.11). What could not be established is marked **unestablished**; a statement
@@ -164,10 +164,19 @@ executed; in a level also the level's `level.ai`, `level.gct` and `level.details
   its four lines follow `Loading DLL: xrGame.dll` (and any registry message) and precede
   `Executing config-script "…default_controls.ltx"...`; the texture, script-pool and renderer figures
   are then 0 [DG-9, DG-10].
+- **At each stage caption of a load**: whenever a new stage caption of the loading screen begins
+  (`loading-screen.md` section 5), before its image is drawn, the engine prints three lines: `* phase
+  time: <ms> ms` (milliseconds since the previous caption began or, for the first caption, since the
+  load began), `* phase cmem: <n> K` (the program's own memory manager's bytes in use, as below), and
+  the caption's displayed text (`loading-screen.md` 4.3, with the `...`) as a line of its own [DG-21].
+  The lines the stage's work writes follow (none, for some stages). Measured for a New Game: seventeen
+  such groups, one per caption of `loading-screen.md` section 5 in its order (e.g. `* phase time: 0 ms`,
+  `* phase cmem: 26124 K`, `Кэширование объектов...` first, `Клиент: Соединение с localhost...` sixth),
+  then the end-of-load pair below [DG-21].
 - **At the end of a load**: when the last of the nested loading phases ends (the loading screen of
   `loading-screen.md` finishes), the engine prints `* phase time: <ms> ms` (milliseconds since the
-  previous phase) and `* phase cmem: <n> K` (the bytes the program's own memory manager has in use),
-  then runs `stat_memory` [DG-9, DG-10]. It does so through the console's input line: the line is set to
+  last stage caption began) and `* phase cmem: <n> K` (the bytes the program's own memory manager has
+  in use), then runs `stat_memory` [DG-9, DG-10, DG-21]. It does so through the console's input line: the line is set to
   `stat_memory` and executed without the `~ <line>` echo, then emptied, so a line the user was typing in
   the console is lost (**believed**: this is the line the console edits; not measured with the console
   open) [DG-9]. Measured for a New Game; **believed** for every load (loading a save, changing level),
@@ -201,7 +210,7 @@ were 0, so no such lines appeared, and the next line was `refCount:pBaseZB 1` [D
   user; the shipped `__support\userdocs\user.ltx`; the archives' script `bind_stalker.script`, extracted
   with the project's archive tool.
 - Static analysis with Ghidra 12.2 (headless, read-only) of `XR_3DA.exe` (the two engine commands, the
-  resource manager's count lines and its destruction, startup, the end of loading, the console's line
+  resource manager's count lines and its destruction, startup, the stage captions and the end of loading, the console's line
   execution), `xrGame.dll` (the memory statistics command), `xrCore.dll` (address-space and heap
   statistics, memory release, string and memory sharing statistics, the open-file list, the command-line
   option), `xrRender_R1.dll` and `xrRender_R2.dll` (the renderer's memory figure).
@@ -217,6 +226,7 @@ were 0, so no such lines appeared, and the next line was `refCount:pBaseZB 1` [D
 - Approved specifications of the repository read for context (CC, CS, `steering-the-original.md`).
 - No leaked source code, derived projects or third-party documentation of the engine were used.
 
+
 ## Gaps found in review
 
-- Each loading-stage title change during a load (`loading-screen.md`), not only the end of the load, prints `* phase time: <ms> ms` and `* phase cmem: <n> K` (same meanings as 2.4) and then the new stage title as its own log line (measured: seventeen such groups during a New Game before the final pair of 2.4).
+- The phase timer of 2.4 is restarted (when the load begins and at each stage caption) only while the engine's global timer is not paused; whether it can be paused during a load, and so whether a `* phase time` can then span several captions, is not established.
