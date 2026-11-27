@@ -78,8 +78,8 @@ On an iPhone the heap grew while a level ran (74.9 → 78 MiB about 110 s into t
 | Owner | `l01_escape` | The largest level |
 |---|---|---|
 | The level's textures, as stored (BC) | 127 MiB (the objects' 22.5 MiB of it; 458 textures) | Its surfaces' alone: 91.2 MB `l07_military`, 83.3 for `l01_escape` |
-| The level's buffers (geometry, the objects', draw records) | 78.7 MiB (the objects' 19.2; every detail window's indices among them, the static world's 12.7) | `level.geom` 109.7 MB `l12_stancia_2` against 57.0 |
-| The level in all (`gpu_level`) | 462 textures, 143 MiB; 60 buffers, 61 MiB; 48 vertex arrays (before the detail windows' indices) | |
+| The level's buffers (geometry, the objects', draw records) | 70.8 MiB (the objects' 11.3: every detail window's indices among them, 16-bit, each draw reading from one of the vertex arrays' first vertices, 19.2 with 32-bit indices, #610; the static world's 12.7) | `level.geom` 109.7 MB `l12_stancia_2` against 57.0 |
+| The level in all (`gpu_level`) | 462 textures, 143 MiB; 60 buffers, 79 MiB; 51 vertex arrays | |
 | The video mode's targets (`targets`): the frame, the offscreen frame, the supersampled target with its distortion and depth, the world's depth | 5 textures: 19 MiB at 1024 × 768, 22 at 1280 × 720, 37 at 1448 × 1086, 52 at 2868 × 1320; 19 again at 1024 × 768 after a game at 2868 × 1320 | |
 | The renderer's own (`renderer`, `particles`, `lights`) | 7 textures, 2 MiB; 9 buffers, 2 MiB (the particles' 2 MiB of it) | |
 | The menus' images and the videos (`images`, `video`), while drawn | in the title menu 6 textures, 2 MiB, and 8 textures, 3 MiB; in the level 1 texture, 1 MiB | |

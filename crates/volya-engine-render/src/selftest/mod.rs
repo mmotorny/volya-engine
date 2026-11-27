@@ -112,6 +112,10 @@ const CHECKS: &[(&str, Run)] = &[
     ("objects draw quantized models", |m| {
         Box::pin(world::objects_draw_quantized_models(m))
     }),
+    (
+        "objects past 16 bits of vertices keep 16-bit indices",
+        |m| Box::pin(world::objects_past_16_bits_keep_16_bit_indices(m)),
+    ),
     ("objects draw their detail window", |m| {
         Box::pin(world::objects_draw_their_detail_window(m))
     }),

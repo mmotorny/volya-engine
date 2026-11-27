@@ -650,6 +650,40 @@ pub async fn objects_draw_quantized_models(make: Make<'_>) -> Outcome {
     Ok(String::new())
 }
 
+/// Objects past 16 bits of vertices: a draw from vertex 0 (a degenerate
+/// triangle) and one from vertex 70,000 (the green screen-covering
+/// triangle of [`object_geometry`]) share their indices; the second reads
+/// from a base of its own, so the indices stay 16-bit (#610).
+pub async fn objects_past_16_bits_keep_16_bit_indices(make: Make<'_>) -> Outcome {
+    let mut r = make();
+    let base = quadrants(&r);
+    let green = object_geometry(UP);
+    let mut vertices = vec![0; 70_000 * crate::world::MODEL_VERTEX_BYTES];
+    vertices.extend_from_slice(&green.vertices);
+    let objects = ObjectGeometry { vertices, ..green };
+    let g = geom(Layout::VertexLit, 0, 0, [0; 8]);
+    let surfaces = [surface(Program::ModelSelfLight, Some(base))];
+    let far = WorldDraw {
+        first_vertex: 70_000,
+        ..object_draw(0, [0.0; 4])
+    };
+    let world = r
+        .create_world_with(
+            &g,
+            &objects,
+            &surfaces,
+            &[object_draw(0, [0.0; 4]), far],
+            None,
+        )
+        .map_err(fail("world"))?;
+    // The vertices, two 16-bit ranges of 3 (12 bytes), two draw records.
+    let want = (objects.vertices.len() + 12 + 2 * crate::world::DRAW_BYTES) as u64;
+    ensure_eq!(world.object_gpu_bytes(), want, "object bytes");
+    let px = centre(&mut r, frame(world, None)).await?;
+    expect_near(px, [0, 255, 0], "the draw from vertex 70,000")?;
+    Ok(String::new())
+}
+
 /// A skinned progressive mesh of two detail windows, each a
 /// screen-covering triangle: window 0 green, window 1 red (texels of
 /// [`quadrants`], self-lit). Its sphere's measure m = r / d² at d = 1

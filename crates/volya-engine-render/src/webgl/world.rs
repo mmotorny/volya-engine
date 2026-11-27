@@ -725,6 +725,14 @@ impl World {
     }
 }
 
+/// The base of `bases` (ascending, the first 0 or at most `first_vertex`)
+/// an object draw from `first_vertex` reads from: the last at or below it.
+fn object_base(bases: &[u32], first_vertex: u32) -> usize {
+    bases
+        .partition_point(|&b| b <= first_vertex)
+        .saturating_sub(1)
+}
+
 enum Source {
     /// Stored vertex buffer `i` of the level's geometry.
     Vertices(u32),
@@ -778,6 +786,9 @@ pub struct GeometryUpload {
     object_buffer_bytes: u64,
     object_vb: u32,
     object_ib: u32,
+    /// The objects' vertex buffers' first vertices, ascending: vertex
+    /// buffer `object_vb + g` is the objects' from vertex `object_bases[g]`.
+    object_bases: Vec<u32>,
     /// The draws' index ranges it was begun for.
     ranges: Vec<(bool, u32, u32, u32, u32)>,
     /// Whether it was begun with objects' vertices.
@@ -1062,6 +1073,7 @@ impl Renderer {
         // The objects' buffers follow the level's.
         let (object_vb, object_ib) = (vertex_buffers.len() as u32, index_buffers.len() as u32);
         let mut object_buffer_bytes = 0;
+        let mut object_bases = vec![0];
         if !objects.vertices.is_empty() {
             // Whole 16-byte vertices: a multiple of 4 bytes, as buffers need.
             let bytes = objects.vertices.len() as u64;
@@ -1077,27 +1089,58 @@ impl Renderer {
             object_buffer_bytes += bytes;
             // Rebased as they are uploaded, as the level's are (a rebased
             // copy made at once took 2.6 MiB, its 32-bit working copy 4 MiB,
-            // in the wasm heap; #357), 32-bit once they pass 16 bits.
+            // in the wasm heap; #357). Each draw reads the vertices from
+            // one of `object_bases`, the last at or below its first vertex,
+            // its own within 16 bits of it: WebGL 2 has no base vertex, so
+            // each base is a vertex array's attribute offset, and the
+            // indices stay 16-bit (32-bit took the objects' buffers from 6.0
+            // to 19.2 MiB once every detail window was uploaded, #610). A
+            // draw whose own vertices pass 16 bits makes them 32-bit, read
+            // from vertex 0.
             let label = "object indices";
+            let mut tops: HashMap<RangeKey, u32> = HashMap::new();
+            for d in draws.iter().filter(|d| d.object.is_some()) {
+                tops.entry(Rebased::key(d)).or_insert_with(|| {
+                    let range = d.first_index as usize..(d.first_index + d.index_count) as usize;
+                    let top = objects.indices[range].iter().copied().max().unwrap_or(0);
+                    u32::from(top) + d.first_vertex
+                });
+            }
+            let mut spans: Vec<(u32, u32)> = tops.iter().map(|(k, &top)| (k.4, top)).collect();
+            spans.sort_unstable();
+            let limit = u32::from(u16::MAX);
+            let wide = spans.iter().any(|&(first, top)| top - first > limit);
+            let mut bases: Vec<u32> = Vec::new();
+            if !wide {
+                for &(first, top) in &spans {
+                    if bases.last().is_none_or(|&b| top - b > limit) {
+                        bases.push(first);
+                    }
+                }
+            }
+            if bases.is_empty() {
+                bases.push(0);
+            }
+            // A vertex buffer index per base, all the one buffer.
+            for _ in 1..bases.len() {
+                vertex_buffers.push(vertex_buffers[object_vb as usize].clone());
+            }
             let mut object_segments: Vec<Segment> = Vec::new();
-            let mut widest = 0u32;
             for d in draws.iter().filter(|d| d.object.is_some()) {
                 rebased.add(d, || {
                     let at = object_segments.last().map_or(0, |s| s.at + s.count);
-                    let range = d.first_index as usize..(d.first_index + d.index_count) as usize;
-                    let top = objects.indices[range].iter().copied().max().unwrap_or(0);
-                    widest = widest.max(u32::from(top) + d.first_vertex);
+                    let g = object_base(&bases, d.first_vertex);
                     object_segments.push(Segment {
                         at,
                         first: d.first_index,
                         count: d.index_count,
-                        base: d.first_vertex,
-                        vb: object_vb,
+                        base: d.first_vertex - bases[g],
+                        vb: object_vb + g as u32,
                     });
                     at
                 });
             }
-            let wide = widest > u32::from(u16::MAX);
+            object_bases = bases;
             let count = object_segments.last().map_or(0, |s| s.at + s.count);
             let bytes = (u64::from(count) * if wide { 4 } else { 2 }).max(4);
             object_buffer_bytes += bytes.next_multiple_of(4);
@@ -1134,6 +1177,7 @@ impl Renderer {
             object_buffer_bytes,
             object_vb,
             object_ib,
+            object_bases,
             ranges: draws.iter().map(Rebased::key).collect(),
             objects: !objects.vertices.is_empty(),
             windows: objects.windows.clone(),
@@ -1176,6 +1220,7 @@ impl Renderer {
             mut object_buffer_bytes,
             object_vb,
             object_ib,
+            object_bases,
             objects,
             windows,
             ..
@@ -1211,8 +1256,8 @@ impl Renderer {
             .map(|mut d| {
                 if d.object.is_some() {
                     d.first_index = rebased.first_index(&d);
+                    d.vertex_buffer = object_vb + object_base(&object_bases, d.first_vertex) as u32;
                     d.first_vertex = 0;
-                    d.vertex_buffer = object_vb;
                     d.index_buffer = object_ib;
                 } else if let Some(&(ib, k)) = level_segments.get(&Rebased::key(&d)) {
                     d.first_index = segments[ib as usize][k as usize].at;
@@ -1353,7 +1398,11 @@ impl Renderer {
                     .or_insert_with(|| {
                         let layout = surfaces[d.surface as usize].program.layout();
                         let vb = &vertex_buffers[d.vertex_buffer as usize];
-                        let mut buffers = vec![(vb, 0, vertex_layout(layout))];
+                        // An object base's first vertex, as an offset.
+                        let offset = (d.vertex_buffer.checked_sub(object_vb))
+                            .and_then(|g| object_bases.get(g as usize))
+                            .map_or(0, |&b| u64::from(b) * MODEL_VERTEX_BYTES as u64);
+                        let mut buffers = vec![(vb, offset, vertex_layout(layout))];
                         if let Some(Some(ids)) = id_buffers.get(d.vertex_buffer as usize) {
                             buffers.push((ids, 0, &ID));
                         }

@@ -91,7 +91,7 @@ const STAGE_BUDGETS: [(Stage, f64); 9] = [
     // 9.5: `level.details`' slot grid (8.4) and the cache (#411).
     (Stage::LoadingDetails, 10.5),
     // 11.0: the objects' models (9.4) and the zones' effect objects;
-    // 19.7 with every detail window's indices (#528, over: #610).
+    // 19.7 with every detail window's indices (#528, over: #653).
     (Stage::ClientSpawning, 12.5),
     (Stage::LoadingTextures, 4.5), // 3.2
 ];
