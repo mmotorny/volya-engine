@@ -49,6 +49,11 @@ const SPIN: u32 = 1000;
 /// 10 ms each, measured on the PC, #762).
 const START_QUANTUM_MS: u32 = 0;
 
+// The plan's `prestart_sleeps 0`: before the first frame sleeps advance the
+// clock not at all, as the startup's Sleep(5) waits on its other threads
+// took 282 and 283 calls in two runs (measured on the PC, #762); only its
+// busy waits advance it, by their reads.
+
 /// The clock at the first frame, whatever the startup took: how long that
 /// was depends on how often it waited, so from the first frame on every
 /// run reads the same times (the driver warns when the startup took longer).
@@ -110,7 +115,7 @@ pub fn plan() -> String {
         "volya-capture-plan 1\n\
          # From tests/fidelity/views.rs (xtask wincapture). Frames of {FRAME_MS} ms.\n\
          frame_ms {FRAME_MS}\nspin {SPIN}\nsleep_advances 1\n\
-         start_quantum_ms {START_QUANTUM_MS}\nfirst_frame_ms {FIRST_FRAME_MS}\n\
+         start_quantum_ms {START_QUANTUM_MS}\nprestart_sleeps 0\nfirst_frame_ms {FIRST_FRAME_MS}\n\
          epoch {EPOCH}\nsize {WIDTH} {HEIGHT}"
     );
     for line in String::from_utf8_lossy(&capture_ltx()).lines() {

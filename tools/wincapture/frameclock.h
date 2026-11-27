@@ -16,7 +16,7 @@
 
 #define FRAMECLOCK_NAME "Local\\VolyaFrameClock"
 #define FRAMECLOCK_MAGIC 0x6b636f6c63796c76ull /* "vlyclock" */
-#define FRAMECLOCK_VERSION 3
+#define FRAMECLOCK_VERSION 4
 
 /* Ticks of the clock: 100 ns, the unit of the system time. Every clock the
  * game reads is derived from one count of them (frameclock.c). */
@@ -35,6 +35,7 @@ struct frameclock {
     uint64_t sleep_advances; /* 1: a main-thread Sleep(n) adds n ms to the clock */
     uint64_t start_quantum;  /* before the first frame, ms a main-thread Sleep adds at least */
     uint64_t first_frame;    /* ticks the clock is moved up to at the first frame (0: not) */
+    uint64_t prestart_sleeps; /* 1: sleeps before the first frame advance the clock too */
     char log_path[260];      /* the proxy's own log (empty: none) */
 
     /* Written by the driver while the game runs. */
