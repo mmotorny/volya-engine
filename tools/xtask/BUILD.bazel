@@ -13,6 +13,8 @@ exports_files(["Cargo.toml"])
 volya_binary(
     name = "xtask",
     srcs = glob(["src/**/*.rs"]),
+    # The fidelity suite's views (src/wincapture.rs).
+    compile_data = ["//tests/fidelity:views.rs"],
     crate_root = "src/main.rs",
     env = {
         "VOLYA_GOG_INSTALLER": GOG_INSTALLER,
@@ -33,6 +35,21 @@ volya_binary(
         "src/d3d9probes_action.rs",
     ],
     crate_root = "src/d3d9probes_action.rs",
+)
+
+# The Windows capture's actions' tool (build/wincapture.bzl): its modules
+# alone, so an edit elsewhere in xtask builds nothing again.
+volya_binary(
+    name = "wincapture-action",
+    srcs = [
+        "src/common.rs",
+        "src/d3d9probes.rs",
+        "src/wincapture.rs",
+        "src/wincapture_action.rs",
+    ],
+    # The fidelity suite's views (src/wincapture.rs).
+    compile_data = ["//tests/fidelity:views.rs"],
+    crate_root = "src/wincapture_action.rs",
 )
 
 rust_test(

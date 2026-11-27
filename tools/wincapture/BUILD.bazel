@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+
+load("//build:checks.bzl", "volya_checks")
+load("//build:d3d9probes.bzl", "d3d9probes_zip")
+load("//build:wincapture.bzl", "wincapture_binary", "wincapture_plan")
+
+package(default_visibility = ["//visibility:public"])
+
+# The frame clock: a proxy winmm.dll for the game's bin\ (frameclock.c).
+wincapture_binary(
+    name = "winmm",
+    srcs = [
+        "frameclock.c",
+        "frameclock.h",
+        "winmm_exports.h",
+    ],
+    kind = "dll",
+    out = "winmm.dll",
+)
+
+# The driver (capture.c).
+wincapture_binary(
+    name = "volyacapture",
+    srcs = [
+        "capture.c",
+        "frameclock.h",
+    ],
+    kind = "exe",
+    out = "volyacapture.exe",
+)
+
+# The views, their frames and settings (tests/fidelity/views.rs).
+wincapture_plan(
+    name = "plan",
+    out = "plan.txt",
+)
+
+# The Windows runner (docs/testing.md, The original on Windows;
+# `bazel run //tools/xtask -- wincapture release` publishes it).
+d3d9probes_zip(
+    name = "runner",
+    srcs = [
+        "README.txt",
+        ":plan",
+        ":volyacapture",
+        ":winmm",
+    ],
+    out = "wincapture.zip",
+)
+
+volya_checks(wasm = False)

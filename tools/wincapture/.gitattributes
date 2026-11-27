@@ -1,0 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+
+# Results from the Windows PC (docs/testing.md) keep the bytes Windows wrote.
+results/** -text

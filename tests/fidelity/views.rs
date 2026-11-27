@@ -7,8 +7,9 @@
 // the same views and settings; a change here needs new frames.
 //
 // Each view has its own user configuration file, `<view>.user.ltx` ([`user_ltx`]):
-// the shipped `user.ltx` with [`SETTINGS`] and [`VIEW_SETTINGS`]
-// written into it. The original runs with it (`-ltx`), our check starts
+// [`SETTINGS`] and [`VIEW_SETTINGS`] written into a configuration file; the
+// Windows capture (tools/wincapture) writes them into an empty one, its
+// lines only these. The original runs with it (`-ltx`), our check starts
 // from the same bytes, and each engine's file as it rewrites it on quit
 // (options-screens.md 12.3) must match the other's byte for byte before
 // any pixel is compared (#561).
