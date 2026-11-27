@@ -659,6 +659,78 @@ export const tests = {
     return `outfit ${outfit}`;
   },
 
+  "touch: a look swipe across the screen's width turns finely when slow and far when quick (the look curve, #731)": async () => {
+    needsGame();
+    const controls = document.getElementById("touch-controls");
+    assert(controls, "no touch controls");
+    const tap = { pointerType: "touch", pointerId: 30, isPrimary: true, button: 0 };
+    pointer("pointerdown", client(512, 100), { ...tap, buttons: 1 });
+    pointer("pointerup", client(512, 100), { ...tap, buttons: 0 });
+    for (let i = 0; i < 50 && controls.hidden; i++) await sleep(20);
+    assert(!controls.hidden, "the touch controls show");
+    const look = controls.querySelector(".touch-look");
+    const r = localRect(look, controls);
+    const [lx, ly] = [(r.left + r.right) / 2, (r.top + r.bottom) / 2];
+    // The screen's width in the game's own (landscape) layout: the phone's
+    // long side, upright (turned) or not.
+    const width = controls.clientWidth;
+    const touchOn = (type, at) => {
+      const [x, y] = toClient(controls, at);
+      look.dispatchEvent(
+        new PointerEvent(type, {
+          clientX: x,
+          clientY: y,
+          pointerId: 81,
+          pointerType: "touch",
+          isPrimary: true,
+          button: type === "pointermove" ? -1 : 0,
+          buttons: type === "pointerup" ? 0 : 1,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    };
+    const settled = async () => {
+      let last = (await state()).level.yaw;
+      for (let i = 0; i < 100; i++) {
+        await sleep(50);
+        const yaw = (await state()).level.yaw;
+        if (yaw === last) return yaw;
+        last = yaw;
+      }
+      assert(false, "the view to stop turning");
+    };
+    // One swipe of the screen's width at `speed` CSS px/s, its moves placed
+    // by the clock (about every 8 ms) so jitter changes their count, not the
+    // speed; the degrees it turned and the speed it took.
+    const sweep = async (speed, dir) => {
+      const before = await settled();
+      touchOn("pointerdown", [lx, ly]);
+      const t0 = performance.now();
+      let x = 0;
+      while (x < width) {
+        await sleep(8);
+        x = Math.min(width, ((performance.now() - t0) / 1000) * speed);
+        touchOn("pointermove", [lx + dir * x, ly]);
+      }
+      const took = (performance.now() - t0) / 1000;
+      touchOn("pointerup", [lx + dir * width, ly]);
+      const turned = Math.abs((await settled()) - before) * (180 / Math.PI);
+      return { turned, speed: width / took };
+    };
+    const runs = [];
+    for (const [what, speed] of [
+      ["slow", 250],
+      ["steady", 1000],
+      ["quick", width / 0.2],
+    ]) {
+      // Right, then back left alike, so the next tests find the view as it was.
+      runs.push({ what, ...(await sweep(speed, 1)) });
+      await sweep(speed, -1);
+    }
+    return `${width} px wide: ${runs.map((r) => `${r.what} (${Math.round(r.speed)} px/s) ${r.turned.toFixed(0)}°`).join(", ")}`;
+  },
+
   "touch: the stick walks and its sprint lock sprints, drags look (from Jump too), Crouch and its swipe down, Menu opens the menu": async () => {
     needsGame();
     const controls = document.getElementById("touch-controls");
