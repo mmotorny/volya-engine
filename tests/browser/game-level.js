@@ -187,6 +187,46 @@ export const tests = {
     return `ms per frame: ${rows.join("; ")} (before: done ${before.gpu_done_ms?.toFixed(1)})${commands}`;
   },
 
+  "the diagnostic log's cost per frame: off and on in turn, its GPU fence and its writes": async () => {
+    needsGame();
+    await until((s) => s.phase === "level" && !s.intro, "the level");
+    // #669: the latest 60 frames' averages after a second to settle, with
+    // the log off and on in turn (each turn off deletes it; back on, a new
+    // one starts).
+    const rounds = 4;
+    const sums = { off: { cpu: 0, interval: 0 }, on: { cpu: 0, interval: 0 } };
+    try {
+      for (let i = 0; i < rounds; i++) {
+        for (const on of [false, true]) {
+          await volya.diagnostics.setEnabled(on, volya.call);
+          await sleep(1000 + 60 * 34);
+          const s = await volya.call("level_stats");
+          const side = sums[on ? "on" : "off"];
+          side.cpu += s.frame_cpu_ms / rounds;
+          side.interval += s.frame_interval_ms / rounds;
+        }
+      }
+    } finally {
+      await volya.diagnostics.setEnabled(true, volya.call);
+    }
+    // The last turn on: its per-second counters, the fence's poll and the
+    // write to OPFS among them.
+    const { text } = await volya.call("diagnostic_log");
+    const events = JSON.parse(text).traceEvents;
+    const pid = events.findLast((e) => e.name === "session").pid;
+    const mean = (key) => {
+      const values = events.filter((e) => e.pid === pid && e.ph === "C" && key in e.args).map((e) => e.args[key]);
+      return values.length ? (values.reduce((a, b) => a + b, 0) / values.length).toFixed(3) : "none";
+    };
+    const ms = (v) => v.toFixed(2);
+    const { off, on } = sums;
+    return (
+      `ms per frame, off: CPU ${ms(off.cpu)}, interval ${ms(off.interval)}; on: CPU ${ms(on.cpu)}, interval ${ms(on.interval)} ` +
+      `(CPU +${ms(on.cpu - off.cpu)}); on, per second: render.poll mean ${mean("render.poll mean")} ms, ` +
+      `gpu.done_ms mean ${mean("gpu.done_ms mean")}, diagnostics.write_ms mean ${mean("diagnostics.write_ms mean")} max ${mean("diagnostics.write_ms max")}`
+    );
+  },
+
   "transcoding to ETC2 costs: the level's textures and a few large ones": async () => {
     needsGame();
     await until((s) => s.phase === "level" && !s.intro, "the level");
