@@ -782,7 +782,8 @@ function touchPanel() {
 
 /**
  * Settings: updates, the touch controls, the logs and, in a danger zone,
- * the player's saves, settings, and logs and the game files.
+ * the player's saves, settings, and logs and the game files; at the bottom,
+ * Licences (#757): the site's third-party notices, beside this module.
  */
 async function showSettings() {
   const status = await call("game_status");
@@ -826,6 +827,7 @@ async function showSettings() {
           status.imported ? importSection(status, () => ({ userData, logs: logs.present() })) : null,
         )
       : null,
+    bottom(link(new URL("third-party-licenses.txt", import.meta.url).href, "Licences")),
   );
   // Settings is a deeper screen: no logo (it's Home's), Back at the top.
   document.documentElement.dataset.screen = "settings";

@@ -212,7 +212,9 @@ export const SECTIONS = [
   {
     title: "Settings",
     states: [
-      { id: "settings", name: "Game files imported", game: imported, screen: "settings" },
+      // Licences at the bottom (#757) opens the site's third-party notices
+      // in a new tab.
+      { id: "settings", name: "Game files imported; Licences at the bottom opens the third-party notices", game: imported, screen: "settings" },
       {
         id: "settings-touch-experimental",
         name: "Ergonomic mobile mode chosen",

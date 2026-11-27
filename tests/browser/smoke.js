@@ -591,6 +591,14 @@ export const tests = {
       "no Check for updates button",
     );
     assertEqual(document.activeElement?.textContent, "‹ Back", "focus starts on Back (keyboard)");
+    // Licences (#757), last: the site's third-party notices, in a new tab.
+    const licences = [...document.querySelectorAll("#game .bottom a")].find((a) => a.textContent === "Licences");
+    assert(licences, "no Licences link at the bottom of Settings");
+    assert(licences === [...document.querySelectorAll("#game a, #game button")].at(-1), "Licences not last");
+    assertEqual(new URL(licences.href).pathname, `${base}third-party-licenses.txt`, "Licences' target");
+    assertEqual(licences.target, "_blank", "Licences not in a new tab");
+    const notices = await fetch(licences.href);
+    assert(notices.ok && (await notices.text()).length > 0, `the notices: ${notices.status}`);
     // The logo leads Home too.
     document.querySelector(".brand").click();
     for (let i = 0; i < 50 && document.querySelector(".screen-head"); i++) await new Promise((r) => setTimeout(r, 20));
