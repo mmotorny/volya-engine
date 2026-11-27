@@ -1,0 +1,25 @@
+adapter: NVIDIA GeForce RTX 4090
+driver: nvldumd.dll 32.0.16.1088
+vendor: 0x10de
+device: 0x2684
+subsystem: 0x165b10de
+revision: 0xa1
+Caps2: 0xe0020000 (FULLSCREENGAMMA 1, CANCALIBRATEGAMMA 0)
+RasterCaps: 0x07732191 (FOGVERTEX 1, FOGTABLE 1, ZFOG 1, WFOG 1, MIPMAPLODBIAS 1, ANISOTROPY 1)
+TextureCaps: 0x0001ecc5
+TextureFilterCaps: 0x03030700
+TextureAddressCaps: 0x0000003f
+MaxAnisotropy: 16
+MaxTextureWidth: 16384
+MaxTextureHeight: 16384
+AlphaCmpCaps: 0x000000ff
+SrcBlendCaps: 0x00003fff
+DestBlendCaps: 0x00003fff
+ShadeCaps: 0x00084208
+PrimitiveMiscCaps: 0x002fcef2
+TextureOpCaps: 0x03feffff
+PixelShaderVersion: 3.0
+VertexShaderVersion: 3.0
+DXT1 textures: yes
+DXT5 textures: yes
+A8R8G8B8 render target: yes
