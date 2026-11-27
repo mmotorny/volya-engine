@@ -15,13 +15,20 @@
 //! from the [`Host`]'s reports ([`Remote::ended`]). Compressed files travel
 //! apart from the commands, numbered ([`Host::add_file`]), and are decoded
 //! by the host, block by block; commands playing a file not yet arrived
-//! wait for it, with every command taken with them.
+//! wait for it, with every command taken with them. A file played by
+//! path is decoded through the host's sound cache ([`super::cache`]) once
+//! the engine has sized it ([`MixerControl::set_sound_cache`]).
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::io::{self, Cursor};
+use std::rc::Rc;
 
 use volya_engine_formats::audio::VorbisStream;
 
+use super::cache::{CachedSource, SoundCache};
 use super::{Category, File, Mixer, MixerControl, Playback, Source, VoiceId, open_vorbis_file};
+use crate::vfs::Vfs;
 
 const INIT: u8 = 0;
 const PLAY: u8 = 1;
@@ -31,6 +38,10 @@ const SET_VOICE: u8 = 4;
 const SET_VOLUME: u8 = 5;
 const SET_MASTER: u8 = 6;
 const WATCH: u8 = 7;
+const CACHE: u8 = 8;
+
+/// The key of a file played without the sound cache (no path).
+pub const UNCACHED: u32 = u32::MAX;
 
 const CATEGORIES: [Category; Category::COUNT] =
     [Category::Effects, Category::Music, Category::Scaled];
@@ -46,6 +57,10 @@ pub struct Remote {
     master: f32,
     commands: Vec<u8>,
     files: Vec<(u32, Vec<u8>)>,
+    /// The sound cache's `snd_cache_size`, once set.
+    cache: Option<u32>,
+    /// The key of each file played by path, for the host's sound cache.
+    keys: HashMap<String, u32>,
 }
 
 /// What a [`Host`] is sent at once: commands, and the files they play with
@@ -66,6 +81,8 @@ impl Remote {
             master: 1.0,
             commands: Vec::new(),
             files: Vec::new(),
+            cache: None,
+            keys: HashMap::new(),
         };
         remote.connect(rate);
         remote
@@ -74,7 +91,7 @@ impl Remote {
     /// A new host at `rate` Hz: commands not yet taken are dropped, every
     /// voice is gone, and the volumes and the master gain carry over. Voice
     /// and file numbers go on, so reports of the old host's voices change
-    /// nothing.
+    /// nothing. The sound cache, once sized, is made again there.
     pub fn connect(&mut self, rate: u32) {
         self.commands.clear();
         self.files.clear();
@@ -86,20 +103,35 @@ impl Remote {
         }
         self.commands.push(SET_MASTER);
         self.f32(self.master);
+        if let Some(size) = self.cache {
+            self.push_cache(size);
+        }
+    }
+
+    fn push_cache(&mut self, size: u32) {
+        self.commands.push(CACHE);
+        self.u32(size);
+    }
+
+    /// The sound cache key of the file at `path`: one per path.
+    pub fn key(&mut self, path: &str) -> u32 {
+        let next = self.keys.len() as u32;
+        *self.keys.entry(path.to_owned()).or_insert(next)
     }
 
     /// Starts `bytes` without checking that they are a stream that plays;
     /// one that is not ends at once, which a report tells.
     pub fn play_unchecked(&mut self, bytes: Vec<u8>, skip: u64, playback: Playback) -> VoiceId {
-        let (id, file) = self.play_sent(skip, playback);
+        let (id, file) = self.play_sent(UNCACHED, skip, playback);
         self.files.push((file, bytes));
         id
     }
 
     /// [`Remote::play_unchecked`] for a file its caller sends the host
     /// itself, under the number returned ([`Host::add_file`]): the web
-    /// platform's, kept in JavaScript memory (#491).
-    pub fn play_sent(&mut self, skip: u64, playback: Playback) -> (VoiceId, u32) {
+    /// platform's, kept in JavaScript memory (#491). `key`: the file's
+    /// sound cache key ([`Remote::key`]), or [`UNCACHED`].
+    pub fn play_sent(&mut self, key: u32, skip: u64, playback: Playback) -> (VoiceId, u32) {
         let id = VoiceId(self.next_id);
         self.next_id = self.next_id.wrapping_add(1);
         self.commands.push(PLAY);
@@ -107,6 +139,7 @@ impl Remote {
         let file = self.next_file;
         self.next_file = self.next_file.wrapping_add(1);
         self.u32(file);
+        self.u32(key);
         self.commands.extend_from_slice(&skip.to_le_bytes());
         self.commands.push(u8::from(playback.looping));
         self.f32(playback.gain);
@@ -177,6 +210,31 @@ impl MixerControl for Remote {
         Some(self.play_unchecked(bytes, skip, playback))
     }
 
+    fn play_path(
+        &mut self,
+        tree: &dyn Vfs,
+        path: &str,
+        checked: bool,
+        skip: u64,
+        playback: Playback,
+    ) -> Option<VoiceId> {
+        let bytes = crate::vfs::read(tree, path).ok()?;
+        if !checked {
+            VorbisStream::open(Cursor::new(bytes.as_slice())).ok()?;
+        }
+        let key = self.key(path);
+        let (id, file) = self.play_sent(key, skip, playback);
+        self.files.push((file, bytes));
+        Some(id)
+    }
+
+    fn set_sound_cache(&mut self, size: u32) {
+        if self.cache != Some(size) {
+            self.cache = Some(size);
+            self.push_cache(size);
+        }
+    }
+
     fn set_voice(&mut self, id: VoiceId, gain: f32, pan: f32, pitch: f32) {
         if !self.is_playing(id) {
             return;
@@ -236,6 +294,8 @@ pub struct Host {
     mixer: Option<Mixer>,
     /// Files arrived and not yet played, by number.
     files: Vec<(u32, Box<dyn File>)>,
+    /// The sound cache, once the engine sized it.
+    cache: Option<Rc<RefCell<SoundCache>>>,
     open: Opener,
     /// Voices that ended since the last [`Host::take_ended`].
     ended: Vec<u32>,
@@ -287,6 +347,7 @@ enum Command {
     Play {
         id: VoiceId,
         file: u32,
+        key: u32,
         skip: u64,
         playback: Playback,
     },
@@ -301,6 +362,7 @@ enum Command {
     SetVolume(Category, f32),
     SetMaster(f32),
     Watch(Option<Option<VoiceId>>),
+    Cache(u32),
 }
 
 /// The commands of `bytes`, which must be whole.
@@ -313,6 +375,7 @@ fn decode(bytes: &[u8]) -> io::Result<Vec<Command>> {
             PLAY => Command::Play {
                 id: VoiceId(r.u32()?),
                 file: r.u32()?,
+                key: r.u32()?,
                 skip: r.u64()?,
                 playback: Playback {
                     looping: r.u8()? != 0,
@@ -336,6 +399,7 @@ fn decode(bytes: &[u8]) -> io::Result<Vec<Command>> {
                 -1 => Some(None),
                 id => Some(Some(VoiceId(id as u32))),
             }),
+            CACHE => Command::Cache(r.u32()?),
             _ => return Err(malformed()),
         });
     }
@@ -349,6 +413,7 @@ impl Host {
         Self {
             mixer: None,
             files: Vec::new(),
+            cache: None,
             open,
             ended: Vec::new(),
             watch: None,
@@ -387,12 +452,19 @@ impl Host {
                 Command::Play {
                     id,
                     file,
+                    key,
                     skip,
                     playback,
                 } => {
                     let i = self.files.iter().position(|(n, _)| *n == file);
                     let (_, bytes) = self.files.swap_remove(i.ok_or_else(malformed)?);
-                    match (self.open)(bytes, skip) {
+                    let opened = match &self.cache {
+                        Some(cache) if key != UNCACHED => {
+                            CachedSource::open(cache, key, bytes, skip, self.open)
+                        }
+                        _ => (self.open)(bytes, skip),
+                    };
+                    match opened {
                         Ok(source) => self.mixer()?.play_as(id, source, playback),
                         // Errors end the sound rather than the mix.
                         Err(_) => self.ended.push(id.0),
@@ -409,6 +481,17 @@ impl Host {
                 Command::SetVolume(category, volume) => self.mixer()?.set_volume(category, volume),
                 Command::SetMaster(gain) => self.mixer()?.set_master_gain(gain),
                 Command::Watch(watch) => self.watch = watch,
+                // Made once with the device; a new size makes it anew
+                // (voices playing keep the old one until they end).
+                Command::Cache(size) => {
+                    if self
+                        .cache
+                        .as_ref()
+                        .is_none_or(|c| c.borrow().size() != size)
+                    {
+                        self.cache = Some(Rc::new(RefCell::new(SoundCache::new(size))));
+                    }
+                }
             }
         }
         Ok(commands.len())
@@ -442,6 +525,12 @@ impl Host {
     /// The mixer, once a message made one.
     pub fn mixer_ref(&self) -> Option<&Mixer> {
         self.mixer.as_ref()
+    }
+
+    /// The bytes the sound cache holds (its lines and the files' tables),
+    /// 0 before it is made.
+    pub fn cache_bytes(&self) -> usize {
+        self.cache.as_ref().map_or(0, |c| c.borrow().bytes())
     }
 
     /// What [`Remote::watch`] asked to record.

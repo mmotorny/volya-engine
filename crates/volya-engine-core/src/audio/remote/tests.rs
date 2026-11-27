@@ -305,3 +305,96 @@ fn checked_plays_need_a_vorbis_stream() {
             .is_none()
     );
 }
+
+/// A mono source of 16-bit samples (as a Vorbis stream decodes), its
+/// length known: frame `i` is `(i · 13) mod 65,536`, in blocks of 37.
+struct Exact {
+    frames: u64,
+    pos: u64,
+}
+
+impl Source for Exact {
+    fn sample_rate(&self) -> u32 {
+        44_100
+    }
+    fn channels(&self) -> u16 {
+        1
+    }
+    fn read(&mut self, out: &mut Vec<f32>) -> io::Result<bool> {
+        if self.pos >= self.frames {
+            return Ok(false);
+        }
+        let end = (self.pos + 37).min(self.frames);
+        out.extend(
+            (self.pos..end).map(|i| f32::from(((i * 13) % 65_536) as u16 as i16) / 32_768.0),
+        );
+        self.pos = end;
+        Ok(true)
+    }
+    fn rewind(&mut self) -> io::Result<()> {
+        self.pos = 0;
+        Ok(())
+    }
+    fn frames(&self) -> Option<u64> {
+        Some(self.frames)
+    }
+}
+
+fn open_exact(mut file: Box<dyn File>, skip: u64) -> io::Result<Box<dyn Source>> {
+    let mut b = [0; 8];
+    file.read_exact(&mut b)?;
+    let frames = u64::from_le_bytes(b);
+    Ok(Box::new(Exact {
+        frames,
+        pos: skip.min(frames),
+    }))
+}
+
+#[test]
+fn files_played_by_key_mix_through_the_cache_as_decoded() {
+    let mut remote = Remote::new(48_000);
+    let mut host = Host::new(open_exact);
+    let mut direct = Mixer::new(48_000);
+    // Before the cache is sized, and after (twice: the second time from
+    // its lines): the same output.
+    for (sized, looping) in [(false, false), (true, true), (true, false)] {
+        if sized {
+            MixerControl::set_sound_cache(&mut remote, 4);
+        }
+        let file = 20_000u64.to_le_bytes().to_vec();
+        let playback = Playback {
+            looping,
+            ..Playback::default()
+        };
+        for skip in [0, 9_000] {
+            let key = remote.key("a.ogg");
+            let (_, n) = remote.play_sent(key, skip, playback);
+            host.add_file(n, Box::new(io::Cursor::new(file.clone())));
+            let source = open_exact(Box::new(io::Cursor::new(file.clone())), skip).unwrap();
+            direct.play(source, playback);
+        }
+        let m = remote.take().unwrap();
+        assert_eq!(host.apply(&m.commands).unwrap(), m.commands.len());
+        if !sized {
+            assert_eq!(host.cache_bytes(), 0);
+        }
+        for _ in 0..30 {
+            let (a, b) = (direct.mix(1_000), host.mix(1_000));
+            for (i, (x, y)) in a.iter().zip(&b).enumerate() {
+                assert_eq!(x.to_bits(), y.to_bits(), "sample {i}");
+            }
+        }
+        direct.stop_all();
+        MixerControl::stop_all(&mut remote);
+    }
+    // The lines' data and the file's table, 2 bytes for each of its 5
+    // lines of 4,410 samples.
+    let lines = super::super::cache::lines_for(4);
+    assert!(host.cache_bytes() >= lines * 8_820 + 10);
+    // A new host is sized again with the connection.
+    remote.connect(48_000);
+    let mut fresh = Host::new(open_exact);
+    let m = remote.take().unwrap();
+    fresh.apply(&m.commands).unwrap();
+    assert!(fresh.cache_bytes() >= lines * 8_820);
+}

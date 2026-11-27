@@ -30,7 +30,7 @@ Anything above a budget is filed as an issue and investigated. Budgets are still
 | `heap_log` op (test builds) | browser | The wasm heap and the most live under each loading caption. |
 | `heap_map` op (test builds) | browser | Live KiB per MiB of the heap and every live block of 256 KiB or more, by address. |
 | `heap_record` op (test builds) | browser | At the load's most live: live bytes by block size and the largest blocks; every allocation that grew the wasm memory since the reset, by size and address. |
-| The console's `stat_memory`, `dump_resources` and `* phase cmem` (docs/behavior/console-diagnostics.md; in the game's log) | browser, every build | *h* and `phase cmem` as the original counts them ([The allocator](#the-allocator)); *g* and *r* the game scripts' and the renderer's pools; *c* the wasm memory, the rest of 4 GiB free; *t* by the original's rule ([Textures and the GPU](#textures-and-the-gpu)); the colour targets, the programs (as vertex and as fragment shaders) and the vertex arrays (as vertex declarations). The original's other figures (*p*, *e*) have no counterpart and print 0. The file cache's figure is `level_stats`' ([File-backed data](#file-backed-data)). |
+| The console's `stat_memory`, `dump_resources` and `* phase cmem` (docs/behavior/console-diagnostics.md; in the game's log) | browser, every build | *h* and `phase cmem` as the original counts them ([The allocator](#the-allocator)), the audio worker's bytes in use among them (its latest report); *c* with the audio worker's wasm memory among it; *g* and *r* the game scripts' and the renderer's pools; *c* the wasm memory, the rest of 4 GiB free; *t* by the original's rule ([Textures and the GPU](#textures-and-the-gpu)); the colour targets, the programs (as vertex and as fragment shaders) and the vertex arrays (as vertex declarations). The original's other figures (*p*, *e*) have no counterpart and print 0. The file cache's figure is `level_stats`' ([File-backed data](#file-backed-data)). |
 | `level_stats` op | browser | The wasm heaps (engine, audio worker); the GPU world's buffers and textures; everything the context holds (`gpu_live`), split into the level's (`gpu_level`) and what the renderer keeps across games (`gpu_kept`), and by owner (`gpu_owners`: the level, the renderer's own, the targets, the particles', the lights', the images, the videos); the file cache's bytes, its files with theirs and its most since the load began (`file_cache`). |
 | `game-level` and `game-memory` suites' JS memory | Chrome | `performance.measureUserAgentSpecificMemory()` after the New Game (cross-origin isolated pages only, documented, MDN): each context's JavaScript, the wasm memories not among it. |
 | `footprint` of the Simulator's processes | iOS Simulator | Per-process footprints; ETC2 textures there are held as RGBA8, so they don't show the device's (#443). |
@@ -52,7 +52,7 @@ Native figures: `loading_memory.rs` and `level_memory.rs`, release, requested by
 | The particles' effect library (`particles.xr`, `Library`: one buffer of every name, a table of every effect's actions and one of every group's members), read once at launch (`GameData`); its blocks are the boxed `source` actions | 1.4 MB | 1,095 |
 | The UI's data | 0.2 MB | |
 | The renderer and its programs; the menus' textures and video frames | about 6 MiB (believed) | |
-| The audio worker's wasm instance | 2 MiB | |
+| The audio worker's wasm instance, the sound cache's 32,850 K among it (32,773 K of lines, their records and the files' tables, [Deviations](#deviations)) | 35 MiB | |
 | JavaScript: the audio worker 2.9, the page 1.4–1.8 (and its canvas 0.9), the engine worker 1.6, shared 0.7 MiB | 8 MiB | |
 
 All measured natively but the last three (`level_stats`, JS memory). The program's data holds 4,087 of the heap's blocks before a game (452 with the archive tree alone). The compressed sound files are in JavaScript, not a wasm heap: the engine worker reads each into a JavaScript array a piece at a time (256 KiB) and the audio worker keeps it (#491). Before the first New Game the engine's heap is 16–17 MiB with 11 live (measured, `game-level`).
@@ -231,7 +231,7 @@ There is no program scratch shared by the loaders: each owns its stream buffer f
 
 ### What stays on the general heap as it is
 
-Small, short-lived or rare allocations: the UI's state, menus, the console, errors and diagnostics, a stage's temporaries that are small; the audio worker's own instance (2 MiB, its sounds in JavaScript). They are a few MiB and either short-lived or allocated where no large block follows them. The script runtime's blocks and the frame's lists are in their own pools, *g* and *r* ([The allocator](#the-allocator)).
+Small, short-lived or rare allocations: the UI's state, menus, the console, errors and diagnostics, a stage's temporaries that are small; the audio worker's own instance (its sound cache and decoders, counted in *h*; the compressed files in JavaScript). They are a few MiB and either short-lived or allocated where no large block follows them. The script runtime's blocks and the frame's lists are in their own pools, *g* and *r* ([The allocator](#the-allocator)).
 
 ### Budgets
 
@@ -240,11 +240,11 @@ Reported, never gated; no headroom:
 | What | Budget | Reported by |
 |---|---|---|
 | Each caption's growth of `phase cmem` | the original's, K ([The original](#the-original)) | the game suites (browser); `loading_memory.rs` (native) |
-| *h* at the load's end | 227,120 K | the game suites |
+| *h* at the load's end | 260,535 K with sound (the audio worker connected), 227,120 K without (console-diagnostics.md 2.4.1); `st_loading_ai_objects` keeps 40 K with sound | the game suites (with sound; natively there is no device) |
 | *t* at the load's end | 260,798 K | the game suites |
 | The file cache, at each caption and the load's end | the bytes of the files the original has open then ([File-backed data](#file-backed-data)) | the game suites; `loading_memory.rs` |
 
-Reported beside them, not budgets: each stage's peak (the original's log gives none); the wasm memory; *g* and *r*; *h* at startup and in the title menu against the original's 6,009 and 26,449 K (console-diagnostics.md 2.1, measured examples of one run).
+Reported beside them, not budgets: *h* when the load began against the original's 59,492 K with sound; each stage's peak (the original's log gives none); the wasm memory; *g* and *r*; *h* at startup and in the title menu against the original's 6,009 and 26,449 K (console-diagnostics.md 2.1, measured examples of one run).
 
 Targets no tool reports against: a frame's allocations in a running level 0; JavaScript 12 MiB (Chrome).
 
@@ -257,7 +257,7 @@ Matching the original is what is approved; each deviation is the user's decision
 | The file cache: what the original maps is copied into memory, whole or by parts. | Approved (wasm can't map a file): extra memory with its own budget, reported ([File-backed data](#file-backed-data)). |
 | Leaner structures with the same observable behaviour (rule 5). | Approved as a kind: within the original's budget for the same data, behaviour checked against the specs. |
 | *p* (the process heap) prints 0. | Approved: we have nothing equivalent (no CPU copy of GPU resources, no system libraries' heap). |
-| The sounds: the audio worker's heap and the compressed sound files in JavaScript, outside *h*; no sound cache. | Pending the user's decision (#749). The original holds a cache of decoded audio sized from `snd_cache_size` (32,773 K and its 74 K line table at 16, made with the device at startup) and per sound file a 52-byte record and 2 bytes per cache line, all in *h* (console-diagnostics.md 2.1.1). Ours: no cache; the engine's sound system keeps 0.6 MB natively for `l01_escape`'s 308 files and 6,476 sounds (created on the level's first frame with audio output); the audio worker's wasm memory 3 MiB and its JavaScript 3.0 MiB (headless Chrome, `game-level`, `game-memory`). |
+| The sound memory lives in the audio worker's wasm instance, not the engine's heap: the sound cache (decoded audio sized from `snd_cache_size`), the files' line tables, the decoders and voices; the compressed files of the voices playing in its JavaScript. | Approved (#749): the audio worker mixes apart from the engine (#354). Its memory manager's bytes in use are counted in *h* and `phase cmem`, its wasm memory in *c*, as the original's sound library allocates in its process's heap (console-diagnostics.md 2.1.1); the budgets are the original's with sound ([Budgets](#budgets)). Measured (headless Chrome, `game-level`, `game-memory`): the sound memory 33,444–34,088 K, the cache 32,850 K (the original: 33,377 K more than without sound when the load begins, 32,773 K and 74 K of it the cache and its line table); *h* when the load began 53,742–60,548 K against its 59,492 K. The records of the engine's loaded sounds stay in the engine's heap (0.6 MB natively for `l01_escape`'s 308 files and 6,476 sounds, made on the level's first frame with audio output). |
 
 ### Level change and the second New Game
 
@@ -312,7 +312,7 @@ Each step is its own issue, filed after this design is approved, in this order, 
 12. **The renderer's pool**: the frame's lists from a pool of their own, outside *h*, reported as *r*.
 13. **Leaner structures**: a survey of the owners against the original's figures for opportunities of rule 5's kind, each found filed as its own issue.
 
-Pending, not a step: the sound cache, where the original holds its decoded audio (console-diagnostics.md 2.1.1; [Deviations](#deviations)).
+The sound cache, the original's decoded audio, is held in the audio worker and counted in *h* (#749; [Deviations](#deviations)).
 
 The open issues weighed before this design (#486 the objects' models as regions, #489 kept scratch buffers, #679 a frame's last allocations, #405 sorted `Vec`s for `BTreeMap`s) are taken where they match the original or are rule 5's kind; any other is the user's decision.
 

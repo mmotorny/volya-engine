@@ -406,9 +406,15 @@ pub(crate) fn heap_bytes() -> f64 {
 /// the textures the sizes the renderer records for the files it holds by
 /// name (`gl::Texture::record_size`). No part has a counterpart of the process heap, the scripts'
 /// and the renderer's own pools, or the shared strings and blocks: 0.
+/// The audio worker's instance is the sound library's (the original's runs
+/// in its process): its wasm memory adds to the address space committed and
+/// its memory manager's bytes in use, the sound cache among them, to the
+/// heaps (its latest report; docs/architecture/memory.md, Deviations).
 fn memory_statistics() -> volya_engine::core::console::MemoryStatistics {
-    let committed = heap_bytes() as u64;
-    let in_use = volya_engine::core::memory_manager::in_use_bytes() as u64;
+    let audio = audio::host_stats();
+    let committed = heap_bytes() as u64 + audio.audio_heap_bytes as u64;
+    let in_use =
+        volya_engine::core::memory_manager::in_use_bytes() as u64 + audio.audio_in_use_bytes as u64;
     let gpu = gpu::live();
     volya_engine::core::console::MemoryStatistics {
         free: (1u64 << 32).saturating_sub(committed),
@@ -904,6 +910,8 @@ pub async fn call(op: String, args: String) -> Result<String, JsValue> {
                 "load": engine::load_memory(),
                 "now": {
                     "crt_heap": now.crt_heap,
+                    "sound": audio::host_stats().audio_in_use_bytes,
+                    "sound_cache": audio::host_stats().audio_cache_bytes,
                     "textures": now.textures,
                     "live_bytes": counting::live(),
                 },

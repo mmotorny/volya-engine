@@ -1174,6 +1174,20 @@ impl App {
             Some(Phase::Level { level, .. }) => level.take_body_events(),
             _ => Vec::new(),
         };
+        if audio.sounds().is_none() {
+            return Ok(());
+        }
+        if !self.sound_voices_set {
+            // The sound cache, made with the device (console-diagnostics.md
+            // 2.1.1).
+            if let Some(size) = self
+                .console
+                .status("snd_cache_size")
+                .and_then(|v| v.trim().parse::<u32>().ok())
+            {
+                audio.set_sound_cache(size);
+            }
+        }
         let Some(sounds) = audio.sounds() else {
             return Ok(());
         };

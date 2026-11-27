@@ -20,6 +20,7 @@
 //! 3D positioning: callers choose the pan (the music pair uses -1 and +1, full
 //! separation, reproducing the two channels as recorded).
 
+pub mod cache;
 pub mod remote;
 
 use std::io::{self, Cursor, Read, Seek};
@@ -36,6 +37,16 @@ pub trait Source {
     fn read(&mut self, out: &mut Vec<f32>) -> io::Result<bool>;
     /// Restarts from the beginning.
     fn rewind(&mut self) -> io::Result<()>;
+    /// Its length in frames, if known.
+    fn frames(&self) -> Option<u64> {
+        None
+    }
+    /// Skips up to `frames` frames without decoding them; returns how many
+    /// it skipped: 0 for a source that cannot seek (its frames are read
+    /// instead), fewer at the end.
+    fn skip(&mut self, _frames: u64) -> io::Result<u64> {
+        Ok(0)
+    }
 }
 
 impl<R: Read + Seek> Source for VorbisStream<R> {
@@ -53,6 +64,14 @@ impl<R: Read + Seek> Source for VorbisStream<R> {
 
     fn rewind(&mut self) -> io::Result<()> {
         VorbisStream::rewind(self)
+    }
+
+    fn frames(&self) -> Option<u64> {
+        self.end_granule()
+    }
+
+    fn skip(&mut self, frames: u64) -> io::Result<u64> {
+        VorbisStream::skip(self, frames)
     }
 }
 
@@ -111,6 +130,9 @@ pub trait MixerControl {
             self.play_file(bytes, skip, playback)
         }
     }
+    /// Makes the sound cache of `snd_cache_size` `size` where the mixer
+    /// decodes ([`cache`]); nothing for a mixer without one.
+    fn set_sound_cache(&mut self, _size: u32) {}
     /// Changes a playing voice's gain, pan and pitch ([`Mixer::set_voice`]).
     fn set_voice(&mut self, id: VoiceId, gain: f32, pan: f32, pitch: f32);
     fn stop(&mut self, id: VoiceId);

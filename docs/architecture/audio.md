@@ -20,7 +20,17 @@
 - The audio worker sleeps on the wake word with `Atomics.waitAsync` (Chrome 87, Safari 16.4; documented: MDN), for at most 10 ms (the wait's timeout and a timer, whichever ends first): on an iPhone the worker slept up to 15 s with the output starving while the page and the engine ran, until a file's message reached it (measured, diagnostic logs; why the wakes were lost is not established, #452). Woken, it applies the pending commands and mixes 256-frame blocks until the ring holds the target, 30 ms (`ringTarget`): the audio worker's share of the output latency, covering its wake-up.
 - A gain or pan change ramps over one block. Commands read together apply together before the next block, so the hosted mixer's output equals a directly driven mixer's for the same changes between the same blocks (unit-tested, `remote::tests`).
 - Compressed files go apart from the commands, one per voice started, numbered, over the port. Commands read together wait until every file they play has arrived. Neither wasm heap holds a whole file, since a wasm heap never shrinks: the engine worker reads each from the game tree into a JavaScript array 256 KiB at a time (`WebMixer`, #491; 64 KiB pieces doubled the worst sound update of starting 24 voices in Chrome, 4.1 to 7.4 ms, 256 KiB took 4.5, one run each), and the audio worker keeps it there and reads it a piece at a time (`JsFile`).
-- The host reports ended voices, its heap, mixing time and underruns to the engine worker whenever something changed; diagnostics series once per second of output ([diagnostics.md](diagnostics.md)).
+- The host reports ended voices, its heap, its memory manager's bytes in use and the sound cache's (counted in *h*, [memory.md](memory.md#deviations)), mixing time and underruns to the engine worker whenever something changed (the bytes in use with the other news, at least once a second: reporting each change of them flooded the engine worker, whose figures then lagged); diagnostics series once per second of output ([diagnostics.md](diagnostics.md)).
+
+## Sound cache
+
+`volya-engine-core::audio::cache`, docs/behavior/console-diagnostics.md 2.1.1.
+
+- The audio worker's host holds the decoded audio of the sounds played, as the original's sound library does: lines of 8,820 bytes of 16-bit samples, ⌊`snd_cache_size` × 2,097,152 / 8,820⌋ + 1 of them (3,805 at the default 16), each with a 16-byte record (the original's 20), made once when the app first runs the sound system with audio output (the device's creation) and again with each new output (`Remote::connect` sends its size again).
+- 8,820 bytes are 50 ms of the device's 16-bit stereo output at 44,100 Hz. The game's sounds are mono, so a line holds 4,410 of their samples, 100 ms (believed: the spec gives the bytes per line, not how a mono sound fills them, #748).
+- Every file played by path has a key (`Remote::key`, one per path, kept by the engine's mixer) and, once played, a table of 2 bytes per line of its decoded length in the host, kept for the cache's life. A file of more than one channel, or of unknown length, plays straight from its decoder.
+- A voice copies the lines held; at the first line not held its decoder opens (or rewinds) there and runs on through the following lines, held or not, keeping each in the least recently used line, until the voice loops. So a voice seeks at most once per pass: a seek scans the file's pages from its start (#309). The output is the samples a straight decode gives (unit-tested, `cache::tests`, `remote::tests`).
+- Measured (headless Chrome, `audio`): mixing 5.3 ms per second of audio against 4.9 before the cache; the audio worker's wasm memory 35.3 MiB against 3.
 
 ## Decoder
 
@@ -35,7 +45,7 @@
 `volya-engine-core::sound`, docs/formats/sound-ogg-params.md.
 
 - A name's first request resolves its file (`$level$` first, then `$game_sounds$`), checks it and keeps only its parameters, reading only its headers and its last page (its length), as the original keeps no file data (console-diagnostics.md 2.1.1; reading whole files peaked 4.9 MB above the level's sounds, now 0.9, measured natively for `l01_escape`, #749). Not mono, not 44,100 Hz, missing, empty or invalid, or a max distance or max AI distance below 0.1: `Fatal`.
-- Each play reads the compressed file again and decodes it block by block: no PCM is held.
+- Each play sends the compressed file again; its decoded audio is held in the sound cache ([Sound cache](#sound-cache)), not by the sound.
 - `sound_params` (`volya-engine-formats`) reads the record; one shorter than its version's size is treated as an unknown version (defaults and a warning; our choice).
 
 ## Positional playback

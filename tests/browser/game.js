@@ -61,6 +61,11 @@ export const ORIGINAL = {
   },
   h: 227120,
   t: 260798,
+  // With sound on (console-diagnostics.md 2.4.1, `snd_cache_size 16`): h
+  // when the load began (reported beside) and at its end, and the one
+  // caption that keeps more. The budgets while the audio worker's sound
+  // memory counts in h (docs/architecture/memory.md, Deviations).
+  withSound: { loadStartH: 59492, h: 260535, captions: { st_loading_ai_objects: 40 } },
   // Reported beside, not budgets (console-diagnostics.md 2.1's example).
   titleMenuH: 26449,
 };
@@ -76,14 +81,17 @@ export async function againstOriginal() {
   assert(load?.end, "the load has not ended");
   const marks = load.captions.map(([caption, cmem]) => [caption, kib(cmem)]);
   const excesses = [];
+  // The original's with sound when ours holds sound memory (a device).
+  const sound = now.sound > 0;
+  const originalH = sound ? ORIGINAL.withSound.h : ORIGINAL.h;
   const kept = marks.map(([caption, cmem], i) => {
     const grown = (marks[i + 1]?.[1] ?? kib(load.end.cmem)) - cmem;
-    const original = ORIGINAL.captions[caption];
+    const original = (sound && ORIGINAL.withSound.captions[caption]) || ORIGINAL.captions[caption];
     if (grown > original) excesses.push(`${caption} keeps ${grown} K, the original ${original} K`);
     return `${caption} ${grown}/${original}`;
   });
   const [h, t] = [kib(load.end.crt_heap), kib(load.end.textures)];
-  if (h > ORIGINAL.h) excesses.push(`h ${h} K at the load's end, the original ${ORIGINAL.h} K`);
+  if (h > originalH) excesses.push(`h ${h} K at the load's end, the original ${originalH} K`);
   if (t > ORIGINAL.t) excesses.push(`t ${t} K at the load's end, the original ${ORIGINAL.t} K`);
   // The file cache: the most it held under each caption and at the load's
   // end against its budget, the bytes of the files the original has open
@@ -96,7 +104,7 @@ export async function againstOriginal() {
   const [cacheEnd, cacheBudget] = [kib(load.end.file_cache), kib(load.end.file_cache_budget)];
   if (cacheEnd > cacheBudget) excesses.push(`the file cache holds ${cacheEnd} K at the load's end, its budget ${cacheBudget} K`);
   const excess = excesses.length ? `EXCESS over the original's (to file): ${excesses.join("; ")}; ` : "";
-  return `${excess}kept by caption (K, ours/the original's): ${kept.join(", ")}; at the load's end h ${h}/${ORIGINAL.h} K, t ${t}/${ORIGINAL.t} K; h now ${kib(now.crt_heap)} K; the file cache by caption (K, its most/its budget): ${cache.join(", ")}; at the load's end ${cacheEnd}/${cacheBudget} K, its most since the load began ${kib(load.end.file_cache_most)} K`;
+  return `${excess}${sound ? `with sound (its memory ${kib(now.sound)} K, the cache ${kib(now.sound_cache)} K), h at the load's start ${marks[0]?.[1]}/${ORIGINAL.withSound.loadStartH} K; ` : "without sound; "}kept by caption (K, ours/the original's): ${kept.join(", ")}; at the load's end h ${h}/${originalH} K, t ${t}/${ORIGINAL.t} K; h now ${kib(now.crt_heap)} K; the file cache by caption (K, its most/its budget): ${cache.join(", ")}; at the load's end ${cacheEnd}/${cacheBudget} K, its most since the load began ${kib(load.end.file_cache_most)} K`;
 }
 /** h now (K), from the `load_memory` op. */
 export const hNow = async () => kib((await volya.call("load_memory")).now.crt_heap);

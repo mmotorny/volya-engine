@@ -265,7 +265,10 @@ pub fn audio_host_report() -> Option<String> {
         let s = &mut *s.borrow_mut();
         let ended = s.host.take_ended();
         let heap = crate::heap_bytes();
+        let in_use = volya_engine::core::memory_manager::in_use_bytes() as f64;
         let second = s.unreported >= s.sample_rate;
+        // The bytes in use change as voices start and end: they go with
+        // the other news, at least once a second of output.
         if ended.is_empty() && s.blocks.is_empty() && !second && heap == s.reported_heap {
             return None;
         }
@@ -274,6 +277,8 @@ pub fn audio_host_report() -> Option<String> {
             "ended": ended,
             "blocks": std::mem::take(&mut s.blocks),
             "heap": heap,
+            "in_use": in_use,
+            "cache": s.host.cache_bytes(),
             "mix_ms": s.mix_ms,
             "frames": s.frames,
             "underrun": s.underrun,
