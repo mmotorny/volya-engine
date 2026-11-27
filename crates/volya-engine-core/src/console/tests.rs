@@ -470,6 +470,22 @@ fn texts_keep_63_characters() {
     assert_eq!(status(&c, "cdkey").len(), 63);
 }
 
+/// #819: the file saved with a video mode of the platform's own, the rest
+/// as saved, the console's value unchanged.
+#[test]
+fn saved_with_another_video_mode() {
+    let mut c = Console::new(files());
+    c.exec("vid_mode 1320x2388");
+    let plain = String::from_utf8(c.save()).unwrap();
+    let with = String::from_utf8(c.save_with_video_mode((1280, 720))).unwrap();
+    assert!(plain.contains("vid_mode 1320x2388\r\n"));
+    assert_eq!(
+        with,
+        plain.replace("vid_mode 1320x2388\r\n", "vid_mode 1280x720\r\n")
+    );
+    assert_eq!(c.video_mode(), (1320, 2388));
+}
+
 #[test]
 fn commands_with_their_own_rules() {
     let mut c = Console::new(files());

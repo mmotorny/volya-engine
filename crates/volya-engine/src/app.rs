@@ -586,6 +586,10 @@ pub struct App {
     supersample: u32,
     /// The user configuration file to store, once something asked for it.
     save: Option<Vec<u8>>,
+    /// While the resolution follows the screen (the ergonomic mobile mode,
+    /// #806): the video mode the game had before, stored as `vid_mode` in
+    /// place of the one followed and given back when it stops (#819).
+    own_video: Option<Resolution>,
     /// The console's generation as last applied to the game data.
     applied: u64,
     /// The sound volumes as last set.
@@ -763,6 +767,15 @@ fn pps(console: &Console) -> [f32; 2] {
     ["r1_pps_u", "r1_pps_v"].map(|name| console.number(name))
 }
 
+/// The user configuration file as it is stored: `vid_mode` the game's own,
+/// `own`, while the resolution follows the screen ([`App::follow_screen`]).
+fn stored_config(console: &Console, own: Option<Resolution>) -> Vec<u8> {
+    match own {
+        Some(own) => console.save_with_video_mode((own.width, own.height)),
+        None => console.save(),
+    }
+}
+
 /// The resolution of `vid_mode`.
 fn video_mode(console: &Console) -> Resolution {
     let (w, h) = console.video_mode();
@@ -856,6 +869,7 @@ impl App {
             video,
             supersample,
             save: None,
+            own_video: None,
             volumes: None,
             sound_voices_set: false,
             sound_in_level: false,
@@ -1162,7 +1176,7 @@ impl App {
         self.alt_f4 = true;
         self.device_destroyed();
         self.console.log_mut().save();
-        self.save = Some(self.console.save());
+        self.save = Some(stored_config(&self.console, self.own_video));
     }
 
     /// A fatal error during play (as sound-ogg-params.md section 5 makes a
@@ -1545,7 +1559,7 @@ impl App {
                     // Stored when the options screen closes, not only at exit
                     // (our choice: a browser tab is usually closed without
                     // the game's shutdown).
-                    self.save = Some(self.console.save());
+                    self.save = Some(stored_config(&self.console, self.own_video));
                 }
                 if let Some(difficulty) = out.new_game {
                     // level-loading.md section 2.1.
@@ -1722,7 +1736,7 @@ impl App {
                     self.console.log_mut().save();
                 }
                 if out.store_config || menu.quit_requested() {
-                    self.save = Some(self.console.save());
+                    self.save = Some(stored_config(&self.console, self.own_video));
                 }
                 // An Escape that follows a lost pointer lock in the same
                 // frame or the next is the one the browser used to leave the
@@ -2126,6 +2140,27 @@ impl App {
     /// resource manager's lines (console-diagnostics.md 2.5).
     pub(crate) fn device_destroyed(&mut self) {
         device_destroyed(&mut self.device_release, &mut self.console);
+    }
+
+    /// The resolution follows the screen's size `native` (the ergonomic
+    /// mobile mode, #806): applied as a change of `vid_mode` is, the mode
+    /// the game had before kept for [`App::stop_following_screen`] and
+    /// stored in its place (#819).
+    pub fn follow_screen(&mut self, native: Resolution) {
+        self.own_video.get_or_insert(self.video);
+        if self.video != native {
+            self.set_video_mode(native);
+        }
+    }
+
+    /// The resolution no longer follows the screen: the video mode the game
+    /// had before is applied again.
+    pub fn stop_following_screen(&mut self) {
+        if let Some(own) = self.own_video.take()
+            && own != self.video
+        {
+            self.set_video_mode(own);
+        }
     }
 
     /// The user configuration file to store (section 12.3), once asked for:
@@ -3210,6 +3245,40 @@ mod tests {
         let fov = crate::core::camera::FOV_Y_DEGREES;
         let expected = volya_engine_formats::level::Thresholds::new(1920, 1080, fov, lod, a, b);
         assert_eq!(level.visibility().thresholds(), Some(&expected));
+    }
+
+    /// #819: while the resolution follows the screen, the mode followed is
+    /// drawn at but never stored: the configuration file keeps the game's
+    /// own, through rotations, and stopping gives it back.
+    #[test]
+    fn the_mode_followed_is_not_stored() {
+        let tree = fixture::tree();
+        let mut app = App::new(fixture::data(&tree)).unwrap();
+        let own = Resolution::new(1280, 720);
+        app.set_video_mode(own);
+        let stored = |app: &App| {
+            let text = String::from_utf8(stored_config(&app.console, app.own_video)).unwrap();
+            text.lines()
+                .find(|l| l.starts_with("vid_mode "))
+                .map(str::to_owned)
+        };
+        let kept = Some("vid_mode 1280x720".to_owned());
+        app.follow_screen(Resolution::new(1320, 2388));
+        assert_eq!(app.video_mode(), Resolution::new(1320, 2388));
+        assert_eq!(app.console.video_mode(), (1320, 2388));
+        assert_eq!(stored(&app), kept);
+        app.follow_screen(Resolution::new(2388, 1320));
+        assert_eq!(app.video_mode(), Resolution::new(2388, 1320));
+        assert_eq!(stored(&app), kept);
+        app.stop_following_screen();
+        assert_eq!(app.video_mode(), own);
+        assert_eq!(stored(&app), kept);
+        // Followed from a mode equal to the screen's, that one is kept.
+        app.follow_screen(own);
+        app.follow_screen(Resolution::new(720, 1280));
+        assert_eq!(stored(&app), kept);
+        app.stop_following_screen();
+        assert_eq!(app.video_mode(), own);
     }
 
     /// `r1_lmodel_lerp`: 0.1 built in, the stored value; one out of

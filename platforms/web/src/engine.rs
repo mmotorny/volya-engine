@@ -101,15 +101,13 @@ thread_local! {
     /// Whether the game's resolution follows the canvas's size (the
     /// ergonomic mobile mode, #806).
     static FOLLOW_SCREEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// The video mode the game had before it began following the canvas,
-    /// given back when it stops (the standard mode keeps its own).
-    static OWN_MODE: std::cell::Cell<Option<Resolution>> = const { std::cell::Cell::new(None) };
 }
 
 /// The game's resolution follows the canvas's own size, `on`, or not (the
 /// page's ergonomic mobile mode, #806): each change of size applied as a
 /// change of `vid_mode` is (display-mode.md A.9). Turned off, the video
-/// mode it had before is applied again.
+/// mode it had before is applied again; that mode is the one stored
+/// meanwhile (#819), so a game started later has it too.
 pub fn set_follow_screen(on: bool) {
     if FOLLOW_SCREEN.replace(on) == on {
         return;
@@ -118,9 +116,9 @@ pub fn set_follow_screen(on: bool) {
     RUNNING.with(|r| {
         if let Some(running) = r.borrow_mut().as_mut() {
             if on {
-                follow(&mut running.app, native);
-            } else if let Some(mode) = OWN_MODE.take() {
-                running.app.set_video_mode(mode);
+                running.app.follow_screen(native);
+            } else {
+                running.app.stop_following_screen();
             }
         }
     });
@@ -128,11 +126,8 @@ pub fn set_follow_screen(on: bool) {
 
 /// `app` at the screen's size `native` while the resolution follows it.
 fn follow(app: &mut App, native: Resolution) {
-    if FOLLOW_SCREEN.get() && app.video_mode() != native {
-        if OWN_MODE.get().is_none() {
-            OWN_MODE.set(Some(app.video_mode()));
-        }
-        app.set_video_mode(native);
+    if FOLLOW_SCREEN.get() {
+        app.follow_screen(native);
     }
 }
 

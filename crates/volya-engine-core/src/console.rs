@@ -1001,6 +1001,21 @@ impl Console {
     /// (both in action order), at `bind_console` its lines (LF only, by key
     /// code; options-screens.md 12.3).
     pub fn save(&self) -> Vec<u8> {
+        self.save_values(&self.values)
+    }
+
+    /// The file [`Console::save`] writes, with `vid_mode` stored as `mode`
+    /// in place of its value: the platform draws at a mode of its own for
+    /// the time being (the screen-following mode, #806, #819).
+    pub fn save_with_video_mode(&self, (width, height): (u32, u32)) -> Vec<u8> {
+        let mut values = self.values.clone();
+        if let Some(i) = registered("vid_mode") {
+            values[i] = Value::Mode(width as i32, height as i32);
+        }
+        self.save_values(&values)
+    }
+
+    fn save_values(&self, values: &[Value]) -> Vec<u8> {
         let mut text = String::new();
         let slot = |text: &mut String, slot: usize, command: &str| {
             for ((a, _), s) in ACTIONS.iter().zip(&self.slots) {
@@ -1009,7 +1024,7 @@ impl Console {
                 }
             }
         };
-        for (def, v) in COMMANDS.iter().zip(&self.values) {
+        for (def, v) in COMMANDS.iter().zip(values) {
             if def.designer() {
                 continue;
             }

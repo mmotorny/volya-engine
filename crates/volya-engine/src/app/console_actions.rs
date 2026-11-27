@@ -14,7 +14,7 @@ use crate::core::diagnostics;
 use crate::core::input::Input;
 use crate::title_menu::TitleMenu;
 
-use super::{App, NewGame, Phase, display_mode_request, supersample, video_mode};
+use super::{App, NewGame, Phase, display_mode_request, stored_config, supersample, video_mode};
 
 /// The multiplayer actions (console-scope.md section 6, specs 9b and 9c).
 const MULTIPLAYER: &[&str] = &[
@@ -129,7 +129,7 @@ impl App {
             "quit" => {
                 self.device_destroyed();
                 self.console.log_mut().save();
-                self.save = Some(self.console.save());
+                self.save = Some(stored_config(&self.console, self.own_video));
                 self.quit = true;
             }
             // Section 7: only the game is left.
@@ -157,7 +157,7 @@ impl App {
             // Options-screens.md 12.3: no name, the user configuration file.
             // TODO(#655): the other names.
             "cfg_save" if config_name(argument) == "user.ltx" => {
-                self.save = Some(self.console.save());
+                self.save = Some(stored_config(&self.console, self.own_video));
             }
             // TODO(#655): a named configuration file.
             "cfg_save" | "cfg_load" => {}
