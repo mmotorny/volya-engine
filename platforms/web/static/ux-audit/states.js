@@ -91,6 +91,13 @@ export const SECTIONS = [
       { id: "level-touch-moving", name: "Moving with the stick", level: { stick: [0.45, -0.85] }, devices: TOUCH },
       { id: "level-touch-jump", name: "Jump held", level: { down: "jump" }, devices: TOUCH },
       { id: "level-touch-inventory", name: "Inventory held", level: { down: "inventory" }, devices: TOUCH },
+      { id: "level-touch-pda", name: "PDA held", level: { down: "pda" }, devices: TOUCH },
+      {
+        id: "level-touch-pda-open",
+        name: "PDA open (the game draws it): PDA alone, closing it; elsewhere the touchpad",
+        level: { level: false, pda: true },
+        devices: TOUCH,
+      },
       {
         id: "level-touch-past-rim",
         name: "Past the rim: sprinting, the lock target shown",

@@ -518,10 +518,13 @@ pub enum TouchButton {
     NightVision,
     /// Opens the console as a key bound to `console` does (#642).
     Console,
+    /// Opens and closes the PDA as the key bound to `active_jobs` does
+    /// (#730).
+    Pda,
 }
 
 impl TouchButton {
-    pub const ALL: [TouchButton; 8] = [
+    pub const ALL: [TouchButton; 9] = [
         TouchButton::Jump,
         TouchButton::Crouch,
         TouchButton::CrouchLow,
@@ -530,6 +533,7 @@ impl TouchButton {
         TouchButton::Torch,
         TouchButton::NightVision,
         TouchButton::Console,
+        TouchButton::Pda,
     ];
 
     pub fn name(self) -> &'static str {
@@ -542,6 +546,7 @@ impl TouchButton {
             TouchButton::Torch => "torch",
             TouchButton::NightVision => "night_vision",
             TouchButton::Console => "console",
+            TouchButton::Pda => "pda",
         }
     }
 
@@ -712,6 +717,7 @@ impl Control {
             Control::Touch(TouchButton::Torch) => "touch_torch",
             Control::Touch(TouchButton::NightVision) => "touch_night_vision",
             Control::Touch(TouchButton::Console) => "touch_console",
+            Control::Touch(TouchButton::Pda) => "touch_pda",
         }
     }
 }

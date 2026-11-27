@@ -4,7 +4,8 @@
 // Playing a level from the kept import, with every input path: the desktop's
 // full screen offer and Keyboard Lock, the keyboard (walk, jump, torch, the
 // console and its clipboard), the touch controls and zoom guard, the
-// inventory screen (pointer lock, mouse, touch, touchpad), the touch stick,
+// inventory screen (pointer lock, mouse, touch, touchpad), the PDA window
+// (its keys, mouse, the touch PDA button, touchpad), the touch stick,
 // look, sprint lock, Jump, Crouch and Menu, and a gamepad.
 
 import { assert, assertEqual, skip } from "./harness.js";
@@ -591,6 +592,75 @@ export const tests = {
     return `game time ran ${((s.level.game_time - clock) / 1000).toFixed(1)} s under the screen; pointer lock ${granted ? "granted" : "stubbed"}`;
   },
 
+  "the PDA: P opens it on the tasks tab, M switches to the map and closes it, a click on a caption switches tabs, Escape closes it without the menu; on touch the PDA button opens it, the touchpad switches tabs, and the PDA button, alone over it, closes it": async () => {
+    needsGame();
+    const controls = document.getElementById("touch-controls");
+    const live = async (on) => {
+      for (let i = 0; i < 100 && controls.dataset.live !== String(on); i++) await sleep(20);
+      assertEqual(controls.dataset.live, String(on), "the level's controls live");
+    };
+    // The keys bound to `active_jobs` (P) and `map` (M)
+    // (docs/behavior/pda-window.md 4.1).
+    key("KeyP");
+    let s = await until((s) => s.pda, "P to open the PDA");
+    assertEqual(s.pda.tab, 0, "the tasks tab");
+    await live(false);
+    s = await until((s) => s.pda?.clock, "the clock");
+    assert(/^\d\d:\d\d \d\d\/\d\d\/\d{4}$/.test(s.pda.clock), `the clock: ${s.pda.clock}`);
+    key("KeyM");
+    s = await until((s) => s.phase === "level" && !s.pda, "M to close it");
+    key("KeyP");
+    s = await until((s) => s.pda, "P to open it again");
+    assertEqual(s.pda.tab, 0, "P switched back to the tasks tab");
+    // The page takes the mouse as the cursor once the engine says so; the
+    // click comes past the double-click time of the inventory test's last
+    // (a press within it is a double click, which selects no tab).
+    await live(false);
+    await sleep(300);
+    // A click on the diary's caption switches to it (3.3).
+    clickAt(centreOf({ rect: s.pda.tabs[2].rect }));
+    s = await until((s) => s.pda?.tab === 2, "a click on the diary's caption");
+    key("Escape");
+    s = await until((s) => s.phase === "level" && !s.pda, "Escape to close it");
+    assert(!s.menu, "Escape opened the menu");
+    await live(true);
+    // Touch: the PDA button at the top, left of Inventory.
+    const tap = { pointerType: "touch", pointerId: 65, isPrimary: true, button: 0 };
+    pointer("pointerdown", client(512, 100), { ...tap, buttons: 1 });
+    pointer("pointerup", client(512, 100), { ...tap, buttons: 0 });
+    for (let i = 0; i < 50 && controls.hidden; i++) await sleep(20);
+    assert(!controls.hidden, "the touch controls show");
+    const pda = controls.querySelector(".touch-button.pda");
+    const inventory = localRect(controls.querySelector(".touch-button.inventory"), controls);
+    const local = localRect(pda, controls);
+    assert(local.right < inventory.left && local.top < 100, `left of Inventory at the top: ${JSON.stringify(local)}`);
+    const press = () => {
+      const r = pda.getBoundingClientRect();
+      for (const type of ["pointerdown", "pointerup"]) {
+        pda.dispatchEvent(
+          new PointerEvent(type, { clientX: (r.left + r.right) / 2, clientY: (r.top + r.bottom) / 2, pointerId: 66, pointerType: "touch", isPrimary: true, button: 0, buttons: type === "pointerdown" ? 1 : 0, bubbles: true, cancelable: true }),
+        );
+      }
+    };
+    press();
+    s = await until((s) => s.pda, "the PDA button to open it");
+    assertEqual(s.pda.tab, 0, "the tasks tab, as P");
+    for (let i = 0; i < 50 && !controls.classList.contains("pda-open"); i++) await sleep(20);
+    assert(!controls.hidden && controls.classList.contains("pda-open"), "the PDA button over the window");
+    const shown = [...controls.querySelectorAll(".touch-button")].filter((b) => b.getClientRects().length > 0);
+    assertEqual(shown, [pda], "the PDA button alone");
+    // The touchpad (#108): the cursor swiped onto the contacts' caption, a
+    // tap switches to it.
+    await swipeTo(centreOf({ rect: s.pda.tabs[3].rect }));
+    await tapAt();
+    s = await until((s) => s.pda?.tab === 3, "a tap to switch to the contacts");
+    press();
+    s = await until((s) => s.phase === "level" && !s.pda, "the PDA button to close it");
+    await live(true);
+    assert(!controls.classList.contains("pda-open"), "the level's controls again");
+    return "";
+  },
+
   "touch: Torch and Night vision give the torch's commands as L and N do; Night vision shows only with an outfit that has it": async () => {
     needsGame();
     const controls = document.getElementById("touch-controls");
@@ -946,7 +1016,7 @@ export const tests = {
     return `moved ${moved.toFixed(2)} m, turned ${turned.toFixed(2)} rad, sprint-locked ${sprinted.toFixed(2)} m`;
   },
 
-  "a gamepad: the left stick runs, the d-pad up switches the torch": async () => {
+  "a gamepad: the left stick runs, the d-pad up switches the torch, the d-pad left opens the PDA, right moves to the next caption, A switches to it and B closes it": async () => {
     needsGame();
     // A New Game's level after the touch test's quit to the title menu.
     if ((await state()).phase === "menu") await enterLevel();
@@ -971,6 +1041,28 @@ export const tests = {
         pad.buttons[12] = { pressed: false, value: 0 };
         await sleep(100);
       }
+      // The PDA (our design): d-pad left opens it as P does; in it the
+      // d-pad moves the cursor between captions, south presses, east
+      // closes it as Escape does.
+      const tap = async (i) => {
+        pad.buttons[i] = { pressed: true, value: 1 };
+        await sleep(100);
+        pad.buttons[i] = { pressed: false, value: 0 };
+        await sleep(100);
+      };
+      // It opens with the cursor where the pointer last was: the centre.
+      pointer("pointermove", client(512, 384));
+      await tap(14);
+      let s = await until((s) => s.pda, "the d-pad left to open the PDA");
+      assertEqual(s.pda.tab, 0, "the tasks tab");
+      // Right from the centre: the next caption right of it, then the last.
+      await tap(15);
+      await tap(15);
+      await tap(0);
+      s = await until((s) => s.pda?.tab === 6, "the d-pad right twice and A to switch to the last tab");
+      await tap(1);
+      s = await until((s) => s.phase === "level" && !s.pda, "B to close it");
+      assert(!s.menu, "B opened the menu");
     } finally {
       navigator.getGamepads = getGamepads;
     }

@@ -25,6 +25,7 @@
 //! | open the inventory screen | north (Y / triangle) | Inventory, at the top right |
 //! | `torch` (docs/behavior/torch.md 8) | d-pad up | Torch, at the top right beside Inventory (#363) |
 //! | `night_vision` (15.3) | d-pad down | Night vision, beside Torch, shown while it can act (#363) |
+//! | open and close the PDA as `active_jobs` (docs/behavior/pda-window.md 4.1) | d-pad left; in the window, east (B / circle) closes it as the key bound to `quit` | PDA, at the top right beside Inventory, shown over the open window too (#730) |
 //!
 //! Climbing ladders (docs/behavior/climbing.md) has no control of its own
 //! on any path: forward climbs up, back or looking down past 20° climbs
@@ -33,7 +34,8 @@
 //! actions above.
 //!
 //! While a screen that takes the mouse is open over the running level (the
-//! inventory screen, docs/behavior/inventory-screen.md section 1.3), only
+//! inventory screen, docs/behavior/inventory-screen.md section 1.3, or the
+//! PDA window, docs/behavior/pda-window.md section 6), only
 //! the keyboard's keys reach the character, but those the screen uses
 //! ([`Controls::keys_only`]).
 //!
@@ -67,7 +69,9 @@ use volya_engine_formats::cp1251;
 
 /// The actions of section 2.2 this engine acts on, the inventory screen's
 /// (`inventory`, `drop`; docs/behavior/inventory-screen.md 6.1) and the
-/// torch's (`torch`, `night_vision`; docs/behavior/torch.md 8, 15.3).
+/// torch's (`torch`, `night_vision`; docs/behavior/torch.md 8, 15.3) and
+/// the PDA window's (`active_jobs`, `map`, `contacts`;
+/// docs/behavior/pda-window.md 4.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MoveAction {
     Forward,
@@ -88,10 +92,13 @@ pub enum MoveAction {
     Drop,
     Torch,
     NightVision,
+    ActiveJobs,
+    Map,
+    Contacts,
 }
 
 impl MoveAction {
-    pub const ALL: [MoveAction; 18] = [
+    pub const ALL: [MoveAction; 21] = [
         MoveAction::Forward,
         MoveAction::Back,
         MoveAction::LStrafe,
@@ -110,6 +117,9 @@ impl MoveAction {
         MoveAction::Drop,
         MoveAction::Torch,
         MoveAction::NightVision,
+        MoveAction::ActiveJobs,
+        MoveAction::Map,
+        MoveAction::Contacts,
     ];
 
     /// The action's name in `bind` lines.
@@ -133,6 +143,9 @@ impl MoveAction {
             MoveAction::Drop => "drop",
             MoveAction::Torch => "torch",
             MoveAction::NightVision => "night_vision",
+            MoveAction::ActiveJobs => "active_jobs",
+            MoveAction::Map => "map",
+            MoveAction::Contacts => "contacts",
         }
     }
 }
@@ -480,6 +493,46 @@ impl Controls {
             )
         });
         key || touch || input.pad_changes().contains(&(GamepadButton::North, true))
+    }
+
+    /// The PDA tab asked for this frame, with no window open
+    /// (pda-window.md 4.1): a press of a keyboard key bound to
+    /// `active_jobs` (tab 0), `map` (1) or `contacts` (3), or, as
+    /// `active_jobs`, the touch PDA button or a gamepad's d-pad left (our
+    /// design). The first in that order when several are pressed.
+    pub fn pda_pressed(&self, input: &Input) -> Option<usize> {
+        let actions = [
+            MoveAction::ActiveJobs,
+            MoveAction::Map,
+            MoveAction::Contacts,
+        ];
+        let key = actions
+            .iter()
+            .zip(crate::pda_window::ACTION_TABS)
+            .find_map(|(&a, tab)| {
+                input
+                    .device_changes()
+                    .iter()
+                    .any(|&(c, pressed)| {
+                        pressed
+                            && matches!(c, Control::Key(_))
+                            && self.bindings.controls(a).any(|b| b == c)
+                    })
+                    .then_some(tab)
+            });
+        let touch = input.actions().iter().any(|a| {
+            matches!(
+                a,
+                Action::Press {
+                    control: Control::Touch(TouchButton::Pda),
+                    ..
+                }
+            )
+        });
+        let pad = input
+            .pad_changes()
+            .contains(&(GamepadButton::DpadLeft, true));
+        key.or((touch || pad).then_some(crate::pda_window::ACTION_TABS[0]))
     }
 
     /// Whether the player pressed `torch` this frame (torch.md 8): a key

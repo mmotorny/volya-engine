@@ -44,7 +44,7 @@ Dependencies point one way: `volya-engine-web` → `volya-engine` (and `formats`
 - [simulation.md](simulation.md): the offline simulation, collision and movement, the character, particles, zones, lights, torches.
 - [scripts.md](scripts.md): the LuaJIT runtime, its build and the script loader.
 - [input.md](input.md): input forwarding, the touchpad, the level's controls, text entry, full screen.
-- [screens.md](screens.md): fatal errors, settings, the menu during a game, saved games, the inventory screen.
+- [screens.md](screens.md): fatal errors, settings, the menu during a game, saved games, the inventory screen, the PDA window.
 - [diagnostics.md](diagnostics.md): the diagnostic log.
 - [memory.md](memory.md): memory by lifetime and owner, the one-heap design, GPU ownership and release, the migration.
 - [build.md](build.md): Bazel: sharing across worktrees, Rust and crates, build scripts, the web app, checks, tests and their tags, commands, Cargo and editors, measurements.

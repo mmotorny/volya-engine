@@ -20,6 +20,8 @@
 //   torch's one picture, its icon, is Night vision's), redrawn with
 //   scanlines at device pixels (every third row dimmed), so they can't
 //   beat against the screen's pixels.
+// - PDA's glyph: the HUD's PDA icon (`ui_hud_icon_PDA`, the flashing
+//   icon of hud-scope.md spec 2) as a silhouette (#730).
 // - Night vision's glyph: the inventory icon of the torch (`device_torch`,
 //   which has the night vision, torch.md 1.1; `ui\ui_icon_equipment`)
 //   engraved: its brightness as alpha, so its lenses show where a
@@ -48,9 +50,10 @@ const REQUESTS = [
   // The map spot ring has no texture description of its own.
   ["spot", { path: "ui\\ui_common", region: [728, 577, 50, 50] }],
   ["torchIcon", { item: "device_torch", engraving: true }],
+  ["pda", { id: "ui_hud_icon_PDA", silhouette: true }],
 ];
 /** Glyph sources whose transparent margins are trimmed. */
-const TRIMMED = new Set(["crouch", "creep", "sprint", "torchIcon"]);
+const TRIMMED = new Set(["crouch", "creep", "sprint", "torchIcon", "pda"]);
 
 /** The approximations' palette, close to the game's (our choice). */
 const APPROXIMATE_TEAL = [36, 178, 162];
@@ -265,6 +268,22 @@ function torchIconCanvas(scale = 4) {
   return c;
 }
 
+/** An approximate PDA icon (our drawing of the handheld, in a 48 × 24
+ * frame): its body with the screen cut out. */
+function pdaIconCanvas(scale = 4) {
+  const [c, g] = canvas(48 * scale, 24 * scale);
+  g.scale(scale, scale);
+  g.fillStyle = "#fff";
+  g.beginPath();
+  g.roundRect(4, 2, 40, 20, 4);
+  g.roundRect(10, 5, 24, 14, 1);
+  g.fill("evenodd");
+  g.beginPath();
+  g.arc(39, 12, 2.2, 0, 2 * Math.PI);
+  g.fill();
+  return c;
+}
+
 /** Close vector approximations of the game's art (no game data). */
 export function approximateArt() {
   const [frame, g] = canvas(64, 64);
@@ -286,6 +305,7 @@ export function approximateArt() {
     segments: segmentCanvas(184, 12, 0.16, 26, "rgba(200, 200, 200, 0.5)", -Math.PI / 2 - Math.PI / 12),
     spot: segmentCanvas(100, 4, 0.34, 16, "rgb(167, 255, 255)", 0),
     torchIcon: torchIconCanvas(),
+    pda: pdaIconCanvas(),
     ...palette(APPROXIMATE_TEAL, APPROXIMATE_GREY),
   };
 }

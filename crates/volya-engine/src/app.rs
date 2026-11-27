@@ -41,6 +41,7 @@ use crate::loading_screen::{
     intro_due,
 };
 use crate::menu_screens::{Frame, MenuFrame, MenuScreens, MenuState};
+use crate::pda_window::{self, PdaState, PdaWindow};
 use crate::render::present::Presentation;
 use crate::render::world::Filtering;
 use crate::save_load::FieldFont;
@@ -111,6 +112,9 @@ enum Phase {
         /// The level's inventory screen (docs/behavior/inventory-screen.md;
         /// `None` only in unit tests of other screens).
         inventory: Option<Box<InventoryScreen>>,
+        /// The level's PDA window (docs/behavior/pda-window.md; `None`
+        /// only in unit tests of other screens).
+        pda: Option<Box<PdaWindow>>,
         /// Items the player dropped, released from the inventory: kept
         /// until the world can place them (inventory-screen.md 5.7).
         /// TODO(#111): placed into the level near the character.
@@ -309,8 +313,7 @@ const BEFORE_CONSOLE_LINES: [&str; 6] = [
 /// The actions the single-player interface takes a press of, with no
 /// in-game window open, while a living player character exists
 /// (console-key-bindings.md section 5, rule 3): `inventory` opens the
-/// inventory screen, the others the PDA window (TODO(#285): no PDA yet,
-/// so their presses are taken and do nothing).
+/// inventory screen, the others the PDA window (pda-window.md 4.1).
 const INTERFACE_TAKES: [&str; 4] = ["inventory", "active_jobs", "map", "contacts"];
 
 /// The keyboard's and mouse's presses reaching the level this frame
@@ -429,6 +432,21 @@ fn inventory_keys(data: &GameData, controls: &crate::controls::Controls) -> inve
     inventory_screen::Keys {
         inventory: controls.keys(MoveAction::Inventory),
         drop: controls.keys(MoveAction::Drop),
+        quit: data.quit_keys.clone(),
+    }
+}
+
+/// The keys the PDA window reads, from the effective bindings
+/// (pda-window.md 4.1, 5).
+fn pda_keys(data: &GameData, controls: &crate::controls::Controls) -> pda_window::Keys {
+    use crate::controls::MoveAction;
+    pda_window::Keys {
+        actions: [
+            MoveAction::ActiveJobs,
+            MoveAction::Map,
+            MoveAction::Contacts,
+        ]
+        .map(|a| controls.keys(a)),
         quit: data.quit_keys.clone(),
     }
 }
@@ -779,6 +797,9 @@ pub enum AppState {
         /// The inventory screen while it is open.
         #[serde(skip_serializing_if = "Option::is_none")]
         inventory: Option<Box<InventoryState>>,
+        /// The PDA window while it is open.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pda: Option<Box<PdaState>>,
     },
 }
 
@@ -1501,9 +1522,16 @@ impl App {
                     Ok(Some((level, screen))) => {
                         // The level's in-game interface: the inventory
                         // screen's layout at the `_16` rule of now
-                        // (inventory-screen.md section 2).
-                        match InventoryScreen::load(tree, data, self.video) {
-                            Ok(inventory) => {
+                        // (inventory-screen.md section 2), then the PDA
+                        // window, its tab bar laid out in the fonts of now
+                        // (pda-window.md 1, 3.2).
+                        let video = self.video;
+                        let interface = InventoryScreen::load(tree, data, video).and_then(|i| {
+                            let fonts = self.assets.fonts(tree, data, video.height)?;
+                            Ok((i, PdaWindow::load(tree, data, video, fonts)?))
+                        });
+                        match interface {
+                            Ok((inventory, pda)) => {
                                 self.error = None;
                                 self.loaded_since = self.load_started.take();
                                 self.menu_asked = false;
@@ -1513,6 +1541,7 @@ impl App {
                                     intro: Intro::default(),
                                     menu: None,
                                     inventory: Some(Box::new(inventory)),
+                                    pda: Some(Box::new(pda)),
                                     dropped: Vec::new(),
                                 };
                             }
@@ -1616,6 +1645,7 @@ impl App {
                 intro,
                 menu,
                 inventory,
+                pda,
                 dropped,
             } => {
                 if let Some(o) = overlay.take() {
@@ -1746,6 +1776,34 @@ impl App {
                     self.after_update(audio);
                     return;
                 }
+                if let Some(pda) = pda.as_deref_mut().filter(|p| p.is_open()) {
+                    // pda-window.md 6: the game runs on; keys the window
+                    // does not use reach the character.
+                    let keys = pda_keys(data, level.controls());
+                    level.controls_mut().keys_only = Some(keys.used());
+                    pda.update(pda_window::Frame {
+                        data,
+                        keys: &keys,
+                        game_time: level.clock().time(),
+                        now,
+                        global_ms: self.global_clock.now(),
+                        input,
+                        paused: self.pause.is_on(),
+                        alive: level.character().is_some_and(|c| c.conditions.alive()),
+                    });
+                    // TODO(#738): the character receives them.
+                    pda.take_portions();
+                    level.update(now, input);
+                    // The window has the quit key (5), and the page holds
+                    // no pointer lock while it shows: a back request or an
+                    // unlock opens no menu.
+                    level.take_back_requested();
+                    if !pda.is_open() {
+                        level.controls_mut().keys_only = None;
+                    }
+                    self.after_update(audio);
+                    return;
+                }
                 // The level takes key presses while it runs with the
                 // player's controls live, the pause off and no window open
                 // (console-key-bindings.md section 5, rule 3; under the
@@ -1793,6 +1851,19 @@ impl App {
                             self.failed.get_or_insert(e.to_string());
                         }
                     }
+                } else if let Some(pda) = pda.as_deref_mut()
+                    && !self.pause.is_on()
+                    && level.character().is_some_and(|c| c.conditions.alive())
+                    && let Some(tab) = level.controls().pda_pressed(input)
+                {
+                    // pda-window.md 4.1: not paused, the character alive,
+                    // no other window open: switch to the action's tab,
+                    // then open.
+                    pda.act(tab, input.cursor_ui());
+                    let keys = pda_keys(data, level.controls());
+                    level.controls_mut().keys_only = Some(keys.used());
+                    // TODO(#738): the character receives them.
+                    pda.take_portions();
                 }
             }
         }
@@ -2115,6 +2186,7 @@ impl App {
                 intro,
                 menu: None,
                 inventory,
+                pda,
                 ..
             }) => {
                 let mut scene = compose(
@@ -2126,6 +2198,10 @@ impl App {
                 // inventory-screen.md 3.1: over the rendered level.
                 if let (Some(screen), Some(character)) = (inventory, level.character()) {
                     screen.draw(&mut ctx, &mut scene, character)?;
+                }
+                // pda-window.md 2.2: over the rendered level.
+                if let Some(pda) = pda {
+                    pda.draw(&mut ctx, &mut scene)?;
                 }
                 Ok(scene)
             }
@@ -2156,6 +2232,7 @@ impl App {
                 ..
             }) if intro.player.is_none()
                 && !inventory.as_ref().is_some_and(|i| i.is_open())
+                && !self.pda_open()
                 && !self.window.is_open() =>
             {
                 let p = level.player().state();
@@ -2174,8 +2251,8 @@ impl App {
     }
 
     /// Whether the frame shows the game's mouse cursor: the title menu and
-    /// its screens, before a game and during one, and the inventory screen
-    /// (their scenes draw it). Platforms turn touch into a touchpad for the
+    /// its screens, before a game and during one, the inventory screen and
+    /// the PDA window (their scenes draw it). Platforms turn touch into a touchpad for the
     /// cursor then (a Volya Engine addition, decided by the user, #108).
     pub fn cursor_shown(&self) -> bool {
         matches!(
@@ -2187,6 +2264,7 @@ impl App {
                 })
                 | Some(Phase::Level { menu: Some(_), .. })
         ) || self.inventory_open()
+            || self.pda_open()
     }
 
     /// The save screen's name field (UI units) and whether it has focus,
@@ -2202,13 +2280,15 @@ impl App {
     }
 
     /// Whether the player character takes keyboard keys: its controls are
-    /// live, or the inventory screen over the running level passes on the
-    /// keys it doesn't use (inventory-screen.md 1.3). Platforms forward
+    /// live, or the inventory screen or the PDA window over the running
+    /// level passes on the keys it doesn't use (inventory-screen.md 1.3,
+    /// pda-window.md 6). Platforms forward
     /// keys pressed with Control then (it crouches).
     pub fn character_takes_keys(&self) -> bool {
         self.level_controls().is_some()
             || !self.window.is_open()
-                && matches!(&self.phase, Some(Phase::Level { inventory: Some(i), menu: None, .. }) if i.is_open())
+                && (matches!(&self.phase, Some(Phase::Level { inventory: Some(i), menu: None, .. }) if i.is_open())
+                    || self.pda_over_level())
     }
 
     /// Whether the console is open (docs/behavior/console-window.md): it
@@ -2229,6 +2309,19 @@ impl App {
                 &self.phase,
                 Some(Phase::Menu(_) | Phase::Level { menu: Some(_), .. })
             )
+    }
+
+    /// Whether the PDA window is open (pda-window.md).
+    pub fn pda_open(&self) -> bool {
+        matches!(&self.phase, Some(Phase::Level { pda: Some(p), .. }) if p.is_open())
+    }
+
+    /// Whether the PDA window is open over the running level with nothing
+    /// over it (no menu, no console): the touch PDA button shows over it to
+    /// close it (our design, #730).
+    pub fn pda_over_level(&self) -> bool {
+        !self.window.is_open()
+            && matches!(&self.phase, Some(Phase::Level { pda: Some(p), menu: None, .. }) if p.is_open())
     }
 
     /// Whether the inventory screen is open.
@@ -2431,6 +2524,7 @@ impl App {
                 intro,
                 menu,
                 inventory,
+                pda,
                 ..
             }) => AppState::Level {
                 clock,
@@ -2447,6 +2541,9 @@ impl App {
                     .filter(|i| i.is_open())
                     .zip(level.character())
                     .map(|(i, c)| Box::new(i.state(c))),
+                pda: (pda.as_ref())
+                    .filter(|p| p.is_open())
+                    .map(|p| Box::new(p.state())),
             },
         }
     }
@@ -2910,6 +3007,7 @@ mod tests {
             intro: Intro::default(),
             menu: None,
             inventory: None,
+            pda: None,
             dropped: Vec::new(),
         });
         app.update(&tree, 16.0, &mut input, &mut audio);
@@ -3000,17 +3098,21 @@ mod tests {
         app.update(&tree, 0.0, &mut input, &mut audio);
         let mut controls = app.data.controls.clone();
         controls.bindings = crate::controls::Bindings::read(&[
-            b"bind inventory kI\nbind forward kW\nbind wpn_fire mouse1\nbind drop kG\n",
+            b"bind inventory kI\nbind forward kW\nbind wpn_fire mouse1\nbind drop kG\n\
+              bind active_jobs kP\nbind map kM\nbind contacts kH\n",
         ]);
         let character = crate::inventory_screen::tests::character(&[("bread", 5, 3)]);
-        let inventory =
-            InventoryScreen::load(&tree, &app.data, Resolution::new(1024, 768)).unwrap();
+        let xga = Resolution::new(1024, 768);
+        let inventory = InventoryScreen::load(&tree, &app.data, xga).unwrap();
+        let fonts = app.assets.fonts(&tree, &app.data, xga.height).unwrap();
+        let pda = PdaWindow::load(&tree, &app.data, xga, fonts).unwrap();
         app.phase = Some(Phase::Level {
             level: Box::new(LevelScreen::empty(controls, 0).with_character(character)),
             overlay: None,
             intro: Intro::default(),
             menu: None,
             inventory: Some(Box::new(inventory)),
+            pda: Some(Box::new(pda)),
             dropped: Vec::new(),
         });
         app.update(&tree, 16.0, &mut input, &mut audio);
@@ -3202,8 +3304,8 @@ mod tests {
     }
 
     /// console-key-bindings.md section 5, rule 3: the interface takes a
-    /// press of the inventory key while the character lives, so its line
-    /// is not executed; dead, the line is.
+    /// press of the inventory key or a PDA key while the character lives,
+    /// so its line is not executed; dead, the line is.
     #[test]
     fn the_inventory_key_opens_the_screen_instead_of_executing_its_line() {
         let (tree, mut app, mut input, mut audio) = in_level_with_inventory();
@@ -3215,6 +3317,12 @@ mod tests {
         press(&mut input, Key::M);
         app.update(&tree, 32.0, &mut input, &mut audio);
         input.end_frame();
+        assert!(app.pda_open(), "the map key opens the PDA");
+        assert_eq!(logged(&app, start), 0);
+        press(&mut input, Key::M);
+        app.update(&tree, 40.0, &mut input, &mut audio);
+        input.end_frame();
+        assert!(!app.pda_open(), "and closes it");
         assert_eq!(logged(&app, start), 0);
         press(&mut input, Key::I);
         app.update(&tree, 48.0, &mut input, &mut audio);
@@ -3236,6 +3344,90 @@ mod tests {
         input.end_frame();
         assert!(!app.inventory_open());
         assert_eq!(logged(&app, start), 1);
+    }
+
+    /// pda-window.md 4–6: P opens the PDA on the tasks tab over the
+    /// running level, the cursor shown and keys passed on; the inventory
+    /// key does nothing under it; Escape closes it without the menu. The
+    /// touch PDA button and a gamepad's d-pad left open it, east closes it
+    /// (our design).
+    #[test]
+    fn the_pda_keys_open_and_close_the_window() {
+        let (tree, mut app, mut input, mut audio) = in_level_with_inventory();
+        let mut t = 32.0;
+        let mut frame = |app: &mut App, input: &mut Input| {
+            app.update(&tree, t, input, &mut audio);
+            input.end_frame();
+            t += 16.0;
+        };
+        press(&mut input, Key::P);
+        frame(&mut app, &mut input);
+        assert!(app.pda_open());
+        assert!(app.cursor_shown() && app.character_takes_keys());
+        assert!(app.level_controls().is_none() && app.pda_over_level());
+        let AppState::Level { pda: Some(pda), .. } = app.state() else {
+            panic!("no PDA state")
+        };
+        assert_eq!(pda.tab, Some(0));
+        // A click on the diary's caption switches to it (3.3).
+        let [x, y, w, h] = pda.tabs[2].rect;
+        input.handle(Event::PointerMoved {
+            at: [x + w / 2.0, y + h / 2.0],
+        });
+        for pressed in [true, false] {
+            input.handle(Event::PointerButton {
+                at: None,
+                button: crate::core::input::MouseButton::Left,
+                pressed,
+                time: 5000.0,
+            });
+        }
+        frame(&mut app, &mut input);
+        let AppState::Level { pda: Some(pda), .. } = app.state() else {
+            panic!("no PDA state")
+        };
+        assert_eq!(pda.tab, Some(2), "the click switched tabs");
+        press(&mut input, Key::I);
+        frame(&mut app, &mut input);
+        assert!(app.pda_open() && !app.inventory_open());
+        press(&mut input, Key::Escape);
+        frame(&mut app, &mut input);
+        assert!(!app.pda_open());
+        assert!(
+            matches!(app.phase, Some(Phase::Level { menu: None, .. })),
+            "no menu"
+        );
+        assert!(app.level_controls().is_some());
+        for pressed in [true, false] {
+            input.handle(Event::TouchButton {
+                button: crate::core::input::TouchButton::Pda,
+                pressed,
+            });
+        }
+        frame(&mut app, &mut input);
+        assert!(app.pda_open(), "the touch button opens it");
+        for pressed in [true, false] {
+            input.handle(Event::TouchButton {
+                button: crate::core::input::TouchButton::Pda,
+                pressed,
+            });
+        }
+        frame(&mut app, &mut input);
+        assert!(!app.pda_open(), "and closes it");
+        for (button, open) in [
+            (crate::core::input::GamepadButton::DpadLeft, true),
+            (crate::core::input::GamepadButton::East, false),
+        ] {
+            for pressed in [true, false] {
+                input.handle(Event::GamepadButton { button, pressed });
+            }
+            frame(&mut app, &mut input);
+            assert_eq!(app.pda_open(), open, "{button:?}");
+        }
+        assert!(
+            matches!(app.phase, Some(Phase::Level { menu: None, .. })),
+            "east closed the PDA only"
+        );
     }
 
     #[test]

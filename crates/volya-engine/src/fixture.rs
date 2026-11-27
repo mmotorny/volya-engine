@@ -442,7 +442,19 @@ pub fn tree() -> MemVfs {
         <texture id="ui_string_01_e" x="64" y="0" width="32" height="32"/>
         <texture id="ui_pda_m_noupdate" x="670" y="998" width="9" height="11"/>
         <texture id="ui_pda_m_update" x="680" y="998" width="9" height="11"/>
+        <texture id="ui_icons_PDA_string_tooltips_b" x="96" y="0" width="32" height="30"/>
+        <texture id="ui_icons_PDA_string_tooltips_back" x="128" y="0" width="32" height="30"/>
+        <texture id="ui_icons_PDA_string_tooltips_e" x="160" y="0" width="32" height="30"/>
         </ui_texture>"#
+            .into(),
+    );
+    add(
+        &format!("{c}ui/hint_item.xml"),
+        br#"<window><button_hint x="0" y="0" width="200" height="30">
+        <frame_line x="0" y="0" width="200" height="30"><texture>ui_icons_PDA_string_tooltips</texture></frame_line>
+        <description x="10" y="2" width="192" height="20" light_anim="ui_btn_hint" la_cyclic="0" la_texture="0" la_text="1" la_alpha="1">
+        <text font="letterica18" r="255" g="255" b="255"/></description>
+        </button_hint></window>"#
             .into(),
     );
     add(

@@ -5,20 +5,29 @@
 //! seven tabs empty: built with the level's in-game interface (1), its
 //! layout and drawing (2, [`layout`]), the clock (2.3), the new-content
 //! marks (2.4), the tab bar and switching tabs (3), opening and closing
-//! (4.2, 5) and the information portions it gives (8). The tabs' contents
-//! are their own specs' (pda-scope.md PD-4 … PD-17).
+//! (4, 5), its input while open (6), the information portions it gives
+//! (8), and the buttons' hint window (docs/behavior/pda-controls.md 6,
+//! [`hint`]). The tabs' contents are their own specs' (pda-scope.md PD-4 …
+//! PD-17).
 //!
 //! **Input.** A mouse window drawing the game's cursor, as the inventory
-//! screen: touch reaches it through the touchpad of #108 (a tap clicks a
-//! tab); a gamepad's d-pad moves the cursor to the nearest tab button, the
-//! left stick moves it freely and south (A / cross) is the left button
-//! (our design, the options screen's mapping).
+//! screen: keys it does not take reach the character. The keys bound to
+//! `active_jobs`, `map` and `contacts` switch to their tab and open or
+//! close it (4.1), the key bound to `quit` closes it (5). Touch and the
+//! gamepad are our design, as for the inventory screen
+//! ([`crate::controls`]): touch reaches the open window through the
+//! touchpad of #108 (a tap clicks a tab), and the touch PDA button acts as
+//! the key bound to `active_jobs`; a gamepad's d-pad left does too in the
+//! level, and in the window the d-pad moves the cursor to the nearest tab
+//! button, the left stick moves it freely, south (A / cross) is the left
+//! button and east (B / circle) the key bound to `quit`.
 //!
 //! **What waits for other systems**: the information portions are
 //! collected ([`PdaWindow::take_portions`]) until the character can
 //! receive them (#738); the tutorials' `pda_section` (#739); the HUD's
 //! flashing icon and the HUD hidden while open (#740).
 
+pub mod hint;
 pub mod layout;
 #[cfg(test)]
 pub(crate) mod tests;
@@ -27,17 +36,19 @@ use std::io;
 
 use serde::Serialize;
 
-use crate::core::input::Input;
+use crate::core::input::{Action, Control, Input, Key, TouchButton};
 use crate::core::vfs::Vfs;
 use crate::data::{GameData, encode};
 use crate::dialog::{self, Ev};
 use crate::draw::{Ctx, picture_desc};
 use crate::scene::Scene;
+use hint::{Hint, HintDesc};
 use layout::{Layout, Placed, SEPARATOR, SEPARATOR_COLOR, TABS};
 use volya_engine_core::text::Fonts;
+use volya_engine_formats::text::font::UiFont;
 use volya_engine_formats::text::layout::TextBox;
-use volya_engine_formats::ui::Resolution;
 use volya_engine_formats::ui::layout::{HAlign, Rect, VAlign};
+use volya_engine_formats::ui::{Color, Resolution};
 
 /// The portion given when the window opens (4.2, 8).
 pub const OPENED: &str = "ui_pda";
@@ -58,20 +69,71 @@ pub const TAB_PORTIONS: [Option<&str>; TABS] = [
 /// The map tab (3.1).
 pub const MAP_TAB: usize = 1;
 
+/// The tabs the actions select (4.1): `active_jobs`, `map`, `contacts`.
+pub const ACTION_TABS: [usize; 3] = [0, MAP_TAB, 3];
+
+/// The keys the window reads (4.1, 5), from the effective bindings.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Keys {
+    /// Bound to `active_jobs`, `map` and `contacts`, in [`ACTION_TABS`]
+    /// order.
+    pub actions: [Vec<Key>; 3],
+    pub quit: Vec<Key>,
+}
+
+impl Keys {
+    /// Every key the window uses: kept from the character's controls while
+    /// it is open (6).
+    pub fn used(&self) -> Vec<Control> {
+        (self.actions.iter().flatten())
+            .chain(&self.quit)
+            .map(|&k| Control::Key(k))
+            .collect()
+    }
+
+    /// The tab whose action key `key` is bound to (4.1).
+    pub fn tab_of(&self, key: Key) -> Option<usize> {
+        (self.actions.iter())
+            .position(|keys| keys.contains(&key))
+            .map(|i| ACTION_TABS[i])
+    }
+}
+
 /// One frame of the open window.
 pub struct Frame<'a> {
     pub data: &'a GameData,
+    pub keys: &'a Keys,
     /// The game's current time, game milliseconds (2.3).
     pub game_time: u64,
-    /// The engine clock, milliseconds.
+    /// The engine clock, milliseconds: the interface clock of the hint's
+    /// animation (pda-controls.md 6).
     pub now: u64,
+    /// The global clock, milliseconds: the hint's delay (pda-controls.md
+    /// 6).
+    pub global_ms: u64,
     pub input: &'a Input,
-    /// The game is paused: the window takes no input (6).
+    /// The game is paused: the window takes no input but `quit` (5, 6).
     pub paused: bool,
+    /// The character's health is above 0 (5 item 3).
+    pub alive: bool,
+}
+
+/// What a frame did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Outcome {
+    /// The window closed this frame.
+    pub closed: bool,
 }
 
 /// The PDA window of a level.
 pub struct PdaWindow {
+    hint_desc: HintDesc,
+    /// Each tab button's hint text and its width in units, if it has one.
+    hints: Vec<Option<(String, f32)>>,
+    /// The hint window, while a button holds it.
+    hint: Option<Hint>,
+    /// When the cursor entered each caption, global clock milliseconds.
+    entered: [Option<u64>; TABS],
     layout: Layout,
     open: bool,
     /// The tab shown, none until the first switch (3.3).
@@ -101,11 +163,42 @@ impl PdaWindow {
     ) -> io::Result<Self> {
         let sx = resolution.scale().0;
         let width = |font, text: &[u8]| fonts.get(font).width(text) / sx;
-        Ok(Self::new(Layout::load(tree, data, resolution, &width)?))
+        let layout = Layout::load(tree, data, resolution, &width)?;
+        let hint = HintDesc::load(tree, data, resolution)?;
+        Ok(Self::new(
+            layout,
+            hint,
+            &|k| data.strings.get(k).to_owned(),
+            &width,
+        ))
     }
 
-    pub fn new(layout: Layout) -> Self {
+    /// The window of `layout` with the hint window `hint_desc`, the hints'
+    /// texts by `text` (pda-controls.md 4: through the string table) and
+    /// their widths by `width` (6 step 2), measured once.
+    pub fn new(
+        layout: Layout,
+        hint_desc: HintDesc,
+        text: &dyn Fn(&str) -> String,
+        width: &dyn Fn(UiFont, &[u8]) -> f32,
+    ) -> Self {
+        let font = (hint_desc.description.text.as_ref())
+            .and_then(|t| t.font)
+            .unwrap_or(UiFont::DEFAULT);
+        let hints = (layout.buttons.iter())
+            .map(|b| {
+                let t = text(b.hint.as_deref()?);
+                (!t.is_empty()).then(|| {
+                    let w = width(font, &encode(&t));
+                    (t, w)
+                })
+            })
+            .collect();
         Self {
+            hint_desc,
+            hints,
+            hint: None,
+            entered: [None; TABS],
             layout,
             open: false,
             active: None,
@@ -121,6 +214,15 @@ impl PdaWindow {
 
     pub fn layout(&self) -> &Layout {
         &self.layout
+    }
+
+    /// Every texture id the window draws and its string keys, the hint
+    /// window's included, for checks.
+    pub fn references(&self) -> (Vec<String>, Vec<String>) {
+        let (mut textures, strings) = self.layout.references();
+        let line = &self.hint_desc.line;
+        textures.extend(["b", "back", "e"].map(|p| format!("{line}_{p}")));
+        (textures, strings)
     }
 
     pub fn is_open(&self) -> bool {
@@ -164,6 +266,8 @@ impl PdaWindow {
         self.cursor = cursor;
         self.last_update = None;
         self.over = [false; TABS];
+        self.entered = [None; TABS];
+        self.hint = None;
         self.portions.push(OPENED);
     }
 
@@ -173,14 +277,34 @@ impl PdaWindow {
             return;
         }
         self.open = false;
+        self.hint = None;
         self.portions.push(CLOSED);
     }
 
-    /// One frame of the open window: its input (3.3, 6), then the clock
-    /// (2.3).
-    pub fn update(&mut self, f: Frame) {
+    /// An action of 4.1 while the window is the topmost one, or none is
+    /// open: switch to `tab`, then open the window (the cursor at
+    /// `cursor`) if it was closed, close it if it was open.
+    pub fn act(&mut self, tab: usize, cursor: [f32; 2]) {
+        self.switch_to(tab);
+        if self.open {
+            self.close();
+        } else {
+            self.open(cursor);
+        }
+    }
+
+    /// One frame of the open window: the character's death (5 item 3), its
+    /// input (3.3, 4.1, 5, 6), the captions' cursor flags and the hint
+    /// (pda-controls.md 6), then the clock (2.3).
+    pub fn update(&mut self, f: Frame) -> Outcome {
+        let mut out = Outcome::default();
         if !self.open {
-            return;
+            return out;
+        }
+        if !f.alive {
+            self.close();
+            out.closed = true;
+            return out;
         }
         // A frame counts 100 ms at most (as the inventory screen's).
         let dt = f
@@ -189,17 +313,86 @@ impl PdaWindow {
             .min(100) as f32
             / 1000.0;
         self.last_update = Some(f.now);
-        if !f.paused {
-            for e in dialog::events(f.data, f.input, self.cursor, dt) {
-                self.event(e);
+        // The touch PDA button acts as the key bound to `active_jobs` (our
+        // design).
+        let touched = (f.input.actions().iter()).any(|a| {
+            matches!(
+                a,
+                Action::Press {
+                    control: Control::Touch(TouchButton::Pda),
+                    ..
+                }
+            )
+        });
+        if touched && !f.paused {
+            self.act(ACTION_TABS[0], self.cursor);
+            out.closed = true;
+            return out;
+        }
+        for e in dialog::events(f.data, f.input, self.cursor, dt) {
+            // 6: while paused the window takes no input; the key bound to
+            // `quit` still closes it (5 item 2).
+            if f.paused && !matches!(e, Ev::Quit { pressed: true }) {
+                continue;
+            }
+            if self.event(e, f.keys) {
+                out.closed = true;
+                return out;
             }
         }
-        self.over = self.over_flags(self.cursor);
+        let over = self.over_flags(self.cursor);
+        for (i, &now_over) in over.iter().enumerate() {
+            if now_over && !self.over[i] {
+                self.entered[i] = Some(f.global_ms);
+            } else if !now_over && self.over[i] {
+                self.entered[i] = None;
+                if self.hint.as_ref().is_some_and(|h| h.owner == i) {
+                    self.hint = None;
+                }
+            }
+        }
+        self.over = over;
+        self.update_hint(f.now, f.global_ms);
         self.clock = clock_text(f.game_time);
+        out
     }
 
-    fn event(&mut self, e: Ev) {
+    /// pda-controls.md 6: a caption under the cursor for over 500 ms of
+    /// the global clock takes the free hint window; the shown one's
+    /// animation runs.
+    fn update_hint(&mut self, now: u64, global_ms: u64) {
+        if let Some(h) = &mut self.hint {
+            h.update(&self.hint_desc, now);
+            return;
+        }
+        let ready = (0..TABS).find(|&i| {
+            self.over[i]
+                && self.hints[i].is_some()
+                && self.entered[i].is_some_and(|t| global_ms.saturating_sub(t) > hint::DELAY_MS)
+        });
+        if let Some(i) = ready
+            && let Some((text, width)) = self.hints[i].clone()
+        {
+            let h = Hint::take(&self.hint_desc, i, text, width, self.cursor, now);
+            self.hint = Some(h);
+        }
+    }
+
+    /// One event; returns whether the window closed.
+    fn event(&mut self, e: Ev, keys: &Keys) -> bool {
         match e {
+            // 4.1: an action's key switches to its tab, then closes the
+            // window; 5 item 2: `quit` closes it (a gamepad's east too).
+            Ev::Key { key, pressed: true } => {
+                if let Some(tab) = keys.tab_of(key) {
+                    self.act(tab, self.cursor);
+                    return true;
+                }
+            }
+            Ev::Quit { pressed: true } => {
+                self.close();
+                return true;
+            }
             Ev::Move(p) => self.cursor = p,
             Ev::Navigate(d) => {
                 let targets: Vec<Rect> = self.layout.buttons.iter().map(|b| b.rect).collect();
@@ -218,6 +411,7 @@ impl PdaWindow {
             }
             _ => {}
         }
+        false
     }
 
     /// The tab whose caption holds `p`.
@@ -308,7 +502,26 @@ impl PdaWindow {
             let desc = picture_desc(&t.name, r, t.rect, t.color);
             ctx.picture(s, &format!("pda mark {i}"), &desc, r, 0.0, 0, false, None)?;
         }
+        self.draw_hint(ctx, s)?;
         crate::draw::cursor(ctx, s, self.cursor)
+    }
+
+    /// pda-controls.md 6: the hint window over the interface, its frame
+    /// line white with the text's alpha.
+    fn draw_hint(&self, ctx: &mut Ctx, s: &mut Scene) -> io::Result<()> {
+        let Some(h) = &self.hint else {
+            return Ok(());
+        };
+        let d = &self.hint_desc;
+        let line = Color::rgba(255, 255, 255, h.color.a);
+        let r = h.rect;
+        ctx.frame_line_colored(s, "pda hint line", &d.line, (r.x, r.y), r.width, line)?;
+        let w = &d.description.window;
+        let rect = Rect::new(r.x + w.x, r.y + w.y, h.text_width, w.height);
+        let (mut tb, font) = TextBox::of_static(&d.description, rect);
+        tb.complex = false;
+        tb.color = h.color;
+        ctx.text(s, "pda hint", &encode(&h.text), &tb, font)
     }
 
     /// What tests observe.
@@ -326,6 +539,12 @@ impl PdaWindow {
                     new_content: self.new_content[i],
                 })
                 .collect(),
+            hint: self.hint.as_ref().map(|h| HintState {
+                tab: h.owner,
+                text: h.text.clone(),
+                rect: [h.rect.x, h.rect.y, h.rect.width, h.rect.height],
+                alpha: h.color.a,
+            }),
         }
     }
 }
@@ -401,4 +620,16 @@ pub struct PdaState {
     pub clock: String,
     pub cursor: [f32; 2],
     pub tabs: Vec<TabState>,
+    pub hint: Option<HintState>,
+}
+
+/// The hint window as tests see it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct HintState {
+    /// The tab whose button holds it.
+    pub tab: usize,
+    pub text: String,
+    pub rect: [f32; 4],
+    /// The text's alpha as last animated.
+    pub alpha: u8,
 }

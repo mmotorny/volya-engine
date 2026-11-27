@@ -39,3 +39,8 @@ The game's own interface, drawn by the engine (`crates/volya-engine`). The app's
 - While it shows, only the keyboard's keys it doesn't use reach the character (`Controls::keys_only`); mouse, wheel, gamepad and touch are the screen's. The level's controls count as stopped, so the page hides its touch controls, releases pointer lock (the cursor follows the absolute pointer; an exit the page makes releases no held key and opens no menu, so a held W walks on) and turns touch into the touchpad.
 - The quit key closes it (the spec's Escape); the page being hidden opens the menu over it, as in a level (our choice).
 - The `debug_give_item` op puts an item into the inventory with an id from the simulation's pool (test builds only: the `test-ops` feature of `volya-engine-web`, which `cargo xtask e2e` and `web --dev` enable and the deployed build lacks).
+
+## The PDA window
+
+- docs/behavior/pda-window.md, with the controls of docs/behavior/pda-controls.md it uses (the tab bar, frame lines, the hint window), in `volya-engine::pda_window` (#735, #730). Built with the inventory screen when the level is made, its tab bar laid out in the fonts of that moment; its tabs are empty until their own specs are built. Its information portions wait for the character to receive them (#738), the tutorials' `pda_section` for tutorials (#739), the HUD's PDA icon for the HUD (#740).
+- The keys bound to `active_jobs`, `map` and `contacts` switch to their tab and open or close it (a gamepad's d-pad left and the touch PDA button as `active_jobs`: our design); the quit key (a gamepad's east) closes it without the menu; the game is not paused. While it shows, input is shared as for the inventory screen (above).

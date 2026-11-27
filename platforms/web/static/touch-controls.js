@@ -21,8 +21,13 @@
 //   inventory screen (#110), both clear of the thumbs' zones; Console,
 //   right of Menu, opens the console as its key does and raises the
 //   device's keyboard for it (#642, console-touch.js);
-// - Torch and Night vision (toggles, shown on) in a row left of Inventory
-//   along the top edge (#363), clear of the thumbs' zones too, give the
+// - PDA left of Inventory opens the PDA as the key bound to `active_jobs`
+//   does (#730). The PDA has no close button of its own (the original
+//   closes it by key), so while it is open over the level this button
+//   alone shows, at its place, and closes it the same way; touches
+//   elsewhere reach the touchpad (touchpad.js);
+// - Torch and Night vision (toggles, shown on) in a row left of PDA along
+//   the top edge (#363), clear of the thumbs' zones too, give the
 //   `torch` and `night_vision` commands. Each shows only while its command
 //   would do something (the engine says): Torch while a torch is attached,
 //   Night vision while that torch's night vision is on or the worn outfit
@@ -41,7 +46,7 @@ import { approximateArt, gameArt, paintDisc, paintGlyph, paintPicture, vectorGly
 const RADIUS = 56;
 /** Sizes in CSS pixels (match style.css): the buttons, the knob, the lock
  * target, and the segmented ring around the stick. */
-const SIZE = { menu: 44, console: 44, inventory: 44, torch: 44, nightVision: 44, jump: 80, crouch: 64 };
+const SIZE = { menu: 44, console: 44, inventory: 44, pda: 44, torch: 44, nightVision: 44, jump: 80, crouch: 64 };
 const KNOB = 48;
 const TARGET = 44;
 const SEGMENTS = 2 * RADIUS + 6;
@@ -177,6 +182,7 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
   const menu = button("menu", "Menu");
   const consoleButton = button("console", "Console");
   const inventory = button("inventory", "Inventory");
+  const pda = button("pda", "PDA");
   const jump = button("jump", "Jump", ["left", "right"]);
   // Crouch: the upright crouch icon; brighter when on; the creep icon in
   // the low crouch.
@@ -192,7 +198,7 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
   }
   const actions = element("div", "touch-actions");
   actions.append(crouch, jump);
-  root.append(move, look, menu, consoleButton, inventory, torch, nightVision, actions);
+  root.append(move, look, menu, consoleButton, inventory, pda, torch, nightVision, actions);
 
   // Every touch or pen contact on the controls stays with them (a pen
   // can't use pointer lock); a mouse passes through to input.js (pointer
@@ -404,7 +410,7 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
   // cancelled touch does nothing.
   let crouched = false;
   const releases = new Map(); // button → its release
-  for (const b of [menu, inventory, torch, nightVision, jump, crouch]) {
+  for (const b of [menu, inventory, pda, torch, nightVision, jump, crouch]) {
     const held = new Map(); // pointerId → { start, waiting }
     const drags = b === jump || b === crouch;
     let pressed = false; // the press sent, its release not yet
@@ -490,6 +496,7 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
       [menu, SIZE.menu],
       [consoleButton, SIZE.console],
       [inventory, SIZE.inventory],
+      [pda, SIZE.pda],
       [torch, SIZE.torch],
       [nightVision, SIZE.nightVision],
       [jump, SIZE.jump],
@@ -506,6 +513,9 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
     // backpack, drawn as the Menu bars are.
     const bagGlyph = SIZE.inventory * 0.56;
     paintGlyph(inventory.querySelector(".touch-glyph"), vectorGlyph("inventory", Math.round(bagGlyph * k)), bagGlyph, bagGlyph, grey);
+    // The HUD's PDA icon (`ui_hud_icon_PDA`), twice as wide as high.
+    const pdaGlyph = SIZE.pda * 0.7;
+    paintGlyph(pda.querySelector(".touch-glyph"), art.pda, pdaGlyph, pdaGlyph / 2, grey);
     const torchGlyph = SIZE.torch * 0.58;
     const [torchNormal, torchOn] = torch.querySelectorAll(".touch-glyph");
     paintGlyph(torchNormal, vectorGlyph("torch", Math.round(torchGlyph * k)), torchGlyph, torchGlyph, grey);
@@ -566,11 +576,16 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
   // the level.
   let touched = touch || matchMedia("(pointer: coarse)").matches;
   let live = false;
+  let pdaOpen = false;
   const render = () => {
-    const shown = live && touched;
-    if (root.hidden === !shown) return;
+    // Over the open PDA, its button alone (style.css).
+    const overPda = pdaOpen && !live;
+    const shown = (live || overPda) && touched;
+    const mode = root.classList.contains("pda-open");
+    if (root.hidden === !shown && mode === overPda) return;
     root.hidden = !shown;
-    if (shown) {
+    root.classList.toggle("pda-open", overPda);
+    if (shown && !overPda) {
       wake();
     } else {
       // Nothing stays held when the controls go away, and nothing acts:
@@ -579,9 +594,10 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
       letGo = null;
       restStick();
       looking.clear();
-      for (const release of releases.values()) release();
+      for (const [b, release] of releases) if (b !== pda || !shown) release();
       consoleButton.classList.remove("down");
       clearTimeout(idleTimer);
+      root.classList.remove("idle");
     }
   };
   // input.js releases everything on blur and on losing pointer lock (its
@@ -597,7 +613,7 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
   addEventListener(
     "pointerdown",
     (event) => {
-      if (event.pointerType !== "touch" || touched || !live) return;
+      if (event.pointerType !== "touch" || touched || !(live || pdaOpen)) return;
       touched = true;
       render();
     },
@@ -606,9 +622,10 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
 
   return {
     element: root,
-    update({ level, crouch: on, low, sprint, lock, torch: torchOn, nightVision: nightOn }) {
+    update({ level, crouch: on, low, sprint, lock, torch: torchOn, nightVision: nightOn, pda: overPda }) {
       crouched = Boolean(on);
       live = level;
+      pdaOpen = Boolean(overPda);
       if (level) askArt();
       sprinting = Boolean(sprint);
       // For tests: whether the engine's message says the controls are live.

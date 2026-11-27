@@ -609,10 +609,12 @@ pub fn input_capture() -> bool {
 /// (the level's controls live, or the inventory screen over them, #110);
 /// 64 while the touch Torch button shows and 128 while the torch is on, 256
 /// while the Night vision button shows and 512 while night vision is
-/// active (#363).
+/// active (#363); 1024 while the PDA window is open over the running level
+/// (the touch PDA button shows over it, #730).
 #[wasm_bindgen]
 pub fn level_controls() -> u32 {
-    let keys = u32::from(engine::character_takes_keys()) << 5;
+    let keys =
+        u32::from(engine::character_takes_keys()) << 5 | u32::from(engine::pda_over_level()) << 10;
     let button = |b: Option<bool>, shift: u32| match b {
         None => 0,
         Some(on) => (1 | u32::from(on) << 1) << shift,

@@ -56,8 +56,38 @@ fn layout() -> Layout {
     Layout::read(&doc, &ColorDefs::default(), &text, &width).unwrap()
 }
 
+/// `hint_item.xml`'s `button_hint` (pda-controls.md 6).
+const HINT: &str = r#"<window><button_hint x="0" y="0" width="200" height="30">
+<frame_line x="0" y="0" width="200" height="30"><texture>ui_icons_PDA_string_tooltips</texture></frame_line>
+<description x="10" y="2" width="192" height="20" light_anim="ui_btn_hint" la_cyclic="0" la_texture="0" la_text="1" la_alpha="1">
+<text font="letterica18" r="255" g="255" b="255"/></description></button_hint></window>"#;
+
+/// A synthetic `ui_btn_hint`: transparent to opaque over 10 frames at 10
+/// per second (1 s), keys 0 and 10.
+fn hint_desc() -> HintDesc {
+    let animations = volya_engine_formats::lanims::ColourAnimations {
+        version: 1,
+        entries: vec![volya_engine_formats::lanims::Entry {
+            name: b"ui_btn_hint".to_vec(),
+            frame_rate: 10.0,
+            frame_count: 10,
+            keys: vec![(0, 0x00FF_0000), (10, 0xFF00_00FF)],
+        }],
+    };
+    let doc = xml::parse(HINT.as_bytes()).unwrap();
+    HintDesc::read(&doc, &ColorDefs::default(), &animations).unwrap()
+}
+
 fn window() -> PdaWindow {
-    PdaWindow::new(layout())
+    PdaWindow::new(layout(), hint_desc(), &|k| k.to_owned(), &width)
+}
+
+/// The keys of the game's default bindings (pda-window.md 4.1).
+fn keys() -> Keys {
+    Keys {
+        actions: [vec![Key::P], vec![Key::M], vec![Key::H]],
+        quit: vec![Key::Escape],
+    }
 }
 
 struct Run {
@@ -65,6 +95,9 @@ struct Run {
     window: PdaWindow,
     input: Input,
     now: u64,
+    global_ms: u64,
+    paused: bool,
+    alive: bool,
 }
 
 impl Run {
@@ -74,20 +107,45 @@ impl Run {
             window: window(),
             input: Input::new(),
             now: 0,
+            global_ms: 0,
+            paused: false,
+            alive: true,
         }
     }
 
-    fn frame(&mut self, game_time: u64) {
+    /// An open window on tab 0.
+    fn open() -> Self {
+        let mut r = Self::new();
+        r.window.switch_to(0);
+        r.window.open([0.0, 0.0]);
+        r.window.take_portions();
+        r
+    }
+
+    fn frame(&mut self, game_time: u64) -> Outcome {
         let data = fixture::data(&self.tree);
         self.now += 16;
-        self.window.update(Frame {
+        if !self.paused {
+            self.global_ms += 16;
+        }
+        let out = self.window.update(Frame {
             data: &data,
+            keys: &keys(),
             game_time,
             now: self.now,
+            global_ms: self.global_ms,
             input: &self.input,
-            paused: false,
+            paused: self.paused,
+            alive: self.alive,
         });
         self.input.end_frame();
+        out
+    }
+
+    fn key(&mut self, key: Key) {
+        for pressed in [true, false] {
+            self.input.handle(Event::Key { key, pressed });
+        }
     }
 
     fn click(&mut self, at: [f32; 2], time: f64) {
@@ -283,4 +341,130 @@ fn the_window_draws_its_marks_last() {
         "the captions under the marks: {layers:?}"
     );
     assert_eq!(layers.last(), Some(&"cursor"));
+}
+
+/// 4.1: with the window open, an action's key switches to its tab (its
+/// flag cleared, its portion given) and then closes it; the next opening
+/// by another key switches again.
+#[test]
+fn an_actions_key_switches_then_closes() {
+    let mut r = Run::open();
+    r.window.set_new_content(3);
+    r.key(Key::H);
+    assert!(r.frame(0).closed);
+    assert!(!r.window.is_open());
+    assert_eq!(r.window.active_tab(), Some(3));
+    assert!(!r.window.state().tabs[3].new_content);
+    assert_eq!(r.window.take_portions(), ["ui_pda_contacts", "ui_pda_hide"]);
+    r.window.act(MAP_TAB, [0.0, 0.0]);
+    assert!(r.window.is_open());
+    assert_eq!(r.window.take_portions(), ["ui_pda_map_local", "ui_pda"]);
+    // The key of the active tab closes it with no portion of its own.
+    r.key(Key::M);
+    assert!(r.frame(0).closed);
+    assert_eq!(r.window.take_portions(), ["ui_pda_hide"]);
+}
+
+/// 5: the key bound to `quit` closes the window, also while paused; while
+/// paused nothing else acts (6). A gamepad's east button is `quit` (our
+/// design).
+#[test]
+fn quit_closes_it_even_while_paused() {
+    let mut r = Run::open();
+    r.paused = true;
+    r.key(Key::H);
+    r.click(centre(&r.window, 2), 0.0);
+    assert!(!r.frame(0).closed);
+    assert_eq!(r.window.active_tab(), Some(0), "no input while paused");
+    r.key(Key::Escape);
+    assert!(r.frame(0).closed);
+    assert_eq!(r.window.active_tab(), Some(0));
+    let mut r = Run::open();
+    for pressed in [true, false] {
+        r.input.handle(Event::GamepadButton {
+            button: GamepadButton::East,
+            pressed,
+        });
+    }
+    assert!(r.frame(0).closed);
+}
+
+/// 5 item 3: the character's death closes it.
+#[test]
+fn death_closes_it() {
+    let mut r = Run::open();
+    r.alive = false;
+    assert!(r.frame(0).closed);
+    assert_eq!(r.window.take_portions(), ["ui_pda_hide"]);
+}
+
+/// The touch PDA button acts as the key bound to `active_jobs` (our
+/// design): over the open window it switches to tab 0 and closes it.
+#[test]
+fn the_touch_button_acts_as_active_jobs() {
+    let mut r = Run::open();
+    r.window.switch_to(4);
+    for pressed in [true, false] {
+        r.input.handle(Event::TouchButton {
+            button: TouchButton::Pda,
+            pressed,
+        });
+    }
+    assert!(r.frame(0).closed);
+    assert_eq!(r.window.active_tab(), Some(0));
+}
+
+/// pda-controls.md 6: the hint shows once the cursor has rested over 500
+/// ms of the global clock on a caption, above the cursor, max(80, text +
+/// 30) wide; it fades in once and holds; it goes when the cursor leaves;
+/// the paused global clock holds it back.
+#[test]
+fn a_hint_shows_after_500_ms_over_a_caption() {
+    let mut r = Run::open();
+    let at = centre(&r.window, 2);
+    r.input.handle(Event::PointerMoved { at });
+    r.frame(0);
+    r.paused = true;
+    for _ in 0..40 {
+        r.frame(0);
+    }
+    assert_eq!(r.window.state().hint, None, "the global clock stood");
+    r.paused = false;
+    // 16 ms a frame: 500 ms are past at the 32nd frame after entering.
+    for _ in 0..31 {
+        r.frame(0);
+    }
+    assert_eq!(r.window.state().hint, None);
+    r.frame(0);
+    let h = r.window.state().hint.expect("the hint");
+    assert_eq!((h.tab, h.text.as_str()), (2, "pda_btn_diary_hint"));
+    // "pda_btn_diary_hint" is 18 characters: 180 + 30 wide, 30 high, its
+    // bottom-left at the cursor.
+    assert_eq!(h.rect, [at[0], at[1] - 30.0, 210.0, 30.0]);
+    assert_eq!(h.alpha, 0, "the animation's first frame");
+    for _ in 0..80 {
+        r.frame(0);
+    }
+    let h = r.window.state().hint.unwrap();
+    assert!(h.alpha > 200, "faded in and held: {}", h.alpha);
+    r.input.handle(Event::PointerMoved {
+        at: [at[0], at[1] + 100.0],
+    });
+    r.frame(0);
+    assert_eq!(r.window.state().hint, None, "released on leaving");
+}
+
+/// pda-controls.md 6: off the screen above, it moves left, then down to
+/// the cursor's height, then below the cursor.
+#[test]
+fn a_hint_off_the_screen_is_moved() {
+    let d = hint_desc();
+    let h = hint::Hint::take(&d, 0, "x".into(), 50.0, [500.0, 10.0], 0);
+    assert_eq!(h.rect, Rect::new(420.0, 10.0, 80.0, 30.0));
+    let h = hint::Hint::take(&d, 0, "x".into(), 50.0, [1000.0, 300.0], 0);
+    assert_eq!(h.rect, Rect::new(920.0, 270.0, 80.0, 30.0));
+    let h = hint::Hint::take(&d, 0, "x".into(), 50.0, [1000.0, 10.0], 0);
+    assert_eq!(h.rect, Rect::new(920.0, 10.0, 80.0, 30.0));
+    let h = hint::Hint::take(&d, 0, "x".into(), 50.0, [40.0, 10.0], 0);
+    assert_eq!(h.rect, Rect::new(40.0, 55.0, 80.0, 30.0));
 }

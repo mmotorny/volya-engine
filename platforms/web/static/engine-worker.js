@@ -126,6 +126,7 @@ function syncCapture() {
       keys: (bits & 32) !== 0,
       torch: bits & 64 ? (bits & 128) !== 0 : null,
       nightVision: bits & 256 ? (bits & 512) !== 0 : null,
+      pda: (bits & 1024) !== 0,
     });
   }
   const full = e().full_screen_request();

@@ -471,7 +471,29 @@ button.touch-button.down .touch-edges {
   height: 44px;
 }
 
-/* Torch, then Night vision, in a row left of Inventory along the top edge
+/* PDA (#730) left of Inventory, the other in-game window. */
+#touch-controls button.touch-button.pda {
+  right: calc(var(--safe-right) + var(--edge) + 56px);
+  top: calc(var(--safe-top) + var(--edge));
+  width: 44px;
+  height: 44px;
+}
+
+/* Over the open PDA its button alone, at its place; touches elsewhere
+   pass to the touchpad (touch-controls.js). */
+#touch-controls.pda-open {
+  pointer-events: none;
+}
+
+#touch-controls.pda-open > :not(button.touch-button.pda) {
+  display: none;
+}
+
+#touch-controls.pda-open button.touch-button.pda {
+  pointer-events: auto;
+}
+
+/* Torch, then Night vision, in a row left of PDA along the top edge
    (#363): above the look area and clear of both thumbs' zones, away from
    Menu's side, where the move stick's lock target reaches up. Fixed places:
    Night vision showing or not moves nothing. */
@@ -482,11 +504,11 @@ button.touch-button.down .touch-edges {
 }
 
 #touch-controls button.touch-button.torch {
-  right: calc(var(--safe-right) + var(--edge) + 56px);
+  right: calc(var(--safe-right) + var(--edge) + 112px);
 }
 
 #touch-controls button.touch-button.night-vision {
-  right: calc(var(--safe-right) + var(--edge) + 112px);
+  right: calc(var(--safe-right) + var(--edge) + 168px);
 }
 
 :is(#touch-controls, #console-touch) :is(button.touch-button, .console-area)[hidden] {

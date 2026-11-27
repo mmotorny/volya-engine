@@ -560,6 +560,12 @@ pub fn character_takes_keys() -> bool {
     })
 }
 
+/// Whether the PDA window is open over the running level with nothing over
+/// it ([`App::pda_over_level`]).
+pub fn pda_over_level() -> bool {
+    RUNNING.with(|r| r.borrow().as_ref().is_some_and(|r| r.app.pda_over_level()))
+}
+
 /// The page is in the browser's full screen or not, or can't be
 /// ([`App::set_full_screen`]).
 pub fn set_full_screen(on: bool, supported: bool) {

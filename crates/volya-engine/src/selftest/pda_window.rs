@@ -3,14 +3,15 @@
 
 //! The PDA window (docs/behavior/pda-window.md) built from the game's
 //! data and drawn without errors: on the tasks tab at the New Game's start,
-//! the diary's new-content mark set and the cursor over the contacts tab.
-//! Every texture id and string key it draws exists. Frame `pda`.
+//! the diary's new-content mark set and the cursor resting on the contacts
+//! tab, its hint shown (pda-controls.md 6). Every texture id and string
+//! key it draws exists. Frame `pda`.
 
 use super::{Context, Outcome, Run, capture, ensure};
 use crate::core::input::{Event, Input};
 use crate::data::{Assets, GameData};
 use crate::draw::Ctx;
-use crate::pda_window::{Frame, PdaWindow};
+use crate::pda_window::{Frame, Keys, PdaWindow};
 use crate::present::Presenter;
 use crate::scene::Scene;
 use volya_engine_formats::ui::Resolution;
@@ -30,7 +31,7 @@ async fn draws(cx: &Context<'_>) -> Outcome {
         .map_err(|e| format!("fonts: {e}"))?;
     let mut window =
         PdaWindow::load(tree, &data, XGA, fonts).map_err(|e| format!("pda window: {e}"))?;
-    let (textures, strings) = window.layout().references();
+    let (textures, strings) = window.references();
     for id in &textures {
         ensure!(data.descriptions.get(id).is_some(), "texture id {id}");
     }
@@ -45,16 +46,33 @@ async fn draws(cx: &Context<'_>) -> Outcome {
     input.handle(Event::PointerMoved {
         at: [r.x + r.width / 2.0, r.y + r.height / 2.0],
     });
-    window.update(Frame {
-        data: &data,
-        game_time: NEW_GAME,
-        now: 16,
-        input: &input,
-        paused: false,
-    });
+    let keys = Keys::default();
+    // The cursor enters and rests 3.6 s, a frame every 16 ms: the hint
+    // shows after 500 ms and its animation, played once, has ended.
+    for now in (16..=3616).step_by(16) {
+        let out = window.update(Frame {
+            data: &data,
+            keys: &keys,
+            game_time: NEW_GAME,
+            now,
+            global_ms: now,
+            input: &input,
+            paused: false,
+            alive: true,
+        });
+        ensure!(!out.closed, "closed");
+        input.end_frame();
+    }
     let s = window.state();
     ensure!(s.clock == "05:30 01/05/2012", "the clock: {}", s.clock);
     ensure!(s.tabs[3].look == "h", "the contacts tab under the cursor");
+    let hint = s.hint.ok_or("the contacts tab's hint")?;
+    ensure!(
+        hint.text == data.strings.get("pda_btn_contacts_hint"),
+        "the hint: {}",
+        hint.text
+    );
+    ensure!(hint.alpha > 0, "the hint faded in: alpha {}", hint.alpha);
     let mut ctx = Ctx {
         tree,
         data: &data,
