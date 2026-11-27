@@ -404,6 +404,9 @@ export const tests = {
     // (measured natively): run backwards, where the way is clear.
     const steps = new Map();
     const start = (await state()).level.player.position;
+    // #837: the first step's emitter and voice, from the key (the capture
+    // starts just before it, so these are at most the call's return late).
+    await volya.call("audio_capture", { name: "material\\actor\\step\\" });
     down("KeyS");
     try {
       for (const deadline = performance.now() + 2000; performance.now() < deadline; await sleep(30)) {
@@ -414,8 +417,21 @@ export const tests = {
     } finally {
       up("KeyS");
     }
+    const capture = await volya.call("audio_capture");
     const end = (await state()).level.player.position;
     const moved = Math.hypot(end[0] - start[0], end[2] - start[2]);
+    // Frames [t, cpu, phase, ...], blocks [t, frames, mix ms, underrun,
+    // queued, mixer voice, advanced before, after, ...], t on the capture's
+    // clock.
+    const emitted = capture?.frames.find((f) => f[2] !== "none");
+    assert(emitted, "no step emitted");
+    let first = `first step emitted ${emitted[0].toFixed(0)} ms after the key`;
+    if (live.state === "running") {
+      const mixed = capture.blocks.find((b) => b[5] >= 0 && b[7] > b[6]);
+      assert(mixed, "the first step's voice never mixed");
+      const queued = (mixed[4] / live.sampleRate) * 1000;
+      first += `, its voice mixed from ${mixed[0].toFixed(0)} ms with ${queued.toFixed(0)} ms queued ahead`;
+    }
     assert(moved > 2, `ran ${moved.toFixed(2)} m`);
     assert(steps.size >= 2, `steps heard: ${JSON.stringify([...steps.values()])}`);
     for (const e of steps.values()) {
@@ -424,6 +440,7 @@ export const tests = {
     }
     const stats = await volya.call("level_stats");
     return (
+      `${first}; ` +
       `ran ${moved.toFixed(1)} m: ${[...steps.values()].map((e) => e.name.split("\\").pop()).join(", ")}; ` +
       `sound update ${(stats.sound_update_ms * 1000).toFixed(0)} µs average; frame CPU ${stats.frame_cpu_ms.toFixed(2)} ms`
     );

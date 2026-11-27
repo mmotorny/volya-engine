@@ -7,8 +7,10 @@
 //! pairs of docs/behavior/player-footsteps.md (S11); then a New Game on
 //! `l01_escape` whose player runs and jumps, with the steps and the sounds
 //! they play checked against S11's timing and S11 7.2's step lists, and
-//! the footsteps' cost per frame (meaningful in release builds). Skips when
-//! `VOLYA_GOG_INSTALLER` is unset.
+//! the footsteps' cost per frame (meaningful in release builds); and a walk
+//! out of the start bunker onto the earth outside (#837), its first step's
+//! time and each step's material against the ground under the feet. Skips
+//! when `VOLYA_GOG_INSTALLER` is unset.
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -523,4 +525,364 @@ fn footsteps_from_game_data() {
         cost.1.as_secs_f64() * 1e6,
         cost.2
     );
+}
+
+/// A device recording the voices started.
+#[derive(Default)]
+struct Starts(Vec<usize>);
+
+impl volya_engine::core::sound::system::Device for Starts {
+    fn start(&mut self, voice: usize, _: &volya_engine::core::sound::Sound, _: bool, _: u64) {
+        self.0.push(voice);
+    }
+    fn stop(&mut self, _: usize) {}
+    fn set_listener(&mut self, _: &volya_engine::core::sound::system::DeviceListener) {}
+    fn set_source(&mut self, _: usize, _: &volya_engine::core::sound::system::DeviceSource) {}
+}
+
+/// The material id of the solid triangle under `feet` (within 1 m below,
+/// 0.3 m above) and the ids of pass-through ones there.
+fn under(world: &CollisionWorld, feet: Vec3) -> (Option<u32>, BTreeSet<u32>) {
+    let mut found = Vec::new();
+    world.query(
+        [feet[0] - 0.01, feet[1] - 1.0, feet[2] - 0.01],
+        [feet[0] + 0.01, feet[1] + 0.3, feet[2] + 0.01],
+        &mut found,
+    );
+    let origin = [feet[0], feet[1] + 0.3, feet[2]];
+    let mut solid: Option<(f32, u32)> = None;
+    let mut passing = BTreeSet::new();
+    for &t in &found {
+        let Some(d) = geometry::ray_triangle_distance(origin, [0.0, -1.0, 0.0], &world.corners(t))
+        else {
+            continue;
+        };
+        if !(0.0..=1.3).contains(&d) {
+            continue;
+        }
+        if world.is_solid(t) {
+            if solid.is_none_or(|(e, _)| d < e) {
+                solid = Some((d, world.material(t).id));
+            }
+        } else {
+            passing.insert(world.material(t).id);
+        }
+    }
+    (solid.map(|s| s.1), passing)
+}
+
+/// Materials whose steps play `actor\step\default*` (S11 7.2): the hard
+/// surfaces.
+const HARD: [u32; 11] = [0, 3, 4, 5, 6, 12, 18, 49, 53, 80, 81];
+
+/// Triangle `t` is solid and faces up within about 25°.
+fn walkable(world: &CollisionWorld, t: u32) -> bool {
+    let [a, b, c] = world.corners(t);
+    world.is_solid(t) && normalize(cross(sub(b, a), sub(c, a))).is_some_and(|n| n[1] > 0.9)
+}
+
+/// Free of solid triangles from 0.45 to 1.85 m above `feet`, 0.3 m around.
+fn headroom(world: &CollisionWorld, feet: Vec3) -> bool {
+    let axes = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    let centre = add(feet, [0.0, 1.15, 0.0]);
+    let half = [0.3, 0.7, 0.3];
+    let mut found = Vec::new();
+    world.query(sub(centre, half), add(centre, half), &mut found);
+    !found.iter().any(|&t| {
+        world.is_solid(t) && geometry::box_intersects(centre, axes, half, &world.corners(t))
+    })
+}
+
+/// The walkable solid floors on the vertical line through (`x`, `z`)
+/// between `y0` and `y1`, with headroom: their heights and material ids.
+fn floors(world: &CollisionWorld, x: f32, z: f32, y0: f32, y1: f32) -> Vec<(f32, u32)> {
+    let mut found = Vec::new();
+    world.query(
+        [x - 0.01, y0, z - 0.01],
+        [x + 0.01, y1, z + 0.01],
+        &mut found,
+    );
+    let mut out = Vec::new();
+    for &t in &found {
+        if !walkable(world, t) {
+            continue;
+        }
+        let Some(d) =
+            geometry::ray_triangle_distance([x, y1, z], [0.0, -1.0, 0.0], &world.corners(t))
+        else {
+            continue;
+        };
+        let y = y1 - d;
+        if (y0..=y1).contains(&y) && headroom(world, [x, y, z]) {
+            out.push((y, world.material(t).id));
+        }
+    }
+    out
+}
+
+/// The way out of the bunker from `start`: a breadth-first search over a
+/// 0.25 m grid of walkable floors (a neighbour's floor within 0.45 m of
+/// height, with headroom) to the nearest place with nothing above it for
+/// 10 m; the path's points, from `start`.
+fn way_out(world: &CollisionWorld, start: Vec3, goal: impl Fn(Vec3) -> bool) -> Vec<Vec3> {
+    use std::collections::VecDeque;
+    let step = 0.25f32;
+    let key = |p: Vec3| {
+        (
+            ((p[0] - start[0]) / step).round() as i32,
+            ((p[2] - start[2]) / step).round() as i32,
+            (p[1] * 4.0).round() as i32,
+        )
+    };
+    let open = |p: Vec3| {
+        let mut found = Vec::new();
+        world.query(
+            [p[0] - 0.01, p[1] + 2.0, p[2] - 0.01],
+            [p[0] + 0.01, p[1] + 12.0, p[2] + 0.01],
+            &mut found,
+        );
+        !found.iter().any(|&t| {
+            world.is_solid(t)
+                && geometry::ray_triangle_distance(
+                    [p[0], p[1] + 2.0, p[2]],
+                    [0.0, 1.0, 0.0],
+                    &world.corners(t),
+                )
+                .is_some_and(|d| (0.0..=10.0).contains(&d))
+        })
+    };
+    let mut seen: HashMap<(i32, i32, i32), Option<Vec3>> = HashMap::new();
+    let mut queue = VecDeque::from([start]);
+    seen.insert(key(start), None);
+    let mut end = None;
+    while let Some(p) = queue.pop_front() {
+        if goal(p) && open(p) {
+            end = Some(p);
+            break;
+        }
+        if length(sub(p, start)) > 80.0 {
+            continue;
+        }
+        for d in [[step, 0.0], [-step, 0.0], [0.0, step], [0.0, -step]] {
+            let (x, z) = (p[0] + d[0], p[2] + d[1]);
+            for (y, _) in floors(world, x, z, p[1] - 0.45, p[1] + 0.45) {
+                let q = [x, y, z];
+                if let std::collections::hash_map::Entry::Vacant(e) = seen.entry(key(q)) {
+                    e.insert(Some(p));
+                    queue.push_back(q);
+                }
+            }
+        }
+    }
+    let mut path = vec![end.expect("no way out")];
+    while let Some(Some(p)) = seen.get(&key(*path.last().unwrap())) {
+        path.push(*p);
+    }
+    path.reverse();
+    path
+}
+
+/// #837: leaving the start bunker. From the start the player stands, then
+/// runs (W held, steered by the mouse) along the way out to the first
+/// earth outside: the time from the key to the first step and to its
+/// voice starting (S11 3.2, 3.3: the first step is due 173 ms into the
+/// cycle), and per step the pair's ground material against the triangles
+/// under the feet (S11 4.1, level-cform.md 4.4).
+#[test]
+fn footsteps_leaving_the_bunker() {
+    let Some(archives) = gog_archives::archives() else {
+        return;
+    };
+    let root = StdVfs::new(archives[0].file.parent().unwrap());
+    let tree = DbVfs::open_game(&root, Some("mods")).unwrap();
+    let data = GameData::read(&tree, None, SIZE).unwrap();
+    let mut level = LevelScreen::load(&tree, &data, 0).unwrap();
+    let sound = level.take_sound_data().unwrap();
+    let mut system = SoundSystem::new(32);
+    system.set_volume(Category::Effects, 1.0);
+    let pair_sounds = PairSounds::create(
+        &mut system,
+        &tree,
+        &data.aliases,
+        sound.pairs.as_ref().unwrap(),
+    )
+    .unwrap();
+    let start = level.player().state().position;
+    let world = level.shared_collision();
+    let mut path = way_out(&world, start, |_| true);
+    let exit = *path.last().unwrap();
+    let outside = way_out(&world, exit, |p| {
+        under(&world, p).0.is_some_and(|m| matches!(m, 7 | 10))
+    });
+    path.extend(&outside[1..]);
+    // The path's length up to each point.
+    let mut along = vec![0.0f32];
+    for w in path.windows(2) {
+        along.push(along.last().unwrap() + length(sub(w[1], w[0])));
+    }
+    let earth = *along.last().unwrap();
+    eprintln!("the way out: {earth:.2} m to earth, open sky at {exit:?}");
+
+    let mut input = Input::new();
+    let mut device = Starts::default();
+    let mut now = 0u64;
+    let mut frame = |level: &mut LevelScreen, input: &mut Input| {
+        now += FRAME_MS;
+        level.update(now, input);
+        input.end_frame();
+        level.footsteps_frame(now as u32).unwrap();
+        let mut steps = Vec::new();
+        for s in level.footsteps().unwrap().sounds() {
+            pair_sounds.play(&mut system, s);
+            steps.push(*s);
+        }
+        let v = level.player().view();
+        system.set_listener(volya_engine::core::sound::system::Listener {
+            position: v.eye,
+            direction: v.direction,
+            up: v.up,
+        });
+        device.0.clear();
+        system.update(now, &mut device);
+        (now as u32, device.0.len(), steps)
+    };
+    for _ in 0..60 {
+        assert!(frame(&mut level, &mut input).2.is_empty(), "steps standing");
+    }
+    // The mouse's turn per pixel.
+    let yaw = level.player().angles().yaw;
+    input.handle(Event::PointerMotion {
+        delta: [100.0, 0.0],
+    });
+    frame(&mut level, &mut input);
+    let per_pixel = (level.player().angles().yaw - yaw) / 100.0;
+    assert!(per_pixel.abs() > 1e-5, "the mouse does not turn");
+    let wrap = |a: f32| {
+        (a + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
+    };
+    let steer = |level: &LevelScreen, input: &mut Input, next: &mut usize| {
+        let p = level.player().state().position;
+        // The nearest path point from the last one on, then 1 m ahead.
+        let near = (*next..path.len())
+            .take(40)
+            .min_by(|&i, &k| length(sub(path[i], p)).total_cmp(&length(sub(path[k], p))))
+            .unwrap();
+        *next = near;
+        let target = (near..path.len())
+            .find(|&i| along[i] > along[near] + 1.0)
+            .unwrap_or(path.len() - 1);
+        let d = sub(path[target], p);
+        let error = wrap(d[0].atan2(d[2]) - level.player().angles().yaw);
+        input.handle(Event::PointerMotion {
+            delta: [error / per_pixel, 0.0],
+        });
+        along[near]
+    };
+    let mut next = 0;
+    // Facing the way out before the key.
+    for _ in 0..10 {
+        steer(&level, &mut input, &mut next);
+        frame(&mut level, &mut input);
+    }
+    let mut pressed = None;
+    // Per frame: step clock, voices started, the place on the path, and
+    // per step the ground's id and the triangles under the feet.
+    let mut log = Vec::new();
+    let mut beyond = 0;
+    for _ in 0..1500 {
+        // Past the way's end, straight on for 2 s.
+        let at = if beyond == 0 {
+            steer(&level, &mut input, &mut next)
+        } else {
+            earth
+        };
+        if pressed.is_none() {
+            input.handle(Event::Key {
+                key: Key::W,
+                pressed: true,
+            });
+        }
+        let (clock, voices, steps) = frame(&mut level, &mut input);
+        // The key is taken in this frame, whose time began a frame ago.
+        pressed.get_or_insert(clock - FRAME_MS as u32);
+        let p = level.player().state().position;
+        let ground = level.player().body().ground_material().unwrap_or(0);
+        let id = world.materials()[ground as usize].id;
+        let contacts: Vec<_> = level
+            .player()
+            .body()
+            .contacts()
+            .iter()
+            .map(|c| {
+                (
+                    c.shape,
+                    world.materials()[c.material as usize].id,
+                    c.normal[1],
+                )
+            })
+            .collect();
+        log.push((
+            clock,
+            voices,
+            at,
+            steps.len(),
+            id,
+            under(&world, p),
+            contacts,
+            p,
+        ));
+        if at >= earth - 0.01 {
+            beyond += 1;
+            if beyond > 125 {
+                break;
+            }
+        }
+    }
+    let pressed = pressed.unwrap();
+    let last = log.last().unwrap();
+    assert!(
+        last.2 >= earth - 0.01,
+        "stuck {:.2} m along the way",
+        last.2
+    );
+    // S11 3.2, 3.3: the run's cycle starts in the key's frame and its first
+    // step is due 173 ms later, heard at the first frame at or after that;
+    // its voice starts in the same frame's sound update.
+    let first_step = log.iter().find(|f| f.3 > 0).unwrap().0 - pressed;
+    let first_voice = log.iter().find(|f| f.1 > 0).unwrap().0 - pressed;
+    eprintln!(
+        "from the key (frames of {FRAME_MS} ms): first step at {first_step} ms, its voice \
+         started at {first_voice} ms"
+    );
+    let frame_ms = FRAME_MS as u32;
+    assert_eq!(first_step, (frame_ms + 173).div_ceil(frame_ms) * frame_ms);
+    assert_eq!(first_voice, first_step);
+    // S11 4.1, level-cform.md 4.4: each step plays the material most
+    // recently touched, a pass-through one first. On the way out: the
+    // bunker's hard floors and stairs, and the pass-through `materials\fake`
+    // over the stairs; on the earth outside, the earth's from its first or
+    // second step (a frame without contacts keeps the last material).
+    let mut mismatched = 0;
+    let mut outside = Vec::new();
+    for (clock, _, at, steps, id, (solid, passing), contacts, p) in &log {
+        if *steps == 0 {
+            continue;
+        }
+        eprintln!(
+            "step at +{} ms, {at:6.2} m along: ground {id}, under the feet {solid:?}, \
+             pass-through {passing:?}, at {p:?}, contacts {contacts:?}",
+            clock - pressed
+        );
+        if Some(*id) != *solid && !passing.contains(id) {
+            mismatched += 1;
+        }
+        if *solid == Some(EARTH) {
+            outside.push(*id);
+        } else {
+            assert!(HARD.contains(id), "a step on {id} inside");
+        }
+    }
+    eprintln!("steps whose ground is not under the feet: {mismatched}");
+    assert!(outside.len() >= 4, "{outside:?}");
+    assert!(outside[1..].iter().all(|&id| id == EARTH), "{outside:?}");
 }

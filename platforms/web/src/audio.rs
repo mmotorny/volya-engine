@@ -468,11 +468,13 @@ pub fn sound_state() -> serde_json::Value {
     })
 }
 
-/// The `audio_capture` op (tests): records, for the emitter of one sound
-/// name, every block the audio worker mixed (its mixer voice, how far the
-/// voice advanced, its gains) with the AudioWorklet's underruns, and every
-/// worker frame (its time and the emitter's state), to find gaps and jumps
-/// in what is heard.
+/// The `audio_capture` op (tests): records, for the oldest emitter whose
+/// sound name starts with a given one (a whole name, or a directory such as
+/// the steps' `material\actor\step\`), every block the audio worker mixed
+/// (its mixer voice, how far the voice advanced, its gains) with the
+/// AudioWorklet's underruns, and every worker frame (its time and the
+/// emitter's state), to find gaps and jumps in what is heard and when it
+/// starts.
 #[cfg(feature = "test-ops")]
 pub mod capture {
     use super::{OUTPUT, with_sounds};
@@ -501,7 +503,8 @@ pub mod capture {
         });
     }
 
-    /// Starts capturing the emitter of `name`, replacing any capture.
+    /// Starts capturing the oldest emitter whose sound name starts with
+    /// `name`, replacing any capture.
     pub fn start(name: &str) {
         CAPTURE.with(|c| {
             *c.borrow_mut() = Some(Capture {
@@ -550,7 +553,11 @@ pub mod capture {
             return;
         };
         let (emitter, voice) = with_sounds(|host| {
-            let e = host.system.emitters().into_iter().find(|e| e.name == name);
+            let e = host
+                .system
+                .emitters()
+                .into_iter()
+                .find(|e| e.name.starts_with(&name));
             let voice = e
                 .as_ref()
                 .and_then(|e| e.voice)
