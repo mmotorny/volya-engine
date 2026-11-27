@@ -6,7 +6,8 @@
 ** bin\ode.dll, loaded from the folder given, through its exports alone, on
 ** this thread with the floating-point environment each scenario sets and the
 ** C run time's rand of the run time the library imports (msvcr80.dll, which
-** the library loads), seeded by its srand. Writes results\<scenario>.bin and
+** the library loads, found among the process's modules), seeded by its
+** srand. Writes results\<scenario>.bin and
 ** results\info.txt (the processor, the library's size) and prints a line per
 ** scenario. Exit status 0, or 1 if the library or an export is missing.
 **
@@ -21,6 +22,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <windows.h>
+#include <tlhelp32.h>
 
 static void fpenv (uint16_t x87, uint32_t mxcsr)
 {
@@ -29,6 +31,45 @@ static void fpenv (uint16_t x87, uint32_t mxcsr)
 }
 
 static void (__cdecl *crt_srand) (unsigned int);
+
+/* The library's C run time, a side-by-side assembly the loader binds
+** through the library's manifest, so not necessarily the module our own
+** activation context names msvcr80.dll: the process's loaded modules are
+** listed and the one named msvcr80.dll taken (our program links the
+** Universal C Runtime, so any msvcr80.dll is the library's); of several, the
+** one in the game's folder. With none, every module is printed. */
+static HMODULE find_crt (const char *bin)
+{
+  HANDLE snap = CreateToolhelp32Snapshot (TH32CS_SNAPMODULE, 0);
+  if (snap == INVALID_HANDLE_VALUE) {
+    fprintf (stderr, "cannot list the process's modules: error %lu\n", GetLastError ());
+    return NULL;
+  }
+  MODULEENTRY32 m;
+  m.dwSize = sizeof m;
+  HMODULE found = NULL;
+  char found_path[MAX_PATH] = "";
+  size_t bin_len = strlen (bin);
+  for (BOOL ok = Module32First (snap, &m); ok; ok = Module32Next (snap, &m)) {
+    if (_stricmp (m.szModule, "msvcr80.dll")) continue;
+    int in_bin = !_strnicmp (m.szExePath, bin, bin_len);
+    if (!found || in_bin) {
+      found = m.hModule;
+      snprintf (found_path, sizeof found_path, "%s", m.szExePath);
+      if (in_bin) break;
+    }
+  }
+  if (!found) {
+    fprintf (stderr, "no msvcr80.dll among the process's modules after loading the library:\n");
+    m.dwSize = sizeof m;
+    for (BOOL ok = Module32First (snap, &m); ok; ok = Module32Next (snap, &m))
+      fprintf (stderr, "  %s  %s\n", m.szModule, m.szExePath);
+  } else {
+    printf ("library's run time: %s\n", found_path);
+  }
+  CloseHandle (snap);
+  return found;
+}
 
 static void seed_rand (uint32_t s)
 {
@@ -97,9 +138,10 @@ int main (int argc, char **argv)
     fprintf (stderr, "cannot load %s: error %lu\n", path, GetLastError ());
     return 1;
   }
-  HMODULE crt = GetModuleHandleA ("msvcr80.dll");
-  if (!crt || !(crt_srand = (void (__cdecl *) (unsigned int)) GetProcAddress (crt, "srand"))) {
-    fprintf (stderr, "msvcr80.dll's srand not found (the library's run time)\n");
+  HMODULE crt = find_crt (bin);
+  if (!crt) return 1;
+  if (!(crt_srand = (void (__cdecl *) (unsigned int)) GetProcAddress (crt, "srand"))) {
+    fprintf (stderr, "msvcr80.dll has no srand export\n");
     return 1;
   }
 
