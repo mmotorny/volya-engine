@@ -127,7 +127,12 @@ pub fn suite(target: &str, suite: &str) -> Result {
     let (server, port, reports) = serve(&site, &next, &tests, kept)?;
     step(&format!("Browser suite {suite} on {target}"));
     let outcome = run_suite(&server, port, &reports, simulator.as_ref(), target, suite);
-    match profile.map(|p| p.check_size()) {
+    let size = match (profile, &simulator) {
+        (Some(profile), _) => Some(profile.check_size()),
+        (None, Some(simulator)) => Some(simulator.check_size()),
+        (None, None) => None,
+    };
+    match size {
         Some(Err(size)) if outcome.is_ok() => Err(size),
         Some(Err(size)) => outcome.map_err(|e| format!("{e}; {size}")),
         _ => outcome,
@@ -491,7 +496,10 @@ pub(crate) fn chrome(
 }
 
 /// Opens `url` in Mobile Safari on the test simulator, in a Safari started
-/// for it and quit after it (see [`Simulator`]).
+/// for it and quit after it (see [`Simulator`]), with Safari's website data
+/// deleted before and after: each run serves on a port of its own and
+/// storage belongs to an origin, port included, so each run's import stayed
+/// (97 GB, #568); deleted, every run starts from empty storage, as before.
 fn iphone(
     sim: &Simulator,
     url: &str,
@@ -500,10 +508,54 @@ fn iphone(
     timeout: Duration,
 ) -> Result<String> {
     quit_safari(&sim.udid);
+    delete_website_data(&sim.udid)?;
     let report = iphone_suite(&sim.udid, url, id, reports, timeout);
     quit_safari(&sim.udid);
+    if let Err(e) = delete_website_data(&sim.udid) {
+        println!("==> {e}");
+    }
     report
 }
+
+/// Deletes Safari's website data in simulator `udid` (Safari quit): each
+/// origin's directory under `WebsiteData/Default` in Safari's data
+/// container, which holds all of that origin's storage (OPFS, the Cache
+/// API, service workers) and an `origin` file naming it. Measured with iOS
+/// 27.2: a directory per top and frame origin, named by salted hashes, and
+/// a run on a new port made a new one.
+fn delete_website_data(udid: &str) -> Result {
+    let container = output(&mut cmd(
+        "xcrun",
+        &["simctl", "get_app_container", udid, SAFARI, "data"],
+    ))?;
+    let dir = Path::new(container.trim())
+        .join("Library/WebKit/com.apple.mobilesafari/WebsiteData/Default");
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return Ok(());
+    };
+    let (mut origins, mut bytes) = (0, 0);
+    for entry in entries.flatten() {
+        // Beside them is the salt, kept.
+        if !entry.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        let path = entry.path();
+        bytes += disk_usage(&path);
+        fs::remove_dir_all(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        origins += 1;
+    }
+    if origins > 0 {
+        println!(
+            "==> Deleted Safari's website data: {origins} origins, {:.2} GB",
+            bytes as f64 / 1e9
+        );
+    }
+    Ok(())
+}
+
+/// The most the test simulator's data may take: about three times its size
+/// after an erase (2.9 GB measured with iOS 27.2, 2 GB of it system assets).
+const SIMULATOR_DATA_LIMIT: u64 = 10_000_000_000;
 
 fn iphone_suite(
     udid: &str,
@@ -684,6 +736,27 @@ impl Simulator {
             reaper,
             _lock: lock,
         })
+    }
+}
+
+impl Simulator {
+    /// Reports the size of the simulator's data, and fails when it exceeds
+    /// [`SIMULATOR_DATA_LIMIT`].
+    fn check_size(&self) -> Result {
+        let home = output(&mut cmd("xcrun", &["simctl", "getenv", &self.udid, "HOME"]))?;
+        let data = Path::new(home.trim());
+        let total = disk_usage(data);
+        let gb = |bytes: u64| bytes as f64 / 1e9;
+        println!("==> Test simulator's data: {:.2} GB", gb(total));
+        if total > SIMULATOR_DATA_LIMIT {
+            return Err(format!(
+                "the test simulator's data ({}) takes {:.2} GB, more than {:.0} GB",
+                data.display(),
+                gb(total),
+                gb(SIMULATOR_DATA_LIMIT)
+            ));
+        }
+        Ok(())
     }
 }
 
