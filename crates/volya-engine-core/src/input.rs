@@ -277,6 +277,16 @@ keys! {
 }
 
 impl Key {
+    /// The key's code in the game's key list (options-screens.md section
+    /// 11.2).
+    pub fn code(self) -> u16 {
+        let name = self.dik_name();
+        crate::console::KEYS
+            .iter()
+            .find(|(k, _)| *k == name)
+            .map_or(0, |&(_, code)| code)
+    }
+
     pub fn from_name(name: &str) -> Option<Key> {
         Key::ALL.iter().copied().find(|k| k.name() == name)
     }
@@ -829,6 +839,34 @@ impl Input {
         &self.device_changes
     }
 
+    /// The keyboard's key presses (`true`) and releases this frame by key
+    /// code, in order: the key events of docs/behavior/console-input.md
+    /// section 1.
+    pub fn key_events(&self) -> Vec<(u16, bool)> {
+        self.device_changes
+            .iter()
+            .filter_map(|&(c, pressed)| match c {
+                Control::Key(k) => Some((k.code(), pressed)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The codes of the keyboard keys that are down, ascending: the hold
+    /// reports of console-input.md section 1.
+    pub fn keys_down(&self) -> Vec<u16> {
+        let mut down: Vec<u16> = self
+            .held
+            .iter()
+            .filter_map(|&(s, c)| match c {
+                Control::Key(k) if s == Source::Keyboard => Some(k.code()),
+                _ => None,
+            })
+            .collect();
+        down.sort_unstable();
+        down
+    }
+
     /// Whether gamepad button `button` is held.
     pub fn pad_held(&self, button: GamepadButton) -> bool {
         self.pad_held.contains(&button)
@@ -1216,6 +1254,15 @@ mod tests {
             control,
             double: false,
         }
+    }
+
+    #[test]
+    fn every_key_has_its_code() {
+        for &key in Key::ALL {
+            assert_ne!(key.code(), 0, "{key:?}");
+        }
+        assert_eq!(Key::Grave.code(), 41);
+        assert_eq!(Key::Insert.code(), 210);
     }
 
     #[test]
@@ -1763,6 +1810,9 @@ mod tests {
         assert!(!input.device_held(Control::Key(Key::Enter)));
         assert!(input.pad_held(GamepadButton::South));
         assert_eq!(input.device_changes(), [(space, true)]);
+        // The console's key events and hold reports: the keyboard's only.
+        assert_eq!(input.key_events(), [(57, true)]);
+        assert_eq!(input.keys_down(), [57]);
         assert_eq!(input.pad_changes(), [(GamepadButton::South, true)]);
         assert!(input.is_held(Control::Touch(TouchButton::Jump)));
         input.handle(Event::TouchStick { value: [0.5, -2.0] });

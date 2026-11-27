@@ -17,6 +17,7 @@
 
 mod commands;
 mod diagnostics;
+mod input;
 mod log;
 mod value;
 
@@ -25,6 +26,7 @@ pub use commands::{
     Saved,
 };
 pub use diagnostics::{MemoryStatistics, RESOURCE_LABELS, ResourceCounts};
+pub use input::{Clipboard, LINE_LENGTH, Typed};
 pub use log::Log;
 pub use value::{Value, help_text, parse_mode, real_status};
 
@@ -337,6 +339,8 @@ pub struct Console {
     memory: MemoryStatistics,
     /// The counts `dump_resources` prints, as last reported.
     resources: ResourceCounts,
+    /// The input line and its keys' state (docs/behavior/console-input.md).
+    input: input::InputLine,
     /// The user configuration file runs at startup.
     starting: bool,
     /// Why the program ends (console-commands.md section 5), once it must.
@@ -398,6 +402,7 @@ impl Console {
             log: Log::default(),
             memory: MemoryStatistics::default(),
             resources: ResourceCounts::default(),
+            input: Default::default(),
             starting: false,
             fatal: None,
         };
@@ -519,7 +524,11 @@ impl Console {
     }
 
     fn execute(&mut self, line: &str, typed: bool) -> Exec {
+        // Every executed line shares the input line (console-input.md
+        // section 3).
+        self.input.executing();
         let result = self.run(line, typed);
+        self.input.executed();
         if result == Exec::Done {
             self.generation += 1;
         }
