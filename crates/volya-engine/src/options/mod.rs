@@ -14,9 +14,8 @@
 //! (section 13). Touch and gamepads reach every control through the same
 //! mapping as the title menu (our design, like `volya-engine-core::input`):
 //!
-//! - touch is a touchpad for the cursor (#108): a tap clicks at the cursor,
-//!   a double-tap-and-hold drags a slider or a scroll bar, two fingers
-//!   scroll a list;
+//! - touch: the standard touch controls' stick moves the cursor, Click
+//!   held drags a slider or a scroll bar (#856), two fingers scroll a list;
 //! - a gamepad is a mouse (#835, [`Input::set_pad_cursor`]): its left stick
 //!   moves the cursor, south (A / cross) is the left button, held for
 //!   drags, the right stick and the shoulders the wheel; east (B / circle)

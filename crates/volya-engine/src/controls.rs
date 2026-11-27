@@ -808,10 +808,10 @@ impl TouchLookDrag {
 }
 
 /// A touch that stays within this many CSS pixels of where it went down
-/// is no drag (our value, the touchpad's tap slop): it doesn't look.
+/// is no drag (our value): it doesn't look.
 pub const TAP_SLOP_PX: f32 = 10.0;
 /// A touch within the slop lifted within this many milliseconds of going
-/// down is a tap (our value, the touchpad's).
+/// down is a tap (our value).
 pub const TAP_MS: f64 = 500.0;
 /// A tap going down within this many milliseconds of the previous tap's
 /// lift (the engine's double-click time) and within [`DOUBLE_TAP_PX`] of

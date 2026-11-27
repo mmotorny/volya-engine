@@ -14,7 +14,7 @@
 //! in the list's order: the spec leaves the order unestablished (8).
 //!
 //! **Touch and gamepad** are our design (proposed on #743): touch through
-//! the touchpad of #108 (a tap presses a tool, a double-tap-and-hold drags
+//! the standard touch controls (#856: Click presses a tool, held it drags
 //! the map, two fingers zoom: pinched apart or swiped up zoom in, as the
 //! wheel); a gamepad is a mouse, as everywhere in the window (#835): its
 //! left stick moves the cursor, south (A / cross) is the left button and

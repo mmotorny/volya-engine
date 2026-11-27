@@ -18,7 +18,9 @@ use std::fs::File;
 use std::io::BufReader;
 
 use volya_engine::core::console::{Console, action_index};
-use volya_engine::core::input::{Event, GamepadAxis, GamepadButton, Input, Key, MouseButton};
+use volya_engine::core::input::{
+    CursorButton, Event, GamepadAxis, GamepadButton, Input, Key, MouseButton,
+};
 use volya_engine::core::ui;
 use volya_engine::core::vfs::StdVfs;
 use volya_engine::core::vfs::db::DbVfs;
@@ -124,6 +126,16 @@ fn centre(r: [f32; 4]) -> [f32; 2] {
 /// Steers the cursor to `to` with the gamepad's left stick at half tilt
 /// (#835), then lets it go.
 fn stick_to(run: &mut Run, to: [f32; 2]) {
+    steer(run, to, |input, [x, y]| {
+        for (axis, value) in [(GamepadAxis::LeftX, x), (GamepadAxis::LeftY, y)] {
+            input.handle(Event::GamepadAxis { axis, value });
+        }
+    });
+}
+
+/// Steers the cursor to `to` with a stick `push`ed by its value, half way
+/// out, then lets it go.
+fn steer(run: &mut Run, to: [f32; 2], push: impl Fn(&mut Input, [f32; 2])) {
     for _ in 0..600 {
         let [x, y] = run.state().cursor;
         let (dx, dy) = (to[0] - x, to[1] - y);
@@ -131,17 +143,10 @@ fn stick_to(run: &mut Run, to: [f32; 2]) {
         if d < 3.0 {
             break;
         }
-        for (axis, v) in [(GamepadAxis::LeftX, dx / d), (GamepadAxis::LeftY, dy / d)] {
-            run.input.handle(Event::GamepadAxis {
-                axis,
-                value: v * 0.5,
-            });
-        }
+        push(&mut run.input, [dx / d * 0.5, dy / d * 0.5]);
         run.frame();
     }
-    for axis in [GamepadAxis::LeftX, GamepadAxis::LeftY] {
-        run.input.handle(Event::GamepadAxis { axis, value: 0.0 });
-    }
+    push(&mut run.input, [0.0, 0.0]);
     run.frame();
 }
 
@@ -446,23 +451,23 @@ fn options_screen_from_game_data() {
     assert_eq!(run.console.video_mode(), (1024, 768), "Cancel undid it");
     assert!(run.screen.take_closed().unwrap().video_restart);
 
-    // Touch and gamepad (our design): the touchpad (#108) moves the cursor
-    // and a tap clicks at it; the gamepad's left stick moves it (#835),
-    // south clicks, east is Escape.
+    // Touch and gamepad (our design): the standard touch controls' stick
+    // moves the cursor and Click clicks at it (#856); the gamepad's left
+    // stick moves it (#835), south clicks, east is Escape.
     run.screen
         .open(run.data, &mut run.console, XGA, run.now, [512.0, 384.0]);
     let tap = |run: &mut Run, at: [f32; 2]| {
-        let ([x, y], s) = (run.input.cursor_ui(), run.input.sensitivity());
-        run.input.handle(Event::TouchpadMotion {
-            delta: [2.0 * (at[0] - x) / s, 2.0 * (at[1] - y) / s],
-            speed: 0.0,
+        steer(run, at, |input, value| {
+            input.handle(Event::CursorStick { value })
         });
+        // Past the double-click time of an earlier click.
+        for _ in 0..20 {
+            run.frame();
+        }
         for pressed in [true, false] {
-            run.input.handle(Event::TouchpadButton {
-                button: MouseButton::Left,
+            run.input.handle(Event::CursorButton {
+                button: CursorButton::Click,
                 pressed,
-                double: false,
-                time: run.now as f64 * 10.0,
             });
             run.frame();
         }

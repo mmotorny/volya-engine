@@ -9,8 +9,8 @@
      xtask sim` (docs/testing.md). Not a suite: the app's style sheet,
      viewport and guard over shell-like text and a field; flags in the hash,
      joined by "+": `play` (the engine takes input), `controls` (the touch
-     controls' fixed layer), `cursor` (touchend cancelled, as with the
-     touchpad), and to compare, `unguarded` (no zoom.js), `bare` (no
+     controls' fixed layer), `cursor` (touchend cancelled, as while the
+     game shows its cursor), and to compare, `unguarded` (no zoom.js), `bare` (no
      touch-action), `oldmeta` (the viewport from before #345). It shows the
      visual viewport's scale (for `expect-text`) and the events that reached
      it, and posts them to the dev server, which prints them. Open each run
@@ -30,7 +30,7 @@
   if (!flags.includes("unguarded")) (await import(`${base}zoom.js`)).blockZoom();
   if (flags.includes("bare")) document.head.insertAdjacentHTML("beforeend", "<style>* { touch-action: auto !important; }</style>");
   if (flags.includes("play")) document.documentElement.toggleAttribute("data-engine-input", true);
-  // As input.js while the game shows its cursor (the touchpad).
+  // As input.js while the game shows its cursor.
   if (flags.includes("cursor")) addEventListener("touchend", (event) => event.cancelable && event.preventDefault(), { passive: false });
   if (flags.includes("controls")) {
     const controls = document.createElement("div");

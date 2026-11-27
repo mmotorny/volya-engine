@@ -423,8 +423,21 @@ const PROMPT = [
 ];
 const UNDERSCORE = [12.5, 16.9, 8, 2.2];
 
+/** A mouse in a 24 × 24 frame: its body (x, y, width, height, radius),
+ * its buttons' halves and the lines parting them. */
+const MOUSE = {
+  body: [6, 2.5, 12, 19, 6],
+  left: [6, 2.5, 6, 7.5],
+  right: [12, 2.5, 6, 7.5],
+  lines: [
+    [12, 2.5, 12, 10],
+    [6, 10, 18, 10],
+  ],
+};
+
 /** A vector glyph source (our Jump arrow, Menu bars, Inventory backpack,
- * Torch beam or Console prompt) at `size` device pixels. */
+ * Torch beam, Console prompt or the mouse of Click and Right-click) at
+ * `size` device pixels. */
 export function vectorGlyph(name, size) {
   const [c, g] = canvas(size, size);
   g.scale(size / 24, size / 24);
@@ -475,6 +488,23 @@ export function vectorGlyph(name, size) {
     g.beginPath();
     g.roundRect(...BAG.inside);
     g.fill();
+  } else if (name === "click" || name === "right_click") {
+    // A mouse, the button it presses filled (our drawing).
+    g.strokeStyle = "#fff";
+    g.lineWidth = 2;
+    g.beginPath();
+    g.roundRect(...MOUSE.body);
+    g.stroke();
+    g.save();
+    g.clip();
+    g.fillRect(...(name === "click" ? MOUSE.left : MOUSE.right));
+    g.restore();
+    g.beginPath();
+    for (const [x0, y0, x1, y1] of MOUSE.lines) {
+      g.moveTo(x0, y0);
+      g.lineTo(x1, y1);
+    }
+    g.stroke();
   } else {
     for (const bar of BARS) g.fillRect(...bar);
   }

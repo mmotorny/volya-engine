@@ -16,7 +16,7 @@
 //! close it (4.1), the key bound to `quit` closes it (5). Touch and the
 //! gamepad are our design, as for the inventory screen
 //! ([`crate::controls`]): touch reaches the open window through the
-//! touchpad of #108 (a tap clicks a tab), and the touch PDA button acts as
+//! standard touch controls' stick and Click (#856), and the PDA button acts as
 //! the key bound to `active_jobs`; a gamepad's d-pad left does too in the
 //! level, and in the window the gamepad is a mouse (#835,
 //! [`crate::core::input::Input::set_pad_cursor`]): its left stick moves

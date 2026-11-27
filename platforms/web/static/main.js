@@ -226,28 +226,34 @@ globalThis.volya = {
 // page's own interface hides meanwhile.
 const send = (event) => worker.postMessage({ type: "input", event });
 // The device's keyboard for the save screen's name field on touch screens
-// (#94), raised in the touchpad's click on it (#108) or a direct click's
-// lift there (#807).
+// (#94), raised in the lift of the touch controls' Click with the cursor on
+// it (#856) or a direct click's lift there (#807).
 const entry = createTextEntry(send);
 const forward = startInput(() => view, send, { onClick: (at) => entry.click(at), screen: document.getElementById("screen") });
-setCursor = (shown) => forward.setCursor(shown);
+setCursor = (shown) => {
+  forward.setCursor(shown);
+  touch.setCursor({ shown });
+};
 // The console on touch screens: its Console buttons, the device's keyboard
 // and a key strip (#642).
 const consoleTouch = createConsoleTouch(send, forward.consoleKeys, { call });
 setConsole = (state) => {
   forward.setConsole(state.open);
   consoleTouch.update(state);
+  touch.setCursor({ console: state.open });
 };
-const touch = createTouchControls(send, { call, onConsole: () => consoleTouch.raise() });
+const touch = createTouchControls(send, { call, onConsole: () => consoleTouch.raise(), onClick: () => entry.click() });
 // The touch controls' mode (#802): standard unless the app's settings
 // (update.js) say otherwise; Settings changes it (game-ui.js), and the
-// level's controls take it each time they go live, or at once while live.
+// touch controls take it at once (in a level and on the screens with the
+// cursor, #856).
 const appSettings = globalThis.caches ? settingsStore(new URL("./", import.meta.url).href) : null;
 let touchMode = "standard";
 (async () => {
   const stored = await appSettings?.read().catch(() => ({}));
   if (TOUCH_MODES.includes(stored?.touch)) touchMode = stored.touch;
   forward.setTouchMode(touchMode);
+  touch.setMode(touchMode);
 })();
 const touchControls = {
   get mode() {
@@ -259,7 +265,7 @@ const touchControls = {
     if (!TOUCH_MODES.includes(mode)) throw new Error(`unknown touch controls: ${mode}`);
     touchMode = mode;
     forward.setTouchMode(mode);
-    if (levelLive) touch.setMode(mode);
+    touch.setMode(mode);
     if (appSettings) await saveSettings(appSettings, { touch: mode });
   },
   /** The mode the level's controls run now. */
@@ -267,7 +273,6 @@ const touchControls = {
     return touch.element.dataset.mode;
   },
 };
-let levelLive = false;
 document.body.append(touch.element, ...consoleTouch.elements);
 // Full screen with Keyboard Lock, offered in the level (#85).
 const offer = createFullscreenOffer(() => call("bound_keys"));
@@ -279,14 +284,13 @@ setFullScreen = (on) => offer.setFullScreen(on, reportFullScreen);
 document.addEventListener("fullscreenchange", reportFullScreen);
 setCapture = (on) => {
   forward.setCapture(on);
+  touch.setCursor({ capture: on });
   consoleTouch.setCapture(on);
   document.querySelector("main").hidden = on;
   if (!on) offer.leave();
 };
 setTrip = (at) => touch.trip(at);
 setLevel = (controls) => {
-  if (controls.level && !levelLive) touch.setMode(touchMode);
-  levelLive = Boolean(controls.level);
   forward.setLevel(controls.level, controls.keys);
   touch.update(controls);
   offer.update(controls);

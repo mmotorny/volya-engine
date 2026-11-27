@@ -3,7 +3,8 @@
 
 // The ergonomic mobile mode (the app's setting, stored as "experimental",
 // #802) on the screens that show the game's cursor (the user's design,
-// #807), in place of the touchpad (touchpad.js):
+// #807), in place of the standard mode's on-screen stick and cursor
+// buttons (touch-controls.js, #856):
 //
 // - a touch is a direct mouse click where it lands: down presses the left
 //   button there, a moving finger drags it, the lift releases it (the game
@@ -26,7 +27,7 @@
 // point p of the unmagnified picture shows at (x, y) + scale · p. The
 // caller runs `tick(now)` at `deadline()`.
 
-import { TAP_SLOP } from "./touchpad.js";
+import { TAP_SLOP } from "./touch-wheel.js";
 
 /** A press waits this long for a second finger, milliseconds (our choice). */
 export const PRESS_DELAY_MS = 100;

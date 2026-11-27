@@ -512,7 +512,7 @@ pub struct MenuState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::input::{Event, GamepadAxis, GamepadButton, Key, MouseButton};
+    use crate::core::input::{CursorButton, Event, GamepadAxis, GamepadButton, Key, MouseButton};
     use crate::fixture::{self, FakeAudio};
     use crate::save_load::Stubbed;
     use crate::saved_games::{LocalTime, SavedFile};
@@ -591,20 +591,16 @@ mod tests {
             self.key(Key::Enter)
         }
 
-        /// The touchpad (#108): a slow swipe bringing the cursor to UI point
-        /// `at` (section 7 on a 1024 × 768 screen), then a tap.
+        /// The standard touch controls (#856): the on-screen stick bringing
+        /// the cursor to UI point `at`, then a tap on Click.
         fn tap(&mut self, at: [f32; 2]) -> MenuFrame {
-            let ([x, y], s) = (self.input.cursor_ui(), self.input.sensitivity());
-            self.input.handle(Event::TouchpadMotion {
-                delta: [2.0 * (at[0] - x) / s, 2.0 * (at[1] - y) / s],
-                speed: 0.0,
+            self.steer(at, |input, value| {
+                input.handle(Event::CursorStick { value })
             });
             for pressed in [true, false] {
-                self.input.handle(Event::TouchpadButton {
-                    button: MouseButton::Left,
+                self.input.handle(Event::CursorButton {
+                    button: CursorButton::Click,
                     pressed,
-                    double: false,
-                    time: self.now as f64 * 100.0,
                 });
             }
             self.frame()
@@ -613,6 +609,16 @@ mod tests {
         /// Steers the cursor to `to` with the gamepad's left stick, at a
         /// third of full tilt, then lets it go.
         fn stick_to(&mut self, to: [f32; 2]) {
+            self.steer(to, |input, [x, y]| {
+                for (axis, value) in [(GamepadAxis::LeftX, x), (GamepadAxis::LeftY, y)] {
+                    input.handle(Event::GamepadAxis { axis, value });
+                }
+            });
+        }
+
+        /// Steers the cursor to `to` with a stick `push`ed by its value,
+        /// half way out, then lets it go.
+        fn steer(&mut self, to: [f32; 2], push: impl Fn(&mut Input, [f32; 2])) {
             for _ in 0..400 {
                 let [x, y] = self.input.cursor_ui();
                 let (dx, dy) = (to[0] - x, to[1] - y);
@@ -620,15 +626,10 @@ mod tests {
                 if d < 3.0 {
                     break;
                 }
-                for (axis, v) in [(GamepadAxis::LeftX, dx / d), (GamepadAxis::LeftY, dy / d)] {
-                    let value = v * 0.5;
-                    self.input.handle(Event::GamepadAxis { axis, value });
-                }
+                push(&mut self.input, [dx / d * 0.5, dy / d * 0.5]);
                 self.frame();
             }
-            for axis in [GamepadAxis::LeftX, GamepadAxis::LeftY] {
-                self.input.handle(Event::GamepadAxis { axis, value: 0.0 });
-            }
+            push(&mut self.input, [0.0, 0.0]);
             self.frame();
         }
 

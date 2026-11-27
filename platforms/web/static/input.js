@@ -12,25 +12,26 @@
 // it. The on-screen touch controls (touch-controls.js) send their own
 // messages; touches on them don't arrive here.
 //
-// Whenever the game shows its mouse cursor, touch is a touchpad for it
-// (touchpad.js, #108): swipes move the cursor, taps click at it, and a
-// touch never clicks where it lands. In the ergonomic mode
-// (the app's setting, #802) a touch there is a direct click where it lands
-// instead, and a pinch magnifies the screen's picture (direct-touch.js,
-// #807). Elsewhere touches go as contacts. Each touchpad or direct-click
-// touch stays one until lifted; direct touches still down when the cursor
-// appears are dropped (their button released, the cursor left where it
-// is).
+// Whenever the game shows its mouse cursor, the standard mode's on-screen
+// stick and cursor buttons drive it (touch-controls.js, #856), and two
+// fingers on the picture are the wheel (touch-wheel.js): a touch never
+// clicks where it lands. In the ergonomic mode (the app's setting, #802) a
+// touch there is a direct click where it lands instead, and a pinch
+// magnifies the screen's picture (direct-touch.js, #807). Elsewhere touches
+// go as contacts. Each wheel or direct-click touch stays one until lifted;
+// direct touches still down when the cursor appears are dropped (their
+// button released, the cursor left where it is).
 //
-// The page's text entry is focused in the handler of the touchpad's click
-// (`onClick`): that the device's keyboard rises for a focus in a pointerup
-// handler is believed, not measured (WebKit dispatches pointer events from
-// its touch events). While the cursor shows, touchend is cancelled too: the
-// Touch Events specification documents that this suppresses the
-// compatibility mouse events and the click, so no synthetic mousedown blurs
-// the input just focused.
+// The page's text entry is focused in the handler of a direct click's
+// lift (`onClick`; the standard mode's Click calls it in its own lift):
+// that the device's keyboard rises for a focus in a pointerup handler is
+// believed, not measured (WebKit dispatches pointer events from its touch
+// events). While the cursor shows, touchend is cancelled too: the Touch
+// Events specification documents that this suppresses the compatibility
+// mouse events and the click, so no synthetic mousedown blurs the input
+// just focused.
 
-import { createTouchpad } from "./touchpad.js";
+import { createTouchWheel } from "./touch-wheel.js";
 import { createDirectTouch, zoomTransform } from "./direct-touch.js";
 
 // KeyboardEvent.code → engine key name (layout-independent positions): the
@@ -188,10 +189,9 @@ const AXIS_EPSILON = 0.02;
 /**
  * Starts listening; `view()` is the canvas (replaced when the engine starts
  * anew, main.js), `send(event)` posts one message to the engine worker.
- * `onClick(at)` runs in the event handler of a touchpad gesture pressing the
- * left button, or of a direct click's lift (at `at`, canvas CSS pixels; the
- * page may focus its text entry there: a device's keyboard rises only in a
- * user gesture). `screen` is the element holding the canvas, which a
+ * `onClick(at)` runs in the event handler of a direct click's lift (at
+ * `at`, canvas CSS pixels; the page may focus its text entry there: a
+ * device's keyboard rises only in a user gesture). `screen` is the element holding the canvas, which a
  * pinch magnifies (direct-touch.js). Returns `setCapture(on)`, called when the
  * engine reports capture changes, `setLevel(on, keys)`, called when the
  * level's controls go live or stop and when the character takes the
@@ -217,8 +217,8 @@ export function startInput(view, send, { onClick = () => {}, screen = null } = {
   // no release is swallowed then, so nothing is released and no unlock is
   // told (#110: held keys walk on under the inventory screen).
   let leaving = false;
-  // The touchpad while the game shows its cursor, or direct clicks with the
-  // the ergonomic mode; which way each touch down goes ("pad",
+  // Two fingers as the wheel while the game shows its cursor, or direct
+  // clicks in the ergonomic mode; which way each touch down goes ("wheel",
   // "click" or "direct").
   let cursor = false;
   let touchMode = "standard";
@@ -229,16 +229,10 @@ export function startInput(view, send, { onClick = () => {}, screen = null } = {
   const direct = () => touchMode === "experimental" && touchDevice();
   // The console is open: Insert reads the clipboard.
   let consoleOpen = false;
-  const pad = createTouchpad();
+  const fingers = createTouchWheel();
   const routes = new Map();
-  let longPress = null;
-  const padSend = (messages) => {
+  const wheelSend = (messages) => {
     for (const message of messages) send(message);
-    clearTimeout(longPress);
-    const due = pad.deadline();
-    if (due !== null) {
-      longPress = setTimeout(() => padSend(pad.tick(performance.now())), Math.max(0, due - performance.now()));
-    }
   };
   // Direct clicks and the screen's zoom (direct-touch.js, #807), in page
   // coordinates over the screen element.
@@ -275,18 +269,17 @@ export function startInput(view, send, { onClick = () => {}, screen = null } = {
   };
   /** Forgets direct clicks (a press released) and the zoom. */
   const resetClicks = () => clickSend([...clicks.reset(performance.now()), ...clicks.unzoom()]);
-  const touchpad = (event) => {
+  const twoFingers = (event) => {
     const [x, y] = at(event);
-    const time = event.timeStamp;
     const id = event.pointerId;
-    const out = {
-      pointerdown: () => pad.down(id, x, y, time),
-      pointermove: () => pad.move(id, x, y, time),
-      pointerup: () => pad.up(id, x, y, time),
-      pointercancel: () => pad.cancel(id, time),
-    }[event.type]();
-    if (out.some(([type, name, pressed]) => type === "cursor_button" && name === "left" && pressed)) onClick();
-    padSend(out);
+    wheelSend(
+      {
+        pointerdown: () => fingers.down(id, x, y),
+        pointermove: () => fingers.move(id, x, y),
+        pointerup: () => fingers.up(id, x, y),
+        pointercancel: () => fingers.cancel(id),
+      }[event.type](),
+    );
   };
   // The page's root takes the lock: the canvas lets pointer events through
   // (style.css), and locked events then target the root and reach `pointer`.
@@ -317,11 +310,11 @@ export function startInput(view, send, { onClick = () => {}, screen = null } = {
         touchSeen = true;
         send(["touch_direct", direct()]);
       }
-      if (event.type === "pointerdown") routes.set(event.pointerId, cursor ? (touchMode === "experimental" ? "click" : "pad") : "direct");
+      if (event.type === "pointerdown") routes.set(event.pointerId, cursor ? (touchMode === "experimental" ? "click" : "wheel") : "direct");
       const route = routes.get(event.pointerId);
       if (event.type === "pointerup" || event.type === "pointercancel") routes.delete(event.pointerId);
-      if (route === "pad") {
-        touchpad(event);
+      if (route === "wheel") {
+        twoFingers(event);
         return;
       }
       if (route === "click") {
@@ -449,7 +442,7 @@ export function startInput(view, send, { onClick = () => {}, screen = null } = {
   // a fresh press: a toggle, a jump, an Escape); stick and trigger values are
   // sent again by the next poll.
   const releaseAll = () => {
-    padSend(pad.reset(performance.now()));
+    wheelSend(fingers.reset());
     clickSend(clicks.reset(performance.now()));
     send(["blur"]);
     for (const last of pads.values()) last.axes = {};
@@ -503,14 +496,14 @@ export function startInput(view, send, { onClick = () => {}, screen = null } = {
     requestAnimationFrame(poll);
   };
 
-  // Touchpad and direct-click touches down when the cursor hides are
-  // forgotten (a drag or press released), and the screen's zoom ends;
-  // direct touches down when it shows are dropped.
+  // Wheel and direct-click touches down when the cursor hides are
+  // forgotten (a press released), and the screen's zoom ends; direct
+  // touches down when it shows are dropped.
   const setCursor = (shown) => {
     if (shown === cursor) return;
     cursor = shown;
     if (!shown) {
-      padSend(pad.reset(performance.now()));
+      wheelSend(fingers.reset());
       resetClicks();
     }
     const direct = [...routes].filter(([, route]) => route === "direct");
@@ -532,7 +525,7 @@ export function startInput(view, send, { onClick = () => {}, screen = null } = {
   const setCapture = (on) => {
     if (on === capture) return;
     capture = on;
-    padSend(pad.reset(performance.now()));
+    wheelSend(fingers.reset());
     resetClicks();
     routes.clear();
     if (on) send(["touch_direct", direct()]);

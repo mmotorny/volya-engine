@@ -1935,15 +1935,20 @@ mod tests {
     }
 
     #[test]
-    fn a_touchpad_double_tap_and_hold_drags_the_load_list_thumb() {
-        use crate::core::input::{Event, Input, MouseButton};
+    fn the_on_screen_click_held_drags_the_load_list_thumb() {
+        use crate::core::input::{CursorButton, Event, Input};
         let tree = crate::fixture::tree();
         let data = crate::fixture::data(&tree);
         let mut l = list(30);
         let mut input = Input::new();
+        // The standard touch controls (#856), as the app has them.
+        input.set_pad_cursor(true);
         let mut cursor = input.cursor_ui();
         let mut events = Vec::new();
+        let mut now = 0.0;
         let mut frame = |input: &mut Input, l: &mut SaveList| {
+            now += 16.0;
+            input.pad_cursor_frame(now, &[], true);
             for e in crate::dialog::events(&data, input) {
                 if let Ev::Move(at) = e {
                     cursor = at;
@@ -1952,43 +1957,53 @@ mod tests {
             }
             input.end_frame();
         };
-        let to = |input: &Input, [x, y]: [f32; 2]| {
-            // Slow: one to one, then section 7 on a 1024 × 768 screen.
-            let ([cx, cy], s) = (input.cursor_ui(), input.sensitivity());
-            Event::TouchpadMotion {
-                delta: [2.0 * (x - cx) / s, 2.0 * (y - cy) / s],
-                speed: 0.0,
+        let steer = |input: &mut Input,
+                     l: &mut SaveList,
+                     frame: &mut dyn FnMut(&mut Input, &mut SaveList),
+                     to: [f32; 2]| {
+            for _ in 0..400 {
+                let [x, y] = input.cursor_ui();
+                let (dx, dy) = (to[0] - x, to[1] - y);
+                let d = dx.hypot(dy);
+                if d < 1.0 {
+                    break;
+                }
+                // Slower near the end, so it doesn't overshoot.
+                let push = if d < 20.0 { 0.4 } else { 0.7 };
+                input.handle(Event::CursorStick {
+                    value: [dx / d * push, dy / d * push],
+                });
+                frame(input, l);
             }
+            input.handle(Event::CursorStick { value: [0.0, 0.0] });
+            frame(input, l);
         };
-        let button = |pressed, double, time| Event::TouchpadButton {
-            button: MouseButton::Left,
+        let click = |pressed| Event::CursorButton {
+            button: CursorButton::Click,
             pressed,
-            double,
-            time,
         };
         // The cursor on the thumb (from y 415, 16 below the bar's top);
-        // a tap, then the second touch drags with a single press, however
-        // soon after the first.
+        // Click held takes it, and the stick drags it.
         let thumb = l.thumb_rect();
-        input.handle(to(&input, [thumb.x + 8.0, thumb.y + 4.0]));
-        frame(&mut input, &mut l);
-        input.handle(button(true, false, 0.0));
-        input.handle(button(false, false, 0.0));
-        frame(&mut input, &mut l);
-        input.handle(button(true, false, 100.0));
+        steer(
+            &mut input,
+            &mut l,
+            &mut frame,
+            [thumb.x + 8.0, thumb.y + 4.0],
+        );
+        input.handle(click(true));
         frame(&mut input, &mut l);
         let start = l.drag.expect("the thumb taken");
-        input.handle(to(&input, [thumb.x + 8.0, thumb.y + 4.0 + 40.0]));
-        frame(&mut input, &mut l);
-        assert!((l.drag.unwrap() - start - 40.0).abs() < 0.01);
+        let from = input.cursor_ui()[1];
+        steer(&mut input, &mut l, &mut frame, [thumb.x + 8.0, from + 40.0]);
+        let moved = input.cursor_ui()[1] - from;
+        assert!((l.drag.unwrap() - start - moved).abs() < 0.01);
         assert!(l.first > 0, "the list scrolled");
-        input.handle(button(false, false, 900.0));
+        input.handle(click(false));
         frame(&mut input, &mut l);
         assert_eq!(l.drag, None);
-        // Never a double click (which would load a save).
         assert!(!events.contains(&ListEvent::Double));
     }
-
     #[test]
     fn the_caret_counts_characters() {
         let mut f = NameField::default();

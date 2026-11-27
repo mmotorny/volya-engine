@@ -3,7 +3,7 @@
 
 // The game's screens from the kept import: the save screen's name (the
 // device keyboard's input on touch, the on-screen keyboard with a gamepad),
-// the in-game menu and its load screen, the options screen (touchpad,
+// the in-game menu and its load screen, the options screen (touch controls,
 // sliders, the key table, rebinding), Apply storing `user.ltx`, the
 // rebound key in a level and the settings read back at the next launch.
 
@@ -37,9 +37,9 @@ import {
   state,
   storedEnds,
   swipe,
-  swipeTo,
-  tapAt,
-  touchId,
+  stickTo,
+  tapClick,
+  cursorButton,
   until,
   untilOptions,
   view,
@@ -57,24 +57,28 @@ export const tests = {
     const save = async () => (await until((s) => s.menu?.save_screen, "the save screen")).menu.save_screen;
     const [fx, fy, fw, fh] = (await save()).field;
     // Touch (seen earlier in this page): the text entry is where the field
-    // is, but takes no taps itself (#108).
+    // is, but takes no taps itself (#94).
     const entry = document.querySelector("#text-entry input");
     for (let i = 0; i < 50 && entry.parentElement.hidden; i++) await sleep(20);
     assert(!entry.parentElement.hidden, "the text entry shows");
     const centre = [fx + fw / 2, fy + fh / 2];
     assert(document.elementFromPoint(...client(...centre)) !== entry, "the text entry takes taps");
-    // A tap on the field with the cursor elsewhere focuses nothing.
-    await swipeTo([100, 100]);
-    await tapAt(centre);
+    // A tap on the field, or Click with the cursor elsewhere, focuses
+    // nothing.
+    await stickTo([100, 100]);
+    const t = { pointerType: "touch", pointerId: nextTouch(), isPrimary: true, button: 0 };
+    pointer("pointerdown", client(...centre), { ...t, buttons: 1 });
+    pointer("pointerup", client(...centre), { ...t, buttons: 0 });
+    await tapClick();
     await sleep(200);
     assert(document.activeElement !== entry && !(await save()).focused, "a tap on the field focused it");
-    // The cursor over the field: a tap anywhere clicks it, and the page
-    // focuses its input in that tap (the device's keyboard rises only so).
-    await swipeTo(centre);
+    // The stick over the field: Click clicks it, and the page focuses its
+    // input in Click's lift (the device's keyboard rises only so).
+    await stickTo(centre);
     await sleep(200);
-    await tapAt([fx + fw / 2, fy - 100]);
-    assertEqual(document.activeElement, entry, "the input focused in the tap");
-    await until((s) => s.menu?.save_screen?.focused, "the field focused by the tap");
+    await tapClick();
+    assertEqual(document.activeElement, entry, "the input focused in Click's lift");
+    await until((s) => s.menu?.save_screen?.focused, "the field focused by Click");
     // Typed text reaches the field by its own rules (Cyrillic types nothing).
     entry.value = "Ab1ж";
     entry.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: "Ab1ж", bubbles: true }));
@@ -214,8 +218,8 @@ export const tests = {
     const scene = await volya.call("menu_scene", { width: 1024, height: 768 });
     assertEqual(bounds(scene, "dialog").slice(0, 2), [414.5, 167.5], "dialog");
     assert(scene.sprites.some((s) => s.layer === "list_renderer line"), "renderer line");
-    // A tap in the black bars beside a 4:3 picture clicks at the cursor
-    // (the touchpad, #108), which stays where it is.
+    // A tap in the black bars beside a 4:3 picture clicks nothing (the
+    // standard touch controls, #856), and the cursor stays where it is.
     const rect = view().getBoundingClientRect();
     const rotated = rect.width < rect.height !== view().clientWidth < view().clientHeight;
     if (rotated || view().clientWidth / view().clientHeight < render[0] / render[1] + 0.05) {
@@ -233,52 +237,44 @@ export const tests = {
     await sleep(100);
     const after = await volya.call("input_state");
     const actions = after.recent.filter((a) => a.seq > before.count).map((a) => `${a.action} ${a.control}`);
-    assertEqual(actions, ["press mouse_left", "release mouse_left"], "a click");
+    assertEqual(actions, [], "nothing");
     assertEqual(after.ui, before.ui, "the cursor after a tap in the bar");
-    return "a tap in the bar clicks at the cursor";
+    return "a tap in the bar clicks nothing";
   },
 
-  "touchpad: a double-tap-hold drag moves a slider; a two-finger swipe scrolls the key table": async () => {
+  "touch: Click held drags a slider with the stick; a two-finger swipe scrolls the key table": async () => {
     needsGame();
-    await swipeTo(centreOf(button(await options(), "tab 1")));
-    await tapAt();
+    await stickTo(centreOf(button(await options(), "tab 1")));
+    await tapClick();
     let o = await untilOptions((o) => o.page === "sound", "the sound tab");
-    // On the music volume's bar: a tap, then a touch at once, held and
-    // moved left past the bar's start.
+    // On the music volume's bar: Click held, the stick left past the
+    // bar's start.
     const bar = control(o, "track_musicvolume");
-    await swipeTo(centreOf(bar));
+    await stickTo(centreOf(bar));
     const value = () => options().then((o) => parseFloat(control(o, "track_musicvolume").value));
     await sleep(300);
-    const fingerAt = [512, 384];
-    const t = { pointerType: "touch", isPrimary: true, button: 0 };
-    pointer("pointerdown", client(...fingerAt), { ...t, pointerId: nextTouch(), buttons: 1 });
-    pointer("pointerup", client(...fingerAt), { ...t, pointerId: touchId, buttons: 0 });
-    await sleep(50);
-    const s = (await volya.call("input_state")).sensitivity;
-    const id = nextTouch();
-    const travel = (-2 * (bar.rect[2] / 2 + 40)) / s;
-    await swipe([fingerAt], [travel, 0], { lift: false, ids: [id] });
+    await cursorButton("click", true);
+    await stickTo([bar.rect[0] - 30, centreOf(bar)[1]]);
     await sleep(100);
     assertEqual((await volya.call("input_state")).held, ["mouse_left"], "held while dragging");
     assertEqual(await value(), 0, "dragged to the bar's start");
-    // The page losing focus mid-drag releases it, and the touchpad forgets
-    // the finger: its further motion and its lift do nothing.
+    // The page losing focus mid-drag releases it; Click's lift then does
+    // nothing.
     dispatchEvent(new Event("blur"));
     await sleep(100);
     const blurred = await volya.call("input_state");
     assertEqual(blurred.held, [], "released by the blur");
-    pointer("pointermove", client(fingerAt[0] + travel + 60, fingerAt[1]), { ...t, pointerId: id, buttons: 1 });
-    pointer("pointerup", client(fingerAt[0] + travel + 60, fingerAt[1]), { ...t, pointerId: id, buttons: 0 });
+    await cursorButton("click", false);
     await sleep(100);
     const after = await volya.call("input_state");
-    assertEqual([after.ui, after.count], [blurred.ui, blurred.count], "the forgotten finger");
+    assertEqual([after.ui, after.count], [blurred.ui, blurred.count], "Click's lift after the blur");
     // The controls tab; two fingers on the key table swiped up scroll it
     // down, swiped down back.
-    await swipeTo(centreOf(button(await options(), "tab 3")));
-    await tapAt();
+    await stickTo(centreOf(button(await options(), "tab 3")));
+    await tapClick();
     o = await untilOptions((o) => o.page === "controls", "the controls tab");
     const cell = o.cells.find((c) => c.action === "forward" && c.slot === 0);
-    await swipeTo(centreOf(cell));
+    await stickTo(centreOf(cell));
     const top = o.scroll[1];
     await sleep(300);
     await swipe([[400, 500], [470, 500]], [0, -120 / cssPerUi()]);
@@ -290,7 +286,6 @@ export const tests = {
     assertEqual(o.page, "controls", "nothing clicked");
     return `scrolled ${scrolled - top} positions`;
   },
-
   "a setting, a tap and a key changed, Apply stores them": async () => {
     needsGame();
     // The controls tab; the mouse-sensitivity bar clicked at a third.
@@ -310,14 +305,14 @@ export const tests = {
     await untilOptions((o) => o.waiting === "forward:0", "the cell to wait");
     key("KeyT");
     o = await untilOptions((o) => o.cells.find((c) => c.action === "forward" && c.slot === 0).key === "kT", "kT");
-    // Touch (the touchpad): the cursor to the sound tab, a tap; then to the
-    // EAX check box, a tap.
-    await swipeTo(centreOf(button(o, "tab 1")));
-    await tapAt();
+    // Touch (the touch controls' stick and Click): the cursor to the sound
+    // tab, Click; then to the EAX check box, Click.
+    await stickTo(centreOf(button(o, "tab 1")));
+    await tapClick();
     o = await untilOptions((o) => o.page === "sound", "the sound tab");
     const eax = control(o, "check_eax").value;
-    await swipeTo(centreOf(control(o, "check_eax")));
-    await tapAt();
+    await stickTo(centreOf(control(o, "check_eax")));
+    await tapClick();
     o = await untilOptions((o) => control(o, "check_eax").value !== eax, "the tap to toggle EAX");
     clickAt(centreOf(button(o, "btn_accept")));
     await until((s) => s.phase === "menu" && !s.options, "Apply to close the screen");

@@ -396,10 +396,11 @@ export function clickAt(at) {
   pointer("pointerup", p, { button: 0, buttons: 0 });
 }
 
-// Touch where the game shows its cursor is a touchpad (touchpad.js, #108).
+// Touch where the game shows its cursor: the standard touch controls'
+// stick and cursor buttons (touch-controls.js, #856); two fingers on the
+// picture are the wheel (touch-wheel.js).
 export let touchId = 100;
-/** Slow enough for the touchpad's one-to-one speed, CSS pixels per event
- * 25 ms apart (120 px/s; the curve rises from 200). */
+/** CSS pixels per event 25 ms apart of a slow swipe. */
 export const SLOW_STEP = 3;
 /** CSS pixels per UI unit of the drawn picture. */
 export const cssPerUi = () => {
@@ -422,32 +423,83 @@ export async function swipe(starts, [tx, ty], { lift = true, ids } = {}) {
   return ids;
 }
 
-/** Moves the cursor to UI point `target` with slow touchpad swipes. */
-export async function swipeTo(target) {
-  // Past the double-tap time of an earlier tap (a touch then would drag).
-  await sleep(300);
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const { ui, sensitivity } = await volya.call("input_state");
-    const [dx, dy] = [target[0] - ui[0], target[1] - ui[1]];
-    if (Math.hypot(dx, dy) < 1.5) return;
-    // One to one when slow: the cursor moves s/2 times the finger's travel
-    // in UI units (title-menu.md section 7, over 2 normalised units).
-    const travel = [(2 * dx) / sensitivity, (2 * dy) / sensitivity];
-    await swipe([[512 - travel[0] / 2, 384 - travel[1] / 2]], travel);
-    await sleep(50);
+/** The touch controls, once they show the cursor's controls: on a touch
+ * device at once, elsewhere once a touch is seen (a tap on the picture,
+ * which clicks nothing). */
+export async function cursorControls() {
+  const controls = document.getElementById("touch-controls");
+  if (controls.dataset.view !== "cursor") {
+    const t = { pointerType: "touch", pointerId: nextTouch(), isPrimary: true, button: 0 };
+    pointer("pointerdown", client(1000, 20), { ...t, buttons: 1 });
+    pointer("pointerup", client(1000, 20), { ...t, buttons: 0 });
   }
-  const { ui } = await volya.call("input_state");
-  throw new Error(`the cursor at ${ui}, not ${target}`);
+  for (let i = 0; i < 100 && controls.dataset.view !== "cursor"; i++) await sleep(20);
+  assertEqual(controls.dataset.view, "cursor", "the touch controls' view");
+  return controls;
 }
 
-/** A touchpad tap at UI point `at` (anywhere: it clicks at the cursor). */
-export async function tapAt(at = [512, 384]) {
+/** A touch `type` on `el` at page point `at` (its centre by default). */
+function touchOn(el, type, id, at = null) {
+  const r = el.getBoundingClientRect();
+  const [x, y] = at ?? [(r.left + r.right) / 2, (r.top + r.bottom) / 2];
+  el.dispatchEvent(
+    new PointerEvent(type, { clientX: x, clientY: y, pointerId: id, pointerType: "touch", isPrimary: false, button: 0, buttons: type === "pointerup" ? 0 : 1, bubbles: true, cancelable: true }),
+  );
+}
+
+/** The stick's radius, CSS pixels (touch-controls.js). */
+const STICK_RADIUS = 56;
+
+/** Steers the game's cursor to UI point `target` with the touch controls'
+ * stick (#856), pushed less as the cursor nears it, then lets it go. */
+export async function stickTo(target) {
+  const controls = await cursorControls();
+  const move = controls.querySelector(".touch-move");
+  // In the controls' own frame (turned on upright phones): a thumb near
+  // the bottom left.
+  const origin = [100, controls.clientHeight - 100];
+  const id = nextTouch();
+  touchOn(move, "pointerdown", id, toClient(controls, origin));
+  let sent = null;
+  try {
+    const started = performance.now();
+    while (performance.now() - started < 20000) {
+      const { ui } = await volya.call("input_state");
+      const [dx, dy] = [target[0] - ui[0], target[1] - ui[1]];
+      const d = Math.hypot(dx, dy);
+      if (d < 2) return;
+      // About 540, 117 and 21 UI units a second (the gamepad's curve),
+      // slower over clickable elements.
+      const push = d > 80 ? 0.8 : d > 20 ? 0.5 : 0.35;
+      const value = [(dx / d) * push, (dy / d) * push];
+      if (!sent || Math.hypot(value[0] - sent[0], value[1] - sent[1]) > 0.02) {
+        sent = value;
+        touchOn(move, "pointermove", id, toClient(controls, [origin[0] + value[0] * STICK_RADIUS, origin[1] + value[1] * STICK_RADIUS]));
+      }
+      await sleep(25);
+    }
+    const { ui } = await volya.call("input_state");
+    throw new Error(`the stick took the cursor to ${ui}, not ${target}`);
+  } finally {
+    touchOn(move, "pointerup", id, toClient(controls, origin));
+  }
+}
+
+/** Presses (`pressed`) or releases a cursor button of the touch controls:
+ * "click", "right-click" or "menu". */
+export async function cursorButton(name, pressed) {
+  const controls = await cursorControls();
+  const b = controls.querySelector(`.touch-button.${name}`);
+  touchOn(b, pressed ? "pointerdown" : "pointerup", 90);
+}
+
+/** A tap on the touch controls' Click (or `name`), past the double-click
+ * time of an earlier one: a click at the cursor. */
+export async function tapClick(name = "click") {
   await sleep(300);
-  const t = { pointerType: "touch", pointerId: ++touchId, isPrimary: true, button: 0 };
-  pointer("pointerdown", client(...at), { ...t, buttons: 1 });
-  pointer("pointerup", client(...at), { ...t, buttons: 0 });
+  await cursorButton(name, true);
+  await cursorButton(name, false);
 }
-
 /** The in-game menu's item list (save-load-screens.md section 2). */
 export const inGame = (s) => (s.phase === "level" ? s.menu?.menu : undefined);
 

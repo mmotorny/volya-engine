@@ -58,10 +58,16 @@ function assertNear(actual, expected, message) {
   assert(close, `${message}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
 }
 
-/** The app's touchpad recognizer (touchpad.js, #108), unit-tested here. */
-async function touchpad() {
+/** The app's two-finger wheel recognizer (touch-wheel.js, #856), unit-tested here. */
+async function touchWheel() {
   const path = location.pathname;
-  return import(`${path.slice(0, path.indexOf("/__test/") + 1)}touchpad.js`);
+  return import(`${path.slice(0, path.indexOf("/__test/") + 1)}touch-wheel.js`);
+}
+
+/** The app's touch controls (touch-controls.js), unit-tested here. */
+async function touchControls() {
+  const path = location.pathname;
+  return import(`${path.slice(0, path.indexOf("/__test/") + 1)}touch-controls.js`);
 }
 
 /** The app's direct touch recognizer (direct-touch.js, #807), unit-tested here. */
@@ -76,9 +82,6 @@ const clicks = (messages) =>
     type === "zoom" ? `zoom ${rest[0].scale.toFixed(3)} ${rest[0].x.toFixed(1)},${rest[0].y.toFixed(1)}` : `${type} ${rest[1]},${rest[2]} @${rest[3]}`,
   );
 
-/** The messages' kinds and values, speeds left out. */
-const plain = (messages) =>
-  messages.map((m) => (m[0] === "cursor_motion" ? `motion ${m[1]},${m[2]}` : m[0] === "wheel" ? `wheel ${m[1]}` : `${m[1]} ${m[2] ? "down" : "up"} @${m[3]}`));
 
 const summary = (actions) =>
   actions.map((a) => (a.action === "cursor" ? "cursor" : `${a.action} ${a.control}${a.double ? " double" : ""}`));
@@ -181,153 +184,143 @@ export const tests = {
     assertEqual(summary(actions), ["press mouse4", "press mouse5", "release mouse5", "release mouse4"]);
   },
 
-  "touchpad: a tap clicks at once; small jitter stays a tap; a long touch or a move is no tap": async () => {
-    const { createTouchpad, TAP_SLOP, LONG_PRESS_MS } = await touchpad();
-    const pad = createTouchpad();
-    assertEqual(pad.down(1, 100, 100, 0), [], "down");
-    assertEqual(pad.move(1, 100 + TAP_SLOP, 100, 50), [], "within the slop");
-    assertEqual(plain(pad.up(1, 100 + TAP_SLOP, 100, 100)), ["left down @100", "left up @100"], "tap");
-    // Lifted at the long press's time: no tap (the long press had fired).
-    const late = createTouchpad();
-    late.down(1, 0, 0, 1000);
-    assertEqual(late.deadline(), 1000 + LONG_PRESS_MS, "deadline");
-    assertEqual(late.tick(1000 + LONG_PRESS_MS - 1), [], "not yet");
-    assertEqual(plain(late.up(1, 0, 0, 1000 + LONG_PRESS_MS)), [`right down @${1000 + LONG_PRESS_MS}`, `right up @${1000 + LONG_PRESS_MS}`], "a long press, no tap");
-    // Moved past the slop: a move, from where it began, then no tap.
-    const moved = createTouchpad();
-    moved.down(1, 0, 0, 0);
-    assertEqual(plain(moved.move(1, TAP_SLOP + 1, 0, 20)), [`motion ${TAP_SLOP + 1},0`], "past the slop");
-    assertEqual(plain(moved.move(1, TAP_SLOP + 1, 7, 40)), ["motion 0,7"], "then by its motion");
-    assertEqual(plain(moved.move(1, 0, 0, 60)), [`motion ${-TAP_SLOP - 1},-7`], "back");
-    assertEqual(plain(moved.up(1, 0, 0, 80)), [], "no tap after a move");
-    assertEqual(moved.deadline(), null, "no long press");
-  },
-
-  "touchpad: swipe speed is smoothed from the events' times": async () => {
-    const { createTouchpad, SPEED_SMOOTH_MS } = await touchpad();
-    const pad = createTouchpad();
-    pad.down(1, 0, 0, 0);
-    let last;
-    // 10 px every 10 ms: 1000 px/s, approached.
-    for (let i = 2; i <= 40; i++) last = pad.move(1, i * 10, 0, i * 10)[0];
-    assert(Math.abs(last[3] - 1000) < 10, `speed ${last[3]}`);
-    // Slowing to 100 px/s: the speed follows within a few smoothing times.
-    let t = 400;
-    let x = 400;
-    for (let i = 0; i < 8; i++) last = pad.move(1, (x += 10), 0, (t += SPEED_SMOOTH_MS));
-    assert(Math.abs(last[0][3] - 133) < 10, `slow speed ${last[0][3]}`);
-  },
-
-  "touchpad: a long press is a right click; double-tap and hold drags with a single press; a quick second tap is a double click": async () => {
-    const { createTouchpad, LONG_PRESS_MS, DOUBLE_TAP_MS, TAP_SLOP } = await touchpad();
-    const pad = createTouchpad();
-    pad.down(1, 50, 50, 0);
-    assertEqual(plain(pad.tick(LONG_PRESS_MS)), [`right down @${LONG_PRESS_MS}`, `right up @${LONG_PRESS_MS}`], "long press");
-    assertEqual(pad.tick(LONG_PRESS_MS + 100), [], "once");
-    assertEqual(plain(pad.up(1, 50, 50, 900)), [], "no tap after it");
-    // Lifted past the long press before its timer ran: the right click then.
-    const late = createTouchpad();
-    late.down(1, 0, 0, 0);
-    assertEqual(plain(late.up(1, 0, 0, LONG_PRESS_MS)), [`right down @${LONG_PRESS_MS}`, `right up @${LONG_PRESS_MS}`], "late lift");
-    // A tap, then a touch soon after: moved past the slop, it presses (a
-    // single press) and drags.
-    pad.down(2, 0, 0, 1000);
-    pad.up(2, 0, 0, 1050);
-    const t2 = 1050 + DOUBLE_TAP_MS - 1;
-    assertEqual(pad.down(3, 300, 300, t2), [], "nothing yet");
-    assertEqual(pad.move(3, 300 + TAP_SLOP, 300, t2 + 10), [], "within the slop");
-    const pressed = pad.move(3, 301 + TAP_SLOP, 300, t2 + 20);
-    assertEqual(plain(pressed), [`left down @${t2 + 20}`, `motion ${TAP_SLOP + 1},0`], "drag pressed");
-    assertEqual(pressed[0][4], false, "a single press");
-    assertEqual(pad.deadline(), null, "no long press while dragging");
-    assertEqual(plain(pad.move(3, 303 + TAP_SLOP, 300, 1400)), ["motion 2,0"], "dragging");
-    assertEqual(pad.tick(5000), [], "held, not a right click");
-    // A second finger while dragging does nothing; it lifting first leaves
-    // the drag on.
-    assertEqual(pad.down(4, 0, 0, 5000), [], "second finger");
-    assertEqual(pad.move(4, 0, 300, 5010), [], "no scroll while dragging");
-    assertEqual(pad.up(4, 0, 300, 5020), [], "the second finger lifted");
-    assertEqual(plain(pad.move(3, 305 + TAP_SLOP, 300, 5030)), ["motion 2,0"], "still dragging");
-    assertEqual(plain(pad.up(3, 305 + TAP_SLOP, 300, 5100)), ["left up @5100"], "released");
-    // Held still after a tap: the press once the long press's time comes.
-    pad.down(5, 0, 0, 6000);
-    pad.up(5, 0, 0, 6010);
-    pad.down(6, 0, 0, 6020);
-    assertEqual(pad.deadline(), 6020 + LONG_PRESS_MS, "deadline");
-    assertEqual(plain(pad.tick(6020 + LONG_PRESS_MS)), [`left down @${6020 + LONG_PRESS_MS}`], "held press");
-    assertEqual(plain(pad.up(6, 0, 0, 7000)), ["left up @7000"], "held release");
-    // Too late for a second touch: a fresh one.
-    pad.down(7, 0, 0, 8000);
-    pad.up(7, 0, 0, 8010);
-    pad.down(8, 0, 0, 8010 + DOUBLE_TAP_MS);
-    assertEqual(plain(pad.up(8, 0, 0, 8300)), ["left down @8300", "left up @8300"], "a plain tap");
-    // Two quick taps: a click, then a double click.
-    const twice = createTouchpad();
-    twice.down(1, 0, 0, 0);
-    const first = twice.up(1, 0, 0, 40);
-    assertEqual(twice.down(1, TAP_SLOP * 5, 0, 120), [], "the second touch waits");
-    const second = twice.up(1, TAP_SLOP * 5, 0, 160);
-    assertEqual(plain([...first, ...second]), ["left down @40", "left up @40", "left down @160", "left up @160"], "double tap");
-    assertEqual([first[0][4], second[0][4]], [false, true], "the second is a double click");
-    // A drag is released by a cancel of any finger, and by a reset.
-    const drag = (p, t) => {
-      p.down(1, 0, 0, t);
-      p.up(1, 0, 0, t + 10);
-      p.down(1, 0, 0, t + 20);
-      return p.move(1, 50, 0, t + 30);
-    };
-    const cancelled = createTouchpad();
-    drag(cancelled, 0);
-    cancelled.down(2, 0, 0, 40);
-    assertEqual(plain(cancelled.cancel(2, 50)), ["left up @50"], "cancel of the other finger");
-    assertEqual(cancelled.move(1, 90, 0, 60), [], "then nothing");
-    assertEqual(cancelled.up(1, 90, 0, 70), [], "no second release");
-    drag(cancelled, 1000);
-    assertEqual(plain(cancelled.cancel(1, 1040)), ["left up @1040"], "cancel of the lead");
-    drag(cancelled, 2000);
-    assertEqual(plain(cancelled.reset(2040)), ["left up @2040"], "reset");
-    assertEqual(cancelled.move(1, 90, 50, 2050), [], "forgotten");
-    assertEqual(cancelled.reset(2060), [], "nothing held");
-  },
-
-  "touchpad: two fingers swiped up or down scroll; no tap or move after": async () => {
-    const { createTouchpad, SCROLL_STEP } = await touchpad();
-    const pad = createTouchpad();
-    pad.down(1, 100, 300, 0);
-    pad.down(2, 200, 300, 10);
-    assertEqual(pad.deadline(), null, "no long press");
+  "touch wheel: one finger does nothing; two fingers swiped up or down scroll; none after one lifts": async () => {
+    const { createTouchWheel, SCROLL_STEP, TAP_SLOP } = await touchWheel();
+    const pad = createTouchWheel();
+    assertEqual(pad.down(1, 100, 300), [], "one finger");
+    assertEqual(pad.move(1, 100, 100), [], "moved: nothing");
+    assertEqual(pad.up(1, 100, 100), [], "lifted: no click");
+    pad.down(1, 100, 300);
+    pad.down(2, 200, 300);
     // Both up by a step: the content follows, wheel down.
-    assertEqual(pad.move(1, 100, 300 - SCROLL_STEP, 20), [], "half a step");
-    assertEqual(pad.move(2, 200, 300 - SCROLL_STEP, 30), [["wheel", 1]], "a step down");
-    assertEqual(pad.move(1, 100, 300 + SCROLL_STEP * 3, 40), [["wheel", -2]], "back up");
-    assertEqual(pad.up(1, 100, 300 + SCROLL_STEP * 3, 50), [], "lifted");
-    assertEqual(pad.move(2, 200, 0, 60), [], "one finger left does nothing");
-    assertEqual(pad.up(2, 200, 0, 70), [], "no tap");
-    // A moving finger joined by a second scrolls too.
-    pad.down(3, 0, 0, 100);
-    pad.move(3, 50, 0, 110);
-    pad.down(4, 0, 100, 120);
-    assertEqual(pad.move(4, 0, 100 + SCROLL_STEP * 2, 130), [["wheel", -1]], "scroll after a move");
+    assertEqual(pad.move(1, 100, 300 - SCROLL_STEP), [], "half a step");
+    assertEqual(pad.move(2, 200, 300 - SCROLL_STEP), [["wheel", 1]], "a step down");
+    assertEqual(pad.move(1, 100, 300 + SCROLL_STEP * 3), [["wheel", -2]], "back up");
+    assertEqual(pad.up(1, 100, 300 + SCROLL_STEP * 3), [], "lifted");
+    assertEqual(pad.move(2, 200, 0), [], "one finger left does nothing");
+    assertEqual(pad.up(2, 200, 0), [], "lifted");
+    // Within the slop, nothing; a third finger ends it until all lift.
+    pad.down(3, 0, 0);
+    pad.down(4, 0, 100);
+    assertEqual(pad.move(4, 0, 100 + TAP_SLOP), [], "within the slop");
+    pad.down(5, 50, 50);
+    assertEqual(pad.move(4, 0, 100 + SCROLL_STEP * 3), [], "three fingers: nothing");
+    for (const id of [3, 4, 5]) pad.up(id, 0, 0);
+    // A cancel, and a reset, forget the fingers.
+    pad.down(6, 0, 0);
+    pad.down(7, 0, 100);
+    assertEqual(pad.cancel(7), [], "cancelled");
+    assertEqual(pad.move(6, 0, SCROLL_STEP * 3), [], "nothing after");
+    pad.reset();
+    pad.down(8, 0, 0);
+    pad.down(9, 0, 100);
+    assertEqual(pad.move(9, 0, 100 + SCROLL_STEP * 2), [["wheel", -1]], "afresh after a reset");
   },
 
-  "touchpad: two fingers pinched apart are wheel down, together wheel up": async () => {
-    const { createTouchpad, PINCH_STEP } = await touchpad();
-    const pad = createTouchpad();
-    pad.down(1, 100, 300, 0);
-    pad.down(2, 200, 300, 10);
+  "touch wheel: two fingers pinched apart are wheel down, together wheel up": async () => {
+    const { createTouchWheel, PINCH_STEP } = await touchWheel();
+    const pad = createTouchWheel();
+    pad.down(1, 100, 300);
+    pad.down(2, 200, 300);
     // Apart by a step, half from each finger: wheel down.
-    assertEqual(pad.move(1, 100 - PINCH_STEP / 2, 300, 20), [], "half a step");
-    assertEqual(pad.move(2, 200 + PINCH_STEP / 2, 300, 30), [["wheel", 1]], "a step apart");
-    assertEqual(pad.move(1, 100 + PINCH_STEP, 300, 40), [["wheel", -1]], "together");
+    assertEqual(pad.move(1, 100 - PINCH_STEP / 2, 300), [], "half a step");
+    assertEqual(pad.move(2, 200 + PINCH_STEP / 2, 300), [["wheel", 1]], "a step apart");
+    assertEqual(pad.move(1, 100 + PINCH_STEP, 300), [["wheel", -1]], "together");
     // Still a pinch after a vertical move: no scroll.
-    assertEqual(pad.move(2, 200 + PINCH_STEP / 2, 270, 50), [], "no scroll");
-    pad.up(1, 100 + PINCH_STEP, 300, 60);
-    assertEqual(pad.up(2, 200, 300, 70), [], "no tap");
+    assertEqual(pad.move(2, 200 + PINCH_STEP / 2, 270), [], "no scroll");
+    pad.up(1, 100 + PINCH_STEP, 300);
+    assertEqual(pad.up(2, 200, 300), [], "no click");
   },
 
+  "touch controls (#856): with the game's cursor the stick and Click, Right-click and Menu are the cursor's; in the level and the ergonomic mode they are not": async () => {
+    const { createTouchControls } = await touchControls();
+    // The app's style sheet: what shows is its doing.
+    const path = location.pathname;
+    const sheet = document.createElement("link");
+    sheet.rel = "stylesheet";
+    sheet.href = `${path.slice(0, path.indexOf("/__test/") + 1)}style.css`;
+    await new Promise((resolve, reject) => {
+      sheet.onload = resolve;
+      sheet.onerror = () => reject(new Error("style.css did not load"));
+      document.head.append(sheet);
+    });
+    const sent = [];
+    let clicked = 0;
+    const touch = createTouchControls((m) => sent.push(m), { touch: true, fade: false, onClick: () => clicked++ });
+    document.body.append(touch.element);
+    const root = touch.element;
+    try {
+      const shows = (selector) => root.querySelector(selector).getClientRects().length > 0;
+      const tap = (el, type, at, id = 7) => {
+        const r = el.getBoundingClientRect();
+        const [x, y] = at ?? [(r.left + r.right) / 2, (r.top + r.bottom) / 2];
+        el.dispatchEvent(new PointerEvent(type, { clientX: x, clientY: y, pointerId: id, pointerType: "touch", isPrimary: true, button: 0, buttons: type === "pointerup" ? 0 : 1, bubbles: true, cancelable: true }));
+      };
+      touch.update({ level: false });
+      assert(root.hidden, "hidden without the cursor");
+      touch.setCursor({ shown: true, capture: true });
+      assertEqual(root.dataset.view, "cursor", "the cursor's controls");
+      for (const s of [".touch-move", ".touch-button.menu", ".touch-button.click", ".touch-button.right-click"]) assert(shows(s), `${s} shown`);
+      for (const s of [".touch-button.jump", ".touch-button.crouch", ".touch-button.inventory", ".touch-button.pda", ".touch-button.console", ".touch-look"]) assert(!shows(s), `${s} hidden`);
+      // The stick: its reach, to the rim at most, and zero when let go.
+      const move = root.querySelector(".touch-move");
+      const r = move.getBoundingClientRect();
+      const at = [r.left + 100, r.bottom - 100];
+      tap(move, "pointerdown", at);
+      tap(move, "pointermove", [at[0] + 28, at[1]]);
+      tap(move, "pointermove", [at[0] + 400, at[1]]);
+      tap(move, "pointerup", [at[0] + 400, at[1]]);
+      assertEqual(sent.splice(0), [["cursor_stick", 0, 0], ["cursor_stick", 0.5, 0], ["cursor_stick", 1, 0], ["cursor_stick", 0, 0]], "the stick");
+      // Click: pressed and released, the page's click in its lift; Right-click; Menu is back.
+      tap(root.querySelector(".touch-button.click"), "pointerdown");
+      assertEqual(clicked, 0, "no click at the press");
+      tap(root.querySelector(".touch-button.click"), "pointerup");
+      assertEqual(clicked, 1, "the click in the lift");
+      tap(root.querySelector(".touch-button.right-click"), "pointerdown");
+      tap(root.querySelector(".touch-button.right-click"), "pointerup");
+      tap(root.querySelector(".touch-button.menu"), "pointerdown");
+      tap(root.querySelector(".touch-button.menu"), "pointerup");
+      assertEqual(
+        sent.splice(0),
+        [
+          ["cursor_button", "click", true],
+          ["cursor_button", "click", false],
+          ["cursor_button", "right_click", true],
+          ["cursor_button", "right_click", false],
+          ["cursor_button", "back", true],
+          ["cursor_button", "back", false],
+        ],
+        "the buttons",
+      );
+      // Held as the screen goes: released as it was pressed.
+      tap(root.querySelector(".touch-button.click"), "pointerdown");
+      tap(move, "pointerdown", at, 8);
+      touch.update({ level: true });
+      assertEqual(root.dataset.view, "level", "the level's controls");
+      assertEqual(sent.splice(0), [["cursor_button", "click", true], ["cursor_stick", 0, 0], ["cursor_stick", 0, 0], ["cursor_button", "click", false]], "let go");
+      // The PDA open over the level: the cursor's controls and PDA.
+      touch.update({ level: false, pda: true });
+      assertEqual(root.dataset.view, "cursor", "over the PDA");
+      assert(shows(".touch-button.pda") && shows(".touch-button.click"), "PDA and Click");
+      // The console open, or the ergonomic mode: none of them.
+      touch.update({ level: false });
+      touch.setCursor({ console: true });
+      assert(root.hidden, "hidden under the console");
+      touch.setCursor({ console: false });
+      touch.setMode("experimental");
+      assert(root.hidden, "hidden in the ergonomic mode");
+      touch.setMode("standard");
+      assertEqual(root.dataset.view, "cursor", "back");
+      touch.setCursor({ capture: false });
+      assert(root.hidden, "hidden while the page's interface shows");
+    } finally {
+      root.remove();
+      sheet.remove();
+    }
+  },
   "direct touch (experimental, #807): a tap presses and releases where it lands; held still it presses after the delay; moved past the slop it presses where it began and drags": async () => {
     const { createDirectTouch, PRESS_DELAY_MS } = await directTouch();
-    const { TAP_SLOP } = await touchpad();
+    const { TAP_SLOP } = await touchWheel();
     const d = createDirectTouch(() => [800, 400]);
     assertEqual(d.down(1, 100, 100, 0), [], "nothing at once: a second finger may follow");
     assertEqual(d.deadline(), PRESS_DELAY_MS, "the press's deadline");

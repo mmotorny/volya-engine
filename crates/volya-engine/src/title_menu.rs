@@ -753,7 +753,7 @@ pub struct TitleMenuState {
 mod tests {
     use super::*;
     use crate::core::audio::Category;
-    use crate::core::input::Event;
+    use crate::core::input::{CursorButton, Event};
     use crate::fixture::{self, FakeAudio, GLYPH};
     use crate::scene::TextureId;
 
@@ -1109,40 +1109,52 @@ mod tests {
     }
 
     #[test]
-    fn the_touchpad_selects_by_moving_the_cursor_and_clicks_at_it() {
+    fn the_on_screen_stick_selects_by_moving_the_cursor_and_click_clicks_at_it() {
         let mut r = Run::open(0);
         r.frame(1000);
+        // The standard touch controls (#856), as the app has them: the
+        // gamepad cursor's frame before the menu's.
+        r.input.set_pad_cursor(true);
+        let frame = |r: &mut Run, now: u64| {
+            r.input.pad_cursor_frame(now as f64, &[], true);
+            r.frame(now);
+        };
         let click = |r: &mut Run, now: u64| {
             for pressed in [true, false] {
-                r.input.handle(Event::TouchpadButton {
-                    button: MouseButton::Left,
+                r.input.handle(Event::CursorButton {
+                    button: CursorButton::Click,
                     pressed,
-                    double: false,
-                    time: now as f64,
                 });
             }
-            r.frame(now);
+            frame(r, now);
         };
         // A click with the cursor at the centre, on no item: nothing.
         click(&mut r, 1000);
         let s = r.state(1000);
         assert_eq!((s.selected, s.activations.len()), (0, 0));
-        // A slow swipe onto item 4 (one to one, then section 7: the cursor
-        // moves s / 2 UI units per screen unit here) selects it.
-        let [x, y] = r.input.cursor_ui();
-        let s = r.input.sensitivity();
+        // The stick steers the cursor onto item 4, which selects it.
         let target = [782.0, 419.0 + 120.0 + 15.0];
-        r.input.handle(Event::TouchpadMotion {
-            delta: [2.0 * (target[0] - x) / s, 2.0 * (target[1] - y) / s],
-            speed: 100.0,
-        });
-        r.frame(1500);
-        let s = r.state(1500);
+        let mut now = 1000;
+        for _ in 0..200 {
+            let [x, y] = r.input.cursor_ui();
+            let (dx, dy) = (target[0] - x, target[1] - y);
+            let d = dx.hypot(dy);
+            if d < 3.0 {
+                break;
+            }
+            r.input.handle(Event::CursorStick {
+                value: [dx / d * 0.6, dy / d * 0.6],
+            });
+            now += 16;
+            frame(&mut r, now);
+        }
+        r.input.handle(Event::CursorStick { value: [0.0, 0.0] });
+        frame(&mut r, now + 500);
+        let s = r.state(now + 500);
         assert_eq!((s.selected, s.activations.len()), (4, 0));
-        click(&mut r, 3000);
-        assert_eq!(r.state(3000).activations[0].item, "btn_credits");
+        click(&mut r, now + 2000);
+        assert_eq!(r.state(now + 2000).activations[0].item, "btn_credits");
     }
-
     #[test]
     fn music_repeats_as_a_stereo_pair() {
         let mut r = Run::open(0);

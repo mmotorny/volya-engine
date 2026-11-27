@@ -531,18 +531,32 @@ button.touch-button.down .touch-edges {
   height: 44px;
 }
 
-/* Over the open PDA its button alone, at its place; touches elsewhere
-   pass to the touchpad (touch-controls.js). */
-#touch-controls.pda-open {
+/* Over the open PDA its button alone, at its place, or with the cursor's
+   controls (touch-controls.js); touches elsewhere pass to input.js. */
+#touch-controls:is(.pda-open, .cursor) {
   pointer-events: none;
 }
 
-#touch-controls.pda-open > :not(button.touch-button.pda) {
+#touch-controls.pda-open:not(.cursor) > :not(button.touch-button.pda) {
   display: none;
 }
 
-#touch-controls.pda-open button.touch-button.pda {
+#touch-controls:is(.pda-open, .cursor) :is(button.touch-button, .touch-move) {
   pointer-events: auto;
+}
+
+/* The cursor's controls (#856): the stick, Menu, Click and Right-click,
+   PDA over the open PDA; no sprint. */
+#touch-controls.cursor > :not(.touch-move, button.touch-button:is(.menu, .pda), .touch-cursor-actions),
+#touch-controls.cursor:not(.pda-open) > button.touch-button.pda,
+#touch-controls.cursor :is(.touch-sprint-hint, .touch-lock),
+#touch-controls:not(.cursor) > .touch-cursor-actions {
+  display: none;
+}
+
+/* Over the main menu Console moves aside for Menu, as in the level. */
+#touch-controls.cursor:not([hidden]) ~ #console-touch button.touch-button.console {
+  left: calc(var(--safe-left) + var(--edge) + 56px);
 }
 
 /* Torch, then Night vision, in a row left of PDA along the top edge
@@ -589,6 +603,30 @@ button.touch-button.down .touch-edges {
 }
 
 #touch-controls button.touch-button.crouch {
+  right: 100px;
+  bottom: 4px;
+  width: 64px;
+  height: 64px;
+}
+
+/* Click at Jump's place, Right-click at Crouch's (#856). */
+.touch-cursor-actions {
+  position: absolute;
+  right: calc(var(--safe-right) + var(--edge));
+  bottom: calc(var(--safe-bottom) + var(--edge));
+  width: 164px;
+  height: 80px;
+  pointer-events: none;
+}
+
+#touch-controls button.touch-button.click {
+  right: 0;
+  bottom: 0;
+  width: 80px;
+  height: 80px;
+}
+
+#touch-controls button.touch-button.right-click {
   right: 100px;
   bottom: 4px;
   width: 64px;

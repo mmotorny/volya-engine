@@ -15,8 +15,8 @@
 //! | `["motion", dx, dy]` | relative mouse motion (pointer lock) |
 //! | `["button", x, y, name, pressed, time]` | mouse button ([`MouseButton::name`]) |
 //! | `["touch", x, y, "start"\|"move"\|"end", time, id, primary]` | a touch contact (`id`, `primary` optional: a primary contact without id), while the game shows no cursor or touches click where they land |
-//! | `["cursor_motion", dx, dy, speed]` | a touchpad swipe's motion while the game shows its cursor (#108), and its smoothed speed in CSS pixels per second |
-//! | `["cursor_button", "left"\|"right", pressed, time, double]` | a touchpad gesture pressing or releasing a mouse button at the cursor (#108); `double` for a double click's second press |
+//! | `["cursor_stick", x, y]` | the standard touch controls' stick while the game shows its cursor (#856): its reach in stick radii (+y down), at most 1 long; `0, 0` when let go |
+//! | `["cursor_button", name, pressed]` | an on-screen cursor button while the game shows its cursor (#856; [`CursorButton::name`]) |
 //! | `["touch_drop"]` | the touches down when the cursor appeared are dropped: their left button released where the cursor is (#108) |
 //! | `["touch_direct", on]` | touches click where they land while the game shows its cursor (`on`: the ergonomic mode, #807): the cursor isn't drawn until a mouse moves it |
 //! | `["key", name, pressed]` | key ([`Key::name`]), no auto-repeat |
@@ -42,8 +42,8 @@ use js_sys::Array;
 use serde::Serialize;
 use volya_engine::core::console::{Clipboard, typing_key};
 use volya_engine::core::input::{
-    Action, Event, GamepadAxis, GamepadButton, Input, Key, LookPhase, MouseButton, TouchButton,
-    TouchLook, TouchPhase,
+    Action, CursorButton, Event, GamepadAxis, GamepadButton, Input, Key, LookPhase, MouseButton,
+    TouchButton, TouchLook, TouchPhase,
 };
 use volya_engine::formats::ui::Resolution;
 use wasm_bindgen::JsValue;
@@ -331,15 +331,10 @@ fn decode(message: &Array) -> Result<Option<Vec<Event>>, JsValue> {
             }
             return Ok(Some(events));
         }
-        "cursor_motion" => Event::TouchpadMotion {
-            delta: at()?,
-            speed: num(3)? as f32,
-        },
-        "cursor_button" => Event::TouchpadButton {
-            button: MouseButton::from_name(&text(1)?).ok_or_else(bad)?,
+        "cursor_stick" => Event::CursorStick { value: at()? },
+        "cursor_button" => Event::CursorButton {
+            button: CursorButton::from_name(&text(1)?).ok_or_else(bad)?,
             pressed: flag(2)?,
-            double: message.get(4).as_bool().unwrap_or(false),
-            time: num(3)?,
         },
         "touch_drop" => Event::TouchDropped,
         "touch_direct" => Event::TouchDirect { on: flag(1)? },

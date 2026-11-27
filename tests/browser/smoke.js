@@ -816,12 +816,13 @@ export const tests = {
           // not ready yet.
           const doc = frame.contentDocument;
           // The level's states show the touch controls (or the full screen
-          // offer) instead of a screen, the console's its touch layer, the
-          // screen zoom's its stand-in for the game's picture.
+          // offer) instead of a screen, as do the screens with the game's
+          // cursor, the console's its touch layer, the screen zoom's its
+          // stand-in for the game's picture.
           const overlay = state.level?.offer ? "fullscreen-offer" : state.console ? "console-touch" : "touch-controls";
           const shown = state.screenZoom
             ? Boolean(doc?.querySelector("#screen .ux-game"))
-            : state.level || state.console
+            : state.level || state.console || state.cursorScreen
               ? doc?.getElementById(overlay)?.hidden === false
               : doc?.getElementById("game")?.children.length > 0;
           ok = doc?.documentElement?.dataset.ready === "true" && (shown || state.startError);

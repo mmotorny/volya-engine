@@ -11,13 +11,14 @@
 //! the original game's (it has no touch or gamepad support), chosen to give
 //! every input path the same reach:
 //!
-//! - **Touch as a touchpad** wherever the game shows its cursor (a Volya
-//!   Engine addition, decided by the user, #108): the platform recognises
-//!   the gestures (swipe, tap, double-tap-and-hold, long press, two-finger
-//!   swipe) and sends relative motion ([`Event::TouchpadMotion`], through
-//!   [`touchpad_gain`] and then the sensitivity rule of §7), button presses
-//!   at the cursor ([`Event::TouchpadButton`]) and wheel steps. A touch
-//!   never clicks where it lands there.
+//! - **The on-screen stick and cursor buttons** wherever the game shows
+//!   its cursor in the standard mobile mode (the user's design, #856): the
+//!   page's stick ([`Event::CursorStick`]) moves the cursor as a gamepad's
+//!   left stick does, through [`Input::pad_cursor_frame`]; its Click and
+//!   Right-click buttons are the gamepad's south and west there, the mouse
+//!   buttons at the cursor, and Back is its east ([`Event::CursorButton`]).
+//!   Two fingers on the picture are wheel steps. A touch never clicks
+//!   where it lands there.
 //! - **Touch as direct clicks** there instead in the ergonomic mobile mode
 //!   (the user's design, #807): touches arrive as
 //!   [`Event::Touch`] (below), and while the platform says so
@@ -44,8 +45,7 @@
 //!   [`Event::Touch`]): the cursor is placed under the pointer, inverting the screen
 //!   mapping, so the drawn cursor and the system pointer agree. The
 //!   sensitivity rule of §7 applies to relative motion only
-//!   ([`Event::PointerMotion`], e.g. under pointer lock, and
-//!   [`Event::TouchpadMotion`]).
+//!   ([`Event::PointerMotion`], e.g. under pointer lock).
 //! - Keyboard auto-repeat is not a key press: platforms report physical
 //!   presses only.
 //!
@@ -108,28 +108,6 @@ pub fn normalized_from_screen([x, y]: [f32; 2], [w, h]: [f32; 2]) -> [f32; 2] {
 /// *n* += (Δx · *s* / W, Δy · *s* / H), clamped to −1 … +1.
 pub fn apply_motion([nx, ny]: [f32; 2], [dx, dy]: [f32; 2], [w, h]: [f32; 2], s: f32) -> [f32; 2] {
     [clamp_unit(nx + dx * s / w), clamp_unit(ny + dy * s / h)]
-}
-
-/// Below this speed of a touchpad swipe (screen units per second) the
-/// cursor follows the finger one to one before the sensitivity rule (§7).
-/// Our design (#108).
-pub const TOUCHPAD_PRECISE_SPEED: f32 = 200.0;
-/// From this speed on a swipe moves the cursor [`TOUCHPAD_MAX_GAIN`] times
-/// as far.
-pub const TOUCHPAD_FAST_SPEED: f32 = 1200.0;
-pub const TOUCHPAD_MAX_GAIN: f32 = 2.5;
-
-/// The touchpad's acceleration (our design, #108): the gain on a swipe's
-/// motion at `speed` (the platform's smoothed speed of that swipe): 1 up
-/// to [`TOUCHPAD_PRECISE_SPEED`], precise when slow; rising linearly to
-/// [`TOUCHPAD_MAX_GAIN`] at [`TOUCHPAD_FAST_SPEED`], so a quick swipe
-/// crosses the screen; level beyond.
-pub fn touchpad_gain(speed: f32) -> f32 {
-    let t = (speed - TOUCHPAD_PRECISE_SPEED) / (TOUCHPAD_FAST_SPEED - TOUCHPAD_PRECISE_SPEED);
-    if t.is_nan() {
-        return 1.0;
-    }
-    1.0 + t.clamp(0.0, 1.0) * (TOUCHPAD_MAX_GAIN - 1.0)
 }
 
 /// The gamepad cursor's radial dead zone, as a fraction of full deflection:
@@ -726,6 +704,49 @@ impl TouchButton {
     }
 }
 
+/// The on-screen buttons wherever the game shows its cursor in the
+/// standard mobile mode (the user's design, #856): those of a gamepad
+/// driving the cursor ([`GamepadButton::cursor_control`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CursorButton {
+    /// The left mouse button at the cursor, as a gamepad's south: held, it
+    /// drags; a second press within [`DOUBLE_CLICK_MS`] double-clicks.
+    Click,
+    /// The right mouse button, as a gamepad's west.
+    RightClick,
+    /// A gamepad's east: Escape, and each screen's back.
+    Back,
+}
+
+impl CursorButton {
+    pub const ALL: [CursorButton; 3] = [
+        CursorButton::Click,
+        CursorButton::RightClick,
+        CursorButton::Back,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            CursorButton::Click => "click",
+            CursorButton::RightClick => "right_click",
+            CursorButton::Back => "back",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<CursorButton> {
+        CursorButton::ALL.into_iter().find(|b| b.name() == name)
+    }
+
+    /// The gamepad button it acts as.
+    pub fn pad(self) -> GamepadButton {
+        match self {
+            CursorButton::Click => GamepadButton::South,
+            CursorButton::RightClick => GamepadButton::West,
+            CursorButton::Back => GamepadButton::East,
+        }
+    }
+}
+
 /// What a platform reports. Screen positions are in the same units as the
 /// screen size given to [`Input::set_screen`], origin top-left.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -745,21 +766,18 @@ pub enum Event {
         pressed: bool,
         time: f64,
     },
-    /// Touchpad motion of the cursor (#108): a swipe's motion in screen
-    /// units at `speed` screen units per second (the platform's smoothed
-    /// speed of that swipe).
-    TouchpadMotion {
-        delta: [f32; 2],
-        speed: f32,
+    /// The on-screen stick while the game shows its cursor (#856): its
+    /// reach in stick radii (+x right, +y down; zero when let go), at most
+    /// 1 long. It moves the cursor as a gamepad's left stick does
+    /// ([`Input::pad_cursor_frame`]).
+    CursorStick {
+        value: [f32; 2],
     },
-    /// A touchpad gesture pressed or released a mouse button at the cursor
-    /// (#108) at `time` ms. The platform's recognizer decides a double
-    /// click (`double`, for a press): a drag's press never is one.
-    TouchpadButton {
-        button: MouseButton,
+    /// An on-screen cursor button pressed or released while the game shows
+    /// its cursor (#856), as the gamepad's ([`CursorButton`]).
+    CursorButton {
+        button: CursorButton,
         pressed: bool,
-        double: bool,
-        time: f64,
     },
     /// The touches down when the cursor appeared are dropped (#108): the
     /// left button they hold is released where the cursor is, their
@@ -931,7 +949,8 @@ enum Source {
     Keyboard,
     Mouse,
     Touch,
-    Touchpad,
+    /// The on-screen cursor buttons (#856).
+    CursorPad,
     Pad,
     Stick,
 }
@@ -988,6 +1007,10 @@ pub struct Input {
     pointer_unlocked: bool,
     /// The gamepad drives the game's cursor ([`Input::set_pad_cursor`]).
     pad_cursor: bool,
+    /// The on-screen stick's reach for the cursor ([`Event::CursorStick`]).
+    cursor_stick: [f32; 2],
+    /// The on-screen Back button holds the gamepad's east.
+    cursor_back: bool,
     /// The platform time of the latest [`Input::pad_cursor_frame`], ms: a
     /// gamepad's presses are timed by it for double clicks.
     pad_clock: Option<f64>,
@@ -1037,6 +1060,8 @@ impl Default for Input {
             sticks_released: [false; 2],
             pointer_unlocked: false,
             pad_cursor: false,
+            cursor_stick: [0.0; 2],
+            cursor_back: false,
             pad_clock: None,
             nudges: Default::default(),
             shoulders: Default::default(),
@@ -1311,6 +1336,8 @@ impl Input {
             self.pad_changes.push((button, false));
         }
         self.touch_stick = [0.0; 2];
+        self.cursor_stick = [0.0; 2];
+        self.cursor_back = false;
         self.sticks_released = [true; 2];
         self.looks_released = true;
     }
@@ -1377,26 +1404,36 @@ impl Input {
                 }
                 self.mouse_button(Source::Mouse, button, pressed, time);
             }
-            Event::TouchpadMotion { delta, speed } => {
-                let gain = touchpad_gain(speed);
-                let delta = delta.map(|d| if d.is_finite() { d * gain } else { 0.0 });
-                let to = apply_motion(self.cursor, delta, self.screen, self.sensitivity);
-                self.set_cursor(to);
+            Event::CursorStick { value } => {
+                let [x, y] = value.map(|v| if v.is_finite() { v } else { 0.0 });
+                let d = x.hypot(y);
+                self.cursor_stick = if d > 1.0 { [x / d, y / d] } else { [x, y] };
             }
-            Event::TouchpadButton {
-                button,
+            Event::CursorButton {
+                button: CursorButton::Back,
                 pressed,
-                double,
-                time: _,
             } => {
-                // The recognizer's double click, not the press times'.
-                self.last_press[button as usize] = None;
-                self.set(
-                    Source::Touchpad,
-                    Control::Mouse(button),
-                    pressed,
-                    double && pressed,
-                )
+                // The gamepad's east itself, so each screen's back is the
+                // gamepad's; a gamepad's own east held stays held.
+                if pressed != self.cursor_back {
+                    self.cursor_back = pressed;
+                    self.handle(Event::GamepadButton {
+                        button: GamepadButton::East,
+                        pressed,
+                    });
+                }
+            }
+            Event::CursorButton { button, pressed } => {
+                let Control::Mouse(b) = button.pad().cursor_control() else {
+                    return;
+                };
+                if !pressed {
+                    self.set(Source::CursorPad, Control::Mouse(b), false, false);
+                } else if self.pad_cursor {
+                    // Timed by the frames, as a gamepad's presses are.
+                    let time = self.pad_clock.unwrap_or(0.0);
+                    self.mouse_button(Source::CursorPad, b, true, time);
+                }
             }
             Event::TouchDropped => {
                 self.set(
@@ -1533,8 +1570,9 @@ impl Input {
     }
 
     /// The gamepad cursor's frame at platform time `time_ms`, before the
-    /// screens read the frame (our design, #835): the left stick moves the
-    /// cursor by [`pad_cursor_motion`], slowed over any of `targets` (the
+    /// screens read the frame (our design, #835): the left stick, or the
+    /// on-screen stick where it is pushed further ([`Event::CursorStick`],
+    /// #856), moves the cursor by [`pad_cursor_motion`], slowed over any of `targets` (the
     /// clickable elements, UI rectangles x, y, width, height); each d-pad
     /// press nudges it [`PAD_NUDGE`] units, repeating while held; the
     /// shoulders are the wheel (left up, right down), repeating while
@@ -1557,7 +1595,19 @@ impl Input {
             return;
         }
         let [mut x, mut y] = self.cursor_ui();
-        let stick = [self.axis(GamepadAxis::LeftX), self.axis(GamepadAxis::LeftY)];
+        let pad = [self.axis(GamepadAxis::LeftX), self.axis(GamepadAxis::LeftY)];
+        let length = |[x, y]: [f32; 2]| {
+            if x.is_finite() && y.is_finite() {
+                x.hypot(y)
+            } else {
+                0.0
+            }
+        };
+        let stick = if length(self.cursor_stick) > length(pad) {
+            self.cursor_stick
+        } else {
+            pad
+        };
         let [dx, dy] = pad_cursor_motion(stick, dt, over_target([x, y], targets));
         x += dx;
         y += dy;
@@ -1792,23 +1842,6 @@ mod tests {
     }
 
     #[test]
-    fn the_touchpad_curve_is_one_to_one_when_slow_and_rises_when_fast() {
-        assert_eq!(touchpad_gain(0.0), 1.0);
-        assert_eq!(touchpad_gain(TOUCHPAD_PRECISE_SPEED), 1.0);
-        assert!((touchpad_gain(700.0) - 1.75).abs() < 1e-6);
-        assert_eq!(touchpad_gain(TOUCHPAD_FAST_SPEED), TOUCHPAD_MAX_GAIN);
-        assert_eq!(touchpad_gain(1e9), TOUCHPAD_MAX_GAIN);
-        assert_eq!(touchpad_gain(f32::NAN), 1.0);
-        assert_eq!(touchpad_gain(-5.0), 1.0);
-        let mut last = 1.0;
-        for speed in (0..3000).step_by(10) {
-            let g = touchpad_gain(speed as f32);
-            assert!(g >= last && (1.0..=TOUCHPAD_MAX_GAIN).contains(&g));
-            last = g;
-        }
-    }
-
-    #[test]
     fn the_pad_cursor_curve_has_a_dead_zone_and_is_slow_near_the_centre() {
         assert_eq!(pad_cursor_speed(0.0), 0.0);
         assert_eq!(pad_cursor_speed(PAD_CURSOR_DEAD_ZONE), 0.0);
@@ -2001,49 +2034,52 @@ mod tests {
     }
 
     #[test]
-    fn touchpad_motion_follows_section_7_after_the_curve_and_clicks_at_the_cursor() {
+    fn the_on_screen_stick_and_buttons_drive_the_cursor_as_a_gamepad_does() {
         let mut input = Input::new();
         input.set_screen(SCREEN);
-        // Slow: as relative mouse motion (§7: Δ · s / W).
-        input.handle(Event::TouchpadMotion {
-            delta: [192.0, 108.0],
-            speed: 100.0,
+        input.set_pad_cursor(true);
+        input.pad_cursor_frame(0.0, &[], true);
+        let start = input.cursor_ui();
+        // Past its rim it reaches no further than a gamepad's full tilt.
+        input.handle(Event::CursorStick { value: [3.0, 0.0] });
+        input.pad_cursor_frame(100.0, &[], true);
+        let moved = input.cursor_ui()[0] - start[0];
+        assert!((moved - PAD_CURSOR_MAX_SPEED * 0.1).abs() < 0.5, "{moved}");
+        // The same curve and friction as the gamepad's left stick.
+        let target = [0.0, 0.0, UI_WIDTH, UI_HEIGHT];
+        input.handle(Event::CursorStick { value: [0.0, 0.6] });
+        let before = input.cursor_ui();
+        input.pad_cursor_frame(200.0, &[target], true);
+        let [_, dy] = pad_cursor_motion([0.0, 0.6], 0.1, true);
+        assert!((input.cursor_ui()[1] - before[1] - dy).abs() < 0.01);
+        // Within the dead zone, or let go, nothing.
+        input.handle(Event::CursorStick { value: [0.1, 0.1] });
+        let at = input.cursor_ui();
+        input.pad_cursor_frame(300.0, &[], true);
+        assert_eq!(input.cursor_ui(), at);
+        input.handle(Event::CursorStick {
+            value: [f32::NAN, 0.0],
         });
-        assert_eq!(input.cursor(), [0.15, 0.15]);
-        // Fast: the same swipe moves 2.5 times as far.
-        input.handle(Event::TouchpadMotion {
-            delta: [-192.0, -108.0],
-            speed: 5000.0,
-        });
-        assert!((input.cursor()[0] - (0.15 - 0.375)).abs() < 1e-6);
-        // The sensitivity applies; the screen clamps.
-        input.set_sensitivity(1.0);
-        input.handle(Event::TouchpadMotion {
-            delta: [1e6, f32::NAN],
-            speed: 100.0,
-        });
-        assert_eq!(input.cursor()[0], 1.0);
+        input.pad_cursor_frame(400.0, &[], true);
+        assert_eq!(input.cursor_ui(), at);
         input.end_frame();
-        let at = input.cursor();
-        // A click at the cursor: the left button, double as the recognizer
-        // says, whatever the times (a drag's quick press is single).
-        for (pressed, double, time) in [
-            (true, false, 0.0),
-            (false, false, 0.0),
-            (true, true, 900.0),
-            (false, true, 900.0),
-            (true, false, 950.0),
-            (false, false, 950.0),
-        ] {
-            input.handle(Event::TouchpadButton {
-                button: MouseButton::Left,
-                pressed,
-                double,
-                time,
-            });
-        }
-        assert_eq!(input.cursor(), at);
+        // Click is the left button at the cursor, a second press within the
+        // double-click time a double click, timed by the frames.
         let left = Control::Mouse(MouseButton::Left);
+        let click = |input: &mut Input, pressed| {
+            input.handle(Event::CursorButton {
+                button: CursorButton::Click,
+                pressed,
+            })
+        };
+        click(&mut input, true);
+        click(&mut input, false);
+        input.pad_cursor_frame(500.0, &[], true);
+        click(&mut input, true);
+        click(&mut input, false);
+        input.pad_cursor_frame(900.0, &[], true);
+        click(&mut input, true);
+        assert_eq!(input.cursor_ui(), at);
         assert_eq!(
             input.actions(),
             [
@@ -2055,43 +2091,56 @@ mod tests {
                 },
                 Action::Release { control: left },
                 press(left),
-                Action::Release { control: left },
             ]
         );
+        // Held, it drags: the cursor moves with the button down.
+        input.handle(Event::CursorStick { value: [1.0, 0.0] });
+        input.pad_cursor_frame(1000.0, &[], true);
+        assert!(input.is_held(left) && input.cursor_ui()[0] > at[0]);
+        click(&mut input, false);
+        assert!(!input.is_held(left));
         // Not the mouse's own: the level's controls don't see it.
         assert!(input.device_changes().is_empty());
-        input.handle(Event::TouchpadButton {
-            button: MouseButton::Right,
+        input.end_frame();
+        // Right-click is the right button.
+        input.handle(Event::CursorButton {
+            button: CursorButton::RightClick,
             pressed: true,
-            double: false,
-            time: 500.0,
         });
+        assert!(input.is_held(Control::Mouse(MouseButton::Right)));
         input.release_all();
         assert!(input.held().is_empty());
-        // Held apart from direct touch: dropping the touches down when the
-        // cursor appeared releases theirs only, where the cursor is.
-        input.handle(Event::Touch {
-            at: [0.0, 0.0],
-            phase: TouchPhase::Start,
-            time: 1000.0,
-        });
-        input.handle(Event::TouchpadButton {
-            button: MouseButton::Left,
-            pressed: true,
-            double: false,
-            time: 1000.0,
-        });
-        let at = input.cursor();
-        input.handle(Event::TouchDropped);
-        assert_eq!(input.cursor(), at);
-        assert_eq!(input.held(), [left], "the touchpad's press kept");
-        input.handle(Event::TouchpadButton {
-            button: MouseButton::Left,
-            pressed: false,
-            double: false,
-            time: 1100.0,
-        });
+        input.end_frame();
+        // Back is the gamepad's east: Escape, and east among the gamepad's
+        // presses, which the screens read as their back.
+        for pressed in [true, false] {
+            input.handle(Event::CursorButton {
+                button: CursorButton::Back,
+                pressed,
+            });
+        }
+        assert_eq!(
+            input.pad_changes(),
+            [(GamepadButton::East, true), (GamepadButton::East, false)]
+        );
+        let escape = Control::Key(Key::Escape);
+        assert_eq!(
+            input.actions(),
+            [press(escape), Action::Release { control: escape }]
+        );
+        input.end_frame();
+        // Off (the on-screen keyboard takes the gamepad), the stick and the
+        // buttons do nothing; a release still releases.
+        click(&mut input, true);
+        input.set_pad_cursor(false);
+        click(&mut input, false);
         assert!(input.held().is_empty());
+        click(&mut input, true);
+        assert!(input.held().is_empty());
+        input.handle(Event::CursorStick { value: [1.0, 0.0] });
+        let at = input.cursor_ui();
+        input.pad_cursor_frame(1100.0, &[], true);
+        assert_eq!(input.cursor_ui(), at);
     }
 
     #[test]
@@ -2176,7 +2225,7 @@ mod tests {
             phase: TouchPhase::End,
             time: 10.0,
         });
-        assert!(input.cursor_drawn(), "the touchpad's cursor shows");
+        assert!(input.cursor_drawn(), "drawn outside the direct mode");
     }
 
     #[test]

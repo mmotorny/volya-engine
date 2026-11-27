@@ -10,9 +10,9 @@
 //! [`menu`]) acting on the player character's inventory, and the sounds (7).
 //!
 //! **Input.** A mouse screen (6.2) drawing the game's cursor. Touch reaches
-//! it through the touchpad of #108 wherever the cursor shows: swipes move
-//! the cursor, a tap clicks, a long press is a right click (the context
-//! menu), double-tap-and-hold drags; nothing here reads touches directly.
+//! it through the standard touch controls wherever the cursor shows (#856):
+//! the stick moves the cursor, Click clicks and held drags, Right-click
+//! opens the context menu; nothing here reads touches directly.
 //! A gamepad is a mouse here (#835, [`Input::set_pad_cursor`]): its left
 //! stick moves the cursor, south (A / cross) is the left button, held for
 //! drags, west (X / square) the right one; east (B / circle) is the key

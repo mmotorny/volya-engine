@@ -5,7 +5,7 @@
 // without the game fails, the archives they read are imported from the real
 // installer, the logo sequence is skipped with synthesized Escape presses,
 // and the menu is driven with synthesized keyboard, mouse and touch (the
-// touchpad) input.
+// touch controls' stick and cursor buttons) input.
 
 import { assert, assertEqual } from "./harness.js";
 import {
@@ -19,6 +19,7 @@ import {
   installer,
   key,
   needsGame,
+  nextTouch,
   noteHeap,
   pointAt,
   pointer,
@@ -28,8 +29,8 @@ import {
   row,
   sleep,
   state,
-  swipeTo,
-  tapAt,
+  stickTo,
+  tapClick,
   until,
 } from "./game.js";
 
@@ -212,26 +213,35 @@ export const tests = {
     assertEqual((await state()).menu.activations.length, 1, "activations");
   },
 
-  "touch is a touchpad: a tap on an item clicks at the cursor, not there; a swipe moves the cursor, a tap anywhere clicks under it": async () => {
+  "touch: the controls' stick moves the cursor, Click clicks under it, Menu goes back; a tap on an item clicks nothing": async () => {
     needsGame();
     // The cursor away from the items.
-    await swipeTo([300, 650]);
+    await stickTo([300, 650]);
     let s = await state();
     const [activations, selected] = [s.menu.activations.length, s.menu.selected];
     const ui = (await volya.call("input_state")).ui;
-    await tapAt(centreOfRow(4));
+    // A tap on item 4 clicks nothing, nor moves the cursor.
+    const t = { pointerType: "touch", pointerId: nextTouch(), isPrimary: true, button: 0 };
+    pointer("pointerdown", client(...centreOfRow(4)), { ...t, buttons: 1 });
+    pointer("pointerup", client(...centreOfRow(4)), { ...t, buttons: 0 });
     await sleep(300);
     s = await state();
     assertEqual([s.menu.activations.length, s.menu.selected], [activations, selected], "a tap on item 4 clicked it");
     assertEqual((await volya.call("input_state")).ui, ui, "the tap moved the cursor");
-    // A swipe onto item 4 selects it (hover); a tap elsewhere activates it.
-    await swipeTo(centreOfRow(4));
+    // The stick onto New game (item 0) selects it (hover); Click
+    // activates it: the difficulty page; Menu (Escape) returns.
+    await stickTo(centreOfRow(0));
+    await until((s) => s.menu.selected === 0 && !s.menu.moving, "item 0 at rest", 2000);
+    await tapClick();
+    s = await until((s) => s.menu.list === "menu_new_game", "Click to open the difficulty page");
+    await tapClick("menu");
+    s = await until((s) => s.menu.list === "menu_main", "Menu to return to the main page");
+    // The stick onto item 4, Click: activated.
+    await stickTo(centreOfRow(4));
     await until((s) => s.menu.selected === 4 && !s.menu.moving, "item 4 at rest", 2000);
-    await tapAt([150, 150]);
-    s = await until((s) => s.menu.activations.length === activations + 1, "an activation");
-    assertEqual(s.menu.activations.at(-1).item, "btn_credits", "activated");
+    await tapClick();
+    await until((s) => s.menu.activations.at(-1)?.item === "btn_credits", "Click to activate item 4");
   },
-
   "Enter on New game opens the difficulty page; Escape returns": async () => {
     needsGame();
     await pointAt(0);

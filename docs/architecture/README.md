@@ -43,7 +43,7 @@ Dependencies point one way: `volya-engine-web` → `volya-engine` (and `formats`
 - [audio.md](audio.md): the workers' split, the shared-memory transport, decoding, positional playback, the level's sounds, footsteps.
 - [simulation.md](simulation.md): the offline simulation, collision and movement, the character, particles, zones, lights, torches.
 - [scripts.md](scripts.md): the LuaJIT runtime, its build and the script loader.
-- [input.md](input.md): input forwarding, the touchpad, the level's controls, text entry, full screen.
+- [input.md](input.md): input forwarding, the cursor's touch controls, the level's controls, text entry, full screen.
 - [screens.md](screens.md): fatal errors, settings, the menu during a game, saved games, the inventory screen, the PDA window.
 - [diagnostics.md](diagnostics.md): the diagnostic log.
 - [memory.md](memory.md): memory by lifetime and owner, the one-heap design, GPU ownership and release, the migration.

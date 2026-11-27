@@ -2390,8 +2390,8 @@ impl App {
 
     /// Whether the frame shows the game's mouse cursor: the title menu and
     /// its screens, before a game and during one, the inventory screen and
-    /// the PDA window (their scenes draw it). Platforms turn touch into a touchpad for the
-    /// cursor then (a Volya Engine addition, decided by the user, #108).
+    /// the PDA window (their scenes draw it). Platforms' touch controls
+    /// drive the cursor then (the user's designs, #856, #807).
     pub fn cursor_shown(&self) -> bool {
         matches!(
             &self.phase,
@@ -2776,7 +2776,7 @@ mod tests {
         );
         let scene = app.scene(&tree, Resolution::new(1024, 768)).unwrap();
         assert!(scene.first("background").is_some());
-        // The menu draws its cursor: touch is a touchpad (#108).
+        // The menu draws its cursor: touch's stick drives it (#856).
         assert!(app.cursor_shown() && scene.first("cursor").is_some());
         // Touches clicking where they land (#807): the cursor isn't drawn;
         // a mouse moving shows it again.
@@ -3630,7 +3630,7 @@ mod tests {
         // inventory-screen.md 1.3: the cursor shows, the page's touch
         // controls and pointer lock go (our design), the game runs on.
         assert!(app.level_controls().is_none());
-        // Touch is a touchpad for its cursor (#108).
+        // Touch's stick drives its cursor (#856).
         assert!(app.cursor_shown());
         // Keys still reach the character: the page forwards Control.
         assert!(app.character_takes_keys());

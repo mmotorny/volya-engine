@@ -669,8 +669,8 @@ pub fn console_opens_over_menu() -> bool {
     engine::console_opens_over_menu()
 }
 
-/// Whether the game shows its mouse cursor: the page's touch is a
-/// touchpad then, elsewhere direct (#108).
+/// Whether the game shows its mouse cursor: the page's touch drives the
+/// cursor then (the on-screen stick, #856, or direct clicks, #807).
 #[wasm_bindgen]
 pub fn cursor_shown() -> bool {
     engine::cursor_shown()

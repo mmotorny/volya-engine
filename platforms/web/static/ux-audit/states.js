@@ -77,6 +77,22 @@ export const SECTIONS = [
       { id: "home-finish", name: "Update downloaded", game: imported, updates: { status: "ready" } },
     ],
   },
+  // The standard mode on the screens with the game's cursor (menus, boxes,
+  // save and load, the inventory, the PDA; #856): the level's stick moves
+  // the cursor, Click and Right-click are its buttons, Menu goes back. The
+  // game draws the screen; the board shows a stand-in.
+  {
+    title: "Screens with the game's cursor",
+    note: "A stand-in for the screen and the cursor the game draws. Touch controls: approximations; the app draws them from the textures in the game files.",
+    states: [
+      { id: "cursor-menu", name: "Main menu: the stick, Click, Right-click, Menu; Console beside Menu", cursorScreen: { what: "The game's main menu", console: true }, devices: TOUCH },
+      { id: "cursor-idle", name: "Idle", cursorScreen: { what: "The game's screen" }, devices: TOUCH },
+      { id: "cursor-moving", name: "Moving the cursor with the stick", cursorScreen: { what: "The game's screen", stick: [0.6, -0.5] }, devices: TOUCH },
+      { id: "cursor-click", name: "Click held (a drag)", cursorScreen: { what: "The game's inventory", stick: [0.7, 0.2], down: "click" }, devices: TOUCH },
+      { id: "cursor-right-click", name: "Right-click held", cursorScreen: { what: "The game's inventory", down: "right-click" }, devices: TOUCH },
+      { id: "cursor-pda", name: "PDA open: PDA too, closing it", cursorScreen: { what: "The game's PDA", pda: true }, devices: TOUCH },
+    ],
+  },
   // In the level, over a plain backdrop (the board can't show the game's
   // own frames): on desktop the full screen offer, on touch devices the
   // touch controls (approximations of the game's textures: the board has no
@@ -92,12 +108,7 @@ export const SECTIONS = [
       { id: "level-touch-jump", name: "Jump held", level: { down: "jump" }, devices: TOUCH },
       { id: "level-touch-inventory", name: "Inventory held", level: { down: "inventory" }, devices: TOUCH },
       { id: "level-touch-pda", name: "PDA held", level: { down: "pda" }, devices: TOUCH },
-      {
-        id: "level-touch-pda-open",
-        name: "PDA open (the game draws it): PDA alone, closing it; elsewhere the touchpad",
-        level: { level: false, pda: true },
-        devices: TOUCH,
-      },
+
       {
         id: "level-touch-past-rim",
         name: "Past the rim: sprinting, the lock target shown",
@@ -162,6 +173,12 @@ export const SECTIONS = [
         devices: TOUCH,
       },
       { id: "level-experimental-jump", name: "Jump held", level: { mode: "experimental", down: "jump" }, devices: TOUCH },
+      {
+        id: "level-touch-pda-open",
+        name: "PDA open (the game draws it): PDA alone, closing it; elsewhere direct clicks",
+        level: { mode: "experimental", level: false, pda: true },
+        devices: TOUCH,
+      },
     ],
   },
   // The ergonomic mode on the screens with the game's cursor (menus, the

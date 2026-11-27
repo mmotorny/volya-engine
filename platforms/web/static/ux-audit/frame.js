@@ -199,6 +199,33 @@ if (state.level) {
     if (fade) touch.fadeNow();
     if (down) box.querySelector(`.touch-button.${down}`).classList.add("down");
   }
+} else if (state.cursorScreen) {
+  // A screen with the game's cursor in the standard mode (#856): a
+  // stand-in for the game's picture (turned as the canvas is on upright
+  // phones) under the cursor's controls, the stick held where the state
+  // says, a button held; over the main menu its Console button beside
+  // Menu.
+  document.documentElement.dataset.uxLevel = "";
+  if (device.height > device.width) document.documentElement.dataset.uxTurned = "";
+  document.querySelector("main").hidden = true;
+  const { what, stick, down, pda, console: menu } = state.cursorScreen;
+  document
+    .getElementById("screen")
+    .insertAdjacentHTML("beforeend", `<div class="ux-game"><div class="ux-stand-in ux-menu">${what} (the game draws it and its cursor)</div></div>`);
+  const touch = createTouchControls(() => {}, { touch: true, fade: false });
+  document.body.append(touch.element);
+  touch.update({ level: false, pda: Boolean(pda) });
+  touch.setCursor({ shown: true, capture: true });
+  if (menu) {
+    const consoleTouch = createConsoleTouch(() => {}, { press() {}, type() {}, paste() {} }, { touch: true });
+    document.body.append(...consoleTouch.elements);
+    consoleTouch.setCapture(true);
+    consoleTouch.update({ open: false, menu: true });
+  }
+  const box = touch.element;
+  const landscape = [Math.max(box.clientWidth, box.clientHeight), Math.min(box.clientWidth, box.clientHeight)];
+  if (stick) touch.showStick([140, landscape[1] - 150], stick);
+  if (down) box.querySelector(`.touch-button.${down}`).classList.add("down");
 } else if (state.screenZoom) {
   // A screen with the game's cursor in the ergonomic mode (#807): a
   // stand-in for the game's picture, turned as the canvas is on upright

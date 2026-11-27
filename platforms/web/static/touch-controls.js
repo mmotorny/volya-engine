@@ -32,14 +32,25 @@
 // - PDA left of Inventory opens the PDA as the key bound to `active_jobs`
 //   does (#730). The PDA has no close button of its own (the original
 //   closes it by key), so while it is open over the level this button
-//   alone shows, at its place, and closes it the same way; touches
-//   elsewhere reach the touchpad (touchpad.js);
+//   shows at its place and closes it the same way;
 // - Torch and Night vision (toggles, shown on) in a row left of PDA along
 //   the top edge (#363), clear of the thumbs' zones too, give the
 //   `torch` and `night_vision` commands. Each shows only while its command
 //   would do something (the engine says): Torch while a torch is attached,
 //   Night vision while that torch's night vision is on or the worn outfit
 //   has it, so neither sits idle for most of the game.
+//
+// Wherever the game shows its cursor (menus, boxes, save and load, the
+// inventory, the PDA) the standard mode shows the cursor's controls
+// instead (the user's design, #856; setCursor): the same stick, bottom
+// left, moves the game's cursor as a gamepad's left stick does (the
+// engine's pad_cursor_frame: its dead zone, curve and friction), without
+// the sprint; Click at Jump's place is the left button (held, it drags; a
+// second tap within the double-click time double-clicks) and Right-click
+// at Crouch's place the right; Menu is the gamepad's east, each screen's
+// back; PDA stays over the open PDA. Touches elsewhere pass to input.js
+// (two fingers there are the wheel). The ergonomic mode shows none of
+// them there (direct-touch.js).
 //
 // They look like instruments of the game's HUD, drawn from its own UI
 // textures (touch-art.js; design A of #105). No text on the controls: names
@@ -56,7 +67,7 @@ export const TOUCH_MODES = ["standard", "experimental"];
 const RADIUS = 56;
 /** Sizes in CSS pixels (match style.css): the buttons, the knob, the lock
  * target, and the segmented ring around the stick. */
-const SIZE = { menu: 44, console: 44, inventory: 44, pda: 44, torch: 44, nightVision: 44, jump: 80, crouch: 64 };
+const SIZE = { menu: 44, console: 44, inventory: 44, pda: 44, torch: 44, nightVision: 44, jump: 80, crouch: 64, click: 80, rightClick: 64 };
 const KNOB = 48;
 const TARGET = 44;
 const SEGMENTS = 2 * RADIUS + 6;
@@ -155,12 +166,18 @@ const onTarget = ([x, y], centre) => Math.hypot(x - centre[0], y - centre[1]) <=
  * `nightVision` on or off, or null to hide their buttons), and
  * `trip(at)` the destination's place in the picture (from its centre, in
  * half its height) or null. `setMode(mode)` picks standard or
- * experimental (TOUCH_MODES). `touch` says the device has touch without
+ * experimental (TOUCH_MODES). `setCursor({ shown, capture, console })`
+ * follows whether the game shows its cursor, the engine owns the screen
+ * and the console is open: the cursor's controls show where all but the
+ * last hold (standard mode). `touch` says the device has touch without
  * waiting for one, and `fade: false` keeps the controls from fading when
  * idle (UX audit page). `onConsole()` runs where a tap on Console may
- * raise the device's keyboard (raiseOnTap, console-touch.js).
+ * raise the device's keyboard (raiseOnTap, console-touch.js), `onClick()`
+ * in the handler of Click's lift, where the page may focus its text entry
+ * for the save screen's name field (text-entry.js: a device's keyboard
+ * rises only in a user gesture).
  */
-export function createTouchControls(send, { call = null, touch = false, fade = true, onConsole = () => {} } = {}) {
+export function createTouchControls(send, { call = null, touch = false, fade = true, onConsole = () => {}, onClick = () => {} } = {}) {
   const root = element("div", "touch-controls");
   root.id = "touch-controls";
   root.hidden = true;
@@ -217,7 +234,17 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
   }
   const actions = element("div", "touch-actions");
   actions.append(crouch, jump);
-  root.append(move, look, destination, menu, consoleButton, inventory, pda, torch, nightVision, actions);
+  // The cursor's buttons (#856): Click at Jump's place, Right-click at
+  // Crouch's.
+  const click = button("click", "Click");
+  const rightClick = button("right-click", "Right-click");
+  rightClick.dataset.button = "right_click";
+  const cursorActions = element("div", "touch-cursor-actions");
+  cursorActions.append(rightClick, click);
+  root.append(move, look, destination, menu, consoleButton, inventory, pda, torch, nightVision, actions, cursorActions);
+  // What the controls show: "hidden", "level", "pda" (the PDA button over
+  // the open PDA) or "cursor" (the cursor's controls); set by render.
+  let view = "hidden";
 
   // Every touch or pen contact on the controls stays with them (a pen
   // can't use pointer lock); a mouse passes through to input.js (pointer
@@ -257,8 +284,9 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
   };
   root.addEventListener("pointerdown", wake, { capture: true });
 
-  // The move stick.
-  let stick = null; // { id, origin, centre, value, past }
+  // The move stick; on the screens with the cursor it moves the cursor
+  // (`cursor`), reaching to its rim, with no sprint.
+  let stick = null; // { id, origin, centre, value, past, cursor }
   let sprinting = false;
   let letGo = null; // { origin, centre } of the latest let-go, for the lock
   /**
@@ -343,8 +371,13 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
   /** The stick's touch ends: let go where it is, or, `cancelled` (by the
    * system or the controls hiding), without acting there, so no lock. */
   const endStick = (cancelled, value) => {
-    const { origin, centre, past } = stick;
+    const { origin, centre, past, cursor } = stick;
     stick = null;
+    if (cursor) {
+      send(["cursor_stick", 0, 0]);
+      restStick();
+      return;
+    }
     if (cancelled) {
       send(["stick_cancel"]);
       letGo = null;
@@ -365,15 +398,29 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
       if (stick) return;
       capture(event);
       const origin = local(root, event);
+      const cursor = view === "cursor";
       const centre = aim(origin);
-      stick = { id: event.pointerId, origin, centre, value: [0, 0], past: false };
+      stick = { id: event.pointerId, origin, centre, value: [0, 0], past: false, cursor };
       showHeld(origin, centre, [0, 0], false);
+      if (cursor) {
+        send(["cursor_stick", 0, 0]);
+        return;
+      }
       send(["stick_lock", ...centre]);
       send(["stick", 0, 0]);
     },
     pointermove: (event) => {
       if (stick?.id !== event.pointerId) return;
-      const value = reachOf(event);
+      let value = reachOf(event);
+      if (stick.cursor) {
+        // To the rim: a gamepad stick's full tilt.
+        const length = Math.hypot(...value);
+        if (length > 1) value = [value[0] / length, value[1] / length];
+        stick.value = value;
+        showHeld(stick.origin, stick.centre, value, false);
+        send(["cursor_stick", ...value]);
+        return;
+      }
       stick.value = value;
       stick.past = pastRim(value, stick.centre, stick.past);
       showHeld(stick.origin, stick.centre, value, stick.past);
@@ -459,22 +506,31 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
   // on release, a drag aside stands up and looks, a swipe down only goes
   // to the low crouch, so no swipe stands up for a moment first; a
   // cancelled touch does nothing.
+  //
+  // On the screens with the cursor (#856) Menu, Click and Right-click are
+  // the cursor's buttons (["cursor_button", name, pressed]): Menu the
+  // gamepad's east there. A button released sends what it pressed.
   let crouched = false;
   const releases = new Map(); // button → its release
-  for (const b of [menu, inventory, pda, torch, nightVision, jump, crouch]) {
+  const CURSOR_BUTTONS = { menu: "back", click: "click", right_click: "right_click" };
+  for (const b of [menu, inventory, pda, torch, nightVision, jump, crouch, click, rightClick]) {
     const held = new Map(); // pointerId → { start, waiting }
     const drags = b === jump || b === crouch;
-    let pressed = false; // the press sent, its release not yet
+    let pressed = null; // the message pressed, its release not yet sent
+    const message = () => {
+      const name = b.dataset.button;
+      return view === "cursor" && CURSOR_BUTTONS[name] ? ["cursor_button", CURSOR_BUTTONS[name]] : ["tbutton", name];
+    };
     const press = () => {
       if (pressed) return;
-      pressed = true;
-      send(["tbutton", b.dataset.button, true]);
+      pressed = message();
+      send([...pressed, true]);
     };
     const lift = () => {
       b.classList.remove("down");
       if (!pressed) return;
-      pressed = false;
-      send(["tbutton", b.dataset.button, false]);
+      send([...pressed, false]);
+      pressed = null;
     };
     releases.set(b, () => {
       for (const id of held.keys()) {
@@ -517,7 +573,11 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
         touch.waiting = false;
         startLook(event, at, "drag");
       },
-      pointerup: (event) => release(event, false),
+      pointerup: (event) => {
+        const clicked = b === click && pressed?.[0] === "cursor_button" && held.has(event.pointerId);
+        release(event, false);
+        if (clicked) onClick();
+      },
       pointercancel: (event) => release(event, true),
     });
   }
@@ -545,6 +605,7 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
   let art = approximateArt();
   const paint = () => {
     const { teal, tealHi, grey, pale } = art;
+    const k = devicePixelRatio || 1;
     for (const [b, size] of [
       [menu, SIZE.menu],
       [consoleButton, SIZE.console],
@@ -554,10 +615,17 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
       [nightVision, SIZE.nightVision],
       [jump, SIZE.jump],
       [crouch, SIZE.crouch],
+      [click, SIZE.click],
+      [rightClick, SIZE.rightClick],
     ]) {
       paintDisc(b.querySelector(".touch-disc"), art, size);
     }
-    const k = devicePixelRatio || 1;
+    for (const [b, name, size] of [
+      [click, "click", SIZE.click * 0.5],
+      [rightClick, "right_click", SIZE.rightClick * 0.56],
+    ]) {
+      paintGlyph(b.querySelector(".touch-glyph"), vectorGlyph(name, Math.round(size * k)), size, size, teal);
+    }
     const menuGlyph = SIZE.menu * 0.5;
     paintGlyph(menu.querySelector(".touch-glyph"), vectorGlyph("menu", Math.round(menuGlyph * k)), menuGlyph, menuGlyph, grey);
     const promptGlyph = SIZE.console * 0.56;
@@ -630,6 +698,9 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
   let touched = touch || matchMedia("(pointer: coarse)").matches;
   let live = false;
   let pdaOpen = false;
+  // The game shows its cursor, the engine owns the screen, the console is
+  // open (setCursor).
+  let cursor = { shown: false, capture: false, console: false };
   /**
    * Nothing stays held when the controls go away (or change), and nothing
    * acts: a held stick is cancelled, not let go, so it can't lock; a finger
@@ -645,17 +716,26 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
     consoleButton.classList.remove("down");
   };
   const render = () => {
-    // Over the open PDA, its button alone (style.css).
+    // The cursor's controls (standard mode), or over the open PDA its
+    // button alone (style.css); the PDA button shows over the open PDA
+    // either way.
     const overPda = pdaOpen && !live;
-    const shown = (live || overPda) && touched;
-    const mode = root.classList.contains("pda-open");
-    if (root.hidden === !shown && mode === overPda) return;
-    root.hidden = !shown;
-    root.classList.toggle("pda-open", overPda);
-    if (shown && !overPda) {
+    const cursorControls = !live && mode === "standard" && cursor.shown && cursor.capture && !cursor.console;
+    const next = !touched ? "hidden" : live ? "level" : cursorControls ? "cursor" : overPda ? "pda" : "hidden";
+    const pdaShown = overPda && next !== "hidden";
+    if (next === view && root.classList.contains("pda-open") === pdaShown) return;
+    // Nothing held carries from one view to another, but the PDA button
+    // that opened the PDA stays held while it shows over it.
+    if (next !== view) letGoAll(pdaShown);
+    view = next;
+    root.hidden = view === "hidden";
+    root.classList.toggle("pda-open", pdaShown);
+    root.classList.toggle("cursor", view === "cursor");
+    // For tests: what the controls show.
+    root.dataset.view = view;
+    if (view === "level" || view === "cursor") {
       wake();
     } else {
-      letGoAll(shown);
       clearTimeout(idleTimer);
       root.classList.remove("idle");
     }
@@ -666,14 +746,14 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
   // them again would be a fresh press).
   const resend = () => {
     if (root.hidden) return;
-    if (stick?.value) send(["stick", ...stick.value]);
+    if (stick?.value) send([stick.cursor ? "cursor_stick" : "stick", ...stick.value]);
   };
   addEventListener("blur", resend);
   document.addEventListener("pointerlockchange", resend);
   addEventListener(
     "pointerdown",
     (event) => {
-      if (event.pointerType !== "touch" || touched || !(live || pdaOpen)) return;
+      if (event.pointerType !== "touch" || touched || !(live || pdaOpen || cursor.shown)) return;
       touched = true;
       render();
     },
@@ -717,6 +797,14 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
       mode = next;
       root.dataset.mode = mode;
       if (mode === "standard") destination.hidden = true;
+      render();
+    },
+    /** Whether the game shows its cursor (`shown`), the engine owns the
+     * screen (`capture`) and the console is open (`console`): any left
+     * out keeps its value. */
+    setCursor(state) {
+      cursor = { ...cursor, ...state };
+      render();
     },
     /** The stick held at `origin` (CSS pixels) with `value` (stick radii,
      * or "target" for the lock target's place; UX audit page). */

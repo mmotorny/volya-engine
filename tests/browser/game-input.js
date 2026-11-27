@@ -4,8 +4,8 @@
 // Playing a level from the kept import, with every input path: the desktop's
 // full screen offer and Keyboard Lock, the keyboard (walk, jump, torch, the
 // console and its clipboard), the touch controls and zoom guard, the
-// inventory screen (pointer lock, mouse, touch, touchpad), the PDA window
-// (its keys, mouse, the touch PDA button, touchpad), touch's standard
+// inventory screen (pointer lock, mouse, touch), the PDA window (its keys,
+// mouse, the touch PDA button, the touch controls' stick and Click), touch's standard
 // controls (the stick and its sprint lock, the look curve) and
 // experimental ones (tap-to-move, direct manipulation look), Jump, Crouch
 // and Menu, and a gamepad.
@@ -32,11 +32,11 @@ import {
   render,
   sleep,
   state,
-  swipe,
-  swipeTo,
-  tapAt,
+  stickTo,
+  tapClick,
+  cursorButton,
+  cursorControls,
   toClient,
-  touchId,
   turned,
   until,
   view,
@@ -413,7 +413,7 @@ export const tests = {
     assertEqual(visualViewport.scale, 1, "visualViewport.scale");
   },
 
-  "the inventory: I opens it over the running level (a held W walks on, Control crouches under it), the outfit dragged to the backpack, bread eaten, the touch button opens it, the touchpad selects, opens the menu and drags, Escape and the exit button close it": async () => {
+  "the inventory: I opens it over the running level (a held W walks on, Control crouches under it), the outfit dragged to the backpack, bread eaten, the touch button opens it, the touch controls' stick and Click select, Right-click opens the menu, Click held drags, Escape and the exit button close it": async () => {
     needsGame();
     const controls = document.getElementById("touch-controls");
     const centreOf4 = ([x, y, w, h], within) => {
@@ -571,41 +571,45 @@ export const tests = {
       );
     }
     s = await until((s) => s.inventory, "the touch button to open the screen");
-    for (let i = 0; i < 50 && !controls.hidden; i++) await sleep(20);
-    assert(controls.hidden, "the touch controls hide under the screen");
-    // Touch is the touchpad here (#108): the cursor swiped onto the outfit
-    // in the backpack, a tap selects it, a long press opens its menu, whose
-    // first row («одеть костюм») a tap at the cursor chooses.
+    // The cursor's controls show over it (#856): the stick, Menu, Click
+    // and Right-click.
+    await cursorControls();
+    const shown = (name) => controls.querySelector(`.touch-button.${name}`).getClientRects().length > 0;
+    assert(["menu", "click", "right-click"].every(shown) && !["jump", "crouch", "inventory"].some(shown), "the cursor's buttons");
+    // The stick moves the cursor onto the outfit in the backpack, Click
+    // selects it, Right-click opens its menu, whose first row («одеть
+    // костюм») Click chooses.
     const bag = s.inventory.lists.find((l) => l.list === "bag");
     const suitCell = bag.cells.find((c) => c.section === "novice_outfit");
-    await swipeTo(centreOf4(suitCell.rect));
-    await tapAt();
-    s = await until((s) => s.inventory?.selected === suitCell.items[0], "a tap to select the outfit");
-    await sleep(300);
-    const press = { pointerType: "touch", pointerId: nextTouch(), isPrimary: true, button: 0 };
-    pointer("pointerdown", client(512, 384), { ...press, buttons: 1 });
-    await sleep(650);
-    pointer("pointerup", client(512, 384), { ...press, buttons: 0 });
-    s = await until((s) => s.inventory?.menu, "a long press to open the context menu");
+    await stickTo(centreOf4(suitCell.rect));
+    await tapClick();
+    s = await until((s) => s.inventory?.selected === suitCell.items[0], "Click to select the outfit");
+    await tapClick("right-click");
+    s = await until((s) => s.inventory?.menu, "Right-click to open the context menu");
     assertEqual(s.inventory.menu.entries, ["st_dress_outfit", "st_drop"], "the outfit's entries");
-    await swipeTo(centreOf({ rect: s.inventory.menu.rows[0] }));
-    await tapAt();
+    await stickTo(centreOf({ rect: s.inventory.menu.rows[0] }));
+    await tapClick();
     s = await until((s) => item(s, "novice_outfit")?.place === "slot", "the outfit worn again");
-    // A double-tap-hold on the character picture drags the outfit; let go
-    // on its own list, nothing moves.
+    // Click held on the character picture drags the outfit with the
+    // stick; let go on the backpack, it is undressed.
     const worn = s.inventory.lists.find((l) => l.list === "outfit");
-    await swipeTo(centreOf4(worn.cells[0].rect, worn.rect));
+    await stickTo(centreOf4(worn.cells[0].rect, worn.rect));
     await sleep(300);
-    const finger = [512, 384];
-    pointer("pointerdown", client(...finger), { ...press, pointerId: nextTouch(), buttons: 1 });
-    pointer("pointerup", client(...finger), { ...press, pointerId: touchId, buttons: 0 });
-    await sleep(50);
-    const id = nextTouch();
-    await swipe([finger], [0, 30], { lift: false, ids: [id] });
-    s = await until((s) => s.inventory?.dragging === worn.cells[0].items[0], "a double-tap-hold to drag");
-    pointer("pointerup", client(finger[0], finger[1] + 30), { ...press, pointerId: id, buttons: 0 });
+    await cursorButton("click", true);
+    const bagNow = s.inventory.lists.find((l) => l.list === "bag");
+    await stickTo(centreOf4(bagNow.rect));
+    s = await until((s) => s.inventory?.dragging === worn.cells[0].items[0], "Click held to drag");
+    await cursorButton("click", false);
+    s = await until((s) => item(s, "novice_outfit")?.place === "backpack", "the drag to the backpack");
     s = await until((s) => s.inventory && s.inventory.dragging == null, "the drag to end");
-    assertEqual(item(s, "novice_outfit").place, "slot", "dropped on its own list");
+    // Dragged back onto the character, worn again.
+    const inBag = s.inventory.lists.find((l) => l.list === "bag").cells.find((c) => c.section === "novice_outfit");
+    await stickTo(centreOf4(inBag.rect));
+    await sleep(300);
+    await cursorButton("click", true);
+    await stickTo(centreOf4(worn.rect));
+    await cursorButton("click", false);
+    s = await until((s) => item(s, "novice_outfit")?.place === "slot", "dragged back on");
     // The exit button closes it.
     clickAt(centreOf({ rect: s.inventory.exit }));
     s = await until((s) => s.phase === "level" && !s.inventory, "the exit button to close the screen");
@@ -614,7 +618,7 @@ export const tests = {
     return `game time ran ${((s.level.game_time - clock) / 1000).toFixed(1)} s under the screen; pointer lock ${granted ? "granted" : "stubbed"}`;
   },
 
-  "the PDA: P opens it on the tasks tab, M switches to the map and closes it, a click on a caption switches tabs, Escape closes it without the menu; on touch the PDA button opens it, the touchpad switches tabs, and the PDA button, alone over it, closes it": async () => {
+  "the PDA: P opens it on the tasks tab, M switches to the map and closes it, a click on a caption switches tabs, Escape closes it without the menu; on touch the PDA button opens it, the stick and Click switch tabs, and the PDA button over it closes it": async () => {
     needsGame();
     const controls = document.getElementById("touch-controls");
     const live = async (on) => {
@@ -669,13 +673,13 @@ export const tests = {
     assertEqual(s.pda.tab, 0, "the tasks tab, as P");
     for (let i = 0; i < 50 && !controls.classList.contains("pda-open"); i++) await sleep(20);
     assert(!controls.hidden && controls.classList.contains("pda-open"), "the PDA button over the window");
-    const shown = [...controls.querySelectorAll(".touch-button")].filter((b) => b.getClientRects().length > 0);
-    assertEqual(shown, [pda], "the PDA button alone");
-    // The touchpad (#108): the cursor swiped onto the contacts' caption, a
-    // tap switches to it.
-    await swipeTo(centreOf({ rect: s.pda.tabs[3].rect }));
-    await tapAt();
-    s = await until((s) => s.pda?.tab === 3, "a tap to switch to the contacts");
+    // With the cursor's controls (#856).
+    const shown = [...controls.querySelectorAll(".touch-button")].filter((b) => b.getClientRects().length > 0).map((b) => b.dataset.button);
+    assertEqual(shown.sort(), ["click", "menu", "pda", "right_click"], "the PDA button and the cursor's");
+    // The stick onto the contacts' caption, Click switches to it.
+    await stickTo(centreOf({ rect: s.pda.tabs[3].rect }));
+    await tapClick();
+    s = await until((s) => s.pda?.tab === 3, "Click to switch to the contacts");
     press();
     s = await until((s) => s.phase === "level" && !s.pda, "the PDA button to close it");
     await live(true);
@@ -1436,7 +1440,7 @@ export const tests = {
     return report;
   },
 
-  "touch, standard: the stick walks and its sprint lock sprints, drags look (from Jump too), Crouch and its swipe down, Menu opens the menu": async () => {
+  "touch, standard: the stick walks and its sprint lock sprints, drags look (from Jump too), Crouch and its swipe down, Menu opens the menu, where the stick and Click return to the game, and Menu does": async () => {
     needsGame();
     const controls = document.getElementById("touch-controls");
     assert(controls, "no touch controls");
@@ -1621,20 +1625,29 @@ export const tests = {
     touchOn(menu, "pointerup", 34, centre(menu));
     const opened = await until((s) => inGame(s), "the in-game menu");
     assertEqual(inGame(opened).list, "menu_main_single", "list");
-    for (let i = 0; i < 50 && !controls.hidden; i++) await sleep(20);
-    assert(controls.hidden, "the touch controls hide in the menu");
+    for (let i = 0; i < 50 && controls.dataset.view !== "cursor"; i++) await sleep(20);
+    assertEqual(controls.dataset.view, "cursor", "the cursor's controls in the menu");
     await sleep(100);
     const held = (await volya.call("input_state")).held;
-    assert(!held.some((h) => h.startsWith("touch_")), `held after hiding: ${held}`);
-    // The touchpad (#108): "Возврат к игре" under the cursor, selected and
-    // under the glass once the bar rests; a tap activates it; the controls
-    // show again.
-    await swipeTo(centreOfRow(0));
+    assert(!held.some((h) => h.startsWith("touch_")), `held after the level's controls went: ${held}`);
+    // The stick (#856): "Возврат к игре" under the cursor, selected and
+    // under the glass once the bar rests; Click activates it; the level's
+    // controls show again.
+    await stickTo(centreOfRow(0));
     await until((s) => inGame(s)?.selected === 0 && !inGame(s).moving, "item 0 at rest", 3000);
-    await tapAt([200, 200]);
+    await tapClick();
     await until((s) => s.phase === "level" && !s.menu, "back in the game");
-    for (let i = 0; i < 50 && controls.hidden; i++) await sleep(20);
-    assert(!controls.hidden, "the touch controls show again");
+    for (let i = 0; i < 50 && controls.dataset.view !== "level"; i++) await sleep(20);
+    assertEqual(controls.dataset.view, "level", "the level's controls again");
+    // Menu again; on the menu Menu is back (the gamepad's east): the game
+    // again.
+    touchOn(menu, "pointerdown", 36, centre(menu));
+    touchOn(menu, "pointerup", 36, centre(menu));
+    await until((s) => inGame(s), "the in-game menu again");
+    for (let i = 0; i < 50 && controls.dataset.view !== "cursor"; i++) await sleep(20);
+    touchOn(menu, "pointerdown", 37, centre(menu));
+    touchOn(menu, "pointerup", 37, centre(menu));
+    await until((s) => s.phase === "level" && !s.menu, "Menu on the menu to return to the game");
     await quitToTitle();
     return `moved ${moved.toFixed(2)} m, turned ${turned.toFixed(2)} rad, sprint-locked ${sprinted.toFixed(2)} m`;
   },

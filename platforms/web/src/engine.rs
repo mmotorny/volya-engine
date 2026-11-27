@@ -663,7 +663,7 @@ pub fn console_opens_over_menu() -> bool {
 }
 
 /// Whether the game shows its mouse cursor ([`App::cursor_shown`]): the
-/// page's touch is a touchpad then (#108).
+/// page's touch drives the cursor then (#856, #807).
 pub fn cursor_shown() -> bool {
     RUNNING.with(|r| r.borrow().as_ref().is_some_and(|r| r.app.cursor_shown()))
 }

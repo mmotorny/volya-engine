@@ -8,15 +8,15 @@
 //
 // An unseen text input lies where the field is while the save screen shows
 // it (the engine reports where: {type: "text_field"}), on touch devices
-// only. Touch is a touchpad for the cursor there (#108), so the field is
-// clicked with the cursor like everything else, and the input never takes
-// taps itself. A device's keyboard rises only for an input focused within a
-// user gesture (iOS; that a pointerup handler counts is believed, not
-// measured): so the engine reports whether the cursor is over the field,
-// and when a touchpad gesture presses
-// the left button over it, input.js calls `click()` in that very event
-// handler, which focuses the input; the same press reaches the engine and
-// focuses its field as a mouse click does. What is typed into the input is
+// only. Touch drives the cursor there with the touch controls' stick and
+// Click (#856), so the field is clicked with the cursor like everything
+// else, and the input never takes taps itself. A device's keyboard rises
+// only for an input focused within a user gesture (iOS; that a pointerup
+// handler counts is believed, not measured): so the engine reports whether
+// the cursor is over the field, and when Click is lifted with the cursor
+// over it, touch-controls.js calls `click()` in that very event handler,
+// which focuses the input; Click's press reached the engine and focused
+// its field as a mouse click does. What is typed into the input is
 // sent as text (["text", s]) and the input emptied at once; the engine
 // keeps the field's own rules (the characters a key types, its width
 // limit). Backspace, Enter and the arrows arrive as keys: from input.js
@@ -36,9 +36,9 @@ const EDITING = { Backspace: "backspace", Delete: "delete", Enter: "enter", Arro
  * The text entry; `send(message)` posts one input message to the engine.
  * `update({ rect, focused, over })` follows the engine's field: canvas CSS
  * pixels, or `rect: null` when it doesn't show; `over` while the cursor is
- * over it. `click(at)` runs in the handler of a gesture clicking: a
- * touchpad's at the cursor, a direct click's at `at` (canvas CSS pixels,
- * the ergonomic mode, #807).
+ * over it. `click(at)` runs in the handler of a gesture clicking: Click's
+ * lift at the cursor, a direct click's at `at` (canvas CSS pixels, the
+ * ergonomic mode, #807).
  */
 export function createTextEntry(send) {
   // Laid out as the canvas is (turned on upright phones, style.css), so the
@@ -113,7 +113,7 @@ export function createTextEntry(send) {
       const [x, y, width, height] = field.rect;
       const over = at ? at[0] >= x && at[0] < x + width && at[1] >= y && at[1] < y + height : field.over;
       if (!over) return;
-      // A touchpad click is a touch device's.
+      // A touch click is a touch device's.
       touched = true;
       update(field);
       input.focus({ preventScroll: true });

@@ -41,7 +41,7 @@
 // leaves it, or the field goes (rect null): canvas CSS pixels [x, y, width,
 // height]; the page's text entry follows it (#94, #108).
 // { type: "cursor", shown } whenever the game's mouse cursor shows or hides:
-// the page's touch is a touchpad while it shows (#108).
+// the page's touch controls drive the cursor while it shows (#856, #807).
 // { type: "console", open, menu } whenever the console opens or closes,
 // or whether it would open over the main menu changes: the page reads the
 // clipboard for Insert while it is open (#639) and shows its Console

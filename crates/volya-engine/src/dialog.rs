@@ -6,8 +6,8 @@
 //! input events, the push button, and the message box.
 //!
 //! **Input.** These screens are mouse screens (section 3.1). Touch reaches
-//! them as a touchpad for the cursor (#108, [`crate::core::input`]), a
-//! gamepad as a mouse (#835, [`Input::set_pad_cursor`]): its left stick
+//! them through the standard touch controls' stick and cursor buttons
+//! (#856, [`crate::core::input`]) or directly (#807), a gamepad as a mouse (#835, [`Input::set_pad_cursor`]): its left stick
 //! moves the cursor, south (A / cross) is the left button; east (B /
 //! circle) is the key bound to `quit`.
 
