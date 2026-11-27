@@ -163,7 +163,8 @@ pub struct WorldScene {
     pub projection: Mat4,
     #[serde(skip)]
     pub environment: Environment,
-    /// Seconds since the level was shown (the shaders' `time`).
+    /// The engine's global time, seconds (tree-sway.md 3.1): the trees'
+    /// sway and the clouds' drift.
     pub time: f32,
     /// Where each of the level's object instances
     /// ([`crate::objects::LevelObjects::instances`]) is drawn; `None`: not

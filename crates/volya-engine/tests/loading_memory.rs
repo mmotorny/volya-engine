@@ -289,7 +289,7 @@ fn loading_stage_memory() {
     let h_before = memory_manager::in_use_bytes();
     for t in 1..=FRAMES {
         screen.update(16 * t, &Input::new());
-        drop(screen.scene(Resolution::new(1024, 768), 16 * t));
+        drop(screen.scene(Resolution::new(1024, 768)));
     }
     eprintln!(
         "{FRAMES} frames after the load (updates and scenes): r {} K (the original {ORIGINAL_R_DRAWN} K once frames are drawn, reported beside), h {:+} K",

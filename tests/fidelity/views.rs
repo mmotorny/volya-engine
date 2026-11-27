@@ -193,6 +193,25 @@ impl Place {
     }
 }
 
+/// The engine's global time at a New Game's frame 1 of play in the
+/// capture, ms (tree-sway.md sections 3 and 4: real time since the
+/// engine's initialisation, paused time left out; it drives the trees' sway
+/// and the clouds' drift): ours runs from it at [`FRAME_MS`] a frame, as
+/// the original's does after frame 1 (nothing of the capture's play turns
+/// the pause on, sound-weather-ambient.md 3.1). Its parts on the capture's
+/// frame clock (`xtask wincapture`'s plan):
+/// - 120,000: the clock is moved to 120 s once the first frame is
+///   presented; believed to count, the logo sequence's first item turning
+///   the pause on in a later frame (not established);
+/// - 28 × [`FRAME_MS`]: the level's overlay frames before its intro starts
+///   (loading-screen.md 2, steps 4 and 5: at most 2 of 30 remain), unpaused
+///   since `main_menu off` closed the menu;
+/// - not counted, not known on this machine: the startup before the first
+///   frame, the frames between the logos' items and before the title menu,
+///   the loading's own frames and waits, and the frames from the intro's
+///   end to frame 1 of play (the run's `events.txt` stays on the PC; #853).
+pub const PLAY_GLOBAL_MS: u64 = 120_000 + 28 * FRAME_MS as u64;
+
 /// Where a New Game's view is seen from.
 #[derive(Clone, Copy, Debug)]
 pub enum Camera {

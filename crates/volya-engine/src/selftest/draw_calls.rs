@@ -164,7 +164,7 @@ pub async fn draw_calls_from_game_data(cx: &Context<'_>) -> Outcome {
             for _ in 0..3 {
                 now += 16;
                 screen.paused(now);
-                let mut scene = screen.scene(SIZE, 0);
+                let mut scene = screen.scene(SIZE);
                 scene.presentation = presentation;
                 r.take_frame_stats();
                 r.take_static_calls();
@@ -186,7 +186,7 @@ pub async fn draw_calls_from_game_data(cx: &Context<'_>) -> Outcome {
             }
             // The particles left out of the pixels compared (the level
             // checks' views compare them in the parity suite).
-            let mut scene = screen.scene(SIZE, 0);
+            let mut scene = screen.scene(SIZE);
             scene.presentation = presentation;
             if let Some(w) = scene.world.as_mut() {
                 w.particles = Default::default();
@@ -319,7 +319,7 @@ pub async fn gpu_cost_from_game_data(cx: &Context<'_>) -> Outcome {
                 now += 16;
                 screen.paused(now);
             }
-            let mut scene = screen.scene(PHONE, 0);
+            let mut scene = screen.scene(PHONE);
             scene.presentation = Presentation {
                 supersample,
                 ..Default::default()

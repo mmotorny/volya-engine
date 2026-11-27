@@ -71,7 +71,7 @@ pub async fn grass_from_game_data(cx: &Context<'_>) -> Outcome {
     };
     // The first frame's pass draws nothing (TODO(#407)); the next
     // builds the whole cache and selects.
-    let mut scene = screen.scene(SIZE, 0);
+    let mut scene = screen.scene(SIZE);
     ensure!(
         instances_of(&scene).is_some_and(|(i, _)| i == 0),
         "the first frame's instances: {:?}",
@@ -87,7 +87,7 @@ pub async fn grass_from_game_data(cx: &Context<'_>) -> Outcome {
         let start = now_ms();
         screen.paused(16 * (f + 1));
         pass_times.push(now_ms() - start);
-        let mut scene = screen.scene(SIZE, 0);
+        let mut scene = screen.scene(SIZE);
         scene.presentation = presentation;
         frames.push(scene);
     }

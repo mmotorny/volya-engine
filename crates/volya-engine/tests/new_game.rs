@@ -96,7 +96,7 @@ fn new_game_start_view_from_game_data() {
     // 6 of the cycle in time order, from 00:00).
     let (eye, angles) = outdoors();
     screen.set_camera(eye, angles);
-    let scene = screen.scene(SIZE, 205_000);
+    let scene = screen.scene(SIZE);
     assert_eq!(scene.world.unwrap().sky.unwrap().section, 6);
 
     // The player character (player-state.md 4.1, 4.2). The update above was

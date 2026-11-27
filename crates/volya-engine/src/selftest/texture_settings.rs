@@ -57,7 +57,7 @@ async fn texture_settings(cx: &Context<'_>) -> Outcome {
         // again.
         let screen = LevelScreen::load(tree, &data, 0).map_err(|e| format!("level: {e}"))?;
         let mut presenter = Presenter::new();
-        let mut scene = screen.scene(SIZE, 0);
+        let mut scene = screen.scene(SIZE);
         scene.filtering = filtering;
         scene.texture_quality = TextureQuality::new(lod, list.clone());
         let list = presenter.draw_list(&mut r, tree, &scene, 0);

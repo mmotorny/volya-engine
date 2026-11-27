@@ -3841,13 +3841,13 @@ impl LevelScreen {
     /// The frame for `resolution`, its world hidden under an opaque picture
     /// (kept on the GPU, not drawn): the detail objects' pass does not run
     /// (detail-objects.md 5.1).
-    pub fn covered_scene(&self, resolution: Resolution, clock_ms: u64) -> Scene {
-        self.compose(resolution, clock_ms, true)
+    pub fn covered_scene(&self, resolution: Resolution) -> Scene {
+        self.compose(resolution, true)
     }
 
     /// The frame for `resolution`.
-    pub fn scene(&self, resolution: Resolution, clock_ms: u64) -> Scene {
-        self.compose(resolution, clock_ms, false)
+    pub fn scene(&self, resolution: Resolution) -> Scene {
+        self.compose(resolution, false)
     }
 
     /// The detail objects' pass of this frame (detail-objects.md 5.1): the
@@ -3903,12 +3903,12 @@ impl LevelScreen {
         })
     }
 
-    fn compose(&self, resolution: Resolution, clock_ms: u64, covered: bool) -> Scene {
+    fn compose(&self, resolution: Resolution, covered: bool) -> Scene {
         // The scene's lists are the renderer's pool's, as the passes'.
-        crate::core::memory_manager::frame_lists(|| self.composed(resolution, clock_ms, covered))
+        crate::core::memory_manager::frame_lists(|| self.composed(resolution, covered))
     }
 
-    fn composed(&self, resolution: Resolution, clock_ms: u64, covered: bool) -> Scene {
+    fn composed(&self, resolution: Resolution, covered: bool) -> Scene {
         let (view, projection) = self.view_projection(resolution.width, resolution.height);
         let details = if covered {
             None
@@ -3943,9 +3943,9 @@ impl LevelScreen {
             view,
             projection,
             environment: self.environment.clone(),
-            // The shaders' clock starts when the level is shown (our choice;
-            // which clock is unestablished, ogf.md section 10).
-            time: clock_ms.saturating_sub(self.shown) as f32 / 1000.0,
+            // The engine's global time in seconds, single precision: the
+            // trees' sway (tree-sway.md 3.1) and the clouds' drift (sky.md).
+            time: (self.global_ms as f64 / 1000.0) as f32,
             objects: self.placements.clone(),
             seen: Some(self.seen.clone()),
             sky: Some(sky::sky_frame(

@@ -55,7 +55,7 @@ pub async fn walking_draws_an_offline_stalker(cx: &Context<'_>) -> Outcome {
     let mut presenter = Presenter::new();
     // Per instance: whether the renderer draws any of its draws.
     let mut drawn = |screen: &LevelScreen| -> Result<Vec<bool>, Problem> {
-        let list = presenter.draw_list(&mut gpu, tree, &screen.scene(SIZE, 0), 0);
+        let list = presenter.draw_list(&mut gpu, tree, &screen.scene(SIZE), 0);
         let world = list.world.ok_or("the world")?.world;
         let mut shown = vec![false; screen.world().objects.instances.len()];
         for &(j, i) in &draws {
@@ -119,7 +119,7 @@ async fn start_view(
     }
     let mut gpu: Renderer = cx.renderer();
     let mut presenter = Presenter::new();
-    let scene = screen.scene(SIZE, 0);
+    let scene = screen.scene(SIZE);
     let list = presenter.draw_list(&mut gpu, tree, &scene, 0);
     let pixels = capture(&mut gpu, &list, SIZE.width, SIZE.height).await?;
     let errors = presenter.take_errors();

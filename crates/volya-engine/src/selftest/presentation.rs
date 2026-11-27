@@ -40,7 +40,7 @@ pub async fn start_view_supersampled(cx: &Context<'_>) -> Outcome {
     let mut notes = Vec::new();
     for supersample in [1, 2] {
         screen.set_supersample(supersample);
-        let mut scene = screen.scene(SIZE, 0);
+        let mut scene = screen.scene(SIZE);
         scene.presentation = Presentation {
             supersample,
             ..Default::default()

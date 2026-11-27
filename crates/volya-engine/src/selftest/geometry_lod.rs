@@ -44,7 +44,7 @@ async fn geometry_lod(cx: &Context<'_>) -> Outcome {
         // The camera pass again with the thresholds.
         screen.set_geometry_lod(lod, SSA_LOD_A, SSA_LOD_B);
         screen.set_camera(eye, angles);
-        let mut scene = screen.scene(SIZE, 0);
+        let mut scene = screen.scene(SIZE);
         scene.geometry_lod = lod;
         let list = presenter.draw_list(&mut r, tree, &scene, 0);
         frames.push(capture(&mut r, &list, SIZE.width, SIZE.height).await?);
@@ -64,7 +64,7 @@ async fn geometry_lod(cx: &Context<'_>) -> Outcome {
     for sweep in &mut sweeps {
         let start = now_ms();
         for i in 0..STEPS {
-            let mut scene = screen.scene(SIZE, 0);
+            let mut scene = screen.scene(SIZE);
             scene.geometry_lod = 0.15 + 1.05 * i as f32 / (STEPS - 1) as f32;
             let list = presenter.draw_list(&mut r, tree, &scene, 0);
             capture(&mut r, &list, SIZE.width, SIZE.height).await?;

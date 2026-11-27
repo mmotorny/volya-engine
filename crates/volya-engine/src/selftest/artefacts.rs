@@ -31,7 +31,7 @@ async fn frame(
     tree: &dyn Vfs,
     screen: &LevelScreen,
 ) -> Result<(Vec<u8>, Scene), Problem> {
-    let scene = screen.scene(SIZE, 2000);
+    let scene = screen.scene(SIZE);
     let list = presenter.draw_list(r, tree, &scene, 2000);
     let pixels = capture(r, &list, SIZE.width, SIZE.height).await?;
     Ok((pixels, scene))

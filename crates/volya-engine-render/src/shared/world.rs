@@ -613,13 +613,7 @@ pub(crate) fn frame_constants(
     size: (u32, u32),
 ) -> Vec<u8> {
     let l = &frame.light;
-    let tau = std::f32::consts::TAU;
-    let t = frame.time;
-    let wind = {
-        let (x, z) = ((0.6283 * t).sin(), (0.6283 * t).cos());
-        let len = x.hypot(z).max(1e-9);
-        [0.005 * x / len, 0.0, 0.005 * z / len, 0.0]
-    };
+    let (wave, wind) = sway_constants(frame.time);
     let mut constants = Vec::with_capacity(FRAME_BYTES as usize);
     push_mat(&mut constants, view_projection);
     push_mat(&mut constants, &frame.view);
@@ -643,11 +637,37 @@ pub(crate) fn frame_constants(
         fog_plane(view_projection, l.fog_near, l.fog_far),
     );
     push_vec4(&mut constants, vec4(l.fog_color, 0.0));
-    push_vec4(&mut constants, [0.1 / tau, 0.01 / tau, 0.11 / tau, t / tau]);
+    push_vec4(&mut constants, wave);
     push_vec4(&mut constants, wind);
     let lerp = frame.projected.as_ref().map_or(0.0, |p| p.lerp);
     push_vec4(&mut constants, [lerp, 0.0, 0.0, 0.0]);
     constants
+}
+
+/// The trees' `wave` and `wind` of the frame's global time `t` (seconds,
+/// single precision), as docs/behavior/tree-sway.md section 2 computes
+/// them, in single precision with its constants: `wave` = (0.1, 0.01,
+/// 0.11, *t*) · 1/(2π); `wind` = (sin *a*, 0, cos *a*, 0), *a* = *t* · 0.2π,
+/// over its length, times 0.005. The sine, cosine, square root and
+/// reciprocal are taken in double precision and rounded to single (the
+/// original's x87 precision mode is unestablished, section 7).
+pub fn sway_constants(t: f32) -> ([f32; 4], [f32; 4]) {
+    let inv_tau = f32::from_bits(0x3E22_F983);
+    let k = f32::from_bits(0x3F20_D97C);
+    let length = f32::from_bits(0x3BA3_D70A);
+    let spatial = [0x3DCC_CCCD, 0x3C23_D70A, 0x3DE1_47AE].map(f32::from_bits);
+    let wave = [
+        spatial[0] * inv_tau,
+        spatial[1] * inv_tau,
+        spatial[2] * inv_tau,
+        t * inv_tau,
+    ];
+    let a = f64::from(t * k);
+    let (x, z) = (a.sin() as f32, a.cos() as f32);
+    let sum = x * x + 0.0 * 0.0 + z * z + 0.0 * 0.0;
+    let inv = (1.0 / f64::from(sum).sqrt()) as f32;
+    let wind = [x * inv * length, 0.0, z * inv * length, 0.0];
+    (wave, wind)
 }
 
 /// The light pass `l`'s constants, the start of its slot of
@@ -1033,6 +1053,27 @@ pub(crate) fn fill_object_rebased(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_sway_constants() {
+        // tree-sway.md section 6's worked values.
+        let near = |a: f32, b: f32| assert!((a - b).abs() < 1e-6, "{a} against {b}");
+        let (wave, wind) = sway_constants(0.0);
+        assert_eq!(wind, [0.0, 0.0, 0.005, 0.0]);
+        assert_eq!(wave[3], 0.0);
+        near(wave[0], 0.1 / std::f32::consts::TAU);
+        near(wave[1], 0.01 / std::f32::consts::TAU);
+        near(wave[2], 0.11 / std::f32::consts::TAU);
+        let (_, wind) = sway_constants(2.5);
+        near(wind[0], 0.005);
+        near(wind[2], 0.0);
+        let (wave, wind) = sway_constants(120.0);
+        assert!((wave[3] - 19.0986).abs() < 1e-4);
+        near(wind[0], 0.0);
+        near(wind[2], 0.005);
+        // Every component single precision of the spec's constants.
+        assert_eq!(wave[3], 120.0 * f32::from_bits(0x3E22_F983));
+    }
 
     #[test]
     fn a_cell_camera() {

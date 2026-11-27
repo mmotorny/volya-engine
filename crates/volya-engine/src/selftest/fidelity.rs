@@ -32,7 +32,8 @@ mod list {
     ));
 }
 use list::{
-    Camera, FOV_DEGREES, FRAME_MS, HEIGHT, Place, SKIP_EVERY, TITLE_MENU_FRAME, VIEWS, WIDTH,
+    Camera, FOV_DEGREES, FRAME_MS, HEIGHT, PLAY_GLOBAL_MS, Place, SKIP_EVERY, TITLE_MENU_FRAME,
+    VIEWS, WIDTH,
 };
 
 /// Frames the startup sequence may take before the title menu (the
@@ -175,6 +176,8 @@ async fn new_game(
         if let Some((eye, angles)) = at {
             screen.set_camera(eye, angles);
         }
+        // The global time the capture's frame had (the trees' sway).
+        screen.set_global_clock(PLAY_GLOBAL_MS + now);
         screen.update(now, &input);
         // The last second composed frame by frame, as the app composes
         // every frame: the detail pass updates and selects the detail
@@ -185,13 +188,13 @@ async fn new_game(
             if let Some((eye, angles)) = at {
                 screen.set_camera(eye, angles);
             }
-            screen.scene(SIZE, now);
+            screen.scene(SIZE);
         }
     }
     if let Some((eye, angles)) = at {
         screen.set_camera(eye, angles);
     }
-    let mut scene = screen.scene(SIZE, now);
+    let mut scene = screen.scene(SIZE);
     let quality = TextureQuality::new(
         console.number("texture_lod").max(0.0) as u32,
         TextureQuality::read_list(&data.system),

@@ -72,7 +72,7 @@ pub async fn the_camera_pass_keeps_the_draws(cx: &Context<'_>) -> Outcome {
     let mut notes = Vec::new();
 
     // The start view: the traversal's visuals only, against every draw.
-    let kept = screen.scene(SIZE, 0);
+    let kept = screen.scene(SIZE);
     let seen = kept
         .world
         .as_ref()
@@ -123,7 +123,7 @@ pub async fn the_camera_pass_keeps_the_draws(cx: &Context<'_>) -> Outcome {
     };
     screen.set_camera([x, ground + 1.7, z], angles);
     screen.paused(32);
-    let faded = screen.scene(SIZE, 0);
+    let faded = screen.scene(SIZE);
     let seen = faded
         .world
         .as_ref()

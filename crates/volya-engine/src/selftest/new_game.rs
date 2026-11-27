@@ -83,7 +83,7 @@ pub async fn start_view(cx: &Context<'_>) -> Outcome {
 
     let mut gpu = cx.renderer();
     let mut presenter = Presenter::new();
-    let scene = screen.scene(SIZE, 0);
+    let scene = screen.scene(SIZE);
     let start = now_ms();
     let pixels = draw(&mut gpu, &mut presenter, tree, &scene, 0).await?;
     let first = now_ms() - start;
@@ -145,7 +145,7 @@ pub async fn start_view(cx: &Context<'_>) -> Outcome {
         },
     );
     screen.set_camera(eye, angles);
-    let scene = screen.scene(SIZE, 5000);
+    let scene = screen.scene(SIZE);
     let pixels = draw(&mut gpu, &mut presenter, tree, &scene, 5000).await?;
     // Its blended trees differ by a few pixels from run to run (#435):
     // compared, not held.
@@ -170,7 +170,7 @@ pub async fn start_view(cx: &Context<'_>) -> Outcome {
     // later it is 06:04:10, and the sky blends the next hour's pair.
     screen.update(205_000, &Input::new());
     screen.set_camera(eye, angles);
-    let mut scene = screen.scene(SIZE, 205_000);
+    let mut scene = screen.scene(SIZE);
     let rows = (SIZE.width * 16 * 4) as usize;
     let at_six = draw(&mut gpu, &mut presenter, tree, &scene, 205_000).await?[..rows].to_vec();
     // The frame binds the cube maps of [default_weather_06] and _07 (index
@@ -342,7 +342,7 @@ async fn views(
                 },
             );
         }
-        let scene = screen.scene(SIZE, 0);
+        let scene = screen.scene(SIZE);
         pictures.push(draw(r, &mut presenter, tree, &scene, 0).await?);
         first.get_or_insert(now_ms() - start);
     }
@@ -559,13 +559,13 @@ pub async fn placed_effects_are_drawn(cx: &Context<'_>) -> Outcome {
     screen.set_effect_origins_drawn(&[Origin::Placed]);
     let mut r = cx.renderer();
     let mut presenter = Presenter::new();
-    let scene = screen.scene(SIZE, 2000);
+    let scene = screen.scene(SIZE);
     let on = draw(&mut r, &mut presenter, tree, &scene, 2000).await?;
     let draws = &scene.world.as_ref().ok_or("world")?.particles;
     ensure_eq!(draws.len(), 1, "{draws:?}");
     ensure_eq!(draws[0].particles, 7);
     screen.set_effects_drawn(false);
-    let off_scene = screen.scene(SIZE, 2000);
+    let off_scene = screen.scene(SIZE);
     let off = draw(&mut r, &mut presenter, tree, &off_scene, 2000).await?;
     let errors = presenter.take_errors();
     ensure!(errors.is_empty(), "{errors:?}");

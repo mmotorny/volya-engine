@@ -148,7 +148,7 @@ program a tree uses comes from its shader (shader specification).
 
 Wind sway (animation, not needed for a still image at rest): `wave` = (0.1, 0.01, 0.11, *t*) / (2π) and
 `wind` = 0.005 × normalize(sin(0.2π·*t*), 0, cos(0.2π·*t*)), *t* = the engine's global time in seconds
-(which clock exactly is **unestablished**).
+(its clock and the single-precision computation: `docs/behavior/tree-sway.md`).
 
 In the data (test: any of the three rgb values exactly non-zero) the scale rgb part and the bias rgb part
 are non-zero for the same instances: 728 of the 18,644 type-7 instances (15 in `l01_escape`) and 967 of
@@ -316,7 +316,6 @@ All 30 shipped levels:
 
 ## 10. Unestablished
 
-- Which clock drives the wind-sway time *t* (section 5).
 - Meaning of the four reserved u32 of the window lists (0 everywhere).
 
 ## 11. Provenance

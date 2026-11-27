@@ -101,7 +101,7 @@ pub async fn level_frame_heap_traffic(cx: &Context<'_>) -> Outcome {
         .map_err(|e| format!("sounds: {e}"))?;
         system.update(ms, &mut NoDevice);
         part(1, &mut at);
-        let scene = level.scene(SIZE, ms);
+        let scene = level.scene(SIZE);
         part(2, &mut at);
         let list = presenter.draw_list(&mut renderer, tree, &scene, ms);
         drop(scene);

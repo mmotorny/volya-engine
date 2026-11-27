@@ -1019,7 +1019,7 @@ impl App {
             Some(Phase::Loading {
                 stages: NewGame::Stages(loading),
                 ..
-            }) => Some(loading.level_to_prepare()?.scene(resolution, self.clock)),
+            }) => Some(loading.level_to_prepare()?.scene(resolution)),
             _ => None,
         }
     }
@@ -2312,7 +2312,7 @@ impl App {
             }) => {
                 // Nothing of the game is drawn behind the menu; the world
                 // stays in the scene, covered, so it stays on the GPU.
-                let mut scene = level.covered_scene(resolution, self.clock);
+                let mut scene = level.covered_scene(resolution);
                 if self.screens.sub().is_none() {
                     ctx.surface = menu_surface;
                 }
@@ -2334,12 +2334,8 @@ impl App {
                 pda,
                 ..
             }) => {
-                let mut scene = compose(
-                    level.scene(resolution, self.clock),
-                    intro,
-                    overlay.as_ref(),
-                    &mut ctx,
-                )?;
+                let mut scene =
+                    compose(level.scene(resolution), intro, overlay.as_ref(), &mut ctx)?;
                 // inventory-screen.md 3.1: over the rendered level.
                 if let (Some(screen), Some(character)) = (inventory, level.character()) {
                     screen.draw(&mut ctx, &mut scene, character)?;

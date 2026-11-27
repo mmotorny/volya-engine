@@ -60,7 +60,7 @@ async fn frame(
     tree: &dyn Vfs,
     screen: &LevelScreen,
 ) -> Result<(Vec<u8>, Scene, f64, usize), Problem> {
-    let scene = screen.scene(SIZE, 16);
+    let scene = screen.scene(SIZE);
     let list = presenter.draw_list(r, tree, &scene, 16);
     let start = now_ms();
     let pixels = capture(r, &list, SIZE.width, SIZE.height).await?;
