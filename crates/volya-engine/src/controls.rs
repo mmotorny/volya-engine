@@ -393,10 +393,11 @@ impl SprintLock {
 pub const LOOK_PRECISE_SPEED: f32 = 300.0;
 /// From this speed on a drag turns [`LOOK_MAX_GAIN`] times as far (our
 /// choice: a quick flick).
-pub const LOOK_FAST_SPEED: f32 = 1500.0;
-/// The most a fast drag is multiplied by (our choice: modest, so turning
-/// stays predictable).
-pub const LOOK_MAX_GAIN: f32 = 1.6;
+pub const LOOK_FAST_SPEED: f32 = 3000.0;
+/// The most a fast drag is multiplied by (our choice, #731: a quick flick
+/// across the look half, about 400 px, turns 90–180° at the default
+/// `mouse_sens`).
+pub const LOOK_MAX_GAIN: f32 = 3.25;
 
 /// The touch look's acceleration (our design, as mobile shooters do): a
 /// drag at `speed` CSS pixels per second gives this many mouse counts per
@@ -962,10 +963,10 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
     }
 
     #[test]
-    fn the_look_curve_is_one_to_one_when_slow_and_modest_when_fast() {
+    fn the_look_curve_is_one_to_one_when_slow_and_far_when_fast() {
         assert_eq!(look_gain(0.0), 1.0);
         assert_eq!(look_gain(LOOK_PRECISE_SPEED), 1.0);
-        assert!((look_gain(900.0) - 1.3).abs() < 1e-6);
+        assert!((look_gain(900.0) - 1.5).abs() < 1e-6);
         assert_eq!(look_gain(LOOK_FAST_SPEED), LOOK_MAX_GAIN);
         assert_eq!(look_gain(10_000.0), LOOK_MAX_GAIN);
         assert_eq!(look_gain(f32::NAN), 1.0);
@@ -978,7 +979,7 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
             );
             last = g;
         }
-        // Through the controls: a 40-pixel flick at 2400 px/s turns 1.6
+        // Through the controls: a 40-pixel flick at 3600 px/s turns 3.25
         // times as far, the same pixels slowly one count each. The counts
         // are mouse counts: the movement layer scales them by `mouse_sens`
         // and `mouse_invert` (8.1).
@@ -986,9 +987,9 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
         let mut i = Input::new();
         i.handle(Event::TouchLook {
             delta: [0.0, 40.0],
-            speed: 2400.0,
+            speed: 3600.0,
         });
-        assert_eq!(req(&mut c, &i).0.mouse, [0.0, 64.0]);
+        assert_eq!(req(&mut c, &i).0.mouse, [0.0, 130.0]);
         i.end_frame();
         i.handle(Event::TouchLook {
             delta: [0.0, 40.0],
@@ -1001,7 +1002,7 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
     fn uneven_event_batching_at_a_steady_drag_gives_a_steady_gain() {
         // A drag at a steady 900 px/s, its events (10 px each) falling
         // into frames unevenly, as 120 Hz events into 60 Hz frames with
-        // jitter do: every frame turns 1.3 counts per pixel.
+        // jitter do: every frame turns 1.5 counts per pixel.
         let mut c = controls();
         let mut i = Input::new();
         for batch in [1, 3, 0, 2, 1, 4, 2, 0, 1] {
@@ -1013,7 +1014,7 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
             }
             let turned = req(&mut c, &i).0.mouse[0];
             let pixels = 10.0 * batch as f32;
-            assert!((turned - 1.3 * pixels).abs() < 1e-3, "{batch}: {turned}");
+            assert!((turned - 1.5 * pixels).abs() < 1e-3, "{batch}: {turned}");
             i.end_frame();
         }
     }

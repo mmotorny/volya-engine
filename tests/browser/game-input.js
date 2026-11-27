@@ -700,35 +700,47 @@ export const tests = {
       }
       assert(false, "the view to stop turning");
     };
-    // One swipe of the screen's width at `speed` CSS px/s, its moves placed
-    // by the clock (about every 8 ms) so jitter changes their count, not the
-    // speed; the degrees it turned and the speed it took.
-    const sweep = async (speed, dir) => {
+    // One swipe of `length` px at `speed` CSS px/s, its moves placed by the
+    // clock (about every 8 ms) so jitter changes their count, not the speed;
+    // the degrees it turned and the speed it took.
+    const sweep = async (length, speed, dir) => {
       const before = await settled();
       touchOn("pointerdown", [lx, ly]);
       const t0 = performance.now();
       let x = 0;
-      while (x < width) {
+      while (x < length) {
         await sleep(8);
-        x = Math.min(width, ((performance.now() - t0) / 1000) * speed);
+        x = Math.min(length, ((performance.now() - t0) / 1000) * speed);
         touchOn("pointermove", [lx + dir * x, ly]);
       }
       const took = (performance.now() - t0) / 1000;
-      touchOn("pointerup", [lx + dir * width, ly]);
+      touchOn("pointerup", [lx + dir * length, ly]);
       const turned = Math.abs((await settled()) - before) * (180 / Math.PI);
-      return { turned, speed: width / took };
+      return { turned, speed: length / took };
     };
-    const runs = [];
-    for (const [what, speed] of [
-      ["slow", 250],
-      ["steady", 1000],
-      ["quick", width / 0.2],
+    // The look area: the right half.
+    const half = r.right - r.left;
+    const runs = {};
+    for (const [what, length, speed] of [
+      ["slow", width, 250],
+      ["steady", width, 1000],
+      ["quick", width, width / 0.2],
+      ["half quick", half, half / 0.15],
     ]) {
       // Right, then back left alike, so the next tests find the view as it was.
-      runs.push({ what, ...(await sweep(speed, 1)) });
-      await sweep(speed, -1);
+      runs[what] = await sweep(length, speed, 1);
+      await sweep(length, speed, -1);
     }
-    return `${width} px wide: ${runs.map((r) => `${r.what} (${Math.round(r.speed)} px/s) ${r.turned.toFixed(0)}°`).join(", ")}`;
+    const report = `${width} px wide, look half ${Math.round(half)}: ${Object.entries(runs)
+      .map(([what, r]) => `${what} (${Math.round(r.speed)} px/s) ${r.turned.toFixed(0)}°`)
+      .join(", ")}`;
+    // At the default mouse_sens 0.12 (0.1375° a count): slow stays one count
+    // a pixel; a quick flick across the look half turns 90–180°.
+    const perPixel = runs.slow.turned / width;
+    assert(Math.abs(perPixel - 0.1375) < 0.005, `slow: ${perPixel.toFixed(4)}° a pixel; ${report}`);
+    const flick = runs["half quick"].turned;
+    assert(flick >= 90 && flick <= 180, `the half flick: ${report}`);
+    return report;
   },
 
   "touch: the stick walks and its sprint lock sprints, drags look (from Jump too), Crouch and its swipe down, Menu opens the menu": async () => {
