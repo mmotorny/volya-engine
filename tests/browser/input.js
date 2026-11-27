@@ -263,13 +263,20 @@ export const tests = {
       for (const s of [".touch-move", ".touch-button.menu", ".touch-button.click", ".touch-button.right-click"]) assert(shows(s), `${s} shown`);
       for (const s of [".touch-button.jump", ".touch-button.crouch", ".touch-button.inventory", ".touch-button.pda", ".touch-button.console", ".touch-look"]) assert(!shows(s), `${s} hidden`);
       // The stick: its reach, to the rim at most, and zero when let go.
+      // In the controls' own frame, turned with the canvas on upright
+      // phones (style.css).
+      const page = ([x, y]) => {
+        const b = root.getBoundingClientRect();
+        const turned = b.width < b.height !== root.clientWidth < root.clientHeight;
+        return turned ? [b.right - y, b.top + x] : [b.left + x, b.top + y];
+      };
       const move = root.querySelector(".touch-move");
-      const r = move.getBoundingClientRect();
-      const at = [r.left + 100, r.bottom - 100];
+      const origin = [100, root.clientHeight - 100];
+      const at = page(origin);
       tap(move, "pointerdown", at);
-      tap(move, "pointermove", [at[0] + 28, at[1]]);
-      tap(move, "pointermove", [at[0] + 400, at[1]]);
-      tap(move, "pointerup", [at[0] + 400, at[1]]);
+      tap(move, "pointermove", page([origin[0] + 28, origin[1]]));
+      tap(move, "pointermove", page([origin[0] + 400, origin[1]]));
+      tap(move, "pointerup", page([origin[0] + 400, origin[1]]));
       assertEqual(sent.splice(0), [["cursor_stick", 0, 0], ["cursor_stick", 0.5, 0], ["cursor_stick", 1, 0], ["cursor_stick", 0, 0]], "the stick");
       // Click: pressed and released, the page's click in its lift; Right-click; Menu is back.
       tap(root.querySelector(".touch-button.click"), "pointerdown");

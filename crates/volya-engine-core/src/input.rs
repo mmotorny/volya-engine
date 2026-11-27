@@ -115,13 +115,10 @@ pub fn apply_motion([nx, ny]: [f32; 2], [dx, dy]: [f32; 2], [w, h]: [f32; 2], s:
 /// (documented, Microsoft's "Getting Started With XInput").
 pub const PAD_CURSOR_DEAD_ZONE: f32 = 0.24;
 /// The gamepad cursor's speed at full deflection, UI units per second:
-/// about a screen's width a second (our choice).
-pub const PAD_CURSOR_MAX_SPEED: f32 = 1000.0;
-/// The curve's exponent past the dead zone: 2, slow and precise near the
-/// centre (40 units/s at a fifth of the way out), fast at full tilt (our
-/// choice; XInput's guide suggests a non-linear transform such as a cube
-/// for precision at low deflection).
-pub const PAD_CURSOR_EXPONENT: f32 = 2.0;
+/// about half a screen's width a second, reached linearly from the dead
+/// zone's edge (the user's choice, #856: the square curve before it was
+/// either too slow or overshot).
+pub const PAD_CURSOR_MAX_SPEED: f32 = 500.0;
 /// The gamepad cursor's speed over a clickable element, as a fraction of
 /// its speed elsewhere: friction (our value; Roblox's and the Xbox
 /// browser's virtual cursors slow over interactable elements, documented
@@ -155,9 +152,9 @@ fn past_dead_zone(d: f32, dead: f32) -> f32 {
 /// The gamepad cursor's speed in UI units per second for a left stick
 /// deflected `d` (its length, 0 … 1; our design): none within
 /// [`PAD_CURSOR_DEAD_ZONE`], then [`PAD_CURSOR_MAX_SPEED`] times the
-/// fraction of the way out to the power [`PAD_CURSOR_EXPONENT`].
+/// fraction of the way out (linear).
 pub fn pad_cursor_speed(d: f32) -> f32 {
-    PAD_CURSOR_MAX_SPEED * past_dead_zone(d, PAD_CURSOR_DEAD_ZONE).powf(PAD_CURSOR_EXPONENT)
+    PAD_CURSOR_MAX_SPEED * past_dead_zone(d, PAD_CURSOR_DEAD_ZONE)
 }
 
 /// The gamepad cursor's motion this frame in UI units: the left stick at
@@ -1842,15 +1839,15 @@ mod tests {
     }
 
     #[test]
-    fn the_pad_cursor_curve_has_a_dead_zone_and_is_slow_near_the_centre() {
+    fn the_pad_cursor_speed_has_a_dead_zone_and_is_linear_past_it() {
         assert_eq!(pad_cursor_speed(0.0), 0.0);
         assert_eq!(pad_cursor_speed(PAD_CURSOR_DEAD_ZONE), 0.0);
         assert_eq!(pad_cursor_speed(1.0), PAD_CURSOR_MAX_SPEED);
         assert_eq!(pad_cursor_speed(2.0), PAD_CURSOR_MAX_SPEED);
         assert_eq!(pad_cursor_speed(f32::NAN), 0.0);
-        // A fifth of the way out: a twenty-fifth of the speed.
+        // A fifth of the way out: a fifth of the speed.
         let fifth = PAD_CURSOR_DEAD_ZONE + 0.2 * (1.0 - PAD_CURSOR_DEAD_ZONE);
-        assert!((pad_cursor_speed(fifth) - 40.0).abs() < 0.01);
+        assert!((pad_cursor_speed(fifth) - 100.0).abs() < 0.01);
         let mut last = 0.0;
         for i in 0..=100 {
             let v = pad_cursor_speed(i as f32 / 100.0);
@@ -1860,10 +1857,10 @@ mod tests {
         // Radial: the direction kept, the length by the curve; friction
         // slows it over a target.
         let [x, y] = pad_cursor_motion([0.6, 0.8], 0.5, false);
-        assert!((x - 300.0).abs() < 0.01 && (y - 400.0).abs() < 0.01);
+        assert!((x - 150.0).abs() < 0.01 && (y - 200.0).abs() < 0.01);
         let [x, y] = pad_cursor_motion([0.6, 0.8], 0.5, true);
-        assert!((x - 300.0 * PAD_CURSOR_FRICTION).abs() < 0.01);
-        assert!((y - 400.0 * PAD_CURSOR_FRICTION).abs() < 0.01);
+        assert!((x - 150.0 * PAD_CURSOR_FRICTION).abs() < 0.01);
+        assert!((y - 200.0 * PAD_CURSOR_FRICTION).abs() < 0.01);
         assert_eq!(pad_cursor_motion([0.1, 0.1], 0.5, false), [0.0, 0.0]);
         assert_eq!(pad_cursor_motion([f32::NAN, 0.0], 0.5, false), [0.0, 0.0]);
         assert_eq!(pad_cursor_motion([1.0, 0.0], 0.0, false), [0.0, 0.0]);
@@ -1886,21 +1883,21 @@ mod tests {
         input.set_pad_cursor(true);
         input.pad_cursor_frame(0.0, &[], true);
         assert_eq!(input.cursor_ui(), [512.0, 384.0]);
-        // Full tilt right for 100 ms: 100 units.
+        // Full tilt right for 100 ms: 50 units.
         axis(&mut input, GamepadAxis::LeftX, 1.0);
         input.pad_cursor_frame(100.0, &[], true);
-        assert!((input.cursor_ui()[0] - 612.0).abs() < 0.01);
+        assert!((input.cursor_ui()[0] - 562.0).abs() < 0.01);
         assert!(matches!(input.actions(), [Action::Cursor { .. }]));
         input.end_frame();
-        // Over a target: 40.
-        let target = [600.0, 300.0, 200.0, 200.0];
+        // Over a target: 20.
+        let target = [550.0, 300.0, 200.0, 200.0];
         input.pad_cursor_frame(200.0, &[target], true);
-        assert!((input.cursor_ui()[0] - 652.0).abs() < 0.01);
+        assert!((input.cursor_ui()[0] - 582.0).abs() < 0.01);
         input.end_frame();
         // A stalled frame counts 100 ms at most; the screen clamps.
         input.pad_cursor_frame(5000.0, &[], true);
-        assert!((input.cursor_ui()[0] - 752.0).abs() < 0.01);
-        for t in 0..20 {
+        assert!((input.cursor_ui()[0] - 632.0).abs() < 0.01);
+        for t in 0..40 {
             input.pad_cursor_frame(5100.0 + 100.0 * t as f64, &[], true);
         }
         assert_eq!(input.cursor_ui()[0], UI_WIDTH);

@@ -468,9 +468,9 @@ export async function stickTo(target) {
       const [dx, dy] = [target[0] - ui[0], target[1] - ui[1]];
       const d = Math.hypot(dx, dy);
       if (d < 2) return;
-      // About 540, 117 and 21 UI units a second (the gamepad's curve),
+      // About 370, 140 and 40 UI units a second (the gamepad's speed),
       // slower over clickable elements.
-      const push = d > 80 ? 0.8 : d > 20 ? 0.5 : 0.35;
+      const push = d > 80 ? 0.8 : d > 20 ? 0.45 : 0.3;
       const value = [(dx / d) * push, (dy / d) * push];
       if (!sent || Math.hypot(value[0] - sent[0], value[1] - sent[1]) > 0.02) {
         sent = value;
