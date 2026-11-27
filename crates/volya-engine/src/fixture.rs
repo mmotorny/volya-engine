@@ -558,6 +558,8 @@ pub struct FakeAudio {
     pub master_gains: Vec<f32>,
     /// Every category volume set, in order.
     pub volumes: Vec<(crate::core::audio::Category, f32)>,
+    /// The positional sound system, when a test gives one.
+    pub sounds: Option<crate::core::sound::system::SoundSystem>,
 }
 
 impl FakeAudio {
@@ -590,5 +592,9 @@ impl AudioOut for FakeAudio {
 
     fn set_volume(&mut self, category: crate::core::audio::Category, volume: f32) {
         self.volumes.push((category, volume));
+    }
+
+    fn sounds(&mut self) -> Option<&mut crate::core::sound::system::SoundSystem> {
+        self.sounds.as_mut()
     }
 }

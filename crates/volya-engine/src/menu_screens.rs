@@ -60,6 +60,8 @@ pub struct MenuFrame {
     pub disconnect: bool,
     /// The options screen closed with a video restart marked.
     pub video_restart: bool,
+    /// The options screen closed with a sound restart marked.
+    pub sound_restart: bool,
     /// The options screen closed: the settings are to be stored.
     pub store_config: bool,
     /// A screen failed to open: fatal, as in the original (ui-layout.md
@@ -198,6 +200,7 @@ impl MenuScreens {
                     self.sub = None;
                     menu.set_cursor(data, input.cursor_ui());
                     out.video_restart = closed.video_restart;
+                    out.sound_restart = closed.sound_restart;
                     out.store_config = true;
                 }
                 return out;

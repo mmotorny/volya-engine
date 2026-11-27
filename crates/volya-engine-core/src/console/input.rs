@@ -58,7 +58,8 @@ pub enum Typed {
     /// if console-window.md section 2's condition holds.
     Close,
     /// Enter executed `line` (the line as typed) with `result`; an
-    /// [`Exec::Action`] is the owner's to run.
+    /// [`Exec::Action`] waits in [`Console::take_actions`] for the owner
+    /// to run.
     Entered { line: String, result: Exec },
 }
 

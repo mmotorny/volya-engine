@@ -52,6 +52,8 @@ use volya_engine_formats::pe::{self, Rgba};
 use volya_engine_formats::ui::Resolution;
 use volya_engine_formats::ui::picture::Quad;
 
+mod console_actions;
+
 /// The executable holding the splash picture, relative to the game root,
 /// and the picture's bitmap resource (startup.md section 3).
 pub const SPLASH_EXE: &str = "bin/XR_3DA.exe";
@@ -530,6 +532,8 @@ pub struct App {
     console_touched: bool,
     /// Alt+F4 ended the game (console-input.md section 1).
     alt_f4: bool,
+    /// A console line's `quit` ended the game (steering-the-original.md 7).
+    quit: bool,
     /// Updates so far.
     frames: u64,
     /// The update in which a lost pointer lock opened the menu.
@@ -731,11 +735,13 @@ fn phase_ms(started: &mut Option<f64>, time_ms: f64) -> u64 {
 impl App {
     pub fn new(data: GameData) -> io::Result<Self> {
         TitleMenu::check(&data)?;
-        let console = data.console();
+        let mut console = data.console();
         // The original ends at startup (console-commands.md section 5).
         if let Some(why) = console.fatal() {
             return Err(io::Error::other(why.to_owned()));
         }
+        // TODO(#654): the user configuration file's actions at startup.
+        console.take_actions();
         let video = video_mode(&console);
         let supersample = supersample(&console);
         let texture_list = TextureQuality::read_list(&data.system);
@@ -770,6 +776,7 @@ impl App {
             frame_ms: 0,
             console_touched: false,
             alt_f4: false,
+            quit: false,
             frames: 0,
             unlock_opened: None,
             prepare_textures: false,
@@ -925,6 +932,7 @@ impl App {
         if let Some(why) = self.console.take_fatal() {
             self.failed.get_or_insert(why);
         }
+        self.run_console_actions(input, audio);
         // A fatal error the level met, or a placed effect's group
         // (particle-groups.md 2.3): the game ends with it.
         if let Some(Phase::Level { level, .. }) = &mut self.phase {
@@ -1314,6 +1322,11 @@ impl App {
                     self.samplers.reset(&self.console);
                     menu.resized(data, self.video);
                 }
+                if out.sound_restart {
+                    // `snd_restart`, after `vid_restart` (options-screens.md
+                    // 5.4): the next sound frame restarts the sound system.
+                    self.sound_voices_set = false;
+                }
                 if menu.quit_requested() {
                     // The program's normal end (console-log.md 3.3), the
                     // graphics device destroyed (console-diagnostics.md
@@ -1457,6 +1470,11 @@ impl App {
                     // A device reset (texture-quality-filtering.md 7.3).
                     self.samplers.reset(&self.console);
                     menu.resized(data, self.video);
+                }
+                if out.sound_restart {
+                    // `snd_restart`, after `vid_restart` (options-screens.md
+                    // 5.4): the next sound frame restarts the sound system.
+                    self.sound_voices_set = false;
                 }
                 if menu.quit_requested() {
                     self.console.device_destroyed();
@@ -1817,7 +1835,8 @@ impl App {
         TextureQuality::new(lod, self.texture_list.clone())
     }
 
-    /// Executes a console command, as a program's line (tests).
+    /// Executes a console command, as a program's line (tests); an action
+    /// runs at the next update.
     pub fn exec(&mut self, line: &str) {
         self.console.exec(line);
     }
@@ -2197,7 +2216,7 @@ impl App {
     }
 
     pub fn quit_requested(&self) -> bool {
-        if self.alt_f4 {
+        if self.alt_f4 || self.quit {
             return true;
         }
         match &self.phase {
@@ -2843,6 +2862,103 @@ mod tests {
     /// How many log lines are `line`.
     fn logged(app: &App, line: &str) -> usize {
         app.console().log().iter().filter(|l| *l == line).count()
+    }
+
+    /// Console actions (console_actions.rs): a bound key's `main_menu`
+    /// opens the in-game menu, `main_menu off` closes it, `disconnect`
+    /// leaves the game for the title menu.
+    #[test]
+    fn a_bound_line_opens_the_menu_and_disconnect_leaves_the_game() {
+        let (tree, mut app, mut input, mut audio) = in_level_with_inventory();
+        app.exec("bind_console main_menu kK");
+        press(&mut input, Key::K);
+        app.update(&tree, 32.0, &mut input, &mut audio);
+        input.end_frame();
+        assert!(menu_open(&app));
+        app.exec("main_menu off");
+        app.update(&tree, 48.0, &mut input, &mut audio);
+        assert!(!menu_open(&app));
+        app.exec("main_menu 1");
+        app.update(&tree, 64.0, &mut input, &mut audio);
+        assert!(menu_open(&app));
+        app.exec("disconnect");
+        app.update(&tree, 80.0, &mut input, &mut audio);
+        let AppState::Menu { menu, .. } = app.state() else {
+            panic!("{:?}", app.state())
+        };
+        assert_eq!(menu.menu.list, "menu_main");
+        // Nothing to leave on the title screen.
+        app.exec("disconnect");
+        app.update(&tree, 96.0, &mut input, &mut audio);
+        assert!(matches!(app.state(), AppState::Menu { .. }));
+        assert!(!app.quit_requested());
+    }
+
+    /// Steering-the-original.md section 7: a normal exit.
+    #[test]
+    fn a_bound_quit_line_ends_the_game() {
+        let (tree, mut app, mut input, mut audio) = in_level_with_inventory();
+        app.exec("bind_console quit kK");
+        app.take_log_file();
+        app.take_save();
+        press(&mut input, Key::K);
+        app.update(&tree, 32.0, &mut input, &mut audio);
+        assert!(app.quit_requested());
+        assert!(app.take_log_file().is_some());
+        assert!(app.take_save().is_some());
+    }
+
+    /// `snd_restart` restarts the sound system with `snd_targets`
+    /// (sound-positional.md section 2), and only then.
+    #[test]
+    fn snd_restart_takes_snd_targets() {
+        use crate::core::sound::system::SoundSystem;
+        let (tree, mut app, mut input, mut audio) = in_level_with_inventory();
+        audio.sounds = Some(SoundSystem::new(4));
+        let voices = |audio: &FakeAudio| audio.sounds.as_ref().unwrap().voice_count();
+        // The first frame with sound takes it.
+        app.update(&tree, 32.0, &mut input, &mut audio);
+        assert_eq!(voices(&audio), 16);
+        app.exec("snd_targets 8");
+        app.update(&tree, 48.0, &mut input, &mut audio);
+        assert_eq!(voices(&audio), 16);
+        app.exec("snd_restart");
+        app.update(&tree, 64.0, &mut input, &mut audio);
+        assert_eq!(voices(&audio), 8);
+    }
+
+    /// Steering-the-original.md 3.2: `start` of the New Game loads it at
+    /// the difficulty set; without a client it says so.
+    #[test]
+    fn start_begins_the_new_game() {
+        let tree = fixture::tree();
+        let mut app = App::new(fixture::data(&tree)).unwrap();
+        app.assets = fixture::assets();
+        let (mut input, mut audio) = (Input::new(), FakeAudio::default());
+        app.update(&tree, 0.0, &mut input, &mut audio);
+        for _ in 0..5 {
+            press(&mut input, Key::Escape);
+            app.update(&tree, 10.0, &mut input, &mut audio);
+            input.end_frame();
+        }
+        assert!(matches!(app.state(), AppState::Menu { .. }));
+        app.exec("start server(all/alife/new)");
+        app.update(&tree, 20.0, &mut input, &mut audio);
+        assert_eq!(
+            logged(
+                &app,
+                "! Can't start game without client. Arguments: 'server(all/alife/new)'."
+            ),
+            1
+        );
+        app.exec("g_game_difficulty gd_veteran");
+        app.exec("start server(all/single/alife/new) client(localhost)");
+        app.update(&tree, 30.0, &mut input, &mut audio);
+        let AppState::Loading { difficulty, .. } = app.state() else {
+            panic!("{:?}", app.state())
+        };
+        assert_eq!(difficulty, "gd_veteran");
+        assert!(audio.playing.is_empty(), "the menu music stopped");
     }
 
     /// console-key-bindings.md section 5.
