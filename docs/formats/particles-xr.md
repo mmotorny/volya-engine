@@ -227,7 +227,7 @@ record outside `source` has a bit above 0x3; no record has 0x40000000.
 | Bit | Records | Meaning |
 |---|---|---|
 | 0x1 | 407 | not tested by the game (`bin_flags.py`); no effect on the game (believed: an editor setting) |
-| 0x2 | 1,067 + 1,036 `source` | the action's stored positions and directions are given in the effect's own space and follow the effect's full transform when the effect is placed; without it only the effect's position applies (P2) |
+| 0x2 | 1,067 + 1,036 `source` | selects the matrix an action is placed by when the effect is placed (P2 5.2): with it the effect's full transform, without it only the effect's position. It acts only on the fields that P2 5.2's table places, of the types 1, 9, 14, 15, 16, 17, 19, 21, 27, 29 and 31; on the other types (4, 6, 7, 8, 10, 12, 22, 23, 24, 25, 30), whose placement changes nothing, it has no effect (`bit2_types.py`). Set on placed types in 1,886 records (1,036 of them `source`), on other types in 217, all `gravity` (8) (`bit2_types.py`) |
 | 0x20000000 | 412 (`source` only) | `source`: a new particle's size is uniform: its three components take the first one generated (P2) |
 | 0x40000000 | 0 | `source`: the source is switched off; set and cleared by the game at run time (believed: set while the effect is stopped, cleared when it plays), never set in the data (P2) |
 | 0x80000000 | 1,087 (`source` only) | tested only by `source`; with and without it, a new particle is made from the same fields in the same way: no effect on the simulation (`bin_flags.py`) |
@@ -511,7 +511,7 @@ limit 0, 7 members, all child names empty (effect, start, stop, flags): `explosi
 
 ## 10. Provenance
 
-- Date: 2026-11-24.
+- Date: 2026-11-24; the reach of action flag bit 0x2 (4.2) stated per type 2026-11-26.
 - Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG): archives `gamedata.db0` …
   `gamedata.dbd` and `mods\mp_military_2.xdb0` (listings), `particles.xr` from `gamedata.db4` and
   `gamedata.dba`; binaries `bin\xrRender_R1.dll` (MD5 `2bf95c8376b735daa6d82b8944894be0`) and
@@ -529,5 +529,4 @@ limit 0, 7 members, all child names empty (effect, start, stop, flags): `explosi
 
 ## Gaps found in review
 
-- Which fields of each action type are positions and which are directions under action flag bit 0x2 (4.2) is not stated per type; P2's placement must establish it.
 - Bit 0x1 of the action flag word is "not tested" by a search for flag tests in the particle library only; whether any other part of the game reads it is not shown.

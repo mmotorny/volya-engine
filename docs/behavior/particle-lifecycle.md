@@ -154,7 +154,15 @@ The owner places an instance with a matrix *M*, a velocity **w** and a choice of
   *M* and **w** (5.2). The particles keep their values: already live particles are not moved.
 - **Local mode**: nothing is placed and **w** is not used; *M* is kept, and the particles, which stay in the
   effect's own space, are drawn transformed by *M* (P7). The instance's position is not changed by a local-mode
-  placement.
+  placement. The bounding box and sphere (8.2, 8.3) are then in the effect's own space too: the instance computes
+  them from the particles' stored positions (or its position) and never maps them by *M* (`bin_local_box.py`).
+  *M* is applied by their users: the effect object's culling sphere and the queuing of the effect for drawing take
+  the sphere's centre mapped as a point by the object's transform, which a local-mode placement sets to *M*, and
+  the radius as it is, not scaled by *M* (P7 7.1; `bin_local_box.py`). Neither of these reads the box
+  (`bin_local_box.py`).
+  **Disputed in review:** the box is read and mapped too: the occlusion test of a drawn effect object (P7 7.1;
+  `docs/behavior/occlusion-tests.md` 6, "An object's box") takes the instance's bounding box as its visual's box and
+  uses the smallest axis-aligned box around that box transformed by the object's transform (in local mode *M*).
 
 A world-mode placement clears local mode; a local-mode placement sets it. A new instance has position (0, 0, 0),
 the identity as its kept matrix, and its action list as stored, which acts as a placement by the identity with
@@ -324,26 +332,30 @@ updated without stopping, is stopped by the time limit in step *k*, the first *k
 - The starting state of the shared generator and the other draws from it (2.1).
 - Placement of a region of a kind above 10 (4.3).
 - Whether the bounding box leaves out particles removed by collision in the same step (8.3).
+- Whether anything outside this specification and P7 reads an instance's bounding box, which in local mode is in
+  the effect's own space (5.1).
+  **Disputed in review:** the occlusion test of effect objects (`docs/behavior/occlusion-tests.md` 6) reads it,
+  mapped by the object's transform (5.1); whether anything else reads it is unestablished.
 - How often owners update and place their instances (the owners' specs).
 
 ## 11. Provenance
 
-- Date: 2026-11-24; a new instance's box and sphere (8.1) added 2026-11-26.
+- Date: 2026-11-24; a new instance's box and sphere (8.1) added 2026-11-26; the box and sphere in local mode (5.1)
+  added 2026-11-26.
 - Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG): `particles.xr` from `gamedata.db4`
   (identical copy in `gamedata.dba`); binaries `bin\xrParticles.dll` (MD5 `22bad4d258e6211c6ea7cc8dc8d7ca55`) and
   `bin\xrRender_R1.dll` (MD5 `2bf95c8376b735daa6d82b8944894be0`); for a new instance's box and sphere (8.1),
-  `bin\XR_3DA.exe` (MD5 `ba3ad0127bff6619ed991a7c82d8b946`).
+  `bin\XR_3DA.exe` (MD5 `ba3ad0127bff6619ed991a7c82d8b946`); for the box and sphere in local mode (5.1),
+  `bin\xrGame.dll` (MD5 `19938b4b9fa11e3b4b6462ce7e7a12ac`).
 - Data examined: every effect record of `particles.xr`, decoded with a throwaway parser written from P1's text.
 - Analysis: static analysis (Ghidra 12.2, headless) of the particle library (the random numbers, region
   generation, containment and placement, the placement of action lists and of each action type, particle birth,
   addition and removal, play and stop) and of the first renderer's effect instance (its record, placement, play,
-  stop and update) and of the engine executable's routines that set a new instance's box and sphere; the region placement was checked by emulating the program's instructions on random input.
+  stop and update) and of the engine executable's routines that set a new instance's box and sphere, and, for the
+  box and sphere in local mode (5.1), of the first renderer's traversal of drawn objects and of the game library's
+  effect object (`bin\xrGame.dll`); the region placement was checked by emulating the program's instructions on
+  random input.
   Behaviour was then reproduced by a throwaway implementation written from this text (`sim.py`). No execution or
   debugging of the game.
 - No leaked source code, derived projects or third-party documentation of the engine were used. The checks in
   `checks/particle-lifecycle/` reproduce every fact.
-
-## Gaps found in review
-
-- In local mode (5.1) the bounding box and sphere of 8.2 and 8.3 are computed from the particles' untransformed positions and the unchanged instance position; whether and where the kept matrix *M* is applied to them before they are used is not stated.
-- `docs/formats/particles-xr.md` 4.2 describes action flag bit 0x2 as making an action's stored positions and directions follow the full transform; section 5.2 here restricts that to the placed types and fields of its table (bit 0x2 on `gravity`, `turbulence` and the other unplaced types has no effect), and particles-xr.md's row does not say so.
