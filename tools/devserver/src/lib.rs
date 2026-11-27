@@ -371,10 +371,11 @@ enum Route {
 
 /// A reference's path below the references' directory: `<suite>/` and one
 /// or more names, each a [`plain_name`], the last a frame, a configuration
-/// file, or the Direct3D 9 probes' `.bin` log and `.json` index.
+/// file, the Direct3D 9 probes' `.bin` log and `.json` index, or a captured
+/// recording's `.wav` and its frames' `.txt` table.
 fn reference_path(rest: &str) -> Option<&str> {
     let names: Vec<&str> = rest.split('/').collect();
-    let kind = [".png", ".ltx", ".bin", ".json"]
+    let kind = [".png", ".ltx", ".bin", ".json", ".wav", ".txt"]
         .iter()
         .any(|k| rest.ends_with(k));
     (names.len() >= 2 && names.iter().all(|n| plain_name(n)) && kind).then_some(rest)
