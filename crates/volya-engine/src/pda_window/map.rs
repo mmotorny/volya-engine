@@ -828,10 +828,10 @@ impl MapWindow {
         if self.at_min_zoom() || !self.frame_overlaps(r) {
             return Vec::new();
         }
-        let b = self.maps.levels[i].picture.bound;
-        let k = (r[2] - r[0]) / (b[2] - b[0]);
+        // 2.3: the width ratio on both axes.
+        let [u, v] = self.maps.levels[i].picture.point(*x, *z, r[2] - r[0]);
         let f = self.layout.frame;
-        let (cx, cy) = (f.x + r[0] + k * (x - b[0]), f.y + r[1] + k * (b[3] - z));
+        let (cx, cy) = (f.x + r[0] + u, f.y + r[1] + v);
         let s = self.scale();
         let angle = heading([yaw.sin(), yaw.cos()]);
         (self.layout.spots.iter().enumerate())

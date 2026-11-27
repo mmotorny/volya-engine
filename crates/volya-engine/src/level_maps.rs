@@ -3,8 +3,10 @@
 
 //! The level-map data (docs/behavior/pda-level-maps.md, cited by section):
 //! the list of level maps of `game.ltx` (2), the global map (4) and each
-//! level map's section (3, 5), and how a level position maps onto the
-//! global map (6). The PDA map draws them (docs/behavior/pda-map.md).
+//! level map's section (3, 5), how a level position maps into a level
+//! map's picture and onto the global map (6), and the minimap's section
+//! (7). The PDA map draws them (docs/behavior/pda-map.md); the minimap
+//! (hud-scope.md spec 10, #177) will read its section here.
 
 use std::io;
 
@@ -63,6 +65,40 @@ impl MapPicture {
 
     pub fn height(&self) -> f32 {
         self.bound[3] - self.bound[1]
+    }
+
+    /// Where level point (`x`, `z`) lies in the picture drawn `width`
+    /// units wide (6.2): u = (x − x1) · k right of its left edge, v = (y2 −
+    /// z) · k below its top, k = `width` / (x2 − x1) on both axes.
+    pub fn point(&self, x: f32, z: f32, width: f32) -> [f32; 2] {
+        let k = width / self.width();
+        [(x - self.bound[0]) * k, (self.bound[3] - z) * k]
+    }
+
+    /// The inverse (6.2): x = u / k + x1, z = y2 − v / k.
+    pub fn level_point(&self, [u, v]: [f32; 2], width: f32) -> [f32; 2] {
+        let k = width / self.width();
+        [u / k + self.bound[0], self.bound[3] - v / k]
+    }
+
+    /// The minimap's section (7): level `name`'s section of `game`, found
+    /// by the plain existence test, else of the level's `level.ltx`
+    /// (`level`), read as in section 3, and its size for a level frame
+    /// `frame_width` units wide: F / 100 units per metre on both axes.
+    pub fn minimap(
+        game: &Config,
+        level: Option<&Config>,
+        name: &str,
+        frame_width: f32,
+    ) -> io::Result<(Self, [f32; 2])> {
+        let config = match level {
+            Some(level) if !game.contains(name) => level,
+            _ => game,
+        };
+        let picture = Self::read(config, name)?;
+        let f = frame_width * 0.01;
+        let size = [picture.width() * f, picture.height() * f];
+        Ok((picture, size))
     }
 }
 
@@ -186,6 +222,48 @@ mod tests {
         let [gx, gy] = maps.levels[0].to_global(-246.7263, -134.43387);
         assert!((gx - 376.56).abs() < 0.01, "{gx}");
         assert!((gy - 2300.57).abs() < 0.01, "{gy}");
+    }
+
+    #[test]
+    fn the_list_is_in_key_byte_order_and_bound_rect_needs_texture() {
+        // ltx-config.md 6: upper case sorts before lower case (2).
+        let game = "[level_maps_single]\nl04_darkvalley\nL05_bar\n\
+            [global_map]\nmax_zoom = 6\n\
+            [l04_darkvalley]\nbound_rect = 1,2,3,4\nglobal_rect = 0,0,1,1\n\
+            [L05_bar]\ntexture = map\\map_bar\nbound_rect = 0, -512.03, 512, 512.001\nglobal_rect = 407, 1414, 556, 1712\n";
+        let maps = LevelMaps::read(&parse(game.as_bytes()).unwrap()).unwrap();
+        let names: Vec<&str> = maps.levels.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["l05_bar", "l04_darkvalley"]);
+        // `bound_rect` without `texture` is not read (3).
+        assert_eq!(maps.levels[1].picture.bound, NO_MAP_RECT);
+        assert_eq!(maps.levels[0].picture.texture, "map\\map_bar");
+    }
+
+    #[test]
+    fn maps_into_the_picture_and_back() {
+        let maps = LevelMaps::read(&parse(GAME.as_bytes()).unwrap()).unwrap();
+        let p = &maps.levels[0].picture;
+        // 6.2: the start at picture pixel (49.9, 670.8) of 512 × 1024.
+        let [u, v] = p.point(-246.7263, -134.43387, 512.0);
+        assert!(
+            (u - 49.9).abs() < 0.05 && (v - 670.8).abs() < 0.1,
+            "{u} {v}"
+        );
+        let [x, z] = p.level_point([u, v], 512.0);
+        assert!((x + 246.7263).abs() < 1e-3 && (z + 134.43387).abs() < 1e-3);
+    }
+
+    #[test]
+    fn the_minimap_reads_game_ltx_else_level_ltx() {
+        let game = parse(GAME.as_bytes()).unwrap();
+        let (p, size) = MapPicture::minimap(&game, None, "l01_escape", 200.0).unwrap();
+        assert_eq!(p.texture, "map\\map_escape");
+        assert!((size[0] - 722.044 * 2.0).abs() < 0.01, "{size:?}");
+        // Not in game.ltx: the level's own file (7).
+        let level =
+            parse(b"[l99_test]\ntexture = map\\map_test\nbound_rect = 0,0,100,50\n").unwrap();
+        let (p, size) = MapPicture::minimap(&game, Some(&level), "l99_test", 100.0).unwrap();
+        assert_eq!((p.texture.as_str(), size), ("map\\map_test", [100.0, 50.0]));
     }
 
     #[test]
