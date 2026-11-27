@@ -278,7 +278,6 @@ pub fn audio_host_report() -> Option<String> {
             "blocks": std::mem::take(&mut s.blocks),
             "heap": heap,
             "in_use": in_use,
-            "cache": s.host.cache_bytes(),
             "mix_ms": s.mix_ms,
             "frames": s.frames,
             "underrun": s.underrun,

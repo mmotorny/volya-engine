@@ -6,8 +6,8 @@
 // every MUSIC_S, a busy moment every BUSY_S (BUSY sounds of the level's
 // files started by one update) and a run back and forth between them.
 // Sampled every second: the audio worker's mixing time and frames, its
-// underruns, the sound cache's bytes, its wasm memory and the engine's
-// frame times (`level_stats`). Where the page's AudioContext does not run
+// underruns, its memory manager's bytes in use (the sound memory), its
+// wasm memory and the engine's frame times (`level_stats`). Where the page's AudioContext does not run
 // (the iOS Simulator holds it "interrupted" without a gesture), an
 // OfflineAudioContext rendered in steps of STEP_S paced by as long a
 // pause stands in for it, as the audio suite's renders do.
@@ -64,7 +64,7 @@ const quantile = (values, q) => {
 export const tests = {
   ...keptSetup({ level: true }),
 
-  [`a level session of ${SESSION_S / 60} minutes: mixing, underruns, the sound cache, frame times`]: async () => {
+  [`a level session of ${SESSION_S / 60} minutes: mixing, underruns, the sound memory, frame times`]: async () => {
     needsGame();
     let done = false;
     const live = volya.audioState() === "running";
@@ -84,7 +84,6 @@ export const tests = {
           mix: s.audio_mix_ms,
           frames: s.audio_mixed_frames,
           underrun: s.audio_underrun_frames,
-          cache: s.audio_cache_bytes,
           inUse: s.audio_in_use_bytes,
           heap: s.audio_heap_bytes,
           cpu: s.frame_cpu_ms,
@@ -144,9 +143,8 @@ export const tests = {
       mix_ms_per_s_p99: +quantile(perSecond, 0.99).toFixed(2),
       mix_ms_per_s_worst: +Math.max(...perSecond).toFixed(2),
       underrun_ms: +underrunMs.toFixed(1),
-      cache_kib: minutes.map((m) => Math.round(at(m).cache / 1024)),
-      cache_most_kib: Math.round(most("cache") / 1024),
-      in_use_most_kib: Math.round(most("inUse") / 1024),
+      sound_kib: minutes.map((m) => Math.round(at(m).inUse / 1024)),
+      sound_most_kib: Math.round(most("inUse") / 1024),
       audio_heap_mib: minutes.map((m) => +(at(m).heap / 2 ** 20).toFixed(1)),
       frame_cpu_ms: +(cpu.reduce((a, b) => a + b, 0) / cpu.length).toFixed(2),
       frame_cpu_p99_ms: +quantile(cpu, 0.99).toFixed(2),
@@ -160,9 +158,9 @@ export const tests = {
     return (
       `${summary.output} output, ${audioS.toFixed(0)} s of audio; mixing ${mean.toFixed(2)} ms per second of audio, ` +
       `${summary.mix_ms_per_s_p99} at the 99th percentile of seconds, ${summary.mix_ms_per_s_worst} worst; ` +
-      `underruns ${underrunMs.toFixed(0)} ms; the sound cache at minutes ${minutes.join(", ")}: ` +
-      `${minutes.map((m) => kib(at(m).cache)).join(", ")} (most ${kib(most("cache"))}), ` +
-      `the audio worker's bytes in use most ${kib(most("inUse"))}; its wasm memory ${minutes.map((m) => mib(at(m).heap)).join(", ")}; ` +
+      `underruns ${underrunMs.toFixed(0)} ms; the sound memory at minutes ${minutes.join(", ")}: ` +
+      `${minutes.map((m) => kib(at(m).inUse)).join(", ")} (most ${kib(most("inUse"))}); ` +
+      `the audio worker's wasm memory ${minutes.map((m) => mib(at(m).heap)).join(", ")}; ` +
       `frame CPU ${summary.frame_cpu_ms} ms average, ${summary.frame_cpu_p99_ms} at the 99th percentile of seconds, ` +
       `${summary.frame_cpu_worst_ms} worst frame; frame interval ${summary.frame_interval_ms} ms; ` +
       `${busy} busy moments of ${BUSY} sounds, ${runs} runs, ${heard.size} files; ${JSON.stringify(summary)}`

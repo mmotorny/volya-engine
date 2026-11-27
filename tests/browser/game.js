@@ -61,11 +61,6 @@ export const ORIGINAL = {
   },
   h: 227120,
   t: 260798,
-  // With sound on (console-diagnostics.md 2.4.1, `snd_cache_size 16`): h
-  // when the load began (reported beside) and at its end, and the one
-  // caption that keeps more. The budgets while the audio worker's sound
-  // memory counts in h (docs/architecture/memory.md, Deviations).
-  withSound: { loadStartH: 59492, h: 260535, captions: { st_loading_ai_objects: 40 } },
   // Reported beside, not budgets (console-diagnostics.md 2.1's example).
   titleMenuH: 26449,
   // The game scripts' pool at the load's end, K (#667): reported beside.
@@ -87,12 +82,13 @@ export async function againstOriginal() {
   assert(load?.end, "the load has not ended");
   const marks = load.captions.map(([caption, cmem]) => [caption, kib(cmem)]);
   const excesses = [];
-  // The original's with sound when ours holds sound memory (a device).
-  const sound = now.sound > 0;
-  const originalH = sound ? ORIGINAL.withSound.h : ORIGINAL.h;
+  // The budgets are the original's without sound: the sound memory, the
+  // audio worker's, is reported beside h (docs/architecture/memory.md,
+  // Deviations).
+  const originalH = ORIGINAL.h;
   const kept = marks.map(([caption, cmem], i) => {
     const grown = (marks[i + 1]?.[1] ?? kib(load.end.cmem)) - cmem;
-    const original = (sound && ORIGINAL.withSound.captions[caption]) || ORIGINAL.captions[caption];
+    const original = ORIGINAL.captions[caption];
     if (grown > original) excesses.push(`${caption} keeps ${grown} K, the original ${original} K`);
     return `${caption} ${grown}/${original}`;
   });
@@ -110,7 +106,7 @@ export async function againstOriginal() {
   const [cacheEnd, cacheBudget] = [kib(load.end.file_cache), kib(load.end.file_cache_budget)];
   if (cacheEnd > cacheBudget) excesses.push(`the file cache holds ${cacheEnd} K at the load's end, its budget ${cacheBudget} K`);
   const excess = excesses.length ? `EXCESS over the original's (to file): ${excesses.join("; ")}; ` : "";
-  return `${excess}${sound ? `with sound (its memory ${kib(now.sound)} K, the cache ${kib(now.sound_cache)} K), h at the load's start ${marks[0]?.[1]}/${ORIGINAL.withSound.loadStartH} K; ` : "without sound; "}kept by caption (K, ours/the original's): ${kept.join(", ")}; at the load's end h ${h}/${originalH} K, t ${t}/${ORIGINAL.t} K, g ${kib(load.end.game_lua)}/${ORIGINAL.g} K, r ${kib(load.end.render)}/${ORIGINAL.r} K; h now ${kib(now.crt_heap)} K, g ${kib(now.game_lua)} K, r ${kib(now.render)} K (the original's ${ORIGINAL.rDrawn} K once frames are drawn); the file cache by caption (K, its most/its budget): ${cache.join(", ")}; at the load's end ${cacheEnd}/${cacheBudget} K, its most since the load began ${kib(load.end.file_cache_most)} K`;
+  return `${excess}the sound memory ${kib(now.sound)} K; kept by caption (K, ours/the original's): ${kept.join(", ")}; at the load's end h ${h}/${originalH} K, t ${t}/${ORIGINAL.t} K, g ${kib(load.end.game_lua)}/${ORIGINAL.g} K, r ${kib(load.end.render)}/${ORIGINAL.r} K; h now ${kib(now.crt_heap)} K, g ${kib(now.game_lua)} K, r ${kib(now.render)} K (the original's ${ORIGINAL.rDrawn} K once frames are drawn); the file cache by caption (K, its most/its budget): ${cache.join(", ")}; at the load's end ${cacheEnd}/${cacheBudget} K, its most since the load began ${kib(load.end.file_cache_most)} K`;
 }
 /** The renderer's pool now against the original's once frames are drawn. */
 export const rNow = async () =>

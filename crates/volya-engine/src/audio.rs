@@ -35,9 +35,6 @@ pub trait AudioOut {
     fn sounds(&mut self) -> Option<&mut SoundSystem> {
         None
     }
-    /// Makes the sound cache of `snd_cache_size` `size`
-    /// (console-diagnostics.md 2.1.1), where the output decodes.
-    fn set_sound_cache(&mut self, _size: u32) {}
 }
 
 /// No audio output: nothing plays.
@@ -99,10 +96,6 @@ impl AudioOut for MixerOut<'_> {
 
     fn sounds(&mut self) -> Option<&mut SoundSystem> {
         self.sounds.as_deref_mut()
-    }
-
-    fn set_sound_cache(&mut self, size: u32) {
-        self.mixer.set_sound_cache(size);
     }
 }
 

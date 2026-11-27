@@ -113,13 +113,9 @@ impl MixerControl for WebMixer {
         playback: Playback,
     ) -> Option<VoiceId> {
         let array = self.read(tree, path, !checked)?;
-        let key = self.remote.key(path);
-        let (id, number) = self.remote.play_sent(key, skip, playback);
+        let (id, number) = self.remote.play_sent(skip, playback);
         self.files.push((number, array));
         Some(id)
-    }
-    fn set_sound_cache(&mut self, size: u32) {
-        self.remote.set_sound_cache(size);
     }
     fn set_voice(&mut self, id: VoiceId, gain: f32, pan: f32, pitch: f32) {
         self.remote.set_voice(id, gain, pan, pitch);
@@ -152,10 +148,9 @@ impl MixerControl for WebMixer {
 pub struct HostStats {
     /// Its wasm heap (linear memory).
     pub audio_heap_bytes: f64,
-    /// Its memory manager's bytes in use (counted as the engine's *h*):
-    /// the sound cache among them, and of it the cache's bytes.
+    /// Its memory manager's bytes in use: the sound memory, reported
+    /// beside the engine's *h*.
     pub audio_in_use_bytes: f64,
-    pub audio_cache_bytes: f64,
     /// Time spent mixing (decoding included), ms, and frames mixed, since
     /// the audio worker started.
     pub audio_mix_ms: f64,
@@ -311,7 +306,6 @@ pub fn audio_report(report: &str) -> Result<(), JsValue> {
         *s.borrow_mut() = HostStats {
             audio_heap_bytes: number("heap"),
             audio_in_use_bytes: number("in_use"),
-            audio_cache_bytes: number("cache"),
             audio_mix_ms: number("mix_ms"),
             audio_mixed_frames: number("frames"),
             audio_underrun_frames: number("underrun"),
