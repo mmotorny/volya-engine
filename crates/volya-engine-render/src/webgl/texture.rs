@@ -47,9 +47,10 @@ impl Renderer {
     }
 
     /// Uploads every face and mip level of `dds`, by this context's
-    /// [`TexturePath`] (transcoding here when it is ETC2).
-    pub fn create_texture(&self, dds: &Dds) -> Result<Texture, TextureError> {
-        let mut upload = self.begin_texture(dds)?;
+    /// [`TexturePath`] (transcoding here when it is ETC2); `name` names it
+    /// (the file's path, [`gl::Texture::set_name`]).
+    pub fn create_texture(&self, name: &str, dds: &Dds) -> Result<Texture, TextureError> {
+        let mut upload = self.begin_texture(name, dds)?;
         upload.step(self, dds, &mut Vec::new(), u64::MAX);
         Ok(upload.finish(self))
     }
@@ -58,7 +59,7 @@ impl Renderer {
     /// ([`Renderer::create_texture`] in steps): the texture is made, empty,
     /// and filled by [`TextureUpload::step`], so a platform can spread the
     /// writes and wait between them (#440).
-    pub fn begin_texture(&self, dds: &Dds) -> Result<TextureUpload, TextureError> {
+    pub fn begin_texture(&self, name: &str, dds: &Dds) -> Result<TextureUpload, TextureError> {
         let (width, height) = (dds.width, dds.height);
         let size_error = |reason| TextureError::Size {
             width,
@@ -97,6 +98,7 @@ impl Renderer {
         let texture = self
             .gl
             .texture(format, width, height, dds.mip_levels.max(1), cube);
+        texture.set_name(name);
         Ok(TextureUpload {
             texture,
             faces: dds.faces,

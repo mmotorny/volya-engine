@@ -20,8 +20,8 @@
 #![allow(dead_code)]
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
-use std::rc::Rc;
+use std::collections::{BTreeMap, HashMap};
+use std::rc::{Rc, Weak};
 
 use web_sys::WebGl2RenderingContext as C;
 use web_sys::{
@@ -236,7 +236,7 @@ impl Gl {
 
     /// Those of [`Gl::live`] made for `owner`.
     pub fn live_of(&self, owner: Owner) -> Live {
-        self.live[owner as usize].get()
+        self.live.live[owner as usize].get()
     }
 
     /// Those of [`Gl::live`] the renderer keeps across games: every
@@ -271,6 +271,43 @@ impl Gl {
         let c = self.counted();
         c.update(f);
         c
+    }
+
+    /// The textures and programs that live (made and not yet deleted),
+    /// with their names, oldest first.
+    pub fn remaining(&self) -> Remaining {
+        let mut r = Remaining::default();
+        for named in self.live.named.borrow().values() {
+            match named {
+                Named::Texture(t) => {
+                    let count = t.strong_count() as u64;
+                    let Some(t) = t.upgrade() else { continue };
+                    let name = t
+                        .name
+                        .borrow()
+                        .clone()
+                        .unwrap_or_else(|| t.live.owner.name().into());
+                    match t.drawn_into.get() {
+                        None => r.textures.push((count, name)),
+                        Some(true) => r.targets.push((count, name)),
+                        Some(false) => r.depths.push((count, name)),
+                    }
+                }
+                Named::Program(p) => {
+                    let count = p.strong_count() as u64;
+                    let Some(p) = p.upgrade() else { continue };
+                    r.programs
+                        .push((count, p.names.0.clone(), p.names.1.clone()));
+                }
+            }
+        }
+        r
+    }
+
+    /// Forgets the samplers it made (each is deleted once nothing holds
+    /// it), as the renderer is released.
+    pub fn forget_samplers(&self) {
+        self.samplers.borrow_mut().clear();
     }
 
     pub fn max_texture_size(&self) -> u32 {
@@ -394,7 +431,9 @@ impl Gl {
             height,
             levels,
             drawn_into: Cell::new(None),
+            name: RefCell::new(None),
         }));
+        t.0.live.named(t.0.id, Named::Texture(Rc::downgrade(&t.0)));
         t.0.live.update(|l| {
             l.textures += 1;
             l.texture_bytes += t.bytes();
@@ -653,14 +692,20 @@ impl Gl {
         }
         self.count(Call::Create);
         let first_instance = self.gl.get_uniform_location(&raw, "naga_vs_first_instance");
-        Ok(Program(Rc::new(ProgramInner {
+        let p = Program(Rc::new(ProgramInner {
             live: self.add_live(|l| l.programs += 1),
             gl: self.gl.clone(),
             raw,
             id,
             units,
             first_instance,
-        })))
+            names: (
+                format!("{} {}", vs.module, vs.entry),
+                format!("{} {}", fs.module, fs.entry),
+            ),
+        }));
+        p.0.live.named(id, Named::Program(Rc::downgrade(&p.0)));
+        Ok(p)
     }
 
     /// A vertex array reading `buffers` (each at its byte offset, with its
@@ -1281,11 +1326,14 @@ struct TextureInner {
     levels: u32,
     /// Once a framebuffer draws into it: as its colour (true) or depth.
     drawn_into: Cell<Option<bool>>,
+    /// [`Texture::set_name`].
+    name: RefCell<Option<String>>,
 }
 
 impl Drop for TextureInner {
     fn drop(&mut self) {
         self.gl.delete_texture(Some(&self.raw));
+        self.live.forget(self.id);
         let bytes = texture_bytes(self);
         let drawn_into = self.drawn_into.get();
         self.live.update(|l| {
@@ -1376,8 +1424,19 @@ impl Owner {
     }
 }
 
-/// Live resources by [`Owner`].
-type Owned = [Cell<Live>; OWNERS.len()];
+/// Live resources by [`Owner`], and the textures and programs among them
+/// by id (made in that order).
+#[derive(Default)]
+struct Owned {
+    live: [Cell<Live>; OWNERS.len()],
+    named: RefCell<BTreeMap<u32, Named>>,
+}
+
+/// A live texture or program, for [`Gl::remaining`].
+enum Named {
+    Texture(Weak<TextureInner>),
+    Program(Weak<ProgramInner>),
+}
 
 /// The count a resource is in: its owner's.
 struct Counted {
@@ -1387,11 +1446,37 @@ struct Counted {
 
 impl Counted {
     fn update(&self, f: impl Fn(&mut Live)) {
-        let c = &self.live[self.owner as usize];
+        let c = &self.live.live[self.owner as usize];
         let mut l = c.get();
         f(&mut l);
         c.set(l);
     }
+
+    /// Lists the texture or program `id` among the live ones.
+    fn named(&self, id: u32, named: Named) {
+        self.live.named.borrow_mut().insert(id, named);
+    }
+
+    /// Takes `id` off that list, as it is deleted.
+    fn forget(&self, id: u32) {
+        self.live.named.borrow_mut().remove(&id);
+    }
+}
+
+/// The textures and programs that live ([`Gl::remaining`]), each with its
+/// handles' count and its name: a texture's as given
+/// ([`Texture::set_name`]), else its [`Owner`]'s; a program's stages' as
+/// `<module> <entry point>`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Remaining {
+    /// Those no framebuffer draws into.
+    pub textures: Vec<(u64, String)>,
+    /// Those drawn into as a colour.
+    pub targets: Vec<(u64, String)>,
+    /// Those drawn into as a depth.
+    pub depths: Vec<(u64, String)>,
+    /// Each with its vertex and fragment stages' names.
+    pub programs: Vec<(u64, String, String)>,
 }
 
 /// The resources a [`Gl`] made that live: their counts and bytes.
@@ -1457,6 +1542,11 @@ impl std::ops::Sub for Live {
 pub struct Texture(Rc<TextureInner>);
 
 impl Texture {
+    /// Names it (the file it was made from) for [`Gl::remaining`].
+    pub fn set_name(&self, name: &str) {
+        *self.0.name.borrow_mut() = Some(name.to_owned());
+    }
+
     pub fn size(&self) -> (u32, u32) {
         (self.0.width, self.0.height)
     }
@@ -1559,11 +1649,15 @@ struct ProgramInner {
     /// Its units: (unit, the WGSL texture, the WGSL sampler).
     units: Vec<Unit>,
     first_instance: Option<WebGlUniformLocation>,
+    /// Its vertex and fragment stages' names: the module's and the entry
+    /// point's.
+    names: (String, String),
 }
 
 impl Drop for ProgramInner {
     fn drop(&mut self) {
         self.gl.delete_program(Some(&self.raw));
+        self.live.forget(self.id);
         self.live.update(|l| l.programs -= 1);
     }
 }

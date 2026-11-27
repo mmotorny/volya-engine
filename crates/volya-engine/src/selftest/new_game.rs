@@ -432,7 +432,7 @@ pub async fn loading_takes_prepared_textures(cx: &Context<'_>) -> Outcome {
         let bytes = vfs::read(tree, p).map_err(|e| format!("{p}: {e}"))?;
         let dds = Dds::parse(&bytes).map_err(|e| format!("{p}: {e:?}"))?;
         let texture = gpu
-            .create_texture(&dds)
+            .create_texture(p, &dds)
             .map_err(|e| format!("{p}: {e:?}"))?;
         gpu.add_prepared(p, texture);
     }

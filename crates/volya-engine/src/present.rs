@@ -139,7 +139,9 @@ fn load_texture(
     let bytes = vfs::read(tree, path).map_err(|e| e.to_string())?;
     let dds = Dds::parse(&bytes).map_err(|e| e.to_string())?;
     let dds = quality.apply(path, &dds);
-    renderer.create_texture(&dds).map_err(|e| e.to_string())
+    renderer
+        .create_texture(path, &dds)
+        .map_err(|e| e.to_string())
 }
 
 /// The portal fade's batch (portal-fade.md 2 – 5) of its triangles
@@ -310,7 +312,7 @@ impl Presenter {
                 let dds = Dds::parse(&bytes).map_err(|e| e.to_string())?;
                 let dds = self.quality.apply(path, &dds);
                 renderer
-                    .owning(Owner::Images, || renderer.create_texture(&dds))
+                    .owning(Owner::Images, || renderer.create_texture(path, &dds))
                     .map_err(|e| e.to_string())
             });
         let texture = loaded

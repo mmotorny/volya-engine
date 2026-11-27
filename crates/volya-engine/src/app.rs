@@ -466,6 +466,14 @@ pub struct LevelControls {
     pub night_vision: Option<bool>,
 }
 
+/// [`App::device_destroyed`], with the fields it takes.
+fn device_destroyed(release: &mut Option<Box<dyn FnMut()>>, console: &mut Console) {
+    if let Some(release) = release {
+        release();
+    }
+    console.device_destroyed();
+}
+
 pub struct App {
     data: GameData,
     assets: Assets,
@@ -540,6 +548,9 @@ pub struct App {
     alt_f4: bool,
     /// A console line's `quit` ended the game (steering-the-original.md 7).
     quit: bool,
+    /// Releases the platform's graphics resources at exit
+    /// ([`App::set_device_release`]).
+    device_release: Option<Box<dyn FnMut()>>,
     /// Updates so far.
     frames: u64,
     /// The update in which a lost pointer lock opened the menu.
@@ -783,6 +794,7 @@ impl App {
             console_touched: false,
             alt_f4: false,
             quit: false,
+            device_release: None,
             frames: 0,
             unlock_opened: None,
             prepare_textures: false,
@@ -985,6 +997,7 @@ impl App {
             return;
         }
         self.alt_f4 = true;
+        self.device_destroyed();
         self.console.log_mut().save();
         self.save = Some(self.console.save());
     }
@@ -1362,7 +1375,7 @@ impl App {
                     // The program's normal end (console-log.md 3.3), the
                     // graphics device destroyed (console-diagnostics.md
                     // 2.5).
-                    self.console.device_destroyed();
+                    device_destroyed(&mut self.device_release, &mut self.console);
                     self.console.log_mut().save();
                 }
                 if out.store_config || menu.quit_requested() {
@@ -1508,7 +1521,7 @@ impl App {
                     self.sound_voices_set = false;
                 }
                 if menu.quit_requested() {
-                    self.console.device_destroyed();
+                    device_destroyed(&mut self.device_release, &mut self.console);
                     self.console.log_mut().save();
                 }
                 if out.store_config || menu.quit_requested() {
@@ -1822,6 +1835,20 @@ impl App {
         if let Some(Phase::Menu(menu)) = &mut self.phase {
             menu.resized(&self.data, self.video);
         }
+    }
+
+    /// Gives the platform's release of its graphics resources (the
+    /// renderer's), which a normal exit runs before the shutdown's lines
+    /// (console-diagnostics.md 2.5): the original destroys its graphics
+    /// device first, so the lines count what was left after it.
+    pub fn set_device_release(&mut self, release: Box<dyn FnMut()>) {
+        self.device_release = Some(release);
+    }
+
+    /// At a normal exit: the graphics resources released, then the
+    /// resource manager's lines (console-diagnostics.md 2.5).
+    pub(crate) fn device_destroyed(&mut self) {
+        device_destroyed(&mut self.device_release, &mut self.console);
     }
 
     /// The user configuration file to store (section 12.3), once asked for:

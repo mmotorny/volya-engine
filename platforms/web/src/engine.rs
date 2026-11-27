@@ -132,6 +132,8 @@ pub async fn launch() -> Result<serde_json::Value, JsValue> {
         web_sys::console::error_1(&e);
         Default::default()
     });
+    // The renderer released at the last game's exit, made again.
+    crate::gpu::restore();
     let splash = crate::game::with_trees(|_, root| app::splash(root))?.map_err(error)?;
     let size = splash.as_ref().map_or((0, 0), |s| (s.width, s.height));
     if let Some(image) = &splash {
@@ -150,6 +152,9 @@ pub async fn launch() -> Result<serde_json::Value, JsValue> {
                 data.set_user_config(user);
             }
             let mut app = App::new(data).map_err(error)?;
+            // Its normal exit releases what the renderer holds
+            // (docs/behavior/console-diagnostics.md 2.5).
+            app.set_device_release(Box::new(crate::gpu::release));
             // The level's textures (transcoded on a GPU without BC) and
             // geometry are uploaded while it loads, a piece at a time
             // (#113, #184, #355).

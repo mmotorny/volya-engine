@@ -339,6 +339,8 @@ export const tests = {
     const read = () => dir.getFileHandle("xray_player.log").then((f) => f.getFile()).then((f) => f.text()).catch(() => "");
     const before = await read();
     // A game with a New Game's load, quit from the title menu: its log.
+    // Launched after the last game's quit released the renderer's
+    // resources, made again here.
     await launchToMenu();
     await enterLevel();
     await quitToTitle();
@@ -364,10 +366,13 @@ export const tests = {
     assert(figure(win32, "committed") > 0 && figure(win32, "free") > 0, win32);
     assert(figure(d3d, "textures") > 0, d3d);
     assert(figure(xray, "crt heap") > 0, xray);
-    // The quit's resource counts (console-diagnostics.md 2.5).
-    const dump = lines.slice(lines.findLastIndex((l) => l.startsWith("* RM_Dump: textures  : "))).slice(0, 13);
-    const count = (label) => Number(dump.find((l) => l.startsWith(`* RM_Dump: ${label}: `))?.split(": ").at(-1));
-    assert(count("textures  ") > 0 && count("vs        ") > 0 && count("dcl       ") > 0, dump.join("; "));
+    // The quit's resource counts (console-diagnostics.md 2.5): after the
+    // renderer's resources were released, none left, so none listed by
+    // name (as in every measured run of the original).
+    const from = lines.findLastIndex((l) => l.startsWith("* RM_Dump: textures  : "));
+    const dump = lines.slice(from, lines.findIndex((l, i) => i > from && l.startsWith("* RM_Dump: v_shaders : ")) + 1);
+    assertEqual(dump.length, 13, `the quit's lines: ${dump.join("; ")}`);
+    assert(dump.every((l) => l.startsWith("* RM_Dump: ") && l.endsWith(": 0")), `left at the quit: ${dump.join("; ")}`);
     return `phase cmem (K) ${cmem.join(", ")}; ${win32}; ${d3d}; ${xray}; at the quit ${dump.map((l) => l.slice(11).replace(/ +:/, ":")).join(", ")}`;
   },
 

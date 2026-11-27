@@ -237,7 +237,8 @@ async fn prepare(paths: Vec<String>, load: Option<u64>) -> Result<(), JsValue> {
             ("height", height),
         ];
         crate::gpu::with_renderer(|r| crate::diagnostics::gpu_step("gpu.texture", Some(r), &step));
-        let Some(Ok(mut upload)) = crate::gpu::with_renderer(|r| r.begin_texture(&dds)) else {
+        let Some(Ok(mut upload)) = crate::gpu::with_renderer(|r| r.begin_texture(&path, &dds))
+        else {
             continue;
         };
         let transcoded = upload.transcoded();

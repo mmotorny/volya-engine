@@ -395,7 +395,7 @@ fn dds_texture(r: &Renderer, cube: bool, bgra: [u8; 4]) -> Result<Texture, Probl
     let data: Vec<u8> = (0..faces).flat_map(|_| bgra).collect();
     let file = file(1, 1, 0, cube, PixelFormat::BGRA8, &data);
     let dds = Dds::parse(&file).map_err(|e| Problem::Fail(format!("dds: {e}")))?;
-    r.create_texture(&dds)
+    r.create_texture("", &dds)
         .map_err(|e| Problem::Fail(format!("texture: {e}")))
 }
 
@@ -882,7 +882,7 @@ fn faces_cube(r: &Renderer, faces: [[u8; 4]; 6]) -> Result<Texture, Problem> {
     let data: Vec<u8> = faces.iter().flat_map(|f| f.repeat(16)).collect();
     let file = file(4, 4, 0, true, PixelFormat::BGRA8, &data);
     let dds = Dds::parse(&file).map_err(|e| Problem::Fail(format!("dds: {e}")))?;
-    r.create_texture(&dds)
+    r.create_texture("", &dds)
         .map_err(|e| Problem::Fail(format!("texture: {e}")))
 }
 

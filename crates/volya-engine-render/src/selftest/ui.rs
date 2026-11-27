@@ -38,7 +38,7 @@ fn dds(bytes: &[u8]) -> Result<Dds<'_>, Problem> {
 
 fn texture(renderer: &Renderer, bytes: &[u8]) -> Result<crate::Texture, Problem> {
     renderer
-        .create_texture(&dds(bytes)?)
+        .create_texture("", &dds(bytes)?)
         .map_err(|e| Problem::Fail(format!("texture: {e}")))
 }
 

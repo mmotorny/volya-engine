@@ -16,6 +16,8 @@ use super::Log;
 pub struct Meters {
     pub memory: fn() -> MemoryStatistics,
     pub resources: fn() -> ResourceCounts,
+    /// The resources of the counts' first five kinds that remain, by name.
+    pub remaining: fn() -> RemainingResources,
 }
 
 static METERS: OnceLock<Meters> = OnceLock::new();
@@ -124,13 +126,31 @@ impl ResourceCounts {
         METERS.get().map(|m| (m.resources)()).unwrap_or_default()
     }
 
-    /// The thirteen lines (2.2; at shutdown, 2.5). TODO(#668): at shutdown
-    /// a remaining resource of the first five kinds is listed after its
-    /// kind's line; none is reported, so none is listed.
-    pub(super) fn print(&self, log: &mut Log) {
-        for (label, count) in RESOURCE_LABELS.iter().zip(self.0) {
+    /// The thirteen lines (2.2); at shutdown (2.5) with `remaining`, each
+    /// of the first five kinds' remaining resources listed after its line
+    /// when its count is not 0.
+    pub(super) fn print(&self, log: &mut Log, remaining: Option<&RemainingResources>) {
+        for (kind, (label, count)) in RESOURCE_LABELS.iter().zip(self.0).enumerate() {
             log.message(&format!("* RM_Dump: {label}: {count}"));
+            let listed = remaining.and_then(|r| r.0.get(kind)).filter(|_| count != 0);
+            for (n, name) in listed.into_iter().flatten() {
+                log.message(&format!("*        : {n:>3}: {name}"));
+            }
         }
+    }
+}
+
+/// The resources of [`RESOURCE_LABELS`]' first five kinds that remain at
+/// shutdown (section 2.5), by kind: each with its count (**believed** a
+/// reference count: here, the handles held) and its name, as the renderer
+/// measures them ([`Meters`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RemainingResources(pub [Vec<(u64, String)>; 5]);
+
+impl RemainingResources {
+    /// As the [`Meters`] measure them now.
+    pub(super) fn measured() -> Self {
+        METERS.get().map(|m| (m.remaining)()).unwrap_or_default()
     }
 }
 

@@ -262,10 +262,51 @@ fn dump_resources_prints_thirteen_counts() {
     assert_eq!(lines[9], "* RM_Dump: lst_constants: 0");
     assert_eq!(lines[12], "* RM_Dump: v_shaders : 314");
     assert_eq!(printed(&mut c, "dump_resources"), lines);
-    // 2.5: again as the device is destroyed at exit.
+    // 2.5: again as the device is destroyed at exit, with nothing
+    // remaining listed.
     let from = c.log().len();
     c.device_destroyed();
     assert_eq!(c.log()[from..], lines);
+}
+
+#[test]
+fn the_shutdown_lists_the_remaining_resources_by_name() {
+    // 2.5: after each of lines 1–5 whose count is not 0, its kind's
+    // remaining resources, the count right-aligned in three characters.
+    let mut c = Console::new(files());
+    c.set_resource_counts(ResourceCounts([2, 0, 0, 1, 1, 3, 0, 0, 0, 0, 0, 0, 0]));
+    c.set_remaining_resources(RemainingResources([
+        vec![(1, "ui\\ui_logo".into()), (12, "level".into())],
+        // Not listed: the count is 0.
+        vec![(1, "targets".into())],
+        vec![],
+        vec![(1, "ui vs".into())],
+        vec![(1, "ui fs".into())],
+    ]));
+    let from = c.log().len();
+    c.device_destroyed();
+    assert_eq!(
+        c.log()[from..],
+        [
+            "* RM_Dump: textures  : 2",
+            "*        :   1: ui\\ui_logo",
+            "*        :  12: level",
+            "* RM_Dump: rtargets  : 0",
+            "* RM_Dump: rtargetsc : 0",
+            "* RM_Dump: vs        : 1",
+            "*        :   1: ui vs",
+            "* RM_Dump: ps        : 1",
+            "*        :   1: ui fs",
+            "* RM_Dump: dcl       : 3",
+            "* RM_Dump: states    : 0",
+            "* RM_Dump: tex_list  : 0",
+            "* RM_Dump: matrices  : 0",
+            "* RM_Dump: lst_constants: 0",
+            "* RM_Dump: v_passes  : 0",
+            "* RM_Dump: v_elements: 0",
+            "* RM_Dump: v_shaders : 0",
+        ]
+    );
 }
 
 #[test]

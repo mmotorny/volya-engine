@@ -214,11 +214,7 @@ mod tested {
 
     /// Allocations made, their bytes, and the bytes live.
     pub fn traffic() -> (usize, usize, usize) {
-        (
-            ALLOCATIONS.load(Relaxed),
-            BYTES.load(Relaxed),
-            live(),
-        )
+        (ALLOCATIONS.load(Relaxed), BYTES.load(Relaxed), live())
     }
 
     /// After a block was added: a new record's sizes and large blocks.
@@ -335,6 +331,7 @@ pub async fn start(canvas: OffscreenCanvas) {
     volya_engine::core::console::set_meters(volya_engine::core::console::Meters {
         memory: memory_statistics,
         resources: gpu::resource_counts,
+        remaining: gpu::remaining_resources,
     });
     gpu::init(canvas).await;
     diagnostics::started().await;

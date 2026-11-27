@@ -66,6 +66,11 @@ mod gl_device {
             Ok((device, renderer, name))
         }
 
+        /// The context's GL layer, which renderers draw through.
+        pub(in crate::gpu) fn gl(&self) -> Rc<Gl> {
+            self.gl.clone()
+        }
+
         pub(in crate::gpu) fn max_texture_size(&self) -> u32 {
             self.gl.max_texture_size()
         }

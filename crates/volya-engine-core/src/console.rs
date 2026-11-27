@@ -35,7 +35,9 @@ pub use commands::{
     Bare, COMMANDS, CommandDef, DIFFICULTIES, GAME_MODES, Kind, PRESET_FILES, PRESETS, RENDERERS,
     Saved,
 };
-pub use diagnostics::{MemoryStatistics, Meters, RESOURCE_LABELS, ResourceCounts, set_meters};
+pub use diagnostics::{
+    MemoryStatistics, Meters, RESOURCE_LABELS, RemainingResources, ResourceCounts, set_meters,
+};
 pub use input::{Clipboard, LINE_LENGTH, Typed};
 pub use log::{FatalReport, Log};
 pub use value::{Value, help_text, parse_mode, real_status};
@@ -362,6 +364,9 @@ pub struct Console {
     memory: Option<MemoryStatistics>,
     /// Fixed counts for `dump_resources`, in place of the [`Meters`]'.
     resources: Option<ResourceCounts>,
+    /// Fixed remaining resources for the shutdown, in place of the
+    /// [`Meters`]'.
+    remaining: Option<RemainingResources>,
     /// The input line and its keys' state (docs/behavior/console-input.md).
     input: input::InputLine,
     /// The user configuration file runs at startup.
@@ -444,6 +449,7 @@ impl Console {
             log: Log::default(),
             memory: None,
             resources: None,
+            remaining: None,
             input: Default::default(),
             starting: false,
             fatal: None,
@@ -501,6 +507,12 @@ impl Console {
         self.memory.unwrap_or_else(MemoryStatistics::measured)
     }
 
+    /// Fixed resources the shutdown lists as remaining from now on
+    /// (console-diagnostics.md 2.5), in place of the [`Meters`]' (tests).
+    pub fn set_remaining_resources(&mut self, remaining: RemainingResources) {
+        self.remaining = Some(remaining);
+    }
+
     /// The resource counts as of now.
     fn resources(&self) -> ResourceCounts {
         self.resources.unwrap_or_else(ResourceCounts::measured)
@@ -525,10 +537,15 @@ impl Console {
         self.exec("stat_memory");
     }
 
-    /// The graphics device is destroyed at exit (console-diagnostics.md
-    /// 2.5): the resource manager's thirteen count lines.
+    /// The graphics device was destroyed at exit (console-diagnostics.md
+    /// 2.5): the resource manager's thirteen count lines, each of the
+    /// first five kinds' remaining resources by name.
     pub fn device_destroyed(&mut self) {
-        self.resources().print(&mut self.log);
+        let remaining = self
+            .remaining
+            .clone()
+            .unwrap_or_else(RemainingResources::measured);
+        self.resources().print(&mut self.log, Some(&remaining));
     }
 
     /// Why the program ends, once a command made it end: `help` executed
@@ -823,7 +840,7 @@ impl Console {
                 Exec::Shown
             }
             "dump_resources" => {
-                self.resources().print(&mut self.log);
+                self.resources().print(&mut self.log, None);
                 Exec::Shown
             }
             "dump_open_files" => {

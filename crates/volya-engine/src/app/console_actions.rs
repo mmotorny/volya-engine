@@ -127,7 +127,7 @@ impl App {
             // (console-log.md 3.3, console-diagnostics.md 2.5,
             // options-screens.md 12.3).
             "quit" => {
-                self.console.device_destroyed();
+                self.device_destroyed();
                 self.console.log_mut().save();
                 self.save = Some(self.console.save());
                 self.quit = true;

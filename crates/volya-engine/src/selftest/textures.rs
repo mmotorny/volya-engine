@@ -70,7 +70,7 @@ pub async fn game_textures_and_videos_upload_and_draw(cx: &Context<'_>) -> Outco
         }
         samples.push(path.clone());
         let texture = renderer
-            .create_texture(&dds)
+            .create_texture(path, &dds)
             .map_err(|e| format!("{path}: {e}"))?;
         let mut list = DrawList::default();
         list.quads.push(Quad::new(Rect::SCREEN, &texture));

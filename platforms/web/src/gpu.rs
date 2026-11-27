@@ -35,7 +35,11 @@ const MAX_CAPTURE: u32 = 4096;
 
 struct Gpu {
     device: device::Device,
-    renderer: Renderer,
+    /// `None` once released at the game's exit ([`release`]), until it is
+    /// made again ([`Gpu::renderer`]).
+    renderer: Option<Renderer>,
+    /// How BC textures reach the GPU, as the renderer was first made.
+    textures: &'static str,
     /// What `debug_draw` shows when the game does not run.
     list: DrawList,
     video: Option<Playing>,
@@ -165,7 +169,8 @@ async fn connect(canvas: OffscreenCanvas) -> Result<Gpu, String> {
     let (device, renderer, renderer_name) = device::Device::connect(canvas, context).await?;
     Ok(Gpu {
         device,
-        renderer,
+        textures: renderer.texture_path().name(),
+        renderer: Some(renderer),
         list: DrawList::default(),
         video: None,
         presenter: Presenter::new(),
@@ -210,7 +215,9 @@ pub fn status() -> Status {
         g.borrow().as_ref().map(|gpu| Status {
             state: "ready",
             message: None,
-            textures: Some(gpu.renderer.texture_path().name()),
+            textures: Some(
+                (gpu.renderer.as_ref()).map_or(gpu.textures, |r| r.texture_path().name()),
+            ),
             renderer: Some(gpu.renderer_name.clone()),
             format: Some(gpu.device.format_name()),
             size: Some(gpu.device.size().into()),
@@ -237,11 +244,9 @@ pub fn status() -> Status {
 /// ([`Presenter::prepare_world`]); whether all of it is.
 pub fn prepare_world(level: &Arc<LevelWorld>, budget: u64) -> Result<bool, JsValue> {
     with_gpu(|gpu| {
-        crate::game::with_trees(|tree, _| {
-            gpu.presenter
-                .prepare_world(&mut gpu.renderer, tree, level, budget)
-        })?
-        .map_err(error)
+        let (_, renderer, presenter) = gpu.parts();
+        crate::game::with_trees(|tree, _| presenter.prepare_world(renderer, tree, level, budget))?
+            .map_err(error)
     })
 }
 
@@ -249,7 +254,44 @@ pub fn prepare_world(level: &Arc<LevelWorld>, budget: u64) -> Result<bool, JsVal
 /// ([`Presenter::abandon_prepared`]).
 pub fn abandon_prepared() {
     let _ = with_gpu(|gpu| {
-        gpu.presenter.abandon_prepared(&gpu.renderer);
+        if let Some(renderer) = &gpu.renderer {
+            gpu.presenter.abandon_prepared(renderer);
+        }
+        Ok(())
+    });
+}
+
+/// Releases every GPU resource the game drew with: the renderer's (its
+/// programs, targets and prepared textures), the presenter's (the level's,
+/// the menus' images, the videos'), the debug draw's and the samplers; as
+/// the game's graphics device is destroyed at its exit, before the
+/// shutdown's counts (docs/behavior/console-diagnostics.md 2.5). The
+/// context stays: the renderer is made again when a game is launched
+/// ([`restore`]).
+pub fn release() {
+    GPU.with(|g| {
+        if let Ok(mut g) = g.try_borrow_mut()
+            && let Some(gpu) = g.as_mut()
+        {
+            gpu.video = None;
+            gpu.list = DrawList::default();
+            gpu.presenter = Presenter::new();
+            gpu.renderer = None;
+            let gl = gpu.device.gl();
+            gl.forget_samplers();
+            // A deleted program still in use lives until another is used
+            // (WebGL 2 specification, 5.14.9).
+            gl.context().use_program(None);
+            gl.reset_state();
+            gpu.dirty = false;
+        }
+    });
+}
+
+/// Makes the renderer again after [`release`], for a game launched.
+pub fn restore() {
+    let _ = with_gpu(|gpu| {
+        gpu.renderer();
         Ok(())
     });
 }
@@ -327,28 +369,26 @@ pub fn warm_up() -> Result<bool, JsValue> {
         };
         // Kept through the loading screen's frames until the level shows.
         let level = scene.world.as_ref().map(|w| w.world.clone());
-        gpu.presenter.hold_world(level);
+        let (device, renderer, presenter) = gpu.parts();
+        presenter.hold_world(level);
         let mode = [
             ("width", Value::Number(f64::from(size.width))),
             ("height", Value::Number(f64::from(size.height))),
             ("provoking_first", Value::Bool(PROVOKING_FIRST.get())),
         ];
         // The world is made here (its buffers, records and programs).
-        crate::diagnostics::gpu_step("gpu.world_make", Some(&gpu.renderer), &mode);
+        crate::diagnostics::gpu_step("gpu.world_make", Some(renderer), &mode);
         let list = tracing::info_span!("render.scene").in_scope(|| {
-            crate::game::with_trees(|tree, _| {
-                gpu.presenter.draw_list(&mut gpu.renderer, tree, &scene, 0)
-            })
+            crate::game::with_trees(|tree, _| presenter.draw_list(renderer, tree, &scene, 0))
         })?;
-        for e in gpu.presenter.take_errors() {
+        for e in presenter.take_errors() {
             web_sys::console::error_1(&format!("drawing: {e}").into());
         }
-        crate::diagnostics::gpu_step("gpu.warm_up_draw", Some(&gpu.renderer), &[]);
-        let (device, renderer) = (&gpu.device, &mut gpu.renderer);
+        crate::diagnostics::gpu_step("gpu.warm_up_draw", Some(renderer), &[]);
         tracing::info_span!("render.encode").in_scope(|| {
             device.render_hidden(renderer, &list, CLEAR, (size.width, size.height));
         });
-        let emitted = gpu.renderer.world_calls_emitted();
+        let emitted = renderer.world_calls_emitted();
         let kinds: Vec<(&str, Value)> = volya_engine::render::world::CALL_KINDS
             .iter()
             .zip(emitted)
@@ -360,9 +400,15 @@ pub fn warm_up() -> Result<bool, JsValue> {
     })
 }
 
-/// Runs `f` with the renderer, `None` without graphics.
+/// Runs `f` with the renderer, `None` without graphics or once released
+/// ([`release`]).
 pub fn with_renderer<T>(f: impl FnOnce(&Renderer) -> T) -> Option<T> {
-    GPU.with(|g| g.borrow().as_ref().map(|gpu| f(&gpu.renderer)))
+    GPU.with(|g| {
+        g.borrow()
+            .as_ref()
+            .and_then(|gpu| gpu.renderer.as_ref())
+            .map(f)
+    })
 }
 
 fn with_gpu<T>(f: impl FnOnce(&mut Gpu) -> Result<T, JsValue>) -> Result<T, JsValue> {
@@ -421,20 +467,20 @@ pub fn world_stats() -> serde_json::Value {
             "gpu_object_bytes": world.map(|w| w.object_gpu_bytes()),
             "gpu_object_texture_bytes": world.map(|w| w.object_texture_bytes()),
             "frame_commands": frame_commands(),
-            "gpu_live": live_json(g.as_ref().map(|gpu| gpu.renderer.gpu_live())),
+            "gpu_live": live_json(g.as_ref().map(|gpu| gpu.device.gl().live())),
             // The scenes' own (a level's), apart from what the renderer
             // keeps across games.
-            "gpu_level": live_json(g.as_ref().map(|gpu| gpu.renderer.gpu_live() - gpu.renderer.gpu_kept())),
-            "gpu_kept": live_json(g.as_ref().map(|gpu| gpu.renderer.gpu_kept())),
+            "gpu_level": live_json(g.as_ref().map(|gpu| gpu.device.gl().live() - gpu.device.gl().kept())),
+            "gpu_kept": live_json(g.as_ref().map(|gpu| gpu.device.gl().kept())),
             // Everything the context holds, by owner (docs/architecture/
             // memory.md, GPU memory).
             "gpu_owners": g.as_ref().map(|gpu| {
                 volya_engine::render::gl::OWNERS
                     .iter()
-                    .map(|&o| (o.name().to_owned(), live_json(Some(gpu.renderer.gpu_live_of(o)))))
+                    .map(|&o| (o.name().to_owned(), live_json(Some(gpu.device.gl().live_of(o)))))
                     .collect::<serde_json::Map<_, _>>()
             }),
-            "prepared_textures": g.as_ref().map(|gpu| gpu.renderer.prepared_count()),
+            "prepared_textures": g.as_ref().map(|gpu| gpu.renderer.as_ref().map_or(0, |r| r.prepared_count())),
             "preparing_world": g.as_ref().map(|gpu| gpu.presenter.preparing_world()),
         })
     })
@@ -450,7 +496,10 @@ thread_local! {
 pub fn live() -> volya_engine::render::gl::Live {
     GPU.with(|g| match g.try_borrow() {
         Ok(g) => {
-            let l = g.as_ref().map(|gpu| gpu.renderer.gpu_live()).unwrap_or_default();
+            let l = g
+                .as_ref()
+                .map(|gpu| gpu.device.gl().live())
+                .unwrap_or_default();
             LIVE_SEEN.set(l);
             l
         }
@@ -474,6 +523,23 @@ pub fn resource_counts() -> volya_engine::core::console::ResourceCounts {
     counts[4] = l.programs;
     counts[5] = l.vertex_arrays;
     volya_engine::core::console::ResourceCounts(counts)
+}
+
+/// The resources of [`resource_counts`]' first five kinds that live, by
+/// name (docs/behavior/console-diagnostics.md 2.5): the textures and colour
+/// targets, each program as its vertex and its fragment shader.
+pub fn remaining_resources() -> volya_engine::core::console::RemainingResources {
+    let r = GPU.with(|g| match g.try_borrow() {
+        Ok(g) => g.as_ref().map(|gpu| gpu.device.gl().remaining()),
+        Err(_) => None,
+    });
+    let r = r.unwrap_or_default();
+    let (vs, ps) = r
+        .programs
+        .into_iter()
+        .map(|(n, vs, ps)| ((n, vs), (n, ps)))
+        .unzip();
+    volya_engine::core::console::RemainingResources([r.textures, r.targets, Vec::new(), vs, ps])
 }
 
 /// Resources the context holds.
@@ -521,7 +587,8 @@ fn frame_commands() -> serde_json::Value {
 /// Sets the splash picture the game shows while it loads.
 pub fn set_splash(image: &Rgba) {
     let _ = with_gpu(|gpu| {
-        gpu.presenter.set_splash(&gpu.renderer, image);
+        let (_, renderer, presenter) = gpu.parts();
+        presenter.set_splash(renderer, image);
         Ok(())
     });
 }
@@ -620,9 +687,12 @@ pub fn frame(time: f64) {
         });
         // The game's screen, redrawn every frame while it runs (videos and
         // the cursor animate); otherwise what `debug_draw` set.
-        let list = tracing::info_span!("render.scene").in_scope(|| {
-            crate::engine::draw_list(&mut gpu.renderer, &mut gpu.presenter, resolution)
+        let list = crate::engine::active().then(|| {
+            let (_, renderer, presenter) = gpu.parts();
+            tracing::info_span!("render.scene")
+                .in_scope(|| crate::engine::draw_list(renderer, presenter, resolution))
         });
+        let list = list.flatten();
         match list {
             Some(mut list) => {
                 if !DETAILS_DRAWN.get()
@@ -646,7 +716,7 @@ pub fn frame(time: f64) {
                 let frame = [("frame", Value::Number(f64::from(LEVEL_FRAMES.get() + 1)))];
                 if logged {
                     LEVEL_FRAMES.set(LEVEL_FRAMES.get() + 1);
-                    crate::diagnostics::gpu_step("gpu.level_frame", Some(&gpu.renderer), &frame);
+                    crate::diagnostics::gpu_step("gpu.level_frame", gpu.renderer.as_ref(), &frame);
                 }
                 gpu.present_at(&list, (resolution.width, resolution.height));
                 if logged {
@@ -664,7 +734,8 @@ pub fn frame(time: f64) {
             }
             None => {
                 gpu.advance_video(time);
-                if gpu.dirty {
+                // Nothing once the renderer is released.
+                if gpu.dirty && gpu.renderer.is_some() {
                     let list = std::mem::take(&mut gpu.list);
                     gpu.present(&list);
                     gpu.list = list;
@@ -677,6 +748,21 @@ pub fn frame(time: f64) {
 }
 
 impl Gpu {
+    /// The renderer, made again on the context after [`release`].
+    fn renderer(&mut self) -> &mut Renderer {
+        self.parts().1
+    }
+
+    /// The device, the renderer (made again after [`release`]) and the
+    /// presenter, for drawing.
+    fn parts(&mut self) -> (&mut device::Device, &mut Renderer, &mut Presenter) {
+        let device = &mut self.device;
+        let renderer = self
+            .renderer
+            .get_or_insert_with(|| Renderer::new(device.gl()));
+        (device, renderer, &mut self.presenter)
+    }
+
     /// The diagnostic log's GPU times (#355), while it is on: the time
     /// from a frame's submission until the GPU is done with all work
     /// submitted so far (`gpu.done_ms`, a frame a second; the fences are
@@ -716,16 +802,17 @@ impl Gpu {
 
     /// Presents `list` drawn at `size`, scaled to fit the canvas.
     fn present_at(&mut self, list: &DrawList, size: (u32, u32)) {
-        let Some(frame) = tracing::info_span!("render.acquire").in_scope(|| self.device.acquire())
+        let (device, renderer, _) = self.parts();
+        let Some(frame) = tracing::info_span!("render.acquire").in_scope(|| device.acquire())
         else {
             // Stays dirty: drawn on the next frame.
             return;
         };
-        self.renderer.take_frame_stats();
+        renderer.take_frame_stats();
         tracing::info_span!("render.encode").in_scope(|| {
-            (self.device).render_scaled(&mut self.renderer, &frame, list, CLEAR, size);
+            device.render_scaled(renderer, &frame, list, CLEAR, size);
         });
-        let stats = self.renderer.take_frame_stats();
+        let stats = renderer.take_frame_stats();
         LAST_STATS.set(stats);
         if list.world.is_some() {
             use volya_engine::core::diagnostics::metric;
@@ -742,7 +829,7 @@ impl Gpu {
     }
 
     fn advance_video(&mut self, now: f64) {
-        let Some(playing) = &mut self.video else {
+        let (Some(playing), Some(renderer)) = (&mut self.video, &self.renderer) else {
             return;
         };
         let frame_ms = 1000.0 / playing.fps;
@@ -765,7 +852,7 @@ impl Gpu {
             }
             match playing.video.next_frame() {
                 Ok(Some(frame)) => {
-                    self.renderer.update_video(&mut playing.texture, &frame);
+                    renderer.update_video(&mut playing.texture, &frame);
                     playing.shown += 1;
                     self.dirty = true;
                 }
@@ -821,7 +908,9 @@ pub fn debug_draw(path: Option<&str>) -> Result<serde_json::Value, JsValue> {
         let quad = if let Some(source) = source {
             let video = TheoraVideo::open(source.clone()).map_err(error)?;
             let info_ = video.info().clone();
-            let texture = gpu.renderer.create_video_texture(info_.width, info_.height);
+            let texture = gpu
+                .renderer()
+                .create_video_texture(info_.width, info_.height);
             let mut quad = Quad::new(Rect::SCREEN, texture.texture());
             quad.source = texture.frame_rect();
             let fps = f64::from(info_.fps_numerator) / f64::from(info_.fps_denominator.max(1));
@@ -843,7 +932,7 @@ pub fn debug_draw(path: Option<&str>) -> Result<serde_json::Value, JsValue> {
             quad
         } else {
             let dds = Dds::parse(&bytes).map_err(error)?;
-            let texture = gpu.renderer.create_texture(&dds).map_err(error)?;
+            let texture = gpu.renderer().create_texture(path, &dds).map_err(error)?;
             let format = match dds.format {
                 Format::Masked(m) => format!("{}-bit", m.bits),
                 f => format!("{f:?}"),
@@ -928,9 +1017,10 @@ pub async fn debug_capture(width: u32, height: u32) -> Result<Capture, JsValue> 
     let pixels = with_gpu(|gpu| {
         // The game's screen as it would be at this size, else the debug list.
         let resolution = Resolution::new(width, height);
-        let list = crate::engine::draw_list(&mut gpu.renderer, &mut gpu.presenter, resolution)
-            .unwrap_or_else(|| gpu.list.clone());
-        Ok(gpu.renderer.capture(&list, width, height, CLEAR))
+        let fallback = gpu.list.clone();
+        let (_, renderer, presenter) = gpu.parts();
+        let list = crate::engine::draw_list(renderer, presenter, resolution).unwrap_or(fallback);
+        Ok(renderer.capture(&list, width, height, CLEAR))
     })?;
     let rgba = pixels.await.map_err(error)?;
     Ok(Capture {
@@ -1123,7 +1213,7 @@ pub fn debug_draw_particles(case: &str) -> Result<serde_json::Value, JsValue> {
         vertices,
     };
     with_gpu(|gpu| {
-        let r = &mut gpu.renderer;
+        let r = gpu.renderer();
         let white = r.create_rgba_texture(1, 1, &[255; 4]);
         let world = (r.create_world(&Default::default(), &[], &[], None)).map_err(error)?;
         let blend = |key, argb| {
@@ -1302,7 +1392,7 @@ pub fn debug_draw_lights(case: &str) -> Result<serde_json::Value, JsValue> {
         .collect(),
     };
     with_gpu(|gpu| {
-        let r = &mut gpu.renderer;
+        let r = gpu.renderer();
         let white = r.create_rgba_texture(1, 1, &[255; 4]);
         r.set_light_textures(LightTextures {
             att: white.clone(),
