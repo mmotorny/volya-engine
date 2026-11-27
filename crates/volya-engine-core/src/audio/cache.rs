@@ -13,6 +13,9 @@
 //! into the line least recently used. The output is the same as decoding
 //! the file straight through.
 //!
+//! A line is kept coded losslessly ([`coding`], #796): it takes its code's
+//! bytes, and copying it out decodes the samples kept.
+//!
 //! A line's 8,820 bytes are 50 ms of the device's 16-bit stereo output at
 //! 44,100 Hz (the spec's bytes per line); the game's sounds are mono, and a
 //! line holds 4,410 of their 16-bit samples, 100 ms (believed: the spec
@@ -22,6 +25,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io;
 use std::rc::Rc;
+
+mod coding;
 
 use super::remote::Opener;
 use super::{File, Source};
@@ -65,9 +70,12 @@ struct FileLines {
 /// The sound cache.
 pub struct SoundCache {
     size: u32,
-    /// The data of the lines used so far, in their order: a free line is
+    /// The code of the lines used so far, in their order: a free line is
     /// allocated when first taken.
-    data: Vec<Box<[i16]>>,
+    data: Vec<Box<[u8]>>,
+    /// A line's code and residuals, while coding it.
+    code: Vec<u8>,
+    residuals: Vec<u32>,
     lines: Vec<Line>,
     /// Least and most recently used.
     oldest: u32,
@@ -90,6 +98,8 @@ impl SoundCache {
         Self {
             size,
             data: Vec::with_capacity(count),
+            code: Vec::new(),
+            residuals: Vec::new(),
             lines,
             oldest: 0,
             newest: count as u32 - 1,
@@ -112,11 +122,13 @@ impl SoundCache {
         self.data.len()
     }
 
-    /// The bytes it holds: the data of the lines used and every line's
-    /// record, the files' tables.
+    /// The bytes it holds: the code of the lines used and every line's
+    /// record, the files' tables, the coder's buffers.
     pub fn bytes(&self) -> usize {
-        self.data.len() * LINE_BYTES
-            + self.data.capacity() * size_of::<Box<[i16]>>()
+        self.data.iter().map(|l| l.len()).sum::<usize>()
+            + self.data.capacity() * size_of::<Box<[u8]>>()
+            + self.code.capacity()
+            + self.residuals.capacity() * 4
             + self.lines.capacity() * size_of::<Line>()
             + self
                 .files
@@ -170,17 +182,20 @@ impl SoundCache {
         }
     }
 
-    /// The samples of line `index` of file `key`, if held (made the most
-    /// recently used).
-    fn get(&mut self, key: u32, index: usize) -> Option<&[i16]> {
-        let file = self.files.get(&key)?;
-        let line = *file.table.get(index)?;
+    /// The samples of line `index` of file `key` into `out`, if held (made
+    /// the most recently used).
+    fn get(&mut self, key: u32, index: usize, out: &mut Vec<i16>) -> bool {
+        let Some(file) = self.files.get(&key) else {
+            return false;
+        };
+        let line = file.table.get(index).copied().unwrap_or(NO_LINE);
         if line == NO_LINE {
-            return None;
+            return false;
         }
         let len = line_len(file.frames, index);
         self.touch(u32::from(line));
-        Some(&self.data[usize::from(line)][..len])
+        coding::decode(&self.data[usize::from(line)], len, out);
+        true
     }
 
     /// Keeps `samples` as line `index` of file `key`, in the line least
@@ -208,12 +223,15 @@ impl SoundCache {
         let line = &mut self.lines[i as usize];
         line.file = key;
         line.index = index as u32;
+        coding::encode(samples, &mut self.code, &mut self.residuals);
+        let code = self.code.as_slice().into();
         // Free lines are the oldest, in their order: the first free one is
         // the next to allocate.
         if i as usize == self.data.len() {
-            self.data.push(vec![0; LINE_SAMPLES].into_boxed_slice());
+            self.data.push(code);
+        } else {
+            self.data[i as usize] = code;
         }
-        self.data[i as usize][..samples.len()].copy_from_slice(samples);
         self.touch(i);
     }
 }
@@ -370,8 +388,8 @@ impl Source for CachedSource {
         let offset = (self.at % LINE_SAMPLES as u64) as usize;
         let len = line_len(self.frames, index);
         if !self.streaming {
-            if let Some(samples) = self.cache.borrow_mut().get(self.key, index) {
-                out.extend(samples[offset..].iter().copied().map(to_float));
+            if self.cache.borrow_mut().get(self.key, index, &mut self.line) {
+                out.extend(self.line[offset..].iter().copied().map(to_float));
                 self.at += (len - offset) as u64;
                 return Ok(true);
             }
@@ -492,7 +510,8 @@ mod tests {
             assert_eq!(c.lines_used(), (i + 1).min(count));
             assert_eq!(c.files[&1].table[i] as usize, i % count);
         }
-        assert_eq!(c.bytes(), empty + count * LINE_BYTES);
+        // Coded: a constant line in a few hundred bytes.
+        assert!(c.bytes() > empty && c.bytes() < empty + count * LINE_BYTES / 10);
     }
 
     #[test]
@@ -509,6 +528,10 @@ mod tests {
         let mut again = CachedSource::open(&cache, 1, file(frames), 0, open_ramp).unwrap();
         assert_eq!(play(&mut *again), want);
         assert_eq!(OPENED.with(|o| o.get()), 1);
+        // Its 3 lines held coded, in less than their samples' bytes.
+        let code: usize = cache.borrow().data.iter().map(|l| l.len()).sum();
+        assert_eq!(cache.borrow().lines_used(), 3);
+        assert!(code < 10_000 * 2, "{code}");
         // Skipped in, and looped back.
         let mut skipped = CachedSource::open(&cache, 1, file(frames), 5_000, open_ramp).unwrap();
         assert_eq!(play(&mut *skipped), want[5_000..]);

@@ -387,11 +387,13 @@ fn files_played_by_key_mix_through_the_cache_as_decoded() {
         direct.stop_all();
         MixerControl::stop_all(&mut remote);
     }
-    // The data of the file's 5 lines of 4,410 samples (allocated as first
-    // used), every line's record and the file's table, 2 bytes a line.
+    // The code of the file's 5 lines of 4,410 samples (allocated as first
+    // used, at most their samples' bytes), every line's record, the file's
+    // table, 2 bytes a line, and the coder's buffers (a line's code and
+    // residuals).
     let lines = super::super::cache::lines_for(4);
-    assert!(host.cache_bytes() >= 5 * 8_820 + lines * 16 + 10);
-    assert!(host.cache_bytes() < 6 * 8_820 + lines * 40);
+    assert!(host.cache_bytes() >= lines * 16 + 10);
+    assert!(host.cache_bytes() < 5 * 8_821 + lines * 40 + 4 * 8_820);
     // A new host is sized again with the connection: its records only.
     remote.connect(48_000);
     let mut fresh = Host::new(open_exact);
