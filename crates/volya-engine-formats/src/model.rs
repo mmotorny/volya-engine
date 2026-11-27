@@ -152,6 +152,22 @@ impl SkinnedMesh {
         }
     }
 
+    /// The indices any detail window draws, as a range of
+    /// [`SkinnedMesh::indices`]: all of them (type 5), or from the first
+    /// window's start to the last window's end (type 4, object-detail-level.md
+    /// 4).
+    pub fn detail_span(&self) -> std::ops::Range<usize> {
+        match &self.windows {
+            Some(w) if !w.steps.is_empty() => {
+                let start = w.steps.iter().map(|s| s.index_offset as usize);
+                let end = (w.steps.iter())
+                    .map(|s| s.index_offset as usize + 3 * usize::from(s.triangle_count));
+                start.min().unwrap_or(0)..end.max().unwrap_or(0)
+            }
+            _ => 0..self.indices.len(),
+        }
+    }
+
     /// The largest bone index any vertex names.
     pub fn largest_bone(&self) -> u16 {
         self.vertices
@@ -807,6 +823,8 @@ mod tests {
         assert_eq!(b.vertices[1].binormal, [0.0, 0.0, 1.0]);
         // Detail level 0: one triangle from index 3.
         assert_eq!(b.full_detail_indices(), [2, 1, 0]);
+        // Both windows: indices 0 … 6.
+        assert_eq!((a.detail_span(), b.detail_span()), (0..6, 0..6));
         assert_eq!(b.render_mode(256), RenderMode::TwoLink);
         // (K − 22) / 3 = 1 < bone 2: software.
         assert_eq!(b.render_mode(25), RenderMode::Software);

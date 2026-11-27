@@ -209,6 +209,7 @@ fn draw(surface: u32, tree: Option<TreeLight>) -> WorldDraw {
         sphere: [0.0, 0.0, 1.0, 10.0],
         tree,
         object: None,
+        windows: [0, 0],
     }
 }
 
@@ -505,6 +506,7 @@ fn object_geometry(normal: [u8; 3]) -> ObjectGeometry {
     ObjectGeometry {
         vertices,
         indices: vec![0, 1, 2],
+        windows: Vec::new(),
     }
 }
 
@@ -645,6 +647,82 @@ pub async fn objects_draw_quantized_models(make: Make<'_>) -> Outcome {
             .is_err(),
         "an object draw beyond the indices accepted"
     );
+    Ok(String::new())
+}
+
+/// A skinned progressive mesh of two detail windows, each a
+/// screen-covering triangle: window 0 green, window 1 red (texels of
+/// [`quadrants`], self-lit). Its sphere's measure m = r / d² at d = 1
+/// chooses the window (object-detail-level.md 4): with 16 × 16 pixels and
+/// a 90° field of view P_lo = 455.11 / 256, P_hi = 7281.78 / 256, and
+/// window 1 is drawn while (m − P_lo) / (P_hi − P_lo) < 1/4.
+pub async fn objects_draw_their_detail_window(make: Make<'_>) -> Outcome {
+    let mut r = make();
+    let base = quadrants(&r);
+    let q = |v: f32| (v * 32767.0 / 12.0).floor() as i16;
+    let uv = |u: f32, v: f32| [(u * 32767.0 / 16.0) as i16, (v * 32767.0 / 16.0) as i16];
+    let mut vertices = Vec::new();
+    for texel in [uv(0.75, 0.25), uv(0.25, 0.25)] {
+        for [x, y] in [[-3.0, -3.0], [-3.0, 9.0], [9.0, -3.0]] {
+            vertices.extend(model_vertex([q(x), q(y), 0], UP, texel));
+        }
+    }
+    let objects = ObjectGeometry {
+        vertices,
+        indices: vec![0, 1, 2, 3, 4, 5],
+        windows: vec![
+            crate::world::DetailWindow {
+                offset: 0,
+                index_count: 3,
+            },
+            crate::world::DetailWindow {
+                offset: 3,
+                index_count: 3,
+            },
+        ],
+    };
+    let g = geom(Layout::VertexLit, 0, 0, [0; 8]);
+    let surfaces = [surface(Program::ModelSelfLight, Some(base))];
+    let draw = WorldDraw {
+        index_count: 6,
+        windows: [0, 2],
+        ..object_draw(0, [0.0; 4])
+    };
+    let world = r
+        .create_world_with(&g, &objects, &surfaces, &[draw], None)
+        .map_err(fail("world"))?;
+    let at = |r: &Renderer, radius: f32| {
+        r.place_draw(&world, 0, &draw.transform, [0.0, 0.0, 1.0, radius]);
+    };
+    let green = [0, 255, 0];
+    for (radius, lod, want, what) in [
+        (100.0, 1.0, green, "near: window 0"),
+        (1.0, 1.0, [255, 0, 0], "far: the coarsest"),
+        (8.0, 1.0, [255, 0, 0], "a quarter less a little: window 1"),
+        (8.0, 1.2, green, "a higher detail: window 0"),
+    ] {
+        at(&r, radius);
+        let mut f = frame(world.clone(), None);
+        f.geometry_lod = lod;
+        expect_near(centre(&mut r, f).await?, want, what)?;
+    }
+    // A window beyond the draw's range, or beyond the windows, fails.
+    for bad in [
+        WorldDraw {
+            index_count: 3,
+            ..draw
+        },
+        WorldDraw {
+            windows: [1, 2],
+            ..draw
+        },
+    ] {
+        ensure!(
+            r.create_world_with(&g, &objects, &surfaces, &[bad], None)
+                .is_err(),
+            "a window outside accepted: {bad:?}"
+        );
+    }
     Ok(String::new())
 }
 

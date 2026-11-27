@@ -118,8 +118,8 @@ fn level_objects_from_game_data() {
         assert!(objects.instances.len() > 352);
         let count = |class: &str| instances.iter().filter(|i| i.class_id == class).count();
         assert_eq!((count("AI_STL_S"), count("AI_TRD_S")), (32, 1));
-        // The other 319: 101 model files, 163,064 vertices and 388,632
-        // full-detail indices counted once per object.
+        // The other 319: 101 model files, 163,064 vertices and 1,012,059
+        // indices of every detail window counted once per object.
         let others: Vec<&Instance> = instances
             .iter()
             .copied()
@@ -135,7 +135,7 @@ fn level_objects_from_game_data() {
                 i + m.meshes.iter().map(|m| m.index_count).sum::<u32>(),
             )
         });
-        assert_eq!((vertices, indices), (163_064, 388_632));
+        assert_eq!((vertices, indices), (163_064, 1_012_059));
         assert_eq!(count("AI_CROW"), 55);
         assert_eq!(count("SM_FLESH"), 1);
         assert_eq!(count("O_HLAMP"), 5);

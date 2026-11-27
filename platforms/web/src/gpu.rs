@@ -1288,6 +1288,7 @@ pub fn debug_draw_lights(case: &str) -> Result<serde_json::Value, JsValue> {
             sphere: [0.0, 0.0, 1.0, 10.0],
             tree: None,
             object: None,
+            windows: [0, 0],
         };
         let world = r
             .create_world(&geom, &[surface], &[draw], None)

@@ -183,6 +183,7 @@ fn world_draws(level: &LevelWorld) -> Vec<WorldDraw> {
                     bias: t.bias,
                 }),
                 object: None,
+                windows: [0, 0],
             })
         })
         .chain(level.objects.draws.iter().map(|d| WorldDraw {
@@ -202,6 +203,7 @@ fn world_draws(level: &LevelWorld) -> Vec<WorldDraw> {
             },
             tree: None,
             object: Some(d.dynamic_props),
+            windows: d.windows,
         }))
         .collect()
 }

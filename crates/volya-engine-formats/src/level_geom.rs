@@ -423,10 +423,15 @@ impl ProgressiveMesh {
     /// (1 = full detail): `floor((1 − f) × (step_count − 1) + 0.5)`. We clamp
     /// `f` to [0, 1]; `None` without steps.
     pub fn step_for_detail(&self, f: f32) -> Option<usize> {
-        let last = self.steps.len().checked_sub(1)?;
-        let f = f.clamp(0.0, 1.0);
-        Some((((1.0 - f) * last as f32 + 0.5).floor() as usize).min(last))
+        detail_step(f, self.steps.len())
     }
+}
+
+/// [`ProgressiveMesh::step_for_detail`] of a list of `count` steps.
+pub fn detail_step(f: f32, count: usize) -> Option<usize> {
+    let last = count.checked_sub(1)?;
+    let f = f.clamp(0.0, 1.0);
+    Some((((1.0 - f) * last as f32 + 0.5).floor() as usize).min(last))
 }
 
 /// A parsed `level.geom` or `level.geomx`.

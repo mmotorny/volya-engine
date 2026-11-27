@@ -101,6 +101,43 @@ pub fn model_vertex(position: [i16; 3], normal: [u8; 3], uv: [i16; 2]) -> [u8; M
 pub struct ObjectGeometry {
     pub vertices: Vec<u8>,
     pub indices: Vec<u16>,
+    /// The skinned progressive meshes' detail windows, each mesh's most
+    /// detailed first ([`WorldDraw::windows`] names a draw's).
+    pub windows: Vec<DetailWindow>,
+}
+
+/// A detail window of a progressive mesh (ogf.md section 6;
+/// object-detail-level.md 4): `index_count` indices from `offset` past its
+/// draw's first index.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DetailWindow {
+    pub offset: u32,
+    pub index_count: u32,
+}
+
+/// The window drawn of `count` detail windows for a draw with bounding
+/// sphere `sphere` seen from `eye` (object-detail-level.md 4): with its
+/// measure m = r / (|E − C|² + 10⁻⁵) and the thresholds `[P_lo, P_hi]`,
+/// q = √(clamp((m − P_lo) / (P_hi − P_lo), 0, 1)) and window
+/// floor((1 − q)(n − 1) + 0.5). `None` without windows.
+pub fn detail_window(
+    sphere: [f32; 4],
+    eye: [f32; 3],
+    bounds: [f32; 2],
+    count: usize,
+) -> Option<usize> {
+    let d: [f32; 3] = std::array::from_fn(|i| sphere[i] - eye[i]);
+    let m = sphere[3] / (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] + 1e-5);
+    let [lo, hi] = bounds;
+    let q = ((m - lo) / (hi - lo)).clamp(0.0, 1.0).sqrt();
+    volya_engine_formats::level_geom::detail_step(q, count)
+}
+
+/// `[P_lo, P_hi]` of a `width` × `height` render target, vertical field of
+/// view `fov` degrees and `r__geometry_lod` `geometry_lod` (level.md 9.4).
+pub fn detail_bounds(width: u32, height: u32, fov: f32, geometry_lod: f32) -> [f32; 2] {
+    let s = (geometry_lod + 1e-7) * (90.0 / fov).powi(2) * width as f32 * height as f32;
+    [(16.0f32 / 0.75).powi(2) / s, (64.0f32 / 0.75).powi(2) / s]
 }
 
 impl Program {
@@ -301,6 +338,10 @@ pub struct WorldDraw {
     pub tree: Option<TreeLight>,
     /// An object's `L_dynamic_props` (level-objects.md 5.4).
     pub object: Option<[f32; 4]>,
+    /// An object draw's detail windows: `[first, count]` of
+    /// [`ObjectGeometry::windows`], each window within the draw's range;
+    /// count 0 draws the range whole.
+    pub windows: [u32; 2],
 }
 
 /// Bytes of one draw's record in the draws buffer.
@@ -504,8 +545,6 @@ pub(crate) struct LitDraw {
     pub(crate) vertex_buffer: u32,
     pub(crate) index_buffer: u32,
     pub(crate) first_vertex: u32,
-    pub(crate) first_index: u32,
-    pub(crate) index_count: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1064,5 +1103,26 @@ mod tests {
         // object-detail-level.md 1: a higher detail lowers the threshold.
         let half = ssa_min(1024, 768, 90.0, 0.5);
         assert!((half - 2.0 * expected).abs() < 1e-5 * expected);
+    }
+
+    /// object-detail-level.md 4: m ≥ P_hi draws window 0, m ≤ P_lo the
+    /// coarsest, between them by √ of the fraction.
+    #[test]
+    fn detail_windows_by_measure() {
+        let [lo, hi] = detail_bounds(1024, 768, 90.0, 1.0);
+        let s = 1024.0 * 768.0;
+        assert!((lo * s - 455.11).abs() < 0.01 && (hi * s - 7281.78).abs() < 0.01);
+        // A sphere of radius r at distance d: m = r / d².
+        let at = |m: f32| [0.0, 0.0, 1.0, m * (1.0 + 1e-5)];
+        let pick = |m: f32, n: usize| detail_window(at(m), [0.0; 3], [lo, hi], n);
+        assert_eq!(pick(hi * 2.0, 5), Some(0));
+        assert_eq!(pick(lo / 2.0, 5), Some(4));
+        // A quarter of the way: q = 0.5, window floor(0.5 · 4 + 0.5) = 2.
+        assert_eq!(pick(lo + 0.25 * (hi - lo), 5), Some(2));
+        assert_eq!(pick(lo, 1), Some(0));
+        assert_eq!(pick(lo, 0), None);
+        // A higher detail draws finer windows.
+        let fine = detail_bounds(1024, 768, 90.0, 1.2);
+        assert!(fine[0] < lo && fine[1] < hi);
     }
 }

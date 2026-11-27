@@ -29,7 +29,7 @@ use crate::core::object_light;
 use crate::core::simulation::{NO_ID, Simulation};
 use crate::core::vfs::{self, Vfs};
 use crate::data::GameData;
-use crate::render::world::{ObjectGeometry, model_vertex};
+use crate::render::world::{DetailWindow, ObjectGeometry, model_vertex};
 use volya_engine_formats::cp1251;
 use volya_engine_formats::lanims;
 use volya_engine_formats::model::{self, Mat4, Model, transform, transform_point};
@@ -285,12 +285,15 @@ pub fn locate_model(tree: &dyn Vfs, data: &GameData, dir: &str, name: &str) -> i
 pub struct MeshRange {
     pub texture: String,
     pub shader: String,
-    /// First vertex in [`ObjectGeometry`], and the full-detail indices
-    /// (section 4.9) from `first_index`.
+    /// First vertex in [`ObjectGeometry`], and the indices every detail
+    /// window draws from `first_index` (object-detail-level.md 4).
     pub first_vertex: u32,
     pub vertex_count: u32,
     pub first_index: u32,
     pub index_count: u32,
+    /// Its detail windows, `[first, count]` of [`ObjectGeometry::windows`]
+    /// (count 0: a skinned mesh, drawn whole).
+    pub windows: [u32; 2],
     /// The mesh's header sphere in model space: centre, radius
     /// (object-detail-level.md 3).
     pub sphere: [f32; 4],
@@ -308,7 +311,7 @@ pub struct LoadedModel {
 }
 
 /// Appends `model`'s vertices, quantized (section 4.7), and its meshes'
-/// full-detail indices to `geometry`. Every mesh is quantized whatever its
+/// indices and detail windows to `geometry`. Every mesh is quantized whatever its
 /// render mode: the software mode keeps floats, but needs a bone index
 /// above 78 with 256 vertex shader constants, which no shipped model has
 /// (our choice: the constant count of a GPU device has no meaning here).
@@ -329,12 +332,22 @@ pub fn add_model(
                 v.uv.map(model::quantize_uv),
             ));
         }
-        // Detail level 0: which level the renderer draws objects at is
-        // unestablished (section 4.9); full detail is our choice, so only
-        // its indices are kept.
-        let indices = m.full_detail_indices();
+        // Every detail window's indices; the renderer draws the window of
+        // each frame's detail value (object-detail-level.md 4).
+        let span = m.detail_span();
+        let indices = &m.indices[span.clone()];
         let first_index = geometry.indices.len() as u32;
         geometry.indices.extend_from_slice(indices);
+        let first_window = geometry.windows.len() as u32;
+        if let Some(w) = &m.windows {
+            geometry
+                .windows
+                .extend(w.steps.iter().map(|s| DetailWindow {
+                    offset: s.index_offset - span.start as u32,
+                    index_count: 3 * u32::from(s.triangle_count),
+                }));
+        }
+        let windows = [first_window, geometry.windows.len() as u32 - first_window];
         meshes.push(MeshRange {
             texture: m.texture.clone(),
             shader: m.shader.clone(),
@@ -342,6 +355,7 @@ pub fn add_model(
             vertex_count: m.vertices.len() as u32,
             first_index,
             index_count: indices.len() as u32,
+            windows,
             sphere: {
                 let (c, r) = (m.header.sphere_centre, m.header.sphere_radius);
                 [c[0], c[1], c[2], r]
@@ -669,6 +683,8 @@ pub struct ObjectDraw {
     pub first_vertex: u32,
     pub first_index: u32,
     pub index_count: u32,
+    /// [`MeshRange::windows`].
+    pub windows: [u32; 2],
     pub transform: Mat4,
     /// The mesh's own sphere, its centre placed by the transform and its
     /// radius as stored: each part's small-part test
@@ -736,6 +752,7 @@ impl LevelObjects {
                     first_vertex: mesh.first_vertex,
                     first_index: mesh.first_index,
                     index_count: mesh.index_count,
+                    windows: mesh.windows,
                     transform: instance.transform,
                     sphere: {
                         let s = mesh.sphere;
@@ -838,6 +855,7 @@ mod tests {
             first_vertex: 0,
             first_index: 0,
             index_count: 3,
+            windows: [0, 0],
             transform: x,
             sphere: [0.0; 4],
             mesh_sphere: [1.0, 0.0, -1.0, 0.25],

@@ -370,6 +370,7 @@ fn draw_static(
     step: &Step,
     shows: impl Fn(u32) -> bool,
     hidden: impl Fn(u32) -> bool,
+    drawn_range: impl Fn(u32) -> std::ops::Range<u32>,
 ) {
     use crate::stats::StaticCall;
     /// A call being gathered: draws whose vertices are their own with
@@ -493,6 +494,7 @@ fn draw_static(
             Kind::Single
         });
         gl.set_first_instance(&inner.surface_programs[d.surface as usize].0, i);
+        let range = drawn_range(i);
         gl.draw_elements(C::TRIANGLES, range.start, range.len() as u32, wide, 1);
     }
     flush(&mut pending);
@@ -539,6 +541,11 @@ struct Inner {
     strict: RefCell<Vec<(usize, WorldDraw)>>,
     /// The draws light passes may draw again.
     lit: Vec<LitDraw>,
+    /// The kept draws' detail windows: each one's first index and index
+    /// count; and each kept draw's (`[first, count]` of them, count 0:
+    /// none).
+    detail: Vec<[u32; 2]>,
+    detail_of: Vec<[u32; 2]>,
     /// The bounding sphere each kept draw's record holds now.
     spheres: RefCell<Vec<[f32; 4]>>,
     sky: Option<SkyResources>,
@@ -553,6 +560,33 @@ struct Inner {
 }
 
 impl Inner {
+    /// The indices kept draw `k` draws seen from `eye` with the detail
+    /// thresholds `bounds` ([`detail_bounds`]): its detail window
+    /// ([`detail_window`]), or its whole range.
+    fn drawn_range(&self, k: u32, eye: [f32; 3], bounds: [f32; 2]) -> std::ops::Range<u32> {
+        let [first, count] = self.detail_of[k as usize];
+        let window = (count > 0)
+            .then(|| {
+                detail_window(
+                    self.spheres.borrow()[k as usize],
+                    eye,
+                    bounds,
+                    count as usize,
+                )
+            })
+            .flatten();
+        match window {
+            Some(j) => {
+                let [start, n] = self.detail[(first + j as u32) as usize];
+                start..start + n
+            }
+            None => {
+                let d = &self.calls[k as usize];
+                d.first_index..d.first_index + d.index_count
+            }
+        }
+    }
+
     /// Binds the frame's constants and the records.
     fn bind_frame(&self, gl: &Gl, programs: &WorldPrograms) {
         crate::stats::bind_group();
@@ -729,6 +763,8 @@ pub struct GeometryUpload {
     ranges: Vec<(bool, u32, u32, u32, u32)>,
     /// Whether it was begun with objects' vertices.
     objects: bool,
+    /// The objects' detail windows ([`ObjectGeometry::windows`]).
+    windows: Vec<DetailWindow>,
 }
 
 impl GeometryUpload {
@@ -875,8 +911,15 @@ impl Renderer {
         let object_vertices = (objects.vertices.len() / MODEL_VERTEX_BYTES) as u64;
         for d in draws {
             let fits = if d.object.is_some() {
+                let [first, count] = d.windows.map(|w| w as usize);
                 u64::from(d.first_index) + u64::from(d.index_count) <= objects.indices.len() as u64
                     && u64::from(d.first_vertex) < object_vertices.max(1)
+                    && (objects.windows.get(first..first.saturating_add(count))).is_some_and(|w| {
+                        w.iter().all(|w| {
+                            u64::from(w.offset) + u64::from(w.index_count)
+                                <= u64::from(d.index_count)
+                        })
+                    })
             } else {
                 (d.vertex_buffer as usize) < layout.vertex_buffers.len()
                     && (d.index_buffer as usize) < layout.index_counts.len()
@@ -1072,6 +1115,7 @@ impl Renderer {
             object_ib,
             ranges: draws.iter().map(Rebased::key).collect(),
             objects: !objects.vertices.is_empty(),
+            windows: objects.windows.clone(),
         })
     }
 
@@ -1112,6 +1156,7 @@ impl Renderer {
             object_vb,
             object_ib,
             objects,
+            windows,
             ..
         } = upload;
         let gl = self.gl.clone();
@@ -1180,8 +1225,6 @@ impl Renderer {
                     vertex_buffer: d.vertex_buffer,
                     index_buffer: d.index_buffer,
                     first_vertex: d.first_vertex,
-                    first_index: d.first_index,
-                    index_count: d.index_count,
                 })
             })
             .collect();
@@ -1347,6 +1390,25 @@ impl Renderer {
                 first_vertex: d.first_vertex as i32,
             })
             .collect();
+        // Each kept draw's detail windows, at their indices' places as
+        // uploaded.
+        let mut detail = Vec::new();
+        let detail_of: Vec<[u32; 2]> = (kept.iter().zip(&kept_of))
+            .map(|(d, k)| {
+                let [first, count] = d.windows;
+                if k.is_none() || count == 0 {
+                    return [0, 0];
+                }
+                let at = detail.len() as u32;
+                detail.extend(
+                    windows[first as usize..(first + count) as usize]
+                        .iter()
+                        .map(|w| [d.first_index + w.offset, w.index_count]),
+                );
+                [at, count]
+            })
+            .collect();
+        drop(windows);
         let (sky, sky_error) = match sky.map(|t| SkyResources::new(&gl, t)) {
             Some(Ok(sky)) => {
                 for t in sky.textures() {
@@ -1385,6 +1447,8 @@ impl Renderer {
             exclusive,
             strict: RefCell::new(strict),
             lit,
+            detail,
+            detail_of,
             spheres: RefCell::new(kept.iter().map(|d| d.sphere).collect()),
             sky,
             sky_error,
@@ -1563,6 +1627,8 @@ impl Renderer {
         // test, conservatively; the shaders still drop the rest).
         let planes = frustum_planes(&view_projection);
         let ssa = ssa_min(size.0, size.1, frame.fov_y_degrees, frame.geometry_lod);
+        let bounds = detail_bounds(size.0, size.1, frame.fov_y_degrees, frame.geometry_lod);
+        let drawn_range = |k: u32| inner.drawn_range(k, frame.eye, bounds);
         let spheres = inner.spheres.borrow();
         // The draws the camera pass keeps, by kept draw.
         let kept: Option<Vec<bool>> = frame.drawn.as_ref().map(|drawn| {
@@ -1579,7 +1645,15 @@ impl Renderer {
         let shows = |i: u32| in_pass(i) && may(i);
         let hidden = |i: u32| !in_pass(i) && may(i);
         set_part(Part::WorldEarly);
-        draw_static(&gl, programs, inner, &inner.early, shows, hidden);
+        draw_static(
+            &gl,
+            programs,
+            inner,
+            &inner.early,
+            shows,
+            hidden,
+            drawn_range,
+        );
         if let Some(prepared) = particles {
             set_part(Part::Particles);
             prepared.draw_queue(&gl, &self.particles, ParticleQueue::Early);
@@ -1652,12 +1726,22 @@ impl Renderer {
                     emitted(Kind::Light);
                     gl.set_first_instance(p, d.kept);
                     let wide = inner.index_wide[d.index_buffer as usize];
-                    gl.draw_elements(C::TRIANGLES, d.first_index, d.index_count, wide, 1);
+                    // The camera's window (object-detail-level.md 4).
+                    let range = drawn_range(d.kept);
+                    gl.draw_elements(C::TRIANGLES, range.start, range.len() as u32, wide, 1);
                 }
             }
         }
         set_part(Part::WorldLate);
-        draw_static(&gl, programs, inner, &inner.late, shows, hidden);
+        draw_static(
+            &gl,
+            programs,
+            inner,
+            &inner.late,
+            shows,
+            hidden,
+            drawn_range,
+        );
         if let Some(prepared) = particles {
             set_part(Part::Particles);
             prepared.draw_queue(&gl, &self.particles, ParticleQueue::Late);
@@ -1685,7 +1769,8 @@ impl Renderer {
             emitted(Kind::Strict);
             gl.set_first_instance(&inner.surface_programs[d.surface as usize].0, i as u32);
             let wide = inner.index_wide[d.index_buffer as usize];
-            gl.draw_elements(C::TRIANGLES, d.first_index, d.index_count, wide, 1);
+            let range = drawn_range(i as u32);
+            gl.draw_elements(C::TRIANGLES, range.start, range.len() as u32, wide, 1);
         }
         // Step 7: the glows (glows.md section 4).
         if let Some(prepared) = particles {
