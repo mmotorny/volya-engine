@@ -613,27 +613,27 @@ export const tests = {
     assert(!button("Delete settings and saved games"), "offered with nothing stored");
   },
 
-  "Remove imported game: asks in the page, Escape cancels, a failure is told": async () => {
+  "Delete imported game: asks in the page, Escape cancels, a failure is told": async () => {
     // The smoke page has no game imported: the UX audit frame's fake engine has one.
     const frame = Object.assign(document.createElement("iframe"), { width: 1280, height: 800 });
     frame.style.cssText = "position: fixed; left: -5000px; top: 0";
-    frame.src = `${base}ux-audit/frame.html#desktop/settings-remove-game-failed`;
+    frame.src = `${base}ux-audit/frame.html#desktop/settings-delete-game-failed`;
     document.body.append(frame);
     try {
       const doc = () => frame.contentDocument;
       const button = (label) => [...(doc()?.querySelectorAll("#game button") ?? [])].find((b) => b.textContent === label);
-      await until(() => doc()?.documentElement?.dataset.ready === "true" && button("Remove imported game"), "the frame didn't render");
-      const note = button("Remove imported game").closest(".danger-item").querySelector(".note");
-      assertEqual(note.classList.contains("error") && note.textContent, "Couldn't remove the imported game.", "the failure");
-      button("Remove imported game").click();
+      await until(() => doc()?.documentElement?.dataset.ready === "true" && button("Delete imported game"), "the frame didn't render");
+      const note = button("Delete imported game").closest(".danger-item").querySelector(".note");
+      assertEqual(note.classList.contains("error") && note.textContent, "Couldn't delete the imported game.", "the failure");
+      button("Delete imported game").click();
       const ask = doc().querySelector("#game .confirm");
-      assertEqual(ask?.querySelector("strong").textContent, "Remove the imported game?", "the question");
+      assertEqual(ask?.querySelector("strong").textContent, "Delete the imported game?", "the question");
       assertEqual(ask.querySelector("span")?.textContent, "The game's settings and saved games stay.", "the detail");
       assert(ask.closest(".danger-zone"), "not in the danger zone");
       assertEqual(doc().activeElement?.textContent, "Cancel", "focus on Cancel");
       doc().activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-      await until(() => !doc().querySelector("#game .confirm") && button("Remove imported game"), "Escape didn't cancel");
-      assertEqual(doc().activeElement?.textContent, "Remove imported game", "focus back on the button");
+      await until(() => !doc().querySelector("#game .confirm") && button("Delete imported game"), "Escape didn't cancel");
+      assertEqual(doc().activeElement?.textContent, "Delete imported game", "focus back on the button");
     } finally {
       frame.remove();
     }

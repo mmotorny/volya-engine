@@ -14,7 +14,7 @@
 // Home holds Play only; secondary actions (an update offer, Settings) sit at
 // the bottom, away from it. Settings holds updates, the diagnostic
 // log and, in a danger zone, deleting the game's settings and saved games
-// and removing the import.
+// and deleting the import.
 
 import { SHARE_ICON, canOffer, chromium, install, installed, platform } from "./install.js";
 import * as diagnostics from "./diagnostics.js";
@@ -124,7 +124,7 @@ const GRAPHICS_PROBLEM = "Volya Engine draws the game with WebGL 2, which isn't 
 /**
  * The screen when this browser can't draw the game, imported or not: said
  * before anything is downloaded or imported (it couldn't be played here).
- * Settings stays reachable, e.g. to remove an import.
+ * Settings stays reachable, e.g. to delete an import.
  */
 async function showUnsupported() {
   const { gpu } = await call("status");
@@ -757,19 +757,19 @@ function userDataSection() {
 }
 
 /**
- * Danger zone: Remove imported game, after a confirmation (#538) that says
+ * Danger zone: Delete imported game, after a confirmation (#538) that says
  * the game's settings and saved games stay, when there are any; then the
  * import screen.
  */
 function importSection(status, userData) {
-  const title = "Remove imported game";
+  const title = "Delete imported game";
   const button = element("button", { className: "danger filled", textContent: title });
   const note = element("p", {
     className: "note",
     textContent: `Deletes the game's ${formatBytes(status.bytes)} from this app's storage. You can import it again from the installer.`,
   });
   button.addEventListener("click", async () => {
-    const ask = confirmation("Remove the imported game?", userData ? "The game's settings and saved games stay." : null, "Remove");
+    const ask = confirmation("Delete the imported game?", userData ? "The game's settings and saved games stay." : null, "Delete");
     button.replaceWith(ask.element);
     ask.focus();
     if (!(await ask.result)) {
@@ -781,8 +781,8 @@ function importSection(status, userData) {
     try {
       await call("forget_game");
     } catch (error) {
-      console.warn(`removing the imported game: ${error.message}`);
-      note.textContent = "Couldn't remove the imported game.";
+      console.warn(`deleting the imported game: ${error.message}`);
+      note.textContent = "Couldn't delete the imported game.";
       note.classList.add("error");
       ask.element.replaceWith(button);
       button.focus();
