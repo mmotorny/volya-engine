@@ -405,6 +405,10 @@ pub struct App {
     /// Platform time of the update that began the first caption, while
     /// loading.
     load_started: Option<f64>,
+    /// Platform time the phase timer last restarted (the load or its
+    /// latest caption began, console-diagnostics.md 2.4), until the
+    /// loading screen finishes.
+    phase_started: Option<f64>,
     /// Set with the level: when its loading began, until the next update.
     loaded_since: Option<f64>,
     /// Platform milliseconds from the first caption to the update after
@@ -636,6 +640,13 @@ pub enum AppState {
     },
 }
 
+/// Whole milliseconds since the phase timer last restarted, restarting it
+/// at `time_ms` (console-diagnostics.md 2.4).
+fn phase_ms(started: &mut Option<f64>, time_ms: f64) -> u64 {
+    let since = started.replace(time_ms).unwrap_or(time_ms);
+    (time_ms - since).max(0.0) as u64
+}
+
 impl App {
     pub fn new(data: GameData) -> io::Result<Self> {
         TitleMenu::check(&data)?;
@@ -693,6 +704,7 @@ impl App {
             failed: None,
             game_type: None,
             load_started: None,
+            phase_started: None,
             loaded_since: None,
             load_ms: None,
         })
@@ -1166,7 +1178,10 @@ impl App {
                     menu.resized(data, self.video);
                 }
                 if menu.quit_requested() {
-                    // The program's normal end (console-log.md 3.3).
+                    // The program's normal end (console-log.md 3.3), the
+                    // graphics device destroyed (console-diagnostics.md
+                    // 2.5).
+                    self.console.device_destroyed();
                     self.console.log_mut().save();
                 }
                 if out.store_config || menu.quit_requested() {
@@ -1208,15 +1223,28 @@ impl App {
                         self.game_type = Some(GAME_TYPE);
                         self.load_started = Some(time_ms);
                         let mut loading = Loading::start(data, changed);
+                        // The first caption begins as the load does.
+                        self.phase_started = Some(time_ms);
+                        self.console
+                            .phase_caption(0, &loading.screen().state().caption);
                         if self.prepare_textures {
                             loading.prepare_textures();
                         }
                         *stages = NewGame::Stages(Box::new(loading));
                         Ok(None)
                     }
-                    NewGame::Stages(loading) => loading
-                        .step(tree, data, now)
-                        .map(|level| level.map(|l| (l, loading.screen().clone()))),
+                    NewGame::Stages(loading) => {
+                        let captions = loading.screen().state().captions;
+                        let step = loading.step(tree, data, now);
+                        let screen = loading.screen().state();
+                        if screen.captions != captions {
+                            // The phase timer restarts whenever the global
+                            // timer runs; here it always does (#619).
+                            let ms = phase_ms(&mut self.phase_started, time_ms);
+                            self.console.phase_caption(ms, &screen.caption);
+                        }
+                        step.map(|level| level.map(|l| (l, loading.screen().clone())))
+                    }
                 };
                 match step {
                     Ok(None) => {}
@@ -1292,6 +1320,7 @@ impl App {
                     menu.resized(data, self.video);
                 }
                 if menu.quit_requested() {
+                    self.console.device_destroyed();
                     self.console.log_mut().save();
                 }
                 if out.store_config || menu.quit_requested() {
@@ -1333,6 +1362,13 @@ impl App {
             } => {
                 if let Some(o) = overlay.take() {
                     *overlay = o.next_frame(audio);
+                    if overlay.is_none() {
+                        // The loading screen finishes
+                        // (console-diagnostics.md 2.4).
+                        let ms = phase_ms(&mut self.phase_started, time_ms);
+                        self.phase_started = None;
+                        self.console.load_ended(ms);
+                    }
                 }
                 let left = overlay.as_ref().map(|o| o.frames_left);
                 // While the intro plays, including the frame that ends it,
@@ -2200,11 +2236,38 @@ mod tests {
         };
         app.update(&tree, 40.0, &mut input, &mut audio);
         assert_eq!(caption(&app), (1, "Кэширование объектов...".into()));
+        // console-diagnostics.md 2.4: each caption's phase lines.
+        let last = |app: &App| {
+            app.console()
+                .log()
+                .iter()
+                .rev()
+                .take(3)
+                .rev()
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            last(&app),
+            [
+                "* phase time: 0 ms",
+                "* phase cmem: 0 K",
+                "Кэширование объектов..."
+            ]
+        );
         let scene = app.scene(&tree, res).unwrap();
         assert!(scene.first("background").is_none(), "menu gone");
         assert_eq!(scene.layer("loading strip").count(), 40);
         app.update(&tree, 50.0, &mut input, &mut audio);
         assert_eq!(caption(&app), (2, "Сервер: Старт...".into()));
+        assert_eq!(
+            last(&app),
+            [
+                "* phase time: 10 ms",
+                "* phase cmem: 0 K",
+                "Сервер: Старт..."
+            ]
+        );
         app.update(&tree, 60.0, &mut input, &mut audio);
         app.update(&tree, 70.0, &mut input, &mut audio);
         assert_eq!(caption(&app), (4, "st_creating_new_game...".into()));

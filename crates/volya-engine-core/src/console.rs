@@ -10,11 +10,13 @@
 //! lines it prints (console-commands.md's "prints") and every other part's,
 //! for whoever shows them. Of the actions it runs those whose effect is the
 //! console's own: `help`, the key bindings (options-screens.md 11.5),
-//! `bind_console`, `load_last_save <name>`, `flush` and `clear_log`; the
-//! others are its caller's ([`Exec::Action`]). Setting `_preset` runs the preset's script
-//! (options-screens.md section 8).
+//! `bind_console`, `load_last_save <name>`, `flush`, `clear_log` and the
+//! diagnostic commands (docs/behavior/console-diagnostics.md); the others
+//! are its caller's ([`Exec::Action`]). Setting `_preset` runs the preset's
+//! script (options-screens.md section 8).
 
 mod commands;
+mod diagnostics;
 mod log;
 mod value;
 
@@ -22,6 +24,7 @@ pub use commands::{
     Bare, COMMANDS, CommandDef, DIFFICULTIES, GAME_MODES, Kind, PRESET_FILES, PRESETS, RENDERERS,
     Saved,
 };
+pub use diagnostics::{MemoryStatistics, RESOURCE_LABELS, ResourceCounts};
 pub use log::Log;
 pub use value::{Value, help_text, parse_mode, real_status};
 
@@ -296,7 +299,8 @@ pub enum Exec {
     /// A value was rejected or an action's argument named nothing: nothing
     /// changed.
     Rejected,
-    /// The bare name printed the status, or `help` its listing.
+    /// The bare name printed the status, `help` its listing, or a
+    /// diagnostic command its lines.
     Shown,
     /// An action whose effect is the console's caller's (its own
     /// specification, docs/behavior/console-scope.md section 6).
@@ -329,6 +333,10 @@ pub struct Console {
     /// of the bare name (texture-quality-filtering.md 6.1).
     executions: Vec<u64>,
     log: Log,
+    /// The figures `stat_memory` prints, as last reported.
+    memory: MemoryStatistics,
+    /// The counts `dump_resources` prints, as last reported.
+    resources: ResourceCounts,
     /// The user configuration file runs at startup.
     starting: bool,
     /// Why the program ends (console-commands.md section 5), once it must.
@@ -388,6 +396,8 @@ impl Console {
             generation: 0,
             executions: vec![0; COMMANDS.len()],
             log: Log::default(),
+            memory: MemoryStatistics::default(),
+            resources: ResourceCounts::default(),
             starting: false,
             fatal: None,
         };
@@ -418,17 +428,54 @@ impl Console {
         &mut self.log
     }
 
+    /// The figures `stat_memory` prints from now on
+    /// (console-diagnostics.md 2.1).
+    pub fn set_memory_statistics(&mut self, memory: MemoryStatistics) {
+        self.memory = memory;
+    }
+
+    /// The counts `dump_resources` and the shutdown print from now on
+    /// (console-diagnostics.md 2.2).
+    pub fn set_resource_counts(&mut self, resources: ResourceCounts) {
+        self.resources = resources;
+    }
+
+    /// A stage caption of a load begins (console-diagnostics.md 2.4):
+    /// `ms` since the previous one began (or, for the first, since the
+    /// load began), the memory in use, then the caption's displayed text.
+    pub fn phase_caption(&mut self, ms: u64, caption: &str) {
+        diagnostics::phase(&mut self.log, ms, &self.memory);
+        self.log.message(caption);
+    }
+
+    /// The loading screen finishes (console-diagnostics.md 2.4): `ms` since
+    /// the last caption began, the memory in use, then `stat_memory`, run
+    /// without the `~ <line>` echo. TODO(#637): through the console's input
+    /// line, emptying it.
+    pub fn load_ended(&mut self, ms: u64) {
+        diagnostics::phase(&mut self.log, ms, &self.memory);
+        self.exec("stat_memory");
+    }
+
+    /// The graphics device is destroyed at exit (console-diagnostics.md
+    /// 2.5): the resource manager's thirteen count lines.
+    pub fn device_destroyed(&mut self) {
+        self.resources.print(&mut self.log);
+    }
+
     /// Why the program ends, once a command made it end: `help` executed
     /// from the user configuration file at startup (console-commands.md
-    /// section 5, measured as a crash of the original).
+    /// section 5, measured as a crash of the original), or `dump_resources`
+    /// before the graphics device exists (console-diagnostics.md 2.2).
     pub fn fatal(&self) -> Option<&str> {
         self.fatal.as_deref()
     }
 
     /// As the game starts (console-commands.md section 1): of the user
     /// configuration file `user` the lines that start with the bytes
-    /// `renderer `, then `unbindall`, then the whole file as a script
-    /// (options-screens.md section 12.2). The first execution's
+    /// `renderer `, then `stat_memory` (console-diagnostics.md 2.4), then
+    /// `unbindall`, then the whole file as a script (options-screens.md
+    /// section 12.2). The first execution's
     /// `Executing config-script` lines are `cfg_load`'s (console-scope.md
     /// 5.6), not printed here.
     pub fn startup(files: ConsoleFiles, user: &[u8]) -> Self {
@@ -439,6 +486,8 @@ impl Console {
                 console.exec(&cp1251::decode(line));
             }
         }
+        // The renderer and the game library are loaded.
+        console.exec("stat_memory");
         console.starting = true;
         console.exec("unbindall");
         console.exec_script(user);
@@ -617,6 +666,28 @@ impl Console {
                 self.log.save();
                 self.print("* Log file has been cleaned successfully!".to_owned());
                 Exec::Done
+            }
+            // console-diagnostics.md 2.1: the argument is ignored.
+            "stat_memory" => {
+                self.memory.print(&mut self.log);
+                Exec::Shown
+            }
+            // 2.2: the configuration file runs at startup before the
+            // graphics device exists, and the original crashes there.
+            "dump_resources" if self.starting => {
+                self.fatal = Some(
+                    "`dump_resources` in the user configuration file: the graphics device does not exist yet"
+                        .to_owned(),
+                );
+                Exec::Shown
+            }
+            "dump_resources" => {
+                self.resources.print(&mut self.log);
+                Exec::Shown
+            }
+            "dump_open_files" => {
+                diagnostics::dump_open_files(&mut self.log, argument);
+                Exec::Shown
             }
             // With a name it only remembers it (steering-the-original.md
             // 3.2.1); without one it loads, which is the caller's.

@@ -166,7 +166,140 @@ fn startup_runs_the_renderer_lines_first() {
         &["- renderer renderer_r2"],
     ]
     .concat();
-    assert_eq!(c.log(), [first, second].concat());
+    assert_eq!(
+        c.log(),
+        [&first[..], &STAT_MEMORY[..], &second[..]].concat()
+    );
+}
+
+/// `stat_memory`'s lines with no figure reported.
+const STAT_MEMORY: [&str; 4] = [
+    "* [win32]: free[0 K], reserved[0 K], committed[0 K]",
+    "* [ D3D ]: textures[0 K]",
+    "* [x-ray]: crt heap[0 K], process heap[0 K], game lua[0 K], engine lua[0 K], render[0 K]",
+    "* [x-ray]: economy: strings[0 K], smem[0 K]",
+];
+
+#[test]
+fn stat_memory_prints_the_four_lines_whatever_the_argument() {
+    // console-diagnostics.md 2.1.
+    let mut c = Console::new(files());
+    assert_eq!(printed(&mut c, "stat_memory"), STAT_MEMORY);
+    assert_eq!(printed(&mut c, "stat_memory extra words"), STAT_MEMORY);
+    c.set_memory_statistics(MemoryStatistics {
+        free: 2047,
+        reserved: 1024,
+        committed: 1 << 30,
+        textures: 260_814 * 1024 + 1023,
+        crt_heap: 6009 * 1024,
+        process_heap: 724 * 1024,
+        game_lua: 1952 * 1024,
+        engine_lua: 171 * 1024,
+        render: 5,
+        strings: -1500,
+        smem: 28_221 * 1024,
+        cmem: 0,
+    });
+    assert_eq!(
+        printed(&mut c, "stat_memory"),
+        [
+            "* [win32]: free[1 K], reserved[1 K], committed[1048576 K]",
+            "* [ D3D ]: textures[260814 K]",
+            "* [x-ray]: crt heap[6009 K], process heap[724 K], game lua[1952 K], engine lua[171 K], render[0 K]",
+            // Toward zero.
+            "* [x-ray]: economy: strings[-1 K], smem[28221 K]",
+        ]
+    );
+}
+
+#[test]
+fn dump_resources_prints_thirteen_counts() {
+    // 2.2: every label but `lst_constants` is ten characters long.
+    assert!(
+        RESOURCE_LABELS
+            .iter()
+            .all(|l| l.len() == 10 || *l == "lst_constants")
+    );
+    let mut c = Console::new(files());
+    c.set_resource_counts(ResourceCounts([
+        255, 2, 0, 6, 9, 6, 20, 219, 0, 0, 306, 306, 314,
+    ]));
+    let lines = printed(&mut c, "dump_resources 0");
+    assert_eq!(lines.len(), 13);
+    assert_eq!(lines[0], "* RM_Dump: textures  : 255");
+    assert_eq!(lines[9], "* RM_Dump: lst_constants: 0");
+    assert_eq!(lines[12], "* RM_Dump: v_shaders : 314");
+    assert_eq!(printed(&mut c, "dump_resources"), lines);
+    // 2.5: again as the device is destroyed at exit.
+    let from = c.log().len();
+    c.device_destroyed();
+    assert_eq!(c.log()[from..], lines);
+}
+
+#[test]
+fn dump_resources_at_startup_ends_the_program() {
+    // 2.2, measured as a crash: nothing after it runs.
+    let c = Console::startup(
+        files(),
+        b"dump_resources
+hud_info off
+",
+    );
+    assert!(c.fatal().is_some());
+    assert!(c.on("hud_info"));
+    // `stat_memory` and `dump_open_files` work there.
+    let c = Console::startup(
+        files(),
+        b"dump_open_files
+stat_memory
+",
+    );
+    assert!(c.fatal().is_none());
+    assert_eq!(
+        c.log()[4..],
+        [&["- dump_open_files "][..], &STAT_MEMORY].concat()
+    );
+}
+
+#[test]
+fn dump_open_files_lists_nothing_without_file_activity() {
+    // 2.3: the argument is `atoi`'s; the bare name shows.
+    let mut c = Console::new(files());
+    assert_eq!(printed(&mut c, "dump_open_files"), ["- dump_open_files "]);
+    for one in ["1", "1x", " 1", "+1"] {
+        assert!(printed(&mut c, &format!("dump_open_files {one}")).is_empty());
+    }
+    for other in ["0", "2", "-1", "abc", "11"] {
+        assert_eq!(
+            printed(&mut c, &format!("dump_open_files {other}")),
+            ["----un-used"],
+            "{other}"
+        );
+    }
+}
+
+#[test]
+fn a_load_prints_its_phases_then_stat_memory() {
+    // 2.4.
+    let mut c = Console::new(files());
+    c.set_memory_statistics(MemoryStatistics {
+        cmem: 26_124 * 1024 + 7,
+        ..Default::default()
+    });
+    c.phase_caption(0, "Кэширование объектов...");
+    c.load_ended(1234);
+    assert_eq!(
+        c.log()[..5],
+        [
+            "* phase time: 0 ms",
+            "* phase cmem: 26124 K",
+            "Кэширование объектов...",
+            "* phase time: 1234 ms",
+            "* phase cmem: 26124 K",
+        ]
+    );
+    // Without the echo.
+    assert_eq!(c.log()[5..], STAT_MEMORY);
 }
 
 #[test]
