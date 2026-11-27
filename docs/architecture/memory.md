@@ -7,9 +7,10 @@ Where the engine's memory goes, by lifetime and owner; the design it follows (th
 Our memory figures are the original's, counted the same way, so they compare directly. The design follows the approved spec's functional description of the original's memory manager and figures (docs/behavior/console-diagnostics.md 2.1, 2.1.1, 2.4, 2.4.1), never its code: implementers work from that text only (docs/clean-room.md). The original's figures are hard budgets, with no headroom:
 
 - each caption's growth of `* phase cmem` (the next caption's figure less its own; the load's end for the last);
-- the end-of-load *h* (the C runtime heap's in-use bytes, equal to its last `phase cmem`) and *t* (the textures).
+- the end-of-load *h* (the C runtime heap's in-use bytes, equal to its last `phase cmem`) and *t* (the textures);
+- the file cache's, our own figure for what the original maps ([File-backed data](#file-backed-data)).
 
-Anything above a budget is filed as an issue and investigated. Budgets are still measured and reported, never release gates (AGENTS.md). Where matching is impossible by design, the deviation is listed in [Deviations](#deviations) and needs the user's approval; a figure the spec leaves unestablished is not a budget until it is established.
+Anything above a budget is filed as an issue and investigated. Budgets are still measured and reported, never release gates (AGENTS.md). Matching the original is what is approved; every deviation is the user's decision, case by case, recorded in [Deviations](#deviations). A figure the spec leaves unestablished is not a budget until it is established.
 
 ## Limits
 
@@ -28,7 +29,7 @@ Anything above a budget is filed as an issue and investigated. Budgets are still
 | `heap_log` op (test builds) | browser | The wasm heap and the most live under each loading caption. |
 | `heap_map` op (test builds) | browser | Live KiB per MiB of the heap and every live block of 256 KiB or more, by address. |
 | `heap_record` op (test builds) | browser | At the load's most live: live bytes by block size and the largest blocks; every allocation that grew the wasm memory since the reset, by size and address. |
-| The console's `stat_memory`, `dump_resources` and `* phase cmem` (docs/behavior/console-diagnostics.md; in the game's log) | browser, every build | *h* and `phase cmem` as the original counts them ([The allocator](#the-allocator)); *c* the wasm memory and what the browser holds for the held files ([File-backed data](#file-backed-data)), the rest of 4 GiB free; *t* by the original's rule ([Textures and the GPU](#textures-and-the-gpu)); the colour targets, the programs (as vertex and as fragment shaders) and the vertex arrays (as vertex declarations). The original's other figures have no counterpart and print 0. |
+| The console's `stat_memory`, `dump_resources` and `* phase cmem` (docs/behavior/console-diagnostics.md; in the game's log) | browser, every build | *h* and `phase cmem` as the original counts them ([The allocator](#the-allocator)); *g* and *r* the game scripts' and the renderer's pools; *c* the wasm memory, the rest of 4 GiB free; *t* by the original's rule ([Textures and the GPU](#textures-and-the-gpu)); the colour targets, the programs (as vertex and as fragment shaders) and the vertex arrays (as vertex declarations). The original's other figures (*p*, *e*) have no counterpart and print 0. The file cache's figure is `level_stats`' ([File-backed data](#file-backed-data)). |
 | `level_stats` op | browser | The wasm heaps (engine, audio worker); the GPU world's buffers and textures; everything the context holds (`gpu_live`), split into the level's (`gpu_level`) and what the renderer keeps across games (`gpu_kept`), and by owner (`gpu_owners`: the level, the renderer's own, the targets, the particles', the lights', the images, the videos). |
 | `game-level` and `game-memory` suites' JS memory | Chrome | `performance.measureUserAgentSpecificMemory()` after the New Game (cross-origin isolated pages only, documented, MDN): each context's JavaScript, the wasm memories not among it. |
 | `footprint` of the Simulator's processes | iOS Simulator | Per-process footprints; ETC2 textures there are held as RGBA8, so they don't show the device's (#443). |
@@ -136,29 +137,30 @@ Measured (#667): its New Game of `l01_escape` run unmodified under Wine three ti
 | 9 | `st_loading_shaders` | 1,400 | 0 | The shader table (from 7). |
 | 10 | `st_loading_geometry` | 353 | 366 | |
 | 11 | `st_loading_spatial_db` | 4,297 | −1,819 | |
-| 12 | `st_loading_details` | 10 | 5,423 | `level.details` held whole and read in place: the slot grid becomes a view of it. The cache's 0.2 MB stays (where the original holds its cache is unestablished). |
+| 12 | `st_loading_details` | 10 | 5,423 | The compact slot grid (a leaner structure in place of the mapped `level.details`, rule 5) counted in the file cache's figure, not *h*. The cache's 0.2 MB stays (where the original holds its cache is unestablished). |
 | 13 | `st_loading_sectors_portals` | 143 | 0 | |
-| 14 | `st_loading_ai_objects` | 0 | 3 | `level.ai` and `level.gct` held whole and read in place; the navigation positions read from the held `level.ai` instead of a copy. |
+| 14 | `st_loading_ai_objects` | 0 | 3 | The navigation positions (moved from 5; a leaner structure in place of the mapped `level.ai`, rule 5) and `level.gct` counted in the file cache's figure, not *h*. |
 | 15 | `st_client_spawning` | 4,708 | 13,551 | The objects' models come from 1 (one not prefetched is loaded here); their CPU geometry, every detail window's indices among it (12.3 MB), freed once uploaded, as the original keeps it in Direct3D's buffers. |
-| 16 | `st_loading_textures` | 1 | 338 | The texture file read into the held-file region, not the heap. |
+| 16 | `st_loading_textures` | 1 | 338 | The texture file read into the file cache, not the heap. |
 | 17 | `st_client_synchronising` | 0 | 0 | |
 | | The load, its first caption to its end | 201,005 | 70,396 | |
 | | *h* at the load's end | 227,120 | 75,602 | |
 | | *t* at the load's end | 260,798 | 148,764 (the renderer's texture bytes, headless Chrome) | Counted by the original's rule; the prefetched models' textures added (the original's 865 base textures against 631 without prefetching, 2.4.1). |
 
-Where ours keeps less than the original (8, 11) it stays: the budget is a ceiling. Beside them at the load's end the original writes the committed address space 849,680–849,744 K (the whole 32-bit process, its program, libraries and driver; ours, the wasm memory and the held files, 101,760 K today), the process heap 400,268–400,269 K and the game scripts' pool 25,762–25,784 K (measured, #667).
+Where ours keeps less than the original (8, 11) it stays (rule 5): the budget is a ceiling. Beside them at the load's end the original writes the committed address space 849,680–849,744 K (the whole 32-bit process, its program, libraries and driver; ours, the wasm memory, 101,760 K today), the process heap 400,268–400,269 K and the game scripts' pool 25,762–25,784 K (measured, #667).
 
 ## Design
 
 ### Rules
 
 1. **One heap, the original's memory manager in front of it**: our global allocator serves small requests from fixed-size pools and large ones from Rust's `System` allocator (dlmalloc over the wasm memory), as the original's memory manager does over the C runtime's heap ([The allocator](#the-allocator)). No heap per lifetime: the experiment measured it to grow the heap ([Rejected](#rejected-heaps-by-lifetime-401)).
-2. **The original's files read in place are held whole; the rest stream.** A file the original maps and keeps open while its data is in use is held whole in the file region and read in place, not copied into a parsed form ([File-backed data](#file-backed-data)). Other files are read as streams into their final form, the smallest that serves their readers.
+2. **What the original maps goes to the file cache; the rest streams.** A file the original maps and reads in place is held, whole or by parts, in the file cache, which has a budget and a figure of its own ([File-backed data](#file-backed-data)). Other files are read as streams into their final form, the smallest that serves their readers.
 3. **An owner of many long-lived things holds them in a few large blocks** (a region): one text buffer and tables of ranges or indices into it, sized once from what is read and never grown afterwards. Plain `Vec`s on the one heap, reached by index, freed whole with their owner: what the pools can't serve well (sizes over 862 bytes, data read as one run) and what keeps the block count low.
-4. **Only the collision world keeps its large blocks as spares.** Freeing a large wasm block returns nothing to the device, and the next load's earlier stages split its space before the collision world is read; kept, its arrays are reused whole when large enough, and each grows to the largest level met. No other owner keeps a spare: kept between loads, the texture file buffer took the space the geometry's upload reused, so the first game's heap grew by more than the second saved (76–82 against 74 MiB; #487). The spares are not counted in *h* ([Deviations](#deviations)).
-5. **The same data under the same caption.** Each stage loads and keeps what the original's does under that caption ([The original](#the-original)), so each caption's growth compares with the original's.
-6. **No allocation in a running frame.** Per-frame data goes into buffers its owner keeps and clears (`Vec::clear` keeps capacity); a bump arena is not added, as the heap already stays flat while the level runs (#402).
-7. **Nothing of a level outlives it on the GPU.** A level's GPU resources are released when the level ends, before the next load starts. The prefetched models' are the game type's, not the level's.
+4. **No owner keeps a spare across loads.** The collision world is freed with its level, as the original's; so is every other owner's data. (Kept between loads, the texture file buffer took the space the geometry's upload reused, so the first game's heap grew by more than the second saved: 76–82 against 74 MiB, #487.)
+5. **A leaner structure is an approved kind of deviation.** A better algorithm or data structure than the original's, with the same observable behaviour, is taken wherever found: it stays within the original's budget for the same data (the caption's growth, or the file cache's share of the file it replaces) and its behaviour is checked against the specs. Taken so far: the collision world (29.4 MB kept against the original's 72,669 K; each triangle's material and sector in 2 bytes, #490), the detail objects' compact slot grid, the navigation positions (6 of each vertex's 21 bytes).
+6. **The same data under the same caption.** Each stage loads and keeps what the original's does under that caption ([The original](#the-original)), so each caption's growth compares with the original's.
+7. **No allocation in a running frame.** Per-frame data goes into buffers its owner keeps and clears (`Vec::clear` keeps capacity), taken from the renderer's pool, reported as *r* ([The allocator](#the-allocator)).
+8. **Nothing of a level outlives it.** A level's heap data and GPU resources are released when the level ends, before the next load starts. The prefetched models' are the game type's, not the level's.
 
 ### The allocator
 
@@ -167,15 +169,16 @@ The global allocator, natively and in wasm, follows the original's memory manage
 - A request of up to 862 bytes (alignment at most 16) goes to one of 54 pools of fixed block sizes 16, 32, … 864 bytes: *n* bytes to the pool of 16 × (⌊(*n* + 1) / 16⌋ + 1). A pool takes its memory from `System` in chunks of 16 KiB plus 22 bytes and never returns them; a freed block goes back to its pool. A reallocation within the same pool stays in place.
 - A larger request (or one aligned over 16) is one `System` block of the request plus 23 bytes.
 - `phase cmem` and *h* count what the original's heap walk counts: every pool's chunks whole (16,406 bytes each, used or free) and every large block with its 23 bytes; `System`'s own overhead, as the C runtime heap's, not in it. The test ops keep their requested-byte counts beside (`heap_log`, `heap_map`, `heap_record`, the frame's traffic), as do `loading_memory.rs` and `level_memory.rs` beside *h*.
+- Two pools sit outside *h*, as the original's are committed apart from its heap (console-diagnostics.md 2.1, 2.1.1): the game scripts' (the script runtime's allocator, *g*) and the renderer's (the lists a frame's scene, passes and draw list grow and refill, *r*: the original's is 0 at the load's end and a few hundred K once frames are drawn). Each takes its memory from `System` in segments of its own and reports its bytes in use. *e* prints 0: no shader scripts run.
 - The pools are locked (native tests run threads; the engine's worker is single-threaded, so the lock is never contended there).
 
-What stays: the one heap, the regions and their owners (rule 3), the counting wrapper's place. What changes: small blocks no longer reach dlmalloc one by one, so the stages' hundreds of thousands of small temporaries (`st_client_spawning`'s 2.52 million allocations) fill pool chunks rather than splitting dlmalloc's free space between large blocks (believed: fewer holes the large blocks can't use, as [Heap minus live](#heap-minus-live) describes); a pool's high-water mark is kept for the page's life and counted in *h*, as in the original.
+What stays: the one heap, the regions and their owners (rule 3), the counting wrapper's place. What goes: the collision world's spares (#357). What changes: small blocks no longer reach dlmalloc one by one, so the stages' hundreds of thousands of small temporaries (`st_client_spawning`'s 2.52 million allocations) fill pool chunks rather than splitting dlmalloc's free space between large blocks (believed: fewer holes the large blocks can't use, as [Heap minus live](#heap-minus-live) describes); a pool's high-water mark is kept for the page's life and counted in *h*, as in the original.
 
 ### File-backed data
 
-The original reads in place, from views of the mapped archives, the files it keeps open while their data is in use, and copies none into its heap; their views count in *c*, not *h* (console-diagnostics.md 2.1.1, 2.4.1). As wasm can't map a file ([Limits](#limits)), each such file is copied whole into a block of its own taken from `System` outside the pools and not counted in *h* (the file region), held as long as the original keeps it open, and read in place:
+The original reads in place, from views of the mapped archives, the files it keeps open while their data is in use, and copies none into its heap; their views count in *c*, not *h* (console-diagnostics.md 2.1.1, 2.4.1). A mapping is a cache of the file's pages. As wasm can't map a file ([Limits](#limits)), the file cache stands for it: a file is held whole in memory where its budget affords it, otherwise as a least-recently-used cache of its parts, and read in place either way. It is memory the original's figures don't show, so it has a budget and a figure of its own; it is not in *h* and not left unnamed in *c*.
 
-| File | Bytes (`l01_escape`) | Held |
+| File | Bytes (`l01_escape`) | Open in the original |
 |---|---|---|
 | `level` | 4,094,604 | from `st_opening_stream` to the level's end (believed: the spec says it is read in place, not when it is closed) |
 | `all.spawn` | 4,474,073 | while `st_creating_new_game` reads it (how long the original keeps it open is unestablished) |
@@ -183,7 +186,9 @@ The original reads in place, from views of the mapped archives, the files it kee
 | `level.details` | 8,392,388 | from `st_loading_details` to the level's end |
 | Any other file read from the archives (the texture files, the models', the sounds', the configuration's) | its size | while it is read |
 
-So about 33 MB of a level's files are held beside the heap. *c* is the wasm memory, which the file region is part of. Natively the same region is used (one path; the native tests count *h* the same way).
+- **Budget**: at any moment, the bytes of the files the original has open then (for `l01_escape` in a level 28.6 MB: `level`, `level.ai`, `level.gct`, `level.details`; during the load, the file being read beside them). A leaner structure that replaces a mapped file (rule 5: the detail slot grid, the navigation positions) counts here against that file's share, not in *h*. Files are held whole, which the budget affords by its definition; a file is held by parts only where a measured hard limit doesn't afford it whole, with a smaller budget of the cache's size (a deviation, [Deviations](#deviations)).
+- **Reported**: the file cache's bytes, by file, and its most since the load began, in `level_stats` (`file_cache`) and by the game suites against the budget at each caption and at the load's end. The console's lines stay the original's: the figure is not added to `stat_memory`, and *c* remains the wasm memory.
+- Natively the same cache is used (one path; the native tests count *h* and the cache the same way).
 
 ### Textures and the GPU
 
@@ -198,9 +203,9 @@ Nesting: the program holds game types; a game type holds sessions; a session hol
 | Program | Regions made at launch, before anything else: the archive index (#300), the configuration (#299), the string tables and the effect library (#484; the library read once at launch rather than with each level: our choice, as `gamemtl.xr` is read with the level). | 5.3 MB in about 4,100 blocks |
 | Game type | The prefetched models and their GPU resources, made under `st_prefetching_objects` and kept until the game type changes. | the original's 85,047 K |
 | Session | The offline simulation's registry (a slot table, each record's strings its own); the game graph; the character; the script runtime's state. | 8.7 MB (16 with the navigation) |
-| Level | Its held files ([File-backed data](#file-backed-data)); its owners' blocks: the collision world's arrays (kept as spares after the level, rule 4), the detail cache, the objects' sounds and effects and the models not prefetched. | about 54 MB (about 62, `l11_pripyat`; believed), and about 29 MB of held files |
-| Loading | Each reader's own stream buffer: 64 KiB for the graph and the geometry's read; 2 MiB pieces for the geometry's upload and the index runs; in the browser one band buffer per preparation. A file being read is in the file region. Stage temporaries freed by the stage's end. | under 10 MB above what each stage keeps |
-| Frame | Buffers kept by the level (its scene's lists among them), the sounds and the presenter (the draw list's), cleared each frame. | held for the level |
+| Level | Its files in the file cache ([File-backed data](#file-backed-data)); its owners' blocks: the collision world's arrays, the detail cache, the objects' sounds and effects and the models not prefetched; its frames' lists in the renderer's pool. All freed when it ends (rule 8). | about 54 MB (about 62, `l11_pripyat`; believed), and the file cache's 28.6 MB |
+| Loading | Each reader's own stream buffer: 64 KiB for the graph and the geometry's read; 2 MiB pieces for the geometry's upload and the index runs; in the browser one band buffer per preparation. A file being read is in the file cache. Stage temporaries freed by the stage's end. | under 10 MB above what each stage keeps |
+| Frame | Buffers kept by the level (its scene's lists among them), the sounds and the presenter (the draw list's), from the renderer's pool, cleared each frame. | held for the level |
 
 There is no program scratch shared by the loaders: each owns its stream buffer for its read.
 
@@ -211,7 +216,7 @@ There is no program scratch shared by the loaders: each owns its stream buffer f
 
 ### What stays on the general heap as it is
 
-Small, short-lived or rare allocations: the UI's state, menus, the console, errors and diagnostics, a stage's temporaries that are small; the audio worker's own instance (2 MiB, its sounds in JavaScript). They are a few MiB and either short-lived or allocated where no large block follows them. The script runtime's blocks move to a pool of their own counted as *g* ([Migration](#migration)), as the original's game scripts allocate from the game library's own pool, outside *h* (console-diagnostics.md 2.1.1).
+Small, short-lived or rare allocations: the UI's state, menus, the console, errors and diagnostics, a stage's temporaries that are small; the audio worker's own instance (2 MiB, its sounds in JavaScript). They are a few MiB and either short-lived or allocated where no large block follows them. The script runtime's blocks and the frame's lists are in their own pools, *g* and *r* ([The allocator](#the-allocator)).
 
 ### Budgets
 
@@ -222,33 +227,32 @@ Reported, never gated; no headroom:
 | Each caption's growth of `phase cmem` | the original's, K ([The original](#the-original)) | the game suites (browser); `loading_memory.rs` (native) |
 | *h* at the load's end | 227,120 K | the game suites |
 | *t* at the load's end | 260,798 K | the game suites |
+| The file cache, at each caption and the load's end | the bytes of the files the original has open then ([File-backed data](#file-backed-data)) | the game suites; `loading_memory.rs` |
 
-Reported beside them, not budgets: each stage's peak (the original's log gives none); the wasm memory and the held files; *h* at startup and in the title menu against the original's 6,009 and 26,449 K (console-diagnostics.md 2.1, measured examples of one run).
+Reported beside them, not budgets: each stage's peak (the original's log gives none); the wasm memory; *g* and *r*; *h* at startup and in the title menu against the original's 6,009 and 26,449 K (console-diagnostics.md 2.1, measured examples of one run).
 
 Targets no tool reports against: a frame's allocations in a running level 0; JavaScript 12 MiB (Chrome).
 
 ### Deviations
 
-Where ours does not match the original. Each needs the user's approval; matching is the default, and a choice leaner than the original's (for the iPhone or a lower-spec device) is a deviation too, weighed only against a measured hard limit: so far the reference iPhone's 2,528 MB per process (measured, #443); another device's limit is measured when it is targeted.
+Matching the original is what is approved; each deviation is the user's decision, case by case, recorded here. A choice leaner than the original's for the iPhone or a lower-spec device (other than rule 5's) is weighed only against a measured hard limit: so far the reference iPhone's 2,528 MB per process (measured, #443); another device's limit is measured when it is targeted.
 
-| Deviation | Why |
+| Deviation | Decision |
 |---|---|
-| The held files are copies in the wasm memory, counted in *c* but not *h*. | wasm can't map a file ([Limits](#limits)). |
-| The collision world's spares (rule 4) are kept after a level and not counted in *h*. | A freed large block in the original's heap is not in *h* either, and a freed wasm block returns nothing to the device; kept, the next load's world reuses them (#357). |
-| Owners leaner than the original's: the collision world (29.4 MB kept against the original's 72,669 K; each triangle's material and sector in 2 bytes, #490), the detail objects' compact slot grid (replaced by reading the held `level.details`), the navigation positions (6 of each vertex's 21 bytes; replaced by reading the held `level.ai`). | Made before this design; kept unless the user asks to match. |
-| The sounds: the audio worker's heap and the compressed sound files in JavaScript, outside *h*. | Which figure counts the original's sound data is unestablished (console-diagnostics.md 2.1.1); revisited when it is established. |
-| The renderer's frame lists stay in *h* (the original's lists grown while drawing are in its renderer's pool, *r*: 0 at the load's end, a few hundred K later). | At the load's end, where the budgets are, both are about 0 (believed for ours: no frame is drawn before it); *r* prints 0. |
-| *p* (the process heap) prints 0. | Ours keeps no CPU copy of GPU resources; what else the original's holds is unestablished. |
+| The file cache: what the original maps is copied into memory, whole or by parts. | Approved (wasm can't map a file): extra memory with its own budget, reported ([File-backed data](#file-backed-data)). |
+| Leaner structures with the same observable behaviour (rule 5). | Approved as a kind: within the original's budget for the same data, behaviour checked against the specs. |
+| *p* (the process heap) prints 0. | Approved: we have nothing equivalent (no CPU copy of GPU resources, no system libraries' heap). |
+| The sounds: the audio worker's heap and the compressed sound files in JavaScript, outside *h*. | Pending: where the original holds its sound data is to be measured from a run with sound on and its volumes muted (the spec's runs used `-nosound`, console-diagnostics.md 2.1.1); matched once known. |
 
 ### Level change and the second New Game
 
 A level change goes through a save and a load in the original (docs/behavior/offline-simulation.md 6.1); a New Game after a game is a game's end and a load. Both run in this order:
 
-1. The level ends whole: its screen, its sounds (with the collision world they share, #451), the presenter's world (released with the first frame drawn without it) and any preparation in progress, every GPU resource of the level (rule 7). The collision world's arrays go to its spares.
+1. The level ends whole: its screen, its sounds (with the collision world they share, #451), the presenter's world (released with the first frame drawn without it) and any preparation in progress, every GPU resource of the level and its heap data, the collision world's arrays among them (rule 8).
 2. A game's end also ends the session (the registry and graph go; the next session's blocks fit their holes, as they are sized from the same files).
-3. The next load starts. The collision world's arrays come from the spares, and a larger level grows them at the top once.
+3. The next load starts.
 
-So the heap after any sequence of levels is what the program, the session, the largest level met and the collision spares need, plus what a second game's layout adds once (4 MiB, measured above); the GPU holds one level at a time.
+So the heap after any sequence of levels is what the program, the game type, the session and the largest level met need, with the holes their layouts leave (a second game's layout added 4 MiB once, measured above with the spares kept); the GPU holds one level at a time.
 
 ### GPU memory: what is owned and released when
 
@@ -273,7 +277,7 @@ Data written each frame is never written into a buffer the GPU may still be read
 
 The real limit is the process's: 2,528 MB on the reference iPhone (measured, Jetsam, #443), the wasm heaps, JavaScript, WebKit and the GPU's resources together. The death it recorded was ANGLE's index rewriting, with the wasm heap at about 104 MiB (fixed, #443), not the heap. The 110 MiB wasm heap figure (`WASM_HEAP_CAP`, tests/browser/game.js) was a guard from a measured heap, not a limit, and is replaced by the original's figures ([Budgets](#budgets)).
 
-Expected after a New Game of `l01_escape` under this design (believed, from the figures above): the wasm memory about 260–280 MiB (*h* 222 MiB, the held files 31 MiB, the collision spares after a first level and dlmalloc's holes); the GPU about 370 MiB (textures by *t*'s files, BC as stored, about 255 MiB with the prefetched ones; the level's buffers 79 MiB; the targets 52 MiB at 2868 × 1320) and the drawing buffers up to 45 MB; JavaScript and WebKit about 120 MB (the Simulator's WebContent held 199–222 MB in a level with a heap of about 90 MiB, #443). About 0.9 GB in all: a margin of about 1.6 GB to the limit, measured on the deployed app once the migration lands (the real device's footprint is the user's report; the Simulator's doesn't show it, #443).
+Expected after a New Game of `l01_escape` under this design (believed, from the figures above): the wasm memory about 280–300 MiB (*h* 222 MiB, the file cache's about 28 MiB with a file being read, *g* about 25 MiB as the original's, and dlmalloc's holes); the GPU about 370 MiB (textures by *t*'s files, BC as stored, about 255 MiB with the prefetched ones; the level's buffers 79 MiB; the targets 52 MiB at 2868 × 1320) and the drawing buffers up to 45 MB; JavaScript and WebKit about 120 MB (the Simulator's WebContent held 199–222 MB in a level with a heap of about 90 MiB, #443). About 0.9 GB in all: a margin of about 1.6 GB to the limit, measured on the deployed app once the migration lands (the real device's footprint is the user's report; the Simulator's doesn't show it, #443).
 
 ## Migration
 
@@ -281,16 +285,21 @@ Each step is its own issue, filed after this design is approved, in this order, 
 
 1. **Report against the original's figures.** The game suites compare each caption's `phase cmem` growth and the end-of-load *h* and *t* with the original's (no headroom); `loading_memory.rs` the same natively; `WASM_HEAP_CAP` and the per-stage budgets go.
 2. **The original's memory manager as the global allocator** (native and wasm): the 54 pools, the 16 KiB chunks, the 23 bytes; `phase cmem` and *h* counted as the original's.
-3. ***t* by the original's rule.**
-4. **The file region**: files read from the archives copied whole into blocks outside the pools and *h*, counted in *c*; the texture files' read first.
-5. **The `level` file held and read in place**, its chunks' data made under the caption that reads them (the shader table under `st_loading_shaders`).
-6. **`level.details` held and read in place**, the slot grid a view of it.
-7. **`level.ai` and `level.gct` held and read in place under `st_loading_ai_objects`**, the navigation positions read from them.
-8. **The new game made under `st_creating_new_game`** from `all.spawn` held and read in place: the registry, the game graph, the character.
-9. **Prefetching under `st_prefetching_objects`**: the 394 models of `prefetch_visuals_single` and their textures, kept while the game type stays; the objects spawned take them; the objects' CPU geometry freed once uploaded.
-10. **The game scripts' pool**: the script runtime allocates from a pool of its own, outside *h*, reported as *g*.
+3. **The collision world freed with its level**: its spares go (#357).
+4. ***t* by the original's rule.**
+5. **The file cache**: what the original maps held whole or by parts outside *h*, its budget and its figure reported (`level_stats`, the game suites); the texture files' read first.
+6. **The `level` file in the file cache, read in place**, its chunks' data made under the caption that reads them (the shader table under `st_loading_shaders`).
+7. **The detail slot grid counted in the file cache** against `level.details`.
+8. **The navigation positions made under `st_loading_ai_objects`** and counted in the file cache against `level.ai`, with `level.gct`.
+9. **The new game made under `st_creating_new_game`** from `all.spawn` in the file cache: the registry, the game graph, the character.
+10. **Prefetching under `st_prefetching_objects`**: the 394 models of `prefetch_visuals_single` and their textures, kept while the game type stays; the objects spawned take them; the objects' CPU geometry freed once uploaded.
+11. **The game scripts' pool**: the script runtime allocates from a pool of its own, outside *h*, reported as *g*.
+12. **The renderer's pool**: the frame's lists from a pool of their own, outside *h*, reported as *r*.
+13. **Leaner structures**: a survey of the owners against the original's figures for opportunities of rule 5's kind, each found filed as its own issue.
 
-The open issues weighed before this design (#486 the objects' models as regions, #489 kept scratch buffers, #679 a frame's last allocations, #405 sorted `Vec`s for `BTreeMap`s) are taken only where they match the original or the user approves them as deviations.
+Pending, not a step: where the original holds its sound data (a run with sound on and volumes muted).
+
+The open issues weighed before this design (#486 the objects' models as regions, #489 kept scratch buffers, #679 a frame's last allocations, #405 sorted `Vec`s for `BTreeMap`s) are taken where they match the original or are rule 5's kind; any other is the user's decision.
 
 ## GPU and JavaScript memory
 
