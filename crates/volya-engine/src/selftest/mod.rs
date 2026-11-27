@@ -36,6 +36,7 @@ mod lights;
 mod new_game;
 mod objects;
 mod options;
+mod pda_window;
 mod presentation;
 mod save_load;
 mod statistics;
@@ -225,6 +226,7 @@ const SUITES: &[(&str, &[Checks])] = &[
             textures::CHECKS,
             save_load::CHECKS,
             inventory_screen::CHECKS,
+            pda_window::CHECKS,
             options::CHECKS,
         ],
     ),

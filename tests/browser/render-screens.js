@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-// The game's screens drawn from game data: the title menu, save, load, inventory and options screens (volya_engine::selftest).
+// The game's screens drawn from game data: the title menu, save, load, inventory, PDA and options screens (volya_engine::selftest).
 
 import { gameChecks } from "./render-game.js";
 

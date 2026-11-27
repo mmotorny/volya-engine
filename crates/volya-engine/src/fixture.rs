@@ -290,7 +290,15 @@ const MOVIES: &str = r#"<intro_logo>
   <video_wnd x="0" y="0" width="1024" height="768" stretch="1"><texture x="0" y="0" width="512" height="288">intro\intro_stalker</texture></video_wnd></item>
 </intro_game>"#;
 
-const STRINGS: [(&str, &str); 20] = [
+const STRINGS: [(&str, &str); 27] = [
+    // The PDA's tab captions (pda-window.md 3.1).
+    ("pda_btn_quests", "Задачи"),
+    ("pda_btn_map", "План"),
+    ("pda_btn_diary", "Журнал"),
+    ("pda_btn_contacts", "Контакты"),
+    ("pda_btn_ranking", "Ранги"),
+    ("pda_btn_statistics", "Данные"),
+    ("pda_btn_encyclopedia", "Справка"),
     ("ui_mm_return_game", "Возврат к игре"),
     ("ui_mm_save_game", "Сохранить игру"),
     ("ui_mm_quit_game", "Завершить игру"),
@@ -328,7 +336,7 @@ pub fn tree() -> MemVfs {
         &format!("{c}system.ltx"),
         // The inventory screen's item sections (it reads their panel keys).
         format!(
-            "[texture_desc]\nfiles = ui_mainmenu, ui_asus_intro, ui_common, ui_inventory\n\
+            "[texture_desc]\nfiles = ui_mainmenu, ui_asus_intro, ui_common, ui_inventory, ui_pda, ui_old_textures\n\
              [evaluation]\nline1 = \"\"\nline2 = \"\"\nline3 = \"\"\n{}",
             crate::inventory_screen::tests::ITEMS
         )
@@ -415,6 +423,28 @@ pub fn tree() -> MemVfs {
         </ui_texture>"#
             .into(),
     );
+    // The PDA window (pda-window.md 1, 2; pda-controls.md 3).
+    add(
+        &format!("{c}ui/pda.xml"),
+        crate::pda_window::tests::PDA.into(),
+    );
+    add(
+        &format!("{c}ui/ui_pda.xml"),
+        br#"<ui_texture><file_name>ui\ui_PDA</file_name>
+        <texture id="ui_PDA" x="0" y="0" width="1020" height="702"/></ui_texture>"#
+            .into(),
+    );
+    add(
+        &format!("{c}ui/ui_old_textures.xml"),
+        br#"<ui_texture><file_name>ui\ui_old_textures</file_name>
+        <texture id="ui_string_01_b" x="0" y="0" width="32" height="32"/>
+        <texture id="ui_string_01_back" x="32" y="0" width="32" height="32"/>
+        <texture id="ui_string_01_e" x="64" y="0" width="32" height="32"/>
+        <texture id="ui_pda_m_noupdate" x="670" y="998" width="9" height="11"/>
+        <texture id="ui_pda_m_update" x="680" y="998" width="9" height="11"/>
+        </ui_texture>"#
+            .into(),
+    );
     add(
         &format!("{c}ui/game_tutorials.xml"),
         b"<window>\r\n#include \"ui\\ui_movies.xml\"\r\n</window>".into(),
@@ -456,6 +486,8 @@ pub fn tree() -> MemVfs {
     add(&format!("{t}ui/ui_inventory.dds"), dds(1024, 1024));
     add(&format!("{t}ui/ui_icon_equipment.dds"), dds(1024, 2048));
     add(&format!("{t}ui/ui_grid.dds"), dds(128, 64));
+    add(&format!("{t}ui/ui_pda.dds"), dds(1024, 1024));
+    add(&format!("{t}ui/ui_old_textures.dds"), dds(1024, 1024));
     add(&format!("{t}ui/ui_magnifier.dds"), dds(256, 32));
     add(&format!("{t}ui/ui_static_mm_back_04.dds"), dds(1024, 1024));
     add(

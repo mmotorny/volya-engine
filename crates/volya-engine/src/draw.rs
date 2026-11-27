@@ -343,10 +343,22 @@ impl Ctx<'_> {
         scene: &mut Scene,
         layer: &str,
         base: &str,
-        (x, y): (f32, f32),
+        at: (f32, f32),
         width: f32,
     ) -> io::Result<()> {
-        let c = Color::WHITE;
+        self.frame_line_colored(scene, layer, base, at, width, Color::WHITE)
+    }
+
+    /// [`Ctx::frame_line`] with its three parts in colour `c`.
+    pub fn frame_line_colored(
+        &mut self,
+        scene: &mut Scene,
+        layer: &str,
+        base: &str,
+        (x, y): (f32, f32),
+        width: f32,
+        c: Color,
+    ) -> io::Result<()> {
         let (b, e) = (format!("{base}_b"), format!("{base}_e"));
         let bw = self.part_size(&b).map_or(0.0, |s| s.0);
         let ew = self.part_size(&e).map_or(0.0, |s| s.0);
